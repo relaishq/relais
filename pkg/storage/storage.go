@@ -13,13 +13,13 @@ import (
 // proper playback and processing. Frames are the fundamental unit of media
 // in the Relais system.
 type Frame struct {
-	SessionID  string    // Unique identifier for the media session this frame belongs to
-	Index      int64     // Sequential frame number within the session, used for ordering
-	Data       []byte    // Raw frame data (encoded video/audio) in the specified codec format
-	Timestamp  time.Time // When the frame was captured/created, used for synchronization
-	MediaType  string    // Type of media ("video" or "audio")
-	Codec      string    // Codec used for encoding (e.g., "h264", "opus", "jpeg")
-	KeyFrame   bool      // Whether this is a key frame (for video), important for seeking
+	SessionID string    // Unique identifier for the media session this frame belongs to
+	Index     int64     // Sequential frame number within the session, used for ordering
+	Data      []byte    // Raw frame data (encoded video/audio) in the specified codec format
+	Timestamp time.Time // When the frame was captured/created, used for synchronization
+	MediaType string    // Type of media ("video" or "audio")
+	Codec     string    // Codec used for encoding (e.g., "h264", "opus", "jpeg")
+	KeyFrame  bool      // Whether this is a key frame (for video), important for seeking
 }
 
 // Storage defines the interface for frame storage backends.

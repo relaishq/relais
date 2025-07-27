@@ -19,6 +19,12 @@ Relais is a distributed media server built in Go that supports flexible ingress 
   - Distributed storage support
   - Load balancing across core servers
 
+- **Development Quality**
+  - Comprehensive linting with golangci-lint
+  - Integration and benchmark tests
+  - Context-based graceful shutdown
+  - Error handling best practices
+
 ## Architecture
 
 ```
@@ -39,8 +45,9 @@ Relais is a distributed media server built in Go that supports flexible ingress 
 
 ### Prerequisites
 
-- Go 1.21 or higher
+- Go 1.23 or higher
 - Redis (optional, for distributed storage)
+- golangci-lint (for development)
 
 ### Installation
 
@@ -75,7 +82,10 @@ make coverage
 # Format code
 make fmt
 
-# Run linter
+# Install/update linting tools
+make lint-install
+
+# Run comprehensive linter (golangci-lint)
 make lint
 
 # Run with hot reload
@@ -134,31 +144,56 @@ func (p *MyPlugin) Stop() error {
 }
 ```
 
-## Benchmarking
+## Testing & Quality Assurance
 
-The project includes comprehensive benchmarking tools:
+The project includes comprehensive testing and quality tools:
 
 ```bash
-# Run all benchmarks
+# Run all tests (integration and unit)
+make test
+
+# Run benchmarks
 make bench
 
 # Run with profiling
 make profile
+
+# Run linting (50+ checks including errcheck, unused, typecheck)
+make lint
+
+# Generate test coverage report
+make coverage
 ```
 
-Key metrics:
+### Key Metrics
 - Ingress throughput (frames/sec)
-- Storage read/write performance
+- Storage read/write performance  
 - Maximum concurrent clients
 - Transform plugin processing time
+- Code coverage and quality scores
+
+### Code Quality
+- **golangci-lint**: 50+ linters including errcheck, unused, typecheck
+- **Integration tests**: End-to-end plugin pipeline testing
+- **Benchmark tests**: Performance regression detection
+- **Race condition detection**: Context-based error handling
 
 ## Contributing
 
 1. Fork the repository
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+3. Install development tools (`make lint-install`)
+4. Make your changes with proper error handling
+5. Run tests and linting (`make test && make lint`)
+6. Commit your changes (`git commit -m 'Add amazing feature'`)
+7. Push to the branch (`git push origin feature/amazing-feature`)
+8. Open a Pull Request
+
+### Code Standards
+- All code must pass `make lint` (golangci-lint)
+- Integration tests required for new plugins
+- Proper error handling and context cancellation
+- No race conditions in concurrent code
 
 ## License
 

@@ -60,7 +60,7 @@ func (g *VideoGenerator) GenerateFrames() []storage.Frame {
 
 		// Create frame with metadata
 		frames[i] = storage.Frame{
-			SessionID:  "test_session",
+			SessionID: "test_session",
 			Index:     int64(i),
 			Data:      buf.Bytes(),
 			Timestamp: time.Now().Add(time.Duration(i) * time.Second / time.Duration(g.frameRate)),

@@ -25,9 +25,9 @@ import (
 // - The size of frame data (especially for high-resolution video)
 // - Cleaning up sessions that are no longer needed via DeleteSession
 type MemoryStorage struct {
-	mu       sync.RWMutex                    // Protects access to the frames map
-	frames   map[string]map[int64]Frame      // Maps session ID to a map of frame index to Frame
-	sessions map[string]struct{}             // Tracks active sessions for efficient listing
+	mu       sync.RWMutex               // Protects access to the frames map
+	frames   map[string]map[int64]Frame // Maps session ID to a map of frame index to Frame
+	sessions map[string]struct{}        // Tracks active sessions for efficient listing
 }
 
 // NewMemoryStorage creates a new MemoryStorage instance.

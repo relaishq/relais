@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"net/http"
-	"sync"
 
 	"github.com/gorilla/websocket"
 	"github.com/relais/pkg/webrtc"
@@ -14,7 +13,7 @@ type SignalingServer struct {
 	upgrader   websocket.Upgrader
 	sessionMgr *SessionManager
 	webrtcMgr  *webrtc.PionAdapter
-	clients    sync.Map
+	// clients    sync.Map // TODO: Track active WebSocket connections for broadcasting
 }
 
 // NewSignalingServer creates a new signaling server

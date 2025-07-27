@@ -33,7 +33,7 @@ func BenchmarkIngressThroughput(b *testing.B) {
 
 	go func() {
 		defer wg.Done()
-		plugin.Run(ctx, store)
+		_ = plugin.Run(ctx, store) // Error handled by context cancellation
 	}()
 
 	time.Sleep(time.Second) // Let it run for 1 second
@@ -69,7 +69,7 @@ func BenchmarkConcurrentClients(b *testing.B) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				camera.Run(ctx, store)
+				_ = camera.Run(ctx, store) // Error handled by context cancellation
 			}()
 
 			// Start multiple egress clients

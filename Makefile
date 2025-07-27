@@ -17,7 +17,7 @@ BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 # Linker flags
 LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.BuildTime=$(BUILD_TIME)"
 
-.PHONY: all build clean test coverage deps lint vet fmt run help
+.PHONY: all build clean test coverage deps lint lint-install vet fmt run help
 
 all: test build
 
@@ -44,8 +44,22 @@ coverage: ## Run tests with coverage
 deps: ## Download dependencies
 	$(GOMOD) download
 
-lint: ## Run linter
-	golangci-lint run
+lint-install: ## Install/update golangci-lint
+	@echo "Installing golangci-lint..."
+	$(GOCMD) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@echo "golangci-lint installed!"
+
+lint: ## Run comprehensive linter
+	@echo "Running golangci-lint..."
+	@if command -v ~/go/bin/golangci-lint >/dev/null 2>&1; then \
+		~/go/bin/golangci-lint run ./...; \
+	elif command -v golangci-lint >/dev/null 2>&1; then \
+		golangci-lint run ./...; \
+	else \
+		echo "golangci-lint not found. Install with: make lint-install"; \
+		exit 1; \
+	fi
+	@echo "All linting checks passed!"
 
 vet: ## Run go vet
 	$(GOCMD) vet ./...
