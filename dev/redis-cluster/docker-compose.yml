@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  redis-cluster:
+    image: bitnami/redis-cluster:7.2
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+      - REDIS_PASSWORD=
+      - REDIS_NODES=6
+      - REDIS_CLUSTER_REPLICAS=1
+      - REDIS_CLUSTER_CREATOR=yes
+      - REDIS_PORT_NUMBER=7000
+    ports:
+      - "7000:7000"
+      - "7001:7001"
+      - "7002:7002"
+      - "7003:7003"
+      - "7004:7004"
+      - "7005:7005"
+    volumes:
+      - redis-cluster-data:/bitnami/redis-cluster
+    restart: unless-stopped
+
+volumes:
+  redis-cluster-data:

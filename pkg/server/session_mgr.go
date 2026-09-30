@@ -14,6 +14,25 @@ type SessionInfo struct {
 	CreatedAt time.Time              // When the session was created
 	Type      string                 // Session type ("webrtc", "rtsp", etc.)
 	Metadata  map[string]interface{} // Additional session metadata
+	// Participants in this session. Keys are participant IDs.
+	Participants map[string]*Participant
+}
+
+// Participant represents a user/peer in a session.
+type Participant struct {
+	ID       string                 // Unique participant identifier
+	JoinedAt time.Time              // When the participant joined
+	Meta     map[string]interface{} // Arbitrary participant metadata
+	Tracks   []TrackInfo            // Tracks published by the participant
+}
+
+// TrackInfo contains metadata about a published track.
+type TrackInfo struct {
+	ID         string                 // Track identifier
+	Kind       string                 // "audio" | "video"
+	Codec      string                 // e.g., "opus", "h264"
+	SSRC       uint32                 // Optional: RTP SSRC if known
+	Attributes map[string]interface{} // Additional attributes
 }
 
 // SessionManager handles active media sessions.
@@ -37,10 +56,11 @@ func (sm *SessionManager) CreateSession(ctx context.Context, sessionType string,
 	defer sm.mu.Unlock()
 
 	session := &SessionInfo{
-		ID:        generateSessionID(),
-		CreatedAt: time.Now(),
-		Type:      sessionType,
-		Metadata:  metadata,
+		ID:           generateSessionID(),
+		CreatedAt:    time.Now(),
+		Type:         sessionType,
+		Metadata:     metadata,
+		Participants: make(map[string]*Participant),
 	}
 
 	sm.sessions[session.ID] = session
@@ -109,6 +129,49 @@ func (sm *SessionManager) GetActiveSessions() []*SessionInfo {
 		sessions = append(sessions, session)
 	}
 	return sessions
+}
+
+// AddParticipant adds a participant to a session.
+func (sm *SessionManager) AddParticipant(sessionID string, p *Participant) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	s, ok := sm.sessions[sessionID]
+	if !ok {
+		return false
+	}
+	if _, exists := s.Participants[p.ID]; exists {
+		return true
+	}
+	s.Participants[p.ID] = p
+	return true
+}
+
+// RemoveParticipant removes a participant from a session.
+func (sm *SessionManager) RemoveParticipant(sessionID, participantID string) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	s, ok := sm.sessions[sessionID]
+	if !ok {
+		return false
+	}
+	delete(s.Participants, participantID)
+	return true
+}
+
+// AddTrack associates a track with a participant.
+func (sm *SessionManager) AddTrack(sessionID, participantID string, t TrackInfo) bool {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	s, ok := sm.sessions[sessionID]
+	if !ok {
+		return false
+	}
+	p, ok := s.Participants[participantID]
+	if !ok {
+		return false
+	}
+	p.Tracks = append(p.Tracks, t)
+	return true
 }
 
 // generateSessionID creates a unique session identifier.

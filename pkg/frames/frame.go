@@ -13,6 +13,11 @@ type Frame struct {
 	MediaType string // "video" or "audio"
 	Codec     string
 	KeyFrame  bool
+	// Optional per-track metadata for WebRTC integration
+	TrackID   string // Publisher track identifier
+	SSRC      uint32 // RTP SSRC if known
+	ClockRate uint32 // RTP clock rate (e.g., 90000 for H264, 48000 for Opus)
+	RTPTime   uint32 // RTP timestamp if sourced from RTP
 }
 
 // FrameMetadata contains frame information without the actual data

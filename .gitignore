@@ -4,8 +4,6 @@
 *.dll
 *.so
 *.dylib
-relais
-relais-*
 
 # Test binary, built with `go test -c`
 *.test
@@ -31,3 +29,5 @@ vendor/
 .env
 
 bin
+
+examples/

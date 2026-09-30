@@ -15,7 +15,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.21'
+          go-version-file: 'go.mod'
 
       - name: Install dependencies
         run: make deps
@@ -39,7 +39,43 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.21'
+          go-version-file: 'go.mod'
 
       - name: Run benchmarks
         run: make bench
+
+  cluster-tests-gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.gate.outputs.should_run }}
+    steps:
+      - name: Gate cluster tests
+        id: gate
+        env:
+          RELAIS_TEST_REDIS_CLUSTER_ADDRS: ${{ secrets.RELAIS_TEST_REDIS_CLUSTER_ADDRS }}
+        run: |
+          if [ -n "${RELAIS_TEST_REDIS_CLUSTER_ADDRS}" ]; then
+            echo "should_run=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_run=false" >> $GITHUB_OUTPUT
+          fi
+
+  cluster-tests:
+    needs: cluster-tests-gate
+    if: ${{ needs.cluster-tests-gate.outputs.should_run == 'true' }}
+    env:
+      RELAIS_TEST_REDIS_CLUSTER_ADDRS: ${{ secrets.RELAIS_TEST_REDIS_CLUSTER_ADDRS }}
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Install dependencies
+        run: make deps
+
+      - name: Run Redis Cluster tests
+        run: make test-cluster

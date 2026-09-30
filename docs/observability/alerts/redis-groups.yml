@@ -1,0 +1,36 @@
+groups:
+  - name: relais-redis-groups
+    interval: 1m
+    rules:
+      - alert: RelaisRedisEnsureGroupErrors
+        expr: sum(rate(relais_redis_group_ensure_total{result="error"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: relais
+          category: redis-streams
+        annotations:
+          summary: Ensure group errors detected
+          description: "Consumer group ensure operations are failing. Investigate Redis connectivity or permissions."
+
+      - alert: RelaisRedisClaimErrors
+        expr: sum(rate(relais_redis_group_claims_total{result="error"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+          service: relais
+          category: redis-streams
+        annotations:
+          summary: Claim errors detected
+          description: "Group claim operations are failing. Check consumer health and Redis cluster state."
+
+      - alert: RelaisRedisClaimEmptiesHigh
+        expr: sum(rate(relais_redis_group_claims_total{result="empty"}[15m])) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          service: relais
+          category: redis-streams
+        annotations:
+          summary: Elevated empty claim results
+          description: "Sustained empty claims may indicate misconfigured minIdle, aggressive claiming, or no pending messages."

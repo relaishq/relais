@@ -112,6 +112,40 @@ func (s *MemoryStorage) ListFrames(_ context.Context, sessionID string) ([]Frame
 	return frames, nil
 }
 
+// ListFramesSince returns frames with Index >= fromIndex up to limit.
+// If limit <= 0, it returns all available frames from fromIndex.
+func (s *MemoryStorage) ListFramesSince(_ context.Context, sessionID string, fromIndex int64, limit int) ([]Frame, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Check if session exists
+	sessionFrames, exists := s.frames[sessionID]
+	if !exists {
+		return nil, fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	// Collect and sort indices
+	idxs := make([]int64, 0, len(sessionFrames))
+	for idx := range sessionFrames {
+		if idx >= fromIndex {
+			idxs = append(idxs, idx)
+		}
+	}
+	sort.Slice(idxs, func(i, j int) bool { return idxs[i] < idxs[j] })
+
+	// Apply limit
+	if limit > 0 && len(idxs) > limit {
+		idxs = idxs[:limit]
+	}
+
+	// Build frames slice in order
+	out := make([]Frame, 0, len(idxs))
+	for _, idx := range idxs {
+		out = append(out, sessionFrames[idx])
+	}
+	return out, nil
+}
+
 // ListSessions returns a list of all active session IDs.
 // The returned list is sorted alphabetically for consistent ordering.
 //
@@ -157,4 +191,29 @@ func (s *MemoryStorage) DeleteSession(_ context.Context, sessionID string) error
 // This method is included for interface compatibility and always returns nil.
 func (s *MemoryStorage) Close() error {
 	return nil
+}
+
+// ListTracks returns unique TrackIDs observed for the session by scanning stored frames.
+// If the session is not found, returns an error.
+func (s *MemoryStorage) ListTracks(_ context.Context, sessionID string) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	sessionFrames, exists := s.frames[sessionID]
+	if !exists {
+		return nil, fmt.Errorf("session not found: %s", sessionID)
+	}
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	for _, f := range sessionFrames {
+		if f.TrackID == "" {
+			continue
+		}
+		if _, ok := seen[f.TrackID]; !ok {
+			seen[f.TrackID] = struct{}{}
+			out = append(out, f.TrackID)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }

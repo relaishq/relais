@@ -60,3 +60,10 @@ func (r *Registry) Create(pType PluginType, name string) (Plugin, error) {
 
 	return nil, fmt.Errorf("plugin not found: %s/%s", pType, name)
 }
+
+// MustRegister is a helper to register plugins at init time and panic on error.
+func MustRegister(r *Registry, pType PluginType, name string, factory PluginFactory) {
+	if err := r.Register(pType, name, factory); err != nil {
+		panic(err)
+	}
+}

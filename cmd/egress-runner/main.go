@@ -3,15 +3,13 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/relais/pkg/config"
 	"github.com/relais/pkg/logging"
 	"github.com/relais/pkg/plugins"
-	"github.com/relais/pkg/storage"
+	"github.com/relais/pkg/util/bootstrap"
 	"github.com/relais/plugins/egress/webrtc_egress"
 )
 
@@ -22,24 +20,10 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Load configuration
-	cfg, err := config.LoadConfig()
+	// Bootstrap config, logger, storage and emit startup log
+	logger, store, _, err := bootstrap.Init(ctx, "egress-runner", *pluginType)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
-	}
-
-	// Initialize logger
-	logger := logging.NewLogger(cfg.Logging.Level)
-
-	// Initialize storage
-	var store storage.Storage
-	if cfg.Storage.Type == "redis" {
-		store, err = storage.NewRedisStorage(cfg.Storage.RedisURL)
-	} else {
-		store = storage.NewMemoryStorage()
-	}
-	if err != nil {
-		logger.Fatalf("Failed to initialize storage: %v", err)
+		logging.NewLogger("info").WithError(err).Fatal("bootstrap failed")
 	}
 	defer store.Close()
 
@@ -49,7 +33,7 @@ func main() {
 	case "webrtc":
 		plugin = webrtc_egress.NewWebRTCEgressPlugin()
 	default:
-		logger.Fatalf("Unknown plugin type: %s", *pluginType)
+		logger.WithField("plugin_type", *pluginType).Fatal("unknown plugin type")
 	}
 
 	// Handle shutdown
@@ -63,6 +47,6 @@ func main() {
 
 	// Run plugin
 	if err := plugin.Run(ctx, store); err != nil {
-		logger.Fatalf("Plugin error: %v", err)
+		logger.WithError(err).Fatal("plugin failed")
 	}
 }
