@@ -44,6 +44,19 @@ jobs:
       - name: Run benchmarks
         run: make bench
 
+  call-harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Run call harness tests (race detector)
+        run: make test-harness
+
   cluster-tests-gate:
     runs-on: ubuntu-latest
     outputs:
