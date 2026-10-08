@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Relais echo</title>
+  <style>
+    :root {
+      --bg: #f7f7f5;
+      --fg: #1d1d1b;
+      --muted: #66665f;
+      --panel: #ffffff;
+      --line: #deddd6;
+      --ok: #1f7a3d;
+      --bad: #b3261e;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #161614;
+        --fg: #ecebe6;
+        --muted: #a3a29b;
+        --panel: #1f1f1c;
+        --line: #34342f;
+        --ok: #5cc27e;
+        --bad: #f08a80;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px;
+      background: var(--bg);
+      color: var(--fg);
+      font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { max-width: 1040px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    h2 { font-size: 16px; margin: 24px 0 8px; }
+    p { margin: 0 0 12px; color: var(--muted); }
+    a { color: inherit; }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 12px 0; }
+    button { font: inherit; padding: 6px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); cursor: pointer; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .videos { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+    figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+    video { display: block; width: 100%; aspect-ratio: 4 / 3; background: #000; object-fit: contain; }
+    figcaption { padding: 6px 10px; color: var(--muted); font-size: 13px; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+    dt { color: var(--muted); }
+    dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .ok { color: var(--ok); }
+    .bad { color: var(--bad); }
+    pre { margin: 0; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; font-size: 12px; max-height: 420px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Relais echo</h1>
+  <p>
+    Publishes <strong id="source-label">…</strong> to one Relais media worker and plays the worker's echo.
+    Source: <a href="?source=camera">camera and microphone</a> · <a href="?source=test">test pattern</a>.
+  </p>
+
+  <div class="controls">
+    <button id="start" type="button">Start call</button>
+    <button id="hangup" type="button" disabled>Hang up</button>
+    <label><input id="unmute" type="checkbox"> Play echoed audio</label>
+  </div>
+
+  <div class="videos">
+    <figure>
+      <video id="local" autoplay playsinline muted></video>
+      <figcaption>Local</figcaption>
+    </figure>
+    <figure>
+      <video id="remote" autoplay playsinline muted></video>
+      <figcaption>Echo from the media worker</figcaption>
+    </figure>
+  </div>
+
+  <h2>Call</h2>
+  <dl id="summary"></dl>
+
+  <h2>Stats</h2>
+  <p>Also in <code>window.relaisStats</code>. Counters the browser does not expose read <code>"unverified"</code>, never 0.</p>
+  <pre id="stats">{}</pre>
+
+  <h2>Log</h2>
+  <pre id="log"></pre>
+</main>
+<script src="demo.js"></script>
+</body>
+</html>

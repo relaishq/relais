@@ -18,6 +18,7 @@ import (
 	"github.com/pion/dtls/v3/pkg/crypto/fingerprint"
 	"github.com/pion/dtls/v3/pkg/crypto/selfsign"
 	"github.com/pion/logging"
+	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
 )
@@ -83,8 +84,9 @@ type session struct {
 }
 
 // newSession creates a session for an offer: the session state with fresh
-// ICE credentials, a fresh DTLS certificate and the outbound echo track. The
-// session answers the caller's ICE checks as soon as the worker registers it.
+// ICE credentials, a fresh DTLS certificate and an outbound echo track for
+// each accepted m-line. The session answers the caller's ICE checks as soon
+// as the worker registers it.
 func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 	id, err := randomString(sessionIDLength)
 	if err != nil {
@@ -98,7 +100,11 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 	if err != nil {
 		return nil, err
 	}
-	audio, err := newTrackState("audio", offer.audio())
+	audio, err := newTrackState(offer.accepted(mediaAudio))
+	if err != nil {
+		return nil, err
+	}
+	video, err := newTrackState(offer.accepted(mediaVideo))
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +131,7 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 			},
 			SRTP:  srtpState{Inbound: make(map[uint32]uint64)},
 			Audio: audio,
+			Video: video,
 		},
 		nominated:  make(chan struct{}),
 		rtcpBuf:    make([]byte, receiveMTU),
@@ -145,12 +152,19 @@ func (s *session) answerParams() answerParams {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	tracks := make(map[string]trackState)
+	for _, track := range []trackState{s.state.Audio, s.state.Video} {
+		if track.negotiated() {
+			tracks[track.MID] = track
+		}
+	}
+
 	return answerParams{
 		iceUfrag:    s.state.ICE.LocalUfrag,
 		icePwd:      s.state.ICE.LocalPwd,
 		fingerprint: certificateFingerprint(s.state.DTLS.Certificate),
 		candidate:   s.worker.MediaAddr(),
-		audio:       s.state.Audio,
+		tracks:      tracks,
 	}
 }
 
@@ -326,7 +340,8 @@ func (s *session) handlePacket(pkt []byte) {
 }
 
 // handleRTP decrypts a packet from the caller and echoes it back on the
-// matching outbound track.
+// outbound track for its payload type (Opus on the audio track, VP8 on the
+// video track).
 func (s *session) handleRTP(pkt []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -349,8 +364,8 @@ func (s *session) handleRTP(pkt []byte) {
 	}
 	s.state.SRTP.noteInbound(in.SSRC, in.SequenceNumber)
 
-	track := &s.state.Audio
-	if in.PayloadType != track.PayloadType {
+	track := s.trackFor(in.PayloadType)
+	if track == nil {
 		return
 	}
 	header, ok := track.rewrite(&in.Header)
@@ -379,8 +394,22 @@ func (s *session) handleRTP(pkt []byte) {
 	}
 }
 
-// handleRTCP decrypts the caller's RTCP so the inbound SRTCP context stays
-// current. The worker does not act on RTCP yet.
+// trackFor returns the outbound track that echoes a payload type, or nil.
+func (s *session) trackFor(payloadType uint8) *trackState {
+	for _, track := range []*trackState{&s.state.Audio, &s.state.Video} {
+		if track.negotiated() && track.PayloadType == payloadType {
+			return track
+		}
+	}
+
+	return nil
+}
+
+// handleRTCP decrypts the caller's RTCP, which keeps the inbound SRTCP
+// context current, and relays keyframe requests: when the caller's receiver
+// asks for a keyframe (PLI or FIR) on the worker's video track, the worker
+// asks the caller for a keyframe on the caller's source video. Other RTCP
+// (reports, NACKs, ...) is not acted on.
 func (s *session) handleRTCP(pkt []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -388,9 +417,81 @@ func (s *session) handleRTCP(pkt []byte) {
 	if s.srtpIn == nil {
 		return
 	}
-	if _, err := s.srtpIn.DecryptRTCP(s.rtcpBuf, pkt, nil); err != nil {
+	plain, err := s.srtpIn.DecryptRTCP(s.rtcpBuf, pkt, nil)
+	if err != nil {
 		s.log.Debugf("session %s: drop SRTCP packet: %v", s.id, err)
+
+		return
 	}
+	if !s.state.Video.negotiated() {
+		return
+	}
+	packets, err := rtcp.Unmarshal(plain)
+	if err != nil {
+		s.log.Debugf("session %s: drop RTCP packet: %v", s.id, err)
+
+		return
+	}
+	if trigger := keyframeRequest(packets, s.state.Video.SSRC); trigger != "" {
+		s.requestKeyframe(trigger)
+	}
+}
+
+// keyframeRequest returns "PLI" or "FIR" when a compound RTCP packet asks
+// for a keyframe on ssrc, and "" otherwise.
+func keyframeRequest(packets []rtcp.Packet, ssrc uint32) string {
+	for _, packet := range packets {
+		switch p := packet.(type) {
+		case *rtcp.PictureLossIndication:
+			if p.MediaSSRC == ssrc {
+				return "PLI"
+			}
+		case *rtcp.FullIntraRequest:
+			for _, entry := range p.FIR {
+				if entry.SSRC == ssrc {
+					return "FIR"
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+// requestKeyframe sends the caller a PLI for the video SSRC the video track
+// echoes. It runs under mu. Until the first video packet arrives the worker
+// does not know that SSRC, and there is no echo that could need a keyframe.
+func (s *session) requestKeyframe(trigger string) {
+	video := &s.state.Video
+	if !video.Anchored {
+		return
+	}
+
+	pli := rtcp.PictureLossIndication{SenderSSRC: video.SSRC, MediaSSRC: video.InboundSSRC}
+	plain, err := pli.Marshal()
+	if err != nil {
+		s.log.Debugf("session %s: marshal PLI: %v", s.id, err)
+
+		return
+	}
+	encrypted, err := s.srtpOut.EncryptRTCP(s.encryptBuf, plain, nil)
+	if err != nil {
+		s.log.Warnf("session %s: encrypt PLI: %v", s.id, err)
+
+		return
+	}
+	s.encryptBuf = encrypted[:cap(encrypted)]
+	if index, ok := s.srtpOut.Index(video.SSRC); ok {
+		video.SRTCPIndex = index
+	}
+
+	if _, err := s.worker.send(encrypted, s.state.ICE.RemoteAddr); err != nil {
+		s.log.Debugf("session %s: send PLI: %v", s.id, err)
+
+		return
+	}
+	s.log.Debugf("session %s: caller sent %s for video ssrc %d; sent PLI for caller ssrc %d",
+		s.id, trigger, video.SSRC, video.InboundSSRC)
 }
 
 func (s *session) consentExpired() {
@@ -419,14 +520,20 @@ func (s *session) close() {
 	})
 }
 
-func newTrackState(id string, media *offeredMedia) (trackState, error) {
+// newTrackState creates the outbound track that answers an accepted m-line.
+// A nil m-line gives the zero value: a track that is not negotiated.
+func newTrackState(media *offeredMedia) (trackState, error) {
+	if media == nil {
+		return trackState{}, nil
+	}
+
 	var random [10]byte
 	if _, err := rand.Read(random[:]); err != nil {
 		return trackState{}, err
 	}
 
 	return trackState{
-		ID:          id,
+		ID:          media.kind, // "audio" or "video"
 		MID:         media.mid,
 		PayloadType: media.codec.payloadType,
 		SSRC:        binary.BigEndian.Uint32(random[0:4]),
