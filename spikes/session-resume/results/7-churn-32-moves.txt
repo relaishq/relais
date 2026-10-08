@@ -1,0 +1,350 @@
+   0.011s client state: negotiationneeded -> 
+   0.011s client state: signaling -> have-local-offer
+   0.013s client state: signaling -> stable
+   0.014s client state: ice -> checking
+   0.014s client state: pc -> connecting
+   0.216s [A] ICE nominated remote 127.0.0.1:58710
+   0.216s client state: ice -> connected
+   0.216s client state: dtls -> connecting
+   0.218s DTLS ClientHello from client: record=fefd client_version=fefd supported_versions=absent (DTLS 1.2 only)
+   0.225s client state: dtls -> connected
+   0.225s [A] DTLS handshake done in 7ms: suite=TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 srtp=SRTP_AEAD_AES_128_GCM
+   0.225s client state: pc -> connected
+   0.225s === client connected; starting media
+   0.247s client: OnTrack ssrc=3822899050 codec=audio/opus
+   5.046s wrap trigger: server saw inbound seq 65535
+   5.049s [B] inbound ssrc=1590339448: restored index roc=0 seq=65535 via primer (srtp ROC now 0)
+   5.049s [B] outbound: last seq=65476 roc=0 -> next seq=41 roc=1 (margin 100)
+   5.049s [B] outbound SRTCP index 9 -> 25
+   5.050s === MOVE A->B: cut->resumed 3.351ms, state blob 1611 bytes (DTLS state 827 bytes)
+   5.066s [B] first resumed inbound RTP decrypted: ssrc=1590339448 seq=0 srtpROC=1 trackedIndex=65536
+  15.228s [A'] inbound ssrc=1590339448: restored index roc=1 seq=507 via primer (srtp ROC now 1)
+  15.228s [A'] outbound: last seq=548 roc=1 -> next seq=649 roc=1 (margin 100)
+  15.228s [A'] outbound SRTCP index 45 -> 61
+  15.228s [A'] first resumed inbound RTP decrypted: ssrc=1590339448 seq=508 srtpROC=1 trackedIndex=66044
+  15.229s === MOVE B->A': cut->resumed 1.534ms, state blob 1612 bytes (DTLS state 827 bytes)
+  15.730s [B2] inbound ssrc=1590339448: restored index roc=1 seq=533 via primer (srtp ROC now 1)
+  15.730s [B2] outbound: last seq=674 roc=1 -> next seq=775 roc=1 (margin 100)
+  15.732s [B2] outbound SRTCP index 62 -> 78
+  15.733s === MOVE A'->B2: cut->resumed 3.027ms, state blob 1612 bytes (DTLS state 827 bytes)
+  15.747s [B2] first resumed inbound RTP decrypted: ssrc=1590339448 seq=534 srtpROC=1 trackedIndex=66070
+  16.234s [A3] inbound ssrc=1590339448: restored index roc=1 seq=558 via primer (srtp ROC now 1)
+  16.234s [A3] outbound: last seq=799 roc=1 -> next seq=900 roc=1 (margin 100)
+  16.234s [A3] outbound SRTCP index 79 -> 95
+  16.235s === MOVE B2->A3: cut->resumed 1.606ms, state blob 1612 bytes (DTLS state 827 bytes)
+  16.246s [A3] first resumed inbound RTP decrypted: ssrc=1590339448 seq=559 srtpROC=1 trackedIndex=66095
+  16.736s [B4] inbound ssrc=1590339448: restored index roc=1 seq=583 via primer (srtp ROC now 1)
+  16.736s [B4] outbound: last seq=924 roc=1 -> next seq=1025 roc=1 (margin 100)
+  16.736s [B4] outbound SRTCP index 96 -> 112
+  16.737s === MOVE A3->B4: cut->resumed 997µs, state blob 1612 bytes (DTLS state 827 bytes)
+  16.746s [B4] first resumed inbound RTP decrypted: ssrc=1590339448 seq=584 srtpROC=1 trackedIndex=66120
+  17.238s [A5] inbound ssrc=1590339448: restored index roc=1 seq=608 via primer (srtp ROC now 1)
+  17.238s [A5] outbound: last seq=1049 roc=1 -> next seq=1150 roc=1 (margin 100)
+  17.238s [A5] outbound SRTCP index 112 -> 128
+  17.239s === MOVE B4->A5: cut->resumed 1.281ms, state blob 1613 bytes (DTLS state 827 bytes)
+  17.247s [A5] first resumed inbound RTP decrypted: ssrc=1590339448 seq=609 srtpROC=1 trackedIndex=66145
+  17.740s [B6] inbound ssrc=1590339448: restored index roc=1 seq=633 via primer (srtp ROC now 1)
+  17.741s [B6] outbound: last seq=1174 roc=1 -> next seq=1275 roc=1 (margin 100)
+  17.743s [B6] outbound SRTCP index 129 -> 145
+  17.744s === MOVE A5->B6: cut->resumed 3.841ms, state blob 1613 bytes (DTLS state 827 bytes)
+  17.746s [B6] first resumed inbound RTP decrypted: ssrc=1590339448 seq=634 srtpROC=1 trackedIndex=66170
+  18.246s [A7] inbound ssrc=1590339448: restored index roc=1 seq=658 via primer (srtp ROC now 1)
+  18.246s [A7] outbound: last seq=1299 roc=1 -> next seq=1400 roc=1 (margin 100)
+  18.246s [A7] outbound SRTCP index 145 -> 161
+  18.246s [A7] first resumed inbound RTP decrypted: ssrc=1590339448 seq=659 srtpROC=1 trackedIndex=66195
+  18.246s === MOVE B6->A7: cut->resumed 1.312ms, state blob 1613 bytes (DTLS state 827 bytes)
+  18.750s [B8] inbound ssrc=1590339448: restored index roc=1 seq=683 via primer (srtp ROC now 1)
+  18.750s [B8] outbound: last seq=1424 roc=1 -> next seq=1525 roc=1 (margin 100)
+  18.750s [B8] outbound SRTCP index 162 -> 178
+  18.750s [B8] first resumed inbound RTP decrypted: ssrc=1590339448 seq=684 srtpROC=1 trackedIndex=66220
+  18.751s === MOVE A7->B8: cut->resumed 3.466ms, state blob 1613 bytes (DTLS state 827 bytes)
+  19.253s [A9] inbound ssrc=1590339448: restored index roc=1 seq=709 via primer (srtp ROC now 1)
+  19.253s [A9] outbound: last seq=1550 roc=1 -> next seq=1651 roc=1 (margin 100)
+  19.253s [A9] outbound SRTCP index 179 -> 195
+  19.253s === MOVE B8->A9: cut->resumed 1.601ms, state blob 1613 bytes (DTLS state 827 bytes)
+  19.267s [A9] first resumed inbound RTP decrypted: ssrc=1590339448 seq=710 srtpROC=1 trackedIndex=66246
+  19.754s [B10] inbound ssrc=1590339448: restored index roc=1 seq=734 via primer (srtp ROC now 1)
+  19.754s [B10] outbound: last seq=1675 roc=1 -> next seq=1776 roc=1 (margin 100)
+  19.754s [B10] outbound SRTCP index 196 -> 212
+  19.755s === MOVE A9->B10: cut->resumed 913µs, state blob 1613 bytes (DTLS state 827 bytes)
+  19.767s [B10] first resumed inbound RTP decrypted: ssrc=1590339448 seq=735 srtpROC=1 trackedIndex=66271
+  20.258s [A11] inbound ssrc=1590339448: restored index roc=1 seq=759 via primer (srtp ROC now 1)
+  20.258s [A11] outbound: last seq=1800 roc=1 -> next seq=1901 roc=1 (margin 100)
+  20.258s [A11] outbound SRTCP index 213 -> 229
+  20.259s === MOVE B10->A11: cut->resumed 2.401ms, state blob 1614 bytes (DTLS state 827 bytes)
+  20.267s [A11] first resumed inbound RTP decrypted: ssrc=1590339448 seq=760 srtpROC=1 trackedIndex=66296
+  20.760s [B12] inbound ssrc=1590339448: restored index roc=1 seq=784 via primer (srtp ROC now 1)
+  20.760s [B12] outbound: last seq=1925 roc=1 -> next seq=2026 roc=1 (margin 100)
+  20.760s [B12] outbound SRTCP index 229 -> 245
+  20.760s === MOVE A11->B12: cut->resumed 955µs, state blob 1614 bytes (DTLS state 827 bytes)
+  20.766s [B12] first resumed inbound RTP decrypted: ssrc=1590339448 seq=785 srtpROC=1 trackedIndex=66321
+  21.264s [A13] inbound ssrc=1590339448: restored index roc=1 seq=809 via primer (srtp ROC now 1)
+  21.264s [A13] outbound: last seq=2050 roc=1 -> next seq=2151 roc=1 (margin 100)
+  21.264s [A13] outbound SRTCP index 246 -> 262
+  21.265s === MOVE B12->A13: cut->resumed 3.02ms, state blob 1614 bytes (DTLS state 827 bytes)
+  21.266s [A13] first resumed inbound RTP decrypted: ssrc=1590339448 seq=810 srtpROC=1 trackedIndex=66346
+  21.767s [B14] inbound ssrc=1590339448: restored index roc=1 seq=834 via primer (srtp ROC now 1)
+  21.767s [B14] outbound: last seq=2175 roc=1 -> next seq=2276 roc=1 (margin 100)
+  21.767s [B14] outbound SRTCP index 263 -> 279
+  21.767s [B14] first resumed inbound RTP decrypted: ssrc=1590339448 seq=835 srtpROC=1 trackedIndex=66371
+  21.767s === MOVE A13->B14: cut->resumed 1.662ms, state blob 1614 bytes (DTLS state 827 bytes)
+  22.269s [A15] inbound ssrc=1590339448: restored index roc=1 seq=860 via primer (srtp ROC now 1)
+  22.269s [A15] outbound: last seq=2301 roc=1 -> next seq=2402 roc=1 (margin 100)
+  22.269s [A15] outbound SRTCP index 280 -> 296
+  22.269s === MOVE B14->A15: cut->resumed 1.332ms, state blob 1614 bytes (DTLS state 827 bytes)
+  22.287s [A15] first resumed inbound RTP decrypted: ssrc=1590339448 seq=861 srtpROC=1 trackedIndex=66397
+  22.771s [B16] inbound ssrc=1590339448: restored index roc=1 seq=885 via primer (srtp ROC now 1)
+  22.771s [B16] outbound: last seq=2426 roc=1 -> next seq=2527 roc=1 (margin 100)
+  22.771s [B16] outbound SRTCP index 297 -> 313
+  22.772s === MOVE A15->B16: cut->resumed 2.099ms, state blob 1614 bytes (DTLS state 827 bytes)
+  22.787s [B16] first resumed inbound RTP decrypted: ssrc=1590339448 seq=886 srtpROC=1 trackedIndex=66422
+  23.274s [A17] inbound ssrc=1590339448: restored index roc=1 seq=910 via primer (srtp ROC now 1)
+  23.274s [A17] outbound: last seq=2551 roc=1 -> next seq=2652 roc=1 (margin 100)
+  23.274s [A17] outbound SRTCP index 314 -> 330
+  23.274s === MOVE B16->A17: cut->resumed 1.327ms, state blob 1614 bytes (DTLS state 827 bytes)
+  23.287s [A17] first resumed inbound RTP decrypted: ssrc=1590339448 seq=911 srtpROC=1 trackedIndex=66447
+  23.777s [B18] inbound ssrc=1590339448: restored index roc=1 seq=935 via primer (srtp ROC now 1)
+  23.778s [B18] outbound: last seq=2676 roc=1 -> next seq=2777 roc=1 (margin 100)
+  23.778s [B18] outbound SRTCP index 331 -> 347
+  23.778s === MOVE A17->B18: cut->resumed 2.788ms, state blob 1614 bytes (DTLS state 827 bytes)
+  23.787s [B18] first resumed inbound RTP decrypted: ssrc=1590339448 seq=936 srtpROC=1 trackedIndex=66472
+  24.280s [A19] inbound ssrc=1590339448: restored index roc=1 seq=960 via primer (srtp ROC now 1)
+  24.281s [A19] outbound: last seq=2801 roc=1 -> next seq=2902 roc=1 (margin 100)
+  24.281s [A19] outbound SRTCP index 347 -> 363
+  24.281s === MOVE B18->A19: cut->resumed 1.734ms, state blob 1614 bytes (DTLS state 827 bytes)
+  24.287s [A19] first resumed inbound RTP decrypted: ssrc=1590339448 seq=961 srtpROC=1 trackedIndex=66497
+  24.783s [B20] inbound ssrc=1590339448: restored index roc=1 seq=985 via primer (srtp ROC now 1)
+  24.783s [B20] outbound: last seq=2926 roc=1 -> next seq=3027 roc=1 (margin 100)
+  24.783s [B20] outbound SRTCP index 364 -> 380
+  24.783s === MOVE A19->B20: cut->resumed 1.257ms, state blob 1614 bytes (DTLS state 827 bytes)
+  24.786s [B20] first resumed inbound RTP decrypted: ssrc=1590339448 seq=986 srtpROC=1 trackedIndex=66522
+  25.285s [A21] inbound ssrc=1590339448: restored index roc=1 seq=1010 via primer (srtp ROC now 1)
+  25.286s [A21] outbound: last seq=3051 roc=1 -> next seq=3152 roc=1 (margin 100)
+  25.286s [A21] outbound SRTCP index 380 -> 396
+  25.286s [A21] first resumed inbound RTP decrypted: ssrc=1590339448 seq=1011 srtpROC=1 trackedIndex=66547
+  25.286s === MOVE B20->A21: cut->resumed 2.064ms, state blob 1614 bytes (DTLS state 827 bytes)
+  25.788s [B22] inbound ssrc=1590339448: restored index roc=1 seq=1035 via primer (srtp ROC now 1)
+  25.788s [B22] outbound: last seq=3176 roc=1 -> next seq=3277 roc=1 (margin 100)
+  25.788s [B22] outbound SRTCP index 397 -> 413
+  25.788s [B22] first resumed inbound RTP decrypted: ssrc=1590339448 seq=1036 srtpROC=1 trackedIndex=66572
+  25.789s === MOVE A21->B22: cut->resumed 1.485ms, state blob 1614 bytes (DTLS state 827 bytes)
+  26.290s [A23] inbound ssrc=1590339448: restored index roc=1 seq=1061 via primer (srtp ROC now 1)
+  26.290s [A23] outbound: last seq=3302 roc=1 -> next seq=3403 roc=1 (margin 100)
+  26.290s [A23] outbound SRTCP index 414 -> 430
+  26.290s === MOVE B22->A23: cut->resumed 910µs, state blob 1614 bytes (DTLS state 827 bytes)
+  26.308s [A23] first resumed inbound RTP decrypted: ssrc=1590339448 seq=1062 srtpROC=1 trackedIndex=66598
+  26.792s [B24] inbound ssrc=1590339448: restored index roc=1 seq=1086 via primer (srtp ROC now 1)
+  26.792s [B24] outbound: last seq=3427 roc=1 -> next seq=3528 roc=1 (margin 100)
+  26.792s [B24] outbound SRTCP index 430 -> 446
+  26.792s === MOVE A23->B24: cut->resumed 960µs, state blob 1614 bytes (DTLS state 827 bytes)
+  26.807s [B24] first resumed inbound RTP decrypted: ssrc=1590339448 seq=1087 srtpROC=1 trackedIndex=66623
+  27.294s [A25] inbound ssrc=1590339448: restored index roc=1 seq=1111 via primer (srtp ROC now 1)
+  27.294s [A25] outbound: last seq=3552 roc=1 -> next seq=3653 roc=1 (margin 100)
+  27.294s [A25] outbound SRTCP index 447 -> 463
+  27.295s === MOVE B24->A25: cut->resumed 1.01ms, state blob 1614 bytes (DTLS state 827 bytes)
+  27.306s [A25] first resumed inbound RTP decrypted: ssrc=1590339448 seq=1112 srtpROC=1 trackedIndex=66648
+  27.796s [B26] inbound ssrc=1590339448: restored index roc=1 seq=1136 via primer (srtp ROC now 1)
+  27.796s [B26] outbound: last seq=3677 roc=1 -> next seq=3778 roc=1 (margin 100)
+  27.796s [B26] outbound SRTCP index 464 -> 480
+  27.797s === MOVE A25->B26: cut->resumed 1.633ms, state blob 1614 bytes (DTLS state 827 bytes)
+  27.807s [B26] first resumed inbound RTP decrypted: ssrc=1590339448 seq=1137 srtpROC=1 trackedIndex=66673
+  28.299s [A27] inbound ssrc=1590339448: restored index roc=1 seq=1161 via primer (srtp ROC now 1)
+  28.299s [A27] outbound: last seq=3802 roc=1 -> next seq=3903 roc=1 (margin 100)
+  28.299s [A27] outbound SRTCP index 480 -> 496
+  28.300s === MOVE B26->A27: cut->resumed 1.67ms, state blob 1614 bytes (DTLS state 827 bytes)
+  28.307s [A27] first resumed inbound RTP decrypted: ssrc=1590339448 seq=1162 srtpROC=1 trackedIndex=66698
+  28.802s [B28] inbound ssrc=1590339448: restored index roc=1 seq=1186 via primer (srtp ROC now 1)
+  28.802s [B28] outbound: last seq=3927 roc=1 -> next seq=4028 roc=1 (margin 100)
+  28.802s [B28] outbound SRTCP index 496 -> 512
+  28.803s === MOVE A27->B28: cut->resumed 2.319ms, state blob 1614 bytes (DTLS state 827 bytes)
+  28.806s [B28] first resumed inbound RTP decrypted: ssrc=1590339448 seq=1187 srtpROC=1 trackedIndex=66723
+  29.306s [A29] inbound ssrc=1590339448: restored index roc=1 seq=1211 via primer (srtp ROC now 1)
+  29.306s [A29] outbound: last seq=4052 roc=1 -> next seq=4153 roc=1 (margin 100)
+  29.306s [A29] outbound SRTCP index 513 -> 529
+  29.306s [A29] first resumed inbound RTP decrypted: ssrc=1590339448 seq=1212 srtpROC=1 trackedIndex=66748
+  29.307s === MOVE B28->A29: cut->resumed 2.884ms, state blob 1615 bytes (DTLS state 827 bytes)
+  29.809s [B30] inbound ssrc=1590339448: restored index roc=1 seq=1237 via primer (srtp ROC now 1)
+  29.809s [B30] outbound: last seq=4178 roc=1 -> next seq=4279 roc=1 (margin 100)
+  29.809s [B30] outbound SRTCP index 530 -> 546
+  29.809s === MOVE A29->B30: cut->resumed 1.062ms, state blob 1615 bytes (DTLS state 827 bytes)
+  29.826s [B30] first resumed inbound RTP decrypted: ssrc=1590339448 seq=1238 srtpROC=1 trackedIndex=66774
+  30.310s [A31] inbound ssrc=1590339448: restored index roc=1 seq=1262 via primer (srtp ROC now 1)
+  30.310s [A31] outbound: last seq=4303 roc=1 -> next seq=4404 roc=1 (margin 100)
+  30.310s [A31] outbound SRTCP index 547 -> 563
+  30.311s === MOVE B30->A31: cut->resumed 1.126ms, state blob 1615 bytes (DTLS state 827 bytes)
+  30.327s [A31] first resumed inbound RTP decrypted: ssrc=1590339448 seq=1263 srtpROC=1 trackedIndex=66799
+  45.311s === PAUSE: server sends only STUN responses for 8s
+  53.311s === PAUSE over: echo + SR resume
+  65.411s [A31] DTLS read ended (peer closed?): EOF
+  65.411s client: track read ended: EOF
+  65.411s client log [pc/warn] Failed to accept RTCP stream is already closed
+  65.411s client state: dtls -> closed
+  65.411s client log [pc/warn] Failed to accept RTP stream is already closed
+
+  65.412s client state: pc -> closed
+==================== REPORT ====================
+  65.412s client state: ice -> closed
+media start t0; moves at +4.820s and +30.084s; last move +15s STUN-only pause [+45.085s, +53.085s]; end +65.085s
+flags: margin=100 rtcp-margin=16 naive-roc=false lag=0s close=server
+
+-- client connection state events after connect (before teardown) --
+  none (stayed connected; no signaling/negotiationneeded/ICE/DTLS changes)
+  note: negotiationneeded fired 1 times in total (incl. setup)
+
+-- moves --
+  move 1 A->B: cut +4.820s, snapshot taken -1µs before cut, cut->resumed 3.351ms, blob 1611B (dtls 827B)
+    old endpoint stats at kill: A: stun req/resp/bad=5/5/0 rtp in/out=241/241 rtcp in/out=10/9 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=5 srIn=5 droppedNotReady=0
+    state (dtls bytes elided): {"localUfrag":"snxHD8xf","localPwd":"\u003credacted\u003e","remoteUfrag":"PQhfkfGvAorwEFWq","remoteAddr":"127.0.0.1:58710","dtlsState":null,"srtpProfile":7,"keyCheck":"cf44891f6de5fe13","inbound":[{"ssrc":1590339448,"highestIndex":65535}],"outbound":{"ssrc":3822899050,"pt":111,"started":true,"lastExtSeq":65476,"tsOffset":3344705799,"lastTs":3344948544,"lastSentAt":1791442626436121000,"packets":241,"octets":1687,"hasSrtcp":true,"srtcpIndex":9},"echoSrcSsrc":1590339448,"exportedAt":1791442626436652000}
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 65476 -> 41 (+101), ts delta 960 for caller counter delta 1
+    DTLS blob: gob 827B: epochs local=1 remote=1, randoms 2x32B, cipherSuite=0xc02b, masterSecret=48B, localSeq(current epoch)=1, srtpProfile=0x0007, peerCerts=1 (290B DER), sessionID=0B, CIDs=0/0B, isClient=false, alpn=""
+  move 2 B->A': cut +15.001s, snapshot taken -6µs before cut, cut->resumed 1.534ms, blob 1612B (dtls 827B)
+    old endpoint stats at kill: B: stun req/resp/bad=5/5/0 rtp in/out=508/508 rtcp in/out=20/20 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=10 srIn=10 droppedNotReady=0
+    state (dtls bytes elided): {"localUfrag":"snxHD8xf","localPwd":"\u003credacted\u003e","remoteUfrag":"PQhfkfGvAorwEFWq","remoteAddr":"127.0.0.1:58710","dtlsState":null,"srtpProfile":7,"keyCheck":"cf44891f6de5fe13","inbound":[{"ssrc":1590339448,"highestIndex":66043}],"outbound":{"ssrc":3822899050,"pt":111,"started":true,"lastExtSeq":66084,"tsOffset":3344705799,"lastTs":3345436224,"lastSentAt":1791442636597089000,"packets":749,"octets":5243,"hasSrtcp":true,"srtcpIndex":45},"echoSrcSsrc":1590339448,"exportedAt":1791442636617369000}
+    client echo gap: 22ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 548 -> 649 (+101), ts delta 960 for caller counter delta 1
+  move 3 A'->B2: cut +15.503s, snapshot taken -1µs before cut, cut->resumed 3.027ms, blob 1612B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 674 -> 775 (+101), ts delta 960 for caller counter delta 1
+  move 4 B2->A3: cut +16.007s, snapshot taken -2µs before cut, cut->resumed 1.606ms, blob 1612B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 799 -> 900 (+101), ts delta 960 for caller counter delta 1
+  move 5 A3->B4: cut +16.510s, snapshot taken -1µs before cut, cut->resumed 997µs, blob 1612B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 924 -> 1025 (+101), ts delta 960 for caller counter delta 1
+  move 6 B4->A5: cut +17.012s, snapshot taken -2µs before cut, cut->resumed 1.281ms, blob 1613B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 1049 -> 1150 (+101), ts delta 960 for caller counter delta 1
+  move 7 A5->B6: cut +17.514s, snapshot taken -2µs before cut, cut->resumed 3.841ms, blob 1613B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 1174 -> 1275 (+101), ts delta 960 for caller counter delta 1
+  move 8 B6->A7: cut +18.019s, snapshot taken -2µs before cut, cut->resumed 1.312ms, blob 1613B (dtls 827B)
+    client echo gap: 23ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 1299 -> 1400 (+101), ts delta 960 for caller counter delta 1
+  move 9 A7->B8: cut +18.521s, snapshot taken -12µs before cut, cut->resumed 3.466ms, blob 1613B (dtls 827B)
+    client echo gap: 23ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 1424 -> 1525 (+101), ts delta 960 for caller counter delta 1
+  move 10 B8->A9: cut +19.026s, snapshot taken -2µs before cut, cut->resumed 1.601ms, blob 1613B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 1550 -> 1651 (+101), ts delta 960 for caller counter delta 1
+  move 11 A9->B10: cut +19.528s, snapshot taken -1µs before cut, cut->resumed 913µs, blob 1613B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 1675 -> 1776 (+101), ts delta 960 for caller counter delta 1
+  move 12 B10->A11: cut +20.030s, snapshot taken -4µs before cut, cut->resumed 2.401ms, blob 1614B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 1800 -> 1901 (+101), ts delta 960 for caller counter delta 1
+  move 13 A11->B12: cut +20.533s, snapshot taken -1µs before cut, cut->resumed 955µs, blob 1614B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 1925 -> 2026 (+101), ts delta 960 for caller counter delta 1
+  move 14 B12->A13: cut +21.035s, snapshot taken -7µs before cut, cut->resumed 3.02ms, blob 1614B (dtls 827B)
+    client echo gap: 30ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 2050 -> 2151 (+101), ts delta 960 for caller counter delta 1
+  move 15 A13->B14: cut +21.540s, snapshot taken -2µs before cut, cut->resumed 1.662ms, blob 1614B (dtls 827B)
+    client echo gap: 30ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 2175 -> 2276 (+101), ts delta 960 for caller counter delta 1
+  move 16 B14->A15: cut +22.042s, snapshot taken -2µs before cut, cut->resumed 1.332ms, blob 1614B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 2301 -> 2402 (+101), ts delta 960 for caller counter delta 1
+  move 17 A15->B16: cut +22.544s, snapshot taken -3µs before cut, cut->resumed 2.099ms, blob 1614B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 2426 -> 2527 (+101), ts delta 960 for caller counter delta 1
+  move 18 B16->A17: cut +23.047s, snapshot taken -2µs before cut, cut->resumed 1.327ms, blob 1614B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 2551 -> 2652 (+101), ts delta 960 for caller counter delta 1
+  move 19 A17->B18: cut +23.549s, snapshot taken -8µs before cut, cut->resumed 2.788ms, blob 1614B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 2676 -> 2777 (+101), ts delta 960 for caller counter delta 1
+  move 20 B18->A19: cut +24.053s, snapshot taken -2µs before cut, cut->resumed 1.734ms, blob 1614B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 2801 -> 2902 (+101), ts delta 960 for caller counter delta 1
+  move 21 A19->B20: cut +24.556s, snapshot taken -2µs before cut, cut->resumed 1.257ms, blob 1614B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 2926 -> 3027 (+101), ts delta 960 for caller counter delta 1
+  move 22 B20->A21: cut +25.058s, snapshot taken -3µs before cut, cut->resumed 2.064ms, blob 1614B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 3051 -> 3152 (+101), ts delta 960 for caller counter delta 1
+  move 23 A21->B22: cut +25.561s, snapshot taken -2µs before cut, cut->resumed 1.485ms, blob 1614B (dtls 827B)
+    client echo gap: 30ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 3176 -> 3277 (+101), ts delta 960 for caller counter delta 1
+  move 24 B22->A23: cut +26.064s, snapshot taken -2µs before cut, cut->resumed 910µs, blob 1614B (dtls 827B)
+    client echo gap: 30ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 3302 -> 3403 (+101), ts delta 960 for caller counter delta 1
+  move 25 A23->B24: cut +26.565s, snapshot taken -3µs before cut, cut->resumed 960µs, blob 1614B (dtls 827B)
+    client echo gap: 25ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 3427 -> 3528 (+101), ts delta 960 for caller counter delta 1
+  move 26 B24->A25: cut +27.067s, snapshot taken -1µs before cut, cut->resumed 1.01ms, blob 1614B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 3552 -> 3653 (+101), ts delta 960 for caller counter delta 1
+  move 27 A25->B26: cut +27.569s, snapshot taken -2µs before cut, cut->resumed 1.633ms, blob 1614B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 3677 -> 3778 (+101), ts delta 960 for caller counter delta 1
+  move 28 B26->A27: cut +28.072s, snapshot taken -2µs before cut, cut->resumed 1.67ms, blob 1614B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 3802 -> 3903 (+101), ts delta 960 for caller counter delta 1
+  move 29 A27->B28: cut +28.575s, snapshot taken -3µs before cut, cut->resumed 2.319ms, blob 1614B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 3927 -> 4028 (+101), ts delta 960 for caller counter delta 1
+  move 30 B28->A29: cut +29.078s, snapshot taken -6µs before cut, cut->resumed 2.884ms, blob 1615B (dtls 827B)
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 4052 -> 4153 (+101), ts delta 960 for caller counter delta 1
+  move 31 A29->B30: cut +29.582s, snapshot taken -1µs before cut, cut->resumed 1.062ms, blob 1615B (dtls 827B)
+    client echo gap: 22ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 4178 -> 4279 (+101), ts delta 960 for caller counter delta 1
+  move 32 B30->A31: cut +30.084s, snapshot taken -1µs before cut, cut->resumed 1.126ms, blob 1615B (dtls 827B)
+    client echo gap: 22ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 4303 -> 4404 (+101), ts delta 960 for caller counter delta 1
+  32 moves: mean worst-gap 22ms, max 30ms
+
+-- echo stream continuity (client side) --
+  seq discontinuity at +4.840s: 65476 -> 41 (caller counter 240 -> 241)
+  seq discontinuity at +15.003s: 548 -> 649 (caller counter 748 -> 749)
+  seq discontinuity at +15.521s: 674 -> 775 (caller counter 774 -> 775)
+  seq discontinuity at +16.020s: 799 -> 900 (caller counter 799 -> 800)
+  seq discontinuity at +16.520s: 924 -> 1025 (caller counter 824 -> 825)
+  seq discontinuity at +17.021s: 1049 -> 1150 (caller counter 849 -> 850)
+  seq discontinuity at +17.521s: 1174 -> 1275 (caller counter 874 -> 875)
+  seq discontinuity at +18.021s: 1299 -> 1400 (caller counter 899 -> 900)
+  seq discontinuity at +18.525s: 1424 -> 1525 (caller counter 924 -> 925)
+  seq discontinuity at +19.042s: 1550 -> 1651 (caller counter 950 -> 951)
+  seq discontinuity at +19.541s: 1675 -> 1776 (caller counter 975 -> 976)
+  seq discontinuity at +20.042s: 1800 -> 1901 (caller counter 1000 -> 1001)
+  seq discontinuity at +20.541s: 1925 -> 2026 (caller counter 1025 -> 1026)
+  seq discontinuity at +21.041s: 2050 -> 2151 (caller counter 1050 -> 1051)
+  seq discontinuity at +21.541s: 2175 -> 2276 (caller counter 1075 -> 1076)
+  seq discontinuity at +22.062s: 2301 -> 2402 (caller counter 1101 -> 1102)
+  seq discontinuity at +22.562s: 2426 -> 2527 (caller counter 1126 -> 1127)
+  seq discontinuity at +23.061s: 2551 -> 2652 (caller counter 1151 -> 1152)
+  seq discontinuity at +23.562s: 2676 -> 2777 (caller counter 1176 -> 1177)
+  seq discontinuity at +24.061s: 2801 -> 2902 (caller counter 1201 -> 1202)
+  seq discontinuity at +24.561s: 2926 -> 3027 (caller counter 1226 -> 1227)
+  seq discontinuity at +25.061s: 3051 -> 3152 (caller counter 1251 -> 1252)
+  seq discontinuity at +25.563s: 3176 -> 3277 (caller counter 1276 -> 1277)
+  seq discontinuity at +26.083s: 3302 -> 3403 (caller counter 1302 -> 1303)
+  seq discontinuity at +26.582s: 3427 -> 3528 (caller counter 1327 -> 1328)
+  seq discontinuity at +27.081s: 3552 -> 3653 (caller counter 1352 -> 1353)
+  seq discontinuity at +27.581s: 3677 -> 3778 (caller counter 1377 -> 1378)
+  seq discontinuity at +28.081s: 3802 -> 3903 (caller counter 1402 -> 1403)
+  seq discontinuity at +28.581s: 3927 -> 4028 (caller counter 1427 -> 1428)
+  seq discontinuity at +29.081s: 4052 -> 4153 (caller counter 1452 -> 1453)
+  seq discontinuity at +29.601s: 4178 -> 4279 (caller counter 1478 -> 1479)
+  seq discontinuity at +30.101s: 4303 -> 4404 (caller counter 1503 -> 1504)
+  caller sent 3254 packets; echoes received 2854; ts violations 0; seq discontinuities 32; max inter-arrival outside pause 30ms
+  client received 105 SRTCP sender reports from server
+
+-- client SRTP/SRTCP decrypt / replay failures (srtp logger) --
+  total: 0
+-- client ICE/DTLS/other warnings --
+
+-- consent (client's selected-pair STUN counters) --
+  at last move: requests=17 responses=17; at end (35s later): requests=35 responses=35
+  longest interval without a new STUN response after last move: 2s (sampled every 500ms)
+  client PeerConnection state during STUN-only pause (8s, > 5s disconnect timeout): connected throughout
+
+-- server endpoints --
+  final A31: stun req/resp/bad=18/18/0 rtp in/out=1750/1350 rtcp in/out=70/54 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=35 srIn=35 droppedNotReady=0
+  packets queued by demux while no endpoint owned the session (delivered to new owner): 5
+
+-- DTLS end-of-call check --
+  client DTLS transport closed after resumed server sent close_notify (server->client DTLS record decrypted OK)
+
+RESULT: PASS

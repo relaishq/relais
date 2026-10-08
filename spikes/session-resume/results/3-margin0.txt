@@ -1,0 +1,76 @@
+   0.015s client state: negotiationneeded -> 
+   0.016s client state: signaling -> have-local-offer
+   0.019s client state: signaling -> stable
+   0.019s client state: ice -> checking
+   0.019s client state: pc -> connecting
+   0.221s [A] ICE nominated remote 127.0.0.1:52946
+   0.221s client state: dtls -> connecting
+   0.221s client state: ice -> connected
+   0.223s DTLS ClientHello from client: record=fefd client_version=fefd supported_versions=absent (DTLS 1.2 only)
+   0.231s client state: dtls -> connected
+   0.231s [A] DTLS handshake done in 7ms: suite=TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 srtp=SRTP_AEAD_AES_128_GCM
+   0.231s client state: pc -> connected
+   0.231s === client connected; starting media
+   0.253s client: OnTrack ssrc=3525927798 codec=audio/opus
+   5.052s wrap trigger: server saw inbound seq 65535
+   5.056s [B] inbound ssrc=1199820353: restored index roc=0 seq=65535 via primer (srtp ROC now 0)
+   5.056s [B] outbound: last seq=65476 roc=0 -> next seq=65477 roc=0 (margin 0)
+   5.056s [B] outbound SRTCP index 9 -> 9
+   5.057s === MOVE A->B: cut->resumed 3.368ms, state blob 1601 bytes (DTLS state 822 bytes)
+   5.072s [B] first resumed inbound RTP decrypted: ssrc=1199820353 seq=0 srtpROC=1 trackedIndex=65536
+  15.234s [A'] inbound ssrc=1199820353: restored index roc=1 seq=507 via primer (srtp ROC now 1)
+  15.234s [A'] outbound: last seq=448 roc=1 -> next seq=449 roc=1 (margin 0)
+  15.234s [A'] outbound SRTCP index 29 -> 29
+  15.234s [A'] first resumed inbound RTP decrypted: ssrc=1199820353 seq=508 srtpROC=1 trackedIndex=66044
+  15.235s === MOVE B->A': cut->resumed 2.228ms, state blob 1602 bytes (DTLS state 822 bytes)
+  30.235s === PAUSE: server sends only STUN responses for 8s
+  38.235s === PAUSE over: echo + SR resume
+  50.336s [A'] DTLS read ended (peer closed?): EOF
+  50.338s client: track read ended: EOF
+  50.338s client log [pc/warn] Failed to accept RTCP stream is already closed
+  50.338s client log [pc/warn] Failed to accept RTP stream is already closed
+  50.338s client state: dtls -> closed
+
+==================== REPORT ====================
+  50.340s client log [ice/warn] Failed to read from candidate udp4 host 127.0.0.1:52946 (resolved: 127.0.0.1:52946): read udp 127.0.0.1:52946: i/o timeout
+media start t0; moves at +4.821s and +15.001s; last move +15s STUN-only pause [+30.004s, +38.004s]; end +50.004s
+flags: margin=0 rtcp-margin=0 naive-roc=false lag=0s close=server
+
+-- client connection state events after connect (before teardown) --
+  none (stayed connected; no signaling/negotiationneeded/ICE/DTLS changes)
+  note: negotiationneeded fired 1 times in total (incl. setup)
+
+-- moves --
+  move 1 A->B: cut +4.821s, snapshot taken -1µs before cut, cut->resumed 3.368ms, blob 1601B (dtls 822B)
+    old endpoint stats at kill: A: stun req/resp/bad=5/5/0 rtp in/out=241/241 rtcp in/out=10/9 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=5 srIn=5 droppedNotReady=0
+    state (dtls bytes elided): {"localUfrag":"SW0ZXRsH","localPwd":"\u003credacted\u003e","remoteUfrag":"TudUpvvnsmHiwLQr","remoteAddr":"127.0.0.1:52946","dtlsState":null,"srtpProfile":7,"keyCheck":"6cff7b5cb2fbb3b6","inbound":[{"ssrc":1199820353,"highestIndex":65535}],"outbound":{"ssrc":3525927798,"pt":111,"started":true,"lastExtSeq":65476,"tsOffset":598775563,"lastTs":599018308,"lastSentAt":1791442460186072000,"packets":241,"octets":1687,"hasSrtcp":true,"srtcpIndex":9},"echoSrcSsrc":1199820353,"exportedAt":1791442460187047000}
+  50.340s client state: pc -> closed
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    DTLS blob: gob 822B: epochs local=1 remote=1, randoms 2x32B, cipherSuite=0xc02b, masterSecret=48B, localSeq(current epoch)=1, srtpProfile=0x0007, peerCerts=1 (291B DER), sessionID=0B, CIDs=0/0B, isClient=false, alpn=""
+  move 2 B->A': cut +15.001s, snapshot taken -11µs before cut, cut->resumed 2.228ms, blob 1602B (dtls 822B)
+  50.340s client state: ice -> closed
+    old endpoint stats at kill: B: stun req/resp/bad=5/5/0 rtp in/out=508/508 rtcp in/out=20/20 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=10 srIn=10 droppedNotReady=0
+    state (dtls bytes elided): {"localUfrag":"SW0ZXRsH","localPwd":"\u003credacted\u003e","remoteUfrag":"TudUpvvnsmHiwLQr","remoteAddr":"127.0.0.1:52946","dtlsState":null,"srtpProfile":7,"keyCheck":"6cff7b5cb2fbb3b6","inbound":[{"ssrc":1199820353,"highestIndex":66043}],"outbound":{"ssrc":3525927798,"pt":111,"started":true,"lastExtSeq":65984,"tsOffset":598775563,"lastTs":599505988,"lastSentAt":1791442470346129000,"packets":749,"octets":5243,"hasSrtcp":true,"srtcpIndex":29},"echoSrcSsrc":1199820353,"exportedAt":1791442470366260000}
+    client echo gap: 22ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+
+-- echo stream continuity (client side) --
+  caller sent 2500 packets; echoes received 2100; ts violations 0; seq discontinuities 0; max inter-arrival outside pause 34ms
+  client received 83 SRTCP sender reports from server
+
+-- client SRTP/SRTCP decrypt / replay failures (srtp logger) --
+  total: 0
+-- client ICE/DTLS/other warnings --
+
+-- consent (client's selected-pair STUN counters) --
+  at last move: requests=10 responses=10; at end (35s later): requests=27 responses=27
+  longest interval without a new STUN response after last move: 2.001s (sampled every 500ms)
+  client PeerConnection state during STUN-only pause (8s, > 5s disconnect timeout): connected throughout
+
+-- server endpoints --
+  final A': stun req/resp/bad=17/17/0 rtp in/out=1751/1351 rtcp in/out=70/54 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=35 srIn=35 droppedNotReady=0
+  packets queued by demux while no endpoint owned the session (delivered to new owner): 1
+
+-- DTLS end-of-call check --
+  client DTLS transport closed after resumed server sent close_notify (server->client DTLS record decrypted OK)
+
+RESULT: PASS

@@ -1,0 +1,89 @@
+   0.003s client state: signaling -> have-local-offer
+   0.003s client state: negotiationneeded -> 
+   0.004s client state: signaling -> stable
+   0.004s client state: ice -> checking
+   0.004s client state: pc -> connecting
+   0.205s [A] ICE nominated remote 127.0.0.1:63290
+   0.205s client state: dtls -> connecting
+   0.205s client state: ice -> connected
+   0.206s DTLS ClientHello from client: record=fefd client_version=fefd supported_versions=absent (DTLS 1.2 only)
+   0.212s [A] DTLS handshake done in 6ms: suite=TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 srtp=SRTP_AEAD_AES_128_GCM
+   0.212s client state: dtls -> connected
+   0.212s client state: pc -> connected
+   0.212s === client connected; starting media
+   0.233s client: OnTrack ssrc=2212757301 codec=audio/opus
+   5.033s wrap trigger: server saw inbound seq 65535
+   5.035s [B] inbound ssrc=2358310776: NAIVE restore SetROC(0) only (highest seq 65535 not restorable)
+   5.035s [B] outbound: last seq=65476 roc=0 -> next seq=41 roc=1 (margin 100)
+   5.035s [B] outbound SRTCP index 9 -> 25
+   5.036s === MOVE A->B: cut->resumed 2.066ms, state blob 1607 bytes (DTLS state 825 bytes)
+   5.053s [B] SRTP decrypt FAIL ssrc=2358310776 seq=0: failed to verify auth tag: cipher: message authentication failed
+   5.073s [B] SRTP decrypt FAIL ssrc=2358310776 seq=1: failed to verify auth tag: cipher: message authentication failed
+   5.093s [B] SRTP decrypt FAIL ssrc=2358310776 seq=2: failed to verify auth tag: cipher: message authentication failed
+   5.113s [B] SRTP decrypt FAIL ssrc=2358310776 seq=3: failed to verify auth tag: cipher: message authentication failed
+   5.133s [B] SRTP decrypt FAIL ssrc=2358310776 seq=4: failed to verify auth tag: cipher: message authentication failed
+   5.153s [B] SRTP decrypt FAIL ssrc=2358310776 seq=5: failed to verify auth tag: cipher: message authentication failed
+   5.173s [B] SRTP decrypt FAIL ssrc=2358310776 seq=6: failed to verify auth tag: cipher: message authentication failed
+   5.193s [B] SRTP decrypt FAIL ssrc=2358310776 seq=7: failed to verify auth tag: cipher: message authentication failed
+   5.213s [B] SRTP decrypt FAIL ssrc=2358310776 seq=8: failed to verify auth tag: cipher: message authentication failed
+   5.233s [B] SRTP decrypt FAIL ssrc=2358310776 seq=9: failed to verify auth tag: cipher: message authentication failed
+   5.253s [B] SRTP decrypt FAIL ssrc=2358310776 seq=10: failed to verify auth tag: cipher: message authentication failed
+   5.273s [B] SRTP decrypt FAIL ssrc=2358310776 seq=11: failed to verify auth tag: cipher: message authentication failed
+   5.293s [B] SRTP decrypt FAIL ssrc=2358310776 seq=12: failed to verify auth tag: cipher: message authentication failed
+   5.313s [B] SRTP decrypt FAIL ssrc=2358310776 seq=13: failed to verify auth tag: cipher: message authentication failed
+   5.332s [B] SRTP decrypt FAIL ssrc=2358310776 seq=14: failed to verify auth tag: cipher: message authentication failed
+   5.353s [B] SRTP decrypt FAIL ssrc=2358310776 seq=15: failed to verify auth tag: cipher: message authentication failed
+   5.373s [B] SRTP decrypt FAIL ssrc=2358310776 seq=16: failed to verify auth tag: cipher: message authentication failed
+   5.393s [B] SRTP decrypt FAIL ssrc=2358310776 seq=17: failed to verify auth tag: cipher: message authentication failed
+   5.413s [B] SRTP decrypt FAIL ssrc=2358310776 seq=18: failed to verify auth tag: cipher: message authentication failed
+   5.433s [B] SRTP decrypt FAIL ssrc=2358310776 seq=19: failed to verify auth tag: cipher: message authentication failed
+   5.452s [B] SRTP decrypt FAIL ssrc=2358310776 seq=20: failed to verify auth tag: cipher: message authentication failed
+   5.473s [B] SRTP decrypt FAIL ssrc=2358310776 seq=21: failed to verify auth tag: cipher: message authentication failed
+   5.493s [B] SRTP decrypt FAIL ssrc=2358310776 seq=22: failed to verify auth tag: cipher: message authentication failed
+   5.513s [B] SRTP decrypt FAIL ssrc=2358310776 seq=23: failed to verify auth tag: cipher: message authentication failed
+   5.533s [B] SRTP decrypt FAIL ssrc=2358310776 seq=24: failed to verify auth tag: cipher: message authentication failed
+   5.553s [B] SRTP decrypt FAIL ssrc=2358310776 seq=25: failed to verify auth tag: cipher: message authentication failed
+... (2259 'SRTP decrypt FAIL' lines elided) ...
+==================== REPORT ====================
+media start t0; moves at +4.821s and +15.001s; last move +15s STUN-only pause [+30.003s, +38.003s]; end +50.003s
+flags: margin=100 rtcp-margin=16 naive-roc=true lag=0s close=client
+
+-- client connection state events after connect (before teardown) --
+  none (stayed connected; no signaling/negotiationneeded/ICE/DTLS changes)
+  note: negotiationneeded fired 1 times in total (incl. setup)
+
+-- moves --
+  move 1 A->B: cut +4.821s, snapshot taken -1µs before cut, cut->resumed 2.066ms, blob 1607B (dtls 825B)
+    old endpoint stats at kill: A: stun req/resp/bad=5/5/0 rtp in/out=241/241 rtcp in/out=10/9 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=5 srIn=5 droppedNotReady=0
+    state (dtls bytes elided): {"localUfrag":"wfJXW1KN","localPwd":"\u003credacted\u003e","remoteUfrag":"myAgIgRnWJFjrDaG","remoteAddr":"127.0.0.1:63290","dtlsState":null,"srtpProfile":7,"keyCheck":"eab0c3cdf7447192","inbound":[{"ssrc":2358310776,"highestIndex":65535}],"outbound":{"ssrc":2212757301,"pt":111,"started":true,"lastExtSeq":65476,"tsOffset":2138083632,"lastTs":2138326377,"lastSentAt":1791442526042278000,"packets":241,"octets":1687,"hasSrtcp":true,"srtcpIndex":9},"echoSrcSsrc":2358310776,"exportedAt":1791442526042999000}
+    client echo gap: 20ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    DTLS blob: gob 825B: epochs local=1 remote=1, randoms 2x32B, cipherSuite=0xc02b, masterSecret=48B, localSeq(current epoch)=1, srtpProfile=0x0007, peerCerts=1 (290B DER), sessionID=0B, CIDs=0/0B, isClient=false, alpn=""
+  move 2 B->A': cut +15.001s, snapshot taken -3µs before cut, cut->resumed 1.566ms, blob 1608B (dtls 825B)
+    old endpoint stats at kill: B: stun req/resp/bad=5/5/0 rtp in/out=0/0 rtcp in/out=20/20 srtpFail=508 srtcpFail=0 nackIn=0 rrIn=10 srIn=10 droppedNotReady=0
+    state (dtls bytes elided): {"localUfrag":"wfJXW1KN","localPwd":"\u003credacted\u003e","remoteUfrag":"myAgIgRnWJFjrDaG","remoteAddr":"127.0.0.1:63290","dtlsState":null,"srtpProfile":7,"keyCheck":"eab0c3cdf7447192","inbound":[{"ssrc":2358310776,"highestIndex":65535}],"outbound":{"ssrc":2212757301,"pt":111,"started":true,"lastExtSeq":65576,"tsOffset":2138083632,"lastTs":2138326377,"lastSentAt":1791442526042278000,"packets":241,"octets":1687,"hasSrtcp":true,"srtcpIndex":45},"echoSrcSsrc":2358310776,"exportedAt":1791442536222429000}
+  FAIL: move 2: no echo around the move
+
+-- echo stream continuity (client side) --
+  caller sent 2500 packets; echoes received 241; ts violations 0; seq discontinuities 0; max inter-arrival outside pause 21ms
+  client received 83 SRTCP sender reports from server
+  FAIL: echo stopped before the end of the call
+
+-- client SRTP/SRTCP decrypt / replay failures (srtp logger) --
+  total: 0
+-- client ICE/DTLS/other warnings --
+
+-- consent (client's selected-pair STUN counters) --
+  at last move: requests=10 responses=10; at end (35s later): requests=27 responses=27
+  longest interval without a new STUN response after last move: 2.004s (sampled every 500ms)
+  client PeerConnection state during STUN-only pause (8s, > 5s disconnect timeout): connected throughout
+
+-- server endpoints --
+  final A': stun req/resp/bad=17/17/0 rtp in/out=0/0 rtcp in/out=70/54 srtpFail=1751 srtcpFail=0 nackIn=0 rrIn=35 srIn=35 droppedNotReady=0
+  packets queued by demux while no endpoint owned the session (delivered to new owner): 1
+  FAIL: server decrypt failures on final endpoint
+  FAIL: server decrypt failures on an endpoint (B->A')
+
+-- DTLS end-of-call check --
+  resumed server DTLS conn received + decrypted client close_notify (client->server DTLS record OK)
+
+RESULT: FAIL

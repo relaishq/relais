@@ -1,0 +1,124 @@
+   0.004s client state: negotiationneeded -> 
+   0.004s client state: signaling -> have-local-offer
+   0.005s client state: signaling -> stable
+   0.005s client state: ice -> checking
+   0.005s client state: pc -> connecting
+   0.206s [A] ICE nominated remote 127.0.0.1:49850
+   0.206s client state: dtls -> connecting
+   0.206s client state: ice -> connected
+   0.206s DTLS ClientHello from client: record=fefd client_version=fefd supported_versions=absent (DTLS 1.2 only)
+   0.212s [A] DTLS handshake done in 5ms: suite=TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 srtp=SRTP_AEAD_AES_128_GCM
+   0.212s client state: dtls -> connected
+   0.212s client state: pc -> connected
+   0.212s === client connected; starting media
+   0.233s client: OnTrack ssrc=3042997415 codec=audio/opus
+   5.032s wrap trigger: server saw inbound seq 65535
+   5.334s [B] inbound ssrc=2498134127: restored index roc=0 seq=65535 via primer (srtp ROC now 0)
+   5.334s [B] outbound: last seq=65476 roc=0 -> next seq=65477 roc=0 (margin 0)
+   5.334s [B] outbound SRTCP index 9 -> 9
+   5.334s === MOVE A->B: cut->resumed 931µs, state blob 1619 bytes (DTLS state 832 bytes)
+   5.353s [B] first resumed inbound RTP decrypted: ssrc=2498134127 seq=15 srtpROC=1 trackedIndex=65551
+   5.353s client log [srtp/info] srtp ssrc=3042997415 index=65477: duplicated packet
+   5.373s client log [srtp/info] srtp ssrc=3042997415 index=65478: duplicated packet
+   5.393s client log [srtp/info] srtp ssrc=3042997415 index=65479: duplicated packet
+   5.413s client log [srtp/info] srtp ssrc=3042997415 index=65480: duplicated packet
+   5.433s client log [srtp/info] srtp ssrc=3042997415 index=65481: duplicated packet
+   5.453s client log [srtp/info] srtp ssrc=3042997415 index=65482: duplicated packet
+   5.473s client log [srtp/info] srtp ssrc=3042997415 index=65483: duplicated packet
+   5.493s client log [srtp/info] srtp ssrc=3042997415 index=65484: duplicated packet
+   5.513s client log [srtp/info] srtp ssrc=3042997415 index=65485: duplicated packet
+   5.533s client log [srtp/info] srtp ssrc=3042997415 index=65486: duplicated packet
+   5.552s client log [srtp/info] srtp ssrc=3042997415 index=65487: duplicated packet
+   5.573s client log [srtp/info] srtp ssrc=3042997415 index=65488: duplicated packet
+   5.593s client log [srtp/info] srtp ssrc=3042997415 index=65489: duplicated packet
+   5.613s client log [srtp/info] srtp ssrc=3042997415 index=65490: duplicated packet
+   5.633s client log [srtp/info] srtp ssrc=3042997415 index=65491: duplicated packet
+   5.834s client log [srtp/info] srtcp ssrc=3042997415 index=10: duplicated packet
+  15.514s [A'] inbound ssrc=2498134127: restored index roc=1 seq=507 via primer (srtp ROC now 1)
+  15.514s [A'] outbound: last seq=433 roc=1 -> next seq=434 roc=1 (margin 0)
+  15.514s [A'] outbound SRTCP index 28 -> 28
+  15.515s === MOVE B->A': cut->resumed 802µs, state blob 1620 bytes (DTLS state 832 bytes)
+  15.533s [A'] first resumed inbound RTP decrypted: ssrc=2498134127 seq=524 srtpROC=1 trackedIndex=66060
+  15.533s client log [srtp/info] srtp ssrc=3042997415 index=434: duplicated packet
+  15.553s client log [srtp/info] srtp ssrc=3042997415 index=435: duplicated packet
+  15.573s client log [srtp/info] srtp ssrc=3042997415 index=436: duplicated packet
+  15.593s client log [srtp/info] srtp ssrc=3042997415 index=437: duplicated packet
+  15.613s client log [srtp/info] srtp ssrc=3042997415 index=438: duplicated packet
+  15.633s client log [srtp/info] srtp ssrc=3042997415 index=439: duplicated packet
+  15.653s client log [srtp/info] srtp ssrc=3042997415 index=440: duplicated packet
+  15.673s client log [srtp/info] srtp ssrc=3042997415 index=441: duplicated packet
+  15.693s client log [srtp/info] srtp ssrc=3042997415 index=442: duplicated packet
+  15.713s client log [srtp/info] srtp ssrc=3042997415 index=443: duplicated packet
+  15.733s client log [srtp/info] srtp ssrc=3042997415 index=444: duplicated packet
+  15.753s client log [srtp/info] srtp ssrc=3042997415 index=445: duplicated packet
+  15.773s client log [srtp/info] srtp ssrc=3042997415 index=446: duplicated packet
+  15.792s client log [srtp/info] srtp ssrc=3042997415 index=447: duplicated packet
+  15.813s client log [srtp/info] srtp ssrc=3042997415 index=448: duplicated packet
+  15.833s client log [srtp/info] srtp ssrc=3042997415 index=449: duplicated packet
+  16.014s client log [srtp/info] srtcp ssrc=3042997415 index=29: duplicated packet
+  30.515s === PAUSE: server sends only STUN responses for 8s
+  38.515s === PAUSE over: echo + SR resume
+  50.616s client: track read ended: EOF
+  50.616s client log [pc/warn] Failed to accept RTP stream is already closed
+  50.616s client log [pc/warn] Failed to accept RTCP stream is already closed
+  50.616s client state: dtls -> closed
+  50.616s client state: ice -> closed
+  50.616s client state: pc -> closed
+  50.616s [A'] DTLS read ended (peer closed?): EOF
+
+==================== REPORT ====================
+media start t0; moves at +5.121s and +15.301s; last move +15s STUN-only pause [+30.303s, +38.303s]; end +50.303s
+flags: margin=0 rtcp-margin=0 naive-roc=false lag=300ms close=client
+
+-- client connection state events after connect (before teardown) --
+  none (stayed connected; no signaling/negotiationneeded/ICE/DTLS changes)
+  note: negotiationneeded fired 1 times in total (incl. setup)
+
+-- moves --
+  move 1 A->B: cut +5.121s, snapshot taken 300.727ms before cut, cut->resumed 931µs, blob 1619B (dtls 832B)
+    old endpoint stats at kill: A: stun req/resp/bad=5/5/0 rtp in/out=256/256 rtcp in/out=10/10 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=5 srIn=5 droppedNotReady=0
+    state (dtls bytes elided): {"localUfrag":"f3iXNFSS","localPwd":"\u003credacted\u003e","remoteUfrag":"YkgDOTNkEayMwJqy","remoteAddr":"127.0.0.1:49850","dtlsState":null,"srtpProfile":7,"keyCheck":"7e484e3844bdbf23","inbound":[{"ssrc":2498134127,"highestIndex":65535}],"outbound":{"ssrc":3042997415,"pt":111,"started":true,"lastExtSeq":65476,"tsOffset":3037065398,"lastTs":3037308143,"lastSentAt":1791442529552067000,"packets":241,"octets":1687,"hasSrtcp":true,"srtcpIndex":9},"echoSrcSsrc":2498134127,"exportedAt":1791442529552489000}
+    client echo gap: 319ms (normal 20ms); caller packets missing in that gap: 15; ts delta 15360 (expected 15360, continuous=true)
+    DTLS blob: gob 832B: epochs local=1 remote=1, randoms 2x32B, cipherSuite=0xc02b, masterSecret=48B, localSeq(current epoch)=1, srtpProfile=0x0007, peerCerts=1 (291B DER), sessionID=0B, CIDs=0/0B, isClient=false, alpn=""
+  move 2 B->A': cut +15.301s, snapshot taken 300.567ms before cut, cut->resumed 802µs, blob 1620B (dtls 832B)
+    old endpoint stats at kill: B: stun req/resp/bad=5/5/0 rtp in/out=509/509 rtcp in/out=20/20 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=10 srIn=10 droppedNotReady=0
+    state (dtls bytes elided): {"localUfrag":"f3iXNFSS","localPwd":"\u003credacted\u003e","remoteUfrag":"YkgDOTNkEayMwJqy","remoteAddr":"127.0.0.1:49850","dtlsState":null,"srtpProfile":7,"keyCheck":"7e484e3844bdbf23","inbound":[{"ssrc":2498134127,"highestIndex":66043}],"outbound":{"ssrc":3042997415,"pt":111,"started":true,"lastExtSeq":65969,"tsOffset":3037065398,"lastTs":3037795823,"lastSentAt":1791442539712908000,"packets":734,"octets":5138,"hasSrtcp":true,"srtcpIndex":28},"echoSrcSsrc":2498134127,"exportedAt":1791442539732956000}
+    client echo gap: 340ms (normal 20ms); caller packets missing in that gap: 16; ts delta 16320 (expected 16320, continuous=true)
+
+-- echo stream continuity (client side) --
+  caller sent 2515 packets; echoes received 2084; ts violations 0; seq discontinuities 0; max inter-arrival outside pause 340ms
+  client received 82 SRTCP sender reports from server
+
+-- client SRTP/SRTCP decrypt / replay failures (srtp logger) --
+  +5.141s srtp ssrc=3042997415 index=65477: duplicated packet
+  +5.161s srtp ssrc=3042997415 index=65478: duplicated packet
+  +5.181s srtp ssrc=3042997415 index=65479: duplicated packet
+  +5.201s srtp ssrc=3042997415 index=65480: duplicated packet
+  +5.221s srtp ssrc=3042997415 index=65481: duplicated packet
+  +5.241s srtp ssrc=3042997415 index=65482: duplicated packet
+  +5.261s srtp ssrc=3042997415 index=65483: duplicated packet
+  +5.281s srtp ssrc=3042997415 index=65484: duplicated packet
+  +5.301s srtp ssrc=3042997415 index=65485: duplicated packet
+  +5.321s srtp ssrc=3042997415 index=65486: duplicated packet
+  +5.340s srtp ssrc=3042997415 index=65487: duplicated packet
+  +5.361s srtp ssrc=3042997415 index=65488: duplicated packet
+  +5.381s srtp ssrc=3042997415 index=65489: duplicated packet
+  +5.401s srtp ssrc=3042997415 index=65490: duplicated packet
+  +5.421s srtp ssrc=3042997415 index=65491: duplicated packet
+  total: 33
+  FAIL: client saw 33 SRTP/SRTCP failures
+-- client ICE/DTLS/other warnings --
+
+-- consent (client's selected-pair STUN counters) --
+  at last move: requests=10 responses=10; at end (35s later): requests=27 responses=27
+  longest interval without a new STUN response after last move: 2.001s (sampled every 500ms)
+  client PeerConnection state during STUN-only pause (8s, > 5s disconnect timeout): connected throughout
+
+-- server endpoints --
+  final A': stun req/resp/bad=18/18/0 rtp in/out=1750/1350 rtcp in/out=70/54 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=35 srIn=35 droppedNotReady=0
+  packets queued by demux while no endpoint owned the session (delivered to new owner): 0
+
+-- DTLS end-of-call check --
+  resumed server DTLS conn received + decrypted client close_notify (client->server DTLS record OK)
+
+RESULT: FAIL

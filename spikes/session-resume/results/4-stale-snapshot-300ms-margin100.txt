@@ -1,0 +1,79 @@
+   0.003s client state: negotiationneeded -> 
+   0.003s client state: signaling -> have-local-offer
+   0.003s client state: signaling -> stable
+   0.004s client state: ice -> checking
+   0.004s client state: pc -> connecting
+   0.204s [A] ICE nominated remote 127.0.0.1:59830
+   0.205s client state: dtls -> connecting
+   0.205s client state: ice -> connected
+   0.205s DTLS ClientHello from client: record=fefd client_version=fefd supported_versions=absent (DTLS 1.2 only)
+   0.214s [A] DTLS handshake done in 8ms: suite=TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 srtp=SRTP_AEAD_AES_128_GCM
+   0.214s client state: dtls -> connected
+   0.214s client state: pc -> connected
+   0.214s === client connected; starting media
+   0.235s client: OnTrack ssrc=1526644770 codec=audio/opus
+   5.034s wrap trigger: server saw inbound seq 65535
+   5.337s [B] inbound ssrc=1292231124: restored index roc=0 seq=65535 via primer (srtp ROC now 0)
+   5.337s [B] outbound: last seq=65476 roc=0 -> next seq=41 roc=1 (margin 100)
+   5.337s [B] outbound SRTCP index 9 -> 25
+   5.337s === MOVE A->B: cut->resumed 1.515ms, state blob 1601 bytes (DTLS state 821 bytes)
+   5.355s [B] first resumed inbound RTP decrypted: ssrc=1292231124 seq=15 srtpROC=1 trackedIndex=65551
+  15.517s [A'] inbound ssrc=1292231124: restored index roc=1 seq=507 via primer (srtp ROC now 1)
+  15.518s [A'] outbound: last seq=533 roc=1 -> next seq=634 roc=1 (margin 100)
+  15.518s [A'] outbound SRTCP index 44 -> 60
+  15.519s === MOVE B->A': cut->resumed 1.974ms, state blob 1602 bytes (DTLS state 821 bytes)
+  15.535s [A'] first resumed inbound RTP decrypted: ssrc=1292231124 seq=524 srtpROC=1 trackedIndex=66060
+  30.519s === PAUSE: server sends only STUN responses for 8s
+  38.523s === PAUSE over: echo + SR resume
+  50.620s client: track read ended: EOF
+  50.620s client log [pc/warn] Failed to accept RTCP stream is already closed
+  50.620s client log [pc/warn] Failed to accept RTP stream is already closed
+  50.620s client state: dtls -> closed
+  50.621s client state: ice -> closed
+  50.621s client state: pc -> closed
+  50.621s [A'] DTLS read ended (peer closed?): EOF
+
+==================== REPORT ====================
+media start t0; moves at +5.121s and +15.301s; last move +15s STUN-only pause [+30.305s, +38.309s]; end +50.305s
+flags: margin=100 rtcp-margin=16 naive-roc=false lag=300ms close=client
+
+-- client connection state events after connect (before teardown) --
+  none (stayed connected; no signaling/negotiationneeded/ICE/DTLS changes)
+  note: negotiationneeded fired 1 times in total (incl. setup)
+
+-- moves --
+  move 1 A->B: cut +5.121s, snapshot taken 300.764ms before cut, cut->resumed 1.515ms, blob 1601B (dtls 821B)
+    old endpoint stats at kill: A: stun req/resp/bad=5/5/0 rtp in/out=256/256 rtcp in/out=10/10 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=5 srIn=5 droppedNotReady=0
+    state (dtls bytes elided): {"localUfrag":"CXF1rd02","localPwd":"\u003credacted\u003e","remoteUfrag":"mbxOSKKpXJhPgYuM","remoteAddr":"127.0.0.1:59830","dtlsState":null,"srtpProfile":7,"keyCheck":"d777524457e6ac86","inbound":[{"ssrc":1292231124,"highestIndex":65535}],"outbound":{"ssrc":1526644770,"pt":111,"started":true,"lastExtSeq":65476,"tsOffset":293192064,"lastTs":293434809,"lastSentAt":1791442532156479000,"packets":241,"octets":1687,"hasSrtcp":true,"srtcpIndex":9},"echoSrcSsrc":1292231124,"exportedAt":1791442532156902000}
+    client echo gap: 22ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 65491 -> 41 (+86), ts delta 960 for caller counter delta 1
+    DTLS blob: gob 821B: epochs local=1 remote=1, randoms 2x32B, cipherSuite=0xc02b, masterSecret=48B, localSeq(current epoch)=1, srtpProfile=0x0007, peerCerts=1 (291B DER), sessionID=0B, CIDs=0/0B, isClient=false, alpn=""
+  move 2 B->A': cut +15.301s, snapshot taken 300.375ms before cut, cut->resumed 1.974ms, blob 1602B (dtls 821B)
+    old endpoint stats at kill: B: stun req/resp/bad=5/5/0 rtp in/out=509/509 rtcp in/out=20/20 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=10 srIn=10 droppedNotReady=0
+    state (dtls bytes elided): {"localUfrag":"CXF1rd02","localPwd":"\u003credacted\u003e","remoteUfrag":"mbxOSKKpXJhPgYuM","remoteAddr":"127.0.0.1:59830","dtlsState":null,"srtpProfile":7,"keyCheck":"d777524457e6ac86","inbound":[{"ssrc":1292231124,"highestIndex":66043}],"outbound":{"ssrc":1526644770,"pt":111,"started":true,"lastExtSeq":66069,"tsOffset":293192064,"lastTs":293922489,"lastSentAt":1791442542316688000,"packets":734,"octets":5138,"hasSrtcp":true,"srtcpIndex":44},"echoSrcSsrc":1292231124,"exportedAt":1791442542337621000}
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 549 -> 634 (+85), ts delta 960 for caller counter delta 1
+
+-- echo stream continuity (client side) --
+  seq discontinuity at +5.141s: 65491 -> 41 (caller counter 255 -> 256)
+  seq discontinuity at +15.321s: 549 -> 634 (caller counter 764 -> 765)
+  caller sent 2515 packets; echoes received 2115; ts violations 0; seq discontinuities 2; max inter-arrival outside pause 28ms
+  client received 84 SRTCP sender reports from server
+
+-- client SRTP/SRTCP decrypt / replay failures (srtp logger) --
+  total: 0
+-- client ICE/DTLS/other warnings --
+
+-- consent (client's selected-pair STUN counters) --
+  at last move: requests=10 responses=10; at end (35s later): requests=27 responses=27
+  longest interval without a new STUN response after last move: 2.001s (sampled every 500ms)
+  client PeerConnection state during STUN-only pause (8s, > 5s disconnect timeout): connected throughout
+
+-- server endpoints --
+  final A': stun req/resp/bad=18/18/0 rtp in/out=1750/1350 rtcp in/out=70/54 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=35 srIn=35 droppedNotReady=0
+  packets queued by demux while no endpoint owned the session (delivered to new owner): 0
+
+-- DTLS end-of-call check --
+  resumed server DTLS conn received + decrypted client close_notify (client->server DTLS record OK)
+
+RESULT: PASS

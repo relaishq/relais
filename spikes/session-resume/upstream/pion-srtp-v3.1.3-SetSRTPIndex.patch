@@ -1,0 +1,100 @@
+--- a/context.go
++++ b/context.go
+@@ -398,8 +398,30 @@
+ 	state, _ := c.getSRTPSSRCState(ssrc, true)
+ 	state.index = uint64(roc) << 16
+ 	state.rolloverHasProcessed = false
++}
++
++// SRTPIndex returns the SRTP packet index (ROC<<16 | highest sequence number)
++// of specified SSRC, as defined in RFC 3711 Section 3.3.1.
++// ok is false if no packet has been processed for the SSRC yet.
++func (c *Context) SRTPIndex(ssrc uint32) (index uint64, ok bool) {
++	state, exists := c.srtpSSRCStates[ssrc]
++	if !exists || !state.rolloverHasProcessed {
++		return 0, false
++	}
++
++	return state.index, true
+ }
+ 
++// SetSRTPIndex sets the SRTP packet index (ROC<<16 | highest sequence number)
++// of specified SSRC, e.g. to continue a session in a new Context.
++// Unlike SetROC, the rollover counter of the next packet is estimated relative
++// to index, so a sequence number wrap after the index was saved is handled.
++func (c *Context) SetSRTPIndex(ssrc uint32, index uint64) {
++	state, _ := c.getSRTPSSRCState(ssrc, true)
++	state.index = index
++	state.rolloverHasProcessed = true
++}
++
+ // Index returns SRTCP index value of specified SSRC.
+ func (c *Context) Index(ssrc uint32) (uint32, bool) {
+ 	state, ok := c.srtcpSSRCStates[ssrc]
+--- a/context_index_test.go
++++ b/context_index_test.go
+@@ -0,0 +1,64 @@
++// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
++// SPDX-License-Identifier: MIT
++
++package srtp
++
++import (
++	"testing"
++
++	"github.com/pion/rtp"
++)
++
++// A session moved to a new Context after seq 65535 (ROC 0) must decrypt the
++// next packet, seq 0, with ROC 1. SetROC cannot express that; SetSRTPIndex can.
++func TestSetSRTPIndexAcrossWrap(t *testing.T) {
++	key := make([]byte, 16)
++	salt := make([]byte, 14)
++	profile := ProtectionProfileAes128CmHmacSha1_80
++	const ssrc = 1234
++
++	enc, err := CreateContext(key, salt, profile)
++	if err != nil {
++		t.Fatal(err)
++	}
++	dec, err := CreateContext(key, salt, profile, SRTPReplayProtection(64))
++	if err != nil {
++		t.Fatal(err)
++	}
++	pkt := func(seq uint16) []byte {
++		raw, _ := (&rtp.Packet{Header: rtp.Header{Version: 2, SequenceNumber: seq, SSRC: ssrc}, Payload: []byte{1, 2, 3}}).Marshal()
++		out, err := enc.EncryptRTP(nil, raw, nil)
++		if err != nil {
++			t.Fatal(err)
++		}
++
++		return out
++	}
++	for seq := 65530; seq <= 65535; seq++ {
++		if _, err := dec.DecryptRTP(nil, pkt(uint16(seq)), nil); err != nil {
++			t.Fatal(err)
++		}
++	}
++	saved, ok := dec.SRTPIndex(ssrc)
++	if !ok || saved != 65535 {
++		t.Fatalf("SRTPIndex = %d, %v", saved, ok)
++	}
++
++	// Naive restore: SetROC only. The post-wrap packet fails auth.
++	naive, _ := CreateContext(key, salt, profile, SRTPReplayProtection(64))
++	naive.SetROC(ssrc, uint32(saved>>16))
++	wrapped := pkt(0) // encrypted with ROC 1
++	if _, err := naive.DecryptRTP(nil, append([]byte{}, wrapped...), nil); err == nil {
++		t.Fatal("expected SetROC-only restore to fail across the wrap")
++	}
++
++	// Index restore: works.
++	restored, _ := CreateContext(key, salt, profile, SRTPReplayProtection(64))
++	restored.SetSRTPIndex(ssrc, saved)
++	if _, err := restored.DecryptRTP(nil, wrapped, nil); err != nil {
++		t.Fatalf("SetSRTPIndex restore failed: %v", err)
++	}
++	if idx, _ := restored.SRTPIndex(ssrc); idx != 1<<16 {
++		t.Fatalf("index after wrap = %d", idx)
++	}
++}

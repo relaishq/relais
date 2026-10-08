@@ -1,0 +1,79 @@
+   0.005s client state: negotiationneeded -> 
+   0.005s client state: signaling -> have-local-offer
+   0.006s client state: signaling -> stable
+   0.007s client state: ice -> checking
+   0.007s client state: pc -> connecting
+   0.208s [A] ICE nominated remote 127.0.0.1:61328
+   0.208s client state: ice -> connected
+   0.208s client state: dtls -> connecting
+   0.209s DTLS ClientHello from client: record=fefd client_version=fefd supported_versions=absent (DTLS 1.2 only)
+   0.221s client state: dtls -> connected
+   0.221s [A] DTLS handshake done in 11ms: suite=TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 srtp=SRTP_AEAD_AES_128_GCM
+   0.221s client state: pc -> connected
+   0.221s === client connected; starting media
+   0.243s client: OnTrack ssrc=447824154 codec=audio/opus
+   5.042s wrap trigger: server saw inbound seq 65535
+   5.045s [B] inbound ssrc=502196205: restored index roc=0 seq=65535 via primer (srtp ROC now 0)
+   5.045s [B] outbound: last seq=65476 roc=0 -> next seq=41 roc=1 (margin 100)
+   5.045s [B] outbound SRTCP index 9 -> 25
+   5.046s === MOVE A->B: cut->resumed 2.382ms, state blob 1604 bytes (DTLS state 825 bytes)
+   5.062s [B] first resumed inbound RTP decrypted: ssrc=502196205 seq=0 srtpROC=1 trackedIndex=65536
+  15.223s [A'] inbound ssrc=502196205: restored index roc=1 seq=507 via primer (srtp ROC now 1)
+  15.223s [A'] outbound: last seq=548 roc=1 -> next seq=649 roc=1 (margin 100)
+  15.223s [A'] outbound SRTCP index 45 -> 61
+  15.223s [A'] first resumed inbound RTP decrypted: ssrc=502196205 seq=508 srtpROC=1 trackedIndex=66044
+  15.224s === MOVE B->A': cut->resumed 1.423ms, state blob 1605 bytes (DTLS state 825 bytes)
+  45.224s === PAUSE: server sends only STUN responses for 12s
+  57.224s === PAUSE over: echo + SR resume
+  75.329s client log [pc/warn] Failed to accept RTP stream is already closed
+  75.330s client log [pc/warn] Failed to accept RTCP stream is already closed
+  75.328s client: track read ended: EOF
+  75.333s client state: dtls -> closed
+  75.334s client state: ice -> closed
+  75.335s client state: pc -> closed
+  75.336s [A'] DTLS read ended (peer closed?): EOF
+
+==================== REPORT ====================
+media start t0; moves at +4.821s and +15.001s; last move +30s STUN-only pause [+45.003s, +57.003s]; end +75.003s
+flags: margin=100 rtcp-margin=16 naive-roc=false lag=0s close=client
+
+-- client connection state events after connect (before teardown) --
+  none (stayed connected; no signaling/negotiationneeded/ICE/DTLS changes)
+  note: negotiationneeded fired 1 times in total (incl. setup)
+
+-- moves --
+  move 1 A->B: cut +4.821s, snapshot taken -1µs before cut, cut->resumed 2.382ms, blob 1604B (dtls 825B)
+    old endpoint stats at kill: A: stun req/resp/bad=5/5/0 rtp in/out=241/241 rtcp in/out=10/9 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=5 srIn=5 droppedNotReady=0
+    state (dtls bytes elided): {"localUfrag":"1LgWj7tj","localPwd":"\u003credacted\u003e","remoteUfrag":"EMaVxKsFpFZdmwHt","remoteAddr":"127.0.0.1:61328","dtlsState":null,"srtpProfile":7,"keyCheck":"9d257925458ffcb7","inbound":[{"ssrc":502196205,"highestIndex":65535}],"outbound":{"ssrc":447824154,"pt":111,"started":true,"lastExtSeq":65476,"tsOffset":3546408828,"lastTs":3546651573,"lastSentAt":1791442378855335000,"packets":241,"octets":1687,"hasSrtcp":true,"srtcpIndex":9},"echoSrcSsrc":502196205,"exportedAt":1791442378856147000}
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 65476 -> 41 (+101), ts delta 960 for caller counter delta 1
+    DTLS blob: gob 825B: epochs local=1 remote=1, randoms 2x32B, cipherSuite=0xc02b, masterSecret=48B, localSeq(current epoch)=1, srtpProfile=0x0007, peerCerts=1 (290B DER), sessionID=0B, CIDs=0/0B, isClient=false, alpn=""
+  move 2 B->A': cut +15.001s, snapshot taken -7µs before cut, cut->resumed 1.423ms, blob 1605B (dtls 825B)
+    old endpoint stats at kill: B: stun req/resp/bad=5/5/0 rtp in/out=508/508 rtcp in/out=20/20 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=10 srIn=10 droppedNotReady=0
+    state (dtls bytes elided): {"localUfrag":"1LgWj7tj","localPwd":"\u003credacted\u003e","remoteUfrag":"EMaVxKsFpFZdmwHt","remoteAddr":"127.0.0.1:61328","dtlsState":null,"srtpProfile":7,"keyCheck":"9d257925458ffcb7","inbound":[{"ssrc":502196205,"highestIndex":66043}],"outbound":{"ssrc":447824154,"pt":111,"started":true,"lastExtSeq":66084,"tsOffset":3546408828,"lastTs":3547139253,"lastSentAt":1791442389015406000,"packets":749,"octets":5243,"hasSrtcp":true,"srtcpIndex":45},"echoSrcSsrc":502196205,"exportedAt":1791442389035263000}
+    client echo gap: 21ms (normal 20ms); caller packets missing in that gap: 0; ts delta 960 (expected 960, continuous=true)
+    echo seq jump at move: 548 -> 649 (+101), ts delta 960 for caller counter delta 1
+
+-- echo stream continuity (client side) --
+  seq discontinuity at +4.841s: 65476 -> 41 (caller counter 240 -> 241)
+  seq discontinuity at +15.002s: 548 -> 649 (caller counter 748 -> 749)
+  caller sent 3750 packets; echoes received 3150; ts violations 0; seq discontinuities 2; max inter-arrival outside pause 36ms
+  client received 125 SRTCP sender reports from server
+
+-- client SRTP/SRTCP decrypt / replay failures (srtp logger) --
+  total: 0
+-- client ICE/DTLS/other warnings --
+
+-- consent (client's selected-pair STUN counters) --
+  at last move: requests=10 responses=10; at end (1m0s later): requests=40 responses=40
+  longest interval without a new STUN response after last move: 2.003s (sampled every 500ms)
+  client PeerConnection state during STUN-only pause (12s, > 5s disconnect timeout): connected throughout
+
+-- server endpoints --
+  final A': stun req/resp/bad=30/30/0 rtp in/out=3001/2401 rtcp in/out=120/96 srtpFail=0 srtcpFail=0 nackIn=0 rrIn=60 srIn=60 droppedNotReady=0
+  packets queued by demux while no endpoint owned the session (delivered to new owner): 1
+
+-- DTLS end-of-call check --
+  resumed server DTLS conn received + decrypted client close_notify (client->server DTLS record OK)
+
+RESULT: PASS
