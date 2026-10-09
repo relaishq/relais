@@ -14,9 +14,9 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.21'
+          go-version-file: 'go.mod'
 
       - name: Run tests
         run: make test
@@ -24,7 +24,7 @@ jobs:
       - name: Build binaries
         run: |
           make build
-          tar czf relais-${{ github.ref_name }}-linux-amd64.tar.gz relais*
+          tar czf relais-${{ github.ref_name }}-linux-amd64.tar.gz bin/relais-*
 
       - name: Create Release
         uses: softprops/action-gh-release@v1

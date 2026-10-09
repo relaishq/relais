@@ -1,0 +1,8 @@
+version: "2"
+
+linters:
+  exclusions:
+    # golangci-lint v1 skipped unchecked errors from Close, Flush and print
+    # calls by default; v2 makes that opt-in. Keep the v1 baseline.
+    presets:
+      - std-error-handling

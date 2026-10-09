@@ -10,7 +10,7 @@ import (
 	"github.com/relais/pkg/logging"
 	"github.com/relais/pkg/plugins"
 	"github.com/relais/pkg/util/bootstrap"
-	"github.com/relais/plugins/egress/webrtc_egress"
+	webrtcegress "github.com/relais/plugins/egress/webrtc"
 )
 
 func main() {
@@ -31,9 +31,14 @@ func main() {
 	var plugin plugins.EgressPlugin
 	switch *pluginType {
 	case "webrtc":
-		plugin = webrtc_egress.NewWebRTCEgressPlugin()
+		// Placeholder egress: it only polls storage and sends no media. Live
+		// WebRTC media runs in the media worker (pkg/mediaworker).
+		plugin = &webrtcegress.Egress{}
 	default:
 		logger.WithField("plugin_type", *pluginType).Fatal("unknown plugin type")
+	}
+	if err := plugin.Initialize(ctx, nil); err != nil {
+		logger.WithError(err).Fatal("plugin initialize failed")
 	}
 
 	// Handle shutdown
