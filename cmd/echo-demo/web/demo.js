@@ -309,10 +309,17 @@ function onTrack(event) {
 // hangup ends the call. The last stats stay on the page, published with the
 // ended call state.
 async function hangup() {
-  if (!pc) {
+  const conn = pc;
+  if (!conn) {
     return;
   }
   await updateStats();
+  // While the stats were read, another hangup (or a failed start) may have
+  // ended this call and a new call may have begun; that one is not ours to
+  // tear down.
+  if (conn !== pc) {
+    return;
+  }
   teardown();
   setCallState('ended');
 }
