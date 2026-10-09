@@ -10,6 +10,7 @@ import (
 	"github.com/relais/internal/workerprobe"
 	"github.com/relais/pkg/callharness"
 	"github.com/relais/pkg/controlplane"
+	"github.com/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,7 +41,11 @@ func waitTakeovers(t *testing.T, ctx context.Context, h *callharness.Harness, co
 // One live caller survives twenty hard kills on three distinct private legs.
 // Replacements are empty and never export or release the crashed tenure.
 func TestRelayHardKillTakeover(t *testing.T) {
-	h := startHarness(t, callharness.Options{Relay: true, Workers: 3})
+	forSessionStores(t, testRelayHardKillTakeover)
+}
+
+func testRelayHardKillTakeover(t *testing.T, store sessionstore.Store) {
+	h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, Workers: 3})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 	call, err := h.Dial(ctx, callharness.CallOptions{Video: true})
@@ -128,18 +133,20 @@ func TestRelayHardKillTakeover(t *testing.T) {
 // the crypto margin prevents index reuse. FirstKeyframeTakeover guards that
 // margin when the snapshot predates the first packets and exercises pending PLI.
 func TestRelayStaleSnapshotTakeover(t *testing.T) {
-	testTakeoverAtGate(t, false, false)
+	forSessionStores(t, func(t *testing.T, store sessionstore.Store) { testTakeoverAtGate(t, store, false, false) })
 }
 
 func TestRelayMidKeyframeTakeover(t *testing.T) {
-	testTakeoverAtGate(t, true, false)
+	forSessionStores(t, func(t *testing.T, store sessionstore.Store) { testTakeoverAtGate(t, store, true, false) })
 }
 
-func TestRelayFirstKeyframeTakeover(t *testing.T) { testTakeoverAtGate(t, true, true) }
+func TestRelayFirstKeyframeTakeover(t *testing.T) {
+	forSessionStores(t, func(t *testing.T, store sessionstore.Store) { testTakeoverAtGate(t, store, true, true) })
+}
 
-func testTakeoverAtGate(t *testing.T, midKeyframe, firstKeyframe bool) {
+func testTakeoverAtGate(t *testing.T, store sessionstore.Store, midKeyframe, firstKeyframe bool) {
 	t.Helper()
-	h := startHarness(t, callharness.Options{Relay: true, Workers: 2})
+	h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, Workers: 2})
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
 	call, err := h.Dial(ctx, callharness.CallOptions{Video: true})

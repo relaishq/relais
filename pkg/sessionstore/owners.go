@@ -2,15 +2,15 @@
 // workers, together with their resumable state blobs. Each ownership change
 // advances an epoch, so an old worker can
 // neither renew nor release its successor's lease. Transitions compare the
-// owner and epoch atomically; a later Redis store can use the same contract.
+// owner and epoch atomically across both Memory and Redis.
 // The session ID is the worker's ICE username fragment, read by the relay
 // from the caller's binding requests.
 //
 // PutState atomically checks an unexpired owner/epoch and copies the blob.
 // GetState returns an isolated copy; Transfer retains it. Matching Release
 // and expiry delete both lease and blob. Stale puts return ErrLeaseLost and
-// stale releases cannot delete a successor's state. Storage is in memory;
-// Redis and encryption are separate work.
+// stale releases cannot delete a successor's state. Memory stores copies in
+// process; Redis seals state with AES-256-GCM.
 package sessionstore
 
 import (
@@ -47,8 +47,9 @@ type Owners interface {
 
 // Store transitions are atomic compare-and-set operations. Expired leases
 // cannot renew or transfer. Claim refuses any existing record, including an
-// expired one. Lookups and listing prune expiry; after pruning, the ID can
-// be claimed again with a fresh global epoch. This does not resume or recover
+// expired one. Lookups prune their session; listing prunes only the listed
+// worker. Redis metadata also expires after configured retention. After pruning,
+// the ID can be claimed again with a fresh global epoch. This does not resume or recover
 // the expired session. Stale release is ignored, and epochs strictly increase
 // on reclaim.
 type Store interface {
@@ -56,6 +57,8 @@ type Store interface {
 
 	// PutState atomically checks the current unexpired lease and replaces the
 	// resumable blob. Stale writers receive ErrLeaseLost. Bytes are copied.
+	// Redis rejects a delayed superseded put with ErrStateSuperseded; that
+	// error does not revoke the current lease.
 	PutState(ctx context.Context, lease Lease, state []byte) error
 
 	// GetState returns a copy of the latest blob for a live lease, or
@@ -84,8 +87,16 @@ type Store interface {
 	// successful no-op, including when the address has become owner again.
 	Release(ctx context.Context, lease Lease) error
 
-	// ListByWorker returns only unexpired leases, pruning expired records.
+	// ListByWorker returns only unexpired leases, pruning expired records only
+	// for the listed worker. Redis metadata also expires after retention.
 	ListByWorker(ctx context.Context, worker netip.AddrPort) ([]Lease, error)
+}
+
+// WorkerIndexRefresher is optional for stores with expiring worker indexes.
+// The worker calls it once per renewal tick, alongside the lease renewals.
+// Index lifetime must not depend on best-effort per-session repair jobs.
+type WorkerIndexRefresher interface {
+	RefreshWorkerIndex(context.Context, netip.AddrPort, time.Duration) error
 }
 
 // Memory is a single-process store. Use NewMemory, not its zero value.
@@ -233,6 +244,9 @@ func (m *Memory) ListByWorker(ctx context.Context, worker netip.AddrPort) ([]Lea
 	leases := []Lease{}
 	now := time.Now()
 	for _, lease := range m.leases {
+		if lease.Worker != worker {
+			continue
+		}
 		if !now.Before(lease.ExpiresAt) {
 			delete(m.leases, lease.SessionID)
 			delete(m.states, lease.SessionID)

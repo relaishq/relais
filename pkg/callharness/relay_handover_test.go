@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/relais/pkg/callharness"
+	"github.com/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,7 +16,11 @@ import (
 // Twenty alternating planned moves on different private sockets, followed
 // by a full minute of consent (including a media-free stretch).
 func TestRelayPlannedHandover(t *testing.T) {
-	h := startHarness(t, callharness.Options{Relay: true, Workers: 2})
+	forSessionStores(t, testRelayPlannedHandover)
+}
+
+func testRelayPlannedHandover(t *testing.T, store sessionstore.Store) {
+	h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, Workers: 2})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 	call, err := h.Dial(ctx, callharness.CallOptions{Video: true})
@@ -89,7 +94,11 @@ func TestRelayPlannedHandover(t *testing.T) {
 }
 
 func TestRelayDrainTenCalls(t *testing.T) {
-	h := startHarness(t, callharness.Options{Relay: true, Workers: 3})
+	forSessionStores(t, testRelayDrainTenCalls)
+}
+
+func testRelayDrainTenCalls(t *testing.T, store sessionstore.Store) {
+	h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, Workers: 3})
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	calls := make([]*callharness.Call, 10)

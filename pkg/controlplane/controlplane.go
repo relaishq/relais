@@ -63,6 +63,7 @@ type registration struct {
 	recovering    bool
 	recovered     bool
 	rejoinReady   bool
+	retryingMoves bool
 	pending       map[string]*takeoverState // unfinished transfers, retained for retry
 }
 
@@ -355,10 +356,17 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	}
 
 	res.Result.Drain = time.Since(started)
-	// Every exit after beginning a hold releases it. A successful/rolled-back
-	// resume chooses its owner explicitly; early export failure stays on A.
+	// Successful/rolled-back resume releases to its owner. An uncertain final
+	// export retains the hold until adoption, bounded by the relay backstop.
 	releaseTo := source.addr
 	defer func() {
+		p.mu.Lock()
+		pending := source.pending[c.id]
+		retained := pending != nil && pending.planned
+		p.mu.Unlock()
+		if retained {
+			return
+		}
 		held, releaseErr := r.ReleaseSession(c.id, releaseTo)
 		res.Result.HeldPackets = held
 		if errors.Is(releaseErr, relay.ErrHoldExpired) {
@@ -391,8 +399,11 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	}
 
 	res.Result.StateBytes = len(state)
-	transferred, err := p.store.Transfer(ctx, lease, target.addr, p.ttl)
+	transferred, err := p.transfer(ctx, lease, target.addr)
 	if err != nil {
+		if p.retainUncertainMove(source, c, lease, source.addr, state, err) {
+			return res, err
+		}
 		err = p.rollback(c, source, target, r, state, lease, false, false, &res.Result, err)
 		return res, err
 	}
@@ -425,7 +436,15 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 
 	var err error
 	if transferred {
-		lease, err = p.store.Transfer(ctx, lease, source.addr, p.ttl)
+		from := lease
+		lease, err = p.transfer(ctx, lease, source.addr)
+		routed := source.addr
+		if rerouted {
+			routed = target.addr
+		}
+		if p.retainUncertainMove(source, c, from, routed, state, err) {
+			return err
+		}
 	}
 	var routeErr error
 	if err == nil && rerouted {
@@ -640,4 +659,55 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 // process may use, at most 16.
 func drainParallelism() int {
 	return min(max(runtime.GOMAXPROCS(0), 1), 16)
+}
+
+// transfer adopts an exact candidate after uncertainty. Only settlement can
+// prove a negative; a failed Get must never trigger rollback of a committed move.
+func (p *Plane) transfer(ctx context.Context, from sessionstore.Lease, to netip.AddrPort) (sessionstore.Lease, error) {
+	lease, err := p.store.Transfer(ctx, from, to, p.ttl)
+	var transient *sessionstore.TransientError
+	if !errors.As(err, &transient) || transient.Candidate == nil {
+		return lease, err
+	}
+	return p.resolveCandidate(ctx, *transient.Candidate, err)
+}
+func (p *Plane) resolveCandidate(ctx context.Context, candidate sessionstore.Lease, cause error) (sessionstore.Lease, error) {
+	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+	current, err := p.store.Get(ctx, candidate.SessionID)
+	if err == nil && current.Worker == candidate.Worker && current.Epoch == candidate.Epoch {
+		return current, nil
+	}
+	if resolver, ok := p.store.(sessionstore.TransitionResolver); ok {
+		settled, committed, settleErr := resolver.Settle(ctx, candidate)
+		if settleErr == nil {
+			if committed {
+				return settled, nil
+			}
+			return sessionstore.Lease{}, &sessionstore.TransientError{Op: "settled transfer", Err: cause}
+		}
+	}
+	return sessionstore.Lease{}, &sessionstore.TransientError{Op: "uncertain transfer", Err: cause, Candidate: &candidate}
+}
+
+// Retain the final export and candidate if the store is still unavailable.
+// Run retries these calls without declaring a healthy source worker dead or
+// exporting it again. The relay hold waits for adoption or its bounded
+// backstop; adopted retries explicitly release to the confirmed owner.
+func (p *Plane) retainUncertainMove(source *registration, c *call, from sessionstore.Lease, routed netip.AddrPort, state []byte, cause error) bool {
+	var transient *sessionstore.TransientError
+	if !errors.As(cause, &transient) || transient.Candidate == nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if source.pending == nil {
+		source.pending = make(map[string]*takeoverState)
+	}
+	excluded := map[netip.AddrPort]bool{source.addr: true}
+	if transient.Candidate.Worker == source.addr {
+		excluded = map[netip.AddrPort]bool{from.Worker: true}
+	}
+	source.pending[c.id] = &takeoverState{lease: from, candidate: transient.Candidate, routed: routed, excluded: excluded, attemptLimit: maxResumeAttempts, plannedState: state, planned: true}
+	return true
 }

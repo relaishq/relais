@@ -21,7 +21,7 @@ import (
 // The relay topology (Options.Relay): one or more media workers, each on its
 // own loopback UDP socket, behind a relay. Every answer advertises the
 // relay's public address, the workers send and receive only over the relay
-// leg, and an in-memory session-owner store tells the relay which worker owns
+// leg, and the configured session-owner store tells the relay which worker owns
 // each session. The shared-socket topology for handovers is in handover.go.
 
 // workerParam is the signaling query parameter that picks the worker for an
@@ -32,7 +32,7 @@ const workerParam = "worker"
 // store it routes by. The store outlives relay restarts, as a shared store
 // outlives a relay process.
 type relayTopology struct {
-	owners        *sessionstore.Memory
+	owners        sessionstore.Store
 	loggerFactory logging.LoggerFactory
 
 	mu               sync.Mutex
@@ -46,7 +46,11 @@ type relayTopology struct {
 // startRelayedWorkers starts the relay and opts.Workers workers behind it.
 func startRelayedWorkers(opts Options) (*workers, error) {
 	count := max(opts.Workers, 1)
-	topology := &relayTopology{owners: sessionstore.NewMemory(), loggerFactory: opts.WorkerLoggerFactory}
+	store := opts.SessionStore
+	if store == nil {
+		store = sessionstore.NewMemory()
+	}
+	topology := &relayTopology{owners: store, loggerFactory: opts.WorkerLoggerFactory}
 	r, err := relay.New(relay.Config{
 		PublicAddr:    "127.0.0.1:0",
 		WorkerAddr:    "127.0.0.1:0",

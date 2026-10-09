@@ -454,11 +454,42 @@ func (w *Worker) claim(ctx context.Context, sess *session) error {
 		return nil
 	}
 
+	// Keep Close's wait count nonzero while a claim can enqueue cleanup.
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return ErrClosed
+	}
+	w.running.Add(1)
+	w.mu.Unlock()
+	defer w.running.Done()
 	ctx, cancel := context.WithTimeout(ctx, ownershipTimeout)
 	defer cancel()
 
 	lease, err := w.cfg.Relay.Owners.Claim(ctx, sess.id, w.localAddr, w.cfg.Relay.LeaseTTL)
 	if err != nil {
+		var transient *sessionstore.TransientError
+		if errors.As(err, &transient) && transient.Candidate != nil {
+			candidate := *transient.Candidate
+			w.running.Go(func() {
+				cleanup, cancel := context.WithTimeout(context.Background(), ownershipTimeout)
+				defer cancel()
+				// Settlement fences a delayed claim as well as finding a committed one.
+				// Conditional release can never remove a successor's tenure.
+				if resolver, ok := w.cfg.Relay.Owners.(sessionstore.TransitionResolver); ok {
+					settled, committed, settleErr := resolver.Settle(cleanup, candidate)
+					if settleErr == nil && !committed {
+						return
+					}
+					if committed {
+						candidate = settled
+					}
+				}
+				if releaseErr := w.cfg.Relay.Owners.Release(cleanup, candidate); releaseErr != nil {
+					w.log.Warnf("session %s: uncertain claim cleanup: %v", sess.id, releaseErr)
+				}
+			})
+		}
 		return fmt.Errorf("mediaworker: claim session %s: %w", sess.id, err)
 	}
 
@@ -504,35 +535,58 @@ func (w *Worker) renewLeases() {
 				sessions = append(sessions, sess)
 			}
 			w.mu.Unlock()
-			for _, sess := range sessions {
-				sess.mu.Lock()
-				lease, fenced := sess.lease, sess.fenced.Load()
-				sess.mu.Unlock()
-				if fenced {
-					continue
-				}
-
-				ctx, cancel := context.WithTimeout(sess.ctx, ownershipTimeout)
-				renewed, err := w.cfg.Relay.Owners.Renew(ctx, lease, w.cfg.Relay.LeaseTTL)
-				cancel()
-				sess.mu.Lock()
-				if err == nil {
-					sess.lease = renewed
-				}
-
-				lost := errors.Is(err, sessionstore.ErrLeaseLost) && !sess.fenced.Load()
-				if lost {
-					sess.fenced.Store(true)
-				}
-				sess.mu.Unlock()
-				if lost {
-					w.log.Warnf("session %s: lease lost; fenced", sess.id)
-					sess.close()
-				} else if err != nil && sess.ctx.Err() == nil {
-					w.log.Warnf("session %s: renew lease: %v", sess.id, err)
-				}
+			var renewals sync.WaitGroup
+			if refresher, ok := w.cfg.Relay.Owners.(sessionstore.WorkerIndexRefresher); ok && len(sessions) > 0 {
+				// Exactly one non-droppable index refresh per worker renewal tick.
+				renewals.Go(func() {
+					ctx, cancel := context.WithTimeout(context.Background(), ownershipTimeout)
+					defer cancel()
+					if err := refresher.RefreshWorkerIndex(ctx, w.localAddr, w.cfg.Relay.LeaseTTL); err != nil {
+						w.log.Warnf("refresh worker index: %v", err)
+					}
+				})
 			}
+			// At most 32 lease renewals in flight. A slow session must not
+			// serialize every other lease behind its ownership timeout.
+			slots := make(chan struct{}, 32)
+			for _, sess := range sessions {
+				slots <- struct{}{}
+				renewals.Go(func() {
+					defer func() { <-slots }()
+					w.renewLease(sess)
+				})
+			}
+			renewals.Wait()
 		}
+	}
+}
+
+func (w *Worker) renewLease(sess *session) {
+	sess.mu.Lock()
+	lease, fenced := sess.lease, sess.fenced.Load()
+	sess.mu.Unlock()
+	if fenced {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(sess.ctx, ownershipTimeout)
+	renewed, err := w.cfg.Relay.Owners.Renew(ctx, lease, w.cfg.Relay.LeaseTTL)
+	cancel()
+	sess.mu.Lock()
+	if err == nil {
+		sess.lease = renewed
+	}
+
+	lost := errors.Is(err, sessionstore.ErrLeaseLost) && !sess.fenced.Load()
+	if lost {
+		sess.fenced.Store(true)
+	}
+	sess.mu.Unlock()
+	if lost {
+		w.log.Warnf("session %s: lease lost; fenced", sess.id)
+		sess.close()
+	} else if err != nil && sess.ctx.Err() == nil {
+		w.log.Warnf("session %s: renew lease: %v", sess.id, err)
 	}
 }
 
