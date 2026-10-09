@@ -272,7 +272,7 @@ func (s *SignalingServer) handleConnection(conn *websocket.Conn) {
 			}
 			ice := pion.ICECandidateInit{Candidate: payload.Candidate, SDPMid: payload.SDPMid, SDPMLineIndex: payload.SDPMLineIndex}
 			if err := state.pc.AddICECandidate(ice); err != nil {
-				// log error
+				s.logger.WithError(err).Warn("signaling: add ICE candidate failed")
 			}
 
 		case "select_tracks":
@@ -291,15 +291,6 @@ func (s *SignalingServer) handleConnection(conn *websocket.Conn) {
 			// Unknown message type; ignore or log
 		}
 	}
-}
-
-func (s *SignalingServer) handleSignalingMessage(msg struct {
-	Type    string          `json:"type"`
-	Payload json.RawMessage `json:"payload"`
-},
-) []byte {
-	// Deprecated path: logic handled directly in handleConnection
-	return nil
 }
 
 func mustJSON(v any) json.RawMessage {
