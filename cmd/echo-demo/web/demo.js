@@ -174,22 +174,21 @@ async function start() {
     firstEchoFrameAt: null, firstEchoFrameMethod: null, answer: null,
   });
   window.relaisStats = { source, unverified: [] }; // drop the previous call's stats
-  setCallState('starting');
 
+  // The connection is the call's identity, created before anything is
+  // awaited so that hangup can end the call at any point of start. Hangup
+  // tears the call down and clears pc; after every await, start checks
+  // hungUp and stops without touching pc, resourceURL, localStream or call,
+  // which may already belong to the next call.
+  let conn = null;
+  const hungUp = () => conn !== pc;
   try {
-    localStream = source === 'test'
-      ? await testStream()
-      : await navigator.mediaDevices.getUserMedia({
-        audio: true,
-        video: { width: { ideal: 640 }, height: { ideal: 480 } },
-      });
-    els.local.srcObject = localStream;
+    conn = new RTCPeerConnection({ bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' });
+    pc = conn;
+    setCallState('starting');
 
-    pc = new RTCPeerConnection({ bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' });
-    // An event queued before teardown can fire after it, when pc is null or
-    // already the next call's connection, so each handler keeps its own
-    // connection and ignores events once that is no longer the call's.
-    const conn = pc;
+    // An event queued before teardown can fire after it, so each handler
+    // ignores events once its connection is no longer the call's.
     conn.ontrack = (event) => {
       if (conn === pc) {
         onTrack(event);
@@ -205,37 +204,73 @@ async function start() {
         log(`ICE connection state: ${conn.iceConnectionState}`);
       }
     };
+
+    const stream = source === 'test'
+      ? await testStream()
+      : await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: { width: { ideal: 640 }, height: { ideal: 480 } },
+      });
+    if (hungUp()) {
+      stopTracks(stream); // teardown ran before the call had this media
+      return;
+    }
+    localStream = stream;
+    els.local.srcObject = localStream;
     // Audio first, then video: one sendrecv m-line each, bundled.
     for (const kind of ['audio', 'video']) {
       const track = localStream.getTracks().find((t) => t.kind === kind);
       if (track) {
-        pc.addTransceiver(track, { direction: 'sendrecv', streams: [localStream] });
+        conn.addTransceiver(track, { direction: 'sendrecv', streams: [localStream] });
       } else {
         log(`no local ${kind} track`);
       }
     }
 
-    await pc.setLocalDescription(await pc.createOffer());
+    const offer = await conn.createOffer();
+    if (hungUp()) {
+      return;
+    }
+    await conn.setLocalDescription(offer);
+    if (hungUp()) {
+      return;
+    }
     // ICE-lite worker: it never checks the browser's candidates, so the
     // offer goes out without waiting for gathering.
     const response = await fetch('/calls', {
       method: 'POST',
       headers: { 'Content-Type': 'application/sdp' },
-      body: pc.localDescription.sdp,
+      body: conn.localDescription.sdp,
     });
+    const location = response.status === 201 ? response.headers.get('Location') : null;
+    if (hungUp()) {
+      // The worker created a session after teardown ran, so teardown could
+      // not release it; without this DELETE it would wait out its timeout.
+      deleteSession(location);
+      return;
+    }
+    resourceURL = location; // from here on, teardown releases the session
     const body = await response.text();
+    if (hungUp()) {
+      return;
+    }
     if (response.status !== 201) {
       throw new Error(`POST /calls: ${response.status} ${body.trim()}`);
     }
-    resourceURL = response.headers.get('Location');
     call.answer = describeAnswer(body);
     log(`answer: ${JSON.stringify(call.answer)}`);
-    await pc.setRemoteDescription({ type: 'answer', sdp: body });
+    await conn.setRemoteDescription({ type: 'answer', sdp: body });
+    if (hungUp()) {
+      return;
+    }
     setCallState('connecting');
 
     statsTimer = setInterval(updateStats, STATS_INTERVAL_MS);
     updateStats();
   } catch (err) {
+    if (hungUp()) {
+      return; // the closed connection's error; hangup has published "ended"
+    }
     teardown();
     setCallState('failed', err);
   }
@@ -287,23 +322,32 @@ async function hangup() {
 function teardown() {
   clearInterval(statsTimer);
   statsTimer = null;
-  if (resourceURL) {
-    fetch(resourceURL, { method: 'DELETE' }).catch((err) => log(`DELETE: ${err}`));
-    resourceURL = null;
-  }
+  deleteSession(resourceURL);
+  resourceURL = null;
   if (pc) {
     pc.close();
     pc = null;
   }
-  for (const track of localStream ? localStream.getTracks() : []) {
-    track.stop();
-  }
+  stopTracks(localStream);
   localStream = null;
   clearInterval(testSource.timer);
   testSource.timer = null;
   if (testSource.audioContext) {
     testSource.audioContext.close();
     testSource.audioContext = null;
+  }
+}
+
+// deleteSession ends the worker's session for a call (url is its Location).
+function deleteSession(url) {
+  if (url) {
+    fetch(url, { method: 'DELETE' }).catch((err) => log(`DELETE: ${err}`));
+  }
+}
+
+function stopTracks(stream) {
+  for (const track of stream ? stream.getTracks() : []) {
+    track.stop();
   }
 }
 
