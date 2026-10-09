@@ -1,5 +1,7 @@
 # Relais Scalable Media Server Architecture Plan
 
+> **Historical document.** This plan describes the retired 2025 architecture: the `relais-core` server, `pkg/server` and the Pion v3 adapter in `pkg/webrtc` no longer exist. Its "current" sections and deployment steps do not match the code. For today's architecture see [docs/architecture.md](architecture.md); for the current prototype spec see [GitHub issue #1](https://github.com/relaishq/relais/issues/1).
+
 ## Executive Summary
 
 This document outlines the roadmap for transforming Relais into a horizontally scalable, easy-to-deploy media server solution with Terminal User Interface (TUI) management capabilities. The evolution maintains backward compatibility while adding distributed storage, remote runner management, and comprehensive operational tooling.
@@ -1644,11 +1646,7 @@ kubectl apply -f deployments/kubernetes/redis-cluster.yaml
 kubectl wait --for=condition=ready pod -l app=redis-cluster --timeout=300s
 ```
 
-**Step 2: Deploy Relais Core**
-```bash
-kubectl apply -f deployments/kubernetes/core-deployment.yaml
-kubectl wait --for=condition=available deployment/relais-core --timeout=300s
-```
+**~~Step 2: Deploy Relais Core~~** (retired: there is no `relais-core` binary or `core-deployment.yaml`; skip this step.)
 
 **Step 3: Deploy Runners**
 ```bash
@@ -1657,7 +1655,7 @@ kubectl apply -f deployments/kubernetes/egress-runner-deployment.yaml
 kubectl apply -f deployments/kubernetes/transform-runner-deployment.yaml
 ```
 
-**Step 4: Verify Deployment**
+**Step 4: Verify Deployment** (the `relais-core` checks below no longer apply.)
 ```bash
 # Check all pods are running
 kubectl get pods -l app=relais-core
