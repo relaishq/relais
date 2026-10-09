@@ -7,9 +7,10 @@ Relais is a distributed media server that supports flexible ingress and egress o
 ## Core Components
 
 ### 1. Media Worker (prototype)
-- `pkg/mediaworker`: a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) instead of Pion's PeerConnection, so session state can later be exported and resumed on another worker
+- `pkg/mediaworker`: a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) instead of Pion's PeerConnection, so session state can be exported and resumed on another worker
 - WHIP-style signaling: one HTTP exchange per call
 - Currently echoes the caller's Opus audio and VP8 video
+- Planned handover: several workers can share one UDP socket (`Socket`), and a live session moves between them as exported bytes (ICE credentials, DTLS connection state, SRTP indexes, outbound track counters) without the caller reconnecting
 - Tested through the call harness (`pkg/callharness`) and demonstrated by the browser echo demo (`cmd/echo-demo`)
 
 The earlier `relais-core` server (Pion v3 signaling, session control plane API) has been retired.
@@ -37,7 +38,7 @@ Live calls terminate on the media worker and do not use storage yet. The plugin 
 The system scales horizontally by:
 - Running multiple plugin instances
 - Using distributed storage
-- Running multiple media workers (planned: session handover between workers and a relay in front of them)
+- Running multiple media workers: sessions can move between workers on one UDP socket today; a relay in front of separate workers is planned
 
 ## Security
 

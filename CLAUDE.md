@@ -11,7 +11,8 @@ make deps
 # Build the plugin runner binaries (ingress, egress, transform)
 make build
 
-# Run one media worker plus the browser echo page on http://localhost:9101
+# Run media workers A and B on one UDP socket plus the browser echo page on
+# http://localhost:9101 ("Move call" hands the live call to the other worker)
 make demo
 
 # Clean build artifacts
@@ -51,9 +52,9 @@ make fmt
 Relais is a distributed media server. Live WebRTC media runs in the media worker prototype; stored frames flow through a plugin-based pipeline:
 
 - **Media path (prototype)**:
-  - `pkg/mediaworker/` - Media worker: a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) with WHIP-style signaling; it currently echoes the caller's audio and video
-  - `pkg/callharness/` - Call harness: the test seam for media; a Pion WebRTC client plays the caller in-process
-  - `cmd/echo-demo` - Browser echo demo for the media worker (`make demo`)
+  - `pkg/mediaworker/` - Media worker: a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) with WHIP-style signaling; it currently echoes the caller's audio and video. A live session can be exported to bytes and resumed on another worker that shares the same UDP socket (`Socket.Handover`, a planned handover)
+  - `pkg/callharness/` - Call harness: the test seam for media; a Pion WebRTC client plays the caller in-process, and `Call.Handover` moves a call between workers
+  - `cmd/echo-demo` - Browser echo demo: two media workers on one socket, with a "Move call" button (`make demo`)
 
 - **Plugin runners**:
   - `ingress-runner` - Handles media input plugins
