@@ -24,7 +24,7 @@ jobs:
       - name: Build binaries
         run: |
           make build
-          tar czf relais-${{ github.ref_name }}-linux-amd64.tar.gz relais*
+          tar czf relais-${{ github.ref_name }}-linux-amd64.tar.gz bin/relais-*
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
