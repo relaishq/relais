@@ -23,6 +23,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -94,12 +95,21 @@ type session struct {
 	encryptBuf []byte
 
 	// ctx is the session's lifetime; close cancels it.
-	ctx            context.Context
-	cancel         context.CancelFunc
-	closeOnce      sync.Once
-	snapshotMu     sync.Mutex // serialize encode/store without blocking packet processing
-	snapshotWanted chan struct{}
-	needsKeyframe  bool // resumed video may not yet have a known inbound SSRC
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	closeOnce           sync.Once
+	snapshotMu          sync.Mutex // serialize encode/store without blocking packet processing
+	snapshotWanted      chan struct{}
+	needsKeyframe       bool // resumed video may not yet have a known inbound SSRC
+	cacheMu             sync.Mutex
+	collector           frameCollector     // guarded by mu
+	replay              []framecache.Frame // loaded and encoded before adoption
+	afterReplay         bool               // first live video must follow the cached burst
+	replaying           bool
+	replayStart         uint64
+	replayTimestamp     uint32
+	replayAnchorAt      time.Time
+	replayBurstDuration time.Duration
 }
 
 // newSession creates a session for an offer: the session state with fresh
@@ -386,8 +396,9 @@ func (s *session) handlePacket(pkt []byte) {
 // outbound track for its payload type (Opus on the audio track, VP8 on the
 // video track).
 func (s *session) handleRTP(pkt []byte) {
+	var complete *framecache.Frame
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer func() { s.mu.Unlock(); s.appendFrame(complete) }()
 
 	if s.srtpIn == nil || s.fenced.Load() {
 		return // SRTP keys are not ready yet, or the session has moved.
@@ -428,6 +439,18 @@ func (s *session) handleRTP(pkt []byte) {
 		return
 	}
 
+	if track == &s.state.Video && (s.replaying || track.ReplayFloor > 0 && extendIndex(track.HighestSentIndex, header.SequenceNumber) <= track.ReplayFloor) {
+		return
+	}
+	if track == &s.state.Video && s.afterReplay {
+		s.continueAfterReplay(&in, &header)
+	}
+	if track == &s.state.Video && s.worker.cfg.cacheEnabled() {
+		complete = s.collector.push(&in, framecache.Track{Kind: track.ID, SSRC: track.SSRC})
+		if complete != nil {
+			complete.EchoTimestamp = header.Timestamp
+		}
+	}
 	out := rtp.Packet{Header: header, Payload: in.Payload}
 	n, err := out.MarshalTo(s.plainBuf)
 	if err != nil {
@@ -587,6 +610,15 @@ func (s *session) close() {
 		}
 		_ = s.dtlsEndpoint.Close()
 
+		if !s.fenced.Load() && s.worker.cfg.Relay == nil && s.worker.cfg.cacheEnabled() {
+			s.cacheMu.Lock()
+			ctx, cancel := context.WithTimeout(context.Background(), ownershipTimeout)
+			if err := s.worker.cfg.FrameCache.DeleteSession(ctx, s.id); err != nil {
+				s.log.Warnf("session %s: delete frames: %v", s.id, err)
+			}
+			cancel()
+			s.cacheMu.Unlock()
+		}
 		s.worker.forget(s)
 		s.worker.releaseSession(s.id)
 		if s.fenced.Load() {

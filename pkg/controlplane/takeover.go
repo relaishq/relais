@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/sessionstore"
 )
@@ -25,6 +26,8 @@ import (
 // fencing/dropping its old sessions. Remote workers need an explicit token
 // for this acknowledgment; the in-process contract uses the next heartbeat.
 type Config struct {
+	// FrameCache is shared with the workers, for hangup/lost-call cleanup.
+	FrameCache          framecache.Store
 	DeadAfter           time.Duration // 400 ms without a heartbeat
 	CheckInterval       time.Duration // 50 ms: detection adds at most one tick
 	TakeoverParallelism int           // 16; never one goroutine per unbounded call set
@@ -397,6 +400,7 @@ func (p *Plane) lose(c *call, lease sessionstore.Lease) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = p.store.Release(ctx, lease)
+	p.deleteFrames(c.id)
 	p.mu.Lock()
 	r := p.relay
 	p.mu.Unlock()
@@ -434,4 +438,15 @@ func (p *Plane) Replace(name string, addr netip.AddrPort, worker Worker) error {
 		w.StartHeartbeats(p)
 	}
 	return nil
+}
+
+// deleteFrames applies only to a terminal call, never to the old worker's
+// lost lease: the successor still needs that same shared cache.
+func (p *Plane) deleteFrames(id string) {
+	if p.config.FrameCache == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = p.config.FrameCache.DeleteSession(ctx, id)
 }

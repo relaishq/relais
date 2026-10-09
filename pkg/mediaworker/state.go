@@ -12,7 +12,8 @@ import (
 // state can be checked before a worker resumes it. Version 3 is the first
 // exported form: the state plus the DTLS connection state.
 // Version 4 persists counter advance accumulated while a track is silent.
-const sessionStateVersion = 4
+// Version 5 persists the cache replay floor across subsequent resumes.
+const sessionStateVersion = 5
 
 // sessionState is the session state: everything needed to continue a session
 // on another media worker except the established DTLS connection state, kept
@@ -114,9 +115,15 @@ type trackState struct {
 	AdvanceSinceSend uint32
 	Packets          uint64
 	// HighestSentIndex is the highest extended sequence number (rollover
-	// counter << 16 | sequence number) sent on the track.
+	// counter << 16 | sequence number) sent or durably reserved on the track.
 	HighestSentIndex uint64
-	LastTimestamp    uint32
+	// ReplayFloor protects cached indexes and advances to the snapshot high
+	// water mark on later resumes. Never echo a
+	// rewritten source index at or below it, including after planned resumes.
+	// After a margin-zero move of an ever-replayed session, reordered late packets
+	// never echoed by the old owner are dropped: a small quality cost, not a safety issue.
+	ReplayFloor   uint64
+	LastTimestamp uint32
 	// SRTCPIndex is the last SRTCP index the worker used for RTCP it sent
 	// with this track's SSRC as the sender: the keyframe requests (PLI) it
 	// sends the caller on the video track. It stays zero until the first.

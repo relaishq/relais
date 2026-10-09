@@ -9,6 +9,7 @@ import (
 	"image"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
@@ -33,23 +34,27 @@ import (
 
 // vp8Frame is one VP8 frame the caller reassembled from RTP packets.
 type vp8Frame struct {
-	data      []byte
-	timestamp uint32 // RTP timestamp
-	firstSeq  uint16
-	lastSeq   uint16
-	keyframe  bool
+	data         []byte
+	timestamp    uint32 // RTP timestamp
+	firstSeq     uint16
+	lastSeq      uint16
+	keyframe     bool
+	pictureID    uint16
+	firstArrival time.Time
 }
 
 // vp8Assembler reassembles the VP8 frames of one track from its RTP packets
 // in arrival order. It repairs nothing: the echo runs over loopback, so a
 // missing or reordered packet is a defect to report.
 type vp8Assembler struct {
-	building  bool
-	broken    bool // the frame lost its start or a packet
-	timestamp uint32
-	firstSeq  uint16
-	lastSeq   uint16
-	buf       []byte
+	building     bool
+	broken       bool // the frame lost its start or a packet
+	timestamp    uint32
+	firstSeq     uint16
+	lastSeq      uint16
+	buf          []byte
+	pictureID    uint16
+	firstArrival time.Time
 }
 
 // push adds the next packet. It returns the frame the packet completes, if
@@ -72,6 +77,8 @@ func (a *vp8Assembler) push(pkt *rtp.Packet) (frame *vp8Frame, incomplete int) {
 		a.broken = err != nil || desc.S != 1 || desc.PID != 0
 		a.timestamp = pkt.Timestamp
 		a.firstSeq = pkt.SequenceNumber
+		a.pictureID = desc.PictureID
+		a.firstArrival = time.Now()
 		a.buf = a.buf[:0]
 	} else if err != nil || pkt.SequenceNumber != a.lastSeq+1 {
 		a.broken = true
@@ -94,6 +101,7 @@ func (a *vp8Assembler) push(pkt *rtp.Packet) (frame *vp8Frame, incomplete int) {
 		firstSeq:  a.firstSeq,
 		lastSeq:   a.lastSeq,
 		keyframe:  isVP8Keyframe(data),
+		pictureID: a.pictureID, firstArrival: a.firstArrival,
 	}, incomplete
 }
 
@@ -132,8 +140,10 @@ func fullDecode(ctx context.Context, frames []vp8Frame, size image.Point) FullDe
 
 	// framecrc prints one line per decoded frame; -xerror stops at the first
 	// decode error, and -v error prints nothing unless something failed.
+	// Preserve compressed replay timestamps: ffmpeg's default output pacing
+	// would drop decoded burst frames to impose a constant output frame rate.
 	cmd := exec.CommandContext(ctx, path, "-hide_banner", "-nostdin", "-v", "error", "-xerror",
-		"-threads", "1", "-f", "ivf", "-i", "pipe:0", "-f", "framecrc", "-")
+		"-threads", "1", "-f", "ivf", "-i", "pipe:0", "-fps_mode", "passthrough", "-f", "framecrc", "-")
 	cmd.Stdin = &ivf
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

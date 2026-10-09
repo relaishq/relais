@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
 )
 
@@ -34,7 +35,7 @@ func startWorkers(opts Options) (*workers, error) {
 	if opts.Relay {
 		return startRelayedWorkers(opts)
 	}
-	cfg := mediaworker.Config{LoggerFactory: opts.WorkerLoggerFactory}
+	cfg := mediaworker.Config{FrameCache: framecache.NewMemory(framecache.Limits{}), LoggerFactory: opts.WorkerLoggerFactory, DisableFrameCache: opts.DisableFrameCache, DisableResumePLI: opts.DisableResumePLI}
 	if opts.Workers <= 1 {
 		cfg.ListenAddr = "127.0.0.1:0"
 		worker, err := mediaworker.New(cfg)
@@ -171,14 +172,19 @@ type moveRecord struct {
 
 // rtpMark is the header of a packet the caller received.
 type rtpMark struct {
-	seq       uint16
-	timestamp uint32
+	seq           uint16
+	timestamp     uint32
+	pictureID     uint16
+	havePictureID bool
 }
 
 // frameMark is a complete video frame the caller received.
 type frameMark struct {
-	at        time.Duration
-	decodable bool
+	at           time.Duration
+	decodable    bool
+	firstArrival time.Duration
+	source       sentVideoFrame
+	pictureID    uint16
 }
 
 // consentSample is the caller's running totals of consent checks sent and
@@ -200,6 +206,10 @@ func (r *recorder) move(record moveRecord) {
 // MoveReport is one planned handover as the caller observed it, plus what
 // the system reported about it.
 type MoveReport struct {
+	// Recovery measures video recovery from the caller's first post-margin RTP
+	// packet, including replay received while ResumeSession is still returning.
+	Recovery VideoRecovery
+
 	Kind                          string        // "move" or "takeover"
 	DetectionTime                 time.Duration // failure action to control-plane detection
 	DecryptionFailuresAfterResume int
@@ -296,6 +306,13 @@ func (r *recorder) moveReports() []MoveReport {
 		}
 		for _, track := range r.tracks {
 			report.Tracks = append(report.Tracks, track.aroundMove(report.Start, report.End))
+		}
+		if report.Kind == "takeover" {
+			limit := r.hungUpAt
+			if len(reports)+1 < len(r.moves) {
+				limit = r.since(r.moves[len(reports)+1].start)
+			}
+			report.Recovery = r.videoRecovery(report.Start, limit)
 		}
 		firstResumed := time.Duration(0)
 		for _, track := range r.tracks {
@@ -438,6 +455,14 @@ func (r *recorder) consentEnd() time.Duration {
 func writeHandoverSummary(b *strings.Builder, r *Report) {
 	for i, move := range r.Moves {
 		res := move.Result
+		if move.Kind == "takeover" {
+			recovery := move.Recovery
+			live := recovery.FirstDecodedLiveAfterKill.String()
+			if recovery.LivePath == "" {
+				live = "not observed"
+			}
+			fmt.Fprintf(b, "  video recovery: first decoded %s, first live %s from kill; %s from media resume; path=%s live_path=%s picture_id=%d interval=%s keyframe_interval=%s within_interval=%t\n", recovery.FirstDecodedAfterKill, live, recovery.FirstDecodedAfterMediaResume, recovery.Path, recovery.LivePath, recovery.PictureID, recovery.FrameInterval, recovery.KeyframeInterval, recovery.WithinFrameInterval)
+		}
 		fmt.Fprintf(b, "  %s %d: worker %d -> %d at %s (detection %s, decrypt failures after resume %d)", move.Kind, i+1, move.From, move.To, ms(move.Start), ms(move.DetectionTime), move.DecryptionFailuresAfterResume)
 		if move.Error != "" {
 			fmt.Fprintf(b, " FAILED (rolled back: %t): %s\n", res.RolledBack, move.Error)

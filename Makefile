@@ -81,14 +81,14 @@ test-streams: ## Run Redis Streams tests (non-cluster) in storage
 test-cluster: ## Run Redis Cluster integration tests (requires RELAIS_TEST_REDIS_CLUSTER_ADDRS)
 	$(GOTEST) -v -count=1 -run '^TestCluster' ./pkg/storage
 
-HARNESS_PKGS=./pkg/controlplane/... ./pkg/mediaworker/... ./pkg/relay/... ./pkg/sessionstore/... ./pkg/callharness/... ./cmd/echo-demo/...
+HARNESS_PKGS=./pkg/framecache/... ./pkg/controlplane/... ./pkg/mediaworker/... ./pkg/relay/... ./pkg/sessionstore/... ./pkg/callharness/... ./cmd/echo-demo/...
 HARNESS_FLAGS ?=
 
 test-harness: ## Run the call harness (audio+video echo calls, direct and through the relay) with the race detector; HARNESS_FLAGS=-short for 5 s calls; full VP8 decode needs ffmpeg on PATH
 	$(GOTEST) -race -v -count=1 -timeout 20m $(HARNESS_FLAGS) $(HARNESS_PKGS)
 
 test-harness-timing: ## Run the relay move, drain and takeover timing tests without the race detector, which enforce issues #6/#7's gap targets (needs ffmpeg on PATH)
-	$(GOTEST) -v -count=1 -run '^TestRelay(PlannedHandover|DrainTenCalls|HardKillTakeover|StaleSnapshotTakeover|MidKeyframeTakeover|FirstKeyframeTakeover)$$' ./pkg/callharness/
+	$(GOTEST) -v -count=1 -run '^TestRelay(PlannedHandover|DrainTenCalls|HardKillTakeover|StaleSnapshotTakeover|MidKeyframeTakeover|FirstKeyframeTakeover|FrameCacheModes|FrameCacheMidKeyframe|FrameCacheWithoutSource|FrameCacheLargeGroup)$$' ./pkg/callharness/
 
 DEMO_FLAGS ?=
 

@@ -11,6 +11,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -225,16 +226,82 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 		sess.close()
 		return "", err
 	}
-	if err := w.adopt(sess, dtlsConn); err != nil {
+	var replayPackets [][]byte
+	if opts.SequenceMargin > 0 && w.cfg.socket == nil && sess.state.Video.negotiated() && w.cfg.cacheEnabled() {
+		timeout := w.cfg.CacheReadTimeout
+		if timeout <= 0 {
+			timeout = 150 * time.Millisecond
+		}
+		ctx, cancel := context.WithTimeout(parent, timeout)
+		frames, cacheErr := w.cfg.FrameCache.Current(ctx, sess.id, framecache.Track{Kind: sess.state.Video.ID, SSRC: sess.state.Video.SSRC})
+		cancel()
+		if cacheErr != nil {
+			reason := "cache-error"
+			if errors.Is(cacheErr, context.DeadlineExceeded) {
+				reason = "cache-timeout"
+			}
+			sess.skipReplay(reason)
+			sess.log.Warnf("session %s: read cached group: %v", sess.id, cacheErr)
+		} else {
+			before := sess.state.Video
+			if sess.reserveReplay(frames, opts.SequenceMargin) {
+				if err := sess.persistSnapshotContext(parent); err != nil {
+					// No replay ciphertext has been made or sent. Keep PLI recovery when
+					// storage is unavailable, but a lost lease must still abort adoption.
+					sess.state.Video = before
+					sess.replay = nil
+					sess.skipReplay("reservation-failure")
+					if sess.fenced.Load() {
+						return "", err
+					}
+					sess.log.Warnf("session %s: reserve cached replay: %v", sess.id, err)
+				} else {
+					replayPackets, err = sess.encodeReplay()
+					if err != nil {
+						sess.skipReplay("encoding-failure")
+						sess.fenced.Store(true)
+						sess.close()
+						return "", err
+					}
+				}
+			}
+		}
+	}
+
+	if opts.SequenceMargin > 0 && sess.state.Video.negotiated() {
+		if w.cfg.socket != nil {
+			sess.skipReplay("shared-socket")
+		} else if w.cfg.FrameCache == nil {
+			sess.skipReplay("unconfigured")
+		} else if !w.cfg.cacheEnabled() {
+			sess.skipReplay("disabled")
+		}
+	}
+
+	if err := parent.Err(); err != nil {
+		sess.fenced.Store(true)
+		sess.close()
+		return "", err
+	}
+	sess.mu.Lock()
+	sess.replaying = len(replayPackets) > 0
+	if err := w.adopt(sess, dtlsConn, replayPackets); err != nil {
+		sess.mu.Unlock()
 		sess.fenced.Store(true)
 		sess.close()
 
 		return "", err
 	}
-	sess.mu.Lock()
-	sess.needsKeyframe = opts.SequenceMargin > 0 && sess.state.Video.negotiated()
-	if sess.needsKeyframe {
+	sess.needsKeyframe = opts.SequenceMargin > 0 && sess.state.Video.negotiated() && !w.cfg.DisableResumePLI
+	// Shared-socket output is fenced until Handover switches the route. Keep
+	// the request pending for the first routed video packet; skip replay there.
+	if sess.needsKeyframe && w.cfg.socket == nil {
 		sess.requestKeyframe("resume")
+	}
+
+	// A cached group can recover the source identity of an unanchored snapshot.
+	if sess.needsKeyframe && w.cfg.socket == nil && sess.state.Video.Anchored {
+		sess.requestKeyframe("resume-cache")
 	}
 	pendingPLI := sess.needsKeyframe
 	sess.mu.Unlock()
@@ -257,7 +324,7 @@ func (w *Worker) SessionDecryptFailures(sessionID string) (uint64, error) {
 }
 
 // adopt registers a resumed session and serves it.
-func (w *Worker) adopt(sess *session, dtlsConn *dtls.Conn) error {
+func (w *Worker) adopt(sess *session, dtlsConn *dtls.Conn, replayPackets [][]byte) error {
 	w.mu.Lock()
 	if w.closed {
 		w.mu.Unlock()
@@ -274,7 +341,13 @@ func (w *Worker) adopt(sess *session, dtlsConn *dtls.Conn) error {
 	// SRTP belong to the session before the caller's next consent check.
 	w.byAddr[sess.state.ICE.RemoteAddr] = sess
 	w.running.Add(2)
+	if len(replayPackets) > 0 {
+		w.running.Add(1)
+	}
 	w.mu.Unlock()
+	if len(replayPackets) > 0 {
+		go func() { defer w.running.Done(); sess.sendReplay(replayPackets) }()
+	}
 	go func() { defer w.running.Done(); sess.snapshotLoop() }()
 
 	go func() {
@@ -427,6 +500,13 @@ func (s *session) resumeTrack(track *trackState, opts ResumeOptions) error {
 	}
 	if err := track.checkSequenceMargin(opts.SequenceMargin); err != nil {
 		return err
+	}
+	// A later resume must also protect live indexes used since the burst.
+	// Conservatively advance the persisted floor to the snapshot's high water
+	// mark, including reserved but unsent indexes. In particular a margin-zero
+	// handover cannot re-encrypt recently accepted source packets there.
+	if track.ReplayFloor > 0 {
+		track.ReplayFloor = track.HighestSentIndex
 	}
 	if track.Packets == 0 {
 		// The handshake snapshot may predate the first media packet. Keep
