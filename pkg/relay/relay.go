@@ -11,21 +11,31 @@
 // table. Every other packet (DTLS, SRTP, SRTCP, or anything else) is
 // forwarded untouched to the worker the flow table names for the address it
 // came from; the relay never looks past the bytes that tell STUN apart from
-// the rest (RFC 7983). A packet from an address without a confirmed flow is
+// the rest (RFC 7983). A packet from an address without a confirmed route is
 // dropped.
 //
+// No routing changes for a caller until the owning worker has authenticated
+// one of the caller's binding requests (see flows.go). The relay cannot
+// check ICE credentials, so a binding request it routes by the store only
+// proposes a pending candidate for the caller, which carries that session's
+// binding requests and nothing else; the caller's confirmed route, if any,
+// is untouched. The candidate becomes the confirmed route when its worker
+// sends the caller a STUN binding success for one of those requests, which
+// the worker does only after checking the credentials. The relay reads STUN
+// headers on the worker leg for that, and nothing else.
+//
 // Store lookups run off the packet path (see lookups.go): a binding request
-// on an established flow is forwarded at once, and the lookup only checks
-// that the owner has not changed. A new flow is pending until its worker
-// answers the caller, which the worker does only after checking the
-// request's ICE credentials; the flow table is bounded (see flows.go).
+// on an established route is forwarded at once, and the lookup only checks
+// that the owner has not changed. Lookups, their queues and the flow table
+// are all bounded.
 //
 // Media workers bind only private sockets. They reach callers through the
 // relay: the relay leg (see header.go) carries each packet with the caller's
 // address, so callers only ever see the relay's address. The relay accepts
 // relay-leg datagrams only from registered workers (Config.Workers,
-// AddWorker), and sends a worker's packet only to a caller whose flow that
-// worker owns.
+// AddWorker), and sends a worker's packet only to a caller whose confirmed
+// route is that worker, or, for the binding success that confirms it, whose
+// candidate is.
 //
 // The flow table is a cache, not state. A restarted relay starts with an
 // empty table and rebuilds each flow from the store on the caller's next
@@ -57,17 +67,18 @@ const (
 	// up on the session too.
 	DefaultFlowTimeout = 30 * time.Second
 
-	// DefaultPendingFlowTimeout drops a pending flow its worker has not
-	// answered. A worker answers a valid binding request within
+	// DefaultPendingFlowTimeout drops a pending candidate its worker has not
+	// confirmed. A worker answers a valid binding request within
 	// milliseconds.
 	DefaultPendingFlowTimeout = 3 * time.Second
 
 	DefaultMaxFlows        = 65536
 	DefaultMaxPendingFlows = 4096
 
-	DefaultOwnerLookups       = 16
-	DefaultMaxQueuedLookups   = 1024
-	DefaultOwnerLookupTimeout = time.Second
+	DefaultOwnerLookups         = 16
+	DefaultMaxQueuedLookups     = 1024
+	DefaultMaxQueuedLookupBytes = 1 << 20
+	DefaultOwnerLookupTimeout   = time.Second
 )
 
 const (
@@ -100,27 +111,36 @@ type Config struct {
 	// requests by. Required.
 	Owners sessionstore.Owners
 
-	// FlowTimeout drops a confirmed flow after its caller has sent nothing
-	// for this long; PendingFlowTimeout drops a pending flow its worker has
-	// not answered. Default DefaultFlowTimeout and DefaultPendingFlowTimeout.
+	// FlowTimeout drops a confirmed route after its caller has sent nothing
+	// for this long; PendingFlowTimeout drops a pending candidate its worker
+	// has not confirmed. Default DefaultFlowTimeout and
+	// DefaultPendingFlowTimeout.
 	FlowTimeout        time.Duration
 	PendingFlowTimeout time.Duration
 
-	// MaxFlows bounds the flow table, and MaxPendingFlows the pending flows
-	// in it. Default DefaultMaxFlows and DefaultMaxPendingFlows.
+	// MaxFlows bounds confirmed routes and pending candidates together, and
+	// MaxPendingFlows the candidates. Default DefaultMaxFlows and
+	// DefaultMaxPendingFlows.
 	MaxFlows        int
 	MaxPendingFlows int
 
 	// OwnerLookups is how many store lookups run at once; MaxQueuedLookups
-	// bounds the sessions waiting for or undergoing one; OwnerLookupTimeout
-	// bounds each. Default DefaultOwnerLookups, DefaultMaxQueuedLookups and
+	// bounds the sessions waiting for or undergoing one, and
+	// MaxQueuedLookupBytes the binding requests copied while they wait;
+	// OwnerLookupTimeout bounds each lookup. Default DefaultOwnerLookups,
+	// DefaultMaxQueuedLookups, DefaultMaxQueuedLookupBytes and
 	// DefaultOwnerLookupTimeout.
-	OwnerLookups       int
-	MaxQueuedLookups   int
-	OwnerLookupTimeout time.Duration
+	OwnerLookups         int
+	MaxQueuedLookups     int
+	MaxQueuedLookupBytes int
+	OwnerLookupTimeout   time.Duration
 
 	// LoggerFactory defaults to Pion's default logger factory.
 	LoggerFactory logging.LoggerFactory
+
+	// beforeApply, when set, runs after a session's owner has been read and
+	// before the result is applied. Tests use it to hold a result back.
+	beforeApply func(sessionID string)
 }
 
 // Stats counts what the relay has done since it started.
@@ -134,26 +154,32 @@ type Stats struct {
 	STUNRouted uint64
 
 	// Binding requests dropped: UnknownSession for a session the store has
-	// no owner for, LookupsDropped because owner lookups were saturated, and
-	// LookupsFailed because the store lookup failed. Unroutable counts other
-	// caller packets dropped for want of a confirmed flow.
+	// no owner for, LookupsDropped because owner lookups were saturated (or
+	// the request was too large to hold), LookupsFailed because the store
+	// lookup failed, and FlowsRejected because confirmed routes filled the
+	// flow table. Unroutable counts other caller packets dropped for want of
+	// a confirmed route.
 	UnknownSession uint64
 	LookupsDropped uint64
 	LookupsFailed  uint64
+	FlowsRejected  uint64
 	Unroutable     uint64
 
 	// Relay-leg datagrams dropped: UnknownWorker from an unregistered
-	// address, WorkerNoFlow for a caller whose flow the sending worker does
-	// not own, and Malformed for a bad header.
+	// address, WorkerNoFlow for a caller the sending worker holds neither the
+	// confirmed route of nor a candidate its binding success confirms, and
+	// Malformed for a bad header.
 	UnknownWorker uint64
 	WorkerNoFlow  uint64
 	Malformed     uint64
 
-	// Flows and PendingFlows are the flow table's size now; FlowsEvicted
-	// counts flows its limits have evicted.
-	Flows        int
-	PendingFlows int
-	FlowsEvicted uint64
+	// Flows counts confirmed routes now and PendingFlows pending candidates.
+	// FlowsPromoted counts candidates their worker confirmed, and
+	// FlowsEvicted candidates the limits evicted.
+	Flows         int
+	PendingFlows  int
+	FlowsPromoted uint64
+	FlowsEvicted  uint64
 }
 
 // Relay is a running relay.
@@ -227,7 +253,7 @@ func New(cfg Config) (*Relay, error) {
 	for _, worker := range cfg.Workers {
 		r.AddWorker(worker)
 	}
-	r.lookups = newOwnerLookups(r, cfg.OwnerLookups, cfg.MaxQueuedLookups)
+	r.lookups = newOwnerLookups(r, cfg)
 	r.running.Add(3)
 	go r.callerLoop()
 	go r.workerLoop()
@@ -260,6 +286,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.MaxQueuedLookups <= 0 {
 		cfg.MaxQueuedLookups = DefaultMaxQueuedLookups
+	}
+	if cfg.MaxQueuedLookupBytes <= 0 {
+		cfg.MaxQueuedLookupBytes = DefaultMaxQueuedLookupBytes
 	}
 	if cfg.OwnerLookupTimeout <= 0 {
 		cfg.OwnerLookupTimeout = DefaultOwnerLookupTimeout
@@ -331,7 +360,7 @@ func (r *Relay) registered(worker netip.AddrPort) bool {
 
 // Stats returns the relay's counters.
 func (r *Relay) Stats() Stats {
-	flows, pending, evicted := r.flows.counts()
+	flows := r.flows.counts()
 
 	return Stats{
 		CallerPackets:  r.callerPackets.Load(),
@@ -340,13 +369,15 @@ func (r *Relay) Stats() Stats {
 		UnknownSession: r.unknownSession.Load(),
 		LookupsDropped: r.lookupsDropped.Load(),
 		LookupsFailed:  r.lookupsFailed.Load(),
+		FlowsRejected:  flows.rejected,
 		Unroutable:     r.unroutable.Load(),
 		UnknownWorker:  r.unknownWorker.Load(),
 		WorkerNoFlow:   r.workerNoFlow.Load(),
 		Malformed:      r.malformed.Load(),
-		Flows:          flows,
-		PendingFlows:   pending,
-		FlowsEvicted:   evicted,
+		Flows:          flows.routes,
+		PendingFlows:   flows.pending,
+		FlowsPromoted:  flows.promoted,
+		FlowsEvicted:   flows.evicted,
 	}
 }
 
@@ -387,23 +418,23 @@ func (r *Relay) callerLoop() {
 	}
 }
 
-// route picks the worker for a caller packet. A binding request on a flow
-// for its session follows the flow, and a store lookup checks the owner in
-// the background; any other binding request waits for its lookup (and is
-// forwarded by the lookup, not here). Every other packet needs a confirmed
-// flow.
+// route picks the worker for a caller packet. A binding request for the
+// session of the caller's candidate or route follows it, and a store lookup
+// checks the owner in the background; any other binding request waits for
+// its lookup (and is forwarded by the lookup, not here). Every other packet
+// needs a confirmed route.
 func (r *Relay) route(pkt []byte, from netip.AddrPort) (netip.AddrPort, bool) {
 	now := time.Now()
 
 	if isSTUN(pkt) {
-		if sessionID, ok := bindingRequestSession(pkt); ok {
-			if worker, ok := r.flows.routeSTUN(from, sessionID, now); ok {
+		if sessionID, txID, ok := parseBindingRequest(pkt); ok {
+			if worker, ok := r.flows.routeSTUN(from, sessionID, txID, now); ok {
 				r.stunRouted.Add(1)
 				r.lookups.refresh(sessionID, from)
 
 				return worker, true
 			}
-			if !r.lookups.resolve(sessionID, from, pkt) {
+			if !r.lookups.resolve(sessionID, from, pkt, txID) {
 				r.lookupsDropped.Add(1)
 			}
 
@@ -440,8 +471,9 @@ func (r *Relay) owner(sessionID string) (netip.AddrPort, error) {
 }
 
 // resolved acts on a session's owner lookup for the callers waiting on it:
-// it admits each waiting binding request's caller and forwards the request,
-// or moves an established flow to a new owner.
+// it proposes each waiting binding request's caller to the owner and
+// forwards the request, or has an established route follow a new owner
+// (through a candidate the owner must confirm).
 func (r *Relay) resolved(sessionID string, owner netip.AddrPort, err error, waiters []waiter) {
 	now := time.Now()
 	switch {
@@ -449,12 +481,15 @@ func (r *Relay) resolved(sessionID string, owner netip.AddrPort, err error, wait
 		for _, w := range waiters {
 			if w.datagram == nil {
 				if r.flows.reroute(w.caller, owner, sessionID, now) {
-					r.log.Infof("session %s: owner is now worker %s; caller %s follows", sessionID, owner, w.caller)
+					r.log.Infof("session %s: owner is now worker %s; caller %s moves once it answers",
+						sessionID, owner, w.caller)
 				}
 
 				continue
 			}
-			r.flows.admit(w.caller, owner, sessionID, now)
+			if !r.flows.admit(w.caller, owner, sessionID, w.txID, now) {
+				continue // counted as FlowsRejected
+			}
 			r.stunRouted.Add(1)
 			r.forward(w.datagram, w.caller, owner)
 		}
@@ -480,7 +515,8 @@ func (r *Relay) resolved(sessionID string, owner netip.AddrPort, err error, wait
 
 // workerLoop reads the relay leg and sends each worker packet to the caller
 // its header names, from the public socket: only from a registered worker,
-// and only to a caller whose flow that worker owns.
+// and only to a caller whose confirmed route is that worker, or whose
+// candidate it confirms with a binding success.
 func (r *Relay) workerLoop() {
 	defer r.running.Done()
 
@@ -509,14 +545,14 @@ func (r *Relay) workerLoop() {
 
 			continue
 		}
-		allowed, confirmed := r.flows.answer(caller, from, time.Now())
+		allowed, promoted := r.flows.answer(caller, from, pkt, time.Now())
 		if !allowed {
 			r.workerNoFlow.Add(1)
 
 			continue
 		}
-		if confirmed != "" {
-			r.log.Infof("session %s: caller %s <-> worker %s", confirmed, caller, from)
+		if promoted != "" {
+			r.log.Infof("session %s: caller %s <-> worker %s", promoted, caller, from)
 		}
 		if _, err := r.public.WriteToUDPAddrPort(pkt, caller); err != nil {
 			r.log.Debugf("forward to caller %s: %v", caller, err)
@@ -550,21 +586,22 @@ func isSTUN(pkt []byte) bool {
 	return len(pkt) > 0 && pkt[0] <= 3 && stun.IsMessage(pkt)
 }
 
-// bindingRequestSession returns the session a STUN binding request is for:
-// the first half of its USERNAME, which is the worker's ICE ufrag. Message
-// integrity is not checked here; the worker checks it.
-func bindingRequestSession(pkt []byte) (string, bool) {
+// parseBindingRequest returns the session a STUN binding request is for (the
+// first half of its USERNAME, which is the worker's ICE ufrag) and its
+// transaction ID. Message integrity is not checked here; the worker checks
+// it.
+func parseBindingRequest(pkt []byte) (string, [stun.TransactionIDSize]byte, bool) {
 	msg := &stun.Message{Raw: pkt}
 	if err := msg.Decode(); err != nil || msg.Type != stun.BindingRequest {
-		return "", false
+		return "", msg.TransactionID, false
 	}
 	var username stun.Username
 	if err := username.GetFrom(msg); err != nil {
-		return "", false
+		return "", msg.TransactionID, false
 	}
 	sessionID, _, ok := strings.Cut(username.String(), ":")
 
-	return sessionID, ok && sessionID != ""
+	return sessionID, msg.TransactionID, ok && sessionID != ""
 }
 
 func unmap(addr netip.AddrPort) netip.AddrPort {

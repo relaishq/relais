@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,9 +21,12 @@ import (
 
 // These tests drive the relay through its two sockets only: test callers
 // send to the public address, and test workers speak the relay-leg header
-// on the private one. The call harness runs real calls through the relay; it
-// cannot send arbitrary bytes from a caller's address or see what reaches a
-// worker, which is why the forwarding rules are proven here.
+// on the private one. A test worker "authenticates" a binding request by
+// answering it with a binding success for its transaction ID, as a real
+// worker does after checking the ICE credentials. The call harness runs
+// real calls through the relay; it cannot send arbitrary bytes from a
+// caller's address or see what reaches a worker, which is why the
+// forwarding rules are proven here.
 
 const (
 	sessionA = "sessionAsessionA"
@@ -68,12 +72,12 @@ func TestHeaderRoundTrip(t *testing.T) {
 }
 
 // TestNonSTUNPacketsAreForwardedUnparsed proves the relay never parses a
-// packet that is not STUN. Once the caller's flow to worker A is confirmed,
-// every other packet from the caller reaches worker A byte for byte,
-// whatever it contains, including packets that differ from a valid binding
-// request for session B in their first byte only, and RTP that carries the
-// STUN magic cookie and a binding request for session B. Only a real STUN
-// binding request moves the flow.
+// packet that is not STUN. Once the caller's route to worker A is
+// confirmed, every other packet from the caller reaches worker A byte for
+// byte, whatever it contains, including packets that differ from a valid
+// binding request for session B in their first byte only, and RTP that
+// carries the STUN magic cookie and a binding request for session B. Only a
+// real STUN binding request, once its worker answers it, moves the route.
 //
 // The first-byte variants catch a relay that recognizes STUN by its magic
 // cookie alone: STUN decoders ignore the top two bits of the message type,
@@ -92,11 +96,9 @@ func TestNonSTUNPacketsAreForwardedUnparsed(t *testing.T) {
 	}
 	workerB.expectNothing(t)
 
-	// The same bytes as a STUN binding request do move the flow to B, and,
-	// once B answers, the caller's other packets follow it.
 	caller.send(t, bindB, sys.relay.PublicAddr())
 	workerB.expect(t, caller.addr(), bindB)
-	sys.answer(t, workerB, caller)
+	sys.confirm(t, workerB, caller, bindB)
 	caller.send(t, media, sys.relay.PublicAddr())
 	workerB.expect(t, caller.addr(), media)
 	workerA.expectNothing(t)
@@ -161,7 +163,7 @@ func TestBindingRequestsRouteBySessionOwner(t *testing.T) {
 	sys.connect(t, callerA, workerA, sessionA)
 	sys.connect(t, callerB, workerB, sessionB)
 
-	// Each caller's other packets follow its own flow.
+	// Each caller's other packets follow its own route.
 	pktA, pktB := []byte{0x17, 0xfe, 0xfd, 0xaa}, []byte{0x17, 0xfe, 0xfd, 0xbb}
 	callerA.send(t, pktA, sys.relay.PublicAddr())
 	callerB.send(t, pktB, sys.relay.PublicAddr())
@@ -169,7 +171,7 @@ func TestBindingRequestsRouteBySessionOwner(t *testing.T) {
 	workerB.expect(t, callerB.addr(), pktB)
 
 	// A binding request for a session nobody owns is dropped, and so is
-	// anything from an address without a flow.
+	// anything from an address without a route.
 	stranger := newTestCaller(t)
 	stranger.send(t, bindingRequest(t, "nobodyownsthis00"), sys.relay.PublicAddr())
 	stranger.send(t, pktA, sys.relay.PublicAddr())
@@ -178,23 +180,24 @@ func TestBindingRequestsRouteBySessionOwner(t *testing.T) {
 
 	stats := sys.relay.Stats()
 	assert.EqualValues(t, 1, stats.UnknownSession, "binding requests for unknown sessions")
-	assert.EqualValues(t, 1, stats.Unroutable, "packets without a flow")
-	assert.Equal(t, 2, stats.Flows, "flows")
+	assert.EqualValues(t, 1, stats.Unroutable, "packets without a route")
+	assert.Equal(t, 2, stats.Flows, "confirmed routes")
+	assert.EqualValues(t, 2, stats.FlowsPromoted, "promoted candidates")
 }
 
 // TestRelayLegOnlyCarriesWorkersToTheirOwnCallers covers the way back. The
 // relay accepts relay-leg datagrams only from registered workers, and sends
-// a worker's packet only to a caller whose flow that worker owns, from the
-// relay's public address. Anything else on the relay leg is dropped and
-// counted, so the relay cannot be made to send from its public address to
-// arbitrary destinations.
+// a worker's packet only to a caller whose confirmed route is that worker,
+// or, for the binding success that confirms it, whose candidate is.
+// Anything else on the relay leg is dropped and counted, so the relay cannot
+// be made to send from its public address to arbitrary destinations.
 func TestRelayLegOnlyCarriesWorkersToTheirOwnCallers(t *testing.T) {
 	sys := startTestRelay(t, Config{})
 	workerA, workerB := sys.worker(t, sessionA), sys.worker(t, sessionB)
 	caller := newTestCaller(t)
 	outsider := &testWorker{conn: listenLoopback(t)} // never registered
 
-	// Without a flow, not even a registered worker reaches the caller.
+	// Without a route, not even a registered worker reaches the caller.
 	workerA.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
 	caller.expectNothing(t)
 
@@ -202,13 +205,18 @@ func TestRelayLegOnlyCarriesWorkersToTheirOwnCallers(t *testing.T) {
 	caller.send(t, bind, sys.relay.PublicAddr())
 	workerA.expect(t, caller.addr(), bind)
 
-	// The caller's flow belongs to worker A: an unregistered sender and
-	// another registered worker are both refused.
-	outsider.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
-	workerB.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
+	// The caller's candidate is worker A. A binding success for the request
+	// from an outsider or from worker B is refused, and so is anything but
+	// that binding success from worker A.
+	success := bindingSuccess(t, bind)
+	outsider.sendTo(t, caller.addr(), success, sys.relay.WorkerAddr())
+	workerB.sendTo(t, caller.addr(), success, sys.relay.WorkerAddr())
+	workerA.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
 	caller.expectNothing(t)
 
-	// Worker A reaches it, from the public address, with packets unchanged.
+	// Worker A's binding success confirms the route; then worker A reaches
+	// the caller, from the public address, with packets unchanged.
+	sys.confirm(t, workerA, caller, bind)
 	for _, pkt := range [][]byte{dtlsReply, bytes.Repeat([]byte{0x90}, 1200), bindingRequest(t, sessionB)} {
 		workerA.sendTo(t, caller.addr(), pkt, sys.relay.WorkerAddr())
 		caller.expect(t, sys.relay.PublicAddr(), pkt)
@@ -227,102 +235,166 @@ func TestRelayLegOnlyCarriesWorkersToTheirOwnCallers(t *testing.T) {
 
 	stats := sys.relay.Stats()
 	assert.EqualValues(t, 2, stats.UnknownWorker, "datagrams from unregistered senders")
-	assert.EqualValues(t, 2, stats.WorkerNoFlow, "datagrams for callers the sender has no flow with")
+	assert.EqualValues(t, 3, stats.WorkerNoFlow, "datagrams for callers the sender may not reach")
 	assert.EqualValues(t, 1, stats.Malformed, "malformed relay-leg datagrams")
-	assert.EqualValues(t, 3, stats.WorkerPackets, "worker packets delivered")
+	assert.EqualValues(t, 4, stats.WorkerPackets, "worker packets delivered")
 }
 
-// TestFlowsArePendingUntilTheWorkerAnswers: a binding request naming a known
-// session admits only a pending flow, because the relay cannot check ICE
-// credentials. A pending flow carries the caller's binding requests and
-// nothing else. The worker's answer, which it sends only after checking the
-// credentials, confirms the flow; a flow the worker never answers expires.
-func TestFlowsArePendingUntilTheWorkerAnswers(t *testing.T) {
-	const pendingTimeout = 300 * time.Millisecond
+// TestCandidatesNeedTheWorkersBindingSuccess: a binding request naming a
+// known session only proposes a candidate, because the relay cannot check
+// ICE credentials. A candidate carries the caller's binding requests for
+// its session and nothing else. Only the candidate worker's binding success
+// for one of those requests confirms it: the worker's media, or a binding
+// success for another transaction, does not. A candidate nobody confirms
+// expires.
+func TestCandidatesNeedTheWorkersBindingSuccess(t *testing.T) {
+	// Long enough for the steps up to the confirmation (about 0.4 s).
+	const pendingTimeout = 1500 * time.Millisecond
 
 	sys := startTestRelay(t, Config{PendingFlowTimeout: pendingTimeout})
 	worker := sys.worker(t, sessionA)
 	caller, prober := newTestCaller(t), newTestCaller(t)
-	bind := bindingRequest(t, sessionA)
 
+	bind := bindingRequest(t, sessionA)
 	caller.send(t, bind, sys.relay.PublicAddr())
 	worker.expect(t, caller.addr(), bind)
+	retry := bindingRequest(t, sessionA) // a new check rides the candidate
+	caller.send(t, retry, sys.relay.PublicAddr())
+	worker.expect(t, caller.addr(), retry)
+
+	worker.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
+	worker.sendTo(t, caller.addr(), bindingSuccess(t, bindingRequest(t, sessionA)), sys.relay.WorkerAddr())
+	caller.expectNothing(t)
 	caller.send(t, media, sys.relay.PublicAddr())
 	worker.expectNothing(t)
-	caller.send(t, bind, sys.relay.PublicAddr()) // a retransmission
-	worker.expect(t, caller.addr(), bind)
+	assert.Zero(t, sys.relay.Stats().FlowsPromoted, "promotions without a matching binding success")
 
-	sys.answer(t, worker, caller)
+	sys.confirm(t, worker, caller, retry)
 	caller.send(t, media, sys.relay.PublicAddr())
 	worker.expect(t, caller.addr(), media)
 
 	// The prober knows the session ID but not the ICE password, so the
-	// worker never answers it.
+	// worker never confirms it.
 	prober.send(t, bind, sys.relay.PublicAddr())
 	worker.expect(t, prober.addr(), bind)
 	require.Eventually(t, func() bool { return sys.relay.Stats().PendingFlows == 0 },
-		10*pendingTimeout, pendingTimeout/10, "unanswered pending flow expires")
+		10*pendingTimeout, pendingTimeout/10, "unconfirmed candidate expires")
 	prober.send(t, media, sys.relay.PublicAddr())
 	worker.expectNothing(t)
 
 	stats := sys.relay.Stats()
-	assert.Equal(t, 1, stats.Flows, "flows")
-	assert.EqualValues(t, 2, stats.Unroutable, "packets on pending or expired flows")
+	assert.Equal(t, 1, stats.Flows, "confirmed routes")
+	assert.EqualValues(t, 1, stats.FlowsPromoted, "promoted candidates")
+	assert.EqualValues(t, 2, stats.Unroutable, "packets without a confirmed route")
 }
 
-// TestFlowTableIsBounded floods the relay with binding requests from new
-// addresses that name a real session but are never answered. Pending flows
-// stay within their limit, the oldest evicted first, and established calls
-// keep their flows. Only when nothing is pending does a new flow evict a
-// confirmed one: the one idle the longest.
-func TestFlowTableIsBounded(t *testing.T) {
+// TestSpoofedRequestForAnotherSessionLeavesTheCallAlone sends, from an
+// established caller's address, a binding request for another known
+// session: what an attacker spoofing the caller's address would send. The
+// request reaches that session's worker as a candidate, and the call keeps
+// its route, media and consent checks until that worker authenticates the
+// request, which it never does.
+func TestSpoofedRequestForAnotherSessionLeavesTheCallAlone(t *testing.T) {
+	const pendingTimeout = 300 * time.Millisecond
+
+	sys := startTestRelay(t, Config{PendingFlowTimeout: pendingTimeout})
+	workerA, workerB := sys.worker(t, sessionA), sys.worker(t, sessionB)
+	caller := newTestCaller(t)
+	sys.connect(t, caller, workerA, sessionA)
+
+	spoofed := bindingRequest(t, sessionB)
+	caller.send(t, spoofed, sys.relay.PublicAddr())
+	workerB.expect(t, caller.addr(), spoofed)
+
+	caller.send(t, media, sys.relay.PublicAddr())
+	workerA.expect(t, caller.addr(), media, "media during the candidate")
+	consent := bindingRequest(t, sessionA)
+	caller.send(t, consent, sys.relay.PublicAddr())
+	workerA.expect(t, caller.addr(), consent, "consent check during the candidate")
+	sys.confirm(t, workerA, caller, consent)
+	workerB.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
+	caller.expectNothing(t)
+
+	require.Eventually(t, func() bool { return sys.relay.Stats().PendingFlows == 0 },
+		10*pendingTimeout, pendingTimeout/10, "unconfirmed candidate expires")
+	caller.send(t, media, sys.relay.PublicAddr())
+	workerA.expect(t, caller.addr(), media, "media after the candidate")
+	workerB.expectNothing(t)
+}
+
+// TestOwnerChangeMovesTheCallOnlyOnceTheNewOwnerAnswers changes a session's
+// owner in the store mid-call. The relay notices on the caller's next
+// consent check and proposes the new owner as a candidate, but media keeps
+// going to the old owner until the new one authenticates a consent check.
+func TestOwnerChangeMovesTheCallOnlyOnceTheNewOwnerAnswers(t *testing.T) {
+	sys := startTestRelay(t, Config{})
+	oldOwner, newOwner := sys.worker(t, sessionA), sys.worker(t, sessionB)
+	caller := newTestCaller(t)
+	sys.connect(t, caller, oldOwner, sessionA)
+
+	require.NoError(t, sys.cfg.Owners.Claim(context.Background(), sessionA, newOwner.addr()))
+	consent := bindingRequest(t, sessionA)
+	caller.send(t, consent, sys.relay.PublicAddr())
+	oldOwner.expect(t, caller.addr(), consent, "the check that finds the new owner")
+	require.Eventually(t, func() bool { return sys.relay.Stats().PendingFlows == 1 }, receiveTimeout, time.Millisecond,
+		"new owner proposed")
+
+	caller.send(t, media, sys.relay.PublicAddr())
+	oldOwner.expect(t, caller.addr(), media, "media before the new owner answers")
+
+	consent = bindingRequest(t, sessionA)
+	caller.send(t, consent, sys.relay.PublicAddr())
+	newOwner.expect(t, caller.addr(), consent, "the next check goes to the new owner")
+	sys.confirm(t, newOwner, caller, consent)
+	caller.send(t, media, sys.relay.PublicAddr())
+	newOwner.expect(t, caller.addr(), media, "media after the new owner answers")
+	oldOwner.expectNothing(t)
+}
+
+// TestFlowTableIsBoundedWithoutEvictingCalls floods the relay with binding
+// requests from new addresses that name a real session but are never
+// confirmed. Candidates stay within their limit, the oldest evicted first.
+// When confirmed routes fill the table, a new candidate is rejected rather
+// than evicting a live call.
+func TestFlowTableIsBoundedWithoutEvictingCalls(t *testing.T) {
 	sys := startTestRelay(t, Config{MaxFlows: 4, MaxPendingFlows: 2})
 	worker := sys.worker(t, sessionA)
-	bind := bindingRequest(t, sessionA)
 	call1, call2 := newTestCaller(t), newTestCaller(t)
 	sys.connect(t, call1, worker, sessionA)
 	sys.connect(t, call2, worker, sessionA)
 
 	probers := make([]*testCaller, 5)
+	requests := make([][]byte, len(probers))
 	for i := range probers {
-		probers[i] = newTestCaller(t)
-		probers[i].send(t, bind, sys.relay.PublicAddr())
-		worker.expect(t, probers[i].addr(), bind)
+		probers[i], requests[i] = newTestCaller(t), bindingRequest(t, sessionA)
+		probers[i].send(t, requests[i], sys.relay.PublicAddr())
+		worker.expect(t, probers[i].addr(), requests[i])
 	}
 	stats := sys.relay.Stats()
-	assert.Equal(t, 2, stats.PendingFlows, "pending flows after the flood")
-	assert.Equal(t, 4, stats.Flows, "flows after the flood")
-	assert.EqualValues(t, 3, stats.FlowsEvicted, "evicted flows")
-	for _, call := range []*testCaller{call1, call2} {
-		call.send(t, media, sys.relay.PublicAddr())
-		worker.expect(t, call.addr(), media)
-	}
+	assert.Equal(t, 2, stats.PendingFlows, "candidates after the flood")
+	assert.Equal(t, 2, stats.Flows, "confirmed routes after the flood")
+	assert.EqualValues(t, 3, stats.FlowsEvicted, "evicted candidates")
 
-	// The newest prober turns out legitimate. A new flow at the limit still
-	// evicts a pending one first, then is answered too.
-	sys.answer(t, worker, probers[4])
-	extra := newTestCaller(t)
-	extra.send(t, bind, sys.relay.PublicAddr())
-	worker.expect(t, extra.addr(), bind)
-	sys.answer(t, worker, extra)
+	// Two more callers turn out legitimate and fill the table with
+	// confirmed routes; the second evicts the last stale candidate.
+	sys.confirm(t, worker, probers[4], requests[4])
+	call3 := newTestCaller(t)
+	sys.connect(t, call3, worker, sessionA)
 	stats = sys.relay.Stats()
-	assert.Equal(t, 0, stats.PendingFlows, "pending flows")
-	assert.EqualValues(t, 4, stats.FlowsEvicted, "evicted flows")
+	assert.Equal(t, 4, stats.Flows, "confirmed routes")
+	assert.Equal(t, 0, stats.PendingFlows, "candidates")
+	assert.EqualValues(t, 4, stats.FlowsEvicted, "evicted candidates")
 
-	// With four confirmed flows and none pending, a new flow evicts the
-	// confirmed flow idle the longest: call1.
-	for _, call := range []*testCaller{call2, probers[4], extra} {
+	// The table is full of calls: a new caller is turned away and no call
+	// loses its route.
+	late := newTestCaller(t)
+	late.send(t, bindingRequest(t, sessionA), sys.relay.PublicAddr())
+	worker.expectNothing(t)
+	assert.EqualValues(t, 1, sys.relay.Stats().FlowsRejected, "rejected candidates")
+	for _, call := range []*testCaller{call1, call2, probers[4], call3} {
 		call.send(t, media, sys.relay.PublicAddr())
 		worker.expect(t, call.addr(), media)
 	}
-	late := newTestCaller(t)
-	late.send(t, bind, sys.relay.PublicAddr())
-	worker.expect(t, late.addr(), bind)
-	call1.send(t, media, sys.relay.PublicAddr())
-	worker.expectNothing(t)
-	call2.send(t, media, sys.relay.PublicAddr())
-	worker.expect(t, call2.addr(), media)
-	assert.EqualValues(t, 5, sys.relay.Stats().FlowsEvicted, "evicted flows")
 }
 
 // TestSlowStoreDoesNotStallEstablishedFlows blocks the session-owner store.
@@ -347,10 +419,10 @@ func TestSlowStoreDoesNotStallEstablishedFlows(t *testing.T) {
 		"lookup for session B started")
 
 	callerA.send(t, media, sys.relay.PublicAddr())
-	workerA.expect(t, callerA.addr(), media, "media on an established flow")
+	workerA.expect(t, callerA.addr(), media, "media on an established route")
 	consent := bindingRequest(t, sessionA)
 	callerA.send(t, consent, sys.relay.PublicAddr())
-	workerA.expect(t, callerA.addr(), consent, "consent check on an established flow")
+	workerA.expect(t, callerA.addr(), consent, "consent check on an established route")
 	workerB.expectNothing(t)
 
 	store.unblock()
@@ -399,11 +471,89 @@ func TestOwnerLookupsAreBounded(t *testing.T) {
 	assert.Zero(t, store.calls(sessionC), "lookups for the dropped session")
 }
 
-// TestFlowsAreRebuiltFromTheStore covers both ways a flow disappears: it
+// TestLookupQueueHoldsBoundedBytes: binding requests copied while their
+// lookup waits stay within MaxQueuedLookupBytes, and an oversized binding
+// request is never held at all.
+func TestLookupQueueHoldsBoundedBytes(t *testing.T) {
+	bind := bindingRequest(t, sessionB)
+	held := MaxHeaderLen + len(bind)
+	store := newGatedOwners()
+	sys := startTestRelay(t, Config{
+		Owners: store, MaxQueuedLookupBytes: 2*held + held/2, OwnerLookupTimeout: time.Minute,
+	})
+	worker := sys.worker(t, sessionB)
+	require.NoError(t, store.Claim(context.Background(), sessionC, worker.addr()))
+	caller, other := newTestCaller(t), newTestCaller(t)
+
+	store.block()
+	t.Cleanup(store.unblock)
+
+	for range 4 {
+		caller.send(t, bindingRequest(t, sessionB), sys.relay.PublicAddr())
+	}
+	other.send(t, paddedBindingRequest(t, sessionC, maxQueuedBindingRequest+4), sys.relay.PublicAddr())
+	require.Eventually(t, func() bool { return sys.relay.Stats().LookupsDropped == 3 }, receiveTimeout, time.Millisecond,
+		"requests over the byte budget, and the oversized one, are dropped")
+
+	store.unblock()
+	for i := range 2 {
+		worker.expectAny(t, caller.addr(), "held binding request %d", i)
+	}
+	worker.expectNothing(t)
+	assert.Zero(t, store.calls(sessionC), "lookups for the oversized request")
+}
+
+// TestStaleLookupResultCannotOverrideNewerRoute holds a lookup's result
+// back after it read the session's old owner, moves the session to a new
+// owner, and sends another binding request. The request waits for the held
+// lookup to be applied and then gets a fresh lookup of its own, so the new
+// owner's answer is what confirms the caller's route; the stale result
+// never replaces it.
+func TestStaleLookupResultCannotOverrideNewerRoute(t *testing.T) {
+	reached, release := make(chan struct{}), make(chan struct{})
+	var held atomic.Bool
+	sys := startTestRelay(t, Config{
+		OwnerLookups: 2,
+		beforeApply: func(sessionID string) {
+			if sessionID == sessionA && held.CompareAndSwap(false, true) {
+				close(reached)
+				<-release
+			}
+		},
+	})
+	oldOwner, newOwner := sys.worker(t, sessionA), sys.worker(t, sessionB)
+	caller := newTestCaller(t)
+
+	first := bindingRequest(t, sessionA)
+	caller.send(t, first, sys.relay.PublicAddr())
+	select {
+	case <-reached:
+	case <-time.After(receiveTimeout):
+		t.Fatal("the first lookup never finished")
+	}
+
+	require.NoError(t, sys.cfg.Owners.Claim(context.Background(), sessionA, newOwner.addr()))
+	second := bindingRequest(t, sessionA)
+	caller.send(t, second, sys.relay.PublicAddr())
+	time.Sleep(quietPeriod) // room for a concurrent lookup to apply first, if there were one
+	close(release)
+
+	oldOwner.expect(t, caller.addr(), first, "the held result forwards the first request")
+	newOwner.expect(t, caller.addr(), second, "the second request gets the new owner")
+	sys.confirm(t, newOwner, caller, second)
+	oldOwner.sendTo(t, caller.addr(), bindingSuccess(t, first), sys.relay.WorkerAddr())
+	caller.expectNothing(t)
+
+	caller.send(t, media, sys.relay.PublicAddr())
+	newOwner.expect(t, caller.addr(), media)
+	oldOwner.expectNothing(t)
+}
+
+// TestFlowsAreRebuiltFromTheStore covers both ways a route disappears: it
 // expires when the caller goes quiet, and a restarted relay starts without
 // any. Either way the caller's media is dropped until its next binding
-// request rebuilds the flow from the session-owner store and the worker
-// answers it.
+// request is routed by the session-owner store and the worker answers it;
+// after a restart the worker's own media confirms nothing.
 func TestFlowsAreRebuiltFromTheStore(t *testing.T) {
 	const flowTimeout = 300 * time.Millisecond
 
@@ -412,7 +562,7 @@ func TestFlowsAreRebuiltFromTheStore(t *testing.T) {
 	caller := newTestCaller(t)
 	sys.connect(t, caller, worker, sessionA)
 
-	t.Run("idle flow expires", func(t *testing.T) {
+	t.Run("idle route expires", func(t *testing.T) {
 		time.Sleep(2 * flowTimeout)
 		caller.send(t, media, sys.relay.PublicAddr())
 		worker.expectNothing(t)
@@ -430,7 +580,15 @@ func TestFlowsAreRebuiltFromTheStore(t *testing.T) {
 		worker.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
 		caller.expectNothing(t)
 
-		sys.connect(t, caller, worker, sessionA)
+		consent := bindingRequest(t, sessionA)
+		caller.send(t, consent, sys.relay.PublicAddr())
+		worker.expect(t, caller.addr(), consent)
+		worker.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
+		caller.expectNothing(t)
+		caller.send(t, media, sys.relay.PublicAddr())
+		worker.expectNothing(t)
+
+		sys.confirm(t, worker, caller, consent)
 		caller.send(t, media, sys.relay.PublicAddr())
 		worker.expect(t, caller.addr(), media)
 	})
@@ -445,8 +603,9 @@ func TestNewRequiresOwnersAndSpecificIP(t *testing.T) {
 }
 
 // BenchmarkCallerPacket measures the relay's per-packet work for a caller's
-// SRTP packet on a confirmed flow: the flow lookup and the relay-leg header
-// written in front of the packet in place. Socket I/O is not included.
+// SRTP packet on a confirmed route: the route lookup and the relay-leg
+// header written in front of the packet in place. Socket I/O is not
+// included.
 func BenchmarkCallerPacket(b *testing.B) {
 	r, err := New(Config{Owners: sessionstore.NewMemory()})
 	require.NoError(b, err)
@@ -454,8 +613,12 @@ func BenchmarkCallerPacket(b *testing.B) {
 
 	caller := netip.MustParseAddrPort("198.51.100.7:50000")
 	worker := netip.MustParseAddrPort("127.0.0.1:4000")
-	r.flows.admit(caller, worker, sessionA, time.Now())
-	r.flows.answer(caller, worker, time.Now())
+	txID := stun.NewTransactionID()
+	success, err := stun.Build(stun.NewTransactionIDSetter(txID), stun.BindingSuccess, stun.Fingerprint)
+	require.NoError(b, err)
+	require.True(b, r.flows.admit(caller, worker, sessionA, txID, time.Now()))
+	allowed, promoted := r.flows.answer(caller, worker, success.Raw, time.Now())
+	require.True(b, allowed && promoted == sessionA)
 
 	buf := make([]byte, MaxHeaderLen+1200)
 	buf[MaxHeaderLen] = 0x80 // an RTP version byte
@@ -523,24 +686,25 @@ func (s *testSystem) worker(t *testing.T, sessionID string) *testWorker {
 	return w
 }
 
-// connect makes a caller's flow to a worker confirmed, as ICE does: the
-// caller's binding request reaches the worker, and the worker answers.
+// connect gives a caller a confirmed route to a worker, as ICE does: the
+// caller's binding request reaches the worker, and the worker answers it.
 func (s *testSystem) connect(t *testing.T, c *testCaller, w *testWorker, sessionID string) {
 	t.Helper()
 
 	bind := bindingRequest(t, sessionID)
 	c.send(t, bind, s.relay.PublicAddr())
 	w.expect(t, c.addr(), bind, "binding request")
-	s.answer(t, w, c)
+	s.confirm(t, w, c, bind)
 }
 
-// answer has a worker answer a caller through the relay, as its binding
-// success response would.
-func (s *testSystem) answer(t *testing.T, w *testWorker, c *testCaller) {
+// confirm has a worker answer a caller's binding request with a binding
+// success through the relay, and requires the caller to receive it.
+func (s *testSystem) confirm(t *testing.T, w *testWorker, c *testCaller, request []byte) {
 	t.Helper()
 
-	w.sendTo(t, c.addr(), dtlsReply, s.relay.WorkerAddr())
-	c.expect(t, s.relay.PublicAddr(), dtlsReply)
+	success := bindingSuccess(t, request)
+	w.sendTo(t, c.addr(), success, s.relay.WorkerAddr())
+	c.expect(t, s.relay.PublicAddr(), success)
 }
 
 // testWorker plays a media worker on the relay leg.
@@ -552,15 +716,12 @@ func (w *testWorker) addr() netip.AddrPort {
 	return localAddr(w.conn)
 }
 
-// expect requires the next datagram to be pkt from caller. An empty pkt
-// accepts any packet.
+// expect requires the next datagram to be pkt from caller.
 func (w *testWorker) expect(t *testing.T, caller netip.AddrPort, pkt []byte, msgAndArgs ...any) {
 	t.Helper()
 
 	got := w.expectAny(t, caller, msgAndArgs...)
-	if len(pkt) > 0 {
-		require.Equal(t, pkt, got, msgAndArgs...)
-	}
+	require.Equal(t, pkt, got, msgAndArgs...)
 }
 
 // expectAny requires the next datagram to come from caller and returns its
@@ -688,13 +849,46 @@ func (g *gatedOwners) calls(sessionID string) int {
 func bindingRequest(t *testing.T, sessionID string) []byte {
 	t.Helper()
 
-	msg, err := stun.Build(
-		stun.BindingRequest,
-		stun.NewTransactionIDSetter(stun.NewTransactionID()),
-		stun.NewUsername(sessionID+":callerufrag"),
-		stun.NewShortTermIntegrity("worker-ice-password"),
-		stun.Fingerprint,
-	)
+	return paddedBindingRequest(t, sessionID, 0)
+}
+
+// paddedBindingRequest is a binding request for a session, padded with a
+// comprehension-optional attribute to at least size bytes.
+func paddedBindingRequest(t *testing.T, sessionID string, size int) []byte {
+	t.Helper()
+
+	build := func(padding int) []byte {
+		setters := []stun.Setter{
+			stun.BindingRequest,
+			stun.NewTransactionIDSetter(stun.NewTransactionID()),
+			stun.NewUsername(sessionID + ":callerufrag"),
+		}
+		if padding > 0 {
+			setters = append(setters, stun.RawAttribute{Type: 0x8070, Value: make([]byte, padding)})
+		}
+		setters = append(setters, stun.NewShortTermIntegrity("worker-ice-password"), stun.Fingerprint)
+		msg, err := stun.Build(setters...)
+		require.NoError(t, err)
+
+		return msg.Raw
+	}
+
+	pkt := build(0)
+	if len(pkt) < size {
+		pkt = build(size - len(pkt) - 4)
+	}
+
+	return pkt
+}
+
+// bindingSuccess is a worker's binding success response to a request.
+func bindingSuccess(t *testing.T, request []byte) []byte {
+	t.Helper()
+
+	req := &stun.Message{Raw: append([]byte(nil), request...)}
+	require.NoError(t, req.Decode())
+	msg, err := stun.Build(stun.NewTransactionIDSetter(req.TransactionID), stun.BindingSuccess,
+		stun.NewShortTermIntegrity("worker-ice-password"), stun.Fingerprint)
 	require.NoError(t, err)
 
 	return msg.Raw
