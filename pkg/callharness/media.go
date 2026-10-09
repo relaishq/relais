@@ -169,3 +169,25 @@ func (s *vp8Source) next() (frame []byte, keyframe bool, err error) {
 func isVP8Keyframe(frame []byte) bool {
 	return len(frame) > 0 && frame[0]&1 == 0
 }
+
+// keyframeInterval inspects the encoded fixture, independent of PLI rewinds.
+func (s *vp8Source) keyframeInterval() time.Duration {
+	probe, err := newVP8Source(s.data)
+	if err != nil {
+		return 0
+	}
+	first := -1
+	for i := 0; i < 10000; i++ {
+		frame, _, err := probe.reader.ParseNextFrame()
+		if err != nil {
+			return 0
+		}
+		if isVP8Keyframe(frame) {
+			if first >= 0 {
+				return time.Duration(i-first) * probe.frameDuration
+			}
+			first = i
+		}
+	}
+	return 0
+}

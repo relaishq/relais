@@ -11,6 +11,8 @@ import (
 // Report is what the caller observed during one call. Times are offsets from
 // the moment the caller started dialing.
 type Report struct {
+	// StartedAt aligns packet observations across calls sharing a worker.
+	StartedAt time.Time
 	// OfferAnswerExchanges counts the HTTP offer/answer exchanges the caller
 	// made to start the call.
 	OfferAnswerExchanges int
@@ -144,6 +146,9 @@ type VideoReport struct {
 	// FrameGaps counts complete frames that did not directly follow the
 	// previous complete frame: frames were lost or reordered between them.
 	FrameGaps int
+	// NonMonotonicTimestamps counts complete frames whose RTP timestamp did
+	// not advance from the previous complete frame (modulo the RTP clock).
+	NonMonotonicTimestamps int
 	// UnmatchedFrames counts frames that are not byte for byte a frame the
 	// caller sent.
 	UnmatchedFrames int

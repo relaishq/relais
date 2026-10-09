@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
+	"github.com/pion/rtp/codecs"
 	"github.com/pion/webrtc/v4"
 )
 
@@ -44,6 +45,9 @@ type recorder struct {
 	sentVideo        SentTrack
 	sentFrames       map[string]map[string]struct{}
 	firstVideoSentAt time.Duration
+	sentVideoFrames  map[uint16]sentVideoFrame
+	frameInterval    time.Duration
+	keyframeInterval time.Duration
 	keyframeRequests int // PLI/FIR the caller sent for the echoed video
 
 	tracks []*trackRecord
@@ -93,7 +97,8 @@ type videoRecord struct {
 
 func newRecorder() *recorder {
 	return &recorder{
-		start: time.Now(),
+		start:           time.Now(),
+		sentVideoFrames: make(map[uint16]sentVideoFrame),
 		sentFrames: map[string]map[string]struct{}{
 			kindAudio: {},
 			kindVideo: {},
@@ -302,7 +307,14 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 	track.arrivals = append(track.arrivals, at)
 	track.lastArrival = at
 	track.lastSeq = pkt.SequenceNumber
-	track.headers = append(track.headers, rtpMark{seq: pkt.SequenceNumber, timestamp: pkt.Timestamp})
+	mark := rtpMark{seq: pkt.SequenceNumber, timestamp: pkt.Timestamp}
+	if track.video != nil {
+		var desc codecs.VP8Packet
+		if _, err := desc.Unmarshal(pkt.Payload); err == nil {
+			mark.pictureID, mark.havePictureID = desc.PictureID, true
+		}
+	}
+	track.headers = append(track.headers, mark)
 
 	// Opus packets are whole frames; VP8 frames are matched once reassembled.
 	if track.video == nil {
@@ -334,7 +346,11 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 	v := track.video
 	decodable := v.DecodableFrames
 	defer func() {
-		v.frames = append(v.frames, frameMark{at: r.since(decoded), decodable: v.DecodableFrames > decodable})
+		source := r.sentVideoFrames[frame.pictureID]
+		if source.data != string(frame.data) {
+			source = sentVideoFrame{}
+		}
+		v.frames = append(v.frames, frameMark{at: r.since(decoded), decodable: v.DecodableFrames > decodable, firstArrival: r.since(frame.firstArrival), source: source, pictureID: frame.pictureID})
 	}()
 
 	v.Frames++
@@ -347,6 +363,9 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 
 	// A frame is in order when its first packet directly follows the previous
 	// complete frame's last packet: no frame was lost or reordered between.
+	if v.haveLast && int32(frame.timestamp-v.lastTS) <= 0 {
+		v.NonMonotonicTimestamps++
+	}
 	inOrder := !v.haveLast || (frame.firstSeq == v.lastSeq+1 && int32(frame.timestamp-v.lastTS) > 0)
 	if !inOrder {
 		v.FrameGaps++
@@ -401,6 +420,7 @@ func (r *recorder) report() *Report {
 	defer r.mu.Unlock()
 
 	rep := &Report{
+		StartedAt:            r.start,
 		OfferAnswerExchanges: r.offerAnswerExchanges,
 		ConnectedAt:          r.connectedAt,
 		HungUpAt:             r.hungUpAt,

@@ -136,11 +136,14 @@ func TestPlannedHandoverKeepsConsent(t *testing.T) {
 // continuous, and the caller keeps decrypting and decoding.
 func TestHandoverSequenceMargin(t *testing.T) {
 	const margin = 100
+	// A nonzero margin intentionally exercises the takeover sequence space.
+	// Disable replay here to retain this test's isolated counter assertions;
+	// the default recovery paths are exercised in the real kill scenarios.
 
 	report := runHandoverCall(t, 5*time.Second, func(ctx context.Context, call *callharness.Call) {
 		sleepUntil(ctx, 2*time.Second)
 		require.NoError(t, call.Handover(callharness.HandoverOptions{To: 1, SequenceMargin: margin}))
-	})
+	}, callharness.Options{DisableFrameCache: true})
 
 	assertCleanCall(t, report)
 	assertMoves(t, report, [][2]int{{0, 1}}, margin)
@@ -166,10 +169,16 @@ func TestHandoverSequenceMargin(t *testing.T) {
 // alongside, hangs up and returns the caller's report.
 func runHandoverCall(t *testing.T, duration time.Duration,
 	during func(ctx context.Context, call *callharness.Call),
+	options ...callharness.Options,
 ) *callharness.Report {
 	t.Helper()
 
-	h, err := callharness.Start(callharness.Options{Workers: 2})
+	opts := callharness.Options{Workers: 2}
+	if len(options) > 0 {
+		opts = options[0]
+		opts.Workers = 2
+	}
+	h, err := callharness.Start(opts)
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, h.Close()) })
 
