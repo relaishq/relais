@@ -1,6 +1,7 @@
 package callharness
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"path"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -95,14 +97,14 @@ type HandoverOptions struct {
 	SequenceMargin uint16
 }
 
-// Handover moves the call to another media worker on the same socket, as a
-// planned handover: the old worker exports the session to bytes and the new
-// one resumes it from them. It needs Options.Workers of 2 or more. The
+// Handover moves the call to another worker through the relay control
+// plane or on a shared socket. The old worker exports the session to bytes
+// and the new one resumes them. It needs Options.Workers of 2 or more. The
 // report describes each move as the caller saw it (Report.Moves).
 func (c *Call) Handover(opts HandoverOptions) error {
 	ws := c.harness.workers
-	if ws.socket == nil {
-		return errors.New("callharness: a handover needs Options.Workers of 2 or more, without Options.Relay")
+	if ws.socket == nil && (ws.relay == nil || len(ws.list) < 2) {
+		return errors.New("callharness: a handover needs Options.Workers of 2 or more")
 	}
 	if opts.To < 0 || opts.To >= len(ws.list) {
 		return fmt.Errorf("callharness: no worker %d", opts.To)
@@ -110,6 +112,27 @@ func (c *Call) Handover(opts HandoverOptions) error {
 	sessionID, err := c.sessionID()
 	if err != nil {
 		return err
+	}
+
+	if ws.relay != nil {
+		if opts.SequenceMargin != 0 {
+			return errors.New("callharness: relay planned moves require sequence margin 0")
+		}
+		t := ws.relay
+		started := time.Now()
+		owner, _ := c.harness.SessionOwner(sessionID)
+		result, err := t.plane.Move(context.Background(), sessionID, strconv.Itoa(opts.To))
+		if result.Start.IsZero() {
+			result.Start = started
+			result.End = time.Now()
+			result.From = strconv.Itoa(owner)
+		}
+		from, _ := strconv.Atoi(result.From)
+		c.rec.move(moveRecord{from: from, to: opts.To, start: result.Start, end: result.End, result: result.Result, err: err})
+		if err != nil {
+			return fmt.Errorf("callharness: relay move: %w", err)
+		}
+		return nil
 	}
 
 	from := ws.index(ws.socket.Owner(sessionID))
@@ -394,6 +417,9 @@ func writeHandoverSummary(b *strings.Builder, r *Report) {
 		} else {
 			fmt.Fprintf(b, "; handover %s (drain %s, export %s, resume %s), state %d B, %d caller packets held\n",
 				us(res.Duration), us(res.Drain), us(res.Export), us(res.Resume), res.StateBytes, res.HeldPackets)
+		}
+		if res.HoldExpired {
+			b.WriteString("    warning: caller hold expired; packets auto-released\n")
 		}
 		for _, t := range move.Tracks {
 			fmt.Fprintf(b, "    %s: gap %s (typical %s), %d seq skipped, largest ts step %d (typical %d), %d packets after",

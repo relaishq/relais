@@ -332,7 +332,7 @@ func TestOwnerChangeMovesTheCallOnlyOnceTheNewOwnerAnswers(t *testing.T) {
 	caller := newTestCaller(t)
 	sys.connect(t, caller, oldOwner, sessionA)
 
-	require.NoError(t, sys.cfg.Owners.Claim(context.Background(), sessionA, newOwner.addr()))
+	transferTestLease(t, sys.cfg.Owners, sessionA, newOwner.addr())
 	consent := bindingRequest(t, sessionA)
 	caller.send(t, consent, sys.relay.PublicAddr())
 	oldOwner.expect(t, caller.addr(), consent, "the check that finds the new owner")
@@ -443,7 +443,7 @@ func TestOwnerLookupsAreBounded(t *testing.T) {
 	})
 	worker := sys.worker(t, sessionA)
 	for _, session := range []string{sessionB, sessionC} {
-		require.NoError(t, store.Claim(context.Background(), session, worker.addr()))
+		claimTestLease(t, store, session, worker.addr())
 	}
 	caller := newTestCaller(t)
 
@@ -482,7 +482,7 @@ func TestLookupQueueHoldsBoundedBytes(t *testing.T) {
 		Owners: store, MaxQueuedLookupBytes: 2*held + held/2, OwnerLookupTimeout: time.Minute,
 	})
 	worker := sys.worker(t, sessionB)
-	require.NoError(t, store.Claim(context.Background(), sessionC, worker.addr()))
+	claimTestLease(t, store, sessionC, worker.addr())
 	caller, other := newTestCaller(t), newTestCaller(t)
 
 	store.block()
@@ -532,7 +532,7 @@ func TestStaleLookupResultCannotOverrideNewerRoute(t *testing.T) {
 		t.Fatal("the first lookup never finished")
 	}
 
-	require.NoError(t, sys.cfg.Owners.Claim(context.Background(), sessionA, newOwner.addr()))
+	transferTestLease(t, sys.cfg.Owners, sessionA, newOwner.addr())
 	second := bindingRequest(t, sessionA)
 	caller.send(t, second, sys.relay.PublicAddr())
 	time.Sleep(quietPeriod) // room for a concurrent lookup to apply first, if there were one
@@ -679,7 +679,7 @@ func (s *testSystem) worker(t *testing.T, sessionID string) *testWorker {
 	t.Helper()
 
 	w := &testWorker{conn: listenLoopback(t)}
-	require.NoError(t, s.cfg.Owners.Claim(context.Background(), sessionID, w.addr()))
+	claimTestLease(t, s.cfg.Owners, sessionID, w.addr())
 	s.relay.AddWorker(w.addr())
 	s.workers = append(s.workers, w.addr())
 
@@ -922,4 +922,101 @@ func receive(t *testing.T, conn *net.UDPConn, d time.Duration) ([]byte, bool) {
 	require.NoError(t, err)
 
 	return buf[:n], true
+}
+
+func claimTestLease(t *testing.T, owners sessionstore.Owners, id string, addr netip.AddrPort) {
+	t.Helper()
+	_, err := owners.(sessionstore.Store).Claim(context.Background(), id, addr, time.Minute)
+	require.NoError(t, err)
+}
+func transferTestLease(t *testing.T, owners sessionstore.Owners, id string, addr netip.AddrPort) {
+	t.Helper()
+	store := owners.(sessionstore.Store)
+	lease, err := store.Get(context.Background(), id)
+	require.NoError(t, err)
+	_, err = store.Transfer(context.Background(), lease, addr, time.Minute)
+	require.NoError(t, err)
+}
+
+// Trusted moves retain authenticated routes and immediately exclude the old
+// private leg, including its late binding successes for pending checks.
+func TestTrustedMovePreservesRoutesAndFencesOldWorker(t *testing.T) {
+	sys := startTestRelay(t, Config{MaxFlows: 2, MaxPendingFlows: 1})
+	a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+	caller, other := newTestCaller(t), newTestCaller(t)
+	sys.connect(t, caller, a, sessionA)
+	// Keep another confirmed route at the capacity limit: the move must need
+	// no candidate slot and must not evict this route.
+	sys.connect(t, other, b, sessionB)
+	transferTestLease(t, sys.cfg.Owners, sessionA, b.addr())
+	require.NoError(t, sys.relay.MoveSession(sessionA, a.addr(), b.addr()))
+	require.Equal(t, 2, sys.relay.Stats().Flows)
+	require.Zero(t, sys.relay.Stats().PendingFlows)
+	a.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
+	caller.expectNothing(t)
+	b.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
+	caller.expect(t, sys.relay.PublicAddr(), dtlsReply)
+	caller.send(t, media, sys.relay.PublicAddr())
+	b.expect(t, caller.addr(), media)
+	other.send(t, media, sys.relay.PublicAddr())
+	b.expect(t, other.addr(), media)
+	a.expectNothing(t)
+
+	// A pending address for the moved session is not authenticated by a
+	// notification. Its old owner's delayed answer must reach nobody.
+	fresh := newTestCaller(t)
+	// Use a new relay with spare capacity to admit a pending check on A.
+	sys2 := startTestRelay(t, Config{})
+	a2, b2 := sys2.worker(t, sessionA), sys2.worker(t, sessionB)
+	check := bindingRequest(t, sessionA)
+	fresh.send(t, check, sys2.relay.PublicAddr())
+	a2.expect(t, fresh.addr(), check)
+	require.NoError(t, sys2.relay.MoveSession(sessionA, a2.addr(), b2.addr()))
+	a2.sendTo(t, fresh.addr(), bindingSuccess(t, check), sys2.relay.WorkerAddr())
+	fresh.expectNothing(t)
+	require.Zero(t, sys2.relay.Stats().Flows)
+	require.Zero(t, sys2.relay.Stats().PendingFlows)
+}
+
+// Hold a lookup after it read A, then notify A->B. Even if the late lookup
+// proposes an authenticated A answer, it may never restore the old route.
+func TestTrustedMoveInvalidatesStaleLookup(t *testing.T) {
+	reached, release := make(chan struct{}), make(chan struct{})
+	var armed, held atomic.Bool
+	var once sync.Once
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	sys := startTestRelay(t, Config{beforeApply: func(id string) {
+		if id == sessionA && armed.Load() && held.CompareAndSwap(false, true) {
+			close(reached)
+			<-release
+		}
+	}})
+	// Release before relay cleanup waits for the held lookup.
+	t.Cleanup(func() { once.Do(func() { close(release) }) })
+	a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+	caller := newTestCaller(t)
+	sys.connect(t, caller, a, sessionA)
+	armed.Store(true)
+	consent := bindingRequest(t, sessionA)
+	caller.send(t, consent, sys.relay.PublicAddr())
+	a.expect(t, caller.addr(), consent)
+	select {
+	case <-reached:
+	case <-time.After(receiveTimeout):
+		t.Fatal("lookup not held")
+	}
+	transferTestLease(t, sys.cfg.Owners, sessionA, b.addr())
+	require.NoError(t, sys.relay.MoveSession(sessionA, a.addr(), b.addr()))
+	once.Do(func() { close(release) })
+	require.Eventually(t, func() bool {
+		sys.relay.lookups.mu.Lock()
+		defer sys.relay.lookups.mu.Unlock()
+		return len(sys.relay.lookups.pending) == 0
+	}, receiveTimeout, time.Millisecond)
+	a.sendTo(t, caller.addr(), bindingSuccess(t, consent), sys.relay.WorkerAddr())
+	caller.expectNothing(t)
+	require.Zero(t, sys.relay.Stats().PendingFlows)
+	caller.send(t, media, sys.relay.PublicAddr())
+	b.expect(t, caller.addr(), media)
+	a.expectNothing(t)
 }

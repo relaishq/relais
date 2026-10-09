@@ -16,8 +16,10 @@ const maxCandidateTransactions = 8
 
 // flowTable maps each caller address to the worker its packets go to. It is
 // a cache of the session-owner store, and no routing changes for a caller
-// until the owning worker has authenticated one of the caller's binding
-// requests:
+// until the worker authenticates a binding request or the trusted control
+// plane calls moveSession. A bounded hold brackets that move: caller packets
+// wait for the new owner to resume, while worker replies continue flowing.
+// The routing rules are:
 //
 //   - A caller has at most one confirmed route, which carries all of its
 //     packets, and at most one pending candidate, which carries only its
@@ -29,7 +31,8 @@ const maxCandidateTransactions = 8
 //     checking the request's ICE credentials. A binding success from that
 //     worker whose transaction ID is one of the candidate's requests
 //     promotes the candidate to the caller's confirmed route. Nothing else
-//     does: the relay reads only STUN headers on the worker leg.
+//     does on the packet path: only trusted moveSession bypasses promotion.
+//     The relay reads only STUN headers on the worker leg.
 //   - Candidates expire after the pending timeout, routes after the idle
 //     timeout without caller packets. At most maxPending candidates exist,
 //     the oldest evicted first, and at most maxFlows routes and candidates
@@ -46,8 +49,9 @@ type flowTable struct {
 
 	mu       sync.Mutex
 	callers  map[netip.AddrPort]*callerFlows
-	routes   *list.List // of *callerFlows with a route, most recently active first
-	pending  *list.List // of *callerFlows with a candidate, newest first
+	sessions map[string]map[netip.AddrPort]*callerFlows // confirmed and pending, bounded by callers
+	routes   *list.List                                 // of *callerFlows with a route, most recently active first
+	pending  *list.List                                 // of *callerFlows with a candidate, newest first
 	evicted  uint64
 	rejected uint64
 	promoted uint64
@@ -88,6 +92,7 @@ func newFlowTable(limits flowLimits) *flowTable {
 		maxFlows:       limits.maxFlows,
 		maxPending:     limits.maxPending,
 		callers:        make(map[netip.AddrPort]*callerFlows),
+		sessions:       make(map[string]map[netip.AddrPort]*callerFlows),
 		routes:         list.New(),
 		pending:        list.New(),
 	}
@@ -177,6 +182,22 @@ func (t *flowTable) reroute(caller, owner netip.AddrPort, session string, now ti
 	return ok
 }
 
+// moveSession re-points existing authenticated routes without admitting or
+// evicting any route. Pending checks for the moved session are discarded;
+// their old owner's late answer must not undo the trusted move.
+func (t *flowTable) moveSession(session string, from, to netip.AddrPort) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, c := range t.sessions[session] {
+		if c.candidate != nil && c.candidate.session == session {
+			t.dropCandidate(c)
+		}
+		if c.route != nil && c.route.session == session && c.route.worker == from {
+			c.route.worker = to
+		}
+	}
+}
+
 // answer reports whether worker may send pkt to caller, and promotes the
 // caller's candidate when pkt is that worker's binding success for one of
 // the candidate's requests; promoted is then the candidate's session. A
@@ -244,7 +265,48 @@ func (t *flowTable) counts() flowCounts {
 	}
 }
 
+// forwardRoute returns the current authenticated worker and session for a
+// caller without a store lookup. It is rechecked at the send boundary.
+func (t *flowTable) forwardRoute(caller netip.AddrPort) (flow, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c := t.live(caller, time.Now())
+	if c == nil || c.route == nil {
+		return flow{}, false
+	}
+	return *c.route, true
+}
+
+// sessionWorker supplies the current route on automatic hold release.
+func (t *flowTable) sessionWorker(session string, fallback netip.AddrPort) netip.AddrPort {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, c := range t.sessions[session] {
+		if c.route != nil && c.route.session == session {
+			return c.route.worker
+		}
+	}
+	return fallback
+}
+
 // The helpers below run under mu.
+
+func (t *flowTable) index(c *callerFlows, session string) {
+	if t.sessions[session] == nil {
+		t.sessions[session] = make(map[netip.AddrPort]*callerFlows)
+	}
+	t.sessions[session][c.caller] = c
+}
+
+func (t *flowTable) unindex(c *callerFlows, session string) {
+	if c.route != nil && c.route.session == session || c.candidate != nil && c.candidate.session == session {
+		return
+	}
+	delete(t.sessions[session], c.caller)
+	if len(t.sessions[session]) == 0 {
+		delete(t.sessions, session)
+	}
+}
 
 // propose makes f the caller's candidate, replacing any candidate it has,
 // unless the table has no room for one.
@@ -276,6 +338,7 @@ func (t *flowTable) propose(caller netip.AddrPort, f flow, now time.Time) (*call
 		t.callers[caller] = c
 	}
 	c.candidate = &f
+	t.index(c, f.session)
 	c.admitted = now
 	c.nTxIDs = 0
 	c.candidateElem = t.pending.PushFront(c)
@@ -286,6 +349,10 @@ func (t *flowTable) propose(caller netip.AddrPort, f flow, now time.Time) (*call
 // promote makes a caller's candidate its confirmed route.
 func (t *flowTable) promote(c *callerFlows, now time.Time) {
 	f := *c.candidate
+	previous := ""
+	if c.route != nil {
+		previous = c.route.session
+	}
 	t.pending.Remove(c.candidateElem)
 	c.candidate, c.candidateElem = nil, nil
 	if c.route == nil {
@@ -294,6 +361,9 @@ func (t *flowTable) promote(c *callerFlows, now time.Time) {
 		t.routes.MoveToFront(c.routeElem)
 	}
 	c.route = &f
+	if previous != "" && previous != f.session {
+		t.unindex(c, previous)
+	}
 	c.lastSeen = now
 	t.promoted++
 }
@@ -344,14 +414,18 @@ func (t *flowTable) expire(now time.Time) {
 }
 
 func (t *flowTable) dropCandidate(c *callerFlows) {
+	session := c.candidate.session
 	t.pending.Remove(c.candidateElem)
 	c.candidate, c.candidateElem = nil, nil
+	t.unindex(c, session)
 	t.release(c)
 }
 
 func (t *flowTable) dropRoute(c *callerFlows) {
+	session := c.route.session
 	t.routes.Remove(c.routeElem)
 	c.route, c.routeElem = nil, nil
+	t.unindex(c, session)
 	t.release(c)
 }
 

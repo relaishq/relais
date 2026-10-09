@@ -81,7 +81,7 @@ test-streams: ## Run Redis Streams tests (non-cluster) in storage
 test-cluster: ## Run Redis Cluster integration tests (requires RELAIS_TEST_REDIS_CLUSTER_ADDRS)
 	$(GOTEST) -v -count=1 -run '^TestCluster' ./pkg/storage
 
-HARNESS_PKGS=./pkg/mediaworker/... ./pkg/relay/... ./pkg/sessionstore/... ./pkg/callharness/... ./cmd/echo-demo/...
+HARNESS_PKGS=./pkg/controlplane/... ./pkg/mediaworker/... ./pkg/relay/... ./pkg/sessionstore/... ./pkg/callharness/... ./cmd/echo-demo/...
 HARNESS_FLAGS ?=
 
 test-harness: ## Run the call harness (audio+video echo calls, direct and through the relay) with the race detector; HARNESS_FLAGS=-short for 5 s calls; full VP8 decode needs ffmpeg on PATH

@@ -14,8 +14,8 @@
 // the rest (RFC 7983). A packet from an address without a confirmed route is
 // dropped.
 //
-// No routing changes for a caller until the owning worker has authenticated
-// one of the caller's binding requests (see flows.go). The relay cannot
+// Except for a trusted MoveSession, routing changes only after the worker
+// authenticates a caller's binding request (see flows.go). The relay cannot
 // check ICE credentials, so a binding request it routes by the store only
 // proposes a pending candidate for the caller, which carries that session's
 // binding requests and nothing else; the caller's confirmed route, if any,
@@ -23,6 +23,14 @@
 // sends the caller a STUN binding success for one of those requests, which
 // the worker does only after checking the credentials. The relay reads STUN
 // headers on the worker leg for that, and nothing else.
+//
+// A planned move holds caller packets before the old worker exports. A
+// private-leg barrier drains what the old worker already received. After
+// transfer, reroute and resume, ReleaseSession forwards the bounded queue
+// in arrival order. A short BarrierTimeout aborts before export if the source
+// never acknowledges; the longer HoldTimeout backstop starts after that
+// acknowledgement. Either timeout releases to the current route. Overflow is
+// dropped and counted. Worker-to-caller traffic is never held.
 //
 // Store lookups run off the packet path (see lookups.go): a binding request
 // on an established route is forwarded at once, and the lookup only checks
@@ -57,6 +65,7 @@ import (
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
 
+	"github.com/relais/internal/relayleg"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -79,6 +88,22 @@ const (
 	DefaultMaxQueuedLookups     = 1024
 	DefaultMaxQueuedLookupBytes = 1 << 20
 	DefaultOwnerLookupTimeout   = time.Second
+
+	// DefaultBarrierTimeout aborts a missing drain acknowledgement after one
+	// second: enough scheduling headroom on the private leg, while staying
+	// below the multi-second ICE connectivity failure window. No export or
+	// ownership change occurs during this wait.
+	DefaultBarrierTimeout = time.Second
+
+	// DefaultHoldTimeout covers the worker's 2 s store call and 5 s resume
+	// budgets on the forward and rollback paths after drain acknowledgement,
+	// the rollback's 5 s context, and local export/transfer headroom. Remote
+	// worker or store implementations must configure their coordination budgets.
+	DefaultHoldTimeout       = 30 * time.Second
+	DefaultMaxHeldSessions   = 1024
+	DefaultMaxHeldPackets    = 256
+	DefaultMaxHeldBytes      = 1 << 20
+	DefaultMaxTotalHeldBytes = 8 << 20
 )
 
 const (
@@ -135,6 +160,21 @@ type Config struct {
 	MaxQueuedLookupBytes int
 	OwnerLookupTimeout   time.Duration
 
+	// BarrierTimeout bounds the pre-export drain acknowledgement wait. On
+	// expiry the move aborts and held packets replay to the current route.
+	// Defaults to DefaultBarrierTimeout.
+	BarrierTimeout time.Duration
+
+	// HoldTimeout is the coordination backstop after acknowledgement; every
+	// normal move exit releases explicitly. Defaults to DefaultHoldTimeout.
+	// The packet and byte limits apply per session; total bytes and session count
+	// bound all concurrent holds. Overflow drops the newest caller packet.
+	HoldTimeout       time.Duration
+	MaxHeldSessions   int
+	MaxHeldPackets    int
+	MaxHeldBytes      int
+	MaxTotalHeldBytes int
+
 	// LoggerFactory defaults to Pion's default logger factory.
 	LoggerFactory logging.LoggerFactory
 
@@ -145,6 +185,17 @@ type Config struct {
 
 // Stats counts what the relay has done since it started.
 type Stats struct {
+	// Holds, HeldPackets and HeldBytes are the current bounded queues.
+	Holds       int
+	HeldPackets int
+	HeldBytes   int
+	// BarrierTimeouts counts pre-export acknowledgement failures.
+	BarrierTimeouts uint64
+	// HoldDrops counts overflow, HoldTimeouts post-acknowledgement release, and
+	// HoldSendFailures queued packets that could not be forwarded.
+	HoldDrops        uint64
+	HoldTimeouts     uint64
+	HoldSendFailures uint64
 	// CallerPackets counts caller packets forwarded to a worker, and
 	// WorkerPackets worker packets forwarded to a caller.
 	CallerPackets uint64
@@ -192,6 +243,20 @@ type Relay struct {
 	workerAddr netip.AddrPort
 	flows      *flowTable
 	lookups    *ownerLookups
+
+	// routeMu serializes generation validation with route application only.
+	routeMu sync.Mutex
+
+	// forwardMu orders caller sends, holds and private drain barriers. No
+	// socket write takes routeMu. Queued releases precede new caller sends.
+	forwardMu        sync.Mutex
+	holds            map[string]*sessionHold
+	heldPackets      int
+	heldBytes        int
+	holdDrops        atomic.Uint64
+	barrierTimeouts  atomic.Uint64
+	holdTimeouts     atomic.Uint64
+	holdSendFailures atomic.Uint64
 
 	registryMu sync.RWMutex
 	registry   map[netip.AddrPort]struct{}
@@ -247,6 +312,7 @@ func New(cfg Config) (*Relay, error) {
 			maxPending:     cfg.MaxPendingFlows,
 		}),
 		registry: make(map[netip.AddrPort]struct{}),
+		holds:    make(map[string]*sessionHold),
 		ctx:      ctx,
 		cancel:   cancel,
 	}
@@ -292,6 +358,24 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.OwnerLookupTimeout <= 0 {
 		cfg.OwnerLookupTimeout = DefaultOwnerLookupTimeout
+	}
+	if cfg.BarrierTimeout <= 0 {
+		cfg.BarrierTimeout = DefaultBarrierTimeout
+	}
+	if cfg.HoldTimeout <= 0 {
+		cfg.HoldTimeout = DefaultHoldTimeout
+	}
+	if cfg.MaxHeldSessions <= 0 {
+		cfg.MaxHeldSessions = DefaultMaxHeldSessions
+	}
+	if cfg.MaxHeldPackets <= 0 {
+		cfg.MaxHeldPackets = DefaultMaxHeldPackets
+	}
+	if cfg.MaxHeldBytes <= 0 {
+		cfg.MaxHeldBytes = DefaultMaxHeldBytes
+	}
+	if cfg.MaxTotalHeldBytes <= 0 {
+		cfg.MaxTotalHeldBytes = DefaultMaxTotalHeldBytes
 	}
 	if cfg.LoggerFactory == nil {
 		cfg.LoggerFactory = logging.NewDefaultLoggerFactory()
@@ -343,6 +427,34 @@ func (r *Relay) AddWorker(worker netip.AddrPort) {
 	r.registry[unmap(worker)] = struct{}{}
 }
 
+// MoveSession is a trusted control-plane notification after a lease transfer.
+// It immediately fences the old relay leg, preserves all confirmed callers,
+// and invalidates lookups that started before the move. It admits no caller
+// addresses: those still require the worker's authenticated binding answer.
+func (r *Relay) MoveSession(sessionID string, from, to netip.AddrPort) error {
+	from, to = unmap(from), unmap(to)
+	if sessionID == "" || !r.registered(from) || !r.registered(to) {
+		return errors.New("relay: move needs a session and registered workers")
+	}
+	r.forwardMu.Lock()
+	defer r.forwardMu.Unlock()
+	r.routeMu.Lock()
+	defer r.routeMu.Unlock()
+	if r.ctx.Err() != nil {
+		return errors.New("relay: closed")
+	}
+	r.lookups.mu.Lock()
+	if lookup := r.lookups.pending[sessionID]; lookup != nil {
+		lookup.generation++
+	}
+	r.lookups.mu.Unlock()
+	r.flows.moveSession(sessionID, from, to)
+	if h := r.holds[sessionID]; h != nil {
+		h.worker = to
+	}
+	return nil
+}
+
 // RemoveWorker stops accepting a media worker's datagrams.
 func (r *Relay) RemoveWorker(worker netip.AddrPort) {
 	r.registryMu.Lock()
@@ -361,8 +473,13 @@ func (r *Relay) registered(worker netip.AddrPort) bool {
 // Stats returns the relay's counters.
 func (r *Relay) Stats() Stats {
 	flows := r.flows.counts()
+	r.forwardMu.Lock()
+	holds, packets, bytes := len(r.holds), r.heldPackets, r.heldBytes
+	r.forwardMu.Unlock()
 
 	return Stats{
+		BarrierTimeouts: r.barrierTimeouts.Load(),
+		Holds:           holds, HeldPackets: packets, HeldBytes: bytes, HoldDrops: r.holdDrops.Load(), HoldTimeouts: r.holdTimeouts.Load(), HoldSendFailures: r.holdSendFailures.Load(),
 		CallerPackets:  r.callerPackets.Load(),
 		WorkerPackets:  r.workerPackets.Load(),
 		STUNRouted:     r.stunRouted.Load(),
@@ -387,6 +504,14 @@ func (r *Relay) Close() error {
 	r.closeOnce.Do(func() {
 		r.cancel()
 		r.closeErr = errors.Join(r.public.Close(), r.workers.Close())
+		r.forwardMu.Lock()
+		for id, h := range r.holds {
+			h.timer.Stop()
+			close(h.released)
+			delete(r.holds, id)
+		}
+		r.heldPackets, r.heldBytes = 0, 0
+		r.forwardMu.Unlock()
 		r.running.Wait()
 	})
 
@@ -453,14 +578,53 @@ func (r *Relay) route(pkt []byte, from netip.AddrPort) (netip.AddrPort, bool) {
 // forward sends a caller packet to a worker. datagram is MaxHeaderLen bytes
 // of room for the relay-leg header followed by the packet.
 func (r *Relay) forward(datagram []byte, caller, worker netip.AddrPort) {
+	r.forwardMu.Lock()
+	defer r.forwardMu.Unlock()
+	packet := datagram[MaxHeaderLen:]
+	var session string
+	var tx [stun.TransactionIDSize]byte
+	var stunRequest bool
+	if isSTUN(packet) {
+		session, tx, stunRequest = parseBindingRequest(packet)
+	}
+	if !stunRequest {
+		f, ok := r.flows.forwardRoute(caller)
+		if !ok {
+			return
+		}
+		session, worker = f.session, f.worker
+	}
+	if h := r.holds[session]; h != nil {
+		// Only authenticated callers for this session may spend its queue.
+		// Other addresses' checks can retry after the hold; pending candidates
+		// are insufficient, even if their USERNAME names the held session.
+		confirmed, ok := r.flows.forwardRoute(caller)
+		if !ok || confirmed.session != session {
+			return
+		}
+		r.enqueue(h, caller, packet)
+		return
+	}
+	if stunRequest {
+		current, ok := r.flows.routeSTUN(caller, session, tx, time.Now())
+		if !ok {
+			return
+		}
+		worker = current
+	}
+	r.sendCaller(datagram, caller, worker)
+}
+
+// sendCaller runs under forwardMu; routeMu is never held during a write.
+func (r *Relay) sendCaller(datagram []byte, caller, worker netip.AddrPort) bool {
 	start := MaxHeaderLen - HeaderLen(caller)
 	AppendHeader(datagram[start:start], caller)
 	if _, err := r.workers.WriteToUDPAddrPort(datagram[start:], worker); err != nil {
 		r.log.Debugf("forward to worker %s: %v", worker, err)
-
-		return
+		return false
 	}
 	r.callerPackets.Add(1)
+	return true
 }
 
 func (r *Relay) owner(sessionID string) (netip.AddrPort, error) {
@@ -472,9 +636,11 @@ func (r *Relay) owner(sessionID string) (netip.AddrPort, error) {
 
 // resolved acts on a session's owner lookup for the callers waiting on it:
 // it proposes each waiting binding request's caller to the owner and
-// forwards the request, or has an established route follow a new owner
+// returns admitted requests for forwarding after routeMu is unlocked, or
+// has an established route follow a new owner
 // (through a candidate the owner must confirm).
-func (r *Relay) resolved(sessionID string, owner netip.AddrPort, err error, waiters []waiter) {
+func (r *Relay) resolved(sessionID string, owner netip.AddrPort, err error, waiters []waiter) []waiter {
+	var forwards []waiter
 	now := time.Now()
 	switch {
 	case err == nil:
@@ -491,7 +657,7 @@ func (r *Relay) resolved(sessionID string, owner netip.AddrPort, err error, wait
 				continue // counted as FlowsRejected
 			}
 			r.stunRouted.Add(1)
-			r.forward(w.datagram, w.caller, owner)
+			forwards = append(forwards, w)
 		}
 	case errors.Is(err, sessionstore.ErrNotFound):
 		for _, w := range waiters {
@@ -511,6 +677,7 @@ func (r *Relay) resolved(sessionID string, owner netip.AddrPort, err error, wait
 			}
 		}
 	}
+	return forwards
 }
 
 // workerLoop reads the relay leg and sends each worker packet to the caller
@@ -538,6 +705,12 @@ func (r *Relay) workerLoop() {
 			continue
 		}
 
+		if id, ack, ok := relayleg.ParseBarrier(buf[:n]); ok {
+			if ack {
+				r.acknowledgeBarrier(id, from)
+			}
+			continue
+		}
 		caller, pkt, err := ParseHeader(buf[:n])
 		if err != nil {
 			r.malformed.Add(1)

@@ -22,6 +22,7 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
+	"github.com/relais/pkg/sessionstore"
 )
 
 const (
@@ -62,11 +63,13 @@ type session struct {
 
 	mu       sync.Mutex
 	state    sessionState
+	lease    sessionstore.Lease // guarded by mu; never part of the media snapshot
 	dtlsConn *dtls.Conn
 	srtpIn   *srtp.Context // decrypts caller to worker
 	srtpOut  *srtp.Context // encrypts worker to caller
 
-	// fenced is set, under mu, when the session is exported for a handover.
+	// fenced is set under mu when exported, when its lease is lost, or when
+	// a failed resume must close without disturbing the continuing caller.
 	// From then on this worker processes none of the session's packets and
 	// sends the caller nothing, not even the close_notify of closing the
 	// DTLS connection: the session continues on another worker.

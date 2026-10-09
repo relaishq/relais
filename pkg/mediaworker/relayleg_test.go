@@ -201,3 +201,40 @@ func listenTestUDP(t *testing.T) *net.UDPConn {
 
 	return conn
 }
+
+// A relay worker renews a live lease and silently removes its responder
+// after a transfer makes the token stale. It cannot release the successor.
+func TestRelayWorkerRenewsAndFencesLostLease(t *testing.T) {
+	owners := sessionstore.NewMemory()
+	relayLeg := listenTestUDP(t)
+	worker, err := New(Config{Relay: &RelayConfig{
+		Addr:       relayLeg.LocalAddr().(*net.UDPAddr).AddrPort(),
+		PublicAddr: netip.MustParseAddrPort("192.0.2.10:3478"), Owners: owners, LeaseTTL: 300 * time.Millisecond,
+	}})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, worker.Close()) })
+	id, answer, err := worker.CreateSession(context.Background(), testOffer(testOfferAttrs{}))
+	require.NoError(t, err)
+	lease, err := owners.Get(context.Background(), id)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		current, err := owners.Get(context.Background(), id)
+		return err == nil && current.ExpiresAt.After(lease.ExpiresAt)
+	}, time.Second, time.Millisecond)
+	successor := netip.MustParseAddrPort("127.0.0.1:40000")
+	transferred, err := owners.Transfer(context.Background(), lease, successor, time.Minute)
+	require.NoError(t, err)
+	time.Sleep(600 * time.Millisecond) // six renewal intervals, with scheduling headroom
+	current, err := owners.Get(context.Background(), id)
+	require.NoError(t, err)
+	require.Equal(t, transferred, current)
+	call := &testCall{worker: worker, id: id, username: id + ":" + testCallerUfrag, pwd: answerPwd(t, answer)}
+	check := call.bindingRequest(t)
+	caller := netip.MustParseAddrPort("198.51.100.1:50000")
+	_, err = relayLeg.WriteToUDPAddrPort(append(relay.AppendHeader(nil, caller), check.Raw...), worker.LocalAddr())
+	require.NoError(t, err)
+	require.NoError(t, relayLeg.SetReadDeadline(time.Now().Add(200*time.Millisecond)))
+	_, err = relayLeg.Read(make([]byte, receiveMTU))
+	require.True(t, isTimeout(err), "lost-lease worker sent a packet")
+	require.ErrorIs(t, worker.EndSession(id), ErrUnknownSession, "worker fenced itself without a hangup")
+}

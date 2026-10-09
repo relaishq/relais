@@ -32,6 +32,7 @@ import (
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
 
+	"github.com/relais/internal/workerprobe"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -92,8 +93,7 @@ type Config struct {
 }
 
 // RelayConfig puts a media worker behind a relay. A worker behind a relay
-// owns its UDP socket; it cannot also share a Socket (moving calls between
-// workers through the relay is later work).
+// owns its UDP socket; it cannot also share a Socket.
 type RelayConfig struct {
 	// Addr is the relay's private relay-leg address. The worker sends every
 	// packet there and accepts packets only from there.
@@ -106,7 +106,10 @@ type RelayConfig struct {
 	// Owners is the session-owner store the relay routes by. The worker
 	// claims each new session, as owned by its own socket address, before it
 	// returns the answer, and releases the session when it ends.
-	Owners sessionstore.Owners
+	Owners sessionstore.Store
+
+	// LeaseTTL bounds ownership without renewal. Defaults to three seconds.
+	LeaseTTL time.Duration
 }
 
 // Worker is a media worker. It owns one UDP socket, or shares one with other
@@ -121,6 +124,7 @@ type Worker struct {
 	localAddr netip.AddrPort
 	mediaAddr netip.AddrPort
 	readDone  chan struct{}
+	stopRenew chan struct{}
 
 	mu       sync.Mutex
 	sessions map[string]*session         // by session ID, which is also the worker's ICE ufrag
@@ -142,6 +146,13 @@ func New(cfg Config) (*Worker, error) {
 	}
 	if cfg.consentTimeout <= 0 {
 		cfg.consentTimeout = defaultConsentTimeout
+	}
+	if cfg.Relay != nil {
+		relayCfg := *cfg.Relay
+		if relayCfg.LeaseTTL <= 0 {
+			relayCfg.LeaseTTL = 3 * time.Second
+		}
+		cfg.Relay = &relayCfg
 	}
 	if err := validateRelayConfig(cfg.Relay); err != nil {
 		return nil, err
@@ -199,10 +210,18 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 		localAddr: localAddr,
 		mediaAddr: mediaAddr,
 		readDone:  make(chan struct{}),
+		stopRenew: make(chan struct{}),
 		sessions:  make(map[string]*session),
 		byAddr:    make(map[netip.AddrPort]*session),
 	}
+	if cfg.Relay != nil {
+		workerprobe.Register(localAddr, worker.captureZombie)
+	}
 	go worker.readLoop()
+	if cfg.Relay != nil {
+		worker.running.Add(1)
+		go worker.renewLeases()
+	}
 
 	return worker
 }
@@ -245,7 +264,7 @@ func (w *Worker) CreateSession(ctx context.Context, offerSDP string) (sessionID,
 
 		return "", "", err
 	}
-	if err := w.claim(ctx, sess.id); err != nil {
+	if err := w.claim(ctx, sess); err != nil {
 		sess.close()
 
 		return "", "", err
@@ -255,7 +274,7 @@ func (w *Worker) CreateSession(ctx context.Context, offerSDP string) (sessionID,
 	if w.closed {
 		w.mu.Unlock()
 		sess.close()
-		w.release(sess.id) // claimed above, never registered
+		w.release(sess) // claimed above, never registered
 
 		return "", "", ErrClosed
 	}
@@ -290,7 +309,11 @@ func (w *Worker) Close() error {
 
 		return nil
 	}
+	if w.cfg.Relay != nil {
+		workerprobe.Remove(w.localAddr)
+	}
 	w.closed = true
+	close(w.stopRenew)
 	sessions := make([]*session, 0, len(w.sessions))
 	for _, sess := range w.sessions {
 		sessions = append(sessions, sess)
@@ -372,7 +395,8 @@ func (w *Worker) send(pkt []byte, to netip.AddrPort) (int, error) {
 // forget removes a closed session and its caller addresses. Behind a relay
 // it also releases the session in the session-owner store, if it was the
 // session registered under that ID (a duplicate that failed to register is
-// ending, not the live one).
+// ending, not the live one). Exported sessions retain their lease for the
+// control plane to transfer; a stale lease can never release a successor.
 func (w *Worker) forget(sess *session) {
 	w.mu.Lock()
 	registered := w.sessions[sess.id] == sess
@@ -386,35 +410,94 @@ func (w *Worker) forget(sess *session) {
 	}
 	w.mu.Unlock()
 
-	if registered {
-		w.release(sess.id)
+	if registered && !sess.fenced.Load() {
+		w.release(sess)
 	}
 }
 
 // claim records the worker as a session's owner, so the relay routes the
 // session's caller here. Without a relay there is nothing to claim.
-func (w *Worker) claim(ctx context.Context, sessionID string) error {
+func (w *Worker) claim(ctx context.Context, sess *session) error {
 	if w.cfg.Relay == nil {
 		return nil
 	}
+
 	ctx, cancel := context.WithTimeout(ctx, ownershipTimeout)
 	defer cancel()
-	if err := w.cfg.Relay.Owners.Claim(ctx, sessionID, w.localAddr); err != nil {
-		return fmt.Errorf("mediaworker: claim session %s: %w", sessionID, err)
+
+	lease, err := w.cfg.Relay.Owners.Claim(ctx, sess.id, w.localAddr, w.cfg.Relay.LeaseTTL)
+	if err != nil {
+		return fmt.Errorf("mediaworker: claim session %s: %w", sess.id, err)
 	}
 
+	sess.lease = lease
 	return nil
 }
 
-// release removes the worker's claim on a session it no longer serves.
-func (w *Worker) release(sessionID string) {
+func (w *Worker) release(sess *session) {
 	if w.cfg.Relay == nil {
 		return
 	}
+
+	sess.mu.Lock()
+	lease := sess.lease
+	sess.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), ownershipTimeout)
 	defer cancel()
-	if err := w.cfg.Relay.Owners.Release(ctx, sessionID, w.localAddr); err != nil {
-		w.log.Warnf("session %s: release ownership: %v", sessionID, err)
+
+	if err := w.cfg.Relay.Owners.Release(ctx, lease); err != nil {
+		w.log.Warnf("session %s: release lease: %v", sess.id, err)
+	}
+}
+
+// renewLeases keeps live sessions owned. A lost token fences silently, so
+// closing the old transport cannot end the call running on its successor.
+func (w *Worker) renewLeases() {
+	defer w.running.Done()
+
+	ticker := time.NewTicker(max(w.cfg.Relay.LeaseTTL/3, time.Millisecond))
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-w.stopRenew:
+			return
+		case <-ticker.C:
+			w.mu.Lock()
+			sessions := make([]*session, 0, len(w.sessions))
+			for _, sess := range w.sessions {
+				sessions = append(sessions, sess)
+			}
+			w.mu.Unlock()
+			for _, sess := range sessions {
+				sess.mu.Lock()
+				lease, fenced := sess.lease, sess.fenced.Load()
+				sess.mu.Unlock()
+				if fenced {
+					continue
+				}
+
+				ctx, cancel := context.WithTimeout(sess.ctx, ownershipTimeout)
+				renewed, err := w.cfg.Relay.Owners.Renew(ctx, lease, w.cfg.Relay.LeaseTTL)
+				cancel()
+				sess.mu.Lock()
+				if err == nil {
+					sess.lease = renewed
+				}
+
+				lost := errors.Is(err, sessionstore.ErrLeaseLost) && !sess.fenced.Load()
+				if lost {
+					sess.fenced.Store(true)
+				}
+				sess.mu.Unlock()
+				if lost {
+					w.log.Warnf("session %s: lease lost; fenced", sess.id)
+					sess.close()
+				} else if err != nil && sess.ctx.Err() == nil {
+					w.log.Warnf("session %s: renew lease: %v", sess.id, err)
+				}
+			}
+		}
 	}
 }
 

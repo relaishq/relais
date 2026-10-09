@@ -10,6 +10,7 @@ import (
 	"github.com/pion/dtls/v3"
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
+	"github.com/relais/pkg/sessionstore"
 )
 
 // A session moves between workers as bytes: ExportSession on the old owner,
@@ -47,6 +48,9 @@ const resumeTimeout = 5 * time.Second
 // ResumeOptions shape how a resumed session continues the worker's outbound
 // streams.
 type ResumeOptions struct {
+	// Lease is mandatory behind a relay: the control plane transfers it before resume.
+	Lease sessionstore.Lease
+
 	// SequenceMargin moves each outbound track's RTP sequence numbers (and
 	// SRTP index) forward by this much, so no index the old owner may have
 	// used after its snapshot is used again. Timestamps do not move. A
@@ -99,7 +103,8 @@ func (w *Worker) ExportSession(sessionID string) ([]byte, error) {
 //
 // On a shared Socket, Socket.Handover calls it and routes the caller's
 // packets here. A worker with its own socket only receives the caller's
-// packets if they reach that socket.
+// packets if they reach that socket. Behind a relay, the control plane
+// transfers ownership first and supplies the new fenced lease in opts.
 func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error) {
 	if opts.SequenceMargin >= 1<<15 {
 		return "", fmt.Errorf("mediaworker: sequence margin %d is not below 2^15", opts.SequenceMargin)
@@ -112,14 +117,29 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 		return "", errSessionExists
 	}
 
+	if w.cfg.Relay != nil {
+		if opts.Lease.SessionID != snap.State.ID || opts.Lease.Worker != w.localAddr {
+			return "", sessionstore.ErrLeaseLost
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), ownershipTimeout)
+		lease, err := w.cfg.Relay.Owners.Renew(ctx, opts.Lease, w.cfg.Relay.LeaseTTL)
+		cancel()
+		if err != nil {
+			return "", err
+		}
+		opts.Lease = lease
+	}
 	sess := sessionFromState(w, snap.State)
+	sess.lease = opts.Lease
 	dtlsConn, err := sess.resume(snap.DTLSConnection, opts)
 	if err != nil {
+		sess.fenced.Store(true)
 		sess.close()
 
 		return "", fmt.Errorf("mediaworker: resume session %s: %w", sess.id, err)
 	}
 	if err := w.adopt(sess, dtlsConn); err != nil {
+		sess.fenced.Store(true)
 		sess.close()
 
 		return "", err

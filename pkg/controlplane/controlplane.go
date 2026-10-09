@@ -1,0 +1,579 @@
+// Package controlplane coordinates planned moves without changing the
+// caller's connection. It freezes the old worker, transfers a fenced lease,
+// reroutes the relay and resumes the new worker from the final snapshot.
+// A bounded relay hold and a private drain barrier bracket the sequence so
+// caller packets wait in order instead of disappearing between owners.
+// A per-call lock prevents overlapping moves; a failed move resumes the old
+// worker after restoring ownership, even if reverse notification fails.
+// Workers are reached through a small interface so a later process boundary
+// can use the same coordination rules.
+package controlplane
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/netip"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/relais/pkg/mediaworker"
+	"github.com/relais/pkg/relay"
+	"github.com/relais/pkg/sessionstore"
+)
+
+var (
+	// ErrMoveInProgress refuses overlapping coordination of the same call.
+	ErrMoveInProgress = errors.New("controlplane: move in progress")
+	// ErrUnknownCall means this control plane no longer tracks the call.
+	ErrUnknownCall = errors.New("controlplane: unknown call")
+	// ErrNoTarget means no non-draining destination is available.
+	ErrNoTarget = errors.New("controlplane: no non-draining target worker")
+)
+
+// Worker is the in-process media boundary. Resume must either adopt the
+// supplied lease and run the session, or fail without running it.
+type Worker interface {
+	CreateSession(ctx context.Context, offer string) (string, string, error)
+	EndSession(sessionID string) error
+	ExportSession(sessionID string) ([]byte, error)
+	ResumeSession(state []byte, opts mediaworker.ResumeOptions) (string, error)
+}
+
+// Relay is the trusted routing boundary, satisfied by *relay.Relay.
+type Relay interface {
+	HoldSession(ctx context.Context, sessionID string, from netip.AddrPort) error
+	MoveSession(sessionID string, from, to netip.AddrPort) error
+	ReleaseSession(sessionID string, to netip.AddrPort) (int, error)
+}
+
+type registration struct {
+	name     string
+	addr     netip.AddrPort
+	worker   Worker
+	draining bool
+	reserved int // incoming creates/moves; counted when balancing
+}
+
+type call struct {
+	mu        sync.Mutex
+	id        string
+	lastMove  *time.Time
+	moveCount uint64
+}
+
+// Plane owns the registry and call metadata. The store remains authoritative
+// for ownership. New and Register must be called before accepting calls.
+type Plane struct {
+	mu              sync.Mutex
+	relay           Relay
+	store           sessionstore.Store
+	workers         map[string]*registration
+	calls           map[string]*call
+	ttl             time.Duration
+	incomingChanged chan struct{}
+}
+
+// New returns an empty in-process control plane for the relay and store.
+func New(r Relay, store sessionstore.Store) *Plane {
+	return &Plane{
+		relay:           r,
+		store:           store,
+		workers:         make(map[string]*registration),
+		calls:           make(map[string]*call),
+		ttl:             3 * time.Second,
+		incomingChanged: make(chan struct{}),
+	}
+}
+
+// Register names a worker by its unique private relay-leg address.
+func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error {
+	if name == "" || !addr.IsValid() || worker == nil {
+		return errors.New("controlplane: worker needs name, address and interface")
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if _, ok := p.workers[name]; ok {
+		return errors.New("controlplane: duplicate worker name")
+	}
+
+	for _, w := range p.workers {
+		if w.addr == addr {
+			return errors.New("controlplane: duplicate worker address")
+		}
+	}
+
+	p.workers[name] = &registration{name: name, addr: addr, worker: worker}
+	return nil
+}
+
+// SetRelay replaces the relay after a harness restart. In-flight moves keep
+// their routing boundary; the caller of SetRelay must serialize the restart.
+func (p *Plane) SetRelay(r Relay) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.relay = r
+}
+
+// pick runs under mu and reserves capacity before another selection can run.
+func (p *Plane) pick(ctx context.Context, name string, exclude netip.AddrPort) (*registration, error) {
+	var best *registration
+	load := int(^uint(0) >> 1)
+	for _, w := range p.workers {
+		if name != "" && w.name != name {
+			continue
+		}
+		if w.draining || w.addr == exclude {
+			continue
+		}
+
+		leases, err := p.store.ListByWorker(ctx, w.addr)
+		if err != nil {
+			return nil, err
+		}
+
+		n := len(leases) + w.reserved
+		if n < load || (n == load && (best == nil || w.name < best.name)) {
+			best, load = w, n
+		}
+	}
+	if best == nil {
+		return nil, ErrNoTarget
+	}
+	best.reserved++
+	return best, nil
+}
+
+func (p *Plane) unreserve(w *registration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	w.reserved--
+	close(p.incomingChanged)
+	p.incomingChanged = make(chan struct{})
+}
+
+func (p *Plane) forget(c *call) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.calls[c.id] == c {
+		delete(p.calls, c.id)
+	}
+}
+
+func (p *Plane) lookup(id string) (*call, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	c := p.calls[id]
+	if c == nil {
+		return nil, ErrUnknownCall
+	}
+
+	return c, nil
+}
+
+func (p *Plane) owner(addr netip.AddrPort) *registration {
+	for _, w := range p.workers {
+		if w.addr == addr {
+			return w
+		}
+	}
+
+	return nil
+}
+
+// Create starts a call on the least-loaded non-draining worker. name can
+// pin a worker for a test, but cannot bypass draining.
+func (p *Plane) Create(ctx context.Context, offer, name string) (string, string, error) {
+	p.mu.Lock()
+	w, err := p.pick(ctx, name, netip.AddrPort{})
+	p.mu.Unlock()
+	if err != nil {
+		return "", "", err
+	}
+	defer p.unreserve(w)
+
+	id, answer, err := w.worker.CreateSession(ctx, offer)
+	if err != nil {
+		return "", "", err
+	}
+
+	p.mu.Lock()
+	p.calls[id] = &call{id: id}
+	p.mu.Unlock()
+	return id, answer, nil
+}
+
+// End waits for a move already in progress, then hangs up the current owner.
+func (p *Plane) End(ctx context.Context, id string) error {
+	c, err := p.lookup(id)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	lease, err := p.store.Get(ctx, id)
+	if err != nil {
+		if errors.Is(err, sessionstore.ErrNotFound) {
+			p.forget(c)
+		}
+
+		return err
+	}
+
+	p.mu.Lock()
+	w := p.owner(lease.Worker)
+	p.mu.Unlock()
+	if w == nil {
+		return ErrUnknownCall
+	}
+
+	if err := w.worker.EndSession(id); err != nil {
+		if errors.Is(err, mediaworker.ErrUnknownSession) {
+			p.forget(c)
+			_ = p.store.Release(ctx, lease)
+		}
+
+		return err
+	}
+	p.forget(c)
+	return nil
+}
+
+// MoveResult records coordination timings; the harness measures media gaps
+// separately at the caller.
+type MoveResult struct {
+	ID     string                     `json:"id"`
+	From   string                     `json:"from"`
+	To     string                     `json:"to"`
+	Start  time.Time                  `json:"start"`
+	End    time.Time                  `json:"end"`
+	Result mediaworker.HandoverResult `json:"result"`
+	// Error is empty on success, otherwise the per-call drain/move failure.
+	Error string `json:"error,omitempty"`
+}
+
+// Move fails fast if another move or drain holds the call. Empty to picks
+// the least-loaded non-draining worker other than the current owner.
+func (p *Plane) Move(ctx context.Context, id, to string) (MoveResult, error) {
+	c, err := p.lookup(id)
+	if err != nil {
+		return MoveResult{}, err
+	}
+
+	if !c.mu.TryLock() {
+		return MoveResult{}, ErrMoveInProgress
+	}
+	defer c.mu.Unlock()
+
+	lease, err := p.store.Get(ctx, id)
+	if err != nil {
+		return MoveResult{}, err
+	}
+
+	p.mu.Lock()
+	target, err := p.pick(ctx, to, lease.Worker)
+	p.mu.Unlock()
+	if err != nil {
+		return MoveResult{}, err
+	}
+	defer p.unreserve(target)
+
+	return p.move(ctx, c, lease, target)
+}
+
+// move holds the call lock and an incoming reservation on target.
+func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, target *registration) (res MoveResult, err error) {
+	p.mu.Lock()
+	source, r := p.owner(lease.Worker), p.relay
+	p.mu.Unlock()
+	if source == nil {
+		return res, ErrUnknownCall
+	}
+
+	res = MoveResult{ID: c.id, From: source.name, To: target.name, Start: time.Now(), Result: mediaworker.HandoverResult{SessionID: c.id}}
+	defer func() {
+		res.End = time.Now()
+		res.Result.Duration = res.End.Sub(res.Start)
+		if err != nil {
+			res.Error = err.Error()
+		}
+	}()
+	started := time.Now()
+	// Missing acknowledgement aborts before export; the relay replays to A.
+	if err = r.HoldSession(ctx, c.id, source.addr); err != nil {
+		return res, err
+	}
+
+	res.Result.Drain = time.Since(started)
+	// Every exit after beginning a hold releases it. A successful/rolled-back
+	// resume chooses its owner explicitly; early export failure stays on A.
+	releaseTo := source.addr
+	defer func() {
+		held, releaseErr := r.ReleaseSession(c.id, releaseTo)
+		res.Result.HeldPackets = held
+		if errors.Is(releaseErr, relay.ErrHoldExpired) {
+			res.Result.HoldExpired = true
+			if err == nil {
+				// Resume completed; expiry affected packet holding, not ownership.
+				// The relay already counted it in HoldTimeouts. Do not invite a retry.
+				return
+			}
+		}
+		if releaseErr != nil {
+			err = errors.Join(err, fmt.Errorf("controlplane: release caller hold: %w", releaseErr))
+		}
+	}()
+	started = time.Now()
+	state, err := source.worker.ExportSession(c.id)
+	res.Result.Export = time.Since(started)
+	if err != nil {
+		if errors.Is(err, mediaworker.ErrUnknownSession) {
+			p.forget(c)
+		}
+
+		return res, err
+	}
+
+	res.Result.StateBytes = len(state)
+	transferred, err := p.store.Transfer(ctx, lease, target.addr, p.ttl)
+	if err != nil {
+		err = p.rollback(c, source, target, r, state, lease, false, false, &res.Result, err)
+		return res, err
+	}
+
+	if err = r.MoveSession(c.id, source.addr, target.addr); err != nil {
+		err = p.rollback(c, source, target, r, state, transferred, true, false, &res.Result, err)
+		return res, err
+	}
+
+	started = time.Now()
+	_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: transferred})
+	res.Result.Resume = time.Since(started)
+	if err != nil {
+		err = p.rollback(c, source, target, r, state, transferred, true, true, &res.Result, err)
+		return res, err
+	}
+
+	releaseTo = target.addr
+	now := time.Now()
+	c.lastMove = &now
+	c.moveCount++
+	return res, nil
+}
+
+func (p *Plane) rollback(c *call, source, target *registration, r Relay, state []byte, lease sessionstore.Lease, transferred, rerouted bool, result *mediaworker.HandoverResult, cause error) error {
+	// Recovery uses a fresh context after the request has flushed its source.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var err error
+	if transferred {
+		lease, err = p.store.Transfer(ctx, lease, source.addr, p.ttl)
+	}
+	var routeErr error
+	if err == nil && rerouted {
+		routeErr = r.MoveSession(c.id, target.addr, source.addr)
+	}
+	// A failed reverse notification must not prevent A from running again.
+	// B never resumed, and the next authenticated consent check follows A's
+	// restored store ownership even if the relay itself needs to recover.
+	if err == nil {
+		_, err = source.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: lease})
+	}
+	if err != nil {
+		p.forget(c)
+		_ = p.store.Release(ctx, lease)
+		return fmt.Errorf("controlplane: call lost: move failed (%v), rollback failed: %w", cause, err)
+	}
+
+	result.RolledBack = true
+	if routeErr != nil {
+		return fmt.Errorf("controlplane: rolled back on source; relay restore failed (%v): %w", routeErr, cause)
+	}
+
+	return fmt.Errorf("controlplane: move failed, rolled back: %w", cause)
+}
+
+// Drain blocks new selections immediately. Existing calls move concurrently;
+// reservations keep concurrent selections balanced. With no destination it
+// moves nothing. It marks draining before waiting up to one second for
+// incoming reservations, then includes those calls in the drain.
+func (p *Plane) Drain(ctx context.Context, name string) ([]MoveResult, error) {
+	p.mu.Lock()
+	w := p.workers[name]
+	if w == nil {
+		p.mu.Unlock()
+		return nil, errors.New("controlplane: unknown worker")
+	}
+
+	w.draining = true
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+
+	for w.reserved != 0 {
+		changed := p.incomingChanged
+		p.mu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			return nil, errors.New("controlplane: draining; incoming work did not finish within one second")
+		}
+
+		p.mu.Lock()
+	}
+
+	leases, err := p.store.ListByWorker(ctx, w.addr)
+	if err != nil {
+		p.mu.Unlock()
+		return nil, err
+	}
+	type job struct {
+		lease  sessionstore.Lease
+		target *registration
+		c      *call
+	}
+
+	jobs := make([]job, 0, len(leases))
+	for _, lease := range leases {
+		target, pickErr := p.pick(ctx, "", w.addr)
+		if pickErr != nil {
+			for _, j := range jobs {
+				j.target.reserved--
+			}
+			close(p.incomingChanged)
+			p.incomingChanged = make(chan struct{})
+			p.mu.Unlock()
+			return nil, pickErr
+		}
+
+		jobs = append(jobs, job{lease: lease, target: target, c: p.calls[lease.SessionID]})
+	}
+	p.mu.Unlock()
+	results := make([]MoveResult, len(jobs))
+	errs := make([]error, len(jobs))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 16)
+	for i, j := range jobs {
+		wg.Go(func() {
+			defer p.unreserve(j.target)
+
+			results[i] = MoveResult{ID: j.lease.SessionID, From: w.name, To: j.target.name}
+			defer func() {
+				if errs[i] != nil {
+					results[i].Error = errs[i].Error()
+				}
+			}()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if j.c == nil {
+				errs[i] = ErrUnknownCall
+				return
+			}
+
+			if !j.c.mu.TryLock() {
+				errs[i] = ErrMoveInProgress
+				return
+			}
+			defer j.c.mu.Unlock()
+
+			// Re-read after taking the move lock: a completed move may have changed
+			// the owner since Drain listed the leases.
+			current, err := p.store.Get(ctx, j.lease.SessionID)
+			if err != nil {
+				errs[i] = err
+				return
+			}
+			if current.Worker != w.addr || current.Epoch != j.lease.Epoch {
+				errs[i] = sessionstore.ErrLeaseLost
+				return
+			}
+
+			results[i], errs[i] = p.move(ctx, j.c, current, j.target)
+		})
+	}
+	wg.Wait()
+	return results, errors.Join(errs...)
+}
+
+// WorkerStatus describes one registered worker and its live lease count.
+type WorkerStatus struct {
+	Name     string         `json:"name"`
+	Address  netip.AddrPort `json:"address"`
+	Draining bool           `json:"draining"`
+	Calls    int            `json:"call_count"`
+}
+
+// CallStatus describes current lease ownership and successful moves.
+type CallStatus struct {
+	ID        string         `json:"id"`
+	Owner     string         `json:"owner"`
+	Address   netip.AddrPort `json:"owner_address"`
+	Epoch     uint64         `json:"lease_epoch"`
+	LastMove  *time.Time     `json:"last_move"`
+	MoveCount uint64         `json:"move_count"`
+}
+
+// Status is the HTTP view of workers and live calls.
+type Status struct {
+	Workers []WorkerStatus `json:"workers"`
+	Calls   []CallStatus   `json:"calls"`
+}
+
+// Status lists live calls and prunes metadata whose lease has disappeared.
+func (p *Plane) Status(ctx context.Context) (Status, error) {
+	p.mu.Lock()
+	workers := make([]*registration, 0, len(p.workers))
+	for _, w := range p.workers {
+		workers = append(workers, w)
+	}
+	// Copy registry flags here; metadata is read under each call lock below.
+	status := Status{Workers: []WorkerStatus{}, Calls: []CallStatus{}}
+	for _, w := range workers {
+		status.Workers = append(status.Workers, WorkerStatus{Name: w.name, Address: w.addr, Draining: w.draining})
+	}
+
+	calls := make([]*call, 0, len(p.calls))
+	for _, c := range p.calls {
+		calls = append(calls, c)
+	}
+	p.mu.Unlock()
+	for _, c := range calls {
+		c.mu.Lock()
+		lease, err := p.store.Get(ctx, c.id)
+		if errors.Is(err, sessionstore.ErrNotFound) {
+			p.forget(c)
+			c.mu.Unlock()
+			continue
+		}
+		if err != nil {
+			c.mu.Unlock()
+			return Status{}, err
+		}
+
+		cs := CallStatus{ID: c.id, Address: lease.Worker, Epoch: lease.Epoch, LastMove: c.lastMove, MoveCount: c.moveCount}
+		for i := range status.Workers {
+			if status.Workers[i].Address == lease.Worker {
+				cs.Owner = status.Workers[i].Name
+				status.Workers[i].Calls++
+			}
+		}
+
+		status.Calls = append(status.Calls, cs)
+		c.mu.Unlock()
+	}
+	sort.Slice(status.Workers, func(i, j int) bool { return status.Workers[i].Name < status.Workers[j].Name })
+	sort.Slice(status.Calls, func(i, j int) bool { return status.Calls[i].ID < status.Calls[j].ID })
+	return status, nil
+}
