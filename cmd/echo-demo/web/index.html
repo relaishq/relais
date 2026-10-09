@@ -57,13 +57,14 @@
 <main>
   <h1>Relais echo</h1>
   <p>
-    Publishes <strong id="source-label">…</strong> to one Relais media worker and plays the worker's echo.
+    Publishes <strong id="source-label">…</strong> to a Relais media worker and plays the worker's echo.
     Source: <a href="?source=camera">camera and microphone</a> · <a href="?source=test">test pattern</a>.
   </p>
 
   <div class="controls">
     <button id="start" type="button">Start call</button>
     <button id="hangup" type="button" disabled>Hang up</button>
+    <button id="move" type="button" disabled>Move call</button>
     <label><input id="unmute" type="checkbox"> Play echoed audio</label>
   </div>
 
@@ -81,6 +82,15 @@
   <h2>Call</h2>
   <dl id="summary"></dl>
 
+  <h2>Handover</h2>
+  <p>
+    Two media workers, A and B, share one UDP socket; calls start on A. <strong>Move call</strong> hands the live
+    call to the other worker, and the page measures the move for 3 s (keep this tab visible).
+    Also <code>window.relaisMove()</code> and <code>window.relaisStats.handover</code>.
+  </p>
+  <dl id="handover"></dl>
+  <pre id="moves">[]</pre>
+
   <h2>Stats</h2>
   <p>Also in <code>window.relaisStats</code>. Counters the browser does not expose read <code>"unverified"</code>, never 0.</p>
   <pre id="stats">{}</pre>
@@ -89,5 +99,6 @@
   <pre id="log"></pre>
 </main>
 <script src="demo.js"></script>
+<script src="handover.js"></script>
 </body>
 </html>
