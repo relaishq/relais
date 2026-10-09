@@ -89,7 +89,7 @@ test-harness: ## Run the call harness (audio+video echo calls, direct and throug
 
 DEMO_FLAGS ?=
 
-demo: ## Run one media worker plus the browser echo page on http://localhost:9101 (?source=test for the test pattern); DEMO_FLAGS="-media-ip=IP -media-port=N -http=ADDR -relay" (-relay: worker behind a relay on the media address)
+demo: ## Run media workers A and B on one UDP socket plus the browser echo page on http://localhost:9101 (?source=test for the test pattern; "Move call" hands the call over); DEMO_FLAGS="-media-ip=IP -media-port=N -http=ADDR -relay" (-relay: one worker behind a relay on the media address instead; no moves)
 	$(GOCMD) run ./cmd/echo-demo $(DEMO_FLAGS)
 
 help: ## Display this help screen

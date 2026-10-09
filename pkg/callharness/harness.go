@@ -5,9 +5,10 @@
 // echoed video decodes, SRTP decryption failures, keyframe requests, and any
 // renegotiation or ICE restart.
 //
-// By default the system is one media worker serving WHIP-style signaling.
-// Options.Relay puts a relay in front of one or more workers (see
-// topology.go). A test looks like this:
+// Today the system is one media worker serving WHIP-style signaling, or
+// several workers sharing one UDP socket so that a call can move between
+// them (Call.Handover, a planned handover), or, with Options.Relay, one or
+// more workers behind a relay (see topology.go). A test looks like this:
 //
 //	h, _ := callharness.Start(callharness.Options{})
 //	defer h.Close()
@@ -34,27 +35,30 @@ import (
 
 // Options configures the system the harness starts.
 type Options struct {
-	// WorkerLoggerFactory is passed to the media workers and the relay.
+	// WorkerLoggerFactory is passed to the media workers (and the relay).
 	// Defaults to Pion's default logger factory (PION_LOG_* environment
 	// variables).
 	WorkerLoggerFactory logging.LoggerFactory
+
+	// Workers is how many media workers run. Without Relay, one (the
+	// default) owns its UDP socket; two or more share one UDP socket, calls
+	// start on the first, and Call.Handover moves a call between them.
+	// With Relay, each worker owns a private socket behind the relay, and a
+	// call picks its worker with CallOptions.Worker; Call.Handover is not
+	// available (moving calls through the relay is later work).
+	Workers int
 
 	// Relay runs every call through a relay with an in-memory session-owner
 	// store: answers advertise the relay's public address, and the workers
 	// bind only private sockets behind it.
 	Relay bool
-
-	// Workers is the number of media workers; defaults to 1. A call picks
-	// its worker with CallOptions.Worker.
-	Workers int
 }
 
-// Harness runs the system in-process: media workers on loopback UDP sockets
-// (behind a relay with Options.Relay) and their signaling endpoint on a
+// Harness runs the system in-process: media workers on loopback UDP
+// sockets (shared, or behind a relay) and their signaling endpoint on a
 // loopback HTTP server.
 type Harness struct {
-	workers      []*mediaworker.Worker
-	relay        *relayTopology // nil without Options.Relay
+	workers      *workers
 	server       *http.Server
 	serveDone    chan struct{}
 	signalingURL string
@@ -63,26 +67,28 @@ type Harness struct {
 
 // Start starts the system.
 func Start(opts Options) (*Harness, error) {
-	h := &Harness{
-		serveDone:  make(chan struct{}),
-		httpClient: &http.Client{Timeout: 10 * time.Second},
-	}
-	if err := h.startTopology(opts); err != nil {
+	workers, err := startWorkers(opts)
+	if err != nil {
 		return nil, err
 	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		_ = h.closeTopology()
+		_ = workers.close()
 
 		return nil, fmt.Errorf("callharness: listen for signaling: %w", err)
 	}
 
-	h.server = &http.Server{
-		Handler:           h.signalingHandler(),
-		ReadHeaderTimeout: 5 * time.Second,
+	h := &Harness{
+		workers: workers,
+		server: &http.Server{
+			Handler:           workers.signaling,
+			ReadHeaderTimeout: 5 * time.Second,
+		},
+		serveDone:    make(chan struct{}),
+		signalingURL: "http://" + listener.Addr().String() + mediaworker.CallsPath,
+		httpClient:   &http.Client{Timeout: 10 * time.Second},
 	}
-	h.signalingURL = "http://" + listener.Addr().String() + mediaworker.CallsPath
 	go func() {
 		defer close(h.serveDone)
 		_ = h.server.Serve(listener)
@@ -114,7 +120,7 @@ func (h *Harness) Close() error {
 	serverErr := h.server.Close()
 	<-h.serveDone
 
-	return errors.Join(serverErr, h.closeTopology())
+	return errors.Join(serverErr, h.workers.close())
 }
 
 // postOffer makes the one signaling exchange that starts a call on a media

@@ -17,7 +17,7 @@ Relais is a distributed media server built in Go that supports flexible ingress 
 - **Horizontal Scaling**
   - Run multiple plugin instances
   - Distributed storage support
-  - Multiple media workers behind a relay on one public UDP port (planned: session handover between workers)
+  - Multiple media workers: a live call can move between workers on the same UDP socket (experimental), and separate workers can sit behind a relay on one public UDP port (moving calls through the relay is planned)
 
 - **Development Quality**
   - Comprehensive linting with golangci-lint
@@ -43,10 +43,10 @@ Relais is a distributed media server built in Go that supports flexible ingress 
 
 Live WebRTC calls do not use this pipeline yet. They run in the media worker prototype:
 
-- `pkg/mediaworker` - a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) with WHIP-style signaling. It currently echoes the caller's audio and video.
+- `pkg/mediaworker` - a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) with WHIP-style signaling. It currently echoes the caller's audio and video. A live session can be exported to bytes and resumed on another worker that shares the same UDP socket (a planned handover).
 - `pkg/relay` - the relay: one public UDP address that every answer advertises. It routes STUN binding requests by the session owner in `pkg/sessionstore` and forwards everything else to the owning worker without parsing it; workers bind only private sockets behind it.
-- `pkg/callharness` - the test seam for media: a Pion WebRTC client plays the caller in-process, directly or through the relay (`make test-harness`).
-- `cmd/echo-demo` - a browser echo page for the media worker (`make demo`, then open http://localhost:9101; `DEMO_FLAGS=-relay` puts the worker behind the relay).
+- `pkg/callharness` - the test seam for media: a Pion WebRTC client plays the caller in-process, can move its call between workers on one socket, or calls through the relay (`make test-harness`).
+- `cmd/echo-demo` - a browser echo page for two media workers on one socket, with a "Move call" button (`make demo`, then open http://localhost:9101); `DEMO_FLAGS=-relay` runs one worker behind the relay instead.
 
 The earlier `relais-core` server and its Pion v3 signaling path (`pkg/server`, `pkg/webrtc`) have been retired.
 

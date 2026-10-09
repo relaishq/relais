@@ -59,6 +59,12 @@ type Report struct {
 
 	// Tracks are the tracks the caller received, in arrival order.
 	Tracks []TrackReport
+
+	// Moves are the planned handovers made during the call (Call.Handover),
+	// as the caller observed them. Consent is what the caller observed of
+	// its ICE consent checks. See handover.go.
+	Moves   []MoveReport
+	Consent ConsentReport
 }
 
 // StateChange is one connection state transition.
@@ -360,6 +366,7 @@ func (r *Report) Summary() string {
 		b.WriteString("\n")
 		writeVideoSummary(&b, r, t.Video)
 	}
+	writeHandoverSummary(&b, r)
 
 	return b.String()
 }
