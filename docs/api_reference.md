@@ -1,36 +1,21 @@
 # Relais API Reference
 
-## Control Plane API
+## Media Worker Signaling
 
-### Sessions
-
-```
-POST /api/v1/sessions
-Create a new media session
-
-GET /api/v1/sessions/{id}
-Get session information
-
-DELETE /api/v1/sessions/{id}
-End a session
-```
-
-### Plugins
+The media worker (`pkg/mediaworker`) serves WHIP-style signaling; `cmd/echo-demo` mounts it next to the demo page.
 
 ```
-POST /api/v1/plugins/{type}/start
-Start a plugin instance
+POST /calls
+Body: SDP offer (Content-Type: application/sdp)
+201 Created with the SDP answer; Location: /calls/{id}
 
-POST /api/v1/plugins/{type}/stop
-Stop a plugin instance
+DELETE /calls/{id}
+Hang up
 ```
 
-## WebRTC Signaling
+See `SignalingHandler` in `pkg/mediaworker/signaling.go` for the current contract.
 
-```
-GET /ws/signaling
-WebSocket endpoint for WebRTC signaling
-```
+The control plane API (`/api/v1/sessions`, `/api/v1/plugins`) and the WebSocket signaling endpoint (`/ws/signaling`) were served by the retired `relais-core` server and no longer exist.
 
 ## Plugin Development
 

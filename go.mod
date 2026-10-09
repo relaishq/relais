@@ -1,10 +1,11 @@
 module github.com/relais
 
-go 1.24.0
+go 1.26.0
+
+toolchain go1.26.9
 
 require (
 	github.com/go-redis/redis/v8 v8.11.5
-	github.com/gorilla/websocket v1.5.3
 	github.com/pion/dtls/v3 v3.1.8
 	github.com/pion/ice/v4 v4.4.2
 	github.com/pion/interceptor v0.1.48
@@ -15,13 +16,12 @@ require (
 	github.com/pion/srtp/v3 v3.0.13
 	github.com/pion/stun/v4 v4.0.0
 	github.com/pion/transport/v4 v4.1.0
-	github.com/pion/webrtc/v3 v3.2.24
 	github.com/pion/webrtc/v4 v4.2.20
 	github.com/prometheus/client_golang v1.19.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/spf13/viper v1.18.2
 	github.com/stretchr/testify v1.12.1
-	golang.org/x/image v0.36.0
+	golang.org/x/image v0.46.0
 )
 
 require (
@@ -35,16 +35,9 @@ require (
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.1.0 // indirect
 	github.com/pion/datachannel v1.6.2 // indirect
-	github.com/pion/dtls/v2 v2.2.7 // indirect
-	github.com/pion/ice/v2 v2.3.11 // indirect
-	github.com/pion/mdns v0.0.8 // indirect
 	github.com/pion/mdns/v2 v2.2.0 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/sctp v1.11.1 // indirect
-	github.com/pion/srtp/v2 v2.0.18 // indirect
-	github.com/pion/stun v0.6.1 // indirect
-	github.com/pion/transport/v2 v2.2.3 // indirect
-	github.com/pion/turn/v2 v2.1.3 // indirect
 	github.com/pion/turn/v5 v5.1.0 // indirect
 	github.com/prometheus/client_model v0.5.0 // indirect
 	github.com/prometheus/common v0.48.0 // indirect
@@ -60,11 +53,11 @@ require (
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.9.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.48.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
-	golang.org/x/net v0.50.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect

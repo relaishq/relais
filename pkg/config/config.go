@@ -1,9 +1,9 @@
 package config
 
 import (
-	"github.com/pion/webrtc/v3"
-	"github.com/spf13/viper"
 	"strings"
+
+	"github.com/spf13/viper"
 )
 
 // Config holds all configuration for the application
@@ -11,7 +11,6 @@ type Config struct {
 	Server  ServerConfig
 	Storage StorageConfig
 	Logging LoggingConfig
-	WebRTC  WebRTCConfig
 }
 
 type ServerConfig struct {
@@ -44,10 +43,6 @@ type LoggingConfig struct {
 	File  string
 }
 
-type WebRTCConfig struct {
-	ICEServers []webrtc.ICEServer
-}
-
 // LoadConfig reads configuration from environment variables and files
 func LoadConfig() (*Config, error) {
 	viper.SetDefault("server.host", "0.0.0.0")
@@ -69,7 +64,6 @@ func LoadConfig() (*Config, error) {
 	viper.SetDefault("storage.redis_db", 0)
 	viper.SetDefault("storage.redis_prefix", "")
 	viper.SetDefault("logging.level", "info")
-	viper.SetDefault("webrtc.ice_servers", []string{"stun:stun.l.google.com:19302"})
 
 	// Ensure environment variables override nested keys by mapping dots to underscores
 	viper.SetEnvPrefix("RELAIS")
@@ -79,15 +73,6 @@ func LoadConfig() (*Config, error) {
 	var config Config
 	if err := viper.Unmarshal(&config); err != nil {
 		return nil, err
-	}
-
-	// Convert string ICE servers to proper ICEServer objects
-	iceURLs := viper.GetStringSlice("webrtc.ice_servers")
-	config.WebRTC.ICEServers = make([]webrtc.ICEServer, len(iceURLs))
-	for i, url := range iceURLs {
-		config.WebRTC.ICEServers[i] = webrtc.ICEServer{
-			URLs: []string{url},
-		}
 	}
 
 	// Basic validation and sane defaults

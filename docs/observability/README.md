@@ -37,7 +37,7 @@ scrape_configs:
 
 ## Validation Checklist
 
-- HTTP metrics endpoint is reachable on the core: `http://<host>:<port>/metrics`.
+- HTTP metrics endpoint is reachable: `http://<host>:<port>/metrics`. The retired `relais-core` server served it; no binary serves it today, so the process you scrape must mount `promhttp.Handler()`.
 - Key metric families are present:
   - `relais_redis_group_reads_total{stream}`
   - `relais_redis_group_read_messages_total{stream}`

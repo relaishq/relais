@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/relais/pkg/storage"
-	"github.com/relais/plugins/egress/webrtc_egress"
+	webrtcegress "github.com/relais/plugins/egress/webrtc"
 	"github.com/relais/plugins/ingress/camera"
 	"github.com/relais/plugins/transforms/watermark"
 	"github.com/stretchr/testify/assert"
@@ -88,11 +88,9 @@ func TestFullPipeline(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	// Initialize WebRTC egress plugin
-	webrtcPlugin := webrtc_egress.NewWebRTCEgressPlugin()
-	err = webrtcPlugin.Initialize(ctx, map[string]interface{}{
-		"ice_servers": []string{"stun:stun.l.google.com:19302"},
-	})
+	// Initialize the egress plugin (a storage-polling placeholder)
+	egressPlugin := &webrtcegress.Egress{}
+	err = egressPlugin.Initialize(ctx, nil)
 	assert.NoError(t, err)
 
 	// Run plugins in background with error channels
@@ -112,7 +110,7 @@ func TestFullPipeline(t *testing.T) {
 	}()
 
 	go func() {
-		err := webrtcPlugin.Run(ctx, store)
+		err := egressPlugin.Run(ctx, store)
 		errChans[2] <- err
 	}()
 
