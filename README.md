@@ -53,7 +53,7 @@ The earlier `relais-core` server and its Pion v3 signaling path (`pkg/server`, `
 
 ### Prerequisites
 
-- Go 1.23 or higher
+- Go 1.26 or higher
 - Redis (optional, for distributed storage)
 - golangci-lint (for development)
 

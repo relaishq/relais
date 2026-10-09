@@ -43,9 +43,9 @@ coverage: ## Run tests with coverage
 deps: ## Download dependencies
 	$(GOMOD) download
 
-lint-install: ## Install/update golangci-lint
+lint-install: ## Install golangci-lint (the version CI uses)
 	@echo "Installing golangci-lint..."
-	$(GOCMD) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	$(GOCMD) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 	@echo "golangci-lint installed!"
 
 lint: ## Run comprehensive linter

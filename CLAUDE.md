@@ -86,7 +86,7 @@ New plugins must implement one of the interfaces in `pkg/plugins/interface.go` a
 
 ## Dependencies
 
-- Go 1.21+ required
+- Go 1.26+ required
 - Uses Pion v4 libraries for real-time communication
 - Redis optional for distributed storage
 - golangci-lint required for linting
