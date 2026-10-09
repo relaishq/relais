@@ -1,6 +1,6 @@
 # Relais Media Server
 
-Relais is a distributed media server built in Go that supports flexible ingress and egress of media streams through a plugin system. It uses Pion WebRTC for real-time communication and supports horizontal scaling.
+Relais is a distributed media server built in Go that supports flexible ingress and egress of media streams through a plugin system. Live WebRTC media runs in the media worker prototype, built on Pion v4 libraries.
 
 ## Features
 
@@ -17,7 +17,7 @@ Relais is a distributed media server built in Go that supports flexible ingress 
 - **Horizontal Scaling**
   - Run multiple plugin instances
   - Distributed storage support
-  - Load balancing across core servers
+  - Multiple media workers (planned: session handover and a relay in front of them)
 
 - **Development Quality**
   - Comprehensive linting with golangci-lint
@@ -33,19 +33,27 @@ Relais is a distributed media server built in Go that supports flexible ingress 
 │   Plugins   │ ──► │   Plugins   │ ──► │   Plugins   │
 └─────────────┘     └─────────────┘     └─────────────┘
        │                   │                   │
-       └───────────┬───────┴───────────┬──────┘
-                   │                   │
-            ┌─────────────┐     ┌─────────────┐
-            │   Storage   │     │   Relais    │
-            │   Backend   │ ◄─► │    Core     │
-            └─────────────┘     └─────────────┘
+       └───────────────────┼───────────────────┘
+                           │
+                    ┌─────────────┐
+                    │   Storage   │
+                    │   Backend   │
+                    └─────────────┘
 ```
+
+Live WebRTC calls do not use this pipeline yet. They run in the media worker prototype:
+
+- `pkg/mediaworker` - a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) with WHIP-style signaling. It currently echoes the caller's audio and video.
+- `pkg/callharness` - the test seam for media: a Pion WebRTC client plays the caller in-process (`make test-harness`).
+- `cmd/echo-demo` - a browser echo page for the media worker (`make demo`, then open http://localhost:9101).
+
+The earlier `relais-core` server and its Pion v3 signaling path (`pkg/server`, `pkg/webrtc`) have been retired.
 
 ## Getting Started
 
 ### Prerequisites
 
-- Go 1.23 or higher
+- Go 1.26 or higher
 - Redis (optional, for distributed storage)
 - golangci-lint (for development)
 
@@ -59,7 +67,7 @@ cd relais
 # Install dependencies
 make deps
 
-# Build the binaries
+# Build the plugin runner binaries
 make build
 ```
 
@@ -68,6 +76,9 @@ make build
 ```bash
 # Run all tests
 make test
+
+# Run the call harness (audio+video echo calls, race detector)
+make test-harness
 
 # Run benchmarks
 make bench
@@ -88,8 +99,8 @@ make lint-install
 # Run comprehensive linter (golangci-lint)
 make lint
 
-# Run with hot reload
-make run
+# Run the media worker echo demo on http://localhost:9101
+make demo
 ```
 
 ### Configuration
@@ -97,8 +108,6 @@ make run
 Configuration is loaded from environment variables:
 
 ```env
-RELAIS_SERVER_HOST=0.0.0.0
-RELAIS_SERVER_PORT=8080
 RELAIS_STORAGE_TYPE=redis
 RELAIS_STORAGE_REDIS_URL=localhost:6379
 RELAIS_LOGGING_LEVEL=info
@@ -133,6 +142,7 @@ RELAIS_STORAGE_REDIS_CLUSTER_ADDRS=                  # e.g. host1:6379,host2:637
 
 Notes:
 
+- These settings configure `RedisStorage` (`EnableStreams`, `EnableStreamGroups`, `SetRetention`). The retired `relais-core` applied them; the plugin runners do not apply them yet.
 - The group is lazily created on first read using `XGROUP CREATE MKSTREAM` (auto-creation), so you don't need a separate migration step.
 - `ReadStreamGroup()` uses non-blocking reads by default. Set a positive block duration to use blocking reads.
 - For per-track consumption, `ReadTrackStreamGroup()` reads from track-specific streams that mirror session events by `TrackID`.
@@ -241,9 +251,7 @@ What the tests cover:
 
 ### Metrics Guide
 
-Relais exposes Prometheus metrics at `GET /metrics` from the core server (see `cmd/relais-core/main.go`). By default the server listens on `RELAIS_SERVER_HOST:RELAIS_SERVER_PORT`.
-
-- Example: `http://localhost:8080/metrics`
+Relais defines its Prometheus metrics in `pkg/metrics`. No binary serves `GET /metrics` at the moment: the retired `relais-core` server did. A process that needs scraping can mount `promhttp.Handler()` from `github.com/prometheus/client_golang/prometheus/promhttp`.
 
 Key metric families:
 
@@ -261,7 +269,7 @@ Key metric families:
   - `relais_redis_errors_total{op,type}`
   - `relais_redis_retries_total{op}`
 
-- Egress tailer:
+- Egress tailer (no current emitter; the retired `relais-core` recorded these):
   - `relais_egress_reads_total{mode=session|track}`
   - `relais_egress_empty_polls_total`
   - `relais_egress_errors_total{stage}`
