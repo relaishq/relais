@@ -138,6 +138,9 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 		return nil, err
 	}
 
+	if a, v, ok := workerprobe.InitialSequences(w.localAddr); ok {
+		audio.InitialSeq, video.InitialSeq = a, v
+	}
 	return sessionFromState(w, sessionState{
 		Version: sessionStateVersion,
 		ID:      id,

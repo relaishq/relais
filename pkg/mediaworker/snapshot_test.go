@@ -138,7 +138,7 @@ func TestUnsentTrackTakeoverRejectsSequenceWrap(t *testing.T) {
 	profile := srtp.ProtectionProfileAeadAes128Gcm
 	keys := testSessionKeys(t, profile)
 	track := trackState{MID: "video", SSRC: 123, InitialSeq: 30000}
-	for range 2 {
+	for range 4 {
 		out := testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
 		sess := &session{srtpOut: out}
 		require.NoError(t, sess.resumeTrack(&track, ResumeOptions{SequenceMargin: 8192}))

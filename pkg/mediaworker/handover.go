@@ -50,7 +50,8 @@ const resumeTimeout = 5 * time.Second
 // ErrSequenceBudgetExhausted rejects an RTP advance whose retained margins
 // plus the caller's reserved outage gap would reach the half sequence space.
 // It also rejects an unsent track's first-index wrap. Neither case is safely
-// resumable; the plane records a definitive clean loss.
+// resumable; the plane records a definitive clean loss. An SRTCP margin
+// that would reset the 31-bit index under the same keys is rejected too.
 var ErrSequenceBudgetExhausted = errors.New("mediaworker: sequence budget exhausted")
 
 // SequenceGapReserve reserves 10,000 sequence numbers for the caller's own
@@ -61,7 +62,9 @@ var ErrSequenceBudgetExhausted = errors.New("mediaworker: sequence budget exhaus
 // potentially used after a stale snapshot at 10,000 packets/s for 550 ms.
 const SequenceGapReserve = 10000
 
-const maxRetainedSequenceAdvance = (1 << 15) - SequenceGapReserve - 1
+// The next packet adds one index beyond the retained high water mark. Keep
+// that packet plus the caller gap strictly below the half sequence space.
+const maxRetainedSequenceAdvance = (1 << 15) - SequenceGapReserve - 2
 
 // SequenceResumeAttempts derives the remaining safe margin applications from
 // every negotiated track in the actual resumable state. The control plane
@@ -78,7 +81,7 @@ func (state *sessionState) sequenceResumeAttempts(margin uint16) (int, error) {
 	if margin == 0 {
 		return 0, nil
 	}
-	attempts := maxRetainedSequenceAdvance / int(margin)
+	attempts := 0xffff / int(margin)
 	for _, track := range []*trackState{&state.Audio, &state.Video} {
 		if !track.negotiated() {
 			continue
@@ -88,7 +91,7 @@ func (state *sessionState) sequenceResumeAttempts(margin uint16) (int, error) {
 		}
 		remaining := maxRetainedSequenceAdvance - int(track.AdvanceSinceSend)
 		if track.Packets == 0 {
-			remaining = min(remaining, 0xffff-int(track.InitialSeq))
+			remaining = 0xffff - int(track.InitialSeq)
 		}
 		attempts = min(attempts, remaining/int(margin))
 	}
@@ -102,8 +105,13 @@ func (track *trackState) checkSequenceMargin(margin uint16) error {
 	if !track.negotiated() || margin == 0 {
 		return nil
 	}
-	if uint64(track.AdvanceSinceSend)+uint64(margin)+SequenceGapReserve >= 1<<15 ||
-		track.Packets == 0 && uint64(track.InitialSeq)+uint64(margin) > 0xffff {
+	if track.Packets == 0 {
+		if uint64(track.InitialSeq)+uint64(margin) > 0xffff {
+			return ErrSequenceBudgetExhausted
+		}
+		return nil
+	}
+	if uint64(track.AdvanceSinceSend)+uint64(margin)+SequenceGapReserve+1 >= 1<<15 {
 		return ErrSequenceBudgetExhausted
 	}
 	return nil
@@ -500,6 +508,11 @@ func (s *session) resumeTrack(track *trackState, opts ResumeOptions) error {
 	}
 	if err := track.checkSequenceMargin(opts.SequenceMargin); err != nil {
 		return err
+	}
+	// Pion SetIndex reduces modulo 2^31. A takeover margin must never
+	// reset an exhausted SRTCP context and reuse ciphertext indexes.
+	if uint64(track.SRTCPIndex)+uint64(opts.SRTCPIndexMargin) > 1<<31-1 {
+		return ErrSequenceBudgetExhausted
 	}
 	// A later resume must also protect live indexes used since the burst.
 	// Conservatively advance the persisted floor to the snapshot's high water
