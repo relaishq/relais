@@ -46,6 +46,10 @@ type recorder struct {
 	keyframeRequests int // PLI/FIR the caller sent for the echoed video
 
 	tracks []*trackRecord
+
+	// Handovers and consent checks; see handover.go.
+	moves   []moveRecord
+	consent []consentSample
 }
 
 type trackRecord struct {
@@ -61,6 +65,7 @@ type trackRecord struct {
 	lastSeq            uint16
 	seqDiscontinuities int
 	unmatchedPayloads  int
+	headers            []rtpMark // sequence number and timestamp of each arrival
 
 	video *videoRecord // video tracks only
 }
@@ -78,6 +83,9 @@ type videoRecord struct {
 	// decodeInput is every complete frame from the first decoded keyframe on,
 	// for the full decode at hangup.
 	decodeInput []vp8Frame
+
+	// frames marks when each complete frame arrived and whether it decodes.
+	frames []frameMark
 }
 
 func newRecorder() *recorder {
@@ -283,6 +291,7 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 	track.arrivals = append(track.arrivals, at)
 	track.lastArrival = at
 	track.lastSeq = pkt.SequenceNumber
+	track.headers = append(track.headers, rtpMark{seq: pkt.SequenceNumber, timestamp: pkt.Timestamp})
 
 	// Opus packets are whole frames; VP8 frames are matched once reassembled.
 	if track.video == nil {
@@ -312,6 +321,10 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 		return
 	}
 	v := track.video
+	decodable := v.DecodableFrames
+	defer func() {
+		v.frames = append(v.frames, frameMark{at: r.since(decoded), decodable: v.DecodableFrames > decodable})
+	}()
 
 	v.Frames++
 	if frame.keyframe {
@@ -410,6 +423,8 @@ func (r *recorder) report() *Report {
 		}
 		rep.Tracks = append(rep.Tracks, report)
 	}
+	rep.Moves = r.moveReports()
+	rep.Consent = r.consentReport()
 
 	return rep
 }
