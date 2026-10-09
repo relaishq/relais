@@ -61,48 +61,43 @@ func (w *Worker) handleSTUN(raw []byte, from netip.AddrPort) {
 	if sess == nil {
 		return
 	}
-	response, err := sess.answerBindingRequest(msg, remoteUfrag, from)
-	if err != nil {
+	if err := sess.answerBindingRequest(msg, remoteUfrag, from); err != nil {
 		w.log.Debugf("session %s: drop binding request from %s: %v", localUfrag, from, err)
-
-		return
-	}
-
-	// The caller proved it knows the session's ICE password from this
-	// address, so its DTLS and SRTP from here belong to the session.
-	w.mapAddr(from, sess)
-	if _, err := w.conn.WriteToUDPAddrPort(response, from); err != nil {
-		w.log.Debugf("session %s: send binding response: %v", localUfrag, err)
 	}
 }
 
 // answerBindingRequest checks a binding request against the session's ICE
-// credentials and builds the success response. A request with USE-CANDIDATE
+// credentials and sends the success response. A request with USE-CANDIDATE
 // nominates the address it came from; a later one from another address
 // re-nominates, and the worker moves the session there. Consent is per
 // candidate pair (RFC 7675), so only valid requests from the nominated
 // address refresh it. Valid requests from other addresses are answered but
 // do not keep the session alive.
 //
+// Only a request that authenticates maps its address to the session, on
+// the worker and on a shared socket. The response is sent under the session
+// lock, like every other packet the session sends, so a session exported for
+// a handover cannot answer after its snapshot.
+//
 // The caller is the controlling agent (the answer says a=ice-lite), so role
 // attributes are not checked.
-func (s *session) answerBindingRequest(msg *stun.Message, remoteUfrag string, from netip.AddrPort) ([]byte, error) {
+func (s *session) answerBindingRequest(msg *stun.Message, remoteUfrag string, from netip.AddrPort) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.fenced.Load() {
-		return nil, errHandedOver
+		return errHandedOver
 	}
 	creds := &s.state.ICE
 	if remoteUfrag != creds.RemoteUfrag {
-		return nil, errWrongUfrag
+		return errWrongUfrag
 	}
 	integrity := stun.NewShortTermIntegrity(creds.LocalPwd)
 	if err := integrity.Check(msg); err != nil {
-		return nil, err
+		return err
 	}
 	if err := stun.Fingerprint.Check(msg); err != nil {
-		return nil, err
+		return err
 	}
 
 	if msg.Contains(stun.AttrUseCandidate) && creds.RemoteAddr != from {
@@ -126,8 +121,16 @@ func (s *session) answerBindingRequest(msg *stun.Message, remoteUfrag string, fr
 		stun.Fingerprint,
 	)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return response.Raw, nil
+	// The caller proved it knows the session's ICE password from this
+	// address, so its DTLS and SRTP from here belong to the session.
+	s.worker.mapAddr(from, s)
+	s.worker.learnFlow(from, s.id)
+	if _, err := s.worker.conn.WriteToUDPAddrPort(response.Raw, from); err != nil {
+		s.log.Debugf("session %s: send binding response: %v", s.id, err)
+	}
+
+	return nil
 }

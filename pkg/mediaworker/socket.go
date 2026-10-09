@@ -66,9 +66,12 @@ type SocketConfig struct {
 //
 // The socket routes like the relay in issue #5 will: a STUN binding request
 // goes to the worker that owns the session named by the worker half of its
-// USERNAME (the ICE ufrag is the session ID), and the request's source
-// address is remembered as a flow of that session. Every other packet goes to
-// the owner of its source address's flow, unparsed. A worker may send only to
+// USERNAME (the ICE ufrag is the session ID). When that worker has
+// authenticated the request (MESSAGE-INTEGRITY with the session's ICE
+// password), the request's source address becomes a flow of the session.
+// Every other packet goes to the owner of its source address's flow,
+// unparsed. A request that fails authentication changes no flow, so it
+// cannot redirect an established caller's media. A worker may send only to
 // flows of sessions it owns; anything else is dropped. That is the fence that
 // keeps a session's old owner from reaching the caller after a move.
 type Socket struct {
@@ -311,10 +314,8 @@ func (s *Socket) dispatch(pkt []byte, from netip.AddrPort) {
 	if r == nil {
 		return
 	}
-	if isSTUN {
-		// The owner checks the request's integrity; the flow only routes.
-		s.flows[from] = sessionID
-	}
+	// A STUN request changes no flow here: the owner records one only once
+	// it has authenticated the request (learnFlow).
 
 	packet := portPacket{data: bytes.Clone(pkt), from: from}
 	switch {
@@ -324,6 +325,17 @@ func (s *Socket) dispatch(pkt []byte, from netip.AddrPort) {
 		}
 	case r.owner != nil:
 		r.owner.deliver(packet)
+	}
+}
+
+// learnFlow makes from a flow of a session after the session's owner, on
+// port, has authenticated an ICE check from that address. Only the current
+// owner can: a worker that is not (or no longer) the owner changes nothing.
+func (s *Socket) learnFlow(port *socketPort, from netip.AddrPort, sessionID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r := s.routes[sessionID]; r != nil && r.owner == port {
+		s.flows[from] = sessionID
 	}
 }
 
@@ -616,6 +628,14 @@ func (p *socketPort) Close() error {
 func (w *Worker) claimSession(sessionID string) {
 	if port, ok := w.conn.(*socketPort); ok {
 		port.socket.claim(sessionID, port)
+	}
+}
+
+// learnFlow tells a shared socket that an ICE check from from has
+// authenticated for one of this worker's sessions.
+func (w *Worker) learnFlow(from netip.AddrPort, sessionID string) {
+	if port, ok := w.conn.(*socketPort); ok {
+		port.socket.learnFlow(port, from, sessionID)
 	}
 }
 

@@ -85,7 +85,7 @@ func TestRestoreOutboundIndexAcrossWrap(t *testing.T) {
 // TestSocketFencesOldOwner checks that only a session's current owner can
 // send to the session's caller through the shared socket.
 func TestSocketFencesOldOwner(t *testing.T) {
-	socket, workerA, workerB := newTestSocket(t)
+	socket, workerA, workerB := newTestSocket(t, testConsentTimeout)
 	portA, portB := workerA.conn.(*socketPort), workerB.conn.(*socketPort)
 
 	caller, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.MustParseAddrPort("127.0.0.1:0")))
@@ -131,7 +131,7 @@ func TestSocketFencesOldOwner(t *testing.T) {
 // over before its DTLS handshake, and that trying leaves it running on its
 // worker: its ICE checks are still answered there.
 func TestHandoverOfUnestablishedSession(t *testing.T) {
-	socket, workerA, workerB := newTestSocket(t)
+	socket, workerA, workerB := newTestSocket(t, testConsentTimeout)
 	call := dialTestSessionOn(t, workerA)
 	nominated := call.endpoint(t)
 	require.True(t, nominated.check(t, true), "nomination answered")
@@ -161,14 +161,14 @@ func TestResumeSessionRejectsBadState(t *testing.T) {
 	require.Error(t, err, "margin of 2^15")
 }
 
-func newTestSocket(t *testing.T) (*Socket, *Worker, *Worker) {
+func newTestSocket(t *testing.T, consentTimeout time.Duration) (*Socket, *Worker, *Worker) {
 	t.Helper()
 
 	socket, err := ListenSocket(SocketConfig{})
 	require.NoError(t, err)
 	var workers []*Worker
 	for range 2 {
-		worker, err := socket.NewWorker(Config{consentTimeout: testConsentTimeout})
+		worker, err := socket.NewWorker(Config{consentTimeout: consentTimeout})
 		require.NoError(t, err)
 		workers = append(workers, worker)
 	}
