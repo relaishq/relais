@@ -86,6 +86,45 @@ func TestWorkerBehindRelay(t *testing.T) {
 	require.ErrorIs(t, err, sessionstore.ErrNotFound, "session released when it ends")
 }
 
+// TestRelayLegCarriesFullSizePackets sends a caller's ICE check as large as
+// the worker's read buffer (receiveMTU) over the relay leg. The relay-leg
+// header must not eat into it: a truncated check fails its integrity check
+// and goes unanswered.
+func TestRelayLegCarriesFullSizePackets(t *testing.T) {
+	relayLeg := listenTestUDP(t)
+	worker, err := New(Config{
+		consentTimeout: testConsentTimeout,
+		Relay: &RelayConfig{
+			Addr:       relayLeg.LocalAddr().(*net.UDPAddr).AddrPort(),
+			PublicAddr: netip.MustParseAddrPort("192.0.2.10:3478"),
+			Owners:     sessionstore.NewMemory(),
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, worker.Close()) })
+
+	id, answerSDP, err := worker.CreateSession(context.Background(), testOffer(testOfferAttrs{}))
+	require.NoError(t, err)
+	call := &testCall{worker: worker, id: id, username: id + ":" + testCallerUfrag, pwd: answerPwd(t, answerSDP)}
+	caller := netip.MustParseAddrPort("[2001:db8::7]:50000") // the longer IPv6 header
+
+	request := call.paddedBindingRequest(t, receiveMTU)
+	require.Len(t, request.Raw, receiveMTU)
+	_, err = relayLeg.WriteToUDPAddrPort(append(relay.AppendHeader(nil, caller), request.Raw...), worker.LocalAddr())
+	require.NoError(t, err)
+
+	require.NoError(t, relayLeg.SetReadDeadline(time.Now().Add(testCheckTimeout)))
+	buf := make([]byte, 2*receiveMTU)
+	n, err := relayLeg.Read(buf)
+	require.NoError(t, err, "a full-size check is answered")
+	_, pkt, err := relay.ParseHeader(buf[:n])
+	require.NoError(t, err)
+	response := &stun.Message{Raw: pkt}
+	require.NoError(t, response.Decode())
+	assert.Equal(t, stun.BindingSuccess, response.Type)
+	assert.Equal(t, request.TransactionID, response.TransactionID)
+}
+
 func TestRelayConfigIsValidated(t *testing.T) {
 	owners := sessionstore.NewMemory()
 	addr := netip.MustParseAddrPort("127.0.0.1:9")
@@ -115,6 +154,29 @@ func (c *testCall) bindingRequest(t *testing.T) *stun.Message {
 	require.NoError(t, err)
 
 	return request
+}
+
+// paddedBindingRequest is bindingRequest padded with a comprehension-optional
+// attribute to exactly size bytes.
+func (c *testCall) paddedBindingRequest(t *testing.T, size int) *stun.Message {
+	t.Helper()
+
+	build := func(padding int) *stun.Message {
+		request, err := stun.Build(
+			stun.BindingRequest,
+			stun.NewTransactionIDSetter(stun.NewTransactionID()),
+			stun.NewUsername(c.username),
+			stun.RawAttribute{Type: stun.AttrUseCandidate},
+			stun.RawAttribute{Type: 0x8070, Value: make([]byte, padding)},
+			stun.NewShortTermIntegrity(c.pwd),
+			stun.Fingerprint,
+		)
+		require.NoError(t, err)
+
+		return request
+	}
+
+	return build(size - len(build(0).Raw))
 }
 
 func answerPwd(t *testing.T, answerSDP string) string {

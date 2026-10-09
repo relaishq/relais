@@ -20,6 +20,11 @@ type relayConn struct {
 	// buffers hold outgoing datagrams: header plus packet. Sessions, their
 	// DTLS connections and the read loop all send concurrently.
 	buffers sync.Pool
+
+	// readMu guards readBuf, which holds an incoming datagram: header plus
+	// a packet as long as the caller's read buffer.
+	readMu  sync.Mutex
+	readBuf []byte
 }
 
 func newRelayConn(conn *net.UDPConn, relayAddr netip.AddrPort) *relayConn {
@@ -34,19 +39,28 @@ func newRelayConn(conn *net.UDPConn, relayAddr netip.AddrPort) *relayConn {
 	}
 }
 
-// ReadFromUDPAddrPort reads the next packet the relay forwarded and returns
-// it with the address of the caller that sent it. Datagrams from anywhere
-// but the relay, or with a malformed header, are dropped.
+// ReadFromUDPAddrPort reads the next packet the relay forwarded into b and
+// returns it with the address of the caller that sent it. The datagram is
+// read with room for the header on top of len(b), so b holds a packet as
+// long as the worker's own socket would deliver into it. Datagrams from
+// anywhere but the relay, or with a malformed header, are dropped.
 func (c *relayConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+
+	if need := relay.MaxHeaderLen + len(b); len(c.readBuf) < need {
+		c.readBuf = make([]byte, need)
+	}
+	buf := c.readBuf[:relay.MaxHeaderLen+len(b)]
 	for {
-		n, from, err := c.conn.ReadFromUDPAddrPort(b)
+		n, from, err := c.conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
 			return 0, netip.AddrPort{}, err
 		}
 		if netip.AddrPortFrom(from.Addr().Unmap(), from.Port()) != c.relay {
 			continue
 		}
-		caller, pkt, err := relay.ParseHeader(b[:n])
+		caller, pkt, err := relay.ParseHeader(buf[:n])
 		if err != nil {
 			continue
 		}
