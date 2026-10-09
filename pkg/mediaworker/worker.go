@@ -5,7 +5,9 @@
 //
 // A media worker terminates one session per caller. A session is a single
 // BUNDLEd, rtcp-muxed transport, and every session on a worker shares the
-// worker's one UDP socket. For now the worker echoes the caller's media back:
+// worker's one UDP socket. Callers reach that socket directly, or, behind a
+// relay (Config.Relay), only through the relay's public address. For now the
+// worker echoes the caller's media back:
 // Opus audio and VP8 video, each on the worker's own outbound track with its
 // own SSRC, sequence numbers and timestamps. It relays the caller's keyframe
 // requests for the echoed video back to the caller's video source.
@@ -28,9 +30,16 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
+
+	"github.com/relais/pkg/sessionstore"
 )
 
-const defaultConnectTimeout = 30 * time.Second
+const (
+	defaultConnectTimeout = 30 * time.Second
+
+	// ownershipTimeout bounds one session-owner store call.
+	ownershipTimeout = 2 * time.Second
+)
 
 var (
 	// ErrUnsupportedOffer is returned when an SDP offer cannot be answered:
@@ -49,12 +58,19 @@ var (
 // Config configures a media worker.
 type Config struct {
 	// ListenAddr is the local UDP address of the worker's media socket. All
-	// sessions on the worker share this one socket, and its address is the
-	// single host candidate advertised in every answer, so the IP must be
-	// specific (not 0.0.0.0 or ::) and reachable by callers. Defaults to
-	// "127.0.0.1:0", which suits in-process callers; browsers such as Chrome
-	// do not gather loopback candidates, so they need a LAN address.
+	// sessions on the worker share this one socket, so the IP must be
+	// specific (not 0.0.0.0 or ::). Without a relay, its address is the
+	// single host candidate advertised in every answer and must be reachable
+	// by callers; browsers such as Chrome do not gather loopback candidates,
+	// so they need a LAN address. Behind a relay it is a private address
+	// that only the relay sends to. Defaults to "127.0.0.1:0".
 	ListenAddr string
+
+	// Relay, when set, puts the worker behind a relay: answers advertise the
+	// relay's public address, and every packet goes to and from the relay
+	// over the relay leg. Nil means callers reach the worker's socket
+	// directly.
+	Relay *RelayConfig
 
 	// LoggerFactory is used by the worker and by the Pion components it
 	// drives. Defaults to Pion's default logger factory.
@@ -70,13 +86,38 @@ type Config struct {
 	consentTimeout time.Duration
 }
 
+// RelayConfig puts a media worker behind a relay.
+type RelayConfig struct {
+	// Addr is the relay's private relay-leg address. The worker sends every
+	// packet there and accepts packets only from there.
+	Addr netip.AddrPort
+
+	// PublicAddr is the relay's public address: the single host candidate
+	// in every answer.
+	PublicAddr netip.AddrPort
+
+	// Owners is the session-owner store the relay routes by. The worker
+	// claims each new session, as owned by its own socket address, before it
+	// returns the answer, and releases the session when it ends.
+	Owners sessionstore.Owners
+}
+
+// packetConn is the worker's media transport, addressed by caller: its own
+// UDP socket, or a relayConn that carries each packet over the relay leg.
+type packetConn interface {
+	ReadFromUDPAddrPort(b []byte) (n int, addr netip.AddrPort, err error)
+	WriteToUDPAddrPort(b []byte, addr netip.AddrPort) (int, error)
+	Close() error
+}
+
 // Worker is a media worker. It owns one UDP socket and the sessions that run
 // over it.
 type Worker struct {
 	cfg       Config
 	log       logging.LeveledLogger
-	conn      *net.UDPConn
-	localAddr netip.AddrPort
+	conn      packetConn
+	localAddr netip.AddrPort // the worker's own socket
+	mediaAddr netip.AddrPort // where callers send: localAddr, or the relay's public address
 	readDone  chan struct{}
 
 	mu       sync.Mutex
@@ -101,6 +142,10 @@ func New(cfg Config) (*Worker, error) {
 		cfg.consentTimeout = defaultConsentTimeout
 	}
 
+	if err := validateRelayConfig(cfg.Relay); err != nil {
+		return nil, err
+	}
+
 	addr, err := net.ResolveUDPAddr("udp", cfg.ListenAddr)
 	if err != nil {
 		return nil, fmt.Errorf("mediaworker: resolve listen address: %w", err)
@@ -120,31 +165,48 @@ func New(cfg Config) (*Worker, error) {
 		return nil, fmt.Errorf("mediaworker: unexpected local address %T", conn.LocalAddr())
 	}
 	localAddr := udpAddr.AddrPort()
+	localAddr = netip.AddrPortFrom(localAddr.Addr().Unmap(), localAddr.Port())
 
 	worker := &Worker{
 		cfg:       cfg,
 		log:       cfg.LoggerFactory.NewLogger("mediaworker"),
 		conn:      conn,
-		localAddr: netip.AddrPortFrom(localAddr.Addr().Unmap(), localAddr.Port()),
+		localAddr: localAddr,
+		mediaAddr: localAddr,
 		readDone:  make(chan struct{}),
 		sessions:  make(map[string]*session),
 		byAddr:    make(map[netip.AddrPort]*session),
+	}
+	if cfg.Relay != nil {
+		worker.conn = newRelayConn(conn, cfg.Relay.Addr)
+		worker.mediaAddr = cfg.Relay.PublicAddr
 	}
 	go worker.readLoop()
 
 	return worker, nil
 }
 
-// MediaAddr returns the address of the worker's UDP media socket.
+// MediaAddr returns the address callers send media to, which is the single
+// host candidate in every answer: the worker's own UDP socket, or, behind a
+// relay, the relay's public address.
 func (w *Worker) MediaAddr() netip.AddrPort {
+	return w.mediaAddr
+}
+
+// LocalAddr returns the address of the worker's own UDP socket. Without a
+// relay it is MediaAddr. Behind a relay it is private, and it is the address
+// the worker claims its sessions with in the session-owner store.
+func (w *Worker) LocalAddr() netip.AddrPort {
 	return w.localAddr
 }
 
 // CreateSession answers a caller's SDP offer. It creates a session that
 // starts answering the caller's ICE checks at once, and returns the session
 // ID and the SDP answer. The answer advertises ICE-lite, BUNDLE, rtcp-mux and
-// a single host candidate.
-func (w *Worker) CreateSession(_ context.Context, offerSDP string) (sessionID, answerSDP string, err error) {
+// a single host candidate. Behind a relay, the session is claimed in the
+// session-owner store before the answer is returned, so the relay can route
+// the caller's first ICE check.
+func (w *Worker) CreateSession(ctx context.Context, offerSDP string) (sessionID, answerSDP string, err error) {
 	offer, err := parseOffer(offerSDP)
 	if err != nil {
 		return "", "", err
@@ -157,6 +219,11 @@ func (w *Worker) CreateSession(_ context.Context, offerSDP string) (sessionID, a
 
 	answer, err := buildAnswer(offer, sess.answerParams())
 	if err != nil {
+		sess.close()
+
+		return "", "", err
+	}
+	if err := w.claim(ctx, sess.id); err != nil {
 		sess.close()
 
 		return "", "", err
@@ -221,7 +288,8 @@ func (w *Worker) Close() error {
 
 // readLoop reads the worker's socket. STUN goes to the ICE-lite responder;
 // everything else goes to the session that owns the sender's address
-// (RFC 7983 demultiplexing happens in the session).
+// (RFC 7983 demultiplexing happens in the session). Behind a relay, the
+// sender is the caller that the relay-leg header names.
 func (w *Worker) readLoop() {
 	defer close(w.readDone)
 
@@ -278,11 +346,10 @@ func (w *Worker) send(pkt []byte, to netip.AddrPort) (int, error) {
 	return w.conn.WriteToUDPAddrPort(pkt, to)
 }
 
-// forget removes a closed session and its caller addresses.
+// forget removes a closed session and its caller addresses, and releases
+// the session in the session-owner store.
 func (w *Worker) forget(sess *session) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if w.sessions[sess.id] == sess {
 		delete(w.sessions, sess.id)
 	}
@@ -290,5 +357,50 @@ func (w *Worker) forget(sess *session) {
 		if owner == sess {
 			delete(w.byAddr, addr)
 		}
+	}
+	w.mu.Unlock()
+
+	w.release(sess.id)
+}
+
+// claim records the worker as a session's owner, so the relay routes the
+// session's caller here. Without a relay there is nothing to claim.
+func (w *Worker) claim(ctx context.Context, sessionID string) error {
+	if w.cfg.Relay == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, ownershipTimeout)
+	defer cancel()
+	if err := w.cfg.Relay.Owners.Claim(ctx, sessionID, w.localAddr); err != nil {
+		return fmt.Errorf("mediaworker: claim session %s: %w", sessionID, err)
+	}
+
+	return nil
+}
+
+// release removes the worker's claim on a session it no longer serves.
+func (w *Worker) release(sessionID string) {
+	if w.cfg.Relay == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), ownershipTimeout)
+	defer cancel()
+	if err := w.cfg.Relay.Owners.Release(ctx, sessionID, w.localAddr); err != nil {
+		w.log.Warnf("session %s: release ownership: %v", sessionID, err)
+	}
+}
+
+func validateRelayConfig(cfg *RelayConfig) error {
+	switch {
+	case cfg == nil:
+		return nil
+	case !cfg.Addr.IsValid():
+		return errors.New("mediaworker: Relay.Addr is required")
+	case !cfg.PublicAddr.IsValid() || cfg.PublicAddr.Addr().IsUnspecified():
+		return errors.New("mediaworker: Relay.PublicAddr must name a specific IP and port")
+	case cfg.Owners == nil:
+		return errors.New("mediaworker: Relay.Owners is required")
+	default:
+		return nil
 	}
 }
