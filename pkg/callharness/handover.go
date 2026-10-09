@@ -11,13 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pion/webrtc/v4"
 	"github.com/relais/pkg/mediaworker"
 )
-
-// consentSampleInterval is how often the caller samples its ICE consent
-// checks. Pion's caller sends one every 2 s.
-const consentSampleInterval = 250 * time.Millisecond
 
 // workers are the system's media workers. A single worker owns its UDP
 // socket. Two or more share one socket (mediaworker.Socket), calls start on
@@ -141,103 +136,6 @@ func (c *Call) sessionID() (string, error) {
 	return path.Base(resource.Path), nil
 }
 
-// trackCall records a call that has not closed yet, so Harness.Close can stop
-// its consent sampler before the workers end it.
-func (h *Harness) trackCall(c *Call) {
-	h.callsMu.Lock()
-	defer h.callsMu.Unlock()
-	if h.calls == nil {
-		h.calls = make(map[*Call]struct{})
-	}
-	h.calls[c] = struct{}{}
-}
-
-func (h *Harness) untrackCall(c *Call) {
-	h.callsMu.Lock()
-	defer h.callsMu.Unlock()
-	delete(h.calls, c)
-}
-
-// stopSamplers stops the consent samplers of calls still open. Closing the
-// workers sends those calls a DTLS close_notify, on which Pion closes their
-// PeerConnections.
-func (h *Harness) stopSamplers() {
-	h.callsMu.Lock()
-	calls := make([]*Call, 0, len(h.calls))
-	for c := range h.calls {
-		calls = append(calls, c)
-	}
-	h.callsMu.Unlock()
-
-	for _, c := range calls {
-		c.stopSampler()
-	}
-}
-
-// startSampler starts the consent sampler, which runs until stopSampler.
-func (c *Call) startSampler() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closing {
-		return
-	}
-	c.sampler.Add(1)
-	go func() {
-		defer c.sampler.Done()
-		c.sampleConsent()
-	}()
-}
-
-// stopSampler stops the consent sampler and waits until it has returned.
-// Pion's GetStats is not safe to call while the PeerConnection closes, and
-// Pion closes it by itself when the worker sends a DTLS close_notify. So
-// everything that closes the PeerConnection or ends the call on the worker
-// (Hangup's DELETE, close, Harness.Close) stops the sampler first.
-func (c *Call) stopSampler() {
-	c.stopSampling.Do(func() { close(c.samplingStopped) })
-	c.sampler.Wait()
-}
-
-// sampleConsent samples the caller's ICE consent checks (STUN binding
-// requests on the candidate pair in use, and the responses to them) from
-// getStats, as a browser page could, until stopSampler or the connection
-// closes.
-func (c *Call) sampleConsent() {
-	ticker := time.NewTicker(consentSampleInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-c.samplingStopped:
-			return
-		case <-ticker.C:
-		}
-		if c.pc.ConnectionState() == webrtc.PeerConnectionStateClosed {
-			return
-		}
-		if requests, responses, ok := pairChecks(c.pc.GetStats()); ok {
-			c.rec.consentChecks(time.Now(), requests, responses)
-		}
-	}
-}
-
-// pairChecks returns the checks sent and responses received on the
-// candidate pair in use: the succeeded pair with the most responses (consent
-// checks go to the pair in use only).
-func pairChecks(stats webrtc.StatsReport) (requests, responses uint64, ok bool) {
-	for _, stat := range stats {
-		pair, isPair := stat.(webrtc.ICECandidatePairStats)
-		if !isPair || pair.State != webrtc.StatsICECandidatePairStateSucceeded {
-			continue
-		}
-		if !ok || pair.ResponsesReceived > responses {
-			requests, responses, ok = pair.RequestsSent, pair.ResponsesReceived, true
-		}
-	}
-
-	return requests, responses, ok
-}
-
 // moveRecord is one handover the harness made.
 type moveRecord struct {
 	from, to   int
@@ -258,6 +156,8 @@ type frameMark struct {
 	decodable bool
 }
 
+// consentSample is the caller's running totals of consent checks sent and
+// answered, at one of them (see consent.go).
 type consentSample struct {
 	at                  time.Duration
 	requests, responses uint64
@@ -267,15 +167,6 @@ func (r *recorder) move(record moveRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.moves = append(r.moves, record)
-}
-
-func (r *recorder) consentChecks(at time.Time, requests, responses uint64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.hungUp {
-		return
-	}
-	r.consent = append(r.consent, consentSample{at: r.since(at), requests: requests, responses: responses})
 }
 
 // MoveReport is one planned handover as the caller observed it, plus what
@@ -328,23 +219,24 @@ type MoveTrackReport struct {
 	FirstDecodableFrameAfter time.Duration
 }
 
-// ConsentReport is what the caller observed of its ICE consent checks:
-// STUN binding requests on the candidate pair in use, sampled from getStats.
+// ConsentReport is what the caller observed of its ICE consent checks: the
+// STUN binding requests it sent and the binding success responses to them,
+// seen on its own UDP socket (see consent.go).
 type ConsentReport struct {
-	// RequestsSent and ResponsesReceived are the totals at the last sample.
+	// RequestsSent and ResponsesReceived are the totals until hangup.
 	RequestsSent      uint64
 	ResponsesReceived uint64
 
 	// Since is when the window below starts: the end of the last move, or
 	// when the call connected if nothing moved. ObservedFor runs from there
-	// to the last sample.
+	// to the last request or response.
 	Since       time.Duration
 	ObservedFor time.Duration
 
 	// ResponsesAfter counts responses received in the window, and
 	// LongestWithoutResponse is the longest stretch of it without a new
-	// response (to the sampling interval). The caller checks every 2 s;
-	// with no packet at all for 5 s its connection goes "disconnected".
+	// response. The caller checks every 2 s; with no packet at all for 5 s
+	// its connection goes "disconnected".
 	ResponsesAfter         uint64
 	LongestWithoutResponse time.Duration
 }

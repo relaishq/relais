@@ -65,8 +65,10 @@ type Harness struct {
 	signalingURL string
 	httpClient   *http.Client
 
+	// callsMu guards the calls not closed yet and closed (see lifecycle.go).
 	callsMu sync.Mutex
-	calls   map[*Call]struct{} // calls not closed yet
+	calls   map[*Call]struct{}
+	closed  bool
 }
 
 // Start starts the system.
@@ -119,14 +121,15 @@ func (h *Harness) ExchangeOffer(ctx context.Context, offer string) (AnswerFacts,
 	return facts, errors.Join(parseErr, h.deleteCall(ctx, resourceURL))
 }
 
-// Close stops the signaling server, the media workers and the relay. Calls
-// still open stop sampling first, because closing the workers ends them.
+// Close closes any calls still open, then stops the signaling server, the
+// media workers and the relay. Dial fails with ErrHarnessClosed from the
+// moment Close starts.
 func (h *Harness) Close() error {
-	h.stopSamplers()
+	callsErr := h.closeCalls()
 	serverErr := h.server.Close()
 	<-h.serveDone
 
-	return errors.Join(serverErr, h.workers.close())
+	return errors.Join(callsErr, serverErr, h.workers.close())
 }
 
 // postOffer makes the one signaling exchange that starts a call on a media

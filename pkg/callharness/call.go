@@ -75,6 +75,13 @@ type Call struct {
 	// the video sender answers it the way a browser's encoder would.
 	keyframeWanted atomic.Bool
 
+	// socket is the caller's UDP socket, which observes its consent checks
+	// (consent.go).
+	socket *callerSocket
+
+	// mu guards closing and the reader goroutines' lifecycle: a reader starts
+	// only under mu while closing is false, so close's Wait never races an
+	// Add.
 	mu            sync.Mutex
 	closing       bool
 	echoVideoSSRC uint32
@@ -82,28 +89,32 @@ type Call struct {
 	firSequence   uint8
 	readers       sync.WaitGroup
 
-	// The consent sampler (startSampler) runs until samplingStopped closes,
-	// once (stopSampling); sampler waits for it to return.
-	sampler         sync.WaitGroup
-	samplingStopped chan struct{}
-	stopSampling    sync.Once
+	closeOnce sync.Once
+	closeErr  error
 }
 
 // Dial starts a call: it makes one WHIP-style offer/answer exchange with the
-// system and waits until the caller's connection is "connected".
+// system and waits until the caller's connection is "connected". It fails
+// with ErrHarnessClosed once the harness is closing.
 func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err error) {
 	rec := newRecorder()
 
-	api, err := newCallerAPI(rec, opts.BrowserLikeOffer)
+	socket, err := newCallerSocket(rec)
 	if err != nil {
 		return nil, err
 	}
+	api, err := newCallerAPI(rec, opts.BrowserLikeOffer, socket)
+	if err != nil {
+		return nil, errors.Join(err, socket.close())
+	}
 	pc, err := api.NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
-		return nil, fmt.Errorf("callharness: new PeerConnection: %w", err)
+		return nil, errors.Join(fmt.Errorf("callharness: new PeerConnection: %w", err), socket.close())
 	}
-	call = &Call{harness: h, pc: pc, rec: rec, samplingStopped: make(chan struct{})}
-	h.trackCall(call)
+	call = &Call{harness: h, pc: pc, rec: rec, socket: socket}
+	if err := h.addCall(call); err != nil {
+		return nil, errors.Join(err, call.close())
+	}
 	defer func() {
 		if err != nil {
 			_ = call.close()
@@ -146,7 +157,6 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 	pc.OnSignalingStateChange(rec.signalingState)
 	pc.OnNegotiationNeeded(rec.negotiationNeeded)
 	pc.OnTrack(call.onTrack)
-	call.startSampler()
 
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
@@ -432,15 +442,12 @@ func (c *Call) RequestKeyframe(request KeyframeRequest) error {
 
 // Hangup ends the call and returns what the caller observed. It waits
 // briefly for the last echoed packets, stops recording, sends the WHIP-style
-// DELETE, closes the PeerConnection and runs the full video decode. The
-// consent sampler stops first: the DELETE makes the worker send a DTLS
-// close_notify, on which Pion closes the PeerConnection by itself.
+// DELETE, closes the PeerConnection and runs the full video decode.
 func (c *Call) Hangup(ctx context.Context) (*Report, error) {
 	select {
 	case <-time.After(echoDrain):
 	case <-ctx.Done():
 	}
-	c.stopSampler()
 
 	if iceUfrag(c.pc.CurrentLocalDescription()) != c.localUfrag ||
 		iceUfrag(c.pc.CurrentRemoteDescription()) != c.remoteUfrag {
@@ -466,25 +473,29 @@ func (c *Call) Hangup(ctx context.Context) (*Report, error) {
 	return report, errors.Join(deleteErr, closeErr)
 }
 
-// close stops the consent sampler, closes the PeerConnection and waits for
-// the reader goroutines.
+// close closes the PeerConnection, waits for the reader goroutines and
+// closes the caller's socket. Once is enough: Hangup, a failed Dial and
+// Harness.Close may all call it.
 func (c *Call) close() error {
-	c.mu.Lock()
-	c.closing = true
-	c.mu.Unlock()
-	c.stopSampler()
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closing = true
+		c.mu.Unlock()
 
-	err := c.pc.Close()
-	c.readers.Wait()
-	c.harness.untrackCall(c)
+		err := c.pc.Close()
+		c.readers.Wait()
+		c.closeErr = errors.Join(err, c.socket.close())
+		c.harness.removeCall(c)
+	})
 
-	return err
+	return c.closeErr
 }
 
 // newCallerAPI builds the caller's Pion API: Opus and VP8 (or a browser-like
-// codec list), Pion's default interceptors, host candidates on loopback
-// only, and a logger factory that counts SRTP decryption failures.
-func newCallerAPI(rec *recorder, browserLike bool) (*webrtc.API, error) {
+// codec list), Pion's default interceptors, a host candidate on the caller's
+// own loopback socket (through its UDP mux, which observes consent checks),
+// and a logger factory that counts SRTP decryption failures.
+func newCallerAPI(rec *recorder, browserLike bool, socket *callerSocket) (*webrtc.API, error) {
 	mediaEngine := &webrtc.MediaEngine{}
 	register := registerCallerCodecs
 	if browserLike {
@@ -504,6 +515,7 @@ func newCallerAPI(rec *recorder, browserLike bool) (*webrtc.API, error) {
 	settings.SetIncludeLoopbackCandidate(true)
 	settings.SetIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
+	settings.SetICEUDPMux(socket.mux)
 
 	return webrtc.NewAPI(
 		webrtc.WithMediaEngine(mediaEngine),
