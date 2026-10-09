@@ -59,6 +59,11 @@ type Config struct {
 	// ConnectTimeout bounds ICE nomination plus the DTLS handshake for a new
 	// session. Defaults to 30 seconds.
 	ConnectTimeout time.Duration
+
+	// consentTimeout is RFC 7675's consent timeout, 30 seconds. It is not a
+	// deployment setting; it is unexported so this package's tests can
+	// shorten it.
+	consentTimeout time.Duration
 }
 
 // Worker is a media worker. It owns one UDP socket and the sessions that run
@@ -87,6 +92,9 @@ func New(cfg Config) (*Worker, error) {
 	}
 	if cfg.ConnectTimeout <= 0 {
 		cfg.ConnectTimeout = defaultConnectTimeout
+	}
+	if cfg.consentTimeout <= 0 {
+		cfg.consentTimeout = defaultConsentTimeout
 	}
 
 	addr, err := net.ResolveUDPAddr("udp", cfg.ListenAddr)

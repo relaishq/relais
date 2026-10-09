@@ -135,7 +135,7 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 		cancel:     cancel,
 	}
 	sess.dtlsEndpoint = newDTLSEndpoint(sess)
-	sess.consent = time.AfterFunc(consentTimeout, sess.consentExpired)
+	sess.consent = time.AfterFunc(w.cfg.consentTimeout, sess.consentExpired)
 
 	return sess, nil
 }
@@ -335,19 +335,26 @@ func (s *session) handleRTP(pkt []byte) {
 		return // SRTP keys are not ready yet.
 	}
 
-	plain, err := s.srtpIn.DecryptRTP(s.decryptBuf, pkt, nil)
+	// A successful decryption advances the inbound SRTP context's rollover
+	// counter and replay window, so the session state records the packet's
+	// index at once, from the header the context authenticated. Nothing that
+	// can fail may sit between the two, or a snapshot would carry an index
+	// behind the context's.
+	var header rtp.Header
+	plain, err := s.srtpIn.DecryptRTP(s.decryptBuf, pkt, &header)
 	if err != nil {
 		s.log.Debugf("session %s: drop SRTP packet: %v", s.id, err)
 
 		return
 	}
+	s.state.SRTP.noteInbound(header.SSRC, header.SequenceNumber)
+
 	var in rtp.Packet
 	if err := in.Unmarshal(plain); err != nil {
 		s.log.Debugf("session %s: drop RTP packet: %v", s.id, err)
 
 		return
 	}
-	s.state.SRTP.noteInbound(in.SSRC, in.SequenceNumber)
 
 	track := &s.state.Audio
 	if in.PayloadType != track.PayloadType {
@@ -394,7 +401,8 @@ func (s *session) handleRTCP(pkt []byte) {
 }
 
 func (s *session) consentExpired() {
-	s.log.Infof("session %s: no ICE consent check for %s, closing", s.id, consentTimeout)
+	s.log.Infof("session %s: no ICE consent check from the nominated address for %s, closing",
+		s.id, s.worker.cfg.consentTimeout)
 	s.close()
 }
 

@@ -234,10 +234,13 @@ func (c *Call) SendAudio(ctx context.Context, duration time.Duration) error {
 		if err != nil {
 			return err
 		}
+		// The echo can arrive before WriteSample returns, so the payload is
+		// registered first; the packet is counted once the write succeeds.
+		c.rec.sending(frame)
 		if err := c.audio.WriteSample(media.Sample{Data: frame, Duration: frameDuration}); err != nil {
 			return fmt.Errorf("callharness: send audio: %w", err)
 		}
-		c.rec.sent(frame)
+		c.rec.sent()
 
 		select {
 		case <-ctx.Done():

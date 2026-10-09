@@ -168,11 +168,19 @@ func (r *recorder) srtpError(msg string) {
 	}
 }
 
-func (r *recorder) sent(payload []byte) {
+// sending registers a payload the caller is about to send, so its echo is
+// matched even when it arrives before the send call returns.
+func (r *recorder) sending(payload []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sentPayloads[string(payload)] = struct{}{}
+}
+
+// sent counts a packet the caller has sent.
+func (r *recorder) sent() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sentPackets++
-	r.sentPayloads[string(payload)] = struct{}{}
 }
 
 func (r *recorder) addTrack(kind string, ssrc uint32, payloadType uint8) *trackRecord {
