@@ -131,6 +131,53 @@ func TestHangupDuringHandoverEndsTheCall(t *testing.T) {
 	require.False(t, isTimeout(err), "the caller saw no close_notify from the resumed worker")
 }
 
+// TestOverlappingHandoverIsRefused starts a second handover of a session
+// while the first has it between owners. The second must be refused at
+// once, not queued to run as another move when the first is done; a hangup
+// during a move still waits for it and ends the call.
+func TestOverlappingHandoverIsRefused(t *testing.T) {
+	socket, workerA, workerB := newTestSocket(t, 30*time.Second)
+	workerC, err := socket.NewWorker(Config{consentTimeout: 30 * time.Second})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, workerC.Close()) })
+	call, client := dialDTLSCaller(t, workerA)
+
+	overlapping := make(chan error, 1)
+	socket.afterExport = func() {
+		go func() {
+			_, err := socket.Handover(call.id, workerC, ResumeOptions{})
+			overlapping <- err
+		}()
+		select {
+		case err := <-overlapping:
+			overlapping <- err // answered while the first move is in flight
+		case <-time.After(silence):
+		}
+	}
+	_, err = socket.Handover(call.id, workerB, ResumeOptions{})
+	require.NoError(t, err, "first move A -> B")
+	socket.afterExport = nil
+	require.ErrorIs(t, <-overlapping, ErrHandoverInProgress, "overlapping move to C")
+	require.Same(t, workerB, socket.Owner(call.id), "owner after the moves")
+	require.Nil(t, workerC.session(call.id), "the overlapping move reached worker C")
+
+	hungUp := make(chan error, 1)
+	socket.afterExport = func() {
+		go func() { hungUp <- socket.EndSession(call.id) }()
+		time.Sleep(100 * time.Millisecond)
+	}
+	_, err = socket.Handover(call.id, workerC, ResumeOptions{})
+	require.NoError(t, err, "move B -> C")
+	require.NoError(t, <-hungUp, "hangup during the move")
+	require.Nil(t, socket.Owner(call.id), "session still routed after the hangup")
+	require.Nil(t, workerC.session(call.id), "session still on worker C after the hangup")
+
+	require.NoError(t, client.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, err = client.Read(make([]byte, receiveMTU))
+	require.Error(t, err, "the caller's DTLS connection is still open")
+	require.False(t, isTimeout(err), "the caller saw no close_notify after the hangup")
+}
+
 // dialDTLSCaller sets up an established session on worker: a caller that
 // nominates its address and completes the DTLS handshake as the client,
 // with the certificate its offer's fingerprint names.

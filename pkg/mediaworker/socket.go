@@ -100,6 +100,9 @@ type route struct {
 	// on: a handover, and a hangup, which must reach the owner the handover
 	// leaves the session with.
 	op sync.Mutex
+	// moving is set, under Socket.mu, for the whole of a handover, so an
+	// overlapping one is refused instead of queued behind it.
+	moving bool
 
 	owner *socketPort // nil while the session is between owners
 	held  bool        // a handover holds the caller's packets in queue
@@ -456,8 +459,8 @@ type HandoverResult struct {
 //
 // No caller packet is processed by both workers. If the new owner cannot
 // resume the session, the old owner resumes it from the same bytes. A
-// hangup (EndSession) or another handover of the same session waits until
-// this one is done.
+// hangup (EndSession) of the same session waits until this one is done; an
+// overlapping handover gets ErrHandoverInProgress at once.
 func (s *Socket) Handover(sessionID string, to *Worker, opts ResumeOptions) (HandoverResult, error) {
 	start := time.Now()
 	result := HandoverResult{SessionID: sessionID}
@@ -466,11 +469,11 @@ func (s *Socket) Handover(sessionID string, to *Worker, opts ResumeOptions) (Han
 	if !ok || toPort.socket != s {
 		return result, errNotOnSocket
 	}
-	r := s.lockRoute(sessionID)
-	if r == nil {
-		return result, ErrUnknownSession
+	r, err := s.beginHandover(sessionID)
+	if err != nil {
+		return result, err
 	}
-	defer r.op.Unlock()
+	defer s.endHandover(r)
 
 	from, err := s.hold(sessionID, toPort)
 	if err != nil {
@@ -524,6 +527,46 @@ func (s *Socket) Handover(sessionID string, to *Worker, opts ResumeOptions) (Han
 		sessionID, result.Duration, result.StateBytes, result.HeldPackets)
 
 	return result, nil
+}
+
+// beginHandover claims a session for one handover: it marks the route as
+// moving, refusing an overlapping handover with ErrHandoverInProgress, and
+// takes the route's op lock, which waits only for a hangup in progress.
+func (s *Socket) beginHandover(sessionID string) (*route, error) {
+	s.mu.Lock()
+	r := s.routes[sessionID]
+	switch {
+	case r == nil:
+		s.mu.Unlock()
+
+		return nil, ErrUnknownSession
+	case r.moving:
+		s.mu.Unlock()
+
+		return nil, ErrHandoverInProgress
+	}
+	r.moving = true
+	s.mu.Unlock()
+
+	r.op.Lock()
+	s.mu.RLock()
+	current := s.routes[sessionID] == r
+	s.mu.RUnlock()
+	if !current { // the call ended while the hangup held the lock
+		s.endHandover(r)
+
+		return nil, ErrUnknownSession
+	}
+
+	return r, nil
+}
+
+// endHandover releases what beginHandover claimed.
+func (s *Socket) endHandover(r *route) {
+	s.mu.Lock()
+	r.moving = false
+	s.mu.Unlock()
+	r.op.Unlock()
 }
 
 // hold starts a handover: the session's packets are queued from now on.
