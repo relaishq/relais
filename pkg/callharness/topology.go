@@ -79,6 +79,9 @@ func (h *Harness) startTopology(opts Options) error {
 			return errors.Join(err, h.closeTopology())
 		}
 		h.workers = append(h.workers, worker)
+		if h.relay != nil {
+			h.relay.relay.AddWorker(worker.LocalAddr())
+		}
 	}
 
 	return nil
@@ -165,8 +168,8 @@ func (h *Harness) RelayAddr() netip.AddrPort {
 // RestartRelay replaces the relay with a new one on the same public and
 // relay-leg addresses, as a restarted relay process would come back: the
 // flow table is lost, while the session-owner store and the workers carry
-// on. It returns once the new relay is listening, with how long no relay
-// was listening.
+// on, and the new relay is configured with the same workers. It returns
+// once the new relay is listening, with how long no relay was listening.
 func (h *Harness) RestartRelay() (time.Duration, error) {
 	if h.relay == nil {
 		return 0, errors.New("callharness: no relay; start the harness with Options.Relay")
@@ -180,6 +183,9 @@ func (h *Harness) RestartRelay() (time.Duration, error) {
 		WorkerAddr:    old.WorkerAddr().String(),
 		Owners:        h.relay.owners,
 		LoggerFactory: h.relay.loggerFactory,
+	}
+	for _, worker := range h.workers {
+		cfg.Workers = append(cfg.Workers, worker.LocalAddr())
 	}
 	down := time.Now()
 	if err := old.Close(); err != nil {

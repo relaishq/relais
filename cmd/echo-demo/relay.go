@@ -56,6 +56,7 @@ func startMedia(addr netip.AddrPort, withRelay bool, loggerFactory logging.Logge
 	if err != nil {
 		return nil, errors.Join(err, r.Close())
 	}
+	r.AddWorker(worker.LocalAddr())
 	log.Printf("echo-demo: relay on udp %s (the host candidate in every answer), relay leg on udp %s",
 		r.PublicAddr(), r.WorkerAddr())
 	log.Printf("echo-demo: media worker behind the relay on private udp %s", worker.LocalAddr())
