@@ -52,6 +52,42 @@ func TestUnauthenticatedCheckMovesNoFlow(t *testing.T) {
 	require.Equal(t, "now to stranger", sendAndReceive(t, portA, stranger, "now to stranger"))
 }
 
+// TestDTLSWriteCannotOutlastExport races a DTLS record against an export:
+// the record is written while the export holds the session lock, as a
+// close_notify or retransmission could be. Once the export has fenced the
+// session, the record must not reach the caller, or it could end the call
+// the new owner has just resumed.
+func TestDTLSWriteCannotOutlastExport(t *testing.T) {
+	worker, err := New(Config{consentTimeout: 10 * time.Second})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, worker.Close()) })
+	call := dialTestSessionOn(t, worker)
+	caller := call.endpoint(t)
+	require.True(t, caller.check(t, true), "caller nominates its address")
+	sess := worker.session(call.id)
+	require.NotNil(t, sess)
+
+	record := []byte{21, 0xfe, 0xfd, 'x'} // looks like a DTLS alert; the content does not matter
+	_, err = sess.dtlsEndpoint.WriteTo(record, nil)
+	require.NoError(t, err)
+	require.Equal(t, string(record), receive(t, caller.conn), "a record before the export reaches the caller")
+
+	// The export's critical section: lock, fence, unlock. The record is
+	// written while it holds the lock.
+	sess.mu.Lock()
+	written := make(chan error, 1)
+	go func() {
+		_, err := sess.dtlsEndpoint.WriteTo(record, nil)
+		written <- err
+	}()
+	time.Sleep(100 * time.Millisecond) // the write is now waiting for the lock
+	sess.fenced.Store(true)
+	sess.mu.Unlock()
+
+	require.NoError(t, <-written, "a fenced write fails silently")
+	require.Empty(t, receive(t, caller.conn), "a record written during the export reached the caller")
+}
+
 // sendAndReceive writes msg to the endpoint's address through port, and
 // returns what the endpoint receives ("" when nothing arrives).
 func sendAndReceive(t *testing.T, port *socketPort, to *testEndpoint, msg string) string {

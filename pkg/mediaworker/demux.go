@@ -62,15 +62,15 @@ func (e *dtlsEndpoint) ReadFrom(p []byte) (int, net.Addr, error) {
 
 // WriteTo sends to the caller's nominated address. Before nomination there
 // is nowhere to send, and the record is dropped; so is every record after
-// the session was handed over (see session.fenced).
+// the session was handed over (see session.fenced). The check and the send
+// happen under the session lock, which export holds while it fences, so a
+// record cannot pass the check, wait out an export and leave afterwards.
 func (e *dtlsEndpoint) WriteTo(p []byte, _ net.Addr) (int, error) {
-	if e.sess.fenced.Load() {
-		return len(p), nil
-	}
 	e.sess.mu.Lock()
+	defer e.sess.mu.Unlock()
+
 	to := e.sess.state.ICE.RemoteAddr
-	e.sess.mu.Unlock()
-	if !to.IsValid() {
+	if e.sess.fenced.Load() || !to.IsValid() {
 		return len(p), nil
 	}
 
