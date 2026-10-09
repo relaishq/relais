@@ -11,10 +11,10 @@
 //   ?autostart=0     wait for the Start button instead of calling on load
 //
 // For automation, the page keeps a stats summary in window.relaisStats and,
-// as JSON, in the #stats element, refreshed every second. Any counter the
-// browser does not expose is the string "unverified" and is listed in
-// relaisStats.unverified; it is never reported as 0. window.relaisStart()
-// and window.relaisHangup() control the call.
+// as JSON, in the #stats element, refreshed every second and on every call
+// state change. Any counter the browser does not expose is the string
+// "unverified" and is listed in relaisStats.unverified; it is never reported
+// as 0. window.relaisStart() and window.relaisHangup() control the call.
 
 const UNVERIFIED = 'unverified';
 const STATS_INTERVAL_MS = 1000;
@@ -62,6 +62,9 @@ function log(message) {
   console.log(`[relais] ${message}`);
 }
 
+// setCallState moves the call to a new state and publishes it at once, on
+// top of the last stats: the stats timer stops at hangup, so waiting for the
+// next poll would leave the old state on the page.
 function setCallState(state, error) {
   call.state = state;
   if (error) {
@@ -70,7 +73,34 @@ function setCallState(state, error) {
   }
   els.start.disabled = state === 'starting' || state === 'connecting' || state === 'connected';
   els.hangup.disabled = !pc;
-  render(window.relaisStats);
+
+  const stats = {
+    ...window.relaisStats, updatedAt: new Date().toISOString(), callState: call.state, error: call.error,
+  };
+  if (pc) {
+    Object.assign(stats, connectionStates(pc));
+  } else if ('connectionState' in stats) {
+    // teardown closed the connection, which leaves these states "closed".
+    Object.assign(stats, { connectionState: 'closed', iceConnectionState: 'closed', signalingState: 'closed' });
+  }
+  publish(stats);
+}
+
+function connectionStates(conn) {
+  return {
+    connectionState: conn.connectionState,
+    iceConnectionState: conn.iceConnectionState,
+    iceGatheringState: conn.iceGatheringState,
+    signalingState: conn.signalingState,
+  };
+}
+
+// publish makes stats the page's snapshot: window.relaisStats, the #stats
+// JSON and the summary.
+function publish(stats) {
+  window.relaisStats = stats;
+  els.stats.textContent = JSON.stringify(stats, null, 2);
+  render(stats);
 }
 
 // The test source: an animated canvas (moving square, clock, frame counter)
@@ -143,6 +173,7 @@ async function start() {
     error: null, startedAt: performance.now(), connectedAt: null,
     firstEchoFrameAt: null, firstEchoFrameMethod: null, answer: null,
   });
+  window.relaisStats = { source, unverified: [] }; // drop the previous call's stats
   setCallState('starting');
 
   try {
@@ -155,6 +186,25 @@ async function start() {
     els.local.srcObject = localStream;
 
     pc = new RTCPeerConnection({ bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require' });
+    // An event queued before teardown can fire after it, when pc is null or
+    // already the next call's connection, so each handler keeps its own
+    // connection and ignores events once that is no longer the call's.
+    const conn = pc;
+    conn.ontrack = (event) => {
+      if (conn === pc) {
+        onTrack(event);
+      }
+    };
+    conn.onconnectionstatechange = () => {
+      if (conn === pc) {
+        onConnectionStateChange(conn);
+      }
+    };
+    conn.oniceconnectionstatechange = () => {
+      if (conn === pc) {
+        log(`ICE connection state: ${conn.iceConnectionState}`);
+      }
+    };
     // Audio first, then video: one sendrecv m-line each, bundled.
     for (const kind of ['audio', 'video']) {
       const track = localStream.getTracks().find((t) => t.kind === kind);
@@ -164,9 +214,6 @@ async function start() {
         log(`no local ${kind} track`);
       }
     }
-    pc.ontrack = onTrack;
-    pc.onconnectionstatechange = onConnectionStateChange;
-    pc.oniceconnectionstatechange = () => log(`ICE connection state: ${pc.iceConnectionState}`);
 
     await pc.setLocalDescription(await pc.createOffer());
     // ICE-lite worker: it never checks the browser's candidates, so the
@@ -194,8 +241,8 @@ async function start() {
   }
 }
 
-function onConnectionStateChange() {
-  const state = pc.connectionState;
+function onConnectionStateChange(conn) {
+  const state = conn.connectionState;
   log(`connection state: ${state}`);
   if (state === 'connected' && call.connectedAt === null) {
     call.connectedAt = performance.now();
@@ -224,7 +271,8 @@ function onTrack(event) {
   }
 }
 
-// hangup ends the call. The last stats stay on the page.
+// hangup ends the call. The last stats stay on the page, published with the
+// ended call state.
 async function hangup() {
   if (!pc) {
     return;
@@ -283,15 +331,19 @@ function describeAnswer(sdp) {
 const DTLS_VERSIONS = { FEFF: 'DTLS 1.0', FEFD: 'DTLS 1.2', FEFC: 'DTLS 1.3' };
 
 async function updateStats() {
-  if (!pc) {
+  const conn = pc;
+  if (!conn) {
     return;
   }
   let report;
   try {
-    report = await pc.getStats();
+    report = await conn.getStats();
   } catch (err) {
     log(`getStats: ${err}`);
     return;
+  }
+  if (conn !== pc) {
+    return; // the call ended while getStats ran; its final state is published
   }
   const byId = new Map();
   report.forEach((stat) => byId.set(stat.id, stat));
@@ -368,10 +420,7 @@ async function updateStats() {
     source,
     callState: call.state,
     error: call.error,
-    connectionState: pc.connectionState,
-    iceConnectionState: pc.iceConnectionState,
-    iceGatheringState: pc.iceGatheringState,
-    signalingState: pc.signalingState,
+    ...connectionStates(conn),
     transport: {
       dtlsState: read(transport, 'dtlsState', 'transport.dtlsState'),
       tlsVersion,
@@ -408,9 +457,7 @@ async function updateStats() {
     unverified,
   };
 
-  window.relaisStats = stats;
-  els.stats.textContent = JSON.stringify(stats, null, 2);
-  render(stats);
+  publish(stats);
 }
 
 function render(stats) {
