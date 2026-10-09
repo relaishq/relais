@@ -81,6 +81,12 @@ type Call struct {
 	haveEchoVideo bool
 	firSequence   uint8
 	readers       sync.WaitGroup
+
+	// The consent sampler (startSampler) runs until samplingStopped closes,
+	// once (stopSampling); sampler waits for it to return.
+	sampler         sync.WaitGroup
+	samplingStopped chan struct{}
+	stopSampling    sync.Once
 }
 
 // Dial starts a call: it makes one WHIP-style offer/answer exchange with the
@@ -96,7 +102,8 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 	if err != nil {
 		return nil, fmt.Errorf("callharness: new PeerConnection: %w", err)
 	}
-	call = &Call{harness: h, pc: pc, rec: rec}
+	call = &Call{harness: h, pc: pc, rec: rec, samplingStopped: make(chan struct{})}
+	h.trackCall(call)
 	defer func() {
 		if err != nil {
 			_ = call.close()
@@ -139,7 +146,7 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 	pc.OnSignalingStateChange(rec.signalingState)
 	pc.OnNegotiationNeeded(rec.negotiationNeeded)
 	pc.OnTrack(call.onTrack)
-	call.startReader(call.sampleConsent)
+	call.startSampler()
 
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {
@@ -425,12 +432,15 @@ func (c *Call) RequestKeyframe(request KeyframeRequest) error {
 
 // Hangup ends the call and returns what the caller observed. It waits
 // briefly for the last echoed packets, stops recording, sends the WHIP-style
-// DELETE, closes the PeerConnection and runs the full video decode.
+// DELETE, closes the PeerConnection and runs the full video decode. The
+// consent sampler stops first: the DELETE makes the worker send a DTLS
+// close_notify, on which Pion closes the PeerConnection by itself.
 func (c *Call) Hangup(ctx context.Context) (*Report, error) {
 	select {
 	case <-time.After(echoDrain):
 	case <-ctx.Done():
 	}
+	c.stopSampler()
 
 	if iceUfrag(c.pc.CurrentLocalDescription()) != c.localUfrag ||
 		iceUfrag(c.pc.CurrentRemoteDescription()) != c.remoteUfrag {
@@ -456,14 +466,17 @@ func (c *Call) Hangup(ctx context.Context) (*Report, error) {
 	return report, errors.Join(deleteErr, closeErr)
 }
 
-// close closes the PeerConnection and waits for the reader goroutines.
+// close stops the consent sampler, closes the PeerConnection and waits for
+// the reader goroutines.
 func (c *Call) close() error {
 	c.mu.Lock()
 	c.closing = true
 	c.mu.Unlock()
+	c.stopSampler()
 
 	err := c.pc.Close()
 	c.readers.Wait()
+	c.harness.untrackCall(c)
 
 	return err
 }

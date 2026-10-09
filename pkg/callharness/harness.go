@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pion/logging"
@@ -63,6 +64,9 @@ type Harness struct {
 	serveDone    chan struct{}
 	signalingURL string
 	httpClient   *http.Client
+
+	callsMu sync.Mutex
+	calls   map[*Call]struct{} // calls not closed yet
 }
 
 // Start starts the system.
@@ -115,8 +119,10 @@ func (h *Harness) ExchangeOffer(ctx context.Context, offer string) (AnswerFacts,
 	return facts, errors.Join(parseErr, h.deleteCall(ctx, resourceURL))
 }
 
-// Close stops the signaling server, the media workers and the relay.
+// Close stops the signaling server, the media workers and the relay. Calls
+// still open stop sampling first, because closing the workers ends them.
 func (h *Harness) Close() error {
+	h.stopSamplers()
 	serverErr := h.server.Close()
 	<-h.serveDone
 

@@ -31,6 +31,9 @@ type workers struct {
 }
 
 func startWorkers(opts Options) (*workers, error) {
+	if opts.Workers < 0 {
+		return nil, fmt.Errorf("callharness: %d workers", opts.Workers)
+	}
 	if opts.Relay {
 		return startRelayedWorkers(opts)
 	}
@@ -138,14 +141,77 @@ func (c *Call) sessionID() (string, error) {
 	return path.Base(resource.Path), nil
 }
 
+// trackCall records a call that has not closed yet, so Harness.Close can stop
+// its consent sampler before the workers end it.
+func (h *Harness) trackCall(c *Call) {
+	h.callsMu.Lock()
+	defer h.callsMu.Unlock()
+	if h.calls == nil {
+		h.calls = make(map[*Call]struct{})
+	}
+	h.calls[c] = struct{}{}
+}
+
+func (h *Harness) untrackCall(c *Call) {
+	h.callsMu.Lock()
+	defer h.callsMu.Unlock()
+	delete(h.calls, c)
+}
+
+// stopSamplers stops the consent samplers of calls still open. Closing the
+// workers sends those calls a DTLS close_notify, on which Pion closes their
+// PeerConnections.
+func (h *Harness) stopSamplers() {
+	h.callsMu.Lock()
+	calls := make([]*Call, 0, len(h.calls))
+	for c := range h.calls {
+		calls = append(calls, c)
+	}
+	h.callsMu.Unlock()
+
+	for _, c := range calls {
+		c.stopSampler()
+	}
+}
+
+// startSampler starts the consent sampler, which runs until stopSampler.
+func (c *Call) startSampler() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closing {
+		return
+	}
+	c.sampler.Add(1)
+	go func() {
+		defer c.sampler.Done()
+		c.sampleConsent()
+	}()
+}
+
+// stopSampler stops the consent sampler and waits until it has returned.
+// Pion's GetStats is not safe to call while the PeerConnection closes, and
+// Pion closes it by itself when the worker sends a DTLS close_notify. So
+// everything that closes the PeerConnection or ends the call on the worker
+// (Hangup's DELETE, close, Harness.Close) stops the sampler first.
+func (c *Call) stopSampler() {
+	c.stopSampling.Do(func() { close(c.samplingStopped) })
+	c.sampler.Wait()
+}
+
 // sampleConsent samples the caller's ICE consent checks (STUN binding
 // requests on the candidate pair in use, and the responses to them) from
-// getStats, as a browser page could, until the connection closes.
+// getStats, as a browser page could, until stopSampler or the connection
+// closes.
 func (c *Call) sampleConsent() {
 	ticker := time.NewTicker(consentSampleInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
+	for {
+		select {
+		case <-c.samplingStopped:
+			return
+		case <-ticker.C:
+		}
 		if c.pc.ConnectionState() == webrtc.PeerConnectionStateClosed {
 			return
 		}

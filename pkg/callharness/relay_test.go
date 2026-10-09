@@ -41,6 +41,17 @@ const (
 	restartSettle = 100 * time.Millisecond
 )
 
+// TestNegativeWorkersAreRejected: a negative worker count is a mistake in
+// either topology, not one worker.
+func TestNegativeWorkersAreRejected(t *testing.T) {
+	for _, relay := range []bool{false, true} {
+		h, err := callharness.Start(callharness.Options{Workers: -1, Relay: relay})
+		if !assert.Error(t, err, "Workers: -1, Relay: %t", relay) {
+			assert.NoError(t, h.Close())
+		}
+	}
+}
+
 // TestEchoCallThroughRelay is the baseline call through the relay: Opus and
 // VP8 echoed back cleanly, with the relay's address as the only address the
 // caller ever sees.
