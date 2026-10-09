@@ -2,6 +2,8 @@ module github.com/relais
 
 go 1.26.0
 
+toolchain go1.26.9
+
 require (
 	github.com/go-redis/redis/v8 v8.11.5
 	github.com/pion/dtls/v3 v3.1.8
