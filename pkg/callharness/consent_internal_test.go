@@ -2,6 +2,7 @@ package callharness
 
 import (
 	"context"
+	"net"
 	"slices"
 	"testing"
 	"time"
@@ -10,6 +11,53 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestConsentWindowEndsAtHangup: the consent window runs to hangup (or to
+// the connection closing, if earlier), and the silent stretch after the
+// last answer counts toward the longest time without one.
+func TestConsentWindowEndsAtHangup(t *testing.T) {
+	sec := func(s float64) time.Duration { return time.Duration(s * float64(time.Second)) }
+	rec := newRecorder()
+	rec.connected, rec.connectedAt = true, sec(0.2)
+	rec.consent = []consentSample{
+		{at: sec(1), requests: 1}, {at: sec(1), requests: 1, responses: 1},
+		{at: sec(3), requests: 2}, {at: sec(3), requests: 2, responses: 2},
+	}
+	rec.hungUp, rec.hungUpAt = true, sec(10)
+
+	report := rec.consentReport()
+	assert.Equal(t, sec(9.8), report.ObservedFor, "window to hangup")
+	assert.Equal(t, sec(7), report.LongestWithoutResponse, "the silent tail from the last answer to hangup")
+	assert.EqualValues(t, 2, report.ResponsesAfter)
+
+	rec.connectionStates = []StateChange{{At: sec(0.2), State: "connected"}, {At: sec(5), State: "closed"}}
+	report = rec.consentReport()
+	assert.Equal(t, sec(4.8), report.ObservedFor, "window to the connection closing")
+	assert.Equal(t, sec(2), report.LongestWithoutResponse, "the tail ends when the connection closed")
+}
+
+// TestConsentCountsOnlySentRequests: a binding request whose write fails is
+// not counted as sent, and a late answer to it is not counted either.
+func TestConsentCountsOnlySentRequests(t *testing.T) {
+	rec := newRecorder()
+	socket, err := newCallerSocket(rec)
+	require.NoError(t, err)
+	observer := socket.observer
+	request := []byte{0x00, 0x01, 0x00, 0x00, 0x21, 0x12, 0xa4, 0x42, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+	to := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9}
+
+	_, err = observer.WriteTo(request, to)
+	require.NoError(t, err)
+	require.NoError(t, socket.close())
+	_, err = observer.WriteTo(request, to)
+	require.Error(t, err, "write on the closed socket")
+
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	require.Len(t, rec.consent, 1, "only the request that was written counts")
+	assert.EqualValues(t, 1, rec.consent[0].requests)
+	assert.Empty(t, observer.unanswered, "the failed request awaits no answer")
+}
 
 // TestConsentObservedWhileWorkerEndsCall has the worker end a live call on
 // its own, as its consent timer would: it sends a DTLS close_notify, and

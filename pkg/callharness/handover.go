@@ -229,13 +229,15 @@ type ConsentReport struct {
 
 	// Since is when the window below starts: the end of the last move, or
 	// when the call connected if nothing moved. ObservedFor runs from there
-	// to the last request or response.
+	// to hangup, or to when the caller's connection closed or failed if that
+	// came first.
 	Since       time.Duration
 	ObservedFor time.Duration
 
 	// ResponsesAfter counts responses received in the window, and
 	// LongestWithoutResponse is the longest stretch of it without a new
-	// response. The caller checks every 2 s; with no packet at all for 5 s
+	// response, the stretch from the last response to the end of the window
+	// included. The caller checks every 2 s; with no packet at all for 5 s
 	// its connection goes "disconnected".
 	ResponsesAfter         uint64
 	LongestWithoutResponse time.Duration
@@ -337,15 +339,18 @@ func (r *recorder) consentReport() ConsentReport {
 	if n := len(r.moves); n > 0 {
 		report.Since = r.since(r.moves[n-1].end)
 	}
-	if len(r.consent) == 0 {
-		return report
+	end := r.consentEnd()
+	if n := len(r.consent); n > 0 {
+		last := r.consent[n-1]
+		report.RequestsSent, report.ResponsesReceived = last.requests, last.responses
 	}
-	last := r.consent[len(r.consent)-1]
-	report.RequestsSent, report.ResponsesReceived = last.requests, last.responses
 
 	var before uint64 // responses at the start of the window
 	lastResponse := report.Since
 	for _, sample := range r.consent {
+		if sample.at > end {
+			break
+		}
 		if sample.at <= report.Since {
 			before = sample.responses
 
@@ -357,12 +362,27 @@ func (r *recorder) consentReport() ConsentReport {
 			lastResponse = sample.at
 		}
 	}
-	if last.at > report.Since {
-		report.ObservedFor = last.at - report.Since
-		report.LongestWithoutResponse = max(report.LongestWithoutResponse, last.at-lastResponse)
+	if end > report.Since {
+		// The silent tail up to the end of the window counts too.
+		report.ObservedFor = end - report.Since
+		report.LongestWithoutResponse = max(report.LongestWithoutResponse, end-lastResponse)
 	}
 
 	return report
+}
+
+// consentEnd is when the consent window ends: at hangup, or when the
+// caller's connection closed or failed, if that came first. It runs under
+// r.mu.
+func (r *recorder) consentEnd() time.Duration {
+	end := r.hungUpAt
+	for _, change := range r.connectionStates {
+		if change.At > r.connectedAt && (change.State == "closed" || change.State == "failed") {
+			return min(end, change.At)
+		}
+	}
+
+	return end
 }
 
 func writeHandoverSummary(b *strings.Builder, r *Report) {

@@ -29,9 +29,14 @@ const (
 	// connection "disconnected" after 5 s with nothing received.
 	stunOnlyPause = 8 * time.Second
 
-	// maxConsentSilence bounds the time without an answered consent check.
-	// The caller checks every 2 s; the rest is sampling and scheduling.
-	maxConsentSilence = 4500 * time.Millisecond
+	// callerCheckInterval is how often Pion's caller sends a consent check.
+	callerCheckInterval = 2 * time.Second
+
+	// maxConsentSilence bounds the time without an answered consent check,
+	// including the stretch from the last answer to hangup: two check
+	// intervals (one check may be lost to scheduling) plus Hangup's echo
+	// drain.
+	maxConsentSilence = 2*callerCheckInterval + 500*time.Millisecond
 )
 
 // TestPlannedHandover is the repeated-move scenario: a call with audio and
@@ -105,10 +110,12 @@ func TestPlannedHandoverKeepsConsent(t *testing.T) {
 	assertCleanCall(t, report)
 	assertMoves(t, report, [][2]int{{0, 1}, {1, 0}}, 0)
 
+	// The window runs from the last move to hangup, which comes after the
+	// consent window, whatever the timing of the last check.
 	consent := report.Consent
-	assert.GreaterOrEqual(t, consent.ObservedFor, consentWindow-time.Second, "consent observed after the last move")
-	assert.GreaterOrEqual(t, consent.ResponsesAfter, uint64(consentWindow/(4*time.Second)),
-		"consent checks answered after the last move")
+	assert.GreaterOrEqual(t, consent.ObservedFor, consentWindow, "consent observed after the last move")
+	assert.GreaterOrEqual(t, consent.ResponsesAfter, uint64(consentWindow/(2*callerCheckInterval)),
+		"consent checks answered after the last move (at least every other one)")
 	assert.Less(t, consent.LongestWithoutResponse, maxConsentSilence, "longest time without an answered consent check")
 
 	// The echo came back after the STUN-only pause, still continuous and

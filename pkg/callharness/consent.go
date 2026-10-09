@@ -73,18 +73,35 @@ type stunObserver struct {
 	unanswered map[[stunTransactionSize]byte]struct{}
 }
 
+// WriteTo sends a packet. A binding request counts as sent only once the
+// write succeeded. Its answer is awaited from just before the write, so a
+// response that the read loop sees before WriteTo returns still matches; the
+// request is timestamped then too, so it never appears after its answer.
 func (o *stunObserver) WriteTo(p []byte, addr net.Addr) (int, error) {
-	if txID, ok := stunMessage(p, stunBindingRequest); ok {
-		o.mu.Lock()
-		if len(o.unanswered) >= maxUnansweredChecks {
-			clear(o.unanswered)
-		}
-		o.unanswered[txID] = struct{}{}
-		o.mu.Unlock()
-		o.rec.consentRequest(time.Now())
+	txID, isRequest := stunMessage(p, stunBindingRequest)
+	if !isRequest {
+		return o.conn.WriteTo(p, addr)
 	}
 
-	return o.conn.WriteTo(p, addr)
+	o.mu.Lock()
+	if len(o.unanswered) >= maxUnansweredChecks {
+		clear(o.unanswered)
+	}
+	o.unanswered[txID] = struct{}{}
+	o.mu.Unlock()
+
+	sentAt := time.Now()
+	n, err := o.conn.WriteTo(p, addr)
+	if err != nil {
+		o.mu.Lock()
+		delete(o.unanswered, txID)
+		o.mu.Unlock()
+
+		return n, err
+	}
+	o.rec.consentRequest(sentAt)
+
+	return n, nil
 }
 
 func (o *stunObserver) ReadFrom(p []byte) (int, net.Addr, error) {
@@ -136,16 +153,20 @@ func (r *recorder) consentResponse(at time.Time) {
 }
 
 // consentEvent adds a sample with the running totals of requests sent and
-// responses received.
+// responses received. Samples stay in time order: a request recorded just
+// after its own answer (see WriteTo) takes the answer's time.
 func (r *recorder) consentEvent(at time.Time, requests, responses uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.hungUp {
 		return
 	}
+	sample := consentSample{at: r.since(at), requests: requests, responses: responses}
 	if n := len(r.consent); n > 0 {
-		requests += r.consent[n-1].requests
-		responses += r.consent[n-1].responses
+		last := r.consent[n-1]
+		sample.at = max(sample.at, last.at)
+		sample.requests += last.requests
+		sample.responses += last.responses
 	}
-	r.consent = append(r.consent, consentSample{at: r.since(at), requests: requests, responses: responses})
+	r.consent = append(r.consent, sample)
 }
