@@ -5,12 +5,15 @@ import (
 	"net/netip"
 	"sync"
 
+	"github.com/relais/internal/relayleg"
+	"github.com/relais/internal/workerprobe"
 	"github.com/relais/pkg/relay"
 )
 
 // relayConn is the worker's end of the relay leg: the worker's private UDP
-// socket, on which every datagram is a caller's packet behind the relay-leg
-// header (see package relay). It reads and writes packets addressed by
+// socket. Caller packets carry the relay-leg header (see package relay);
+// private drain barriers are acknowledged by the single worker read loop.
+// It reads and writes packets addressed by
 // caller, as the worker's own socket does without a relay, so the rest of
 // the worker cannot tell the two apart.
 type relayConn struct {
@@ -58,6 +61,14 @@ func (c *relayConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
 			return 0, netip.AddrPort{}, err
 		}
 		if netip.AddrPortFrom(from.Addr().Unmap(), from.Port()) != c.relay {
+			continue
+		}
+		if id, ack, ok := relayleg.ParseBarrier(buf[:n]); ok {
+			if !ack && !workerprobe.BarrierIgnored(c.conn.LocalAddr().(*net.UDPAddr).AddrPort()) {
+				// The worker's single read loop finished the previous packet before
+				// requesting this read, so the acknowledgement is a drain barrier.
+				_, _ = c.conn.WriteToUDPAddrPort(relayleg.Barrier(id, true), c.relay)
+			}
 			continue
 		}
 		caller, pkt, err := relay.ParseHeader(buf[:n])

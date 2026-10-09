@@ -7,11 +7,18 @@ import (
 )
 
 // The relay leg is the private UDP path between the relay and the media
-// workers. Every packet on it travels in its own datagram behind a small
+// workers. Caller packets travel in their own datagrams behind a version-1
 // header that names a caller's address. From the relay to a worker the
 // header says which caller sent the packet; from a worker to the relay it
 // says which caller to send the packet to. The caller's packet follows the
 // header unchanged.
+//
+// Private drain barriers reserve a separate 13-byte format (internal/relayleg):
+// "RLS\x01", an acknowledgement byte (0 or 1), and a random big-endian uint64
+// ID. A receiver checks its trusted source and recognizes that exact format
+// before parsing caller headers. Barriers start with 'R' (0x52), whereas
+// caller datagrams start with HeaderVersion (0x01), so the formats cannot
+// overlap. A caller packet resembling a barrier still has its caller header.
 //
 //	 0                   1                   2                   3
 //	 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1

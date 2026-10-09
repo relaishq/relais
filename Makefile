@@ -17,7 +17,7 @@ BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 # Linker flags (populate pkg/buildinfo)
 LDFLAGS=-ldflags "-X github.com/relais/pkg/buildinfo.Version=$(VERSION) -X github.com/relais/pkg/buildinfo.Commit=$(COMMIT) -X github.com/relais/pkg/buildinfo.Date=$(BUILD_TIME)"
 
-.PHONY: all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-harness demo help
+.PHONY: all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-harness test-harness-timing demo help
 
 all: test build
 
@@ -81,11 +81,14 @@ test-streams: ## Run Redis Streams tests (non-cluster) in storage
 test-cluster: ## Run Redis Cluster integration tests (requires RELAIS_TEST_REDIS_CLUSTER_ADDRS)
 	$(GOTEST) -v -count=1 -run '^TestCluster' ./pkg/storage
 
-HARNESS_PKGS=./pkg/mediaworker/... ./pkg/relay/... ./pkg/sessionstore/... ./pkg/callharness/... ./cmd/echo-demo/...
+HARNESS_PKGS=./pkg/controlplane/... ./pkg/mediaworker/... ./pkg/relay/... ./pkg/sessionstore/... ./pkg/callharness/... ./cmd/echo-demo/...
 HARNESS_FLAGS ?=
 
 test-harness: ## Run the call harness (audio+video echo calls, direct and through the relay) with the race detector; HARNESS_FLAGS=-short for 5 s calls; full VP8 decode needs ffmpeg on PATH
 	$(GOTEST) -race -v -count=1 $(HARNESS_FLAGS) $(HARNESS_PKGS)
+
+test-harness-timing: ## Run the relay move and drain timing tests without the race detector, which enforce issue #6's 100 ms gap target (needs ffmpeg on PATH)
+	$(GOTEST) -v -count=1 -run '^TestRelay(PlannedHandover|DrainTenCalls)$$' ./pkg/callharness/
 
 DEMO_FLAGS ?=
 

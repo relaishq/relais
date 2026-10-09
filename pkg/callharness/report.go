@@ -118,6 +118,11 @@ type TrackReport struct {
 	// SequenceDiscontinuities counts packets whose sequence number does not
 	// follow the previous packet's.
 	SequenceDiscontinuities int
+
+	// DuplicatePackets and OutOfOrderPackets distinguish stale sender traffic
+	// from forward sequence gaps caused by lost packets.
+	DuplicatePackets  int
+	OutOfOrderPackets int
 	// UnmatchedPayloads counts audio packets whose payload is not one the
 	// caller sent, i.e. packets that are not an echo of the caller's media.
 	// Video is matched frame by frame instead (VideoReport.UnmatchedFrames).

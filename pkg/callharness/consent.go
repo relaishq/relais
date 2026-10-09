@@ -71,6 +71,7 @@ type stunObserver struct {
 
 	mu         sync.Mutex
 	unanswered map[[stunTransactionSize]byte]struct{}
+	inspect    func([]byte) // test-only raw caller observation; nil normally
 }
 
 // WriteTo sends a packet. A binding request counts as sent only once the
@@ -109,6 +110,11 @@ func (o *stunObserver) ReadFrom(p []byte) (int, net.Addr, error) {
 	if err != nil {
 		return n, addr, err
 	}
+	o.mu.Lock()
+	if o.inspect != nil {
+		o.inspect(p[:n])
+	}
+	o.mu.Unlock()
 	if txID, ok := stunMessage(p[:n], stunBindingSuccess); ok {
 		o.mu.Lock()
 		_, answers := o.unanswered[txID]

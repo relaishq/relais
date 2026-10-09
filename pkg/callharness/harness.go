@@ -45,8 +45,8 @@ type Options struct {
 	// default) owns its UDP socket; two or more share one UDP socket, calls
 	// start on the first, and Call.Handover moves a call between them.
 	// With Relay, each worker owns a private socket behind the relay, and a
-	// call picks its worker with CallOptions.Worker; Call.Handover is not
-	// available (moving calls through the relay is later work).
+	// call picks its worker with CallOptions.Worker. Call.Handover uses the
+	// control plane to transfer ownership and re-point the relay.
 	Workers int
 
 	// Relay runs every call through a relay with an in-memory session-owner

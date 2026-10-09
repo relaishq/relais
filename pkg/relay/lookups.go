@@ -28,7 +28,8 @@ const (
 // has been applied, binding requests for the session wait for it, and any
 // that arrive after the result was read get a fresh lookup once it has been
 // applied. Results for one session are therefore applied in order, and an
-// older result never overwrites a newer one.
+// older result never overwrites a newer one. A trusted move invalidates a
+// pending lookup by generation; its waiters retry against the new owner.
 //
 // What waits is bounded: at most maxQueued sessions, maxWaitersPerSession
 // requests per session, maxBytes of copied requests in all, and no request
@@ -48,7 +49,8 @@ type ownerLookups struct {
 
 // sessionLookup is one session's queued or running lookup.
 type sessionLookup struct {
-	waiters []waiter
+	waiters    []waiter
+	generation uint64
 }
 
 // waiter is one caller waiting for a session's owner.
@@ -150,15 +152,13 @@ func (l *ownerLookups) run(ctx context.Context) {
 // other lookup for it runs or applies meanwhile; requests that arrived
 // later are queued for a fresh lookup.
 func (l *ownerLookups) lookUp(ctx context.Context, sessionID string) {
-	owner, err := l.relay.owner(sessionID)
-
 	l.mu.Lock()
 	lookup := l.pending[sessionID]
-	waiters := lookup.waiters
-	lookup.waiters = nil
-	for _, w := range waiters {
-		l.bytes -= len(w.datagram)
-	}
+	generation := lookup.generation
+	l.mu.Unlock()
+	owner, err := l.relay.owner(sessionID)
+	l.mu.Lock()
+	nWaiters := len(lookup.waiters)
 	l.mu.Unlock()
 
 	if l.beforeApply != nil {
@@ -167,12 +167,33 @@ func (l *ownerLookups) lookUp(ctx context.Context, sessionID string) {
 	if ctx.Err() != nil {
 		return
 	}
-	l.relay.resolved(sessionID, owner, err, waiters)
+
+	l.relay.routeMu.Lock()
+	l.mu.Lock()
+	if lookup.generation != generation {
+		// Keep the bounded waiters, but discard the stale result. A fresh lookup
+		// follows the transferred lease; no history map grows with moved calls.
+		l.queue <- sessionID
+		l.mu.Unlock()
+		l.relay.routeMu.Unlock()
+		return
+	}
+	waiters := lookup.waiters[:nWaiters]
+	lookup.waiters = lookup.waiters[nWaiters:]
+	for _, w := range waiters {
+		l.bytes -= len(w.datagram)
+	}
+	l.mu.Unlock()
+	forwards := l.relay.resolved(sessionID, owner, err, waiters)
+	l.relay.routeMu.Unlock()
+	for _, w := range forwards {
+		l.relay.forward(w.datagram, w.caller, owner)
+	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if len(lookup.waiters) > 0 {
-		l.queue <- sessionID // never blocks, as in add
+		l.queue <- sessionID
 	} else {
 		delete(l.pending, sessionID)
 	}

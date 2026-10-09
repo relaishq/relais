@@ -64,6 +64,8 @@ type trackRecord struct {
 	gapEndedAt         time.Duration
 	lastSeq            uint16
 	seqDiscontinuities int
+	duplicatePackets   int
+	outOfOrderPackets  int
 	unmatchedPayloads  int
 	headers            []rtpMark // sequence number and timestamp of each arrival
 
@@ -282,8 +284,15 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 			track.gap = gap
 			track.gapEndedAt = at
 		}
-		if pkt.SequenceNumber != track.lastSeq+1 {
+		step := pkt.SequenceNumber - track.lastSeq
+		if step != 1 {
 			track.seqDiscontinuities++
+		}
+		if step == 0 {
+			track.duplicatePackets++
+		}
+		if step > 1<<15 {
+			track.outOfOrderPackets++
 		}
 	} else {
 		track.firstArrival = at
@@ -416,6 +425,8 @@ func (r *recorder) report() *Report {
 			MediaGapEndedAt:         track.gapEndedAt,
 			SequenceDiscontinuities: track.seqDiscontinuities,
 			UnmatchedPayloads:       track.unmatchedPayloads,
+			DuplicatePackets:        track.duplicatePackets,
+			OutOfOrderPackets:       track.outOfOrderPackets,
 		}
 		if track.video != nil {
 			video := track.video.VideoReport

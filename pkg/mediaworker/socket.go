@@ -428,6 +428,11 @@ type HandoverResult struct {
 	// socket held them and delivered them to the new owner, in order.
 	HeldPackets int
 
+	// HoldExpired warns that a relay hold auto-released before coordination
+	// finished. It is counted in relay HoldTimeouts and does not turn a
+	// completed resume into a failed move. Shared-socket moves leave it false.
+	HoldExpired bool
+
 	// RolledBack is set when the new owner could not resume the session
 	// and the old owner resumed it from the same bytes instead. Handover
 	// then returns an error, but the call goes on.

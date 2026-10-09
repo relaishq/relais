@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"net/netip"
 	"strconv"
 	"sync"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/pion/logging"
 
+	"github.com/relais/pkg/controlplane"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
@@ -37,6 +37,7 @@ type relayTopology struct {
 
 	mu    sync.Mutex
 	relay *relay.Relay
+	plane *controlplane.Plane
 }
 
 // startRelayedWorkers starts the relay and opts.Workers workers behind it.
@@ -53,6 +54,7 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 		return nil, fmt.Errorf("callharness: start relay: %w", err)
 	}
 	topology.relay = r
+	topology.plane = controlplane.New(r, topology.owners)
 
 	ws := &workers{relay: topology}
 	for range count {
@@ -70,8 +72,11 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 		}
 		ws.list = append(ws.list, worker)
 		r.AddWorker(worker.LocalAddr())
+		if err := topology.plane.Register(strconv.Itoa(len(ws.list)-1), worker.LocalAddr(), worker); err != nil {
+			return nil, errors.Join(err, ws.close())
+		}
 	}
-	ws.signaling = relayedSignaling(ws.list)
+	ws.signaling = topology.plane.Handler()
 
 	return ws, nil
 }
@@ -83,44 +88,6 @@ func (t *relayTopology) close() error {
 	defer t.mu.Unlock()
 
 	return t.relay.Close()
-}
-
-// relayedSignaling is the WHIP-style signaling endpoint of the relay
-// topology. With one worker it is that worker's own endpoint. With more, a
-// small front stands in for the control plane: an offer goes to the worker
-// that CallOptions.Worker names (the "worker" query parameter), and a
-// hang-up goes to whichever worker has the session.
-func relayedSignaling(list []*mediaworker.Worker) http.Handler {
-	if len(list) == 1 {
-		return list[0].SignalingHandler()
-	}
-
-	endpoints := make([]http.Handler, len(list))
-	for i, worker := range list {
-		endpoints[i] = worker.SignalingHandler()
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST "+mediaworker.CallsPath, func(rw http.ResponseWriter, r *http.Request) {
-		i, err := strconv.Atoi(r.URL.Query().Get(workerParam))
-		if err != nil || i < 0 || i >= len(endpoints) {
-			http.Error(rw, "unknown worker", http.StatusBadRequest)
-
-			return
-		}
-		endpoints[i].ServeHTTP(rw, r)
-	})
-	mux.HandleFunc("DELETE "+mediaworker.CallsPath+"/{id}", func(rw http.ResponseWriter, r *http.Request) {
-		for _, worker := range list {
-			if worker.EndSession(r.PathValue("id")) == nil {
-				rw.WriteHeader(http.StatusOK)
-
-				return
-			}
-		}
-		http.Error(rw, mediaworker.ErrUnknownSession.Error(), http.StatusNotFound)
-	})
-
-	return mux
 }
 
 // offerURL is where an offer for a worker goes. Only the relay topology
@@ -184,6 +151,7 @@ func (h *Harness) RestartRelay() (time.Duration, error) {
 		return 0, fmt.Errorf("callharness: restart relay: %w", err)
 	}
 	t.relay = r
+	t.plane.SetRelay(r)
 
 	return time.Since(down), nil
 }
