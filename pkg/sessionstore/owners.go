@@ -1,12 +1,20 @@
 // Package sessionstore keeps fenced session ownership outside the media
-// workers. Each ownership change advances an epoch, so an old worker can
+// workers, together with their resumable state blobs. Each ownership change
+// advances an epoch, so an old worker can
 // neither renew nor release its successor's lease. Transitions compare the
 // owner and epoch atomically; a later Redis store can use the same contract.
 // The session ID is the worker's ICE username fragment, read by the relay
 // from the caller's binding requests.
+//
+// PutState atomically checks an unexpired owner/epoch and copies the blob.
+// GetState returns an isolated copy; Transfer retains it. Matching Release
+// and expiry delete both lease and blob. Stale puts return ErrLeaseLost and
+// stale releases cannot delete a successor's state. Storage is in memory;
+// Redis and encryption are separate work.
 package sessionstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/netip"
@@ -46,6 +54,14 @@ type Owners interface {
 type Store interface {
 	Owners
 
+	// PutState atomically checks the current unexpired lease and replaces the
+	// resumable blob. Stale writers receive ErrLeaseLost. Bytes are copied.
+	PutState(ctx context.Context, lease Lease, state []byte) error
+
+	// GetState returns a copy of the latest blob for a live lease, or
+	// ErrNotFound when there is no snapshot. Transfer preserves the blob.
+	GetState(ctx context.Context, sessionID string) ([]byte, error)
+
 	// Claim creates a lease for an unknown session. Any existing record,
 	// including an expired one, returns ErrLeaseHeld. It never transfers a
 	// recorded lease to a new owner. Expired records are pruned by lookups
@@ -76,6 +92,7 @@ type Store interface {
 type Memory struct {
 	mu     sync.RWMutex
 	leases map[string]Lease
+	states map[string][]byte
 	epoch  uint64 // global; no per-session history survives release
 }
 
@@ -83,7 +100,7 @@ var _ Store = (*Memory)(nil)
 
 // NewMemory returns an empty in-memory fenced store.
 func NewMemory() *Memory {
-	return &Memory{leases: make(map[string]Lease)}
+	return &Memory{leases: make(map[string]Lease), states: make(map[string][]byte)}
 }
 
 func valid(id string, worker netip.AddrPort, ttl time.Duration) bool {
@@ -174,6 +191,7 @@ func (m *Memory) Get(ctx context.Context, id string) (Lease, error) {
 	lease, ok := m.leases[id]
 	if !ok || !time.Now().Before(lease.ExpiresAt) {
 		delete(m.leases, id)
+		delete(m.states, id)
 		return Lease{}, ErrNotFound
 	}
 
@@ -197,6 +215,7 @@ func (m *Memory) Release(ctx context.Context, lease Lease) error {
 
 	if current, ok := m.leases[lease.SessionID]; ok && same(current, lease) {
 		delete(m.leases, lease.SessionID)
+		delete(m.states, lease.SessionID)
 	}
 
 	return nil
@@ -216,6 +235,7 @@ func (m *Memory) ListByWorker(ctx context.Context, worker netip.AddrPort) ([]Lea
 	for _, lease := range m.leases {
 		if !now.Before(lease.ExpiresAt) {
 			delete(m.leases, lease.SessionID)
+			delete(m.states, lease.SessionID)
 			continue
 		}
 		if lease.Worker == worker {
@@ -224,4 +244,40 @@ func (m *Memory) ListByWorker(ctx context.Context, worker netip.AddrPort) ([]Lea
 	}
 
 	return leases, nil
+}
+
+// PutState implements Store. The lease check and blob write share a lock;
+// Redis can implement the same operation with one script.
+func (m *Memory) PutState(ctx context.Context, lease Lease, state []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.leases[lease.SessionID]
+	if !ok || !same(current, lease) || !time.Now().Before(current.ExpiresAt) {
+		return ErrLeaseLost
+	}
+	m.states[lease.SessionID] = bytes.Clone(state)
+	return nil
+}
+
+// GetState implements Store.
+func (m *Memory) GetState(ctx context.Context, id string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lease, ok := m.leases[id]
+	if !ok || !time.Now().Before(lease.ExpiresAt) {
+		delete(m.leases, id)
+		delete(m.states, id)
+		return nil, ErrNotFound
+	}
+	state, ok := m.states[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return bytes.Clone(state), nil
 }

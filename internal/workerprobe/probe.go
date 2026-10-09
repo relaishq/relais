@@ -4,9 +4,11 @@
 package workerprobe
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 )
 
 // Sender sends independently encrypted marked media on the old private leg,
@@ -20,7 +22,14 @@ type Capture func(string) (Sender, error)
 type registration struct {
 	capture         Capture
 	ignoredBarriers int
+	lifecycle       Lifecycle
+	beforeSnapshot  func(context.Context, string)
+	afterEcho       func(context.Context, string, []byte)
+	afterResume     func(string, bool)
 }
+
+// enabled keeps every production probe call off the process-wide mutex.
+var enabled atomic.Bool
 
 var registry struct {
 	sync.Mutex
@@ -37,6 +46,7 @@ func Enable() func() {
 		registry.workers = make(map[netip.AddrPort]*registration)
 	}
 	registry.users++
+	enabled.Store(true)
 	registry.Unlock()
 	var once sync.Once
 	return func() {
@@ -46,6 +56,7 @@ func Enable() func() {
 
 			registry.users--
 			if registry.users == 0 {
+				enabled.Store(false)
 				registry.workers = nil
 			}
 		})
@@ -54,6 +65,10 @@ func Enable() func() {
 
 // Register attaches a relay worker only while at least one test scope exists.
 func Register(addr netip.AddrPort, capture Capture) {
+	if !enabled.Load() {
+		return
+	}
+
 	registry.Lock()
 	defer registry.Unlock()
 
@@ -64,6 +79,10 @@ func Register(addr netip.AddrPort, capture Capture) {
 
 // Remove detaches a closed relay worker without affecting other workers.
 func Remove(addr netip.AddrPort) {
+	if !enabled.Load() {
+		return
+	}
+
 	registry.Lock()
 	defer registry.Unlock()
 
@@ -105,9 +124,159 @@ func IgnoreBarriers(addr netip.AddrPort) (func(), error) {
 
 // BarrierIgnored is inert unless Enable and IgnoreBarriers scopes are active.
 func BarrierIgnored(addr netip.AddrPort) bool {
+	if !enabled.Load() {
+		return false
+	}
+
 	addr = netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port())
 	registry.Lock()
 	defer registry.Unlock()
 	worker := registry.workers[addr]
 	return worker != nil && worker.ignoredBarriers > 0
+}
+
+// Lifecycle supplies crash/pause actions only to opt-in internal test scopes.
+type Lifecycle struct {
+	Kill          func() error
+	Pause         func(bool)
+	SnapshotReady func(string) bool
+}
+
+// RegisterLifecycle is inert outside Enable scopes.
+func RegisterLifecycle(addr netip.AddrPort, actions Lifecycle) {
+	if !enabled.Load() {
+		return
+	}
+
+	registry.Lock()
+	defer registry.Unlock()
+	if w := registry.workers[addr]; w != nil {
+		w.lifecycle = actions
+	}
+}
+
+// Kill closes a worker's sockets and discards its memory without a flush.
+func Kill(addr netip.AddrPort) error {
+	registry.Lock()
+	w := registry.workers[addr]
+	registry.Unlock()
+	if w == nil || w.lifecycle.Kill == nil {
+		return errors.New("workerprobe: no lifecycle probe")
+	}
+	return w.lifecycle.Kill()
+}
+
+// Pause stops packet processing, snapshots, renewal and heartbeats while
+// retaining memory and the private socket. Zombie can still send on it.
+func Pause(addr netip.AddrPort, paused bool) error {
+	registry.Lock()
+	w := registry.workers[addr]
+	registry.Unlock()
+	if w == nil || w.lifecycle.Pause == nil {
+		return errors.New("workerprobe: no lifecycle probe")
+	}
+	w.lifecycle.Pause(paused)
+	return nil
+}
+
+// SetBeforeSnapshot installs a cancellable gate just before a background copy.
+// A gate can reliably kill at the end of a snapshot interval, without putting
+// test hooks on the exported production worker API.
+func SetBeforeSnapshot(addr netip.AddrPort, hook func(context.Context, string)) error {
+	registry.Lock()
+	defer registry.Unlock()
+	w := registry.workers[addr]
+	if w == nil {
+		return errors.New("workerprobe: no snapshot probe")
+	}
+	w.beforeSnapshot = hook
+	return nil
+}
+
+// BeforeSnapshot runs the opt-in background gate outside the session lock.
+func BeforeSnapshot(addr netip.AddrPort, ctx context.Context, id string) {
+	if !enabled.Load() {
+		return
+	}
+
+	registry.Lock()
+	var hook func(context.Context, string)
+	if w := registry.workers[addr]; w != nil {
+		hook = w.beforeSnapshot
+	}
+	registry.Unlock()
+	if hook != nil {
+		hook(ctx, id)
+	}
+}
+
+// SetAfterEcho installs a packet gate after a successfully encrypted echo.
+// The packet is plaintext, borrowed for the duration of the callback. Gates
+// must return when ctx ends; Kill cancels ctx before waiting for packet locks.
+func SetAfterEcho(addr netip.AddrPort, hook func(context.Context, string, []byte)) error {
+	registry.Lock()
+	defer registry.Unlock()
+	w := registry.workers[addr]
+	if w == nil {
+		return errors.New("workerprobe: no packet probe")
+	}
+	w.afterEcho = hook
+	return nil
+}
+
+// AfterEcho is inert unless a packet gate was installed in a test scope.
+func AfterEcho(addr netip.AddrPort, ctx context.Context, id string, packet []byte) {
+	if !enabled.Load() {
+		return
+	}
+
+	registry.Lock()
+	var hook func(context.Context, string, []byte)
+	if w := registry.workers[addr]; w != nil {
+		hook = w.afterEcho
+	}
+	registry.Unlock()
+	if hook != nil {
+		hook(ctx, id, packet)
+	}
+}
+
+// SnapshotReady observes completion of the initial put without exposing the
+// blob or requesting a fresh snapshot. It is available only in Enable scopes.
+func SnapshotReady(addr netip.AddrPort, id string) bool {
+	registry.Lock()
+	var ready func(string) bool
+	if w := registry.workers[addr]; w != nil {
+		ready = w.lifecycle.SnapshotReady
+	}
+	registry.Unlock()
+	return ready != nil && ready(id)
+}
+
+// SetAfterResume observes whether takeover needs a PLI before its source SSRC
+// is learned. It is internal and unavailable outside Enable scopes.
+func SetAfterResume(addr netip.AddrPort, hook func(string, bool)) error {
+	registry.Lock()
+	defer registry.Unlock()
+	w := registry.workers[addr]
+	if w == nil {
+		return errors.New("workerprobe: no resume probe")
+	}
+	w.afterResume = hook
+	return nil
+}
+
+func AfterResume(addr netip.AddrPort, id string, pendingPLI bool) {
+	if !enabled.Load() {
+		return
+	}
+	registry.Lock()
+	var hook func(string, bool)
+	if w := registry.workers[addr]; w != nil {
+		hook = w.afterResume
+	}
+	registry.Unlock()
+	if hook != nil {
+		hook(id, pendingPLI)
+	}
 }

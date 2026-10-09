@@ -52,11 +52,11 @@ make fmt
 Relais is a distributed media server. Live WebRTC media runs in the media worker prototype; stored frames flow through a plugin-based pipeline:
 
 - **Media path (prototype)**:
-  - `pkg/mediaworker/` - Media worker: a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) with WHIP-style signaling; it currently echoes the caller's audio and video. A live session can be exported to bytes and resumed on another worker that shares the same UDP socket (`Socket.Handover`, a planned handover)
+  - `pkg/mediaworker/` - Media worker: a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) with WHIP-style signaling; it currently echoes the caller's audio and video. A live session can be exported to bytes and resumed on another worker that shares the same UDP socket (`Socket.Handover`, a planned handover); relayed workers also persist fenced snapshots for automatic crash takeover
   - `pkg/callharness/` - Call harness: the test seam for media; a Pion WebRTC client plays the caller in-process, and `Call.Handover` moves a call between workers
   - `pkg/relay/` - Relay: the one public UDP address; routes each caller's packets to the worker that owns the session, and holds them during a move
-  - `pkg/sessionstore/` - Session store: fenced ownership leases (owner, epoch, expiry); in-memory for now
-  - `pkg/controlplane/` - Control plane: places calls, moves live calls between workers behind the relay, drains workers, and serves `GET /status`
+  - `pkg/sessionstore/` - Session store: fenced ownership leases (owner, epoch, expiry) and resumable state blobs; in-memory for now
+  - `pkg/controlplane/` - Control plane: places calls, moves live calls between workers behind the relay, drains workers, detects heartbeat failures, takes over crashed workers' calls, and serves `GET /status`
   - `cmd/echo-demo` - Browser echo demo: two media workers on one socket, with a "Move call" button (`make demo`)
 
 - **Plugin runners**:

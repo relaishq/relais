@@ -1,8 +1,10 @@
 package workerprobe
 
 import (
+	"context"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -60,4 +62,25 @@ func TestBarrierSuppressionScopes(t *testing.T) {
 	require.False(t, BarrierIgnored(addr))
 	Remove(addr)
 	require.False(t, BarrierIgnored(addr), "closed workers leave no hook")
+}
+
+func TestDisabledHotProbesDoNotAcquireRegistryLock(t *testing.T) {
+	require.False(t, enabled.Load())
+	addr := netip.MustParseAddrPort("127.0.0.1:10004")
+	registry.Lock()
+	done := make(chan struct{})
+	go func() {
+		AfterEcho(addr, context.Background(), "id", nil)
+		BeforeSnapshot(addr, context.Background(), "id")
+		AfterResume(addr, "id", false)
+		BarrierIgnored(addr)
+		close(done)
+	}()
+	select {
+	case <-done:
+		registry.Unlock()
+	case <-time.After(time.Second):
+		registry.Unlock()
+		t.Fatal("disabled hot probe tried to take the global lock")
+	}
 }

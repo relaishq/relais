@@ -44,7 +44,7 @@ Live calls terminate on the media worker and do not use storage yet. The plugin 
 The system scales horizontally by:
 - Running multiple plugin instances
 - Using distributed storage
-- Running multiple media workers: sessions can move between workers on one UDP socket today, and separate workers can sit behind one relay address; moving sessions through the relay is planned
+- Running multiple media workers: sessions can move between workers on one UDP socket today, and separate workers can sit behind one relay address; planned moves and automatic crash takeovers through the relay preserve the caller's transport
 
 ## Security
 

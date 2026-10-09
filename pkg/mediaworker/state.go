@@ -11,7 +11,8 @@ import (
 // its exported form (snapshot, in handover.go) changes, so exported session
 // state can be checked before a worker resumes it. Version 3 is the first
 // exported form: the state plus the DTLS connection state.
-const sessionStateVersion = 3
+// Version 4 persists counter advance accumulated while a track is silent.
+const sessionStateVersion = 4
 
 // sessionState is the session state: everything needed to continue a session
 // on another media worker except the established DTLS connection state, kept
@@ -108,7 +109,10 @@ type trackState struct {
 	TSOffset    uint32
 
 	// Counters updated at encrypt time.
-	Packets uint64
+	// AdvanceSinceSend accumulates takeover margins until this track sends.
+	// It survives snapshots, including failed adoption and silent cameras.
+	AdvanceSinceSend uint32
+	Packets          uint64
 	// HighestSentIndex is the highest extended sequence number (rollover
 	// counter << 16 | sequence number) sent on the track.
 	HighestSentIndex uint64
@@ -159,6 +163,7 @@ func (t *trackState) noteSent(header *rtp.Header) {
 	}
 	t.LastTimestamp = header.Timestamp
 	t.Packets++
+	t.AdvanceSinceSend = 0
 }
 
 // noteInbound records a packet the worker has decrypted.

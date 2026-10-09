@@ -115,6 +115,7 @@ type fakeRelay struct {
 	failReverse bool
 	mu          sync.Mutex
 	moves       [][2]netip.AddrPort
+	forgotten   []string
 }
 
 func (r *fakeRelay) HoldSession(_ context.Context, _ string, _ netip.AddrPort) error {
@@ -331,4 +332,10 @@ func TestEndPrunesMissingSessionWithLiveLease(t *testing.T) {
 	require.Empty(t, p.calls)
 	_, err = p.store.Get(context.Background(), id)
 	require.ErrorIs(t, err, sessionstore.ErrNotFound)
+}
+
+func (r *fakeRelay) ForgetSession(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.forgotten = append(r.forgotten, id)
 }

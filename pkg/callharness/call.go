@@ -453,6 +453,7 @@ func (c *Call) Hangup(ctx context.Context) (*Report, error) {
 		iceUfrag(c.pc.CurrentRemoteDescription()) != c.remoteUfrag {
 		c.rec.iceRestartObserved()
 	}
+	takeoverErr := c.collectTakeovers(ctx)
 	c.rec.hangup()
 	remoteAddr := c.selectedRemoteAddr()
 
@@ -470,7 +471,7 @@ func (c *Call) Hangup(ctx context.Context) (*Report, error) {
 		}
 	}
 
-	return report, errors.Join(deleteErr, closeErr)
+	return report, errors.Join(takeoverErr, deleteErr, closeErr)
 }
 
 // close closes the PeerConnection, waits for the reader goroutines and
