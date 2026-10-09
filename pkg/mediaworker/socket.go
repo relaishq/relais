@@ -88,10 +88,19 @@ type Socket struct {
 	routes map[string]*route // by session ID
 	flows  map[netip.AddrPort]string
 	closed bool
+
+	// afterExport, when set by a test, runs during a handover between the
+	// old owner's export and the new owner's resume.
+	afterExport func()
 }
 
 // route is where a session's packets go.
 type route struct {
+	// op serializes the operations that decide which worker a session is
+	// on: a handover, and a hangup, which must reach the owner the handover
+	// leaves the session with.
+	op sync.Mutex
+
 	owner *socketPort // nil while the session is between owners
 	held  bool        // a handover holds the caller's packets in queue
 	queue []portPacket
@@ -176,14 +185,44 @@ func (s *Socket) Owner(sessionID string) *Worker {
 	return nil
 }
 
-// EndSession hangs up a session on whichever worker owns it.
+// EndSession hangs up a session on whichever worker owns it. A hangup that
+// arrives during a handover waits for it, then ends the session on the
+// worker the handover left it with.
 func (s *Socket) EndSession(sessionID string) error {
+	r := s.lockRoute(sessionID)
+	if r == nil {
+		return ErrUnknownSession
+	}
+	defer r.op.Unlock()
+
 	owner := s.Owner(sessionID)
 	if owner == nil {
 		return ErrUnknownSession
 	}
 
 	return owner.EndSession(sessionID)
+}
+
+// lockRoute returns a session's route with its op lock held, or nil if the
+// session has no route.
+func (s *Socket) lockRoute(sessionID string) *route {
+	for {
+		s.mu.RLock()
+		r := s.routes[sessionID]
+		s.mu.RUnlock()
+		if r == nil {
+			return nil
+		}
+
+		r.op.Lock()
+		s.mu.RLock()
+		current := s.routes[sessionID] == r
+		s.mu.RUnlock()
+		if current {
+			return r
+		}
+		r.op.Unlock() // the route was replaced while waiting; look again
+	}
 }
 
 // SignalingHandler is the WHIP-style signaling endpoint (see
@@ -416,7 +455,9 @@ type HandoverResult struct {
 //     the new owner.
 //
 // No caller packet is processed by both workers. If the new owner cannot
-// resume the session, the old owner resumes it from the same bytes.
+// resume the session, the old owner resumes it from the same bytes. A
+// hangup (EndSession) or another handover of the same session waits until
+// this one is done.
 func (s *Socket) Handover(sessionID string, to *Worker, opts ResumeOptions) (HandoverResult, error) {
 	start := time.Now()
 	result := HandoverResult{SessionID: sessionID}
@@ -425,6 +466,12 @@ func (s *Socket) Handover(sessionID string, to *Worker, opts ResumeOptions) (Han
 	if !ok || toPort.socket != s {
 		return result, errNotOnSocket
 	}
+	r := s.lockRoute(sessionID)
+	if r == nil {
+		return result, ErrUnknownSession
+	}
+	defer r.op.Unlock()
+
 	from, err := s.hold(sessionID, toPort)
 	if err != nil {
 		return result, err
@@ -450,6 +497,9 @@ func (s *Socket) Handover(sessionID string, to *Worker, opts ResumeOptions) (Han
 	}
 	exported := time.Now()
 	s.route(sessionID, nil)
+	if s.afterExport != nil {
+		s.afterExport()
+	}
 
 	result.StateBytes = len(state)
 	if _, err := to.ResumeSession(state, opts); err != nil {

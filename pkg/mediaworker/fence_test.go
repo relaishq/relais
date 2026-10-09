@@ -1,12 +1,19 @@
 package mediaworker
 
 import (
+	"context"
+	"crypto"
+	"crypto/x509"
 	"errors"
 	"net"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/pion/dtls/v3"
+	"github.com/pion/dtls/v3/pkg/crypto/fingerprint"
+	"github.com/pion/dtls/v3/pkg/crypto/selfsign"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,6 +93,87 @@ func TestDTLSWriteCannotOutlastExport(t *testing.T) {
 
 	require.NoError(t, <-written, "a fenced write fails silently")
 	require.Empty(t, receive(t, caller.conn), "a record written during the export reached the caller")
+}
+
+// TestHangupDuringHandoverEndsTheCall hangs a call up while a handover has
+// it between owners. The hangup must wait for the handover and end the call
+// on the worker that now owns it; the caller sees that worker's
+// close_notify. The test also checks that a completed handover sends the
+// caller nothing at all, though the old owner closed its DTLS connection.
+func TestHangupDuringHandoverEndsTheCall(t *testing.T) {
+	socket, workerA, workerB := newTestSocket(t, 30*time.Second)
+	call, client := dialDTLSCaller(t, workerA)
+
+	_, err := socket.Handover(call.id, workerB, ResumeOptions{})
+	require.NoError(t, err, "move A -> B")
+	require.Same(t, workerB, socket.Owner(call.id))
+	require.NoError(t, client.SetReadDeadline(time.Now().Add(silence)))
+	_, err = client.Read(make([]byte, receiveMTU))
+	require.True(t, isTimeout(err), "the caller received something from the move (a close_notify?): %v", err)
+
+	hungUp := make(chan error, 1)
+	socket.afterExport = func() {
+		go func() { hungUp <- socket.EndSession(call.id) }()
+		time.Sleep(100 * time.Millisecond) // the hangup arrives between owners
+	}
+	_, err = socket.Handover(call.id, workerA, ResumeOptions{})
+	require.NoError(t, err, "move B -> A")
+	require.NoError(t, <-hungUp, "hangup during the handover")
+
+	require.Nil(t, workerA.session(call.id), "session still on worker A after the hangup")
+	require.Nil(t, workerB.session(call.id), "session still on worker B after the hangup")
+	require.Nil(t, socket.Owner(call.id), "session still routed after the hangup")
+	require.ErrorIs(t, socket.EndSession(call.id), ErrUnknownSession)
+
+	require.NoError(t, client.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, err = client.Read(make([]byte, receiveMTU))
+	require.Error(t, err, "the caller's DTLS connection is still open")
+	require.False(t, isTimeout(err), "the caller saw no close_notify from the resumed worker")
+}
+
+// dialDTLSCaller sets up an established session on worker: a caller that
+// nominates its address and completes the DTLS handshake as the client,
+// with the certificate its offer's fingerprint names.
+func dialDTLSCaller(t *testing.T, worker *Worker) (*testCall, *dtls.Conn) {
+	t.Helper()
+
+	cert, err := selfsign.GenerateSelfSigned()
+	require.NoError(t, err)
+	parsed, err := x509.ParseCertificate(cert.Certificate[0])
+	require.NoError(t, err)
+	callerFingerprint, err := fingerprint.Fingerprint(parsed, crypto.SHA256)
+	require.NoError(t, err)
+	offer := strings.ReplaceAll(testOffer(testOfferAttrs{}),
+		strings.TrimSuffix(strings.Repeat("AB:", 32), ":"), callerFingerprint)
+
+	id, answerSDP, err := worker.CreateSession(context.Background(), offer)
+	require.NoError(t, err)
+	ufrag, pwd := answerCredentials(t, answerSDP)
+	call := &testCall{worker: worker, id: id, username: ufrag + ":" + testCallerUfrag, pwd: pwd}
+	caller := call.endpoint(t)
+	require.True(t, caller.check(t, true), "caller nominates its address")
+
+	client, err := dtls.ClientWithOptions(caller.conn, net.UDPAddrFromAddrPort(worker.MediaAddr()),
+		dtls.WithCertificates(cert),
+		dtls.WithSRTPProtectionProfiles(dtls.SRTP_AEAD_AES_128_GCM),
+		dtls.WithExtendedMasterSecret(dtls.RequireExtendedMasterSecret),
+		dtls.WithInsecureSkipVerify(true))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, client.HandshakeContext(ctx))
+
+	sess := worker.session(id)
+	require.NotNil(t, sess)
+	require.Eventually(t, func() bool {
+		sess.mu.Lock()
+		defer sess.mu.Unlock()
+
+		return sess.srtpIn != nil
+	}, 5*time.Second, 10*time.Millisecond, "worker established the session")
+
+	return call, client
 }
 
 // sendAndReceive writes msg to the endpoint's address through port, and
