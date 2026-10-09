@@ -23,10 +23,10 @@ const (
 	// candidate: type preference 126, local preference 65535, component 1.
 	hostCandidatePriority = 126<<24 | 65535<<8 | (256 - 1)
 
-	// consentTimeout ends a session when the caller stops sending
-	// authenticated connectivity checks (RFC 7675 consent freshness). Callers
-	// send one every few seconds.
-	consentTimeout = 30 * time.Second
+	// defaultConsentTimeout ends a session when the caller stops sending
+	// authenticated connectivity checks from its nominated address (RFC 7675
+	// consent freshness). Callers send one every few seconds.
+	defaultConsentTimeout = 30 * time.Second
 )
 
 var errWrongUfrag = errors.New("mediaworker: STUN USERNAME does not match the caller's ICE ufrag")
@@ -75,7 +75,11 @@ func (w *Worker) handleSTUN(raw []byte, from netip.AddrPort) {
 
 // answerBindingRequest checks a binding request against the session's ICE
 // credentials and builds the success response. A request with USE-CANDIDATE
-// nominates the address it came from. Every valid request refreshes consent.
+// nominates the address it came from; a later one from another address
+// re-nominates, and the worker moves the session there. Consent is per
+// candidate pair (RFC 7675), so only valid requests from the nominated
+// address refresh it. Valid requests from other addresses are answered but
+// do not keep the session alive.
 //
 // The caller is the controlling agent (the answer says a=ice-lite), so role
 // attributes are not checked.
@@ -96,11 +100,17 @@ func (s *session) answerBindingRequest(msg *stun.Message, remoteUfrag string, fr
 	}
 
 	if msg.Contains(stun.AttrUseCandidate) && creds.RemoteAddr != from {
+		if creds.RemoteAddr.IsValid() {
+			s.log.Debugf("session %s: caller re-nominated %s (was %s)", s.id, from, creds.RemoteAddr)
+		} else {
+			s.log.Debugf("session %s: caller nominated %s", s.id, from)
+		}
 		creds.RemoteAddr = from
-		s.log.Debugf("session %s: caller nominated %s", s.id, from)
 		s.nominatedOnce.Do(func() { close(s.nominated) })
 	}
-	s.consent.Reset(consentTimeout)
+	if from == creds.RemoteAddr {
+		s.consent.Reset(s.worker.cfg.consentTimeout)
+	}
 
 	response, err := stun.Build(
 		stun.NewTransactionIDSetter(msg.TransactionID),

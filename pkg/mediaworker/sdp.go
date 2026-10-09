@@ -100,7 +100,7 @@ func parseOffer(raw string) (*remoteOffer, error) {
 		offer.media = append(offer.media, media)
 
 		spec, supported := supportedCodecs[media.kind]
-		if !supported || offer.accepted(media.kind) != nil || md.MediaName.Port.Value == 0 || !isSendRecv(md) {
+		if !supported || offer.accepted(media.kind) != nil || md.MediaName.Port.Value == 0 || !isSendRecv(&desc, md) {
 			continue
 		}
 		picked, ok := findCodec(md, spec)
@@ -364,17 +364,34 @@ func findCodec(md *sdp.MediaDescription, spec codecSpec) (codec, bool) {
 	return codec{}, false
 }
 
-// isSendRecv reports whether an offered m-line is sendrecv (the default when
-// no direction attribute is present). Echo needs both directions.
-func isSendRecv(md *sdp.MediaDescription) bool {
-	for _, attr := range md.Attributes {
+// isSendRecv reports whether an offered m-line is sendrecv. Echo needs both
+// directions.
+func isSendRecv(desc *sdp.SessionDescription, md *sdp.MediaDescription) bool {
+	return direction(desc, md) == sdp.AttrKeySendRecv
+}
+
+// direction resolves an offered m-line's direction (RFC 8866 section 6.7):
+// its own direction attribute, else the session-level one, else sendrecv.
+func direction(desc *sdp.SessionDescription, md *sdp.MediaDescription) string {
+	if dir, ok := directionAttribute(md.Attributes); ok {
+		return dir
+	}
+	if dir, ok := directionAttribute(desc.Attributes); ok {
+		return dir
+	}
+
+	return sdp.AttrKeySendRecv
+}
+
+func directionAttribute(attrs []sdp.Attribute) (string, bool) {
+	for _, attr := range attrs {
 		switch attr.Key {
-		case sdp.AttrKeySendOnly, sdp.AttrKeyRecvOnly, sdp.AttrKeyInactive:
-			return false
+		case sdp.AttrKeySendRecv, sdp.AttrKeySendOnly, sdp.AttrKeyRecvOnly, sdp.AttrKeyInactive:
+			return attr.Key, true
 		}
 	}
 
-	return true
+	return "", false
 }
 
 // bundleGroup returns the MIDs of the offer's BUNDLE group that contains

@@ -199,19 +199,27 @@ func (r *recorder) srtpError(msg string) {
 	}
 }
 
-// sent records a frame the caller sent: an Opus packet or a VP8 frame.
-func (r *recorder) sent(kind string, frame []byte, keyframe bool) {
+// sending registers a frame the caller is about to send (an Opus packet or a
+// VP8 frame), so its echo is matched even when it arrives before the write
+// returns. The first video frame's send time is taken here for the same
+// reason: the echo's decode time is measured against it.
+func (r *recorder) sending(kind string, frame []byte) {
 	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.sentFrames[kind][string(frame)] = struct{}{}
+	if kind == kindVideo && r.sentVideo.Frames == 0 {
+		r.firstVideoSentAt = r.since(now)
+	}
+}
 
+// sent counts a frame the caller has written.
+func (r *recorder) sent(kind string, keyframe bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	track := &r.sentAudio
 	if kind == kindVideo {
 		track = &r.sentVideo
-		if track.Frames == 0 {
-			r.firstVideoSentAt = r.since(now)
-		}
 	}
 	track.Frames++
 	if keyframe {

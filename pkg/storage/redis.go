@@ -691,14 +691,16 @@ func (s *RedisStorage) PutFrame(ctx context.Context, frame Frame) error {
 			}
 			xaddSess := &redis.XAddArgs{Stream: s.streamKey(frame.SessionID), ID: "*", Values: sessFields}
 			if s.streamMaxLen > 0 {
-				xaddSess.MaxLenApprox = s.streamMaxLen
+				xaddSess.MaxLen = s.streamMaxLen
+				xaddSess.Approx = true
 			}
 			pipe.XAdd(ctx, xaddSess)
 			// Per-track stream
 			if frame.TrackID != "" {
 				xaddTr := &redis.XAddArgs{Stream: s.streamTrackKey(frame.SessionID, frame.TrackID), ID: "*", Values: sessFields}
 				if s.streamMaxLen > 0 {
-					xaddTr.MaxLenApprox = s.streamMaxLen
+					xaddTr.MaxLen = s.streamMaxLen
+					xaddTr.Approx = true
 				}
 				pipe.XAdd(ctx, xaddTr)
 			}

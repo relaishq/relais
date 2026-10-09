@@ -12,15 +12,22 @@ import (
 const sessionStateVersion = 2
 
 // sessionState is the session state: everything needed to continue a session
-// on another media worker, kept as one plain value. Its fields are exported
-// so the value serializes with encoding/json or encoding/gob.
+// on another media worker except the established DTLS connection state, kept
+// as one plain value. Its fields are exported so the value serializes with
+// encoding/json or encoding/gob.
 //
-// The live transport objects on a session are caches built from this value:
+// The established DTLS connection state (master secret, cipher suite, epochs
+// and record sequence numbers) is deliberately not held here. It lives in the
+// dtls.Conn, which updates it on every record, and is exported only at
+// snapshot time: issue #4 marshals it with the conn's ConnectionState and
+// dtls.State.MarshalBinary, and a resuming worker rebuilds the connection
+// with dtls.ResumeWithOptions. This value holds everything else.
+//
+// The live transport objects on a session are caches built from this value
+// (plus, for DTLS, that exported connection state):
 //
 //   - the DTLS connection, established by the handshake today and rebuilt
-//     with dtls.ResumeWithOptions later. Its connection state (keys, epochs,
-//     sequence numbers) is the one part that is not copied here; it stays in
-//     the dtls.Conn until a snapshot marshals it.
+//     with dtls.ResumeWithOptions in issue #4.
 //   - the SRTP contexts, which are re-derived from DTLS keying material and
 //     can be primed with the indexes below through SetROC and SetIndex.
 type sessionState struct {
@@ -44,7 +51,9 @@ type iceState struct {
 	RemotePwd   string
 
 	// RemoteAddr is the caller address nominated with USE-CANDIDATE. The
-	// worker sends everything there. It is the zero value until nomination.
+	// worker sends everything there, and only checks from there refresh
+	// consent. A USE-CANDIDATE from another address re-nominates. It is the
+	// zero value until nomination.
 	RemoteAddr netip.AddrPort
 }
 

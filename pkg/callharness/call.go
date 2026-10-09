@@ -329,12 +329,13 @@ func (c *Call) sendAudio(ctx context.Context, end time.Time) error {
 		if err != nil {
 			return err
 		}
-		// Record before writing: the echo can come back over loopback before
-		// WriteSample returns.
-		c.rec.sent(kindAudio, frame, false)
+		// The echo can arrive before WriteSample returns, so the frame is
+		// registered first; it is counted once the write succeeds.
+		c.rec.sending(kindAudio, frame)
 		if err := c.audio.WriteSample(media.Sample{Data: frame, Duration: frameDuration}); err != nil {
 			return fmt.Errorf("callharness: send audio: %w", err)
 		}
+		c.rec.sent(kindAudio, false)
 
 		select {
 		case <-ctx.Done():
@@ -368,10 +369,11 @@ func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
 		if err != nil {
 			return err
 		}
-		c.rec.sent(kindVideo, frame, keyframe) // before writing, as for audio
+		c.rec.sending(kindVideo, frame) // before writing, as for audio
 		if err := c.video.WriteSample(media.Sample{Data: frame, Duration: src.frameDuration}); err != nil {
 			return fmt.Errorf("callharness: send video: %w", err)
 		}
+		c.rec.sent(kindVideo, keyframe)
 
 		select {
 		case <-ctx.Done():
