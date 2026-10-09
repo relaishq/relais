@@ -38,6 +38,10 @@ type CallOptions struct {
 	// H265 and AV1, each with RTX), RED, ULPFEC, telephone-event and comfort
 	// noise, extra RTP header extensions, and an RTX ssrc-group for video.
 	BrowserLikeOffer bool
+
+	// Worker is the index of the media worker that takes the call (see
+	// Options.Workers); 0 is the first.
+	Worker int
 }
 
 // KeyframeRequest is an RTCP message that asks a sender for a keyframe.
@@ -152,7 +156,7 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 
 	call.offer = pc.LocalDescription().SDP
 	rec.offerAnswerExchange()
-	answer, resourceURL, err := h.postOffer(ctx, call.offer)
+	answer, resourceURL, err := h.postOffer(ctx, opts.Worker, call.offer)
 	if err != nil {
 		return call, err
 	}
@@ -432,6 +436,7 @@ func (c *Call) Hangup(ctx context.Context) (*Report, error) {
 		c.rec.iceRestartObserved()
 	}
 	c.rec.hangup()
+	remoteAddr := c.selectedRemoteAddr()
 
 	deleteErr := c.harness.deleteCall(ctx, c.resourceURL)
 	closeErr := c.close()
@@ -439,6 +444,7 @@ func (c *Call) Hangup(ctx context.Context) (*Report, error) {
 	report := c.rec.report()
 	report.Offer = c.offer
 	report.Answer = c.answer
+	report.RemoteAddr = remoteAddr
 	for i := range report.Tracks {
 		if video := report.Tracks[i].Video; video != nil {
 			frames, size := c.rec.decodeInput(i)
