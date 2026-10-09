@@ -780,3 +780,19 @@ func parseBindingRequest(pkt []byte) (string, [stun.TransactionIDSize]byte, bool
 func unmap(addr netip.AddrPort) netip.AddrPort {
 	return netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port())
 }
+
+// ForgetSession fences all cached routes for a call whose lease was released.
+// Pending lookups are invalidated too, so an old store answer cannot resurrect
+// the lost call. Call this after releasing the lease.
+func (r *Relay) ForgetSession(id string) {
+	r.forwardMu.Lock()
+	defer r.forwardMu.Unlock()
+	r.routeMu.Lock()
+	defer r.routeMu.Unlock()
+	r.lookups.mu.Lock()
+	if lookup := r.lookups.pending[id]; lookup != nil {
+		lookup.generation++
+	}
+	r.lookups.mu.Unlock()
+	r.flows.forgetSession(id)
+}

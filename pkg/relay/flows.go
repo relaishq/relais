@@ -469,3 +469,17 @@ func parseBindingSuccess(pkt []byte) ([stun.TransactionIDSize]byte, bool) {
 
 	return txID, true
 }
+
+// forgetSession removes every confirmed or pending route for a lost call.
+func (t *flowTable) forgetSession(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, c := range t.sessions[id] {
+		if c.candidate != nil && c.candidate.session == id {
+			t.dropCandidate(c)
+		}
+		if c.route != nil && c.route.session == id {
+			t.dropRoute(c)
+		}
+	}
+}

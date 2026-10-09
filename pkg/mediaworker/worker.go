@@ -13,10 +13,10 @@
 // sequence numbers and timestamps. It relays the caller's keyframe requests
 // for the echoed video back to the caller's video source.
 //
-// The worker does not use webrtc.PeerConnection on purpose. Later work must
-// export a session's state (ICE credentials, DTLS connection state, SRTP
-// rollover counters, outbound track counters) to a session store and resume
-// it on another worker. A PeerConnection keeps that state private, so each
+// The worker does not use webrtc.PeerConnection on purpose. It snapshots
+// session state (ICE credentials, DTLS connection state, SRTP rollover
+// counters, outbound track counters) to a fenced session store and resumes
+// it on another worker after a planned move or crash takeover. A PeerConnection keeps that state private, so each
 // session here keeps it in one plain value; see sessionState.
 package mediaworker
 
@@ -27,6 +27,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/logging"
@@ -55,10 +56,25 @@ var (
 	// ErrUnknownSession is returned when a session ID does not exist on this
 	// media worker.
 	ErrUnknownSession = errors.New("mediaworker: unknown session")
+
+	// ErrRejoinRequired asks a returned worker to discard its old sessions
+	// before acknowledging a second heartbeat. Until that acknowledgment the
+	// control plane keeps it dead and excludes it from selections.
+	ErrRejoinRequired = errors.New("mediaworker: rejoin requires empty sessions")
 )
+
+// Heartbeats is the worker-to-control-plane liveness boundary. The private
+// worker address identifies a registration; later this can be a network call.
+type Heartbeats interface{ Heartbeat(netip.AddrPort) error }
 
 // Config configures a media worker.
 type Config struct {
+	// SnapshotInterval defaults to 100 ms. Encoding and storage run outside
+	// the session lock, on a background goroutine, never on the packet path.
+	SnapshotInterval time.Duration
+	// HeartbeatInterval defaults to 100 ms; StartHeartbeats sets the receiver.
+	HeartbeatInterval time.Duration
+
 	// ListenAddr is the local UDP address of the worker's media socket. All
 	// sessions on the worker share this one socket, so the IP must be
 	// specific (not 0.0.0.0 or ::). Without a relay, its address is the
@@ -121,10 +137,12 @@ type Worker struct {
 	// localAddr is the UDP socket the worker reads: its own or the shared
 	// Socket's. mediaAddr is where callers send: localAddr, or behind a
 	// relay the relay's public address.
-	localAddr netip.AddrPort
-	mediaAddr netip.AddrPort
-	readDone  chan struct{}
-	stopRenew chan struct{}
+	localAddr        netip.AddrPort
+	mediaAddr        netip.AddrPort
+	readDone         chan struct{}
+	stopRenew        chan struct{}
+	paused           atomic.Bool
+	heartbeatStarted bool
 
 	mu       sync.Mutex
 	sessions map[string]*session         // by session ID, which is also the worker's ICE ufrag
@@ -135,6 +153,12 @@ type Worker struct {
 
 // New starts a media worker listening on cfg.ListenAddr.
 func New(cfg Config) (*Worker, error) {
+	if cfg.SnapshotInterval <= 0 {
+		cfg.SnapshotInterval = 100 * time.Millisecond
+	}
+	if cfg.HeartbeatInterval <= 0 {
+		cfg.HeartbeatInterval = 100 * time.Millisecond
+	}
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = "127.0.0.1:0"
 	}
@@ -216,6 +240,10 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 	}
 	if cfg.Relay != nil {
 		workerprobe.Register(localAddr, worker.captureZombie)
+		workerprobe.RegisterLifecycle(localAddr, workerprobe.Lifecycle{
+			Kill: worker.kill, Pause: worker.paused.Store,
+			SnapshotReady: func(id string) bool { s := worker.session(id); return s != nil && s.snapshotStored.Load() },
+		})
 	}
 	go worker.readLoop()
 	if cfg.Relay != nil {
@@ -279,8 +307,9 @@ func (w *Worker) CreateSession(ctx context.Context, offerSDP string) (sessionID,
 		return "", "", ErrClosed
 	}
 	w.sessions[sess.id] = sess
-	w.running.Add(1)
+	w.running.Add(2)
 	w.mu.Unlock()
+	go func() { defer w.running.Done(); sess.snapshotLoop() }()
 
 	go func() {
 		defer w.running.Done()
@@ -348,6 +377,9 @@ func (w *Worker) readLoop() {
 			}
 			w.log.Debugf("read: %v", err)
 
+			continue
+		}
+		if w.paused.Load() {
 			continue
 		}
 		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
@@ -463,6 +495,9 @@ func (w *Worker) renewLeases() {
 		case <-w.stopRenew:
 			return
 		case <-ticker.C:
+			if w.paused.Load() {
+				continue
+			}
 			w.mu.Lock()
 			sessions := make([]*session, 0, len(w.sessions))
 			for _, sess := range w.sessions {
@@ -513,5 +548,104 @@ func validateRelayConfig(cfg *RelayConfig) error {
 		return errors.New("mediaworker: Relay.Owners is required")
 	default:
 		return nil
+	}
+}
+
+// StartHeartbeats connects this worker to the control plane once registered.
+// Calling it twice or after Close is harmless. Closing/killing the worker
+// stops heartbeats alongside lease renewal.
+func (w *Worker) StartHeartbeats(receiver Heartbeats) {
+	w.mu.Lock()
+	if w.closed || w.heartbeatStarted {
+		w.mu.Unlock()
+		return
+	}
+	w.heartbeatStarted = true
+	w.running.Add(1)
+	w.mu.Unlock()
+	w.heartbeat(receiver)
+	go func() {
+		defer w.running.Done()
+		ticker := time.NewTicker(w.cfg.HeartbeatInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-w.stopRenew:
+				return
+			case <-ticker.C:
+				if !w.paused.Load() {
+					w.heartbeat(receiver)
+				}
+			}
+		}
+	}()
+}
+
+// kill is reachable only through the internal harness probe. Close the
+// snapshot writers first, then close the socket and silently discard every
+// session. No export, final put,
+// release or close_notify reaches the caller, as with process death.
+func (w *Worker) kill() error {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		return nil
+	}
+	w.closed = true
+	close(w.stopRenew)
+	sessions := make([]*session, 0, len(w.sessions))
+	for _, s := range w.sessions {
+		sessions = append(sessions, s)
+	}
+	w.mu.Unlock()
+	for _, s := range sessions {
+		s.fenced.Store(true)
+		s.cancel() // releases gates and cancels in-flight puts before socket close
+	}
+	// Synchronize with each writer so no put can slip past socket shutdown.
+	for _, s := range sessions {
+		s.snapshotMu.Lock()
+		s.snapshotMu.Unlock() //nolint:staticcheck // Synchronize with a cancelled writer; no mutation is needed.
+	}
+	err := w.conn.Close()
+	for _, s := range sessions {
+		s.close()
+	}
+	w.running.Wait()
+	<-w.readDone
+	workerprobe.Remove(w.localAddr)
+	return err
+}
+
+// heartbeat performs the rejoin acknowledgment before becoming selectable.
+// A returning worker's old sessions may not have observed their lost leases
+// yet. Fence them synchronously; a subsequent move back to this address must
+// never encounter their old contexts or errSessionExists.
+func (w *Worker) heartbeat(receiver Heartbeats) {
+	w.mu.Lock()
+	closed := w.closed
+	w.mu.Unlock()
+	if closed {
+		return
+	}
+	if !errors.Is(receiver.Heartbeat(w.localAddr), ErrRejoinRequired) {
+		return
+	}
+	w.mu.Lock()
+	sessions := make([]*session, 0, len(w.sessions))
+	for _, s := range w.sessions {
+		sessions = append(sessions, s)
+	}
+	w.mu.Unlock()
+	for _, s := range sessions {
+		s.fenced.Store(true)
+		s.cancel()
+		s.close()
+	}
+	w.mu.Lock()
+	closed = w.closed
+	w.mu.Unlock()
+	if !closed {
+		_ = receiver.Heartbeat(w.localAddr)
 	}
 }

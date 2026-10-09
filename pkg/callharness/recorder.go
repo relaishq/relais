@@ -36,6 +36,7 @@ type recorder struct {
 	renegotiations       int
 	iceRestarts          int
 	decryptionFailures   DecryptionFailures
+	decryptFailureTimes  []time.Duration
 
 	// What the caller sent, by kind. sentFrames holds every distinct frame
 	// (an Opus packet or a VP8 frame) so echoes can be matched to it.
@@ -199,6 +200,7 @@ func (r *recorder) srtpError(msg string) {
 	if r.hungUp {
 		return
 	}
+	r.decryptFailureTimes = append(r.decryptFailureTimes, time.Since(r.start))
 	switch {
 	case strings.Contains(msg, "failed to verify auth tag"):
 		r.decryptionFailures.AuthTag++

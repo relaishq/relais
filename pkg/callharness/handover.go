@@ -161,6 +161,8 @@ func (c *Call) sessionID() (string, error) {
 
 // moveRecord is one handover the harness made.
 type moveRecord struct {
+	kind       string
+	detection  time.Duration
 	from, to   int
 	start, end time.Time
 	result     mediaworker.HandoverResult
@@ -190,12 +192,18 @@ func (r *recorder) move(record moveRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.moves = append(r.moves, record)
+	// Automatic events are collected at hangup, after any later planned move
+	// was recorded. Keep the report and consent window in event order.
+	sort.SliceStable(r.moves, func(i, j int) bool { return r.moves[i].start.Before(r.moves[j].start) })
 }
 
 // MoveReport is one planned handover as the caller observed it, plus what
 // the system reported about it.
 type MoveReport struct {
-	From, To int // worker indexes
+	Kind                          string        // "move" or "takeover"
+	DetectionTime                 time.Duration // failure action to control-plane detection
+	DecryptionFailuresAfterResume int
+	From, To                      int // worker indexes
 
 	// Start and End bracket the handover call, as offsets from dialing.
 	Start, End time.Duration
@@ -272,17 +280,36 @@ func (r *recorder) moveReports() []MoveReport {
 	reports := make([]MoveReport, 0, len(r.moves))
 	for _, move := range r.moves {
 		report := MoveReport{
-			From:   move.from,
-			To:     move.to,
-			Start:  r.since(move.start),
-			End:    r.since(move.end),
-			Result: move.result,
+			Kind:          move.kind,
+			DetectionTime: move.detection,
+			From:          move.from,
+			To:            move.to,
+			Start:         r.since(move.start),
+			End:           r.since(move.end),
+			Result:        move.result,
+		}
+		if report.Kind == "" {
+			report.Kind = "move"
 		}
 		if move.err != nil {
 			report.Error = move.err.Error()
 		}
 		for _, track := range r.tracks {
 			report.Tracks = append(report.Tracks, track.aroundMove(report.Start, report.End))
+		}
+		firstResumed := time.Duration(0)
+		for _, track := range r.tracks {
+			i := sort.Search(len(track.arrivals), func(i int) bool { return track.arrivals[i] > report.End })
+			if i < len(track.arrivals) && (firstResumed == 0 || track.arrivals[i] < firstResumed) {
+				firstResumed = track.arrivals[i]
+			}
+		}
+		if firstResumed != 0 {
+			for _, at := range r.decryptFailureTimes {
+				if at >= firstResumed {
+					report.DecryptionFailuresAfterResume++
+				}
+			}
 		}
 		reports = append(reports, report)
 	}
@@ -411,7 +438,7 @@ func (r *recorder) consentEnd() time.Duration {
 func writeHandoverSummary(b *strings.Builder, r *Report) {
 	for i, move := range r.Moves {
 		res := move.Result
-		fmt.Fprintf(b, "  move %d:           worker %d -> %d at %s", i+1, move.From, move.To, ms(move.Start))
+		fmt.Fprintf(b, "  %s %d: worker %d -> %d at %s (detection %s, decrypt failures after resume %d)", move.Kind, i+1, move.From, move.To, ms(move.Start), ms(move.DetectionTime), move.DecryptionFailuresAfterResume)
 		if move.Error != "" {
 			fmt.Fprintf(b, " FAILED (rolled back: %t): %s\n", res.RolledBack, move.Error)
 		} else {

@@ -10,6 +10,7 @@ import (
 	"github.com/pion/dtls/v3"
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
+	"github.com/relais/internal/workerprobe"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -45,9 +46,73 @@ var (
 // waits for nothing, so it is quick; the bound only guards against a hang.
 const resumeTimeout = 5 * time.Second
 
-// ResumeOptions shape how a resumed session continues the worker's outbound
-// streams.
+// ErrSequenceBudgetExhausted rejects an RTP advance whose retained margins
+// plus the caller's reserved outage gap would reach the half sequence space.
+// It also rejects an unsent track's first-index wrap. Neither case is safely
+// resumable; the plane records a definitive clean loss.
+var ErrSequenceBudgetExhausted = errors.New("mediaworker: sequence budget exhausted")
+
+// SequenceGapReserve reserves 10,000 sequence numbers for the caller's own
+// packets during an outage: a 2 s recovery target at up to 5,000 packets/s per
+// outbound track. This budget is additional to retained takeover margins.
+// Higher rates or longer outages require a larger reserve and fewer retries.
+// The 8192 margin separately exceeds the conservative 5500 source indexes
+// potentially used after a stale snapshot at 10,000 packets/s for 550 ms.
+const SequenceGapReserve = 10000
+
+const maxRetainedSequenceAdvance = (1 << 15) - SequenceGapReserve - 1
+
+// SequenceResumeAttempts derives the remaining safe margin applications from
+// every negotiated track in the actual resumable state. The control plane
+// caps its target retries by this minimum; ResumeSession rechecks the guard.
+func SequenceResumeAttempts(data []byte, margin uint16) (int, error) {
+	snap, err := decodeSnapshot(data)
+	if err != nil {
+		return 0, err
+	}
+	return snap.State.sequenceResumeAttempts(margin)
+}
+
+func (state *sessionState) sequenceResumeAttempts(margin uint16) (int, error) {
+	if margin == 0 {
+		return 0, nil
+	}
+	attempts := maxRetainedSequenceAdvance / int(margin)
+	for _, track := range []*trackState{&state.Audio, &state.Video} {
+		if !track.negotiated() {
+			continue
+		}
+		if err := track.checkSequenceMargin(margin); err != nil {
+			return 0, err
+		}
+		remaining := maxRetainedSequenceAdvance - int(track.AdvanceSinceSend)
+		if track.Packets == 0 {
+			remaining = min(remaining, 0xffff-int(track.InitialSeq))
+		}
+		attempts = min(attempts, remaining/int(margin))
+	}
+	if attempts == 0 {
+		return 0, ErrSequenceBudgetExhausted
+	}
+	return attempts, nil
+}
+
+func (track *trackState) checkSequenceMargin(margin uint16) error {
+	if !track.negotiated() || margin == 0 {
+		return nil
+	}
+	if uint64(track.AdvanceSinceSend)+uint64(margin)+SequenceGapReserve >= 1<<15 ||
+		track.Packets == 0 && uint64(track.InitialSeq)+uint64(margin) > 0xffff {
+		return ErrSequenceBudgetExhausted
+	}
+	return nil
+}
+
+// ResumeOptions shape how a resumed session continues outbound streams.
 type ResumeOptions struct {
+	// Context optionally bounds rebuilding and persisting the resumed transport.
+	// The adopted session has its own lifetime and outlives this context.
+	Context context.Context
 	// Lease is mandatory behind a relay: the control plane transfers it before resume.
 	Lease sessionstore.Lease
 
@@ -109,9 +174,21 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 	if opts.SequenceMargin >= 1<<15 {
 		return "", fmt.Errorf("mediaworker: sequence margin %d is not below 2^15", opts.SequenceMargin)
 	}
+	parent := opts.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	if err := parent.Err(); err != nil {
+		return "", err
+	}
 	snap, err := decodeSnapshot(state)
 	if err != nil {
 		return "", err
+	}
+	if opts.SequenceMargin > 0 {
+		if _, err := snap.State.sequenceResumeAttempts(opts.SequenceMargin); err != nil {
+			return "", err
+		}
 	}
 	if w.session(snap.State.ID) != nil {
 		return "", errSessionExists
@@ -121,7 +198,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 		if opts.Lease.SessionID != snap.State.ID || opts.Lease.Worker != w.localAddr {
 			return "", sessionstore.ErrLeaseLost
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), ownershipTimeout)
+		ctx, cancel := context.WithTimeout(parent, ownershipTimeout)
 		lease, err := w.cfg.Relay.Owners.Renew(ctx, opts.Lease, w.cfg.Relay.LeaseTTL)
 		cancel()
 		if err != nil {
@@ -138,12 +215,30 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 
 		return "", fmt.Errorf("mediaworker: resume session %s: %w", sess.id, err)
 	}
+	if err := sess.persistSnapshotContext(parent); err != nil {
+		sess.fenced.Store(true)
+		sess.close()
+		return "", err
+	}
+	if err := parent.Err(); err != nil {
+		sess.fenced.Store(true)
+		sess.close()
+		return "", err
+	}
 	if err := w.adopt(sess, dtlsConn); err != nil {
 		sess.fenced.Store(true)
 		sess.close()
 
 		return "", err
 	}
+	sess.mu.Lock()
+	sess.needsKeyframe = opts.SequenceMargin > 0 && sess.state.Video.negotiated()
+	if sess.needsKeyframe {
+		sess.requestKeyframe("resume")
+	}
+	pendingPLI := sess.needsKeyframe
+	sess.mu.Unlock()
+	workerprobe.AfterResume(w.localAddr, sess.id, pendingPLI)
 	sess.log.Infof("session %s: resumed with %s", sess.id, snap.State.ICE.RemoteAddr)
 
 	return sess.id, nil
@@ -178,8 +273,9 @@ func (w *Worker) adopt(sess *session, dtlsConn *dtls.Conn) error {
 	// The nominated address has passed ICE checks already: its DTLS and
 	// SRTP belong to the session before the caller's next consent check.
 	w.byAddr[sess.state.ICE.RemoteAddr] = sess
-	w.running.Add(1)
+	w.running.Add(2)
 	w.mu.Unlock()
+	go func() { defer w.running.Done(); sess.snapshotLoop() }()
 
 	go func() {
 		defer w.running.Done()
@@ -287,7 +383,11 @@ func (s *session) resume(dtlsBytes []byte, opts ResumeOptions) (*dtls.Conn, erro
 	exported := s.state.SRTP.Profile
 	s.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(s.ctx, resumeTimeout)
+	parent := opts.Context
+	if parent == nil {
+		parent = s.ctx
+	}
+	ctx, cancel := context.WithTimeout(parent, resumeTimeout)
 	defer cancel()
 	if err := dtlsConn.HandshakeContext(ctx); err != nil {
 		return nil, fmt.Errorf("resume DTLS: %w", err)
@@ -322,12 +422,34 @@ func (s *session) resume(dtlsBytes []byte, opts ResumeOptions) (*dtls.Conn, erro
 // by the margin (timestamps do not), and the outbound SRTP context continues
 // from the highest index sent. It runs under mu.
 func (s *session) resumeTrack(track *trackState, opts ResumeOptions) error {
-	if !track.negotiated() || track.Packets == 0 {
+	if !track.negotiated() {
+		return nil
+	}
+	if err := track.checkSequenceMargin(opts.SequenceMargin); err != nil {
+		return err
+	}
+	if track.Packets == 0 {
+		// The handshake snapshot may predate the first media packet. Keep
+		// ROC at zero: the receiver may never have seen this track.
+		initial := uint64(track.InitialSeq) + uint64(opts.SequenceMargin)
+		if initial > 0xffff {
+			return ErrSequenceBudgetExhausted
+		}
+		track.AdvanceSinceSend += uint32(opts.SequenceMargin)
+		track.InitialSeq += opts.SequenceMargin
+		if opts.SequenceMargin > 0 {
+			if err := restoreOutboundIndex(s.srtpOut, track.SSRC, initial-1); err != nil {
+				return err
+			}
+		}
+		track.SRTCPIndex += opts.SRTCPIndexMargin
+		s.srtpOut.SetIndex(track.SSRC, track.SRTCPIndex)
 		// Nothing sent: the first packet starts the stream, as it would have
 		// on the old owner.
 		return nil
 	}
 
+	track.AdvanceSinceSend += uint32(opts.SequenceMargin)
 	margin := uint64(opts.SequenceMargin)
 	track.SeqOffset += opts.SequenceMargin
 	track.HighestSentIndex += margin
@@ -335,7 +457,7 @@ func (s *session) resumeTrack(track *trackState, opts ResumeOptions) error {
 		return err
 	}
 
-	if track.SRTCPIndex > 0 {
+	if track.SRTCPIndex > 0 || opts.SRTCPIndexMargin > 0 {
 		track.SRTCPIndex += opts.SRTCPIndexMargin
 		s.srtpOut.SetIndex(track.SSRC, track.SRTCPIndex)
 	}

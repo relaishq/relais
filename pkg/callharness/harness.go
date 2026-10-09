@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/pion/logging"
+	"github.com/relais/internal/workerprobe"
 	"github.com/relais/pkg/mediaworker"
 )
 
@@ -53,6 +54,8 @@ type Options struct {
 	// store: answers advertise the relay's public address, and the workers
 	// bind only private sockets behind it.
 	Relay bool
+	// SnapshotInterval sets the worker snapshot cadence for crash tests.
+	SnapshotInterval time.Duration
 }
 
 // Harness runs the system in-process: media workers on loopback UDP
@@ -66,27 +69,34 @@ type Harness struct {
 	httpClient   *http.Client
 
 	// callsMu guards the calls not closed yet and closed (see lifecycle.go).
-	callsMu sync.Mutex
-	calls   map[*Call]struct{}
-	closed  bool
+	callsMu      sync.Mutex
+	calls        map[*Call]struct{}
+	closed       bool
+	disableProbe func()
+	failures     map[string][]time.Time
 }
 
 // Start starts the system.
 func Start(opts Options) (*Harness, error) {
+	disableProbe := workerprobe.Enable()
 	workers, err := startWorkers(opts)
 	if err != nil {
+		disableProbe()
 		return nil, err
 	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		_ = workers.close()
+		disableProbe()
 
 		return nil, fmt.Errorf("callharness: listen for signaling: %w", err)
 	}
 
 	h := &Harness{
-		workers: workers,
+		workers:      workers,
+		disableProbe: disableProbe,
+		failures:     make(map[string][]time.Time),
 		server: &http.Server{
 			Handler:           workers.signaling,
 			ReadHeaderTimeout: 5 * time.Second,
@@ -125,6 +135,7 @@ func (h *Harness) ExchangeOffer(ctx context.Context, offer string) (AnswerFacts,
 // media workers and the relay. Dial fails with ErrHarnessClosed from the
 // moment Close starts.
 func (h *Harness) Close() error {
+	defer h.disableProbe()
 	callsErr := h.closeCalls()
 	serverErr := h.server.Close()
 	<-h.serveDone

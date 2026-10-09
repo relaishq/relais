@@ -1,6 +1,8 @@
-// Package controlplane coordinates planned moves without changing the
-// caller's connection. It freezes the old worker, transfers a fenced lease,
-// reroutes the relay and resumes the new worker from the final snapshot.
+// Package controlplane coordinates moves and crash takeovers without changing
+// the caller's connection. Run detects heartbeat timeouts and resumes dead
+// workers' calls from stored snapshots with counter margins. Planned moves
+// freeze the old worker, transfer a fenced lease,
+// reroute the relay and resume the new worker from the final snapshot.
 // A bounded relay hold and a private drain barrier bracket the sequence so
 // caller packets wait in order instead of disappearing between owners.
 // A per-call lock prevents overlapping moves; a failed move resumes the old
@@ -47,21 +49,30 @@ type Relay interface {
 	HoldSession(ctx context.Context, sessionID string, from netip.AddrPort) error
 	MoveSession(sessionID string, from, to netip.AddrPort) error
 	ReleaseSession(sessionID string, to netip.AddrPort) (int, error)
+	ForgetSession(sessionID string)
 }
 
 type registration struct {
-	name     string
-	addr     netip.AddrPort
-	worker   Worker
-	draining bool
-	reserved int // incoming creates/moves; counted when balancing
+	name          string
+	addr          netip.AddrPort
+	worker        Worker
+	draining      bool
+	reserved      int // incoming creates/moves; counted when balancing
+	lastHeartbeat time.Time
+	dead          bool
+	recovering    bool
+	recovered     bool
+	rejoinReady   bool
+	pending       map[string]*takeoverState // unfinished transfers, retained for retry
 }
 
 type call struct {
-	mu        sync.Mutex
-	id        string
-	lastMove  *time.Time
-	moveCount uint64
+	mu            sync.Mutex
+	id            string
+	lastMove      *time.Time
+	moveCount     uint64
+	takeoverCount uint64
+	lastMoveKind  string
 }
 
 // Plane owns the registry and call metadata. The store remains authoritative
@@ -74,12 +85,25 @@ type Plane struct {
 	calls           map[string]*call
 	ttl             time.Duration
 	incomingChanged chan struct{}
+	config          Config
+	events          [recentTakeoverLimit]MoveResult
+	eventNext       int
+	eventCount      int
+	lostCount       uint64
+	running         bool
 }
 
-// New returns an empty in-process control plane for the relay and store.
-func New(r Relay, store sessionstore.Store) *Plane {
+// New returns an empty in-process control plane. Drive Run with the
+// application lifetime context to enable automatic crash detection.
+func New(r Relay, store sessionstore.Store) *Plane { return NewWithConfig(r, store, Config{}) }
+
+// NewWithConfig changes the death-detection intervals and takeover bounds.
+// Run must be driven with an application-owned lifetime context.
+func NewWithConfig(r Relay, store sessionstore.Store, config Config) *Plane {
+	config = config.defaults()
 	return &Plane{
 		relay:           r,
+		config:          config,
 		store:           store,
 		workers:         make(map[string]*registration),
 		calls:           make(map[string]*call),
@@ -95,19 +119,24 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 	}
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	if _, ok := p.workers[name]; ok {
+		p.mu.Unlock()
 		return errors.New("controlplane: duplicate worker name")
 	}
 
 	for _, w := range p.workers {
 		if w.addr == addr {
+			p.mu.Unlock()
 			return errors.New("controlplane: duplicate worker address")
 		}
 	}
 
-	p.workers[name] = &registration{name: name, addr: addr, worker: worker}
+	p.workers[name] = &registration{name: name, addr: addr, worker: worker, lastHeartbeat: time.Now()}
+	p.mu.Unlock()
+	if w, ok := worker.(interface{ StartHeartbeats(mediaworker.Heartbeats) }); ok {
+		w.StartHeartbeats(p)
+	}
 	return nil
 }
 
@@ -122,13 +151,20 @@ func (p *Plane) SetRelay(r Relay) {
 
 // pick runs under mu and reserves capacity before another selection can run.
 func (p *Plane) pick(ctx context.Context, name string, exclude netip.AddrPort) (*registration, error) {
+	return p.pickExcluding(ctx, name, map[netip.AddrPort]bool{exclude: true})
+}
+
+func (p *Plane) pickExcluding(ctx context.Context, name string, excluded map[netip.AddrPort]bool) (*registration, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var best *registration
 	load := int(^uint(0) >> 1)
 	for _, w := range p.workers {
 		if name != "" && w.name != name {
 			continue
 		}
-		if w.draining || w.addr == exclude {
+		if w.draining || w.dead || excluded[w.addr] {
 			continue
 		}
 
@@ -252,12 +288,16 @@ func (p *Plane) End(ctx context.Context, id string) error {
 // MoveResult records coordination timings; the harness measures media gaps
 // separately at the caller.
 type MoveResult struct {
-	ID     string                     `json:"id"`
-	From   string                     `json:"from"`
-	To     string                     `json:"to"`
-	Start  time.Time                  `json:"start"`
-	End    time.Time                  `json:"end"`
-	Result mediaworker.HandoverResult `json:"result"`
+	Kind          string                     `json:"kind"`
+	DetectedAt    time.Time                  `json:"detected_at,omitempty"`
+	LastHeartbeat time.Time                  `json:"last_heartbeat,omitempty"`
+	Lost          bool                       `json:"lost,omitempty"`
+	ID            string                     `json:"id"`
+	From          string                     `json:"from"`
+	To            string                     `json:"to"`
+	Start         time.Time                  `json:"start"`
+	End           time.Time                  `json:"end"`
+	Result        mediaworker.HandoverResult `json:"result"`
 	// Error is empty on success, otherwise the per-call drain/move failure.
 	Error string `json:"error,omitempty"`
 }
@@ -300,7 +340,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		return res, ErrUnknownCall
 	}
 
-	res = MoveResult{ID: c.id, From: source.name, To: target.name, Start: time.Now(), Result: mediaworker.HandoverResult{SessionID: c.id}}
+	res = MoveResult{Kind: "move", ID: c.id, From: source.name, To: target.name, Start: time.Now(), Result: mediaworker.HandoverResult{SessionID: c.id}}
 	defer func() {
 		res.End = time.Now()
 		res.Result.Duration = res.End.Sub(res.Start)
@@ -338,7 +378,13 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	res.Result.Export = time.Since(started)
 	if err != nil {
 		if errors.Is(err, mediaworker.ErrUnknownSession) {
-			p.forget(c)
+			// A hard-killed source has no memory but can still own a live
+			// lease and snapshot. Preserve that record for crash recovery.
+			current, getErr := p.store.Get(ctx, c.id)
+			if errors.Is(getErr, sessionstore.ErrNotFound) || getErr == nil &&
+				(current.Worker != lease.Worker || current.Epoch != lease.Epoch) {
+				p.forget(c)
+			}
 		}
 
 		return res, err
@@ -368,6 +414,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	now := time.Now()
 	c.lastMove = &now
 	c.moveCount++
+	c.lastMoveKind = "move"
 	return res, nil
 }
 
@@ -513,26 +560,33 @@ func (p *Plane) Drain(ctx context.Context, name string) ([]MoveResult, error) {
 
 // WorkerStatus describes one registered worker and its live lease count.
 type WorkerStatus struct {
-	Name     string         `json:"name"`
-	Address  netip.AddrPort `json:"address"`
-	Draining bool           `json:"draining"`
-	Calls    int            `json:"call_count"`
+	Name          string         `json:"name"`
+	Address       netip.AddrPort `json:"address"`
+	Draining      bool           `json:"draining"`
+	Recovering    bool           `json:"recovering"`
+	Dead          bool           `json:"dead"`
+	LastHeartbeat time.Time      `json:"last_heartbeat"`
+	Calls         int            `json:"call_count"`
 }
 
 // CallStatus describes current lease ownership and successful moves.
 type CallStatus struct {
-	ID        string         `json:"id"`
-	Owner     string         `json:"owner"`
-	Address   netip.AddrPort `json:"owner_address"`
-	Epoch     uint64         `json:"lease_epoch"`
-	LastMove  *time.Time     `json:"last_move"`
-	MoveCount uint64         `json:"move_count"`
+	ID            string         `json:"id"`
+	Owner         string         `json:"owner"`
+	Address       netip.AddrPort `json:"owner_address"`
+	Epoch         uint64         `json:"lease_epoch"`
+	LastMove      *time.Time     `json:"last_move"`
+	MoveCount     uint64         `json:"move_count"`
+	TakeoverCount uint64         `json:"takeover_count"`
+	LastMoveKind  string         `json:"last_move_kind"`
 }
 
 // Status is the HTTP view of workers and live calls.
 type Status struct {
-	Workers []WorkerStatus `json:"workers"`
-	Calls   []CallStatus   `json:"calls"`
+	Workers   []WorkerStatus `json:"workers"`
+	Calls     []CallStatus   `json:"calls"`
+	Takeovers []MoveResult   `json:"takeovers"`
+	LostCount uint64         `json:"lost_count"`
 }
 
 // Status lists live calls and prunes metadata whose lease has disappeared.
@@ -543,9 +597,9 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 		workers = append(workers, w)
 	}
 	// Copy registry flags here; metadata is read under each call lock below.
-	status := Status{Workers: []WorkerStatus{}, Calls: []CallStatus{}}
+	status := Status{Workers: []WorkerStatus{}, Calls: []CallStatus{}, Takeovers: p.recentTakeovers(), LostCount: p.lostCount}
 	for _, w := range workers {
-		status.Workers = append(status.Workers, WorkerStatus{Name: w.name, Address: w.addr, Draining: w.draining})
+		status.Workers = append(status.Workers, WorkerStatus{Name: w.name, Address: w.addr, Draining: w.draining, Dead: w.dead, Recovering: w.recovering, LastHeartbeat: w.lastHeartbeat})
 	}
 
 	calls := make([]*call, 0, len(p.calls))
@@ -566,7 +620,7 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 			return Status{}, err
 		}
 
-		cs := CallStatus{ID: c.id, Address: lease.Worker, Epoch: lease.Epoch, LastMove: c.lastMove, MoveCount: c.moveCount}
+		cs := CallStatus{ID: c.id, Address: lease.Worker, Epoch: lease.Epoch, LastMove: c.lastMove, MoveCount: c.moveCount, TakeoverCount: c.takeoverCount, LastMoveKind: c.lastMoveKind}
 		for i := range status.Workers {
 			if status.Workers[i].Address == lease.Worker {
 				cs.Owner = status.Workers[i].Name

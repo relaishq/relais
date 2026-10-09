@@ -35,9 +35,12 @@ type relayTopology struct {
 	owners        *sessionstore.Memory
 	loggerFactory logging.LoggerFactory
 
-	mu    sync.Mutex
-	relay *relay.Relay
-	plane *controlplane.Plane
+	mu               sync.Mutex
+	relay            *relay.Relay
+	plane            *controlplane.Plane
+	cancel           context.CancelFunc
+	done             chan struct{}
+	snapshotInterval time.Duration
 }
 
 // startRelayedWorkers starts the relay and opts.Workers workers behind it.
@@ -55,12 +58,17 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 	}
 	topology.relay = r
 	topology.plane = controlplane.New(r, topology.owners)
+	topology.snapshotInterval = opts.SnapshotInterval
+	ctx, cancel := context.WithCancel(context.Background())
+	topology.cancel, topology.done = cancel, make(chan struct{})
+	go func() { defer close(topology.done); _ = topology.plane.Run(ctx) }()
 
 	ws := &workers{relay: topology}
 	for range count {
 		worker, err := mediaworker.New(mediaworker.Config{
-			ListenAddr:    "127.0.0.1:0",
-			LoggerFactory: opts.WorkerLoggerFactory,
+			ListenAddr:       "127.0.0.1:0",
+			LoggerFactory:    opts.WorkerLoggerFactory,
+			SnapshotInterval: opts.SnapshotInterval,
 			Relay: &mediaworker.RelayConfig{
 				Addr:       r.WorkerAddr(),
 				PublicAddr: r.PublicAddr(),
@@ -87,6 +95,8 @@ func (t *relayTopology) close() error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	t.cancel()
+	<-t.done
 	return t.relay.Close()
 }
 

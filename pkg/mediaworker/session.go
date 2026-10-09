@@ -22,6 +22,7 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
+	"github.com/relais/internal/workerprobe"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -78,6 +79,7 @@ type session struct {
 	// decryptFailures counts SRTP and SRTCP packets from the caller that this
 	// worker could not decrypt.
 	decryptFailures atomic.Uint64
+	snapshotStored  atomic.Bool // internal harness readiness observation, no state bytes exposed
 
 	// Runtime plumbing, rebuilt by a worker that resumes the session.
 	dtlsEndpoint  *dtlsEndpoint
@@ -92,9 +94,12 @@ type session struct {
 	encryptBuf []byte
 
 	// ctx is the session's lifetime; close cancels it.
-	ctx       context.Context
-	cancel    context.CancelFunc
-	closeOnce sync.Once
+	ctx            context.Context
+	cancel         context.CancelFunc
+	closeOnce      sync.Once
+	snapshotMu     sync.Mutex // serialize encode/store without blocking packet processing
+	snapshotWanted chan struct{}
+	needsKeyframe  bool // resumed video may not yet have a known inbound SSRC
 }
 
 // newSession creates a session for an offer: the session state with fresh
@@ -150,17 +155,18 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 func sessionFromState(w *Worker, state sessionState) *session {
 	ctx, cancel := context.WithCancel(context.Background())
 	sess := &session{
-		id:         state.ID,
-		worker:     w,
-		log:        w.cfg.LoggerFactory.NewLogger("session"),
-		state:      state,
-		nominated:  make(chan struct{}),
-		rtcpBuf:    make([]byte, receiveMTU),
-		decryptBuf: make([]byte, receiveMTU),
-		plainBuf:   make([]byte, receiveMTU),
-		encryptBuf: make([]byte, receiveMTU),
-		ctx:        ctx,
-		cancel:     cancel,
+		id:             state.ID,
+		snapshotWanted: make(chan struct{}, 1),
+		worker:         w,
+		log:            w.cfg.LoggerFactory.NewLogger("session"),
+		state:          state,
+		nominated:      make(chan struct{}),
+		rtcpBuf:        make([]byte, receiveMTU),
+		decryptBuf:     make([]byte, receiveMTU),
+		plainBuf:       make([]byte, receiveMTU),
+		encryptBuf:     make([]byte, receiveMTU),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 	sess.dtlsEndpoint = newDTLSEndpoint(sess)
 	sess.consent = time.AfterFunc(w.cfg.consentTimeout, sess.consentExpired)
@@ -244,6 +250,9 @@ func (s *session) connect() (*dtls.Conn, error) {
 		return dtlsConn, fmt.Errorf("start SRTP: %w", err)
 	}
 
+	if err := s.persistSnapshot(); err != nil {
+		return dtlsConn, err
+	}
 	return dtlsConn, nil
 }
 
@@ -397,7 +406,11 @@ func (s *session) handleRTP(pkt []byte) {
 
 		return
 	}
+	oldInbound := s.state.SRTP.Inbound[authenticated.SSRC]
 	s.state.SRTP.noteInbound(authenticated.SSRC, authenticated.SequenceNumber)
+	if oldInbound>>16 != s.state.SRTP.Inbound[authenticated.SSRC]>>16 {
+		s.wantSnapshot()
+	}
 
 	var in rtp.Packet
 	if err := in.Unmarshal(plain); err != nil {
@@ -429,11 +442,24 @@ func (s *session) handleRTP(pkt []byte) {
 		return
 	}
 	s.encryptBuf = encrypted[:cap(encrypted)]
+	oldOutbound := track.HighestSentIndex
 	track.noteSent(&header)
+	if track.Packets == 1 {
+		if roc, ok := s.srtpOut.ROC(track.SSRC); ok {
+			track.HighestSentIndex = uint64(roc)<<16 | uint64(header.SequenceNumber)
+		}
+	}
+	if track.Packets == 1 || oldOutbound>>16 != track.HighestSentIndex>>16 {
+		s.wantSnapshot()
+	}
 
 	if _, err := s.worker.send(encrypted, s.state.ICE.RemoteAddr); err != nil {
 		s.log.Debugf("session %s: send echo packet: %v", s.id, err)
 	}
+	if s.needsKeyframe && track == &s.state.Video {
+		s.requestKeyframe("resume-first-video")
+	}
+	workerprobe.AfterEcho(s.worker.localAddr, s.ctx, s.id, s.plainBuf[:n])
 }
 
 // trackFor returns the outbound track that echoes a payload type, or nil.
@@ -506,7 +532,7 @@ func keyframeRequest(packets []rtcp.Packet, ssrc uint32) string {
 // does not know that SSRC, and there is no echo that could need a keyframe.
 func (s *session) requestKeyframe(trigger string) {
 	video := &s.state.Video
-	if !video.Anchored {
+	if s.fenced.Load() || !video.Anchored {
 		return
 	}
 
@@ -533,6 +559,7 @@ func (s *session) requestKeyframe(trigger string) {
 
 		return
 	}
+	s.needsKeyframe = false
 	s.log.Debugf("session %s: caller sent %s for video ssrc %d; sent PLI for caller ssrc %d",
 		s.id, trigger, video.SSRC, video.InboundSSRC)
 }
@@ -587,8 +614,11 @@ func newTrackState(media *offeredMedia) (trackState, error) {
 		MID:         media.mid,
 		PayloadType: media.codec.payloadType,
 		SSRC:        binary.BigEndian.Uint32(random[0:4]),
-		InitialSeq:  binary.BigEndian.Uint16(random[4:6]),
-		InitialTS:   binary.BigEndian.Uint32(random[6:10]),
+		// Reserve the upper half for a first takeover margin. A caller that
+		// has never received this SSRC starts at ROC 0, so even an unanchored
+		// handshake snapshot must not make its first echo start at ROC 1.
+		InitialSeq: binary.BigEndian.Uint16(random[4:6]) & 0x7fff,
+		InitialTS:  binary.BigEndian.Uint32(random[6:10]),
 	}, nil
 }
 

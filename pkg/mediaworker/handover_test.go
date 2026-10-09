@@ -154,7 +154,7 @@ func TestResumeSessionRejectsBadState(t *testing.T) {
 	require.ErrorIs(t, err, errBadState)
 	_, err = worker.ResumeSession([]byte(`{"Version":2}`), ResumeOptions{})
 	require.ErrorIs(t, err, errStateVersion)
-	_, err = worker.ResumeSession([]byte(`{"Version":3,"State":{"Version":3,"ID":"a","ICE":{"LocalUfrag":"a"}}}`),
+	_, err = worker.ResumeSession([]byte(`{"Version":4,"State":{"Version":4,"ID":"a","ICE":{"LocalUfrag":"a"}}}`),
 		ResumeOptions{})
 	require.ErrorIs(t, err, errBadState)
 	_, err = worker.ResumeSession(nil, ResumeOptions{SequenceMargin: 1 << 15})
