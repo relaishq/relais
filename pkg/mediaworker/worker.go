@@ -1,0 +1,290 @@
+// Package mediaworker implements the Relais media worker: a minimal WebRTC
+// endpoint built from Pion's component libraries (pion/stun for ICE-lite,
+// pion/dtls and pion/srtp for DTLS-SRTP, pion/rtp, pion/sdp) instead of
+// Pion's PeerConnection.
+//
+// A media worker terminates one session per caller. A session is a single
+// BUNDLEd, rtcp-muxed transport, and every session on a worker shares the
+// worker's one UDP socket. For now the worker echoes the caller's Opus audio
+// back on its own outbound track.
+//
+// The worker does not use webrtc.PeerConnection on purpose. Later work must
+// export a session's state (ICE credentials, DTLS connection state, SRTP
+// rollover counters, outbound track counters) to a session store and resume
+// it on another worker. A PeerConnection keeps that state private, so each
+// session here keeps it in one plain value; see sessionState.
+package mediaworker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"sync"
+	"time"
+
+	"github.com/pion/logging"
+	"github.com/pion/stun/v4"
+)
+
+const defaultConnectTimeout = 30 * time.Second
+
+var (
+	// ErrUnsupportedOffer is returned when an SDP offer cannot be answered:
+	// it is malformed, or it asks for something the media worker does not
+	// support.
+	ErrUnsupportedOffer = errors.New("mediaworker: unsupported offer")
+
+	// ErrClosed is returned when the media worker has been closed.
+	ErrClosed = errors.New("mediaworker: closed")
+
+	// ErrUnknownSession is returned when a session ID does not exist on this
+	// media worker.
+	ErrUnknownSession = errors.New("mediaworker: unknown session")
+)
+
+// Config configures a media worker.
+type Config struct {
+	// ListenAddr is the local UDP address of the worker's media socket. All
+	// sessions on the worker share this one socket, and its address is the
+	// single host candidate advertised in every answer, so the IP must be
+	// specific (not 0.0.0.0 or ::). Defaults to "127.0.0.1:0".
+	ListenAddr string
+
+	// LoggerFactory is used by the worker and by the Pion components it
+	// drives. Defaults to Pion's default logger factory.
+	LoggerFactory logging.LoggerFactory
+
+	// ConnectTimeout bounds ICE nomination plus the DTLS handshake for a new
+	// session. Defaults to 30 seconds.
+	ConnectTimeout time.Duration
+
+	// consentTimeout is RFC 7675's consent timeout, 30 seconds. It is not a
+	// deployment setting; it is unexported so this package's tests can
+	// shorten it.
+	consentTimeout time.Duration
+}
+
+// Worker is a media worker. It owns one UDP socket and the sessions that run
+// over it.
+type Worker struct {
+	cfg       Config
+	log       logging.LeveledLogger
+	conn      *net.UDPConn
+	localAddr netip.AddrPort
+	readDone  chan struct{}
+
+	mu       sync.Mutex
+	sessions map[string]*session         // by session ID, which is also the worker's ICE ufrag
+	byAddr   map[netip.AddrPort]*session // caller addresses that passed an ICE check
+	closed   bool
+	running  sync.WaitGroup // session goroutines
+}
+
+// New starts a media worker listening on cfg.ListenAddr.
+func New(cfg Config) (*Worker, error) {
+	if cfg.ListenAddr == "" {
+		cfg.ListenAddr = "127.0.0.1:0"
+	}
+	if cfg.LoggerFactory == nil {
+		cfg.LoggerFactory = logging.NewDefaultLoggerFactory()
+	}
+	if cfg.ConnectTimeout <= 0 {
+		cfg.ConnectTimeout = defaultConnectTimeout
+	}
+	if cfg.consentTimeout <= 0 {
+		cfg.consentTimeout = defaultConsentTimeout
+	}
+
+	addr, err := net.ResolveUDPAddr("udp", cfg.ListenAddr)
+	if err != nil {
+		return nil, fmt.Errorf("mediaworker: resolve listen address: %w", err)
+	}
+	if addr.IP == nil || addr.IP.IsUnspecified() {
+		return nil, fmt.Errorf("mediaworker: listen address %q must name a specific IP", cfg.ListenAddr)
+	}
+
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("mediaworker: listen: %w", err)
+	}
+	udpAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		_ = conn.Close()
+
+		return nil, fmt.Errorf("mediaworker: unexpected local address %T", conn.LocalAddr())
+	}
+	localAddr := udpAddr.AddrPort()
+
+	worker := &Worker{
+		cfg:       cfg,
+		log:       cfg.LoggerFactory.NewLogger("mediaworker"),
+		conn:      conn,
+		localAddr: netip.AddrPortFrom(localAddr.Addr().Unmap(), localAddr.Port()),
+		readDone:  make(chan struct{}),
+		sessions:  make(map[string]*session),
+		byAddr:    make(map[netip.AddrPort]*session),
+	}
+	go worker.readLoop()
+
+	return worker, nil
+}
+
+// MediaAddr returns the address of the worker's UDP media socket.
+func (w *Worker) MediaAddr() netip.AddrPort {
+	return w.localAddr
+}
+
+// CreateSession answers a caller's SDP offer. It creates a session that
+// starts answering the caller's ICE checks at once, and returns the session
+// ID and the SDP answer. The answer advertises ICE-lite, BUNDLE, rtcp-mux and
+// a single host candidate.
+func (w *Worker) CreateSession(_ context.Context, offerSDP string) (sessionID, answerSDP string, err error) {
+	offer, err := parseOffer(offerSDP)
+	if err != nil {
+		return "", "", err
+	}
+
+	sess, err := newSession(w, offer)
+	if err != nil {
+		return "", "", err
+	}
+
+	answer, err := buildAnswer(offer, sess.answerParams())
+	if err != nil {
+		sess.close()
+
+		return "", "", err
+	}
+
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+		sess.close()
+
+		return "", "", ErrClosed
+	}
+	w.sessions[sess.id] = sess
+	w.running.Add(1)
+	w.mu.Unlock()
+
+	go func() {
+		defer w.running.Done()
+		sess.run()
+	}()
+
+	return sess.id, answer, nil
+}
+
+// EndSession hangs up a session.
+func (w *Worker) EndSession(sessionID string) error {
+	sess := w.session(sessionID)
+	if sess == nil {
+		return ErrUnknownSession
+	}
+	sess.close()
+
+	return nil
+}
+
+// Close hangs up every session and closes the worker's socket.
+func (w *Worker) Close() error {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+
+		return nil
+	}
+	w.closed = true
+	sessions := make([]*session, 0, len(w.sessions))
+	for _, sess := range w.sessions {
+		sessions = append(sessions, sess)
+	}
+	w.mu.Unlock()
+
+	// Sessions send close_notify, so the socket stays open until they end.
+	for _, sess := range sessions {
+		sess.close()
+	}
+	w.running.Wait()
+
+	err := w.conn.Close()
+	<-w.readDone
+
+	return err
+}
+
+// readLoop reads the worker's socket. STUN goes to the ICE-lite responder;
+// everything else goes to the session that owns the sender's address
+// (RFC 7983 demultiplexing happens in the session).
+func (w *Worker) readLoop() {
+	defer close(w.readDone)
+
+	buf := make([]byte, receiveMTU)
+	for {
+		n, from, err := w.conn.ReadFromUDPAddrPort(buf)
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			w.log.Debugf("read: %v", err)
+
+			continue
+		}
+		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
+		pkt := buf[:n]
+
+		if stun.IsMessage(pkt) {
+			w.handleSTUN(pkt, from)
+
+			continue
+		}
+		if sess := w.sessionAt(from); sess != nil {
+			sess.handlePacket(pkt)
+		}
+	}
+}
+
+func (w *Worker) session(id string) *session {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.sessions[id]
+}
+
+func (w *Worker) sessionAt(addr netip.AddrPort) *session {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	return w.byAddr[addr]
+}
+
+func (w *Worker) mapAddr(addr netip.AddrPort, sess *session) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	// A session that is no longer registered has been closed.
+	if w.sessions[sess.id] == sess {
+		w.byAddr[addr] = sess
+	}
+}
+
+func (w *Worker) send(pkt []byte, to netip.AddrPort) (int, error) {
+	return w.conn.WriteToUDPAddrPort(pkt, to)
+}
+
+// forget removes a closed session and its caller addresses.
+func (w *Worker) forget(sess *session) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.sessions[sess.id] == sess {
+		delete(w.sessions, sess.id)
+	}
+	for addr, owner := range w.byAddr {
+		if owner == sess {
+			delete(w.byAddr, addr)
+		}
+	}
+}

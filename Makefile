@@ -17,7 +17,7 @@ BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 # Linker flags (populate pkg/buildinfo)
 LDFLAGS=-ldflags "-X github.com/relais/pkg/buildinfo.Version=$(VERSION) -X github.com/relais/pkg/buildinfo.Commit=$(COMMIT) -X github.com/relais/pkg/buildinfo.Date=$(BUILD_TIME)"
 
-.PHONY: all build clean test coverage deps lint lint-install vet fmt run bench profile test-streams test-stream-groups test-cluster help
+.PHONY: all build clean test coverage deps lint lint-install vet fmt run bench profile test-streams test-stream-groups test-cluster test-harness help
 
 all: test build
 
@@ -84,6 +84,12 @@ test-streams: ## Run Redis Streams tests (non-cluster) in storage
 
 test-cluster: ## Run Redis Cluster integration tests (requires RELAIS_TEST_REDIS_CLUSTER_ADDRS)
 	$(GOTEST) -v -count=1 -run '^TestCluster' ./pkg/storage
+
+HARNESS_PKGS=./pkg/mediaworker/... ./pkg/callharness/...
+HARNESS_FLAGS ?=
+
+test-harness: ## Run the call harness (media worker calls) with the race detector; HARNESS_FLAGS=-short for 5 s calls
+	$(GOTEST) -race -v -count=1 $(HARNESS_FLAGS) $(HARNESS_PKGS)
 
 help: ## Display this help screen
 	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
