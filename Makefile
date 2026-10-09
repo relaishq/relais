@@ -17,12 +17,11 @@ BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 # Linker flags (populate pkg/buildinfo)
 LDFLAGS=-ldflags "-X github.com/relais/pkg/buildinfo.Version=$(VERSION) -X github.com/relais/pkg/buildinfo.Commit=$(COMMIT) -X github.com/relais/pkg/buildinfo.Date=$(BUILD_TIME)"
 
-.PHONY: all build clean test coverage deps lint lint-install vet fmt run bench profile test-streams test-stream-groups test-cluster test-harness demo help
+.PHONY: all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-harness demo help
 
 all: test build
 
-build: ensure_bin_dir ## Build the binary
-	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME) -v $(LDFLAGS) ./cmd/relais-core
+build: ensure_bin_dir ## Build the plugin runner binaries
 	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-ingress -v $(LDFLAGS) ./cmd/ingress-runner
 	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-egress -v $(LDFLAGS) ./cmd/egress-runner
 	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-transform -v $(LDFLAGS) ./cmd/transform-runner
@@ -66,9 +65,6 @@ vet: ## Run go vet
 
 fmt: ## Run go fmt
 	$(GOCMD) fmt ./...
-
-run: build ## Run the application
-	./$(BIN_DIR)/$(BINARY_NAME)
 
 bench: ## Run benchmarks
 	$(GOTEST) -bench=. ./test/benchmark/...

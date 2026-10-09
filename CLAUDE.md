@@ -8,11 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies
 make deps
 
-# Build all binaries (core, ingress, egress, transform runners)
+# Build the plugin runner binaries (ingress, egress, transform)
 make build
 
-# Run the core application
-make run
+# Run one media worker plus the browser echo page on http://localhost:9101
+make demo
 
 # Clean build artifacts
 make clean
@@ -26,6 +26,9 @@ make test
 
 # Run tests with coverage report
 make coverage
+
+# Run the call harness (audio+video echo calls, race detector)
+make test-harness
 
 # Run benchmarks
 make bench
@@ -45,33 +48,33 @@ make fmt
 
 ## Architecture Overview
 
-Relais is a distributed media server built with a plugin-based architecture:
+Relais is a distributed media server. Live WebRTC media runs in the media worker prototype; stored frames flow through a plugin-based pipeline:
 
-- **Core Components**: 
-  - `relais-core` - Main server managing sessions and coordination
+- **Media path (prototype)**:
+  - `pkg/mediaworker/` - Media worker: a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) with WHIP-style signaling; it currently echoes the caller's audio and video
+  - `pkg/callharness/` - Call harness: the test seam for media; a Pion WebRTC client plays the caller in-process
+  - `cmd/echo-demo` - Browser echo demo for the media worker (`make demo`)
+
+- **Plugin runners**:
   - `ingress-runner` - Handles media input plugins
-  - `egress-runner` - Handles media output plugins  
+  - `egress-runner` - Handles media output plugins
   - `transform-runner` - Handles media processing plugins
 
 - **Plugin System**: Located in `plugins/` with interfaces defined in `pkg/plugins/`
   - Ingress plugins capture media (e.g., camera input)
   - Transform plugins process media (e.g., watermarking)
-  - Egress plugins output media (e.g., WebRTC streaming)
+  - Egress plugins output media (the WebRTC egress plugin is a storage-polling placeholder)
 
 - **Storage Backend**: Abstractions in `pkg/storage/` supporting Redis and in-memory implementations
 
 - **Key Packages**:
   - `pkg/config/` - Configuration management using Viper
   - `pkg/frames/` - Media frame handling and codecs
-  - `pkg/server/` - WebRTC signaling and session management
-  - `pkg/webrtc/` - Pion WebRTC adapter
 
 ## Configuration
 
 Environment variables for configuration:
 ```
-RELAIS_SERVER_HOST=0.0.0.0
-RELAIS_SERVER_PORT=8080
 RELAIS_STORAGE_TYPE=redis
 RELAIS_STORAGE_REDIS_URL=localhost:6379
 RELAIS_LOGGING_LEVEL=info
@@ -84,7 +87,7 @@ New plugins must implement one of the interfaces in `pkg/plugins/interface.go` a
 ## Dependencies
 
 - Go 1.21+ required
-- Uses Pion WebRTC for real-time communication
+- Uses Pion v4 libraries for real-time communication
 - Redis optional for distributed storage
 - golangci-lint required for linting
 
