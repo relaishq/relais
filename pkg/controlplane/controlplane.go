@@ -262,6 +262,7 @@ func (p *Plane) End(ctx context.Context, id string) error {
 	if err != nil {
 		if errors.Is(err, sessionstore.ErrNotFound) {
 			p.forget(c)
+			p.deleteFrames(id)
 		}
 
 		return err
@@ -278,11 +279,13 @@ func (p *Plane) End(ctx context.Context, id string) error {
 		if errors.Is(err, mediaworker.ErrUnknownSession) {
 			p.forget(c)
 			_ = p.store.Release(ctx, lease)
+			p.deleteFrames(id)
 		}
 
 		return err
 	}
 	p.forget(c)
+	p.deleteFrames(id)
 	return nil
 }
 

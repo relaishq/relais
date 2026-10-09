@@ -38,6 +38,7 @@ func (h *Harness) RestartWorker(worker int) error {
 	defer t.mu.Unlock()
 	old := h.workers.list[worker]
 	fresh, err := mediaworker.New(mediaworker.Config{LoggerFactory: t.loggerFactory, SnapshotInterval: t.snapshotInterval,
+		FrameCache: t.frames, DisableFrameCache: t.disableFrameCache, DisableResumePLI: t.disableResumePLI,
 		Relay: &mediaworker.RelayConfig{Addr: t.relay.WorkerAddr(), PublicAddr: t.relay.PublicAddr(), Owners: t.owners}})
 	if err != nil {
 		return err
@@ -186,4 +187,13 @@ func (h *Harness) WaitForSnapshot(ctx context.Context, worker int, id string) er
 		case <-ticker.C:
 		}
 	}
+}
+
+// ReplayStats snapshots a worker's replay diagnostics. A fresh harness per
+// recovery trial makes these counters specific to that trial.
+func (h *Harness) ReplayStats(worker int) (mediaworker.ReplayStats, error) {
+	if worker < 0 || worker >= len(h.workers.list) {
+		return mediaworker.ReplayStats{}, errors.New("callharness: no worker")
+	}
+	return h.workers.list[worker].ReplayStats(), nil
 }

@@ -13,6 +13,8 @@ import (
 	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
 	"github.com/pion/rtcp"
+	"github.com/pion/rtp"
+	"github.com/pion/rtp/codecs"
 	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
@@ -32,6 +34,9 @@ type CallOptions struct {
 	// Video adds a VP8 video track next to the Opus audio track, on the same
 	// bundled connection.
 	Video bool
+	// VideoData optionally supplies a VP8 IVF fixture. Nil uses the embedded
+	// 320x240/30 fps fixture (natural keyframe interval one second).
+	VideoData []byte
 
 	// BrowserLikeOffer makes the caller offer what a browser offers rather
 	// than just the codecs it sends: every codec Pion knows (VP8, VP9, H264,
@@ -74,6 +79,7 @@ type Call struct {
 	// keyframeWanted is set when the worker asks the caller for a keyframe;
 	// the video sender answers it the way a browser's encoder would.
 	keyframeWanted atomic.Bool
+	videoData      []byte
 
 	// socket is the caller's UDP socket, which observes its consent checks
 	// (consent.go).
@@ -111,7 +117,7 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("callharness: new PeerConnection: %w", err), socket.close())
 	}
-	call = &Call{harness: h, pc: pc, rec: rec, socket: socket}
+	call = &Call{harness: h, pc: pc, rec: rec, socket: socket, videoData: opts.VideoData}
 	if err := h.addCall(call); err != nil {
 		return nil, errors.Join(err, call.close())
 	}
@@ -201,7 +207,12 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 
 // addTrack adds one of the caller's tracks and reads the RTCP sent to it.
 func (c *Call) addTrack(capability webrtc.RTPCodecCapability, kind string) (*webrtc.TrackLocalStaticSample, uint32, error) {
-	track, err := webrtc.NewTrackLocalStaticSample(capability, kind, "caller")
+	track, err := webrtc.NewTrackLocalStaticSample(capability, kind, "caller", webrtc.WithPayloader(func(_ webrtc.RTPCodecCapability) (rtp.Payloader, error) {
+		if kind == kindVideo {
+			return &codecs.VP8Payloader{EnablePictureID: true}, nil
+		}
+		return &codecs.OpusPayloader{}, nil
+	}))
 	if err != nil {
 		return nil, 0, err
 	}
@@ -370,19 +381,27 @@ func (c *Call) sendAudio(ctx context.Context, end time.Time) error {
 }
 
 // sendVideo sends one VP8 frame per frame interval. When the worker asks for
-// a keyframe, the caller restarts the file, whose first frame is one, as a
-// browser's encoder would send a keyframe next.
+// a keyframe, the caller rewinds to an already encoded keyframe on its next
+// 33 ms tick, with no encoder delay. Real browser timing is #13's concern.
 func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
-	src, err := newVP8Source(callerVideo)
+	data := c.videoData
+	if data == nil {
+		data = callerVideo
+	}
+	src, err := newVP8Source(data)
 	if err != nil {
 		return err
 	}
 
+	c.rec.mu.Lock()
+	c.rec.keyframeInterval = src.keyframeInterval()
+	c.rec.mu.Unlock()
 	ticker := time.NewTicker(src.frameDuration)
 	defer ticker.Stop()
 
 	for time.Now().Before(end) {
-		if c.keyframeWanted.Swap(false) {
+		pliResponse := c.keyframeWanted.Swap(false)
+		if pliResponse {
 			if err := src.rewind(); err != nil {
 				return err
 			}
@@ -391,7 +410,7 @@ func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
 		if err != nil {
 			return err
 		}
-		c.rec.sending(kindVideo, frame) // before writing, as for audio
+		c.rec.sendingVideo(frame, pliResponse, src.frameDuration) // records the observable PictureID before writing
 		if err := c.video.WriteSample(media.Sample{Data: frame, Duration: src.frameDuration}); err != nil {
 			return fmt.Errorf("callharness: send video: %w", err)
 		}

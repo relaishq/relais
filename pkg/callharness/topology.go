@@ -13,6 +13,7 @@ import (
 	"github.com/pion/logging"
 
 	"github.com/relais/pkg/controlplane"
+	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
@@ -41,6 +42,9 @@ type relayTopology struct {
 	cancel           context.CancelFunc
 	done             chan struct{}
 	snapshotInterval time.Duration
+
+	frames                              framecache.Store
+	disableFrameCache, disableResumePLI bool
 }
 
 // startRelayedWorkers starts the relay and opts.Workers workers behind it.
@@ -51,6 +55,8 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 		store = sessionstore.NewMemory()
 	}
 	topology := &relayTopology{owners: store, loggerFactory: opts.WorkerLoggerFactory}
+	topology.frames = framecache.NewMemory(framecache.Limits{})
+	topology.disableFrameCache, topology.disableResumePLI = opts.DisableFrameCache, opts.DisableResumePLI
 	r, err := relay.New(relay.Config{
 		PublicAddr:    "127.0.0.1:0",
 		WorkerAddr:    "127.0.0.1:0",
@@ -61,7 +67,7 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 		return nil, fmt.Errorf("callharness: start relay: %w", err)
 	}
 	topology.relay = r
-	topology.plane = controlplane.New(r, topology.owners)
+	topology.plane = controlplane.NewWithConfig(r, topology.owners, controlplane.Config{FrameCache: topology.frames})
 	topology.snapshotInterval = opts.SnapshotInterval
 	ctx, cancel := context.WithCancel(context.Background())
 	topology.cancel, topology.done = cancel, make(chan struct{})
@@ -70,9 +76,13 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 	ws := &workers{relay: topology}
 	for range count {
 		worker, err := mediaworker.New(mediaworker.Config{
-			ListenAddr:       "127.0.0.1:0",
-			LoggerFactory:    opts.WorkerLoggerFactory,
-			SnapshotInterval: opts.SnapshotInterval,
+			ListenAddr:             "127.0.0.1:0",
+			FrameCache:             topology.frames,
+			DisableFrameCache:      opts.DisableFrameCache,
+			DisableResumePLI:       opts.DisableResumePLI,
+			ReplayMaxBurstDuration: opts.ReplayMaxBurstDuration,
+			LoggerFactory:          opts.WorkerLoggerFactory,
+			SnapshotInterval:       opts.SnapshotInterval,
 			Relay: &mediaworker.RelayConfig{
 				Addr:       r.WorkerAddr(),
 				PublicAddr: r.PublicAddr(),

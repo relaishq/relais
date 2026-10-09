@@ -18,6 +18,66 @@
 // counters, outbound track counters) to a fenced session store and resumes
 // it on another worker after a planned move or crash takeover. A PeerConnection keeps that state private, so each
 // session here keeps it in one plain value; see sessionState.
+//
+// # Cached video recovery
+//
+// Config.FrameCache is shared outside disposable workers. Only complete VP8
+// frames (partition-zero start, contiguous packets, final marker) are appended,
+// after releasing the session lock. An incomplete keyframe cannot replace the
+// current group. Planned moves never replay. Crash resumes (SequenceMargin>0)
+// default to cache plus PLI; DisableFrameCache and DisableResumePLI select each
+// independently. Nil FrameCache leaves caching unconfigured. Relay-mode cache
+// deletion belongs to the control plane, which knows the terminal call state;
+// a stale worker's consent expiry or Close cannot erase a successor's frames.
+//
+// Current reads have their own configurable 150 ms timeout. Failure is a miss,
+// and groups beyond either ReplayMaxDuration (1 s) or ReplayMaxBytes (256 KiB)
+// are skipped whole. The 256 KiB and 1024-packet limits are hard ceilings.
+// ReplayMaxBurstDuration defaults to one source frame interval (33 ms for a
+// one-frame group). Admission uses half that deadline's nominal wire budget,
+// including RTP/SRTP overhead, to leave headroom for timer and scheduling jitter.
+// Criterion 4 depends on keyframe size: a keyframe larger than that budget is
+// skipped in favour of PLI. Replay additionally allows less
+// than margin minus the 5500-index staleness allowance and 65-index guard.
+// Reservations must also preserve the number of remaining takeover margins.
+// Missing, oversized, or unavailable cached media uses the PLI path.
+//
+// Before any replay ciphertext leaves, ResumeSession reserves R+1+64 indexes
+// in HighestSentIndex, SeqOffset and AdvanceSinceSend and synchronously stores
+// the snapshot outside the packet lock. The persisted ReplayFloor also rejects
+// source packets rewriting at or below the burst. Subsequent resumes advance
+// it to the snapshot high water mark, protecting live indexes too, especially
+// on margin-zero moves. Reservation failure suppresses replay. Version 5 snapshots carry
+// this floor and reject older versions. Encryption happens before adoption;
+// a worker-tracked background task paces bytes at ReplayBitrate (10 Mbps),
+// outside the session lock and shared UDP reader. Audio, other sessions and
+// STUN continue. ResumeSession returns after adoption, releasing the takeover
+// slot and call lock. The default deadline is one frame interval, checked at
+// frame boundaries. A started frame finishes before deadline truncation, so a
+// complete keyframe is never cut by the deadline. Every exit releases the gate.
+// All skips and truncations are logged and counted in Worker.ReplayStats. PLI is requested both
+// at adoption and after replay, since a response during replay could be gated.
+// Shared-socket handovers skip replay and defer PLI until routed video arrives.
+//
+// The replay begins at last cached EchoTimestamp plus arrival age, clamped to
+// [0,2 s], and at least one source frame interval ahead. Multi-frame groups
+// supply their last source spacing; a one-frame group uses 3000 ticks (30 fps).
+// Only an already-sent track applies the snapshot timestamp floor, avoiding a
+// random unanchored timestamp being compared with zero. Frames are compressed
+// to one RTP tick apart. The first live frame advances by the time spent sending
+// replay and waiting for live media, then restores source timestamp spacing.
+// This maps a paced 90 kHz source clock; a remote cache must retain wall arrival
+// times and account for host clock differences.
+//
+// In this one-worker echo topology, cached frames were already seen by the
+// caller. Replaying them restores a decodable older picture; it cannot recreate
+// frames lost during the outage or make dependent live interframes decodable.
+// A fresh live keyframe is still needed. The harness reports first decoded
+// output and first decoded live output from the same kill instant, plus the
+// one-frame-interval criterion measured from resumed media and observable
+// PictureID/payload attribution. Its natural keyframe interval is normally 1 s.
+// Its PLI responder rewinds an already encoded keyframe on the next 33 ms tick,
+// with no encoder delay; real browser timing is measured separately by #13.
 package mediaworker
 
 import (
@@ -34,6 +94,7 @@ import (
 	"github.com/pion/stun/v4"
 
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -69,6 +130,29 @@ type Heartbeats interface{ Heartbeat(netip.AddrPort) error }
 
 // Config configures a media worker.
 type Config struct {
+	// FrameCache lives outside workers. Share one Store across takeover targets.
+	// Nil leaves caching unconfigured; the harness supplies shared memory by
+	// default. Neither worker construction nor worker death owns this store.
+	FrameCache framecache.Store
+	// CacheReadTimeout defaults to 150 ms. Failure is a cache miss.
+	CacheReadTimeout time.Duration
+	// ReplayMaxDuration and ReplayMaxBytes default to 1 s and 256 KiB.
+	// Groups above either limit are skipped whole; bytes cannot exceed 256 KiB.
+	ReplayMaxDuration time.Duration
+	ReplayMaxBytes    int
+	// ReplayMaxBurstDuration limits paced wire time and live-video gating.
+	// Default: one source frame interval, or 33 ms for a one-frame group.
+	// Admission uses half this nominal wire-byte budget for scheduling headroom.
+	// Deadline truncation occurs at a frame boundary, finishing a started frame.
+	ReplayMaxBurstDuration time.Duration
+	// ReplayBitrate caps the encrypted replay burst in bits/s. Default: 10 Mbps.
+	ReplayBitrate int
+	// DisableFrameCache disables writes and crash replay. Default: enabled.
+	DisableFrameCache bool
+	// DisableResumePLI disables takeover keyframe requests. Caller feedback
+	// requests are still relayed normally. Default: request on takeover.
+	DisableResumePLI bool
+
 	// SnapshotInterval defaults to 100 ms. Encoding and storage run outside
 	// the session lock, on a background goroutine, never on the packet path.
 	SnapshotInterval time.Duration
@@ -144,11 +228,13 @@ type Worker struct {
 	paused           atomic.Bool
 	heartbeatStarted bool
 
-	mu       sync.Mutex
-	sessions map[string]*session         // by session ID, which is also the worker's ICE ufrag
-	byAddr   map[netip.AddrPort]*session // caller addresses that passed an ICE check
-	closed   bool
-	running  sync.WaitGroup // session goroutines
+	mu            sync.Mutex
+	sessions      map[string]*session         // by session ID, which is also the worker's ICE ufrag
+	byAddr        map[netip.AddrPort]*session // caller addresses that passed an ICE check
+	closed        bool
+	running       sync.WaitGroup // session goroutines
+	replayStatsMu sync.Mutex
+	replayStats   ReplayStats
 }
 
 // New starts a media worker listening on cfg.ListenAddr.
@@ -703,3 +789,5 @@ func (w *Worker) heartbeat(receiver Heartbeats) {
 		_ = receiver.Heartbeat(w.localAddr)
 	}
 }
+
+func (c Config) cacheEnabled() bool { return c.FrameCache != nil && !c.DisableFrameCache }

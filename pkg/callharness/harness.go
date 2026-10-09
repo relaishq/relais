@@ -60,6 +60,12 @@ type Options struct {
 	SessionStore sessionstore.Store
 	// SnapshotInterval sets the worker snapshot cadence for crash tests.
 	SnapshotInterval time.Duration
+	// DisableFrameCache and DisableResumePLI independently select the video
+	// recovery paths. Both paths are enabled by default.
+	DisableFrameCache bool
+	DisableResumePLI  bool
+	// ReplayMaxBurstDuration overrides the worker's one-frame replay cap.
+	ReplayMaxBurstDuration time.Duration
 }
 
 // Harness runs the system in-process: media workers on loopback UDP

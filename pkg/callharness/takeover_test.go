@@ -105,7 +105,14 @@ func testRelayHardKillTakeover(t *testing.T, store sessionstore.Store) {
 		require.Len(t, move.Tracks, 2)
 		for _, track := range move.Tracks {
 			assert.Positive(t, track.PacketsAfter)
-			assert.GreaterOrEqual(t, track.SkippedSequenceNumbers, 8192, "kill %d %s", i+1, track.Kind)
+			skipped := track.SkippedSequenceNumbers
+			// Replay starts at the post-margin snapshot index, which may lag
+			// the last received packet. Check the original full-margin invariant
+			// on new source media, excluding inserted replay packets.
+			if track.Kind == "video" && move.Recovery.ReplayPackets > 0 {
+				skipped = move.Recovery.SourceVideoSkippedSequenceNumbers
+			}
+			assert.GreaterOrEqual(t, skipped, 8192, "kill %d %s", i+1, track.Kind)
 			assert.Less(t, track.Gap, 2*time.Second, "kill %d %s", i+1, track.Kind)
 			if track.Kind == "video" {
 				assert.Positive(t, track.FirstDecodableFrameAfter)
@@ -205,7 +212,11 @@ func testTakeoverAtGate(t *testing.T, store sessionstore.Store, midKeyframe, fir
 		// There is no observable sequence jump on a stream first seen after
 		// resume. Still require resumed packets and clean decryption below.
 		if !firstKeyframe || report.Track(track.Kind).FirstArrival < move.End {
-			assert.GreaterOrEqual(t, track.SkippedSequenceNumbers, minJump)
+			skipped := track.SkippedSequenceNumbers
+			if track.Kind == "video" && move.Recovery.ReplayPackets > 0 {
+				skipped = move.Recovery.SourceVideoSkippedSequenceNumbers
+			}
+			assert.GreaterOrEqual(t, skipped, minJump)
 		}
 		assert.Positive(t, track.PacketsAfter)
 		if track.Kind == "video" {
