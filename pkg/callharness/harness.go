@@ -33,6 +33,7 @@ import (
 	"github.com/pion/logging"
 	"github.com/relais/internal/workerprobe"
 	"github.com/relais/pkg/mediaworker"
+	"github.com/relais/pkg/sessionstore"
 )
 
 // Options configures the system the harness starts.
@@ -50,10 +51,13 @@ type Options struct {
 	// control plane to transfer ownership and re-point the relay.
 	Workers int
 
-	// Relay runs every call through a relay with an in-memory session-owner
-	// store: answers advertise the relay's public address, and the workers
+	// Relay runs every call through a relay with a session-owner store
+	// (Memory by default): answers advertise the relay's public address, and the workers
 	// bind only private sockets behind it.
 	Relay bool
+	// SessionStore selects the relay topology's store. Nil uses Memory.
+	// The caller owns its lifetime; it must outlive Harness.Close.
+	SessionStore sessionstore.Store
 	// SnapshotInterval sets the worker snapshot cadence for crash tests.
 	SnapshotInterval time.Duration
 	// DisableFrameCache and DisableResumePLI independently select the video

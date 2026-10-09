@@ -10,6 +10,7 @@ import (
 
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
+	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -102,13 +103,28 @@ func (p *Plane) Run(ctx context.Context) error {
 			now := time.Now()
 			p.mu.Lock()
 			dead := []*registration{}
+			planned := []*registration{}
 			for _, w := range p.workers {
-				if !w.recovering && ((!w.dead && now.Sub(w.lastHeartbeat) >= p.config.DeadAfter) || (w.dead && !w.recovered)) {
+				if w.recovering {
+					continue
+				}
+				if (!w.dead && now.Sub(w.lastHeartbeat) >= p.config.DeadAfter) || (w.dead && !w.recovered) {
 					w.dead, w.recovering, w.recovered, w.rejoinReady = true, true, false, false
 					dead = append(dead, w)
+				} else if !w.dead && !w.retryingMoves && len(w.pending) > 0 {
+					w.retryingMoves = true
+					planned = append(planned, w)
 				}
 			}
 			p.mu.Unlock()
+			for _, w := range planned {
+				wg.Go(func() {
+					p.retryPlannedMoves(ctx, w, now)
+					p.mu.Lock()
+					w.retryingMoves = false
+					p.mu.Unlock()
+				})
+			}
 			for _, w := range dead {
 				wg.Go(func() {
 					recovered := p.recoverWorker(ctx, w, now)
@@ -172,6 +188,9 @@ func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected tim
 // Its fields are accessed under the call lock; pending membership uses p.mu.
 type takeoverState struct {
 	lease           sessionstore.Lease
+	candidate       *sessionstore.Lease
+	plannedState    []byte
+	planned         bool
 	routed          netip.AddrPort
 	excluded        map[netip.AddrPort]bool
 	attempts        int
@@ -209,7 +228,38 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 	p.mu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	p.mu.Lock()
+	existing := source.pending[c.id]
+	p.mu.Unlock()
 	lease, err := p.store.Get(ctx, c.id)
+	if existing != nil && existing.candidate != nil {
+		candidate := *existing.candidate
+		if err == nil && lease.Worker == candidate.Worker && lease.Epoch == candidate.Epoch {
+			p.mu.Lock()
+			existing.lease = lease
+			existing.candidate = nil
+			p.mu.Unlock()
+			listed = lease
+		} else {
+			settled, settleErr := p.resolveCandidate(ctx, candidate, &sessionstore.TransientError{Op: "pending transfer", Err: err, Candidate: &candidate})
+			if settleErr == nil {
+				p.mu.Lock()
+				existing.lease = settled
+				existing.candidate = nil
+				p.mu.Unlock()
+				lease, listed, err = settled, settled, nil
+			} else {
+				var transient *sessionstore.TransientError
+				if errors.As(settleErr, &transient) && transient.Candidate == nil {
+					p.mu.Lock()
+					existing.candidate = nil
+					p.mu.Unlock()
+				} else {
+					return
+				}
+			}
+		}
+	}
 	if err != nil || lease.Worker != listed.Worker || lease.Epoch != listed.Epoch {
 		if errors.Is(err, sessionstore.ErrNotFound) {
 			p.mu.Lock()
@@ -225,6 +275,11 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 			if pending != nil {
 				res := MoveResult{Kind: "takeover", ID: c.id, From: source.name, To: to, Start: detected,
 					DetectedAt: detected, LastHeartbeat: lastHeartbeat, Result: mediaworker.HandoverResult{SessionID: c.id}}
+				if pending.planned {
+					res.Kind = "move"
+					res.DetectedAt = time.Time{}
+					res.LastHeartbeat = time.Time{}
+				}
 				p.completeTakeover(source, c, pending.lease, &res, true,
 					fmt.Errorf("controlplane: pending takeover lease vanished: %w", err))
 			}
@@ -238,6 +293,10 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 		source.pending = make(map[string]*takeoverState)
 	}
 	pending := source.pending[c.id]
+	if pending == nil && lease.Worker != source.addr {
+		p.mu.Unlock()
+		return
+	}
 	if pending == nil {
 		pending = &takeoverState{lease: lease, routed: lease.Worker,
 			excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts}
@@ -248,6 +307,11 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 	p.mu.Unlock()
 	res := MoveResult{Kind: "takeover", ID: c.id, From: source.name, Start: detected,
 		DetectedAt: detected, LastHeartbeat: lastHeartbeat, Result: mediaworker.HandoverResult{SessionID: c.id}}
+	if pending.planned {
+		res.Kind = "move"
+		res.DetectedAt = time.Time{}
+		res.LastHeartbeat = time.Time{}
+	}
 	// Publish only terminal outcomes. A transient error preserves the lease,
 	// call and retry state without falsely reporting a lost takeover.
 	complete := func(lost bool, cause error) {
@@ -277,12 +341,20 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 		res.To = target.name
 		transferred := pending.lease
 		if transferred.Worker != target.addr {
-			transferred, err = p.store.Transfer(ctx, pending.lease, target.addr, p.ttl)
+			transferred, err = p.transfer(ctx, pending.lease, target.addr)
 			if err != nil {
+				var transient *sessionstore.TransientError
+				if errors.As(err, &transient) && transient.Candidate != nil {
+					p.mu.Lock()
+					pending.candidate = transient.Candidate
+					p.mu.Unlock()
+				}
 				p.unreserve(target)
 				return
 			}
+			p.mu.Lock()
 			pending.lease = transferred
+			p.mu.Unlock()
 		}
 		// No source hold or rollback. Routing fences the previous leg immediately.
 		if err = r.MoveSession(c.id, pending.routed, target.addr); err != nil {
@@ -290,7 +362,11 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 			return
 		}
 		pending.routed = target.addr
-		state, stateErr := p.store.GetState(ctx, c.id)
+		state := pending.plannedState
+		var stateErr error
+		if state == nil {
+			state, stateErr = p.store.GetState(ctx, c.id)
+		}
 		if stateErr != nil {
 			p.unreserve(target)
 			if errors.Is(stateErr, sessionstore.ErrNotFound) {
@@ -298,7 +374,14 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 			}
 			return
 		}
-		budget, budgetErr := mediaworker.SequenceResumeAttempts(state, p.config.SequenceMargin)
+		margin, rtcpMargin := p.config.SequenceMargin, p.config.SRTCPIndexMargin
+		if pending.planned {
+			margin, rtcpMargin = 0, 0
+		}
+		budget, budgetErr := maxResumeAttempts, error(nil)
+		if !pending.planned {
+			budget, budgetErr = mediaworker.SequenceResumeAttempts(state, margin)
+		}
 		if budgetErr != nil {
 			p.unreserve(target)
 			complete(true, budgetErr)
@@ -313,15 +396,25 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 		res.Result.StateBytes = len(state)
 		started := time.Now()
 		pending.attempts++
+		if !pending.planned {
+			pending.plannedState = nil
+		}
 		_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: transferred,
-			Context: ctx, SequenceMargin: p.config.SequenceMargin, SRTCPIndexMargin: p.config.SRTCPIndexMargin})
+			Context: ctx, SequenceMargin: margin, SRTCPIndexMargin: rtcpMargin})
 		res.Result.Resume += time.Since(started)
 		p.unreserve(target)
 		if err == nil {
 			now := time.Now()
-			c.lastMove, c.lastMoveKind = &now, "takeover"
+			c.lastMove, c.lastMoveKind = &now, res.Kind
 			c.moveCount++
-			c.takeoverCount++
+			if !pending.planned {
+				c.takeoverCount++
+			}
+			if pending.planned {
+				held, releaseErr := r.ReleaseSession(c.id, target.addr)
+				res.Result.HeldPackets = held
+				res.Result.HoldExpired = errors.Is(releaseErr, relay.ErrHoldExpired)
+			}
 			complete(false, nil)
 			return
 		}
@@ -355,7 +448,7 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 func (p *Plane) completeTakeover(source *registration, c *call, lease sessionstore.Lease,
 	res *MoveResult, lost bool, cause error) {
 	if lost {
-		p.lose(c, lease)
+		p.lose(c, lease, res.Kind == "move")
 	}
 	p.finishPending(source, c.id)
 	res.End = time.Now()
@@ -365,7 +458,9 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 		res.Error = cause.Error()
 	}
 	p.mu.Lock()
-	p.recordTakeover(*res)
+	if res.Kind == "takeover" {
+		p.recordTakeover(*res)
+	}
 	if lost {
 		p.lostCount++
 	}
@@ -395,7 +490,7 @@ func (p *Plane) recentTakeovers() []MoveResult {
 	return out
 }
 
-func (p *Plane) lose(c *call, lease sessionstore.Lease) {
+func (p *Plane) lose(c *call, lease sessionstore.Lease, planned bool) {
 	// Cleanup outlives a cancelled detector context, as with move rollback.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -404,6 +499,10 @@ func (p *Plane) lose(c *call, lease sessionstore.Lease) {
 	p.mu.Lock()
 	r := p.relay
 	p.mu.Unlock()
+	// A lost final export must free its bounded relay hold immediately.
+	if planned {
+		_, _ = r.ReleaseSession(c.id, netip.AddrPort{})
+	}
 	r.ForgetSession(c.id)
 	p.forget(c)
 }
@@ -438,6 +537,31 @@ func (p *Plane) Replace(name string, addr netip.AddrPort, worker Worker) error {
 		w.StartHeartbeats(p)
 	}
 	return nil
+}
+
+func (p *Plane) retryPlannedMoves(ctx context.Context, w *registration, now time.Time) {
+	p.mu.Lock()
+	leases := make([]sessionstore.Lease, 0, len(w.pending))
+	for _, pending := range w.pending {
+		if pending.planned {
+			leases = append(leases, pending.lease)
+		}
+	}
+	p.mu.Unlock()
+	jobs := make(chan sessionstore.Lease)
+	var wg sync.WaitGroup
+	for range min(len(leases), p.config.TakeoverParallelism) {
+		wg.Go(func() {
+			for lease := range jobs {
+				p.takeover(ctx, w, lease, now)
+			}
+		})
+	}
+	for _, lease := range leases {
+		jobs <- lease
+	}
+	close(jobs)
+	wg.Wait()
 }
 
 // deleteFrames applies only to a terminal call, never to the old worker's
