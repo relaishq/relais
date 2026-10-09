@@ -68,14 +68,18 @@ type Config struct {
 	// deployment setting; it is unexported so this package's tests can
 	// shorten it.
 	consentTimeout time.Duration
+
+	// socket, set by Socket.NewWorker, is a media socket shared with other
+	// workers; the worker attaches to it instead of listening on ListenAddr.
+	socket *Socket
 }
 
-// Worker is a media worker. It owns one UDP socket and the sessions that run
-// over it.
+// Worker is a media worker. It owns one UDP socket, or shares one with other
+// workers (see Socket), and the sessions that run over it.
 type Worker struct {
 	cfg       Config
 	log       logging.LeveledLogger
-	conn      *net.UDPConn
+	conn      packetConn // its own UDP socket, or a port on a shared Socket
 	localAddr netip.AddrPort
 	readDone  chan struct{}
 
@@ -100,6 +104,14 @@ func New(cfg Config) (*Worker, error) {
 	if cfg.consentTimeout <= 0 {
 		cfg.consentTimeout = defaultConsentTimeout
 	}
+	if cfg.socket != nil {
+		port, err := cfg.socket.attach()
+		if err != nil {
+			return nil, err
+		}
+
+		return start(cfg, port, cfg.socket.LocalAddr()), nil
+	}
 
 	addr, err := net.ResolveUDPAddr("udp", cfg.ListenAddr)
 	if err != nil {
@@ -121,6 +133,11 @@ func New(cfg Config) (*Worker, error) {
 	}
 	localAddr := udpAddr.AddrPort()
 
+	return start(cfg, conn, localAddr), nil
+}
+
+// start runs a worker on conn.
+func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 	worker := &Worker{
 		cfg:       cfg,
 		log:       cfg.LoggerFactory.NewLogger("mediaworker"),
@@ -132,7 +149,7 @@ func New(cfg Config) (*Worker, error) {
 	}
 	go worker.readLoop()
 
-	return worker, nil
+	return worker
 }
 
 // MediaAddr returns the address of the worker's UDP media socket.

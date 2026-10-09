@@ -29,7 +29,10 @@ const (
 	defaultConsentTimeout = 30 * time.Second
 )
 
-var errWrongUfrag = errors.New("mediaworker: STUN USERNAME does not match the caller's ICE ufrag")
+var (
+	errWrongUfrag = errors.New("mediaworker: STUN USERNAME does not match the caller's ICE ufrag")
+	errHandedOver = errors.New("mediaworker: session has been handed over to another worker")
+)
 
 // hostCandidate is the a=candidate value for the worker's socket.
 func hostCandidate(addr netip.AddrPort) string {
@@ -87,6 +90,9 @@ func (s *session) answerBindingRequest(msg *stun.Message, remoteUfrag string, fr
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.fenced.Load() {
+		return nil, errHandedOver
+	}
 	creds := &s.state.ICE
 	if remoteUfrag != creds.RemoteUfrag {
 		return nil, errWrongUfrag

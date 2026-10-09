@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/dtls/v3"
@@ -53,7 +54,7 @@ var supportedSRTPProfiles = []dtls.SRTPProtectionProfile{
 // dtlsConn, srtpIn and srtpOut are caches built from it. mu is the session's
 // one lock: it guards state and the caches, and every packet the session
 // sends or receives is processed under it, so a snapshot taken under mu is
-// atomic with the counters.
+// atomic with the counters (see export).
 type session struct {
 	id     string // state.ID; never changes
 	worker *Worker
@@ -64,6 +65,16 @@ type session struct {
 	dtlsConn *dtls.Conn
 	srtpIn   *srtp.Context // decrypts caller to worker
 	srtpOut  *srtp.Context // encrypts worker to caller
+
+	// fenced is set, under mu, when the session is exported for a handover.
+	// From then on this worker processes none of the session's packets and
+	// sends the caller nothing, not even the close_notify of closing the
+	// DTLS connection: the session continues on another worker.
+	fenced atomic.Bool
+
+	// decryptFailures counts SRTP and SRTCP packets from the caller that this
+	// worker could not decrypt.
+	decryptFailures atomic.Uint64
 
 	// Runtime plumbing, rebuilt by a worker that resumes the session.
 	dtlsEndpoint  *dtlsEndpoint
@@ -109,30 +120,37 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 		return nil, err
 	}
 
+	return sessionFromState(w, sessionState{
+		Version: sessionStateVersion,
+		ID:      id,
+		ICE: iceState{
+			LocalUfrag:  id,
+			LocalPwd:    pwd,
+			RemoteUfrag: offer.iceUfrag,
+			RemotePwd:   offer.icePwd,
+		},
+		DTLS: dtlsState{
+			Certificate:           certDER,
+			PrivateKey:            keyDER,
+			CallerFingerprintHash: offer.fingerprintHash,
+			CallerFingerprint:     offer.fingerprint,
+		},
+		SRTP:  srtpState{Inbound: make(map[uint32]uint64)},
+		Audio: audio,
+		Video: video,
+	}), nil
+}
+
+// sessionFromState builds the runtime plumbing around a session state: a
+// new session's, or one being resumed. The consent timer starts at once, and
+// a shared socket routes the session to this worker.
+func sessionFromState(w *Worker, state sessionState) *session {
 	ctx, cancel := context.WithCancel(context.Background())
 	sess := &session{
-		id:     id,
-		worker: w,
-		log:    w.cfg.LoggerFactory.NewLogger("session"),
-		state: sessionState{
-			Version: sessionStateVersion,
-			ID:      id,
-			ICE: iceState{
-				LocalUfrag:  id,
-				LocalPwd:    pwd,
-				RemoteUfrag: offer.iceUfrag,
-				RemotePwd:   offer.icePwd,
-			},
-			DTLS: dtlsState{
-				Certificate:           certDER,
-				PrivateKey:            keyDER,
-				CallerFingerprintHash: offer.fingerprintHash,
-				CallerFingerprint:     offer.fingerprint,
-			},
-			SRTP:  srtpState{Inbound: make(map[uint32]uint64)},
-			Audio: audio,
-			Video: video,
-		},
+		id:         state.ID,
+		worker:     w,
+		log:        w.cfg.LoggerFactory.NewLogger("session"),
+		state:      state,
 		nominated:  make(chan struct{}),
 		rtcpBuf:    make([]byte, receiveMTU),
 		decryptBuf: make([]byte, receiveMTU),
@@ -143,8 +161,9 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 	}
 	sess.dtlsEndpoint = newDTLSEndpoint(sess)
 	sess.consent = time.AfterFunc(w.cfg.consentTimeout, sess.consentExpired)
+	w.claimSession(sess.id)
 
-	return sess, nil
+	return sess
 }
 
 // answerParams is the session's half of the SDP answer.
@@ -175,51 +194,62 @@ func (s *session) answerParams() answerParams {
 func (s *session) run() {
 	defer s.close()
 
+	dtlsConn, err := s.connect()
+	if dtlsConn != nil {
+		// close may already have run (and found no DTLS connection to
+		// close), so run closes the connection it created too. A second
+		// Close is harmless.
+		defer func() { _ = dtlsConn.Close() }()
+	}
+	if err != nil {
+		s.log.Warnf("session %s: %v", s.id, err)
+
+		return
+	}
+	s.log.Infof("session %s: established with %s", s.id, s.dtlsEndpoint.RemoteAddr())
+	s.serve(dtlsConn)
+}
+
+// connect waits for the caller's nomination, runs the DTLS handshake and
+// starts SRTP. It returns the DTLS connection whenever it created one.
+func (s *session) connect() (*dtls.Conn, error) {
 	connectCtx, cancel := context.WithTimeout(s.ctx, s.worker.cfg.ConnectTimeout)
 	defer cancel()
 
 	select {
 	case <-s.nominated:
 	case <-connectCtx.Done():
-		s.log.Warnf("session %s: caller did not complete ICE: %v", s.id, connectCtx.Err())
-
-		return
+		return nil, fmt.Errorf("caller did not complete ICE: %w", connectCtx.Err())
 	}
 
 	options, err := s.dtlsServerOptions()
 	if err != nil {
-		s.log.Warnf("session %s: DTLS options: %v", s.id, err)
-
-		return
+		return nil, fmt.Errorf("DTLS options: %w", err)
 	}
 	dtlsConn, err := dtls.ServerWithOptions(s.dtlsEndpoint, s.dtlsEndpoint.RemoteAddr(), options...)
 	if err != nil {
-		s.log.Warnf("session %s: create DTLS server: %v", s.id, err)
-
-		return
+		return nil, fmt.Errorf("create DTLS server: %w", err)
 	}
-	// close may already have run (and found no DTLS connection to close), so
-	// run closes the connection it created too. A second Close is harmless.
-	defer func() { _ = dtlsConn.Close() }()
 	s.mu.Lock()
 	s.dtlsConn = dtlsConn
 	s.mu.Unlock()
 
 	if err := dtlsConn.HandshakeContext(connectCtx); err != nil {
-		s.log.Warnf("session %s: DTLS handshake: %v", s.id, err)
-
-		return
+		return dtlsConn, fmt.Errorf("DTLS handshake: %w", err)
 	}
-	if err := s.startSRTP(dtlsConn); err != nil {
-		s.log.Warnf("session %s: start SRTP: %v", s.id, err)
-
-		return
+	if _, err := s.startSRTP(dtlsConn); err != nil {
+		return dtlsConn, fmt.Errorf("start SRTP: %w", err)
 	}
-	s.log.Infof("session %s: established with %s", s.id, s.dtlsEndpoint.RemoteAddr())
 
-	// WebRTC without data channels carries no DTLS application data, but the
-	// DTLS connection still has to be read so alerts are processed: a
-	// close_notify from the caller ends the session.
+	return dtlsConn, nil
+}
+
+// serve keeps an established session alive until the caller hangs up, its
+// consent expires or the session is closed. WebRTC without data channels
+// carries no DTLS application data, but the DTLS connection still has to be
+// read so alerts are processed: a close_notify from the caller ends the
+// session.
+func (s *session) serve(dtlsConn *dtls.Conn) {
 	buf := make([]byte, receiveMTU)
 	for {
 		if _, err := dtlsConn.Read(buf); err != nil {
@@ -287,34 +317,35 @@ func (s *session) verifyCallerCertificate(rawCerts [][]byte, _ [][]*x509.Certifi
 // startSRTP derives the session's SRTP keys from the DTLS connection
 // (RFC 5764) and builds the inbound and outbound SRTP contexts. The keys are
 // not part of the session state: they can always be derived again from the
-// DTLS connection.
-func (s *session) startSRTP(conn *dtls.Conn) error {
+// DTLS connection, which is how a resumed session gets them. They are
+// returned for that case.
+func (s *session) startSRTP(conn *dtls.Conn) (srtp.SessionKeys, error) {
 	dtlsProfile, ok := conn.SelectedSRTPProtectionProfile()
 	if !ok {
-		return errNoSRTPProfile
+		return srtp.SessionKeys{}, errNoSRTPProfile
 	}
 	profile, err := srtpProfile(dtlsProfile)
 	if err != nil {
-		return err
+		return srtp.SessionKeys{}, err
 	}
 
 	connState, ok := conn.ConnectionState()
 	if !ok {
-		return errors.New("mediaworker: DTLS connection state unavailable")
+		return srtp.SessionKeys{}, errors.New("mediaworker: DTLS connection state unavailable")
 	}
 	config := srtp.Config{Profile: profile}
 	if err := config.ExtractSessionKeysFromDTLS(&connState, false); err != nil {
-		return err
+		return srtp.SessionKeys{}, err
 	}
 
 	in, err := srtp.CreateContext(config.Keys.RemoteMasterKey, config.Keys.RemoteMasterSalt, profile,
 		srtp.SRTPReplayProtection(replayWindow), srtp.SRTCPReplayProtection(replayWindow))
 	if err != nil {
-		return err
+		return srtp.SessionKeys{}, err
 	}
 	out, err := srtp.CreateContext(config.Keys.LocalMasterKey, config.Keys.LocalMasterSalt, profile)
 	if err != nil {
-		return err
+		return srtp.SessionKeys{}, err
 	}
 
 	s.mu.Lock()
@@ -323,7 +354,7 @@ func (s *session) startSRTP(conn *dtls.Conn) error {
 	s.srtpOut = out
 	s.mu.Unlock()
 
-	return nil
+	return config.Keys, nil
 }
 
 // handlePacket demultiplexes a non-STUN packet from the caller (RFC 7983):
@@ -346,8 +377,8 @@ func (s *session) handleRTP(pkt []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.srtpIn == nil {
-		return // SRTP keys are not ready yet.
+	if s.srtpIn == nil || s.fenced.Load() {
+		return // SRTP keys are not ready yet, or the session has moved.
 	}
 
 	// A successful decryption advances the inbound SRTP context's rollover
@@ -358,6 +389,7 @@ func (s *session) handleRTP(pkt []byte) {
 	var authenticated rtp.Header
 	plain, err := s.srtpIn.DecryptRTP(s.decryptBuf, pkt, &authenticated)
 	if err != nil {
+		s.decryptFailures.Add(1)
 		s.log.Debugf("session %s: drop SRTP packet: %v", s.id, err)
 
 		return
@@ -421,11 +453,12 @@ func (s *session) handleRTCP(pkt []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.srtpIn == nil {
+	if s.srtpIn == nil || s.fenced.Load() {
 		return
 	}
 	plain, err := s.srtpIn.DecryptRTCP(s.rtcpBuf, pkt, nil)
 	if err != nil {
+		s.decryptFailures.Add(1)
 		s.log.Debugf("session %s: drop SRTCP packet: %v", s.id, err)
 
 		return
@@ -508,8 +541,9 @@ func (s *session) consentExpired() {
 }
 
 // close ends the session: it sends close_notify to the caller (when DTLS is
-// up) and removes the session from the worker. It is safe to call more than
-// once and from any goroutine.
+// up) and removes the session from the worker. A fenced session, one that
+// was exported for a handover, sends nothing: it just leaves this worker. It
+// is safe to call more than once and from any goroutine.
 func (s *session) close() {
 	s.closeOnce.Do(func() {
 		s.cancel()
@@ -524,7 +558,12 @@ func (s *session) close() {
 		_ = s.dtlsEndpoint.Close()
 
 		s.worker.forget(s)
-		s.log.Debugf("session %s: closed", s.id)
+		s.worker.releaseSession(s.id)
+		if s.fenced.Load() {
+			s.log.Debugf("session %s: handed over", s.id)
+		} else {
+			s.log.Debugf("session %s: closed", s.id)
+		}
 	})
 }
 

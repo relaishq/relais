@@ -61,8 +61,12 @@ func (e *dtlsEndpoint) ReadFrom(p []byte) (int, net.Addr, error) {
 }
 
 // WriteTo sends to the caller's nominated address. Before nomination there
-// is nowhere to send, and the record is dropped.
+// is nowhere to send, and the record is dropped; so is every record after
+// the session was handed over (see session.fenced).
 func (e *dtlsEndpoint) WriteTo(p []byte, _ net.Addr) (int, error) {
+	if e.sess.fenced.Load() {
+		return len(p), nil
+	}
 	e.sess.mu.Lock()
 	to := e.sess.state.ICE.RemoteAddr
 	e.sess.mu.Unlock()

@@ -7,29 +7,33 @@ import (
 	"github.com/pion/srtp/v3"
 )
 
-// sessionStateVersion is bumped whenever sessionState's layout changes, so a
-// stored session state can be checked before a worker resumes it.
-const sessionStateVersion = 2
+// sessionStateVersion is bumped whenever the layout of sessionState or of
+// its exported form (snapshot, in handover.go) changes, so exported session
+// state can be checked before a worker resumes it. Version 3 is the first
+// exported form: the state plus the DTLS connection state.
+const sessionStateVersion = 3
 
 // sessionState is the session state: everything needed to continue a session
 // on another media worker except the established DTLS connection state, kept
 // as one plain value. Its fields are exported so the value serializes with
-// encoding/json or encoding/gob.
+// encoding/json (see snapshot).
 //
 // The established DTLS connection state (master secret, cipher suite, epochs
 // and record sequence numbers) is deliberately not held here. It lives in the
 // dtls.Conn, which updates it on every record, and is exported only at
-// snapshot time: issue #4 marshals it with the conn's ConnectionState and
-// dtls.State.MarshalBinary, and a resuming worker rebuilds the connection
-// with dtls.ResumeWithOptions. This value holds everything else.
+// snapshot time: export marshals it with the conn's ConnectionState and
+// dtls.State.MarshalBinary next to this value, and a resuming worker rebuilds
+// the connection with dtls.ResumeWithOptions. This value holds everything
+// else.
 //
 // The live transport objects on a session are caches built from this value
 // (plus, for DTLS, that exported connection state):
 //
-//   - the DTLS connection, established by the handshake today and rebuilt
-//     with dtls.ResumeWithOptions in issue #4.
+//   - the DTLS connection, established by the handshake or rebuilt with
+//     dtls.ResumeWithOptions.
 //   - the SRTP contexts, which are re-derived from DTLS keying material and
-//     can be primed with the indexes below through SetROC and SetIndex.
+//     continue from the indexes below (restoreInboundIndex,
+//     restoreOutboundIndex and SetIndex).
 type sessionState struct {
 	Version int
 	ID      string // the session ID, which is also the worker's ICE ufrag
