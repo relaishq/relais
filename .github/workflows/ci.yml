@@ -54,7 +54,15 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
+      # The harness decodes every echoed VP8 frame with ffmpeg when it is on
+      # PATH; RELAIS_HARNESS_REQUIRE_FFMPEG turns a skipped decode into a
+      # failure so CI never passes without it.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Run call harness tests (race detector)
+        env:
+          RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
         run: make test-harness
 
   cluster-tests-gate:

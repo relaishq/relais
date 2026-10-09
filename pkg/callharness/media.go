@@ -11,6 +11,7 @@ import (
 	// tests, whatever their working directory.
 	_ "embed"
 
+	"github.com/pion/webrtc/v4/pkg/media/ivfreader"
 	"github.com/pion/webrtc/v4/pkg/media/oggreader"
 )
 
@@ -85,4 +86,86 @@ func (s *opusSource) next() ([]byte, time.Duration, error) {
 	}
 
 	return nil, 0, errors.New("callharness: Ogg file has no Opus frames")
+}
+
+// callerVideo is 5 s of pre-encoded VP8 (320x240, 30 fps, about 160 kb/s, a
+// keyframe every 30 frames, no alt-ref frames so every frame is shown) that
+// the caller plays in a loop. It was generated with:
+//
+//	ffmpeg -f lavfi -i "testsrc2=size=320x240:rate=30:duration=5" \
+//	  -pix_fmt yuv420p -c:v libvpx -b:v 160k -g 30 -keyint_min 30 \
+//	  -auto-alt-ref 0 -lag-in-frames 0 -deadline realtime -cpu-used 8 -error-resilient 1 \
+//	  -map_metadata -1 -fflags +bitexact -flags:v +bitexact \
+//	  testdata/caller-video.ivf
+//
+//go:embed testdata/caller-video.ivf
+var callerVideo []byte
+
+const vp8ClockRate = 90000
+
+// vp8Source reads VP8 frames from an IVF file in the style of Pion's
+// play-from-disk example, looping at the end of the file. Every IVF frame of
+// callerVideo is one shown frame, sent as one media sample.
+type vp8Source struct {
+	data          []byte
+	reader        *ivfreader.IVFReader
+	frameDuration time.Duration
+}
+
+func newVP8Source(data []byte) (*vp8Source, error) {
+	src := &vp8Source{data: data}
+	if err := src.rewind(); err != nil {
+		return nil, err
+	}
+
+	return src, nil
+}
+
+// rewind restarts the file, whose first frame is a keyframe.
+func (s *vp8Source) rewind() error {
+	reader, header, err := ivfreader.NewWith(bytes.NewReader(s.data))
+	if err != nil {
+		return fmt.Errorf("callharness: open IVF: %w", err)
+	}
+	if header.FourCC != "VP80" {
+		return fmt.Errorf("callharness: IVF codec %q, want VP80", header.FourCC)
+	}
+	if header.TimebaseDenominator == 0 || header.TimebaseNumerator == 0 {
+		return errors.New("callharness: IVF has no frame rate")
+	}
+	s.reader = reader
+	s.frameDuration = time.Second * time.Duration(header.TimebaseNumerator) / time.Duration(header.TimebaseDenominator)
+
+	return nil
+}
+
+// next returns the next VP8 frame and whether it is a keyframe.
+func (s *vp8Source) next() (frame []byte, keyframe bool, err error) {
+	for rewinds := 0; rewinds < 2; {
+		frame, _, err := s.reader.ParseNextFrame()
+		if errors.Is(err, io.EOF) {
+			rewinds++
+			if err := s.rewind(); err != nil {
+				return nil, false, err
+			}
+
+			continue
+		}
+		if err != nil {
+			return nil, false, fmt.Errorf("callharness: read IVF frame: %w", err)
+		}
+		if len(frame) == 0 {
+			continue
+		}
+
+		return frame, isVP8Keyframe(frame), nil
+	}
+
+	return nil, false, errors.New("callharness: IVF file has no VP8 frames")
+}
+
+// isVP8Keyframe reads the key frame flag of a VP8 frame (RFC 6386 section
+// 9.1): bit 0 of the first byte is 0 for a keyframe.
+func isVP8Keyframe(frame []byte) bool {
+	return len(frame) > 0 && frame[0]&1 == 0
 }

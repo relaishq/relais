@@ -4,16 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
+	"image"
 	"net"
-	"net/http"
-	"net/url"
-	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/ice/v4"
 	"github.com/pion/interceptor"
+	"github.com/pion/rtcp"
 	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
@@ -23,33 +22,69 @@ import (
 // before it stops recording.
 const echoDrain = 500 * time.Millisecond
 
-const opusPayloadType = 111
+const (
+	opusPayloadType = 111
+	vp8PayloadType  = 96
+)
+
+// CallOptions shape the call the caller makes.
+type CallOptions struct {
+	// Video adds a VP8 video track next to the Opus audio track, on the same
+	// bundled connection.
+	Video bool
+
+	// BrowserLikeOffer makes the caller offer what a browser offers rather
+	// than just the codecs it sends: every codec Pion knows (VP8, VP9, H264,
+	// H265 and AV1, each with RTX), RED, ULPFEC, telephone-event and comfort
+	// noise, extra RTP header extensions, and an RTX ssrc-group for video.
+	BrowserLikeOffer bool
+}
+
+// KeyframeRequest is an RTCP message that asks a sender for a keyframe.
+type KeyframeRequest int
+
+const (
+	// PLI is a Picture Loss Indication (RFC 4585).
+	PLI KeyframeRequest = iota
+	// FIR is a Full Intra Request (RFC 5104).
+	FIR
+)
 
 // Call is one call made by the caller: a Pion PeerConnection that sends
-// pre-encoded Opus audio and records everything it observes.
+// pre-encoded Opus audio (and VP8 video) and records everything it observes.
 type Call struct {
 	harness *Harness
 	pc      *webrtc.PeerConnection
 	audio   *webrtc.TrackLocalStaticSample
+	video   *webrtc.TrackLocalStaticSample // nil for an audio-only call
 	rec     *recorder
 
 	audioSSRC   uint32
+	videoSSRC   uint32
+	offer       string
 	answer      AnswerFacts
 	resourceURL string // the call's signaling resource, from Location
 	localUfrag  string
 	remoteUfrag string
 
-	mu      sync.Mutex
-	closing bool
-	readers sync.WaitGroup
+	// keyframeWanted is set when the worker asks the caller for a keyframe;
+	// the video sender answers it the way a browser's encoder would.
+	keyframeWanted atomic.Bool
+
+	mu            sync.Mutex
+	closing       bool
+	echoVideoSSRC uint32
+	haveEchoVideo bool
+	firSequence   uint8
+	readers       sync.WaitGroup
 }
 
 // Dial starts a call: it makes one WHIP-style offer/answer exchange with the
 // system and waits until the caller's connection is "connected".
-func (h *Harness) Dial(ctx context.Context) (call *Call, err error) {
+func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err error) {
 	rec := newRecorder()
 
-	api, err := newCallerAPI(rec)
+	api, err := newCallerAPI(rec, opts.BrowserLikeOffer)
 	if err != nil {
 		return nil, err
 	}
@@ -65,29 +100,20 @@ func (h *Harness) Dial(ctx context.Context) (call *Call, err error) {
 		}
 	}()
 
-	call.audio, err = webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: opusSampleRate, Channels: 2},
-		"audio", "caller",
-	)
+	call.audio, call.audioSSRC, err = call.addTrack(
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: opusSampleRate, Channels: 2}, kindAudio)
 	if err != nil {
 		return call, err
 	}
-	sender, err := pc.AddTrack(call.audio)
-	if err != nil {
-		return call, err
-	}
-	if encodings := sender.GetParameters().Encodings; len(encodings) > 0 {
-		call.audioSSRC = uint32(encodings[0].SSRC)
-	}
-	call.startReader(func() {
-		// Read RTCP so the sender's interceptors run.
-		buf := make([]byte, 1500)
-		for {
-			if _, _, err := sender.Read(buf); err != nil {
-				return
-			}
+	rec.sentAudio.SSRC = call.audioSSRC
+	if opts.Video {
+		call.video, call.videoSSRC, err = call.addTrack(
+			webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: vp8ClockRate}, kindVideo)
+		if err != nil {
+			return call, err
 		}
-	})
+		rec.sentVideo.SSRC = call.videoSSRC
+	}
 
 	connected := make(chan struct{})
 	var connectedOnce sync.Once
@@ -124,10 +150,13 @@ func (h *Harness) Dial(ctx context.Context) (call *Call, err error) {
 		return call, ctx.Err()
 	}
 
-	answer, err := call.exchange(ctx, pc.LocalDescription().SDP)
+	call.offer = pc.LocalDescription().SDP
+	rec.offerAnswerExchange()
+	answer, resourceURL, err := h.postOffer(ctx, call.offer)
 	if err != nil {
 		return call, err
 	}
+	call.resourceURL = resourceURL
 	if call.answer, err = parseAnswer(answer); err != nil {
 		return call, fmt.Errorf("callharness: parse answer: %w", err)
 	}
@@ -148,57 +177,102 @@ func (h *Harness) Dial(ctx context.Context) (call *Call, err error) {
 	}
 }
 
-// exchange POSTs the offer and returns the answer: the call's one signaling
-// exchange.
-func (c *Call) exchange(ctx context.Context, offer string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.harness.signalingURL, strings.NewReader(offer))
+// addTrack adds one of the caller's tracks and reads the RTCP sent to it.
+func (c *Call) addTrack(capability webrtc.RTPCodecCapability, kind string) (*webrtc.TrackLocalStaticSample, uint32, error) {
+	track, err := webrtc.NewTrackLocalStaticSample(capability, kind, "caller")
 	if err != nil {
-		return "", err
+		return nil, 0, err
 	}
-	req.Header.Set("Content-Type", "application/sdp")
-
-	c.rec.offerAnswerExchange()
-	resp, err := c.harness.httpClient.Do(req)
+	sender, err := c.pc.AddTrack(track)
 	if err != nil {
-		return "", fmt.Errorf("callharness: POST offer: %w", err)
+		return nil, 0, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("callharness: read answer: %w", err)
-	}
-	if resp.StatusCode != http.StatusCreated {
-		return "", fmt.Errorf("callharness: POST offer: %s: %s", resp.Status, strings.TrimSpace(string(body)))
-	}
-	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/sdp") {
-		return "", fmt.Errorf("callharness: answer has Content-Type %q", ct)
+	var ssrc uint32
+	if encodings := sender.GetParameters().Encodings; len(encodings) > 0 {
+		ssrc = uint32(encodings[0].SSRC)
 	}
 
-	if location := resp.Header.Get("Location"); location != "" {
-		base, err := url.Parse(c.harness.signalingURL)
-		if err != nil {
-			return "", err
+	c.startReader(func() {
+		// Reading RTCP also runs the sender's interceptors.
+		for {
+			packets, _, err := sender.ReadRTCP()
+			if err != nil {
+				return
+			}
+			for range keyframeRequests(packets, ssrc) {
+				c.rec.keyframeRequestReceived(kind)
+				if kind == kindVideo {
+					c.keyframeWanted.Store(true)
+				}
+			}
 		}
-		ref, err := url.Parse(location)
-		if err != nil {
-			return "", fmt.Errorf("callharness: bad Location %q: %w", location, err)
+	})
+
+	return track, ssrc, nil
+}
+
+// keyframeRequests returns the PLI and FIR packets in packets that ask for a
+// keyframe on ssrc.
+func keyframeRequests(packets []rtcp.Packet, ssrc uint32) []rtcp.Packet {
+	var requests []rtcp.Packet
+	for _, packet := range packets {
+		switch p := packet.(type) {
+		case *rtcp.PictureLossIndication:
+			if p.MediaSSRC == ssrc {
+				requests = append(requests, p)
+			}
+		case *rtcp.FullIntraRequest:
+			for _, entry := range p.FIR {
+				if entry.SSRC == ssrc {
+					requests = append(requests, p)
+
+					break
+				}
+			}
 		}
-		c.resourceURL = base.ResolveReference(ref).String()
 	}
 
-	return string(body), nil
+	return requests
 }
 
 func (c *Call) onTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-	record := c.rec.addTrack(track.Kind().String(), uint32(track.SSRC()), uint8(track.PayloadType()))
+	kind := track.Kind().String()
+	record := c.rec.addTrack(kind, uint32(track.SSRC()), uint8(track.PayloadType()))
+	if kind == kindVideo {
+		c.mu.Lock()
+		c.echoVideoSSRC = uint32(track.SSRC())
+		c.haveEchoVideo = true
+		c.mu.Unlock()
+	}
+
 	c.startReader(func() {
+		var assembler *vp8Assembler
+		if kind == kindVideo {
+			assembler = &vp8Assembler{}
+		}
 		for {
 			pkt, _, err := track.ReadRTP()
 			if err != nil {
 				return
 			}
 			c.rec.packet(record, pkt, time.Now())
+			if assembler == nil {
+				continue
+			}
+
+			frame, incomplete := assembler.push(pkt)
+			if incomplete > 0 {
+				c.rec.videoIncomplete(record, incomplete)
+			}
+			if frame == nil {
+				continue
+			}
+			var size image.Point
+			var decodeErr error
+			if frame.keyframe {
+				size, decodeErr = decodeKeyframe(frame.data)
+			}
+			c.rec.videoFrame(record, frame, size, decodeErr, time.Now())
 		}
 	})
 }
@@ -217,9 +291,31 @@ func (c *Call) startReader(fn func()) {
 	}()
 }
 
-// SendAudio plays the pre-encoded Opus file in real time, looping it, for
-// the given duration.
-func (c *Call) SendAudio(ctx context.Context, duration time.Duration) error {
+// SendMedia plays the pre-encoded media in real time, looping it, for the
+// given duration: Opus audio, and VP8 video when the call has video.
+func (c *Call) SendMedia(ctx context.Context, duration time.Duration) error {
+	end := time.Now().Add(duration)
+
+	var wg sync.WaitGroup
+	var audioErr, videoErr error
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		audioErr = c.sendAudio(ctx, end)
+	}()
+	if c.video != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			videoErr = c.sendVideo(ctx, end)
+		}()
+	}
+	wg.Wait()
+
+	return errors.Join(audioErr, videoErr)
+}
+
+func (c *Call) sendAudio(ctx context.Context, end time.Time) error {
 	src, err := newOpusSource(callerAudio)
 	if err != nil {
 		return err
@@ -228,19 +324,18 @@ func (c *Call) SendAudio(ctx context.Context, duration time.Duration) error {
 	ticker := time.NewTicker(opusFrameDuration)
 	defer ticker.Stop()
 
-	end := time.Now().Add(duration)
 	for time.Now().Before(end) {
 		frame, frameDuration, err := src.next()
 		if err != nil {
 			return err
 		}
-		// The echo can arrive before WriteSample returns, so the payload is
-		// registered first; the packet is counted once the write succeeds.
-		c.rec.sending(frame)
+		// The echo can arrive before WriteSample returns, so the frame is
+		// registered first; it is counted once the write succeeds.
+		c.rec.sending(kindAudio, frame)
 		if err := c.audio.WriteSample(media.Sample{Data: frame, Duration: frameDuration}); err != nil {
 			return fmt.Errorf("callharness: send audio: %w", err)
 		}
-		c.rec.sent()
+		c.rec.sent(kindAudio, false)
 
 		select {
 		case <-ctx.Done():
@@ -252,9 +347,80 @@ func (c *Call) SendAudio(ctx context.Context, duration time.Duration) error {
 	return nil
 }
 
+// sendVideo sends one VP8 frame per frame interval. When the worker asks for
+// a keyframe, the caller restarts the file, whose first frame is one, as a
+// browser's encoder would send a keyframe next.
+func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
+	src, err := newVP8Source(callerVideo)
+	if err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(src.frameDuration)
+	defer ticker.Stop()
+
+	for time.Now().Before(end) {
+		if c.keyframeWanted.Swap(false) {
+			if err := src.rewind(); err != nil {
+				return err
+			}
+		}
+		frame, keyframe, err := src.next()
+		if err != nil {
+			return err
+		}
+		c.rec.sending(kindVideo, frame) // before writing, as for audio
+		if err := c.video.WriteSample(media.Sample{Data: frame, Duration: src.frameDuration}); err != nil {
+			return fmt.Errorf("callharness: send video: %w", err)
+		}
+		c.rec.sent(kindVideo, keyframe)
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+
+	return nil
+}
+
+// RequestKeyframe asks the system for a keyframe on the echoed video, as a
+// browser's receiver does when it cannot decode. It fails until the echoed
+// video track has arrived.
+func (c *Call) RequestKeyframe(request KeyframeRequest) error {
+	c.mu.Lock()
+	echo, ok := c.echoVideoSSRC, c.haveEchoVideo
+	c.firSequence++
+	sequence := c.firSequence
+	c.mu.Unlock()
+	if !ok {
+		return errors.New("callharness: no echoed video track to request a keyframe on")
+	}
+
+	var packet rtcp.Packet
+	switch request {
+	case PLI:
+		packet = &rtcp.PictureLossIndication{SenderSSRC: c.videoSSRC, MediaSSRC: echo}
+	case FIR:
+		packet = &rtcp.FullIntraRequest{
+			SenderSSRC: c.videoSSRC,
+			FIR:        []rtcp.FIREntry{{SSRC: echo, SequenceNumber: sequence}},
+		}
+	default:
+		return fmt.Errorf("callharness: unknown keyframe request %d", request)
+	}
+	if err := c.pc.WriteRTCP([]rtcp.Packet{packet}); err != nil {
+		return fmt.Errorf("callharness: send keyframe request: %w", err)
+	}
+	c.rec.keyframeRequestSent()
+
+	return nil
+}
+
 // Hangup ends the call and returns what the caller observed. It waits
 // briefly for the last echoed packets, stops recording, sends the WHIP-style
-// DELETE and closes the PeerConnection.
+// DELETE, closes the PeerConnection and runs the full video decode.
 func (c *Call) Hangup(ctx context.Context) (*Report, error) {
 	select {
 	case <-time.After(echoDrain):
@@ -267,34 +433,20 @@ func (c *Call) Hangup(ctx context.Context) (*Report, error) {
 	}
 	c.rec.hangup()
 
-	deleteErr := c.deleteResource(ctx)
+	deleteErr := c.harness.deleteCall(ctx, c.resourceURL)
 	closeErr := c.close()
 
 	report := c.rec.report()
+	report.Offer = c.offer
 	report.Answer = c.answer
-	report.SentAudio.SSRC = c.audioSSRC
+	for i := range report.Tracks {
+		if video := report.Tracks[i].Video; video != nil {
+			frames, size := c.rec.decodeInput(i)
+			video.FullDecode = fullDecode(ctx, frames, size)
+		}
+	}
 
 	return report, errors.Join(deleteErr, closeErr)
-}
-
-func (c *Call) deleteResource(ctx context.Context) error {
-	if c.resourceURL == "" {
-		return nil
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.resourceURL, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := c.harness.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("callharness: DELETE call: %w", err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("callharness: DELETE call: %s", resp.Status)
-	}
-
-	return nil
 }
 
 // close closes the PeerConnection and waits for the reader goroutines.
@@ -309,20 +461,16 @@ func (c *Call) close() error {
 	return err
 }
 
-// newCallerAPI builds the caller's Pion API: Opus only, Pion's default
-// interceptors, host candidates on loopback only, and a logger factory that
-// counts SRTP decryption failures.
-func newCallerAPI(rec *recorder) (*webrtc.API, error) {
+// newCallerAPI builds the caller's Pion API: Opus and VP8 (or a browser-like
+// codec list), Pion's default interceptors, host candidates on loopback
+// only, and a logger factory that counts SRTP decryption failures.
+func newCallerAPI(rec *recorder, browserLike bool) (*webrtc.API, error) {
 	mediaEngine := &webrtc.MediaEngine{}
-	if err := mediaEngine.RegisterCodec(webrtc.RTPCodecParameters{
-		RTPCodecCapability: webrtc.RTPCodecCapability{
-			MimeType:    webrtc.MimeTypeOpus,
-			ClockRate:   opusSampleRate,
-			Channels:    2,
-			SDPFmtpLine: "minptime=10;useinbandfec=1",
-		},
-		PayloadType: opusPayloadType,
-	}, webrtc.RTPCodecTypeAudio); err != nil {
+	register := registerCallerCodecs
+	if browserLike {
+		register = registerBrowserLikeCodecs
+	}
+	if err := register(mediaEngine); err != nil {
 		return nil, err
 	}
 
@@ -342,6 +490,91 @@ func newCallerAPI(rec *recorder) (*webrtc.API, error) {
 		webrtc.WithInterceptorRegistry(registry),
 		webrtc.WithSettingEngine(settings),
 	), nil
+}
+
+// registerCallerCodecs registers just the codecs the caller sends.
+func registerCallerCodecs(m *webrtc.MediaEngine) error {
+	if err := m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType:    webrtc.MimeTypeOpus,
+			ClockRate:   opusSampleRate,
+			Channels:    2,
+			SDPFmtpLine: "minptime=10;useinbandfec=1",
+		},
+		PayloadType: opusPayloadType,
+	}, webrtc.RTPCodecTypeAudio); err != nil {
+		return err
+	}
+
+	return m.RegisterCodec(webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType:  webrtc.MimeTypeVP8,
+			ClockRate: vp8ClockRate,
+			RTCPFeedback: []webrtc.RTCPFeedback{
+				{Type: "goog-remb"}, {Type: "ccm", Parameter: "fir"}, {Type: "nack"}, {Type: "nack", Parameter: "pli"},
+			},
+		},
+		PayloadType: vp8PayloadType,
+	}, webrtc.RTPCodecTypeVideo)
+}
+
+// registerBrowserLikeCodecs registers a codec and header extension list
+// shaped like Chrome's: Pion's defaults (Opus 111, VP8 96 and other video
+// codecs with RTX) plus the extras Chrome offers.
+func registerBrowserLikeCodecs(m *webrtc.MediaEngine) error {
+	if err := m.RegisterDefaultCodecs(); err != nil {
+		return err
+	}
+
+	extras := []struct {
+		kind  webrtc.RTPCodecType
+		codec webrtc.RTPCodecParameters
+	}{
+		{webrtc.RTPCodecTypeAudio, codecParameters("audio/red", 48000, 2, "111/111", 63)},
+		{webrtc.RTPCodecTypeAudio, codecParameters("audio/CN", 8000, 0, "", 13)},
+		{webrtc.RTPCodecTypeAudio, codecParameters("audio/telephone-event", 48000, 0, "", 110)},
+		{webrtc.RTPCodecTypeAudio, codecParameters("audio/telephone-event", 8000, 0, "", 126)},
+		{webrtc.RTPCodecTypeVideo, codecParameters("video/red", 90000, 0, "", 114)},
+		{webrtc.RTPCodecTypeVideo, codecParameters(webrtc.MimeTypeRTX, 90000, 0, "apt=114", 115)},
+		{webrtc.RTPCodecTypeVideo, codecParameters("video/ulpfec", 90000, 0, "", 118)},
+	}
+	for _, extra := range extras {
+		if err := m.RegisterCodec(extra.codec, extra.kind); err != nil {
+			return err
+		}
+	}
+
+	extensions := []struct {
+		kind webrtc.RTPCodecType
+		uri  string
+	}{
+		{webrtc.RTPCodecTypeAudio, sdp.AudioLevelURI},
+		{webrtc.RTPCodecTypeAudio, sdp.ABSSendTimeURI},
+		{webrtc.RTPCodecTypeVideo, sdp.ABSSendTimeURI},
+		{webrtc.RTPCodecTypeVideo, "urn:ietf:params:rtp-hdrext:toffset"},
+		{webrtc.RTPCodecTypeVideo, "urn:3gpp:video-orientation"},
+		{webrtc.RTPCodecTypeVideo, "http://www.webrtc.org/experiments/rtp-hdrext/playout-delay"},
+		{webrtc.RTPCodecTypeVideo, "http://www.webrtc.org/experiments/rtp-hdrext/video-content-type"},
+	}
+	for _, extension := range extensions {
+		if err := m.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: extension.uri}, extension.kind); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func codecParameters(mimeType string, clockRate uint32, channels uint16, fmtp string, payloadType webrtc.PayloadType) webrtc.RTPCodecParameters {
+	return webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType:    mimeType,
+			ClockRate:   clockRate,
+			Channels:    channels,
+			SDPFmtpLine: fmtp,
+		},
+		PayloadType: payloadType,
+	}
 }
 
 // iceUfrag returns the ICE username fragment in a session description.

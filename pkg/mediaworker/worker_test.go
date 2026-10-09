@@ -73,33 +73,46 @@ func TestConsentFreshness(t *testing.T) {
 func TestOfferDirection(t *testing.T) {
 	tests := []struct {
 		name         string
-		sessionAttrs []string
-		mediaAttrs   []string
-		accepted     bool
+		offer        testOfferAttrs
+		audio, video bool // whether the answer accepts each m-line
 	}{
-		{name: "no direction is sendrecv", accepted: true},
-		{name: "media sendrecv", mediaAttrs: []string{"a=sendrecv"}, accepted: true},
-		{name: "media recvonly", mediaAttrs: []string{"a=recvonly"}},
-		{name: "session sendonly", sessionAttrs: []string{"a=sendonly"}},
-		{name: "session recvonly", sessionAttrs: []string{"a=recvonly"}},
-		{name: "session inactive", sessionAttrs: []string{"a=inactive"}},
+		{name: "no direction is sendrecv", audio: true, video: true},
 		{
-			name:         "media sendrecv overrides session recvonly",
-			sessionAttrs: []string{"a=recvonly"},
-			mediaAttrs:   []string{"a=sendrecv"},
-			accepted:     true,
+			name:  "media sendrecv",
+			offer: testOfferAttrs{audio: []string{"a=sendrecv"}, video: []string{"a=sendrecv"}},
+			audio: true, video: true,
+		},
+		{name: "audio recvonly", offer: testOfferAttrs{audio: []string{"a=recvonly"}}, video: true},
+		{name: "video sendonly", offer: testOfferAttrs{video: []string{"a=sendonly"}}, audio: true},
+		{name: "both inactive", offer: testOfferAttrs{audio: []string{"a=inactive"}, video: []string{"a=inactive"}}},
+		{name: "session sendonly", offer: testOfferAttrs{session: []string{"a=sendonly"}}},
+		{name: "session recvonly", offer: testOfferAttrs{session: []string{"a=recvonly"}}},
+		{name: "session inactive", offer: testOfferAttrs{session: []string{"a=inactive"}}},
+		{
+			name:  "audio sendrecv overrides session recvonly",
+			offer: testOfferAttrs{session: []string{"a=recvonly"}, audio: []string{"a=sendrecv"}},
+			audio: true,
+		},
+		{
+			name:  "video sendrecv overrides session inactive",
+			offer: testOfferAttrs{session: []string{"a=inactive"}, video: []string{"a=sendrecv"}},
+			video: true,
 		},
 	}
 
 	worker := newTestWorker(t)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := worker.CreateSession(context.Background(), testOffer(tc.sessionAttrs, tc.mediaAttrs))
-			if tc.accepted {
-				require.NoError(t, err)
-			} else {
+			_, answer, err := worker.CreateSession(context.Background(), testOffer(tc.offer))
+			if !tc.audio && !tc.video {
 				require.ErrorIs(t, err, ErrUnsupportedOffer)
+
+				return
 			}
+			require.NoError(t, err)
+			accepted := acceptedMedia(t, answer)
+			require.Equal(t, tc.audio, accepted[mediaAudio], "audio accepted")
+			require.Equal(t, tc.video, accepted[mediaVideo], "video accepted")
 		})
 	}
 }
@@ -126,8 +139,10 @@ func dialTestSession(t *testing.T) *testCall {
 	t.Helper()
 
 	worker := newTestWorker(t)
-	id, answerSDP, err := worker.CreateSession(context.Background(), testOffer(nil, nil))
+	id, answerSDP, err := worker.CreateSession(context.Background(), testOffer(testOfferAttrs{}))
 	require.NoError(t, err)
+	require.Equal(t, map[string]bool{mediaAudio: true, mediaVideo: true}, acceptedMedia(t, answerSDP),
+		"answer accepts audio and video")
 
 	var answer sdp.SessionDescription
 	require.NoError(t, answer.UnmarshalString(answerSDP))
@@ -227,29 +242,59 @@ func (e *testEndpoint) checkUntilClosed(t *testing.T, d time.Duration) {
 		e.conn.LocalAddr(), d, testConsentTimeout)
 }
 
-// testOffer is a minimal offer for one sendrecv Opus m-line, with extra
-// session-level and media-level attribute lines.
-func testOffer(sessionAttrs, mediaAttrs []string) string {
+// testOfferAttrs are extra attribute lines for testOffer: session-level, and
+// on the audio and video m-lines.
+type testOfferAttrs struct {
+	session, audio, video []string
+}
+
+// testOffer is a minimal offer for a sendrecv Opus m-line and a sendrecv VP8
+// m-line in one BUNDLE group, with extra attribute lines.
+func testOffer(attrs testOfferAttrs) string {
 	lines := []string{
 		"v=0",
 		"o=- 1 1 IN IP4 127.0.0.1",
 		"s=-",
 		"t=0 0",
-		"a=group:BUNDLE 0",
+		"a=group:BUNDLE 0 1",
 	}
-	lines = append(lines, sessionAttrs...)
-	lines = append(lines,
-		"m=audio 9 UDP/TLS/RTP/SAVPF 111",
-		"c=IN IP4 0.0.0.0",
-		"a=mid:0",
-		"a=ice-ufrag:"+testCallerUfrag,
-		"a=ice-pwd:"+testCallerPwd,
-		"a=fingerprint:sha-256 "+strings.TrimSuffix(strings.Repeat("AB:", 32), ":"),
-		"a=setup:actpass",
-		"a=rtcp-mux",
-		"a=rtpmap:111 opus/48000/2",
-	)
-	lines = append(lines, mediaAttrs...)
+	lines = append(lines, attrs.session...)
+	lines = append(lines, "m=audio 9 UDP/TLS/RTP/SAVPF 111")
+	lines = append(lines, testMediaTransport("0")...)
+	lines = append(lines, "a=rtpmap:111 opus/48000/2")
+	lines = append(lines, attrs.audio...)
+	lines = append(lines, "m=video 9 UDP/TLS/RTP/SAVPF 96")
+	lines = append(lines, testMediaTransport("1")...)
+	lines = append(lines, "a=rtpmap:96 VP8/90000", "a=rtcp-fb:96 nack pli")
+	lines = append(lines, attrs.video...)
 
 	return strings.Join(lines, "\r\n") + "\r\n"
+}
+
+// testMediaTransport is the transport attributes a browser puts on each
+// bundled m-line.
+func testMediaTransport(mid string) []string {
+	return []string{
+		"c=IN IP4 0.0.0.0",
+		"a=mid:" + mid,
+		"a=ice-ufrag:" + testCallerUfrag,
+		"a=ice-pwd:" + testCallerPwd,
+		"a=fingerprint:sha-256 " + strings.TrimSuffix(strings.Repeat("AB:", 32), ":"),
+		"a=setup:actpass",
+		"a=rtcp-mux",
+	}
+}
+
+// acceptedMedia reports, by media type, which m-lines an answer accepts.
+func acceptedMedia(t *testing.T, answerSDP string) map[string]bool {
+	t.Helper()
+
+	var answer sdp.SessionDescription
+	require.NoError(t, answer.UnmarshalString(answerSDP))
+	accepted := map[string]bool{}
+	for _, md := range answer.MediaDescriptions {
+		accepted[md.MediaName.Media] = md.MediaName.Port.Value != 0
+	}
+
+	return accepted
 }

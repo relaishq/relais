@@ -5,8 +5,10 @@
 //
 // A media worker terminates one session per caller. A session is a single
 // BUNDLEd, rtcp-muxed transport, and every session on a worker shares the
-// worker's one UDP socket. For now the worker echoes the caller's Opus audio
-// back on its own outbound track.
+// worker's one UDP socket. For now the worker echoes the caller's media back:
+// Opus audio and VP8 video, each on the worker's own outbound track with its
+// own SSRC, sequence numbers and timestamps. It relays the caller's keyframe
+// requests for the echoed video back to the caller's video source.
 //
 // The worker does not use webrtc.PeerConnection on purpose. Later work must
 // export a session's state (ICE credentials, DTLS connection state, SRTP
@@ -49,7 +51,9 @@ type Config struct {
 	// ListenAddr is the local UDP address of the worker's media socket. All
 	// sessions on the worker share this one socket, and its address is the
 	// single host candidate advertised in every answer, so the IP must be
-	// specific (not 0.0.0.0 or ::). Defaults to "127.0.0.1:0".
+	// specific (not 0.0.0.0 or ::) and reachable by callers. Defaults to
+	// "127.0.0.1:0", which suits in-process callers; browsers such as Chrome
+	// do not gather loopback candidates, so they need a LAN address.
 	ListenAddr string
 
 	// LoggerFactory is used by the worker and by the Pion components it

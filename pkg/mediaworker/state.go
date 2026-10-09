@@ -9,7 +9,7 @@ import (
 
 // sessionStateVersion is bumped whenever sessionState's layout changes, so a
 // stored session state can be checked before a worker resumes it.
-const sessionStateVersion = 1
+const sessionStateVersion = 2
 
 // sessionState is the session state: everything needed to continue a session
 // on another media worker except the established DTLS connection state, kept
@@ -34,10 +34,14 @@ type sessionState struct {
 	Version int
 	ID      string // the session ID, which is also the worker's ICE ufrag
 
-	ICE   iceState
-	DTLS  dtlsState
-	SRTP  srtpState
+	ICE  iceState
+	DTLS dtlsState
+	SRTP srtpState
+
+	// Audio and Video are the worker's outbound tracks. A track the offer did
+	// not include (or the answer rejected) is the zero value; see negotiated.
 	Audio trackState
+	Video trackState
 }
 
 type iceState struct {
@@ -70,22 +74,24 @@ type srtpState struct {
 	// DTLS handshake completes.
 	Profile srtp.ProtectionProfile
 
-	// Inbound maps each caller SSRC to the highest extended sequence number
-	// (rollover counter << 16 | sequence number) the worker has decrypted.
+	// Inbound maps each caller SSRC (audio and video alike) to the highest
+	// extended sequence number (rollover counter << 16 | sequence number)
+	// the worker has decrypted.
 	Inbound map[uint32]uint64
 }
 
 // trackState is one of the worker's outbound tracks. The worker echoes one
 // of the caller's tracks back as its own continuous RTP stream: its own SSRC,
 // and sequence numbers and timestamps that start at the worker's own random
-// values.
+// values. Audio and video are rewritten independently, each in its own
+// sequence and timestamp space.
 //
 // Rewriting shifts the caller's sequence numbers and timestamps by offsets
 // fixed at the first packet, so loss and reordering on the caller's stream
 // stay visible to the caller's jitter buffer and NACK logic.
 type trackState struct {
 	ID          string // msid track ID advertised in the answer
-	MID         string
+	MID         string // the answered m-line; empty when the track is not negotiated
 	PayloadType uint8
 	SSRC        uint32 // the worker's outbound SSRC
 
@@ -103,9 +109,15 @@ type trackState struct {
 	// counter << 16 | sequence number) sent on the track.
 	HighestSentIndex uint64
 	LastTimestamp    uint32
-	// SRTCPIndex is the last SRTCP index sent for this SSRC. The worker
-	// sends no RTCP yet, so it stays zero.
+	// SRTCPIndex is the last SRTCP index the worker used for RTCP it sent
+	// with this track's SSRC as the sender: the keyframe requests (PLI) it
+	// sends the caller on the video track. It stays zero until the first.
 	SRTCPIndex uint32
+}
+
+// negotiated reports whether the answer includes the track.
+func (t *trackState) negotiated() bool {
+	return t.MID != ""
 }
 
 // rewrite returns the outbound header for an inbound packet. It reports false
@@ -120,8 +132,12 @@ func (t *trackState) rewrite(in *rtp.Header) (rtp.Header, bool) {
 		return rtp.Header{}, false
 	}
 
+	// Header extensions are dropped: the answer negotiates none. Padding is
+	// kept so padding-only packets still fill their place in the sequence.
 	return rtp.Header{
 		Version:        2,
+		Padding:        in.Padding,
+		PaddingSize:    in.PaddingSize,
 		Marker:         in.Marker,
 		PayloadType:    t.PayloadType,
 		SequenceNumber: in.SequenceNumber + t.SeqOffset,

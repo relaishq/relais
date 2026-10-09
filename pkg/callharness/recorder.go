@@ -1,12 +1,18 @@
 package callharness
 
 import (
+	"image"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
+)
+
+const (
+	kindAudio = "audio"
+	kindVideo = "video"
 )
 
 // recorder collects what the caller observes during a call. Times are
@@ -31,8 +37,13 @@ type recorder struct {
 	iceRestarts          int
 	decryptionFailures   DecryptionFailures
 
-	sentPackets  int
-	sentPayloads map[string]struct{}
+	// What the caller sent, by kind. sentFrames holds every distinct frame
+	// (an Opus packet or a VP8 frame) so echoes can be matched to it.
+	sentAudio        SentTrack
+	sentVideo        SentTrack
+	sentFrames       map[string]map[string]struct{}
+	firstVideoSentAt time.Duration
+	keyframeRequests int // PLI/FIR the caller sent for the echoed video
 
 	tracks []*trackRecord
 }
@@ -50,12 +61,32 @@ type trackRecord struct {
 	lastSeq            uint16
 	seqDiscontinuities int
 	unmatchedPayloads  int
+
+	video *videoRecord // video tracks only
+}
+
+// videoRecord follows the decodability of a received video track; see
+// video.go for the method.
+type videoRecord struct {
+	VideoReport
+
+	chain    bool // every frame since the last decoded keyframe is decodable
+	haveLast bool
+	lastSeq  uint16 // last packet of the previous complete frame
+	lastTS   uint32
+
+	// decodeInput is every complete frame from the first decoded keyframe on,
+	// for the full decode at hangup.
+	decodeInput []vp8Frame
 }
 
 func newRecorder() *recorder {
 	return &recorder{
-		start:        time.Now(),
-		sentPayloads: make(map[string]struct{}),
+		start: time.Now(),
+		sentFrames: map[string]map[string]struct{}{
+			kindAudio: {},
+			kindVideo: {},
+		},
 	}
 }
 
@@ -168,25 +199,62 @@ func (r *recorder) srtpError(msg string) {
 	}
 }
 
-// sending registers a payload the caller is about to send, so its echo is
-// matched even when it arrives before the send call returns.
-func (r *recorder) sending(payload []byte) {
+// sending registers a frame the caller is about to send (an Opus packet or a
+// VP8 frame), so its echo is matched even when it arrives before the write
+// returns. The first video frame's send time is taken here for the same
+// reason: the echo's decode time is measured against it.
+func (r *recorder) sending(kind string, frame []byte) {
+	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.sentPayloads[string(payload)] = struct{}{}
+	r.sentFrames[kind][string(frame)] = struct{}{}
+	if kind == kindVideo && r.sentVideo.Frames == 0 {
+		r.firstVideoSentAt = r.since(now)
+	}
 }
 
-// sent counts a packet the caller has sent.
-func (r *recorder) sent() {
+// sent counts a frame the caller has written.
+func (r *recorder) sent(kind string, keyframe bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.sentPackets++
+	track := &r.sentAudio
+	if kind == kindVideo {
+		track = &r.sentVideo
+	}
+	track.Frames++
+	if keyframe {
+		track.Keyframes++
+	}
+}
+
+// keyframeRequestReceived records a PLI or FIR for one of the caller's own
+// tracks.
+func (r *recorder) keyframeRequestReceived(kind string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.hungUp {
+		return
+	}
+	if kind == kindVideo {
+		r.sentVideo.KeyframeRequests++
+	} else {
+		r.sentAudio.KeyframeRequests++
+	}
+}
+
+func (r *recorder) keyframeRequestSent() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.keyframeRequests++
 }
 
 func (r *recorder) addTrack(kind string, ssrc uint32, payloadType uint8) *trackRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	track := &trackRecord{kind: kind, ssrc: ssrc, payloadType: payloadType}
+	if kind == kindVideo {
+		track.video = &videoRecord{}
+	}
 	r.tracks = append(r.tracks, track)
 
 	return track
@@ -216,9 +284,91 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 	track.lastArrival = at
 	track.lastSeq = pkt.SequenceNumber
 
-	if _, ok := r.sentPayloads[string(pkt.Payload)]; !ok {
-		track.unmatchedPayloads++
+	// Opus packets are whole frames; VP8 frames are matched once reassembled.
+	if track.video == nil {
+		if _, ok := r.sentFrames[track.kind][string(pkt.Payload)]; !ok {
+			track.unmatchedPayloads++
+		}
 	}
+}
+
+// videoIncomplete records frames that lost packets on a video track.
+func (r *recorder) videoIncomplete(track *trackRecord, frames int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.hungUp {
+		return
+	}
+	track.video.IncompleteFrames += frames
+}
+
+// videoFrame records a complete frame on a video track. For a keyframe,
+// size and decodeErr are the result of decoding it in Go; decoded is when
+// that finished.
+func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Point, decodeErr error, decoded time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.hungUp {
+		return
+	}
+	v := track.video
+
+	v.Frames++
+	if frame.keyframe {
+		v.Keyframes++
+	}
+	if _, ok := r.sentFrames[kindVideo][string(frame.data)]; !ok {
+		v.UnmatchedFrames++
+	}
+
+	// A frame is in order when its first packet directly follows the previous
+	// complete frame's last packet: no frame was lost or reordered between.
+	inOrder := !v.haveLast || (frame.firstSeq == v.lastSeq+1 && int32(frame.timestamp-v.lastTS) > 0)
+	if !inOrder {
+		v.FrameGaps++
+	}
+	v.haveLast = true
+	v.lastSeq = frame.lastSeq
+	v.lastTS = frame.timestamp
+
+	switch {
+	case frame.keyframe && decodeErr == nil:
+		v.KeyframesDecoded++
+		v.DecodableFrames++
+		v.chain = true
+		if v.FirstDecodedFrameAt == 0 {
+			v.FirstDecodedFrameAt = r.since(decoded)
+			v.Width, v.Height = size.X, size.Y
+		}
+	case frame.keyframe:
+		v.KeyframeDecodeErrors++
+		v.LastDecodeError = decodeErr.Error()
+		v.chain = false
+	case v.chain && inOrder:
+		v.DecodableFrames++
+	case v.KeyframesDecoded == 0:
+		v.FramesBeforeFirstKeyframe++
+	default:
+		v.UndecodableFrames++
+		v.chain = false
+	}
+
+	if v.KeyframesDecoded > 0 {
+		v.decodeInput = append(v.decodeInput, *frame)
+	}
+}
+
+// decodeInput returns the frames of the i-th received track for the full
+// decode, and the size of its first decoded keyframe.
+func (r *recorder) decodeInput(i int) ([]vp8Frame, image.Point) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	v := r.tracks[i].video
+	if v == nil {
+		return nil, image.Point{}
+	}
+
+	return v.decodeInput, image.Point{X: v.Width, Y: v.Height}
 }
 
 // report returns the measurements. Call it after hangup.
@@ -235,10 +385,13 @@ func (r *recorder) report() *Report {
 		DecryptionFailures:   r.decryptionFailures,
 		Renegotiations:       r.renegotiations,
 		ICERestarts:          r.iceRestarts,
-		SentAudio:            SentTrack{Packets: r.sentPackets},
+		SentAudio:            r.sentAudio,
+		SentVideo:            r.sentVideo,
+		FirstVideoSentAt:     r.firstVideoSentAt,
+		KeyframeRequestsSent: r.keyframeRequests,
 	}
 	for _, track := range r.tracks {
-		rep.Tracks = append(rep.Tracks, TrackReport{
+		report := TrackReport{
 			Kind:                    track.kind,
 			SSRC:                    track.ssrc,
 			PayloadType:             track.payloadType,
@@ -250,7 +403,12 @@ func (r *recorder) report() *Report {
 			MediaGapEndedAt:         track.gapEndedAt,
 			SequenceDiscontinuities: track.seqDiscontinuities,
 			UnmatchedPayloads:       track.unmatchedPayloads,
-		})
+		}
+		if track.video != nil {
+			video := track.video.VideoReport
+			report.Video = &video
+		}
+		rep.Tracks = append(rep.Tracks, report)
 	}
 
 	return rep
