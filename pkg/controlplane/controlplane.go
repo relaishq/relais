@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -403,8 +404,11 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 	return fmt.Errorf("controlplane: move failed, rolled back: %w", cause)
 }
 
-// Drain blocks new selections immediately. Existing calls move concurrently;
-// reservations keep concurrent selections balanced. With no destination it
+// Drain blocks new selections immediately. Existing calls move concurrently,
+// at most drainParallelism at a time: a call waiting its turn keeps flowing
+// on the old worker, so running more moves than there are CPUs would only
+// lengthen every held call's gap. Reservations keep concurrent selections
+// balanced. With no destination it
 // moves nothing. It marks draining before waiting up to one second for
 // incoming reservations, then includes those calls in the drain.
 func (p *Plane) Drain(ctx context.Context, name string) ([]MoveResult, error) {
@@ -463,7 +467,7 @@ func (p *Plane) Drain(ctx context.Context, name string) ([]MoveResult, error) {
 	results := make([]MoveResult, len(jobs))
 	errs := make([]error, len(jobs))
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 16)
+	sem := make(chan struct{}, drainParallelism())
 	for i, j := range jobs {
 		wg.Go(func() {
 			defer p.unreserve(j.target)
@@ -576,4 +580,10 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 	sort.Slice(status.Workers, func(i, j int) bool { return status.Workers[i].Name < status.Workers[j].Name })
 	sort.Slice(status.Calls, func(i, j int) bool { return status.Calls[i].ID < status.Calls[j].ID })
 	return status, nil
+}
+
+// drainParallelism bounds the moves a drain runs at once: one per CPU the
+// process may use, at most 16.
+func drainParallelism() int {
+	return min(max(runtime.GOMAXPROCS(0), 1), 16)
 }

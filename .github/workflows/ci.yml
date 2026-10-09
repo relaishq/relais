@@ -65,6 +65,13 @@ jobs:
           RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
         run: make test-harness
 
+      # The race detector slows the media path several times over, so the
+      # relay move and drain gap targets are enforced in a run without it.
+      - name: Run relay timing tests (no race detector)
+        env:
+          RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
+        run: make test-harness-timing
+
   cluster-tests-gate:
     runs-on: ubuntu-latest
     outputs:

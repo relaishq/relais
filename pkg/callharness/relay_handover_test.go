@@ -124,6 +124,15 @@ func TestRelayDrainTenCalls(t *testing.T) {
 	for range calls {
 		require.NoError(t, <-sent)
 	}
+	// Ten video calls, three workers and the relay share this process. Under
+	// the race detector that load, not the move, sets the slowest call's gap
+	// on a small CI runner (up to about 95 ms of the 100 ms target), so the
+	// race run checks only for a gross regression. The timing run without
+	// the race detector enforces the target itself.
+	callGapLimit := maxHandoverGap
+	if raceDetector {
+		callGapLimit = 2 * maxHandoverGap
+	}
 	maxGap := time.Duration(0)
 	for i, call := range calls {
 		report, err := call.Hangup(ctx)
@@ -135,9 +144,9 @@ func TestRelayDrainTenCalls(t *testing.T) {
 			assert.Positive(t, track.PacketsAfter)
 			assert.Zero(t, track.SkippedSequenceNumbers, "call %d %s", i, track.Kind)
 			if track.Kind == "video" {
-				assert.Less(t, track.FirstDecodableFrameAfter, maxHandoverGap, "call %d first decodable frame", i)
+				assert.Less(t, track.FirstDecodableFrameAfter, callGapLimit, "call %d first decodable frame", i)
 			}
-			assert.Less(t, track.Gap, maxHandoverGap, "call %d %s", i, track.Kind)
+			assert.Less(t, track.Gap, callGapLimit, "call %d %s", i, track.Kind)
 			maxGap = max(maxGap, track.Gap)
 		}
 		assertVideoDecodes(t, report)
