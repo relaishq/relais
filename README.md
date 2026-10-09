@@ -17,7 +17,7 @@ Relais is a distributed media server built in Go that supports flexible ingress 
 - **Horizontal Scaling**
   - Run multiple plugin instances
   - Distributed storage support
-  - Multiple media workers (planned: session handover and a relay in front of them)
+  - Multiple media workers: a live call can move between workers on the same UDP socket (experimental; a relay in front of separate workers is planned)
 
 - **Development Quality**
   - Comprehensive linting with golangci-lint
@@ -43,9 +43,9 @@ Relais is a distributed media server built in Go that supports flexible ingress 
 
 Live WebRTC calls do not use this pipeline yet. They run in the media worker prototype:
 
-- `pkg/mediaworker` - a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) with WHIP-style signaling. It currently echoes the caller's audio and video.
-- `pkg/callharness` - the test seam for media: a Pion WebRTC client plays the caller in-process (`make test-harness`).
-- `cmd/echo-demo` - a browser echo page for the media worker (`make demo`, then open http://localhost:9101).
+- `pkg/mediaworker` - a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) with WHIP-style signaling. It currently echoes the caller's audio and video. A live session can be exported to bytes and resumed on another worker that shares the same UDP socket (a planned handover).
+- `pkg/callharness` - the test seam for media: a Pion WebRTC client plays the caller in-process and can move its call between workers (`make test-harness`).
+- `cmd/echo-demo` - a browser echo page for two media workers on one socket, with a "Move call" button (`make demo`, then open http://localhost:9101).
 
 The earlier `relais-core` server and its Pion v3 signaling path (`pkg/server`, `pkg/webrtc`) have been retired.
 

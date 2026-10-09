@@ -5,8 +5,9 @@
 // echoed video decodes, SRTP decryption failures, keyframe requests, and any
 // renegotiation or ICE restart.
 //
-// Today the system is one media worker serving WHIP-style signaling. A test
-// looks like this:
+// Today the system is one media worker serving WHIP-style signaling, or
+// several workers sharing one UDP socket so that a call can move between
+// them (Call.Handover, a planned handover). A test looks like this:
 //
 //	h, _ := callharness.Start(callharness.Options{})
 //	defer h.Close()
@@ -33,15 +34,20 @@ import (
 
 // Options configures the system the harness starts.
 type Options struct {
-	// WorkerLoggerFactory is passed to the media worker. Defaults to Pion's
+	// WorkerLoggerFactory is passed to the media workers. Defaults to Pion's
 	// default logger factory (PION_LOG_* environment variables).
 	WorkerLoggerFactory logging.LoggerFactory
+
+	// Workers is how many media workers run. One (the default) owns its UDP
+	// socket. Two or more share one UDP socket, calls start on the first,
+	// and Call.Handover moves a call between them.
+	Workers int
 }
 
-// Harness runs the system in-process: a media worker on a loopback UDP
-// socket and its signaling endpoint on a loopback HTTP server.
+// Harness runs the system in-process: media workers on a loopback UDP
+// socket and their signaling endpoint on a loopback HTTP server.
 type Harness struct {
-	worker       *mediaworker.Worker
+	workers      *workers
 	server       *http.Server
 	serveDone    chan struct{}
 	signalingURL string
@@ -50,25 +56,22 @@ type Harness struct {
 
 // Start starts the system.
 func Start(opts Options) (*Harness, error) {
-	worker, err := mediaworker.New(mediaworker.Config{
-		ListenAddr:    "127.0.0.1:0",
-		LoggerFactory: opts.WorkerLoggerFactory,
-	})
+	workers, err := startWorkers(opts)
 	if err != nil {
 		return nil, err
 	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		_ = worker.Close()
+		_ = workers.close()
 
 		return nil, fmt.Errorf("callharness: listen for signaling: %w", err)
 	}
 
 	h := &Harness{
-		worker: worker,
+		workers: workers,
 		server: &http.Server{
-			Handler:           worker.SignalingHandler(),
+			Handler:           workers.signaling,
 			ReadHeaderTimeout: 5 * time.Second,
 		},
 		serveDone:    make(chan struct{}),
@@ -101,12 +104,12 @@ func (h *Harness) ExchangeOffer(ctx context.Context, offer string) (AnswerFacts,
 	return facts, errors.Join(parseErr, h.deleteCall(ctx, resourceURL))
 }
 
-// Close stops the signaling server and the media worker.
+// Close stops the signaling server and the media workers.
 func (h *Harness) Close() error {
 	serverErr := h.server.Close()
 	<-h.serveDone
 
-	return errors.Join(serverErr, h.worker.Close())
+	return errors.Join(serverErr, h.workers.close())
 }
 
 // postOffer makes the one signaling exchange that starts a call: it POSTs

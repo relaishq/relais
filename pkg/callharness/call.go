@@ -135,6 +135,7 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 	pc.OnSignalingStateChange(rec.signalingState)
 	pc.OnNegotiationNeeded(rec.negotiationNeeded)
 	pc.OnTrack(call.onTrack)
+	call.startReader(call.sampleConsent)
 
 	offer, err := pc.CreateOffer(nil)
 	if err != nil {

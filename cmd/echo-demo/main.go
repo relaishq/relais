@@ -1,8 +1,12 @@
-// Command echo-demo is the browser demo for the media worker. It runs one
-// media worker and serves a page that calls it: the page publishes camera
-// and microphone (or a generated test pattern) through the worker's
-// WHIP-style signaling endpoint, plays the echo, and exposes WebRTC stats for
-// automated checks (window.relaisStats and the #stats element).
+// Command echo-demo is the browser demo for the media worker. It runs two
+// media workers, A and B, on one shared UDP socket and serves a page that
+// calls them: the page publishes camera and microphone (or a generated test
+// pattern) through the WHIP-style signaling endpoint, plays the echo, and
+// exposes WebRTC stats for automated checks (window.relaisStats and the
+// #stats element). Calls start on worker A; the page's "Move call" button
+// (POST /calls/{id}/move) hands the live call over to the other worker, and
+// the page records what the browser saw of each move (see handover.go and
+// web/handover.js).
 //
 // Browsers allow getUserMedia only in a secure context, which
 // http://localhost is, so the page is meant to be opened on localhost.
@@ -40,7 +44,6 @@ import (
 	"time"
 
 	"github.com/pion/logging"
-	"github.com/relais/pkg/mediaworker"
 )
 
 const (
@@ -77,23 +80,20 @@ func run() error {
 		return err
 	}
 
-	worker, err := mediaworker.New(mediaworker.Config{
-		ListenAddr:    netip.AddrPortFrom(ip, uint16(*mediaPort)).String(),
-		LoggerFactory: loggerFactory(),
-	})
+	sys, err := startSystem(netip.AddrPortFrom(ip, uint16(*mediaPort)).String(), loggerFactory())
 	if err != nil {
 		return err
 	}
-	defer func() { _ = worker.Close() }()
+	defer func() { _ = sys.close() }()
 
 	listener, err := net.Listen("tcp", *httpAddr)
 	if err != nil {
 		return fmt.Errorf("listen for HTTP: %w", err)
 	}
-	server := &http.Server{Handler: newHandler(worker), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Handler: newHandler(sys), ReadHeaderTimeout: 5 * time.Second}
 
 	_, port, _ := net.SplitHostPort(listener.Addr().String())
-	log.Printf("echo-demo: media worker on udp %s (the host candidate in every answer)", worker.MediaAddr())
+	log.Printf("echo-demo: media workers A and B on udp %s (the host candidate in every answer)", sys.MediaAddr())
 	log.Printf("echo-demo: camera and microphone: http://localhost:%s/", port)
 	log.Printf("echo-demo: test pattern:          http://localhost:%s/?source=test", port)
 	if host, _, _ := net.SplitHostPort(*httpAddr); host != "localhost" && host != "127.0.0.1" && host != "::1" {
@@ -119,9 +119,10 @@ func run() error {
 	return server.Shutdown(shutdownCtx)
 }
 
-// newHandler serves the demo page and the worker's signaling endpoint
-// (POST /calls, DELETE /calls/{id}) from one origin.
-func newHandler(worker *mediaworker.Worker) http.Handler {
+// newHandler serves the demo page and the call endpoints (POST /calls,
+// DELETE /calls/{id}, POST /calls/{id}/move, GET /calls/{id}) from one
+// origin.
+func newHandler(sys *system) http.Handler {
 	static, err := fs.Sub(webFiles, "web")
 	if err != nil {
 		panic(err) // the embedded directory is fixed at build time
@@ -129,9 +130,7 @@ func newHandler(worker *mediaworker.Worker) http.Handler {
 	files := http.FileServerFS(static)
 
 	mux := http.NewServeMux()
-	signaling := worker.SignalingHandler()
-	mux.Handle(mediaworker.CallsPath, signaling)
-	mux.Handle(mediaworker.CallsPath+"/", signaling)
+	sys.register(mux)
 	mux.Handle("/", http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		// Always serve the current page while iterating on it.
 		rw.Header().Set("Cache-Control", "no-store")

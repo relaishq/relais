@@ -1,0 +1,429 @@
+package callharness
+
+import (
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"path"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/pion/webrtc/v4"
+	"github.com/relais/pkg/mediaworker"
+)
+
+// consentSampleInterval is how often the caller samples its ICE consent
+// checks. Pion's caller sends one every 2 s.
+const consentSampleInterval = 250 * time.Millisecond
+
+// workers are the system's media workers. A single worker owns its UDP
+// socket. Two or more share one socket (mediaworker.Socket), calls start on
+// the first, and a call can move between them.
+type workers struct {
+	socket    *mediaworker.Socket // nil for a single worker
+	list      []*mediaworker.Worker
+	signaling http.Handler
+}
+
+func startWorkers(opts Options) (*workers, error) {
+	cfg := mediaworker.Config{LoggerFactory: opts.WorkerLoggerFactory}
+	if opts.Workers <= 1 {
+		cfg.ListenAddr = "127.0.0.1:0"
+		worker, err := mediaworker.New(cfg)
+		if err != nil {
+			return nil, err
+		}
+
+		return &workers{list: []*mediaworker.Worker{worker}, signaling: worker.SignalingHandler()}, nil
+	}
+
+	socket, err := mediaworker.ListenSocket(mediaworker.SocketConfig{
+		ListenAddr:    "127.0.0.1:0",
+		LoggerFactory: opts.WorkerLoggerFactory,
+	})
+	if err != nil {
+		return nil, err
+	}
+	ws := &workers{socket: socket}
+	for range opts.Workers {
+		worker, err := socket.NewWorker(cfg)
+		if err != nil {
+			return nil, errors.Join(err, ws.close())
+		}
+		ws.list = append(ws.list, worker)
+	}
+	ws.signaling = socket.SignalingHandler(ws.list[0])
+
+	return ws, nil
+}
+
+// close closes the workers, then their shared socket.
+func (ws *workers) close() error {
+	var errs []error
+	for _, worker := range ws.list {
+		errs = append(errs, worker.Close())
+	}
+	if ws.socket != nil {
+		errs = append(errs, ws.socket.Close())
+	}
+
+	return errors.Join(errs...)
+}
+
+func (ws *workers) index(worker *mediaworker.Worker) int {
+	return slices.Index(ws.list, worker)
+}
+
+// HandoverOptions shape a planned handover.
+type HandoverOptions struct {
+	// To is the index of the worker that takes the call over (0 is the
+	// worker calls start on).
+	To int
+
+	// SequenceMargin moves the echoed tracks' sequence numbers forward by
+	// this much across the move; see mediaworker.ResumeOptions. Zero, the
+	// right value for a planned handover, keeps them continuous.
+	SequenceMargin uint16
+}
+
+// Handover moves the call to another media worker on the same socket, as a
+// planned handover: the old worker exports the session to bytes and the new
+// one resumes it from them. It needs Options.Workers of 2 or more. The
+// report describes each move as the caller saw it (Report.Moves).
+func (c *Call) Handover(opts HandoverOptions) error {
+	ws := c.harness.workers
+	if ws.socket == nil {
+		return errors.New("callharness: a handover needs Options.Workers of 2 or more")
+	}
+	if opts.To < 0 || opts.To >= len(ws.list) {
+		return fmt.Errorf("callharness: no worker %d", opts.To)
+	}
+	sessionID, err := c.sessionID()
+	if err != nil {
+		return err
+	}
+
+	from := ws.index(ws.socket.Owner(sessionID))
+	start := time.Now()
+	result, err := ws.socket.Handover(sessionID, ws.list[opts.To], mediaworker.ResumeOptions{
+		SequenceMargin: opts.SequenceMargin,
+	})
+	end := time.Now()
+	c.rec.move(moveRecord{from: from, to: opts.To, start: start, end: end, result: result, err: err})
+	if err != nil {
+		return fmt.Errorf("callharness: handover to worker %d: %w", opts.To, err)
+	}
+
+	return nil
+}
+
+// sessionID is the call's session ID, the last segment of its resource URL.
+func (c *Call) sessionID() (string, error) {
+	resource, err := url.Parse(c.resourceURL)
+	if err != nil || c.resourceURL == "" {
+		return "", fmt.Errorf("callharness: no session ID in resource URL %q", c.resourceURL)
+	}
+
+	return path.Base(resource.Path), nil
+}
+
+// sampleConsent samples the caller's ICE consent checks (STUN binding
+// requests on the candidate pair in use, and the responses to them) from
+// getStats, as a browser page could, until the connection closes.
+func (c *Call) sampleConsent() {
+	ticker := time.NewTicker(consentSampleInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if c.pc.ConnectionState() == webrtc.PeerConnectionStateClosed {
+			return
+		}
+		if requests, responses, ok := pairChecks(c.pc.GetStats()); ok {
+			c.rec.consentChecks(time.Now(), requests, responses)
+		}
+	}
+}
+
+// pairChecks returns the checks sent and responses received on the
+// candidate pair in use: the succeeded pair with the most responses (consent
+// checks go to the pair in use only).
+func pairChecks(stats webrtc.StatsReport) (requests, responses uint64, ok bool) {
+	for _, stat := range stats {
+		pair, isPair := stat.(webrtc.ICECandidatePairStats)
+		if !isPair || pair.State != webrtc.StatsICECandidatePairStateSucceeded {
+			continue
+		}
+		if !ok || pair.ResponsesReceived > responses {
+			requests, responses, ok = pair.RequestsSent, pair.ResponsesReceived, true
+		}
+	}
+
+	return requests, responses, ok
+}
+
+// moveRecord is one handover the harness made.
+type moveRecord struct {
+	from, to   int
+	start, end time.Time
+	result     mediaworker.HandoverResult
+	err        error
+}
+
+// rtpMark is the header of a packet the caller received.
+type rtpMark struct {
+	seq       uint16
+	timestamp uint32
+}
+
+// frameMark is a complete video frame the caller received.
+type frameMark struct {
+	at        time.Duration
+	decodable bool
+}
+
+type consentSample struct {
+	at                  time.Duration
+	requests, responses uint64
+}
+
+func (r *recorder) move(record moveRecord) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.moves = append(r.moves, record)
+}
+
+func (r *recorder) consentChecks(at time.Time, requests, responses uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.hungUp {
+		return
+	}
+	r.consent = append(r.consent, consentSample{at: r.since(at), requests: requests, responses: responses})
+}
+
+// MoveReport is one planned handover as the caller observed it, plus what
+// the system reported about it.
+type MoveReport struct {
+	From, To int // worker indexes
+
+	// Start and End bracket the handover call, as offsets from dialing.
+	Start, End time.Duration
+
+	// Error is the handover's error; empty when it succeeded.
+	Error string
+
+	// Result is the system's account of the move: exported state size,
+	// caller packets held and timings.
+	Result mediaworker.HandoverResult
+
+	// Tracks describe each received track around the move.
+	Tracks []MoveTrackReport
+}
+
+// MoveTrackReport is one received track around a move. "Around the move"
+// runs from the last packet that arrived before the move started to the
+// first that arrived after it ended.
+type MoveTrackReport struct {
+	Kind string
+
+	// Gap is the longest interval between consecutive packets around the
+	// move: the media gap the move caused. TypicalInterval is the track's
+	// median interval between packets, for comparison.
+	Gap             time.Duration
+	TypicalInterval time.Duration
+
+	// SkippedSequenceNumbers counts sequence numbers missing around the
+	// move: a sequence margin's jump, or lost packets.
+	SkippedSequenceNumbers int
+
+	// LargestTimestampStep is the largest RTP timestamp step between
+	// consecutive packets around the move; TypicalTimestampStep is the
+	// track's median step between packets of different frames. With
+	// continuous timestamps the first is no larger than one frame's step.
+	LargestTimestampStep uint32
+	TypicalTimestampStep uint32
+
+	// PacketsAfter counts packets that arrived after the move ended.
+	PacketsAfter int
+
+	// FirstDecodableFrameAfter is, for video, the time from the end of the
+	// move to the first decodable frame after it; zero if none arrived.
+	FirstDecodableFrameAfter time.Duration
+}
+
+// ConsentReport is what the caller observed of its ICE consent checks:
+// STUN binding requests on the candidate pair in use, sampled from getStats.
+type ConsentReport struct {
+	// RequestsSent and ResponsesReceived are the totals at the last sample.
+	RequestsSent      uint64
+	ResponsesReceived uint64
+
+	// Since is when the window below starts: the end of the last move, or
+	// when the call connected if nothing moved. ObservedFor runs from there
+	// to the last sample.
+	Since       time.Duration
+	ObservedFor time.Duration
+
+	// ResponsesAfter counts responses received in the window, and
+	// LongestWithoutResponse is the longest stretch of it without a new
+	// response (to the sampling interval). The caller checks every 2 s;
+	// with no packet at all for 5 s its connection goes "disconnected".
+	ResponsesAfter         uint64
+	LongestWithoutResponse time.Duration
+}
+
+// moveReports describes every move from the caller's records. It runs under
+// r.mu.
+func (r *recorder) moveReports() []MoveReport {
+	reports := make([]MoveReport, 0, len(r.moves))
+	for _, move := range r.moves {
+		report := MoveReport{
+			From:   move.from,
+			To:     move.to,
+			Start:  r.since(move.start),
+			End:    r.since(move.end),
+			Result: move.result,
+		}
+		if move.err != nil {
+			report.Error = move.err.Error()
+		}
+		for _, track := range r.tracks {
+			report.Tracks = append(report.Tracks, track.aroundMove(report.Start, report.End))
+		}
+		reports = append(reports, report)
+	}
+
+	return reports
+}
+
+func (t *trackRecord) aroundMove(start, end time.Duration) MoveTrackReport {
+	report := MoveTrackReport{
+		Kind:                 t.kind,
+		TypicalInterval:      medianInterval(t.arrivals),
+		TypicalTimestampStep: medianTimestampStep(t.headers),
+	}
+
+	// first: the last arrival before the move started; after: the first
+	// arrival after it ended.
+	first := max(sort.Search(len(t.arrivals), func(i int) bool { return t.arrivals[i] > start })-1, 0)
+	after := sort.Search(len(t.arrivals), func(i int) bool { return t.arrivals[i] > end })
+	report.PacketsAfter = len(t.arrivals) - after
+
+	for i := first; i < after && i+1 < len(t.arrivals); i++ {
+		report.Gap = max(report.Gap, t.arrivals[i+1]-t.arrivals[i])
+		if step := int16(t.headers[i+1].seq - t.headers[i].seq); step > 1 { //nolint:gosec // wraps on purpose
+			report.SkippedSequenceNumbers += int(step) - 1
+		}
+		if step := t.headers[i+1].timestamp - t.headers[i].timestamp; int32(step) > 0 { //nolint:gosec // wraps on purpose
+			report.LargestTimestampStep = max(report.LargestTimestampStep, step)
+		}
+	}
+
+	if t.video != nil {
+		for _, frame := range t.video.frames {
+			if frame.at > end && frame.decodable {
+				report.FirstDecodableFrameAfter = frame.at - end
+
+				break
+			}
+		}
+	}
+
+	return report
+}
+
+func medianInterval(arrivals []time.Duration) time.Duration {
+	if len(arrivals) < 2 {
+		return 0
+	}
+	intervals := make([]time.Duration, 0, len(arrivals)-1)
+	for i := 1; i < len(arrivals); i++ {
+		intervals = append(intervals, arrivals[i]-arrivals[i-1])
+	}
+	slices.Sort(intervals)
+
+	return intervals[len(intervals)/2]
+}
+
+// medianTimestampStep is the median positive timestamp step: packets of the
+// same video frame share a timestamp and are left out.
+func medianTimestampStep(headers []rtpMark) uint32 {
+	var steps []uint32
+	for i := 1; i < len(headers); i++ {
+		if step := headers[i].timestamp - headers[i-1].timestamp; int32(step) > 0 { //nolint:gosec // wraps on purpose
+			steps = append(steps, step)
+		}
+	}
+	if len(steps) == 0 {
+		return 0
+	}
+	slices.Sort(steps)
+
+	return steps[len(steps)/2]
+}
+
+// consentReport summarizes the consent samples. It runs under r.mu.
+func (r *recorder) consentReport() ConsentReport {
+	report := ConsentReport{Since: r.connectedAt}
+	if n := len(r.moves); n > 0 {
+		report.Since = r.since(r.moves[n-1].end)
+	}
+	if len(r.consent) == 0 {
+		return report
+	}
+	last := r.consent[len(r.consent)-1]
+	report.RequestsSent, report.ResponsesReceived = last.requests, last.responses
+
+	var before uint64 // responses at the start of the window
+	lastResponse := report.Since
+	for _, sample := range r.consent {
+		if sample.at <= report.Since {
+			before = sample.responses
+
+			continue
+		}
+		if sample.responses > before+report.ResponsesAfter {
+			report.LongestWithoutResponse = max(report.LongestWithoutResponse, sample.at-lastResponse)
+			report.ResponsesAfter = sample.responses - before
+			lastResponse = sample.at
+		}
+	}
+	if last.at > report.Since {
+		report.ObservedFor = last.at - report.Since
+		report.LongestWithoutResponse = max(report.LongestWithoutResponse, last.at-lastResponse)
+	}
+
+	return report
+}
+
+func writeHandoverSummary(b *strings.Builder, r *Report) {
+	for i, move := range r.Moves {
+		res := move.Result
+		fmt.Fprintf(b, "  move %d:           worker %d -> %d at %s", i+1, move.From, move.To, ms(move.Start))
+		if move.Error != "" {
+			fmt.Fprintf(b, " FAILED (rolled back: %t): %s\n", res.RolledBack, move.Error)
+		} else {
+			fmt.Fprintf(b, "; handover %s (drain %s, export %s, resume %s), state %d B, %d caller packets held\n",
+				us(res.Duration), us(res.Drain), us(res.Export), us(res.Resume), res.StateBytes, res.HeldPackets)
+		}
+		for _, t := range move.Tracks {
+			fmt.Fprintf(b, "    %s: gap %s (typical %s), %d seq skipped, largest ts step %d (typical %d), %d packets after",
+				t.Kind, ms(t.Gap), ms(t.TypicalInterval), t.SkippedSequenceNumbers,
+				t.LargestTimestampStep, t.TypicalTimestampStep, t.PacketsAfter)
+			if t.Kind == kindVideo {
+				fmt.Fprintf(b, ", first decodable frame %s after", ms(t.FirstDecodableFrameAfter))
+			}
+			b.WriteString("\n")
+		}
+	}
+	c := r.Consent
+	fmt.Fprintf(b, "  consent checks:   %d sent, %d answered; from %s for %s: %d answered, longest without an answer %s\n",
+		c.RequestsSent, c.ResponsesReceived, ms(c.Since), ms(c.ObservedFor), c.ResponsesAfter, ms(c.LongestWithoutResponse))
+}
+
+func us(d time.Duration) string {
+	return d.Round(10 * time.Microsecond).String()
+}

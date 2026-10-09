@@ -55,6 +55,8 @@ const call = {
 window.relaisStats = { source, callState: call.state, unverified: [] };
 window.relaisStart = start;
 window.relaisHangup = hangup;
+// For handover.js: the current call's connection, resource and state.
+window.relaisCall = () => ({ pc, resourceURL, state: call.state });
 
 function log(message) {
   const line = `${new Date().toISOString().slice(11, 23)}  ${message}`;
@@ -98,6 +100,9 @@ function connectionStates(conn) {
 // publish makes stats the page's snapshot: window.relaisStats, the #stats
 // JSON and the summary.
 function publish(stats) {
+  if (window.relaisHandover) {
+    stats.handover = window.relaisHandover.stats(); // see handover.js
+  }
   window.relaisStats = stats;
   els.stats.textContent = JSON.stringify(stats, null, 2);
   render(stats);

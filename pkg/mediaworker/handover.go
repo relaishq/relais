@@ -1,0 +1,390 @@
+package mediaworker
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/pion/dtls/v3"
+	"github.com/pion/rtp"
+	"github.com/pion/srtp/v3"
+)
+
+// A session moves between workers as bytes: ExportSession on the old owner,
+// ResumeSession on the new one. Nothing else passes between them, so the
+// same bytes can later go through a session store or across processes.
+//
+// What the bytes hold, and how the new owner uses it:
+//
+//   - ICE: the credentials and the nominated caller address. An ICE-lite
+//     worker needs nothing else to answer the caller's consent checks.
+//   - DTLS: the dtls.Conn's exported state (cipher suite, master secret,
+//     epochs, record sequence number, the caller's certificate), resumed with
+//     dtls.ResumeWithOptions. The SRTP keys are derived from it again, never
+//     stored.
+//   - SRTP, receive side: the highest index (rollover counter and sequence
+//     number) per caller SSRC. Replay windows start fresh.
+//   - SRTP, send side: per outbound track, the highest index sent and the
+//     last SRTCP index, plus the rewriting offsets, so sequence numbers and
+//     timestamps continue where the old owner stopped.
+
+// ErrNotEstablished is returned when a session cannot be exported because
+// its DTLS handshake has not completed.
+var ErrNotEstablished = errors.New("mediaworker: session not established")
+
+var (
+	errSessionExists = errors.New("mediaworker: session already runs on this worker")
+	errStateVersion  = errors.New("mediaworker: unsupported session state version")
+	errBadState      = errors.New("mediaworker: invalid session state")
+)
+
+// resumeTimeout bounds rebuilding a resumed DTLS connection. It sends and
+// waits for nothing, so it is quick; the bound only guards against a hang.
+const resumeTimeout = 5 * time.Second
+
+// ResumeOptions shape how a resumed session continues the worker's outbound
+// streams.
+type ResumeOptions struct {
+	// SequenceMargin moves each outbound track's RTP sequence numbers (and
+	// SRTP index) forward by this much, so no index the old owner may have
+	// used after its snapshot is used again. Timestamps do not move. A
+	// planned handover snapshots after the old owner stopped, so 0 is exact.
+	// A snapshot that may be stale (a crash takeover) needs a margin larger
+	// than the packets sent since it was taken. It must be below 2^15.
+	SequenceMargin uint16
+
+	// SRTCPIndexMargin does the same for the SRTCP index of the RTCP the
+	// worker sends (its keyframe requests).
+	SRTCPIndexMargin uint32
+}
+
+// snapshot is the exported form of a session: the session state plus the
+// established DTLS connection state, taken together under the session lock.
+// It is encoded as JSON.
+type snapshot struct {
+	Version int // sessionStateVersion
+	State   sessionState
+
+	// DTLSConnection is pion/dtls State.MarshalBinary of the session's
+	// dtls.Conn.
+	DTLSConnection []byte
+}
+
+// ExportSession freezes a live session, snapshots it to bytes and drops it
+// from this worker without telling the caller: the old owner's half of a
+// planned handover (see Socket.Handover). From the moment of the snapshot
+// the worker processes none of the session's packets and sends the caller
+// nothing, so the snapshot is final and no packet is handled by two workers.
+func (w *Worker) ExportSession(sessionID string) ([]byte, error) {
+	sess := w.session(sessionID)
+	if sess == nil {
+		return nil, ErrUnknownSession
+	}
+	state, err := sess.export()
+	if err != nil {
+		return nil, err
+	}
+	sess.close() // fenced: its close_notify never leaves the worker
+
+	return state, nil
+}
+
+// ResumeSession continues a session from bytes made by ExportSession, on
+// this worker or another. It rebuilds the DTLS connection from the exported
+// state, derives the SRTP keys again, restores the SRTP indexes and starts
+// answering the caller's consent checks. The caller sees neither a new
+// handshake nor a new nomination.
+//
+// On a shared Socket, Socket.Handover calls it and routes the caller's
+// packets here. A worker with its own socket only receives the caller's
+// packets if they reach that socket.
+func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error) {
+	if opts.SequenceMargin >= 1<<15 {
+		return "", fmt.Errorf("mediaworker: sequence margin %d is not below 2^15", opts.SequenceMargin)
+	}
+	snap, err := decodeSnapshot(state)
+	if err != nil {
+		return "", err
+	}
+	if w.session(snap.State.ID) != nil {
+		return "", errSessionExists
+	}
+
+	sess := sessionFromState(w, snap.State)
+	dtlsConn, err := sess.resume(snap.DTLSConnection, opts)
+	if err != nil {
+		sess.close()
+
+		return "", fmt.Errorf("mediaworker: resume session %s: %w", sess.id, err)
+	}
+	if err := w.adopt(sess, dtlsConn); err != nil {
+		sess.close()
+
+		return "", err
+	}
+	sess.log.Infof("session %s: resumed with %s", sess.id, snap.State.ICE.RemoteAddr)
+
+	return sess.id, nil
+}
+
+// SessionDecryptFailures returns how many of the caller's SRTP and SRTCP
+// packets this worker could not decrypt in a session it runs. A resumed
+// session counts from its resume.
+func (w *Worker) SessionDecryptFailures(sessionID string) (uint64, error) {
+	sess := w.session(sessionID)
+	if sess == nil {
+		return 0, ErrUnknownSession
+	}
+
+	return sess.decryptFailures.Load(), nil
+}
+
+// adopt registers a resumed session and serves it.
+func (w *Worker) adopt(sess *session, dtlsConn *dtls.Conn) error {
+	w.mu.Lock()
+	if w.closed {
+		w.mu.Unlock()
+
+		return ErrClosed
+	}
+	if _, ok := w.sessions[sess.id]; ok {
+		w.mu.Unlock()
+
+		return errSessionExists
+	}
+	w.sessions[sess.id] = sess
+	// The nominated address has passed ICE checks already: its DTLS and
+	// SRTP belong to the session before the caller's next consent check.
+	w.byAddr[sess.state.ICE.RemoteAddr] = sess
+	w.running.Add(1)
+	w.mu.Unlock()
+
+	go func() {
+		defer w.running.Done()
+		defer sess.close()
+		sess.serve(dtlsConn)
+	}()
+
+	return nil
+}
+
+// export fences the session and snapshots it. The fence and the snapshot
+// happen under mu, which every packet the session handles holds, so the
+// counters in the snapshot are the final ones.
+func (s *session) export() ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.fenced.Load() {
+		return nil, errHandedOver
+	}
+	if s.dtlsConn == nil || s.srtpIn == nil {
+		return nil, ErrNotEstablished
+	}
+
+	// Fence first, so the DTLS connection cannot send a record the snapshot
+	// does not account for.
+	s.fenced.Store(true)
+	connState, ok := s.dtlsConn.ConnectionState()
+	if !ok {
+		s.fenced.Store(false)
+
+		return nil, errors.New("mediaworker: DTLS connection state unavailable")
+	}
+	dtlsState, err := connState.MarshalBinary()
+	if err != nil {
+		s.fenced.Store(false)
+
+		return nil, fmt.Errorf("mediaworker: export DTLS state: %w", err)
+	}
+	state, err := json.Marshal(snapshot{
+		Version:        sessionStateVersion,
+		State:          s.state,
+		DTLSConnection: dtlsState,
+	})
+	if err != nil {
+		s.fenced.Store(false)
+
+		return nil, fmt.Errorf("mediaworker: encode session state: %w", err)
+	}
+
+	return state, nil
+}
+
+func decodeSnapshot(data []byte) (*snapshot, error) {
+	var version struct{ Version int }
+	if err := json.Unmarshal(data, &version); err != nil {
+		return nil, fmt.Errorf("%w: %w", errBadState, err)
+	}
+	if version.Version != sessionStateVersion {
+		return nil, fmt.Errorf("%w %d (want %d)", errStateVersion, version.Version, sessionStateVersion)
+	}
+
+	var snap snapshot
+	if err := json.Unmarshal(data, &snap); err != nil {
+		return nil, fmt.Errorf("%w: %w", errBadState, err)
+	}
+	state := &snap.State
+	switch {
+	case state.Version != sessionStateVersion:
+		return nil, fmt.Errorf("%w %d (want %d)", errStateVersion, state.Version, sessionStateVersion)
+	case state.ID == "" || state.ID != state.ICE.LocalUfrag:
+		return nil, fmt.Errorf("%w: session ID %q, ICE ufrag %q", errBadState, state.ID, state.ICE.LocalUfrag)
+	case !state.ICE.RemoteAddr.IsValid():
+		return nil, fmt.Errorf("%w: no nominated caller address", errBadState)
+	case len(snap.DTLSConnection) == 0 || state.SRTP.Profile == 0:
+		return nil, fmt.Errorf("%w: no DTLS connection state", errBadState)
+	}
+	if state.SRTP.Inbound == nil {
+		state.SRTP.Inbound = make(map[uint32]uint64)
+	}
+
+	return &snap, nil
+}
+
+// resume rebuilds the session's transport from its exported DTLS state:
+// the DTLS connection, SRTP keys and contexts, and the SRTP indexes. The
+// session is not registered yet, so nothing else touches it.
+func (s *session) resume(dtlsBytes []byte, opts ResumeOptions) (*dtls.Conn, error) {
+	// The caller nominated its address before the snapshot.
+	s.nominatedOnce.Do(func() { close(s.nominated) })
+
+	var dtlsState dtls.State
+	if err := dtlsState.UnmarshalBinary(dtlsBytes); err != nil {
+		return nil, fmt.Errorf("DTLS state: %w", err)
+	}
+	// Role, cipher suite, epochs, master secret and SRTP profile all come
+	// from the state; there is no handshake.
+	dtlsConn, err := dtls.ResumeWithOptions(&dtlsState, s.dtlsEndpoint, s.dtlsEndpoint.RemoteAddr(),
+		dtls.WithLoggerFactory(s.worker.cfg.LoggerFactory))
+	if err != nil {
+		return nil, fmt.Errorf("resume DTLS: %w", err)
+	}
+	s.mu.Lock()
+	s.dtlsConn = dtlsConn // close closes it from here on
+	exported := s.state.SRTP.Profile
+	s.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(s.ctx, resumeTimeout)
+	defer cancel()
+	if err := dtlsConn.HandshakeContext(ctx); err != nil {
+		return nil, fmt.Errorf("resume DTLS: %w", err)
+	}
+
+	keys, err := s.startSRTP(dtlsConn)
+	if err != nil {
+		return nil, fmt.Errorf("start SRTP: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.SRTP.Profile != exported {
+		return nil, fmt.Errorf("resumed DTLS state selects SRTP profile %d, session state says %d",
+			s.state.SRTP.Profile, exported)
+	}
+	for ssrc, index := range s.state.SRTP.Inbound {
+		if err := restoreInboundIndex(s.srtpIn, keys, s.state.SRTP.Profile, ssrc, index); err != nil {
+			return nil, fmt.Errorf("restore inbound SRTP index for ssrc %d: %w", ssrc, err)
+		}
+	}
+	for _, track := range []*trackState{&s.state.Audio, &s.state.Video} {
+		if err := s.resumeTrack(track, opts); err != nil {
+			return nil, fmt.Errorf("restore outbound %s track: %w", track.ID, err)
+		}
+	}
+
+	return dtlsConn, nil
+}
+
+// resumeTrack continues an outbound track: its sequence numbers move forward
+// by the margin (timestamps do not), and the outbound SRTP context continues
+// from the highest index sent. It runs under mu.
+func (s *session) resumeTrack(track *trackState, opts ResumeOptions) error {
+	if !track.negotiated() || track.Packets == 0 {
+		// Nothing sent: the first packet starts the stream, as it would have
+		// on the old owner.
+		return nil
+	}
+
+	margin := uint64(opts.SequenceMargin)
+	track.SeqOffset += opts.SequenceMargin
+	track.HighestSentIndex += margin
+	if err := restoreOutboundIndex(s.srtpOut, track.SSRC, track.HighestSentIndex); err != nil {
+		return err
+	}
+
+	if track.SRTCPIndex > 0 {
+		track.SRTCPIndex += opts.SRTCPIndexMargin
+		s.srtpOut.SetIndex(track.SSRC, track.SRTCPIndex)
+	}
+
+	return nil
+}
+
+// pion/srtp cannot set an SSRC's full SRTP index (rollover counter and
+// highest sequence number). SetROC sets only the rollover counter and makes
+// the next packet's sequence number the highest, so a sequence-number wrap
+// between the snapshot and the first resumed packet would break the stream
+// for good. The two functions below set the full index instead by running
+// one local "priming" packet at that index through the context, exactly as
+// live traffic would. A primer never leaves the process. A proposed upstream
+// patch (SRTPIndex/SetSRTPIndex, on the spike/session-resume branch under
+// spikes/session-resume/upstream) would replace them.
+
+// restoreInboundIndex makes an inbound context continue a caller's stream
+// whose highest decrypted index is index. The primer is encrypted with the
+// caller's keys by a throwaway context and decrypted by in; it also marks
+// that index as seen in in's fresh replay window, which it was.
+func restoreInboundIndex(in *srtp.Context, keys srtp.SessionKeys, profile srtp.ProtectionProfile,
+	ssrc uint32, index uint64,
+) error {
+	primer, err := srtp.CreateContext(keys.RemoteMasterKey, keys.RemoteMasterSalt, profile)
+	if err != nil {
+		return err
+	}
+	roc := uint32(index >> 16) //nolint:gosec // an SRTP index is 48 bits
+	primer.SetROC(ssrc, roc)
+	encrypted, err := primer.EncryptRTP(nil, primingPacket(ssrc, uint16(index)), nil) //nolint:gosec // low 16 bits
+	if err != nil {
+		return err
+	}
+	in.SetROC(ssrc, roc)
+	if _, err := in.DecryptRTP(nil, encrypted, nil); err != nil {
+		return err
+	}
+
+	return checkROC(in, ssrc, roc)
+}
+
+// restoreOutboundIndex makes an outbound context continue a stream whose
+// highest sent index is index. The primer's ciphertext is discarded: it
+// reuses the keystream of a packet already sent, so it must never be sent.
+func restoreOutboundIndex(out *srtp.Context, ssrc uint32, index uint64) error {
+	roc := uint32(index >> 16) //nolint:gosec // an SRTP index is 48 bits
+	out.SetROC(ssrc, roc)
+	if _, err := out.EncryptRTP(nil, primingPacket(ssrc, uint16(index)), nil); err != nil { //nolint:gosec // low 16 bits
+		return err
+	}
+
+	return checkROC(out, ssrc, roc)
+}
+
+func checkROC(ctx *srtp.Context, ssrc, want uint32) error {
+	if got, ok := ctx.ROC(ssrc); !ok || got != want {
+		return fmt.Errorf("rollover counter %d after priming, want %d", got, want)
+	}
+
+	return nil
+}
+
+func primingPacket(ssrc uint32, seq uint16) []byte {
+	packet := rtp.Packet{
+		Header:  rtp.Header{Version: 2, SequenceNumber: seq, SSRC: ssrc},
+		Payload: []byte{0},
+	}
+	raw, _ := packet.Marshal() // a fixed header and a one-byte payload cannot fail
+
+	return raw
+}
