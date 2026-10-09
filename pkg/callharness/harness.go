@@ -7,7 +7,8 @@
 //
 // Today the system is one media worker serving WHIP-style signaling, or
 // several workers sharing one UDP socket so that a call can move between
-// them (Call.Handover, a planned handover). A test looks like this:
+// them (Call.Handover, a planned handover), or, with Options.Relay, one or
+// more workers behind a relay (see topology.go). A test looks like this:
 //
 //	h, _ := callharness.Start(callharness.Options{})
 //	defer h.Close()
@@ -26,6 +27,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pion/logging"
@@ -34,24 +36,39 @@ import (
 
 // Options configures the system the harness starts.
 type Options struct {
-	// WorkerLoggerFactory is passed to the media workers. Defaults to Pion's
-	// default logger factory (PION_LOG_* environment variables).
+	// WorkerLoggerFactory is passed to the media workers (and the relay).
+	// Defaults to Pion's default logger factory (PION_LOG_* environment
+	// variables).
 	WorkerLoggerFactory logging.LoggerFactory
 
-	// Workers is how many media workers run. One (the default) owns its UDP
-	// socket. Two or more share one UDP socket, calls start on the first,
-	// and Call.Handover moves a call between them.
+	// Workers is how many media workers run. Without Relay, one (the
+	// default) owns its UDP socket; two or more share one UDP socket, calls
+	// start on the first, and Call.Handover moves a call between them.
+	// With Relay, each worker owns a private socket behind the relay, and a
+	// call picks its worker with CallOptions.Worker; Call.Handover is not
+	// available (moving calls through the relay is later work).
 	Workers int
+
+	// Relay runs every call through a relay with an in-memory session-owner
+	// store: answers advertise the relay's public address, and the workers
+	// bind only private sockets behind it.
+	Relay bool
 }
 
-// Harness runs the system in-process: media workers on a loopback UDP
-// socket and their signaling endpoint on a loopback HTTP server.
+// Harness runs the system in-process: media workers on loopback UDP
+// sockets (shared, or behind a relay) and their signaling endpoint on a
+// loopback HTTP server.
 type Harness struct {
 	workers      *workers
 	server       *http.Server
 	serveDone    chan struct{}
 	signalingURL string
 	httpClient   *http.Client
+
+	// callsMu guards the calls not closed yet and closed (see lifecycle.go).
+	callsMu sync.Mutex
+	calls   map[*Call]struct{}
+	closed  bool
 }
 
 // Start starts the system.
@@ -95,7 +112,7 @@ func (h *Harness) SignalingURL() string {
 // captured from Chrome, and returns what the answer says. It then hangs the
 // call up again; no media flows.
 func (h *Harness) ExchangeOffer(ctx context.Context, offer string) (AnswerFacts, error) {
-	answer, resourceURL, err := h.postOffer(ctx, offer)
+	answer, resourceURL, err := h.postOffer(ctx, 0, offer)
 	if err != nil {
 		return AnswerFacts{}, err
 	}
@@ -104,19 +121,26 @@ func (h *Harness) ExchangeOffer(ctx context.Context, offer string) (AnswerFacts,
 	return facts, errors.Join(parseErr, h.deleteCall(ctx, resourceURL))
 }
 
-// Close stops the signaling server and the media workers.
+// Close closes any calls still open, then stops the signaling server, the
+// media workers and the relay. Dial fails with ErrHarnessClosed from the
+// moment Close starts.
 func (h *Harness) Close() error {
+	callsErr := h.closeCalls()
 	serverErr := h.server.Close()
 	<-h.serveDone
 
-	return errors.Join(serverErr, h.workers.close())
+	return errors.Join(callsErr, serverErr, h.workers.close())
 }
 
-// postOffer makes the one signaling exchange that starts a call: it POSTs
-// the offer and returns the answer and the call's resource URL (from
-// Location).
-func (h *Harness) postOffer(ctx context.Context, offer string) (answer, resourceURL string, err error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.signalingURL, strings.NewReader(offer))
+// postOffer makes the one signaling exchange that starts a call on a media
+// worker: it POSTs the offer and returns the answer and the call's resource
+// URL (from Location).
+func (h *Harness) postOffer(ctx context.Context, worker int, offer string) (answer, resourceURL string, err error) {
+	target, err := h.offerURL(worker)
+	if err != nil {
+		return "", "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(offer))
 	if err != nil {
 		return "", "", err
 	}

@@ -207,7 +207,7 @@ type answerParams struct {
 	iceUfrag    string
 	icePwd      string
 	fingerprint string         // sha-256 fingerprint of the session's certificate
-	candidate   netip.AddrPort // the worker's socket: the single host candidate
+	candidate   netip.AddrPort // the worker's MediaAddr (its socket, or the relay): the single host candidate
 
 	// tracks are the worker's outbound tracks by the MID they answer.
 	tracks map[string]trackState

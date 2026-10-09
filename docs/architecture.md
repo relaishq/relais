@@ -13,6 +13,12 @@ Relais is a distributed media server that supports flexible ingress and egress o
 - Planned handover: several workers can share one UDP socket (`Socket`), and a live session moves between them as exported bytes (ICE credentials, DTLS connection state, SRTP indexes, outbound track counters) without the caller reconnecting
 - Tested through the call harness (`pkg/callharness`) and demonstrated by the browser echo demo (`cmd/echo-demo`)
 
+### Relay (prototype)
+- `pkg/relay`: one public UDP address in front of the media workers; every answer advertises it as the single host candidate
+- Reads only STUN: a binding request's ICE username fragment is the session ID, which the relay looks up in the session-owner store (`pkg/sessionstore`) to find the owning worker
+- Forwards DTLS, SRTP and SRTCP without parsing them, by a bounded flow table (caller address to worker) that is only a cache of the store; a caller's route changes only after the owning worker has authenticated one of its binding requests
+- Workers bind only private sockets and reach callers through the relay over the relay leg, where a small versioned header carries the caller's address
+
 The earlier `relais-core` server (Pion v3 signaling, session control plane API) has been retired.
 
 ### 2. Plugin System
@@ -38,7 +44,7 @@ Live calls terminate on the media worker and do not use storage yet. The plugin 
 The system scales horizontally by:
 - Running multiple plugin instances
 - Using distributed storage
-- Running multiple media workers: sessions can move between workers on one UDP socket today; a relay in front of separate workers is planned
+- Running multiple media workers: sessions can move between workers on one UDP socket today, and separate workers can sit behind one relay address; moving sessions through the relay is planned
 
 ## Security
 

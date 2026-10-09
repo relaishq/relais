@@ -20,6 +20,11 @@ type Report struct {
 	Offer  string
 	Answer AnswerFacts
 
+	// RemoteAddr is the remote end ("ip:port") of the caller's selected ICE
+	// candidate pair at hangup: the one address the caller sent to and
+	// accepted media from.
+	RemoteAddr string
+
 	// ConnectedAt is when the caller's connection state first reached
 	// "connected"; zero if it never did.
 	ConnectedAt time.Duration
@@ -331,6 +336,7 @@ func (r *Report) Summary() string {
 	fmt.Fprintf(&b, "  signaling:        %d offer/answer exchange(s); answer ice-lite=%t bundle=%v rtcp-mux=%t host candidates=%d\n",
 		r.OfferAnswerExchanges, r.Answer.ICELite, r.Answer.Bundle, r.Answer.RTCPMux, len(r.Answer.HostCandidates()))
 	fmt.Fprintf(&b, "  answer media:     %s\n", formatAnswerMedia(r.Answer.Media))
+	fmt.Fprintf(&b, "  remote address:   %s (the caller's selected candidate pair)\n", r.RemoteAddr)
 	fmt.Fprintf(&b, "  connected at:     %s; call length %s (until hangup at %s)\n",
 		ms(r.ConnectedAt), ms(r.HungUpAt-r.ConnectedAt), ms(r.HungUpAt))
 	fmt.Fprintf(&b, "  connection:       %s (stayed connected: %t)\n", formatStates(r.ConnectionStates), r.ConnectedThroughout())

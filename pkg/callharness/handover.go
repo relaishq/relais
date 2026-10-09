@@ -11,24 +11,27 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pion/webrtc/v4"
 	"github.com/relais/pkg/mediaworker"
 )
 
-// consentSampleInterval is how often the caller samples its ICE consent
-// checks. Pion's caller sends one every 2 s.
-const consentSampleInterval = 250 * time.Millisecond
-
 // workers are the system's media workers. A single worker owns its UDP
 // socket. Two or more share one socket (mediaworker.Socket), calls start on
-// the first, and a call can move between them.
+// the first, and a call can move between them. With Options.Relay, each
+// worker owns a private socket behind a relay instead (topology.go).
 type workers struct {
 	socket    *mediaworker.Socket // nil for a single worker
+	relay     *relayTopology      // nil without Options.Relay
 	list      []*mediaworker.Worker
 	signaling http.Handler
 }
 
 func startWorkers(opts Options) (*workers, error) {
+	if opts.Workers < 0 {
+		return nil, fmt.Errorf("callharness: %d workers", opts.Workers)
+	}
+	if opts.Relay {
+		return startRelayedWorkers(opts)
+	}
 	cfg := mediaworker.Config{LoggerFactory: opts.WorkerLoggerFactory}
 	if opts.Workers <= 1 {
 		cfg.ListenAddr = "127.0.0.1:0"
@@ -60,7 +63,7 @@ func startWorkers(opts Options) (*workers, error) {
 	return ws, nil
 }
 
-// close closes the workers, then their shared socket.
+// close closes the workers, then their shared socket or relay.
 func (ws *workers) close() error {
 	var errs []error
 	for _, worker := range ws.list {
@@ -68,6 +71,9 @@ func (ws *workers) close() error {
 	}
 	if ws.socket != nil {
 		errs = append(errs, ws.socket.Close())
+	}
+	if ws.relay != nil {
+		errs = append(errs, ws.relay.close())
 	}
 
 	return errors.Join(errs...)
@@ -96,7 +102,7 @@ type HandoverOptions struct {
 func (c *Call) Handover(opts HandoverOptions) error {
 	ws := c.harness.workers
 	if ws.socket == nil {
-		return errors.New("callharness: a handover needs Options.Workers of 2 or more")
+		return errors.New("callharness: a handover needs Options.Workers of 2 or more, without Options.Relay")
 	}
 	if opts.To < 0 || opts.To >= len(ws.list) {
 		return fmt.Errorf("callharness: no worker %d", opts.To)
@@ -130,40 +136,6 @@ func (c *Call) sessionID() (string, error) {
 	return path.Base(resource.Path), nil
 }
 
-// sampleConsent samples the caller's ICE consent checks (STUN binding
-// requests on the candidate pair in use, and the responses to them) from
-// getStats, as a browser page could, until the connection closes.
-func (c *Call) sampleConsent() {
-	ticker := time.NewTicker(consentSampleInterval)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		if c.pc.ConnectionState() == webrtc.PeerConnectionStateClosed {
-			return
-		}
-		if requests, responses, ok := pairChecks(c.pc.GetStats()); ok {
-			c.rec.consentChecks(time.Now(), requests, responses)
-		}
-	}
-}
-
-// pairChecks returns the checks sent and responses received on the
-// candidate pair in use: the succeeded pair with the most responses (consent
-// checks go to the pair in use only).
-func pairChecks(stats webrtc.StatsReport) (requests, responses uint64, ok bool) {
-	for _, stat := range stats {
-		pair, isPair := stat.(webrtc.ICECandidatePairStats)
-		if !isPair || pair.State != webrtc.StatsICECandidatePairStateSucceeded {
-			continue
-		}
-		if !ok || pair.ResponsesReceived > responses {
-			requests, responses, ok = pair.RequestsSent, pair.ResponsesReceived, true
-		}
-	}
-
-	return requests, responses, ok
-}
-
 // moveRecord is one handover the harness made.
 type moveRecord struct {
 	from, to   int
@@ -184,6 +156,8 @@ type frameMark struct {
 	decodable bool
 }
 
+// consentSample is the caller's running totals of consent checks sent and
+// answered, at one of them (see consent.go).
 type consentSample struct {
 	at                  time.Duration
 	requests, responses uint64
@@ -193,15 +167,6 @@ func (r *recorder) move(record moveRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.moves = append(r.moves, record)
-}
-
-func (r *recorder) consentChecks(at time.Time, requests, responses uint64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.hungUp {
-		return
-	}
-	r.consent = append(r.consent, consentSample{at: r.since(at), requests: requests, responses: responses})
 }
 
 // MoveReport is one planned handover as the caller observed it, plus what
@@ -254,23 +219,26 @@ type MoveTrackReport struct {
 	FirstDecodableFrameAfter time.Duration
 }
 
-// ConsentReport is what the caller observed of its ICE consent checks:
-// STUN binding requests on the candidate pair in use, sampled from getStats.
+// ConsentReport is what the caller observed of its ICE consent checks: the
+// STUN binding requests it sent and the binding success responses to them,
+// seen on its own UDP socket (see consent.go).
 type ConsentReport struct {
-	// RequestsSent and ResponsesReceived are the totals at the last sample.
+	// RequestsSent and ResponsesReceived are the totals until hangup.
 	RequestsSent      uint64
 	ResponsesReceived uint64
 
 	// Since is when the window below starts: the end of the last move, or
 	// when the call connected if nothing moved. ObservedFor runs from there
-	// to the last sample.
+	// to hangup, or to when the caller's connection closed or failed if that
+	// came first.
 	Since       time.Duration
 	ObservedFor time.Duration
 
 	// ResponsesAfter counts responses received in the window, and
 	// LongestWithoutResponse is the longest stretch of it without a new
-	// response (to the sampling interval). The caller checks every 2 s;
-	// with no packet at all for 5 s its connection goes "disconnected".
+	// response, the stretch from the last response to the end of the window
+	// included. The caller checks every 2 s; with no packet at all for 5 s
+	// its connection goes "disconnected".
 	ResponsesAfter         uint64
 	LongestWithoutResponse time.Duration
 }
@@ -371,15 +339,18 @@ func (r *recorder) consentReport() ConsentReport {
 	if n := len(r.moves); n > 0 {
 		report.Since = r.since(r.moves[n-1].end)
 	}
-	if len(r.consent) == 0 {
-		return report
+	end := r.consentEnd()
+	if n := len(r.consent); n > 0 {
+		last := r.consent[n-1]
+		report.RequestsSent, report.ResponsesReceived = last.requests, last.responses
 	}
-	last := r.consent[len(r.consent)-1]
-	report.RequestsSent, report.ResponsesReceived = last.requests, last.responses
 
 	var before uint64 // responses at the start of the window
 	lastResponse := report.Since
 	for _, sample := range r.consent {
+		if sample.at > end {
+			break
+		}
 		if sample.at <= report.Since {
 			before = sample.responses
 
@@ -391,12 +362,27 @@ func (r *recorder) consentReport() ConsentReport {
 			lastResponse = sample.at
 		}
 	}
-	if last.at > report.Since {
-		report.ObservedFor = last.at - report.Since
-		report.LongestWithoutResponse = max(report.LongestWithoutResponse, last.at-lastResponse)
+	if end > report.Since {
+		// The silent tail up to the end of the window counts too.
+		report.ObservedFor = end - report.Since
+		report.LongestWithoutResponse = max(report.LongestWithoutResponse, end-lastResponse)
 	}
 
 	return report
+}
+
+// consentEnd is when the consent window ends: at hangup, or when the
+// caller's connection closed or failed, if that came first. It runs under
+// r.mu.
+func (r *recorder) consentEnd() time.Duration {
+	end := r.hungUpAt
+	for _, change := range r.connectionStates {
+		if change.At > r.connectedAt && (change.State == "closed" || change.State == "failed") {
+			return min(end, change.At)
+		}
+	}
+
+	return end
 }
 
 func writeHandoverSummary(b *strings.Builder, r *Report) {

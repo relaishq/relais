@@ -15,12 +15,17 @@
 // host candidate in every answer, therefore defaults to this machine's
 // primary LAN IPv4 address.
 //
+// With -relay, a relay owns that media address instead, and one media worker
+// sits behind it on a private loopback socket: callers see only the relay's
+// address, and the page works the same, except that "Move call" reports that
+// moving a call through the relay is not supported yet (see relay.go).
+//
 // Usage:
 //
-//	go run ./cmd/echo-demo [-http localhost:9101] [-media-ip 192.168.1.20] [-media-port 9150]
+//	go run ./cmd/echo-demo [-http localhost:9101] [-media-ip 192.168.1.20] [-media-port 9150] [-relay]
 //
 // Each flag can also be set in the environment: RELAIS_DEMO_HTTP_ADDR,
-// RELAIS_DEMO_MEDIA_IP and RELAIS_DEMO_MEDIA_PORT. Then open
+// RELAIS_DEMO_MEDIA_IP, RELAIS_DEMO_MEDIA_PORT and RELAIS_DEMO_RELAY=1. Then open
 // http://localhost:9101/ for camera and microphone, or
 // http://localhost:9101/?source=test for the test pattern (no permission
 // prompt).
@@ -70,6 +75,8 @@ func run() error {
 	mediaIP := flag.String("media-ip", os.Getenv("RELAIS_DEMO_MEDIA_IP"),
 		"IP of the worker's UDP media socket, advertised as the single host candidate (default: this machine's primary LAN IPv4)")
 	mediaPort := flag.Int("media-port", defaultPort, "UDP port of the worker's media socket (0 picks a free port)")
+	withRelay := flag.Bool("relay", os.Getenv("RELAIS_DEMO_RELAY") == "1",
+		"put a relay on the media address and the worker behind it on a private loopback socket")
 	flag.Parse()
 	if *mediaPort < 0 || *mediaPort > 65535 {
 		return fmt.Errorf("-media-port %d out of range", *mediaPort)
@@ -80,7 +87,7 @@ func run() error {
 		return err
 	}
 
-	sys, err := startSystem(netip.AddrPortFrom(ip, uint16(*mediaPort)).String(), loggerFactory())
+	sys, err := startMedia(netip.AddrPortFrom(ip, uint16(*mediaPort)), *withRelay, loggerFactory())
 	if err != nil {
 		return err
 	}
@@ -93,7 +100,6 @@ func run() error {
 	server := &http.Server{Handler: newHandler(sys), ReadHeaderTimeout: 5 * time.Second}
 
 	_, port, _ := net.SplitHostPort(listener.Addr().String())
-	log.Printf("echo-demo: media workers A and B on udp %s (the host candidate in every answer)", sys.MediaAddr())
 	log.Printf("echo-demo: camera and microphone: http://localhost:%s/", port)
 	log.Printf("echo-demo: test pattern:          http://localhost:%s/?source=test", port)
 	if host, _, _ := net.SplitHostPort(*httpAddr); host != "localhost" && host != "127.0.0.1" && host != "::1" {
@@ -122,7 +128,7 @@ func run() error {
 // newHandler serves the demo page and the call endpoints (POST /calls,
 // DELETE /calls/{id}, POST /calls/{id}/move, GET /calls/{id}) from one
 // origin.
-func newHandler(sys *system) http.Handler {
+func newHandler(sys mediaSystem) http.Handler {
 	static, err := fs.Sub(webFiles, "web")
 	if err != nil {
 		panic(err) // the embedded directory is fixed at build time
@@ -209,11 +215,11 @@ func usable(ip netip.Addr) bool {
 	return ip.Is4() && !ip.IsLoopback() && !ip.IsUnspecified() && !ip.IsLinkLocalUnicast()
 }
 
-// loggerFactory logs the worker's own session events at Info and Pion's
-// components at Error, unless PION_LOG_* says otherwise.
+// loggerFactory logs the worker's own session events and the relay's routing
+// at Info and Pion's components at Error, unless PION_LOG_* says otherwise.
 func loggerFactory() logging.LoggerFactory {
 	factory := logging.NewDefaultLoggerFactory()
-	for _, scope := range []string{"mediaworker", "session"} {
+	for _, scope := range []string{"mediaworker", "session", "relay"} {
 		if _, set := factory.ScopeLevels[scope]; !set && factory.DefaultLogLevel < logging.LogLevelInfo {
 			factory.ScopeLevels[scope] = logging.LogLevelInfo
 		}
