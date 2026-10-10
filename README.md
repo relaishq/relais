@@ -103,7 +103,10 @@ For real-camera and Android runs, follow the
 [real-device checklist](docs/dev/real-device-checklist.md). Opt in with
 `-local-network=192.168.1.50` (your local IPv4 address) to serve the page over HTTPS and
 bind relay media to that IP. The launcher prints the URL and SHA-256
-certificate fingerprint; private APIs stay on loopback. The page has a source
+certificate fingerprint in plain hex and Chrome's format; compare it with the
+browser's certificate viewer. The full printed URL selects camera and includes
+a per-launch token required for non-GET call controls. Private APIs stay on
+loopback. The page has a source
 menu, a 10-move/10-kill checklist button, and **Save results** for version 4 JSON.
 Both sources use the same counter reader. Each takeover records the time to a
 first live frame after observed content recovery, measured conservatively from
@@ -134,7 +137,9 @@ cannot claim recovery. `contentResumedMs` separately reports recovery from the
 largest gap ending after issue, even if a larger gap precedes issue (unverified
 if still open). Presentation gaps remain a secondary metric. Camera counters
 advance only when a camera frame arrives, and use the same reader and verdicts
-as the pattern source.
+as the pattern source. Source draw timestamps provide the observed cadence;
+source stalls join starvation diagnostics and are excluded from baseline
+calibration.
 Audio judges total `concealedSamples` at the receiver sample rate. Non-silent
 concealment remains a diagnostic. `concealmentEvents` bounds bursts when more
 than one event occurs between stats. `totalSamplesReceived` must advance by at

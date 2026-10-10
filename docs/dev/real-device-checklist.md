@@ -20,13 +20,20 @@ make demo-cluster DEMO_CLUSTER_FLAGS="-http=127.0.0.1:9201 -local-network=192.16
 The page and relay UDP media bind only to that IP. Private control, worker,
 relay HTTP APIs, relay worker leg, and Redis remain on `127.0.0.1`.
 The terminal prints a warning, an HTTPS URL, and the certificate SHA-256
-fingerprint. Call controls are reachable from the local network, so use a
-trusted network. Allow the owned demo processes through the Mac firewall if
+fingerprint in plain hex and Chrome's uppercase, colon-separated format.
+Call controls require a random per-launch token from the printed URL. The page
+sends it as `X-Relais-Demo-Token` on every non-GET request. Keep the full URL
+private; it grants demo controls. Use a trusted network. Allow the owned demo processes through the Mac firewall if
 prompted. Do not change router settings or open ports to the internet.
 
 The self-signed ECDSA certificate and key are generated in memory at startup.
-They expire after 24 hours and change every restart. Use the printed literal-IP
-URL, such as `https://192.168.1.50:9201/?source=camera&autostart=0`.
+They expire after 24 hours and change every restart. The certificate starts
+one hour before launch to tolerate device clock skew. Use the full printed
+literal-IP URL, such as
+`https://192.168.1.50:9201/?source=camera&autostart=0#token=[launch token]`.
+The fragment token stays out of page requests and Referer headers. It changes
+on restart. Opening a URL without it can load the page, but call controls return
+403. Local-network URLs select camera; loopback-only URLs keep the pattern.
 `-local-network` accepts a literal private or loopback IPv4 address, not a
 wildcard or DNS name. IPv6 is rejected: HTTPS worked in the browser check,
 but IPv6 media did not connect. Without the flag the demo remains HTTP and
@@ -41,6 +48,10 @@ this checklist, which requires separate processes and kill controls.
    **Advanced**, then **Proceed to [your IP] (unsafe)**. This is a temporary
    exception for this demo. Do not install a root certificate. If Chrome policy
    prevents proceeding, record the block rather than changing managed settings.
+   Open Chrome's certificate viewer from the page's security details. Compare
+   its SHA-256 fingerprint with the terminal's **fingerprint (Chrome)** value.
+   Stop if they differ. If the viewer does not expose that fingerprint, record
+   this verification as NOT-RUN.
 2. Confirm **Camera with counter and tone (720p)** in the Source menu. Click
    **Start call** and allow camera access. Microphone access is not requested.
    The page requests 1280×720 at 30 fps, draws camera frames into a 720p canvas,
@@ -87,6 +98,8 @@ relaisDemo.saveResults();
    [your IP] (unsafe)**. Accept only the demo URL you started. If Android or a
    managed Chrome policy blocks the exception or camera permission, record it.
    Do not install certificates or disable browser security globally.
+   Compare the SHA-256 fingerprint in Chrome's certificate viewer with the
+   terminal value, as on desktop. Record NOT-RUN if that viewer is unavailable.
 3. Repeat desktop steps 2–5. Keep the echo visible, the phone awake, and Chrome
    in the foreground. The same checklist button works without Android DevTools.
 4. Save the JSON. Find it in Chrome → menu → **Downloads**, or the phone's
@@ -110,6 +123,15 @@ it does not subtract unsynchronized phone/server wall clocks. The server's
 actual kill timestamp remains in `event.server.at`. The definition is also saved
 in `measurement.timeToFirstLiveFrameMs`. This measurement is separate from the
 media gap and does not change verdict thresholds.
+
+`frameIntervalMs` comes from observed source draws, using the median of up to
+60 intervals before the measurement window (or available intervals during
+startup). A source gap longer than 1.5 times that cadence appears in
+`sourceStarvedPeriods`, including an unfinished stall. Overlap can make a video
+failure inconclusive under the existing starvation rule. A source-stalled
+baseline is excluded from noise calibration. A steady source does not mask a
+Relais media gap. Configured `cameraSettings.frameRate` remains a device setting,
+not proof of the observed frame rate.
 
 A hidden page is invalid. Missing evidence, noisy baselines, or a pending hold
 can be inconclusive. Keep those records; do not interpret them as a pass.

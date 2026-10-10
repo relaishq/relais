@@ -313,7 +313,8 @@ test('missing recovery watermark and stale or unreadable frames cannot prove liv
  assert.equal(M.firstLiveFrame('kill',[{atMs:400,counter:10,advanced:true},...frames.slice(1)],0,500,400),M.UNKNOWN);
  assert.equal(M.firstLiveFrame('kill',frames,0,500,300),M.UNKNOWN);
 });
-test('live frame comparison uses unwrapped counters across the 16-bit boundary',()=>{
+test('live frame comparison uses receiver-unwrapped counters across the 16-bit boundary',()=>{
+ // These are receiver-unwrapped observations; the raw reader returns 0..65535.
  const frames=[{atMs:400,counter:65534,advanced:true,sourceCounterAtObservation:65536},
   {atMs:433,counter:65536,advanced:true}, {atMs:466,counter:65537,advanced:true}];
  assert.equal(M.firstLiveFrame('kill',frames,0,500,400),466);
@@ -336,4 +337,35 @@ test('shared counter painter survives the unchanged reader at pattern and 720p g
    assert.equal(M.readCounterBand(reader,{videoWidth:width,videoHeight:height}).counter,n & 65535);
   }
  }
+});
+
+
+test('source stall during a move downgrades an overlapping video failure',()=>{
+ const source=M.sourceDiagnostics([0,33,66,99,132,165,278,311,344],165,350);
+ assert.equal(source.frameIntervalMs,33);
+ assert.deepEqual(source.sourceStarvedPeriods,[{startMs:165,endMs:278,ms:113}]);
+ const e={...event('move',150),...source,video:{...event().video,maxMs:150,maxStartMs:165,maxEndMs:315}};
+ assert.equal(M.gapDiagnostics(e).adjustedVideoGapMs,37);
+ assert.equal(M.verdict(e).status,'inconclusive');
+ // An unrelated source stall cannot conceal a real media gap.
+ assert.equal(M.verdict({...e,video:{...e.video,maxStartMs:400,maxEndMs:550}}).status,'fail');
+});
+test('steady observed source cadence preserves a real Relais gap failure',()=>{
+ const source=M.sourceDiagnostics(Array.from({length:12},(_,i)=>i*33),165,350);
+ assert.equal(source.frameIntervalMs,33);assert.deepEqual(source.sourceStarvedPeriods,[]);
+ const e={...event('move',150),...source,video:{...event().video,maxMs:150,maxStartMs:165,maxEndMs:315}};
+ assert.equal(M.verdict(e).status,'fail');
+});
+test('source cadence uses observed 15 fps and detects a rate drop and open stall',()=>{
+ const slow=M.sourceDiagnostics([0,66,132,198,264,330],198,360);
+ assert.equal(slow.frameIntervalMs,66);assert.deepEqual(slow.sourceStarvedPeriods,[]);
+ const drop=M.sourceDiagnostics([0,33,66,99,132,198,264],132,280);
+ assert.equal(drop.frameIntervalMs,33);assert.equal(drop.sourceStarvedPeriods.length,2);
+ const open=M.sourceDiagnostics([0,33,66,99,132,165],165,300);
+ assert.equal(open.sourceStarvedPeriods.at(-1).open,true);
+ assert.equal(M.verdict({...event('move',150),...open,video:{...event().video,maxMs:150,maxStartMs:165,maxEndMs:315}}).status,'inconclusive');
+ assert.equal(M.sourceDiagnostics([],0,100).frameIntervalMs,M.UNKNOWN);
+ // Do not admit a source-stalled window into future noise calibration.
+ const e={...baseline(80),...open};
+ assert.equal(M.noiseFloor([e]).video.count,0);
 });

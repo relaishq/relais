@@ -116,8 +116,21 @@
     for(const [a,b] of clips){total+=Math.max(0,b-Math.max(a,last));last=Math.max(last,b);}
     return total;
   }
+  // Calibrate from observed draws before the window, so a stall within the
+  // window cannot inflate its own expected cadence. Use up to 60 intervals.
+  function sourceDiagnostics(times,start,end) {
+    const draws=times.filter((at)=>at<=end);
+    const intervals=draws.slice(1).map((at,i)=>({startMs:draws[i],endMs:at,ms:at-draws[i]})).filter((p)=>p.ms>0);
+    const before=intervals.filter((p)=>p.endMs<=start);
+    const values=(before.length?before:intervals).slice(-60).map((p)=>p.ms).sort((a,b)=>a-b);
+    const cadence=values.length?(values[Math.floor((values.length-1)/2)]+values[Math.floor(values.length/2)])/2:UNKNOWN;
+    const periods=typeof cadence==='number'?intervals.filter((p)=>p.ms>cadence*1.5 && p.endMs>=start):[];
+    const last=draws.at(-1);
+    if(typeof cadence==='number' && last!==undefined && end-last>cadence*1.5)periods.push({startMs:last,endMs:end,ms:end-last,open:true});
+    return {frameIntervalMs:cadence,sourceStarvedPeriods:periods};
+  }
   function gapDiagnostics(e) {
-    const periods=[...(e.starvedPeriods || []),...(e.unreadPeriods || []),...(e.longTasks || [])];
+    const periods=[...(e.starvedPeriods || []),...(e.sourceStarvedPeriods || []),...(e.unreadPeriods || []),...(e.longTasks || [])];
     const overlapMs=overlappingMs(periods,e.video.maxStartMs,e.video.maxEndMs);
     return {overlapMs,adjustedVideoGapMs:typeof e.video.maxMs==='number'?Math.max(0,e.video.maxMs-overlapMs):UNKNOWN};
   }
@@ -172,12 +185,12 @@
     if(hold.status==='pending' || hold.status==='superseded' || hold.status==='not-run') return {status:'inconclusive',reasons:['60 s hold '+hold.status]};
     return hold.verdict;
   }
-  function validBaseline(e,threshold) {return e.windowVerdict.status==='pass' && ['video','audio'].every((kind)=>typeof e[kind].maxMs==='number' && e[kind].maxMs<threshold);}
+  function validBaseline(e,threshold) {return !(e.sourceStarvedPeriods?.length) && e.windowVerdict.status==='pass' && ['video','audio'].every((kind)=>typeof e[kind].maxMs==='number' && e[kind].maxMs<threshold);}
   function noiseFloor(entries,baselineCount=5,threshold=100) {
     const valid=entries.filter((e)=>validBaseline(e,threshold)),recent=valid.slice(-baselineCount);
     const measure=(kind)=>{const values=recent.map((e)=>e[kind].maxMs).sort((a,b)=>a-b);return {count:values.length,medianMs:values.length?(values[Math.floor((values.length-1)/2)]+values[Math.floor(values.length/2)])/2:UNKNOWN,maxMs:values.length?values.at(-1):UNKNOWN};};
     return {video:measure('video'),audio:measure('audio'),excluded:entries.length-valid.length};
   }
-  const api={UNKNOWN,gap,delta,windowStart,content,firstLiveFrame,drawCounterBand,readCounterBand,decodeCounter,counterObservation,starved,hiddenDuring,concealment,overlappingMs,gapDiagnostics,noiseGate,noiseDiagnostics,verdict,combine,noiseFloor};
+  const api={UNKNOWN,gap,delta,windowStart,content,firstLiveFrame,drawCounterBand,readCounterBand,decodeCounter,counterObservation,starved,hiddenDuring,concealment,overlappingMs,sourceDiagnostics,gapDiagnostics,noiseGate,noiseDiagnostics,verdict,combine,noiseFloor};
   if(typeof module!=='undefined')module.exports=api;else root.relaisMetrics=api;
 })(globalThis);

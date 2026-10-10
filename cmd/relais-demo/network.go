@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/relais/internal/processrun"
@@ -58,7 +59,7 @@ func pageCertificate(host string) (tls.Certificate, string, error) {
 	}
 	now := time.Now()
 	template := &x509.Certificate{
-		SerialNumber: serial, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(24 * time.Hour),
+		SerialNumber: serial, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true, IPAddresses: []net.IP{net.ParseIP(host)},
 	}
@@ -68,6 +69,33 @@ func pageCertificate(host string) (tls.Certificate, string, error) {
 	}
 	sum := sha256.Sum256(der)
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, hex.EncodeToString(sum[:]), nil
+}
+
+func launchToken(localHost string) (string, error) {
+	if localHost == "" {
+		return "", nil
+	}
+	var token [32]byte
+	if _, err := rand.Read(token[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(token[:]), nil
+}
+
+func chromeFingerprint(fingerprint string) string {
+	var pairs []string
+	for i := 0; i+1 < len(fingerprint); i += 2 {
+		pairs = append(pairs, strings.ToUpper(fingerprint[i:i+2]))
+	}
+	return strings.Join(pairs, ":")
+}
+
+func demoPageURL(cfg config, address, token string) string {
+	if cfg.LocalNetwork != "" {
+		return "https://" + address + "/?source=camera&autostart=0#token=" + token
+	}
+	_, port, _ := net.SplitHostPort(address)
+	return "http://localhost:" + port + "/?source=test&autostart=0"
 }
 
 func listenPage(cfg config) (net.Listener, string, error) {

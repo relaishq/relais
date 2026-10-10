@@ -64,6 +64,20 @@ func TestDemoLocalNetworkSmoke(t *testing.T) {
 	require.NoError(t, response.TLS.PeerCertificates[0].VerifyHostname(publicHost))
 	require.NotEmpty(t, fingerprint)
 	_ = response.Body.Close()
+	require.NotEmpty(t, d.launchToken)
+	for _, token := range []string{"", "wrong", d.launchToken} {
+		req, err := http.NewRequest(http.MethodPost, "https://"+listener.Addr().String()+"/", nil)
+		require.NoError(t, err)
+		req.Header.Set("X-Relais-Demo-Token", token)
+		out, err := client.Do(req)
+		require.NoError(t, err)
+		want := http.StatusForbidden
+		if token == d.launchToken {
+			want = http.StatusOK // static page reached
+		}
+		require.Equal(t, want, out.StatusCode)
+		_ = out.Body.Close()
+	}
 	// Check readiness from the real production-launched binaries, not just
 	// flags. Their private APIs must bind only 127.0.0.1 and refuse isolationHost.
 	logs, err := filepath.Glob(filepath.Join(d.dir, "*.log"))

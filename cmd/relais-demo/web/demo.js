@@ -3,14 +3,20 @@
   const M = window.relaisMetrics;
   const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check'].map((id) => [id,document.getElementById(id)]));
   const params = new URLSearchParams(location.search);
+  const launchToken = new URLSearchParams(location.hash.slice(1)).get('token') || '';
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve,ms));
   let call = null, lastResult = null, starting = null, lastResultsRender = -Infinity;
   const stamp = () => ({ at: new Date().toISOString(), atMs: performance.now() });
   const active = (s) => call === s && !s.stopped;
   function note(s, kind, state) { s.transitions.push({...stamp(),kind,state}); }
   function error(err) { el.error.textContent = err.message || String(err); }
+  function request(path,options={}) {
+    const headers=new Headers(options.headers);
+    if((options.method || 'GET').toUpperCase()!=='GET' && launchToken)headers.set('X-Relais-Demo-Token',launchToken);
+    return fetch(path,{...options,headers});
+  }
   async function json(path, options = {}) {
-    const response = await fetch(path, {...options,cache:'no-store'});
+    const response = await request(path, {...options,cache:'no-store'});
     const text = await response.text();
     let data; try { data = JSON.parse(text); } catch { data = {error:text}; }
     if (!response.ok) throw Object.assign(new Error(data.error || text || `HTTP ${response.status}`), {server:data});
@@ -37,7 +43,7 @@
         g.fillStyle='#fff';g.fillRect(260+180*Math.sin(t),140+100*Math.cos(t),100,100);
         g.font='28px monospace';g.fillText('Relais cluster echo',24,48);
       }
-      s.sourceCounter=++n;stampCounter(g,canvas,n);
+      s.sourceCounter=++n;stampCounter(g,canvas,n);s.sourceFrames.push(performance.now());
     };
     if(s.source==='camera') {
       const camera=await navigator.mediaDevices.getUserMedia({audio:false,video:{width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:30}}});
@@ -46,12 +52,11 @@
       s.cameraVideo=document.createElement('video');s.cameraVideo.muted=true;s.cameraVideo.playsInline=true;s.cameraVideo.srcObject=camera;
       await s.cameraVideo.play();
       if(!active(s))throw new Error('call ended');
-      s.sourceFrameRate=s.cameraSettings.frameRate;
       const frame=()=>{if(!active(s))return;draw();s.cameraCallback=s.cameraVideo.requestVideoFrameCallback(frame);};
       // Advance only when the camera provides a frame. A frozen camera must
       // not masquerade as fresh content behind a timer-driven counter.
       s.cameraCallback=s.cameraVideo.requestVideoFrameCallback(frame);
-    }else {s.sourceFrameRate=30;draw();s.sourceTimer=setInterval(draw,1000/30);}
+    }else {draw();s.sourceTimer=setInterval(draw,1000/30);}
     s.canvasStream=canvas.captureStream(30);
     s.audioContext=new AudioContext();
     const osc=s.audioContext.createOscillator(),gain=s.audioContext.createGain(),dest=s.audioContext.createMediaStreamDestination();
@@ -133,7 +138,7 @@
     return {version:4,source:s.source,id:s.id,startedAt:s.startedAt,state:s.stopped?'ended':s.pc.connectionState,running:!!s.script || !!s.busy || !!s.checklist,
       iceConnectionState:s.pc.iceConnectionState,owner:s.owner,workerPIDs:s.status?.worker_pids || {},poolSize:s.status?.pool_size,expectedPoolSize:s.status?.expected_pool_size,registrationError:s.status?.registration_error || null,
       thresholds:{moveGapMs:100,drainGapMs:100,killGapMs:2000,longHoldMs:60000},
-      measurement:{video:'decoded counter: observation time minus previous presentation time',audio:'total concealedSamples at receiver sample rate',sampleRate:s.sampleRate,statsClock:'RTCStats.timestamp',settleAfterResponseMs:2000,timeToFirstLiveFrameMs:'kill events only; null for moves, drains, and baselines. Browser kill-request issuance to first decoded counter beyond the source watermark sampled at largest content-gap recovery; conservative upper bound including request transit and owner lookup, without subtracting server clocks. Missing kill evidence is unverified'},
+      measurement:{video:'decoded counter: observation time minus previous presentation time',audio:'total concealedSamples at receiver sample rate',sampleRate:s.sampleRate,statsClock:'RTCStats.timestamp',settleAfterResponseMs:2000,sourceCadence:'median of up to 60 observed draw intervals before the measurement window; source gaps over 1.5 times cadence join starvation diagnostics and are excluded from baselines',timeToFirstLiveFrameMs:'kill events only; null for moves, drains, and baselines. Browser kill-request issuance to first decoded counter beyond the source watermark sampled at largest content-gap recovery; conservative upper bound including request transit and owner lookup, without subtracting server clocks. Missing kill evidence is unverified'},
       media:{videoGapMs:s.lastContent===null?M.UNKNOWN:(s.stoppedAtMs || performance.now())-s.lastContent,presentationGapMs:s.lastVideo===null?M.UNKNOWN:(s.stoppedAtMs || performance.now())-s.lastVideo,audioPacketGapMs:s.lastAudio===null?M.UNKNOWN:(s.stoppedAtMs || performance.now())-s.lastAudio},
       overall:s.latest,connectedThroughout,noRenegotiation,transitions:s.transitions,ownerChanges:s.owners,descriptionChanges:s.descriptionChanges,
       negotiationNeeded:s.negotiations,iceRestartCalls:s.restartCalls,sampleErrors:s.sampleErrors,testAudioState:s.audioContext?.state || null,audioPlayback:s.playback || 'pending',statusError:s.statusError,
@@ -232,25 +237,23 @@
     if(!['pattern','camera'].includes(source)) throw new Error('source must be pattern (or test) or camera');
     el.source.value=source;
     const s={source,baselineCount,headroomRatio,pc:new RTCPeerConnection({bundlePolicy:'max-bundle',rtcpMuxPolicy:'require'}),...stamp(),startedAt:new Date().toISOString(),
-      transitions:[],owners:[],frames:[],frameMeta:[],contentFrames:[],counterReadFailures:[],hiddenPeriods:[],longTasks:[],baselines:[],samples:[],events:[],descriptionChanges:[],negotiations:[],restartCalls:[],sampleErrors:[],lastVideo:null,lastAudio:null,lastContent:null,maxCounter:null,armed:false,stopped:false};
+      transitions:[],owners:[],sourceFrames:[],frames:[],frameMeta:[],contentFrames:[],counterReadFailures:[],hiddenPeriods:[],longTasks:[],baselines:[],samples:[],events:[],descriptionChanges:[],negotiations:[],restartCalls:[],sampleErrors:[],lastVideo:null,lastAudio:null,lastContent:null,maxCounter:null,armed:false,stopped:false};
     call=s;el.error.textContent='';observePage(s);attach(s);statuses(s);samples(s);
     starting=(async()=>{
       try {
         const stream=await sourceStream(s);
         if(!active(s)){stream.getTracks().forEach((t)=>t.stop());throw new Error('call ended');}
         s.stream=stream;el.local.srcObject=stream;
-        const frameRate=s.sourceFrameRate;
-        s.frameIntervalMs=frameRate>0?1000/frameRate:M.UNKNOWN;
         for(const kind of ['audio','video']) {const track=stream.getTracks().find((t)=>t.kind===kind);if(!track) throw new Error(`missing ${kind} source`);s.pc.addTransceiver(track,{direction:'sendrecv',streams:[stream]});}
         await s.pc.setLocalDescription(await s.pc.createOffer());
         if(!active(s)) throw new Error('call ended');
         await waitFor(s,()=>s.pc.iceGatheringState==='complete',10000,'initial ICE gathering did not finish');
-        const response=await fetch('/calls',{method:'POST',headers:{'Content-Type':'application/sdp'},body:s.pc.localDescription.sdp});
+        const response=await request('/calls',{method:'POST',headers:{'Content-Type':'application/sdp'},body:s.pc.localDescription.sdp});
         const location=response.headers.get('Location'),body=await response.text();
         if(response.status!==201) throw new Error(`POST /calls ${response.status}: ${body}`);
         if(!location || !/^\/calls\/[^/]+$/.test(location)) throw new Error('invalid call Location');
         s.resource=location;s.id=decodeURIComponent(location.split('/').at(-1));
-        if(!active(s)){await fetch(location,{method:'DELETE'});throw new Error('call ended');}
+        if(!active(s)){await request(location,{method:'DELETE'});throw new Error('call ended');}
         await s.pc.setRemoteDescription({type:'answer',sdp:body});
         await waitFor(s,()=>s.pc.connectionState==='connected' && s.lastVideo!==null && s.latest?.audio.packetsReceived>0 && s.owner,15000,'media not ready; test tone may need a page click for Chrome autoplay');
         descriptions(s);s.armed=true;s.readyAtMs=performance.now();return snapshot(s);
@@ -264,11 +267,12 @@
     const presentation=M.gap(s.frames,begin,end);
     const video={method:'decoded counter',...M.content(s.contentFrames,begin,end,issued,sourceCounterAtIssue)};
     const evidenceStart=typeof video.maxStartMs==='number'?Math.min(begin,video.maxStartMs):begin;
+    const source=M.sourceDiagnostics(s.sourceFrames,evidenceStart,end);
     const starvedPeriods=s.frameMeta.filter((x)=>x.starved && x.startMs<=end && x.endMs>=evidenceStart);
     return {
-      video,presentation,
+      video,presentation,...source,
       audio:{...M.concealment(s.samples,begin,end,s.sampleRate),lastPacketAgeMs:typeof after?.audio.lastPacketReceivedTimestamp==='number'?end-rtcTime(after.audio.lastPacketReceivedTimestamp):M.UNKNOWN},audioDelta:M.delta(before?.audio || {},after?.audio || {}),videoDelta:M.delta(before?.video || {},after?.video || {}),
-      hidden:M.hiddenDuring(s.hiddenPeriods,begin,end),starved:starvedPeriods.length>0 || s.longTasks.some((x)=>x.atMs<=end && x.endMs>=evidenceStart),
+      hidden:M.hiddenDuring(s.hiddenPeriods,begin,end),starved:source.sourceStarvedPeriods.length>0 || starvedPeriods.length>0 || s.longTasks.some((x)=>x.atMs<=end && x.endMs>=evidenceStart),
       starvedPeriods,
       unreadPeriods:s.contentFrames.flatMap((f,i,list)=>f.counter===M.UNKNOWN?[{startMs:list[i-1]?.atMs ?? f.atMs,endMs:list[i+1]?.atMs ?? end}]:[]).filter((p)=>p.startMs<=end && p.endMs>=evidenceStart),
       longTasks:s.longTasks.filter((x)=>x.atMs<=end && x.endMs>=evidenceStart),samplingErrors:s.sampleErrors.filter((x)=>x.atMs>=begin && x.atMs<=end)};
@@ -331,7 +335,7 @@
       record.contentResumedMs=record.video.contentResumedMs ?? M.UNKNOWN;
       record.gapDiagnostics=M.gapDiagnostics(record);
       record.noiseGate=M.noiseGate(record.noiseFloor,s.baselineCount,100,s.headroomRatio);
-      Object.assign(record,M.noiseDiagnostics(record,s.frameIntervalMs));
+      Object.assign(record,M.noiseDiagnostics(record,record.frameIntervalMs));
       record.timeToFirstNewContentMs=record.video.firstNewContentMs ?? M.UNKNOWN;
       record.timeToFirstLiveFrameMs=M.firstLiveFrame(kind,s.contentFrames,issued,end,record.video.contentResumedMs);
       s.previousWindowEnd=end;
@@ -381,7 +385,7 @@
     s.cameraStream?.getTracks().forEach((t)=>t.stop());s.canvasStream?.getTracks().forEach((t)=>t.stop());
     s.stream?.getTracks().forEach((t)=>t.stop());
     if(s.audioContext) await s.audioContext.close();
-    if(s.resource) {try{const response=await fetch(s.resource,{method:'DELETE'});if(!response.ok) throw new Error(`DELETE ${response.status}`);}catch(err){s.cleanupError=String(err);error(err);}}
+    if(s.resource) {try{const response=await request(s.resource,{method:'DELETE'});if(!response.ok) throw new Error(`DELETE ${response.status}`);}catch(err){s.cleanupError=String(err);error(err);}}
     lastResult=snapshot(s);render();
   }
   async function stop() {if(call)await cleanup(call);return snapshot(call);}
@@ -411,7 +415,7 @@
   for(const kind of ['move','drain','kill']) el[kind].onclick=()=>event(kind).catch(error);
   el.audio.onchange=()=>{el.remote.muted=!el.audio.checked;el.remote.play().then(()=>{if(call)call.playback=el.remote.muted?'muted':'playing';},error);if(call && !call.stopped && call.audioContext?.state==='suspended') call.audioContext.resume().catch(error);};
   document.addEventListener('pointerdown',()=>{if(call && !call.stopped && call.audioContext?.state==='suspended') call.audioContext.resume().catch(error);});
-  window.addEventListener('pagehide',()=>{if(call?.resource)fetch(call.resource,{method:'DELETE',keepalive:true}).catch(()=>{});});
+  window.addEventListener('pagehide',()=>{if(call?.resource)request(call.resource,{method:'DELETE',keepalive:true}).catch(()=>{});});
   setInterval(render,1000);render();
   if(params.get('autostart')==='1')start().catch(error);
 })();

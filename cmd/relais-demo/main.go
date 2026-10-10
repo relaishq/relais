@@ -43,6 +43,10 @@ func processEnv(key, addr, prefix string, withKey bool) []string {
 }
 
 func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*demo, error) {
+	token, err := launchToken(cfg.LocalNetwork)
+	if err != nil {
+		return nil, err
+	}
 	bin, err := filepath.Abs(cfg.Bin)
 	if err != nil {
 		return nil, err
@@ -106,7 +110,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 	if err != nil {
 		return nil, err
 	}
-	d := &demo{ctx: ctx, client: &http.Client{Timeout: 10 * time.Second}, control: "http://" + controlAddr, relay: relay.Media, redis: addr, dir: dir, workers: map[string]*workerProcess{}, publicHost: cfg.LocalNetwork}
+	d := &demo{ctx: ctx, client: &http.Client{Timeout: 10 * time.Second}, control: "http://" + controlAddr, relay: relay.Media, redis: addr, dir: dir, workers: map[string]*workerProcess{}, publicHost: cfg.LocalNetwork, launchToken: token}
 	usedMedia := map[string]bool{}
 	d.spawn = func(ctx context.Context, name string) (*workerProcess, error) {
 		media, err := freshUDP(usedMedia)
@@ -217,14 +221,11 @@ func run() error {
 		scheme = "https"
 		fmt.Printf("WARNING: demo page, call controls and relay media are reachable on the local network at %s; use a trusted network. Private APIs remain on loopback.\n", cfg.LocalNetwork)
 		fmt.Printf("certificate SHA-256 fingerprint: %s\n", fingerprint)
+		fmt.Printf("certificate SHA-256 fingerprint (Chrome): %s\n", chromeFingerprint(fingerprint))
 	}
 	pageURL := scheme + "://" + listener.Addr().String()
 	processrun.Ready(map[string]any{"http": pageURL, "media": d.relay, "redis": d.redis, "certificate_sha256": fingerprint})
-	_, port, _ := net.SplitHostPort(listener.Addr().String())
-	if cfg.LocalNetwork == "" {
-		pageURL = "http://localhost:" + port
-	}
-	fmt.Printf("cluster demo: %s/?source=test&autostart=0\n", pageURL)
+	fmt.Printf("cluster demo: %s\n", demoPageURL(cfg, listener.Addr().String(), d.launchToken))
 	err = processrun.Serve(ctx, listener, d.handler(http.FileServer(http.FS(files))))
 	if errors.Is(err, context.Canceled) {
 		return nil
