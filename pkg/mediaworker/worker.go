@@ -228,13 +228,18 @@ type Worker struct {
 	paused           atomic.Bool
 	heartbeatStarted bool
 
-	mu            sync.Mutex
-	sessions      map[string]*session         // by session ID, which is also the worker's ICE ufrag
-	byAddr        map[netip.AddrPort]*session // caller addresses that passed an ICE check
-	closed        bool
-	running       sync.WaitGroup // session goroutines
-	replayStatsMu sync.Mutex
-	replayStats   ReplayStats
+	mu                        sync.Mutex
+	sessions                  map[string]*session         // by session ID, which is also the worker's ICE ufrag
+	byAddr                    map[netip.AddrPort]*session // caller addresses that passed an ICE check
+	closed                    bool
+	running                   sync.WaitGroup // session goroutines
+	replayStatsMu             sync.Mutex
+	replayStats               ReplayStats
+	cacheQueueMu              sync.Mutex
+	cacheQueue                chan cacheAppend
+	cacheQueueClosed          bool
+	cachePending, cacheBytes  int
+	cacheDropped, cacheErrors uint64
 }
 
 // New starts a media worker listening on cfg.ListenAddr.
@@ -314,15 +319,16 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 		mediaAddr = cfg.Relay.PublicAddr
 	}
 	worker := &Worker{
-		cfg:       cfg,
-		log:       cfg.LoggerFactory.NewLogger("mediaworker"),
-		conn:      conn,
-		localAddr: localAddr,
-		mediaAddr: mediaAddr,
-		readDone:  make(chan struct{}),
-		stopRenew: make(chan struct{}),
-		sessions:  make(map[string]*session),
-		byAddr:    make(map[netip.AddrPort]*session),
+		cfg:        cfg,
+		log:        cfg.LoggerFactory.NewLogger("mediaworker"),
+		conn:       conn,
+		localAddr:  localAddr,
+		mediaAddr:  mediaAddr,
+		readDone:   make(chan struct{}),
+		stopRenew:  make(chan struct{}),
+		cacheQueue: make(chan cacheAppend, cacheQueueFrames),
+		sessions:   make(map[string]*session),
+		byAddr:     make(map[netip.AddrPort]*session),
 	}
 	if cfg.Relay != nil {
 		workerprobe.Register(localAddr, worker.captureZombie)
@@ -331,6 +337,8 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 			SnapshotReady: func(id string) bool { s := worker.session(id); return s != nil && s.snapshotStored.Load() },
 		})
 	}
+	worker.running.Add(1)
+	go worker.runCacheAppends()
 	go worker.readLoop()
 	if cfg.Relay != nil {
 		worker.running.Add(1)

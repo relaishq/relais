@@ -54,24 +54,96 @@ func (a *frameCollector) push(in *rtp.Packet, track framecache.Track) *framecach
 	return &f
 }
 
-// appendFrame runs after releasing mu. cacheMu serializes append with local
-// hangup deletion, preventing a delayed write from resurrecting ended media.
-// The in-memory append is cheap; remote operations have a bounded context and
-// never hold the transport/counter lock.
+// Each worker has one ordered queue, capped by both complete-frame count and
+// payload bytes, including the append in flight. Slow Redis cannot hold the
+// UDP reader or create unbounded work. A dropped frame leaves a sequence hole;
+// the Store then discards the group until the next complete keyframe.
+const cacheQueueFrames = 32
+const cacheQueueBytes = 8 << 20
+
+type cacheAppend struct {
+	session *session
+	frame   framecache.Frame
+	bytes   int
+}
+
 func (s *session) appendFrame(f *framecache.Frame) {
-	if f == nil {
+	if f == nil || s.fenced.Load() || s.ctx.Err() != nil {
 		return
 	}
+	bytes := 0
+	for _, p := range f.Packets {
+		bytes += len(p.Payload)
+	}
+	w := s.worker
+	w.cacheQueueMu.Lock()
+	defer w.cacheQueueMu.Unlock()
+	if w.cacheQueueClosed {
+		return
+	}
+	if w.cachePending >= cacheQueueFrames || bytes > cacheQueueBytes-w.cacheBytes {
+		w.cacheDropped++
+		return
+	}
+	// The collector transferred ownership of the complete frame; packet memory
+	// is independent of the reader's reusable decrypt buffer.
+	w.cachePending++
+	w.cacheBytes += bytes
+	w.cacheQueue <- cacheAppend{session: s, frame: *f, bytes: bytes}
+}
+func (w *Worker) runCacheAppends() {
+	defer w.running.Done()
+	defer func() {
+		w.cacheQueueMu.Lock()
+		defer w.cacheQueueMu.Unlock()
+		w.cacheQueueClosed = true
+		for {
+			select {
+			case job := <-w.cacheQueue:
+				w.cachePending--
+				w.cacheBytes -= job.bytes
+			default:
+				return
+			}
+		}
+	}()
+	for {
+		select {
+		case <-w.stopRenew:
+			return
+		default:
+		}
+		select {
+		case <-w.stopRenew:
+			return
+		case job := <-w.cacheQueue:
+			err := job.session.storeFrame(job.frame)
+			w.cacheQueueMu.Lock()
+			w.cachePending--
+			w.cacheBytes -= job.bytes
+			if err != nil {
+				w.cacheErrors++
+			}
+			w.cacheQueueMu.Unlock()
+		}
+	}
+}
+
+// Serialize append with local hangup deletion. Cancellation/fencing rejects
+// queued work from ended/exported sessions before it reaches the store.
+func (s *session) storeFrame(f framecache.Frame) error {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 	if s.fenced.Load() || s.ctx.Err() != nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, ownershipTimeout)
 	defer cancel()
-	if err := s.worker.cfg.FrameCache.Append(ctx, s.id, *f); err != nil && s.ctx.Err() == nil {
+	err := s.worker.cfg.FrameCache.Append(ctx, s.id, f)
+	if err != nil && s.ctx.Err() == nil {
 		s.log.Warnf("session %s: cache frame: %v", s.id, err)
 	}
+	return err
 }
 
 // reserveReplay runs before adoption. Persisting the reservation is mandatory:
@@ -316,13 +388,21 @@ func (s *session) continueAfterReplay(in *rtp.Packet, header *rtp.Header) {
 type ReplayStats struct {
 	Skipped   map[string]uint64
 	Truncated map[string]uint64
+	// AppendDropped counts queue admission drops. AppendErrors counts failed I/O.
+	AppendDropped uint64
+	AppendErrors  uint64
+	AppendPending int
+	AppendBytes   int
 }
 
 // ReplayStats returns a copied snapshot, independent of session lifetime.
 func (w *Worker) ReplayStats() ReplayStats {
 	w.replayStatsMu.Lock()
 	defer w.replayStatsMu.Unlock()
-	out := ReplayStats{Skipped: make(map[string]uint64), Truncated: make(map[string]uint64)}
+	w.cacheQueueMu.Lock()
+	dropped, failed, pending, bytes := w.cacheDropped, w.cacheErrors, w.cachePending, w.cacheBytes
+	w.cacheQueueMu.Unlock()
+	out := ReplayStats{AppendDropped: dropped, AppendErrors: failed, AppendPending: pending, AppendBytes: bytes, Skipped: make(map[string]uint64), Truncated: make(map[string]uint64)}
 	for reason, count := range w.replayStats.Skipped {
 		out.Skipped[reason] = count
 	}

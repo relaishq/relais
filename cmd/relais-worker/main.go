@@ -9,7 +9,6 @@ import (
 
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/controlplane"
-	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
 )
 
@@ -22,6 +21,7 @@ func run() error {
 	public := flag.String("relay-media", processrun.Env("RELAIS_RELAY_MEDIA", ""), "relay advertised public UDP address")
 	control := flag.String("control", processrun.Env("RELAIS_CONTROL_URL", ""), "control-plane HTTP URL for heartbeats")
 	httpAddr := flag.String("http", processrun.Env("RELAIS_WORKER_HTTP", "127.0.0.1:0"), "private worker HTTP address")
+	cacheOff := flag.Bool("frame-cache-off", false, "disable cache writes and takeover replay (PLI remains enabled)")
 	drainTimeout := flag.Duration("drain-timeout", 5*time.Second, "SIGTERM drain deadline before closing")
 	flag.Parse()
 	if *drainTimeout <= 0 {
@@ -45,7 +45,12 @@ func run() error {
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	worker, err := mediaworker.New(mediaworker.Config{ListenAddr: *listen, FrameCache: framecache.NewMemory(framecache.Limits{}), Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store}})
+	frames, err := storeConfig.OpenFrames(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = frames.Close() }()
+	worker, err := mediaworker.New(mediaworker.Config{ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store}})
 	if err != nil {
 		return err
 	}

@@ -26,6 +26,8 @@ type result struct {
 	Decrypt, AfterResume, Reconnects, Renegotiations int
 	Decoded, Live, Detection                         time.Duration
 	Pass                                             bool
+	Path, LivePath                                   string
+	ReplayPackets                                    int
 }
 
 func binaries(bin string) error {
@@ -52,7 +54,7 @@ func processEnv(key, addr, prefix string) []string {
 	}
 	return append(env, "RELAIS_SESSIONSTORE_KEY="+key, "RELAIS_REDIS_ADDR="+addr, "RELAIS_REDIS_PREFIX="+prefix)
 }
-func trial(ctx context.Context, manager *processManager, bin, dir string, env []string, after time.Duration, verbose, terminate bool) (result, error) {
+func trial(ctx context.Context, manager *processManager, bin, dir string, env []string, after, warmup time.Duration, verbose, terminate, cacheOff bool) (result, error) {
 	var processes []*child
 	defer func() {
 		for i := len(processes) - 1; i >= 0; i-- {
@@ -86,7 +88,11 @@ func trial(ctx context.Context, manager *processManager, bin, dir string, env []
 	workerPIDs := map[string]*child{}
 	controlArgs := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", relayReady.HTTP}
 	for _, name := range []string{"0", "1"} {
-		c, r, err := start("worker-"+name, filepath.Join(bin, "relais-worker"), "-media", "127.0.0.1:0", "-http", "127.0.0.1:0", "-name", name, "-control", controlURL, "-relay-leg", relayReady.Leg, "-relay-media", relayReady.Media)
+		args := []string{filepath.Join(bin, "relais-worker"), "-media", "127.0.0.1:0", "-http", "127.0.0.1:0", "-name", name, "-control", controlURL, "-relay-leg", relayReady.Leg, "-relay-media", relayReady.Media}
+		if cacheOff {
+			args = append(args, "-frame-cache-off")
+		}
+		c, r, err := start("worker-"+name, args...)
 		if err != nil {
 			return result{}, err
 		}
@@ -128,7 +134,7 @@ func trial(ctx context.Context, manager *processManager, bin, dir string, env []
 	case err := <-sent:
 		senderJoined = true
 		return result{}, fmt.Errorf("media ended before SIGKILL: %v", err)
-	case <-time.After(2 * time.Second):
+	case <-time.After(warmup):
 	}
 	status, err := h.Status(ctx)
 	if err != nil {
@@ -219,7 +225,8 @@ func trial(ctx context.Context, manager *processManager, bin, dir string, env []
 	if terminate {
 		return measureDrain(report, relayReady.Media, observedUntil), nil
 	}
-	return measure(report, relayReady.Media, after), nil
+	r := measure(report, relayReady.Media, after)
+	return r, nil
 }
 func measure(report *callharness.Report, relayAddr string, after time.Duration) result {
 	r := result{Decrypt: report.DecryptionFailures.Total(), Reconnects: report.ICERestarts, Renegotiations: report.Renegotiations}
@@ -228,6 +235,7 @@ func measure(report *callharness.Report, relayAddr string, after time.Duration) 
 	}
 	move := report.Moves[0]
 	r.AfterResume, r.Decoded, r.Live, r.Detection = move.DecryptionFailuresAfterResume, move.Recovery.FirstDecodedAfterKill, move.Recovery.FirstDecodedLiveAfterKill, move.DetectionTime
+	r.Path, r.LivePath, r.ReplayPackets = move.Recovery.Path, move.Recovery.LivePath, move.Recovery.ReplayPackets
 	flowing := len(move.Tracks) == 2
 	for _, track := range move.Tracks {
 		r.Gap = max(r.Gap, track.Gap)
@@ -235,20 +243,21 @@ func measure(report *callharness.Report, relayAddr string, after time.Duration) 
 	}
 	video := report.Track("video")
 	decoded := video != nil && video.Video != nil && video.Video.FullDecode.Ran() && video.Video.FullDecode.Errors == "" && video.Video.FullDecode.FramesDecoded == video.Video.FullDecode.FramesIn && video.Video.KeyframeDecodeErrors == 0
-	r.Pass = flowing && decoded && r.Gap > 0 && r.Gap < 2*time.Second && r.AfterResume == 0 && r.Reconnects == 0 && r.Renegotiations == 0 && report.OfferAnswerExchanges == 1 && report.ConnectedThroughout() && report.RemoteAddr == relayAddr && r.Decoded > 0 && r.Live > 0 && move.Error == "" && report.Consent.ResponsesAfter > 0
+	attributed := (r.Path == "Cache" && r.ReplayPackets > 0 || r.Path == "Keyframe" || r.Path == "Live") && (r.LivePath == "Keyframe" || r.LivePath == "Live")
+	r.Pass = attributed && flowing && decoded && r.Gap > 0 && r.Gap < 2*time.Second && r.AfterResume == 0 && r.Reconnects == 0 && r.Renegotiations == 0 && report.OfferAnswerExchanges == 1 && report.ConnectedThroughout() && report.RemoteAddr == relayAddr && r.Decoded > 0 && r.Live > 0 && move.Error == "" && report.Consent.ResponsesAfter > 0
 	if after >= 60*time.Second {
 		r.Pass = r.Pass && report.Consent.ObservedFor >= 60*time.Second
 	}
 	return r
 }
 func printTable(results []result) {
-	fmt.Println("run  gap_ms  decrypt(total/after)  reconnects  renegotiations  decoded_ms  live_ms  detection_ms  result")
+	fmt.Println("run  gap_ms  decrypt(total/after)  reconnects  renegotiations  decoded_ms  live_ms  detection_ms  first_path  live_path  replay_packets  result")
 	for i, r := range results {
 		state := "FAIL"
 		if r.Pass {
 			state = "PASS"
 		}
-		fmt.Printf("%3d  %6.1f  %7d/%-5d       %3d        %3d          %7.1f    %7.1f  %7.1f       %s\n", i+1, float64(r.Gap)/float64(time.Millisecond), r.Decrypt, r.AfterResume, r.Reconnects, r.Renegotiations, float64(r.Decoded)/float64(time.Millisecond), float64(r.Live)/float64(time.Millisecond), float64(r.Detection)/float64(time.Millisecond), state)
+		fmt.Printf("%3d  %6.1f  %7d/%-5d       %3d        %3d          %7.1f    %7.1f  %7.1f       %-8s    %-8s    %5d           %s\n", i+1, float64(r.Gap)/float64(time.Millisecond), r.Decrypt, r.AfterResume, r.Reconnects, r.Renegotiations, float64(r.Decoded)/float64(time.Millisecond), float64(r.Live)/float64(time.Millisecond), float64(r.Detection)/float64(time.Millisecond), r.Path, r.LivePath, r.ReplayPackets, state)
 	}
 }
 func run() error {
@@ -258,6 +267,8 @@ func run() error {
 	redisAddr := flag.String("redis", os.Getenv("RELAIS_REDIS_ADDR"), "explicit dedicated Redis address, or start a throwaway instance")
 	redisBinary := flag.String("redis-server", "redis-server", "Redis executable for the throwaway instance")
 	verbose := flag.Bool("verbose", false, "print full caller reports")
+	compare := flag.Bool("compare-cache", true, "compare Redis cache+PLI with cache-off PLI (runs per mode)")
+	cacheOff := flag.Bool("frame-cache-off", false, "single-mode PLI run (with -compare-cache=false)")
 	terminate := flag.Bool("sigterm", false, "verify graceful owning-worker drain instead of crash takeover")
 	flag.Parse()
 	if *runs < 1 || *after < time.Second {
@@ -307,30 +318,62 @@ func run() error {
 	if *after < 60*time.Second {
 		fmt.Println("DEVELOPMENT RUN: 60 s post-takeover consent acceptance NOT-RUN")
 	}
-	results := []result{}
-	for i := 0; i < *runs; i++ {
-		trialDir := filepath.Join(dir, fmt.Sprintf("run-%02d", i+1))
-		if err := os.Mkdir(trialDir, 0700); err != nil {
-			return err
+	modes := []bool{*cacheOff}
+	if *compare && !*terminate && !*cacheOff {
+		modes = []bool{false, true}
+	}
+	all := make([][]result, 0, len(modes))
+	for _, off := range modes {
+		label := "redis-cache+pli"
+		if off {
+			label = "pli-cache-off"
 		}
-		env := processEnv(hex.EncodeToString(key[:]), addr, fmt.Sprintf("relais:crash:%s:%d:", filepath.Base(dir), i))
-		trialCtx, stop := context.WithTimeout(ctx, *after+30*time.Second)
-		r, err := trial(trialCtx, manager, bin, trialDir, env, *after, *verbose, *terminate)
-		stop()
-		results = append(results, r)
-		printTable(results)
-		if err != nil {
-			return err
+		fmt.Printf("MODE %s\n", label)
+		results := []result{}
+		for i := 0; i < *runs; i++ {
+			trialDir := filepath.Join(dir, fmt.Sprintf("%s-%02d", label, i+1))
+			if err := os.Mkdir(trialDir, 0700); err != nil {
+				return err
+			}
+			env := processEnv(hex.EncodeToString(key[:]), addr, fmt.Sprintf("relais:crash:%s:%s:%d:", filepath.Base(dir), label, i))
+			trialCtx, stop := context.WithTimeout(ctx, *after+30*time.Second)
+			// Use the same phases in both modes. The small embedded 320x240 fixture
+			// fits #9's unchanged admission budget in this part of its keyframe group.
+			// A dense 720p group generally exceeds it and falls back to PLI.
+			warmup := 1550*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
+			r, err := trial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, *terminate, off)
+			stop()
+			results = append(results, r)
+			printTable(results)
+			if err != nil {
+				return err
+			}
+			if !r.Pass {
+				return errors.New("caller-observed process handover threshold failed")
+			}
+			if !*terminate && off && (r.Path != "Keyframe" || r.ReplayPackets != 0) {
+				return errors.New("cache-off run did not prove PLI attribution")
+			}
 		}
-		if !r.Pass {
-			return errors.New("caller-observed process handover threshold failed")
+		labelSignal := "SIGKILL"
+		if *terminate {
+			labelSignal = "SIGTERM drain"
+		}
+		fmt.Printf("PASS: %d consecutive real-process %s trials mode=%s\n", len(results), labelSignal, label)
+		all = append(all, results)
+	}
+	if len(all) == 2 {
+		printComparison(all[0], all[1])
+		cacheFrames := 0
+		for _, r := range all[0] {
+			if r.Path == "Cache" && r.ReplayPackets > 0 {
+				cacheFrames++
+			}
+		}
+		if cacheFrames == 0 {
+			return errors.New("cross-process cached decode NOT-PROVEN: every run fell back to PLI")
 		}
 	}
-	label := "SIGKILL"
-	if *terminate {
-		label = "SIGTERM drain"
-	}
-	fmt.Printf("PASS: %d consecutive real-process %s trials\n", len(results), label)
 	return nil
 }
 func main() {
@@ -364,4 +407,15 @@ func measureDrain(report *callharness.Report, relayAddr string, observedUntil ti
 	decoded := video != nil && video.Video != nil && video.Video.FullDecode.Ran() && video.Video.FullDecode.Errors == "" && video.Video.FullDecode.FramesDecoded == video.Video.FullDecode.FramesIn && video.Video.KeyframeDecodeErrors == 0
 	r.Pass = flowing && decoded && r.Gap > 0 && r.Gap < 100*time.Millisecond && r.Decrypt == 0 && r.Reconnects == 0 && r.Renegotiations == 0 && report.OfferAnswerExchanges == 1 && report.ConnectedThroughout() && report.RemoteAddr == relayAddr && len(report.Moves) == 0
 	return r
+}
+
+// All durations share SIGKILL as their origin. Cache frames restore old pixels;
+// only live_ms measures a frame sent by the caller after that kill.
+func printComparison(cache, pli []result) {
+	fmt.Println("CACHE_VS_PLI common_start=SIGKILL (cached picture predates crash)")
+	fmt.Println("run  cache_decoded_ms  cache_live_ms  cache_path  cache_live_path  pli_decoded_ms  pli_live_ms  pli_path")
+	for i, c := range cache {
+		p := pli[i]
+		fmt.Printf("%3d  %16.1f  %13.1f  %-10s  %-15s  %14.1f  %11.1f  %s\n", i+1, float64(c.Decoded)/float64(time.Millisecond), float64(c.Live)/float64(time.Millisecond), c.Path, c.LivePath, float64(p.Decoded)/float64(time.Millisecond), float64(p.Live)/float64(time.Millisecond), p.Path)
+	}
 }

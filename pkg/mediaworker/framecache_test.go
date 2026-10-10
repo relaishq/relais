@@ -804,3 +804,93 @@ func TestReplaySkipReasonCounters(t *testing.T) {
 	require.Len(t, w.ReplayStats().Skipped, len(tests))
 	require.Empty(t, w.ReplayStats().Truncated)
 }
+
+// Exercise queue saturation through decrypted packet handling: the reader must
+// return and echo every frame even while the production Store.Append stalls.
+func TestFrameCacheQueueBoundsDoNotBlockPacketPath(t *testing.T) {
+	w := newTestWorker(t)
+	cache := &blockedFrameCache{Store: framecache.NewMemory(framecache.Limits{}), entered: make(chan struct{})}
+	w.cfg.FrameCache = cache
+	sink := listenTestUDP(t)
+	sess := sessionFromState(w, sessionState{ID: "queue", ICE: iceState{RemoteAddr: sink.LocalAddr().(*net.UDPAddr).AddrPort()}, SRTP: srtpState{Inbound: make(map[uint32]uint64)}, Video: trackState{MID: "1", ID: "video", SSRC: 123, PayloadType: 96, InitialSeq: 1200}})
+	defer sess.close()
+	profile := srtp.ProtectionProfileAeadAes128Gcm
+	keys := testSessionKeys(t, profile)
+	sess.srtpIn = testContext(t, keys.RemoteMasterKey, keys.RemoteMasterSalt, profile)
+	sess.srtpOut = testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
+	caller := testContext(t, keys.RemoteMasterKey, keys.RemoteMasterSalt, profile)
+	send := func(seq uint16) {
+		raw, err := (&rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 96, SSRC: 456, SequenceNumber: seq, Timestamp: uint32(seq) * 3000, Marker: true}, Payload: []byte{0x10, 0}}).Marshal()
+		require.NoError(t, err)
+		encrypted, err := caller.EncryptRTP(nil, raw, nil)
+		require.NoError(t, err)
+		sess.handleRTP(encrypted)
+	}
+	send(1)
+	select {
+	case <-cache.entered:
+	case <-time.After(time.Second):
+		t.Fatal("append did not start")
+	}
+	start := time.Now()
+	for seq := uint16(2); seq <= 65; seq++ {
+		send(seq)
+	}
+	require.Less(t, time.Since(start), 500*time.Millisecond, "cache must not hold the reader")
+	stats := w.ReplayStats()
+	require.Equal(t, cacheQueueFrames, stats.AppendPending)
+	require.EqualValues(t, 33, stats.AppendDropped)
+	sess.mu.Lock()
+	packets := sess.state.Video.Packets
+	sess.mu.Unlock()
+	require.EqualValues(t, 65, packets, "echo continues under cache load")
+	// Observe all 65 echoes at the UDP receiver, rather than trusting counters.
+	callerRx := testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
+	require.NoError(t, sink.SetReadDeadline(time.Now().Add(time.Second)))
+	for i := range 65 {
+		raw := make([]byte, 2048)
+		n, _, err := sink.ReadFromUDP(raw)
+		require.NoError(t, err)
+		var header rtp.Header
+		_, err = callerRx.DecryptRTP(nil, raw[:n], &header)
+		require.NoError(t, err)
+		require.EqualValues(t, 1200+i, header.SequenceNumber)
+	}
+	// An oversized new append is also counted while the queue is saturated.
+	large := framecache.Frame{Track: framecache.Track{Kind: "video", SSRC: 123}, Keyframe: true, Packets: []framecache.Packet{{Marker: true, Payload: make([]byte, cacheQueueBytes)}}}
+	sess.appendFrame(&large)
+	require.EqualValues(t, 34, w.ReplayStats().AppendDropped)
+	require.LessOrEqual(t, w.ReplayStats().AppendBytes, cacheQueueBytes)
+	sess.close() // cancels the in-flight append; queued appends must be discarded
+	require.Eventually(t, func() bool { return w.ReplayStats().AppendPending == 0 }, time.Second, time.Millisecond)
+	frames, err := cache.Current(context.Background(), sess.id, large.Track)
+	require.NoError(t, err)
+	require.Empty(t, frames, "queued work cannot resurrect hangup")
+}
+
+// Byte pressure drops work before the frame-count cap, counting the active
+// append in the budget. This independently exercises payload admission.
+func TestFrameCacheQueuePayloadBound(t *testing.T) {
+	w := newTestWorker(t)
+	cache := &blockedFrameCache{Store: framecache.NewMemory(framecache.Limits{}), entered: make(chan struct{})}
+	w.cfg.FrameCache = cache
+	sess := sessionFromState(w, sessionState{ID: "byte-bound"})
+	defer sess.close()
+	f := framecache.Frame{Track: framecache.Track{Kind: "video", SSRC: 123}, Keyframe: true, Packets: []framecache.Packet{{Marker: true, Payload: make([]byte, 1<<20)}}}
+	sess.appendFrame(&f)
+	select {
+	case <-cache.entered:
+	case <-time.After(time.Second):
+		t.Fatal("append did not start")
+	}
+	for range 7 {
+		sess.appendFrame(&f)
+	}
+	require.Equal(t, 8, w.ReplayStats().AppendPending)
+	require.Equal(t, cacheQueueBytes, w.ReplayStats().AppendBytes)
+	sess.appendFrame(&f)
+	require.EqualValues(t, 1, w.ReplayStats().AppendDropped)
+	require.Equal(t, 8, w.ReplayStats().AppendPending)
+	sess.close()
+	require.Eventually(t, func() bool { return w.ReplayStats().AppendPending == 0 }, time.Second, time.Millisecond)
+}

@@ -48,7 +48,9 @@ type Store interface {
 	DeleteSession(context.Context, string) error
 }
 
-// Limits bounds retained payload per track and across all sessions. Zero
+// Limits bounds retained payload per track and, for Memory, across sessions.
+// Redis uses Bytes, Frames and IdleTTL; TotalBytes and Sessions are Memory-only.
+// Zero
 // values select 8 MiB/300 frames per track, 64 MiB/1024 sessions globally,
 // and a 30 s idle TTL. Global expiry runs lazily at most once a second;
 // append and read also expire their requested session before touching it.
@@ -86,7 +88,7 @@ type Memory struct {
 	nextExpiry time.Time
 }
 
-func NewMemory(limits Limits) *Memory {
+func defaultLimits(limits Limits) Limits {
 	if limits.Bytes <= 0 {
 		limits.Bytes = 8 << 20
 	}
@@ -102,22 +104,20 @@ func NewMemory(limits Limits) *Memory {
 	if limits.IdleTTL <= 0 {
 		limits.IdleTTL = 30 * time.Second
 	}
-	return &Memory{limits: limits, sessions: make(map[string]*cachedSession)}
+	return limits
+}
+
+func NewMemory(limits Limits) *Memory {
+	return &Memory{limits: defaultLimits(limits), sessions: make(map[string]*cachedSession)}
 }
 
 func (m *Memory) Append(ctx context.Context, id string, frame Frame) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(frame.Packets) == 0 {
-		return ErrInvalidFrame
-	}
-	size := 0
-	for i, p := range frame.Packets {
-		if len(p.Payload) == 0 || p.Marker != (i == len(frame.Packets)-1) || i > 0 && p.SequenceNumber != frame.Packets[i-1].SequenceNumber+1 {
-			return ErrInvalidFrame
-		}
-		size += len(p.Payload)
+	size, err := frameSize(frame)
+	if err != nil {
+		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()

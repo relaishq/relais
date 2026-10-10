@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/sessionstore"
 	"github.com/relais/pkg/storage"
 )
@@ -53,6 +54,25 @@ func (c StoreConfig) Open(ctx context.Context) (*sessionstore.Redis, error) {
 	if err := ValidateRedis(c.Address); err != nil {
 		return nil, err
 	}
+	key, err := storeKey()
+	if err != nil {
+		return nil, err
+	}
+	return sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix}, key)
+}
+
+// OpenFrames shares the snapshot master key, using a separate HKDF domain.
+func (c StoreConfig) OpenFrames(ctx context.Context) (*framecache.Redis, error) {
+	if err := ValidateRedis(c.Address); err != nil {
+		return nil, err
+	}
+	key, err := storeKey()
+	if err != nil {
+		return nil, err
+	}
+	return framecache.NewRedis(ctx, storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix}, key, framecache.Limits{})
+}
+func storeKey() ([]byte, error) {
 	encoded := os.Getenv("RELAIS_SESSIONSTORE_KEY")
 	key, err := hex.DecodeString(encoded)
 	if err != nil || len(key) != 32 {
@@ -61,7 +81,7 @@ func (c StoreConfig) Open(ctx context.Context) (*sessionstore.Redis, error) {
 	if err != nil || len(key) != 32 {
 		return nil, errors.New("RELAIS_SESSIONSTORE_KEY must encode 32 bytes as hex or base64")
 	}
-	return sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix}, key)
+	return key, nil
 }
 func Context() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())

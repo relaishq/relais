@@ -32,7 +32,7 @@ build: ensure_bin_dir ## Build plugin runners and relay, worker, control and cra
 	$(GOBUILD) -o $(BIN_DIR)/crash-run $(LDFLAGS) ./cmd/crash-run
 
 CRASH_FLAGS ?=
-crash-run: build ## Run ten real-process SIGKILL calls on a dedicated throwaway Redis; requires Redis and ffmpeg
+crash-run: build ## Compare ten real-process SIGKILL calls per cache/PLI mode on throwaway Redis; requires ffmpeg
 	./$(BIN_DIR)/crash-run $(CRASH_FLAGS)
 
 ensure_bin_dir: ## Create bin directory if it doesn't exist

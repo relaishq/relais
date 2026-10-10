@@ -10,8 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"crypto/rand"
+	"encoding/hex"
 	"github.com/relais/pkg/callharness"
+	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/sessionstore"
+	"github.com/relais/pkg/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,6 +30,7 @@ func TestRelayFrameCacheModes(t *testing.T) {
 }
 
 func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
+	frames := selectedFrameCache(t, store)
 	for _, mode := range []struct {
 		name       string
 		cache, pli bool
@@ -37,7 +42,7 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 			within := 0
 			for trial := range 10 {
 				t.Run(fmt.Sprint(trial), func(t *testing.T) {
-					h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, Workers: 2, DisableFrameCache: !mode.cache, DisableResumePLI: !mode.pli})
+					h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, FrameCache: frames, Workers: 2, DisableFrameCache: !mode.cache, DisableResumePLI: !mode.pli})
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					defer cancel()
 					call, err := h.Dial(ctx, callharness.CallOptions{Video: true})
@@ -131,7 +136,8 @@ func TestRelayFrameCacheMidKeyframe(t *testing.T) {
 }
 
 func testRelayFrameCacheMidKeyframe(t *testing.T, store sessionstore.Store) {
-	h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, Workers: 2, DisableResumePLI: true, ReplayMaxBurstDuration: 50 * time.Millisecond})
+	frames := selectedFrameCache(t, store)
+	h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, FrameCache: frames, Workers: 2, DisableResumePLI: true, ReplayMaxBurstDuration: 50 * time.Millisecond})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	call, err := h.Dial(ctx, callharness.CallOptions{Video: true})
@@ -292,4 +298,20 @@ func TestRelayFrameCacheLargeGroup(t *testing.T) {
 			t.Logf("LARGE_REPLAY scenario=%s max_burst=%s replay_packets=%d first_from_kill=%s live_from_kill=%s keyframe_interval=%s other_audio_max=%s other_video_max=%s", scenario.name, scenario.maxBurst, recovery.ReplayPackets, recovery.FirstDecodedAfterKill, recovery.FirstDecodedLiveAfterKill, recovery.KeyframeInterval, maxAudio, maxVideo)
 		})
 	}
+}
+
+// The Redis session-store variant also selects Redis media retention. Workers
+// get the caller-owned Store through the production Options.FrameCache seam.
+func selectedFrameCache(t *testing.T, store sessionstore.Store) framecache.Store {
+	t.Helper()
+	if store == nil {
+		return nil
+	}
+	var token [16]byte
+	_, err := rand.Read(token[:])
+	require.NoError(t, err)
+	frames, err := framecache.NewRedis(context.Background(), storage.RedisConfig{Addr: os.Getenv("RELAIS_TEST_REDIS_ADDR"), Prefix: "harness:frames:" + hex.EncodeToString(token[:]) + ":"}, make([]byte, 32), framecache.Limits{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, frames.Close()) })
+	return frames
 }
