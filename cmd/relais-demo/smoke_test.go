@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"io/fs"
 	"net"
 	"net/http"
@@ -9,15 +11,105 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/relais/internal/clusterprocess"
 	"github.com/relais/internal/privateapi"
+	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/callharness"
 	"github.com/relais/pkg/controlplane"
 	"github.com/stretchr/testify/require"
 )
+
+// Use a second IPv4 loopback address when the host supports it. Otherwise
+// probe private HTTP sockets on ::1; that probe does not require IPv6 media.
+func TestDemoLocalNetworkSmoke(t *testing.T) {
+	if os.Getenv("RELAIS_DEMO_SMOKE") != "1" {
+		t.Skip("opt-in: make build, then RELAIS_DEMO_SMOKE=1 go test -run TestDemoLocalNetworkSmoke -v ./cmd/relais-demo")
+	}
+	publicHost, isolationHost := "127.0.0.2", "127.0.0.2"
+	probe, err := net.Listen("tcp4", net.JoinHostPort(publicHost, "0"))
+	if err != nil {
+		publicHost, isolationHost = "127.0.0.1", "::1"
+		t.Log("second IPv4 loopback address unavailable; private-API isolation probe uses ::1 HTTP only")
+	} else {
+		require.NoError(t, probe.Close())
+	}
+	cfg := config{Bin: filepath.Join("..", "..", "bin"), RedisBinary: "redis-server", HTTP: "127.0.0.1:0", LocalNetwork: publicHost}
+	listener, fingerprint, err := listenPage(cfg)
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+	manager := &clusterprocess.Manager{}
+	ctx, stop := manager.Context()
+	defer stop()
+	d, err := launch(ctx, manager, cfg)
+	require.NoError(t, err)
+	mediaHost, _, err := net.SplitHostPort(d.relay)
+	require.NoError(t, err)
+	require.Equal(t, publicHost, mediaHost)
+	files, err := fs.Sub(web, "web")
+	require.NoError(t, err)
+	served := make(chan error, 1)
+	go func() { served <- processrun.Serve(ctx, listener, d.handler(http.FileServer(http.FS(files)))) }()
+	defer func() { stop(); require.NoError(t, <-served) }()
+	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // owned ephemeral certificate
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	response, err := client.Get("https://" + listener.Addr().String() + "/")
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	require.NotNil(t, response.TLS)
+	require.NoError(t, response.TLS.PeerCertificates[0].VerifyHostname(publicHost))
+	require.NotEmpty(t, fingerprint)
+	_ = response.Body.Close()
+	require.NotEmpty(t, d.launchToken)
+	for _, token := range []string{"", "wrong", d.launchToken} {
+		req, err := http.NewRequest(http.MethodPost, "https://"+listener.Addr().String()+"/", nil)
+		require.NoError(t, err)
+		req.Header.Set("X-Relais-Demo-Token", token)
+		out, err := client.Do(req)
+		require.NoError(t, err)
+		want := http.StatusForbidden
+		if token == d.launchToken {
+			want = http.StatusOK // static page reached
+		}
+		require.Equal(t, want, out.StatusCode)
+		_ = out.Body.Close()
+	}
+	// Check readiness from the real production-launched binaries, not just
+	// flags. Their private APIs must bind only 127.0.0.1 and refuse isolationHost.
+	logs, err := filepath.Glob(filepath.Join(d.dir, "*.log"))
+	require.NoError(t, err)
+	privateCount := 0
+	for _, path := range logs {
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		for _, line := range strings.Split(string(data), "\n") {
+			var ready clusterprocess.Ready
+			if json.Unmarshal([]byte(line), &ready) != nil || ready.HTTP == "" {
+				continue
+			}
+			privateCount++
+			host, port, err := net.SplitHostPort(strings.TrimPrefix(ready.HTTP, "http://"))
+			require.NoError(t, err)
+			require.Equal(t, "127.0.0.1", host)
+			conn, dialErr := net.DialTimeout("tcp", net.JoinHostPort(isolationHost, port), 100*time.Millisecond)
+			if conn != nil {
+				_ = conn.Close()
+			}
+			require.Error(t, dialErr, "private API exposed on isolation address %s", isolationHost)
+			if ready.Leg != "" {
+				legHost, _, err := net.SplitHostPort(ready.Leg)
+				require.NoError(t, err)
+				require.Equal(t, "127.0.0.1", legHost)
+			}
+		}
+	}
+	require.Equal(t, 5, privateCount, "relay, control, and three workers")
+	t.Logf("TLS page %s, public media %s; all %d private APIs refuse %s", listener.Addr(), d.relay, privateCount, isolationHost)
+}
 
 // Opt-in real process smoke; ordinary tests do not require built binaries or
 // Redis. It drives the launcher's production endpoints with the external Pion

@@ -279,3 +279,117 @@ test('gross audio failure requires a proven burst, not just a sampled upper boun
  assert.equal(M.verdict({...e,audio:{...e.audio,lowerMs:180}}).status,'fail');
  assert.equal(M.verdict({...e,audio:{...e.audio,lowerMs:80}}).status,'inconclusive');
 });
+
+test('first live frame is null for moves, drains, and baselines even with live media',()=>{
+ const frames=[{atMs:60,counter:10,advanced:true,sourceCounterAtObservation:11},
+  {atMs:85,counter:12,advanced:true}];
+ for(const kind of ['move','drain','baseline']) {
+  assert.equal(M.firstLiveFrame(kind,frames,0,1400,60),null);
+  assert.equal(M.firstLiveFrame(kind,[],0,1400,M.UNKNOWN),null);
+ }
+ assert.equal(M.firstLiveFrame('kill',frames,0,1400,60),85);
+});
+test('first live frame waits past the source watermark at recovery, not advancing replay',()=>{
+ const frames=[
+  {atMs:0,counter:100,advanced:true,sourceCounterAtObservation:102},
+  {atMs:400,counter:101,advanced:true,sourceCounterAtObservation:114},
+  {atMs:433,counter:110,advanced:true,sourceCounterAtObservation:115},
+  {atMs:466,counter:114,advanced:true,sourceCounterAtObservation:116},
+  {atMs:499,counter:115,advanced:true,sourceCounterAtObservation:117}
+ ];
+ const m=M.content(frames,10,520,10,102);
+ assert.equal(m.contentResumedMs,390);
+ assert.equal(m.firstNewContentMs,423);
+ assert.equal(M.firstLiveFrame('kill',frames,10,520,m.contentResumedMs),489);
+ assert.equal(M.firstLiveFrame('kill',frames,10,480,m.contentResumedMs),M.UNKNOWN);
+ assert.equal(M.firstLiveFrame('kill',frames,10,520,M.UNKNOWN),M.UNKNOWN);
+});
+test('missing recovery watermark and stale or unreadable frames cannot prove live video',()=>{
+ const frames=[{atMs:400,counter:10,advanced:true,sourceCounterAtObservation:20},
+  {atMs:420,counter:M.UNKNOWN,advanced:false},
+  {atMs:450,counter:21,advanced:false},
+  {atMs:470,counter:20,advanced:true}];
+ assert.equal(M.firstLiveFrame('kill',frames,0,500,400),M.UNKNOWN);
+ assert.equal(M.firstLiveFrame('kill',[{atMs:400,counter:10,advanced:true},...frames.slice(1)],0,500,400),M.UNKNOWN);
+ assert.equal(M.firstLiveFrame('kill',frames,0,500,300),M.UNKNOWN);
+});
+test('live frame comparison uses receiver-unwrapped counters across the 16-bit boundary',()=>{
+ // These are receiver-unwrapped observations; the raw reader returns 0..65535.
+ const frames=[{atMs:400,counter:65534,advanced:true,sourceCounterAtObservation:65536},
+  {atMs:433,counter:65536,advanced:true}, {atMs:466,counter:65537,advanced:true}];
+ assert.equal(M.firstLiveFrame('kill',frames,0,500,400),466);
+});
+test('shared counter painter survives the unchanged reader at pattern and 720p geometry',()=>{
+ for(const [width,height] of [[640,480],[1280,720]]) {
+  for(const n of [1,43789,65535,65536]) {
+   const rectangles=[];
+   const painter={fillStyle:null,fillRect(x,y,w,h){rectangles.push({x:x*width/640,y:y*height/480,w:w*width/640,h:h*height/480,color:this.fillStyle});}};
+   M.drawCounterBand(painter,n);
+   const bytes=new Uint8ClampedArray(128);
+   const reader={drawImage(video,x,y,w,h,dx,dy,dw,dh){
+    assert.equal(y,height*64/480);assert.equal(h,height*128/480);
+    for(let row=0;row<2;row++)for(let bit=0;bit<16;bit++) {
+     const sx=(bit+0.5)*width/16,sy=height*(96+row*64)/480;
+     const rect=rectangles.find((r)=>sx>=r.x && sx<r.x+r.w && sy>=r.y && sy<r.y+r.h);
+     assert.ok(rect);bytes[(row*16+bit)*4]=rect.color==='#fff'?255:0;
+    }
+   },getImageData(){return {data:bytes};}};
+   assert.equal(M.readCounterBand(reader,{videoWidth:width,videoHeight:height}).counter,n & 65535);
+  }
+ }
+});
+
+
+test('source stall during a move downgrades an overlapping video failure',()=>{
+ const source=M.sourceDiagnostics([0,33,66,99,132,165,278,311,344],165,350);
+ assert.equal(source.frameIntervalMs,33);
+ assert.deepEqual(source.sourceStarvedPeriods,[{startMs:198,endMs:278,ms:80}]);
+ const e={...event('move',150),...source,video:{...event().video,maxMs:150,maxStartMs:165,maxEndMs:315}};
+ assert.equal(M.gapDiagnostics(e).adjustedVideoGapMs,70);
+ assert.equal(M.verdict(e).status,'inconclusive');
+ // An unrelated source stall cannot conceal a real media gap.
+ assert.equal(M.verdict({...e,video:{...e.video,maxStartMs:400,maxEndMs:550}}).status,'fail');
+});
+test('steady observed source cadence preserves a real Relais gap failure',()=>{
+ const source=M.sourceDiagnostics(Array.from({length:12},(_,i)=>i*33),165,350);
+ assert.equal(source.frameIntervalMs,33);assert.deepEqual(source.sourceStarvedPeriods,[]);
+ const e={...event('move',150),...source,video:{...event().video,maxMs:150,maxStartMs:165,maxEndMs:315}};
+ assert.equal(M.verdict(e).status,'fail');
+});
+test('source cadence uses observed 15 fps and detects a rate drop and open stall',()=>{
+ const slow=M.sourceDiagnostics([0,66,132,198,264,330],198,360);
+ assert.equal(slow.frameIntervalMs,66);assert.deepEqual(slow.sourceStarvedPeriods,[]);
+ const drop=M.sourceDiagnostics([0,33,66,99,132,198,264],132,280);
+ assert.equal(drop.frameIntervalMs,33);assert.equal(drop.sourceStarvedPeriods.length,2);
+ const open=M.sourceDiagnostics([0,33,66,99,132,165],165,300);
+ assert.deepEqual(open.sourceStarvedPeriods.at(-1),{startMs:198,endMs:300,ms:102,open:true});
+ assert.equal(M.verdict({...event('move',150),...open,video:{...event().video,maxMs:150,maxStartMs:165,maxEndMs:315}}).status,'inconclusive');
+ assert.equal(M.sourceDiagnostics([],0,100).frameIntervalMs,M.UNKNOWN);
+ // Exclude a baseline when source excess overlaps its largest gap.
+ const e={...baseline(80),...open,video:{maxMs:80,maxStartMs:200,maxEndMs:280}};
+ assert.equal(M.noiseFloor([e]).video.count,0);
+});
+
+
+test('a draw hiccup just over 1.5 times cadence cannot hide a real Relais failure',()=>{
+ for(const delay of [49.501,51]) {
+  const source=M.sourceDiagnostics([0,33,66,99,132,165,165+delay,198+delay,231+delay],165,310);
+  const e={...event('move',140),...source,video:{...event().video,maxMs:140,maxStartMs:165,maxEndMs:305}};
+  assert.equal(M.verdict(e).status,'fail');
+  assert.ok(Math.abs(M.gapDiagnostics(e).overlapMs-(delay-33))<1e-9);
+  assert.ok(M.gapDiagnostics(e).adjustedVideoGapMs>120);
+ }
+});
+test('baselines exclude only source excess overlapping their largest gap',()=>{
+ const source=M.sourceDiagnostics([0,33,66,99,132,165,216,249,282],165,300);
+ // Normal cadence within the 51 ms draw interval is not a source stall.
+ const normal={...baseline(33),...source,video:{maxMs:33,maxStartMs:165,maxEndMs:198}};
+ assert.equal(M.noiseFloor([normal]).video.count,1);
+ const unrelated={...baseline(40),...source,video:{maxMs:40,maxStartMs:250,maxEndMs:290}};
+ const floor=M.noiseFloor(Array.from({length:5},()=>unrelated));
+ assert.equal(floor.video.count,5);assert.equal(floor.excluded,0);
+ assert.equal(M.noiseGate(floor).ready,true);
+ const overlapping={...baseline(40),...source,video:{maxMs:40,maxStartMs:190,maxEndMs:230}};
+ assert.equal(M.noiseFloor([overlapping]).video.count,0);
+ assert.equal(M.noiseFloor([overlapping]).excluded,1);
+});
