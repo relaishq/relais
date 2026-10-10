@@ -396,7 +396,11 @@ func (w *Worker) adopt(sess *session, dtlsConn *dtls.Conn, replayPackets [][]byt
 	w.sessions[sess.id] = sess
 	// The nominated address has passed ICE checks already: its DTLS and
 	// SRTP belong to the session before the caller's next consent check.
+	// No check has passed here yet, so the address does not stick to the
+	// session on this worker until one does; the relay or shared socket
+	// keeps the session's own check time across the move.
 	w.byAddr[sess.state.ICE.RemoteAddr] = sess
+	delete(w.byAddrConsent, sess.state.ICE.RemoteAddr)
 	w.running.Add(2)
 	if len(replayPackets) > 0 {
 		w.running.Add(1)

@@ -182,7 +182,7 @@ func TestHoldMissingAcknowledgementTimesOut(t *testing.T) {
 }
 
 func TestSessionIndexPrunesExpiredAndReplacedFlows(t *testing.T) {
-	table := newFlowTable(flowLimits{idleTimeout: time.Second, pendingTimeout: time.Second, maxFlows: 8, maxPending: 8})
+	table := newFlowTable(flowLimits{stickinessWindow: time.Second, idleTimeout: 10 * time.Second, pendingTimeout: time.Second, maxFlows: 8, maxPending: 8})
 	caller := newTestCaller(t).addr()
 	worker := listenLoopback(t)
 	addr := localAddr(worker)
@@ -195,13 +195,13 @@ func TestSessionIndexPrunesExpiredAndReplacedFlows(t *testing.T) {
 	require.Equal(t, sessionA, promoted)
 	requestB := bindingRequest(t, sessionB)
 	_, txB, _ := parseBindingRequest(requestB)
-	require.True(t, table.admit(caller, addr, sessionB, txB, now))
+	require.True(t, table.admit(caller, addr, sessionB, txB, now.Add(time.Second)))
 	require.Len(t, table.sessions, 2)
-	allowed, promoted = table.answer(caller, addr, bindingSuccess(t, requestB), now)
+	allowed, promoted = table.answer(caller, addr, bindingSuccess(t, requestB), now.Add(time.Second))
 	require.True(t, allowed)
 	require.Equal(t, sessionB, promoted)
 	require.Len(t, table.sessions, 1, "replacing a route drops the old session index")
-	table.sweep(now.Add(2 * time.Second))
+	table.sweep(now.Add(12 * time.Second))
 	require.Empty(t, table.sessions)
 	require.Empty(t, table.callers)
 }
@@ -217,9 +217,15 @@ func TestHoldQueueExcludesUnconfirmedCallers(t *testing.T) {
 	// session may spend this session's held-packet budget.
 	for _, intruder := range []*testCaller{stranger, other} {
 		for range 3 {
-			routed := sys.relay.Stats().STUNRouted
+			before := sys.relay.Stats()
 			intruder.send(t, bindingRequest(t, sessionA), sys.relay.PublicAddr())
-			require.Eventually(t, func() bool { return sys.relay.Stats().STUNRouted > routed }, receiveTimeout, time.Millisecond)
+			require.Eventually(t, func() bool {
+				after := sys.relay.Stats()
+				if intruder == other {
+					return after.FlowsRejected > before.FlowsRejected
+				}
+				return after.STUNRouted > before.STUNRouted
+			}, receiveTimeout, time.Millisecond)
 		}
 	}
 	a.expectNothing(t)

@@ -54,6 +54,13 @@ type SocketConfig struct {
 	// Defaults to "127.0.0.1:0".
 	ListenAddr string
 
+	// RouteStickinessWindow keeps a caller address on its session for this
+	// long after the session last authenticated an ICE check from it: until
+	// then, no other session can take the address. Media does not extend
+	// it. It applies to every worker on the socket. Defaults to the
+	// workers' consent timeout, 30 seconds.
+	RouteStickinessWindow time.Duration
+
 	// LoggerFactory defaults to Pion's default logger factory.
 	LoggerFactory logging.LoggerFactory
 }
@@ -71,8 +78,12 @@ type SocketConfig struct {
 // password), the request's source address becomes a flow of the session.
 // Every other packet goes to the owner of its source address's flow,
 // unparsed. A request that fails authentication changes no flow, so it
-// cannot redirect an established caller's media. A worker may send only to
-// flows of sessions it owns; anything else is dropped. That is the fence that
+// cannot redirect an established caller's media. Nor can valid credentials
+// for another session while the address's own session is active: a flow
+// sticks to its session for RouteStickinessWindow after the session last
+// authenticated a check from it. Media does not count, and a session may
+// always move to another address or worker. A worker may send only to flows
+// of sessions it owns; anything else is dropped. That is the fence that
 // keeps a session's old owner from reaching the caller after a move.
 type Socket struct {
 	conn      *net.UDPConn
@@ -80,14 +91,17 @@ type Socket struct {
 	log       logging.LeveledLogger
 	readDone  chan struct{}
 
+	stickinessWindow time.Duration // SocketConfig.RouteStickinessWindow
+
 	// mu guards the routing tables. Writes to the UDP socket hold it for
 	// reading, so a route change waits for writes in progress: once it
 	// returns, the old owner has no packet on its way out.
-	mu     sync.RWMutex
-	ports  map[*socketPort]struct{}
-	routes map[string]*route // by session ID
-	flows  map[netip.AddrPort]string
-	closed bool
+	mu          sync.RWMutex
+	ports       map[*socketPort]struct{}
+	routes      map[string]*route // by session ID
+	flows       map[netip.AddrPort]string
+	flowConsent map[netip.AddrPort]time.Time // when each flow last authenticated a check
+	closed      bool
 
 	// afterExport, when set by a test, runs during a handover between the
 	// old owner's export and the new owner's resume.
@@ -114,6 +128,9 @@ func ListenSocket(cfg SocketConfig) (*Socket, error) {
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = "127.0.0.1:0"
 	}
+	if cfg.RouteStickinessWindow <= 0 {
+		cfg.RouteStickinessWindow = defaultConsentTimeout
+	}
 	if cfg.LoggerFactory == nil {
 		cfg.LoggerFactory = logging.NewDefaultLoggerFactory()
 	}
@@ -138,13 +155,15 @@ func ListenSocket(cfg SocketConfig) (*Socket, error) {
 	local := udpAddr.AddrPort()
 
 	s := &Socket{
-		conn:      conn,
-		localAddr: netip.AddrPortFrom(local.Addr().Unmap(), local.Port()),
-		log:       cfg.LoggerFactory.NewLogger("mediasocket"),
-		readDone:  make(chan struct{}),
-		ports:     make(map[*socketPort]struct{}),
-		routes:    make(map[string]*route),
-		flows:     make(map[netip.AddrPort]string),
+		conn:             conn,
+		localAddr:        netip.AddrPortFrom(local.Addr().Unmap(), local.Port()),
+		log:              cfg.LoggerFactory.NewLogger("mediasocket"),
+		readDone:         make(chan struct{}),
+		ports:            make(map[*socketPort]struct{}),
+		routes:           make(map[string]*route),
+		flows:            make(map[netip.AddrPort]string),
+		flowConsent:      make(map[netip.AddrPort]time.Time),
+		stickinessWindow: cfg.RouteStickinessWindow,
 	}
 	go s.readLoop()
 
@@ -159,6 +178,7 @@ func (s *Socket) LocalAddr() netip.AddrPort {
 // NewWorker starts a media worker on the socket. cfg.ListenAddr is ignored.
 func (s *Socket) NewWorker(cfg Config) (*Worker, error) {
 	cfg.socket = s
+	cfg.RouteStickinessWindow = s.stickinessWindow
 	worker, err := New(cfg)
 	if err != nil {
 		return nil, err
@@ -316,6 +336,7 @@ func (s *Socket) release(sessionID string, port *socketPort) {
 	for addr, id := range s.flows {
 		if id == sessionID {
 			delete(s.flows, addr)
+			delete(s.flowConsent, addr)
 		}
 	}
 }
@@ -371,14 +392,25 @@ func (s *Socket) dispatch(pkt []byte, from netip.AddrPort) {
 }
 
 // learnFlow makes from a flow of a session after the session's owner, on
-// port, has authenticated an ICE check from that address. Only the current
-// owner can: a worker that is not (or no longer) the owner changes nothing.
-func (s *Socket) learnFlow(port *socketPort, from netip.AddrPort, sessionID string) {
+// port, has authenticated an ICE check from that address, and reports
+// whether it did. Only the current owner can: a worker that is not (or no
+// longer) the owner changes nothing. Nor can a session take an address that
+// another session authenticated a check from within the stickiness window.
+// On false, the worker must neither answer the check nor act on it.
+func (s *Socket) learnFlow(port *socketPort, from netip.AddrPort, sessionID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if r := s.routes[sessionID]; r != nil && r.owner == port {
-		s.flows[from] = sessionID
+	if r := s.routes[sessionID]; r == nil || r.owner != port {
+		return false
 	}
+	now := time.Now()
+	if incumbent := s.flows[from]; incumbent != "" && incumbent != sessionID &&
+		now.Sub(s.flowConsent[from]) < s.stickinessWindow {
+		return false
+	}
+	s.flows[from] = sessionID
+	s.flowConsent[from] = now
+	return true
 }
 
 // stunSessionID returns the session a STUN binding request is for: the
@@ -628,6 +660,7 @@ func (s *Socket) drop(sessionID string) {
 	for addr, id := range s.flows {
 		if id == sessionID {
 			delete(s.flows, addr)
+			delete(s.flowConsent, addr)
 		}
 	}
 }
@@ -731,10 +764,11 @@ func (w *Worker) claimSession(sessionID string) {
 
 // learnFlow tells a shared socket that an ICE check from from has
 // authenticated for one of this worker's sessions.
-func (w *Worker) learnFlow(from netip.AddrPort, sessionID string) {
+func (w *Worker) learnFlow(from netip.AddrPort, sessionID string) bool {
 	if port, ok := w.conn.(*socketPort); ok {
-		port.socket.learnFlow(port, from, sessionID)
+		return port.socket.learnFlow(port, from, sessionID)
 	}
+	return true
 }
 
 // releaseSession removes an ended session's route when the worker is on a
