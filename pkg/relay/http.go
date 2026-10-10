@@ -24,9 +24,10 @@ type ReleaseReply struct {
 	Packets int `json:"packets"`
 }
 type RelayStatus struct {
-	Public  netip.AddrPort `json:"public"`
-	Private netip.AddrPort `json:"private"`
-	Stats   Stats          `json:"stats"`
+	Instance string         `json:"instance"`
+	Public   netip.AddrPort `json:"public"`
+	Private  netip.AddrPort `json:"private"`
+	Stats    Stats          `json:"stats"`
 }
 
 // PrivateHandler controls a relay on a trusted loopback HTTP listener.
@@ -99,7 +100,7 @@ func (r *Relay) PrivateHandler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, _ *http.Request) {
-		privateapi.Write(w, RelayStatus{Public: r.PublicAddr(), Private: r.WorkerAddr(), Stats: r.Stats()})
+		privateapi.Write(w, RelayStatus{Instance: r.instance, Public: r.PublicAddr(), Private: r.WorkerAddr(), Stats: r.Stats()})
 	})
 	return mux
 }

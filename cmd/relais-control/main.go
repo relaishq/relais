@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/controlplane"
@@ -71,6 +73,9 @@ func run() error {
 			return err
 		}
 	}
+	registrationDone := make(chan struct{})
+	go func() { defer close(registrationDone); registerRestartedRelay(ctx, plane, r) }()
+	defer func() { cancel(); <-registrationDone }()
 	done := make(chan struct{})
 	go func() { defer close(done); _ = plane.Run(ctx) }()
 	processrun.Ready(map[string]any{"http": "http://" + listener.Addr().String()})
@@ -85,5 +90,25 @@ func run() error {
 func main() {
 	if err := run(); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// A new relay process loses its private-leg registry. Re-register live workers
+// on each tick, including late registrations and rejoins in the same instance.
+func registerRestartedRelay(ctx context.Context, plane *controlplane.Plane, r *controlplane.RemoteRelay) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	var registry controlplane.RelayWorkerRegistry
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			attempt, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			if err := registry.Sync(attempt, plane, r); err != nil {
+				log.Printf("relay worker registration: %v", err)
+			}
+			cancel()
+		}
 	}
 }

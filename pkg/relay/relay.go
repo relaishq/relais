@@ -54,17 +54,14 @@
 // route is that worker, or, for the binding success that confirms it, whose
 // candidate is.
 //
-// The flow table is a cache, not state. A restarted relay starts with an
-// empty table and rebuilds each flow from the store on the caller's next
-// STUN binding request (ICE consent checks arrive every few seconds); until
-// then the caller's packets, and the workers' packets to it, are dropped.
-// A restart also forgets which routes were active, so until a caller's next
-// answered check another session can claim its address. Persisted routes
-// (#42) close that gap.
+// Optional persisted routing evidence is restored before packet loops start.
+// It retains the authenticated consent time and uses the current lease owner;
+// the relay holds no media keys or resumable snapshots. See persistence.go.
 package relay
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"net"
@@ -134,6 +131,15 @@ const (
 
 // Config configures a relay.
 type Config struct {
+	// Routes enables asynchronous confirmed-route persistence and eager restore.
+	// Nil preserves the address-only relay API for embedders.
+	Routes sessionstore.Routes
+	// DisableRouteRestore measures the consent-check recovery baseline. Writes
+	// remain enabled so the comparison changes only restart restoration.
+	DisableRouteRestore bool
+	// RouteRestoreTimeout bounds startup store work (default 5 seconds).
+	RouteRestoreTimeout time.Duration
+
 	// PublicAddr is the relay's public UDP address: callers send everything
 	// there, and every answer advertises it as the single host candidate, so
 	// the IP must be specific (not 0.0.0.0 or ::) and reachable by callers.
@@ -213,6 +219,13 @@ type Config struct {
 
 // Stats counts what the relay has done since it started.
 type Stats struct {
+	RoutesRestored       uint64
+	RoutesRestoreSkipped uint64
+	RoutesRestoreFailed  uint64
+	RouteWrites          uint64
+	RouteWritesDropped   uint64
+	RouteWritesFailed    uint64
+
 	// Holds, HeldPackets and HeldBytes are the current bounded queues.
 	Holds       int
 	HeldPackets int
@@ -264,14 +277,16 @@ type Stats struct {
 
 // Relay is a running relay.
 type Relay struct {
-	cfg        Config
-	log        logging.LeveledLogger
-	public     *net.UDPConn
-	workers    *net.UDPConn
-	publicAddr netip.AddrPort
-	workerAddr netip.AddrPort
-	flows      *flowTable
-	lookups    *ownerLookups
+	instance    string
+	cfg         Config
+	log         logging.LeveledLogger
+	public      *net.UDPConn
+	workers     *net.UDPConn
+	publicAddr  netip.AddrPort
+	workerAddr  netip.AddrPort
+	flows       *flowTable
+	lookups     *ownerLookups
+	persistence *routeWrites
 
 	// routeMu serializes generation validation with route application only.
 	routeMu sync.Mutex
@@ -296,16 +311,22 @@ type Relay struct {
 	closeOnce sync.Once
 	closeErr  error
 
-	callerPackets  atomic.Uint64
-	workerPackets  atomic.Uint64
-	stunRouted     atomic.Uint64
-	unknownSession atomic.Uint64
-	lookupsDropped atomic.Uint64
-	lookupsFailed  atomic.Uint64
-	unroutable     atomic.Uint64
-	unknownWorker  atomic.Uint64
-	workerNoFlow   atomic.Uint64
-	malformed      atomic.Uint64
+	routesRestored       atomic.Uint64
+	routesRestoreSkipped atomic.Uint64
+	routesRestoreFailed  atomic.Uint64
+	routeWritesDone      atomic.Uint64
+	routeWritesDropped   atomic.Uint64
+	routeWritesFailed    atomic.Uint64
+	callerPackets        atomic.Uint64
+	workerPackets        atomic.Uint64
+	stunRouted           atomic.Uint64
+	unknownSession       atomic.Uint64
+	lookupsDropped       atomic.Uint64
+	lookupsFailed        atomic.Uint64
+	unroutable           atomic.Uint64
+	unknownWorker        atomic.Uint64
+	workerNoFlow         atomic.Uint64
+	malformed            atomic.Uint64
 }
 
 // New starts a relay.
@@ -328,6 +349,7 @@ func New(cfg Config) (*Relay, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &Relay{
+		instance:   rand.Text(),
 		cfg:        cfg,
 		log:        cfg.LoggerFactory.NewLogger("relay"),
 		public:     public,
@@ -349,7 +371,11 @@ func New(cfg Config) (*Relay, error) {
 	for _, worker := range cfg.Workers {
 		r.AddWorker(worker)
 	}
+	r.restoreRoutes()
 	r.lookups = newOwnerLookups(r, cfg)
+	if cfg.Routes != nil {
+		r.persistence = newRouteWrites(r)
+	}
 	r.running.Add(3)
 	go r.callerLoop()
 	go r.workerLoop()
@@ -359,6 +385,9 @@ func New(cfg Config) (*Relay, error) {
 }
 
 func applyDefaults(cfg *Config) {
+	if cfg.RouteRestoreTimeout <= 0 {
+		cfg.RouteRestoreTimeout = 5 * time.Second
+	}
 	if cfg.PublicAddr == "" {
 		cfg.PublicAddr = "127.0.0.1:0"
 	}
@@ -485,6 +514,9 @@ func (r *Relay) MoveSession(sessionID string, from, to netip.AddrPort) error {
 	}
 	r.lookups.mu.Unlock()
 	r.flows.moveSession(sessionID, from, to)
+	for _, caller := range r.flows.sessionCallers(sessionID) {
+		r.persist(caller, true)
+	}
 	if h := r.holds[sessionID]; h != nil {
 		h.worker = to
 	}
@@ -514,6 +546,7 @@ func (r *Relay) Stats() Stats {
 	r.forwardMu.Unlock()
 
 	return Stats{
+		RoutesRestored: r.routesRestored.Load(), RoutesRestoreSkipped: r.routesRestoreSkipped.Load(), RoutesRestoreFailed: r.routesRestoreFailed.Load(), RouteWrites: r.routeWritesDone.Load(), RouteWritesDropped: r.routeWritesDropped.Load(), RouteWritesFailed: r.routeWritesFailed.Load(),
 		BarrierTimeouts: r.barrierTimeouts.Load(),
 		Holds:           holds, HeldPackets: packets, HeldBytes: bytes, HoldDrops: r.holdDrops.Load(), HoldTimeouts: r.holdTimeouts.Load(), HoldSendFailures: r.holdSendFailures.Load(),
 		CallerPackets:  r.callerPackets.Load(),
@@ -590,6 +623,9 @@ func (r *Relay) route(pkt []byte, from netip.AddrPort) (netip.AddrPort, bool) {
 	if isSTUN(pkt) {
 		if sessionID, txID, ok := parseBindingRequest(pkt); ok {
 			if worker, ok := r.flows.routeSTUN(from, sessionID, txID, now); ok {
+				if isNomination(pkt) {
+					r.flows.markNomination(from, txID)
+				}
 				r.stunRouted.Add(1)
 				r.lookups.refresh(sessionID, from)
 
@@ -646,6 +682,9 @@ func (r *Relay) forward(datagram []byte, caller, worker netip.AddrPort) {
 		if !ok {
 			return
 		}
+		if isNomination(packet) {
+			r.flows.markNomination(caller, tx)
+		}
 		worker = current
 	}
 	r.sendCaller(datagram, caller, worker)
@@ -691,6 +730,9 @@ func (r *Relay) resolved(sessionID string, owner netip.AddrPort, err error, wait
 			}
 			if !r.flows.admit(w.caller, owner, sessionID, w.txID, now) {
 				continue // counted as FlowsRejected
+			}
+			if isNomination(w.datagram[MaxHeaderLen:]) {
+				r.flows.markNomination(w.caller, w.txID)
 			}
 			r.stunRouted.Add(1)
 			forwards = append(forwards, w)
@@ -759,6 +801,9 @@ func (r *Relay) workerLoop() {
 			r.workerNoFlow.Add(1)
 
 			continue
+		}
+		if _, success := parseBindingSuccess(pkt); success {
+			r.persist(caller, promoted != "")
 		}
 		if promoted != "" {
 			r.log.Infof("session %s: caller %s <-> worker %s", promoted, caller, from)
@@ -831,4 +876,7 @@ func (r *Relay) ForgetSession(id string) {
 	}
 	r.lookups.mu.Unlock()
 	r.flows.forgetSession(id)
+	if r.persistence != nil {
+		r.persistence.enqueue(id, nil)
+	}
 }

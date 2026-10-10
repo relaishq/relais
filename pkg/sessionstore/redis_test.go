@@ -227,8 +227,8 @@ func (h *lostResponseHook) BeforeProcess(ctx context.Context, _ redis.Cmder) (co
 	return ctx, nil
 }
 func (h *lostResponseHook) AfterProcess(_ context.Context, cmd redis.Cmder) error {
-	args := cmd.Args()
-	if (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 7 && args[7] == h.op && cmd.Err() == nil {
+	args := sessionCommandArgs(cmd)
+	if (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 0 && args[0] == h.op && cmd.Err() == nil {
 		h.calls++
 		return errors.New("EOF: injected lost script response")
 	}
@@ -327,8 +327,8 @@ type failedReconcileHook struct {
 }
 
 func (h *failedReconcileHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
-	args := cmd.Args()
-	if h.dropped && (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 7 && args[7] == "get" {
+	args := sessionCommandArgs(cmd)
+	if h.dropped && (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 0 && args[0] == "get" {
 		return ctx, errors.New("EOF: injected failed reconcile")
 	}
 	return ctx, nil
