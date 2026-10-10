@@ -68,13 +68,20 @@ Redis unavailability can delay a call until recovery or lease expiry.
 caller owns its lifetime. `RELAIS_TEST_REDIS_ADDR` enables Redis tests under a
 fresh random prefix, removed by SCAN/DEL at cleanup. An absent or unavailable
 explicit endpoint skips local Redis tests. Set `RELAIS_TEST_REDIS_REQUIRE=1` to
-fail when the endpoint is missing or unreachable. The call-harness CI job sets
-required mode, supplies `redis:7`, and checks its service health.
+fail when the endpoint is missing or unreachable. PR race unit tests require
+Redis. The PR call-harness job supplies `redis:7`
+and checks service health. Its short step clears the Redis address and disables
+required mode; a separate race step runs `TestRelayUncertainTransferSurvives`
+with Redis required. Full-matrix race and timing steps require Redis for all
+Redis harness scenarios.
 
 Use a dedicated throwaway loopback Redis with persistence disabled. Never use
-another Redis instance or flush shared data. Always set the endpoint, even for
-skip checks, because legacy tests otherwise default to port 6379. A skip check
-uses an unused, non-default port.
+another Redis instance or flush shared data. Storage stream/group tests and
+storage benchmarks skip before constructing a
+client when `RELAIS_TEST_REDIS_ADDR` is unset, unless required mode is enabled.
+Required mode fails on a missing or unreachable endpoint. Benchmarks use random
+prefixes and delete only their own keys during cleanup. For an optional skip
+check, unset the test address and requirement; there is no test default to 6379.
 
 ```sh
 RELAIS_TEST_REDIS_ADDR=127.0.0.1:PORT go test -race -count=1 ./pkg/... ./internal/...

@@ -17,7 +17,7 @@ BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 # Linker flags (populate pkg/buildinfo)
 LDFLAGS=-ldflags "-X github.com/relais/pkg/buildinfo.Version=$(VERSION) -X github.com/relais/pkg/buildinfo.Commit=$(COMMIT) -X github.com/relais/pkg/buildinfo.Date=$(BUILD_TIME)"
 
-.PHONY: all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-harness test-harness-timing demo crash-run help
+.PHONY: all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo crash-run help
 
 all: test build
 
@@ -42,7 +42,7 @@ clean: ## Remove build artifacts
 	$(GOCLEAN)
 	rm -rf $(BIN_DIR)
 
-test: ## Run tests
+test: ## Run all tests (Redis integration requires RELAIS_TEST_REDIS_ADDR)
 	$(GOTEST) -v ./...
 
 coverage: ## Run tests with coverage
@@ -90,14 +90,35 @@ test-streams: ## Run Redis Streams tests (non-cluster) in storage
 test-cluster: ## Run Redis Cluster integration tests (requires RELAIS_TEST_REDIS_CLUSTER_ADDRS)
 	$(GOTEST) -v -count=1 -run '^TestCluster' ./pkg/storage
 
-HARNESS_PKGS=./pkg/framecache/... ./pkg/controlplane/... ./pkg/mediaworker/... ./pkg/relay/... ./pkg/sessionstore/... ./pkg/callharness/... ./cmd/echo-demo/...
+# Cover all packages except the call harness, which has a separate CI job.
+# Include the plugin and pipeline suites previously covered by make test.
+UNIT_PKGS=$(shell $(GOCMD) list ./pkg/... ./internal/... ./cmd/... ./plugins/... ./test/... | awk '$$0 != "github.com/relais/pkg/callharness"')
+
+test-unit: ## Run all non-harness tests with the race detector; set RELAIS_TEST_REDIS_ADDR for Redis suites
+	$(GOTEST) -race -v -count=1 -timeout 10m $(UNIT_PKGS)
+
+# test-unit already covers every package outside the call harness under -race.
+HARNESS_PKGS=./pkg/callharness/...
 HARNESS_FLAGS ?=
 
 test-harness: ## Run the call harness (audio+video echo calls, direct and through the relay) with the race detector; HARNESS_FLAGS=-short for 5 s calls; full VP8 decode needs ffmpeg on PATH
 	$(GOTEST) -race -v -count=1 -timeout 30m $(HARNESS_FLAGS) $(HARNESS_PKGS)
 
+# Disable Redis explicitly, including deeply nested uncertainty subtests,
+# even if the invoking shell has Redis configured and required.
+test-harness-short: ## Run the PR call harness with -race and -short (5 s baseline calls), memory only; requires ffmpeg
+	RELAIS_TEST_REDIS_ADDR= RELAIS_TEST_REDIS_REQUIRE=0 $(GOTEST) -race -short -v -count=1 -timeout 10m ./pkg/callharness/
+
+test-harness-smoke: ## Enforce PR timing thresholds without -race: 20 moves, 20 kills and planned wrap, memory only; requires ffmpeg
+	RELAIS_TEST_REDIS_ADDR= RELAIS_TEST_REDIS_REQUIRE=0 $(GOTEST) -v -count=1 -timeout 10m -run '^TestRelay(PlannedHandover|HardKillTakeover|PlannedWrap)$$' ./pkg/callharness/
+
 test-harness-timing: ## Run the relay move, drain and takeover timing tests without the race detector, which enforce issues #6/#7/#8's gap targets (needs ffmpeg on PATH)
 	$(GOTEST) -v -count=1 -timeout 30m -run '^TestRelay(PlannedHandover|DrainTenCalls|HardKillTakeover|StaleSnapshotTakeover|MidKeyframeTakeover|FirstKeyframeTakeover|FrameCacheModes|FrameCacheMidKeyframe|FrameCacheWithoutSource|FrameCacheLargeGroup|PlannedWrap|TakeoverWrap)$$' ./pkg/callharness/
+
+test-full: ## Run race units and the full in-process race/timing matrix; requires dedicated Redis and ffmpeg
+	$(MAKE) test-unit
+	$(MAKE) test-harness
+	$(MAKE) test-harness-timing
 
 DEMO_FLAGS ?=
 
