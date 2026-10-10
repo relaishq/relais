@@ -36,8 +36,20 @@ type Frame struct {
 	SourceSSRC    uint32
 	EchoTimestamp uint32
 	Arrival       time.Time
-	Keyframe      bool
-	Packets       []Packet
+	// Redis supplies elapsed server time; local monotonic time advances it after read.
+	ageAtRead time.Duration
+	readAt    time.Time
+	Keyframe  bool
+	Packets   []Packet
+}
+
+// ReplayAge uses one clock for Redis append/read, independent of host wall clocks.
+// Memory frames retain local receipt-time semantics.
+func (f Frame) ReplayAge(now time.Time) time.Duration {
+	if !f.readAt.IsZero() {
+		return f.ageAtRead + now.Sub(f.readAt)
+	}
+	return now.Sub(f.Arrival)
 }
 
 // Store can be implemented by a remote cache. Implementations copy on append
@@ -50,8 +62,7 @@ type Store interface {
 
 // Limits bounds retained payload per track and, for Memory, across sessions.
 // Redis uses Bytes, Frames and IdleTTL; TotalBytes and Sessions are Memory-only.
-// Zero
-// values select 8 MiB/300 frames per track, 64 MiB/1024 sessions globally,
+// Zero values select 8 MiB/300 frames per track, 64 MiB/1024 sessions globally,
 // and a 30 s idle TTL. Global expiry runs lazily at most once a second;
 // append and read also expire their requested session before touching it.
 type Limits struct {

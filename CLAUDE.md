@@ -16,7 +16,7 @@ make build
 # http://localhost:9101 ("Move call" hands the live call to the other worker)
 make demo
 
-# Prove real SIGKILL takeover: ten runs, each with 60 s of media/consent
+# Prove real SIGKILL takeover: ten interleaved runs per mode, each with 60 s of media/consent
 # Requires redis-server and ffmpeg; starts its own Redis, never port 6379
 make crash-run
 # Developer smoke run (does not prove the 60 s consent threshold)

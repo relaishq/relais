@@ -47,3 +47,8 @@ func TestCrashRunRejectsIncompleteOrUncleanCallerEvidence(t *testing.T) {
 	}
 	require.False(t, measure(successfulReport(), "127.0.0.1:10", 60*time.Second).Pass)
 }
+
+func TestCacheAttributionCountsActualDecodedPath(t *testing.T) {
+	require.Equal(t, 1, cacheAttributions([]result{{Path: "Cache", ReplayPackets: 2}, {Path: "Keyframe", ReplayPackets: 2}, {Path: "Cache"}}))
+	require.Equal(t, 25*time.Millisecond, median([]time.Duration{40 * time.Millisecond, 10 * time.Millisecond, 30 * time.Millisecond, 20 * time.Millisecond}))
+}

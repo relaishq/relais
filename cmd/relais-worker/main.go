@@ -9,6 +9,7 @@ import (
 
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/controlplane"
+	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
 )
 
@@ -45,11 +46,15 @@ func run() error {
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	frames, err := storeConfig.OpenFrames(ctx)
-	if err != nil {
-		return err
+	var frames framecache.Store
+	if !*cacheOff {
+		client, err := storeConfig.OpenFrames(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = client.Close() }()
+		frames = client
 	}
-	defer func() { _ = frames.Close() }()
 	worker, err := mediaworker.New(mediaworker.Config{ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store}})
 	if err != nil {
 		return err

@@ -119,7 +119,7 @@ const appendLua = `
 local p, size, cap, maxframes, ttl = ARGV[1], tonumber(ARGV[2]), tonumber(ARGV[3]), tonumber(ARGV[4]), tonumber(ARGV[5])
 local n=tonumber(redis.call('HGET',KEYS[1],p..'n')) or 0
 local function clear()
- for i=1,n do redis.call('HDEL',KEYS[1],p..'f'..i) end
+ for i=1,n do redis.call('HDEL',KEYS[1],p..'f'..i,p..'a'..i) end
  redis.call('HDEL',KEYS[1],p..'b',p..'n',p..'s',p..'t')
  n=0
 end
@@ -134,18 +134,24 @@ else
 end
 local bytes=tonumber(redis.call('HGET',KEYS[1],p..'b')) or 0
 if bytes+size>cap or n+1>maxframes then clear(); return finish() end
-redis.call('HSET',KEYS[1],p..'f'..(n+1),ARGV[10],p..'n',n+1,p..'b',bytes+size,p..'s',ARGV[9],p..'t',ARGV[8])
+local clock=redis.call('TIME')
+local now=clock[1]..'.'..clock[2]
+redis.call('HSET',KEYS[1],p..'a'..(n+1),now,p..'f'..(n+1),ARGV[10],p..'n',n+1,p..'b',bytes+size,p..'s',ARGV[9],p..'t',ARGV[8])
 return finish()
 `
 const currentLua = `
 local p=ARGV[1]
 local n=tonumber(redis.call('HGET',KEYS[1],p..'n')) or 0
 if n>tonumber(ARGV[3]) then return redis.error_reply('framecache: frame cap exceeded') end
-local frames={}
+local clock=redis.call('TIME')
+local frames={clock[1],clock[2]}
 for i=1,n do
  local f=redis.call('HGET',KEYS[1],p..'f'..i)
  if not f then return redis.error_reply('framecache: missing record') end
- frames[i]=f
+ local arrived=redis.call('HGET',KEYS[1],p..'a'..i)
+ if not arrived then return redis.error_reply('framecache: missing arrival time') end
+ frames[#frames+1]=f
+ frames[#frames+1]=arrived
 end
 redis.call('PEXPIRE',KEYS[1],ARGV[2])
 return frames
@@ -255,9 +261,18 @@ func (r *Redis) Current(ctx context.Context, id string, track Track) ([]Frame, e
 		}
 		return nil, err
 	}
-	frames := make([]Frame, len(raw))
+	readAt := time.Now()
+	if len(raw) < 2 || (len(raw)-2)%2 != 0 {
+		return nil, errEncoding
+	}
+	serverNow, err := redisTime(raw[0] + "." + raw[1])
+	if err != nil {
+		return nil, err
+	}
+	frames := make([]Frame, (len(raw)-2)/2)
 	size := 0
-	for i, blob := range raw {
+	for i := range frames {
+		blob := raw[2+i*2]
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -265,6 +280,11 @@ func (r *Redis) Current(ctx context.Context, id string, track Track) ([]Frame, e
 		if err != nil {
 			return nil, err
 		} // never expose a partial authenticated group
+		arrived, err := redisTime(raw[3+i*2])
+		if err != nil {
+			return nil, err
+		}
+		frames[i].ageAtRead, frames[i].readAt = serverNow.Sub(arrived), readAt
 		n, err := frameSize(frames[i])
 		if err != nil {
 			return nil, err
@@ -292,4 +312,21 @@ func (r *Redis) DeleteSession(ctx context.Context, id string) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	return r.client.Del(ctx, r.key(id)).Err()
+}
+
+// Redis TIME returns seconds plus microseconds, without zero padding.
+func redisTime(raw string) (time.Time, error) {
+	sec, micros, ok := strings.Cut(raw, ".")
+	if !ok {
+		return time.Time{}, errEncoding
+	}
+	s, err := strconv.ParseInt(sec, 10, 64)
+	if err != nil {
+		return time.Time{}, errEncoding
+	}
+	us, err := strconv.ParseInt(micros, 10, 64)
+	if err != nil || us < 0 || us >= 1000000 {
+		return time.Time{}, errEncoding
+	}
+	return time.Unix(s, us*1000), nil
 }

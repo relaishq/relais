@@ -236,7 +236,8 @@ type Worker struct {
 	replayStatsMu             sync.Mutex
 	replayStats               ReplayStats
 	cacheQueueMu              sync.Mutex
-	cacheQueue                chan cacheAppend
+	cacheQueues               [cacheConsumers]chan cacheAppend
+	cacheLastWarning          time.Time
 	cacheQueueClosed          bool
 	cachePending, cacheBytes  int
 	cacheDropped, cacheErrors uint64
@@ -319,16 +320,15 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 		mediaAddr = cfg.Relay.PublicAddr
 	}
 	worker := &Worker{
-		cfg:        cfg,
-		log:        cfg.LoggerFactory.NewLogger("mediaworker"),
-		conn:       conn,
-		localAddr:  localAddr,
-		mediaAddr:  mediaAddr,
-		readDone:   make(chan struct{}),
-		stopRenew:  make(chan struct{}),
-		cacheQueue: make(chan cacheAppend, cacheQueueFrames),
-		sessions:   make(map[string]*session),
-		byAddr:     make(map[netip.AddrPort]*session),
+		cfg:       cfg,
+		log:       cfg.LoggerFactory.NewLogger("mediaworker"),
+		conn:      conn,
+		localAddr: localAddr,
+		mediaAddr: mediaAddr,
+		readDone:  make(chan struct{}),
+		stopRenew: make(chan struct{}),
+		sessions:  make(map[string]*session),
+		byAddr:    make(map[netip.AddrPort]*session),
 	}
 	if cfg.Relay != nil {
 		workerprobe.Register(localAddr, worker.captureZombie)
@@ -337,8 +337,11 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 			SnapshotReady: func(id string) bool { s := worker.session(id); return s != nil && s.snapshotStored.Load() },
 		})
 	}
-	worker.running.Add(1)
-	go worker.runCacheAppends()
+	for i := range worker.cacheQueues {
+		worker.cacheQueues[i] = make(chan cacheAppend, cacheQueueFrames)
+		worker.running.Add(1)
+		go worker.runCacheAppends(worker.cacheQueues[i])
+	}
 	go worker.readLoop()
 	if cfg.Relay != nil {
 		worker.running.Add(1)

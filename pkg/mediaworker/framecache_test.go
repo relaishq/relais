@@ -7,12 +7,14 @@ import (
 	"github.com/pion/srtp/v3"
 	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
+	"hash/fnv"
 	"net"
 	"net/netip"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/pion/logging"
 	"github.com/pion/rtp"
 	"github.com/relais/pkg/framecache"
 	"github.com/stretchr/testify/require"
@@ -863,6 +865,7 @@ func TestFrameCacheQueueBoundsDoNotBlockPacketPath(t *testing.T) {
 	require.LessOrEqual(t, w.ReplayStats().AppendBytes, cacheQueueBytes)
 	sess.close() // cancels the in-flight append; queued appends must be discarded
 	require.Eventually(t, func() bool { return w.ReplayStats().AppendPending == 0 }, time.Second, time.Millisecond)
+	require.Zero(t, w.ReplayStats().AppendErrors, "hangup is not failed I/O")
 	frames, err := cache.Current(context.Background(), sess.id, large.Track)
 	require.NoError(t, err)
 	require.Empty(t, frames, "queued work cannot resurrect hangup")
@@ -893,4 +896,117 @@ func TestFrameCacheQueuePayloadBound(t *testing.T) {
 	require.Equal(t, 8, w.ReplayStats().AppendPending)
 	sess.close()
 	require.Eventually(t, func() bool { return w.ReplayStats().AppendPending == 0 }, time.Second, time.Millisecond)
+}
+
+type shardedFrameCache struct {
+	framecache.Store
+	entered chan string
+	release chan struct{}
+	mu      sync.Mutex
+	order   map[string][]uint32
+}
+
+func (c *shardedFrameCache) Append(ctx context.Context, id string, f framecache.Frame) error {
+	if f.Timestamp == 1 {
+		c.entered <- id
+		select {
+		case <-c.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	c.mu.Lock()
+	c.order[id] = append(c.order[id], f.Timestamp)
+	c.mu.Unlock()
+	return nil
+}
+func TestFrameCacheShardsMakeProgressAndPreserveSessionOrder(t *testing.T) {
+	w, err := New(Config{consentTimeout: 10 * time.Second})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, w.Close()) })
+	cache := &shardedFrameCache{Store: framecache.NewMemory(framecache.Limits{}), entered: make(chan string, cacheConsumers), release: make(chan struct{}), order: make(map[string][]uint32)}
+	w.cfg.FrameCache = cache
+	// Release even if the concurrent-progress assertion fails.
+	defer func() { close(cache.release) }()
+	ids := make(map[uint32]string)
+	for i := 0; len(ids) < 4; i++ {
+		id := fmt.Sprintf("shard-%d", i)
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(id))
+		ids[h.Sum32()%4] = id
+	}
+	for _, id := range ids {
+		sess := sessionFromState(w, sessionState{ID: id})
+		defer sess.close()
+		for timestamp := uint32(1); timestamp <= 3; timestamp++ {
+			sess.appendFrame(&framecache.Frame{Timestamp: timestamp, Packets: []framecache.Packet{{Marker: true, Payload: []byte{1}}}})
+		}
+	}
+	for range 4 {
+		select {
+		case <-cache.entered:
+		case <-time.After(time.Second):
+			t.Fatal("one blocked session prevents another shard from appending")
+		}
+	}
+	// Release without closing twice in cleanup.
+	for range 4 {
+		cache.release <- struct{}{}
+	}
+	require.Eventually(t, func() bool { return w.ReplayStats().AppendPending == 0 }, time.Second, time.Millisecond)
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	for _, id := range ids {
+		require.Equal(t, []uint32{1, 2, 3}, cache.order[id])
+	}
+}
+
+type immediateCacheFailure struct{ framecache.Store }
+
+func (c *immediateCacheFailure) Append(context.Context, string, framecache.Frame) error {
+	return errors.New("cache unavailable")
+}
+
+type cacheWarningLogger struct {
+	logging.LeveledLogger
+	mu       sync.Mutex
+	warnings int
+}
+
+func (l *cacheWarningLogger) Warnf(string, ...any) {
+	l.mu.Lock()
+	l.warnings++
+	l.mu.Unlock()
+}
+func (l *cacheWarningLogger) count() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.warnings
+}
+func TestFrameCacheFailureWarningsAreRateLimited(t *testing.T) {
+	w, err := New(Config{consentTimeout: 10 * time.Second})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, w.Close()) })
+	w.cfg.FrameCache = &immediateCacheFailure{Store: framecache.NewMemory(framecache.Limits{})}
+	logger := &cacheWarningLogger{LeveledLogger: w.log}
+	w.log = logger
+	sess := sessionFromState(w, sessionState{ID: "warning-limit"})
+	defer sess.close()
+	batch := func(n int) {
+		for range n {
+			sess.appendFrame(&framecache.Frame{Packets: []framecache.Packet{{Marker: true, Payload: []byte{1}}}})
+		}
+		require.Eventually(t, func() bool { return w.ReplayStats().AppendPending == 0 }, time.Second, time.Millisecond)
+	}
+	batch(10)
+	require.Eventually(t, func() bool { return logger.count() == 1 }, time.Second, time.Millisecond)
+	batch(10)
+	require.EqualValues(t, 20, w.ReplayStats().AppendErrors, "every failed append is counted")
+	require.Equal(t, 1, logger.count(), "failure bursts do not warn per frame")
+	w.cacheQueueMu.Lock()
+	w.cacheLastWarning = time.Now().Add(-11 * time.Second)
+	w.cacheQueueMu.Unlock()
+	batch(1)
+	require.Eventually(t, func() bool { return logger.count() == 2 }, time.Second, time.Millisecond)
+	require.EqualValues(t, 21, w.ReplayStats().AppendErrors)
 }

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -225,8 +226,7 @@ func trial(ctx context.Context, manager *processManager, bin, dir string, env []
 	if terminate {
 		return measureDrain(report, relayReady.Media, observedUntil), nil
 	}
-	r := measure(report, relayReady.Media, after)
-	return r, nil
+	return measure(report, relayReady.Media, after), nil
 }
 func measure(report *callharness.Report, relayAddr string, after time.Duration) result {
 	r := result{Decrypt: report.DecryptionFailures.Total(), Reconnects: report.ICERestarts, Renegotiations: report.Renegotiations}
@@ -261,14 +261,14 @@ func printTable(results []result) {
 	}
 }
 func run() error {
-	runs := flag.Int("runs", 10, "consecutive real SIGKILL trials")
+	runs := flag.Int("runs", 10, "trials per mode (cache and PLI are interleaved by default)")
 	after := flag.Duration("after", 60*time.Second, "media/consent observation after takeover (60s for acceptance)")
 	binArg := flag.String("bin", "bin", "built binaries and throwaway run directory")
 	redisAddr := flag.String("redis", os.Getenv("RELAIS_REDIS_ADDR"), "explicit dedicated Redis address, or start a throwaway instance")
 	redisBinary := flag.String("redis-server", "redis-server", "Redis executable for the throwaway instance")
 	verbose := flag.Bool("verbose", false, "print full caller reports")
 	compare := flag.Bool("compare-cache", true, "compare Redis cache+PLI with cache-off PLI (runs per mode)")
-	cacheOff := flag.Bool("frame-cache-off", false, "single-mode PLI run (with -compare-cache=false)")
+	cacheOff := flag.Bool("frame-cache-off", false, "run PLI only; disable cache writes and replay (overrides comparison)")
 	terminate := flag.Bool("sigterm", false, "verify graceful owning-worker drain instead of crash takeover")
 	flag.Parse()
 	if *runs < 1 || *after < time.Second {
@@ -322,29 +322,30 @@ func run() error {
 	if *compare && !*terminate && !*cacheOff {
 		modes = []bool{false, true}
 	}
-	all := make([][]result, 0, len(modes))
-	for _, off := range modes {
-		label := "redis-cache+pli"
+	all := make([][]result, len(modes))
+	labels := make([]string, len(modes))
+	for m, off := range modes {
+		labels[m] = "redis-cache+pli"
 		if off {
-			label = "pli-cache-off"
+			labels[m] = "pli-cache-off"
 		}
-		fmt.Printf("MODE %s\n", label)
-		results := []result{}
-		for i := 0; i < *runs; i++ {
+	}
+	for i := 0; i < *runs; i++ {
+		for m, off := range modes {
+			label := labels[m]
+			fmt.Printf("TRIAL %d MODE %s\n", i+1, label)
 			trialDir := filepath.Join(dir, fmt.Sprintf("%s-%02d", label, i+1))
 			if err := os.Mkdir(trialDir, 0700); err != nil {
 				return err
 			}
 			env := processEnv(hex.EncodeToString(key[:]), addr, fmt.Sprintf("relais:crash:%s:%s:%d:", filepath.Base(dir), label, i))
 			trialCtx, stop := context.WithTimeout(ctx, *after+30*time.Second)
-			// Use the same phases in both modes. The small embedded 320x240 fixture
-			// fits #9's unchanged admission budget in this part of its keyframe group.
-			// A dense 720p group generally exceeds it and falls back to PLI.
+			// Identical phases for both modes, sampling #9's unchanged budget.
 			warmup := 1550*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
 			r, err := trial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, *terminate, off)
 			stop()
-			results = append(results, r)
-			printTable(results)
+			all[m] = append(all[m], r)
+			printTable(all[m])
 			if err != nil {
 				return err
 			}
@@ -355,23 +356,19 @@ func run() error {
 				return errors.New("cache-off run did not prove PLI attribution")
 			}
 		}
-		labelSignal := "SIGKILL"
-		if *terminate {
-			labelSignal = "SIGTERM drain"
-		}
-		fmt.Printf("PASS: %d consecutive real-process %s trials mode=%s\n", len(results), labelSignal, label)
-		all = append(all, results)
+	}
+	signal := "SIGKILL"
+	if *terminate {
+		signal = "SIGTERM drain"
+	}
+	for m, results := range all {
+		fmt.Printf("PASS: %d/%d real-process %s trials mode=%s cache_attributed=%d/%d\n", len(results), *runs, signal, labels[m], cacheAttributions(results), len(results))
+		printPathMedians(labels[m], results)
 	}
 	if len(all) == 2 {
 		printComparison(all[0], all[1])
-		cacheFrames := 0
-		for _, r := range all[0] {
-			if r.Path == "Cache" && r.ReplayPackets > 0 {
-				cacheFrames++
-			}
-		}
-		if cacheFrames == 0 {
-			return errors.New("cross-process cached decode NOT-PROVEN: every run fell back to PLI")
+		if cacheAttributions(all[0]) == 0 {
+			return errors.New("cross-process cached decode NOT-PROVEN: cache_attributed=0; every run fell back to PLI")
 		}
 	}
 	return nil
@@ -417,5 +414,44 @@ func printComparison(cache, pli []result) {
 	for i, c := range cache {
 		p := pli[i]
 		fmt.Printf("%3d  %16.1f  %13.1f  %-10s  %-15s  %14.1f  %11.1f  %s\n", i+1, float64(c.Decoded)/float64(time.Millisecond), float64(c.Live)/float64(time.Millisecond), c.Path, c.LivePath, float64(p.Decoded)/float64(time.Millisecond), float64(p.Live)/float64(time.Millisecond), p.Path)
+	}
+}
+
+func cacheAttributions(results []result) int {
+	n := 0
+	for _, r := range results {
+		if r.Path == "Cache" && r.ReplayPackets > 0 {
+			n++
+		}
+	}
+	return n
+}
+func median(values []time.Duration) time.Duration {
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	n := len(values)
+	if n%2 == 1 {
+		return values[n/2]
+	}
+	return values[n/2-1] + (values[n/2]-values[n/2-1])/2
+}
+func printPathMedians(mode string, results []result) {
+	for _, path := range []string{"Cache", "Keyframe", "Live"} {
+		var decoded, live []time.Duration
+		for _, r := range results {
+			if r.Path == path {
+				decoded = append(decoded, r.Decoded)
+			}
+		}
+		for _, r := range results {
+			if r.LivePath == path {
+				live = append(live, r.Live)
+			}
+		}
+		if len(decoded) > 0 {
+			fmt.Printf("PATH_MEDIAN mode=%s path=%s decoded_runs=%d decoded_ms=%.1f\n", mode, path, len(decoded), float64(median(decoded))/float64(time.Millisecond))
+		}
+		if len(live) > 0 {
+			fmt.Printf("PATH_MEDIAN mode=%s path=%s live_runs=%d live_ms=%.1f\n", mode, path, len(live), float64(median(live))/float64(time.Millisecond))
+		}
 	}
 }

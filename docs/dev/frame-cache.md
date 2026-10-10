@@ -25,7 +25,7 @@ containing braces are rejected. The process commands refuse port 6379.
 `callharness.Options.FrameCache` selects a caller-owned store for either local
 harness topology. Nil selects Memory. External topology owns its stores in the
 separate processes. `relais-worker -frame-cache-off` disables writes and replay
-while keeping the takeover PLI enabled.
+while keeping the takeover PLI enabled. It does not open a frame-cache client.
 
 ## Binary records and encryption
 
@@ -60,14 +60,21 @@ or a protection against a Redis administrator rolling back an entire group.
 Each session has one Redis hash, `PREFIXframes:{sess:SESSION_ID}`. Track fields
 use hex track-kind bytes and decimal SSRC to avoid aliases. A track's `b/n/s/t`
 fields hold payload bytes, frame count, last sequence and timestamp; `f1..fn`
-hold encrypted binary records. Unusual session IDs are escaped to avoid
+hold encrypted binary records. Matching `a1..an` fields hold Redis server arrival
+times. Unusual session IDs are escaped to avoid
 braces changing the Cluster hash tag.
 
 One Lua script per append validates continuity and atomically replaces a
 keyframe group, appends a complete frame, or removes the whole group. An
 incomplete frame is rejected before I/O. A sequence hole, non-forward timestamp,
 byte overflow or frame overflow makes the group unavailable until the next
-complete keyframe. The read script returns all frames atomically. Ambiguous
+complete keyframe. The read script returns all frames atomically. Append stamps Redis `TIME`
+for each accepted frame; read returns Redis `TIME` with those stamps. Replay
+age uses their difference, then advances on the reader's local monotonic clock.
+Worker wall-clock skew does not affect it. Groups written before server-time
+metadata was introduced cause a cache miss until the next complete keyframe. The original arrival time stays in
+the encrypted frame for diagnostics. Server timing is advisory metadata; Redis
+clock changes are still bounded by #9's zero-to-two-second age clamp. Ambiguous
 network failures are never retried: duplicate appends could damage continuity.
 
 Defaults match Memory: 8 MiB of payload and 300 frames per track, with a 30 s
@@ -85,8 +92,11 @@ this change's live integration verification uses standalone Redis.
 
 ## Packet path and slow Redis
 
-Each worker has one ordered append consumer, with at most 32 complete frames
-and 8 MiB of queued payload **including the append in flight**. The UDP reader
+Each worker has four append consumers, selected by a stable session hash.
+Appends remain ordered within each session; up to four Redis operations run
+concurrently (about 4/RTT aggregate capacity when sessions occupy all shards).
+The shared limit is 32 complete frames and 8 MiB of queued payload **including
+all appends in flight**. A slow session can still delay others on its shard. The UDP reader
 only transfers a completed frame to this queue. Saturation drops new appends,
 never blocks media or allocates another goroutine. `ReplayStats` (also in the
 worker's private status API) exposes `AppendDropped`, `AppendErrors`,
@@ -95,19 +105,24 @@ cached group, so dropped work cannot produce a truncated replay group.
 
 Append has a bounded context. Queued work checks session cancellation/fencing,
 and local deletion serializes with append; shutdown discards the queue and
-joins its consumer. The existing takeover `Current` budget remains 150 ms;
+joins all four consumers. Hangup cancellation does not count as an append
+error. Failed I/O warnings are limited to one per worker per ten seconds;
+`AppendErrors` still counts every failure. The existing takeover `Current` budget remains 150 ms;
 read timeout, authentication failure or missing data yields a cache miss and
 PLI fallback. The cache remains advisory during Redis failure.
 
 ## Recovery measurements and limits
 
 `make crash-run` now runs ten real-process SIGKILL trials **per mode**:
-Redis cache plus PLI, then cache off plus PLI. Each trial preserves 60 s of
+Redis cache plus PLI and cache off plus PLI, interleaved within each trial. Each trial preserves 60 s of
 post-takeover media/consent observation. It prints first-decoded and first-live
 latency from SIGKILL, first/live attribution, replay packet count, decryption,
 connection and takeover checks, followed by a paired `CACHE_VS_PLI` table. The
 cache-off trials require Keyframe attribution and zero replay packets. A
-comparison that never decodes a cached picture fails explicitly.
+comparison that never decodes a cached picture fails explicitly. Pass lines
+report the cache-attributed count, and summaries report median first-picture
+and live-video latency separately for each attributed path. The full-matrix
+CI job allows 35 minutes for the twenty trials (about 21 minutes locally).
 
 The embedded 320x240/30 fps fixture is killed 1.550 s into sending (plus 7 ms
 per trial, identical phases for both modes). This samples an admissible current
@@ -120,7 +135,8 @@ make crash-run CRASH_FLAGS='-runs 2 -after 2s'
 ```
 
 That prints DEVELOPMENT RUN and does **not** verify 60 s consent acceptance.
-`-compare-cache=false -frame-cache-off` selects one PLI-only mode. `-sigterm`
+`-frame-cache-off` selects one PLI-only mode and overrides comparison.
+`-compare-cache=false` selects one cache-plus-PLI mode. `-sigterm`
 retains the planned-drain check and does not run crash comparison.
 
 The finding from #9 still applies: in this one-worker echo topology, replay

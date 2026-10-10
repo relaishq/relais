@@ -135,3 +135,22 @@ func TestRedisCurrentHonorsReadDeadline(t *testing.T) {
 	require.NoError(t, r.Close())
 	<-done
 }
+
+func TestRedisReplayAgeIgnoresHostClockSkew(t *testing.T) {
+	r := testRedis(t, Limits{})
+	for _, skew := range []time.Duration{-24 * time.Hour, 24 * time.Hour} {
+		f := testFrame(1, true)
+		f.Arrival = time.Now().Add(skew)
+		require.NoError(t, r.Append(context.Background(), "skew", f))
+		time.Sleep(50 * time.Millisecond)
+		frames, err := r.Current(context.Background(), "skew", f.Track)
+		require.NoError(t, err)
+		require.Len(t, frames, 1)
+		require.True(t, f.Arrival.Equal(frames[0].Arrival), "diagnostic arrival is preserved")
+		age := frames[0].ReplayAge(time.Now())
+		require.GreaterOrEqual(t, age, 50*time.Millisecond)
+		require.Less(t, age, time.Second, "replay age comes from Redis, not either host")
+		later := frames[0].ReplayAge(frames[0].readAt.Add(100 * time.Millisecond))
+		require.Equal(t, frames[0].ageAtRead+100*time.Millisecond, later)
+	}
+}

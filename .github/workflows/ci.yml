@@ -83,14 +83,14 @@ jobs:
       redis:
         image: redis:7
         ports:
-          - 6379:6379
+          - 16379:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
     env:
-      RELAIS_TEST_REDIS_ADDR: "127.0.0.1:6379"
+      RELAIS_TEST_REDIS_ADDR: "127.0.0.1:16379"
       RELAIS_TEST_REDIS_REQUIRE: "1"
     steps:
       - uses: actions/checkout@v6
@@ -109,14 +109,14 @@ jobs:
       redis:
         image: redis:7
         ports:
-          - 6379:6379
+          - 16379:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
     env:
-      RELAIS_TEST_REDIS_ADDR: "127.0.0.1:6379"
+      RELAIS_TEST_REDIS_ADDR: "127.0.0.1:16379"
       RELAIS_TEST_REDIS_REQUIRE: "1"
       RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
     steps:
@@ -157,6 +157,7 @@ jobs:
         run: make test-harness-smoke
 
   crash-run:
+    timeout-minutes: 35
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -168,7 +169,7 @@ jobs:
       - name: Install Redis and ffmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
       # The driver starts and stops its own Redis on a free loopback port.
-      - name: Run ten real-process SIGKILL trials
+      - name: Run twenty interleaved SIGKILL trials (ten per mode)
         run: make crash-run
       - name: Upload crash-run failure logs
         if: failure()

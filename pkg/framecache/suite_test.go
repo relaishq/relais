@@ -6,12 +6,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"net"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/relais/internal/redisendpoint"
 	"github.com/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -25,11 +25,9 @@ func testRedis(t *testing.T, limits Limits, options ...RedisOptions) *Redis {
 		}
 		t.Skip("Redis requires RELAIS_TEST_REDIS_ADDR")
 	}
-	_, port, err := net.SplitHostPort(addr)
-	require.NoError(t, err)
-	require.NotEqual(t, "6379", port, "tests must use a dedicated Redis")
+	require.NoError(t, redisendpoint.Validate(addr), "tests must use a dedicated Redis")
 	var token [16]byte
-	_, err = rand.Read(token[:])
+	_, err := rand.Read(token[:])
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -63,7 +61,9 @@ func TestStoreCurrentGroup(t *testing.T) {
 		frames, err := store.Current(ctx, "s", testTrack)
 		require.NoError(t, err)
 		require.Len(t, frames, 10)
+		frames[0].ageAtRead, frames[0].readAt = 0, time.Time{}
 		require.Equal(t, testFrame(91, true), frames[0])
+		frames[9].ageAtRead, frames[9].readAt = 0, time.Time{}
 		require.Equal(t, testFrame(100, false), frames[9])
 	})
 }
@@ -179,18 +179,18 @@ func TestStoreSerialWrapAndTimestampLoss(t *testing.T) {
 }
 func TestStoreIdleTTL(t *testing.T) {
 	forStores(t, func(t *testing.T, newStore func(Limits) Store) {
-		store := newStore(Limits{IdleTTL: 100 * time.Millisecond})
+		store := newStore(Limits{IdleTTL: 300 * time.Millisecond})
 		ctx := context.Background()
 		require.NoError(t, store.Append(ctx, "s", testFrame(1, true)))
-		time.Sleep(60 * time.Millisecond)
+		time.Sleep(180 * time.Millisecond)
 		frames, err := store.Current(ctx, "s", testTrack)
 		require.NoError(t, err)
 		require.Len(t, frames, 1)
-		time.Sleep(60 * time.Millisecond)
+		time.Sleep(180 * time.Millisecond)
 		frames, err = store.Current(ctx, "s", testTrack)
 		require.NoError(t, err)
 		require.Len(t, frames, 1, "read refreshes idle expiry")
-		time.Sleep(130 * time.Millisecond)
+		time.Sleep(390 * time.Millisecond)
 		frames, err = store.Current(ctx, "s", testTrack)
 		require.NoError(t, err)
 		require.Empty(t, frames)

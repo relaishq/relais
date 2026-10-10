@@ -2,6 +2,7 @@ package mediaworker
 
 import (
 	"context"
+	"hash/fnv"
 	"time"
 
 	"github.com/pion/rtp"
@@ -54,10 +55,11 @@ func (a *frameCollector) push(in *rtp.Packet, track framecache.Track) *framecach
 	return &f
 }
 
-// Each worker has one ordered queue, capped by both complete-frame count and
-// payload bytes, including the append in flight. Slow Redis cannot hold the
+// Each worker has four session-hashed ordered queues, with a shared cap on
+// complete-frame count and payload bytes, including all appends in flight. Slow Redis cannot hold the
 // UDP reader or create unbounded work. A dropped frame leaves a sequence hole;
 // the Store then discards the group until the next complete keyframe.
+const cacheConsumers = 4
 const cacheQueueFrames = 32
 const cacheQueueBytes = 8 << 20
 
@@ -89,9 +91,11 @@ func (s *session) appendFrame(f *framecache.Frame) {
 	// is independent of the reader's reusable decrypt buffer.
 	w.cachePending++
 	w.cacheBytes += bytes
-	w.cacheQueue <- cacheAppend{session: s, frame: *f, bytes: bytes}
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(s.id))
+	w.cacheQueues[hash.Sum32()%cacheConsumers] <- cacheAppend{session: s, frame: *f, bytes: bytes}
 }
-func (w *Worker) runCacheAppends() {
+func (w *Worker) runCacheAppends(queue <-chan cacheAppend) {
 	defer w.running.Done()
 	defer func() {
 		w.cacheQueueMu.Lock()
@@ -99,7 +103,7 @@ func (w *Worker) runCacheAppends() {
 		w.cacheQueueClosed = true
 		for {
 			select {
-			case job := <-w.cacheQueue:
+			case job := <-queue:
 				w.cachePending--
 				w.cacheBytes -= job.bytes
 			default:
@@ -116,15 +120,25 @@ func (w *Worker) runCacheAppends() {
 		select {
 		case <-w.stopRenew:
 			return
-		case job := <-w.cacheQueue:
+		case job := <-queue:
 			err := job.session.storeFrame(job.frame)
 			w.cacheQueueMu.Lock()
 			w.cachePending--
 			w.cacheBytes -= job.bytes
+			warn := false
 			if err != nil {
 				w.cacheErrors++
+				// One warning per worker per interval, regardless of session count.
+				if time.Since(w.cacheLastWarning) >= 10*time.Second {
+					w.cacheLastWarning = time.Now()
+					warn = true
+				}
 			}
+			errors := w.cacheErrors
 			w.cacheQueueMu.Unlock()
+			if warn {
+				w.log.Warnf("cache append failed (errors=%d): %v", errors, err)
+			}
 		}
 	}
 }
@@ -140,8 +154,8 @@ func (s *session) storeFrame(f framecache.Frame) error {
 	ctx, cancel := context.WithTimeout(s.ctx, ownershipTimeout)
 	defer cancel()
 	err := s.worker.cfg.FrameCache.Append(ctx, s.id, f)
-	if err != nil && s.ctx.Err() == nil {
-		s.log.Warnf("session %s: cache frame: %v", s.id, err)
+	if s.ctx.Err() != nil {
+		return nil
 	}
 	return err
 }
@@ -227,7 +241,7 @@ func (s *session) reserveReplay(frames []framecache.Frame, margin uint16) bool {
 		track.InboundSSRC = first.SourceSSRC
 		track.SeqOffset = track.InitialSeq - first.Packets[0].SequenceNumber
 	}
-	age := min(max(time.Since(last.Arrival), 0), 2*time.Second)
+	age := min(max(last.ReplayAge(time.Now()), 0), 2*time.Second)
 	// Never compare an unanchored random clock with zero using serial math.
 	// Start at least one source frame interval after the last cached echo.
 	ts := last.EchoTimestamp + max(uint32(age.Seconds()*90000), interval)
