@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strings"
@@ -27,6 +29,8 @@ type demo struct {
 	ctx                        context.Context
 	client                     *http.Client
 	control, relay, redis, dir string
+	publicHost                 string     // exact opt-in page IP; empty means loopback only
+	launchToken                string     // per-launch LAN mutation capability
 	op                         sync.Mutex // serialize actions, including recycled workers
 	mu                         sync.Mutex // status can poll during recovery
 	workers                    map[string]*workerProcess
@@ -338,13 +342,27 @@ func (d *demo) handler(files http.Handler) http.Handler {
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
 		}
-		if host != "localhost" && host != "127.0.0.1" && host != "::1" && host != "[::1]" {
+		allowed := host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+		if d.publicHost != "" {
+			ip, err := netip.ParseAddr(host)
+			selected, selectedErr := netip.ParseAddr(d.publicHost)
+			allowed = err == nil && selectedErr == nil && ip.Is4() && ip == selected
+		}
+		if !allowed {
 			http.Error(w, "demo Host refused", http.StatusForbidden)
+			return
+		}
+		if d.publicHost != "" && r.Method != http.MethodGet && (d.launchToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Relais-Demo-Token")), []byte(d.launchToken)) != 1) {
+			http.Error(w, "demo launch token required", http.StatusForbidden)
 			return
 		}
 		// Block web pages on other origins from controlling local child processes.
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+r.Host {
+			scheme := "http"
+			if r.TLS != nil {
+				scheme = "https"
+			}
+			if origin := r.Header.Get("Origin"); origin != "" && origin != scheme+"://"+r.Host {
 				http.Error(w, "cross-origin demo action refused", http.StatusForbidden)
 				return
 			}
