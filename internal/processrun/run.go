@@ -89,13 +89,8 @@ func Context() (context.Context, context.CancelFunc) {
 
 // ListenPrivate refuses accidental public exposure of unauthenticated APIs.
 func ListenPrivate(addr string) (net.Listener, error) {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
+	if err := ValidatePrivateListener(addr, os.Getenv("RELAIS_PRIVATE_NETS")); err != nil {
 		return nil, err
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return nil, errors.New("private HTTP listener must use a literal loopback IP")
 	}
 	return net.Listen("tcp", addr)
 }

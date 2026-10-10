@@ -217,3 +217,41 @@ jobs:
 
       - name: Run Redis Cluster tests
         run: make test-cluster
+
+  netns-crash-run:
+    timeout-minutes: 35
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+      - name: Install namespace tools, Redis and ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2 iptables procps redis-server ffmpeg
+      - name: Build as the normal user
+        run: |
+          make build
+          go test -c -o bin/nettopology.test ./internal/nettopology
+          go test -c -o bin/clusterprocess.test ./internal/clusterprocess
+      - name: Verify namespace isolation and cleanup
+        run: |
+          set -o pipefail
+          sudo -E env RELAIS_TEST_NETNS_REQUIRE=1 ./bin/nettopology.test -test.v -test.timeout=3m 2>&1 | tee bin/netns-tests.log
+          sudo -E ./bin/clusterprocess.test -test.v -test.timeout=3m 2>&1 | tee bin/netns-process-tests.log
+      - name: Run twenty namespaced LAN SIGKILL trials (ten per mode)
+        run: |
+          set -o pipefail
+          sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -topology=netns -profile=lan 2>&1 | tee bin/netns-crash-run.log
+      - name: Make root-owned driver logs readable for artifact upload
+        if: always()
+        run: sudo find bin -maxdepth 1 -type d -name 'crash-run-*' -exec chmod -R a+rX {} +
+      - name: Upload namespace failure logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: netns-crash-run-logs
+          path: |
+            bin/netns-*.log
+            bin/crash-run-*

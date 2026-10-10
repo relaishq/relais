@@ -38,6 +38,8 @@ const (
 type callerSocket struct {
 	mux      *ice.UDPMuxDefault
 	observer *stunObserver
+	// Nil retains the existing loopback-only candidate filter.
+	candidateIP net.IP
 }
 
 // newCallerSocket opens a loopback UDP socket for one call.
@@ -46,6 +48,10 @@ func newCallerSocket(rec *recorder) (*callerSocket, error) {
 	if err != nil {
 		return nil, fmt.Errorf("callharness: caller socket: %w", err)
 	}
+	return wrapCallerSocket(rec, conn), nil
+}
+
+func wrapCallerSocket(rec *recorder, conn net.PacketConn) *callerSocket {
 	observer := &stunObserver{conn: conn, rec: rec, unanswered: make(map[[stunTransactionSize]byte]struct{})}
 
 	return &callerSocket{
@@ -54,7 +60,7 @@ func newCallerSocket(rec *recorder) (*callerSocket, error) {
 			Logger:  logging.NewDefaultLoggerFactory().NewLogger("ice"),
 		}),
 		observer: observer,
-	}, nil
+	}
 }
 
 // close closes the mux and the socket under it.
