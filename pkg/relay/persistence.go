@@ -168,17 +168,20 @@ func (r *Relay) restoreRoutes() {
 		}
 		return routes[i].SessionID < routes[j].SessionID
 	})
-	restored := make(map[netip.AddrPort]bool)
+	decided := make(map[netip.AddrPort]bool)
 	for _, route := range routes {
+		// The newest record decides this address even when its owner is unknown.
+		// Falling back would route it to a different, older session.
+		duplicate := decided[route.Caller]
+		decided[route.Caller] = true
 		lease, ok := leases[route.SessionID]
-		if ok && lease.Epoch == route.Generation && !restored[route.Caller] && r.flows.restore(route, unmap(lease.Worker), time.Now()) {
-			restored[route.Caller] = true
+		if ok && lease.Epoch == route.Generation && !duplicate && r.flows.restore(route, unmap(lease.Worker), time.Now()) {
 			r.routesRestored.Add(1)
 		} else {
 			r.routesRestoreSkipped.Add(1)
 			// Never delete an otherwise valid record just because startup ran out
 			// of time/space. Expired, fenced and duplicate evidence can be removed.
-			if ok && lease.Epoch != route.Generation || restored[route.Caller] || !time.Now().Before(route.ExpiresAt) {
+			if ok && lease.Epoch != route.Generation || duplicate || !time.Now().Before(route.ExpiresAt) {
 				if ctx.Err() == nil {
 					loadErr = errors.Join(loadErr, r.cfg.Routes.DeleteRoute(ctx, route))
 				}

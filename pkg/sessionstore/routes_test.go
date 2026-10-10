@@ -3,6 +3,7 @@ package sessionstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/netip"
 	"os"
 	"strings"
@@ -290,4 +291,56 @@ func TestSamePairNominationPreservesBackupBothStores(t *testing.T) {
 		require.NoError(t, err)
 		require.ElementsMatch(t, []Route{primary, backup}, loaded)
 	})
+}
+
+// Drop one real pipelined lease reply while leaving the other session readable.
+type failedRouteLeaseHook struct {
+	lostResponseHook
+	leaseKey string
+	err      error
+}
+
+func (h *failedRouteLeaseHook) AfterProcessPipeline(_ context.Context, cmds []redis.Cmder) error {
+	for _, cmd := range cmds {
+		args := sessionCommandArgs(cmd)
+		wire := cmd.Args()
+		if cmd.Name() == "eval" && len(wire) > 3 && wire[3] == h.leaseKey && len(args) > 0 && args[0] == "get" {
+			cmd.SetErr(h.err)
+		}
+	}
+	return nil
+}
+
+func TestRedisRouteLoaderRetainsAddressWithFailedNewestLease(t *testing.T) {
+	r := testRedis(t)
+	ctx := context.Background()
+	caller := netip.MustParseAddrPort("127.0.0.1:5911")
+	olderLease, err := r.Claim(ctx, "older", netip.MustParseAddrPort("127.0.0.1:4911"), time.Minute)
+	require.NoError(t, err)
+	newerLease, err := r.Claim(ctx, "newer", netip.MustParseAddrPort("127.0.0.1:4912"), time.Minute)
+	require.NoError(t, err)
+	older := routeFor(olderLease, caller, time.Minute)
+	newer := older
+	newer.SessionID, newer.Generation = newerLease.SessionID, newerLease.Epoch
+	newer.LastAuthenticated = older.LastAuthenticated.Add(time.Millisecond)
+	for _, route := range []Route{older, newer} {
+		require.NoError(t, r.PutRoute(ctx, route, false))
+	}
+	fault := errors.New("newest lease read failed")
+	r.client.AddHook(&failedRouteLeaseHook{leaseKey: r.keys(newer.SessionID)[0], err: fault})
+	loaded, owners, err := r.LoadRouteOwners(ctx, 10)
+	require.ErrorIs(t, err, fault)
+	require.ElementsMatch(t, []Route{older, newer}, loaded, "failed lease evidence must still reserve its caller address")
+	require.Equal(t, olderLease, owners[older.SessionID])
+	_, known := owners[newer.SessionID]
+	require.False(t, known, "a failed lease read must not become an authoritative missing lease")
+	loaded, owners, err = r.LoadRouteOwners(ctx, 1)
+	require.ErrorIs(t, err, fault)
+	require.ErrorIs(t, err, ErrRouteLimit)
+	require.Equal(t, []Route{newer}, loaded, "a full batch must still reserve a loaded address with its newest evidence")
+	_, known = owners[newer.SessionID]
+	require.False(t, known)
+	raw, err := r.client.HGet(ctx, r.keys(newer.SessionID)[4], caller.String()).Result()
+	require.NoError(t, err)
+	require.NotEmpty(t, raw, "a transient read failure must not delete the newest evidence")
 }

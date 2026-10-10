@@ -29,8 +29,12 @@ reconnecting callers or exposing their media keys to the relay.
   lease read per session hash. Successful masters retain their partial results
   if another master fails. Expired fields are pruned before limits or lease
   reads. For duplicate addresses, the latest authenticated time wins, then the
-  latest confirmation time; losing records are deleted. UDP source floods never
-  initiate restore reads or scans.
+  latest confirmation time; losing records are deleted. The newest loaded record
+  decides its address even when its lease read fails: count it as skipped and
+  leave the address unrestored, rather than route to an older session. Redis
+  retains failed lease candidates without owner entries so this decision is
+  independent of scan order, even when the batch is full for a loaded address.
+  UDP source floods never initiate restore reads or scans.
 - Preserve the original authenticated request time. Restoration, movement,
   ordinary media, unanswered checks and unmatched/replayed successes never
   renew consent. The restored address remains sticky for the remainder of its
@@ -53,10 +57,14 @@ reconnecting callers or exposing their media keys to the relay.
   the same lifecycle under its lease lock. Each session hash holds at most eight
   address fields: writes prune
   expired fields and evict the oldest authenticated evidence on address churn.
-  Memory applies the same cap. Re-nomination at a new address or session removes
-  old addresses after the worker authenticates `USE-CANDIDATE`. Repeated
-  nominations at the same session/address are ordinary throttled renewals and
-  preserve backup routes. A nomination watermark
+  Memory applies the same cap. A nomination at an address not yet confirmed for
+  that session removes old addresses after the worker authenticates
+  `USE-CANDIDATE`. A nomination at an already confirmed session/address is an
+  ordinary throttled renewal, including a switch from the previously nominated
+  address to a confirmed backup. Both addresses keep forwarding and remain
+  eligible for restoration until their normal invalidation or expiry. The relay
+  does not track the session's last nominated address. This preserves confirmed
+  backup paths and the existing same-pair write rules. A nomination watermark
   rejects delayed writes that would recreate an older address. Trusted movement
   republishes the route with its new epoch and unchanged confirmation/consent
   times. `ForgetSession` queues deletion even if the store still has a lease.

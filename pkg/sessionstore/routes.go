@@ -39,6 +39,9 @@ type Routes interface {
 
 // RouteLoader supplies the leases read with a startup batch, avoiding a second
 // owner read per route. Partial batches remain usable when an error is returned.
+// A failed lease read retains its route candidates but omits the session from
+// the owner map. Such evidence reserves an address against older records; it
+// cannot be restored or treated as an authoritative missing lease.
 type RouteLoader interface {
 	LoadRouteOwners(context.Context, int) ([]Route, map[string]Lease, error)
 }

@@ -486,3 +486,124 @@ func TestRestoreErrorAndDeadlineRetainAlreadyLoadedEvidence(t *testing.T) {
 		})
 	}
 }
+
+// The load seam can report both records even when Memory normally coalesces
+// them. Lease reads and record cleanup still use the selected backing store.
+type failedLeaseRouteStore struct {
+	partialRouteStore
+	failedSession string
+}
+
+func (s *failedLeaseRouteStore) Get(ctx context.Context, id string) (sessionstore.Lease, error) {
+	if id == s.failedSession {
+		return sessionstore.Lease{}, errors.New("newest lease unavailable")
+	}
+	return s.Routes.Get(ctx, id)
+}
+
+type failedOwnedRouteStore struct {
+	*failedLeaseRouteStore
+}
+
+func (s *failedOwnedRouteStore) LoadRouteOwners(ctx context.Context, limit int) ([]sessionstore.Route, map[string]sessionstore.Lease, error) {
+	records, err := s.LoadRoutes(ctx, limit)
+	owners := make(map[string]sessionstore.Lease)
+	for _, record := range records {
+		lease, readErr := s.Get(ctx, record.SessionID)
+		if readErr != nil {
+			err = errors.Join(err, readErr)
+		} else {
+			owners[record.SessionID] = lease
+		}
+	}
+	return records, owners, err
+}
+
+func TestRestoreNewestLeaseFailureNeverFallsBackBothStores(t *testing.T) {
+	for _, batched := range []bool{false, true} {
+		t.Run(fmt.Sprintf("batched=%v", batched), func(t *testing.T) {
+			for _, reverse := range []bool{false, true} {
+				t.Run(fmt.Sprint(reverse), func(t *testing.T) {
+					routeStores(t, func(t *testing.T, store sessionstore.Store, routes sessionstore.Routes) {
+						sys := startTestRelay(t, Config{Owners: store})
+						a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+						caller := newTestCaller(t)
+						leaseA, err := store.Get(context.Background(), sessionA)
+						require.NoError(t, err)
+						leaseB, err := store.Get(context.Background(), sessionB)
+						require.NoError(t, err)
+						now := time.Now().UTC()
+						old := sessionstore.Route{Caller: caller.addr(), SessionID: sessionA, Generation: leaseA.Epoch, ConfirmedAt: now, LastAuthenticated: now, ExpiresAt: now.Add(time.Minute)}
+						newest := old
+						newest.SessionID, newest.Generation = sessionB, leaseB.Epoch
+						newest.LastAuthenticated = now.Add(time.Millisecond)
+						records := []sessionstore.Route{old, newest}
+						if reverse {
+							records[0], records[1] = records[1], records[0]
+						}
+						for _, record := range records {
+							require.NoError(t, routes.PutRoute(context.Background(), record, false))
+						}
+						failed := &failedLeaseRouteStore{partialRouteStore: partialRouteStore{Routes: routes, records: records}, failedSession: sessionB}
+						sys.cfg.Routes = failed
+						if batched {
+							sys.cfg.Routes = &failedOwnedRouteStore{failedLeaseRouteStore: failed}
+						}
+						sys.restart(t)
+						_, restored := sys.relay.flows.forwardRoute(caller.addr())
+						require.False(t, restored, "an unreadable newer lease must reserve the address without restoring it")
+						require.EqualValues(t, 0, sys.relay.Stats().RoutesRestored)
+						require.EqualValues(t, 2, sys.relay.Stats().RoutesRestoreSkipped)
+						require.EqualValues(t, 1, sys.relay.Stats().RoutesRestoreFailed)
+						caller.send(t, media, sys.relay.PublicAddr())
+						a.expectNothing(t)
+						b.expectNothing(t)
+						loaded, err := routes.LoadRoutes(context.Background(), 10)
+						require.NoError(t, err)
+						require.Equal(t, []sessionstore.Route{newest}, loaded, "keep the unreadable winner for a later restart")
+					})
+				})
+			}
+		})
+	}
+}
+
+func TestNominationSwitchToConfirmedBackupPreservesBothStores(t *testing.T) {
+	routeStores(t, func(t *testing.T, store sessionstore.Store, routes sessionstore.Routes) {
+		sys := startTestRelay(t, Config{Owners: store, Routes: routes})
+		worker := sys.worker(t, sessionA)
+		primary, backup := newTestCaller(t), newTestCaller(t)
+		nominate := func(caller *testCaller) {
+			request, err := stun.Build(stun.BindingRequest, stun.TransactionID, stun.NewUsername(sessionA+":callerufrag"), stun.RawAttribute{Type: stun.AttrUseCandidate})
+			require.NoError(t, err)
+			caller.send(t, request.Raw, sys.relay.PublicAddr())
+			worker.expect(t, caller.addr(), request.Raw)
+			sys.confirm(t, worker, caller, request.Raw)
+		}
+		// Primary is nominated first; backup is confirmed without nomination.
+		nominate(primary)
+		original := persistedRoute(t, routes, primary.addr(), func(sessionstore.Route) bool { return true })
+		sys.connect(t, backup, worker, sessionA)
+		persistedRoute(t, routes, backup.addr(), func(sessionstore.Route) bool { return true })
+		// Force the renewal through persistence, rather than relying on throttling.
+		time.Sleep(time.Second + 10*time.Millisecond)
+		nominate(backup)
+		persistedRoute(t, routes, backup.addr(), func(record sessionstore.Route) bool {
+			return record.LastAuthenticated.After(original.LastAuthenticated.Add(time.Second))
+		})
+		loaded, err := routes.LoadRoutes(context.Background(), 10)
+		require.NoError(t, err)
+		require.Len(t, loaded, 2)
+		require.Contains(t, loaded, original)
+		for _, caller := range []*testCaller{primary, backup} {
+			caller.send(t, media, sys.relay.PublicAddr())
+			worker.expect(t, caller.addr(), media)
+		}
+		sys.restart(t)
+		require.EqualValues(t, 2, sys.relay.Stats().RoutesRestored)
+		for _, caller := range []*testCaller{primary, backup} {
+			caller.send(t, media, sys.relay.PublicAddr())
+			worker.expect(t, caller.addr(), media)
+		}
+	})
+}

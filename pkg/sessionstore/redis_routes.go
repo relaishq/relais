@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -133,6 +134,7 @@ func (r *Redis) LoadRouteOwners(ctx context.Context, limit int) ([]Route, map[st
 	var mu sync.Mutex
 	routes := []Route{}
 	owners := make(map[string]Lease)
+	newest := make(map[netip.AddrPort]int)
 	seen := make(map[string]bool)
 	scan := func(ctx context.Context, client *redis.Client) error {
 		var cursor uint64
@@ -194,29 +196,44 @@ func (r *Redis) LoadRouteOwners(ctx context.Context, limit int) ([]Route, map[st
 			reachedLimit := false
 			for id, cmd := range leases {
 				result, err := cmd.Slice()
-				if err != nil {
-					continue
-				}
 				var lease Lease
-				if len(result) > 0 && result[0] == int64(1) {
+				if err == nil && len(result) > 0 && result[0] == int64(1) {
 					lease, err = decodeLease(id, result)
 				}
 				if err != nil {
 					failures = errors.Join(failures, err)
-					continue
 				}
+				// Keep failed lease candidates with no owner entry. The relay needs
+				// their evidence to prevent an older session winning the address.
 				for _, route := range candidates[id] {
-					if lease.Epoch != route.Generation || !time.Now().Before(route.ExpiresAt) {
+					if !time.Now().Before(route.ExpiresAt) || err == nil && lease.Epoch != route.Generation {
 						raw, _ := routeJSON(route)
 						cleanup.Eval(ctx, deleteRouteLua, []string{r.keys(id)[4]}, route.Caller.String(), raw)
 						continue
 					}
 					mu.Lock()
+					index, seenAddress := newest[route.Caller]
+					newer := !seenAddress || routeEvidenceNewer(route, routes[index]) ||
+						route.LastAuthenticated.Equal(routes[index].LastAuthenticated) &&
+							route.ConfirmedAt.Equal(routes[index].ConfirmedAt) && route.SessionID < routes[index].SessionID
 					if len(routes) >= limit {
 						reachedLimit = true
+						// Even a full partial batch must retain newer evidence for
+						// an address it already contains, including an unknown owner.
+						if seenAddress && newer {
+							routes[index] = route
+							if err == nil {
+								owners[id] = lease
+							}
+						}
 					} else {
+						if newer {
+							newest[route.Caller] = len(routes)
+						}
 						routes = append(routes, route)
-						owners[id] = lease
+						if err == nil {
+							owners[id] = lease
+						}
 					}
 					mu.Unlock()
 				}
