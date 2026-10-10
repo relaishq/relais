@@ -20,6 +20,7 @@ type Sender func([]byte) ([]byte, error)
 type Capture func(string) (Sender, error)
 
 type registration struct {
+	initialSequence *[2]uint16
 	capture         Capture
 	ignoredBarriers int
 	lifecycle       Lifecycle
@@ -279,4 +280,30 @@ func AfterResume(addr netip.AddrPort, id string, pendingPLI bool) {
 	if hook != nil {
 		hook(id, pendingPLI)
 	}
+}
+
+// SetInitialSequences overrides new outbound tracks on one enabled relay
+// worker. It is an internal harness option; production keeps random starts.
+func SetInitialSequences(addr netip.AddrPort, audio, video uint16) error {
+	registry.Lock()
+	defer registry.Unlock()
+	w := registry.workers[addr]
+	if w == nil {
+		return errors.New("workerprobe: no sequence probe")
+	}
+	w.initialSequence = &[2]uint16{audio, video}
+	return nil
+}
+
+// InitialSequences is inert outside an opt-in harness scope.
+func InitialSequences(addr netip.AddrPort) (audio, video uint16, ok bool) {
+	if !enabled.Load() {
+		return 0, 0, false
+	}
+	registry.Lock()
+	defer registry.Unlock()
+	if w := registry.workers[addr]; w != nil && w.initialSequence != nil {
+		return w.initialSequence[0], w.initialSequence[1], true
+	}
+	return 0, 0, false
 }

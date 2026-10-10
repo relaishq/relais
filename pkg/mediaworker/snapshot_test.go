@@ -58,7 +58,7 @@ func TestLeaseLostSnapshotSilentlyDiscardsSession(t *testing.T) {
 }
 
 func TestHandshakeSnapshotMarginSkipsFirstPacketIndexes(t *testing.T) {
-	for _, initial := range []uint16{1200, 50000} {
+	for _, initial := range []uint16{1200, 49151} {
 		t.Run(fmt.Sprint(initial), func(t *testing.T) {
 			profile := srtp.ProtectionProfileAeadAes128Gcm
 			keys := testSessionKeys(t, profile)
@@ -132,13 +132,13 @@ func TestInitialSequenceLeavesRoomForFreshReceiverTakeover(t *testing.T) {
 	}
 }
 
-// A negotiated but idle camera must never roll into ROC 1 before the receiver
-// has seen a packet. Even repeated takeover margins fail before the wrap.
+// An idle camera retains enough ROC-zero runway for the caller to lose its
+// start and still authenticate a high index before the first live wrap.
 func TestUnsentTrackTakeoverRejectsSequenceWrap(t *testing.T) {
 	profile := srtp.ProtectionProfileAeadAes128Gcm
 	keys := testSessionKeys(t, profile)
 	track := trackState{MID: "video", SSRC: 123, InitialSeq: 30000}
-	for range 2 {
+	for range 3 {
 		out := testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
 		sess := &session{srtpOut: out}
 		require.NoError(t, sess.resumeTrack(&track, ResumeOptions{SequenceMargin: 8192}))

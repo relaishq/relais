@@ -31,6 +31,10 @@ const (
 
 // CallOptions shape the call the caller makes.
 type CallOptions struct {
+	// InitialSequenceNumbers replaces random RTP starts for wrap tests. Nil
+	// keeps Pion's random starts. Both tracks keep their normal packetizers.
+	InitialSequenceNumbers *RTPSequenceNumbers
+
 	// Video adds a VP8 video track next to the Opus audio track, on the same
 	// bundled connection.
 	Video bool
@@ -47,6 +51,12 @@ type CallOptions struct {
 	// Worker is the index of the media worker that takes the call (see
 	// Options.Workers); 0 is the first.
 	Worker int
+}
+
+// RTPSequenceNumbers selects deterministic starts for the caller's tracks.
+type RTPSequenceNumbers struct {
+	Audio uint16
+	Video uint16
 }
 
 // KeyframeRequest is an RTCP message that asks a sender for a keyframe.
@@ -78,8 +88,9 @@ type Call struct {
 
 	// keyframeWanted is set when the worker asks the caller for a keyframe;
 	// the video sender answers it the way a browser's encoder would.
-	keyframeWanted atomic.Bool
-	videoData      []byte
+	keyframeWanted   atomic.Bool
+	videoData        []byte
+	initialSequences *RTPSequenceNumbers
 
 	// socket is the caller's UDP socket, which observes its consent checks
 	// (consent.go).
@@ -117,7 +128,7 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("callharness: new PeerConnection: %w", err), socket.close())
 	}
-	call = &Call{harness: h, pc: pc, rec: rec, socket: socket, videoData: opts.VideoData}
+	call = &Call{harness: h, pc: pc, rec: rec, socket: socket, videoData: opts.VideoData, initialSequences: opts.InitialSequenceNumbers}
 	if err := h.addCall(call); err != nil {
 		return nil, errors.Join(err, call.close())
 	}
@@ -207,12 +218,20 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 
 // addTrack adds one of the caller's tracks and reads the RTCP sent to it.
 func (c *Call) addTrack(capability webrtc.RTPCodecCapability, kind string) (*webrtc.TrackLocalStaticSample, uint32, error) {
-	track, err := webrtc.NewTrackLocalStaticSample(capability, kind, "caller", webrtc.WithPayloader(func(_ webrtc.RTPCodecCapability) (rtp.Payloader, error) {
+	options := []func(*webrtc.TrackLocalStaticRTP){webrtc.WithPayloader(func(_ webrtc.RTPCodecCapability) (rtp.Payloader, error) {
 		if kind == kindVideo {
 			return &codecs.VP8Payloader{EnablePictureID: true}, nil
 		}
 		return &codecs.OpusPayloader{}, nil
-	}))
+	})}
+	if c.initialSequences != nil {
+		sequence := c.initialSequences.Audio
+		if kind == kindVideo {
+			sequence = c.initialSequences.Video
+		}
+		options = append(options, webrtc.WithRTPSequenceNumber(sequence))
+	}
+	track, err := webrtc.NewTrackLocalStaticSample(capability, kind, "caller", options...)
 	if err != nil {
 		return nil, 0, err
 	}
