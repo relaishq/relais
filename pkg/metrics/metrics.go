@@ -6,6 +6,17 @@ import (
 )
 
 var (
+	CheckpointWrites = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "relais_checkpoint_writes_total", Help: "Checkpoint write attempts by result",
+	}, []string{"result"})
+	CheckpointEnvelopeEvents = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "relais_checkpoint_envelope_events_total", Help: "Takeovers outside the checkpoint envelope by policy",
+	}, []string{"policy"})
+	CheckpointAge = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name: "relais_checkpoint_age_seconds", Help: "Age of snapshot counters at crash takeover",
+		Buckets: prometheus.DefBuckets,
+	})
+
 	EgressReads = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "relais_egress_reads_total",

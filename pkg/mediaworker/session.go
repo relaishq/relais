@@ -79,8 +79,12 @@ type session struct {
 
 	// decryptFailures counts SRTP and SRTCP packets from the caller that this
 	// worker could not decrypt.
-	decryptFailures atomic.Uint64
-	snapshotStored  atomic.Bool // internal harness readiness observation, no state bytes exposed
+	decryptFailures                atomic.Uint64
+	lastCheckpoint                 time.Time   // guarded by mu; local acknowledgment time of last successful write
+	audioRate, videoRate, rtcpRate packetMeter // guarded by mu
+	snapshotStored                 atomic.Bool // internal harness readiness observation, no state bytes exposed
+
+	callerSequenceReserve uint32 // active recovery reserve, guarded by mu
 
 	// Runtime plumbing, rebuilt by a worker that resumes the session.
 	dtlsEndpoint  *dtlsEndpoint
@@ -467,6 +471,19 @@ func (s *session) handleRTP(pkt []byte) {
 
 		return
 	}
+	if s.worker.cfg.Relay != nil {
+		meter := &s.audioRate
+		if track == &s.state.Video {
+			meter = &s.videoRate
+		}
+		index := uint64(header.SequenceNumber)
+		if track.Packets > 0 {
+			index = extendIndex(track.HighestSentIndex, header.SequenceNumber)
+		}
+		if !meter.allow(time.Now(), index, s.worker.cfg.CheckpointEnvelope.Defaults().MaxRTPPacketRate, checkpointRTPBurst) {
+			return
+		}
+	}
 	encrypted, err := s.srtpOut.EncryptRTP(s.encryptBuf, s.plainBuf[:n], nil)
 	if err != nil {
 		s.log.Warnf("session %s: encrypt echo packet: %v", s.id, err)
@@ -578,6 +595,9 @@ func (s *session) requestKeyframe(trigger string) {
 	}
 	// At the 2^31-packet SRTCP key lifetime, encryption fails: log and
 	// cease transmitting PLIs rather than wrap/reuse an index under these keys.
+	if s.worker.cfg.Relay != nil && !s.rtcpRate.allow(time.Now(), uint64(video.SRTCPIndex)+1, s.worker.cfg.CheckpointEnvelope.Defaults().MaxSRTCPPacketRate, checkpointSRTCPBurst) {
+		return
+	}
 	encrypted, err := s.srtpOut.EncryptRTCP(s.encryptBuf, plain, nil)
 	if err != nil {
 		s.log.Warnf("session %s: encrypt PLI: %v", s.id, err)

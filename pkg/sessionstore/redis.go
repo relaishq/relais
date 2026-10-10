@@ -239,12 +239,18 @@ elseif op=='claim' then
  retain(epoch)
  redis.call('DEL',KEYS[2])
  return write(owner,epoch)
-elseif op=='get' or op=='state' then
+elseif op=='get' or op=='state' or op=='checkpoint' then
  if not current[1] then
   redis.call('DEL',KEYS[2],KEYS[3])
   return {0}
  end
  if op=='get' then return reply() end
+ if op=='checkpoint' then
+  local stored=redis.call('HGET',KEYS[1],'checkpoint_at')
+  if not stored then return {0} end
+  if redis.call('HGET',KEYS[1],'state_digest')~=ARGV[6] then return {-4} end
+  return {1,stored,string.format('%.0f',now())}
+ end
  local blob=redis.call('GET',KEYS[2])
  if not blob then return {0} end
  return {1,blob,redis.call('HGET',KEYS[1],'state_seq') or ''}
@@ -267,7 +273,7 @@ elseif op=='put' then
  local previous=redis.call('HGET',KEYS[1],'state_seq')
  if not greater(ARGV[7],previous) then return {-4} end
  redis.call('SET',KEYS[2],ARGV[6])
- redis.call('HSET',KEYS[1],'state_seq',ARGV[7])
+ redis.call('HSET',KEYS[1],'state_seq',ARGV[7],'checkpoint_at',string.format('%.0f',now()),'state_digest',ARGV[8])
  redis.call('PEXPIREAT',KEYS[2],current[3])
  return {1}
 end
@@ -366,7 +372,7 @@ func (r *Redis) run(ctx context.Context, op, id, owner, epoch string, ttl time.D
 		return err
 	}
 	var err error
-	if op == "get" || op == "state" || op == "settle" || op == "indexed" {
+	if op == "get" || op == "state" || op == "settle" || op == "indexed" || op == "checkpoint" {
 		err = r.retryRead(ctx, "session_"+op, fn)
 	} else {
 		for attempt := 0; attempt < 3; attempt++ {
@@ -686,7 +692,7 @@ func (r *Redis) PutState(ctx context.Context, lease Lease, state []byte) error {
 	}
 	blob := append(header, nonce...)
 	blob = seal.Seal(blob, nonce, state, stateAAD(lease.SessionID, seq, header))
-	_, err = r.run(ctx, "put", lease.SessionID, lease.Worker.String(), strconv.FormatUint(lease.Epoch, 10), 0, blob, seq)
+	_, err = r.run(ctx, "put", lease.SessionID, lease.Worker.String(), strconv.FormatUint(lease.Epoch, 10), 0, blob, seq, fmt.Sprintf("%x", sha256.Sum256(state)))
 	return err
 }
 func (r *Redis) GetState(ctx context.Context, id string) ([]byte, error) {
@@ -834,4 +840,37 @@ func connectRedis(cfg storage.RedisConfig) redis.UniversalClient {
 		client = redis.NewClient(&redis.Options{Addr: cfg.Addr, Password: cfg.Password, DB: cfg.DB, MaxRetries: -1})
 	}
 	return client
+}
+
+// Clock samples Redis TIME before a media copy, so a delayed PutState cannot
+// make old counters look fresh merely because the write eventually succeeds.
+func (r *Redis) Clock(ctx context.Context) (time.Time, error) {
+	ctx, cancel := context.WithTimeout(ctx, transitionCommandLimit)
+	defer cancel()
+	var now time.Time
+	err := r.retryRead(ctx, "session_clock", func() error {
+		var err error
+		now, err = r.client.Time(ctx).Result()
+		return err
+	})
+	return now.Truncate(time.Millisecond), err
+}
+
+func (r *Redis) Checkpoint(ctx context.Context, id string, state []byte) (Checkpoint, error) {
+	result, err := r.run(ctx, "checkpoint", id, "", "", 0, fmt.Sprintf("%x", sha256.Sum256(state)))
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	stored, err := strconv.ParseInt(result[1].(string), 10, 64)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	now, err := strconv.ParseInt(result[2].(string), 10, 64)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	if now < stored {
+		return Checkpoint{}, ErrUnsafeCheckpointClock
+	}
+	return Checkpoint{StoredAt: time.UnixMilli(stored), Now: time.UnixMilli(now), Age: time.Duration(max(now-stored, 0)) * time.Millisecond}, nil
 }

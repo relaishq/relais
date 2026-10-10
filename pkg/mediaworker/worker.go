@@ -130,6 +130,8 @@ type Heartbeats interface{ Heartbeat(netip.AddrPort) error }
 
 // Config configures a media worker.
 type Config struct {
+	// CheckpointEnvelope bounds outbound index rates for safe crash recovery.
+	CheckpointEnvelope CheckpointEnvelope
 	// FrameCache lives outside workers. Share one Store across takeover targets.
 	// Nil leaves caching unconfigured; the harness supplies shared memory by
 	// default. Neither worker construction nor worker death owns this store.

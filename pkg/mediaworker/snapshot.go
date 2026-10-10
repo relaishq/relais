@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/metrics"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -24,6 +25,10 @@ func (w *Worker) SnapshotSession(id string) ([]byte, error) {
 }
 
 func (s *session) snapshotBytes() ([]byte, error) {
+	return s.snapshotBytesAt(time.Time{})
+}
+
+func (s *session) snapshotBytesAt(captured time.Time) ([]byte, error) {
 	s.mu.Lock()
 	if s.fenced.Load() || s.ctx.Err() != nil {
 		s.mu.Unlock()
@@ -35,6 +40,15 @@ func (s *session) snapshotBytes() ([]byte, error) {
 	}
 	dtlsState, ok := s.dtlsConn.ConnectionState()
 	state := s.state
+	if !captured.IsZero() {
+		state.Checkpoint.CapturedAt = captured
+		state.Checkpoint.Successes++ // only durable if this put succeeds
+		if !s.lastCheckpoint.IsZero() {
+			state.Checkpoint.AgeAtCapture = time.Since(s.lastCheckpoint)
+		}
+	}
+	state.Checkpoint.RTPPacketRate = max(state.Checkpoint.RTPPacketRate, s.audioRate.peak, s.videoRate.peak)
+	state.Checkpoint.SRTCPPacketRate = max(state.Checkpoint.SRTCPPacketRate, s.rtcpRate.peak)
 	state.SRTP.Inbound = maps.Clone(state.SRTP.Inbound)
 	// Certificate/key byte slices are immutable throughout a session.
 	s.mu.Unlock()
@@ -64,18 +78,42 @@ func (s *session) persistSnapshotContext(parent context.Context) error {
 	// packet lock is never held during encoding or the fenced store operation.
 	s.snapshotMu.Lock()
 	defer s.snapshotMu.Unlock()
-	state, err := s.snapshotBytes()
+	ctx, cancel := context.WithTimeout(parent, ownershipTimeout)
+	defer cancel()
+	s.mu.Lock()
+	s.state.Checkpoint.Attempts++
+	s.mu.Unlock()
+	captured, err := s.worker.cfg.Relay.Owners.Clock(ctx)
+	var state []byte
+	if err == nil {
+		state, err = s.snapshotBytesAt(captured)
+	}
 	if err != nil {
+		s.mu.Lock()
+		s.state.Checkpoint.Failures++
+		s.mu.Unlock()
+		metrics.CheckpointWrites.WithLabelValues("failure").Inc()
 		return err
 	}
 	s.mu.Lock()
 	lease := s.lease
 	s.mu.Unlock()
-	ctx, cancel := context.WithTimeout(parent, ownershipTimeout)
-	defer cancel()
 	err = s.worker.cfg.Relay.Owners.PutState(ctx, lease, state)
 	if err == nil {
 		s.snapshotStored.Store(true)
+		s.mu.Lock()
+		s.state.Checkpoint.Successes++
+		s.state.Checkpoint.CapturedAt = captured
+		s.state.Checkpoint.RTPPacketRate = max(s.state.Checkpoint.RTPPacketRate, s.audioRate.peak, s.videoRate.peak)
+		s.state.Checkpoint.SRTCPPacketRate = max(s.state.Checkpoint.SRTCPPacketRate, s.rtcpRate.peak)
+		s.lastCheckpoint = time.Now()
+		s.mu.Unlock()
+		metrics.CheckpointWrites.WithLabelValues("success").Inc()
+	} else {
+		s.mu.Lock()
+		s.state.Checkpoint.Failures++
+		s.mu.Unlock()
+		metrics.CheckpointWrites.WithLabelValues("failure").Inc()
 	}
 	if errors.Is(err, sessionstore.ErrLeaseLost) {
 		s.mu.Lock()
