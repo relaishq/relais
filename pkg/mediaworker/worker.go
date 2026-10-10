@@ -182,6 +182,13 @@ type Config struct {
 	// session. Defaults to 30 seconds.
 	ConnectTimeout time.Duration
 
+	// RouteStickinessWindow keeps a caller address on its session for this
+	// long after the session last authenticated an ICE check from it: until
+	// then, another session's checks from that address are dropped, even
+	// with valid credentials. Defaults to the consent timeout, 30 seconds. A
+	// shared socket sets it from SocketConfig.RouteStickinessWindow.
+	RouteStickinessWindow time.Duration
+
 	// consentTimeout is RFC 7675's consent timeout, 30 seconds. It is not a
 	// deployment setting; it is unexported so this package's tests can
 	// shorten it.
@@ -231,6 +238,7 @@ type Worker struct {
 	mu                        sync.Mutex
 	sessions                  map[string]*session         // by session ID, which is also the worker's ICE ufrag
 	byAddr                    map[netip.AddrPort]*session // caller addresses that passed an ICE check
+	byAddrConsent             map[netip.AddrPort]time.Time
 	closed                    bool
 	running                   sync.WaitGroup // session goroutines
 	replayStatsMu             sync.Mutex
@@ -262,6 +270,9 @@ func New(cfg Config) (*Worker, error) {
 	}
 	if cfg.consentTimeout <= 0 {
 		cfg.consentTimeout = defaultConsentTimeout
+	}
+	if cfg.RouteStickinessWindow <= 0 {
+		cfg.RouteStickinessWindow = cfg.consentTimeout
 	}
 	if cfg.Relay != nil {
 		relayCfg := *cfg.Relay
@@ -320,15 +331,16 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 		mediaAddr = cfg.Relay.PublicAddr
 	}
 	worker := &Worker{
-		cfg:       cfg,
-		log:       cfg.LoggerFactory.NewLogger("mediaworker"),
-		conn:      conn,
-		localAddr: localAddr,
-		mediaAddr: mediaAddr,
-		readDone:  make(chan struct{}),
-		stopRenew: make(chan struct{}),
-		sessions:  make(map[string]*session),
-		byAddr:    make(map[netip.AddrPort]*session),
+		cfg:           cfg,
+		log:           cfg.LoggerFactory.NewLogger("mediaworker"),
+		conn:          conn,
+		localAddr:     localAddr,
+		mediaAddr:     mediaAddr,
+		readDone:      make(chan struct{}),
+		stopRenew:     make(chan struct{}),
+		sessions:      make(map[string]*session),
+		byAddr:        make(map[netip.AddrPort]*session),
+		byAddrConsent: make(map[netip.AddrPort]time.Time),
 	}
 	if cfg.Relay != nil {
 		workerprobe.Register(localAddr, worker.captureZombie)
@@ -507,14 +519,29 @@ func (w *Worker) sessionAt(addr netip.AddrPort) *session {
 	return w.byAddr[addr]
 }
 
-func (w *Worker) mapAddr(addr netip.AddrPort, sess *session) {
+// mapAddr maps addr to sess, on the worker and on a shared socket, after
+// sess has authenticated an ICE check from it, and reports whether it did.
+// It refuses when sess has ended, or when another session authenticated a
+// check from addr within the stickiness window (byAddrConsent holds when
+// each address last passed one). It runs under sess.mu, before the check
+// changes nomination or consent.
+func (w *Worker) mapAddr(addr netip.AddrPort, sess *session) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
-	// A session that is no longer registered has been closed.
-	if w.sessions[sess.id] == sess {
-		w.byAddr[addr] = sess
+	if w.sessions[sess.id] != sess {
+		return false
 	}
+	now := time.Now()
+	if incumbent := w.byAddr[addr]; incumbent != nil && incumbent.id != sess.id &&
+		now.Sub(w.byAddrConsent[addr]) < w.cfg.RouteStickinessWindow {
+		return false
+	}
+	if !w.learnFlow(addr, sess.id) {
+		return false
+	}
+	w.byAddr[addr] = sess
+	w.byAddrConsent[addr] = now
+	return true
 }
 
 func (w *Worker) send(pkt []byte, to netip.AddrPort) (int, error) {
@@ -535,6 +562,7 @@ func (w *Worker) forget(sess *session) {
 	for addr, owner := range w.byAddr {
 		if owner == sess {
 			delete(w.byAddr, addr)
+			delete(w.byAddrConsent, addr)
 		}
 	}
 	w.mu.Unlock()
