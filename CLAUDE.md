@@ -9,12 +9,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make deps
 
 # Build plugin runners plus relais-relay, relais-worker, relais-control
-# and the opt-in crash-run driver
+# and the opt-in crash-run and relais-demo drivers
 make build
 
 # Run media workers A and B on one UDP socket plus the browser echo page on
 # http://localhost:9101 ("Move call" hands the live call to the other worker)
 make demo
+
+# Browser cluster demo: relay, control, 3 workers, dedicated throwaway Redis
+# Move, drain and SIGKILL controls; Chrome scripted API in window.relaisDemo
+make demo-cluster
+# Optional loopback HTTP address / dedicated non-6379 Redis
+make demo-cluster DEMO_CLUSTER_FLAGS="-http=127.0.0.1:9201"
 
 # Prove real SIGKILL takeover: ten runs, each with 60 s of media/consent
 # Requires redis-server and ffmpeg; starts its own Redis, never port 6379

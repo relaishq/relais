@@ -19,6 +19,7 @@ func run() error {
 	storeConfig.Flags(flag.CommandLine)
 	relayURL := flag.String("relay", processrun.Env("RELAIS_RELAY_URL", ""), "relay control HTTP URL")
 	httpAddr := flag.String("http", processrun.Env("RELAIS_CONTROL_HTTP", "127.0.0.1:0"), "WHIP and private heartbeat HTTP address")
+	demoRegister := flag.Bool("demo-register", false, "enable loopback demo replacement registration")
 	var registered workers
 	flag.Var(&registered, "worker", "name=http://worker-address (repeat for each worker)")
 	flag.Parse()
@@ -40,9 +41,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	handler := plane.ProcessHandler()
+	if *demoRegister {
+		handler = demoHandler(plane, r)
+	}
 	served := make(chan struct{})
 	serveErr := make(chan error, 1)
-	go func() { defer close(served); serveErr <- processrun.Serve(ctx, listener, plane.ProcessHandler()) }()
+	go func() { defer close(served); serveErr <- processrun.Serve(ctx, listener, handler) }()
 	defer func() { cancel(); <-served }()
 	for _, entry := range registered {
 		name, endpoint, ok := strings.Cut(entry, "=")

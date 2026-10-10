@@ -40,6 +40,10 @@ jobs:
       - name: Build
         run: make build
 
+      # The demo page's verdict logic decides the browser go/no-go.
+      - name: Run demo metric tests
+        run: node --test cmd/relais-demo/metrics.test.cjs
+
   # The build job is the aggregate gate while all work runs in parallel.
   # Making it required in GitHub settings is a separate admin decision.
   # always() turns a failed dependency into a failed check, rather than a skip.
