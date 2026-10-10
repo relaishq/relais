@@ -60,6 +60,7 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 					assertVideoDecodes(t, report)
 					assert.Zero(t, report.Track("video").Video.NonMonotonicTimestamps)
 					require.Len(t, report.Moves, 1)
+					t.Logf("CALLER_EVENT run=%d mode=%s %s", trial+1, mode.name, report.Moves[0].Measurement.Summary())
 					recovery := report.Moves[0].Recovery
 					stats, err := h.ReplayStats(1)
 					require.NoError(t, err)

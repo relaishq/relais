@@ -21,7 +21,8 @@ type VideoRecovery struct {
 	// Both common-start metrics begin at the kill, for every mode. Cached
 	// output can precede control-plane completion, so completion is unsuitable.
 	FirstDecodedAfterKill time.Duration
-	// FirstDecodedLiveAfterKill is zero when no live frame decoded.
+	// FirstDecodedLiveAfterKill measures a decoded frame sent at/after
+	// MediaResumedAt, and is zero when no such live frame decoded.
 	FirstDecodedLiveAfterKill    time.Duration
 	LivePath                     string
 	KeyframeInterval             time.Duration
@@ -34,17 +35,21 @@ type VideoRecovery struct {
 }
 
 type sentVideoFrame struct {
-	at   time.Duration
-	data string
-	pli  bool
+	at          time.Duration
+	data        string
+	pli         bool
+	requestedAt time.Duration
+	duration    time.Duration
+	written     bool
+	returnedAt  time.Duration
 }
 
-func (r *recorder) sendingVideo(frame []byte, pli bool, interval time.Duration) {
+func (r *recorder) sendingVideo(frame []byte, requestedAt, interval time.Duration) {
 	r.sending(kindVideo, frame)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	id := uint16(r.sentVideo.Frames & 0x7fff)
-	r.sentVideoFrames[id] = sentVideoFrame{at: r.since(time.Now()), data: string(frame), pli: pli}
+	r.sentVideoFrames[id] = sentVideoFrame{at: r.since(time.Now()), data: string(frame), pli: requestedAt > 0, requestedAt: requestedAt, duration: interval}
 	r.frameInterval = interval
 }
 
@@ -123,7 +128,7 @@ func (r *recorder) videoRecovery(start, limit time.Duration) VideoRecovery {
 			if !f.decodable || f.at < result.MediaResumedAt || f.firstArrival < result.MediaResumedAt || f.at >= limit {
 				continue
 			}
-			if f.source.at >= start && result.FirstDecodedLiveAfterKill == 0 {
+			if f.source.at >= result.MediaResumedAt && result.FirstDecodedLiveAfterKill == 0 {
 				result.FirstDecodedLiveAfterKill = f.at - start
 				result.LivePath = "Live"
 				if f.source.pli {
@@ -148,4 +153,8 @@ func (r *recorder) videoRecovery(start, limit time.Duration) VideoRecovery {
 		}
 	}
 	return result
+}
+
+func (f sentVideoFrame) unit() contentUnit {
+	return contentUnit{at: f.at, duration: f.duration, written: f.written, returnedAt: f.returnedAt}
 }

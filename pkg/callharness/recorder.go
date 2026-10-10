@@ -41,14 +41,21 @@ type recorder struct {
 
 	// What the caller sent, by kind. sentFrames holds every distinct frame
 	// (an Opus packet or a VP8 frame) so echoes can be matched to it.
-	sentAudio        SentTrack
-	sentVideo        SentTrack
-	sentFrames       map[string]map[string]struct{}
-	firstVideoSentAt time.Duration
-	sentVideoFrames  map[uint16]sentVideoFrame
-	frameInterval    time.Duration
-	keyframeInterval time.Duration
-	keyframeRequests int // PLI/FIR the caller sent for the echoed video
+	sentAudio             SentTrack
+	sentVideo             SentTrack
+	sentFrames            map[string]map[string]struct{}
+	firstVideoSentAt      time.Duration
+	sentVideoFrames       map[uint16]sentVideoFrame
+	sentAudioUnits        map[string]contentUnit
+	audioIdentity         uint64
+	pendingAudio          string
+	contentAssemblies     map[videoAssemblyKey]*contentAssembly
+	contentIdentityErrors int
+	repeatedAudioReturns  []contentUnit
+	repeatedVideoReturns  []contentUnit
+	frameInterval         time.Duration
+	keyframeInterval      time.Duration
+	keyframeRequests      int // PLI/FIR the caller sent for the echoed video
 
 	tracks []*trackRecord
 
@@ -97,8 +104,10 @@ type videoRecord struct {
 
 func newRecorder() *recorder {
 	return &recorder{
-		start:           time.Now(),
-		sentVideoFrames: make(map[uint16]sentVideoFrame),
+		start:             time.Now(),
+		sentVideoFrames:   make(map[uint16]sentVideoFrame),
+		sentAudioUnits:    make(map[string]contentUnit),
+		contentAssemblies: make(map[videoAssemblyKey]*contentAssembly),
 		sentFrames: map[string]map[string]struct{}{
 			kindAudio: {},
 			kindVideo: {},
@@ -238,6 +247,16 @@ func (r *recorder) sent(kind string, keyframe bool) {
 	if kind == kindVideo {
 		track = &r.sentVideo
 	}
+	if kind == kindVideo {
+		id := uint16(track.Frames & 0x7fff)
+		source := r.sentVideoFrames[id]
+		source.written = true
+		r.sentVideoFrames[id] = source
+	} else {
+		unit := r.sentAudioUnits[r.pendingAudio]
+		unit.written = true
+		r.sentAudioUnits[r.pendingAudio] = unit
+	}
 	track.Frames++
 	if keyframe {
 		track.Keyframes++
@@ -246,17 +265,19 @@ func (r *recorder) sent(kind string, keyframe bool) {
 
 // keyframeRequestReceived records a PLI or FIR for one of the caller's own
 // tracks.
-func (r *recorder) keyframeRequestReceived(kind string) {
+func (r *recorder) keyframeRequestReceived(kind string) time.Duration {
+	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.hungUp {
-		return
+		return 0
 	}
 	if kind == kindVideo {
 		r.sentVideo.KeyframeRequests++
 	} else {
 		r.sentAudio.KeyframeRequests++
 	}
+	return r.since(now)
 }
 
 func (r *recorder) keyframeRequestSent() {
@@ -315,6 +336,18 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 		}
 	}
 	track.headers = append(track.headers, mark)
+
+	if track.video != nil {
+		r.returnedVideo(track, pkt, at)
+	} else if unit, ok := r.sentAudioUnits[string(pkt.Payload)]; ok {
+		if unit.returnedAt == 0 {
+			unit.returnedAt = at
+			r.sentAudioUnits[string(pkt.Payload)] = unit
+		} else {
+			unit.returnedAt, unit.identity = at, string(pkt.Payload)
+			r.repeatedAudioReturns = append(r.repeatedAudioReturns, unit)
+		}
+	}
 
 	// Opus packets are whole frames; VP8 frames are matched once reassembled.
 	if track.video == nil {
