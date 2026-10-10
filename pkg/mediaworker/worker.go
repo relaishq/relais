@@ -228,13 +228,19 @@ type Worker struct {
 	paused           atomic.Bool
 	heartbeatStarted bool
 
-	mu            sync.Mutex
-	sessions      map[string]*session         // by session ID, which is also the worker's ICE ufrag
-	byAddr        map[netip.AddrPort]*session // caller addresses that passed an ICE check
-	closed        bool
-	running       sync.WaitGroup // session goroutines
-	replayStatsMu sync.Mutex
-	replayStats   ReplayStats
+	mu                        sync.Mutex
+	sessions                  map[string]*session         // by session ID, which is also the worker's ICE ufrag
+	byAddr                    map[netip.AddrPort]*session // caller addresses that passed an ICE check
+	closed                    bool
+	running                   sync.WaitGroup // session goroutines
+	replayStatsMu             sync.Mutex
+	replayStats               ReplayStats
+	cacheQueueMu              sync.Mutex
+	cacheQueues               [cacheConsumers]chan cacheAppend
+	cacheLastWarning          time.Time
+	cacheQueueClosed          bool
+	cachePending, cacheBytes  int
+	cacheDropped, cacheErrors uint64
 }
 
 // New starts a media worker listening on cfg.ListenAddr.
@@ -330,6 +336,11 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 			Kill: worker.kill, Pause: worker.paused.Store,
 			SnapshotReady: func(id string) bool { s := worker.session(id); return s != nil && s.snapshotStored.Load() },
 		})
+	}
+	for i := range worker.cacheQueues {
+		worker.cacheQueues[i] = make(chan cacheAppend, cacheQueueFrames)
+		worker.running.Add(1)
+		go worker.runCacheAppends(worker.cacheQueues[i])
 	}
 	go worker.readLoop()
 	if cfg.Relay != nil {

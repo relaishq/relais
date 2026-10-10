@@ -37,7 +37,7 @@ demo-cluster: build ## Run three separate workers and the browser move/drain/kil
 	./$(BIN_DIR)/relais-demo $(DEMO_CLUSTER_FLAGS)
 
 CRASH_FLAGS ?=
-crash-run: build ## Run ten real-process SIGKILL calls on a dedicated throwaway Redis; requires Redis and ffmpeg
+crash-run: build ## Compare ten real-process SIGKILL calls per cache/PLI mode on throwaway Redis; requires ffmpeg
 	./$(BIN_DIR)/crash-run $(CRASH_FLAGS)
 
 ensure_bin_dir: ## Create bin directory if it doesn't exist

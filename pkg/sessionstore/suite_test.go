@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relais/internal/redisendpoint"
 	"github.com/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -27,6 +28,7 @@ func testRedis(t *testing.T, options ...RedisOptions) *Redis {
 		}
 		t.Skip("Redis integration requires RELAIS_TEST_REDIS_ADDR")
 	}
+	require.NoError(t, redisendpoint.Validate(addr), "tests must use a dedicated Redis")
 	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
 		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {

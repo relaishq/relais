@@ -2,6 +2,7 @@ package mediaworker
 
 import (
 	"context"
+	"hash/fnv"
 	"time"
 
 	"github.com/pion/rtp"
@@ -54,24 +55,109 @@ func (a *frameCollector) push(in *rtp.Packet, track framecache.Track) *framecach
 	return &f
 }
 
-// appendFrame runs after releasing mu. cacheMu serializes append with local
-// hangup deletion, preventing a delayed write from resurrecting ended media.
-// The in-memory append is cheap; remote operations have a bounded context and
-// never hold the transport/counter lock.
+// Each worker has four session-hashed ordered queues, with a shared cap on
+// complete-frame count and payload bytes, including all appends in flight. Slow Redis cannot hold the
+// UDP reader or create unbounded work. A dropped frame leaves a sequence hole;
+// the Store then discards the group until the next complete keyframe.
+const cacheConsumers = 4
+const cacheQueueFrames = 32
+const cacheQueueBytes = 8 << 20
+
+type cacheAppend struct {
+	session *session
+	frame   framecache.Frame
+	bytes   int
+}
+
 func (s *session) appendFrame(f *framecache.Frame) {
-	if f == nil {
+	if f == nil || s.fenced.Load() || s.ctx.Err() != nil {
 		return
 	}
+	bytes := 0
+	for _, p := range f.Packets {
+		bytes += len(p.Payload)
+	}
+	w := s.worker
+	w.cacheQueueMu.Lock()
+	defer w.cacheQueueMu.Unlock()
+	if w.cacheQueueClosed {
+		return
+	}
+	if w.cachePending >= cacheQueueFrames || bytes > cacheQueueBytes-w.cacheBytes {
+		w.cacheDropped++
+		return
+	}
+	// The collector transferred ownership of the complete frame; packet memory
+	// is independent of the reader's reusable decrypt buffer.
+	w.cachePending++
+	w.cacheBytes += bytes
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(s.id))
+	w.cacheQueues[hash.Sum32()%cacheConsumers] <- cacheAppend{session: s, frame: *f, bytes: bytes}
+}
+func (w *Worker) runCacheAppends(queue <-chan cacheAppend) {
+	defer w.running.Done()
+	defer func() {
+		w.cacheQueueMu.Lock()
+		defer w.cacheQueueMu.Unlock()
+		w.cacheQueueClosed = true
+		for {
+			select {
+			case job := <-queue:
+				w.cachePending--
+				w.cacheBytes -= job.bytes
+			default:
+				return
+			}
+		}
+	}()
+	for {
+		select {
+		case <-w.stopRenew:
+			return
+		default:
+		}
+		select {
+		case <-w.stopRenew:
+			return
+		case job := <-queue:
+			err := job.session.storeFrame(job.frame)
+			w.cacheQueueMu.Lock()
+			w.cachePending--
+			w.cacheBytes -= job.bytes
+			warn := false
+			if err != nil {
+				w.cacheErrors++
+				// One warning per worker per interval, regardless of session count.
+				if time.Since(w.cacheLastWarning) >= 10*time.Second {
+					w.cacheLastWarning = time.Now()
+					warn = true
+				}
+			}
+			errors := w.cacheErrors
+			w.cacheQueueMu.Unlock()
+			if warn {
+				w.log.Warnf("cache append failed (errors=%d): %v", errors, err)
+			}
+		}
+	}
+}
+
+// Serialize append with local hangup deletion. Cancellation/fencing rejects
+// queued work from ended/exported sessions before it reaches the store.
+func (s *session) storeFrame(f framecache.Frame) error {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 	if s.fenced.Load() || s.ctx.Err() != nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(s.ctx, ownershipTimeout)
 	defer cancel()
-	if err := s.worker.cfg.FrameCache.Append(ctx, s.id, *f); err != nil && s.ctx.Err() == nil {
-		s.log.Warnf("session %s: cache frame: %v", s.id, err)
+	err := s.worker.cfg.FrameCache.Append(ctx, s.id, f)
+	if s.ctx.Err() != nil {
+		return nil
 	}
+	return err
 }
 
 // reserveReplay runs before adoption. Persisting the reservation is mandatory:
@@ -155,7 +241,7 @@ func (s *session) reserveReplay(frames []framecache.Frame, margin uint16) bool {
 		track.InboundSSRC = first.SourceSSRC
 		track.SeqOffset = track.InitialSeq - first.Packets[0].SequenceNumber
 	}
-	age := min(max(time.Since(last.Arrival), 0), 2*time.Second)
+	age := min(max(last.ReplayAge(time.Now()), 0), 2*time.Second)
 	// Never compare an unanchored random clock with zero using serial math.
 	// Start at least one source frame interval after the last cached echo.
 	ts := last.EchoTimestamp + max(uint32(age.Seconds()*90000), interval)
@@ -316,13 +402,21 @@ func (s *session) continueAfterReplay(in *rtp.Packet, header *rtp.Header) {
 type ReplayStats struct {
 	Skipped   map[string]uint64
 	Truncated map[string]uint64
+	// AppendDropped counts queue admission drops. AppendErrors counts failed I/O.
+	AppendDropped uint64
+	AppendErrors  uint64
+	AppendPending int
+	AppendBytes   int
 }
 
 // ReplayStats returns a copied snapshot, independent of session lifetime.
 func (w *Worker) ReplayStats() ReplayStats {
 	w.replayStatsMu.Lock()
 	defer w.replayStatsMu.Unlock()
-	out := ReplayStats{Skipped: make(map[string]uint64), Truncated: make(map[string]uint64)}
+	w.cacheQueueMu.Lock()
+	dropped, failed, pending, bytes := w.cacheDropped, w.cacheErrors, w.cachePending, w.cacheBytes
+	w.cacheQueueMu.Unlock()
+	out := ReplayStats{AppendDropped: dropped, AppendErrors: failed, AppendPending: pending, AppendBytes: bytes, Skipped: make(map[string]uint64), Truncated: make(map[string]uint64)}
 	for reason, count := range w.replayStats.Skipped {
 		out.Skipped[reason] = count
 	}

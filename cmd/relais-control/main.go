@@ -34,7 +34,12 @@ func run() error {
 	}
 	defer func() { _ = store.Close() }()
 	r := &controlplane.RemoteRelay{URL: *relayURL}
-	plane := controlplane.New(r, store)
+	frames, err := storeConfig.OpenFrames(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = frames.Close() }()
+	plane := controlplane.NewWithConfig(r, store, controlplane.Config{FrameCache: frames})
 	// Serve heartbeats during registration. A slow later worker must not make
 	// an earlier healthy registration age past DeadAfter before Run starts.
 	listener, err := processrun.ListenPrivate(*httpAddr)

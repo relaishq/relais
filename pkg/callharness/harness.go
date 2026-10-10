@@ -33,6 +33,7 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/sessionstore"
 )
@@ -69,6 +70,9 @@ type Options struct {
 	// SessionStore selects the relay topology's store. Nil uses Memory.
 	// The caller owns its lifetime; it must outlive Harness.Close.
 	SessionStore sessionstore.Store
+	// FrameCache selects a shared cache, including Redis. Nil uses Memory.
+	// The caller owns its lifetime and must keep it open through Harness.Close.
+	FrameCache framecache.Store
 	// SnapshotInterval sets the worker snapshot cadence for crash tests.
 	SnapshotInterval time.Duration
 	// DisableFrameCache and DisableResumePLI independently select the video
@@ -100,7 +104,7 @@ type Harness struct {
 // Start starts a local topology, or attaches callers to Options.External.
 func Start(opts Options) (*Harness, error) {
 	if opts.External != nil {
-		if opts.Relay || opts.Workers != 0 || opts.SessionStore != nil {
+		if opts.Relay || opts.Workers != 0 || opts.SessionStore != nil || opts.FrameCache != nil {
 			return nil, errors.New("callharness: external topology cannot start local workers")
 		}
 		u, err := url.Parse(opts.External.SignalingURL)

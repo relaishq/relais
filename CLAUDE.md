@@ -22,7 +22,7 @@ make demo-cluster
 # Optional loopback HTTP address / dedicated non-6379 Redis
 make demo-cluster DEMO_CLUSTER_FLAGS="-http=127.0.0.1:9201"
 
-# Prove real SIGKILL takeover: ten runs, each with 60 s of media/consent
+# Prove real SIGKILL takeover: ten interleaved runs per mode, each with 60 s of media/consent
 # Requires redis-server and ffmpeg; starts its own Redis, never port 6379
 make crash-run
 # Developer smoke run (does not prove the 60 s consent threshold)

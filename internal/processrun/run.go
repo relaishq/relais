@@ -13,10 +13,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/relais/internal/redisendpoint"
+	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/sessionstore"
 	"github.com/relais/pkg/storage"
 )
@@ -35,24 +36,31 @@ func (c *StoreConfig) Flags(fs *flag.FlagSet) {
 	fs.StringVar(&c.Address, "redis", Env("RELAIS_REDIS_ADDR", ""), "explicit Redis host:port (6379 is refused)")
 	fs.StringVar(&c.Prefix, "redis-prefix", Env("RELAIS_REDIS_PREFIX", "relais:process:"), "shared session-store namespace")
 }
-func ValidateRedis(addr string) error {
-	_, port, err := net.SplitHostPort(addr)
-	if err != nil || port == "" {
-		return errors.New("an explicit Redis host:port is required")
-	}
-	number, err := strconv.Atoi(port)
-	if err != nil || number < 1 || number > 65535 {
-		return errors.New("redis requires a numeric port between 1 and 65535")
-	}
-	if number == 6379 {
-		return errors.New("port 6379 is reserved; use a dedicated Redis instance")
-	}
-	return nil
-}
+func ValidateRedis(addr string) error { return redisendpoint.Validate(addr) }
+
 func (c StoreConfig) Open(ctx context.Context) (*sessionstore.Redis, error) {
 	if err := ValidateRedis(c.Address); err != nil {
 		return nil, err
 	}
+	key, err := storeKey()
+	if err != nil {
+		return nil, err
+	}
+	return sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix}, key)
+}
+
+// OpenFrames shares the snapshot master key, using a separate HKDF domain.
+func (c StoreConfig) OpenFrames(ctx context.Context) (*framecache.Redis, error) {
+	if err := ValidateRedis(c.Address); err != nil {
+		return nil, err
+	}
+	key, err := storeKey()
+	if err != nil {
+		return nil, err
+	}
+	return framecache.NewRedis(ctx, storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix}, key, framecache.Limits{})
+}
+func storeKey() ([]byte, error) {
 	encoded := os.Getenv("RELAIS_SESSIONSTORE_KEY")
 	key, err := hex.DecodeString(encoded)
 	if err != nil || len(key) != 32 {
@@ -61,7 +69,7 @@ func (c StoreConfig) Open(ctx context.Context) (*sessionstore.Redis, error) {
 	if err != nil || len(key) != 32 {
 		return nil, errors.New("RELAIS_SESSIONSTORE_KEY must encode 32 bytes as hex or base64")
 	}
-	return sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix}, key)
+	return key, nil
 }
 func Context() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())

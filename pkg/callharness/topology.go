@@ -56,7 +56,10 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 		store = sessionstore.NewMemory()
 	}
 	topology := &relayTopology{owners: store, loggerFactory: opts.WorkerLoggerFactory}
-	topology.frames = framecache.NewMemory(framecache.Limits{})
+	topology.frames = opts.FrameCache
+	if topology.frames == nil {
+		topology.frames = framecache.NewMemory(framecache.Limits{})
+	}
 	topology.disableFrameCache, topology.disableResumePLI = opts.DisableFrameCache, opts.DisableResumePLI
 	r, err := relay.New(relay.Config{
 		PublicAddr:    "127.0.0.1:0",
