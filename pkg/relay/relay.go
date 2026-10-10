@@ -26,11 +26,12 @@
 //
 // A confirmed route sticks to its session while the session is active: its
 // worker has answered one of the session's own binding requests from the
-// caller within Config.RouteStickinessWindow. Until then the relay drops a
-// binding request for another session from that address, even one with
-// valid credentials, so spoofing an active caller's address cannot take its
-// media. Media and unanswered requests keep nothing active. The session
-// itself may always move, and MoveSession and ForgetSession are unaffected.
+// caller that arrived within Config.RouteStickinessWindow. Until then the
+// relay drops a binding request for another session from that address,
+// even one with valid credentials, so spoofing an active caller's address
+// cannot take its media. Media and unanswered requests keep nothing
+// active. The session itself may always move, and MoveSession and
+// ForgetSession are unaffected.
 //
 // A planned move holds caller packets before the old worker exports. A
 // private-leg barrier drains what the old worker already received. After
@@ -161,10 +162,13 @@ type Config struct {
 	PendingFlowTimeout time.Duration
 
 	// RouteStickinessWindow keeps a confirmed route on its session for this
-	// long after the session's worker last answered one of its binding
-	// requests from the caller: until then, no other session can take the
-	// caller's address. Media and unanswered requests do not extend it.
-	// Default DefaultRouteStickinessWindow; there is no way to turn it off.
+	// long after the arrival of the last of the session's binding requests
+	// from the caller that its worker answered: until then, no other
+	// session can take the caller's address. Media and unanswered requests
+	// do not extend it. It is at most FlowTimeout, and a longer value is
+	// clamped to it: otherwise idle routes would outlive FlowTimeout and the
+	// expiry scan would walk them. Default DefaultRouteStickinessWindow (or
+	// FlowTimeout, if shorter); there is no way to turn it off.
 	RouteStickinessWindow time.Duration
 
 	// MaxFlows bounds confirmed routes and pending candidates together, and
@@ -367,6 +371,8 @@ func applyDefaults(cfg *Config) {
 	if cfg.FlowTimeout <= 0 {
 		cfg.FlowTimeout = DefaultFlowTimeout
 	}
+	// Stickiness never outlasts the idle timeout (see RouteStickinessWindow).
+	cfg.RouteStickinessWindow = min(cfg.RouteStickinessWindow, cfg.FlowTimeout)
 	if cfg.PendingFlowTimeout <= 0 {
 		cfg.PendingFlowTimeout = DefaultPendingFlowTimeout
 	}

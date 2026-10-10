@@ -28,7 +28,9 @@ session from that address is dropped, even if its credentials are valid.
   `mediaworker.SocketConfig.RouteStickinessWindow` (applies to every worker
   on the socket), and `mediaworker.Config.RouteStickinessWindow` (a worker on
   its own socket). Use the same value everywhere. Zero selects the default;
-  the rule cannot be turned off.
+  the rule cannot be turned off. On the relay the window is at most
+  `FlowTimeout`, and a longer value is clamped to it, so an idle route never
+  outlives its idle timeout.
 - **The same session may always move.** It can authenticate from a new
   address, re-nominate, or follow its session to a new worker. Trusted
   control-plane moves (`MoveSession`, `ForgetSession`, uncertain-route
@@ -47,12 +49,16 @@ session from that address is dropped, even if its credentials are valid.
   - Relay: the relay cannot check credentials, so it uses the worker's
     answer. It remembers a few unanswered requests per route. A binding
     success from the route's worker that answers one of them renews the
-    route, as of the request's arrival (a request held during a planned move
-    counts from the hold's release). Each success consumes its request, so a
-    replayed or unmatched success renews nothing. An active route rejects
-    candidates for other sessions, and the relay checks again before it
-    promotes a candidate, because the incumbent may have renewed meanwhile.
-    Idle cleanup does not drop an active route.
+    route, as of the request's arrival. One exception: `MoveSession`
+    discards the requests waiting for the old worker, so when it runs during
+    a hold, each held request is recorded again when the hold releases and
+    counts from then. A hold that ends with no `MoveSession` (a timeout, or
+    a move aborted before the transfer) keeps the original arrival times.
+    Each success consumes its request, so a replayed or unmatched success
+    renews nothing. An active route rejects candidates for other sessions,
+    and the relay checks again before it promotes a candidate, because the
+    incumbent may have renewed meanwhile. Idle cleanup does not drop an
+    active route.
 - **Moves keep the evidence.** A relay move keeps the route's last renewal
   time and discards requests still waiting for the old worker. A shared
   socket keeps its flows across a handover. A worker that resumes a session
@@ -75,12 +81,27 @@ session from that address is dropped, even if its credentials are valid.
   stop renewing and lapse after one window. Rate limiting per caller would
   close this; it is not part of this decision.
 
-## Restart residual risk and persisted routes (#42)
+## Residual risk: lockout after a relay restart, and persisted routes (#42)
 
 A restarted relay has an empty flow table, so it does not know which
-addresses are active. Until A's next authenticated check, an attacker can
-claim A's address. Normal restart recovery still works. Persisted routes
-(#42) close this gap. They must restore the address, the session, and the
-last renewal time, and take the current worker from authoritative
-ownership. Restoring a route or moving it to another worker must never
-create a fresh renewal time.
+addresses are active. Normal restart recovery still works: each caller's
+next answered check rebuilds its route. But if an attacker with valid
+credentials for its own session B spoofs A's address X first, B becomes the
+active session at X and keeps it active with each further spoofed check.
+A's checks from X are then rejected before they reach A's worker, and A's
+other packets go to B's worker, which cannot decrypt them. A's consent
+lapses and A's call ends after about 30 seconds. This is a lockout: A's
+call is lost, though A's keys and media content stay safe. Before this
+decision, the same attack made the route flip between A and B with each
+check.
+
+The same lockout is possible before a caller's first answered check, on
+the relay or a shared socket, if an attacker can predict the caller's
+address and claim it first.
+
+Persisted routes (#42) close the restart case. They must restore the
+address, the session, and the last renewal time, and take the current
+worker from authoritative ownership. Restoring a route or moving it to
+another worker must never create a fresh renewal time. For the new-caller
+case, and until #42, the mitigation is outside this rule: ingress filtering
+that stops source-address spoofing (BCP 38), or rate limiting per caller.

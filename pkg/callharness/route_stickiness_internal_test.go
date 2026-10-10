@@ -11,24 +11,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAuthenticatedSpoofCannotMoveRelayRoute is #20 through the relay: an
+// TestAuthenticatedSpoofCannotMoveRelayRoute is #20 end to end: an
 // attacker holding valid ICE credentials for its own call B sends B's
 // checks from the victim A's address while A is active. A's media must keep
-// flowing to A's worker throughout, whether B is on another worker or on
-// A's own, and right after a planned move of A, which must carry A's
-// activity over to its new worker.
+// flowing to A's worker throughout: through the relay, whether B is on
+// another worker or on A's own, and right after a planned move of A, which
+// must carry A's activity over to its new worker. On a shared socket after
+// a planned move, the socket's own record of A's checks is all that
+// protects the address: A's new worker has not seen a check yet, and A's
+// old worker, where B runs, has forgotten A.
 func TestAuthenticatedSpoofCannotMoveRelayRoute(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
+		relay    bool // through the relay, or else on a shared socket
 		attacker int  // the attacker's worker; the victim starts on worker 0
 		move     bool // move the victim to worker 1 just before the attack
 	}{
-		{name: "different workers", attacker: 1},
-		{name: "same worker", attacker: 0},
-		{name: "after a planned move", attacker: 0, move: true},
+		{name: "different workers", relay: true, attacker: 1},
+		{name: "same worker", relay: true, attacker: 0},
+		{name: "after a planned move", relay: true, attacker: 0, move: true},
+		{name: "shared socket after a planned move", attacker: 0, move: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h, err := Start(Options{Relay: true, Workers: 2})
+			h, err := Start(Options{Relay: tc.relay, Workers: 2})
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = h.Close() })
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -44,6 +49,10 @@ func TestAuthenticatedSpoofCannotMoveRelayRoute(t *testing.T) {
 			if tc.move {
 				require.NoError(t, victim.Handover(HandoverOptions{To: 1}))
 			}
+			target := h.RelayAddr()
+			if !tc.relay {
+				target = h.workers.socket.LocalAddr()
+			}
 			sent := make(chan error, 1)
 			go func() { sent <- victim.SendMedia(ctx, 3*time.Second) }()
 			// Use the victim's actual socket as a test-only source injection seam.
@@ -55,7 +64,7 @@ func TestAuthenticatedSpoofCannotMoveRelayRoute(t *testing.T) {
 					stun.RawAttribute{Type: stun.AttrUseCandidate},
 					stun.NewShortTermIntegrity(pwd), stun.Fingerprint)
 				require.NoError(t, err)
-				_, err = victim.socket.observer.conn.WriteTo(request.Raw, net.UDPAddrFromAddrPort(h.RelayAddr()))
+				_, err = victim.socket.observer.conn.WriteTo(request.Raw, net.UDPAddrFromAddrPort(target))
 				require.NoError(t, err)
 				time.Sleep(50 * time.Millisecond)
 			}

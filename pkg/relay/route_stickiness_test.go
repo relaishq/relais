@@ -155,3 +155,18 @@ func TestRouteConsentTransactionsAreBounded(t *testing.T) {
 	_, ok = checks.answer(firstID)
 	require.False(t, ok, "oldest transaction evicted")
 }
+
+// TestRouteStickinessWindowIsAtMostFlowTimeout: a window longer than the
+// idle timeout is clamped to it, so idle routes do not outlive FlowTimeout.
+func TestRouteStickinessWindowIsAtMostFlowTimeout(t *testing.T) {
+	const flowTimeout = 300 * time.Millisecond
+
+	for _, window := range []time.Duration{0, time.Minute} {
+		sys := startTestRelay(t, Config{FlowTimeout: flowTimeout, RouteStickinessWindow: window})
+		require.Equal(t, flowTimeout, sys.relay.flows.stickinessWindow, "window %s", window)
+	}
+	sys := startTestRelay(t, Config{FlowTimeout: flowTimeout, RouteStickinessWindow: flowTimeout / 2})
+	require.Equal(t, flowTimeout/2, sys.relay.flows.stickinessWindow, "a shorter window is kept")
+	sys = startTestRelay(t, Config{})
+	require.Equal(t, DefaultRouteStickinessWindow, sys.relay.flows.stickinessWindow, "default")
+}
