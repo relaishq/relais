@@ -93,7 +93,9 @@ relaisDemo.saveResults();
 ## Android Chrome: same local network
 
 1. Connect the phone to the same Wi-Fi. Open the exact printed HTTPS URL in
-   Chrome. Do not use `localhost`, which refers to the phone.
+   Chrome. Transfer the full URL privately to the phone, for example in a
+   private message, or type it exactly. Include the entire `#token=…` fragment.
+   Do not use `localhost`, which refers to the phone.
 2. On **Your connection is not private**, tap **Advanced**, then **Proceed to
    [your IP] (unsafe)**. Accept only the demo URL you started. If Android or a
    managed Chrome policy blocks the exception or camera permission, record it.
@@ -126,10 +128,12 @@ media gap and does not change verdict thresholds.
 
 `frameIntervalMs` comes from observed source draws, using the median of up to
 60 intervals before the measurement window (or available intervals during
-startup). A source gap longer than 1.5 times that cadence appears in
-`sourceStarvedPeriods`, including an unfinished stall. Overlap can make a video
-failure inconclusive under the existing starvation rule. A source-stalled
-baseline is excluded from noise calibration. A steady source does not mask a
+startup). For a source gap longer than 1.5 times that cadence, only the excess
+beyond normal cadence appears in `sourceStarvedPeriods`, including an
+unfinished stall. Only that excess can reduce the measured gap in starvation
+diagnostics. Overlap can make a video failure inconclusive under the existing
+starvation rule. A baseline is excluded from noise calibration only when
+source excess overlaps its largest video gap. A steady source does not mask a
 Relais media gap. Configured `cameraSettings.frameRate` remains a device setting,
 not proof of the observed frame rate.
 

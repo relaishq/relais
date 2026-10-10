@@ -343,9 +343,9 @@ test('shared counter painter survives the unchanged reader at pattern and 720p g
 test('source stall during a move downgrades an overlapping video failure',()=>{
  const source=M.sourceDiagnostics([0,33,66,99,132,165,278,311,344],165,350);
  assert.equal(source.frameIntervalMs,33);
- assert.deepEqual(source.sourceStarvedPeriods,[{startMs:165,endMs:278,ms:113}]);
+ assert.deepEqual(source.sourceStarvedPeriods,[{startMs:198,endMs:278,ms:80}]);
  const e={...event('move',150),...source,video:{...event().video,maxMs:150,maxStartMs:165,maxEndMs:315}};
- assert.equal(M.gapDiagnostics(e).adjustedVideoGapMs,37);
+ assert.equal(M.gapDiagnostics(e).adjustedVideoGapMs,70);
  assert.equal(M.verdict(e).status,'inconclusive');
  // An unrelated source stall cannot conceal a real media gap.
  assert.equal(M.verdict({...e,video:{...e.video,maxStartMs:400,maxEndMs:550}}).status,'fail');
@@ -362,10 +362,34 @@ test('source cadence uses observed 15 fps and detects a rate drop and open stall
  const drop=M.sourceDiagnostics([0,33,66,99,132,198,264],132,280);
  assert.equal(drop.frameIntervalMs,33);assert.equal(drop.sourceStarvedPeriods.length,2);
  const open=M.sourceDiagnostics([0,33,66,99,132,165],165,300);
- assert.equal(open.sourceStarvedPeriods.at(-1).open,true);
+ assert.deepEqual(open.sourceStarvedPeriods.at(-1),{startMs:198,endMs:300,ms:102,open:true});
  assert.equal(M.verdict({...event('move',150),...open,video:{...event().video,maxMs:150,maxStartMs:165,maxEndMs:315}}).status,'inconclusive');
  assert.equal(M.sourceDiagnostics([],0,100).frameIntervalMs,M.UNKNOWN);
- // Do not admit a source-stalled window into future noise calibration.
- const e={...baseline(80),...open};
+ // Exclude a baseline when source excess overlaps its largest gap.
+ const e={...baseline(80),...open,video:{maxMs:80,maxStartMs:200,maxEndMs:280}};
  assert.equal(M.noiseFloor([e]).video.count,0);
+});
+
+
+test('a draw hiccup just over 1.5 times cadence cannot hide a real Relais failure',()=>{
+ for(const delay of [49.501,51]) {
+  const source=M.sourceDiagnostics([0,33,66,99,132,165,165+delay,198+delay,231+delay],165,310);
+  const e={...event('move',140),...source,video:{...event().video,maxMs:140,maxStartMs:165,maxEndMs:305}};
+  assert.equal(M.verdict(e).status,'fail');
+  assert.ok(Math.abs(M.gapDiagnostics(e).overlapMs-(delay-33))<1e-9);
+  assert.ok(M.gapDiagnostics(e).adjustedVideoGapMs>120);
+ }
+});
+test('baselines exclude only source excess overlapping their largest gap',()=>{
+ const source=M.sourceDiagnostics([0,33,66,99,132,165,216,249,282],165,300);
+ // Normal cadence within the 51 ms draw interval is not a source stall.
+ const normal={...baseline(33),...source,video:{maxMs:33,maxStartMs:165,maxEndMs:198}};
+ assert.equal(M.noiseFloor([normal]).video.count,1);
+ const unrelated={...baseline(40),...source,video:{maxMs:40,maxStartMs:250,maxEndMs:290}};
+ const floor=M.noiseFloor(Array.from({length:5},()=>unrelated));
+ assert.equal(floor.video.count,5);assert.equal(floor.excluded,0);
+ assert.equal(M.noiseGate(floor).ready,true);
+ const overlapping={...baseline(40),...source,video:{maxMs:40,maxStartMs:190,maxEndMs:230}};
+ assert.equal(M.noiseFloor([overlapping]).video.count,0);
+ assert.equal(M.noiseFloor([overlapping]).excluded,1);
 });

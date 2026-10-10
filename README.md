@@ -138,8 +138,9 @@ largest gap ending after issue, even if a larger gap precedes issue (unverified
 if still open). Presentation gaps remain a secondary metric. Camera counters
 advance only when a camera frame arrives, and use the same reader and verdicts
 as the pattern source. Source draw timestamps provide the observed cadence;
-source stalls join starvation diagnostics and are excluded from baseline
-calibration.
+only source delay beyond normal cadence joins starvation diagnostics. A
+baseline is excluded from calibration when that excess overlaps its largest
+video gap.
 Audio judges total `concealedSamples` at the receiver sample rate. Non-silent
 concealment remains a diagnostic. `concealmentEvents` bounds bursts when more
 than one event occurs between stats. `totalSamplesReceived` must advance by at

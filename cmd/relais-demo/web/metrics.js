@@ -124,9 +124,11 @@
     const before=intervals.filter((p)=>p.endMs<=start);
     const values=(before.length?before:intervals).slice(-60).map((p)=>p.ms).sort((a,b)=>a-b);
     const cadence=values.length?(values[Math.floor((values.length-1)/2)]+values[Math.floor(values.length/2)])/2:UNKNOWN;
-    const periods=typeof cadence==='number'?intervals.filter((p)=>p.ms>cadence*1.5 && p.endMs>=start):[];
+    // Normal cadence is expected source time, not starvation. Only the
+    // excess can explain part of a measured receiver gap.
+    const periods=typeof cadence==='number'?intervals.filter((p)=>p.ms>cadence*1.5 && p.endMs>=start).map((p)=>({startMs:p.startMs+cadence,endMs:p.endMs,ms:p.ms-cadence})):[];
     const last=draws.at(-1);
-    if(typeof cadence==='number' && last!==undefined && end-last>cadence*1.5)periods.push({startMs:last,endMs:end,ms:end-last,open:true});
+    if(typeof cadence==='number' && last!==undefined && end-last>cadence*1.5)periods.push({startMs:last+cadence,endMs:end,ms:end-last-cadence,open:true});
     return {frameIntervalMs:cadence,sourceStarvedPeriods:periods};
   }
   function gapDiagnostics(e) {
@@ -185,7 +187,7 @@
     if(hold.status==='pending' || hold.status==='superseded' || hold.status==='not-run') return {status:'inconclusive',reasons:['60 s hold '+hold.status]};
     return hold.verdict;
   }
-  function validBaseline(e,threshold) {return !(e.sourceStarvedPeriods?.length) && e.windowVerdict.status==='pass' && ['video','audio'].every((kind)=>typeof e[kind].maxMs==='number' && e[kind].maxMs<threshold);}
+  function validBaseline(e,threshold) {return overlappingMs(e.sourceStarvedPeriods || [],e.video.maxStartMs,e.video.maxEndMs)===0 && e.windowVerdict.status==='pass' && ['video','audio'].every((kind)=>typeof e[kind].maxMs==='number' && e[kind].maxMs<threshold);}
   function noiseFloor(entries,baselineCount=5,threshold=100) {
     const valid=entries.filter((e)=>validBaseline(e,threshold)),recent=valid.slice(-baselineCount);
     const measure=(kind)=>{const values=recent.map((e)=>e[kind].maxMs).sort((a,b)=>a-b);return {count:values.length,medianMs:values.length?(values[Math.floor((values.length-1)/2)]+values[Math.floor(values.length/2)])/2:UNKNOWN,maxMs:values.length?values.at(-1):UNKNOWN};};
