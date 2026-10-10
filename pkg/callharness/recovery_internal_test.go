@@ -30,10 +30,10 @@ func TestRecoveryExcludesReplayFromSourceMargin(t *testing.T) {
 }
 
 func TestRecoveryCommonStartSeparatesLive(t *testing.T) {
-	r := &recorder{frameInterval: time.Second / 30, keyframeInterval: time.Second, sentVideoFrames: map[uint16]sentVideoFrame{0: {at: time.Millisecond}, 1: {at: 20 * time.Millisecond, pli: true}}}
+	r := &recorder{frameInterval: time.Second / 30, keyframeInterval: time.Second, sentVideoFrames: map[uint16]sentVideoFrame{0: {at: time.Millisecond}, 1: {at: 24 * time.Millisecond, pli: true}}}
 	r.tracks = []*trackRecord{{kind: kindVideo, arrivals: []time.Duration{2 * time.Millisecond, 21 * time.Millisecond, 25 * time.Millisecond}, headers: []rtpMark{{seq: 110, pictureID: 0, havePictureID: true}, {seq: 8293, pictureID: 0, havePictureID: true}, {seq: 8400, pictureID: 1, havePictureID: true}}, video: &videoRecord{frames: []frameMark{
 		{at: 22 * time.Millisecond, firstArrival: 21 * time.Millisecond, source: sentVideoFrame{at: time.Millisecond}, decodable: true, pictureID: 0},
-		{at: 26 * time.Millisecond, firstArrival: 25 * time.Millisecond, source: sentVideoFrame{at: 20 * time.Millisecond, pli: true}, decodable: true, pictureID: 1},
+		{at: 26 * time.Millisecond, firstArrival: 25 * time.Millisecond, source: sentVideoFrame{at: 24 * time.Millisecond, pli: true}, decodable: true, pictureID: 1},
 	}}}}
 	result := r.videoRecovery(10*time.Millisecond, time.Second)
 	require.Equal(t, 12*time.Millisecond, result.FirstDecodedAfterKill)
@@ -42,4 +42,14 @@ func TestRecoveryCommonStartSeparatesLive(t *testing.T) {
 	require.Equal(t, "Cache", result.Path)
 	require.Equal(t, "Keyframe", result.LivePath)
 	require.Equal(t, time.Second, result.KeyframeInterval)
+}
+
+func TestRecoveryOutageFrameIsNotFirstLive(t *testing.T) {
+	r := &recorder{sentVideoFrames: map[uint16]sentVideoFrame{0: {at: time.Millisecond}, 1: {at: 20 * time.Millisecond, pli: true}}, frameInterval: time.Second / 30}
+	r.tracks = []*trackRecord{{kind: kindVideo, arrivals: []time.Duration{2 * time.Millisecond, 21 * time.Millisecond}, headers: []rtpMark{{seq: 110, pictureID: 0}, {seq: 8303, pictureID: 1, havePictureID: true}}, video: &videoRecord{frames: []frameMark{{at: 22 * time.Millisecond, firstArrival: 21 * time.Millisecond, source: sentVideoFrame{at: 20 * time.Millisecond, pli: true}, pictureID: 1, decodable: true}}}}}
+	result := r.videoRecovery(10*time.Millisecond, time.Second)
+	require.Equal(t, 21*time.Millisecond, result.MediaResumedAt)
+	require.Equal(t, 12*time.Millisecond, result.FirstDecodedAfterKill)
+	require.Zero(t, result.FirstDecodedLiveAfterKill, "sent after kill but before resume is outage content")
+	require.Empty(t, result.LivePath)
 }

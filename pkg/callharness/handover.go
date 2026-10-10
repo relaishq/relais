@@ -214,6 +214,10 @@ type MoveReport struct {
 	// packet, including replay received while ResumeSession is still returning.
 	Recovery VideoRecovery
 
+	// Measurement is the caller content yardstick, independent of sequence
+	// margins and of the system account in Result.
+	Measurement EventMeasurement
+
 	Kind                          string        // "move" or "takeover"
 	DetectionTime                 time.Duration // failure action to control-plane detection
 	DecryptionFailuresAfterResume int
@@ -292,6 +296,7 @@ type ConsentReport struct {
 // r.mu.
 func (r *recorder) moveReports() []MoveReport {
 	reports := make([]MoveReport, 0, len(r.moves))
+	baselineFloor := time.Duration(0)
 	for _, move := range r.moves {
 		report := MoveReport{
 			Kind:          move.kind,
@@ -311,12 +316,22 @@ func (r *recorder) moveReports() []MoveReport {
 		for _, track := range r.tracks {
 			report.Tracks = append(report.Tracks, track.aroundMove(report.Start, report.End))
 		}
+		limit := r.hungUpAt
+		if len(reports)+1 < len(r.moves) {
+			limit = r.since(r.moves[len(reports)+1].start)
+		}
 		if report.Kind == "takeover" {
-			limit := r.hungUpAt
-			if len(reports)+1 < len(r.moves) {
-				limit = r.since(r.moves[len(reports)+1].start)
-			}
 			report.Recovery = r.videoRecovery(report.Start, limit)
+		}
+		report.Measurement = r.eventMeasurement(report, limit, baselineFloor)
+		if report.Kind == "takeover" {
+			previous := report.Measurement
+			if previous.Audio.Recovered && (r.sentVideo.Frames == 0 || previous.Video.Recovered) {
+				baselineFloor = report.Start + max(previous.Audio.BackToBaseline, previous.Video.BackToBaseline)
+			} else {
+				// No trusted recovery boundary exists for the next baseline.
+				baselineFloor = r.hungUpAt
+			}
 		}
 		firstResumed := time.Duration(0)
 		for _, track := range r.tracks {
@@ -458,6 +473,7 @@ func (r *recorder) consentEnd() time.Duration {
 
 func writeHandoverSummary(b *strings.Builder, r *Report) {
 	for i, move := range r.Moves {
+		fmt.Fprintf(b, "  caller event %d (%s): %s\n", i+1, move.Kind, move.Measurement.Summary())
 		res := move.Result
 		if move.Kind == "takeover" {
 			recovery := move.Recovery

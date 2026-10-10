@@ -219,6 +219,9 @@ func assertMoves(t *testing.T, report *callharness.Report, moves [][2]int, margi
 
 	require.Len(t, report.Moves, len(moves), "moves")
 	for i, move := range report.Moves {
+		if margin == 0 {
+			assertNoLostContent(t, move)
+		}
 		assert.Empty(t, move.Error, "move %d error", i+1)
 		assert.Equal(t, moves[i], [2]int{move.From, move.To}, "move %d workers", i+1)
 		assert.Positive(t, move.Result.StateBytes, "move %d exported state", i+1)
@@ -276,4 +279,15 @@ func assertVideoDecodes(t *testing.T, report *callharness.Report) {
 	}
 	assert.Empty(t, full.Errors, "ffmpeg decode errors")
 	assert.Equal(t, full.FramesIn, full.FramesDecoded, "frames ffmpeg decoded")
+}
+
+func assertNoLostContent(t *testing.T, move callharness.MoveReport) {
+	t.Helper()
+	require.Positive(t, move.Measurement.SettleWindow, "caller event measurement must be wired into the report")
+	if move.Measurement.Inconclusive {
+		t.Logf("content measurement inconclusive: %s", move.Measurement.Summary())
+		return
+	}
+	assert.Zero(t, move.Measurement.LostAudio, "planned move lost sent audio")
+	assert.Zero(t, move.Measurement.LostVideoFrames, "planned move lost sent video")
 }

@@ -2,6 +2,7 @@ package callharness
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -190,4 +191,37 @@ func (s *vp8Source) keyframeInterval() time.Duration {
 		}
 	}
 	return 0
+}
+
+// identifyOpus retains the fixture's one encoded frame, repackaged as code 3
+// with 8 trailing Opus padding bytes (RFC 6716 section 3.2.5). Decoders ignore
+// padding contents, so the caller's per-send counter cannot change the audio.
+// This synthetic measurement source deliberately uses nonzero padding; it is
+// not an Opus encoder (RFC 6716 requires encoders to zero their padding).
+// Unlike RTP extensions, this payload survives the echo worker unchanged.
+// Reject other framing instead of silently changing what a fixture decodes.
+func identifyOpus(frame []byte, id uint64) ([]byte, error) {
+	if len(frame) == 0 || frame[0]&3 != 0 {
+		return nil, errors.New("callharness: audio identity needs a single-frame code-0 Opus fixture")
+	}
+	packet := make([]byte, len(frame)+10)
+	packet[0], packet[1], packet[2] = frame[0]|3, 0x41, 8
+	copy(packet[3:], frame[1:])
+	binary.BigEndian.PutUint64(packet[len(packet)-8:], id)
+	return packet, nil
+}
+
+func (r *recorder) sendingAudio(frame []byte, duration time.Duration) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.audioIdentity++
+	packet, err := identifyOpus(frame, r.audioIdentity)
+	if err != nil {
+		return nil, err
+	}
+	key := string(packet)
+	r.pendingAudio = key
+	r.sentFrames[kindAudio][key] = struct{}{}
+	r.sentAudioUnits[key] = contentUnit{at: r.since(time.Now()), duration: duration}
+	return packet, nil
 }

@@ -52,3 +52,20 @@ func TestCacheAttributionCountsActualDecodedPath(t *testing.T) {
 	require.Equal(t, 1, cacheAttributions([]result{{Path: "Cache", ReplayPackets: 2}, {Path: "Keyframe", ReplayPackets: 2}, {Path: "Cache"}}))
 	require.Equal(t, 25*time.Millisecond, median([]time.Duration{40 * time.Millisecond, 10 * time.Millisecond, 30 * time.Millisecond, 20 * time.Millisecond}))
 }
+
+// Phase 2 measurements are observational. A noisy or undersampled yardstick
+// must carry its reason to the process summary without changing phase 1's
+// existing ten-run acceptance or treating an unknown measurement as a pass.
+func TestCrashRunCarriesInconclusiveYardstickWithoutChangingAcceptance(t *testing.T) {
+	report := successfulReport()
+	report.Moves[0].Measurement = callharness.EventMeasurement{
+		SettleWindow: 500 * time.Millisecond,
+		LostAudio:    460 * time.Millisecond, LostVideoFrames: 14,
+		Inconclusive: true, Reasons: []string{"video baseline has 2 samples (need 10)"},
+	}
+	measured := measure(report, "127.0.0.1:9", 60*time.Second)
+	require.True(t, measured.Pass, "the original acceptance thresholds are unchanged")
+	require.Equal(t, report.Moves[0].Measurement, measured.Measurement)
+	require.Contains(t, measured.Measurement.Summary(), "inconclusive: video baseline has 2 samples")
+	require.Contains(t, (callharness.EventMeasurement{}).Summary(), "inconclusive: event measurement not available")
+}

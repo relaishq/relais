@@ -30,6 +30,7 @@ type result struct {
 	Pass                                             bool
 	Path, LivePath                                   string
 	ReplayPackets                                    int
+	Measurement                                      callharness.EventMeasurement
 }
 
 func binaries(bin string) error {
@@ -235,6 +236,7 @@ func measure(report *callharness.Report, relayAddr string, after time.Duration) 
 		return r
 	}
 	move := report.Moves[0]
+	r.Measurement = move.Measurement
 	r.AfterResume, r.Decoded, r.Live, r.Detection = move.DecryptionFailuresAfterResume, move.Recovery.FirstDecodedAfterKill, move.Recovery.FirstDecodedLiveAfterKill, move.DetectionTime
 	r.Path, r.LivePath, r.ReplayPackets = move.Recovery.Path, move.Recovery.LivePath, move.Recovery.ReplayPackets
 	flowing := len(move.Tracks) == 2
@@ -254,6 +256,7 @@ func measure(report *callharness.Report, relayAddr string, after time.Duration) 
 func printTable(results []result) {
 	fmt.Println("run  gap_ms  decrypt(total/after)  reconnects  renegotiations  decoded_ms  live_ms  detection_ms  first_path  live_path  replay_packets  result")
 	for i, r := range results {
+		fmt.Printf("CALLER_EVENT run=%d %s\n", i+1, r.Measurement.Summary())
 		state := "FAIL"
 		if r.Pass {
 			state = "PASS"

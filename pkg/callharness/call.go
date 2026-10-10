@@ -89,9 +89,9 @@ type Call struct {
 	localUfrag  string
 	remoteUfrag string
 
-	// keyframeWanted is set when the worker asks the caller for a keyframe;
+	// keyframeWanted holds the caller-clock time of the pending request;
 	// the video sender answers it the way a browser's encoder would.
-	keyframeWanted   atomic.Bool
+	keyframeWanted   atomic.Int64
 	videoData        []byte
 	initialSequences *RTPSequenceNumbers
 
@@ -255,9 +255,9 @@ func (c *Call) addTrack(capability webrtc.RTPCodecCapability, kind string) (*web
 				return
 			}
 			for range keyframeRequests(packets, ssrc) {
-				c.rec.keyframeRequestReceived(kind)
+				requestedAt := c.rec.keyframeRequestReceived(kind)
 				if kind == kindVideo {
-					c.keyframeWanted.Store(true)
+					c.keyframeWanted.Store(int64(requestedAt))
 				}
 			}
 		}
@@ -386,7 +386,10 @@ func (c *Call) sendAudio(ctx context.Context, end time.Time) error {
 		}
 		// The echo can arrive before WriteSample returns, so the frame is
 		// registered first; it is counted once the write succeeds.
-		c.rec.sending(kindAudio, frame)
+		frame, err = c.rec.sendingAudio(frame, frameDuration)
+		if err != nil {
+			return err
+		}
 		if err := c.audio.WriteSample(media.Sample{Data: frame, Duration: frameDuration}); err != nil {
 			return fmt.Errorf("callharness: send audio: %w", err)
 		}
@@ -422,8 +425,8 @@ func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
 	defer ticker.Stop()
 
 	for time.Now().Before(end) {
-		pliResponse := c.keyframeWanted.Swap(false)
-		if pliResponse {
+		requestedAt := time.Duration(c.keyframeWanted.Swap(0))
+		if requestedAt > 0 {
 			if err := src.rewind(); err != nil {
 				return err
 			}
@@ -432,7 +435,7 @@ func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
 		if err != nil {
 			return err
 		}
-		c.rec.sendingVideo(frame, pliResponse, src.frameDuration) // records the observable PictureID before writing
+		c.rec.sendingVideo(frame, requestedAt, src.frameDuration) // records the observable PictureID before writing
 		if err := c.video.WriteSample(media.Sample{Data: frame, Duration: src.frameDuration}); err != nil {
 			return fmt.Errorf("callharness: send video: %w", err)
 		}
