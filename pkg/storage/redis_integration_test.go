@@ -11,11 +11,17 @@ func requireRedis(t *testing.T) string {
 	t.Helper()
 	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
 	if addr == "" {
-		addr = "localhost:6379"
+		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
+			t.Fatal("required Redis endpoint is not configured")
+		}
+		t.Skip("skipping: RELAIS_TEST_REDIS_ADDR not set")
 	}
 	// Try to connect
 	rs, err := NewRedisStorage(RedisConfig{Addr: addr})
 	if err != nil {
+		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
+			t.Fatalf("required Redis endpoint unavailable: %v", err)
+		}
 		t.Skipf("skipping: cannot connect to redis at %s: %v", addr, err)
 	}
 	_ = rs.Close()
