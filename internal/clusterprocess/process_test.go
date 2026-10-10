@@ -3,7 +3,6 @@ package clusterprocess
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,11 +10,7 @@ import (
 )
 
 func TestStopReapedChildCannotSignalReusedGroup(t *testing.T) {
-	root := filepath.Join("..", "..", "bin")
-	require.NoError(t, os.MkdirAll(root, 0o755))
-	dir, err := os.MkdirTemp(root, "process-stop-test-")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	exited, err := Start(dir, "exited", os.Environ(), "/usr/bin/true")
 	require.NoError(t, err)
 	<-exited.done
