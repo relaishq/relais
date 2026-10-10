@@ -16,6 +16,7 @@ func run() error {
 	leg := flag.String("leg", processrun.Env("RELAIS_RELAY_LEG", "127.0.0.1:0"), "private worker-leg UDP address")
 	httpAddr := flag.String("http", processrun.Env("RELAIS_RELAY_HTTP", "127.0.0.1:0"), "private control HTTP address")
 	hold := flag.Duration("hold-timeout", 3*time.Second, "abandoned move backstop")
+	restoreOff := flag.Bool("route-restore-off", false, "disable persisted-route restore for baseline measurement")
 	flag.Parse()
 	ctx, cancel := processrun.Context()
 	defer cancel()
@@ -24,7 +25,7 @@ func run() error {
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	r, err := relay.New(relay.Config{PublicAddr: *public, WorkerAddr: *leg, Owners: store, HoldTimeout: *hold})
+	r, err := relay.New(relay.Config{PublicAddr: *public, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, HoldTimeout: *hold})
 	if err != nil {
 		return err
 	}

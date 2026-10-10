@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/pion/stun/v4"
+	"github.com/relais/pkg/sessionstore"
 )
 
 // maxOutstandingChecks is how many unanswered binding requests a caller's
@@ -49,10 +50,10 @@ const maxOutstandingChecks = 8
 //     maxFlows routes and candidates together. Confirmed routes are never
 //     evicted: when only they fill the table, a new candidate is rejected.
 //
-// Losing the table (a relay restart) also loses which routes were active:
-// until a caller's next answered check, another session can claim its
-// address. Persisted routes (#42) close that gap; see
-// docs/adr/0001-route-stickiness.md.
+// Without persistence, a restart loses which routes were active until each
+// caller's next answered check. Optional persisted evidence restores the
+// remaining consent window before packet loops start; see
+// docs/adr/0003-persisted-relay-routes.md.
 type flowTable struct {
 	stickinessWindow time.Duration
 	idleTimeout      time.Duration
@@ -74,11 +75,17 @@ type flowTable struct {
 type callerFlows struct {
 	caller netip.AddrPort
 
-	route             *flow
-	routeElem         *list.Element
-	lastSeen          time.Time     // last caller packet on the route
-	lastAuthenticated time.Time     // arrival of the route session's last answered request
-	routeChecks       bindingChecks // the route session's unanswered requests
+	route                    *flow
+	routeElem                *list.Element
+	lastSeen                 time.Time // last caller packet on the route
+	lastAuthenticated        time.Time // arrival of the route session's last answered request
+	confirmedAt              time.Time
+	lastPersistQueued        time.Time
+	lastPersistAuthenticated time.Time
+	nominationPending        bool
+	consentBound             bool
+	consentDeadline          time.Time
+	routeChecks              bindingChecks // the route session's unanswered requests
 
 	candidate       *flow
 	candidateElem   *list.Element
@@ -240,7 +247,7 @@ func (t *flowTable) answer(caller, worker netip.AddrPort, pkt []byte, now time.T
 	}
 	txID, success := parseBindingSuccess(pkt)
 	if c.candidate != nil && c.candidate.worker == worker && success {
-		if sentAt, ok := c.candidateChecks.answer(txID); ok {
+		if sentAt, nominated, ok := c.candidateChecks.answerEvidence(txID); ok {
 			// The route's session may have answered a check since this
 			// candidate was admitted.
 			if t.sticky(c, c.candidate.session, now) {
@@ -251,14 +258,23 @@ func (t *flowTable) answer(caller, worker netip.AddrPort, pkt []byte, now time.T
 				sentAt = maxTime(c.lastAuthenticated, sentAt)
 			}
 			t.promote(c, now)
+			c.confirmedAt = now
 			c.lastAuthenticated = sentAt
+			c.consentDeadline = sentAt.Add(t.stickinessWindow)
+			if nominated {
+				t.renominate(c, now)
+			}
 			return true, c.route.session
 		}
 	}
 	if c.route != nil && c.route.worker == worker {
 		if success {
-			if sentAt, ok := c.routeChecks.answer(txID); ok {
+			if sentAt, nominated, ok := c.routeChecks.answerEvidence(txID); ok {
 				c.lastAuthenticated = maxTime(c.lastAuthenticated, sentAt)
+				c.consentDeadline = c.lastAuthenticated.Add(t.stickinessWindow)
+				if nominated {
+					t.renominate(c, now)
+				}
 			}
 		}
 		return true, ""
@@ -289,6 +305,11 @@ func (t *flowTable) forget(caller netip.AddrPort, session string) {
 func (t *flowTable) sweep(now time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	for _, c := range t.callers {
+		if c.route != nil && c.consentBound && !now.Before(c.consentDeadline) {
+			t.dropRoute(c)
+		}
+	}
 
 	t.expire(now)
 }
@@ -427,6 +448,9 @@ func (t *flowTable) live(caller netip.AddrPort, now time.Time) *callerFlows {
 	if c.candidate != nil && now.Sub(c.admitted) > t.pendingTimeout {
 		t.dropCandidate(c)
 	}
+	if c.route != nil && c.consentBound && !now.Before(c.consentDeadline) {
+		t.dropRoute(c)
+	}
 	if c.route != nil && now.Sub(c.lastSeen) > t.idleTimeout && !t.protected(c, now) {
 		t.dropRoute(c)
 	}
@@ -501,7 +525,7 @@ func (t *flowTable) sticky(c *callerFlows, session string, now time.Time) bool {
 // protected reports whether the route is active: its worker answered one of
 // the route session's requests that arrived within the stickiness window.
 func (t *flowTable) protected(c *callerFlows, now time.Time) bool {
-	return !c.lastAuthenticated.IsZero() && now.Sub(c.lastAuthenticated) < t.stickinessWindow
+	return !c.lastAuthenticated.IsZero() && now.Sub(c.lastAuthenticated) < t.stickinessWindow && (!c.consentBound || now.Before(c.consentDeadline))
 }
 
 func maxTime(a, b time.Time) time.Time {
@@ -517,8 +541,9 @@ func maxTime(a, b time.Time) time.Time {
 // request's arrival, not the answer's, is when the session was last active.
 type bindingChecks struct {
 	checks [maxOutstandingChecks]struct {
-		id     [stun.TransactionIDSize]byte
-		sentAt time.Time
+		id        [stun.TransactionIDSize]byte
+		sentAt    time.Time
+		nominated bool
 	}
 	next int
 }
@@ -532,19 +557,25 @@ func (b *bindingChecks) record(id [stun.TransactionIDSize]byte, now time.Time) {
 	}
 	b.checks[b.next].id = id
 	b.checks[b.next].sentAt = now
+	b.checks[b.next].nominated = false
 	b.next = (b.next + 1) % len(b.checks)
 }
 
 // answer consumes the request a binding success answers and returns when
 // it arrived.
 func (b *bindingChecks) answer(id [stun.TransactionIDSize]byte) (time.Time, bool) {
+	sentAt, _, ok := b.answerEvidence(id)
+	return sentAt, ok
+}
+
+func (b *bindingChecks) answerEvidence(id [stun.TransactionIDSize]byte) (time.Time, bool, bool) {
 	for i, check := range b.checks {
 		if check.id == id && !check.sentAt.IsZero() {
 			b.checks[i].sentAt = time.Time{}
-			return check.sentAt, true
+			return check.sentAt, check.nominated, true
 		}
 	}
-	return time.Time{}, false
+	return time.Time{}, false, false
 }
 
 // parseBindingSuccess returns the transaction ID of a STUN binding success
@@ -571,4 +602,90 @@ func (t *flowTable) forgetSession(id string) {
 			t.dropRoute(c)
 		}
 	}
+}
+
+// markNomination remembers USE-CANDIDATE only on the request that the worker
+// must subsequently authenticate. A spoofed or unmatched success changes nothing.
+func (t *flowTable) markNomination(caller netip.AddrPort, tx [stun.TransactionIDSize]byte) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if c := t.callers[caller]; c != nil {
+		for _, checks := range []*bindingChecks{&c.routeChecks, &c.candidateChecks} {
+			for i := range checks.checks {
+				if checks.checks[i].id == tx && !checks.checks[i].sentAt.IsZero() {
+					checks.checks[i].nominated = true
+				}
+			}
+		}
+	}
+}
+func (t *flowTable) renominate(c *callerFlows, now time.Time) {
+	c.confirmedAt = now
+	c.nominationPending = true
+	for _, other := range t.sessions[c.route.session] {
+		if other != c && other.route != nil && other.route.session == c.route.session {
+			t.dropRoute(other)
+		}
+	}
+}
+
+type routeSnapshot struct {
+	record    sessionstore.Route
+	worker    netip.AddrPort
+	nominated bool
+}
+
+func (t *flowTable) snapshot(caller netip.AddrPort, force bool, now time.Time) (routeSnapshot, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c := t.callers[caller]
+	if c == nil || c.route == nil || c.lastAuthenticated.IsZero() || !force && !c.nominationPending && (now.Sub(c.lastPersistQueued) < time.Second || !c.lastAuthenticated.After(c.lastPersistAuthenticated)) {
+		return routeSnapshot{}, false
+	}
+	c.lastPersistQueued = now
+	c.lastPersistAuthenticated = c.lastAuthenticated
+	c.consentBound = true
+	snapshot := routeSnapshot{record: sessionstore.Route{Caller: caller, SessionID: c.route.session, ConfirmedAt: c.confirmedAt, LastAuthenticated: c.lastAuthenticated, ExpiresAt: c.consentDeadline}, worker: c.route.worker, nominated: c.nominationPending}
+	c.nominationPending = false
+	return snapshot, true
+}
+func (t *flowTable) sessionCallers(id string) []netip.AddrPort {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	callers := []netip.AddrPort{}
+	for caller, c := range t.sessions[id] {
+		if c.route != nil && c.route.session == id {
+			callers = append(callers, caller)
+		}
+	}
+	return callers
+}
+func (t *flowTable) restore(record sessionstore.Route, worker netip.AddrPort, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !now.Before(record.ExpiresAt) || now.Sub(record.LastAuthenticated) >= t.stickinessWindow {
+		return false
+	}
+	c := t.callers[record.Caller]
+	if c != nil && c.route != nil {
+		if !record.LastAuthenticated.After(c.lastAuthenticated) || t.sticky(c, record.SessionID, now) {
+			return false
+		}
+		t.dropRoute(c)
+	}
+	if t.routes.Len()+t.pending.Len() >= t.maxFlows {
+		return false
+	}
+	c = &callerFlows{caller: record.Caller, route: &flow{worker: worker, session: record.SessionID}, lastSeen: now, lastAuthenticated: record.LastAuthenticated, confirmedAt: record.ConfirmedAt, consentBound: true, consentDeadline: minTime(record.ExpiresAt, record.LastAuthenticated.Add(t.stickinessWindow))}
+	t.callers[c.caller] = c
+	c.routeElem = t.routes.PushFront(c)
+	t.index(c, record.SessionID)
+	return true
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
 }

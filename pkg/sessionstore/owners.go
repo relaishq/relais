@@ -101,17 +101,20 @@ type WorkerIndexRefresher interface {
 
 // Memory is a single-process store. Use NewMemory, not its zero value.
 type Memory struct {
-	mu     sync.RWMutex
-	leases map[string]Lease
-	states map[string][]byte
-	epoch  uint64 // global; no per-session history survives release
+	mu               sync.RWMutex
+	leases           map[string]Lease
+	states           map[string][]byte
+	routes           map[netip.AddrPort]Route
+	routeNominations map[string]Route
+	routeSessions    map[string]map[netip.AddrPort]struct{}
+	epoch            uint64 // global; no per-session history survives release
 }
 
 var _ Store = (*Memory)(nil)
 
 // NewMemory returns an empty in-memory fenced store.
 func NewMemory() *Memory {
-	return &Memory{leases: make(map[string]Lease), states: make(map[string][]byte)}
+	return &Memory{leases: make(map[string]Lease), states: make(map[string][]byte), routes: make(map[netip.AddrPort]Route), routeNominations: make(map[string]Route), routeSessions: make(map[string]map[netip.AddrPort]struct{})}
 }
 
 func valid(id string, worker netip.AddrPort, ttl time.Duration) bool {
@@ -187,6 +190,7 @@ func (m *Memory) Transfer(ctx context.Context, from Lease, to netip.AddrPort, tt
 		return Lease{}, ErrLeaseLost
 	}
 
+	m.forgetRoutes(from.SessionID)
 	return m.next(from.SessionID, to, ttl), nil
 }
 
@@ -203,6 +207,7 @@ func (m *Memory) Get(ctx context.Context, id string) (Lease, error) {
 	if !ok || !time.Now().Before(lease.ExpiresAt) {
 		delete(m.leases, id)
 		delete(m.states, id)
+		m.forgetRoutes(id)
 		return Lease{}, ErrNotFound
 	}
 
@@ -227,6 +232,7 @@ func (m *Memory) Release(ctx context.Context, lease Lease) error {
 	if current, ok := m.leases[lease.SessionID]; ok && same(current, lease) {
 		delete(m.leases, lease.SessionID)
 		delete(m.states, lease.SessionID)
+		m.forgetRoutes(lease.SessionID)
 	}
 
 	return nil
@@ -250,6 +256,7 @@ func (m *Memory) ListByWorker(ctx context.Context, worker netip.AddrPort) ([]Lea
 		if !now.Before(lease.ExpiresAt) {
 			delete(m.leases, lease.SessionID)
 			delete(m.states, lease.SessionID)
+			m.forgetRoutes(lease.SessionID)
 			continue
 		}
 		if lease.Worker == worker {
@@ -287,6 +294,7 @@ func (m *Memory) GetState(ctx context.Context, id string) ([]byte, error) {
 	if !ok || !time.Now().Before(lease.ExpiresAt) {
 		delete(m.leases, id)
 		delete(m.states, id)
+		m.forgetRoutes(id)
 		return nil, ErrNotFound
 	}
 	state, ok := m.states[id]

@@ -77,14 +77,14 @@ type overtakeHook struct {
 }
 
 func (h *overtakeHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
-	args := cmd.Args()
-	if (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 9 && args[7] == h.op {
-		epoch := fmt.Sprint(args[9])
-		worker := fmt.Sprint(args[8])
+	args := sessionCommandArgs(cmd)
+	if (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 2 && args[0] == h.op {
+		epoch := fmt.Sprint(args[2])
+		worker := fmt.Sprint(args[1])
 		id := "retry-claim"
 		if h.op == "transfer" {
-			worker = fmt.Sprint(args[12])
-			epoch = fmt.Sprint(args[13])
+			worker = fmt.Sprint(args[5])
+			epoch = fmt.Sprint(args[6])
 			id = "retry-transfer"
 		}
 		h.attempts++

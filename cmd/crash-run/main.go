@@ -271,7 +271,13 @@ func run() error {
 	compare := flag.Bool("compare-cache", true, "compare Redis cache+PLI with cache-off PLI (runs per mode)")
 	cacheOff := flag.Bool("frame-cache-off", false, "run PLI only; disable cache writes and replay (overrides comparison)")
 	terminate := flag.Bool("sigterm", false, "verify graceful owning-worker drain instead of crash takeover")
+	relayRestart := flag.Bool("relay-restart", false, "SIGKILL and restart the relay mid-call; workers and caller stay alive")
+	restoreOff := flag.Bool("route-restore-off", false, "disable route restore in relay-restart baseline trials")
+	compareRestore := flag.Bool("compare-restore", true, "compare restore on/off in relay-restart mode")
 	flag.Parse()
+	if *relayRestart && (*terminate || *cacheOff) {
+		return errors.New("relay-restart cannot combine with sigterm or frame-cache-off")
+	}
 	if *runs < 1 || *after < time.Second {
 		return errors.New("runs must be positive and after must be at least 1s")
 	}
@@ -323,12 +329,24 @@ func run() error {
 	if *compare && !*terminate && !*cacheOff {
 		modes = []bool{false, true}
 	}
+	if *relayRestart {
+		modes = []bool{*restoreOff}
+		if *compareRestore && !*restoreOff {
+			modes = []bool{false, true}
+		}
+	}
 	all := make([][]result, len(modes))
 	labels := make([]string, len(modes))
 	for m, off := range modes {
 		labels[m] = "redis-cache+pli"
 		if off {
 			labels[m] = "pli-cache-off"
+		}
+		if *relayRestart {
+			labels[m] = "restore-on"
+			if off {
+				labels[m] = "restore-off"
+			}
 		}
 	}
 	for i := 0; i < *runs; i++ {
@@ -343,20 +361,38 @@ func run() error {
 			trialCtx, stop := context.WithTimeout(ctx, *after+30*time.Second)
 			// Identical phases for both modes, sampling #9's unchanged budget.
 			warmup := 1550*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
-			r, err := trial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, *terminate, off)
+			var r result
+			var err error
+			if *relayRestart {
+				warmup = 2250*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
+				r, err = relayRestartTrial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, off)
+			} else {
+				r, err = trial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, *terminate, off)
+			}
 			stop()
 			all[m] = append(all[m], r)
-			printTable(all[m])
+			if *relayRestart {
+				printRelayRestartTable(label, all[m])
+			} else {
+				printTable(all[m])
+			}
 			if err != nil {
 				return err
 			}
 			if !r.Pass {
 				return errors.New("caller-observed process handover threshold failed")
 			}
-			if !*terminate && off && (r.Path != "Keyframe" || r.ReplayPackets != 0) {
+			if !*relayRestart && !*terminate && off && (r.Path != "Keyframe" || r.ReplayPackets != 0) {
 				return errors.New("cache-off run did not prove PLI attribution")
 			}
 		}
+	}
+	if *relayRestart {
+		for m, results := range all {
+			fmt.Printf("PASS: %d/%d real-process relay-restart trials mode=%s\n", len(results), *runs, labels[m])
+			printRelayRestartTable(labels[m], results)
+		}
+		return nil
 	}
 	signal := "SIGKILL"
 	if *terminate {

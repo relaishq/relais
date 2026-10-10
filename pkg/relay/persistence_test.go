@@ -1,0 +1,318 @@
+package relay
+
+import (
+	"context"
+	"crypto/rand"
+	"net/netip"
+	"os"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/pion/stun/v4"
+	"github.com/relais/internal/redisendpoint"
+	"github.com/relais/pkg/sessionstore"
+	"github.com/relais/pkg/storage"
+	"github.com/stretchr/testify/require"
+)
+
+func routeStores(t *testing.T, test func(*testing.T, sessionstore.Store, sessionstore.Routes)) {
+	t.Helper()
+	t.Run("memory", func(t *testing.T) { store := sessionstore.NewMemory(); test(t, store, store) })
+	t.Run("redis", func(t *testing.T) {
+		addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+		if addr == "" {
+			if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
+				t.Fatal("Redis required")
+			}
+			t.Skip("dedicated Redis not configured")
+		}
+		require.NoError(t, redisendpoint.Validate(addr))
+		store, err := sessionstore.NewRedis(context.Background(), storage.RedisConfig{Addr: addr, Prefix: "relay-route-test:" + rand.Text() + ":"}, make([]byte, 32))
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+		test(t, store, store)
+	})
+}
+func persistedRoute(t *testing.T, routes sessionstore.Routes, caller netip.AddrPort, check func(sessionstore.Route) bool) sessionstore.Route {
+	t.Helper()
+	var result sessionstore.Route
+	require.Eventually(t, func() bool {
+		loaded, err := routes.LoadRoutes(context.Background(), 100)
+		if err != nil {
+			return false
+		}
+		for _, record := range loaded {
+			if record.Caller == caller && check(record) {
+				result = record
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, time.Millisecond)
+	return result
+}
+func TestPersistedRelayRestoresMediaAndStickinessBothStores(t *testing.T) {
+	routeStores(t, func(t *testing.T, store sessionstore.Store, routes sessionstore.Routes) {
+		sys := startTestRelay(t, Config{Owners: store, Routes: routes, RouteStickinessWindow: 2 * time.Second})
+		a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+		caller := newTestCaller(t)
+		sys.connect(t, caller, a, sessionA)
+		record := persistedRoute(t, routes, caller.addr(), func(record sessionstore.Route) bool { return record.SessionID == sessionA })
+		sys.restart(t)
+		caller.send(t, media, sys.relay.PublicAddr())
+		a.expect(t, caller.addr(), media, "media restores without an ICE check")
+		caller.send(t, bindingRequest(t, sessionB), sys.relay.PublicAddr())
+		b.expectNothing(t)
+		a.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
+		caller.expect(t, sys.relay.PublicAddr(), dtlsReply)
+		require.EqualValues(t, 1, sys.relay.Stats().RoutesRestored)
+		loaded, err := routes.LoadRoutes(context.Background(), 100)
+		require.NoError(t, err)
+		require.Equal(t, record.LastAuthenticated, loaded[0].LastAuthenticated, "restore and media never renew stickiness")
+		// Only the remainder of the original window is protected.
+		time.Sleep(time.Until(record.ExpiresAt) + 10*time.Millisecond)
+		check := bindingRequest(t, sessionB)
+		caller.send(t, check, sys.relay.PublicAddr())
+		b.expect(t, caller.addr(), check, "original consent deadline releases the address")
+	})
+}
+func TestPersistedRelayMoveUsesCurrentGenerationBothStores(t *testing.T) {
+	routeStores(t, func(t *testing.T, store sessionstore.Store, routes sessionstore.Routes) {
+		sys := startTestRelay(t, Config{Owners: store, Routes: routes})
+		a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+		caller := newTestCaller(t)
+		sys.connect(t, caller, a, sessionA)
+		record := persistedRoute(t, routes, caller.addr(), func(record sessionstore.Route) bool { return true })
+		lease, err := store.Get(context.Background(), sessionA)
+		require.NoError(t, err)
+		next, err := store.Transfer(context.Background(), lease, b.addr(), time.Minute)
+		require.NoError(t, err)
+		require.NoError(t, sys.relay.MoveSession(sessionA, a.addr(), b.addr()))
+		moved := persistedRoute(t, routes, caller.addr(), func(record sessionstore.Route) bool { return record.Generation == next.Epoch })
+		require.Equal(t, record.LastAuthenticated, moved.LastAuthenticated)
+		require.Equal(t, record.ConfirmedAt, moved.ConfirmedAt)
+		sys.restart(t)
+		caller.send(t, media, sys.relay.PublicAddr())
+		b.expect(t, caller.addr(), media)
+		a.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
+		caller.expectNothing(t)
+		b.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
+		caller.expect(t, sys.relay.PublicAddr(), dtlsReply)
+	})
+}
+func TestPersistedRelayHangupAndNewGenerationInvalidateBothStores(t *testing.T) {
+	for _, action := range []string{"hangup", "new-generation", "forget"} {
+		t.Run(action, func(t *testing.T) {
+			routeStores(t, func(t *testing.T, store sessionstore.Store, routes sessionstore.Routes) {
+				sys := startTestRelay(t, Config{Owners: store, Routes: routes})
+				a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+				caller := newTestCaller(t)
+				sys.connect(t, caller, a, sessionA)
+				persistedRoute(t, routes, caller.addr(), func(sessionstore.Route) bool { return true })
+				lease, err := store.Get(context.Background(), sessionA)
+				require.NoError(t, err)
+				switch action {
+				case "hangup":
+					require.NoError(t, store.Release(context.Background(), lease))
+					sys.relay.ForgetSession(sessionA)
+				case "new-generation":
+					_, err = store.Transfer(context.Background(), lease, b.addr(), time.Minute)
+					require.NoError(t, err)
+				case "forget":
+					sys.relay.ForgetSession(sessionA)
+				}
+				require.Eventually(t, func() bool {
+					loaded, err := routes.LoadRoutes(context.Background(), 100)
+					return err == nil && len(loaded) == 0
+				}, 2*time.Second, time.Millisecond)
+				sys.restart(t)
+				caller.send(t, media, sys.relay.PublicAddr())
+				a.expectNothing(t)
+				b.expectNothing(t)
+			})
+		})
+	}
+}
+func TestPersistedRelayRenominationInvalidatesOldAddressBothStores(t *testing.T) {
+	routeStores(t, func(t *testing.T, store sessionstore.Store, routes sessionstore.Routes) {
+		sys := startTestRelay(t, Config{Owners: store, Routes: routes})
+		a := sys.worker(t, sessionA)
+		old, next := newTestCaller(t), newTestCaller(t)
+		sys.connect(t, old, a, sessionA)
+		persistedRoute(t, routes, old.addr(), func(sessionstore.Route) bool { return true })
+		request, err := stun.Build(stun.BindingRequest, stun.TransactionID, stun.NewUsername(sessionA+":callerufrag"), stun.RawAttribute{Type: stun.AttrUseCandidate}, stun.NewShortTermIntegrity("worker-ice-password"), stun.Fingerprint)
+		require.NoError(t, err)
+		next.send(t, request.Raw, sys.relay.PublicAddr())
+		a.expect(t, next.addr(), request.Raw)
+		sys.confirm(t, a, next, request.Raw)
+		persistedRoute(t, routes, next.addr(), func(sessionstore.Route) bool { return true })
+		sys.restart(t)
+		old.send(t, media, sys.relay.PublicAddr())
+		a.expectNothing(t)
+		next.send(t, media, sys.relay.PublicAddr())
+		a.expect(t, next.addr(), media)
+	})
+}
+func TestRestoredRouteExpiresDespiteMediaBothStores(t *testing.T) {
+	routeStores(t, func(t *testing.T, store sessionstore.Store, routes sessionstore.Routes) {
+		sys := startTestRelay(t, Config{Owners: store, Routes: routes, RouteStickinessWindow: 150 * time.Millisecond})
+		a := sys.worker(t, sessionA)
+		caller := newTestCaller(t)
+		sys.connect(t, caller, a, sessionA)
+		record := persistedRoute(t, routes, caller.addr(), func(sessionstore.Route) bool { return true })
+		sys.restart(t)
+		caller.send(t, media, sys.relay.PublicAddr())
+		a.expect(t, caller.addr(), media)
+		time.Sleep(time.Until(record.ExpiresAt) + 10*time.Millisecond)
+		caller.send(t, media, sys.relay.PublicAddr())
+		a.expectNothing(t)
+	})
+}
+func TestRouteRenewalPersistenceIsThrottled(t *testing.T) {
+	store := sessionstore.NewMemory()
+	sys := startTestRelay(t, Config{Owners: store, Routes: store})
+	a := sys.worker(t, sessionA)
+	caller := newTestCaller(t)
+	sys.connect(t, caller, a, sessionA)
+	original := persistedRoute(t, store, caller.addr(), func(sessionstore.Route) bool { return true })
+	for range 20 {
+		sys.connect(t, caller, a, sessionA)
+	}
+	require.EqualValues(t, 1, sys.relay.Stats().RouteWrites)
+	time.Sleep(time.Second)
+	sys.connect(t, caller, a, sessionA)
+	renewed := persistedRoute(t, store, caller.addr(), func(record sessionstore.Route) bool {
+		return record.LastAuthenticated.After(original.LastAuthenticated)
+	})
+	require.Equal(t, original.ConfirmedAt, renewed.ConfirmedAt)
+	require.EqualValues(t, 2, sys.relay.Stats().RouteWrites)
+}
+
+type blockedRouteStore struct {
+	*sessionstore.Memory
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockedRouteStore) PutRoute(ctx context.Context, record sessionstore.Route, nominated bool) error {
+	s.once.Do(func() { close(s.entered) })
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.release:
+	}
+	return s.Memory.PutRoute(ctx, record, nominated)
+}
+func TestRouteWritesAreBoundedAndNeverBlockMedia(t *testing.T) {
+	store := &blockedRouteStore{Memory: sessionstore.NewMemory(), entered: make(chan struct{}), release: make(chan struct{})}
+	sys := startTestRelay(t, Config{Owners: store, Routes: store, MaxQueuedLookups: 2, OwnerLookupTimeout: 2 * time.Second})
+	a := sys.worker(t, sessionA)
+	caller := newTestCaller(t)
+	sys.connect(t, caller, a, sessionA)
+	<-store.entered
+	caller.send(t, media, sys.relay.PublicAddr())
+	a.expect(t, caller.addr(), media, "slow persistence cannot stop forwarding")
+	for range 8 {
+		sys.connect(t, newTestCaller(t), a, sessionA)
+	}
+	require.Positive(t, sys.relay.Stats().RouteWritesDropped, "bounded route overflow is counted")
+	close(store.release)
+	require.Eventually(t, func() bool { return sys.relay.Stats().RouteWrites > 0 }, 2*time.Second, time.Millisecond)
+}
+func TestRouteRestoreLimitFailsClosed(t *testing.T) {
+	store := sessionstore.NewMemory()
+	owner := netip.MustParseAddrPort("127.0.0.1:6100")
+	lease, err := store.Claim(context.Background(), sessionA, owner, time.Minute)
+	require.NoError(t, err)
+	now := time.Now()
+	for _, port := range []uint16{6101, 6102} {
+		record := sessionstore.Route{Caller: netip.AddrPortFrom(owner.Addr(), port), SessionID: sessionA, Generation: lease.Epoch, ConfirmedAt: now, LastAuthenticated: now, ExpiresAt: now.Add(time.Second)}
+		require.NoError(t, store.PutRoute(context.Background(), record, false))
+	}
+	_, err = New(Config{Owners: store, Routes: store, MaxFlows: 1})
+	require.ErrorIs(t, err, sessionstore.ErrRouteLimit)
+}
+
+type countedRouteStore struct {
+	*sessionstore.Memory
+	scans atomic.Uint64
+}
+
+func (s *countedRouteStore) LoadRoutes(ctx context.Context, limit int) ([]sessionstore.Route, error) {
+	s.scans.Add(1)
+	return s.Memory.LoadRoutes(ctx, limit)
+}
+func TestUnknownSourceFloodCannotTriggerRestoreStoreWork(t *testing.T) {
+	store := &countedRouteStore{Memory: sessionstore.NewMemory()}
+	sys := startTestRelay(t, Config{Owners: store, Routes: store})
+	callers := make([]*testCaller, 20)
+	for i := range callers {
+		callers[i] = newTestCaller(t)
+		for range 10 {
+			callers[i].send(t, media, sys.relay.PublicAddr())
+		}
+	}
+	require.Eventually(t, func() bool { return sys.relay.Stats().Unroutable >= 200 }, time.Second, time.Millisecond)
+	require.EqualValues(t, 1, store.scans.Load(), "only the eager startup scan may load persisted routes")
+	callers[0].expectNothing(t)
+}
+
+func TestRenominationReusedTransactionUsesOnlyCurrentEvidence(t *testing.T) {
+	table := newFlowTable(flowLimits{stickinessWindow: time.Minute, idleTimeout: time.Minute, pendingTimeout: time.Minute, maxFlows: 10, maxPending: 10})
+	worker := netip.MustParseAddrPort("127.0.0.1:7100")
+	old := netip.MustParseAddrPort("127.0.0.1:7101")
+	next := netip.MustParseAddrPort("127.0.0.1:7102")
+	now := time.Now()
+	var reused []byte
+	for _, caller := range []netip.AddrPort{old, next} {
+		request := bindingRequest(t, sessionA)
+		_, tx, ok := parseBindingRequest(request)
+		require.True(t, ok)
+		require.True(t, table.admit(caller, worker, sessionA, tx, now))
+		allowed, _ := table.answer(caller, worker, bindingSuccess(t, request), now)
+		require.True(t, allowed)
+		reused = request
+	}
+	_, tx, _ := parseBindingRequest(reused)
+	_, ok := table.routeSTUN(next, sessionA, tx, now.Add(time.Millisecond))
+	require.True(t, ok)
+	table.markNomination(next, tx)
+	allowed, _ := table.answer(next, worker, bindingSuccess(t, reused), now.Add(2*time.Millisecond))
+	require.True(t, allowed)
+	_, ok = table.route(old, now.Add(3*time.Millisecond))
+	require.False(t, ok, "authenticated re-nomination must invalidate the old address even with a reused transaction ID")
+}
+
+func TestHeldNominationStillInvalidatesOldAddressAfterMove(t *testing.T) {
+	store := sessionstore.NewMemory()
+	sys := startTestRelay(t, Config{Owners: store, Routes: store})
+	a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+	old, next := newTestCaller(t), newTestCaller(t)
+	sys.connect(t, old, a, sessionA)
+	sys.connect(t, next, a, sessionA)
+	beginHold(t, sys, a, sessionA)
+	request, err := stun.Build(stun.BindingRequest, stun.TransactionID, stun.NewUsername(sessionA+":callerufrag"), stun.RawAttribute{Type: stun.AttrUseCandidate}, stun.NewShortTermIntegrity("worker-ice-password"), stun.Fingerprint)
+	require.NoError(t, err)
+	next.send(t, request.Raw, sys.relay.PublicAddr())
+	require.Eventually(t, func() bool { return sys.relay.Stats().HeldPackets == 1 }, time.Second, time.Millisecond)
+	transferTestLease(t, store, sessionA, b.addr())
+	require.NoError(t, sys.relay.MoveSession(sessionA, a.addr(), b.addr()))
+	_, err = sys.relay.ReleaseSession(sessionA, b.addr())
+	require.NoError(t, err)
+	b.expect(t, next.addr(), request.Raw)
+	sys.confirm(t, b, next, request.Raw)
+	old.send(t, media, sys.relay.PublicAddr())
+	b.expectNothing(t)
+	require.Eventually(t, func() bool {
+		records, err := store.LoadRoutes(context.Background(), 10)
+		return err == nil && len(records) == 1 && records[0].Caller == next.addr()
+	}, time.Second, time.Millisecond)
+	sys.restart(t)
+	old.send(t, media, sys.relay.PublicAddr())
+	b.expectNothing(t)
+	next.send(t, media, sys.relay.PublicAddr())
+	b.expect(t, next.addr(), media)
+}

@@ -81,7 +81,7 @@ session from that address is dropped, even if its credentials are valid.
   stop renewing and lapse after one window. Rate limiting per caller would
   close this; it is not part of this decision.
 
-## Residual risk: lockout after a relay restart, and persisted routes (#42)
+## Restart gap in an address-only relay, and persisted routes (#42)
 
 A restarted relay has an empty flow table, so it does not know which
 addresses are active. Normal restart recovery still works: each caller's
@@ -105,3 +105,13 @@ worker from authoritative ownership. Restoring a route or moving it to
 another worker must never create a fresh renewal time. For the new-caller
 case, and until #42, the mitigation is outside this rule: ingress filtering
 that stops source-address spoofing (BCP 38), or rate limiting per caller.
+
+## Persisted-route addendum (#42)
+
+ADR 0003 implements restart protection when route persistence is enabled.
+The relay restores authenticated evidence before accepting any caller packets,
+uses the lease's current owner and generation, and preserves the original
+renewal time. Restored routes protect only the remainder of their original
+consent window. The separate relay process enables this by default. An
+address-only embedded relay, failed/dropped persistence writes, or the explicit
+restore-off measurement mode can still have the restart gap described above.

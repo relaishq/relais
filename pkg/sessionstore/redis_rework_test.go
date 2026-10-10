@@ -25,8 +25,8 @@ type failedSettleHook struct {
 }
 
 func (h *failedSettleHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
-	args := cmd.Args()
-	if !h.disabled && (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 7 && args[7] == "settle" {
+	args := sessionCommandArgs(cmd)
+	if !h.disabled && (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 0 && args[0] == "settle" {
 		return ctx, errors.New("EOF: settlement unavailable")
 	}
 	return ctx, nil
@@ -236,8 +236,8 @@ type delayedPutHook struct {
 }
 
 func (h *delayedPutHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
-	args := cmd.Args()
-	if (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 7 && args[7] == "put" && h.count.Add(1) == 1 {
+	args := sessionCommandArgs(cmd)
+	if (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 0 && args[0] == "put" && h.count.Add(1) == 1 {
 		close(h.blocked)
 		select {
 		case <-h.release:
@@ -316,8 +316,8 @@ type errorBeforeHook struct {
 }
 
 func (h *errorBeforeHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
-	args := cmd.Args()
-	if (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 7 && args[7] == h.op {
+	args := sessionCommandArgs(cmd)
+	if (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 0 && args[0] == h.op {
 		h.attempts++
 		if h.remaining > 0 {
 			h.remaining--
@@ -386,8 +386,8 @@ func (h *indexFaultHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (co
 func (h *indexFaultHook) AfterProcess(_ context.Context, cmd redis.Cmder) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	args := cmd.Args()
-	if (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 7 && (args[7] == "claim" || args[7] == "transfer") && cmd.Err() == nil {
+	args := sessionCommandArgs(cmd)
+	if (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(args) > 0 && (args[0] == "claim" || args[0] == "transfer") && cmd.Err() == nil {
 		h.committed = true
 		h.cancel()
 	}

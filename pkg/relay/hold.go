@@ -212,6 +212,9 @@ func (r *Relay) releaseHold(h *sessionHold, to netip.AddrPort) int {
 				r.holdSendFailures.Add(1)
 				continue
 			}
+			if request && isNomination(payload) {
+				r.flows.markNomination(packet.caller, tx)
+			}
 		}
 		if !r.sendCaller(packet.datagram, packet.caller, worker) {
 			r.holdSendFailures.Add(1)
