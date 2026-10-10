@@ -17,11 +17,11 @@ BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 # Linker flags (populate pkg/buildinfo)
 LDFLAGS=-ldflags "-X github.com/relais/pkg/buildinfo.Version=$(VERSION) -X github.com/relais/pkg/buildinfo.Commit=$(COMMIT) -X github.com/relais/pkg/buildinfo.Date=$(BUILD_TIME)"
 
-.PHONY: all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo crash-run help
+.PHONY: all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo demo-cluster crash-run help
 
 all: test build
 
-build: ensure_bin_dir ## Build plugin runners and relay, worker, control and crash-run binaries
+build: ensure_bin_dir ## Build plugin runners, relay, worker, control, crash-run and demo binaries
 	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-ingress -v $(LDFLAGS) ./cmd/ingress-runner
 	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-egress -v $(LDFLAGS) ./cmd/egress-runner
 	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-transform -v $(LDFLAGS) ./cmd/transform-runner
@@ -30,6 +30,11 @@ build: ensure_bin_dir ## Build plugin runners and relay, worker, control and cra
 	$(GOBUILD) -o $(BIN_DIR)/relais-worker $(LDFLAGS) ./cmd/relais-worker
 	$(GOBUILD) -o $(BIN_DIR)/relais-control $(LDFLAGS) ./cmd/relais-control
 	$(GOBUILD) -o $(BIN_DIR)/crash-run $(LDFLAGS) ./cmd/crash-run
+	$(GOBUILD) -o $(BIN_DIR)/relais-demo $(LDFLAGS) ./cmd/relais-demo
+
+DEMO_CLUSTER_FLAGS ?=
+demo-cluster: build ## Run three separate workers and the browser move/drain/kill page on loopback; starts its own Redis (never 6379)
+	./$(BIN_DIR)/relais-demo $(DEMO_CLUSTER_FLAGS)
 
 CRASH_FLAGS ?=
 crash-run: build ## Compare ten real-process SIGKILL calls per cache/PLI mode on throwaway Redis; requires ffmpeg

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Relais cluster demo</title>
+<style>
+:root{color-scheme:light dark;font:15px/1.5 system-ui,sans-serif}body{margin:0;padding:24px;background:light-dark(#f7f7f5,#161614);color:light-dark(#1d1d1b,#ecebe6)}main{max-width:1100px;margin:auto}h1{font-size:24px;margin:0}h2{font-size:18px;margin:24px 0 8px}p{color:light-dark(#66665f,#b3b3aa)}a{color:inherit}.controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:18px 0}button{font:inherit;padding:8px 16px;border:1px solid #8886;border-radius:6px;cursor:pointer}button:disabled{opacity:.5;cursor:default}.videos{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}figure{margin:0;border:1px solid #8886;border-radius:8px;overflow:hidden}video{width:100%;aspect-ratio:4/3;background:#000;display:block}figcaption{padding:6px 12px}dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 18px;padding:14px;border:1px solid #8886;border-radius:8px}dd{margin:0;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}pre{padding:14px;border:1px solid #8886;border-radius:8px;max-height:360px;overflow:auto;font-size:12px}table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}th,td{text-align:left;padding:8px;border-bottom:1px solid #8886}.scroll{overflow:auto}.error{color:light-dark(#b3261e,#f08a80)}.gap{font-size:20px;font-weight:600}code{font-size:13px}
+</style>
+</head>
+<body><main>
+<h1>Relais cluster demo</h1>
+<p>One relay, one control plane and three separate media workers. Publish
+<a href="?source=camera&autostart=0">camera and microphone</a> or a
+<a href="?source=test&autostart=0">test pattern and tone</a> and see the echo.</p>
+<div class="controls">
+<button id="start">Start call</button><button id="stop" disabled>Hang up</button>
+<button id="move" disabled>Move call</button><button id="drain" disabled>Drain owner</button>
+<button id="kill" disabled>Kill owner (SIGKILL)</button>
+<label><input id="audio" type="checkbox" checked> Play echoed audio</label>
+</div>
+<p id="error" class="error" role="alert"></p>
+<div class="videos"><figure><video id="local" autoplay playsinline muted></video><figcaption>Local source</figcaption></figure>
+<figure><video id="remote" autoplay playsinline></video><figcaption>Echo from the current owner</figcaption></figure></div>
+<h2>Live call</h2><dl id="summary"></dl>
+<p class="gap" id="gap">Video gap — · Audio packet gap —</p>
+<p>Move and drain: gap &lt; 100 ms. SIGKILL takeover: gap &lt; 2 s. Both media streams must
+continue, with the connection staying connected, no ICE restart or renegotiation,
+and a continuous 60 s hold after the last event. A pending check is inconclusive.</p>
+<p>Keep this Chrome tab and remote video visible and unobstructed. Hidden windows are invalid.
+Test video gaps use decoded counter advances; audio gaps use total concealment samples.
+Starvation only downgrades a failing gap when its overlap could explain the excess above the threshold. Missing counters or inadequate audio playout is inconclusive.
+Raw gaps below the threshold pass regardless of the baseline floor. Run <code>relaisDemo.runBaseline()</code> for failure checks: too few valid baselines or a floor near the threshold can make a move or drain gap failure inconclusive. Gaps at least the threshold plus the floor max still fail; with no floor, allow one source frame interval.</p>
+<h2>Move log</h2><div class="scroll"><table><thead><tr><th>Time</th><th>Kind</th><th>From → to</th><th>Video gap</th><th>Audio gap</th><th>Result</th></tr></thead><tbody id="moves"></tbody></table></div>
+<h2>Connection transitions</h2><pre id="transitions">[]</pre>
+<h2>Results</h2><p>Script API: <code>window.relaisDemo</code>. Unsupported counters read <code>"unverified"</code>.
+The browser cannot report SRTP decryption failures directly; undecryptable packets appear as loss or freezes.
+Worker logs provide their decryption-failure counts.</p><pre id="results">{}</pre>
+</main><script src="metrics.js"></script><script src="demo.js"></script></body></html>

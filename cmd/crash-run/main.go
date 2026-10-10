@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/relais/internal/clusterprocess"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/callharness"
 )
@@ -55,38 +56,38 @@ func processEnv(key, addr, prefix string) []string {
 	}
 	return append(env, "RELAIS_SESSIONSTORE_KEY="+key, "RELAIS_REDIS_ADDR="+addr, "RELAIS_REDIS_PREFIX="+prefix)
 }
-func trial(ctx context.Context, manager *processManager, bin, dir string, env []string, after, warmup time.Duration, verbose, terminate, cacheOff bool) (result, error) {
-	var processes []*child
+func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, after, warmup time.Duration, verbose, terminate, cacheOff bool) (result, error) {
+	var processes []*clusterprocess.Child
 	defer func() {
 		for i := len(processes) - 1; i >= 0; i-- {
-			processes[i].stop()
+			processes[i].Stop()
 		}
 	}()
-	start := func(name string, args ...string) (*child, ready, error) {
+	start := func(name string, args ...string) (*clusterprocess.Child, clusterprocess.Ready, error) {
 		childEnv := env
 		if name == "relay" {
 			childEnv = withoutKey(env)
 		}
-		c, err := manager.start(dir, name, childEnv, args...)
+		c, err := manager.Start(dir, name, childEnv, args...)
 		if err != nil {
-			return nil, ready{}, err
+			return nil, clusterprocess.Ready{}, err
 		}
 		processes = append(processes, c)
 		startup, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		r, err := c.ready(startup)
+		r, err := c.Ready(startup)
 		return c, r, err
 	}
 	_, relayReady, err := start("relay", filepath.Join(bin, "relais-relay"), "-media", "127.0.0.1:0", "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0")
 	if err != nil {
 		return result{}, err
 	}
-	controlAddr, err := freeTCP()
+	controlAddr, err := clusterprocess.FreeTCP()
 	if err != nil {
 		return result{}, err
 	}
 	controlURL := "http://" + controlAddr
-	workerPIDs := map[string]*child{}
+	workerPIDs := map[string]*clusterprocess.Child{}
 	controlArgs := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", relayReady.HTTP}
 	for _, name := range []string{"0", "1"} {
 		args := []string{filepath.Join(bin, "relais-worker"), "-media", "127.0.0.1:0", "-http", "127.0.0.1:0", "-name", name, "-control", controlURL, "-relay-leg", relayReady.Leg, "-relay-media", relayReady.Media}
@@ -155,13 +156,13 @@ func trial(ctx context.Context, manager *processManager, bin, dir string, env []
 	if terminate {
 		signal, label = syscall.SIGTERM, "SIGTERM"
 	}
-	if err := worker.signalGroup(signal); err != nil {
+	if err := worker.SignalGroup(signal); err != nil {
 		return result{}, err
 	}
 	if !terminate {
 		h.RecordProcessKill(owner, killed)
 	}
-	fmt.Printf("%s worker=%s pid=%d session=%s relay=%s\n", label, owner, worker.pid, call.SessionID(), relayReady.Media)
+	fmt.Printf("%s worker=%s pid=%d session=%s relay=%s\n", label, owner, worker.PID(), call.SessionID(), relayReady.Media)
 	// Wait for a terminal takeover, then observe at least 60 s of consent in
 	// the default run. The short developer mode cannot claim that acceptance.
 	deadline := time.NewTimer(3 * time.Second)
@@ -188,9 +189,9 @@ func trial(ctx context.Context, manager *processManager, bin, dir string, env []
 		select {
 		case <-ctx.Done():
 			return result{}, ctx.Err()
-		case <-worker.done:
-			if worker.err != nil {
-				return result{}, fmt.Errorf("SIGTERM worker exit: %w", worker.err)
+		case <-worker.Done():
+			if worker.Err() != nil {
+				return result{}, fmt.Errorf("SIGTERM worker exit: %w", worker.Err())
 			}
 		case <-time.After(6 * time.Second):
 			return result{}, errors.New("SIGTERM worker did not finish drain and exit")
@@ -286,23 +287,23 @@ func run() error {
 		return err
 	}
 	fmt.Printf("process logs: %s\n", dir)
-	manager := &processManager{}
-	ctx, cancel := manager.context()
+	manager := &clusterprocess.Manager{}
+	ctx, cancel := manager.Context()
 	defer cancel()
 	addr := *redisAddr
 	if addr == "" {
-		addr, err = freeTCP()
+		addr, err = clusterprocess.FreeTCP()
 		if err != nil {
 			return err
 		}
 		_, port, _ := net.SplitHostPort(addr)
-		redis, err := manager.start(dir, "redis", os.Environ(), *redisBinary, "--bind", "127.0.0.1", "--port", port, "--save", "", "--appendonly", "no", "--dir", dir)
+		redis, err := manager.Start(dir, "redis", os.Environ(), *redisBinary, "--bind", "127.0.0.1", "--port", port, "--save", "", "--appendonly", "no", "--dir", dir)
 		if err != nil {
 			return err
 		}
-		defer redis.stop()
+		defer redis.Stop()
 		startup, stop := context.WithTimeout(ctx, 5*time.Second)
-		err = waitTCP(startup, addr, redis)
+		err = clusterprocess.WaitTCP(startup, addr, redis)
 		stop()
 		if err != nil {
 			return err

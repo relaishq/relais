@@ -50,6 +50,177 @@ Live WebRTC calls do not use this pipeline yet. They run in the media worker pro
 
 The earlier `relais-core` server and its Pion v3 signaling path (`pkg/server`, `pkg/webrtc`) have been retired.
 
+## Browser cluster demo: move, drain and kill
+
+Run `make demo-cluster` with Go 1.26+ and `redis-server` on PATH, then open
+[the demo](http://localhost:9101/?source=test&autostart=0) in current Chrome.
+Click **Start call** to publish a canvas test pattern and synthetic tone, or
+select **camera and microphone** to publish your devices. The page plays the
+echoed video and audio; use headphones for the camera source to avoid feedback.
+The Start click also unlocks Chrome's audio autoplay policy. Keep the tab
+visible for presentation-gap measurements. This demo requires no bundler or CDN.
+
+The launcher starts its own throwaway Redis, one relay, one control plane and
+**three workers as separate processes**. It binds HTTP and media to loopback
+and refuses Redis port **6379**. `make demo` continues to run the older
+shared-socket page. The two demos use the same default HTTP port, so run one at
+a time or override the cluster address:
+
+```bash
+make demo-cluster
+make demo-cluster DEMO_CLUSTER_FLAGS="-http=127.0.0.1:9201"
+# Optional: an explicitly selected, dedicated Redis; never port 6379
+make demo-cluster DEMO_CLUSTER_FLAGS="-redis=127.0.0.1:16379"
+```
+
+- **Move call** asks the existing control-plane move endpoint to move the
+  live call to another eligible worker.
+- **Drain owner** calls the existing drain endpoint, moves all calls off the
+  owning worker, stops that process, and starts a fresh replacement.
+- **Kill owner** finds this call's owner through control-plane status, sends
+  its owned process group SIGKILL, waits for the real heartbeat detector and
+  takeover, then starts a fresh replacement. It never tells the control plane
+  that the worker died. Each successful drain or kill restores a pool of three.
+
+Fresh numeric replacement names avoid reviving an operator-drained registration.
+Worker UDP addresses are never reused within the launcher lifetime.
+The control binary's opt-in `-demo-register` adds a loopback-only
+`POST /demo/register` bootstrap hook; it is disabled by default. Historical
+registrations remain in control-plane status, while `worker_pids` lists only
+live launcher-owned workers. No media or lease policy is changed.
+
+`GET /demo/status` proxies control-plane status and adds `worker_pids`, the
+`pool_size`, `expected_pool_size`, the relay media address, and dedicated Redis address. `POST /demo/kill` and
+`POST /demo/drain` take JSON `{"id":"call-id"}`; an omitted ID is accepted only
+when exactly one call exists. The launcher also forwards WHIP `/calls`, call
+moves, worker drains and `/status` for an external Pion caller. Replacement
+work belongs to the launcher lifetime even if the browser disconnects.
+Ctrl-C stops and reaps all owned children and the throwaway Redis; a second
+signal forces cleanup. Explicitly supplied Redis instances remain running.
+Logs remain in `bin/demo-cluster-*/`.
+
+The page shows connection/ICE transitions, ownership, worker pool size and event
+results. A short pool is a visible warning. Replacement startup is retried once;
+failed startup children are stopped. A lost registration reply is confirmed
+through control-plane status. Confirmed registrations keep their worker. If
+confirmation is unavailable, the launcher keeps ownership, reports
+`registration_error` and suppresses automatic retry. Later status reads clear the warning once
+registration is confirmed. HTTP Host values are limited to localhost,
+127.0.0.1 and [::1]. Throwaway Redis readiness comes from its own process log.
+
+Test video carries a 16-bit counter in large black/white blocks. The receiver
+reads those blocks after VP8 decoding. An inverse row detects unreadable blocks;
+the reader follows receiver resolution changes. Each primary content interval
+runs from the previous advancing frame's presentation time to the current
+frame's pixel observation time, including an open freeze. Delayed callbacks
+can enlarge gaps but cannot shorten them. Older callback metadata cannot
+report a newer counter snapshot as early recovery. Replayed or old content
+does not count as recovery. At issue, the page records the sender counter.
+First new content must exceed that counter, so content already in flight
+cannot claim recovery. `contentResumedMs` separately reports recovery from the
+largest gap ending after issue, even if a larger gap precedes issue (unverified
+if still open). Presentation gaps remain a secondary metric. Camera video has
+no counter and reports presentation-only, inconclusive.
+Audio judges total `concealedSamples` at the receiver sample rate. Non-silent
+concealment remains a diagnostic. `concealmentEvents` bounds bursts when more
+than one event occurs between stats. `totalSamplesReceived` must advance by at
+least 90% of elapsed time times sample rate over the counter coverage interval;
+otherwise audio playout is inconclusive even with zero concealment. Missing
+counters remain `"unverified"`. Packet timestamp deltas remain diagnostics.
+Stats use RTCStats timestamps. Windows close after these timestamps cover the
+two-second settle; audio records its counter coverage boundaries.
+
+Keep the tab and remote video visible and unobstructed. Visibility changes and
+IntersectionObserver record hidden periods; any overlapping event or hold is
+`invalid` with reason `page hidden`. Browser visibility tracking cannot detect
+every form of window occlusion. Starvation, long tasks and unreadable counters
+are diagnostics when measured gaps pass. A failing video gap becomes
+inconclusive only if the union of overlapping diagnostic time could bring
+its largest interval below the event threshold. A small overlap cannot hide a
+larger failure. The hold uses the same rule with its 2 s threshold. This
+adjustment cannot turn a measured failure into a pass. Audio concealment
+counters remain cumulative and do not use this adjustment.
+
+Both counter rows use one draw into a 16×2 canvas. Unreadable values are logged
+at most once a second, with the 32 raw R-channel values. Results render at
+most once a second. `runBaseline()` defaults to five null windows. `noiseFloor` reports
+median/max gaps over the last `baselineCount` valid baselines and counts
+excluded windows. A baseline is valid only when it passes and both gaps are
+below 100 ms; freezes are excluded. New valid baselines let the floor recover.
+Raw gaps below the threshold pass regardless of the floor; the floor is never subtracted. For move and drain gap
+failures, fewer than the configured number of valid baselines makes the verdict
+inconclusive (`too few valid baselines`). With enough baselines, either floor
+maximum at or above threshold × headroom ratio makes a gap failure inconclusive
+(`noise floor near threshold`). A low floor permits an authoritative gap failure.
+Gross failures remain FAIL regardless of the gate: a proven gap at least the
+threshold plus that media's floor maximum cannot be explained by the floor.
+With no floor, use one recorded source frame interval as the noise allowance;
+with neither available, retain the raw failure. Audio uses the proven lower
+burst bound for this check, never an uncertain upper bound.
+Configure both with `start({source:'test', baselineCount:5,
+headroomRatio:0.8})`; the ratio must be greater than zero and at most one.
+Kills and the 60 s hold need no baseline gate. Action, connection and negotiation
+failures remain failures regardless of the floor.
+
+`excessOverFloorMs.video` and `.audio` each report nonnegative `medianMs` and
+`maxMs` excesses. These are diagnostics and never adjust thresholds.
+`withinBaselineJitter` is a boolean: the video gap is at or below the video floor
+max plus one source frame interval (1000/30 ms for the test pattern, or the
+camera track's frame rate). `frameIntervalMs` records that interval. When the
+floor or interval is unavailable, `baselineJitterAvailable` and
+`withinBaselineJitter` are false.
+
+```javascript
+// Click Start call first (or unlock Chrome audio with a page click).
+await window.relaisDemo.start({source: 'test'});
+// Start long runs without holding a browser tool call open.
+window.demoRun = window.relaisDemo.runBaseline(5);
+// Poll in separate calls until running is false. Read results after each run.
+window.relaisDemo.results(); // {running: true/false, baselines, noiseFloor, ...}
+// After baseline completes:
+window.demoRun = window.relaisDemo.runMoves(10, 3000);
+// After moves complete, optional: runKills(10, 3000) or runDrains(10, 3000).
+window.relaisDemo.results();
+// Poll longHold.status until it is no longer pending, then save results.
+// Optional interactive wait: await window.relaisDemo.waitForLongHold();
+await window.relaisDemo.stop();
+```
+
+Run helpers serialize actions. Each window starts at the later of a 1 s
+lookback and the previous window's end; it ends 2 s after the response. The
+60 s hold starts after the last window. New actions supersede that hold.
+The hold retains running maximum content/concealment gaps and freeze deltas
+for its whole duration. A transient freeze cannot disappear from the hold
+result merely because media recovers at the end.
+
+`results()` is schema version 3. Each event has `windowVerdict` and `verdict`,
+both `{status: "pass" | "fail" | "inconclusive" | "invalid", reasons: string[]}`.
+`windowVerdict` covers the event window; `verdict` also requires the final hold.
+Successful windows awaiting a hold are inconclusive. `windowPass` and `pass`
+are true for pass, false for fail, null for inconclusive/invalid. Top-level
+`verdict` and `pass` aggregate the event verdicts. `longHold` has `status`
+(pending/superseded before completion, then the four verdict values), `verdict`
+after completion, `runningMax: {video, audio}`, `largestGaps`,
+`gapDiagnostics`, `freezeDelta` and
+`freezeDurationDelta`. Planned gaps must be below 100 ms; kill gaps below 2 s.
+The hold requires continued media below 2 s, with no connection change, ICE
+restart or renegotiation. Baselines have window verdicts and no hold requirement.
+
+Browser SRTP failure counts remain unverified. Worker logs record the first
+failure and powers of two outside the session lock, plus a final count on normal
+close/handover. SIGKILL cannot emit a final count. Browser acceptance recordings
+remain separate from native smoke verification. Safari is outside scope.
+
+For the opt-in headless smoke (external Pion caller, one move/drain, three kills and
+post-kill echo/full VP8 decode; **not** browser presentation or the 60 s hold):
+
+```bash
+make build
+RELAIS_TEST_REDIS_ADDR=127.0.0.1:1 RELAIS_DEMO_SMOKE=1 \
+  go test -race -count=1 -run TestDemoExternalSmoke -v ./cmd/relais-demo
+node --test cmd/relais-demo/metrics.test.cjs
+```
+
 ## Real processes: WebRTC you can kill -9
 
 `make crash-run` builds and starts `relais-relay`, `relais-control` and two

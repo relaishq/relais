@@ -1,4 +1,4 @@
-package main
+package clusterprocess
 
 import (
 	"context"
@@ -8,34 +8,34 @@ import (
 	"syscall"
 )
 
-// processManager owns every service and the throwaway Redis across trials.
+// Manager owns every service and the throwaway Redis across trials.
 // Start and forced shutdown share a lock so a signal cannot miss a new child.
-type processManager struct {
+type Manager struct {
 	mu       sync.Mutex
-	children []*child
+	children []*Child
 	stopping bool
 }
 
-func (m *processManager) start(dir, name string, env []string, args ...string) (*child, error) {
+func (m *Manager) Start(dir, name string, env []string, args ...string) (*Child, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.stopping {
 		return nil, context.Canceled
 	}
-	c, err := startChild(dir, name, env, args...)
+	c, err := Start(dir, name, env, args...)
 	if err == nil {
 		m.children = append(m.children, c)
 	}
 	return c, err
 }
 
-func (m *processManager) stop(force bool) {
+func (m *Manager) Stop(force bool) {
 	m.mu.Lock()
 	m.stopping = true
-	children := append([]*child(nil), m.children...)
+	children := append([]*Child(nil), m.children...)
 	if force {
 		for _, c := range children {
-			_ = c.signalGroup(syscall.SIGKILL)
+			_ = c.SignalGroup(syscall.SIGKILL)
 		}
 	}
 	m.mu.Unlock()
@@ -45,15 +45,15 @@ func (m *processManager) stop(force bool) {
 			<-c.done
 			_ = c.log.Close()
 		} else {
-			c.stop()
+			c.Stop()
 		}
 	}
 }
 
-// context keeps notification active during cleanup. The first signal cancels
+// Context keeps notification active during cleanup. The first signal cancels
 // work; a second kills and reaps every owned child before exiting. Workers use
 // processrun.Context instead, retaining their immediate second-signal exit.
-func (m *processManager) context() (context.Context, context.CancelFunc) {
+func (m *Manager) Context() (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
@@ -62,7 +62,7 @@ func (m *processManager) context() (context.Context, context.CancelFunc) {
 	stop := func() {
 		once.Do(func() {
 			cancel()
-			m.stop(false)
+			m.Stop(false)
 			signal.Stop(signals)
 			close(done)
 		})
@@ -76,7 +76,7 @@ func (m *processManager) context() (context.Context, context.CancelFunc) {
 		}
 		select {
 		case sig := <-signals:
-			m.stop(true)
+			m.Stop(true)
 			os.Exit(128 + int(sig.(syscall.Signal)))
 		case <-done:
 		}
