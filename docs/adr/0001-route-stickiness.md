@@ -99,7 +99,7 @@ The same lockout is possible before a caller's first answered check, on
 the relay or a shared socket, if an attacker can predict the caller's
 address and claim it first.
 
-Persisted routes (#42) close the restart case. They must restore the
+Persisted routes (#42) reduce the restart case for successfully restored addresses. They must restore the
 address, the session, and the last renewal time, and take the current
 worker from authoritative ownership. Restoring a route or moving it to
 another worker must never create a fresh renewal time. For the new-caller
@@ -115,3 +115,12 @@ renewal time. Restored routes protect only the remainder of their original
 consent window. The separate relay process enables this by default. An
 address-only embedded relay, failed/dropped persistence writes, or the explicit
 restore-off measurement mode can still have the restart gap described above.
+
+Startup continues with partial evidence if restore reaches its deadline or
+capacity limit, or the store fails. This preserves availability: unrestored calls
+can recover on their next authenticated check instead of waiting for persisted
+records to expire before the relay starts. Unrestored addresses can still suffer
+the spoofing lockout described above. That risk is accepted. Restored routes
+retain their original window, and only they stop forwarding at its deadline
+until the first matched renewal. Persistence does not add a media deadline to
+live routes whose real checks were pushed out of the bounded request set.

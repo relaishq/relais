@@ -30,6 +30,7 @@ type result struct {
 	Pass                                             bool
 	Path, LivePath                                   string
 	ReplayPackets                                    int
+	RoutesRestored                                   uint64
 }
 
 func binaries(bin string) error {

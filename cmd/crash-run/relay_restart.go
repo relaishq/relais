@@ -12,6 +12,7 @@ import (
 
 	"github.com/relais/internal/clusterprocess"
 	"github.com/relais/pkg/callharness"
+	"github.com/relais/pkg/controlplane"
 )
 
 // relayRestartTrial kills only the relay; the caller, control plane and workers
@@ -132,6 +133,11 @@ func relayRestartTrial(ctx context.Context, manager *clusterprocess.Manager, bin
 	if mediaErr != nil && !errors.Is(mediaErr, context.Canceled) {
 		return result{}, mediaErr
 	}
+	remote := &controlplane.RemoteRelay{URL: ready.HTTP}
+	status, err := remote.Status(ctx)
+	if err != nil {
+		return result{}, err
+	}
 	report, err := call.Hangup(ctx)
 	if err != nil {
 		return result{}, err
@@ -139,15 +145,15 @@ func relayRestartTrial(ctx context.Context, manager *clusterprocess.Manager, bin
 	if verbose {
 		fmt.Println(report.Summary())
 	}
-	return measureRelayRestart(report, ready.Media, killed, until, restoreOff), nil
+	return measureRelayRestart(report, ready.Media, killed, until, restoreOff, status.Stats.RoutesRestored), nil
 }
 
-func measureRelayRestart(report *callharness.Report, relayAddr string, killed, until time.Time, restoreOff bool) result {
-	r := result{Decrypt: report.DecryptionFailures.Total(), Reconnects: report.ICERestarts, Renegotiations: report.Renegotiations}
+func measureRelayRestart(report *callharness.Report, relayAddr string, killed, until time.Time, restoreOff bool, restored uint64) result {
+	r := result{Decrypt: report.DecryptionFailures.Total(), Reconnects: report.ICERestarts, Renegotiations: report.Renegotiations, RoutesRestored: restored}
 	at := killed.Sub(report.StartedAt)
 	flowing := len(report.Tracks) == 2
 	for _, track := range report.Tracks {
-		gap, resumed, ok := relayRestartGap(track.Arrivals, at)
+		gap, resumed, ok := relayRestartGap(track.Arrivals, at, until.Sub(report.StartedAt))
 		r.Gap = max(r.Gap, gap)
 		flowing = flowing && ok && resumed > at && track.Packets > 0 && until.Sub(report.StartedAt.Add(track.LastArrival)) < 150*time.Millisecond
 	}
@@ -156,29 +162,39 @@ func measureRelayRestart(report *callharness.Report, relayAddr string, killed, u
 	if restoreOff {
 		limit = 6 * time.Second
 	}
-	r.Pass = flowing && r.Gap > 0 && r.Gap < limit && r.Decrypt == 0 && r.Reconnects == 0 && r.Renegotiations == 0 && report.OfferAnswerExchanges == 1 && report.ConnectedThroughout() && report.RemoteAddr == relayAddr && len(report.Moves) == 0 && report.Consent.ResponsesAfter > 0
+	r.Pass = (restoreOff && restored == 0 || !restoreOff && restored >= 1) && flowing && r.Gap > 0 && r.Gap < limit && r.Decrypt == 0 && r.Reconnects == 0 && r.Renegotiations == 0 && report.OfferAnswerExchanges == 1 && report.ConnectedThroughout() && report.RemoteAddr == relayAddr && len(report.Moves) == 0 && report.Consent.ResponsesAfter > 0
 	return r
 }
-func relayRestartGap(arrivals []time.Duration, at time.Duration) (gap, resumed time.Duration, ok bool) {
+
+// Include every silence intersecting the kill-to-end observation, including
+// a later stall and the trailing silence if a track never resumes.
+func relayRestartGap(arrivals []time.Duration, at, end time.Duration) (gap, resumed time.Duration, ok bool) {
 	for i := 1; i < len(arrivals); i++ {
 		start := arrivals[i-1]
-		if start < at-100*time.Millisecond || start > at+100*time.Millisecond {
-			continue
+		stop := min(arrivals[i], end)
+		if stop > at && start < end && stop-start > gap {
+			gap, resumed, ok = stop-start, stop, true
 		}
-		if arrivals[i] > at && arrivals[i]-start > gap {
-			gap, resumed, ok = arrivals[i]-start, arrivals[i], true
+	}
+	if len(arrivals) > 0 {
+		last := arrivals[len(arrivals)-1]
+		if end > at && end > last && end-last > gap {
+			gap, resumed, ok = end-last, end, true
 		}
 	}
 	return gap, resumed, ok
 }
 func printRelayRestartTable(label string, results []result) {
 	fmt.Printf("RELAY_RESTART mode=%s\n", label)
-	fmt.Println("run  gap_ms  reconnects  renegotiations  decryption_failures  result")
+	if label == "restore-off" {
+		fmt.Println("BASELINE: test caller uses a fixed 2 s keepalive; this is not a browser measurement.")
+	}
+	fmt.Println("run  gap_ms  reconnects  renegotiations  decryption_failures  routes_restored  result")
 	for i, r := range results {
 		state := "FAIL"
 		if r.Pass {
 			state = "PASS"
 		}
-		fmt.Printf("%3d  %6.1f  %10d  %14d  %19d  %s\n", i+1, float64(r.Gap)/float64(time.Millisecond), r.Reconnects, r.Renegotiations, r.Decrypt, state)
+		fmt.Printf("%3d  %6.1f  %10d  %14d  %19d  %15d  %s\n", i+1, float64(r.Gap)/float64(time.Millisecond), r.Reconnects, r.Renegotiations, r.Decrypt, r.RoutesRestored, state)
 	}
 }

@@ -3,6 +3,8 @@ package relay
 import (
 	"context"
 	"crypto/rand"
+	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"sync"
@@ -222,7 +224,7 @@ func TestRouteWritesAreBoundedAndNeverBlockMedia(t *testing.T) {
 	close(store.release)
 	require.Eventually(t, func() bool { return sys.relay.Stats().RouteWrites > 0 }, 2*time.Second, time.Millisecond)
 }
-func TestRouteRestoreLimitFailsClosed(t *testing.T) {
+func TestRouteRestoreLimitStartsWithPartialRoutes(t *testing.T) {
 	store := sessionstore.NewMemory()
 	owner := netip.MustParseAddrPort("127.0.0.1:6100")
 	lease, err := store.Claim(context.Background(), sessionA, owner, time.Minute)
@@ -232,8 +234,11 @@ func TestRouteRestoreLimitFailsClosed(t *testing.T) {
 		record := sessionstore.Route{Caller: netip.AddrPortFrom(owner.Addr(), port), SessionID: sessionA, Generation: lease.Epoch, ConfirmedAt: now, LastAuthenticated: now, ExpiresAt: now.Add(time.Second)}
 		require.NoError(t, store.PutRoute(context.Background(), record, false))
 	}
-	_, err = New(Config{Owners: store, Routes: store, MaxFlows: 1})
-	require.ErrorIs(t, err, sessionstore.ErrRouteLimit)
+	r, err := New(Config{Owners: store, Routes: store, MaxFlows: 1})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, r.Close()) }()
+	require.EqualValues(t, 1, r.Stats().RoutesRestored)
+	require.EqualValues(t, 1, r.Stats().RoutesRestoreFailed)
 }
 
 type countedRouteStore struct {
@@ -283,10 +288,10 @@ func TestRenominationReusedTransactionUsesOnlyCurrentEvidence(t *testing.T) {
 	allowed, _ := table.answer(next, worker, bindingSuccess(t, reused), now.Add(2*time.Millisecond))
 	require.True(t, allowed)
 	_, ok = table.route(old, now.Add(3*time.Millisecond))
-	require.False(t, ok, "authenticated re-nomination must invalidate the old address even with a reused transaction ID")
+	require.True(t, ok, "same pair nomination preserves backup paths even with a reused transaction ID")
 }
 
-func TestHeldNominationStillInvalidatesOldAddressAfterMove(t *testing.T) {
+func TestHeldSamePairNominationPreservesBackupAfterMove(t *testing.T) {
 	store := sessionstore.NewMemory()
 	sys := startTestRelay(t, Config{Owners: store, Routes: store})
 	a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
@@ -305,14 +310,179 @@ func TestHeldNominationStillInvalidatesOldAddressAfterMove(t *testing.T) {
 	b.expect(t, next.addr(), request.Raw)
 	sys.confirm(t, b, next, request.Raw)
 	old.send(t, media, sys.relay.PublicAddr())
-	b.expectNothing(t)
+	b.expect(t, old.addr(), media)
 	require.Eventually(t, func() bool {
 		records, err := store.LoadRoutes(context.Background(), 10)
-		return err == nil && len(records) == 1 && records[0].Caller == next.addr()
+		return err == nil && len(records) == 2
 	}, time.Second, time.Millisecond)
 	sys.restart(t)
 	old.send(t, media, sys.relay.PublicAddr())
-	b.expectNothing(t)
+	b.expect(t, old.addr(), media)
 	next.send(t, media, sys.relay.PublicAddr())
 	b.expect(t, next.addr(), media)
+}
+
+func TestLivePersistedRouteKeepsMediaAfterConsentWindowBothStores(t *testing.T) {
+	routeStores(t, func(t *testing.T, store sessionstore.Store, routes sessionstore.Routes) {
+		sys := startTestRelay(t, Config{Owners: store, Routes: routes, RouteStickinessWindow: 80 * time.Millisecond})
+		worker := sys.worker(t, sessionA)
+		caller := newTestCaller(t)
+		sys.connect(t, caller, worker, sessionA)
+		record := persistedRoute(t, routes, caller.addr(), func(sessionstore.Route) bool { return true })
+		time.Sleep(time.Until(record.ExpiresAt) + 20*time.Millisecond)
+		caller.send(t, media, sys.relay.PublicAddr())
+		worker.expect(t, caller.addr(), media)
+	})
+}
+func TestRestoredRouteRenewalRemovesTemporaryConsentBoundBothStores(t *testing.T) {
+	routeStores(t, func(t *testing.T, store sessionstore.Store, routes sessionstore.Routes) {
+		sys := startTestRelay(t, Config{Owners: store, Routes: routes, RouteStickinessWindow: 150 * time.Millisecond})
+		worker := sys.worker(t, sessionA)
+		caller := newTestCaller(t)
+		sys.connect(t, caller, worker, sessionA)
+		persistedRoute(t, routes, caller.addr(), func(sessionstore.Route) bool { return true })
+		sys.restart(t)
+		sys.connect(t, caller, worker, sessionA)
+		time.Sleep(180 * time.Millisecond)
+		caller.send(t, media, sys.relay.PublicAddr())
+		worker.expect(t, caller.addr(), media)
+	})
+}
+func TestRepeatedSamePairNominationIsThrottledBothStores(t *testing.T) {
+	routeStores(t, func(t *testing.T, store sessionstore.Store, routes sessionstore.Routes) {
+		sys := startTestRelay(t, Config{Owners: store, Routes: routes})
+		worker := sys.worker(t, sessionA)
+		primary, backup := newTestCaller(t), newTestCaller(t)
+		sys.connect(t, primary, worker, sessionA)
+		sys.connect(t, backup, worker, sessionA)
+		original := persistedRoute(t, routes, primary.addr(), func(sessionstore.Route) bool { return true })
+		persistedRoute(t, routes, backup.addr(), func(sessionstore.Route) bool { return true })
+		for range 10 {
+			request, err := stun.Build(stun.BindingRequest, stun.TransactionID, stun.NewUsername(sessionA+":callerufrag"), stun.RawAttribute{Type: stun.AttrUseCandidate})
+			require.NoError(t, err)
+			primary.send(t, request.Raw, sys.relay.PublicAddr())
+			worker.expect(t, primary.addr(), request.Raw)
+			sys.confirm(t, worker, primary, request.Raw)
+		}
+		loaded, err := routes.LoadRoutes(context.Background(), 10)
+		require.NoError(t, err)
+		require.Len(t, loaded, 2)
+		require.Contains(t, loaded, original)
+		require.EqualValues(t, 2, sys.relay.Stats().RouteWrites)
+		backup.send(t, media, sys.relay.PublicAddr())
+		worker.expect(t, backup.addr(), media)
+	})
+}
+
+type partialRouteStore struct {
+	sessionstore.Routes
+	records []sessionstore.Route
+	err     error
+	wait    bool
+}
+
+func (s *partialRouteStore) LoadRoutes(ctx context.Context, _ int) ([]sessionstore.Route, error) {
+	if s.wait {
+		<-ctx.Done()
+		return s.records, ctx.Err()
+	}
+	return s.records, s.err
+}
+func TestRestoreStoreErrorAndDeadlineStillServePackets(t *testing.T) {
+	for _, mode := range []string{"error", "deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			store := sessionstore.NewMemory()
+			routes := &partialRouteStore{Routes: store, err: errors.New("master unavailable"), wait: mode == "deadline"}
+			sys := startTestRelay(t, Config{Owners: store, Routes: routes, RouteRestoreTimeout: 10 * time.Millisecond})
+			require.EqualValues(t, 1, sys.relay.Stats().RoutesRestoreFailed)
+			worker := sys.worker(t, sessionA)
+			caller := newTestCaller(t)
+			sys.connect(t, caller, worker, sessionA)
+			caller.send(t, media, sys.relay.PublicAddr())
+			worker.expect(t, caller.addr(), media)
+		})
+	}
+}
+func TestRestoreDuplicateAddressNewestWinsBothOrdersBothStores(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		t.Run(fmt.Sprint(reverse), func(t *testing.T) {
+			routeStores(t, func(t *testing.T, store sessionstore.Store, routes sessionstore.Routes) {
+				sys := startTestRelay(t, Config{Owners: store})
+				a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+				caller := newTestCaller(t)
+				leaseA, err := store.Get(context.Background(), sessionA)
+				require.NoError(t, err)
+				leaseB, err := store.Get(context.Background(), sessionB)
+				require.NoError(t, err)
+				now := time.Now().UTC()
+				old := sessionstore.Route{Caller: caller.addr(), SessionID: sessionA, Generation: leaseA.Epoch, ConfirmedAt: now, LastAuthenticated: now, ExpiresAt: now.Add(time.Minute)}
+				winner := old
+				winner.SessionID = sessionB
+				winner.Generation = leaseB.Epoch
+				winner.LastAuthenticated = now.Add(time.Millisecond)
+				// Confirmation time is deliberately older: authentication wins first.
+				winner.ConfirmedAt = now.Add(-time.Second)
+				records := []sessionstore.Route{old, winner}
+				if reverse {
+					records[0], records[1] = records[1], records[0]
+				}
+				for _, record := range records {
+					require.NoError(t, routes.PutRoute(context.Background(), record, false))
+				}
+				// Force either scan order at the relay seam; backing-store deletion remains real.
+				sys.cfg.Routes = &partialRouteStore{Routes: routes, records: records}
+				sys.restart(t)
+				caller.send(t, media, sys.relay.PublicAddr())
+				b.expect(t, caller.addr(), media)
+				a.expectNothing(t)
+				loaded, err := routes.LoadRoutes(context.Background(), 10)
+				require.NoError(t, err)
+				require.Equal(t, []sessionstore.Route{winner}, loaded)
+				require.EqualValues(t, 1, sys.relay.Stats().RoutesRestored)
+				require.EqualValues(t, 1, sys.relay.Stats().RoutesRestoreSkipped)
+			})
+		})
+	}
+}
+
+// A timed-out master must not discard evidence already read from another.
+type partialOwnedRouteStore struct {
+	sessionstore.Routes
+	record sessionstore.Route
+	lease  sessionstore.Lease
+	wait   bool
+}
+
+func (s *partialOwnedRouteStore) LoadRouteOwners(ctx context.Context, _ int) ([]sessionstore.Route, map[string]sessionstore.Lease, error) {
+	err := errors.New("one master unavailable")
+	if s.wait {
+		<-ctx.Done()
+		err = ctx.Err()
+	}
+	return []sessionstore.Route{s.record}, map[string]sessionstore.Lease{s.lease.SessionID: s.lease}, err
+}
+func TestRestoreErrorAndDeadlineRetainAlreadyLoadedEvidence(t *testing.T) {
+	for _, wait := range []bool{false, true} {
+		t.Run(fmt.Sprint(wait), func(t *testing.T) {
+			store := sessionstore.NewMemory()
+			sys := startTestRelay(t, Config{Owners: store})
+			worker := sys.worker(t, sessionA)
+			caller := newTestCaller(t)
+			lease, err := store.Get(context.Background(), sessionA)
+			require.NoError(t, err)
+			now := time.Now().UTC()
+			record := sessionstore.Route{Caller: caller.addr(), SessionID: sessionA, Generation: lease.Epoch, ConfirmedAt: now, LastAuthenticated: now, ExpiresAt: now.Add(time.Minute)}
+			require.NoError(t, store.PutRoute(context.Background(), record, false))
+			sys.cfg.Routes = &partialOwnedRouteStore{Routes: store, record: record, lease: lease, wait: wait}
+			sys.cfg.RouteRestoreTimeout = 10 * time.Millisecond
+			sys.restart(t)
+			require.EqualValues(t, 1, sys.relay.Stats().RoutesRestoreFailed)
+			require.EqualValues(t, 1, sys.relay.Stats().RoutesRestored)
+			caller.send(t, media, sys.relay.PublicAddr())
+			worker.expect(t, caller.addr(), media)
+			loaded, err := store.LoadRoutes(context.Background(), 10)
+			require.NoError(t, err)
+			require.Equal(t, []sessionstore.Route{record}, loaded)
+		})
+	}
 }

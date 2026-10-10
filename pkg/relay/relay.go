@@ -219,10 +219,12 @@ type Config struct {
 
 // Stats counts what the relay has done since it started.
 type Stats struct {
-	RoutesRestored     uint64
-	RouteWrites        uint64
-	RouteWritesDropped uint64
-	RouteWritesFailed  uint64
+	RoutesRestored       uint64
+	RoutesRestoreSkipped uint64
+	RoutesRestoreFailed  uint64
+	RouteWrites          uint64
+	RouteWritesDropped   uint64
+	RouteWritesFailed    uint64
 
 	// Holds, HeldPackets and HeldBytes are the current bounded queues.
 	Holds       int
@@ -309,20 +311,22 @@ type Relay struct {
 	closeOnce sync.Once
 	closeErr  error
 
-	routesRestored     atomic.Uint64
-	routeWritesDone    atomic.Uint64
-	routeWritesDropped atomic.Uint64
-	routeWritesFailed  atomic.Uint64
-	callerPackets      atomic.Uint64
-	workerPackets      atomic.Uint64
-	stunRouted         atomic.Uint64
-	unknownSession     atomic.Uint64
-	lookupsDropped     atomic.Uint64
-	lookupsFailed      atomic.Uint64
-	unroutable         atomic.Uint64
-	unknownWorker      atomic.Uint64
-	workerNoFlow       atomic.Uint64
-	malformed          atomic.Uint64
+	routesRestored       atomic.Uint64
+	routesRestoreSkipped atomic.Uint64
+	routesRestoreFailed  atomic.Uint64
+	routeWritesDone      atomic.Uint64
+	routeWritesDropped   atomic.Uint64
+	routeWritesFailed    atomic.Uint64
+	callerPackets        atomic.Uint64
+	workerPackets        atomic.Uint64
+	stunRouted           atomic.Uint64
+	unknownSession       atomic.Uint64
+	lookupsDropped       atomic.Uint64
+	lookupsFailed        atomic.Uint64
+	unroutable           atomic.Uint64
+	unknownWorker        atomic.Uint64
+	workerNoFlow         atomic.Uint64
+	malformed            atomic.Uint64
 }
 
 // New starts a relay.
@@ -367,12 +371,7 @@ func New(cfg Config) (*Relay, error) {
 	for _, worker := range cfg.Workers {
 		r.AddWorker(worker)
 	}
-	if err := r.restoreRoutes(); err != nil {
-		cancel()
-		_ = public.Close()
-		_ = workers.Close()
-		return nil, err
-	}
+	r.restoreRoutes()
 	r.lookups = newOwnerLookups(r, cfg)
 	if cfg.Routes != nil {
 		r.persistence = newRouteWrites(r)
@@ -547,7 +546,7 @@ func (r *Relay) Stats() Stats {
 	r.forwardMu.Unlock()
 
 	return Stats{
-		RoutesRestored: r.routesRestored.Load(), RouteWrites: r.routeWritesDone.Load(), RouteWritesDropped: r.routeWritesDropped.Load(), RouteWritesFailed: r.routeWritesFailed.Load(),
+		RoutesRestored: r.routesRestored.Load(), RoutesRestoreSkipped: r.routesRestoreSkipped.Load(), RoutesRestoreFailed: r.routesRestoreFailed.Load(), RouteWrites: r.routeWritesDone.Load(), RouteWritesDropped: r.routeWritesDropped.Load(), RouteWritesFailed: r.routeWritesFailed.Load(),
 		BarrierTimeouts: r.barrierTimeouts.Load(),
 		Holds:           holds, HeldPackets: packets, HeldBytes: bytes, HoldDrops: r.holdDrops.Load(), HoldTimeouts: r.holdTimeouts.Load(), HoldSendFailures: r.holdSendFailures.Load(),
 		CallerPackets:  r.callerPackets.Load(),

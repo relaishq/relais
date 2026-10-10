@@ -3,8 +3,8 @@ package relay
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/netip"
+	"sort"
 	"sync"
 	"time"
 
@@ -129,32 +129,68 @@ func (r *Relay) persist(caller netip.AddrPort, force bool) {
 		r.persistence.enqueue(snapshot.record.SessionID, &snapshot)
 	}
 }
-func (r *Relay) restoreRoutes() error {
+func (r *Relay) restoreRoutes() {
 	if r.cfg.Routes == nil || r.cfg.DisableRouteRestore {
-		return nil
+		return
 	}
 	ctx, cancel := context.WithTimeout(r.ctx, r.cfg.RouteRestoreTimeout)
 	defer cancel()
-	routes, err := r.cfg.Routes.LoadRoutes(ctx, r.cfg.MaxFlows)
-	if err != nil {
-		return fmt.Errorf("relay: load persisted routes: %w", err)
-	}
-	for _, route := range routes {
-		lease, err := r.cfg.Routes.Get(ctx, route.SessionID)
-		if err != nil && !errors.Is(err, sessionstore.ErrNotFound) {
-			return fmt.Errorf("relay: restore owner: %w", err)
-		}
-		if errors.Is(err, sessionstore.ErrNotFound) || lease.Epoch != route.Generation || !time.Now().Before(route.ExpiresAt) {
-			if err := r.cfg.Routes.DeleteRoute(ctx, route); err != nil {
-				return fmt.Errorf("relay: delete stale route: %w", err)
+	var routes []sessionstore.Route
+	var leases map[string]sessionstore.Lease
+	var loadErr error
+	if loader, ok := r.cfg.Routes.(sessionstore.RouteLoader); ok {
+		routes, leases, loadErr = loader.LoadRouteOwners(ctx, r.cfg.MaxFlows)
+	} else {
+		routes, loadErr = r.cfg.Routes.LoadRoutes(ctx, r.cfg.MaxFlows)
+		leases = make(map[string]sessionstore.Lease)
+		seen := make(map[string]bool)
+		for _, route := range routes {
+			if seen[route.SessionID] {
+				continue
 			}
-			continue
-		}
-		if r.flows.restore(route, unmap(lease.Worker), time.Now()) {
-			r.routesRestored.Add(1)
+			seen[route.SessionID] = true
+			lease, err := r.cfg.Routes.Get(ctx, route.SessionID)
+			if err == nil || errors.Is(err, sessionstore.ErrNotFound) {
+				leases[route.SessionID] = lease
+			} else if !errors.Is(err, sessionstore.ErrNotFound) {
+				loadErr = errors.Join(loadErr, err)
+			}
 		}
 	}
-	return nil
+	// An address can have records in different session hashes. Pick the most
+	// recently authenticated evidence, independent of SCAN/map iteration order.
+	sort.Slice(routes, func(i, j int) bool {
+		if !routes[i].LastAuthenticated.Equal(routes[j].LastAuthenticated) {
+			return routes[i].LastAuthenticated.After(routes[j].LastAuthenticated)
+		}
+		if !routes[i].ConfirmedAt.Equal(routes[j].ConfirmedAt) {
+			return routes[i].ConfirmedAt.After(routes[j].ConfirmedAt)
+		}
+		return routes[i].SessionID < routes[j].SessionID
+	})
+	restored := make(map[netip.AddrPort]bool)
+	for _, route := range routes {
+		lease, ok := leases[route.SessionID]
+		if ok && lease.Epoch == route.Generation && !restored[route.Caller] && r.flows.restore(route, unmap(lease.Worker), time.Now()) {
+			restored[route.Caller] = true
+			r.routesRestored.Add(1)
+		} else {
+			r.routesRestoreSkipped.Add(1)
+			// Never delete an otherwise valid record just because startup ran out
+			// of time/space. Expired, fenced and duplicate evidence can be removed.
+			if ok && lease.Epoch != route.Generation || restored[route.Caller] || !time.Now().Before(route.ExpiresAt) {
+				if ctx.Err() == nil {
+					loadErr = errors.Join(loadErr, r.cfg.Routes.DeleteRoute(ctx, route))
+				}
+			}
+		}
+	}
+	if loadErr != nil {
+		r.routesRestoreFailed.Add(1)
+		r.log.Errorf("partial route restore: restored=%d skipped=%d failed=1: %v", r.routesRestored.Load(), r.routesRestoreSkipped.Load(), loadErr)
+	} else {
+		r.log.Infof("route restore: restored=%d skipped=%d failed=0", r.routesRestored.Load(), r.routesRestoreSkipped.Load())
+	}
 }
 
 func isNomination(pkt []byte) bool {

@@ -257,11 +257,13 @@ func (t *flowTable) answer(caller, worker netip.AddrPort, pkt []byte, now time.T
 			if c.route != nil && c.route.session == c.candidate.session {
 				sentAt = maxTime(c.lastAuthenticated, sentAt)
 			}
+			newPair := c.route == nil || c.route.session != c.candidate.session
 			t.promote(c, now)
 			c.confirmedAt = now
+			c.consentBound = false
 			c.lastAuthenticated = sentAt
 			c.consentDeadline = sentAt.Add(t.stickinessWindow)
-			if nominated {
+			if nominated && newPair {
 				t.renominate(c, now)
 			}
 			return true, c.route.session
@@ -269,12 +271,10 @@ func (t *flowTable) answer(caller, worker netip.AddrPort, pkt []byte, now time.T
 	}
 	if c.route != nil && c.route.worker == worker {
 		if success {
-			if sentAt, nominated, ok := c.routeChecks.answerEvidence(txID); ok {
+			if sentAt, _, ok := c.routeChecks.answerEvidence(txID); ok {
+				c.consentBound = false
 				c.lastAuthenticated = maxTime(c.lastAuthenticated, sentAt)
 				c.consentDeadline = c.lastAuthenticated.Add(t.stickinessWindow)
-				if nominated {
-					t.renominate(c, now)
-				}
 			}
 		}
 		return true, ""
@@ -644,7 +644,6 @@ func (t *flowTable) snapshot(caller netip.AddrPort, force bool, now time.Time) (
 	}
 	c.lastPersistQueued = now
 	c.lastPersistAuthenticated = c.lastAuthenticated
-	c.consentBound = true
 	snapshot := routeSnapshot{record: sessionstore.Route{Caller: caller, SessionID: c.route.session, ConfirmedAt: c.confirmedAt, LastAuthenticated: c.lastAuthenticated, ExpiresAt: c.consentDeadline}, worker: c.route.worker, nominated: c.nominationPending}
 	c.nominationPending = false
 	return snapshot, true

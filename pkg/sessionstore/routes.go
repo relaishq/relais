@@ -28,14 +28,23 @@ type Routes interface {
 	// PutRoute is fenced by the live lease epoch; a newer confirmation wins
 	// over a delayed write. Nomination replaces other addresses for the session.
 	PutRoute(context.Context, Route, bool) error
-	// LoadRoutes is a bounded startup scan. An excess fails closed instead of
-	// leaving active addresses unprotected. Expired evidence is omitted.
+	// LoadRoutes is a bounded startup scan. It returns partial evidence along
+	// with any limit or store error. Expired evidence is omitted.
 	LoadRoutes(context.Context, int) ([]Route, error)
 	// DeleteRoute compares the whole record, so stale cleanup cannot remove
 	// a newer confirmation, renewal or generation.
 	DeleteRoute(context.Context, Route) error
 	ForgetRoutes(context.Context, string) error
 }
+
+// RouteLoader supplies the leases read with a startup batch, avoiding a second
+// owner read per route. Partial batches remain usable when an error is returned.
+type RouteLoader interface {
+	LoadRouteOwners(context.Context, int) ([]Route, map[string]Lease, error)
+}
+
+// MaxRoutesPerSession bounds authenticated address churn independently of MaxFlows.
+const MaxRoutesPerSession = 8
 
 // RouteRetention is a cleanup margin only; it never extends consent.
 const RouteRetention = time.Second
@@ -48,7 +57,7 @@ func validRoute(r Route) bool {
 
 func newerRoute(a, b Route) bool {
 	if a.SessionID != b.SessionID {
-		return a.ConfirmedAt.After(b.ConfirmedAt)
+		return routeEvidenceNewer(a, b)
 	}
 	if a.Generation != b.Generation {
 		return a.Generation > b.Generation
@@ -57,6 +66,14 @@ func newerRoute(a, b Route) bool {
 		return a.ConfirmedAt.After(b.ConfirmedAt)
 	}
 	return !a.LastAuthenticated.Before(b.LastAuthenticated)
+}
+
+// routeEvidenceNewer orders evidence independently of session lease epochs.
+func routeEvidenceNewer(a, b Route) bool {
+	if !a.LastAuthenticated.Equal(b.LastAuthenticated) {
+		return a.LastAuthenticated.After(b.LastAuthenticated)
+	}
+	return a.ConfirmedAt.After(b.ConfirmedAt)
 }
 
 func (m *Memory) PutRoute(ctx context.Context, route Route, nominated bool) error {
@@ -75,11 +92,19 @@ func (m *Memory) PutRoute(ctx context.Context, route Route, nominated bool) erro
 	if !time.Now().Before(route.ExpiresAt) {
 		return ErrNotFound
 	}
+	for caller := range m.routeSessions[route.SessionID] {
+		if !time.Now().Before(m.routes[caller].ExpiresAt) {
+			m.dropRoute(caller)
+		}
+	}
 	if old, ok := m.routes[route.Caller]; ok && !newerRoute(route, old) {
 		return nil
 	}
 	if marker, ok := m.routeNominations[route.SessionID]; ok && marker.Generation == route.Generation && marker.ConfirmedAt.After(route.ConfirmedAt) {
 		return nil
+	}
+	if old, ok := m.routes[route.Caller]; ok && old.SessionID == route.SessionID && old.Generation == route.Generation {
+		nominated = false
 	}
 	if nominated {
 		for caller := range m.routeSessions[route.SessionID] {
@@ -99,6 +124,16 @@ func (m *Memory) PutRoute(ctx context.Context, route Route, nominated bool) erro
 		m.routeSessions[route.SessionID] = make(map[netip.AddrPort]struct{})
 	}
 	m.routeSessions[route.SessionID][route.Caller] = struct{}{}
+	for len(m.routeSessions[route.SessionID]) > MaxRoutesPerSession {
+		var oldest Route
+		for caller := range m.routeSessions[route.SessionID] {
+			candidate := m.routes[caller]
+			if oldest.SessionID == "" || routeEvidenceNewer(oldest, candidate) {
+				oldest = candidate
+			}
+		}
+		m.dropRoute(oldest.Caller)
+	}
 	return nil
 }
 
@@ -124,7 +159,7 @@ func (m *Memory) LoadRoutes(ctx context.Context, limit int) ([]Route, error) {
 			continue
 		}
 		if len(routes) >= limit {
-			return nil, ErrRouteLimit
+			return routes, ErrRouteLimit
 		}
 		routes = append(routes, route)
 	}

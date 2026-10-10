@@ -94,22 +94,19 @@ func main() {
 }
 
 // A new relay process loses its private-leg registry. Re-register live workers
-// after an incarnation change; never restart a caller or renew its ICE consent.
+// on each tick, including late registrations and rejoins in the same instance.
 func registerRestartedRelay(ctx context.Context, plane *controlplane.Plane, r *controlplane.RemoteRelay) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	var instance string
+	var registry controlplane.RelayWorkerRegistry
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			attempt, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-			status, err := r.Status(attempt)
-			if err == nil && status.Instance != instance {
-				if err = plane.RegisterRelayWorkers(attempt, r); err == nil {
-					instance = status.Instance
-				}
+			if err := registry.Sync(attempt, plane, r); err != nil {
+				log.Printf("relay worker registration: %v", err)
 			}
 			cancel()
 		}

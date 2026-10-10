@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +35,14 @@ local t=redis.call('TIME'); local now=tonumber(t[1])*1000+math.floor(tonumber(t[
 local incoming=cjson.decode(ARGV[3])
 if incoming.expires<=now then return 0 end
 local function greater(a,b) return #a>#b or (#a==#b and a>b) end
+-- Prune old fields even when another address keeps the hash alive.
+local values=redis.call('HGETALL',KEYS[2])
+for i=1,#values,2 do
+ if values[i]~='@nomination' then
+  local ok,previous=pcall(cjson.decode,values[i+1])
+  if not ok or previous.expires<=now then redis.call('HDEL',KEYS[2],values[i]) end
+ end
+end
 local marker=redis.call('HGET',KEYS[2],'@nomination')
 if marker and greater(marker,incoming.confirmed) then return 1 end
 local old=redis.call('HGET',KEYS[2],ARGV[2])
@@ -43,7 +50,7 @@ if old then
  old=cjson.decode(old)
  if old.generation==incoming.generation and (greater(old.confirmed,incoming.confirmed) or (old.confirmed==incoming.confirmed and greater(old.authenticated,incoming.authenticated))) then return 1 end
 end
-if ARGV[4]=='1' then
+if ARGV[4]=='1' and (not old or old.generation~=incoming.generation) then
  -- A delayed nomination must not delete a more recently confirmed address.
  local values=redis.call('HGETALL',KEYS[2])
  for i=1,#values,2 do
@@ -56,6 +63,16 @@ if ARGV[4]=='1' then
  redis.call('HSET',KEYS[2],'@nomination',incoming.confirmed)
 end
 redis.call('HSET',KEYS[2],ARGV[2],ARGV[3])
+-- Keep at most eight addresses, evicting the oldest authenticated evidence.
+local values=redis.call('HGETALL',KEYS[2]); local entries={}
+for i=1,#values,2 do
+ if values[i]~='@nomination' then table.insert(entries,{values[i],cjson.decode(values[i+1])}) end
+end
+table.sort(entries,function(a,b)
+ if a[2].authenticated~=b[2].authenticated then return greater(b[2].authenticated,a[2].authenticated) end
+ return greater(b[2].confirmed,a[2].confirmed)
+end)
+for i=1,#entries-tonumber(ARGV[6]) do redis.call('HDEL',KEYS[2],entries[i][1]) end
 local deadline=incoming.expires+tonumber(ARGV[5])
 local remaining=redis.call('PTTL',KEYS[2])
 if remaining<deadline-now then redis.call('PEXPIREAT',KEYS[2],deadline) end
@@ -75,7 +92,7 @@ func (r *Redis) PutRoute(ctx context.Context, route Route, nominated bool) error
 	if nominated {
 		replace = "1"
 	}
-	n, err := r.client.Eval(ctx, putRouteLua, []string{keys[0], keys[4]}, strconv.FormatUint(route.Generation, 10), route.Caller.String(), raw, replace, RouteRetention.Milliseconds()).Int()
+	n, err := r.client.Eval(ctx, putRouteLua, []string{keys[0], keys[4]}, strconv.FormatUint(route.Generation, 10), route.Caller.String(), raw, replace, RouteRetention.Milliseconds(), MaxRoutesPerSession).Int()
 	if err != nil {
 		return &TransientError{Op: "put_route", Err: err}
 	}
@@ -101,72 +118,116 @@ func (r *Redis) ForgetRoutes(ctx context.Context, id string) error {
 	return r.client.Del(ctx, r.keys(id)[4]).Err()
 }
 
-// LoadRoutes scans only on startup. The shared limit also bounds cluster scans.
-// SCAN duplicates are removed; no caller packet can trigger a scan or a lookup.
+// LoadRoutes scans only on startup and returns usable partial results on error.
 func (r *Redis) LoadRoutes(ctx context.Context, limit int) ([]Route, error) {
+	routes, _, err := r.LoadRouteOwners(ctx, limit)
+	return routes, err
+}
+
+// LoadRouteOwners pipelines hash and lease reads per SCAN page on each master.
+// Expired fields never consume the route limit or require a lease read.
+func (r *Redis) LoadRouteOwners(ctx context.Context, limit int) ([]Route, map[string]Lease, error) {
 	if limit <= 0 {
-		return nil, ErrRouteLimit
+		return nil, nil, ErrRouteLimit
 	}
 	var mu sync.Mutex
 	routes := []Route{}
+	owners := make(map[string]Lease)
 	seen := make(map[string]bool)
 	scan := func(ctx context.Context, client *redis.Client) error {
-		mu.Lock()
-		defer mu.Unlock()
 		var cursor uint64
+		var failures error
 		for {
 			keys, next, err := client.Scan(ctx, cursor, escapeRoutePattern(r.prefix)+"routes:*", 128).Result()
 			if err != nil {
-				return err
+				return errors.Join(failures, err)
 			}
+			reads := make(map[string]*redis.StringStringMapCmd)
+			pipe := client.Pipeline()
 			for _, key := range keys {
-				if seen[key] {
-					continue
-				}
+				mu.Lock()
+				duplicate := seen[key]
 				seen[key] = true
-				// Bound scanned session hashes as well as live records. An operator must
-				// remove excessive stale metadata rather than silently skip protection.
-				if len(seen) > limit {
-					return ErrRouteLimit
+				mu.Unlock()
+				if !duplicate {
+					reads[key] = pipe.HGetAll(ctx, key)
 				}
-				n, err := r.client.HLen(ctx, key).Result()
+			}
+			_, readErr := pipe.Exec(ctx)
+			failures = errors.Join(failures, readErr)
+			candidates := make(map[string][]Route)
+			cleanup := client.Pipeline()
+			for key, cmd := range reads {
+				values, err := cmd.Result()
 				if err != nil {
-					return err
-				}
-				if n > int64(limit-len(routes)+1) {
-					return ErrRouteLimit
-				}
-				values, err := r.client.HGetAll(ctx, key).Result()
-				if err != nil {
-					return err
+					continue
 				}
 				for caller, raw := range values {
 					if caller == "@nomination" {
 						continue
 					}
-					if len(routes) >= limit {
-						return ErrRouteLimit
-					}
 					var record storedRoute
 					if err := json.Unmarshal([]byte(raw), &record); err != nil {
-						return fmt.Errorf("sessionstore: decode route: %w", err)
-					}
-					route := record.Data
-					if !validRoute(route) || route.Caller.String() != caller || r.keys(route.SessionID)[4] != key {
-						return errors.New("sessionstore: corrupt route metadata")
-					}
-					lease, err := r.Get(ctx, route.SessionID)
-					if err != nil && !errors.Is(err, ErrNotFound) {
-						return err
-					}
-					if errors.Is(err, ErrNotFound) || lease.Epoch != route.Generation || !time.Now().Before(route.ExpiresAt) {
-						if err := r.DeleteRoute(ctx, route); err != nil {
-							return err
-						}
+						failures = errors.Join(failures, err)
 						continue
 					}
-					routes = append(routes, route)
+					route := record.Data
+					if !time.Now().Before(route.ExpiresAt) {
+						cleanup.Eval(ctx, deleteRouteLua, []string{key}, caller, raw)
+						continue
+					}
+					if !validRoute(route) || route.Caller.String() != caller || r.keys(route.SessionID)[4] != key {
+						failures = errors.Join(failures, errors.New("sessionstore: corrupt route metadata"))
+						continue
+					}
+					candidates[route.SessionID] = append(candidates[route.SessionID], route)
 				}
+			}
+			// Exactly one authoritative get/prune per session, independent of field count.
+			leases := make(map[string]*redis.Cmd)
+			pipe = client.Pipeline()
+			for id := range candidates {
+				leases[id] = pipe.Eval(ctx, sessionLua, r.keys(id), "get", "", "", 1, r.retention.Milliseconds())
+			}
+			_, leaseErr := pipe.Exec(ctx)
+			failures = errors.Join(failures, leaseErr)
+			reachedLimit := false
+			for id, cmd := range leases {
+				result, err := cmd.Slice()
+				if err != nil {
+					continue
+				}
+				var lease Lease
+				if len(result) > 0 && result[0] == int64(1) {
+					lease, err = decodeLease(id, result)
+				}
+				if err != nil {
+					failures = errors.Join(failures, err)
+					continue
+				}
+				for _, route := range candidates[id] {
+					if lease.Epoch != route.Generation || !time.Now().Before(route.ExpiresAt) {
+						raw, _ := routeJSON(route)
+						cleanup.Eval(ctx, deleteRouteLua, []string{r.keys(id)[4]}, route.Caller.String(), raw)
+						continue
+					}
+					mu.Lock()
+					if len(routes) >= limit {
+						reachedLimit = true
+					} else {
+						routes = append(routes, route)
+						owners[id] = lease
+					}
+					mu.Unlock()
+				}
+			}
+			_, cleanupErr := cleanup.Exec(ctx)
+			failures = errors.Join(failures, cleanupErr)
+			if reachedLimit {
+				return errors.Join(failures, ErrRouteLimit)
+			}
+			if failures != nil {
+				return failures
 			}
 			cursor = next
 			if cursor == 0 {
@@ -183,7 +244,7 @@ func (r *Redis) LoadRoutes(ctx context.Context, limit int) ([]Route, error) {
 	default:
 		err = errors.New("sessionstore: route scan needs a Redis client or cluster")
 	}
-	return routes, err
+	return routes, owners, err
 }
 
 func escapeRoutePattern(prefix string) string {
@@ -198,6 +259,9 @@ func (r *RedisOwners) PutRoute(ctx context.Context, route Route, nominated bool)
 }
 func (r *RedisOwners) LoadRoutes(ctx context.Context, limit int) ([]Route, error) {
 	return r.leases.LoadRoutes(ctx, limit)
+}
+func (r *RedisOwners) LoadRouteOwners(ctx context.Context, limit int) ([]Route, map[string]Lease, error) {
+	return r.leases.LoadRouteOwners(ctx, limit)
 }
 func (r *RedisOwners) DeleteRoute(ctx context.Context, route Route) error {
 	return r.leases.DeleteRoute(ctx, route)

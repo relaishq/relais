@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -178,5 +179,115 @@ func TestAddressReuseDoesNotCompareDifferentSessionsEpochs(t *testing.T) {
 		loaded, err := routes.LoadRoutes(ctx, 10)
 		require.NoError(t, err)
 		require.Equal(t, []Route{current}, loaded, "a session with a lower epoch can claim a quiet address")
+	})
+}
+
+// Inject legacy debris directly: old releases did not prune fields on renewal.
+func injectExpiredRoutes(t *testing.T, store Store, lease Lease, count int) {
+	t.Helper()
+	ctx := context.Background()
+	var pipe redis.Pipeliner
+	if r, ok := store.(*Redis); ok {
+		pipe = r.client.Pipeline()
+	}
+	for i := 0; i < count; i++ {
+		route := routeFor(lease, netip.AddrPortFrom(netip.MustParseAddr("::1"), uint16(10000+i)), time.Second)
+		route.LastAuthenticated = time.Now().UTC().Add(-time.Minute)
+		route.ConfirmedAt = route.LastAuthenticated
+		route.ExpiresAt = route.LastAuthenticated.Add(time.Second)
+		switch s := store.(type) {
+		case *Memory:
+			s.mu.Lock()
+			s.routes[route.Caller] = route
+			if s.routeSessions[lease.SessionID] == nil {
+				s.routeSessions[lease.SessionID] = make(map[netip.AddrPort]struct{})
+			}
+			s.routeSessions[lease.SessionID][route.Caller] = struct{}{}
+			s.mu.Unlock()
+		case *Redis:
+			raw, err := routeJSON(route)
+			require.NoError(t, err)
+			pipe.HSet(ctx, s.keys(lease.SessionID)[4], route.Caller.String(), raw)
+		}
+	}
+	if pipe != nil {
+		_, err := pipe.Exec(ctx)
+		require.NoError(t, err)
+	}
+}
+func TestExpiredRouteFieldsCannotPoisonRestoreBothStores(t *testing.T) {
+	forStores(t, func(t *testing.T, factory func(*testing.T) Store) {
+		ctx := context.Background()
+		store := factory(t)
+		routes := store.(Routes)
+		lease, err := store.Claim(ctx, "expired-debris", netip.MustParseAddrPort("127.0.0.1:4801"), time.Minute)
+		require.NoError(t, err)
+		live := routeFor(lease, netip.MustParseAddrPort("127.0.0.1:5801"), 30*time.Second)
+		require.NoError(t, routes.PutRoute(ctx, live, false))
+		injectExpiredRoutes(t, store, lease, 8000)
+		loaded, err := routes.LoadRoutes(ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, []Route{live}, loaded)
+		injectExpiredRoutes(t, store, lease, 8000)
+		live.LastAuthenticated = live.LastAuthenticated.Add(time.Millisecond)
+		live.ExpiresAt = live.ExpiresAt.Add(time.Millisecond)
+		require.NoError(t, routes.PutRoute(ctx, live, false))
+		if s, ok := store.(*Redis); ok {
+			n, err := s.client.HLen(ctx, s.keys(lease.SessionID)[4]).Result()
+			require.NoError(t, err)
+			require.EqualValues(t, 1, n)
+		}
+		loaded, err = routes.LoadRoutes(ctx, 1)
+		require.NoError(t, err)
+		require.Equal(t, []Route{live}, loaded)
+	})
+}
+func TestRouteAddressChurnIsBoundedBothStores(t *testing.T) {
+	forStores(t, func(t *testing.T, factory func(*testing.T) Store) {
+		ctx := context.Background()
+		store := factory(t)
+		routes := store.(Routes)
+		lease, err := store.Claim(ctx, "churn", netip.MustParseAddrPort("127.0.0.1:4802"), time.Minute)
+		require.NoError(t, err)
+		var last Route
+		for i := 0; i < 100; i++ {
+			last = routeFor(lease, netip.AddrPortFrom(netip.MustParseAddr("::1"), uint16(20000+i)), time.Minute)
+			require.NoError(t, routes.PutRoute(ctx, last, false))
+		}
+		loaded, err := routes.LoadRoutes(ctx, 100)
+		require.NoError(t, err)
+		require.Len(t, loaded, MaxRoutesPerSession)
+		require.Contains(t, loaded, last)
+		delayed := last
+		delayed.Caller = netip.MustParseAddrPort("[::1]:29999")
+		delayed.LastAuthenticated = last.LastAuthenticated.Add(-time.Second)
+		delayed.ConfirmedAt = delayed.LastAuthenticated
+		require.NoError(t, routes.PutRoute(ctx, delayed, false))
+		loaded, err = routes.LoadRoutes(ctx, 100)
+		require.NoError(t, err)
+		require.Len(t, loaded, MaxRoutesPerSession)
+		require.NotContains(t, loaded, delayed)
+		for _, route := range loaded {
+			require.GreaterOrEqual(t, int(route.Caller.Port()), 20092)
+		}
+	})
+}
+func TestSamePairNominationPreservesBackupBothStores(t *testing.T) {
+	forStores(t, func(t *testing.T, factory func(*testing.T) Store) {
+		ctx := context.Background()
+		store := factory(t)
+		routes := store.(Routes)
+		lease, err := store.Claim(ctx, "backup", netip.MustParseAddrPort("127.0.0.1:4803"), time.Minute)
+		require.NoError(t, err)
+		primary := routeFor(lease, netip.MustParseAddrPort("127.0.0.1:5803"), time.Minute)
+		require.NoError(t, routes.PutRoute(ctx, primary, true))
+		backup := routeFor(lease, netip.MustParseAddrPort("127.0.0.1:5804"), time.Minute)
+		require.NoError(t, routes.PutRoute(ctx, backup, false))
+		primary.LastAuthenticated = backup.LastAuthenticated.Add(time.Millisecond)
+		primary.ExpiresAt = primary.LastAuthenticated.Add(time.Minute)
+		require.NoError(t, routes.PutRoute(ctx, primary, true))
+		loaded, err := routes.LoadRoutes(ctx, 10)
+		require.NoError(t, err)
+		require.ElementsMatch(t, []Route{primary, backup}, loaded)
 	})
 }

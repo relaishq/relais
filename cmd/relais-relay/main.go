@@ -17,6 +17,8 @@ func run() error {
 	httpAddr := flag.String("http", processrun.Env("RELAIS_RELAY_HTTP", "127.0.0.1:0"), "private control HTTP address")
 	hold := flag.Duration("hold-timeout", 3*time.Second, "abandoned move backstop")
 	restoreOff := flag.Bool("route-restore-off", false, "disable persisted-route restore for baseline measurement")
+	restoreTimeout := flag.Duration("route-restore-timeout", 5*time.Second, "startup route restore budget; continue with partial results on expiry")
+	maxFlows := flag.Int("max-flows", 65536, "maximum confirmed and pending caller routes")
 	flag.Parse()
 	ctx, cancel := processrun.Context()
 	defer cancel()
@@ -25,7 +27,7 @@ func run() error {
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	r, err := relay.New(relay.Config{PublicAddr: *public, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, HoldTimeout: *hold})
+	r, err := relay.New(relay.Config{PublicAddr: *public, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, RouteRestoreTimeout: *restoreTimeout, MaxFlows: *maxFlows, HoldTimeout: *hold})
 	if err != nil {
 		return err
 	}
