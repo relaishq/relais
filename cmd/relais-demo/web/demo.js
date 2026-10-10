@@ -394,7 +394,9 @@
     s.checklist=true;
     const ensureCall=()=>{if(!active(s))throw new Error('call ended during checklist');};
     try {
-      await run('baseline',s.baselineCount);ensureCall();
+      // Two spare baselines: a source hiccup can exclude one, and the noise
+      // floor keeps the last baselineCount valid ones.
+      await run('baseline',s.baselineCount+2);ensureCall();
       await run('move',10);ensureCall();
       await run('kill',10);ensureCall();
       await waitForLongHold();ensureCall();

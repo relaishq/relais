@@ -60,8 +60,8 @@ this checklist, which requires separate processes and kill controls.
    `cameraSettings` in the results records the actual camera dimensions and
    frame rate. If the camera cannot provide 1280×720, record that limitation.
 4. Keep the echo visible for two seconds, then click
-   **Run checklist (10 moves + 10 kills)**. It measures five no-event
-   baselines, ten moves, ten kills, then a continuous 60 s hold. Keep the echo
+   **Run checklist (10 moves + 10 kills)**. It measures seven no-event
+   baselines (the noise floor keeps the last five valid ones), ten moves, ten kills, then a continuous 60 s hold. Keep the echo
    visible and unobstructed. On a small screen the echo appears first; scroll to it immediately
    and stay there until the run finishes. Do not switch tabs or lock the device.
 5. Once **60 s hold** is no longer pending, click **Save results**. Chrome
@@ -80,7 +80,7 @@ await relaisDemo.stop();
 For separate scripted stages:
 
 ```js
-await relaisDemo.runBaseline(5);
+await relaisDemo.runBaseline(7);
 await relaisDemo.runMoves(10);
 await relaisDemo.runKills(10);
 await relaisDemo.waitForLongHold();
