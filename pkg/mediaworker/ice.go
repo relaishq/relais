@@ -30,6 +30,7 @@ const (
 )
 
 var (
+	errActiveFlow = errors.New("mediaworker: caller address belongs to another active session, or the session has ended")
 	errWrongUfrag = errors.New("mediaworker: STUN USERNAME does not match the caller's ICE ufrag")
 	errHandedOver = errors.New("mediaworker: session has been handed over to another worker")
 )
@@ -75,9 +76,12 @@ func (w *Worker) handleSTUN(raw []byte, from netip.AddrPort) {
 // do not keep the session alive.
 //
 // Only a request that authenticates maps its address to the session, on
-// the worker and on a shared socket. The response is sent under the session
-// lock, like every other packet the session sends, so a session exported for
-// a handover cannot answer after its snapshot.
+// the worker and on a shared socket, and only if no other session has
+// authenticated a check from that address within the stickiness window.
+// Otherwise the request is dropped unanswered and changes nothing. The
+// response is sent under the session lock, like every other packet the
+// session sends, so a session exported for a handover cannot answer after
+// its snapshot.
 //
 // The caller is the controlling agent (the answer says a=ice-lite), so role
 // attributes are not checked.
@@ -98,6 +102,13 @@ func (s *session) answerBindingRequest(msg *stun.Message, remoteUfrag string, fr
 	}
 	if err := stun.Fingerprint.Check(msg); err != nil {
 		return err
+	}
+
+	// The caller proved it knows the session's ICE password from this
+	// address, so its DTLS and SRTP from here belong to the session, unless
+	// the address is still another session's.
+	if !s.worker.mapAddr(from, s) {
+		return errActiveFlow
 	}
 
 	if msg.Contains(stun.AttrUseCandidate) && creds.RemoteAddr != from {
@@ -124,10 +135,6 @@ func (s *session) answerBindingRequest(msg *stun.Message, remoteUfrag string, fr
 		return err
 	}
 
-	// The caller proved it knows the session's ICE password from this
-	// address, so its DTLS and SRTP from here belong to the session.
-	s.worker.mapAddr(from, s)
-	s.worker.learnFlow(from, s.id)
 	if _, err := s.worker.conn.WriteToUDPAddrPort(response.Raw, from); err != nil {
 		s.log.Debugf("session %s: send binding response: %v", s.id, err)
 	}

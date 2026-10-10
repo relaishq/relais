@@ -55,13 +55,13 @@ The earlier `relais-core` server and its Pion v3 signaling path (`pkg/server`, `
 Run `make demo-cluster` with Go 1.26+ and `redis-server` on PATH, then open
 [the demo](http://localhost:9101/?source=test&autostart=0) in current Chrome.
 Click **Start call** to publish a canvas test pattern and synthetic tone, or
-select **camera and microphone** to publish your devices. The page plays the
-echoed video and audio; use headphones for the camera source to avoid feedback.
+select **Camera with counter and tone (720p)** to publish your camera. The page plays the
+echoed video and audio; use headphones for the synthetic tone.
 The Start click also unlocks Chrome's audio autoplay policy. Keep the tab
 visible for presentation-gap measurements. This demo requires no bundler or CDN.
 
 The launcher starts its own throwaway Redis, one relay, one control plane and
-**three workers as separate processes**. It binds HTTP and media to loopback
+**three workers as separate processes**. By default it binds HTTP and media to loopback
 and refuses Redis port **6379**. `make demo` continues to run the older
 shared-socket page. The two demos use the same default HTTP port, so run one at
 a time or override the cluster address:
@@ -99,6 +99,21 @@ Ctrl-C stops and reaps all owned children and the throwaway Redis; a second
 signal forces cleanup. Explicitly supplied Redis instances remain running.
 Logs remain in `bin/demo-cluster-*/`.
 
+For real-camera and Android runs, follow the
+[real-device checklist](docs/dev/real-device-checklist.md). Opt in with
+`-local-network=192.168.1.50` (your local IPv4 address) to serve the page over HTTPS and
+bind relay media to that IP. The launcher prints the URL and SHA-256
+certificate fingerprint in plain hex and Chrome's format; compare it with the
+browser's certificate viewer. The full printed URL selects camera and includes
+a per-launch token required for non-GET call controls. Private APIs stay on
+loopback. The page has a source
+menu, a 10-move/10-kill checklist button, and **Save results** for version 4 JSON.
+Both sources use the same counter reader. Each takeover records the time to a
+first live frame after observed content recovery, measured conservatively from
+kill-request issuance; moves and drains report `null` for this field. The
+checklist explains the clock and replay limits. IPv6 local-network mode is
+rejected because browser media did not connect in verification.
+
 The page shows connection/ICE transitions, ownership, worker pool size and event
 results. A short pool is a visible warning. Replacement startup is retried once;
 failed startup children are stopped. A lost registration reply is confirmed
@@ -106,9 +121,10 @@ through control-plane status. Confirmed registrations keep their worker. If
 confirmation is unavailable, the launcher keeps ownership, reports
 `registration_error` and suppresses automatic retry. Later status reads clear the warning once
 registration is confirmed. HTTP Host values are limited to localhost,
-127.0.0.1 and [::1]. Throwaway Redis readiness comes from its own process log.
+127.0.0.1 and [::1] in default mode, or the exact selected IP in local-network
+mode. Mutations require a matching HTTP or HTTPS Origin when supplied. Throwaway Redis readiness comes from its own process log.
 
-Test video carries a 16-bit counter in large black/white blocks. The receiver
+Both pattern and camera video carry a 16-bit counter in large black/white blocks. The receiver
 reads those blocks after VP8 decoding. An inverse row detects unreadable blocks;
 the reader follows receiver resolution changes. Each primary content interval
 runs from the previous advancing frame's presentation time to the current
@@ -119,8 +135,12 @@ does not count as recovery. At issue, the page records the sender counter.
 First new content must exceed that counter, so content already in flight
 cannot claim recovery. `contentResumedMs` separately reports recovery from the
 largest gap ending after issue, even if a larger gap precedes issue (unverified
-if still open). Presentation gaps remain a secondary metric. Camera video has
-no counter and reports presentation-only, inconclusive.
+if still open). Presentation gaps remain a secondary metric. Camera counters
+advance only when a camera frame arrives, and use the same reader and verdicts
+as the pattern source. Source draw timestamps provide the observed cadence;
+only source delay beyond normal cadence joins starvation diagnostics. A
+baseline is excluded from calibration when that excess overlaps its largest
+video gap.
 Audio judges total `concealedSamples` at the receiver sample rate. Non-silent
 concealment remains a diagnostic. `concealmentEvents` bounds bursts when more
 than one event occurs between stats. `totalSamplesReceived` must advance by at
@@ -193,7 +213,7 @@ The hold retains running maximum content/concealment gaps and freeze deltas
 for its whole duration. A transient freeze cannot disappear from the hold
 result merely because media recovers at the end.
 
-`results()` is schema version 3. Each event has `windowVerdict` and `verdict`,
+`results()` is schema version 4. Each event has `windowVerdict` and `verdict`,
 both `{status: "pass" | "fail" | "inconclusive" | "invalid", reasons: string[]}`.
 `windowVerdict` covers the event window; `verdict` also requires the final hold.
 Successful windows awaiting a hold are inconclusive. `windowPass` and `pass`
