@@ -18,7 +18,7 @@ type Checkpoint struct {
 	digest   [32]byte
 }
 
-func (m *Memory) Clock(ctx context.Context) (time.Time, error) {
+func (m *Memory) Clock(ctx context.Context, _ string) (time.Time, error) {
 	if err := ctx.Err(); err != nil {
 		return time.Time{}, err
 	}

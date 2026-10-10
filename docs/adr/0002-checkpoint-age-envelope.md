@@ -7,10 +7,15 @@ between copies, 400 ms of detection and a 50 ms detector tick. Those margins
 assume bounded index rates, including caller sequence gaps.
 
 Decision: the store records successful write time atomically with each blob.
-Redis uses `TIME`; Memory uses its own clock. Before copying media counters,
+Redis uses `TIME` in an EVAL keyed to the session slot, so copying and
+writing use the same Cluster node; Memory uses its own clock. Before copying
+media counters,
 the worker samples that same store clock and persists the sample inside the
 encrypted version-6 snapshot. Takeover reads metadata bound to those exact
-bytes. It exposes **checkpoint age** (since successful write) and **snapshot
+bytes. Redis uses an HMAC over the plaintext, keyed from its store master key. The
+metadata does not expose an unkeyed plaintext fingerprint. Key rotation checks
+all configured active/old keys until their snapshots expire. Takeover exposes
+**checkpoint age** (since successful write) and **snapshot
 age** (since the counter copy). Safety uses snapshot age, so a delayed successful
 put cannot disguise old counters as fresh. Reply latency is added conservatively
 using local elapsed time. No worker wall clocks are compared. An observed store
@@ -24,17 +29,24 @@ maximum age 550 ms, maximum caller RTP packet rate 5,000/s per SSRC, maximum
 SRTCP packet rate 100/s, and safety factor 1.25 (minimum 1). RTP sources must
 advance sequence numbers once per packet and comply with the configured caller
 rate, including packets lost before the worker. As in #7/#8, this is the input
-bound of the guarantee. Workers also cap encrypted packet sends with token
-buckets before live encryption: bursts of 64 RTP packets and 16 SRTCP packets.
-Source sequence gaps raise the observed rate but consume one packet token;
-a relay outage must not permanently block echo. Excess send bursts are dropped.
-Per-session rate observations retain the highest measured rate from
-windows of at least 100 ms and survive moves. Takeover uses the larger of the
-recorded rate and configured maximum. Recorded rates never reduce the bound.
+bound of the guarantee. RTP is measured, without a send limiter: dropping
+an encryption does not slow the caller's source sequence advance. Each SSRC's
+rate is measured from source sequence advance divided by RTP timestamp time
+(Opus 48 kHz, VP8 90 kHz), over at least two media seconds. Queued keyframes and
+relay hold releases preserve source timestamps, so they cannot inflate this
+measurement into an arrival-rate peak. Observed peaks decay with a ten-second
+half-life and survive moves without retaining an all-time maximum. Takeover
+uses the larger of the recorded source rate and configured maximum for both
+margins and the caller reserve. Recorded rates never reduce the configured
+bound. SRTCP retains its send token bucket, with a 16-packet burst: the worker
+allocates those indexes itself, and `needsKeyframe` retries a throttled PLI.
 The worker and control plane must receive matching rate settings.
 
-For snapshot age `a` seconds, rate bound `r`, safety factor `f`, and burst `b`,
-the required margin is `ceil(a * r * f) + b + 1`. The default plain margins
+For snapshot age `a` seconds, rate bound `r`, safety factor `f`, and
+jitter/backlog allowance `b`,
+the required margin is `ceil(a * r * f) + b + 1`. RTP defaults to `b = 64`
+(`RTPBacklogAllowance`); this is recovery headroom, not a traffic limiter.
+The default plain margins
 cover at most `(8192 - 65) / 6250 = 1300.32 ms` for RTP and
 `(128 - 17) / 125 = 888 ms` for SRTCP. The selected 550 ms age is inside both.
 An envelope event occurs if age or observed rate exceeds the configured limit,
@@ -43,8 +55,10 @@ use the larger required margin without reducing either plain margin. The #8
 caller reserve remains at least 10,000 indexes. It grows to
 `max(10000, ceil(2 * r) + 64)` for the two-second outage target; the default
 rate therefore reserves 10,064 indexes. Longer recoveries reserve through the
-current adoption deadline, using elapsed time on the control plane from the
-original outage. A failed target's fresh snapshot cannot reset that outage.
+current adoption deadline, using the greater of the original outage and
+snapshot-copy age plus the remaining deadline. A recent heartbeat cannot make
+an older counter copy consume a smaller caller reserve. A failed target's fresh
+snapshot cannot reset that outage.
 Confirmation keeps the original bytes and margins; an already adopted tenure
 acknowledges them without spending counters, while a cold target rechecks the
 growing reserve. Retained advances, the first packet,
@@ -61,7 +75,7 @@ resume that snapshot. A confirmed live export uses zero margins. Recovery of
 an uncertain export or adoption must use the latest fenced store checkpoint.
 
 Consequences: long stalls may end a call instead of sending undecryptable media.
-The token buckets can drop traffic above the configured send rate. Observed
+The SRTCP bucket can defer feedback above the configured send rate. Observed
 source rates above the configured bound can reduce the recovery budget or cause
 definitive loss. The guarantee requires callers to stay within the source bound.
 Planned live-export moves retain phase-1 behavior. The new owner receives the
@@ -77,5 +91,10 @@ write. Failed writes cannot durably update an unavailable store; those later
 failures appear after the next successful write, while process metrics count
 them immediately. An uncertain write reply is a local failure; the store's
 committed blob and write timestamp remain authoritative at takeover.
+Workers and the control plane must upgrade together: snapshots use version 6,
+and the private HTTP API rejects unknown fields with `DisallowUnknownFields`.
+The changed status JSON uses explicit snake_case checkpoint fields.
+
 Metrics count successful/failed writes, terminal envelope policy events and
-checkpoint age, without per-session labels. Full export remains #39.
+write age (since the successful checkpoint commit), without per-session labels.
+Full export remains #39.

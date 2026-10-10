@@ -449,6 +449,7 @@ func (s *session) export() ([]byte, error) {
 
 		return nil, fmt.Errorf("mediaworker: export DTLS state: %w", err)
 	}
+	s.checkpointRates(&s.state.Checkpoint)
 	state, err := json.Marshal(snapshot{
 		Version:        sessionStateVersion,
 		State:          s.state,

@@ -29,7 +29,7 @@ import (
 // fencing/dropping its old sessions. Remote workers need an explicit token
 // for this acknowledgment; the in-process contract uses the next heartbeat.
 type Config struct {
-	// CheckpointEnvelope must match the workers' rate limits.
+	// CheckpointEnvelope must match the workers' source-rate contract.
 	CheckpointEnvelope mediaworker.CheckpointEnvelope
 	// FrameCache is shared with the workers, for hangup/lost-call cleanup.
 	FrameCache          framecache.Store
@@ -477,6 +477,10 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			}
 			pending.checkpointAge, pending.checkpoint = decision.age, decision.info
 			pending.snapshotAge, pending.checkpointStoredAt = decision.snapshotAge, decision.storedAt
+			copiedAt := time.Now().Add(-decision.snapshotAge)
+			if copiedAt.Before(pending.outageStarted) {
+				pending.outageStarted = copiedAt
+			}
 			pending.envelope = pending.envelope || decision.outside
 			if checkpointErr != nil {
 				p.unreserve(target)
@@ -568,7 +572,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 // cancellation. Expired pending leases are terminal too, never silent exits.
 func (p *Plane) completeTakeover(source *registration, c *call, lease sessionstore.Lease,
 	res *MoveResult, lost bool, cause error) {
-	record := res.Kind == "takeover" || res.Kind == "ended"
+	record := res.Kind == "takeover" || res.Kind == "ended" || lost
 	if lost {
 		p.mu.Lock()
 		pending := source.pending[c.id]
@@ -582,7 +586,7 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 		res.CheckpointAge, res.Checkpoint = pending.checkpointAge, pending.checkpoint
 		res.SnapshotAge, res.CheckpointStoredAt = pending.snapshotAge, pending.checkpointStoredAt
 		res.SequenceMargin, res.SRTCPIndexMargin = pending.margin, pending.rtcpMargin
-		if pending.envelope {
+		if pending.envelope && (!lost || checkpointEnvelopeLoss(cause)) {
 			res.CheckpointPolicy = "scaled"
 			if lost {
 				res.CheckpointPolicy = "definitive-loss"
@@ -727,4 +731,10 @@ func (p *Plane) deleteFrames(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = p.config.FrameCache.DeleteSession(ctx, id)
+}
+
+// Storage disappearance, no target, and unrelated resume errors are losses,
+// but do not imply that the checkpoint envelope caused the loss.
+func checkpointEnvelopeLoss(err error) bool {
+	return errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) || errors.Is(err, mediaworker.ErrSRTCPIndexExhausted) || errors.Is(err, sessionstore.ErrUnsafeCheckpointClock)
 }

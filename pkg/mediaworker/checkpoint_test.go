@@ -41,17 +41,57 @@ func TestCheckpointEnvelopeMargins(t *testing.T) {
 	require.Zero(t, (CheckpointState{}).SuccessRate())
 }
 
-func TestPacketMeterBoundsIndexRateAndMeasuresIt(t *testing.T) {
+func TestSRTCPMeterBoundsWorkerIndexRate(t *testing.T) {
 	var meter packetMeter
 	now := time.Now()
-	for i := uint64(0); i < checkpointRTPBurst; i++ {
-		require.True(t, meter.allow(now, i, 100, checkpointRTPBurst))
+	for i := uint64(0); i < checkpointSRTCPBurst; i++ {
+		require.True(t, meter.allow(now, i, 100, checkpointSRTCPBurst))
 	}
-	require.False(t, meter.allow(now, checkpointRTPBurst, 100, checkpointRTPBurst))
-	require.True(t, meter.allow(now.Add(100*time.Millisecond), checkpointRTPBurst, 100, checkpointRTPBurst))
-	require.Greater(t, meter.peak, float64(100), "burst-inclusive observed rate is conservative")
-	require.True(t, meter.allow(now.Add(200*time.Millisecond), 1000, 100, checkpointRTPBurst), "relay loss cannot permanently exhaust packet tokens")
-	require.Greater(t, meter.peak, float64(9000), "source sequence gaps still raise the observed rate")
+	require.False(t, meter.allow(now, checkpointSRTCPBurst, 100, checkpointSRTCPBurst))
+	require.True(t, meter.allow(now.Add(100*time.Millisecond), checkpointSRTCPBurst, 100, checkpointSRTCPBurst))
+}
+
+func TestSourceRateIgnoresThreeSecondHoldBacklogAndDecays(t *testing.T) {
+	var meter sourceRate
+	now := time.Now()
+	// 500 pps for two seconds, then three seconds queued and released at once.
+	for i := uint64(0); i <= 1000; i++ {
+		meter.observe(now.Add(time.Duration(i)*2*time.Millisecond), i, uint32(i)*180, 90000)
+	}
+	for i := uint64(1001); i <= 2500; i++ {
+		meter.observe(now.Add(5*time.Second), i, uint32(i)*180, 90000)
+	}
+	require.InDelta(t, 500, meter.rate(now.Add(5*time.Second)), 40)
+	require.Less(t, meter.rate(now.Add(35*time.Second)), float64(70), "a retained peak must decay")
+	_, _, _, err := (CheckpointEnvelope{}).CheckpointMargins(time.Second, CheckpointState{RTPPacketRate: meter.rate(now.Add(5 * time.Second))}, 8192, 128)
+	require.NoError(t, err, "a later crash must still fit the default resume budget")
+}
+
+func TestCheckpointObservedPeakDecaysAcrossMove(t *testing.T) {
+	w := newTestWorker(t)
+	call, _ := dialDTLSCaller(t, w)
+	sess := w.session(call.id)
+	sess.mu.Lock()
+	sess.state.Checkpoint.RTPPacketRate = 20000
+	sess.videoRate.peak, sess.videoRate.peakAt = 20000, time.Now().Add(-30*time.Second)
+	sess.mu.Unlock()
+	state, err := w.ExportSession(call.id)
+	require.NoError(t, err)
+	info, err := SnapshotCheckpoint(state)
+	require.NoError(t, err)
+	require.InDelta(t, 2500, info.RTPPacketRate, 10, "export must not retain the all-time state maximum")
+	_, err = w.ResumeSession(state, ResumeOptions{})
+	require.NoError(t, err)
+	sess = w.session(call.id)
+	sess.mu.Lock()
+	sess.audioRate.peakAt = time.Now().Add(-30 * time.Second)
+	sess.videoRate.peakAt = sess.audioRate.peakAt
+	sess.mu.Unlock()
+	state, err = w.SnapshotSession(call.id)
+	require.NoError(t, err)
+	info, err = SnapshotCheckpoint(state)
+	require.NoError(t, err)
+	require.InDelta(t, 312.5, info.RTPPacketRate, 10, "resumed observation must keep decaying")
 }
 
 type checkpointFailStore struct {

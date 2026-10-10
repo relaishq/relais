@@ -130,7 +130,7 @@ type Heartbeats interface{ Heartbeat(netip.AddrPort) error }
 
 // Config configures a media worker.
 type Config struct {
-	// CheckpointEnvelope bounds outbound index rates for safe crash recovery.
+	// CheckpointEnvelope configures source index rates for safe crash recovery.
 	CheckpointEnvelope CheckpointEnvelope
 	// FrameCache lives outside workers. Share one Store across takeover targets.
 	// Nil leaves caching unconfigured; the harness supplies shared memory by
@@ -255,6 +255,7 @@ type Worker struct {
 
 // New starts a media worker listening on cfg.ListenAddr.
 func New(cfg Config) (*Worker, error) {
+	cfg.CheckpointEnvelope = cfg.CheckpointEnvelope.Defaults()
 	if cfg.SnapshotInterval <= 0 {
 		cfg.SnapshotInterval = 100 * time.Millisecond
 	}

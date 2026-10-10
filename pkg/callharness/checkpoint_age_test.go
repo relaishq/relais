@@ -2,7 +2,9 @@ package callharness_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"github.com/pion/rtp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -77,9 +79,9 @@ func TestRelayCheckpointAgePolicy(t *testing.T) {
 				}
 				t.Run(name, func(t *testing.T) {
 					faulty := &checkpointFaultStore{Store: store, mode: mode, entered: make(chan struct{}), release: make(chan struct{}), committed: make(chan struct{})}
-					envelope := mediaworker.CheckpointEnvelope{MaxAge: 50 * time.Millisecond, MaxRTPPacketRate: rate}
+					envelope := mediaworker.CheckpointEnvelope{MaxAge: 50 * time.Millisecond, MaxRTPPacketRate: rate, RTPBacklogAllowance: 1}
 					h := startHarness(t, callharness.Options{Relay: true, Workers: 2, SessionStore: faulty, DisableFrameCache: true,
-						TakeoverConfig: controlplane.Config{CheckpointEnvelope: envelope, SequenceMargin: 2048}})
+						TakeoverConfig: controlplane.Config{CheckpointEnvelope: envelope, SequenceMargin: 8}})
 					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 					defer cancel()
 					call, err := h.Dial(ctx, callharness.CallOptions{Video: true})
@@ -94,14 +96,22 @@ func TestRelayCheckpointAgePolicy(t *testing.T) {
 					require.NoError(t, err)
 					info, err := mediaworker.SnapshotCheckpoint(fresh)
 					require.NoError(t, err)
-					margin, _, _, err := envelope.CheckpointMargins(envelope.MaxAge, info, 2048, 128)
+					margin, _, _, err := envelope.CheckpointMargins(envelope.MaxAge, info, 8, 128)
 					require.NoError(t, err, "fresh checkpoints must fit this configuration")
 					_, err = mediaworker.SequenceResumeAttemptsWithReserve(fresh, margin, envelope.CallerSequenceReserve(info, 0))
 					require.NoError(t, err, "the storage fault must cause budget exhaustion, not the configuration alone")
 					var echoed atomic.Uint64
-					require.NoError(t, workerprobe.SetAfterEcho(lease.Worker, func(_ context.Context, id string, _ []byte) {
+					var sequenceMu sync.Mutex
+					latest := map[uint32]uint16{}
+					require.NoError(t, workerprobe.SetAfterEcho(lease.Worker, func(_ context.Context, id string, raw []byte) {
 						if id == call.SessionID() {
 							echoed.Add(1)
+							var header rtp.Header
+							if _, err := header.Unmarshal(raw); err == nil {
+								sequenceMu.Lock()
+								latest[header.SSRC] = header.SequenceNumber
+								sequenceMu.Unlock()
+							}
 						}
 					}))
 					metricBefore := checkpointCounter(t, metrics.CheckpointEnvelopeEvents.WithLabelValues(policy))
@@ -121,6 +131,27 @@ func TestRelayCheckpointAgePolicy(t *testing.T) {
 							t.Fatal("delayed write not committed")
 						}
 					}
+					// Negative control: inspect the exact checkpoint selected for the
+					// crash (including the late commit), then prove its counters
+					// lag actual encrypted output by more than the plain margin.
+					stale, err := store.GetState(ctx, call.SessionID())
+					require.NoError(t, err)
+					var counters struct {
+						State struct {
+							Audio, Video struct {
+								SSRC             uint32
+								HighestSentIndex uint64
+							}
+						}
+					}
+					require.NoError(t, json.Unmarshal(stale, &counters))
+					sequenceMu.Lock()
+					audioAdvance := uint16(latest[counters.State.Audio.SSRC] - uint16(counters.State.Audio.HighestSentIndex))
+					videoAdvance := uint16(latest[counters.State.Video.SSRC] - uint16(counters.State.Video.HighestSentIndex))
+					sequenceMu.Unlock()
+					require.Greater(t, audioAdvance, uint16(8), "negative control: plain margin is smaller than stale audio advance")
+					require.Greater(t, videoAdvance, uint16(8), "negative control: plain margin is smaller than stale video advance")
+					t.Logf("CHECKPOINT_NEGATIVE_CONTROL plain_margin=8 backlog_allowance=1 audio_advance=%d video_advance=%d", audioAdvance, videoAdvance)
 					require.NoError(t, h.Kill(0))
 					var status controlplane.Status
 					require.Eventually(t, func() bool {
@@ -143,7 +174,7 @@ func TestRelayCheckpointAgePolicy(t *testing.T) {
 						require.ErrorIs(t, err, sessionstore.ErrNotFound)
 					} else {
 						require.Empty(t, event.Error)
-						require.Greater(t, event.SequenceMargin, uint16(2048))
+						require.Greater(t, event.SequenceMargin, uint16(8))
 						require.Len(t, status.Calls, 1)
 						require.Equal(t, "1", status.Calls[0].Owner)
 						data, err := store.GetState(ctx, call.SessionID())

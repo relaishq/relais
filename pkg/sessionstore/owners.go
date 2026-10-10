@@ -56,8 +56,9 @@ type Owners interface {
 type Store interface {
 	Owners
 
-	// Clock reads the store clock, never a worker clock.
-	Clock(context.Context) (time.Time, error)
+	// Clock reads the clock of the node storing this session ID, never a
+	// worker clock or a randomly selected Cluster node.
+	Clock(context.Context, string) (time.Time, error)
 	// Checkpoint verifies that state is still the latest blob and returns its
 	// successful write time and age using that same clock.
 	Checkpoint(context.Context, string, []byte) (Checkpoint, error)

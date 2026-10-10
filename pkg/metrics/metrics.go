@@ -13,7 +13,7 @@ var (
 		Name: "relais_checkpoint_envelope_events_total", Help: "Takeovers outside the checkpoint envelope by policy",
 	}, []string{"policy"})
 	CheckpointAge = promauto.NewHistogram(prometheus.HistogramOpts{
-		Name: "relais_checkpoint_age_seconds", Help: "Age of snapshot counters at crash takeover",
+		Name: "relais_checkpoint_age_seconds", Help: "Age since successful checkpoint write at crash takeover",
 		Buckets: prometheus.DefBuckets,
 	})
 

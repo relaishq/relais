@@ -2,11 +2,14 @@ package sessionstore
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"net/netip"
 	"strconv"
 	"testing"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,7 +20,7 @@ func TestCheckpointClockFencingAndIdentity(t *testing.T) {
 		a, b := netip.MustParseAddrPort("127.0.0.1:1"), netip.MustParseAddrPort("127.0.0.1:2")
 		lease, err := store.Claim(ctx, "checkpoint", a, time.Minute)
 		require.NoError(t, err)
-		before, err := store.Clock(ctx)
+		before, err := store.Clock(ctx, lease.SessionID)
 		require.NoError(t, err)
 		original := []byte("original")
 		require.NoError(t, store.PutState(ctx, lease, original))
@@ -41,11 +44,49 @@ func TestCheckpointClockFencingAndIdentity(t *testing.T) {
 		require.ErrorIs(t, err, ErrNotFound)
 		canceled, cancel := context.WithCancel(ctx)
 		cancel()
-		_, err = store.Clock(canceled)
+		_, err = store.Clock(canceled, lease.SessionID)
 		require.ErrorIs(t, err, context.Canceled)
 		_, err = store.Checkpoint(canceled, lease.SessionID, original)
 		require.ErrorIs(t, err, context.Canceled)
 	})
+}
+
+func TestCheckpointDigestHidesPlaintextFingerprint(t *testing.T) {
+	r := testRedis(t)
+	ctx := context.Background()
+	data := []byte("predictable snapshot")
+	lease, err := r.Claim(ctx, "hmac", netip.MustParseAddrPort("127.0.0.1:1"), time.Minute)
+	require.NoError(t, err)
+	require.NoError(t, r.PutState(ctx, lease, data))
+	digest, err := r.client.HGet(ctx, r.keys(lease.SessionID)[0], "state_digest").Result()
+	require.NoError(t, err)
+	require.Equal(t, r.stateDigest(lease.SessionID, r.activeKey, data), digest)
+	require.NotContains(t, digest, fmt.Sprintf("%x", sha256.Sum256(data)))
+	require.NotEqual(t, r.stateDigest("another-session", r.activeKey, data), digest)
+	other := &Redis{keysByID: map[byte][]byte{r.activeKey: []byte("different master key")}}
+	require.NotEqual(t, other.stateDigest(lease.SessionID, r.activeKey, data), digest)
+}
+
+type clockRoutingClient struct {
+	redis.UniversalClient
+	keys []string
+}
+
+func (c *clockRoutingClient) Time(context.Context) *redis.TimeCmd {
+	return redis.NewTimeCmdResult(time.Unix(123, 0), nil)
+}
+
+func (c *clockRoutingClient) Eval(_ context.Context, _ string, keys []string, _ ...interface{}) *redis.Cmd {
+	c.keys = keys
+	return redis.NewCmdResult([]interface{}{int64(123), int64(456789)}, nil)
+}
+
+func TestCheckpointRedisClockRoutesToSessionSlot(t *testing.T) {
+	client := &clockRoutingClient{}
+	store := &Redis{client: client, prefix: "clock:"}
+	_, err := store.Clock(context.Background(), "clock-session")
+	require.NoError(t, err)
+	require.Equal(t, store.keys("clock-session"), client.keys, "TIME must route to the node storing this session")
 }
 
 func TestCheckpointClockRegressionIsUnsafe(t *testing.T) {

@@ -47,8 +47,7 @@ func (s *session) snapshotBytesAt(captured time.Time) ([]byte, error) {
 			state.Checkpoint.AgeAtCapture = time.Since(s.lastCheckpoint)
 		}
 	}
-	state.Checkpoint.RTPPacketRate = max(state.Checkpoint.RTPPacketRate, s.audioRate.peak, s.videoRate.peak)
-	state.Checkpoint.SRTCPPacketRate = max(state.Checkpoint.SRTCPPacketRate, s.rtcpRate.peak)
+	s.checkpointRates(&state.Checkpoint)
 	state.SRTP.Inbound = maps.Clone(state.SRTP.Inbound)
 	// Certificate/key byte slices are immutable throughout a session.
 	s.mu.Unlock()
@@ -83,7 +82,7 @@ func (s *session) persistSnapshotContext(parent context.Context) error {
 	s.mu.Lock()
 	s.state.Checkpoint.Attempts++
 	s.mu.Unlock()
-	captured, err := s.worker.cfg.Relay.Owners.Clock(ctx)
+	captured, err := s.worker.cfg.Relay.Owners.Clock(ctx, s.id)
 	var state []byte
 	if err == nil {
 		state, err = s.snapshotBytesAt(captured)
@@ -104,8 +103,7 @@ func (s *session) persistSnapshotContext(parent context.Context) error {
 		s.mu.Lock()
 		s.state.Checkpoint.Successes++
 		s.state.Checkpoint.CapturedAt = captured
-		s.state.Checkpoint.RTPPacketRate = max(s.state.Checkpoint.RTPPacketRate, s.audioRate.peak, s.videoRate.peak)
-		s.state.Checkpoint.SRTCPPacketRate = max(s.state.Checkpoint.SRTCPPacketRate, s.rtcpRate.peak)
+		s.checkpointRates(&s.state.Checkpoint)
 		s.lastCheckpoint = time.Now()
 		s.mu.Unlock()
 		metrics.CheckpointWrites.WithLabelValues("success").Inc()

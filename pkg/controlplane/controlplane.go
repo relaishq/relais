@@ -505,7 +505,9 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	res := MoveResult{Kind: "move", ID: c.id, From: source.name, To: target.name, Start: moveStarted}
 	var err error
+	checkpointOutside := false
 	if transferred {
 		from := lease
 		lease, err = p.transfer(ctx, lease, source.addr)
@@ -543,13 +545,9 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 			if err == nil {
 				var decision checkpointDecision
 				decision, err = p.checkpointDecision(resumeCtx, c.id, state, checkpointOutageBudget(resumeCtx, moveStarted))
-				if decision.outside {
-					policy := "scaled"
-					if err != nil {
-						policy = "definitive-loss"
-					}
-					metrics.CheckpointEnvelopeEvents.WithLabelValues(policy).Inc()
-				}
+				res.CheckpointAge, res.SnapshotAge, res.CheckpointStoredAt = decision.age, decision.snapshotAge, decision.storedAt
+				res.Checkpoint, res.SequenceMargin, res.SRTCPIndexMargin = decision.info, decision.margin, decision.rtcpMargin
+				checkpointOutside = decision.outside
 				opts.SequenceMargin, opts.SRTCPIndexMargin = decision.margin, decision.rtcpMargin
 				opts.CallerSequenceReserve = decision.reserve
 				opts.CheckpointAge, opts.SnapshotAge, opts.CheckpointStoredAt = decision.age, decision.snapshotAge, decision.storedAt
@@ -559,10 +557,17 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 			_, err = source.worker.ResumeSession(state, opts)
 		}
 	}
+	if checkpointOutside && (err == nil || checkpointEnvelopeLoss(err)) {
+		res.CheckpointPolicy = "scaled"
+		if err != nil {
+			res.CheckpointPolicy = "definitive-loss"
+		}
+		metrics.CheckpointEnvelopeEvents.WithLabelValues(res.CheckpointPolicy).Inc()
+	}
 	if err != nil {
-		p.forget(c)
-		_ = p.store.Release(ctx, lease)
-		return fmt.Errorf("controlplane: call lost: move failed (%v), rollback failed: %w", cause, err)
+		loss := fmt.Errorf("controlplane: call lost: move failed (%v), rollback failed: %w", cause, err)
+		p.completeTakeover(source, c, lease, &res, true, loss)
+		return loss
 	}
 
 	result.RolledBack = true

@@ -47,7 +47,11 @@ func (p *Plane) checkpointDecision(ctx context.Context, id string, state []byte,
 	decision.snapshotAge += latency
 	decision.margin, decision.rtcpMargin, decision.outside, err = p.config.CheckpointEnvelope.CheckpointMargins(decision.snapshotAge, info, p.config.SequenceMargin, p.config.SRTCPIndexMargin)
 	if err == nil {
-		decision.reserve = p.config.CheckpointEnvelope.CallerSequenceReserve(info, outage)
+		copyOutage := decision.snapshotAge
+		if deadline, ok := ctx.Deadline(); ok {
+			copyOutage += max(time.Until(deadline), 0)
+		}
+		decision.reserve = p.config.CheckpointEnvelope.CallerSequenceReserve(info, max(outage, copyOutage))
 		decision.outside = decision.outside || decision.reserve > p.config.CheckpointEnvelope.CallerSequenceReserve(info, 0)
 		if decision.reserve >= 1<<15 {
 			err = mediaworker.ErrSequenceBudgetExhausted

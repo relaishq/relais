@@ -46,6 +46,11 @@ func TestCheckpointDecisionUsesStoreClockAndCopyAge(t *testing.T) {
 	require.Greater(t, decision.margin, uint16(8192))
 	require.EqualValues(t, 10064, decision.reserve)
 	require.Equal(t, 0.75, decision.info.SuccessRate())
+	deadlineCtx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer cancel()
+	copyReserve, err := p.checkpointDecision(deadlineCtx, "clock", state, 200*time.Millisecond)
+	require.NoError(t, err)
+	require.InDelta(t, 15064, copyReserve.reserve, 100, "reserve includes old copy age plus remaining adoption time, despite a recent heartbeat")
 	longer, err := p.checkpointDecision(context.Background(), "clock", state, 3*time.Second)
 	require.NoError(t, err)
 	require.EqualValues(t, 15064, longer.reserve, "retry checkpoints cannot reset the caller outage")
@@ -55,6 +60,27 @@ func TestCheckpointDecisionUsesStoreClockAndCopyAge(t *testing.T) {
 	decision, err = p.checkpointDecision(context.Background(), "clock", state, 0)
 	require.ErrorIs(t, err, sessionstore.ErrUnsafeCheckpointClock)
 	require.True(t, decision.outside)
+}
+
+func TestEnvelopeFlagDoesNotRelabelUnrelatedLoss(t *testing.T) {
+	for _, cause := range []error{sessionstore.ErrNotFound, ErrNoTarget, mediaworker.ErrSequenceBudgetExhausted} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			p, _, _, _ := setup(t)
+			id, _, err := p.Create(context.Background(), "offer", "a")
+			require.NoError(t, err)
+			lease, err := p.store.Get(context.Background(), id)
+			require.NoError(t, err)
+			source := p.workers["a"]
+			source.pending = map[string]*takeoverState{id: {envelope: true}}
+			res := MoveResult{Kind: "takeover", ID: id, Start: time.Now()}
+			p.completeTakeover(source, p.calls[id], lease, &res, true, cause)
+			if cause == mediaworker.ErrSequenceBudgetExhausted {
+				require.Equal(t, "definitive-loss", res.CheckpointPolicy)
+			} else {
+				require.Empty(t, res.CheckpointPolicy)
+			}
+		})
+	}
 }
 
 func TestCheckpointInvalidStateIsTerminal(t *testing.T) {

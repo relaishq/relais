@@ -79,10 +79,11 @@ type session struct {
 
 	// decryptFailures counts SRTP and SRTCP packets from the caller that this
 	// worker could not decrypt.
-	decryptFailures                atomic.Uint64
-	lastCheckpoint                 time.Time   // guarded by mu; local acknowledgment time of last successful write
-	audioRate, videoRate, rtcpRate packetMeter // guarded by mu
-	snapshotStored                 atomic.Bool // internal harness readiness observation, no state bytes exposed
+	decryptFailures      atomic.Uint64
+	lastCheckpoint       time.Time   // guarded by mu; local acknowledgment time of last successful write
+	audioRate, videoRate sourceRate  // guarded by mu
+	rtcpRate             packetMeter // guarded by mu
+	snapshotStored       atomic.Bool // internal harness readiness observation, no state bytes exposed
 
 	callerSequenceReserve uint32 // active recovery reserve, guarded by mu
 
@@ -190,6 +191,10 @@ func sessionFromState(w *Worker, state sessionState) *session {
 		ctx:            ctx,
 		cancel:         cancel,
 	}
+	now := time.Now()
+	sess.audioRate.peak, sess.audioRate.peakAt = state.Checkpoint.RTPPacketRate, now
+	sess.videoRate.peak, sess.videoRate.peakAt = state.Checkpoint.RTPPacketRate, now
+	sess.rtcpRate.peak, sess.rtcpRate.peakAt = state.Checkpoint.SRTCPPacketRate, now
 	sess.dtlsEndpoint = newDTLSEndpoint(sess)
 	sess.consent = time.AfterFunc(w.cfg.consentTimeout, sess.consentExpired)
 	w.claimSession(sess.id)
@@ -476,13 +481,11 @@ func (s *session) handleRTP(pkt []byte) {
 		if track == &s.state.Video {
 			meter = &s.videoRate
 		}
-		index := uint64(header.SequenceNumber)
-		if track.Packets > 0 {
-			index = extendIndex(track.HighestSentIndex, header.SequenceNumber)
+		clockRate := uint32(48000)
+		if track == &s.state.Video {
+			clockRate = 90000
 		}
-		if !meter.allow(time.Now(), index, s.worker.cfg.CheckpointEnvelope.Defaults().MaxRTPPacketRate, checkpointRTPBurst) {
-			return
-		}
+		meter.observe(time.Now(), s.state.SRTP.Inbound[in.SSRC], in.Timestamp, clockRate)
 	}
 	encrypted, err := s.srtpOut.EncryptRTP(s.encryptBuf, s.plainBuf[:n], nil)
 	if err != nil {
@@ -595,7 +598,7 @@ func (s *session) requestKeyframe(trigger string) {
 	}
 	// At the 2^31-packet SRTCP key lifetime, encryption fails: log and
 	// cease transmitting PLIs rather than wrap/reuse an index under these keys.
-	if s.worker.cfg.Relay != nil && !s.rtcpRate.allow(time.Now(), uint64(video.SRTCPIndex)+1, s.worker.cfg.CheckpointEnvelope.Defaults().MaxSRTCPPacketRate, checkpointSRTCPBurst) {
+	if s.worker.cfg.Relay != nil && !s.rtcpRate.allow(time.Now(), uint64(video.SRTCPIndex)+1, s.worker.cfg.CheckpointEnvelope.MaxSRTCPPacketRate, checkpointSRTCPBurst) {
 		return
 	}
 	encrypted, err := s.srtpOut.EncryptRTCP(s.encryptBuf, plain, nil)
