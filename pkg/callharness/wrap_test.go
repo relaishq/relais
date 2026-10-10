@@ -11,6 +11,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,9 +22,13 @@ var nearWrap = RTPSequenceNumbers{Audio: 65535, Video: 65500}
 var lowSequence = RTPSequenceNumbers{Audio: 1200, Video: 1200}
 
 func TestRelayPlannedWrap(t *testing.T) {
+	forWrapSessionStores(t, testRelayPlannedWrap)
+}
+
+func testRelayPlannedWrap(t *testing.T, store sessionstore.Store) {
 	for _, direction := range []string{"inbound", "outbound", "both"} {
 		t.Run(direction, func(t *testing.T) {
-			ctx, _, call, capture := startWrapCall(t, direction)
+			ctx, h, call, capture := startWrapCall(t, direction, store)
 			seedWrapMedia(t, call)
 			// Three moves of one transport: the first export is before both wraps,
 			// and later exports preserve advanced ROCs. SSRCs and keys stay fixed.
@@ -35,6 +40,9 @@ func TestRelayPlannedWrap(t *testing.T) {
 				}
 				require.NoError(t, call.SendMedia(ctx, duration))
 			}
+			failures, err := h.workers.list[1].SessionDecryptFailures(call.SessionID())
+			require.NoError(t, err)
+			require.Zero(t, failures)
 			report, err := call.Hangup(ctx)
 			require.NoError(t, err)
 			require.Len(t, report.Moves, 3)
@@ -50,14 +58,21 @@ func TestRelayPlannedWrap(t *testing.T) {
 }
 
 func TestRelayTakeoverWrap(t *testing.T) {
-	for _, direction := range []string{"inbound", "outbound", "both"} {
+	forWrapSessionStores(t, testRelayTakeoverWrap)
+}
+
+func testRelayTakeoverWrap(t *testing.T, store sessionstore.Store) {
+	for _, direction := range []string{"inbound", "outbound", "both", "outbound-primer"} {
 		for _, afterWrap := range []bool{false, true} {
+			if direction == "outbound-primer" && afterWrap {
+				continue
+			}
 			timing := "kill-before-wrap"
 			if afterWrap {
 				timing = "stale-snapshot-kill-after-wrap"
 			}
 			t.Run(direction+"/"+timing, func(t *testing.T) {
-				ctx, h, call, capture := startWrapCall(t, direction)
+				ctx, h, call, capture := startWrapCall(t, direction, store)
 				old := h.workers.list[0]
 				require.NoError(t, h.WaitForSnapshot(ctx, 0, call.SessionID()))
 				// Gate all periodic/first-packet/ROC wakeups. A single explicit copy
@@ -91,6 +106,9 @@ func TestRelayTakeoverWrap(t *testing.T) {
 					require.Less(t, index, uint64(1<<16))
 				}
 				require.Less(t, snap.State.Audio.HighestSentIndex, uint64(1<<16))
+				if direction == "outbound-primer" {
+					require.Equal(t, uint64(65535), snap.State.Audio.HighestSentIndex+8192)
+				}
 				require.Less(t, snap.State.Video.HighestSentIndex, uint64(1<<16))
 				owners := h.workers.relay.owners
 				lease, err := owners.Get(ctx, call.SessionID())
@@ -104,7 +122,7 @@ func TestRelayTakeoverWrap(t *testing.T) {
 					crossed := map[uint8]bool{}
 					inbound, outbound := wrapSequences(direction)
 					target := inbound
-					if direction == "outbound" {
+					if direction == "outbound" || direction == "outbound-primer" {
 						target = outbound
 					}
 					require.NoError(t, workerprobe.SetAfterEcho(old.LocalAddr(), func(lifetime context.Context, id string, raw []byte) {
@@ -140,6 +158,14 @@ func TestRelayTakeoverWrap(t *testing.T) {
 					// must derive ROC 1 from the pre-wrap primer, and the outbound margin
 					// jumps across the echoed wrap independently.
 					require.NoError(t, h.Kill(0))
+					if direction == "outbound-primer" {
+						// Pause caller media during recovery so the first resumed audio
+						// packet is exactly 65535 -> 0, without an outage-source jump.
+						require.Eventually(t, func() bool {
+							status, err := h.Status(ctx)
+							return err == nil && len(status.Takeovers) == 1 && len(status.Calls) == 1 && status.Calls[0].Owner == "1"
+						}, 2*time.Second, 5*time.Millisecond)
+					}
 					go func() { sent <- call.SendMedia(ctx, 4*time.Second) }()
 				}
 				require.Eventually(t, func() bool {
@@ -167,18 +193,23 @@ type wrapCapture struct {
 
 func wrapSequences(direction string) (inbound, outbound RTPSequenceNumbers) {
 	inbound, outbound = lowSequence, lowSequence
-	if direction != "outbound" {
+	if direction == "inbound" || direction == "both" {
 		inbound = nearWrap
 	}
 	if direction != "inbound" {
 		outbound = nearWrap
 	}
+	if direction == "outbound-primer" {
+		// One seeded audio packet leaves H + 8192 = 65535. The very first
+		// resumed echo must wrap, so SetROC alone cannot restore this context.
+		outbound = RTPSequenceNumbers{Audio: 57343, Video: 57310}
+	}
 	return
 }
 
-func startWrapCall(t *testing.T, direction string) (context.Context, *Harness, *Call, *wrapCapture) {
+func startWrapCall(t *testing.T, direction string, store sessionstore.Store) (context.Context, *Harness, *Call, *wrapCapture) {
 	t.Helper()
-	h, err := Start(Options{Relay: true, Workers: 2, SnapshotInterval: time.Hour})
+	h, err := Start(Options{Relay: true, Workers: 2, SnapshotInterval: time.Hour, SessionStore: store})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -271,7 +302,7 @@ func assertWrapReport(t *testing.T, call *Call, report *Report, capture *wrapCap
 		capture.Unlock()
 		require.NotEmpty(t, sent)
 		require.Equal(t, startIn, sent[0])
-		if direction != "outbound" {
+		if direction == "inbound" || direction == "both" {
 			assertObservedWrap(t, "sent "+track.Kind, sent, true)
 		}
 		call.rec.mu.Lock()
@@ -286,6 +317,10 @@ func assertWrapReport(t *testing.T, call *Call, report *Report, capture *wrapCap
 		call.rec.mu.Unlock()
 		require.NotEmpty(t, received)
 		require.Equal(t, startOut, received[0])
+		if direction == "outbound-primer" && track.Kind == kindAudio {
+			require.Greater(t, len(received), 1)
+			require.Zero(t, received[1], "first resumed packet itself wraps")
+		}
 		if direction != "inbound" {
 			assertObservedWrap(t, "received "+track.Kind, received, !takeover)
 		}

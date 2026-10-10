@@ -47,12 +47,22 @@ var (
 // waits for nothing, so it is quick; the bound only guards against a hang.
 const resumeTimeout = 5 * time.Second
 
-// ErrSequenceBudgetExhausted rejects an RTP advance whose retained margins
-// plus the caller's reserved outage gap would reach the half sequence space.
-// It also rejects an unsent track's first-index wrap. Neither case is safely
-// resumable; the plane records a definitive clean loss. An SRTCP margin
-// that would reset the 31-bit index under the same keys is rejected too.
+// ErrSequenceBudgetExhausted rejects retained RTP margins plus the caller's
+// reserved outage gap and first resumed packet reaching the half sequence
+// space. Unsent tracks must also retain a pre-wrap runway for lost starts.
 var ErrSequenceBudgetExhausted = errors.New("mediaworker: sequence budget exhausted")
+
+// ErrSRTCPIndexExhausted rejects index reuse under the same master key.
+// RFC 3711 section 9.2 limits a master key to 2^31 SRTCP packets:
+// https://www.rfc-editor.org/rfc/rfc3711.html#section-9.2
+// Resume rejects a margin crossing that lifetime. Live sessions instead
+// log encryption failure and stop sending PLIs until rekeying or termination.
+var ErrSRTCPIndexExhausted = errors.New("mediaworker: SRTCP key lifetime exhausted")
+
+// Keep at least 8193 ROC-zero packets before wrapping an unsent stream. A
+// receiver losing its start needs an authenticated index above 2^15 before
+// it can infer ROC 1; three default margins fit every production start.
+const unsentRunway = 1 << 13
 
 // SequenceGapReserve reserves 10,000 sequence numbers for the caller's own
 // packets during an outage: a 2 s recovery target at up to 5,000 packets/s per
@@ -91,7 +101,7 @@ func (state *sessionState) sequenceResumeAttempts(margin uint16) (int, error) {
 		}
 		remaining := maxRetainedSequenceAdvance - int(track.AdvanceSinceSend)
 		if track.Packets == 0 {
-			remaining = 0xffff - int(track.InitialSeq)
+			remaining = 0xffff - unsentRunway - int(track.InitialSeq)
 		}
 		attempts = min(attempts, remaining/int(margin))
 	}
@@ -106,7 +116,7 @@ func (track *trackState) checkSequenceMargin(margin uint16) error {
 		return nil
 	}
 	if track.Packets == 0 {
-		if uint64(track.InitialSeq)+uint64(margin) > 0xffff {
+		if uint64(track.InitialSeq)+uint64(margin) > 0xffff-unsentRunway {
 			return ErrSequenceBudgetExhausted
 		}
 		return nil
@@ -512,7 +522,7 @@ func (s *session) resumeTrack(track *trackState, opts ResumeOptions) error {
 	// Pion SetIndex reduces modulo 2^31. A takeover margin must never
 	// reset an exhausted SRTCP context and reuse ciphertext indexes.
 	if uint64(track.SRTCPIndex)+uint64(opts.SRTCPIndexMargin) > 1<<31-1 {
-		return ErrSequenceBudgetExhausted
+		return ErrSRTCPIndexExhausted
 	}
 	// A later resume must also protect live indexes used since the burst.
 	// Conservatively advance the persisted floor to the snapshot's high water
@@ -525,7 +535,7 @@ func (s *session) resumeTrack(track *trackState, opts ResumeOptions) error {
 		// The handshake snapshot may predate the first media packet. Keep
 		// ROC at zero: the receiver may never have seen this track.
 		initial := uint64(track.InitialSeq) + uint64(opts.SequenceMargin)
-		if initial > 0xffff {
+		if opts.SequenceMargin > 0 && initial > 0xffff-unsentRunway {
 			return ErrSequenceBudgetExhausted
 		}
 		track.AdvanceSinceSend += uint32(opts.SequenceMargin)

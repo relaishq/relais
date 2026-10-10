@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/relais/pkg/callharness"
+	"github.com/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,6 +22,10 @@ import (
 // source's PictureID plus encoded payload disambiguates a cached keyframe
 // from the identical IVF keyframe sent anew in response to a PLI.
 func TestRelayFrameCacheModes(t *testing.T) {
+	forSessionStores(t, testRelayFrameCacheModes)
+}
+
+func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 	for _, mode := range []struct {
 		name       string
 		cache, pli bool
@@ -32,7 +37,7 @@ func TestRelayFrameCacheModes(t *testing.T) {
 			within := 0
 			for trial := range 10 {
 				t.Run(fmt.Sprint(trial), func(t *testing.T) {
-					h := startHarness(t, callharness.Options{Relay: true, Workers: 2, DisableFrameCache: !mode.cache, DisableResumePLI: !mode.pli})
+					h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, Workers: 2, DisableFrameCache: !mode.cache, DisableResumePLI: !mode.pli})
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					defer cancel()
 					call, err := h.Dial(ctx, callharness.CallOptions{Video: true})
@@ -122,7 +127,11 @@ func TestRelayFrameCacheModes(t *testing.T) {
 }
 
 func TestRelayFrameCacheMidKeyframe(t *testing.T) {
-	h := startHarness(t, callharness.Options{Relay: true, Workers: 2, DisableResumePLI: true, ReplayMaxBurstDuration: 50 * time.Millisecond})
+	forSessionStores(t, testRelayFrameCacheMidKeyframe)
+}
+
+func testRelayFrameCacheMidKeyframe(t *testing.T, store sessionstore.Store) {
+	h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, Workers: 2, DisableResumePLI: true, ReplayMaxBurstDuration: 50 * time.Millisecond})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	call, err := h.Dial(ctx, callharness.CallOptions{Video: true})

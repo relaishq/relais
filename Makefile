@@ -88,7 +88,7 @@ test-harness: ## Run the call harness (audio+video echo calls, direct and throug
 	$(GOTEST) -race -v -count=1 -timeout 30m $(HARNESS_FLAGS) $(HARNESS_PKGS)
 
 test-harness-timing: ## Run the relay move, drain and takeover timing tests without the race detector, which enforce issues #6/#7/#8's gap targets (needs ffmpeg on PATH)
-	$(GOTEST) -v -count=1 -run '^TestRelay(PlannedHandover|DrainTenCalls|HardKillTakeover|StaleSnapshotTakeover|MidKeyframeTakeover|FirstKeyframeTakeover|FrameCacheModes|FrameCacheMidKeyframe|FrameCacheWithoutSource|FrameCacheLargeGroup|PlannedWrap|TakeoverWrap)$$' ./pkg/callharness/
+	$(GOTEST) -v -count=1 -timeout 30m -run '^TestRelay(PlannedHandover|DrainTenCalls|HardKillTakeover|StaleSnapshotTakeover|MidKeyframeTakeover|FirstKeyframeTakeover|FrameCacheModes|FrameCacheMidKeyframe|FrameCacheWithoutSource|FrameCacheLargeGroup|PlannedWrap|TakeoverWrap)$$' ./pkg/callharness/
 
 DEMO_FLAGS ?=
 

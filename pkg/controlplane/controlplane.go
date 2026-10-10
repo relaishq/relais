@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/relais/pkg/mediaworker"
@@ -68,6 +69,8 @@ type registration struct {
 }
 
 type call struct {
+	// hungUp records a completed End; retained retries keep this call.
+	hungUp        atomic.Bool
 	mu            sync.Mutex
 	id            string
 	lastMove      *time.Time
@@ -278,12 +281,15 @@ func (p *Plane) End(ctx context.Context, id string) error {
 	if err := w.worker.EndSession(id); err != nil {
 		if errors.Is(err, mediaworker.ErrUnknownSession) {
 			p.forget(c)
-			_ = p.store.Release(ctx, lease)
+			if p.store.Release(ctx, lease) == nil {
+				c.hungUp.Store(true)
+			}
 			p.deleteFrames(id)
 		}
 
 		return err
 	}
+	c.hungUp.Store(true)
 	p.forget(c)
 	p.deleteFrames(id)
 	return nil
@@ -711,6 +717,6 @@ func (p *Plane) retainUncertainMove(source *registration, c *call, from sessions
 	if transient.Candidate.Worker == source.addr {
 		excluded = map[netip.AddrPort]bool{from.Worker: true}
 	}
-	source.pending[c.id] = &takeoverState{lease: from, candidate: transient.Candidate, routed: routed, excluded: excluded, attemptLimit: maxResumeAttempts, plannedState: state, planned: true}
+	source.pending[c.id] = &takeoverState{call: c, lease: from, candidate: transient.Candidate, routed: routed, excluded: excluded, attemptLimit: maxResumeAttempts, plannedState: state, planned: true}
 	return true
 }

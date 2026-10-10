@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestUnsentTrackUsesEntireROCZeroBudget(t *testing.T) {
+func TestUnsentTrackRetainsPreWrapRunway(t *testing.T) {
 	for _, profile := range testSRTPProfiles {
 		t.Run(profileName(profile), func(t *testing.T) {
 			keys := testSessionKeys(t, profile)
@@ -17,8 +17,8 @@ func TestUnsentTrackUsesEntireROCZeroBudget(t *testing.T) {
 			state := sessionState{Video: track}
 			attempts, err := state.sequenceResumeAttempts(8192)
 			require.NoError(t, err)
-			require.Equal(t, 4, attempts, "unsent receiver has all of ROC zero available")
-			for step := range 4 {
+			require.Equal(t, 3, attempts, "three margins preserve the lost-start runway")
+			for step := range 3 {
 				out := testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
 				sess := &session{srtpOut: out}
 				require.NoError(t, sess.resumeTrack(&track, ResumeOptions{SequenceMargin: 8192}))
@@ -112,11 +112,52 @@ func TestSRTCPRestoreAtIndexBoundary(t *testing.T) {
 			for _, packets := range []uint64{0, 1} {
 				track.Packets = packets
 				before := track
-				require.ErrorIs(t, (&session{srtpOut: restored}).resumeTrack(&track, ResumeOptions{SRTCPIndexMargin: 1}), ErrSequenceBudgetExhausted,
+				require.ErrorIs(t, (&session{srtpOut: restored}).resumeTrack(&track, ResumeOptions{SRTCPIndexMargin: 1}), ErrSRTCPIndexExhausted,
 					"a margin must not bypass Pion's key-exhaustion guard via SetIndex modulo")
 				require.Equal(t, before, track)
 			}
 			t.Logf("SRTCP_BOUNDARY profile=%s final_decrypt_index=%d exhaustion_rejected=true margin_wrap_rejected=true", profileName(profile), index)
+		})
+	}
+}
+
+// Drop a full runway of initial packets at the caller, with either no prior
+// index or only low stale indexes from before the unsent snapshot's retries.
+func TestUnsentTrackLostStartDecryptsAfterWrap(t *testing.T) {
+	for _, profile := range testSRTPProfiles {
+		t.Run(profileName(profile), func(t *testing.T) {
+			for _, initial := range []uint16{30000, 32767} {
+				for _, stale := range []bool{false, true} {
+					keys := testSessionKeys(t, profile)
+					receiver := testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
+					if stale {
+						old := testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
+						for seq := initial; seq < initial+3 && seq <= 1<<15; seq++ {
+							_, err := receiver.DecryptRTP(nil, testEncrypt(t, old, 123, seq), nil)
+							require.NoError(t, err)
+						}
+					}
+					track := trackState{MID: "video", SSRC: 123, InitialSeq: initial}
+					var out *srtp.Context
+					for range 3 {
+						out = testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
+						require.NoError(t, (&session{srtpOut: out}).resumeTrack(&track, ResumeOptions{SequenceMargin: 8192}))
+					}
+					decryptedAfterWrap := 0
+					for index := uint32(track.InitialSeq); index < 65536+2000; index++ {
+						encrypted := testEncrypt(t, out, track.SSRC, uint16(index)) //nolint:gosec // low 16 bits of an SRTP index
+						if index < uint32(track.InitialSeq)+unsentRunway {
+							continue
+						}
+						_, err := receiver.DecryptRTP(nil, encrypted, nil)
+						require.NoError(t, err, "initial=%d stale=%t index=%d", initial, stale, index)
+						if index >= 65536 {
+							decryptedAfterWrap++
+						}
+					}
+					require.Equal(t, 2000, decryptedAfterWrap)
+				}
+			}
 		})
 	}
 }
