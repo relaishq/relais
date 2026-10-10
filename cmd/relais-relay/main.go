@@ -1,0 +1,43 @@
+package main
+
+import (
+	"flag"
+	"log"
+	"time"
+
+	"github.com/relais/internal/processrun"
+	"github.com/relais/pkg/relay"
+)
+
+func run() error {
+	var storeConfig processrun.StoreConfig
+	storeConfig.Flags(flag.CommandLine)
+	public := flag.String("media", processrun.Env("RELAIS_RELAY_MEDIA", "127.0.0.1:0"), "public UDP address")
+	leg := flag.String("leg", processrun.Env("RELAIS_RELAY_LEG", "127.0.0.1:0"), "private worker-leg UDP address")
+	httpAddr := flag.String("http", processrun.Env("RELAIS_RELAY_HTTP", "127.0.0.1:0"), "private control HTTP address")
+	hold := flag.Duration("hold-timeout", 3*time.Second, "abandoned move backstop")
+	flag.Parse()
+	ctx, cancel := processrun.Context()
+	defer cancel()
+	store, err := storeConfig.OpenOwners(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = store.Close() }()
+	r, err := relay.New(relay.Config{PublicAddr: *public, WorkerAddr: *leg, Owners: store, HoldTimeout: *hold})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	listener, err := processrun.ListenPrivate(*httpAddr)
+	if err != nil {
+		return err
+	}
+	processrun.Ready(map[string]any{"http": "http://" + listener.Addr().String(), "media": r.PublicAddr(), "leg": r.WorkerAddr()})
+	return processrun.Serve(ctx, listener, r.PrivateHandler())
+}
+func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}

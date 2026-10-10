@@ -55,7 +55,7 @@ func (h *Harness) RestartWorker(worker int) error {
 }
 
 func (c *Call) collectTakeovers(ctx context.Context) error {
-	if c.harness.workers.relay == nil {
+	if c.harness.workers.relay == nil && c.harness.external == nil {
 		return nil
 	}
 	status, err := c.harness.Status(ctx)

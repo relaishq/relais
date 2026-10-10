@@ -229,7 +229,7 @@ func (r *failedRouteRelay) MoveSession(id string, from, to netip.AddrPort) error
 		r.failForward = false
 		return errors.New("failed route update before mutation")
 	}
-	if from != r.route {
+	if from.IsValid() && from != r.route {
 		return errors.New("retry used a route that was never installed")
 	}
 	r.route = to

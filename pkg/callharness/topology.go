@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -117,6 +118,22 @@ func (t *relayTopology) close() error {
 // offerURL is where an offer for a worker goes. Only the relay topology
 // lets a call pick its worker; otherwise calls start on the first.
 func (h *Harness) offerURL(worker int) (string, error) {
+	if worker == -1 {
+		return h.signalingURL, nil
+	}
+	if h.external != nil {
+		if worker < -1 {
+			return "", errors.New("callharness: negative worker index")
+		}
+		u, err := url.Parse(h.signalingURL)
+		if err != nil {
+			return "", err
+		}
+		q := u.Query()
+		q.Set(workerParam, strconv.Itoa(worker))
+		u.RawQuery = q.Encode()
+		return u.String(), nil
+	}
 	ws := h.workers
 	switch {
 	case worker < 0 || worker >= len(ws.list):
@@ -133,6 +150,9 @@ func (h *Harness) offerURL(worker int) (string, error) {
 // RelayAddr is the relay's public address, which every answer advertises;
 // the zero value without Options.Relay.
 func (h *Harness) RelayAddr() netip.AddrPort {
+	if h.external != nil {
+		return h.external.RelayAddr
+	}
 	t := h.workers.relay
 	if t == nil {
 		return netip.AddrPort{}

@@ -61,7 +61,7 @@ func (h *Harness) Drain(worker int) error {
 }
 
 func (h *Harness) controlRequest(ctx context.Context, method, path string, result any) error {
-	if h.workers.relay == nil {
+	if h.workers.relay == nil && h.external == nil {
 		return errors.New("callharness: control plane needs Options.Relay")
 	}
 

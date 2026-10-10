@@ -17,14 +17,23 @@ BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 # Linker flags (populate pkg/buildinfo)
 LDFLAGS=-ldflags "-X github.com/relais/pkg/buildinfo.Version=$(VERSION) -X github.com/relais/pkg/buildinfo.Commit=$(COMMIT) -X github.com/relais/pkg/buildinfo.Date=$(BUILD_TIME)"
 
-.PHONY: all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-harness test-harness-timing demo help
+.PHONY: all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-harness test-harness-timing demo crash-run help
 
 all: test build
 
-build: ensure_bin_dir ## Build the plugin runner binaries
+build: ensure_bin_dir ## Build plugin runners and relay, worker, control and crash-run binaries
 	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-ingress -v $(LDFLAGS) ./cmd/ingress-runner
 	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-egress -v $(LDFLAGS) ./cmd/egress-runner
 	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-transform -v $(LDFLAGS) ./cmd/transform-runner
+
+	$(GOBUILD) -o $(BIN_DIR)/relais-relay $(LDFLAGS) ./cmd/relais-relay
+	$(GOBUILD) -o $(BIN_DIR)/relais-worker $(LDFLAGS) ./cmd/relais-worker
+	$(GOBUILD) -o $(BIN_DIR)/relais-control $(LDFLAGS) ./cmd/relais-control
+	$(GOBUILD) -o $(BIN_DIR)/crash-run $(LDFLAGS) ./cmd/crash-run
+
+CRASH_FLAGS ?=
+crash-run: build ## Run ten real-process SIGKILL calls on a dedicated throwaway Redis; requires Redis and ffmpeg
+	./$(BIN_DIR)/crash-run $(CRASH_FLAGS)
 
 ensure_bin_dir: ## Create bin directory if it doesn't exist
 	mkdir -p $(BIN_DIR)

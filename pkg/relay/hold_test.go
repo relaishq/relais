@@ -3,6 +3,7 @@ package relay
 import (
 	"bytes"
 	"context"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -176,7 +177,7 @@ func TestHoldMissingAcknowledgementTimesOut(t *testing.T) {
 	require.NoError(t, err)
 	caller.send(t, media, sys.relay.PublicAddr())
 	require.ErrorIs(t, <-done, ErrBarrierTimeout)
-	a.expect(t, caller.addr(), media)
+	expectAfterBarriers(t, a, caller.addr(), media)
 	require.EqualValues(t, 1, sys.relay.Stats().BarrierTimeouts)
 }
 
@@ -267,7 +268,7 @@ func TestDefaultBarrierDeadlineReleasesSilentSource(t *testing.T) {
 	duration := time.Since(started)
 	require.Less(t, duration, 1500*time.Millisecond)
 	for _, packet := range packets {
-		a.expect(t, caller.addr(), packet)
+		expectAfterBarriers(t, a, caller.addr(), packet)
 	}
 	require.Zero(t, sys.relay.Stats().HeldPackets)
 	require.Zero(t, sys.relay.Stats().HeldBytes)
@@ -291,14 +292,97 @@ func TestHoldBackstopStartsAfterAcknowledgement(t *testing.T) {
 	require.Eventually(t, func() bool { return sys.relay.Stats().HeldPackets == 1 }, time.Second/2, time.Millisecond)
 	// Waiting 200 ms exceeds the configured 100 ms coordination backstop,
 	// but the source has not yet acknowledged: only the barrier clock runs.
-	a.expectNothing(t)
+	// Receive and discard retransmissions for 200 ms; no media may escape.
+	deadline := time.Now().Add(200 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		datagram, ok := receive(t, a.conn, time.Until(deadline))
+		if !ok {
+			break
+		}
+		retry, ack, valid := relayleg.ParseBarrier(datagram)
+		require.True(t, valid)
+		require.False(t, ack)
+		require.Equal(t, nonce, retry)
+	}
 	require.Equal(t, 1, sys.relay.Stats().Holds)
 	require.Zero(t, sys.relay.Stats().HoldTimeouts)
 	_, err := a.conn.WriteToUDPAddrPort(relayleg.Barrier(nonce, true), sys.relay.WorkerAddr())
 	require.NoError(t, err)
 	require.NoError(t, <-done)
 	// With no explicit release, the post-acknowledgement backstop now fires.
-	a.expect(t, caller.addr(), media)
+	expectAfterBarriers(t, a, caller.addr(), media)
 	require.EqualValues(t, 1, sys.relay.Stats().HoldTimeouts)
 	require.Zero(t, sys.relay.Stats().BarrierTimeouts)
+}
+
+// Discard only valid unacknowledged barrier retries, preserving exact media
+// and caller assertions after a deliberately silent drain phase.
+func expectAfterBarriers(t *testing.T, w *testWorker, caller netip.AddrPort, want []byte) {
+	t.Helper()
+	deadline := time.Now().Add(receiveTimeout)
+	for {
+		datagram, ok := receive(t, w.conn, time.Until(deadline))
+		require.True(t, ok)
+		if _, ack, valid := relayleg.ParseBarrier(datagram); valid {
+			require.False(t, ack)
+			continue
+		}
+		gotCaller, got, err := ParseHeader(datagram)
+		require.NoError(t, err)
+		require.Equal(t, caller, gotCaller)
+		require.Equal(t, want, got)
+		return
+	}
+}
+
+func TestBarrierResendsSameNonceUntilAcknowledged(t *testing.T) {
+	sys := startTestRelay(t, Config{})
+	a := sys.worker(t, sessionA)
+	done := make(chan error, 1)
+	go func() { done <- sys.relay.HoldSession(context.Background(), sessionA, a.addr()) }()
+	initial, ok := receive(t, a.conn, receiveTimeout)
+	require.True(t, ok)
+	nonce, ack, valid := relayleg.ParseBarrier(initial)
+	require.True(t, valid)
+	require.False(t, ack)
+	// Drop the first barrier, then drop the first ACK. Both losses require a
+	// new datagram; no synthetic relay acknowledgement bypasses the UDP leg.
+	for range 2 {
+		retry, ok := receive(t, a.conn, 200*time.Millisecond)
+		require.True(t, ok)
+		got, isAck, valid := relayleg.ParseBarrier(retry)
+		require.True(t, valid)
+		require.False(t, isAck)
+		require.Equal(t, nonce, got)
+	}
+	_, err := a.conn.WriteToUDPAddrPort(relayleg.Barrier(nonce, true), sys.relay.WorkerAddr())
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+	a.expectNothing(t)
+	_, err = sys.relay.ReleaseSession(sessionA, a.addr())
+	require.NoError(t, err)
+}
+
+func TestDefaultHoldBackstopReleasesAbandonedMove(t *testing.T) {
+	require.Equal(t, 3*time.Second, DefaultHoldTimeout)
+	sys := startTestRelay(t, Config{})
+	a := sys.worker(t, sessionA)
+	caller := newTestCaller(t)
+	sys.connect(t, caller, a, sessionA)
+	beginHold(t, sys, a, sessionA)
+	started := time.Now()
+	caller.send(t, media, sys.relay.PublicAddr())
+	// Simulate a vanished control process after the barrier was acknowledged:
+	// no explicit ReleaseSession occurs, and the queued media must escape.
+	datagram, ok := receive(t, a.conn, 4*time.Second)
+	require.True(t, ok)
+	addr, payload, err := ParseHeader(datagram)
+	require.NoError(t, err)
+	require.Equal(t, caller.addr(), addr)
+	require.Equal(t, media, payload)
+	elapsed := time.Since(started)
+	require.GreaterOrEqual(t, elapsed, DefaultHoldTimeout-100*time.Millisecond)
+	require.Less(t, elapsed, 4*time.Second)
+	require.EqualValues(t, 1, sys.relay.Stats().HoldTimeouts)
+	require.Zero(t, sys.relay.Stats().Holds)
 }

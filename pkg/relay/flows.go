@@ -192,7 +192,7 @@ func (t *flowTable) moveSession(session string, from, to netip.AddrPort) {
 		if c.candidate != nil && c.candidate.session == session {
 			t.dropCandidate(c)
 		}
-		if c.route != nil && c.route.session == session && c.route.worker == from {
+		if c.route != nil && c.route.session == session && (!from.IsValid() || c.route.worker == from) {
 			c.route.worker = to
 		}
 	}

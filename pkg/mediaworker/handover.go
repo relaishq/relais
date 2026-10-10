@@ -204,13 +204,23 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 	if err != nil {
 		return "", err
 	}
+	// A retry after a lost reply must acknowledge the already adopted tenure,
+	// without restoring counters or reapplying margins. Expiry time may have
+	// advanced through renewal; identity is session, worker and epoch only.
+	if existing := w.session(snap.State.ID); existing != nil {
+		existing.mu.Lock()
+		sameLease := opts.Lease.SessionID != "" && existing.lease.SessionID == opts.Lease.SessionID &&
+			existing.lease.Worker == opts.Lease.Worker && existing.lease.Epoch == opts.Lease.Epoch && !existing.fenced.Load()
+		existing.mu.Unlock()
+		if sameLease {
+			return snap.State.ID, nil
+		}
+		return "", errSessionExists
+	}
 	if opts.SequenceMargin > 0 {
 		if _, err := snap.State.sequenceResumeAttempts(opts.SequenceMargin); err != nil {
 			return "", err
 		}
-	}
-	if w.session(snap.State.ID) != nil {
-		return "", errSessionExists
 	}
 
 	if w.cfg.Relay != nil {

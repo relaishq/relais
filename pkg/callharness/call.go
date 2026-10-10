@@ -49,7 +49,10 @@ type CallOptions struct {
 	BrowserLikeOffer bool
 
 	// Worker is the index of the media worker that takes the call (see
-	// Options.Workers); 0 is the first.
+	// Options.Workers); 0 is the first in an owned topology.
+	// In external mode the number is the literal registration name: the zero
+	// value CallOptions{} pins to "0", which must exist.
+	// -1 leaves placement unpinned on relay/control-plane topologies.
 	Worker int
 }
 
