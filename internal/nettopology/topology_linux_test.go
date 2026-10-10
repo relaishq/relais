@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -100,9 +101,15 @@ func TestLinuxIsolationAndCleanup(t *testing.T) {
 	require.Equal(t, "media", string(buffer[:n]))
 	require.NoError(t, caller.SetDeadline(time.Now().Add(150*time.Millisecond)))
 	_, err = caller.WriteTo([]byte("forbidden"), blocked.LocalAddr())
-	require.NoError(t, err)
-	_, _, err = caller.ReadFrom(buffer)
-	require.Error(t, err, "only the selected media port may reply")
+	if err != nil {
+		// OUTPUT filtering may reject the datagram before it leaves the caller.
+		require.True(t, errors.Is(err, syscall.EPERM), "unexpected blocked-port send error: %v", err)
+	} else {
+		_, _, err = caller.ReadFrom(buffer)
+		var netErr net.Error
+		require.ErrorAs(t, err, &netErr, "only the selected media port may reply")
+		require.True(t, netErr.Timeout(), "unexpected blocked-port receive error: %v", err)
+	}
 	// Real children must execute directly in the namespace with unchanged PID.
 	manager := &clusterprocess.Manager{}
 	require.NoError(t, manager.AddCleanup(func() { require.NoError(t, topology.Close()) }))
