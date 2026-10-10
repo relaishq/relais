@@ -1,4 +1,4 @@
-// crash-run is the opt-in real-process acceptance run, never a CI requirement.
+// crash-run is the real-process acceptance run used by the full CI matrix.
 package main
 
 import (

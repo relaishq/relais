@@ -6,11 +6,20 @@ on:
   pull_request:
     branches: [ main ]
 
+  schedule:
+    - cron: '0 8 * * *' # Nightly at 08:00 UTC.
+  workflow_dispatch:
+
+# Only superseded PR runs share a cancellation group. Each full run is distinct.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  build:
+  quality:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -20,8 +29,8 @@ jobs:
       - name: Install dependencies
         run: make deps
 
-      - name: Run tests
-        run: make test
+      - name: Run go vet
+        run: make vet
 
       - name: Run linter
         uses: golangci/golangci-lint-action@v9
@@ -31,10 +40,38 @@ jobs:
       - name: Build
         run: make build
 
-  benchmark:
+      # The demo page's verdict logic decides the browser go/no-go.
+      - name: Run demo metric tests
+        run: node --test cmd/relais-demo/metrics.test.cjs
+
+  # The build job is the aggregate gate while all work runs in parallel.
+  # Making it required in GitHub settings is a separate admin decision.
+  # always() turns a failed dependency into a failed check, rather than a skip.
+  build:
+    needs: [quality, unit-tests, timing-smoke, call-harness]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Require all essential checks
+        env:
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          UNIT_RESULT: ${{ needs.unit-tests.result }}
+          SMOKE_RESULT: ${{ needs.timing-smoke.result }}
+          HARNESS_RESULT: ${{ needs.call-harness.result }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          test "$QUALITY_RESULT" = success
+          test "$UNIT_RESULT" = success
+          test "$HARNESS_RESULT" = success
+          if [ "$EVENT_NAME" = pull_request ]; then
+            test "$SMOKE_RESULT" = success
+          fi
+
+  benchmark:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -44,7 +81,7 @@ jobs:
       - name: Run benchmarks
         run: make bench
 
-  call-harness:
+  unit-tests:
     runs-on: ubuntu-latest
     services:
       redis:
@@ -60,30 +97,89 @@ jobs:
       RELAIS_TEST_REDIS_ADDR: "127.0.0.1:6379"
       RELAIS_TEST_REDIS_REQUIRE: "1"
     steps:
-      - uses: actions/checkout@v3
-
+      - uses: actions/checkout@v6
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
+      - name: Run non-harness tests (race detector, Redis required)
+        run: make test-unit
 
-      # The harness decodes every echoed VP8 frame with ffmpeg when it is on
-      # PATH; RELAIS_HARNESS_REQUIRE_FFMPEG turns a skipped decode into a
-      # failure so CI never passes without it.
+  # PRs run the short memory matrix plus a Redis uncertainty regression.
+  # Main, nightly and manual runs exercise both stores in full.
+  call-harness:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      RELAIS_TEST_REDIS_ADDR: "127.0.0.1:6379"
+      RELAIS_TEST_REDIS_REQUIRE: "1"
+      RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-
-      - name: Run call harness tests (race detector)
-        env:
-          RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
+      - name: Run short call harness (race detector, memory only)
+        if: github.event_name == 'pull_request'
+        run: make test-harness-short
+      - name: Run Redis uncertainty regression (race detector, Redis required)
+        if: github.event_name == 'pull_request'
+        run: go test -race -v -count=1 -timeout 5m -run '^TestRelayUncertainTransferSurvives$' ./pkg/callharness/
+      - name: Run full call harness (race detector, both stores)
+        if: github.event_name != 'pull_request'
         run: make test-harness
-
-      # The race detector slows the media path several times over, so the
-      # relay move and drain gap targets are enforced in a run without it.
-      - name: Run relay timing tests (no race detector)
-        env:
-          RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
+      - name: Run full relay timing gates (no race detector, both stores)
+        if: github.event_name != 'pull_request'
         run: make test-harness-timing
+
+  timing-smoke:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Run timing smoke (no race detector, memory only)
+        run: make test-harness-smoke
+
+  crash-run:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+      - name: Install Redis and ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
+      # The driver starts and stops its own Redis on a free loopback port.
+      - name: Run ten real-process SIGKILL trials
+        run: make crash-run
+      - name: Upload crash-run failure logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crash-run-logs
+          path: bin/crash-run-*
 
   cluster-tests-gate:
     runs-on: ubuntu-latest
@@ -96,9 +192,9 @@ jobs:
           RELAIS_TEST_REDIS_CLUSTER_ADDRS: ${{ secrets.RELAIS_TEST_REDIS_CLUSTER_ADDRS }}
         run: |
           if [ -n "${RELAIS_TEST_REDIS_CLUSTER_ADDRS}" ]; then
-            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
           else
-            echo "should_run=false" >> $GITHUB_OUTPUT
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
           fi
 
   cluster-tests:
@@ -108,7 +204,7 @@ jobs:
       RELAIS_TEST_REDIS_CLUSTER_ADDRS: ${{ secrets.RELAIS_TEST_REDIS_CLUSTER_ADDRS }}
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
 
       - name: Set up Go
         uses: actions/setup-go@v7

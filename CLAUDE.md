@@ -35,14 +35,30 @@ make clean
 ## Testing and Quality
 
 ```bash
-# Run all tests
+# Run all tests (Redis tests skip unless a dedicated endpoint is set)
 make test
 
 # Run tests with coverage report
 make coverage
 
-# Run the call harness (audio+video echo calls, race detector)
+# PR checks: race units with Redis, short race harness with memory only,
+# Redis uncertainty under race, and memory timing smoke (requires ffmpeg)
+# Set this to your own dedicated Redis; never use the user's port 6379.
+export RELAIS_TEST_REDIS_ADDR=127.0.0.1:16379
+export RELAIS_TEST_REDIS_REQUIRE=1
+export RELAIS_HARNESS_REQUIRE_FFMPEG=1
+make test-unit
+make test-harness-short
+go test -race -v -count=1 -timeout 5m -run '^TestRelayUncertainTransferSurvives$' ./pkg/callharness/
+make test-harness-smoke
+
+# Full in-process tests: race units, full race harness and timing gates
+# on both stores (requires dedicated Redis and ffmpeg)
+make test-full
+
+# Run individual full harness gates
 make test-harness
+make test-harness-timing
 
 # Run benchmarks
 make bench
@@ -59,6 +75,31 @@ make vet
 # Format code
 make fmt
 ```
+
+PR CI runs lint (v2.14.0), build, vet, race tests for every package except
+`pkg/callharness` with Redis required, the short memory harness, a separate
+race run of `TestRelayUncertainTransferSurvives` with Redis required, and the
+memory timing smoke in parallel jobs. The smoke retains 20 planned moves,
+20 hard kills, planned sequence wrap, and the full consent windows. Short mode reduces the
+baseline echo calls to 5 s; some fault scenarios retain their fixed duration.
+It skips `TestPlannedHandoverKeepsConsent` and the Redis-only uncertainty
+scenarios. The separate PR Redis step restores uncertainty coverage.
+The `build` job aggregates these results. Making that gate required in GitHub
+settings is a separate admin decision. Superseded PR runs are cancelled;
+main pushes and nightly runs are not cancelled by this policy.
+
+Nightly at 08:00 UTC, pushes to `main`, and manual `workflow_dispatch` runs
+add the full race harness and timing gates on memory and Redis, benchmarks,
+and `make crash-run`. The optional Redis Cluster gate is unchanged. To run
+manually, select **Actions → CI → Run workflow** on the desired branch.
+The short targets clear the Redis test address and disable its requirement,
+so all Redis subtests skip even when the invoking shell has Redis configured.
+Storage stream and group tests skip before constructing a client when
+`RELAIS_TEST_REDIS_ADDR` is unset. Use a disposable Redis for local tests.
+Storage benchmarks also skip Redis unless `RELAIS_TEST_REDIS_ADDR` is set.
+Memory benchmarks always run; Redis variants use random prefixes and remove
+their keys at cleanup. With `RELAIS_TEST_REDIS_REQUIRE=1`, missing or
+unreachable Redis fails integration tests and Redis benchmarks.
 
 ## Architecture Overview
 

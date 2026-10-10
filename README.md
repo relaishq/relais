@@ -234,7 +234,8 @@ or a second offer/answer exchange.
 
 Prerequisites: Go 1.26+, `redis-server` and `ffmpeg` on PATH. On macOS, Redis
 and ffmpeg can be installed with `brew install redis ffmpeg`. This run is
-opt-in and is **not required in CI**.
+part of the full CI matrix (nightly, pushes to `main`, and manual runs). It stays
+out of PR CI.
 
 ```bash
 make crash-run                              # ten consecutive acceptance runs
@@ -409,6 +410,43 @@ make bench
 make coverage
 ```
 
+PR checks run in parallel: lint, build, vet, race unit tests with Redis,
+the short memory call harness, a Redis uncertainty regression under race,
+and a strict memory timing smoke (20 planned moves, 20 hard kills, and planned
+sequence wrap). The goal is about 10 minutes
+of wall time. The full race harness and timing gates on both stores, benchmarks,
+and ten real-process SIGKILL trials run nightly at 08:00 UTC and on every push
+to `main`. Trigger them on demand with **Actions → CI → Run workflow**
+(`workflow_dispatch`). The optional Redis Cluster gate is unchanged.
+
+Local equivalents (ffmpeg required for the harness; use a dedicated Redis):
+
+```bash
+export RELAIS_TEST_REDIS_ADDR=127.0.0.1:16379
+export RELAIS_TEST_REDIS_REQUIRE=1
+export RELAIS_HARNESS_REQUIRE_FFMPEG=1
+make test-unit
+make test-harness-short
+go test -race -v -count=1 -timeout 5m -run '^TestRelayUncertainTransferSurvives$' ./pkg/callharness/
+make test-harness-smoke
+make test-full # full in-process race/timing matrix with both stores
+make crash-run # ten real-process trials, also requires redis-server
+```
+
+Short mode uses 5 s baseline calls. Longer fault scenarios retain their fixed
+duration. The timing smoke retains full consent windows and product thresholds.
+Both short harness and timing smoke clear the Redis test address and disable
+its requirement, so all Redis subtests skip in those targets. PR CI restores
+Redis uncertainty coverage in a separate race step. Short mode also skips
+`TestPlannedHandoverKeepsConsent`; the full matrix runs it.
+`make bench` always runs memory benchmarks. Its Redis variants skip unless
+`RELAIS_TEST_REDIS_ADDR` names a dedicated, disposable Redis instance. Redis
+benchmarks use random prefixes and clean up their own keys. Required-Redis mode
+fails on missing or unreachable endpoints. The `build` job is an aggregate
+gate; making it required in GitHub settings is a separate admin decision.
+Superseded PR runs are cancelled; full-matrix runs are not cancelled by this
+policy. Failed crash runs retain `bin/crash-run-*` as a workflow artifact.
+
 ### Development
 
 ```bash
@@ -531,10 +569,12 @@ make coverage
 
 #### Running Redis Streams Integration Tests
 
-The Redis integration tests require a reachable Redis instance. By default they use `localhost:6379`. Override via:
+The Redis integration tests skip unless `RELAIS_TEST_REDIS_ADDR` is set.
+Use a reachable **dedicated, disposable** Redis instance. The stream and group
+tests write data to it. There is no default connection to port 6379:
 
 ```bash
-export RELAIS_TEST_REDIS_ADDR=localhost:6379
+export RELAIS_TEST_REDIS_ADDR=127.0.0.1:16379
 ```
 
 Run only the Stream Group focused tests:
