@@ -10,9 +10,10 @@ import (
 	"github.com/pion/stun/v4"
 )
 
-// maxCandidateTransactions is how many binding requests a pending candidate
-// remembers; a binding success for any of them confirms it.
-const maxCandidateTransactions = 8
+// maxOutstandingChecks is how many unanswered binding requests a caller's
+// pending candidate, and separately its confirmed route, remember. A
+// binding success counts only if it answers one of them.
+const maxOutstandingChecks = 8
 
 // flowTable maps each caller address to the worker its packets go to. It is
 // a cache of the session-owner store, and no routing changes for a caller
@@ -30,22 +31,34 @@ const maxCandidateTransactions = 8
 //   - The candidate's worker answers with a STUN binding success only after
 //     checking the request's ICE credentials. A binding success from that
 //     worker whose transaction ID is one of the candidate's requests
-//     promotes the candidate to the caller's confirmed route. Nothing else
-//     does on the packet path: only trusted moveSession bypasses promotion.
-//     The relay reads only STUN headers on the worker leg.
-//   - Candidates expire after the pending timeout, routes after the idle
-//     timeout without caller packets. At most maxPending candidates exist,
-//     the oldest evicted first, and at most maxFlows routes and candidates
-//     together. Confirmed routes are never evicted: when only they fill the
-//     table, a new candidate is rejected.
+//     promotes the candidate, unless the route is active for another
+//     session (below). Nothing else does on the packet path: only trusted
+//     moveSession bypasses promotion. The relay reads only STUN headers on
+//     the worker leg.
+//   - A confirmed route is active while its worker answers the route
+//     session's own binding requests from the caller: a binding success
+//     for one of the route's outstanding requests renews it, as of the
+//     request's arrival. Within stickinessWindow of the last one, no
+//     candidate for another session is admitted or promoted, so valid
+//     credentials for another session cannot take an active caller's
+//     address. Media, unanswered requests, and unmatched or replayed
+//     successes renew nothing. The route's own session may always move.
+//   - Candidates expire after the pending timeout. Routes expire after the
+//     idle timeout without caller packets, but not while active. At most
+//     maxPending candidates exist, the oldest evicted first, and at most
+//     maxFlows routes and candidates together. Confirmed routes are never
+//     evicted: when only they fill the table, a new candidate is rejected.
 //
-// Losing the table (a relay restart) only costs the caller's packets until
-// its next binding request is answered.
+// Losing the table (a relay restart) also loses which routes were active:
+// until a caller's next answered check, another session can claim its
+// address. Persisted routes (#42) close that gap; see
+// docs/adr/0001-route-stickiness.md.
 type flowTable struct {
-	idleTimeout    time.Duration
-	pendingTimeout time.Duration
-	maxFlows       int
-	maxPending     int
+	stickinessWindow time.Duration
+	idleTimeout      time.Duration
+	pendingTimeout   time.Duration
+	maxFlows         int
+	maxPending       int
 
 	mu       sync.Mutex
 	callers  map[netip.AddrPort]*callerFlows
@@ -61,15 +74,16 @@ type flowTable struct {
 type callerFlows struct {
 	caller netip.AddrPort
 
-	route     *flow
-	routeElem *list.Element
-	lastSeen  time.Time // last caller packet on the route
+	route             *flow
+	routeElem         *list.Element
+	lastSeen          time.Time     // last caller packet on the route
+	lastAuthenticated time.Time     // arrival of the route session's last answered request
+	routeChecks       bindingChecks // the route session's unanswered requests
 
-	candidate     *flow
-	candidateElem *list.Element
-	admitted      time.Time
-	txIDs         [maxCandidateTransactions][stun.TransactionIDSize]byte
-	nTxIDs        int // binding requests recorded, including overwritten ones
+	candidate       *flow
+	candidateElem   *list.Element
+	admitted        time.Time
+	candidateChecks bindingChecks
 }
 
 // flow is where a caller's packets go: a worker, for a session.
@@ -79,29 +93,34 @@ type flow struct {
 }
 
 type flowLimits struct {
-	idleTimeout    time.Duration
-	pendingTimeout time.Duration
-	maxFlows       int
-	maxPending     int
+	stickinessWindow time.Duration
+	idleTimeout      time.Duration
+	pendingTimeout   time.Duration
+	maxFlows         int
+	maxPending       int
 }
 
 func newFlowTable(limits flowLimits) *flowTable {
+	if limits.stickinessWindow <= 0 {
+		limits.stickinessWindow = DefaultRouteStickinessWindow
+	}
 	return &flowTable{
-		idleTimeout:    limits.idleTimeout,
-		pendingTimeout: limits.pendingTimeout,
-		maxFlows:       limits.maxFlows,
-		maxPending:     limits.maxPending,
-		callers:        make(map[netip.AddrPort]*callerFlows),
-		sessions:       make(map[string]map[netip.AddrPort]*callerFlows),
-		routes:         list.New(),
-		pending:        list.New(),
+		stickinessWindow: limits.stickinessWindow,
+		idleTimeout:      limits.idleTimeout,
+		pendingTimeout:   limits.pendingTimeout,
+		maxFlows:         limits.maxFlows,
+		maxPending:       limits.maxPending,
+		callers:          make(map[netip.AddrPort]*callerFlows),
+		sessions:         make(map[string]map[netip.AddrPort]*callerFlows),
+		routes:           list.New(),
+		pending:          list.New(),
 	}
 }
 
 // routeSTUN returns the worker for a caller's binding request without the
 // store: the candidate's worker when the request is for the candidate's
-// session (which records the request), or else the route's worker when it
-// is for the route's session.
+// session, or else the route's worker when it is for the route's session.
+// Either records the request, so its worker's answer can be matched.
 func (t *flowTable) routeSTUN(caller netip.AddrPort, session string, txID [stun.TransactionIDSize]byte, now time.Time) (netip.AddrPort, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -111,10 +130,11 @@ func (t *flowTable) routeSTUN(caller netip.AddrPort, session string, txID [stun.
 	case c == nil:
 		return netip.AddrPort{}, false
 	case c.candidate != nil && c.candidate.session == session:
-		c.record(txID)
+		c.candidateChecks.record(txID, now)
 
 		return c.candidate.worker, true
 	case c.route != nil && c.route.session == session:
+		c.routeChecks.record(txID, now)
 		t.touch(c, now)
 
 		return c.route.worker, true
@@ -141,8 +161,9 @@ func (t *flowTable) route(caller netip.AddrPort, now time.Time) (netip.AddrPort,
 // admit places a binding request the store routed to worker. A request
 // that matches the caller's confirmed route needs nothing; otherwise it
 // becomes, or joins, the caller's candidate, and the confirmed route stays
-// as it is. It reports false when the table has no room for a new
-// candidate; the request is then dropped.
+// as it is. It reports false when the route is active for another session
+// or the table has no room for a new candidate; the request is then
+// dropped.
 func (t *flowTable) admit(caller, worker netip.AddrPort, session string, txID [stun.TransactionIDSize]byte, now time.Time) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -150,11 +171,12 @@ func (t *flowTable) admit(caller, worker netip.AddrPort, session string, txID [s
 	t.expire(now)
 	c := t.callers[caller]
 	if c != nil && c.route != nil && c.route.worker == worker && c.route.session == session {
+		c.routeChecks.record(txID, now)
 		return true
 	}
 	c, ok := t.propose(caller, flow{worker: worker, session: session}, now)
 	if ok {
-		c.record(txID)
+		c.candidateChecks.record(txID, now)
 	}
 
 	return ok
@@ -183,8 +205,10 @@ func (t *flowTable) reroute(caller, owner netip.AddrPort, session string, now ti
 }
 
 // moveSession re-points existing authenticated routes without admitting or
-// evicting any route. Pending checks for the moved session are discarded;
-// their old owner's late answer must not undo the trusted move.
+// evicting any route. Pending candidates and unanswered route requests for
+// the moved session are discarded: their old owner's late answer must not
+// undo the trusted move. A moved route keeps its last answered request
+// time, so it stays exactly as active as it was.
 func (t *flowTable) moveSession(session string, from, to netip.AddrPort) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -194,14 +218,18 @@ func (t *flowTable) moveSession(session string, from, to netip.AddrPort) {
 		}
 		if c.route != nil && c.route.session == session && (!from.IsValid() || c.route.worker == from) {
 			c.route.worker = to
+			c.routeChecks = bindingChecks{}
 		}
 	}
 }
 
 // answer reports whether worker may send pkt to caller, and promotes the
 // caller's candidate when pkt is that worker's binding success for one of
-// the candidate's requests; promoted is then the candidate's session. A
-// worker may otherwise send only to callers it holds the confirmed route of.
+// the candidate's requests; promoted is then the candidate's session. If
+// the route has become active for another session meanwhile, the candidate
+// is dropped with the packet instead. A worker may otherwise send only to
+// callers it holds the confirmed route of, and its binding success for one
+// of the route's requests renews the route.
 func (t *flowTable) answer(caller, worker netip.AddrPort, pkt []byte, now time.Time) (allowed bool, promoted string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -210,14 +238,29 @@ func (t *flowTable) answer(caller, worker netip.AddrPort, pkt []byte, now time.T
 	if c == nil {
 		return false, ""
 	}
-	if c.candidate != nil && c.candidate.worker == worker {
-		if txID, ok := parseBindingSuccess(pkt); ok && c.answers(txID) {
+	txID, success := parseBindingSuccess(pkt)
+	if c.candidate != nil && c.candidate.worker == worker && success {
+		if sentAt, ok := c.candidateChecks.answer(txID); ok {
+			// The route's session may have answered a check since this
+			// candidate was admitted.
+			if t.sticky(c, c.candidate.session, now) {
+				t.dropCandidate(c)
+				return false, ""
+			}
+			if c.route != nil && c.route.session == c.candidate.session {
+				sentAt = maxTime(c.lastAuthenticated, sentAt)
+			}
 			t.promote(c, now)
-
+			c.lastAuthenticated = sentAt
 			return true, c.route.session
 		}
 	}
 	if c.route != nil && c.route.worker == worker {
+		if success {
+			if sentAt, ok := c.routeChecks.answer(txID); ok {
+				c.lastAuthenticated = maxTime(c.lastAuthenticated, sentAt)
+			}
+		}
 		return true, ""
 	}
 
@@ -309,9 +352,14 @@ func (t *flowTable) unindex(c *callerFlows, session string) {
 }
 
 // propose makes f the caller's candidate, replacing any candidate it has,
-// unless the table has no room for one.
+// unless the route is active for another session or the table has no room
+// for one.
 func (t *flowTable) propose(caller netip.AddrPort, f flow, now time.Time) (*callerFlows, bool) {
 	c := t.callers[caller]
+	if t.sticky(c, f.session, now) {
+		t.rejected++
+		return nil, false
+	}
 	if c != nil && c.candidate != nil {
 		if *c.candidate == f {
 			return c, true
@@ -340,7 +388,7 @@ func (t *flowTable) propose(caller netip.AddrPort, f flow, now time.Time) (*call
 	c.candidate = &f
 	t.index(c, f.session)
 	c.admitted = now
-	c.nTxIDs = 0
+	c.candidateChecks = bindingChecks{}
 	c.candidateElem = t.pending.PushFront(c)
 
 	return c, true
@@ -361,6 +409,8 @@ func (t *flowTable) promote(c *callerFlows, now time.Time) {
 		t.routes.MoveToFront(c.routeElem)
 	}
 	c.route = &f
+	c.routeChecks = c.candidateChecks
+	c.candidateChecks = bindingChecks{}
 	if previous != "" && previous != f.session {
 		t.unindex(c, previous)
 	}
@@ -377,7 +427,7 @@ func (t *flowTable) live(caller netip.AddrPort, now time.Time) *callerFlows {
 	if c.candidate != nil && now.Sub(c.admitted) > t.pendingTimeout {
 		t.dropCandidate(c)
 	}
-	if c.route != nil && now.Sub(c.lastSeen) > t.idleTimeout {
+	if c.route != nil && now.Sub(c.lastSeen) > t.idleTimeout && !t.protected(c, now) {
 		t.dropRoute(c)
 	}
 	if c.route == nil && c.candidate == nil {
@@ -404,12 +454,16 @@ func (t *flowTable) expire(now time.Time) {
 		}
 		t.dropCandidate(c)
 	}
-	for e := t.routes.Back(); e != nil; e = t.routes.Back() {
+	for e := t.routes.Back(); e != nil; {
 		c, _ := e.Value.(*callerFlows)
 		if now.Sub(c.lastSeen) <= t.idleTimeout {
 			break
 		}
-		t.dropRoute(c)
+		previous := e.Prev()
+		if !t.protected(c, now) { // an active route stays until its window lapses
+			t.dropRoute(c)
+		}
+		e = previous
 	}
 }
 
@@ -425,6 +479,8 @@ func (t *flowTable) dropRoute(c *callerFlows) {
 	session := c.route.session
 	t.routes.Remove(c.routeElem)
 	c.route, c.routeElem = nil, nil
+	c.routeChecks = bindingChecks{}
+	c.lastAuthenticated = time.Time{}
 	t.unindex(c, session)
 	t.release(c)
 }
@@ -436,26 +492,59 @@ func (t *flowTable) release(c *callerFlows) {
 	}
 }
 
-// record remembers a binding request sent on the candidate.
-func (c *callerFlows) record(txID [stun.TransactionIDSize]byte) {
-	for i := range min(c.nTxIDs, maxCandidateTransactions) {
-		if c.txIDs[i] == txID {
-			return // a retransmission
-		}
-	}
-	c.txIDs[c.nTxIDs%maxCandidateTransactions] = txID
-	c.nTxIDs++
+// sticky reports whether the caller's route is active for a session other
+// than session, which then may not take the caller's address.
+func (t *flowTable) sticky(c *callerFlows, session string, now time.Time) bool {
+	return c != nil && c.route != nil && c.route.session != session && t.protected(c, now)
 }
 
-// answers reports whether txID is one of the candidate's requests.
-func (c *callerFlows) answers(txID [stun.TransactionIDSize]byte) bool {
-	for i := range min(c.nTxIDs, maxCandidateTransactions) {
-		if c.txIDs[i] == txID {
-			return true
+// protected reports whether the route is active: its worker answered one of
+// the route session's requests that arrived within the stickiness window.
+func (t *flowTable) protected(c *callerFlows, now time.Time) bool {
+	return !c.lastAuthenticated.IsZero() && now.Sub(c.lastAuthenticated) < t.stickinessWindow
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
+// bindingChecks remembers a few unanswered binding requests and when each
+// arrived, overwriting the oldest when full. A binding success consumes its
+// request, so a replayed or unmatched success counts for nothing. The
+// request's arrival, not the answer's, is when the session was last active.
+type bindingChecks struct {
+	checks [maxOutstandingChecks]struct {
+		id     [stun.TransactionIDSize]byte
+		sentAt time.Time
+	}
+	next int
+}
+
+// record remembers a request; a retransmission keeps its first arrival.
+func (b *bindingChecks) record(id [stun.TransactionIDSize]byte, now time.Time) {
+	for _, check := range b.checks {
+		if check.id == id && !check.sentAt.IsZero() {
+			return
 		}
 	}
+	b.checks[b.next].id = id
+	b.checks[b.next].sentAt = now
+	b.next = (b.next + 1) % len(b.checks)
+}
 
-	return false
+// answer consumes the request a binding success answers and returns when
+// it arrived.
+func (b *bindingChecks) answer(id [stun.TransactionIDSize]byte) (time.Time, bool) {
+	for i, check := range b.checks {
+		if check.id == id && !check.sentAt.IsZero() {
+			b.checks[i].sentAt = time.Time{}
+			return check.sentAt, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // parseBindingSuccess returns the transaction ID of a STUN binding success

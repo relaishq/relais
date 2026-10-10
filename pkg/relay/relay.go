@@ -24,6 +24,14 @@
 // the worker does only after checking the credentials. The relay reads STUN
 // headers on the worker leg for that, and nothing else.
 //
+// A confirmed route sticks to its session while the session is active: its
+// worker has answered one of the session's own binding requests from the
+// caller within Config.RouteStickinessWindow. Until then the relay drops a
+// binding request for another session from that address, even one with
+// valid credentials, so spoofing an active caller's address cannot take its
+// media. Media and unanswered requests keep nothing active. The session
+// itself may always move, and MoveSession and ForgetSession are unaffected.
+//
 // A planned move holds caller packets before the old worker exports. A
 // private-leg barrier drains what the old worker already received. After
 // transfer, reroute and resume, ReleaseSession forwards the bounded queue
@@ -49,6 +57,9 @@
 // empty table and rebuilds each flow from the store on the caller's next
 // STUN binding request (ICE consent checks arrive every few seconds); until
 // then the caller's packets, and the workers' packets to it, are dropped.
+// A restart also forgets which routes were active, so until a caller's next
+// answered check another session can claim its address. Persisted routes
+// (#42) close that gap.
 package relay
 
 import (
@@ -75,6 +86,11 @@ const (
 	// nothing for RFC 7675's consent timeout: by then the worker has given
 	// up on the session too.
 	DefaultFlowTimeout = 30 * time.Second
+
+	// DefaultRouteStickinessWindow is the workers' consent timeout (RFC
+	// 7675): a route sticks to its session for as long as the session's
+	// worker keeps the call alive without a fresh consent check.
+	DefaultRouteStickinessWindow = 30 * time.Second
 
 	// DefaultPendingFlowTimeout drops a pending candidate its worker has not
 	// confirmed. A worker answers a valid binding request within
@@ -137,11 +153,19 @@ type Config struct {
 	Owners sessionstore.Owners
 
 	// FlowTimeout drops a confirmed route after its caller has sent nothing
-	// for this long; PendingFlowTimeout drops a pending candidate its worker
-	// has not confirmed. Default DefaultFlowTimeout and
+	// for this long, though never while the route is active (see
+	// RouteStickinessWindow); PendingFlowTimeout drops a pending candidate
+	// its worker has not confirmed. Default DefaultFlowTimeout and
 	// DefaultPendingFlowTimeout.
 	FlowTimeout        time.Duration
 	PendingFlowTimeout time.Duration
+
+	// RouteStickinessWindow keeps a confirmed route on its session for this
+	// long after the session's worker last answered one of its binding
+	// requests from the caller: until then, no other session can take the
+	// caller's address. Media and unanswered requests do not extend it.
+	// Default DefaultRouteStickinessWindow; there is no way to turn it off.
+	RouteStickinessWindow time.Duration
 
 	// MaxFlows bounds confirmed routes and pending candidates together, and
 	// MaxPendingFlows the candidates. Default DefaultMaxFlows and
@@ -208,8 +232,9 @@ type Stats struct {
 	// no owner for, LookupsDropped because owner lookups were saturated (or
 	// the request was too large to hold), LookupsFailed because the store
 	// lookup failed, and FlowsRejected because confirmed routes filled the
-	// flow table. Unroutable counts other caller packets dropped for want of
-	// a confirmed route.
+	// flow table or the caller's route is active for another session.
+	// Unroutable counts other caller packets dropped for want of a confirmed
+	// route.
 	UnknownSession uint64
 	LookupsDropped uint64
 	LookupsFailed  uint64
@@ -306,10 +331,11 @@ func New(cfg Config) (*Relay, error) {
 		publicAddr: publicAddr,
 		workerAddr: workerAddr,
 		flows: newFlowTable(flowLimits{
-			idleTimeout:    cfg.FlowTimeout,
-			pendingTimeout: cfg.PendingFlowTimeout,
-			maxFlows:       cfg.MaxFlows,
-			maxPending:     cfg.MaxPendingFlows,
+			stickinessWindow: cfg.RouteStickinessWindow,
+			idleTimeout:      cfg.FlowTimeout,
+			pendingTimeout:   cfg.PendingFlowTimeout,
+			maxFlows:         cfg.MaxFlows,
+			maxPending:       cfg.MaxPendingFlows,
 		}),
 		registry: make(map[netip.AddrPort]struct{}),
 		holds:    make(map[string]*sessionHold),
@@ -334,6 +360,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.WorkerAddr == "" {
 		cfg.WorkerAddr = "127.0.0.1:0"
+	}
+	if cfg.RouteStickinessWindow <= 0 {
+		cfg.RouteStickinessWindow = DefaultRouteStickinessWindow
 	}
 	if cfg.FlowTimeout <= 0 {
 		cfg.FlowTimeout = DefaultFlowTimeout

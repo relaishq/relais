@@ -84,7 +84,11 @@ func TestHeaderRoundTrip(t *testing.T) {
 // so the variants starting 0x40, 0x80 (an RTP version byte) and 0xC0 decode
 // as binding requests for session B.
 func TestNonSTUNPacketsAreForwardedUnparsed(t *testing.T) {
-	sys := startTestRelay(t, Config{})
+	// The caller switches to session B below, which needs its route to A to
+	// be inactive first.
+	const window = 50 * time.Millisecond
+
+	sys := startTestRelay(t, Config{RouteStickinessWindow: window})
 	workerA, workerB := sys.worker(t, sessionA), sys.worker(t, sessionB)
 	caller := newTestCaller(t)
 	sys.connect(t, caller, workerA, sessionA)
@@ -96,6 +100,7 @@ func TestNonSTUNPacketsAreForwardedUnparsed(t *testing.T) {
 	}
 	workerB.expectNothing(t)
 
+	time.Sleep(window) // no answered check for A since connecting
 	caller.send(t, bindB, sys.relay.PublicAddr())
 	workerB.expect(t, caller.addr(), bindB)
 	sys.confirm(t, workerB, caller, bindB)
@@ -291,35 +296,30 @@ func TestCandidatesNeedTheWorkersBindingSuccess(t *testing.T) {
 // TestSpoofedRequestForAnotherSessionLeavesTheCallAlone sends, from an
 // established caller's address, a binding request for another known
 // session: what an attacker spoofing the caller's address would send. The
-// request reaches that session's worker as a candidate, and the call keeps
-// its route, media and consent checks until that worker authenticates the
-// request, which it never does.
+// caller's route is active, so the relay drops the request instead of
+// proposing the other worker, and the call keeps its route, media and
+// consent checks.
 func TestSpoofedRequestForAnotherSessionLeavesTheCallAlone(t *testing.T) {
-	const pendingTimeout = 300 * time.Millisecond
-
-	sys := startTestRelay(t, Config{PendingFlowTimeout: pendingTimeout})
+	sys := startTestRelay(t, Config{})
 	workerA, workerB := sys.worker(t, sessionA), sys.worker(t, sessionB)
 	caller := newTestCaller(t)
 	sys.connect(t, caller, workerA, sessionA)
 
 	spoofed := bindingRequest(t, sessionB)
 	caller.send(t, spoofed, sys.relay.PublicAddr())
-	workerB.expect(t, caller.addr(), spoofed)
+	require.Eventually(t, func() bool { return sys.relay.Stats().FlowsRejected == 1 }, receiveTimeout, time.Millisecond,
+		"the active route rejects the other session")
+	workerB.expectNothing(t)
+	require.Zero(t, sys.relay.Stats().PendingFlows, "no candidate for the other session")
 
 	caller.send(t, media, sys.relay.PublicAddr())
-	workerA.expect(t, caller.addr(), media, "media during the candidate")
+	workerA.expect(t, caller.addr(), media, "media after the spoofed request")
 	consent := bindingRequest(t, sessionA)
 	caller.send(t, consent, sys.relay.PublicAddr())
-	workerA.expect(t, caller.addr(), consent, "consent check during the candidate")
+	workerA.expect(t, caller.addr(), consent, "consent check after the spoofed request")
 	sys.confirm(t, workerA, caller, consent)
 	workerB.sendTo(t, caller.addr(), dtlsReply, sys.relay.WorkerAddr())
 	caller.expectNothing(t)
-
-	require.Eventually(t, func() bool { return sys.relay.Stats().PendingFlows == 0 },
-		10*pendingTimeout, pendingTimeout/10, "unconfirmed candidate expires")
-	caller.send(t, media, sys.relay.PublicAddr())
-	workerA.expect(t, caller.addr(), media, "media after the candidate")
-	workerB.expectNothing(t)
 }
 
 // TestOwnerChangeMovesTheCallOnlyOnceTheNewOwnerAnswers changes a session's
@@ -557,7 +557,7 @@ func TestStaleLookupResultCannotOverrideNewerRoute(t *testing.T) {
 func TestFlowsAreRebuiltFromTheStore(t *testing.T) {
 	const flowTimeout = 300 * time.Millisecond
 
-	sys := startTestRelay(t, Config{FlowTimeout: flowTimeout})
+	sys := startTestRelay(t, Config{FlowTimeout: flowTimeout, RouteStickinessWindow: flowTimeout})
 	worker := sys.worker(t, sessionA)
 	caller := newTestCaller(t)
 	sys.connect(t, caller, worker, sessionA)
