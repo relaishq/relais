@@ -1,4 +1,4 @@
-package main
+package clusterprocess
 
 import (
 	"bufio"
@@ -32,22 +32,22 @@ func TestDriverDoubleSignalCleanup(t *testing.T) {
 				os.Exit(0)
 			}
 		}()
-		_ = json.NewEncoder(os.Stdout).Encode(ready{HTTP: listener.Addr().String(), PID: os.Getpid()})
+		_ = json.NewEncoder(os.Stdout).Encode(Ready{HTTP: listener.Addr().String(), PID: os.Getpid()})
 		select {}
 	case "manager":
-		manager := &processManager{}
-		ctx, stop := manager.context()
+		manager := &Manager{}
+		ctx, stop := manager.Context()
 		defer stop()
 		dir := os.Getenv("RELAIS_TEST_DRIVER_DIR")
-		var children []*child
+		var children []*Child
 		for _, name := range []string{"fake-child", "fake-redis"} {
 			env := append(os.Environ(), "RELAIS_TEST_DRIVER_ROLE=leaf")
-			c, err := manager.start(dir, name, env, os.Args[0], "-test.run=^TestDriverDoubleSignalCleanup$")
+			c, err := manager.Start(dir, name, env, os.Args[0], "-test.run=^TestDriverDoubleSignalCleanup$")
 			require.NoError(t, err)
 			children = append(children, c)
-			defer c.stop()
+			defer c.Stop()
 			startup, cancel := context.WithTimeout(ctx, 3*time.Second)
-			_, err = c.ready(startup)
+			_, err = c.Ready(startup)
 			cancel()
 			require.NoError(t, err)
 		}
@@ -68,7 +68,7 @@ func TestDriverDoubleSignalCleanup(t *testing.T) {
 			if err != nil {
 				continue
 			}
-			var leaf ready
+			var leaf Ready
 			if json.Unmarshal(data, &leaf) != nil {
 				continue
 			}

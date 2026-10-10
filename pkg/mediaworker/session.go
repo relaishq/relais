@@ -405,8 +405,10 @@ func (s *session) handlePacket(pkt []byte) {
 // video track).
 func (s *session) handleRTP(pkt []byte) {
 	var complete *framecache.Frame
+	var failure uint64
+	var decryptErr error
 	s.mu.Lock()
-	defer func() { s.mu.Unlock(); s.appendFrame(complete) }()
+	defer func() { s.mu.Unlock(); s.logDecryptFailure("SRTP", failure, decryptErr); s.appendFrame(complete) }()
 
 	if s.srtpIn == nil || s.fenced.Load() {
 		return // SRTP keys are not ready yet, or the session has moved.
@@ -420,8 +422,7 @@ func (s *session) handleRTP(pkt []byte) {
 	var authenticated rtp.Header
 	plain, err := s.srtpIn.DecryptRTP(s.decryptBuf, pkt, &authenticated)
 	if err != nil {
-		s.decryptFailures.Add(1)
-		s.log.Debugf("session %s: drop SRTP packet: %v", s.id, err)
+		failure, decryptErr = s.decryptFailures.Add(1), err
 
 		return
 	}
@@ -510,16 +511,17 @@ func (s *session) trackFor(payloadType uint8) *trackState {
 // asks the caller for a keyframe on the caller's source video. Other RTCP
 // (reports, NACKs, ...) is not acted on.
 func (s *session) handleRTCP(pkt []byte) {
+	var failure uint64
+	var decryptErr error
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	defer func() { s.mu.Unlock(); s.logDecryptFailure("SRTCP", failure, decryptErr) }()
 
 	if s.srtpIn == nil || s.fenced.Load() {
 		return
 	}
 	plain, err := s.srtpIn.DecryptRTCP(s.rtcpBuf, pkt, nil)
 	if err != nil {
-		s.decryptFailures.Add(1)
-		s.log.Debugf("session %s: drop SRTCP packet: %v", s.id, err)
+		failure, decryptErr = s.decryptFailures.Add(1), err
 
 		return
 	}
@@ -631,6 +633,7 @@ func (s *session) close() {
 		}
 		s.worker.forget(s)
 		s.worker.releaseSession(s.id)
+		s.log.Infof("session %s: final decryption_failures=%d", s.id, s.decryptFailures.Load())
 		if s.fenced.Load() {
 			s.log.Debugf("session %s: handed over", s.id)
 		} else {
@@ -722,4 +725,11 @@ func randomString(n int) (string, error) {
 	}
 
 	return string(out), nil
+}
+
+// Rate-limit failure logs and run them after releasing the packet-path lock.
+func (s *session) logDecryptFailure(kind string, count uint64, err error) {
+	if count != 0 && count&(count-1) == 0 {
+		s.log.Infof("session %s: %s decryption_failures=%d: %v", s.id, kind, count, err)
+	}
 }
