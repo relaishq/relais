@@ -36,6 +36,24 @@
       replayedOrOld:frames.some((f)=>f.atMs>=start && f.atMs<=end && f.old),
       counterReadErrors:frames.filter((f)=>f.atMs>=start && f.atMs<=end && f.counter===UNKNOWN).length};
   }
+  // Takeovers only: planned moves and drains have no kill-to-live interval.
+  // Wait beyond the source watermark at content recovery. An advancing
+  // replay frame can end a gap while still carrying content from the outage.
+  function firstLiveFrame(kind,frames,issued,end,contentResumedMs) {
+    if(kind!=='kill')return null;
+    if(typeof contentResumedMs!=='number' || contentResumedMs<0)return UNKNOWN;
+    const resumed=frames.find((f)=>f.advanced && f.atMs-issued===contentResumedMs);
+    if(!resumed || typeof resumed.sourceCounterAtObservation!=='number')return UNKNOWN;
+    const first=frames.find((f)=>f.advanced && f.atMs>resumed.atMs && f.atMs<=end && f.counter>resumed.sourceCounterAtObservation);
+    return first?first.atMs-issued:UNKNOWN;
+  }
+  function drawCounterBand(context,n) {
+    for(let bit=0;bit<16;bit++) {
+      const on=!!(n & (1<<bit));
+      context.fillStyle=on?'#fff':'#000';context.fillRect(bit*40,64,40,64);
+      context.fillStyle=on?'#000':'#fff';context.fillRect(bit*40,128,40,64);
+    }
+  }
   // One compositor snapshot for both counter rows; never read a full frame.
   function readCounterBand(context,video) {
     const width=video.videoWidth,height=video.videoHeight;
@@ -98,8 +116,23 @@
     for(const [a,b] of clips){total+=Math.max(0,b-Math.max(a,last));last=Math.max(last,b);}
     return total;
   }
+  // Calibrate from observed draws before the window, so a stall within the
+  // window cannot inflate its own expected cadence. Use up to 60 intervals.
+  function sourceDiagnostics(times,start,end) {
+    const draws=times.filter((at)=>at<=end);
+    const intervals=draws.slice(1).map((at,i)=>({startMs:draws[i],endMs:at,ms:at-draws[i]})).filter((p)=>p.ms>0);
+    const before=intervals.filter((p)=>p.endMs<=start);
+    const values=(before.length?before:intervals).slice(-60).map((p)=>p.ms).sort((a,b)=>a-b);
+    const cadence=values.length?(values[Math.floor((values.length-1)/2)]+values[Math.floor(values.length/2)])/2:UNKNOWN;
+    // Normal cadence is expected source time, not starvation. Only the
+    // excess can explain part of a measured receiver gap.
+    const periods=typeof cadence==='number'?intervals.filter((p)=>p.ms>cadence*1.5 && p.endMs>=start).map((p)=>({startMs:p.startMs+cadence,endMs:p.endMs,ms:p.ms-cadence})):[];
+    const last=draws.at(-1);
+    if(typeof cadence==='number' && last!==undefined && end-last>cadence*1.5)periods.push({startMs:last+cadence,endMs:end,ms:end-last-cadence,open:true});
+    return {frameIntervalMs:cadence,sourceStarvedPeriods:periods};
+  }
   function gapDiagnostics(e) {
-    const periods=[...(e.starvedPeriods || []),...(e.unreadPeriods || []),...(e.longTasks || [])];
+    const periods=[...(e.starvedPeriods || []),...(e.sourceStarvedPeriods || []),...(e.unreadPeriods || []),...(e.longTasks || [])];
     const overlapMs=overlappingMs(periods,e.video.maxStartMs,e.video.maxEndMs);
     return {overlapMs,adjustedVideoGapMs:typeof e.video.maxMs==='number'?Math.max(0,e.video.maxMs-overlapMs):UNKNOWN};
   }
@@ -154,12 +187,12 @@
     if(hold.status==='pending' || hold.status==='superseded' || hold.status==='not-run') return {status:'inconclusive',reasons:['60 s hold '+hold.status]};
     return hold.verdict;
   }
-  function validBaseline(e,threshold) {return e.windowVerdict.status==='pass' && ['video','audio'].every((kind)=>typeof e[kind].maxMs==='number' && e[kind].maxMs<threshold);}
+  function validBaseline(e,threshold) {return overlappingMs(e.sourceStarvedPeriods || [],e.video.maxStartMs,e.video.maxEndMs)===0 && e.windowVerdict.status==='pass' && ['video','audio'].every((kind)=>typeof e[kind].maxMs==='number' && e[kind].maxMs<threshold);}
   function noiseFloor(entries,baselineCount=5,threshold=100) {
     const valid=entries.filter((e)=>validBaseline(e,threshold)),recent=valid.slice(-baselineCount);
     const measure=(kind)=>{const values=recent.map((e)=>e[kind].maxMs).sort((a,b)=>a-b);return {count:values.length,medianMs:values.length?(values[Math.floor((values.length-1)/2)]+values[Math.floor(values.length/2)])/2:UNKNOWN,maxMs:values.length?values.at(-1):UNKNOWN};};
     return {video:measure('video'),audio:measure('audio'),excluded:entries.length-valid.length};
   }
-  const api={UNKNOWN,gap,delta,windowStart,content,readCounterBand,decodeCounter,counterObservation,starved,hiddenDuring,concealment,overlappingMs,gapDiagnostics,noiseGate,noiseDiagnostics,verdict,combine,noiseFloor};
+  const api={UNKNOWN,gap,delta,windowStart,content,firstLiveFrame,drawCounterBand,readCounterBand,decodeCounter,counterObservation,starved,hiddenDuring,concealment,overlappingMs,sourceDiagnostics,gapDiagnostics,noiseGate,noiseDiagnostics,verdict,combine,noiseFloor};
   if(typeof module!=='undefined')module.exports=api;else root.relaisMetrics=api;
 })(globalThis);
