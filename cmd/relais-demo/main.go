@@ -1,4 +1,4 @@
-// relais-demo owns a loopback browser demo and its separate media processes.
+// relais-demo owns a browser demo and its separate media processes.
 package main
 
 import (
@@ -24,7 +24,7 @@ import (
 //go:embed web
 var web embed.FS
 
-type config struct{ Bin, HTTP, Redis, RedisBinary string }
+type config struct{ Bin, HTTP, Redis, RedisBinary, LocalNetwork string }
 
 func processEnv(key, addr, prefix string, withKey bool) []string {
 	env := []string{}
@@ -43,6 +43,10 @@ func processEnv(key, addr, prefix string, withKey bool) []string {
 }
 
 func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*demo, error) {
+	token, err := launchToken(cfg.LocalNetwork)
+	if err != nil {
+		return nil, err
+	}
 	bin, err := filepath.Abs(cfg.Bin)
 	if err != nil {
 		return nil, err
@@ -98,7 +102,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 		ready, err := readyChild(startup, child)
 		return child, ready, err
 	}
-	_, relay, err := start(ctx, "relay", processEnv("", addr, prefix, false), filepath.Join(bin, "relais-relay"), "-media", "127.0.0.1:0", "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0")
+	_, relay, err := start(ctx, "relay", processEnv("", addr, prefix, false), append([]string{filepath.Join(bin, "relais-relay")}, relayArgs(cfg)...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +110,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 	if err != nil {
 		return nil, err
 	}
-	d := &demo{ctx: ctx, client: &http.Client{Timeout: 10 * time.Second}, control: "http://" + controlAddr, relay: relay.Media, redis: addr, dir: dir, workers: map[string]*workerProcess{}}
+	d := &demo{ctx: ctx, client: &http.Client{Timeout: 10 * time.Second}, control: "http://" + controlAddr, relay: relay.Media, redis: addr, dir: dir, workers: map[string]*workerProcess{}, publicHost: cfg.LocalNetwork, launchToken: token}
 	usedMedia := map[string]bool{}
 	d.spawn = func(ctx context.Context, name string) (*workerProcess, error) {
 		media, err := freshUDP(usedMedia)
@@ -178,6 +182,9 @@ func validateConfig(cfg config) error {
 	if ip == nil || !ip.IsLoopback() {
 		return errors.New("demo HTTP address must be literal loopback")
 	}
+	if cfg.LocalNetwork != "" {
+		return validateLocalAddress(cfg.LocalNetwork)
+	}
 	return nil
 }
 
@@ -185,6 +192,7 @@ func run() error {
 	var cfg config
 	flag.StringVar(&cfg.Bin, "bin", "bin", "directory containing built relay, worker and control")
 	flag.StringVar(&cfg.HTTP, "http", "127.0.0.1:9101", "literal loopback page address")
+	flag.StringVar(&cfg.LocalNetwork, "local-network", "", "opt in to HTTPS and public media on this literal local IPv4 address; uses the -http port, private APIs remain on loopback")
 	flag.StringVar(&cfg.Redis, "redis", "", "explicit dedicated Redis address; otherwise start throwaway Redis (6379 refused)")
 	flag.StringVar(&cfg.RedisBinary, "redis-server", "redis-server", "throwaway Redis executable")
 	flag.Parse()
@@ -192,7 +200,7 @@ func run() error {
 	if err := validateConfig(cfg); err != nil {
 		return err
 	}
-	listener, err := processrun.ListenPrivate(cfg.HTTP)
+	listener, fingerprint, err := listenPage(cfg)
 	if err != nil {
 		return err
 	}
@@ -208,9 +216,16 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	processrun.Ready(map[string]any{"http": "http://" + listener.Addr().String(), "media": d.relay, "redis": d.redis})
-	_, port, _ := net.SplitHostPort(listener.Addr().String())
-	fmt.Printf("cluster demo: http://localhost:%s/?source=test&autostart=0\n", port)
+	scheme := "http"
+	if cfg.LocalNetwork != "" {
+		scheme = "https"
+		fmt.Printf("WARNING: demo page, call controls and relay media are reachable on the local network at %s; use a trusted network. Private APIs remain on loopback.\n", cfg.LocalNetwork)
+		fmt.Printf("certificate SHA-256 fingerprint: %s\n", fingerprint)
+		fmt.Printf("certificate SHA-256 fingerprint (Chrome): %s\n", chromeFingerprint(fingerprint))
+	}
+	pageURL := scheme + "://" + listener.Addr().String()
+	processrun.Ready(map[string]any{"http": pageURL, "media": d.relay, "redis": d.redis, "certificate_sha256": fingerprint})
+	fmt.Printf("cluster demo: %s\n", demoPageURL(cfg, listener.Addr().String(), d.launchToken))
 	err = processrun.Serve(ctx, listener, d.handler(http.FileServer(http.FS(files))))
 	if errors.Is(err, context.Canceled) {
 		return nil

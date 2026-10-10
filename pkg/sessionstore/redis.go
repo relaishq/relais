@@ -190,7 +190,7 @@ func (r *Redis) keys(id string) []string {
 		tagID = "~" + base64.RawURLEncoding.EncodeToString([]byte(id))
 	}
 	tag := "{sess:" + tagID + "}"
-	return []string{r.prefix + "lease:" + tag, r.prefix + "state:" + tag, r.prefix + "record:" + tag, r.prefix + "epoch:" + tag}
+	return []string{r.prefix + "lease:" + tag, r.prefix + "state:" + tag, r.prefix + "record:" + tag, r.prefix + "epoch:" + tag, r.prefix + "routes:" + tag}
 }
 
 // All per-session transitions, including read/prune and fenced snapshot writes,
@@ -228,7 +228,7 @@ if op=='settle' or op=='indexed' then
  -- A young prepublication may still commit. Never fence or prune it.
  if op=='indexed' and newer(epoch) and now()<tonumber(ARGV[6])+tonumber(ARGV[7]) then return {3} end
  if op=='indexed' and not current[1] and redis.call('GET',KEYS[3])==owner .. '/' .. epoch then
-  redis.call('DEL',KEYS[2],KEYS[3])
+  redis.call('DEL',KEYS[2],KEYS[3],KEYS[5])
  end
  -- This also settles an indexed prepublication racing its transition. Once
  -- pruned, that candidate is fenced, never a live lease missing its index.
@@ -238,11 +238,11 @@ elseif op=='claim' then
  if redis.call('EXISTS',KEYS[3])==1 then return {-1} end
  if not newer(epoch) then return {-3} end
  retain(epoch)
- redis.call('DEL',KEYS[2])
+ redis.call('DEL',KEYS[2],KEYS[5])
  return write(owner,epoch)
 elseif op=='get' or op=='state' or op=='checkpoint' then
  if not current[1] then
-  redis.call('DEL',KEYS[2],KEYS[3])
+  redis.call('DEL',KEYS[2],KEYS[3],KEYS[5])
   return {0}
  end
  if op=='get' then return reply() end
@@ -262,7 +262,7 @@ elseif op=='get' or op=='state' or op=='checkpoint' then
  return {1,blob,redis.call('HGET',KEYS[1],'state_seq') or ''}
 elseif op=='release' then
  if matches() or (not current[1] and redis.call('GET',KEYS[3])==owner .. '/' .. epoch) then
-  redis.call('DEL',KEYS[1],KEYS[2],KEYS[3])
+  redis.call('DEL',KEYS[1],KEYS[2],KEYS[3],KEYS[5])
  end
  return {1}
 end
@@ -271,6 +271,7 @@ if op=='renew' then return write(owner,epoch)
 elseif op=='transfer' then
  if not newer(ARGV[7]) then return {-3} end
  retain(ARGV[7])
+ redis.call('DEL',KEYS[5])
  return write(ARGV[6],ARGV[7])
 elseif op=='sequence' then
  redis.call('HINCRBY',KEYS[1],'next_seq',1)

@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
+	"github.com/go-redis/redis/v8"
 	"net"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -60,4 +63,19 @@ func testRedis(t *testing.T, options ...RedisOptions) *Redis {
 		require.NoError(t, r.Close())
 	})
 	return r
+}
+
+// sessionCommandArgs returns ARGV without assuming how many per-session keys
+// the production script declares. Fault injection must keep reaching the real
+// transition/snapshot seam as keys are added to the atomic session lifecycle.
+func sessionCommandArgs(cmd redis.Cmder) []interface{} {
+	args := cmd.Args()
+	if (cmd.Name() != "eval" && cmd.Name() != "evalsha") || len(args) < 3 {
+		return nil
+	}
+	n, err := strconv.Atoi(fmt.Sprint(args[2]))
+	if err != nil || n < 0 || len(args) < 3+n {
+		return nil
+	}
+	return args[3+n:]
 }
