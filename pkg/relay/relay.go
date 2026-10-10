@@ -95,11 +95,11 @@ const (
 	// ownership change occurs during this wait.
 	DefaultBarrierTimeout = time.Second
 
-	// DefaultHoldTimeout covers the worker's 2 s store call and 5 s resume
-	// budgets on the forward and rollback paths after drain acknowledgement,
-	// the rollback's 5 s context, and local export/transfer headroom. Remote
-	// worker or store implementations must configure their coordination budgets.
-	DefaultHoldTimeout       = 30 * time.Second
+	// DefaultHoldTimeout bounds abandoned cross-process coordination below
+	// the shortest (5 s) caller connectivity window. Healthy loopback moves
+	// finish in milliseconds. Slow coordination and worst-case rollback can
+	// exceed 3 s; expiry bounds buffering, not successful recovery.
+	DefaultHoldTimeout       = 3 * time.Second
 	DefaultMaxHeldSessions   = 1024
 	DefaultMaxHeldPackets    = 256
 	DefaultMaxHeldBytes      = 1 << 20
@@ -431,9 +431,10 @@ func (r *Relay) AddWorker(worker netip.AddrPort) {
 // It immediately fences the old relay leg, preserves all confirmed callers,
 // and invalidates lookups that started before the move. It admits no caller
 // addresses: those still require the worker's authenticated binding answer.
+// A zero from repairs an uncertain prior route, re-pointing every session route.
 func (r *Relay) MoveSession(sessionID string, from, to netip.AddrPort) error {
 	from, to = unmap(from), unmap(to)
-	if sessionID == "" || !r.registered(from) || !r.registered(to) {
+	if sessionID == "" || from.IsValid() && !r.registered(from) || !r.registered(to) {
 		return errors.New("relay: move needs a session and registered workers")
 	}
 	r.forwardMu.Lock()

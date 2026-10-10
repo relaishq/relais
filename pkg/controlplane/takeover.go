@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/relais/internal/privateapi"
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/relay"
@@ -109,6 +110,9 @@ func (p *Plane) Run(ctx context.Context) error {
 					continue
 				}
 				if (!w.dead && now.Sub(w.lastHeartbeat) >= p.config.DeadAfter) || (w.dead && !w.recovered) {
+					if !w.dead {
+						w.rejoinToken, w.acceptedToken = "", ""
+					}
 					w.dead, w.recovering, w.recovered, w.rejoinReady = true, true, false, false
 					dead = append(dead, w)
 				} else if !w.dead && !w.retryingMoves && len(w.pending) > 0 {
@@ -191,11 +195,15 @@ type takeoverState struct {
 	candidate       *sessionstore.Lease
 	plannedState    []byte
 	planned         bool
+	held            bool
+	crashMargins    bool
 	routed          netip.AddrPort
 	excluded        map[netip.AddrPort]bool
 	attempts        int
 	attemptLimit    int
 	transientResume bool
+	resumeState     []byte
+	resumeTarget    *registration
 }
 
 // Margins cover 100 ms between snapshots + 400 ms without heartbeat + a
@@ -228,6 +236,11 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 	p.mu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	p.takeoverLocked(ctx, source, c, listed, detected)
+}
+
+// takeoverLocked also recovers an ambiguous final export while Move holds c.mu.
+func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *call, listed sessionstore.Lease, detected time.Time) {
 	p.mu.Lock()
 	existing := source.pending[c.id]
 	p.mu.Unlock()
@@ -284,6 +297,9 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 					fmt.Errorf("controlplane: pending takeover lease vanished: %w", err))
 			}
 		} else if err == nil {
+			if existing != nil && existing.held {
+				_, _ = p.relay.ReleaseSession(c.id, lease.Worker)
+			}
 			p.finishPending(source, c.id)
 		}
 		return
@@ -318,12 +334,32 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 		p.completeTakeover(source, c, pending.lease, &res, lost, cause)
 	}
 
-	for noTargetAttempts := 0; pending.attempts < pending.attemptLimit; {
-		p.mu.Lock()
-		target, pickErr := p.pickExcluding(ctx, "", pending.excluded)
-		p.mu.Unlock()
+	for noTargetAttempts := 0; pending.transientResume || pending.attempts < pending.attemptLimit; {
+		name := ""
+		if pending.transientResume {
+			p.mu.Lock()
+			previous := p.owner(pending.lease.Worker)
+			if previous != nil && previous == pending.resumeTarget && !previous.dead && !previous.draining {
+				name = previous.name
+			} else {
+				// Confirmation only reuses bytes for the same eligible registration.
+				// Transfer fences the old epoch; another target must reload the
+				// last persisted counters and spend a fresh margin.
+				pending.excluded[pending.lease.Worker] = true
+				pending.transientResume = false
+				pending.resumeState, pending.plannedState = nil, nil
+				pending.crashMargins = true
+			}
+			p.mu.Unlock()
+		}
+		target, pickErr := p.pickExcluding(ctx, name, pending.excluded)
 		if pickErr != nil {
 			if !errors.Is(pickErr, ErrNoTarget) {
+				return
+			}
+			// Eligibility can change after the pinned registration check.
+			// Retry next tick instead of declaring this uncertain adoption lost.
+			if pending.transientResume {
 				return
 			}
 			noTargetAttempts++
@@ -336,6 +372,12 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 				return
 			case <-time.After(25 * time.Millisecond):
 			}
+			continue
+		}
+		if pending.transientResume && target != pending.resumeTarget {
+			// Replacement can also occur between the registration check and
+			// selection. Do not confirm an old payload on a new registration.
+			p.unreserve(target)
 			continue
 		}
 		res.To = target.name
@@ -358,11 +400,16 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 		}
 		// No source hold or rollback. Routing fences the previous leg immediately.
 		if err = r.MoveSession(c.id, pending.routed, target.addr); err != nil {
+			// Even a generic relay error may follow a committed notification.
+			pending.routed = netip.AddrPort{}
 			p.unreserve(target)
 			return
 		}
 		pending.routed = target.addr
 		state := pending.plannedState
+		if pending.transientResume {
+			state = pending.resumeState
+		}
 		var stateErr error
 		if state == nil {
 			state, stateErr = p.store.GetState(ctx, c.id)
@@ -375,11 +422,11 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 			return
 		}
 		margin, rtcpMargin := p.config.SequenceMargin, p.config.SRTCPIndexMargin
-		if pending.planned {
+		if pending.planned && !pending.crashMargins {
 			margin, rtcpMargin = 0, 0
 		}
 		budget, budgetErr := maxResumeAttempts, error(nil)
-		if !pending.planned {
+		if (!pending.planned || pending.crashMargins) && !pending.transientResume {
 			budget, budgetErr = mediaworker.SequenceResumeAttempts(state, margin)
 		}
 		if budgetErr != nil {
@@ -387,15 +434,21 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 			complete(true, budgetErr)
 			return
 		}
-		pending.attemptLimit = min(pending.attemptLimit, pending.attempts+budget)
-		if pending.attempts >= pending.attemptLimit {
+		if !pending.transientResume {
+			pending.attemptLimit = min(pending.attemptLimit, pending.attempts+budget)
+		}
+		if !pending.transientResume && pending.attempts >= pending.attemptLimit {
 			p.unreserve(target)
 			complete(true, mediaworker.ErrSequenceBudgetExhausted)
 			return
 		}
 		res.Result.StateBytes = len(state)
 		started := time.Now()
-		pending.attempts++
+		if !pending.transientResume {
+			pending.attempts++
+			pending.resumeState = state
+			pending.resumeTarget = target
+		}
 		if !pending.planned {
 			pending.plannedState = nil
 		}
@@ -410,7 +463,7 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 			if !pending.planned {
 				c.takeoverCount++
 			}
-			if pending.planned {
+			if pending.planned || pending.held {
 				held, releaseErr := r.ReleaseSession(c.id, target.addr)
 				res.Result.HeldPackets = held
 				res.Result.HoldExpired = errors.Is(releaseErr, relay.ErrHoldExpired)
@@ -418,7 +471,7 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 			complete(false, nil)
 			return
 		}
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, privateapi.ErrUncertain) {
 			pending.transientResume = true
 			return
 		}
@@ -448,7 +501,11 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 func (p *Plane) completeTakeover(source *registration, c *call, lease sessionstore.Lease,
 	res *MoveResult, lost bool, cause error) {
 	if lost {
-		p.lose(c, lease, res.Kind == "move")
+		p.mu.Lock()
+		pending := source.pending[c.id]
+		held := pending != nil && pending.held
+		p.mu.Unlock()
+		p.lose(c, lease, res.Kind == "move" || held)
 	}
 	p.finishPending(source, c.id)
 	res.End = time.Now()
@@ -526,10 +583,23 @@ func (p *Plane) Replace(name string, addr netip.AddrPort, worker Worker) error {
 			return errors.New("controlplane: duplicate worker address")
 		}
 	}
-	leases, err := p.store.ListByWorker(context.Background(), old.addr)
+	p.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	leases, err := p.store.ListByWorker(ctx, old.addr)
 	if err != nil || len(leases) != 0 {
-		p.mu.Unlock()
 		return errors.New("controlplane: replacement still has leases")
+	}
+	p.mu.Lock()
+	if p.workers[name] != old || !old.dead || !old.recovered || old.recovering || old.reserved != 0 {
+		p.mu.Unlock()
+		return errors.New("controlplane: replacement raced with rejoin or recovery")
+	}
+	for otherName, w := range p.workers {
+		if otherName != name && w.addr == addr {
+			p.mu.Unlock()
+			return errors.New("controlplane: duplicate worker address")
+		}
 	}
 	p.workers[name] = &registration{name: name, addr: addr, worker: worker, lastHeartbeat: time.Now()}
 	p.mu.Unlock()
@@ -543,7 +613,7 @@ func (p *Plane) retryPlannedMoves(ctx context.Context, w *registration, now time
 	p.mu.Lock()
 	leases := make([]sessionstore.Lease, 0, len(w.pending))
 	for _, pending := range w.pending {
-		if pending.planned {
+		if pending.planned || pending.held {
 			leases = append(leases, pending.lease)
 		}
 	}

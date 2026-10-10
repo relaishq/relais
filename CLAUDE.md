@@ -8,12 +8,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies
 make deps
 
-# Build the plugin runner binaries (ingress, egress, transform)
+# Build plugin runners plus relais-relay, relais-worker, relais-control
+# and the opt-in crash-run driver
 make build
 
 # Run media workers A and B on one UDP socket plus the browser echo page on
 # http://localhost:9101 ("Move call" hands the live call to the other worker)
 make demo
+
+# Prove real SIGKILL takeover: ten runs, each with 60 s of media/consent
+# Requires redis-server and ffmpeg; starts its own Redis, never port 6379
+make crash-run
+# Developer smoke run (does not prove the 60 s consent threshold)
+make crash-run CRASH_FLAGS="-runs=1 -after=3s -verbose"
 
 # Clean build artifacts
 make clean
@@ -55,8 +62,10 @@ Relais is a distributed media server. Live WebRTC media runs in the media worker
   - `pkg/mediaworker/` - Media worker: a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) with WHIP-style signaling; it currently echoes the caller's audio and video. A live session can be exported to bytes and resumed on another worker that shares the same UDP socket (`Socket.Handover`, a planned handover); relayed workers also persist fenced snapshots for automatic crash takeover
   - `pkg/callharness/` - Call harness: the test seam for media; a Pion WebRTC client plays the caller in-process, and `Call.Handover` moves a call between workers
   - `pkg/relay/` - Relay: the one public UDP address; routes each caller's packets to the worker that owns the session, and holds them during a move
-  - `pkg/sessionstore/` - Session store: fenced ownership leases (owner, epoch, expiry) and resumable state blobs; in-memory for now
+  - `pkg/sessionstore/` - Session store: fenced ownership leases (owner, epoch, expiry) and resumable state blobs; in-memory or encrypted Redis
   - `pkg/controlplane/` - Control plane: places calls, moves live calls between workers behind the relay, drains workers, detects heartbeat failures, takes over crashed workers' calls, and serves `GET /status`
+  - `cmd/relais-relay`, `cmd/relais-worker`, `cmd/relais-control` - Separate media processes using Redis session state, private HTTP coordination, UDP relay legs and explicit rejoin acknowledgement
+  - `cmd/crash-run` - Starts the process topology and a dedicated throwaway Redis, runs the Pion caller and SIGKILLs the owning worker (`make crash-run`)
   - `cmd/echo-demo` - Browser echo demo: two media workers on one socket, with a "Move call" button (`make demo`)
 
 - **Plugin runners**:
@@ -92,7 +101,7 @@ New plugins must implement one of the interfaces in `pkg/plugins/interface.go` a
 
 - Go 1.26+ required
 - Uses Pion v4 libraries for real-time communication
-- Redis optional for distributed storage
+- Redis optional for in-process tests, required for the separate-process topology
 - golangci-lint required for linting
 
 ## Agent skills

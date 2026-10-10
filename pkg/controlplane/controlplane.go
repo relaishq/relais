@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/relais/internal/privateapi"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
@@ -35,7 +36,7 @@ var (
 	ErrNoTarget = errors.New("controlplane: no non-draining target worker")
 )
 
-// Worker is the in-process media boundary. Resume must either adopt the
+// Worker is the media boundary, local or remote. Resume must either adopt the
 // supplied lease and run the session, or fail without running it.
 type Worker interface {
 	CreateSession(ctx context.Context, offer string) (string, string, error)
@@ -63,6 +64,8 @@ type registration struct {
 	recovering    bool
 	recovered     bool
 	rejoinReady   bool
+	rejoinToken   string
+	acceptedToken string
 	retryingMoves bool
 	pending       map[string]*takeoverState // unfinished transfers, retained for retry
 }
@@ -94,7 +97,7 @@ type Plane struct {
 	running         bool
 }
 
-// New returns an empty in-process control plane. Drive Run with the
+// New returns an empty control plane. Drive Run with the
 // application lifetime context to enable automatic crash detection.
 func New(r Relay, store sessionstore.Store) *Plane { return NewWithConfig(r, store, Config{}) }
 
@@ -150,7 +153,7 @@ func (p *Plane) SetRelay(r Relay) {
 	p.relay = r
 }
 
-// pick runs under mu and reserves capacity before another selection can run.
+// pick reserves capacity under mu, but never holds mu across store I/O.
 func (p *Plane) pick(ctx context.Context, name string, exclude netip.AddrPort) (*registration, error) {
 	return p.pickExcluding(ctx, name, map[netip.AddrPort]bool{exclude: true})
 }
@@ -159,23 +162,36 @@ func (p *Plane) pickExcluding(ctx context.Context, name string, excluded map[net
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	var best *registration
-	load := int(^uint(0) >> 1)
+	p.mu.Lock()
+	candidates := make([]*registration, 0, len(p.workers))
 	for _, w := range p.workers {
-		if name != "" && w.name != name {
-			continue
+		if (name == "" || w.name == name) && !w.draining && !w.dead && !excluded[w.addr] {
+			candidates = append(candidates, w)
 		}
-		if w.draining || w.dead || excluded[w.addr] {
-			continue
-		}
-
+	}
+	p.mu.Unlock()
+	loads := make(map[*registration]int, len(candidates))
+	for _, w := range candidates {
 		leases, err := p.store.ListByWorker(ctx, w.addr)
 		if err != nil {
 			return nil, err
 		}
-
-		n := len(leases) + w.reserved
-		if n < load || (n == load && (best == nil || w.name < best.name)) {
+		loads[w] = len(leases)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var best *registration
+	load := int(^uint(0) >> 1)
+	for _, w := range candidates {
+		// Registry replacement, death or drain may have raced with the listing.
+		if p.workers[w.name] != w || w.draining || w.dead {
+			continue
+		}
+		n := loads[w] + w.reserved
+		if n < load || n == load && (best == nil || w.name < best.name) {
 			best, load = w, n
 		}
 	}
@@ -229,9 +245,7 @@ func (p *Plane) owner(addr netip.AddrPort) *registration {
 // Create starts a call on the least-loaded non-draining worker. name can
 // pin a worker for a test, but cannot bypass draining.
 func (p *Plane) Create(ctx context.Context, offer, name string) (string, string, error) {
-	p.mu.Lock()
 	w, err := p.pick(ctx, name, netip.AddrPort{})
-	p.mu.Unlock()
 	if err != nil {
 		return "", "", err
 	}
@@ -324,9 +338,7 @@ func (p *Plane) Move(ctx context.Context, id, to string) (MoveResult, error) {
 		return MoveResult{}, err
 	}
 
-	p.mu.Lock()
 	target, err := p.pick(ctx, to, lease.Worker)
-	p.mu.Unlock()
 	if err != nil {
 		return MoveResult{}, err
 	}
@@ -355,6 +367,9 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	started := time.Now()
 	// Missing acknowledgement aborts before export; the relay replays to A.
 	if err = r.HoldSession(ctx, c.id, source.addr); err != nil {
+		if errors.Is(err, privateapi.ErrUncertain) {
+			_, _ = r.ReleaseSession(c.id, source.addr)
+		}
 		return res, err
 	}
 
@@ -362,10 +377,14 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	// Successful/rolled-back resume releases to its owner. An uncertain final
 	// export retains the hold until adoption, bounded by the relay backstop.
 	releaseTo := source.addr
+	released := false
 	defer func() {
+		if released {
+			return
+		}
 		p.mu.Lock()
 		pending := source.pending[c.id]
-		retained := pending != nil && pending.planned
+		retained := pending != nil
 		p.mu.Unlock()
 		if retained {
 			return
@@ -388,6 +407,41 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	state, err := source.worker.ExportSession(c.id)
 	res.Result.Export = time.Since(started)
 	if err != nil {
+		// A generic/transport error cannot prove export did not flush A.
+		// Bump its epoch either way and recover the latest store snapshot.
+		if uncertainExport(err) {
+			p.mu.Lock()
+			if source.pending == nil {
+				source.pending = make(map[string]*takeoverState)
+			}
+			source.pending[c.id] = &takeoverState{lease: lease, routed: source.addr,
+				excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts, held: true}
+			p.mu.Unlock()
+			recovery, cancel := context.WithTimeout(context.Background(), takeoverBudget)
+			defer cancel()
+			p.takeoverLocked(recovery, source, c, lease, res.Start)
+			p.mu.Lock()
+			pending := source.pending[c.id]
+			events := p.recentTakeovers()
+			for i := len(events) - 1; i >= 0; i-- {
+				if events[i].ID == c.id && !events[i].Start.Before(res.Start) {
+					res = events[i]
+					if !res.Lost {
+						releaseTo = target.addr
+						err = nil
+					} else {
+						err = errors.New(res.Error)
+					}
+					break
+				}
+			}
+			p.mu.Unlock()
+			if pending != nil {
+				return res, fmt.Errorf("controlplane: export uncertain; recovery pending: %w", err)
+			}
+			released = true
+			return res, err
+		}
 		if errors.Is(err, mediaworker.ErrUnknownSession) {
 			// A hard-killed source has no memory but can still own a live
 			// lease and snapshot. Preserve that record for crash recovery.
@@ -407,12 +461,12 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		if p.retainUncertainMove(source, c, lease, source.addr, state, err) {
 			return res, err
 		}
-		err = p.rollback(c, source, target, r, state, lease, false, false, &res.Result, err)
+		err = p.rollback(c, source, target, r, state, lease, false, false, false, &res.Result, err)
 		return res, err
 	}
 
 	if err = r.MoveSession(c.id, source.addr, target.addr); err != nil {
-		err = p.rollback(c, source, target, r, state, transferred, true, false, &res.Result, err)
+		err = p.rollback(c, source, target, r, state, transferred, true, true, false, &res.Result, err)
 		return res, err
 	}
 
@@ -420,7 +474,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: transferred})
 	res.Result.Resume = time.Since(started)
 	if err != nil {
-		err = p.rollback(c, source, target, r, state, transferred, true, true, &res.Result, err)
+		err = p.rollback(c, source, target, r, state, transferred, true, true, errors.Is(err, privateapi.ErrUncertain) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded), &res.Result, err)
 		return res, err
 	}
 
@@ -432,7 +486,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	return res, nil
 }
 
-func (p *Plane) rollback(c *call, source, target *registration, r Relay, state []byte, lease sessionstore.Lease, transferred, rerouted bool, result *mediaworker.HandoverResult, cause error) error {
+func (p *Plane) rollback(c *call, source, target *registration, r Relay, state []byte, lease sessionstore.Lease, transferred, rerouted, uncertainResume bool, result *mediaworker.HandoverResult, cause error) error {
 	// Recovery uses a fresh context after the request has flushed its source.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -443,9 +497,12 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 		lease, err = p.transfer(ctx, lease, source.addr)
 		routed := source.addr
 		if rerouted {
-			routed = target.addr
+			routed = netip.AddrPort{}
 		}
 		if p.retainUncertainMove(source, c, from, routed, state, err) {
+			p.mu.Lock()
+			source.pending[c.id].crashMargins = uncertainResume
+			p.mu.Unlock()
 			return err
 		}
 	}
@@ -457,7 +514,11 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 	// B never resumed, and the next authenticated consent check follows A's
 	// restored store ownership even if the relay itself needs to recover.
 	if err == nil {
-		_, err = source.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: lease})
+		opts := mediaworker.ResumeOptions{Lease: lease, Context: ctx}
+		if uncertainResume {
+			opts.SequenceMargin, opts.SRTCPIndexMargin = p.config.SequenceMargin, p.config.SRTCPIndexMargin
+		}
+		_, err = source.worker.ResumeSession(state, opts)
 	}
 	if err != nil {
 		p.forget(c)
@@ -506,9 +567,9 @@ func (p *Plane) Drain(ctx context.Context, name string) ([]MoveResult, error) {
 		p.mu.Lock()
 	}
 
+	p.mu.Unlock()
 	leases, err := p.store.ListByWorker(ctx, w.addr)
 	if err != nil {
-		p.mu.Unlock()
 		return nil, err
 	}
 	type job struct {
@@ -522,17 +583,16 @@ func (p *Plane) Drain(ctx context.Context, name string) ([]MoveResult, error) {
 		target, pickErr := p.pick(ctx, "", w.addr)
 		if pickErr != nil {
 			for _, j := range jobs {
-				j.target.reserved--
+				p.unreserve(j.target)
 			}
-			close(p.incomingChanged)
-			p.incomingChanged = make(chan struct{})
-			p.mu.Unlock()
 			return nil, pickErr
 		}
 
-		jobs = append(jobs, job{lease: lease, target: target, c: p.calls[lease.SessionID]})
+		p.mu.Lock()
+		c := p.calls[lease.SessionID]
+		p.mu.Unlock()
+		jobs = append(jobs, job{lease: lease, target: target, c: c})
 	}
-	p.mu.Unlock()
 	results := make([]MoveResult, len(jobs))
 	errs := make([]error, len(jobs))
 	var wg sync.WaitGroup
@@ -712,5 +772,20 @@ func (p *Plane) retainUncertainMove(source *registration, c *call, from sessions
 		excluded = map[netip.AddrPort]bool{from.Worker: true}
 	}
 	source.pending[c.id] = &takeoverState{lease: from, candidate: transient.Candidate, routed: routed, excluded: excluded, attemptLimit: maxResumeAttempts, plannedState: state, planned: true}
+	return true
+}
+
+// Typed pre-export failures are definite. All other errors could follow a
+// flushed source, including an HTTP internal error whose cause was not mapped.
+func uncertainExport(err error) bool {
+	if errors.Is(err, privateapi.ErrUncertain) {
+		return true
+	}
+	for _, known := range []error{mediaworker.ErrUnknownSession, mediaworker.ErrClosed, mediaworker.ErrNotEstablished,
+		sessionstore.ErrNotFound, sessionstore.ErrLeaseLost, sessionstore.ErrTransient} {
+		if errors.Is(err, known) {
+			return false
+		}
+	}
 	return true
 }

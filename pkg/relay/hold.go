@@ -76,8 +76,6 @@ func (r *Relay) HoldSession(ctx context.Context, id string, from netip.AddrPort)
 		r.forwardMu.Unlock()
 		return err
 	}
-	// A lost barrier or acknowledgement across real hosts costs one hold
-	// barrier timeout. Ticket #11 should add a resend; this in-process path has none.
 	h := &sessionHold{id: id, barrier: binary.BigEndian.Uint64(nonce[:]), source: from, worker: from, ready: make(chan struct{}), released: make(chan struct{})}
 	r.holds[id] = h
 	h.timer = time.AfterFunc(r.cfg.BarrierTimeout, func() { r.expireBarrier(h) })
@@ -87,26 +85,37 @@ func (r *Relay) HoldSession(ctx context.Context, id string, from netip.AddrPort)
 		_, _ = r.ReleaseSession(id, from)
 		return err
 	}
-	select {
-	case <-h.ready:
-		r.forwardMu.Lock()
-		active := r.holds[id] == h
-		r.forwardMu.Unlock()
-		if !active {
+	ticker := time.NewTicker(75 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			r.forwardMu.Lock()
+			// Resend the same nonce only in the drain phase. Duplicate ACKs are
+			// harmless; the original deadline is never extended.
+			if r.holds[id] == h && !h.acknowledged {
+				_, _ = r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.barrier, false), from)
+			}
+			r.forwardMu.Unlock()
+		case <-h.ready:
+			r.forwardMu.Lock()
+			active := r.holds[id] == h
+			r.forwardMu.Unlock()
+			if !active {
+				return ErrHoldExpired
+			}
+			return nil
+		case <-h.released:
+			if h.barrierTimedOut {
+				return ErrBarrierTimeout
+			}
 			return ErrHoldExpired
+		case <-r.ctx.Done():
+			return errors.New("relay: closed")
+		case <-ctx.Done():
+			_, _ = r.ReleaseSession(id, netip.AddrPort{})
+			return ctx.Err()
 		}
-
-		return nil
-	case <-h.released:
-		if h.barrierTimedOut {
-			return ErrBarrierTimeout
-		}
-		return ErrHoldExpired
-	case <-r.ctx.Done():
-		return errors.New("relay: closed")
-	case <-ctx.Done():
-		_, _ = r.ReleaseSession(id, netip.AddrPort{})
-		return ctx.Err()
 	}
 }
 

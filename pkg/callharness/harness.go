@@ -25,6 +25,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -36,8 +37,18 @@ import (
 	"github.com/relais/pkg/sessionstore"
 )
 
+// ExternalTopology connects the real caller to an already running system.
+// The harness owns only its callers; it never stops external processes.
+type ExternalTopology struct {
+	SignalingURL string
+	RelayAddr    netip.AddrPort
+}
+
 // Options configures the system the harness starts.
 type Options struct {
+	// External selects a process topology instead of starting local workers.
+	External *ExternalTopology
+
 	// WorkerLoggerFactory is passed to the media workers (and the relay).
 	// Defaults to Pion's default logger factory (PION_LOG_* environment
 	// variables).
@@ -68,10 +79,10 @@ type Options struct {
 	ReplayMaxBurstDuration time.Duration
 }
 
-// Harness runs the system in-process: media workers on loopback UDP
-// sockets (shared, or behind a relay) and their signaling endpoint on a
-// loopback HTTP server.
+// Harness runs a caller against either local workers and signaling, or an
+// externally owned process topology. External mode owns only its callers.
 type Harness struct {
+	external     *ExternalTopology
 	workers      *workers
 	server       *http.Server
 	serveDone    chan struct{}
@@ -86,8 +97,20 @@ type Harness struct {
 	failures     map[string][]time.Time
 }
 
-// Start starts the system.
+// Start starts a local topology, or attaches callers to Options.External.
 func Start(opts Options) (*Harness, error) {
+	if opts.External != nil {
+		if opts.Relay || opts.Workers != 0 || opts.SessionStore != nil {
+			return nil, errors.New("callharness: external topology cannot start local workers")
+		}
+		u, err := url.Parse(opts.External.SignalingURL)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || !opts.External.RelayAddr.IsValid() {
+			return nil, errors.New("callharness: external topology needs a signaling URL and relay address")
+		}
+		external := *opts.External
+		return &Harness{external: &external, workers: &workers{}, failures: make(map[string][]time.Time), signalingURL: external.SignalingURL, httpClient: &http.Client{Timeout: 10 * time.Second}}, nil
+	}
+
 	disableProbe := workerprobe.Enable()
 	workers, err := startWorkers(opts)
 	if err != nil {
@@ -142,11 +165,16 @@ func (h *Harness) ExchangeOffer(ctx context.Context, offer string) (AnswerFacts,
 }
 
 // Close closes any calls still open, then stops the signaling server, the
-// media workers and the relay. Dial fails with ErrHarnessClosed from the
-// moment Close starts.
+// media workers and the relay. In external mode it closes callers only.
+// Dial fails with ErrHarnessClosed from the moment Close starts.
 func (h *Harness) Close() error {
-	defer h.disableProbe()
+	if h.disableProbe != nil {
+		defer h.disableProbe()
+	}
 	callsErr := h.closeCalls()
+	if h.external != nil {
+		return callsErr
+	}
 	serverErr := h.server.Close()
 	<-h.serveDone
 

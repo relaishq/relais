@@ -331,12 +331,12 @@ func TestPendingTakeoverVanishedLeaseRecordsLossAndForgetsRoute(t *testing.T) {
 			source.dead = true
 			require.False(t, p.recoverWorker(ctx, source, time.Now()))
 			if step == "cancelled-expiry" {
-				// Exhaust all safe cancelled attempts. It must wait without silently
-				// dropping ownership; expiry below must publish the terminal outcome.
+				// Confirmation retries use the same tenure and payload, without consuming
+				// another margin. Expiry below must publish the terminal outcome.
 				for range 3 {
 					require.False(t, p.recoverWorker(ctx, source, time.Now()))
 				}
-				require.Equal(t, 2, target.calls, "default remaining budget permits two attempts")
+				require.Equal(t, 4, target.calls, "uncertain adoption retries the same request until settled")
 			}
 			require.Len(t, source.pending, 1)
 			require.Zero(t, p.lostCount)
@@ -366,4 +366,82 @@ func TestPendingTakeoverVanishedLeaseRecordsLossAndForgetsRoute(t *testing.T) {
 			require.Equal(t, []string{id}, r.forgotten)
 		})
 	}
+}
+
+type adoptedLostReply struct{ *retryTarget }
+
+func (w *adoptedLostReply) ResumeSession(data []byte, opts mediaworker.ResumeOptions) (string, error) {
+	_, err := w.retryTarget.ResumeSession(data, opts)
+	if err != nil {
+		return "", err
+	}
+	return "", context.DeadlineExceeded
+}
+func TestUncertainResumeIneligibleTargetUsesThirdWorker(t *testing.T) {
+	for _, reason := range []string{"dead", "draining", "replaced"} {
+		t.Run(reason, func(t *testing.T) {
+			ctx := context.Background()
+			p, _, baseB, _ := setup(t)
+			b := &adoptedLostReply{&retryTarget{fakeWorker: baseB}}
+			p.workers["b"].worker = b
+			c := &retryTarget{fakeWorker: &fakeWorker{store: p.store, addr: netip.MustParseAddrPort("127.0.0.1:3"), running: map[string]bool{}}}
+			require.NoError(t, p.Register("c", c.addr, c))
+			id, _, err := p.Create(ctx, "offer", "a")
+			require.NoError(t, err)
+			lease, err := p.store.Get(ctx, id)
+			require.NoError(t, err)
+			require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
+			source := p.workers["a"]
+			source.dead = true
+			require.False(t, p.recoverWorker(ctx, source, time.Now()))
+			require.True(t, b.runs(id), "adoption commits before its reply is lost")
+			switch reason {
+			case "dead":
+				p.workers["b"].dead = true
+			case "draining":
+				p.workers["b"].draining = true
+			case "replaced":
+				p.workers["b"] = &registration{name: "b", addr: baseB.addr, worker: b, lastHeartbeat: time.Now()}
+			}
+			require.True(t, p.recoverWorker(ctx, source, time.Now()))
+			status, err := p.Status(ctx)
+			require.NoError(t, err)
+			require.Zero(t, status.LostCount)
+			require.Len(t, status.Calls, 1)
+			require.Equal(t, "c", status.Calls[0].Owner)
+			require.True(t, c.runs(id))
+			require.Equal(t, []uint32{16384}, c.seen, "reload adjusted state and apply another safe margin")
+			current, err := p.store.Get(ctx, id)
+			require.NoError(t, err)
+			require.Greater(t, current.Epoch, lease.Epoch+1)
+		})
+	}
+}
+
+type holdReleaseRelay struct {
+	*fakeRelay
+	released []netip.AddrPort
+}
+
+func (r *holdReleaseRelay) ReleaseSession(_ string, to netip.AddrPort) (int, error) {
+	r.released = append(r.released, to)
+	return 0, nil
+}
+func TestUncertainExportLeaseMismatchReleasesHeldPackets(t *testing.T) {
+	ctx := context.Background()
+	p, _, b, baseRelay := setup(t)
+	r := &holdReleaseRelay{fakeRelay: baseRelay}
+	p.relay = r
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	old, err := p.store.Get(ctx, id)
+	require.NoError(t, err)
+	source := p.workers["a"]
+	source.pending = map[string]*takeoverState{id: {lease: old, held: true}}
+	current, err := p.store.Transfer(ctx, old, b.addr, time.Second)
+	require.NoError(t, err)
+	p.takeover(ctx, source, old, time.Now())
+	require.Empty(t, source.pending)
+	require.Equal(t, []netip.AddrPort{current.Worker}, r.released)
+	require.Zero(t, p.lostCount)
 }
