@@ -1,7 +1,7 @@
 'use strict';
 (() => {
   const M = window.relaisMetrics;
-  const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error'].map((id) => [id,document.getElementById(id)]));
+  const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check'].map((id) => [id,document.getElementById(id)]));
   const params = new URLSearchParams(location.search);
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve,ms));
   let call = null, lastResult = null, starting = null, lastResultsRender = -Infinity;
@@ -16,27 +16,48 @@
     if (!response.ok) throw Object.assign(new Error(data.error || text || `HTTP ${response.status}`), {server:data});
     return data;
   }
-  async function testStream(s) {
-    const canvas = document.createElement('canvas'); canvas.width = 640; canvas.height = 480;
-    const g = canvas.getContext('2d'); let n = 0;
-    const draw = () => {
-      const t = performance.now()/1000;
-      g.fillStyle = '#16445c'; g.fillRect(0,0,640,480);
-      g.fillStyle = '#fff'; g.fillRect(260+180*Math.sin(t),140+100*Math.cos(t),100,100);
-      g.font = '28px monospace'; g.fillText('Relais cluster echo',24,48);
-      s.sourceCounter=++n;
-      g.fillText(`${new Date().toISOString().slice(11,23)} #${n}`,24,450);
-      // Sixteen 40x64 blocks, sampled at their centers after VP8 decoding.
-      for(let bit=0;bit<16;bit++) {const on=!!(n & (1<<bit));g.fillStyle=on?'#fff':'#000';g.fillRect(bit*40,64,40,64);g.fillStyle=on?'#000':'#fff';g.fillRect(bit*40,128,40,64);}
+  function stampCounter(g,canvas,n) {
+    // Preserve the test pattern's normalized 640x480 geometry at 720p.
+    g.save();g.scale(canvas.width/640,canvas.height/480);
+    g.font='28px monospace';g.fillStyle='#fff';
+    g.fillText(`${new Date().toISOString().slice(11,23)} #${n}`,24,450);
+    M.drawCounterBand(g,n);
+    g.restore();
+  }
+  async function sourceStream(s) {
+    const canvas=document.createElement('canvas');
+    canvas.width=s.source==='camera'?1280:640;canvas.height=s.source==='camera'?720:480;
+    const g=canvas.getContext('2d');let n=0;
+    const draw=()=>{
+      if(!active(s))return;
+      if(s.source==='camera')g.drawImage(s.cameraVideo,0,0,canvas.width,canvas.height);
+      else {
+        const t=performance.now()/1000;
+        g.fillStyle='#16445c';g.fillRect(0,0,640,480);
+        g.fillStyle='#fff';g.fillRect(260+180*Math.sin(t),140+100*Math.cos(t),100,100);
+        g.font='28px monospace';g.fillText('Relais cluster echo',24,48);
+      }
+      s.sourceCounter=++n;stampCounter(g,canvas,n);
     };
-    draw(); s.sourceTimer = setInterval(draw,1000/30);
-    s.audioContext = new AudioContext();
-    const osc = s.audioContext.createOscillator(), gain = s.audioContext.createGain(), dest = s.audioContext.createMediaStreamDestination();
-    osc.frequency.value = 440; gain.gain.value = 0.15; osc.connect(gain).connect(dest); osc.start();
-    // A console call can run without user activation. Expose suspension in
-    // results and require packet flow before start resolves; never claim audio.
+    if(s.source==='camera') {
+      const camera=await navigator.mediaDevices.getUserMedia({audio:false,video:{width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30,max:30}}});
+      if(!active(s)){camera.getTracks().forEach((t)=>t.stop());throw new Error('call ended');}
+      s.cameraStream=camera;s.cameraSettings=camera.getVideoTracks()[0].getSettings();
+      s.cameraVideo=document.createElement('video');s.cameraVideo.muted=true;s.cameraVideo.playsInline=true;s.cameraVideo.srcObject=camera;
+      await s.cameraVideo.play();
+      if(!active(s))throw new Error('call ended');
+      s.sourceFrameRate=s.cameraSettings.frameRate;
+      const frame=()=>{if(!active(s))return;draw();s.cameraCallback=s.cameraVideo.requestVideoFrameCallback(frame);};
+      // Advance only when the camera provides a frame. A frozen camera must
+      // not masquerade as fresh content behind a timer-driven counter.
+      s.cameraCallback=s.cameraVideo.requestVideoFrameCallback(frame);
+    }else {s.sourceFrameRate=30;draw();s.sourceTimer=setInterval(draw,1000/30);}
+    s.canvasStream=canvas.captureStream(30);
+    s.audioContext=new AudioContext();
+    const osc=s.audioContext.createOscillator(),gain=s.audioContext.createGain(),dest=s.audioContext.createMediaStreamDestination();
+    osc.frequency.value=440;gain.gain.value=0.15;osc.connect(gain).connect(dest);osc.start();
     s.audioContext.resume().catch(error);
-    return new MediaStream([...dest.stream.getAudioTracks(),...canvas.captureStream(30).getVideoTracks()]);
+    return new MediaStream([...dest.stream.getAudioTracks(),...s.canvasStream.getVideoTracks()]);
   }
   function credentials(sdp) { return (sdp || '').split(/\r?\n/).filter((line) => /^a=ice-(ufrag|pwd):/.test(line)).join('\n'); }
   function descriptions(s) {
@@ -101,7 +122,7 @@
     }
   }
   function snapshot(s) {
-    if(!s)return lastResult || {version:3,state:'idle',running:false,events:[],baselines:[]};
+    if(!s)return lastResult || {version:4,state:'idle',running:false,events:[],baselines:[]};
     let hold=s.hold || {status:'not-run',reason:'no event yet'};
     if(s.hold && M.hiddenDuring(s.hiddenPeriods,s.hold.startedMs,Math.min(s.stoppedAtMs || performance.now(),s.hold.dueMs)))hold={...hold,status:'invalid',verdict:{status:'invalid',reasons:['page hidden']}};
     const entries=s.events.map((entry)=>{const verdict=M.combine(entry.windowVerdict,hold);return {...entry,verdict,pass:verdict.status==='pass'?true:verdict.status==='fail'?false:null};});
@@ -109,24 +130,24 @@
     const noRenegotiation=!s.negotiations.length && !s.descriptionChanges.length && !s.restartCalls.length;
     const statuses=entries.map((e)=>e.verdict.status);
     const status=statuses.includes('invalid')?'invalid':statuses.includes('fail')?'fail':!statuses.length || statuses.includes('inconclusive')?'inconclusive':'pass';
-    return {version:3,source:s.source,id:s.id,startedAt:s.startedAt,state:s.stopped?'ended':s.pc.connectionState,running:!!s.script || !!s.busy,
+    return {version:4,source:s.source,id:s.id,startedAt:s.startedAt,state:s.stopped?'ended':s.pc.connectionState,running:!!s.script || !!s.busy || !!s.checklist,
       iceConnectionState:s.pc.iceConnectionState,owner:s.owner,workerPIDs:s.status?.worker_pids || {},poolSize:s.status?.pool_size,expectedPoolSize:s.status?.expected_pool_size,registrationError:s.status?.registration_error || null,
       thresholds:{moveGapMs:100,drainGapMs:100,killGapMs:2000,longHoldMs:60000},
-      measurement:{video:s.source==='test'?'decoded counter: observation time minus previous presentation time':'camera: presentation-only',audio:'total concealedSamples at receiver sample rate',sampleRate:s.sampleRate,statsClock:'RTCStats.timestamp',settleAfterResponseMs:2000},
+      measurement:{video:'decoded counter: observation time minus previous presentation time',audio:'total concealedSamples at receiver sample rate',sampleRate:s.sampleRate,statsClock:'RTCStats.timestamp',settleAfterResponseMs:2000,timeToFirstLiveFrameMs:'kill events only; null for moves, drains, and baselines. Browser kill-request issuance to first decoded counter beyond the source watermark sampled at largest content-gap recovery; conservative upper bound including request transit and owner lookup, without subtracting server clocks. Missing kill evidence is unverified'},
       media:{videoGapMs:s.lastContent===null?M.UNKNOWN:(s.stoppedAtMs || performance.now())-s.lastContent,presentationGapMs:s.lastVideo===null?M.UNKNOWN:(s.stoppedAtMs || performance.now())-s.lastVideo,audioPacketGapMs:s.lastAudio===null?M.UNKNOWN:(s.stoppedAtMs || performance.now())-s.lastAudio},
       overall:s.latest,connectedThroughout,noRenegotiation,transitions:s.transitions,ownerChanges:s.owners,descriptionChanges:s.descriptionChanges,
       negotiationNeeded:s.negotiations,iceRestartCalls:s.restartCalls,sampleErrors:s.sampleErrors,testAudioState:s.audioContext?.state || null,audioPlayback:s.playback || 'pending',statusError:s.statusError,
-      configuration:{baselineCount:s.baselineCount,headroomRatio:s.headroomRatio,playoutCoverageMinimum:0.9},sourceCounter:s.sourceCounter ?? M.UNKNOWN,counterReadFailures:s.counterReadFailures,
+      cameraSettings:s.cameraSettings || null,configuration:{baselineCount:s.baselineCount,headroomRatio:s.headroomRatio,playoutCoverageMinimum:0.9},sourceCounter:s.sourceCounter ?? M.UNKNOWN,counterReadFailures:s.counterReadFailures,
       visibility:s.hiddenPeriods,longTasks:s.longTasks,longHold:hold,events:entries,baselines:s.baselines,noiseFloor:M.noiseFloor(s.baselines,s.baselineCount),noiseGate:M.noiseGate(M.noiseFloor(s.baselines,s.baselineCount),s.baselineCount,100,s.headroomRatio),
       verdict:{status,reasons:entries.flatMap((e)=>e.verdict.reasons)},pass:status==='pass'?true:status==='fail'?false:null,srtpDecryptionFailures:M.UNKNOWN};
   }
   function render() {
     const r=snapshot(call),s=call;
-    el.start.disabled=!!s && !s.stopped;el.stop.disabled=!s || s.stopped;
-    for(const id of ['move','drain','kill'])el[id].disabled=!s || !s.armed || s.pc.connectionState!=='connected' || s.busy || !!s.script;
+    el.start.disabled=!!s && !s.stopped;el.source.disabled=!!s && !s.stopped;el.stop.disabled=!s || s.stopped;el.save.disabled=!s && !lastResult;el.check.disabled=!s || !s.armed || s.busy || !!s.script || !!s.checklist;
+    for(const id of ['move','drain','kill'])el[id].disabled=!s || !s.armed || s.pc.connectionState!=='connected' || s.busy || !!s.script || !!s.checklist;
     const fmt=(ms)=>typeof ms==='number'?`${Math.round(ms)} ms`:'unverified';
     const pool=r.poolSize===undefined?'unknown':`${r.poolSize}/${r.expectedPoolSize}${r.poolSize<r.expectedPoolSize?' WARNING: pool short':''}`;
-    const rows=[['Connection',r.state],['ICE',r.iceConnectionState || '—'],['Owner',r.owner || '—'],['Worker PIDs',JSON.stringify(r.workerPIDs || {})],['Pool',pool],['60 s hold',r.longHold?.status || 'not-run'],['Test audio',r.testAudioState || 'camera'],['Echo audio',r.audioPlayback || 'pending'],['Status',r.registrationError || r.statusError || 'OK'],['Baseline video median / max',`${fmt(r.noiseFloor?.video.medianMs)} / ${fmt(r.noiseFloor?.video.maxMs)}`],['Baseline audio median / max',`${fmt(r.noiseFloor?.audio.medianMs)} / ${fmt(r.noiseFloor?.audio.maxMs)}`],['Planned-event gap failure authority',r.noiseGate?.ready?'ready':r.noiseGate?.reason || 'not measured']];
+    const rows=[['Connection',r.state],['ICE',r.iceConnectionState || '—'],['Owner',r.owner || '—'],['Worker PIDs',JSON.stringify(r.workerPIDs || {})],['Pool',pool],['60 s hold',r.longHold?.status || 'not-run'],['Test audio',r.testAudioState || 'pending'],['Echo audio',r.audioPlayback || 'pending'],['Status',r.registrationError || r.statusError || 'OK'],['Baseline video median / max',`${fmt(r.noiseFloor?.video.medianMs)} / ${fmt(r.noiseFloor?.video.maxMs)}`],['Baseline audio median / max',`${fmt(r.noiseFloor?.audio.medianMs)} / ${fmt(r.noiseFloor?.audio.maxMs)}`],['Planned-event gap failure authority',r.noiseGate?.ready?'ready':r.noiseGate?.reason || 'not measured']];
     el.summary.replaceChildren(...rows.flatMap(([k,v])=>{const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=k;dd.textContent=v;return [dt,dd];}));
     el.gap.textContent=`Content gap ${fmt(r.media?.videoGapMs)} · packet age (diagnostic) ${fmt(r.media?.audioPacketGapMs)}`;
     el.moves.replaceChildren(...r.events.map((entry)=>{const row=document.createElement('tr');for(const value of [entry.at.slice(11,23),entry.kind,`${entry.from || '?'} → ${entry.to || '?'}`,fmt(entry.video.maxMs),fmt(entry.audio.maxMs),`${entry.verdict.status.toUpperCase()}: ${entry.verdict.reasons.join(', ')}`]){const td=document.createElement('td');td.textContent=value;row.append(td);}return row;}));
@@ -170,7 +191,7 @@
       const at=typeof meta.presentationTime==='number'?meta.presentationTime:now;
       s.frames.push(at);s.lastVideo=at;
       s.frameMeta.push({atMs:now,presentationTimeMs:at,startMs:s.previousFrameAtMs ?? now,endMs:now,presentedFrames:meta.presentedFrames,starved:M.starved(s.presentedFrames,meta.presentedFrames)});s.presentedFrames=meta.presentedFrames;s.previousFrameAtMs=now;
-      if(s.source==='test') {
+      {
         let counter=M.UNKNOWN,rawValues=[];
         try {
           const read=M.readCounterBand(decode,el.remote);counter=read.counter;rawValues=read.rawValues;
@@ -186,9 +207,9 @@
         // Counter pixels are observed now; older compositor metadata must not
         // timestamp a newer snapshot as recovery before it was seen. Keep the
         // presentation time separately as the next interval's conservative start.
-        const observation={atMs:now,presentationTimeMs:at,...M.counterObservation(counter,s.maxCounter)};s.contentFrames.push(observation);
+        const observation={atMs:now,presentationTimeMs:at,sourceCounterAtObservation:s.sourceCounter ?? M.UNKNOWN,...M.counterObservation(counter,s.maxCounter)};s.contentFrames.push(observation);
         if(observation.advanced){s.maxCounter=counter;s.lastContent=at;}
-      }else{s.lastContent=at;}
+      }
       s.frameCallback=el.remote.requestVideoFrameCallback(frame);
     };
     s.frameCallback=el.remote.requestVideoFrameCallback(frame);
@@ -202,21 +223,23 @@
     }
     if(!active(s)) throw new Error('call ended');
   }
-  async function start({source=params.get('source')==='test'?'test':'camera',baselineCount=5,headroomRatio=0.8}={}) {
+  async function start({source=el.source.value,baselineCount=5,headroomRatio=0.8}={}) {
     if(starting) return starting;
     if(call && !call.stopped) { if(!call.armed) throw new Error('call is not ready');return snapshot(call); }
     if(!Number.isInteger(baselineCount) || baselineCount<1)throw new Error('baselineCount must be a positive integer');
     if(!Number.isFinite(headroomRatio) || headroomRatio<=0 || headroomRatio>1)throw new Error('headroomRatio must be greater than zero and at most one');
-    if(!['test','camera'].includes(source)) throw new Error('source must be camera or test');
+    if(source==='test')source='pattern';
+    if(!['pattern','camera'].includes(source)) throw new Error('source must be pattern (or test) or camera');
+    el.source.value=source;
     const s={source,baselineCount,headroomRatio,pc:new RTCPeerConnection({bundlePolicy:'max-bundle',rtcpMuxPolicy:'require'}),...stamp(),startedAt:new Date().toISOString(),
       transitions:[],owners:[],frames:[],frameMeta:[],contentFrames:[],counterReadFailures:[],hiddenPeriods:[],longTasks:[],baselines:[],samples:[],events:[],descriptionChanges:[],negotiations:[],restartCalls:[],sampleErrors:[],lastVideo:null,lastAudio:null,lastContent:null,maxCounter:null,armed:false,stopped:false};
     call=s;el.error.textContent='';observePage(s);attach(s);statuses(s);samples(s);
     starting=(async()=>{
       try {
-        const stream=source==='test'?await testStream(s):await navigator.mediaDevices.getUserMedia({audio:true,video:{width:{ideal:640},height:{ideal:480}}});
+        const stream=await sourceStream(s);
         if(!active(s)){stream.getTracks().forEach((t)=>t.stop());throw new Error('call ended');}
         s.stream=stream;el.local.srcObject=stream;
-        const frameRate=source==='test'?30:stream.getVideoTracks()[0]?.getSettings().frameRate;
+        const frameRate=s.sourceFrameRate;
         s.frameIntervalMs=frameRate>0?1000/frameRate:M.UNKNOWN;
         for(const kind of ['audio','video']) {const track=stream.getTracks().find((t)=>t.kind===kind);if(!track) throw new Error(`missing ${kind} source`);s.pc.addTransceiver(track,{direction:'sendrecv',streams:[stream]});}
         await s.pc.setLocalDescription(await s.pc.createOffer());
@@ -239,7 +262,7 @@
     const before=s.samples.filter((x)=>x.atMs<=begin).at(-1);
     const after=s.samples.filter((x)=>x.atMs<=end).at(-1);
     const presentation=M.gap(s.frames,begin,end);
-    const video=s.source==='test'?{method:'decoded counter',...M.content(s.contentFrames,begin,end,issued,sourceCounterAtIssue)}:{method:'presentation-only',...presentation};
+    const video={method:'decoded counter',...M.content(s.contentFrames,begin,end,issued,sourceCounterAtIssue)};
     const evidenceStart=typeof video.maxStartMs==='number'?Math.min(begin,video.maxStartMs):begin;
     const starvedPeriods=s.frameMeta.filter((x)=>x.starved && x.startMs<=end && x.endMs>=evidenceStart);
     return {
@@ -310,6 +333,7 @@
       record.noiseGate=M.noiseGate(record.noiseFloor,s.baselineCount,100,s.headroomRatio);
       Object.assign(record,M.noiseDiagnostics(record,s.frameIntervalMs));
       record.timeToFirstNewContentMs=record.video.firstNewContentMs ?? M.UNKNOWN;
+      record.timeToFirstLiveFrameMs=M.firstLiveFrame(kind,s.contentFrames,issued,end,record.video.contentResumedMs);
       s.previousWindowEnd=end;
       record.connectionStateAfter=s.pc.connectionState;
       record.samplingErrors=s.sampleErrors.filter((e)=>e.atMs>=begin && e.atMs<=end);
@@ -352,13 +376,37 @@
     if(s.frameCallback!==undefined) el.remote.cancelVideoFrameCallback(s.frameCallback);
     clearInterval(s.delayTimer);s.performanceObserver?.disconnect();s.intersection?.disconnect();document.removeEventListener('visibilitychange',s.visibilityListener);
     s.pc.close();note(s,'connection','closed');note(s,'ice','closed');
+    if(s.cameraCallback!==undefined)s.cameraVideo.cancelVideoFrameCallback(s.cameraCallback);
+    if(s.cameraVideo){s.cameraVideo.pause();s.cameraVideo.srcObject=null;}
+    s.cameraStream?.getTracks().forEach((t)=>t.stop());s.canvasStream?.getTracks().forEach((t)=>t.stop());
     s.stream?.getTracks().forEach((t)=>t.stop());
     if(s.audioContext) await s.audioContext.close();
     if(s.resource) {try{const response=await fetch(s.resource,{method:'DELETE'});if(!response.ok) throw new Error(`DELETE ${response.status}`);}catch(err){s.cleanupError=String(err);error(err);}}
     lastResult=snapshot(s);render();
   }
   async function stop() {if(call)await cleanup(call);return snapshot(call);}
-  window.relaisDemo={start,runBaseline:(n=call?.baselineCount || 5,ms)=>run('baseline',n,ms),runMoves:(n,ms)=>run('move',n,ms),runKills:(n,ms)=>run('kill',n,ms),runDrains:(n,ms)=>run('drain',n,ms),results:()=>snapshot(call),waitForLongHold,stop};
+  async function runChecklist() {
+    const s=call;if(!s || !s.armed || s.checklist || s.script || s.busy)throw new Error('start a ready call with no other action first');
+    s.checklist=true;
+    const ensureCall=()=>{if(!active(s))throw new Error('call ended during checklist');};
+    try {
+      await run('baseline',s.baselineCount);ensureCall();
+      await run('move',10);ensureCall();
+      await run('kill',10);ensureCall();
+      await waitForLongHold();ensureCall();
+    }
+    finally{s.checklist=false;render();}
+    return snapshot(s);
+  }
+  function saveResults() {
+    const record=snapshot(call),blob=new Blob([JSON.stringify(record,null,2)+'\n'],{type:'application/json'});
+    const url=URL.createObjectURL(blob),a=document.createElement('a');
+    a.href=url;a.download=`relais-${record.source || 'idle'}-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;
+    a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return record;
+  }
+  el.source.value=params.get('source')==='camera'?'camera':'pattern';
+  window.relaisDemo={runChecklist,saveResults,start,runBaseline:(n=call?.baselineCount || 5,ms)=>run('baseline',n,ms),runMoves:(n,ms)=>run('move',n,ms),runKills:(n,ms)=>run('kill',n,ms),runDrains:(n,ms)=>run('drain',n,ms),results:()=>snapshot(call),waitForLongHold,stop};
+  el.save.onclick=saveResults;el.check.onclick=()=>runChecklist().catch(error);
   el.start.onclick=()=>start().catch(error);el.stop.onclick=()=>stop().catch(error);
   for(const kind of ['move','drain','kill']) el[kind].onclick=()=>event(kind).catch(error);
   el.audio.onchange=()=>{el.remote.muted=!el.audio.checked;el.remote.play().then(()=>{if(call)call.playback=el.remote.muted?'muted':'playing';},error);if(call && !call.stopped && call.audioContext?.state==='suspended') call.audioContext.resume().catch(error);};

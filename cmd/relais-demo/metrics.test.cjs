@@ -279,3 +279,61 @@ test('gross audio failure requires a proven burst, not just a sampled upper boun
  assert.equal(M.verdict({...e,audio:{...e.audio,lowerMs:180}}).status,'fail');
  assert.equal(M.verdict({...e,audio:{...e.audio,lowerMs:80}}).status,'inconclusive');
 });
+
+test('first live frame is null for moves, drains, and baselines even with live media',()=>{
+ const frames=[{atMs:60,counter:10,advanced:true,sourceCounterAtObservation:11},
+  {atMs:85,counter:12,advanced:true}];
+ for(const kind of ['move','drain','baseline']) {
+  assert.equal(M.firstLiveFrame(kind,frames,0,1400,60),null);
+  assert.equal(M.firstLiveFrame(kind,[],0,1400,M.UNKNOWN),null);
+ }
+ assert.equal(M.firstLiveFrame('kill',frames,0,1400,60),85);
+});
+test('first live frame waits past the source watermark at recovery, not advancing replay',()=>{
+ const frames=[
+  {atMs:0,counter:100,advanced:true,sourceCounterAtObservation:102},
+  {atMs:400,counter:101,advanced:true,sourceCounterAtObservation:114},
+  {atMs:433,counter:110,advanced:true,sourceCounterAtObservation:115},
+  {atMs:466,counter:114,advanced:true,sourceCounterAtObservation:116},
+  {atMs:499,counter:115,advanced:true,sourceCounterAtObservation:117}
+ ];
+ const m=M.content(frames,10,520,10,102);
+ assert.equal(m.contentResumedMs,390);
+ assert.equal(m.firstNewContentMs,423);
+ assert.equal(M.firstLiveFrame('kill',frames,10,520,m.contentResumedMs),489);
+ assert.equal(M.firstLiveFrame('kill',frames,10,480,m.contentResumedMs),M.UNKNOWN);
+ assert.equal(M.firstLiveFrame('kill',frames,10,520,M.UNKNOWN),M.UNKNOWN);
+});
+test('missing recovery watermark and stale or unreadable frames cannot prove live video',()=>{
+ const frames=[{atMs:400,counter:10,advanced:true,sourceCounterAtObservation:20},
+  {atMs:420,counter:M.UNKNOWN,advanced:false},
+  {atMs:450,counter:21,advanced:false},
+  {atMs:470,counter:20,advanced:true}];
+ assert.equal(M.firstLiveFrame('kill',frames,0,500,400),M.UNKNOWN);
+ assert.equal(M.firstLiveFrame('kill',[{atMs:400,counter:10,advanced:true},...frames.slice(1)],0,500,400),M.UNKNOWN);
+ assert.equal(M.firstLiveFrame('kill',frames,0,500,300),M.UNKNOWN);
+});
+test('live frame comparison uses unwrapped counters across the 16-bit boundary',()=>{
+ const frames=[{atMs:400,counter:65534,advanced:true,sourceCounterAtObservation:65536},
+  {atMs:433,counter:65536,advanced:true}, {atMs:466,counter:65537,advanced:true}];
+ assert.equal(M.firstLiveFrame('kill',frames,0,500,400),466);
+});
+test('shared counter painter survives the unchanged reader at pattern and 720p geometry',()=>{
+ for(const [width,height] of [[640,480],[1280,720]]) {
+  for(const n of [1,43789,65535,65536]) {
+   const rectangles=[];
+   const painter={fillStyle:null,fillRect(x,y,w,h){rectangles.push({x:x*width/640,y:y*height/480,w:w*width/640,h:h*height/480,color:this.fillStyle});}};
+   M.drawCounterBand(painter,n);
+   const bytes=new Uint8ClampedArray(128);
+   const reader={drawImage(video,x,y,w,h,dx,dy,dw,dh){
+    assert.equal(y,height*64/480);assert.equal(h,height*128/480);
+    for(let row=0;row<2;row++)for(let bit=0;bit<16;bit++) {
+     const sx=(bit+0.5)*width/16,sy=height*(96+row*64)/480;
+     const rect=rectangles.find((r)=>sx>=r.x && sx<r.x+r.w && sy>=r.y && sy<r.y+r.h);
+     assert.ok(rect);bytes[(row*16+bit)*4]=rect.color==='#fff'?255:0;
+    }
+   },getImageData(){return {data:bytes};}};
+   assert.equal(M.readCounterBand(reader,{videoWidth:width,videoHeight:height}).counter,n & 65535);
+  }
+ }
+});

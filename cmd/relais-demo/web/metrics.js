@@ -36,6 +36,24 @@
       replayedOrOld:frames.some((f)=>f.atMs>=start && f.atMs<=end && f.old),
       counterReadErrors:frames.filter((f)=>f.atMs>=start && f.atMs<=end && f.counter===UNKNOWN).length};
   }
+  // Takeovers only: planned moves and drains have no kill-to-live interval.
+  // Wait beyond the source watermark at content recovery. An advancing
+  // replay frame can end a gap while still carrying content from the outage.
+  function firstLiveFrame(kind,frames,issued,end,contentResumedMs) {
+    if(kind!=='kill')return null;
+    if(typeof contentResumedMs!=='number' || contentResumedMs<0)return UNKNOWN;
+    const resumed=frames.find((f)=>f.advanced && f.atMs-issued===contentResumedMs);
+    if(!resumed || typeof resumed.sourceCounterAtObservation!=='number')return UNKNOWN;
+    const first=frames.find((f)=>f.advanced && f.atMs>resumed.atMs && f.atMs<=end && f.counter>resumed.sourceCounterAtObservation);
+    return first?first.atMs-issued:UNKNOWN;
+  }
+  function drawCounterBand(context,n) {
+    for(let bit=0;bit<16;bit++) {
+      const on=!!(n & (1<<bit));
+      context.fillStyle=on?'#fff':'#000';context.fillRect(bit*40,64,40,64);
+      context.fillStyle=on?'#000':'#fff';context.fillRect(bit*40,128,40,64);
+    }
+  }
   // One compositor snapshot for both counter rows; never read a full frame.
   function readCounterBand(context,video) {
     const width=video.videoWidth,height=video.videoHeight;
@@ -160,6 +178,6 @@
     const measure=(kind)=>{const values=recent.map((e)=>e[kind].maxMs).sort((a,b)=>a-b);return {count:values.length,medianMs:values.length?(values[Math.floor((values.length-1)/2)]+values[Math.floor(values.length/2)])/2:UNKNOWN,maxMs:values.length?values.at(-1):UNKNOWN};};
     return {video:measure('video'),audio:measure('audio'),excluded:entries.length-valid.length};
   }
-  const api={UNKNOWN,gap,delta,windowStart,content,readCounterBand,decodeCounter,counterObservation,starved,hiddenDuring,concealment,overlappingMs,gapDiagnostics,noiseGate,noiseDiagnostics,verdict,combine,noiseFloor};
+  const api={UNKNOWN,gap,delta,windowStart,content,firstLiveFrame,drawCounterBand,readCounterBand,decodeCounter,counterObservation,starved,hiddenDuring,concealment,overlappingMs,gapDiagnostics,noiseGate,noiseDiagnostics,verdict,combine,noiseFloor};
   if(typeof module!=='undefined')module.exports=api;else root.relaisMetrics=api;
 })(globalThis);

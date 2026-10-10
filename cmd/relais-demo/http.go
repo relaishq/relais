@@ -27,6 +27,7 @@ type demo struct {
 	ctx                        context.Context
 	client                     *http.Client
 	control, relay, redis, dir string
+	publicHost                 string     // exact opt-in page IP; empty means loopback only
 	op                         sync.Mutex // serialize actions, including recycled workers
 	mu                         sync.Mutex // status can poll during recovery
 	workers                    map[string]*workerProcess
@@ -338,13 +339,22 @@ func (d *demo) handler(files http.Handler) http.Handler {
 		if h, _, err := net.SplitHostPort(host); err == nil {
 			host = h
 		}
-		if host != "localhost" && host != "127.0.0.1" && host != "::1" && host != "[::1]" {
+		allowed := host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+		if d.publicHost != "" {
+			ip := net.ParseIP(host)
+			allowed = ip != nil && ip.Equal(net.ParseIP(d.publicHost))
+		}
+		if !allowed {
 			http.Error(w, "demo Host refused", http.StatusForbidden)
 			return
 		}
 		// Block web pages on other origins from controlling local child processes.
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			if origin := r.Header.Get("Origin"); origin != "" && origin != "http://"+r.Host {
+			scheme := "http"
+			if r.TLS != nil {
+				scheme = "https"
+			}
+			if origin := r.Header.Get("Origin"); origin != "" && origin != scheme+"://"+r.Host {
 				http.Error(w, "cross-origin demo action refused", http.StatusForbidden)
 				return
 			}
