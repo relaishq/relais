@@ -69,9 +69,10 @@ type stunObserver struct {
 	conn net.PacketConn
 	rec  *recorder
 
-	mu         sync.Mutex
-	unanswered map[[stunTransactionSize]byte]struct{}
-	inspect    func([]byte) // test-only raw caller observation; nil normally
+	mu          sync.Mutex
+	unanswered  map[[stunTransactionSize]byte]struct{}
+	inspectSend func([]byte) // test-only observation of caller ciphertext headers
+	inspect     func([]byte) // test-only raw caller observation; nil normally
 }
 
 // WriteTo sends a packet. A binding request counts as sent only once the
@@ -81,7 +82,15 @@ type stunObserver struct {
 func (o *stunObserver) WriteTo(p []byte, addr net.Addr) (int, error) {
 	txID, isRequest := stunMessage(p, stunBindingRequest)
 	if !isRequest {
-		return o.conn.WriteTo(p, addr)
+		n, err := o.conn.WriteTo(p, addr)
+		if err == nil {
+			o.mu.Lock()
+			if o.inspectSend != nil {
+				o.inspectSend(p[:n])
+			}
+			o.mu.Unlock()
+		}
+		return n, err
 	}
 
 	o.mu.Lock()

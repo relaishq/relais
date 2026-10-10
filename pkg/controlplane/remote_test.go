@@ -117,7 +117,7 @@ func TestRemoteRelayWireContract(t *testing.T) {
 }
 
 func TestRemoteErrorsAndTimeouts(t *testing.T) {
-	for _, sentinel := range []error{mediaworker.ErrUnknownSession, mediaworker.ErrUnsupportedOffer, mediaworker.ErrNotEstablished, mediaworker.ErrSequenceBudgetExhausted, sessionstore.ErrLeaseLost, relay.ErrBarrierTimeout, relay.ErrHeld, relay.ErrHoldExpired} {
+	for _, sentinel := range []error{mediaworker.ErrUnknownSession, mediaworker.ErrUnsupportedOffer, mediaworker.ErrClosed, mediaworker.ErrNotEstablished, mediaworker.ErrSequenceBudgetExhausted, mediaworker.ErrSRTCPIndexExhausted, sessionstore.ErrLeaseLost, relay.ErrBarrierTimeout, relay.ErrHeld, relay.ErrHoldExpired} {
 		t.Run(sentinel.Error(), func(t *testing.T) {
 			codes := make(map[string]error)
 			for k, v := range mediaworker.RemoteErrors {
@@ -129,6 +129,16 @@ func TestRemoteErrorsAndTimeouts(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { privateapi.Error(w, sentinel, codes) }))
 			defer server.Close()
 			require.ErrorIs(t, privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/", nil, nil, codes), sentinel)
+		})
+	}
+	for code, sentinel := range mediaworker.RemoteErrors {
+		t.Run("worker/"+code, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				privateapi.Error(w, sentinel, mediaworker.RemoteErrors)
+			}))
+			defer server.Close()
+			_, err := (&RemoteWorker{URL: server.URL, Client: server.Client()}).ResumeSession(nil, mediaworker.ResumeOptions{})
+			require.ErrorIs(t, err, sentinel)
 		})
 	}
 	candidate := sessionstore.Lease{SessionID: "pending", Epoch: 42}
@@ -169,4 +179,36 @@ func TestRemoteErrorsAndTimeouts(t *testing.T) {
 	_, err = worker.ResumeSession(nil, mediaworker.ResumeOptions{Context: ctx})
 	require.ErrorIs(t, err, context.Canceled)
 	require.EqualValues(t, 12, attempts.Load(), "mutations must not retry after a lost response")
+}
+
+func TestHTTPResumeExhaustionIsTerminal(t *testing.T) {
+	for _, sentinel := range []error{mediaworker.ErrSequenceBudgetExhausted, mediaworker.ErrSRTCPIndexExhausted} {
+		t.Run(sentinel.Error(), func(t *testing.T) {
+			ctx := context.Background()
+			p, _, _, _ := setup(t)
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				attempts.Add(1)
+				privateapi.Error(w, sentinel, mediaworker.RemoteErrors)
+			}))
+			defer server.Close()
+			p.workers["b"].worker = &RemoteWorker{URL: server.URL, Client: server.Client()}
+			id, _, err := p.Create(ctx, "offer", "a")
+			require.NoError(t, err)
+			lease, err := p.store.Get(ctx, id)
+			require.NoError(t, err)
+			require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
+			source := p.workers["a"]
+			source.dead = true
+			require.True(t, p.recoverWorker(ctx, source, time.Now()))
+			status, err := p.Status(ctx)
+			require.NoError(t, err)
+			require.Len(t, status.Takeovers, 1)
+			require.True(t, status.Takeovers[0].Lost)
+			require.Contains(t, status.Takeovers[0].Error, sentinel.Error())
+			require.NotContains(t, status.Takeovers[0].Error, "attempts exhausted")
+			require.EqualValues(t, 1, attempts.Load())
+			require.Empty(t, source.pending)
+		})
+	}
 }

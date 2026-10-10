@@ -13,6 +13,7 @@ var RemoteErrors = map[string]error{
 	"unknown_session": ErrUnknownSession, "unsupported_offer": ErrUnsupportedOffer,
 	"closed": ErrClosed, "not_established": ErrNotEstablished,
 	"sequence_budget": ErrSequenceBudgetExhausted, "session_exists": errSessionExists,
+	"srtcp_exhausted": ErrSRTCPIndexExhausted,
 }
 
 type CreateRequest struct {

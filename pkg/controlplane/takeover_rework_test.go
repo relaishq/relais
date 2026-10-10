@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"testing"
 	"time"
@@ -444,4 +445,309 @@ func TestUncertainExportLeaseMismatchReleasesHeldPackets(t *testing.T) {
 	require.Empty(t, source.pending)
 	require.Equal(t, []netip.AddrPort{current.Worker}, r.released)
 	require.Zero(t, p.lostCount)
+}
+
+type uncertainExportWorker struct{ *fakeWorker }
+
+func (*uncertainExportWorker) ExportSession(string) ([]byte, error) {
+	return nil, context.DeadlineExceeded
+}
+
+func TestUncertainExportHangupRecordsEnded(t *testing.T) {
+	ctx := context.Background()
+	p, a, _, _ := setup(t)
+	p.workers["a"].worker = &uncertainExportWorker{fakeWorker: a}
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	p.store = &recoveryErrorStore{Store: p.store, step: "transfer", fail: true}
+	_, err = p.Move(ctx, id, "b")
+	require.Error(t, err)
+	source := p.workers["a"]
+	require.Contains(t, source.pending, id)
+	require.NoError(t, p.End(ctx, id))
+	require.NotContains(t, p.calls, id)
+	p.takeover(ctx, source, source.pending[id].lease, time.Now())
+	status, err := p.Status(ctx)
+	require.NoError(t, err)
+	require.Empty(t, source.pending)
+	require.Len(t, status.Takeovers, 1)
+	require.Equal(t, "ended", status.Takeovers[0].Kind)
+	require.False(t, status.Takeovers[0].Lost)
+	require.Zero(t, status.LostCount)
+}
+
+func TestUncertainExportTerminalOutcomeReleasesHold(t *testing.T) {
+	for _, ended := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ended=%t", ended), func(t *testing.T) {
+			ctx := context.Background()
+			p, _, _, baseRelay := setup(t)
+			r := &holdReleaseRelay{fakeRelay: baseRelay}
+			p.relay = r
+			id, _, err := p.Create(ctx, "offer", "a")
+			require.NoError(t, err)
+			lease, err := p.store.Get(ctx, id)
+			require.NoError(t, err)
+			source := p.workers["a"]
+			source.pending = map[string]*takeoverState{id: {call: p.calls[id], lease: lease, held: true}}
+			if ended {
+				require.NoError(t, p.End(ctx, id))
+			} else {
+				require.NoError(t, p.store.Release(ctx, lease))
+			}
+			p.takeover(ctx, source, lease, time.Now())
+			require.Empty(t, source.pending)
+			require.Equal(t, []netip.AddrPort{{}}, r.released, "terminal recovery must release its hold immediately")
+			require.Equal(t, []string{id}, baseRelay.forgotten)
+		})
+	}
+}
+
+// Model a confirmed negative settlement: an uncertain candidate can no
+// longer commit after the end released the last authoritative lease.
+type endedCandidateStore struct{ sessionstore.Store }
+
+func (*endedCandidateStore) Settle(context.Context, sessionstore.Lease) (sessionstore.Lease, bool, error) {
+	return sessionstore.Lease{}, false, nil
+}
+
+type failedEndStore struct {
+	sessionstore.Store
+	getErr     error
+	releaseErr error
+}
+
+func (s *failedEndStore) Get(ctx context.Context, id string) (sessionstore.Lease, error) {
+	if s.getErr != nil {
+		err := s.getErr
+		s.getErr = nil
+		return sessionstore.Lease{}, err
+	}
+	return s.Store.Get(ctx, id)
+}
+
+func (s *failedEndStore) Release(ctx context.Context, lease sessionstore.Lease) error {
+	if s.releaseErr != nil {
+		return s.releaseErr
+	}
+	return s.Store.Release(ctx, lease)
+}
+
+type failedEndWorker struct {
+	*fakeWorker
+	err error
+}
+
+func (w *failedEndWorker) EndSession(string) error { return w.err }
+
+func TestFailedEndDoesNotHideMissingTakeoverSnapshot(t *testing.T) {
+	for _, failure := range []string{"get", "cancelled", "unknown-owner", "end-session", "release"} {
+		t.Run(failure, func(t *testing.T) {
+			ctx := context.Background()
+			p, a, b, _ := setup(t)
+			p.workers["b"].worker = &takeoverWorker{fakeWorker: b}
+			id, _, err := p.Create(ctx, "offer", "a")
+			require.NoError(t, err)
+			c := p.calls[id]
+			source := p.workers["a"]
+			endCtx := ctx
+			switch failure {
+			case "get":
+				p.store = &failedEndStore{Store: p.store, getErr: errors.New("transient Get timeout")}
+			case "cancelled":
+				var cancel context.CancelFunc
+				endCtx, cancel = context.WithCancel(ctx)
+				cancel()
+				p.store = &failedEndStore{Store: p.store, getErr: endCtx.Err()}
+			case "unknown-owner":
+				delete(p.workers, "a")
+			case "end-session":
+				source.worker = &failedEndWorker{fakeWorker: a, err: errors.New("EndSession unavailable")}
+			case "release":
+				source.worker = &failedEndWorker{fakeWorker: a, err: mediaworker.ErrUnknownSession}
+				p.store = &failedEndStore{Store: p.store, releaseErr: errors.New("Release unavailable")}
+			}
+			require.Error(t, p.End(endCtx, id))
+			p.workers["a"] = source
+			source.worker = a
+			source.dead = true
+			require.True(t, p.recoverWorker(ctx, source, time.Now()))
+			status, err := p.Status(ctx)
+			require.NoError(t, err)
+			require.EqualValues(t, 1, status.LostCount)
+			require.Len(t, status.Takeovers, 1)
+			require.Equal(t, "takeover", status.Takeovers[0].Kind)
+			require.True(t, status.Takeovers[0].Lost)
+			require.Contains(t, status.Takeovers[0].Error, "no takeover snapshot")
+			require.False(t, c.hungUp.Load(), "failed End must not mark a hang-up")
+		})
+	}
+}
+
+type gatedTakeoverSnapshot struct {
+	sessionstore.Store
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *gatedTakeoverSnapshot) GetState(ctx context.Context, id string) ([]byte, error) {
+	close(s.entered)
+	<-s.release
+	return s.Store.GetState(ctx, id)
+}
+
+func TestEndWaitingForTakeoverDoesNotHideSnapshotLoss(t *testing.T) {
+	ctx := context.Background()
+	p, _, b, _ := setup(t)
+	p.workers["b"].worker = &takeoverWorker{fakeWorker: b}
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	c := p.calls[id]
+	source := p.workers["a"]
+	source.dead = true
+	gate := &gatedTakeoverSnapshot{Store: p.store, entered: make(chan struct{}), release: make(chan struct{})}
+	p.store = gate
+	recovered := make(chan bool, 1)
+	go func() { recovered <- p.recoverWorker(ctx, source, time.Now()) }()
+	<-gate.entered // Recovery holds the call lock and has already read the lease.
+	done := make(chan error, 1)
+	go func() { done <- p.End(ctx, id) }()
+	// Sample while recovery is gated: waiting End cannot publish a hang-up.
+	marked := false
+	deadline := time.After(30 * time.Millisecond)
+wait:
+	for {
+		marked = marked || c.hungUp.Load()
+		select {
+		case <-deadline:
+			break wait
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	close(gate.release)
+	require.True(t, <-recovered)
+	require.ErrorIs(t, <-done, sessionstore.ErrNotFound)
+	status, err := p.Status(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, status.LostCount)
+	require.Len(t, status.Takeovers, 1)
+	require.Equal(t, "takeover", status.Takeovers[0].Kind)
+	require.True(t, status.Takeovers[0].Lost)
+	require.Contains(t, status.Takeovers[0].Error, "no takeover snapshot")
+	require.False(t, marked)
+	require.False(t, c.hungUp.Load())
+}
+
+func TestCompletedHangupDoesNotRelabelOtherTakeoverFailures(t *testing.T) {
+	for _, cause := range []error{
+		fmt.Errorf("controlplane: no takeover snapshot: %w", sessionstore.ErrNotFound),
+		errors.New("independent resume failure"),
+	} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			ctx := context.Background()
+			p, _, _, _ := setup(t)
+			id, _, err := p.Create(ctx, "offer", "a")
+			require.NoError(t, err)
+			lease, err := p.store.Get(ctx, id)
+			require.NoError(t, err)
+			c := p.calls[id]
+			require.NoError(t, p.End(ctx, id))
+			require.True(t, c.hungUp.Load())
+			res := MoveResult{Kind: "takeover", ID: id, Start: time.Now()}
+			c.mu.Lock()
+			p.completeTakeover(p.workers["a"], c, lease, &res, true, cause)
+			c.mu.Unlock()
+			require.Equal(t, "takeover", res.Kind)
+			require.True(t, res.Lost)
+			require.Equal(t, cause.Error(), res.Error)
+			require.EqualValues(t, 1, p.lostCount)
+		})
+	}
+}
+
+func TestHangupDuringPendingTakeoverRecordsEnded(t *testing.T) {
+	for _, step := range []string{"transfer", "route", "cancelled"} {
+		t.Run(step, func(t *testing.T) {
+			ctx := context.Background()
+			p, _, baseB, r := setup(t)
+			target := &cancelledResumeTarget{takeoverWorker: &takeoverWorker{fakeWorker: baseB}}
+			p.workers["b"].worker = target
+			id, _, err := p.Create(ctx, "offer", "a")
+			require.NoError(t, err)
+			lease, err := p.store.Get(ctx, id)
+			require.NoError(t, err)
+			require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
+			source := p.workers["a"]
+			source.dead = true
+			switch step {
+			case "transfer":
+				p.store = &recoveryErrorStore{Store: p.store, step: "transfer", fail: true}
+			case "route":
+				r.fail = true
+			}
+			require.False(t, p.recoverWorker(ctx, source, time.Now()))
+			require.Len(t, source.pending, 1)
+			// Waiting for coordination must not publish a completed hang-up.
+			c := source.pending[id].call
+			c.mu.Lock()
+			done := make(chan error, 1)
+			go func() { done <- p.End(ctx, id) }()
+			marked := false
+			for range 30 {
+				marked = marked || c.hungUp.Load()
+				time.Sleep(time.Millisecond)
+			}
+			c.mu.Unlock()
+			err = <-done
+			require.False(t, marked)
+			require.True(t, c.hungUp.Load())
+			if step == "transfer" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, mediaworker.ErrUnknownSession)
+			}
+			// Status/End can forget live metadata; the pending record retains the hang-up.
+			require.NotContains(t, p.calls, id)
+			require.True(t, p.recoverWorker(ctx, source, time.Now()))
+			status, err := p.Status(ctx)
+			require.NoError(t, err)
+			require.Empty(t, source.pending)
+			require.Empty(t, status.Calls)
+			require.Zero(t, status.LostCount)
+			require.Len(t, status.Takeovers, 1)
+			require.Equal(t, "ended", status.Takeovers[0].Kind)
+			require.False(t, status.Takeovers[0].Lost)
+			require.Contains(t, status.Takeovers[0].Error, "pending takeover lease vanished")
+			require.Equal(t, []string{id}, r.forgotten)
+		})
+	}
+}
+
+func TestHangupDuringRetainedPlannedMove(t *testing.T) {
+	p, _, _, r := setup(t)
+	ctx := context.Background()
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	hold := &trackedHoldRelay{fakeRelay: r}
+	p.relay = hold
+	p.store = &retainedMoveStore{Store: p.store}
+	_, err = p.Move(ctx, id, "b")
+	require.Error(t, err)
+	source := p.workers["a"]
+	require.True(t, source.pending[id].planned)
+	require.NotNil(t, source.pending[id].call)
+	require.Empty(t, hold.releases)
+	require.ErrorIs(t, p.End(ctx, id), mediaworker.ErrUnknownSession)
+	require.NotContains(t, p.calls, id)
+	// The store confirms the candidate cannot commit after hangup.
+	p.store = &endedCandidateStore{Store: p.store}
+	p.retryPlannedMoves(ctx, source, time.Now())
+	status, err := p.Status(ctx)
+	require.NoError(t, err)
+	require.Empty(t, source.pending)
+	require.Empty(t, status.Calls)
+	require.Empty(t, status.Takeovers)
+	require.Zero(t, status.LostCount)
+	require.Equal(t, []string{id}, r.forgotten)
+	require.Equal(t, []netip.AddrPort{{}}, hold.releases, "hangup frees retained relay hold")
 }

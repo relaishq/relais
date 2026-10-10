@@ -138,6 +138,14 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 		return nil, err
 	}
 
+	if a, v, ok := workerprobe.InitialSequences(w.localAddr); ok {
+		if audio.negotiated() {
+			audio.InitialSeq = a
+		}
+		if video.negotiated() {
+			video.InitialSeq = v
+		}
+	}
 	return sessionFromState(w, sessionState{
 		Version: sessionStateVersion,
 		ID:      id,
@@ -566,6 +574,8 @@ func (s *session) requestKeyframe(trigger string) {
 
 		return
 	}
+	// At the 2^31-packet SRTCP key lifetime, encryption fails: log and
+	// cease transmitting PLIs rather than wrap/reuse an index under these keys.
 	encrypted, err := s.srtpOut.EncryptRTCP(s.encryptBuf, plain, nil)
 	if err != nil {
 		s.log.Warnf("session %s: encrypt PLI: %v", s.id, err)

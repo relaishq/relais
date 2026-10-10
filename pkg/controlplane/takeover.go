@@ -191,6 +191,8 @@ func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected tim
 // takeoverState survives transient errors even after Transfer changed the owner.
 // Its fields are accessed under the call lock; pending membership uses p.mu.
 type takeoverState struct {
+	// Retain completed hang-ups even after End or Status removes live metadata.
+	call            *call
 	lease           sessionstore.Lease
 	candidate       *sessionstore.Lease
 	plannedState    []byte
@@ -228,6 +230,9 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 	defer cancel()
 	p.mu.Lock()
 	c := p.calls[listed.SessionID]
+	if pending := source.pending[listed.SessionID]; pending != nil && pending.call != nil {
+		c = pending.call
+	}
 	if c == nil {
 		// A live lease is authoritative even if a racing move lost metadata.
 		c = &call{id: listed.SessionID}
@@ -293,7 +298,17 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 					res.DetectedAt = time.Time{}
 					res.LastHeartbeat = time.Time{}
 				}
-				p.completeTakeover(source, c, pending.lease, &res, true,
+				lost := true
+				if c.hungUp.Load() {
+					// Only End's completed hang-up explains a vanished pending lease.
+					// Keep cleanup, including any retained relay hold.
+					p.lose(c, pending.lease, pending.planned || pending.held)
+					lost = false
+					if !pending.planned {
+						res.Kind = "ended"
+					}
+				}
+				p.completeTakeover(source, c, pending.lease, &res, lost,
 					fmt.Errorf("controlplane: pending takeover lease vanished: %w", err))
 			}
 		} else if err == nil {
@@ -314,7 +329,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		return
 	}
 	if pending == nil {
-		pending = &takeoverState{lease: lease, routed: lease.Worker,
+		pending = &takeoverState{call: c, lease: lease, routed: lease.Worker,
 			excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts}
 		source.pending[c.id] = pending
 	}
@@ -475,7 +490,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			pending.transientResume = true
 			return
 		}
-		if errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) {
+		if errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) || errors.Is(err, mediaworker.ErrSRTCPIndexExhausted) {
 			complete(true, err)
 			return
 		}
@@ -500,6 +515,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 // cancellation. Expired pending leases are terminal too, never silent exits.
 func (p *Plane) completeTakeover(source *registration, c *call, lease sessionstore.Lease,
 	res *MoveResult, lost bool, cause error) {
+	record := res.Kind == "takeover" || res.Kind == "ended"
 	if lost {
 		p.mu.Lock()
 		pending := source.pending[c.id]
@@ -515,7 +531,7 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 		res.Error = cause.Error()
 	}
 	p.mu.Lock()
-	if res.Kind == "takeover" {
+	if record {
 		p.recordTakeover(*res)
 	}
 	if lost {
