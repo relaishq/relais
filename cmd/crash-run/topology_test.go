@@ -30,7 +30,8 @@ func TestTopologyBindingsAndOptions(t *testing.T) {
 	require.NoError(t, validateTopologyOptions("netns", "lan", ""))
 	require.Error(t, validateTopologyOptions("netns", "lan", "127.0.0.1:16379"))
 	require.Error(t, validateTopologyOptions("wrong", "lan", ""))
-	require.Error(t, validateTopologyOptions("netns", "region", ""))
+	require.NoError(t, validateTopologyOptions("netns", "region", ""))
+	require.Error(t, validateTopologyOptions("loopback", "region", ""))
 }
 func TestDriverDoesNotInheritPrivateAllowList(t *testing.T) {
 	t.Setenv("RELAIS_PRIVATE_NETS", "10.0.0.0/8")

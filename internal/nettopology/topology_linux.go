@@ -32,7 +32,7 @@ func OpenManaged(ctx context.Context, logf func(string, ...any), register func(f
 	if os.Geteuid() != 0 {
 		return nil, errors.New("netns topology requires root on Linux: build first, then run sudo -E ./bin/crash-run -topology=netns -profile=lan")
 	}
-	for _, tool := range []string{"ip", "iptables", "sysctl"} {
+	for _, tool := range []string{"ip", "iptables", "sysctl", "tc"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			return nil, fmt.Errorf("netns topology requires %s: %w", tool, err)
 		}
@@ -68,7 +68,7 @@ func OpenManaged(ctx context.Context, logf func(string, ...any), register func(f
 	if !found {
 		return nil, errors.New("no unused private topology subnets found; use a Linux VM with no overlapping private routes")
 	}
-	logf("topology=%s datacentre=%s caller=%s profile=lan", t.Plan.ID, t.Plan.Datacentre, t.Plan.CallerNet)
+	logf("topology=%s datacentre=%s caller=%s", t.Plan.ID, t.Plan.Datacentre, t.Plan.CallerNet)
 	if register != nil {
 		if err := register(func() {
 			if err := t.Close(); err != nil {

@@ -47,8 +47,9 @@ PASS: 10/10 real-process SIGKILL trials mode=pli-cache-off
 
 The lines also include the existing cache attribution counts. Every trial
 prints `ISOLATION PASS` before starting the call. The LAN profile leaves links
-unshaped. `Plan.Links` identifies each veth endpoint for later `tc netem`
-profiles; other profile names are currently refused.
+unshaped. `Plan.Links` identifies each veth endpoint for `tc netem` profiles. Shaped
+profile acceptance requires `-scenario=move` or `-scenario=takeover`; see the
+network profile guide below.
 
 For a shorter development run, append `-runs=1 -after=3s`. This does not prove
 the 60-second consent requirement. To exercise kernel isolation and cleanup:
@@ -118,3 +119,9 @@ signaling and driver control requests use the driver's datacentre connection.
 Production would need a public signaling front; this run does not implement
 or prove that front. It proves media crossing the caller link, private API
 isolation, and the existing caller-observed crash thresholds.
+
+## Network profiles
+
+See [network profile acceptance](network-profiles.md) for shaped moves and
+buffered takeovers, per-link settings, verdict rules and nightly/manual CI.
+The existing unshaped LAN cache/PLI lane remains available.

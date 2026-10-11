@@ -26,6 +26,7 @@ func (r *Relay) metricSamples() []metrics.Sample {
 		metrics.Gauge("relais_relay_held_bytes", "Accounted bytes currently queued in move or replay holds.", s.HeldBytes),
 		metrics.Counter("relais_relay_hold_drops_total", "Caller packets dropped at move or replay hold limits.", s.HoldDrops),
 		metrics.Counter("relais_relay_hold_expiries_total", "Move or replay holds expired after the coordination deadline.", s.HoldTimeouts),
+		metrics.Counter("relais_relay_barrier_resends_total", "Repeated private drain markers sent before the original deadline.", s.BarrierResends),
 		metrics.Counter("relais_relay_barrier_timeouts_total", "Pre-export drain barriers that timed out.", s.BarrierTimeouts),
 		metrics.Counter("relais_relay_hold_send_failures_total", "Held packets that could not be forwarded on release.", s.HoldSendFailures),
 		metrics.Counter("relais_relay_route_writes_total", "Successful persisted route writes.", s.RouteWrites),

@@ -364,6 +364,7 @@ func TestBarrierResendsSameNonceUntilAcknowledged(t *testing.T) {
 	_, err := a.conn.WriteToUDPAddrPort(relayleg.Barrier(nonce, true), sys.relay.WorkerAddr())
 	require.NoError(t, err)
 	require.NoError(t, <-done)
+	require.GreaterOrEqual(t, sys.relay.Stats().BarrierResends, uint64(2))
 	a.expectNothing(t)
 	_, err = sys.relay.ReleaseSession(sessionA, a.addr())
 	require.NoError(t, err)

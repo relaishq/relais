@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 )
 
 type result struct {
+	ProfileRow                                       *profileRow `json:"profile_row,omitempty"`
 	BufferEvidence                                   *bufferEvidence
 	Metrics                                          []ProcessMetrics `json:"metrics,omitempty"`
 	Gap                                              time.Duration
@@ -66,7 +68,7 @@ func processEnv(key, addr, prefix string) []string {
 	}
 	return append(env, "RELAIS_SESSIONSTORE_KEY="+key, "RELAIS_REDIS_ADDR="+addr, "RELAIS_REDIS_PREFIX="+prefix)
 }
-func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, after, warmup time.Duration, verbose, terminate, cacheOff bool, topology *nettopology.Topology) (out result, trialErr error) {
+func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, after, warmup time.Duration, verbose, terminate, cacheOff bool, topology *nettopology.Topology, profile *profileTrialOptions) (out result, trialErr error) {
 	var processes []*clusterprocess.Child
 	defer func() {
 		for i := len(processes) - 1; i >= 0; i-- {
@@ -74,7 +76,16 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		}
 	}()
 	systemMetrics := newMetricsRun()
-	defer func() { out.Metrics = systemMetrics.finish(dir) }()
+	defer func() {
+		out.Metrics = systemMetrics.finish(dir)
+		if out.ProfileRow != nil {
+			for _, m := range out.Metrics {
+				if m.Process == "relay" {
+					out.ProfileRow.BarrierResends = uint64(m.Values["relais_relay_barrier_resends_total"])
+				}
+			}
+		}
+	}()
 	start := func(name string, args ...string) (*clusterprocess.Child, clusterprocess.Ready, error) {
 		childEnv := env
 		if name == "relay" {
@@ -95,7 +106,11 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		}
 		return c, r, err
 	}
-	_, relayReady, err := start("relay", filepath.Join(bin, "relais-relay"), "-buffer-off", "-media", roleBind(topology, "relay", true), "-leg", roleBind(topology, "relay", false), "-http", roleBind(topology, "relay", false))
+	relayArgs := []string{filepath.Join(bin, "relais-relay"), "-media", roleBind(topology, "relay", true), "-leg", roleBind(topology, "relay", false), "-http", roleBind(topology, "relay", false)}
+	if profile == nil {
+		relayArgs = append(relayArgs, "-buffer-off")
+	}
+	_, relayReady, err := start("relay", relayArgs...)
 	if err != nil {
 		return result{}, err
 	}
@@ -105,6 +120,12 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	}
 	controlURL := "http://" + controlAddr
 	workerPIDs := map[string]*clusterprocess.Child{}
+	var faults []*uncertainProxy
+	defer func() {
+		for _, f := range faults {
+			f.Close()
+		}
+	}()
 	privateAPIs := []string{strings.TrimPrefix(relayReady.HTTP, "http://"), controlAddr}
 	controlArgs := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", relayReady.HTTP}
 	for _, name := range []string{"0", "1"} {
@@ -118,7 +139,16 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		}
 		workerPIDs[name] = c
 		privateAPIs = append(privateAPIs, strings.TrimPrefix(r.HTTP, "http://"))
-		controlArgs = append(controlArgs, "-worker", name+"="+r.HTTP)
+		endpoint := r.HTTP
+		if profile != nil && profile.Name == "lossy-dc" {
+			proxy, err := newUncertainProxy(topology.Plan.Host.String(), endpoint)
+			if err != nil {
+				return result{}, err
+			}
+			faults = append(faults, proxy)
+			endpoint = proxy.URL
+		}
+		controlArgs = append(controlArgs, "-worker", name+"="+endpoint)
 	}
 	_, _, err = start("control", controlArgs...)
 	if err != nil {
@@ -145,7 +175,12 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		return result{}, err
 	}
 	defer func() { _ = h.Close() }()
-	call, err := h.Dial(ctx, callharness.CallOptions{Video: true, Worker: -1})
+	options := callharness.CallOptions{Video: true, Worker: -1}
+	if profile != nil {
+		p, _ := nettopology.ParseProfile(profile.Name)
+		options.Freshness.AbsoluteLatencyCeiling = p.FreshnessCeiling
+	}
+	call, err := h.Dial(ctx, options)
 	if err != nil {
 		return result{}, err
 	}
@@ -153,7 +188,11 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	mediaCtx, stopMedia := context.WithCancel(ctx)
 	defer stopMedia()
 	sent := make(chan error, 1)
-	go func() { sent <- call.SendMedia(mediaCtx, after+15*time.Second) }()
+	mediaDuration := after + 15*time.Second
+	if profile != nil {
+		mediaDuration = after + 40*time.Second
+	}
+	go func() { sent <- call.SendMedia(mediaCtx, mediaDuration) }()
 	senderJoined := false
 	defer func() {
 		stopMedia()
@@ -181,60 +220,114 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	if worker == nil {
 		return result{}, fmt.Errorf("unknown owning worker %q", owner)
 	}
+	if profile != nil && profile.Name == "lossy-dc" {
+		// The uncertain-reply probe is separate from the acceptance event. A
+		// committed resume with no usable reply must settle or roll back safely;
+		// it need not claim a successful operator move. Keep its caller record.
+		target := 1
+		if owner == "1" {
+			target = 0
+		}
+		faults[target].Arm()
+		probeErr := profileMove(ctx, call, owner)
+		fmt.Printf("UNCERTAIN_PROBE operator_error=%v\n", probeErr)
+		select {
+		case <-ctx.Done():
+			return result{}, ctx.Err()
+		case <-time.After(6 * time.Second):
+		}
+		status, err = h.Status(ctx)
+		if err != nil || len(status.Calls) != 1 {
+			return result{}, fmt.Errorf("uncertainty probe lost call: %v", err)
+		}
+		owner = status.Calls[0].Owner
+		worker = workerPIDs[owner]
+	}
+	if profile != nil && profile.Name == "lossy-dc" {
+		// Exercise barrier loss separately from profile timing samples. Forcing
+		// a 75ms resend into every measured move would bias the named-profile p95.
+		// Keep this probe and let its measurement settle before the baseline.
+		if err := profileBarrierMove(ctx, topology, call, owner); err != nil {
+			return result{}, err
+		}
+		select {
+		case <-ctx.Done():
+			return result{}, ctx.Err()
+		case <-time.After(6 * time.Second):
+		}
+		status, err = h.Status(ctx)
+		if err != nil || len(status.Calls) != 1 {
+			return result{}, fmt.Errorf("post-probe status: %v", err)
+		}
+		owner = status.Calls[0].Owner
+		worker = workerPIDs[owner]
+	}
 	systemMetrics.sampleBeforeFault(ctx)
 	killed := time.Now()
-	signal := syscall.SIGKILL
-	label := "SIGKILL"
-	if terminate {
-		signal, label = syscall.SIGTERM, "SIGTERM"
-	}
-	if err := worker.SignalGroup(signal); err != nil {
-		return result{}, err
-	}
-	if !terminate {
-		h.RecordProcessKill(owner, killed)
-	}
-	fmt.Printf("%s worker=%s pid=%d session=%s relay=%s\n", label, owner, worker.PID(), call.SessionID(), relayReady.Media)
-	// Wait for a terminal takeover, then observe at least 60 s of consent in
-	// the default run. The short developer mode cannot claim that acceptance.
-	deadline := time.NewTimer(3 * time.Second)
-	defer deadline.Stop()
-	tick := time.NewTicker(20 * time.Millisecond)
-	defer tick.Stop()
-	// SIGTERM exits this wait on the first owner change, which may precede
-	// move completion. The later worker-exit and media-freshness checks catch
-	// a failed drain or rollback; this poll alone does not prove success.
-	for len(status.Takeovers) == 0 && (!terminate || len(status.Calls) != 1 || status.Calls[0].Owner == owner) {
-		select {
-		case <-ctx.Done():
-			return result{}, ctx.Err()
-		case <-deadline.C:
-			return result{}, errors.New("takeover did not complete within 3 s")
-		case <-tick.C:
-			status, err = h.Status(ctx)
-			if err != nil {
-				return result{}, err
-			}
-		}
-	}
-	if terminate {
-		if len(status.Takeovers) != 0 {
-			return result{}, errors.New("SIGTERM must drain through a planned move, not crash recovery")
-		}
-		select {
-		case <-ctx.Done():
-			return result{}, ctx.Err()
-		case <-worker.Done():
-			if worker.Err() != nil {
-				return result{}, fmt.Errorf("SIGTERM worker exit: %w", worker.Err())
-			}
-		case <-time.After(6 * time.Second):
-			return result{}, errors.New("SIGTERM worker did not finish drain and exit")
+	var profileActionErr error
+	if profile != nil && profile.Scenario == "move" {
+		err = profileMove(ctx, call, owner)
+		// Keep the caller record even on a definitive/uncertain move error. The
+		// report judges it; stopping here would discard the failure's media evidence.
+		if err != nil {
+			profileActionErr = err
+			fmt.Printf("PROFILE_MOVE_ERROR %v\n", err)
 		}
 	} else {
-		takeover := status.Takeovers[0]
-		if takeover.Lost || takeover.Error != "" {
-			return result{}, fmt.Errorf("takeover lost=%t: %s", takeover.Lost, takeover.Error)
+		signal := syscall.SIGKILL
+		label := "SIGKILL"
+		if terminate {
+			signal, label = syscall.SIGTERM, "SIGTERM"
+		}
+		if err := worker.SignalGroup(signal); err != nil {
+			return result{}, err
+		}
+		if !terminate {
+			h.RecordProcessKill(owner, killed)
+		}
+		fmt.Printf("%s worker=%s pid=%d session=%s relay=%s\n", label, owner, worker.PID(), call.SessionID(), relayReady.Media)
+		priorTakeovers := len(status.Takeovers)
+		// Wait for a terminal takeover, then observe at least 60 s of consent in
+		// the default run. The short developer mode cannot claim that acceptance.
+		deadline := time.NewTimer(3 * time.Second)
+		defer deadline.Stop()
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		// SIGTERM exits this wait on the first owner change, which may precede
+		// move completion. The later worker-exit and media-freshness checks catch
+		// a failed drain or rollback; this poll alone does not prove success.
+		for len(status.Takeovers) == priorTakeovers && (!terminate || len(status.Calls) != 1 || status.Calls[0].Owner == owner) {
+			select {
+			case <-ctx.Done():
+				return result{}, ctx.Err()
+			case <-deadline.C:
+				return result{}, errors.New("takeover did not complete within 3 s")
+			case <-tick.C:
+				status, err = h.Status(ctx)
+				if err != nil {
+					return result{}, err
+				}
+			}
+		}
+		if terminate {
+			if len(status.Takeovers) != 0 {
+				return result{}, errors.New("SIGTERM must drain through a planned move, not crash recovery")
+			}
+			select {
+			case <-ctx.Done():
+				return result{}, ctx.Err()
+			case <-worker.Done():
+				if worker.Err() != nil {
+					return result{}, fmt.Errorf("SIGTERM worker exit: %w", worker.Err())
+				}
+			case <-time.After(6 * time.Second):
+				return result{}, errors.New("SIGTERM worker did not finish drain and exit")
+			}
+		} else {
+			takeover := status.Takeovers[len(status.Takeovers)-1]
+			if takeover.Lost || takeover.Error != "" {
+				return result{}, fmt.Errorf("takeover lost=%t: %s", takeover.Lost, takeover.Error)
+			}
 		}
 	}
 	select {
@@ -259,6 +352,24 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	}
 	if verbose {
 		fmt.Println(report.Summary())
+	}
+	if profile != nil {
+		row := measureProfile(report, relayReady.Media, *profile, after)
+		if profileActionErr != nil {
+			row.Integrity.Failed = true
+			row.Integrity.Reasons = append(row.Integrity.Reasons, "profile action error: "+profileActionErr.Error())
+		}
+		for _, f := range faults {
+			row.UncertainOutcomes += f.Count()
+		}
+		encoded, err := json.Marshal(report)
+		if err != nil {
+			return result{}, err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "caller-report.json"), encoded, 0600); err != nil {
+			return result{}, err
+		}
+		return result{ProfileRow: &row, Measurement: row.Measurement}, nil
 	}
 	if terminate {
 		return measureDrain(report, relayReady.Media, observedUntil), nil
@@ -315,12 +426,20 @@ func run() (err error) {
 	terminate := flag.Bool("sigterm", false, "verify graceful owning-worker drain instead of crash takeover")
 	relayStandby := flag.Bool("relay-standby", false, "fenced standby takeover after SIGKILL and SIGSTOP, ten runs each")
 	topologyOption := flag.String("topology", "loopback", "loopback or netns (Linux/root only)")
-	profile := flag.String("profile", "lan", "network profile (lan: no link shaping)")
+	profile := flag.String("profile", "lan", "lan, region, far-caller or lossy-dc (shaping requires netns)")
+	scenario := flag.String("scenario", "", "profile acceptance: move or takeover; requires netns, enables buffer")
 	relayRestart := flag.Bool("relay-restart", false, "SIGKILL and restart the relay mid-call; workers and caller stay alive")
 	restoreOff := flag.Bool("route-restore-off", false, "disable route restore in relay-restart baseline trials")
 	compareRestore := flag.Bool("compare-restore", true, "compare restore on/off in relay-restart mode")
 	flag.DurationVar(&metricsInterval, "metrics-interval", time.Second, "private metrics scrape interval; 0 disables periodic scraping (pre-fault and final samples remain)")
 	flag.Parse()
+	if *scenario != "" {
+		if err := validateProfileScenario(*topologyOption, *scenario, *bufferOn || *compareBuffer || *replayLoss || *relayRestart || *relayStandby || *terminate || *cacheOff || *restoreOff); err != nil {
+			return err
+		}
+	} else if *profile != "lan" {
+		return errors.New("shaped profile acceptance requires -scenario=move or takeover")
+	}
 	if *replayLoss {
 		*bufferOn = true
 	}
@@ -379,6 +498,21 @@ func run() (err error) {
 			err = errors.Join(err, topology.Close())
 		}
 	}()
+	var settings []nettopology.LinkSetting
+	if topology != nil && *scenario != "" {
+		settings, err = topology.ApplyProfile(ctx, *profile)
+		if err != nil {
+			return err
+		}
+		encoded, err := json.MarshalIndent(settings, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dir, "network-settings.json"), encoded, 0600); err != nil {
+			return err
+		}
+		fmt.Printf("PROFILE_SETTINGS profile=%s %s\n", *profile, encoded)
+	}
 	var bufferCaller string
 	if *bufferOn || *compareBuffer {
 		bufferCaller, err = buildBufferCaller(ctx, dir)
@@ -434,6 +568,9 @@ func run() (err error) {
 	}
 	if *after < 60*time.Second {
 		fmt.Println("DEVELOPMENT RUN: 60 s post-takeover consent acceptance NOT-RUN")
+	}
+	if *scenario != "" {
+		return runProfileTrials(ctx, manager, topology, bin, dir, hex.EncodeToString(key[:]), addr, password, profileTrialOptions{Name: *profile, Scenario: *scenario}, settings, *runs, *after, *verbose)
 	}
 	modes := []bool{*cacheOff}
 	if *compare && !*terminate && !*cacheOff {
@@ -510,7 +647,7 @@ func run() (err error) {
 				warmup = 2250*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
 				r, err = relayRestartTrial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, off)
 			} else {
-				r, err = trial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, *terminate, off, topology)
+				r, err = trial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, *terminate, off, topology, nil)
 			}
 			stop()
 			if err != nil {

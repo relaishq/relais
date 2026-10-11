@@ -109,6 +109,7 @@ func (r *Relay) HoldSession(ctx context.Context, id string, from netip.AddrPort)
 			// Resend the same nonce only in the drain phase. Duplicate ACKs are
 			// harmless; the original deadline is never extended.
 			if r.holds[id] == h && !h.acknowledged {
+				r.barrierResends.Add(1)
 				_, _ = r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.barrier, false), from)
 			}
 			r.forwardMu.Unlock()

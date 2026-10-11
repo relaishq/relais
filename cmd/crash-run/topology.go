@@ -14,8 +14,11 @@ func validateTopologyOptions(topology, profile, redis string) error {
 	if topology != "loopback" && topology != "netns" {
 		return errors.New("topology must be loopback or netns")
 	}
-	if profile != "lan" {
-		return errors.New("only the unshaped lan profile is supported")
+	if _, err := nettopology.ParseProfile(profile); err != nil {
+		return err
+	}
+	if topology == "loopback" && profile != "lan" {
+		return errors.New("shaped profiles require the netns topology")
 	}
 	if topology == "netns" && redis != "" {
 		return errors.New("netns topology starts its own namespaced store; omit -redis and RELAIS_REDIS_ADDR")
