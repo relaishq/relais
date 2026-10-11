@@ -24,19 +24,23 @@ type gapBaseline struct {
 	Median, P95 time.Duration
 }
 type profileRow struct {
-	ProbeEvents                  []callharness.MoveReport `json:"probe_events,omitempty"`
-	Verdict                      string
-	Reasons                      []string
-	Trial                        int
-	AudioGap, VideoGap           time.Duration
-	AudioBaseline, VideoBaseline gapBaseline
-	Measurement                  callharness.EventMeasurement
-	Integrity                    callharness.MetricVerdict
-	VideoDecode                  callharness.FullDecode
-	BarrierResends               uint64
-	UncertainOutcomes            int
+	// Raw per-row counts are in Measurement.ContentLoss. These comparisons
+	// name the pooled run decision, never a separate per-row statistical test.
+	AudioContentLoss, VideoContentLoss profileLossComparison
+	ProbeEvents                        []callharness.MoveReport `json:"probe_events,omitempty"`
+	Verdict                            string
+	Reasons                            []string
+	Trial                              int
+	AudioGap, VideoGap                 time.Duration
+	AudioBaseline, VideoBaseline       gapBaseline
+	Measurement                        callharness.EventMeasurement
+	Integrity                          callharness.MetricVerdict
+	VideoDecode                        callharness.FullDecode
+	BarrierResends                     uint64
+	UncertainOutcomes                  int
 }
 type profileReport struct {
+	AudioContentLoss, VideoContentLoss                               profileLossComparison
 	Profile, Scenario, Verdict                                       string
 	FaultPolicy                                                      string
 	DurationUnit                                                     string
@@ -186,6 +190,15 @@ func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettop
 	if len(rows) < out.MinimumTrials {
 		reason(false, fmt.Sprintf("too few trials: %d, need %d", len(rows), out.MinimumTrials))
 	}
+	callerLoss := p.CallerLoss > 0
+	for _, track := range []struct {
+		video bool
+		out   *profileLossComparison
+	}{{false, &out.AudioContentLoss}, {true, &out.VideoContentLoss}} {
+		event, baseline, windows := poolContentLoss(rows, track.video)
+		*track.out = judgeContentLoss(event, baseline, windows, callerLoss)
+		track.out.GatesAcceptance = options.Scenario == "takeover"
+	}
 	var audio, video, ab, vb []time.Duration
 	for i, row := range rows {
 		reasonStart := len(out.Reasons)
@@ -234,16 +247,34 @@ func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettop
 				rowReason(true, prefix+"pause reaches 2s ceiling")
 			}
 			for _, loss := range []struct {
-				kind    string
-				verdict callharness.MetricVerdict
-			}{{"audio", m.AudioLoss}, {"video", m.VideoLoss}} {
-				if loss.verdict.Failed {
-					rowReason(true, prefix+loss.kind+" content lost: "+loss.verdict.Summary())
-				} else if !loss.verdict.Trusted {
+				kind       string
+				verdict    callharness.MetricVerdict
+				comparison profileLossComparison
+			}{{"audio", m.AudioLoss, out.AudioContentLoss}, {"video", m.VideoLoss, out.VideoContentLoss}} {
+				if !loss.verdict.Trusted {
 					rowReason(false, prefix+loss.kind+" loss inconclusive: "+loss.verdict.Summary())
 				}
+				if !callerLoss && loss.verdict.Failed {
+					rowReason(true, prefix+loss.kind+" content lost: "+loss.verdict.Summary())
+				}
+				if callerLoss && loss.verdict.Failed {
+					// Only the ordinary missing-content verdict is reattributed.
+					// Identity corruption and other known failures must still fail.
+					ordinary := "sent audio never returned"
+					if loss.kind == "video" {
+						ordinary = "sent video never returned complete"
+					}
+					for _, why := range loss.verdict.Reasons {
+						if why != ordinary {
+							rowReason(true, prefix+loss.kind+" content failure: "+why)
+						}
+					}
+				}
+				if loss.comparison.Verdict != "pass" {
+					rowReason(loss.comparison.Verdict == "fail", prefix+loss.kind+" pooled content loss: "+strings.Join(loss.comparison.Reasons, "; "))
+				}
 			}
-			if m.AudioLoss.Trusted && m.LostAudio > 0 || m.VideoLoss.Trusted && m.LostVideoFrames > 0 {
+			if !callerLoss && (m.AudioLoss.Trusted && m.LostAudio > 0 || m.VideoLoss.Trusted && m.LostVideoFrames > 0) {
 				rowReason(true, prefix+"nonzero caller content loss")
 			}
 		}
@@ -255,6 +286,7 @@ func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettop
 		} else if rowUnknown {
 			row.Verdict = "inconclusive"
 		}
+		row.AudioContentLoss, row.VideoContentLoss = out.AudioContentLoss, out.VideoContentLoss
 		row.Reasons = append([]string(nil), out.Reasons[reasonStart:]...)
 		out.Rows[i] = row
 	}

@@ -60,15 +60,17 @@ against a separate LAN run or the old 416ms phase-1 median.
 
 Moves judge audio and video independently. Their nearest-rank p95 must be
 at most the pooled baseline p95 + 50ms and at most **150ms**, inclusive.
-Takeovers require each track's pause strictly below **2s**, and trusted zero
-audio/video content loss in #32's event window. Network loss is still loss:
-the report does not subtract an estimated loss rate to manufacture success.
+Takeovers require each track's pause strictly below **2s**. On `lan` and
+`lossy-dc`, whose caller links are lossless, they require trusted **zero lost
+content** in #32's event window. On `region` and `far-caller`, they require
+**no loss beyond the network's own**, using the same-run comparison below.
+The raw loss remains visible; the report does not relabel it as zero.
 Both require zero decryption failures, continuous connection, one offer/answer,
 no reconnect or renegotiation, and the 60-second consent observation.
 Whole-call ffmpeg decode findings remain explicit diagnostics because these
 profiles deliberately lose packets. Invalid payload identities still fail,
 and unavailable decoding makes the row inconclusive. Takeover content loss
-still gates independently through the caller event window.
+still gates independently through the caller event window and its profile policy.
 
 Ten trials are required. Each track needs at least ten baseline intervals.
 A gap baseline p95-minus-median above 50ms makes the row inconclusive. This
@@ -84,6 +86,61 @@ judgment belongs to the full run, not each individual trial. The run reports `pa
 fail and inconclusive exit nonzero. A short developer run cannot pass the
 60-second consent gate. Too few trials, noisy baselines, untrusted loss,
 unavailable decoding or missing fault evidence are never silently passed.
+
+### Content loss on lossy caller links
+
+Audio has no retransmission, so losing a caller-link packet can lose an audio
+unit even without a takeover. Video counts identified frames that never
+returned complete, independent of decoding. Relay totals and netem drop
+counters mix packets, media kinds, retransmissions and control traffic; they
+cannot cheaply attribute these content units to a direction and event window.
+This policy uses a statistical comparison, not exact per-unit attribution.
+
+The caller retains `Measurement.ContentLoss.Event` and up to three
+`Measurement.ContentLoss.Baselines` per row. Each baseline window has exactly
+the event window's length and comes from the same call, profile and load.
+Baseline windows do not overlap. The newest ends 500ms before the event
+window begins; earlier events and their settling periods, startup, and expired
+history are excluded. Counts include only identified successful writes.
+Audio counts units, including a short final Opus unit, rather than dividing
+lost duration by 20ms. Video counts sent frames, not packets. Duplicates and
+reordering count once. Missing content uses the same observation horizon as
+#32's raw loss; late complete returns are not lost content.
+
+Pool the ten event windows and their baseline windows separately for audio
+and video. Each call must supply a baseline. Each track needs at least 100
+baseline sent units, at least as many baseline sent units as event sent units,
+and at least ten baseline windows. Missing or untrusted counts, insufficient
+coverage, or an untrusted caller loss verdict make that comparison
+**inconclusive**. Other known failures still win.
+
+For caller-link loss, calculate the measured baseline rate `baseline lost /
+baseline sent` and the expected event loss `event sent × baseline rate`.
+Use a one-sided [exact Clopper-Pearson upper rate](https://www.itl.nist.gov/div898/software/dataplot/refman1/auxillar/propconf.htm),
+then a binomial predictive upper count for the event denominator. Each tail
+uses alpha **0.0125** (98.75%): two tails per track, four in total, share a 5%
+error budget. The combined one-sided confidence is at least **95%** under
+independent, stationary Bernoulli content loss. Baseline uncertainty is
+included; even a zero-loss baseline has a positive upper rate. This is a
+sampling bound, not a guarantee that every small additional loss is detectable.
+
+Event loss **above** the upper count fails; loss **at or below** it passes the
+comparison. The run still needs every other takeover criterion to pass. Raw
+per-row sent/lost counts and baseline windows stay in the measurement.
+`AudioContentLoss` and `VideoContentLoss` in each row and summary report the
+pooled event and baseline counts, baseline rate and upper rate, expected
+count, upper count, confidence, method, verdict and reasons. Their scope is
+explicitly `pooled run`; rows do not run separate statistical tests.
+`BoundAvailable` distinguishes an unavailable bound from a zero bound, and
+`GatesAcceptance` distinguishes the takeover gate from move diagnostics. Thus
+`lan` and `lossy-dc` prove exact zero-loss takeover, while `region` and
+`far-caller` prove no loss beyond the network's own at the stated confidence
+and observed sample size.
+
+Moves retain their existing per-track gap, integrity and connection gates;
+they do not currently gate on raw content loss. They record the same raw
+windows and comparison, so caller-link loss cannot introduce a separate
+zero-loss requirement for a short move window.
 
 ### Lossy DC fault evidence
 

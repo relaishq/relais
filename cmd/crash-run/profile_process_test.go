@@ -57,6 +57,17 @@ func TestProfileProcessLoopbackProbe(t *testing.T) {
 			require.Equal(t, []string{"60s consent observation NOT-RUN"}, r.ProfileRow.Integrity.Reasons)
 			require.GreaterOrEqual(t, r.ProfileRow.AudioBaseline.Samples, 10)
 			require.GreaterOrEqual(t, r.ProfileRow.VideoBaseline.Samples, 10)
+			loss := r.ProfileRow.Measurement.ContentLoss
+			require.True(t, loss.Event.Audio.Trusted)
+			require.True(t, loss.Event.Video.Trusted)
+			require.Positive(t, loss.Event.Audio.Sent)
+			require.Positive(t, loss.Event.Video.Sent)
+			require.NotEmpty(t, loss.Baselines, "real driver must supply no-event loss windows")
+			for _, w := range loss.Baselines {
+				require.Equal(t, loss.Event.End-loss.Event.Start, w.End-w.Start)
+				require.True(t, w.Audio.Trusted)
+				require.True(t, w.Video.Trusted)
+			}
 			if scenario == "takeover" {
 				require.True(t, r.Measurement.AudioLoss.Trusted, r.Measurement.Summary())
 				require.True(t, r.Measurement.VideoLoss.Trusted, r.Measurement.Summary())

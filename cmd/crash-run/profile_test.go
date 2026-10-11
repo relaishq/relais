@@ -25,6 +25,13 @@ func goodProfileRows() []profileRow {
 		}
 		m := callharness.EventMeasurement{SettleWindow: 500 * time.Millisecond, AudioLoss: callharness.MetricVerdict{Trusted: true}, VideoLoss: callharness.MetricVerdict{Trusted: true}}
 		m.Audio.BaselineSamples, m.Video.BaselineSamples = 20, 20
+		m.ContentLoss.Event = callharness.ContentLossWindow{Start: 5 * time.Second, End: 6 * time.Second, Audio: callharness.ContentLossCounts{Sent: 50, Trusted: true}, Video: callharness.ContentLossCounts{Sent: 30, Trusted: true}}
+		for j := 0; j < 3; j++ {
+			w := m.ContentLoss.Event
+			w.End = 4500*time.Millisecond - time.Duration(j)*time.Second
+			w.Start = w.End - time.Second
+			m.ContentLoss.Baselines = append(m.ContentLoss.Baselines, w)
+		}
 		rows = append(rows, profileRow{Trial: i + 1, AudioGap: 60 * time.Millisecond, VideoGap: 65 * time.Millisecond, AudioBaseline: b, VideoBaseline: b, Measurement: m, Integrity: callharness.MetricVerdict{Trusted: true}})
 	}
 	return rows
@@ -82,7 +89,7 @@ func TestProfileInconclusiveCannotHideKnownFailure(t *testing.T) {
 	require.Equal(t, "fail", judgeProfile(options, rows, nil).Verdict)
 	rows = goodProfileRows()
 	rows[0].Measurement.LostAudio = time.Millisecond
-	require.Equal(t, "fail", judgeProfile(options, rows, nil).Verdict)
+	require.Equal(t, "fail", judgeProfile(profileTrialOptions{Name: "lan", Scenario: "takeover"}, rows, nil).Verdict)
 	rows = goodProfileRows()
 	rows[0].AudioBaseline.P95 = 80 * time.Millisecond
 	require.Equal(t, "inconclusive", judgeProfile(options, rows, nil).Verdict)
