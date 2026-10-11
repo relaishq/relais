@@ -3,6 +3,7 @@ package relay
 import (
 	"net/http"
 	"net/netip"
+	"time"
 
 	"github.com/relais/internal/privateapi"
 )
@@ -23,11 +24,25 @@ type WorkerRequest struct {
 type ReleaseReply struct {
 	Packets int `json:"packets"`
 }
+
+// ContinuityStatus records acquisition, fencing and socket startup for this
+// instance. Durations are measured in the relay process, not inferred by callers.
+type ContinuityStatus struct {
+	Epoch           uint64        `json:"epoch"`
+	ClaimAt         time.Time     `json:"claim_at"`
+	Wait            time.Duration `json:"wait_ns"`
+	Fence           time.Duration `json:"fence_ns"`
+	Activate        time.Duration `json:"activate_ns"`
+	BindRestore     time.Duration `json:"bind_restore_ns"`
+	FencingFailures uint64        `json:"fencing_failures"`
+	StoreFailures   uint64        `json:"store_failures"`
+}
 type RelayStatus struct {
-	Instance string         `json:"instance"`
-	Public   netip.AddrPort `json:"public"`
-	Private  netip.AddrPort `json:"private"`
-	Stats    Stats          `json:"stats"`
+	Continuity *ContinuityStatus `json:"continuity,omitempty"`
+	Instance   string            `json:"instance"`
+	Public     netip.AddrPort    `json:"public"`
+	Private    netip.AddrPort    `json:"private"`
+	Stats      Stats             `json:"stats"`
 }
 
 // PrivateHandler controls a relay on a trusted loopback HTTP listener.
@@ -100,7 +115,7 @@ func (r *Relay) PrivateHandler() http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, _ *http.Request) {
-		privateapi.Write(w, RelayStatus{Instance: r.instance, Public: r.PublicAddr(), Private: r.WorkerAddr(), Stats: r.Stats()})
+		privateapi.Write(w, RelayStatus{Continuity: r.cfg.Continuity, Instance: r.instance, Public: r.PublicAddr(), Private: r.WorkerAddr(), Stats: r.Stats()})
 	})
 	return mux
 }

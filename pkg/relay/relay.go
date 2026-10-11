@@ -131,6 +131,13 @@ const (
 
 // Config configures a relay.
 type Config struct {
+	// InstanceID links private status to the fenced lease holder. Empty creates
+	// a fresh token for embedded relays.
+	InstanceID string
+	// ForwardingAllowed is a nonblocking tenure check on every packet send.
+	ForwardingAllowed func() bool
+	Continuity        *ContinuityStatus
+
 	// Routes enables asynchronous confirmed-route persistence and eager restore.
 	// Nil preserves the address-only relay API for embedders.
 	Routes sessionstore.Routes
@@ -219,6 +226,9 @@ type Config struct {
 
 // Stats counts what the relay has done since it started.
 type Stats struct {
+	SelfFences uint64
+	Workers    int
+
 	RoutesRestored       uint64
 	RoutesRestoreSkipped uint64
 	RoutesRestoreFailed  uint64
@@ -277,16 +287,19 @@ type Stats struct {
 
 // Relay is a running relay.
 type Relay struct {
-	instance    string
-	cfg         Config
-	log         logging.LeveledLogger
-	public      *net.UDPConn
-	workers     *net.UDPConn
-	publicAddr  netip.AddrPort
-	workerAddr  netip.AddrPort
-	flows       *flowTable
-	lookups     *ownerLookups
-	persistence *routeWrites
+	instance        string
+	workerForwardMu sync.Mutex
+	stopOnce        sync.Once
+	selfFences      atomic.Uint64
+	cfg             Config
+	log             logging.LeveledLogger
+	public          *net.UDPConn
+	workers         *net.UDPConn
+	publicAddr      netip.AddrPort
+	workerAddr      netip.AddrPort
+	flows           *flowTable
+	lookups         *ownerLookups
+	persistence     *routeWrites
 
 	// routeMu serializes generation validation with route application only.
 	routeMu sync.Mutex
@@ -349,7 +362,7 @@ func New(cfg Config) (*Relay, error) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &Relay{
-		instance:   rand.Text(),
+		instance:   cfg.InstanceID,
 		cfg:        cfg,
 		log:        cfg.LoggerFactory.NewLogger("relay"),
 		public:     public,
@@ -367,6 +380,9 @@ func New(cfg Config) (*Relay, error) {
 		holds:    make(map[string]*sessionHold),
 		ctx:      ctx,
 		cancel:   cancel,
+	}
+	if r.instance == "" {
+		r.instance = rand.Text()
 	}
 	for _, worker := range cfg.Workers {
 		r.AddWorker(worker)
@@ -545,7 +561,11 @@ func (r *Relay) Stats() Stats {
 	holds, packets, bytes := len(r.holds), r.heldPackets, r.heldBytes
 	r.forwardMu.Unlock()
 
+	r.registryMu.RLock()
+	workers := len(r.registry)
+	r.registryMu.RUnlock()
 	return Stats{
+		SelfFences: r.selfFences.Load(), Workers: workers,
 		RoutesRestored: r.routesRestored.Load(), RoutesRestoreSkipped: r.routesRestoreSkipped.Load(), RoutesRestoreFailed: r.routesRestoreFailed.Load(), RouteWrites: r.routeWritesDone.Load(), RouteWritesDropped: r.routeWritesDropped.Load(), RouteWritesFailed: r.routeWritesFailed.Load(),
 		BarrierTimeouts: r.barrierTimeouts.Load(),
 		Holds:           holds, HeldPackets: packets, HeldBytes: bytes, HoldDrops: r.holdDrops.Load(), HoldTimeouts: r.holdTimeouts.Load(), HoldSendFailures: r.holdSendFailures.Load(),
@@ -571,8 +591,7 @@ func (r *Relay) Stats() Stats {
 // with it; the session-owner store is not touched.
 func (r *Relay) Close() error {
 	r.closeOnce.Do(func() {
-		r.cancel()
-		r.closeErr = errors.Join(r.public.Close(), r.workers.Close())
+		r.stopSockets()
 		r.forwardMu.Lock()
 		for id, h := range r.holds {
 			h.timer.Stop()
@@ -692,6 +711,9 @@ func (r *Relay) forward(datagram []byte, caller, worker netip.AddrPort) {
 
 // sendCaller runs under forwardMu; routeMu is never held during a write.
 func (r *Relay) sendCaller(datagram []byte, caller, worker netip.AddrPort) bool {
+	if !r.forwardingAllowed() {
+		return false
+	}
 	start := MaxHeaderLen - HeaderLen(caller)
 	AppendHeader(datagram[start:start], caller)
 	if _, err := r.workers.WriteToUDPAddrPort(datagram[start:], worker); err != nil {
@@ -808,7 +830,14 @@ func (r *Relay) workerLoop() {
 		if promoted != "" {
 			r.log.Infof("session %s: caller %s <-> worker %s", promoted, caller, from)
 		}
-		if _, err := r.public.WriteToUDPAddrPort(pkt, caller); err != nil {
+		r.workerForwardMu.Lock()
+		if !r.forwardingAllowed() {
+			r.workerForwardMu.Unlock()
+			continue
+		}
+		_, err = r.public.WriteToUDPAddrPort(pkt, caller)
+		r.workerForwardMu.Unlock()
+		if err != nil {
 			r.log.Debugf("forward to caller %s: %v", caller, err)
 
 			continue
@@ -879,4 +908,21 @@ func (r *Relay) ForgetSession(id string) {
 	if r.persistence != nil {
 		r.persistence.enqueue(id, nil)
 	}
+}
+
+// Fence stops both packet paths synchronously. Close later joins background
+// work; fencing itself never waits for Redis or route persistence.
+func (r *Relay) Fence() {
+	r.forwardMu.Lock()
+	defer r.forwardMu.Unlock()
+	r.workerForwardMu.Lock()
+	defer r.workerForwardMu.Unlock()
+	r.selfFences.Add(1)
+	r.stopSockets()
+}
+func (r *Relay) stopSockets() {
+	r.stopOnce.Do(func() { r.cancel(); r.closeErr = errors.Join(r.public.Close(), r.workers.Close()) })
+}
+func (r *Relay) forwardingAllowed() bool {
+	return r.ctx.Err() == nil && (r.cfg.ForwardingAllowed == nil || r.cfg.ForwardingAllowed())
 }

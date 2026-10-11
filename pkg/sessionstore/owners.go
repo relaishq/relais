@@ -101,6 +101,7 @@ type WorkerIndexRefresher interface {
 
 // Memory is a single-process store. Use NewMemory, not its zero value.
 type Memory struct {
+	relayLeases      map[string]RelayLease
 	mu               sync.RWMutex
 	leases           map[string]Lease
 	states           map[string][]byte
