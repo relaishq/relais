@@ -20,13 +20,14 @@ type Sender func([]byte) ([]byte, error)
 type Capture func(string) (Sender, error)
 
 type registration struct {
-	initialSequence *[2]uint16
-	capture         Capture
-	ignoredBarriers int
-	lifecycle       Lifecycle
-	beforeSnapshot  func(context.Context, string)
-	afterEcho       func(context.Context, string, []byte)
-	afterResume     func(string, bool)
+	initialSequence       *[2]uint16
+	capture               Capture
+	ignoredBarriers       int
+	lifecycle             Lifecycle
+	beforeSnapshot        func(context.Context, string)
+	beforeInitialSnapshot func(context.Context, string)
+	afterEcho             func(context.Context, string, []byte)
+	afterResume           func(string, bool)
 }
 
 // enabled keeps every production probe call off the process-wide mutex.
@@ -204,6 +205,35 @@ func BeforeSnapshot(addr netip.AddrPort, ctx context.Context, id string) {
 	var hook func(context.Context, string)
 	if w := registry.workers[addr]; w != nil {
 		hook = w.beforeSnapshot
+	}
+	registry.Unlock()
+	if hook != nil {
+		hook(ctx, id)
+	}
+}
+
+// SetBeforeInitialSnapshot gates the connect path after SRTP is ready, so
+// a test can let a background checkpoint and live input win the startup race.
+func SetBeforeInitialSnapshot(addr netip.AddrPort, hook func(context.Context, string)) error {
+	registry.Lock()
+	defer registry.Unlock()
+	w := registry.workers[addr]
+	if w == nil {
+		return errors.New("workerprobe: no initial snapshot probe")
+	}
+	w.beforeInitialSnapshot = hook
+	return nil
+}
+
+// BeforeInitialSnapshot is inert outside an enabled test scope.
+func BeforeInitialSnapshot(addr netip.AddrPort, ctx context.Context, id string) {
+	if !enabled.Load() {
+		return
+	}
+	registry.Lock()
+	var hook func(context.Context, string)
+	if w := registry.workers[addr]; w != nil {
+		hook = w.beforeInitialSnapshot
 	}
 	registry.Unlock()
 	if hook != nil {
