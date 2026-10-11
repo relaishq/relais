@@ -173,7 +173,7 @@ func TestDemoStatusAndProxyAndActionGuards(t *testing.T) {
 		http.NotFound(w, r)
 	}))
 	defer control.Close()
-	d := &demo{ctx: context.Background(), control: control.URL, client: control.Client(), workers: map[string]*workerProcess{}, relay: "127.0.0.1:1111", redis: "127.0.0.1:2222"}
+	d := &demo{ctx: context.Background(), control: control.URL, client: control.Client(), workers: map[string]*workerProcess{}, relay: "127.0.0.1:1111", redis: "127.0.0.1:2222", launchID: "test-launch"}
 	handler := d.handler(http.NotFoundHandler())
 	request := httptest.NewRequest(http.MethodGet, "http://localhost/demo/status", nil)
 	response := httptest.NewRecorder()
@@ -196,6 +196,7 @@ func TestDemoStatusAndProxyAndActionGuards(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "http://localhost/calls", strings.NewReader("offer"))
 	req.Header.Set("Content-Type", "application/sdp")
+	req.Header.Set("X-Relais-Demo-Launch-ID", d.launchID)
 	out := httptest.NewRecorder()
 	handler.ServeHTTP(out, req)
 	require.Equal(t, http.StatusCreated, out.Code)

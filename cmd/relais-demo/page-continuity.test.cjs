@@ -7,21 +7,21 @@ const M=require('./web/metrics.js');
 
 // Run production page functions in a DOM-free harness. Snapshot tests hold
 // media evidence passing to expose a missing required agent verdict.
-function page() {
- const element=()=>({value:'pattern',replaceChildren(){},append(){},textContent:''});
+function page(search='',renderPage=false,status) {
+ const element=()=>({value:'pattern',replaceChildren(){},append(){},click(){},textContent:''});
  const elements=new Map();
- const context={window:{relaisMetrics:M,relaisContinuity:A,addEventListener(){}},document:{getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,addEventListener(){},removeEventListener(){},hidden:false},location:{search:'',hash:''},URLSearchParams,Headers,performance:{now:()=>10000,timeOrigin:0},setInterval(){},clearInterval(){},clearTimeout(){},setTimeout(fn){fn();},fetch:async()=>{throw new Error('status unavailable');}};
+ const context={window:{relaisMetrics:M,relaisContinuity:A,addEventListener(){}},document:{getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,addEventListener(){},removeEventListener(){},hidden:false},location:{search,hash:''},URLSearchParams,Headers,Blob,URL:{createObjectURL(blob){context.savedBlob=blob;return 'blob:test';},revokeObjectURL(){}},performance:{now:()=>10000,timeOrigin:0},setInterval(){},clearInterval(){},clearTimeout(){},setTimeout(fn){fn();},fetch:async()=>{if(status)return {ok:true,text:async()=>JSON.stringify(status)};throw new Error('status unavailable');}};
  const source=fs.readFileSync(require.resolve('./web/demo.js'),'utf8');
  const instrument=`
- window.testPage={setCall(s){call=s;},snapshot,event,start};
+ window.testPage={setCall(s){call=s;},snapshot,event,start,saveResults};
  sample=async()=>{};
  observePage=()=>{};attach=()=>{};statuses=()=>{};samples=()=>{};
  sourceStream=async()=>{window.sourceAcquired=true;throw new Error("media started");};
  measurement=()=>({video:{maxMs:0},audio:{maxMs:0},videoDelta:{},audioDelta:{}});
- scheduleHold=()=>{};render=()=>{};
+ scheduleHold=()=>{};${renderPage?'':'render=()=>{};'}
  `;
  vm.runInNewContext(source.replace(/\}\)\(\);\s*$/,instrument+'})();'),context);
- return {api:context.window.testPage,context};
+ return {api:context.window.testPage,context,elements};
 }
 function call() {
  return {agentMode:'demo',source:'pattern',id:'test',resource:'/calls/test',armed:true,readyAtMs:1,pc:{connectionState:'connected'},events:[],baselines:[],hold:{status:'pass',verdict:{status:'pass',reasons:[]}},hiddenPeriods:[],transitions:[],negotiations:[],descriptionChanges:[],restartCalls:[],sampleErrors:[],samples:[{atMs:10000,audio:{},video:{}}],latest:{atMs:13000,audio:{},video:{}},contentFrames:[],baselineCount:1,headroomRatio:0.5};
@@ -66,3 +66,45 @@ test('startup rejects missing selected agent instead of acquiring media',async()
  await assert.rejects(api.start(),/selected agent missing or invalid/);
  assert.equal(context.window.sourceAcquired,undefined);
 });
+
+for(const mode of ['on','off']) {
+ test(`saved JSON includes server buffer mode ${mode} pinned before media`,async()=>{
+  const {api,context}=page('?relay-buffer='+ (mode==='on'?'off':'on'));
+  context.RTCPeerConnection=function(){return {close(){}};};
+  context.fetch=async()=>({ok:true,text:async()=>JSON.stringify({selected_agent:'echo',relayBuffer:mode,launchId:'test-launch'})});
+  await assert.rejects(api.start(),/media started/);
+  assert.equal(context.window.sourceAcquired,true);
+  assert.equal(context.window.relaisDemo.results().relayBuffer,mode);
+  // Later status diagnostics must not relabel the saved call.
+  const s=call();s.agentMode='echo';s.relayBuffer=context.window.relaisDemo.results().relayBuffer;
+  s.status={relayBuffer:mode==='on'?'off':'on'};api.setCall(s);
+  const record=api.saveResults();
+  assert.equal(record.relayBuffer,mode);
+  assert.equal(JSON.parse(await context.savedBlob.text()).relayBuffer,mode);
+ });
+}
+test('unknown buffer mode is unverified in saved JSON',async()=>{
+ const {api,context}=page();api.setCall(call());api.saveResults();
+ assert.equal(JSON.parse(await context.savedBlob.text()).relayBuffer,'unverified');
+});
+test('startup rejects missing buffer mode before acquiring source media',async()=>{
+ const {api,context}=page();context.RTCPeerConnection=function(){return {close(){}};};
+ context.fetch=async()=>({ok:true,text:async()=>JSON.stringify({selected_agent:'echo'})});
+ await assert.rejects(api.start(),/relay buffer mode missing or invalid/);
+ assert.equal(context.window.sourceAcquired,undefined);
+});
+
+test('visible buffer mode comes from status before a call starts',async()=>{
+ const {elements}=page('?relay-buffer=on',true,{relayBuffer:'off'});
+ await new Promise((resolve)=>setImmediate(resolve));
+ assert.equal(elements.get('relay-buffer').textContent,'off');
+});
+
+for(const launchId of [undefined,'',42]) {
+ test(`startup rejects invalid launch identity ${JSON.stringify(launchId)}`,async()=>{
+  const {api,context}=page();context.RTCPeerConnection=function(){return {close(){}};};
+  context.fetch=async()=>({ok:true,text:async()=>JSON.stringify({selected_agent:'echo',relayBuffer:'on',launchId})});
+  await assert.rejects(api.start(),/demo launch identity missing or invalid/);
+  assert.equal(context.window.sourceAcquired,undefined);
+ });
+}

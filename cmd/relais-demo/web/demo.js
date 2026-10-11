@@ -2,10 +2,11 @@
 (() => {
   const M = window.relaisMetrics;
   const A = window.relaisContinuity;
-  const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check'].map((id) => [id,document.getElementById(id)]));
+  const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check','relay-buffer'].map((id) => [id,document.getElementById(id)]));
   const params = new URLSearchParams(location.search);
   const launchToken = new URLSearchParams(location.hash.slice(1)).get('token') || '';
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve,ms));
+  let pageRelayBuffer = M.UNKNOWN;
   let call = null, lastResult = null, starting = null, lastResultsRender = -Infinity;
   const stamp = () => ({ at: new Date().toISOString(), atMs: performance.now() });
   const active = (s) => call === s && !s.stopped;
@@ -146,7 +147,7 @@
     const noRenegotiation=!s.negotiations.length && !s.descriptionChanges.length && !s.restartCalls.length;
     const statuses=entries.map((e)=>e.verdict.status);
     const status=statuses.includes('invalid')?'invalid':statuses.includes('fail')?'fail':!statuses.length || statuses.includes('inconclusive')?'inconclusive':'pass';
-    return {version:5,source:s.source,id:s.id,startedAt:s.startedAt,state:s.stopped?'ended':s.pc.connectionState,running:!!s.script || !!s.busy || !!s.checklist,
+    return {version:5,relayBuffer:s.relayBuffer || M.UNKNOWN,launchId:s.launchId || M.UNKNOWN,source:s.source,id:s.id,startedAt:s.startedAt,state:s.stopped?'ended':s.pc.connectionState,running:!!s.script || !!s.busy || !!s.checklist,
       agentMode:s.agentMode || "unverified",agent:s.agent || null,agentStatusError:s.agentError || null,agentVerdict:{status:entries.some((e)=>e.agentVerdict?.status==='fail')?'fail':entries.length && entries.every((e)=>e.agentVerdict?.status==='pass')?'pass':'inconclusive'},
       iceConnectionState:s.pc.iceConnectionState,owner:s.owner,workerPIDs:s.status?.worker_pids || {},poolSize:s.status?.pool_size,expectedPoolSize:s.status?.expected_pool_size,registrationError:s.status?.registration_error || null,
       thresholds:{moveGapMs:100,drainGapMs:100,killGapMs:2000,longHoldMs:60000},
@@ -160,6 +161,7 @@
   }
   function render() {
     const r=snapshot(call),s=call;
+    el['relay-buffer'].textContent=r.relayBuffer || pageRelayBuffer;
     el.start.disabled=!!s && !s.stopped;el.source.disabled=!!s && !s.stopped;el.stop.disabled=!s || s.stopped;el.save.disabled=!s && !lastResult;el.check.disabled=!s || !s.armed || s.busy || !!s.script || !!s.checklist;
     for(const id of ['move','drain','kill'])el[id].disabled=!s || !s.armed || s.pc.connectionState!=='connected' || s.busy || !!s.script || !!s.checklist;
     const fmt=(ms)=>typeof ms==='number'?`${Math.round(ms)} ms`:'unverified';
@@ -258,6 +260,10 @@
         const initialStatus=await json('/demo/status');
         if(!['demo','echo'].includes(initialStatus.selected_agent))throw new Error('selected agent missing or invalid');
         s.agentMode=initialStatus.selected_agent;
+        if(!['on','off'].includes(initialStatus.relayBuffer))throw new Error('relay buffer mode missing or invalid');
+        s.relayBuffer=initialStatus.relayBuffer;
+        if(typeof initialStatus.launchId!=='string' || !initialStatus.launchId)throw new Error('demo launch identity missing or invalid');
+        s.launchId=initialStatus.launchId;
         const stream=await sourceStream(s);
         if(!active(s)){stream.getTracks().forEach((t)=>t.stop());throw new Error('call ended');}
         s.stream=stream;el.local.srcObject=stream;
@@ -265,7 +271,7 @@
         await s.pc.setLocalDescription(await s.pc.createOffer());
         if(!active(s)) throw new Error('call ended');
         await waitFor(s,()=>s.pc.iceGatheringState==='complete',10000,'initial ICE gathering did not finish');
-        const response=await request('/calls',{method:'POST',headers:{'Content-Type':'application/sdp'},body:s.pc.localDescription.sdp});
+        const response=await request('/calls',{method:'POST',headers:{'Content-Type':'application/sdp','X-Relais-Demo-Launch-ID':s.launchId},body:s.pc.localDescription.sdp});
         const location=response.headers.get('Location'),body=await response.text();
         if(response.status!==201) throw new Error(`POST /calls ${response.status}: ${body}`);
         if(!location || !/^\/calls\/[^/]+$/.test(location)) throw new Error('invalid call Location');
@@ -444,6 +450,10 @@
   el.audio.onchange=()=>{el.remote.muted=!el.audio.checked;el.remote.play().then(()=>{if(call)call.playback=el.remote.muted?'muted':'playing';},error);if(call && !call.stopped && call.audioContext?.state==='suspended') call.audioContext.resume().catch(error);};
   document.addEventListener('pointerdown',()=>{if(call && !call.stopped && call.audioContext?.state==='suspended') call.audioContext.resume().catch(error);});
   window.addEventListener('pagehide',()=>{if(call?.resource)request(call.resource,{method:'DELETE',keepalive:true}).catch(()=>{});});
+  json('/demo/status').then((status)=>{
+    if(['on','off'].includes(status.relayBuffer))pageRelayBuffer=status.relayBuffer;
+    render();
+  }).catch(()=>{});
   setInterval(render,1000);render();
   if(params.get('autostart')==='1')start().catch(error);
 })();

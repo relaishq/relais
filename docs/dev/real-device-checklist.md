@@ -107,9 +107,45 @@ relaisDemo.saveResults();
 4. Save the JSON. Find it in Chrome → menu → **Downloads**, or the phone's
    Downloads folder. Keep the desktop and Android records separately.
 
+## #45: compare relay buffer on and off on each device
+
+Run both modes on desktop Chrome with the real camera at 720p, then run both
+modes on Android Chrome. Replace `192.168.1.50` with the Mac's local Wi-Fi IP.
+For each device:
+
+1. Start with the buffer on (the product default):
+
+   ```sh
+   make demo-cluster DEMO_CLUSTER_FLAGS="-http=127.0.0.1:9201 -local-network=192.168.1.50 -relay-buffer=on"
+   ```
+
+2. Open the new printed URL. Confirm **Relay buffer: on** on the page.
+   Run that device's checklist above. Click **Save results**, then **Hang up**.
+   Keep the JSON as `desktop-camera-buffer-on.json` or
+   `android-camera-buffer-on.json`.
+3. Press Ctrl-C to stop the cluster. Restart with the buffer off:
+
+   ```sh
+   make demo-cluster DEMO_CLUSTER_FLAGS="-http=127.0.0.1:9201 -local-network=192.168.1.50 -relay-buffer=off"
+   ```
+
+4. Open the new printed URL; the token and certificate change on restart.
+   Confirm **Relay buffer: off**. Run the same checklist again.
+   Click **Save results**, then **Hang up**. Keep the JSON as
+   `desktop-camera-buffer-off.json` or `android-camera-buffer-off.json`.
+   Stop the cluster before starting the next device's pair of runs.
+
+Each saved JSON labels its mode in the top-level `relayBuffer` field (`on` or
+`off`), read from the server before the call starts. Compare
+`events[].timeToFirstLiveFrameMs` for entries whose `kind` is `kill` in both
+modes. Also record `events[].windowVerdict`, `events[].verdict`,
+`longHold.status`, and the top-level `verdict`. Retain failures, invalid runs,
+and inconclusive runs. The live-frame timing field does not replace verdicts.
+Keep all four clearly named JSON files.
+
 ## Read the saved record and stop
 
-Results version 4 preserves the existing record structure and verdict rules.
+Results version 5 preserves the existing media record structure and verdict rules.
 `source` is `pattern` or `camera`; both use decoded counters. Each event retains
 `timeToFirstNewContentMs` and `contentResumedMs`, and adds
 `timeToFirstLiveFrameMs`. This field applies only to kill events (takeovers);

@@ -157,7 +157,15 @@ func runExternalSmokePlan(t *testing.T, agentName string, drainFirst bool, kills
 	}()
 	files, err := fs.Sub(web, "web")
 	require.NoError(t, err)
-	server := httptest.NewServer(d.handler(http.FileServer(http.FS(files))))
+	handler := d.handler(http.FileServer(http.FS(files)))
+	// The Pion caller does not speak the browser demo launch protocol. This
+	// test adapter binds its call creation to the launcher it already owns.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/calls" {
+			r.Header.Set("X-Relais-Demo-Launch-ID", d.launchID)
+		}
+		handler.ServeHTTP(w, r)
+	}))
 	defer server.Close()
 	response, err := server.Client().Get(server.URL + "/")
 	require.NoError(t, err)
