@@ -43,7 +43,7 @@ func TestProfileProcessLoopbackProbe(t *testing.T) {
 	stop()
 	for _, scenario := range []string{"move", "takeover"} {
 		t.Run(scenario, func(t *testing.T) {
-			options := profileTrialOptions{Name: "lan", Scenario: scenario}
+			options := profileTrialOptions{Name: "lan", Scenario: scenario, Links: profileTestLinks(t, "lan")}
 			trialDir := filepath.Join(dir, scenario)
 			require.NoError(t, os.Mkdir(trialDir, 0700))
 			env := processEnv(strings.Repeat("00", 32), addr, fmt.Sprintf("relais:profile-probe:%s:%s:", filepath.Base(dir), scenario))
@@ -54,6 +54,10 @@ func TestProfileProcessLoopbackProbe(t *testing.T) {
 			require.NotNil(t, r.ProfileRow)
 			require.Positive(t, r.ProfileRow.EventResult.Duration, "acceptance event must retain real controller timings")
 			require.Positive(t, r.ProfileRow.EventResult.Resume)
+			require.True(t, r.ProfileRow.AudioGapWindow.Complete)
+			require.True(t, r.ProfileRow.VideoGapWindow.Complete)
+			require.True(t, r.ProfileRow.ObservedUncertainMoveResumesAvailable)
+			require.Zero(t, r.ProfileRow.ObservedUncertainMoveResumes)
 			if scenario == "move" {
 				require.Positive(t, r.ProfileRow.EventResult.Drain)
 				require.Positive(t, r.ProfileRow.EventResult.Export)
@@ -65,6 +69,8 @@ func TestProfileProcessLoopbackProbe(t *testing.T) {
 			require.GreaterOrEqual(t, r.ProfileRow.VideoBaseline.Samples, 10)
 			loss := r.ProfileRow.Measurement.ContentLoss
 			require.True(t, loss.Event.Audio.Trusted)
+			require.True(t, loss.Event.Audio.RunTrusted)
+			require.True(t, loss.Event.Video.RunTrusted)
 			require.True(t, loss.Event.Video.Trusted)
 			require.Positive(t, loss.Event.Audio.Sent)
 			require.Positive(t, loss.Event.Video.Sent)

@@ -29,7 +29,7 @@ func goodProfileRows(trials int) []profileRow {
 		}
 		m := callharness.EventMeasurement{SettleWindow: 500 * time.Millisecond, AudioLoss: callharness.MetricVerdict{Trusted: true}, VideoLoss: callharness.MetricVerdict{Trusted: true}}
 		m.Audio.BaselineSamples, m.Video.BaselineSamples = 20, 20
-		m.ContentLoss.Event = callharness.ContentLossWindow{Start: 5 * time.Second, End: 6 * time.Second, Audio: callharness.ContentLossCounts{Sent: 50, Trusted: true}, Video: callharness.ContentLossCounts{Sent: 30, Trusted: true}}
+		m.ContentLoss.Event = callharness.ContentLossWindow{Start: 5 * time.Second, End: 6 * time.Second, Audio: callharness.ContentLossCounts{Sent: 50, Trusted: true, RunTrusted: true}, Video: callharness.ContentLossCounts{Sent: 30, Trusted: true, RunTrusted: true}}
 		for j := 0; j < 3; j++ {
 			w := m.ContentLoss.Event
 			w.End = 4500*time.Millisecond - time.Duration(j)*time.Second
@@ -44,8 +44,8 @@ func TestProfileVerdictSeparateGapsAndExactCeilings(t *testing.T) {
 	for _, name := range []string{"lan", "region", "far-caller", "lossy-dc"} {
 		t.Run(name, func(t *testing.T) {
 			options := profileTrialOptions{Name: name, Scenario: "move"}
-			rows := goodProfileRows(20)
-			rows[0].BarrierResends, rows[0].UncertainOutcomes = 1, 1
+			rows := withProfileProbes(name, goodProfileRows(20))
+			rows[0].BarrierResends, rows[0].InjectedDiscardedReplies = 1, 1
 			r := judgeProfile(options, rows, profileTestLinks(t, options.Name))
 			require.Equal(t, "pass", r.Verdict)
 			require.Equal(t, 150*time.Millisecond, r.AbsoluteGapCeiling)
@@ -102,10 +102,10 @@ func TestProfileInconclusiveCannotHideKnownFailure(t *testing.T) {
 	require.Equal(t, "inconclusive", judgeProfile(options, rows, profileTestLinks(t, options.Name)).Verdict)
 	require.Equal(t, "inconclusive", judgeProfile(options, goodProfileRows(10)[:1], profileTestLinks(t, options.Name)).Verdict)
 	options.Name = "lossy-dc"
-	r = judgeProfile(options, goodProfileRows(10), profileTestLinks(t, options.Name))
+	r = judgeProfile(options, withProfileProbes(options.Name, goodProfileRows(10)), profileTestLinks(t, options.Name))
 	require.Equal(t, "inconclusive", r.Verdict)
 	require.Contains(t, r.Reasons, "barrier resend NOT-PROVEN")
-	require.Contains(t, r.Reasons, "uncertain outcome NOT-PROVEN")
+	require.Contains(t, r.Reasons, "injected discarded reply NOT-PROVEN")
 }
 func TestGapBaselineUsesOnlySameCallPreEventIntervals(t *testing.T) {
 	var arrivals []time.Duration
@@ -180,22 +180,25 @@ func TestMeasureProfileSeparatesProbeFromAcceptanceAndDecoderDiagnostics(t *test
 		ConnectionStates: []callharness.StateChange{{State: "connected"}},
 		Consent:          callharness.ConsentReport{ResponsesAfter: 1, ObservedFor: 60 * time.Second},
 		Moves: []callharness.MoveReport{
-			{Kind: "move", Error: "uncertain reply probe rolled back", Result: mediaworker.HandoverResult{Duration: time.Second}},
-			{Kind: "takeover", Start: 4 * time.Second, Measurement: measurement, Result: mediaworker.HandoverResult{Duration: 100 * time.Millisecond, Resume: 10 * time.Millisecond}, Tracks: []callharness.MoveTrackReport{{Kind: "audio", Gap: 200 * time.Millisecond, PacketsAfter: 1}, {Kind: "video", Gap: 250 * time.Millisecond, PacketsAfter: 1}}},
+			{Kind: "move", Start: time.Second, End: 1030 * time.Millisecond, Tracks: []callharness.MoveTrackReport{{Kind: "audio", PacketsAfter: 1}, {Kind: "video", PacketsAfter: 1}}, Error: "uncertain reply probe rolled back", Result: mediaworker.HandoverResult{Duration: time.Second}},
+			{Kind: "move", Start: 2 * time.Second, End: 2120 * time.Millisecond, Tracks: []callharness.MoveTrackReport{{Kind: "audio", PacketsAfter: 1}, {Kind: "video", PacketsAfter: 1}}},
+			{Kind: "takeover", Start: 4 * time.Second, End: 4100 * time.Millisecond, Measurement: measurement, Result: mediaworker.HandoverResult{Duration: 100 * time.Millisecond, Resume: 10 * time.Millisecond}, Tracks: []callharness.MoveTrackReport{{Kind: "audio", Gap: 200 * time.Millisecond, PacketsAfter: 1}, {Kind: "video", Gap: 250 * time.Millisecond, PacketsAfter: 1}}},
 		},
 		Tracks: []callharness.TrackReport{{Kind: "audio"}, {Kind: "video", Video: &callharness.VideoReport{FullDecode: callharness.FullDecode{Failure: callharness.DecodeInvalid, Errors: "baseline packet loss", FramesDecoded: 1}}}},
 	}
-	for i := 0; i < 150; i++ {
+	for i := 0; i <= 200; i++ {
 		for j := range report.Tracks {
 			report.Tracks[j].Arrivals = append(report.Tracks[j].Arrivals, time.Duration(i)*20*time.Millisecond)
 		}
 	}
-	options := profileTrialOptions{Name: "region", Scenario: "takeover"}
+	report.Tracks[0].Arrivals = append(report.Tracks[0].Arrivals, 4200*time.Millisecond, 4400*time.Millisecond)
+	report.Tracks[1].Arrivals = append(report.Tracks[1].Arrivals, 4250*time.Millisecond, 4400*time.Millisecond)
+	options := profileTrialOptions{Name: "lossy-dc", Scenario: "takeover", Links: profileTestLinks(t, "lossy-dc")}
 	row := measureProfile(report, report.RemoteAddr, options, 60*time.Second)
 	require.True(t, row.Integrity.Trusted)
 	require.False(t, row.Integrity.Failed, row.Integrity.Reasons)
-	require.Len(t, row.ProbeEvents, 1)
-	require.Equal(t, report.Moves[1].Result, row.EventResult)
+	require.Len(t, row.ProbeEvents, 2)
+	require.Equal(t, report.Moves[2].Result, row.EventResult)
 	require.NotEqual(t, report.Moves[0].Result, row.EventResult)
 	require.Equal(t, 200*time.Millisecond, row.AudioGap)
 	require.Equal(t, 250*time.Millisecond, row.VideoGap)
@@ -213,8 +216,8 @@ func TestProfileMoveTrialCountAndP95(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			options := profileTrialOptions{Name: name, Scenario: "move"}
 			links := profileTestLinks(t, name)
-			rows := goodProfileRows(20)
-			rows[0].BarrierResends, rows[0].UncertainOutcomes = 1, 1
+			rows := withProfileProbes(name, goodProfileRows(20))
+			rows[0].BarrierResends, rows[0].InjectedDiscardedReplies = 1, 1
 			for _, count := range []int{10, 19} {
 				r := judgeProfile(options, rows[:count], links)
 				require.Equal(t, 20, r.MinimumTrials)

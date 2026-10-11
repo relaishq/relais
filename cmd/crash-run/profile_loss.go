@@ -12,6 +12,7 @@ const (
 	contentLossTailAlpha       = (1 - contentLossConfidence) / 4
 	minimumLossBaselineUnits   = 100
 	minimumLossBaselineWindows = 10
+	maximumLossBaselineRate    = .10
 )
 
 // The decision pools event and matched baseline windows across the run. The
@@ -43,6 +44,11 @@ func judgeContentLoss(event, baseline callharness.ContentLossCounts, windows int
 	}
 	if !event.Trusted || event.Sent <= 0 || event.Lost < 0 || event.Lost > event.Sent {
 		out.Verdict, out.Reasons = "inconclusive", []string{"event content counts unavailable or untrusted"}
+		return out
+	}
+	if baseline.Sent > 0 && baseline.Lost >= 0 && baseline.Lost <= baseline.Sent && out.BaselineRate > maximumLossBaselineRate {
+		out.Verdict = "inconclusive"
+		out.Reasons = []string{"baseline too lossy to judge"}
 		return out
 	}
 	if !lossy {
@@ -122,7 +128,7 @@ func binomialUpperCount(sent int, rate, alpha float64) int {
 }
 
 func poolContentLoss(rows []profileRow, video bool) (callharness.ContentLossCounts, callharness.ContentLossCounts, int) {
-	event, baseline := callharness.ContentLossCounts{Trusted: true}, callharness.ContentLossCounts{Trusted: true}
+	event, baseline := callharness.ContentLossCounts{Trusted: true, RunTrusted: true}, callharness.ContentLossCounts{Trusted: true, RunTrusted: true}
 	windows := 0
 	for _, row := range rows {
 		e := row.Measurement.ContentLoss
@@ -133,8 +139,11 @@ func poolContentLoss(rows []profileRow, video bool) (callharness.ContentLossCoun
 		}
 		event.Sent += counts.Sent
 		event.Lost += counts.Lost
+		event.LongestLostRun = max(event.LongestLostRun, counts.LongestLostRun)
+		event.RunTrusted = event.RunTrusted && lossRunAvailable(counts) && verdict.Trusted
 		event.Trusted = event.Trusted && counts.Trusted && verdict.Trusted && counts.Sent > 0
 		baseline.Trusted = baseline.Trusted && len(e.Baselines) > 0
+		baseline.RunTrusted = baseline.RunTrusted && len(e.Baselines) > 0
 		for _, window := range e.Baselines {
 			counts = window.Audio
 			if video {
@@ -142,9 +151,31 @@ func poolContentLoss(rows []profileRow, video bool) (callharness.ContentLossCoun
 			}
 			baseline.Sent += counts.Sent
 			baseline.Lost += counts.Lost
+			baseline.LongestLostRun = max(baseline.LongestLostRun, counts.LongestLostRun)
+			baseline.RunTrusted = baseline.RunTrusted && lossRunAvailable(counts)
 			baseline.Trusted = baseline.Trusted && counts.Trusted && counts.Sent > 0
 			windows++
 		}
 	}
 	return event, baseline, windows
+}
+
+func lossRunAvailable(counts callharness.ContentLossCounts) bool {
+	return counts.Trusted && counts.RunTrusted && counts.LongestLostRun >= 0 && counts.LongestLostRun <= counts.Lost && (counts.Lost == 0 || counts.LongestLostRun > 0)
+}
+
+func trialLossBaseline(row profileRow, video bool) callharness.ContentLossCounts {
+	out := callharness.ContentLossCounts{Trusted: len(row.Measurement.ContentLoss.Baselines) > 0, RunTrusted: true}
+	for _, window := range row.Measurement.ContentLoss.Baselines {
+		counts := window.Audio
+		if video {
+			counts = window.Video
+		}
+		out.Sent += counts.Sent
+		out.Lost += counts.Lost
+		out.Trusted = out.Trusted && counts.Trusted
+		out.RunTrusted = out.RunTrusted && lossRunAvailable(counts)
+		out.LongestLostRun = max(out.LongestLostRun, counts.LongestLostRun)
+	}
+	return out
 }

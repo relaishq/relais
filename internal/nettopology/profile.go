@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -42,6 +44,48 @@ type LinkSetting struct {
 	Delay, Jitter              time.Duration
 	Loss, Reorder              float64
 	Qdisc                      string
+}
+
+func (s LinkSetting) impaired() bool {
+	return s.Delay > 0 || s.Jitter > 0 || s.Loss > 0 || s.Reorder > 0
+}
+
+// VerifyQdisc checks the recorded loss, not just a requested shaping value.
+func (s LinkSetting) VerifyQdisc() error {
+	fields := strings.Fields(s.Qdisc)
+	if len(fields) == 0 {
+		return fmt.Errorf("qdisc observation unavailable on %s/%s", s.Namespace, s.Interface)
+	}
+	netem := false
+	for _, field := range fields {
+		netem = netem || field == "netem"
+	}
+	if s.impaired() && !netem {
+		return fmt.Errorf("netem absent on %s/%s", s.Namespace, s.Interface)
+	}
+	observed := 0.0
+	for i, field := range fields {
+		if field != "loss" {
+			continue
+		}
+		i++
+		if i < len(fields) && fields[i] == "random" {
+			i++
+		}
+		if i >= len(fields) || !strings.HasSuffix(fields[i], "%") {
+			return fmt.Errorf("unreadable qdisc loss on %s/%s", s.Namespace, s.Interface)
+		}
+		var err error
+		observed, err = strconv.ParseFloat(strings.TrimSuffix(fields[i], "%"), 64)
+		if err != nil || math.IsNaN(observed) || math.IsInf(observed, 0) {
+			return fmt.Errorf("unreadable qdisc loss on %s/%s", s.Namespace, s.Interface)
+		}
+		break
+	}
+	if math.Abs(observed-s.Loss) > 1e-6 {
+		return fmt.Errorf("qdisc loss on %s/%s is %g%%, requested %g%%", s.Namespace, s.Interface, observed, s.Loss)
+	}
+	return nil
 }
 
 func (p Plan) ProfilePlan(name string) ([]LinkSetting, error) {
@@ -90,9 +134,14 @@ func (t *Topology) ApplyProfile(ctx context.Context, name string) ([]LinkSetting
 	if err != nil {
 		return nil, err
 	}
+	return t.applyProfileSettings(ctx, settings)
+}
+
+// The caller holds mu and supplies settings derived from this owned plan.
+func (t *Topology) applyProfileSettings(ctx context.Context, settings []LinkSetting) ([]LinkSetting, error) {
 	for i := range settings {
 		s := &settings[i]
-		if s.Delay > 0 {
+		if s.impaired() {
 			if _, err := t.runner(ctx, s.command()); err != nil {
 				return nil, err
 			}
@@ -101,7 +150,7 @@ func (t *Topology) ApplyProfile(ctx context.Context, name string) ([]LinkSetting
 		if err != nil {
 			return nil, err
 		}
-		if s.Delay == 0 && strings.Contains(output, "netem") {
+		if !s.impaired() && strings.Contains(output, "netem") {
 			if _, err := t.runner(ctx, Command{"ip", "netns", "exec", s.Namespace, "tc", "qdisc", "del", "dev", s.Interface, "root"}); err != nil {
 				return nil, err
 			}
@@ -111,8 +160,8 @@ func (t *Topology) ApplyProfile(ctx context.Context, name string) ([]LinkSetting
 			}
 		}
 		s.Qdisc = strings.TrimSpace(output)
-		if s.Delay > 0 && !strings.Contains(s.Qdisc, "netem") {
-			return nil, fmt.Errorf("netem absent on %s/%s", s.Namespace, s.Interface)
+		if err := s.VerifyQdisc(); err != nil {
+			return nil, err
 		}
 	}
 	return settings, nil

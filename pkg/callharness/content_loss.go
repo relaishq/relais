@@ -1,13 +1,18 @@
 package callharness
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 // ContentLossCounts counts identified, successfully written content, once per
 // audio unit or complete video frame. Loss means no valid return by the same
 // observation horizon used by EventMeasurement, independent of decoding.
 type ContentLossCounts struct {
-	Sent, Lost int
-	Trusted    bool
+	Sent, Lost     int
+	Trusted        bool
+	LongestLostRun int
+	RunTrusted     bool
 }
 
 type ContentLossWindow struct {
@@ -27,16 +32,29 @@ type ContentLossEvidence struct {
 func countContentLoss(units []contentUnit, start, end, until time.Duration) ContentLossCounts {
 	out := ContentLossCounts{Trusted: true}
 	window := EventMeasurement{WindowStart: start, WindowEnd: end, ObservedUntil: until}
-	for _, unit := range units {
+	ordered := append([]contentUnit(nil), units...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].at == ordered[j].at {
+			return ordered[i].identity < ordered[j].identity
+		}
+		return ordered[i].at < ordered[j].at
+	})
+	run := 0
+	for _, unit := range ordered {
 		if !unit.written || unit.at < start || unit.at >= end {
 			continue
 		}
 		out.Sent++
 		if missingInWindow(unit, window) {
 			out.Lost++
+			run++
+			out.LongestLostRun = max(out.LongestLostRun, run)
+		} else {
+			run = 0
 		}
 	}
 	out.Trusted = out.Sent > 0
+	out.RunTrusted = out.Trusted
 	return out
 }
 

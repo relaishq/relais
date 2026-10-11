@@ -54,7 +54,15 @@ setup and canceled runs. Selecting LAN after another profile removes netem.
 Each trial runs one continuous audio/video call. It takes the baseline from
 the last three seconds of that same call before the acceptance event, under
 the same profile and load (one call). The baseline uses received packet
-intervals, the same units as the caller yardstick's per-track event gap.
+intervals. Crash-run computes event gaps from retained arrivals over
+`[Start, End + return bound + 20ms margin]`. The return bound is the maximum
+caller-link delay plus jitter in the applied plan, cross-checked against half
+the trial's baseline content age. If that estimate is larger, it extends the
+window further. The first arrival after this window closes is included, so a
+gap crossing its end is counted. This catches held packets that reach a far
+caller after the controller event ends. Missing arrival coverage or a baseline
+that disagrees with the link envelope makes the evidence inconclusive. #32's
+caller yardstick and other callers keep their existing windows.
 The run's baseline p95 pools these intervals across trials. It never compares
 against a separate LAN run or the old 416ms phase-1 median.
 
@@ -64,10 +72,13 @@ Takeovers require each track's pause strictly below **2s**. When every media
 link is lossless (currently `lan`), they require trusted **zero lost content**
 in #32's event window. Loss on any media link (currently `region`, `far-caller`
 and `lossy-dc`) requires **no loss beyond the network's own**, using the
-same-run comparison below. The applied link plan selects the rule: positive
-loss on a caller, relay or worker link uses the baseline comparison. Loss
+same-run comparison below. The applied link plan and recorded qdisc select
+the rule: verified positive loss on a caller, relay or worker link uses the
+baseline comparison. Loss
 confined to control or store links does not change the content-loss rule.
-The raw loss remains visible; the report does not relabel it as zero.
+Every impairment, including loss-only, installs netem. Missing or mismatched
+recorded qdisc loss makes the policy inconclusive. The raw loss remains
+visible; the report does not relabel it as zero.
 Both require zero decryption failures, continuous connection, one offer/answer,
 no reconnect or renegotiation, and the 60-second consent observation.
 Whole-call ffmpeg decode findings remain explicit diagnostics because these
@@ -80,7 +91,8 @@ the 19th sorted value at 20 trials, so a single timing outlier does not become
 the p95. At ten trials, p95 selects the maximum. The move thresholds stay
 at baseline p95 + 50ms and the absolute 150ms ceiling. This sample count does
 not guarantee a precise population p95; all trials remain visible, and known
-integrity or connection failures in any trial still fail the run.
+integrity or connection failures in any trial still fail the run. Every move
+trial must also stay strictly below 2s, even when p95 excludes it.
 
 Takeovers retain **ten trials**. Their pause ceiling checks every trial,
 not the displayed p95, so one pause at or above 2s still fails acceptance.
@@ -89,9 +101,11 @@ A gap baseline p95-minus-median above 50ms makes the row inconclusive. This
 budget includes normal intra-frame packet bursts and video cadence. The
 independent #32 content-age baseline still needs ten samples and a spread of
 at most 20ms. The caller policy explicitly records content-age median ceilings:
-LAN/lossy DC 50ms, region 150ms, far caller 250ms. These describe the network
-freshness policy; they do not replace the **150ms move-gap ceiling**. #32's
-per-metric trust, loss and freshness reports are retained unchanged.
+LAN/lossy DC 50ms, region 150ms, far caller 250ms. These are **diagnostic**,
+not acceptance gates; they do not replace the **150ms move-gap ceiling**. #32's
+per-metric trust, loss and freshness reports are retained unchanged. Each row
+records `AudioSpreadMargin` and `VideoSpreadMargin`: 20ms minus that track's
+content-age p95-minus-median. The 20ms limit remains unchanged.
 
 Known failures take precedence over unknown metrics. Rows carry conclusive, fail or inconclusive states and reasons; move p95
 judgment belongs to the full run, not each individual trial. The run reports `pass`, `fail`, or `inconclusive`; both
@@ -124,7 +138,12 @@ and video. Each call must supply a baseline. Each track needs at least 100
 baseline sent units, at least as many baseline sent units as event sent units,
 and at least ten baseline windows. Missing or untrusted counts, insufficient
 coverage, or an untrusted caller loss verdict make that comparison
-**inconclusive**. Other known failures still win.
+**inconclusive**. A trial or pooled baseline above **10%** content loss is
+inconclusive
+("baseline too lossy to judge"). A 100%-loss baseline cannot pass. Expired event
+history stays inconclusive even when the earlier raw verdict set `Failed`.
+Definite lost calls, terminal takeover loss, and takeover timeouts fail.
+Other known failures still win.
 
 For media-link loss, calculate the measured baseline rate `baseline lost /
 baseline sent` and the expected event loss `event sent × baseline rate`.
@@ -149,7 +168,15 @@ a lossless media path proves exact zero-loss takeover, while a lossy media
 path proves no loss beyond the network's own at the stated confidence and
 observed sample size. This includes relay-to-worker DC loss.
 
-Moves retain their existing per-track gap, integrity and connection gates;
+Pooling also has a **per-trial burst guard** for takeovers, separately for
+audio and video. Count consecutive lost identified successful writes in send
+order. A valid return by the observation horizon breaks the run. Fail when the
+longest event run is at least `max(4, longest baseline run anywhere in this
+run + 1)`. This catches a concentrated takeover loss that fits the pooled
+count bound. Scattered losses still use the pooled comparison. Missing burst
+evidence, including old reports without `RunTrusted`, is inconclusive.
+
+Moves retain their per-track gap, integrity and connection gates;
 they do not currently gate on raw content loss. They record the same raw
 windows and comparison, so media-link loss cannot introduce a separate
 zero-loss requirement for a short move window.
@@ -181,9 +208,20 @@ The relay's new `relais_relay_barrier_resends_total` counter counts actual
 resend attempts. Both scenario baselines start after the preliminary move's full
 six-second settling window. Forced probes are excluded from profile p95;
 their measurements remain in the report, and whole-call integrity covers
-them. Random profile loss still applies during the acceptance event. Both resend and uncertain-outcome counts must be
-positive for lossy-DC acceptance. A missing count is inconclusive. The driver
-proxy is private through the existing management link; the original DC
+them. Each lossy-DC trial must have exactly two earlier **move** probes; every
+other profile must have zero. Any earlier takeover fails. The barrier-resend
+probe requires resumed audio/video and gaps at most **225ms** (150ms + 75ms).
+The uncertain-reply probe requires resumed audio/video and gaps strictly below
+**2s**; its operator error may represent a safe rollback. Both probe verdicts
+and maximum gaps appear in `PROFILE_RESULT`. Random profile loss still
+applies during the acceptance event. Both resend and **injected discarded
+reply** counts must be positive for lossy-DC acceptance. A missing injected
+count is inconclusive. `InjectedDiscardedReplies` counts
+proxy injections; `ObservedUncertainMoveResumes` separately counts controller
+uncertain target-resume paths through
+`relais_control_uncertain_move_resumes_total`. Missing controller samples are
+reported as unavailable, rather than zero. Neither counter proves a target
+commit. The driver proxy is private through the existing management link; the original DC
 source/destination qdiscs still apply to both halves of the HTTP round trip.
 
 ### Slow move diagnosis
@@ -235,6 +273,11 @@ matrix run (roughly 11 minutes each for LAN, region and far caller, and
 13 minutes for DC loss). This is a projection from the observed DC run
 and the other profiles' five-second warmup plus 60-second consent window,
 not a hosted measurement of the new configuration. Takeover cost is unchanged.
+The **whole nightly matrix** projects to about **155 runner-minutes** and
+about **30 minutes wall clock** when all eight lanes run concurrently. This
+public repository uses standard GitHub-hosted runners, so the matrix has [**no
+monetary runner charge**](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+The runner-time cost still matters.
 
 The orchestrator can dispatch all lanes with:
 

@@ -68,10 +68,20 @@ func TestProfilePlanEndToEndDelayAndScope(t *testing.T) {
 func TestProfileApplicationRecordsActualQdiscAndPropagatesFailures(t *testing.T) {
 	p, _ := NewPlan(0, 1, "aabbccddee", 2)
 	var calls []Command
+	recorded := map[string]string{}
 	topology := &Topology{Plan: p, runner: func(_ context.Context, c Command) (string, error) {
 		calls = append(calls, c)
 		if c[6] == "show" {
-			return "qdisc netem 8001: root delay 10ms loss 0.5%", nil
+			if value, ok := recorded[c[8]]; ok {
+				return value, nil
+			}
+			return "qdisc noqueue 0: root", nil
+		}
+		if c[6] == "replace" {
+			recorded[c[8]] = "qdisc netem 8001: root " + strings.Join(c[11:], " ")
+		}
+		if c[6] == "del" {
+			recorded[c[8]] = "qdisc noqueue 0: root"
 		}
 		return "", nil
 	}}
@@ -194,4 +204,48 @@ func TestProfileBarrierLossRemovalTriesAllRulesAndRetriesFailures(t *testing.T) 
 	topology.closeErr = cleanupErr
 	require.ErrorIs(t, remove(), cleanupErr)
 	require.Len(t, deleted, 3)
+}
+
+func TestProfileAppliesImpairmentsWithoutDelayAndVerifiesLoss(t *testing.T) {
+	p, err := NewPlan(0, 1, "aabbccddee", 2)
+	require.NoError(t, err)
+	plan, err := p.ProfilePlan("lan")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name          string
+		loss          float64
+		jitter, delay time.Duration
+		reorder       float64
+	}{
+		{name: "loss only", loss: .5}, {name: "jitter only", jitter: time.Millisecond}, {name: "reorder only", reorder: .1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			link := plan[0]
+			link.Loss, link.Jitter, link.Delay, link.Reorder = tc.loss, tc.jitter, tc.delay, tc.reorder
+			var calls []Command
+			topology := &Topology{Plan: p, runner: func(_ context.Context, c Command) (string, error) {
+				calls = append(calls, c)
+				if c[6] == "show" {
+					return "qdisc netem 8001: root " + strings.Join(link.command()[11:], " "), nil
+				}
+				return "", nil
+			}}
+			applied, err := topology.applyProfileSettings(context.Background(), []LinkSetting{link})
+			require.NoError(t, err)
+			require.Len(t, applied, 1)
+			require.Len(t, calls, 2)
+			require.Equal(t, "replace", calls[0][6])
+			require.Equal(t, "show", calls[1][6])
+		})
+	}
+	for _, qdisc := range []string{"qdisc netem 8001: root delay 1ms", "qdisc netem 8001: root loss 0.1%", "qdisc netem 8001: root loss bad%", "qdisc noqueue 0: root"} {
+		link := plan[0]
+		link.Loss = .5
+		link.Qdisc = qdisc
+		require.Error(t, link.VerifyQdisc(), qdisc)
+	}
+	link := plan[0]
+	link.Loss = .5
+	link.Qdisc = "qdisc netem 8001: root loss random 0.500000%"
+	require.NoError(t, link.VerifyQdisc())
 }

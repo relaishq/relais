@@ -542,6 +542,9 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		// with an agent cause. Otherwise typed callback failures are definitive.
 		agentFailure := errors.Is(err, agent.ErrRestore) || errors.Is(err, agent.ErrVersion) || errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrSave)
 		uncertainResume := errors.Is(err, privateapi.ErrUncertain) || (!agentFailure && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)))
+		if uncertainResume {
+			p.metrics.uncertainMoveResumes.Add(1)
+		}
 		err = p.rollback(c, source, target, r, state, transferred, true, true, uncertainResume, &res.Result, err, res.Start)
 		return res, err
 	}

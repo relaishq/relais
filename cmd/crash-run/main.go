@@ -83,6 +83,11 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 				if m.Process == "relay" {
 					out.ProfileRow.BarrierResends = uint64(m.Values["relais_relay_barrier_resends_total"])
 				}
+				if m.Process == "control" {
+					v, ok := m.Values["relais_control_uncertain_move_resumes_total"]
+					out.ProfileRow.ObservedUncertainMoveResumes = uint64(v)
+					out.ProfileRow.ObservedUncertainMoveResumesAvailable = ok
+				}
 			}
 		}
 	}()
@@ -213,7 +218,10 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		return result{}, err
 	}
 	if len(status.Calls) != 1 {
-		return result{}, errors.New("expected one owning call in /status")
+		return result{}, definiteProfileFailure("lost call: expected one owning call in /status")
+	}
+	if profile != nil && len(status.Takeovers) > 0 {
+		return result{}, definiteProfileFailure("unexpected takeover before acceptance")
 	}
 	owner := status.Calls[0].Owner
 	worker := workerPIDs[owner]
@@ -237,8 +245,14 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		case <-time.After(6 * time.Second):
 		}
 		status, err = h.Status(ctx)
-		if err != nil || len(status.Calls) != 1 {
-			return result{}, fmt.Errorf("uncertainty probe lost call: %v", err)
+		if err != nil {
+			return result{}, fmt.Errorf("uncertainty probe status: %w", err)
+		}
+		if len(status.Calls) != 1 {
+			return result{}, definiteProfileFailure("uncertainty probe lost call")
+		}
+		if len(status.Takeovers) > 0 {
+			return result{}, definiteProfileFailure("unexpected takeover before acceptance")
 		}
 		owner = status.Calls[0].Owner
 		worker = workerPIDs[owner]
@@ -256,8 +270,14 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		case <-time.After(6 * time.Second):
 		}
 		status, err = h.Status(ctx)
-		if err != nil || len(status.Calls) != 1 {
-			return result{}, fmt.Errorf("post-probe status: %v", err)
+		if err != nil {
+			return result{}, fmt.Errorf("post-probe status: %w", err)
+		}
+		if len(status.Calls) != 1 {
+			return result{}, definiteProfileFailure("barrier probe lost call")
+		}
+		if len(status.Takeovers) > 0 {
+			return result{}, definiteProfileFailure("unexpected takeover before acceptance")
 		}
 		owner = status.Calls[0].Owner
 		worker = workerPIDs[owner]
@@ -301,7 +321,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			case <-ctx.Done():
 				return result{}, ctx.Err()
 			case <-deadline.C:
-				return result{}, errors.New("takeover did not complete within 3 s")
+				return result{}, definiteProfileFailure("takeover did not complete within 3 s")
 			case <-tick.C:
 				status, err = h.Status(ctx)
 				if err != nil {
@@ -326,7 +346,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		} else {
 			takeover := status.Takeovers[len(status.Takeovers)-1]
 			if takeover.Lost || takeover.Error != "" {
-				return result{}, fmt.Errorf("takeover lost=%t: %s", takeover.Lost, takeover.Error)
+				return result{}, definiteProfileFailure(fmt.Sprintf("takeover lost=%t: %s", takeover.Lost, takeover.Error))
 			}
 		}
 	}
@@ -360,7 +380,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			row.Integrity.Reasons = append(row.Integrity.Reasons, "profile action error: "+profileActionErr.Error())
 		}
 		for _, f := range faults {
-			row.UncertainOutcomes += f.Count()
+			row.InjectedDiscardedReplies += f.Count()
 		}
 		encoded, err := json.Marshal(report)
 		if err != nil {
