@@ -239,11 +239,6 @@ func (r *recorder) srtpError(msg string) {
 	}
 	at := time.Since(r.start)
 	r.decryptFailureTimes = append(r.decryptFailureTimes, at)
-	for i := range r.savedMoves {
-		if r.savedMoves[i].resumedAfterEnd > 0 && at >= r.savedMoves[i].resumedAfterEnd {
-			r.savedMoves[i].DecryptionFailuresAfterResume++
-		}
-	}
 	switch {
 	case strings.Contains(msg, "failed to verify auth tag"):
 		r.decryptionFailures.AuthTag++
@@ -366,15 +361,6 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 		track.duplicatePackets++
 	}
 	track.seenPackets[pkt.SequenceNumber] = pkt.Timestamp
-	for i := range r.savedMoves {
-		if at > r.savedMoves[i].End {
-			for j := range r.savedMoves[i].Tracks {
-				if r.savedMoves[i].Tracks[j].Kind == track.kind {
-					r.savedMoves[i].Tracks[j].PacketsAfter++
-				}
-			}
-		}
-	}
 	track.packets++
 	if len(track.arrivals) >= maxHistoryPackets {
 		remove := maxHistoryPackets / 4

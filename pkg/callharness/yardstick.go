@@ -514,12 +514,18 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 	}
 	if m.VideoExpected && r.recording.DecodeEvery > 0 {
 		m.DecodedSamples = r.eventDecodedSamples(move.Start, limit)
-		if m.DecodedSamples < minimumDecodedSamples || r.eventInvalidSamples(move.Start, limit) {
+		failure := r.eventDecodeFailure(move.Start, limit)
+		if failure == DecodeInvalid {
+			for _, verdict := range []*MetricVerdict{&m.FirstContentVerdict, &m.FirstNewContentVerdict, &m.FirstLiveVerdict} {
+				verdict.Trusted = true
+				verdict.fail("online decoder reported invalid bitstream")
+			}
+		} else if m.DecodedSamples < minimumDecodedSamples || failure == DecodeUnavailable {
 			for _, verdict := range []*MetricVerdict{&m.FirstContentVerdict, &m.FirstNewContentVerdict, &m.FirstLiveVerdict} {
 				if m.DecodedSamples < minimumDecodedSamples {
 					verdict.untrust("too few online decoded samples")
 				} else {
-					verdict.untrust("online decode samples failed or were dropped")
+					verdict.untrust("online decode samples unavailable or dropped")
 				}
 			}
 		}

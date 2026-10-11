@@ -234,6 +234,7 @@ type MoveReport struct {
 
 	Kind                          string        // "move" or "takeover"
 	DetectionTime                 time.Duration // failure action to control-plane detection
+	decryptFailuresAtSave         int
 	DecryptionFailuresAfterResume int
 	From, To                      int // worker indexes
 
@@ -275,7 +276,9 @@ type MoveTrackReport struct {
 	TypicalTimestampStep uint32
 
 	// PacketsAfter counts packets that arrived after the move ended.
-	PacketsAfter int
+	PacketsAfter  int
+	packetsAtSave int
+	packetCounter *trackRecord
 
 	// FirstDecodableFrameAfter is, for video, the time from the end of the
 	// move to the first decodable frame after it; zero if none arrived.
@@ -309,10 +312,28 @@ type ConsentReport struct {
 // moveReports describes every move from the caller's records. It runs under
 // r.mu.
 func (r *recorder) moveReports() []MoveReport {
-	reports := append([]MoveReport(nil), r.savedMoves...)
+	reports := slices.Clone(r.savedMoves)
+	for i := range reports {
+		report := &reports[i]
+		report.Tracks = slices.Clone(report.Tracks)
+		for j := range report.Tracks {
+			track := &report.Tracks[j]
+			track.PacketsAfter += track.packetCounter.packets - track.packetsAtSave
+		}
+		if report.resumedAfterEnd > 0 {
+			report.DecryptionFailuresAfterResume += r.decryptionFailures.Total() - report.decryptFailuresAtSave
+		}
+	}
+	return append(reports, r.measureMoves(r.hungUpAt, len(r.moves))...)
+}
+
+// measureMoves measures only the pending prefix requested by the caller. A
+// maintenance tick must not remeasure later events whose history is retained.
+func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
+	reports := make([]MoveReport, 0, count)
 	baselineFloor := r.baselineFloor
 	firstAudio, firstVideo := r.firstAudio, r.firstVideo
-	for moveIndex, move := range r.moves {
+	for moveIndex, move := range r.moves[:count] {
 		report := MoveReport{
 			Kind:          move.kind,
 			DetectionTime: move.detection,
@@ -331,7 +352,7 @@ func (r *recorder) moveReports() []MoveReport {
 		for _, track := range r.tracks {
 			report.Tracks = append(report.Tracks, track.aroundMove(report.Start, report.End))
 		}
-		limit := r.hungUpAt
+		limit := until
 		if moveIndex+1 < len(r.moves) {
 			limit = r.since(r.moves[moveIndex+1].start)
 		}
@@ -339,7 +360,7 @@ func (r *recorder) moveReports() []MoveReport {
 			report.Recovery = r.videoRecovery(report.Start, limit)
 		}
 		report.Measurement = r.eventMeasurement(report, limit, baselineFloor)
-		if len(reports) == 0 {
+		if len(r.savedMoves) == 0 && len(reports) == 0 {
 			firstAudio, firstVideo = report.Measurement.Audio, report.Measurement.Video
 		}
 		for _, pair := range []struct {

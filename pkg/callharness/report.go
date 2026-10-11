@@ -183,15 +183,25 @@ type VideoReport struct {
 
 // FullDecode is the result of decoding the received video with ffmpeg.
 type FullDecode struct {
-	// Skipped says why the decode did not run (for example, ffmpeg is not
-	// on PATH); empty when it ran.
+	// Skipped says why the decode did not finish (for example, a timeout or
+	// ffmpeg not on PATH); empty when it completed.
 	Skipped string
 
 	Decoder       string // the ffmpeg binary
 	FramesIn      int    // frames given to the decoder
 	FramesDecoded int    // frames the decoder output
 	Errors        string // the decoder's error output; empty when clean
+	Failure       DecodeFailure
 }
+
+// DecodeFailure separates confirmed invalid bitstreams from an unavailable
+// check (timeout, missing decoder, or execution failure).
+type DecodeFailure string
+
+const (
+	DecodeInvalid     DecodeFailure = "invalid bitstream"
+	DecodeUnavailable DecodeFailure = "unavailable"
+)
 
 // Ran reports whether the full decode ran.
 func (f FullDecode) Ran() bool {
@@ -401,7 +411,7 @@ func writeVideoSummary(b *strings.Builder, r *Report, v *VideoReport) {
 	}
 	b.WriteString("\n")
 	if v.OnlineDecode.Every > 0 {
-		fmt.Fprintf(b, "    online decode: every=%d sampled=%d decoded=%d rate=%.4f dropped=%d errors=%d conclusive=%t\n", v.OnlineDecode.Every, v.OnlineDecode.Sampled, v.OnlineDecode.Decoded, v.OnlineDecode.SampleRate(v.Frames), v.OnlineDecode.Dropped, v.OnlineDecode.Errors, v.OnlineDecode.Conclusive())
+		fmt.Fprintf(b, "    online decode: every=%d sampled=%d decoded=%d rate=%.4f dropped=%d unavailable=%d errors=%d conclusive=%t\n", v.OnlineDecode.Every, v.OnlineDecode.Sampled, v.OnlineDecode.Decoded, v.OnlineDecode.SampleRate(v.Frames), v.OnlineDecode.Dropped, v.OnlineDecode.Unavailable, v.OnlineDecode.Errors, v.OnlineDecode.Conclusive())
 	}
 	switch full := v.FullDecode; {
 	case !full.Ran() && v.OnlineDecode.Every > 0:

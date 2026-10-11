@@ -45,8 +45,8 @@ func TestVP8SendIdentityPreservesDecodedPixels(t *testing.T) {
 	require.NotEqual(t, identifyVP8(original[0].data, 0), identifyVP8(original[0].data, 32768))
 }
 
-// Feed more than one PictureID epoch through the production send, packet,
-// assembler and event-summary paths. No twenty-minute sleep is needed.
+// Cross a PictureID epoch through the production send, packet, assembler and
+// event-summary paths. Short mode seeds the counter just before the boundary.
 func TestRecordingWrapEventsAndBoundedHistory(t *testing.T) {
 	r := newRecorder()
 	r.recording.History = 15 * time.Second
@@ -57,13 +57,25 @@ func TestRecordingWrapEventsAndBoundedHistory(t *testing.T) {
 	assembler := &vp8Assembler{}
 	seq := uint16(0)
 	var oldPayloads [][]byte
-	for i := 0; i < 34000; i++ {
-		at := time.Second + time.Duration(i)*(time.Second/30)
+	first, end := 0, 34000
+	if testing.Short() {
+		first, end = 32500, 33300
+		r.sentVideo.Frames = first
+		for i := 0; i < first; i++ {
+			payloader.Payload(1000, []byte{1})
+		}
+	}
+	for i := first; i < end; i++ {
+		at := time.Second + time.Duration(i-first)*(time.Second/30)
 		if i == 32768 {
 			require.NoError(t, src.rewind())
 		}
 		data, key, err := src.next()
 		require.NoError(t, err)
+		if i == first {
+			old := &codecs.VP8Payloader{EnablePictureID: true}
+			oldPayloads = old.Payload(1000, identifyVP8(data, 0))
+		}
 		data = r.sendingVideo(data, nil, time.Second/30)
 		id := uint16(i & 0x7fff)
 		source := r.sentVideoFrames[id]
@@ -71,9 +83,6 @@ func TestRecordingWrapEventsAndBoundedHistory(t *testing.T) {
 		r.sentVideoFrames[id] = source
 		r.sent(kindVideo, key)
 		payloads := payloader.Payload(1000, data)
-		if i == 0 {
-			oldPayloads = payloads
-		}
 		// Leave the full 2s recovery + 3s stability window between events.
 		if i == 32600 || i == 32800 {
 			r.move(moveRecord{start: r.start.Add(at), end: r.start.Add(at + time.Millisecond)})
@@ -103,7 +112,7 @@ func TestRecordingWrapEventsAndBoundedHistory(t *testing.T) {
 		}
 		r.compact(at + 3*time.Millisecond)
 	}
-	r.hungUpAt = 1140 * time.Second
+	r.hungUpAt = time.Second + time.Duration(end-first)*(time.Second/30)
 	report := r.report()
 	require.Len(t, report.Moves, 2)
 	for _, m := range report.Moves {
@@ -117,8 +126,8 @@ func TestRecordingWrapEventsAndBoundedHistory(t *testing.T) {
 	require.GreaterOrEqual(t, report.Moves[1].Measurement.FirstNewContentIdentity, uint64(32768))
 	require.LessOrEqual(t, report.Recording.ContentUnits, 480)
 	require.LessOrEqual(t, report.Recording.FrameMarks, 480)
-	require.Equal(t, 34000, report.SentVideo.Frames)
-	require.Equal(t, 34000, report.Track(kindVideo).Video.DecodableFrames)
+	require.Equal(t, end, report.SentVideo.Frames)
+	require.Equal(t, end-first, report.Track(kindVideo).Video.DecodableFrames)
 }
 
 func TestVP8AssemblyReorderedDuplicateLostAndSequenceWrap(t *testing.T) {
