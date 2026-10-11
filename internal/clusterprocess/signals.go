@@ -14,6 +14,19 @@ type Manager struct {
 	mu       sync.Mutex
 	children []*Child
 	stopping bool
+	cleanups []func()
+}
+
+// AddCleanup registers idempotent resource cleanup after child shutdown,
+// including the forced second-signal exit path.
+func (m *Manager) AddCleanup(cleanup func()) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopping {
+		return context.Canceled
+	}
+	m.cleanups = append(m.cleanups, cleanup)
+	return nil
 }
 
 func (m *Manager) Start(dir, name string, env []string, args ...string) (*Child, error) {
@@ -33,6 +46,7 @@ func (m *Manager) Stop(force bool) {
 	m.mu.Lock()
 	m.stopping = true
 	children := append([]*Child(nil), m.children...)
+	cleanups := append([]func(){}, m.cleanups...)
 	if force {
 		for _, c := range children {
 			_ = c.SignalGroup(syscall.SIGKILL)
@@ -47,6 +61,9 @@ func (m *Manager) Stop(force bool) {
 		} else {
 			c.Stop()
 		}
+	}
+	for i := len(cleanups) - 1; i >= 0; i-- {
+		cleanups[i]()
 	}
 }
 

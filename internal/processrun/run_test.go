@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -32,6 +33,34 @@ func TestProcessConfigurationRequiresDedicatedStore(t *testing.T) {
 	listener, err := ListenPrivate("127.0.0.1:0")
 	require.NoError(t, err)
 	require.NoError(t, listener.Close())
+}
+
+func TestStoreConfigAuthenticatedConnections(t *testing.T) {
+	password := os.Getenv("RELAIS_TEST_REDIS_PASSWORD")
+	if password == "" {
+		t.Skip("set RELAIS_TEST_REDIS_PASSWORD with a dedicated password-protected Redis")
+	}
+	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	require.NoError(t, ValidateRedis(addr))
+	t.Setenv("RELAIS_REDIS_ADDR", addr)
+	t.Setenv("RELAIS_REDIS_PASSWORD", password)
+	t.Setenv("RELAIS_SESSIONSTORE_KEY", hex.EncodeToString(make([]byte, 32)))
+	var config StoreConfig
+	config.Flags(flag.NewFlagSet("authenticated", flag.ContinueOnError))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	store, err := config.Open(ctx)
+	require.NoError(t, err)
+	defer func() { _ = store.Close() }()
+	frames, err := config.OpenFrames(ctx)
+	require.NoError(t, err)
+	defer func() { _ = frames.Close() }()
+	owners, err := config.OpenOwners(ctx)
+	require.NoError(t, err)
+	defer func() { _ = owners.Close() }()
+	config.Password = ""
+	_, err = config.OpenOwners(ctx)
+	require.ErrorContains(t, err, "NOAUTH")
 }
 
 func TestSecondSignalExitsDuringDrain(t *testing.T) {

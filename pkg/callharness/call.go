@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"image"
-	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -119,7 +118,7 @@ type Call struct {
 func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err error) {
 	rec := newRecorder()
 
-	socket, err := newCallerSocket(rec)
+	socket, err := h.newCallerSocket(rec)
 	if err != nil {
 		return nil, err
 	}
@@ -555,7 +554,7 @@ func newCallerAPI(rec *recorder, browserLike bool, socket *callerSocket) (*webrt
 	settings := webrtc.SettingEngine{LoggerFactory: newCallerLoggerFactory(rec)}
 	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 	settings.SetIncludeLoopbackCandidate(true)
-	settings.SetIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })
+	settings.SetIPFilter(socket.acceptsCandidate)
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 	settings.SetICEUDPMux(socket.mux)
 
