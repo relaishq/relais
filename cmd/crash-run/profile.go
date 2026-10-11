@@ -15,6 +15,7 @@ import (
 	"github.com/relais/internal/clusterprocess"
 	"github.com/relais/internal/nettopology"
 	"github.com/relais/pkg/callharness"
+	"github.com/relais/pkg/mediaworker"
 )
 
 type profileTrialOptions struct{ Name, Scenario string }
@@ -27,7 +28,8 @@ type profileRow struct {
 	// Raw per-row counts are in Measurement.ContentLoss. These comparisons
 	// name the pooled run decision, never a separate per-row statistical test.
 	AudioContentLoss, VideoContentLoss profileLossComparison
-	ProbeEvents                        []callharness.MoveReport `json:"probe_events,omitempty"`
+	ProbeEvents                        []callharness.MoveReport   `json:"probe_events,omitempty"`
+	EventResult                        mediaworker.HandoverResult `json:"event_result"`
 	Verdict                            string
 	Reasons                            []string
 	Trial                              int
@@ -131,6 +133,7 @@ func measureProfile(report *callharness.Report, relay string, options profileTri
 		fail("event kind/error: " + move.Kind + " " + move.Error)
 	}
 	row.Measurement = move.Measurement
+	row.EventResult = move.Result
 	for _, track := range move.Tracks {
 		switch track.Kind {
 		case "audio":
@@ -170,11 +173,25 @@ func measureProfile(report *callharness.Report, relay string, options profileTri
 	return row
 }
 
+// The public caller/relay and private relay/worker links carry media. Control
+// and store links do not. Read loss from the applied plan, not the profile name.
+func mediaPathHasLoss(links []nettopology.LinkSetting) bool {
+	for _, link := range links {
+		if link.Loss > 0 && (link.Role == "caller" || link.Role == "relay" || strings.HasPrefix(link.Role, "worker-")) {
+			return true
+		}
+	}
+	return false
+}
+
 // Judge metrics independently: a confirmed integrity/loss/ceiling failure
 // remains failed even when another metric lacks samples. Unknown never passes.
 func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettopology.LinkSetting) profileReport {
 	p, _ := nettopology.ParseProfile(options.Name)
 	out := profileReport{Profile: options.Name, Scenario: options.Scenario, Load: 1, Rows: rows, Links: links, GapAllowance: 50 * time.Millisecond, AbsoluteGapCeiling: 150 * time.Millisecond, FreshnessCeiling: p.FreshnessCeiling, PauseCeiling: 2 * time.Second, MinimumTrials: 10, Verdict: "pass", DurationUnit: "nanoseconds"}
+	if options.Scenario == "move" {
+		out.MinimumTrials = 20
+	}
 	if options.Name == "lossy-dc" {
 		out.FaultPolicy = "one discarded committed resume reply; 40ms private drain-marker loss; 6s probe recovery windows"
 	}
@@ -190,13 +207,13 @@ func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettop
 	if len(rows) < out.MinimumTrials {
 		reason(false, fmt.Sprintf("too few trials: %d, need %d", len(rows), out.MinimumTrials))
 	}
-	callerLoss := p.CallerLoss > 0
+	mediaLoss := mediaPathHasLoss(links)
 	for _, track := range []struct {
 		video bool
 		out   *profileLossComparison
 	}{{false, &out.AudioContentLoss}, {true, &out.VideoContentLoss}} {
 		event, baseline, windows := poolContentLoss(rows, track.video)
-		*track.out = judgeContentLoss(event, baseline, windows, callerLoss)
+		*track.out = judgeContentLoss(event, baseline, windows, mediaLoss)
 		track.out.GatesAcceptance = options.Scenario == "takeover"
 	}
 	var audio, video, ab, vb []time.Duration
@@ -254,10 +271,10 @@ func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettop
 				if !loss.verdict.Trusted {
 					rowReason(false, prefix+loss.kind+" loss inconclusive: "+loss.verdict.Summary())
 				}
-				if !callerLoss && loss.verdict.Failed {
+				if !mediaLoss && loss.verdict.Failed {
 					rowReason(true, prefix+loss.kind+" content lost: "+loss.verdict.Summary())
 				}
-				if callerLoss && loss.verdict.Failed {
+				if mediaLoss && loss.verdict.Failed {
 					// Only the ordinary missing-content verdict is reattributed.
 					// Identity corruption and other known failures must still fail.
 					ordinary := "sent audio never returned"
@@ -274,7 +291,7 @@ func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettop
 					rowReason(loss.comparison.Verdict == "fail", prefix+loss.kind+" pooled content loss: "+strings.Join(loss.comparison.Reasons, "; "))
 				}
 			}
-			if !callerLoss && (m.AudioLoss.Trusted && m.LostAudio > 0 || m.VideoLoss.Trusted && m.LostVideoFrames > 0) {
+			if !mediaLoss && (m.AudioLoss.Trusted && m.LostAudio > 0 || m.VideoLoss.Trusted && m.LostVideoFrames > 0) {
 				rowReason(true, prefix+"nonzero caller content loss")
 			}
 		}
@@ -320,6 +337,30 @@ func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettop
 	}
 	return out
 }
+
+func profileResultLine(report profileReport) string {
+	line := fmt.Sprintf("PROFILE_RESULT verdict=%s audio_p95=%s audio_baseline_p95=%s video_p95=%s video_baseline_p95=%s barrier_resends=%d uncertain_outcomes=%d", report.Verdict, report.AudioP95, report.AudioBaselineP95, report.VideoP95, report.VideoBaselineP95, report.BarrierResends, report.UncertainOutcomes)
+	if len(report.Rows) == 0 {
+		return line + " slowest_trial=unavailable slowest_phases=unavailable"
+	}
+	// Keep the largest media gap visible even when p95 excludes that trial.
+	slowest := report.Rows[0]
+	for _, row := range report.Rows[1:] {
+		if max(row.AudioGap, row.VideoGap) > max(slowest.AudioGap, slowest.VideoGap) {
+			slowest = row
+		}
+	}
+	line += fmt.Sprintf(" slowest_trial=%d slowest_audio_gap=%s slowest_video_gap=%s", slowest.Trial, slowest.AudioGap, slowest.VideoGap)
+	r := slowest.EventResult
+	if r.Duration <= 0 {
+		return line + " slowest_phases=unavailable"
+	}
+	// Transfer, route change, release and coordination overhead are not timed
+	// separately by the controller. Report their combined residual honestly.
+	other := r.Duration - r.Drain - r.Export - r.Resume
+	return line + fmt.Sprintf(" slowest_duration=%s slowest_barrier=%s slowest_export=%s slowest_resume=%s slowest_other=%s", r.Duration, r.Drain, r.Export, r.Resume, other)
+}
+
 func writeProfileReport(dir string, report profileReport) error {
 	encoded, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -329,7 +370,7 @@ func writeProfileReport(dir string, report profileReport) error {
 		return err
 	}
 	fmt.Printf("PROFILE_POLICY profile=%s scenario=%s load=%d minimum_trials=%d move_allowance=%s absolute_move_ceiling=%s takeover_pause_ceiling=%s freshness_median_ceiling=%s\n", report.Profile, report.Scenario, report.Load, report.MinimumTrials, report.GapAllowance, report.AbsoluteGapCeiling, report.PauseCeiling, report.FreshnessCeiling)
-	fmt.Printf("PROFILE_RESULT verdict=%s audio_p95=%s audio_baseline_p95=%s video_p95=%s video_baseline_p95=%s barrier_resends=%d uncertain_outcomes=%d\n", report.Verdict, report.AudioP95, report.AudioBaselineP95, report.VideoP95, report.VideoBaselineP95, report.BarrierResends, report.UncertainOutcomes)
+	fmt.Println(profileResultLine(report))
 	fmt.Printf("PROFILE_REPORT duration_unit=nanoseconds %s\n", encoded)
 	return nil
 }

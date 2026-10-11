@@ -5,12 +5,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relais/internal/nettopology"
 	"github.com/relais/pkg/callharness"
 	"github.com/stretchr/testify/require"
 )
 
-func matchingNetworkLossRows() []profileRow {
-	rows := goodProfileRows()
+func profileTestLinks(t *testing.T, name string) []nettopology.LinkSetting {
+	t.Helper()
+	plan, err := nettopology.NewPlan(0, 1, "aabbccddee", 2)
+	require.NoError(t, err)
+	links, err := plan.ProfilePlan(name)
+	require.NoError(t, err)
+	return links
+}
+
+func matchingNetworkLossRows(trials int) []profileRow {
+	rows := goodProfileRows(trials)
+	rows[0].BarrierResends, rows[0].UncertainOutcomes = 1, 1
 	for i := range rows {
 		rows[i].Measurement.LostAudio = 20 * time.Millisecond
 		rows[i].Measurement.LostVideoFrames = 1
@@ -29,10 +40,42 @@ func matchingNetworkLossRows() []profileRow {
 }
 
 func TestProfileTakeoverLossMatchesNetworkBaseline(t *testing.T) {
-	rows := matchingNetworkLossRows()
-	for _, name := range []string{"region", "far-caller"} {
-		r := judgeProfile(profileTrialOptions{Name: name, Scenario: "takeover"}, rows, nil)
-		require.Equal(t, "pass", r.Verdict, r.Reasons)
+	rows := matchingNetworkLossRows(10)
+	for _, name := range []string{"lan", "region", "far-caller", "lossy-dc"} {
+		t.Run(name, func(t *testing.T) {
+			r := judgeProfile(profileTrialOptions{Name: name, Scenario: "takeover"}, rows, profileTestLinks(t, name))
+			if name == "lan" {
+				require.Equal(t, "fail", r.Verdict, r.Reasons)
+				require.Equal(t, "exact zero loss", r.VideoContentLoss.Method)
+			} else {
+				require.Equal(t, "pass", r.Verdict, r.Reasons)
+				require.Equal(t, "Clopper-Pearson upper rate + binomial predictive upper bound", r.VideoContentLoss.Method)
+			}
+		})
+	}
+}
+
+func TestProfileLossPolicyUsesMediaLinkPlan(t *testing.T) {
+	for _, tc := range []struct {
+		name, profile string
+		links         []nettopology.LinkSetting
+		verdict       string
+	}{
+		{"caller loss", "lan", []nettopology.LinkSetting{{Role: "caller", Loss: .1}}, "pass"},
+		{"relay loss", "lan", []nettopology.LinkSetting{{Role: "relay", Loss: .1}}, "pass"},
+		{"worker loss", "lan", []nettopology.LinkSetting{{Role: "worker-2", Loss: .1}}, "pass"},
+		{"control and store loss only", "region", []nettopology.LinkSetting{{Role: "caller"}, {Role: "relay"}, {Role: "worker-1"}, {Role: "control", Loss: .1}, {Role: "store", Loss: .1}}, "fail"},
+		{"clean media with delay and reorder", "far-caller", []nettopology.LinkSetting{{Role: "caller", Delay: time.Millisecond, Reorder: .1}, {Role: "relay"}, {Role: "worker-1"}}, "fail"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := judgeProfile(profileTrialOptions{Name: tc.profile, Scenario: "takeover"}, matchingNetworkLossRows(10), tc.links)
+			require.Equal(t, tc.verdict, r.Verdict, r.Reasons)
+			if tc.verdict == "fail" {
+				require.Equal(t, "exact zero loss", r.AudioContentLoss.Method)
+			} else {
+				require.NotEqual(t, "exact zero loss", r.AudioContentLoss.Method)
+			}
+		})
 	}
 }
 
@@ -64,7 +107,7 @@ func TestContentLossPredictionBound(t *testing.T) {
 		})
 	}
 	r := judgeContentLoss(counts(500, 1), counts(1500, 30), 30, false)
-	require.Equal(t, "fail", r.Verdict, "clean caller links still require exact zero")
+	require.Equal(t, "fail", r.Verdict, "lossless media links still require exact zero")
 }
 
 func TestExactBinomialCalculationAndBoundBoundary(t *testing.T) {
@@ -85,61 +128,65 @@ func TestExactBinomialCalculationAndBoundBoundary(t *testing.T) {
 }
 
 func TestProfileTakeoverPooledLossFailsAndCannotPassMissingEvidence(t *testing.T) {
-	options := profileTrialOptions{Name: "region", Scenario: "takeover"}
-	for _, tc := range []struct {
-		name    string
-		mutate  func([]profileRow)
-		verdict string
-	}{
-		{"excess audio", func(rows []profileRow) {
-			for i := range rows {
-				rows[i].Measurement.ContentLoss.Event.Audio.Lost = 10
-				rows[i].Measurement.LostAudio = 200 * time.Millisecond
+	for _, name := range []string{"region", "far-caller", "lossy-dc"} {
+		t.Run(name, func(t *testing.T) {
+			options := profileTrialOptions{Name: name, Scenario: "takeover"}
+			for _, tc := range []struct {
+				name    string
+				mutate  func([]profileRow)
+				verdict string
+			}{
+				{"excess audio", func(rows []profileRow) {
+					for i := range rows {
+						rows[i].Measurement.ContentLoss.Event.Audio.Lost = 10
+						rows[i].Measurement.LostAudio = 200 * time.Millisecond
+					}
+				}, "fail"},
+				{"excess video", func(rows []profileRow) {
+					for i := range rows {
+						rows[i].Measurement.ContentLoss.Event.Video.Lost = 10
+						rows[i].Measurement.LostVideoFrames = 10
+					}
+				}, "fail"},
+				{"small baseline", func(rows []profileRow) {
+					for i := range rows {
+						rows[i].Measurement.ContentLoss.Baselines = rows[i].Measurement.ContentLoss.Baselines[:1]
+						rows[i].Measurement.ContentLoss.Baselines[0].Audio.Sent = 5
+					}
+				}, "inconclusive"},
+				{"missing baseline", func(rows []profileRow) { rows[0].Measurement.ContentLoss.Baselines = nil }, "inconclusive"},
+				{"untrusted event", func(rows []profileRow) { rows[0].Measurement.ContentLoss.Event.Audio.Trusted = false }, "inconclusive"},
+				{"identity failure", func(rows []profileRow) {
+					rows[0].Measurement.VideoLoss.Reasons = append(rows[0].Measurement.VideoLoss.Reasons, "conflicting video content identities")
+				}, "fail"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					rows := matchingNetworkLossRows(10)
+					tc.mutate(rows)
+					r := judgeProfile(options, rows, profileTestLinks(t, options.Name))
+					require.Equal(t, tc.verdict, r.Verdict, r.Reasons)
+				})
 			}
-		}, "fail"},
-		{"excess video", func(rows []profileRow) {
-			for i := range rows {
-				rows[i].Measurement.ContentLoss.Event.Video.Lost = 10
-				rows[i].Measurement.LostVideoFrames = 10
+			r := judgeProfile(options, matchingNetworkLossRows(10), profileTestLinks(t, options.Name))
+			require.Equal(t, "pooled run", r.AudioContentLoss.Scope)
+			require.Equal(t, 500, r.AudioContentLoss.Event.Sent)
+			require.Equal(t, 10, r.AudioContentLoss.Event.Lost)
+			require.Equal(t, 1500, r.AudioContentLoss.Baseline.Sent)
+			require.Equal(t, 30, r.AudioContentLoss.Baseline.Lost)
+			require.Equal(t, 30, r.AudioContentLoss.BaselineWindows)
+			require.Equal(t, 10.0, r.AudioContentLoss.ExpectedCount)
+			require.Equal(t, contentLossConfidence, r.AudioContentLoss.Confidence)
+			for _, row := range r.Rows {
+				require.Equal(t, r.AudioContentLoss, row.AudioContentLoss)
+				require.Equal(t, 50, row.Measurement.ContentLoss.Event.Audio.Sent)
+				require.Equal(t, 1, row.Measurement.ContentLoss.Event.Audio.Lost)
 			}
-		}, "fail"},
-		{"small baseline", func(rows []profileRow) {
-			for i := range rows {
-				rows[i].Measurement.ContentLoss.Baselines = rows[i].Measurement.ContentLoss.Baselines[:1]
-				rows[i].Measurement.ContentLoss.Baselines[0].Audio.Sent = 5
-			}
-		}, "inconclusive"},
-		{"missing baseline", func(rows []profileRow) { rows[0].Measurement.ContentLoss.Baselines = nil }, "inconclusive"},
-		{"untrusted event", func(rows []profileRow) { rows[0].Measurement.ContentLoss.Event.Audio.Trusted = false }, "inconclusive"},
-		{"identity failure", func(rows []profileRow) {
-			rows[0].Measurement.VideoLoss.Reasons = append(rows[0].Measurement.VideoLoss.Reasons, "conflicting video content identities")
-		}, "fail"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			rows := matchingNetworkLossRows()
-			tc.mutate(rows)
-			r := judgeProfile(options, rows, nil)
-			require.Equal(t, tc.verdict, r.Verdict, r.Reasons)
+			// Moves do not currently gate on loss; their raw attribution is the same,
+			// and changing the short move window cannot reinstate a zero-loss gate.
+			options.Scenario = "move"
+			r = judgeProfile(options, matchingNetworkLossRows(20), profileTestLinks(t, options.Name))
+			require.Equal(t, "pass", r.Verdict, r.Reasons)
+			require.Equal(t, 20, r.AudioContentLoss.Event.Lost)
 		})
 	}
-	r := judgeProfile(options, matchingNetworkLossRows(), nil)
-	require.Equal(t, "pooled run", r.AudioContentLoss.Scope)
-	require.Equal(t, 500, r.AudioContentLoss.Event.Sent)
-	require.Equal(t, 10, r.AudioContentLoss.Event.Lost)
-	require.Equal(t, 1500, r.AudioContentLoss.Baseline.Sent)
-	require.Equal(t, 30, r.AudioContentLoss.Baseline.Lost)
-	require.Equal(t, 30, r.AudioContentLoss.BaselineWindows)
-	require.Equal(t, 10.0, r.AudioContentLoss.ExpectedCount)
-	require.Equal(t, contentLossConfidence, r.AudioContentLoss.Confidence)
-	for _, row := range r.Rows {
-		require.Equal(t, r.AudioContentLoss, row.AudioContentLoss)
-		require.Equal(t, 50, row.Measurement.ContentLoss.Event.Audio.Sent)
-		require.Equal(t, 1, row.Measurement.ContentLoss.Event.Audio.Lost)
-	}
-	// Moves do not currently gate on loss; their raw attribution is the same,
-	// and changing the short move window cannot reinstate a zero-loss gate.
-	options.Scenario = "move"
-	r = judgeProfile(options, matchingNetworkLossRows(), nil)
-	require.Equal(t, "pass", r.Verdict, r.Reasons)
-	require.Equal(t, 10, r.AudioContentLoss.Event.Lost)
 }

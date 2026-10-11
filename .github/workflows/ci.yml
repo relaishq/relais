@@ -359,7 +359,7 @@ jobs:
   # This is deliberately outside the PR aggregate and main-push lanes.
   netns-network-profiles:
     name: netns-network-profiles (${{ matrix.profile }}, ${{ matrix.scenario }})
-    timeout-minutes: 30
+    timeout-minutes: ${{ matrix.job_minutes }}
     permissions:
       contents: read
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -369,6 +369,15 @@ jobs:
       matrix:
         profile: [lan, region, far-caller, lossy-dc]
         scenario: [move, takeover]
+        include:
+          - scenario: move
+            trials: 20
+            driver_minutes: 35
+            job_minutes: 45
+          - scenario: takeover
+            trials: 10
+            driver_minutes: 20
+            job_minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -387,11 +396,11 @@ jobs:
         run: |
           set -o pipefail
           sudo -E env RELAIS_TEST_NETNS_REQUIRE=1 ./bin/nettopology.test -test.v -test.run='^TestLinuxProfile' -test.timeout=2m 2>&1 | tee bin/network-profile-tests.log
-      - name: Judge ten buffered profile trials
-        timeout-minutes: 20
+      - name: Judge buffered profile trials
+        timeout-minutes: ${{ matrix.driver_minutes }}
         run: |
           set -o pipefail
-          sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -topology=netns -profile=${{ matrix.profile }} -scenario=${{ matrix.scenario }} -runs=10 -after=60s 2>&1 | tee bin/network-profile-driver.log
+          sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -topology=netns -profile=${{ matrix.profile }} -scenario=${{ matrix.scenario }} -runs=${{ matrix.trials }} -after=60s 2>&1 | tee bin/network-profile-driver.log
       - name: Assert namespace and link cleanup
         if: always()
         timeout-minutes: 1

@@ -52,6 +52,12 @@ func TestProfileProcessLoopbackProbe(t *testing.T) {
 			r, err := trial(trialCtx, manager, bin, trialDir, env, 5*time.Second, 5*time.Second, false, false, false, nil, &options)
 			require.NoError(t, err)
 			require.NotNil(t, r.ProfileRow)
+			require.Positive(t, r.ProfileRow.EventResult.Duration, "acceptance event must retain real controller timings")
+			require.Positive(t, r.ProfileRow.EventResult.Resume)
+			if scenario == "move" {
+				require.Positive(t, r.ProfileRow.EventResult.Drain)
+				require.Positive(t, r.ProfileRow.EventResult.Export)
+			}
 			require.False(t, r.ProfileRow.Integrity.Failed, r.ProfileRow.Integrity.Reasons)
 			require.False(t, r.ProfileRow.Integrity.Trusted, "short smoke cannot claim 60s consent")
 			require.Equal(t, []string{"60s consent observation NOT-RUN"}, r.ProfileRow.Integrity.Reasons)
@@ -74,7 +80,7 @@ func TestProfileProcessLoopbackProbe(t *testing.T) {
 				require.Zero(t, r.Measurement.LostAudio, r.Measurement.Summary())
 				require.Zero(t, r.Measurement.LostVideoFrames, r.Measurement.Summary())
 			}
-			require.Equal(t, "inconclusive", judgeProfile(options, []profileRow{*r.ProfileRow}, nil).Verdict)
+			require.Equal(t, "inconclusive", judgeProfile(options, []profileRow{*r.ProfileRow}, profileTestLinks(t, options.Name)).Verdict)
 		})
 	}
 }

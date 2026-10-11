@@ -7,7 +7,7 @@ It refuses external Redis for netns and never uses port 6379.
 
 ```sh
 make build
-sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -topology=netns -profile=region -scenario=move -runs=10 -after=60s
+sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -topology=netns -profile=region -scenario=move -runs=20 -after=60s
 sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -topology=netns -profile=far-caller -scenario=takeover -runs=10 -after=60s
 ```
 
@@ -60,10 +60,13 @@ against a separate LAN run or the old 416ms phase-1 median.
 
 Moves judge audio and video independently. Their nearest-rank p95 must be
 at most the pooled baseline p95 + 50ms and at most **150ms**, inclusive.
-Takeovers require each track's pause strictly below **2s**. On `lan` and
-`lossy-dc`, whose caller links are lossless, they require trusted **zero lost
-content** in #32's event window. On `region` and `far-caller`, they require
-**no loss beyond the network's own**, using the same-run comparison below.
+Takeovers require each track's pause strictly below **2s**. When every media
+link is lossless (currently `lan`), they require trusted **zero lost content**
+in #32's event window. Loss on any media link (currently `region`, `far-caller`
+and `lossy-dc`) requires **no loss beyond the network's own**, using the
+same-run comparison below. The applied link plan selects the rule: positive
+loss on a caller, relay or worker link uses the baseline comparison. Loss
+confined to control or store links does not change the content-loss rule.
 The raw loss remains visible; the report does not relabel it as zero.
 Both require zero decryption failures, continuous connection, one offer/answer,
 no reconnect or renegotiation, and the 60-second consent observation.
@@ -72,7 +75,16 @@ profiles deliberately lose packets. Invalid payload identities still fail,
 and unavailable decoding makes the row inconclusive. Takeover content loss
 still gates independently through the caller event window and its profile policy.
 
-Ten trials are required. Each track needs at least ten baseline intervals.
+Moves require **20 trials** for every profile. Nearest-rank p95 selects
+the 19th sorted value at 20 trials, so a single timing outlier does not become
+the p95. At ten trials, p95 selects the maximum. The move thresholds stay
+at baseline p95 + 50ms and the absolute 150ms ceiling. This sample count does
+not guarantee a precise population p95; all trials remain visible, and known
+integrity or connection failures in any trial still fail the run.
+
+Takeovers retain **ten trials**. Their pause ceiling checks every trial,
+not the displayed p95, so one pause at or above 2s still fails acceptance.
+Each track needs at least ten baseline intervals.
 A gap baseline p95-minus-median above 50ms makes the row inconclusive. This
 budget includes normal intra-frame packet bursts and video cadence. The
 independent #32 content-age baseline still needs ten samples and a spread of
@@ -87,10 +99,10 @@ fail and inconclusive exit nonzero. A short developer run cannot pass the
 60-second consent gate. Too few trials, noisy baselines, untrusted loss,
 unavailable decoding or missing fault evidence are never silently passed.
 
-### Content loss on lossy caller links
+### Content loss on lossy media links
 
-Audio has no retransmission, so losing a caller-link packet can lose an audio
-unit even without a takeover. Video counts identified frames that never
+Audio has no retransmission, so losing a packet on any media link can lose an
+audio unit even without a takeover. Video counts identified frames that never
 returned complete, independent of decoding. Relay totals and netem drop
 counters mix packets, media kinds, retransmissions and control traffic; they
 cannot cheaply attribute these content units to a direction and event window.
@@ -107,14 +119,14 @@ lost duration by 20ms. Video counts sent frames, not packets. Duplicates and
 reordering count once. Missing content uses the same observation horizon as
 #32's raw loss; late complete returns are not lost content.
 
-Pool the ten event windows and their baseline windows separately for audio
+Pool all acceptance event windows and their baseline windows separately for audio
 and video. Each call must supply a baseline. Each track needs at least 100
 baseline sent units, at least as many baseline sent units as event sent units,
 and at least ten baseline windows. Missing or untrusted counts, insufficient
 coverage, or an untrusted caller loss verdict make that comparison
 **inconclusive**. Other known failures still win.
 
-For caller-link loss, calculate the measured baseline rate `baseline lost /
+For media-link loss, calculate the measured baseline rate `baseline lost /
 baseline sent` and the expected event loss `event sent × baseline rate`.
 Use a one-sided [exact Clopper-Pearson upper rate](https://www.itl.nist.gov/div898/software/dataplot/refman1/auxillar/propconf.htm),
 then a binomial predictive upper count for the event denominator. Each tail
@@ -133,18 +145,18 @@ count, upper count, confidence, method, verdict and reasons. Their scope is
 explicitly `pooled run`; rows do not run separate statistical tests.
 `BoundAvailable` distinguishes an unavailable bound from a zero bound, and
 `GatesAcceptance` distinguishes the takeover gate from move diagnostics. Thus
-`lan` and `lossy-dc` prove exact zero-loss takeover, while `region` and
-`far-caller` prove no loss beyond the network's own at the stated confidence
-and observed sample size.
+a lossless media path proves exact zero-loss takeover, while a lossy media
+path proves no loss beyond the network's own at the stated confidence and
+observed sample size. This includes relay-to-worker DC loss.
 
 Moves retain their existing per-track gap, integrity and connection gates;
 they do not currently gate on raw content loss. They record the same raw
-windows and comparison, so caller-link loss cannot introduce a separate
+windows and comparison, so media-link loss cannot introduce a separate
 zero-loss requirement for a short move window.
 
 ### Lossy DC fault evidence
 
-Small random loss alone will seldom drop one of ten barrier packets, and TCP
+Small random loss alone will seldom drop one of the few barrier packets, and TCP
 can hide reply loss with retransmission. Each lossy trial therefore includes
 an explicit uncertainty probe before its acceptance event. A driver-owned
 HTTP proxy lets a real worker resume commit, then substitutes one malformed
@@ -174,6 +186,30 @@ positive for lossy-DC acceptance. A missing count is inconclusive. The driver
 proxy is private through the existing management link; the original DC
 source/destination qdiscs still apply to both halves of the HTTP round trip.
 
+### Slow move diagnosis
+
+Each row retains the acceptance event's controller result in `event_result`,
+including total `Duration`, barrier `Drain`, `Export`, and `Resume` timings.
+Preliminary fault probes remain separate in `probe_events`. The
+`PROFILE_RESULT` summary names `slowest_trial`, selected by the largest audio
+or video gap, even if p95 excludes that outlier. It prints both gaps and
+the event's phase timings. `slowest_other` is total duration minus barrier,
+export and resume: transfer, routing, release and coordination overhead
+combined. These phases are not individually timed. Missing phase data is
+reported as unavailable.
+
+A lost private-HTTP TCP segment on the DC path can add about one TCP
+retransmission timeout (RTO) to export. The
+[Linux default minimum TCP RTO](https://www.kernel.org/doc/html/latest/networking/ip-sysctl.html#tcp-rto-min-us)
+is 200ms; route and socket settings can override it. This explanation is
+**PLAUSIBLE**, from [run 38154313823](https://github.com/relaishq/relais/actions/runs/38154313823)
+trial 4: export took 209.61ms instead of the other trials' 2.07–2.78ms.
+Barrier, resume, and the combined remaining time stayed normal. The
+acceptance move succeeded without rollback or hold expiry. Its audio/video
+gaps were 247.33ms/260.85ms. No packet trace, retransmission counter, or
+socket RTO setting was captured, so TCP retransmission is not proven.
+The move thresholds still apply to DC loss.
+
 ## CI and evidence boundary
 
 `netns-network-profiles (PROFILE, SCENARIO)` runs the four profiles × two
@@ -187,7 +223,18 @@ the driver as root. Each trial retains service logs, `caller-report.json` and
 `metrics.json`. JSON durations are nanoseconds; the log also prints the thresholds and p95s
 with readable units. Profile JSON results upload on every run; failures and
 cancellations also upload all logs. Always-run leftover checks detect owned
-namespaces or links after teardown. Job timeout: 30 minutes; driver: 20 minutes.
+namespaces or links after teardown. Move jobs use 20 trials, a 35-minute
+driver timeout and a 45-minute job timeout. Takeovers retain ten trials,
+a 20-minute driver timeout and a 30-minute job timeout.
+
+In run 38154313823, the DC trial process observation averaged 78.46s.
+Twenty such trials project to about 26 minutes before job setup, so the
+move timeouts include trial and setup headroom. Adding ten trials to all
+four move lanes projects to about **46 additional runner-minutes** per
+matrix run (roughly 11 minutes each for LAN, region and far caller, and
+13 minutes for DC loss). This is a projection from the observed DC run
+and the other profiles' five-second warmup plus 60-second consent window,
+not a hosted measurement of the new configuration. Takeover cost is unchanged.
 
 The orchestrator can dispatch all lanes with:
 
