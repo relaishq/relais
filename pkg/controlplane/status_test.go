@@ -166,3 +166,66 @@ func TestStatusTightPollingDoesNotBlockMoves(t *testing.T) {
 	default:
 	}
 }
+
+func TestStatusDuringTakeoverDoesNotPutMetadataAheadOfLease(t *testing.T) {
+	p, _, baseB, _ := setup(t)
+	p.workers["b"].worker = &takeoverWorker{fakeWorker: baseB}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	lease, err := p.store.Get(ctx, id)
+	require.NoError(t, err)
+	require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
+	source := p.workers["a"]
+	source.dead = true
+	s := &statusReadStore{Store: p.store, reads: make(chan chan struct{})}
+	p.store = s
+	polled := make(chan Status, 1)
+	pollErrors := make(chan error, 1)
+	go func() {
+		status, err := p.Status(context.WithValue(ctx, statusReadKey{}, true))
+		polled <- status
+		pollErrors <- err
+	}()
+	var release chan struct{}
+	select {
+	case release = <-s.reads:
+	case <-ctx.Done():
+		t.Fatal("status poll did not reach store read")
+	}
+	// Status has read epoch 1. Complete a real takeover before allowing that
+	// read to return; it must not acquire epoch 2's completed-move metadata.
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		p.takeover(ctx, source, lease, time.Now())
+	}()
+	t.Cleanup(func() { cancel(); <-finished })
+	select {
+	case <-finished:
+	case <-ctx.Done():
+		t.Fatal("takeover blocked behind status read")
+	}
+	close(release)
+	status := <-polled
+	require.NoError(t, <-pollErrors)
+	require.Len(t, status.Calls, 1)
+	require.Equal(t, "a", status.Calls[0].Owner)
+	require.EqualValues(t, 1, status.Calls[0].Epoch)
+	require.Zero(t, status.Calls[0].MoveCount)
+	require.Zero(t, status.Calls[0].TakeoverCount)
+	require.Nil(t, status.Calls[0].LastMove)
+	require.Empty(t, status.Calls[0].LastMoveKind)
+	status, err = p.Status(ctx)
+	require.NoError(t, err)
+	require.Len(t, status.Calls, 1)
+	require.Equal(t, "b", status.Calls[0].Owner)
+	require.EqualValues(t, 2, status.Calls[0].Epoch)
+	require.EqualValues(t, 1, status.Calls[0].MoveCount)
+	require.EqualValues(t, 1, status.Calls[0].TakeoverCount)
+	require.NotNil(t, status.Calls[0].LastMove)
+	require.Equal(t, "takeover", status.Calls[0].LastMoveKind)
+	require.Len(t, status.Takeovers, 1)
+	require.False(t, status.Takeovers[0].Lost)
+}

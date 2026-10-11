@@ -200,6 +200,9 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	defer deadline.Stop()
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
+	// SIGTERM exits this wait on the first owner change, which may precede
+	// move completion. The later worker-exit and media-freshness checks catch
+	// a failed drain or rollback; this poll alone does not prove success.
 	for len(status.Takeovers) == 0 && (!terminate || len(status.Calls) != 1 || status.Calls[0].Owner == owner) {
 		select {
 		case <-ctx.Done():
