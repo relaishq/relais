@@ -307,6 +307,7 @@ func run() (err error) {
 	redisBinary := flag.String("redis-server", "redis-server", "Redis executable for the throwaway instance")
 	verbose := flag.Bool("verbose", false, "print full caller reports")
 	bufferOn := flag.Bool("buffer", false, "run with caller SRTP buffering, using the source-checkout caller probe")
+	replayLoss := flag.Bool("buffer-lossy", false, "expire the real replay gate before adoption; prove HTTP keyframe recovery")
 	compareBuffer := flag.Bool("compare-buffer", false, "interleave buffer on/off with the same frame-cache mode; requires source checkout and Go")
 	compare := flag.Bool("compare-cache", true, "compare Redis cache+PLI with cache-off PLI (runs per mode)")
 	cacheOff := flag.Bool("frame-cache-off", false, "run PLI only; disable cache writes and replay (overrides comparison)")
@@ -319,6 +320,12 @@ func run() (err error) {
 	compareRestore := flag.Bool("compare-restore", true, "compare restore on/off in relay-restart mode")
 	flag.DurationVar(&metricsInterval, "metrics-interval", time.Second, "private metrics scrape interval; 0 disables periodic scraping (pre-fault and final samples remain)")
 	flag.Parse()
+	if *replayLoss {
+		*bufferOn = true
+	}
+	if *replayLoss && *compareBuffer {
+		return errors.New("buffer-lossy cannot combine with compare-buffer")
+	}
 	if (*bufferOn || *compareBuffer) && (*relayRestart || *relayStandby || *terminate || *topologyOption != "loopback") {
 		return errors.New("buffer comparison requires loopback and cannot combine with relay-restart, relay-standby or sigterm")
 	}
@@ -451,6 +458,9 @@ func run() (err error) {
 	for m, off := range modes {
 		if *bufferOn || *compareBuffer {
 			labels[m] = "buffer-on"
+			if *replayLoss {
+				labels[m] = "buffer-lossy"
+			}
 			if off {
 				labels[m] = "buffer-off"
 			}
@@ -491,7 +501,7 @@ func run() (err error) {
 			var r result
 			var err error
 			if *bufferOn || *compareBuffer {
-				r, err = bufferTrial(trialCtx, manager, bufferCaller, bin, trialDir, env, *after, warmup, off, *cacheOff)
+				r, err = bufferTrial(trialCtx, manager, bufferCaller, bin, trialDir, env, *after, warmup, off, *cacheOff, *replayLoss)
 			} else if *relayStandby {
 				warmup = 2250*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
 				r, err = relayStandbyTrial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, off)

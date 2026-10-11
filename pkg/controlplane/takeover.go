@@ -457,7 +457,12 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		}
 		// Gate and old-leg fencing precede snapshot I/O. Store errors must not
 		// leave the previous owner able to send after its lease was transferred.
-		if err = r.MoveSession(c.id, pending.routed, target.addr); err != nil {
+		if tenureRelay, ok := r.(TenureRelay); ok {
+			err = tenureRelay.MoveSessionAtEpoch(c.id, pending.routed, target.addr, transferred.Epoch)
+		} else {
+			err = r.MoveSession(c.id, pending.routed, target.addr)
+		}
+		if err != nil {
 			pending.routed = netip.AddrPort{}
 			p.unreserve(target)
 			return

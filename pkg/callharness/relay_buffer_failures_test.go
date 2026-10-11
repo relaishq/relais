@@ -154,10 +154,26 @@ type bufferResumeReplyFault struct {
 	path     string
 	mu       sync.Mutex
 	requests [][]byte
+	moves    []relay.RouteRequest
 	dropped  bool
 }
 
 func (f *bufferResumeReplyFault) RoundTrip(req *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(req.URL.Path, "/move") {
+		data, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		req.Body = io.NopCloser(bytes.NewReader(data))
+		var move relay.RouteRequest
+		if err := json.Unmarshal(data, &move); err != nil {
+			return nil, err
+		}
+		f.mu.Lock()
+		f.moves = append(f.moves, move)
+		f.mu.Unlock()
+	}
+
 	path := f.path
 	if path == "" {
 		path = "/resume"
@@ -486,7 +502,13 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		require.Equal(t, "2", status.Calls[0].Owner)
 	}
 	if reply != nil && path == "retried-replay" {
+		lease, err := store.Get(ctx, call.SessionID())
+		require.NoError(t, err)
 		reply.mu.Lock()
+		require.Len(t, reply.moves, 2)
+		for _, move := range reply.moves {
+			require.Equal(t, lease.Epoch, move.Epoch, "HTTP move confirmation preserves the transferred receiver tenure")
+		}
 		require.Len(t, reply.requests, 2, "confirmation reads the completed replay receipt")
 		require.Equal(t, reply.requests[0], reply.requests[1])
 		reply.mu.Unlock()

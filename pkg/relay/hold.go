@@ -56,6 +56,8 @@ type sessionHold struct {
 	replayResult     ReplayResult
 	queuedHigh       map[uint32]uint64
 	replayGeneration uint64
+	replayTarget     netip.AddrPort
+	replayTenure     uint64
 }
 
 // HoldSession brackets a planned move. Caller packets stop being forwarded

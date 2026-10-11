@@ -3,12 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -23,6 +28,7 @@ type bufferEvidence struct {
 	RelayReplayPackets                    int
 	RelayReplayDuration                   time.Duration
 	Complete, GateReleased                bool
+	RecoveryRequests                      int
 	UniqueDecodedFrames, KeyframeRequests int
 }
 
@@ -30,6 +36,7 @@ type bufferProcessConfig struct {
 	Dir, SignalingURL, RelayHTTP, RelayMedia, KillURL string
 	After, Warmup                                     time.Duration
 	BufferOff                                         bool
+	ReplayLoss                                        bool
 }
 
 // The temporary caller executable uses the existing exact packet and frame
@@ -51,13 +58,24 @@ func buildBufferCaller(ctx context.Context, dir string) (string, error) {
 	return path, nil
 }
 
-func bufferTrial(ctx context.Context, manager *clusterprocess.Manager, caller, bin, dir string, env []string, after, warmup time.Duration, off, cacheOff bool) (result, error) {
+func bufferTrial(ctx context.Context, manager *clusterprocess.Manager, caller, bin, dir string, env []string, after, warmup time.Duration, off, cacheOff, replayLoss bool) (out result, trialErr error) {
 	// Keep all service children in the driver's manager, including when the
 	// caller test crashes or times out before its test cleanups can run.
 	var services []*clusterprocess.Child
 	defer func() {
 		for i := len(services) - 1; i >= 0; i-- {
 			services[i].Stop()
+		}
+	}()
+	systemMetrics := newMetricsRun()
+	var recoveryRequests atomic.Int32
+	defer func() {
+		out.Metrics = systemMetrics.finish(dir)
+		if out.BufferEvidence != nil {
+			out.BufferEvidence.RecoveryRequests = int(recoveryRequests.Load())
+		}
+		if trialErr == nil {
+			trialErr = validateBufferMetrics(out, off, replayLoss)
 		}
 	}()
 	start := func(name string, args ...string) (*clusterprocess.Child, clusterprocess.Ready, error) {
@@ -73,9 +91,15 @@ func bufferTrial(ctx context.Context, manager *clusterprocess.Manager, caller, b
 		readyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		ready, err := child.Ready(readyCtx)
+		if err == nil {
+			systemMetrics.add(name, ready.HTTP, child)
+		}
 		return child, ready, err
 	}
 	args := []string{filepath.Join(bin, "relais-relay"), "-media", "127.0.0.1:0", "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0"}
+	if replayLoss {
+		args = append(args, "-hold-timeout", "150ms")
+	}
 	if off {
 		args = append(args, "-buffer-off")
 	}
@@ -100,7 +124,28 @@ func bufferTrial(ctx context.Context, manager *clusterprocess.Manager, caller, b
 			return result{}, err
 		}
 		workers[name] = child
-		controlArgs = append(controlArgs, "-worker", name+"="+ready.HTTP)
+		workerURL := ready.HTTP
+		if replayLoss {
+			target, err := url.Parse(workerURL)
+			if err != nil {
+				return result{}, err
+			}
+			proxy := httputil.NewSingleHostReverseProxy(target)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				// Delay real adoption past the gate deadline. Resume was already told
+				// that the plan was complete, so recovery must use the HTTP request.
+				if strings.HasSuffix(req.URL.Path, "/resume") {
+					time.Sleep(250 * time.Millisecond)
+				}
+				if strings.HasSuffix(req.URL.Path, "/keyframe") {
+					recoveryRequests.Add(1)
+				}
+				proxy.ServeHTTP(w, req)
+			}))
+			defer server.Close()
+			workerURL = server.URL
+		}
+		controlArgs = append(controlArgs, "-worker", name+"="+workerURL)
 	}
 	if _, _, err := start("control", controlArgs...); err != nil {
 		return result{}, err
@@ -114,6 +159,7 @@ func bufferTrial(ctx context.Context, manager *clusterprocess.Manager, caller, b
 			http.Error(w, "unknown owned worker", http.StatusNotFound)
 			return
 		}
+		systemMetrics.sampleBeforeFault(req.Context())
 		at := time.Now()
 		if err := worker.SignalGroup(syscall.SIGKILL); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
@@ -127,7 +173,7 @@ func bufferTrial(ctx context.Context, manager *clusterprocess.Manager, caller, b
 	})
 	killServer := httptest.NewServer(mux)
 	defer killServer.Close()
-	cfg := bufferProcessConfig{Dir: dir, SignalingURL: controlURL + "/calls", RelayHTTP: relayReady.HTTP, RelayMedia: relayReady.Media, KillURL: killServer.URL, After: after, Warmup: warmup, BufferOff: off}
+	cfg := bufferProcessConfig{Dir: dir, SignalingURL: controlURL + "/calls", RelayHTTP: relayReady.HTTP, RelayMedia: relayReady.Media, KillURL: killServer.URL, After: after, Warmup: warmup, BufferOff: off, ReplayLoss: replayLoss}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return result{}, err
@@ -137,7 +183,7 @@ func bufferTrial(ctx context.Context, manager *clusterprocess.Manager, caller, b
 		return result{}, err
 	}
 	env = append(env, "RELAIS_BUFFER_PROCESS_CONFIG="+configPath)
-	child, err := manager.Start(dir, "caller", env, caller, "-test.run=^TestRelayBufferProcessCaller$", "-test.v", "-test.timeout="+(after+25*time.Second).String())
+	child, err := manager.Start(dir, "caller", env, caller, "-test.run=^TestAcceptanceRelayBufferProcessCaller$", "-test.v", "-test.timeout="+(after+25*time.Second).String())
 	if err != nil {
 		return result{}, err
 	}
@@ -154,19 +200,18 @@ func bufferTrial(ctx context.Context, manager *clusterprocess.Manager, caller, b
 	if err != nil {
 		return result{}, err
 	}
-	var r result
-	if err := json.Unmarshal(data, &r); err != nil {
+	if err := json.Unmarshal(data, &out); err != nil {
 		return result{}, err
 	}
-	if r.BufferEvidence == nil {
+	if out.BufferEvidence == nil {
 		return result{}, fmt.Errorf("buffered caller supplied no buffer evidence")
 	}
-	return r, nil
+	return out, nil
 }
 
 func printBufferComparison(on, off []result) {
-	fmt.Println("BUFFER_VS_BASELINE profile=lan common_start=SIGKILL phase1_median_ms=416 measurement=exact_RTP_packet_return (#32 lost-content/freshness yardstick pending)")
-	fmt.Println("run mode gap_ms pause_vs_phase1_ms decrypt_total/after audio_returned/sent/lost video_returned/sent/lost first_content first_content_ms keyframe_requests relay_replay_packets gate_released result")
+	fmt.Println("BUFFER_VS_BASELINE profile=lan common_start=SIGKILL phase1_median_ms=416 measurement=caller_loss_content_and_freshness")
+	fmt.Println("run mode gap_ms pause_vs_phase1_ms decrypt_total/after audio_returned/sent/lost video_returned/sent/lost first_content first_content_ms keyframe_requests relay_replay_packets gate_released lost_audio_ms lost_video_frames first_new_content audio_fresh_ms video_fresh_ms recovery_http result")
 	printRows := func(mode string, results []result) {
 		for i, r := range results {
 			e := r.BufferEvidence
@@ -177,7 +222,11 @@ func printBufferComparison(on, off []result) {
 			if r.Pass {
 				state = "PASS"
 			}
-			fmt.Printf("%d %s %.1f %+.1f %d/%d %d/%d/%d %d/%d/%d %s %.1f %d %d %t %s\n", i+1, mode, float64(r.Gap)/float64(time.Millisecond), float64(r.Gap-416*time.Millisecond)/float64(time.Millisecond), r.Decrypt, r.AfterResume, e.AudioReturned, e.AudioSent, e.AudioLost, e.VideoReturned, e.VideoSent, e.VideoLost, e.FirstContent, float64(e.FirstContentAfterKill)/float64(time.Millisecond), e.KeyframeRequests, e.RelayReplayPackets, e.GateReleased, state)
+			rowMode := mode
+			if e.RecoveryRequests > 0 && !e.Complete {
+				rowMode = "buffer-lossy"
+			}
+			fmt.Printf("%d %s %.1f %+.1f %d/%d %d/%d/%d %d/%d/%d %s %.1f %d %d %t %.1f %d %q %.1f %.1f %d %s\n", i+1, rowMode, float64(r.Gap)/float64(time.Millisecond), float64(r.Gap-416*time.Millisecond)/float64(time.Millisecond), r.Decrypt, r.AfterResume, e.AudioReturned, e.AudioSent, e.AudioLost, e.VideoReturned, e.VideoSent, e.VideoLost, e.FirstContent, float64(e.FirstContentAfterKill)/float64(time.Millisecond), e.KeyframeRequests, e.RelayReplayPackets, e.GateReleased, float64(r.Measurement.LostAudio)/float64(time.Millisecond), r.Measurement.LostVideoFrames, r.Measurement.FirstNewContent, float64(r.Measurement.Audio.BackToBaseline)/float64(time.Millisecond), float64(r.Measurement.Video.BackToBaseline)/float64(time.Millisecond), e.RecoveryRequests, state)
 		}
 	}
 	printRows("buffer-on", on)
@@ -189,4 +238,37 @@ func printBufferComparison(on, off []result) {
 		}
 		fmt.Printf("BUFFER_PAUSE_MEDIAN gap_ms=%.1f phase1_median_ms=416 delta_ms=%+.1f runs=%d\n", float64(median(gaps))/float64(time.Millisecond), float64(median(gaps)-416*time.Millisecond)/float64(time.Millisecond), len(on))
 	}
+}
+
+// These are the process topology's actual private collector samples. Requiring
+// both ring peaks and lifetime replay/loss counters avoids a presence-only check.
+func validateBufferMetrics(out result, off, replayLoss bool) error {
+	for _, process := range out.Metrics {
+		if process.Process != "relay" {
+			continue
+		}
+		if process.Samples == 0 || process.Error != "" {
+			return errors.New("relay buffer metrics scrape failed")
+		}
+		for _, name := range []string{"buffer_sessions", "buffer_packets", "buffer_bytes", "buffer_drops_total", "buffer_expired_packets_total", "buffer_untracked_total", "replays_total", "replay_packets_total", "replay_filtered_packets_total", "replay_drops_total", "replay_send_failures_total", "replay_expiries_total"} {
+			if _, ok := process.Values["relais_relay_"+name]; !ok {
+				return fmt.Errorf("relay buffer metric missing: %s", name)
+			}
+		}
+		if off {
+			return nil
+		}
+		if process.GaugePeaks["relais_relay_buffer_packets"] <= 0 || process.GaugePeaks["relais_relay_buffer_bytes"] <= 0 {
+			return errors.New("relay metrics did not observe occupied ring")
+		}
+		if replayLoss {
+			if process.Values["relais_relay_replay_drops_total"] <= 0 || process.Values["relais_relay_replay_expiries_total"] <= 0 || out.BufferEvidence.RecoveryRequests == 0 {
+				return errors.New("lossy process replay did not prove counted expiry and HTTP keyframe recovery")
+			}
+		} else if process.Values["relais_relay_replays_total"] <= 0 || process.Values["relais_relay_replay_packets_total"] <= 0 {
+			return errors.New("relay metrics did not observe replay")
+		}
+		return nil
+	}
+	return errors.New("relay buffer process metrics absent")
 }

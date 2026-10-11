@@ -62,6 +62,12 @@ type Relay interface {
 	ForgetSession(sessionID string)
 }
 
+// TenureRelay identifies the transferred lease when a receiver address is reused.
+// Older/fake routing implementations can keep the original Relay interface.
+type TenureRelay interface {
+	MoveSessionAtEpoch(string, netip.AddrPort, netip.AddrPort, uint64) error
+}
+
 // ReplayRelay is the optional phase-2 caller-media cache capability. Both
 // *relay.Relay and RemoteRelay implement it; phase-1/fake relays remain valid.
 type ReplayRelay interface {

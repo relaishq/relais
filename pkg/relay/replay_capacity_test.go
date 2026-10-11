@@ -291,12 +291,16 @@ func TestReplayThroughPreventsRepeatOnNewCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	b.expect(t, caller.addr(), bufferRTP(t, 42, 11))
 	b.expect(t, caller.addr(), bufferRTP(t, 42, 12))
-	// A different recovery from a stale copy filters max(checkpoint,through).
-	// It needs codec fallback because this target's copy predates that through.
+	// Preparation cannot know whether MoveSession will select a new target.
+	// The drain filters max(checkpoint,through) only for this same tenure.
 	plan, err := sys.relay.BeginReplay(context.Background(), sessionA, b.addr(), map[uint32]uint64{42: 11})
 	require.NoError(t, err)
-	require.Zero(t, plan.Packets)
-	require.False(t, plan.Complete)
+	require.Equal(t, 1, plan.Packets)
+	result, err := sys.relay.ReplaySession(context.Background(), sessionA, b.addr())
+	require.NoError(t, err)
+	require.Zero(t, result.Packets)
+	require.False(t, result.Complete)
+	b.expectNothing(t)
 	sys.relay.ForgetSession(sessionA)
 	require.Zero(t, sys.relay.Stats().BufferedSessions)
 	require.Empty(t, sys.relay.flows.emptyWatch)

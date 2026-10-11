@@ -15,14 +15,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// crash-run compiles and launches only this opt-in caller test. The test keeps
-// #27's exact packet/unique-frame observations inside the harness, without
-// editing the recorder or the report files concurrently owned by #32. Relay,
+// crash-run compiles and launches only this opt-in caller test. The test uses
+// #32's current caller loss/content/freshness yardstick alongside exact packet
+// and unique-frame observations, without changing recorder/report APIs. Relay,
 // workers and control plane are ordinary standalone binaries and private APIs.
 type bufferProcessConfig struct {
 	Dir, SignalingURL, RelayHTTP, RelayMedia, KillURL string
 	After, Warmup                                     time.Duration
 	BufferOff                                         bool
+	ReplayLoss                                        bool
 }
 
 type bufferProcessEvidence struct {
@@ -38,7 +39,7 @@ type bufferProcessEvidence struct {
 	KeyframeRequests                    int
 }
 
-func TestRelayBufferProcessCaller(t *testing.T) {
+func TestAcceptanceRelayBufferProcessCaller(t *testing.T) {
 	configPath := os.Getenv("RELAIS_BUFFER_PROCESS_CONFIG")
 	if configPath == "" {
 		t.Skip("caller entrypoint is launched by crash-run -buffer or -compare-buffer")
@@ -54,7 +55,7 @@ func TestRelayBufferProcessCaller(t *testing.T) {
 	h, err := Start(Options{External: &ExternalTopology{SignalingURL: cfg.SignalingURL, RelayAddr: relayAddr}})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
-	call, err := h.Dial(ctx, CallOptions{Video: true, Worker: -1, InitialSequenceNumbers: &RTPSequenceNumbers{Audio: 1000, Video: 2000}})
+	call, err := h.Dial(ctx, CallOptions{Video: true, Worker: -1, Freshness: StrictAcceptancePolicy(), InitialSequenceNumbers: &RTPSequenceNumbers{Audio: 1000, Video: 2000}})
 	require.NoError(t, err)
 	o := observeBufferCall(call)
 	mediaCtx, stopMedia := context.WithCancel(ctx)
@@ -120,7 +121,7 @@ func TestRelayBufferProcessCaller(t *testing.T) {
 			evidence.VideoSent, evidence.VideoReturned, evidence.VideoLost = sentCount, sentCount-lost, lost
 		}
 	}
-	decode := decodeBufferUnique(t, ctx, call, report, !cfg.BufferOff)
+	decode := decodeBufferUnique(t, ctx, call, report, !cfg.BufferOff && !cfg.ReplayLoss)
 	evidence.UniqueDecodedFrames = decode.FramesDecoded
 	gap := time.Duration(0)
 	for _, kind := range []string{"audio", "video"} {
@@ -135,7 +136,12 @@ func TestRelayBufferProcessCaller(t *testing.T) {
 		gap = max(gap, track.MediaGap)
 	}
 	require.Less(t, gap, 2*time.Second)
-	if !cfg.BufferOff {
+	if cfg.ReplayLoss {
+		require.False(t, evidence.Complete)
+		require.True(t, event.Result.HoldExpired)
+		require.Positive(t, evidence.KeyframeRequests)
+		require.Positive(t, relayStatus.Stats.ReplayDrops)
+	} else if !cfg.BufferOff {
 		require.True(t, evidence.Complete)
 		require.Positive(t, evidence.RelayReplayPackets)
 		require.Positive(t, evidence.AudioSent)
@@ -153,7 +159,22 @@ func TestRelayBufferProcessCaller(t *testing.T) {
 	}
 	require.Len(t, report.Moves, 1)
 	move := report.Moves[0]
-	result := map[string]any{"Gap": gap, "Decrypt": report.DecryptionFailures.Total(), "AfterResume": move.DecryptionFailuresAfterResume, "Reconnects": report.ICERestarts, "Renegotiations": report.Renegotiations, "Decoded": move.Recovery.FirstDecodedAfterKill, "Live": move.Recovery.FirstDecodedLiveAfterKill, "Detection": move.DetectionTime, "Pass": true, "Path": move.Recovery.Path, "LivePath": move.Recovery.LivePath, "ReplayPackets": move.Recovery.ReplayPackets, "BufferEvidence": evidence}
+	measurement := move.Measurement
+	require.True(t, measurement.AudioLoss.Trusted, measurement.Summary())
+	require.True(t, measurement.VideoLoss.Trusted, measurement.Summary())
+	require.True(t, measurement.FirstNewContentVerdict.Trusted, measurement.Summary())
+	if cfg.ReplayLoss {
+		require.Equal(t, "keyframe", measurement.FirstNewContent, measurement.Summary())
+		require.Positive(t, measurement.LostAudio)
+		require.Positive(t, measurement.LostVideoFrames)
+	}
+	if !cfg.BufferOff && !cfg.ReplayLoss {
+		require.Zero(t, measurement.LostAudio, measurement.Summary())
+		require.Zero(t, measurement.LostVideoFrames, measurement.Summary())
+		require.Equal(t, "outage media", measurement.FirstNewContent, measurement.Summary())
+		RequireFreshnessRecovered(t, measurement, StrictAcceptancePolicy())
+	}
+	result := map[string]any{"Measurement": measurement, "Gap": gap, "Decrypt": report.DecryptionFailures.Total(), "AfterResume": move.DecryptionFailuresAfterResume, "Reconnects": report.ICERestarts, "Renegotiations": report.Renegotiations, "Decoded": move.Recovery.FirstDecodedAfterKill, "Live": move.Recovery.FirstDecodedLiveAfterKill, "Detection": move.DetectionTime, "Pass": true, "Path": move.Recovery.Path, "LivePath": move.Recovery.LivePath, "ReplayPackets": move.Recovery.ReplayPackets, "BufferEvidence": evidence}
 	encoded, err := json.Marshal(result)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Dir, "result.json"), encoded, 0600))
