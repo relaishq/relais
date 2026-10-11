@@ -86,6 +86,7 @@ type call struct {
 // Plane owns the registry and call metadata. The store remains authoritative
 // for ownership. New and Register must be called before accepting calls.
 type Plane struct {
+	metrics         planeMetrics
 	mu              sync.Mutex
 	relay           Relay
 	store           sessionstore.Store
@@ -248,7 +249,14 @@ func (p *Plane) owner(addr netip.AddrPort) *registration {
 
 // Create starts a call on the least-loaded non-draining worker. name can
 // pin a worker for a test, but cannot bypass draining.
-func (p *Plane) Create(ctx context.Context, offer, name string) (string, string, error) {
+func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answerResult string, createErr error) {
+	defer func() {
+		if createErr != nil {
+			p.metrics.callErrors.Add(1)
+		} else {
+			p.metrics.calls.Add(1)
+		}
+	}()
 	w, err := p.pick(ctx, name, netip.AddrPort{})
 	if err != nil {
 		return "", "", err
@@ -363,6 +371,17 @@ func (p *Plane) Move(ctx context.Context, id, to string) (MoveResult, error) {
 
 // move holds the call lock and an incoming reservation on target.
 func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, target *registration) (res MoveResult, err error) {
+	moved, recoveryMetrics := false, false
+	defer func() {
+		if recoveryMetrics {
+			return // Pending recovery owns the eventual metric outcome.
+		}
+		if err != nil {
+			p.metrics.moveErrors.Add(1)
+		} else if moved {
+			p.metrics.moves.Add(1)
+		}
+	}()
 	p.mu.Lock()
 	source, r := p.owner(lease.Worker), p.relay
 	p.mu.Unlock()
@@ -430,6 +449,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		// A generic/transport error cannot prove export did not flush A.
 		// Bump its epoch either way and recover the latest store snapshot.
 		if uncertainExport(err) {
+			recoveryMetrics = true
 			p.mu.Lock()
 			if source.pending == nil {
 				source.pending = make(map[string]*takeoverState)
@@ -502,6 +522,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	now := time.Now()
 	c.lastMove = &now
 	c.moveCount++
+	moved = true
 	c.lastMoveKind = "move"
 	return res, nil
 }
@@ -591,7 +612,14 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 // balanced. With no destination it
 // moves nothing. It marks draining before waiting up to one second for
 // incoming reservations, then includes those calls in the drain.
-func (p *Plane) Drain(ctx context.Context, name string) ([]MoveResult, error) {
+func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, drainErr error) {
+	defer func() {
+		if drainErr != nil {
+			p.metrics.drainErrors.Add(1)
+		} else {
+			p.metrics.drains.Add(1)
+		}
+	}()
 	p.mu.Lock()
 	w := p.workers[name]
 	if w == nil {

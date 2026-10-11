@@ -432,6 +432,7 @@ func (s *session) handleRTP(pkt []byte) {
 	plain, err := s.srtpIn.DecryptRTP(s.decryptBuf, pkt, &authenticated)
 	if err != nil {
 		failure, decryptErr = s.decryptFailures.Add(1), err
+		s.worker.metrics.decryptFailures.Add(1)
 
 		return
 	}
@@ -542,6 +543,7 @@ func (s *session) handleRTCP(pkt []byte) {
 	plain, err := s.srtpIn.DecryptRTCP(s.rtcpBuf, pkt, nil)
 	if err != nil {
 		failure, decryptErr = s.decryptFailures.Add(1), err
+		s.worker.metrics.decryptFailures.Add(1)
 
 		return
 	}

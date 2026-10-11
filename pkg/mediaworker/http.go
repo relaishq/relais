@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/privateapi"
+	"github.com/relais/pkg/metrics"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -53,6 +54,7 @@ type WorkerStatus struct {
 // Session snapshots contain key material: this API must stay private.
 func (w *Worker) PrivateHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metrics.ProcessHandler(w.metricSamples, metrics.CheckpointCollectors()...))
 	mux.HandleFunc("POST /sessions", func(rw http.ResponseWriter, r *http.Request) {
 		var req CreateRequest
 		if !privateapi.Read(rw, r, &req) {

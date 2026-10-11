@@ -135,7 +135,7 @@ func (s *session) answerBindingRequest(msg *stun.Message, remoteUfrag string, fr
 		return err
 	}
 
-	if _, err := s.worker.conn.WriteToUDPAddrPort(response.Raw, from); err != nil {
+	if _, err := s.worker.send(response.Raw, from); err != nil {
 		s.log.Debugf("session %s: send binding response: %v", s.id, err)
 	}
 
