@@ -2,11 +2,10 @@ package relay
 
 import (
 	"net/http"
-
-	"github.com/relais/pkg/metrics"
 	"net/netip"
 
 	"github.com/relais/internal/privateapi"
+	"github.com/relais/pkg/metrics"
 )
 
 var RemoteErrors = map[string]error{

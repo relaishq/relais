@@ -2,8 +2,11 @@ package controlplane
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -101,4 +104,97 @@ func TestControlMetricsStayOffSignalingHandler(t *testing.T) {
 	p.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	require.Equal(t, http.StatusNotFound, response.Code)
 	require.Contains(t, planeMetricsBody(p), "relais_control_calls_total 0\n")
+}
+
+func TestControlMetricsUncertainExportIsOneMove(t *testing.T) {
+	for _, outcome := range []string{"success", "loss"} {
+		t.Run(outcome, func(t *testing.T) {
+			p, a, b, _ := setup(t)
+			p.workers["a"].worker = &uncertainExportWorker{fakeWorker: a}
+			p.workers["b"].worker = &takeoverWorker{fakeWorker: b}
+			ctx := context.Background()
+			id, _, err := p.Create(ctx, "offer", "a")
+			require.NoError(t, err)
+			if outcome == "success" {
+				lease, getErr := p.store.Get(ctx, id)
+				require.NoError(t, getErr)
+				require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
+			}
+			_, err = p.Move(ctx, id, "b")
+			moves, failures := 0, 1
+			if outcome == "success" {
+				require.NoError(t, err)
+				require.True(t, b.runs(id))
+				moves, failures = 1, 0
+			} else {
+				require.Error(t, err)
+			}
+			body := planeMetricsBody(p)
+			require.Contains(t, body, fmt.Sprintf("relais_control_moves_total %d\n", moves))
+			require.Contains(t, body, fmt.Sprintf("relais_control_move_errors_total %d\n", failures))
+			require.Contains(t, body, fmt.Sprintf("relais_control_losses_total %d\n", failures))
+			require.Contains(t, body, "relais_control_takeovers_total 0\n")
+			require.Contains(t, body, "relais_control_takeover_errors_total 0\n")
+		})
+	}
+}
+
+func TestControlMetricsRetainedUncertainExportCountsOnlyTerminalMove(t *testing.T) {
+	for _, outcome := range []string{"success", "loss"} {
+		t.Run(outcome, func(t *testing.T) {
+			p, a, b, _ := setup(t)
+			p.workers["a"].worker = &uncertainExportWorker{fakeWorker: a}
+			p.workers["b"].worker = &takeoverWorker{fakeWorker: b}
+			ctx := context.Background()
+			id, _, err := p.Create(ctx, "offer", "a")
+			require.NoError(t, err)
+			if outcome == "success" {
+				lease, getErr := p.store.Get(ctx, id)
+				require.NoError(t, getErr)
+				require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
+			}
+			store := &recoveryErrorStore{Store: p.store, step: "transfer", fail: true}
+			p.store = store
+			_, err = p.Move(ctx, id, "b")
+			require.Error(t, err)
+			require.Contains(t, planeMetricsBody(p), "relais_control_move_errors_total 0\n", "pending recovery has no terminal outcome")
+			source := p.workers["a"]
+			pending := source.pending[id]
+			require.NotNil(t, pending)
+			store.fail = false
+			p.takeover(ctx, source, pending.lease, time.Now())
+			require.Empty(t, source.pending)
+			moves, failures := 0, 1
+			if outcome == "success" {
+				moves, failures = 1, 0
+				require.True(t, b.runs(id))
+			}
+			body := planeMetricsBody(p)
+			require.Contains(t, body, fmt.Sprintf("relais_control_moves_total %d\n", moves))
+			require.Contains(t, body, fmt.Sprintf("relais_control_move_errors_total %d\n", failures))
+			require.Contains(t, body, fmt.Sprintf("relais_control_losses_total %d\n", failures))
+			require.Contains(t, body, "relais_control_takeovers_total 0\n")
+			require.Contains(t, body, "relais_control_takeover_errors_total 0\n")
+		})
+	}
+}
+
+type failedReleaseRelay struct{ *fakeRelay }
+
+func (*failedReleaseRelay) ReleaseSession(string, netip.AddrPort) (int, error) {
+	return 0, errors.New("injected release failure")
+}
+
+func TestControlMetricsFinalReleaseFailureIsOneMoveError(t *testing.T) {
+	p, _, b, r := setup(t)
+	p.relay = &failedReleaseRelay{fakeRelay: r}
+	id, _, err := p.Create(context.Background(), "offer", "a")
+	require.NoError(t, err)
+	_, err = p.Move(context.Background(), id, "b")
+	require.ErrorContains(t, err, "release caller hold")
+	require.True(t, b.runs(id), "adoption still completed")
+	body := planeMetricsBody(p)
+	require.Contains(t, body, "relais_control_moves_total 0\n")
+	require.Contains(t, body, "relais_control_move_errors_total 1\n")
+	require.Contains(t, body, "relais_control_losses_total 0\n")
 }

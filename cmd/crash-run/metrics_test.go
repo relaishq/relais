@@ -152,3 +152,113 @@ func TestMetricsRunKeepsMissingScrapeExplicit(t *testing.T) {
 	require.Nil(t, out[0].Values, "failed scrapes must not fabricate zero counters")
 	require.Contains(t, out[0].Error, "503")
 }
+
+func manualMetricsRun(t *testing.T) *metricsRun {
+	t.Helper()
+	oldInterval := metricsInterval
+	metricsInterval = 0
+	t.Cleanup(func() { metricsInterval = oldInterval })
+	r := newMetricsRun()
+	t.Cleanup(func() { r.cancel(); <-r.done })
+	return r
+}
+
+func TestPreFaultScrapeBudgetDoesNotWaitForNetworkLock(t *testing.T) {
+	r := manualMetricsRun(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		close(entered)
+		select {
+		case <-release:
+			_, _ = w.Write([]byte("relais_test 1\n"))
+		case <-req.Context().Done():
+		}
+	}))
+	defer busy.Close()
+	var slowCalls atomic.Int32
+	slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) {
+		slowCalls.Add(1)
+		<-req.Context().Done()
+	}))
+	defer slow.Close()
+	r.targets = []*metricsTarget{
+		{url: busy.URL, done: make(chan struct{})},
+		{url: slow.URL, done: make(chan struct{})},
+		{url: slow.URL, done: make(chan struct{})},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	finished := make(chan struct{})
+	go func() { defer close(finished); r.sample(ctx) }()
+	defer func() { cancel(); close(release); <-finished }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("periodic scrape did not start")
+	}
+	locked := r.mu.TryLock()
+	if locked {
+		r.mu.Unlock()
+	}
+	require.True(t, locked, "network I/O must not hold the state lock")
+	started := time.Now()
+	r.sampleBeforeFault(context.Background())
+	require.Less(t, time.Since(started), 450*time.Millisecond, "one 200 ms budget covers all targets")
+	require.EqualValues(t, 1, slowCalls.Load(), "deadline prevents scraping remaining targets")
+}
+
+func TestMetricsRunClearsExitedScrapeErrors(t *testing.T) {
+	r := manualMetricsRun(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	done := make(chan struct{})
+	target := &metricsTarget{url: server.URL, done: done}
+	r.targets = []*metricsTarget{target}
+	r.sample(context.Background())
+	require.Contains(t, target.data.Error, "503")
+	close(done)
+	r.sample(context.Background())
+	require.True(t, target.data.Exited)
+	require.Empty(t, target.data.Error)
+	require.Zero(t, target.data.Samples, "exit must not manufacture successful observations")
+}
+
+func TestMetricsRunDiscardsResponseAfterProcessExit(t *testing.T) {
+	r := manualMetricsRun(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(entered)
+		<-release
+		_, _ = w.Write([]byte("relais_test 999\n"))
+	}))
+	defer server.Close()
+	done := make(chan struct{})
+	target := &metricsTarget{url: server.URL, done: done}
+	r.targets = []*metricsTarget{target}
+	finished := make(chan struct{})
+	go func() { defer close(finished); r.sample(context.Background()) }()
+	released := false
+	defer func() {
+		if !released {
+			close(release)
+		}
+		<-finished
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("scrape did not start")
+	}
+	close(done)
+	r.sample(context.Background())
+	close(release)
+	released = true
+	<-finished
+	r.mu.Lock()
+	exited, scrapeError, samples := target.data.Exited, target.data.Error, target.data.Samples
+	r.mu.Unlock()
+	require.True(t, exited)
+	require.Empty(t, scrapeError)
+	require.Zero(t, samples)
+}

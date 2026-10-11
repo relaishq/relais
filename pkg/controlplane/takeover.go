@@ -607,7 +607,15 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 	if record {
 		p.recordTakeover(*res)
 	}
-	switch res.Kind {
+	metricKind := res.Kind
+	if !lost && c.hungUp.Load() {
+		metricKind = "ended"
+	} else if pending != nil && pending.held && !pending.planned {
+		// Uncertain export uses crash recovery for safety, but its initiating
+		// operation was a move. Preserve status and recovery semantics.
+		metricKind = "move"
+	}
+	switch metricKind {
 	case "takeover":
 		if lost || cause != nil {
 			p.metrics.takeoverErrors.Add(1)

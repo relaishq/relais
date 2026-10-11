@@ -371,9 +371,15 @@ func (p *Plane) Move(ctx context.Context, id, to string) (MoveResult, error) {
 
 // move holds the call lock and an incoming reservation on target.
 func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, target *registration) (res MoveResult, err error) {
+	moved, recoveryMetrics := false, false
 	defer func() {
+		if recoveryMetrics {
+			return // Pending recovery owns the eventual metric outcome.
+		}
 		if err != nil {
 			p.metrics.moveErrors.Add(1)
+		} else if moved {
+			p.metrics.moves.Add(1)
 		}
 	}()
 	p.mu.Lock()
@@ -443,6 +449,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		// A generic/transport error cannot prove export did not flush A.
 		// Bump its epoch either way and recover the latest store snapshot.
 		if uncertainExport(err) {
+			recoveryMetrics = true
 			p.mu.Lock()
 			if source.pending == nil {
 				source.pending = make(map[string]*takeoverState)
@@ -515,7 +522,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	now := time.Now()
 	c.lastMove = &now
 	c.moveCount++
-	p.metrics.moves.Add(1)
+	moved = true
 	c.lastMoveKind = "move"
 	return res, nil
 }

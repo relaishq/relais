@@ -2,12 +2,11 @@ package mediaworker
 
 import (
 	"net/http"
-
-	"github.com/relais/pkg/metrics"
 	"net/netip"
 	"time"
 
 	"github.com/relais/internal/privateapi"
+	"github.com/relais/pkg/metrics"
 	"github.com/relais/pkg/sessionstore"
 )
 

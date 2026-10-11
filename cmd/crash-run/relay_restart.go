@@ -101,7 +101,7 @@ func relayRestartTrial(ctx context.Context, manager *clusterprocess.Manager, bin
 		return result{}, fmt.Errorf("media ended before relay SIGKILL: %v", err)
 	case <-time.After(warmup):
 	}
-	systemMetrics.sample(ctx)
+	systemMetrics.sampleBeforeFault(ctx)
 	killed := time.Now()
 	if err := old.SignalGroup(syscall.SIGKILL); err != nil {
 		return result{}, err

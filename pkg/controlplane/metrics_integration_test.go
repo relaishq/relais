@@ -99,6 +99,8 @@ func TestMetricsAcrossHTTPMoveAndTakeover(t *testing.T) {
 	require.Zero(t, moved["relais_worker_takeovers_resumed_total"])
 	require.Zero(t, readMetrics(t, workers[0].PrivateHandler())["relais_worker_active_sessions"])
 	beforeTakeover := readMetrics(t, plane.ProcessHandler())
+	// Checkpoint collectors are process-wide: this test's workers share them.
+	// Compare worker 1 before the crash with worker 0 after adoption.
 	beforeWrites := moved[`relais_checkpoint_writes_total{result="success"}`]
 	require.NoError(t, workerprobe.Kill(workers[1].LocalAddr()))
 	require.Eventually(t, func() bool {

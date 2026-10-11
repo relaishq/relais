@@ -157,7 +157,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	if worker == nil {
 		return result{}, fmt.Errorf("unknown owning worker %q", owner)
 	}
-	systemMetrics.sample(ctx)
+	systemMetrics.sampleBeforeFault(ctx)
 	killed := time.Now()
 	signal := syscall.SIGKILL
 	label := "SIGKILL"

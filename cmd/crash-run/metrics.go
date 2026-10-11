@@ -40,10 +40,11 @@ type ProcessMetrics struct {
 }
 
 type metricsTarget struct {
-	url   string
-	done  <-chan struct{}
-	first map[string]float64
-	data  ProcessMetrics
+	url      string
+	done     <-chan struct{}
+	inFlight bool // guarded by metricsRun.mu; overlapping samples skip this target
+	first    map[string]float64
+	data     ProcessMetrics
 }
 
 type metricsRun struct {
@@ -86,39 +87,73 @@ func (r *metricsRun) add(name, endpoint string, child *clusterprocess.Child) {
 }
 
 func (r *metricsRun) sample(ctx context.Context) {
-	// Serializing samples also prevents duplicate requests when a periodic
-	// tick overlaps the mandatory pre-fault sample. No media lock is involved.
+	r.mu.Lock()
+	targets := append([]*metricsTarget(nil), r.targets...)
+	r.mu.Unlock()
+	for _, target := range targets {
+		if ctx.Err() != nil {
+			return
+		}
+		r.sampleTarget(ctx, target)
+	}
+}
+
+// sampleBeforeFault shares one short budget across all targets. It never waits
+// for a periodic scrape already in flight, keeping fault timing bounded.
+func (r *metricsRun) sampleBeforeFault(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	r.sample(ctx)
+}
+
+func (r *metricsRun) sampleTarget(ctx context.Context, target *metricsTarget) {
+	r.mu.Lock()
+	select {
+	case <-target.done:
+		target.data.Exited, target.data.Error = true, ""
+		r.mu.Unlock()
+		return
+	default:
+	}
+	if target.inFlight {
+		r.mu.Unlock()
+		return
+	}
+	target.inFlight = true
+	r.mu.Unlock()
+
+	values, counters, err := scrapeMetrics(ctx, r.client, target.url)
+	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for _, target := range r.targets {
-		select {
-		case <-target.done:
-			target.data.Exited = true
-			continue // A replacement can reuse the URL, but has its own target.
-		default:
-		}
-		values, counters, err := scrapeMetrics(ctx, r.client, target.url)
-		if err != nil {
-			target.data.Error = err.Error()
-			continue
-		}
-		now := time.Now()
-		if target.data.Samples == 0 {
-			target.data.FirstAt = now
-			target.first = values
-			target.data.GaugePeaks = make(map[string]float64)
-		}
-		target.data.Samples++
-		target.data.LastAt, target.data.Values, target.data.Error = now, values, ""
-		target.data.Rates = make(map[string]float64)
-		for name, value := range values {
-			if !counters[name] {
-				if peak, seen := target.data.GaugePeaks[name]; !seen || value > peak {
-					target.data.GaugePeaks[name] = value
-				}
-			} else if first, ok := target.first[name]; ok && target.data.Samples > 1 && value >= first {
-				target.data.Rates[name] = (value - first) / now.Sub(target.data.FirstAt).Seconds()
+	target.inFlight = false
+	select {
+	case <-target.done:
+		// Discard responses from an exited generation, including refused scrapes
+		// and a replacement that may have reused the same URL meanwhile.
+		target.data.Exited, target.data.Error = true, ""
+		return
+	default:
+	}
+	if err != nil {
+		target.data.Error = err.Error()
+		return
+	}
+	if target.data.Samples == 0 {
+		target.data.FirstAt = now
+		target.first = values
+		target.data.GaugePeaks = make(map[string]float64)
+	}
+	target.data.Samples++
+	target.data.LastAt, target.data.Values, target.data.Error = now, values, ""
+	target.data.Rates = make(map[string]float64)
+	for name, value := range values {
+		if !counters[name] {
+			if peak, seen := target.data.GaugePeaks[name]; !seen || value > peak {
+				target.data.GaugePeaks[name] = value
 			}
+		} else if first, ok := target.first[name]; ok && target.data.Samples > 1 && value >= first {
+			target.data.Rates[name] = (value - first) / now.Sub(target.data.FirstAt).Seconds()
 		}
 	}
 }
