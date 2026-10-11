@@ -86,6 +86,19 @@ func (r *metricsRun) add(name, endpoint string, child *clusterprocess.Child) {
 	r.targets = append(r.targets, &metricsTarget{url: endpoint + "/metrics", done: child.Done(), data: ProcessMetrics{Process: name}})
 }
 
+// value returns the most recent successful observation for one process.
+func (r *metricsRun) value(process, name string) (float64, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, target := range r.targets {
+		if target.data.Process == process {
+			value, ok := target.data.Values[name]
+			return value, ok
+		}
+	}
+	return 0, false
+}
+
 func (r *metricsRun) sample(ctx context.Context) {
 	r.mu.Lock()
 	targets := append([]*metricsTarget(nil), r.targets...)

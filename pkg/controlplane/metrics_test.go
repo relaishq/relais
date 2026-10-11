@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/prometheus/common/expfmt"
+	"github.com/relais/internal/privateapi"
+	"github.com/relais/pkg/mediaworker"
 	"github.com/stretchr/testify/require"
 )
 
@@ -324,4 +326,36 @@ func TestControlMetricsFinalReleaseFailureIsOneMoveError(t *testing.T) {
 	require.Contains(t, body, "relais_control_moves_total 0\n")
 	require.Contains(t, body, "relais_control_move_errors_total 1\n")
 	require.Contains(t, body, "relais_control_losses_total 0\n")
+}
+
+type metricsUncertainResumeWorker struct{ *fakeWorker }
+
+func (w *metricsUncertainResumeWorker) ResumeSession(data []byte, opts mediaworker.ResumeOptions) (string, error) {
+	id, err := w.fakeWorker.ResumeSession(data, opts)
+	if err != nil {
+		return id, err
+	}
+	return id, fmt.Errorf("%w: committed target reply discarded", privateapi.ErrUncertain)
+}
+
+func TestControlMetricsCountObservedUncertainResumePaths(t *testing.T) {
+	for _, uncertain := range []bool{false, true} {
+		t.Run(fmt.Sprint(uncertain), func(t *testing.T) {
+			p, _, b, _ := setup(t)
+			id, _, err := p.Create(context.Background(), "offer", "a")
+			require.NoError(t, err)
+			if uncertain {
+				p.workers["b"].worker = &metricsUncertainResumeWorker{b}
+			} else {
+				b.resumeError = true
+			}
+			_, err = p.Move(context.Background(), id, "b")
+			require.Error(t, err)
+			want := 0
+			if uncertain {
+				want = 1
+			}
+			require.Contains(t, planeMetricsBody(p), fmt.Sprintf("relais_control_uncertain_move_resumes_total %d\n", want))
+		})
+	}
 }

@@ -61,6 +61,7 @@ type MetricVerdict struct {
 // Conflicting payload identities fail the affected video metrics, including
 // when their observation window or another metric is inconclusive.
 type EventMeasurement struct {
+	ContentLoss                                                   ContentLossEvidence
 	FirstContentIdentity, FirstNewContentIdentity                 uint64
 	VideoExpected                                                 bool
 	AudioPause, VideoPause                                        time.Duration
@@ -413,6 +414,7 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 	if m.VideoLoss.Failed {
 		m.VideoLoss.Reasons = append(m.VideoLoss.Reasons, "sent video never returned complete")
 	}
+	m.ContentLoss = r.contentLossEvidence(move, m, audio, video, baselineFloor)
 	audio = append(audio, r.repeatedAudioReturns...)
 	video = append(video, r.repeatedVideoReturns...)
 	m.Audio = measureFreshness(audio, move.Start, m.MediaResumedAt, limit, baselineFloor, r.freshnessPolicy)
@@ -531,6 +533,8 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 		}
 	}
 	r.failIdentityMetrics(&m)
+	m.ContentLoss.Event.Audio.Trusted = m.ContentLoss.Event.Audio.Trusted && m.AudioLoss.Trusted
+	m.ContentLoss.Event.Video.Trusted = m.ContentLoss.Event.Video.Trusted && m.VideoLoss.Trusted
 	m.updateJudgment()
 	return m
 }

@@ -261,6 +261,7 @@ type Stats struct {
 	HeldBytes   int
 	// BarrierTimeouts counts pre-export acknowledgement failures.
 	BarrierTimeouts uint64
+	BarrierResends  uint64
 	// HoldDrops counts overflow, HoldTimeouts post-acknowledgement release, and
 	// HoldSendFailures queued packets that could not be forwarded.
 	HoldDrops        uint64
@@ -331,6 +332,7 @@ type Relay struct {
 	heldBytes          int
 	holdDrops          atomic.Uint64
 	barrierTimeouts    atomic.Uint64
+	barrierResends     atomic.Uint64
 	holdTimeouts       atomic.Uint64
 	holdSendFailures   atomic.Uint64
 	buffer             *packetBuffer
@@ -639,6 +641,7 @@ func (r *Relay) Stats() Stats {
 		SelfFences: r.selfFences.Load(), Workers: workers,
 		RoutesRestored: r.routesRestored.Load(), RoutesRestoreSkipped: r.routesRestoreSkipped.Load(), RoutesRestoreFailed: r.routesRestoreFailed.Load(), RouteWrites: r.routeWritesDone.Load(), RouteWritesDropped: r.routeWritesDropped.Load(), RouteWritesFailed: r.routeWritesFailed.Load(),
 		BarrierTimeouts: r.barrierTimeouts.Load(),
+		BarrierResends:  r.barrierResends.Load(),
 		Holds:           holds, HeldPackets: packets, HeldBytes: bytes, HoldDrops: r.holdDrops.Load(), HoldTimeouts: r.holdTimeouts.Load(), HoldSendFailures: r.holdSendFailures.Load(),
 		CallerPackets:  r.callerPackets.Load(),
 		WorkerPackets:  r.workerPackets.Load(),
