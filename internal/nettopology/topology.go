@@ -60,7 +60,11 @@ func (t *Topology) VerifyPrivateAPIs(ctx context.Context, addresses []string) er
 		if err != nil || endpoint.Port() == 6379 || !t.Plan.Datacentre.Contains(endpoint.Addr()) {
 			return fmt.Errorf("invalid private isolation endpoint %q", addr)
 		}
-		d := net.Dialer{Timeout: time.Second}
+		// lossy-dc drops 0.1% of private packets. Linux first retransmits a
+		// lost SYN or SYN-ACK about 1 s later, so a 1 s dial could fail the
+		// trial before media ran. 4 s leaves room for later retransmissions;
+		// a closed port on a reachable host still fails at once.
+		d := net.Dialer{Timeout: 4 * time.Second}
 		conn, err := d.DialContext(ctx, "tcp4", addr)
 		if err != nil {
 			return fmt.Errorf("private listener %s is not live: %w", addr, err)
