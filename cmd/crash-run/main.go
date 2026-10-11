@@ -154,6 +154,9 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	controlArgs := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", relayReady.HTTP}
 	for _, name := range []string{"0", "1"} {
 		args := []string{filepath.Join(bin, "relais-worker"), "-media", roleBind(topology, "worker-"+name, false), "-http", roleBind(topology, "worker-"+name, false), "-name", name, "-control", controlURL, "-relay-leg", relayReady.Leg, "-relay-media", relayReady.Media}
+		if os.Getenv("RELAIS_SRTP_DIAGNOSTICS") == "1" {
+			args = append(args, "-srtp-diagnostics")
+		}
 		if cacheOff {
 			args = append(args, "-frame-cache-off")
 		}
@@ -200,7 +203,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		return result{}, err
 	}
 	defer func() { _ = h.Close() }()
-	options := callharness.CallOptions{Video: true, Worker: -1}
+	options := callharness.CallOptions{Video: true, Worker: -1, SRTPDiagnostics: os.Getenv("RELAIS_SRTP_DIAGNOSTICS") == "1"}
 	if profile != nil {
 		p, _ := nettopology.ParseProfile(profile.Name)
 		options.Freshness.AbsoluteLatencyCeiling = p.FreshnessCeiling

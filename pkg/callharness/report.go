@@ -42,6 +42,9 @@ type Report struct {
 	// DecryptionFailures counts SRTP and SRTCP packets the caller received
 	// but could not decrypt.
 	DecryptionFailures DecryptionFailures
+	// SRTPDiagnostics is optional independent packet evidence. DecryptionFailures
+	// remains the authoritative rejection count from Pion.
+	SRTPDiagnostics *SRTPDiagnosticReport `json:",omitempty"`
 
 	// Renegotiations counts offer/answer rounds (or negotiationneeded events)
 	// after the initial exchange. ICERestarts counts ICE restarts: ICE going
@@ -378,6 +381,10 @@ func (r *Report) Summary() string {
 	fmt.Fprintf(&b, "  ICE connection:   %s\n", formatStates(r.ICEConnectionStates))
 	fmt.Fprintf(&b, "  decrypt failures: %d (auth tag %d, replay %d, other %d)\n",
 		r.DecryptionFailures.Total(), r.DecryptionFailures.AuthTag, r.DecryptionFailures.Replay, r.DecryptionFailures.Other)
+	if d := r.SRTPDiagnostics; d != nil {
+		fmt.Fprintf(&b, "  SRTP diagnostics: ready=%t packets=%d skipped=%d shadow_failures=%d samples=%d omitted=%d unavailable=%q\n",
+			d.Ready, d.Packets, d.Skipped, d.Failures.Total(), len(d.Samples), d.SamplesOmitted, d.Unavailable)
+	}
 	fmt.Fprintf(&b, "  renegotiations:   %d; ICE restarts: %d\n", r.Renegotiations, r.ICERestarts)
 	fmt.Fprintf(&b, "  sent audio:       ssrc=%d frames=%d keyframe requests received=%d\n",
 		r.SentAudio.SSRC, r.SentAudio.Frames, r.SentAudio.KeyframeRequests)

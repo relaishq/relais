@@ -19,6 +19,10 @@ on:
         description: Tune private DC namespace routes with rto_min 5ms and quickack
         type: boolean
         default: true
+      srtp_diagnostics:
+        description: Capture caller SRTP failures and worker ciphertext metadata
+        type: boolean
+        default: false
 
 # Only superseded PR runs share a cancellation group. Each full run is distinct.
 concurrency:
@@ -409,6 +413,7 @@ jobs:
         timeout-minutes: ${{ matrix.driver_minutes }}
         env:
           PRIVATE_ROUTE_TUNING: ${{ github.event_name != 'workflow_dispatch' || inputs.private_route_tuning }}
+          RELAIS_SRTP_DIAGNOSTICS: ${{ inputs.srtp_diagnostics && '1' || '0' }}
         run: |
           set -o pipefail
           {
@@ -451,7 +456,7 @@ jobs:
             bin/crash-run-*/private-route-settings.json
             bin/network-profile-kernel.log
       - name: Upload profile failure logs
-        if: failure() || cancelled() || steps.judge.outcome == 'failure'
+        if: failure() || cancelled() || steps.judge.outcome == 'failure' || inputs.srtp_diagnostics
         uses: actions/upload-artifact@v7
         with:
           name: network-profile-${{ matrix.profile }}-${{ matrix.scenario }}-logs

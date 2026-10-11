@@ -47,6 +47,9 @@ type CallOptions struct {
 	// Video fragments count as one frame. The callback must be concurrent-safe.
 	SendPacing func(kind string, sent, skipped uint64)
 	Recording  RecordingOptions
+	// SRTPDiagnostics authenticates a separate copy of received media for
+	// bounded packet/index diagnostics. It never changes Pion's accounting.
+	SRTPDiagnostics bool
 
 	// InitialSequenceNumbers replaces random RTP starts for wrap tests. Nil
 	// keeps Pion's random starts. Both tracks keep their normal packetizers.
@@ -137,6 +140,9 @@ type Call struct {
 // with ErrHarnessClosed once the harness is closing.
 func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err error) {
 	rec := newRecorder()
+	if opts.SRTPDiagnostics {
+		rec.crypto = newCryptoObserver(rec.start)
+	}
 	rec.freshnessPolicy = opts.Freshness.defaults()
 	rec.recording = opts.Recording.defaults()
 	minimumHistory := rec.freshnessPolicy.RecoveryLimit + rec.freshnessPolicy.StabilityWindow + baselineWindow + 3*time.Second
@@ -637,6 +643,10 @@ func newCallerAPI(rec *recorder, browserLike bool, socket *callerSocket) (*webrt
 	}
 
 	settings := webrtc.SettingEngine{LoggerFactory: newCallerLoggerFactory(rec)}
+	if rec.crypto != nil {
+		// The writer consumes secrets in memory only; it never logs them.
+		settings.SetDTLSKeyLogWriter(rec.crypto)
+	}
 	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 	settings.SetIncludeLoopbackCandidate(true)
 	settings.SetIPFilter(socket.acceptsCandidate)

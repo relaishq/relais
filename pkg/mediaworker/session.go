@@ -537,6 +537,8 @@ func (s *session) handleRTP(pkt []byte) {
 
 	if _, err := s.worker.send(encrypted, s.state.ICE.RemoteAddr); err != nil {
 		s.log.Debugf("session %s: send echo packet: %v", s.id, err)
+	} else {
+		s.tracePacket(encrypted, "echo")
 	}
 	if s.needsKeyframe && track == &s.state.Video {
 		s.requestKeyframe("resume-first-video")
@@ -649,6 +651,7 @@ func (s *session) requestKeyframe(trigger string) {
 		return
 	}
 	s.needsKeyframe = false
+	s.tracePacket(encrypted, "keyframe-request")
 	s.log.Debugf("session %s: caller sent %s for video ssrc %d; sent PLI for caller ssrc %d",
 		s.id, trigger, video.SSRC, video.InboundSSRC)
 }
