@@ -29,6 +29,10 @@ func Open(ctx context.Context, logf func(string, ...any)) (*Topology, error) {
 
 // OpenManaged registers cleanup before setup can create any resources.
 func OpenManaged(ctx context.Context, logf func(string, ...any), register func(func()) error) (*Topology, error) {
+	return OpenManagedWorkers(ctx, logf, register, 2)
+}
+
+func OpenManagedWorkers(ctx context.Context, logf func(string, ...any), register func(func()) error, workers int) (*Topology, error) {
 	if os.Geteuid() != 0 {
 		return nil, errors.New("netns topology requires root on Linux: build first, then run sudo -E ./bin/crash-run -topology=netns -profile=lan")
 	}
@@ -54,7 +58,7 @@ func OpenManaged(ctx context.Context, logf func(string, ...any), register func(f
 		if _, err := rand.Read(token[:]); err != nil {
 			return nil, err
 		}
-		p, err := NewPlan(os.Getuid(), os.Getpid(), hex.EncodeToString(token[:]), 2)
+		p, err := NewPlan(os.Getuid(), os.Getpid(), hex.EncodeToString(token[:]), workers)
 		if err != nil {
 			return nil, err
 		}
@@ -248,10 +252,18 @@ func withNamespace(namespace string, action func() error) error {
 	return <-result
 }
 func (t *Topology) CallerSocket() (net.PacketConn, error) {
-	var conn *net.UDPConn
-	err := withNamespace(t.Plan.Roles["caller"].Namespace, func() error {
+	caller := t.Plan.Roles["caller"]
+	return CallerSocketInNamespace(caller.Namespace, netip.AddrPortFrom(caller.Public, 0))
+}
+
+// CallerSocketInNamespace creates only the media socket in an owned namespace.
+// Signaling and generator operator HTTP remain on the management host.
+// bind must be the caller's specific IPv4 address from the topology plan.
+func CallerSocketInNamespace(namespace string, bind netip.AddrPort) (net.PacketConn, error) {
+	var conn net.PacketConn
+	err := withNamespace(namespace, func() error {
 		var err error
-		conn, err = net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(t.Plan.Roles["caller"].Public, 0)))
+		conn, err = listenCallerSocket(bind)
 		return err
 	})
 	if err != nil {

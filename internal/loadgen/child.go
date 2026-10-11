@@ -14,6 +14,7 @@ import (
 	"github.com/relais/internal/clusterprocess"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/callharness"
+	"github.com/relais/pkg/controlplane"
 )
 
 type ChildOptions struct {
@@ -24,6 +25,7 @@ type ChildOptions struct {
 	Output                string
 	ParentPID             int
 	StartTimeout          time.Duration
+	PlaceOnWorker         bool
 }
 type StartRequest struct {
 	At time.Time `json:"at"`
@@ -84,7 +86,11 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 			defer func() { <-slots }()
 			dial, stop := context.WithTimeout(ctx, 20*time.Second)
 			defer stop()
-			call, err := h.Dial(dial, callharness.CallOptions{Video: o.Video, Worker: -1, Recording: callharness.RecordingOptions{History: 15 * time.Second, DecodeEvery: 30}, SendTiming: meter.Observe, SendPacing: meter.ObservePacing})
+			worker := -1
+			if o.PlaceOnWorker {
+				worker = 0
+			}
+			call, err := h.Dial(dial, callharness.CallOptions{Video: o.Video, Worker: worker, Recording: callharness.RecordingOptions{History: 15 * time.Second, DecodeEvery: 30}, SendTiming: meter.Observe, SendPacing: meter.ObservePacing})
 			if err != nil {
 				errs <- fmt.Errorf("dial %d: %w", i, err)
 				return
@@ -164,6 +170,20 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 			if !found {
 				http.Error(w, "unknown session", http.StatusBadRequest)
 				return
+			}
+		}
+	})
+	mux.HandleFunc("POST /record-moves", func(w http.ResponseWriter, r *http.Request) {
+		var moves []controlplane.MoveResult
+		if json.NewDecoder(r.Body).Decode(&moves) != nil {
+			http.Error(w, "invalid moves", http.StatusBadRequest)
+			return
+		}
+		for _, move := range moves {
+			for _, c := range calls {
+				if c.SessionID() == move.ID {
+					c.RecordExternalMove(move)
+				}
 			}
 		}
 	})

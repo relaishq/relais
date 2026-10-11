@@ -502,6 +502,7 @@ func (w *Worker) readLoop() {
 			continue
 		}
 		w.metrics.packetsIn.Add(1)
+		w.metrics.bytesIn.Add(uint64(n))
 		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
 		pkt := buf[:n]
 
@@ -583,6 +584,7 @@ func (w *Worker) send(pkt []byte, to netip.AddrPort) (int, error) {
 	n, err := w.conn.WriteToUDPAddrPort(pkt, to)
 	if err == nil {
 		w.metrics.packetsOut.Add(1)
+		w.metrics.bytesOut.Add(uint64(n))
 	}
 	return n, err
 }

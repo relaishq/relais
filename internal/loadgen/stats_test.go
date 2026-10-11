@@ -35,7 +35,7 @@ func TestLimitsAndJudgeDoNotTurnSaturationIntoValid(t *testing.T) {
 		stats Stats
 		want  string
 	}{
-		{"late", Stats{Lateness: Lateness{Packets: 100}, IntervalLateness: Lateness{P99: 21 * time.Millisecond}}, "send lateness"},
+		{"late", Stats{Lateness: Lateness{Packets: 100, P99: 5 * time.Millisecond}, IntervalLateness: Lateness{P99: 21 * time.Millisecond}}, "interval send-lateness p99 peak"},
 		{"cpu", Stats{Lateness: Lateness{Packets: 100}, CPUPerGOMAXPROCS: 86}, "CPU"},
 		{"no media", Stats{}, "no successful media"},
 	} {

@@ -264,8 +264,10 @@ type MoveTrackReport struct {
 	// Gap is the longest interval between consecutive packets around the
 	// move: the media gap the move caused. TypicalInterval is the track's
 	// median interval between packets, for comparison.
-	Gap             time.Duration
-	TypicalInterval time.Duration
+	BaselineGapP95     time.Duration
+	BaselineGapSamples int
+	Gap                time.Duration
+	TypicalInterval    time.Duration
 
 	// SkippedSequenceNumbers counts sequence numbers missing around the
 	// move: a sequence margin's jump, or lost packets.
@@ -353,7 +355,20 @@ func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
 			report.Error = move.err.Error()
 		}
 		for _, track := range r.tracks {
-			report.Tracks = append(report.Tracks, track.aroundMove(report.Start, report.End))
+			around := track.aroundMove(report.Start, report.End)
+			var gaps []time.Duration
+			floor := max(report.Start-time.Second, baselineFloor)
+			for i := 1; i < len(track.arrivals); i++ {
+				if track.arrivals[i-1] >= floor && track.arrivals[i] < report.Start {
+					gaps = append(gaps, track.arrivals[i]-track.arrivals[i-1])
+				}
+			}
+			slices.Sort(gaps)
+			around.BaselineGapSamples = len(gaps)
+			if len(gaps) > 0 {
+				around.BaselineGapP95 = gaps[(95*len(gaps)+99)/100-1]
+			}
+			report.Tracks = append(report.Tracks, around)
 		}
 		limit := until
 		if moveIndex+1 < len(r.moves) {
