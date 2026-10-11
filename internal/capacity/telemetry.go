@@ -24,6 +24,7 @@ type Target struct {
 	RedisAddr, RedisPassword string
 	PID                      int
 	Done                     <-chan struct{}
+	Err                      func() error
 }
 type Process struct {
 	Name                    string             `json:"name"`
@@ -44,14 +45,16 @@ type Process struct {
 	MeanHeapBytesPerCall    float64            `json:"mean_heap_bytes_per_call"`
 	RSSUnavailable          bool               `json:"rss_unavailable,omitempty"`
 	RatesPerCallSecond      map[string]float64 `json:"rates_per_call_second,omitempty"`
+	UnexpectedExit          bool               `json:"unexpected_exit,omitempty"`
 	Errors                  []string           `json:"errors,omitempty"`
 	cpu, rss                float64
 	heap                    float64
 	at                      time.Time
 }
 type Telemetry struct {
-	Processes []Process `json:"processes"`
-	Errors    []string  `json:"errors,omitempty"`
+	WindowSeconds float64   `json:"window_seconds"`
+	Processes     []Process `json:"processes"`
+	Errors        []string  `json:"errors,omitempty"`
 }
 type Monitor struct {
 	targets []Target
@@ -61,6 +64,7 @@ type Monitor struct {
 	client  *http.Client
 	stores  []*redis.Client
 	retired []atomic.Bool
+	started time.Time
 }
 
 func Start(ctx context.Context, targets []Target, every time.Duration) *Monitor {
@@ -78,6 +82,7 @@ func Start(ctx context.Context, targets []Target, every time.Duration) *Monitor 
 		}
 		m.data.Processes = append(m.data.Processes, Process{RSSKind: kind, Name: t.Name, PID: t.PID, Peaks: map[string]float64{}})
 	}
+	m.started = time.Now()
 	m.sample(ctx)
 	go func() {
 		defer close(m.done)
@@ -185,31 +190,27 @@ func (m *Monitor) Finish(callers int) Telemetry {
 			_ = store.Close()
 		}
 	}
-	for i := range m.data.Processes {
+	m.data.WindowSeconds = time.Since(m.started).Seconds()
+	for i, target := range m.targets {
 		p := &m.data.Processes[i]
-		if p.Samples < 2 || p.ObservedSeconds <= 0 {
-			m.data.Errors = append(m.data.Errors, p.Name+": missing resource window: "+strings.Join(p.Errors, "; "))
-			continue
-		}
-		denominator := float64(callers) * p.ObservedSeconds
-		p.CPUSecondsPerCallSecond = p.CPUSeconds / denominator
-		p.MeanRSSBytesPerCall = p.RSSByteSeconds / denominator
-		p.MeanHeapBytesPerCall = p.HeapByteSeconds / denominator
-		p.RatesPerCallSecond = map[string]float64{}
-		for name, last := range p.Last {
-			if strings.Contains(name, "_total") {
-				first, ok := p.First[name]
-				if !ok || last < first {
-					m.data.Errors = append(m.data.Errors, p.Name+": invalid counter "+name)
-					continue
+		if !m.retired[i].Load() {
+			select {
+			case <-target.Done:
+				p.UnexpectedExit = true
+				message := target.Name + ": process exited without retirement"
+				if target.Err != nil {
+					if err := target.Err(); err != nil {
+						message += ": " + err.Error()
+					}
 				}
-				p.RatesPerCallSecond[name] = (last - first) / denominator
+				p.Errors = append(p.Errors, message)
+				m.data.Errors = append(m.data.Errors, message)
+			default:
 			}
 		}
-		if len(p.Errors) > 0 {
-			m.data.Errors = append(m.data.Errors, p.Name+": resource sample errors")
-		}
+		m.data.Errors = append(m.data.Errors, normalizeProcess(p, callers, m.data.WindowSeconds)...)
 	}
+
 	return m.data
 }
 
@@ -305,7 +306,42 @@ func redisResources(ctx context.Context, client *redis.Client) (map[string]float
 func (m *Monitor) Retire(name string) {
 	for i, t := range m.targets {
 		if t.Name == name {
+			select {
+			case <-t.Done:
+				return
+			default:
+			}
 			m.retired[i].Store(true)
 		}
 	}
+}
+
+// Contributions to a step use its shared window. Memory averages describe
+// only the process's observed lifetime; a retired tail is never extrapolated.
+func normalizeProcess(p *Process, callers int, windowSeconds float64) []string {
+	var problems []string
+	if p.Samples < 2 || p.ObservedSeconds <= 0 || windowSeconds <= 0 || callers <= 0 {
+		problems = append(problems, p.Name+": missing resource window: "+strings.Join(p.Errors, "; "))
+		return problems
+	}
+	denominator := float64(callers) * windowSeconds
+	p.CPUSecondsPerCallSecond = p.CPUSeconds / denominator
+	p.MeanRSSBytesPerCall = p.RSSByteSeconds / (float64(callers) * p.ObservedSeconds)
+	p.MeanHeapBytesPerCall = p.HeapByteSeconds / (float64(callers) * p.ObservedSeconds)
+	p.RatesPerCallSecond = map[string]float64{}
+	for name, last := range p.Last {
+		if strings.Contains(name, "_total") {
+			first, ok := p.First[name]
+			if !ok || last < first {
+				problems = append(problems, p.Name+": invalid counter "+name)
+				continue
+			}
+			p.RatesPerCallSecond[name] = (last - first) / denominator
+		}
+	}
+	if len(p.Errors) > 0 {
+		problems = append(problems, p.Name+": resource sample errors")
+	}
+
+	return problems
 }

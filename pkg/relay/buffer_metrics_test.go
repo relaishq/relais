@@ -23,6 +23,7 @@ func TestRelayBufferMetricsScrape(t *testing.T) {
 				a.expect(t, caller.addr(), packet)
 			}
 			body := relayMetricsBody(sys.relay)
+			require.Contains(t, body, "relais_relay_buffer_enabled 1\n")
 			require.Contains(t, body, "relais_relay_buffer_sessions 1\n")
 			require.Contains(t, body, "relais_relay_buffer_packets 2\n")
 			require.Contains(t, body, fmt.Sprintf("relais_relay_buffer_bytes %d\n", 2*size))
@@ -74,4 +75,8 @@ func TestRelayBufferMetricsScrape(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRelayBufferMetricDisabled(t *testing.T) {
+	require.Contains(t, relayMetricsBody(startTestRelay(t, Config{}).relay), "relais_relay_buffer_enabled 0\n")
 }

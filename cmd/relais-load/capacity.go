@@ -17,18 +17,21 @@ import (
 
 	"github.com/relais/internal/clusterprocess"
 	"github.com/relais/internal/loadgen"
+	"github.com/relais/pkg/callharness"
 )
 
 type capacityStep struct {
-	Kind                           string            `json:"kind"`
-	Verdict                        string            `json:"service_outcome"`
-	Causes                         []string          `json:"causes,omitempty"`
-	StoreCommandsPerCallSecond     float64           `json:"store_commands_per_call_second"`
-	StoreBytesPerCallSecond        float64           `json:"store_bytes_per_call_second"`
-	RelayPacketsPerSecond          float64           `json:"relay_packets_per_second"`
-	PublicEgressBytesPerCallSecond float64           `json:"public_egress_bytes_per_call_second"`
-	DrainSeconds                   float64           `json:"drain_seconds,omitempty"`
-	Run                            loadgen.RunReport `json:"run"`
+	RelayBufferEnabled             *bool              `json:"relay_buffer_enabled"`
+	StoreBytesByClient             map[string]float64 `json:"store_bytes_by_client_per_call_second"`
+	Kind                           string             `json:"kind"`
+	Verdict                        string             `json:"service_outcome"`
+	Causes                         []string           `json:"causes,omitempty"`
+	StoreCommandsPerCallSecond     float64            `json:"store_commands_per_call_second"`
+	StoreBytesPerCallSecond        float64            `json:"store_bytes_per_call_second"`
+	RelayPacketsPerSecond          float64            `json:"relay_packets_per_second"`
+	PublicEgressBytesPerCallSecond float64            `json:"public_egress_bytes_per_call_second"`
+	DrainSeconds                   float64            `json:"drain_seconds,omitempty"`
+	Run                            loadgen.RunReport  `json:"run"`
 }
 type capacityReport struct {
 	GOOS                     string         `json:"goos"`
@@ -51,6 +54,8 @@ type capacityReport struct {
 	StoreOpsBudget           float64        `json:"store_commands_budget_per_call_second"`
 	StoreBytesBudget         float64        `json:"store_bytes_budget_per_call_second"`
 	Steps                    []capacityStep `json:"steps"`
+	CostStatus               string         `json:"cost_status"`
+	RelayBufferEnabled       *bool          `json:"relay_buffer_enabled"`
 	Cost                     *costReport    `json:"cost,omitempty"`
 	Note                     string         `json:"note"`
 }
@@ -59,7 +64,7 @@ type capacityReport struct {
 // additionally requires caller continuity, complete threshold rows, resource
 // evidence, and the stated store budget. A trusted failure remains visible.
 func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget float64) capacityStep {
-	s := capacityStep{Kind: kind, Run: r, Verdict: "pass"}
+	s := capacityStep{Kind: kind, Run: r, Verdict: "pass", StoreBytesByClient: map[string]float64{}}
 	inconclusive := func(reason string) {
 		if s.Verdict != "fail" {
 			s.Verdict = "inconclusive"
@@ -97,6 +102,17 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 					fail("caller connection " + state.State)
 				}
 			}
+			for _, track := range report.Tracks {
+				if gapOutsideScheduledEvent(r.Events, c.Session, report, track.MediaGapEndedAt, track.MediaGap) {
+					fail(track.Kind + " whole-call media gap outside scheduled events exceeds 150ms")
+				}
+				for i := 1; i < len(track.Arrivals); i++ {
+					if gapOutsideScheduledEvent(r.Events, c.Session, report, track.Arrivals[i], track.Arrivals[i]-track.Arrivals[i-1]) {
+						fail(track.Kind + " observed media gap outside scheduled events exceeds 150ms")
+						break
+					}
+				}
+			}
 			for _, move := range report.Moves {
 				if move.Error != "" {
 					fail("move error: " + move.Error)
@@ -129,13 +145,53 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 	if len(r.Telemetry.Processes) == 0 || len(r.Telemetry.Errors) > 0 {
 		inconclusive("missing or incomplete service resource samples")
 	}
+	expectedTakeovers := 0
+	for _, event := range r.Events {
+		if event.Failed {
+			fail(event.Event.Kind + " confirmed service failure")
+		}
+		if event.Error != "" {
+			fail(event.Event.Kind + " event error: " + event.Error)
+		}
+		if event.Event.Kind == "kill" {
+			expectedTakeovers += event.Affected
+		}
+	}
+	takeoverEvidence := false
 	for _, p := range r.Telemetry.Processes {
+		if p.UnexpectedExit {
+			fail(p.Name + " exited unexpectedly: " + strings.Join(p.Errors, "; "))
+		}
+		if p.Name == "control" {
+			first, firstOK := p.First["relais_control_takeovers_total"]
+			last, lastOK := p.Last["relais_control_takeovers_total"]
+			if firstOK && lastOK && last >= first {
+				takeoverEvidence = true
+				if last-first != float64(expectedTakeovers) {
+					fail(fmt.Sprintf("control takeovers %.0f do not match %d scheduled-kill calls", last-first, expectedTakeovers))
+				}
+			}
+		}
+		if p.Name == "relay" {
+			if value, ok := p.Last["relais_relay_buffer_enabled"]; ok {
+				enabled := value == 1
+				s.RelayBufferEnabled = &enabled
+			}
+		}
 		for name, rate := range p.RatesPerCallSecond {
 			if strings.HasPrefix(name, "relais_store_commands_total") {
 				s.StoreCommandsPerCallSecond += rate
 			}
 			if strings.HasPrefix(name, "relais_transport_bytes_total{") && strings.Contains(name, `transport="redis"`) {
 				s.StoreBytesPerCallSecond += rate
+				client := "unlabelled"
+				for _, label := range []string{"session", "owners", "frame"} {
+					if strings.Contains(name, `client="`+label+`"`) {
+						client = label
+						break
+					}
+				}
+				s.StoreBytesByClient[client] += rate
 			}
 			if p.Name == "relay" && (name == "relais_relay_caller_packets_total" || name == "relais_relay_worker_packets_total") {
 				s.RelayPacketsPerSecond += rate * float64(r.Callers)
@@ -147,6 +203,9 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 				s.PublicEgressBytesPerCallSecond += 28 * rate
 			} // IPv4+UDP, excluding L2
 		}
+	}
+	if !takeoverEvidence {
+		inconclusive("missing control takeover counter window")
 	}
 	if s.StoreCommandsPerCallSecond <= 0 || s.StoreBytesPerCallSecond <= 0 || s.RelayPacketsPerSecond <= 0 {
 		inconclusive("missing store or relay traffic evidence")
@@ -160,11 +219,80 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 		}
 	}
 	// Saturation is authoritative even if another trusted metric failed.
-	if r.Outcome != "valid" {
+	if r.Outcome != "valid" && !confirmedServiceFailure(r) {
 		s.Verdict = "inconclusive"
 	}
 	return s
 }
+
+// A partial drain is known failure even when it leaves event evidence
+// incomplete. That exception requires complete, unsaturated caller processes.
+func confirmedServiceFailure(r loadgen.RunReport) bool {
+	failed := false
+	for _, event := range r.Events {
+		failed = failed || event.Failed
+	}
+	if !failed || len(r.Processes) == 0 {
+		return false
+	}
+	calls := 0
+	for _, p := range r.Processes {
+		if p.Saturated || !p.Complete || len(p.Causes) > 0 {
+			return false
+		}
+		calls += len(p.Calls)
+	}
+	return calls == r.Callers
+}
+
+// A scheduled gap must fit the matched event's API/resume interval, with
+// one move-ceiling allowance for the bounding packet on either side. Another
+// call's event, an unrecorded takeover, or a distant gap cannot excuse it.
+func gapOutsideScheduledEvent(events []loadgen.EventResult, session string, report *callharness.Report, end, gap time.Duration) bool {
+	if gap <= 150*time.Millisecond {
+		return false
+	}
+	for _, event := range events {
+		affected := false
+		for _, id := range event.Sessions {
+			affected = affected || id == session
+		}
+		if !affected || event.Error != "" {
+			continue
+		}
+		for _, move := range report.Moves {
+			if !loadgen.MatchesEvent(event, report, move) {
+				continue
+			}
+			start := move.Start - 150*time.Millisecond
+			finish := max(move.End, move.Measurement.MediaResumedAt) + 150*time.Millisecond
+			if end-gap >= start && end <= finish {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func recordCapacityStep(dir, output string, result *capacityReport, step capacityStep) (capacityStep, error) {
+	if step.Kind == "relay" || step.Kind == "n-plus-one" || step.Kind == "drain" {
+		for worker, peak := range step.Run.WorkerPeaks {
+			if peak <= result.WorkerCapacityLowerBound {
+				continue
+			}
+			step.Causes = append(step.Causes, fmt.Sprintf("%s observed %d calls exceeds proven worker lower bound %d", worker, peak, result.WorkerCapacityLowerBound))
+			if step.Kind == "relay" || (step.Run.Outcome != "valid" && !confirmedServiceFailure(step.Run)) {
+				step.Verdict = "inconclusive"
+			} else {
+				step.Verdict = "fail"
+			}
+		}
+	}
+	result.RelayBufferEnabled = step.RelayBufferEnabled
+	result.Steps = append(result.Steps, step)
+	return step, errors.Join(writeJSON(filepath.Join(dir, "report.json"), step), writeJSON(output, result))
+}
+
 func percentile95(values []time.Duration) time.Duration {
 	if len(values) == 0 {
 		return 0
@@ -179,11 +307,17 @@ func plannedLoad(workers, workerCapacity, relayCapacity int) int {
 
 func runCapacity(ctx context.Context, m *clusterprocess.Manager, c config, root string) error {
 	host, _ := os.Hostname()
-	result := capacityReport{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, GoVersion: runtime.Version(), HostCPUs: runtime.NumCPU(), Runner: host, Topology: c.Topology, Profile: "lan", CallersPerProcess: c.CallersPerProcess, Workers: c.Workers, StoreOpsBudget: c.StoreOpsBudget, StoreBytesBudget: c.StoreBytesBudget, Outcome: "inconclusive", Note: "Bounded short-run lower bounds, not sustained capacity or exact limits. Stop on the first failed or inconclusive step; generator saturation never establishes service capacity. Loopback is Mac/local evidence; netns is emulated unshaped LAN only. Region/far-caller and 60-second consent are not proven by these samples."}
+	profile := "loopback"
+	if c.Topology == "netns" {
+		profile = "lan"
+	}
+	result := capacityReport{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, GoVersion: runtime.Version(), HostCPUs: runtime.NumCPU(), Runner: host, Topology: c.Topology, Profile: profile, CallersPerProcess: c.CallersPerProcess, Workers: c.Workers, StoreOpsBudget: c.StoreOpsBudget, StoreBytesBudget: c.StoreBytesBudget, Outcome: "inconclusive", CostStatus: "NOT-RUN(measurement incomplete)", Note: "Bounded short-run lower bounds, not sustained capacity or exact limits. Stop on the first failed or inconclusive step; generator saturation never establishes service capacity. Loopback is Mac/local evidence; netns is emulated unshaped LAN only. Region/far-caller and 60-second consent are not proven by these samples."}
+	defer func() { fmt.Println("cost=" + result.CostStatus) }()
 	var prices *priceInput
 	if c.Prices != "" {
 		value, err := readPrices(c.Prices)
 		if err != nil {
+			result.CostStatus = "NOT-RUN(invalid price inputs)"
 			return err
 		}
 		prices = &value
@@ -205,21 +339,13 @@ func runCapacity(ctx context.Context, m *clusterprocess.Manager, c config, root 
 		report, runErr := execute(runCtx, m, step, dir)
 		printReport(report)
 		judged := judgeCapacity(kind, report, c.StoreOpsBudget, c.StoreBytesBudget)
-		if kind == "relay" {
-			for worker, peak := range report.WorkerPeaks {
-				if peak > result.WorkerCapacityLowerBound {
-					judged.Verdict = "inconclusive"
-					judged.Causes = append(judged.Causes, fmt.Sprintf("%s exceeds the proven worker load: relay limit cannot be isolated", worker))
-				}
-			}
-		}
 		if runErr != nil {
 			judged.Verdict = "inconclusive"
 			judged.Causes = append(judged.Causes, runErr.Error())
 		}
-		result.Steps = append(result.Steps, judged)
+		judged, writeErr := recordCapacityStep(dir, c.Output, &result, judged)
 		fmt.Printf("capacity kind=%s callers=%d service=%s store-commands/call-s=%.2f store-bytes/call-s=%.0f relay-pps=%.1f drain-s=%.3f\n", kind, count, judged.Verdict, judged.StoreCommandsPerCallSecond, judged.StoreBytesPerCallSecond, judged.RelayPacketsPerSecond, judged.DrainSeconds)
-		return judged, errors.Join(writeJSON(filepath.Join(dir, "report.json"), judged), write())
+		return judged, writeErr
 	}
 	for _, kind := range []string{"worker", "relay"} {
 		for n := c.CapacityStart; n <= c.CapacityMax; {
@@ -264,13 +390,6 @@ func runCapacity(ctx context.Context, m *clusterprocess.Manager, c config, root 
 		if err != nil {
 			return err
 		}
-		for worker, peak := range kill.Run.WorkerPeaks {
-			if peak > result.WorkerCapacityLowerBound {
-				kill.Verdict = "fail"
-				kill.Causes = append(kill.Causes, fmt.Sprintf("%s observed %d calls exceeds capacity %d", worker, peak, result.WorkerCapacityLowerBound))
-			}
-		}
-		result.Steps[len(result.Steps)-1] = kill
 		drain, err := executeStep("drain", result.PlannedCallers, c.Workers, false, []loadgen.Event{{After: 6 * time.Second, Kind: "drain", Worker: 0}})
 		if err != nil {
 			return err
@@ -281,17 +400,8 @@ func runCapacity(ctx context.Context, m *clusterprocess.Manager, c config, root 
 		} else if kill.Verdict == "fail" || drain.Verdict == "fail" {
 			result.Outcome = "fail"
 		}
-		if prices != nil { // cost uses a valid media window at the measured relay load
-			for i := len(result.Steps) - 1; i >= 0; i-- {
-				step := result.Steps[i]
-				if step.Kind == "relay" && step.Verdict == "pass" {
-					cost := calculateCost(*prices, c.Workers, result.PlannedCallers, step.PublicEgressBytesPerCallSecond)
-					result.Cost = &cost
-					break
-				}
-			}
-		}
 	}
+	setCapacityCost(&result, prices)
 	if err := write(); err != nil {
 		return err
 	}
@@ -314,6 +424,7 @@ type priceInput struct {
 	PublicEgressPerGiB float64      `json:"public_egress_per_gib"`
 }
 type costReport struct {
+	Validated                      bool       `json:"validated"`
 	Inputs                         priceInput `json:"inputs"`
 	PlannedCallers                 int        `json:"planned_callers"`
 	MachinePerCallHour             float64    `json:"machine_per_call_hour"`
@@ -373,8 +484,32 @@ func readPrices(path string) (priceInput, error) {
 	}
 	return prices, nil
 }
+func setCapacityCost(result *capacityReport, prices *priceInput) {
+	result.Cost = nil
+	var relay *capacityStep
+	for i := range result.Steps {
+		step := &result.Steps[i]
+		if step.Kind == "relay" && step.Verdict == "pass" {
+			relay = step
+		}
+	}
+	switch {
+	case prices == nil:
+		result.CostStatus = "NOT-RUN(no input prices)"
+	case relay == nil:
+		result.CostStatus = "NOT-RUN(no passing relay step)"
+	case !result.PlannedValidated || result.PlannedCallers < 2:
+		result.CostStatus = "NOT-RUN(planned load not validated)"
+	default:
+		cost := calculateCost(*prices, result.Workers, result.PlannedCallers, relay.PublicEgressBytesPerCallSecond)
+		cost.Validated = true
+		result.Cost = &cost
+		result.CostStatus = fmt.Sprintf("VALIDATED(%s %.6f/call-hour upper-bound estimate at T=%d)", prices.Currency, cost.TotalPerCallHour, result.PlannedCallers)
+	}
+}
+
 func calculateCost(p priceInput, workers, callers int, egress float64) costReport {
-	cost := costReport{Inputs: p, PlannedCallers: callers, PublicEgressBytesPerCallSecond: egress, Note: "Allocated machine cost at measured candidate N+1 occupancy: W workers + one relay/control/store, plus measured public IPv4 UDP egress at input price. No provider prices, discounts, inter-zone charges, provider agent fees, disk, or tax assumed. Valid short-run estimates, not independent-host sizing proof."}
+	cost := costReport{Inputs: p, PlannedCallers: callers, PublicEgressBytesPerCallSecond: egress, Note: "Allocated machine cost at measured candidate N+1 occupancy: W workers + one relay/control/store, plus measured public IPv4 UDP egress at input price. No provider prices, discounts, inter-zone charges, provider agent fees, disk, or tax assumed. Upper-bound estimate at a demonstrated load floor, not an operating recommendation or independent-host sizing proof."}
 	cost.MachinePerCallHour = (float64(workers)*p.Worker.Hourly + p.Relay.Hourly + p.Control.Hourly + p.Store.Hourly) / float64(callers)
 	cost.TransferPerCallHour = egress * 3600 / (1 << 30) * p.PublicEgressPerGiB
 	cost.TotalPerCallHour = cost.MachinePerCallHour + cost.TransferPerCallHour

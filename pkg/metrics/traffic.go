@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/prometheus/client_golang/prometheus"
@@ -13,26 +12,30 @@ import (
 )
 
 var storeCommands = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relais_store_commands_total", Help: "Redis client command attempts, including pipelines and retries; excludes commands inside Lua."}, []string{"store"})
-var transportBytes = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relais_transport_bytes_total", Help: "TCP bytes successfully read or written, including protocol overhead and monitoring; excludes IP headers."}, []string{"transport", "direction"})
+var transportBytes = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relais_transport_bytes_total", Help: "TCP bytes successfully read or written, including protocol overhead and monitoring; excludes IP headers."}, []string{"transport", "client", "direction"})
 
 // TrafficConn measures actual transport bytes, including encrypted snapshots.
 func TrafficConn(conn net.Conn, transport string) net.Conn {
-	return &trafficConn{Conn: conn, transport: transport}
+	return trafficConnForClient(conn, transport, "")
 }
 
 type trafficConn struct {
 	net.Conn
-	transport string
+	readBytes, writeBytes prometheus.Counter
+}
+
+func trafficConnForClient(conn net.Conn, transport, client string) net.Conn {
+	return &trafficConn{Conn: conn, readBytes: transportBytes.WithLabelValues(transport, client, "in"), writeBytes: transportBytes.WithLabelValues(transport, client, "out")}
 }
 
 func (c *trafficConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
-	transportBytes.WithLabelValues(c.transport, "in").Add(float64(n))
+	c.readBytes.Add(float64(n))
 	return n, err
 }
 func (c *trafficConn) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
-	transportBytes.WithLabelValues(c.transport, "out").Add(float64(n))
+	c.writeBytes.Add(float64(n))
 	return n, err
 }
 
@@ -47,37 +50,68 @@ func (l trafficListener) Accept() (net.Conn, error) {
 }
 func TrafficListener(l net.Listener) net.Listener { return trafficListener{l} }
 
-// RedisDialer supplies a wrapper without changing Redis retry policy.
-func RedisDialer(ctx context.Context, network, addr string) (net.Conn, error) {
-	c, err := (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 5 * time.Minute}).DialContext(ctx, network, addr)
-	if err != nil {
-		return nil, err
+type redisDialFunc func(context.Context, string, string) (net.Conn, error)
+
+// RedisDialer wraps the configured go-redis dialer, including its timeout,
+// custom transport and TLS handshake behavior.
+func RedisDialer(dial redisDialFunc, client string) redisDialFunc {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return trafficConnForClient(conn, "redis", client), nil
 	}
-	return TrafficConn(c, "redis"), nil
 }
 
-type StoreHook string
+// RedisClient uses go-redis v8's own option initialization to obtain its
+// private default dialer. The unconnected prototype is immediately closed.
+// Build the real client from fresh input options: re-initializing normalized
+// options would turn MaxRetries=-1 back into automatic retries.
+func RedisClient(options *redis.Options, client string) *redis.Client {
+	original := *options
+	dial := original.Dialer
+	if dial == nil {
+		prototypeOptions := original
+		prototypeOptions.MinIdleConns = 0 // The prototype must never connect.
+		prototype := redis.NewClient(&prototypeOptions)
+		dial = prototype.Options().Dialer
+		_ = prototype.Close()
+	}
+	original.Dialer = RedisDialer(dial, client)
+	return redis.NewClient(&original)
+}
 
-func (h StoreHook) BeforeProcess(ctx context.Context, _ redis.Cmder) (context.Context, error) {
-	storeCommands.WithLabelValues(string(h)).Inc()
+func StoreHook(store string) redis.Hook {
+	return &storeHook{commands: storeCommands.WithLabelValues(store)}
+}
+
+type storeHook struct{ commands prometheus.Counter }
+
+func (h *storeHook) BeforeProcess(ctx context.Context, _ redis.Cmder) (context.Context, error) {
+	h.commands.Inc()
 	return ctx, nil
 }
-func (StoreHook) AfterProcess(context.Context, redis.Cmder) error { return nil }
-func (h StoreHook) BeforeProcessPipeline(ctx context.Context, cmds []redis.Cmder) (context.Context, error) {
-	storeCommands.WithLabelValues(string(h)).Add(float64(len(cmds)))
+func (*storeHook) AfterProcess(context.Context, redis.Cmder) error { return nil }
+func (h *storeHook) BeforeProcessPipeline(ctx context.Context, cmds []redis.Cmder) (context.Context, error) {
+	h.commands.Add(float64(len(cmds)))
 	return ctx, nil
 }
-func (StoreHook) AfterProcessPipeline(context.Context, []redis.Cmder) error { return nil }
+func (*storeHook) AfterProcessPipeline(context.Context, []redis.Cmder) error { return nil }
 
 func TrafficCollectors() []prometheus.Collector {
-	for _, store := range []string{"session", "frame"} {
+	for _, store := range []string{"session", "owners", "frame"} {
 		storeCommands.WithLabelValues(store)
 	}
-	for _, transport := range []string{"redis", "http"} {
+	for _, client := range []string{"session", "owners", "frame"} {
 		for _, direction := range []string{"in", "out"} {
-			transportBytes.WithLabelValues(transport, direction)
+			transportBytes.WithLabelValues("redis", client, direction)
 		}
 	}
+	for _, direction := range []string{"in", "out"} {
+		transportBytes.WithLabelValues("http", "", direction)
+	}
+
 	return []prometheus.Collector{storeCommands, transportBytes}
 }
 

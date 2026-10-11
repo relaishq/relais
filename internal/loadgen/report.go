@@ -153,6 +153,7 @@ type EventResult struct {
 	Affected   int       `json:"affected"`
 	Sessions   []string  `json:"sessions"`
 	Recorded   int       `json:"recorded"`
+	Failed     bool      `json:"failed,omitempty"`
 	Error      string    `json:"error,omitempty"`
 }
 type RunReport struct {

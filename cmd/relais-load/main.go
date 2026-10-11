@@ -23,6 +23,7 @@ import (
 	"github.com/relais/internal/loadgen"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/controlplane"
+	"github.com/relais/pkg/mediaworker"
 )
 
 type config struct {
@@ -85,8 +86,8 @@ func (c config) validate() error {
 	if c.Capacity && c.Limits != loadgen.DefaultLimits() {
 		return errors.New("capacity requires the unchanged generator saturation limits")
 	}
-	if c.Capacity && (c.Calibrate || len(c.Events) > 0 || c.CapacityStart < 1 || c.CapacityMax < c.CapacityStart || c.CapacityMax > 1024 || c.CallersPerProcess < 1 || c.CallersPerProcess > 4 || c.Workers < 3 || c.Workers > 16 || c.Duration < 20*time.Second || c.Duration > 3*time.Minute || c.StoreOpsBudget <= 0 || c.StoreBytesBudget <= 0) {
-		return errors.New("capacity needs 3..16 workers, 20s..3m duration, 1..4 callers/process, positive budgets, 1 <= start <= max <= 1024 and no custom events/calibration")
+	if c.Capacity && (c.Calibrate || len(c.Events) > 0 || c.CapacityStart < 1 || c.CapacityMax < c.CapacityStart || c.CapacityMax > 1024 || c.CallersPerProcess < 1 || c.CallersPerProcess > 4 || c.Workers < 3 || c.Workers > 16 || c.Duration < 20*time.Second || c.Duration > 3*time.Minute || !(c.StoreOpsBudget > 0 && c.StoreOpsBudget <= 100) || !(c.StoreBytesBudget > 0 && c.StoreBytesBudget <= 128<<10)) {
+		return errors.New("capacity needs 3..16 workers, 20s..3m duration, 1..4 callers/process, budgets in (0,100 commands] and (0,128 KiB], 1 <= start <= max <= 1024 and no custom events/calibration")
 	}
 	var previous time.Duration
 	killed := map[int]bool{}
@@ -115,6 +116,14 @@ func (c config) validate() error {
 	}
 	return nil
 }
+
+type responseError struct {
+	code    int
+	message string
+}
+
+func (e *responseError) Error() string { return e.message }
+
 func request(ctx context.Context, method, url string, body, result any) error {
 	var b bytes.Buffer
 	if body != nil {
@@ -134,8 +143,13 @@ func request(ctx context.Context, method, url string, body, result any) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
+		statusError := &responseError{code: resp.StatusCode, message: fmt.Sprintf("%s: %s", url, resp.Status)}
+		if resp.StatusCode == http.StatusMultiStatus && result != nil {
+			return errors.Join(statusError, json.NewDecoder(resp.Body).Decode(result))
+		}
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("%s: %s %s", url, resp.Status, strings.TrimSpace(string(data)))
+		statusError.message += " " + strings.TrimSpace(string(data))
+		return statusError
 	}
 	if result != nil {
 		return json.NewDecoder(resp.Body).Decode(result)
@@ -172,7 +186,11 @@ func waitUntil(ctx context.Context, at time.Time) error {
 	}
 }
 func runEvent(ctx context.Context, t *topology, generators []generator, e loadgen.Event) (result loadgen.EventResult) {
-	defer func() { result.FinishedAt = time.Now() }()
+	defer func() {
+		if result.FinishedAt.IsZero() {
+			result.FinishedAt = time.Now()
+		}
+	}()
 	result = loadgen.EventResult{Event: e, At: time.Now()}
 	var status controlplane.Status
 	t.statusRequests++
@@ -200,6 +218,7 @@ func runEvent(ctx context.Context, t *topology, generators []generator, e loadge
 		result.Event = e
 	}
 	if err == nil && e.Kind == "drain" {
+		result.At = time.Now()
 		for _, c := range status.Calls {
 			if c.Owner == strconv.Itoa(e.Worker) {
 				result.Sessions = append(result.Sessions, c.ID)
@@ -211,11 +230,36 @@ func runEvent(ctx context.Context, t *topology, generators []generator, e loadge
 		} else {
 			var drained controlplane.DrainResult
 			err = request(ctx, http.MethodPost, strings.TrimSuffix(t.External.SignalingURL, "/calls")+fmt.Sprintf("/workers/%d/drain", e.Worker), nil, &drained)
+			result.FinishedAt = time.Now()
+			var statusErr *responseError
+			if errors.As(err, &statusErr) && statusErr.code == http.StatusMultiStatus {
+				result.Failed = true
+			}
+
 			if drained.Error != "" {
+				result.Failed = true
 				err = errors.Join(err, errors.New(drained.Error))
 			}
 			if len(drained.Moves) != result.Affected {
+				result.Failed = true
 				err = errors.Join(err, errors.New("drain missing move results"))
+			}
+			workerURL := ""
+			for _, target := range t.Targets {
+				if target.Name == fmt.Sprintf("worker-%d", e.Worker) {
+					workerURL = target.URL
+				}
+			}
+			if workerURL == "" {
+				err = errors.Join(err, errors.New("missing drained worker status endpoint"))
+			} else {
+				var worker mediaworker.WorkerStatus
+				statusErr := request(ctx, http.MethodGet, workerURL+"/status", nil, &worker)
+				err = errors.Join(err, statusErr)
+				if statusErr == nil && worker.Sessions != 0 {
+					result.Failed = true
+					err = errors.Join(err, fmt.Errorf("drained worker still has %d sessions", worker.Sessions))
+				}
 			}
 			for _, g := range generators {
 				err = errors.Join(err, request(ctx, http.MethodPost, g.url+"/record-moves", drained.Moves, nil))
@@ -284,7 +328,7 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 			report.Causes = append(report.Causes, runErr.Error())
 		}
 	}()
-	t, err := startTopology(ctx, m, c.Bin, dir, c.Workers, c.Topology, c.Capacity)
+	t, err := startTopology(ctx, m, c.Bin, dir, c.Workers, c.Topology)
 	if err != nil {
 		return report, err
 	}
@@ -452,8 +496,8 @@ func run() error {
 	fs.IntVar(&c.CapacityMax, "capacity-max", 16, "bounded maximum concurrent calls per ramp")
 	fs.IntVar(&c.CallersPerProcess, "callers-per-process", 2, "capacity generators: at most four callers per process, two by default")
 	fs.StringVar(&c.Prices, "prices", "", "optional input machine/transfer price JSON")
-	fs.Float64Var(&c.StoreOpsBudget, "store-ops-budget", 256, "maximum Redis client command attempts per call-second")
-	fs.Float64Var(&c.StoreBytesBudget, "store-bytes-budget", 1048576, "maximum Redis request+reply bytes per call-second")
+	fs.Float64Var(&c.StoreOpsBudget, "store-ops-budget", 100, "maximum Redis client command attempts per call-second")
+	fs.Float64Var(&c.StoreBytesBudget, "store-bytes-budget", 128<<10, "maximum Redis request+reply bytes per call-second")
 	fs.BoolVar(&c.Calibrate, "calibrate", false, "double callers per process until saturation; requires -processes=1")
 	fs.IntVar(&c.CalibrationStart, "calibration-start", 1, "first calibration caller count")
 	fs.IntVar(&c.CalibrationMax, "calibration-max", 128, "maximum calibration count (a lower bound if unsaturated)")

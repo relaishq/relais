@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"github.com/relais/internal/capacity"
 	"github.com/relais/internal/loadgen"
 	"github.com/relais/pkg/callharness"
 	"github.com/stretchr/testify/require"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,30 +15,32 @@ import (
 )
 
 func capacityFixture() loadgen.RunReport {
-	return loadgen.RunReport{Callers: 2, Outcome: "valid", Yardstick: []loadgen.MetricRow{{Scenario: "move", Metric: "resume", Outcome: "pass"}}, Telemetry: capacity.Telemetry{Processes: []capacity.Process{{Name: "relay", RatesPerCallSecond: map[string]float64{"relais_relay_caller_packets_total": 80, "relais_relay_worker_packets_total": 80, `relais_transport_bytes_total{direction="out",transport="redis"}`: 1000, `relais_store_commands_total{store="session"}`: 40}}}}, Processes: []loadgen.ProcessReport{{Calls: []loadgen.Message{{Call: &callharness.Report{Moves: []callharness.MoveReport{{Kind: "move", Tracks: []callharness.MoveTrackReport{{Kind: "audio", PacketsAfter: 100, Gap: 40 * time.Millisecond, BaselineGapSamples: 50, BaselineGapP95: 20 * time.Millisecond}}}}}}}}}}
+	r := loadgen.RunReport{Callers: 2, Outcome: "valid", Yardstick: []loadgen.MetricRow{{Scenario: "move", Metric: "resume", Outcome: "pass"}}, Telemetry: capacity.Telemetry{Processes: []capacity.Process{{Name: "relay", RatesPerCallSecond: map[string]float64{"relais_relay_caller_packets_total": 80, "relais_relay_worker_packets_total": 80, `relais_transport_bytes_total{direction="out",transport="redis"}`: 1000, `relais_store_commands_total{store="session"}`: 40}}}}, Processes: []loadgen.ProcessReport{{Calls: []loadgen.Message{{Call: &callharness.Report{Moves: []callharness.MoveReport{{Kind: "move", Tracks: []callharness.MoveTrackReport{{Kind: "audio", PacketsAfter: 100, Gap: 40 * time.Millisecond, BaselineGapSamples: 50, BaselineGapP95: 20 * time.Millisecond}}}}}}}}}}
+	r.Telemetry.Processes = append(r.Telemetry.Processes, capacity.Process{Name: "control", First: map[string]float64{"relais_control_takeovers_total": 0}, Last: map[string]float64{"relais_control_takeovers_total": 0}})
+	return r
 }
 func TestCapacityRejectsSaturatedGeneratorEvenWithGreenCallerRows(t *testing.T) {
 	r := capacityFixture()
 	r.Outcome = "inconclusive"
 	r.Causes = []string{"saturated interval"}
-	step := judgeCapacity("worker", r, 256, 1<<20)
+	step := judgeCapacity("worker", r, 100, 128<<10)
 	require.Equal(t, "inconclusive", step.Verdict)
 }
 func TestCapacityRequiresAllServiceAndResourceEvidence(t *testing.T) {
 	r := capacityFixture()
-	require.Equal(t, "pass", judgeCapacity("worker", r, 256, 1<<20).Verdict)
+	require.Equal(t, "pass", judgeCapacity("worker", r, 100, 128<<10).Verdict)
 	r.Telemetry.Errors = []string{"missing"}
-	require.Equal(t, "inconclusive", judgeCapacity("worker", r, 256, 1<<20).Verdict)
+	require.Equal(t, "inconclusive", judgeCapacity("worker", r, 100, 128<<10).Verdict)
 	r = capacityFixture()
 	r.Yardstick[0].Outcome = "fail"
-	require.Equal(t, "fail", judgeCapacity("worker", r, 256, 1<<20).Verdict)
+	require.Equal(t, "fail", judgeCapacity("worker", r, 100, 128<<10).Verdict)
 	r = capacityFixture()
 	r.Processes[0].Calls[0].Call.Moves[0].Tracks[0].Gap = 200 * time.Millisecond
-	require.Equal(t, "fail", judgeCapacity("worker", r, 256, 1<<20).Verdict)
+	require.Equal(t, "fail", judgeCapacity("worker", r, 100, 128<<10).Verdict)
 	r = capacityFixture()
 	r.Processes[0].Calls[0].Call.Moves[0].Tracks[0].BaselineGapSamples = 2
-	require.Equal(t, "inconclusive", judgeCapacity("worker", r, 256, 1<<20).Verdict)
-	require.Equal(t, "fail", judgeCapacity("worker", capacityFixture(), 20, 1<<20).Verdict)
+	require.Equal(t, "inconclusive", judgeCapacity("worker", r, 100, 128<<10).Verdict)
+	require.Equal(t, "fail", judgeCapacity("worker", capacityFixture(), 20, 128<<10).Verdict)
 }
 func TestNPlusOneReservesMoveSlotAndRelayCapacity(t *testing.T) {
 	require.Equal(t, 19, plannedLoad(3, 10, 100))
@@ -64,4 +68,125 @@ func TestPriceInputsRequireEveryExplicitPrice(t *testing.T) {
 		_, err := readPrices(path)
 		require.Error(t, err)
 	}
+}
+
+func TestCapacityRejectsUnexpectedTakeover(t *testing.T) {
+	r := capacityFixture()
+	r.Telemetry.Processes[1].Last["relais_control_takeovers_total"] = 1
+	require.Equal(t, "fail", judgeCapacity("worker", r, 100, 128<<10).Verdict)
+}
+
+func TestCapacityRejectsWholeCallGapAwayFromScheduledEvents(t *testing.T) {
+	r := capacityFixture()
+	r.Processes[0].Calls[0].Call.Tracks = []callharness.TrackReport{{Kind: "audio", MediaGap: 400 * time.Millisecond, MediaGapEndedAt: 15 * time.Second}}
+	require.Equal(t, "fail", judgeCapacity("worker", r, 100, 128<<10).Verdict)
+}
+
+func TestCapacityTakeoverCountMatchesScheduledAffectedCalls(t *testing.T) {
+	r := capacityFixture()
+	r.Events = []loadgen.EventResult{{Event: loadgen.Event{Kind: "kill"}, Affected: 2}}
+	r.Telemetry.Processes[1].Last["relais_control_takeovers_total"] = 2
+	require.Equal(t, "pass", judgeCapacity("n-plus-one", r, 100, 128<<10).Verdict)
+	r.Telemetry.Processes[1].Last["relais_control_takeovers_total"] = 1
+	require.Equal(t, "fail", judgeCapacity("n-plus-one", r, 100, 128<<10).Verdict)
+	r.Telemetry.Processes[1].Last = nil
+	require.Equal(t, "inconclusive", judgeCapacity("n-plus-one", r, 100, 128<<10).Verdict)
+}
+
+func TestCapacityScheduledGapIsSpecificToCallAndWindow(t *testing.T) {
+	at := time.Now()
+	report := &callharness.Report{StartedAt: at, Moves: []callharness.MoveReport{{Kind: "takeover", From: 0, Start: 6 * time.Second, End: 6500 * time.Millisecond}}}
+	events := []loadgen.EventResult{{Event: loadgen.Event{Kind: "kill", Worker: 0}, At: at.Add(6 * time.Second), Sessions: []string{"affected"}}}
+	require.False(t, gapOutsideScheduledEvent(events, "affected", report, 6400*time.Millisecond, 400*time.Millisecond))
+	require.True(t, gapOutsideScheduledEvent(events, "survivor", report, 6400*time.Millisecond, 400*time.Millisecond))
+	require.True(t, gapOutsideScheduledEvent(events, "affected", report, 15*time.Second, 400*time.Millisecond))
+	// A larger scheduled gap must not mask a later excessive arrival gap.
+	r := capacityFixture()
+	r.Events = events
+	r.Processes[0].Calls[0] = loadgen.Message{Session: "affected", Call: report}
+	report.Tracks = []callharness.TrackReport{{Kind: "audio", MediaGap: 400 * time.Millisecond, MediaGapEndedAt: 6400 * time.Millisecond, Arrivals: []time.Duration{10 * time.Second, 10300 * time.Millisecond}}}
+	require.Equal(t, "fail", judgeCapacity("worker", r, 100, 128<<10).Verdict)
+}
+
+func TestCapacityUnexpectedExitIsKnownFailure(t *testing.T) {
+	r := capacityFixture()
+	r.Telemetry.Processes[0].UnexpectedExit = true
+	r.Telemetry.Processes[0].Errors = []string{"exit status 2"}
+	r.Telemetry.Errors = []string{"process exited"}
+	step := judgeCapacity("worker", r, 100, 128<<10)
+	require.Equal(t, "fail", step.Verdict)
+	require.Contains(t, strings.Join(step.Causes, ";"), "exit status 2")
+}
+
+func TestPeakOverrideIsWrittenToBothReportsIncludingDrain(t *testing.T) {
+	for _, kind := range []string{"n-plus-one", "drain"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			output := filepath.Join(dir, "top.json")
+			result := capacityReport{WorkerCapacityLowerBound: 8}
+			r := capacityFixture()
+			r.WorkerPeaks = map[string]int{"worker-1": 9}
+			step, err := recordCapacityStep(dir, output, &result, judgeCapacity(kind, r, 100, 128<<10))
+			require.NoError(t, err)
+			require.Equal(t, "fail", step.Verdict)
+			var diskStep capacityStep
+			var diskResult capacityReport
+			data, err := os.ReadFile(filepath.Join(dir, "report.json"))
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(data, &diskStep))
+			data, err = os.ReadFile(output)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(data, &diskResult))
+			require.Equal(t, diskStep, diskResult.Steps[0])
+			require.Equal(t, "fail", diskStep.Verdict)
+		})
+	}
+}
+
+func TestCapacityCostReportsEveryMissingPrerequisite(t *testing.T) {
+	prices := priceInput{Currency: "TEST", Worker: machinePrice{Hourly: 1}}
+	result := capacityReport{Workers: 3, PlannedCallers: 8, PlannedValidated: true, Steps: []capacityStep{{Kind: "relay", Verdict: "pass", PublicEgressBytesPerCallSecond: 1000}}}
+	setCapacityCost(&result, nil)
+	require.Equal(t, "NOT-RUN(no input prices)", result.CostStatus)
+	require.Nil(t, result.Cost)
+	result.PlannedValidated = false
+	setCapacityCost(&result, &prices)
+	require.Equal(t, "NOT-RUN(planned load not validated)", result.CostStatus)
+	require.Nil(t, result.Cost)
+	result.Steps = nil
+	setCapacityCost(&result, &prices)
+	require.Equal(t, "NOT-RUN(no passing relay step)", result.CostStatus)
+	result.PlannedValidated = true
+	result.Steps = []capacityStep{{Kind: "relay", Verdict: "pass"}}
+	setCapacityCost(&result, &prices)
+	require.True(t, result.Cost.Validated)
+	require.Contains(t, result.CostStatus, "VALIDATED(")
+}
+
+func TestCapacityRecordsRelayBufferConfiguration(t *testing.T) {
+	for _, value := range []float64{0, 1} {
+		r := capacityFixture()
+		r.Telemetry.Processes[0].Last = map[string]float64{"relais_relay_buffer_enabled": value}
+		step := judgeCapacity("worker", r, 100, 128<<10)
+		require.NotNil(t, step.RelayBufferEnabled)
+		require.Equal(t, value == 1, *step.RelayBufferEnabled)
+	}
+}
+
+func TestCapacityBudgetCannotRelaxObjectiveOrUseNaN(t *testing.T) {
+	c := config{Capacity: true, Callers: 2, Processes: 1, Workers: 3, GOMAXPROCS: 1, Duration: 20 * time.Second, SampleEvery: time.Second, Limits: loadgen.DefaultLimits(), CapacityStart: 2, CapacityMax: 2, CallersPerProcess: 2, StoreOpsBudget: 100, StoreBytesBudget: 128 << 10}
+	require.NoError(t, c.validate())
+	for _, value := range []float64{101, math.NaN(), math.Inf(1), 0} {
+		bad := c
+		bad.StoreOpsBudget = value
+		require.Error(t, bad.validate())
+	}
+	for _, value := range []float64{129 << 10, math.NaN(), math.Inf(1), 0} {
+		bad := c
+		bad.StoreBytesBudget = value
+		require.Error(t, bad.validate())
+	}
+	c.StoreOpsBudget = 90
+	c.StoreBytesBudget = 120 << 10
+	require.NoError(t, c.validate())
 }

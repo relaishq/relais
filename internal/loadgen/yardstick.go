@@ -23,7 +23,8 @@ type MetricRow struct {
 	Outcome         string        `json:"outcome"`
 }
 
-func matchesEvent(e EventResult, report *callharness.Report, move callharness.MoveReport) bool {
+// MatchesEvent ties a recorded move to one scheduled action.
+func MatchesEvent(e EventResult, report *callharness.Report, move callharness.MoveReport) bool {
 	at := report.StartedAt.Add(move.Start)
 	if e.Event.Kind == "kill" {
 		delta := at.Sub(e.At)
@@ -74,7 +75,7 @@ func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []
 				}
 				var matching []callharness.MoveReport
 				for _, move := range c.Call.Moves {
-					if matchesEvent(*e, c.Call, move) {
+					if MatchesEvent(*e, c.Call, move) {
 						matching = append(matching, move)
 					}
 				}

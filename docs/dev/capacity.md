@@ -48,7 +48,7 @@ skips and causes. A single saturated interval makes the whole step
 inconclusive, including all service claims for that step. The #41 soak policy
 proposal does not change this rule.
 
-## Operating load and acceptance
+## Demonstrated load floor and acceptance
 
 For W workers, measured worker lower bound C and relay lower bound R:
 
@@ -75,15 +75,30 @@ first-new-content and freshness retain the existing harness verdicts. These
 short LAN samples do not establish region/far-caller guarantees, sustained
 capacity, or the full 60-second consent observation.
 
+A non-retired service exit is a step error, including the child process error.
+Control-plane takeover counter delta must equal the number of calls affected
+by scheduled kills: zero in every other step. A whole-call or retained arrival
+gap above 150 ms fails outside the affected call's matched scheduled event.
+The allowed gap window brackets that event's API/resume interval, with up to
+150 ms for its bounding packets. Another call's event cannot excuse the gap.
+
 `worker_peak_calls` retains each sampled worker-session peak. A survivor
 above C blocks approval even when its caller rows pass. The post-kill move
 target is selected from the control-plane ownership counts, rather than
-assuming a survivor has room. Drain duration is a conservative wall-time bound
-including status selection and recording the API results.
+assuming a survivor has room. Both kill/move and drain samples reject a worker
+peak above C. Drain duration brackets only the control-plane drain request:
+`At` follows the initial status read, and `FinishedAt` precedes worker-empty
+verification and caller result fan-out. The drained worker's `/status` must
+confirm zero sessions. HTTP 207 is a known partial-drain failure, even if it
+also leaves event rows incomplete; generator saturation remains inconclusive.
 
-The relay's existing caller buffer is enabled only in capacity mode through
-`relais-relay -caller-buffer`. The other commands retain their existing default
-recovery path. The bounded buffer defaults and takeover margins are unchanged.
+Capacity and calibration pass **no buffer flag** to the relay. Both measure
+the standalone product default. The report records `relay_buffer_enabled`
+from `relais_relay_buffer_enabled`; missing setup evidence remains null. This
+is the running configuration, not an inference from whether a replay happened.
+Before #35 lands the product default is buffer-off; after #35 it is buffer-on.
+The old capacity-only override is removed. Buffer limits and recovery margins
+are set by the product, not by this load driver.
 
 ## Measured use and store budget
 
@@ -96,14 +111,19 @@ setup and hangup, while lifetime peak RSS includes setup. Current heap and
 lifetime peak RSS are distinct; a time average of sampled RSS peaks does not
 become current RSS.
 
-For each process, CPU seconds and counter deltas are divided by **total
-concurrent calls × its observed seconds**. Memory byte-seconds use the same
-denominator, yielding average bytes per concurrent call. Worker values include
+Every process's CPU seconds and counter deltas are divided by **total
+concurrent calls × the shared media-window seconds**. Summing these rates
+weights a worker that ran for five of thirty seconds by its actual contribution.
+`window_seconds` records that common denominator. Per-process observed windows
+are retained only for average memory: memory byte-seconds divided by calls ×
+that process's observed seconds. Worker values include
 idle workers and are normalized to topology call count, not only that worker's
 local calls. Do not sum normalized memory across trial types or interpret a
 short shared-host run as independent-host sizing. A killed worker retains its
 last complete pre-fault observation, up to one sampling interval old; its
-missing tail is not extrapolated.
+missing tail is not extrapolated. Total RSS/call includes the fixed overhead
+of the relay, control, Redis and idle workers. It is not marginal memory per
+additional call; compare total RSS across valid steps with the same layout.
 
 Traffic counters cover:
 
@@ -112,10 +132,14 @@ Traffic counters cover:
   are forwarded bytes, not NIC receive totals; rejected datagrams are excluded.
 - Private HTTP listener and default private API client TCP reads/writes, including
   protocol and scrape overhead. Explicit custom client transports are untouched.
-- Redis TCP reads/writes for session/owner and frame-cache clients, including
-  protocol, ciphertext, retries and script loads.
+- Redis TCP reads/writes, labelled by `client="session"`, `client="owners"`
+  (owners and routes), or `client="frame"`, plus `direction="in"|"out"`.
+  These include protocol, ciphertext, retries and script loads. Per-client
+  totals are retained in `store_bytes_by_client_per_call_second` for diagnosis.
+  For TLS Redis connections the wrapper measures Redis stream bytes, excluding
+  TLS record overhead. The hosted topology currently uses plain TCP.
 - Redis client command attempts, including each pipeline member and retry,
-  labelled `session` or `frame`. Lua's internal commands are not counted as
+  labelled `session`, `owners` (lease owners and persisted routes), or `frame`. Lua's internal commands are not counted as
   client operations. Checkpoint write attempts/successes/failures are also
   retained from the existing metrics. INFO monitoring is excluded from the
   application store command and byte budget.
@@ -123,15 +147,30 @@ Traffic counters cover:
 Budgets apply to observed window averages; per-second store burst limits are
 not established by this report.
 
-The initial budget is **256 client commands and 1 MiB of request+reply bytes
-per call-second**. This gives a 50-call installation an application budget of
-12,800 commands/s and 50 MiB/s; it is an explicit sizing ceiling, not a claim
-that any chosen Redis machine carries it. Flags can tighten that ceiling.
-Exceeding either ceiling fails the step and prevents a validated operating
-load. The recorded Mac sample is below both. Checkpoint cadence remains at
-100 ms, with ADR 0002's enforced snapshot-age envelope and margins unchanged.
-If a hosted measurement exceeds this budget, event-driven checkpoint work and
-crash/harness acceptance are required before approving that operating load.
+The objective is **500 concurrent calls on one Redis primary using no more
+than 50% of its comfortable throughput**. Planning assumptions are
+100,000 simple client commands/s and roughly 125 MB/s (1 Gbit/s). The chosen
+allowances are **100 commands and 128 KiB of request + reply per call-second**:
+
+```text
+commands: 100,000 × 50% / 500 = 100 commands/call-second
+bytes:    125 MiB/s × 50% / 500 = 128 KiB/call-second
+```
+
+The byte arithmetic uses a rounded binary-unit approximation of the 1 Gbit/s
+assumption. At exactly 125 decimal MB/s, a strict 50% allowance is 125,000 B per
+call-second; the selected 131,072 B is about 52.4%. Real Redis sizing must
+revisit this approximation, command mix, CPU and network limits. Simple-command
+throughput is an assumption, not a measured Lua/checkpoint workload rating.
+
+The hosted sample's roughly 67 commands and 85 KB per call-second leave about
+33% command-budget margin and 35% byte-budget margin. These observed window
+averages fit the assumed budget; they do not validate Redis hardware for 500
+calls. Flags can tighten the ceiling but cannot relax it or use nonfinite
+values. Exceeding either ceiling fails the step and blocks planned-load
+approval. The documented action is event-driven checkpoints followed by
+crash/harness acceptance before approval. Checkpoint cadence remains at 100 ms,
+with ADR 0002's enforced snapshot-age envelope and margins unchanged.
 
 ## Cost
 
@@ -160,8 +199,12 @@ for IPv4+UDP. The cost records the measured rate and exact decoded price inputs.
 It allocates whole machines at the derived occupancy, including the spare
 worker. It does not infer prices from CPU utilization, charge internal legs as
 public egress, or assume agent/provider fees, discounts, tax or inter-zone fees.
-If planned load fails acceptance, the cost remains a candidate estimate, not
-an approved operating cost. Without input prices, cost is **NOT-RUN**.
+The cost has a `validated` flag. It is calculated only when the planned sample
+load is validated, prices are supplied and a relay step passed. Otherwise the
+report and console explicitly say `cost=NOT-RUN(<reason>)`, including missing
+prices, an unvalidated plan or no passing relay step. At a demonstrated load
+floor T, allocated cost/call-hour is an **upper-bound estimate**, assuming the
+same workload and prices. It is not an operating recommendation.
 
 ## Hosted workflow
 
@@ -179,6 +222,5 @@ gh workflow run load-calibration.yml --repo relaishq/relais --ref feat/40-capaci
   -f mode=capacity -f duration=30s -f capacity_max=16 -f callers_per_process=2
 ```
 
-The orchestrator must push the branch and dispatch that workflow. This worker
-makes no GitHub writes. Hosted numbers must be added separately to
-[capacity-results.md](capacity-results.md) before posting on #31.
+See [capacity-results.md](capacity-results.md) for the hosted observations and
+their limits. Re-run after a change to the product default or acceptance gates.

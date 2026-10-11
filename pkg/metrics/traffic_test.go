@@ -15,8 +15,8 @@ import (
 )
 
 func TestTrafficConnCountsActualPartialWritesAndReads(t *testing.T) {
-	beforeIn := counterValue(transportBytes.WithLabelValues("test", "in"))
-	beforeOut := counterValue(transportBytes.WithLabelValues("test", "out"))
+	beforeIn := counterValue(transportBytes.WithLabelValues("test", "", "in"))
+	beforeOut := counterValue(transportBytes.WithLabelValues("test", "", "out"))
 	client, server := net.Pipe()
 	defer func() { _ = client.Close(); _ = server.Close() }()
 	wrapped := TrafficConn(client, "test")
@@ -34,8 +34,8 @@ func TestTrafficConnCountsActualPartialWritesAndReads(t *testing.T) {
 	_, err = io.ReadFull(wrapped, buf[:])
 	require.NoError(t, err)
 	<-done
-	require.Equal(t, beforeIn+5, counterValue(transportBytes.WithLabelValues("test", "in")))
-	require.Equal(t, beforeOut+3, counterValue(transportBytes.WithLabelValues("test", "out")))
+	require.Equal(t, beforeIn+5, counterValue(transportBytes.WithLabelValues("test", "", "in")))
+	require.Equal(t, beforeOut+3, counterValue(transportBytes.WithLabelValues("test", "", "out")))
 }
 func TestStoreHookIncludesPipelineCommands(t *testing.T) {
 	before := counterValue(storeCommands.WithLabelValues("test"))

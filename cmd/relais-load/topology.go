@@ -34,7 +34,7 @@ type topology struct {
 
 // Owned loopback or Linux namespace topology. Caller attachment is separate
 // so only the media socket enters the caller namespace.
-func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir string, workers int, mode string, buffer bool) (_ *topology, runErr error) {
+func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir string, workers int, mode string) (_ *topology, runErr error) {
 	t := &topology{Workers: map[int]*clusterprocess.Child{}}
 	defer func() {
 		if runErr != nil {
@@ -83,7 +83,7 @@ func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir stri
 	if err := pingRedis(ctx, addr, password); err != nil {
 		return nil, err
 	}
-	t.Targets = append(t.Targets, capacity.Target{Name: "store", PID: redis.PID(), Done: redis.Done(), RedisAddr: addr, RedisPassword: password})
+	t.Targets = append(t.Targets, capacity.Target{Name: "store", PID: redis.PID(), Done: redis.Done(), Err: redis.Err, RedisAddr: addr, RedisPassword: password})
 	var key [32]byte
 	if _, err := rand.Read(key[:]); err != nil {
 		return nil, err
@@ -129,12 +129,11 @@ func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir stri
 		defer stop()
 		ready, err := c.Ready(startup)
 		if err == nil {
-			t.Targets = append(t.Targets, capacity.Target{Name: name, PID: c.PID(), URL: ready.HTTP, Done: c.Done()})
+			t.Targets = append(t.Targets, capacity.Target{Name: name, PID: c.PID(), URL: ready.HTTP, Done: c.Done(), Err: c.Err})
 		}
 		return c, ready, err
 	}
-	relayBuffer := "-caller-buffer=" + fmt.Sprint(buffer)
-	_, relay, err := start("relay", filepath.Join(bin, "relais-relay"), relayBuffer, "-media", roleBind(t.Network, "relay", true), "-leg", roleBind(t.Network, "relay", false), "-http", roleBind(t.Network, "relay", false))
+	_, relay, err := start("relay", filepath.Join(bin, "relais-relay"), "-media", roleBind(t.Network, "relay", true), "-leg", roleBind(t.Network, "relay", false), "-http", roleBind(t.Network, "relay", false))
 	if err != nil {
 		return nil, err
 	}
