@@ -204,6 +204,7 @@ type takeoverState struct {
 	plannedState            []byte
 	planned                 bool
 	held                    bool
+	plannedHoldTarget       *registration // A planned hold may auto-release to this possibly adopted target.
 	crashMargins            bool
 	routed                  netip.AddrPort
 	excluded                map[netip.AddrPort]bool
@@ -446,18 +447,31 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			pending.lease = transferred
 			p.mu.Unlock()
 		}
-		if replay, ok := r.(ReplayRelay); ok && !pending.planned && pending.replayPlan == nil {
-			plan, gateErr := replay.BeginReplay(ctx, c.id, pending.routed, nil)
+		// A planned hold may already have flushed to this target after its
+		// resume reply was lost. Confirmation must never replay its live input
+		// against the old export checkpoint. A different target can still replay.
+		confirmPlannedTarget := pending.transientResume && target == pending.plannedHoldTarget
+		if replay, ok := r.(ReplayRelay); ok && !pending.planned && pending.replayPlan == nil && !confirmPlannedTarget {
+			// The route follows adoption; the gate's source must stay the same
+			// as checkpoint preparation, including after a planned hold expires.
+			plan, gateErr := replay.BeginReplay(ctx, c.id, source.addr, nil)
 			if gateErr == nil {
 				pending.replayPlan, pending.held = &plan, true
-			} else if !errors.Is(gateErr, relay.ErrBufferDisabled) {
+			} else if !errors.Is(gateErr, relay.ErrBufferDisabled) && (!pending.held || !errors.Is(gateErr, relay.ErrHeld)) {
 				p.unreserve(target)
 				return
+			} else if errors.Is(gateErr, relay.ErrHeld) {
+				pending.plannedHoldTarget = target
 			}
 		}
 		// Gate and old-leg fencing precede snapshot I/O. Store errors must not
 		// leave the previous owner able to send after its lease was transferred.
-		if err = r.MoveSession(c.id, pending.routed, target.addr); err != nil {
+		if tenureRelay, ok := r.(TenureRelay); ok {
+			err = tenureRelay.MoveSessionAtEpoch(c.id, pending.routed, target.addr, transferred.Epoch)
+		} else {
+			err = r.MoveSession(c.id, pending.routed, target.addr)
+		}
+		if err != nil {
 			pending.routed = netip.AddrPort{}
 			p.unreserve(target)
 			return
@@ -613,6 +627,20 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 				}
 				pending.held = false
 			}
+			if pending.replayPlan == nil && (pending.planned || pending.held) {
+				held, releaseErr := r.ReleaseSession(c.id, target.addr)
+				res.Result.HeldPackets = held
+				res.Result.HoldExpired = errors.Is(releaseErr, relay.ErrHoldExpired)
+				if res.Result.HoldExpired && confirmPlannedTarget && canRecoverReplay {
+					// Idempotent resume does not re-request video recovery. Account
+					// for the expired hold and recover any gap without old ciphertext.
+					if err := recovery.RequestKeyframe(ctx, c.id); err != nil {
+						pending.transientResume = true
+						return
+					}
+					res.Result.RelayReplayRecoveryPLI = true
+				}
+			}
 			now := time.Now()
 			c.stateMu.Lock()
 			c.lastMove, c.lastMoveKind = &now, res.Kind
@@ -621,11 +649,6 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 				c.takeoverCount++
 			}
 			c.stateMu.Unlock()
-			if pending.replayPlan == nil && (pending.planned || pending.held) {
-				held, releaseErr := r.ReleaseSession(c.id, target.addr)
-				res.Result.HeldPackets = held
-				res.Result.HoldExpired = errors.Is(releaseErr, relay.ErrHoldExpired)
-			}
 			complete(false, nil)
 			return
 		}

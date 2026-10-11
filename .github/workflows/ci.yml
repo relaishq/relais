@@ -232,6 +232,29 @@ jobs:
             bin/relay-continuity-*.log
             bin/crash-run-*
 
+  # Ten consecutive buffered SIGKILL trials, each observing 60 seconds,
+  # separate from the phase-1 cache and relay-continuity comparisons.
+  crash-run-buffer:
+    timeout-minutes: 35
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+      - name: Install Redis and ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
+      - name: Accept ten consecutive buffered SIGKILL trials (lan)
+        run: make crash-run CRASH_FLAGS="-buffer -runs=10 -after=60s"
+      - name: Upload buffered crash-run failure logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crash-run-buffer-logs
+          path: bin/crash-run-*
+
   cluster-tests-gate:
     runs-on: ubuntu-latest
     outputs:

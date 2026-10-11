@@ -20,17 +20,22 @@ type Sender func([]byte) ([]byte, error)
 type Capture func(string) (Sender, error)
 
 type registration struct {
-	initialSequence *[2]uint16
-	capture         Capture
-	ignoredBarriers int
-	lifecycle       Lifecycle
-	beforeSnapshot  func(context.Context, string)
-	afterEcho       func(context.Context, string, []byte)
-	afterResume     func(string, bool)
+	initialSequence       *[2]uint16
+	capture               Capture
+	ignoredBarriers       int
+	lifecycle             Lifecycle
+	beforeSnapshot        func(context.Context, string)
+	beforeInitialSnapshot func(context.Context, string)
+	afterEcho             func(context.Context, string, []byte)
+	afterDecrypt          func(string, uint32, uint64)
+	afterResume           func(string, bool)
 }
 
 // enabled keeps every production probe call off the process-wide mutex.
 var enabled atomic.Bool
+
+// Enabled lets packet paths avoid probe calls and argument work in production.
+func Enabled() bool { return enabled.Load() }
 
 var registry struct {
 	sync.Mutex
@@ -211,6 +216,35 @@ func BeforeSnapshot(addr netip.AddrPort, ctx context.Context, id string) {
 	}
 }
 
+// SetBeforeInitialSnapshot gates the connect path after SRTP is ready, so
+// a test can let a background checkpoint and live input win the startup race.
+func SetBeforeInitialSnapshot(addr netip.AddrPort, hook func(context.Context, string)) error {
+	registry.Lock()
+	defer registry.Unlock()
+	w := registry.workers[addr]
+	if w == nil {
+		return errors.New("workerprobe: no initial snapshot probe")
+	}
+	w.beforeInitialSnapshot = hook
+	return nil
+}
+
+// BeforeInitialSnapshot is inert outside an enabled test scope.
+func BeforeInitialSnapshot(addr netip.AddrPort, ctx context.Context, id string) {
+	if !enabled.Load() {
+		return
+	}
+	registry.Lock()
+	var hook func(context.Context, string)
+	if w := registry.workers[addr]; w != nil {
+		hook = w.beforeInitialSnapshot
+	}
+	registry.Unlock()
+	if hook != nil {
+		hook(ctx, id)
+	}
+}
+
 // SetAfterEcho installs a packet gate after a successfully encrypted echo.
 // The packet is plaintext, borrowed for the duration of the callback. Gates
 // must return when ctx ends; Kill cancels ctx before waiting for packet locks.
@@ -306,4 +340,32 @@ func InitialSequences(addr netip.AddrPort) (audio, video uint16, ok bool) {
 		return w.initialSequence[0], w.initialSequence[1], true
 	}
 	return 0, 0, false
+}
+
+// SetAfterDecrypt observes authenticated inbound indexes in an opt-in test.
+// It exposes no keys or media and must return promptly.
+func SetAfterDecrypt(addr netip.AddrPort, hook func(string, uint32, uint64)) error {
+	registry.Lock()
+	defer registry.Unlock()
+	w := registry.workers[addr]
+	if w == nil {
+		return errors.New("workerprobe: no packet probe")
+	}
+	w.afterDecrypt = hook
+	return nil
+}
+
+func AfterDecrypt(addr netip.AddrPort, id string, ssrc uint32, index uint64) {
+	if !enabled.Load() {
+		return
+	}
+	registry.Lock()
+	var hook func(string, uint32, uint64)
+	if w := registry.workers[addr]; w != nil {
+		hook = w.afterDecrypt
+	}
+	registry.Unlock()
+	if hook != nil {
+		hook(id, ssrc, index)
+	}
 }

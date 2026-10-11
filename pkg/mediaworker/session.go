@@ -285,7 +285,11 @@ func (s *session) connect() (*dtls.Conn, error) {
 		return dtlsConn, fmt.Errorf("start SRTP: %w", err)
 	}
 
-	if err := s.persistSnapshot(); err != nil {
+	workerprobe.BeforeInitialSnapshot(s.worker.localAddr, s.ctx, s.id)
+	// The background loop can store the handshake and then accept changed
+	// agent state before this attempt. A skip means a checkpoint is already
+	// durable; the loop will persist the newer pair after the save interval.
+	if err := s.persistSnapshot(); err != nil && !errors.Is(err, errCheckpointSkipped) {
 		return dtlsConn, err
 	}
 	return dtlsConn, nil
@@ -446,6 +450,9 @@ func (s *session) handleRTP(pkt []byte) {
 	}
 	oldInbound := s.state.SRTP.Inbound[authenticated.SSRC]
 	s.state.SRTP.noteInbound(authenticated.SSRC, authenticated.SequenceNumber)
+	if workerprobe.Enabled() {
+		workerprobe.AfterDecrypt(s.worker.localAddr, s.id, authenticated.SSRC, extendIndex(oldInbound, authenticated.SequenceNumber))
+	}
 	if oldInbound>>16 != s.state.SRTP.Inbound[authenticated.SSRC]>>16 {
 		s.wantSnapshot()
 	}
