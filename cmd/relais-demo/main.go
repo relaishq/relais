@@ -152,12 +152,8 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 // process a retired UDP address, even if the OS happens to allocate it again.
 func freshUDP(used map[string]bool) (string, error) {
 	for i := 0; i < 100; i++ {
-		conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+		addr, err := clusterprocess.FreeUDP()
 		if err != nil {
-			return "", err
-		}
-		addr := conn.LocalAddr().String()
-		if err := conn.Close(); err != nil {
 			return "", err
 		}
 		if !used[addr] {

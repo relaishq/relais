@@ -100,6 +100,8 @@ func (r *metricsRun) sample(ctx context.Context) {
 
 // sampleBeforeFault shares one short budget across all targets. It never waits
 // for a periodic scrape already in flight, keeping fault timing bounded.
+// Skipping that target can leave a killed worker's last sample up to one
+// scrape interval old.
 func (r *metricsRun) sampleBeforeFault(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer cancel()
