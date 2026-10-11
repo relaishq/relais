@@ -116,6 +116,7 @@ func (p *Plane) Run(ctx context.Context) error {
 				}
 				if (!w.dead && now.Sub(w.lastHeartbeat) >= p.config.DeadAfter) || (w.dead && !w.recovered) {
 					if !w.dead {
+						p.metrics.detections.Add(1)
 						w.rejoinToken, w.acceptedToken = "", ""
 					}
 					w.dead, w.recovering, w.recovered, w.rejoinReady = true, true, false, false
@@ -610,6 +611,32 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 	p.mu.Lock()
 	if record {
 		p.recordTakeover(*res)
+	}
+	metricKind := res.Kind
+	if !lost && c.hungUp.Load() {
+		metricKind = "ended"
+	} else if pending != nil && pending.held && !pending.planned {
+		// Uncertain export uses crash recovery for safety, but its initiating
+		// operation was a move. Preserve status and recovery semantics.
+		metricKind = "move"
+	}
+	switch metricKind {
+	case "takeover":
+		if lost || cause != nil {
+			p.metrics.takeoverErrors.Add(1)
+		} else {
+			p.metrics.takeovers.Add(1)
+		}
+	case "move":
+		if lost || cause != nil {
+			// An immediate rollback failure is counted by move's defer.
+			// Only retained recovery completes a separate attempt here.
+			if pending != nil {
+				p.metrics.moveErrors.Add(1)
+			}
+		} else {
+			p.metrics.moves.Add(1)
+		}
 	}
 	if lost {
 		p.lostCount++

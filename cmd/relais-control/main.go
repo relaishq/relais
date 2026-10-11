@@ -30,6 +30,11 @@ func run() error {
 	}
 	ctx, cancel := processrun.Context()
 	defer cancel()
+	listener, err := processrun.ListenPrivate(*httpAddr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = listener.Close() }()
 	store, err := storeConfig.Open(ctx)
 	if err != nil {
 		return err
@@ -44,10 +49,6 @@ func run() error {
 	plane := controlplane.NewWithConfig(r, store, controlplane.Config{FrameCache: frames})
 	// Serve heartbeats during registration. A slow later worker must not make
 	// an earlier healthy registration age past DeadAfter before Run starts.
-	listener, err := processrun.ListenPrivate(*httpAddr)
-	if err != nil {
-		return err
-	}
 	handler := plane.ProcessHandler()
 	if *demoRegister {
 		handler = demoHandler(plane, r)
