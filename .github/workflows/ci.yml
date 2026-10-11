@@ -359,8 +359,6 @@ jobs:
   # This is deliberately outside the PR aggregate and main-push lanes.
   netns-network-profiles:
     name: netns-network-profiles (${{ matrix.profile }}, ${{ matrix.scenario }})
-    # Temporary exemption for the product failure tracked in #87.
-    continue-on-error: ${{ matrix.expected_failure == true }}
     timeout-minutes: ${{ matrix.job_minutes }}
     permissions:
       contents: read
@@ -402,6 +400,10 @@ jobs:
           set -o pipefail
           sudo -E env RELAIS_TEST_NETNS_REQUIRE=1 ./bin/nettopology.test -test.v -test.run='^TestLinuxProfile' -test.timeout=2m 2>&1 | tee bin/network-profile-tests.log
       - name: Judge buffered profile trials
+        id: judge
+        # Temporary exemption for the product failure tracked in #87: only the
+        # trial verdict may fail without failing the job. Cleanup still binds.
+        continue-on-error: ${{ matrix.expected_failure == true }}
         timeout-minutes: ${{ matrix.driver_minutes }}
         run: |
           set -o pipefail
@@ -443,7 +445,7 @@ jobs:
         run: |
           echo 'Known product failure: #87 (planned-move latency under DC loss). Remove this exemption when #87 is fixed.' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload profile failure logs
-        if: failure() || cancelled()
+        if: failure() || cancelled() || steps.judge.outcome == 'failure'
         uses: actions/upload-artifact@v7
         with:
           name: network-profile-${{ matrix.profile }}-${{ matrix.scenario }}-logs
