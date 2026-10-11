@@ -23,6 +23,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/sessionstore"
 )
@@ -59,9 +60,11 @@ var supportedSRTPProfiles = []dtls.SRTPProtectionProfile{
 // sends or receives is processed under it, so a snapshot taken under mu is
 // atomic with the counters (see export).
 type session struct {
-	id     string // state.ID; never changes
-	worker *Worker
-	log    logging.LeveledLogger
+	agent        *agentHost
+	durableAgent agentState // guarded by mu; last acknowledged durable agent pair
+	id           string     // state.ID; never changes
+	worker       *Worker
+	log          logging.LeveledLogger
 
 	mu       sync.Mutex
 	state    sessionState
@@ -151,7 +154,7 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 			video.InitialSeq = v
 		}
 	}
-	return sessionFromState(w, sessionState{
+	sess := sessionFromState(w, sessionState{
 		Version: sessionStateVersion,
 		ID:      id,
 		ICE: iceState{
@@ -169,7 +172,12 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 		SRTP:  srtpState{Inbound: make(map[uint32]uint64)},
 		Audio: audio,
 		Video: video,
-	}), nil
+	})
+	if err := sess.initAgent(false, ResumeOptions{}); err != nil {
+		sess.close()
+		return nil, err
+	}
+	return sess, nil
 }
 
 // sessionFromState builds the runtime plumbing around a session state: a
@@ -455,6 +463,40 @@ func (s *session) handleRTP(pkt []byte) {
 	header, ok := track.rewrite(&in.Header)
 	if !ok {
 		return
+	}
+
+	if track == &s.state.Audio && s.agent != nil {
+		if _, echo := s.agent.instance.(*agent.Echo); !echo {
+			if s.worker.cfg.Relay != nil {
+				s.audioRate.observe(time.Now(), s.state.SRTP.Inbound[in.SSRC], in.Timestamp, 48000)
+			}
+			s.enqueueAudio(&in, header)
+			return
+		}
+		// Built-in echo is stateless, cannot block, and needs no callback
+		// goroutine. Keep its original synchronous timing and packet semantics.
+		if s.agent.paused {
+			s.worker.agents.drops.Add(1)
+			return
+		}
+		input := agent.Input{Payload: append([]byte(nil), in.Payload...), Marker: in.Marker,
+			Progress: agent.Progress{SSRC: in.SSRC, Index: extendIndex(s.state.SRTP.Inbound[in.SSRC], in.SequenceNumber), Timestamp: in.Timestamp, Consumed: s.state.Agent.Progress.Consumed + 1}}
+		select {
+		case s.agent.queue <- agentInput{input, header}:
+		default:
+			s.worker.agents.drops.Add(1)
+			return
+		}
+		queued := <-s.agent.queue
+		ctx, cancel := context.WithTimeout(s.ctx, s.worker.cfg.Agent.CallbackTimeout)
+		output, err := s.agent.instance.Process(ctx, queued.input)
+		cancel()
+		if err != nil {
+			return
+		} // built-in Echo cannot fail or wait
+		in.Payload = output.Audio
+		s.state.Agent.Progress = agent.Progress{SSRC: in.SSRC, Index: extendIndex(s.state.SRTP.Inbound[in.SSRC], in.SequenceNumber), Timestamp: in.Timestamp, Consumed: s.state.Agent.Progress.Consumed + 1}
+		s.state.Agent.Revision++
 	}
 
 	if track == &s.state.Video && (s.replaying || track.ReplayFloor > 0 && extendIndex(track.HighestSentIndex, header.SequenceNumber) <= track.ReplayFloor) {

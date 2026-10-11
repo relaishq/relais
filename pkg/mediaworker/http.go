@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/privateapi"
+	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -15,6 +16,7 @@ var RemoteErrors = map[string]error{
 	"closed": ErrClosed, "not_established": ErrNotEstablished,
 	"sequence_budget": ErrSequenceBudgetExhausted, "session_exists": errSessionExists,
 	"srtcp_exhausted": ErrSRTCPIndexExhausted,
+	"agent_version":   agent.ErrVersion, "agent_oversize": agent.ErrStateTooLarge, "agent_save": agent.ErrSave, "agent_restore": agent.ErrRestore,
 }
 
 type CreateRequest struct {
@@ -31,14 +33,17 @@ type ExportReply struct {
 // ResumeRequest deliberately excludes Context; the server uses the request's
 // deadline and the client honors ResumeOptions.Context.
 type ResumeRequest struct {
-	CallerSequenceReserve uint32             `json:"caller_sequence_reserve"`
-	SnapshotAge           time.Duration      `json:"snapshot_age"`
-	CheckpointStoredAt    time.Time          `json:"checkpoint_stored_at"`
-	CheckpointAge         time.Duration      `json:"checkpoint_age"`
-	State                 []byte             `json:"state"`
-	Lease                 sessionstore.Lease `json:"lease"`
-	SequenceMargin        uint16             `json:"sequence_margin"`
-	SRTCPIndexMargin      uint32             `json:"srtcp_index_margin"`
+	Kind                  agent.ResumeKind        `json:"resume_kind"`
+	InputMayBeDuplicated  bool                    `json:"input_may_be_duplicated"`
+	DuplicateWindows      []agent.DuplicateWindow `json:"duplicate_windows"`
+	CallerSequenceReserve uint32                  `json:"caller_sequence_reserve"`
+	SnapshotAge           time.Duration           `json:"snapshot_age"`
+	CheckpointStoredAt    time.Time               `json:"checkpoint_stored_at"`
+	CheckpointAge         time.Duration           `json:"checkpoint_age"`
+	State                 []byte                  `json:"state"`
+	Lease                 sessionstore.Lease      `json:"lease"`
+	SequenceMargin        uint16                  `json:"sequence_margin"`
+	SRTCPIndexMargin      uint32                  `json:"srtcp_index_margin"`
 }
 type ResumeReply struct {
 	ID string `json:"id"`
@@ -47,6 +52,7 @@ type WorkerStatus struct {
 	Address  netip.AddrPort `json:"address"`
 	Sessions int            `json:"sessions"`
 	Replay   ReplayStats    `json:"replay"`
+	Agents   AgentStats     `json:"agents"`
 }
 
 // PrivateHandler exposes the existing worker operations on trusted loopback.
@@ -85,7 +91,7 @@ func (w *Worker) PrivateHandler() http.Handler {
 		if !privateapi.Read(rw, r, &req) {
 			return
 		}
-		id, err := w.ResumeSession(req.State, ResumeOptions{CallerSequenceReserve: req.CallerSequenceReserve, CheckpointAge: req.CheckpointAge, SnapshotAge: req.SnapshotAge, CheckpointStoredAt: req.CheckpointStoredAt, Context: r.Context(), Lease: req.Lease, SequenceMargin: req.SequenceMargin, SRTCPIndexMargin: req.SRTCPIndexMargin})
+		id, err := w.ResumeSession(req.State, ResumeOptions{Kind: req.Kind, InputMayBeDuplicated: req.InputMayBeDuplicated, DuplicateWindows: req.DuplicateWindows, CallerSequenceReserve: req.CallerSequenceReserve, CheckpointAge: req.CheckpointAge, SnapshotAge: req.SnapshotAge, CheckpointStoredAt: req.CheckpointStoredAt, Context: r.Context(), Lease: req.Lease, SequenceMargin: req.SequenceMargin, SRTCPIndexMargin: req.SRTCPIndexMargin})
 		if err != nil {
 			privateapi.Error(rw, err, RemoteErrors)
 			return
@@ -93,7 +99,7 @@ func (w *Worker) PrivateHandler() http.Handler {
 		privateapi.Write(rw, ResumeReply{ID: id})
 	})
 	mux.HandleFunc("GET /status", func(rw http.ResponseWriter, _ *http.Request) {
-		privateapi.Write(rw, WorkerStatus{Address: w.LocalAddr(), Sessions: w.SessionCount(), Replay: w.ReplayStats()})
+		privateapi.Write(rw, WorkerStatus{Address: w.LocalAddr(), Sessions: w.SessionCount(), Replay: w.ReplayStats(), Agents: w.AgentStats()})
 	})
 	return mux
 }

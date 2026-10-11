@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/metrics"
 	"github.com/relais/pkg/sessionstore"
 )
@@ -49,6 +50,7 @@ func (s *session) snapshotBytesAt(captured time.Time) ([]byte, error) {
 	}
 	s.checkpointRates(&state.Checkpoint)
 	state.SRTP.Inbound = maps.Clone(state.SRTP.Inbound)
+	state.Agent = cloneAgentState(state.Agent)
 	// Certificate/key byte slices are immutable throughout a session.
 	s.mu.Unlock()
 	if !ok {
@@ -77,6 +79,13 @@ func (s *session) persistSnapshotContext(parent context.Context) error {
 	// packet lock is never held during encoding or the fenced store operation.
 	s.snapshotMu.Lock()
 	defer s.snapshotMu.Unlock()
+	s.mu.Lock()
+	changed := !agentStateEqual(s.state.Agent, s.durableAgent)
+	tooSoon := s.snapshotStored.Load() && time.Since(s.lastCheckpoint) < s.worker.cfg.Agent.SaveInterval
+	s.mu.Unlock()
+	if changed && tooSoon {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(parent, ownershipTimeout)
 	defer cancel()
 	s.mu.Lock()
@@ -92,18 +101,26 @@ func (s *session) persistSnapshotContext(parent context.Context) error {
 		s.state.Checkpoint.Failures++
 		s.mu.Unlock()
 		metrics.CheckpointWrites.WithLabelValues("failure").Inc()
+		if !errors.Is(err, ErrNotEstablished) && !errors.Is(err, errHandedOver) {
+			err = s.agentSaveFailed(err)
+		}
 		return err
 	}
 	s.mu.Lock()
 	lease := s.lease
 	s.mu.Unlock()
 	err = s.worker.cfg.Relay.Owners.PutState(ctx, lease, state)
+	var saved snapshot
+	if err == nil {
+		err = json.Unmarshal(state, &saved)
+	}
 	if err == nil {
 		s.snapshotStored.Store(true)
 		s.mu.Lock()
 		s.state.Checkpoint.Successes++
 		s.state.Checkpoint.CapturedAt = captured
 		s.checkpointRates(&s.state.Checkpoint)
+		s.durableAgent = saved.State.Agent
 		s.lastCheckpoint = time.Now()
 		s.mu.Unlock()
 		metrics.CheckpointWrites.WithLabelValues("success").Inc()
@@ -113,6 +130,10 @@ func (s *session) persistSnapshotContext(parent context.Context) error {
 		s.mu.Unlock()
 		metrics.CheckpointWrites.WithLabelValues("failure").Inc()
 	}
+	if err != nil && !errors.Is(err, sessionstore.ErrLeaseLost) {
+		err = s.agentSaveFailed(err)
+	}
+
 	if errors.Is(err, sessionstore.ErrLeaseLost) {
 		s.mu.Lock()
 		s.fenced.Store(true)
@@ -153,4 +174,18 @@ func (s *session) snapshotLoop() {
 			s.log.Warnf("session %s: snapshot: %v", s.id, err)
 		}
 	}
+}
+
+func (s *session) agentSaveFailed(err error) error {
+	if s.ctx.Err() != nil {
+		return err
+	}
+	s.mu.Lock()
+	changed := !agentStateEqual(s.state.Agent, s.durableAgent)
+	s.mu.Unlock()
+	if changed {
+		err = fmt.Errorf("%w: %w", agent.ErrSave, err)
+		s.agentFailed(err)
+	}
+	return err
 }

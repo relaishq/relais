@@ -51,7 +51,7 @@ func (w *RemoteWorker) ResumeSession(state []byte, opts mediaworker.ResumeOption
 		ctx = context.Background()
 	}
 	var reply mediaworker.ResumeReply
-	err := privateapi.Do(ctx, remoteClient(w.Client), w.URL, http.MethodPost, "/resume", mediaworker.ResumeRequest{CallerSequenceReserve: opts.CallerSequenceReserve, CheckpointAge: opts.CheckpointAge, SnapshotAge: opts.SnapshotAge, CheckpointStoredAt: opts.CheckpointStoredAt, State: state, Lease: opts.Lease, SequenceMargin: opts.SequenceMargin, SRTCPIndexMargin: opts.SRTCPIndexMargin}, &reply, mediaworker.RemoteErrors)
+	err := privateapi.Do(ctx, remoteClient(w.Client), w.URL, http.MethodPost, "/resume", mediaworker.ResumeRequest{Kind: opts.Kind, InputMayBeDuplicated: opts.InputMayBeDuplicated, DuplicateWindows: opts.DuplicateWindows, CallerSequenceReserve: opts.CallerSequenceReserve, CheckpointAge: opts.CheckpointAge, SnapshotAge: opts.SnapshotAge, CheckpointStoredAt: opts.CheckpointStoredAt, State: state, Lease: opts.Lease, SequenceMargin: opts.SequenceMargin, SRTCPIndexMargin: opts.SRTCPIndexMargin}, &reply, mediaworker.RemoteErrors)
 	return reply.ID, err
 }
 func (w *RemoteWorker) Status(ctx context.Context) (mediaworker.WorkerStatus, error) {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/privateapi"
+	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/metrics"
@@ -524,7 +525,11 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		if !pending.planned {
 			pending.plannedState = nil
 		}
-		_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: transferred,
+		kind := agent.Takeover
+		if pending.planned && !pending.crashMargins {
+			kind = agent.PlannedMove
+		}
+		_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Kind: kind, Lease: transferred,
 			Context: ctx, CallerSequenceReserve: pending.reserve, CheckpointAge: pending.checkpointAge, SnapshotAge: pending.snapshotAge, CheckpointStoredAt: pending.checkpointStoredAt, SequenceMargin: margin, SRTCPIndexMargin: rtcpMargin})
 		res.Result.Resume += time.Since(started)
 		p.unreserve(target)

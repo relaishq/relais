@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/privateapi"
+	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/metrics"
 	"github.com/relais/pkg/relay"
@@ -491,7 +492,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	}
 
 	started = time.Now()
-	_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: transferred})
+	_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Kind: agent.PlannedMove, Lease: transferred})
 	res.Result.Resume = time.Since(started)
 	if err != nil {
 		err = p.rollback(c, source, target, r, state, transferred, true, true, errors.Is(err, privateapi.ErrUncertain) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded), &res.Result, err, res.Start)
@@ -542,7 +543,7 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 			resumeCtx, resumeCancel = context.WithTimeout(ctx, takeoverBudget)
 			defer resumeCancel()
 		}
-		opts := mediaworker.ResumeOptions{Lease: lease, Context: resumeCtx}
+		opts := mediaworker.ResumeOptions{Kind: agent.PlannedMove, Lease: lease, Context: resumeCtx}
 		if uncertainResume {
 			// B may already have emitted media and persisted adjusted counters.
 			// Its fenced store state, rather than the final export from A, is now
@@ -554,6 +555,7 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 				res.CheckpointAge, res.SnapshotAge, res.CheckpointStoredAt = decision.age, decision.snapshotAge, decision.storedAt
 				res.Checkpoint, res.SequenceMargin, res.SRTCPIndexMargin = decision.info, decision.margin, decision.rtcpMargin
 				checkpointOutside = decision.outside
+				opts.Kind = agent.Takeover
 				opts.SequenceMargin, opts.SRTCPIndexMargin = decision.margin, decision.rtcpMargin
 				opts.CallerSequenceReserve = decision.reserve
 				opts.CheckpointAge, opts.SnapshotAge, opts.CheckpointStoredAt = decision.age, decision.snapshotAge, decision.storedAt
