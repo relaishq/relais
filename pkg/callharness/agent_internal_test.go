@@ -109,6 +109,7 @@ type agentHarnessSystem struct {
 
 type agentHarnessSettings struct {
 	snapshotInterval      time.Duration
+	saveInterval          time.Duration
 	targetRestoreFailure  bool
 	targetCallbackTimeout string
 	echo                  bool
@@ -133,7 +134,7 @@ func startAgentHarness(t *testing.T, store sessionstore.Store, settings ...agent
 		config = settings[0]
 	}
 	for i := range 2 {
-		w, err := mediaworker.New(mediaworker.Config{SnapshotInterval: config.snapshotInterval, Agent: mediaworker.AgentConfig{Factory: func(string) agent.Agent {
+		w, err := mediaworker.New(mediaworker.Config{SnapshotInterval: config.snapshotInterval, Agent: mediaworker.AgentConfig{SaveInterval: config.saveInterval, Factory: func(string) agent.Agent {
 			if config.echo {
 				return &agent.Echo{}
 			}
@@ -454,6 +455,14 @@ type agentWriteSpy struct {
 	mu            sync.Mutex
 	changedWrites []time.Time
 	lastCount     uint64
+	writes        []agentWriteObservation
+}
+
+type agentWriteObservation struct {
+	count    uint64
+	started  time.Time
+	finished time.Time
+	err      error
 }
 
 func (s *agentWriteSpy) PutState(ctx context.Context, lease sessionstore.Lease, data []byte) error {
@@ -472,11 +481,15 @@ func (s *agentWriteSpy) PutState(ctx context.Context, lease sessionstore.Lease, 
 	if count != snap.State.Agent.Progress.Consumed {
 		return errors.New("state/progress pair disagrees")
 	}
-	if err := s.Store.PutState(ctx, lease, data); err != nil {
-		return err
-	}
+	started := time.Now()
+	err := s.Store.PutState(ctx, lease, data)
+	finished := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.writes = append(s.writes, agentWriteObservation{count, started, finished, err})
+	if err != nil {
+		return err
+	}
 	if count != s.lastCount {
 		s.changedWrites = append(s.changedWrites, time.Now())
 		s.lastCount = count
@@ -491,8 +504,38 @@ func TestAgentSaveRateAndAtomicProgress(t *testing.T) {
 		defer cancel()
 		call, err := sys.h.Dial(ctx, CallOptions{})
 		require.NoError(t, err)
+		started := time.Now()
+		var inputStopped time.Time
+		defer func() {
+			if !t.Failed() {
+				return
+			}
+			_, live, liveErr := sys.workers[0].SessionAgent(call.SessionID())
+			call.rec.mu.Lock()
+			sent := call.rec.sentAudio
+			call.rec.mu.Unlock()
+			spy.mu.Lock()
+			defer spy.mu.Unlock()
+			t.Logf("AGENT_SAVE_DIAGNOSTIC sent=%+v live=%+v live_error=%v saved=%d stats=%+v input_stopped=%s (before hangup/flush)", sent, live, liveErr, spy.lastCount, sys.workers[0].AgentStats(), inputStopped.Sub(started))
+			for _, write := range spy.writes {
+				t.Logf("AGENT_SAVE_DIAGNOSTIC count=%d start=%s finish=%s store_latency=%s error=%v", write.count, write.started.Sub(started), write.finished.Sub(started), write.finished.Sub(write.started), write.err)
+			}
+		}()
 		require.NoError(t, call.SendMedia(ctx, 700*time.Millisecond))
-		require.Eventually(t, func() bool { spy.mu.Lock(); defer spy.mu.Unlock(); return spy.lastCount == 35 }, time.Second, time.Millisecond)
+		inputStopped = time.Now()
+		// SendMedia is paced by wall time. Missed ticks under load can send
+		// fewer than 35 frames; every frame actually sent must still be consumed
+		// and durably saved before hangup, without bypassing the save rate.
+		call.rec.mu.Lock()
+		sent := uint64(call.rec.sentAudio.Frames)
+		call.rec.mu.Unlock()
+		require.Eventually(t, func() bool {
+			_, progress, err := sys.workers[0].SessionAgent(call.SessionID())
+			return err == nil && progress.Consumed == sent
+		}, time.Second, time.Millisecond, "agent must consume every sent frame")
+		require.Zero(t, sys.workers[0].AgentStats().InputDrops)
+		require.Eventually(t, func() bool { spy.mu.Lock(); defer spy.mu.Unlock(); return spy.lastCount == sent }, time.Second, time.Millisecond,
+			"final consumed progress must reach the store while input is idle")
 		spy.mu.Lock()
 		writes := append([]time.Time(nil), spy.changedWrites...)
 		spy.mu.Unlock()
@@ -502,11 +545,58 @@ func TestAgentSaveRateAndAtomicProgress(t *testing.T) {
 		}
 		state, p, err := sys.workers[0].SessionAgent(call.SessionID())
 		require.NoError(t, err)
-		require.EqualValues(t, 35, p.Consumed)
+		require.EqualValues(t, sent, p.Consumed)
 		require.EqualValues(t, p.Consumed, binary.BigEndian.Uint64(state.Bytes))
 		_, err = call.Hangup(ctx)
 		require.NoError(t, err)
-		t.Logf("AGENT_SAVE_RATE consumed=35 changed_writes=%d minimum_interval=100ms transport_interval=5ms", len(writes))
+		t.Logf("AGENT_SAVE_RATE consumed=%d changed_writes=%d minimum_interval=100ms transport_interval=5ms", sent, len(writes))
+	})
+}
+
+func TestAgentInitialCheckpointSkipKeepsCall(t *testing.T) {
+	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+		spy := &agentWriteSpy{Store: store}
+		// Keep the changed pair rate limited throughout the startup gate.
+		sys := startAgentHarness(t, spy, agentHarnessSettings{snapshotInterval: 5 * time.Millisecond, saveInterval: time.Hour})
+		entered, release := make(chan struct{}), make(chan struct{})
+		var once sync.Once
+		unblock := func() { once.Do(func() { close(release) }) }
+		defer unblock()
+		require.NoError(t, workerprobe.SetBeforeInitialSnapshot(sys.workers[0].LocalAddr(), func(ctx context.Context, _ string) {
+			close(entered)
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+		}))
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		call, err := sys.h.Dial(ctx, CallOptions{})
+		require.NoError(t, err)
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("connect did not reach initial checkpoint gate")
+		}
+		// The background loop stores the handshake before connect's own put.
+		require.Eventually(t, func() bool {
+			spy.mu.Lock()
+			defer spy.mu.Unlock()
+			return len(spy.writes) > 0 && spy.writes[0].err == nil
+		}, time.Second, time.Millisecond)
+		require.NoError(t, call.SendMedia(ctx, 20*time.Millisecond))
+		require.Eventually(t, func() bool {
+			_, progress, err := sys.workers[0].SessionAgent(call.SessionID())
+			return err == nil && progress.Consumed > 0
+		}, time.Second, time.Millisecond)
+		unblock()
+		require.Never(t, func() bool { return sys.workers[0].SessionCount() == 0 }, 200*time.Millisecond, time.Millisecond,
+			"a rate-limited initial checkpoint must not close an established call with a durable background checkpoint")
+		require.NoError(t, call.SendMedia(ctx, 20*time.Millisecond))
+		require.Eventually(t, func() bool {
+			_, progress, err := sys.workers[0].SessionAgent(call.SessionID())
+			return err == nil && progress.Consumed >= 2
+		}, time.Second, time.Millisecond)
 	})
 }
 
