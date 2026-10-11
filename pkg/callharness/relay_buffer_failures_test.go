@@ -32,6 +32,7 @@ import (
 
 type bufferFailureConfig struct {
 	buffer          relay.BufferConfig
+	holdTimeout     time.Duration
 	cache           bool
 	workers         int
 	workerHandler   func(int, http.Handler) http.Handler
@@ -71,7 +72,7 @@ func startBufferFailureSystem(t *testing.T, store sessionstore.Store, cfg buffer
 			frames = redisFrames
 		}
 	}
-	relayConfig := relay.Config{Owners: store, Buffer: &cfg.buffer}
+	relayConfig := relay.Config{Owners: store, Buffer: &cfg.buffer, HoldTimeout: cfg.holdTimeout}
 	if cfg.persist {
 		relayConfig.Routes = store.(sessionstore.Routes)
 	}
@@ -704,5 +705,111 @@ func TestRelayBufferUncertainExport(t *testing.T) {
 		require.NoError(t, err)
 		require.Zero(t, report.DecryptionFailures.Total())
 		require.True(t, report.ConnectedThroughout())
+	})
+}
+
+// The first target request is uncertain and unadopted until the planned hold
+// has expired. Recovery must recreate and prepare one gate with one source.
+type bufferUnadoptedResumeFault struct {
+	expired func() bool
+	once    atomic.Bool
+}
+
+func (f *bufferUnadoptedResumeFault) RoundTrip(req *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(req.URL.Path, "/resume") && f.once.CompareAndSwap(false, true) {
+		defer func() { _ = req.Body.Close() }()
+		tick := time.NewTicker(5 * time.Millisecond)
+		defer tick.Stop()
+		for !f.expired() {
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-tick.C:
+			}
+		}
+		return nil, errors.New("injected lost resume request before adoption")
+	}
+	return http.DefaultTransport.RoundTrip(req)
+}
+func TestRelayBufferUncertainExportAfterHoldExpiry(t *testing.T) {
+	relayBufferStores(t, func(t *testing.T, store sessionstore.Store) {
+		var sys *bufferFailureSystem
+		fault := &bufferUnadoptedResumeFault{expired: func() bool { return sys.r.Stats().HoldTimeouts > 0 }}
+		var exported atomic.Bool
+		var mu sync.Mutex
+		var begins []relay.ReplayRequest
+		sys = startBufferFailureSystem(t, store, bufferFailureConfig{
+			workers: 2, holdTimeout: 500 * time.Millisecond, targetTransport: fault,
+			workerHandler: func(i int, next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if i == 0 && strings.HasSuffix(r.URL.Path, "/export") && exported.CompareAndSwap(false, true) {
+						next.ServeHTTP(httptest.NewRecorder(), r)
+						w.WriteHeader(http.StatusServiceUnavailable)
+						return
+					}
+					next.ServeHTTP(w, r)
+				})
+			},
+			relayHandler: func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if strings.HasSuffix(r.URL.Path, "/begin-replay") {
+						body, err := io.ReadAll(r.Body)
+						if err != nil {
+							w.WriteHeader(http.StatusBadRequest)
+							return
+						}
+						r.Body = io.NopCloser(bytes.NewReader(body))
+						var begin relay.ReplayRequest
+						if err = json.Unmarshal(body, &begin); err != nil {
+							w.WriteHeader(http.StatusBadRequest)
+							return
+						}
+						mu.Lock()
+						begins = append(begins, begin)
+						mu.Unlock()
+					}
+					next.ServeHTTP(w, r)
+				})
+			},
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		call, err := sys.h.Dial(ctx, CallOptions{Video: true, Worker: 0})
+		require.NoError(t, err)
+		mediaCtx, stop := context.WithCancel(ctx)
+		sent := make(chan error, 1)
+		go func() { sent <- call.SendMedia(mediaCtx, 7*time.Second) }()
+		defer func() { stop(); require.ErrorIs(t, <-sent, context.Canceled) }()
+		time.Sleep(650 * time.Millisecond)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, sys.h.external.SignalingURL+"/"+call.SessionID()+"/move?to=1", nil)
+		require.NoError(t, err)
+		response, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		_ = response.Body.Close()
+		require.Equal(t, http.StatusInternalServerError, response.StatusCode, "first adoption remains uncertain after the original hold expires")
+		status := waitBufferTakeovers(t, ctx, sys.h, 1)
+		require.False(t, status.Takeovers[0].Lost)
+		require.True(t, status.Takeovers[0].Result.RelayReplayComplete)
+		require.Positive(t, status.Takeovers[0].Result.RelayReplayPackets)
+		require.Equal(t, "1", status.Calls[0].Owner)
+		require.EqualValues(t, 1, sys.r.Stats().HoldTimeouts, "recovery must not wait for a second hold expiry")
+		require.Zero(t, sys.r.Stats().Holds)
+		mu.Lock()
+		observed := append([]relay.ReplayRequest(nil), begins...)
+		mu.Unlock()
+		require.GreaterOrEqual(t, len(observed), 3)
+		for _, begin := range observed {
+			require.Equal(t, sys.workers[0].LocalAddr(), begin.From, "gate creation and checkpoint preparation use the same original source")
+		}
+		failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
+		require.NoError(t, err)
+		require.Zero(t, failures)
+		time.Sleep(300 * time.Millisecond)
+		stop()
+		report, err := call.Hangup(ctx)
+		require.NoError(t, err)
+		require.Zero(t, report.DecryptionFailures.Total())
+		require.True(t, report.ConnectedThroughout())
+		require.Zero(t, report.SentVideo.KeyframeRequests)
 	})
 }

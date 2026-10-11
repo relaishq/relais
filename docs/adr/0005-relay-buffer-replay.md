@@ -344,11 +344,11 @@ acceptance below now consumes the current #32 yardstick directly.
 
 The standalone `relais-relay` enables the bounded caller buffer by default.
 `-buffer-off` restores phase-1 recovery. `-buffer-window`,
-The total byte limit is at most 1 GiB; both the per-session ring and the
-derived per-session/global replay holds must fit it.
 `-buffer-session-bytes`, `-buffer-total-bytes` and `-buffer-ssrcs` expose the
-retention and admission bounds. All bounds must be positive. The core
-`relay.Config.Buffer == nil` behavior remains available to embedded callers.
+retention and admission bounds. All bounds must be positive. The total byte
+limit is at most 1 GiB; both the per-session ring and the derived per-session
+and global replay holds must fit it. The core `relay.Config.Buffer == nil`
+behavior remains available to embedded callers.
 The standalone relay retains the fenced lease, standby flags, bind retries
 and private-listener validation from #43.
 

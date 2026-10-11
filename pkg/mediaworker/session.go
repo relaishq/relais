@@ -446,7 +446,9 @@ func (s *session) handleRTP(pkt []byte) {
 	}
 	oldInbound := s.state.SRTP.Inbound[authenticated.SSRC]
 	s.state.SRTP.noteInbound(authenticated.SSRC, authenticated.SequenceNumber)
-	workerprobe.AfterDecrypt(s.worker.localAddr, s.id, authenticated.SSRC, s.state.SRTP.Inbound[authenticated.SSRC])
+	if workerprobe.Enabled() {
+		workerprobe.AfterDecrypt(s.worker.localAddr, s.id, authenticated.SSRC, extendIndex(oldInbound, authenticated.SequenceNumber))
+	}
 	if oldInbound>>16 != s.state.SRTP.Inbound[authenticated.SSRC]>>16 {
 		s.wantSnapshot()
 	}

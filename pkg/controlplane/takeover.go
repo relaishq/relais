@@ -447,7 +447,9 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			p.mu.Unlock()
 		}
 		if replay, ok := r.(ReplayRelay); ok && !pending.planned && pending.replayPlan == nil {
-			plan, gateErr := replay.BeginReplay(ctx, c.id, pending.routed, nil)
+			// The route follows adoption; the gate's source must stay the same
+			// as checkpoint preparation, including after a planned hold expires.
+			plan, gateErr := replay.BeginReplay(ctx, c.id, source.addr, nil)
 			if gateErr == nil {
 				pending.replayPlan, pending.held = &plan, true
 			} else if !errors.Is(gateErr, relay.ErrBufferDisabled) && (!pending.held || !errors.Is(gateErr, relay.ErrHeld)) {

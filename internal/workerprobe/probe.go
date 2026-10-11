@@ -33,6 +33,9 @@ type registration struct {
 // enabled keeps every production probe call off the process-wide mutex.
 var enabled atomic.Bool
 
+// Enabled lets packet paths avoid probe calls and argument work in production.
+func Enabled() bool { return enabled.Load() }
+
 var registry struct {
 	sync.Mutex
 	users   int
