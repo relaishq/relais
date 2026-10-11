@@ -129,15 +129,6 @@ func (c *Child) Ready(ctx context.Context) (Ready, error) {
 		}
 	}
 }
-func FreeTCP() (string, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	addr := listener.Addr().String()
-	err = listener.Close()
-	return addr, err
-}
 func WaitTCP(ctx context.Context, addr string, c *Child) error {
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()

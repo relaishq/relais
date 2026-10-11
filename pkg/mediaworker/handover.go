@@ -11,6 +11,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/sessionstore"
 )
@@ -148,6 +149,9 @@ func (track *trackState) checkSequenceMarginWithReserve(margin uint16, reserve u
 
 // ResumeOptions shape how a resumed session continues outbound streams.
 type ResumeOptions struct {
+	Kind                 agent.ResumeKind
+	InputMayBeDuplicated bool
+	DuplicateWindows     []agent.DuplicateWindow
 	// CallerSequenceReserve can enlarge, never reduce, the phase-1 reserve.
 	CallerSequenceReserve uint32
 	// Context optionally bounds rebuilding and persisting the resumed transport.
@@ -214,7 +218,16 @@ func (w *Worker) ExportSession(sessionID string) ([]byte, error) {
 // packets here. A worker with its own socket only receives the caller's
 // packets if they reach that socket. Behind a relay, the control plane
 // transfers ownership first and supplies the new fenced lease in opts.
-func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error) {
+func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, resumeErr error) {
+	defer func() {
+		if resumeErr != nil {
+			if opts.SequenceMargin > 0 {
+				w.metrics.takeoverErrors.Add(1)
+			} else {
+				w.metrics.handoverErrors.Add(1)
+			}
+		}
+	}()
 	if opts.SequenceMargin >= 1<<15 {
 		return "", fmt.Errorf("mediaworker: sequence margin %d is not below 2^15", opts.SequenceMargin)
 	}
@@ -266,6 +279,12 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 	sess.state.Checkpoint.TakeoverAge = opts.CheckpointAge
 	sess.state.Checkpoint.TakeoverSnapshotAge = opts.SnapshotAge
 	sess.state.Checkpoint.TakeoverStoredAt = opts.CheckpointStoredAt
+	if err := sess.initAgent(true, opts); err != nil {
+		sess.fenced.Store(true)
+		sess.close()
+		// The control plane owns rollback/retry and terminal lease cleanup.
+		return "", err
+	}
 	dtlsConn, err := sess.resume(snap.DTLSConnection, opts)
 	if err != nil {
 		sess.fenced.Store(true)
@@ -273,7 +292,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 
 		return "", fmt.Errorf("mediaworker: resume session %s: %w", sess.id, err)
 	}
-	if err := sess.persistSnapshotContext(parent); err != nil {
+	if err := sess.persistSnapshotMode(parent, true); err != nil {
 		sess.fenced.Store(true)
 		sess.close()
 		return "", err
@@ -302,7 +321,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 		} else {
 			before := sess.state.Video
 			if sess.reserveReplay(frames, opts.SequenceMargin) {
-				if err := sess.persistSnapshotContext(parent); err != nil {
+				if err := sess.persistSnapshotMode(parent, true); err != nil {
 					// No replay ciphertext has been made or sent. Keep PLI recovery when
 					// storage is unavailable, but a lost lease must still abort adoption.
 					sess.state.Video = before
@@ -364,6 +383,11 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 	sess.mu.Unlock()
 	workerprobe.AfterResume(w.localAddr, sess.id, pendingPLI)
 	sess.log.Infof("session %s: resumed with %s checkpoint_age=%s snapshot_age=%s", sess.id, snap.State.ICE.RemoteAddr, opts.CheckpointAge, opts.SnapshotAge)
+	if opts.SequenceMargin > 0 {
+		w.metrics.takeovers.Add(1)
+	} else {
+		w.metrics.handovers.Add(1)
+	}
 
 	return sess.id, nil
 }
@@ -401,7 +425,7 @@ func (w *Worker) adopt(sess *session, dtlsConn *dtls.Conn, replayPackets [][]byt
 	// keeps the session's own check time across the move.
 	w.byAddr[sess.state.ICE.RemoteAddr] = sess
 	delete(w.byAddrConsent, sess.state.ICE.RemoteAddr)
-	w.running.Add(2)
+	w.running.Add(3)
 	if len(replayPackets) > 0 {
 		w.running.Add(1)
 	}
@@ -409,6 +433,7 @@ func (w *Worker) adopt(sess *session, dtlsConn *dtls.Conn, replayPackets [][]byt
 	if len(replayPackets) > 0 {
 		go func() { defer w.running.Done(); sess.sendReplay(replayPackets) }()
 	}
+	go func() { defer w.running.Done(); sess.agentLoop() }()
 	go func() { defer w.running.Done(); sess.snapshotLoop() }()
 
 	go func() {
@@ -424,8 +449,27 @@ func (w *Worker) adopt(sess *session, dtlsConn *dtls.Conn, replayPackets [][]byt
 // happen under mu, which every packet the session handles holds, so the
 // counters in the snapshot are the final ones.
 func (s *session) export() ([]byte, error) {
+	// An export attempted before handshake must leave audio accepting input.
+	s.mu.Lock()
+	established := s.dtlsConn != nil && s.srtpIn != nil
+	fenced := s.fenced.Load()
+	s.mu.Unlock()
+	if fenced {
+		return nil, errHandedOver
+	}
+	if !established {
+		return nil, ErrNotEstablished
+	}
+	if err := s.flushAgent(); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer func() {
+		if !s.fenced.Load() && s.ctx.Err() == nil && s.agent != nil {
+			s.agent.paused = false
+		}
+	}()
 
 	if s.fenced.Load() {
 		return nil, errHandedOver
@@ -469,7 +513,7 @@ func decodeSnapshot(data []byte) (*snapshot, error) {
 	if err := json.Unmarshal(data, &version); err != nil {
 		return nil, fmt.Errorf("%w: %w", errBadState, err)
 	}
-	if version.Version != sessionStateVersion {
+	if version.Version != sessionStateVersion && version.Version != 6 {
 		return nil, fmt.Errorf("%w %d (want %d)", errStateVersion, version.Version, sessionStateVersion)
 	}
 
@@ -479,7 +523,7 @@ func decodeSnapshot(data []byte) (*snapshot, error) {
 	}
 	state := &snap.State
 	switch {
-	case state.Version != sessionStateVersion:
+	case state.Version != version.Version:
 		return nil, fmt.Errorf("%w %d (want %d)", errStateVersion, state.Version, sessionStateVersion)
 	case state.ID == "" || state.ID != state.ICE.LocalUfrag:
 		return nil, fmt.Errorf("%w: session ID %q, ICE ufrag %q", errBadState, state.ID, state.ICE.LocalUfrag)
@@ -488,6 +532,17 @@ func decodeSnapshot(data []byte) (*snapshot, error) {
 	case len(snap.DTLSConnection) == 0 || state.SRTP.Profile == 0:
 		return nil, fmt.Errorf("%w: no DTLS connection state", errBadState)
 	}
+	if version.Version == 6 {
+		var legacy struct {
+			State struct{ Agent json.RawMessage }
+		}
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return nil, fmt.Errorf("%w: %w", errBadState, err)
+		}
+		state.Agent.legacy = len(legacy.State.Agent) == 0
+	}
+	state.Version = sessionStateVersion
+	snap.Version = sessionStateVersion
 	if state.SRTP.Inbound == nil {
 		state.SRTP.Inbound = make(map[uint32]uint64)
 	}

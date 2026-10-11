@@ -25,6 +25,7 @@ import (
 )
 
 type result struct {
+	Metrics                                          []ProcessMetrics `json:"metrics,omitempty"`
 	Gap                                              time.Duration
 	Decrypt, AfterResume, Reconnects, Renegotiations int
 	Decoded, Live, Detection                         time.Duration
@@ -58,13 +59,15 @@ func processEnv(key, addr, prefix string) []string {
 	}
 	return append(env, "RELAIS_SESSIONSTORE_KEY="+key, "RELAIS_REDIS_ADDR="+addr, "RELAIS_REDIS_PREFIX="+prefix)
 }
-func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, after, warmup time.Duration, verbose, terminate, cacheOff bool, topology *nettopology.Topology) (result, error) {
+func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, after, warmup time.Duration, verbose, terminate, cacheOff bool, topology *nettopology.Topology) (out result, trialErr error) {
 	var processes []*clusterprocess.Child
 	defer func() {
 		for i := len(processes) - 1; i >= 0; i-- {
 			processes[i].Stop()
 		}
 	}()
+	systemMetrics := newMetricsRun()
+	defer func() { out.Metrics = systemMetrics.finish(dir) }()
 	start := func(name string, args ...string) (*clusterprocess.Child, clusterprocess.Ready, error) {
 		childEnv := env
 		if name == "relay" {
@@ -80,6 +83,8 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		r, err := c.Ready(startup)
 		if err != nil {
 			err = fmt.Errorf("%s readiness: %w", name, err)
+		} else {
+			systemMetrics.add(name, r.HTTP, c)
 		}
 		return c, r, err
 	}
@@ -169,6 +174,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	if worker == nil {
 		return result{}, fmt.Errorf("unknown owning worker %q", owner)
 	}
+	systemMetrics.sampleBeforeFault(ctx)
 	killed := time.Now()
 	signal := syscall.SIGKILL
 	label := "SIGKILL"
@@ -295,12 +301,16 @@ func run() (err error) {
 	relayRestart := flag.Bool("relay-restart", false, "SIGKILL and restart the relay mid-call; workers and caller stay alive")
 	restoreOff := flag.Bool("route-restore-off", false, "disable route restore in relay-restart baseline trials")
 	compareRestore := flag.Bool("compare-restore", true, "compare restore on/off in relay-restart mode")
+	flag.DurationVar(&metricsInterval, "metrics-interval", time.Second, "private metrics scrape interval; 0 disables periodic scraping (pre-fault and final samples remain)")
 	flag.Parse()
 	if err := validateTopologyOptions(*topologyOption, *profile, *redisAddr); err != nil {
 		return err
 	}
 	if *relayRestart && *topologyOption != "loopback" {
 		return errors.New("relay-restart supports only the loopback topology")
+	}
+	if metricsInterval < 0 {
+		return errors.New("metrics-interval must not be negative")
 	}
 	if *relayRestart && (*terminate || *cacheOff) {
 		return errors.New("relay-restart cannot combine with sigterm or frame-cache-off")

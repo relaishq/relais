@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/privateapi"
+	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/metrics"
 	"github.com/relais/pkg/relay"
@@ -86,6 +87,7 @@ type call struct {
 // Plane owns the registry and call metadata. The store remains authoritative
 // for ownership. New and Register must be called before accepting calls.
 type Plane struct {
+	metrics         planeMetrics
 	mu              sync.Mutex
 	relay           Relay
 	store           sessionstore.Store
@@ -248,7 +250,14 @@ func (p *Plane) owner(addr netip.AddrPort) *registration {
 
 // Create starts a call on the least-loaded non-draining worker. name can
 // pin a worker for a test, but cannot bypass draining.
-func (p *Plane) Create(ctx context.Context, offer, name string) (string, string, error) {
+func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answerResult string, createErr error) {
+	defer func() {
+		if createErr != nil {
+			p.metrics.callErrors.Add(1)
+		} else {
+			p.metrics.calls.Add(1)
+		}
+	}()
 	w, err := p.pick(ctx, name, netip.AddrPort{})
 	if err != nil {
 		return "", "", err
@@ -363,6 +372,17 @@ func (p *Plane) Move(ctx context.Context, id, to string) (MoveResult, error) {
 
 // move holds the call lock and an incoming reservation on target.
 func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, target *registration) (res MoveResult, err error) {
+	moved, recoveryMetrics := false, false
+	defer func() {
+		if recoveryMetrics {
+			return // Pending recovery owns the eventual metric outcome.
+		}
+		if err != nil {
+			p.metrics.moveErrors.Add(1)
+		} else if moved {
+			p.metrics.moves.Add(1)
+		}
+	}()
 	p.mu.Lock()
 	source, r := p.owner(lease.Worker), p.relay
 	p.mu.Unlock()
@@ -430,6 +450,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		// A generic/transport error cannot prove export did not flush A.
 		// Bump its epoch either way and recover the latest store snapshot.
 		if uncertainExport(err) {
+			recoveryMetrics = true
 			p.mu.Lock()
 			if source.pending == nil {
 				source.pending = make(map[string]*takeoverState)
@@ -439,25 +460,26 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 			p.mu.Unlock()
 			recovery, cancel := context.WithTimeout(context.Background(), takeoverBudget)
 			defer cancel()
-			p.takeoverLocked(recovery, source, c, lease, res.Start)
+			outcome := p.takeoverLocked(recovery, source, c, lease, res.Start)
 			p.mu.Lock()
 			pending := source.pending[c.id]
-			events := p.recentTakeovers()
-			for i := len(events) - 1; i >= 0; i-- {
-				if events[i].ID == c.id && !events[i].Start.Before(res.Start) {
-					res = events[i]
-					if !res.Lost {
-						releaseTo = target.addr
-						err = nil
-					} else {
-						err = errors.New(res.Error)
-					}
-					break
+			p.mu.Unlock()
+			if outcome != nil {
+				res = *outcome
+				if !res.Lost {
+					releaseTo = target.addr
+					err = nil
+				} else {
+					err = errors.New(res.Error)
 				}
 			}
-			p.mu.Unlock()
 			if pending != nil {
 				return res, fmt.Errorf("controlplane: export uncertain; recovery pending: %w", err)
+			}
+			if outcome == nil {
+				// A concurrent transfer ended recovery without a terminal outcome.
+				// Let move's defer count the failed coordination attempt.
+				recoveryMetrics = false
 			}
 			released = true
 			return res, err
@@ -491,7 +513,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	}
 
 	started = time.Now()
-	_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: transferred})
+	_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Kind: agent.PlannedMove, Lease: transferred})
 	res.Result.Resume = time.Since(started)
 	if err != nil {
 		err = p.rollback(c, source, target, r, state, transferred, true, true, errors.Is(err, privateapi.ErrUncertain) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded), &res.Result, err, res.Start)
@@ -502,6 +524,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	now := time.Now()
 	c.lastMove = &now
 	c.moveCount++
+	moved = true
 	c.lastMoveKind = "move"
 	return res, nil
 }
@@ -542,7 +565,7 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 			resumeCtx, resumeCancel = context.WithTimeout(ctx, takeoverBudget)
 			defer resumeCancel()
 		}
-		opts := mediaworker.ResumeOptions{Lease: lease, Context: resumeCtx}
+		opts := mediaworker.ResumeOptions{Kind: agent.PlannedMove, Lease: lease, Context: resumeCtx}
 		if uncertainResume {
 			// B may already have emitted media and persisted adjusted counters.
 			// Its fenced store state, rather than the final export from A, is now
@@ -554,6 +577,7 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 				res.CheckpointAge, res.SnapshotAge, res.CheckpointStoredAt = decision.age, decision.snapshotAge, decision.storedAt
 				res.Checkpoint, res.SequenceMargin, res.SRTCPIndexMargin = decision.info, decision.margin, decision.rtcpMargin
 				checkpointOutside = decision.outside
+				opts.Kind = agent.Takeover
 				opts.SequenceMargin, opts.SRTCPIndexMargin = decision.margin, decision.rtcpMargin
 				opts.CallerSequenceReserve = decision.reserve
 				opts.CheckpointAge, opts.SnapshotAge, opts.CheckpointStoredAt = decision.age, decision.snapshotAge, decision.storedAt
@@ -591,7 +615,14 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 // balanced. With no destination it
 // moves nothing. It marks draining before waiting up to one second for
 // incoming reservations, then includes those calls in the drain.
-func (p *Plane) Drain(ctx context.Context, name string) ([]MoveResult, error) {
+func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, drainErr error) {
+	defer func() {
+		if drainErr != nil {
+			p.metrics.drainErrors.Add(1)
+		} else {
+			p.metrics.drains.Add(1)
+		}
+	}()
 	p.mu.Lock()
 	w := p.workers[name]
 	if w == nil {

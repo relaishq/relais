@@ -130,6 +130,9 @@ type Heartbeats interface{ Heartbeat(netip.AddrPort) error }
 
 // Config configures a media worker.
 type Config struct {
+	// Agent selects per-call audio logic. Zero values keep the default echo.
+	Agent AgentConfig
+
 	// CheckpointEnvelope configures source index rates for safe crash recovery.
 	CheckpointEnvelope CheckpointEnvelope
 	// FrameCache lives outside workers. Share one Store across takeover targets.
@@ -224,9 +227,11 @@ type RelayConfig struct {
 // Worker is a media worker. It owns one UDP socket, or shares one with other
 // workers (see Socket), and the sessions that run over it.
 type Worker struct {
-	cfg  Config
-	log  logging.LeveledLogger
-	conn packetConn // its own UDP socket, a port on a shared Socket, or the relay leg (relayConn)
+	agents  agentCounters
+	metrics workerMetrics
+	cfg     Config
+	log     logging.LeveledLogger
+	conn    packetConn // its own UDP socket, a port on a shared Socket, or the relay leg (relayConn)
 	// localAddr is the UDP socket the worker reads: its own or the shared
 	// Socket's. mediaAddr is where callers send: localAddr, or behind a
 	// relay the relay's public address.
@@ -255,6 +260,7 @@ type Worker struct {
 
 // New starts a media worker listening on cfg.ListenAddr.
 func New(cfg Config) (*Worker, error) {
+	cfg.Agent = cfg.Agent.defaults()
 	cfg.CheckpointEnvelope = cfg.CheckpointEnvelope.Defaults()
 	if cfg.SnapshotInterval <= 0 {
 		cfg.SnapshotInterval = 100 * time.Millisecond
@@ -419,8 +425,9 @@ func (w *Worker) CreateSession(ctx context.Context, offerSDP string) (sessionID,
 		return "", "", ErrClosed
 	}
 	w.sessions[sess.id] = sess
-	w.running.Add(2)
+	w.running.Add(3)
 	w.mu.Unlock()
+	go func() { defer w.running.Done(); sess.agentLoop() }()
 	go func() { defer w.running.Done(); sess.snapshotLoop() }()
 
 	go func() {
@@ -494,6 +501,7 @@ func (w *Worker) readLoop() {
 		if w.paused.Load() {
 			continue
 		}
+		w.metrics.packetsIn.Add(1)
 		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
 		pkt := buf[:n]
 
@@ -548,7 +556,11 @@ func (w *Worker) mapAddr(addr netip.AddrPort, sess *session) bool {
 }
 
 func (w *Worker) send(pkt []byte, to netip.AddrPort) (int, error) {
-	return w.conn.WriteToUDPAddrPort(pkt, to)
+	n, err := w.conn.WriteToUDPAddrPort(pkt, to)
+	if err == nil {
+		w.metrics.packetsOut.Add(1)
+	}
+	return n, err
 }
 
 // forget removes a closed session and its caller addresses. Behind a relay

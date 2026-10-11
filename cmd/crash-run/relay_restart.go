@@ -18,13 +18,15 @@ import (
 // relayRestartTrial kills only the relay; the caller, control plane and workers
 // stay alive. The replacement binds all three original addresses. Recovery is
 // exclusively the production startup restore and control re-registration path.
-func relayRestartTrial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, after, warmup time.Duration, verbose, restoreOff bool) (result, error) {
+func relayRestartTrial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, after, warmup time.Duration, verbose, restoreOff bool) (out result, trialErr error) {
 	var processes []*clusterprocess.Child
 	defer func() {
 		for i := len(processes) - 1; i >= 0; i-- {
 			processes[i].Stop()
 		}
 	}()
+	systemMetrics := newMetricsRun()
+	defer func() { out.Metrics = systemMetrics.finish(dir) }()
 	start := func(name string, args ...string) (*clusterprocess.Child, clusterprocess.Ready, error) {
 		childEnv := env
 		if strings.HasPrefix(name, "relay") {
@@ -38,6 +40,9 @@ func relayRestartTrial(ctx context.Context, manager *clusterprocess.Manager, bin
 		startup, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		ready, err := c.Ready(startup)
+		if err == nil {
+			systemMetrics.add(name, ready.HTTP, c)
+		}
 		return c, ready, err
 	}
 	relayArgs := []string{filepath.Join(bin, "relais-relay"), "-media", "127.0.0.1:0", "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0"}
@@ -96,6 +101,7 @@ func relayRestartTrial(ctx context.Context, manager *clusterprocess.Manager, bin
 		return result{}, fmt.Errorf("media ended before relay SIGKILL: %v", err)
 	case <-time.After(warmup):
 	}
+	systemMetrics.sampleBeforeFault(ctx)
 	killed := time.Now()
 	if err := old.SignalGroup(syscall.SIGKILL); err != nil {
 		return result{}, err
