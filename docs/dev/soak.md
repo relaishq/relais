@@ -35,8 +35,8 @@ last seven seconds are reserved for recovery rather than another fault.
 measurements made by soak. Both default to 8 from the latest #40 hosted evidence.
 The driver rejects loads above `min((workers-1)*worker-floor - 1, relay-floor)`.
 Each move needs a free target slot. All sampled worker session peaks must stay
-at or below the supplied worker floor. The eight-call nightly has three
-workers: survivors carry about four calls each, below the eight-call floor.
+at or below the supplied worker floor. The six-call nightly has three
+workers: survivors carry about three calls each, below the eight-call floor.
 Larger hardware needs capacity evidence for its workload before selecting
 floors that authorize a 50-call run. The defaults deliberately reject 50 calls.
 
@@ -80,7 +80,12 @@ Each event includes its preceding one-second baseline and the caller's saved
 loss-observation, settling and freshness horizons. A conservative seven-second
 recovery tail also covers incomplete event evidence. Any overlapping excluded interval makes that event and
 its rows inconclusive, with raw trusted/failure counts retained. Such an event
-also prevents a conclusive whole-run pass. Over-budget runs are inconclusive.
+is listed with its cause in the JSON and log. Inconclusive events do not each
+invalidate the entire run. The run needs at least 95% conclusive events, using
+an exact fraction, plus at least one conclusive pass of each kind: move, drain
+and kill. Exactly 95% is permitted. For example, 19/20 qualifies; 18/19 is
+94.737% and does not. Runs above the saturation budget are inconclusive.
+Missing caller, cleanup or independent resource evidence remains inconclusive.
 A separately confirmed service crash still fails, using #40's
 `confirmedServiceFailure` rule. Direct caller/worker decryption failures,
 control-plane lost calls, excessive worker peaks, memory growth and observed
@@ -104,6 +109,17 @@ the report. Workers and callers need at least ten minutes of observations;
 shorter incarnations are `insufficient-data`, never called flat. Replacements
 use separate PID windows and their own warm-up. A short smoke can test the
 regression and sampling, but cannot prove flat worker/caller memory.
+
+`outcome` judges execution and event coverage. Insufficient memory does not
+prevent a short nightly from passing; observed memory growth still fails.
+`acceptance` is a separate boolean. It requires full scale (at least 50 calls
+for at least one hour), `outcome=pass`, and conclusive memory for every
+long-lived process. Relay, control, Redis and caller processes always require
+memory proof for acceptance. A worker incarnation observed for at least ten
+minutes also requires it; shorter incarnations remain explicitly unjudged.
+Missing role verdicts prevent acceptance. The report marks each metric's
+`long_lived` status and lists `acceptance_reasons`; the log prints the boolean
+and every reason. A short run always has `acceptance=false`.
 
 ## Cleanup evidence
 
@@ -146,7 +162,7 @@ relay state is freed at once. That change is outside #41.
 
 The registered `load-calibration.yml` workflow has a separate `soak` job,
 90-minute job budget and 80-minute measurement budget. It does not invoke
-`crash-run`. Nightly uses eight calls for ten minutes, 30-second events, seed
+`crash-run`. Nightly uses six calls for ten minutes, 30-second events, seed
 41, three workers, two callers per generator, ubuntu-latest, namespace LAN and
 measured worker/relay floors of eight. Runner metadata, report and every child
 log are uploaded always, including failure. Namespace cleanup is checked.
@@ -155,7 +171,7 @@ After the workflow change is published, short dispatch:
 
 ```sh
 gh workflow run load-calibration.yml --repo relaishq/relais --ref feat/41-soak \
-  -f mode=soak -f soak_callers=8 -f soak_duration=10m -f chaos_interval=30s \
+  -f mode=soak -f soak_callers=6 -f soak_duration=10m -f chaos_interval=30s \
   -f seed=41 -f runner_label=ubuntu-latest -f callers_per_process=2 \
   -f soak_workers=3 -f worker_floor=8 -f relay_floor=8
 ```

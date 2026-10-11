@@ -94,21 +94,43 @@ func TestSoakSaturationBudgetAndOverlap(t *testing.T) {
 	require.Zero(t, judgeSaturation(r).Saturated)
 }
 
-func soakFixture() (config, loadgen.RunReport) {
+func soakFixture() (config, loadgen.RunReport) { return soakFixtureEvents(3, 60*time.Second) }
+func soakFixtureEvents(count int, interval time.Duration) (config, loadgen.RunReport) {
 	at := time.Unix(1000, 0)
-	c := config{Soak: true, Duration: 20 * time.Minute, Callers: 2, Processes: 1, Workers: 3, WorkerFloor: 8, RelayFloor: 8, StoreOpsBudget: 100, StoreBytesBudget: 128 << 10, Events: []loadgen.Event{{After: 30 * time.Second, Kind: "move", Worker: 1, Count: 1}}}
+	c := config{Soak: true, Duration: 20 * time.Minute, Callers: 2, Processes: 1, Workers: 3, WorkerFloor: 8, RelayFloor: 8, StoreOpsBudget: 100, StoreBytesBudget: 128 << 10}
 	r := capacityFixture()
 	r.StartedAt, r.Duration, r.Limits = at, c.Duration, loadgen.DefaultLimits()
-	move := r.Processes[0].Calls[0].Call.Moves[0]
-	move.To, move.Start, move.End = 1, 30*time.Second, 31*time.Second
-	move.Measurement.AudioLoss.Trusted = true
-	move.Measurement.Audio.Verdict.Trusted = true
-	move.Measurement.ResumeVerdict.Trusted = true
-	r.Events = []loadgen.EventResult{{Event: c.Events[0], At: at.Add(30 * time.Second), FinishedAt: at.Add(31 * time.Second), Affected: 1, Sessions: []string{"a"}}}
-	r.Processes = []loadgen.ProcessReport{{PID: 42, Complete: true, ExpectedCalls: 2, Lateness: loadgen.Lateness{Packets: 1}, Calls: []loadgen.Message{{Session: "a", Call: &callharness.Report{StartedAt: at, HungUpAt: c.Duration, Moves: []callharness.MoveReport{move}}}, {Session: "b", Call: &callharness.Report{StartedAt: at, HungUpAt: c.Duration}}}}}
-	for _, s := range memorySamples(at, c.Duration, 0) {
-		r.Processes[0].Samples = append(r.Processes[0].Samples, loadgen.Stats{At: s.At, Interval: time.Second, RSSBytes: s.RSSBytes, HeapInUseBytes: s.HeapInUseBytes})
+	template := r.Processes[0].Calls[0].Call.Moves[0]
+	template.Measurement.AudioLoss.Trusted = true
+	template.Measurement.Audio.Verdict.Trusted = true
+	template.Measurement.ResumeVerdict.Trusted = true
+	var moves []callharness.MoveReport
+	takeovers := 0
+	for i := range count {
+		after := 30*time.Second + time.Duration(i)*interval
+		kind := []string{"move", "drain", "kill"}[i%3]
+		event := loadgen.Event{After: after, Kind: kind, Worker: 1, Count: 1}
+		move := template
+		move.Tracks = append([]callharness.MoveTrackReport(nil), template.Tracks...)
+		move.From, move.To, move.Start, move.End = 0, 1, after, after+time.Second
+		if kind == "drain" {
+			move.From, move.To = 1, 0
+		}
+		if kind == "kill" {
+			event.Worker = 0
+			move.Kind = "takeover"
+			takeovers++
+		}
+		moves = append(moves, move)
+		c.Events = append(c.Events, event)
+		r.Events = append(r.Events, loadgen.EventResult{Event: event, At: at.Add(after), FinishedAt: at.Add(after + time.Second), Affected: 1, Sessions: []string{"a"}})
 	}
+	r.Telemetry.Processes[1].Last["relais_control_takeovers_total"] = float64(takeovers)
+	r.Processes = []loadgen.ProcessReport{{PID: 42, Complete: true, ExpectedCalls: 2, Lateness: loadgen.Lateness{Packets: 1}, Calls: []loadgen.Message{{Session: "a", Call: &callharness.Report{StartedAt: at, HungUpAt: c.Duration, Moves: moves}}, {Session: "b", Call: &callharness.Report{StartedAt: at, HungUpAt: c.Duration}}}}}
+	for _, sample := range memorySamples(at, c.Duration, 0) {
+		r.Processes[0].Samples = append(r.Processes[0].Samples, loadgen.Stats{At: sample.At, Interval: time.Second, RSSBytes: sample.RSSBytes, HeapInUseBytes: sample.HeapInUseBytes})
+	}
+	r.Telemetry.Processes = append(r.Telemetry.Processes, capacity.Process{Name: "store", PID: 45}, capacity.Process{Name: "worker-0", PID: 46})
 	for i := range r.Telemetry.Processes {
 		r.Telemetry.Processes[i].Memory = memorySamples(at, c.Duration, 0)
 	}
@@ -333,4 +355,126 @@ func TestSoakMemoryNeedsFiveMinutesAfterWarmup(t *testing.T) {
 		require.Equal(t, "pass", judgeMemory("service", 1, metric, memorySamples(at, 10*time.Minute, 0), at, time.Hour, false).Outcome)
 		require.Equal(t, "insufficient-data", judgeMemory("service", 1, metric, memorySamples(at, 10*time.Minute-time.Second, 1<<20), at, time.Hour, false).Outcome)
 	}
+}
+
+func TestSoakEventCoveragePolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		excluded []int
+		fail     bool
+		want     string
+	}{
+		{"one among nineteen passes", []int{0}, false, "pass"},
+		{"ten percent inconclusive", []int{0, 1}, false, "inconclusive"},
+		{"any failed event", nil, true, "fail"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, r := soakFixtureEvents(20, 30*time.Second)
+			for _, index := range tc.excluded {
+				r.Processes[0].Samples[31+index*30].IntervalLateness.P99 = 21 * time.Millisecond
+			}
+			if tc.fail {
+				r.Processes[0].Calls[0].Call.Moves[0].Tracks[0].Gap = 151 * time.Millisecond
+			}
+			r.Judge()
+			v := judgeSoak(c, r)
+			require.Equal(t, tc.want, v.Outcome)
+			require.Equal(t, 20-len(tc.excluded), v.ConclusiveEvents)
+			for _, index := range tc.excluded {
+				require.Equal(t, "inconclusive", v.Events[index].Outcome)
+				require.NotEmpty(t, v.Events[index].Causes)
+			}
+		})
+	}
+	c, r := soakFixtureEvents(19, 30*time.Second)
+	r.Processes[0].Samples[31].IntervalLateness.P99 = 21 * time.Millisecond
+	r.Judge()
+	boundary := judgeSoak(c, r)
+	require.Equal(t, "inconclusive", boundary.Outcome, "18/19 is below the exact 95% threshold")
+	require.InDelta(t, 100.0*18/19, boundary.ConclusiveEventPercent, .000001)
+	c, r = soakFixtureEvents(20, 30*time.Second)
+	// Keep only one scheduled kill, then exclude it. Aggregate coverage is 95%,
+	// but that cannot establish kill recovery.
+	for i := range r.Events {
+		if r.Events[i].Event.Kind == "kill" && i != 2 {
+			r.Events[i].Event.Kind = "move"
+			c.Events[i].Kind = "move"
+			r.Events[i].Event.Worker = 1
+			c.Events[i].Worker = 1
+			r.Processes[0].Calls[0].Call.Moves[i].Kind = "move"
+		}
+	}
+	r.Telemetry.Processes[1].Last["relais_control_takeovers_total"] = 1
+	r.Processes[0].Samples[91].IntervalLateness.P99 = 21 * time.Millisecond
+	r.Judge()
+	v := judgeSoak(c, r)
+	require.Equal(t, 95.0, v.ConclusiveEventPercent)
+	require.Equal(t, "inconclusive", v.Outcome)
+	require.Contains(t, v.Causes, "no conclusive kill pass")
+}
+
+func TestSoakAcceptanceRequiresFullScaleAndMemory(t *testing.T) {
+	c, r := soakFixture()
+	v := judgeSoak(c, r)
+	require.Equal(t, "pass", v.Outcome)
+	require.False(t, v.Acceptance)
+	require.Contains(t, v.AcceptanceReasons, "requires at least 50 concurrent calls for at least one hour")
+	// Scale is configured separately from the verdict fixture's call inventory.
+	// All observed long-lived roles have conclusive memory in this fixture.
+	c.Callers, c.Duration = 50, time.Hour
+	v = judgeSoak(c, r)
+	require.True(t, v.FullScale)
+	require.True(t, v.Acceptance)
+	v.Outcome = "fail"
+	v.judgeAcceptance()
+	require.False(t, v.Acceptance)
+	require.Contains(t, v.AcceptanceReasons, "run outcome is fail")
+	r.Telemetry.Processes[0].Memory = memorySamples(r.StartedAt, 3*time.Minute, 0)
+	v = judgeSoak(c, r)
+	require.Equal(t, "pass", v.Outcome)
+	require.False(t, v.Acceptance)
+	require.Contains(t, v.AcceptanceReasons, "relay pid=0 rss: insufficient-data")
+	// A worker observed for ten minutes still requires memory proof even if its
+	// memory sampler returned only a short tail.
+	r.Telemetry.Processes[3].ObservedSeconds = 600
+	r.Telemetry.Processes[3].Memory = memorySamples(r.StartedAt, 3*time.Minute, 0)
+	v = judgeSoak(c, r)
+	require.False(t, v.Acceptance)
+	require.Contains(t, v.AcceptanceReasons, "worker-0 pid=46 rss: insufficient-data")
+	// Post-judgment execution errors also revoke acceptance.
+	v.Outcome = "inconclusive"
+	v.judgeAcceptance()
+	require.False(t, v.Acceptance)
+	require.Contains(t, v.AcceptanceReasons, "run outcome is inconclusive")
+}
+
+func TestSoakShortRunCanPassWithoutMemoryEvidence(t *testing.T) {
+	c, r := soakFixture()
+	for i := range r.Telemetry.Processes {
+		r.Telemetry.Processes[i].Memory = nil
+	}
+	for i := range r.Processes[0].Samples {
+		r.Processes[0].Samples[i].RSSBytes, r.Processes[0].Samples[i].HeapInUseBytes = 0, 0
+	}
+	v := judgeSoak(c, r)
+	require.Equal(t, "pass", v.Outcome)
+	require.False(t, v.Acceptance)
+	for _, m := range v.Memory {
+		require.Equal(t, "insufficient-data", m.Outcome)
+	}
+}
+
+func TestSoakEventCoverageDoesNotHideIncompleteGenerators(t *testing.T) {
+	c, r := soakFixtureEvents(20, 30*time.Second)
+	// One missing event record is local to event coverage, not a missing caller.
+	r.Processes[0].Calls[0].Call.Moves = r.Processes[0].Calls[0].Call.Moves[1:]
+	r.Judge()
+	v := judgeSoak(c, r)
+	require.Equal(t, "pass", v.Outcome)
+	require.Equal(t, "inconclusive", v.Events[0].Outcome)
+	require.NotEmpty(t, v.Events[0].Causes)
+	// A genuinely incomplete generator remains an independent unknown.
+	r.Processes[0].Complete = false
+	r.Judge()
+	require.Equal(t, "inconclusive", judgeSoak(c, r).Outcome)
 }

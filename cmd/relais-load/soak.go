@@ -51,6 +51,7 @@ type memoryVerdict struct {
 	Outcome             string  `json:"outcome"`
 	Samples             int     `json:"samples"`
 	RawSamples          int     `json:"raw_samples"`
+	LongLived           bool    `json:"long_lived"`
 	MedianBytes         float64 `json:"median_bytes"`
 	SlopeBytesPerSecond float64 `json:"slope_bytes_per_second"`
 	ProjectedHourBytes  float64 `json:"projected_hour_bytes"`
@@ -60,6 +61,7 @@ type memoryVerdict struct {
 
 func judgeMemory(name string, pid int, metric string, samples []capacity.MemorySample, start time.Time, duration time.Duration, incarnation bool) memoryVerdict {
 	v := memoryVerdict{Name: name, PID: pid, Metric: metric, Outcome: "insufficient-data", RawSamples: len(samples)}
+	v.LongLived = !incarnation || name == "caller" || (len(samples) >= 2 && samples[len(samples)-1].At.Sub(samples[0].At) >= 10*time.Minute)
 	warmup := min(duration/10, 5*time.Minute)
 	if len(samples) < 2 {
 		v.Reason = "fewer than two samples"
@@ -216,33 +218,39 @@ func eventSaturated(r loadgen.RunReport, e loadgen.EventResult, b saturationBudg
 
 type soakEventVerdict struct {
 	Index     int                 `json:"index"`
+	Kind      string              `json:"kind"`
+	Causes    []string            `json:"causes"`
 	Outcome   string              `json:"outcome"`
 	Saturated bool                `json:"saturated"`
 	Rows      []loadgen.MetricRow `json:"rows"`
 }
 type soakReport struct {
-	GOOS              string             `json:"goos"`
-	GOARCH            string             `json:"goarch"`
-	GoVersion         string             `json:"go_version"`
-	Runner            string             `json:"runner"`
-	Topology          string             `json:"topology"`
-	Video             bool               `json:"video"`
-	GOMAXPROCS        int                `json:"gomaxprocs"`
-	Seed              int64              `json:"seed"`
-	Schedule          []loadgen.Event    `json:"schedule"`
-	WorkerFloor       int                `json:"worker_floor"`
-	RelayFloor        int                `json:"relay_floor"`
-	Workers           int                `json:"workers"`
-	Processes         int                `json:"generator_processes"`
-	CallersPerProcess int                `json:"callers_per_process"`
-	Interval          time.Duration      `json:"interval_ns"`
-	FullScale         bool               `json:"full_scale"`
-	Saturation        saturationBudget   `json:"saturation"`
-	Memory            []memoryVerdict    `json:"memory"`
-	Events            []soakEventVerdict `json:"events"`
-	Outcome           string             `json:"outcome"`
-	Causes            []string           `json:"causes"`
-	Run               loadgen.RunReport  `json:"run"`
+	GOOS                   string             `json:"goos"`
+	GOARCH                 string             `json:"goarch"`
+	GoVersion              string             `json:"go_version"`
+	Runner                 string             `json:"runner"`
+	Topology               string             `json:"topology"`
+	Video                  bool               `json:"video"`
+	GOMAXPROCS             int                `json:"gomaxprocs"`
+	Seed                   int64              `json:"seed"`
+	Schedule               []loadgen.Event    `json:"schedule"`
+	WorkerFloor            int                `json:"worker_floor"`
+	RelayFloor             int                `json:"relay_floor"`
+	Workers                int                `json:"workers"`
+	Processes              int                `json:"generator_processes"`
+	CallersPerProcess      int                `json:"callers_per_process"`
+	Interval               time.Duration      `json:"interval_ns"`
+	FullScale              bool               `json:"full_scale"`
+	Acceptance             bool               `json:"acceptance"`
+	AcceptanceReasons      []string           `json:"acceptance_reasons"`
+	ConclusiveEvents       int                `json:"conclusive_events"`
+	ConclusiveEventPercent float64            `json:"conclusive_event_percent"`
+	Saturation             saturationBudget   `json:"saturation"`
+	Memory                 []memoryVerdict    `json:"memory"`
+	Events                 []soakEventVerdict `json:"events"`
+	Outcome                string             `json:"outcome"`
+	Causes                 []string           `json:"causes"`
+	Run                    loadgen.RunReport  `json:"run"`
 }
 
 func leakCauses(l loadgen.LeakReport) []string {
@@ -293,17 +301,24 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 	for i := range usable.Processes {
 		usable.Processes[i].Saturated = false
 	}
+	usable.Events = append([]loadgen.EventResult(nil), r.Events...)
 	usable.Judge()
-	if r.Outcome == "inconclusive" && usable.Outcome == "valid" {
-		// execute errors, unlike saturation, must not disappear in the copy.
-		for _, cause := range r.Causes {
-			if !strings.Contains(cause, "process ") {
-				inconclusive(cause)
-			}
+	// Preserve execution errors that were added after RunReport.Judge. Known
+	// event evidence and process saturation are evaluated by their own gates.
+	expected := r
+	expected.Events = append([]loadgen.EventResult(nil), r.Events...)
+	expected.Judge()
+	known := map[string]bool{}
+	for _, cause := range expected.Causes {
+		known[cause] = true
+	}
+	for _, cause := range r.Causes {
+		if !known[cause] {
+			inconclusive(cause)
 		}
 	}
-	for i, e := range r.Events {
-		v := soakEventVerdict{Index: i, Outcome: "pass", Saturated: eventSaturated(r, e, result.Saturation)}
+	for i, e := range usable.Events {
+		v := soakEventVerdict{Index: i, Kind: e.Event.Kind, Outcome: "pass", Saturated: eventSaturated(r, e, result.Saturation)}
 		rows := append([]loadgen.MetricRow(nil), usable.Yardstick...)
 		rows = append(rows, soakGapRows(usable, e, i)...)
 		for _, row := range rows {
@@ -317,34 +332,56 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 				} else if row.Outcome != "pass" && v.Outcome != "fail" {
 					v.Outcome = "inconclusive"
 				}
+				if row.Outcome != "pass" && !v.Saturated {
+					v.Causes = append(v.Causes, row.Metric+" "+row.Outcome)
+				}
 			}
 		}
-		if !v.Saturated && (e.Failed || e.Error != "") {
-			v.Outcome = "fail"
+		if e.Failed || e.Error != "" {
+			v.Causes = append(v.Causes, "action failed: "+e.Error)
+			if !v.Saturated {
+				v.Outcome = "fail"
+			}
 		}
-		if v.Saturated || len(v.Rows) == 0 {
+		if v.Saturated {
 			v.Outcome = "inconclusive"
+			v.Causes = append(v.Causes, "event window overlaps generator saturation")
+		}
+		if len(v.Rows) == 0 {
+			v.Causes = append(v.Causes, "no recovery rows")
+			if v.Outcome != "fail" {
+				v.Outcome = "inconclusive"
+			}
+		}
+		ids := map[string]bool{}
+		for _, id := range e.Sessions {
+			ids[id] = true
+		}
+		if e.Recorded != e.Affected || len(ids) != e.Affected || len(ids) != len(e.Sessions) {
+			v.Causes = append(v.Causes, fmt.Sprintf("incomplete or duplicate affected-call evidence: %d/%d recorded", e.Recorded, e.Affected))
+			if v.Outcome != "fail" {
+				v.Outcome = "inconclusive"
+			}
 		}
 		result.Events = append(result.Events, v)
 		if v.Outcome == "fail" {
 			fail(fmt.Sprintf("event %d failed caller recovery rows", i))
 		}
-		if v.Outcome == "inconclusive" {
-			inconclusive(fmt.Sprintf("event %d lacks conclusive recovery rows", i))
-		}
 	}
-	// Remove only overlapping event rows from capacity judgment, rather than
-	// relaxing global generator thresholds or suppressing independent failures.
-	usable.Yardstick = append([]loadgen.MetricRow(nil), usable.Yardstick...)
-	for i := range usable.Yardstick {
-		if result.Events[usable.Yardstick[i].EventIndex].Saturated {
-			usable.Yardstick[i].Outcome = "inconclusive"
-		}
-	}
+	// Event coverage is judged separately. Capacity still checks whole-call
+	// continuity, counters and resources, while inconclusive event evidence is
+	// omitted from its aggregate rows/move samples. Raw evidence remains in Run.
 	excluded := map[int]bool{}
 	for i, e := range result.Events {
-		excluded[i] = e.Saturated
+		excluded[i] = e.Outcome == "inconclusive"
 	}
+	// RunReport's event matching causes belong to individual event coverage.
+	// Rebuild only generator completeness here; keep the complete event/row copy
+	// for the independent continuity, takeover-counter and resource checks.
+	generatorValidity := usable
+	generatorValidity.Events = nil
+	generatorValidity.Judge()
+	usable.Outcome, usable.Causes = generatorValidity.Outcome, generatorValidity.Causes
 	step := judgeCapacityExcept("soak", usable, c.StoreOpsBudget, c.StoreBytesBudget, excluded)
 	if step.Verdict == "fail" {
 		for _, cause := range step.Causes {
@@ -355,33 +392,51 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 			inconclusive(cause)
 		}
 	}
+	passes := map[string]bool{}
+	for _, e := range result.Events {
+		if e.Outcome != "inconclusive" {
+			result.ConclusiveEvents++
+		}
+		if e.Outcome == "pass" {
+			passes[e.Kind] = true
+		}
+	}
+	if len(result.Events) > 0 {
+		result.ConclusiveEventPercent = 100 * float64(result.ConclusiveEvents) / float64(len(result.Events))
+	}
+	if len(result.Events) == 0 || result.ConclusiveEvents*100 < len(result.Events)*95 {
+		inconclusive(fmt.Sprintf("conclusive event coverage %.3f%% is below 95%%", result.ConclusiveEventPercent))
+	}
+	for _, kind := range []string{"move", "drain", "kill"} {
+		if !passes[kind] {
+			inconclusive("no conclusive " + kind + " pass")
+		}
+	}
 	if result.Saturation.Outcome != "pass" {
 		inconclusive(fmt.Sprintf("generator saturation %.3f%% exceeds 1%% run budget", result.Saturation.Percent))
 	}
 	if len(r.Events) != len(c.Events) {
 		inconclusive("chaos schedule incomplete")
 	}
-	addMemory := func(name string, pid int, samples []capacity.MemorySample, worker bool, heap bool) {
+	addMemory := func(name string, pid int, samples []capacity.MemorySample, worker bool, heap bool, observedSeconds float64) {
 		metrics := []string{"rss"}
 		if heap {
 			metrics = append(metrics, "heap-in-use")
 		}
 		for _, metric := range metrics {
 			v := judgeMemory(name, pid, metric, samples, r.StartedAt, r.Duration, worker)
+			if worker && observedSeconds >= (10*time.Minute).Seconds() {
+				v.LongLived = true
+			}
 			result.Memory = append(result.Memory, v)
 			if v.Outcome == "fail" {
 				fail(fmt.Sprintf("%s pid=%d %s projects %.0f bytes/hour above %.0f", name, pid, metric, v.ProjectedHourBytes, v.LimitBytes))
-			}
-			// Short chaos incarnations are explicitly unjudged by policy. Long-lived
-			// roles with missing data cannot establish flat memory.
-			if v.Outcome == "insufficient-data" && !worker {
-				inconclusive(name + " " + metric + ": " + v.Reason)
 			}
 		}
 	}
 	for _, p := range r.Telemetry.Processes {
 		worker := strings.HasPrefix(p.Name, "worker-")
-		addMemory(p.Name, p.PID, p.Memory, worker, p.Name != "store")
+		addMemory(p.Name, p.PID, p.Memory, worker, p.Name != "store", p.ObservedSeconds)
 		if worker && p.Peaks["relais_worker_active_sessions"] > float64(c.WorkerFloor) {
 			fail(p.Name + " exceeded measured worker floor")
 		}
@@ -398,7 +453,7 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 		for _, s := range p.Samples {
 			samples = append(samples, capacity.MemorySample{At: s.At, RSSBytes: s.RSSBytes, HeapInUseBytes: s.HeapInUseBytes})
 		}
-		addMemory("caller", p.PID, samples, true, true)
+		addMemory("caller", p.PID, samples, true, true, 0)
 		for _, m := range p.Calls {
 			if m.Call == nil {
 				continue
@@ -433,7 +488,39 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 	if confirmedServiceFailure(r) {
 		fail("independently confirmed service failure")
 	}
+	result.judgeAcceptance()
 	return result
+}
+
+func (r *soakReport) judgeAcceptance() {
+	r.Acceptance = false
+	r.AcceptanceReasons = nil
+	if !r.FullScale {
+		r.AcceptanceReasons = append(r.AcceptanceReasons, "requires at least 50 concurrent calls for at least one hour")
+	}
+	if r.Outcome != "pass" {
+		r.AcceptanceReasons = append(r.AcceptanceReasons, "run outcome is "+r.Outcome)
+	}
+	if len(r.Memory) == 0 {
+		r.AcceptanceReasons = append(r.AcceptanceReasons, "no process memory verdicts")
+	}
+	roles := map[string]bool{}
+	for _, m := range r.Memory {
+		role := m.Name
+		if strings.HasPrefix(role, "worker-") {
+			role = "worker"
+		}
+		roles[role] = true
+		if m.LongLived && m.Outcome != "pass" {
+			r.AcceptanceReasons = append(r.AcceptanceReasons, fmt.Sprintf("%s pid=%d %s: %s", m.Name, m.PID, m.Metric, m.Outcome))
+		}
+	}
+	for _, role := range []string{"relay", "control", "store", "caller", "worker"} {
+		if !roles[role] {
+			r.AcceptanceReasons = append(r.AcceptanceReasons, "missing "+role+" memory verdicts")
+		}
+	}
+	r.Acceptance = len(r.AcceptanceReasons) == 0
 }
 
 // Each service incarnation gets one monitor. No counters or memory trends
@@ -745,14 +832,9 @@ func runSoak(ctx context.Context, m *clusterprocess.Manager, c config, root stri
 			result.Outcome = "inconclusive"
 		}
 	}
+	result.judgeAcceptance() // execute errors can change the final outcome.
 	printReport(report)
-	for _, e := range result.Events {
-		fmt.Printf("soak event=%d outcome=%s saturated-window=%t\n", e.Index, e.Outcome, e.Saturated)
-	}
-	fmt.Printf("soak outcome=%s saturation=%.3f%% report=%s\n", result.Outcome, result.Saturation.Percent, c.Output)
-	for _, cause := range result.Causes {
-		fmt.Println("soak cause:", cause)
-	}
+	printSoakVerdict(result, c.Output)
 	writeErr := writeJSON(c.Output, result)
 	if result.Outcome != "pass" {
 		return errors.Join(runErr, writeErr, errors.New("soak did not pass; see report"))
@@ -944,4 +1026,21 @@ func observeSoakKey(ctx context.Context, client *redis.Client, prefix, key strin
 		}
 	}
 	return k, nil
+}
+
+func printSoakVerdict(r soakReport, output string) {
+	for _, e := range r.Events {
+		fmt.Printf("soak event=%d kind=%s outcome=%s saturated-window=%t\n", e.Index, e.Kind, e.Outcome, e.Saturated)
+		for _, cause := range e.Causes {
+			fmt.Printf("soak event=%d cause=%s\n", e.Index, cause)
+		}
+	}
+	fmt.Printf("soak outcome=%s saturation=%.3f%% conclusive-events=%d/%d (%.3f%%) report=%s\n", r.Outcome, r.Saturation.Percent, r.ConclusiveEvents, len(r.Events), r.ConclusiveEventPercent, output)
+	for _, cause := range r.Causes {
+		fmt.Println("soak cause:", cause)
+	}
+	fmt.Printf("soak acceptance=%t\n", r.Acceptance)
+	for _, reason := range r.AcceptanceReasons {
+		fmt.Println("soak acceptance reason:", reason)
+	}
 }

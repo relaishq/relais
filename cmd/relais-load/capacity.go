@@ -67,7 +67,7 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 	return judgeCapacityExcept(kind, r, opsBudget, bytesBudget, nil)
 }
 
-// excluded is used only by soak for event windows with saturated generators.
+// excluded is used only by soak for individually inconclusive event windows.
 func judgeCapacityExcept(kind string, r loadgen.RunReport, opsBudget, bytesBudget float64, excluded map[int]bool) capacityStep {
 	s := capacityStep{Kind: kind, Run: r, Verdict: "pass", StoreBytesByClient: map[string]float64{}}
 	inconclusive := func(reason string) {
@@ -84,6 +84,9 @@ func judgeCapacityExcept(kind string, r loadgen.RunReport, opsBudget, bytesBudge
 		inconclusive("no event threshold rows")
 	}
 	for _, row := range r.Yardstick {
+		if excluded[row.EventIndex] {
+			continue
+		}
 		if row.Outcome == "fail" {
 			fail(row.Scenario + " " + row.Metric)
 		} else if row.Outcome != "pass" {
@@ -175,9 +178,6 @@ func judgeCapacityExcept(kind string, r loadgen.RunReport, opsBudget, bytesBudge
 	}
 	expectedTakeovers := 0
 	for i, event := range r.Events {
-		if excluded[i] {
-			inconclusive(event.Event.Kind + " event window overlaps generator saturation")
-		}
 		if event.Failed && !excluded[i] {
 			fail(event.Event.Kind + " confirmed service failure")
 		}

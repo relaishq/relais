@@ -1,5 +1,46 @@
 # Soak implementation and local evidence (#41)
 
+## Hosted report rejudged after rework 2
+
+The orchestrator published commit `8ac0040` and supplied downloaded artifacts
+for [run 38152777929](https://github.com/relaishq/relais/actions/runs/38152777929):
+eight calls, ten minutes, seed 41, Linux namespace topology on ubuntu-latest.
+No new hosted run was dispatched during rework 2.
+
+The new policy is implemented with an **exact 95%** threshold. This artifact
+has **18/19 conclusive events = 94.737%**, so it remains **inconclusive** with
+`acceptance=false`. Its only run-level cause is now insufficient event
+coverage. This conflicts with the rework brief's expected `pass`: rounding
+coverage to a whole percent would give 95%, but that is a different policy.
+The orchestrator has been asked to choose; no rounding was silently added.
+
+Event 5 (zero-based, the kill at three minutes) remains individually
+inconclusive because its window overlaps generator saturation. Every other
+event passes. Every affected-call count matches the recorded count. All
+three kinds have conclusive passes. Saturation is exactly 6/600 seconds (1%),
+which is allowed. Bounded cleanup passes. Contrary to the brief's summary,
+the raw artifact has conclusive relay/control/Redis memory metrics; workers
+and callers have insufficient data. No short run establishes acceptance.
+
+| Rework 2 check | Status | Evidence / limit |
+| --- | --- | --- |
+| Formatting, vet, lint, build, workflow | VERIFIED | gofmt, diff whitespace, native/Linux vet, golangci-lint v2.14.0, make build and actionlint passed. |
+| Changed-package race tests | VERIFIED | relais-load (both changed Go files and tests) passed with memory storage and required throwaway Redis; Redis reaped. |
+| Outcome policy tests | VERIFIED | 19/20 conclusive passes; 10% inconclusive does not; absence of a conclusive kill does not; any failed event fails. |
+| Acceptance tests | VERIFIED | Short runs, failed outcomes and insufficient long-lived memory cannot establish acceptance. A full-scale fixture with conclusive memory can. Short runs can pass without memory evidence. |
+| Production guard mutations | VERIFIED | Five mutations reject weakened event coverage, per-kind coverage, acceptance scale, acceptance memory and acceptance outcome. Restored source passes. Prior twelve mutation logs retained. |
+| Hosted JSON rejudgment | PARTIAL | Raw events unchanged, 18/19 conclusive, outcome inconclusive under exact 95%, acceptance false. Expected pass needs a threshold/rounding decision. |
+| Nightly scale | VERIFIED | Dispatch default and scheduled fallback use six calls; ten-minute duration and 30 s interval unchanged. |
+| New six-call hosted nightly | NOT-RUN | Orchestrator owns publication and dispatch. |
+
+Rejudged artifacts are ignored local files:
+`bin/soak-linux-38152777929-rework2.json` and
+`bin/soak-verification/rework2-hosted-rejudge.log`. Runner metadata is copied
+from the measured Linux run, rather than the Mac doing the offline judgment.
+The JSON lists every event's kind, verdict and causes, exact conclusive count
+and percentage, per-metric memory requirements, and acceptance reasons.
+
+
 Rework 1 used one new macOS/arm64 loopback run on 2026-10-11, Go 1.26.9.
 The Mac was shared and possibly contended. No hosted or full-hour soak ran.
 

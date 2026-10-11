@@ -10,7 +10,7 @@ on:
         options: [calibration, capacity, both, soak]
       soak_callers:
         description: Concurrent soak calls
-        default: '8'
+        default: '6'
         type: string
       soak_duration:
         description: Soak media duration (Go duration)
@@ -196,7 +196,7 @@ jobs:
       - name: Run continuous calls with move, drain and SIGKILL
         timeout-minutes: 80
         env:
-          CALLS: ${{ inputs.soak_callers || '8' }}
+          CALLS: ${{ inputs.soak_callers || '6' }}
           DURATION: ${{ inputs.soak_duration || '10m' }}
           INTERVAL: ${{ inputs.chaos_interval || '30s' }}
           SEED: ${{ inputs.seed || '41' }}
