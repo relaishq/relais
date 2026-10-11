@@ -87,6 +87,7 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 	}
 	gaps := map[string][]time.Duration{}
 	excess := map[string][]time.Duration{}
+	generatorGapAmbiguity := false
 	for _, p := range r.Processes {
 		for _, c := range p.Calls {
 			if c.Call == nil {
@@ -103,12 +104,25 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 				}
 			}
 			for _, track := range report.Tracks {
+				outsideGap := func(end, gap time.Duration, description string) {
+					if !gapOutsideScheduledEvent(r.Events, c.Session, report, end, gap) {
+						return
+					}
+					// A stall in this call's generator can explain the amount
+					// above the 150ms ceiling even when interval p99 is valid.
+					if p.Lateness.Max >= gap-150*time.Millisecond {
+						generatorGapAmbiguity = true
+						inconclusive(fmt.Sprintf("%s %s: generator maximum send lateness %s can explain gap excess %s", track.Kind, description, p.Lateness.Max, gap-150*time.Millisecond))
+						return
+					}
+					fail(track.Kind + " " + description + " outside scheduled events exceeds 150ms")
+				}
 				if gapOutsideScheduledEvent(r.Events, c.Session, report, track.MediaGapEndedAt, track.MediaGap) {
-					fail(track.Kind + " whole-call media gap outside scheduled events exceeds 150ms")
+					outsideGap(track.MediaGapEndedAt, track.MediaGap, "whole-call media gap")
 				}
 				for i := 1; i < len(track.Arrivals); i++ {
 					if gapOutsideScheduledEvent(r.Events, c.Session, report, track.Arrivals[i], track.Arrivals[i]-track.Arrivals[i-1]) {
-						fail(track.Kind + " observed media gap outside scheduled events exceeds 150ms")
+						outsideGap(track.Arrivals[i], track.Arrivals[i]-track.Arrivals[i-1], "observed media gap")
 						break
 					}
 				}
@@ -218,16 +232,22 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 			s.DrainSeconds = e.FinishedAt.Sub(e.At).Seconds()
 		}
 	}
-	// Saturation is authoritative even if another trusted metric failed.
-	if r.Outcome != "valid" && !confirmedServiceFailure(r) {
+	// Generator ambiguity cannot establish a service failure, except when
+	// independent evidence confirms a crash or a failed drain.
+	if (r.Outcome != "valid" || generatorGapAmbiguity) && !confirmedServiceFailure(r) {
 		s.Verdict = "inconclusive"
 	}
 	return s
 }
 
-// A partial drain is known failure even when it leaves event evidence
-// incomplete. That exception requires complete, unsaturated caller processes.
+// A crash is independently confirmed even with an invalid generator. A
+// partial drain requires complete, unsaturated callers to establish failure.
 func confirmedServiceFailure(r loadgen.RunReport) bool {
+	for _, p := range r.Telemetry.Processes {
+		if p.UnexpectedExit {
+			return true
+		}
+	}
 	failed := false
 	for _, event := range r.Events {
 		failed = failed || event.Failed
@@ -265,7 +285,13 @@ func gapOutsideScheduledEvent(events []loadgen.EventResult, session string, repo
 				continue
 			}
 			start := move.Start - 150*time.Millisecond
-			finish := max(move.End, move.Measurement.MediaResumedAt) + 150*time.Millisecond
+			finish := max(move.End, move.Measurement.MediaResumedAt)
+			if move.Kind == "takeover" {
+				// MediaResumedAt is the earliest track. Allow later tracks
+				// the takeover row's 2s bound; their gaps are judged above.
+				finish = max(finish, move.Start+2*time.Second)
+			}
+			finish += 150 * time.Millisecond
 			if end-gap >= start && end <= finish {
 				return false
 			}
@@ -281,7 +307,7 @@ func recordCapacityStep(dir, output string, result *capacityReport, step capacit
 				continue
 			}
 			step.Causes = append(step.Causes, fmt.Sprintf("%s observed %d calls exceeds proven worker lower bound %d", worker, peak, result.WorkerCapacityLowerBound))
-			if step.Kind == "relay" || (step.Run.Outcome != "valid" && !confirmedServiceFailure(step.Run)) {
+			if (step.Kind == "relay" || step.Run.Outcome != "valid") && !confirmedServiceFailure(step.Run) {
 				step.Verdict = "inconclusive"
 			} else {
 				step.Verdict = "fail"

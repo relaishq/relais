@@ -29,12 +29,19 @@ func readMetrics(t *testing.T, handler http.Handler) map[string]float64 {
 	families, err := parser.TextToMetricFamilies(r.Body)
 	require.NoError(t, err)
 	values := make(map[string]float64)
+	allowedLabels := map[string][]string{
+		"relais_store_commands_total":  {"store"},
+		"relais_transport_bytes_total": {"transport", "client", "direction"},
+	}
 	for name, family := range families {
 		for _, metric := range family.Metric {
 			key := name
 			for _, label := range metric.Label {
-				require.True(t, strings.HasPrefix(name, "relais_checkpoint_"))
-				require.Contains(t, []string{"result", "policy"}, label.GetName(), "no caller or session labels")
+				allowed := allowedLabels[name]
+				if strings.HasPrefix(name, "relais_checkpoint_") {
+					allowed = []string{"result", "policy"}
+				}
+				require.Contains(t, allowed, label.GetName(), "%s: no caller or session labels", name)
 				key += "{" + label.GetName() + "=" + strconv.Quote(label.GetValue()) + "}"
 			}
 			switch {

@@ -44,9 +44,11 @@ Use at most four callers per generator process. The main hosted calibration
 on run 38133371237 proved four and first saturated at eight per process with
 GOMAXPROCS=1. Capacity defaults to two, to leave more pacing margin on a shared
 runner. Reports preserve each process's exact caller count, CPU, lateness,
-skips and causes. A single saturated interval makes the whole step
-inconclusive, including all service claims for that step. The #41 soak policy
-proposal does not change this rule.
+skips and causes. The cause label `interval send-lateness p99 peak` denotes
+the largest one-second-interval p99, not the whole-step p99. A single saturated
+interval makes capacity evidence inconclusive. An independently confirmed
+service crash still fails, with the generator cause retained. The #41 soak
+policy proposal does not change the generator limits.
 
 ## Demonstrated load floor and acceptance
 
@@ -75,12 +77,18 @@ first-new-content and freshness retain the existing harness verdicts. These
 short LAN samples do not establish region/far-caller guarantees, sustained
 capacity, or the full 60-second consent observation.
 
-A non-retired service exit is a step error, including the child process error.
+A non-retired service exit fails the step, including the child process error,
+even when the generator is invalid.
 Control-plane takeover counter delta must equal the number of calls affected
 by scheduled kills: zero in every other step. A whole-call or retained arrival
 gap above 150 ms fails outside the affected call's matched scheduled event.
-The allowed gap window brackets that event's API/resume interval, with up to
-150 ms for its bounding packets. Another call's event cannot excuse the gap.
+If that call's generator process has maximum send lateness at least as large
+as the gap's excess above 150 ms, the step is inconclusive: a caller stall
+can explain the excess even when interval p99 passes. A confirmed service
+crash remains a failure. The allowed gap window brackets the event's API/resume
+interval. Takeovers allow later tracks to recover within the row's two-second
+bound, rather than ending at the earliest track's resume. Both allow up to
+150 ms for bounding packets. Another call's event cannot excuse the gap.
 
 `worker_peak_calls` retains each sampled worker-session peak. A survivor
 above C blocks approval even when its caller rows pass. The post-kill move
@@ -96,7 +104,7 @@ Capacity and calibration pass **no buffer flag** to the relay. Both measure
 the standalone product default. The report records `relay_buffer_enabled`
 from `relais_relay_buffer_enabled`; missing setup evidence remains null. This
 is the running configuration, not an inference from whether a replay happened.
-Before #35 lands the product default is buffer-off; after #35 it is buffer-on.
+The standalone product default is buffer-on following #35.
 The old capacity-only override is removed. Buffer limits and recovery margins
 are set by the product, not by this load driver.
 
@@ -218,7 +226,7 @@ and all child logs are uploaded even on failure. Cleanup is checked before
 upload. Checkout does not retain credentials.
 
 ```sh
-gh workflow run load-calibration.yml --repo relaishq/relais --ref feat/40-capacity \
+gh workflow run load-calibration.yml --repo relaishq/relais --ref main \
   -f mode=capacity -f duration=30s -f capacity_max=16 -f callers_per_process=2
 ```
 

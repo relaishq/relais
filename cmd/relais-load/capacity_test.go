@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/relais/internal/capacity"
 	"github.com/relais/internal/loadgen"
 	"github.com/relais/pkg/callharness"
@@ -82,6 +83,55 @@ func TestCapacityRejectsWholeCallGapAwayFromScheduledEvents(t *testing.T) {
 	require.Equal(t, "fail", judgeCapacity("worker", r, 100, 128<<10).Verdict)
 }
 
+func TestCapacityCallerStallMakesOutsideEventGapInconclusive(t *testing.T) {
+	for _, arrivals := range []bool{false, true} {
+		for _, tc := range []struct {
+			name     string
+			lateness time.Duration
+			want     string
+		}{
+			{"below excess", 249 * time.Millisecond, "fail"},
+			{"equal excess", 250 * time.Millisecond, "inconclusive"},
+			{"above excess", 400 * time.Millisecond, "inconclusive"},
+		} {
+			t.Run(fmt.Sprintf("%s/arrivals=%t", tc.name, arrivals), func(t *testing.T) {
+				r := capacityFixture()
+				r.Processes[0].Lateness.Max = tc.lateness
+				track := callharness.TrackReport{Kind: "audio", MediaGap: 400 * time.Millisecond, MediaGapEndedAt: 15 * time.Second}
+				if arrivals {
+					track.MediaGap = 0
+					track.Arrivals = []time.Duration{14600 * time.Millisecond, 15 * time.Second}
+				}
+				r.Processes[0].Calls[0].Call.Tracks = []callharness.TrackReport{track}
+				// A different process's stall cannot explain this call's gap.
+				r.Processes = append(r.Processes, loadgen.ProcessReport{Lateness: loadgen.Lateness{Max: time.Second}})
+				step := judgeCapacity("worker", r, 100, 128<<10)
+				require.Equal(t, tc.want, step.Verdict)
+				if tc.want == "inconclusive" {
+					require.Contains(t, strings.Join(step.Causes, ";"), "generator maximum send lateness")
+				}
+			})
+		}
+	}
+}
+
+func TestCapacityTakeoverAllowsLaterVideoWithinTakeoverBound(t *testing.T) {
+	at := time.Now()
+	r := capacityFixture()
+	r.Events = []loadgen.EventResult{{Event: loadgen.Event{Kind: "kill", Worker: 0}, At: at.Add(6 * time.Second), Sessions: []string{"affected"}, Affected: 1}}
+	r.Telemetry.Processes[1].Last["relais_control_takeovers_total"] = 1
+	r.Processes[0].Calls[0] = loadgen.Message{Session: "affected", Call: &callharness.Report{
+		StartedAt: at,
+		Moves: []callharness.MoveReport{{Kind: "takeover", From: 0, Start: 6 * time.Second, End: 6200 * time.Millisecond,
+			Measurement: callharness.EventMeasurement{MediaResumedAt: 6150 * time.Millisecond},
+			Tracks:      []callharness.MoveTrackReport{{Kind: "video", Gap: 800 * time.Millisecond, PacketsAfter: 20}}}},
+		Tracks: []callharness.TrackReport{{Kind: "video", MediaGap: 800 * time.Millisecond, MediaGapEndedAt: 6900 * time.Millisecond}},
+	}}
+	require.Equal(t, "pass", judgeCapacity("n-plus-one", r, 100, 128<<10).Verdict)
+	r.Processes[0].Calls[0].Call.Tracks[0].MediaGapEndedAt = 9 * time.Second
+	require.Equal(t, "fail", judgeCapacity("n-plus-one", r, 100, 128<<10).Verdict)
+}
+
 func TestCapacityTakeoverCountMatchesScheduledAffectedCalls(t *testing.T) {
 	r := capacityFixture()
 	r.Events = []loadgen.EventResult{{Event: loadgen.Event{Kind: "kill"}, Affected: 2}}
@@ -116,6 +166,25 @@ func TestCapacityUnexpectedExitIsKnownFailure(t *testing.T) {
 	step := judgeCapacity("worker", r, 100, 128<<10)
 	require.Equal(t, "fail", step.Verdict)
 	require.Contains(t, strings.Join(step.Causes, ";"), "exit status 2")
+}
+
+func TestCapacityUnexpectedExitFailsWithInvalidGenerator(t *testing.T) {
+	r := capacityFixture()
+	r.Outcome = "inconclusive"
+	r.Causes = []string{"saturated interval"}
+	r.Processes[0].Saturated = true
+	r.Telemetry.Processes[0].UnexpectedExit = true
+	r.Telemetry.Processes[0].Errors = []string{"process exited with status 2"}
+	r.Telemetry.Errors = []string{"process exited"}
+	step := judgeCapacity("relay", r, 100, 128<<10)
+	require.Equal(t, "fail", step.Verdict)
+	require.Contains(t, strings.Join(step.Causes, ";"), "generator invalid: saturated interval")
+	// A relay placement override also must not hide a confirmed crash.
+	step.Run.WorkerPeaks = map[string]int{"worker-0": 9}
+	dir := t.TempDir()
+	step, err := recordCapacityStep(dir, filepath.Join(dir, "top.json"), &capacityReport{WorkerCapacityLowerBound: 8}, step)
+	require.NoError(t, err)
+	require.Equal(t, "fail", step.Verdict)
 }
 
 func TestPeakOverrideIsWrittenToBothReportsIncludingDrain(t *testing.T) {
