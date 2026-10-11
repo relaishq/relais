@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/prometheus/common/expfmt"
+	"github.com/relais/internal/processrss"
 )
 
 type Target struct {
@@ -26,7 +27,14 @@ type Target struct {
 	Done                     <-chan struct{}
 	Err                      func() error
 }
+type MemorySample struct {
+	At             time.Time `json:"at"`
+	RSSBytes       uint64    `json:"rss_bytes"`
+	HeapInUseBytes uint64    `json:"heap_in_use_bytes,omitempty"`
+}
+
 type Process struct {
+	Memory                  []MemorySample     `json:"memory_samples,omitempty"`
 	Name                    string             `json:"name"`
 	PID                     int                `json:"pid"`
 	Samples                 int                `json:"samples"`
@@ -57,6 +65,7 @@ type Telemetry struct {
 	Errors        []string  `json:"errors,omitempty"`
 }
 type Monitor struct {
+	memory  bool
 	targets []Target
 	data    Telemetry
 	cancel  context.CancelFunc
@@ -68,8 +77,17 @@ type Monitor struct {
 }
 
 func Start(ctx context.Context, targets []Target, every time.Duration) *Monitor {
+	return start(ctx, targets, every, false)
+}
+
+// StartSoak retains current RSS and Go heap-in-use samples for regression.
+func StartSoak(ctx context.Context, targets []Target, every time.Duration) *Monitor {
+	return start(ctx, targets, every, true)
+}
+
+func start(ctx context.Context, targets []Target, every time.Duration, memory bool) *Monitor {
 	ctx, cancel := context.WithCancel(ctx)
-	m := &Monitor{retired: make([]atomic.Bool, len(targets)), targets: targets, cancel: cancel, done: make(chan struct{}), client: &http.Client{Timeout: 500 * time.Millisecond}}
+	m := &Monitor{memory: memory, retired: make([]atomic.Bool, len(targets)), targets: targets, cancel: cancel, done: make(chan struct{}), client: &http.Client{Timeout: 500 * time.Millisecond}}
 	for _, t := range targets {
 		var client *redis.Client
 		if t.RedisAddr != "" {
@@ -150,6 +168,14 @@ func (m *Monitor) sample(ctx context.Context) {
 			default:
 			}
 			now := time.Now()
+			if m.memory {
+				current, rssErr := processrss.Current(t.PID)
+				if rssErr != nil {
+					p.Errors = append(p.Errors, "current RSS: "+rssErr.Error())
+				} else {
+					p.Memory = append(p.Memory, MemorySample{At: now, RSSBytes: current, HeapInUseBytes: uint64(values["relais_process_heap_in_use_bytes"])})
+				}
+			}
 			if p.Samples > 0 {
 				dt := now.Sub(p.at).Seconds()
 				if cpu < p.cpu {

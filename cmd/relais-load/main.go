@@ -27,6 +27,10 @@ import (
 )
 
 type config struct {
+	Soak                                          bool
+	ChaosInterval                                 time.Duration
+	Seed                                          int64
+	WorkerFloor, RelayFloor                       int
 	Callers, Processes, Workers, GOMAXPROCS       int
 	Duration, SampleEvery                         time.Duration
 	Bin, Output                                   string
@@ -88,6 +92,17 @@ func (c config) validate() error {
 	}
 	if c.Capacity && (c.Calibrate || len(c.Events) > 0 || c.CapacityStart < 1 || c.CapacityMax < c.CapacityStart || c.CapacityMax > 1024 || c.CallersPerProcess < 1 || c.CallersPerProcess > 4 || c.Workers < 3 || c.Workers > 16 || c.Duration < 20*time.Second || c.Duration > 3*time.Minute || !(c.StoreOpsBudget > 0 && c.StoreOpsBudget <= 100) || !(c.StoreBytesBudget > 0 && c.StoreBytesBudget <= 128<<10)) {
 		return errors.New("capacity needs 3..16 workers, 20s..3m duration, 1..4 callers/process, budgets in (0,100 commands] and (0,128 KiB], 1 <= start <= max <= 1024 and no custom events/calibration")
+	}
+	if c.Soak {
+		if c.Capacity || c.Calibrate || c.Workers < 3 || c.Workers > 16 || c.Duration < 20*time.Second || c.Duration > 24*time.Hour || c.ChaosInterval < 20*time.Second || c.ChaosInterval+7*time.Second >= c.Duration || c.SampleEvery != time.Second || c.CallersPerProcess < 1 || c.CallersPerProcess > 4 || c.Limits != loadgen.DefaultLimits() || c.Callers > plannedLoad(c.Workers, c.WorkerFloor, c.RelayFloor) || c.Callers < 2 {
+			return errors.New("soak needs 2..N+1 callers within explicit measured worker/relay floors, 3..16 workers, 20s..24h duration, >=20s interval and recovery tail, 1s samples, unchanged limits, 1..4 callers/process and no capacity/calibration")
+		}
+		for _, n := range counts(c.Callers, c.Processes) {
+			if n > c.CallersPerProcess {
+				return errors.New("soak processes exceed callers-per-process budget")
+			}
+		}
+		return nil
 	}
 	var previous time.Duration
 	killed := map[int]bool{}
@@ -275,6 +290,9 @@ func runEvent(ctx context.Context, t *topology, generators []generator, e loadge
 		if result.Affected == 0 {
 			err = errors.New("kill selected worker with no calls")
 		} else {
+			if t.Soak != nil {
+				t.Soak.retire(fmt.Sprintf("worker-%d", e.Worker))
+			}
 			result.At = time.Now()
 			err = t.kill(e.Worker)
 			if err == nil {
@@ -354,7 +372,11 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 			f, err := os.Open(g.output)
 			p := loadgen.ProcessReport{PID: g.child.PID(), ExpectedCalls: g.count}
 			if err == nil {
-				p, err = loadgen.ReadProcess(f, g.child.PID(), g.count, c.Limits)
+				if c.Soak {
+					p, err = loadgen.ReadSoakProcess(f, g.child.PID(), g.count, c.Limits)
+				} else {
+					p, err = loadgen.ReadProcess(f, g.child.PID(), g.count, c.Limits)
+				}
 				_ = f.Close()
 			}
 			if err = errors.Join(err, g.child.Err()); err != nil {
@@ -370,7 +392,7 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 		env := serviceEnv("", "", "")
 		env = append(withoutEnv(env, "GOMAXPROCS"), "GOMAXPROCS="+strconv.Itoa(c.GOMAXPROCS))
 		args := append([]string{executable}, callerNetworkArgs(t.Network)...)
-		args = append(args, "-place-on-worker="+strconv.FormatBool(c.PlaceOnWorker), "-child", "-parent-pid", strconv.Itoa(os.Getpid()), "-callers", strconv.Itoa(n), "-duration", c.Duration.String(), "-sample-every", c.SampleEvery.String(), "-video="+strconv.FormatBool(c.Video), "-signaling", t.External.SignalingURL, "-relay", t.External.RelayAddr.String(), "-output", output)
+		args = append(args, "-soak="+strconv.FormatBool(c.Soak), "-place-on-worker="+strconv.FormatBool(c.PlaceOnWorker), "-child", "-parent-pid", strconv.Itoa(os.Getpid()), "-callers", strconv.Itoa(n), "-duration", c.Duration.String(), "-sample-every", c.SampleEvery.String(), "-video="+strconv.FormatBool(c.Video), "-signaling", t.External.SignalingURL, "-relay", t.External.RelayAddr.String(), "-output", output)
 		child, err := m.Start(dir, name, env, args...)
 		if err != nil {
 			return report, err
@@ -398,6 +420,10 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 	if err := waitUntil(ctx, report.StartedAt); err != nil {
 		return report, err
 	}
+	if c.Soak {
+		t.Soak = startSoakExecution(ctx, t, c.SampleEvery)
+		defer func() { report.Telemetry = t.Soak.finish(c.Callers, c.Duration) }()
+	}
 	var monitor *capacity.Monitor
 	if c.Capacity {
 		monitor = capacity.Start(ctx, t.Targets, c.SampleEvery)
@@ -412,7 +438,24 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 		if err := waitUntil(ctx, report.StartedAt.Add(e.After)); err != nil {
 			return report, err
 		}
-		report.Events = append(report.Events, runEvent(ctx, t, generators, e))
+		if c.Soak {
+			resolved, err := resolveSoakEvent(ctx, t, e, c.WorkerFloor)
+			if err != nil {
+				return report, err
+			}
+			result := runEvent(ctx, t, generators, resolved)
+			report.Events = append(report.Events, result)
+			if result.Error != "" {
+				return report, errors.New(result.Error)
+			}
+			if resolved.Kind == "kill" || resolved.Kind == "drain" {
+				if err := t.recycle(ctx, resolved.Worker); err != nil {
+					return report, err
+				}
+			}
+		} else {
+			report.Events = append(report.Events, runEvent(ctx, t, generators, e))
+		}
 	}
 	if c.Capacity {
 		if err := waitUntil(ctx, report.StartedAt.Add(c.Duration)); err != nil {
@@ -433,6 +476,10 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 		case <-ctx.Done():
 			return report, ctx.Err()
 		}
+	}
+	if c.Soak {
+		report.Telemetry = t.Soak.finish(c.Callers, c.Duration)
+		report.Leaks = t.checkSoakLeaks(generators)
 	}
 	return report, nil
 }
@@ -490,6 +537,11 @@ func run() error {
 	fs.StringVar(&c.Bin, "bin", "bin", "service binaries and run logs directory")
 	fs.StringVar(&c.Output, "output", "", "report JSON path; defaults to run directory")
 	fs.BoolVar(&c.Video, "video", true, "send harness audio plus video with bounded online decode sampling")
+	fs.BoolVar(&c.Soak, "soak", false, "continuous calls with seeded moves, drains and restarted SIGKILL workers")
+	fs.DurationVar(&c.ChaosInterval, "chaos-interval", 30*time.Second, "time between soak events")
+	fs.Int64Var(&c.Seed, "seed", 41, "reproducible soak schedule seed")
+	fs.IntVar(&c.WorkerFloor, "worker-floor", 8, "measured per-worker call floor; supply matching capacity evidence")
+	fs.IntVar(&c.RelayFloor, "relay-floor", 8, "measured relay call floor; supply matching capacity evidence")
 	fs.BoolVar(&c.Capacity, "capacity", false, "bounded service ramps followed by derived N+1 kill/move and drain")
 	fs.StringVar(&c.Topology, "topology", "loopback", "loopback or Linux netns (unshaped LAN)")
 	fs.IntVar(&c.CapacityStart, "capacity-start", 2, "first concurrent-call step")
@@ -519,9 +571,18 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		return loadgen.RunChild(ctx, loadgen.ChildOptions{PlaceOnWorker: c.PlaceOnWorker, Topology: external, Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output, ParentPID: *parentPID})
+		return loadgen.RunChild(ctx, loadgen.ChildOptions{PlaceOnWorker: c.PlaceOnWorker, Topology: external, Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output, ParentPID: *parentPID, Soak: c.Soak})
 	}
 	c.Events = []loadgen.Event(events)
+	if c.Soak {
+		if len(c.Events) > 0 {
+			return errors.New("soak generates its own seeded schedule; custom events are forbidden")
+		}
+		if !flagWasSet(fs, "processes") {
+			c.Processes = (c.Callers + c.CallersPerProcess - 1) / c.CallersPerProcess
+		}
+		c.Events = soakSchedule(c.Duration, c.ChaosInterval, c.Seed, c.Workers)
+	}
 	if err := c.validate(); err != nil {
 		return err
 	}
@@ -552,6 +613,9 @@ func run() error {
 	m := &clusterprocess.Manager{}
 	ctx, stop := m.Context()
 	defer stop()
+	if c.Soak {
+		return runSoak(ctx, m, c, root)
+	}
 	if c.Capacity {
 		return runCapacity(ctx, m, c, root)
 	}
@@ -631,4 +695,14 @@ func withoutEnv(env []string, name string) []string {
 		}
 	}
 	return out
+}
+
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }

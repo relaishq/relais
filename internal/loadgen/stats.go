@@ -3,7 +3,9 @@ package loadgen
 
 import (
 	"fmt"
+	"github.com/relais/internal/processrss"
 	"math"
+	"os"
 	"runtime"
 	"runtime/metrics"
 	"sync"
@@ -131,6 +133,8 @@ func (l Limits) Validate() error {
 }
 
 type Stats struct {
+	RSSBytes                uint64        `json:"rss_bytes,omitempty"`
+	HeapInUseBytes          uint64        `json:"heap_in_use_bytes,omitempty"`
 	At                      time.Time     `json:"at"`
 	Interval                time.Duration `json:"interval_ns"`
 	CPUPercent              float64       `json:"cpu_percent_one_core"`
@@ -148,8 +152,9 @@ type Stats struct {
 	StatusRequestsPerSecond float64       `json:"status_requests_per_second"`
 }
 type Sampler struct {
-	at  time.Time
-	cpu time.Duration
+	CurrentMemory bool
+	at            time.Time
+	cpu           time.Duration
 }
 
 func cpuUsage() (time.Duration, uint64, error) {
@@ -180,6 +185,15 @@ func (s *Sampler) Sample(m *Meter) (Stats, error) {
 	sample := m.sample()
 	pct := 100 * float64(cpu-s.cpu) / float64(elapsed)
 	out := Stats{At: now, Interval: elapsed, CPUPercent: pct, CPUPerGOMAXPROCS: pct / float64(runtime.GOMAXPROCS(0)), GOMAXPROCS: runtime.GOMAXPROCS(0), HeapBytes: samples[0].Value.Uint64(), RuntimeBytes: samples[1].Value.Uint64(), PeakRSSBytes: rss, Lateness: sample.all, IntervalLateness: sample.interval, Pacing: sample.pacing, IntervalPacing: sample.intervalPacing, StatusRequests: sample.requests, IntervalStatusRequests: sample.intervalRequests, StatusRequestsPerSecond: float64(sample.intervalRequests) / elapsed.Seconds()}
+	if s.CurrentMemory {
+		var heap runtime.MemStats
+		runtime.ReadMemStats(&heap)
+		out.HeapInUseBytes = heap.HeapInuse
+		out.RSSBytes, err = processrss.Current(os.Getpid())
+		if err != nil {
+			return Stats{}, err
+		}
+	}
 	s.at, s.cpu = now, cpu
 	return out, nil
 }

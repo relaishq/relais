@@ -60,6 +60,29 @@ func (p *Plane) ProcessHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", metrics.ProcessHandler(p.metricSamples, metrics.CheckpointCollectors()...))
 	mux.Handle("/", p.Handler())
+	// Recycle only the original registered process endpoint after death and
+	// complete recovery. Replace retains its lease and race guards. This is
+	// needed after a drain, whose registration intentionally stays draining.
+	mux.HandleFunc("POST /private/workers/{name}/replace", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		p.mu.Lock()
+		old := p.workers[name]
+		var worker Worker
+		var address netip.AddrPort
+		if old != nil {
+			worker, address = old.worker, old.addr
+		}
+		p.mu.Unlock()
+		if old == nil {
+			http.Error(w, "unknown worker", http.StatusNotFound)
+			return
+		}
+		if err := p.Replace(name, address, worker); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		privateapi.Write(w, struct{}{})
+	})
 	mux.HandleFunc("POST /private/workers/{name}/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		var req HeartbeatRequest
 		if !privateapi.Read(w, r, &req) {

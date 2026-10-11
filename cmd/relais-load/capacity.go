@@ -64,6 +64,11 @@ type capacityReport struct {
 // additionally requires caller continuity, complete threshold rows, resource
 // evidence, and the stated store budget. A trusted failure remains visible.
 func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget float64) capacityStep {
+	return judgeCapacityExcept(kind, r, opsBudget, bytesBudget, nil)
+}
+
+// excluded is used only by soak for event windows with saturated generators.
+func judgeCapacityExcept(kind string, r loadgen.RunReport, opsBudget, bytesBudget float64, excluded map[int]bool) capacityStep {
 	s := capacityStep{Kind: kind, Run: r, Verdict: "pass", StoreBytesByClient: map[string]float64{}}
 	inconclusive := func(reason string) {
 		if s.Verdict != "fail" {
@@ -128,6 +133,15 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 				}
 			}
 			for _, move := range report.Moves {
+				skip := false
+				for i, e := range r.Events {
+					if excluded[i] && loadgen.MatchesEvent(e, report, move) {
+						skip = true
+					}
+				}
+				if skip {
+					continue
+				}
 				if move.Error != "" {
 					fail("move error: " + move.Error)
 				}
@@ -160,11 +174,14 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 		inconclusive("missing or incomplete service resource samples")
 	}
 	expectedTakeovers := 0
-	for _, event := range r.Events {
-		if event.Failed {
+	for i, event := range r.Events {
+		if excluded[i] {
+			inconclusive(event.Event.Kind + " event window overlaps generator saturation")
+		}
+		if event.Failed && !excluded[i] {
 			fail(event.Event.Kind + " confirmed service failure")
 		}
-		if event.Error != "" {
+		if event.Error != "" && !excluded[i] {
 			fail(event.Event.Kind + " event error: " + event.Error)
 		}
 		if event.Event.Kind == "kill" {

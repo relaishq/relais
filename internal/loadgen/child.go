@@ -18,6 +18,7 @@ import (
 )
 
 type ChildOptions struct {
+	Soak                  bool
 	Topology              callharness.ExternalTopology
 	Callers               int
 	Duration, SampleEvery time.Duration
@@ -196,7 +197,7 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	}
 	// Lifetime request totals include setup; interval rates start with media.
 	meter.sample()
-	sampler := &Sampler{}
+	sampler := &Sampler{CurrentMemory: o.Soak}
 	if err := sampler.Reset(); err != nil {
 		return err
 	}

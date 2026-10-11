@@ -138,3 +138,35 @@ func TestSlowListingDoesNotBlockHeartbeatAndRechecksPlacement(t *testing.T) {
 		})
 	}
 }
+
+// Process recycling must retain Replace's death, recovery and lease guards.
+func TestProcessReplacementAfterDrainRequiresSettledDeadWorker(t *testing.T) {
+	p, a, _, _ := setup(t)
+	server := httptest.NewServer(p.ProcessHandler())
+	defer server.Close()
+	replace := func() error {
+		return privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/private/workers/a/replace", nil, nil, nil)
+	}
+	require.Error(t, replace(), "a live registration cannot be reset")
+	p.mu.Lock()
+	p.workers["a"].draining = true
+	p.workers["a"].dead = true
+	p.workers["a"].recovering = true
+	p.mu.Unlock()
+	require.Error(t, replace(), "recovery must settle before clearing drain")
+	p.mu.Lock()
+	p.workers["a"].recovering = false
+	p.workers["a"].recovered = true
+	p.mu.Unlock()
+	lease, err := p.store.Claim(context.Background(), "replacement-guard", a.addr, time.Second)
+	require.NoError(t, err)
+	require.Error(t, replace(), "old leases prevent replacement")
+	require.NoError(t, p.store.Release(context.Background(), lease))
+	require.NoError(t, replace())
+	p.mu.Lock()
+	require.False(t, p.workers["a"].draining)
+	require.False(t, p.workers["a"].dead)
+	require.Equal(t, a.addr, p.workers["a"].addr)
+	p.mu.Unlock()
+	require.Error(t, replace(), "repeating replacement cannot reset a live registration")
+}

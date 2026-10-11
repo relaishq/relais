@@ -61,6 +61,15 @@ type ProcessReport struct {
 }
 
 func ReadProcess(r io.Reader, pid, expected int, limits Limits) (ProcessReport, error) {
+	return readProcess(r, pid, expected, limits, false)
+}
+
+// ReadSoakProcess retains all intervals; short-load reports remain bounded.
+func ReadSoakProcess(r io.Reader, pid, expected int, limits Limits) (ProcessReport, error) {
+	return readProcess(r, pid, expected, limits, true)
+}
+
+func readProcess(r io.Reader, pid, expected int, limits Limits, all bool) (ProcessReport, error) {
 	out := ProcessReport{PID: pid, ExpectedCalls: expected}
 	decoder := json.NewDecoder(r)
 	seen := map[int]bool{}
@@ -96,7 +105,7 @@ func ReadProcess(r io.Reader, pid, expected int, limits Limits) (ProcessReport, 
 				return out, fmt.Errorf("empty stats message")
 			}
 			s := *m.Stats
-			if len(out.Samples) == 256 {
+			if !all && len(out.Samples) == 256 {
 				copy(out.Samples, out.Samples[1:])
 				out.Samples = out.Samples[:255]
 				out.SamplesDropped++
@@ -131,7 +140,11 @@ func ReadProcess(r io.Reader, pid, expected int, limits Limits) (ProcessReport, 
 		out.StatusRequestsPerSecond = float64(statusRequests) / measured.Seconds()
 	}
 	peak := Stats{Lateness: out.Lateness, IntervalLateness: Lateness{P99: out.PeakIntervalP99}, IntervalPacing: peakPacing, CPUPerGOMAXPROCS: out.PeakCPUPerGOMAXPROCS}
-	out.Causes = append(out.Causes, limits.Causes(peak)...)
+	if !all {
+		out.Causes = append(out.Causes, limits.Causes(peak)...)
+	} else if out.Lateness.Packets == 0 {
+		out.Causes = append(out.Causes, "no successful media sends")
+	}
 	if !out.Complete || len(out.Calls) != expected || len(out.Samples) == 0 {
 		out.Complete = false
 		out.Causes = append(out.Causes, "missing terminal message, calls or resource samples")
@@ -156,7 +169,32 @@ type EventResult struct {
 	Failed     bool      `json:"failed,omitempty"`
 	Error      string    `json:"error,omitempty"`
 }
+
+// RetainedKey records the physical Redis TTL and, for the persistent relay
+// fencing hash, the logical lease expiry measured against Redis TIME.
+type RetainedKey struct {
+	Error            string `json:"error,omitempty"`
+	Key              string `json:"key"`
+	Class            string `json:"class"`
+	TTLMS            int64  `json:"ttl_ms"`
+	LimitMS          int64  `json:"limit_ms"`
+	LeaseRemainingMS *int64 `json:"lease_remaining_ms,omitempty"`
+	Released         bool   `json:"released,omitempty"`
+}
+type LeakReport struct {
+	Keys            []RetainedKey  `json:"keys"`
+	RelayWait       time.Duration  `json:"relay_wait"`
+	RelayObservedAt time.Time      `json:"relay_observed_at"`
+	Checked         bool           `json:"checked"`
+	Sessions        map[string]int `json:"sessions"`
+	StoreKeys       []string       `json:"store_keys"`
+	Processes       []int          `json:"processes"`
+	Listeners       []string       `json:"listeners"`
+	Errors          []string       `json:"errors,omitempty"`
+}
+
 type RunReport struct {
+	Leaks                         LeakReport         `json:"leaks,omitempty"`
 	Telemetry                     capacity.Telemetry `json:"telemetry"`
 	WorkerPeaks                   map[string]int     `json:"worker_peak_calls"`
 	StartedAt                     time.Time          `json:"started_at"`

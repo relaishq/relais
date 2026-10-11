@@ -1,0 +1,947 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math/rand"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/go-redis/redis/v8"
+	"github.com/relais/internal/capacity"
+	"github.com/relais/internal/clusterprocess"
+	"github.com/relais/internal/loadgen"
+	"github.com/relais/internal/relaylease"
+	"github.com/relais/pkg/controlplane"
+	"github.com/relais/pkg/mediaworker"
+	"github.com/relais/pkg/relay"
+)
+
+// Schedule workers are cyclic selection offsets into the occupied/live pool.
+// Resolving against ownership avoids no-op kills. Both the exact seeded plan
+// and the resolved action/session IDs are recorded; resolution is deterministic
+// for the same ownership state, and never consumes more random numbers.
+func soakSchedule(duration, interval time.Duration, seed int64, workers int) []loadgen.Event {
+	if interval <= 0 || workers <= 0 {
+		return nil
+	}
+	rng := rand.New(rand.NewSource(seed)) // Version-stable Go source, isolated from placement/random ports.
+	kinds := rng.Perm(3)
+	names := []string{"move", "drain", "kill"}
+	var events []loadgen.Event
+	for at, i := interval, 0; at+7*time.Second < duration; at, i = at+interval, i+1 {
+		events = append(events, loadgen.Event{After: at, Kind: names[kinds[i%3]], Worker: rng.Intn(workers), Count: 0})
+	}
+	return events
+}
+
+type memoryVerdict struct {
+	Name                string  `json:"name"`
+	PID                 int     `json:"pid"`
+	Metric              string  `json:"metric"`
+	Outcome             string  `json:"outcome"`
+	Samples             int     `json:"samples"`
+	RawSamples          int     `json:"raw_samples"`
+	MedianBytes         float64 `json:"median_bytes"`
+	SlopeBytesPerSecond float64 `json:"slope_bytes_per_second"`
+	ProjectedHourBytes  float64 `json:"projected_hour_bytes"`
+	LimitBytes          float64 `json:"limit_bytes"`
+	Reason              string  `json:"reason,omitempty"`
+}
+
+func judgeMemory(name string, pid int, metric string, samples []capacity.MemorySample, start time.Time, duration time.Duration, incarnation bool) memoryVerdict {
+	v := memoryVerdict{Name: name, PID: pid, Metric: metric, Outcome: "insufficient-data", RawSamples: len(samples)}
+	warmup := min(duration/10, 5*time.Minute)
+	if len(samples) < 2 {
+		v.Reason = "fewer than two samples"
+		return v
+	}
+	if incarnation && samples[len(samples)-1].At.Sub(samples[0].At) < 10*time.Minute {
+		v.Reason = "incarnation observed for less than ten minutes"
+		return v
+	}
+	// Every incarnation has its own warm-up, using the run's warm-up duration.
+	if samples[0].At.After(start.Add(time.Second)) {
+		start = samples[0].At
+	}
+	var xs, ys []float64
+	for _, s := range samples {
+		if s.At.Before(start.Add(warmup)) || s.At.After(start.Add(duration)) {
+			continue
+		}
+		value := s.RSSBytes
+		if metric == "heap-in-use" {
+			value = s.HeapInUseBytes
+		}
+		if value == 0 {
+			continue
+		}
+		xs = append(xs, s.At.Sub(start).Seconds())
+		ys = append(ys, float64(value))
+	}
+	v.Samples = len(xs)
+	if len(xs) < 3 || xs[len(xs)-1] <= xs[0] {
+		v.Reason = "fewer than three post-warm-up samples"
+		return v
+	}
+	if xs[len(xs)-1]-xs[0] < (5 * time.Minute).Seconds() {
+		v.Reason = "less than five minutes of post-warm-up observations"
+		return v
+	}
+	var mx, my float64
+	for i := range xs {
+		mx += xs[i]
+		my += ys[i]
+	}
+	mx /= float64(len(xs))
+	my /= float64(len(xs))
+	var numerator, denominator float64
+	for i := range xs {
+		numerator += (xs[i] - mx) * (ys[i] - my)
+		denominator += (xs[i] - mx) * (xs[i] - mx)
+	}
+	sort.Float64s(ys)
+	v.MedianBytes = ys[len(ys)/2]
+	if len(ys)%2 == 0 {
+		v.MedianBytes = (ys[len(ys)/2] + ys[len(ys)/2-1]) / 2
+	}
+	v.SlopeBytesPerSecond = numerator / denominator
+	v.ProjectedHourBytes = v.SlopeBytesPerSecond * 3600
+	v.LimitBytes = max(.1*v.MedianBytes, 16<<20)
+	v.Outcome = "pass"
+	if v.ProjectedHourBytes > v.LimitBytes {
+		v.Outcome = "fail"
+	}
+	return v
+}
+
+type excludedInterval struct {
+	PID        int `json:"pid"`
+	Start, End time.Time
+	Causes     []string `json:"causes"`
+}
+type saturationBudget struct {
+	Intervals    int                `json:"one_second_intervals"`
+	Saturated    int                `json:"saturated_one_second_intervals"`
+	Percent      float64            `json:"saturated_percent"`
+	LimitPercent float64            `json:"limit_percent"`
+	Outcome      string             `json:"outcome"`
+	Excluded     []excludedInterval `json:"excluded"`
+}
+
+// The denominator is wall-clock seconds, not process-seconds. If several
+// generators stall together that second counts once, with every process named.
+// A delayed saturated sample excludes every second it overlaps, conservatively.
+func judgeSaturation(r loadgen.RunReport) saturationBudget {
+	b := saturationBudget{LimitPercent: 1, Outcome: "pass", Intervals: int((r.Duration + time.Second - 1) / time.Second)}
+	seen := map[int]bool{}
+	end := r.StartedAt.Add(r.Duration)
+	for _, p := range r.Processes {
+		for _, s := range p.Samples {
+			if s.IntervalLateness.P99 <= r.Limits.P99 && s.IntervalPacing.SkippedPercent() <= r.Limits.SkippedPercent && s.CPUPerGOMAXPROCS <= r.Limits.CPUPercent {
+				continue
+			}
+			first, last := maxTime(s.At.Add(-s.Interval), r.StartedAt), minTime(s.At, end)
+			if !last.After(first) {
+				continue
+			}
+			b.Excluded = append(b.Excluded, excludedInterval{PID: p.PID, Start: first, End: last, Causes: r.Limits.Causes(s)})
+			for i := int(first.Sub(r.StartedAt) / time.Second); i < b.Intervals && r.StartedAt.Add(time.Duration(i)*time.Second).Before(last); i++ {
+				seen[i] = true
+			}
+		}
+	}
+	b.Saturated = len(seen)
+	if b.Intervals > 0 {
+		b.Percent = 100 * float64(b.Saturated) / float64(b.Intervals)
+	}
+	if b.Intervals == 0 || b.Percent > b.LimitPercent {
+		b.Outcome = "inconclusive"
+	}
+	return b
+}
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+func minTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+
+// The event window includes each affected caller's baseline and the complete
+// recovery/freshness observation horizon used by its saved yardstick.
+func eventWindow(r loadgen.RunReport, e loadgen.EventResult) (time.Time, time.Time) {
+	first, last := e.At.Add(-time.Second), e.FinishedAt.Add(7*time.Second)
+	for _, p := range r.Processes {
+		for _, c := range p.Calls {
+			if c.Call == nil {
+				continue
+			}
+			for _, move := range c.Call.Moves {
+				if loadgen.MatchesEvent(e, c.Call, move) {
+					first = minTime(first, c.Call.StartedAt.Add(move.Start).Add(-time.Second))
+					last = maxTime(last, c.Call.StartedAt.Add(max(move.End, move.Measurement.MediaResumedAt)).Add(7*time.Second))
+					m := move.Measurement
+					observed := max(m.ObservedUntil, m.SettledAt, m.Audio.EvaluationEnd, m.Video.EvaluationEnd)
+					last = maxTime(last, c.Call.StartedAt.Add(observed))
+				}
+			}
+		}
+	}
+	return first, last
+}
+func eventSaturated(r loadgen.RunReport, e loadgen.EventResult, b saturationBudget) bool {
+	first, last := eventWindow(r, e)
+	for _, s := range b.Excluded {
+		if s.Start.Before(last) && s.End.After(first) {
+			return true
+		}
+	}
+	return false
+}
+
+type soakEventVerdict struct {
+	Index     int                 `json:"index"`
+	Outcome   string              `json:"outcome"`
+	Saturated bool                `json:"saturated"`
+	Rows      []loadgen.MetricRow `json:"rows"`
+}
+type soakReport struct {
+	GOOS              string             `json:"goos"`
+	GOARCH            string             `json:"goarch"`
+	GoVersion         string             `json:"go_version"`
+	Runner            string             `json:"runner"`
+	Topology          string             `json:"topology"`
+	Video             bool               `json:"video"`
+	GOMAXPROCS        int                `json:"gomaxprocs"`
+	Seed              int64              `json:"seed"`
+	Schedule          []loadgen.Event    `json:"schedule"`
+	WorkerFloor       int                `json:"worker_floor"`
+	RelayFloor        int                `json:"relay_floor"`
+	Workers           int                `json:"workers"`
+	Processes         int                `json:"generator_processes"`
+	CallersPerProcess int                `json:"callers_per_process"`
+	Interval          time.Duration      `json:"interval_ns"`
+	FullScale         bool               `json:"full_scale"`
+	Saturation        saturationBudget   `json:"saturation"`
+	Memory            []memoryVerdict    `json:"memory"`
+	Events            []soakEventVerdict `json:"events"`
+	Outcome           string             `json:"outcome"`
+	Causes            []string           `json:"causes"`
+	Run               loadgen.RunReport  `json:"run"`
+}
+
+func leakCauses(l loadgen.LeakReport) []string {
+	var causes []string
+	if !l.Checked {
+		causes = append(causes, "leak checks incomplete")
+	}
+	for name, n := range l.Sessions {
+		if strings.HasPrefix(name, "relay-") && (l.RelayWait < soakRelayWait || l.RelayObservedAt.IsZero()) {
+			continue
+		}
+		if n != 0 {
+			causes = append(causes, fmt.Sprintf("%s retains %d sessions", name, n))
+		}
+	}
+	for _, key := range l.Keys {
+		if key.Error != "" {
+			continue
+		}
+		if !boundedSoakKey(key) {
+			causes = append(causes, fmt.Sprintf("Redis key %s class=%s has unbounded retention (TTL=%dms)", key.Key, key.Class, key.TTLMS))
+		}
+	}
+	if len(l.Processes) > 0 {
+		causes = append(causes, "owned processes remain")
+	}
+	if len(l.Listeners) > 0 {
+		causes = append(causes, "owned listeners remain")
+	}
+	return append(causes, l.Errors...)
+}
+
+func judgeSoak(c config, r loadgen.RunReport) soakReport {
+	host, _ := os.Hostname()
+	result := soakReport{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, GoVersion: runtime.Version(), Runner: host, Topology: c.Topology, Video: c.Video, GOMAXPROCS: c.GOMAXPROCS, Seed: c.Seed, Schedule: c.Events, Workers: c.Workers, Processes: c.Processes, CallersPerProcess: c.CallersPerProcess, Interval: c.ChaosInterval, WorkerFloor: c.WorkerFloor, RelayFloor: c.RelayFloor, FullScale: c.Callers >= 50 && c.Duration >= time.Hour, Outcome: "pass", Run: r}
+	inconclusive := func(reason string) {
+		if result.Outcome != "fail" {
+			result.Outcome = "inconclusive"
+		}
+		result.Causes = append(result.Causes, reason)
+	}
+	fail := func(reason string) { result.Outcome = "fail"; result.Causes = append(result.Causes, reason) }
+	result.Saturation = judgeSaturation(r)
+	// Rejudge a copy without process-wide saturation. Its intervals remain intact
+	// in the original report, and the budget/event windows control validity here.
+	usable := r
+	usable.Processes = append([]loadgen.ProcessReport(nil), r.Processes...)
+	for i := range usable.Processes {
+		usable.Processes[i].Saturated = false
+	}
+	usable.Judge()
+	if r.Outcome == "inconclusive" && usable.Outcome == "valid" {
+		// execute errors, unlike saturation, must not disappear in the copy.
+		for _, cause := range r.Causes {
+			if !strings.Contains(cause, "process ") {
+				inconclusive(cause)
+			}
+		}
+	}
+	for i, e := range r.Events {
+		v := soakEventVerdict{Index: i, Outcome: "pass", Saturated: eventSaturated(r, e, result.Saturation)}
+		rows := append([]loadgen.MetricRow(nil), usable.Yardstick...)
+		rows = append(rows, soakGapRows(usable, e, i)...)
+		for _, row := range rows {
+			if row.EventIndex == i {
+				if v.Saturated {
+					row.Outcome = "inconclusive"
+				} // Retain Trusted/Failed counts as raw evidence.
+				v.Rows = append(v.Rows, row)
+				if row.Outcome == "fail" {
+					v.Outcome = "fail"
+				} else if row.Outcome != "pass" && v.Outcome != "fail" {
+					v.Outcome = "inconclusive"
+				}
+			}
+		}
+		if !v.Saturated && (e.Failed || e.Error != "") {
+			v.Outcome = "fail"
+		}
+		if v.Saturated || len(v.Rows) == 0 {
+			v.Outcome = "inconclusive"
+		}
+		result.Events = append(result.Events, v)
+		if v.Outcome == "fail" {
+			fail(fmt.Sprintf("event %d failed caller recovery rows", i))
+		}
+		if v.Outcome == "inconclusive" {
+			inconclusive(fmt.Sprintf("event %d lacks conclusive recovery rows", i))
+		}
+	}
+	// Remove only overlapping event rows from capacity judgment, rather than
+	// relaxing global generator thresholds or suppressing independent failures.
+	usable.Yardstick = append([]loadgen.MetricRow(nil), usable.Yardstick...)
+	for i := range usable.Yardstick {
+		if result.Events[usable.Yardstick[i].EventIndex].Saturated {
+			usable.Yardstick[i].Outcome = "inconclusive"
+		}
+	}
+	excluded := map[int]bool{}
+	for i, e := range result.Events {
+		excluded[i] = e.Saturated
+	}
+	step := judgeCapacityExcept("soak", usable, c.StoreOpsBudget, c.StoreBytesBudget, excluded)
+	if step.Verdict == "fail" {
+		for _, cause := range step.Causes {
+			fail(cause)
+		}
+	} else if step.Verdict != "pass" {
+		for _, cause := range step.Causes {
+			inconclusive(cause)
+		}
+	}
+	if result.Saturation.Outcome != "pass" {
+		inconclusive(fmt.Sprintf("generator saturation %.3f%% exceeds 1%% run budget", result.Saturation.Percent))
+	}
+	if len(r.Events) != len(c.Events) {
+		inconclusive("chaos schedule incomplete")
+	}
+	addMemory := func(name string, pid int, samples []capacity.MemorySample, worker bool, heap bool) {
+		metrics := []string{"rss"}
+		if heap {
+			metrics = append(metrics, "heap-in-use")
+		}
+		for _, metric := range metrics {
+			v := judgeMemory(name, pid, metric, samples, r.StartedAt, r.Duration, worker)
+			result.Memory = append(result.Memory, v)
+			if v.Outcome == "fail" {
+				fail(fmt.Sprintf("%s pid=%d %s projects %.0f bytes/hour above %.0f", name, pid, metric, v.ProjectedHourBytes, v.LimitBytes))
+			}
+			// Short chaos incarnations are explicitly unjudged by policy. Long-lived
+			// roles with missing data cannot establish flat memory.
+			if v.Outcome == "insufficient-data" && !worker {
+				inconclusive(name + " " + metric + ": " + v.Reason)
+			}
+		}
+	}
+	for _, p := range r.Telemetry.Processes {
+		worker := strings.HasPrefix(p.Name, "worker-")
+		addMemory(p.Name, p.PID, p.Memory, worker, p.Name != "store")
+		if worker && p.Peaks["relais_worker_active_sessions"] > float64(c.WorkerFloor) {
+			fail(p.Name + " exceeded measured worker floor")
+		}
+		if p.Name == "control" && p.Last["relais_control_losses_total"] > 0 {
+			fail("control reports unintended lost calls")
+		}
+		// Counters are absent from Peaks; inspect the last raw counter too.
+		if worker && p.Last["relais_worker_decryption_failures_total"] > 0 {
+			fail(p.Name + " worker decryption failures")
+		}
+	}
+	for _, p := range r.Processes {
+		var samples []capacity.MemorySample
+		for _, s := range p.Samples {
+			samples = append(samples, capacity.MemorySample{At: s.At, RSSBytes: s.RSSBytes, HeapInUseBytes: s.HeapInUseBytes})
+		}
+		addMemory("caller", p.PID, samples, true, true)
+		for _, m := range p.Calls {
+			if m.Call == nil {
+				continue
+			}
+			if m.Call.StartedAt.Add(m.Call.HungUpAt).Before(r.StartedAt.Add(r.Duration)) {
+				fail("caller ended before intended media lifetime")
+			}
+			if m.Call.DecryptionFailures.Total() > 0 {
+				fail("caller decryption failures")
+			}
+		}
+	}
+	leaks := r.Leaks
+	leaks.Checked = true
+	leaks.Errors = nil
+	for _, cause := range leakCauses(leaks) {
+		fail(cause)
+	}
+	for name := range r.Leaks.Sessions {
+		if strings.HasPrefix(name, "relay-") && (r.Leaks.RelayWait < soakRelayWait || r.Leaks.RelayObservedAt.IsZero()) {
+			inconclusive("relay cleanup not observed after inactivity timeout")
+			break
+		}
+	}
+	if len(r.Leaks.StoreKeys) != len(r.Leaks.Keys) {
+		inconclusive("Redis retention observations missing")
+	}
+	if !r.Leaks.Checked || len(r.Leaks.Errors) > 0 {
+		inconclusive("leak checks incomplete: " + strings.Join(r.Leaks.Errors, "; "))
+	}
+	// Crash and partial-drain proof uses #40's independent failure rule.
+	if confirmedServiceFailure(r) {
+		fail("independently confirmed service failure")
+	}
+	return result
+}
+
+// Each service incarnation gets one monitor. No counters or memory trends
+// cross PID boundaries. Unchanged roles keep a single uninterrupted window.
+type soakExecution struct {
+	ctx      context.Context
+	every    time.Duration
+	active   map[string]*capacity.Monitor
+	data     capacity.Telemetry
+	finished bool
+}
+
+func startSoakExecution(ctx context.Context, t *topology, every time.Duration) *soakExecution {
+	s := &soakExecution{ctx: ctx, every: every, active: map[string]*capacity.Monitor{}}
+	for _, target := range t.Targets {
+		s.add(target)
+	}
+	return s
+}
+func (s *soakExecution) add(target capacity.Target) {
+	s.active[target.Name] = capacity.StartSoak(s.ctx, []capacity.Target{target}, s.every)
+}
+func (s *soakExecution) collect(name string) {
+	m := s.active[name]
+	if m == nil {
+		return
+	}
+	telemetry := m.Finish(1)
+	// Finish(1) rates are converted below to the common run denominator.
+	for i := range telemetry.Processes {
+		for metric, rate := range telemetry.Processes[i].RatesPerCallSecond {
+			telemetry.Processes[i].RatesPerCallSecond[metric] = rate * telemetry.WindowSeconds
+		}
+	}
+	s.data.Processes = append(s.data.Processes, telemetry.Processes...)
+	s.data.Errors = append(s.data.Errors, telemetry.Errors...)
+	delete(s.active, name)
+}
+func (s *soakExecution) retire(name string) { s.collect(name) }
+func (s *soakExecution) finish(callers int, duration time.Duration) capacity.Telemetry {
+	if s.finished {
+		return s.data
+	}
+	names := make([]string, 0, len(s.active))
+	for name := range s.active {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		s.collect(name)
+	}
+	s.data.WindowSeconds = duration.Seconds()
+	for i := range s.data.Processes {
+		p := &s.data.Processes[i]
+		for metric, delta := range p.RatesPerCallSecond {
+			p.RatesPerCallSecond[metric] = delta / (float64(callers) * duration.Seconds())
+		}
+	}
+	s.finished = true
+	return s.data
+}
+
+func resolveSoakEvent(ctx context.Context, t *topology, e loadgen.Event, floor int) (loadgen.Event, error) {
+	var status controlplane.Status
+	t.statusRequests++
+	if err := request(ctx, http.MethodGet, strings.TrimSuffix(t.External.SignalingURL, "/calls")+"/status", nil, &status); err != nil {
+		return e, err
+	}
+	if status.LostCount != 0 {
+		return e, fmt.Errorf("control reports %d lost calls", status.LostCount)
+	}
+	var live, occupied []controlplane.WorkerStatus
+	for _, w := range status.Workers {
+		if !w.Dead && !w.Draining && !w.Recovering {
+			live = append(live, w)
+			if w.Calls > 0 {
+				occupied = append(occupied, w)
+			}
+			if w.Calls > floor {
+				return e, errors.New("worker exceeds measured floor before chaos")
+			}
+		}
+	}
+	if len(live) != len(t.Workers) || len(occupied) == 0 {
+		return e, errors.New("N+1 pool not fully ready for next event")
+	}
+	sort.Slice(live, func(i, j int) bool {
+		if live[i].Calls != live[j].Calls {
+			return live[i].Calls < live[j].Calls
+		}
+		return live[i].Name < live[j].Name
+	})
+	sort.Slice(occupied, func(i, j int) bool { return occupied[i].Name < occupied[j].Name })
+	selected := occupied[e.Worker%len(occupied)]
+	if e.Kind == "move" {
+		selected = live[0]
+		if selected.Calls >= floor {
+			return e, errors.New("no move slot below worker floor")
+		}
+		e.Count = 1
+	}
+	e.Worker, _ = strconv.Atoi(selected.Name)
+	return e, nil
+}
+
+func (t *topology) recycle(ctx context.Context, id int) error {
+	name := fmt.Sprintf("worker-%d", id)
+	launch := t.Launch[id]
+	if launch == nil {
+		return errors.New("missing owned worker launch specification")
+	}
+	if t.Soak != nil {
+		t.Soak.retire(name)
+	}
+	t.Workers[id].Stop()
+	deadline, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	controlURL := strings.TrimSuffix(t.External.SignalingURL, "/calls")
+	// Wait for the real detector and all old leases to settle before replacement.
+	for {
+		var status controlplane.Status
+		t.statusRequests++
+		if err := request(deadline, http.MethodGet, controlURL+"/status", nil, &status); err != nil {
+			return err
+		}
+		ready := false
+		for _, w := range status.Workers {
+			if w.Name == strconv.Itoa(id) && w.Dead && !w.Recovering && w.Calls == 0 {
+				ready = true
+			}
+		}
+		if ready {
+			break
+		}
+		if err := waitUntil(deadline, time.Now().Add(50*time.Millisecond)); err != nil {
+			return err
+		}
+	}
+	if err := request(deadline, http.MethodPost, controlURL+"/private/workers/"+strconv.Itoa(id)+"/replace", nil, nil); err != nil {
+		return err
+	}
+	launch.Incarnation++
+	dir := filepath.Join(t.Dir, fmt.Sprintf("%s-incarnation-%03d", name, launch.Incarnation))
+	if err := os.Mkdir(dir, 0700); err != nil {
+		return err
+	}
+	child, err := startRole(t.Manager, t.Network, dir, name, launch.Env, launch.Args...)
+	if err != nil {
+		return err
+	}
+	t.processes = append(t.processes, child)
+	t.Workers[id] = child
+	ready, err := child.Ready(deadline)
+	if err != nil {
+		return err
+	}
+	if ready.HTTP != launch.URL {
+		return errors.New("replacement changed registered worker endpoint")
+	}
+	delete(t.Killed, id)
+	target := capacity.Target{Name: name, PID: child.PID(), URL: ready.HTTP, Done: child.Done(), Err: child.Err}
+	t.Targets = append(t.Targets, target)
+	t.Soak.add(target)
+	return nil
+}
+
+func (t *topology) checkSoakLeaks(generators []generator) loadgen.LeakReport {
+	l := loadgen.LeakReport{Sessions: map[string]int{}}
+	ctx, cancel := context.WithTimeout(context.Background(), soakRelayWait+15*time.Second)
+	defer cancel()
+	recordError := func(err error) {
+		if err != nil {
+			l.Errors = append(l.Errors, err.Error())
+		}
+	}
+	var status controlplane.Status
+	recordError(request(ctx, http.MethodGet, strings.TrimSuffix(t.External.SignalingURL, "/calls")+"/status", nil, &status))
+	l.Sessions["control"] = len(status.Calls)
+	if status.LostCount != 0 {
+		l.Errors = append(l.Errors, fmt.Sprintf("control lost %d calls", status.LostCount))
+	}
+	// execute waits for every caller report (including hangup) before this check.
+	// Keep the relay alive through its inactivity timeout and sweep margin.
+	waitAt := time.Now()
+	timer := time.NewTimer(soakRelayWait)
+	select {
+	case <-timer.C:
+		l.RelayWait = time.Since(waitAt)
+	case <-ctx.Done():
+		timer.Stop()
+		recordError(ctx.Err())
+	}
+	endpoints := map[string]string{}
+	for _, target := range t.Targets {
+		if strings.HasPrefix(target.Name, "worker-") {
+			// Only current incarnations still expose status; retired PIDs remain in
+			// the process inventory checked after all shutdowns.
+			id, _ := strconv.Atoi(strings.TrimPrefix(target.Name, "worker-"))
+			if t.Workers[id].PID() != target.PID {
+				continue
+			}
+			var worker mediaworker.WorkerStatus
+			recordError(request(ctx, http.MethodGet, target.URL+"/status", nil, &worker))
+			l.Sessions[target.Name] = worker.Sessions
+		}
+		if target.Name == "relay" {
+			l.RelayObservedAt = time.Now()
+			var relayStatus relay.RelayStatus
+			recordError(request(ctx, http.MethodGet, target.URL+"/status", nil, &relayStatus))
+			l.Sessions["relay-buffer"] = relayStatus.Stats.BufferedSessions
+			l.Sessions["relay-holds"] = relayStatus.Stats.Holds
+			l.Sessions["relay-routes"] = relayStatus.Stats.Flows
+			l.Sessions["relay-pending-routes"] = relayStatus.Stats.PendingFlows
+		}
+		if target.URL != "" {
+			endpoints[strings.TrimPrefix(target.URL, "http://")] = "tcp"
+		}
+	}
+	endpoints[t.RedisAddr] = "tcp"
+	endpoints[t.External.RelayAddr.String()] = "udp"
+	for _, launch := range t.Launch {
+		for i, arg := range launch.Args {
+			if i > 0 && (launch.Args[i-1] == "-media" || launch.Args[i-1] == "-relay-leg") {
+				endpoints[arg] = "udp"
+			}
+		}
+	}
+	children := append([]*clusterprocess.Child(nil), t.processes...)
+	for _, g := range generators {
+		g.child.Stop()
+		children = append(children, g.child)
+		endpoints[strings.TrimPrefix(g.url, "http://")] = "tcp"
+	}
+	// Shut down services, but keep the owned Redis alive for an actual prefix
+	// SCAN and TTL checks. Never delete keys before this observation or wait
+	// for store TTLs.
+	for i := len(t.processes) - 1; i >= 1; i-- {
+		t.processes[i].Stop()
+	}
+	client := redis.NewClient(&redis.Options{Addr: t.RedisAddr, Password: t.RedisPassword, MaxRetries: -1, ReadTimeout: time.Second, WriteTimeout: time.Second})
+	keys, err := scanSoakKeys(ctx, client, t.Prefix)
+	l.StoreKeys = keys
+	recordError(err)
+	for _, key := range keys {
+		observation, err := observeSoakKey(ctx, client, t.Prefix, key)
+		if err != nil {
+			observation.Error = err.Error()
+		}
+		l.Keys = append(l.Keys, observation)
+		recordError(err)
+	}
+	recordError(client.Close())
+	recordError(t.close())
+	l.Processes, err = soakProcesses(children)
+	recordError(err)
+	if t.Network == nil {
+		for addr, network := range endpoints {
+			if network == "tcp" {
+				listener, err := net.Listen("tcp4", addr)
+				if err == nil {
+					recordError(listener.Close())
+				} else {
+					l.Listeners = append(l.Listeners, network+":"+addr)
+					recordError(err)
+				}
+			} else {
+				socket, err := net.ListenPacket("udp4", addr)
+				if err == nil {
+					recordError(socket.Close())
+				} else {
+					l.Listeners = append(l.Listeners, network+":"+addr)
+					recordError(err)
+				}
+			}
+		}
+	} else {
+		// Successful owned namespace deletion removes every listener in those
+		// isolated namespaces. Host caller listeners still need a bind check.
+		for _, g := range generators {
+			addr := strings.TrimPrefix(g.url, "http://")
+			listener, err := net.Listen("tcp4", addr)
+			if err == nil {
+				recordError(listener.Close())
+			} else {
+				l.Listeners = append(l.Listeners, "tcp:"+addr)
+				recordError(err)
+			}
+		}
+	}
+	sort.Strings(l.StoreKeys)
+	sort.Strings(l.Listeners)
+	sort.Ints(l.Processes)
+	l.Checked = len(l.Errors) == 0
+	return l
+}
+
+func runSoak(ctx context.Context, m *clusterprocess.Manager, c config, root string) error {
+	fmt.Printf("soak seed=%d calls=%d processes=%d interval=%s duration=%s worker-floor=%d relay-floor=%d\n", c.Seed, c.Callers, c.Processes, c.ChaosInterval, c.Duration, c.WorkerFloor, c.RelayFloor)
+	for i, e := range c.Events {
+		fmt.Printf("schedule index=%d after=%s kind=%s selection-offset=%d\n", i, e.After, e.Kind, e.Worker)
+	}
+	runCtx, cancel := context.WithTimeout(ctx, 4*time.Minute+c.Duration)
+	defer cancel()
+	report, runErr := execute(runCtx, m, c, root)
+	result := judgeSoak(c, report)
+	if runErr != nil {
+		result.Causes = append(result.Causes, runErr.Error())
+		if result.Outcome != "fail" {
+			result.Outcome = "inconclusive"
+		}
+	}
+	printReport(report)
+	for _, e := range result.Events {
+		fmt.Printf("soak event=%d outcome=%s saturated-window=%t\n", e.Index, e.Outcome, e.Saturated)
+	}
+	fmt.Printf("soak outcome=%s saturation=%.3f%% report=%s\n", result.Outcome, result.Saturation.Percent, c.Output)
+	for _, cause := range result.Causes {
+		fmt.Println("soak cause:", cause)
+	}
+	writeErr := writeJSON(c.Output, result)
+	if result.Outcome != "pass" {
+		return errors.Join(runErr, writeErr, errors.New("soak did not pass; see report"))
+	}
+	return errors.Join(runErr, writeErr)
+}
+
+func scanSoakKeys(ctx context.Context, client *redis.Client, prefix string) ([]string, error) {
+	if prefix == "" {
+		return nil, errors.New("empty owned Redis prefix")
+	}
+	pattern := strings.NewReplacer("\\", "\\\\", "*", "\\*", "?", "\\?", "[", "\\[", "]", "\\]").Replace(prefix) + "*"
+	var result []string
+	var cursor uint64
+	for {
+		keys, next, err := client.Scan(ctx, cursor, pattern, 128).Result()
+		if err != nil {
+			return result, err
+		}
+		result = append(result, keys...)
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+// Probe both owned leaders and their groups to detect surviving descendants.
+func soakProcesses(children []*clusterprocess.Child) ([]int, error) {
+	var remaining []int
+	var problems error
+	for _, child := range children {
+		for _, pid := range []int{child.PID(), -child.PID()} {
+			err := syscall.Kill(pid, 0)
+			if err == nil || errors.Is(err, syscall.EPERM) {
+				remaining = append(remaining, pid)
+			} else if !errors.Is(err, syscall.ESRCH) {
+				problems = errors.Join(problems, err)
+			}
+		}
+	}
+	return remaining, problems
+}
+
+// Apply #40's interruption rows to each event, in addition to whole-run p95.
+// A single slow event must not disappear inside hours of other successful moves.
+func soakGapRows(r loadgen.RunReport, e loadgen.EventResult, index int) []loadgen.MetricRow {
+	rows := map[string]*loadgen.MetricRow{}
+	gaps, excess := map[string][]time.Duration{}, map[string][]time.Duration{}
+	for _, p := range r.Processes {
+		for _, c := range p.Calls {
+			if c.Call == nil {
+				continue
+			}
+			for _, move := range c.Call.Moves {
+				if loadgen.MatchesEvent(e, c.Call, move) {
+					for _, track := range move.Tracks {
+						row := rows[track.Kind]
+						if row == nil {
+							row = &loadgen.MetricRow{EventIndex: index, After: e.Event.After, Scenario: move.Kind, Metric: track.Kind + "_media_gap", Events: e.Affected}
+							rows[track.Kind] = row
+						}
+						if track.PacketsAfter == 0 {
+							row.Trusted++
+							row.Failed++
+							continue
+						}
+						if move.Kind == "takeover" {
+							row.Trusted++
+							if track.Gap >= 2*time.Second {
+								row.Failed++
+							}
+							continue
+						}
+						if track.BaselineGapSamples < 10 {
+							continue
+						}
+						row.Trusted++
+						gaps[track.Kind] = append(gaps[track.Kind], track.Gap)
+						excess[track.Kind] = append(excess[track.Kind], track.Gap-track.BaselineGapP95)
+					}
+				}
+			}
+		}
+	}
+	var result []loadgen.MetricRow
+	kinds := make([]string, 0, len(rows))
+	for kind := range rows {
+		kinds = append(kinds, kind)
+	}
+	sort.Strings(kinds)
+	for _, kind := range kinds {
+		row := rows[kind]
+		if percentile95(gaps[kind]) > 150*time.Millisecond || percentile95(excess[kind]) > 50*time.Millisecond {
+			row.Failed++
+		}
+		if row.Events > 0 {
+			row.TrustedCoverage = float64(row.Trusted) / float64(row.Events)
+		}
+		row.Outcome = "pass"
+		if row.Events == 0 || row.TrustedCoverage < .8 {
+			row.Outcome = "inconclusive"
+		}
+		if row.Failed > 0 {
+			row.Outcome = "fail"
+		}
+		result = append(result, *row)
+	}
+	return result
+}
+
+// These bounds match the owned topology's unmodified control/store defaults:
+// lease=3s, retention=5m, index grace=5m. No product retention is shortened.
+const (
+	soakRelayWait    = relay.DefaultFlowTimeout + 5*time.Second
+	soakSessionLimit = 3*time.Second + 5*time.Minute + 5*time.Second
+	soakIndexLimit   = 10*time.Minute + 5*time.Second
+)
+
+func boundedSoakKey(k loadgen.RetainedKey) bool {
+	switch k.Class {
+	case "expired":
+		return k.TTLMS == -2
+	case "session-counter":
+		return k.TTLMS == -1 || k.TTLMS > 0
+	case "relay-lease":
+		// The hash persists for its monotone epoch. Release clears the identities;
+		// expiry is a field, not PTTL. Missing expiry evidence must fail.
+		return k.LeaseRemainingMS != nil && (*k.LeaseRemainingMS <= relaylease.DefaultTTL.Milliseconds())
+	case "session", "worker-index":
+		limit := soakSessionLimit.Milliseconds()
+		if k.Class == "worker-index" {
+			limit = soakIndexLimit.Milliseconds()
+		}
+		return k.TTLMS > 0 && k.TTLMS <= limit
+	default:
+		return false
+	}
+}
+
+func observeSoakKey(ctx context.Context, client *redis.Client, prefix, key string) (loadgen.RetainedKey, error) {
+	k := loadgen.RetainedKey{Key: key, Class: "unknown"}
+	ttl, err := client.PTTL(ctx, key).Result()
+	if err != nil {
+		return k, err
+	}
+	// go-redis preserves Redis sentinel -1/-2 as nanoseconds, not milliseconds.
+	k.TTLMS = ttl.Milliseconds()
+	if ttl < 0 {
+		k.TTLMS = int64(ttl)
+	}
+	suffix := strings.TrimPrefix(key, prefix)
+	if !strings.HasPrefix(key, prefix) {
+		return k, errors.New("key outside owned prefix")
+	}
+	switch {
+	case ttl == -2:
+		// SCAN and PTTL are separate reads; positive-TTL keys can expire between them.
+		k.Class = "expired"
+	case suffix == "session_epoch":
+		k.Class = "session-counter"
+	case strings.HasPrefix(suffix, "worker:"):
+		k.Class, k.LimitMS = "worker-index", soakIndexLimit.Milliseconds()
+	case suffix == "relay:{relay:ZGVmYXVsdA}":
+		k.Class, k.LimitMS = "relay-lease", relaylease.DefaultTTL.Milliseconds()
+		// Atomically compare the lease expiry to Redis server time. A missing or
+		// malformed field is an observation error, never an expired lease.
+		values, err := client.Eval(ctx, `local c=redis.call('HMGET',KEYS[1],'holder','expires','forwarder','previous'); local expires=tonumber(c[2]); if not expires or not c[1] or not c[3] or not c[4] then return redis.error_reply('invalid relay fencing hash') end; local t=redis.call('TIME'); return {expires-tonumber(t[1])*1000-math.floor(tonumber(t[2])/1000), c[1]=='' and c[3]=='' and c[4]=='' and expires==0 and 1 or 0}`, []string{key}).Slice()
+		if err != nil {
+			return k, err
+		}
+		if len(values) != 2 {
+			return k, errors.New("invalid relay expiry reply")
+		}
+		remaining, ok := values[0].(int64)
+		released, valid := values[1].(int64)
+		if !ok || !valid {
+			return k, errors.New("invalid relay expiry types")
+		}
+		k.LeaseRemainingMS, k.Released = &remaining, released == 1
+	default:
+		for _, kind := range []string{"lease", "state", "record", "epoch", "routes"} {
+			if strings.HasPrefix(suffix, kind+":{sess:") && strings.HasSuffix(suffix, "}") {
+				k.Class, k.LimitMS = "session", soakSessionLimit.Milliseconds()
+				break
+			}
+		}
+	}
+	return k, nil
+}
