@@ -41,6 +41,11 @@ func run() error {
 	if *name == "" || *control == "" {
 		return &configError{}
 	}
+	listener, err := processrun.ListenPrivate(*httpAddr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = listener.Close() }()
 	store, err := storeConfig.Open(ctx)
 	if err != nil {
 		return err
@@ -60,10 +65,6 @@ func run() error {
 		return err
 	}
 	defer func() { _ = worker.Close() }()
-	listener, err := processrun.ListenPrivate(*httpAddr)
-	if err != nil {
-		return err
-	}
 	processrun.Ready(map[string]any{"http": "http://" + listener.Addr().String(), "media": worker.LocalAddr(), "name": *name})
 	worker.StartHeartbeats(&controlplane.RemoteHeartbeats{URL: *control, Name: *name})
 	// Keep this HTTP API and heartbeats alive while the control plane exports

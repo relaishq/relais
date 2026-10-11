@@ -45,6 +45,11 @@ func startBufferHarness(t *testing.T, store sessionstore.Store, enabled bool, af
 
 func startConfiguredBufferHarness(t *testing.T, store sessionstore.Store, cfg relay.Config, afterTargetResume ...func()) *bufferHarness {
 	t.Helper()
+	return startBufferHarnessWithAgents(t, store, cfg, nil, afterTargetResume...)
+}
+
+func startBufferHarnessWithAgents(t *testing.T, store sessionstore.Store, cfg relay.Config, agents []mediaworker.AgentConfig, afterTargetResume ...func()) *bufferHarness {
+	t.Helper()
 	disable := workerprobe.Enable()
 	t.Cleanup(disable)
 	frames := framecache.NewMemory(framecache.Limits{})
@@ -57,7 +62,11 @@ func startConfiguredBufferHarness(t *testing.T, store sessionstore.Store, cfg re
 	plane := controlplane.NewWithConfig(remote, store, controlplane.Config{FrameCache: frames})
 	sys := &bufferHarness{r: r}
 	for i := range 2 {
-		w, err := mediaworker.New(mediaworker.Config{FrameCache: frames, DisableFrameCache: true, Relay: &mediaworker.RelayConfig{Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr(), Owners: store}})
+		var agentConfig mediaworker.AgentConfig
+		if i < len(agents) {
+			agentConfig = agents[i]
+		}
+		w, err := mediaworker.New(mediaworker.Config{Agent: agentConfig, FrameCache: frames, DisableFrameCache: true, Relay: &mediaworker.RelayConfig{Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr(), Owners: store}})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, w.Close()) })
 		private := w.PrivateHandler()

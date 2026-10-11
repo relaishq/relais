@@ -5,6 +5,7 @@ import (
 	"errors"
 	"maps"
 	"net/netip"
+	"slices"
 	"sort"
 	"time"
 )
@@ -15,24 +16,34 @@ var (
 	ErrReplayNotReady   = errors.New("relay: replay checkpoint not supplied")
 )
 
+// ReplayWindow bounds selected caller media in inbound SRTP index space.
+// It describes possible input, rather than promising every index in the range.
+type ReplayWindow struct {
+	SSRC  uint32 `json:"ssrc"`
+	First uint64 `json:"first"`
+	Last  uint64 `json:"last"`
+}
+
 // ReplayPlan reports whether the retained ring covers the checkpoint. An
 // incomplete cache keeps the worker's ordinary frame-cache/PLI fallback.
 type ReplayPlan struct {
-	Packets  int  `json:"packets"`
-	Complete bool `json:"complete"`
+	Packets  int            `json:"packets"`
+	Complete bool           `json:"complete"`
+	Windows  []ReplayWindow `json:"windows,omitempty"`
 }
 
 // ReplayResult includes loss observed after preparation or worker adoption.
 // Dropped counts ring-copy/live admission drops and packets discarded on expiry;
 // historical ring gaps clear Complete without inventing a missing-packet count.
 type ReplayResult struct {
-	Packets      int           `json:"packets"`
-	Filtered     int           `json:"filtered"`
-	Duration     time.Duration `json:"duration"`
-	Dropped      int           `json:"dropped"`
-	SendFailures int           `json:"send_failures"`
-	Expired      bool          `json:"expired"`
-	Complete     bool          `json:"complete"`
+	Windows      []ReplayWindow `json:"windows,omitempty"`
+	Packets      int            `json:"packets"`
+	Filtered     int            `json:"filtered"`
+	Duration     time.Duration  `json:"duration"`
+	Dropped      int            `json:"dropped"`
+	SendFailures int            `json:"send_failures"`
+	Expired      bool           `json:"expired"`
+	Complete     bool           `json:"complete"`
 }
 
 // replayReceipt is retained with bounded session metadata, until flow removal.
@@ -49,7 +60,7 @@ func (r *Relay) saveReplay(h *sessionHold) {
 			return
 		}
 		if s := r.buffer.sessions[h.id]; s != nil && s.replayGeneration == h.replayGeneration {
-			s.receipt = &replayReceipt{source: h.source, target: h.worker, inbound: maps.Clone(h.replayInbound), result: h.replayResult}
+			s.receipt = &replayReceipt{source: h.source, target: h.worker, inbound: maps.Clone(h.replayInbound), result: cloneReplayResult(h.replayResult)}
 		}
 	}
 }
@@ -79,7 +90,7 @@ func (r *Relay) BeginReplay(ctx context.Context, id string, from netip.AddrPort,
 	if s := r.buffer.sessions[id]; s != nil && s.receipt != nil {
 		receipt := s.receipt
 		if r.holds[id] == nil && receipt.source == from && receipt.target == current && (inbound == nil && receipt.source != receipt.target || inbound != nil && maps.Equal(receipt.inbound, inbound)) {
-			return ReplayPlan{Packets: receipt.result.Packets, Complete: receipt.result.Complete}, nil
+			return ReplayPlan{Packets: receipt.result.Packets, Complete: receipt.result.Complete, Windows: slices.Clone(receipt.result.Windows)}, nil
 		}
 	}
 	if h := r.holds[id]; h != nil {
@@ -130,7 +141,7 @@ func (r *Relay) configureReplay(h *sessionHold, inbound map[uint32]uint64) (Repl
 			}
 		}
 		if maps.Equal(h.replayInbound, inbound) {
-			return ReplayPlan{Packets: len(h.queue), Complete: h.replayComplete}, nil
+			return replayPlan(h), nil
 		}
 	}
 	for _, index := range inbound {
@@ -212,7 +223,7 @@ func (r *Relay) configureReplay(h *sessionHold, inbound map[uint32]uint64) (Repl
 			h.queuedHigh[p.ssrc] = max(h.queuedHigh[p.ssrc], p.index)
 		}
 	}
-	return ReplayPlan{Packets: len(h.queue), Complete: h.replayComplete}, nil
+	return replayPlan(h), nil
 }
 
 func indexTranslation(highest, floor uint64) func(uint64) uint64 {
@@ -305,6 +316,7 @@ func (r *Relay) replayDrop(h *sessionHold) {
 	r.holdDrops.Add(1)
 	h.replayComplete = false
 	h.replayResult.Dropped++
+	r.replayDrops.Add(1)
 }
 
 // Keep the interleaving slots of different SSRCs/control packets, but order
@@ -342,7 +354,7 @@ func (r *Relay) ReplaySession(ctx context.Context, id string, to netip.AddrPort)
 	h := r.holds[id]
 	if h == nil || !h.replay {
 		if s := r.bufferSession(id); s != nil && s.receipt != nil && s.receipt.target == to && r.flows.sessionWorker(id, to) == to {
-			result := s.receipt.result
+			result := cloneReplayResult(s.receipt.result)
 			r.forwardMu.Unlock()
 			if result.Expired {
 				return result, ErrHoldExpired
@@ -379,11 +391,13 @@ func (r *Relay) ReplaySession(ctx context.Context, id string, to netip.AddrPort)
 		h.replaying = false
 		if errors.Is(err, ErrHoldExpired) || r.ctx.Err() != nil {
 			h.replayComplete = false
-			h.replayResult.Expired = true
+			if !h.replayResult.Expired {
+				r.markReplayExpired(h)
+			}
 		}
 		h.replayResult.Duration += time.Since(started)
 		r.saveReplay(h)
-		return h.replayResult, err
+		return cloneReplayResult(h.replayResult), err
 	}
 	finish := func(err error) (ReplayResult, error) {
 		r.forwardMu.Lock()
@@ -487,11 +501,54 @@ func (r *Relay) drainReplayBatch(h *sessionHold, to netip.AddrPort, pacer *repla
 		}
 		if r.sendHeld(h.id, p, to) {
 			h.replayResult.Packets++
+			if p.media {
+				h.replayResult.Windows = noteReplayWindow(h.replayResult.Windows, p)
+			}
 			r.replayPackets.Add(1)
 		} else {
 			h.replayComplete = false
 			h.replayResult.SendFailures++
+			r.replaySendFailures.Add(1)
 			r.holdSendFailures.Add(1)
 		}
 	}
+}
+
+func cloneReplayResult(result ReplayResult) ReplayResult {
+	result.Windows = slices.Clone(result.Windows)
+	return result
+}
+
+// Bounds describe selected media, before resume; newly gated traffic after
+// preparation cannot have been processed by the fenced source. Result windows
+// refine those bounds to media actually sent. Gaps within a range are possible.
+func replayPlan(h *sessionHold) ReplayPlan {
+	plan := ReplayPlan{Packets: len(h.queue), Complete: h.replayComplete}
+	for _, p := range h.queue {
+		if p.media {
+			plan.Windows = noteReplayWindow(plan.Windows, p)
+		}
+	}
+	return plan
+}
+func noteReplayWindow(windows []ReplayWindow, p heldPacket) []ReplayWindow {
+	for i := range windows {
+		if windows[i].SSRC == p.ssrc {
+			windows[i].First = min(windows[i].First, p.index)
+			windows[i].Last = max(windows[i].Last, p.index)
+			return windows
+		}
+	}
+	return append(windows, ReplayWindow{SSRC: p.ssrc, First: p.index, Last: p.index})
+}
+
+func (r *Relay) markReplayExpired(h *sessionHold) {
+	if h.replayResult.Expired {
+		return
+	}
+	h.replayComplete = false
+	h.replayResult.Expired = true
+	h.replayResult.Dropped += len(h.queue)
+	r.replayDrops.Add(uint64(len(h.queue)))
+	r.replayExpiries.Add(1)
 }

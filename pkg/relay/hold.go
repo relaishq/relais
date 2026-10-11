@@ -209,9 +209,7 @@ func (r *Relay) expireHold(h *sessionHold) {
 	if h.replay {
 		// An abandoned crash replay has no acknowledged live recipient. End
 		// the gate without flushing old ciphertext to an unadopted/dead leg.
-		h.replayComplete = false
-		h.replayResult.Expired = true
-		h.replayResult.Dropped += len(h.queue)
+		r.markReplayExpired(h)
 		r.saveReplay(h)
 		r.discardHold(h)
 	} else {

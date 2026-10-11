@@ -5,6 +5,7 @@ import (
 	"net/netip"
 
 	"github.com/relais/internal/privateapi"
+	"github.com/relais/pkg/metrics"
 )
 
 var RemoteErrors = map[string]error{
@@ -40,6 +41,7 @@ type RelayStatus struct {
 // PrivateHandler controls a relay on a trusted loopback HTTP listener.
 func (r *Relay) PrivateHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metrics.ProcessHandler(r.metricSamples))
 	mux.HandleFunc("POST /sessions/{id}/begin-replay", func(w http.ResponseWriter, req *http.Request) {
 		var body ReplayRequest
 		if !privateapi.Read(w, req, &body) {

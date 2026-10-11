@@ -13,6 +13,7 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
+	"github.com/relais/pkg/agent"
 )
 
 // packetConn is a worker's media transport: its own UDP socket, or a port on
@@ -455,6 +456,7 @@ type HandoverResult struct {
 	// largest validated snapshot age in this recovery, including copy-to-write
 	// delay. A failed target's newer checkpoint cannot shrink this warning.
 	// Newly gated input was never delivered to the prior owner.
+	DuplicateWindows        []agent.DuplicateWindow
 	InputMayBeDuplicated    bool
 	InputDuplicationWindow  time.Duration
 	RelayReplayPackets      int

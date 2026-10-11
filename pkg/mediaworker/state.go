@@ -14,7 +14,9 @@ import (
 // Version 4 persists counter advance accumulated while a track is silent.
 // Version 5 persists the cache replay floor across subsequent resumes.
 // Version 6 persists checkpoint observations and measured packet rates.
-const sessionStateVersion = 6
+// Version 7 adds the agent state/progress pair. Version-six legacy echo
+// snapshots can be read; older workers must reject new application snapshots.
+const sessionStateVersion = 7
 
 // sessionState is the session state: everything needed to continue a session
 // on another media worker except the established DTLS connection state, kept
@@ -38,6 +40,7 @@ const sessionStateVersion = 6
 //     continue from the indexes below (restoreInboundIndex,
 //     restoreOutboundIndex and SetIndex).
 type sessionState struct {
+	Agent      agentState
 	Checkpoint CheckpointState
 	Version    int
 	ID         string // the session ID, which is also the worker's ICE ufrag

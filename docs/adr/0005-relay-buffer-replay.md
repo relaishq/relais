@@ -81,7 +81,29 @@ margin to `SeqOffset` and its outbound high water mark. This maps an input
 processed again to a fresh outbound encryption index. #9's `ReplayFloor` is an
 outbound floor protecting reserved frame-cache indexes. Neither that floor nor
 the worker's outbound SSRC is a relay checkpoint filter. `SnapshotInboundIndexes`
-returns only the caller map and checks the snapshot version.
+returns the caller transport map and checks the snapshot version.
+
+For custom audio agents, `SnapshotReplayIndexes` instead uses the last consumed
+`Agent.Progress.Index` when it trails audio's transport high water mark. Both
+the application state/progress pair and transport counters come from the same
+metadata-validated snapshot, so no older, separately saved application state is
+substituted. A consumed SSRC mismatch or progress ahead of transport is rejected.
+If the custom agent has consumed no audio, the relay has no audio floor and
+retains all available audio, including caller index zero. Built-in and legacy
+Echo remain synchronous and use the transport floor. Video always uses transport.
+
+The resumed custom audio SRTP context is primed at that same consumed floor,
+rather than the transport high water mark. For a never-consumed stream it starts
+just before the first selected replay index (or stays unprimed at index zero).
+For a cold relay with a never-consumed stream, the transport checkpoint also
+aligns the selected ranges to the caller's actual ROC before the notice reaches
+the worker. This admits queues larger than the 64-packet receive window and across ROC wraps
+without disabling replay protection. Persisted transport high water marks and
+outbound margins remain intact. Source-rate observation uses each authenticated
+input index and original RTP timestamp, including queued input below the saved
+transport high water mark; a compressed 2.4-second replay still measures 50
+Opus packets/s. Cache loss and agent queue overflow are still
+bounded, counted loss; this rule does not make the ring or agent queue durable.
 
 Packets above the checkpoint are delivered at least once across worker tenures,
 including input the dead worker already processed after its last checkpoint.
@@ -99,8 +121,18 @@ with fresh bytes while leaving the gate unprepared. The validated counter copy
 supplies both caller inbound indexes and the scaled margin/reserve decision.
 An unsafe age or counter envelope produces definitive loss without resuming.
 
-The takeover resume result exposes `InputMayBeDuplicated` and
-`InputDuplicationWindow`. The latter retains the largest conservative
+The relay plan and result expose per-SSRC `Windows` in caller inbound index
+space. Before any resumed processing, the control plane supplies the selected
+ranges as `ResumeOptions.InputMayBeDuplicated` and `DuplicateWindows`, with the
+same fields on direct and private HTTP paths. No selected media leaves these
+false/empty; planned moves without replay also leave them false/empty. Bounds
+can include gaps and conservatively include input whose prior processing is
+unknown. After drain, the takeover result intersects successful-send ranges
+with the pre-resume plan, so newly gated live input does not extend the duplicate
+warning. The notice cannot be narrowed retroactively after callbacks have begun.
+
+The takeover resume result exposes `InputMayBeDuplicated`, `DuplicateWindows`
+and `InputDuplicationWindow`. The latter retains the largest conservative
 `SnapshotAge` validated in this recovery, bounding the prior owner's post-copy
 processing span. A failed target can persist a newer counter reservation;
 that write cannot shrink the warning while the original input queue survives.
@@ -233,8 +265,9 @@ using their existing source PictureID identity, and require every original frame
 to return and ffmpeg to decode the full unique frame sequence. They do not modify
 the recorder/report/recovery files owned by #32. This proves packet return and
 codec continuity, not a browser jitter buffer's audio playout/concealment policy.
-The new #32 yardstick's first-content, late-delivery, concealment and freshness
-measurements still need a run after its merge.
+The merged #32 yardstick is now used by the strict acceptance test below.
+Its decoded-first-content gate remains failing; these spike measurements do
+not replace that verdict.
 
 The #34 integration tests exercise metadata replacement between the blob read
 and validation, terminal loss with an allocated gate/ring on both stores, and
@@ -266,3 +299,30 @@ per worker-hour. The same observation limit applies to the 400 ms sample.
 No faster-detection policy is adopted. Reproduce with
 `RELAIS_DETECTION_SECONDS=120 go test -count=1 -v -run
 '^TestHeartbeatDetectionMeasurement$' ./pkg/controlplane/`.
+
+## Main integration and strict acceptance
+
+The private relay `/metrics` registry exports ring sessions, packets, accounted
+bytes, capacity drops, normal expiry and metadata admission failures. It also
+exports completed drains, replayed/filtered packets, replay admission/expiry
+drops, UDP send failures and replay gate expiry. These have no session labels.
+Move and replay holds share the existing hold gauges; replay-specific loss
+counters exclude planned moves. Scrape tests drive actual UDP forwarding,
+capacity loss, send failure and hold expiry.
+
+`TestAcceptanceRelayBufferTakeover` uses the merged caller yardstick, both
+stores, and `StrictAcceptancePolicy()` without race. Buffer-off controls must
+show positive trusted loss and a requested keyframe. Buffer-on must show zero
+trusted loss, first new decoded outage media, zero decrypt failures and recovered
+freshness over the full stability window. The test retains every strict gate.
+
+Current local integration is partial: both stores show zero buffer-on loss,
+zero decrypt failures and recovered freshness, but the yardstick labels first
+new decoded content `natural keyframe`. Its decoder-chain recorder treats
+repeated pre-crash pictures as a broken chain before fresh outage pictures.
+The unfiltered full decode also stops at a non-monotonic DTS from those repeated
+pictures. The strict first-new-content assertion therefore fails. Recorder
+changes belong to #32 and were not made here; the earlier packet/unique-decode
+evidence above cannot substitute for this gate or prove actual caller decode
+continuity. The table and logs in the rework report record the failed
+classification explicitly. No timing threshold was loosened.

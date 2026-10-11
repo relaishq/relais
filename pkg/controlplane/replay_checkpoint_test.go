@@ -29,14 +29,24 @@ func (r *checkpointReplayRelay) BeginReplay(_ context.Context, _ string, _ netip
 	if inbound != nil {
 		r.prepared = append(r.prepared, inbound)
 	}
-	return relay.ReplayPlan{Complete: inbound != nil && !r.incompletePlan}, nil
+	plan := relay.ReplayPlan{Complete: inbound != nil && !r.incompletePlan}
+	for ssrc, floor := range inbound {
+		plan.Windows = append(plan.Windows, relay.ReplayWindow{SSRC: ssrc, First: floor + 1, Last: floor + 1})
+	}
+	return plan, nil
 }
 func (r *checkpointReplayRelay) ReplaySession(context.Context, string, netip.AddrPort) (relay.ReplayResult, error) {
 	r.gated = false
 	if r.replayErr != nil || r.replayResult.Dropped > 0 || r.replayResult.SendFailures > 0 {
 		return r.replayResult, r.replayErr
 	}
-	return relay.ReplayResult{Packets: 1, Complete: true}, nil
+	result := relay.ReplayResult{Packets: 1, Complete: true}
+	if len(r.prepared) > 0 {
+		for ssrc, floor := range r.prepared[len(r.prepared)-1] {
+			result.Windows = append(result.Windows, relay.ReplayWindow{SSRC: ssrc, First: floor + 1, Last: floor + 1})
+		}
+	}
+	return result, nil
 }
 func (r *checkpointReplayRelay) ForgetSession(id string) {
 	r.gated, r.forgotten = false, true

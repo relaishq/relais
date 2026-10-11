@@ -230,6 +230,9 @@ type Stats struct {
 	BufferUntracked      uint64
 	ReplayPackets        uint64
 	ReplayFiltered       uint64
+	ReplayDrops          uint64
+	ReplaySendFailures   uint64
+	ReplayExpiries       uint64
 	Replays              uint64
 	RoutesRestored       uint64
 	RoutesRestoreSkipped uint64
@@ -305,18 +308,21 @@ type Relay struct {
 
 	// forwardMu orders caller sends, holds and private drain barriers. No
 	// socket write takes routeMu. Queued releases precede new caller sends.
-	forwardMu        sync.Mutex
-	holds            map[string]*sessionHold
-	heldPackets      int
-	heldBytes        int
-	holdDrops        atomic.Uint64
-	barrierTimeouts  atomic.Uint64
-	holdTimeouts     atomic.Uint64
-	holdSendFailures atomic.Uint64
-	buffer           *packetBuffer
-	replayPackets    atomic.Uint64
-	replayFiltered   atomic.Uint64
-	replays          atomic.Uint64
+	forwardMu          sync.Mutex
+	holds              map[string]*sessionHold
+	heldPackets        int
+	heldBytes          int
+	holdDrops          atomic.Uint64
+	barrierTimeouts    atomic.Uint64
+	holdTimeouts       atomic.Uint64
+	holdSendFailures   atomic.Uint64
+	buffer             *packetBuffer
+	replayPackets      atomic.Uint64
+	replayFiltered     atomic.Uint64
+	replayDrops        atomic.Uint64
+	replaySendFailures atomic.Uint64
+	replayExpiries     atomic.Uint64
+	replays            atomic.Uint64
 
 	replayPacing map[netip.AddrPort]*replayPacer
 	registryMu   sync.RWMutex
@@ -589,7 +595,7 @@ func (r *Relay) Stats() Stats {
 	return Stats{
 		BufferedSessions: bufferStats.BufferedSessions, BufferedPackets: bufferStats.BufferedPackets, BufferedBytes: bufferStats.BufferedBytes,
 		BufferDrops: bufferStats.BufferDrops, BufferExpired: bufferStats.BufferExpired, BufferUntracked: bufferStats.BufferUntracked,
-		ReplayPackets: r.replayPackets.Load(), ReplayFiltered: r.replayFiltered.Load(), Replays: r.replays.Load(),
+		ReplayPackets: r.replayPackets.Load(), ReplayFiltered: r.replayFiltered.Load(), ReplayDrops: r.replayDrops.Load(), ReplaySendFailures: r.replaySendFailures.Load(), ReplayExpiries: r.replayExpiries.Load(), Replays: r.replays.Load(),
 		RoutesRestored: r.routesRestored.Load(), RoutesRestoreSkipped: r.routesRestoreSkipped.Load(), RoutesRestoreFailed: r.routesRestoreFailed.Load(), RouteWrites: r.routeWritesDone.Load(), RouteWritesDropped: r.routeWritesDropped.Load(), RouteWritesFailed: r.routeWritesFailed.Load(),
 		BarrierTimeouts: r.barrierTimeouts.Load(),
 		Holds:           holds, HeldPackets: packets, HeldBytes: bytes, HoldDrops: r.holdDrops.Load(), HoldTimeouts: r.holdTimeouts.Load(), HoldSendFailures: r.holdSendFailures.Load(),
@@ -619,6 +625,9 @@ func (r *Relay) Close() error {
 		r.closeErr = errors.Join(r.public.Close(), r.workers.Close())
 		r.forwardMu.Lock()
 		for id, h := range r.holds {
+			if h.replay {
+				r.markReplayExpired(h)
+			}
 			h.timer.Stop()
 			close(h.released)
 			delete(r.holds, id)
