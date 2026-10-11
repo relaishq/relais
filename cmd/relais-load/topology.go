@@ -19,9 +19,11 @@ import (
 )
 
 type topology struct {
-	External  callharness.ExternalTopology
-	Workers   map[int]*clusterprocess.Child
-	processes []*clusterprocess.Child
+	External       callharness.ExternalTopology
+	Workers        map[int]*clusterprocess.Child
+	Killed         map[int]bool
+	statusRequests uint64
+	processes      []*clusterprocess.Child
 }
 
 // Owned loopback topology; caller attachment is separate so namespace and
@@ -136,7 +138,14 @@ func (t *topology) kill(worker int) error {
 	if c == nil {
 		return fmt.Errorf("worker %d is not owned", worker)
 	}
-	return c.SignalGroup(syscall.SIGKILL)
+	if err := c.SignalGroup(syscall.SIGKILL); err != nil {
+		return err
+	}
+	if t.Killed == nil {
+		t.Killed = map[int]bool{}
+	}
+	t.Killed[worker] = true
+	return nil
 }
 
 func (t *topology) close() {

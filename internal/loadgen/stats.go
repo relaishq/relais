@@ -54,8 +54,10 @@ func (h *histogram) summary() Lateness {
 }
 
 type Meter struct {
-	mu              sync.Mutex
-	total, interval histogram
+	mu                                     sync.Mutex
+	total, interval                        histogram
+	pacing, intervalPacing                 Pacing
+	statusRequests, intervalStatusRequests uint64
 }
 
 func (m *Meter) Observe(_ string, scheduled, actual time.Time) {
@@ -64,38 +66,86 @@ func (m *Meter) Observe(_ string, scheduled, actual time.Time) {
 	m.total.add(actual.Sub(scheduled))
 	m.interval.add(actual.Sub(scheduled))
 }
-func (m *Meter) Sample() (Lateness, Lateness) {
+
+// Pacing counts frames, independently of fragmented RTP packet counts.
+type Pacing struct {
+	SentFrames    uint64 `json:"sent_frames"`
+	SkippedFrames uint64 `json:"skipped_frames"`
+}
+
+func (p Pacing) SkippedPercent() float64 {
+	if p.SentFrames+p.SkippedFrames == 0 {
+		return 0
+	}
+	return 100 * float64(p.SkippedFrames) / float64(p.SentFrames+p.SkippedFrames)
+}
+func (m *Meter) ObservePacing(_ string, sent, skipped uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	all, interval := m.total.summary(), m.interval.summary()
+	m.pacing.SentFrames += sent
+	m.pacing.SkippedFrames += skipped
+	m.intervalPacing.SentFrames += sent
+	m.intervalPacing.SkippedFrames += skipped
+}
+func (m *Meter) observeStatusRequest() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.statusRequests++
+	m.intervalStatusRequests++
+}
+
+type meterSample struct {
+	all, interval              Lateness
+	pacing, intervalPacing     Pacing
+	requests, intervalRequests uint64
+}
+
+func (m *Meter) sample() meterSample {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := meterSample{m.total.summary(), m.interval.summary(), m.pacing, m.intervalPacing, m.statusRequests, m.intervalStatusRequests}
 	m.interval = histogram{}
-	return all, interval
+	m.intervalPacing = Pacing{}
+	m.intervalStatusRequests = 0
+	return out
+}
+func (m *Meter) Sample() (Lateness, Lateness) {
+	s := m.sample()
+	return s.all, s.interval
 }
 
 type Limits struct {
-	P99        time.Duration `json:"p99_lateness_limit_ns"`
-	CPUPercent float64       `json:"cpu_percent_per_gomaxprocs_limit"`
+	P99            time.Duration `json:"p99_lateness_limit_ns"`
+	CPUPercent     float64       `json:"cpu_percent_per_gomaxprocs_limit"`
+	SkippedPercent float64       `json:"skipped_frame_percent_limit"`
 }
 
-func DefaultLimits() Limits { return Limits{20 * time.Millisecond, 85} }
+func DefaultLimits() Limits {
+	return Limits{P99: 20 * time.Millisecond, CPUPercent: 85, SkippedPercent: 1}
+}
 func (l Limits) Validate() error {
-	if l.P99 <= 0 || l.CPUPercent <= 0 || l.CPUPercent > 100 || math.IsNaN(l.CPUPercent) {
-		return fmt.Errorf("positive lateness and CPU limit in (0,100] required")
+	if l.P99 <= 0 || l.CPUPercent <= 0 || l.CPUPercent > 100 || math.IsNaN(l.CPUPercent) || l.SkippedPercent < 0 || l.SkippedPercent > 100 || math.IsNaN(l.SkippedPercent) {
+		return fmt.Errorf("positive lateness, CPU limit in (0,100], and skipped-frame limit in [0,100] required")
 	}
 	return nil
 }
 
 type Stats struct {
-	At               time.Time     `json:"at"`
-	Interval         time.Duration `json:"interval_ns"`
-	CPUPercent       float64       `json:"cpu_percent_one_core"`
-	CPUPerGOMAXPROCS float64       `json:"cpu_percent_per_gomaxprocs"`
-	GOMAXPROCS       int           `json:"gomaxprocs"`
-	HeapBytes        uint64        `json:"heap_bytes"`
-	RuntimeBytes     uint64        `json:"runtime_bytes"`
-	PeakRSSBytes     uint64        `json:"peak_rss_bytes"`
-	Lateness         Lateness      `json:"lateness"`
-	IntervalLateness Lateness      `json:"interval_lateness"`
+	At                      time.Time     `json:"at"`
+	Interval                time.Duration `json:"interval_ns"`
+	CPUPercent              float64       `json:"cpu_percent_one_core"`
+	CPUPerGOMAXPROCS        float64       `json:"cpu_percent_per_gomaxprocs"`
+	GOMAXPROCS              int           `json:"gomaxprocs"`
+	HeapBytes               uint64        `json:"heap_bytes"`
+	RuntimeBytes            uint64        `json:"runtime_bytes"`
+	PeakRSSBytes            uint64        `json:"peak_rss_bytes"`
+	Lateness                Lateness      `json:"lateness"`
+	IntervalLateness        Lateness      `json:"interval_lateness"`
+	Pacing                  Pacing        `json:"pacing"`
+	IntervalPacing          Pacing        `json:"interval_pacing"`
+	StatusRequests          uint64        `json:"status_requests"`
+	IntervalStatusRequests  uint64        `json:"interval_status_requests"`
+	StatusRequestsPerSecond float64       `json:"status_requests_per_second"`
 }
 type Sampler struct {
 	at  time.Time
@@ -127,9 +177,9 @@ func (s *Sampler) Sample(m *Meter) (Stats, error) {
 	}
 	samples := []metrics.Sample{{Name: "/memory/classes/heap/objects:bytes"}, {Name: "/memory/classes/total:bytes"}}
 	metrics.Read(samples)
-	all, interval := m.Sample()
+	sample := m.sample()
 	pct := 100 * float64(cpu-s.cpu) / float64(elapsed)
-	out := Stats{now, elapsed, pct, pct / float64(runtime.GOMAXPROCS(0)), runtime.GOMAXPROCS(0), samples[0].Value.Uint64(), samples[1].Value.Uint64(), rss, all, interval}
+	out := Stats{At: now, Interval: elapsed, CPUPercent: pct, CPUPerGOMAXPROCS: pct / float64(runtime.GOMAXPROCS(0)), GOMAXPROCS: runtime.GOMAXPROCS(0), HeapBytes: samples[0].Value.Uint64(), RuntimeBytes: samples[1].Value.Uint64(), PeakRSSBytes: rss, Lateness: sample.all, IntervalLateness: sample.interval, Pacing: sample.pacing, IntervalPacing: sample.intervalPacing, StatusRequests: sample.requests, IntervalStatusRequests: sample.intervalRequests, StatusRequestsPerSecond: float64(sample.intervalRequests) / elapsed.Seconds()}
 	s.at, s.cpu = now, cpu
 	return out, nil
 }
@@ -140,6 +190,9 @@ func (l Limits) Causes(s Stats) []string {
 	}
 	if s.IntervalLateness.P99 > l.P99 {
 		reasons = append(reasons, fmt.Sprintf("send lateness p99 %s exceeds %s", s.IntervalLateness.P99, l.P99))
+	}
+	if s.IntervalPacing.SkippedPercent() > l.SkippedPercent {
+		reasons = append(reasons, fmt.Sprintf("skipped frames %.2f%% exceeds %.2f%%", s.IntervalPacing.SkippedPercent(), l.SkippedPercent))
 	}
 	if s.CPUPerGOMAXPROCS > l.CPUPercent {
 		reasons = append(reasons, fmt.Sprintf("CPU %.2f%% per GOMAXPROCS exceeds %.2f%%", s.CPUPerGOMAXPROCS, l.CPUPercent))

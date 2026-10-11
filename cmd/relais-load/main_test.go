@@ -77,3 +77,25 @@ func TestMoveScheduleUsesEligibleCallsAndReturnsOperatorFailure(t *testing.T) {
 		t.Fatal("insufficient sample accepted")
 	}
 }
+
+func TestMoveExcludesUndetectedKilledOwners(t *testing.T) {
+	var moved []string
+	caller := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req loadgen.MoveRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+		}
+		moved = append(moved, req.Sessions...)
+	}))
+	defer caller.Close()
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"calls": []map[string]string{{"id": "stale", "owner": "0"}, {"id": "live", "owner": "1"}, {"id": "target", "owner": "2"}}})
+	}))
+	defer control.Close()
+	topology := &topology{External: externalTopology(control.URL+"/calls", netip.MustParseAddrPort("127.0.0.1:20000")), Killed: map[int]bool{0: true}}
+	event := loadgen.Event{Kind: "move", Worker: 2}
+	result := runEvent(context.Background(), topology, []generator{{url: caller.URL, sessions: []string{"stale", "live", "target"}}}, event)
+	if result.Error != "" || result.Affected != 1 || !reflect.DeepEqual(result.Sessions, []string{"live"}) || !reflect.DeepEqual(moved, result.Sessions) || result.FinishedAt.Before(result.At) {
+		t.Fatalf("%+v moved=%v", result, moved)
+	}
+}

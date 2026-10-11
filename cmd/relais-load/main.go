@@ -153,14 +153,17 @@ func waitUntil(ctx context.Context, at time.Time) error {
 		return ctx.Err()
 	}
 }
-func runEvent(ctx context.Context, t *topology, generators []generator, e loadgen.Event) loadgen.EventResult {
-	result := loadgen.EventResult{Event: e, At: time.Now()}
+func runEvent(ctx context.Context, t *topology, generators []generator, e loadgen.Event) (result loadgen.EventResult) {
+	defer func() { result.FinishedAt = time.Now() }()
+	result = loadgen.EventResult{Event: e, At: time.Now()}
 	var status controlplane.Status
+	t.statusRequests++
 	err := request(ctx, http.MethodGet, strings.TrimSuffix(t.External.SignalingURL, "/calls")+"/status", nil, &status)
 	if err == nil && e.Kind == "kill" {
 		for _, c := range status.Calls {
 			if c.Owner == strconv.Itoa(e.Worker) {
 				result.Affected++
+				result.Sessions = append(result.Sessions, c.ID)
 			}
 		}
 		if result.Affected == 0 {
@@ -177,7 +180,8 @@ func runEvent(ctx context.Context, t *topology, generators []generator, e loadge
 	} else if err == nil {
 		eligible := map[string]bool{}
 		for _, c := range status.Calls {
-			if c.Owner != strconv.Itoa(e.Worker) {
+			owner, ownerErr := strconv.Atoi(c.Owner)
+			if ownerErr == nil && !t.Killed[owner] && c.Owner != strconv.Itoa(e.Worker) {
 				eligible[c.ID] = true
 			}
 		}
@@ -194,11 +198,10 @@ func runEvent(ctx context.Context, t *topology, generators []generator, e loadge
 				}
 			}
 			if len(ids) > 0 {
+				result.Affected += len(ids)
+				result.Sessions = append(result.Sessions, ids...)
 				moveErr := request(ctx, http.MethodPost, g.url+"/move", loadgen.MoveRequest{Sessions: ids, To: e.Worker}, nil)
 				err = errors.Join(err, moveErr)
-				if moveErr == nil {
-					result.Affected += len(ids)
-				}
 			}
 		}
 		if result.Affected == 0 || remaining > 0 {
@@ -224,6 +227,12 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 		return report, err
 	}
 	defer t.close()
+	defer func() {
+		report.DriverStatusRequests = t.statusRequests
+		if c.Duration > 0 {
+			report.DriverStatusRequestsPerSecond = float64(t.statusRequests) / c.Duration.Seconds()
+		}
+	}()
 	executable, err := os.Executable()
 	if err != nil {
 		return report, err
@@ -254,7 +263,7 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 		name := fmt.Sprintf("caller-%d", i)
 		env := serviceEnv("", "", "")
 		env = append(withoutEnv(env, "GOMAXPROCS"), "GOMAXPROCS="+strconv.Itoa(c.GOMAXPROCS))
-		child, err := m.Start(dir, name, env, executable, "-child", "-callers", strconv.Itoa(n), "-duration", c.Duration.String(), "-sample-every", c.SampleEvery.String(), "-video="+strconv.FormatBool(c.Video), "-signaling", t.External.SignalingURL, "-relay", t.External.RelayAddr.String(), "-output", output)
+		child, err := m.Start(dir, name, env, executable, "-child", "-parent-pid", strconv.Itoa(os.Getpid()), "-callers", strconv.Itoa(n), "-duration", c.Duration.String(), "-sample-every", c.SampleEvery.String(), "-video="+strconv.FormatBool(c.Video), "-signaling", t.External.SignalingURL, "-relay", t.External.RelayAddr.String(), "-output", output)
 		if err != nil {
 			return report, err
 		}
@@ -313,12 +322,12 @@ func writeJSON(path string, value any) error {
 }
 func printReport(r loadgen.RunReport) {
 	fmt.Printf("callers=%d duration=%s outcome=%s\n", r.Callers, r.Duration, r.Outcome)
-	fmt.Println("PID CALLS CPU(core)% CPU/GOMAXPROCS% HEAP(MiB) RSS-peak(MiB) SEND-p50 SEND-p99 INTERVAL-p99-peak SEND-max SATURATED")
+	fmt.Println("PID CALLS CPU(core)% CPU/GOMAXPROCS% HEAP(MiB) RSS-peak(MiB) SEND-p50 SEND-p99 INTERVAL-p99-peak SEND-max SKIPPED-peak% STATUS/s SATURATED")
 	for _, p := range r.Processes {
-		fmt.Printf("%d %d %.2f %.2f %.1f %.1f %s %s %s %s %t\n", p.PID, len(p.Calls), p.PeakCPUPercent, p.PeakCPUPerGOMAXPROCS, float64(p.PeakHeapBytes)/(1<<20), float64(p.PeakRSSBytes)/(1<<20), p.Lateness.P50, p.Lateness.P99, p.PeakIntervalP99, p.Lateness.Max, p.Saturated)
+		fmt.Printf("%d %d %.2f %.2f %.1f %.1f %s %s %s %s %.2f %.2f %t\n", p.PID, len(p.Calls), p.PeakCPUPercent, p.PeakCPUPerGOMAXPROCS, float64(p.PeakHeapBytes)/(1<<20), float64(p.PeakRSSBytes)/(1<<20), p.Lateness.P50, p.Lateness.P99, p.PeakIntervalP99, p.Lateness.Max, p.PeakSkippedPercent, p.StatusRequestsPerSecond, p.Saturated)
 	}
 	for _, e := range r.Events {
-		fmt.Printf("event=%s at=%s worker=%d affected=%d error=%q\n", e.Event.Kind, e.Event.After, e.Event.Worker, e.Affected, e.Error)
+		fmt.Printf("event=%s at=%s worker=%d affected=%d recorded=%d error=%q\n", e.Event.Kind, e.Event.After, e.Event.Worker, e.Affected, e.Recorded, e.Error)
 	}
 	for _, cause := range r.Causes {
 		fmt.Println("cause:", cause)
@@ -331,6 +340,7 @@ func run() error {
 	child := fs.Bool("child", false, "internal caller-process mode")
 	signaling := fs.String("signaling", "", "child control-plane calls URL")
 	relay := fs.String("relay", "", "child relay media address")
+	parentPID := fs.Int("parent-pid", 0, "internal caller owner PID")
 	fs.IntVar(&c.Callers, "callers", 10, "total simultaneous harness callers")
 	fs.IntVar(&c.Processes, "processes", 2, "generator processes (balanced caller distribution)")
 	fs.IntVar(&c.Workers, "workers", 3, "owned media workers")
@@ -338,6 +348,7 @@ func run() error {
 	fs.DurationVar(&c.Duration, "duration", 60*time.Second, "media duration after all callers connect")
 	fs.DurationVar(&c.SampleEvery, "sample-every", time.Second, "child resource sample interval")
 	fs.DurationVar(&c.Limits.P99, "lateness-limit", 20*time.Millisecond, "saturation limit for interval p99 packet lateness")
+	fs.Float64Var(&c.Limits.SkippedPercent, "skipped-frame-limit", 1, "saturation percent of skipped frame opportunities")
 	fs.Float64Var(&c.Limits.CPUPercent, "cpu-limit", 85, "saturation CPU percent per GOMAXPROCS")
 	fs.StringVar(&c.Bin, "bin", "bin", "service binaries and run logs directory")
 	fs.StringVar(&c.Output, "output", "", "report JSON path; defaults to run directory")
@@ -359,7 +370,7 @@ func run() error {
 		}
 		ctx, stop := processrun.Context()
 		defer stop()
-		return loadgen.RunChild(ctx, loadgen.ChildOptions{Topology: externalTopology(*signaling, addr), Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output})
+		return loadgen.RunChild(ctx, loadgen.ChildOptions{Topology: externalTopology(*signaling, addr), Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output, ParentPID: *parentPID})
 	}
 	c.Events = []loadgen.Event(events)
 	if err := c.validate(); err != nil {

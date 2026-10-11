@@ -22,6 +22,8 @@ type ChildOptions struct {
 	Duration, SampleEvery time.Duration
 	Video                 bool
 	Output                string
+	ParentPID             int
+	StartTimeout          time.Duration
 }
 type StartRequest struct {
 	At time.Time `json:"at"`
@@ -41,6 +43,17 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	if o.Callers < 1 || o.Duration <= 0 || o.SampleEvery <= 0 {
 		return errors.New("invalid child counts or durations")
 	}
+	if o.ParentPID == 0 {
+		o.ParentPID = os.Getppid()
+	}
+	ctx, stopParent := watchParent(ctx, o.ParentPID, 250*time.Millisecond, os.Getppid)
+	defer stopParent()
+	if o.StartTimeout == 0 {
+		o.StartTimeout = 3 * time.Minute
+	}
+	meter := &Meter{}
+	poller := newStatusPoller(o.Topology.SignalingURL, meter)
+	o.Topology.Status = poller.Get
 	h, err := callharness.Start(callharness.Options{External: &o.Topology})
 	if err != nil {
 		return err
@@ -52,7 +65,6 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	}
 	defer func() { _ = output.Close() }()
 	writer := NewWriter(io.MultiWriter(output, os.Stdout))
-	meter := &Meter{}
 	calls := make([]*callharness.Call, o.Callers)
 	// Bounded setup concurrency prevents signaling setup from flooding the server.
 	var wg sync.WaitGroup
@@ -71,7 +83,7 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 			defer func() { <-slots }()
 			dial, stop := context.WithTimeout(ctx, 20*time.Second)
 			defer stop()
-			call, err := h.Dial(dial, callharness.CallOptions{Video: o.Video, Worker: -1, Recording: callharness.RecordingOptions{History: 15 * time.Second, DecodeEvery: 30}, SendTiming: meter.Observe})
+			call, err := h.Dial(dial, callharness.CallOptions{Video: o.Video, Worker: -1, Recording: callharness.RecordingOptions{History: 15 * time.Second, DecodeEvery: 30}, SendTiming: meter.Observe, SendPacing: meter.ObservePacing})
 			if err != nil {
 				errs <- fmt.Errorf("dial %d: %w", i, err)
 				return
@@ -158,19 +170,11 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	go func() { served <- processrun.Serve(lifetime, listener, mux) }()
 	defer func() { cancel(); <-served }()
 	processrun.Ready(map[string]any{"http": "http://" + listener.Addr().String(), "type": "ready", "callers": len(calls)})
-	var at time.Time
-	select {
-	case at = <-start:
-	case <-ctx.Done():
-		return ctx.Err()
+	if err := waitForStart(ctx, start, o.StartTimeout); err != nil {
+		return err
 	}
-	timer := time.NewTimer(max(time.Until(at), 0))
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	// Lifetime request totals include setup; interval rates start with media.
+	meter.sample()
 	sampler := &Sampler{}
 	if err := sampler.Reset(); err != nil {
 		return err

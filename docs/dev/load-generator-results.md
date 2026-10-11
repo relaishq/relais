@@ -1,66 +1,125 @@
 # Local load-generator evidence
 
-Worker checkout: `feat/38-load-generator`, base `b2ce35e`, darwin/arm64, Go 1.26.9.
+Rework checkout: `feat/38-load-generator`, base `e5510a4`, with uncommitted
+PR #71 review fixes. Measured on 2026-10-11 UTC, darwin/arm64, Go 1.26.9.
+This is a shared developer Mac. These short runs do not establish sustained
+host capacity or a hosted Linux result. Worker build, lint and test checks
+finished before these runtime measurements; no worker checks overlapped them.
 
-These measurements came from a shared developer Mac. They do not establish a stable host capacity or a hosted Linux result.
+## Correction to previous evidence
 
-## 60-second load run
+The earlier base `b2ce35e` advanced a deadline once per sent frame, while the
+Go ticker dropped deadlines during stalls. One short stall therefore left
+later sends permanently late. The regression reproduced this: one 60 ms stall
+made **80/80 later sends exceed 20 ms**. The corrected pacer follows delivered
+tick timestamps and counts dropped frame opportunities separately. The
+regression now passes, and a subsequent one-second interval passes the
+production lateness and skipped-frame limits.
+
+The earlier five-call-per-process load results (148.3/150.2 ms peak interval
+p99), preliminary ramps, eight-caller repeat, and 8/16 calibration bracket are
+**withdrawn as generator-capacity evidence**. Their reported lateness was
+inflated by persistent schedule debt, so those observations cannot distinguish
+a short stall from sustained under-sending. Their raw caller reports remain
+historical observations; they do not establish service guarantees. Historical
+artifacts include `bin/load-mac-final.json`, `bin/calibration-mac.json`,
+`bin/calibration-mac-boundary.json`, and `bin/calibration-mac-final.json`.
+
+The measurements below use delivered-tick lateness and the separate 1%
+skipped-frame limit. The 8/16 bracket below is a new observation from corrected
+instrumentation, even though its caller counts match the withdrawn bracket.
+
+## Corrected 20-second load run
 
 ```sh
-./bin/relais-load -callers=10 -processes=2 -duration=60s \
-  -event=10s,move,2,1 -event=30s,kill,0,0 \
-  -output=bin/load-mac-final.json
+./bin/relais-load -callers=8 -processes=2 -gomaxprocs=1 -duration=20s \
+  -event=6s,move,2,1 -output=bin/load-mac-rework.json
 ```
 
-| Process | Callers | Peak CPU / one core | Peak heap MiB | Peak RSS MiB | Send p50 | Send p99 | Peak interval p99 | Send max |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 96763 | 5 | 8.08% | 11.0 | 34.9 | 1.7 ms | 141.2 ms | 148.3 ms | 168.357 ms |
-| 96764 | 5 | 7.85% | 11.6 | 35.0 | 1.3 ms | 122.0 ms | 150.2 ms | 150.280 ms |
+| Process | Callers | Peak CPU / one core | Peak heap MiB | Peak RSS MiB | Send p50 | Send p99 | Peak interval p99 | Send max | Peak skipped frames | Status requests/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 32694 | 4 | 5.81% | 8.6 | 33.2 | 0.600 ms | 2.300 ms | 5.000 ms | 5.575 ms | 0.00% | 0.73 |
+| 32695 | 4 | 6.26% | 9.0 | 32.5 | 0.600 ms | 2.700 ms | 5.000 ms | 5.620 ms | 0.00% | 0.73 |
 
-**Outcome: inconclusive.** Both generators exceeded the default 20 ms interval p99 send-lateness limit. Each had GOMAXPROCS 1. CPU remained below the 85% limit. The command exited 1 and preserved the cause.
+**Outcome: valid; command exit 0.** All eight calls returned complete reports,
+with no caller errors, decryption failures or ICE restarts. Each process sent
+6,400 frames with zero skips. The move at six seconds selected two calls;
+`affected=2` and `recorded=2`. All eight yardstick metrics for this event passed
+with 2/2 trusted call coverage. Generator validity remains separate from
+service verdicts.
 
-All 10 calls returned complete reports. All stayed connected, with zero decryption failures and zero ICE restarts. The move at 10 seconds affected two calls; SIGKILL at 30 seconds affected three calls. All affected calls retained the same per-event yardstick as the ordinary harness. The two move rows passed each recorded metric. The three takeover rows retained trusted audio-loss and video-loss failures. These raw observations do not override the invalid generator result or prove service guarantees.
+Each process made 16 status requests including setup, and 15 in the measured
+media/hangup intervals (0.73 requests/s). The driver made one event status read,
+reported separately as 0.05 requests/s over the configured 20-second duration.
+The real run confirms that status traffic is shared within each process.
+Reports and logs: `bin/load-mac-rework.json`, `bin/load-mac-rework.log`,
+`bin/load-run-1041248452/`.
 
-Full report and child logs remain under ignored `bin/`: `bin/load-mac-final.json` and `bin/load-run-1442116382/`.
-
-## Preliminary calibration and boundary repeat
-
-One generator process, GOMAXPROCS 1, audio plus video, 15 seconds per step. The preliminary ramp was valid at 1, 2, 4 and 8 callers and saturated at 16. A lint run overlapped its 16-caller step. The separate boundary repeat at 8 callers also saturated (peak interval p99 30.4 ms, peak CPU 12.77%). This variation prevents treating the preliminary count of 8 as a stable limit. The final ramp below runs after the worker quality checks finish.
-
-Preliminary reports: `bin/calibration-mac.json` and `bin/calibration-mac-boundary.json`.
-
-## Final Mac calibration
+## Corrected Mac calibration — one ramp
 
 ```sh
 ./bin/relais-load -calibrate -processes=1 -gomaxprocs=1 \
-  -duration=15s -calibration-max=16 \
-  -output=bin/calibration-mac-final.json
+  -duration=15s -calibration-max=16 -output=bin/calibration-mac-rework.json
 ```
 
-| Callers / process | Peak CPU / one core | Peak heap MiB | Peak RSS MiB | Cumulative send p99 | Peak interval p99 | Generator outcome |
-| --- | ---: | ---: | ---: | ---: | ---: | --- |
-| 1 | 1.83% | 3.0 | 23.5 | 2.2 ms | 3.1 ms | valid |
-| 2 | 2.46% | 4.0 | 25.4 | 2.2 ms | 2.3 ms | valid |
-| 4 | 4.19% | 7.0 | 29.8 | 2.5 ms | 3.5 ms | valid |
-| 8 | 7.15% | 11.9 | 39.5 | 2.7 ms | 3.7 ms | valid |
-| 16 | 21.66% | 23.0 | 54.3 | 440.1 ms | 440.4 ms | inconclusive |
+Audio plus video, one generator process, GOMAXPROCS 1. Default limits: interval
+p99 lateness >20 ms, skipped frame opportunities >1%, CPU/GOMAXPROCS >85%.
 
-The final ramp observed **8 valid callers and saturation at 16 callers**. Its peak interval p99 at 16 was 440.4 ms; CPU was only 21.66% of one core. This is a short-run observed bracket. The independent eight-caller saturation and the longer five-call-per-process load saturation show that it is not a stable sustained-capacity limit. Other workers share this Mac. Worker quality checks had finished before this final ramp began.
+| Callers / process | Peak CPU / one core | Peak heap MiB | Peak RSS MiB | Cumulative send p99 | Peak interval p99 | Peak skipped frames | Status requests/s | Generator outcome |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | 1.59% | 3.2 | 24.5 | 2.2 ms | 6.105 ms | 0.00% | 0.64 | valid |
+| 2 | 3.74% | 5.0 | 27.2 | 2.3 ms | 2.500 ms | 0.00% | 0.77 | valid |
+| 4 | 8.53% | 6.3 | 31.3 | 2.5 ms | 3.800 ms | 0.00% | 0.71 | valid |
+| 8 | 9.59% | 14.9 | 41.5 | 2.8 ms | 7.400 ms | 0.00% | 0.90 | valid |
+| 16 | 17.94% | 26.7 | 61.8 | 60.8 ms | 80.800 ms | 6.09% | 0.97 | inconclusive |
 
-The final calibration report includes every step, per-call yardstick, thresholds and resource samples. It remains in `bin/calibration-mac-final.json`; process logs are in `bin/load-run-3258105647/`.
+The ramp observed **8 valid callers and saturation at 16**; calibration exit
+0, with saturation as its expected endpoint. At 16 callers, interval p99
+reached 80.8 ms and skipped frames peaked at 6.09%. The process sent 18,818
+frames and skipped 382 of 19,200 opportunities. CPU stayed below its limit.
+All steps had complete caller reports. The corrected evidence catches actual
+missing workload; it does not carry one stall forward as permanent lateness.
+This remains a short-run observed bracket on a shared Mac, not a stable
+sustained-capacity threshold.
 
-## Hosted Linux
-
-**NOT-RUN.** The new nightly/manual `Load generator calibration` workflow uploads the hosted report, runner details and all process logs. The orchestrator must dispatch it after integration. The load binary cross-compiles for linux/amd64; that does not prove native Linux resource sampling.
+Report and logs: `bin/calibration-mac-rework.json`,
+`bin/calibration-mac-rework.log`, `bin/load-run-3646616182/`.
 
 ## Verification
 
-- Race unit tests: `go test -race -count=1 ./internal/loadgen ./cmd/relais-load`.
-- Real external-caller socket/timing test: `go test -race -count=1 -run ^TestSendTiming ./pkg/callharness/`, with a worker-owned throwaway Redis endpoint and `RELAIS_TEST_REDIS_REQUIRE=1`.
-- CPU-saturation mutation: removing CPU detection from the production report reader made `TestReadProcessUsesActualSaturationLimits/cpu` fail; restoring it returned the race suite to green. The red log is `bin/saturation-mutation-red.log`.
-- `go vet ./...`, `make build`, Linux cross-build, repository formatting and golangci-lint v2.14.0 (0 issues).
-- Workflow YAML parses. Hosted workflow execution and full namespace load placement are NOT-RUN. No full harness matrix was run.
+- `gofmt -l .`: no files; `git diff --check`: clean.
+- `go vet ./...`: passed; golangci-lint v2.14.0: **0 issues**.
+- `make build`: passed (`bin/rework-build.log`).
+- `go test -race -count=1 ./cmd/relais-load/ ./internal/loadgen/`: passed
+  (`bin/rework-units-race.log`).
+- `go test -race -count=1 -run '^TestSendTiming|^TestExternalMove'
+  ./pkg/callharness/`: passed (`bin/rework-harness-race.log`). Package tests
+  used worker-owned Redis on a free loopback port, persistence disabled, with
+  `RELAIS_TEST_REDIS_ADDR` and `RELAIS_TEST_REDIS_REQUIRE=1`; Redis was reaped.
+- Stall red/green: `bin/rework-stall-red.log` records the 80/80 failure;
+  `bin/rework-stall-green.log` records the passing corrected harness tests.
+  `TestStallIntervalsRecover` exercises real media and the production meter:
+  dropped frames appear in the stalled interval, and a later interval is valid.
+- Ring-loss regression feeds 300 completed caller reports through the production
+  reader and judge, with only 256 matching takeover records. The run is
+  inconclusive despite 256/300 trusted coverage exceeding 80%. Repeated moves
+  remain separate events, and unrelated action times cannot fill missing records.
+- Shared poller regression uses the external harness's `Status` entry point.
+  100 concurrent readers cause one HTTP request per one-second refresh, both
+  for successful responses and failures. Request telemetry is checked.
+- Tests cover unknown owner on a failed external move, exclusion of calls still
+  owned by a killed worker, start deadline (including a future `/start` time),
+  and parent-change cancellation through the production lifetime helpers.
+- Workflow YAML and required settings verified: no concurrency group,
+  `persist-credentials: false`, and an `always()` step prints command report
+  summaries even if calibration fails. Artifact upload remains unconditional.
+- Cleanup: all **46** rework-owned service, caller and Redis PIDs were absent
+  (`bin/rework-cleanup-check.json`). Redis never used port 6379.
 
-Cancellation smoke: SIGTERM during an active two-process run produced an inconclusive report with both child records. All eight owned topology/caller/Redis PIDs were absent after cleanup (`bin/load-cancel-check.json`). A final check found all 103 recorded task-owned service/caller/Redis PIDs absent (`bin/cleanup-check.json`).
+**NOT-RUN:** hosted Linux workflow, full harness matrix, namespace load
+placement, and a deliberate parent-kill runtime test. Parent cancellation and
+start deadlines have unit coverage; normal child lifetime and cleanup were
+exercised by the load run and calibration. The orchestrator must dispatch CI
+for hosted Linux evidence.
 
-All started processes are task-owned and stopped between runs. Work is uncommitted; no GitHub writes were performed.
+Changes remain uncommitted. No push, GitHub writes, or agent delegation occurred.

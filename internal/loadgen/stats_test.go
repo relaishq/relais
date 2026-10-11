@@ -101,13 +101,15 @@ func TestResourceSampler(t *testing.T) {
 }
 
 func TestYardstickCoverageAndFailuresRemainSeparateFromGeneratorValidity(t *testing.T) {
-	events := make([]callharness.MoveReport, 5)
-	for i := range events {
-		events[i].Kind = "move"
-		events[i].Measurement.AudioLoss.Trusted = i < 4
+	at := time.Now()
+	calls := make([]Message, 5)
+	sessions := []string{"a", "b", "c", "d", "e"}
+	for i := range calls {
+		move := callharness.MoveReport{Kind: "move", To: 1, Start: time.Second}
+		move.Measurement.AudioLoss.Trusted = i < 4
+		calls[i] = Message{Session: sessions[i], Call: &callharness.Report{StartedAt: at, Moves: []callharness.MoveReport{move}}}
 	}
-	report := &callharness.Report{Moves: events}
-	run := RunReport{Processes: []ProcessReport{{Complete: true, Calls: []Message{{Call: report}}}}}
+	run := RunReport{Processes: []ProcessReport{{Complete: true, Calls: calls}}, Events: []EventResult{{Event: Event{Kind: "move", Worker: 1}, At: at.Add(time.Second), FinishedAt: at.Add(2 * time.Second), Affected: 5, Sessions: sessions}}}
 	run.Judge()
 	if run.Outcome != "valid" {
 		t.Fatal(run)
@@ -124,12 +126,12 @@ func TestYardstickCoverageAndFailuresRemainSeparateFromGeneratorValidity(t *test
 	if row := find("audio_loss"); row.Outcome != "pass" || row.TrustedCoverage != .8 {
 		t.Fatal(row)
 	}
-	events[3].Measurement.AudioLoss.Trusted = false
+	calls[3].Call.Moves[0].Measurement.AudioLoss.Trusted = false
 	run.Judge()
 	if row := find("audio_loss"); row.Outcome != "inconclusive" {
 		t.Fatal(row)
 	}
-	events[0].Measurement.AudioLoss.Failed = true
+	calls[0].Call.Moves[0].Measurement.AudioLoss.Failed = true
 	run.Judge()
 	if row := find("audio_loss"); row.Outcome != "fail" {
 		t.Fatal(row)

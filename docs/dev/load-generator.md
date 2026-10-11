@@ -26,6 +26,9 @@ directory under `bin/load-run-*`. It refuses port 6379. It does not use the
 Redis endpoint inherited from the environment. First interrupt cancels the
 run and closes children; a second interrupt force-kills owned process groups.
 Normal exit, errors and each calibration step also stop and reap children.
+A caller waits at most three minutes for `/start`, including a future start
+time. It polls its original parent PID every 250 ms and cancels its work on
+reparenting. Caller cleanup then closes its connections and operator endpoint.
 Logs survive for diagnosis. The existing `crash-run` modes are unchanged.
 
 ## Generator validity
@@ -39,11 +42,13 @@ The default limits are documented inputs, stored in each report:
 
 | Measurement | Default saturation limit | Definition |
 | --- | --- | --- |
-| Send lateness | p99 > 20 ms in any resource interval | Actual successful UDP write time minus that media sample's original pacer deadline, once per RTP packet |
+| Send lateness | p99 > 20 ms in any resource interval | Actual successful UDP write time minus the delivered tick that triggered the frame, once per RTP packet |
+| Skipped frames | > 1% in any resource interval | Dropped ticker opportunities / (successful frames + dropped opportunities), summed across audio and video |
 | CPU | > 85% per GOMAXPROCS in any interval | Delta of child `getrusage` user + system CPU, divided by wall time and GOMAXPROCS |
 
-The limits are inclusive: exactly 20 ms or 85% does not trigger saturation.
-Override with `-lateness-limit` and `-cpu-limit`; reports record those choices.
+The limits are inclusive: exactly 20 ms, 1% skipped frames or 85% CPU does not
+trigger saturation. Override with `-lateness-limit`, `-skipped-frame-limit` and
+`-cpu-limit`; reports record those choices.
 Default sampling is one second (`-sample-every`, minimum 100 ms). The final
 sample includes the media tail and hangup. CPU includes all child work during
 that interval, including online decode coordination and report construction.
@@ -51,14 +56,32 @@ Decoder subprocess CPU is excluded from child `RUSAGE_SELF`; its scheduling
 impact remains visible in packet-send lateness. This is a conservative pacing
 validity check, not a measurement of the topology's total CPU cost.
 
-The pacer deadline advances by the encoded frame interval, independently of
-actual send time. Timer ticks dropped by an overloaded scheduler therefore do
-not erase missed workload: the remaining packets accumulate schedule debt.
+The first sample starts immediately. Later samples use the actual timestamp
+from the ticker. A short stall can delay a queued tick, but it does not leave
+permanent schedule debt in later intervals. Gaps between delivered tick
+timestamps count dropped frame opportunities separately. A final accounting
+also catches a stall that lasts through the media deadline. Skips are assigned
+to the interval where they become observable; one stalled interval still makes
+the whole run inconclusive, while later intervals can recover.
+
 All packets of a fragmented video frame share that frame's scheduled time.
-STUN, DTLS and RTCP are excluded. Failed UDP writes are not successful sends;
-caller errors still invalidate the measurement. The optional timing callback
-runs at the caller socket after each successful write and must be fast and
-safe for concurrent audio and video sends.
+The frame count increments once after a successful sample write; fragments do
+not inflate the skipped-frame denominator. STUN, DTLS and RTCP are excluded
+from packet lateness. Failed UDP writes are not successful sends; caller errors
+still invalidate the measurement. Optional callbacks must be fast and safe for
+concurrent audio and video sends.
+
+Each caller process has one shared, demand-driven status poller. Callers keep
+their existing one-second observation cadence and read the same snapshot;
+HTTP refreshes are limited to one per second per process, including failed
+reads and final collection. The harness excludes these observer HTTP reads
+from planned moves. Local in-process harness behavior remains unchanged.
+`status_requests` includes setup and failed requests. Resource intervals report
+`interval_status_requests` and `status_requests_per_second`; the process rate
+is the weighted average across media and hangup intervals, excluding setup.
+Driver event reads appear separately as `driver_status_requests` and their
+rate per configured media duration. This avoids one Redis scan per call per
+second; each shared status request still reads all live call owners.
 
 Each process reports cumulative p50, p99 and exact maximum lateness, plus its
 worst interval p99. Percentiles use bounded 100 microsecond histogram buckets
@@ -81,16 +104,22 @@ exits nonzero for an inconclusive run. The existing per-call event verdicts
 remain visible, including trusted failures. Aggregated `yardstick` rows keep
 those verdicts: any trusted failure fails its metric, otherwise passing needs
 at least 80% trusted event coverage. Unknown metrics remain inconclusive.
-Rows are grouped separately by planned move and takeover. Capacity and soak
-runners must require valid generator evidence before making service claims.
+Rows are separate for each scheduled event (`event_index` is zero-based),
+with coverage measured against all `affected` calls. The driver stores the
+selected session IDs and action times. Each affected call must supply a record
+with the matching kind, worker and action time; a missing record makes the run
+inconclusive even when the remaining trusted coverage is above 80%. For kills,
+the recorded action must match within one microsecond. This catches records
+lost from the control plane's bounded takeover ring. `recorded` reports the
+number of affected calls with a matching record. Capacity and soak runners must require valid generator evidence before making service claims.
 
 ## Events
 
 Repeat `-event=after,kind,count,worker` with increasing offsets from media start:
 
 - `10s,move,2,1`: move the first two eligible callers to worker 1. Calls already
-  on worker 1 are excluded. Count zero means all eligible calls. Selection is
-  deterministic in process/caller order, not a random statistical sample.
+  on worker 1 or still owned by a killed worker are excluded. Count zero means
+  all eligible calls. Selection is deterministic in process/caller order, not a random statistical sample.
 - `30s,kill,0,0`: SIGKILL owned media worker 0, affecting **all** of its calls.
   Count must be zero. Each generator records the driver's kill timestamp so
   the harness's automatic takeover yardstick uses the real fault action.
@@ -100,7 +129,9 @@ leave one worker alive, have at least 3 seconds before its first event, and
 more than 7 seconds after its last event. Moves to a worker already killed
 are rejected. Events with no affected calls are measurement errors. A move
 uses the control plane's operator HTTP API through a small harness hook and
-records the existing per-call move report. A kill still relies entirely on
+records the existing per-call move report. For a move, `affected` is the
+selected number of calls whose moves were attempted; an operator error or a
+partial group makes the run inconclusive. A kill still relies entirely on
 missed heartbeats for recovery. No recovery shortcut is added.
 
 The owned command topology is loopback. `internal/loadgen.ChildOptions`
@@ -108,9 +139,8 @@ accepts an external harness topology, including its `CallerSocket` factory,
 with signaling separate from media. The socket injection matches #36's
 factory on main. Full multi-process namespace placement and network profile
 control are future integration work; this command does not claim netns proof.
-Fixed service/operator addresses use `clusterprocess.FreeTCP`, so main's #60
-allocator will put them outside the OS ephemeral range after integration.
-The base tested here still uses its earlier port allocation. Caller media
+Fixed service/operator addresses use main's `clusterprocess.FreeTCP`
+allocator outside the OS ephemeral range (#60). Caller media
 sockets continue to use individual dynamic ports.
 
 ## Calibration
@@ -138,7 +168,8 @@ noise can lower the result even when the child's own CPU remains low.
 The separate **Load generator calibration** workflow runs nightly at 09:30 UTC
 and on `workflow_dispatch`, never on pull requests. It uses hosted Ubuntu,
 one generator with GOMAXPROCS 1, a 30-second ramp per step capped at 128 callers,
-and uploads reports, runner information and all process logs even on failure.
+prints the command's report summaries even on failure, and uploads reports,
+runner information and all process logs. Checkout does not persist credentials.
 The orchestrator must dispatch the workflow after integration. Hosted Linux
 calibration is **NOT-RUN** in this worker checkout.
 

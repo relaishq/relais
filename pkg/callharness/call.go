@@ -40,9 +40,12 @@ type CallOptions struct {
 	// enough media to observe Freshness.EvaluationWindow().
 	Freshness FreshnessPolicy
 	// SendTiming observes each successful RTP socket write. It must be fast
-	// and safe for concurrent audio/video sends. Scheduled is the original
-	// pacer deadline, including missed ticks; actual is after the UDP write.
+	// and safe for concurrent audio/video sends. Scheduled is the delivered
+	// tick that triggered the frame; actual is after the UDP write.
 	SendTiming func(kind string, scheduled, actual time.Time)
+	// SendPacing counts successful frames and dropped ticker opportunities.
+	// Video fragments count as one frame. The callback must be concurrent-safe.
+	SendPacing func(kind string, sent, skipped uint64)
 	Recording  RecordingOptions
 
 	// InitialSequenceNumbers replaces random RTP starts for wrap tests. Nil
@@ -111,7 +114,8 @@ type Call struct {
 
 	// socket is the caller's UDP socket, which observes its consent checks
 	// (consent.go).
-	socket *callerSocket
+	socket     *callerSocket
+	sendPacing func(string, uint64, uint64)
 
 	// mu guards closing and the reader goroutines' lifecycle: a reader starts
 	// only under mu while closing is false, so close's Wait never races an
@@ -153,7 +157,7 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("callharness: new PeerConnection: %w", err), socket.close())
 	}
-	call = &Call{harness: h, pc: pc, rec: rec, socket: socket, videoData: opts.VideoData, initialSequences: opts.InitialSequenceNumbers}
+	call = &Call{harness: h, pc: pc, rec: rec, socket: socket, sendPacing: opts.SendPacing, videoData: opts.VideoData, initialSequences: opts.InitialSequenceNumbers}
 	if err := h.addCall(call); err != nil {
 		return nil, errors.Join(err, call.close())
 	}
@@ -430,10 +434,12 @@ func (c *Call) sendAudio(ctx context.Context, end time.Time) error {
 	ticker := time.NewTicker(opusFrameDuration)
 	defer ticker.Stop()
 
-	scheduled := time.Now()
+	pacer := framePacer{period: opusFrameDuration, start: time.Now(), observe: c.sendPacing, kind: kindAudio}
+	pacer.scheduled = pacer.start
+	defer pacer.finish(end)
 	for time.Now().Before(end) {
 		if c.socket.observer.sendTiming != nil {
-			c.socket.observer.audioSchedule.Store(timePointer(scheduled))
+			c.socket.observer.audioSchedule.Store(timePointer(pacer.scheduled))
 		}
 		frame, frameDuration, err := src.next()
 		if err != nil {
@@ -449,13 +455,13 @@ func (c *Call) sendAudio(ctx context.Context, end time.Time) error {
 			return fmt.Errorf("callharness: send audio: %w", err)
 		}
 		c.rec.sent(kindAudio, false)
-		next := scheduled.Add(opusFrameDuration)
-		scheduled = next
+		pacer.sentFrame()
 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case tick := <-ticker.C:
+			pacer.next(tick)
 		}
 	}
 
@@ -481,10 +487,12 @@ func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
 	ticker := time.NewTicker(src.frameDuration)
 	defer ticker.Stop()
 
-	scheduled := time.Now()
+	pacer := framePacer{period: src.frameDuration, start: time.Now(), observe: c.sendPacing, kind: kindVideo}
+	pacer.scheduled = pacer.start
+	defer pacer.finish(end)
 	for time.Now().Before(end) {
 		if c.socket.observer.sendTiming != nil {
-			c.socket.observer.videoSchedule.Store(timePointer(scheduled))
+			c.socket.observer.videoSchedule.Store(timePointer(pacer.scheduled))
 		}
 		requestedAt := c.keyframeWanted.Swap(nil)
 		if requestedAt != nil {
@@ -501,13 +509,13 @@ func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
 			return fmt.Errorf("callharness: send video: %w", err)
 		}
 		c.rec.sent(kindVideo, keyframe)
-		next := scheduled.Add(src.frameDuration)
-		scheduled = next
+		pacer.sentFrame()
 
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case tick := <-ticker.C:
+			pacer.next(tick)
 		}
 	}
 

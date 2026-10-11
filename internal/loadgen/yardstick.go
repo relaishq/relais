@@ -1,32 +1,88 @@
 package loadgen
 
 import (
-	"github.com/relais/pkg/callharness"
+	"fmt"
 	"sort"
+	"time"
+
+	"github.com/relais/pkg/callharness"
 )
 
-// MetricRow aggregates the existing yardstick without changing its decisions.
-// Any trusted failure stays failed. Passing needs >=80% trusted event coverage.
-// Generator saturation overrides the run's validity, never these raw rows.
+// MetricRow retains the existing per-call verdicts for one scheduled event.
+// Coverage uses all affected calls, including missing records. A trusted
+// failure still fails its metric even when generator validity is inconclusive.
 type MetricRow struct {
-	Scenario        string  `json:"scenario"`
-	Metric          string  `json:"metric"`
-	Events          int     `json:"events"`
-	Trusted         int     `json:"trusted"`
-	Failed          int     `json:"failed"`
-	TrustedCoverage float64 `json:"trusted_coverage"`
-	Outcome         string  `json:"outcome"`
+	EventIndex      int           `json:"event_index"`
+	After           time.Duration `json:"after_ns"`
+	Scenario        string        `json:"scenario"`
+	Metric          string        `json:"metric"`
+	Events          int           `json:"events"`
+	Trusted         int           `json:"trusted"`
+	Failed          int           `json:"failed"`
+	TrustedCoverage float64       `json:"trusted_coverage"`
+	Outcome         string        `json:"outcome"`
 }
 
-func yardstick(processes []ProcessReport) []MetricRow {
-	rows := map[string]*MetricRow{}
-	for _, p := range processes {
-		for _, c := range p.Calls {
-			if c.Call == nil {
-				continue
+func matchesEvent(e EventResult, report *callharness.Report, move callharness.MoveReport) bool {
+	at := report.StartedAt.Add(move.Start)
+	if e.Event.Kind == "kill" {
+		delta := at.Sub(e.At)
+		return move.Kind == "takeover" && move.From == e.Event.Worker && delta >= -time.Microsecond && delta <= time.Microsecond
+	}
+	return move.Kind == "move" && move.To == e.Event.Worker && !at.Before(e.At) && !at.After(e.FinishedAt)
+}
+
+func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []string) {
+	var result []MetricRow
+	var causes []string
+	for i := range events {
+		e := &events[i]
+		e.Recorded = 0
+		expected := map[string]bool{}
+		for _, id := range e.Sessions {
+			expected[id] = true
+		}
+		if len(expected) != e.Affected {
+			causes = append(causes, fmt.Sprintf("event %d (%s at %s): %d distinct session IDs for %d affected calls", i+1, e.Event.Kind, e.Event.After, len(expected), e.Affected))
+		}
+		kind := e.Event.Kind
+		if kind == "kill" {
+			kind = "takeover"
+		}
+		rows := map[string]*MetricRow{}
+		row := func(metric string) *MetricRow {
+			if rows[metric] == nil {
+				rows[metric] = &MetricRow{EventIndex: i, After: e.Event.After, Scenario: kind, Metric: metric, Events: e.Affected}
 			}
-			for _, move := range c.Call.Moves {
-				m := move.Measurement
+			return rows[metric]
+		}
+		for _, name := range []string{"audio_loss", "audio_freshness", "resume"} {
+			row(name)
+		}
+		seen := map[string]bool{}
+		for _, p := range processes {
+			for _, c := range p.Calls {
+				if c.Call == nil || !expected[c.Session] {
+					continue
+				}
+				var matching []callharness.MoveReport
+				for _, move := range c.Call.Moves {
+					if matchesEvent(*e, c.Call, move) {
+						matching = append(matching, move)
+					}
+				}
+				if len(matching) == 0 {
+					continue
+				}
+				if seen[c.Session] || len(matching) > 1 {
+					causes = append(causes, fmt.Sprintf("event %d: duplicate matching records for session %s", i+1, c.Session))
+				}
+				if seen[c.Session] {
+					continue
+				}
+				seen[c.Session] = true
+				e.Recorded++
+				m := matching[0].Measurement
 				verdicts := map[string]callharness.MetricVerdict{"audio_loss": m.AudioLoss, "audio_freshness": m.Audio.Verdict, "resume": m.ResumeVerdict}
 				if m.VideoExpected {
 					verdicts["video_loss"] = m.VideoLoss
@@ -36,13 +92,7 @@ func yardstick(processes []ProcessReport) []MetricRow {
 					verdicts["first_live"] = m.FirstLiveVerdict
 				}
 				for name, v := range verdicts {
-					key := move.Kind + ":" + name
-					r := rows[key]
-					if r == nil {
-						r = &MetricRow{Scenario: move.Kind, Metric: name}
-						rows[key] = r
-					}
-					r.Events++
+					r := row(name)
 					if v.Trusted {
 						r.Trusted++
 						if v.Failed {
@@ -52,24 +102,28 @@ func yardstick(processes []ProcessReport) []MetricRow {
 				}
 			}
 		}
-	}
-	keys := make([]string, 0, len(rows))
-	for key := range rows {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	result := make([]MetricRow, 0, len(keys))
-	for _, key := range keys {
-		r := rows[key]
-		r.TrustedCoverage = float64(r.Trusted) / float64(r.Events)
-		r.Outcome = "pass"
-		if r.TrustedCoverage < .8 {
-			r.Outcome = "inconclusive"
+		if e.Recorded != e.Affected {
+			causes = append(causes, fmt.Sprintf("event %d (%s at %s): matching records for %d/%d affected calls; missing event evidence", i+1, e.Event.Kind, e.Event.After, e.Recorded, e.Affected))
 		}
-		if r.Failed > 0 {
-			r.Outcome = "fail"
+		keys := make([]string, 0, len(rows))
+		for key := range rows {
+			keys = append(keys, key)
 		}
-		result = append(result, *r)
+		sort.Strings(keys)
+		for _, key := range keys {
+			r := rows[key]
+			if r.Events > 0 {
+				r.TrustedCoverage = float64(r.Trusted) / float64(r.Events)
+			}
+			r.Outcome = "pass"
+			if r.Events == 0 || r.TrustedCoverage < .8 {
+				r.Outcome = "inconclusive"
+			}
+			if r.Failed > 0 {
+				r.Outcome = "fail"
+			}
+			result = append(result, *r)
+		}
 	}
-	return result
+	return result, causes
 }

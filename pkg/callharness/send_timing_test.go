@@ -65,3 +65,63 @@ func TestSendTimingExcludesControlPackets(t *testing.T) {
 		t.Fatal(n)
 	}
 }
+
+// A single blocked write must not leave every subsequent send behind a
+// deadline that the ticker has already dropped.
+func TestSendTimingRecoversAfterOneStall(t *testing.T) {
+	h, err := Start(Options{Relay: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = h.Close() }()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var first time.Time
+	var later, late int
+	c, err := h.Dial(ctx, CallOptions{Worker: -1, SendTiming: func(kind string, scheduled, actual time.Time) {
+		if kind != kindAudio {
+			return
+		}
+		if first.IsZero() {
+			first = actual
+			time.Sleep(60 * time.Millisecond)
+			return
+		}
+		if actual.Sub(first) >= 400*time.Millisecond {
+			later++
+			if actual.Sub(scheduled) > 20*time.Millisecond {
+				late++
+			}
+		}
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SendMedia(ctx, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Hangup(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if later < 60 || late > later/10 {
+		t.Fatalf("stall did not recover: %d/%d later sends exceeded 20ms", late, later)
+	}
+}
+
+func TestSendTimingPacerCountsDroppedTicksAndFinalStall(t *testing.T) {
+	start := time.Unix(1, 0)
+	var sent, skipped uint64
+	p := framePacer{period: 20 * time.Millisecond, start: start, scheduled: start, kind: kindAudio, observe: func(_ string, s, k uint64) { sent += s; skipped += k }}
+	p.sentFrame()
+	p.next(start.Add(20 * time.Millisecond))
+	p.sentFrame()
+	p.next(start.Add(80 * time.Millisecond))
+	p.sentFrame()
+	if skipped != 2 || p.scheduled != start.Add(80*time.Millisecond) {
+		t.Fatalf("lost dropped ticks: %+v", p)
+	}
+	p.finish(start.Add(time.Second))
+	if sent+skipped != 50 {
+		t.Fatalf("missed stall through deadline: sent=%d skipped=%d", sent, skipped)
+	}
+}

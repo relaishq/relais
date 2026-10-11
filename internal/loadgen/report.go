@@ -38,26 +38,34 @@ func (w *Writer) Write(m Message) {
 func (w *Writer) Err() error { w.mu.Lock(); defer w.mu.Unlock(); return w.err }
 
 type ProcessReport struct {
-	PID                  int           `json:"pid"`
-	ExpectedCalls        int           `json:"expected_calls"`
-	Calls                []Message     `json:"calls"`
-	Samples              []Stats       `json:"samples"`
-	SamplesDropped       int           `json:"samples_dropped"`
-	PeakIntervalP99      time.Duration `json:"peak_interval_p99_ns"`
-	Complete             bool          `json:"complete"`
-	Saturated            bool          `json:"saturated"`
-	Causes               []string      `json:"causes"`
-	PeakCPUPercent       float64       `json:"peak_cpu_percent_one_core"`
-	PeakCPUPerGOMAXPROCS float64       `json:"peak_cpu_percent_per_gomaxprocs"`
-	PeakHeapBytes        uint64        `json:"peak_heap_bytes"`
-	PeakRSSBytes         uint64        `json:"peak_rss_bytes"`
-	Lateness             Lateness      `json:"lateness"`
+	PID                         int           `json:"pid"`
+	ExpectedCalls               int           `json:"expected_calls"`
+	Calls                       []Message     `json:"calls"`
+	Samples                     []Stats       `json:"samples"`
+	SamplesDropped              int           `json:"samples_dropped"`
+	PeakIntervalP99             time.Duration `json:"peak_interval_p99_ns"`
+	PeakSkippedPercent          float64       `json:"peak_interval_skipped_frame_percent"`
+	Pacing                      Pacing        `json:"pacing"`
+	StatusRequests              uint64        `json:"status_requests"`
+	StatusRequestsPerSecond     float64       `json:"status_requests_per_second"`
+	PeakStatusRequestsPerSecond float64       `json:"peak_status_requests_per_second"`
+	Complete                    bool          `json:"complete"`
+	Saturated                   bool          `json:"saturated"`
+	Causes                      []string      `json:"causes"`
+	PeakCPUPercent              float64       `json:"peak_cpu_percent_one_core"`
+	PeakCPUPerGOMAXPROCS        float64       `json:"peak_cpu_percent_per_gomaxprocs"`
+	PeakHeapBytes               uint64        `json:"peak_heap_bytes"`
+	PeakRSSBytes                uint64        `json:"peak_rss_bytes"`
+	Lateness                    Lateness      `json:"lateness"`
 }
 
 func ReadProcess(r io.Reader, pid, expected int, limits Limits) (ProcessReport, error) {
 	out := ProcessReport{PID: pid, ExpectedCalls: expected}
 	decoder := json.NewDecoder(r)
 	seen := map[int]bool{}
+	var statusRequests uint64
+	var measured time.Duration
+	var peakPacing Pacing
 	for {
 		var m Message
 		if err := decoder.Decode(&m); err != nil {
@@ -99,7 +107,16 @@ func ReadProcess(r io.Reader, pid, expected int, limits Limits) (ProcessReport, 
 			out.PeakHeapBytes = max(out.PeakHeapBytes, s.HeapBytes)
 			out.PeakRSSBytes = max(out.PeakRSSBytes, s.PeakRSSBytes)
 			out.Lateness = s.Lateness
-			if s.IntervalLateness.P99 > limits.P99 || s.CPUPerGOMAXPROCS > limits.CPUPercent {
+			out.Pacing = s.Pacing
+			if s.IntervalPacing.SkippedPercent() > out.PeakSkippedPercent {
+				out.PeakSkippedPercent = s.IntervalPacing.SkippedPercent()
+				peakPacing = s.IntervalPacing
+			}
+			out.StatusRequests = s.StatusRequests
+			statusRequests += s.IntervalStatusRequests
+			measured += s.Interval
+			out.PeakStatusRequestsPerSecond = max(out.PeakStatusRequestsPerSecond, s.StatusRequestsPerSecond)
+			if s.IntervalLateness.P99 > limits.P99 || s.CPUPerGOMAXPROCS > limits.CPUPercent || s.IntervalPacing.SkippedPercent() > limits.SkippedPercent {
 				out.Saturated = true
 			}
 
@@ -109,7 +126,10 @@ func ReadProcess(r io.Reader, pid, expected int, limits Limits) (ProcessReport, 
 			return out, fmt.Errorf("unknown child message %q", m.Type)
 		}
 	}
-	peak := Stats{Lateness: out.Lateness, IntervalLateness: Lateness{P99: out.PeakIntervalP99}, CPUPerGOMAXPROCS: out.PeakCPUPerGOMAXPROCS}
+	if measured > 0 {
+		out.StatusRequestsPerSecond = float64(statusRequests) / measured.Seconds()
+	}
+	peak := Stats{Lateness: out.Lateness, IntervalLateness: Lateness{P99: out.PeakIntervalP99}, IntervalPacing: peakPacing, CPUPerGOMAXPROCS: out.PeakCPUPerGOMAXPROCS}
 	out.Causes = append(out.Causes, limits.Causes(peak)...)
 	if !out.Complete || len(out.Calls) != expected || len(out.Samples) == 0 {
 		out.Complete = false
@@ -126,29 +146,39 @@ type Event struct {
 	Worker int `json:"worker"`
 }
 type EventResult struct {
-	Event    Event     `json:"event"`
-	At       time.Time `json:"at"`
-	Affected int       `json:"affected"`
-	Error    string    `json:"error,omitempty"`
+	Event      Event     `json:"event"`
+	At         time.Time `json:"at"`
+	FinishedAt time.Time `json:"finished_at"`
+	Affected   int       `json:"affected"`
+	Sessions   []string  `json:"sessions"`
+	Recorded   int       `json:"recorded"`
+	Error      string    `json:"error,omitempty"`
 }
 type RunReport struct {
-	StartedAt time.Time       `json:"started_at"`
-	Duration  time.Duration   `json:"duration_ns"`
-	Callers   int             `json:"callers"`
-	Limits    Limits          `json:"limits"`
-	Processes []ProcessReport `json:"processes"`
-	Events    []EventResult   `json:"events"`
-	Yardstick []MetricRow     `json:"yardstick"`
-	Outcome   string          `json:"outcome"`
-	Causes    []string        `json:"causes"`
+	StartedAt                     time.Time       `json:"started_at"`
+	Duration                      time.Duration   `json:"duration_ns"`
+	Callers                       int             `json:"callers"`
+	Limits                        Limits          `json:"limits"`
+	Processes                     []ProcessReport `json:"processes"`
+	Events                        []EventResult   `json:"events"`
+	Yardstick                     []MetricRow     `json:"yardstick"`
+	Outcome                       string          `json:"outcome"`
+	Causes                        []string        `json:"causes"`
+	DriverStatusRequests          uint64          `json:"driver_status_requests"`
+	DriverStatusRequestsPerSecond float64         `json:"driver_status_requests_per_second"`
 }
 
 // Judge keeps generator validity separate from caller failures. A saturated or
 // incomplete run cannot establish capacity. Caller results remain inspectable.
 func (r *RunReport) Judge() {
-	r.Yardstick = yardstick(r.Processes)
+	var eventCauses []string
+	r.Yardstick, eventCauses = yardstick(r.Processes, r.Events)
 	r.Outcome = "valid"
 	r.Causes = nil
+	if len(eventCauses) > 0 {
+		r.Outcome = "inconclusive"
+		r.Causes = append(r.Causes, eventCauses...)
+	}
 	completed := 0
 	for _, p := range r.Processes {
 		completed += len(p.Calls)

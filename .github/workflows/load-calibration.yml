@@ -17,16 +17,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: load-calibration-${{ github.run_id }}
-  cancel-in-progress: false
-
 jobs:
   calibrate:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -46,7 +44,10 @@ jobs:
           ./bin/relais-load -calibrate -processes=1 -gomaxprocs=1 \
             -duration="$RAMP_DURATION" -calibration-max="$RAMP_MAX" \
             -output=bin/calibration-linux.json > bin/calibration-linux.log 2>&1
-          cat bin/calibration-linux.log
+      - name: Print calibration evidence
+        if: always()
+        run: |
+          if [ -f bin/calibration-linux.log ]; then cat bin/calibration-linux.log; fi
       - name: Upload reports and all process logs
         if: always()
         uses: actions/upload-artifact@v7
