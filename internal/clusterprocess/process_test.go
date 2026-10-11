@@ -3,7 +3,6 @@ package clusterprocess
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -11,11 +10,7 @@ import (
 )
 
 func TestStopReapedChildCannotSignalReusedGroup(t *testing.T) {
-	root := filepath.Join("..", "..", "bin")
-	require.NoError(t, os.MkdirAll(root, 0o755))
-	dir, err := os.MkdirTemp(root, "process-stop-test-")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	exited, err := Start(dir, "exited", os.Environ(), "/usr/bin/true")
 	require.NoError(t, err)
 	<-exited.done
@@ -46,4 +41,17 @@ func TestWaitLogReadinessBelongsToChild(t *testing.T) {
 	require.ErrorIs(t, child.WaitLog(missing, "missing marker"), context.DeadlineExceeded)
 	child.Stop()
 	require.Error(t, child.WaitLog(ctx, "Ready to accept connections"), "exited child log must not prove live readiness")
+}
+
+func TestReadyIncludesFinalExitLog(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		child, err := Start(t.TempDir(), "startup-failure", os.Environ(), "/bin/sh", "-c", "sleep 0.003; echo 'fatal startup: Redis authentication failed' >&2; exit 23")
+		require.NoError(t, err)
+		defer child.Stop()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, err = child.Ready(ctx)
+		cancel()
+		require.ErrorContains(t, err, "fatal startup: Redis authentication failed")
+		require.ErrorContains(t, err, "status 23")
+	}
 }

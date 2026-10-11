@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/clusterprocess"
+	"github.com/relais/internal/nettopology"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/callharness"
 )
@@ -51,14 +52,14 @@ func processEnv(key, addr, prefix string) []string {
 	env := []string{}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if name == "RELAIS_SESSIONSTORE_KEY" || name == "RELAIS_REDIS_ADDR" || name == "RELAIS_REDIS_PREFIX" {
+		if name == "RELAIS_SESSIONSTORE_KEY" || name == "RELAIS_REDIS_ADDR" || name == "RELAIS_REDIS_PREFIX" || name == "RELAIS_REDIS_PASSWORD" || name == "RELAIS_PRIVATE_NETS" {
 			continue
 		}
 		env = append(env, entry)
 	}
 	return append(env, "RELAIS_SESSIONSTORE_KEY="+key, "RELAIS_REDIS_ADDR="+addr, "RELAIS_REDIS_PREFIX="+prefix)
 }
-func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, after, warmup time.Duration, verbose, terminate, cacheOff bool) (out result, trialErr error) {
+func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, after, warmup time.Duration, verbose, terminate, cacheOff bool, topology *nettopology.Topology) (out result, trialErr error) {
 	var processes []*clusterprocess.Child
 	defer func() {
 		for i := len(processes) - 1; i >= 0; i-- {
@@ -72,32 +73,35 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		if name == "relay" {
 			childEnv = withoutKey(env)
 		}
-		c, err := manager.Start(dir, name, childEnv, args...)
+		c, err := startRole(manager, topology, dir, name, childEnv, args...)
 		if err != nil {
-			return nil, clusterprocess.Ready{}, err
+			return nil, clusterprocess.Ready{}, fmt.Errorf("%s launch: %w", name, err)
 		}
 		processes = append(processes, c)
 		startup, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		r, err := c.Ready(startup)
-		if err == nil {
+		if err != nil {
+			err = fmt.Errorf("%s readiness: %w", name, err)
+		} else {
 			systemMetrics.add(name, r.HTTP, c)
 		}
 		return c, r, err
 	}
-	_, relayReady, err := start("relay", filepath.Join(bin, "relais-relay"), "-media", "127.0.0.1:0", "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0")
+	_, relayReady, err := start("relay", filepath.Join(bin, "relais-relay"), "-media", roleBind(topology, "relay", true), "-leg", roleBind(topology, "relay", false), "-http", roleBind(topology, "relay", false))
 	if err != nil {
 		return result{}, err
 	}
-	controlAddr, err := clusterprocess.FreeTCP()
+	controlAddr, err := controlAddress(topology)
 	if err != nil {
 		return result{}, err
 	}
 	controlURL := "http://" + controlAddr
 	workerPIDs := map[string]*clusterprocess.Child{}
+	privateAPIs := []string{strings.TrimPrefix(relayReady.HTTP, "http://"), controlAddr}
 	controlArgs := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", relayReady.HTTP}
 	for _, name := range []string{"0", "1"} {
-		args := []string{filepath.Join(bin, "relais-worker"), "-media", "127.0.0.1:0", "-http", "127.0.0.1:0", "-name", name, "-control", controlURL, "-relay-leg", relayReady.Leg, "-relay-media", relayReady.Media}
+		args := []string{filepath.Join(bin, "relais-worker"), "-media", roleBind(topology, "worker-"+name, false), "-http", roleBind(topology, "worker-"+name, false), "-name", name, "-control", controlURL, "-relay-leg", relayReady.Leg, "-relay-media", relayReady.Media}
 		if cacheOff {
 			args = append(args, "-frame-cache-off")
 		}
@@ -106,6 +110,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			return result{}, err
 		}
 		workerPIDs[name] = c
+		privateAPIs = append(privateAPIs, strings.TrimPrefix(r.HTTP, "http://"))
 		controlArgs = append(controlArgs, "-worker", name+"="+r.HTTP)
 	}
 	_, _, err = start("control", controlArgs...)
@@ -116,7 +121,19 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	if err != nil {
 		return result{}, err
 	}
-	h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: controlURL + "/calls", RelayAddr: relayAddr}})
+	external := &callharness.ExternalTopology{SignalingURL: controlURL + "/calls", RelayAddr: relayAddr}
+	if topology != nil {
+		if err := topology.AllowMedia(ctx, relayAddr); err != nil {
+			return result{}, err
+		}
+		privateAPIs = append(privateAPIs, envValue(env, "RELAIS_REDIS_ADDR"))
+		if err := topology.VerifyPrivateAPIs(ctx, privateAPIs); err != nil {
+			return result{}, err
+		}
+		fmt.Println("ISOLATION PASS: caller cannot reach relay-private, workers, control or store; only relay UDP media is allowed")
+		external.CallerSocket = topology.CallerSocket
+	}
+	h, err := callharness.Start(callharness.Options{External: external})
 	if err != nil {
 		return result{}, err
 	}
@@ -269,7 +286,7 @@ func printTable(results []result) {
 		fmt.Printf("%3d  %6.1f  %7d/%-5d       %3d        %3d          %7.1f    %7.1f  %7.1f       %-8s    %-8s    %5d           %s\n", i+1, float64(r.Gap)/float64(time.Millisecond), r.Decrypt, r.AfterResume, r.Reconnects, r.Renegotiations, float64(r.Decoded)/float64(time.Millisecond), float64(r.Live)/float64(time.Millisecond), float64(r.Detection)/float64(time.Millisecond), r.Path, r.LivePath, r.ReplayPackets, state)
 	}
 }
-func run() error {
+func run() (err error) {
 	runs := flag.Int("runs", 10, "trials per mode (cache and PLI are interleaved by default)")
 	after := flag.Duration("after", 60*time.Second, "media/consent observation after takeover (60s for acceptance)")
 	binArg := flag.String("bin", "bin", "built binaries and throwaway run directory")
@@ -279,11 +296,19 @@ func run() error {
 	compare := flag.Bool("compare-cache", true, "compare Redis cache+PLI with cache-off PLI (runs per mode)")
 	cacheOff := flag.Bool("frame-cache-off", false, "run PLI only; disable cache writes and replay (overrides comparison)")
 	terminate := flag.Bool("sigterm", false, "verify graceful owning-worker drain instead of crash takeover")
+	topologyOption := flag.String("topology", "loopback", "loopback or netns (Linux/root only)")
+	profile := flag.String("profile", "lan", "network profile (lan: no link shaping)")
 	relayRestart := flag.Bool("relay-restart", false, "SIGKILL and restart the relay mid-call; workers and caller stay alive")
 	restoreOff := flag.Bool("route-restore-off", false, "disable route restore in relay-restart baseline trials")
 	compareRestore := flag.Bool("compare-restore", true, "compare restore on/off in relay-restart mode")
 	flag.DurationVar(&metricsInterval, "metrics-interval", time.Second, "private metrics scrape interval; 0 disables periodic scraping (pre-fault and final samples remain)")
 	flag.Parse()
+	if err := validateTopologyOptions(*topologyOption, *profile, *redisAddr); err != nil {
+		return err
+	}
+	if *relayRestart && *topologyOption != "loopback" {
+		return errors.New("relay-restart supports only the loopback topology")
+	}
 	if metricsInterval < 0 {
 		return errors.New("metrics-interval must not be negative")
 	}
@@ -308,23 +333,56 @@ func run() error {
 	manager := &clusterprocess.Manager{}
 	ctx, cancel := manager.Context()
 	defer cancel()
+	var topology *nettopology.Topology
+	if *topologyOption == "netns" {
+		topology, err = nettopology.OpenManaged(ctx, func(format string, args ...any) { fmt.Printf(format+"\n", args...) }, manager.AddCleanup)
+		if err != nil {
+			return err
+		}
+	}
+	defer func() {
+		cancel()
+		if topology != nil {
+			err = errors.Join(err, topology.Close())
+		}
+	}()
 	addr := *redisAddr
+	password := ""
+	if topology != nil {
+		var secret [32]byte
+		if _, err := rand.Read(secret[:]); err != nil {
+			return err
+		}
+		password = hex.EncodeToString(secret[:])
+	}
 	if addr == "" {
-		addr, err = clusterprocess.FreeTCP()
+		addr, err = redisAddress(topology)
 		if err != nil {
 			return err
 		}
 		_, port, _ := net.SplitHostPort(addr)
-		redis, err := manager.Start(dir, "redis", os.Environ(), *redisBinary, "--bind", "127.0.0.1", "--port", port, "--save", "", "--appendonly", "no", "--dir", dir)
+		args, removeConfig, err := redisCommand(topology, *redisBinary, port, dir, password)
 		if err != nil {
 			return err
+		}
+		defer removeConfig()
+		if err := manager.AddCleanup(removeConfig); err != nil {
+			return err
+		}
+		redis, err := startRole(manager, topology, dir, "redis", os.Environ(), args...)
+		if err != nil {
+			return fmt.Errorf("store launch: %w", err)
 		}
 		defer redis.Stop()
 		startup, stop := context.WithTimeout(ctx, 5*time.Second)
 		err = clusterprocess.WaitTCP(startup, addr, redis)
+		if err == nil && topology != nil {
+			err = pingRedis(startup, addr, password)
+		}
 		stop()
+		removeConfig()
 		if err != nil {
-			return err
+			return fmt.Errorf("store readiness: %w (log %s)", err, filepath.Join(dir, "redis.log"))
 		}
 	}
 	if err := processrun.ValidateRedis(addr); err != nil {
@@ -370,6 +428,9 @@ func run() error {
 				return err
 			}
 			env := processEnv(hex.EncodeToString(key[:]), addr, fmt.Sprintf("relais:crash:%s:%s:%d:", filepath.Base(dir), label, i))
+			if topology != nil {
+				env = append(env, "RELAIS_PRIVATE_NETS="+topology.Plan.PrivateNets(), "RELAIS_REDIS_PASSWORD="+password)
+			}
 			trialCtx, stop := context.WithTimeout(ctx, *after+30*time.Second)
 			// Identical phases for both modes, sampling #9's unchanged budget.
 			warmup := 1550*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
@@ -379,23 +440,23 @@ func run() error {
 				warmup = 2250*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
 				r, err = relayRestartTrial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, off)
 			} else {
-				r, err = trial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, *terminate, off)
+				r, err = trial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, *terminate, off, topology)
 			}
 			stop()
+			if err != nil {
+				return trialFailure(i+1, label, trialDir, err)
+			}
 			all[m] = append(all[m], r)
 			if *relayRestart {
 				printRelayRestartTable(label, all[m])
 			} else {
 				printTable(all[m])
 			}
-			if err != nil {
-				return err
-			}
 			if !r.Pass {
-				return errors.New("caller-observed process handover threshold failed")
+				return trialFailure(i+1, label, trialDir, errors.New("caller-observed process handover threshold failed"))
 			}
 			if !*relayRestart && !*terminate && off && (r.Path != "Keyframe" || r.ReplayPackets != 0) {
-				return errors.New("cache-off run did not prove PLI attribution")
+				return trialFailure(i+1, label, trialDir, errors.New("cache-off run did not prove PLI attribution"))
 			}
 		}
 	}

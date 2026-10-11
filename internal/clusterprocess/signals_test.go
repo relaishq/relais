@@ -18,6 +18,8 @@ import (
 )
 
 func TestDriverDoubleSignalCleanup(t *testing.T) {
+	executable, err := os.Executable()
+	require.NoError(t, err)
 	switch os.Getenv("RELAIS_TEST_DRIVER_ROLE") {
 	case "leaf":
 		signal.Ignore(os.Interrupt, syscall.SIGTERM)
@@ -42,7 +44,7 @@ func TestDriverDoubleSignalCleanup(t *testing.T) {
 		var children []*Child
 		for _, name := range []string{"fake-child", "fake-redis"} {
 			env := append(os.Environ(), "RELAIS_TEST_DRIVER_ROLE=leaf")
-			c, err := manager.Start(dir, name, env, os.Args[0], "-test.run=^TestDriverDoubleSignalCleanup$")
+			c, err := manager.Start(dir, name, env, executable, "-test.run=^TestDriverDoubleSignalCleanup$", "-test.v=false")
 			require.NoError(t, err)
 			children = append(children, c)
 			defer c.Stop()
@@ -56,12 +58,7 @@ func TestDriverDoubleSignalCleanup(t *testing.T) {
 		fmt.Println("cleanup")
 		return
 	}
-	root, err := filepath.Abs(filepath.Join("..", "..", "bin"))
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(root, 0o755))
-	dir, err := os.MkdirTemp(root, "driver-signals-test-")
-	require.NoError(t, err)
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 	defer func() {
 		for _, name := range []string{"fake-child", "fake-redis"} {
 			data, err := os.ReadFile(filepath.Join(dir, name+".log"))
@@ -78,7 +75,7 @@ func TestDriverDoubleSignalCleanup(t *testing.T) {
 			}
 		}
 	}()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestDriverDoubleSignalCleanup$")
+	cmd := exec.Command(executable, "-test.run=^TestDriverDoubleSignalCleanup$", "-test.v=false")
 	cmd.Env = append(os.Environ(), "RELAIS_TEST_DRIVER_ROLE=manager", "RELAIS_TEST_DRIVER_DIR="+dir)
 	output, err := cmd.StdoutPipe()
 	require.NoError(t, err)
@@ -89,7 +86,7 @@ func TestDriverDoubleSignalCleanup(t *testing.T) {
 	scanner := bufio.NewScanner(output)
 	require.True(t, scanner.Scan())
 	var pids []int
-	require.NoError(t, json.Unmarshal(scanner.Bytes(), &pids))
+	require.NoError(t, json.Unmarshal(scanner.Bytes(), &pids), "manager helper output: %s", scanner.Text())
 	require.Len(t, pids, 2)
 	require.NoError(t, cmd.Process.Signal(os.Interrupt))
 	require.True(t, scanner.Scan())
