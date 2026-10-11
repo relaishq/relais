@@ -191,3 +191,11 @@ Local run results are recorded in [load-generator-results.md](load-generator-res
 
 For bounded worker/relay ramps, resource and store traffic, N+1 kill/drain
 acceptance and input-priced cost, see [capacity.md](capacity.md).
+
+## Soak
+
+`-soak` runs continuous calls with a seeded move/drain/SIGKILL schedule,
+worker recycling, a 1% run saturation budget, per-event exclusions, memory
+regression by incarnation and shutdown leak inventories. See
+[soak.md](soak.md) for the exact gates, capacity inputs and CI dispatches.
+Ordinary load and capacity retain their strict any-saturated-interval rule.

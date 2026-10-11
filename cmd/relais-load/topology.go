@@ -10,32 +10,46 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/relais/internal/capacity"
 	"github.com/relais/internal/clusterprocess"
+	"github.com/relais/internal/loadgen"
 	"github.com/relais/internal/nettopology"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/callharness"
 )
 
+type workerLaunch struct {
+	Env, Args   []string
+	URL         string
+	Incarnation int
+}
+
 type topology struct {
-	External       callharness.ExternalTopology
-	Workers        map[int]*clusterprocess.Child
-	Killed         map[int]bool
-	statusRequests uint64
-	processes      []*clusterprocess.Child
-	Network        *nettopology.Topology
-	Targets        []capacity.Target
-	Monitor        *capacity.Monitor
+	Sentinel                              int
+	Rejoins                               []loadgen.WorkerRejoin
+	Launch                                map[int]*workerLaunch
+	Manager                               *clusterprocess.Manager
+	Dir, RedisAddr, RedisPassword, Prefix string
+	Soak                                  *soakExecution
+	External                              callharness.ExternalTopology
+	Workers                               map[int]*clusterprocess.Child
+	Killed                                map[int]bool
+	statusRequests                        uint64
+	processes                             []*clusterprocess.Child
+	Network                               *nettopology.Topology
+	Targets                               []capacity.Target
+	Monitor                               *capacity.Monitor
 }
 
 // Owned loopback or Linux namespace topology. Caller attachment is separate
 // so only the media socket enters the caller namespace.
 func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir string, workers int, mode string) (_ *topology, runErr error) {
-	t := &topology{Workers: map[int]*clusterprocess.Child{}}
+	t := &topology{Workers: map[int]*clusterprocess.Child{}, Launch: map[int]*workerLaunch{}, Manager: m, Dir: dir}
 	defer func() {
 		if runErr != nil {
 			runErr = errors.Join(runErr, t.close())
@@ -88,7 +102,8 @@ func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir stri
 	if _, err := rand.Read(key[:]); err != nil {
 		return nil, err
 	}
-	env := serviceEnv(hex.EncodeToString(key[:]), addr, "relais:load:"+filepath.Base(dir)+":")
+	t.RedisAddr, t.RedisPassword, t.Prefix = addr, password, "relais:load:"+filepath.Base(dir)+":"
+	env := serviceEnv(hex.EncodeToString(key[:]), addr, t.Prefix)
 	env = append(env, "RELAIS_REDIS_PASSWORD="+password)
 	if t.Network != nil {
 		env = append(env, "RELAIS_PRIVATE_NETS="+t.Network.Plan.PrivateNets())
@@ -129,6 +144,10 @@ func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir stri
 		defer stop()
 		ready, err := c.Ready(startup)
 		if err == nil {
+			if strings.HasPrefix(name, "worker-") {
+				id, _ := strconv.Atoi(strings.TrimPrefix(name, "worker-"))
+				t.Launch[id] = &workerLaunch{Env: childEnv, Args: append([]string(nil), args...), URL: ready.HTTP}
+			}
 			t.Targets = append(t.Targets, capacity.Target{Name: name, PID: c.PID(), URL: ready.HTTP, Done: c.Done(), Err: c.Err})
 		}
 		return c, ready, err
@@ -192,6 +211,9 @@ func (t *topology) kill(worker int) error {
 	c := t.Workers[worker]
 	if c == nil {
 		return fmt.Errorf("worker %d is not owned", worker)
+	}
+	if t.Soak != nil {
+		t.Soak.retire(fmt.Sprintf("worker-%d", worker))
 	}
 	if t.Monitor != nil {
 		t.Monitor.Retire(fmt.Sprintf("worker-%d", worker))

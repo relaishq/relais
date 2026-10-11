@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"github.com/relais/internal/clusterprocess"
+	"github.com/relais/internal/processrss"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/callharness"
 	"github.com/relais/pkg/controlplane"
 )
 
 type ChildOptions struct {
+	Soak                  bool
 	Topology              callharness.ExternalTopology
 	Callers               int
 	Duration, SampleEvery time.Duration
@@ -42,6 +44,11 @@ type MoveRequest struct {
 // RunChild exposes only a loopback operator endpoint. Topology injection keeps
 // signaling separate from media and accepts #36's setns socket factory.
 func RunChild(ctx context.Context, o ChildOptions) error {
+	if o.Soak {
+		if err := processrss.Check(); err != nil {
+			return fmt.Errorf("soak memory sampling unavailable: %w", err)
+		}
+	}
 	if o.Callers < 1 || o.Duration <= 0 || o.SampleEvery <= 0 {
 		return errors.New("invalid child counts or durations")
 	}
@@ -119,6 +126,9 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	var startMu sync.Mutex
 	started := false
 	mux := http.NewServeMux()
+	if o.Soak {
+		registerMemoryDiagnostics(mux, calls)
+	}
 	mux.HandleFunc("GET /sessions", func(w http.ResponseWriter, _ *http.Request) {
 		ids := make([]string, len(calls))
 		for i, c := range calls {
@@ -196,7 +206,7 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	}
 	// Lifetime request totals include setup; interval rates start with media.
 	meter.sample()
-	sampler := &Sampler{}
+	sampler := &Sampler{CurrentMemory: o.Soak}
 	if err := sampler.Reset(); err != nil {
 		return err
 	}

@@ -100,11 +100,20 @@ type SentTrack struct {
 	KeyframeRequests int
 }
 
+// MediaGap records an interval between successfully decrypted packets.
+// These sparse observations survive rolling history, up to MaxRetainedMediaGaps.
+type MediaGap struct{ EndedAt, Duration time.Duration }
+
+const MaxRetainedMediaGaps = 4096
+
 // TrackReport describes a track the caller received.
 type TrackReport struct {
-	Kind        string
-	SSRC        uint32
-	PayloadType uint8
+	MediaGaps         []MediaGap
+	MediaGapsRecorded bool
+	MediaGapOverflow  int
+	Kind              string
+	SSRC              uint32
+	PayloadType       uint8
 
 	// Packets counts all packets the caller decrypted on this track.
 	// Arrivals holds the rolling history named by Report.Recording.

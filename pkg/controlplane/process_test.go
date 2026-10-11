@@ -138,3 +138,42 @@ func TestSlowListingDoesNotBlockHeartbeatAndRechecksPlacement(t *testing.T) {
 		})
 	}
 }
+
+// Process recycling must retain Replace's death, recovery and lease guards.
+func TestProcessReplacementAfterDrainRequiresSettledDeadWorker(t *testing.T) {
+	p, a, _, _ := setup(t)
+	server := httptest.NewServer(p.ProcessHandler())
+	defer server.Close()
+	replace := func() error {
+		return privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/private/workers/a/replace", nil, nil, nil)
+	}
+	require.Error(t, replace(), "a live registration cannot be reset")
+	p.mu.Lock()
+	p.workers["a"].draining = true
+	p.workers["a"].dead = true
+	p.workers["a"].recovering = true
+	p.mu.Unlock()
+	require.Error(t, replace(), "recovery must settle before clearing drain")
+	p.mu.Lock()
+	p.workers["a"].recovering = false
+	p.workers["a"].recovered = true
+	p.mu.Unlock()
+	lease, err := p.store.Claim(context.Background(), "replacement-guard", a.addr, time.Second)
+	require.NoError(t, err)
+	require.Error(t, replace(), "old leases prevent replacement")
+	require.NoError(t, p.store.Release(context.Background(), lease))
+	require.NoError(t, replace())
+	p.mu.Lock()
+	require.False(t, p.workers["a"].draining)
+	require.True(t, p.workers["a"].dead, "reset must not bypass the rejoin fence")
+	require.Equal(t, a.addr, p.workers["a"].addr)
+	p.mu.Unlock()
+	var challenge HeartbeatReply
+	require.NoError(t, privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/private/workers/a/heartbeat", HeartbeatRequest{Address: a.addr}, &challenge, nil))
+	require.NotEmpty(t, challenge.Token, "a paused old process needs the rejoin token")
+	p.mu.Lock()
+	require.True(t, p.workers["a"].dead)
+	p.mu.Unlock()
+	require.NoError(t, privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/private/workers/a/heartbeat", HeartbeatRequest{Address: a.addr, Token: challenge.Token}, nil, nil))
+	require.Error(t, replace(), "rejoined live registration cannot be reset")
+}

@@ -4,10 +4,46 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Calibration, capacity, or both (separate hosted jobs)
+        description: Calibration, capacity, soak, or both ramps (separate jobs)
         default: 'calibration'
         type: choice
-        options: [calibration, capacity, both]
+        options: [calibration, capacity, both, soak]
+      soak_callers:
+        description: Concurrent soak calls
+        default: '6'
+        type: string
+      soak_duration:
+        description: Soak media duration (Go duration)
+        default: '10m10s'
+        type: string
+      chaos_interval:
+        description: Time between seeded soak events
+        default: '30s'
+        type: string
+      seed:
+        description: Reproducible soak schedule seed
+        default: '41'
+        type: string
+      runner_label:
+        description: Soak runner label; choose larger hardware for 50 calls
+        default: 'ubuntu-latest'
+        type: string
+      generator_processes:
+        description: Soak generators; 0 derives from callers_per_process
+        default: '0'
+        type: string
+      soak_workers:
+        description: N+1 worker pool size
+        default: '3'
+        type: string
+      worker_floor:
+        description: Measured worker floor for this runner and workload
+        default: '8'
+        type: string
+      relay_floor:
+        description: Measured relay floor for this runner and workload
+        default: '8'
+        type: string
       capacity_max:
         description: Maximum callers per bounded capacity ramp
         default: '16'
@@ -36,7 +72,7 @@ permissions:
 
 jobs:
   calibrate:
-    if: github.event_name == 'schedule' || inputs.mode != 'capacity'
+    if: github.event_name == 'schedule' || inputs.mode == 'calibration' || inputs.mode == 'both'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -108,6 +144,8 @@ jobs:
         run: |
           price_flags=()
           if [ -f bin/capacity-prices.json ]; then price_flags=(-prices=bin/capacity-prices.json); fi
+          # Redirect logs as the checkout owner; only the topology needs root.
+          # shellcheck disable=SC2024
           sudo -E ./bin/relais-load -capacity -topology=netns -workers=3 \
             -duration="$SAMPLE_DURATION" -capacity-max="$SAMPLE_MAX" \
             -callers-per-process="$GENERATOR_CALLERS" -gomaxprocs=1 \
@@ -132,6 +170,72 @@ jobs:
           name: capacity-linux-${{ github.run_id }}
           path: |
             bin/capacity-*
+            bin/load-run-*
+          if-no-files-found: warn
+          retention-days: 14
+
+  soak:
+    name: Soak with seeded chaos
+    if: github.event_name == 'schedule' || inputs.mode == 'soak'
+    runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install disposable topology dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg iproute2 iptables procps
+      - name: Build real-process binaries
+        run: make build
+      - name: Record runner
+        run: |
+          { uname -a; lscpu; go version; } > bin/soak-runner.txt
+      - name: Run continuous calls with move, drain and SIGKILL
+        timeout-minutes: 80
+        env:
+          CALLS: ${{ inputs.soak_callers || '6' }}
+          DURATION: ${{ inputs.soak_duration || '10m10s' }}
+          INTERVAL: ${{ inputs.chaos_interval || '30s' }}
+          SEED: ${{ inputs.seed || '41' }}
+          PROCESSES: ${{ inputs.generator_processes || '0' }}
+          CALLERS_PER_PROCESS: ${{ inputs.callers_per_process || '2' }}
+          WORKERS: ${{ inputs.soak_workers || '3' }}
+          WORKER_FLOOR: ${{ inputs.worker_floor || '8' }}
+          RELAY_FLOOR: ${{ inputs.relay_floor || '8' }}
+        run: |
+          process_flags=()
+          if [ "$PROCESSES" != '0' ]; then process_flags=("-processes=$PROCESSES"); fi
+          # Redirect logs as the checkout owner; only the topology needs root.
+          # shellcheck disable=SC2024
+          sudo -E ./bin/relais-load -soak -topology=netns \
+            -callers="$CALLS" -duration="$DURATION" -chaos-interval="$INTERVAL" \
+            -seed="$SEED" -workers="$WORKERS" -gomaxprocs=1 \
+            -worker-floor="$WORKER_FLOOR" -relay-floor="$RELAY_FLOOR" \
+            -callers-per-process="$CALLERS_PER_PROCESS" "${process_flags[@]}" \
+            -output=bin/soak-linux.json > bin/soak-linux.log 2>&1
+      - name: Print evidence and check namespace cleanup
+        if: always()
+        run: |
+          if [ -f bin/soak-linux.log ]; then cat bin/soak-linux.log; fi
+          if sudo ip netns list | grep -E '^relais-net-'; then
+            echo 'FAIL: owned topology namespaces remain'
+            exit 1
+          fi
+      - name: Restore artifact ownership
+        if: always()
+        run: |
+          sudo find bin -maxdepth 1 -type d -name 'load-run-*' -exec chown -R "$(id -u):$(id -g)" {} +
+          sudo find bin -maxdepth 1 -type f -name 'soak-*' -exec chown "$(id -u):$(id -g)" {} +
+      - name: Upload report and all process logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: soak-linux-${{ github.run_id }}
+          path: |
+            bin/soak-*
             bin/load-run-*
           if-no-files-found: warn
           retention-days: 14

@@ -95,7 +95,7 @@ func TestResourceSampler(t *testing.T) {
 	at := time.Now()
 	m.Observe("audio", at, at)
 	stats, err := s.Sample(m)
-	if err != nil || stats.GOMAXPROCS < 1 || stats.RuntimeBytes == 0 || stats.PeakRSSBytes == 0 || stats.Lateness.Packets != 1 {
+	if err != nil || stats.GOMAXPROCS < 1 || stats.RuntimeBytes == 0 || stats.PeakRSSBytes == 0 || stats.Lateness.Packets != 1 || stats.RuntimeMemory != nil {
 		t.Fatalf("%+v %v", stats, err)
 	}
 }
