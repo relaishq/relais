@@ -118,7 +118,13 @@ Redis cache plus PLI and cache off plus PLI, interleaved within each trial. Each
 post-takeover media/consent observation. It prints first-decoded and first-live
 latency from SIGKILL, first/live attribution, replay packet count, decryption,
 connection and takeover checks, followed by a paired `CACHE_VS_PLI` table. The
-cache-off trials require Keyframe attribution and zero replay packets. A
+cache-off trials require zero replay packets and a newly decoded keyframe
+whose request reached the caller after SIGKILL. A natural keyframe may decode
+first, but cannot prove PLI recovery. `pli_keyframe_ms` reports the requested
+keyframe's decode time from SIGKILL independently of `decoded_ms` (first
+picture) and `live_ms` (first picture sent after media resumed); zero means
+no decoded PLI response was proved. The comparison includes both first/live
+paths, and `PLI_MEDIAN` summarizes only decoded PLI responses. A
 comparison that never decodes a cached picture fails explicitly. Pass lines
 report the cache-attributed count, and summaries report median first-picture
 and live-video latency separately for each attributed path. The full-matrix
