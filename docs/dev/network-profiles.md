@@ -100,8 +100,13 @@ This tests uncertainty recovery, not a claim that the failed operator request
 was a successful planned move.
 
 For a second preliminary planned move in each lossy trial, the driver
-briefly drops only private `RLS\x01` drain markers in the **owned relay
-namespace**. After 40ms it removes that rule, allowing the real 75ms resend.
+briefly drops only private `RLS\x01` drain markers on **owned worker
+namespace ingress**, restricted to each private veth and the relay private
+source address. After 40ms it removes the rules, allowing the real 75ms resend.
+Ingress loss leaves the relay send successful and the receiver silent. An
+OUTPUT drop would return `EPERM` to the sender through the
+[Linux local output path](https://github.com/torvalds/linux/blob/v6.8/net/ipv4/ip_output.c#L96-L125)
+and [netfilter drop verdict](https://github.com/torvalds/linux/blob/v6.8/net/netfilter/core.c#L583-L601).
 Media packets are not selected; the original barrier deadline is unchanged.
 The relay's new `relais_relay_barrier_resends_total` counter counts actual
 resend attempts. Both scenario baselines start after the preliminary move's full
@@ -116,7 +121,10 @@ source/destination qdiscs still apply to both halves of the HTTP round trip.
 
 `netns-network-profiles (PROFILE, SCENARIO)` runs the four profiles × two
 scenarios on nightly schedules and manual workflow dispatch only. It is not
-a PR or main-push gate. The existing `netns-crash-run` LAN job is unchanged.
+a PR or main-push gate. The existing `netns-crash-run` LAN job retains its
+isolation and cleanup coverage, excluding `Test(LinuxProfile|Profile)` so
+profile-specific test failures cannot block its LAN trials. Platform-independent
+profile tests still run in the unit job; native profile tests run in the matrix.
 Each matrix lane builds as the ordinary user, then runs namespace tests and
 the driver as root. Each trial retains service logs, `caller-report.json` and
 `metrics.json`. JSON durations are nanoseconds; the log also prints the thresholds and p95s

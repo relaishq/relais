@@ -93,17 +93,105 @@ func TestProfileApplicationRecordsActualQdiscAndPropagatesFailures(t *testing.T)
 	require.ErrorContains(t, err, "closed")
 }
 
-func TestBarrierLossRemovalUsesSameOwnedNamespaceAndRule(t *testing.T) {
-	p, _ := NewPlan(0, 1, "aabbccddee", 2)
+func TestProfileBarrierLossUsesWorkerIngressAndSameRemovalRules(t *testing.T) {
+	p, err := NewPlan(0, 1, "aabbccddee", 2)
+	require.NoError(t, err)
 	var calls []Command
-	topology := &Topology{Plan: p, runner: func(_ context.Context, c Command) (string, error) { calls = append(calls, c); return "", nil }}
+	topology := &Topology{Plan: p, runner: func(_ context.Context, c Command) (string, error) {
+		calls = append(calls, append(Command(nil), c...))
+		return "", nil
+	}}
 	remove, err := topology.BarrierLoss(context.Background())
 	require.NoError(t, err)
-	require.NoError(t, remove())
+	// OUTPUT DROP returns EPERM to sendto; loss must occur on the receiving
+	// worker's INPUT path, after transmission over the private veth.
+	require.Equal(t, "INPUT", calls[0][8])
 	require.Len(t, calls, 2)
-	require.Equal(t, p.Roles["relay"].Namespace, calls[0][3])
-	require.Equal(t, "-A", calls[0][7])
-	require.Equal(t, "-D", calls[1][7])
-	calls[0][7] = "-D"
-	require.Equal(t, calls[0], calls[1])
+	for i, c := range calls {
+		role := []string{"worker-0", "worker-1"}[i]
+		require.Equal(t, p.Roles[role].Namespace, c[3])
+		require.Equal(t, "-A", c[7])
+		var peer string
+		for _, link := range p.Links {
+			if link.Role == role {
+				peer = link.PeerLink
+			}
+		}
+		require.Equal(t, []string{"-i", peer, "-s", p.Roles["relay"].Private.String(), "-p", "udp", "-m", "u32", "--u32", "0>>22&0x3C@8=0x524c5301", "-j", "DROP"}, []string(c[9:]))
+	}
+	require.NoError(t, remove())
+	require.Len(t, calls, 4)
+	for i := 0; i < 2; i++ {
+		want := append(Command(nil), calls[i]...)
+		want[7] = "-D"
+		require.Equal(t, want, calls[3-i])
+	}
+	require.NoError(t, remove())
+	require.Len(t, calls, 4, "successful removal must be idempotent")
+}
+
+func TestProfileBarrierLossRollsBackPartialInstallationWithFreshContext(t *testing.T) {
+	p, err := NewPlan(0, 1, "aabbccddee", 2)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	installErr, cleanupErr := errors.New("install denied"), errors.New("cleanup denied")
+	var calls []Command
+	topology := &Topology{Plan: p, runner: func(commandCtx context.Context, c Command) (string, error) {
+		calls = append(calls, append(Command(nil), c...))
+		if len(calls) == 2 {
+			cancel()
+			return "", installErr
+		}
+		if c[7] == "-D" {
+			require.NoError(t, commandCtx.Err())
+			_, bounded := commandCtx.Deadline()
+			require.True(t, bounded)
+			return "", cleanupErr
+		}
+		return "", nil
+	}}
+	remove, err := topology.BarrierLoss(ctx)
+	require.Nil(t, remove)
+	require.ErrorIs(t, err, installErr)
+	require.ErrorIs(t, err, cleanupErr)
+	require.Len(t, calls, 3)
+	want := append(Command(nil), calls[0]...)
+	want[7] = "-D"
+	require.Equal(t, want, calls[2])
+	topology.closed = true
+	_, err = topology.BarrierLoss(context.Background())
+	require.ErrorContains(t, err, "closed")
+	require.Len(t, calls, 3)
+}
+
+func TestProfileBarrierLossRemovalTriesAllRulesAndRetriesFailures(t *testing.T) {
+	p, err := NewPlan(0, 1, "aabbccddee", 2)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var deleted []Command
+	cleanupErr := errors.New("cleanup denied")
+	topology := &Topology{Plan: p, runner: func(commandCtx context.Context, c Command) (string, error) {
+		if c[7] == "-D" {
+			require.NoError(t, commandCtx.Err())
+			deleted = append(deleted, c)
+			if len(deleted) == 1 {
+				return "", cleanupErr
+			}
+		}
+		return "", nil
+	}}
+	remove, err := topology.BarrierLoss(ctx)
+	require.NoError(t, err)
+	cancel()
+	require.ErrorIs(t, remove(), cleanupErr)
+	require.Len(t, deleted, 2, "one cleanup failure must not skip the other worker")
+	require.NoError(t, remove())
+	require.Len(t, deleted, 3)
+	require.Equal(t, deleted[0], deleted[2], "retry only the failed deletion")
+	topology.closed = true
+	topology.closeErr = cleanupErr
+	require.ErrorIs(t, remove(), cleanupErr)
+	require.Len(t, deleted, 3)
 }

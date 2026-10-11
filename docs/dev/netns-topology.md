@@ -56,7 +56,7 @@ the 60-second consent requirement. To exercise kernel isolation and cleanup:
 
 ```sh
 go test -c -o bin/nettopology.test ./internal/nettopology
-sudo -E env RELAIS_TEST_NETNS_REQUIRE=1 ./bin/nettopology.test -test.v -test.timeout=3m
+sudo -E env RELAIS_TEST_NETNS_REQUIRE=1 ./bin/nettopology.test -test.v -test.skip='^Test(LinuxProfile|Profile)' -test.timeout=3m
 ```
 
 The store binds its own private address on port 16379. Existing external

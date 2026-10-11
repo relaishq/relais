@@ -111,42 +111,50 @@ func TestLinuxProfileBarrierLossIsScopedAndReversible(t *testing.T) {
 	defer cancel()
 	topology, err := Open(ctx, t.Logf)
 	require.NoError(t, err)
-	defer topology.Close()
-	var source, destination *net.UDPConn
-	for _, entry := range []struct {
-		role string
-		conn **net.UDPConn
-	}{{"relay", &source}, {"worker-0", &destination}} {
-		require.NoError(t, withNamespace(topology.Plan.Roles[entry.role].Namespace, func() error {
+	t.Cleanup(func() { _ = topology.Close() })
+	openSocket := func(role string) *net.UDPConn {
+		var conn *net.UDPConn
+		require.NoError(t, withNamespace(topology.Plan.Roles[role].Namespace, func() error {
 			var err error
-			*entry.conn, err = net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(topology.Plan.Roles[entry.role].Private, 0)))
+			conn, err = net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(topology.Plan.Roles[role].Private, 0)))
 			return err
 		}))
-		defer (*entry.conn).Close()
+		t.Cleanup(func() { _ = conn.Close() })
+		return conn
 	}
+	source := openSocket("relay")
+	destinations := []*net.UDPConn{openSocket("worker-0"), openSocket("worker-1")}
 	remove, err := topology.BarrierLoss(ctx)
 	require.NoError(t, err)
 	defer func() { _ = remove() }()
-	addr := destination.LocalAddr().(*net.UDPAddr).AddrPort()
-	// The real barrier wire prefix is RLS\x01; iptables must drop it and only it.
-	_, err = source.WriteToUDPAddrPort([]byte("RLS\x01\x0012345678"), addr)
-	require.NoError(t, err)
-	require.NoError(t, destination.SetReadDeadline(time.Now().Add(25*time.Millisecond)))
-	var b [100]byte
-	_, _, err = destination.ReadFromUDPAddrPort(b[:])
-	var timeout net.Error
-	require.ErrorAs(t, err, &timeout)
-	require.True(t, timeout.Timeout())
-	_, err = source.WriteToUDPAddrPort([]byte("media"), addr)
-	require.NoError(t, err)
-	require.NoError(t, destination.SetReadDeadline(time.Now().Add(time.Second)))
-	n, _, err := destination.ReadFromUDPAddrPort(b[:])
-	require.NoError(t, err)
-	require.Equal(t, "media", string(b[:n]))
+	for _, destination := range destinations {
+		addr := destination.LocalAddr().(*net.UDPAddr).AddrPort()
+		// The real barrier wire prefix is RLS\x01. Transmission must succeed
+		// just as on a lossy link; only the receiver observes the missing marker.
+		_, err = source.WriteToUDPAddrPort([]byte("RLS\x01\x0012345678"), addr)
+		require.NoError(t, err)
+		require.NoError(t, destination.SetReadDeadline(time.Now().Add(25*time.Millisecond)))
+		var b [100]byte
+		_, _, err = destination.ReadFromUDPAddrPort(b[:])
+		var timeout net.Error
+		require.ErrorAs(t, err, &timeout)
+		require.True(t, timeout.Timeout())
+		_, err = source.WriteToUDPAddrPort([]byte("media"), addr)
+		require.NoError(t, err)
+		require.NoError(t, destination.SetReadDeadline(time.Now().Add(time.Second)))
+		n, _, err := destination.ReadFromUDPAddrPort(b[:])
+		require.NoError(t, err)
+		require.Equal(t, "media", string(b[:n]))
+	}
 	require.NoError(t, remove())
-	_, err = source.WriteToUDPAddrPort([]byte("RLS\x01\x0012345678"), addr)
-	require.NoError(t, err)
-	n, _, err = destination.ReadFromUDPAddrPort(b[:])
-	require.NoError(t, err)
-	require.Equal(t, "RLS\x01\x0012345678", string(b[:n]))
+	for _, destination := range destinations {
+		addr := destination.LocalAddr().(*net.UDPAddr).AddrPort()
+		_, err = source.WriteToUDPAddrPort([]byte("RLS\x01\x0012345678"), addr)
+		require.NoError(t, err)
+		require.NoError(t, destination.SetReadDeadline(time.Now().Add(time.Second)))
+		var b [100]byte
+		n, _, err := destination.ReadFromUDPAddrPort(b[:])
+		require.NoError(t, err)
+		require.Equal(t, "RLS\x01\x0012345678", string(b[:n]))
+	}
 }

@@ -121,18 +121,48 @@ func (t *Topology) ApplyProfile(ctx context.Context, name string) ([]LinkSetting
 // BarrierLoss installs a brief, driver-owned loss burst for the private drain
 // marker, so a lossy-dc trial proves resend instead of hoping a 0.1% random
 // loss happens to hit one of a handful of barriers. Media is not selected.
+// Drop on worker ingress: OUTPUT DROP would return EPERM to the relay sender,
+// unlike a real lossy link. Both workers are covered as ownership can change.
 func (t *Topology) BarrierLoss(ctx context.Context) (func() error, error) {
-	ns := t.Plan.Roles["relay"].Namespace
-	rule := Command{"ip", "netns", "exec", ns, "iptables", "-w", "2", "-A", "OUTPUT", "-p", "udp", "-m", "u32", "--u32", "0>>22&0x3C@8=0x524c5301", "-j", "DROP"}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.closed {
 		return nil, errors.New("topology is closed")
 	}
-	if _, err := t.runner(ctx, rule); err != nil {
-		return nil, err
+	var installed []Command
+	// The caller holds t.mu. Cleanup uses fresh contexts even when installation
+	// was canceled, and retains failed deletions for a subsequent removal try.
+	removeRules := func() error {
+		var failures []error
+		for i := len(installed) - 1; i >= 0; i-- {
+			remove := append(Command(nil), installed[i]...)
+			remove[7] = "-D"
+			if _, err := t.cleanupCommand(remove); err != nil {
+				failures = append(failures, err)
+			} else {
+				installed = append(installed[:i], installed[i+1:]...)
+			}
+		}
+		return errors.Join(failures...)
 	}
-	remove := append(Command(nil), rule...)
-	remove[7] = "-D"
-	return func() error { _, err := t.cleanupCommand(remove); return err }, nil
+	for _, link := range t.Plan.Links {
+		if !strings.HasPrefix(link.Role, "worker-") {
+			continue
+		}
+		ns := t.Plan.Roles[link.Role].Namespace
+		rule := Command{"ip", "netns", "exec", ns, "iptables", "-w", "2", "-A", "INPUT", "-i", link.PeerLink, "-s", t.Plan.Roles["relay"].Private.String(), "-p", "udp", "-m", "u32", "--u32", "0>>22&0x3C@8=0x524c5301", "-j", "DROP"}
+		if _, err := t.runner(ctx, rule); err != nil {
+			return nil, errors.Join(err, removeRules())
+		}
+		installed = append(installed, rule)
+	}
+	return func() error {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if t.closed {
+			// Close owns namespace cleanup; preserve any teardown failure.
+			return t.closeErr
+		}
+		return removeRules()
+	}, nil
 }
