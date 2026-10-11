@@ -298,6 +298,21 @@ type failedRouteLeaseHook struct {
 	lostResponseHook
 	leaseKey string
 	err      error
+	// Keep this two-candidate fault test in one page. Redis SCAN COUNT
+	// is only a hint and can otherwise stop at the injected error before
+	// reaching the older hash. Other scans (including cleanup) stay real.
+	scanPattern string
+	scanKeys    []string
+}
+
+func (h *failedRouteLeaseHook) AfterProcess(ctx context.Context, cmd redis.Cmder) error {
+	if scan, ok := cmd.(*redis.ScanCmd); ok && h.scanPattern != "" {
+		args := scan.Args()
+		if len(args) > 3 && args[3] == h.scanPattern {
+			scan.SetVal(h.scanKeys, 0)
+		}
+	}
+	return h.lostResponseHook.AfterProcess(ctx, cmd)
 }
 
 func (h *failedRouteLeaseHook) AfterProcessPipeline(_ context.Context, cmds []redis.Cmder) error {
@@ -327,7 +342,7 @@ func TestRedisRouteLoaderRetainsAddressWithFailedNewestLease(t *testing.T) {
 		require.NoError(t, r.PutRoute(ctx, route, false))
 	}
 	fault := errors.New("newest lease read failed")
-	r.client.AddHook(&failedRouteLeaseHook{leaseKey: r.keys(newer.SessionID)[0], err: fault})
+	r.client.AddHook(&failedRouteLeaseHook{leaseKey: r.keys(newer.SessionID)[0], err: fault, scanPattern: escapeRoutePattern(r.prefix) + "routes:*", scanKeys: []string{r.keys(older.SessionID)[4], r.keys(newer.SessionID)[4]}})
 	loaded, owners, err := r.LoadRouteOwners(ctx, 10)
 	require.ErrorIs(t, err, fault)
 	require.ElementsMatch(t, []Route{older, newer}, loaded, "failed lease evidence must still reserve its caller address")
