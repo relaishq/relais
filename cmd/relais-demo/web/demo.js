@@ -1,6 +1,7 @@
 'use strict';
 (() => {
   const M = window.relaisMetrics;
+  const A = window.relaisContinuity;
   const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check'].map((id) => [id,document.getElementById(id)]));
   const params = new URLSearchParams(location.search);
   const launchToken = new URLSearchParams(location.hash.slice(1)).get('token') || '';
@@ -120,6 +121,10 @@
       try {
         const status = await json('/demo/status'); if (!active(s)) return;
         s.status = status; s.statusError = null;
+        if(status.selected_agent==='demo' && s.id) {
+          try { s.agent=await json(`/demo/agent/${encodeURIComponent(s.id)}`);s.agentError=null; }
+          catch(err) {s.agentError=String(err);s.agent=null;}
+        }
         const owner = status.calls.find((c) => c.id === s.id)?.owner || null;
         if (s.id && owner !== s.owner) { s.owners.push({...stamp(),from:s.owner,to:owner}); s.owner = owner; }
       } catch (err) { if (active(s)) { s.statusError = String(err); s.owner = null; } }
@@ -127,15 +132,21 @@
     }
   }
   function snapshot(s) {
-    if(!s)return lastResult || {version:4,state:'idle',running:false,events:[],baselines:[]};
+    if(!s)return lastResult || {version:5,state:'idle',running:false,events:[],baselines:[]};
     let hold=s.hold || {status:'not-run',reason:'no event yet'};
     if(s.hold && M.hiddenDuring(s.hiddenPeriods,s.hold.startedMs,Math.min(s.stoppedAtMs || performance.now(),s.hold.dueMs)))hold={...hold,status:'invalid',verdict:{status:'invalid',reasons:['page hidden']}};
-    const entries=s.events.map((entry)=>{const verdict=M.combine(entry.windowVerdict,hold);return {...entry,verdict,pass:verdict.status==='pass'?true:verdict.status==='fail'?false:null};});
+    const entries=s.events.map((entry)=>{let verdict=M.combine(entry.windowVerdict,hold);
+      if(entry.agentVerdict && entry.agentVerdict.status!=='pass') {
+        const status=verdict.status==='invalid'?'invalid':verdict.status==='fail' || entry.agentVerdict.status==='fail'?'fail':'inconclusive';
+        verdict={status,reasons:[...verdict.reasons,...entry.agentVerdict.reasons.map((reason)=>`agent: ${reason}`)]};
+      }
+      return {...entry,verdict,pass:verdict.status==='pass'?true:verdict.status==='fail'?false:null};});
     const connectedThroughout=!!s.readyAtMs && s.transitions.every((e)=>e.atMs<s.readyAtMs || e.kind!=='connection' || e.state==='connected' || (s.stopped && e.state==='closed' && e.atMs>=s.stoppedAtMs));
     const noRenegotiation=!s.negotiations.length && !s.descriptionChanges.length && !s.restartCalls.length;
     const statuses=entries.map((e)=>e.verdict.status);
     const status=statuses.includes('invalid')?'invalid':statuses.includes('fail')?'fail':!statuses.length || statuses.includes('inconclusive')?'inconclusive':'pass';
-    return {version:4,source:s.source,id:s.id,startedAt:s.startedAt,state:s.stopped?'ended':s.pc.connectionState,running:!!s.script || !!s.busy || !!s.checklist,
+    return {version:5,source:s.source,id:s.id,startedAt:s.startedAt,state:s.stopped?'ended':s.pc.connectionState,running:!!s.script || !!s.busy || !!s.checklist,
+      agentMode:s.status?.selected_agent || "unverified",agent:s.agent || null,agentStatusError:s.agentError || null,agentVerdict:{status:s.events.some((e)=>e.agentVerdict?.status==='fail')?'fail':s.events.length && s.events.every((e)=>e.agentVerdict?.status==='pass')?'pass':'inconclusive'},
       iceConnectionState:s.pc.iceConnectionState,owner:s.owner,workerPIDs:s.status?.worker_pids || {},poolSize:s.status?.pool_size,expectedPoolSize:s.status?.expected_pool_size,registrationError:s.status?.registration_error || null,
       thresholds:{moveGapMs:100,drainGapMs:100,killGapMs:2000,longHoldMs:60000},
       measurement:{video:'decoded counter: observation time minus previous presentation time',audio:'total concealedSamples at receiver sample rate',sampleRate:s.sampleRate,statsClock:'RTCStats.timestamp',settleAfterResponseMs:2000,sourceCadence:'median of up to 60 observed draw intervals before the measurement window; source gaps over 1.5 times cadence contribute only excess beyond cadence to starvation diagnostics; baselines are excluded only when source excess overlaps their largest video gap',timeToFirstLiveFrameMs:'kill events only; null for moves, drains, and baselines. Browser kill-request issuance to first decoded counter beyond the source watermark sampled at largest content-gap recovery; conservative upper bound including request transit and owner lookup, without subtracting server clocks. Missing kill evidence is unverified'},
@@ -152,10 +163,10 @@
     for(const id of ['move','drain','kill'])el[id].disabled=!s || !s.armed || s.pc.connectionState!=='connected' || s.busy || !!s.script || !!s.checklist;
     const fmt=(ms)=>typeof ms==='number'?`${Math.round(ms)} ms`:'unverified';
     const pool=r.poolSize===undefined?'unknown':`${r.poolSize}/${r.expectedPoolSize}${r.poolSize<r.expectedPoolSize?' WARNING: pool short':''}`;
-    const rows=[['Connection',r.state],['ICE',r.iceConnectionState || '—'],['Owner',r.owner || '—'],['Worker PIDs',JSON.stringify(r.workerPIDs || {})],['Pool',pool],['60 s hold',r.longHold?.status || 'not-run'],['Test audio',r.testAudioState || 'pending'],['Echo audio',r.audioPlayback || 'pending'],['Status',r.registrationError || r.statusError || 'OK'],['Baseline video median / max',`${fmt(r.noiseFloor?.video.medianMs)} / ${fmt(r.noiseFloor?.video.maxMs)}`],['Baseline audio median / max',`${fmt(r.noiseFloor?.audio.medianMs)} / ${fmt(r.noiseFloor?.audio.maxMs)}`],['Planned-event gap failure authority',r.noiseGate?.ready?'ready':r.noiseGate?.reason || 'not measured']];
+    const rows=[['Agent',r.agentMode],['Agent count / phase',r.agent?`${r.agent.position.count} / ${Math.round(r.agent.position.phase_samples/48)} ms`:r.agentStatusError || '—'],['Last agent resume',r.agent?.last_resume?`${r.agent.last_resume.kind}; checkpoint ${fmt(r.agent.last_resume.checkpoint_age_ms)}, snapshot ${fmt(r.agent.last_resume.snapshot_age_ms)}; duplicated input ${r.agent.last_resume.input_may_be_duplicated}`:'—'],['Agent continuity',r.agentMode==='demo'?r.agentVerdict.status:'—'],['Connection',r.state],['ICE',r.iceConnectionState || '—'],['Owner',r.owner || '—'],['Worker PIDs',JSON.stringify(r.workerPIDs || {})],['Pool',pool],['60 s hold',r.longHold?.status || 'not-run'],['Test audio',r.testAudioState || 'pending'],['Returned audio',r.audioPlayback || 'pending'],['Status',r.registrationError || r.statusError || 'OK'],['Baseline video median / max',`${fmt(r.noiseFloor?.video.medianMs)} / ${fmt(r.noiseFloor?.video.maxMs)}`],['Baseline audio median / max',`${fmt(r.noiseFloor?.audio.medianMs)} / ${fmt(r.noiseFloor?.audio.maxMs)}`],['Planned-event gap failure authority',r.noiseGate?.ready?'ready':r.noiseGate?.reason || 'not measured']];
     el.summary.replaceChildren(...rows.flatMap(([k,v])=>{const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=k;dd.textContent=v;return [dt,dd];}));
     el.gap.textContent=`Content gap ${fmt(r.media?.videoGapMs)} · packet age (diagnostic) ${fmt(r.media?.audioPacketGapMs)}`;
-    el.moves.replaceChildren(...r.events.map((entry)=>{const row=document.createElement('tr');for(const value of [entry.at.slice(11,23),entry.kind,`${entry.from || '?'} → ${entry.to || '?'}`,fmt(entry.video.maxMs),fmt(entry.audio.maxMs),`${entry.verdict.status.toUpperCase()}: ${entry.verdict.reasons.join(', ')}`]){const td=document.createElement('td');td.textContent=value;row.append(td);}return row;}));
+    el.moves.replaceChildren(...r.events.map((entry)=>{const row=document.createElement('tr');for(const value of [entry.at.slice(11,23),entry.kind,`${entry.from || '?'} → ${entry.to || '?'}`,fmt(entry.video.maxMs),fmt(entry.audio.maxMs),`${entry.verdict.status.toUpperCase()}: ${entry.verdict.reasons.join(', ')}`,entry.agentVerdict?`${entry.agentVerdict.status.toUpperCase()}: #${entry.agentVerdict.positionBefore?.count ?? '?'} → #${entry.agentVerdict.positionRestored?.count ?? '?'} → #${entry.agentVerdict.positionAfter?.count ?? '?'}; duplicated ${entry.agentVerdict.inputMayBeDuplicated ?? 'unknown'}`:'—']){const td=document.createElement('td');td.textContent=value;row.append(td);}return row;}));
     el.transitions.textContent=JSON.stringify(r.transitions || [],null,2);
     // Rendering large JSON trees competes with media callbacks: at most 1 Hz.
     if(performance.now()-lastResultsRender>=1000){el.results.textContent=JSON.stringify(r,null,2);lastResultsRender=performance.now();}
@@ -345,6 +356,14 @@
       record.descriptionChanges=s.descriptionChanges.filter((e)=>e.atMs>=begin && e.atMs<=end);
       record.renegotiations=s.negotiations.filter((e)=>e.atMs>=begin && e.atMs<=end).length;
       record.iceRestarts=s.restartCalls.filter((e)=>e.atMs>=begin && e.atMs<=end).length+record.descriptionChanges.filter((e)=>e.iceRestart).length;
+      if(kind!=='baseline' && s.status?.selected_agent==='demo') {
+        record.agentContinuity=record.server?.agent_continuity || null;
+        if(record.agentContinuity) {
+          try {record.agentContinuity.observed_after=await json(`/demo/agent/${encodeURIComponent(s.id)}`);}
+          catch(err) {record.agentContinuity.errors.push(`post-event: ${err}`);}
+        }
+        record.agentVerdict=A.verdict(kind,record.agentContinuity);
+      }
       record.windowVerdict=M.verdict(record);record.windowPass=record.windowVerdict.status==='pass'?true:record.windowVerdict.status==='fail'?false:null;
       (kind==='baseline'?s.baselines:s.events).push(record);
       if(active(s)) scheduleHold(s);
@@ -411,7 +430,7 @@
     a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);return record;
   }
   el.source.value=params.get('source')==='camera'?'camera':'pattern';
-  window.relaisDemo={runChecklist,saveResults,start,runBaseline:(n=call?.baselineCount || 5,ms)=>run('baseline',n,ms),runMoves:(n,ms)=>run('move',n,ms),runKills:(n,ms)=>run('kill',n,ms),runDrains:(n,ms)=>run('drain',n,ms),results:()=>snapshot(call),waitForLongHold,stop};
+  window.relaisDemo={runChecklist,saveResults,start,runBaseline:(n=call?.baselineCount || 5,ms)=>run('baseline',n,ms),runMoves:(n,ms)=>run('move',n,ms),runKills:(n,ms)=>run('kill',n,ms),runDrains:(n,ms)=>run('drain',n,ms),results:()=>snapshot(call),agentStatus:async()=>{if(!call?.id)throw new Error("start a call first");return json(`/demo/agent/${encodeURIComponent(call.id)}`);},waitForLongHold,stop};
   el.save.onclick=saveResults;el.check.onclick=()=>runChecklist().catch(error);
   el.start.onclick=()=>start().catch(error);el.stop.onclick=()=>stop().catch(error);
   for(const kind of ['move','drain','kill']) el[kind].onclick=()=>event(kind).catch(error);

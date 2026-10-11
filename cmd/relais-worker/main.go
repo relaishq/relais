@@ -23,10 +23,15 @@ func run() error {
 	control := flag.String("control", processrun.Env("RELAIS_CONTROL_URL", ""), "control-plane HTTP URL for heartbeats")
 	httpAddr := flag.String("http", processrun.Env("RELAIS_WORKER_HTTP", "127.0.0.1:0"), "private worker HTTP address")
 	cacheOff := flag.Bool("frame-cache-off", false, "disable cache writes and takeover replay (PLI remains enabled)")
+	agentName := flag.String("agent", "echo", "audio agent: echo or demo")
 	drainTimeout := flag.Duration("drain-timeout", 5*time.Second, "SIGTERM drain deadline before closing")
 	flag.Parse()
 	if *drainTimeout <= 0 {
 		return &configError{}
+	}
+	agentConfig, err := selectAgent(*agentName)
+	if err != nil {
+		return err
 	}
 	ctx, cancel := processrun.Context()
 	defer cancel()
@@ -60,7 +65,7 @@ func run() error {
 		defer func() { _ = client.Close() }()
 		frames = client
 	}
-	worker, err := mediaworker.New(mediaworker.Config{ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store}})
+	worker, err := mediaworker.New(mediaworker.Config{Agent: agentConfig, ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store}})
 	if err != nil {
 		return err
 	}
@@ -72,7 +77,7 @@ func run() error {
 	serving, stopHTTP := context.WithCancel(context.Background())
 	defer stopHTTP()
 	done := make(chan error, 1)
-	go func() { done <- processrun.Serve(serving, listener, worker.PrivateHandler()) }()
+	go func() { done <- processrun.Serve(serving, listener, agentHandler(worker, *agentName)) }()
 	select {
 	case err := <-done:
 		return err

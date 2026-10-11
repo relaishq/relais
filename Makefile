@@ -17,7 +17,7 @@ BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 # Linker flags (populate pkg/buildinfo)
 LDFLAGS=-ldflags "-X github.com/relais/pkg/buildinfo.Version=$(VERSION) -X github.com/relais/pkg/buildinfo.Commit=$(COMMIT) -X github.com/relais/pkg/buildinfo.Date=$(BUILD_TIME)"
 
-.PHONY: all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo demo-cluster crash-run help
+.PHONY: all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo demo-cluster demo-agent crash-run help
 
 all: test build
 
@@ -35,6 +35,9 @@ build: ensure_bin_dir ## Build plugin runners, relay, worker, control, crash-run
 DEMO_CLUSTER_FLAGS ?=
 demo-cluster: build ## Run three separate workers and the browser move/drain/kill page on loopback; starts its own Redis (never 6379)
 	./$(BIN_DIR)/relais-demo $(DEMO_CLUSTER_FLAGS)
+
+demo-agent: build ## Run the scripted tone agent through moves and crashes; owns throwaway Redis
+	./$(BIN_DIR)/relais-demo -agent=demo $(DEMO_CLUSTER_FLAGS)
 
 CRASH_FLAGS ?=
 crash-run: build ## Compare ten real-process SIGKILL calls per cache/PLI mode on throwaway Redis; requires ffmpeg

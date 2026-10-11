@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,6 +20,7 @@ import (
 	"github.com/relais/internal/clusterprocess"
 	"github.com/relais/internal/privateapi"
 	"github.com/relais/internal/processrun"
+	agentdemo "github.com/relais/pkg/agent/demo"
 	"github.com/relais/pkg/callharness"
 	"github.com/relais/pkg/controlplane"
 	"github.com/stretchr/testify/require"
@@ -114,7 +117,9 @@ func TestDemoLocalNetworkSmoke(t *testing.T) {
 // Opt-in real process smoke; ordinary tests do not require built binaries or
 // Redis. It drives the launcher's production endpoints with the external Pion
 // caller. Browser presentation gaps and the 60 s browser hold remain NOT-RUN.
-func TestDemoExternalSmoke(t *testing.T) {
+func TestDemoExternalSmoke(t *testing.T)      { runExternalSmoke(t, "echo") }
+func TestDemoAgentExternalSmoke(t *testing.T) { runExternalSmoke(t, "demo") }
+func runExternalSmoke(t *testing.T, agentName string) {
 	if os.Getenv("RELAIS_DEMO_SMOKE") != "1" {
 		t.Skip("opt-in: make build, then RELAIS_DEMO_SMOKE=1 go test -run TestDemoExternalSmoke -v ./cmd/relais-demo")
 	}
@@ -122,7 +127,7 @@ func TestDemoExternalSmoke(t *testing.T) {
 	defer cancel()
 	manager := &clusterprocess.Manager{}
 	defer manager.Stop(false)
-	d, err := launch(ctx, manager, config{Bin: filepath.Join("..", "..", "bin"), RedisBinary: "redis-server"})
+	d, err := launch(ctx, manager, config{Bin: filepath.Join("..", "..", "bin"), RedisBinary: "redis-server", Agent: agentName})
 	require.NoError(t, err)
 	// Retain all started process identities and assert they're reaped by cleanup.
 	var children []*clusterprocess.Child
@@ -183,8 +188,36 @@ func TestDemoExternalSmoke(t *testing.T) {
 		require.Len(t, status.WorkerPIDs, 3)
 	}
 	read()
+	require.Equal(t, agentName, status.SelectedAgent)
+	evidenceRecords := []json.RawMessage{}
+	checkAgent := func(kind string, evidence *agentContinuity) {
+		if agentName != "demo" {
+			return
+		}
+		require.NotNil(t, evidence)
+		require.Empty(t, evidence.Errors)
+		require.NotNil(t, evidence.Before)
+		require.NotNil(t, evidence.After)
+		require.NotNil(t, evidence.After.LastResume)
+		var observed agentdemo.Status
+		require.NoError(t, privateapi.Do(ctx, server.Client(), server.URL, http.MethodGet, "/demo/agent/"+call.SessionID(), nil, &observed, nil))
+		payload, err := json.Marshal(struct {
+			*agentContinuity
+			Observed agentdemo.Status `json:"observed_after"`
+		}{evidence, observed})
+		require.NoError(t, err)
+		command := exec.Command("node", "-e", `const A=require('./web/continuity.js');let s='';process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{const verdict=A.verdict(process.argv[1],JSON.parse(s));console.log(JSON.stringify(verdict));if(verdict.status!=='pass')process.exitCode=1;});`, kind)
+		command.Stdin = bytes.NewReader(payload)
+		output, err := command.CombinedOutput()
+		require.NoError(t, err, "page continuity verdict: %s", output)
+		t.Logf("DEMO_AGENT_%s %s", kind, output)
+		evidenceRecords = append(evidenceRecords, json.RawMessage(payload))
+	}
 	original := status.Calls[0].Owner
-	var move controlplane.MoveResult
+	var move struct {
+		controlplane.MoveResult
+		Agent *agentContinuity `json:"agent_continuity"`
+	}
 	require.NoError(t, privateapi.Do(ctx, server.Client(), server.URL, http.MethodPost, "/calls/"+call.SessionID()+"/move", nil, &move, nil))
 	require.Empty(t, move.Error)
 	read()
@@ -192,6 +225,7 @@ func TestDemoExternalSmoke(t *testing.T) {
 	require.Equal(t, move.To, status.Calls[0].Owner)
 	t.Logf("move: %s -> %s, epoch=%d moves=%d", original, status.Calls[0].Owner, status.Calls[0].Epoch, status.Calls[0].MoveCount)
 	wait()
+	checkAgent("move", move.Agent)
 	var drain actionResult
 	require.NoError(t, privateapi.Do(ctx, server.Client(), server.URL, http.MethodPost, "/demo/drain", map[string]string{"id": call.SessionID()}, &drain, nil))
 	require.Empty(t, drain.Error)
@@ -201,6 +235,7 @@ func TestDemoExternalSmoke(t *testing.T) {
 	require.Contains(t, status.WorkerPIDs, drain.Replacement)
 	t.Logf("drain: %s -> %s; replacement %s pid=%d", drain.From, drain.To, drain.Replacement, drain.ReplacementPID)
 	wait()
+	checkAgent("drain", drain.Agent)
 	replacements := map[string]bool{drain.Replacement: true}
 	killedReplacement := false
 	for i := 0; i < 3; i++ {
@@ -216,6 +251,7 @@ func TestDemoExternalSmoke(t *testing.T) {
 		require.Equal(t, uint64(i+1), status.Calls[0].TakeoverCount)
 		require.NotContains(t, status.WorkerPIDs, kill.From)
 		wait()
+		checkAgent("kill", kill.Agent)
 		read()
 		for _, w := range status.Workers {
 			if _, live := status.WorkerPIDs[w.Name]; live {
@@ -247,6 +283,14 @@ func TestDemoExternalSmoke(t *testing.T) {
 	require.Empty(t, video.Video.FullDecode.Errors)
 	require.Equal(t, video.Video.FullDecode.FramesIn, video.Video.FullDecode.FramesDecoded)
 	t.Log(report.Summary())
+	if agentName == "demo" {
+		audio := report.Track("audio")
+		require.NotNil(t, audio)
+		require.Equal(t, audio.Packets, audio.UnmatchedPayloads)
+		evidence, err := json.MarshalIndent(evidenceRecords, "", "  ")
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(filepath.Join("..", "..", "bin", "w47-agent-process-evidence.json"), evidence, 0600))
+	}
 	d.mu.Lock()
 	for _, w := range d.workers {
 		children = append(children, w.child)

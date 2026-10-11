@@ -29,6 +29,7 @@ type demo struct {
 	ctx                        context.Context
 	client                     *http.Client
 	control, relay, redis, dir string
+	agentName                  string
 	publicHost                 string     // exact opt-in page IP; empty means loopback only
 	launchToken                string     // per-launch LAN mutation capability
 	op                         sync.Mutex // serialize actions, including recycled workers
@@ -44,6 +45,7 @@ var errRegistrationUncertain = errors.New("replacement registration unverified")
 
 type demoStatus struct {
 	controlplane.Status
+	SelectedAgent     string         `json:"selected_agent"`
 	RegistrationError string         `json:"registration_error,omitempty"`
 	PoolSize          int            `json:"pool_size"`
 	ExpectedPoolSize  int            `json:"expected_pool_size"`
@@ -59,6 +61,10 @@ func (d *demo) status(ctx context.Context) (demoStatus, error) {
 		return status, err
 	}
 	status.Relay, status.Redis = d.relay, d.redis
+	status.SelectedAgent = d.agentName
+	if status.SelectedAgent == "" {
+		status.SelectedAgent = "echo"
+	}
 	status.WorkerPIDs = map[string]int{}
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -162,16 +168,18 @@ func (d *demo) replaceOnce(ctx context.Context, old string) (string, int, error)
 }
 
 type actionResult struct {
-	Kind           string                    `json:"kind"`
-	ID             string                    `json:"id"`
-	From           string                    `json:"from"`
-	To             string                    `json:"to"`
-	PID            int                       `json:"pid"`
-	Replacement    string                    `json:"replacement,omitempty"`
-	ReplacementPID int                       `json:"replacement_pid,omitempty"`
-	At             time.Time                 `json:"at"`
-	Drain          *controlplane.DrainResult `json:"drain,omitempty"`
-	Error          string                    `json:"error,omitempty"`
+	Agent          *agentContinuity            `json:"agent_continuity,omitempty"`
+	Continuities   map[string]*agentContinuity `json:"-"`
+	Kind           string                      `json:"kind"`
+	ID             string                      `json:"id"`
+	From           string                      `json:"from"`
+	To             string                      `json:"to"`
+	PID            int                         `json:"pid"`
+	Replacement    string                      `json:"replacement,omitempty"`
+	ReplacementPID int                         `json:"replacement_pid,omitempty"`
+	At             time.Time                   `json:"at"`
+	Drain          *controlplane.DrainResult   `json:"drain,omitempty"`
+	Error          string                      `json:"error,omitempty"`
 }
 
 // Kill waits for the real detector/takeover before adding a fresh target. It
@@ -187,7 +195,8 @@ func (d *demo) kill(ctx context.Context, id string) (actionResult, error) {
 	if worker == nil {
 		return actionResult{}, errors.New("owner is not a launcher-owned process")
 	}
-	result := actionResult{Kind: "kill", ID: owner.ID, From: owner.Owner, PID: worker.child.PID(), At: time.Now()}
+	continuity := d.beforeAgent(ctx, owner.ID, owner.Owner)
+	result := actionResult{Agent: continuity, Kind: "kill", ID: owner.ID, From: owner.Owner, PID: worker.child.PID(), At: time.Now()}
 	if err := worker.child.SignalGroup(syscall.SIGKILL); err != nil {
 		return result, err
 	}
@@ -224,6 +233,7 @@ func (d *demo) kill(ctx context.Context, id string) (actionResult, error) {
 		case <-ticker.C:
 		}
 	}
+	d.finishAgent(ctx, owner.ID, result.From, result.To, "kill", continuity)
 	worker.child.Stop() // closes the killed child's log without signalling a reaped PID
 	result.Replacement, result.ReplacementPID, err = d.replacement(ctx, owner.Owner)
 	if err != nil {
@@ -241,7 +251,19 @@ func (d *demo) drain(ctx context.Context, name string) (actionResult, error) {
 	if worker == nil {
 		return actionResult{}, errors.New("worker is not a launcher-owned process")
 	}
-	result := actionResult{Kind: "drain", From: name, PID: worker.child.PID(), At: time.Now()}
+	continuities := map[string]*agentContinuity{}
+	if d.agentName == "demo" {
+		status, err := d.status(ctx)
+		if err != nil {
+			return actionResult{}, err
+		}
+		for _, call := range status.Calls {
+			if call.Owner == name {
+				continuities[call.ID] = d.beforeAgent(ctx, call.ID, name)
+			}
+		}
+	}
+	result := actionResult{Continuities: continuities, Kind: "drain", From: name, PID: worker.child.PID(), At: time.Now()}
 	var reply controlplane.DrainResult
 	err := privateapi.Do(ctx, d.client, d.control, http.MethodPost, "/workers/"+url.PathEscape(name)+"/drain", nil, &reply, nil)
 	result.Drain = &reply
@@ -254,6 +276,10 @@ func (d *demo) drain(ctx context.Context, name string) (actionResult, error) {
 	if len(reply.Moves) > 0 {
 		result.ID, result.To = reply.Moves[0].ID, reply.Moves[0].To
 	}
+	for _, move := range reply.Moves {
+		d.finishAgent(ctx, move.ID, move.From, move.To, "drain", continuities[move.ID])
+	}
+	result.Agent = continuities[result.ID]
 	worker.child.Stop()
 	result.Replacement, result.ReplacementPID, err = d.replacement(ctx, name)
 	return result, err
@@ -271,7 +297,33 @@ func (d *demo) handler(files http.Handler) http.Handler {
 	// The Pion external harness reads /status next to its signaling URL.
 	mux.Handle("GET /status", proxy)
 	mux.Handle("DELETE /calls/{id}", proxy)
-	mux.HandleFunc("POST /calls/{id}/move", func(w http.ResponseWriter, r *http.Request) { d.op.Lock(); defer d.op.Unlock(); proxy.ServeHTTP(w, r) })
+	mux.HandleFunc("POST /calls/{id}/move", func(w http.ResponseWriter, r *http.Request) {
+		d.op.Lock()
+		defer d.op.Unlock()
+		if d.agentName == "demo" {
+			d.moveAgent(w, r)
+		} else {
+			proxy.ServeHTTP(w, r)
+		}
+	})
+	mux.HandleFunc("GET /demo/agent/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if d.agentName != "demo" {
+			http.Error(w, "demo agent not selected", http.StatusNotFound)
+			return
+		}
+		owner, err := d.owner(r.Context(), r.PathValue("id"))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		status, err := d.readAgent(r.Context(), owner.ID, owner.Owner)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		privateapi.Write(w, status)
+	})
 	mux.HandleFunc("GET /demo/status", func(w http.ResponseWriter, r *http.Request) {
 		status, err := d.status(r.Context())
 		if err != nil {
@@ -307,6 +359,7 @@ func (d *demo) handler(files http.Handler) http.Handler {
 						for _, move := range result.Drain.Moves {
 							if move.ID == owner.ID {
 								result.ID, result.To = move.ID, move.To
+								result.Agent = result.Continuities[move.ID]
 								break
 							}
 						}

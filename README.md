@@ -50,6 +50,127 @@ Live WebRTC calls do not use this pipeline yet. They run in the media worker pro
 
 The earlier `relais-core` server and its Pion v3 signaling path (`pkg/server`, `pkg/webrtc`) have been retired.
 
+## Scripted audio agent: moves and crashes
+
+```bash
+make demo-agent
+# Choose another page port when 9101 is occupied:
+make demo-agent DEMO_CLUSTER_FLAGS="-http=127.0.0.1:9201"
+```
+
+Requires Go 1.26+ and `redis-server`. Open the printed URL in Chrome, click
+**Start call**, and keep **Play returned audio** enabled. The worker plays an
+owned ten-note scale: one count per 500 ms of consumed audio. The scale rises
+through counts 1–9; every tenth count plays a two-tone pulse. A high chime
+announces a resume. The page shows the count, phase within the count, last
+resume kind, checkpoint age, snapshot age, and duplicated-input flag.
+Use **Move call**, **Drain owner**, and **Kill owner (SIGKILL)** to hear and see
+it keep its place. Each session has independent state. The agent handles only
+audio; the existing page's video echo remains the media yardstick.
+
+`make demo-agent` selects `-agent=demo` on every worker, including replacements.
+The worker and cluster launcher otherwise default to `-agent=echo`. The
+launcher owns a throwaway Redis on a free port (never 6379) and reaps all child
+processes on Ctrl-C. No external audio service, data channel, native codec
+installation, or runtime encoder is needed.
+
+### Audio provenance and continuation
+
+The small assets in `pkg/agent/demo/assets/` are sine waves synthesized by
+our Go generator. They contain no speech, sampled recording, proprietary TTS
+voice, or third-party composition. We use pre-encoded Opus because the #46
+interface has no validated pure-Go encoder with serializable codec state.
+Regenerate from the repository root with:
+
+```bash
+go run ./pkg/agent/demo/generate  # requires ffmpeg with libopus
+```
+
+The generator writes raw PCM and uses ffmpeg/libopus with fixed 32 kb/s CELT
+frames, a 4 kHz bandwidth ceiling, 20 ms duration, and bit-exact flags.
+The common narrowband frame type lets longer packets combine tone and chime
+frames without changing codec configuration. It stores only length-prefixed
+Opus packets, excluding Ogg metadata. Regeneration is byte-identical with the
+same encoder version; different ffmpeg/libopus versions can change the bytes.
+Runtime output is deterministic for the committed assets and input sequence.
+The demo accepts input durations from 20–120 ms in 20 ms units; shorter input
+packets are rejected explicitly. Count and phase advance only on consumed
+input, so an idle or dropped input does not advance the script. The resume
+chime replaces 100 ms of the scale without changing the script's position.
+Save includes the count, tone phase, pending chime phase, consumed input floor,
+and resume evidence. The host durably coalesces changed saves at its 100 ms
+interval and flushes the accepted queue for a planned move.
+
+On replay, only input already represented by the saved consumed floor is
+suppressed. Input after that floor advances the script even inside a flagged
+duplicate window: that work is absent from the restored checkpoint. The #46
+base does not yet replay caller input (#27); its live takeover flag is false.
+Unit tests exercise flagged windows independently. Crash recovery can repeat
+uncheckpointed tones and lose input sent during the outage on this base.
+
+### Chrome continuity script
+
+After clicking **Start call**, run this in DevTools on the demo page:
+
+```javascript
+await window.relaisDemo.runBaseline(5);
+await window.relaisDemo.runMoves(3);
+await window.relaisDemo.runDrains(1);
+await window.relaisDemo.runKills(3);
+const hold = await window.relaisDemo.waitForLongHold();
+const results = window.relaisDemo.results();
+console.table(results.events.map(e => ({
+  kind: e.kind,
+  before: e.agentVerdict?.positionBefore?.count,
+  restored: e.agentVerdict?.positionRestored?.count,
+  after: e.agentVerdict?.positionAfter?.count,
+  duplicated: e.agentVerdict?.inputMayBeDuplicated,
+  checkpointAgeMs: e.agentVerdict?.checkpointAgeMs,
+  snapshotAgeMs: e.agentVerdict?.snapshotAgeMs,
+  continuity: e.agentVerdict?.status,
+  media: e.verdict.status
+})));
+window.relaisDemo.saveResults();
+await window.relaisDemo.stop();
+```
+
+Results version 5 adds `agentMode`, live `agent`, `agentStatusError`, aggregate
+`agentVerdict`, and per-event `agentContinuity`/`agentVerdict`. Each continuity
+verdict is `pass`, `fail`, or `inconclusive`, independent of the media verdict
+and its 60 s hold. The overall event also requires passing agent continuity
+when the demo agent is selected. `window.relaisDemo.agentStatus()` reads the
+current private worker status through `GET /demo/agent/{id}`. No transport
+snapshot or key material reaches the page.
+
+Planned continuity compares the source's **flushed export** count, tone phase,
+and consumed progress with the target's initial restored position and its
+actual incoming snapshot. A takeover compares the restored position with the
+actual checkpoint sent to the target and checks the ages against the control
+plane's measured event. Rollback is bounded by **snapshot age plus one 20 ms
+packet**, since snapshot age includes copy-to-commit storage delay that
+checkpoint write age does not. A fresh post-event observation must show the
+agent advancing. Missing source/export/checkpoint/status evidence remains
+inconclusive. This proves application state continuity; browser playback and
+the existing media verdict prove separate aspects of the caller experience.
+
+Local checks:
+
+```bash
+node --test cmd/relais-demo/*.test.cjs
+# With your own throwaway Redis on a non-6379 port:
+RELAIS_TEST_REDIS_ADDR=127.0.0.1:16379 RELAIS_TEST_REDIS_REQUIRE=1 \
+  go test -race -count=1 ./pkg/agent/demo/... ./cmd/relais-worker ./cmd/relais-demo
+make build
+RELAIS_DEMO_SMOKE=1 go test -race -count=1 -v \
+  -run '^TestDemoAgentExternalSmoke$' ./cmd/relais-demo
+```
+
+The opt-in smoke starts its own Redis and real workers, uses the external Pion
+caller, and runs the page's continuity function on one move, one drain, and
+three SIGKILL events. It writes `bin/w47-agent-process-evidence.json`. It does
+not replace a Chrome run, audible listening check, recording, or the browser's
+60 s hold.
+
 ## Browser cluster demo: move, drain and kill
 
 Run `make demo-cluster` with Go 1.26+ and `redis-server` on PATH, then open
@@ -107,7 +228,7 @@ certificate fingerprint in plain hex and Chrome's format; compare it with the
 browser's certificate viewer. The full printed URL selects camera and includes
 a per-launch token required for non-GET call controls. Private APIs stay on
 loopback. The page has a source
-menu, a 10-move/10-kill checklist button, and **Save results** for version 4 JSON.
+menu, a 10-move/10-kill checklist button, and **Save results** for version 5 JSON.
 Both sources use the same counter reader. Each takeover records the time to a
 first live frame after observed content recovery, measured conservatively from
 kill-request issuance; moves and drains report `null` for this field. The
@@ -213,7 +334,7 @@ The hold retains running maximum content/concealment gaps and freeze deltas
 for its whole duration. A transient freeze cannot disappear from the hold
 result merely because media recovers at the end.
 
-`results()` is schema version 4. Each event has `windowVerdict` and `verdict`,
+`results()` is schema version 5. Each event has `windowVerdict` and `verdict`,
 both `{status: "pass" | "fail" | "inconclusive" | "invalid", reasons: string[]}`.
 `windowVerdict` covers the event window; `verdict` also requires the final hold.
 Successful windows awaiting a hold are inconclusive. `windowPass` and `pass`
