@@ -182,6 +182,47 @@ jobs:
           name: crash-run-logs
           path: bin/crash-run-*
 
+  # Each lane runs twenty 60 s trials on an awake Linux runner. The driver
+  # and relay children run as the same ordinary user; fencing reads /proc.
+  relay-continuity:
+    timeout-minutes: 35
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [relay-restart, relay-standby]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+      - name: Install Redis and ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
+      - name: Verify native process identity and stopped-child fencing
+        shell: bash
+        run: |
+          set -o pipefail
+          test "$(id -u)" -ne 0
+          mkdir -p bin
+          go test -race -v -count=1 ./internal/processidentity/ | tee bin/relay-continuity-fencing.log
+      # Restart compares ten restore-on and ten restore-off trials. Standby
+      # compares ten SIGKILL and ten SIGSTOP trials. Redis is driver-owned.
+      - name: Run relay continuity acceptance
+        shell: bash
+        run: |
+          set -o pipefail
+          make crash-run CRASH_FLAGS="-${{ matrix.mode }} -runs=10 -after=60s" |& tee bin/relay-continuity-driver.log
+      - name: Upload relay continuity failure logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: relay-continuity-${{ matrix.mode }}-logs
+          path: |
+            bin/relay-continuity-*.log
+            bin/crash-run-*
+
   cluster-tests-gate:
     runs-on: ubuntu-latest
     outputs:
