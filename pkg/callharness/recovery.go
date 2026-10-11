@@ -29,8 +29,12 @@ type VideoRecovery struct {
 	FirstDecodedRepeated bool
 	// FirstDecodedLiveAfterKill measures a decoded frame sent at/after
 	// MediaResumedAt, and is zero when no such live frame decoded.
-	FirstDecodedLiveAfterKill    time.Duration
-	LivePath                     string
+	FirstDecodedLiveAfterKill time.Duration
+	LivePath                  string
+	// FirstDecodedPLIAfterKill measures the first newly decoded response to a
+	// keyframe request received by the caller at/after the kill. It is zero
+	// without that evidence, even when a natural keyframe restores video first.
+	FirstDecodedPLIAfterKill     time.Duration
 	KeyframeInterval             time.Duration
 	FirstDecodedAfterMediaResume time.Duration
 	FrameInterval                time.Duration
@@ -149,6 +153,9 @@ func (r *recorder) videoRecovery(start, limit time.Duration) VideoRecovery {
 		for _, f := range track.video.frames {
 			if !f.decodable || f.at < result.MediaResumedAt || f.at >= limit {
 				continue
+			}
+			if !f.repeated && f.source.pli && f.source.requestedAt >= start && f.source.at >= f.source.requestedAt && result.FirstDecodedPLIAfterKill == 0 {
+				result.FirstDecodedPLIAfterKill = f.at - start
 			}
 			if !f.repeated && f.source.at >= result.MediaResumedAt && result.FirstDecodedLiveAfterKill == 0 {
 				result.FirstDecodedLiveAfterKill = f.at - start

@@ -29,7 +29,7 @@ type result struct {
 	Metrics                                          []ProcessMetrics `json:"metrics,omitempty"`
 	Gap                                              time.Duration
 	Decrypt, AfterResume, Reconnects, Renegotiations int
-	Decoded, Live, Detection                         time.Duration
+	Decoded, Live, PLI, Detection                    time.Duration
 	Pass                                             bool
 	Path, LivePath                                   string
 	ReplayPackets                                    int
@@ -274,6 +274,7 @@ func measure(report *callharness.Report, relayAddr string, after time.Duration) 
 	r.Measurement = move.Measurement
 	r.AfterResume, r.Decoded, r.Live, r.Detection = move.DecryptionFailuresAfterResume, move.Recovery.FirstDecodedAfterKill, move.Recovery.FirstDecodedLiveAfterKill, move.DetectionTime
 	r.Path, r.LivePath, r.ReplayPackets = move.Recovery.Path, move.Recovery.LivePath, move.Recovery.ReplayPackets
+	r.PLI = move.Recovery.FirstDecodedPLIAfterKill
 	flowing := len(move.Tracks) == 2
 	for _, track := range move.Tracks {
 		r.Gap = max(r.Gap, track.Gap)
@@ -289,14 +290,14 @@ func measure(report *callharness.Report, relayAddr string, after time.Duration) 
 	return r
 }
 func printTable(results []result) {
-	fmt.Println("run  gap_ms  decrypt(total/after)  reconnects  renegotiations  decoded_ms  live_ms  detection_ms  first_path  live_path  replay_packets  result")
+	fmt.Println("run  gap_ms  decrypt(total/after)  reconnects  renegotiations  decoded_ms  live_ms  detection_ms  first_path  live_path  replay_packets  pli_keyframe_ms  result")
 	for i, r := range results {
 		fmt.Printf("CALLER_EVENT run=%d %s\n", i+1, r.Measurement.Summary())
 		state := "FAIL"
 		if r.Pass {
 			state = "PASS"
 		}
-		fmt.Printf("%3d  %6.1f  %7d/%-5d       %3d        %3d          %7.1f    %7.1f  %7.1f       %-8s    %-8s    %5d           %s\n", i+1, float64(r.Gap)/float64(time.Millisecond), r.Decrypt, r.AfterResume, r.Reconnects, r.Renegotiations, float64(r.Decoded)/float64(time.Millisecond), float64(r.Live)/float64(time.Millisecond), float64(r.Detection)/float64(time.Millisecond), r.Path, r.LivePath, r.ReplayPackets, state)
+		fmt.Printf("%3d  %6.1f  %7d/%-5d       %3d        %3d          %7.1f    %7.1f  %7.1f       %-8s    %-8s    %5d           %7.1f          %s\n", i+1, float64(r.Gap)/float64(time.Millisecond), r.Decrypt, r.AfterResume, r.Reconnects, r.Renegotiations, float64(r.Decoded)/float64(time.Millisecond), float64(r.Live)/float64(time.Millisecond), float64(r.Detection)/float64(time.Millisecond), r.Path, r.LivePath, r.ReplayPackets, float64(r.PLI)/float64(time.Millisecond), state)
 	}
 }
 func run() (err error) {
@@ -532,7 +533,7 @@ func run() (err error) {
 			if !r.Pass {
 				return trialFailure(i+1, label, trialDir, errors.New("caller-observed process handover threshold failed"))
 			}
-			if !*bufferOn && !*compareBuffer && !*relayStandby && !*relayRestart && !*terminate && off && (r.Path != "Keyframe" || r.ReplayPackets != 0) {
+			if !*bufferOn && !*compareBuffer && !*relayStandby && !*relayRestart && !*terminate && off && !provesPLIRecovery(r) {
 				return trialFailure(i+1, label, trialDir, errors.New("cache-off run did not prove PLI attribution"))
 			}
 		}
@@ -583,6 +584,11 @@ func run() (err error) {
 	}
 	return nil
 }
+
+func provesPLIRecovery(r result) bool {
+	return r.PLI > 0 && r.ReplayPackets == 0
+}
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -620,10 +626,10 @@ func measureDrain(report *callharness.Report, relayAddr string, observedUntil ti
 // only live_ms measures a frame sent by the caller after that kill.
 func printComparison(cache, pli []result) {
 	fmt.Println("CACHE_VS_PLI common_start=SIGKILL (cached picture predates crash)")
-	fmt.Println("run  cache_decoded_ms  cache_live_ms  cache_path  cache_live_path  pli_decoded_ms  pli_live_ms  pli_path")
+	fmt.Println("run  cache_decoded_ms  cache_live_ms  cache_path  cache_live_path  pli_decoded_ms  pli_live_ms  pli_path  pli_live_path  pli_keyframe_ms")
 	for i, c := range cache {
 		p := pli[i]
-		fmt.Printf("%3d  %16.1f  %13.1f  %-10s  %-15s  %14.1f  %11.1f  %s\n", i+1, float64(c.Decoded)/float64(time.Millisecond), float64(c.Live)/float64(time.Millisecond), c.Path, c.LivePath, float64(p.Decoded)/float64(time.Millisecond), float64(p.Live)/float64(time.Millisecond), p.Path)
+		fmt.Printf("%3d  %16.1f  %13.1f  %-10s  %-15s  %14.1f  %11.1f  %-8s  %-13s  %15.1f\n", i+1, float64(c.Decoded)/float64(time.Millisecond), float64(c.Live)/float64(time.Millisecond), c.Path, c.LivePath, float64(p.Decoded)/float64(time.Millisecond), float64(p.Live)/float64(time.Millisecond), p.Path, p.LivePath, float64(p.PLI)/float64(time.Millisecond))
 	}
 }
 
@@ -645,6 +651,15 @@ func median(values []time.Duration) time.Duration {
 	return values[n/2-1] + (values[n/2]-values[n/2-1])/2
 }
 func printPathMedians(mode string, results []result) {
+	var pli []time.Duration
+	for _, r := range results {
+		if r.PLI > 0 {
+			pli = append(pli, r.PLI)
+		}
+	}
+	if len(pli) > 0 {
+		fmt.Printf("PLI_MEDIAN mode=%s common_start=SIGKILL decoded_runs=%d pli_keyframe_ms=%.1f\n", mode, len(pli), float64(median(pli))/float64(time.Millisecond))
+	}
 	for _, path := range []string{"Cache", "Keyframe", "Live"} {
 		var decoded, live []time.Duration
 		for _, r := range results {

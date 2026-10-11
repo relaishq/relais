@@ -13,7 +13,7 @@ func successfulReport() *callharness.Report {
 		OfferAnswerExchanges: 1, RemoteAddr: "127.0.0.1:9", ConnectionStates: []callharness.StateChange{{State: "connected"}},
 		Consent: callharness.ConsentReport{ObservedFor: 61 * time.Second, ResponsesAfter: 30},
 		Tracks:  []callharness.TrackReport{{Kind: "video", Video: &callharness.VideoReport{FullDecode: callharness.FullDecode{FramesIn: 10, FramesDecoded: 10}}}},
-		Moves:   []callharness.MoveReport{{Kind: "takeover", Tracks: []callharness.MoveTrackReport{{Kind: "audio", Gap: 450 * time.Millisecond, PacketsAfter: 10}, {Kind: "video", Gap: 460 * time.Millisecond, PacketsAfter: 10}}, Measurement: callharness.EventMeasurement{SettleWindow: 500 * time.Millisecond, AudioLoss: callharness.MetricVerdict{Trusted: true}, VideoLoss: callharness.MetricVerdict{Trusted: true}, Audio: callharness.FreshnessReport{Verdict: callharness.MetricVerdict{Trusted: true}}, Video: callharness.FreshnessReport{Verdict: callharness.MetricVerdict{Trusted: true}}, ResumeVerdict: callharness.MetricVerdict{Trusted: true}, FirstContentVerdict: callharness.MetricVerdict{Trusted: true}, FirstNewContentVerdict: callharness.MetricVerdict{Trusted: true}, FirstLiveVerdict: callharness.MetricVerdict{Trusted: true}}, Recovery: callharness.VideoRecovery{Path: "Keyframe", LivePath: "Keyframe", FirstDecodedAfterKill: 470 * time.Millisecond, FirstDecodedLiveAfterKill: 470 * time.Millisecond}}},
+		Moves:   []callharness.MoveReport{{Kind: "takeover", Tracks: []callharness.MoveTrackReport{{Kind: "audio", Gap: 450 * time.Millisecond, PacketsAfter: 10}, {Kind: "video", Gap: 460 * time.Millisecond, PacketsAfter: 10}}, Measurement: callharness.EventMeasurement{SettleWindow: 500 * time.Millisecond, AudioLoss: callharness.MetricVerdict{Trusted: true}, VideoLoss: callharness.MetricVerdict{Trusted: true}, Audio: callharness.FreshnessReport{Verdict: callharness.MetricVerdict{Trusted: true}}, Video: callharness.FreshnessReport{Verdict: callharness.MetricVerdict{Trusted: true}}, ResumeVerdict: callharness.MetricVerdict{Trusted: true}, FirstContentVerdict: callharness.MetricVerdict{Trusted: true}, FirstNewContentVerdict: callharness.MetricVerdict{Trusted: true}, FirstLiveVerdict: callharness.MetricVerdict{Trusted: true}}, Recovery: callharness.VideoRecovery{Path: "Keyframe", LivePath: "Keyframe", FirstDecodedAfterKill: 470 * time.Millisecond, FirstDecodedLiveAfterKill: 470 * time.Millisecond, FirstDecodedPLIAfterKill: 470 * time.Millisecond}}},
 	}
 }
 func TestCrashRunRejectsIncompleteOrUncleanCallerEvidence(t *testing.T) {
@@ -52,6 +52,43 @@ func TestCrashRunRejectsIncompleteOrUncleanCallerEvidence(t *testing.T) {
 func TestCacheAttributionCountsActualDecodedPath(t *testing.T) {
 	require.Equal(t, 1, cacheAttributions([]result{{Path: "Cache", ReplayPackets: 2}, {Path: "Keyframe", ReplayPackets: 2}, {Path: "Cache"}}))
 	require.Equal(t, 25*time.Millisecond, median([]time.Duration{40 * time.Millisecond, 10 * time.Millisecond, 30 * time.Millisecond, 20 * time.Millisecond}))
+}
+
+func TestCacheOffPLIAttribution(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*callharness.VideoRecovery)
+		want   bool
+	}{
+		{"requested keyframe first", func(r *callharness.VideoRecovery) {}, true},
+		{"natural keyframe before requested keyframe", func(r *callharness.VideoRecovery) {
+			r.Path = "Live"
+			r.FirstDecodedAfterKill = 400 * time.Millisecond
+		}, true},
+		{"natural first live before requested keyframe", func(r *callharness.VideoRecovery) {
+			r.Path, r.LivePath = "Live", "Live"
+			r.FirstDecodedAfterKill, r.FirstDecodedLiveAfterKill = 400*time.Millisecond, 400*time.Millisecond
+		}, true},
+		{"natural keyframe alone", func(r *callharness.VideoRecovery) {
+			r.Path, r.LivePath = "Live", "Live"
+			r.FirstDecodedPLIAfterKill = 0
+		}, false},
+		{"path label without decoded PLI evidence", func(r *callharness.VideoRecovery) {
+			r.FirstDecodedPLIAfterKill = 0
+		}, false},
+		{"cache replay with decoded PLI", func(r *callharness.VideoRecovery) {
+			r.Path, r.ReplayPackets = "Cache", 2
+		}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r := successfulReport()
+			test.mutate(&r.Moves[0].Recovery)
+			measured := measure(r, "127.0.0.1:9", 60*time.Second)
+			require.True(t, measured.Pass)
+			require.Equal(t, r.Moves[0].Recovery.FirstDecodedPLIAfterKill, measured.PLI)
+			require.Equal(t, test.want, provesPLIRecovery(measured))
+		})
+	}
 }
 
 // An unknown metric preserves its reason; an independent trusted failure

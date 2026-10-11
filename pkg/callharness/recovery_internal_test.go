@@ -53,3 +53,41 @@ func TestRecoveryOutageFrameIsNotFirstLive(t *testing.T) {
 	require.Zero(t, result.FirstDecodedLiveAfterKill, "sent after kill but before resume is outage content")
 	require.Empty(t, result.LivePath)
 }
+
+func TestRecoveryTracksDecodedPLIIndependently(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		sent      time.Duration
+		requested time.Duration
+		pli       bool
+		decodable bool
+		repeated  bool
+		want      time.Duration
+	}{
+		{"request after resume", 24 * time.Millisecond, 23 * time.Millisecond, true, true, false, 16 * time.Millisecond},
+		{"request during outage", 20 * time.Millisecond, 19 * time.Millisecond, true, true, false, 16 * time.Millisecond},
+		{"natural keyframe alone", 24 * time.Millisecond, 0, false, true, false, 0},
+		{"request without decode", 24 * time.Millisecond, 23 * time.Millisecond, true, false, false, 0},
+		{"request before kill", 24 * time.Millisecond, 9 * time.Millisecond, true, true, false, 0},
+		{"request after send", 24 * time.Millisecond, 25 * time.Millisecond, true, true, false, 0},
+		{"repeated picture", 24 * time.Millisecond, 23 * time.Millisecond, true, true, true, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := sentVideoFrame{at: test.sent, requestedAt: test.requested, pli: test.pli}
+			r := &recorder{sentVideoFrames: map[uint16]sentVideoFrame{0: {at: time.Millisecond}, 1: {at: 20 * time.Millisecond}, 2: response}}
+			r.tracks = []*trackRecord{{kind: kindVideo,
+				arrivals: []time.Duration{2 * time.Millisecond, 21 * time.Millisecond, 25 * time.Millisecond},
+				headers:  []rtpMark{{seq: 110, pictureID: 0, havePictureID: true}, {seq: 8303, pictureID: 1, havePictureID: true}, {seq: 8304, pictureID: 2, havePictureID: true}},
+				video: &videoRecord{frames: []frameMark{
+					{at: 22 * time.Millisecond, source: sentVideoFrame{at: 20 * time.Millisecond}, decodable: true, pictureID: 1},
+					{at: 26 * time.Millisecond, source: response, decodable: test.decodable, repeated: test.repeated, pictureID: 2},
+				}},
+			}}
+			recovery := r.videoRecovery(10*time.Millisecond, time.Second)
+			require.Equal(t, "Live", recovery.Path)
+			require.Equal(t, 12*time.Millisecond, recovery.FirstDecodedAfterKill)
+			require.Zero(t, recovery.ReplayPackets)
+			require.Equal(t, test.want, recovery.FirstDecodedPLIAfterKill)
+		})
+	}
+}
