@@ -1,6 +1,6 @@
 # Local load-generator evidence
 
-Rework checkout: `feat/38-load-generator`, base `e5510a4`, with uncommitted
+First rework checkout: `feat/38-load-generator`, base `e5510a4`, with uncommitted
 PR #71 review fixes. Measured on 2026-10-11 UTC, darwin/arm64, Go 1.26.9.
 This is a shared developer Mac. These short runs do not establish sustained
 host capacity or a hosted Linux result. Worker build, lint and test checks
@@ -122,4 +122,62 @@ start deadlines have unit coverage; normal child lifetime and cleanup were
 exercised by the load run and calibration. The orchestrator must dispatch CI
 for hosted Linux evidence.
 
-Changes remain uncommitted. No push, GitHub writes, or agent delegation occurred.
+Those changes were later committed as `97fa96e`. No push, GitHub writes, or
+agent delegation occurred during that worker verification.
+
+## Final-collection follow-up — rework 2
+
+Base `97fa96e`, with the new fix uncommitted; measured on 2026-10-11 UTC.
+A regression first reproduced the cancelled-poll bug through a real caller's
+`Hangup`: cancelling caller A's in-flight status context cached `context
+canceled`, and caller B's final collection returned that error. The red log is
+`bin/rework2-cancel-red.log`; the corrected path passes in
+`bin/rework2-cancel-green.log`.
+
+Shared reads now fetch under `context.WithoutCancel` plus their own timeout.
+Caller cancellation/deadline errors return only to that reader and never enter
+the shared cache. Final collection bypasses a periodic snapshot and uses a
+10-second request deadline. Final callers share the completed result for one
+second; this preserves shared polling instead of adding one scan per hangup.
+The child has a 15-second hangup budget for the final read, echo drain and
+call deletion. Local in-process status collection remains unchanged.
+
+The slow-status regression uses an actual 1.1-second HTTP response: a periodic
+read times out, then 100 final readers succeed using one fresh longer read.
+A separate deadline regression confirms that a reader's deadline does not
+cancel the shared request or poison its successful cached snapshot.
+
+```sh
+./bin/relais-load -callers=8 -processes=2 -gomaxprocs=1 -duration=20s \
+  -event=6s,move,2,1 -output=bin/load-mac-rework2.json
+```
+
+| Process | Callers | Peak CPU / one core | Peak heap MiB | Peak RSS MiB | Send p99 | Peak interval p99 | Peak skipped frames | Status requests/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 49365 | 4 | 6.85% | 9.4 | 33.2 | 11.7 ms | 26.388 ms | 1.25% | 0.59 |
+| 49366 | 4 | 7.00% | 8.2 | 33.5 | 6.5 ms | 26.300 ms | 1.25% | 0.59 |
+
+**Outcome: inconclusive; command exit 1.** Both processes exceeded the unchanged
+20 ms interval p99 and 1% skipped-frame limits. Each sent 6,396 frames and
+skipped four of 6,400 opportunities. These are pacing saturation causes;
+there were no caller errors or final-collection errors. All eight caller
+reports were complete, and the move had `affected=2`, `recorded=2`, with all
+metrics passing at 2/2 trusted coverage. The shared-Mac observation does not
+establish service capacity. No repeat load or calibration ramp was run.
+
+Each process made 13 status requests including setup, with 12 in the measured
+media/hangup intervals (0.59 requests/s). Reports and logs:
+`bin/load-mac-rework2.json`, `bin/load-mac-rework2.log`,
+`bin/load-run-3764419899/`.
+
+Verification: `gofmt -l .` and `git diff --check` clean; `go vet ./...` passed;
+golangci-lint v2.14.0 reported **0 issues**; `make build` passed;
+`go test -race -count=1 ./cmd/relais-load/ ./internal/loadgen/` passed, including
+the new real-hangup, slow-response and caller-deadline regressions. Logs:
+`bin/rework2-vet.log`, `bin/rework2-lint.log`, `bin/rework2-build.log`,
+`bin/rework2-race.log`. All eight recorded owned service/caller/Redis PIDs were
+absent after cleanup (`bin/rework2-cleanup-check.json`). Redis used a private
+loopback port with persistence disabled; port 6379 was never used.
+
+No full harness or hosted workflow was run for this follow-up. Changes remain
+uncommitted; no push, GitHub writes or delegation occurred.

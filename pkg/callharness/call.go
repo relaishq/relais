@@ -568,7 +568,7 @@ func (c *Call) Hangup(ctx context.Context) (*Report, error) {
 		iceUfrag(c.pc.CurrentRemoteDescription()) != c.remoteUfrag {
 		c.rec.iceRestartObserved()
 	}
-	takeoverErr := c.collectTakeovers(ctx)
+	takeoverErr := c.collectFinalTakeovers(ctx)
 	c.rec.hangup()
 	remoteAddr := c.selectedRemoteAddr()
 

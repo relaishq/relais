@@ -51,6 +51,9 @@ type ExternalTopology struct {
 	// Status optionally supplies a shared status view for external callers.
 	// Nil keeps the ordinary per-call HTTP reads and local harness behavior.
 	Status func(context.Context) (controlplane.Status, error)
+	// FinalStatus optionally refreshes the shared status view at Hangup with
+	// a final-collection timeout. Nil preserves the ordinary Status path.
+	FinalStatus func(context.Context) (controlplane.Status, error)
 }
 
 // Options configures the system the harness starts.

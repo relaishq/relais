@@ -72,10 +72,20 @@ still invalidate the measurement. Optional callbacks must be fast and safe for
 concurrent audio and video sends.
 
 Each caller process has one shared, demand-driven status poller. Callers keep
-their existing one-second observation cadence and read the same snapshot;
-HTTP refreshes are limited to one per second per process, including failed
-reads and final collection. The harness excludes these observer HTTP reads
-from planned moves. Local in-process harness behavior remains unchanged.
+their existing one-second observation cadence and read the same snapshot.
+Periodic HTTP reads use a poller-owned one-second timeout, independent of a
+caller's cancellation or deadline. Successful snapshots and poller errors are
+cached for one second from completion; caller cancellation errors stay local
+to that reader. The harness excludes these observer HTTP reads from planned
+moves. Local in-process harness behavior remains unchanged.
+
+Final collection at `Hangup` bypasses a periodic snapshot and uses a fresh read
+with a poller-owned ten-second timeout. Calls finishing within one second of
+that final read share its result, so final collection also avoids one scan per
+call. The child allows 15 seconds for hangup, covering that read, echo drain
+and deletion. A final refresh can follow a periodic read within the same
+second; the reported request counts and rates include both.
+
 `status_requests` includes setup and failed requests. Resource intervals report
 `interval_status_requests` and `status_requests_per_second`; the process rate
 is the weighted average across media and hangup intervals, excluding setup.

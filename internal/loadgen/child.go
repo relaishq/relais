@@ -54,6 +54,7 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	meter := &Meter{}
 	poller := newStatusPoller(o.Topology.SignalingURL, meter)
 	o.Topology.Status = poller.Get
+	o.Topology.FinalStatus = poller.GetFinal
 	h, err := callharness.Start(callharness.Options{External: &o.Topology})
 	if err != nil {
 		return err
@@ -185,7 +186,8 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 		go func() {
 			defer wg.Done()
 			sendErr := c.SendMedia(lifetime, o.Duration)
-			hangup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+			// Allow the 10s final status read plus echo drain and deletion.
+			hangup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 			defer stop()
 			rep, hangErr := c.Hangup(hangup)
 			m := Message{Type: "call", PID: os.Getpid(), CallID: i, Session: c.SessionID(), Call: rep}

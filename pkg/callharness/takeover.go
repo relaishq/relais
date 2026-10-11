@@ -11,6 +11,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/controlplane"
 	"github.com/relais/pkg/mediaworker"
 )
 
@@ -55,10 +56,22 @@ func (h *Harness) RestartWorker(worker int) error {
 }
 
 func (c *Call) collectTakeovers(ctx context.Context) error {
+	return c.collectStatusTakeovers(ctx, c.harness.Status)
+}
+
+func (c *Call) collectFinalTakeovers(ctx context.Context) error {
+	read := c.harness.Status
+	if c.harness.external != nil && c.harness.external.FinalStatus != nil {
+		read = c.harness.external.FinalStatus
+	}
+	return c.collectStatusTakeovers(ctx, read)
+}
+
+func (c *Call) collectStatusTakeovers(ctx context.Context, read func(context.Context) (controlplane.Status, error)) error {
 	if c.harness.workers.relay == nil && c.harness.external == nil {
 		return nil
 	}
-	status, err := c.harness.Status(ctx)
+	status, err := read(ctx)
 	if err != nil {
 		return err
 	}
