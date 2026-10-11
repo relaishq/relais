@@ -26,6 +26,8 @@ func (h *Harness) Drain(worker int) error {
 	if worker < 0 || worker >= len(h.workers.list) {
 		return fmt.Errorf("callharness: no worker %d", worker)
 	}
+	h.statusPollMu.RLock()
+	defer h.statusPollMu.RUnlock()
 	var reply controlplane.DrainResult
 	if err := h.controlRequest(context.Background(), http.MethodPost, "/workers/"+strconv.Itoa(worker)+"/drain", &reply); err != nil {
 		return err

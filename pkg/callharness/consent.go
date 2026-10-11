@@ -37,8 +37,9 @@ const (
 // callerSocket is the UDP socket a call's ICE agent sends and receives on,
 // through mux, with the observer in between.
 type callerSocket struct {
-	mux         *ice.UDPMuxDefault
-	observer    *stunObserver
+	mux      *ice.UDPMuxDefault
+	observer *stunObserver
+	// Nil retains the existing loopback-only candidate filter.
 	candidateIP net.IP
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -32,6 +31,13 @@ const (
 // CallOptions shape the call the caller makes.
 type CallOptions struct {
 	// Freshness configures the caller's bounded recovery evaluation.
+	// Defaults stay strict (2s recovery + 3s stability), including under race.
+	// Acceptance callers such as #27 can set RecoveryLimit: 2*time.Second
+	// explicitly and use RequireFreshnessRecovered with the required policy
+	// (StrictAcceptancePolicy by default) without race. Phase-1
+	// scenarios report freshness without gating it, with or without race.
+	// These defaults and measured recovery times remain strict. Allow
+	// enough media to observe Freshness.EvaluationWindow().
 	Freshness FreshnessPolicy
 	// SendTiming observes each successful RTP socket write. It must be fast
 	// and safe for concurrent audio/video sends. Scheduled is the original
@@ -342,13 +348,12 @@ func (c *Call) onTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 				c.rec.videoIncomplete(record, incomplete)
 			}
 			for _, frame := range frames {
-				var size image.Point
-				var decodeErr error
-				if frame.keyframe {
-					size, decodeErr = decodeKeyframe(frame.data)
+				size, decodeErr, repeated := c.rec.decodeVideoFrame(record, frame, time.Now())
+				if repeated {
+					continue
 				}
-				c.rec.videoFrame(record, frame, size, decodeErr, time.Now())
-				if sampler != nil {
+				accepted := c.rec.videoFrame(record, frame, size, decodeErr, time.Now())
+				if accepted && sampler != nil {
 					sampler.frame(frame, size, decodeErr)
 				}
 			}

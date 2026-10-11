@@ -71,7 +71,7 @@ func TestCrashRunCarriesIndependentMetricUncertainty(t *testing.T) {
 }
 
 func TestCrashRunRejectsMeasuredRecoveryFailure(t *testing.T) {
-	for _, metric := range []string{"resume", "new", "audio"} {
+	for _, metric := range []string{"resume", "new", "first", "live"} {
 		t.Run(metric, func(t *testing.T) {
 			r := successfulReport()
 			m := &r.Moves[0].Measurement
@@ -82,8 +82,10 @@ func TestCrashRunRejectsMeasuredRecoveryFailure(t *testing.T) {
 				m.ResumeVerdict = failed
 			case "new":
 				m.FirstNewContentVerdict = failed
-			case "audio":
-				m.Audio.Verdict = failed
+			case "first":
+				m.FirstContentVerdict = failed
+			case "live":
+				m.FirstLiveVerdict = failed
 			}
 			m.Inconclusive = true // unrelated uncertainty cannot hide this failure.
 			require.False(t, measure(r, "127.0.0.1:9", 60*time.Second).Pass)
@@ -103,4 +105,20 @@ func TestCrashRunRequiresConclusiveCoverage(t *testing.T) {
 	}
 	require.Equal(t, 8, conclusiveEvents(unknown))
 	require.True(t, callharness.EnoughConclusive(conclusiveEvents(unknown), len(unknown)))
+}
+
+func TestCrashRunReportsFreshnessWithoutPhaseOneGate(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unknown", true: "failed"}[failed], func(t *testing.T) {
+			r := successfulReport()
+			m := &r.Moves[0].Measurement
+			m.Audio.Verdict = callharness.MetricVerdict{Trusted: failed, Failed: failed, Reasons: []string{"late freshness"}}
+			m.Video.Verdict = m.Audio.Verdict
+			measured := measure(r, "127.0.0.1:9", 60*time.Second)
+			require.True(t, measured.Pass, "phase-1 freshness must remain diagnostic")
+			require.Equal(t, *m, measured.Measurement, "keep the measured freshness in output")
+			m.FirstNewContentVerdict = callharness.MetricVerdict{Trusted: true, Failed: true, Reasons: []string{"conflicting video content identities"}}
+			require.False(t, measure(r, "127.0.0.1:9", 60*time.Second).Pass, "identity conflicts must remain gated")
+		})
+	}
 }

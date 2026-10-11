@@ -24,6 +24,9 @@ type VideoRecovery struct {
 	// Both common-start metrics begin at the kill, for every mode. Cached
 	// output can precede control-plane completion, so completion is unsuitable.
 	FirstDecodedAfterKill time.Duration
+	// FirstDecodedRepeated says the first returned decodable picture reuses
+	// a prior decode. Its cache provenance is known, but no new decode ran.
+	FirstDecodedRepeated bool
 	// FirstDecodedLiveAfterKill measures a decoded frame sent at/after
 	// MediaResumedAt, and is zero when no such live frame decoded.
 	FirstDecodedLiveAfterKill    time.Duration
@@ -147,7 +150,7 @@ func (r *recorder) videoRecovery(start, limit time.Duration) VideoRecovery {
 			if !f.decodable || f.at < result.MediaResumedAt || f.at >= limit {
 				continue
 			}
-			if f.source.at >= result.MediaResumedAt && result.FirstDecodedLiveAfterKill == 0 {
+			if !f.repeated && f.source.at >= result.MediaResumedAt && result.FirstDecodedLiveAfterKill == 0 {
 				result.FirstDecodedLiveAfterKill = f.at - start
 				result.LivePath = "Live"
 				if f.source.pli {
@@ -158,6 +161,7 @@ func (r *recorder) videoRecovery(start, limit time.Duration) VideoRecovery {
 				continue
 			}
 			result.FirstDecodedAfterKill = f.at - start
+			result.FirstDecodedRepeated = f.repeated
 			result.FirstDecodedAfterMediaResume = f.at - result.MediaResumedAt
 			result.PictureID, result.FrameSentAt = f.pictureID, f.source.at
 			switch {
@@ -227,4 +231,15 @@ func identifyVP8(frame []byte, identity uint64) []byte {
 	copy(marked[len(frame):], "RelaisV1")
 	binary.BigEndian.PutUint64(marked[len(frame)+8:], identity)
 	return marked
+}
+
+// A delayed previous epoch can reuse PictureID without claiming the current
+// full identity. It has no retained source, so remains unknown; wrong bytes
+// claiming the current identity still constitute a conflict.
+func previousVP8Epoch(frame []byte, source sentVideoFrame, pictureID uint16) bool {
+	if len(frame) < 16 || len(source.data) < 16 || string(frame[len(frame)-16:len(frame)-8]) != "RelaisV1" || source.data[len(source.data)-16:len(source.data)-8] != "RelaisV1" {
+		return false
+	}
+	identity := binary.BigEndian.Uint64(frame[len(frame)-8:])
+	return identity&0x7fff == uint64(pictureID) && identity>>15 < source.identity>>15
 }

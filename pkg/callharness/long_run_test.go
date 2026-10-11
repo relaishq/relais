@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/relais/pkg/callharness"
+	"github.com/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,7 +21,17 @@ func TestLongRunRecording(t *testing.T) {
 	duration, err := time.ParseDuration(value)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, duration, 2*time.Minute)
-	h, err := callharness.Start(callharness.Options{Workers: 2})
+	// Keep the default CI variant at one two-minute call. Focused integration
+	// verification can opt into the identical run against both store choices.
+	if os.Getenv("RELAIS_LONG_RUN_BOTH_STORES") == "1" {
+		forSessionStores(t, func(t *testing.T, store sessionstore.Store) { testLongRunRecording(t, duration, store) })
+		return
+	}
+	testLongRunRecording(t, duration, nil)
+}
+
+func testLongRunRecording(t *testing.T, duration time.Duration, store sessionstore.Store) {
+	h, err := callharness.Start(callharness.Options{Workers: 2, SessionStore: store})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
 	ctx, cancel := context.WithTimeout(context.Background(), duration+time.Minute)
@@ -49,9 +60,18 @@ func TestLongRunRecording(t *testing.T) {
 	require.GreaterOrEqual(t, len(rep.Moves), int(duration/(30*time.Second))-1)
 	newConclusive := 0
 	for _, m := range rep.Moves {
-		require.False(t, m.Measurement.Failed, m.Measurement.Summary())
+		// These are unbuffered phase-1 handovers. Freshness remains diagnostic;
+		// the separate TestAcceptance lane owns its strict acceptance gate.
+		require.False(t, m.Measurement.ContentRecoveryFailed(), m.Measurement.Summary())
+		require.False(t, m.Measurement.AudioLoss.Failed, m.Measurement.Summary())
+		require.False(t, m.Measurement.VideoLoss.Failed, m.Measurement.Summary())
 		require.True(t, m.Measurement.AudioLoss.Trusted, m.Measurement.Summary())
 		require.True(t, m.Measurement.VideoLoss.Trusted, m.Measurement.Summary())
+		require.LessOrEqual(t, m.Measurement.ObservedUntil, m.Start+15*time.Second)
+		for _, f := range []callharness.FreshnessReport{m.Measurement.Audio, m.Measurement.Video} {
+			require.Equal(t, m.Start+callharness.StrictAcceptancePolicy().EvaluationWindow(), f.EvaluationEnd)
+			require.Equal(t, f.StabilityWindow, f.StabilityObserved)
+		}
 		if m.Measurement.FirstNewContentVerdict.Trusted {
 			newConclusive++
 		}

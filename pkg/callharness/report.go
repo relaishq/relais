@@ -145,6 +145,9 @@ type VideoReport struct {
 	Frames           int
 	Keyframes        int
 	IncompleteFrames int
+	// RepeatedFrames counts exact pictures already decoded. They remain
+	// complete receipts, but are excluded from decoder inputs and samples.
+	RepeatedFrames int
 	// FrameGaps counts complete frames that did not directly follow the
 	// previous complete frame: frames were lost or reordered between them.
 	FrameGaps int
@@ -162,7 +165,7 @@ type VideoReport struct {
 	KeyframeDecodeErrors int
 	LastDecodeError      string
 
-	// DecodableFrames counts frames that decode: decoded keyframes, and
+	// DecodableFrames counts unique frames that decode: decoded keyframes, and
 	// interframes in an unbroken run of complete frames since one.
 	// FramesBeforeFirstKeyframe counts frames that arrived before any
 	// keyframe decoded (a receiver waits for a keyframe). UndecodableFrames
@@ -183,15 +186,25 @@ type VideoReport struct {
 
 // FullDecode is the result of decoding the received video with ffmpeg.
 type FullDecode struct {
-	// Skipped says why the decode did not run (for example, ffmpeg is not
-	// on PATH); empty when it ran.
+	// Skipped says why the decode did not finish (for example, a timeout or
+	// ffmpeg not on PATH); empty when it completed.
 	Skipped string
 
 	Decoder       string // the ffmpeg binary
 	FramesIn      int    // frames given to the decoder
 	FramesDecoded int    // frames the decoder output
 	Errors        string // the decoder's error output; empty when clean
+	Failure       DecodeFailure
 }
+
+// DecodeFailure separates confirmed invalid bitstreams from an unavailable
+// check (timeout, missing decoder, or execution failure).
+type DecodeFailure string
+
+const (
+	DecodeInvalid     DecodeFailure = "invalid bitstream"
+	DecodeUnavailable DecodeFailure = "unavailable"
+)
 
 // Ran reports whether the full decode ran.
 func (f FullDecode) Ran() bool {
@@ -385,8 +398,8 @@ func (r *Report) Summary() string {
 }
 
 func writeVideoSummary(b *strings.Builder, r *Report, v *VideoReport) {
-	fmt.Fprintf(b, "    frames:         %d complete (%d keyframes), %d incomplete, %d gaps, %d unmatched\n",
-		v.Frames, v.Keyframes, v.IncompleteFrames, v.FrameGaps, v.UnmatchedFrames)
+	fmt.Fprintf(b, "    frames:         %d complete (%d keyframes), %d repeated, %d incomplete, %d gaps, %d unmatched\n",
+		v.Frames, v.Keyframes, v.RepeatedFrames, v.IncompleteFrames, v.FrameGaps, v.UnmatchedFrames)
 	if v.FirstDecodedFrameAt == 0 {
 		fmt.Fprintf(b, "    first decoded:  none\n")
 	} else {
@@ -401,7 +414,7 @@ func writeVideoSummary(b *strings.Builder, r *Report, v *VideoReport) {
 	}
 	b.WriteString("\n")
 	if v.OnlineDecode.Every > 0 {
-		fmt.Fprintf(b, "    online decode: every=%d sampled=%d decoded=%d rate=%.4f dropped=%d errors=%d conclusive=%t\n", v.OnlineDecode.Every, v.OnlineDecode.Sampled, v.OnlineDecode.Decoded, v.OnlineDecode.SampleRate(v.Frames), v.OnlineDecode.Dropped, v.OnlineDecode.Errors, v.OnlineDecode.Conclusive())
+		fmt.Fprintf(b, "    online decode: every=%d sampled=%d decoded=%d rate=%.4f dropped=%d unavailable=%d errors=%d conclusive=%t\n", v.OnlineDecode.Every, v.OnlineDecode.Sampled, v.OnlineDecode.Decoded, v.OnlineDecode.SampleRate(v.Frames), v.OnlineDecode.Dropped, v.OnlineDecode.Unavailable, v.OnlineDecode.Errors, v.OnlineDecode.Conclusive())
 	}
 	switch full := v.FullDecode; {
 	case !full.Ran() && v.OnlineDecode.Every > 0:

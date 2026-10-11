@@ -47,6 +47,7 @@ type RecordingReport struct {
 	HistoryStart                                                 time.Duration
 	Packets, ContentUnits, Assemblies, FrameMarks, OfflineFrames int
 	EventSummaries                                               int
+	DecodedPictures                                              int
 	HistoryBytes                                                 int64
 }
 
@@ -66,6 +67,7 @@ func (r *recorder) memoryGauge() RecordingReport {
 	for _, t := range r.tracks {
 		g.Packets += len(t.arrivals)
 		if t.video != nil {
+			g.DecodedPictures += len(t.video.decodedPictures)
 			g.FrameMarks += len(t.video.frames)
 			g.OfflineFrames += len(t.video.decodeInput)
 			for _, f := range t.video.decodeInput {
@@ -93,9 +95,15 @@ func (c *Call) maintainRecording(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			poll, cancel := context.WithTimeout(ctx, time.Second)
-			_ = c.collectTakeovers(poll) // Hangup still returns a failed final collection.
-			cancel()
+			// Status holds the control-plane call lock while reading the store.
+			// A planned move uses TryLock there, so our observer must not race it.
+			// Skip a busy poll rather than delay compaction behind a long move.
+			if c.harness.statusPollMu.TryLock() {
+				poll, cancel := context.WithTimeout(ctx, time.Second)
+				_ = c.collectTakeovers(poll) // Hangup still returns a failed final collection.
+				cancel()
+				c.harness.statusPollMu.Unlock()
+			}
 			c.rec.mu.Lock()
 			if !c.rec.hungUp {
 				c.rec.compact(time.Since(c.rec.start))
@@ -122,17 +130,25 @@ func (r *recorder) compact(now time.Duration) {
 	if cutoff <= 0 {
 		return
 	}
-	oldUntil := r.hungUpAt
-	r.hungUpAt = now
-	reports := r.moveReports()
-	r.hungUpAt = oldUntil
 	count := 0
-	savedCount := len(r.savedMoves)
-	for i, move := range r.moves {
+	for _, move := range r.moves {
 		if r.since(move.start)-baselineWindow >= cutoff+2*time.Second {
 			break
 		}
-		rep := reports[savedCount+i]
+		count++
+	}
+	// eventMeasurement also uses the observation horizon for settled loss.
+	// Expose this tick's horizon while measuring just the expiring prefix.
+	oldUntil := r.hungUpAt
+	r.hungUpAt = now
+	reports := r.measureMoves(now, count)
+	r.hungUpAt = oldUntil
+	for _, rep := range reports {
+		rep.decryptFailuresAtSave = r.decryptionFailures.Total()
+		for i := range rep.Tracks {
+			rep.Tracks[i].packetCounter = r.tracks[i]
+			rep.Tracks[i].packetsAtSave = r.tracks[i].packets
+		}
 		r.savedMoves = append(r.savedMoves, rep)
 		if len(r.savedMoves) == 1 {
 			r.firstAudio, r.firstVideo = rep.Measurement.Audio, rep.Measurement.Video
@@ -145,7 +161,6 @@ func (r *recorder) compact(now time.Duration) {
 				r.baselineFloor = max(rep.End, m.MediaResumedAt)
 			}
 		}
-		count++
 	}
 	r.moves = slices.Clone(r.moves[count:])
 	for key, u := range r.sentAudioUnits {
@@ -203,13 +218,18 @@ func (r *recorder) compact(now time.Duration) {
 			t.seenPackets[mark.seq] = mark.timestamp
 		}
 		if t.video != nil {
+			for id, picture := range t.video.decodedPictures {
+				if picture.at < cutoff {
+					delete(t.video.decodedPictures, id)
+				}
+			}
 			t.video.frames = slices.Clone(slices.DeleteFunc(t.video.frames, func(f frameMark) bool { return f.at < cutoff }))
 			t.video.sampleResults = slices.Clone(slices.DeleteFunc(t.video.sampleResults, func(s decodeSample) bool { return s.at < cutoff }))
 		}
 	}
 	r.compactConsent(cutoff)
 	first := sort.Search(len(r.decryptFailureTimes), func(i int) bool { return r.decryptFailureTimes[i] >= cutoff })
-	// Saved event totals are updated by srtpError as new failures arrive.
+	// Saved events use counter snapshots; reporting adds subsequent failures.
 	r.decryptFailureTimes = slices.Clone(r.decryptFailureTimes[first:])
 	r.historyStart = max(r.historyStart, cutoff)
 }

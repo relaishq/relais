@@ -243,6 +243,10 @@ node --test cmd/relais-demo/metrics.test.cjs
 
 ## Real processes: WebRTC you can kill -9
 
+For Linux emulated machines, private API isolation, and running inside an
+existing Linux VM or container from a Mac, see
+[the namespace topology guide](docs/dev/netns-topology.md).
+
 `make crash-run` builds and starts `relais-relay`, `relais-control` and two
 copies of `relais-worker` as separate OS processes. A real Pion caller sends
 Opus audio and VP8 video continuously through the relay. The driver reads

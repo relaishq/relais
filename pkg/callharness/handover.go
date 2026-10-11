@@ -123,6 +123,8 @@ func (c *Call) Handover(opts HandoverOptions) error {
 		if opts.SequenceMargin != 0 {
 			return errors.New("callharness: relay planned moves require sequence margin 0")
 		}
+		c.harness.statusPollMu.RLock()
+		defer c.harness.statusPollMu.RUnlock()
 		t := ws.relay
 		started := time.Now()
 		owner, _ := c.harness.SessionOwner(sessionID)
@@ -184,12 +186,14 @@ type rtpMark struct {
 
 // frameMark is a complete video frame the caller received.
 type frameMark struct {
-	receivedAt   time.Duration
-	at           time.Duration
-	decodable    bool
-	firstArrival time.Duration
-	source       sentVideoFrame
-	pictureID    uint16
+	repeated            bool // provenance reuses an earlier decode; no decoder input
+	restartsDecodeChain bool
+	receivedAt          time.Duration
+	at                  time.Duration
+	decodable           bool
+	firstArrival        time.Duration
+	source              sentVideoFrame
+	pictureID           uint16
 }
 
 // consentSample is the caller's running totals of consent checks sent and
@@ -233,6 +237,7 @@ type MoveReport struct {
 
 	Kind                          string        // "move" or "takeover"
 	DetectionTime                 time.Duration // failure action to control-plane detection
+	decryptFailuresAtSave         int
 	DecryptionFailuresAfterResume int
 	From, To                      int // worker indexes
 
@@ -274,7 +279,9 @@ type MoveTrackReport struct {
 	TypicalTimestampStep uint32
 
 	// PacketsAfter counts packets that arrived after the move ended.
-	PacketsAfter int
+	PacketsAfter  int
+	packetsAtSave int
+	packetCounter *trackRecord
 
 	// FirstDecodableFrameAfter is, for video, the time from the end of the
 	// move to the first decodable frame after it; zero if none arrived.
@@ -308,10 +315,28 @@ type ConsentReport struct {
 // moveReports describes every move from the caller's records. It runs under
 // r.mu.
 func (r *recorder) moveReports() []MoveReport {
-	reports := append([]MoveReport(nil), r.savedMoves...)
+	reports := slices.Clone(r.savedMoves)
+	for i := range reports {
+		report := &reports[i]
+		report.Tracks = slices.Clone(report.Tracks)
+		for j := range report.Tracks {
+			track := &report.Tracks[j]
+			track.PacketsAfter += track.packetCounter.packets - track.packetsAtSave
+		}
+		if report.resumedAfterEnd > 0 {
+			report.DecryptionFailuresAfterResume += r.decryptionFailures.Total() - report.decryptFailuresAtSave
+		}
+	}
+	return append(reports, r.measureMoves(r.hungUpAt, len(r.moves))...)
+}
+
+// measureMoves measures only the pending prefix requested by the caller. A
+// maintenance tick must not remeasure later events whose history is retained.
+func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
+	reports := make([]MoveReport, 0, count)
 	baselineFloor := r.baselineFloor
 	firstAudio, firstVideo := r.firstAudio, r.firstVideo
-	for moveIndex, move := range r.moves {
+	for moveIndex, move := range r.moves[:count] {
 		report := MoveReport{
 			Kind:          move.kind,
 			DetectionTime: move.detection,
@@ -330,7 +355,7 @@ func (r *recorder) moveReports() []MoveReport {
 		for _, track := range r.tracks {
 			report.Tracks = append(report.Tracks, track.aroundMove(report.Start, report.End))
 		}
-		limit := r.hungUpAt
+		limit := until
 		if moveIndex+1 < len(r.moves) {
 			limit = r.since(r.moves[moveIndex+1].start)
 		}
@@ -338,21 +363,21 @@ func (r *recorder) moveReports() []MoveReport {
 			report.Recovery = r.videoRecovery(report.Start, limit)
 		}
 		report.Measurement = r.eventMeasurement(report, limit, baselineFloor)
-		if len(reports) == 0 {
+		if len(r.savedMoves) == 0 && len(reports) == 0 {
 			firstAudio, firstVideo = report.Measurement.Audio, report.Measurement.Video
 		}
 		for _, pair := range []struct {
 			current *FreshnessReport
 			first   FreshnessReport
 		}{{&report.Measurement.Audio, firstAudio}, {&report.Measurement.Video, firstVideo}} {
-			pair.current.FirstBaselineTrusted = pair.first.Verdict.Trusted
+			pair.current.FirstBaselineTrusted = pair.first.baselineTrusted()
 			pair.current.FirstBaselineSamples = pair.first.BaselineSamples
 			pair.current.FirstBaselineMedian = pair.first.BaselineMedian
 			pair.current.FirstBaselineP95 = pair.first.BaselineP95
 			if pair.current == &report.Measurement.Audio || report.Measurement.VideoExpected {
 				previous := pair.current.Verdict
 				pair.current.updateVerdict()
-				if !previous.Trusted {
+				if !previous.Trusted && !pair.current.AbsoluteLag {
 					pair.current.Verdict.Trusted = false
 					for _, reason := range previous.Reasons {
 						if !slices.Contains(pair.current.Verdict.Reasons, reason) {
@@ -360,11 +385,9 @@ func (r *recorder) moveReports() []MoveReport {
 						}
 					}
 				}
-				if pair.current == &report.Measurement.Video && (r.contentIdentityErrors > 0) {
-					pair.current.Verdict.untrust("video identity attribution unavailable")
-				}
 			}
 		}
+		r.failIdentityMetrics(&report.Measurement)
 		report.Measurement.updateJudgment()
 		if report.Kind == "takeover" {
 			previous := report.Measurement

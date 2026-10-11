@@ -37,7 +37,8 @@ import (
 // vp8Frame is one VP8 frame the caller reassembled from RTP packets.
 type vp8Frame struct {
 	data         []byte
-	timestamp    uint32 // RTP timestamp
+	timestamp    uint32        // RTP timestamp
+	sourceAt     time.Duration // authenticated sender clock for decoder DTS
 	firstSeq     uint16
 	lastSeq      uint16
 	keyframe     bool
@@ -62,6 +63,7 @@ type pendingFrame struct {
 	firstArrival time.Time
 	earliest     uint16
 	assembly     contentAssembly
+	arrivals     map[uint16]time.Time
 	ready        *vp8Frame
 	bytes        int
 }
@@ -105,14 +107,59 @@ func (a *vp8Assembler) pushAll(pkt *rtp.Packet, now time.Time) (frames []*vp8Fra
 			}
 			if !duplicate {
 				var f *pendingFrame
-				for _, candidate := range a.pending {
-					if candidate.id == id {
+				for _, candidate := range slices.Backward(a.pending) {
+					if candidate.id != id {
+						continue
+					}
+					if candidate.ready != nil {
+						if (contentPacketSpan{candidate.ready.firstSeq, candidate.ready.lastSeq}).contains(pkt.SequenceNumber) {
+							f = candidate // duplicate while waiting for reordering
+							break
+						}
+						continue
+					}
+					// A replay can retain timestamp/PictureID while changing its
+					// sequence span. Never let an expired prefix absorb the new
+					// copy, including marker-before-start reordering. The fragment
+					// bound also separates disjoint spans within the reorder window.
+					step := int16(pkt.SequenceNumber - candidate.earliest)
+					newStart := desc.S == 1 && desc.PID == 0 && len(candidate.assembly.starts) > 0 && !candidate.assembly.starts[pkt.SequenceNumber]
+					beforeStart := len(candidate.assembly.starts) > 0 && step < 0
+					if now.Sub(candidate.firstArrival) < frameReorderWindow && step > -maxAssemblyPackets && step < maxAssemblyPackets && !newStart && !beforeStart {
 						f = candidate
 						break
 					}
 				}
 				if f == nil {
-					f = &pendingFrame{id: id, firstArrival: now, earliest: pkt.SequenceNumber, assembly: contentAssembly{parts: map[uint16][]byte{}, starts: map[uint16]bool{}, ends: map[uint16]bool{}}}
+					f = &pendingFrame{id: id, firstArrival: now, earliest: pkt.SequenceNumber, assembly: contentAssembly{parts: map[uint16][]byte{}, starts: map[uint16]bool{}, ends: map[uint16]bool{}}, arrivals: map[uint16]time.Time{}}
+					if desc.S == 1 && desc.PID == 0 {
+						// A nearby replay's tail may precede its new start and
+						// temporarily join the interrupted prefix. Move that tail
+						// into the new span once its start identifies the split.
+						for _, old := range a.pending {
+							if old.id != id || old.ready != nil || now.Sub(old.firstArrival) >= frameReorderWindow {
+								continue
+							}
+							for seq, part := range old.assembly.parts {
+								if uint16(seq-pkt.SequenceNumber) >= maxAssemblyPackets {
+									continue
+								}
+								f.assembly.parts[seq] = part
+								f.arrivals[seq] = old.arrivals[seq]
+								if old.arrivals[seq].Before(f.firstArrival) {
+									f.firstArrival = old.arrivals[seq]
+								}
+								if old.assembly.ends[seq] {
+									f.assembly.ends[seq] = true
+								}
+								f.bytes += len(part)
+								old.bytes -= len(part)
+								delete(old.assembly.parts, seq)
+								delete(old.assembly.ends, seq)
+								delete(old.arrivals, seq)
+							}
+						}
+					}
 					a.pending = append(a.pending, f)
 				}
 				if _, exists := f.assembly.parts[pkt.SequenceNumber]; !exists && f.ready == nil {
@@ -120,6 +167,7 @@ func (a *vp8Assembler) pushAll(pkt *rtp.Packet, now time.Time) (frames []*vp8Fra
 						f.earliest = pkt.SequenceNumber
 					}
 					f.assembly.parts[pkt.SequenceNumber] = bytes.Clone(payload)
+					f.arrivals[pkt.SequenceNumber] = now
 					f.bytes += len(payload)
 					if desc.S == 1 && desc.PID == 0 {
 						f.assembly.starts[pkt.SequenceNumber] = true
@@ -212,11 +260,11 @@ func decodeKeyframe(frame []byte) (image.Point, error) {
 // a keyframe of the given size.
 func fullDecode(ctx context.Context, frames []vp8Frame, size image.Point) FullDecode {
 	if len(frames) == 0 {
-		return FullDecode{Skipped: "no decoded keyframe to start from"}
+		return FullDecode{Skipped: "no decoded keyframe to start from", Failure: DecodeUnavailable}
 	}
 	path, err := exec.LookPath("ffmpeg")
 	if err != nil {
-		return FullDecode{Skipped: "ffmpeg not found on PATH"}
+		return FullDecode{Skipped: "ffmpeg not found on PATH", Failure: DecodeUnavailable}
 	}
 
 	var ivf bytes.Buffer
@@ -243,12 +291,26 @@ func fullDecode(ctx context.Context, frames []vp8Frame, size image.Point) FullDe
 	if runErr != nil && result.Errors == "" {
 		result.Errors = runErr.Error()
 	}
+	if ctx.Err() != nil {
+		result.Failure = DecodeUnavailable
+		result.Skipped = "decode interrupted: " + ctx.Err().Error()
+		result.Errors = ""
+	} else if result.Errors != "" || result.FramesDecoded != result.FramesIn {
+		// ffmpeg execution failures do not prove corrupt media. Only an
+		// explicit bitstream diagnostic can produce a trusted failure.
+		result.Failure = DecodeUnavailable
+		message := strings.ToLower(result.Errors)
+		if strings.Contains(message, "invalid data") || strings.Contains(message, "error while decoding") {
+			result.Failure = DecodeInvalid
+		}
+	}
 
 	return result
 }
 
-// writeIVF writes VP8 frames as an IVF stream with the RTP clock as its time
-// base.
+// writeIVF uses the authenticated source clock when available. Decoder input
+// retains source order and excludes decoded repeats; relay output timestamps
+// cannot move its DTS backwards. Unknown sources retain their RTP timestamps.
 func writeIVF(w *bytes.Buffer, frames []vp8Frame, size image.Point) {
 	var header [32]byte
 	copy(header[0:4], "DKIF")
@@ -265,7 +327,12 @@ func writeIVF(w *bytes.Buffer, frames []vp8Frame, size image.Point) {
 	for _, frame := range frames {
 		var frameHeader [12]byte
 		binary.LittleEndian.PutUint32(frameHeader[0:], uint32(len(frame.data)))
-		binary.LittleEndian.PutUint64(frameHeader[4:], uint64(frame.timestamp-frames[0].timestamp))
+		dts := uint64(frame.timestamp - frames[0].timestamp)
+		if frames[0].sourceAt > 0 && frame.sourceAt >= frames[0].sourceAt {
+			delta := frame.sourceAt - frames[0].sourceAt
+			dts = uint64(delta/time.Second)*vp8ClockRate + uint64(delta%time.Second)*vp8ClockRate/uint64(time.Second)
+		}
+		binary.LittleEndian.PutUint64(frameHeader[4:], dts)
 		w.Write(frameHeader[:])
 		w.Write(frame.data)
 	}

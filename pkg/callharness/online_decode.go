@@ -7,19 +7,23 @@ import (
 	"time"
 )
 
+// Reserve the three recovery targets plus one routine target while a decoder
+// job is busy. This stays fixed; overflow remains explicit and nonblocking.
+const onlineDecodeQueueCapacity = minimumDecodedSamples + 1
+
 // OnlineDecodeReport counts checked target frames, not the reference frames
 // ffmpeg must decode before an interframe. Keyframes are always decoded in Go.
 // A full queue drops a sample explicitly; it never blocks the RTP reader.
 type OnlineDecodeReport struct {
-	Every                                            int
-	Sampled, Decoded, UniqueDecoded, Errors, Dropped int
-	LastError                                        string
+	Every                                                         int
+	Sampled, Decoded, UniqueDecoded, Errors, Dropped, Unavailable int
+	LastError                                                     string
 }
 
 func (d OnlineDecodeReport) Conclusive() bool {
 	// One dropped sample over hours does not erase the remaining coverage.
 	// Reuse the yardstick's coverage gate; event-local drops still invalidate
-	// the affected first-content verdicts in eventInvalidSamples.
+	// the affected first-content verdicts in eventDecodeFailure.
 	return d.UniqueDecoded >= minimumDecodedSamples && d.Errors == 0 && EnoughConclusive(d.UniqueDecoded, d.Sampled)
 }
 func (d OnlineDecodeReport) SampleRate(frames int) float64 {
@@ -33,6 +37,7 @@ type decodeSample struct {
 	at       time.Duration
 	decoded  bool
 	sourceAt time.Duration
+	failure  DecodeFailure
 }
 type sampleJob struct {
 	frames   []vp8Frame
@@ -50,7 +55,7 @@ type onlineSampler struct {
 }
 
 func (c *Call) newOnlineSampler(track *trackRecord) *onlineSampler {
-	s := &onlineSampler{call: c, track: track, queue: make(chan sampleJob, 2)}
+	s := &onlineSampler{call: c, track: track, queue: make(chan sampleJob, onlineDecodeQueueCapacity)}
 	c.rec.mu.Lock()
 	track.video.OnlineDecode.Every = c.rec.recording.DecodeEvery
 	c.rec.mu.Unlock()
@@ -60,19 +65,7 @@ func (c *Call) newOnlineSampler(track *trackRecord) *onlineSampler {
 			result := fullDecode(ctx, job.frames, job.size)
 			cancel()
 			c.rec.mu.Lock()
-			d := &track.video.OnlineDecode
-			success := result.Ran() && result.Errors == "" && result.FramesDecoded == len(job.frames)
-			if success {
-				d.Decoded++
-			} else {
-				d.Errors++
-				d.LastError = result.Errors
-				if !result.Ran() {
-					d.LastError = result.Skipped
-				}
-			}
-			r := c.rec
-			r.recordDecodeSample(track, decodeSample{at: job.at, decoded: success, sourceAt: job.sourceAt})
+			c.rec.recordOnlineDecode(track, job, result)
 			c.rec.mu.Unlock()
 		}
 	})
@@ -113,7 +106,7 @@ func (s *onlineSampler) frame(f *vp8Frame, size image.Point, err error) {
 			v.lastSampleEvent = r.since(move.start)
 		}
 	}
-	wanted := f.keyframe || v.Frames%r.recording.DecodeEvery == 0 || v.sampleBurst > 0
+	wanted := f.keyframe || (v.Frames-v.RepeatedFrames)%r.recording.DecodeEvery == 0 || v.sampleBurst > 0
 	if wanted && v.sampleBurst > 0 {
 		v.sampleBurst--
 	}
@@ -125,18 +118,20 @@ func (s *onlineSampler) frame(f *vp8Frame, size image.Point, err error) {
 	d.Sampled++
 	if f.keyframe {
 		success := err == nil
+		var failure DecodeFailure
 		if success {
 			d.Decoded++
 		} else {
 			d.Errors++
 			d.LastError = err.Error()
+			failure = DecodeInvalid
 		}
-		r.recordDecodeSample(s.track, decodeSample{at: at, decoded: success, sourceAt: sourceAt})
+		r.recordDecodeSample(s.track, decodeSample{at: at, decoded: success, sourceAt: sourceAt, failure: failure})
 		r.mu.Unlock()
 		return
 	}
 	if len(s.gop) == 0 {
-		v.sampleResults = append(v.sampleResults, decodeSample{at: at, decoded: false, sourceAt: sourceAt})
+		v.sampleResults = append(v.sampleResults, decodeSample{at: at, sourceAt: sourceAt, failure: DecodeUnavailable})
 		d.Dropped++
 		r.mu.Unlock()
 		return
@@ -145,7 +140,7 @@ func (s *onlineSampler) frame(f *vp8Frame, size image.Point, err error) {
 	select {
 	case s.queue <- job:
 	default:
-		v.sampleResults = append(v.sampleResults, decodeSample{at: at, decoded: false, sourceAt: sourceAt})
+		v.sampleResults = append(v.sampleResults, decodeSample{at: at, sourceAt: sourceAt, failure: DecodeUnavailable})
 		d.Dropped++
 	}
 	r.mu.Unlock()
@@ -165,17 +160,43 @@ func (r *recorder) eventDecodedSamples(start, limit time.Duration) int {
 	return len(seen)
 }
 
-func (r *recorder) eventInvalidSamples(start, limit time.Duration) bool {
+func (r *recorder) eventDecodeFailure(start, limit time.Duration) DecodeFailure {
+	var failure DecodeFailure
 	for _, t := range r.tracks {
 		if t.video != nil {
 			for _, s := range t.video.sampleResults {
 				if !s.decoded && s.at >= start && s.at < limit {
-					return true
+					if s.failure == DecodeInvalid {
+						return DecodeInvalid
+					}
+					failure = DecodeUnavailable
 				}
 			}
 		}
 	}
-	return false
+	return failure
+}
+
+// recordOnlineDecode runs under r.mu, after the decoder finishes outside it.
+func (r *recorder) recordOnlineDecode(track *trackRecord, job sampleJob, result FullDecode) {
+	d := &track.video.OnlineDecode
+	success := result.Ran() && result.Errors == "" && result.FramesDecoded == len(job.frames) && result.Failure == ""
+	failure := result.Failure
+	if success {
+		d.Decoded++
+	} else {
+		if failure == DecodeInvalid {
+			d.Errors++
+		} else {
+			failure = DecodeUnavailable
+			d.Unavailable++
+		}
+		d.LastError = result.Errors
+		if result.Skipped != "" {
+			d.LastError = result.Skipped
+		}
+	}
+	r.recordDecodeSample(track, decodeSample{at: job.at, decoded: success, sourceAt: job.sourceAt, failure: failure})
 }
 
 func (r *recorder) recordDecodeSample(track *trackRecord, sample decodeSample) {
