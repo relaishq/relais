@@ -1,6 +1,7 @@
 package mediaworker
 
 import (
+	"errors"
 	"net/http"
 	"net/netip"
 	"time"
@@ -68,14 +69,14 @@ func (w *Worker) PrivateHandler() http.Handler {
 		}
 		id, answer, err := w.CreateSession(r.Context(), req.Offer)
 		if err != nil {
-			privateapi.Error(rw, err, RemoteErrors)
+			workerAPIError(rw, err)
 			return
 		}
 		privateapi.Write(rw, CreateReply{ID: id, Answer: answer})
 	})
 	mux.HandleFunc("DELETE /sessions/{id}", func(rw http.ResponseWriter, r *http.Request) {
 		if err := w.EndSession(r.PathValue("id")); err != nil {
-			privateapi.Error(rw, err, RemoteErrors)
+			workerAPIError(rw, err)
 			return
 		}
 		rw.WriteHeader(http.StatusNoContent)
@@ -83,7 +84,7 @@ func (w *Worker) PrivateHandler() http.Handler {
 	mux.HandleFunc("POST /sessions/{id}/export", func(rw http.ResponseWriter, r *http.Request) {
 		state, err := w.ExportSession(r.PathValue("id"))
 		if err != nil {
-			privateapi.Error(rw, err, RemoteErrors)
+			workerAPIError(rw, err)
 			return
 		}
 		privateapi.Write(rw, ExportReply{State: state})
@@ -95,7 +96,7 @@ func (w *Worker) PrivateHandler() http.Handler {
 		}
 		id, err := w.ResumeSession(req.State, ResumeOptions{Kind: req.Kind, InputMayBeDuplicated: req.InputMayBeDuplicated, DuplicateWindows: req.DuplicateWindows, CallerSequenceReserve: req.CallerSequenceReserve, CheckpointAge: req.CheckpointAge, SnapshotAge: req.SnapshotAge, CheckpointStoredAt: req.CheckpointStoredAt, Context: r.Context(), Lease: req.Lease, SequenceMargin: req.SequenceMargin, SRTCPIndexMargin: req.SRTCPIndexMargin})
 		if err != nil {
-			privateapi.Error(rw, err, RemoteErrors)
+			workerAPIError(rw, err)
 			return
 		}
 		privateapi.Write(rw, ResumeReply{ID: id})
@@ -111,4 +112,16 @@ func (w *Worker) SessionCount() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return len(w.sessions)
+}
+
+// Agent errors can wrap more than one sentinel. Choose one code explicitly;
+// map iteration must not turn an unknown version into a generic restore error.
+func workerAPIError(rw http.ResponseWriter, err error) {
+	for _, code := range []string{"agent_version", "agent_oversize", "agent_save", "agent_restore"} {
+		if sentinel := RemoteErrors[code]; errors.Is(err, sentinel) {
+			privateapi.Error(rw, err, map[string]error{code: sentinel})
+			return
+		}
+	}
+	privateapi.Error(rw, err, RemoteErrors)
 }

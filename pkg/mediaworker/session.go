@@ -474,28 +474,8 @@ func (s *session) handleRTP(pkt []byte) {
 			s.enqueueAudio(&in, header)
 			return
 		}
-		// Built-in echo is stateless, cannot block, and needs no callback
-		// goroutine. Keep its original synchronous timing and packet semantics.
-		if s.agent.paused {
-			s.worker.agents.drops.Add(1)
-			return
-		}
-		input := agent.Input{Payload: append([]byte(nil), in.Payload...), Marker: in.Marker,
-			Progress: agent.Progress{SSRC: in.SSRC, Index: extendIndex(s.state.SRTP.Inbound[in.SSRC], in.SequenceNumber), Timestamp: in.Timestamp, Consumed: s.state.Agent.Progress.Consumed + 1}}
-		select {
-		case s.agent.queue <- agentInput{input, header}:
-		default:
-			s.worker.agents.drops.Add(1)
-			return
-		}
-		queued := <-s.agent.queue
-		ctx, cancel := context.WithTimeout(s.ctx, s.worker.cfg.Agent.CallbackTimeout)
-		output, err := s.agent.instance.Process(ctx, queued.input)
-		cancel()
-		if err != nil {
-			return
-		} // built-in Echo cannot fail or wait
-		in.Payload = output.Audio
+		// Echo uses the original synchronous media path, with no queue,
+		// payload copy or per-packet context. Progress shares its packet lock.
 		s.state.Agent.Progress = agent.Progress{SSRC: in.SSRC, Index: extendIndex(s.state.SRTP.Inbound[in.SSRC], in.SequenceNumber), Timestamp: in.Timestamp, Consumed: s.state.Agent.Progress.Consumed + 1}
 		s.state.Agent.Revision++
 	}

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/relais/internal/workerprobe"
-	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/metrics"
 	"github.com/relais/pkg/sessionstore"
 )
@@ -30,14 +29,20 @@ func (s *session) snapshotBytes() ([]byte, error) {
 }
 
 func (s *session) snapshotBytesAt(captured time.Time) ([]byte, error) {
+	data, _, err := s.captureSnapshotAt(captured)
+	return data, err
+}
+
+// captureSnapshotAt returns the exact owned pair encoded in this snapshot.
+func (s *session) captureSnapshotAt(captured time.Time) ([]byte, agentState, error) {
 	s.mu.Lock()
 	if s.fenced.Load() || s.ctx.Err() != nil {
 		s.mu.Unlock()
-		return nil, errHandedOver
+		return nil, agentState{}, errHandedOver
 	}
 	if s.dtlsConn == nil || s.srtpIn == nil {
 		s.mu.Unlock()
-		return nil, ErrNotEstablished
+		return nil, agentState{}, ErrNotEstablished
 	}
 	dtlsState, ok := s.dtlsConn.ConnectionState()
 	state := s.state
@@ -54,13 +59,14 @@ func (s *session) snapshotBytesAt(captured time.Time) ([]byte, error) {
 	// Certificate/key byte slices are immutable throughout a session.
 	s.mu.Unlock()
 	if !ok {
-		return nil, errors.New("mediaworker: DTLS connection state unavailable")
+		return nil, agentState{}, errors.New("mediaworker: DTLS connection state unavailable")
 	}
 	binary, err := dtlsState.MarshalBinary()
 	if err != nil {
-		return nil, fmt.Errorf("mediaworker: snapshot DTLS: %w", err)
+		return nil, agentState{}, fmt.Errorf("mediaworker: snapshot DTLS: %w", err)
 	}
-	return json.Marshal(snapshot{Version: sessionStateVersion, State: state, DTLSConnection: binary})
+	data, err := json.Marshal(snapshot{Version: sessionStateVersion, State: state, DTLSConnection: binary})
+	return data, state.Agent, err
 }
 
 // Snapshot ordering: copy+put is serialized by snapshotMu, preventing an old
@@ -71,7 +77,15 @@ func (s *session) persistSnapshot() error {
 	return s.persistSnapshotContext(s.ctx)
 }
 
+// errCheckpointSkipped is not a durable acknowledgment. Resume and replay
+// reservations use force=true and cannot skip their required checkpoint.
+var errCheckpointSkipped = errors.New("mediaworker: checkpoint rate limited")
+
 func (s *session) persistSnapshotContext(parent context.Context) error {
+	return s.persistSnapshotMode(parent, false)
+}
+
+func (s *session) persistSnapshotMode(parent context.Context, force bool) error {
 	if s.worker.cfg.Relay == nil {
 		return nil
 	}
@@ -83,8 +97,8 @@ func (s *session) persistSnapshotContext(parent context.Context) error {
 	changed := !agentStateEqual(s.state.Agent, s.durableAgent)
 	tooSoon := s.snapshotStored.Load() && time.Since(s.lastCheckpoint) < s.worker.cfg.Agent.SaveInterval
 	s.mu.Unlock()
-	if changed && tooSoon {
-		return nil
+	if !force && changed && tooSoon {
+		return errCheckpointSkipped
 	}
 	ctx, cancel := context.WithTimeout(parent, ownershipTimeout)
 	defer cancel()
@@ -93,34 +107,35 @@ func (s *session) persistSnapshotContext(parent context.Context) error {
 	s.mu.Unlock()
 	captured, err := s.worker.cfg.Relay.Owners.Clock(ctx, s.id)
 	var state []byte
+	var pair agentState
 	if err == nil {
-		state, err = s.snapshotBytesAt(captured)
+		state, pair, err = s.captureSnapshotAt(captured)
 	}
 	if err != nil {
 		s.mu.Lock()
 		s.state.Checkpoint.Failures++
 		s.mu.Unlock()
 		metrics.CheckpointWrites.WithLabelValues("failure").Inc()
-		if !errors.Is(err, ErrNotEstablished) && !errors.Is(err, errHandedOver) {
-			err = s.agentSaveFailed(err)
-		}
 		return err
 	}
+	// Clock may wait while a callback publishes new state. Apply the cap to
+	// the actual captured pair too, rather than only the pre-Clock observation.
 	s.mu.Lock()
+	capturedChanged := !agentStateEqual(pair, s.durableAgent)
+	capturedTooSoon := s.snapshotStored.Load() && time.Since(s.lastCheckpoint) < s.worker.cfg.Agent.SaveInterval
 	lease := s.lease
 	s.mu.Unlock()
-	err = s.worker.cfg.Relay.Owners.PutState(ctx, lease, state)
-	var saved snapshot
-	if err == nil {
-		err = json.Unmarshal(state, &saved)
+	if !force && capturedChanged && capturedTooSoon {
+		return errCheckpointSkipped
 	}
+	err = s.worker.cfg.Relay.Owners.PutState(ctx, lease, state)
 	if err == nil {
 		s.snapshotStored.Store(true)
 		s.mu.Lock()
 		s.state.Checkpoint.Successes++
 		s.state.Checkpoint.CapturedAt = captured
 		s.checkpointRates(&s.state.Checkpoint)
-		s.durableAgent = saved.State.Agent
+		s.durableAgent = pair
 		s.lastCheckpoint = time.Now()
 		s.mu.Unlock()
 		metrics.CheckpointWrites.WithLabelValues("success").Inc()
@@ -129,9 +144,6 @@ func (s *session) persistSnapshotContext(parent context.Context) error {
 		s.state.Checkpoint.Failures++
 		s.mu.Unlock()
 		metrics.CheckpointWrites.WithLabelValues("failure").Inc()
-	}
-	if err != nil && !errors.Is(err, sessionstore.ErrLeaseLost) {
-		err = s.agentSaveFailed(err)
 	}
 
 	if errors.Is(err, sessionstore.ErrLeaseLost) {
@@ -170,22 +182,8 @@ func (s *session) snapshotLoop() {
 		if s.ctx.Err() != nil {
 			return
 		}
-		if err := s.persistSnapshot(); err != nil && !errors.Is(err, ErrNotEstablished) && s.ctx.Err() == nil {
+		if err := s.persistSnapshot(); err != nil && !errors.Is(err, ErrNotEstablished) && !errors.Is(err, errCheckpointSkipped) && s.ctx.Err() == nil {
 			s.log.Warnf("session %s: snapshot: %v", s.id, err)
 		}
 	}
-}
-
-func (s *session) agentSaveFailed(err error) error {
-	if s.ctx.Err() != nil {
-		return err
-	}
-	s.mu.Lock()
-	changed := !agentStateEqual(s.state.Agent, s.durableAgent)
-	s.mu.Unlock()
-	if changed {
-		err = fmt.Errorf("%w: %w", agent.ErrSave, err)
-		s.agentFailed(err)
-	}
-	return err
 }

@@ -212,6 +212,7 @@ type takeoverState struct {
 	transientResume    bool
 	resumeState        []byte
 	resumeTarget       *registration
+	agentFailure       error // preserve the actionable cause if no compatible target remains
 	checkpointAge      time.Duration
 	snapshotAge        time.Duration
 	checkpointStoredAt time.Time
@@ -400,7 +401,11 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			}
 			noTargetAttempts++
 			if noTargetAttempts == maxResumeAttempts {
-				complete(true, pickErr)
+				cause := pickErr
+				if pending.agentFailure != nil {
+					cause = fmt.Errorf("controlplane: no compatible agent target: %w", pending.agentFailure)
+				}
+				complete(true, cause)
 				return
 			}
 			select {
@@ -556,6 +561,9 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		if errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) || errors.Is(err, mediaworker.ErrSRTCPIndexExhausted) {
 			complete(true, err)
 			return
+		}
+		if errors.Is(err, agent.ErrRestore) || errors.Is(err, agent.ErrVersion) || errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrSave) {
+			pending.agentFailure = err
 		}
 		pending.transientResume = false
 		pending.excluded[target.addr] = true

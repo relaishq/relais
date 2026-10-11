@@ -79,7 +79,9 @@ type ResumeNotice struct {
 // Agent callbacks are serialized and each receives a deadline. Save encodes
 // state; the host rate-limits durable saves. Save and Restore must be inverses,
 // and Restore must reject unsupported versions with ErrVersion. The host copies
-// returned bytes. Callbacks must honor cancellation and must not start work
+// returned bytes. Resume must have no external side effects: a failed
+// transport adoption may retry Restore/Resume on a fresh instance.
+// Callbacks must honor cancellation and must not start work
 // that mutates the agent after returning. External side effects are not made
 // transactional by this interface; replay-tolerant apps must deduplicate them.
 type Agent interface {
@@ -111,9 +113,14 @@ type Echo struct{}
 func (*Echo) Process(_ context.Context, in Input) (Output, error) {
 	return Output{Audio: in.Payload}, nil
 }
-func (*Echo) Save(context.Context) (State, error) { return State{Version: 1}, nil }
+
+// echoStateVersion is an application identity marker, distinct from the
+// conventional version 1 used by custom agents, including stateless ones.
+const echoStateVersion uint32 = 0x4543484f // ECHO
+
+func (*Echo) Save(context.Context) (State, error) { return State{Version: echoStateVersion}, nil }
 func (*Echo) Restore(_ context.Context, state State) error {
-	if state.Version != 1 {
+	if state.Version != echoStateVersion {
 		return ErrVersion
 	}
 	if len(state.Bytes) != 0 {

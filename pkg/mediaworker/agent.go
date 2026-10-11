@@ -12,6 +12,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/relais/internal/workerprobe"
 	"github.com/relais/pkg/agent"
+	"github.com/relais/pkg/relay"
 )
 
 // AgentConfig bounds per-call application work. Zero values use the defaults.
@@ -109,12 +110,13 @@ func (s *session) initAgent(restoring bool, opts ResumeOptions) error {
 			if _, ok := h.instance.(*agent.Echo); !ok {
 				return s.agentError(agent.ErrVersion)
 			}
-			s.state.Agent.State.Version = 1
+			s.state.Agent.State, _ = h.instance.Save(s.ctx)
 			s.state.Agent.legacy = false
 		}
 		if err := s.validateAgentState(s.state.Agent.State); err != nil {
 			return s.agentError(err)
 		}
+		s.durableAgent = cloneAgentState(s.state.Agent)
 		if err := s.agentCall(func(ctx context.Context) error { return restoreAgent(ctx, h.instance, s.state.Agent.State) }); err != nil {
 			return s.agentError(fmt.Errorf("%w: %w", agent.ErrRestore, err))
 		}
@@ -240,7 +242,6 @@ func (s *session) publishAgent() {
 	s.mu.Lock()
 	if !s.fenced.Load() && s.ctx.Err() == nil {
 		s.state.Agent = cloneAgentState(s.agent.latest)
-		s.wantSnapshot()
 	}
 	s.mu.Unlock()
 }
@@ -328,8 +329,6 @@ func (s *session) agentLoop() {
 			}
 		}
 	}
-	ticker := time.NewTicker(s.worker.cfg.Agent.SaveInterval)
-	defer ticker.Stop()
 	for {
 		select {
 		case <-s.ctx.Done():
@@ -348,8 +347,6 @@ func (s *session) agentLoop() {
 				s.agentFailed(err)
 				return
 			}
-		case <-ticker.C:
-			s.wantSnapshot()
 		case in := <-s.agent.queue:
 			if err := s.processAudio(in); err != nil {
 				s.agentFailed(err)
@@ -376,10 +373,13 @@ func (s *session) flushAgent() error {
 	if s.agent == nil {
 		return nil
 	}
+	if _, echo := s.agent.instance.(*agent.Echo); echo {
+		return nil // Echo has no pending callbacks; fence atomically under mu.
+	}
 	s.mu.Lock()
 	s.agent.paused = true
 	s.mu.Unlock()
-	ctx, cancel := context.WithTimeout(s.ctx, time.Duration(cap(s.agent.queue)+2)*s.worker.cfg.Agent.CallbackTimeout)
+	ctx, cancel := context.WithTimeout(s.ctx, min(time.Duration(cap(s.agent.queue)+2)*s.worker.cfg.Agent.CallbackTimeout, relay.DefaultHoldTimeout/2))
 	defer cancel()
 	request := agentFlush{done: make(chan error, 1)}
 	select {

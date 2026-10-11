@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -224,7 +226,9 @@ func TestAgentDefaultEchoRestoresLegacySnapshot(t *testing.T) {
 	require.NoError(t, err)
 	state, _, err := w.SessionAgent(call.id)
 	require.NoError(t, err)
-	require.EqualValues(t, 1, state.Version)
+	echoState, err := (&agent.Echo{}).Save(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, echoState, state)
 }
 
 func TestAgentPlannedFlushDrainsAcceptedQueue(t *testing.T) {
@@ -377,4 +381,49 @@ func (a *suppressedFirstAgent) Process(ctx context.Context, in agent.Input) (age
 		output.Audio = nil
 	}
 	return output, err
+}
+
+func TestAgentEchoDoesNotPauseOrDropAtExport(t *testing.T) {
+	w, s, caller := agentPacketSession(t, &agent.Echo{}, time.Second)
+	require.NoError(t, s.flushAgent())
+	require.False(t, s.agent.paused)
+	s.handleRTP(testEncrypt(t, caller, 456, 1))
+	s.mu.Lock()
+	packets := s.state.Audio.Packets
+	s.mu.Unlock()
+	require.EqualValues(t, 1, packets)
+	require.Zero(t, w.AgentStats().InputDrops)
+}
+
+func TestAgentIdleDoesNotRequestSnapshots(t *testing.T) {
+	_, s, _ := agentPacketSession(t, &countingAgent{}, time.Second)
+	select {
+	case <-s.snapshotWanted:
+		t.Fatal("idle agent requested a checkpoint")
+	case <-time.After(250 * time.Millisecond):
+	}
+}
+
+func TestAgentEchoRejectsStatelessCustomState(t *testing.T) {
+	require.ErrorIs(t, (&agent.Echo{}).Restore(context.Background(), agent.State{Version: 1}), agent.ErrVersion)
+}
+
+func TestAgentHTTPVersionErrorIsDeterministic(t *testing.T) {
+	err := fmt.Errorf("%w: %w", agent.ErrRestore, agent.ErrVersion)
+	for range 100 {
+		rw := httptest.NewRecorder()
+		workerAPIError(rw, err)
+		var failure struct{ Code string }
+		require.NoError(t, json.Unmarshal(rw.Body.Bytes(), &failure))
+		require.Equal(t, "agent_version", failure.Code)
+	}
+}
+
+func TestAgentMetricsSurviveSessionRemoval(t *testing.T) {
+	a := &countingAgent{oversize: true}
+	w, s, caller := agentPacketSession(t, a, time.Second)
+	s.handleRTP(testEncrypt(t, caller, 456, 1))
+	require.Eventually(t, func() bool { return w.SessionCount() == 0 }, time.Second, time.Millisecond)
+	require.Contains(t, metricsBody(w), "relais_worker_agent_oversized_states_total 1\n")
+	require.Contains(t, metricsBody(w), "relais_worker_agent_save_failures_total 0\n")
 }

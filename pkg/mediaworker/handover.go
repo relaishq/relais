@@ -282,9 +282,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 	if err := sess.initAgent(true, opts); err != nil {
 		sess.fenced.Store(true)
 		sess.close()
-		// Restore failures are terminal. Remove this exact transferred lease
-		// so existing control-plane rollback cannot resurrect the application.
-		w.release(sess)
+		// The control plane owns rollback/retry and terminal lease cleanup.
 		return "", err
 	}
 	dtlsConn, err := sess.resume(snap.DTLSConnection, opts)
@@ -294,7 +292,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 
 		return "", fmt.Errorf("mediaworker: resume session %s: %w", sess.id, err)
 	}
-	if err := sess.persistSnapshotContext(parent); err != nil {
+	if err := sess.persistSnapshotMode(parent, true); err != nil {
 		sess.fenced.Store(true)
 		sess.close()
 		return "", err
@@ -323,7 +321,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 		} else {
 			before := sess.state.Video
 			if sess.reserveReplay(frames, opts.SequenceMargin) {
-				if err := sess.persistSnapshotContext(parent); err != nil {
+				if err := sess.persistSnapshotMode(parent, true); err != nil {
 					// No replay ciphertext has been made or sent. Keep PLI recovery when
 					// storage is unavailable, but a lost lease must still abort adoption.
 					sess.state.Video = before
