@@ -1,0 +1,59 @@
+name: Load generator calibration
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: Media duration per ramp step (Go duration)
+        default: '30s'
+        type: string
+      max_callers:
+        description: Maximum callers in one generator process
+        default: '128'
+        type: string
+  schedule:
+    - cron: '30 9 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: load-calibration-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  calibrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install throwaway Redis and media decoder
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
+      - name: Build real-process binaries
+        run: make build
+      - name: Record runner
+        run: |
+          mkdir -p bin
+          { uname -a; lscpu; go version; } > bin/calibration-runner.txt
+      - name: Calibrate one generator process
+        env:
+          RAMP_DURATION: ${{ inputs.duration || '30s' }}
+          RAMP_MAX: ${{ inputs.max_callers || '128' }}
+        run: |
+          ./bin/relais-load -calibrate -processes=1 -gomaxprocs=1 \
+            -duration="$RAMP_DURATION" -calibration-max="$RAMP_MAX" \
+            -output=bin/calibration-linux.json > bin/calibration-linux.log 2>&1
+          cat bin/calibration-linux.log
+      - name: Upload reports and all process logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: load-calibration-linux-${{ github.run_id }}
+          path: |
+            bin/calibration-*
+            bin/load-run-*
+          if-no-files-found: warn
+          retention-days: 14

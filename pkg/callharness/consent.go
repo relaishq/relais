@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/ice/v4"
@@ -36,8 +37,9 @@ const (
 // callerSocket is the UDP socket a call's ICE agent sends and receives on,
 // through mux, with the observer in between.
 type callerSocket struct {
-	mux      *ice.UDPMuxDefault
-	observer *stunObserver
+	mux         *ice.UDPMuxDefault
+	observer    *stunObserver
+	candidateIP net.IP
 }
 
 // newCallerSocket opens a loopback UDP socket for one call.
@@ -46,6 +48,10 @@ func newCallerSocket(rec *recorder) (*callerSocket, error) {
 	if err != nil {
 		return nil, fmt.Errorf("callharness: caller socket: %w", err)
 	}
+	return wrapCallerSocket(rec, conn), nil
+}
+
+func wrapCallerSocket(rec *recorder, conn net.PacketConn) *callerSocket {
 	observer := &stunObserver{conn: conn, rec: rec, unanswered: make(map[[stunTransactionSize]byte]struct{})}
 
 	return &callerSocket{
@@ -54,7 +60,7 @@ func newCallerSocket(rec *recorder) (*callerSocket, error) {
 			Logger:  logging.NewDefaultLoggerFactory().NewLogger("ice"),
 		}),
 		observer: observer,
-	}, nil
+	}
 }
 
 // close closes the mux and the socket under it.
@@ -66,8 +72,10 @@ func (s *callerSocket) close() error {
 // the caller's consent checks. It does not embed the socket, so the mux uses
 // its ReadFrom and WriteTo.
 type stunObserver struct {
-	conn net.PacketConn
-	rec  *recorder
+	conn                         net.PacketConn
+	sendTiming                   func(string, time.Time, time.Time)
+	audioSchedule, videoSchedule atomic.Pointer[time.Time]
+	rec                          *recorder
 
 	mu          sync.Mutex
 	unanswered  map[[stunTransactionSize]byte]struct{}
@@ -84,6 +92,7 @@ func (o *stunObserver) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if !isRequest {
 		n, err := o.conn.WriteTo(p, addr)
 		if err == nil {
+			o.observeMediaSend(p[:n], time.Now())
 			o.mu.Lock()
 			if o.inspectSend != nil {
 				o.inspectSend(p[:n])

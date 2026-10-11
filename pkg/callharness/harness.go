@@ -43,6 +43,9 @@ import (
 type ExternalTopology struct {
 	SignalingURL string
 	RelayAddr    netip.AddrPort
+	// CallerSocket creates the UDP4 media socket; the harness owns it.
+	// Nil retains loopback. Signaling uses a separate HTTP connection.
+	CallerSocket func() (net.PacketConn, error)
 }
 
 // Options configures the system the harness starts.

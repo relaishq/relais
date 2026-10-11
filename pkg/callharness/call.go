@@ -33,7 +33,11 @@ const (
 type CallOptions struct {
 	// Freshness configures the caller's bounded recovery evaluation.
 	Freshness FreshnessPolicy
-	Recording RecordingOptions
+	// SendTiming observes each successful RTP socket write. It must be fast
+	// and safe for concurrent audio/video sends. Scheduled is the original
+	// pacer deadline, including missed ticks; actual is after the UDP write.
+	SendTiming func(kind string, scheduled, actual time.Time)
+	Recording  RecordingOptions
 
 	// InitialSequenceNumbers replaces random RTP starts for wrap tests. Nil
 	// keeps Pion's random starts. Both tracks keep their normal packetizers.
@@ -130,10 +134,11 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 		return nil, fmt.Errorf("callharness: recording history must be at least %s", minimumHistory)
 	}
 
-	socket, err := newCallerSocket(rec)
+	socket, err := h.newCallerSocket(rec)
 	if err != nil {
 		return nil, err
 	}
+	socket.observer.sendTiming = opts.SendTiming
 	api, err := newCallerAPI(rec, opts.BrowserLikeOffer, socket)
 	if err != nil {
 		return nil, errors.Join(err, socket.close())
@@ -420,7 +425,11 @@ func (c *Call) sendAudio(ctx context.Context, end time.Time) error {
 	ticker := time.NewTicker(opusFrameDuration)
 	defer ticker.Stop()
 
+	scheduled := time.Now()
 	for time.Now().Before(end) {
+		if c.socket.observer.sendTiming != nil {
+			c.socket.observer.audioSchedule.Store(timePointer(scheduled))
+		}
 		frame, frameDuration, err := src.next()
 		if err != nil {
 			return err
@@ -435,6 +444,8 @@ func (c *Call) sendAudio(ctx context.Context, end time.Time) error {
 			return fmt.Errorf("callharness: send audio: %w", err)
 		}
 		c.rec.sent(kindAudio, false)
+		next := scheduled.Add(opusFrameDuration)
+		scheduled = next
 
 		select {
 		case <-ctx.Done():
@@ -465,7 +476,11 @@ func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
 	ticker := time.NewTicker(src.frameDuration)
 	defer ticker.Stop()
 
+	scheduled := time.Now()
 	for time.Now().Before(end) {
+		if c.socket.observer.sendTiming != nil {
+			c.socket.observer.videoSchedule.Store(timePointer(scheduled))
+		}
 		requestedAt := c.keyframeWanted.Swap(nil)
 		if requestedAt != nil {
 			if err := src.rewind(); err != nil {
@@ -481,6 +496,8 @@ func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
 			return fmt.Errorf("callharness: send video: %w", err)
 		}
 		c.rec.sent(kindVideo, keyframe)
+		next := scheduled.Add(src.frameDuration)
+		scheduled = next
 
 		select {
 		case <-ctx.Done():
@@ -609,7 +626,7 @@ func newCallerAPI(rec *recorder, browserLike bool, socket *callerSocket) (*webrt
 	settings := webrtc.SettingEngine{LoggerFactory: newCallerLoggerFactory(rec)}
 	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 	settings.SetIncludeLoopbackCandidate(true)
-	settings.SetIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })
+	settings.SetIPFilter(socket.acceptsCandidate)
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 	settings.SetICEUDPMux(socket.mux)
 
