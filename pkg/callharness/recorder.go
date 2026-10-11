@@ -20,8 +20,17 @@ const (
 // offsets from the moment the caller started dialing. Nothing is recorded
 // after hangup, so tearing the call down does not show up as a failure.
 type recorder struct {
-	freshnessPolicy FreshnessPolicy
-	start           time.Time
+	recording              RecordingOptions
+	lastCompact            time.Duration
+	historyStart           time.Duration
+	savedMoves             []MoveReport
+	baselineFloor          time.Duration
+	firstAudio, firstVideo FreshnessReport
+	consentPrefix          ConsentReport
+	consentLastResponse    time.Duration
+	consentBaseResponses   uint64
+	freshnessPolicy        FreshnessPolicy
+	start                  time.Time
 
 	mu sync.Mutex
 
@@ -40,8 +49,8 @@ type recorder struct {
 	decryptionFailures   DecryptionFailures
 	decryptFailureTimes  []time.Duration
 
-	// What the caller sent, by kind. sentFrames holds every distinct frame
-	// (an Opus packet or a VP8 frame) so echoes can be matched to it.
+	// Recent caller sends, by kind. Identity maps expire with the rolling
+	// history; event summaries retain their finite observation horizon.
 	sentAudio             SentTrack
 	sentVideo             SentTrack
 	sentFrames            map[string]map[string]struct{}
@@ -70,7 +79,9 @@ type trackRecord struct {
 	kind        string
 	ssrc        uint32
 	payloadType uint8
+	seenPackets map[uint16]uint32
 
+	packets            int
 	arrivals           []time.Duration
 	firstArrival       time.Duration
 	lastArrival        time.Duration
@@ -81,6 +92,7 @@ type trackRecord struct {
 	duplicatePackets   int
 	outOfOrderPackets  int
 	unmatchedPayloads  int
+	unmatchedTimes     []time.Duration
 	headers            []rtpMark // sequence number and timestamp of each arrival
 
 	video *videoRecord // video tracks only
@@ -91,16 +103,23 @@ type trackRecord struct {
 type videoRecord struct {
 	VideoReport
 
-	chain         bool // every frame since the last decoded keyframe is decodable
-	haveLast      bool
-	lastSeq       uint16 // last packet of the previous complete frame
-	lastTS        uint32
-	lastPictureID uint16
-	lastSourceAt  time.Duration
+	chain           bool // every frame since the last decoded keyframe is decodable
+	haveLast        bool
+	lastSeq         uint16 // last packet of the previous complete frame
+	lastTS          uint32
+	lastPictureID   uint16
+	lastSourceAt    time.Duration
+	lastIdentity    uint64
+	decodedPictures map[uint16]sentVideoFrame // recent decoded identities, not just complete receipts
+	decodeOverflow  bool
+	sampleBurst     int
+	lastSampleEvent time.Duration
+	sampleResults   []decodeSample
 
-	// decodeInput is every complete frame from the first decoded keyframe on,
-	// for the full decode at hangup.
+	// decodeInput is bounded short-call input for the decode at hangup.
+	// Sampled online mode does not retain whole-call decode input.
 	decodeInput []vp8Frame
+	decodeBytes int
 
 	// frames marks when each complete frame arrived and whether it decodes.
 	frames []frameMark
@@ -109,6 +128,7 @@ type videoRecord struct {
 func newRecorder() *recorder {
 	return &recorder{
 		start:             time.Now(),
+		recording:         RecordingOptions{}.defaults(),
 		sentVideoFrames:   make(map[uint16]sentVideoFrame),
 		sentAudioUnits:    make(map[string]contentUnit),
 		contentAssemblies: make(map[videoAssemblyKey]*contentAssembly),
@@ -218,7 +238,8 @@ func (r *recorder) srtpError(msg string) {
 	if r.hungUp {
 		return
 	}
-	r.decryptFailureTimes = append(r.decryptFailureTimes, time.Since(r.start))
+	at := time.Since(r.start)
+	r.decryptFailureTimes = append(r.decryptFailureTimes, at)
 	switch {
 	case strings.Contains(msg, "failed to verify auth tag"):
 		r.decryptionFailures.AuthTag++
@@ -298,7 +319,7 @@ func (r *recorder) keyframeRequestSent() {
 func (r *recorder) addTrack(kind string, ssrc uint32, payloadType uint8) *trackRecord {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	track := &trackRecord{kind: kind, ssrc: ssrc, payloadType: payloadType}
+	track := &trackRecord{kind: kind, ssrc: ssrc, payloadType: payloadType, seenPackets: make(map[uint16]uint32)}
 	if kind == kindVideo {
 		track.video = &videoRecord{}
 	}
@@ -316,7 +337,12 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 	}
 
 	at := r.since(arrived)
-	if n := len(track.arrivals); n > 0 {
+	if track.seenPackets == nil {
+		track.seenPackets = make(map[uint16]uint32)
+	}
+	prior, seen := track.seenPackets[pkt.SequenceNumber]
+	duplicate := seen && prior == pkt.Timestamp
+	if track.packets > 0 {
 		if gap := at - track.lastArrival; gap > track.gap {
 			track.gap = gap
 			track.gapEndedAt = at
@@ -325,14 +351,23 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 		if step != 1 {
 			track.seqDiscontinuities++
 		}
-		if step == 0 {
-			track.duplicatePackets++
-		}
-		if step > 1<<15 {
+
+		if step > 1<<15 && !duplicate {
 			track.outOfOrderPackets++
 		}
 	} else {
 		track.firstArrival = at
+	}
+	if duplicate {
+		track.duplicatePackets++
+	}
+	track.seenPackets[pkt.SequenceNumber] = pkt.Timestamp
+	track.packets++
+	if len(track.arrivals) >= maxHistoryPackets {
+		remove := maxHistoryPackets / 4
+		r.historyStart = max(r.historyStart, track.arrivals[remove])
+		track.arrivals = append(track.arrivals[:0], track.arrivals[remove:]...)
+		track.headers = append(track.headers[:0], track.headers[remove:]...)
 	}
 	track.arrivals = append(track.arrivals, at)
 	track.lastArrival = at
@@ -354,7 +389,7 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 			r.sentAudioUnits[string(pkt.Payload)] = unit
 		} else {
 			unit.returnedAt, unit.identity, unit.replayed = at, string(pkt.Payload), true
-			r.repeatedAudioReturns = append(r.repeatedAudioReturns, unit)
+			r.repeatedAudioReturns = r.appendRepeat(r.repeatedAudioReturns, unit)
 		}
 	}
 
@@ -362,6 +397,7 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 	if track.video == nil {
 		if _, ok := r.sentFrames[track.kind][string(pkt.Payload)]; !ok {
 			track.unmatchedPayloads++
+			r.recordUnmatched(track, at)
 		}
 	}
 }
@@ -379,28 +415,41 @@ func (r *recorder) videoIncomplete(track *trackRecord, frames int) {
 // videoFrame records a complete frame on a video track. For a keyframe,
 // size and decodeErr are the result of decoding it in Go; decoded is when
 // that finished.
-func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Point, decodeErr error, decoded time.Time) {
+func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Point, decodeErr error, decoded time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.hungUp {
-		return
+		return false
 	}
 	v := track.video
+	if r.recordDecodedRepeat(track, frame, decoded) {
+		return false
+	}
 	decodable := v.DecodableFrames
 	restartsDecodeChain := false
 	source := r.sentVideoFrames[frame.pictureID]
 	if source.data != string(frame.data) {
-		if source.at > 0 && source.written {
+		if source.at > 0 && source.written && !previousVP8Epoch(frame.data, source, frame.pictureID) {
 			r.contentIdentityErrors++
 		}
 		source = sentVideoFrame{}
 	}
+	frame.sourceAt = source.at
 	defer func() {
 		receivedAt := time.Duration(0)
 		if !frame.completedAt.IsZero() {
 			receivedAt = r.since(frame.completedAt)
 		}
 		v.frames = append(v.frames, frameMark{at: r.since(decoded), decodable: v.DecodableFrames > decodable, firstArrival: r.since(frame.firstArrival), receivedAt: receivedAt, source: source, pictureID: frame.pictureID, restartsDecodeChain: restartsDecodeChain})
+		// The echo can decode before the source write returns. Retain its
+		// known identity now; repeat filtering still requires a confirmed
+		// write in the current send map.
+		if v.DecodableFrames > decodable && source.at > 0 {
+			if v.decodedPictures == nil {
+				v.decodedPictures = make(map[uint16]sentVideoFrame)
+			}
+			v.decodedPictures[frame.pictureID] = source
+		}
 	}()
 
 	v.Frames++
@@ -409,6 +458,11 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 	}
 	if _, ok := r.sentFrames[kindVideo][string(frame.data)]; !ok {
 		v.UnmatchedFrames++
+		at := r.since(decoded)
+		if !frame.completedAt.IsZero() {
+			at = r.since(frame.completedAt)
+		}
+		r.recordUnmatched(track, at)
 	}
 
 	// Authenticated caller identities follow the source PictureID chain even
@@ -419,7 +473,7 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 	}
 	inOrder := !v.haveLast || (frame.firstSeq == v.lastSeq+1 && int32(frame.timestamp-v.lastTS) > 0)
 	if v.haveLast && v.lastSourceAt > 0 && source.at > 0 {
-		inOrder = frame.pictureID == (v.lastPictureID+1)&0x7fff && source.at > v.lastSourceAt && int32(frame.timestamp-v.lastTS) > 0
+		inOrder = (source.identity == v.lastIdentity+1 || (source.identity == 0 && frame.pictureID == (v.lastPictureID+1)&0x7fff)) && source.at > v.lastSourceAt && int32(frame.timestamp-v.lastTS) > 0
 	}
 	if !inOrder {
 		v.FrameGaps++
@@ -428,6 +482,7 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 	v.lastSeq = frame.lastSeq
 	v.lastTS = frame.timestamp
 	v.lastPictureID, v.lastSourceAt = frame.pictureID, source.at
+	v.lastIdentity = source.identity
 
 	restartsDecodeChain = frame.keyframe && decodeErr == nil && (!v.chain || !inOrder)
 	switch {
@@ -452,9 +507,55 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 		v.chain = false
 	}
 
-	if v.KeyframesDecoded > 0 {
-		v.decodeInput = append(v.decodeInput, *frame)
+	if v.KeyframesDecoded > 0 && r.recording.DecodeEvery == 0 {
+		if len(v.decodeInput) < maxOfflineFrames && v.decodeBytes+len(frame.data) <= maxOfflineBytes {
+			v.decodeBytes += len(frame.data)
+			v.decodeInput = append(v.decodeInput, *frame)
+		} else {
+			v.decodeOverflow = true
+		}
 	}
+	return true
+}
+
+// decodeVideoFrame rejects already decoded pictures before either decoder is
+// called. The live reader then records a new frame and optionally samples it.
+func (r *recorder) decodeVideoFrame(track *trackRecord, frame *vp8Frame, at time.Time) (image.Point, error, bool) {
+	r.mu.Lock()
+	repeated := r.hungUp || r.recordDecodedRepeat(track, frame, at)
+	r.mu.Unlock()
+	if repeated || !frame.keyframe {
+		return image.Point{}, nil, repeated
+	}
+	size, err := decodeKeyframe(frame.data)
+	return size, err, false
+}
+
+// recordDecodedRepeat runs under r.mu. Cache provenance remains known from
+// the earlier decode, but a repeat cannot advance the decoder, satisfy decode
+// sampling, or supply first new content. Only exact retained send identities
+// qualify; unknown epochs and conflicting payloads still follow the old path.
+func (r *recorder) recordDecodedRepeat(track *trackRecord, frame *vp8Frame, at time.Time) bool {
+	source := r.sentVideoFrames[frame.pictureID]
+	previous, ok := track.video.decodedPictures[frame.pictureID]
+	if !ok || source.at <= 0 || !source.written || source.data != string(frame.data) || previous.identity != source.identity || previous.at != source.at || previous.data != source.data {
+		return false
+	}
+	v := track.video
+	v.Frames++
+	v.RepeatedFrames++
+	if frame.keyframe {
+		v.Keyframes++
+	}
+	receivedAt := r.since(at)
+	if !frame.completedAt.IsZero() {
+		receivedAt = r.since(frame.completedAt)
+	}
+	if len(v.frames) > 0 && receivedAt-v.frames[len(v.frames)-1].receivedAt > max(50*time.Millisecond, 3*r.frameInterval) {
+		v.sampleBurst = max(v.sampleBurst, minimumDecodedSamples)
+	}
+	v.frames = append(v.frames, frameMark{at: r.since(at), decodable: true, repeated: true, firstArrival: r.since(frame.firstArrival), receivedAt: receivedAt, source: source, pictureID: frame.pictureID})
+	return true
 }
 
 // decodeInput returns the frames of the i-th received track for the full
@@ -495,7 +596,7 @@ func (r *recorder) report() *Report {
 			Kind:                    track.kind,
 			SSRC:                    track.ssrc,
 			PayloadType:             track.payloadType,
-			Packets:                 len(track.arrivals),
+			Packets:                 track.packets,
 			Arrivals:                append([]time.Duration(nil), track.arrivals...),
 			FirstArrival:            track.firstArrival,
 			LastArrival:             track.lastArrival,
@@ -512,6 +613,7 @@ func (r *recorder) report() *Report {
 		}
 		rep.Tracks = append(rep.Tracks, report)
 	}
+	rep.Recording = r.memoryGauge()
 	rep.Moves = r.moveReports()
 	rep.Consent = r.consentReport()
 
