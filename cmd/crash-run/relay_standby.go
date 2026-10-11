@@ -43,13 +43,13 @@ func relayStandbyTrial(ctx context.Context, manager *clusterprocess.Manager, bin
 		ready, err := c.Ready(startup)
 		return c, ready, err
 	}
-	relayArgs := []string{filepath.Join(bin, "relais-relay"), "-media", "127.0.0.1:0", "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0"}
+	relayArgs := []string{filepath.Join(bin, "relais-relay"), "-buffer-off", "-media", "127.0.0.1:0", "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0"}
 	old, ready, err := start("relay", relayArgs...)
 	if err != nil {
 		return result{}, err
 	}
 
-	standbyArgs := []string{filepath.Join(bin, "relais-relay"), "-standby", "-media", ready.Media, "-leg", ready.Leg, "-http", strings.TrimPrefix(ready.HTTP, "http://")}
+	standbyArgs := []string{filepath.Join(bin, "relais-relay"), "-buffer-off", "-standby", "-media", ready.Media, "-leg", ready.Leg, "-http", strings.TrimPrefix(ready.HTTP, "http://")}
 	standby, err := manager.Start(dir, "relay-standby", withoutKey(env), standbyArgs...)
 	if err != nil {
 		return result{}, err

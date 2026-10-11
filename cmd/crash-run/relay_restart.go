@@ -45,7 +45,7 @@ func relayRestartTrial(ctx context.Context, manager *clusterprocess.Manager, bin
 		}
 		return c, ready, err
 	}
-	relayArgs := []string{filepath.Join(bin, "relais-relay"), "-media", "127.0.0.1:0", "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0"}
+	relayArgs := []string{filepath.Join(bin, "relais-relay"), "-buffer-off", "-media", "127.0.0.1:0", "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0"}
 	if restoreOff {
 		relayArgs = append(relayArgs, "-route-restore-off")
 	}
@@ -112,7 +112,7 @@ func relayRestartTrial(ctx context.Context, manager *clusterprocess.Manager, bin
 		return result{}, ctx.Err()
 	case <-old.Done():
 	}
-	args := []string{filepath.Join(bin, "relais-relay"), "-media", ready.Media, "-leg", ready.Leg, "-http", strings.TrimPrefix(ready.HTTP, "http://")}
+	args := []string{filepath.Join(bin, "relais-relay"), "-buffer-off", "-media", ready.Media, "-leg", ready.Leg, "-http", strings.TrimPrefix(ready.HTTP, "http://")}
 	if restoreOff {
 		args = append(args, "-route-restore-off")
 	}

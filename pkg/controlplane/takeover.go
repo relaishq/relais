@@ -450,7 +450,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			plan, gateErr := replay.BeginReplay(ctx, c.id, pending.routed, nil)
 			if gateErr == nil {
 				pending.replayPlan, pending.held = &plan, true
-			} else if !errors.Is(gateErr, relay.ErrBufferDisabled) {
+			} else if !errors.Is(gateErr, relay.ErrBufferDisabled) && (!pending.held || !errors.Is(gateErr, relay.ErrHeld)) {
 				p.unreserve(target)
 				return
 			}

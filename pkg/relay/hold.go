@@ -249,11 +249,17 @@ func (r *Relay) releaseHold(h *sessionHold, to netip.AddrPort) int {
 			r.replayFiltered.Add(1)
 			continue
 		}
-		if h.replay && packet.media {
-			h.delivered[packet.ssrc] = packet.index
-		}
-		if !r.sendHeld(h.id, packet, worker) {
+		if r.sendHeld(h.id, packet, worker) {
+			if h.replay {
+				r.noteReplayDelivery(h, packet, worker)
+			}
+		} else {
 			r.holdSendFailures.Add(1)
+			if h.replay {
+				h.replayComplete = false
+				h.replayResult.SendFailures++
+				r.replaySendFailures.Add(1)
+			}
 		}
 	}
 	r.heldBytes -= h.bytes
