@@ -33,6 +33,7 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/controlplane"
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/sessionstore"
@@ -74,6 +75,8 @@ type Options struct {
 	// The caller owns its lifetime and must keep it open through Harness.Close.
 	FrameCache framecache.Store
 	// SnapshotInterval sets the worker snapshot cadence for crash tests.
+	// TakeoverConfig overrides control-plane bounds for fault scenarios.
+	TakeoverConfig   controlplane.Config
 	SnapshotInterval time.Duration
 	// DisableFrameCache and DisableResumePLI independently select the video
 	// recovery paths. Both paths are enabled by default.

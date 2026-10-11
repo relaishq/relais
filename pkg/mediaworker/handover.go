@@ -87,7 +87,25 @@ func SequenceResumeAttempts(data []byte, margin uint16) (int, error) {
 	return snap.State.sequenceResumeAttempts(margin)
 }
 
+// SequenceResumeAttemptsWithReserve keeps the phase-1 minimum caller reserve
+// and enlarges it for higher configured source rates during a two-second outage.
+func SequenceResumeAttemptsWithReserve(data []byte, margin uint16, reserve uint32) (int, error) {
+	snap, err := decodeSnapshot(data)
+	if err != nil {
+		return 0, err
+	}
+	return snap.State.sequenceResumeAttemptsWithReserve(margin, reserve)
+}
+
 func (state *sessionState) sequenceResumeAttempts(margin uint16) (int, error) {
+	return state.sequenceResumeAttemptsWithReserve(margin, SequenceGapReserve)
+}
+
+func (state *sessionState) sequenceResumeAttemptsWithReserve(margin uint16, reserve uint32) (int, error) {
+	reserve = max(reserve, SequenceGapReserve)
+	if reserve >= 1<<15-1 {
+		return 0, ErrSequenceBudgetExhausted
+	}
 	if margin == 0 {
 		return 0, nil
 	}
@@ -96,10 +114,10 @@ func (state *sessionState) sequenceResumeAttempts(margin uint16) (int, error) {
 		if !track.negotiated() {
 			continue
 		}
-		if err := track.checkSequenceMargin(margin); err != nil {
+		if err := track.checkSequenceMarginWithReserve(margin, reserve); err != nil {
 			return 0, err
 		}
-		remaining := maxRetainedSequenceAdvance - int(track.AdvanceSinceSend)
+		remaining := (1 << 15) - int(reserve) - 2 - int(track.AdvanceSinceSend)
 		if track.Packets == 0 {
 			remaining = 0xffff - unsentRunway - int(track.InitialSeq)
 		}
@@ -111,7 +129,8 @@ func (state *sessionState) sequenceResumeAttempts(margin uint16) (int, error) {
 	return attempts, nil
 }
 
-func (track *trackState) checkSequenceMargin(margin uint16) error {
+func (track *trackState) checkSequenceMarginWithReserve(margin uint16, reserve uint32) error {
+	reserve = max(reserve, SequenceGapReserve)
 	if !track.negotiated() || margin == 0 {
 		return nil
 	}
@@ -121,7 +140,7 @@ func (track *trackState) checkSequenceMargin(margin uint16) error {
 		}
 		return nil
 	}
-	if uint64(track.AdvanceSinceSend)+uint64(margin)+SequenceGapReserve+1 >= 1<<15 {
+	if uint64(track.AdvanceSinceSend)+uint64(margin)+uint64(reserve)+1 >= 1<<15 {
 		return ErrSequenceBudgetExhausted
 	}
 	return nil
@@ -129,6 +148,8 @@ func (track *trackState) checkSequenceMargin(margin uint16) error {
 
 // ResumeOptions shape how a resumed session continues outbound streams.
 type ResumeOptions struct {
+	// CallerSequenceReserve can enlarge, never reduce, the phase-1 reserve.
+	CallerSequenceReserve uint32
 	// Context optionally bounds rebuilding and persisting the resumed transport.
 	// The adopted session has its own lifetime and outlives this context.
 	Context context.Context
@@ -146,6 +167,10 @@ type ResumeOptions struct {
 	// SRTCPIndexMargin does the same for the SRTCP index of the RTCP the
 	// worker sends (its keyframe requests).
 	SRTCPIndexMargin uint32
+	// CheckpointAge is the store-clock age supplied at crash takeover.
+	CheckpointAge      time.Duration
+	SnapshotAge        time.Duration
+	CheckpointStoredAt time.Time
 }
 
 // snapshot is the exported form of a session: the session state plus the
@@ -189,7 +214,16 @@ func (w *Worker) ExportSession(sessionID string) ([]byte, error) {
 // packets here. A worker with its own socket only receives the caller's
 // packets if they reach that socket. Behind a relay, the control plane
 // transfers ownership first and supplies the new fenced lease in opts.
-func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error) {
+func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, resumeErr error) {
+	defer func() {
+		if resumeErr != nil {
+			if opts.SequenceMargin > 0 {
+				w.metrics.takeoverErrors.Add(1)
+			} else {
+				w.metrics.handoverErrors.Add(1)
+			}
+		}
+	}()
 	if opts.SequenceMargin >= 1<<15 {
 		return "", fmt.Errorf("mediaworker: sequence margin %d is not below 2^15", opts.SequenceMargin)
 	}
@@ -218,7 +252,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 		return "", errSessionExists
 	}
 	if opts.SequenceMargin > 0 {
-		if _, err := snap.State.sequenceResumeAttempts(opts.SequenceMargin); err != nil {
+		if _, err := snap.State.sequenceResumeAttemptsWithReserve(opts.SequenceMargin, opts.CallerSequenceReserve); err != nil {
 			return "", err
 		}
 	}
@@ -237,6 +271,10 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 	}
 	sess := sessionFromState(w, snap.State)
 	sess.lease = opts.Lease
+	sess.callerSequenceReserve = opts.CallerSequenceReserve
+	sess.state.Checkpoint.TakeoverAge = opts.CheckpointAge
+	sess.state.Checkpoint.TakeoverSnapshotAge = opts.SnapshotAge
+	sess.state.Checkpoint.TakeoverStoredAt = opts.CheckpointStoredAt
 	dtlsConn, err := sess.resume(snap.DTLSConnection, opts)
 	if err != nil {
 		sess.fenced.Store(true)
@@ -334,7 +372,12 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 	pendingPLI := sess.needsKeyframe
 	sess.mu.Unlock()
 	workerprobe.AfterResume(w.localAddr, sess.id, pendingPLI)
-	sess.log.Infof("session %s: resumed with %s", sess.id, snap.State.ICE.RemoteAddr)
+	sess.log.Infof("session %s: resumed with %s checkpoint_age=%s snapshot_age=%s", sess.id, snap.State.ICE.RemoteAddr, opts.CheckpointAge, opts.SnapshotAge)
+	if opts.SequenceMargin > 0 {
+		w.metrics.takeovers.Add(1)
+	} else {
+		w.metrics.handovers.Add(1)
+	}
 
 	return sess.id, nil
 }
@@ -420,6 +463,7 @@ func (s *session) export() ([]byte, error) {
 
 		return nil, fmt.Errorf("mediaworker: export DTLS state: %w", err)
 	}
+	s.checkpointRates(&s.state.Checkpoint)
 	state, err := json.Marshal(snapshot{
 		Version:        sessionStateVersion,
 		State:          s.state,
@@ -530,7 +574,7 @@ func (s *session) resumeTrack(track *trackState, opts ResumeOptions) error {
 	if !track.negotiated() {
 		return nil
 	}
-	if err := track.checkSequenceMargin(opts.SequenceMargin); err != nil {
+	if err := track.checkSequenceMarginWithReserve(opts.SequenceMargin, opts.CallerSequenceReserve); err != nil {
 		return err
 	}
 	// Pion SetIndex reduces modulo 2^31. A takeover margin must never

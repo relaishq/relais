@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hkdf"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -239,12 +240,23 @@ elseif op=='claim' then
  retain(epoch)
  redis.call('DEL',KEYS[2],KEYS[5])
  return write(owner,epoch)
-elseif op=='get' or op=='state' then
+elseif op=='get' or op=='state' or op=='checkpoint' then
  if not current[1] then
   redis.call('DEL',KEYS[2],KEYS[3],KEYS[5])
   return {0}
  end
  if op=='get' then return reply() end
+ if op=='checkpoint' then
+  local stored=redis.call('HGET',KEYS[1],'checkpoint_at')
+  if not stored then return {0} end
+  local digest=redis.call('HGET',KEYS[1],'state_digest')
+  local matched=false
+  for _,candidate in ipairs(cjson.decode(ARGV[6])) do
+   if candidate==digest then matched=true; break end
+  end
+  if not matched then return {-4} end
+  return {1,stored,string.format('%.0f',now())}
+ end
  local blob=redis.call('GET',KEYS[2])
  if not blob then return {0} end
  return {1,blob,redis.call('HGET',KEYS[1],'state_seq') or ''}
@@ -268,7 +280,7 @@ elseif op=='put' then
  local previous=redis.call('HGET',KEYS[1],'state_seq')
  if not greater(ARGV[7],previous) then return {-4} end
  redis.call('SET',KEYS[2],ARGV[6])
- redis.call('HSET',KEYS[1],'state_seq',ARGV[7])
+ redis.call('HSET',KEYS[1],'state_seq',ARGV[7],'checkpoint_at',string.format('%.0f',now()),'state_digest',ARGV[8])
  redis.call('PEXPIREAT',KEYS[2],current[3])
  return {1}
 end
@@ -367,7 +379,7 @@ func (r *Redis) run(ctx context.Context, op, id, owner, epoch string, ttl time.D
 		return err
 	}
 	var err error
-	if op == "get" || op == "state" || op == "settle" || op == "indexed" {
+	if op == "get" || op == "state" || op == "settle" || op == "indexed" || op == "checkpoint" {
 		err = r.retryRead(ctx, "session_"+op, fn)
 	} else {
 		for attempt := 0; attempt < 3; attempt++ {
@@ -687,7 +699,11 @@ func (r *Redis) PutState(ctx context.Context, lease Lease, state []byte) error {
 	}
 	blob := append(header, nonce...)
 	blob = seal.Seal(blob, nonce, state, stateAAD(lease.SessionID, seq, header))
-	_, err = r.run(ctx, "put", lease.SessionID, lease.Worker.String(), strconv.FormatUint(lease.Epoch, 10), 0, blob, seq)
+	digest, err := r.stateDigest(lease.SessionID, r.activeKey, state)
+	if err != nil {
+		return err
+	}
+	_, err = r.run(ctx, "put", lease.SessionID, lease.Worker.String(), strconv.FormatUint(lease.Epoch, 10), 0, blob, seq, digest)
 	return err
 }
 func (r *Redis) GetState(ctx context.Context, id string) ([]byte, error) {
@@ -835,4 +851,80 @@ func connectRedis(cfg storage.RedisConfig) redis.UniversalClient {
 		client = redis.NewClient(&redis.Options{Addr: cfg.Addr, Password: cfg.Password, DB: cfg.DB, MaxRetries: -1})
 	}
 	return client
+}
+
+// Clock samples Redis TIME before a media copy, so a delayed PutState cannot
+// make old counters look fresh merely because the write eventually succeeds.
+func (r *Redis) Clock(ctx context.Context, id string) (time.Time, error) {
+	ctx, cancel := context.WithTimeout(ctx, transitionCommandLimit)
+	defer cancel()
+	var result []interface{}
+	err := r.retryRead(ctx, "session_clock", func() error {
+		var err error
+		result, err = r.client.Eval(ctx, `return redis.call('TIME')`, r.keys(id)).Slice()
+		return err
+	})
+	if err != nil {
+		return time.Time{}, err
+	}
+	if len(result) != 2 {
+		return time.Time{}, errors.New("sessionstore: invalid clock response")
+	}
+	seconds, err := strconv.ParseInt(fmt.Sprint(result[0]), 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+	micros, err := strconv.ParseInt(fmt.Sprint(result[1]), 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Unix(seconds, micros*1000).Truncate(time.Millisecond), nil
+}
+
+// Domain separation keeps the metadata authenticator independent of the AES
+// encryption key. Include session ID and key ID to prevent cross-record reuse.
+func (r *Redis) stateDigest(id string, keyID byte, state []byte) (string, error) {
+	master, ok := r.keysByID[keyID]
+	if !ok {
+		return "", errors.New("sessionstore: unknown checkpoint key ID")
+	}
+	key, err := hkdf.Key(sha256.New, master, nil, "relais/sessionstore/checkpoint-digest/v1/"+id, 32)
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write(stateAAD(id, "checkpoint-digest-v1", []byte{keyID}))
+	mac.Write(state)
+	return fmt.Sprintf("%d:%x", keyID, mac.Sum(nil)), nil
+}
+
+func (r *Redis) Checkpoint(ctx context.Context, id string, state []byte) (Checkpoint, error) {
+	digests := make([]string, 0, len(r.keysByID))
+	for keyID := range r.keysByID {
+		digest, err := r.stateDigest(id, keyID, state)
+		if err != nil {
+			return Checkpoint{}, err
+		}
+		digests = append(digests, digest)
+	}
+	candidates, err := json.Marshal(digests)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	result, err := r.run(ctx, "checkpoint", id, "", "", 0, string(candidates))
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	stored, err := strconv.ParseInt(result[1].(string), 10, 64)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	now, err := strconv.ParseInt(result[2].(string), 10, 64)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	if now < stored {
+		return Checkpoint{}, ErrUnsafeCheckpointClock
+	}
+	return Checkpoint{StoredAt: time.UnixMilli(stored), Now: time.UnixMilli(now), Age: time.Duration(max(now-stored, 0)) * time.Millisecond}, nil
 }

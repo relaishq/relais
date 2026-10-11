@@ -165,7 +165,7 @@ type retrySnapshot struct {
 func takeoverSnapshot(t *testing.T, id string, advance uint32) []byte {
 	t.Helper()
 	var state retrySnapshot
-	state.Version, state.State.Version = 5, 5
+	state.Version, state.State.Version = 6, 6
 	state.State.ID, state.State.ICE.LocalUfrag = id, id
 	state.State.ICE.RemoteAddr = netip.MustParseAddrPort("127.0.0.1:9000")
 	state.State.SRTP.Profile = 7
@@ -750,4 +750,8 @@ func TestHangupDuringRetainedPlannedMove(t *testing.T) {
 	require.Zero(t, status.LostCount)
 	require.Equal(t, []string{id}, r.forgotten)
 	require.Equal(t, []netip.AddrPort{{}}, hold.releases, "hangup frees retained relay hold")
+	body := planeMetricsBody(p)
+	require.Contains(t, body, "relais_control_moves_total 0\n")
+	require.Contains(t, body, "relais_control_move_errors_total 1\n", "hangup adds no second error")
+	require.Contains(t, body, "relais_control_losses_total 0\n")
 }

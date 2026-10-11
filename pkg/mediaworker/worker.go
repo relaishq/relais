@@ -130,6 +130,8 @@ type Heartbeats interface{ Heartbeat(netip.AddrPort) error }
 
 // Config configures a media worker.
 type Config struct {
+	// CheckpointEnvelope configures source index rates for safe crash recovery.
+	CheckpointEnvelope CheckpointEnvelope
 	// FrameCache lives outside workers. Share one Store across takeover targets.
 	// Nil leaves caching unconfigured; the harness supplies shared memory by
 	// default. Neither worker construction nor worker death owns this store.
@@ -222,9 +224,10 @@ type RelayConfig struct {
 // Worker is a media worker. It owns one UDP socket, or shares one with other
 // workers (see Socket), and the sessions that run over it.
 type Worker struct {
-	cfg  Config
-	log  logging.LeveledLogger
-	conn packetConn // its own UDP socket, a port on a shared Socket, or the relay leg (relayConn)
+	metrics workerMetrics
+	cfg     Config
+	log     logging.LeveledLogger
+	conn    packetConn // its own UDP socket, a port on a shared Socket, or the relay leg (relayConn)
 	// localAddr is the UDP socket the worker reads: its own or the shared
 	// Socket's. mediaAddr is where callers send: localAddr, or behind a
 	// relay the relay's public address.
@@ -253,6 +256,7 @@ type Worker struct {
 
 // New starts a media worker listening on cfg.ListenAddr.
 func New(cfg Config) (*Worker, error) {
+	cfg.CheckpointEnvelope = cfg.CheckpointEnvelope.Defaults()
 	if cfg.SnapshotInterval <= 0 {
 		cfg.SnapshotInterval = 100 * time.Millisecond
 	}
@@ -491,6 +495,7 @@ func (w *Worker) readLoop() {
 		if w.paused.Load() {
 			continue
 		}
+		w.metrics.packetsIn.Add(1)
 		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
 		pkt := buf[:n]
 
@@ -545,7 +550,11 @@ func (w *Worker) mapAddr(addr netip.AddrPort, sess *session) bool {
 }
 
 func (w *Worker) send(pkt []byte, to netip.AddrPort) (int, error) {
-	return w.conn.WriteToUDPAddrPort(pkt, to)
+	n, err := w.conn.WriteToUDPAddrPort(pkt, to)
+	if err == nil {
+		w.metrics.packetsOut.Add(1)
+	}
+	return n, err
 }
 
 // forget removes a closed session and its caller addresses. Behind a relay

@@ -198,10 +198,11 @@ func (s *session) reserveReplay(frames []framecache.Frame, margin uint16) bool {
 	}
 	// 5500 is the caller-visible staleness allowance used by #7. Limit the
 	// burst to 1024 packets even when byte/duration settings are enlarged.
+	maxAdvance := maxRetainedSequenceAdvance - int(max(s.callerSequenceReserve, SequenceGapReserve)-SequenceGapReserve)
 	budget := min(1024, int(margin)-5500-replayWindow-1,
-		maxRetainedSequenceAdvance-int(s.state.Video.AdvanceSinceSend)-replayWindow-1)
+		maxAdvance-int(s.state.Video.AdvanceSinceSend)-replayWindow-1)
 	// Preserve every remaining #7 retry, including non-default margins.
-	remaining := maxRetainedSequenceAdvance - int(s.state.Video.AdvanceSinceSend)
+	remaining := maxAdvance - int(s.state.Video.AdvanceSinceSend)
 	if margin == 0 {
 		return s.skipReplay("sequence-budget")
 	}

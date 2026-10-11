@@ -38,6 +38,9 @@ func run() error {
 	}
 	ctx, cancel := processrun.Context()
 	defer cancel()
+	// validateAddresses has already refused a non-private HTTP address. Bind
+	// the listener only after the lease is won and the old relay is fenced:
+	// a standby must hold no socket while the active relay owns the port.
 	store, err := storeConfig.OpenOwners(ctx)
 	if err != nil {
 		return err
@@ -72,6 +75,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	defer func() { _ = listener.Close() }()
 	continuity.BindRestore = time.Since(bindAt)
 	processrun.Ready(map[string]any{"instance": process.Owner, "epoch": guard.Lease().Epoch, "http": "http://" + listener.Addr().String(), "media": r.PublicAddr(), "leg": r.WorkerAddr()})
 	err = processrun.Serve(guard.Context(), listener, r.PrivateHandler())

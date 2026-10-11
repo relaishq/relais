@@ -79,8 +79,13 @@ type session struct {
 
 	// decryptFailures counts SRTP and SRTCP packets from the caller that this
 	// worker could not decrypt.
-	decryptFailures atomic.Uint64
-	snapshotStored  atomic.Bool // internal harness readiness observation, no state bytes exposed
+	decryptFailures      atomic.Uint64
+	lastCheckpoint       time.Time   // guarded by mu; local acknowledgment time of last successful write
+	audioRate, videoRate sourceRate  // guarded by mu
+	rtcpRate             packetMeter // guarded by mu
+	snapshotStored       atomic.Bool // internal harness readiness observation, no state bytes exposed
+
+	callerSequenceReserve uint32 // active recovery reserve, guarded by mu
 
 	// Runtime plumbing, rebuilt by a worker that resumes the session.
 	dtlsEndpoint  *dtlsEndpoint
@@ -186,6 +191,10 @@ func sessionFromState(w *Worker, state sessionState) *session {
 		ctx:            ctx,
 		cancel:         cancel,
 	}
+	now := time.Now()
+	sess.audioRate.peak, sess.audioRate.peakAt = state.Checkpoint.RTPPacketRate, now
+	sess.videoRate.peak, sess.videoRate.peakAt = state.Checkpoint.RTPPacketRate, now
+	sess.rtcpRate.peak, sess.rtcpRate.peakAt = state.Checkpoint.SRTCPPacketRate, now
 	sess.dtlsEndpoint = newDTLSEndpoint(sess)
 	sess.consent = time.AfterFunc(w.cfg.consentTimeout, sess.consentExpired)
 	w.claimSession(sess.id)
@@ -423,6 +432,7 @@ func (s *session) handleRTP(pkt []byte) {
 	plain, err := s.srtpIn.DecryptRTP(s.decryptBuf, pkt, &authenticated)
 	if err != nil {
 		failure, decryptErr = s.decryptFailures.Add(1), err
+		s.worker.metrics.decryptFailures.Add(1)
 
 		return
 	}
@@ -466,6 +476,17 @@ func (s *session) handleRTP(pkt []byte) {
 		s.log.Debugf("session %s: marshal echo packet: %v", s.id, err)
 
 		return
+	}
+	if s.worker.cfg.Relay != nil {
+		meter := &s.audioRate
+		if track == &s.state.Video {
+			meter = &s.videoRate
+		}
+		clockRate := uint32(48000)
+		if track == &s.state.Video {
+			clockRate = 90000
+		}
+		meter.observe(time.Now(), s.state.SRTP.Inbound[in.SSRC], in.Timestamp, clockRate)
 	}
 	encrypted, err := s.srtpOut.EncryptRTP(s.encryptBuf, s.plainBuf[:n], nil)
 	if err != nil {
@@ -522,6 +543,7 @@ func (s *session) handleRTCP(pkt []byte) {
 	plain, err := s.srtpIn.DecryptRTCP(s.rtcpBuf, pkt, nil)
 	if err != nil {
 		failure, decryptErr = s.decryptFailures.Add(1), err
+		s.worker.metrics.decryptFailures.Add(1)
 
 		return
 	}
@@ -578,6 +600,9 @@ func (s *session) requestKeyframe(trigger string) {
 	}
 	// At the 2^31-packet SRTCP key lifetime, encryption fails: log and
 	// cease transmitting PLIs rather than wrap/reuse an index under these keys.
+	if s.worker.cfg.Relay != nil && !s.rtcpRate.allow(time.Now(), uint64(video.SRTCPIndex)+1, s.worker.cfg.CheckpointEnvelope.MaxSRTCPPacketRate, checkpointSRTCPBurst) {
+		return
+	}
 	encrypted, err := s.srtpOut.EncryptRTCP(s.encryptBuf, plain, nil)
 	if err != nil {
 		s.log.Warnf("session %s: encrypt PLI: %v", s.id, err)
