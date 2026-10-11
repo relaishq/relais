@@ -28,6 +28,7 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 	public := flag.String("media", processrun.Env("RELAIS_RELAY_MEDIA", "127.0.0.1:0"), "public UDP address")
 	leg := flag.String("leg", processrun.Env("RELAIS_RELAY_LEG", "127.0.0.1:0"), "private worker-leg UDP address")
 	httpAddr := flag.String("http", processrun.Env("RELAIS_RELAY_HTTP", "127.0.0.1:0"), "private control HTTP address")
+	callerBuffer := flag.Bool("caller-buffer", false, "enable bounded phase-2 caller media replay")
 	hold := flag.Duration("hold-timeout", 3*time.Second, "abandoned move backstop")
 	restoreOff := flag.Bool("route-restore-off", false, "disable persisted-route restore for baseline measurement")
 	restoreTimeout := flag.Duration("route-restore-timeout", 5*time.Second, "startup route restore budget; continue with partial results on expiry")
@@ -98,7 +99,11 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 		return bindFailed(err)
 	}
 	defer func() { _ = listener.Close() }()
-	r, err := relay.New(relay.Config{InstanceID: process.Owner, ForwardingAllowed: guard.Allowed, Continuity: continuity, BindContext: bindCtx, PublicAddr: *public, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, RouteRestoreTimeout: *restoreTimeout, MaxFlows: *maxFlows, HoldTimeout: *hold})
+	var buffer *relay.BufferConfig
+	if *callerBuffer {
+		buffer = &relay.BufferConfig{}
+	}
+	r, err := relay.New(relay.Config{Buffer: buffer, InstanceID: process.Owner, ForwardingAllowed: guard.Allowed, Continuity: continuity, BindContext: bindCtx, PublicAddr: *public, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, RouteRestoreTimeout: *restoreTimeout, MaxFlows: *maxFlows, HoldTimeout: *hold})
 	if err != nil {
 		return bindFailed(err)
 	}

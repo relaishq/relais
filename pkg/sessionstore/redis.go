@@ -846,10 +846,11 @@ func connectRedis(cfg storage.RedisConfig) redis.UniversalClient {
 		if len(addrs) == 0 {
 			addrs = []string{cfg.Addr}
 		}
-		client = redis.NewClusterClient(&redis.ClusterOptions{Addrs: addrs, Password: cfg.Password, MaxRetries: -1, MaxRedirects: -1})
+		client = redis.NewClusterClient(&redis.ClusterOptions{Addrs: addrs, Password: cfg.Password, MaxRetries: -1, MaxRedirects: -1, Dialer: metrics.RedisDialer})
 	} else {
-		client = redis.NewClient(&redis.Options{Addr: cfg.Addr, Password: cfg.Password, DB: cfg.DB, MaxRetries: -1})
+		client = redis.NewClient(&redis.Options{Addr: cfg.Addr, Password: cfg.Password, DB: cfg.DB, MaxRetries: -1, Dialer: metrics.RedisDialer})
 	}
+	client.AddHook(metrics.StoreHook("session"))
 	return client
 }
 

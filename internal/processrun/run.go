@@ -18,6 +18,7 @@ import (
 
 	"github.com/relais/internal/redisendpoint"
 	"github.com/relais/pkg/framecache"
+	"github.com/relais/pkg/metrics"
 	"github.com/relais/pkg/sessionstore"
 	"github.com/relais/pkg/storage"
 )
@@ -94,7 +95,11 @@ func ListenPrivate(addr string) (net.Listener, error) {
 	if err := ValidatePrivateListener(addr, os.Getenv("RELAIS_PRIVATE_NETS")); err != nil {
 		return nil, err
 	}
-	return net.Listen("tcp", addr)
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	return metrics.TrafficListener(l), nil
 }
 
 // Ready is one machine-readable startup line, containing no store key.

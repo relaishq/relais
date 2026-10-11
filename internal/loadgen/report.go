@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/relais/internal/capacity"
 	"github.com/relais/pkg/callharness"
 )
 
@@ -155,17 +156,19 @@ type EventResult struct {
 	Error      string    `json:"error,omitempty"`
 }
 type RunReport struct {
-	StartedAt                     time.Time       `json:"started_at"`
-	Duration                      time.Duration   `json:"duration_ns"`
-	Callers                       int             `json:"callers"`
-	Limits                        Limits          `json:"limits"`
-	Processes                     []ProcessReport `json:"processes"`
-	Events                        []EventResult   `json:"events"`
-	Yardstick                     []MetricRow     `json:"yardstick"`
-	Outcome                       string          `json:"outcome"`
-	Causes                        []string        `json:"causes"`
-	DriverStatusRequests          uint64          `json:"driver_status_requests"`
-	DriverStatusRequestsPerSecond float64         `json:"driver_status_requests_per_second"`
+	Telemetry                     capacity.Telemetry `json:"telemetry"`
+	WorkerPeaks                   map[string]int     `json:"worker_peak_calls"`
+	StartedAt                     time.Time          `json:"started_at"`
+	Duration                      time.Duration      `json:"duration_ns"`
+	Callers                       int                `json:"callers"`
+	Limits                        Limits             `json:"limits"`
+	Processes                     []ProcessReport    `json:"processes"`
+	Events                        []EventResult      `json:"events"`
+	Yardstick                     []MetricRow        `json:"yardstick"`
+	Outcome                       string             `json:"outcome"`
+	Causes                        []string           `json:"causes"`
+	DriverStatusRequests          uint64             `json:"driver_status_requests"`
+	DriverStatusRequestsPerSecond float64            `json:"driver_status_requests_per_second"`
 }
 
 // Judge keeps generator validity separate from caller failures. A saturated or

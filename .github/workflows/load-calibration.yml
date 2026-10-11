@@ -3,6 +3,23 @@ name: Load generator calibration
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Calibration, capacity, or both (separate hosted jobs)
+        default: 'calibration'
+        type: choice
+        options: [calibration, capacity, both]
+      capacity_max:
+        description: Maximum callers per bounded capacity ramp
+        default: '16'
+        type: string
+      callers_per_process:
+        description: Capacity callers per generator process (1 to 4)
+        default: '2'
+        type: string
+      prices_json:
+        description: Optional explicit machine and transfer price JSON
+        default: ''
+        type: string
       duration:
         description: Media duration per ramp step (Go duration)
         default: '30s'
@@ -19,6 +36,7 @@ permissions:
 
 jobs:
   calibrate:
+    if: github.event_name == 'schedule' || inputs.mode != 'capacity'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -55,6 +73,65 @@ jobs:
           name: load-calibration-linux-${{ github.run_id }}
           path: |
             bin/calibration-*
+            bin/load-run-*
+          if-no-files-found: warn
+          retention-days: 14
+
+  capacity:
+    name: Capacity sample
+    if: github.event_name == 'schedule' || inputs.mode == 'capacity' || inputs.mode == 'both'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install disposable topology dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg iproute2 iptables procps
+      - name: Build real-process binaries
+        run: make build
+      - name: Record runner and price inputs
+        env:
+          PRICE_INPUT: ${{ inputs.prices_json }}
+        run: |
+          { uname -a; lscpu; go version; } > bin/capacity-runner.txt
+          if [ -n "$PRICE_INPUT" ]; then printf '%s\n' "$PRICE_INPUT" > bin/capacity-prices.json; fi
+      - name: Measure emulated LAN capacity and N+1
+        timeout-minutes: 15
+        env:
+          SAMPLE_DURATION: ${{ inputs.duration || '30s' }}
+          SAMPLE_MAX: ${{ inputs.capacity_max || '16' }}
+          GENERATOR_CALLERS: ${{ inputs.callers_per_process || '2' }}
+        run: |
+          price_flags=()
+          if [ -f bin/capacity-prices.json ]; then price_flags=(-prices=bin/capacity-prices.json); fi
+          sudo -E ./bin/relais-load -capacity -topology=netns -workers=3 \
+            -duration="$SAMPLE_DURATION" -capacity-max="$SAMPLE_MAX" \
+            -callers-per-process="$GENERATOR_CALLERS" -gomaxprocs=1 \
+            -output=bin/capacity-linux.json "${price_flags[@]}" > bin/capacity-linux.log 2>&1
+      - name: Print evidence and check namespace cleanup
+        if: always()
+        run: |
+          if [ -f bin/capacity-linux.log ]; then cat bin/capacity-linux.log; fi
+          if sudo ip netns list | grep -E '^relais-net-'; then
+            echo 'FAIL: owned topology namespaces remain'
+            exit 1
+          fi
+      - name: Restore artifact ownership
+        if: always()
+        run: |
+          sudo find bin -maxdepth 1 -type d -name 'load-run-*' -exec chown -R "$(id -u):$(id -g)" {} +
+          sudo find bin -maxdepth 1 -type f -name 'capacity-*' -exec chown "$(id -u):$(id -g)" {} +
+      - name: Upload reports and process logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: capacity-linux-${{ github.run_id }}
+          path: |
+            bin/capacity-*
             bin/load-run-*
           if-no-files-found: warn
           retention-days: 14

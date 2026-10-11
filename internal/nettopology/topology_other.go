@@ -18,3 +18,8 @@ func (t *Topology) removeNamespace(string) error                    { return err
 func OpenManaged(context.Context, func(string, ...any), func(func()) error) (*Topology, error) {
 	return nil, errLinux
 }
+
+func OpenManagedWorkers(context.Context, func(string, ...any), func(func()) error, int) (*Topology, error) {
+	return nil, errLinux
+}
+func CallerSocketInNamespace(string) (net.PacketConn, error) { return nil, errLinux }

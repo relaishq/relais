@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/relais/pkg/metrics"
 	"github.com/relais/pkg/storage"
 )
 
@@ -87,10 +88,11 @@ func NewRedis(ctx context.Context, cfg storage.RedisConfig, key []byte, limits L
 		if len(addrs) == 0 {
 			addrs = []string{cfg.Addr}
 		}
-		client = redis.NewClusterClient(&redis.ClusterOptions{Addrs: addrs, Password: cfg.Password, MaxRetries: -1, MaxRedirects: -1})
+		client = redis.NewClusterClient(&redis.ClusterOptions{Addrs: addrs, Password: cfg.Password, MaxRetries: -1, MaxRedirects: -1, Dialer: metrics.RedisDialer})
 	} else {
-		client = redis.NewClient(&redis.Options{Addr: cfg.Addr, Password: cfg.Password, DB: cfg.DB, MaxRetries: -1})
+		client = redis.NewClient(&redis.Options{Addr: cfg.Addr, Password: cfg.Password, DB: cfg.DB, MaxRetries: -1, Dialer: metrics.RedisDialer})
 	}
+	client.AddHook(metrics.StoreHook("frame"))
 	r := &Redis{client: client, prefix: cfg.Prefix, limits: defaultLimits(limits), activeKey: opts.KeyID, keysByID: keys}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()

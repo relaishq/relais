@@ -132,6 +132,8 @@ Repeat `-event=after,kind,count,worker` with increasing offsets from media start
 - `10s,move,2,1`: move the first two eligible callers to worker 1. Calls already
   on worker 1 or still owned by a killed worker are excluded. Count zero means
   all eligible calls. Selection is deterministic in process/caller order, not a random statistical sample.
+- `10s,drain,0,0`: drain all calls from worker 0 through the real operator API.
+  Count must be zero. Per-call API results use the same caller move yardstick.
 - `30s,kill,0,0`: SIGKILL owned media worker 0, affecting **all** of its calls.
   Count must be zero. Each generator records the driver's kill timestamp so
   the harness's automatic takeover yardstick uses the real fault action.
@@ -186,3 +188,6 @@ The orchestrator must dispatch the workflow after integration. Hosted Linux
 calibration is **NOT-RUN** in this worker checkout.
 
 Local run results are recorded in [load-generator-results.md](load-generator-results.md).
+
+For bounded worker/relay ramps, resource and store traffic, N+1 kill/drain
+acceptance and input-priced cost, see [capacity.md](capacity.md).

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/relais/pkg/metrics"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -87,6 +88,11 @@ func Read(w http.ResponseWriter, r *http.Request, value any) bool {
 }
 
 func Do(ctx context.Context, client *http.Client, base, method, path string, input, output any, codes map[string]error) error {
+	if client.Transport == nil {
+		copy := *client
+		copy.Transport = metrics.HTTPTransport()
+		client = &copy
+	}
 	var body bytes.Buffer
 	if input != nil {
 		if err := json.NewEncoder(&body).Encode(input); err != nil {

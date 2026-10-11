@@ -29,7 +29,11 @@ func matchesEvent(e EventResult, report *callharness.Report, move callharness.Mo
 		delta := at.Sub(e.At)
 		return move.Kind == "takeover" && move.From == e.Event.Worker && delta >= -time.Microsecond && delta <= time.Microsecond
 	}
-	return move.Kind == "move" && move.To == e.Event.Worker && !at.Before(e.At) && !at.After(e.FinishedAt)
+	target := move.To == e.Event.Worker
+	if e.Event.Kind == "drain" {
+		target = move.From == e.Event.Worker
+	}
+	return move.Kind == "move" && target && !at.Before(e.At) && !at.After(e.FinishedAt)
 }
 
 func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []string) {
@@ -46,6 +50,9 @@ func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []
 			causes = append(causes, fmt.Sprintf("event %d (%s at %s): %d distinct session IDs for %d affected calls", i+1, e.Event.Kind, e.Event.After, len(expected), e.Affected))
 		}
 		kind := e.Event.Kind
+		if kind == "drain" {
+			kind = "move"
+		}
 		if kind == "kill" {
 			kind = "takeover"
 		}

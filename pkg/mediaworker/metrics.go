@@ -10,6 +10,7 @@ import (
 // from snapshots. This prevents counting a moved session's packets twice.
 type workerMetrics struct {
 	packetsIn, packetsOut, decryptFailures atomic.Uint64
+	bytesIn, bytesOut                      atomic.Uint64
 	handovers, takeovers                   atomic.Uint64
 	handoverErrors, takeoverErrors         atomic.Uint64
 }
@@ -17,6 +18,8 @@ type workerMetrics struct {
 func (w *Worker) metricSamples() []metrics.Sample {
 	a := w.AgentStats()
 	return []metrics.Sample{
+		metrics.Counter("relais_worker_udp_bytes_in_total", "UDP payload bytes received, excluding relay headers.", w.metrics.bytesIn.Load()),
+		metrics.Counter("relais_worker_udp_bytes_out_total", "UDP payload bytes sent, excluding relay headers.", w.metrics.bytesOut.Load()),
 		metrics.Counter("relais_worker_agent_input_drops_total", "Agent audio inputs dropped by bounds or deadlines.", a.InputDrops),
 		metrics.Counter("relais_worker_agent_callback_deadlines_total", "Agent callbacks exceeding their deadline.", a.CallbackDeadlines),
 		metrics.Counter("relais_worker_agent_oversized_states_total", "Agent states exceeding their size limit.", a.OversizedStates),

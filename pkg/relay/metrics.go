@@ -5,6 +5,8 @@ import "github.com/relais/pkg/metrics"
 func (r *Relay) metricSamples() []metrics.Sample {
 	s := r.Stats()
 	return []metrics.Sample{
+		metrics.Counter("relais_relay_private_udp_bytes_out_total", "UDP payload bytes forwarded to workers, including relay headers.", r.callerBytes.Load()),
+		metrics.Counter("relais_relay_public_udp_bytes_out_total", "UDP payload bytes forwarded to callers.", r.workerBytes.Load()),
 		metrics.Gauge("relais_relay_buffer_sessions", "Sessions with retained caller replay metadata.", s.BufferedSessions),
 		metrics.Gauge("relais_relay_buffer_packets", "Caller media packets currently in the replay ring.", s.BufferedPackets),
 		metrics.Gauge("relais_relay_buffer_bytes", "Accounted ring bytes including headers and packet overhead.", s.BufferedBytes),
