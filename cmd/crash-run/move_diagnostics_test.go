@@ -70,3 +70,20 @@ func TestProxyDiagnosticsRecordUpstreamBodyAndReuse(t *testing.T) {
 		require.Greater(t, e.Duration, time.Duration(0))
 	}
 }
+
+func TestDiagnosticFetchFailureIsExplicitAndNonFatal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "diagnostics unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	d := collectMoveDiagnostics(context.Background(), []string{strings.TrimPrefix(server.URL, "http://")}, nil, nil)
+	d.Events = append(d.Events, movediag.Event{TraceID: "measured", Kind: "move"})
+	d.selectMove("measured", true)
+	require.False(t, d.Complete)
+	require.Len(t, d.Errors, 1)
+	require.Contains(t, d.Errors[0], "diagnostics unavailable")
+	rows := goodProfileRows(20)
+	rows[0].MoveDiagnostics = d
+	report := judgeProfile(profileTrialOptions{Name: "lan", Scenario: "move"}, rows, profileTestLinks(t, "lan"))
+	require.Equal(t, "pass", report.Verdict)
+}

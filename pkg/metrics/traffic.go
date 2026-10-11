@@ -81,7 +81,9 @@ func RedisClient(options *redis.Options, client string) *redis.Client {
 	}
 	original.Dialer = RedisDialer(dial, client)
 	clientInstance := redis.NewClient(&original)
-	clientInstance.AddHook(movediag.RedisHook{})
+	if movediag.Enabled() {
+		clientInstance.AddHook(movediag.RedisHook{})
+	}
 	return clientInstance
 }
 

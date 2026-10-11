@@ -99,13 +99,17 @@ not the displayed p95, so one pause at or above 2s still fails acceptance.
 Each track needs at least ten baseline intervals.
 A gap baseline p95-minus-median above 50ms makes the row inconclusive. This
 budget includes normal intra-frame packet bursts and video cadence. The
-independent #32 content-age baseline still needs ten samples and a spread of
-at most 20ms. The caller policy explicitly records content-age median ceilings:
+profile content-age baseline needs ten samples and a p95-minus-median spread
+of at most **20ms + applied caller round-trip jitter**. The jitter is summed
+from the caller→relay and relay→caller endpoints in the applied link plan.
+Private-link jitter does not increase this limit. Thus far caller allows 40ms;
+LAN, region and lossy DC retain 20ms. The caller policy explicitly records content-age median ceilings:
 LAN/lossy DC 50ms, region 150ms, far caller 250ms. These are **diagnostic**,
 not acceptance gates; they do not replace the **150ms move-gap ceiling**. #32's
 per-metric trust, loss and freshness reports are retained unchanged. Each row
-records `AudioSpreadMargin` and `VideoSpreadMargin`: 20ms minus that track's
-content-age p95-minus-median. The 20ms limit remains unchanged.
+records `AudioSpreadMargin` and `VideoSpreadMargin`: the profile spread limit
+minus that track's content-age p95-minus-median. The run records
+`ContentAgeSpreadLimit`, also printed in `PROFILE_POLICY`.
 
 Known failures take precedence over unknown metrics. Rows carry conclusive, fail or inconclusive states and reasons; move p95
 judgment belongs to the full run, not each individual trial. The run reports `pass`, `fail`, or `inconclusive`; both
@@ -239,20 +243,13 @@ Preliminary fault probes remain separate in `probe_events`. The
 or video gap, even if p95 excludes that outlier. It prints both gaps and
 the event's phase timings. `slowest_other` is total duration minus barrier,
 export and resume: transfer, routing, release and coordination overhead
-combined. These phases are not individually timed. Missing phase data is
+combined. Detailed diagnostics time their private calls separately. Missing phase data is
 reported as unavailable.
 
-A lost private-HTTP TCP segment on the DC path can add about one TCP
-retransmission timeout (RTO) to export. The
-[Linux default minimum TCP RTO](https://www.kernel.org/doc/html/latest/networking/ip-sysctl.html#tcp-rto-min-us)
-is 200ms; route and socket settings can override it. This explanation is
-**PLAUSIBLE**, from [run 38154313823](https://github.com/relaishq/relais/actions/runs/38154313823)
-trial 4: export took 209.61ms instead of the other trials' 2.07–2.78ms.
-Barrier, resume, and the combined remaining time stayed normal. The
-acceptance move succeeded without rollback or hold expiry. Its audio/video
-gaps were 247.33ms/260.85ms. No packet trace, retransmission counter, or
-socket RTO setting was captured, so TCP retransmission is not proven.
-The move thresholds still apply to DC loss.
+Per-phase HTTP/Redis traces and TCP counter deltas now distinguish these
+costs. The native A/B supports tail-loss-probe delay on small private RPCs;
+see the table below and [move latency](move-latency.md). The move thresholds
+still apply to DC loss.
 
 ## CI and evidence boundary
 
@@ -271,6 +268,11 @@ namespaces or links after teardown. Move jobs use 20 trials, a 35-minute
 driver timeout and a 45-minute job timeout. Takeovers retain ten trials,
 a 20-minute driver timeout and a 30-minute job timeout.
 
+Every matrix entry fails the workflow on fail or inconclusive, including
+lossy-DC moves. Private-route tuning now defaults on, following
+[ADR 0007](../adr/0007-private-route-tcp-recovery.md); no acceptance threshold
+changed. The manual `private_route_tuning=false` input retains the baseline.
+
 In run 38154313823, the DC trial process observation averaged 78.46s.
 Twenty such trials project to about 26 minutes before job setup, so the
 move timeouts include trial and setup headroom. Adding ten trials to all
@@ -288,7 +290,7 @@ The runner-time cost still matters.
 The orchestrator can dispatch all lanes with:
 
 ```sh
-gh workflow run ci.yml --repo relaishq/relais --ref feat/37-network-profiles
+gh workflow run ci.yml --repo relaishq/relais --ref investigate/87-move-latency
 ```
 
 Native Linux tests verify actual region/far-caller RTT, qdisc switching,
@@ -297,10 +299,19 @@ opt-in using `RELAIS_TEST_NETNS_REQUIRE=1`, consistent with #36. macOS unit
 checks and Linux cross-vet do not prove runtime shaping or these thresholds.
 Hosted results and posting the first results to #31 belong to the orchestrator.
 
-## Planned-move TCP diagnostics (#87)
+## Private TCP recovery and diagnostics (#87)
 
-Profile move runs now record per-phase private HTTP/Redis calls, connection
-reuse and namespace TCP recovery counters in `profile-report.json`.
-An opt-in `-private-route-tuning` flag changes only owned DC namespace routes.
-See [the move-latency investigation](move-latency.md) for measurement limits,
-Linux A/B workflow dispatches, source checks and ranked mitigation options.
+Private DC routes use `rto_min 5ms quickack 1` by default. Disable with
+`-private-route-tuning=false` for an untuned baseline. Every profile report
+records `private_route_tuning`; enabled reports include observed route metrics.
+Host, caller and fabric routes remain unchanged.
+
+| Lossy DC move run (20 trials) | Tuning | Verdict | Caller move duration | Audio / video gap p95 |
+| --- | --- | --- | --- | --- |
+| [38169245053](https://github.com/relaishq/relais/actions/runs/38169245053) | Off | Fail | 19 at 25–38ms; one at 253ms | 37.6 / 37.5ms |
+| [38169250273](https://github.com/relaishq/relais/actions/runs/38169250273) | On | Pass | All at 23–43ms | 43.1 / 47.0ms |
+
+Profile move reports retain per-phase private HTTP/Redis timings, connection
+reuse and namespace TCP counters. Diagnostic collection errors are explicit
+and non-fatal. See [move latency](move-latency.md) for the TLP evidence and
+limits, and [private-route deployment](private-route-tuning.md) for commands.

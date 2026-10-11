@@ -41,3 +41,19 @@ func TestDiagnosticsTimeFullBodyAndReuseConnections(t *testing.T) {
 	}
 	require.Equal(t, 1, events[1].ReusedConnections)
 }
+
+func TestDisabledDiagnosticsDoNotTraceRequests(t *testing.T) {
+	t.Setenv("RELAIS_MOVE_DIAGNOSTICS", "1")
+	ctx := movediag.Begin(context.Background())
+	t.Setenv("RELAIS_MOVE_DIAGNOSTICS", "")
+	server := httptest.NewServer(movediag.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Empty(t, movediag.ID(r.Context()))
+		require.Empty(t, r.Header.Get("X-Relais-Move-Trace"))
+		Write(w, map[string]bool{"ok": true})
+	})))
+	defer server.Close()
+	require.NoError(t, Do(ctx, server.Client(), server.URL, http.MethodPost, "/resume", nil, nil, nil))
+	for _, event := range movediag.Default.Snapshot().Events {
+		require.NotEqual(t, movediag.ID(ctx), event.TraceID)
+	}
+}

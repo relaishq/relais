@@ -28,6 +28,16 @@ func TestMoveDiagnosticsThroughRealRedisClient(t *testing.T) {
 	defer client.Close()
 	require.NoError(t, client.Ping(context.Background()).Err())
 	ctx := movediag.Phase(movediag.Begin(context.Background()), "resume")
+	// A client constructed with diagnostics off must have no trace hook,
+	// even if a traced coordination context later reaches a snapshot command.
+	t.Setenv("RELAIS_MOVE_DIAGNOSTICS", "")
+	plain := RedisClient(&redis.Options{Addr: addr, MaxRetries: -1}, "move-default-test")
+	defer plain.Close()
+	t.Setenv("RELAIS_MOVE_DIAGNOSTICS", "1")
+	require.NoError(t, plain.Ping(ctx).Err())
+	for _, event := range movediag.Default.Snapshot().Events {
+		require.NotEqual(t, movediag.ID(ctx), event.TraceID)
+	}
 	require.Equal(t, redis.Nil, client.Get(ctx, "move-diagnostic-missing-key").Err())
 	_, err = client.Pipelined(ctx, func(p redis.Pipeliner) error { p.Ping(ctx); p.Echo(ctx, "secret-payload"); return nil })
 	require.NoError(t, err)

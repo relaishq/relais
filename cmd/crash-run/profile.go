@@ -19,10 +19,11 @@ import (
 )
 
 type profileTrialOptions struct {
-	Name, Scenario string
-	Links          []nettopology.LinkSetting
-	PrivateRoutes  []nettopology.PrivateRoute
-	KernelRelease  string
+	Name, Scenario     string
+	Links              []nettopology.LinkSetting
+	PrivateRouteTuning bool
+	PrivateRoutes      []nettopology.PrivateRoute
+	KernelRelease      string
 }
 type gapBaseline struct {
 	Intervals   []time.Duration `json:"intervals,omitempty"`
@@ -54,6 +55,7 @@ type profileRow struct {
 	UncertainReplyProbe, BarrierResendProbe profileProbeVerdict
 }
 type profileReport struct {
+	PrivateRouteTuning                                               bool                       `json:"private_route_tuning"`
 	PrivateRoutes                                                    []nettopology.PrivateRoute `json:"private_routes,omitempty"`
 	KernelRelease                                                    string                     `json:"kernel_release,omitempty"`
 	AudioContentLoss, VideoContentLoss                               profileLossComparison
@@ -63,6 +65,7 @@ type profileReport struct {
 	Load                                                             int
 	Rows                                                             []profileRow
 	Links                                                            []nettopology.LinkSetting
+	ContentAgeSpreadLimit                                            time.Duration
 	AudioP95, VideoP95, AudioBaselineP95, VideoBaselineP95           time.Duration
 	GapAllowance, AbsoluteGapCeiling, FreshnessCeiling, PauseCeiling time.Duration
 	MinimumTrials                                                    int
@@ -167,8 +170,9 @@ func measureProfile(report *callharness.Report, relay string, options profileTri
 	}
 	row.Measurement = move.Measurement
 	row.EventResult = move.Result
-	row.AudioSpreadMargin = 20*time.Millisecond - (move.Measurement.Audio.BaselineP95 - move.Measurement.Audio.BaselineMedian)
-	row.VideoSpreadMargin = 20*time.Millisecond - (move.Measurement.Video.BaselineP95 - move.Measurement.Video.BaselineMedian)
+	spreadLimit := profileContentAgeSpreadLimit(options.Links)
+	row.AudioSpreadMargin = spreadLimit - (move.Measurement.Audio.BaselineP95 - move.Measurement.Audio.BaselineMedian)
+	row.VideoSpreadMargin = spreadLimit - (move.Measurement.Video.BaselineP95 - move.Measurement.Video.BaselineMedian)
 	for _, kind := range []string{"audio", "video"} {
 		gap, window, reasons := measureProfileGap(report, move, kind, options.Links)
 		if kind == "audio" {
@@ -242,7 +246,7 @@ func mediaPathHasLoss(links []nettopology.LinkSetting) (bool, error) {
 // remains failed even when another metric lacks samples. Unknown never passes.
 func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettopology.LinkSetting) profileReport {
 	p, _ := nettopology.ParseProfile(options.Name)
-	out := profileReport{PrivateRoutes: options.PrivateRoutes, KernelRelease: options.KernelRelease, Profile: options.Name, Scenario: options.Scenario, Load: 1, Rows: rows, Links: links, GapAllowance: 50 * time.Millisecond, AbsoluteGapCeiling: 150 * time.Millisecond, FreshnessCeiling: p.FreshnessCeiling, PauseCeiling: 2 * time.Second, MinimumTrials: 10, Verdict: "pass", DurationUnit: "nanoseconds"}
+	out := profileReport{PrivateRouteTuning: options.PrivateRouteTuning, PrivateRoutes: options.PrivateRoutes, KernelRelease: options.KernelRelease, Profile: options.Name, Scenario: options.Scenario, Load: 1, Rows: rows, Links: links, ContentAgeSpreadLimit: profileContentAgeSpreadLimit(links), GapAllowance: 50 * time.Millisecond, AbsoluteGapCeiling: 150 * time.Millisecond, FreshnessCeiling: p.FreshnessCeiling, PauseCeiling: 2 * time.Second, MinimumTrials: 10, Verdict: "pass", DurationUnit: "nanoseconds"}
 	if options.Scenario == "move" {
 		out.MinimumTrials = 20
 	}
@@ -306,8 +310,8 @@ func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettop
 				rowReason(false, prefix+b.kind+" gap baseline has fewer than 10 intervals")
 			}
 			// Packet-gap spread includes the normal intra-frame burst/33ms cadence.
-			// 50ms is the noise budget for gaps; #32's independent content-age
-			// baseline still uses its original 20ms spread limit below.
+			// 50ms is the noise budget for gaps. Content-age spread has its
+			// own applied caller-jitter allowance below.
 			if b.value.P95-b.value.Median > 50*time.Millisecond {
 				rowReason(false, prefix+b.kind+" gap baseline p95-minus-median exceeds 50ms")
 			}
@@ -346,8 +350,8 @@ func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettop
 			poolProfileProbe(&out.BarrierResendProbe, row.BarrierResendProbe)
 		}
 		m := row.Measurement
-		row.AudioSpreadMargin = 20*time.Millisecond - (m.Audio.BaselineP95 - m.Audio.BaselineMedian)
-		row.VideoSpreadMargin = 20*time.Millisecond - (m.Video.BaselineP95 - m.Video.BaselineMedian)
+		row.AudioSpreadMargin = out.ContentAgeSpreadLimit - (m.Audio.BaselineP95 - m.Audio.BaselineMedian)
+		row.VideoSpreadMargin = out.ContentAgeSpreadLimit - (m.Video.BaselineP95 - m.Video.BaselineMedian)
 		for _, track := range []struct {
 			kind            string
 			event, baseline callharness.ContentLossCounts
@@ -364,7 +368,7 @@ func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettop
 			kind   string
 			report callharness.FreshnessReport
 		}{{"audio", m.Audio}, {"video", m.Video}} {
-			if f.report.BaselineSamples < 10 || f.report.BaselineP95-f.report.BaselineMedian > 20*time.Millisecond {
+			if f.report.BaselineSamples < 10 || f.report.BaselineP95-f.report.BaselineMedian > out.ContentAgeSpreadLimit {
 				rowReason(false, prefix+f.kind+" content-age baseline too small or noisy")
 			}
 		}
@@ -501,7 +505,7 @@ func writeProfileReport(dir string, report profileReport) error {
 	if err := os.WriteFile(filepath.Join(dir, "profile-report.json"), encoded, 0600); err != nil {
 		return err
 	}
-	fmt.Printf("PROFILE_POLICY profile=%s scenario=%s load=%d minimum_trials=%d move_allowance=%s absolute_move_ceiling=%s takeover_pause_ceiling=%s diagnostic_freshness_median_ceiling=%s\n", report.Profile, report.Scenario, report.Load, report.MinimumTrials, report.GapAllowance, report.AbsoluteGapCeiling, report.PauseCeiling, report.FreshnessCeiling)
+	fmt.Printf("PROFILE_POLICY profile=%s scenario=%s load=%d minimum_trials=%d move_allowance=%s absolute_move_ceiling=%s takeover_pause_ceiling=%s diagnostic_freshness_median_ceiling=%s content_age_spread_limit=%s\n", report.Profile, report.Scenario, report.Load, report.MinimumTrials, report.GapAllowance, report.AbsoluteGapCeiling, report.PauseCeiling, report.FreshnessCeiling, report.ContentAgeSpreadLimit)
 	fmt.Println(profileResultLine(report))
 	fmt.Printf("PROFILE_REPORT duration_unit=nanoseconds %s\n", encoded)
 	return nil

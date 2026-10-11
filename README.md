@@ -366,7 +366,8 @@ node --test cmd/relais-demo/metrics.test.cjs
 
 For Linux emulated machines, private API isolation, and running inside an
 existing Linux VM or container from a Mac, see
-[the namespace topology guide](docs/dev/netns-topology.md).
+[the namespace topology guide](docs/dev/netns-topology.md). For low-latency private
+Linux deployments, follow [the private-route TCP policy](docs/dev/private-route-tuning.md).
 
 `make crash-run` builds and starts `relais-relay`, `relais-control` and two
 copies of `relais-worker` as separate OS processes. A real Pion caller sends

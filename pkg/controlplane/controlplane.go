@@ -369,9 +369,16 @@ type MoveResult struct {
 // Move fails fast if another move or drain holds the call. Empty to picks
 // the least-loaded non-draining worker other than the current owner.
 func (p *Plane) Move(ctx context.Context, id, to string) (res MoveResult, moveErr error) {
+	if !movediag.Enabled() {
+		return p.moveRequest(ctx, id, to)
+	}
 	ctx = movediag.Begin(ctx)
 	event := movediag.NewEvent(ctx, "move", "planned_move")
 	defer func() { res.Result.MoveDiagnosticID = movediag.ID(ctx); movediag.Default.Finish(event, moveErr != nil) }()
+	return p.moveRequest(ctx, id, to)
+}
+
+func (p *Plane) moveRequest(ctx context.Context, id, to string) (MoveResult, error) {
 	c, err := p.lookup(id)
 	if err != nil {
 		return MoveResult{}, err
@@ -539,7 +546,11 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	}
 
 	started = time.Now()
-	_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Kind: agent.PlannedMove, Lease: transferred, Context: movediag.Copy(context.Background(), movediag.Phase(ctx, "resume"))})
+	opts := mediaworker.ResumeOptions{Kind: agent.PlannedMove, Lease: transferred}
+	if movediag.ID(ctx) != "" {
+		opts.Context = movediag.Copy(context.Background(), movediag.Phase(ctx, "resume"))
+	}
+	_, err = target.worker.ResumeSession(state, opts)
 	res.Result.Resume = time.Since(started)
 	if err != nil {
 		// Explicit transport uncertainty can hide a committed adoption, even

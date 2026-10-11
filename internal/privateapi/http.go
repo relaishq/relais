@@ -10,9 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptrace"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/relais/internal/movediag"
@@ -107,20 +105,10 @@ func Do(ctx context.Context, client *http.Client, base, method, path string, inp
 		return err
 	}
 
-	event := movediag.NewEvent(ctx, "http", method+" "+DiagnosticOperation(path))
-	event.RequestBytes = body.Len()
-	var eventMu sync.Mutex
-	if event.TraceID != "" {
-		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
-			eventMu.Lock()
-			defer eventMu.Unlock()
-			event.Connections++
-			if info.Reused {
-				event.ReusedConnections++
-			}
-		}}))
-		movediag.Inject(req)
-		defer func() { eventMu.Lock(); defer eventMu.Unlock(); movediag.Default.Finish(event, resultErr != nil) }()
+	var diagnostic *requestDiagnostic
+	if movediag.Enabled() && movediag.ID(ctx) != "" {
+		req, diagnostic = traceRequest(req, path, body.Len())
+		defer func() { diagnostic.finish(resultErr != nil) }()
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
@@ -132,10 +120,8 @@ func Do(ctx context.Context, client *http.Client, base, method, path string, inp
 	if err != nil {
 		return Uncertain(err)
 	}
-	if event.TraceID != "" {
-		eventMu.Lock()
-		event.ResponseBytes = len(data)
-		eventMu.Unlock()
+	if diagnostic != nil {
+		diagnostic.responseBytes(len(data))
 	}
 	if len(data) > MaxBody {
 		return Uncertain(errors.New("privateapi: response too large"))

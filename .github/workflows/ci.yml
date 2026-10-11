@@ -16,9 +16,9 @@ on:
         options: [all, lossy-dc-move]
         default: all
       private_route_tuning:
-        description: Test-only DC namespace routes with rto_min 5ms and quickack
+        description: Tune private DC namespace routes with rto_min 5ms and quickack
         type: boolean
-        default: false
+        default: true
 
 # Only superseded PR runs share a cancellation group. Each full run is distinct.
 concurrency:
@@ -399,18 +399,17 @@ jobs:
           set -o pipefail
           sudo -E env RELAIS_TEST_NETNS_REQUIRE=1 ./bin/nettopology.test -test.v -test.run='^TestLinuxProfile' -test.timeout=2m 2>&1 | tee bin/network-profile-tests.log
       - name: Judge buffered profile trials
+        id: judge
         timeout-minutes: ${{ matrix.driver_minutes }}
         env:
-          PRIVATE_ROUTE_TUNING: ${{ inputs.private_route_tuning }}
+          PRIVATE_ROUTE_TUNING: ${{ github.event_name != 'workflow_dispatch' || inputs.private_route_tuning }}
         run: |
           set -o pipefail
-          tuning=()
-          if [ "$PRIVATE_ROUTE_TUNING" = true ]; then tuning=(-private-route-tuning); fi
           {
             uname -a
             if [ -r /proc/version_signature ]; then cat /proc/version_signature; fi
           } | tee bin/network-profile-kernel.log
-          sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run "${tuning[@]}" -topology=netns -profile=${{ matrix.profile }} -scenario=${{ matrix.scenario }} -runs=${{ matrix.trials }} -after=60s 2>&1 | tee bin/network-profile-driver.log
+          sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -private-route-tuning="$PRIVATE_ROUTE_TUNING" -topology=netns -profile=${{ matrix.profile }} -scenario=${{ matrix.scenario }} -runs=${{ matrix.trials }} -after=60s 2>&1 | tee bin/network-profile-driver.log
       - name: Assert namespace and link cleanup
         if: always()
         timeout-minutes: 1
@@ -445,7 +444,7 @@ jobs:
             bin/crash-run-*/network-settings.json
             bin/network-profile-kernel.log
       - name: Upload profile failure logs
-        if: failure() || cancelled()
+        if: failure() || cancelled() || steps.judge.outcome == 'failure'
         uses: actions/upload-artifact@v7
         with:
           name: network-profile-${{ matrix.profile }}-${{ matrix.scenario }}-logs

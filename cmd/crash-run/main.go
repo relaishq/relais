@@ -169,8 +169,9 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		if err := topology.AllowMedia(ctx, relayAddr); err != nil {
 			return result{}, err
 		}
-		privateAPIs = append(privateAPIs, envValue(env, "RELAIS_REDIS_ADDR"))
-		if err := topology.VerifyPrivateAPIs(ctx, privateAPIs); err != nil {
+		// Verify the store too, but diagnostics use only the HTTP endpoints.
+		privateEndpoints := append(append([]string(nil), privateAPIs...), envValue(env, "RELAIS_REDIS_ADDR"))
+		if err := topology.VerifyPrivateAPIs(ctx, privateEndpoints); err != nil {
 			return result{}, err
 		}
 		fmt.Println("ISOLATION PASS: caller cannot reach relay-private, workers, control or store; only relay UDP media is allowed")
@@ -463,16 +464,13 @@ func run() (err error) {
 	relayStandby := flag.Bool("relay-standby", false, "fenced standby takeover after SIGKILL and SIGSTOP, ten runs each")
 	topologyOption := flag.String("topology", "loopback", "loopback or netns (Linux/root only)")
 	profile := flag.String("profile", "lan", "lan, region, far-caller or lossy-dc (shaping requires netns)")
-	privateRouteTuning := flag.Bool("private-route-tuning", false, "test-only: rto_min 5ms and quickack on owned namespace DC routes")
+	privateRouteTuning := flag.Bool("private-route-tuning", true, "rto_min 5ms and quickack on owned namespace DC routes; false measures the untuned baseline")
 	scenario := flag.String("scenario", "", "profile acceptance: move or takeover; requires netns, enables buffer")
 	relayRestart := flag.Bool("relay-restart", false, "SIGKILL and restart the relay mid-call; workers and caller stay alive")
 	restoreOff := flag.Bool("route-restore-off", false, "disable route restore in relay-restart baseline trials")
 	compareRestore := flag.Bool("compare-restore", true, "compare restore on/off in relay-restart mode")
 	flag.DurationVar(&metricsInterval, "metrics-interval", time.Second, "private metrics scrape interval; 0 disables periodic scraping (pre-fault and final samples remain)")
 	flag.Parse()
-	if *privateRouteTuning && (*topologyOption != "netns" || *scenario == "") {
-		return errors.New("private-route-tuning requires a netns profile scenario")
-	}
 	if *scenario != "" {
 		if err := validateProfileScenario(*topologyOption, *scenario, *bufferOn || *compareBuffer || *replayLoss || *relayRestart || *relayStandby || *terminate || *cacheOff || *restoreOff); err != nil {
 			return err
@@ -540,7 +538,7 @@ func run() (err error) {
 	}()
 	var privateRoutes []nettopology.PrivateRoute
 	var kernelRelease string
-	if topology != nil && *scenario != "" {
+	if topology != nil {
 		kernelRelease, err = topology.KernelRelease(ctx)
 		if err != nil {
 			return err
@@ -624,7 +622,7 @@ func run() (err error) {
 		fmt.Println("DEVELOPMENT RUN: 60 s post-takeover consent acceptance NOT-RUN")
 	}
 	if *scenario != "" {
-		return runProfileTrials(ctx, manager, topology, bin, dir, hex.EncodeToString(key[:]), addr, password, profileTrialOptions{Name: *profile, Scenario: *scenario, PrivateRoutes: privateRoutes, KernelRelease: kernelRelease}, settings, *runs, *after, *verbose)
+		return runProfileTrials(ctx, manager, topology, bin, dir, hex.EncodeToString(key[:]), addr, password, profileTrialOptions{Name: *profile, Scenario: *scenario, PrivateRouteTuning: *privateRouteTuning, PrivateRoutes: privateRoutes, KernelRelease: kernelRelease}, settings, *runs, *after, *verbose)
 	}
 	modes := []bool{*cacheOff}
 	if *compare && !*terminate && !*cacheOff {

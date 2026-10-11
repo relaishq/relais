@@ -14,6 +14,18 @@ import (
 
 const profileGapMargin = 20 * time.Millisecond
 
+// Content age includes caller-to-relay and relay-to-caller transit. Sum the
+// jitter on those applied endpoints; private-link jitter is outside this budget.
+func profileContentAgeSpreadLimit(links []nettopology.LinkSetting) time.Duration {
+	limit := 20 * time.Millisecond
+	for _, link := range links {
+		if link.Role == "caller" {
+			limit += link.Jitter
+		}
+	}
+	return limit
+}
+
 var errProfileTrialFailed = errors.New("definite profile trial failure")
 
 func definiteProfileFailure(reason string) error {
