@@ -15,6 +15,9 @@ import (
 
 // Status reads the control plane's public HTTP view of ownership and moves.
 func (h *Harness) Status(ctx context.Context) (controlplane.Status, error) {
+	if h.external != nil && h.external.Status != nil {
+		return h.external.Status(ctx)
+	}
 	var status controlplane.Status
 	err := h.controlRequest(ctx, http.MethodGet, "/status", &status)
 	return status, err
