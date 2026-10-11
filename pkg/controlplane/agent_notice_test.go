@@ -54,6 +54,82 @@ func (w *rejectingAgentWorker) ResumeSession([]byte, mediaworker.ResumeOptions) 
 	}
 	return "", fmt.Errorf("%w: %w", agent.ErrRestore, agent.ErrVersion)
 }
+
+type rollbackNoticeWorker struct {
+	*fakeWorker
+	state []byte
+	opts  mediaworker.ResumeOptions
+}
+
+func (w *rollbackNoticeWorker) ResumeSession(state []byte, opts mediaworker.ResumeOptions) (string, error) {
+	w.state, w.opts = state, opts
+	if _, err := w.store.Renew(context.Background(), opts.Lease, time.Minute); err != nil {
+		return "", err
+	}
+	w.mu.Lock()
+	w.running[opts.Lease.SessionID] = true
+	w.mu.Unlock()
+	return opts.Lease.SessionID, nil
+}
+
+func TestMoveAgentFailureBeforeResumeUncertainty(t *testing.T) {
+	for _, failure := range []struct {
+		name      string
+		err       error
+		uncertain bool
+	}{
+		{"restore-deadline", fmt.Errorf("%w: %w", agent.ErrRestore, context.DeadlineExceeded), false},
+		{"restore-canceled", fmt.Errorf("%w: %w", agent.ErrRestore, context.Canceled), false},
+		{"version-deadline", fmt.Errorf("%w: %w", agent.ErrVersion, context.DeadlineExceeded), false},
+		{"oversize-deadline", fmt.Errorf("%w: %w", agent.ErrStateTooLarge, context.DeadlineExceeded), false},
+		{"save-deadline", fmt.Errorf("%w: %w", agent.ErrSave, context.DeadlineExceeded), false},
+		{"transport-deadline", context.DeadlineExceeded, true},
+		{"transport-canceled", context.Canceled, true},
+		{"transport-uncertain", privateapi.ErrUncertain, true},
+		{"transport-uncertain-restore", privateapi.Uncertain(agent.ErrRestore), true},
+	} {
+		t.Run(failure.name, func(t *testing.T) {
+			p, baseA, baseB, _ := setup(t)
+			a := &rollbackNoticeWorker{fakeWorker: baseA}
+			b := &rejectingAgentWorker{fakeWorker: baseB, err: failure.err}
+			p.workers["a"].worker, p.workers["b"].worker = a, b
+			ctx := context.Background()
+			id, _, err := p.Create(ctx, "offer", "a")
+			require.NoError(t, err)
+			lease, err := p.store.Get(ctx, id)
+			require.NoError(t, err)
+			// Distinct from fakeWorker's final export, so the test also checks
+			// which state the rollback chooses.
+			checkpoint := takeoverSnapshot(t, id, 0)
+			require.NoError(t, p.store.PutState(ctx, lease, checkpoint))
+
+			result, err := p.Move(ctx, id, "b")
+			require.ErrorIs(t, err, failure.err)
+			require.True(t, result.Result.RolledBack)
+			require.False(t, result.Lost)
+			require.Equal(t, 1, b.attempts)
+			require.True(t, a.runs(id))
+			require.False(t, b.runs(id))
+			if failure.uncertain {
+				require.Equal(t, checkpoint, a.state)
+				require.Equal(t, agent.Takeover, a.opts.Kind)
+				require.Positive(t, a.opts.SequenceMargin)
+				require.Positive(t, a.opts.SRTCPIndexMargin)
+			} else {
+				require.Equal(t, []byte(id), a.state)
+				require.Equal(t, agent.PlannedMove, a.opts.Kind)
+				require.Zero(t, a.opts.SequenceMargin)
+				require.Zero(t, a.opts.SRTCPIndexMargin)
+			}
+			lease, err = p.store.Get(ctx, id)
+			require.NoError(t, err)
+			require.Equal(t, a.addr, lease.Worker)
+			require.EqualValues(t, 3, lease.Epoch)
+			require.NoError(t, p.End(ctx, id))
+		})
+	}
+}
+
 func TestAgentTakeoverRestoreFailurePreservesCause(t *testing.T) {
 	for _, failure := range []struct {
 		name  string
