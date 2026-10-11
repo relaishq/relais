@@ -7,10 +7,16 @@ the netns harness applies it by default and supports an untuned A/B baseline.
 
 ## Evidence and mechanism
 
-| Lossy DC move run (20 trials) | Private tuning | Verdict | Caller move duration | Audio / video gap p95 |
+| Lossy DC move run (20 trials) | Private tuning | Verdict | Caller audio gap | Audio / video gap p95 |
 | --- | --- | --- | --- | --- |
 | [38169245053](https://github.com/relaishq/relais/actions/runs/38169245053) | Off | Fail | 19 at 25–38ms; one at 253ms | 37.6 / 37.5ms |
 | [38169250273](https://github.com/relaishq/relais/actions/runs/38169250273) | 5ms, quick ACK | Pass | All at 23–43ms | 43.1 / 47.0ms |
+
+Controller paused move durations were 22.4–26.7ms plus one 238.9ms outlier
+untuned, and 23.3–25.3ms tuned. These are distinct from caller audio gaps.
+The tuned gap p95 was higher (43.1/47.0ms versus 37.6/37.5ms); treat this as
+single-run variation within the unchanged thresholds, not a demonstrated
+population p95 improvement.
 
 The untuned outlier spent 224.7ms in resume and 2.3ms in export. Store counters
 increased by one each for `TCPLossProbes`, `TCPLossProbeRecovery` and

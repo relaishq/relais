@@ -44,6 +44,24 @@ type result struct {
 	BindWaitTime                                     time.Duration
 }
 
+// Each netns run retains route evidence, even without a profile scenario.
+func recordPrivateRouteSettings(dir string, tuned bool, kernel string, routes []nettopology.PrivateRoute) error {
+	report := struct {
+		PrivateRouteTuning bool                       `json:"private_route_tuning"`
+		KernelRelease      string                     `json:"kernel_release"`
+		PrivateRoutes      []nettopology.PrivateRoute `json:"private_routes"`
+	}{tuned, kernel, routes}
+	encoded, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "private-route-settings.json"), encoded, 0600); err != nil {
+		return err
+	}
+	fmt.Printf("PRIVATE_ROUTE_SETTINGS %s\n", encoded)
+	return nil
+}
+
 func binaries(bin string) error {
 	for _, name := range []string{"relais-relay", "relais-worker", "relais-control"} {
 		stat, err := os.Stat(filepath.Join(bin, name))
@@ -545,9 +563,14 @@ func run() (err error) {
 		}
 		if *privateRouteTuning {
 			privateRoutes, err = topology.TunePrivateRoutes(ctx)
-			if err != nil {
-				return err
-			}
+		} else {
+			privateRoutes, err = topology.ObservePrivateRoutes(ctx)
+		}
+		if err != nil {
+			return err
+		}
+		if err := recordPrivateRouteSettings(dir, *privateRouteTuning, kernelRelease, privateRoutes); err != nil {
+			return err
 		}
 	}
 	var settings []nettopology.LinkSetting

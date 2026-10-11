@@ -112,8 +112,8 @@ type PrivateRoute struct {
 	Namespace string        `json:"namespace"`
 	Interface string        `json:"interface"`
 	Prefix    string        `json:"prefix"`
-	RtoMin    time.Duration `json:"rto_min_ns"`
-	QuickACK  bool          `json:"quickack"`
+	RtoMin    time.Duration `json:"rto_min_ns,omitempty"`
+	QuickACK  bool          `json:"quickack,omitempty"`
 	Observed  string        `json:"observed"`
 }
 
@@ -128,9 +128,9 @@ func (p Plan) PrivateRouteCommands() []Command {
 	return commands
 }
 
-// TunePrivateRoutes is a test-only opt-in experiment. It changes only existing
-// connected DC routes inside owned namespaces. No host/caller route or sysctl
-// changes. Namespace deletion removes the settings.
+// TunePrivateRoutes applies the recommended private TCP recovery policy to
+// existing connected DC routes inside owned namespaces. Crash-run enables it
+// by default. No host/caller route or sysctl changes; teardown removes it.
 func (t *Topology) TunePrivateRoutes(ctx context.Context) ([]PrivateRoute, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -140,6 +140,21 @@ func (t *Topology) TunePrivateRoutes(ctx context.Context) ([]PrivateRoute, error
 	if err := t.execute(ctx, t.Plan.PrivateRouteCommands()); err != nil {
 		return nil, err
 	}
+	return t.privateRoutes(ctx, true)
+}
+
+// ObservePrivateRoutes reads the existing private routes without changing them.
+// Absent explicit TCP metrics stay unspecified; Observed retains kernel output.
+func (t *Topology) ObservePrivateRoutes(ctx context.Context) ([]PrivateRoute, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return nil, errors.New("topology is closed")
+	}
+	return t.privateRoutes(ctx, false)
+}
+
+func (t *Topology) privateRoutes(ctx context.Context, tuned bool) ([]PrivateRoute, error) {
 	var settings []PrivateRoute
 	for _, link := range t.Plan.Links {
 		if link.Bridge != t.Plan.DCBridge {
@@ -150,10 +165,14 @@ func (t *Topology) TunePrivateRoutes(ctx context.Context) ([]PrivateRoute, error
 		if err != nil {
 			return nil, err
 		}
-		if !strings.Contains(observed, "rto_min lock 5ms") || !strings.Contains(observed, "quickack 1") {
-			return nil, fmt.Errorf("private route tuning not observed in %s: %s", ns, observed)
+		route := PrivateRoute{Role: link.Role, Namespace: ns, Interface: link.PeerLink, Prefix: t.Plan.Datacentre.String(), Observed: strings.TrimSpace(observed)}
+		if tuned {
+			if !strings.Contains(observed, "rto_min lock 5ms") || !strings.Contains(observed, "quickack 1") {
+				return nil, fmt.Errorf("private route tuning not observed in %s: %s", ns, observed)
+			}
+			route.RtoMin, route.QuickACK = 5*time.Millisecond, true
 		}
-		settings = append(settings, PrivateRoute{Role: link.Role, Namespace: ns, Interface: link.PeerLink, Prefix: t.Plan.Datacentre.String(), RtoMin: 5 * time.Millisecond, QuickACK: true, Observed: strings.TrimSpace(observed)})
+		settings = append(settings, route)
 	}
 	return settings, nil
 }

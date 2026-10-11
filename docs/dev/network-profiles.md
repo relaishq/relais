@@ -306,7 +306,7 @@ Private DC routes use `rto_min 5ms quickack 1` by default. Disable with
 records `private_route_tuning`; enabled reports include observed route metrics.
 Host, caller and fabric routes remain unchanged.
 
-| Lossy DC move run (20 trials) | Tuning | Verdict | Caller move duration | Audio / video gap p95 |
+| Lossy DC move run (20 trials) | Tuning | Verdict | Caller audio gap | Audio / video gap p95 |
 | --- | --- | --- | --- | --- |
 | [38169245053](https://github.com/relaishq/relais/actions/runs/38169245053) | Off | Fail | 19 at 25–38ms; one at 253ms | 37.6 / 37.5ms |
 | [38169250273](https://github.com/relaishq/relais/actions/runs/38169250273) | On | Pass | All at 23–43ms | 43.1 / 47.0ms |

@@ -35,6 +35,11 @@ latency and retransmission counters. Do not use a machine-wide TCP sysctl.
 Crash-run applies the same metrics only to owned DC namespace routes, by
 default. `-private-route-tuning=false` measures the baseline. It verifies the
 observed metrics and records `private_route_tuning` in every profile report.
+Every netns run also prints its state and observed routes as
+`PRIVATE_ROUTE_SETTINGS`, and writes `private-route-settings.json`. The file
+is retained in CI even for the unshaped LAN crash job. Untuned runs read back
+the existing routes without changing them; absent explicit metrics remain
+unspecified.
 Host, caller and fabric routes stay unchanged; namespace teardown removes the
 settings. The driver-owned HTTP fault proxy still uses the host's original
 TCP policy, so this harness does not promise to eliminate every loss spike.

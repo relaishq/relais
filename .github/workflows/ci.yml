@@ -356,6 +356,12 @@ jobs:
         run: |
           sudo find bin -maxdepth 1 -type d -name 'crash-run-*' -exec chown -R "$(id -u):$(id -g)" {} +
           sudo find bin -maxdepth 1 -type d -name 'crash-run-*' -exec chmod -R a+rX {} +
+      - name: Upload namespace route settings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: netns-crash-run-route-settings
+          path: bin/crash-run-*/private-route-settings.json
       - name: Upload namespace failure logs
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7
@@ -442,6 +448,7 @@ jobs:
           path: |
             bin/crash-run-*/profile-report.json
             bin/crash-run-*/network-settings.json
+            bin/crash-run-*/private-route-settings.json
             bin/network-profile-kernel.log
       - name: Upload profile failure logs
         if: failure() || cancelled() || steps.judge.outcome == 'failure'

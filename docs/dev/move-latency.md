@@ -9,10 +9,16 @@ No move retry, fencing, rollback or media threshold changed.
 Both runs used `6.17.0-1022-azure` (Ubuntu `6.17.0-1022.22-azure`, base
 `6.17.13`), with twenty lossy-DC moves and 60 seconds of consent per trial.
 
-| Run | Private route tuning | Verdict | Caller move duration | Audio / video gap p95 |
+| Run | Private route tuning | Verdict | Caller audio gap | Audio / video gap p95 |
 | --- | --- | --- | --- | --- |
 | [38169245053](https://github.com/relaishq/relais/actions/runs/38169245053) | Off | Fail | 19 at 25–38ms; one at 253ms | 37.6 / 37.5ms |
 | [38169250273](https://github.com/relaishq/relais/actions/runs/38169250273) | `rto_min 5ms quickack 1` | Pass | All at 23–43ms | 43.1 / 47.0ms |
+
+Controller paused move durations were 22.4–26.7ms plus one 238.9ms outlier
+untuned, and 23.3–25.3ms tuned. These are distinct from caller audio gaps.
+The tuned gap p95 was higher (43.1/47.0ms versus 37.6/37.5ms); treat this as
+single-run variation within the unchanged thresholds, not a demonstrated
+population p95 improvement.
 
 The untuned slow move spent 224.7ms in resume and 2.3ms in export. Store
 `TCPLossProbes`, `TCPLossProbeRecovery` and `TcpRetransSegs` rose by one;
@@ -50,8 +56,12 @@ available phase/counter evidence is useful. Native re-runs must verify complete
 collection after this correction.
 
 Reports include `kernel_release`, explicit `private_route_tuning` (true or
-false), observed tuned `private_routes`, the slowest paused move and its
-longest call. JSON durations are nanoseconds. Kernel provenance uploads as
+false), observed `private_routes`, the slowest paused move and its
+longest call. Every netns run, including unshaped LAN crash trials, also prints
+`PRIVATE_ROUTE_SETTINGS` and writes `private-route-settings.json` with its tuning
+state, kernel and observed DC routes. Untuned routes retain their raw output;
+absent explicit TCP metrics are unspecified, not reported as zero.
+JSON durations are nanoseconds. Kernel provenance uploads as
 `network-profile-kernel.log`. Host-side proxy TCP settings remain untouched.
 
 ## Re-runs

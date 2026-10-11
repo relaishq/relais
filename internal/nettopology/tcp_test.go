@@ -84,3 +84,25 @@ func TestPrivateRouteTuningScopeAndObservedSettings(t *testing.T) {
 	_, err = topology.TunePrivateRoutes(context.Background())
 	require.ErrorContains(t, err, "not observed")
 }
+
+func TestPrivateRouteObservationsDoNotChangeRoutes(t *testing.T) {
+	p, err := NewPlan(0, 123, "aabbccddee", 2)
+	require.NoError(t, err)
+	topology := &Topology{Plan: p, runner: func(_ context.Context, c Command) (string, error) {
+		require.Equal(t, []string{"route", "show", p.Datacentre.String()}, []string(c[3:]))
+		require.Equal(t, "ip", c[0])
+		require.Equal(t, "-n", c[1])
+		require.NotEqual(t, p.Roles["caller"].Namespace, c[2])
+		require.NotEqual(t, p.FabricNamespace, c[2])
+		return "connected private route without explicit TCP metrics", nil
+	}}
+	routes, err := topology.ObservePrivateRoutes(context.Background())
+	require.NoError(t, err)
+	require.Len(t, routes, 5)
+	for _, route := range routes {
+		require.Equal(t, "connected private route without explicit TCP metrics", route.Observed)
+	}
+	topology.runner = func(context.Context, Command) (string, error) { return "", errors.New("route read failed") }
+	_, err = topology.ObservePrivateRoutes(context.Background())
+	require.ErrorContains(t, err, "route read failed")
+}
