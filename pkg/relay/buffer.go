@@ -10,20 +10,29 @@ import (
 )
 
 const (
-	DefaultBufferWindow          = time.Second
+	DefaultBufferWindow          = 1500 * time.Millisecond
 	DefaultMaxBufferedBytes      = 1 << 20
 	DefaultMaxTotalBufferedBytes = 64 << 20
 	DefaultMaxBufferedSSRCs      = 16
+	bufferPacketOverhead         = 256 // packet, two list nodes, queue slot and allocator overhead
 )
 
 // BufferConfig enables the caller SRTP cache. A nil Config.Buffer retains
 // the phase-1 cache/PLI path; a non-nil value selects these bounded defaults.
-// The byte budget includes relay-header room. SSRC metadata is bounded too.
+// Byte budgets include relay-header room and 256 bytes per packet for heap
+// overhead. SSRC metadata is bounded too.
 type BufferConfig struct {
-	Window          time.Duration
-	MaxSessionBytes int
-	MaxTotalBytes   int
-	MaxSSRCs        int
+	Window time.Duration
+	// Window defaults to these envelope/detector durations plus transfer time.
+	// Match these to the control plane when changing its defaults.
+	SnapshotMaxAge      time.Duration
+	DeadAfter           time.Duration
+	CheckInterval       time.Duration
+	TransferAllowance   time.Duration
+	TakeoverParallelism int // 16; sets the default global replay hold budget
+	MaxSessionBytes     int
+	MaxTotalBytes       int
+	MaxSSRCs            int
 	// Replay sends at most 16 packets or 16 KiB each millisecond by default.
 	ReplayInterval     time.Duration
 	ReplayBatchPackets int
@@ -32,7 +41,10 @@ type BufferConfig struct {
 
 func (c BufferConfig) defaults() BufferConfig {
 	if c.Window <= 0 {
-		c.Window = DefaultBufferWindow
+		c.Window = defaultDuration(c.SnapshotMaxAge, 550*time.Millisecond) + defaultDuration(c.DeadAfter, 400*time.Millisecond) + defaultDuration(c.CheckInterval, 50*time.Millisecond) + defaultDuration(c.TransferAllowance, 500*time.Millisecond)
+	}
+	if c.TakeoverParallelism <= 0 {
+		c.TakeoverParallelism = 16
 	}
 	if c.MaxSessionBytes <= 0 {
 		c.MaxSessionBytes = DefaultMaxBufferedBytes
@@ -55,6 +67,15 @@ func (c BufferConfig) defaults() BufferConfig {
 	return c
 }
 
+func defaultDuration(value, fallback time.Duration) time.Duration {
+	if value > 0 {
+		return value
+	}
+	return fallback
+}
+
+func packetCost(datagram []byte) int { return len(datagram) + bufferPacketOverhead }
+
 type bufferedPacket struct {
 	heldPacket
 	session       string
@@ -68,9 +89,12 @@ type bufferedSession struct {
 	packets *list.List
 	bytes   int
 	// Highest indexes survive time expiry, so silent tracks retain their ROC.
-	indexes   map[uint32]uint64
-	trimmed   map[uint32]uint64
-	untracked bool
+	indexes          map[uint32]uint64
+	trimmed          map[uint32]uint64
+	untracked        bool
+	replayedThrough  map[uint32]uint64
+	replayGeneration uint64
+	receipt          *replayReceipt
 }
 
 // packetBuffer is protected by Relay.forwardMu. Its two linked lists give
@@ -117,6 +141,10 @@ func inboundIndex(highest uint64, seq uint16) uint64 {
 }
 
 func (b *packetBuffer) add(id string, caller netip.AddrPort, packet []byte, now time.Time) {
+	b.addWithCheckpoint(id, caller, packet, now, nil)
+}
+
+func (b *packetBuffer) addWithCheckpoint(id string, caller netip.AddrPort, packet []byte, now time.Time, checkpoint map[uint32]uint64) {
 	ssrc, seq, ok := callerIndex(packet)
 	if !ok {
 		return
@@ -137,6 +165,14 @@ func (b *packetBuffer) add(id string, caller netip.AddrPort, packet []byte, now 
 		b.untracked++
 		return
 	}
+	// A cold ring can first observe this SSRC after checkpoint preparation.
+	// Seed its ROC from that same copy before considering the first live input.
+	if !seen {
+		if floor, known := checkpoint[ssrc]; known {
+			highest, seen = floor, true
+			s.indexes[ssrc] = floor
+		}
+	}
 	index := uint64(seq)
 	if seen {
 		index = inboundIndex(highest, seq)
@@ -144,7 +180,7 @@ func (b *packetBuffer) add(id string, caller netip.AddrPort, packet []byte, now 
 	if !seen || index > highest {
 		s.indexes[ssrc] = index
 	}
-	size := MaxHeaderLen + len(packet)
+	size := MaxHeaderLen + len(packet) + bufferPacketOverhead
 	// Evict oldest first even when one incoming datagram cannot fit.
 	for s.bytes+size > b.cfg.MaxSessionBytes && s.packets.Len() > 0 {
 		b.remove(s.packets.Front().Value.(*bufferedPacket), true)
@@ -157,7 +193,7 @@ func (b *packetBuffer) add(id string, caller netip.AddrPort, packet []byte, now 
 		b.drops++
 		return
 	}
-	data := make([]byte, size)
+	data := make([]byte, size-bufferPacketOverhead)
 	copy(data[MaxHeaderLen:], packet)
 	p := &bufferedPacket{heldPacket: heldPacket{caller: caller, datagram: data}, session: id, at: now, ssrc: ssrc, index: index}
 	p.global = b.packets.PushBack(p)
@@ -170,8 +206,8 @@ func (b *packetBuffer) remove(p *bufferedPacket, overflow bool) {
 	s := b.sessions[p.session]
 	s.packets.Remove(p.local)
 	b.packets.Remove(p.global)
-	s.bytes -= len(p.datagram)
-	b.bytes -= len(p.datagram)
+	s.bytes -= packetCost(p.datagram)
+	b.bytes -= packetCost(p.datagram)
 	s.trimmed[p.ssrc] = max(s.trimmed[p.ssrc], p.index)
 	if overflow {
 		b.drops++

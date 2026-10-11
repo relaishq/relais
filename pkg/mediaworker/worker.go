@@ -508,6 +508,30 @@ func (w *Worker) readLoop() {
 	}
 }
 
+// RequestKeyframe recovers video after a replay that became incomplete after
+// resume. It uses the existing bounded SRTCP path and retries on incoming video
+// if the SSRC is not known yet or the SRTCP allowance is temporarily exhausted.
+func (w *Worker) RequestKeyframe(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s := w.session(id)
+	if s == nil {
+		return ErrUnknownSession
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fenced.Load() {
+		return ErrClosed
+	}
+	if !s.state.Video.negotiated() || w.cfg.DisableResumePLI {
+		return nil
+	}
+	s.needsKeyframe = true
+	s.requestKeyframe("relay-replay-incomplete")
+	return nil
+}
+
 func (w *Worker) session(id string) *session {
 	w.mu.Lock()
 	defer w.mu.Unlock()

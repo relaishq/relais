@@ -81,6 +81,13 @@ func (w *Worker) PrivateHandler() http.Handler {
 		}
 		privateapi.Write(rw, ExportReply{State: state})
 	})
+	mux.HandleFunc("POST /sessions/{id}/keyframe", func(rw http.ResponseWriter, r *http.Request) {
+		if err := w.RequestKeyframe(r.Context(), r.PathValue("id")); err != nil {
+			privateapi.Error(rw, err, RemoteErrors)
+			return
+		}
+		rw.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("POST /resume", func(rw http.ResponseWriter, r *http.Request) {
 		var req ResumeRequest
 		if !privateapi.Read(rw, r, &req) {

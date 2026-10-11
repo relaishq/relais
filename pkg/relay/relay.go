@@ -318,8 +318,9 @@ type Relay struct {
 	replayFiltered   atomic.Uint64
 	replays          atomic.Uint64
 
-	registryMu sync.RWMutex
-	registry   map[netip.AddrPort]struct{}
+	replayPacing map[netip.AddrPort]*replayPacer
+	registryMu   sync.RWMutex
+	registry     map[netip.AddrPort]struct{}
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -379,10 +380,11 @@ func New(cfg Config) (*Relay, error) {
 			maxFlows:         cfg.MaxFlows,
 			maxPending:       cfg.MaxPendingFlows,
 		}),
-		registry: make(map[netip.AddrPort]struct{}),
-		holds:    make(map[string]*sessionHold),
-		ctx:      ctx,
-		cancel:   cancel,
+		registry:     make(map[netip.AddrPort]struct{}),
+		holds:        make(map[string]*sessionHold),
+		replayPacing: make(map[netip.AddrPort]*replayPacer),
+		ctx:          ctx,
+		cancel:       cancel,
 	}
 	for _, worker := range cfg.Workers {
 		r.AddWorker(worker)
@@ -457,9 +459,16 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.MaxHeldBytes <= 0 {
 		cfg.MaxHeldBytes = DefaultMaxHeldBytes
+		if cfg.Buffer != nil {
+			cfg.MaxHeldBytes = max(cfg.MaxHeldBytes, cfg.Buffer.defaults().MaxSessionBytes)
+		}
 	}
 	if cfg.MaxTotalHeldBytes <= 0 {
 		cfg.MaxTotalHeldBytes = DefaultMaxTotalHeldBytes
+		if cfg.Buffer != nil {
+			b := cfg.Buffer.defaults()
+			cfg.MaxTotalHeldBytes = max(cfg.MaxTotalHeldBytes, b.TakeoverParallelism*b.MaxSessionBytes)
+		}
 	}
 	if cfg.LoggerFactory == nil {
 		cfg.LoggerFactory = logging.NewDefaultLoggerFactory()
@@ -545,6 +554,9 @@ func (r *Relay) MoveSession(sessionID string, from, to netip.AddrPort) error {
 
 // RemoveWorker stops accepting a media worker's datagrams.
 func (r *Relay) RemoveWorker(worker netip.AddrPort) {
+	r.forwardMu.Lock()
+	defer r.forwardMu.Unlock()
+	delete(r.replayPacing, unmap(worker))
 	r.registryMu.Lock()
 	defer r.registryMu.Unlock()
 	delete(r.registry, unmap(worker))
@@ -615,6 +627,7 @@ func (r *Relay) Close() error {
 		if r.buffer != nil {
 			for id := range r.buffer.sessions {
 				r.buffer.forget(id)
+				r.flows.unwatchEmpty(id)
 			}
 		}
 		r.forwardMu.Unlock()
@@ -696,24 +709,31 @@ func (r *Relay) forward(datagram []byte, caller, worker netip.AddrPort) {
 	if isSTUN(packet) {
 		session, tx, stunRequest = parseBindingRequest(packet)
 	}
+	f, confirmed := r.flows.forwardRoute(caller)
 	if !stunRequest {
-		f, ok := r.flows.forwardRoute(caller)
-		if !ok {
+		if !confirmed {
 			return
 		}
 		session, worker = f.session, f.worker
 	}
 	if r.buffer != nil {
-		if f, ok := r.flows.forwardRoute(caller); ok && f.session == session {
-			r.buffer.add(session, caller, packet, time.Now())
+		if confirmed && f.session == session {
+			newSession := r.buffer.sessions[session] == nil
+			var checkpoint map[uint32]uint64
+			if h := r.holds[session]; h != nil && h.replay && h.replayCheckpoint {
+				checkpoint = h.replayInbound
+			}
+			r.buffer.addWithCheckpoint(session, caller, packet, time.Now(), checkpoint)
+			if newSession && r.buffer.sessions[session] != nil {
+				r.flows.watchEmpty(session)
+			}
 		}
 	}
 	if h := r.holds[session]; h != nil {
 		// Only authenticated callers for this session may spend its queue.
 		// Other addresses' checks can retry after the hold; pending candidates
 		// are insufficient, even if their USERNAME names the held session.
-		confirmed, ok := r.flows.forwardRoute(caller)
-		if !ok || confirmed.session != session {
+		if !confirmed || f.session != session {
 			return
 		}
 		r.enqueue(h, caller, packet)
@@ -877,10 +897,9 @@ func (r *Relay) sweepFlows() {
 			r.forwardMu.Lock()
 			if r.buffer != nil {
 				r.buffer.expire(now)
-				for id := range r.buffer.sessions {
-					if r.holds[id] == nil && len(r.flows.sessionCallers(id)) == 0 {
-						r.buffer.forget(id)
-					}
+				for _, id := range r.flows.takeEmptySessions(r.holds) {
+					r.buffer.forget(id)
+					r.flows.unwatchEmpty(id)
 				}
 			}
 			r.forwardMu.Unlock()
@@ -937,6 +956,7 @@ func (r *Relay) ForgetSession(id string) {
 	r.flows.forgetSession(id)
 	if r.buffer != nil {
 		r.buffer.forget(id)
+		r.flows.unwatchEmpty(id)
 	}
 	if r.persistence != nil {
 		r.persistence.enqueue(id, nil)

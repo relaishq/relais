@@ -20,7 +20,7 @@ func bufferRTP(t *testing.T, ssrc uint32, seq uint16) []byte {
 func TestBufferBoundsDropOldest(t *testing.T) {
 	caller := netip.MustParseAddrPort("127.0.0.1:12345")
 	packet := bufferRTP(t, 1, 1)
-	size := len(packet) + MaxHeaderLen
+	size := len(packet) + MaxHeaderLen + bufferPacketOverhead
 	for _, total := range []bool{false, true} {
 		t.Run(map[bool]string{false: "session", true: "total"}[total], func(t *testing.T) {
 			cfg := BufferConfig{MaxSessionBytes: 2 * size}
@@ -144,7 +144,7 @@ func TestBufferOnlyConfirmedCallers(t *testing.T) {
 }
 
 func TestBufferRestoredROCAndIncompleteCoverage(t *testing.T) {
-	sys := startTestRelay(t, Config{Buffer: &BufferConfig{MaxSessionBytes: 2 * (MaxHeaderLen + 15)}})
+	sys := startTestRelay(t, Config{Buffer: &BufferConfig{MaxSessionBytes: 2 * (MaxHeaderLen + 15 + bufferPacketOverhead)}})
 	a := sys.worker(t, sessionA)
 	caller := newTestCaller(t)
 	sys.connect(t, caller, a, sessionA)

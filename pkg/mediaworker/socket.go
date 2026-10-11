@@ -455,10 +455,15 @@ type HandoverResult struct {
 	// largest validated snapshot age in this recovery, including copy-to-write
 	// delay. A failed target's newer checkpoint cannot shrink this warning.
 	// Newly gated input was never delivered to the prior owner.
-	InputMayBeDuplicated   bool
-	InputDuplicationWindow time.Duration
-	RelayReplayPackets     int
-	RelayReplayDuration    time.Duration
+	InputMayBeDuplicated    bool
+	InputDuplicationWindow  time.Duration
+	RelayReplayPackets      int
+	RelayReplayDuration     time.Duration
+	RelayReplayDrops        int
+	RelayReplaySendFailures int
+	// RelayReplayRecoveryPLI records an accepted worker recovery request.
+	// Emission may wait until the video SSRC is known.
+	RelayReplayRecoveryPLI bool
 	RelayReplayComplete    bool
 	SessionID              string
 

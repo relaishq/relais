@@ -61,14 +61,17 @@ type flowTable struct {
 	maxFlows         int
 	maxPending       int
 
-	mu       sync.Mutex
-	callers  map[netip.AddrPort]*callerFlows
-	sessions map[string]map[netip.AddrPort]*callerFlows // confirmed and pending, bounded by callers
-	routes   *list.List                                 // of *callerFlows with a route, most recently active first
-	pending  *list.List                                 // of *callerFlows with a candidate, newest first
-	evicted  uint64
-	rejected uint64
-	promoted uint64
+	// Only buffered sessions subscribe, so event storage is bounded by MaxFlows.
+	emptyWatch  map[string]bool
+	emptyEvents map[string]bool
+	mu          sync.Mutex
+	callers     map[netip.AddrPort]*callerFlows
+	sessions    map[string]map[netip.AddrPort]*callerFlows // confirmed and pending, bounded by callers
+	routes      *list.List                                 // of *callerFlows with a route, most recently active first
+	pending     *list.List                                 // of *callerFlows with a candidate, newest first
+	evicted     uint64
+	rejected    uint64
+	promoted    uint64
 }
 
 // callerFlows is one caller's confirmed route and pending candidate.
@@ -369,6 +372,9 @@ func (t *flowTable) unindex(c *callerFlows, session string) {
 	delete(t.sessions[session], c.caller)
 	if len(t.sessions[session]) == 0 {
 		delete(t.sessions, session)
+		if t.emptyWatch[session] {
+			t.emptyEvents[session] = true
+		}
 	}
 }
 
@@ -687,4 +693,42 @@ func minTime(a, b time.Time) time.Time {
 		return b
 	}
 	return a
+}
+
+// watchEmpty subscribes only after a confirmed caller allocated buffer metadata.
+func (t *flowTable) watchEmpty(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.emptyWatch == nil {
+		t.emptyWatch = make(map[string]bool)
+		t.emptyEvents = make(map[string]bool)
+	}
+	t.emptyWatch[id] = true
+}
+
+// takeEmptySessions visits only flow-removal events, never all buffered calls.
+// The caller holds forwardMu. A held session keeps its event until release.
+func (t *flowTable) takeEmptySessions(holds map[string]*sessionHold) []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var empty []string
+	for id := range t.emptyEvents {
+		if holds[id] != nil {
+			continue
+		}
+		delete(t.emptyEvents, id)
+		if len(t.sessions[id]) != 0 {
+			continue
+		}
+		delete(t.emptyWatch, id)
+		empty = append(empty, id)
+	}
+	return empty
+}
+
+func (t *flowTable) unwatchEmpty(id string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.emptyWatch, id)
+	delete(t.emptyEvents, id)
 }

@@ -19,6 +19,8 @@ type checkpointReplayRelay struct {
 	gated, forgotten bool
 	prepared         []map[uint32]uint64
 	sentOnLoss       int
+	replayResult     relay.ReplayResult
+	replayErr        error
 }
 
 func (r *checkpointReplayRelay) BeginReplay(_ context.Context, _ string, _ netip.AddrPort, inbound map[uint32]uint64) (relay.ReplayPlan, error) {
@@ -30,7 +32,10 @@ func (r *checkpointReplayRelay) BeginReplay(_ context.Context, _ string, _ netip
 }
 func (r *checkpointReplayRelay) ReplaySession(context.Context, string, netip.AddrPort) (relay.ReplayResult, error) {
 	r.gated = false
-	return relay.ReplayResult{Packets: 1}, nil
+	if r.replayErr != nil || r.replayResult.Dropped > 0 || r.replayResult.SendFailures > 0 {
+		return r.replayResult, r.replayErr
+	}
+	return relay.ReplayResult{Packets: 1, Complete: true}, nil
 }
 func (r *checkpointReplayRelay) ForgetSession(id string) {
 	r.gated, r.forgotten = false, true
@@ -56,8 +61,10 @@ type replayCheckpointStore struct {
 
 type replayCheckpointWorker struct {
 	*takeoverWorker
-	state []byte
-	opts  mediaworker.ResumeOptions
+	state       []byte
+	opts        mediaworker.ResumeOptions
+	keyframes   int
+	keyframeErr error
 }
 
 func (w *replayCheckpointWorker) ResumeSession(state []byte, opts mediaworker.ResumeOptions) (string, error) {
@@ -251,4 +258,70 @@ func TestCheckpointReplayRetryCannotShrinkDuplicationWindow(t *testing.T) {
 	require.True(t, events[0].Result.InputMayBeDuplicated)
 	require.Equal(t, failed.age, events[0].Result.InputDuplicationWindow,
 		"the old input queue still covers the original checkpoint, despite a new reservation write")
+}
+
+func (w *replayCheckpointWorker) RequestKeyframe(context.Context, string) error {
+	w.keyframes++
+	return w.keyframeErr
+}
+
+func TestCheckpointReplayLossRequestsWorkerKeyframe(t *testing.T) {
+	for _, failure := range []string{"live-drop", "send-failure", "expiry", "relay-restart"} {
+		t.Run(failure, func(t *testing.T) {
+			p, _, baseB, baseR := setup(t)
+			r := &checkpointReplayRelay{fakeRelay: baseR}
+			switch failure {
+			case "live-drop":
+				r.replayResult.Dropped = 1
+			case "send-failure":
+				r.replayResult.SendFailures = 1
+			default:
+				r.replayResult.Expired = true
+				r.replayErr = relay.ErrHoldExpired
+			}
+			p.relay = r
+			target := &replayCheckpointWorker{takeoverWorker: &takeoverWorker{fakeWorker: baseB}}
+			p.workers["b"].worker = target
+			ctx := context.Background()
+			id, _, err := p.Create(ctx, "offer", "a")
+			require.NoError(t, err)
+			lease, err := p.store.Get(ctx, id)
+			require.NoError(t, err)
+			require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
+			p.workers["a"].dead = true
+			p.takeover(ctx, p.workers["a"], lease, time.Now())
+			require.True(t, target.opts.RelayReplay, "loss happens after adopting a complete plan")
+			require.Equal(t, 1, target.keyframes, "video recovery must not wait for receiver feedback")
+			require.Len(t, p.recentTakeovers(), 1)
+			require.False(t, p.recentTakeovers()[0].Result.RelayReplayComplete)
+		})
+	}
+}
+
+func TestCheckpointReplayRecoveryFailureRemainsRetryable(t *testing.T) {
+	p, _, baseB, baseR := setup(t)
+	r := &checkpointReplayRelay{fakeRelay: baseR, replayResult: relay.ReplayResult{SendFailures: 1}}
+	p.relay = r
+	target := &replayCheckpointWorker{takeoverWorker: &takeoverWorker{fakeWorker: baseB}, keyframeErr: context.DeadlineExceeded}
+	p.workers["b"].worker = target
+	ctx := context.Background()
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	lease, err := p.store.Get(ctx, id)
+	require.NoError(t, err)
+	require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
+	source := p.workers["a"]
+	source.dead = true
+	p.takeover(ctx, source, lease, time.Now())
+	require.Empty(t, p.recentTakeovers(), "a failed recovery request cannot complete the takeover")
+	require.Len(t, source.pending, 1)
+	target.keyframeErr = nil
+	lease, err = p.store.Get(ctx, id)
+	require.NoError(t, err)
+	p.takeover(ctx, source, lease, time.Now())
+	require.Equal(t, 2, target.keyframes)
+	require.Len(t, p.recentTakeovers(), 1)
+	require.False(t, p.recentTakeovers()[0].Lost)
+	require.True(t, p.recentTakeovers()[0].Result.RelayReplayRecoveryPLI)
+	require.Equal(t, 1, p.recentTakeovers()[0].Result.RelayReplaySendFailures)
 }

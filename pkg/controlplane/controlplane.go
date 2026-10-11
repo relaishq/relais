@@ -47,6 +47,12 @@ type Worker interface {
 	ResumeSession(state []byte, opts mediaworker.ResumeOptions) (string, error)
 }
 
+// ReplayRecoveryWorker can request fresh video after a lossy relay replay.
+// Targets without this capability retain ordinary frame-cache/PLI recovery.
+type ReplayRecoveryWorker interface {
+	RequestKeyframe(context.Context, string) error
+}
+
 // Relay is the trusted routing boundary, satisfied by *relay.Relay.
 type Relay interface {
 	HoldSession(ctx context.Context, sessionID string, from netip.AddrPort) error

@@ -53,6 +53,9 @@ type sessionHold struct {
 	replayTrimmed    map[uint32]uint64
 	replayComplete   bool
 	replayCheckpoint bool
+	replayResult     ReplayResult
+	queuedHigh       map[uint32]uint64
+	replayGeneration uint64
 }
 
 // HoldSession brackets a planned move. Caller packets stop being forwarded
@@ -206,6 +209,10 @@ func (r *Relay) expireHold(h *sessionHold) {
 	if h.replay {
 		// An abandoned crash replay has no acknowledged live recipient. End
 		// the gate without flushing old ciphertext to an unadopted/dead leg.
+		h.replayComplete = false
+		h.replayResult.Expired = true
+		h.replayResult.Dropped += len(h.queue)
+		r.saveReplay(h)
 		r.discardHold(h)
 	} else {
 		r.releaseHold(h, netip.AddrPort{})

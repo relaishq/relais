@@ -36,13 +36,18 @@ type bufferHarness struct {
 // their private HTTP APIs. External caller mode does not imply real processes.
 func startBufferHarness(t *testing.T, store sessionstore.Store, enabled bool, afterTargetResume ...func()) *bufferHarness {
 	t.Helper()
-	disable := workerprobe.Enable()
-	t.Cleanup(disable)
-	frames := framecache.NewMemory(framecache.Limits{})
 	cfg := relay.Config{Owners: store}
 	if enabled {
 		cfg.Buffer = &relay.BufferConfig{}
 	}
+	return startConfiguredBufferHarness(t, store, cfg, afterTargetResume...)
+}
+
+func startConfiguredBufferHarness(t *testing.T, store sessionstore.Store, cfg relay.Config, afterTargetResume ...func()) *bufferHarness {
+	t.Helper()
+	disable := workerprobe.Enable()
+	t.Cleanup(disable)
+	frames := framecache.NewMemory(framecache.Limits{})
 	r, err := relay.New(cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, r.Close()) })
@@ -316,7 +321,7 @@ func testRelayBufferTakeover(t *testing.T, store sessionstore.Store, enabled, st
 			highest = max(highest, index)
 			seq := p.header.SequenceNumber - offset
 			if !p.at.Before(move.DetectedAt) {
-				seq -= 8192
+				seq -= move.SequenceMargin
 			}
 			returned[seq]++
 		}
@@ -419,4 +424,35 @@ func TestRelayBufferReplayWindow(t *testing.T) {
 	require.GreaterOrEqual(t, sys.r.Stats().ReplayPackets, uint64(200))
 	require.Zero(t, sys.r.Stats().HoldDrops)
 	t.Logf("RELAY_BUFFER_WINDOW replayed=%d received=%d sent=%d inbound_window=64 worker_decrypt_failures=%d caller_decrypt_failures=%d", sys.r.Stats().ReplayPackets, report.Track("audio").Packets, report.SentAudio.Frames, failures, report.DecryptionFailures.Total())
+}
+
+// The worker has already adopted RelayReplay=true when its resume reply is
+// delayed beyond the relay backstop. Recovery must generate a caller PLI
+// through the real private HTTP and encrypted SRTCP paths on both stores.
+func TestRelayBufferExpiredReplayRequestsKeyframe(t *testing.T) {
+	relayBufferStores(t, func(t *testing.T, store sessionstore.Store) {
+		sys := startConfiguredBufferHarness(t, store, relay.Config{Owners: store, Buffer: &relay.BufferConfig{}, HoldTimeout: 100 * time.Millisecond}, func() { time.Sleep(200 * time.Millisecond) })
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		call, err := sys.h.Dial(ctx, CallOptions{Video: true})
+		require.NoError(t, err)
+		require.NoError(t, call.SendMedia(ctx, time.Second))
+		require.NoError(t, workerprobe.Kill(sys.workers[0].LocalAddr()))
+		require.NoError(t, call.SendMedia(ctx, 2*time.Second))
+		status, err := sys.h.Status(ctx)
+		require.NoError(t, err)
+		require.Len(t, status.Takeovers, 1)
+		result := status.Takeovers[0].Result
+		require.True(t, result.HoldExpired)
+		require.False(t, result.RelayReplayComplete)
+		require.True(t, result.RelayReplayRecoveryPLI)
+		report, err := call.Hangup(ctx)
+		require.NoError(t, err)
+		require.Zero(t, report.KeyframeRequestsSent, "the receiver never requests recovery")
+		require.Positive(t, report.SentVideo.KeyframeRequests, "the resumed worker requests a caller keyframe")
+		require.Zero(t, report.DecryptionFailures.Total())
+		require.True(t, report.ConnectedThroughout())
+		require.Positive(t, report.Track("video").Video.KeyframesDecoded)
+		t.Logf("REPLAY_EXPIRY_RECOVERY caller_received_pli=%d receiver_sent_pli=%d decrypt_failures=%d", report.SentVideo.KeyframeRequests, report.KeyframeRequestsSent, report.DecryptionFailures.Total())
+	})
 }

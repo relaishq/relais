@@ -54,6 +54,9 @@ func (w *RemoteWorker) ResumeSession(state []byte, opts mediaworker.ResumeOption
 	err := privateapi.Do(ctx, remoteClient(w.Client), w.URL, http.MethodPost, "/resume", mediaworker.ResumeRequest{CallerSequenceReserve: opts.CallerSequenceReserve, CheckpointAge: opts.CheckpointAge, SnapshotAge: opts.SnapshotAge, CheckpointStoredAt: opts.CheckpointStoredAt, State: state, Lease: opts.Lease, SequenceMargin: opts.SequenceMargin, SRTCPIndexMargin: opts.SRTCPIndexMargin, RelayReplay: opts.RelayReplay}, &reply, mediaworker.RemoteErrors)
 	return reply.ID, err
 }
+func (w *RemoteWorker) RequestKeyframe(ctx context.Context, id string) error {
+	return privateapi.Do(ctx, remoteClient(w.Client), w.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/keyframe", nil, nil, mediaworker.RemoteErrors)
+}
 func (w *RemoteWorker) Status(ctx context.Context) (mediaworker.WorkerStatus, error) {
 	var reply mediaworker.WorkerStatus
 	err := privateapi.Do(ctx, remoteClient(w.Client), w.URL, http.MethodGet, "/status", nil, &reply, mediaworker.RemoteErrors)

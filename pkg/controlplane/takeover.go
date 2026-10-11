@@ -554,9 +554,10 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		if !pending.planned {
 			pending.plannedState = nil
 		}
+		recovery, canRecoverReplay := target.worker.(ReplayRecoveryWorker)
 		_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: transferred,
 			Context: ctx, CallerSequenceReserve: pending.reserve, CheckpointAge: pending.checkpointAge, SnapshotAge: pending.snapshotAge, CheckpointStoredAt: pending.checkpointStoredAt, SequenceMargin: margin, SRTCPIndexMargin: rtcpMargin,
-			RelayReplay: pending.replayPlan != nil && pending.replayPlan.Complete})
+			RelayReplay: pending.replayPlan != nil && pending.replayPlan.Complete && canRecoverReplay})
 		res.Result.Resume += time.Since(started)
 		p.unreserve(target)
 		if err == nil {
@@ -566,11 +567,20 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 				replayed, replayErr := r.(ReplayRelay).ReplaySession(ctx, c.id, target.addr)
 				res.Result.RelayReplayPackets = replayed.Packets
 				res.Result.RelayReplayDuration = replayed.Duration
-				res.Result.RelayReplayComplete = pending.replayPlan.Complete
-				res.Result.HoldExpired = errors.Is(replayErr, relay.ErrHoldExpired)
+				res.Result.RelayReplayComplete = pending.replayPlan.Complete && replayed.Complete && replayErr == nil
+				res.Result.RelayReplayDrops = replayed.Dropped
+				res.Result.RelayReplaySendFailures = replayed.SendFailures
+				res.Result.HoldExpired = replayed.Expired || errors.Is(replayErr, relay.ErrHoldExpired)
 				if replayErr != nil && !res.Result.HoldExpired {
 					pending.transientResume = true
 					return
+				}
+				if !res.Result.RelayReplayComplete && canRecoverReplay {
+					if err := recovery.RequestKeyframe(ctx, c.id); err != nil {
+						pending.transientResume = true
+						return
+					}
+					res.Result.RelayReplayRecoveryPLI = true
 				}
 				pending.held = false
 			}
