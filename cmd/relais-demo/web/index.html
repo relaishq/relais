@@ -18,11 +18,12 @@
 <button id="kill" disabled>Kill owner (SIGKILL)</button>
 <button id="check" disabled>Run checklist (10 moves + 10 kills)</button>
 <button id="save" disabled>Save results</button>
-<label><input id="audio" type="checkbox" checked> Play echoed audio</label>
+<label><input id="audio" type="checkbox" checked> Play returned audio</label>
 </div>
 <p id="error" class="error" role="alert"></p>
 <div class="videos"><figure><video id="local" autoplay playsinline muted></video><figcaption>Local source</figcaption></figure>
-<figure><video id="remote" autoplay playsinline></video><figcaption>Echo from the current owner</figcaption></figure></div>
+<figure><video id="remote" autoplay playsinline></video><figcaption>Audio agent or echo from the current owner</figcaption></figure></div>
+<p>The demo agent plays a rising ten-note scale, one count per 500 ms of consumed input. Every tenth count has a two-tone pulse. A short high chime marks each resume. Watch the count and tone phase below while moving or killing the owner.</p>
 <h2>Live call</h2><dl id="summary"></dl>
 <p class="gap" id="gap">Video gap — · Audio packet gap —</p>
 <p>Move and drain: gap &lt; 100 ms. SIGKILL takeover: gap &lt; 2 s. Both media streams must
@@ -32,11 +33,11 @@ and a continuous 60 s hold after the last event. A pending check is inconclusive
 Both video sources use decoded counter advances; audio gaps use total concealment samples.
 Starvation only downgrades a failing gap when its overlap could explain the excess above the threshold. Missing counters or inadequate audio playout is inconclusive.
 Raw gaps below the threshold pass regardless of the baseline floor. Run <code>relaisDemo.runBaseline()</code> for failure checks: too few valid baselines or a floor near the threshold can make a move or drain gap failure inconclusive. Gaps at least the threshold plus the floor max still fail; with no floor, allow one source frame interval.</p>
-<h2>Move log</h2><div class="scroll"><table><thead><tr><th>Time</th><th>Kind</th><th>From → to</th><th>Video gap</th><th>Audio gap</th><th>Result</th></tr></thead><tbody id="moves"></tbody></table></div>
+<h2>Move log</h2><div class="scroll"><table><thead><tr><th>Time</th><th>Kind</th><th>From → to</th><th>Video gap</th><th>Audio gap</th><th>Media result</th><th>Agent continuity</th></tr></thead><tbody id="moves"></tbody></table></div>
 <h2>Connection transitions</h2><pre id="transitions">[]</pre>
 <h2>Results</h2><p>Script API: <code>window.relaisDemo</code>. Unsupported counters read <code>"unverified"</code>.
 The checklist runs five baselines, ten moves, ten kills, then a 60 s hold. Keep the echo visible during the run.
-Results version 4 adds time to the first live frame after takeover: the first counter from content sent after observed media recovery, measured from kill request issuance. Save results downloads JSON to your browser’s Downloads folder.
+Results version 5 adds agent count and phase before, restored and after each event, duplicate-input evidence, measured checkpoint and snapshot ages, and a separate continuity verdict. Version 4 added time to the first live frame after takeover: the first counter from content sent after observed media recovery, measured from kill request issuance. Save results downloads JSON to your browser’s Downloads folder.
 The browser cannot report SRTP decryption failures directly; undecryptable packets appear as loss or freezes.
 Worker logs provide their decryption-failure counts.</p><pre id="results">{}</pre>
-</main><script src="metrics.js"></script><script src="demo.js"></script></body></html>
+</main><script src="metrics.js"></script><script src="continuity.js"></script><script src="demo.js"></script></body></html>

@@ -24,7 +24,7 @@ import (
 //go:embed web
 var web embed.FS
 
-type config struct{ Bin, HTTP, Redis, RedisBinary, LocalNetwork string }
+type config struct{ Bin, HTTP, Redis, RedisBinary, LocalNetwork, Agent string }
 
 func processEnv(key, addr, prefix string, withKey bool) []string {
 	env := []string{}
@@ -110,7 +110,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 	if err != nil {
 		return nil, err
 	}
-	d := &demo{ctx: ctx, client: &http.Client{Timeout: 10 * time.Second}, control: "http://" + controlAddr, relay: relay.Media, redis: addr, dir: dir, workers: map[string]*workerProcess{}, publicHost: cfg.LocalNetwork, launchToken: token}
+	d := &demo{ctx: ctx, client: &http.Client{Timeout: 10 * time.Second}, control: "http://" + controlAddr, relay: relay.Media, redis: addr, dir: dir, workers: map[string]*workerProcess{}, publicHost: cfg.LocalNetwork, launchToken: token, agentName: selectedAgent(cfg)}
 	usedMedia := map[string]bool{}
 	d.spawn = func(ctx context.Context, name string) (*workerProcess, error) {
 		media, err := freshUDP(usedMedia)
@@ -124,7 +124,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 			}
 		}
 		workerEnv = append(workerEnv, "PION_LOG_INFO=session")
-		child, ready, err := start(ctx, "worker-"+name, workerEnv, filepath.Join(bin, "relais-worker"), "-media", media, "-http", "127.0.0.1:0", "-name", name, "-control", d.control, "-relay-leg", relay.Leg, "-relay-media", relay.Media)
+		child, ready, err := start(ctx, "worker-"+name, workerEnv, filepath.Join(bin, "relais-worker"), "-media", media, "-http", "127.0.0.1:0", "-name", name, "-control", d.control, "-relay-leg", relay.Leg, "-relay-media", relay.Media, "-agent", selectedAgent(cfg))
 		if err != nil {
 			return nil, err
 		}
@@ -164,7 +164,17 @@ func freshUDP(used map[string]bool) (string, error) {
 	return "", errors.New("could not allocate a new worker UDP address")
 }
 
+func selectedAgent(cfg config) string {
+	if cfg.Agent == "" {
+		return "echo"
+	}
+	return cfg.Agent
+}
+
 func validateConfig(cfg config) error {
+	if selectedAgent(cfg) != "echo" && selectedAgent(cfg) != "demo" {
+		return errors.New("-agent must be echo or demo")
+	}
 	if cfg.Redis != "" {
 		if err := processrun.ValidateRedis(cfg.Redis); err != nil {
 			return err
@@ -186,6 +196,7 @@ func validateConfig(cfg config) error {
 
 func run() error {
 	var cfg config
+	flag.StringVar(&cfg.Agent, "agent", "echo", "worker audio agent: echo or demo")
 	flag.StringVar(&cfg.Bin, "bin", "bin", "directory containing built relay, worker and control")
 	flag.StringVar(&cfg.HTTP, "http", "127.0.0.1:9101", "literal loopback page address")
 	flag.StringVar(&cfg.LocalNetwork, "local-network", "", "opt in to HTTPS and public media on this literal local IPv4 address; uses the -http port, private APIs remain on loopback")
