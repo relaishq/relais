@@ -296,3 +296,11 @@ root-qdisc preservation, barrier-only loss/removal and cleanup. They are
 opt-in using `RELAIS_TEST_NETNS_REQUIRE=1`, consistent with #36. macOS unit
 checks and Linux cross-vet do not prove runtime shaping or these thresholds.
 Hosted results and posting the first results to #31 belong to the orchestrator.
+
+## Planned-move TCP diagnostics (#87)
+
+Profile move runs now record per-phase private HTTP/Redis calls, connection
+reuse and namespace TCP recovery counters in `profile-report.json`.
+An opt-in `-private-route-tuning` flag changes only owned DC namespace routes.
+See [the move-latency investigation](move-latency.md) for measurement limits,
+Linux A/B workflow dispatches, source checks and ranked mitigation options.

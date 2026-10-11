@@ -451,6 +451,8 @@ func (s *Socket) write(port *socketPort, pkt []byte, to netip.AddrPort) (int, er
 
 // HandoverResult describes a completed planned handover.
 type HandoverResult struct {
+	// MoveDiagnosticID correlates opt-in process traces; no session state.
+	MoveDiagnosticID string `json:"move_diagnostic_id,omitempty"`
 	// InputMayBeDuplicated warns that replay can repeat input processed by
 	// the prior owner after the counter copy. InputDuplicationWindow is its
 	// largest validated snapshot age in this recovery, including copy-to-write

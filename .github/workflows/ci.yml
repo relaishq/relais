@@ -9,6 +9,16 @@ on:
   schedule:
     - cron: '0 8 * * *' # Nightly at 08:00 UTC.
   workflow_dispatch:
+    inputs:
+      network_profile_lane:
+        description: Network profile matrix to run (other CI jobs still run)
+        type: choice
+        options: [all, lossy-dc-move]
+        default: all
+      private_route_tuning:
+        description: Test-only DC namespace routes with rto_min 5ms and quickack
+        type: boolean
+        default: false
 
 # Only superseded PR runs share a cancellation group. Each full run is distinct.
 concurrency:
@@ -367,17 +377,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [lan, region, far-caller, lossy-dc]
-        scenario: [move, takeover]
-        include:
-          - scenario: move
-            trials: 20
-            driver_minutes: 35
-            job_minutes: 45
-          - scenario: takeover
-            trials: 10
-            driver_minutes: 20
-            job_minutes: 30
+        profile: ${{ fromJSON(inputs.network_profile_lane == 'lossy-dc-move' && '["lossy-dc"]' || '["lan","region","far-caller","lossy-dc"]') }}
+        scenario: ${{ fromJSON(inputs.network_profile_lane == 'lossy-dc-move' && '["move"]' || '["move","takeover"]') }}
+        include: ${{ fromJSON(inputs.network_profile_lane == 'lossy-dc-move' && '[{"scenario":"move","trials":20,"driver_minutes":35,"job_minutes":45}]' || '[{"scenario":"move","trials":20,"driver_minutes":35,"job_minutes":45},{"scenario":"takeover","trials":10,"driver_minutes":20,"job_minutes":30}]') }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -398,9 +400,17 @@ jobs:
           sudo -E env RELAIS_TEST_NETNS_REQUIRE=1 ./bin/nettopology.test -test.v -test.run='^TestLinuxProfile' -test.timeout=2m 2>&1 | tee bin/network-profile-tests.log
       - name: Judge buffered profile trials
         timeout-minutes: ${{ matrix.driver_minutes }}
+        env:
+          PRIVATE_ROUTE_TUNING: ${{ inputs.private_route_tuning }}
         run: |
           set -o pipefail
-          sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -topology=netns -profile=${{ matrix.profile }} -scenario=${{ matrix.scenario }} -runs=${{ matrix.trials }} -after=60s 2>&1 | tee bin/network-profile-driver.log
+          tuning=()
+          if [ "$PRIVATE_ROUTE_TUNING" = true ]; then tuning=(-private-route-tuning); fi
+          {
+            uname -a
+            if [ -r /proc/version_signature ]; then cat /proc/version_signature; fi
+          } | tee bin/network-profile-kernel.log
+          sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run "${tuning[@]}" -topology=netns -profile=${{ matrix.profile }} -scenario=${{ matrix.scenario }} -runs=${{ matrix.trials }} -after=60s 2>&1 | tee bin/network-profile-driver.log
       - name: Assert namespace and link cleanup
         if: always()
         timeout-minutes: 1
@@ -433,6 +443,7 @@ jobs:
           path: |
             bin/crash-run-*/profile-report.json
             bin/crash-run-*/network-settings.json
+            bin/network-profile-kernel.log
       - name: Upload profile failure logs
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7

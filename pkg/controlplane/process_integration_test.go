@@ -2,73 +2,125 @@ package controlplane_test
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/relais/internal/movediag"
+	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/callharness"
 	"github.com/relais/pkg/controlplane"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
+	"github.com/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
 
 // A real caller crosses both HTTP adapters and the UDP drain barrier. The
 // external harness owns no topology, and closing it must leave the system up.
 func TestHTTPTopologyUsesExistingMediaPaths(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	store := sessionstore.NewMemory()
-	r, err := relay.New(relay.Config{PublicAddr: "127.0.0.1:0", WorkerAddr: "127.0.0.1:0", Owners: store})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, r.Close()) }()
-	relayServer := httptest.NewServer(r.PrivateHandler())
-	defer relayServer.Close()
-	remoteRelay := &controlplane.RemoteRelay{URL: relayServer.URL}
-	plane := controlplane.New(remoteRelay, store)
-	for _, name := range []string{"0", "1"} {
-		worker, err := mediaworker.New(mediaworker.Config{ListenAddr: "127.0.0.1:0", Relay: &mediaworker.RelayConfig{Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr(), Owners: store}})
-		require.NoError(t, err)
-		defer func() { require.NoError(t, worker.Close()) }()
-		server := httptest.NewServer(worker.PrivateHandler())
-		defer server.Close()
-		require.NoError(t, remoteRelay.AddWorker(ctx, worker.LocalAddr()))
-		require.NoError(t, plane.Register(name, worker.LocalAddr(), &controlplane.RemoteWorker{URL: server.URL}))
+	t.Setenv("RELAIS_MOVE_DIAGNOSTICS", "1")
+	for _, kind := range []string{"memory", "redis"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			var store sessionstore.Store = sessionstore.NewMemory()
+			if kind == "redis" {
+				addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+				if addr == "" {
+					if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
+						t.Fatal("dedicated Redis required")
+					}
+					t.Skip("dedicated Redis not configured")
+				}
+				require.NoError(t, processrun.ValidateRedis(addr))
+				redisStore, err := sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: addr, Prefix: fmt.Sprintf("move-diag:%d:", time.Now().UnixNano())}, make([]byte, 32))
+				require.NoError(t, err)
+				defer redisStore.Close()
+				store = redisStore
+			}
+			r, err := relay.New(relay.Config{PublicAddr: "127.0.0.1:0", WorkerAddr: "127.0.0.1:0", Owners: store})
+			require.NoError(t, err)
+			defer func() { require.NoError(t, r.Close()) }()
+			relayServer := httptest.NewServer(movediag.Handler(r.PrivateHandler()))
+			defer relayServer.Close()
+			remoteRelay := &controlplane.RemoteRelay{URL: relayServer.URL}
+			plane := controlplane.New(remoteRelay, store)
+			for _, name := range []string{"0", "1"} {
+				worker, err := mediaworker.New(mediaworker.Config{ListenAddr: "127.0.0.1:0", Relay: &mediaworker.RelayConfig{Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr(), Owners: store}})
+				require.NoError(t, err)
+				defer func() { require.NoError(t, worker.Close()) }()
+				server := httptest.NewServer(movediag.Handler(worker.PrivateHandler()))
+				defer server.Close()
+				require.NoError(t, remoteRelay.AddWorker(ctx, worker.LocalAddr()))
+				require.NoError(t, plane.Register(name, worker.LocalAddr(), &controlplane.RemoteWorker{URL: server.URL}))
+			}
+			server := httptest.NewServer(movediag.Handler(plane.ProcessHandler()))
+			defer server.Close()
+			h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: server.URL + "/calls", RelayAddr: r.PublicAddr()}})
+			require.NoError(t, err)
+			defer func() { require.NoError(t, h.Close()) }()
+			require.Equal(t, r.PublicAddr(), h.RelayAddr())
+			call, err := h.Dial(ctx, callharness.CallOptions{Video: true})
+			require.NoError(t, err)
+			require.NoError(t, call.SendMedia(ctx, time.Second))
+			status, err := h.Status(ctx)
+			require.NoError(t, err)
+			require.Len(t, status.Calls, 1)
+			res, err := plane.Move(ctx, call.SessionID(), "1")
+			require.NoError(t, err)
+			require.False(t, res.Result.HoldExpired)
+			require.NotEmpty(t, res.Result.MoveDiagnosticID)
+			phases := map[string]int{}
+			redisPhases := map[string]int{}
+			for _, event := range movediag.Default.Snapshot().Events {
+				if event.TraceID != res.Result.MoveDiagnosticID {
+					continue
+				}
+				if event.Kind == "redis" {
+					redisPhases[event.Phase]++
+					continue
+				}
+				if event.Kind != "http" {
+					continue
+				}
+				phases[event.Phase]++
+				require.Greater(t, event.Duration, time.Duration(0))
+				require.Equal(t, event.End.Sub(event.Start), event.Duration)
+			}
+			require.Equal(t, map[string]int{"barrier": 1, "export": 1, "transfer": 1, "resume": 1, "release": 1}, phases)
+			if kind == "redis" {
+				for _, phase := range []string{"prepare", "transfer", "resume"} {
+					require.Positive(t, redisPhases[phase], phase)
+				}
+				require.Zero(t, redisPhases["barrier"])
+				require.Zero(t, redisPhases["export"])
+				require.Zero(t, redisPhases["release"])
+				t.Logf("move diagnostics HTTP=%v Redis=%v", phases, redisPhases)
+			}
+			require.NoError(t, call.SendMedia(ctx, time.Second))
+			report, err := call.Hangup(ctx)
+			require.NoError(t, err)
+			require.True(t, report.ConnectedThroughout())
+			require.Equal(t, 1, report.OfferAnswerExchanges)
+			require.Zero(t, report.DecryptionFailures.Total())
+			require.Zero(t, report.ICERestarts)
+			require.Zero(t, report.Renegotiations)
+			require.NotNil(t, report.Track("audio"))
+			require.NotNil(t, report.Track("video"))
+			require.Positive(t, report.Track("video").Video.KeyframesDecoded)
+			require.NoError(t, h.Close())
+			status, err = plane.Status(ctx)
+			require.NoError(t, err)
+			require.Empty(t, status.Calls)
+			require.NoError(t, remoteRelay.RemoveWorker(ctx, status.Workers[0].Address))
+		})
 	}
-	server := httptest.NewServer(plane.ProcessHandler())
-	defer server.Close()
-	h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: server.URL + "/calls", RelayAddr: r.PublicAddr()}})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, h.Close()) }()
-	require.Equal(t, r.PublicAddr(), h.RelayAddr())
-	call, err := h.Dial(ctx, callharness.CallOptions{Video: true})
-	require.NoError(t, err)
-	require.NoError(t, call.SendMedia(ctx, time.Second))
-	status, err := h.Status(ctx)
-	require.NoError(t, err)
-	require.Len(t, status.Calls, 1)
-	res, err := plane.Move(ctx, call.SessionID(), "1")
-	require.NoError(t, err)
-	require.False(t, res.Result.HoldExpired)
-	require.NoError(t, call.SendMedia(ctx, time.Second))
-	report, err := call.Hangup(ctx)
-	require.NoError(t, err)
-	require.True(t, report.ConnectedThroughout())
-	require.Equal(t, 1, report.OfferAnswerExchanges)
-	require.Zero(t, report.DecryptionFailures.Total())
-	require.Zero(t, report.ICERestarts)
-	require.Zero(t, report.Renegotiations)
-	require.NotNil(t, report.Track("audio"))
-	require.NotNil(t, report.Track("video"))
-	require.Positive(t, report.Track("video").Video.KeyframesDecoded)
-	require.NoError(t, h.Close())
-	status, err = plane.Status(ctx)
-	require.NoError(t, err)
-	require.Empty(t, status.Calls)
-	require.NoError(t, remoteRelay.RemoveWorker(ctx, status.Workers[0].Address))
 }
 
 func TestPrivateAPIsRejectBadRequestsAndPreserveErrors(t *testing.T) {

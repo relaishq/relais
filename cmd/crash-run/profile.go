@@ -21,6 +21,8 @@ import (
 type profileTrialOptions struct {
 	Name, Scenario string
 	Links          []nettopology.LinkSetting
+	PrivateRoutes  []nettopology.PrivateRoute
+	KernelRelease  string
 }
 type gapBaseline struct {
 	Intervals   []time.Duration `json:"intervals,omitempty"`
@@ -28,7 +30,8 @@ type gapBaseline struct {
 	Median, P95 time.Duration
 }
 type profileRow struct {
-	TrialError string `json:"trial_error,omitempty"`
+	MoveDiagnostics *moveDiagnostics `json:"move_diagnostics,omitempty"`
+	TrialError      string           `json:"trial_error,omitempty"`
 	// Raw per-row counts are in Measurement.ContentLoss. These comparisons
 	// name the pooled run decision, never a separate per-row statistical test.
 	AudioContentLoss, VideoContentLoss      profileLossComparison
@@ -51,6 +54,8 @@ type profileRow struct {
 	UncertainReplyProbe, BarrierResendProbe profileProbeVerdict
 }
 type profileReport struct {
+	PrivateRoutes                                                    []nettopology.PrivateRoute `json:"private_routes,omitempty"`
+	KernelRelease                                                    string                     `json:"kernel_release,omitempty"`
 	AudioContentLoss, VideoContentLoss                               profileLossComparison
 	Profile, Scenario, Verdict                                       string
 	FaultPolicy                                                      string
@@ -237,7 +242,7 @@ func mediaPathHasLoss(links []nettopology.LinkSetting) (bool, error) {
 // remains failed even when another metric lacks samples. Unknown never passes.
 func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettopology.LinkSetting) profileReport {
 	p, _ := nettopology.ParseProfile(options.Name)
-	out := profileReport{Profile: options.Name, Scenario: options.Scenario, Load: 1, Rows: rows, Links: links, GapAllowance: 50 * time.Millisecond, AbsoluteGapCeiling: 150 * time.Millisecond, FreshnessCeiling: p.FreshnessCeiling, PauseCeiling: 2 * time.Second, MinimumTrials: 10, Verdict: "pass", DurationUnit: "nanoseconds"}
+	out := profileReport{PrivateRoutes: options.PrivateRoutes, KernelRelease: options.KernelRelease, Profile: options.Name, Scenario: options.Scenario, Load: 1, Rows: rows, Links: links, GapAllowance: 50 * time.Millisecond, AbsoluteGapCeiling: 150 * time.Millisecond, FreshnessCeiling: p.FreshnessCeiling, PauseCeiling: 2 * time.Second, MinimumTrials: 10, Verdict: "pass", DurationUnit: "nanoseconds"}
 	if options.Scenario == "move" {
 		out.MinimumTrials = 20
 	}
@@ -468,6 +473,15 @@ func profileResultLine(report profileReport) string {
 			slowest = row
 		}
 	}
+	if report.Scenario == "move" {
+		slowestMove := report.Rows[0]
+		for _, row := range report.Rows[1:] {
+			if row.EventResult.Duration > slowestMove.EventResult.Duration {
+				slowestMove = row
+			}
+		}
+		line += fmt.Sprintf(" slowest_move_trial=%d slowest_move_duration=%s", slowestMove.Trial, slowestMove.EventResult.Duration) + slowestMove.MoveDiagnostics.summary()
+	}
 	line += fmt.Sprintf(" slowest_trial=%d slowest_audio_gap=%s slowest_video_gap=%s", slowest.Trial, slowest.AudioGap, slowest.VideoGap)
 	r := slowest.EventResult
 	if r.Duration <= 0 {
@@ -502,6 +516,9 @@ func runProfileTrials(ctx context.Context, manager *clusterprocess.Manager, t *n
 		}
 		env := processEnv(key, addr, fmt.Sprintf("relais:profile:%s:%d:", filepath.Base(dir), i))
 		env = append(env, "RELAIS_PRIVATE_NETS="+t.Plan.PrivateNets(), "RELAIS_REDIS_PASSWORD="+password)
+		if options.Scenario == "move" {
+			env = append(env, "RELAIS_MOVE_DIAGNOSTICS=1")
+		}
 		trialCtx, cancel := context.WithTimeout(ctx, after+50*time.Second)
 		r, err := trial(trialCtx, manager, bin, trialDir, env, after, 5*time.Second, verbose, false, false, t, &options)
 		cancel()

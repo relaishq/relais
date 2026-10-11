@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/relais/internal/movediag"
 	"github.com/relais/internal/privateapi"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/relay"
@@ -15,14 +16,16 @@ import (
 // RemoteWorker implements Worker with bounded HTTP requests. No mutation is
 // automatically retried. Supply Client to override the two-second default.
 type RemoteWorker struct {
-	URL    string
-	Client *http.Client
+	URL               string
+	Client            *http.Client
+	diagnosticContext context.Context
 }
 
 // RemoteRelay implements Relay and exposes registry operations to bootstrap.
 type RemoteRelay struct {
-	URL    string
-	Client *http.Client
+	URL               string
+	Client            *http.Client
+	diagnosticContext context.Context
 }
 
 func remoteClient(client *http.Client) *http.Client {
@@ -42,7 +45,7 @@ func (w *RemoteWorker) EndSession(id string) error {
 }
 func (w *RemoteWorker) ExportSession(id string) ([]byte, error) {
 	var reply mediaworker.ExportReply
-	err := privateapi.Do(context.Background(), remoteClient(w.Client), w.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/export", nil, &reply, mediaworker.RemoteErrors)
+	err := privateapi.Do(movediag.Copy(context.Background(), w.diagnosticContext), remoteClient(w.Client), w.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/export", nil, &reply, mediaworker.RemoteErrors)
 	return reply.State, err
 }
 func (w *RemoteWorker) ResumeSession(state []byte, opts mediaworker.ResumeOptions) (string, error) {
@@ -63,7 +66,7 @@ func (w *RemoteWorker) Status(ctx context.Context) (mediaworker.WorkerStatus, er
 	return reply, err
 }
 func (r *RemoteRelay) route(ctx context.Context, id, action string, from, to netip.AddrPort, output any) error {
-	return privateapi.Do(ctx, remoteClient(r.Client), r.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/"+action, relay.RouteRequest{From: from, To: to, Repair: action == "move" && !from.IsValid()}, output, relay.RemoteErrors)
+	return privateapi.Do(movediag.Copy(ctx, r.diagnosticContext), remoteClient(r.Client), r.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/"+action, relay.RouteRequest{From: from, To: to, Repair: action == "move" && !from.IsValid()}, output, relay.RemoteErrors)
 }
 func (r *RemoteRelay) HoldSession(ctx context.Context, id string, from netip.AddrPort) error {
 	return r.route(ctx, id, "hold", from, netip.AddrPort{}, nil)
@@ -134,4 +137,21 @@ func (h *RemoteHeartbeats) Heartbeat(addr netip.AddrPort) error {
 	}
 	h.token = ""
 	return nil
+}
+
+func diagnosticWorker(w Worker, ctx context.Context) Worker {
+	if remote, ok := w.(*RemoteWorker); ok && movediag.ID(ctx) != "" {
+		copy := *remote
+		copy.diagnosticContext = ctx
+		return &copy
+	}
+	return w
+}
+func diagnosticRelay(r Relay, ctx context.Context) Relay {
+	if remote, ok := r.(*RemoteRelay); ok && movediag.ID(ctx) != "" {
+		copy := *remote
+		copy.diagnosticContext = ctx
+		return &copy
+	}
+	return r
 }

@@ -61,7 +61,7 @@ func processEnv(key, addr, prefix string) []string {
 	env := []string{}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if name == "RELAIS_SESSIONSTORE_KEY" || name == "RELAIS_REDIS_ADDR" || name == "RELAIS_REDIS_PREFIX" || name == "RELAIS_REDIS_PASSWORD" || name == "RELAIS_PRIVATE_NETS" {
+		if name == "RELAIS_MOVE_DIAGNOSTICS" || name == "RELAIS_SESSIONSTORE_KEY" || name == "RELAIS_REDIS_ADDR" || name == "RELAIS_REDIS_PREFIX" || name == "RELAIS_REDIS_PASSWORD" || name == "RELAIS_PRIVATE_NETS" {
 			continue
 		}
 		env = append(env, entry)
@@ -288,6 +288,11 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		worker = workerPIDs[owner]
 	}
 	systemMetrics.sampleBeforeFault(ctx)
+	var diagnostics *moveDiagnostics
+	var tcpBefore []nettopology.TCPSnapshot
+	if profile != nil && profile.Scenario == "move" {
+		tcpBefore = topology.SnapshotTCP(ctx)
+	}
 	killed := time.Now()
 	var profileActionErr error
 	if profile != nil && profile.Scenario == "move" {
@@ -298,6 +303,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			profileActionErr = err
 			fmt.Printf("PROFILE_MOVE_ERROR %v\n", err)
 		}
+		diagnostics = collectMoveDiagnostics(ctx, privateAPIs, tcpBefore, topology.SnapshotTCP(ctx))
 	} else {
 		signal := syscall.SIGKILL
 		label := "SIGKILL"
@@ -381,6 +387,10 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	}
 	if profile != nil {
 		row := measureProfile(report, relayReady.Media, *profile, after)
+		if diagnostics != nil {
+			diagnostics.selectMove(row.EventResult.MoveDiagnosticID, profileActionErr == nil && !row.EventResult.RolledBack)
+			row.MoveDiagnostics = diagnostics
+		}
 		if profileActionErr != nil {
 			row.Integrity.Failed = true
 			row.Integrity.Reasons = append(row.Integrity.Reasons, "profile action error: "+profileActionErr.Error())
@@ -453,12 +463,16 @@ func run() (err error) {
 	relayStandby := flag.Bool("relay-standby", false, "fenced standby takeover after SIGKILL and SIGSTOP, ten runs each")
 	topologyOption := flag.String("topology", "loopback", "loopback or netns (Linux/root only)")
 	profile := flag.String("profile", "lan", "lan, region, far-caller or lossy-dc (shaping requires netns)")
+	privateRouteTuning := flag.Bool("private-route-tuning", false, "test-only: rto_min 5ms and quickack on owned namespace DC routes")
 	scenario := flag.String("scenario", "", "profile acceptance: move or takeover; requires netns, enables buffer")
 	relayRestart := flag.Bool("relay-restart", false, "SIGKILL and restart the relay mid-call; workers and caller stay alive")
 	restoreOff := flag.Bool("route-restore-off", false, "disable route restore in relay-restart baseline trials")
 	compareRestore := flag.Bool("compare-restore", true, "compare restore on/off in relay-restart mode")
 	flag.DurationVar(&metricsInterval, "metrics-interval", time.Second, "private metrics scrape interval; 0 disables periodic scraping (pre-fault and final samples remain)")
 	flag.Parse()
+	if *privateRouteTuning && (*topologyOption != "netns" || *scenario == "") {
+		return errors.New("private-route-tuning requires a netns profile scenario")
+	}
 	if *scenario != "" {
 		if err := validateProfileScenario(*topologyOption, *scenario, *bufferOn || *compareBuffer || *replayLoss || *relayRestart || *relayStandby || *terminate || *cacheOff || *restoreOff); err != nil {
 			return err
@@ -524,6 +538,20 @@ func run() (err error) {
 			err = errors.Join(err, topology.Close())
 		}
 	}()
+	var privateRoutes []nettopology.PrivateRoute
+	var kernelRelease string
+	if topology != nil && *scenario != "" {
+		kernelRelease, err = topology.KernelRelease(ctx)
+		if err != nil {
+			return err
+		}
+		if *privateRouteTuning {
+			privateRoutes, err = topology.TunePrivateRoutes(ctx)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	var settings []nettopology.LinkSetting
 	if topology != nil && *scenario != "" {
 		settings, err = topology.ApplyProfile(ctx, *profile)
@@ -596,7 +624,7 @@ func run() (err error) {
 		fmt.Println("DEVELOPMENT RUN: 60 s post-takeover consent acceptance NOT-RUN")
 	}
 	if *scenario != "" {
-		return runProfileTrials(ctx, manager, topology, bin, dir, hex.EncodeToString(key[:]), addr, password, profileTrialOptions{Name: *profile, Scenario: *scenario}, settings, *runs, *after, *verbose)
+		return runProfileTrials(ctx, manager, topology, bin, dir, hex.EncodeToString(key[:]), addr, password, profileTrialOptions{Name: *profile, Scenario: *scenario, PrivateRoutes: privateRoutes, KernelRelease: kernelRelease}, settings, *runs, *after, *verbose)
 	}
 	modes := []bool{*cacheOff}
 	if *compare && !*terminate && !*cacheOff {

@@ -10,9 +10,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/relais/internal/movediag"
 	"github.com/relais/pkg/metrics"
 	"github.com/relais/pkg/sessionstore"
 )
@@ -87,7 +90,7 @@ func Read(w http.ResponseWriter, r *http.Request, value any) bool {
 	return true
 }
 
-func Do(ctx context.Context, client *http.Client, base, method, path string, input, output any, codes map[string]error) error {
+func Do(ctx context.Context, client *http.Client, base, method, path string, input, output any, codes map[string]error) (resultErr error) {
 	if client.Transport == nil {
 		copy := *client
 		copy.Transport = metrics.HTTPTransport()
@@ -103,6 +106,22 @@ func Do(ctx context.Context, client *http.Client, base, method, path string, inp
 	if err != nil {
 		return err
 	}
+
+	event := movediag.NewEvent(ctx, "http", method+" "+DiagnosticOperation(path))
+	event.RequestBytes = body.Len()
+	var eventMu sync.Mutex
+	if event.TraceID != "" {
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
+			eventMu.Lock()
+			defer eventMu.Unlock()
+			event.Connections++
+			if info.Reused {
+				event.ReusedConnections++
+			}
+		}}))
+		movediag.Inject(req)
+		defer func() { eventMu.Lock(); defer eventMu.Unlock(); movediag.Default.Finish(event, resultErr != nil) }()
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -112,6 +131,11 @@ func Do(ctx context.Context, client *http.Client, base, method, path string, inp
 	data, err := io.ReadAll(io.LimitReader(resp.Body, MaxBody+1))
 	if err != nil {
 		return Uncertain(err)
+	}
+	if event.TraceID != "" {
+		eventMu.Lock()
+		event.ResponseBytes = len(data)
+		eventMu.Unlock()
 	}
 	if len(data) > MaxBody {
 		return Uncertain(errors.New("privateapi: response too large"))
@@ -140,4 +164,21 @@ func Do(ctx context.Context, client *http.Client, base, method, path string, inp
 		return Uncertain(err)
 	}
 	return nil
+}
+
+// DiagnosticOperation records only operation names. Session/worker identifiers stay private.
+func DiagnosticOperation(path string) string {
+	if strings.HasPrefix(path, "/sessions/") {
+		for _, op := range []string{"export", "hold", "move", "release", "keyframe", "begin-replay", "replay"} {
+			if strings.HasSuffix(path, "/"+op) {
+				return "/sessions/:id/" + op
+			}
+		}
+		return "/sessions/:id"
+	}
+	switch path {
+	case "/resume", "/status", "/sessions", "/workers":
+		return path
+	}
+	return "/private-operation"
 }
