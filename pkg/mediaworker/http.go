@@ -3,6 +3,7 @@ package mediaworker
 import (
 	"net/http"
 	"net/netip"
+	"time"
 
 	"github.com/relais/internal/privateapi"
 	"github.com/relais/pkg/sessionstore"
@@ -30,10 +31,14 @@ type ExportReply struct {
 // ResumeRequest deliberately excludes Context; the server uses the request's
 // deadline and the client honors ResumeOptions.Context.
 type ResumeRequest struct {
-	State            []byte             `json:"state"`
-	Lease            sessionstore.Lease `json:"lease"`
-	SequenceMargin   uint16             `json:"sequence_margin"`
-	SRTCPIndexMargin uint32             `json:"srtcp_index_margin"`
+	CallerSequenceReserve uint32             `json:"caller_sequence_reserve"`
+	SnapshotAge           time.Duration      `json:"snapshot_age"`
+	CheckpointStoredAt    time.Time          `json:"checkpoint_stored_at"`
+	CheckpointAge         time.Duration      `json:"checkpoint_age"`
+	State                 []byte             `json:"state"`
+	Lease                 sessionstore.Lease `json:"lease"`
+	SequenceMargin        uint16             `json:"sequence_margin"`
+	SRTCPIndexMargin      uint32             `json:"srtcp_index_margin"`
 }
 type ResumeReply struct {
 	ID string `json:"id"`
@@ -80,7 +85,7 @@ func (w *Worker) PrivateHandler() http.Handler {
 		if !privateapi.Read(rw, r, &req) {
 			return
 		}
-		id, err := w.ResumeSession(req.State, ResumeOptions{Context: r.Context(), Lease: req.Lease, SequenceMargin: req.SequenceMargin, SRTCPIndexMargin: req.SRTCPIndexMargin})
+		id, err := w.ResumeSession(req.State, ResumeOptions{CallerSequenceReserve: req.CallerSequenceReserve, CheckpointAge: req.CheckpointAge, SnapshotAge: req.SnapshotAge, CheckpointStoredAt: req.CheckpointStoredAt, Context: r.Context(), Lease: req.Lease, SequenceMargin: req.SequenceMargin, SRTCPIndexMargin: req.SRTCPIndexMargin})
 		if err != nil {
 			privateapi.Error(rw, err, RemoteErrors)
 			return

@@ -10,7 +10,7 @@ import (
 	"github.com/relais/pkg/storage"
 )
 
-// RedisOwners exposes only lease address lookup and connection lifecycle.
+// RedisOwners exposes live leases, route metadata and connection lifecycle.
 // It holds no snapshot encryption keys and has no snapshot read/write API.
 // Lookups share Redis's fenced lease/expiry semantics, including expiry pruning.
 type RedisOwners struct{ leases *Redis }
