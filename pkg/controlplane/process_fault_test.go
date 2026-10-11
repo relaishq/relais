@@ -95,13 +95,17 @@ func newHTTPSystem(t *testing.T, source, target, routing *lostReply, counts ...i
 type httpSystemSettings struct {
 	holdTimeout time.Duration
 	agent       mediaworker.AgentConfig
+	store       sessionstore.Store
 }
 
 func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply, settings httpSystemSettings, counts ...int) *httpSystem {
 	t.Helper()
 	cleanupProbe := workerprobe.Enable()
 	t.Cleanup(cleanupProbe)
-	store := sessionstore.NewMemory()
+	store := settings.store
+	if store == nil {
+		store = sessionstore.NewMemory()
+	}
 	r, err := relay.New(relay.Config{PublicAddr: "127.0.0.1:0", WorkerAddr: "127.0.0.1:0", Owners: store, HoldTimeout: settings.holdTimeout})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, r.Close()) })

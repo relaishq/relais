@@ -629,14 +629,16 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			complete(false, nil)
 			return
 		}
-		// Typed adoption failures are definitive even when their callback
-		// cause is a deadline. Match the HTTP worker's agent error mapping.
+		// Explicit transport uncertainty can hide an adopted target even with
+		// an agent cause. Confirm that target before treating typed failures as
+		// definitive, including callback deadlines.
 		agentFailure := errors.Is(err, agent.ErrRestore) || errors.Is(err, agent.ErrVersion) || errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrSave)
-		if agentFailure {
-			pending.agentFailure = err
-		} else if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, privateapi.ErrUncertain) {
+		if errors.Is(err, privateapi.ErrUncertain) || (!agentFailure && (ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))) {
 			pending.transientResume = true
 			return
+		}
+		if agentFailure {
+			pending.agentFailure = err
 		}
 		if errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) || errors.Is(err, mediaworker.ErrSRTCPIndexExhausted) {
 			complete(true, err)
