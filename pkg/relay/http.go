@@ -10,6 +10,8 @@ import (
 var RemoteErrors = map[string]error{
 	"barrier_timeout": ErrBarrierTimeout, "held": ErrHeld,
 	"hold_limit": ErrHoldLimit, "hold_expired": ErrHoldExpired,
+	"buffer_disabled": ErrBufferDisabled, "replay_in_progress": ErrReplayInProgress,
+	"replay_not_ready": ErrReplayNotReady,
 }
 
 type RouteRequest struct {
@@ -23,6 +25,11 @@ type WorkerRequest struct {
 type ReleaseReply struct {
 	Packets int `json:"packets"`
 }
+type ReplayRequest struct {
+	From    netip.AddrPort    `json:"from"`
+	To      netip.AddrPort    `json:"to"`
+	Inbound map[uint32]uint64 `json:"inbound"`
+}
 type RelayStatus struct {
 	Instance string         `json:"instance"`
 	Public   netip.AddrPort `json:"public"`
@@ -33,6 +40,30 @@ type RelayStatus struct {
 // PrivateHandler controls a relay on a trusted loopback HTTP listener.
 func (r *Relay) PrivateHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /sessions/{id}/begin-replay", func(w http.ResponseWriter, req *http.Request) {
+		var body ReplayRequest
+		if !privateapi.Read(w, req, &body) {
+			return
+		}
+		plan, err := r.BeginReplay(req.Context(), req.PathValue("id"), body.From, body.Inbound)
+		if err != nil {
+			privateapi.Error(w, err, RemoteErrors)
+			return
+		}
+		privateapi.Write(w, plan)
+	})
+	mux.HandleFunc("POST /sessions/{id}/replay", func(w http.ResponseWriter, req *http.Request) {
+		var body ReplayRequest
+		if !privateapi.Read(w, req, &body) {
+			return
+		}
+		result, err := r.ReplaySession(req.Context(), req.PathValue("id"), body.To)
+		if err != nil {
+			privateapi.Error(w, err, RemoteErrors)
+			return
+		}
+		privateapi.Write(w, result)
+	})
 	mux.HandleFunc("POST /workers", func(w http.ResponseWriter, req *http.Request) {
 		var body WorkerRequest
 		if !privateapi.Read(w, req, &body) {

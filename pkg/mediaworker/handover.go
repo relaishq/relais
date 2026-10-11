@@ -148,6 +148,10 @@ func (track *trackState) checkSequenceMarginWithReserve(margin uint16, reserve u
 
 // ResumeOptions shape how a resumed session continues outbound streams.
 type ResumeOptions struct {
+	// RelayReplay means a complete caller-media ring is gated for replay.
+	// Keep the existing codec chain: no cached old pictures or proactive PLI.
+	// Incomplete/lost relay caches leave this false and use normal recovery.
+	RelayReplay bool
 	// CallerSequenceReserve can enlarge, never reduce, the phase-1 reserve.
 	CallerSequenceReserve uint32
 	// Context optionally bounds rebuilding and persisting the resumed transport.
@@ -284,7 +288,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 		return "", err
 	}
 	var replayPackets [][]byte
-	if opts.SequenceMargin > 0 && w.cfg.socket == nil && sess.state.Video.negotiated() && w.cfg.cacheEnabled() {
+	if opts.SequenceMargin > 0 && !opts.RelayReplay && w.cfg.socket == nil && sess.state.Video.negotiated() && w.cfg.cacheEnabled() {
 		timeout := w.cfg.CacheReadTimeout
 		if timeout <= 0 {
 			timeout = 150 * time.Millisecond
@@ -349,7 +353,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 
 		return "", err
 	}
-	sess.needsKeyframe = opts.SequenceMargin > 0 && sess.state.Video.negotiated() && !w.cfg.DisableResumePLI
+	sess.needsKeyframe = opts.SequenceMargin > 0 && !opts.RelayReplay && sess.state.Video.negotiated() && !w.cfg.DisableResumePLI
 	// Shared-socket output is fenced until Handover switches the route. Keep
 	// the request pending for the first routed video packet; skip replay there.
 	if sess.needsKeyframe && w.cfg.socket == nil {

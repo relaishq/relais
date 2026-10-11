@@ -51,7 +51,7 @@ func (w *RemoteWorker) ResumeSession(state []byte, opts mediaworker.ResumeOption
 		ctx = context.Background()
 	}
 	var reply mediaworker.ResumeReply
-	err := privateapi.Do(ctx, remoteClient(w.Client), w.URL, http.MethodPost, "/resume", mediaworker.ResumeRequest{CallerSequenceReserve: opts.CallerSequenceReserve, CheckpointAge: opts.CheckpointAge, SnapshotAge: opts.SnapshotAge, CheckpointStoredAt: opts.CheckpointStoredAt, State: state, Lease: opts.Lease, SequenceMargin: opts.SequenceMargin, SRTCPIndexMargin: opts.SRTCPIndexMargin}, &reply, mediaworker.RemoteErrors)
+	err := privateapi.Do(ctx, remoteClient(w.Client), w.URL, http.MethodPost, "/resume", mediaworker.ResumeRequest{CallerSequenceReserve: opts.CallerSequenceReserve, CheckpointAge: opts.CheckpointAge, SnapshotAge: opts.SnapshotAge, CheckpointStoredAt: opts.CheckpointStoredAt, State: state, Lease: opts.Lease, SequenceMargin: opts.SequenceMargin, SRTCPIndexMargin: opts.SRTCPIndexMargin, RelayReplay: opts.RelayReplay}, &reply, mediaworker.RemoteErrors)
 	return reply.ID, err
 }
 func (w *RemoteWorker) Status(ctx context.Context) (mediaworker.WorkerStatus, error) {
@@ -72,6 +72,18 @@ func (r *RemoteRelay) ReleaseSession(id string, to netip.AddrPort) (int, error) 
 	var reply relay.ReleaseReply
 	err := r.route(context.Background(), id, "release", netip.AddrPort{}, to, &reply)
 	return reply.Packets, err
+}
+
+func (r *RemoteRelay) BeginReplay(ctx context.Context, id string, from netip.AddrPort, inbound map[uint32]uint64) (relay.ReplayPlan, error) {
+	var reply relay.ReplayPlan
+	err := privateapi.Do(ctx, remoteClient(r.Client), r.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/begin-replay", relay.ReplayRequest{From: from, Inbound: inbound}, &reply, relay.RemoteErrors)
+	return reply, err
+}
+
+func (r *RemoteRelay) ReplaySession(ctx context.Context, id string, to netip.AddrPort) (relay.ReplayResult, error) {
+	var reply relay.ReplayResult
+	err := privateapi.Do(ctx, remoteClient(r.Client), r.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/replay", relay.ReplayRequest{To: to}, &reply, relay.RemoteErrors)
+	return reply, err
 }
 
 // ForgetSession cannot report errors through Relay's existing interface.
