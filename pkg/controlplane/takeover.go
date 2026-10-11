@@ -468,7 +468,11 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			}
 			return
 		}
-		if pending.replayPlan != nil {
+		// Confirmation reuses the already configured gate and exact resume
+		// bytes. A replay reply may be lost after draining and releasing the
+		// gate; rebuilding it here would resend authenticated input to the
+		// same tenure and fail its SRTP replay window.
+		if pending.replayPlan != nil && !pending.transientResume {
 			replay := r.(ReplayRelay)
 			inbound, indexErr := mediaworker.SnapshotInboundIndexes(state)
 			if indexErr != nil {
@@ -560,7 +564,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 				replayed, replayErr := r.(ReplayRelay).ReplaySession(ctx, c.id, target.addr)
 				res.Result.RelayReplayPackets = replayed.Packets
 				res.Result.RelayReplayDuration = replayed.Duration
-				res.Result.RelayReplayComplete = pending.replayPlan.Complete
+				res.Result.RelayReplayComplete = pending.replayPlan.Complete && replayErr == nil
 				res.Result.HoldExpired = errors.Is(replayErr, relay.ErrHoldExpired)
 				if replayErr != nil && !res.Result.HoldExpired {
 					pending.transientResume = true

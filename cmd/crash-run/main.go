@@ -31,6 +31,7 @@ type result struct {
 	Path, LivePath                                   string
 	ReplayPackets                                    int
 	RoutesRestored                                   uint64
+	BufferEvidence                                   *bufferEvidence
 }
 
 func binaries(bin string) error {
@@ -79,7 +80,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		r, err := c.Ready(startup)
 		return c, r, err
 	}
-	_, relayReady, err := start("relay", filepath.Join(bin, "relais-relay"), "-media", "127.0.0.1:0", "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0")
+	_, relayReady, err := start("relay", filepath.Join(bin, "relais-relay"), "-media", "127.0.0.1:0", "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0", "-buffer-off")
 	if err != nil {
 		return result{}, err
 	}
@@ -269,6 +270,8 @@ func run() error {
 	redisAddr := flag.String("redis", os.Getenv("RELAIS_REDIS_ADDR"), "explicit dedicated Redis address, or start a throwaway instance")
 	redisBinary := flag.String("redis-server", "redis-server", "Redis executable for the throwaway instance")
 	verbose := flag.Bool("verbose", false, "print full caller reports")
+	bufferOn := flag.Bool("buffer", false, "run with caller SRTP buffering, using the source-checkout caller probe")
+	compareBuffer := flag.Bool("compare-buffer", false, "interleave buffer on/off with the same frame-cache mode; requires source checkout and Go")
 	compare := flag.Bool("compare-cache", true, "compare Redis cache+PLI with cache-off PLI (runs per mode)")
 	cacheOff := flag.Bool("frame-cache-off", false, "run PLI only; disable cache writes and replay (overrides comparison)")
 	terminate := flag.Bool("sigterm", false, "verify graceful owning-worker drain instead of crash takeover")
@@ -276,6 +279,9 @@ func run() error {
 	restoreOff := flag.Bool("route-restore-off", false, "disable route restore in relay-restart baseline trials")
 	compareRestore := flag.Bool("compare-restore", true, "compare restore on/off in relay-restart mode")
 	flag.Parse()
+	if (*bufferOn || *compareBuffer) && (*relayRestart || *terminate) {
+		return errors.New("buffer comparison cannot combine with relay-restart or sigterm")
+	}
 	if *relayRestart && (*terminate || *cacheOff) {
 		return errors.New("relay-restart cannot combine with sigterm or frame-cache-off")
 	}
@@ -297,6 +303,13 @@ func run() error {
 	manager := &clusterprocess.Manager{}
 	ctx, cancel := manager.Context()
 	defer cancel()
+	var bufferCaller string
+	if *bufferOn || *compareBuffer {
+		bufferCaller, err = buildBufferCaller(ctx, dir)
+		if err != nil {
+			return err
+		}
+	}
 	addr := *redisAddr
 	if addr == "" {
 		addr, err = clusterprocess.FreeTCP()
@@ -336,9 +349,22 @@ func run() error {
 			modes = []bool{false, true}
 		}
 	}
+	if *bufferOn || *compareBuffer {
+		modes = []bool{false}
+		if *compareBuffer {
+			modes = []bool{false, true}
+		}
+	}
 	all := make([][]result, len(modes))
 	labels := make([]string, len(modes))
 	for m, off := range modes {
+		if *bufferOn || *compareBuffer {
+			labels[m] = "buffer-on"
+			if off {
+				labels[m] = "buffer-off"
+			}
+			continue
+		}
 		labels[m] = "redis-cache+pli"
 		if off {
 			labels[m] = "pli-cache-off"
@@ -364,7 +390,9 @@ func run() error {
 			warmup := 1550*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
 			var r result
 			var err error
-			if *relayRestart {
+			if *bufferOn || *compareBuffer {
+				r, err = bufferTrial(trialCtx, manager, bufferCaller, bin, trialDir, env, *after, warmup, off, *cacheOff)
+			} else if *relayRestart {
 				warmup = 2250*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
 				r, err = relayRestartTrial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, off)
 			} else {
@@ -372,7 +400,13 @@ func run() error {
 			}
 			stop()
 			all[m] = append(all[m], r)
-			if *relayRestart {
+			if *bufferOn || *compareBuffer {
+				if off {
+					printBufferComparison(nil, all[m])
+				} else {
+					printBufferComparison(all[m], nil)
+				}
+			} else if *relayRestart {
 				printRelayRestartTable(label, all[m])
 			} else {
 				printTable(all[m])
@@ -383,10 +417,21 @@ func run() error {
 			if !r.Pass {
 				return errors.New("caller-observed process handover threshold failed")
 			}
-			if !*relayRestart && !*terminate && off && (r.Path != "Keyframe" || r.ReplayPackets != 0) {
+			if !*bufferOn && !*compareBuffer && !*relayRestart && !*terminate && off && (r.Path != "Keyframe" || r.ReplayPackets != 0) {
 				return errors.New("cache-off run did not prove PLI attribution")
 			}
 		}
+	}
+	if *bufferOn || *compareBuffer {
+		if len(all) == 2 {
+			printBufferComparison(all[0], all[1])
+		} else {
+			printBufferComparison(all[0], nil)
+		}
+		for m, results := range all {
+			fmt.Printf("PASS: %d/%d real-process SIGKILL trials mode=%s\n", len(results), *runs, labels[m])
+		}
+		return nil
 	}
 	if *relayRestart {
 		for m, results := range all {

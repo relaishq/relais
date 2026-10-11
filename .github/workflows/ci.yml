@@ -182,6 +182,29 @@ jobs:
           name: crash-run-logs
           path: bin/crash-run-*
 
+  # Kept separate from the phase-1 cache comparison: each twenty-trial
+  # comparison observes 60 seconds per call, within its own 35-minute budget.
+  crash-run-buffer:
+    timeout-minutes: 35
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+      - name: Install Redis and ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
+      - name: Compare ten buffered and ten baseline SIGKILL trials (lan)
+        run: make crash-run CRASH_FLAGS="-compare-buffer"
+      - name: Upload buffered crash-run failure logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crash-run-buffer-logs
+          path: bin/crash-run-*
+
   cluster-tests-gate:
     runs-on: ubuntu-latest
     outputs:
