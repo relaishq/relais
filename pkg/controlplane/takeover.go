@@ -259,7 +259,9 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 }
 
 // takeoverLocked also recovers an ambiguous final export while Move holds c.mu.
-func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *call, listed sessionstore.Lease, detected time.Time) {
+// A non-nil outcome has completed terminal accounting, independent of the
+// bounded status history. Nil means recovery is pending or ownership changed.
+func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *call, listed sessionstore.Lease, detected time.Time) (outcome *MoveResult) {
 	p.mu.Lock()
 	existing := source.pending[c.id]
 	p.mu.Unlock()
@@ -324,6 +326,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 				}
 				p.completeTakeover(source, c, pending.lease, &res, lost,
 					fmt.Errorf("controlplane: pending takeover lease vanished: %w", err))
+				outcome = &res
 			}
 		} else if err == nil {
 			if existing != nil && existing.held {
@@ -367,6 +370,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 	// call and retry state without falsely reporting a lost takeover.
 	complete := func(lost bool, cause error) {
 		p.completeTakeover(source, c, pending.lease, &res, lost, cause)
+		outcome = &res
 	}
 
 	for noTargetAttempts := 0; pending.transientResume || pending.attempts < pending.attemptLimit; {
@@ -567,6 +571,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		err = errors.New("counter margin retry budget exhausted")
 	}
 	complete(true, fmt.Errorf("controlplane: takeover resume attempts exhausted: %w", err))
+	return
 }
 
 // completeTakeover runs under the call lock; loss cleanup outlives detector

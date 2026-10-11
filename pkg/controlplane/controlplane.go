@@ -459,25 +459,26 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 			p.mu.Unlock()
 			recovery, cancel := context.WithTimeout(context.Background(), takeoverBudget)
 			defer cancel()
-			p.takeoverLocked(recovery, source, c, lease, res.Start)
+			outcome := p.takeoverLocked(recovery, source, c, lease, res.Start)
 			p.mu.Lock()
 			pending := source.pending[c.id]
-			events := p.recentTakeovers()
-			for i := len(events) - 1; i >= 0; i-- {
-				if events[i].ID == c.id && !events[i].Start.Before(res.Start) {
-					res = events[i]
-					if !res.Lost {
-						releaseTo = target.addr
-						err = nil
-					} else {
-						err = errors.New(res.Error)
-					}
-					break
+			p.mu.Unlock()
+			if outcome != nil {
+				res = *outcome
+				if !res.Lost {
+					releaseTo = target.addr
+					err = nil
+				} else {
+					err = errors.New(res.Error)
 				}
 			}
-			p.mu.Unlock()
 			if pending != nil {
 				return res, fmt.Errorf("controlplane: export uncertain; recovery pending: %w", err)
+			}
+			if outcome == nil {
+				// A concurrent transfer ended recovery without a terminal outcome.
+				// Let move's defer count the failed coordination attempt.
+				recoveryMetrics = false
 			}
 			released = true
 			return res, err
