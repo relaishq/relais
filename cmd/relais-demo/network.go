@@ -41,7 +41,11 @@ func relayArgs(cfg config) []string {
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	return []string{"-media", net.JoinHostPort(host, "0"), "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0"}
+	args := []string{"-media", net.JoinHostPort(host, "0"), "-leg", "127.0.0.1:0", "-http", "127.0.0.1:0"}
+	if selectedRelayBuffer(cfg) == "off" {
+		args = append(args, "-buffer-off")
+	}
+	return args
 }
 
 // The key and certificate live only in memory and are new on each startup.
