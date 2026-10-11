@@ -14,6 +14,7 @@ func acquireLease(ctx context.Context, _ bool, cfg relaylease.Config) (commandGu
 		return nil, err
 	}
 	cfg.Process.PID, cfg.Process.Start = id.PID, id.Start
+	cfg.Process.Host, cfg.Process.Namespace, cfg.Process.Executable = id.Host, id.Namespace, id.Executable
 	return relaylease.Acquire(ctx, cfg)
 }
 

@@ -3,9 +3,9 @@
 A relay restart loses every call's media until its sockets and routes recover.
 The standalone `relais-relay` now owns a fenced relay lease. A second instance
 with `-standby` waits without binding sockets and takes over the same public UDP,
-worker-leg UDP and private HTTP addresses after verified process exit or lease expiry. Both processes use
-the same Redis namespace and `-relay-lease` key (default `default`). Each socket
-set needs a distinct key. Standby addresses must have fixed, nonzero ports.
+worker-leg UDP and private HTTP addresses after verified process exit or lease
+expiry. Both processes use the same Redis namespace and `-relay-lease` key
+(default `default`). Each socket set needs a distinct key. Standby addresses must have fixed, nonzero ports.
 Neither UDP socket uses `SO_REUSEPORT`; kernel socket exclusivity remains a
 second defence against simultaneous forwarding.
 
@@ -13,13 +13,14 @@ second defence against simultaneous forwarding.
 
 Memory and Redis implement an independent `RelayLeases` capability with claim,
 renew, transfer, activation, release and read. The owner is a fresh instance token, with a
-monotone epoch, expiry, PID and kernel start time. The relay's keyless
+monotone epoch, expiry, PID, kernel start time, host/PID-namespace markers, and
+the executable device/inode captured when that process starts. The relay's keyless
 `RedisOwners` capability gains these metadata operations, not snapshot access.
 Redis uses one atomic Lua script and Redis `TIME`; memory uses its lease lock.
 The Redis hash is persistent: expiry must not erase fencing evidence or reset an
 epoch. Keep namespaces and keys stable while old processes can exist. Do not
-share a relay key across hosts. A missing hash can be re-created by renewal
-when no successor is recorded: restore the same holder and epoch, with the
+share a relay key across hosts or PID namespaces. A missing hash can be
+re-created by renewal when no successor is recorded: restore the same holder and epoch, with the
 forwarder set to self. An existing different holder or newer epoch rejects
 renewal. An older epoch for the same holder is repaired without decreasing the
 relay's epoch. A claim racing re-creation still has one atomic winner; a losing
@@ -28,20 +29,31 @@ an NTP step on the Redis host shifts lease expiry.
 
 Takeover follows this order:
 
-1. Read the lease and observe both its holder and last possible forwarder with
-   the same kernel identity checks used for fencing, without sending a signal.
+1. Read the lease and validate every recorded predecessor's host and PID
+   namespace before interpreting local PIDs. A foreign or missing scope marker
+   is a configuration error: refuse the claim, log loudly with the process-local
+   `configuration_errors_total` counter, and exit without signalling or binding.
+   Both stores repeat this check inside every claim transaction, preventing a
+   foreign record from racing the last read. Scope changes also invalidate a
+   dead-holder claim's identity comparison.
+   Then observe both holder and last possible forwarder with the same kernel
+   identity checks used for fencing, without a terminating signal.
    If both are verifiably gone, claim immediately, bypassing expiry and recovery
    grace. `ClaimDeadRelay` atomically checks the observed epoch, holder,
    forwarder and previous-holder evidence before advancing the epoch. A changed
    record rejects the claim and requires fresh observations. A renewal changing
    only expiry does not resurrect a dead process; it may complete before the
    claim, but renewals of the replaced epoch are rejected afterwards.
-   Otherwise, observe the same expired holder and epoch on two polls separated
-   by at least one renewal interval, then make an ordinary expired-lease claim.
+   Otherwise, a candidate with continuous store access may claim an expired
+   tenure immediately. Only a candidate that itself failed a store operation
+   within the last TTL observes the same expired holder and epoch on two polls
+   separated by at least one renewal interval. The same recovery grace applies
+   to a missing hash after that candidate reconnects, giving the active time to
+   re-create its tenure. A missing hash with continuous access needs no grace.
    The store reports expiry using its own clock; a client's wall clock never
    authorizes a claim. A live tenure, changed holder/epoch, or failed read resets
-   that grace observation. Bootstrap and an explicitly released tenure can be
-   claimed immediately. An uncertain store result never permits signalling or
+   that grace observation. An explicitly released tenure can be claimed
+   immediately. An uncertain store result never permits signalling or
    binding. Repeating a claim for the identical process identity settles it
    idempotently if that tenure still exists.
 2. Start renewing the new tenure, including during fencing and route restore.
@@ -52,11 +64,14 @@ Takeover follows this order:
    requires Linux 5.3+ and working
    pidfd syscalls; refusal or unavailable checks fail closed. macOS retains its
    PID/start-time query and signal path, rechecking identity after its executable
-   lookup. Before signalling, require the target executable to have the same
-   inode as our own: Linux checks `/proc/<pid>/exe`; macOS obtains the kernel
-   executable vnode path with
-   [`PROC_PIDPATHINFO`](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/proc_info.c). This requires both cooperating
-   relays to run the same executable artifact, including during upgrades.
+   lookup. Before signalling, compare the target executable against **its
+   recorded** device/inode, not the candidate's executable. Linux stats
+   `/proc/<pid>/exe`, including a deleted old inode. macOS finds the main
+   executable path with `PROC_PIDPATHINFO` and reads its mapped vnode device/inode
+   using [`PROC_PIDREGIONPATHINFO2`](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/proc_info.c).
+   It does not stat that path, which could already refer to the replacement
+   binary. A standby running an upgraded inode can therefore fence a stalled
+   older relay, while an unexpected executable change still fails closed.
    Then send `SIGKILL` and wait for exit. A zombie confirms exit of the
    inspected task;
    it does not prove that all shared socket references have drained. Linux reads
@@ -92,9 +107,12 @@ The dead-holder check applies to both plain startup and every standby poll.
 ESRCH, a zombie, or a start-time/boot-ID mismatch proves the recorded process
 exited. No executable lookup is possible or needed for an absent/reused/dead
 identity; a matching live identity undergoes the executable check and a second
-identity read. Linux uses the pinned pidfd throughout. A stopped process remains
+identity read. Linux uses the pinned pidfd throughout. If a `/proc` identity
+read fails, recheck the pidfd and probe it with signal 0; an unreadable/hidden
+entry for a still-live process is an error, not proof of exit. A stopped process remains
 live and does not qualify. EPERM, a failed executable check, or an unconfirmable
-state also does not qualify; the candidate keeps the expiry-and-grace path.
+state also does not qualify; the candidate keeps the normal expiry path,
+including recovery grace only if that candidate recently lost store access.
 Both holder and forwarder must qualify, so a dead pending claimant cannot hide a
 live predecessor. The normal post-claim fencing, activation and exclusive binds
 still run before media starts, including the bounded zombie socket-release wait.
@@ -103,15 +121,17 @@ A plain restart is expected to claim on its first successful startup observation
 of the dead holder, without a TTL or grace delay. A standby normally detects a
 SIGKILLed holder by its next poll, about 100 ms with defaults. Socket/route startup
 and worker re-registration add time to both paths. A SIGSTOPed or live holder
-retains the expiry, grace and verified SIGKILL path. These are expected decision
+retains the expiry and verified SIGKILL path, with recovery grace only after a
+candidate-side store failure. These are expected decision
 timings, not a caller-gap guarantee on a loaded host or slow store.
 
 Defaults are a **600 ms lease**, **200 ms renewal**, and **100 ms claim poll**.
-A holder whose exit is not verified needs a further 200 ms expiry recovery
-grace, so frozen-holder failure
-recognition can take about 900 ms with poll rounding. This reduces the time
-left for fencing, route restore and worker re-registration within the one-second
-caller budget. These are configurable with `-relay-lease-ttl`,
+With continuous store access, frozen-holder recognition takes up to about
+700 ms with poll rounding. A candidate-side store failure within the last TTL
+adds a 200 ms recovery grace, taking recognition up to about 900 ms. A partition
+seen only by the active does not earn grace: the connected candidate can fence
+it after expiry. Fencing, route restore, and worker registration still need to
+fit within the one-second caller budget. These are configurable with `-relay-lease-ttl`,
 `-relay-lease-renew` and
 `-relay-lease-poll`; renewal must be positive and shorter than the lease. Loaded
 hosts, a slow store or a large route scan can exceed the measured loopback gap.
@@ -132,9 +152,10 @@ unreachable the active relay keeps forwarding existing routes; failed owner
 lookups and persistence retain their existing ADR 0003 behaviour. The standby
 cannot claim or activate, does not signal the active process, and does not bind.
 While renewal fails, retry it every 50 ms (or the configured renewal interval
-if shorter). After Redis recovers, the two-poll recovery grace gives the healthy
-active time to renew before a standby can claim an expired tenure. This favors
-recovery but does not promise that a stalled active wins; the atomic claim or
+if shorter). After a candidate's own store access recovers, its two-poll grace
+gives the healthy active time to renew or re-create a missing hash before that
+candidate claims. A candidate that never lost store access does not add grace.
+This favors recovery but does not promise that a stalled active wins; the atomic claim or
 renewal still decides ownership. There is no takeover without a successful
 lease decision.
 
@@ -144,7 +165,7 @@ process identities and expires the tenure while retaining its epoch. A plain
 restart can claim it immediately, without waiting for the old TTL or recovery
 grace. A stale release cannot erase a successor. A crash or failed release
 retains fencing evidence; verified exit permits the fast claim, while unknown
-exit retains the expiry-and-grace path.
+exit retains the normal expiry path with candidate-side recovery grace.
 
 ## Evidence and limits
 
@@ -195,9 +216,29 @@ PID. Command tests also require plain restart and a waiting standby to become
 ready within 500 ms after SIGKILL despite a 3 s lease, and prove a stopped holder
 is not claimed early. Unit tests cover EPERM/unknown exit, a changed holder during
 the identity check, a dead holder with a live forwarder, and the claim/renew race
-in both stores. Unit tests
-cover both stores, competing claims, interrupted claimants, expired activation,
+in both stores. Regressions also cover candidate-side recovery versus an
+active-only partition, missing-hash re-creation during recovery grace, foreign
+host/namespace refusal before any claim, atomic store scope checks, Linux
+hidden identity reads, and an upgraded executable fencing a stopped old relay.
+The upgrade and foreign-scope paths run through real command/Redis tests.
+Unit tests cover both stores, competing claims, interrupted claimants, expired activation,
 identity/signalling failures, and a stopped child killed by the identity helper.
+
+Linux host scope uses `/etc/machine-id`, falling back to
+`/var/lib/dbus/machine-id`, plus the device/inode of `/proc/self/ns/pid`.
+macOS uses the machine UUID from
+[`gethostuuid`](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/sys_generic.c)
+and one host PID namespace. `kern.uuid` is the
+[kernel build UUID](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_sysctl.c),
+so it cannot distinguish machines running the same kernel. Linux boot IDs remain
+in the start identity: a different valid boot ID on the same machine proves the
+old namespace and process cannot survive, even if its namespace inode changed.
+Different namespaces in the same boot are foreign. An occupied legacy lease
+without scope markers is unverifiable and refused. A graceful old-version
+release clears those identities and permits the new record format. After a
+crash, verify that all old relays have stopped before a deliberate lease-key
+migration. Do not erase an old record while its process may still forward. The host marker assumes machine IDs are
+unique; cloned installations must not share a relay key.
 
 This design is for cooperating relay binaries on one Linux or macOS host, with
 permission to terminate one another, and a store whose acknowledged lease

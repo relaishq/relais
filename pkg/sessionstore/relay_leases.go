@@ -3,15 +3,37 @@ package sessionstore
 import (
 	"context"
 	"errors"
+	"github.com/relais/internal/processidentity"
 	"time"
 )
 
 // RelayProcess identifies a same-host process. Owner is a fresh instance token;
 // Start is the kernel process start time, not a wall-clock estimate.
 type RelayProcess struct {
-	Owner string `json:"owner"`
-	PID   int    `json:"pid"`
-	Start string `json:"start"`
+	Owner      string `json:"owner"`
+	PID        int    `json:"pid"`
+	Start      string `json:"start"`
+	Host       string `json:"host"`
+	Namespace  string `json:"pid_namespace"`
+	Executable string `json:"executable"`
+}
+
+func (p RelayProcess) Identity() processidentity.Identity {
+	return processidentity.Identity{PID: p.PID, Start: p.Start, Host: p.Host, Namespace: p.Namespace, Executable: p.Executable}
+}
+
+// Compare scope inside the claim transaction as well as before kernel probes.
+// This prevents a foreign record racing the candidate's last store read.
+func relayScope(p RelayProcess, l RelayLease) error {
+	for _, target := range []RelayProcess{l.Holder, l.Forwarder, l.PreviousHolder} {
+		if target == (RelayProcess{}) {
+			continue
+		}
+		if err := processidentity.SameScope(p.Identity(), target.Identity()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RelayLease retains the last possible forwarder even while a new holder is
@@ -46,7 +68,7 @@ type RelayLeases interface {
 }
 
 func validRelay(key string, p RelayProcess, ttl time.Duration) bool {
-	return key != "" && p.Owner != "" && p.PID > 0 && p.Start != "" && ttl >= time.Millisecond
+	return key != "" && p.Owner != "" && p.PID > 0 && p.Start != "" && p.Host != "" && p.Namespace != "" && p.Executable != "" && ttl >= time.Millisecond
 }
 func sameRelay(a, b RelayLease) bool {
 	return a.Key == b.Key && a.Holder == b.Holder && a.Epoch == b.Epoch
@@ -98,6 +120,11 @@ func (m *Memory) changeRelay(ctx context.Context, op string, expected RelayLease
 	defer m.mu.Unlock()
 	l, ok := m.relayLeases[expected.Key]
 	now := time.Now()
+	if op == "claim" || op == "claim_dead" {
+		if err := relayScope(p, l); err != nil {
+			return RelayLease{}, err
+		}
+	}
 	if op == "claim_dead" {
 		if !ok || !sameRelay(l, expected) || l.Forwarder != expected.Forwarder || l.PreviousHolder != expected.PreviousHolder {
 			return RelayLease{}, ErrLeaseLost

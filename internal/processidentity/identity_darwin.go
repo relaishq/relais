@@ -3,6 +3,7 @@ package processidentity
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"golang.org/x/sys/unix"
@@ -24,8 +25,11 @@ func inspect(pid int) (string, bool, error) {
 }
 
 func fencePlatform(ctx context.Context, id Identity) error {
+	if err := localScope(id); err != nil {
+		return err
+	}
 	return fence(ctx, id, inspect, func(pid int) error {
-		if err := verifyExecutable(pid); err != nil {
+		if err := verifyRecordedExecutable(pid, id.Executable); err != nil {
 			return err
 		}
 		// macOS has no pidfd. Recheck start time after the executable lookup.
@@ -47,12 +51,8 @@ func fencePlatform(ctx context.Context, id Identity) error {
 // path, not argv[0] or the mutable kern.procargs2 user stack.
 func processPath(pid int) (string, error) {
 	buf := make([]byte, 4096)
-	// x/sys has no libSystem proc_pidpath wrapper. Keep this kernel vnode
-	// lookup available without CGO, rather than trusting mutable argv data.
-	//nolint:staticcheck // SA1019: the required proc_info wrapper is not exposed by x/sys.
-	_, _, errno := unix.Syscall6(unix.SYS_PROC_INFO, 2, uintptr(pid), 11, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-	if errno != 0 {
-		return "", errno
+	if _, err := procInfo(pid, 11, 0, buf); err != nil {
+		return "", err
 	}
 	end := bytes.IndexByte(buf, 0)
 	if end <= 0 {
@@ -61,17 +61,66 @@ func processPath(pid int) (string, error) {
 	return string(buf[:end]), nil
 }
 
-func verifyExecutable(pid int) error {
-	target, err := processPath(pid)
-	if err != nil {
-		return err
-	}
-	self, err := processPath(os.Getpid())
-	if err != nil {
-		return err
-	}
-	return sameExecutable(target, self)
-}
 func gonePlatform(ctx context.Context, id Identity) (bool, error) {
-	return gone(ctx, id, inspect, verifyExecutable)
+	if err := localScope(id); err != nil {
+		return false, err
+	}
+	return gone(ctx, id, inspect, func(pid int) error { return verifyRecordedExecutable(pid, id.Executable) })
+}
+
+func procInfo(pid, flavor int, address uint64, buf []byte) (int, error) {
+	// x/sys does not expose proc_pidinfo. Read kernel vnode data without CGO.
+	//nolint:staticcheck // SA1019: the required proc_info wrapper is not exposed by x/sys.
+	n, _, errno := unix.Syscall6(unix.SYS_PROC_INFO, 2, uintptr(pid), uintptr(flavor), uintptr(address), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if errno != 0 {
+		return 0, errno
+	}
+	return int(n), nil
+}
+func scopePlatform() (string, string, error) {
+	var uuid [16]byte
+	timeout := unix.Timespec{Sec: 1}
+	// kern.uuid is the kernel build UUID. gethostuuid reads the machine UUID.
+	//nolint:staticcheck // SA1019: x/sys has no gethostuuid wrapper.
+	_, _, errno := unix.Syscall(unix.SYS_GETHOSTUUID, uintptr(unsafe.Pointer(&uuid[0])), uintptr(unsafe.Pointer(&timeout)), 0)
+	if errno != 0 {
+		return "", "", errno
+	}
+	if uuid == ([16]byte{}) {
+		return "", "", errors.New("empty Darwin host UUID")
+	}
+	return fmt.Sprintf("darwin:%x", uuid), "darwin", nil
+}
+func executableIdentity(pid int) (string, error) {
+	path, err := processPath(pid)
+	if err != nil {
+		return "", err
+	}
+	// proc_regionwithpathinfo: regioninfo(96), vnode_info(152), path(1024).
+	// Read the mapped vnode, not stat(path), which can resolve an upgraded file.
+	buf := make([]byte, 1272)
+	var address uint64
+	for range 128 {
+		n, err := procInfo(pid, 22, address, buf) // PROC_PIDREGIONPATHINFO2: mapped vnodes only.
+		if err != nil {
+			return "", err
+		}
+		if n != len(buf) {
+			return "", errors.New("short Darwin region vnode reply")
+		}
+		end := bytes.IndexByte(buf[248:], 0)
+		if end >= 0 && string(buf[248:248+end]) == path {
+			dev, ino := binary.LittleEndian.Uint32(buf[96:]), binary.LittleEndian.Uint64(buf[104:])
+			if ino == 0 {
+				return "", errors.New("empty Darwin executable vnode")
+			}
+			return fmt.Sprintf("%x:%x", dev, ino), nil
+		}
+		next := binary.LittleEndian.Uint64(buf[80:]) + binary.LittleEndian.Uint64(buf[88:])
+		if next <= address {
+			break
+		}
+		address = next
+	}
+	return "", errors.New("cannot find Darwin executable vnode")
 }

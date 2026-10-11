@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/clusterprocess"
+	"github.com/relais/internal/processidentity"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/controlplane"
 	"github.com/relais/pkg/sessionstore"
@@ -66,6 +68,10 @@ func startCommand(t *testing.T, addr, prefix string, args ...string) *clusterpro
 	t.Helper()
 	binary, err := os.Executable()
 	require.NoError(t, err)
+	return startCommandBinary(t, binary, addr, prefix, args...)
+}
+func startCommandBinary(t *testing.T, binary, addr, prefix string, args ...string) *clusterprocess.Child {
+	t.Helper()
 	// The race runtime otherwise adds a 1s successful-exit sleep, obscuring
 	// the real command's graceful release and shutdown budget.
 	env := append(os.Environ(), "RELAIS_W43_COMMAND_HELPER=1", "GORACE="+os.Getenv("GORACE")+" atexit_sleep_ms=0")
@@ -74,6 +80,68 @@ func startCommand(t *testing.T, addr, prefix string, args ...string) *clusterpro
 	require.NoError(t, err)
 	t.Cleanup(c.Stop)
 	return c
+}
+
+func TestCommandUpgradedStandbyFencesStoppedRelay(t *testing.T) {
+	s, addr, prefix := commandStore(t)
+	binary, err := os.Executable()
+	require.NoError(t, err)
+	data, err := os.ReadFile(binary)
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "relay")
+	require.NoError(t, os.WriteFile(path, data, 0700))
+	active := startCommandBinary(t, path, addr, prefix)
+	ready := readyCommand(t, active)
+	old, err := s.GetRelay(context.Background(), "default")
+	require.NoError(t, err)
+	require.NotEmpty(t, old.Holder.Host)
+	require.NotEmpty(t, old.Holder.Namespace)
+	require.NotEmpty(t, old.Holder.Executable)
+	require.NoError(t, active.SignalGroup(syscall.SIGSTOP))
+	t.Cleanup(func() { _ = active.SignalGroup(syscall.SIGKILL) })
+	require.NoError(t, os.WriteFile(path+".new", data, 0700))
+	require.NoError(t, os.Rename(path+".new", path))
+	next := startCommandBinary(t, path, addr, prefix, "-standby", "-media", ready.Media, "-leg", ready.Leg, "-http", strings.TrimPrefix(ready.HTTP, "http://"))
+	readyCommand(t, next)
+	current, err := s.GetRelay(context.Background(), "default")
+	require.NoError(t, err)
+	require.NotEqual(t, old.Holder.Executable, current.Holder.Executable)
+	require.Greater(t, current.Epoch, old.Epoch)
+	select {
+	case <-active.Done():
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("stopped old executable was not reaped after replacement readiness")
+	}
+}
+func TestCommandForeignScopeRefusesClaim(t *testing.T) {
+	for _, field := range []string{"host", "namespace"} {
+		t.Run(field, func(t *testing.T) {
+			s, addr, prefix := commandStore(t)
+			target, err := clusterprocess.Start(t.TempDir(), "target", os.Environ(), "sleep", "30")
+			require.NoError(t, err)
+			t.Cleanup(target.Stop)
+			p := commandIdentity(t, "foreign", target.PID(), "unseen-start")
+			if field == "host" {
+				p.Host = "another-host"
+			} else {
+				p.Namespace = "another-namespace"
+			}
+			l, err := s.ClaimRelay(context.Background(), "default", p, time.Millisecond)
+			require.NoError(t, err)
+			time.Sleep(3 * time.Millisecond)
+			c := startCommand(t, addr, prefix)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err = c.Ready(ctx)
+			require.Error(t, err)
+			require.ErrorContains(t, err, "configuration_error configuration_errors_total=1")
+			current, err := s.GetRelay(context.Background(), "default")
+			require.NoError(t, err)
+			require.Equal(t, l.Epoch, current.Epoch)
+			require.Equal(t, p, current.Holder)
+			require.NoError(t, target.SignalGroup(0))
+		})
+	}
 }
 func readyCommand(t *testing.T, c *clusterprocess.Child) clusterprocess.Ready {
 	t.Helper()
@@ -96,7 +164,7 @@ func TestCommandMismatchedIdentityRecoversWithoutSignalling(t *testing.T) {
 	target, err := clusterprocess.Start(t.TempDir(), "target", os.Environ(), "sleep", "30")
 	require.NoError(t, err)
 	t.Cleanup(target.Stop)
-	l, err := s.ClaimRelay(context.Background(), "default", sessionstore.RelayProcess{Owner: "target", PID: target.PID(), Start: "mismatched-start"}, 30*time.Millisecond)
+	l, err := s.ClaimRelay(context.Background(), "default", commandIdentity(t, "target", target.PID(), "mismatched-start"), 30*time.Millisecond)
 	require.NoError(t, err)
 	_, err = s.ActivateRelay(context.Background(), l)
 	require.NoError(t, err)
@@ -124,7 +192,7 @@ func TestCommandSelfFencesOnObservedSuccessor(t *testing.T) {
 	l, err := s.GetRelay(context.Background(), "default")
 	require.NoError(t, err)
 	require.Equal(t, status.Instance, l.Holder.Owner)
-	_, err = s.TransferRelay(context.Background(), l, sessionstore.RelayProcess{Owner: "successor", PID: 42, Start: "test-start"}, time.Second)
+	_, err = s.TransferRelay(context.Background(), l, commandIdentity(t, "successor", 42, "test-start"), time.Second)
 	require.NoError(t, err)
 	select {
 	case <-c.Done():
@@ -389,7 +457,7 @@ func TestCommandLeaseLossCancelsBindWait(t *testing.T) {
 		l, err = s.GetRelay(context.Background(), "default")
 		return err == nil && l.Forwarder == l.Holder
 	}, time.Second, 10*time.Millisecond)
-	_, err = s.TransferRelay(context.Background(), l, sessionstore.RelayProcess{Owner: "successor", PID: 42, Start: "test-start"}, time.Second)
+	_, err = s.TransferRelay(context.Background(), l, commandIdentity(t, "successor", 42, "test-start"), time.Second)
 	require.NoError(t, err)
 	select {
 	case <-c.Done():
@@ -544,4 +612,11 @@ func TestCommandStoppedHolderCannotClaimImmediately(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, old.Holder, current.Holder)
 	require.NoError(t, active.SignalGroup(0), "stopped holder must not be killed before expiry")
+}
+
+func commandIdentity(t *testing.T, owner string, pid int, start string) sessionstore.RelayProcess {
+	t.Helper()
+	id, err := processidentity.Current()
+	require.NoError(t, err)
+	return sessionstore.RelayProcess{Owner: owner, PID: pid, Start: start, Host: id.Host, Namespace: id.Namespace, Executable: id.Executable}
 }

@@ -2,6 +2,8 @@ package sessionstore
 
 import (
 	"context"
+	"github.com/relais/internal/processidentity"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -11,7 +13,63 @@ import (
 )
 
 func relayProcess(owner string) RelayProcess {
-	return RelayProcess{Owner: owner, PID: 42, Start: "kernel-start"}
+	return RelayProcess{Owner: owner, PID: 42, Start: "kernel-start", Host: "test-host", Namespace: "test-namespace", Executable: "test-executable"}
+}
+
+func TestRelayClaimRejectsForeignScopeAtomically(t *testing.T) {
+	forStores(t, func(t *testing.T, newStore func(*testing.T) Store) {
+		s := newStore(t).(RelayLeases)
+		ctx := context.Background()
+		for _, field := range []string{"host", "namespace", "forwarder"} {
+			t.Run(field, func(t *testing.T) {
+				old := relayProcess("old")
+				if field == "namespace" {
+					old.Namespace = "foreign-namespace"
+				} else {
+					old.Host = "foreign-host"
+				}
+				l, err := s.ClaimRelay(ctx, field, old, time.Second)
+				require.NoError(t, err)
+				if field == "forwarder" {
+					l, err = s.ActivateRelay(ctx, l)
+					require.NoError(t, err)
+					l, err = s.TransferRelay(ctx, l, relayProcess("pending"), time.Millisecond)
+					require.NoError(t, err)
+				} else {
+					l, err = s.RenewRelay(ctx, l, time.Millisecond)
+					require.NoError(t, err)
+				}
+				time.Sleep(3 * time.Millisecond)
+				_, err = s.ClaimRelay(ctx, field, relayProcess("candidate"), time.Second)
+				require.ErrorIs(t, err, processidentity.ErrForeignScope, "ordinary claim must check the record inside its transaction")
+				_, err = s.ClaimDeadRelay(ctx, l, relayProcess("candidate"), time.Second)
+				require.ErrorIs(t, err, processidentity.ErrForeignScope)
+				current, err := s.GetRelay(ctx, field)
+				require.NoError(t, err)
+				require.Equal(t, l.Epoch, current.Epoch)
+				require.Equal(t, l.Holder, current.Holder)
+			})
+		}
+	})
+}
+func TestRelayClaimSameMachinePreviousBootDifferentNamespace(t *testing.T) {
+	forStores(t, func(t *testing.T, newStore func(*testing.T) Store) {
+		s := newStore(t).(RelayLeases)
+		old, candidate := relayProcess("old"), relayProcess("candidate")
+		old.Start = "12345678-1234-1234-1234-123456789abc:42"
+		candidate.Start = "87654321-1234-1234-1234-123456789abc:42"
+		candidate.Namespace = "new-boot-namespace"
+		l, err := s.ClaimRelay(context.Background(), "one", old, time.Second)
+		require.NoError(t, err)
+		futureBoot := candidate.Start
+		candidate.Start = strings.ToUpper(old.Start)
+		_, err = s.ClaimDeadRelay(context.Background(), l, candidate, time.Second)
+		require.ErrorIs(t, err, processidentity.ErrForeignScope, "case alone does not prove a different boot")
+		candidate.Start = futureBoot
+		next, err := s.ClaimDeadRelay(context.Background(), l, candidate, time.Second)
+		require.NoError(t, err)
+		require.Greater(t, next.Epoch, l.Epoch)
+	})
 }
 func TestRelayLeaseLifecycle(t *testing.T) {
 	forStores(t, func(t *testing.T, newStore func(*testing.T) Store) {

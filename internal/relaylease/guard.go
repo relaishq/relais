@@ -21,6 +21,16 @@ const (
 	RetryRenew   = 50 * time.Millisecond
 )
 
+var configurationErrors atomic.Uint64
+
+// ConfigurationErrorCount includes failures before any sockets are bound.
+func ConfigurationErrorCount() uint64 { return configurationErrors.Load() }
+func configurationError(err error) error {
+	count := configurationErrors.Add(1)
+	log.Printf("relay configuration_error configuration_errors_total=%d; refusing claim and bind: %v", count, err)
+	return err
+}
+
 type Config struct {
 	Store            sessionstore.RelayLeases
 	Key              string
@@ -101,6 +111,12 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 	if cfg.Store == nil || cfg.Key == "" || cfg.Process.Owner == "" || cfg.Process.PID <= 0 || cfg.Process.Start == "" || cfg.TTL < time.Millisecond || cfg.Renew <= 0 || cfg.Renew >= cfg.TTL || cfg.Poll <= 0 {
 		return nil, errors.New("relay lease needs a store, key and 0 < renewal < TTL, poll > 0")
 	}
+	if cfg.Process.Host == "" || cfg.Process.Namespace == "" {
+		return nil, configurationError(processidentity.ErrForeignScope)
+	}
+	if cfg.Process.Executable == "" {
+		return nil, configurationError(processidentity.ErrExecutable)
+	}
 	if cfg.Fence == nil {
 		cfg.Fence = processidentity.Fence
 	}
@@ -116,13 +132,25 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 
 	var observed sessionstore.RelayLease
 	var expiredAt time.Time
+	var lastStoreFailure time.Time
+	var observedMissing bool
 	for {
 		op, cancel := context.WithTimeout(ctx, cfg.Poll)
 		current, readErr := cfg.Store.GetRelay(op, cfg.Key)
 		cancel()
 		claim := errors.Is(readErr, sessionstore.ErrNotFound)
+		missing := claim
+		graceClaim := missing
 		deadClaim := false
 		if readErr == nil {
+			for _, p := range []sessionstore.RelayProcess{current.Holder, current.Forwarder, current.PreviousHolder} {
+				if p == (sessionstore.RelayProcess{}) {
+					continue
+				}
+				if err := processidentity.SameScope(cfg.Process.Identity(), p.Identity()); err != nil {
+					return nil, configurationError(err)
+				}
+			}
 			switch {
 			case current.Holder.Owner == "", current.Holder == cfg.Process:
 				claim = true // bootstrap, graceful release, or settle an uncertain claim
@@ -131,18 +159,20 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 				deadClaim = predecessorsGone(op, current, cfg.Gone)
 				cancel()
 				claim = deadClaim
-				if deadClaim {
-					expiredAt = time.Time{}
-				} else if current.Expired {
-					if expiredAt.IsZero() || current.Epoch != observed.Epoch || current.Holder != observed.Holder {
-						observed, expiredAt = current, time.Now()
-					} else if time.Since(expiredAt) >= cfg.Renew {
-						claim = true
-					}
-				} else {
-					expiredAt = time.Time{}
+				if !deadClaim && current.Expired {
+					claim, graceClaim = true, true
 				}
 			}
+		} else if !missing {
+			lastStoreFailure = time.Now()
+		}
+		// Give the active one renewal interval only when this candidate itself
+		// recently lost store access. Continuous access needs no recovery grace.
+		if graceClaim && !lastStoreFailure.IsZero() && time.Since(lastStoreFailure) < cfg.TTL {
+			if expiredAt.IsZero() || observedMissing != missing || current.Epoch != observed.Epoch || current.Holder != observed.Holder {
+				observed, observedMissing, expiredAt = current, missing, time.Now()
+			}
+			claim = time.Since(expiredAt) >= cfg.Renew
 		} else {
 			expiredAt = time.Time{}
 		}
@@ -158,9 +188,13 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 			if err == nil {
 				break
 			}
+			if errors.Is(err, processidentity.ErrForeignScope) {
+				return nil, configurationError(err)
+			}
 			expiredAt = time.Time{} // a competing tenure or uncertain result resets grace
 		}
-		if err != nil && !errors.Is(err, sessionstore.ErrLeaseHeld) && !errors.Is(err, sessionstore.ErrLeaseLost) {
+		if err != nil && !errors.Is(err, sessionstore.ErrNotFound) && !errors.Is(err, sessionstore.ErrLeaseHeld) && !errors.Is(err, sessionstore.ErrLeaseLost) {
+			lastStoreFailure = time.Now()
 			failures++
 			log.Printf("relay lease claim unavailable; no takeover: %v", err)
 		}
@@ -184,7 +218,7 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 		}
 		seen[p] = true
 		op, stop := context.WithTimeout(owned, cfg.TTL)
-		err = cfg.Fence(op, processidentity.Identity{PID: p.PID, Start: p.Start})
+		err = cfg.Fence(op, p.Identity())
 		stop()
 		if err != nil {
 			g.timing.FencingFailures++
@@ -260,7 +294,7 @@ func predecessorsGone(ctx context.Context, l sessionstore.RelayLease, check func
 		if p == (sessionstore.RelayProcess{}) {
 			continue
 		}
-		id := processidentity.Identity{PID: p.PID, Start: p.Start}
+		id := p.Identity()
 		if seen[id] {
 			continue
 		}

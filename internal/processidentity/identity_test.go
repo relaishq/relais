@@ -1,12 +1,15 @@
 package processidentity
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
@@ -60,12 +63,10 @@ func TestFenceStoppedProcess(t *testing.T) {
 		case <-time.After(time.Second):
 		}
 	})
-	start, _, err := inspect(cmd.Process.Pid)
-	require.NoError(t, err)
 	require.NoError(t, cmd.Process.Signal(syscall.SIGSTOP))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	require.NoError(t, Fence(ctx, Identity{PID: cmd.Process.Pid, Start: start}))
+	require.NoError(t, Fence(ctx, identityForPID(t, cmd.Process.Pid)))
 	// SIGCONT cannot resurrect the fenced process. Do not send to a reaped PID.
 	select {
 	case err := <-done:
@@ -79,7 +80,7 @@ func TestRealMismatchedStartKeepsChildAlive(t *testing.T) {
 	cmd := exec.Command("sleep", "30")
 	require.NoError(t, cmd.Start())
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
-	err := Fence(context.Background(), Identity{PID: cmd.Process.Pid, Start: "wrong"})
+	err := Fence(context.Background(), identityForPIDStart(t, cmd.Process.Pid, "wrong"))
 	require.NoError(t, err)
 	require.NoError(t, cmd.Process.Signal(syscall.Signal(0)))
 }
@@ -214,12 +215,12 @@ func TestFenceUnreapedProcessReleasesSockets(t *testing.T) {
 	require.NoError(t, cmd.Process.Signal(syscall.SIGSTOP))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	require.NoError(t, Fence(ctx, Identity{PID: cmd.Process.Pid, Start: start}))
+	require.NoError(t, Fence(ctx, identityForPID(t, cmd.Process.Pid)))
 	current, dead, err := inspect(cmd.Process.Pid)
 	require.NoError(t, err, "child must still exist without parent reaping")
 	require.Equal(t, start, current)
 	require.True(t, dead, "Fence must return for an unreaped zombie")
-	exited, err := Gone(ctx, Identity{PID: cmd.Process.Pid, Start: start})
+	exited, err := Gone(ctx, identityForPIDStart(t, cmd.Process.Pid, start))
 	require.NoError(t, err)
 	require.True(t, exited, "dead-holder check must recognize an unreaped zombie")
 	bindCtx, stopBind := context.WithTimeout(context.Background(), socketbind.DefaultTimeout)
@@ -261,7 +262,10 @@ func TestFenceMatchingOtherExecutableFailsClosed(t *testing.T) {
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 	start, _, err := inspect(cmd.Process.Pid)
 	require.NoError(t, err)
-	err = Fence(context.Background(), Identity{PID: cmd.Process.Pid, Start: start})
+	id, err := Current()
+	require.NoError(t, err)
+	id.PID, id.Start = cmd.Process.Pid, start
+	err = Fence(context.Background(), id)
 	require.ErrorIs(t, err, ErrExecutable)
 	require.NoError(t, cmd.Process.Signal(syscall.Signal(0)))
 }
@@ -324,4 +328,128 @@ func TestGoneLiveCurrentProcess(t *testing.T) {
 	exited, err = Gone(context.Background(), id)
 	require.NoError(t, err)
 	require.True(t, exited)
+}
+
+func identityForPIDStart(t *testing.T, pid int, start string) Identity {
+	t.Helper()
+	id, err := Current()
+	require.NoError(t, err)
+	id.PID, id.Start = pid, start
+	return id
+}
+func identityForPID(t *testing.T, pid int) Identity {
+	t.Helper()
+	start, _, err := inspect(pid)
+	require.NoError(t, err)
+	id := identityForPIDStart(t, pid, start)
+	id.Executable, err = executableIdentity(pid)
+	require.NoError(t, err)
+	return id
+}
+
+func TestForeignScopeCannotBeGoneOrFenced(t *testing.T) {
+	local, err := Current()
+	require.NoError(t, err)
+	for _, field := range []string{"host", "namespace", "missing"} {
+		t.Run(field, func(t *testing.T) {
+			id := local
+			id.PID, id.Start = 2147483647, "unseen-start"
+			switch field {
+			case "host":
+				id.Host = "another-host"
+			case "namespace":
+				id.Namespace = "another-namespace"
+			case "missing":
+				id.Host = ""
+			}
+			exited, err := Gone(context.Background(), id)
+			require.False(t, exited)
+			require.ErrorIs(t, err, ErrForeignScope)
+			require.ErrorIs(t, Fence(context.Background(), id), ErrForeignScope)
+		})
+	}
+}
+func TestSameMachinePreviousBootIsNotForeignNamespace(t *testing.T) {
+	local := Identity{Host: "same-machine", Namespace: "current-namespace", Start: "12345678-1234-1234-1234-123456789abc:42"}
+	old := Identity{Host: local.Host, Namespace: "old-namespace", Start: "87654321-1234-1234-1234-123456789abc:42"}
+	require.NoError(t, SameScope(local, old))
+	old.Start = local.Start
+	require.ErrorIs(t, SameScope(local, old), ErrForeignScope)
+	old.Start = "unknown:42"
+	require.ErrorIs(t, SameScope(local, old), ErrForeignScope)
+}
+func TestPinnedUnreadableIdentityDoesNotProveExit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		probe error
+		want  bool
+	}{
+		{"hidden live process", nil, false},
+		{"permission denied", syscall.EPERM, false},
+		{"confirmed exit", syscall.ESRCH, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			probes := 0
+			read := func(pid int) (string, bool, error) {
+				return inspectPinnedWith(pid, func(int) (string, bool, error) { return "", false, os.ErrNotExist }, func() error { return nil }, func() error { probes++; return tc.probe })
+			}
+			exited, err := gone(context.Background(), Identity{PID: 42, Start: "old"}, read, func(int) error { t.Fatal("hidden identity cannot reach executable verification"); return nil })
+			require.Equal(t, tc.want, exited)
+			if tc.want {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				require.False(t, errors.Is(err, os.ErrNotExist), "hidden proc entry must not masquerade as confirmed absence")
+			}
+			require.Equal(t, 1, probes)
+		})
+	}
+}
+func TestFenceUpgradedExecutable(t *testing.T) {
+	if os.Getenv("RELAIS_UPGRADE_ACTIVE") == "1" {
+		fmt.Println("UPGRADE_ACTIVE_READY")
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
+	if raw := os.Getenv("RELAIS_UPGRADE_FENCE"); raw != "" {
+		var id Identity
+		require.NoError(t, json.Unmarshal([]byte(raw), &id))
+		self, err := Current()
+		require.NoError(t, err)
+		require.NotEqual(t, id.Executable, self.Executable, "standby must use the replacement inode")
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, Fence(ctx, id), "upgraded standby must fence the recorded old executable")
+		return
+	}
+	data, err := os.ReadFile(os.Args[0])
+	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "relay")
+	require.NoError(t, os.WriteFile(path, data, 0700))
+	active := exec.Command(path, "-test.run=^TestFenceUpgradedExecutable$")
+	active.Env = append(os.Environ(), "RELAIS_UPGRADE_ACTIVE=1", "GORACE=atexit_sleep_ms=0")
+	stdout, err := active.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, active.Start())
+	t.Cleanup(func() { _ = active.Process.Kill(); _ = active.Wait() })
+	scanner := bufio.NewScanner(stdout)
+	require.True(t, scanner.Scan())
+	require.Equal(t, "UPGRADE_ACTIVE_READY", scanner.Text())
+	id := identityForPID(t, active.Process.Pid)
+	require.NoError(t, active.Process.Signal(syscall.SIGSTOP))
+	replacement := path + ".new"
+	require.NoError(t, os.WriteFile(replacement, data, 0700))
+	require.NoError(t, os.Rename(replacement, path))
+	actual, err := executableIdentity(active.Process.Pid)
+	require.NoError(t, err)
+	require.Equal(t, id.Executable, actual, "mapped old inode survives path replacement")
+	recorded, err := json.Marshal(id)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	standby := exec.CommandContext(ctx, path, "-test.run=^TestFenceUpgradedExecutable$")
+	standby.Env = append(os.Environ(), "RELAIS_UPGRADE_FENCE="+string(recorded), "GORACE=atexit_sleep_ms=0")
+	output, err := standby.CombinedOutput()
+	require.NoError(t, err, string(output))
 }

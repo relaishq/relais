@@ -14,7 +14,7 @@ import (
 )
 
 func process(owner string) sessionstore.RelayProcess {
-	return sessionstore.RelayProcess{Owner: owner, PID: 42, Start: "start"}
+	return sessionstore.RelayProcess{Owner: owner, PID: 42, Start: "start", Host: "test-host", Namespace: "test-namespace", Executable: "test-executable"}
 }
 func config(s sessionstore.RelayLeases) Config {
 	return Config{Store: s, Key: "one", Process: process("b"), TTL: 90 * time.Millisecond, Renew: 20 * time.Millisecond, Poll: 5 * time.Millisecond, Gone: func(context.Context, processidentity.Identity) (bool, error) { return false, nil }}
@@ -154,9 +154,9 @@ func TestActivationRetriesAfterFencingWithRenewals(t *testing.T) {
 	require.EqualValues(t, 9, s.activations.Load())
 	require.Positive(t, s.renewals.Load(), "activation retry must keep renewing")
 }
-func TestExpiredEpochNeedsTwoSeparatedPolls(t *testing.T) {
+func TestRecoveredExpiredEpochNeedsTwoSeparatedPolls(t *testing.T) {
 	s := sessionstore.NewMemory()
-	cfg := config(s)
+	cfg := config(&firstReadUnavailable{RelayLeases: s})
 	_, err := s.ClaimRelay(context.Background(), cfg.Key, process("a"), time.Millisecond)
 	require.NoError(t, err)
 	time.Sleep(3 * time.Millisecond)
@@ -166,6 +166,20 @@ func TestExpiredEpochNeedsTwoSeparatedPolls(t *testing.T) {
 	require.NoError(t, err)
 	defer g.Close()
 	require.GreaterOrEqual(t, time.Since(started), cfg.Renew)
+}
+func TestContinuousStoreAccessClaimsExpiredWithoutGrace(t *testing.T) {
+	s := sessionstore.NewMemory()
+	cfg := config(s)
+	cfg.TTL, cfg.Renew = time.Second, 200*time.Millisecond
+	_, err := s.ClaimRelay(context.Background(), cfg.Key, process("a"), time.Millisecond)
+	require.NoError(t, err)
+	time.Sleep(3 * time.Millisecond)
+	cfg.Fence = func(context.Context, processidentity.Identity) error { return nil }
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	g, err := Acquire(ctx, cfg)
+	require.NoError(t, err, "a candidate with no store outage must not add recovery grace")
+	defer g.Close()
 }
 func TestAcquireAllowsOwnPIDOne(t *testing.T) {
 	cfg := config(sessionstore.NewMemory())
@@ -279,7 +293,7 @@ func TestActivationRetryStopsOnLossOrCancellation(t *testing.T) {
 func TestDeadHolderImmediatelyClaimed(t *testing.T) {
 	id, err := processidentity.Current()
 	require.NoError(t, err)
-	old := sessionstore.RelayProcess{Owner: "old-instance", PID: id.PID, Start: "previous:" + id.Start}
+	old := sessionstore.RelayProcess{Owner: "old-instance", PID: id.PID, Start: "previous:" + id.Start, Host: id.Host, Namespace: id.Namespace, Executable: id.Executable}
 	s := sessionstore.NewMemory()
 	l, err := s.ClaimRelay(context.Background(), "one", old, 3*time.Second)
 	require.NoError(t, err)
@@ -289,6 +303,7 @@ func TestDeadHolderImmediatelyClaimed(t *testing.T) {
 	cfg.TTL = 3 * time.Second
 	cfg.Renew = time.Second
 	cfg.Gone = nil
+	cfg.Process.Host, cfg.Process.Namespace, cfg.Process.Executable = id.Host, id.Namespace, id.Executable
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	g, err := Acquire(ctx, cfg)
@@ -384,4 +399,133 @@ func (s *unavailable) ClaimDeadRelay(ctx context.Context, l sessionstore.RelayLe
 		return sessionstore.RelayLease{}, sessionstore.ErrTransient
 	}
 	return s.RelayLeases.ClaimDeadRelay(ctx, l, p, ttl)
+}
+
+type firstReadUnavailable struct {
+	sessionstore.RelayLeases
+	failed bool
+}
+
+func (s *firstReadUnavailable) GetRelay(ctx context.Context, key string) (sessionstore.RelayLease, error) {
+	if !s.failed {
+		s.failed = true
+		return sessionstore.RelayLease{}, sessionstore.ErrTransient
+	}
+	return s.RelayLeases.GetRelay(ctx, key)
+}
+
+func TestActiveOnlyStorePartitionIsFencedWithoutCandidateGrace(t *testing.T) {
+	base := sessionstore.NewMemory()
+	s := &unavailable{RelayLeases: base}
+	activeCfg := config(s)
+	activeCfg.Process = process("a")
+	active, err := Acquire(context.Background(), activeCfg)
+	require.NoError(t, err)
+	defer active.Close()
+	s.offline.Store(true)
+	time.Sleep(activeCfg.TTL + 20*time.Millisecond)
+	require.True(t, active.Allowed())
+	cfg := config(base)
+	cfg.TTL, cfg.Renew = time.Second, 200*time.Millisecond
+	fences := 0
+	cfg.Fence = func(context.Context, processidentity.Identity) error { fences++; return nil }
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	g, err := Acquire(ctx, cfg)
+	require.NoError(t, err, "only the active lost store access; the candidate needs no recovery grace")
+	defer g.Close()
+	require.Equal(t, 1, fences)
+	require.Zero(t, g.Timing().StoreFailures)
+}
+
+type recreatingLease struct {
+	sessionstore.RelayLeases
+	old   sessionstore.RelayLease
+	reads int
+}
+
+func (s *recreatingLease) GetRelay(ctx context.Context, key string) (sessionstore.RelayLease, error) {
+	s.reads++
+	if s.reads == 1 {
+		return sessionstore.RelayLease{}, sessionstore.ErrTransient
+	}
+	if s.reads == 3 {
+		if _, err := s.RenewRelay(ctx, s.old, time.Second); err != nil {
+			return sessionstore.RelayLease{}, err
+		}
+	}
+	return s.RelayLeases.GetRelay(ctx, key)
+}
+func TestRecoveredMissingRecordLetsActiveRecreate(t *testing.T) {
+	s := &recreatingLease{RelayLeases: sessionstore.NewMemory(), old: sessionstore.RelayLease{Key: "one", Holder: process("a"), Epoch: 7}}
+	cfg := config(s)
+	cfg.TTL, cfg.Renew = time.Second, 200*time.Millisecond
+	cfg.Fence = func(context.Context, processidentity.Identity) error {
+		t.Fatal("must give the healthy active time to recreate its lease")
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	g, err := Acquire(ctx, cfg)
+	if g != nil {
+		g.Close()
+	}
+	require.Nil(t, g)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	current, err := s.GetRelay(context.Background(), cfg.Key)
+	require.NoError(t, err)
+	require.Equal(t, s.old.Holder, current.Holder)
+}
+func TestContinuousStoreAccessClaimsMissingWithoutGrace(t *testing.T) {
+	cfg := config(sessionstore.NewMemory())
+	cfg.TTL, cfg.Renew = time.Second, 200*time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	g, err := Acquire(ctx, cfg)
+	require.NoError(t, err)
+	defer g.Close()
+}
+func TestForeignHolderOrForwarderRefusesClaim(t *testing.T) {
+	for _, field := range []string{"host", "namespace", "forwarder"} {
+		t.Run(field, func(t *testing.T) {
+			s := sessionstore.NewMemory()
+			p := process("foreign")
+			if field == "namespace" {
+				p.Namespace = "another-namespace"
+			} else {
+				p.Host = "another-host"
+			}
+			ttl := time.Millisecond
+			if field == "forwarder" {
+				ttl = time.Second
+			}
+			l, err := s.ClaimRelay(context.Background(), "one", p, ttl)
+			require.NoError(t, err)
+			if field == "forwarder" {
+				l, err = s.ActivateRelay(context.Background(), l)
+				require.NoError(t, err)
+				l, err = s.TransferRelay(context.Background(), l, process("pending"), time.Millisecond)
+				require.NoError(t, err)
+			}
+			time.Sleep(3 * time.Millisecond)
+			cfg := config(s)
+			cfg.Gone = func(context.Context, processidentity.Identity) (bool, error) {
+				t.Fatal("foreign scope must be rejected before reading local PIDs")
+				return true, nil
+			}
+			cfg.Fence = func(context.Context, processidentity.Identity) error {
+				t.Fatal("foreign process must never be signalled")
+				return nil
+			}
+			before := ConfigurationErrorCount()
+			g, err := Acquire(context.Background(), cfg)
+			require.Nil(t, g)
+			require.ErrorIs(t, err, processidentity.ErrForeignScope)
+			require.Equal(t, before+1, ConfigurationErrorCount())
+			current, err := s.GetRelay(context.Background(), "one")
+			require.NoError(t, err)
+			require.Equal(t, l.Epoch, current.Epoch)
+			require.Equal(t, l.Holder, current.Holder)
+		})
+	}
 }

@@ -3,23 +3,82 @@ package processidentity
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 )
 
 var ErrExecutable = errors.New("fencing target is not the relay executable")
 var ErrUnsupported = errors.New("standby process fencing requires Linux or macOS")
+var ErrForeignScope = errors.New("relay process host or PID namespace is unverifiable")
 
 type Identity struct {
-	PID   int
-	Start string
+	PID                         int
+	Start                       string
+	Host, Namespace, Executable string
 }
 
 func Current() (Identity, error) {
 	start, _, err := inspect(os.Getpid())
-	return Identity{PID: os.Getpid(), Start: start}, err
+	if err != nil {
+		return Identity{}, err
+	}
+	host, namespace, err := scopePlatform()
+	if err != nil {
+		return Identity{}, err
+	}
+	exe, err := executableIdentity(os.Getpid())
+	return Identity{PID: os.Getpid(), Start: start, Host: host, Namespace: namespace, Executable: exe}, err
+}
+
+// SameScope must run before interpreting a local PID or advancing a lease.
+// A prior boot on the same machine has no surviving namespace or processes.
+func SameScope(local, target Identity) error {
+	if local.Host == "" || target.Host != local.Host || local.Namespace == "" || target.Namespace == "" {
+		return ErrForeignScope
+	}
+	if local.Namespace != target.Namespace && !differentBoot(local.Start, target.Start) {
+		return ErrForeignScope
+	}
+	return nil
+}
+func differentBoot(a, b string) bool {
+	boot := func(start string) string {
+		value, _, ok := strings.Cut(start, ":")
+		if !ok || len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+			return ""
+		}
+		if _, err := hex.DecodeString(strings.ReplaceAll(value, "-", "")); err != nil {
+			return ""
+		}
+		return strings.ToLower(value)
+	}
+	x, y := boot(a), boot(b)
+	return x != "" && y != "" && x != y
+}
+func localScope(id Identity) error {
+	local, err := Current()
+	if err != nil {
+		return err
+	}
+	return SameScope(local, id)
+}
+func verifyRecordedExecutable(pid int, recorded string) error {
+	if recorded == "" {
+		return ErrExecutable
+	}
+	actual, err := executableIdentity(pid)
+	if err != nil {
+		return err
+	}
+	if actual != recorded {
+		return ErrExecutable
+	}
+	return nil
 }
 
 // Fence verifies start time immediately before SIGKILL and waits for exit.
@@ -80,19 +139,25 @@ func fence(ctx context.Context, id Identity, read func(int) (string, bool, error
 	}
 }
 
-func sameExecutable(target, self string) error {
-	a, err := os.Stat(target)
-	if err != nil {
-		return err
+// A missing/hidden /proc entry does not prove exit while the pinned process
+// remains live. Keep this seam shared with production Linux reads for testing.
+func inspectPinnedWith(pid int, read func(int) (string, bool, error), check func() error, signalZero func() error) (string, bool, error) {
+	if err := check(); err != nil {
+		return "", false, err
 	}
-	b, err := os.Stat(self)
-	if err != nil {
-		return err
+	start, dead, readErr := read(pid)
+	if err := check(); err != nil {
+		return "", false, err
 	}
-	if !os.SameFile(a, b) {
-		return ErrExecutable
+	if readErr != nil {
+		if err := signalZero(); errors.Is(err, syscall.ESRCH) {
+			return "", false, syscall.ESRCH
+		} else if err != nil {
+			return "", false, fmt.Errorf("cannot confirm pinned process exit: %v (identity read: %v)", err, readErr)
+		}
+		return "", false, fmt.Errorf("pinned process is live but its identity is unreadable: %v", readErr)
 	}
-	return nil
+	return start, dead, nil
 }
 
 // Gone verifies that the recorded process has exited, without signalling it.

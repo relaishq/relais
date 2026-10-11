@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/relais/internal/processidentity"
 )
 
 // A single persistent hash retains fencing evidence and the monotone epoch.
@@ -21,6 +22,26 @@ local now=tonumber(t[1])*1000+math.floor(tonumber(t[2])/1000)
 local c=redis.call('HMGET',KEYS[1],'holder','epoch','expires','forwarder','previous')
 local function reply() return {1,c[1],c[2],c[3],c[4] or '',c[5] or '',tonumber(c[3])<=now and 1 or 0} end
 if op=='get' then if not c[1] then return {3} end return reply() end
+if op=='claim' or op=='claim_dead' then
+ local candidate=cjson.decode(holder)
+ local function boot(start)
+  local value=string.match(start or '', '^([^:]+):')
+  if not value or #value~=36 or string.sub(value,9,9)~='-' or string.sub(value,14,14)~='-' or string.sub(value,19,19)~='-' or string.sub(value,24,24)~='-' then return nil end
+  local hex=string.gsub(value,'-','')
+  if #hex~=32 or string.find(hex,'[^%x]') then return nil end
+  return string.lower(value)
+ end
+ for _,i in ipairs({1,4,5}) do
+  if c[i] and c[i]~='' then
+   local target=cjson.decode(c[i])
+   if not target.host or target.host=='' or target.host~=candidate.host or not target.pid_namespace or target.pid_namespace=='' then return {4} end
+   if target.pid_namespace~=candidate.pid_namespace then
+    local a,b=boot(target.start),boot(candidate.start)
+    if not a or not b or a==b then return {4} end
+   end
+  end
+ end
+end
 if op=='claim' then
  if c[1]==holder then return reply() end
  if c[1] and tonumber(c[3])>now then return {0} end
@@ -106,6 +127,8 @@ func (r *Redis) relayOperation(ctx context.Context, op string, l RelayLease, p R
 		return RelayLease{}, ErrLeaseLost
 	case 3:
 		return RelayLease{}, ErrNotFound
+	case 4:
+		return RelayLease{}, processidentity.ErrForeignScope
 	}
 	if code != 1 || len(reply) != 7 {
 		return RelayLease{}, errors.New("sessionstore: invalid relay lease reply")

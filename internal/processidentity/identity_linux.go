@@ -44,6 +44,9 @@ func parseStat(stat string) (string, bool, error) {
 // The pidfd pins the signal recipient. Its fdinfo Pid brackets /proc reads,
 // refusing a namespace mismatch and recognizing a reaped pinned process.
 func fencePlatform(ctx context.Context, id Identity) error {
+	if err := localScope(id); err != nil {
+		return err
+	}
 	if id.PID <= 0 || id.Start == "" {
 		return errors.New("invalid fencing target")
 	}
@@ -57,7 +60,7 @@ func fencePlatform(ctx context.Context, id Identity) error {
 	defer func() { _ = unix.Close(fd) }()
 
 	return fence(ctx, id, func(pid int) (string, bool, error) { return inspectPinned(fd, pid) }, func(pid int) error {
-		if err := sameExecutable(fmt.Sprintf("/proc/%d/exe", pid), "/proc/self/exe"); err != nil {
+		if err := verifyRecordedExecutable(pid, id.Executable); err != nil {
 			return err
 		}
 		if err := checkPinned(fd, id.PID); err != nil {
@@ -92,24 +95,17 @@ func checkPidfd(info string, pid int) error {
 func checkPinned(fd, pid int) error {
 	data, err := os.ReadFile(fmt.Sprintf("/proc/self/fdinfo/%d", fd))
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot read pidfd identity: %v", err)
 	}
 	return checkPidfd(string(data), pid)
 }
 func inspectPinned(fd, pid int) (string, bool, error) {
-	if err := checkPinned(fd, pid); err != nil {
-		return "", false, err
-	}
-	start, dead, err := inspect(pid)
-	if err != nil {
-		return "", false, err
-	}
-	if err := checkPinned(fd, pid); err != nil {
-		return "", false, err
-	}
-	return start, dead, nil
+	return inspectPinnedWith(pid, inspect, func() error { return checkPinned(fd, pid) }, func() error { return unix.PidfdSendSignal(fd, 0, nil, 0) })
 }
 func gonePlatform(ctx context.Context, id Identity) (bool, error) {
+	if err := localScope(id); err != nil {
+		return false, err
+	}
 	if id.PID <= 0 || id.Start == "" {
 		return false, errors.New("invalid process identity")
 	}
@@ -125,9 +121,37 @@ func gonePlatform(ctx context.Context, id Identity) (bool, error) {
 	}
 	defer func() { _ = unix.Close(fd) }()
 	return gone(ctx, id, func(pid int) (string, bool, error) { return inspectPinned(fd, pid) }, func(pid int) error {
-		if err := sameExecutable(fmt.Sprintf("/proc/%d/exe", pid), "/proc/self/exe"); err != nil {
+		if err := verifyRecordedExecutable(pid, id.Executable); err != nil {
 			return err
 		}
 		return checkPinned(fd, pid)
 	})
+}
+
+func scopePlatform() (string, string, error) {
+	var machine string
+	for _, path := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			machine = strings.TrimSpace(string(data))
+		}
+		if machine != "" {
+			break
+		}
+	}
+	if machine == "" {
+		return "", "", errors.New("cannot read Linux machine ID")
+	}
+	var ns unix.Stat_t
+	if err := unix.Stat("/proc/self/ns/pid", &ns); err != nil {
+		return "", "", err
+	}
+	return "linux:" + machine, fmt.Sprintf("%x:%x", ns.Dev, ns.Ino), nil
+}
+func executableIdentity(pid int) (string, error) {
+	var stat unix.Stat_t
+	if err := unix.Stat(fmt.Sprintf("/proc/%d/exe", pid), &stat); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x:%x", stat.Dev, stat.Ino), nil
 }

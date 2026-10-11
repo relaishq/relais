@@ -61,8 +61,9 @@ func TestLinuxBootIdentityMakesSameTicksFromOldBootAlreadyFenced(t *testing.T) {
 	require.True(t, strings.HasPrefix(id.Start, strings.TrimSpace(string(boot))+":"))
 	_, ticks, ok := strings.Cut(id.Start, ":")
 	require.True(t, ok)
-	require.NoError(t, Fence(context.Background(), Identity{PID: id.PID, Start: "previous-boot:" + ticks}))
-	exited, err := Gone(context.Background(), Identity{PID: id.PID, Start: "previous-boot:" + ticks})
+	id.Start = "previous-boot:" + ticks
+	require.NoError(t, Fence(context.Background(), id))
+	exited, err := Gone(context.Background(), id)
 	require.NoError(t, err)
 	require.True(t, exited)
 }
@@ -73,4 +74,29 @@ func TestPidfdIdentityRejectsInvalidNamespaceAndRecognizesExit(t *testing.T) {
 	require.Error(t, checkPidfd("Pid:\t43\n", 42))
 	require.Error(t, checkPidfd("Pid:\tbroken\n", 42))
 	require.Error(t, checkPidfd("flags:\t02000002\n", 42))
+}
+func TestLinuxPreviousBootNamespaceCannotSurvive(t *testing.T) {
+	id, err := Current()
+	require.NoError(t, err)
+	_, ticks, ok := strings.Cut(id.Start, ":")
+	require.True(t, ok)
+	id.Start = "00000000-0000-0000-0000-000000000000:" + ticks
+	id.Namespace = "previous-boot-namespace"
+	exited, err := Gone(context.Background(), id)
+	require.NoError(t, err)
+	require.True(t, exited)
+	require.NoError(t, Fence(context.Background(), id))
+}
+func TestLinuxHiddenProcEntryKeepsLivePinnedProcessUnverifiable(t *testing.T) {
+	fd, err := unix.PidfdOpen(os.Getpid(), 0)
+	require.NoError(t, err)
+	defer func() { _ = unix.Close(fd) }()
+	read := func(pid int) (string, bool, error) {
+		return inspectPinnedWith(pid, func(int) (string, bool, error) { return "", false, os.ErrNotExist }, func() error { return checkPinned(fd, pid) }, func() error { return unix.PidfdSendSignal(fd, 0, nil, 0) })
+	}
+	id, err := Current()
+	require.NoError(t, err)
+	exited, err := gone(context.Background(), id, read, func(int) error { return nil })
+	require.Error(t, err)
+	require.False(t, exited)
 }
