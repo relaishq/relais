@@ -73,11 +73,14 @@ func TestEnvelopeFlagDoesNotRelabelUnrelatedLoss(t *testing.T) {
 			source := p.workers["a"]
 			source.pending = map[string]*takeoverState{id: {envelope: true}}
 			res := MoveResult{Kind: "takeover", ID: id, Start: time.Now()}
+			before := checkpointPolicyFromScrape(t, p, "definitive-loss")
 			p.completeTakeover(source, p.calls[id], lease, &res, true, cause)
 			if cause == mediaworker.ErrSequenceBudgetExhausted {
 				require.Equal(t, "definitive-loss", res.CheckpointPolicy)
+				require.Equal(t, before+1, checkpointPolicyFromScrape(t, p, "definitive-loss"))
 			} else {
 				require.Empty(t, res.CheckpointPolicy)
+				require.Equal(t, before, checkpointPolicyFromScrape(t, p, "definitive-loss"))
 			}
 		})
 	}

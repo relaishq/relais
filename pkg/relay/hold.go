@@ -53,6 +53,9 @@ type sessionHold struct {
 	replayTrimmed    map[uint32]uint64
 	replayComplete   bool
 	replayCheckpoint bool
+	replayResult     ReplayResult
+	queuedHigh       map[uint32]uint64
+	replayGeneration uint64
 }
 
 // HoldSession brackets a planned move. Caller packets stop being forwarded
@@ -203,7 +206,25 @@ func (r *Relay) expireHold(h *sessionHold) {
 	}
 
 	r.holdTimeouts.Add(1)
-	r.releaseHold(h, netip.AddrPort{})
+	if h.replay {
+		// An abandoned crash replay has no acknowledged live recipient. End
+		// the gate without flushing old ciphertext to an unadopted/dead leg.
+		r.markReplayExpired(h)
+		r.saveReplay(h)
+		r.discardHold(h)
+	} else {
+		r.releaseHold(h, netip.AddrPort{})
+	}
+}
+
+// discardHold runs under forwardMu. Terminal cleanup never sends its queue.
+func (r *Relay) discardHold(h *sessionHold) {
+	delete(r.holds, h.id)
+	h.timer.Stop()
+	close(h.released)
+	r.heldBytes -= h.bytes
+	r.heldPackets -= len(h.queue)
+	h.queue, h.bytes = nil, 0
 }
 
 // releaseHold runs under forwardMu and sends without routeMu. Re-admitting

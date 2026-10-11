@@ -24,6 +24,13 @@ func TestSnapshotInboundIndexesSeparateOutboundSpace(t *testing.T) {
 	again, err := SnapshotInboundIndexes(raw)
 	require.NoError(t, err)
 	require.EqualValues(t, 7<<16|123, again[42])
+	snap.State.SRTP.Inbound = nil
+	raw, err = json.Marshal(snap)
+	require.NoError(t, err)
+	empty, err := SnapshotInboundIndexes(raw)
+	require.NoError(t, err)
+	require.NotNil(t, empty, "empty checkpoint is prepared, not the relay's null marker")
+	require.Empty(t, empty)
 	_, err = SnapshotInboundIndexes([]byte(`{"Version":0}`))
 	require.Error(t, err)
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/privateapi"
+	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/metrics"
@@ -115,6 +116,7 @@ func (p *Plane) Run(ctx context.Context) error {
 				}
 				if (!w.dead && now.Sub(w.lastHeartbeat) >= p.config.DeadAfter) || (w.dead && !w.recovered) {
 					if !w.dead {
+						p.metrics.detections.Add(1)
 						w.rejoinToken, w.acceptedToken = "", ""
 					}
 					w.dead, w.recovering, w.recovered, w.rejoinReady = true, true, false, false
@@ -196,30 +198,33 @@ func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected tim
 // Its fields are accessed under the call lock; pending membership uses p.mu.
 type takeoverState struct {
 	// Retain completed hang-ups even after End or Status removes live metadata.
-	call               *call
-	lease              sessionstore.Lease
-	candidate          *sessionstore.Lease
-	plannedState       []byte
-	planned            bool
-	held               bool
-	crashMargins       bool
-	routed             netip.AddrPort
-	excluded           map[netip.AddrPort]bool
-	attempts           int
-	attemptLimit       int
-	transientResume    bool
-	resumeState        []byte
-	resumeTarget       *registration
-	checkpointAge      time.Duration
-	snapshotAge        time.Duration
-	checkpointStoredAt time.Time
-	outageStarted      time.Time
-	checkpoint         mediaworker.CheckpointState
-	envelope           bool
-	margin             uint16
-	reserve            uint32
-	rtcpMargin         uint32
-	replayPlan         *relay.ReplayPlan
+	call                    *call
+	lease                   sessionstore.Lease
+	candidate               *sessionstore.Lease
+	plannedState            []byte
+	planned                 bool
+	held                    bool
+	crashMargins            bool
+	routed                  netip.AddrPort
+	excluded                map[netip.AddrPort]bool
+	attempts                int
+	attemptLimit            int
+	transientResume         bool
+	resumeState             []byte
+	resumeTarget            *registration
+	agentFailure            error
+	checkpointAge           time.Duration
+	snapshotAge             time.Duration
+	checkpointStoredAt      time.Time
+	outageStarted           time.Time
+	checkpoint              mediaworker.CheckpointState
+	envelope                bool
+	margin                  uint16
+	reserve                 uint32
+	rtcpMargin              uint32
+	replayPlan              *relay.ReplayPlan
+	replayDuplicationWindow time.Duration
+	replayAnchors           map[uint32]uint64
 }
 
 // Margins cover 100 ms between snapshots + 400 ms without heartbeat + a
@@ -259,7 +264,9 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 }
 
 // takeoverLocked also recovers an ambiguous final export while Move holds c.mu.
-func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *call, listed sessionstore.Lease, detected time.Time) {
+// A non-nil outcome has completed terminal accounting, independent of the
+// bounded status history. Nil means recovery is pending or ownership changed.
+func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *call, listed sessionstore.Lease, detected time.Time) (outcome *MoveResult) {
 	p.mu.Lock()
 	existing := source.pending[c.id]
 	p.mu.Unlock()
@@ -324,6 +331,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 				}
 				p.completeTakeover(source, c, pending.lease, &res, lost,
 					fmt.Errorf("controlplane: pending takeover lease vanished: %w", err))
+				outcome = &res
 			}
 		} else if err == nil {
 			if existing != nil && existing.held {
@@ -367,6 +375,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 	// call and retry state without falsely reporting a lost takeover.
 	complete := func(lost bool, cause error) {
 		p.completeTakeover(source, c, pending.lease, &res, lost, cause)
+		outcome = &res
 	}
 
 	for noTargetAttempts := 0; pending.transientResume || pending.attempts < pending.attemptLimit; {
@@ -399,7 +408,11 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			}
 			noTargetAttempts++
 			if noTargetAttempts == maxResumeAttempts {
-				complete(true, pickErr)
+				cause := pickErr
+				if pending.agentFailure != nil {
+					cause = fmt.Errorf("controlplane: no compatible agent target: %w", pending.agentFailure)
+				}
+				complete(true, cause)
 				return
 			}
 			select {
@@ -468,26 +481,6 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			}
 			return
 		}
-		// Confirmation reuses the already configured gate and exact resume
-		// bytes. A replay reply may be lost after draining and releasing the
-		// gate; rebuilding it here would resend authenticated input to the
-		// same tenure and fail its SRTP replay window.
-		if pending.replayPlan != nil && !pending.transientResume {
-			replay := r.(ReplayRelay)
-			inbound, indexErr := mediaworker.SnapshotInboundIndexes(state)
-			if indexErr != nil {
-				p.unreserve(target)
-				complete(true, indexErr)
-				return
-			}
-			plan, gateErr := replay.BeginReplay(ctx, c.id, source.addr, inbound)
-			if gateErr == nil {
-				pending.replayPlan, pending.held = &plan, true
-			} else {
-				p.unreserve(target)
-				return
-			}
-		}
 		margin, rtcpMargin := p.config.SequenceMargin, p.config.SRTCPIndexMargin
 		if pending.transientResume {
 			margin, rtcpMargin = pending.margin, pending.rtcpMargin
@@ -520,6 +513,32 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			margin, rtcpMargin = decision.margin, decision.rtcpMargin
 			pending.reserve = decision.reserve
 			metrics.CheckpointAge.Observe(pending.checkpointAge.Seconds())
+		}
+		// Only fix the replay filter after metadata validates these exact bytes.
+		// A superseded checkpoint leaves the gate unprepared for a fresh read.
+		if pending.replayPlan != nil {
+			replay := r.(ReplayRelay)
+			inbound, indexErr := mediaworker.SnapshotReplayIndexes(state)
+			if indexErr != nil {
+				p.unreserve(target)
+				complete(true, indexErr)
+				return
+			}
+			anchors, indexErr := mediaworker.SnapshotInboundIndexes(state)
+			if indexErr != nil {
+				p.unreserve(target)
+				complete(true, indexErr)
+				return
+			}
+			pending.replayAnchors = anchors
+			plan, gateErr := replay.BeginReplay(ctx, c.id, source.addr, inbound)
+			if gateErr == nil {
+				pending.replayPlan, pending.held = &plan, true
+				pending.replayDuplicationWindow = max(pending.replayDuplicationWindow, pending.snapshotAge)
+			} else {
+				p.unreserve(target)
+				return
+			}
 		}
 		res.CheckpointAge, res.Checkpoint = pending.checkpointAge, pending.checkpoint
 		res.SnapshotAge, res.CheckpointStoredAt = pending.snapshotAge, pending.checkpointStoredAt
@@ -554,30 +573,54 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		if !pending.planned {
 			pending.plannedState = nil
 		}
-		_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: transferred,
-			Context: ctx, CallerSequenceReserve: pending.reserve, CheckpointAge: pending.checkpointAge, SnapshotAge: pending.snapshotAge, CheckpointStoredAt: pending.checkpointStoredAt, SequenceMargin: margin, SRTCPIndexMargin: rtcpMargin,
-			RelayReplay: pending.replayPlan != nil && pending.replayPlan.Complete})
+		kind := agent.Takeover
+		if pending.planned && !pending.crashMargins {
+			kind = agent.PlannedMove
+		}
+		recovery, canRecoverReplay := target.worker.(ReplayRecoveryWorker)
+		var duplicateWindows []agent.DuplicateWindow
+		if pending.replayPlan != nil {
+			duplicateWindows = agentReplayWindows(pending.replayPlan.Windows, pending.replayAnchors)
+		}
+		_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Kind: kind, InputMayBeDuplicated: len(duplicateWindows) > 0, DuplicateWindows: duplicateWindows, Lease: transferred,
+			Context: ctx, CallerSequenceReserve: pending.reserve, CheckpointAge: pending.checkpointAge, SnapshotAge: pending.snapshotAge, CheckpointStoredAt: pending.checkpointStoredAt, SequenceMargin: margin, SRTCPIndexMargin: rtcpMargin, RelayReplay: pending.replayPlan != nil && pending.replayPlan.Complete && canRecoverReplay})
 		res.Result.Resume += time.Since(started)
 		p.unreserve(target)
 		if err == nil {
 			if pending.replayPlan != nil {
 				replayed, replayErr := r.(ReplayRelay).ReplaySession(ctx, c.id, target.addr)
+				res.Result.DuplicateWindows = deliveredReplayWindows(pending.replayPlan.Windows, replayed.Windows, pending.replayAnchors)
+				res.Result.InputMayBeDuplicated = len(res.Result.DuplicateWindows) > 0
+				if res.Result.InputMayBeDuplicated {
+					res.Result.InputDuplicationWindow = pending.replayDuplicationWindow
+				}
 				res.Result.RelayReplayPackets = replayed.Packets
 				res.Result.RelayReplayDuration = replayed.Duration
-				res.Result.RelayReplayComplete = pending.replayPlan.Complete && replayErr == nil
-				res.Result.HoldExpired = errors.Is(replayErr, relay.ErrHoldExpired)
+				res.Result.RelayReplayComplete = pending.replayPlan.Complete && replayed.Complete && replayErr == nil
+				res.Result.RelayReplayDrops = replayed.Dropped
+				res.Result.RelayReplaySendFailures = replayed.SendFailures
+				res.Result.HoldExpired = replayed.Expired || errors.Is(replayErr, relay.ErrHoldExpired)
 				if replayErr != nil && !res.Result.HoldExpired {
 					pending.transientResume = true
 					return
 				}
+				if pending.replayPlan.Complete && !res.Result.RelayReplayComplete && canRecoverReplay {
+					if err := recovery.RequestKeyframe(ctx, c.id); err != nil {
+						pending.transientResume = true
+						return
+					}
+					res.Result.RelayReplayRecoveryPLI = true
+				}
 				pending.held = false
 			}
 			now := time.Now()
+			c.stateMu.Lock()
 			c.lastMove, c.lastMoveKind = &now, res.Kind
 			c.moveCount++
 			if !pending.planned {
 				c.takeoverCount++
 			}
+			c.stateMu.Unlock()
 			if pending.replayPlan == nil && (pending.planned || pending.held) {
 				held, releaseErr := r.ReleaseSession(c.id, target.addr)
 				res.Result.HeldPackets = held
@@ -586,7 +629,12 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			complete(false, nil)
 			return
 		}
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, privateapi.ErrUncertain) {
+		// Typed adoption failures are definitive even when their callback
+		// cause is a deadline. Match the HTTP worker's agent error mapping.
+		agentFailure := errors.Is(err, agent.ErrRestore) || errors.Is(err, agent.ErrVersion) || errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrSave)
+		if agentFailure {
+			pending.agentFailure = err
+		} else if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, privateapi.ErrUncertain) {
 			pending.transientResume = true
 			return
 		}
@@ -609,6 +657,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		err = errors.New("counter margin retry budget exhausted")
 	}
 	complete(true, fmt.Errorf("controlplane: takeover resume attempts exhausted: %w", err))
+	return
 }
 
 // completeTakeover runs under the call lock; loss cleanup outlives detector
@@ -649,6 +698,32 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 	if record {
 		p.recordTakeover(*res)
 	}
+	metricKind := res.Kind
+	if !lost && c.hungUp.Load() {
+		metricKind = "ended"
+	} else if pending != nil && pending.held && !pending.planned {
+		// Uncertain export uses crash recovery for safety, but its initiating
+		// operation was a move. Preserve status and recovery semantics.
+		metricKind = "move"
+	}
+	switch metricKind {
+	case "takeover":
+		if lost || cause != nil {
+			p.metrics.takeoverErrors.Add(1)
+		} else {
+			p.metrics.takeovers.Add(1)
+		}
+	case "move":
+		if lost || cause != nil {
+			// An immediate rollback failure is counted by move's defer.
+			// Only retained recovery completes a separate attempt here.
+			if pending != nil {
+				p.metrics.moveErrors.Add(1)
+			}
+		} else {
+			p.metrics.moves.Add(1)
+		}
+	}
 	if lost {
 		p.lostCount++
 	}
@@ -687,11 +762,12 @@ func (p *Plane) lose(c *call, lease sessionstore.Lease, planned bool) {
 	p.mu.Lock()
 	r := p.relay
 	p.mu.Unlock()
-	// A lost final export must free its bounded relay hold immediately.
+	// Forget atomically discards held input and the ring before any legacy
+	// release can flush packets to a target that failed to resume.
+	r.ForgetSession(c.id)
 	if planned {
 		_, _ = r.ReleaseSession(c.id, netip.AddrPort{})
 	}
-	r.ForgetSession(c.id)
 	p.forget(c)
 }
 
@@ -780,4 +856,54 @@ func (p *Plane) deleteFrames(id string) {
 // but do not imply that the checkpoint envelope caused the loss.
 func checkpointEnvelopeLoss(err error) bool {
 	return errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) || errors.Is(err, mediaworker.ErrSRTCPIndexExhausted) || errors.Is(err, sessionstore.ErrUnsafeCheckpointClock)
+}
+
+func agentReplayWindows(windows []relay.ReplayWindow, anchors ...map[uint32]uint64) []agent.DuplicateWindow {
+	if len(windows) == 0 {
+		return nil
+	}
+	out := make([]agent.DuplicateWindow, len(windows))
+	for i, window := range windows {
+		first := window.First
+		if len(anchors) > 0 {
+			if high, known := anchors[0][window.SSRC]; known {
+				first = alignReplayIndex(high, uint16(first)) //nolint:gosec // RTP sequence low bits
+			}
+		}
+		out[i] = agent.DuplicateWindow{SSRC: window.SSRC, First: first, Last: first + window.Last - window.First}
+	}
+	return out
+}
+
+// Only ranges selected before resume can repeat the fenced source's work.
+// Later gated live traffic refines the replay result but adds no duplicate risk.
+func deliveredReplayWindows(planned, delivered []relay.ReplayWindow, anchors ...map[uint32]uint64) []agent.DuplicateWindow {
+	var out []relay.ReplayWindow
+	for _, window := range planned {
+		for _, sent := range delivered {
+			if window.SSRC != sent.SSRC {
+				continue
+			}
+			first, last := max(window.First, sent.First), min(window.Last, sent.Last)
+			if first <= last {
+				out = append(out, relay.ReplayWindow{SSRC: window.SSRC, First: first, Last: last})
+			}
+		}
+	}
+	return agentReplayWindows(out, anchors...)
+}
+
+// RFC 3711 half-space inference uses the authenticated transport checkpoint
+// to translate a cold relay's locally counted ROC. The bounded source-rate
+// envelope and ring window keep the selected range within this half-space.
+func alignReplayIndex(high uint64, seq uint16) uint64 {
+	roc, previous := high>>16, uint16(high) //nolint:gosec // RTP sequence low bits
+	if previous < 1<<15 && seq > previous && uint32(seq)-uint32(previous) > 1<<15 {
+		if roc > 0 {
+			roc--
+		}
+	} else if previous >= 1<<15 && previous > seq && uint32(previous)-uint32(seq) > 1<<15 {
+		roc++
+	}
+	return roc<<16 | uint64(seq)
 }

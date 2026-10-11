@@ -13,6 +13,7 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
+	"github.com/relais/pkg/agent"
 )
 
 // packetConn is a worker's media transport: its own UDP socket, or a port on
@@ -450,10 +451,23 @@ func (s *Socket) write(port *socketPort, pkt []byte, to netip.AddrPort) (int, er
 
 // HandoverResult describes a completed planned handover.
 type HandoverResult struct {
-	RelayReplayPackets  int
-	RelayReplayDuration time.Duration
-	RelayReplayComplete bool
-	SessionID           string
+	// InputMayBeDuplicated warns that replay can repeat input processed by
+	// the prior owner after the counter copy. InputDuplicationWindow is its
+	// largest validated snapshot age in this recovery, including copy-to-write
+	// delay. A failed target's newer checkpoint cannot shrink this warning.
+	// Newly gated input was never delivered to the prior owner.
+	DuplicateWindows        []agent.DuplicateWindow
+	InputMayBeDuplicated    bool
+	InputDuplicationWindow  time.Duration
+	RelayReplayPackets      int
+	RelayReplayDuration     time.Duration
+	RelayReplayDrops        int
+	RelayReplaySendFailures int
+	// RelayReplayRecoveryPLI records an accepted worker recovery request.
+	// Emission may wait until the video SSRC is known.
+	RelayReplayRecoveryPLI bool
+	RelayReplayComplete    bool
+	SessionID              string
 
 	// StateBytes is the size of the exported session state, the only thing
 	// that passed from the old worker to the new one.

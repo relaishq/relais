@@ -9,10 +9,16 @@ includes failure detection; this does not make a crash a planned move.
 ## Cache bounds and admission
 
 `relay.Config.Buffer != nil` enables this core protocol. `&relay.BufferConfig{}`
-selects a one-second window, 1 MiB per session, 64 MiB in total, and 16 tracked
-SSRCs per session. Cache-session metadata is capped by the relay's `MaxFlows`.
+selects a 1.5-second window, 1 MiB per session, 64 MiB in total, and 16 tracked
+SSRCs per session. The default time bound is the configured snapshot envelope
+(550 ms), dead-worker window (400 ms), detector tick (50 ms), and transfer
+allowance (500 ms), summed to 1.5 s. `BufferConfig.SnapshotMaxAge`, `DeadAfter`,
+`CheckInterval`, and `TransferAllowance` derive that default; set them to match
+any changed control-plane envelope/detector configuration, or set `Window`
+explicitly. The byte bound can still evict media before the time bound.
+Cache-session metadata is capped by the relay's `MaxFlows`.
 Nil retains phase-1 recovery, so its existing frame-cache/PLI scenarios remain
-independently testable. Standalone wiring and #35 acceptance are described below.
+independently testable. Standalone process wiring and acceptance are #35.
 
 Only confirmed callers may allocate cache or hold memory, as in #6. A pending
 STUN candidate is insufficient. The cache contains caller-to-worker SRTP only,
@@ -30,15 +36,31 @@ No expiry resets a live session's rollover counter. Forget/route cleanup removes
 metadata; a relay restart discards the cache. Empty or incomplete caches retain
 the worker's ordinary frame-cache/PLI path. This cache is not durable storage.
 
-Byte accounting includes ciphertext and relay-header room. Packet/list metadata
-is bounded by that byte budget and the minimum RTP header size. Metadata for
-streams is separately capped. Replay pins retained datagrams in the existing
-hold: per-session bytes are capped by both cache and hold limits, all holds by
-`MaxTotalHeldBytes` (8 MiB by default), and concurrent holds by
-`MaxHeldSessions` (1,024). Pinned references remain accounted even when the cache
-evicts their packets. New held traffic also spends the hold budget. Hold overflow
-retains #6's counted drop-newest policy. Therefore no-loss acceptance requires
-both cache and hold capacity, and successful coordination before the backstop.
+Byte accounting includes ciphertext, relay-header room, and 256 bytes per
+packet for packet/list/queue and allocator overhead. A local GC measurement of
+40,000 tiny RTP arrivals retained 3,640 packets under a 1 MiB account, with about
+1 MB additional heap; the old account retained 32,768 packets and 9.36 MB.
+These are local retained-heap measurements, not a bound on process RSS or
+transient allocation. Metadata for streams is separately capped.
+
+Replay pins retained datagrams in the existing hold. Its per-session byte
+cap is `MaxHeldBytes`. With buffering enabled, that defaults to at least
+`2 × MaxSessionBytes`: 2 MiB for a 1 MiB ring. One ring budget pins history;
+the second leaves room for live traffic gated during resume and replay.
+This is bounded headroom, not a guarantee against a stalled or slower drain.
+The default `MaxTotalHeldBytes` is at least
+`TakeoverParallelism × MaxHeldBytes`: 32 MiB for 16 parallel takeovers with
+2 MiB holds. Set `BufferConfig.TakeoverParallelism` to match the plane's
+configured concurrency. Explicit hold limits override these defaults.
+Phase-1 holds retain their 1 MiB per-session and 8 MiB total defaults.
+`MaxHeldSessions` caps concurrent holds at 1,024. Pinned references remain
+accounted even when the cache evicts their packets. New held traffic also
+spends the hold budget.
+
+Hold overflow retains #6's counted drop-newest policy and makes replay
+incomplete, including live drops after the complete plan was handed to resume.
+No-loss acceptance therefore requires both cache and hold capacity, and
+successful coordination before the backstop.
 
 ## Two SRTP index spaces
 
@@ -47,7 +69,9 @@ Its half-space ROC estimate follows RFC 3711 section 3.3.1. The worker snapshot'
 `SRTP.Inbound[C]` is the highest authenticated caller index. Replay drops every
 packet at or below that value. A relay restored mid-call aligns its observed
 ROC to the checkpoint before filtering; it cannot infer unknown historical
-wraps from a clear 16-bit sequence alone. The existing half-space/rate envelope
+wraps from a clear 16-bit sequence alone. If the first packet of an SSRC arrives
+only after preparation, its index is seeded from that checkpoint before the
+live filter runs. The existing half-space/rate envelope
 still applies. Replay across wraps will get end-to-end failure coverage in #35.
 
 The worker has a different outbound SSRC and sequence space. For an anchored
@@ -57,7 +81,29 @@ margin to `SeqOffset` and its outbound high water mark. This maps an input
 processed again to a fresh outbound encryption index. #9's `ReplayFloor` is an
 outbound floor protecting reserved frame-cache indexes. Neither that floor nor
 the worker's outbound SSRC is a relay checkpoint filter. `SnapshotInboundIndexes`
-returns only the caller map and checks the snapshot version.
+returns the caller transport map and checks the snapshot version.
+
+For custom audio agents, `SnapshotReplayIndexes` instead uses the last consumed
+`Agent.Progress.Index` when it trails audio's transport high water mark. Both
+the application state/progress pair and transport counters come from the same
+metadata-validated snapshot, so no older, separately saved application state is
+substituted. A consumed SSRC mismatch or progress ahead of transport is rejected.
+If the custom agent has consumed no audio, the relay has no audio floor and
+retains all available audio, including caller index zero. Built-in and legacy
+Echo remain synchronous and use the transport floor. Video always uses transport.
+
+The resumed custom audio SRTP context is primed at that same consumed floor,
+rather than the transport high water mark. For a never-consumed stream it starts
+just before the first selected replay index (or stays unprimed at index zero).
+For a cold relay with a never-consumed stream, the transport checkpoint also
+aligns the selected ranges to the caller's actual ROC before the notice reaches
+the worker. This admits queues larger than the 64-packet receive window and across ROC wraps
+without disabling replay protection. Persisted transport high water marks and
+outbound margins remain intact. Source-rate observation uses each authenticated
+input index and original RTP timestamp, including queued input below the saved
+transport high water mark; a compressed 2.4-second replay still measures 50
+Opus packets/s. Cache loss and agent queue overflow are still
+bounded, counted loss; this rule does not make the ring or agent queue durable.
 
 Packets above the checkpoint are delivered at least once across worker tenures,
 including input the dead worker already processed after its last checkpoint.
@@ -65,13 +111,38 @@ Within a target replay, repeated ciphertext indexes are filtered and per-SSRC
 input is ordered, so the new worker never encrypts the same input twice. The
 returned content can repeat even though outbound SRTP indexes never do.
 Timestamps and frame PictureIDs retain their source identity. A receiver must
-handle repeated content; an agent's duplicated-input callback belongs to #39.
+handle repeated content; agent notification integration belongs to #46.
 
 The window is determined by the exact snapshot's inbound map and retained
-packets, rather than an assumed checkpoint cadence. #34's store-clock age seam
-has not landed on this base. Its age metadata and policy must be integrated and
-the age-window acceptance rerun after the orchestrator merges it. Fixed phase-1
-counter margins and the existing resume-attempt budget are retained here.
+packets, rather than an assumed checkpoint cadence. ADR 0002's checkpoint
+metadata is validated against those same bytes before fixing the replay filter.
+Takeover performs one blob read per attempt; a concurrent replacement retries
+with fresh bytes while leaving the gate unprepared. The validated counter copy
+supplies both caller inbound indexes and the scaled margin/reserve decision.
+An unsafe age or counter envelope produces definitive loss without resuming.
+
+The relay plan and result expose per-SSRC `Windows` in caller inbound index
+space. Before any resumed processing, the control plane supplies the selected
+ranges as `ResumeOptions.InputMayBeDuplicated` and `DuplicateWindows`, with the
+same fields on direct and private HTTP paths. No selected media leaves these
+false/empty; planned moves without replay also leave them false/empty. Bounds
+can include gaps and conservatively include input whose prior processing is
+unknown. After drain, the takeover result intersects successful-send ranges
+with the pre-resume plan, so newly gated live input does not extend the duplicate
+warning. The notice cannot be narrowed retroactively after callbacks have begun.
+
+The takeover resume result exposes `InputMayBeDuplicated`, `DuplicateWindows`
+and `InputDuplicationWindow`. The latter retains the largest conservative
+`SnapshotAge` validated in this recovery, bounding the prior owner's post-copy
+processing span. A failed target can persist a newer counter reservation;
+that write cannot shrink the warning while the original input queue survives.
+It includes counter-copy-to-write delay and metadata reply latency; write age
+alone would understate the window after a delayed successful put. This is a time
+span in which replayed input may have been processed, not a count of duplicates
+or a bound on source RTP timestamp age. Newly gated input was never delivered
+to the prior owner. Agents can use this warning without learning media keys.
+The original write time and both ages remain available on the takeover event
+and in the resumed worker's checkpoint observations.
 
 ## Gate and private protocol
 
@@ -79,37 +150,80 @@ After lease transfer, the control plane calls `BeginReplay` with a null inbound
 map to install the gate, then fences the old leg by switching the route. This
 precedes snapshot I/O: a stalled store must not leave the old owner forwarding.
 A dead source needs no drain acknowledgement. The plane then reads the snapshot,
-extracts its inbound map, and calls `BeginReplay` again with that exact map before
-resume. An empty map is valid; null means that the checkpoint is not ready yet.
+validates its bound age metadata and counter envelope, extracts its inbound map,
+and calls `BeginReplay` again with that exact map before resume. An empty map is
+valid; null means that the checkpoint is not ready yet.
 Preparation filters the bounded, pinned queue against the checkpoint. A repeated
-request for the same checkpoint reuses the queue. Replay refuses a gate whose
+request for the same checkpoint reuses the queue. A newer map is accepted only
+when every previous SSRC floor is present and at least as high; preparation
+re-filters against those new floors. A regressed or missing floor is refused.
+Completed replay retains one receipt per buffered session, keyed by source,
+target and checkpoint, plus per-SSRC `replayedThrough` floors. A lost HTTP reply
+returns the original receipt without installing another gate or sending the
+ciphertext again. A fresh gate takes its target from the current route and
+filters against `max(checkpoint, replayedThrough)`. If a different recovery's
+copy predates that through floor, its plan remains incomplete and uses PLI
+recovery. Flow-removal events or explicit forget discard the bounded metadata.
+
+Known limitation, assigned to #35: `replayedThrough` currently applies across
+all later targets and tenures. If A→B replay delivers caller indexes 11–12,
+then B crashes before its checkpoint advances past 10, a B→A takeover filters
+11–12 out. That audio is lost and ordinary PLI fallback runs because the plan
+is incomplete. #35 will key the floor to the receipt's target and tenure;
+this ticket does not implement that change. The at-least-once statement above
+therefore excludes this immediate second-crash case.
+
+Replay refuses a gate whose
 checkpoint has not been supplied. A trimmed index above
 the checkpoint, unavailable ring, metadata limit, or hold overflow marks the
 plan incomplete. A complete plan tells resume to skip old frame-cache pictures
-and proactive PLI, preserving the caller's codec chain. The existing outbound
-margin/budget and frame-cache floor remain in force.
+and proactive PLI, preserving the caller's codec chain. This optimization is
+used only with a worker that can receive a recovery keyframe request. The
+existing outbound margin/budget and frame-cache floor remain in force.
 
 After the target resumes,
 `ReplaySession` drains selected input and new held traffic on the normal private
 UDP leg. The last empty-queue check and hold release share `forwardMu`, so a live
 packet cannot overtake replay and push the 64-packet SRTP receive window past it.
 Other sessions can forward between replay batches. SSRC streams are ordered
-independently while retaining their interleaving slots. Held binding requests
-are admitted again to preserve authenticated consent evidence.
+independently while retaining their interleaving slots. Preparation sorts once;
+late arrivals insert into their SSRC's order, while ordinary arrivals append.
+Each drain batch holds the forwarding lock for O(batch) work and never sorts
+the remaining queue. Empty-session cleanup consumes flow-removal events, so it
+does not scan all buffered sessions under the forwarding lock. Held binding
+requests are admitted again to preserve authenticated consent evidence.
 
 Both operations are available through private HTTP:
 `POST /sessions/{id}/begin-replay` takes source and nullable inbound indexes;
 `POST /sessions/{id}/replay` takes the resumed target. Worker resume carries the
 complete-plan flag through its existing private API. Neither relay endpoint
-receives media keys. The existing bounded hold timeout releases abandoned work;
-timeout/drop/send counters must be checked before claiming complete replay.
-Retried HTTP outcomes, failed adoption, a second immediate crash and frame-cache
-coexistence have #35 failure-path coverage described below.
+receives media keys. The bounded hold timeout ends an abandoned replay gate by
+discarding queued ciphertext; it cannot identify an adopted live recipient
+safely. Normal planned-move timeout behavior is unchanged. Every terminal
+takeover loss forgets the session: this atomically discards the gate, held packets
+and ring before any legacy release can flush input to a failed target.
+`ReplayResult` reports `Complete`, `Dropped`, `SendFailures`, and `Expired`,
+including loss after resume. Expiry or any send/drop failure clears completion.
+Context cancellation keeps the queued packets and completeness intact; retrying
+the same lossless hold still tells resume to skip frame-cache/PLI recovery.
+When resume was told the plan was complete but replay later loses packets or
+its hold vanishes (including restart), the plane calls
+`POST /sessions/{id}/keyframe` on the worker. This uses its existing encrypted, rate-bounded PLI path. A plan already known to be incomplete
+uses the worker's ordinary resume recovery and receives no second control-plane
+keyframe request. Unknown video SSRCs keep the request pending until video
+arrives. An uncertain recovery request keeps takeover retryable. The in-process expiry test on both stores observes a worker PLI and
+no receiver PLI, with zero decryption failures. Full real-process restarts,
+failed adoption, a second immediate crash and frame-cache coexistence remain
+#35's acceptance scope.
 
 ## Pacing and spike evidence
 
-Default replay batches contain at most 16 packets or 16 KiB, with one millisecond
-between batches. A single oversized datagram may exceed the batch byte target,
+Default replay uses a shared bucket per target worker, allowing at most 16
+packets or 16 KiB per millisecond across every session replaying to that worker.
+Tokens refill with elapsed time; starting another session cannot reset the
+target's burst allowance. Filtering stale ciphertext happens before token
+admission, so discarded duplicates spend no sender capacity. A single oversized
+datagram may exceed the batch byte target,
 but still spends the bounded cache/hold budget. This restores freshness quickly
 without dumping the entire ring into the worker socket at once. All sender
 timers, HTTP servers, worker actors and test Redis instances are task-owned.
@@ -151,14 +265,26 @@ using their existing source PictureID identity, and require every original frame
 to return and ffmpeg to decode the full unique frame sequence. They do not modify
 the recorder/report/recovery files owned by #32. This proves packet return and
 codec continuity, not a browser jitter buffer's audio playout/concealment policy.
-The new #32 yardstick's first-content, late-delivery, concealment and freshness
-measurements still need a run after its merge.
+The merged #32 yardstick is now used by the strict acceptance test below.
+Its decoded-first-content gate remains failing; these spike measurements do
+not replace that verdict.
+
+The #34 integration tests exercise metadata replacement between the blob read
+and validation, terminal loss with an allocated gate/ring on both stores, and
+compressed replay through the production SRTP decrypt/echo path. That path
+measures caller index advance against original RTP timestamps, not arrival time
+or the outbound margin. Delivering 2.4 source seconds in a burst measured about
+50 packets/s for Opus and 500 packets/s for VP8. No rate estimate is produced
+before two media seconds. Replay therefore does not manufacture an arrival-rate
+peak that would inflate the next checkpoint's safety margin.
 
 ## Failure detection measurement
 
 Keep the 400 ms default. Two real workers per threshold sent their normal
 100 ms heartbeats to three actual control planes concurrently for 120 seconds,
-under the Mac's current shared load. No worker was intentionally stopped. The
+under the Mac's current shared load. These were idle in-process workers, so the
+measurement undercounts false takeovers under active media, process isolation,
+and transport load. No worker was intentionally stopped. The
 observer counted actual rejoin/fence challenges, not predicted timer gaps.
 
 | Dead window | Worker-minutes observed | False takeovers | Per worker-hour equivalent | Largest observed heartbeat gap |
@@ -174,101 +300,111 @@ No faster-detection policy is adopted. Reproduce with
 `RELAIS_DETECTION_SECONDS=120 go test -count=1 -v -run
 '^TestHeartbeatDetectionMeasurement$' ./pkg/controlplane/`.
 
-## Failure paths and standalone acceptance (#35)
+## Main integration and strict acceptance
 
-The standalone `relais-relay` now enables the bounded caller buffer by default.
+The private relay `/metrics` registry exports ring sessions, packets, accounted
+bytes, capacity drops, normal expiry and metadata admission failures. It also
+exports completed drains, replayed/filtered packets, replay admission/expiry
+drops, UDP send failures and replay gate expiry. These have no session labels.
+Move and replay holds share the existing hold gauges; replay-specific loss
+counters exclude planned moves. Scrape tests drive actual UDP forwarding,
+capacity loss, send failure and hold expiry.
+
+`TestAcceptanceRelayBufferTakeover` uses the merged caller yardstick, both
+stores, and `StrictAcceptancePolicy()` without race. Buffer-off controls must
+show positive trusted loss and a requested keyframe. Buffer-on must show zero
+trusted loss, first new decoded outage media, zero decrypt failures and recovered
+freshness over the full stability window. The test retains every strict gate.
+
+Current local integration is partial: both stores show zero buffer-on loss,
+zero decrypt failures and recovered freshness, but the yardstick labels first
+new decoded content `natural keyframe`. Its decoder-chain recorder treats
+repeated pre-crash pictures as a broken chain before fresh outage pictures.
+The unfiltered full decode also stops at a non-monotonic DTS from those repeated
+pictures. The strict first-new-content assertion therefore fails. Recorder
+changes belong to #32 and were not made here; the earlier packet/unique-decode
+evidence above cannot substitute for this gate or prove actual caller decode
+continuity. The table and logs in the rework report record the failed
+classification explicitly. No timing threshold was loosened.
+
+## Standalone wiring and merge verification (#35)
+
+The standalone `relais-relay` enables the bounded caller buffer by default.
 `-buffer-off` restores phase-1 recovery. `-buffer-window`,
 `-buffer-session-bytes`, `-buffer-total-bytes` and `-buffer-ssrcs` expose the
 retention and admission bounds. All bounds must be positive. The core
 `relay.Config.Buffer == nil` behavior remains available to embedded callers.
+The standalone relay retains the fenced lease, standby flags, bind retries
+and private-listener validation from #43.
 
-A lost replay HTTP reply exposed a failure beyond a lost adoption reply:
-replay had already drained the queue and released the gate, but the next
-control-plane attempt rebuilt that gate from the original checkpoint. The
-already adopted worker then received the same authenticated ciphertext again.
-The new real-actor HTTP test reproduced **38 worker decryption failures** on
-memory before the fix. Confirmation now reuses the configured checkpoint and
-resume bytes without calling `BeginReplay` again for the same uncertain tenure.
-A remaining queue resumes from its delivered floor; a missing gate returns
-`ErrHoldExpired`, without rebuffering input already delivered to that tenure.
-The result reports `HoldExpired` and does not claim confirmed complete replay
-when the reply was uncertain. Relay counters still show exactly one replay;
-caller packet return and unique-frame decode establish that it completed.
+A lost replay HTTP reply on the original #35 base reproduced **38 worker
+decryption failures** when confirmation recreated a drained gate. Main's #27
+replay receipts now cover this regression. Confirmation returns the saved
+result for the same source, target and checkpoint, without replaying ciphertext
+again. The #35 test checks confirmed completion, no expired hold, exactly one
+drain and zero decryption failures. Main's receipt implementation supersedes
+the earlier #35 control-plane guard and completion check.
 
 `TestRelayBufferFailurePaths` exercises real workers, caller SRTP, and the
-control-to-worker/control-to-relay private HTTP APIs on both session stores.
-The frame-cache coexistence tests also use Redis frame storage in the Redis
-lane. Failure injection lives in the harness tests, not production flags.
+control-to-worker/control-to-relay private HTTP APIs. Frame-cache coexistence
+uses Redis frame storage in the Redis lane. Failure injection lives in the
+harness tests, not production flags. Failed adoption, clean loss after all
+targets reject adoption, lost resume/replay replies, caller sequence wrap,
+frame-cache coexistence, overflow, expiry and actual relay restart have passing
+memory and Redis merge checks. Continued complete-buffer cases check zero outage packet
+loss, no outbound SRTP index reuse, no requested keyframe and ffmpeg decoding
+of every unique original picture. Clean loss checks lease removal, one counted
+loss and release of held bytes. Overflow and expiry check decryptable media
+through the existing keyframe path.
 
-| Path | Memory outcome | Redis outcome | Caller / adopted-worker decryption failures | Gate released |
-| --- | --- | --- | --- | --- |
-| Target dies after storing its counter reservation, before adoption | Continued on next target | Continued on next target | 0 / 0 | Yes |
-| All targets reject adoption | Clean loss, `LostCount=1` | Clean loss, `LostCount=1` | 0 / no adopted target | Yes |
-| Adopted target's resume reply is lost | Same tenure confirmed | Same tenure confirmed | 0 / 0 | Yes |
-| Completed replay's reply is lost | Continued, one replay | Continued, one replay | 0 / 0 | Yes |
-| Target dies during paced replay | Continued on next target | Continued on next target | 0 / 0 | Yes |
-| Target dies just after replay, before the reply | Continued on next target | Continued on next target | 0 / 0 | Yes |
-| Caller sequence wraps inside the ring window, audio and video | Continued across wrap | Continued across wrap | 0 / 0 | Yes |
-| Complete buffer and frame cache both enabled | Outage content first; old cache replay suppressed | Same | 0 / 0 | Yes |
-| Incomplete buffer and frame cache both replay | Cached old picture first; new content from requested keyframe | Same | 0 / 0 | Yes |
-| Buffer capacity overflow | PLI fallback, overflow counted | Same | 0 / 0 | Yes |
-| Buffer time expiry | PLI fallback, expiry counted | Same | 0 / 0 | Yes |
-| Actual relay restart with restored routes and an empty ring | PLI fallback enabled; outage packets retained by new relay | Same | 0 / 0 | Yes |
-
-The continued complete-buffer scenarios also check zero outage packet loss,
-no outbound SRTP index reuse, no requested keyframe, and full ffmpeg decoding
-of every unique original picture. Second-crash tests check the intermediate
-adopted worker before killing it too. The lost-session test checks lease
-removal, a single counted loss, and immediate release of held bytes. Capacity
-and expiry deliberately lose retained content; they prove decryptable media
-continues through the existing keyframe path, not no-loss recovery outside
-the bounds. A restarted relay cannot restore historical ciphertext, even when
-it restores authenticated routes.
+The unchanged second-crash no-loss regressions fail against main's documented
+cross-target `replayedThrough` limitation. On both memory and Redis, a crash during replay
+lost 53 outage packets; a crash just after replay requested a keyframe. Both
+had zero caller and adopted-worker decryption failures, and released the gate
+before the no-loss assertion failed. The target/tenure floor repair is #35
+phase 2 work. Phase 1 preserves main's replay implementation and the failing
+regression assertions.
 
 ### Real-process comparison
 
 `make crash-run CRASH_FLAGS="-compare-buffer"` interleaves ten buffer-on and
-ten buffer-off SIGKILL trials in the existing loopback (`lan`) topology. Both
-modes use the same frame-cache setting, checkpoint cadence, kill phase and
-60-second post-takeover observation. `-frame-cache-off` can select PLI-only in
-both comparison modes. The original cache/PLI comparison explicitly disables
-the relay buffer, so its phase-1 metrics still measure the same recovery paths.
-`-buffer` selects a single buffered mode for developer smoke runs.
+ten buffer-off SIGKILL trials in the loopback (`lan`) topology. Both modes use
+the same frame-cache setting, checkpoint cadence, kill phase and 60-second
+post-takeover observation. `-frame-cache-off` selects PLI-only in both modes.
+The original cache/PLI comparison explicitly disables the relay buffer.
+`-buffer` selects a single buffered mode for developer smoke runs. Buffer
+comparison refuses relay-restart, relay-standby, sigterm and netns combinations;
+main's existing modes and topology validation remain available.
 
 The comparison builds a caller test executable once from the source checkout
 and launches only `TestRelayBufferProcessCaller` in each trial. This reuses
-#27's exact ciphertext-header packet observations and unique-picture decode
-inside new harness test files, without changing #32's recorder, report or
-public caller APIs. Relay, workers and control plane are the ordinary separate
+exact ciphertext-header packet observations and unique-picture decode inside
+new harness test files. Relay, workers and control plane are ordinary separate
 binaries. Each process group is owned, stopped and reaped by the runner; Redis
 is throwaway on a free loopback port. This mode requires the source checkout
-and the Go tool, as does `make crash-run`.
+and Go.
 
 The table separates audio/video returned, sent and lost outage packets, first
 new source-content attribution, first-content delay, keyframe requests, relay
 replay count, gate release and caller media gap. Source timestamps plus packet
 position identify input after each tenure's sequence offset; duplicates cannot
-hide a missing source packet. Outage spans SIGKILL to terminal takeover. These
-are packet-return and codec-continuity measurements. They are not the #32
-caller playout/concealment/freshness yardstick; its columns must be added and
-acceptance rerun after that merge. Media gap is reported against phase 1's
-**416 ms median**, with the same SIGKILL origin for both modes.
+hide missing source packets. Outage spans SIGKILL to terminal takeover. These
+are packet-return and codec-continuity measurements. Main contains #32's
+caller playout/concealment/freshness yardstick; integrating it into this
+comparison remains #35 phase 2 work. Media gap is reported against phase 1's
+**416 ms median**, using the same SIGKILL origin for both modes.
 
-One local Redis process smoke (`-buffer -runs=1 -after=5s`) returned **20/20
-audio and 12/12 video outage packets**, with **zero decryption failures and
-zero keyframe requests**. First new source content was outage media at
-**389.0 ms**; the gap was **406.0 ms**, 10.0 ms below the phase-1 median.
-A second bounded on/off comparison returned 19/19 audio and 12/12 video
-outage packets with the buffer, versus 0/22 audio and 0/13 video without it.
-Its buffered gap was 402.2 ms and first outage content 385.2 ms; the baseline
-gap was 460.3 ms and first requested-keyframe content 450.8 ms. Both had zero
-caller decryption failures. These are developer observations on the shared
-Mac, not ten-run acceptance or browser playout claims.
+One merge smoke (`-compare-buffer -runs=1 -after=5s`) returned **18/18 audio
+and 11/11 video outage packets** with buffering, with zero decryption failures
+and no keyframe request. First new source content was outage media at
+**360.1 ms**; gap was **375.9 ms**, 40.1 ms below the phase-1 median. Buffer-off
+returned 0/20 audio and 0/12 video outage packets; its gap was 424.3 ms and
+first requested-keyframe content was 551.0 ms. Both modes released the gate
+and passed the packet-return smoke. This single shared-Mac run does not prove
+ten-run acceptance or browser playout.
 
 A separate `crash-run-buffer` non-PR CI job runs the twenty interleaved trials
-and uploads `bin/crash-run-*` logs on failure. Its 35-minute budget avoids
-combining two roughly 22-minute comparisons in the existing job. PR checks
-are unchanged. **NOT-RUN locally:** ten-run/60-second acceptance, the nightly
-full matrix and timing matrix. Their current merged-head results remain CI
-requirements; the pending #27/#34 integration and #32 yardstick also need a
-merged-head rerun.
+and uploads `bin/crash-run-*` logs on failure. All main jobs, including relay
+continuity and PR checks, remain unchanged. **NOT-RUN locally:** ten-run/
+60-second acceptance, the nightly full matrix and timing matrix. Comparison
+yardstick integration and merged-head acceptance remain pending.

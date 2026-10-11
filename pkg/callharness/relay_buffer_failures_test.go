@@ -487,11 +487,11 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 	}
 	if reply != nil && path == "retried-replay" {
 		reply.mu.Lock()
-		require.Len(t, reply.requests, 2, "confirmation rechecks replay without recreating the released gate")
+		require.Len(t, reply.requests, 2, "confirmation reads the completed replay receipt")
 		require.Equal(t, reply.requests[0], reply.requests[1])
 		reply.mu.Unlock()
-		require.True(t, status.Takeovers[0].Result.HoldExpired)
-		require.False(t, status.Takeovers[0].Result.RelayReplayComplete, "an uncertain reply must not claim confirmed complete replay")
+		require.False(t, status.Takeovers[0].Result.HoldExpired)
+		require.True(t, status.Takeovers[0].Result.RelayReplayComplete, "the retry confirms the completed replay receipt")
 		require.EqualValues(t, 1, sys.r.Stats().Replays, "a lost reply cannot duplicate the replay")
 	}
 	if reply != nil && path == "retried-target" {

@@ -42,7 +42,11 @@ func TestDemoKillSelectsOwnerAndStartsReplacement(t *testing.T) {
 				owner, dead = "a", true
 			default:
 			}
-			privateapi.Write(w, controlplane.Status{Calls: []controlplane.CallStatus{{ID: "call", Owner: owner}}, Workers: []controlplane.WorkerStatus{{Name: "b", Dead: dead}}})
+			status := controlplane.Status{Calls: []controlplane.CallStatus{{ID: "call", Owner: owner}}, Workers: []controlplane.WorkerStatus{{Name: "b", Dead: dead}}}
+			if dead {
+				status.Takeovers = []controlplane.MoveResult{{Kind: "takeover", ID: "call", From: "b", To: "a", Start: time.Now(), End: time.Now()}}
+			}
+			privateapi.Write(w, status)
 		case "/demo/register":
 			var req map[string]string
 			require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
@@ -86,6 +90,73 @@ func TestDemoKillSelectsOwnerAndStartsReplacement(t *testing.T) {
 	require.Equal(t, "a", status.Calls[0].Owner)
 	require.Equal(t, map[string]int{"a": a.child.PID(), "3": replacement.child.PID()}, status.WorkerPIDs)
 }
+
+func TestDemoKillWaitsForTerminalTakeoverOutcome(t *testing.T) {
+	for _, lost := range []bool{false, true} {
+		t.Run(fmt.Sprintf("lost=%t", lost), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			manager := &clusterprocess.Manager{}
+			defer manager.Stop(false)
+			dir := t.TempDir()
+			worker := testProcess(t, manager, dir, "source")
+			polls := 0
+			oldEvent := controlplane.MoveResult{Kind: "takeover", ID: "call", From: "source", To: "old", Start: time.Now().Add(-time.Minute), End: time.Now().Add(-time.Minute)}
+			control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/status":
+					status := controlplane.Status{Calls: []controlplane.CallStatus{{ID: "call", Owner: "source"}}, Takeovers: []controlplane.MoveResult{oldEvent}}
+					select {
+					case <-worker.child.Done():
+						polls++
+						status.Workers = []controlplane.WorkerStatus{{Name: "source", Dead: true, Recovering: polls == 1 || lost && polls == 2}}
+						status.Calls[0].Owner = "transient"
+						if polls >= 3 {
+							event := controlplane.MoveResult{Kind: "takeover", ID: "call", From: "source", To: "final", Lost: lost, Start: time.Now(), End: time.Now()}
+							status.Takeovers = append(status.Takeovers, event)
+							status.Calls[0].Owner = event.To
+							if lost {
+								status.Calls = nil
+							}
+						}
+					default:
+					}
+					privateapi.Write(w, status)
+				case "/demo/register":
+					privateapi.Write(w, map[string]bool{"ok": true})
+				default:
+					t.Errorf("unexpected request %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer control.Close()
+			d := &demo{ctx: ctx, control: control.URL, client: control.Client(), workers: map[string]*workerProcess{"source": worker}, next: 3}
+			d.spawn = func(_ context.Context, name string) (*workerProcess, error) {
+				return testProcess(t, manager, dir, name), nil
+			}
+			server := httptest.NewServer(d.handler(http.NotFoundHandler()))
+			defer server.Close()
+			response, err := server.Client().Post(server.URL+"/demo/kill", "application/json", strings.NewReader(`{"id":"call"}`))
+			require.NoError(t, err)
+			defer response.Body.Close()
+			var result actionResult
+			require.NoError(t, json.NewDecoder(response.Body).Decode(&result))
+			if lost {
+				// Check the real HTTP outcome, not just a detached decision helper.
+				require.Equal(t, http.StatusConflict, response.StatusCode)
+				require.Equal(t, "call was lost during takeover", result.Error)
+				require.Empty(t, result.To)
+			} else {
+				require.Equal(t, http.StatusOK, response.StatusCode)
+				require.Empty(t, result.Error)
+				require.Equal(t, "final", result.To)
+			}
+			require.Equal(t, "3", result.Replacement)
+			require.Positive(t, result.ReplacementPID)
+		})
+	}
+}
+
 func TestDemoStatusAndProxyAndActionGuards(t *testing.T) {
 	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/status" {
