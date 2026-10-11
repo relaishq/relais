@@ -15,23 +15,29 @@ import (
 )
 
 func TestAgentReplayNoticeMatchesDirectAndHTTP(t *testing.T) {
-	for _, replay := range []bool{false, true} {
+	for _, mode := range []string{"none", "complete", "incomplete", "empty"} {
+		replay := mode == "complete" || mode == "incomplete"
 		for _, remote := range []bool{false, true} {
-			t.Run(stringBool(replay)+"/http="+stringBool(remote), func(t *testing.T) {
+			t.Run(mode+"/http="+stringBool(remote), func(t *testing.T) {
 				p, _, baseB, baseR := setup(t)
-				if replay {
-					p.relay = &checkpointReplayRelay{fakeRelay: baseR}
+				if mode != "none" {
+					p.relay = &checkpointReplayRelay{fakeRelay: baseR, incompletePlan: mode != "complete", emptyPlan: mode == "empty"}
 				}
 				notices := make(chan mediaworker.ResumeOptions, 1)
 				target := &replayCheckpointWorker{takeoverWorker: &takeoverWorker{fakeWorker: baseB}}
 				p.workers["b"].worker = target
 				if remote {
 					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if r.URL.Path != "/resume" {
+							require.NoError(t, target.RequestKeyframe(r.Context(), "call"))
+							w.WriteHeader(http.StatusNoContent)
+							return
+						}
 						var req mediaworker.ResumeRequest
 						if !privateapi.Read(w, r, &req) {
 							return
 						}
-						id, err := target.ResumeSession(req.State, mediaworker.ResumeOptions{Lease: req.Lease, Context: r.Context(), Kind: req.Kind, InputMayBeDuplicated: req.InputMayBeDuplicated, DuplicateWindows: req.DuplicateWindows, RelayReplay: req.RelayReplay})
+						id, err := target.ResumeSession(req.State, mediaworker.ResumeOptions{Lease: req.Lease, Context: r.Context(), Kind: req.Kind, InputMayBeDuplicated: req.InputMayBeDuplicated, DuplicateWindows: req.DuplicateWindows, RelayReplay: req.RelayReplay, RelayInputReplay: req.RelayInputReplay})
 						if err != nil {
 							privateapi.Error(w, err, mediaworker.RemoteErrors)
 							return
@@ -59,7 +65,8 @@ func TestAgentReplayNoticeMatchesDirectAndHTTP(t *testing.T) {
 				}
 				require.Equal(t, agent.Takeover, opts.Kind)
 				require.Equal(t, replay, opts.InputMayBeDuplicated)
-				require.Equal(t, replay, opts.RelayReplay)
+				require.Equal(t, mode == "complete", opts.RelayReplay)
+				require.Equal(t, mode == "incomplete", opts.RelayInputReplay)
 				require.Len(t, p.recentTakeovers(), 1)
 				if replay {
 					want := []agent.DuplicateWindow{{SSRC: 42, First: 11, Last: 11}}

@@ -2,6 +2,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,26 @@ import (
 	"github.com/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
+
+func TestRemoteWorkerRelayInputReplayWirePresence(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(stringBool(enabled), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req map[string]json.RawMessage
+				require.True(t, privateapi.Read(w, r, &req))
+				_, present := req["relay_input_replay"]
+				require.Equal(t, enabled, present, "omit unused fields rejected by older strict resume readers")
+				if enabled {
+					require.JSONEq(t, "true", string(req["relay_input_replay"]))
+				}
+				privateapi.Write(w, mediaworker.ResumeReply{ID: "call"})
+			}))
+			defer server.Close()
+			_, err := (&RemoteWorker{URL: server.URL}).ResumeSession(nil, mediaworker.ResumeOptions{RelayInputReplay: enabled})
+			require.NoError(t, err)
+		})
+	}
+}
 
 func TestRemoteWorkerWireContract(t *testing.T) {
 	storedAt := time.Unix(1234567, 0).UTC()

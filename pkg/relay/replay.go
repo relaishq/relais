@@ -26,7 +26,7 @@ type ReplayWindow struct {
 }
 
 // ReplayPlan reports whether the retained ring covers the checkpoint. An
-// incomplete cache keeps the worker's ordinary frame-cache/PLI fallback.
+// incomplete ring can still deliver retained media, followed by PLI recovery.
 type ReplayPlan struct {
 	Packets  int            `json:"packets"`
 	Complete bool           `json:"complete"`
