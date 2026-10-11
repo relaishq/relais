@@ -152,10 +152,14 @@ type ResumeOptions struct {
 	Kind                 agent.ResumeKind
 	InputMayBeDuplicated bool
 	DuplicateWindows     []agent.DuplicateWindow
-	// RelayReplay means a complete caller-media ring is gated for replay.
+	// RelayReplay means the gated caller-media ring has complete codec continuity.
 	// Keep the existing codec chain: no cached old pictures or proactive PLI.
-	// Incomplete/lost relay caches leave this false and use normal recovery.
 	RelayReplay bool
+	// RelayInputReplay means incomplete caller media is scheduled for delivery.
+	// Complete rings use RelayReplay. Skip cached pictures and resume PLI;
+	// the control plane requests a keyframe after an incomplete drain.
+	// Empty rings leave this false and use normal frame-cache/PLI recovery.
+	RelayInputReplay bool
 	// CallerSequenceReserve can enlarge, never reduce, the phase-1 reserve.
 	CallerSequenceReserve uint32
 	// Context optionally bounds rebuilding and persisting the resumed transport.
@@ -307,7 +311,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 		return "", err
 	}
 	var replayPackets [][]byte
-	if opts.SequenceMargin > 0 && !opts.RelayReplay && w.cfg.socket == nil && sess.state.Video.negotiated() && w.cfg.cacheEnabled() {
+	if opts.SequenceMargin > 0 && !opts.RelayReplay && !opts.RelayInputReplay && w.cfg.socket == nil && sess.state.Video.negotiated() && w.cfg.cacheEnabled() {
 		timeout := w.cfg.CacheReadTimeout
 		if timeout <= 0 {
 			timeout = 150 * time.Millisecond
@@ -372,7 +376,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 
 		return "", err
 	}
-	sess.needsKeyframe = opts.SequenceMargin > 0 && !opts.RelayReplay && sess.state.Video.negotiated() && !w.cfg.DisableResumePLI
+	sess.needsKeyframe = opts.SequenceMargin > 0 && !opts.RelayReplay && !opts.RelayInputReplay && sess.state.Video.negotiated() && !w.cfg.DisableResumePLI
 	// Shared-socket output is fenced until Handover switches the route. Keep
 	// the request pending for the first routed video packet; skip replay there.
 	if sess.needsKeyframe && w.cfg.socket == nil {

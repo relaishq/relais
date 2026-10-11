@@ -189,7 +189,7 @@ func (l Limits) Causes(s Stats) []string {
 		reasons = append(reasons, "no successful media sends")
 	}
 	if s.IntervalLateness.P99 > l.P99 {
-		reasons = append(reasons, fmt.Sprintf("send lateness p99 %s exceeds %s", s.IntervalLateness.P99, l.P99))
+		reasons = append(reasons, fmt.Sprintf("interval send-lateness p99 peak %s exceeds %s", s.IntervalLateness.P99, l.P99))
 	}
 	if s.IntervalPacing.SkippedPercent() > l.SkippedPercent {
 		reasons = append(reasons, fmt.Sprintf("skipped frames %.2f%% exceeds %.2f%%", s.IntervalPacing.SkippedPercent(), l.SkippedPercent))

@@ -43,8 +43,9 @@ func (c processCollector) Collect(ch chan<- prometheus.Metric) {
 // ring use, drops and replays when those counters become available.
 func ProcessHandler(snapshot func() []Sample, additional ...prometheus.Collector) http.Handler {
 	registry := prometheus.NewRegistry()
-	registry.MustRegister(processCollector{snapshot: snapshot})
+	registry.MustRegister(processCollector{snapshot: func() []Sample { return append(snapshot(), processResources()...) }})
 	registry.MustRegister(additional...)
+	registry.MustRegister(TrafficCollectors()...)
 	return promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 }
 

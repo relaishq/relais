@@ -353,22 +353,23 @@ type Relay struct {
 	closeOnce sync.Once
 	closeErr  error
 
-	routesRestored       atomic.Uint64
-	routesRestoreSkipped atomic.Uint64
-	routesRestoreFailed  atomic.Uint64
-	routeWritesDone      atomic.Uint64
-	routeWritesDropped   atomic.Uint64
-	routeWritesFailed    atomic.Uint64
-	callerPackets        atomic.Uint64
-	workerPackets        atomic.Uint64
-	stunRouted           atomic.Uint64
-	unknownSession       atomic.Uint64
-	lookupsDropped       atomic.Uint64
-	lookupsFailed        atomic.Uint64
-	unroutable           atomic.Uint64
-	unknownWorker        atomic.Uint64
-	workerNoFlow         atomic.Uint64
-	malformed            atomic.Uint64
+	routesRestored           atomic.Uint64
+	routesRestoreSkipped     atomic.Uint64
+	routesRestoreFailed      atomic.Uint64
+	routeWritesDone          atomic.Uint64
+	routeWritesDropped       atomic.Uint64
+	routeWritesFailed        atomic.Uint64
+	callerPackets            atomic.Uint64
+	callerBytes, workerBytes atomic.Uint64
+	workerPackets            atomic.Uint64
+	stunRouted               atomic.Uint64
+	unknownSession           atomic.Uint64
+	lookupsDropped           atomic.Uint64
+	lookupsFailed            atomic.Uint64
+	unroutable               atomic.Uint64
+	unknownWorker            atomic.Uint64
+	workerNoFlow             atomic.Uint64
+	malformed                atomic.Uint64
 }
 
 // New starts a relay.
@@ -815,6 +816,7 @@ func (r *Relay) sendCaller(datagram []byte, caller, worker netip.AddrPort) bool 
 		return false
 	}
 	r.callerPackets.Add(1)
+	r.callerBytes.Add(uint64(len(datagram) - start))
 	return true
 }
 
@@ -937,6 +939,7 @@ func (r *Relay) workerLoop() {
 			continue
 		}
 		r.workerPackets.Add(1)
+		r.workerBytes.Add(uint64(len(pkt)))
 	}
 }
 

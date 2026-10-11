@@ -2,10 +2,12 @@ package callharness
 
 import (
 	"context"
+	"github.com/relais/pkg/controlplane"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"testing"
+	"time"
 )
 
 func TestExternalMoveFailedOwnerIsUnknown(t *testing.T) {
@@ -22,5 +24,17 @@ func TestExternalMoveFailedOwnerIsUnknown(t *testing.T) {
 	}
 	if len(c.rec.moves) != 1 || c.rec.moves[0].from != -1 || c.rec.moves[0].err == nil {
 		t.Fatalf("failed move owner is not unknown: %+v", c.rec.moves)
+	}
+}
+
+func TestRecordOperatorDrainPreservesCallerMove(t *testing.T) {
+	rec := newRecorder()
+	started := rec.start.Add(time.Second)
+	rec.move(moveRecord{from: 0, to: 1, start: started, end: started.Add(time.Millisecond)})
+	// The observer must keep the actual API times and worker IDs.
+	c := &Call{rec: rec}
+	c.RecordExternalMove(controlplane.MoveResult{From: "1", To: "2", Start: started.Add(time.Second), End: started.Add(time.Second + time.Millisecond)})
+	if len(rec.moves) != 2 || rec.moves[1].from != 1 || rec.moves[1].to != 2 || !rec.moves[1].start.Equal(started.Add(time.Second)) {
+		t.Fatalf("wrong drain observation: %+v", rec.moves)
 	}
 }

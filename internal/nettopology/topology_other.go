@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 )
 
 var errLinux = errors.New("netns topology requires Linux; run it inside a Linux VM or container (no Mac network changes)")
@@ -18,3 +19,8 @@ func (t *Topology) removeNamespace(string) error                    { return err
 func OpenManaged(context.Context, func(string, ...any), func(func()) error) (*Topology, error) {
 	return nil, errLinux
 }
+
+func OpenManagedWorkers(context.Context, func(string, ...any), func(func()) error, int) (*Topology, error) {
+	return nil, errLinux
+}
+func CallerSocketInNamespace(string, netip.AddrPort) (net.PacketConn, error) { return nil, errLinux }

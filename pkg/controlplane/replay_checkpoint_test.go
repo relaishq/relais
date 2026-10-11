@@ -18,6 +18,7 @@ type checkpointReplayRelay struct {
 	*fakeRelay
 	gated, forgotten bool
 	incompletePlan   bool
+	emptyPlan        bool
 	prepared         []map[uint32]uint64
 	sentOnLoss       int
 	replayResult     relay.ReplayResult
@@ -28,6 +29,9 @@ func (r *checkpointReplayRelay) BeginReplay(_ context.Context, _ string, _ netip
 	r.gated = true
 	if inbound != nil {
 		r.prepared = append(r.prepared, inbound)
+	}
+	if r.emptyPlan {
+		return relay.ReplayPlan{}, nil
 	}
 	plan := relay.ReplayPlan{Complete: inbound != nil && !r.incompletePlan}
 	for ssrc, floor := range inbound {
@@ -337,22 +341,31 @@ func TestCheckpointReplayRecoveryFailureRemainsRetryable(t *testing.T) {
 	require.Equal(t, 1, p.recentTakeovers()[0].Result.RelayReplaySendFailures)
 }
 
-func TestCheckpointIncompleteReplayPlanUsesResumeRecoveryOnly(t *testing.T) {
-	p, _, baseB, baseR := setup(t)
-	p.relay = &checkpointReplayRelay{fakeRelay: baseR, incompletePlan: true, replayResult: relay.ReplayResult{Dropped: 1}}
-	target := &replayCheckpointWorker{takeoverWorker: &takeoverWorker{fakeWorker: baseB}}
-	p.workers["b"].worker = target
-	ctx := context.Background()
-	id, _, err := p.Create(ctx, "offer", "a")
-	require.NoError(t, err)
-	lease, err := p.store.Get(ctx, id)
-	require.NoError(t, err)
-	require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
-	p.workers["a"].dead = true
-	p.takeover(ctx, p.workers["a"], lease, time.Now())
-	require.False(t, target.opts.RelayReplay, "resume already uses its frame-cache/PLI recovery")
-	require.Zero(t, target.keyframes, "an incomplete plan must not request a second recovery PLI")
-	require.Len(t, p.recentTakeovers(), 1)
-	require.False(t, p.recentTakeovers()[0].Result.RelayReplayComplete)
-	require.False(t, p.recentTakeovers()[0].Result.RelayReplayRecoveryPLI)
+func TestCheckpointIncompleteReplayPlanRecovery(t *testing.T) {
+	for _, empty := range []bool{false, true} {
+		t.Run("empty="+stringBool(empty), func(t *testing.T) {
+			p, _, baseB, baseR := setup(t)
+			p.relay = &checkpointReplayRelay{fakeRelay: baseR, incompletePlan: true, emptyPlan: empty, replayResult: relay.ReplayResult{Dropped: 1}}
+			target := &replayCheckpointWorker{takeoverWorker: &takeoverWorker{fakeWorker: baseB}}
+			p.workers["b"].worker = target
+			ctx := context.Background()
+			id, _, err := p.Create(ctx, "offer", "a")
+			require.NoError(t, err)
+			lease, err := p.store.Get(ctx, id)
+			require.NoError(t, err)
+			require.NoError(t, p.store.PutState(ctx, lease, replayCheckpointSnapshot(t, id, 10)))
+			p.workers["a"].dead = true
+			p.takeover(ctx, p.workers["a"], lease, time.Now())
+			require.False(t, target.opts.RelayReplay, "incomplete input must not promise codec continuity")
+			require.Equal(t, !empty, target.opts.RelayInputReplay, "only retained media defers frame-cache/PLI recovery")
+			if empty {
+				require.Zero(t, target.keyframes, "empty rings use resume recovery")
+			} else {
+				require.Equal(t, 1, target.keyframes, "incomplete input needs post-drain PLI recovery")
+			}
+			require.Len(t, p.recentTakeovers(), 1)
+			require.False(t, p.recentTakeovers()[0].Result.RelayReplayComplete)
+			require.Equal(t, !empty, p.recentTakeovers()[0].Result.RelayReplayRecoveryPLI)
+		})
+	}
 }

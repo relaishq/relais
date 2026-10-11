@@ -31,3 +31,17 @@ func (c *Call) MoveExternal(ctx context.Context, to int) error {
 	c.rec.move(moveRecord{from: from, to: to, start: result.Start, end: result.End, result: result.Result, err: err})
 	return err
 }
+
+// RecordExternalMove records a completed operator move (for example a drain).
+// It observes the real control-plane result; it does not initiate recovery.
+func (c *Call) RecordExternalMove(result controlplane.MoveResult) {
+	from, err := strconv.Atoi(result.From)
+	if err != nil {
+		from = -1
+	}
+	to, err := strconv.Atoi(result.To)
+	if err != nil {
+		to = -1
+	}
+	c.rec.move(moveRecord{from: from, to: to, start: result.Start, end: result.End, result: result.Result})
+}

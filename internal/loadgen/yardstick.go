@@ -23,13 +23,18 @@ type MetricRow struct {
 	Outcome         string        `json:"outcome"`
 }
 
-func matchesEvent(e EventResult, report *callharness.Report, move callharness.MoveReport) bool {
+// MatchesEvent ties a recorded move to one scheduled action.
+func MatchesEvent(e EventResult, report *callharness.Report, move callharness.MoveReport) bool {
 	at := report.StartedAt.Add(move.Start)
 	if e.Event.Kind == "kill" {
 		delta := at.Sub(e.At)
 		return move.Kind == "takeover" && move.From == e.Event.Worker && delta >= -time.Microsecond && delta <= time.Microsecond
 	}
-	return move.Kind == "move" && move.To == e.Event.Worker && !at.Before(e.At) && !at.After(e.FinishedAt)
+	target := move.To == e.Event.Worker
+	if e.Event.Kind == "drain" {
+		target = move.From == e.Event.Worker
+	}
+	return move.Kind == "move" && target && !at.Before(e.At) && !at.After(e.FinishedAt)
 }
 
 func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []string) {
@@ -46,6 +51,9 @@ func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []
 			causes = append(causes, fmt.Sprintf("event %d (%s at %s): %d distinct session IDs for %d affected calls", i+1, e.Event.Kind, e.Event.After, len(expected), e.Affected))
 		}
 		kind := e.Event.Kind
+		if kind == "drain" {
+			kind = "move"
+		}
 		if kind == "kill" {
 			kind = "takeover"
 		}
@@ -67,7 +75,7 @@ func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []
 				}
 				var matching []callharness.MoveReport
 				for _, move := range c.Call.Moves {
-					if matchesEvent(*e, c.Call, move) {
+					if MatchesEvent(*e, c.Call, move) {
 						matching = append(matching, move)
 					}
 				}

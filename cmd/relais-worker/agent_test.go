@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,19 +97,59 @@ func (s *demoSystem) status(t *testing.T, ctx context.Context, worker int, id st
 	return result
 }
 func TestDemoAgentPlannedMoveMemoryAndRedis(t *testing.T) {
+	testDemoAgentPlannedMove(t, false)
+}
+
+func TestDemoAgentPlannedMoveWithSenderStallMemoryAndRedis(t *testing.T) {
+	testDemoAgentPlannedMove(t, true)
+}
+
+func testDemoAgentPlannedMove(t *testing.T, stallSender bool) {
+	t.Helper()
 	demoStores(t, func(t *testing.T, store sessionstore.Store) {
 		sys := startDemoSystem(t, store, nil)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		call, err := sys.h.Dial(ctx, callharness.CallOptions{})
+		var sent atomic.Uint64
+		var stallNext atomic.Bool
+		call, err := sys.h.Dial(ctx, callharness.CallOptions{SendTiming: func(kind string, _, _ time.Time) {
+			if kind == "audio" {
+				sent.Add(1)
+				if stallNext.Swap(false) {
+					// Model a scheduled-out sender. SendMedia has a wall-clock
+					// deadline, so missed ticks are not extra input packets.
+					time.Sleep(80 * time.Millisecond)
+				}
+			}
+		}})
 		require.NoError(t, err)
+		defer func() {
+			if !t.Failed() {
+				return
+			}
+			status, err := sys.plane.Status(ctx)
+			t.Logf("DEMO_MOVE_DIAGNOSTICS sent=%d control=%+v error=%v", sent.Load(), status, err)
+			for i, worker := range sys.workers {
+				_, progress, err := worker.SessionAgent(call.SessionID())
+				t.Logf("DEMO_MOVE_DIAGNOSTICS worker=%d progress=%+v error=%v stats=%+v", i, progress, err, worker.AgentStats())
+			}
+		}()
+		stallNext.Store(stallSender)
 		require.NoError(t, call.SendMedia(ctx, 740*time.Millisecond))
+		beforeSent := sent.Load()
+		require.Greater(t, beforeSent, uint64(25), "send enough input to advance the demo count")
+		position := func(packets uint64) agentdemo.Position {
+			samples := packets * agentdemo.FrameSamples
+			return agentdemo.Position{Count: 1 + samples/agentdemo.CountSamples, PhaseSamples: uint32(samples % agentdemo.CountSamples)}
+		}
+		// Compare with successful RTP socket writes, not duration/20ms.
+		// Exact equality still catches every lost or unconsumed input packet.
 		require.Eventually(t, func() bool {
 			_, p, err := sys.workers[0].SessionAgent(call.SessionID())
-			return err == nil && p.Consumed == 37
+			return err == nil && p.Consumed == beforeSent
 		}, time.Second, time.Millisecond)
 		before := sys.status(t, ctx, 0, call.SessionID())
-		require.Equal(t, agentdemo.Position{Count: 2, PhaseSamples: 12 * agentdemo.FrameSamples}, before.Position)
+		require.Equal(t, position(beforeSent), before.Position)
 		move, err := sys.plane.Move(ctx, call.SessionID(), "1")
 		require.NoError(t, err)
 		require.Empty(t, move.Error)
@@ -122,13 +163,16 @@ func TestDemoAgentPlannedMoveMemoryAndRedis(t *testing.T) {
 		require.Equal(t, before.Progress, after.LastResume.Progress)
 		require.Equal(t, agent.PlannedMove, after.LastResume.Kind)
 		require.False(t, after.LastResume.InputMayBeDuplicated)
+		stallNext.Store(stallSender)
 		require.NoError(t, call.SendMedia(ctx, 260*time.Millisecond))
+		finalSent := sent.Load()
+		require.Greater(t, finalSent, beforeSent, "send fresh input after the move")
 		require.Eventually(t, func() bool {
 			_, p, err := sys.workers[1].SessionAgent(call.SessionID())
-			return err == nil && p.Consumed == 50
+			return err == nil && p.Consumed == finalSent
 		}, time.Second, time.Millisecond)
 		final := sys.status(t, ctx, 1, call.SessionID())
-		require.Equal(t, agentdemo.Position{Count: 3}, final.Position)
+		require.Equal(t, position(finalSent), final.Position)
 		report, err := call.Hangup(ctx)
 		require.NoError(t, err)
 		require.True(t, report.ConnectedThroughout())
@@ -137,9 +181,10 @@ func TestDemoAgentPlannedMoveMemoryAndRedis(t *testing.T) {
 		require.Zero(t, report.Renegotiations)
 		audio := report.Track("audio")
 		require.NotNil(t, audio)
-		require.GreaterOrEqual(t, audio.Packets, 49)
+		require.EqualValues(t, finalSent, report.SentAudio.Frames)
+		require.GreaterOrEqual(t, audio.Packets, int(finalSent)-1)
 		require.Equal(t, audio.Packets, audio.UnmatchedPayloads, "caller receives synthesized audio rather than its input")
-		t.Logf("DEMO_MOVE source=%+v restored=%+v final=%+v packets=%d", before.Position, after.LastResume.Position, final.Position, audio.Packets)
+		t.Logf("DEMO_MOVE source=%+v restored=%+v final=%+v sent_before=%d sent_final=%d packets=%d", before.Position, after.LastResume.Position, final.Position, beforeSent, finalSent, audio.Packets)
 	})
 }
 func TestDemoAgentTakeoverMemoryAndRedis(t *testing.T) {

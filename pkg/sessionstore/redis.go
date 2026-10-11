@@ -149,7 +149,7 @@ func NewRedis(ctx context.Context, cfg storage.RedisConfig, key []byte, options 
 		}
 		keysByID[id] = append([]byte(nil), old...)
 	}
-	client := connectRedis(cfg)
+	client := connectRedis(cfg, "session")
 	r := &Redis{client: client, prefix: cfg.Prefix, retention: opts.Retention, indexGrace: opts.IndexGrace, maintenanceSlots: make(chan struct{}, 32), activeKey: opts.KeyID, keysByID: keysByID}
 	if err := r.retryRead(ctx, "session_ping", func() error { return client.Ping(ctx).Err() }); err != nil {
 		_ = client.Close()
@@ -839,17 +839,18 @@ func (r *Redis) ListByWorker(ctx context.Context, worker netip.AddrPort) ([]Leas
 	return leases, nil
 }
 
-func connectRedis(cfg storage.RedisConfig) redis.UniversalClient {
+func connectRedis(cfg storage.RedisConfig, label string) redis.UniversalClient {
 	var client redis.UniversalClient
 	if cfg.Cluster || len(cfg.Addrs) > 0 {
 		addrs := cfg.Addrs
 		if len(addrs) == 0 {
 			addrs = []string{cfg.Addr}
 		}
-		client = redis.NewClusterClient(&redis.ClusterOptions{Addrs: addrs, Password: cfg.Password, MaxRetries: -1, MaxRedirects: -1})
+		client = redis.NewClusterClient(&redis.ClusterOptions{Addrs: addrs, Password: cfg.Password, MaxRetries: -1, MaxRedirects: -1, NewClient: func(opts *redis.Options) *redis.Client { return metrics.RedisClient(opts, label) }})
 	} else {
-		client = redis.NewClient(&redis.Options{Addr: cfg.Addr, Password: cfg.Password, DB: cfg.DB, MaxRetries: -1})
+		client = metrics.RedisClient(&redis.Options{Addr: cfg.Addr, Password: cfg.Password, DB: cfg.DB, MaxRetries: -1}, label)
 	}
+	client.AddHook(metrics.StoreHook(label))
 	return client
 }
 

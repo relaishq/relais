@@ -124,8 +124,22 @@ func TestDefaultPageRemainsHTTP(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = listener.Close() }()
 	require.Empty(t, fingerprint)
-	_, plainTCP := listener.(*net.TCPListener)
-	require.True(t, plainTCP)
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() {
+		served <- processrun.Serve(ctx, listener, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}))
+	}()
+	defer func() { cancel(); require.NoError(t, <-served) }()
+	transport := &http.Transport{}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
+	response, err := client.Get("http://" + listener.Addr().String())
+	require.NoError(t, err)
+	defer func() { _ = response.Body.Close() }()
+	require.Equal(t, http.StatusNoContent, response.StatusCode)
+	require.Nil(t, response.TLS, "the instrumented page listener must serve plain HTTP")
 }
 
 func TestLocalNetworkHostAllowsOnlySelectedIP(t *testing.T) {

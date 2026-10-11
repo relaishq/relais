@@ -18,20 +18,28 @@ import (
 	"strings"
 	"time"
 
+	"github.com/relais/internal/capacity"
 	"github.com/relais/internal/clusterprocess"
 	"github.com/relais/internal/loadgen"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/controlplane"
+	"github.com/relais/pkg/mediaworker"
 )
 
 type config struct {
-	Callers, Processes, Workers, GOMAXPROCS int
-	Duration, SampleEvery                   time.Duration
-	Bin, Output                             string
-	Video, Calibrate                        bool
-	CalibrationStart, CalibrationMax        int
-	Limits                                  loadgen.Limits
-	Events                                  []loadgen.Event
+	Callers, Processes, Workers, GOMAXPROCS       int
+	Duration, SampleEvery                         time.Duration
+	Bin, Output                                   string
+	Video, Calibrate                              bool
+	CalibrationStart, CalibrationMax              int
+	Limits                                        loadgen.Limits
+	Events                                        []loadgen.Event
+	Capacity                                      bool
+	Topology                                      string
+	PlaceOnWorker                                 bool
+	CapacityStart, CapacityMax, CallersPerProcess int
+	Prices                                        string
+	StoreOpsBudget, StoreBytesBudget              float64
 }
 type eventFlags []loadgen.Event
 
@@ -42,7 +50,7 @@ func (e *eventFlags) String() string { return fmt.Sprint([]loadgen.Event(*e)) }
 func (e *eventFlags) Set(value string) error {
 	parts := strings.Split(value, ",")
 	if len(parts) != 4 {
-		return errors.New("event needs after,move|kill,count,worker")
+		return errors.New("event needs after,move|kill|drain,count,worker")
 	}
 	after, err := time.ParseDuration(parts[0])
 	if err != nil {
@@ -72,23 +80,34 @@ func (c config) validate() error {
 	if c.Calibrate && (c.Processes != 1 || len(c.Events) > 0 || c.CalibrationStart < 1 || c.CalibrationMax < c.CalibrationStart || c.CalibrationMax > 4096) {
 		return errors.New("calibration needs one process, no events and 1 <= start <= max <= 4096")
 	}
+	if c.Topology != "" && c.Topology != "loopback" && c.Topology != "netns" {
+		return errors.New("topology must be loopback or netns")
+	}
+	if c.Capacity && c.Limits != loadgen.DefaultLimits() {
+		return errors.New("capacity requires the unchanged generator saturation limits")
+	}
+	if c.Capacity && (c.Calibrate || len(c.Events) > 0 || c.CapacityStart < 1 || c.CapacityMax < c.CapacityStart || c.CapacityMax > 1024 || c.CallersPerProcess < 1 || c.CallersPerProcess > 4 || c.Workers < 3 || c.Workers > 16 || c.Duration < 20*time.Second || c.Duration > 3*time.Minute || !(c.StoreOpsBudget > 0 && c.StoreOpsBudget <= 100) || !(c.StoreBytesBudget > 0 && c.StoreBytesBudget <= 128<<10)) {
+		return errors.New("capacity needs 3..16 workers, 20s..3m duration, 1..4 callers/process, budgets in (0,100 commands] and (0,128 KiB], 1 <= start <= max <= 1024 and no custom events/calibration")
+	}
 	var previous time.Duration
 	killed := map[int]bool{}
 	for _, e := range c.Events {
 		if e.After < 3*time.Second || e.After <= previous || e.After+7*time.Second >= c.Duration || e.Worker < 0 || e.Worker >= c.Workers || e.Count < 0 || e.Count > c.Callers {
 			return errors.New("events need ordered times, >=3s warmup, >7s recovery tail, valid worker/count")
 		}
-		if e.Kind != "move" && e.Kind != "kill" {
-			return errors.New("event kind must be move or kill")
+		if e.Kind != "move" && e.Kind != "kill" && e.Kind != "drain" {
+			return errors.New("event kind must be move, drain or kill")
 		}
 		if killed[e.Worker] {
 			return errors.New("cannot move to or kill a previously killed worker")
 		}
-		if e.Kind == "kill" {
+		if e.Kind == "kill" || e.Kind == "drain" {
 			if e.Count != 0 {
-				return errors.New("kill affects a whole worker; count must be zero")
+				return errors.New("kill/drain affects a whole worker; count must be zero")
 			}
-			killed[e.Worker] = true
+			if e.Kind == "kill" {
+				killed[e.Worker] = true
+			}
 		}
 		previous = e.After
 	}
@@ -97,6 +116,14 @@ func (c config) validate() error {
 	}
 	return nil
 }
+
+type responseError struct {
+	code    int
+	message string
+}
+
+func (e *responseError) Error() string { return e.message }
+
 func request(ctx context.Context, method, url string, body, result any) error {
 	var b bytes.Buffer
 	if body != nil {
@@ -116,8 +143,13 @@ func request(ctx context.Context, method, url string, body, result any) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
+		statusError := &responseError{code: resp.StatusCode, message: fmt.Sprintf("%s: %s", url, resp.Status)}
+		if resp.StatusCode == http.StatusMultiStatus && result != nil {
+			return errors.Join(statusError, json.NewDecoder(resp.Body).Decode(result))
+		}
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("%s: %s %s", url, resp.Status, strings.TrimSpace(string(data)))
+		statusError.message += " " + strings.TrimSpace(string(data))
+		return statusError
 	}
 	if result != nil {
 		return json.NewDecoder(resp.Body).Decode(result)
@@ -154,12 +186,86 @@ func waitUntil(ctx context.Context, at time.Time) error {
 	}
 }
 func runEvent(ctx context.Context, t *topology, generators []generator, e loadgen.Event) (result loadgen.EventResult) {
-	defer func() { result.FinishedAt = time.Now() }()
+	defer func() {
+		if result.FinishedAt.IsZero() {
+			result.FinishedAt = time.Now()
+		}
+	}()
 	result = loadgen.EventResult{Event: e, At: time.Now()}
 	var status controlplane.Status
 	t.statusRequests++
 	err := request(ctx, http.MethodGet, strings.TrimSuffix(t.External.SignalingURL, "/calls")+"/status", nil, &status)
-	if err == nil && e.Kind == "kill" {
+	if err == nil && e.Kind == "move" && e.Worker < 0 {
+		counts := map[int]int{}
+		for worker := range t.Workers {
+			if !t.Killed[worker] {
+				counts[worker] = 0
+			}
+		}
+		for _, call := range status.Calls {
+			worker, parseErr := strconv.Atoi(call.Owner)
+			if parseErr == nil && !t.Killed[worker] {
+				counts[worker]++
+			}
+		}
+		best := -1
+		for worker, n := range counts {
+			if best < 0 || n < counts[best] || (n == counts[best] && worker < best) {
+				best = worker
+			}
+		}
+		e.Worker = best
+		result.Event = e
+	}
+	if err == nil && e.Kind == "drain" {
+		result.At = time.Now()
+		for _, c := range status.Calls {
+			if c.Owner == strconv.Itoa(e.Worker) {
+				result.Sessions = append(result.Sessions, c.ID)
+				result.Affected++
+			}
+		}
+		if result.Affected == 0 {
+			err = errors.New("drain selected worker with no calls")
+		} else {
+			var drained controlplane.DrainResult
+			err = request(ctx, http.MethodPost, strings.TrimSuffix(t.External.SignalingURL, "/calls")+fmt.Sprintf("/workers/%d/drain", e.Worker), nil, &drained)
+			result.FinishedAt = time.Now()
+			var statusErr *responseError
+			if errors.As(err, &statusErr) && statusErr.code == http.StatusMultiStatus {
+				result.Failed = true
+			}
+
+			if drained.Error != "" {
+				result.Failed = true
+				err = errors.Join(err, errors.New(drained.Error))
+			}
+			if len(drained.Moves) != result.Affected {
+				result.Failed = true
+				err = errors.Join(err, errors.New("drain missing move results"))
+			}
+			workerURL := ""
+			for _, target := range t.Targets {
+				if target.Name == fmt.Sprintf("worker-%d", e.Worker) {
+					workerURL = target.URL
+				}
+			}
+			if workerURL == "" {
+				err = errors.Join(err, errors.New("missing drained worker status endpoint"))
+			} else {
+				var worker mediaworker.WorkerStatus
+				statusErr := request(ctx, http.MethodGet, workerURL+"/status", nil, &worker)
+				err = errors.Join(err, statusErr)
+				if statusErr == nil && worker.Sessions != 0 {
+					result.Failed = true
+					err = errors.Join(err, fmt.Errorf("drained worker still has %d sessions", worker.Sessions))
+				}
+			}
+			for _, g := range generators {
+				err = errors.Join(err, request(ctx, http.MethodPost, g.url+"/record-moves", drained.Moves, nil))
+			}
+		}
+	} else if err == nil && e.Kind == "kill" {
 		for _, c := range status.Calls {
 			if c.Owner == strconv.Itoa(e.Worker) {
 				result.Affected++
@@ -222,11 +328,11 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 			report.Causes = append(report.Causes, runErr.Error())
 		}
 	}()
-	t, err := startTopology(ctx, m, c.Bin, dir, c.Workers)
+	t, err := startTopology(ctx, m, c.Bin, dir, c.Workers, c.Topology)
 	if err != nil {
 		return report, err
 	}
-	defer t.close()
+	defer func() { runErr = errors.Join(runErr, t.close()) }()
 	defer func() {
 		report.DriverStatusRequests = t.statusRequests
 		if c.Duration > 0 {
@@ -263,7 +369,9 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 		name := fmt.Sprintf("caller-%d", i)
 		env := serviceEnv("", "", "")
 		env = append(withoutEnv(env, "GOMAXPROCS"), "GOMAXPROCS="+strconv.Itoa(c.GOMAXPROCS))
-		child, err := m.Start(dir, name, env, executable, "-child", "-parent-pid", strconv.Itoa(os.Getpid()), "-callers", strconv.Itoa(n), "-duration", c.Duration.String(), "-sample-every", c.SampleEvery.String(), "-video="+strconv.FormatBool(c.Video), "-signaling", t.External.SignalingURL, "-relay", t.External.RelayAddr.String(), "-output", output)
+		args := append([]string{executable}, callerNetworkArgs(t.Network)...)
+		args = append(args, "-place-on-worker="+strconv.FormatBool(c.PlaceOnWorker), "-child", "-parent-pid", strconv.Itoa(os.Getpid()), "-callers", strconv.Itoa(n), "-duration", c.Duration.String(), "-sample-every", c.SampleEvery.String(), "-video="+strconv.FormatBool(c.Video), "-signaling", t.External.SignalingURL, "-relay", t.External.RelayAddr.String(), "-output", output)
+		child, err := m.Start(dir, name, env, args...)
 		if err != nil {
 			return report, err
 		}
@@ -287,11 +395,37 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 			return report, err
 		}
 	}
+	if err := waitUntil(ctx, report.StartedAt); err != nil {
+		return report, err
+	}
+	var monitor *capacity.Monitor
+	if c.Capacity {
+		monitor = capacity.Start(ctx, t.Targets, c.SampleEvery)
+		t.Monitor = monitor
+		defer func() {
+			if monitor != nil {
+				report.Telemetry = monitor.Finish(c.Callers)
+			}
+		}()
+	}
 	for _, e := range c.Events {
 		if err := waitUntil(ctx, report.StartedAt.Add(e.After)); err != nil {
 			return report, err
 		}
 		report.Events = append(report.Events, runEvent(ctx, t, generators, e))
+	}
+	if c.Capacity {
+		if err := waitUntil(ctx, report.StartedAt.Add(c.Duration)); err != nil {
+			return report, err
+		}
+		report.Telemetry = monitor.Finish(c.Callers)
+		monitor = nil
+		report.WorkerPeaks = map[string]int{}
+		for _, p := range report.Telemetry.Processes {
+			if strings.HasPrefix(p.Name, "worker-") {
+				report.WorkerPeaks[p.Name] = int(p.Peaks["relais_worker_active_sessions"])
+			}
+		}
 	}
 	for _, g := range generators {
 		select {
@@ -340,6 +474,9 @@ func run() error {
 	child := fs.Bool("child", false, "internal caller-process mode")
 	signaling := fs.String("signaling", "", "child control-plane calls URL")
 	relay := fs.String("relay", "", "child relay media address")
+	callerNamespace := fs.String("caller-namespace", "", "internal owned caller namespace")
+	callerBind := fs.String("caller-bind", "", "internal specific caller IPv4 UDP bind address")
+	fs.BoolVar(&c.PlaceOnWorker, "place-on-worker", false, "internal capacity placement on worker zero")
 	parentPID := fs.Int("parent-pid", 0, "internal caller owner PID")
 	fs.IntVar(&c.Callers, "callers", 10, "total simultaneous harness callers")
 	fs.IntVar(&c.Processes, "processes", 2, "generator processes (balanced caller distribution)")
@@ -353,10 +490,18 @@ func run() error {
 	fs.StringVar(&c.Bin, "bin", "bin", "service binaries and run logs directory")
 	fs.StringVar(&c.Output, "output", "", "report JSON path; defaults to run directory")
 	fs.BoolVar(&c.Video, "video", true, "send harness audio plus video with bounded online decode sampling")
+	fs.BoolVar(&c.Capacity, "capacity", false, "bounded service ramps followed by derived N+1 kill/move and drain")
+	fs.StringVar(&c.Topology, "topology", "loopback", "loopback or Linux netns (unshaped LAN)")
+	fs.IntVar(&c.CapacityStart, "capacity-start", 2, "first concurrent-call step")
+	fs.IntVar(&c.CapacityMax, "capacity-max", 16, "bounded maximum concurrent calls per ramp")
+	fs.IntVar(&c.CallersPerProcess, "callers-per-process", 2, "capacity generators: at most four callers per process, two by default")
+	fs.StringVar(&c.Prices, "prices", "", "optional input machine/transfer price JSON")
+	fs.Float64Var(&c.StoreOpsBudget, "store-ops-budget", 100, "maximum Redis client command attempts per call-second")
+	fs.Float64Var(&c.StoreBytesBudget, "store-bytes-budget", 128<<10, "maximum Redis request+reply bytes per call-second")
 	fs.BoolVar(&c.Calibrate, "calibrate", false, "double callers per process until saturation; requires -processes=1")
 	fs.IntVar(&c.CalibrationStart, "calibration-start", 1, "first calibration caller count")
 	fs.IntVar(&c.CalibrationMax, "calibration-max", 128, "maximum calibration count (a lower bound if unsaturated)")
-	fs.Var(&events, "event", "repeat after,move|kill,count,worker; move count=0 means all eligible calls")
+	fs.Var(&events, "event", "repeat after,move|kill|drain,count,worker; move count=0 means all eligible calls")
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
 	}
@@ -370,7 +515,11 @@ func run() error {
 		}
 		ctx, stop := processrun.Context()
 		defer stop()
-		return loadgen.RunChild(ctx, loadgen.ChildOptions{Topology: externalTopology(*signaling, addr), Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output, ParentPID: *parentPID})
+		external, err := childTopology(*signaling, addr, *callerNamespace, *callerBind)
+		if err != nil {
+			return err
+		}
+		return loadgen.RunChild(ctx, loadgen.ChildOptions{PlaceOnWorker: c.PlaceOnWorker, Topology: external, Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output, ParentPID: *parentPID})
 	}
 	c.Events = []loadgen.Event(events)
 	if err := c.validate(); err != nil {
@@ -403,6 +552,9 @@ func run() error {
 	m := &clusterprocess.Manager{}
 	ctx, stop := m.Context()
 	defer stop()
+	if c.Capacity {
+		return runCapacity(ctx, m, c, root)
+	}
 	if !c.Calibrate {
 		runCtx, cancel := context.WithTimeout(ctx, 4*time.Minute+c.Duration)
 		defer cancel()

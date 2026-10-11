@@ -340,7 +340,7 @@ func firstBufferContent(call *Call, report *Report, killed, end time.Time) (stri
 
 func TestRelayBufferFailurePaths(t *testing.T) {
 	relayBufferStores(t, func(t *testing.T, store sessionstore.Store) {
-		for _, path := range []string{"failed-adoption", "failed-adoption-loss", "retried-target", "retried-replay", "second-crash-during", "second-crash-after", "second-crash-canceled", "sequence-wrap", "frame-cache-complete", "frame-cache-replay", "overflow", "expiry", "relay-restart"} {
+		for _, path := range []string{"failed-adoption", "failed-adoption-loss", "retried-target", "retried-replay", "second-crash-during", "second-crash-after", "second-crash-canceled", "sequence-wrap", "frame-cache-complete", "incomplete-ring-cache-on", "overflow", "expiry", "relay-restart"} {
 			t.Run(path, func(t *testing.T) { testBufferFailure(t, store, path) })
 		}
 	})
@@ -378,10 +378,10 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		cfg.buffer.ReplayInterval = 5 * time.Millisecond
 	case "frame-cache-complete":
 		cfg.cache = true
-	case "frame-cache-replay":
+	case "incomplete-ring-cache-on":
 		cfg.cache = true
 		// Keep actual video datagrams as well as audio, while truncating
-		// enough of the checkpoint window to select cached-picture replay.
+		// enough of the checkpoint window to break codec continuity.
 		cfg.buffer.MaxSessionBytes = 4 << 10
 	case "overflow":
 		cfg.buffer.MaxSessionBytes = 300
@@ -598,7 +598,7 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 	require.Zero(t, report.ICERestarts)
 	require.Zero(t, report.Renegotiations)
 	require.True(t, report.ConnectedThroughout())
-	fallback := path == "frame-cache-replay" || path == "overflow" || path == "expiry" || path == "relay-restart"
+	fallback := path == "incomplete-ring-cache-on" || path == "overflow" || path == "expiry" || path == "relay-restart"
 	event := status.Takeovers[len(status.Takeovers)-1]
 	first, delay := firstBufferContent(call, report, killed, event.End)
 	lossSent, loss := bufferPacketLoss(t, o, killed, event.End)
@@ -617,7 +617,7 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 			require.Equal(t, "Outage", first)
 			decodeBufferUnique(t, ctx, call, report, true)
 		}
-		if path == "overflow" || path == "frame-cache-replay" {
+		if path == "overflow" || path == "incomplete-ring-cache-on" {
 			require.Positive(t, sys.r.Stats().BufferDrops)
 		}
 		if path == "expiry" {
@@ -628,10 +628,9 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 			require.Positive(t, report.SentVideo.KeyframeRequests)
 			require.NotEmpty(t, first)
 		}
-		if path == "frame-cache-replay" {
-			require.Greater(t, event.Result.RelayReplayPackets, 1, "the relay ring actually replays alongside the cached group")
-			require.Equal(t, "Cache", report.Moves[0].Recovery.Path)
-			require.Positive(t, report.Moves[0].Recovery.ReplayPackets, "frame cache actually replayed alongside the incomplete relay ring")
+		if path == "incomplete-ring-cache-on" {
+			require.Greater(t, event.Result.RelayReplayPackets, 1, "the incomplete relay ring actually delivers retained media")
+			require.True(t, event.Result.RelayReplayRecoveryPLI, "incomplete retained input requests a keyframe after drain")
 		}
 		if path == "sequence-wrap" {
 			o.mu.Lock()
