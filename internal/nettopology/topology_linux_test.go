@@ -289,9 +289,25 @@ func TestLinuxStaleCleanupContinuesPastDeletionFailure(t *testing.T) {
 	}
 	_, err = runCommand(ctx, Command{"ip", "link", "add", stuck.ManagementHost, "type", "veth", "peer", "name", stuck.ManagementPeer})
 	require.NoError(t, err)
+	namespaces, err := runCommand(ctx, Command{"ip", "netns", "list"})
+	require.NoError(t, err)
+	require.Contains(t, namespaces, stuck.FabricNamespace)
+	require.Contains(t, namespaces, other.FabricNamespace)
 	var logs []string
+	var deletions []string
 	cleaner := &Topology{logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }, runner: func(ctx context.Context, command Command) (string, error) {
-		if strings.Join(command, " ") == "ip netns delete "+stuck.FabricNamespace || strings.Join(command, " ") == "ip link delete "+stuck.ManagementHost {
+		text := strings.Join(command, " ")
+		if text == "ip netns list" {
+			// List only our real fixtures, with the failed namespace first,
+			// so deletion of the other namespace proves continued cleanup.
+			return stuck.FabricNamespace + "\n" + other.FabricNamespace + "\n", nil
+		}
+		if strings.HasPrefix(text, "ip link delete ") || strings.HasPrefix(text, "ip netns delete ") {
+			deletions = append(deletions, text)
+		}
+		// Deleting either veth end removes the pair. Fail both ends so link
+		// enumeration order cannot remove our target before the injection.
+		if text == "ip netns delete "+stuck.FabricNamespace || text == "ip link delete "+stuck.ManagementHost || text == "ip link delete "+stuck.ManagementPeer {
 			return "", errors.New("injected stale deletion failure")
 		}
 		return runCommand(ctx, command)
@@ -299,7 +315,17 @@ func TestLinuxStaleCleanupContinuesPastDeletionFailure(t *testing.T) {
 	require.NoError(t, cleaner.cleanStale(ctx))
 	require.Contains(t, strings.Join(logs, "\n"), "cannot clean stale namespace "+stuck.FabricNamespace+"; continuing")
 	require.Contains(t, strings.Join(logs, "\n"), "cannot clean stale link "+stuck.ManagementHost+"; continuing")
-	namespaces, err := runCommand(ctx, Command{"ip", "netns", "list"})
+	require.Contains(t, strings.Join(logs, "\n"), "cannot clean stale link "+stuck.ManagementPeer+"; continuing")
+	// Production cleans root links before namespaces. Both link failures
+	// must be reached, followed by a namespace failure and then success.
+	require.Len(t, deletions, 4)
+	require.ElementsMatch(t, []string{"ip link delete " + stuck.ManagementHost, "ip link delete " + stuck.ManagementPeer}, deletions[:2])
+	require.Equal(t, []string{"ip netns delete " + stuck.FabricNamespace, "ip netns delete " + other.FabricNamespace}, deletions[2:])
+	for _, link := range []string{stuck.ManagementHost, stuck.ManagementPeer} {
+		_, err := runCommand(ctx, Command{"ip", "link", "show", "dev", link})
+		require.NoError(t, err, "failed veth deletions must leave both ends for recovery")
+	}
+	namespaces, err = runCommand(ctx, Command{"ip", "netns", "list"})
 	require.NoError(t, err)
 	require.Contains(t, namespaces, stuck.FabricNamespace)
 	require.NotContains(t, namespaces, other.FabricNamespace)
