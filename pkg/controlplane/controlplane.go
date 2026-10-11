@@ -532,7 +532,11 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Kind: agent.PlannedMove, Lease: transferred})
 	res.Result.Resume = time.Since(started)
 	if err != nil {
-		err = p.rollback(c, source, target, r, state, transferred, true, true, errors.Is(err, privateapi.ErrUncertain) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded), &res.Result, err, res.Start)
+		// Explicit transport uncertainty can hide a committed adoption, even
+		// with an agent cause. Otherwise typed callback failures are definitive.
+		agentFailure := errors.Is(err, agent.ErrRestore) || errors.Is(err, agent.ErrVersion) || errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrSave)
+		uncertainResume := errors.Is(err, privateapi.ErrUncertain) || (!agentFailure && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)))
+		err = p.rollback(c, source, target, r, state, transferred, true, true, uncertainResume, &res.Result, err, res.Start)
 		return res, err
 	}
 

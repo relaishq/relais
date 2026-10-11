@@ -34,11 +34,13 @@ type agentResumeObservation struct {
 	count  uint64
 }
 type harnessCounterAgent struct {
-	count          uint64
-	consumedAt     int64
-	resumes        chan agentResumeObservation
-	restoreFailure bool
-	processDelay   time.Duration
+	count           uint64
+	consumedAt      int64
+	resumes         chan agentResumeObservation
+	restoreFailure  bool
+	callbackTimeout string
+	resumeSave      bool
+	processDelay    time.Duration
 }
 
 func (a *harnessCounterAgent) Process(ctx context.Context, _ agent.Input) (agent.Output, error) {
@@ -56,13 +58,21 @@ func (a *harnessCounterAgent) Process(ctx context.Context, _ agent.Input) (agent
 	binary.BigEndian.PutUint64(payload[len(payload)-8:], a.count)
 	return agent.Output{Audio: payload, Changed: true}, nil
 }
-func (a *harnessCounterAgent) Save(context.Context) (agent.State, error) {
+func (a *harnessCounterAgent) Save(ctx context.Context) (agent.State, error) {
+	if a.callbackTimeout == "save" && a.resumeSave {
+		<-ctx.Done()
+		return agent.State{}, ctx.Err()
+	}
 	data := make([]byte, 16)
 	binary.BigEndian.PutUint64(data, a.count)
 	binary.BigEndian.PutUint64(data[8:], uint64(a.consumedAt))
 	return agent.State{Version: 1, Bytes: data}, nil
 }
-func (a *harnessCounterAgent) Restore(_ context.Context, state agent.State) error {
+func (a *harnessCounterAgent) Restore(ctx context.Context, state agent.State) error {
+	if a.callbackTimeout == "restore" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	if a.restoreFailure {
 		return errors.New("injected restore failure")
 	}
@@ -76,7 +86,15 @@ func (a *harnessCounterAgent) Restore(_ context.Context, state agent.State) erro
 	a.consumedAt = int64(binary.BigEndian.Uint64(state.Bytes[8:]))
 	return nil
 }
-func (a *harnessCounterAgent) Resume(_ context.Context, notice agent.ResumeNotice) error {
+func (a *harnessCounterAgent) Resume(ctx context.Context, notice agent.ResumeNotice) error {
+	if a.callbackTimeout == "resume" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if a.callbackTimeout == "save" {
+		a.resumeSave = true
+		return nil
+	}
 	a.resumes <- agentResumeObservation{notice, a.count}
 	return nil
 }
@@ -90,10 +108,11 @@ type agentHarnessSystem struct {
 }
 
 type agentHarnessSettings struct {
-	snapshotInterval     time.Duration
-	targetRestoreFailure bool
-	echo                 bool
-	sourceProcessDelay   time.Duration
+	snapshotInterval      time.Duration
+	targetRestoreFailure  bool
+	targetCallbackTimeout string
+	echo                  bool
+	sourceProcessDelay    time.Duration
 }
 
 func startAgentHarness(t *testing.T, store sessionstore.Store, settings ...agentHarnessSettings) *agentHarnessSystem {
@@ -119,6 +138,9 @@ func startAgentHarness(t *testing.T, store sessionstore.Store, settings ...agent
 				return &agent.Echo{}
 			}
 			a := &harnessCounterAgent{resumes: resumes, restoreFailure: i == 1 && config.targetRestoreFailure}
+			if i == 1 {
+				a.callbackTimeout = config.targetCallbackTimeout
+			}
 			if i == 0 {
 				a.processDelay = config.sourceProcessDelay
 			}
@@ -486,6 +508,52 @@ func TestAgentSaveRateAndAtomicProgress(t *testing.T) {
 		require.NoError(t, err)
 		t.Logf("AGENT_SAVE_RATE consumed=35 changed_writes=%d minimum_interval=100ms transport_interval=5ms", len(writes))
 	})
+}
+
+func TestAgentCallbackTimeoutRollsBackPlannedCall(t *testing.T) {
+	for _, callback := range []string{"restore", "resume", "save"} {
+		t.Run(callback, func(t *testing.T) {
+			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+				sys := startAgentHarness(t, store, agentHarnessSettings{targetCallbackTimeout: callback})
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				call, err := sys.h.Dial(ctx, CallOptions{})
+				require.NoError(t, err)
+				counts := observeAgentCounts(call)
+				require.NoError(t, call.SendMedia(ctx, 200*time.Millisecond))
+				require.Eventually(t, func() bool { return len(counts.snapshot()) >= 10 }, time.Second, time.Millisecond)
+
+				result, err := sys.plane.Move(ctx, call.SessionID(), "1")
+				if callback == "save" {
+					require.ErrorIs(t, err, agent.ErrSave)
+					require.EqualValues(t, 1, sys.workers[1].AgentStats().SaveFailures)
+				} else {
+					require.ErrorIs(t, err, agent.ErrRestore)
+					require.EqualValues(t, 1, sys.workers[1].AgentStats().RestoreFailures)
+				}
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.True(t, result.Result.RolledBack)
+				require.False(t, result.Lost)
+				require.Equal(t, 1, sys.workers[0].SessionCount())
+				require.Zero(t, sys.workers[1].SessionCount())
+				require.EqualValues(t, 1, sys.workers[1].AgentStats().CallbackDeadlines)
+				resumed := awaitAgentResume(t, sys)
+				require.Equal(t, agent.PlannedMove, resumed.notice.Kind)
+				require.EqualValues(t, 10, resumed.count)
+				require.Equal(t, resumed.count, resumed.notice.Progress.Consumed)
+				require.NoError(t, call.SendMedia(ctx, 200*time.Millisecond))
+				require.Eventually(t, func() bool { return len(counts.snapshot()) >= 20 }, time.Second, time.Millisecond)
+				for i, n := range counts.snapshot() {
+					require.EqualValues(t, i+1, n, "rollback preserves the final exported agent state")
+				}
+				report, err := call.Hangup(ctx)
+				require.NoError(t, err)
+				require.Zero(t, report.DecryptionFailures.Total())
+				require.Len(t, report.Tracks, 1)
+				require.Zero(t, report.Tracks[0].SequenceDiscontinuities, "planned rollback spends no sequence margin")
+			})
+		})
+	}
 }
 
 func TestAgentFailedRestoreRollsBackPlannedCall(t *testing.T) {
