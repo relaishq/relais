@@ -30,6 +30,7 @@ type demo struct {
 	client                     *http.Client
 	control, relay, redis, dir string
 	agentName                  string
+	relayBuffer                string
 	publicHost                 string     // exact opt-in page IP; empty means loopback only
 	launchToken                string     // per-launch LAN mutation capability
 	op                         sync.Mutex // serialize actions, including recycled workers
@@ -45,6 +46,7 @@ var errRegistrationUncertain = errors.New("replacement registration unverified")
 
 type demoStatus struct {
 	controlplane.Status
+	RelayBuffer       string         `json:"relayBuffer"`
 	SelectedAgent     string         `json:"selected_agent"`
 	RegistrationError string         `json:"registration_error,omitempty"`
 	PoolSize          int            `json:"pool_size"`
@@ -61,6 +63,7 @@ func (d *demo) status(ctx context.Context) (demoStatus, error) {
 		return status, err
 	}
 	status.Relay, status.Redis = d.relay, d.redis
+	status.RelayBuffer = selectedRelayBuffer(config{RelayBuffer: d.relayBuffer})
 	status.SelectedAgent = d.agentName
 	if status.SelectedAgent == "" {
 		status.SelectedAgent = "echo"

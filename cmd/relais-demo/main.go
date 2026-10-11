@@ -24,7 +24,7 @@ import (
 //go:embed web
 var web embed.FS
 
-type config struct{ Bin, HTTP, Redis, RedisBinary, LocalNetwork, Agent string }
+type config struct{ Bin, HTTP, Redis, RedisBinary, LocalNetwork, Agent, RelayBuffer string }
 
 func processEnv(key, addr, prefix string, withKey bool) []string {
 	env := []string{}
@@ -110,7 +110,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 	if err != nil {
 		return nil, err
 	}
-	d := &demo{ctx: ctx, client: &http.Client{Timeout: 10 * time.Second}, control: "http://" + controlAddr, relay: relay.Media, redis: addr, dir: dir, workers: map[string]*workerProcess{}, publicHost: cfg.LocalNetwork, launchToken: token, agentName: selectedAgent(cfg)}
+	d := &demo{ctx: ctx, client: &http.Client{Timeout: 10 * time.Second}, control: "http://" + controlAddr, relay: relay.Media, redis: addr, dir: dir, workers: map[string]*workerProcess{}, publicHost: cfg.LocalNetwork, launchToken: token, agentName: selectedAgent(cfg), relayBuffer: selectedRelayBuffer(cfg)}
 	usedMedia := map[string]bool{}
 	d.spawn = func(ctx context.Context, name string) (*workerProcess, error) {
 		media, err := freshUDP(usedMedia)
@@ -171,7 +171,17 @@ func selectedAgent(cfg config) string {
 	return cfg.Agent
 }
 
+func selectedRelayBuffer(cfg config) string {
+	if cfg.RelayBuffer == "" {
+		return "on"
+	}
+	return cfg.RelayBuffer
+}
+
 func validateConfig(cfg config) error {
+	if selectedRelayBuffer(cfg) != "on" && selectedRelayBuffer(cfg) != "off" {
+		return errors.New("-relay-buffer must be on or off")
+	}
 	if selectedAgent(cfg) != "echo" && selectedAgent(cfg) != "demo" {
 		return errors.New("-agent must be echo or demo")
 	}
@@ -194,14 +204,19 @@ func validateConfig(cfg config) error {
 	return nil
 }
 
+func configureFlags(flags *flag.FlagSet, cfg *config) {
+	flags.StringVar(&cfg.RelayBuffer, "relay-buffer", "on", "relay caller SRTP buffer: on or off")
+	flags.StringVar(&cfg.Agent, "agent", "echo", "worker audio agent: echo or demo")
+	flags.StringVar(&cfg.Bin, "bin", "bin", "directory containing built relay, worker and control")
+	flags.StringVar(&cfg.HTTP, "http", "127.0.0.1:9101", "literal loopback page address")
+	flags.StringVar(&cfg.LocalNetwork, "local-network", "", "opt in to HTTPS and public media on this literal local IPv4 address; uses the -http port, private APIs remain on loopback")
+	flags.StringVar(&cfg.Redis, "redis", "", "explicit dedicated Redis address; otherwise start throwaway Redis (6379 refused)")
+	flags.StringVar(&cfg.RedisBinary, "redis-server", "redis-server", "throwaway Redis executable")
+}
+
 func run() error {
 	var cfg config
-	flag.StringVar(&cfg.Agent, "agent", "echo", "worker audio agent: echo or demo")
-	flag.StringVar(&cfg.Bin, "bin", "bin", "directory containing built relay, worker and control")
-	flag.StringVar(&cfg.HTTP, "http", "127.0.0.1:9101", "literal loopback page address")
-	flag.StringVar(&cfg.LocalNetwork, "local-network", "", "opt in to HTTPS and public media on this literal local IPv4 address; uses the -http port, private APIs remain on loopback")
-	flag.StringVar(&cfg.Redis, "redis", "", "explicit dedicated Redis address; otherwise start throwaway Redis (6379 refused)")
-	flag.StringVar(&cfg.RedisBinary, "redis-server", "redis-server", "throwaway Redis executable")
+	configureFlags(flag.CommandLine, &cfg)
 	flag.Parse()
 	// Validate exposure and Redis before starting any child or dialing any store.
 	if err := validateConfig(cfg); err != nil {
