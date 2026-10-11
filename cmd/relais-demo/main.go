@@ -43,6 +43,10 @@ func processEnv(key, addr, prefix string, withKey bool) []string {
 }
 
 func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*demo, error) {
+	id, err := newLaunchID()
+	if err != nil {
+		return nil, err
+	}
 	token, err := launchToken(cfg.LocalNetwork)
 	if err != nil {
 		return nil, err
@@ -110,7 +114,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 	if err != nil {
 		return nil, err
 	}
-	d := &demo{ctx: ctx, client: &http.Client{Timeout: 10 * time.Second}, control: "http://" + controlAddr, relay: relay.Media, redis: addr, dir: dir, workers: map[string]*workerProcess{}, publicHost: cfg.LocalNetwork, launchToken: token, agentName: selectedAgent(cfg), relayBuffer: selectedRelayBuffer(cfg)}
+	d := &demo{ctx: ctx, client: &http.Client{Timeout: 10 * time.Second}, control: "http://" + controlAddr, relay: relay.Media, redis: addr, dir: dir, workers: map[string]*workerProcess{}, publicHost: cfg.LocalNetwork, launchToken: token, launchID: id, agentName: selectedAgent(cfg), relayBuffer: selectedRelayBuffer(cfg)}
 	usedMedia := map[string]bool{}
 	d.spawn = func(ctx context.Context, name string) (*workerProcess, error) {
 		media, err := freshUDP(usedMedia)
@@ -171,6 +175,14 @@ func selectedAgent(cfg config) string {
 	return cfg.Agent
 }
 
+func newLaunchID() (string, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(id[:]), nil
+}
+
 func selectedRelayBuffer(cfg config) string {
 	if cfg.RelayBuffer == "" {
 		return "on"
@@ -205,7 +217,14 @@ func validateConfig(cfg config) error {
 }
 
 func configureFlags(flags *flag.FlagSet, cfg *config) {
-	flags.StringVar(&cfg.RelayBuffer, "relay-buffer", "on", "relay caller SRTP buffer: on or off")
+	cfg.RelayBuffer = "on"
+	flags.Func("relay-buffer", "relay caller SRTP buffer: on or off (default on)", func(mode string) error {
+		if mode != "on" && mode != "off" {
+			return errors.New("-relay-buffer must be on or off")
+		}
+		cfg.RelayBuffer = mode
+		return nil
+	})
 	flags.StringVar(&cfg.Agent, "agent", "echo", "worker audio agent: echo or demo")
 	flags.StringVar(&cfg.Bin, "bin", "bin", "directory containing built relay, worker and control")
 	flags.StringVar(&cfg.HTTP, "http", "127.0.0.1:9101", "literal loopback page address")

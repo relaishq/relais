@@ -32,6 +32,7 @@ type demo struct {
 	agentName                  string
 	relayBuffer                string
 	publicHost                 string     // exact opt-in page IP; empty means loopback only
+	launchID                   string     // public identity; separate from the LAN mutation capability
 	launchToken                string     // per-launch LAN mutation capability
 	op                         sync.Mutex // serialize actions, including recycled workers
 	mu                         sync.Mutex // status can poll during recovery
@@ -46,6 +47,7 @@ var errRegistrationUncertain = errors.New("replacement registration unverified")
 
 type demoStatus struct {
 	controlplane.Status
+	LaunchID          string         `json:"launchId"`
 	RelayBuffer       string         `json:"relayBuffer"`
 	SelectedAgent     string         `json:"selected_agent"`
 	RegistrationError string         `json:"registration_error,omitempty"`
@@ -63,6 +65,7 @@ func (d *demo) status(ctx context.Context) (demoStatus, error) {
 		return status, err
 	}
 	status.Relay, status.Redis = d.relay, d.redis
+	status.LaunchID = d.launchID
 	status.RelayBuffer = selectedRelayBuffer(config{RelayBuffer: d.relayBuffer})
 	status.SelectedAgent = d.agentName
 	if status.SelectedAgent == "" {
@@ -303,7 +306,13 @@ func (d *demo) handler(files http.Handler) http.Handler {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/", files)
-	mux.Handle("POST /calls", proxy)
+	mux.HandleFunc("POST /calls", func(w http.ResponseWriter, r *http.Request) {
+		if d.launchID == "" || r.Header.Get("X-Relais-Demo-Launch-ID") != d.launchID {
+			http.Error(w, "demo launch changed; reload the page and start a new call", http.StatusConflict)
+			return
+		}
+		proxy.ServeHTTP(w, r)
+	})
 	// The Pion external harness reads /status next to its signaling URL.
 	mux.Handle("GET /status", proxy)
 	mux.Handle("DELETE /calls/{id}", proxy)

@@ -57,3 +57,10 @@ func TestRelayBufferRejectsInvalidModeBeforeListening(t *testing.T) {
 		require.Nil(t, listener)
 	}
 }
+
+func TestRelayBufferFlagRejectsExplicitEmpty(t *testing.T) {
+	var cfg config
+	flags := flag.NewFlagSet("relais-demo", flag.ContinueOnError)
+	configureFlags(flags, &cfg)
+	require.ErrorContains(t, flags.Parse([]string{"-relay-buffer="}), "-relay-buffer must be on or off")
+}

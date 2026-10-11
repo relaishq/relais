@@ -71,11 +71,11 @@ for(const mode of ['on','off']) {
  test(`saved JSON includes server buffer mode ${mode} pinned before media`,async()=>{
   const {api,context}=page('?relay-buffer='+ (mode==='on'?'off':'on'));
   context.RTCPeerConnection=function(){return {close(){}};};
-  context.fetch=async()=>({ok:true,text:async()=>JSON.stringify({selected_agent:'echo',relayBuffer:mode})});
+  context.fetch=async()=>({ok:true,text:async()=>JSON.stringify({selected_agent:'echo',relayBuffer:mode,launchId:'test-launch'})});
   await assert.rejects(api.start(),/media started/);
   assert.equal(context.window.sourceAcquired,true);
   assert.equal(context.window.relaisDemo.results().relayBuffer,mode);
-  // Later diagnostics must not relabel the call if the server is restarted.
+  // Later status diagnostics must not relabel the saved call.
   const s=call();s.agentMode='echo';s.relayBuffer=context.window.relaisDemo.results().relayBuffer;
   s.status={relayBuffer:mode==='on'?'off':'on'};api.setCall(s);
   const record=api.saveResults();
@@ -99,3 +99,12 @@ test('visible buffer mode comes from status before a call starts',async()=>{
  await new Promise((resolve)=>setImmediate(resolve));
  assert.equal(elements.get('relay-buffer').textContent,'off');
 });
+
+for(const launchId of [undefined,'',42]) {
+ test(`startup rejects invalid launch identity ${JSON.stringify(launchId)}`,async()=>{
+  const {api,context}=page();context.RTCPeerConnection=function(){return {close(){}};};
+  context.fetch=async()=>({ok:true,text:async()=>JSON.stringify({selected_agent:'echo',relayBuffer:'on',launchId})});
+  await assert.rejects(api.start(),/demo launch identity missing or invalid/);
+  assert.equal(context.window.sourceAcquired,undefined);
+ });
+}
