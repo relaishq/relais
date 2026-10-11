@@ -110,6 +110,7 @@ type videoRecord struct {
 	lastPictureID   uint16
 	lastSourceAt    time.Duration
 	lastIdentity    uint64
+	decodedPictures map[uint16]sentVideoFrame // recent decoded identities, not just complete receipts
 	decodeOverflow  bool
 	sampleBurst     int
 	lastSampleEvent time.Duration
@@ -414,13 +415,16 @@ func (r *recorder) videoIncomplete(track *trackRecord, frames int) {
 // videoFrame records a complete frame on a video track. For a keyframe,
 // size and decodeErr are the result of decoding it in Go; decoded is when
 // that finished.
-func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Point, decodeErr error, decoded time.Time) {
+func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Point, decodeErr error, decoded time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.hungUp {
-		return
+		return false
 	}
 	v := track.video
+	if r.recordDecodedRepeat(track, frame, decoded) {
+		return false
+	}
 	decodable := v.DecodableFrames
 	restartsDecodeChain := false
 	source := r.sentVideoFrames[frame.pictureID]
@@ -430,12 +434,19 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 		}
 		source = sentVideoFrame{}
 	}
+	frame.sourceAt = source.at
 	defer func() {
 		receivedAt := time.Duration(0)
 		if !frame.completedAt.IsZero() {
 			receivedAt = r.since(frame.completedAt)
 		}
 		v.frames = append(v.frames, frameMark{at: r.since(decoded), decodable: v.DecodableFrames > decodable, firstArrival: r.since(frame.firstArrival), receivedAt: receivedAt, source: source, pictureID: frame.pictureID, restartsDecodeChain: restartsDecodeChain})
+		if v.DecodableFrames > decodable && source.at > 0 && source.written {
+			if v.decodedPictures == nil {
+				v.decodedPictures = make(map[uint16]sentVideoFrame)
+			}
+			v.decodedPictures[frame.pictureID] = source
+		}
 	}()
 
 	v.Frames++
@@ -501,6 +512,47 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 			v.decodeOverflow = true
 		}
 	}
+	return true
+}
+
+// decodeVideoFrame rejects already decoded pictures before either decoder is
+// called. The live reader then records a new frame and optionally samples it.
+func (r *recorder) decodeVideoFrame(track *trackRecord, frame *vp8Frame, at time.Time) (image.Point, error, bool) {
+	r.mu.Lock()
+	repeated := r.hungUp || r.recordDecodedRepeat(track, frame, at)
+	r.mu.Unlock()
+	if repeated || !frame.keyframe {
+		return image.Point{}, nil, repeated
+	}
+	size, err := decodeKeyframe(frame.data)
+	return size, err, false
+}
+
+// recordDecodedRepeat runs under r.mu. Cache provenance remains known from
+// the earlier decode, but a repeat cannot advance the decoder, satisfy decode
+// sampling, or supply first new content. Only exact retained send identities
+// qualify; unknown epochs and conflicting payloads still follow the old path.
+func (r *recorder) recordDecodedRepeat(track *trackRecord, frame *vp8Frame, at time.Time) bool {
+	source := r.sentVideoFrames[frame.pictureID]
+	previous, ok := track.video.decodedPictures[frame.pictureID]
+	if !ok || source.at <= 0 || !source.written || source.data != string(frame.data) || previous.identity != source.identity || previous.at != source.at || previous.data != source.data {
+		return false
+	}
+	v := track.video
+	v.Frames++
+	v.RepeatedFrames++
+	if frame.keyframe {
+		v.Keyframes++
+	}
+	receivedAt := r.since(at)
+	if !frame.completedAt.IsZero() {
+		receivedAt = r.since(frame.completedAt)
+	}
+	if len(v.frames) > 0 && receivedAt-v.frames[len(v.frames)-1].receivedAt > max(50*time.Millisecond, 3*r.frameInterval) {
+		v.sampleBurst = max(v.sampleBurst, minimumDecodedSamples)
+	}
+	v.frames = append(v.frames, frameMark{at: r.since(at), decodable: true, repeated: true, firstArrival: r.since(frame.firstArrival), receivedAt: receivedAt, source: source, pictureID: frame.pictureID})
+	return true
 }
 
 // decodeInput returns the frames of the i-th received track for the full

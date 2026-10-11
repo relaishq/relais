@@ -106,7 +106,7 @@ func (s *onlineSampler) frame(f *vp8Frame, size image.Point, err error) {
 			v.lastSampleEvent = r.since(move.start)
 		}
 	}
-	wanted := f.keyframe || v.Frames%r.recording.DecodeEvery == 0 || v.sampleBurst > 0
+	wanted := f.keyframe || (v.Frames-v.RepeatedFrames)%r.recording.DecodeEvery == 0 || v.sampleBurst > 0
 	if wanted && v.sampleBurst > 0 {
 		v.sampleBurst--
 	}

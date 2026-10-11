@@ -37,7 +37,8 @@ import (
 // vp8Frame is one VP8 frame the caller reassembled from RTP packets.
 type vp8Frame struct {
 	data         []byte
-	timestamp    uint32 // RTP timestamp
+	timestamp    uint32        // RTP timestamp
+	sourceAt     time.Duration // authenticated sender clock for decoder DTS
 	firstSeq     uint16
 	lastSeq      uint16
 	keyframe     bool
@@ -307,8 +308,9 @@ func fullDecode(ctx context.Context, frames []vp8Frame, size image.Point) FullDe
 	return result
 }
 
-// writeIVF writes VP8 frames as an IVF stream with the RTP clock as its time
-// base.
+// writeIVF uses the authenticated source clock when available. Decoder input
+// retains source order and excludes decoded repeats; relay output timestamps
+// cannot move its DTS backwards. Unknown sources retain their RTP timestamps.
 func writeIVF(w *bytes.Buffer, frames []vp8Frame, size image.Point) {
 	var header [32]byte
 	copy(header[0:4], "DKIF")
@@ -325,7 +327,12 @@ func writeIVF(w *bytes.Buffer, frames []vp8Frame, size image.Point) {
 	for _, frame := range frames {
 		var frameHeader [12]byte
 		binary.LittleEndian.PutUint32(frameHeader[0:], uint32(len(frame.data)))
-		binary.LittleEndian.PutUint64(frameHeader[4:], uint64(frame.timestamp-frames[0].timestamp))
+		dts := uint64(frame.timestamp - frames[0].timestamp)
+		if frames[0].sourceAt > 0 && frame.sourceAt >= frames[0].sourceAt {
+			delta := frame.sourceAt - frames[0].sourceAt
+			dts = uint64(delta/time.Second)*vp8ClockRate + uint64(delta%time.Second)*vp8ClockRate/uint64(time.Second)
+		}
+		binary.LittleEndian.PutUint64(frameHeader[4:], dts)
 		w.Write(frameHeader[:])
 		w.Write(frame.data)
 	}

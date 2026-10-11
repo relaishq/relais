@@ -145,6 +145,9 @@ type VideoReport struct {
 	Frames           int
 	Keyframes        int
 	IncompleteFrames int
+	// RepeatedFrames counts exact pictures already decoded. They remain
+	// complete receipts, but are excluded from decoder inputs and samples.
+	RepeatedFrames int
 	// FrameGaps counts complete frames that did not directly follow the
 	// previous complete frame: frames were lost or reordered between them.
 	FrameGaps int
@@ -162,7 +165,7 @@ type VideoReport struct {
 	KeyframeDecodeErrors int
 	LastDecodeError      string
 
-	// DecodableFrames counts frames that decode: decoded keyframes, and
+	// DecodableFrames counts unique frames that decode: decoded keyframes, and
 	// interframes in an unbroken run of complete frames since one.
 	// FramesBeforeFirstKeyframe counts frames that arrived before any
 	// keyframe decoded (a receiver waits for a keyframe). UndecodableFrames
@@ -395,8 +398,8 @@ func (r *Report) Summary() string {
 }
 
 func writeVideoSummary(b *strings.Builder, r *Report, v *VideoReport) {
-	fmt.Fprintf(b, "    frames:         %d complete (%d keyframes), %d incomplete, %d gaps, %d unmatched\n",
-		v.Frames, v.Keyframes, v.IncompleteFrames, v.FrameGaps, v.UnmatchedFrames)
+	fmt.Fprintf(b, "    frames:         %d complete (%d keyframes), %d repeated, %d incomplete, %d gaps, %d unmatched\n",
+		v.Frames, v.Keyframes, v.RepeatedFrames, v.IncompleteFrames, v.FrameGaps, v.UnmatchedFrames)
 	if v.FirstDecodedFrameAt == 0 {
 		fmt.Fprintf(b, "    first decoded:  none\n")
 	} else {

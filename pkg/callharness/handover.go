@@ -184,6 +184,7 @@ type rtpMark struct {
 
 // frameMark is a complete video frame the caller received.
 type frameMark struct {
+	repeated            bool // provenance reuses an earlier decode; no decoder input
 	restartsDecodeChain bool
 	receivedAt          time.Duration
 	at                  time.Duration

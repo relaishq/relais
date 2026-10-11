@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"image"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -344,13 +343,12 @@ func (c *Call) onTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 				c.rec.videoIncomplete(record, incomplete)
 			}
 			for _, frame := range frames {
-				var size image.Point
-				var decodeErr error
-				if frame.keyframe {
-					size, decodeErr = decodeKeyframe(frame.data)
+				size, decodeErr, repeated := c.rec.decodeVideoFrame(record, frame, time.Now())
+				if repeated {
+					continue
 				}
-				c.rec.videoFrame(record, frame, size, decodeErr, time.Now())
-				if sampler != nil {
+				accepted := c.rec.videoFrame(record, frame, size, decodeErr, time.Now())
+				if accepted && sampler != nil {
 					sampler.frame(frame, size, decodeErr)
 				}
 			}

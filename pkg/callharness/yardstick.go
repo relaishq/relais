@@ -464,7 +464,7 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 				}
 				continue
 			}
-			if !seenDecoded[frame.source.at] {
+			if !frame.repeated && !seenDecoded[frame.source.at] {
 				m.DecodedFrames++
 				seenDecoded[frame.source.at] = true
 			}
@@ -476,14 +476,14 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 				m.FirstContentIdentity = frame.source.identity
 				m.FirstContentSentAt = frame.source.at
 			}
-			if !prior && m.FirstNewContent == "" {
+			if !frame.repeated && !prior && m.FirstNewContent == "" {
 				m.FirstNewContent = class
 				m.FirstNewFrame = frame.at - move.Start
 				m.FirstNewContentPictureID = frame.pictureID
 				m.FirstNewContentIdentity = frame.source.identity
 				m.FirstNewContentSentAt = frame.source.at
 			}
-			if frame.source.at >= m.MediaResumedAt && m.FirstLiveFrame == 0 {
+			if !frame.repeated && frame.source.at >= m.MediaResumedAt && m.FirstLiveFrame == 0 {
 				m.FirstLiveFrame = frame.at - move.Start
 			}
 		}

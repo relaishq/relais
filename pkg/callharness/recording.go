@@ -47,6 +47,7 @@ type RecordingReport struct {
 	HistoryStart                                                 time.Duration
 	Packets, ContentUnits, Assemblies, FrameMarks, OfflineFrames int
 	EventSummaries                                               int
+	DecodedPictures                                              int
 	HistoryBytes                                                 int64
 }
 
@@ -66,6 +67,7 @@ func (r *recorder) memoryGauge() RecordingReport {
 	for _, t := range r.tracks {
 		g.Packets += len(t.arrivals)
 		if t.video != nil {
+			g.DecodedPictures += len(t.video.decodedPictures)
 			g.FrameMarks += len(t.video.frames)
 			g.OfflineFrames += len(t.video.decodeInput)
 			for _, f := range t.video.decodeInput {
@@ -210,6 +212,11 @@ func (r *recorder) compact(now time.Duration) {
 			t.seenPackets[mark.seq] = mark.timestamp
 		}
 		if t.video != nil {
+			for id, picture := range t.video.decodedPictures {
+				if picture.at < cutoff {
+					delete(t.video.decodedPictures, id)
+				}
+			}
 			t.video.frames = slices.Clone(slices.DeleteFunc(t.video.frames, func(f frameMark) bool { return f.at < cutoff }))
 			t.video.sampleResults = slices.Clone(slices.DeleteFunc(t.video.sampleResults, func(s decodeSample) bool { return s.at < cutoff }))
 		}
