@@ -462,9 +462,11 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 			p.takeoverLocked(recovery, source, c, lease, res.Start)
 			p.mu.Lock()
 			pending := source.pending[c.id]
+			outcomeRecorded := false
 			events := p.recentTakeovers()
 			for i := len(events) - 1; i >= 0; i-- {
 				if events[i].ID == c.id && !events[i].Start.Before(res.Start) {
+					outcomeRecorded = true
 					res = events[i]
 					if !res.Lost {
 						releaseTo = target.addr
@@ -478,6 +480,11 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 			p.mu.Unlock()
 			if pending != nil {
 				return res, fmt.Errorf("controlplane: export uncertain; recovery pending: %w", err)
+			}
+			if !outcomeRecorded {
+				// A concurrent transfer ended recovery without a terminal outcome.
+				// Let move's defer count the failed coordination attempt.
+				recoveryMetrics = false
 			}
 			released = true
 			return res, err

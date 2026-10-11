@@ -139,6 +139,72 @@ func TestControlMetricsUncertainExportIsOneMove(t *testing.T) {
 	}
 }
 
+type gatedUncertainExportWorker struct {
+	*uncertainExportWorker
+	started chan struct{}
+	gate    chan struct{}
+}
+
+func (w *gatedUncertainExportWorker) ExportSession(id string) ([]byte, error) {
+	close(w.started)
+	<-w.gate
+	return w.uncertainExportWorker.ExportSession(id)
+}
+
+func TestControlMetricsUncertainExportConcurrentTransferCountsOneMoveError(t *testing.T) {
+	p, a, b, _ := setup(t)
+	w := &gatedUncertainExportWorker{
+		uncertainExportWorker: &uncertainExportWorker{fakeWorker: a},
+		started:               make(chan struct{}),
+		gate:                  make(chan struct{}),
+	}
+	p.workers["a"].worker = w
+	t.Cleanup(func() {
+		select {
+		case <-w.gate:
+		default:
+			close(w.gate)
+		}
+	})
+	ctx := context.Background()
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	lease, err := p.store.Get(ctx, id)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() {
+		_, moveErr := p.Move(ctx, id, "b")
+		done <- moveErr
+	}()
+	select {
+	case <-w.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("move did not reach export")
+	}
+	// Another controller transfers ownership before uncertain-export recovery
+	// reads the lease. Recovery must release its pending entry without loss.
+	_, err = p.store.Transfer(ctx, lease, b.addr, time.Minute)
+	require.NoError(t, err)
+	close(w.gate)
+	select {
+	case err = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("move did not finish")
+	}
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	body := planeMetricsBody(p)
+	require.Contains(t, body, "relais_control_moves_total 0\n")
+	require.Contains(t, body, "relais_control_move_errors_total 1\n")
+	require.Contains(t, body, "relais_control_losses_total 0\n")
+	require.Contains(t, body, "relais_control_takeovers_total 0\n")
+	require.Contains(t, body, "relais_control_takeover_errors_total 0\n")
+	status, err := p.Status(ctx)
+	require.NoError(t, err)
+	require.Empty(t, status.Takeovers)
+	require.Len(t, status.Calls, 1)
+	require.Equal(t, "b", status.Calls[0].Owner)
+}
+
 func TestControlMetricsRetainedUncertainExportCountsOnlyTerminalMove(t *testing.T) {
 	for _, outcome := range []string{"success", "loss"} {
 		t.Run(outcome, func(t *testing.T) {
