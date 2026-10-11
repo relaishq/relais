@@ -29,7 +29,40 @@ func TestRelayFrameCacheModes(t *testing.T) {
 	forSessionStores(t, testRelayFrameCacheModes)
 }
 
+// assertCacheRecovery keeps content, resume and decode failures gated in
+// every run. Phase-1 cache recovery reports freshness without gating it,
+// with or without race: the 2s acceptance gate belongs to buffered takeovers
+// in #27. Loss and new-content coverage remain gated in every run; freshness
+// coverage needs the longer observation used outside short mode.
+func assertCacheRecovery(t *testing.T, measurement callharness.EventMeasurement) {
+	t.Helper()
+	for _, metric := range []struct {
+		name    string
+		verdict callharness.MetricVerdict
+	}{
+		{"resume", measurement.ResumeVerdict},
+		{"first content", measurement.FirstContentVerdict},
+		{"first new content", measurement.FirstNewContentVerdict},
+		{"first live", measurement.FirstLiveVerdict},
+	} {
+		assert.False(t, metric.verdict.Trusted && metric.verdict.Failed, "%s: %s", metric.name, measurement.Summary())
+	}
+	if raceDetector {
+		t.Log("freshness: not gated under race (phase-1 diagnostic)")
+	} else {
+		t.Log("freshness: not gated in phase-1 (diagnostic)")
+	}
+}
+
 func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
+	freshness := callharness.FreshnessPolicy{RecoveryLimit: 2 * time.Second, StabilityWindow: 3 * time.Second}
+	// Full and timing lanes observe the complete freshness stability window.
+	// Short trials retain loss, recovery and decode gates without freshness
+	// coverage, since their recordings end before that window completes.
+	mediaDuration := freshness.EvaluationWindow() + time.Second
+	if testing.Short() {
+		mediaDuration = shortCallDuration
+	}
 	frames := selectedFrameCache(t, store)
 	for _, mode := range []struct {
 		name       string
@@ -40,15 +73,16 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 			paths := map[string]int{}
 			liveReasons := map[string]int{}
 			within := 0
+			lossConclusive, newConclusive, freshnessConclusive := 0, 0, 0
 			for trial := range 10 {
 				t.Run(fmt.Sprint(trial), func(t *testing.T) {
 					h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, FrameCache: frames, Workers: 2, DisableFrameCache: !mode.cache, DisableResumePLI: !mode.pli})
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					ctx, cancel := context.WithTimeout(context.Background(), mediaDuration+9*time.Second)
 					defer cancel()
-					call, err := h.Dial(ctx, callharness.CallOptions{Video: true})
+					call, err := h.Dial(ctx, callharness.CallOptions{Video: true, Freshness: freshness})
 					require.NoError(t, err)
 					sent := make(chan error, 1)
-					go func() { sent <- call.SendMedia(ctx, 3*time.Second) }()
+					go func() { sent <- call.SendMedia(ctx, mediaDuration) }()
 					time.Sleep(550*time.Millisecond + time.Duration(trial)*7*time.Millisecond)
 					require.NoError(t, h.Kill(0))
 					status := waitTakeovers(t, ctx, h, 1)
@@ -60,6 +94,18 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 					assertVideoDecodes(t, report)
 					assert.Zero(t, report.Track("video").Video.NonMonotonicTimestamps)
 					require.Len(t, report.Moves, 1)
+					t.Logf("CALLER_EVENT run=%d mode=%s %s", trial+1, mode.name, report.Moves[0].Measurement.Summary())
+					measurement := report.Moves[0].Measurement
+					assertCacheRecovery(t, measurement)
+					if measurement.Audio.Verdict.Trusted && measurement.Video.Verdict.Trusted {
+						freshnessConclusive++
+					}
+					if measurement.LossConclusive() {
+						lossConclusive++
+					}
+					if measurement.FirstNewContentVerdict.Trusted {
+						newConclusive++
+					}
 					recovery := report.Moves[0].Recovery
 					stats, err := h.ReplayStats(1)
 					require.NoError(t, err)
@@ -83,6 +129,11 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 					}
 					if mode.name == "keyframe" {
 						require.Equal(t, "Keyframe", recovery.Path)
+						require.True(t, measurement.LossConclusive(), measurement.Summary())
+						require.True(t, measurement.FirstNewContentVerdict.Trusted, measurement.Summary())
+						require.Positive(t, measurement.LostAudio)
+						require.Positive(t, measurement.LostVideoFrames)
+						require.Equal(t, "keyframe", measurement.FirstNewContent)
 					}
 					if mode.pli {
 						assert.Positive(t, report.SentVideo.KeyframeRequests)
@@ -115,6 +166,11 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 						within++
 					}
 				})
+			}
+			require.True(t, callharness.EnoughConclusive(lossConclusive, 10), "loss coverage %d/10", lossConclusive)
+			require.True(t, callharness.EnoughConclusive(newConclusive, 10), "first new content coverage %d/10", newConclusive)
+			if !testing.Short() {
+				require.True(t, callharness.EnoughConclusive(freshnessConclusive, 10), "freshness coverage %d/10", freshnessConclusive)
 			}
 			sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
 			require.Len(t, times, 10)

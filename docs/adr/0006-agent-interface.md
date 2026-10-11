@@ -42,13 +42,23 @@ adapter separately. No PCM completeness or bit-exact decoder migration is claime
 ## Hosting and deadlines
 
 Each session has an independent agent from `AgentConfig.Factory`. The default is
-`agent.Echo`. Built-in echo drains its queue inline and invokes only its known,
-stateless, constant-time callback, preserving the original packet-path timing.
+`agent.Echo`. Built-in Echo uses the original synchronous packet path: no
+payload copy, channel round trip or per-packet deadline. Its consumed progress is recorded
+under the existing packet lock. Export fences Echo atomically without pausing
+audio first, so no input is dropped between a pause and the fence.
 All custom callbacks run off the media path. A bounded queue (32 packets by
 default) accepts audio without waiting.
 Overflow and callback timeout drop input and count it. Callbacks run serially,
 outside the media lock, with a 100 ms deadline by default. Process plus state
-encoding share a deadline. The host copies payloads and returned state bytes.
+encoding share a deadline. The host copies custom payloads and returned state
+bytes. Planned export budgets queued work at half the relay default hold timeout
+(1.5 s), reserving a full callback deadline before starting another queued input.
+At budget exhaustion it drops the remaining queue, counts each input drop, and
+publishes the already-consumed state/progress pair. An in-flight callback can
+finish within its own deadline; budget exhaustion alone never ends the call.
+Export ends a session only if its in-flight callback is actually quarantined
+past its deadline, or another terminal agent error occurs. Idle agents never
+request checkpoints; the existing transport ticker supplies the base cadence.
 
 A callback that finishes after its deadline cannot publish state or output. Its
 instance is quarantined while it runs; further input is dropped. On completion,
@@ -72,48 +82,95 @@ Changed-state store writes coalesce at most once per `SaveInterval` (100 ms
 default). Transport-only snapshots of an unchanged stateless echo keep the
 existing cadence. A checkpoint always copies the newest complete state/progress
 pair; a rate-limited attempt skips the entire write, rather than misdating an
-older agent pair with a newer checkpoint timestamp. A planned move stops
-enqueue, drains the finite accepted queue and publishes the final pair before
-fencing/export, bypassing the rate limit. Periodic copies include owned agent bytes under the same media lock
-as the transport counters. Encoding and fenced storage run outside that lock.
+older agent pair with a newer checkpoint timestamp. A skip, including one found
+after capture, records no checkpoint attempt, success or failure. A planned move
+stops enqueue, drains the accepted queue within its budget, drops any remainder,
+and publishes the final consumed pair before fencing/export, bypassing the rate
+limit. Periodic copies include owned agent
+bytes under the same media lock as the transport counters. Encoding and fenced storage run outside that lock.
+Successful writes reuse the exact pair captured for encoding, without decoding
+the snapshot again. Required resume and replay-reservation checkpoints always
+write; only optional live checkpoints can return an explicit skipped result.
+The restored pair seeds durable state before callbacks, since its checkpoint
+or held export is already available to rollback.
 The bytes ride in the existing encrypted snapshot for Memory and Redis and count
 in the existing store byte accounting. No store schema changes are needed.
 
 Oversize, Save failure, unsupported agent version, Restore failure and callback
 failure are counted on the worker and exposed by `AgentStats` and private status.
-A changed application snapshot that cannot be persisted ends the session; it is
-never allowed to continue with silently lost application state. Unchanged default
-echo keeps the existing transport checkpoint failure policy. Terminal live agent
-failures close transport, remove the session and release its fenced owner lease.
-A failed restore never adopts a session or sends resumed media. It releases
-the exact transferred lease so the existing control-plane rollback cannot
-resurrect that application after a terminal state failure.
+Store write failures follow the existing transport checkpoint policy for all
+agents: count failed writes, retain ownership and keep retrying. The checkpoint
+ages until a successful retry, and a takeover reports its measured age. A store
+stall does not become an agent Save failure or end every application call.
+Failures from the agent's own Save, invalid state and live callbacks remain
+terminal and counted. Worker counters are available through both /status and
+the worker's /metrics registry, without session labels.
+
+A failed target restore never adopts a session or emits resumed media. It returns
+a typed agent cause and closes without releasing the transferred lease. The
+control plane owns cleanup: planned moves can restore a compatible source;
+takeovers can try another compatible target. If none works, the loss result
+preserves the agent cause and removes the lease and snapshot immediately.
+Resume checkpoint errors also close without release, preserving rollback and
+retry. A committed store write cannot become a failed write due to a subsequent
+snapshot decode.
 
 ## Resume and replay
 
+Restore and Resume callback timeouts are typed adoption failures (`ErrRestore`),
+even when they wrap a context deadline. Both direct and HTTP control-plane paths
+try another target and retain the agent failure cause if no target can adopt.
 Restore validates bytes before transport adoption, followed by a deadline-bounded
-Resume notice. The notice includes planned move or takeover, measured checkpoint
-write age, snapshot-copy age, and the saved consumed-input progress. The separate
+Resume notice. Resume must have no external side effects: failed transport
+adoption can retry both callbacks on a fresh instance. Internal state changes
+from Resume are encoded before the required adoption checkpoint. The notice
+includes planned move or takeover, measured checkpoint write age, snapshot-copy age, and the saved consumed-input progress. The separate
 snapshot age also covers copy-to-commit storage delay; checkpoint age alone does
 not bound application state staleness. Rate limiting ages the checkpoint itself
 and is therefore included in those observations. Tests measure the saved pair
 and these ages explicitly.
 
-`ResumeOptions.InputMayBeDuplicated` and `DuplicateWindows` are the seam for #27.
-The private HTTP boundary carries them unchanged. They default to false/empty
-until relay replay supplies real bounds. Each window uses caller inbound SRTP
-indexes and its SSRC. The consumed audio progress can trail `SRTP.Inbound`
-because audio callbacks are queued. #27 must use the agent consumed floor for
-audio replay admission, rather than discard all inputs at or below the transport
-receive high-water mark. Its SRTP restore/replay path must permit that older
-input range. This is an integration requirement, not verified replay behavior
-in this ticket. Applications must tolerate replay after a checkpoint and
-must make external side effects idempotent themselves. This ticket does not
-implement or claim duplicate-input delivery.
+Relay takeover now populates `ResumeOptions.InputMayBeDuplicated` and
+`DuplicateWindows` from the prepared relay plan before Restore/Resume. Direct
+and private HTTP paths carry identical caller inbound SRTP ranges. A resume
+notice describes possible replay, not exactly-once processing: gaps and input
+whose prior processing is unknown can occur within each range. After drain,
+the takeover result narrows those ranges to successful sends within the original
+plan. Live input arriving after preparation cannot have been processed by the
+fenced source and does not enlarge that result. No selected media or a planned
+move without replay leaves the fields false/empty.
+
+Custom-agent consumed audio progress can trail `SRTP.Inbound` because callbacks
+are queued. Ticket #27 uses the consumed `Progress.Index` as the audio replay
+floor when it is below transport. The agent state/progress pair and transport
+counters must come from the same validated checkpoint; mismatched consumed SSRC
+or progress ahead of transport is rejected. A never-consumed stream has no audio
+floor, including index zero. Synchronous built-in/legacy Echo and video keep
+the transport floor.
+
+The resumed SRTP receive context uses the same consumed floor. With no consumed
+progress, it starts just before the first selected replay index, or unprimed at
+index zero. Cold-relay range indexes are aligned to the authenticated transport
+checkpoint's ROC before notifying the worker, including never-consumed audio.
+Replay protection stays enabled; queues larger than its 64-packet
+window and caller ROC wraps are tested. Persisted transport high water marks
+and outbound reservation/margins stay intact. Memory and Redis HTTP takeover
+tests recover inputs queued at the source checkpoint and consume each once on
+the target, with zero decrypt failures and target queue drops. Buffer capacity,
+agent queue overflow/deadlines and the cross-tenure floor limitation assigned
+to #35 still apply. No durable or universal no-loss application claim is made.
+Applications must tolerate replay after a checkpoint and make external side
+effects idempotent themselves.
 
 Transport snapshots now use version 7, so old workers cannot silently resume a
 custom application's snapshot as echo. Version-six snapshots with no agent
-extension remain readable only by default Echo, using empty version-1 state.
+extension remain readable only by default Echo, using the distinct Echo state
+marker (version 0x4543484f, empty bytes).
+Echo rejects custom version-1 state, including empty stateless snapshots, to
+prevent an incompatible factory from silently switching output sequences.
+Unmarked Echo snapshots from the initial version-seven implementation are
+ambiguous and must be drained before upgrading; they are rejected rather than
+interpreted as Echo. No public agent interface signatures changed.
 Missing or zero-version state in a version-seven snapshot is rejected, including
 by Echo. Workers must use the same configured application factory across moves;
 application versions are validated by Restore. Application identity remains an

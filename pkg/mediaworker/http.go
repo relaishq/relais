@@ -1,6 +1,7 @@
 package mediaworker
 
 import (
+	"errors"
 	"net/http"
 	"net/netip"
 	"time"
@@ -45,6 +46,7 @@ type ResumeRequest struct {
 	Lease                 sessionstore.Lease      `json:"lease"`
 	SequenceMargin        uint16                  `json:"sequence_margin"`
 	SRTCPIndexMargin      uint32                  `json:"srtcp_index_margin"`
+	RelayReplay           bool                    `json:"relay_replay"`
 }
 type ResumeReply struct {
 	ID string `json:"id"`
@@ -68,14 +70,14 @@ func (w *Worker) PrivateHandler() http.Handler {
 		}
 		id, answer, err := w.CreateSession(r.Context(), req.Offer)
 		if err != nil {
-			privateapi.Error(rw, err, RemoteErrors)
+			workerAPIError(rw, err)
 			return
 		}
 		privateapi.Write(rw, CreateReply{ID: id, Answer: answer})
 	})
 	mux.HandleFunc("DELETE /sessions/{id}", func(rw http.ResponseWriter, r *http.Request) {
 		if err := w.EndSession(r.PathValue("id")); err != nil {
-			privateapi.Error(rw, err, RemoteErrors)
+			workerAPIError(rw, err)
 			return
 		}
 		rw.WriteHeader(http.StatusNoContent)
@@ -83,19 +85,26 @@ func (w *Worker) PrivateHandler() http.Handler {
 	mux.HandleFunc("POST /sessions/{id}/export", func(rw http.ResponseWriter, r *http.Request) {
 		state, err := w.ExportSession(r.PathValue("id"))
 		if err != nil {
-			privateapi.Error(rw, err, RemoteErrors)
+			workerAPIError(rw, err)
 			return
 		}
 		privateapi.Write(rw, ExportReply{State: state})
+	})
+	mux.HandleFunc("POST /sessions/{id}/keyframe", func(rw http.ResponseWriter, r *http.Request) {
+		if err := w.RequestKeyframe(r.Context(), r.PathValue("id")); err != nil {
+			privateapi.Error(rw, err, RemoteErrors)
+			return
+		}
+		rw.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /resume", func(rw http.ResponseWriter, r *http.Request) {
 		var req ResumeRequest
 		if !privateapi.Read(rw, r, &req) {
 			return
 		}
-		id, err := w.ResumeSession(req.State, ResumeOptions{Kind: req.Kind, InputMayBeDuplicated: req.InputMayBeDuplicated, DuplicateWindows: req.DuplicateWindows, CallerSequenceReserve: req.CallerSequenceReserve, CheckpointAge: req.CheckpointAge, SnapshotAge: req.SnapshotAge, CheckpointStoredAt: req.CheckpointStoredAt, Context: r.Context(), Lease: req.Lease, SequenceMargin: req.SequenceMargin, SRTCPIndexMargin: req.SRTCPIndexMargin})
+		id, err := w.ResumeSession(req.State, ResumeOptions{Kind: req.Kind, InputMayBeDuplicated: req.InputMayBeDuplicated, DuplicateWindows: req.DuplicateWindows, CallerSequenceReserve: req.CallerSequenceReserve, CheckpointAge: req.CheckpointAge, SnapshotAge: req.SnapshotAge, CheckpointStoredAt: req.CheckpointStoredAt, Context: r.Context(), Lease: req.Lease, SequenceMargin: req.SequenceMargin, SRTCPIndexMargin: req.SRTCPIndexMargin, RelayReplay: req.RelayReplay})
 		if err != nil {
-			privateapi.Error(rw, err, RemoteErrors)
+			workerAPIError(rw, err)
 			return
 		}
 		privateapi.Write(rw, ResumeReply{ID: id})
@@ -111,4 +120,16 @@ func (w *Worker) SessionCount() int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return len(w.sessions)
+}
+
+// Agent errors can wrap more than one sentinel. Choose one code explicitly;
+// map iteration must not turn an unknown version into a generic restore error.
+func workerAPIError(rw http.ResponseWriter, err error) {
+	for _, code := range []string{"agent_version", "agent_oversize", "agent_save", "agent_restore"} {
+		if sentinel := RemoteErrors[code]; errors.Is(err, sentinel) {
+			privateapi.Error(rw, err, map[string]error{code: sentinel})
+			return
+		}
+	}
+	privateapi.Error(rw, err, RemoteErrors)
 }

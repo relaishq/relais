@@ -12,6 +12,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/relais/internal/workerprobe"
 	"github.com/relais/pkg/agent"
+	"github.com/relais/pkg/relay"
 )
 
 // AgentConfig bounds per-call application work. Zero values use the defaults.
@@ -55,11 +56,15 @@ type agentInput struct {
 	input  agent.Input
 	header rtp.Header
 }
-type agentFlush struct{ done chan error }
+type agentFlush struct {
+	done     chan error
+	deadline time.Time
+}
 type agentHost struct {
 	instance agent.Agent
 	queue    chan agentInput
 	flush    chan agentFlush
+	late     chan struct{}
 	overdue  atomic.Bool
 	failed   atomic.Bool
 	paused   bool       // guarded by the session's mu
@@ -99,7 +104,7 @@ func cloneAgentState(state agentState) agentState {
 
 func (s *session) initAgent(restoring bool, opts ResumeOptions) error {
 	cfg := s.worker.cfg.Agent
-	h := &agentHost{instance: cfg.Factory(s.id), queue: make(chan agentInput, cfg.QueueCapacity), flush: make(chan agentFlush, 1)}
+	h := &agentHost{instance: cfg.Factory(s.id), queue: make(chan agentInput, cfg.QueueCapacity), flush: make(chan agentFlush, 1), late: make(chan struct{}, 1)}
 	s.agent = h
 	if h.instance == nil {
 		return s.agentError(errors.New("agent: nil factory result"))
@@ -109,12 +114,13 @@ func (s *session) initAgent(restoring bool, opts ResumeOptions) error {
 			if _, ok := h.instance.(*agent.Echo); !ok {
 				return s.agentError(agent.ErrVersion)
 			}
-			s.state.Agent.State.Version = 1
+			s.state.Agent.State, _ = h.instance.Save(s.ctx)
 			s.state.Agent.legacy = false
 		}
 		if err := s.validateAgentState(s.state.Agent.State); err != nil {
 			return s.agentError(err)
 		}
+		s.durableAgent = cloneAgentState(s.state.Agent)
 		if err := s.agentCall(func(ctx context.Context) error { return restoreAgent(ctx, h.instance, s.state.Agent.State) }); err != nil {
 			return s.agentError(fmt.Errorf("%w: %w", agent.ErrRestore, err))
 		}
@@ -128,7 +134,7 @@ func (s *session) initAgent(restoring bool, opts ResumeOptions) error {
 		notice := agent.ResumeNotice{Kind: kind, CheckpointAge: opts.CheckpointAge, SnapshotAge: opts.SnapshotAge,
 			InputMayBeDuplicated: opts.InputMayBeDuplicated, DuplicateWindows: slices.Clone(opts.DuplicateWindows), Progress: s.state.Agent.Progress}
 		if err := s.agentCall(func(ctx context.Context) error { return h.instance.Resume(ctx, notice) }); err != nil {
-			return s.agentError(err)
+			return s.agentError(fmt.Errorf("%w: %w", agent.ErrRestore, err))
 		}
 	}
 	// Save also captures changes made by Resume before the first durable write.
@@ -196,6 +202,10 @@ func (s *session) agentCall(fn func(context.Context) error, waitLate ...bool) er
 		}
 		s.agent.overdue.Store(true)
 		select {
+		case s.agent.late <- struct{}{}:
+		default:
+		}
+		select {
 		case <-done:
 			s.agent.overdue.Store(false)
 			return ctx.Err()
@@ -240,7 +250,6 @@ func (s *session) publishAgent() {
 	s.mu.Lock()
 	if !s.fenced.Load() && s.ctx.Err() == nil {
 		s.state.Agent = cloneAgentState(s.agent.latest)
-		s.wantSnapshot()
 	}
 	s.mu.Unlock()
 }
@@ -328,28 +337,23 @@ func (s *session) agentLoop() {
 			}
 		}
 	}
-	ticker := time.NewTicker(s.worker.cfg.Agent.SaveInterval)
-	defer ticker.Stop()
 	for {
+		// A move request takes priority over starting another queued callback.
+		select {
+		case request := <-s.agent.flush:
+			if !s.finishAgentFlush(request) {
+				return
+			}
+			continue
+		default:
+		}
 		select {
 		case <-s.ctx.Done():
 			return
 		case request := <-s.agent.flush:
-			// Enqueue was stopped under mu before this request, so the queue is finite.
-			var err error
-			for len(s.agent.queue) > 0 && err == nil {
-				err = s.processAudio(<-s.agent.queue)
-			}
-			if err == nil {
-				s.publishAgent()
-			}
-			request.done <- err
-			if err != nil {
-				s.agentFailed(err)
+			if !s.finishAgentFlush(request) {
 				return
 			}
-		case <-ticker.C:
-			s.wantSnapshot()
 		case in := <-s.agent.queue:
 			if err := s.processAudio(in); err != nil {
 				s.agentFailed(err)
@@ -358,6 +362,47 @@ func (s *session) agentLoop() {
 		}
 	}
 }
+
+// Reserve a full callback deadline before starting more work. When the move
+// budget cannot fit it, discard the remaining queue and publish only the pair
+// already consumed. Enqueue is paused; the caller may also discard this queue.
+func (s *session) finishAgentFlush(request agentFlush) bool {
+	var err error
+drain:
+	for time.Until(request.deadline) >= s.worker.cfg.Agent.CallbackTimeout {
+		select {
+		case in := <-s.agent.queue:
+			err = s.processAudio(in)
+			if err != nil {
+				break drain
+			}
+		default:
+			break drain
+		}
+	}
+	s.dropAgentQueue()
+	if err == nil {
+		s.publishAgent()
+	}
+	request.done <- err
+	if err != nil {
+		s.agentFailed(err)
+		return false
+	}
+	return true
+}
+
+func (s *session) dropAgentQueue() {
+	for {
+		select {
+		case <-s.agent.queue:
+			s.worker.agents.drops.Add(1)
+		default:
+			return
+		}
+	}
+}
+
 func (s *session) agentFailed(err error) {
 	if s.ctx.Err() != nil || s.agent == nil || !s.agent.failed.CompareAndSwap(false, true) {
 		return
@@ -376,24 +421,45 @@ func (s *session) flushAgent() error {
 	if s.agent == nil {
 		return nil
 	}
+	if _, echo := s.agent.instance.(*agent.Echo); echo {
+		return nil // Echo has no pending callbacks; fence atomically under mu.
+	}
 	s.mu.Lock()
 	s.agent.paused = true
 	s.mu.Unlock()
-	ctx, cancel := context.WithTimeout(s.ctx, time.Duration(cap(s.agent.queue)+2)*s.worker.cfg.Agent.CallbackTimeout)
-	defer cancel()
-	request := agentFlush{done: make(chan error, 1)}
-	select {
-	case s.agent.flush <- request:
-	case <-ctx.Done():
-		s.agentFailed(ctx.Err())
-		return ctx.Err()
+	budget := min(time.Duration(cap(s.agent.queue)+2)*s.worker.cfg.Agent.CallbackTimeout, relay.DefaultHoldTimeout/2)
+	request := agentFlush{done: make(chan error, 1), deadline: time.Now().Add(budget)}
+	// A callback already quarantined before the move cannot produce a safe
+	// export. Queue exhaustion alone never makes a healthy agent terminal.
+	if s.agent.overdue.Load() {
+		s.agentFailed(context.DeadlineExceeded)
+		return context.DeadlineExceeded
 	}
 	select {
-	case err := <-request.done:
-		return err
-	case <-ctx.Done():
-		s.agentFailed(ctx.Err())
-		return ctx.Err()
+	case s.agent.flush <- request:
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+	timer := time.NewTimer(time.Until(request.deadline))
+	defer timer.Stop()
+	expired := timer.C
+	for {
+		select {
+		case err := <-request.done:
+			return err
+		case <-expired:
+			s.dropAgentQueue()
+			expired = nil
+			// The one in-flight callback may still meet its own deadline.
+			// Wait for its paired publication, or actual quarantine below.
+		case <-s.agent.late:
+			if s.agent.overdue.Load() {
+				s.agentFailed(context.DeadlineExceeded)
+				return context.DeadlineExceeded
+			}
+		case <-s.ctx.Done():
+			return s.ctx.Err()
+		}
 	}
 }
 

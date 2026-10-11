@@ -1,10 +1,13 @@
 package callharness
 
-import "time"
+import (
+	"encoding/binary"
+	"time"
+)
 
 // VideoRecovery attributes a decoded frame using the VP8 PictureID and exact
 // encoded payload observed at the caller, never worker-internal replay flags.
-// A PictureID is unique over these bounded tests (less than 32768 frames).
+// Source identities include the send epoch; recent payload matching expires.
 type VideoRecovery struct {
 	// SourceVideoSkippedSequenceNumbers measures the old-live to new-live
 	// sequence gap excluding inserted replay packets. The first replay index
@@ -21,7 +24,11 @@ type VideoRecovery struct {
 	// Both common-start metrics begin at the kill, for every mode. Cached
 	// output can precede control-plane completion, so completion is unsuitable.
 	FirstDecodedAfterKill time.Duration
-	// FirstDecodedLiveAfterKill is zero when no live frame decoded.
+	// FirstDecodedRepeated says the first returned decodable picture reuses
+	// a prior decode. Its cache provenance is known, but no new decode ran.
+	FirstDecodedRepeated bool
+	// FirstDecodedLiveAfterKill measures a decoded frame sent at/after
+	// MediaResumedAt, and is zero when no such live frame decoded.
 	FirstDecodedLiveAfterKill    time.Duration
 	LivePath                     string
 	KeyframeInterval             time.Duration
@@ -34,18 +41,35 @@ type VideoRecovery struct {
 }
 
 type sentVideoFrame struct {
-	at   time.Duration
-	data string
-	pli  bool
+	identity    uint64
+	at          time.Duration
+	data        string
+	pli         bool
+	requestedAt time.Duration
+	duration    time.Duration
+	written     bool
+	returnedAt  time.Duration
 }
 
-func (r *recorder) sendingVideo(frame []byte, pli bool, interval time.Duration) {
-	r.sending(kindVideo, frame)
+func (r *recorder) sendingVideo(frame []byte, request *keyframeResponseRequest, interval time.Duration) []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	identity := uint64(r.sentVideo.Frames)
+	frame = identifyVP8(frame, identity)
+	data := string(frame)
+	r.sentFrames[kindVideo][data] = struct{}{}
+	if r.sentVideo.Frames == 0 {
+		r.firstVideoSentAt = r.since(time.Now())
+	}
 	id := uint16(r.sentVideo.Frames & 0x7fff)
-	r.sentVideoFrames[id] = sentVideoFrame{at: r.since(time.Now()), data: string(frame), pli: pli}
+	r.sentVideoFrames[id] = sentVideoFrame{identity: uint64(r.sentVideo.Frames), at: r.since(time.Now()), data: data, pli: request != nil, duration: interval}
+	if request != nil {
+		source := r.sentVideoFrames[id]
+		source.requestedAt = request.at
+		r.sentVideoFrames[id] = source
+	}
 	r.frameInterval = interval
+	return frame
 }
 
 // videoRecovery runs under r.mu. A forward sequence jump identifies resumed
@@ -70,6 +94,9 @@ func (r *recorder) videoRecovery(start, limit time.Duration) VideoRecovery {
 			}
 			break
 		}
+	}
+	if result.MediaResumedAt == 0 {
+		result.MediaResumedAt = r.contentResume(start, limit)
 	}
 	if result.MediaResumedAt == 0 {
 		return result
@@ -120,10 +147,10 @@ func (r *recorder) videoRecovery(start, limit time.Duration) VideoRecovery {
 			continue
 		}
 		for _, f := range track.video.frames {
-			if !f.decodable || f.at < result.MediaResumedAt || f.firstArrival < result.MediaResumedAt || f.at >= limit {
+			if !f.decodable || f.at < result.MediaResumedAt || f.at >= limit {
 				continue
 			}
-			if f.source.at >= start && result.FirstDecodedLiveAfterKill == 0 {
+			if !f.repeated && f.source.at >= result.MediaResumedAt && result.FirstDecodedLiveAfterKill == 0 {
 				result.FirstDecodedLiveAfterKill = f.at - start
 				result.LivePath = "Live"
 				if f.source.pli {
@@ -134,6 +161,7 @@ func (r *recorder) videoRecovery(start, limit time.Duration) VideoRecovery {
 				continue
 			}
 			result.FirstDecodedAfterKill = f.at - start
+			result.FirstDecodedRepeated = f.repeated
 			result.FirstDecodedAfterMediaResume = f.at - result.MediaResumedAt
 			result.PictureID, result.FrameSentAt = f.pictureID, f.source.at
 			switch {
@@ -148,4 +176,70 @@ func (r *recorder) videoRecovery(start, limit time.Duration) VideoRecovery {
 		}
 	}
 	return result
+}
+
+func (f sentVideoFrame) unit() contentUnit {
+	return contentUnit{at: f.at, duration: f.duration, written: f.written, returnedAt: f.returnedAt}
+}
+
+// contentResume authenticates the first complete returning unit after an
+// observed outage gap. This fallback does not require a relay sequence margin.
+// Normal pacing (three frame intervals, at least 50ms) is not an outage.
+func (r *recorder) contentResume(start, limit time.Duration) time.Duration {
+	var units []contentUnit
+	for _, u := range r.sentAudioUnits {
+		units = append(units, u)
+	}
+	for _, f := range r.sentVideoFrames {
+		units = append(units, f.unit())
+	}
+	units = append(units, r.repeatedAudioReturns...)
+	units = append(units, r.repeatedVideoReturns...)
+	var resumed time.Duration
+	for _, track := range r.tracks {
+		interval := opusFrameDuration
+		if track.video != nil {
+			interval = r.frameInterval
+			if interval == 0 {
+				interval = time.Second / 30
+			}
+		}
+		for i := 1; i < len(track.arrivals); i++ {
+			at := track.arrivals[i]
+			if at <= start || at >= limit || at-track.arrivals[i-1] <= max(50*time.Millisecond, 3*interval) {
+				continue
+			}
+			for _, unit := range units {
+				if !unit.written || unit.returnedAt < unit.at || unit.returnedAt < at || unit.returnedAt >= limit {
+					continue
+				}
+				if resumed == 0 || unit.returnedAt < resumed {
+					resumed = unit.returnedAt
+				}
+			}
+		}
+	}
+	return resumed
+}
+
+// The fixture decodes identically with this trailer (Go/ffmpeg tested). It
+// makes looped fixture payloads unique across PictureID epochs, so a delayed
+// previous-epoch echo cannot authenticate as a new send with the same ID.
+func identifyVP8(frame []byte, identity uint64) []byte {
+	marked := make([]byte, len(frame)+16)
+	copy(marked, frame)
+	copy(marked[len(frame):], "RelaisV1")
+	binary.BigEndian.PutUint64(marked[len(frame)+8:], identity)
+	return marked
+}
+
+// A delayed previous epoch can reuse PictureID without claiming the current
+// full identity. It has no retained source, so remains unknown; wrong bytes
+// claiming the current identity still constitute a conflict.
+func previousVP8Epoch(frame []byte, source sentVideoFrame, pictureID uint16) bool {
+	if len(frame) < 16 || len(source.data) < 16 || string(frame[len(frame)-16:len(frame)-8]) != "RelaisV1" || source.data[len(source.data)-16:len(source.data)-8] != "RelaisV1" {
+		return false
+	}
+	identity := binary.BigEndian.Uint64(frame[len(frame)-8:])
+	return identity&0x7fff == uint64(pictureID) && identity>>15 < source.identity>>15
 }

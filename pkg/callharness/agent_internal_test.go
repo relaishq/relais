@@ -1,6 +1,7 @@
 package callharness
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -8,9 +9,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -35,9 +38,17 @@ type harnessCounterAgent struct {
 	consumedAt     int64
 	resumes        chan agentResumeObservation
 	restoreFailure bool
+	processDelay   time.Duration
 }
 
-func (a *harnessCounterAgent) Process(_ context.Context, _ agent.Input) (agent.Output, error) {
+func (a *harnessCounterAgent) Process(ctx context.Context, _ agent.Input) (agent.Output, error) {
+	if a.processDelay > 0 {
+		select {
+		case <-time.After(a.processDelay):
+		case <-ctx.Done():
+			return agent.Output{}, ctx.Err()
+		}
+	}
 	a.count++
 	a.consumedAt = time.Now().UnixNano()
 	// One 20 ms CELT silence frame, with the deterministic count in Opus padding.
@@ -81,6 +92,8 @@ type agentHarnessSystem struct {
 type agentHarnessSettings struct {
 	snapshotInterval     time.Duration
 	targetRestoreFailure bool
+	echo                 bool
+	sourceProcessDelay   time.Duration
 }
 
 func startAgentHarness(t *testing.T, store sessionstore.Store, settings ...agentHarnessSettings) *agentHarnessSystem {
@@ -102,7 +115,14 @@ func startAgentHarness(t *testing.T, store sessionstore.Store, settings ...agent
 	}
 	for i := range 2 {
 		w, err := mediaworker.New(mediaworker.Config{SnapshotInterval: config.snapshotInterval, Agent: mediaworker.AgentConfig{Factory: func(string) agent.Agent {
-			return &harnessCounterAgent{resumes: resumes, restoreFailure: i == 1 && config.targetRestoreFailure}
+			if config.echo {
+				return &agent.Echo{}
+			}
+			a := &harnessCounterAgent{resumes: resumes, restoreFailure: i == 1 && config.targetRestoreFailure}
+			if i == 0 {
+				a.processDelay = config.sourceProcessDelay
+			}
+			return a
 		}}, DisableFrameCache: true, Relay: &mediaworker.RelayConfig{Owners: store, Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr()}})
 		require.NoError(t, err)
 		sys.workers = append(sys.workers, w)
@@ -231,6 +251,48 @@ func TestAgentPlannedMoveExactContinuation(t *testing.T) {
 	})
 }
 
+func TestAgentSlowQueueMoveExactContinuation(t *testing.T) {
+	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+		sys := startAgentHarness(t, store, agentHarnessSettings{sourceProcessDelay: 60 * time.Millisecond})
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		call, err := sys.h.Dial(ctx, CallOptions{})
+		require.NoError(t, err)
+		counts := observeAgentCounts(call)
+		// At 50 inputs/sec and 60 ms per callback, this fills the default
+		// 32-input queue. Stop sending before Move to isolate flush drops.
+		require.NoError(t, call.SendMedia(ctx, 1400*time.Millisecond))
+		before := sys.workers[0].AgentStats()
+		require.Positive(t, before.InputDrops, "default queue overflowed before the move")
+		_, err = sys.plane.Move(ctx, call.SessionID(), "1")
+		require.NoError(t, err, "callbacks meeting their deadlines must not lose the call")
+		resumed := awaitAgentResume(t, sys)
+		require.Equal(t, agent.PlannedMove, resumed.notice.Kind)
+		require.Equal(t, resumed.count, resumed.notice.Progress.Consumed)
+		after := sys.workers[0].AgentStats()
+		require.Greater(t, after.InputDrops, before.InputDrops, "flush budget drops the unconsumed queue")
+		require.Zero(t, after.CallbackDeadlines)
+		state, progress, err := sys.workers[1].SessionAgent(call.SessionID())
+		require.NoError(t, err)
+		require.Equal(t, resumed.count, binary.BigEndian.Uint64(state.Bytes))
+		require.Equal(t, resumed.notice.Progress, progress, "move preserves the exact consumed pair")
+		require.NoError(t, call.SendMedia(ctx, 100*time.Millisecond))
+		require.Eventually(t, func() bool {
+			values := counts.snapshot()
+			return len(values) > 0 && values[len(values)-1] >= resumed.count+5
+		}, time.Second, time.Millisecond)
+		values := counts.snapshot()
+		for i, n := range values {
+			require.EqualValues(t, i+1, n, "caller receives exact state continuation, including the first resumed output")
+		}
+		require.Contains(t, values, resumed.count+1)
+		report, err := call.Hangup(ctx)
+		require.NoError(t, err)
+		require.Zero(t, report.DecryptionFailures.Total())
+		t.Logf("AGENT_SLOW_MOVE restored=%d flush_drops=%d deadlines=%d next=%d", resumed.count, after.InputDrops-before.InputDrops, after.CallbackDeadlines, resumed.count+1)
+	})
+}
+
 func TestAgentTakeoverCheckpointContinuation(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		sys := startAgentHarness(t, store)
@@ -314,7 +376,11 @@ func TestAgentTakeoverCheckpointContinuation(t *testing.T) {
 	})
 }
 
-type failedAgentStore struct{ sessionstore.Store }
+type failedAgentStore struct {
+	sessionstore.Store
+	fail     atomic.Bool
+	failures atomic.Uint64
+}
 
 func (s *failedAgentStore) PutState(ctx context.Context, lease sessionstore.Lease, data []byte) error {
 	var snap struct {
@@ -323,27 +389,41 @@ func (s *failedAgentStore) PutState(ctx context.Context, lease sessionstore.Leas
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return err
 	}
-	if len(snap.State.Agent.State.Bytes) == 16 && binary.BigEndian.Uint64(snap.State.Agent.State.Bytes) > 0 {
+	if s.fail.Load() && len(snap.State.Agent.State.Bytes) == 16 && binary.BigEndian.Uint64(snap.State.Agent.State.Bytes) > 0 {
+		s.failures.Add(1)
 		return errors.New("injected durable agent save failure")
 	}
 	return s.Store.PutState(ctx, lease, data)
 }
-func TestAgentFencedSaveFailureEndsCall(t *testing.T) {
+func TestAgentStoreFailureRetriesWithoutEndingCall(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
-		sys := startAgentHarness(t, &failedAgentStore{store})
+		flaky := &failedAgentStore{Store: store}
+		sys := startAgentHarness(t, flaky)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		call, err := sys.h.Dial(ctx, CallOptions{})
 		require.NoError(t, err)
+		require.NoError(t, call.SendMedia(ctx, 200*time.Millisecond))
+		require.Eventually(t, func() bool { _, err := store.GetState(ctx, call.SessionID()); return err == nil }, time.Second, time.Millisecond)
+		baseline, err := store.GetState(ctx, call.SessionID())
+		require.NoError(t, err)
+		flaky.fail.Store(true)
 		require.NoError(t, call.SendMedia(ctx, 300*time.Millisecond))
-		require.Eventually(t, func() bool { return sys.workers[0].SessionCount() == 0 }, time.Second, time.Millisecond)
-		require.EqualValues(t, 1, sys.workers[0].AgentStats().SaveFailures)
+		require.GreaterOrEqual(t, flaky.failures.Load(), uint64(2))
+		require.Equal(t, 1, sys.workers[0].SessionCount())
+		require.Zero(t, sys.workers[0].AgentStats().SaveFailures)
+		unchanged, err := store.GetState(ctx, call.SessionID())
+		require.NoError(t, err)
+		require.Equal(t, baseline, unchanged)
 		_, err = store.Get(ctx, call.SessionID())
-		require.ErrorIs(t, err, sessionstore.ErrNotFound)
-		_, err = store.GetState(ctx, call.SessionID())
-		require.ErrorIs(t, err, sessionstore.ErrNotFound)
+		require.NoError(t, err)
+		flaky.fail.Store(false)
+		require.Eventually(t, func() bool {
+			data, err := store.GetState(ctx, call.SessionID())
+			return err == nil && !bytes.Equal(data, baseline)
+		}, time.Second, time.Millisecond)
 		_, err = call.Hangup(ctx)
-		require.Error(t, err, "ended call is no longer registered")
+		require.NoError(t, err)
 	})
 }
 
@@ -408,7 +488,7 @@ func TestAgentSaveRateAndAtomicProgress(t *testing.T) {
 	})
 }
 
-func TestAgentFailedRestoreEndsPlannedCall(t *testing.T) {
+func TestAgentFailedRestoreRollsBackPlannedCall(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		sys := startAgentHarness(t, store, agentHarnessSettings{targetRestoreFailure: true})
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -418,15 +498,75 @@ func TestAgentFailedRestoreEndsPlannedCall(t *testing.T) {
 		require.NoError(t, call.SendMedia(ctx, 200*time.Millisecond))
 		_, err = sys.plane.Move(ctx, call.SessionID(), "1")
 		require.Error(t, err)
-		require.Zero(t, sys.workers[0].SessionCount())
+		require.Equal(t, 1, sys.workers[0].SessionCount())
 		require.Zero(t, sys.workers[1].SessionCount())
 		require.EqualValues(t, 1, sys.workers[1].AgentStats().RestoreFailures)
 		_, err = store.Get(ctx, call.SessionID())
-		require.ErrorIs(t, err, sessionstore.ErrNotFound)
+		require.NoError(t, err)
 		_, err = store.GetState(ctx, call.SessionID())
-		require.ErrorIs(t, err, sessionstore.ErrNotFound)
-		require.Empty(t, sys.resumes, "failed restore never calls Resume")
+		require.NoError(t, err)
+		require.Equal(t, agent.PlannedMove, awaitAgentResume(t, sys).notice.Kind, "source rolls back; failed target never calls Resume")
+		require.NoError(t, call.SendMedia(ctx, 200*time.Millisecond))
 		_, err = call.Hangup(ctx)
-		require.Error(t, err)
+		require.NoError(t, err)
 	})
+}
+
+// Fail only the first target checkpoint. The source export remains available
+// to the real control-plane rollback path, on both fenced stores.
+type resumeWriteFailureStore struct {
+	sessionstore.Store
+	mu     sync.Mutex
+	target netip.AddrPort
+	cause  error
+}
+
+func (s *resumeWriteFailureStore) PutState(ctx context.Context, lease sessionstore.Lease, data []byte) error {
+	s.mu.Lock()
+	if lease.Worker == s.target && s.cause != nil {
+		err := s.cause
+		s.cause = nil
+		s.mu.Unlock()
+		return err
+	}
+	s.mu.Unlock()
+	return s.Store.PutState(ctx, lease, data)
+}
+func TestAgentResumeCheckpointFailureRollsBack(t *testing.T) {
+	for _, echo := range []bool{true, false} {
+		name := "custom"
+		if echo {
+			name = "echo"
+		}
+		t.Run(name, func(t *testing.T) {
+			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+				flaky := &resumeWriteFailureStore{Store: store}
+				sys := startAgentHarness(t, flaky, agentHarnessSettings{echo: echo})
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				call, err := sys.h.Dial(ctx, CallOptions{})
+				require.NoError(t, err)
+				require.NoError(t, call.SendMedia(ctx, 200*time.Millisecond))
+				flaky.mu.Lock()
+				flaky.target = sys.workers[1].LocalAddr()
+				flaky.cause = errors.New("injected target checkpoint failure")
+				flaky.mu.Unlock()
+				result, err := sys.plane.Move(ctx, call.SessionID(), "1")
+				require.ErrorContains(t, err, "rolled back")
+				require.True(t, result.Result.RolledBack)
+				require.Equal(t, 1, sys.workers[0].SessionCount())
+				require.Zero(t, sys.workers[1].SessionCount())
+				lease, err := store.Get(ctx, call.SessionID())
+				require.NoError(t, err)
+				require.Equal(t, sys.workers[0].LocalAddr(), lease.Worker)
+				_, err = store.GetState(ctx, call.SessionID())
+				require.NoError(t, err)
+				require.Zero(t, sys.workers[1].AgentStats().SaveFailures)
+				require.NoError(t, call.SendMedia(ctx, 200*time.Millisecond))
+				report, err := call.Hangup(ctx)
+				require.NoError(t, err)
+				require.Zero(t, report.DecryptionFailures.Total())
+			})
+		})
+	}
 }

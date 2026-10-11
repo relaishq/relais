@@ -44,6 +44,10 @@ import (
 type ExternalTopology struct {
 	SignalingURL string
 	RelayAddr    netip.AddrPort
+	// CallerSocket creates the caller's UDP4 media socket. Nil preserves the
+	// loopback socket and candidates. A supplied socket must bind a specific
+	// IPv4 address; the harness owns and closes it. Signaling stays separate.
+	CallerSocket func() (net.PacketConn, error)
 }
 
 // Options configures the system the harness starts.
@@ -95,6 +99,10 @@ type Harness struct {
 	serveDone    chan struct{}
 	signalingURL string
 	httpClient   *http.Client
+
+	// statusPollMu excludes periodic status reads from planned moves/drains.
+	// Moves share the read lock, preserving actual overlapping-move rejection.
+	statusPollMu sync.RWMutex
 
 	// callsMu guards the calls not closed yet and closed (see lifecycle.go).
 	callsMu      sync.Mutex

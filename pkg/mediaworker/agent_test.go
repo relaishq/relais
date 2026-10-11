@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -224,7 +226,9 @@ func TestAgentDefaultEchoRestoresLegacySnapshot(t *testing.T) {
 	require.NoError(t, err)
 	state, _, err := w.SessionAgent(call.id)
 	require.NoError(t, err)
-	require.EqualValues(t, 1, state.Version)
+	echoState, err := (&agent.Echo{}).Save(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, echoState, state)
 }
 
 func TestAgentPlannedFlushDrainsAcceptedQueue(t *testing.T) {
@@ -377,4 +381,85 @@ func (a *suppressedFirstAgent) Process(ctx context.Context, in agent.Input) (age
 		output.Audio = nil
 	}
 	return output, err
+}
+
+func TestAgentEchoDoesNotPauseOrDropAtExport(t *testing.T) {
+	w, s, caller := agentPacketSession(t, &agent.Echo{}, time.Second)
+	require.NoError(t, s.flushAgent())
+	require.False(t, s.agent.paused)
+	s.handleRTP(testEncrypt(t, caller, 456, 1))
+	s.mu.Lock()
+	packets := s.state.Audio.Packets
+	s.mu.Unlock()
+	require.EqualValues(t, 1, packets)
+	require.Zero(t, w.AgentStats().InputDrops)
+}
+
+func TestAgentIdleDoesNotRequestSnapshots(t *testing.T) {
+	_, s, _ := agentPacketSession(t, &countingAgent{}, time.Second)
+	select {
+	case <-s.snapshotWanted:
+		t.Fatal("idle agent requested a checkpoint")
+	case <-time.After(250 * time.Millisecond):
+	}
+}
+
+func TestAgentEchoRejectsStatelessCustomState(t *testing.T) {
+	require.ErrorIs(t, (&agent.Echo{}).Restore(context.Background(), agent.State{Version: 1}), agent.ErrVersion)
+}
+
+func TestAgentHTTPVersionErrorIsDeterministic(t *testing.T) {
+	err := fmt.Errorf("%w: %w", agent.ErrRestore, agent.ErrVersion)
+	for range 100 {
+		rw := httptest.NewRecorder()
+		workerAPIError(rw, err)
+		var failure struct{ Code string }
+		require.NoError(t, json.Unmarshal(rw.Body.Bytes(), &failure))
+		require.Equal(t, "agent_version", failure.Code)
+	}
+}
+
+func TestAgentMetricsSurviveSessionRemoval(t *testing.T) {
+	a := &countingAgent{oversize: true}
+	w, s, caller := agentPacketSession(t, a, time.Second)
+	s.handleRTP(testEncrypt(t, caller, 456, 1))
+	require.Eventually(t, func() bool { return w.SessionCount() == 0 }, time.Second, time.Millisecond)
+	require.Contains(t, metricsBody(w), "relais_worker_agent_oversized_states_total 1\n")
+	require.Contains(t, metricsBody(w), "relais_worker_agent_save_failures_total 0\n")
+}
+
+// Restore and Resume share the same typed adoption-failure boundary.
+type timeoutAdoptionAgent struct {
+	countingAgent
+	phase string
+}
+
+func (a *timeoutAdoptionAgent) Restore(ctx context.Context, state agent.State) error {
+	if a.phase == "restore" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return a.countingAgent.Restore(ctx, state)
+}
+func (a *timeoutAdoptionAgent) Resume(ctx context.Context, _ agent.ResumeNotice) error {
+	if a.phase == "resume" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return nil
+}
+func TestAgentAdoptionTimeoutIsTyped(t *testing.T) {
+	for _, phase := range []string{"restore", "resume"} {
+		t.Run(phase, func(t *testing.T) {
+			w, err := New(Config{Agent: AgentConfig{CallbackTimeout: 20 * time.Millisecond, Factory: func(string) agent.Agent { return &timeoutAdoptionAgent{phase: phase} }}})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, w.Close()) })
+			s := sessionFromState(w, sessionState{ID: "timeout", Agent: agentState{State: agent.State{Version: 1, Bytes: make([]byte, 8)}}})
+			defer s.cancel()
+			err = s.initAgent(true, ResumeOptions{})
+			require.ErrorIs(t, err, agent.ErrRestore)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.EqualValues(t, 1, w.AgentStats().RestoreFailures)
+		})
+	}
 }
