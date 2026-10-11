@@ -64,8 +64,10 @@ func testRelayPlannedHandover(t *testing.T, store sessionstore.Store) {
 	assertSignaling(t, report, "audio", "video")
 	assertCleanCall(t, report)
 	require.Len(t, report.Moves, 20)
+	assertContentCoverage(t, report.Moves)
 	gaps := make([]time.Duration, 0, 20)
 	for i, move := range report.Moves {
+		assertNoLostContent(t, move)
 		assert.Empty(t, move.Error)
 		assert.Equal(t, pairs[i], [2]int{move.From, move.To})
 		require.Len(t, move.Tracks, 2)
@@ -149,6 +151,8 @@ func testRelayDrainTenCalls(t *testing.T, store sessionstore.Store) {
 		assertCleanCall(t, report)
 		logRelayMoveDetails(t, "DRAIN_DETAILS", report.Moves)
 		require.Len(t, report.Moves, 1)
+		assertContentCoverage(t, report.Moves)
+		assertNoLostContent(t, report.Moves[0])
 		for _, track := range report.Moves[0].Tracks {
 			assert.Positive(t, track.PacketsAfter)
 			assert.Zero(t, track.SkippedSequenceNumbers, "call %d %s", i, track.Kind)
@@ -174,6 +178,7 @@ func logRelayMoveDetails(t *testing.T, label string, moves []callharness.MoveRep
 	}
 	records := make([]detail, 0, len(moves))
 	for i, move := range moves {
+		t.Logf("CALLER_EVENT run=%d kind=%s %s", i+1, move.Kind, move.Measurement.Summary())
 		d := detail{Move: i + 1, Held: move.Result.HeldPackets}
 		for _, track := range move.Tracks {
 			if track.Kind == "audio" {

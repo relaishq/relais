@@ -32,6 +32,7 @@ type result struct {
 	Pass                                             bool
 	Path, LivePath                                   string
 	ReplayPackets                                    int
+	Measurement                                      callharness.EventMeasurement
 	RoutesRestored                                   uint64
 }
 
@@ -233,7 +234,8 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	case err := <-sent:
 		senderJoined = true
 		return result{}, fmt.Errorf("media ended before observation finished: %v", err)
-	case <-time.After(after):
+	// Even developer runs observe the full default freshness window.
+	case <-time.After(max(after, (callharness.FreshnessPolicy{}).EvaluationWindow())):
 	}
 	observedUntil := time.Now()
 	stopMedia()
@@ -260,6 +262,7 @@ func measure(report *callharness.Report, relayAddr string, after time.Duration) 
 		return r
 	}
 	move := report.Moves[0]
+	r.Measurement = move.Measurement
 	r.AfterResume, r.Decoded, r.Live, r.Detection = move.DecryptionFailuresAfterResume, move.Recovery.FirstDecodedAfterKill, move.Recovery.FirstDecodedLiveAfterKill, move.DetectionTime
 	r.Path, r.LivePath, r.ReplayPackets = move.Recovery.Path, move.Recovery.LivePath, move.Recovery.ReplayPackets
 	flowing := len(move.Tracks) == 2
@@ -270,7 +273,7 @@ func measure(report *callharness.Report, relayAddr string, after time.Duration) 
 	video := report.Track("video")
 	decoded := video != nil && video.Video != nil && video.Video.FullDecode.Ran() && video.Video.FullDecode.Errors == "" && video.Video.FullDecode.FramesDecoded == video.Video.FullDecode.FramesIn && video.Video.KeyframeDecodeErrors == 0
 	attributed := (r.Path == "Cache" && r.ReplayPackets > 0 || r.Path == "Keyframe" || r.Path == "Live") && (r.LivePath == "Keyframe" || r.LivePath == "Live")
-	r.Pass = attributed && flowing && decoded && r.Gap > 0 && r.Gap < 2*time.Second && r.AfterResume == 0 && r.Reconnects == 0 && r.Renegotiations == 0 && report.OfferAnswerExchanges == 1 && report.ConnectedThroughout() && report.RemoteAddr == relayAddr && r.Decoded > 0 && r.Live > 0 && move.Error == "" && report.Consent.ResponsesAfter > 0
+	r.Pass = r.Measurement.SettleWindow > 0 && !r.Measurement.ContentRecoveryFailed() && attributed && flowing && decoded && r.Gap > 0 && r.Gap < 2*time.Second && r.AfterResume == 0 && r.Reconnects == 0 && r.Renegotiations == 0 && report.OfferAnswerExchanges == 1 && report.ConnectedThroughout() && report.RemoteAddr == relayAddr && r.Decoded > 0 && r.Live > 0 && move.Error == "" && report.Consent.ResponsesAfter > 0
 	if after >= 60*time.Second {
 		r.Pass = r.Pass && report.Consent.ObservedFor >= 60*time.Second
 	}
@@ -279,6 +282,7 @@ func measure(report *callharness.Report, relayAddr string, after time.Duration) 
 func printTable(results []result) {
 	fmt.Println("run  gap_ms  decrypt(total/after)  reconnects  renegotiations  decoded_ms  live_ms  detection_ms  first_path  live_path  replay_packets  result")
 	for i, r := range results {
+		fmt.Printf("CALLER_EVENT run=%d %s\n", i+1, r.Measurement.Summary())
 		state := "FAIL"
 		if r.Pass {
 			state = "PASS"
@@ -472,6 +476,11 @@ func run() (err error) {
 		signal = "SIGTERM drain"
 	}
 	for m, results := range all {
+		conclusive := conclusiveEvents(results)
+		if !callharness.EnoughConclusive(conclusive, len(results)) {
+			return fmt.Errorf("mode=%s caller measurement coverage %d/%d below %d%%", labels[m], conclusive, len(results), callharness.MinimumConclusivePercent)
+		}
+		fmt.Printf("CALLER_COVERAGE mode=%s conclusive=%d/%d minimum=%d%%\n", labels[m], conclusive, len(results), callharness.MinimumConclusivePercent)
 		fmt.Printf("PASS: %d/%d real-process %s trials mode=%s cache_attributed=%d/%d\n", len(results), *runs, signal, labels[m], cacheAttributions(results), len(results))
 		printPathMedians(labels[m], results)
 	}
@@ -564,4 +573,14 @@ func printPathMedians(mode string, results []result) {
 			fmt.Printf("PATH_MEDIAN mode=%s path=%s live_runs=%d live_ms=%.1f\n", mode, path, len(live), float64(median(live))/float64(time.Millisecond))
 		}
 	}
+}
+
+func conclusiveEvents(results []result) int {
+	n := 0
+	for _, result := range results {
+		if result.Measurement.Conclusive() {
+			n++
+		}
+	}
+	return n
 }

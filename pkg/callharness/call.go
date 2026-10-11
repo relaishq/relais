@@ -30,6 +30,16 @@ const (
 
 // CallOptions shape the call the caller makes.
 type CallOptions struct {
+	// Freshness configures the caller's bounded recovery evaluation.
+	// Defaults stay strict (2s recovery + 3s stability), including under race.
+	// Acceptance callers such as #27 can set RecoveryLimit: 2*time.Second
+	// explicitly and use RequireFreshnessRecovered with the required policy
+	// (StrictAcceptancePolicy by default) without race. Phase-1
+	// scenarios report freshness without gating it, with or without race.
+	// These defaults and measured recovery times remain strict. Allow
+	// enough media to observe Freshness.EvaluationWindow().
+	Freshness FreshnessPolicy
+
 	// InitialSequenceNumbers replaces random RTP starts for wrap tests. Nil
 	// keeps Pion's random starts. Both tracks keep their normal packetizers.
 	InitialSequenceNumbers *RTPSequenceNumbers
@@ -88,9 +98,9 @@ type Call struct {
 	localUfrag  string
 	remoteUfrag string
 
-	// keyframeWanted is set when the worker asks the caller for a keyframe;
+	// keyframeWanted holds the caller-clock time of the pending request;
 	// the video sender answers it the way a browser's encoder would.
-	keyframeWanted   atomic.Bool
+	keyframeWanted   atomic.Pointer[keyframeResponseRequest]
 	videoData        []byte
 	initialSequences *RTPSequenceNumbers
 
@@ -117,6 +127,7 @@ type Call struct {
 // with ErrHarnessClosed once the harness is closing.
 func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err error) {
 	rec := newRecorder()
+	rec.freshnessPolicy = opts.Freshness.defaults()
 
 	socket, err := h.newCallerSocket(rec)
 	if err != nil {
@@ -254,9 +265,9 @@ func (c *Call) addTrack(capability webrtc.RTPCodecCapability, kind string) (*web
 				return
 			}
 			for range keyframeRequests(packets, ssrc) {
-				c.rec.keyframeRequestReceived(kind)
-				if kind == kindVideo {
-					c.keyframeWanted.Store(true)
+				requestedAt := c.rec.keyframeRequestReceived(kind)
+				if kind == kindVideo && requestedAt != nil {
+					c.keyframeWanted.Store(requestedAt)
 				}
 			}
 		}
@@ -309,7 +320,8 @@ func (c *Call) onTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 			if err != nil {
 				return
 			}
-			c.rec.packet(record, pkt, time.Now())
+			arrived := time.Now()
+			c.rec.packet(record, pkt, arrived)
 			if assembler == nil {
 				continue
 			}
@@ -321,6 +333,7 @@ func (c *Call) onTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 			if frame == nil {
 				continue
 			}
+			frame.completedAt = arrived
 			var size image.Point
 			var decodeErr error
 			if frame.keyframe {
@@ -385,7 +398,10 @@ func (c *Call) sendAudio(ctx context.Context, end time.Time) error {
 		}
 		// The echo can arrive before WriteSample returns, so the frame is
 		// registered first; it is counted once the write succeeds.
-		c.rec.sending(kindAudio, frame)
+		frame, err = c.rec.sendingAudio(frame, frameDuration)
+		if err != nil {
+			return err
+		}
 		if err := c.audio.WriteSample(media.Sample{Data: frame, Duration: frameDuration}); err != nil {
 			return fmt.Errorf("callharness: send audio: %w", err)
 		}
@@ -421,8 +437,8 @@ func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
 	defer ticker.Stop()
 
 	for time.Now().Before(end) {
-		pliResponse := c.keyframeWanted.Swap(false)
-		if pliResponse {
+		requestedAt := c.keyframeWanted.Swap(nil)
+		if requestedAt != nil {
 			if err := src.rewind(); err != nil {
 				return err
 			}
@@ -431,7 +447,7 @@ func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
 		if err != nil {
 			return err
 		}
-		c.rec.sendingVideo(frame, pliResponse, src.frameDuration) // records the observable PictureID before writing
+		c.rec.sendingVideo(frame, requestedAt, src.frameDuration) // records the observable PictureID before writing
 		if err := c.video.WriteSample(media.Sample{Data: frame, Duration: src.frameDuration}); err != nil {
 			return fmt.Errorf("callharness: send video: %w", err)
 		}
