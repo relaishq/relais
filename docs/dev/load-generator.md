@@ -76,12 +76,14 @@ their existing one-second observation cadence and read the same snapshot.
 Periodic HTTP reads use a poller-owned one-second timeout, independent of a
 caller's cancellation or deadline. Successful snapshots and poller errors are
 cached for one second from completion; caller cancellation errors stay local
-to that reader. The harness excludes these observer HTTP reads from planned
-moves. Local in-process harness behavior remains unchanged.
+to that reader. The harness excludes these periodic observer reads from
+planned moves; final reads at `Hangup` do not take that lock, which is safe
+because the control plane's `Status` never takes the call coordination lock.
+Local in-process harness behavior remains unchanged.
 
 Final collection at `Hangup` bypasses a periodic snapshot and uses a fresh read
 with a poller-owned ten-second timeout. Calls finishing within one second of
-that final read share its result, so final collection also avoids one scan per
+that final read's completion share its result, so final collection also avoids one scan per
 call. The child allows 15 seconds for hangup, covering that read, echo drain
 and deletion. A final refresh can follow a periodic read within the same
 second; the reported request counts and rates include both.

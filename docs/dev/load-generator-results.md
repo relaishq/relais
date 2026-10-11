@@ -128,8 +128,9 @@ agent delegation occurred during that worker verification.
 ## Final-collection follow-up — rework 2
 
 Base `97fa96e`, with the new fix uncommitted; measured on 2026-10-11 UTC.
-A regression first reproduced the cancelled-poll bug through a real caller's
-`Hangup`: cancelling caller A's in-flight status context cached `context
+A regression first reproduced the cancelled-poll bug through caller B's real
+`Hangup` (caller A's poll is simulated with a direct status read): cancelling
+caller A's in-flight status context cached `context
 canceled`, and caller B's final collection returned that error. The red log is
 `bin/rework2-cancel-red.log`; the corrected path passes in
 `bin/rework2-cancel-green.log`.

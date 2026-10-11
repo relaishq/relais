@@ -126,11 +126,11 @@ func TestFinalStatusRefreshSurvivesSlowPeriodicTimeout(t *testing.T) {
 func TestCallerDeadlineIsNotCachedAsPollerError(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	var requests atomic.Int64
-	var releaseOnce sync.Once
+	var releaseOnce, enterOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		close(entered)
+		enterOnce.Do(func() { close(entered) })
 		select {
 		case <-release:
 			_ = json.NewEncoder(w).Encode(map[string]any{"calls": []any{}})
