@@ -176,6 +176,7 @@ func TestAgentCheckpointRateLimitUsesCapturedPair(t *testing.T) {
 	s.mu.Lock()
 	s.worker.cfg.Agent.SaveInterval = time.Hour
 	s.lastCheckpoint = time.Now()
+	before := s.state.Checkpoint
 	s.mu.Unlock()
 	s.snapshotMu.Unlock()
 	store.mu.Lock()
@@ -191,4 +192,43 @@ func TestAgentCheckpointRateLimitUsesCapturedPair(t *testing.T) {
 	store.mu.Lock()
 	store.beforeClock = nil
 	store.mu.Unlock()
+	s.mu.Lock()
+	after := s.state.Checkpoint
+	s.mu.Unlock()
+	require.Equal(t, before, after, "a skipped captured pair records no attempt, success, or failure")
+	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	data, err := store.GetState(context.Background(), call.id)
+	require.NoError(t, err)
+	saved, err := decodeSnapshot(data)
+	require.NoError(t, err)
+	require.Equal(t, before.Attempts+1, saved.State.Checkpoint.Attempts)
+	require.Equal(t, before.Successes+1, saved.State.Checkpoint.Successes)
+	require.Equal(t, before.Failures, saved.State.Checkpoint.Failures)
+}
+
+func TestAgentFlushBudgetWaitsForTimelyInFlightPair(t *testing.T) {
+	entered := make(chan struct{})
+	a := &countingAgent{process: func(ctx context.Context, _ agent.Input) error {
+		close(entered)
+		select {
+		case <-time.After(1600 * time.Millisecond):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}}
+	w, s, caller := agentPacketSession(t, a, 2*time.Second)
+	s.handleRTP(testEncrypt(t, caller, 456, 1))
+	<-entered
+	s.handleRTP(testEncrypt(t, caller, 456, 2))
+	s.handleRTP(testEncrypt(t, caller, 456, 3))
+	require.NoError(t, s.flushAgent(), "flush budget expiry cannot fail an in-flight callback that meets its deadline")
+	state, progress, err := w.SessionAgent(s.id)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, binary.BigEndian.Uint64(state.Bytes))
+	require.EqualValues(t, 1, progress.Consumed)
+	require.EqualValues(t, 1, progress.Index)
+	require.EqualValues(t, 2, w.AgentStats().InputDrops)
+	require.Zero(t, w.AgentStats().CallbackDeadlines)
+	require.Equal(t, 1, w.SessionCount())
 }

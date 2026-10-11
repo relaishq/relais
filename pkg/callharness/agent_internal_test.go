@@ -38,9 +38,17 @@ type harnessCounterAgent struct {
 	consumedAt     int64
 	resumes        chan agentResumeObservation
 	restoreFailure bool
+	processDelay   time.Duration
 }
 
-func (a *harnessCounterAgent) Process(_ context.Context, _ agent.Input) (agent.Output, error) {
+func (a *harnessCounterAgent) Process(ctx context.Context, _ agent.Input) (agent.Output, error) {
+	if a.processDelay > 0 {
+		select {
+		case <-time.After(a.processDelay):
+		case <-ctx.Done():
+			return agent.Output{}, ctx.Err()
+		}
+	}
 	a.count++
 	a.consumedAt = time.Now().UnixNano()
 	// One 20 ms CELT silence frame, with the deterministic count in Opus padding.
@@ -85,6 +93,7 @@ type agentHarnessSettings struct {
 	snapshotInterval     time.Duration
 	targetRestoreFailure bool
 	echo                 bool
+	sourceProcessDelay   time.Duration
 }
 
 func startAgentHarness(t *testing.T, store sessionstore.Store, settings ...agentHarnessSettings) *agentHarnessSystem {
@@ -109,7 +118,11 @@ func startAgentHarness(t *testing.T, store sessionstore.Store, settings ...agent
 			if config.echo {
 				return &agent.Echo{}
 			}
-			return &harnessCounterAgent{resumes: resumes, restoreFailure: i == 1 && config.targetRestoreFailure}
+			a := &harnessCounterAgent{resumes: resumes, restoreFailure: i == 1 && config.targetRestoreFailure}
+			if i == 0 {
+				a.processDelay = config.sourceProcessDelay
+			}
+			return a
 		}}, DisableFrameCache: true, Relay: &mediaworker.RelayConfig{Owners: store, Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr()}})
 		require.NoError(t, err)
 		sys.workers = append(sys.workers, w)
@@ -235,6 +248,48 @@ func TestAgentPlannedMoveExactContinuation(t *testing.T) {
 		require.Zero(t, sys.workers[0].AgentStats().InputDrops)
 		require.Zero(t, sys.workers[1].AgentStats().InputDrops)
 		t.Logf("AGENT_PLANNED restored=%d next=%d final=%d exact=true", resumed.count, values[15], values[len(values)-1])
+	})
+}
+
+func TestAgentSlowQueueMoveExactContinuation(t *testing.T) {
+	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+		sys := startAgentHarness(t, store, agentHarnessSettings{sourceProcessDelay: 60 * time.Millisecond})
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		call, err := sys.h.Dial(ctx, CallOptions{})
+		require.NoError(t, err)
+		counts := observeAgentCounts(call)
+		// At 50 inputs/sec and 60 ms per callback, this fills the default
+		// 32-input queue. Stop sending before Move to isolate flush drops.
+		require.NoError(t, call.SendMedia(ctx, 1400*time.Millisecond))
+		before := sys.workers[0].AgentStats()
+		require.Positive(t, before.InputDrops, "default queue overflowed before the move")
+		_, err = sys.plane.Move(ctx, call.SessionID(), "1")
+		require.NoError(t, err, "callbacks meeting their deadlines must not lose the call")
+		resumed := awaitAgentResume(t, sys)
+		require.Equal(t, agent.PlannedMove, resumed.notice.Kind)
+		require.Equal(t, resumed.count, resumed.notice.Progress.Consumed)
+		after := sys.workers[0].AgentStats()
+		require.Greater(t, after.InputDrops, before.InputDrops, "flush budget drops the unconsumed queue")
+		require.Zero(t, after.CallbackDeadlines)
+		state, progress, err := sys.workers[1].SessionAgent(call.SessionID())
+		require.NoError(t, err)
+		require.Equal(t, resumed.count, binary.BigEndian.Uint64(state.Bytes))
+		require.Equal(t, resumed.notice.Progress, progress, "move preserves the exact consumed pair")
+		require.NoError(t, call.SendMedia(ctx, 100*time.Millisecond))
+		require.Eventually(t, func() bool {
+			values := counts.snapshot()
+			return len(values) > 0 && values[len(values)-1] >= resumed.count+5
+		}, time.Second, time.Millisecond)
+		values := counts.snapshot()
+		for i, n := range values {
+			require.EqualValues(t, i+1, n, "caller receives exact state continuation, including the first resumed output")
+		}
+		require.Contains(t, values, resumed.count+1)
+		report, err := call.Hangup(ctx)
+		require.NoError(t, err)
+		require.Zero(t, report.DecryptionFailures.Total())
+		t.Logf("AGENT_SLOW_MOVE restored=%d flush_drops=%d deadlines=%d next=%d", resumed.count, after.InputDrops-before.InputDrops, after.CallbackDeadlines, resumed.count+1)
 	})
 }
 

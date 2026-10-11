@@ -51,9 +51,14 @@ default) accepts audio without waiting.
 Overflow and callback timeout drop input and count it. Callbacks run serially,
 outside the media lock, with a 100 ms deadline by default. Process plus state
 encoding share a deadline. The host copies custom payloads and returned state
-bytes. Planned export caps its flush at half the relay default hold timeout
-(1.5 s), leaving time for transfer and adoption. Idle agents never request
-checkpoints; the existing transport ticker supplies the base cadence.
+bytes. Planned export budgets queued work at half the relay default hold timeout
+(1.5 s), reserving a full callback deadline before starting another queued input.
+At budget exhaustion it drops the remaining queue, counts each input drop, and
+publishes the already-consumed state/progress pair. An in-flight callback can
+finish within its own deadline; budget exhaustion alone never ends the call.
+Export ends a session only if its in-flight callback is actually quarantined
+past its deadline, or another terminal agent error occurs. Idle agents never
+request checkpoints; the existing transport ticker supplies the base cadence.
 
 A callback that finishes after its deadline cannot publish state or output. Its
 instance is quarantined while it runs; further input is dropped. On completion,
@@ -77,9 +82,11 @@ Changed-state store writes coalesce at most once per `SaveInterval` (100 ms
 default). Transport-only snapshots of an unchanged stateless echo keep the
 existing cadence. A checkpoint always copies the newest complete state/progress
 pair; a rate-limited attempt skips the entire write, rather than misdating an
-older agent pair with a newer checkpoint timestamp. A planned move stops
-enqueue, drains the finite accepted queue and publishes the final pair before
-fencing/export, bypassing the rate limit. Periodic copies include owned agent
+older agent pair with a newer checkpoint timestamp. A skip, including one found
+after capture, records no checkpoint attempt, success or failure. A planned move
+stops enqueue, drains the accepted queue within its budget, drops any remainder,
+and publishes the final consumed pair before fencing/export, bypassing the rate
+limit. Periodic copies include owned agent
 bytes under the same media lock as the transport counters. Encoding and fenced storage run outside that lock.
 Successful writes reuse the exact pair captured for encoding, without decoding
 the snapshot again. Required resume and replay-reservation checkpoints always
@@ -110,6 +117,9 @@ snapshot decode.
 
 ## Resume and replay
 
+Restore and Resume callback timeouts are typed adoption failures (`ErrRestore`),
+even when they wrap a context deadline. Both direct and HTTP control-plane paths
+try another target and retain the agent failure cause if no target can adopt.
 Restore validates bytes before transport adoption, followed by a deadline-bounded
 Resume notice. Resume must have no external side effects: failed transport
 adoption can retry both callbacks on a fresh instance. Internal state changes

@@ -126,6 +126,9 @@ func (s *session) persistSnapshotMode(parent context.Context, force bool) error 
 	lease := s.lease
 	s.mu.Unlock()
 	if !force && capturedChanged && capturedTooSoon {
+		s.mu.Lock()
+		s.state.Checkpoint.Attempts-- // discarded capture is not a write attempt
+		s.mu.Unlock()
 		return errCheckpointSkipped
 	}
 	err = s.worker.cfg.Relay.Owners.PutState(ctx, lease, state)

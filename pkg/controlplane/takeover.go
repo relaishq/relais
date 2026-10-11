@@ -554,16 +554,18 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			complete(false, nil)
 			return
 		}
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, privateapi.ErrUncertain) {
+		// Typed adoption failures are definitive even when their callback
+		// cause is a deadline. Match the HTTP worker's agent error mapping.
+		agentFailure := errors.Is(err, agent.ErrRestore) || errors.Is(err, agent.ErrVersion) || errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrSave)
+		if agentFailure {
+			pending.agentFailure = err
+		} else if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, privateapi.ErrUncertain) {
 			pending.transientResume = true
 			return
 		}
 		if errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) || errors.Is(err, mediaworker.ErrSRTCPIndexExhausted) {
 			complete(true, err)
 			return
-		}
-		if errors.Is(err, agent.ErrRestore) || errors.Is(err, agent.ErrVersion) || errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrSave) {
-			pending.agentFailure = err
 		}
 		pending.transientResume = false
 		pending.excluded[target.addr] = true

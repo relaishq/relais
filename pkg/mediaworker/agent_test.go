@@ -427,3 +427,39 @@ func TestAgentMetricsSurviveSessionRemoval(t *testing.T) {
 	require.Contains(t, metricsBody(w), "relais_worker_agent_oversized_states_total 1\n")
 	require.Contains(t, metricsBody(w), "relais_worker_agent_save_failures_total 0\n")
 }
+
+// Restore and Resume share the same typed adoption-failure boundary.
+type timeoutAdoptionAgent struct {
+	countingAgent
+	phase string
+}
+
+func (a *timeoutAdoptionAgent) Restore(ctx context.Context, state agent.State) error {
+	if a.phase == "restore" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return a.countingAgent.Restore(ctx, state)
+}
+func (a *timeoutAdoptionAgent) Resume(ctx context.Context, _ agent.ResumeNotice) error {
+	if a.phase == "resume" {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return nil
+}
+func TestAgentAdoptionTimeoutIsTyped(t *testing.T) {
+	for _, phase := range []string{"restore", "resume"} {
+		t.Run(phase, func(t *testing.T) {
+			w, err := New(Config{Agent: AgentConfig{CallbackTimeout: 20 * time.Millisecond, Factory: func(string) agent.Agent { return &timeoutAdoptionAgent{phase: phase} }}})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, w.Close()) })
+			s := sessionFromState(w, sessionState{ID: "timeout", Agent: agentState{State: agent.State{Version: 1, Bytes: make([]byte, 8)}}})
+			defer s.cancel()
+			err = s.initAgent(true, ResumeOptions{})
+			require.ErrorIs(t, err, agent.ErrRestore)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.EqualValues(t, 1, w.AgentStats().RestoreFailures)
+		})
+	}
+}
