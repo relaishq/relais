@@ -708,16 +708,29 @@ func TestRelayBufferUncertainExport(t *testing.T) {
 	})
 }
 
-// The first target request is uncertain and unadopted until the planned hold
-// has expired. Recovery must recreate and prepare one gate with one source.
-type bufferUnadoptedResumeFault struct {
-	expired func() bool
-	once    atomic.Bool
+// Lose the first target reply until the planned hold expires, either before
+// adoption or after adoption and successful decryption of ungated live input.
+type bufferExpiredResumeFault struct {
+	expired         func() bool
+	adopted         bool
+	liveAfterExpiry func() uint64
+	once            atomic.Bool
 }
 
-func (f *bufferUnadoptedResumeFault) RoundTrip(req *http.Request) (*http.Response, error) {
+func (f *bufferExpiredResumeFault) RoundTrip(req *http.Request) (*http.Response, error) {
 	if strings.HasSuffix(req.URL.Path, "/resume") && f.once.CompareAndSwap(false, true) {
 		defer func() { _ = req.Body.Close() }()
+		if f.adopted {
+			response, err := http.DefaultTransport.RoundTrip(req)
+			if err != nil {
+				return nil, err
+			}
+			_, err = io.Copy(io.Discard, response.Body)
+			_ = response.Body.Close()
+			if err != nil || response.StatusCode != http.StatusOK {
+				return nil, fmt.Errorf("injected adoption failed: status=%d error=%v", response.StatusCode, err)
+			}
+		}
 		tick := time.NewTicker(5 * time.Millisecond)
 		defer tick.Stop()
 		for !f.expired() {
@@ -727,14 +740,35 @@ func (f *bufferUnadoptedResumeFault) RoundTrip(req *http.Request) (*http.Respons
 			case <-tick.C:
 			}
 		}
-		return nil, errors.New("injected lost resume request before adoption")
+		if f.adopted {
+			// Keep B live beyond the initial held-queue flush before confirmation.
+			before, until := f.liveAfterExpiry(), time.Now().Add(150*time.Millisecond)
+			for time.Now().Before(until) || f.liveAfterExpiry() < before+5 {
+				select {
+				case <-req.Context().Done():
+					return nil, req.Context().Err()
+				case <-tick.C:
+				}
+			}
+		}
+		return nil, errors.New("injected lost resume reply after hold expiry")
 	}
 	return http.DefaultTransport.RoundTrip(req)
 }
 func TestRelayBufferUncertainExportAfterHoldExpiry(t *testing.T) {
+	testRelayBufferUncertainExportAfterHoldExpiry(t, false)
+}
+
+func TestRelayBufferUncertainExportAdoptedAfterHoldExpiry(t *testing.T) {
+	testRelayBufferUncertainExportAfterHoldExpiry(t, true)
+}
+
+func testRelayBufferUncertainExportAfterHoldExpiry(t *testing.T, adopted bool) {
+	t.Helper()
 	relayBufferStores(t, func(t *testing.T, store sessionstore.Store) {
 		var sys *bufferFailureSystem
-		fault := &bufferUnadoptedResumeFault{expired: func() bool { return sys.r.Stats().HoldTimeouts > 0 }}
+		var liveAfterExpiry atomic.Uint64
+		fault := &bufferExpiredResumeFault{expired: func() bool { return sys.r.Stats().HoldTimeouts > 0 }, adopted: adopted, liveAfterExpiry: liveAfterExpiry.Load}
 		var exported atomic.Bool
 		var mu sync.Mutex
 		var begins []relay.ReplayRequest
@@ -772,10 +806,16 @@ func TestRelayBufferUncertainExportAfterHoldExpiry(t *testing.T) {
 				})
 			},
 		})
+		require.NoError(t, workerprobe.SetAfterDecrypt(sys.workers[1].LocalAddr(), func(_ string, _ uint32, _ uint64) {
+			if sys.r.Stats().HoldTimeouts > 0 {
+				liveAfterExpiry.Add(1)
+			}
+		}))
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		call, err := sys.h.Dial(ctx, CallOptions{Video: true, Worker: 0})
 		require.NoError(t, err)
+		o := observeBufferCall(call)
 		mediaCtx, stop := context.WithCancel(ctx)
 		sent := make(chan error, 1)
 		go func() { sent <- call.SendMedia(mediaCtx, 7*time.Second) }()
@@ -787,29 +827,46 @@ func TestRelayBufferUncertainExportAfterHoldExpiry(t *testing.T) {
 		require.NoError(t, err)
 		_ = response.Body.Close()
 		require.Equal(t, http.StatusInternalServerError, response.StatusCode, "first adoption remains uncertain after the original hold expires")
+		liveBeforeConfirmation := liveAfterExpiry.Load()
+		if adopted {
+			require.GreaterOrEqual(t, liveBeforeConfirmation, uint64(5), "B authenticated ungated input before confirmation")
+		}
 		status := waitBufferTakeovers(t, ctx, sys.h, 1)
+		time.Sleep(300 * time.Millisecond)
+		failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
+		require.NoError(t, err)
+		require.Zero(t, failures, "confirmation must not replay packets to a possibly live B")
 		require.False(t, status.Takeovers[0].Lost)
-		require.True(t, status.Takeovers[0].Result.RelayReplayComplete)
-		require.Positive(t, status.Takeovers[0].Result.RelayReplayPackets)
+		require.False(t, status.Takeovers[0].Result.RelayReplayComplete)
+		require.Zero(t, status.Takeovers[0].Result.RelayReplayPackets)
+		require.True(t, status.Takeovers[0].Result.HoldExpired)
+		require.True(t, status.Takeovers[0].Result.RelayReplayRecoveryPLI, "expired confirmation requests fresh recovery after idempotent resume")
 		require.Equal(t, "1", status.Calls[0].Owner)
 		require.EqualValues(t, 1, sys.r.Stats().HoldTimeouts, "recovery must not wait for a second hold expiry")
 		require.Zero(t, sys.r.Stats().Holds)
 		mu.Lock()
 		observed := append([]relay.ReplayRequest(nil), begins...)
 		mu.Unlock()
-		require.GreaterOrEqual(t, len(observed), 3)
+		require.Len(t, observed, 1, "same-target confirmation must not create a replay gate")
 		for _, begin := range observed {
 			require.Equal(t, sys.workers[0].LocalAddr(), begin.From, "gate creation and checkpoint preparation use the same original source")
 		}
-		failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
-		require.NoError(t, err)
-		require.Zero(t, failures)
-		time.Sleep(300 * time.Millisecond)
+		sentDuring, lost := bufferPacketLoss(t, o, status.Takeovers[0].Start, status.Takeovers[0].End)
+		require.Positive(t, sentDuring)
+		if !adopted {
+			require.Positive(t, lost, "expired hold cannot recover input lost before adoption")
+		}
 		stop()
 		report, err := call.Hangup(ctx)
 		require.NoError(t, err)
 		require.Zero(t, report.DecryptionFailures.Total())
 		require.True(t, report.ConnectedThroughout())
-		require.Zero(t, report.SentVideo.KeyframeRequests)
+		require.Positive(t, report.SentVideo.KeyframeRequests, "legacy confirmation recovers any gap with a keyframe")
+		for _, kind := range []string{"audio", "video"} {
+			track := report.Track(kind)
+			require.NotNil(t, track)
+			require.Greater(t, track.LastArrival, status.Takeovers[0].End.Sub(report.StartedAt), "media continues after confirmation")
+		}
+		t.Logf("BUFFER_EXPIRY adopted=%t live_before_confirmation=%d hold_timeouts=%d outage_lost=%d worker_decrypt=%d gate_released=true", adopted, liveBeforeConfirmation, sys.r.Stats().HoldTimeouts, lost, failures)
 	})
 }
