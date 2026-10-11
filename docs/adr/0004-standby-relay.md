@@ -28,15 +28,17 @@ Takeover follows this order:
 2. Start renewing the new tenure, including during fencing and route restore.
 3. Fence the old lease holder and the last possible forwarder, deduplicating
    identical targets. Check PID and kernel start time immediately before
-   `SIGKILL`, then wait for exit. A zombie is already unable to forward or hold
-   sockets. Linux reads `/proc/<pid>/stat`; macOS reads `kern.proc.pid` through
+   `SIGKILL`, then wait for exit. A zombie confirms exit of the inspected task;
+   it does not prove that all shared socket references have drained. Linux reads
+   `/proc/<pid>/stat`; macOS reads `kern.proc.pid` through
    `golang.org/x/sys/unix`. A missing process is already fenced. A start-time
    mismatch, permission failure or unconfirmed exit fails closed: log and count
    the error, exit the candidate, and never bind. The controller does not signal
    process groups or arbitrary PIDs from a status endpoint.
 4. Confirm activation with an unexpired owner/epoch compare-and-set. This records
    the new process as the possible forwarder **before** any socket bind.
-5. Bind the original sockets, restore routes through ADR 0003, and start serving.
+5. Bind the original sockets with a shared, bounded retry budget, restore routes
+   through ADR 0003, and start serving.
    The new instance token makes the control plane re-register its live workers.
 
 The lease distinguishes its current holder from its last possible forwarder.
@@ -91,6 +93,30 @@ SIGCONT cannot resurrect a killed process. Timing columns separate the lease
 claim, fencing, activation, socket/route startup, readiness and worker
 registration. Claim, readiness and registration times start at the injected
 signal; fencing, activation and bind/restore are stage durations.
+
+Socket binds retry only `EADDRINUSE`, at 5 ms intervals, under one deadline for
+HTTP and both UDP sockets. `-relay-bind-timeout` defaults to 1 s and must be
+positive. The lease continues renewing during that wait, and observed lease loss
+cancels the wait. HTTP binds first but does not serve; packet loops start only
+after both UDP sockets bind and route restore completes. An exhausted budget or
+another bind error releases partial binds, logs `bind_failures=1`, and exits
+without forwarding. `bind_wait_ns` and the driver's `bind_wait_ms` record the
+occupied-port wait separately from total bind-plus-restore time. This budget
+bounds failure; it does not extend the one-second successful caller-gap gate.
+
+Linux CI disproved the earlier immediate socket-release assumption for an
+unreaped Go child. The leading explanation is that the thread-group leader can
+be a zombie while other exiting runtime threads still reference shared files.
+The Linux kernel [exit path](https://github.com/torvalds/linux/blob/v6.11/kernel/exit.c)
+allows a zombie leader with remaining threads, and
+[file-table teardown](https://github.com/torvalds/linux/blob/v6.11/fs/file.c)
+closes files when the last shared table reference is dropped. Per-task file
+cleanup runs before zombie publication;
+[deferred file release](https://github.com/torvalds/linux/blob/v6.11/fs/file_table.c)
+is another possible source of delay. The exact CI mechanism remains unconfirmed.
+The unreaped-child test now uses the production bind retry and logs owned
+`/proc` thread/descriptor/children and `ss` evidence if its first bind is occupied.
+It requires both sockets to bind within the shared budget before parent reaping.
 
 Production-command tests cover a real Redis transport outage, successor-induced
 self-fencing and mismatched kernel identity with no socket binds. Unit tests

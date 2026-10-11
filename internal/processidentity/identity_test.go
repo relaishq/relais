@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relais/internal/socketbind"
 	"github.com/stretchr/testify/require"
 )
 
@@ -208,10 +209,25 @@ func TestFenceUnreapedProcessReleasesSockets(t *testing.T) {
 	require.NoError(t, err, "child must still exist without parent reaping")
 	require.Equal(t, start, current)
 	require.True(t, dead, "Fence must return for an unreaped zombie")
-	udp, err = net.ListenPacket("udp4", addr.UDP)
-	require.NoError(t, err, "zombie must release its UDP socket before reaping")
+	bindCtx, stopBind := context.WithTimeout(context.Background(), socketbind.DefaultTimeout)
+	defer stopBind()
+	reported := false
+	udp, udpWait, err := socketbind.Retry(bindCtx, func() (net.PacketConn, error) {
+		socket, err := net.ListenPacket("udp4", addr.UDP)
+		if errors.Is(err, syscall.EADDRINUSE) && !reported {
+			reported = true
+			logSocketExitState(t, cmd.Process.Pid, addr.UDP)
+		}
+		return socket, err
+	})
+	require.NoError(t, err, "fenced child must release UDP within the bind budget without reaping")
 	defer func() { _ = udp.Close() }()
-	tcp, err = net.Listen("tcp4", addr.TCP)
-	require.NoError(t, err, "zombie must release its TCP socket before reaping")
+	tcp, tcpWait, err := socketbind.Retry(bindCtx, func() (net.Listener, error) { return net.Listen("tcp4", addr.TCP) })
+	require.NoError(t, err, "fenced child must release TCP within the shared bind budget without reaping")
 	defer func() { _ = tcp.Close() }()
+	current, dead, err = inspect(cmd.Process.Pid)
+	require.NoError(t, err)
+	require.Equal(t, start, current)
+	require.True(t, dead, "socket release must not require parent reaping")
+	t.Logf("fenced unreaped child bind_wait_ms=%.3f", float64(udpWait+tcpWait)/float64(time.Millisecond))
 }

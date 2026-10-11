@@ -35,6 +35,8 @@ type ContinuityStatus struct {
 	Fence           time.Duration `json:"fence_ns"`
 	Activate        time.Duration `json:"activate_ns"`
 	BindRestore     time.Duration `json:"bind_restore_ns"`
+	BindWait        time.Duration `json:"bind_wait_ns"`
+	BindFailures    uint64        `json:"bind_failures"`
 	FencingFailures uint64        `json:"fencing_failures"`
 	StoreFailures   uint64        `json:"store_failures"`
 }

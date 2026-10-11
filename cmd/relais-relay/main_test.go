@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -266,4 +268,130 @@ func TestValidateAddressesBeforeFencing(t *testing.T) {
 	} {
 		require.Error(t, validateAddresses(true, addrs[0], addrs[1], addrs[2]))
 	}
+}
+
+func TestCommandWaitsForSocketRelease(t *testing.T) {
+	for _, blocked := range []string{"public", "leg", "http"} {
+		t.Run(blocked, func(t *testing.T) {
+			_, addr, prefix := commandStore(t)
+			public, leg := freeUDP(t), freeUDP(t)
+			httpAddr, err := clusterprocess.FreeTCP()
+			require.NoError(t, err)
+			var held io.Closer
+			if blocked == "http" {
+				held, err = net.Listen("tcp", httpAddr)
+			} else {
+				udpAddr := public
+				if blocked == "leg" {
+					udpAddr = leg
+				}
+				held, err = net.ListenPacket("udp", udpAddr)
+			}
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = held.Close() })
+			c := startCommand(t, addr, prefix, "-standby", "-media", public, "-leg", leg, "-http", httpAddr)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := c.WaitLog(ctx, "STANDBY_WAIT"); err != nil {
+				_, details := c.Ready(ctx)
+				require.NoError(t, err, "startup details: %v", details)
+			}
+			select {
+			case <-c.Done():
+				t.Fatalf("relay exited instead of waiting for %s release: %v", blocked, c.Err())
+			case <-time.After(100 * time.Millisecond):
+			}
+			require.NoError(t, held.Close())
+			r := readyCommand(t, c)
+			status, err := (&controlplane.RemoteRelay{URL: r.HTTP}).Status(ctx)
+			require.NoError(t, err)
+			// Bind wait must be reported in the actual HTTP status response.
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.HTTP+"/status", nil)
+			require.NoError(t, err)
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer func() { _ = resp.Body.Close() }()
+			var wire struct {
+				Continuity struct {
+					BindWait time.Duration `json:"bind_wait_ns"`
+				} `json:"continuity"`
+			}
+			require.NoError(t, json.NewDecoder(resp.Body).Decode(&wire))
+			require.Positive(t, wire.Continuity.BindWait)
+			require.GreaterOrEqual(t, status.Continuity.BindRestore, wire.Continuity.BindWait)
+		})
+	}
+}
+
+func TestCommandBindBudgetFailsClosed(t *testing.T) {
+	for _, blocked := range []string{"public", "leg", "http"} {
+		t.Run(blocked, func(t *testing.T) {
+			_, addr, prefix := commandStore(t)
+			public, leg := freeUDP(t), freeUDP(t)
+			httpAddr, err := clusterprocess.FreeTCP()
+			require.NoError(t, err)
+			var held io.Closer
+			if blocked == "http" {
+				held, err = net.Listen("tcp", httpAddr)
+			} else {
+				udpAddr := public
+				if blocked == "leg" {
+					udpAddr = leg
+				}
+				held, err = net.ListenPacket("udp", udpAddr)
+			}
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = held.Close() })
+			c := startCommand(t, addr, prefix, "-standby", "-media", public, "-leg", leg, "-http", httpAddr, "-relay-bind-timeout", "80ms")
+			select {
+			case <-c.Done():
+				require.Error(t, c.Err())
+			case <-time.After(3 * time.Second):
+				t.Fatal("bind budget did not stop the candidate")
+			}
+			_, details := c.Ready(context.Background())
+			require.ErrorContains(t, details, "bind_failures=1")
+			require.ErrorContains(t, details, "context deadline exceeded")
+			require.NotContains(t, details.Error(), `"instance":`, "failed candidate must never become ready")
+			for name, a := range map[string]string{"public": public, "leg": leg} {
+				if name == blocked {
+					continue
+				}
+				socket, err := net.ListenPacket("udp", a)
+				require.NoError(t, err, "partial UDP bind must be released")
+				require.NoError(t, socket.Close())
+			}
+			if blocked != "http" {
+				listener, err := net.Listen("tcp", httpAddr)
+				require.NoError(t, err, "partial HTTP bind must be released")
+				require.NoError(t, listener.Close())
+			}
+		})
+	}
+}
+
+func TestCommandLeaseLossCancelsBindWait(t *testing.T) {
+	s, addr, prefix := commandStore(t)
+	held, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = held.Close() }()
+	httpAddr, err := clusterprocess.FreeTCP()
+	require.NoError(t, err)
+	c := startCommand(t, addr, prefix, "-standby", "-media", held.LocalAddr().String(), "-leg", freeUDP(t), "-http", httpAddr, "-relay-bind-timeout", "5s")
+	var l sessionstore.RelayLease
+	require.Eventually(t, func() bool {
+		l, err = s.GetRelay(context.Background(), "default")
+		return err == nil && l.Forwarder == l.Holder
+	}, time.Second, 10*time.Millisecond)
+	_, err = s.TransferRelay(context.Background(), l, sessionstore.RelayProcess{Owner: "successor", PID: 42, Start: "test-start"}, time.Second)
+	require.NoError(t, err)
+	select {
+	case <-c.Done():
+		require.Error(t, c.Err())
+	case <-time.After(time.Second):
+		t.Fatal("lease loss did not cancel the five-second bind wait")
+	}
+	listener, err := net.Listen("tcp", httpAddr)
+	require.NoError(t, err)
+	require.NoError(t, listener.Close())
 }

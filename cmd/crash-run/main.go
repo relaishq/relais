@@ -36,6 +36,7 @@ type result struct {
 	OldWorkerPackets, NewWorkerPackets               uint64
 	ClaimAfter, FenceTime, ActivateTime              time.Duration
 	BindRestoreTime, ReadyAfter, RegisteredAfter     time.Duration
+	BindWaitTime                                     time.Duration
 }
 
 func binaries(bin string) error {

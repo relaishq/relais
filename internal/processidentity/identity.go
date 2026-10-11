@@ -23,7 +23,8 @@ func Current() (Identity, error) {
 }
 
 // Fence verifies start time immediately before SIGKILL and waits for exit.
-// Zombies are gone for this purpose: they cannot forward or own sockets.
+// A zombie ends the identity wait; shared socket references may drain later.
+// Callers must confirm exclusive binds before starting a new forwarder.
 // A reused PID is never signalled and prevents activation.
 func Fence(ctx context.Context, id Identity) error {
 	return fence(ctx, id, inspect, func(pid int) error { return syscall.Kill(pid, syscall.SIGKILL) })

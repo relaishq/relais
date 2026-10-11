@@ -75,6 +75,7 @@ import (
 	"github.com/pion/stun/v4"
 
 	"github.com/relais/internal/relayleg"
+	"github.com/relais/internal/socketbind"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -137,6 +138,9 @@ type Config struct {
 	// ForwardingAllowed is a nonblocking tenure check on every packet send.
 	ForwardingAllowed func() bool
 	Continuity        *ContinuityStatus
+	// BindContext, when set, must carry a shared deadline for occupied-port
+	// retries during construction. Nil preserves single-attempt binding.
+	BindContext context.Context
 
 	// Routes enables asynchronous confirmed-route persistence and eager restore.
 	// Nil preserves the address-only relay API for embedders.
@@ -349,11 +353,17 @@ func New(cfg Config) (*Relay, error) {
 	}
 	applyDefaults(&cfg)
 
-	public, publicAddr, err := listen("public", cfg.PublicAddr)
+	public, publicAddr, wait, err := listen(cfg.BindContext, "public", cfg.PublicAddr)
+	if cfg.Continuity != nil {
+		cfg.Continuity.BindWait += wait
+	}
 	if err != nil {
 		return nil, err
 	}
-	workers, workerAddr, err := listen("worker", cfg.WorkerAddr)
+	workers, workerAddr, wait, err := listen(cfg.BindContext, "worker", cfg.WorkerAddr)
+	if cfg.Continuity != nil {
+		cfg.Continuity.BindWait += wait
+	}
 	if err != nil {
 		_ = public.Close()
 
@@ -462,17 +472,17 @@ func applyDefaults(cfg *Config) {
 	}
 }
 
-func listen(name, addr string) (*net.UDPConn, netip.AddrPort, error) {
+func listen(ctx context.Context, name, addr string) (*net.UDPConn, netip.AddrPort, time.Duration, error) {
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
-		return nil, netip.AddrPort{}, fmt.Errorf("relay: resolve %s address: %w", name, err)
+		return nil, netip.AddrPort{}, 0, fmt.Errorf("relay: resolve %s address: %w", name, err)
 	}
 	if udpAddr.IP == nil || udpAddr.IP.IsUnspecified() {
-		return nil, netip.AddrPort{}, fmt.Errorf("relay: %s address %q must name a specific IP", name, addr)
+		return nil, netip.AddrPort{}, 0, fmt.Errorf("relay: %s address %q must name a specific IP", name, addr)
 	}
-	conn, err := net.ListenUDP("udp", udpAddr)
+	conn, wait, err := socketbind.Retry(ctx, func() (*net.UDPConn, error) { return net.ListenUDP("udp", udpAddr) })
 	if err != nil {
-		return nil, netip.AddrPort{}, fmt.Errorf("relay: listen on %s address: %w", name, err)
+		return nil, netip.AddrPort{}, wait, fmt.Errorf("relay: listen on %s address: %w", name, err)
 	}
 	_ = conn.SetReadBuffer(socketBufferSize)
 	_ = conn.SetWriteBuffer(socketBufferSize)
@@ -481,10 +491,10 @@ func listen(name, addr string) (*net.UDPConn, netip.AddrPort, error) {
 	if !ok {
 		_ = conn.Close()
 
-		return nil, netip.AddrPort{}, fmt.Errorf("relay: unexpected local address %T", conn.LocalAddr())
+		return nil, netip.AddrPort{}, wait, fmt.Errorf("relay: unexpected local address %T", conn.LocalAddr())
 	}
 
-	return conn, unmap(local.AddrPort()), nil
+	return conn, unmap(local.AddrPort()), wait, nil
 }
 
 // PublicAddr is the relay's public UDP address: the single host candidate

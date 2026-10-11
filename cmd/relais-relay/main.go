@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/relais/internal/processidentity"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/internal/relaylease"
+	"github.com/relais/internal/socketbind"
 	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
 )
@@ -32,7 +34,11 @@ func run() error {
 	leaseTTL := flag.Duration("relay-lease-ttl", relaylease.DefaultTTL, "relay lease lifetime")
 	leaseRenew := flag.Duration("relay-lease-renew", relaylease.DefaultRenew, "relay lease renewal interval")
 	leasePoll := flag.Duration("relay-lease-poll", relaylease.DefaultPoll, "standby claim polling interval")
+	bindTimeout := flag.Duration("relay-bind-timeout", socketbind.DefaultTimeout, "shared public, worker-leg and HTTP socket bind retry budget after fencing")
 	flag.Parse()
+	if *bindTimeout <= 0 {
+		return fmt.Errorf("relay bind timeout must be positive")
+	}
 	if err := validateAddresses(*standby, *public, *leg, *httpAddr); err != nil {
 		return err
 	}
@@ -62,20 +68,33 @@ func run() error {
 	timing := guard.Timing()
 	continuity := &relay.ContinuityStatus{Epoch: guard.Lease().Epoch, ClaimAt: timing.ClaimAt, Wait: timing.Wait, Fence: timing.Fence, Activate: timing.Activate, FencingFailures: timing.FencingFailures, StoreFailures: timing.StoreFailures}
 	bindAt := time.Now()
-	r, err := relay.New(relay.Config{InstanceID: process.Owner, ForwardingAllowed: guard.Allowed, Continuity: continuity, PublicAddr: *public, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, RouteRestoreTimeout: *restoreTimeout, MaxFlows: *maxFlows, HoldTimeout: *hold})
-	if err != nil {
+	bindCtx, stopBind := context.WithTimeout(guard.Context(), *bindTimeout)
+	defer stopBind()
+	bindFailed := func(err error) error {
+		if lost := guard.Err(); lost != nil {
+			return lost
+		}
+		continuity.BindFailures++
+		log.Printf("relay bind_failed bind_failures=%d bind_wait_ms=%.1f; refusing forwarding: %v", continuity.BindFailures, float64(continuity.BindWait)/float64(time.Millisecond), err)
 		return err
+	}
+	// Bind HTTP first without serving it. Relay.New starts packet loops only
+	// after both UDP binds, so no forwarding starts with an incomplete set.
+	listener, wait, err := socketbind.Retry(bindCtx, func() (net.Listener, error) { return processrun.ListenPrivate(*httpAddr) })
+	continuity.BindWait += wait
+	if err != nil {
+		return bindFailed(err)
+	}
+	defer func() { _ = listener.Close() }()
+	r, err := relay.New(relay.Config{InstanceID: process.Owner, ForwardingAllowed: guard.Allowed, Continuity: continuity, BindContext: bindCtx, PublicAddr: *public, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, RouteRestoreTimeout: *restoreTimeout, MaxFlows: *maxFlows, HoldTimeout: *hold})
+	if err != nil {
+		return bindFailed(err)
 	}
 	defer func() { _ = r.Close() }()
 	guard.OnLost(r.Fence)
 	if !guard.Allowed() {
 		return sessionstore.ErrLeaseLost
 	}
-	listener, err := processrun.ListenPrivate(*httpAddr)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = listener.Close() }()
 	continuity.BindRestore = time.Since(bindAt)
 	processrun.Ready(map[string]any{"instance": process.Owner, "epoch": guard.Lease().Epoch, "http": "http://" + listener.Addr().String(), "media": r.PublicAddr(), "leg": r.WorkerAddr()})
 	err = processrun.Serve(guard.Context(), listener, r.PrivateHandler())

@@ -213,19 +213,20 @@ func measureRelayStandby(report *callharness.Report, public string, killed, unti
 	r.FenceTime = status.Continuity.Fence
 	r.ActivateTime = status.Continuity.Activate
 	r.BindRestoreTime = status.Continuity.BindRestore
+	r.BindWaitTime = status.Continuity.BindWait
 	r.Pass = r.Pass && r.Duplicates == 0 && r.OldWorkerPackets > 0 && r.NewWorkerPackets > 0 && status.Instance != oldStatus.Instance && status.Continuity.Epoch > oldStatus.Continuity.Epoch && status.Stats.SelfFences == 0 && r.ClaimAfter >= 0
 	return r
 }
 
 func printRelayStandbyTable(label string, results []result) {
 	fmt.Printf("RELAY_STANDBY mode=%s old_process_dead_before_new_ready=true\n", label)
-	fmt.Println("run gap_ms reconnects decryption_failures duplicate_media routes_restored claim_ms fence_ms activate_ms bind_restore_ms ready_ms registered_ms old_worker_packets new_worker_packets result")
+	fmt.Println("run gap_ms reconnects decryption_failures duplicate_media routes_restored claim_ms fence_ms activate_ms bind_wait_ms bind_restore_ms ready_ms registered_ms old_worker_packets new_worker_packets result")
 	for i, r := range results {
 		state := "FAIL"
 		if r.Pass {
 			state = "PASS"
 		}
 		ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
-		fmt.Printf("%d %.1f %d %d %d %d %.1f %.1f %.1f %.1f %.1f %.1f %d %d %s\n", i+1, ms(r.Gap), r.Reconnects, r.Decrypt, r.Duplicates, r.RoutesRestored, ms(r.ClaimAfter), ms(r.FenceTime), ms(r.ActivateTime), ms(r.BindRestoreTime), ms(r.ReadyAfter), ms(r.RegisteredAfter), r.OldWorkerPackets, r.NewWorkerPackets, state)
+		fmt.Printf("%d %.1f %d %d %d %d %.1f %.1f %.1f %.1f %.1f %.1f %.1f %d %d %s\n", i+1, ms(r.Gap), r.Reconnects, r.Decrypt, r.Duplicates, r.RoutesRestored, ms(r.ClaimAfter), ms(r.FenceTime), ms(r.ActivateTime), ms(r.BindWaitTime), ms(r.BindRestoreTime), ms(r.ReadyAfter), ms(r.RegisteredAfter), r.OldWorkerPackets, r.NewWorkerPackets, state)
 	}
 }
