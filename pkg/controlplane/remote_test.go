@@ -18,6 +18,7 @@ import (
 )
 
 func TestRemoteWorkerWireContract(t *testing.T) {
+	storedAt := time.Unix(1234567, 0).UTC()
 	lease := sessionstore.Lease{SessionID: "call", Worker: netip.MustParseAddrPort("127.0.0.1:9"), Epoch: 7}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
@@ -37,6 +38,10 @@ func TestRemoteWorkerWireContract(t *testing.T) {
 			require.Equal(t, lease, req.Lease)
 			require.EqualValues(t, 8192, req.SequenceMargin)
 			require.EqualValues(t, 128, req.SRTCPIndexMargin)
+			require.EqualValues(t, 10064, req.CallerSequenceReserve)
+			require.Equal(t, 400*time.Millisecond, req.CheckpointAge)
+			require.Equal(t, 450*time.Millisecond, req.SnapshotAge)
+			require.Equal(t, storedAt, req.CheckpointStoredAt)
 			privateapi.Write(w, mediaworker.ResumeReply{ID: "call"})
 		case "GET /status":
 			privateapi.Write(w, mediaworker.WorkerStatus{Address: lease.Worker, Sessions: 1})
@@ -54,7 +59,7 @@ func TestRemoteWorkerWireContract(t *testing.T) {
 	state, err := remote.ExportSession(id)
 	require.NoError(t, err)
 	require.Equal(t, []byte("snapshot"), state)
-	id, err = remote.ResumeSession(state, mediaworker.ResumeOptions{Lease: lease, SequenceMargin: 8192, SRTCPIndexMargin: 128})
+	id, err = remote.ResumeSession(state, mediaworker.ResumeOptions{Lease: lease, SequenceMargin: 8192, SRTCPIndexMargin: 128, CallerSequenceReserve: 10064, CheckpointAge: 400 * time.Millisecond, SnapshotAge: 450 * time.Millisecond, CheckpointStoredAt: storedAt})
 	require.NoError(t, err)
 	require.Equal(t, "call", id)
 	status, err := remote.Status(context.Background())

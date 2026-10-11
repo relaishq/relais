@@ -23,6 +23,7 @@ import (
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/sessionstore"
 )
@@ -59,9 +60,11 @@ var supportedSRTPProfiles = []dtls.SRTPProtectionProfile{
 // sends or receives is processed under it, so a snapshot taken under mu is
 // atomic with the counters (see export).
 type session struct {
-	id     string // state.ID; never changes
-	worker *Worker
-	log    logging.LeveledLogger
+	agent        *agentHost
+	durableAgent agentState // guarded by mu; last acknowledged durable agent pair
+	id           string     // state.ID; never changes
+	worker       *Worker
+	log          logging.LeveledLogger
 
 	mu       sync.Mutex
 	state    sessionState
@@ -79,8 +82,13 @@ type session struct {
 
 	// decryptFailures counts SRTP and SRTCP packets from the caller that this
 	// worker could not decrypt.
-	decryptFailures atomic.Uint64
-	snapshotStored  atomic.Bool // internal harness readiness observation, no state bytes exposed
+	decryptFailures      atomic.Uint64
+	lastCheckpoint       time.Time   // guarded by mu; local acknowledgment time of last successful write
+	audioRate, videoRate sourceRate  // guarded by mu
+	rtcpRate             packetMeter // guarded by mu
+	snapshotStored       atomic.Bool // internal harness readiness observation, no state bytes exposed
+
+	callerSequenceReserve uint32 // active recovery reserve, guarded by mu
 
 	// Runtime plumbing, rebuilt by a worker that resumes the session.
 	dtlsEndpoint  *dtlsEndpoint
@@ -146,7 +154,7 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 			video.InitialSeq = v
 		}
 	}
-	return sessionFromState(w, sessionState{
+	sess := sessionFromState(w, sessionState{
 		Version: sessionStateVersion,
 		ID:      id,
 		ICE: iceState{
@@ -164,7 +172,12 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 		SRTP:  srtpState{Inbound: make(map[uint32]uint64)},
 		Audio: audio,
 		Video: video,
-	}), nil
+	})
+	if err := sess.initAgent(false, ResumeOptions{}); err != nil {
+		sess.close()
+		return nil, err
+	}
+	return sess, nil
 }
 
 // sessionFromState builds the runtime plumbing around a session state: a
@@ -186,6 +199,10 @@ func sessionFromState(w *Worker, state sessionState) *session {
 		ctx:            ctx,
 		cancel:         cancel,
 	}
+	now := time.Now()
+	sess.audioRate.peak, sess.audioRate.peakAt = state.Checkpoint.RTPPacketRate, now
+	sess.videoRate.peak, sess.videoRate.peakAt = state.Checkpoint.RTPPacketRate, now
+	sess.rtcpRate.peak, sess.rtcpRate.peakAt = state.Checkpoint.SRTCPPacketRate, now
 	sess.dtlsEndpoint = newDTLSEndpoint(sess)
 	sess.consent = time.AfterFunc(w.cfg.consentTimeout, sess.consentExpired)
 	w.claimSession(sess.id)
@@ -423,6 +440,7 @@ func (s *session) handleRTP(pkt []byte) {
 	plain, err := s.srtpIn.DecryptRTP(s.decryptBuf, pkt, &authenticated)
 	if err != nil {
 		failure, decryptErr = s.decryptFailures.Add(1), err
+		s.worker.metrics.decryptFailures.Add(1)
 
 		return
 	}
@@ -448,6 +466,20 @@ func (s *session) handleRTP(pkt []byte) {
 		return
 	}
 
+	if track == &s.state.Audio && s.agent != nil {
+		if _, echo := s.agent.instance.(*agent.Echo); !echo {
+			if s.worker.cfg.Relay != nil {
+				s.audioRate.observe(time.Now(), s.state.SRTP.Inbound[in.SSRC], in.Timestamp, 48000)
+			}
+			s.enqueueAudio(&in, header)
+			return
+		}
+		// Echo uses the original synchronous media path, with no queue,
+		// payload copy or per-packet context. Progress shares its packet lock.
+		s.state.Agent.Progress = agent.Progress{SSRC: in.SSRC, Index: extendIndex(s.state.SRTP.Inbound[in.SSRC], in.SequenceNumber), Timestamp: in.Timestamp, Consumed: s.state.Agent.Progress.Consumed + 1}
+		s.state.Agent.Revision++
+	}
+
 	if track == &s.state.Video && (s.replaying || track.ReplayFloor > 0 && extendIndex(track.HighestSentIndex, header.SequenceNumber) <= track.ReplayFloor) {
 		return
 	}
@@ -466,6 +498,17 @@ func (s *session) handleRTP(pkt []byte) {
 		s.log.Debugf("session %s: marshal echo packet: %v", s.id, err)
 
 		return
+	}
+	if s.worker.cfg.Relay != nil {
+		meter := &s.audioRate
+		if track == &s.state.Video {
+			meter = &s.videoRate
+		}
+		clockRate := uint32(48000)
+		if track == &s.state.Video {
+			clockRate = 90000
+		}
+		meter.observe(time.Now(), s.state.SRTP.Inbound[in.SSRC], in.Timestamp, clockRate)
 	}
 	encrypted, err := s.srtpOut.EncryptRTP(s.encryptBuf, s.plainBuf[:n], nil)
 	if err != nil {
@@ -522,6 +565,7 @@ func (s *session) handleRTCP(pkt []byte) {
 	plain, err := s.srtpIn.DecryptRTCP(s.rtcpBuf, pkt, nil)
 	if err != nil {
 		failure, decryptErr = s.decryptFailures.Add(1), err
+		s.worker.metrics.decryptFailures.Add(1)
 
 		return
 	}
@@ -578,6 +622,9 @@ func (s *session) requestKeyframe(trigger string) {
 	}
 	// At the 2^31-packet SRTCP key lifetime, encryption fails: log and
 	// cease transmitting PLIs rather than wrap/reuse an index under these keys.
+	if s.worker.cfg.Relay != nil && !s.rtcpRate.allow(time.Now(), uint64(video.SRTCPIndex)+1, s.worker.cfg.CheckpointEnvelope.MaxSRTCPPacketRate, checkpointSRTCPBurst) {
+		return
+	}
 	encrypted, err := s.srtpOut.EncryptRTCP(s.encryptBuf, plain, nil)
 	if err != nil {
 		s.log.Warnf("session %s: encrypt PLI: %v", s.id, err)

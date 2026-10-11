@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -221,9 +222,15 @@ func TestRelayPartialDrainRecordsMoves(t *testing.T) {
 // Missing drain acknowledgement must abort before export, even though the
 // harness's move context has no deadline. The same live call can move later.
 func TestRelaySilentBarrierKeepsCallOnSource(t *testing.T) {
+	// Preserve Pion's rejection reason when a rare failure reaches CI.
+	t.Setenv("PION_LOG_INFO", "srtp")
+	forWrapSessionStores(t, testRelaySilentBarrierKeepsCallOnSource)
+}
+
+func testRelaySilentBarrierKeepsCallOnSource(t *testing.T, store sessionstore.Store) {
 	disable := workerprobe.Enable()
 	t.Cleanup(disable)
-	h, err := Start(Options{Relay: true, Workers: 2})
+	h, err := Start(Options{Relay: true, Workers: 2, SessionStore: store})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = h.Close() })
 	// Ensure a deliberately broken long wait cannot stall regression cleanup.
@@ -267,7 +274,7 @@ func TestRelaySilentBarrierKeepsCallOnSource(t *testing.T) {
 	report, err := call.Hangup(ctx)
 	require.NoError(t, err)
 	require.True(t, report.ConnectedThroughout())
-	require.Zero(t, report.DecryptionFailures.Total())
+	require.Zero(t, report.DecryptionFailures.Total(), "caller SRTP rejection categories: %+v", report.DecryptionFailures)
 	require.Zero(t, report.Renegotiations)
 	require.Zero(t, report.ICERestarts)
 	require.Len(t, report.Moves, 2)
