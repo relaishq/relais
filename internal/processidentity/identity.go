@@ -33,7 +33,7 @@ func fence(ctx context.Context, id Identity, read func(int) (string, bool, error
 		return errors.New("invalid fencing target")
 	}
 	start, dead, err := read(id.PID)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
 		return nil
 	}
 	if err != nil {
@@ -55,7 +55,8 @@ func fence(ctx context.Context, id Identity, read func(int) (string, bool, error
 	defer tick.Stop()
 	for {
 		start, dead, err = read(id.PID)
-		if errors.Is(err, os.ErrNotExist) {
+		// Linux can report ESRCH if the parent reaps during a /proc read.
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
 			return nil
 		}
 		if err != nil {
