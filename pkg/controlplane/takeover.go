@@ -11,6 +11,7 @@ import (
 	"github.com/relais/internal/privateapi"
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
+	"github.com/relais/pkg/metrics"
 	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
 )
@@ -28,6 +29,8 @@ import (
 // fencing/dropping its old sessions. Remote workers need an explicit token
 // for this acknowledgment; the in-process contract uses the next heartbeat.
 type Config struct {
+	// CheckpointEnvelope must match the workers' source-rate contract.
+	CheckpointEnvelope mediaworker.CheckpointEnvelope
 	// FrameCache is shared with the workers, for hangup/lost-call cleanup.
 	FrameCache          framecache.Store
 	DeadAfter           time.Duration // 400 ms without a heartbeat
@@ -38,6 +41,7 @@ type Config struct {
 }
 
 func (c Config) defaults() Config {
+	c.CheckpointEnvelope = c.CheckpointEnvelope.Defaults()
 	if c.DeadAfter <= 0 {
 		c.DeadAfter = 400 * time.Millisecond
 	}
@@ -192,20 +196,29 @@ func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected tim
 // Its fields are accessed under the call lock; pending membership uses p.mu.
 type takeoverState struct {
 	// Retain completed hang-ups even after End or Status removes live metadata.
-	call            *call
-	lease           sessionstore.Lease
-	candidate       *sessionstore.Lease
-	plannedState    []byte
-	planned         bool
-	held            bool
-	crashMargins    bool
-	routed          netip.AddrPort
-	excluded        map[netip.AddrPort]bool
-	attempts        int
-	attemptLimit    int
-	transientResume bool
-	resumeState     []byte
-	resumeTarget    *registration
+	call               *call
+	lease              sessionstore.Lease
+	candidate          *sessionstore.Lease
+	plannedState       []byte
+	planned            bool
+	held               bool
+	crashMargins       bool
+	routed             netip.AddrPort
+	excluded           map[netip.AddrPort]bool
+	attempts           int
+	attemptLimit       int
+	transientResume    bool
+	resumeState        []byte
+	resumeTarget       *registration
+	checkpointAge      time.Duration
+	snapshotAge        time.Duration
+	checkpointStoredAt time.Time
+	outageStarted      time.Time
+	checkpoint         mediaworker.CheckpointState
+	envelope           bool
+	margin             uint16
+	reserve            uint32
+	rtcpMargin         uint32
 }
 
 // Margins cover 100 ms between snapshots + 400 ms without heartbeat + a
@@ -216,7 +229,7 @@ type takeoverState struct {
 // at 5,000 packets/s per track). The snapshot's retained advance reduces the
 // retry budget: fresh state admits two default margins, not three. Higher
 // configured margins or already silent tracks allow fewer attempts.
-// Longer queues/store stalls or higher rates need a later age/rate policy.
+// CheckpointEnvelope enforces longer store stalls with scaled margins or loss.
 const (
 	recentTakeoverLimit     = 256
 	takeoverBudget          = 1500 * time.Millisecond // leaves detection headroom below 2 s
@@ -333,6 +346,12 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts}
 		source.pending[c.id] = pending
 	}
+	if pending.outageStarted.IsZero() {
+		pending.outageStarted = source.lastHeartbeat
+		if pending.outageStarted.IsZero() {
+			pending.outageStarted = detected
+		}
+	}
 	r := p.relay
 	lastHeartbeat := source.lastHeartbeat
 	p.mu.Unlock()
@@ -422,6 +441,9 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		}
 		pending.routed = target.addr
 		state := pending.plannedState
+		if pending.crashMargins {
+			state = nil
+		}
 		if pending.transientResume {
 			state = pending.resumeState
 		}
@@ -437,12 +459,47 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			return
 		}
 		margin, rtcpMargin := p.config.SequenceMargin, p.config.SRTCPIndexMargin
+		if pending.transientResume {
+			margin, rtcpMargin = pending.margin, pending.rtcpMargin
+			reserve := p.config.CheckpointEnvelope.CallerSequenceReserve(pending.checkpoint, checkpointOutageBudget(ctx, pending.outageStarted))
+			pending.envelope = pending.envelope || reserve > pending.reserve
+			pending.reserve = max(pending.reserve, reserve)
+			// An adopted tenure acknowledges idempotently before budget checks.
+			// A still-unadopted tenure must recheck the caller's growing outage gap.
+		} else if !pending.planned || pending.crashMargins {
+			decision, checkpointErr := p.checkpointDecision(ctx, c.id, state, checkpointOutageBudget(ctx, pending.outageStarted))
+			if checkpointErr != nil && !errors.Is(checkpointErr, mediaworker.ErrSequenceBudgetExhausted) && !errors.Is(checkpointErr, sessionstore.ErrUnsafeCheckpointClock) && !errors.Is(checkpointErr, errUnsafeCheckpointState) {
+				p.unreserve(target)
+				if errors.Is(checkpointErr, sessionstore.ErrNotFound) {
+					complete(true, checkpointErr)
+				}
+				return
+			}
+			pending.checkpointAge, pending.checkpoint = decision.age, decision.info
+			pending.snapshotAge, pending.checkpointStoredAt = decision.snapshotAge, decision.storedAt
+			copiedAt := time.Now().Add(-decision.snapshotAge)
+			if copiedAt.Before(pending.outageStarted) {
+				pending.outageStarted = copiedAt
+			}
+			pending.envelope = pending.envelope || decision.outside
+			if checkpointErr != nil {
+				p.unreserve(target)
+				complete(true, checkpointErr)
+				return
+			}
+			margin, rtcpMargin = decision.margin, decision.rtcpMargin
+			pending.reserve = decision.reserve
+			metrics.CheckpointAge.Observe(pending.checkpointAge.Seconds())
+		}
+		res.CheckpointAge, res.Checkpoint = pending.checkpointAge, pending.checkpoint
+		res.SnapshotAge, res.CheckpointStoredAt = pending.snapshotAge, pending.checkpointStoredAt
 		if pending.planned && !pending.crashMargins {
 			margin, rtcpMargin = 0, 0
 		}
+		pending.margin, pending.rtcpMargin = margin, rtcpMargin
 		budget, budgetErr := maxResumeAttempts, error(nil)
 		if (!pending.planned || pending.crashMargins) && !pending.transientResume {
-			budget, budgetErr = mediaworker.SequenceResumeAttempts(state, margin)
+			budget, budgetErr = mediaworker.SequenceResumeAttemptsWithReserve(state, margin, pending.reserve)
 		}
 		if budgetErr != nil {
 			p.unreserve(target)
@@ -468,7 +525,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			pending.plannedState = nil
 		}
 		_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: transferred,
-			Context: ctx, SequenceMargin: margin, SRTCPIndexMargin: rtcpMargin})
+			Context: ctx, CallerSequenceReserve: pending.reserve, CheckpointAge: pending.checkpointAge, SnapshotAge: pending.snapshotAge, CheckpointStoredAt: pending.checkpointStoredAt, SequenceMargin: margin, SRTCPIndexMargin: rtcpMargin})
 		res.Result.Resume += time.Since(started)
 		p.unreserve(target)
 		if err == nil {
@@ -515,7 +572,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 // cancellation. Expired pending leases are terminal too, never silent exits.
 func (p *Plane) completeTakeover(source *registration, c *call, lease sessionstore.Lease,
 	res *MoveResult, lost bool, cause error) {
-	record := res.Kind == "takeover" || res.Kind == "ended"
+	record := res.Kind == "takeover" || res.Kind == "ended" || lost
 	if lost {
 		p.mu.Lock()
 		pending := source.pending[c.id]
@@ -523,6 +580,21 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 		p.mu.Unlock()
 		p.lose(c, lease, res.Kind == "move" || held)
 	}
+	p.mu.Lock()
+	pending := source.pending[c.id]
+	if pending != nil {
+		res.CheckpointAge, res.Checkpoint = pending.checkpointAge, pending.checkpoint
+		res.SnapshotAge, res.CheckpointStoredAt = pending.snapshotAge, pending.checkpointStoredAt
+		res.SequenceMargin, res.SRTCPIndexMargin = pending.margin, pending.rtcpMargin
+		if pending.envelope && (!lost || checkpointEnvelopeLoss(cause)) {
+			res.CheckpointPolicy = "scaled"
+			if lost {
+				res.CheckpointPolicy = "definitive-loss"
+			}
+			metrics.CheckpointEnvelopeEvents.WithLabelValues(res.CheckpointPolicy).Inc()
+		}
+	}
+	p.mu.Unlock()
 	p.finishPending(source, c.id)
 	res.End = time.Now()
 	res.Result.Duration = res.End.Sub(res.Start)
@@ -659,4 +731,10 @@ func (p *Plane) deleteFrames(id string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = p.config.FrameCache.DeleteSession(ctx, id)
+}
+
+// Storage disappearance, no target, and unrelated resume errors are losses,
+// but do not imply that the checkpoint envelope caused the loss.
+func checkpointEnvelopeLoss(err error) bool {
+	return errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) || errors.Is(err, mediaworker.ErrSRTCPIndexExhausted) || errors.Is(err, sessionstore.ErrUnsafeCheckpointClock)
 }

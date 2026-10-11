@@ -13,7 +13,8 @@ import (
 // exported form: the state plus the DTLS connection state.
 // Version 4 persists counter advance accumulated while a track is silent.
 // Version 5 persists the cache replay floor across subsequent resumes.
-const sessionStateVersion = 5
+// Version 6 persists checkpoint observations and measured packet rates.
+const sessionStateVersion = 6
 
 // sessionState is the session state: everything needed to continue a session
 // on another media worker except the established DTLS connection state, kept
@@ -37,8 +38,9 @@ const sessionStateVersion = 5
 //     continue from the indexes below (restoreInboundIndex,
 //     restoreOutboundIndex and SetIndex).
 type sessionState struct {
-	Version int
-	ID      string // the session ID, which is also the worker's ICE ufrag
+	Checkpoint CheckpointState
+	Version    int
+	ID         string // the session ID, which is also the worker's ICE ufrag
 
 	ICE  iceState
 	DTLS dtlsState
