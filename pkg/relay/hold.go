@@ -27,22 +27,32 @@ var (
 type heldPacket struct {
 	caller   netip.AddrPort
 	datagram []byte // includes room for the relay header
+	ssrc     uint32
+	index    uint64
+	media    bool
 }
 
 // sessionHold brackets one move with a drain barrier and a bounded queue.
 // Its fields are protected by forwardMu; timeout releases it automatically.
 type sessionHold struct {
-	id              string
-	barrier         uint64
-	source          netip.AddrPort
-	worker          netip.AddrPort
-	ready           chan struct{}
-	acknowledged    bool
-	barrierTimedOut bool
-	released        chan struct{}
-	timer           *time.Timer
-	queue           []heldPacket
-	bytes           int
+	id               string
+	barrier          uint64
+	source           netip.AddrPort
+	worker           netip.AddrPort
+	ready            chan struct{}
+	acknowledged     bool
+	barrierTimedOut  bool
+	released         chan struct{}
+	timer            *time.Timer
+	queue            []heldPacket
+	bytes            int
+	replay           bool
+	replaying        bool
+	delivered        map[uint32]uint64
+	replayInbound    map[uint32]uint64
+	replayTrimmed    map[uint32]uint64
+	replayComplete   bool
+	replayCheckpoint bool
 }
 
 // HoldSession brackets a planned move. Caller packets stop being forwarded
@@ -152,6 +162,10 @@ func (r *Relay) acknowledgeBarrier(id uint64, from netip.AddrPort) {
 }
 
 func (r *Relay) enqueue(h *sessionHold, caller netip.AddrPort, packet []byte) {
+	if h.replay {
+		r.enqueueReplay(h, caller, packet)
+		return
+	}
 	size := MaxHeaderLen + len(packet)
 	if len(h.queue) >= r.cfg.MaxHeldPackets || h.bytes+size > r.cfg.MaxHeldBytes || r.heldBytes+size > r.cfg.MaxTotalHeldBytes {
 		r.holdDrops.Add(1)
@@ -204,23 +218,40 @@ func (r *Relay) releaseHold(h *sessionHold, to netip.AddrPort) int {
 	}
 
 	count := len(h.queue)
+	if h.replay {
+		orderReplay(h.queue)
+	}
 	for _, packet := range h.queue {
-		payload := packet.datagram[MaxHeaderLen:]
-		if isSTUN(payload) {
-			session, tx, request := parseBindingRequest(payload)
-			if request && !r.flows.admit(packet.caller, worker, session, tx, time.Now()) {
-				r.holdSendFailures.Add(1)
-				continue
-			}
-			if request && isNomination(payload) {
-				r.flows.markNomination(packet.caller, tx)
-			}
+		if floor, known := h.delivered[packet.ssrc]; h.replay && packet.media && known && packet.index <= floor {
+			r.replayFiltered.Add(1)
+			continue
 		}
-		if !r.sendCaller(packet.datagram, packet.caller, worker) {
+		if h.replay && packet.media {
+			h.delivered[packet.ssrc] = packet.index
+		}
+		if !r.sendHeld(h.id, packet, worker) {
 			r.holdSendFailures.Add(1)
 		}
 	}
 	r.heldBytes -= h.bytes
 	r.heldPackets -= count
 	return count
+}
+
+func (r *Relay) sendHeld(id string, packet heldPacket, worker netip.AddrPort) bool {
+	confirmed, ok := r.flows.forwardRoute(packet.caller)
+	if !ok || confirmed.session != id {
+		return false
+	}
+	payload := packet.datagram[MaxHeaderLen:]
+	if isSTUN(payload) {
+		session, tx, request := parseBindingRequest(payload)
+		if request && !r.flows.admit(packet.caller, worker, session, tx, time.Now()) {
+			return false
+		}
+		if request && isNomination(payload) {
+			r.flows.markNomination(packet.caller, tx)
+		}
+	}
+	return r.sendCaller(packet.datagram, packet.caller, worker)
 }

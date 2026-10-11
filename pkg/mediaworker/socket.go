@@ -450,7 +450,10 @@ func (s *Socket) write(port *socketPort, pkt []byte, to netip.AddrPort) (int, er
 
 // HandoverResult describes a completed planned handover.
 type HandoverResult struct {
-	SessionID string
+	RelayReplayPackets  int
+	RelayReplayDuration time.Duration
+	RelayReplayComplete bool
+	SessionID           string
 
 	// StateBytes is the size of the exported session state, the only thing
 	// that passed from the old worker to the new one.

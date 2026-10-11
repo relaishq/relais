@@ -30,6 +30,7 @@ type ExportReply struct {
 // ResumeRequest deliberately excludes Context; the server uses the request's
 // deadline and the client honors ResumeOptions.Context.
 type ResumeRequest struct {
+	RelayReplay      bool               `json:"relay_replay"`
 	State            []byte             `json:"state"`
 	Lease            sessionstore.Lease `json:"lease"`
 	SequenceMargin   uint16             `json:"sequence_margin"`
@@ -80,7 +81,7 @@ func (w *Worker) PrivateHandler() http.Handler {
 		if !privateapi.Read(rw, r, &req) {
 			return
 		}
-		id, err := w.ResumeSession(req.State, ResumeOptions{Context: r.Context(), Lease: req.Lease, SequenceMargin: req.SequenceMargin, SRTCPIndexMargin: req.SRTCPIndexMargin})
+		id, err := w.ResumeSession(req.State, ResumeOptions{Context: r.Context(), Lease: req.Lease, SequenceMargin: req.SequenceMargin, SRTCPIndexMargin: req.SRTCPIndexMargin, RelayReplay: req.RelayReplay})
 		if err != nil {
 			privateapi.Error(rw, err, RemoteErrors)
 			return

@@ -19,7 +19,7 @@ import (
 // The application drives Run with its lifetime context; registration connects
 // in-process heartbeats (100 ms by default). Death after 400 ms excludes the
 // worker from placement. Recovery takes leases without waiting for expiry,
-// reroutes immediately without a hold, and resumes non-destructive snapshots.
+// gates caller media when the relay cache is enabled, and resumes snapshots.
 //
 // Transient errors preserve retry state, including already transferred leases.
 // Terminal missing-state/exhausted-target outcomes release with a fresh bounded
@@ -206,6 +206,7 @@ type takeoverState struct {
 	transientResume bool
 	resumeState     []byte
 	resumeTarget    *registration
+	replayPlan      *relay.ReplayPlan
 }
 
 // Margins cover 100 ms between snapshots + 400 ms without heartbeat + a
@@ -413,9 +414,18 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			pending.lease = transferred
 			p.mu.Unlock()
 		}
-		// No source hold or rollback. Routing fences the previous leg immediately.
+		if replay, ok := r.(ReplayRelay); ok && !pending.planned && pending.replayPlan == nil {
+			plan, gateErr := replay.BeginReplay(ctx, c.id, pending.routed, nil)
+			if gateErr == nil {
+				pending.replayPlan, pending.held = &plan, true
+			} else if !errors.Is(gateErr, relay.ErrBufferDisabled) {
+				p.unreserve(target)
+				return
+			}
+		}
+		// Gate and old-leg fencing precede snapshot I/O. Store errors must not
+		// leave the previous owner able to send after its lease was transferred.
 		if err = r.MoveSession(c.id, pending.routed, target.addr); err != nil {
-			// Even a generic relay error may follow a committed notification.
 			pending.routed = netip.AddrPort{}
 			p.unreserve(target)
 			return
@@ -435,6 +445,22 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 				complete(true, fmt.Errorf("controlplane: no takeover snapshot: %w", stateErr))
 			}
 			return
+		}
+		if pending.replayPlan != nil {
+			replay := r.(ReplayRelay)
+			inbound, indexErr := mediaworker.SnapshotInboundIndexes(state)
+			if indexErr != nil {
+				p.unreserve(target)
+				complete(true, indexErr)
+				return
+			}
+			plan, gateErr := replay.BeginReplay(ctx, c.id, source.addr, inbound)
+			if gateErr == nil {
+				pending.replayPlan, pending.held = &plan, true
+			} else {
+				p.unreserve(target)
+				return
+			}
 		}
 		margin, rtcpMargin := p.config.SequenceMargin, p.config.SRTCPIndexMargin
 		if pending.planned && !pending.crashMargins {
@@ -468,17 +494,30 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			pending.plannedState = nil
 		}
 		_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: transferred,
-			Context: ctx, SequenceMargin: margin, SRTCPIndexMargin: rtcpMargin})
+			Context: ctx, SequenceMargin: margin, SRTCPIndexMargin: rtcpMargin,
+			RelayReplay: pending.replayPlan != nil && pending.replayPlan.Complete})
 		res.Result.Resume += time.Since(started)
 		p.unreserve(target)
 		if err == nil {
+			if pending.replayPlan != nil {
+				replayed, replayErr := r.(ReplayRelay).ReplaySession(ctx, c.id, target.addr)
+				res.Result.RelayReplayPackets = replayed.Packets
+				res.Result.RelayReplayDuration = replayed.Duration
+				res.Result.RelayReplayComplete = pending.replayPlan.Complete
+				res.Result.HoldExpired = errors.Is(replayErr, relay.ErrHoldExpired)
+				if replayErr != nil && !res.Result.HoldExpired {
+					pending.transientResume = true
+					return
+				}
+				pending.held = false
+			}
 			now := time.Now()
 			c.lastMove, c.lastMoveKind = &now, res.Kind
 			c.moveCount++
 			if !pending.planned {
 				c.takeoverCount++
 			}
-			if pending.planned || pending.held {
+			if pending.replayPlan == nil && (pending.planned || pending.held) {
 				held, releaseErr := r.ReleaseSession(c.id, target.addr)
 				res.Result.HeldPackets = held
 				res.Result.HoldExpired = errors.Is(releaseErr, relay.ErrHoldExpired)

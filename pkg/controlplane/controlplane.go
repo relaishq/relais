@@ -54,6 +54,13 @@ type Relay interface {
 	ForgetSession(sessionID string)
 }
 
+// ReplayRelay is the optional phase-2 caller-media cache capability. Both
+// *relay.Relay and RemoteRelay implement it; phase-1/fake relays remain valid.
+type ReplayRelay interface {
+	BeginReplay(context.Context, string, netip.AddrPort, map[uint32]uint64) (relay.ReplayPlan, error)
+	ReplaySession(context.Context, string, netip.AddrPort) (relay.ReplayResult, error)
+}
+
 type registration struct {
 	name          string
 	addr          netip.AddrPort

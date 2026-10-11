@@ -4,15 +4,15 @@
 // relay sends each caller's packets to the media worker that owns the
 // caller's session.
 //
-// The relay reads only STUN. A STUN binding request carries the ICE
+// Routing reads STUN. A STUN binding request carries the ICE
 // USERNAME "worker ufrag:caller ufrag", and the worker's ufrag is the
 // session ID, so the relay looks the session's owner up in the session-owner
 // store (sessionstore.Owners) and admits the caller's address to its flow
 // table. Every other packet (DTLS, SRTP, SRTCP, or anything else) is
 // forwarded untouched to the worker the flow table names for the address it
-// came from; the relay never looks past the bytes that tell STUN apart from
-// the rest (RFC 7983). A packet from an address without a confirmed route is
-// dropped.
+// came from. An optional caller-media cache also reads the clear RTP header
+// to track inbound SRTP indexes; media payloads remain opaque. A packet from
+// an address without a confirmed route is dropped.
 //
 // Except for a trusted MoveSession, routing changes only after the worker
 // authenticates a caller's binding request (see flows.go). The relay cannot
@@ -131,6 +131,8 @@ const (
 
 // Config configures a relay.
 type Config struct {
+	// Buffer enables bounded caller-media replay. Nil retains phase-1 recovery.
+	Buffer *BufferConfig
 	// Routes enables asynchronous confirmed-route persistence and eager restore.
 	// Nil preserves the address-only relay API for embedders.
 	Routes sessionstore.Routes
@@ -219,6 +221,16 @@ type Config struct {
 
 // Stats counts what the relay has done since it started.
 type Stats struct {
+	BufferedSessions int
+	BufferedPackets  int
+	BufferedBytes    int
+	// BufferDrops is capacity overflow; BufferExpired is normal time eviction.
+	BufferDrops          uint64
+	BufferExpired        uint64
+	BufferUntracked      uint64
+	ReplayPackets        uint64
+	ReplayFiltered       uint64
+	Replays              uint64
 	RoutesRestored       uint64
 	RoutesRestoreSkipped uint64
 	RoutesRestoreFailed  uint64
@@ -301,6 +313,10 @@ type Relay struct {
 	barrierTimeouts  atomic.Uint64
 	holdTimeouts     atomic.Uint64
 	holdSendFailures atomic.Uint64
+	buffer           *packetBuffer
+	replayPackets    atomic.Uint64
+	replayFiltered   atomic.Uint64
+	replays          atomic.Uint64
 
 	registryMu sync.RWMutex
 	registry   map[netip.AddrPort]struct{}
@@ -370,6 +386,10 @@ func New(cfg Config) (*Relay, error) {
 	}
 	for _, worker := range cfg.Workers {
 		r.AddWorker(worker)
+	}
+	if cfg.Buffer != nil {
+		r.buffer = newPacketBuffer(*cfg.Buffer)
+		r.buffer.maxSessions = cfg.MaxFlows
 	}
 	r.restoreRoutes()
 	r.lookups = newOwnerLookups(r, cfg)
@@ -543,9 +563,21 @@ func (r *Relay) Stats() Stats {
 	flows := r.flows.counts()
 	r.forwardMu.Lock()
 	holds, packets, bytes := len(r.holds), r.heldPackets, r.heldBytes
+	var bufferStats Stats
+	if r.buffer != nil {
+		bufferStats.BufferedSessions = len(r.buffer.sessions)
+		bufferStats.BufferedPackets = r.buffer.packets.Len()
+		bufferStats.BufferedBytes = r.buffer.bytes
+		bufferStats.BufferDrops = r.buffer.drops
+		bufferStats.BufferExpired = r.buffer.expired
+		bufferStats.BufferUntracked = r.buffer.untracked
+	}
 	r.forwardMu.Unlock()
 
 	return Stats{
+		BufferedSessions: bufferStats.BufferedSessions, BufferedPackets: bufferStats.BufferedPackets, BufferedBytes: bufferStats.BufferedBytes,
+		BufferDrops: bufferStats.BufferDrops, BufferExpired: bufferStats.BufferExpired, BufferUntracked: bufferStats.BufferUntracked,
+		ReplayPackets: r.replayPackets.Load(), ReplayFiltered: r.replayFiltered.Load(), Replays: r.replays.Load(),
 		RoutesRestored: r.routesRestored.Load(), RoutesRestoreSkipped: r.routesRestoreSkipped.Load(), RoutesRestoreFailed: r.routesRestoreFailed.Load(), RouteWrites: r.routeWritesDone.Load(), RouteWritesDropped: r.routeWritesDropped.Load(), RouteWritesFailed: r.routeWritesFailed.Load(),
 		BarrierTimeouts: r.barrierTimeouts.Load(),
 		Holds:           holds, HeldPackets: packets, HeldBytes: bytes, HoldDrops: r.holdDrops.Load(), HoldTimeouts: r.holdTimeouts.Load(), HoldSendFailures: r.holdSendFailures.Load(),
@@ -580,6 +612,11 @@ func (r *Relay) Close() error {
 			delete(r.holds, id)
 		}
 		r.heldPackets, r.heldBytes = 0, 0
+		if r.buffer != nil {
+			for id := range r.buffer.sessions {
+				r.buffer.forget(id)
+			}
+		}
 		r.forwardMu.Unlock()
 		r.running.Wait()
 	})
@@ -665,6 +702,11 @@ func (r *Relay) forward(datagram []byte, caller, worker netip.AddrPort) {
 			return
 		}
 		session, worker = f.session, f.worker
+	}
+	if r.buffer != nil {
+		if f, ok := r.flows.forwardRoute(caller); ok && f.session == session {
+			r.buffer.add(session, caller, packet, time.Now())
+		}
 	}
 	if h := r.holds[session]; h != nil {
 		// Only authenticated callers for this session may spend its queue.
@@ -820,7 +862,11 @@ func (r *Relay) workerLoop() {
 func (r *Relay) sweepFlows() {
 	defer r.running.Done()
 
-	ticker := time.NewTicker(min(r.cfg.FlowTimeout, r.cfg.PendingFlowTimeout) / 2)
+	interval := min(r.cfg.FlowTimeout, r.cfg.PendingFlowTimeout) / 2
+	if r.buffer != nil {
+		interval = min(interval, r.buffer.cfg.Window/2)
+	}
+	ticker := time.NewTicker(max(interval, time.Millisecond))
 	defer ticker.Stop()
 	for {
 		select {
@@ -828,6 +874,16 @@ func (r *Relay) sweepFlows() {
 			return
 		case now := <-ticker.C:
 			r.flows.sweep(now)
+			r.forwardMu.Lock()
+			if r.buffer != nil {
+				r.buffer.expire(now)
+				for id := range r.buffer.sessions {
+					if r.holds[id] == nil && len(r.flows.sessionCallers(id)) == 0 {
+						r.buffer.forget(id)
+					}
+				}
+			}
+			r.forwardMu.Unlock()
 		}
 	}
 }
@@ -876,6 +932,9 @@ func (r *Relay) ForgetSession(id string) {
 	}
 	r.lookups.mu.Unlock()
 	r.flows.forgetSession(id)
+	if r.buffer != nil {
+		r.buffer.forget(id)
+	}
 	if r.persistence != nil {
 		r.persistence.enqueue(id, nil)
 	}
