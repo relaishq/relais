@@ -248,7 +248,7 @@ func measure(report *callharness.Report, relayAddr string, after time.Duration) 
 	video := report.Track("video")
 	decoded := video != nil && video.Video != nil && video.Video.FullDecode.Ran() && video.Video.FullDecode.Errors == "" && video.Video.FullDecode.FramesDecoded == video.Video.FullDecode.FramesIn && video.Video.KeyframeDecodeErrors == 0
 	attributed := (r.Path == "Cache" && r.ReplayPackets > 0 || r.Path == "Keyframe" || r.Path == "Live") && (r.LivePath == "Keyframe" || r.LivePath == "Live")
-	r.Pass = r.Measurement.SettleWindow > 0 && !r.Measurement.RecoveryFailed() && attributed && flowing && decoded && r.Gap > 0 && r.Gap < 2*time.Second && r.AfterResume == 0 && r.Reconnects == 0 && r.Renegotiations == 0 && report.OfferAnswerExchanges == 1 && report.ConnectedThroughout() && report.RemoteAddr == relayAddr && r.Decoded > 0 && r.Live > 0 && move.Error == "" && report.Consent.ResponsesAfter > 0
+	r.Pass = r.Measurement.SettleWindow > 0 && !r.Measurement.ContentRecoveryFailed() && attributed && flowing && decoded && r.Gap > 0 && r.Gap < 2*time.Second && r.AfterResume == 0 && r.Reconnects == 0 && r.Renegotiations == 0 && report.OfferAnswerExchanges == 1 && report.ConnectedThroughout() && report.RemoteAddr == relayAddr && r.Decoded > 0 && r.Live > 0 && move.Error == "" && report.Consent.ResponsesAfter > 0
 	if after >= 60*time.Second {
 		r.Pass = r.Pass && report.Consent.ObservedFor >= 60*time.Second
 	}

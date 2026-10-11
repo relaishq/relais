@@ -55,6 +55,9 @@ func assertCacheRecovery(t *testing.T, measurement callharness.EventMeasurement)
 
 func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 	freshness := callharness.FreshnessPolicy{RecoveryLimit: 2 * time.Second, StabilityWindow: 3 * time.Second}
+	// Keep the full observation in -short too: the retained 80% freshness
+	// coverage gate requires a complete 3s stability window. A 3s recording
+	// would make every freshness verdict unknown after the crash.
 	mediaDuration := freshness.EvaluationWindow() + time.Second
 	frames := selectedFrameCache(t, store)
 	for _, mode := range []struct {

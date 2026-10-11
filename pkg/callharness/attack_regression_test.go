@@ -179,3 +179,49 @@ func TestCorruptedFrameBytesFailThroughCallerRecorder(t *testing.T) {
 	require.True(t, m.VideoLoss.Failed)
 	require.True(t, m.RecoveryFailed())
 }
+
+// N1: a sparse one-second delay cannot hide inside the 10% jitter budget.
+func TestAttackSparseHugeLiveLateness(t *testing.T) {
+	units := attackBaseline()
+	for i := range 250 {
+		sent := 1400*time.Millisecond + time.Duration(i)*20*time.Millisecond
+		latency := time.Millisecond
+		if i%10 == 5 {
+			latency = time.Second
+		}
+		units = append(units, contentUnit{at: sent, returnedAt: sent + latency, identity: fmt.Sprint("sparse", i)})
+	}
+	f := measureFreshness(units, time.Second, 1400*time.Millisecond, 60*time.Second, 0)
+	require.True(t, f.Verdict.Trusted)
+	require.True(t, f.Verdict.Failed, "sparse huge lateness must break recovery")
+}
+
+func TestLiveLatenessCapBoundaryAndPolicy(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		cap, excess time.Duration
+		failed      bool
+	}{
+		{"at cap", 200 * time.Millisecond, 200 * time.Millisecond, false},
+		{"above cap", 200 * time.Millisecond, 201 * time.Millisecond, true},
+		{"explicit tighter cap", 100 * time.Millisecond, 101 * time.Millisecond, true},
+		{"after evaluation", 200 * time.Millisecond, time.Second, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			units := attackBaseline()
+			for i := range 250 {
+				sent := 1400*time.Millisecond + time.Duration(i)*20*time.Millisecond
+				units = append(units, contentUnit{at: sent, returnedAt: sent + time.Millisecond, identity: fmt.Sprint("steady-cap", i)})
+			}
+			sent := 4 * time.Second
+			if test.name == "after evaluation" {
+				sent = 7 * time.Second
+			}
+			units = append(units, contentUnit{at: sent, returnedAt: sent + time.Millisecond + test.excess, identity: "cap-spike"})
+			f := measureFreshness(units, time.Second, 1400*time.Millisecond, 60*time.Second, 0, FreshnessPolicy{LiveLatenessCap: test.cap})
+			require.True(t, f.Verdict.Trusted)
+			require.Equal(t, test.failed, f.Verdict.Failed)
+			require.Equal(t, test.cap, f.LiveLatenessCap)
+		})
+	}
+}

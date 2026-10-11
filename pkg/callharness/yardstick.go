@@ -26,6 +26,7 @@ const (
 	freshnessLateWindowLimit  = 3
 	freshnessLatePercentLimit = 10
 	freshnessAbsoluteCeiling  = 50 * time.Millisecond
+	freshnessLiveLatenessCap  = 200 * time.Millisecond
 )
 
 // MetricVerdict separates trust from an observed failure. Unknown metrics must
@@ -105,6 +106,8 @@ type EventMeasurement struct {
 // cannot improve confirmation or dilute either budget. LiveUnits/LateLiveUnits
 // count eligible post-resume returns across the whole evaluation. Short live
 // lateness streaks remain diagnostics, independently of the budget verdict.
+// Any live return later than baseline p95 + LiveLatenessCap (default 200ms)
+// breaks recovery, including duplicates, inside the evaluation window.
 // JitterUnits and JitterMaxExcess report
 // their count and maximum excess over baseline p95+tolerance. Repeats cannot
 // confirm recovery. LastAboveTolerance records the last above-threshold unit.
@@ -119,7 +122,7 @@ type FreshnessReport struct {
 	Verdict                                            MetricVerdict
 	RecoveryLimit, StabilityWindow, EvaluationEnd      time.Duration
 	StabilityObserved                                  time.Duration
-	AbsoluteLatencyCeiling                             time.Duration
+	AbsoluteLatencyCeiling, LiveLatenessCap            time.Duration
 	AbsoluteLag                                        bool
 	LateWindowUnits, LateWindowLimit, LatePercentLimit int
 	LiveUnits, LateLiveUnits                           int
@@ -142,7 +145,8 @@ type FreshnessReport struct {
 }
 
 // FreshnessPolicy configures event recovery attribution. Nonpositive values
-// use defaults: 2s recovery, 3s stability and a 50ms absolute median ceiling.
+// use defaults: 2s recovery, 3s stability, a 50ms absolute median ceiling,
+// and a 200ms live lateness cap above baseline p95.
 // Set the ceiling per call for a different network latency profile.
 // RecoveryLimit is explicit through CallOptions.Freshness and retained on the
 // report. Buffered-takeover acceptance (#27) uses 2s without race via
@@ -150,8 +154,8 @@ type FreshnessReport struct {
 // with or without race. Defaults and measured recovery times never change
 // under the race detector.
 type FreshnessPolicy struct {
-	RecoveryLimit, StabilityWindow time.Duration
-	AbsoluteLatencyCeiling         time.Duration
+	RecoveryLimit, StabilityWindow          time.Duration
+	AbsoluteLatencyCeiling, LiveLatenessCap time.Duration
 }
 
 // EvaluationWindow is the full event observation duration, applying defaults.
@@ -169,6 +173,9 @@ func (p FreshnessPolicy) defaults() FreshnessPolicy {
 	}
 	if p.AbsoluteLatencyCeiling <= 0 {
 		p.AbsoluteLatencyCeiling = freshnessAbsoluteCeiling
+	}
+	if p.LiveLatenessCap <= 0 {
+		p.LiveLatenessCap = freshnessLiveLatenessCap
 	}
 	return p
 }
@@ -558,6 +565,19 @@ func (m EventMeasurement) Conclusive() bool {
 	return true
 }
 
+// ContentRecoveryFailed gates resume and decoded-content evidence, including
+// identity conflicts, without applying a freshness acceptance limit. Phase-1
+// crash scenarios use this gate and retain loss/coverage as separate checks.
+// Lost outage content is expected in today's unbuffered crashes.
+func (m EventMeasurement) ContentRecoveryFailed() bool {
+	for _, v := range []MetricVerdict{m.ResumeVerdict, m.FirstContentVerdict, m.FirstNewContentVerdict, m.FirstLiveVerdict} {
+		if v.Trusted && v.Failed {
+			return true
+		}
+	}
+	return false
+}
+
 // RecoveryFailed excludes loss, which is expected in today's unbuffered crashes.
 func (m EventMeasurement) RecoveryFailed() bool {
 	for _, v := range []MetricVerdict{m.ResumeVerdict, m.FirstContentVerdict, m.FirstNewContentVerdict, m.FirstLiveVerdict, m.Audio.Verdict, m.Video.Verdict} {
@@ -587,7 +607,7 @@ func measureFreshness(units []contentUnit, start, resumed, limit, baselineFloor 
 	if len(policies) > 0 {
 		policy = policies[0].defaults()
 	}
-	f := FreshnessReport{RecoveryLimit: policy.RecoveryLimit, StabilityWindow: policy.StabilityWindow, EvaluationEnd: min(limit, start+policy.RecoveryLimit+policy.StabilityWindow), BaselineStart: max(0, start-baselineWindow, baselineFloor), Tolerance: freshnessTolerance, SustainedUnits: freshnessSustainedUnits, SpreadLimit: baselineSpreadLimit, LateWindowUnits: freshnessLateWindowUnits, LateWindowLimit: freshnessLateWindowLimit, LatePercentLimit: freshnessLatePercentLimit, AbsoluteLatencyCeiling: policy.AbsoluteLatencyCeiling}
+	f := FreshnessReport{RecoveryLimit: policy.RecoveryLimit, StabilityWindow: policy.StabilityWindow, EvaluationEnd: min(limit, start+policy.RecoveryLimit+policy.StabilityWindow), BaselineStart: max(0, start-baselineWindow, baselineFloor), Tolerance: freshnessTolerance, SustainedUnits: freshnessSustainedUnits, SpreadLimit: baselineSpreadLimit, LateWindowUnits: freshnessLateWindowUnits, LateWindowLimit: freshnessLateWindowLimit, LatePercentLimit: freshnessLatePercentLimit, AbsoluteLatencyCeiling: policy.AbsoluteLatencyCeiling, LiveLatenessCap: policy.LiveLatenessCap}
 	f.StabilityObserved = max(0, f.EvaluationEnd-start-f.RecoveryLimit)
 	var baseline []time.Duration
 	var post []contentUnit
@@ -649,6 +669,13 @@ func measureFreshness(units []contentUnit, start, resumed, limit, baselineFloor 
 			flushJitter()
 			resetRun()
 			counted[unit.identity] = true
+			continue
+		case latency-f.BaselineP95 > f.LiveLatenessCap:
+			flushJitter()
+			resetRun()
+			counted[unit.identity] = true
+			f.LiveUnits++
+			f.LateLiveUnits++
 			continue
 		case excess > 0:
 			lateLive++
@@ -763,7 +790,7 @@ func (m EventMeasurement) Summary() string {
 }
 
 func (f FreshnessReport) summary() string {
-	return fmt.Sprintf("baseline_n=%d median=%s p95=%s peak=%s above_p95=%s back=%s tolerance=%s sustained=%d spread_limit=%s baseline_start=%s first_n=%d first_median=%s first_p95=%s first_trusted=%t lasting_lag=%t last_stale=%s recovery_limit=%s stability_window=%s evaluation_end=%s jitter_units=%d jitter_max_excess=%s stability_observed=%s late_window_units=%d late_window_limit=%d late_percent_limit=%d live_units=%d late_live_units=%d absolute_ceiling=%s absolute_lag=%t verdict=%s", f.BaselineSamples, f.BaselineMedian, f.BaselineP95, f.PeakLatency, f.PeakAboveBaseline, observedDuration(f.BackToBaseline, f.Recovered), f.Tolerance, f.SustainedUnits, f.SpreadLimit, f.BaselineStart, f.FirstBaselineSamples, f.FirstBaselineMedian, f.FirstBaselineP95, f.FirstBaselineTrusted, f.LastingLag, observedDuration(f.LastAboveTolerance, f.LastAboveTolerance > 0), f.RecoveryLimit, f.StabilityWindow, f.EvaluationEnd, f.JitterUnits, f.JitterMaxExcess, f.StabilityObserved, f.LateWindowUnits, f.LateWindowLimit, f.LatePercentLimit, f.LiveUnits, f.LateLiveUnits, f.AbsoluteLatencyCeiling, f.AbsoluteLag, f.Verdict.Summary())
+	return fmt.Sprintf("live_lateness_cap=%s baseline_n=%d median=%s p95=%s peak=%s above_p95=%s back=%s tolerance=%s sustained=%d spread_limit=%s baseline_start=%s first_n=%d first_median=%s first_p95=%s first_trusted=%t lasting_lag=%t last_stale=%s recovery_limit=%s stability_window=%s evaluation_end=%s jitter_units=%d jitter_max_excess=%s stability_observed=%s late_window_units=%d late_window_limit=%d late_percent_limit=%d live_units=%d late_live_units=%d absolute_ceiling=%s absolute_lag=%t verdict=%s", f.LiveLatenessCap, f.BaselineSamples, f.BaselineMedian, f.BaselineP95, f.PeakLatency, f.PeakAboveBaseline, observedDuration(f.BackToBaseline, f.Recovered), f.Tolerance, f.SustainedUnits, f.SpreadLimit, f.BaselineStart, f.FirstBaselineSamples, f.FirstBaselineMedian, f.FirstBaselineP95, f.FirstBaselineTrusted, f.LastingLag, observedDuration(f.LastAboveTolerance, f.LastAboveTolerance > 0), f.RecoveryLimit, f.StabilityWindow, f.EvaluationEnd, f.JitterUnits, f.JitterMaxExcess, f.StabilityObserved, f.LateWindowUnits, f.LateWindowLimit, f.LatePercentLimit, f.LiveUnits, f.LateLiveUnits, f.AbsoluteLatencyCeiling, f.AbsoluteLag, f.Verdict.Summary())
 }
 
 func observedDuration(d time.Duration, observed bool) string {
