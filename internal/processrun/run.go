@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/relais/internal/movediag"
 	"github.com/relais/internal/redisendpoint"
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/metrics"
@@ -108,7 +109,7 @@ func Ready(fields map[string]any) {
 	_ = json.NewEncoder(os.Stdout).Encode(fields)
 }
 func Serve(ctx context.Context, listener net.Listener, handler http.Handler) error {
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second, IdleTimeout: 10 * time.Second}
+	server := &http.Server{Handler: movediag.Handler(handler), ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second, IdleTimeout: 10 * time.Second}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 	select {

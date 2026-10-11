@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/relais/internal/movediag"
 	"github.com/relais/internal/privateapi"
 	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/mediaworker"
@@ -367,7 +368,17 @@ type MoveResult struct {
 
 // Move fails fast if another move or drain holds the call. Empty to picks
 // the least-loaded non-draining worker other than the current owner.
-func (p *Plane) Move(ctx context.Context, id, to string) (MoveResult, error) {
+func (p *Plane) Move(ctx context.Context, id, to string) (res MoveResult, moveErr error) {
+	if !movediag.Enabled() {
+		return p.moveRequest(ctx, id, to)
+	}
+	ctx = movediag.Begin(ctx)
+	event := movediag.NewEvent(ctx, "move", "planned_move")
+	defer func() { res.Result.MoveDiagnosticID = movediag.ID(ctx); movediag.Default.Finish(event, moveErr != nil) }()
+	return p.moveRequest(ctx, id, to)
+}
+
+func (p *Plane) moveRequest(ctx context.Context, id, to string) (MoveResult, error) {
 	c, err := p.lookup(id)
 	if err != nil {
 		return MoveResult{}, err
@@ -422,7 +433,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	}()
 	started := time.Now()
 	// Missing acknowledgement aborts before export; the relay replays to A.
-	if err = r.HoldSession(ctx, c.id, source.addr); err != nil {
+	if err = diagnosticRelay(r, movediag.Phase(ctx, "barrier")).HoldSession(movediag.Phase(ctx, "barrier"), c.id, source.addr); err != nil {
 		if errors.Is(err, privateapi.ErrUncertain) {
 			_, _ = r.ReleaseSession(c.id, source.addr)
 		}
@@ -451,7 +462,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		if retained {
 			return
 		}
-		held, releaseErr := r.ReleaseSession(c.id, releaseTo)
+		held, releaseErr := diagnosticRelay(r, movediag.Phase(ctx, "release")).ReleaseSession(c.id, releaseTo)
 		res.Result.HeldPackets = held
 		if errors.Is(releaseErr, relay.ErrHoldExpired) {
 			res.Result.HoldExpired = true
@@ -466,7 +477,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		}
 	}()
 	started = time.Now()
-	state, err := source.worker.ExportSession(c.id)
+	state, err := diagnosticWorker(source.worker, movediag.Phase(ctx, "export")).ExportSession(c.id)
 	res.Result.Export = time.Since(started)
 	if err != nil {
 		// A generic/transport error cannot prove export did not flush A.
@@ -520,7 +531,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	}
 
 	res.Result.StateBytes = len(state)
-	transferred, err := p.transfer(ctx, lease, target.addr)
+	transferred, err := p.transfer(movediag.Phase(ctx, "transfer"), lease, target.addr)
 	if err != nil {
 		if p.retainUncertainMove(source, c, lease, source.addr, state, err, res.Start) {
 			return res, err
@@ -529,13 +540,17 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		return res, err
 	}
 
-	if err = r.MoveSession(c.id, source.addr, target.addr); err != nil {
+	if err = diagnosticRelay(r, movediag.Phase(ctx, "transfer")).MoveSession(c.id, source.addr, target.addr); err != nil {
 		err = p.rollback(c, source, target, r, state, transferred, true, true, false, &res.Result, err, res.Start)
 		return res, err
 	}
 
 	started = time.Now()
-	_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Kind: agent.PlannedMove, Lease: transferred})
+	opts := mediaworker.ResumeOptions{Kind: agent.PlannedMove, Lease: transferred}
+	if movediag.ID(ctx) != "" {
+		opts.Context = movediag.Copy(context.Background(), movediag.Phase(ctx, "resume"))
+	}
+	_, err = target.worker.ResumeSession(state, opts)
 	res.Result.Resume = time.Since(started)
 	if err != nil {
 		// Explicit transport uncertainty can hide a committed adoption, even

@@ -9,6 +9,7 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/relais/internal/movediag"
 )
 
 var storeCommands = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relais_store_commands_total", Help: "Redis client command attempts, including pipelines and retries; excludes commands inside Lua."}, []string{"store"})
@@ -79,7 +80,11 @@ func RedisClient(options *redis.Options, client string) *redis.Client {
 		_ = prototype.Close()
 	}
 	original.Dialer = RedisDialer(dial, client)
-	return redis.NewClient(&original)
+	clientInstance := redis.NewClient(&original)
+	if movediag.Enabled() {
+		clientInstance.AddHook(movediag.RedisHook{})
+	}
+	return clientInstance
 }
 
 func StoreHook(store string) redis.Hook {

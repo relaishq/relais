@@ -243,20 +243,13 @@ Preliminary fault probes remain separate in `probe_events`. The
 or video gap, even if p95 excludes that outlier. It prints both gaps and
 the event's phase timings. `slowest_other` is total duration minus barrier,
 export and resume: transfer, routing, release and coordination overhead
-combined. These phases are not individually timed. Missing phase data is
+combined. Detailed diagnostics time their private calls separately. Missing phase data is
 reported as unavailable.
 
-A lost private-HTTP TCP segment on the DC path can add about one TCP
-retransmission timeout (RTO) to export. The
-[Linux default minimum TCP RTO](https://www.kernel.org/doc/html/latest/networking/ip-sysctl.html#tcp-rto-min-us)
-is 200ms; route and socket settings can override it. This explanation is
-**PLAUSIBLE**, from [run 38154313823](https://github.com/relaishq/relais/actions/runs/38154313823)
-trial 4: export took 209.61ms instead of the other trials' 2.07–2.78ms.
-Barrier, resume, and the combined remaining time stayed normal. The
-acceptance move succeeded without rollback or hold expiry. Its audio/video
-gaps were 247.33ms/260.85ms. No packet trace, retransmission counter, or
-socket RTO setting was captured, so TCP retransmission is not proven.
-The move thresholds still apply to DC loss.
+Per-phase HTTP/Redis traces and TCP counter deltas now distinguish these
+costs. The native A/B supports tail-loss-probe delay on small private RPCs;
+see the table below and [move latency](move-latency.md). The move thresholds
+still apply to DC loss.
 
 ## CI and evidence boundary
 
@@ -275,13 +268,10 @@ namespaces or links after teardown. Move jobs use 20 trials, a 35-minute
 driver timeout and a 45-minute job timeout. Takeovers retain ten trials,
 a 20-minute driver timeout and a 30-minute job timeout.
 
-Only **lossy-dc × move** has a temporary `continue-on-error` exemption for
-[#87](https://github.com/relaishq/relais/issues/87), planned-move latency under
-DC loss. Its driver still exits nonzero on fail or inconclusive, its profile
-verdict remains unchanged, and its reports and failure logs still upload.
-The job summary names #87 and requires removal of the exemption when it is
-fixed. Every other matrix entry still fails the workflow on fail or
-inconclusive. No move latency threshold changes with this exemption.
+Every matrix entry fails the workflow on fail or inconclusive, including
+lossy-DC moves. Private-route tuning now defaults on, following
+[ADR 0007](../adr/0007-private-route-tcp-recovery.md); no acceptance threshold
+changed. The manual `private_route_tuning=false` input retains the baseline.
 
 In run 38154313823, the DC trial process observation averaged 78.46s.
 Twenty such trials project to about 26 minutes before job setup, so the
@@ -300,7 +290,7 @@ The runner-time cost still matters.
 The orchestrator can dispatch all lanes with:
 
 ```sh
-gh workflow run ci.yml --repo relaishq/relais --ref feat/37-network-profiles
+gh workflow run ci.yml --repo relaishq/relais --ref investigate/87-move-latency
 ```
 
 Native Linux tests verify actual region/far-caller RTT, qdisc switching,
@@ -308,3 +298,20 @@ root-qdisc preservation, barrier-only loss/removal and cleanup. They are
 opt-in using `RELAIS_TEST_NETNS_REQUIRE=1`, consistent with #36. macOS unit
 checks and Linux cross-vet do not prove runtime shaping or these thresholds.
 Hosted results and posting the first results to #31 belong to the orchestrator.
+
+## Private TCP recovery and diagnostics (#87)
+
+Private DC routes use `rto_min 5ms quickack 1` by default. Disable with
+`-private-route-tuning=false` for an untuned baseline. Every profile report
+records `private_route_tuning`; enabled reports include observed route metrics.
+Host, caller and fabric routes remain unchanged.
+
+| Lossy DC move run (20 trials) | Tuning | Verdict | Caller audio gap | Audio / video gap p95 |
+| --- | --- | --- | --- | --- |
+| [38169245053](https://github.com/relaishq/relais/actions/runs/38169245053) | Off | Fail | 19 at 25–38ms; one at 253ms | 37.6 / 37.5ms |
+| [38169250273](https://github.com/relaishq/relais/actions/runs/38169250273) | On | Pass | All at 23–43ms | 43.1 / 47.0ms |
+
+Profile move reports retain per-phase private HTTP/Redis timings, connection
+reuse and namespace TCP counters. Diagnostic collection errors are explicit
+and non-fatal. See [move latency](move-latency.md) for the TLP evidence and
+limits, and [private-route deployment](private-route-tuning.md) for commands.

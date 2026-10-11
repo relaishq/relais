@@ -44,6 +44,24 @@ type result struct {
 	BindWaitTime                                     time.Duration
 }
 
+// Each netns run retains route evidence, even without a profile scenario.
+func recordPrivateRouteSettings(dir string, tuned bool, kernel string, routes []nettopology.PrivateRoute) error {
+	report := struct {
+		PrivateRouteTuning bool                       `json:"private_route_tuning"`
+		KernelRelease      string                     `json:"kernel_release"`
+		PrivateRoutes      []nettopology.PrivateRoute `json:"private_routes"`
+	}{tuned, kernel, routes}
+	encoded, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "private-route-settings.json"), encoded, 0600); err != nil {
+		return err
+	}
+	fmt.Printf("PRIVATE_ROUTE_SETTINGS %s\n", encoded)
+	return nil
+}
+
 func binaries(bin string) error {
 	for _, name := range []string{"relais-relay", "relais-worker", "relais-control"} {
 		stat, err := os.Stat(filepath.Join(bin, name))
@@ -61,7 +79,7 @@ func processEnv(key, addr, prefix string) []string {
 	env := []string{}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if name == "RELAIS_SESSIONSTORE_KEY" || name == "RELAIS_REDIS_ADDR" || name == "RELAIS_REDIS_PREFIX" || name == "RELAIS_REDIS_PASSWORD" || name == "RELAIS_PRIVATE_NETS" {
+		if name == "RELAIS_MOVE_DIAGNOSTICS" || name == "RELAIS_SESSIONSTORE_KEY" || name == "RELAIS_REDIS_ADDR" || name == "RELAIS_REDIS_PREFIX" || name == "RELAIS_REDIS_PASSWORD" || name == "RELAIS_PRIVATE_NETS" {
 			continue
 		}
 		env = append(env, entry)
@@ -169,8 +187,9 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		if err := topology.AllowMedia(ctx, relayAddr); err != nil {
 			return result{}, err
 		}
-		privateAPIs = append(privateAPIs, envValue(env, "RELAIS_REDIS_ADDR"))
-		if err := topology.VerifyPrivateAPIs(ctx, privateAPIs); err != nil {
+		// Verify the store too, but diagnostics use only the HTTP endpoints.
+		privateEndpoints := append(append([]string(nil), privateAPIs...), envValue(env, "RELAIS_REDIS_ADDR"))
+		if err := topology.VerifyPrivateAPIs(ctx, privateEndpoints); err != nil {
 			return result{}, err
 		}
 		fmt.Println("ISOLATION PASS: caller cannot reach relay-private, workers, control or store; only relay UDP media is allowed")
@@ -288,6 +307,11 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		worker = workerPIDs[owner]
 	}
 	systemMetrics.sampleBeforeFault(ctx)
+	var diagnostics *moveDiagnostics
+	var tcpBefore []nettopology.TCPSnapshot
+	if profile != nil && profile.Scenario == "move" {
+		tcpBefore = topology.SnapshotTCP(ctx)
+	}
 	killed := time.Now()
 	var profileActionErr error
 	if profile != nil && profile.Scenario == "move" {
@@ -298,6 +322,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			profileActionErr = err
 			fmt.Printf("PROFILE_MOVE_ERROR %v\n", err)
 		}
+		diagnostics = collectMoveDiagnostics(ctx, privateAPIs, tcpBefore, topology.SnapshotTCP(ctx))
 	} else {
 		signal := syscall.SIGKILL
 		label := "SIGKILL"
@@ -381,6 +406,10 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	}
 	if profile != nil {
 		row := measureProfile(report, relayReady.Media, *profile, after)
+		if diagnostics != nil {
+			diagnostics.selectMove(row.EventResult.MoveDiagnosticID, profileActionErr == nil && !row.EventResult.RolledBack)
+			row.MoveDiagnostics = diagnostics
+		}
 		if profileActionErr != nil {
 			row.Integrity.Failed = true
 			row.Integrity.Reasons = append(row.Integrity.Reasons, "profile action error: "+profileActionErr.Error())
@@ -453,6 +482,7 @@ func run() (err error) {
 	relayStandby := flag.Bool("relay-standby", false, "fenced standby takeover after SIGKILL and SIGSTOP, ten runs each")
 	topologyOption := flag.String("topology", "loopback", "loopback or netns (Linux/root only)")
 	profile := flag.String("profile", "lan", "lan, region, far-caller or lossy-dc (shaping requires netns)")
+	privateRouteTuning := flag.Bool("private-route-tuning", true, "rto_min 5ms and quickack on owned namespace DC routes; false measures the untuned baseline")
 	scenario := flag.String("scenario", "", "profile acceptance: move or takeover; requires netns, enables buffer")
 	relayRestart := flag.Bool("relay-restart", false, "SIGKILL and restart the relay mid-call; workers and caller stay alive")
 	restoreOff := flag.Bool("route-restore-off", false, "disable route restore in relay-restart baseline trials")
@@ -524,6 +554,25 @@ func run() (err error) {
 			err = errors.Join(err, topology.Close())
 		}
 	}()
+	var privateRoutes []nettopology.PrivateRoute
+	var kernelRelease string
+	if topology != nil {
+		kernelRelease, err = topology.KernelRelease(ctx)
+		if err != nil {
+			return err
+		}
+		if *privateRouteTuning {
+			privateRoutes, err = topology.TunePrivateRoutes(ctx)
+		} else {
+			privateRoutes, err = topology.ObservePrivateRoutes(ctx)
+		}
+		if err != nil {
+			return err
+		}
+		if err := recordPrivateRouteSettings(dir, *privateRouteTuning, kernelRelease, privateRoutes); err != nil {
+			return err
+		}
+	}
 	var settings []nettopology.LinkSetting
 	if topology != nil && *scenario != "" {
 		settings, err = topology.ApplyProfile(ctx, *profile)
@@ -596,7 +645,7 @@ func run() (err error) {
 		fmt.Println("DEVELOPMENT RUN: 60 s post-takeover consent acceptance NOT-RUN")
 	}
 	if *scenario != "" {
-		return runProfileTrials(ctx, manager, topology, bin, dir, hex.EncodeToString(key[:]), addr, password, profileTrialOptions{Name: *profile, Scenario: *scenario}, settings, *runs, *after, *verbose)
+		return runProfileTrials(ctx, manager, topology, bin, dir, hex.EncodeToString(key[:]), addr, password, profileTrialOptions{Name: *profile, Scenario: *scenario, PrivateRouteTuning: *privateRouteTuning, PrivateRoutes: privateRoutes, KernelRelease: kernelRelease}, settings, *runs, *after, *verbose)
 	}
 	modes := []bool{*cacheOff}
 	if *compare && !*terminate && !*cacheOff {
