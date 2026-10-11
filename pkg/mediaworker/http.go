@@ -46,6 +46,7 @@ type ResumeRequest struct {
 	Lease                 sessionstore.Lease      `json:"lease"`
 	SequenceMargin        uint16                  `json:"sequence_margin"`
 	SRTCPIndexMargin      uint32                  `json:"srtcp_index_margin"`
+	RelayReplay           bool                    `json:"relay_replay"`
 }
 type ResumeReply struct {
 	ID string `json:"id"`
@@ -89,12 +90,19 @@ func (w *Worker) PrivateHandler() http.Handler {
 		}
 		privateapi.Write(rw, ExportReply{State: state})
 	})
+	mux.HandleFunc("POST /sessions/{id}/keyframe", func(rw http.ResponseWriter, r *http.Request) {
+		if err := w.RequestKeyframe(r.Context(), r.PathValue("id")); err != nil {
+			privateapi.Error(rw, err, RemoteErrors)
+			return
+		}
+		rw.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("POST /resume", func(rw http.ResponseWriter, r *http.Request) {
 		var req ResumeRequest
 		if !privateapi.Read(rw, r, &req) {
 			return
 		}
-		id, err := w.ResumeSession(req.State, ResumeOptions{Kind: req.Kind, InputMayBeDuplicated: req.InputMayBeDuplicated, DuplicateWindows: req.DuplicateWindows, CallerSequenceReserve: req.CallerSequenceReserve, CheckpointAge: req.CheckpointAge, SnapshotAge: req.SnapshotAge, CheckpointStoredAt: req.CheckpointStoredAt, Context: r.Context(), Lease: req.Lease, SequenceMargin: req.SequenceMargin, SRTCPIndexMargin: req.SRTCPIndexMargin})
+		id, err := w.ResumeSession(req.State, ResumeOptions{Kind: req.Kind, InputMayBeDuplicated: req.InputMayBeDuplicated, DuplicateWindows: req.DuplicateWindows, CallerSequenceReserve: req.CallerSequenceReserve, CheckpointAge: req.CheckpointAge, SnapshotAge: req.SnapshotAge, CheckpointStoredAt: req.CheckpointStoredAt, Context: r.Context(), Lease: req.Lease, SequenceMargin: req.SequenceMargin, SRTCPIndexMargin: req.SRTCPIndexMargin, RelayReplay: req.RelayReplay})
 		if err != nil {
 			workerAPIError(rw, err)
 			return

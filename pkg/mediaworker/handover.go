@@ -152,6 +152,10 @@ type ResumeOptions struct {
 	Kind                 agent.ResumeKind
 	InputMayBeDuplicated bool
 	DuplicateWindows     []agent.DuplicateWindow
+	// RelayReplay means a complete caller-media ring is gated for replay.
+	// Keep the existing codec chain: no cached old pictures or proactive PLI.
+	// Incomplete/lost relay caches leave this false and use normal recovery.
+	RelayReplay bool
 	// CallerSequenceReserve can enlarge, never reduce, the phase-1 reserve.
 	CallerSequenceReserve uint32
 	// Context optionally bounds rebuilding and persisting the resumed transport.
@@ -303,7 +307,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 		return "", err
 	}
 	var replayPackets [][]byte
-	if opts.SequenceMargin > 0 && w.cfg.socket == nil && sess.state.Video.negotiated() && w.cfg.cacheEnabled() {
+	if opts.SequenceMargin > 0 && !opts.RelayReplay && w.cfg.socket == nil && sess.state.Video.negotiated() && w.cfg.cacheEnabled() {
 		timeout := w.cfg.CacheReadTimeout
 		if timeout <= 0 {
 			timeout = 150 * time.Millisecond
@@ -368,7 +372,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 
 		return "", err
 	}
-	sess.needsKeyframe = opts.SequenceMargin > 0 && sess.state.Video.negotiated() && !w.cfg.DisableResumePLI
+	sess.needsKeyframe = opts.SequenceMargin > 0 && !opts.RelayReplay && sess.state.Video.negotiated() && !w.cfg.DisableResumePLI
 	// Shared-socket output is fenced until Handover switches the route. Keep
 	// the request pending for the first routed video packet; skip replay there.
 	if sess.needsKeyframe && w.cfg.socket == nil {
@@ -594,10 +598,8 @@ func (s *session) resume(dtlsBytes []byte, opts ResumeOptions) (*dtls.Conn, erro
 		return nil, fmt.Errorf("resumed DTLS state selects SRTP profile %d, session state says %d",
 			s.state.SRTP.Profile, exported)
 	}
-	for ssrc, index := range s.state.SRTP.Inbound {
-		if err := restoreInboundIndex(s.srtpIn, keys, s.state.SRTP.Profile, ssrc, index); err != nil {
-			return nil, fmt.Errorf("restore inbound SRTP index for ssrc %d: %w", ssrc, err)
-		}
+	if err := s.restoreReplayInbound(keys, opts); err != nil {
+		return nil, err
 	}
 	for _, track := range []*trackState{&s.state.Audio, &s.state.Video} {
 		if err := s.resumeTrack(track, opts); err != nil {
@@ -731,4 +733,46 @@ func primingPacket(ssrc uint32, seq uint16) []byte {
 	raw, _ := packet.Marshal() // a fixed header and a one-byte payload cannot fail
 
 	return raw
+}
+
+// Replay reopens only the audio input not represented by the restored agent
+// pair. Outbound counters and persisted transport high water marks stay intact.
+func (s *session) restoreReplayInbound(keys srtp.SessionKeys, opts ResumeOptions) error {
+	floors := s.state.SRTP.Inbound
+	if opts.InputMayBeDuplicated {
+		var err error
+		floors, err = replayInboundIndexes(s.state)
+		if err != nil {
+			return err
+		}
+	}
+	for ssrc, high := range s.state.SRTP.Inbound {
+		index, known := floors[ssrc]
+		if !known {
+			index = high
+			for _, window := range opts.DuplicateWindows {
+				if window.SSRC != ssrc {
+					continue
+				}
+				if window.First >= 1<<48 || window.Last >= 1<<48 || window.Last < window.First {
+					return fmt.Errorf("%w: invalid replay window", errBadState)
+				}
+				if window.First == 0 {
+					// Do not mark the caller's first packet (index zero) as seen.
+					s.srtpIn.SetROC(ssrc, 0)
+					known = true
+				} else {
+					index = window.First - 1
+				}
+				break
+			}
+			if known {
+				continue
+			}
+		}
+		if err := restoreInboundIndex(s.srtpIn, keys, s.state.SRTP.Profile, ssrc, index); err != nil {
+			return fmt.Errorf("restore inbound SRTP index for ssrc %d: %w", ssrc, err)
+		}
+	}
+	return nil
 }

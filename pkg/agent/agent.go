@@ -60,7 +60,8 @@ const (
 
 // DuplicateWindow is the caller's inbound SRTP index range that may replay.
 // The resume path supplies this evidence; an absent window promises no replay
-// in the current implementation. Ticket #27 will populate it on takeover.
+// when no relay media is selected. Relay takeover supplies planned bounds;
+// newly gated live input adds no risk of repeating the fenced source's work.
 type DuplicateWindow struct {
 	SSRC  uint32
 	First uint64

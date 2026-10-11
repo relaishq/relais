@@ -469,7 +469,7 @@ func (s *session) handleRTP(pkt []byte) {
 	if track == &s.state.Audio && s.agent != nil {
 		if _, echo := s.agent.instance.(*agent.Echo); !echo {
 			if s.worker.cfg.Relay != nil {
-				s.audioRate.observe(time.Now(), s.state.SRTP.Inbound[in.SSRC], in.Timestamp, 48000)
+				s.audioRate.observe(time.Now(), extendIndex(s.state.SRTP.Inbound[in.SSRC], in.SequenceNumber), in.Timestamp, 48000)
 			}
 			s.enqueueAudio(&in, header)
 			return

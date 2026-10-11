@@ -130,18 +130,37 @@ not bound application state staleness. Rate limiting ages the checkpoint itself
 and is therefore included in those observations. Tests measure the saved pair
 and these ages explicitly.
 
-`ResumeOptions.InputMayBeDuplicated` and `DuplicateWindows` are the seam for #27.
-The private HTTP boundary carries them unchanged. They default to false/empty
-until relay replay supplies real bounds. Set both fields from #27's resume
-result during that integration. Each window uses caller inbound SRTP
-indexes and its SSRC. The consumed audio progress can trail `SRTP.Inbound`
-because audio callbacks are queued. #27 must start audio replay from the agent consumed `Progress.Index` for
-audio replay admission, rather than discard all inputs at or below the transport
-receive high-water mark. Its SRTP restore/replay path must permit that older
-input range. This is an integration requirement, not verified replay behavior
-in this ticket. Applications must tolerate replay after a checkpoint and
-must make external side effects idempotent themselves. This ticket does not
-implement or claim duplicate-input delivery.
+Relay takeover now populates `ResumeOptions.InputMayBeDuplicated` and
+`DuplicateWindows` from the prepared relay plan before Restore/Resume. Direct
+and private HTTP paths carry identical caller inbound SRTP ranges. A resume
+notice describes possible replay, not exactly-once processing: gaps and input
+whose prior processing is unknown can occur within each range. After drain,
+the takeover result narrows those ranges to successful sends within the original
+plan. Live input arriving after preparation cannot have been processed by the
+fenced source and does not enlarge that result. No selected media or a planned
+move without replay leaves the fields false/empty.
+
+Custom-agent consumed audio progress can trail `SRTP.Inbound` because callbacks
+are queued. Ticket #27 uses the consumed `Progress.Index` as the audio replay
+floor when it is below transport. The agent state/progress pair and transport
+counters must come from the same validated checkpoint; mismatched consumed SSRC
+or progress ahead of transport is rejected. A never-consumed stream has no audio
+floor, including index zero. Synchronous built-in/legacy Echo and video keep
+the transport floor.
+
+The resumed SRTP receive context uses the same consumed floor. With no consumed
+progress, it starts just before the first selected replay index, or unprimed at
+index zero. Cold-relay range indexes are aligned to the authenticated transport
+checkpoint's ROC before notifying the worker, including never-consumed audio.
+Replay protection stays enabled; queues larger than its 64-packet
+window and caller ROC wraps are tested. Persisted transport high water marks
+and outbound reservation/margins stay intact. Memory and Redis HTTP takeover
+tests recover inputs queued at the source checkpoint and consume each once on
+the target, with zero decrypt failures and target queue drops. Buffer capacity,
+agent queue overflow/deadlines and the cross-tenure floor limitation assigned
+to #35 still apply. No durable or universal no-loss application claim is made.
+Applications must tolerate replay after a checkpoint and make external side
+effects idempotent themselves.
 
 Transport snapshots now use version 7, so old workers cannot silently resume a
 custom application's snapshot as echo. Version-six snapshots with no agent

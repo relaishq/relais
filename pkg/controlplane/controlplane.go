@@ -48,12 +48,25 @@ type Worker interface {
 	ResumeSession(state []byte, opts mediaworker.ResumeOptions) (string, error)
 }
 
+// ReplayRecoveryWorker can request fresh video after a lossy relay replay.
+// Targets without this capability retain ordinary frame-cache/PLI recovery.
+type ReplayRecoveryWorker interface {
+	RequestKeyframe(context.Context, string) error
+}
+
 // Relay is the trusted routing boundary, satisfied by *relay.Relay.
 type Relay interface {
 	HoldSession(ctx context.Context, sessionID string, from netip.AddrPort) error
 	MoveSession(sessionID string, from, to netip.AddrPort) error
 	ReleaseSession(sessionID string, to netip.AddrPort) (int, error)
 	ForgetSession(sessionID string)
+}
+
+// ReplayRelay is the optional phase-2 caller-media cache capability. Both
+// *relay.Relay and RemoteRelay implement it; phase-1/fake relays remain valid.
+type ReplayRelay interface {
+	BeginReplay(context.Context, string, netip.AddrPort, map[uint32]uint64) (relay.ReplayPlan, error)
+	ReplaySession(context.Context, string, netip.AddrPort) (relay.ReplayResult, error)
 }
 
 type registration struct {
