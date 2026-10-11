@@ -30,6 +30,7 @@ build: ensure_bin_dir ## Build plugin runners, relay, worker, control, crash-run
 	$(GOBUILD) -o $(BIN_DIR)/relais-worker $(LDFLAGS) ./cmd/relais-worker
 	$(GOBUILD) -o $(BIN_DIR)/relais-control $(LDFLAGS) ./cmd/relais-control
 	$(GOBUILD) -o $(BIN_DIR)/crash-run $(LDFLAGS) ./cmd/crash-run
+	$(GOBUILD) -o $(BIN_DIR)/relais-load $(LDFLAGS) ./cmd/relais-load
 	$(GOBUILD) -o $(BIN_DIR)/relais-demo $(LDFLAGS) ./cmd/relais-demo
 
 DEMO_CLUSTER_FLAGS ?=

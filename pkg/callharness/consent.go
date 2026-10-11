@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/ice/v4"
@@ -72,8 +73,10 @@ func (s *callerSocket) close() error {
 // the caller's consent checks. It does not embed the socket, so the mux uses
 // its ReadFrom and WriteTo.
 type stunObserver struct {
-	conn net.PacketConn
-	rec  *recorder
+	conn                         net.PacketConn
+	sendTiming                   func(string, time.Time, time.Time)
+	audioSchedule, videoSchedule atomic.Pointer[time.Time]
+	rec                          *recorder
 
 	mu          sync.Mutex
 	unanswered  map[[stunTransactionSize]byte]struct{}
@@ -90,6 +93,7 @@ func (o *stunObserver) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if !isRequest {
 		n, err := o.conn.WriteTo(p, addr)
 		if err == nil {
+			o.observeMediaSend(p[:n], time.Now())
 			o.mu.Lock()
 			if o.inspectSend != nil {
 				o.inspectSend(p[:n])
