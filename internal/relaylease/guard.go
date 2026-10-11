@@ -1,0 +1,181 @@
+// Package relaylease owns same-host relay acquisition and process fencing.
+package relaylease
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/relais/internal/processidentity"
+	"github.com/relais/pkg/sessionstore"
+)
+
+const (
+	DefaultTTL   = 600 * time.Millisecond
+	DefaultRenew = 200 * time.Millisecond
+	DefaultPoll  = 100 * time.Millisecond
+)
+
+type Config struct {
+	Store            sessionstore.RelayLeases
+	Key              string
+	Process          sessionstore.RelayProcess
+	TTL, Renew, Poll time.Duration
+	// Fence is injectable for deterministic safety tests. Nil uses kernel identity.
+	Fence func(context.Context, processidentity.Identity) error
+}
+type Timing struct {
+	ClaimAt         time.Time     `json:"claim_at"`
+	Wait            time.Duration `json:"wait_ns"`
+	Fence           time.Duration `json:"fence_ns"`
+	Activate        time.Duration `json:"activate_ns"`
+	FencingFailures uint64        `json:"fencing_failures"`
+	StoreFailures   uint64        `json:"store_failures"`
+}
+type Guard struct {
+	ctx          context.Context
+	cancel       context.CancelFunc
+	done         chan struct{}
+	valid        atomic.Bool
+	mu           sync.Mutex
+	onLost       func()
+	lostHookOnce sync.Once
+	lease        sessionstore.RelayLease
+	timing       Timing
+	err          error
+}
+
+func (g *Guard) Context() context.Context       { return g.ctx }
+func (g *Guard) Allowed() bool                  { return g.valid.Load() && g.ctx.Err() == nil }
+func (g *Guard) Lease() sessionstore.RelayLease { return g.lease }
+func (g *Guard) Timing() Timing                 { return g.timing }
+func (g *Guard) Err() error                     { g.mu.Lock(); defer g.mu.Unlock(); return g.err }
+func (g *Guard) Close()                         { g.cancel(); <-g.done }
+
+// OnLost installs the immediate packet-stop hook, including a loss that raced
+// relay construction. It must not wait for the relay's background goroutines.
+func (g *Guard) OnLost(fn func()) {
+	g.mu.Lock()
+	g.onLost = fn
+	lost := g.err != nil
+	g.mu.Unlock()
+	if lost {
+		g.lostHookOnce.Do(fn)
+	}
+}
+func (g *Guard) lose(err error) {
+	g.valid.Store(false)
+	g.mu.Lock()
+	g.err = err
+	fn := g.onLost
+	g.mu.Unlock()
+	if fn != nil {
+		g.lostHookOnce.Do(fn)
+	}
+	g.cancel()
+}
+
+// Acquire binds nothing. Even an uncertain claim is not permission to signal
+// or bind. The next claim can settle the same holder idempotently in the store.
+func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
+	if cfg.TTL == 0 {
+		cfg.TTL = DefaultTTL
+	}
+	if cfg.Renew == 0 {
+		cfg.Renew = DefaultRenew
+	}
+	if cfg.Poll == 0 {
+		cfg.Poll = DefaultPoll
+	}
+	if cfg.Store == nil || cfg.Key == "" || cfg.Process.Owner == "" || cfg.Process.PID <= 1 || cfg.Process.Start == "" || cfg.TTL < time.Millisecond || cfg.Renew <= 0 || cfg.Renew >= cfg.TTL || cfg.Poll <= 0 {
+		return nil, errors.New("relay lease needs a store, key and 0 < renewal < TTL, poll > 0")
+	}
+	if cfg.Fence == nil {
+		cfg.Fence = processidentity.Fence
+	}
+	started := time.Now()
+	var l sessionstore.RelayLease
+	var err error
+	var failures uint64
+	tick := time.NewTicker(cfg.Poll)
+	defer tick.Stop()
+	for {
+		op, cancel := context.WithTimeout(ctx, cfg.Poll)
+		l, err = cfg.Store.ClaimRelay(op, cfg.Key, cfg.Process, cfg.TTL)
+		cancel()
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, sessionstore.ErrLeaseHeld) {
+			failures++
+			log.Printf("relay lease claim unavailable; no takeover: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-tick.C:
+		}
+	}
+	owned, cancel := context.WithCancel(ctx)
+	g := &Guard{ctx: owned, cancel: cancel, done: make(chan struct{}), lease: l, timing: Timing{ClaimAt: time.Now(), Wait: time.Since(started), StoreFailures: failures}}
+	g.valid.Store(true)
+	go g.renew(cfg)
+	fail := func(err error) (*Guard, error) { g.Close(); return nil, err }
+	fenceAt := time.Now()
+	seen := make(map[sessionstore.RelayProcess]bool)
+	for _, p := range []sessionstore.RelayProcess{l.PreviousHolder, l.Forwarder} {
+		if p.PID == 0 || p == cfg.Process || seen[p] {
+			continue
+		}
+		seen[p] = true
+		op, stop := context.WithTimeout(owned, cfg.TTL)
+		err = cfg.Fence(op, processidentity.Identity{PID: p.PID, Start: p.Start})
+		stop()
+		if err != nil {
+			g.timing.FencingFailures++
+			log.Printf("relay fencing_failed pid=%d fencing_failures=%d; refusing bind: %v", p.PID, g.timing.FencingFailures, err)
+			return fail(fmt.Errorf("fence relay pid %d: %w", p.PID, err))
+		}
+	}
+	g.timing.Fence = time.Since(fenceAt)
+	activateAt := time.Now()
+	op, stop := context.WithTimeout(owned, cfg.Renew)
+	_, err = cfg.Store.ActivateRelay(op, l)
+	stop()
+	if err != nil {
+		return fail(fmt.Errorf("relay activation not confirmed; refusing bind: %w", err))
+	}
+	if !g.Allowed() {
+		return fail(sessionstore.ErrLeaseLost)
+	}
+	g.timing.Activate = time.Since(activateAt)
+	return g, nil
+}
+func (g *Guard) renew(cfg Config) {
+	defer close(g.done)
+	tick := time.NewTicker(cfg.Renew)
+	defer tick.Stop()
+	for {
+		select {
+		case <-g.ctx.Done():
+			return
+		case <-tick.C:
+		}
+		op, stop := context.WithTimeout(g.ctx, cfg.Renew)
+		_, err := cfg.Store.RenewRelay(op, g.lease, cfg.TTL)
+		stop()
+		if errors.Is(err, sessionstore.ErrLeaseLost) {
+			g.lose(err)
+			return
+		}
+		if err != nil && g.ctx.Err() == nil {
+			// No expiry-based self-fence: during an outage only this process can
+			// forward. Once Redis returns, the CAS observes any successor.
+			log.Printf("relay lease renewal unavailable; retaining forwarding: %v", err)
+		}
+	}
+}
