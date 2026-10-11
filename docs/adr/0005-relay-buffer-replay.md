@@ -33,8 +33,11 @@ the relay. Capacity overflow evicts oldest packets and increments `BufferDrops`;
 normal time expiry increments `BufferExpired`. Oversized packets are counted
 and discarded. `BufferUntracked` counts SSRC/session metadata admission limits.
 No expiry resets a live session's rollover counter. Forget/route cleanup removes
-metadata; a relay restart discards the cache. Empty or incomplete caches retain
-the worker's ordinary frame-cache/PLI path. This cache is not durable storage.
+metadata; a relay restart discards the cache. Empty caches retain the worker's
+ordinary frame-cache/PLI path. An incomplete
+ring with selected caller media prefers input replay, followed by a keyframe
+request, so cached-picture replay cannot discard retained outage video. This
+cache is not durable storage.
 
 Byte accounting includes ciphertext, relay-header room, and 256 bytes per
 packet for packet/list/queue and allocator overhead. A local GC measurement of
@@ -189,7 +192,9 @@ Replay refuses a gate whose
 checkpoint has not been supplied. A trimmed index above
 the checkpoint, unavailable ring, metadata limit, or hold overflow marks the
 plan incomplete. A complete plan tells resume to skip old frame-cache pictures
-and proactive PLI, preserving the caller's codec chain. This optimization is
+and proactive PLI, preserving the caller's codec chain. An incomplete plan with
+selected media also skips cached pictures and resume PLI, then requests a
+keyframe after drain to repair any missing reference. This optimization is
 used only with a worker that can receive a recovery keyframe request. The
 existing outbound margin/budget and frame-cache floor remain in force.
 
@@ -208,8 +213,12 @@ requests are admitted again to preserve authenticated consent evidence.
 Both operations are available through private HTTP:
 `POST /sessions/{id}/begin-replay` takes source and nullable inbound indexes;
 `POST /sessions/{id}/replay` takes the resumed target. Worker resume carries the
-complete-plan flag through its existing private API. Neither relay endpoint
-receives media keys. The bounded hold timeout ends an abandoned replay gate by
+`RelayReplay` complete-plan flag and the separate `RelayInputReplay` flag
+through its existing private API (`relay_replay` and `relay_input_replay`).
+The latter means selected caller media is pending, without promising codec
+continuity. No selected media leaves it false. Both flags preserve the existing
+outbound sequence margins and cached-picture index reservations. Neither relay
+endpoint receives media keys. The bounded hold timeout ends an abandoned replay gate by
 discarding queued ciphertext; it cannot identify an adopted live recipient
 safely. Normal planned-move timeout behavior is unchanged. Every terminal
 takeover loss forgets the session: this atomically discards the gate, held packets
@@ -218,11 +227,18 @@ and ring before any legacy release can flush input to a failed target.
 including loss after resume. Expiry or any send/drop failure clears completion.
 Context cancellation keeps the queued packets and completeness intact; retrying
 the same lossless hold still tells resume to skip frame-cache/PLI recovery.
-When resume was told the plan was complete but replay later loses packets or
-its hold vanishes (including restart), the plane calls
-`POST /sessions/{id}/keyframe` on the worker. This uses its existing encrypted, rate-bounded PLI path. A plan already known to be incomplete
-uses the worker's ordinary resume recovery and receives no second control-plane
-keyframe request. Unknown video SSRCs keep the request pending until video
+When resume deferred recovery for selected input and the drain is incomplete,
+or a complete plan later loses packets or its hold vanishes (including restart),
+the plane calls
+`POST /sessions/{id}/keyframe` on the worker. This uses its existing encrypted,
+rate-bounded PLI path. An incomplete plan with no selected media uses the
+worker's ordinary resume
+recovery and receives no second control-plane keyframe request. Overflow or
+expiry can leave a partial ring; any retained media is delivered before PLI.
+When nothing remains, or buffering is off or the relay restarts before preparing
+input, normal frame-cache/PLI recovery applies. On a badly incomplete ring,
+the first fresh picture may wait for PLI instead of showing an old cached
+picture. Unknown video SSRCs keep the request pending until video
 arrives. An uncertain recovery request keeps takeover retryable. The in-process expiry test on both stores observes a worker PLI and
 no receiver PLI, with zero decryption failures. Full real-process restarts,
 failed adoption, a second immediate crash and frame-cache coexistence remain
