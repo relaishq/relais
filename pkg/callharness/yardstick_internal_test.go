@@ -179,7 +179,6 @@ func TestEventMeasurementInconclusive(t *testing.T) {
 			}
 		}, "baseline p95-minus-median exceeds 20ms"},
 		{"short settle", func(r *recorder) { r.hungUpAt = 2300 * time.Millisecond }, "settle window truncated"},
-		{"wrap", func(r *recorder) { r.sentVideo.Frames = 32769 }, "PictureID wrapped"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			r := testMeasurementRecorder(t)
@@ -250,18 +249,19 @@ func TestReorderedDuplicatedContentHasNoFalseLoss(t *testing.T) {
 	deliverAudio := func(i int, arrived time.Duration) {
 		r.packet(audio, &rtp.Packet{Header: rtp.Header{SequenceNumber: uint16(i)}, Payload: audioPayloads[i]}, r.start.Add(arrived))
 	}
+	recordFrames := func(completed []*vp8Frame, decodedAt time.Duration) {
+		for _, frame := range completed {
+			size, decodeErr := decodeKeyframe(frame.data)
+			require.NoError(t, decodeErr)
+			r.videoFrame(video, frame, size, decodeErr, r.start.Add(decodedAt+100*time.Microsecond))
+		}
+	}
 	deliverVideo := func(i, j int, arrived time.Duration, decode bool) {
 		packet := &rtp.Packet{Header: rtp.Header{Timestamp: uint32(i * 3000), SequenceNumber: uint16(65534 + i*len(frames[i]) + j), Marker: j == len(frames[i])-1}, Payload: frames[i][j]}
 		r.packet(video, packet, r.start.Add(arrived))
 		if decode {
-			frame, _ := assembler.push(packet)
-			if frame != nil {
-				frame.firstArrival = r.start.Add(arrived)
-				frame.completedAt = r.start.Add(arrived)
-				size, decodeErr := decodeKeyframe(frame.data)
-				require.NoError(t, decodeErr)
-				r.videoFrame(video, frame, size, decodeErr, r.start.Add(arrived+100*time.Microsecond))
-			}
+			completed, _ := assembler.pushAll(packet, r.start.Add(arrived))
+			recordFrames(completed, arrived)
 		}
 	}
 	// Ten real received units establish the baseline. Three decoded, fresh
@@ -289,6 +289,10 @@ func TestReorderedDuplicatedContentHasNoFalseLoss(t *testing.T) {
 	for i := 12; i < 15; i++ {
 		deliverOrdered(i)
 	}
+	// The decoder deliberately did not receive frames 10/11. Expire its forward
+	// source gap on the same caller clock as the live reader's deadline drain.
+	completed, _ := assembler.pushAll(nil, r.start.Add(2300*time.Millisecond))
+	recordFrames(completed, 2300*time.Millisecond)
 	r.hungUpAt = 3 * time.Second
 	m := r.eventMeasurement(MoveReport{Kind: "takeover", Start: 1600 * time.Millisecond, End: 1900 * time.Millisecond, Recovery: VideoRecovery{MediaResumedAt: 2 * time.Second}}, r.hungUpAt, 0)
 	require.False(t, m.Inconclusive, m.Reasons)

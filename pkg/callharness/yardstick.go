@@ -35,7 +35,8 @@ type MetricVerdict struct {
 // decoded recovery. All times use the caller clock, not RTP timestamps.
 // Pause retains the existing per-kind MoveTrackReport.Gap.
 // Loss counts successful sends in [Start-250ms, max(End,MediaResumedAt)+250ms).
-// Lost means no valid complete return by ObservedUntil (call hangup). Returns
+// Lost means no valid complete return by ObservedUntil: hangup, or the saved
+// summary horizon for an event whose bounded history expired. Returns
 // after SettledAt are late, separately from loss. Hangup before SettledAt makes
 // loss unknown. Duplicate/reordered returns count once. Nearby event windows
 // can overlap; never sum their losses. Video loss does not depend on decoding.
@@ -51,6 +52,7 @@ type MetricVerdict struct {
 // one metric is unknown. Failed means at least one trusted metric failed.
 // Missing resume/decoded content/recovery are failures, not uncertainty.
 type EventMeasurement struct {
+	FirstContentIdentity, FirstNewContentIdentity                 uint64
 	VideoExpected                                                 bool
 	AudioPause, VideoPause                                        time.Duration
 	WindowStart, WindowEnd, SettledAt, ObservedUntil              time.Duration
@@ -67,6 +69,7 @@ type EventMeasurement struct {
 	FirstContentSentAt, FirstNewContentSentAt                     time.Duration
 	FirstContentVerdict, FirstNewContentVerdict, FirstLiveVerdict MetricVerdict
 	DecodedFrames                                                 int
+	DecodedSamples                                                int
 	Inconclusive, Failed                                          bool
 	Reasons                                                       []string
 }
@@ -151,6 +154,8 @@ func (s contentPacketSpan) contains(seq uint16) bool {
 }
 
 type contentAssembly struct {
+	bytes        int
+	lastAt       time.Duration
 	parts        map[uint16][]byte
 	starts, ends map[uint16]bool
 	completed    []contentPacketSpan
@@ -193,6 +198,7 @@ func (a *contentAssembly) finish(span contentPacketSpan) {
 	a.completed = append(a.completed, span)
 	for seq := range a.parts {
 		if span.contains(seq) {
+			a.bytes -= len(a.parts[seq])
 			delete(a.parts, seq)
 		}
 	}
@@ -214,8 +220,8 @@ func (a *contentAssembly) finish(span contentPacketSpan) {
 // returnedVideo measures completeness separately from the arrival-order decoder
 // used by phase 1. It accepts reordered fragments and exact duplicates, and
 // checks the reassembled payload against the send identified by PictureID.
-// Assemblies retain at most received packet state, proportional to the existing
-// recorder. Wrap-safe and bounded long-run recording belongs to #33.
+// Assemblies expire after one second and have fixed count/fragment limits.
+// The epoch trailer makes (PictureID, payload) unique across source wraps.
 func (r *recorder) returnedVideo(track *trackRecord, pkt *rtp.Packet, at time.Duration) {
 	var desc codecs.VP8Packet
 	payload, err := desc.Unmarshal(pkt.Payload)
@@ -231,9 +237,21 @@ func (r *recorder) returnedVideo(track *trackRecord, pkt *rtp.Packet, at time.Du
 	key := videoAssemblyKey{track: track, pictureID: desc.PictureID, timestamp: pkt.Timestamp}
 	a := r.contentAssemblies[key]
 	if a == nil {
+		if len(r.contentAssemblies) >= 4*maxAssemblyFrames {
+			var oldest videoAssemblyKey
+			oldestAt := at
+			for key, candidate := range r.contentAssemblies {
+				if candidate.lastAt <= oldestAt {
+					oldest, oldestAt = key, candidate.lastAt
+				}
+			}
+			delete(r.contentAssemblies, oldest)
+			r.historyStart = max(r.historyStart, oldestAt)
+		}
 		a = &contentAssembly{parts: make(map[uint16][]byte), starts: make(map[uint16]bool), ends: make(map[uint16]bool)}
 		r.contentAssemblies[key] = a
 	}
+	a.lastAt = at
 	for _, span := range a.completed {
 		if span.contains(pkt.SequenceNumber) {
 			return
@@ -249,7 +267,13 @@ func (r *recorder) returnedVideo(track *trackRecord, pkt *rtp.Packet, at time.Du
 		}
 		return
 	}
+	if len(a.parts) >= maxAssemblyPackets || len(a.completed) >= maxAssemblyPackets || a.bytes+len(payload) > maxAssemblyBytes {
+		delete(r.contentAssemblies, key)
+		r.contentIdentityErrors++
+		return
+	}
 	a.parts[pkt.SequenceNumber] = bytes.Clone(payload)
+	a.bytes += len(payload)
 	if desc.S == 1 && desc.PID == 0 {
 		a.starts[pkt.SequenceNumber] = true
 	}
@@ -265,8 +289,8 @@ func (r *recorder) returnedVideo(track *trackRecord, pkt *rtp.Packet, at time.Du
 		r.sentVideoFrames[desc.PictureID] = source
 	} else {
 		unit := source.unit()
-		unit.returnedAt, unit.identity, unit.replayed = at, fmt.Sprint(desc.PictureID), true
-		r.repeatedVideoReturns = append(r.repeatedVideoReturns, unit)
+		unit.returnedAt, unit.identity, unit.replayed = at, fmt.Sprint(source.identity, ":", desc.PictureID), true
+		r.repeatedVideoReturns = r.appendRepeat(r.repeatedVideoReturns, unit)
 	}
 	a.finish(span)
 }
@@ -303,9 +327,7 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 	if r.contentIdentityErrors > 0 {
 		m.VideoLoss.untrust("conflicting video content identities")
 	}
-	if r.sentVideo.Frames > 32768 {
-		m.VideoLoss.untrust("video PictureID wrapped; attribution requires #33")
-	}
+
 	var audio, video []contentUnit
 	for identity, unit := range r.sentAudioUnits {
 		if !unit.written {
@@ -324,7 +346,7 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 			continue
 		}
 		unit := source.unit()
-		unit.identity = fmt.Sprint(identity)
+		unit.identity = fmt.Sprint(source.identity, ":", identity)
 		video = append(video, unit)
 		if missingInWindow(unit, m) {
 			m.LostVideoFrames++
@@ -351,11 +373,23 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 	m.Audio = measureFreshness(audio, move.Start, m.MediaResumedAt, limit, baselineFloor, r.freshnessPolicy)
 	if m.VideoExpected {
 		m.Video = measureFreshness(video, move.Start, m.MediaResumedAt, limit, baselineFloor, r.freshnessPolicy)
-		if r.contentIdentityErrors > 0 || r.sentVideo.Frames > 32768 {
+		if r.contentIdentityErrors > 0 {
 			m.Video.Verdict.untrust("video identity attribution unavailable")
 		}
 	} else {
 		m.Video.Verdict.Trusted = true
+	}
+	for _, track := range r.tracks {
+		freshness := &m.Audio
+		if track.kind == kindVideo {
+			freshness = &m.Video
+		}
+		for _, at := range track.unmatchedTimes {
+			if at >= freshness.BaselineStart && at <= freshness.EvaluationEnd {
+				freshness.Verdict.untrust("returned content identity unavailable in freshness window")
+				break
+			}
+		}
 	}
 	m.ResumeVerdict = MetricVerdict{Trusted: true, Failed: m.MediaResumedAt == 0}
 	if m.ResumeVerdict.Failed {
@@ -363,7 +397,7 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 	}
 	m.FirstContentVerdict, m.FirstNewContentVerdict, m.FirstLiveVerdict = MetricVerdict{Trusted: true}, MetricVerdict{Trusted: true}, MetricVerdict{Trusted: true}
 	if m.VideoExpected {
-		seenDecoded := map[uint16]bool{}
+		seenDecoded := map[time.Duration]bool{}
 		var frames []frameMark
 		for _, track := range r.tracks {
 			if track.video != nil {
@@ -372,24 +406,39 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 		}
 		slices.SortFunc(frames, func(a, b frameMark) int { return cmp.Compare(a.at, b.at) })
 		for _, frame := range frames {
-			if m.MediaResumedAt == 0 || !frame.decodable || frame.at < m.MediaResumedAt || frame.at >= limit || frame.source.at == 0 {
+			if m.MediaResumedAt == 0 || !frame.decodable || frame.at < m.MediaResumedAt || frame.at >= limit {
 				continue
 			}
-			if !seenDecoded[frame.pictureID] {
+			if frame.source.at == 0 {
+				if m.FirstContent == "" {
+					m.FirstContent = "unknown"
+					m.FirstContentVerdict.untrust("first decoded content identity unavailable")
+				}
+				if m.FirstNewContent == "" {
+					m.FirstNewContentVerdict.untrust("decoded content identity unavailable before first new content")
+				}
+				if m.FirstLiveFrame == 0 {
+					m.FirstLiveVerdict.untrust("decoded content identity unavailable before first live content")
+				}
+				continue
+			}
+			if !seenDecoded[frame.source.at] {
 				m.DecodedFrames++
-				seenDecoded[frame.pictureID] = true
+				seenDecoded[frame.source.at] = true
 			}
 			prior := frame.source.returnedAt >= frame.source.at && frame.source.returnedAt > 0 && frame.source.returnedAt < move.Start
 			class := classifyContent(frame, move.Start, m.WindowStart, m.MediaResumedAt, m.Video)
 			if m.FirstContent == "" {
 				m.FirstContent = class
 				m.FirstContentPictureID = frame.pictureID
+				m.FirstContentIdentity = frame.source.identity
 				m.FirstContentSentAt = frame.source.at
 			}
 			if !prior && m.FirstNewContent == "" {
 				m.FirstNewContent = class
 				m.FirstNewFrame = frame.at - move.Start
 				m.FirstNewContentPictureID = frame.pictureID
+				m.FirstNewContentIdentity = frame.source.identity
 				m.FirstNewContentSentAt = frame.source.at
 			}
 			if frame.source.at >= m.MediaResumedAt && m.FirstLiveFrame == 0 {
@@ -405,7 +454,7 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 		if m.FirstLiveFrame == 0 {
 			m.FirstLiveVerdict.fail("no decoded frame sent after media resumed before limit")
 		}
-		if r.contentIdentityErrors > 0 || r.sentVideo.Frames > 32768 {
+		if r.contentIdentityErrors > 0 {
 			for _, reason := range []string{"video identity attribution unavailable"} {
 				m.FirstContentVerdict.untrust(reason)
 				m.FirstNewContentVerdict.untrust(reason)
@@ -420,6 +469,23 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 			}
 			if m.FirstNewContent == "live" || m.FirstNewContent == "outage media" {
 				m.FirstNewContentVerdict.untrust("video baseline cannot distinguish live from outage media")
+			}
+		}
+	}
+	if max(0, move.Start-baselineWindow) < r.historyStart {
+		for _, verdict := range []*MetricVerdict{&m.AudioLoss, &m.VideoLoss, &m.Audio.Verdict, &m.Video.Verdict, &m.ResumeVerdict, &m.FirstContentVerdict, &m.FirstNewContentVerdict, &m.FirstLiveVerdict} {
+			verdict.untrust("event history expired before observation")
+		}
+	}
+	if m.VideoExpected && r.recording.DecodeEvery > 0 {
+		m.DecodedSamples = r.eventDecodedSamples(move.Start, limit)
+		if m.DecodedSamples < minimumDecodedSamples || r.eventInvalidSamples(move.Start, limit) {
+			for _, verdict := range []*MetricVerdict{&m.FirstContentVerdict, &m.FirstNewContentVerdict, &m.FirstLiveVerdict} {
+				if m.DecodedSamples < minimumDecodedSamples {
+					verdict.untrust("too few online decoded samples")
+				} else {
+					verdict.untrust("online decode samples failed or were dropped")
+				}
 			}
 		}
 	}

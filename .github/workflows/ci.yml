@@ -140,6 +140,11 @@ jobs:
       - name: Run full call harness (race detector, both stores)
         if: github.event_name != 'pull_request'
         run: make test-harness
+      - name: Run shortened long-call recording check
+        if: github.event_name != 'pull_request'
+        env:
+          RELAIS_LONG_RUN_DURATION: "2m"
+        run: go test -v -count=1 -timeout 4m -run '^TestLongRunRecording$' ./pkg/callharness/
       - name: Run full relay timing gates (no race detector, both stores)
         if: github.event_name != 'pull_request'
         run: make test-harness-timing

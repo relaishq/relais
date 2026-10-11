@@ -8,6 +8,7 @@ import (
 	"errors"
 	"image"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -45,66 +46,147 @@ type vp8Frame struct {
 	completedAt  time.Time
 }
 
-// vp8Assembler reassembles the VP8 frames of one track from its RTP packets
-// in arrival order. It repairs nothing: the echo runs over loopback, so a
-// missing or reordered packet is a defect to report.
-type vp8Assembler struct {
-	building     bool
-	broken       bool // the frame lost its start or a packet
-	timestamp    uint32
-	firstSeq     uint16
-	lastSeq      uint16
-	buf          []byte
-	pictureID    uint16
+const (
+	frameReorderWindow = 100 * time.Millisecond
+	maxAssemblyFrames  = 64
+	maxAssemblyPackets = 512
+	maxAssemblyBytes   = 1 << 20
+)
+
+type assemblyID struct {
+	timestamp uint32
+	pictureID uint16
+}
+type pendingFrame struct {
+	id           assemblyID
 	firstArrival time.Time
+	earliest     uint16
+	assembly     contentAssembly
+	ready        *vp8Frame
+	bytes        int
+}
+type completedFrame struct {
+	id   assemblyID
+	span contentPacketSpan
 }
 
-// push adds the next packet. It returns the frame the packet completes, if
-// any, and how many frames turned out incomplete.
-func (a *vp8Assembler) push(pkt *rtp.Packet) (frame *vp8Frame, incomplete int) {
-	if len(pkt.Payload) == 0 {
-		return nil, 0 // padding only: no frame data
-	}
+// vp8Assembler retains at most 64 frames, 512 fragments per frame and 1 MiB
+// per frame. Known earlier frames hold later frames for at most 100 ms.
+// Fragment order and exact duplicates never create a frame gap. A missing
+// fragment expires once; later frames then break the source decode chain.
+type vp8Assembler struct {
+	pending   []*pendingFrame
+	completed []completedFrame
+	last      completedFrame
+	haveLast  bool
+}
 
-	var desc codecs.VP8Packet
-	payload, err := desc.Unmarshal(pkt.Payload)
+// push is retained for single-frame fixtures; the live reader drains pushAll.
+func (a *vp8Assembler) push(pkt *rtp.Packet) (*vp8Frame, int) {
+	frames, n := a.pushAll(pkt, time.Now())
+	if len(frames) == 0 {
+		return nil, n
+	}
+	return frames[0], n
+}
 
-	if a.building && pkt.Timestamp != a.timestamp {
-		// A new frame started before the last one saw its marker bit.
-		incomplete++
-		a.building = false
+func (a *vp8Assembler) pushAll(pkt *rtp.Packet, now time.Time) (frames []*vp8Frame, incomplete int) {
+	if pkt != nil && len(pkt.Payload) > 0 {
+		var desc codecs.VP8Packet
+		payload, err := desc.Unmarshal(pkt.Payload)
+		if err == nil {
+			id := assemblyID{pkt.Timestamp, desc.PictureID}
+			duplicate := false
+			for _, done := range a.completed {
+				if done.id == id && done.span.contains(pkt.SequenceNumber) {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				var f *pendingFrame
+				for _, candidate := range a.pending {
+					if candidate.id == id {
+						f = candidate
+						break
+					}
+				}
+				if f == nil {
+					f = &pendingFrame{id: id, firstArrival: now, earliest: pkt.SequenceNumber, assembly: contentAssembly{parts: map[uint16][]byte{}, starts: map[uint16]bool{}, ends: map[uint16]bool{}}}
+					a.pending = append(a.pending, f)
+				}
+				if _, exists := f.assembly.parts[pkt.SequenceNumber]; !exists && f.ready == nil {
+					if int16(pkt.SequenceNumber-f.earliest) < 0 {
+						f.earliest = pkt.SequenceNumber
+					}
+					f.assembly.parts[pkt.SequenceNumber] = bytes.Clone(payload)
+					f.bytes += len(payload)
+					if desc.S == 1 && desc.PID == 0 {
+						f.assembly.starts[pkt.SequenceNumber] = true
+					}
+					if pkt.Marker {
+						f.assembly.ends[pkt.SequenceNumber] = true
+					}
+					if len(f.assembly.parts) > maxAssemblyPackets || f.bytes > maxAssemblyBytes {
+						f.firstArrival = now.Add(-frameReorderWindow)
+					} else {
+						for first := range f.assembly.starts {
+							for last := range f.assembly.ends {
+								count := int(uint16(last-first)) + 1
+								if count > len(f.assembly.parts) || count > maxAssemblyPackets {
+									continue
+								}
+								var data []byte
+								for i := 0; i < count; i++ {
+									part, ok := f.assembly.parts[first+uint16(i)]
+									if !ok {
+										data = nil
+										break
+									}
+									data = append(data, part...)
+								}
+								if len(data) > 0 {
+									f.ready = &vp8Frame{data: data, timestamp: id.timestamp, firstSeq: first, lastSeq: last, keyframe: isVP8Keyframe(data), pictureID: id.pictureID, firstArrival: f.firstArrival, completedAt: now}
+									break
+								}
+							}
+							if f.ready != nil {
+								break
+							}
+						}
+					}
+				}
+			}
+		}
 	}
-	if !a.building {
-		a.building = true
-		a.broken = err != nil || desc.S != 1 || desc.PID != 0
-		a.timestamp = pkt.Timestamp
-		a.firstSeq = pkt.SequenceNumber
-		a.pictureID = desc.PictureID
-		a.firstArrival = time.Now()
-		a.buf = a.buf[:0]
-	} else if err != nil || pkt.SequenceNumber != a.lastSeq+1 {
-		a.broken = true
+	slices.SortStableFunc(a.pending, func(x, y *pendingFrame) int { return int(int16(x.earliest - y.earliest)) })
+	for len(a.pending) > 0 {
+		f := a.pending[0]
+		if f.ready != nil {
+			// A whole later frame can arrive before any fragment of its predecessor.
+			// Wait only for a small forward source+packet gap; replay and takeover
+			// margins must not acquire an artificial playout delay.
+			sourceStep := (f.id.pictureID - a.last.id.pictureID) & 0x7fff
+			packetStep := uint16(f.ready.firstSeq - a.last.span.last)
+			timestampStep := uint32(f.id.timestamp - a.last.id.timestamp)
+			if a.haveLast && sourceStep > 1 && sourceStep < 1<<14 && packetStep > 1 && packetStep <= maxAssemblyPackets && timestampStep > 0 && timestampStep <= uint32(frameReorderWindow*vp8ClockRate/time.Second) && now.Sub(f.firstArrival) < frameReorderWindow {
+				break
+			}
+			a.last = completedFrame{f.id, contentPacketSpan{f.ready.firstSeq, f.ready.lastSeq}}
+			a.haveLast = true
+			frames = append(frames, f.ready)
+			a.completed = append(a.completed, completedFrame{f.id, contentPacketSpan{f.ready.firstSeq, f.ready.lastSeq}})
+			if len(a.completed) > maxAssemblyPackets {
+				a.completed = slices.Clone(a.completed[len(a.completed)-maxAssemblyPackets:])
+			}
+		} else if now.Sub(f.firstArrival) >= frameReorderWindow || len(a.pending) > maxAssemblyFrames {
+			incomplete++
+		} else {
+			break
+		}
+		a.pending = slices.Delete(a.pending, 0, 1)
 	}
-	a.lastSeq = pkt.SequenceNumber
-	a.buf = append(a.buf, payload...)
-
-	if !pkt.Marker {
-		return nil, incomplete
-	}
-	a.building = false
-	if a.broken || len(a.buf) == 0 {
-		return nil, incomplete + 1
-	}
-	data := bytes.Clone(a.buf)
-
-	return &vp8Frame{
-		data:      data,
-		timestamp: a.timestamp,
-		firstSeq:  a.firstSeq,
-		lastSeq:   a.lastSeq,
-		keyframe:  isVP8Keyframe(data),
-		pictureID: a.pictureID, firstArrival: a.firstArrival, completedAt: time.Now(),
-	}, incomplete
+	return frames, incomplete
 }
 
 // decodeKeyframe decodes a VP8 keyframe in pure Go and returns its size.

@@ -33,6 +33,7 @@ const (
 type CallOptions struct {
 	// Freshness configures the caller's bounded recovery evaluation.
 	Freshness FreshnessPolicy
+	Recording RecordingOptions
 
 	// InitialSequenceNumbers replaces random RTP starts for wrap tests. Nil
 	// keeps Pion's random starts. Both tracks keep their normal packetizers.
@@ -112,8 +113,9 @@ type Call struct {
 	firSequence   uint8
 	readers       sync.WaitGroup
 
-	closeOnce sync.Once
-	closeErr  error
+	recordingCancel context.CancelFunc
+	closeOnce       sync.Once
+	closeErr        error
 }
 
 // Dial starts a call: it makes one WHIP-style offer/answer exchange with the
@@ -122,6 +124,11 @@ type Call struct {
 func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err error) {
 	rec := newRecorder()
 	rec.freshnessPolicy = opts.Freshness.defaults()
+	rec.recording = opts.Recording.defaults()
+	minimumHistory := rec.freshnessPolicy.RecoveryLimit + rec.freshnessPolicy.StabilityWindow + baselineWindow + 3*time.Second
+	if rec.recording.History < minimumHistory {
+		return nil, fmt.Errorf("callharness: recording history must be at least %s", minimumHistory)
+	}
 
 	socket, err := newCallerSocket(rec)
 	if err != nil {
@@ -215,6 +222,17 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 
 	select {
 	case <-connected:
+		maintenance, cancel := context.WithCancel(context.Background())
+		call.mu.Lock()
+		if call.closing {
+			call.mu.Unlock()
+			cancel()
+			return call, ErrHarnessClosed
+		}
+		call.recordingCancel = cancel
+		call.readers.Add(1)
+		call.mu.Unlock()
+		go func() { defer call.readers.Done(); call.maintainRecording(maintenance) }()
 		return call, nil
 	case state := <-failed:
 		return call, fmt.Errorf("callharness: connection %s before connecting", state)
@@ -306,34 +324,51 @@ func (c *Call) onTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 
 	c.startReader(func() {
 		var assembler *vp8Assembler
+		var sampler *onlineSampler
 		if kind == kindVideo {
 			assembler = &vp8Assembler{}
+			if c.rec.recording.DecodeEvery > 0 {
+				sampler = c.newOnlineSampler(record)
+				defer close(sampler.queue)
+			}
 		}
-		for {
-			pkt, _, err := track.ReadRTP()
-			if err != nil {
-				return
-			}
-			arrived := time.Now()
-			c.rec.packet(record, pkt, arrived)
-			if assembler == nil {
-				continue
-			}
-
-			frame, incomplete := assembler.push(pkt)
+		recordFrames := func(frames []*vp8Frame, incomplete int) {
 			if incomplete > 0 {
 				c.rec.videoIncomplete(record, incomplete)
 			}
-			if frame == nil {
-				continue
+			for _, frame := range frames {
+				var size image.Point
+				var decodeErr error
+				if frame.keyframe {
+					size, decodeErr = decodeKeyframe(frame.data)
+				}
+				c.rec.videoFrame(record, frame, size, decodeErr, time.Now())
+				if sampler != nil {
+					sampler.frame(frame, size, decodeErr)
+				}
 			}
-			frame.completedAt = arrived
-			var size image.Point
-			var decodeErr error
-			if frame.keyframe {
-				size, decodeErr = decodeKeyframe(frame.data)
+		}
+		for {
+			if assembler != nil {
+				_ = track.SetReadDeadline(time.Now().Add(frameReorderWindow))
 			}
-			c.rec.videoFrame(record, frame, size, decodeErr, time.Now())
+			pkt, _, err := track.ReadRTP()
+			arrived := time.Now()
+			if err != nil {
+				if assembler != nil {
+					frames, n := assembler.pushAll(nil, arrived)
+					recordFrames(frames, n)
+				}
+				if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+					continue
+				}
+				return
+			}
+			c.rec.packet(record, pkt, arrived)
+			if assembler != nil {
+				frames, n := assembler.pushAll(pkt, arrived)
+				recordFrames(frames, n)
+			}
 		}
 	})
 }
@@ -441,7 +476,7 @@ func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
 		if err != nil {
 			return err
 		}
-		c.rec.sendingVideo(frame, requestedAt, src.frameDuration) // records the observable PictureID before writing
+		frame = c.rec.sendingVideo(frame, requestedAt, src.frameDuration) // records the observable PictureID before writing
 		if err := c.video.WriteSample(media.Sample{Data: frame, Duration: src.frameDuration}); err != nil {
 			return fmt.Errorf("callharness: send video: %w", err)
 		}
@@ -517,7 +552,14 @@ func (c *Call) Hangup(ctx context.Context) (*Report, error) {
 	for i := range report.Tracks {
 		if video := report.Tracks[i].Video; video != nil {
 			frames, size := c.rec.decodeInput(i)
-			video.FullDecode = fullDecode(ctx, frames, size)
+			switch {
+			case c.rec.recording.DecodeEvery > 0:
+				video.FullDecode = FullDecode{Skipped: "online sampled decoding selected"}
+			case c.rec.tracks[i].video.decodeOverflow:
+				video.FullDecode = FullDecode{Skipped: "offline frame limit exceeded; select online sampled decoding"}
+			default:
+				video.FullDecode = fullDecode(ctx, frames, size)
+			}
 		}
 	}
 
@@ -533,6 +575,9 @@ func (c *Call) close() error {
 		c.closing = true
 		c.mu.Unlock()
 
+		if c.recordingCancel != nil {
+			c.recordingCancel()
+		}
 		err := c.pc.Close()
 		c.readers.Wait()
 		c.closeErr = errors.Join(err, c.socket.close())

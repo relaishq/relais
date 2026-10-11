@@ -202,7 +202,18 @@ type consentSample struct {
 func (r *recorder) move(record moveRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for _, existing := range r.moves {
+		if existing.start.Equal(record.start) && existing.end.Equal(record.end) && existing.kind == record.kind {
+			return
+		}
+	}
+	for _, existing := range r.savedMoves {
+		if existing.Start == r.since(record.start) && existing.End == r.since(record.end) && existing.Kind == record.kind {
+			return
+		}
+	}
 	r.moves = append(r.moves, record)
+	r.resetConsent(r.since(record.end))
 	// Automatic events are collected at hangup, after any later planned move
 	// was recorded. Keep the report and consent window in event order.
 	sort.SliceStable(r.moves, func(i, j int) bool { return r.moves[i].start.Before(r.moves[j].start) })
@@ -211,6 +222,7 @@ func (r *recorder) move(record moveRecord) {
 // MoveReport is one planned handover as the caller observed it, plus what
 // the system reported about it.
 type MoveReport struct {
+	resumedAfterEnd time.Duration
 	// Recovery measures video recovery from the caller's first post-margin RTP
 	// packet, including replay received while ResumeSession is still returning.
 	Recovery VideoRecovery
@@ -296,10 +308,10 @@ type ConsentReport struct {
 // moveReports describes every move from the caller's records. It runs under
 // r.mu.
 func (r *recorder) moveReports() []MoveReport {
-	reports := make([]MoveReport, 0, len(r.moves))
-	baselineFloor := time.Duration(0)
-	var firstAudio, firstVideo FreshnessReport
-	for _, move := range r.moves {
+	reports := append([]MoveReport(nil), r.savedMoves...)
+	baselineFloor := r.baselineFloor
+	firstAudio, firstVideo := r.firstAudio, r.firstVideo
+	for moveIndex, move := range r.moves {
 		report := MoveReport{
 			Kind:          move.kind,
 			DetectionTime: move.detection,
@@ -319,8 +331,8 @@ func (r *recorder) moveReports() []MoveReport {
 			report.Tracks = append(report.Tracks, track.aroundMove(report.Start, report.End))
 		}
 		limit := r.hungUpAt
-		if len(reports)+1 < len(r.moves) {
-			limit = r.since(r.moves[len(reports)+1].start)
+		if moveIndex+1 < len(r.moves) {
+			limit = r.since(r.moves[moveIndex+1].start)
 		}
 		if report.Kind == "takeover" {
 			report.Recovery = r.videoRecovery(report.Start, limit)
@@ -338,8 +350,17 @@ func (r *recorder) moveReports() []MoveReport {
 			pair.current.FirstBaselineMedian = pair.first.BaselineMedian
 			pair.current.FirstBaselineP95 = pair.first.BaselineP95
 			if pair.current == &report.Measurement.Audio || report.Measurement.VideoExpected {
+				previous := pair.current.Verdict
 				pair.current.updateVerdict()
-				if pair.current == &report.Measurement.Video && (r.contentIdentityErrors > 0 || r.sentVideo.Frames > 32768) {
+				if !previous.Trusted {
+					pair.current.Verdict.Trusted = false
+					for _, reason := range previous.Reasons {
+						if !slices.Contains(pair.current.Verdict.Reasons, reason) {
+							pair.current.Verdict.Reasons = append(pair.current.Verdict.Reasons, reason)
+						}
+					}
+				}
+				if pair.current == &report.Measurement.Video && (r.contentIdentityErrors > 0) {
 					pair.current.Verdict.untrust("video identity attribution unavailable")
 				}
 			}
@@ -362,6 +383,7 @@ func (r *recorder) moveReports() []MoveReport {
 				firstResumed = track.arrivals[i]
 			}
 		}
+		report.resumedAfterEnd = firstResumed
 		if firstResumed != 0 {
 			for _, at := range r.decryptFailureTimes {
 				if at >= firstResumed {
@@ -443,7 +465,13 @@ func medianTimestampStep(headers []rtpMark) uint32 {
 
 // consentReport summarizes the consent samples. It runs under r.mu.
 func (r *recorder) consentReport() ConsentReport {
-	report := ConsentReport{Since: r.connectedAt}
+	report := r.consentPrefix
+	if report.Since == 0 {
+		report.Since = r.connectedAt
+	}
+	if len(r.savedMoves) > 0 {
+		report.Since = r.savedMoves[len(r.savedMoves)-1].End
+	}
 	if n := len(r.moves); n > 0 {
 		report.Since = r.since(r.moves[n-1].end)
 	}
@@ -454,7 +482,10 @@ func (r *recorder) consentReport() ConsentReport {
 	}
 
 	var before uint64 // responses at the start of the window
-	lastResponse := report.Since
+	if len(r.consent) > 0 {
+		before = r.consentBaseResponses - report.ResponsesAfter
+	}
+	lastResponse := max(report.Since, r.consentLastResponse)
 	for _, sample := range r.consent {
 		if sample.at > end {
 			break

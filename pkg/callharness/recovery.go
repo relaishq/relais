@@ -1,10 +1,13 @@
 package callharness
 
-import "time"
+import (
+	"encoding/binary"
+	"time"
+)
 
 // VideoRecovery attributes a decoded frame using the VP8 PictureID and exact
 // encoded payload observed at the caller, never worker-internal replay flags.
-// A PictureID is unique over these bounded tests (less than 32768 frames).
+// Source identities include the send epoch; recent payload matching expires.
 type VideoRecovery struct {
 	// SourceVideoSkippedSequenceNumbers measures the old-live to new-live
 	// sequence gap excluding inserted replay packets. The first replay index
@@ -35,6 +38,7 @@ type VideoRecovery struct {
 }
 
 type sentVideoFrame struct {
+	identity    uint64
 	at          time.Duration
 	data        string
 	pli         bool
@@ -44,18 +48,25 @@ type sentVideoFrame struct {
 	returnedAt  time.Duration
 }
 
-func (r *recorder) sendingVideo(frame []byte, request *keyframeResponseRequest, interval time.Duration) {
-	r.sending(kindVideo, frame)
+func (r *recorder) sendingVideo(frame []byte, request *keyframeResponseRequest, interval time.Duration) []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	identity := uint64(r.sentVideo.Frames)
+	frame = identifyVP8(frame, identity)
+	data := string(frame)
+	r.sentFrames[kindVideo][data] = struct{}{}
+	if r.sentVideo.Frames == 0 {
+		r.firstVideoSentAt = r.since(time.Now())
+	}
 	id := uint16(r.sentVideo.Frames & 0x7fff)
-	r.sentVideoFrames[id] = sentVideoFrame{at: r.since(time.Now()), data: string(frame), pli: request != nil, duration: interval}
+	r.sentVideoFrames[id] = sentVideoFrame{identity: uint64(r.sentVideo.Frames), at: r.since(time.Now()), data: data, pli: request != nil, duration: interval}
 	if request != nil {
 		source := r.sentVideoFrames[id]
 		source.requestedAt = request.at
 		r.sentVideoFrames[id] = source
 	}
 	r.frameInterval = interval
+	return frame
 }
 
 // videoRecovery runs under r.mu. A forward sequence jump identifies resumed
@@ -205,4 +216,15 @@ func (r *recorder) contentResume(start, limit time.Duration) time.Duration {
 		}
 	}
 	return resumed
+}
+
+// The fixture decodes identically with this trailer (Go/ffmpeg tested). It
+// makes looped fixture payloads unique across PictureID epochs, so a delayed
+// previous-epoch echo cannot authenticate as a new send with the same ID.
+func identifyVP8(frame []byte, identity uint64) []byte {
+	marked := make([]byte, len(frame)+16)
+	copy(marked, frame)
+	copy(marked[len(frame):], "RelaisV1")
+	binary.BigEndian.PutUint64(marked[len(frame)+8:], identity)
+	return marked
 }
