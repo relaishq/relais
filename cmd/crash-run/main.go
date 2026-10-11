@@ -34,6 +34,11 @@ type result struct {
 	ReplayPackets                                    int
 	Measurement                                      callharness.EventMeasurement
 	RoutesRestored                                   uint64
+	Duplicates                                       int
+	OldWorkerPackets, NewWorkerPackets               uint64
+	ClaimAfter, FenceTime, ActivateTime              time.Duration
+	BindRestoreTime, ReadyAfter, RegisteredAfter     time.Duration
+	BindWaitTime                                     time.Duration
 }
 
 func binaries(bin string) error {
@@ -195,6 +200,9 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	defer deadline.Stop()
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
+	// SIGTERM exits this wait on the first owner change, which may precede
+	// move completion. The later worker-exit and media-freshness checks catch
+	// a failed drain or rollback; this poll alone does not prove success.
 	for len(status.Takeovers) == 0 && (!terminate || len(status.Calls) != 1 || status.Calls[0].Owner == owner) {
 		select {
 		case <-ctx.Done():
@@ -300,6 +308,7 @@ func run() (err error) {
 	compare := flag.Bool("compare-cache", true, "compare Redis cache+PLI with cache-off PLI (runs per mode)")
 	cacheOff := flag.Bool("frame-cache-off", false, "run PLI only; disable cache writes and replay (overrides comparison)")
 	terminate := flag.Bool("sigterm", false, "verify graceful owning-worker drain instead of crash takeover")
+	relayStandby := flag.Bool("relay-standby", false, "fenced standby takeover after SIGKILL and SIGSTOP, ten runs each")
 	topologyOption := flag.String("topology", "loopback", "loopback or netns (Linux/root only)")
 	profile := flag.String("profile", "lan", "network profile (lan: no link shaping)")
 	relayRestart := flag.Bool("relay-restart", false, "SIGKILL and restart the relay mid-call; workers and caller stay alive")
@@ -313,8 +322,14 @@ func run() (err error) {
 	if *relayRestart && *topologyOption != "loopback" {
 		return errors.New("relay-restart supports only the loopback topology")
 	}
+	if *relayStandby && *topologyOption != "loopback" {
+		return errors.New("relay-standby supports only the loopback topology")
+	}
 	if metricsInterval < 0 {
 		return errors.New("metrics-interval must not be negative")
+	}
+	if *relayStandby && (*relayRestart || *terminate || *cacheOff || *restoreOff) {
+		return errors.New("relay-standby cannot combine with relay-restart, sigterm, frame-cache-off or route-restore-off")
 	}
 	if *relayRestart && (*terminate || *cacheOff) {
 		return errors.New("relay-restart cannot combine with sigterm or frame-cache-off")
@@ -409,6 +424,9 @@ func run() (err error) {
 			modes = []bool{false, true}
 		}
 	}
+	if *relayStandby {
+		modes = []bool{false, true}
+	}
 	all := make([][]result, len(modes))
 	labels := make([]string, len(modes))
 	for m, off := range modes {
@@ -420,6 +438,12 @@ func run() (err error) {
 			labels[m] = "restore-on"
 			if off {
 				labels[m] = "restore-off"
+			}
+		}
+		if *relayStandby {
+			labels[m] = "SIGKILL"
+			if off {
+				labels[m] = "SIGSTOP"
 			}
 		}
 	}
@@ -440,7 +464,10 @@ func run() (err error) {
 			warmup := 1550*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
 			var r result
 			var err error
-			if *relayRestart {
+			if *relayStandby {
+				warmup = 2250*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
+				r, err = relayStandbyTrial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, off)
+			} else if *relayRestart {
 				warmup = 2250*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
 				r, err = relayRestartTrial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, off)
 			} else {
@@ -451,7 +478,9 @@ func run() (err error) {
 				return trialFailure(i+1, label, trialDir, err)
 			}
 			all[m] = append(all[m], r)
-			if *relayRestart {
+			if *relayStandby {
+				printRelayStandbyTable(label, all[m])
+			} else if *relayRestart {
 				printRelayRestartTable(label, all[m])
 			} else {
 				printTable(all[m])
@@ -459,10 +488,17 @@ func run() (err error) {
 			if !r.Pass {
 				return trialFailure(i+1, label, trialDir, errors.New("caller-observed process handover threshold failed"))
 			}
-			if !*relayRestart && !*terminate && off && (r.Path != "Keyframe" || r.ReplayPackets != 0) {
+			if !*relayStandby && !*relayRestart && !*terminate && off && (r.Path != "Keyframe" || r.ReplayPackets != 0) {
 				return trialFailure(i+1, label, trialDir, errors.New("cache-off run did not prove PLI attribution"))
 			}
 		}
+	}
+	if *relayStandby {
+		for m, results := range all {
+			fmt.Printf("PASS: %d/%d real-process relay-standby trials mode=%s\n", len(results), *runs, labels[m])
+			printRelayStandbyTable(labels[m], results)
+		}
+		return nil
 	}
 	if *relayRestart {
 		for m, results := range all {
