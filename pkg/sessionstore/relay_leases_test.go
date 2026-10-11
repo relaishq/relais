@@ -16,6 +16,95 @@ func relayProcess(owner string) RelayProcess {
 	return RelayProcess{Owner: owner, PID: 42, Start: "kernel-start", Host: "test-host", Namespace: "test-namespace", Executable: "test-executable"}
 }
 
+func TestExpiredUnknownRelayClaimAtomicBoundaries(t *testing.T) {
+	forStores(t, func(t *testing.T, newStore func(*testing.T) Store) {
+		s := newStore(t).(RelayLeases)
+		ctx := context.Background()
+		old, candidate := relayProcess("unknown"), relayProcess("candidate")
+		old.Host = processidentity.UnknownHost
+		l, err := s.ClaimRelay(ctx, "unknown", old, time.Second)
+		require.NoError(t, err)
+		l, err = s.ActivateRelay(ctx, l)
+		require.NoError(t, err)
+		_, err = s.ClaimExpiredUnknownRelay(ctx, l, candidate, time.Second)
+		require.ErrorIs(t, err, ErrLeaseHeld, "unknown-host restart cannot bypass expiry")
+		_, err = s.RenewRelay(ctx, l, time.Millisecond)
+		require.NoError(t, err)
+		time.Sleep(3 * time.Millisecond)
+		l, err = s.GetRelay(ctx, l.Key)
+		require.NoError(t, err)
+		require.True(t, l.Expired)
+		_, err = s.ClaimRelay(ctx, l.Key, candidate, time.Second)
+		require.ErrorIs(t, err, processidentity.ErrForeignScope)
+		_, err = s.ClaimDeadRelay(ctx, l, candidate, time.Second)
+		require.ErrorIs(t, err, processidentity.ErrForeignScope)
+		for _, field := range []string{"holder", "forwarder", "previous", "epoch"} {
+			changed := l
+			switch field {
+			case "holder":
+				changed.Holder.Start += "changed"
+			case "forwarder":
+				changed.Forwarder.Start += "changed"
+			case "previous":
+				changed.PreviousHolder = old
+			case "epoch":
+				changed.Epoch++
+			}
+			_, err = s.ClaimExpiredUnknownRelay(ctx, changed, candidate, time.Second)
+			require.ErrorIs(t, err, ErrLeaseLost, field)
+		}
+		// The store clock must reject a stale expired read after renewal.
+		_, err = s.RenewRelay(ctx, l, time.Second)
+		require.NoError(t, err)
+		_, err = s.ClaimExpiredUnknownRelay(ctx, l, candidate, time.Second)
+		require.ErrorIs(t, err, ErrLeaseHeld)
+		_, err = s.RenewRelay(ctx, l, time.Millisecond)
+		require.NoError(t, err)
+		time.Sleep(3 * time.Millisecond)
+		next, err := s.ClaimExpiredUnknownRelay(ctx, l, candidate, time.Second)
+		require.NoError(t, err)
+		require.Equal(t, l.Epoch+1, next.Epoch)
+		require.Equal(t, candidate, next.Holder)
+		require.Equal(t, old, next.Forwarder)
+		settled, err := s.ClaimExpiredUnknownRelay(ctx, next, candidate, time.Second)
+		require.NoError(t, err)
+		require.Equal(t, next.Epoch, settled.Epoch)
+		_, err = s.ClaimExpiredUnknownRelay(ctx, next, relayProcess("other"), time.Second)
+		require.ErrorIs(t, err, processidentity.ErrForeignScope, "only the identical new holder may settle")
+		next, err = s.ActivateRelay(ctx, next)
+		require.NoError(t, err)
+		_, err = s.RenewRelay(ctx, next, time.Millisecond)
+		require.NoError(t, err)
+		time.Sleep(3 * time.Millisecond)
+		_, err = s.ClaimExpiredUnknownRelay(ctx, next, relayProcess("other"), time.Second)
+		require.ErrorIs(t, err, processidentity.ErrForeignScope, "known-host records cannot use this exception")
+	})
+}
+
+func TestUnknownRestartDoesNotAllowForeignForwarder(t *testing.T) {
+	forStores(t, func(t *testing.T, newStore func(*testing.T) Store) {
+		s := newStore(t).(RelayLeases)
+		ctx := context.Background()
+		foreign := relayProcess("foreign-forwarder")
+		foreign.Host = "another-host"
+		l, err := s.ClaimRelay(ctx, "unknown", foreign, time.Second)
+		require.NoError(t, err)
+		l, err = s.ActivateRelay(ctx, l)
+		require.NoError(t, err)
+		unknown := relayProcess("unknown")
+		unknown.Host = processidentity.UnknownHost
+		l, err = s.TransferRelay(ctx, l, unknown, time.Millisecond)
+		require.NoError(t, err)
+		time.Sleep(3 * time.Millisecond)
+		_, err = s.ClaimExpiredUnknownRelay(ctx, l, relayProcess("candidate"), time.Second)
+		require.ErrorIs(t, err, processidentity.ErrForeignScope)
+		current, err := s.GetRelay(ctx, l.Key)
+		require.NoError(t, err)
+		require.Equal(t, l.Holder, current.Holder)
+		require.Equal(t, l.Epoch, current.Epoch)
+	})
+}
+
 func TestRelayClaimRejectsForeignScopeAtomically(t *testing.T) {
 	forStores(t, func(t *testing.T, newStore func(*testing.T) Store) {
 		s := newStore(t).(RelayLeases)

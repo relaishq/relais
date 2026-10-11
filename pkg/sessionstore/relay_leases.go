@@ -24,9 +24,12 @@ func (p RelayProcess) Identity() processidentity.Identity {
 
 // Compare scope inside the claim transaction as well as before kernel probes.
 // This prevents a foreign record racing the candidate's last store read.
-func relayScope(p RelayProcess, l RelayLease) error {
+func relayScope(p RelayProcess, l RelayLease, allowUnknown bool) error {
 	for _, target := range []RelayProcess{l.Holder, l.Forwarder, l.PreviousHolder} {
 		if target == (RelayProcess{}) {
+			continue
+		}
+		if allowUnknown && target.Host == processidentity.UnknownHost {
 			continue
 		}
 		if err := processidentity.SameScope(p.Identity(), target.Identity()); err != nil {
@@ -60,6 +63,11 @@ type RelayLeases interface {
 	// recorded holder and forwarder are gone. CAS checks all identity evidence
 	// and the epoch; a delayed renewal cannot revive the replaced tenure.
 	ClaimDeadRelay(context.Context, RelayLease, RelayProcess, time.Duration) (RelayLease, error)
+	// ClaimExpiredUnknownRelay is only for plain relay startup without a standby.
+	// It checks expiry and all observed identity evidence atomically. Unknown
+	// predecessors must not be probed or fenced. An identical holder can settle
+	// an uncertain earlier claim without advancing the epoch again.
+	ClaimExpiredUnknownRelay(context.Context, RelayLease, RelayProcess, time.Duration) (RelayLease, error)
 	RenewRelay(context.Context, RelayLease, time.Duration) (RelayLease, error)
 	TransferRelay(context.Context, RelayLease, RelayProcess, time.Duration) (RelayLease, error)
 	ActivateRelay(context.Context, RelayLease) (RelayLease, error)
@@ -79,6 +87,9 @@ func (m *Memory) ClaimRelay(ctx context.Context, key string, p RelayProcess, ttl
 }
 func (m *Memory) ClaimDeadRelay(ctx context.Context, l RelayLease, p RelayProcess, ttl time.Duration) (RelayLease, error) {
 	return m.changeRelay(ctx, "claim_dead", l, p, ttl)
+}
+func (m *Memory) ClaimExpiredUnknownRelay(ctx context.Context, l RelayLease, p RelayProcess, ttl time.Duration) (RelayLease, error) {
+	return m.changeRelay(ctx, "claim_unknown", l, p, ttl)
 }
 func (m *Memory) RenewRelay(ctx context.Context, l RelayLease, ttl time.Duration) (RelayLease, error) {
 	return m.changeRelay(ctx, "renew", l, l.Holder, ttl)
@@ -120,14 +131,25 @@ func (m *Memory) changeRelay(ctx context.Context, op string, expected RelayLease
 	defer m.mu.Unlock()
 	l, ok := m.relayLeases[expected.Key]
 	now := time.Now()
-	if op == "claim" || op == "claim_dead" {
-		if err := relayScope(p, l); err != nil {
+	if op == "claim" || op == "claim_dead" || op == "claim_unknown" {
+		if op == "claim_unknown" && !unknownRestartEvidence(p, l) {
+			return RelayLease{}, processidentity.ErrForeignScope
+		}
+		if err := relayScope(p, l, op == "claim_unknown"); err != nil {
 			return RelayLease{}, err
 		}
 	}
-	if op == "claim_dead" {
+	if op == "claim_dead" || op == "claim_unknown" {
 		if !ok || !sameRelay(l, expected) || l.Forwarder != expected.Forwarder || l.PreviousHolder != expected.PreviousHolder {
 			return RelayLease{}, ErrLeaseLost
+		}
+		if op == "claim_unknown" {
+			if l.Holder == p {
+				return l, nil
+			}
+			if now.Before(l.ExpiresAt) {
+				return RelayLease{}, ErrLeaseHeld
+			}
 		}
 	} else if op == "claim" {
 		if ok && l.Holder == p {
@@ -150,7 +172,7 @@ func (m *Memory) changeRelay(ctx context.Context, op string, expected RelayLease
 		return RelayLease{}, ErrLeaseLost
 	}
 	switch op {
-	case "claim", "claim_dead", "transfer":
+	case "claim", "claim_dead", "claim_unknown", "transfer":
 		l.PreviousHolder = l.Holder
 		l.Holder = p
 		l.Key = expected.Key
@@ -173,4 +195,8 @@ func (m *Memory) changeRelay(ctx context.Context, op string, expected RelayLease
 	l.Expired = !now.Before(l.ExpiresAt)
 	m.relayLeases[l.Key] = l
 	return l, nil
+}
+
+func unknownRestartEvidence(p RelayProcess, l RelayLease) bool {
+	return l.Holder.Host == processidentity.UnknownHost || l.Holder == p && (l.Forwarder.Host == processidentity.UnknownHost || l.PreviousHolder.Host == processidentity.UnknownHost)
 }

@@ -36,7 +36,15 @@ Takeover follows this order:
    Both stores repeat this check inside every claim transaction, preventing a
    foreign record from racing the last read. Scope changes also invalidate a
    dead-holder claim's identity comparison.
-   Then observe both holder and last possible forwarder with the same kernel
+   The only startup exception is a plain relay reclaiming an expired holder
+   whose host is explicitly `unknown`, under the single-relay assumption below.
+   `ClaimExpiredUnknownRelay` atomically checks expiry, epoch and all predecessor
+   evidence. A renewal after the expired read prevents the claim. It never
+   bypasses expiry for a new holder, and cannot admit a foreign known-host
+   forwarder or previous holder. An identical holder may settle an uncertain
+   successful claim without advancing the epoch. Ordinary and dead-holder
+   claims continue to refuse unknown hosts.
+   For verifiable hosts, observe both holder and last possible forwarder with the same kernel
    identity checks used for fencing, without a terminating signal.
    If both are verifiably gone, claim immediately, bypassing expiry and recovery
    grace. `ClaimDeadRelay` atomically checks the observed epoch, holder,
@@ -58,7 +66,8 @@ Takeover follows this order:
    idempotently if that tenure still exists.
 2. Start renewing the new tenure, including during fencing and route restore.
 3. Fence the old lease holder and the last possible forwarder, deduplicating
-   identical targets. Linux opens a pidfd first, brackets `/proc` identity and
+   identical targets. Unknown-host predecessors in the plain startup exception
+   are never probed or signalled. Linux opens a pidfd first, brackets `/proc` identity and
    executable checks with the pidfd's `fdinfo` PID, and uses `pidfd_send_signal`
    so PID reuse cannot redirect the signal. The [pidfd API](https://github.com/mkerrisk/man-pages/blob/master/man2/pidfd_open.2)
    requires Linux 5.3+ and working
@@ -224,8 +233,31 @@ The upgrade and foreign-scope paths run through real command/Redis tests.
 Unit tests cover both stores, competing claims, interrupted claimants, expired activation,
 identity/signalling failures, and a stopped child killed by the identity helper.
 
-Linux host scope uses `/etc/machine-id`, falling back to
+`-host-id` overrides machine identity discovery on Linux and macOS. Its default
+is `RELAIS_HOST_ID`; an explicit flag overrides the environment. Use the same
+stable value for the active and standby on one host, and distinct values for
+different hosts. The recorded marker is `host-id:<value>`; an explicit value
+does not bypass PID namespace, boot or executable verification.
+Changing a configured ID changes the scope marker. Stop and release the active
+before changing the ID for both active and standby.
+
+Without an explicit host ID, Linux host scope uses `/etc/machine-id`, falling back to
 `/var/lib/dbus/machine-id`, plus the device/inode of `/proc/self/ns/pid`.
+If neither file provides an ID, a plain relay still starts with the host marker
+`unknown` and logs a warning. Namespace, process start and executable identity
+must still be readable. Standby mode refuses startup without a resolvable host
+identity and tells the operator to set `-host-id` or `RELAIS_HOST_ID`.
+
+An unknown-host holder is unverifiable, including against another unknown-host
+record: it has no dead-holder fast path and is never killed. A resolved standby
+also refuses an unknown-host holder. Only a plain relay starting up may reclaim
+an expired unknown-host holder. This is the single-relay container restart case:
+the operator has stopped the only relay before starting its replacement. It
+assumes no standby and no other surviving relay. Expiry does not prove that the
+old process stopped; exclusive socket binds still apply. Configure a host ID
+before using a standby. An unknown-host active can release gracefully to clear
+its identities before starting an active and standby with the new host ID.
+
 macOS uses the machine UUID from
 [`gethostuuid`](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/sys_generic.c)
 and one host PID namespace. `kern.uuid` is the
@@ -237,8 +269,13 @@ Different namespaces in the same boot are foreign. An occupied legacy lease
 without scope markers is unverifiable and refused. A graceful old-version
 release clears those identities and permits the new record format. After a
 crash, verify that all old relays have stopped before a deliberate lease-key
-migration. Do not erase an old record while its process may still forward. The host marker assumes machine IDs are
-unique; cloned installations must not share a relay key.
+migration. Do not erase an old record while its process may still forward.
+
+The host marker assumes machine IDs are unique. An image with a baked-in
+machine ID running on several hosts does not separate those hosts. A holder on
+another host can look like a rebooted local holder: a different Linux boot ID
+then appears to prove that it is gone. Set a distinct `RELAIS_HOST_ID` per host,
+or regenerate the machine ID at boot. Do not share a relay key across hosts.
 
 This design is for cooperating relay binaries on one Linux or macOS host, with
 permission to terminate one another, and a store whose acknowledged lease

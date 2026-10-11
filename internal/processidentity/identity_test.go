@@ -26,6 +26,48 @@ func TestCurrentStable(t *testing.T) {
 	require.Equal(t, a, b)
 	require.NotEmpty(t, a.Start)
 }
+
+func TestLinuxHostDiscoveryAndOverride(t *testing.T) {
+	reads := 0
+	missing := func(string) ([]byte, error) { reads++; return nil, os.ErrNotExist }
+	require.Equal(t, UnknownHost, linuxHost("", missing))
+	require.Equal(t, 2, reads)
+	reads = 0
+	require.Equal(t, "host-id:unique-host", linuxHost("unique-host", missing))
+	require.Zero(t, reads, "override must bypass machine ID discovery")
+	for _, primary := range []string{"", "primary"} {
+		host := linuxHost("", func(path string) ([]byte, error) {
+			if path == "/etc/machine-id" {
+				return []byte(primary), nil
+			}
+			return []byte(" fallback\n"), nil
+		})
+		want := "linux:primary"
+		if primary == "" {
+			want = "linux:fallback"
+		}
+		require.Equal(t, want, host)
+	}
+}
+
+func TestExplicitHostIdentityAndUnknownRefusal(t *testing.T) {
+	local, err := CurrentWithHostID(" unique-host ")
+	require.NoError(t, err)
+	require.Equal(t, "host-id:unique-host", local.Host)
+	require.NotEmpty(t, local.Namespace)
+	require.NotEmpty(t, local.Executable)
+	live, err := GoneFrom(context.Background(), local, local)
+	require.NoError(t, err)
+	require.False(t, live, "fencing checks must use the configured local host ID")
+	target := local
+	target.Host = UnknownHost
+	for _, id := range []Identity{local, target} {
+		exited, err := GoneFrom(context.Background(), id, target)
+		require.ErrorIs(t, err, ErrForeignScope)
+		require.False(t, exited)
+		require.ErrorIs(t, FenceFrom(context.Background(), id, target), ErrForeignScope)
+	}
+}
 func TestFenceMismatchSendsNoSignal(t *testing.T) {
 	signalled := false
 	err := fence(context.Background(), Identity{PID: 42, Start: "old"}, func(int) (string, bool, error) { return "new", false, nil }, func(int) error { signalled = true; return nil })

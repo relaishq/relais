@@ -3,6 +3,7 @@ package relaylease
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -18,6 +19,106 @@ func process(owner string) sessionstore.RelayProcess {
 }
 func config(s sessionstore.RelayLeases) Config {
 	return Config{Store: s, Key: "one", Process: process("b"), TTL: 90 * time.Millisecond, Renew: 20 * time.Millisecond, Poll: 5 * time.Millisecond, Gone: func(context.Context, processidentity.Identity) (bool, error) { return false, nil }}
+}
+
+func TestUnknownHostStartupAndRestart(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		for _, allow := range []bool{false, true} {
+			t.Run(fmt.Sprintf("expired=%t/plain=%t", expired, allow), func(t *testing.T) {
+				s := sessionstore.NewMemory()
+				old := process("unknown")
+				old.Host = processidentity.UnknownHost
+				l, err := s.ClaimRelay(context.Background(), "one", old, time.Second)
+				require.NoError(t, err)
+				_, err = s.ActivateRelay(context.Background(), l)
+				require.NoError(t, err)
+				if expired {
+					_, err = s.RenewRelay(context.Background(), l, time.Millisecond)
+					require.NoError(t, err)
+					time.Sleep(3 * time.Millisecond)
+				}
+				cfg := config(s)
+				cfg.AllowUnknownHostRestart = allow
+				probes, signals := 0, 0
+				cfg.Gone = func(context.Context, processidentity.Identity) (bool, error) {
+					probes++
+					return false, errors.New("unknown host must never be probed")
+				}
+				cfg.Fence = func(context.Context, processidentity.Identity) error {
+					signals++
+					return errors.New("unknown host must never be fenced")
+				}
+				g, err := Acquire(context.Background(), cfg)
+				if g != nil {
+					defer g.Close()
+				}
+				require.Zero(t, probes)
+				require.Zero(t, signals)
+				if allow && expired {
+					require.NoError(t, err)
+					require.True(t, g.Allowed())
+					require.Greater(t, g.Lease().Epoch, l.Epoch)
+				} else {
+					require.ErrorIs(t, err, processidentity.ErrForeignScope)
+					current, err := s.GetRelay(context.Background(), "one")
+					require.NoError(t, err)
+					require.Equal(t, l.Holder, current.Holder)
+					require.Equal(t, l.Epoch, current.Epoch)
+				}
+			})
+		}
+	}
+	for _, allow := range []bool{false, true} {
+		cfg := config(sessionstore.NewMemory())
+		cfg.Process.Host = processidentity.UnknownHost
+		cfg.AllowUnknownHostRestart = allow
+		g, err := Acquire(context.Background(), cfg)
+		if allow {
+			require.NoError(t, err)
+			require.True(t, g.Allowed())
+			g.Close()
+		} else {
+			require.ErrorIs(t, err, processidentity.ErrForeignScope)
+		}
+	}
+}
+
+type unknownClaimReplyLost struct {
+	sessionstore.RelayLeases
+	calls int
+}
+
+func (s *unknownClaimReplyLost) ClaimExpiredUnknownRelay(ctx context.Context, l sessionstore.RelayLease, p sessionstore.RelayProcess, ttl time.Duration) (sessionstore.RelayLease, error) {
+	s.calls++
+	claimed, err := s.RelayLeases.ClaimExpiredUnknownRelay(ctx, l, p, ttl)
+	if err == nil && s.calls == 1 {
+		return sessionstore.RelayLease{}, sessionstore.ErrTransient
+	}
+	return claimed, err
+}
+
+func TestUnknownHostRestartSettlesUncertainClaim(t *testing.T) {
+	for _, unknownCandidate := range []bool{false, true} {
+		s := &unknownClaimReplyLost{RelayLeases: sessionstore.NewMemory()}
+		old := process("old")
+		old.Host = processidentity.UnknownHost
+		l, err := s.ClaimRelay(context.Background(), "one", old, time.Millisecond)
+		require.NoError(t, err)
+		_, err = s.ActivateRelay(context.Background(), l)
+		require.NoError(t, err)
+		time.Sleep(3 * time.Millisecond)
+		cfg := config(s)
+		cfg.AllowUnknownHostRestart = true
+		if unknownCandidate {
+			cfg.Process.Host = processidentity.UnknownHost
+		}
+		g, err := Acquire(context.Background(), cfg)
+		require.NoError(t, err)
+		require.Equal(t, 2, s.calls)
+		require.Equal(t, l.Epoch+1, g.Lease().Epoch)
+		require.EqualValues(t, 1, g.Timing().StoreFailures)
+		g.Close()
+	}
 }
 func TestFenceFailurePreventsActivationAndBinding(t *testing.T) {
 	for _, failure := range []error{processidentity.ErrExecutable, errors.New("permission denied")} {

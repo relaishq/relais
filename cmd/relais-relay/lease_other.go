@@ -10,7 +10,7 @@ import (
 )
 
 // Unsupported platforms retain plain relay operation without process fencing.
-func acquireLease(ctx context.Context, standby bool, _ relaylease.Config) (commandGuard, error) {
+func acquireLease(ctx context.Context, standby bool, _ string, _ relaylease.Config) (commandGuard, error) {
 	if standby {
 		return nil, processidentity.ErrUnsupported
 	}

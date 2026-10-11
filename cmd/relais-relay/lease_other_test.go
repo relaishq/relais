@@ -14,10 +14,10 @@ import (
 func TestUnsupportedPlatformKeepsPlainRelayAndRefusesStandby(t *testing.T) {
 	require.NoError(t, validatePlatform(false))
 	require.ErrorIs(t, validatePlatform(true), processidentity.ErrUnsupported)
-	g, err := acquireLease(context.Background(), false, relaylease.Config{})
+	g, err := acquireLease(context.Background(), false, "", relaylease.Config{})
 	require.NoError(t, err)
 	require.True(t, g.Allowed())
 	g.Close()
-	_, err = acquireLease(context.Background(), true, relaylease.Config{})
+	_, err = acquireLease(context.Background(), true, "", relaylease.Config{})
 	require.ErrorIs(t, err, processidentity.ErrUnsupported)
 }

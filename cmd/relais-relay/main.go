@@ -19,6 +19,10 @@ import (
 )
 
 func run() error {
+	return runWithLease(acquireLease)
+}
+
+func runWithLease(acquire func(context.Context, bool, string, relaylease.Config) (commandGuard, error)) error {
 	var storeConfig processrun.StoreConfig
 	storeConfig.Flags(flag.CommandLine)
 	public := flag.String("media", processrun.Env("RELAIS_RELAY_MEDIA", "127.0.0.1:0"), "public UDP address")
@@ -29,6 +33,7 @@ func run() error {
 	restoreTimeout := flag.Duration("route-restore-timeout", 5*time.Second, "startup route restore budget; continue with partial results on expiry")
 	maxFlows := flag.Int("max-flows", 65536, "maximum confirmed and pending caller routes")
 	standby := flag.Bool("standby", false, "wait without binding any sockets, then fence and take over")
+	hostID := flag.String("host-id", processrun.Env("RELAIS_HOST_ID", ""), "unique host identity; overrides machine ID discovery (required for standby when unavailable)")
 	leaseKey := flag.String("relay-lease", "default", "same-host relay lease key; shared by active and standby")
 	leaseTTL := flag.Duration("relay-lease-ttl", relaylease.DefaultTTL, "relay lease lifetime")
 	leaseRenew := flag.Duration("relay-lease-renew", relaylease.DefaultRenew, "relay lease renewal interval")
@@ -58,7 +63,7 @@ func run() error {
 	if *standby {
 		log.Printf("STANDBY_WAIT pid=%d lease=%s", os.Getpid(), *leaseKey)
 	}
-	guard, err := acquireLease(ctx, *standby, relaylease.Config{Store: store, Key: *leaseKey, Process: process, TTL: *leaseTTL, Renew: *leaseRenew, Poll: *leasePoll})
+	guard, err := acquire(ctx, *standby, *hostID, relaylease.Config{Store: store, Key: *leaseKey, Process: process, TTL: *leaseTTL, Renew: *leaseRenew, Poll: *leasePoll})
 	if err != nil {
 		return err
 	}

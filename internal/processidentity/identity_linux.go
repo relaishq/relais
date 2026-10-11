@@ -44,9 +44,6 @@ func parseStat(stat string) (string, bool, error) {
 // The pidfd pins the signal recipient. Its fdinfo Pid brackets /proc reads,
 // refusing a namespace mismatch and recognizing a reaped pinned process.
 func fencePlatform(ctx context.Context, id Identity) error {
-	if err := localScope(id); err != nil {
-		return err
-	}
 	if id.PID <= 0 || id.Start == "" {
 		return errors.New("invalid fencing target")
 	}
@@ -103,9 +100,6 @@ func inspectPinned(fd, pid int) (string, bool, error) {
 	return inspectPinnedWith(pid, inspect, func() error { return checkPinned(fd, pid) }, func() error { return unix.PidfdSendSignal(fd, 0, nil, 0) })
 }
 func gonePlatform(ctx context.Context, id Identity) (bool, error) {
-	if err := localScope(id); err != nil {
-		return false, err
-	}
 	if id.PID <= 0 || id.Start == "" {
 		return false, errors.New("invalid process identity")
 	}
@@ -128,25 +122,16 @@ func gonePlatform(ctx context.Context, id Identity) (bool, error) {
 	})
 }
 
-func scopePlatform() (string, string, error) {
-	var machine string
-	for _, path := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
-		data, err := os.ReadFile(path)
-		if err == nil {
-			machine = strings.TrimSpace(string(data))
-		}
-		if machine != "" {
-			break
-		}
-	}
-	if machine == "" {
-		return "", "", errors.New("cannot read Linux machine ID")
-	}
+func scopePlatform(hostID string) (string, string, error) {
+	return scopeLinux(hostID, os.ReadFile)
+}
+
+func scopeLinux(hostID string, read func(string) ([]byte, error)) (string, string, error) {
 	var ns unix.Stat_t
 	if err := unix.Stat("/proc/self/ns/pid", &ns); err != nil {
 		return "", "", err
 	}
-	return "linux:" + machine, fmt.Sprintf("%x:%x", ns.Dev, ns.Ino), nil
+	return linuxHost(hostID, read), fmt.Sprintf("%x:%x", ns.Dev, ns.Ino), nil
 }
 func executableIdentity(pid int) (string, error) {
 	var stat unix.Stat_t

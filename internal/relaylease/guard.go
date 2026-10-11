@@ -36,6 +36,8 @@ type Config struct {
 	Key              string
 	Process          sessionstore.RelayProcess
 	TTL, Renew, Poll time.Duration
+	// Only a plain relay starting up may reclaim an expired unknown-host holder.
+	AllowUnknownHostRestart bool
 	// Fence is injectable for deterministic safety tests. Nil uses kernel identity.
 	Fence func(context.Context, processidentity.Identity) error
 	// Gone only observes identity; it must never signal a live or stopped holder.
@@ -114,14 +116,21 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 	if cfg.Process.Host == "" || cfg.Process.Namespace == "" {
 		return nil, configurationError(processidentity.ErrForeignScope)
 	}
+	if cfg.Process.Host == processidentity.UnknownHost && !cfg.AllowUnknownHostRestart {
+		return nil, configurationError(processidentity.ErrForeignScope)
+	}
 	if cfg.Process.Executable == "" {
 		return nil, configurationError(processidentity.ErrExecutable)
 	}
 	if cfg.Fence == nil {
-		cfg.Fence = processidentity.Fence
+		cfg.Fence = func(ctx context.Context, id processidentity.Identity) error {
+			return processidentity.FenceFrom(ctx, cfg.Process.Identity(), id)
+		}
 	}
 	if cfg.Gone == nil {
-		cfg.Gone = processidentity.Gone
+		cfg.Gone = func(ctx context.Context, id processidentity.Identity) (bool, error) {
+			return processidentity.GoneFrom(ctx, cfg.Process.Identity(), id)
+		}
 	}
 	started := time.Now()
 	var l sessionstore.RelayLease
@@ -134,6 +143,7 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 	var expiredAt time.Time
 	var lastStoreFailure time.Time
 	var observedMissing bool
+	var unknownClaim bool
 	for {
 		op, cancel := context.WithTimeout(ctx, cfg.Poll)
 		current, readErr := cfg.Store.GetRelay(op, cfg.Key)
@@ -142,16 +152,23 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 		missing := claim
 		graceClaim := missing
 		deadClaim := false
+		unknownClaim = false
 		if readErr == nil {
+			unknownClaim = cfg.AllowUnknownHostRestart && (current.Expired && current.Holder.Host == processidentity.UnknownHost || current.Holder == cfg.Process && hasUnknownHost(current))
 			for _, p := range []sessionstore.RelayProcess{current.Holder, current.Forwarder, current.PreviousHolder} {
 				if p == (sessionstore.RelayProcess{}) {
 					continue
+				}
+				if unknownClaim && p.Host == processidentity.UnknownHost {
+					continue // Never interpret an unknown-host PID.
 				}
 				if err := processidentity.SameScope(cfg.Process.Identity(), p.Identity()); err != nil {
 					return nil, configurationError(err)
 				}
 			}
 			switch {
+			case unknownClaim:
+				claim, graceClaim = true, current.Holder != cfg.Process
 			case current.Holder.Owner == "", current.Holder == cfg.Process:
 				claim = true // bootstrap, graceful release, or settle an uncertain claim
 			default:
@@ -179,7 +196,9 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 		err = readErr
 		if claim {
 			op, cancel = context.WithTimeout(ctx, cfg.Poll)
-			if deadClaim {
+			if unknownClaim {
+				l, err = cfg.Store.ClaimExpiredUnknownRelay(op, current, cfg.Process, cfg.TTL)
+			} else if deadClaim {
 				l, err = cfg.Store.ClaimDeadRelay(op, current, cfg.Process, cfg.TTL)
 			} else {
 				l, err = cfg.Store.ClaimRelay(op, cfg.Key, cfg.Process, cfg.TTL)
@@ -215,6 +234,9 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 	for _, p := range []sessionstore.RelayProcess{l.PreviousHolder, l.Forwarder} {
 		if p.PID == 0 || p == cfg.Process || seen[p] {
 			continue
+		}
+		if unknownClaim && p.Host == processidentity.UnknownHost {
+			continue // Single-relay restart assumes the old relay was stopped.
 		}
 		seen[p] = true
 		op, stop := context.WithTimeout(owned, cfg.TTL)
@@ -257,6 +279,10 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 	g.timing.Activate = time.Since(activateAt)
 	return g, nil
 }
+
+func hasUnknownHost(l sessionstore.RelayLease) bool {
+	return l.Holder.Host == processidentity.UnknownHost || l.Forwarder.Host == processidentity.UnknownHost || l.PreviousHolder.Host == processidentity.UnknownHost
+}
 func (g *Guard) renew(cfg Config) {
 	defer close(g.done)
 	tick := time.NewTimer(cfg.Renew)
@@ -295,6 +321,9 @@ func predecessorsGone(ctx context.Context, l sessionstore.RelayLease, check func
 			continue
 		}
 		id := p.Identity()
+		if id.Host == processidentity.UnknownHost {
+			return false
+		}
 		if seen[id] {
 			continue
 		}

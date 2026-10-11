@@ -24,6 +24,26 @@ func TestParseStatCommParentheses(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestLinuxCurrentWithoutMachineID(t *testing.T) {
+	for _, hostID := range []string{"", "explicit-host"} {
+		reads := 0
+		id, err := currentWithScope(hostID, func(override string) (string, string, error) {
+			return scopeLinux(override, func(string) ([]byte, error) { reads++; return nil, os.ErrNotExist })
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, id.Start)
+		require.NotEmpty(t, id.Namespace)
+		require.NotEmpty(t, id.Executable)
+		if hostID == "" {
+			require.Equal(t, UnknownHost, id.Host)
+			require.Equal(t, 2, reads)
+		} else {
+			require.Equal(t, "host-id:"+hostID, id.Host)
+			require.Zero(t, reads)
+		}
+	}
+}
+
 // Capture only the owned test child's threads, descriptors and UDP port.
 // A leader can be Z while another thread still references its shared files.
 func logSocketExitState(t *testing.T, pid int, udpAddr string) {

@@ -25,9 +25,6 @@ func inspect(pid int) (string, bool, error) {
 }
 
 func fencePlatform(ctx context.Context, id Identity) error {
-	if err := localScope(id); err != nil {
-		return err
-	}
 	return fence(ctx, id, inspect, func(pid int) error {
 		if err := verifyRecordedExecutable(pid, id.Executable); err != nil {
 			return err
@@ -62,9 +59,6 @@ func processPath(pid int) (string, error) {
 }
 
 func gonePlatform(ctx context.Context, id Identity) (bool, error) {
-	if err := localScope(id); err != nil {
-		return false, err
-	}
 	return gone(ctx, id, inspect, func(pid int) error { return verifyRecordedExecutable(pid, id.Executable) })
 }
 
@@ -77,7 +71,10 @@ func procInfo(pid, flavor int, address uint64, buf []byte) (int, error) {
 	}
 	return int(n), nil
 }
-func scopePlatform() (string, string, error) {
+func scopePlatform(hostID string) (string, string, error) {
+	if hostID != "" {
+		return "host-id:" + hostID, "darwin", nil
+	}
 	var uuid [16]byte
 	timeout := unix.Timespec{Sec: 1}
 	// kern.uuid is the kernel build UUID. gethostuuid reads the machine UUID.

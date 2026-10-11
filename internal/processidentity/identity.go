@@ -16,6 +16,9 @@ var ErrExecutable = errors.New("fencing target is not the relay executable")
 var ErrUnsupported = errors.New("standby process fencing requires Linux or macOS")
 var ErrForeignScope = errors.New("relay process host or PID namespace is unverifiable")
 
+// UnknownHost permits plain relay startup, but never process verification.
+const UnknownHost = "unknown"
+
 type Identity struct {
 	PID                         int
 	Start                       string
@@ -23,11 +26,20 @@ type Identity struct {
 }
 
 func Current() (Identity, error) {
+	return CurrentWithHostID("")
+}
+
+// CurrentWithHostID overrides platform discovery with an operator-supplied ID.
+func CurrentWithHostID(hostID string) (Identity, error) {
+	return currentWithScope(strings.TrimSpace(hostID), scopePlatform)
+}
+
+func currentWithScope(hostID string, scope func(string) (string, string, error)) (Identity, error) {
 	start, _, err := inspect(os.Getpid())
 	if err != nil {
 		return Identity{}, err
 	}
-	host, namespace, err := scopePlatform()
+	host, namespace, err := scope(hostID)
 	if err != nil {
 		return Identity{}, err
 	}
@@ -38,7 +50,7 @@ func Current() (Identity, error) {
 // SameScope must run before interpreting a local PID or advancing a lease.
 // A prior boot on the same machine has no surviving namespace or processes.
 func SameScope(local, target Identity) error {
-	if local.Host == "" || target.Host != local.Host || local.Namespace == "" || target.Namespace == "" {
+	if local.Host == "" || local.Host == UnknownHost || target.Host == UnknownHost || target.Host != local.Host || local.Namespace == "" || target.Namespace == "" {
 		return ErrForeignScope
 	}
 	if local.Namespace != target.Namespace && !differentBoot(local.Start, target.Start) {
@@ -60,13 +72,6 @@ func differentBoot(a, b string) bool {
 	x, y := boot(a), boot(b)
 	return x != "" && y != "" && x != y
 }
-func localScope(id Identity) error {
-	local, err := Current()
-	if err != nil {
-		return err
-	}
-	return SameScope(local, id)
-}
 func verifyRecordedExecutable(pid int, recorded string) error {
 	if recorded == "" {
 		return ErrExecutable
@@ -86,6 +91,18 @@ func verifyRecordedExecutable(pid int, recorded string) error {
 // Callers must confirm exclusive binds before starting a new forwarder.
 // A reused PID proves the recorded process exited and is never signalled.
 func Fence(ctx context.Context, id Identity) error {
+	local, err := Current()
+	if err != nil {
+		return err
+	}
+	return FenceFrom(ctx, local, id)
+}
+
+// FenceFrom uses the local identity captured with the configured host ID.
+func FenceFrom(ctx context.Context, local, id Identity) error {
+	if err := SameScope(local, id); err != nil {
+		return err
+	}
 	return fencePlatform(ctx, id)
 }
 func fence(ctx context.Context, id Identity, read func(int) (string, bool, error), kill func(int) error) error {
@@ -163,7 +180,38 @@ func inspectPinnedWith(pid int, read func(int) (string, bool, error), check func
 // Gone verifies that the recorded process has exited, without signalling it.
 // A live or stopped matching identity returns false. Unknown states are errors,
 // never evidence of exit. Socket exclusivity remains required after a zombie.
-func Gone(ctx context.Context, id Identity) (bool, error) { return gonePlatform(ctx, id) }
+func Gone(ctx context.Context, id Identity) (bool, error) {
+	local, err := Current()
+	if err != nil {
+		return false, err
+	}
+	return GoneFrom(ctx, local, id)
+}
+
+// GoneFrom uses the local identity captured with the configured host ID.
+func GoneFrom(ctx context.Context, local, id Identity) (bool, error) {
+	if err := SameScope(local, id); err != nil {
+		return false, err
+	}
+	return gonePlatform(ctx, id)
+}
+
+// Shared with Linux production discovery so missing machine IDs can be tested
+// without changing the host filesystem. An override does not read these files.
+func linuxHost(hostID string, read func(string) ([]byte, error)) string {
+	if hostID != "" {
+		return "host-id:" + hostID
+	}
+	for _, path := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
+		data, err := read(path)
+		if err == nil {
+			if machine := strings.TrimSpace(string(data)); machine != "" {
+				return "linux:" + machine
+			}
+		}
+	}
+	return UnknownHost
+}
 func gone(ctx context.Context, id Identity, read func(int) (string, bool, error), executable func(int) error) (bool, error) {
 	if id.PID <= 0 || id.Start == "" {
 		return false, errors.New("invalid process identity")

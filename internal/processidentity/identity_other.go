@@ -8,5 +8,5 @@ func inspect(int) (string, bool, error)             { return "", false, ErrUnsup
 func fencePlatform(context.Context, Identity) error { return ErrUnsupported }
 
 func gonePlatform(context.Context, Identity) (bool, error) { return false, ErrUnsupported }
-func scopePlatform() (string, string, error)               { return "", "", ErrUnsupported }
+func scopePlatform(string) (string, string, error)         { return "", "", ErrUnsupported }
 func executableIdentity(int) (string, error)               { return "", ErrUnsupported }

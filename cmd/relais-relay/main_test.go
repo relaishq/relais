@@ -25,6 +25,7 @@ import (
 	"github.com/relais/internal/clusterprocess"
 	"github.com/relais/internal/processidentity"
 	"github.com/relais/internal/processrun"
+	"github.com/relais/internal/relaylease"
 	"github.com/relais/pkg/controlplane"
 	"github.com/relais/pkg/sessionstore"
 	"github.com/relais/pkg/storage"
@@ -42,11 +43,127 @@ func TestRelayCommandHelper(t *testing.T) {
 		}
 	}
 	flag.CommandLine = flag.NewFlagSet("relay", flag.ExitOnError)
-	if err := run(); err != nil {
+	acquire := acquireLease
+	if os.Getenv("RELAIS_W43_NO_MACHINE_ID") == "1" {
+		acquire = func(ctx context.Context, standby bool, hostID string, cfg relaylease.Config) (commandGuard, error) {
+			return acquireLeaseWithIdentity(ctx, standby, hostID, cfg, func(override string) (processidentity.Identity, error) {
+				id, err := processidentity.CurrentWithHostID(override)
+				if strings.TrimSpace(override) == "" {
+					id.Host = processidentity.UnknownHost
+				}
+				return id, err
+			})
+		}
+	}
+	if err := runWithLease(acquire); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 	os.Exit(0)
+}
+
+func TestCommandWithoutMachineIDPlainRestartAndStandbyRefusal(t *testing.T) {
+	t.Setenv("RELAIS_W43_NO_MACHINE_ID", "1")
+	t.Setenv("RELAIS_HOST_ID", "")
+	s, addr, prefix := commandStore(t)
+	httpAddr, err := clusterprocess.FreeTCP()
+	require.NoError(t, err)
+	unresolved := startCommand(t, addr, prefix, "-standby", "-media", freeUDP(t), "-leg", freeUDP(t), "-http", httpAddr)
+	err = failedCommand(t, unresolved)
+	require.ErrorContains(t, err, "standby requires a host identity; set -host-id or RELAIS_HOST_ID")
+	_, err = s.GetRelay(context.Background(), "default")
+	require.ErrorIs(t, err, sessionstore.ErrNotFound, "unresolved standby must not create a lease")
+	active := startCommand(t, addr, prefix, "-relay-lease-ttl", "90ms", "-relay-lease-renew", "20ms")
+	ready := readyCommand(t, active)
+	old, err := s.GetRelay(context.Background(), "default")
+	require.NoError(t, err)
+	require.Equal(t, processidentity.UnknownHost, old.Holder.Host)
+	standbyArgs := []string{"-standby", "-media", ready.Media, "-leg", ready.Leg, "-http", strings.TrimPrefix(ready.HTTP, "http://")}
+	standby := startCommand(t, addr, prefix, standbyArgs...)
+	err = failedCommand(t, standby)
+	require.ErrorContains(t, err, "standby requires a host identity; set -host-id or RELAIS_HOST_ID")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	require.NoError(t, active.SignalGroup(syscall.SIGKILL))
+	select {
+	case <-active.Done():
+	case <-ctx.Done():
+		t.Fatal("owned unknown-host relay was not reaped")
+	}
+	time.Sleep(100 * time.Millisecond)
+	// Even a resolved standby cannot interpret an unknown holder's PID.
+	resolved := startCommand(t, addr, prefix, append(standbyArgs, "-host-id", "container-host")...)
+	err = failedCommand(t, resolved)
+	require.ErrorContains(t, err, "host or PID namespace is unverifiable")
+	current, err := s.GetRelay(ctx, "default")
+	require.NoError(t, err)
+	require.Equal(t, old.Epoch, current.Epoch)
+	next := startCommand(t, addr, prefix, "-media", ready.Media, "-leg", ready.Leg, "-http", strings.TrimPrefix(ready.HTTP, "http://"))
+	readyCommand(t, next)
+	current, err = s.GetRelay(context.Background(), "default")
+	require.NoError(t, err)
+	require.Greater(t, current.Epoch, old.Epoch)
+	require.Equal(t, processidentity.UnknownHost, current.Holder.Host)
+}
+
+func TestCommandHostIDFlagAndEnvironment(t *testing.T) {
+	t.Setenv("RELAIS_W43_NO_MACHINE_ID", "1")
+	t.Setenv("RELAIS_HOST_ID", "env-host")
+	for _, flagID := range []string{"", "flag-host"} {
+		t.Run(flagID, func(t *testing.T) {
+			s, addr, prefix := commandStore(t)
+			args := []string{"-standby", "-media", freeUDP(t), "-leg", freeUDP(t)}
+			httpAddr, err := clusterprocess.FreeTCP()
+			require.NoError(t, err)
+			args = append(args, "-http", httpAddr)
+			want := "env-host"
+			if flagID != "" {
+				args = append(args, "-host-id", flagID)
+				want = flagID
+			}
+			readyCommand(t, startCommand(t, addr, prefix, args...))
+			l, err := s.GetRelay(context.Background(), "default")
+			require.NoError(t, err)
+			require.Equal(t, "host-id:"+want, l.Holder.Host)
+		})
+	}
+}
+
+func TestCommandUnknownHolderIsNotFenced(t *testing.T) {
+	s, addr, prefix := commandStore(t)
+	target, err := clusterprocess.Start(t.TempDir(), "target", os.Environ(), "sleep", "30")
+	require.NoError(t, err)
+	t.Cleanup(target.Stop)
+	p := commandIdentity(t, "unknown", target.PID(), "unverifiable-start")
+	p.Host = processidentity.UnknownHost
+	l, err := s.ClaimRelay(context.Background(), "default", p, time.Second)
+	require.NoError(t, err)
+	_, err = s.ActivateRelay(context.Background(), l)
+	require.NoError(t, err)
+	_, err = s.RenewRelay(context.Background(), l, time.Millisecond)
+	require.NoError(t, err)
+	time.Sleep(3 * time.Millisecond)
+	readyCommand(t, startCommand(t, addr, prefix))
+	require.NoError(t, target.SignalGroup(0), "unknown-host PID must not be killed")
+	current, err := s.GetRelay(context.Background(), "default")
+	require.NoError(t, err)
+	require.Greater(t, current.Epoch, l.Epoch)
+}
+
+func failedCommand(t *testing.T, c *clusterprocess.Child) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	select {
+	case <-c.Done():
+	case <-ctx.Done():
+		t.Fatal("expected command refusal did not exit")
+	}
+	// Read the final log after exit; Ready may otherwise capture an empty log
+	// just before its select observes exit.
+	_, err := c.Ready(ctx)
+	require.Error(t, err)
+	return err
 }
 func commandStore(t *testing.T) (*sessionstore.RedisOwners, string, string) {
 	t.Helper()
@@ -90,7 +207,7 @@ func TestCommandUpgradedStandbyFencesStoppedRelay(t *testing.T) {
 	require.NoError(t, err)
 	path := filepath.Join(t.TempDir(), "relay")
 	require.NoError(t, os.WriteFile(path, data, 0700))
-	active := startCommandBinary(t, path, addr, prefix)
+	active := startCommandBinary(t, path, addr, prefix, "-host-id", "upgrade-host")
 	ready := readyCommand(t, active)
 	old, err := s.GetRelay(context.Background(), "default")
 	require.NoError(t, err)
@@ -101,7 +218,7 @@ func TestCommandUpgradedStandbyFencesStoppedRelay(t *testing.T) {
 	t.Cleanup(func() { _ = active.SignalGroup(syscall.SIGKILL) })
 	require.NoError(t, os.WriteFile(path+".new", data, 0700))
 	require.NoError(t, os.Rename(path+".new", path))
-	next := startCommandBinary(t, path, addr, prefix, "-standby", "-media", ready.Media, "-leg", ready.Leg, "-http", strings.TrimPrefix(ready.HTTP, "http://"))
+	next := startCommandBinary(t, path, addr, prefix, "-standby", "-host-id", "upgrade-host", "-media", ready.Media, "-leg", ready.Leg, "-http", strings.TrimPrefix(ready.HTTP, "http://"))
 	readyCommand(t, next)
 	current, err := s.GetRelay(context.Background(), "default")
 	require.NoError(t, err)
@@ -130,9 +247,7 @@ func TestCommandForeignScopeRefusesClaim(t *testing.T) {
 			require.NoError(t, err)
 			time.Sleep(3 * time.Millisecond)
 			c := startCommand(t, addr, prefix)
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			_, err = c.Ready(ctx)
+			err = failedCommand(t, c)
 			require.Error(t, err)
 			require.ErrorContains(t, err, "configuration_error configuration_errors_total=1")
 			current, err := s.GetRelay(context.Background(), "default")
