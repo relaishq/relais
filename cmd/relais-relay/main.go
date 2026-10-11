@@ -45,12 +45,12 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 	leasePoll := flag.Duration("relay-lease-poll", relaylease.DefaultPoll, "standby claim polling interval")
 	bindTimeout := flag.Duration("relay-bind-timeout", socketbind.DefaultTimeout, "shared public, worker-leg and HTTP socket bind retry budget after fencing")
 	flag.Parse()
-	if *bufferWindow <= 0 || *bufferSession <= 0 || *bufferTotal <= 0 || *bufferSSRCs <= 0 {
-		return fmt.Errorf("buffer bounds must be positive")
+	if err := validateBufferBounds(*bufferWindow, *bufferSession, *bufferTotal, *bufferSSRCs); err != nil {
+		return err
 	}
 	var buffer *relay.BufferConfig
 	if !*bufferOff {
-		buffer = &relay.BufferConfig{Window: *bufferWindow, MaxSessionBytes: *bufferSession, MaxTotalBytes: *bufferTotal, MaxSSRCs: *bufferSSRCs}
+		buffer = &relay.BufferConfig{Window: *bufferWindow, MaxSessionBytes: *bufferSession, MaxTotalBytes: *bufferTotal, MaxSSRCs: *bufferSSRCs, TakeoverParallelism: bufferTakeoverParallelism}
 	}
 	if err := validatePlatform(*standby); err != nil {
 		return err
@@ -160,6 +160,29 @@ func validateAddresses(standby bool, public, leg, httpAddr string) error {
 	n, err := strconv.Atoi(port)
 	if err != nil || n < 0 || n > 65535 || standby && n == 0 {
 		return fmt.Errorf("invalid relay HTTP port: %s", httpAddr)
+	}
+	return nil
+}
+
+const (
+	maxBufferTotalBytes       = 1 << 30 // bounded to 1 GiB, including on 32-bit hosts
+	bufferTakeoverParallelism = 16
+)
+
+func validateBufferBounds(window time.Duration, session, total, ssrcs int) error {
+	if window <= 0 || session <= 0 || total <= 0 || ssrcs <= 0 {
+		return fmt.Errorf("buffer bounds must be positive")
+	}
+	if total > maxBufferTotalBytes {
+		return fmt.Errorf("buffer total bytes must not exceed 1 GiB")
+	}
+	if session > total {
+		return fmt.Errorf("buffer session bytes must not exceed total bytes")
+	}
+	// The ring and held queues each have a global cap. The derived held cap
+	// must fit that same configured budget; division avoids overflow.
+	if session > total/(2*bufferTakeoverParallelism) || total < bufferTakeoverParallelism*relay.DefaultMaxHeldBytes {
+		return fmt.Errorf("derived replay hold bytes must not exceed buffer total bytes")
 	}
 	return nil
 }

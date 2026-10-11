@@ -243,6 +243,24 @@ func printBufferComparison(on, off []result) {
 // These are the process topology's actual private collector samples. Requiring
 // both ring peaks and lifetime replay/loss counters avoids a presence-only check.
 func validateBufferMetrics(out result, off, replayLoss bool) error {
+	surviving := 0
+	for _, process := range out.Metrics {
+		if !strings.HasPrefix(process.Process, "worker-") || process.Exited {
+			continue
+		}
+		surviving++
+		value, present := process.Values["relais_worker_decryption_failures_total"]
+		if process.Samples == 0 || process.Error != "" || !present {
+			return errors.New("surviving worker decryption metrics unavailable")
+		}
+		if value != 0 {
+			return fmt.Errorf("surviving worker %s recorded decryption failures: %g", process.Process, value)
+		}
+	}
+	if surviving != 1 {
+		return fmt.Errorf("expected one surviving worker, got %d", surviving)
+	}
+
 	for _, process := range out.Metrics {
 		if process.Process != "relay" {
 			continue

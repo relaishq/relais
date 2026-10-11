@@ -180,7 +180,10 @@ private UDP send. A failed send, including a self-fenced send, counts as loss
 without recording delivery. Each paced batch verifies that its target and
 receiver tenure still match the live gate. A mid-replay move stops the old drain
 with `ErrReplayTargetChanged`; it leaves the unsent queue gated and does not
-save an old-target result as the new target's receipt.
+save an old-target result as the new target's receipt. Preparing for the next
+receiver keeps the gate, resets delivery to its checkpoint, and rebuilds the
+queue from the retained ring plus still-gated live input. Context cancellation
+also permits this preparation when the receiver tenure changes.
 
 Replay refuses a gate whose
 checkpoint has not been supplied. A trimmed index above
@@ -342,8 +345,10 @@ acceptance below now consumes the current #32 yardstick directly.
 The standalone `relais-relay` enables the bounded caller buffer by default.
 `-buffer-off` restores phase-1 recovery. `-buffer-window`,
 `-buffer-session-bytes`, `-buffer-total-bytes` and `-buffer-ssrcs` expose the
-retention and admission bounds. All bounds must be positive. The core
-`relay.Config.Buffer == nil` behavior remains available to embedded callers.
+retention and admission bounds. All bounds must be positive. The total byte
+limit is at most 1 GiB; both the per-session ring and the derived per-session
+and global replay holds must fit it. The core `relay.Config.Buffer == nil`
+behavior remains available to embedded callers.
 The standalone relay retains the fenced lease, standby flags, bind retries
 and private-listener validation from #43.
 
@@ -376,13 +381,25 @@ Unit regressions cover A→B→A→B address reuse, a fresh epoch at the same ad
 self-fenced sends, and a route move between paced batches. The send and move
 regressions failed before their corresponding fixes.
 
+Interrupted HTTP replay is also canceled after B decrypts its first packet,
+then B is killed before checkpointing. The gate is rebuilt for C; an opt-in
+probe requires C to authenticate every uncheckpointed index processed by B.
+The same direct check covers a second crash after B completes its drain.
+Removing tenure re-preparation makes the cancellation test fail to finish
+recovery. An uncertain export with a planned hold now releases all observed
+held input to the adopted worker before the backstop, with no hold timeout.
+These regressions pass with memory and a dedicated throwaway Redis.
+
 ### Real-process comparison
 
 `make crash-run CRASH_FLAGS="-compare-buffer"` interleaves ten buffer-on and
 ten buffer-off SIGKILL trials in the loopback (`lan`) topology. Both modes use
 the same frame-cache setting, checkpoint cadence, kill phase and 60-second
 post-takeover observation. `-frame-cache-off` selects PLI-only in both modes.
-The original cache/PLI comparison explicitly disables the relay buffer.
+The original cache/PLI comparison and relay restart/standby continuity modes
+explicitly pass `-buffer-off`. `relais-load` and `relais-demo` keep the product
+default buffer on. An uncertain planned export retains its existing hold and
+releases it to the adopted target through the planned-hold path.
 `-buffer` selects the buffered acceptance mode.
 `make crash-run CRASH_FLAGS="-buffer -runs=10 -after=60s"` runs ten consecutive
 SIGKILL takeovers, each with 60 seconds of post-takeover observation. Buffer
@@ -420,7 +437,9 @@ ten-run acceptance or browser playout.
 The process driver now samples each real private `/metrics` endpoint and
 writes `metrics.json`. Main's collector already exports ring sessions, packets,
 bytes, capacity/age/metadata loss and completed, sent, filtered, dropped, failed
-and expired replay counters. The buffered driver requires those samples,
+and expired replay counters. The buffered driver also requires a successful
+surviving-worker scrape with `relais_worker_decryption_failures_total` equal to
+zero. It requires those relay samples,
 occupied-ring gauge peaks and successful replay counters. No extra collector
 names or session labels are needed.
 

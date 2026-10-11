@@ -26,11 +26,15 @@ type registration struct {
 	lifecycle       Lifecycle
 	beforeSnapshot  func(context.Context, string)
 	afterEcho       func(context.Context, string, []byte)
+	afterDecrypt    func(string, uint32, uint64)
 	afterResume     func(string, bool)
 }
 
 // enabled keeps every production probe call off the process-wide mutex.
 var enabled atomic.Bool
+
+// Enabled lets packet paths avoid probe calls and argument work in production.
+func Enabled() bool { return enabled.Load() }
 
 var registry struct {
 	sync.Mutex
@@ -306,4 +310,32 @@ func InitialSequences(addr netip.AddrPort) (audio, video uint16, ok bool) {
 		return w.initialSequence[0], w.initialSequence[1], true
 	}
 	return 0, 0, false
+}
+
+// SetAfterDecrypt observes authenticated inbound indexes in an opt-in test.
+// It exposes no keys or media and must return promptly.
+func SetAfterDecrypt(addr netip.AddrPort, hook func(string, uint32, uint64)) error {
+	registry.Lock()
+	defer registry.Unlock()
+	w := registry.workers[addr]
+	if w == nil {
+		return errors.New("workerprobe: no packet probe")
+	}
+	w.afterDecrypt = hook
+	return nil
+}
+
+func AfterDecrypt(addr netip.AddrPort, id string, ssrc uint32, index uint64) {
+	if !enabled.Load() {
+		return
+	}
+	registry.Lock()
+	var hook func(string, uint32, uint64)
+	if w := registry.workers[addr]; w != nil {
+		hook = w.afterDecrypt
+	}
+	registry.Unlock()
+	if hook != nil {
+		hook(id, ssrc, index)
+	}
 }

@@ -102,6 +102,16 @@ func (r *Relay) BeginReplay(ctx context.Context, id string, from netip.AddrPort,
 		if !h.replay || h.source != from || h.replaying {
 			return ReplayPlan{}, ErrHeld
 		}
+		if s := r.bufferSession(id); h.replayTarget.IsValid() && (h.replayTarget != current || s != nil && h.replayTenure != s.routeTenure) {
+			// Keep the gate, but prepare from the new receiver's checkpoint.
+			// The old drain's floor cannot suppress input for this tenure.
+			for _, index := range inbound {
+				if index >= 1<<48 {
+					return ReplayPlan{}, errors.New("relay: inbound SRTP index exceeds 48 bits")
+				}
+			}
+			r.rebuildReplay(h, inbound)
+		}
 		return r.configureReplay(h, inbound)
 	}
 	if len(r.holds) >= r.cfg.MaxHeldSessions {
@@ -132,6 +142,70 @@ func (r *Relay) BeginReplay(ctx context.Context, id string, from netip.AddrPort,
 		}
 	}
 	return r.configureReplay(h, inbound)
+}
+
+// rebuildReplay runs under forwardMu. Ring eviction must not discard live
+// packets still owned by the gate; merge both sets without duplicating input.
+func (r *Relay) rebuildReplay(h *sessionHold, inbound map[uint32]uint64) {
+	r.buffer.expire(time.Now())
+	gated := h.queue
+	r.heldPackets -= len(gated)
+	r.heldBytes -= h.bytes
+	h.queue, h.bytes = nil, 0
+	h.delivered = make(map[uint32]uint64)
+	h.replayInbound, h.replayTrimmed = nil, nil
+	h.replayCheckpoint = false
+	h.replayTarget, h.replayTenure = netip.AddrPort{}, 0
+	h.replayResult = ReplayResult{}
+	clear(h.queuedHigh)
+	s := r.bufferSession(h.id)
+	h.replayComplete = s != nil && s.packets.Len() > 0 && !s.untracked
+	type packetIndex struct {
+		ssrc  uint32
+		index uint64
+	}
+	seen := make(map[packetIndex]bool)
+	appendPacket := func(p heldPacket) {
+		if floor, known := inbound[p.ssrc]; p.media && known && p.index <= floor {
+			r.replayFiltered.Add(1)
+			return
+		}
+		key := packetIndex{p.ssrc, p.index}
+		if p.media && seen[key] {
+			return
+		}
+		if p.media {
+			seen[key] = true
+		}
+		if !r.appendReplay(h, p) {
+			h.replayComplete = false
+		}
+	}
+	if s != nil {
+		// Align before filtering so checkpoint ROC changes use one index space.
+		for ssrc, floor := range inbound {
+			translate := indexTranslation(s.indexes[ssrc], floor)
+			for i := range gated {
+				if gated[i].media && gated[i].ssrc == ssrc {
+					gated[i].index = translate(gated[i].index)
+				}
+			}
+			r.buffer.align(s, ssrc, floor)
+		}
+		s.replayGeneration++
+		h.replayGeneration = s.replayGeneration
+		h.replayTrimmed = maps.Clone(s.trimmed)
+	}
+	// Retain the live input the gate already owns before copying the ring.
+	for _, p := range gated {
+		appendPacket(p)
+	}
+	if s != nil {
+		for item := s.packets.Front(); item != nil; item = item.Next() {
+			p := item.Value.(*bufferedPacket)
+			appendPacket(heldPacket{caller: p.caller, datagram: p.datagram, ssrc: p.ssrc, index: p.index, media: true})
+		}
+	}
 }
 
 func (r *Relay) configureReplay(h *sessionHold, inbound map[uint32]uint64) (ReplayPlan, error) {
@@ -512,19 +586,7 @@ func (r *Relay) drainReplayBatch(h *sessionHold, to netip.AddrPort, pacer *repla
 			continue
 		}
 		if r.sendHeld(h.id, p, to) {
-			if p.media {
-				h.delivered[p.ssrc] = p.index
-				if s := r.buffer.sessions[h.id]; s != nil {
-					if s.replayedTarget != to || s.replayedTenure != h.replayTenure {
-						s.replayedTarget, s.replayedTenure = to, h.replayTenure
-						s.replayedThrough = nil
-					}
-					if s.replayedThrough == nil {
-						s.replayedThrough = make(map[uint32]uint64)
-					}
-					s.replayedThrough[p.ssrc] = max(s.replayedThrough[p.ssrc], p.index)
-				}
-			}
+			r.noteReplayDelivery(h, p, to)
 			h.replayResult.Packets++
 			if p.media {
 				h.replayResult.Windows = noteReplayWindow(h.replayResult.Windows, p)
@@ -536,6 +598,22 @@ func (r *Relay) drainReplayBatch(h *sessionHold, to netip.AddrPort, pacer *repla
 			r.replaySendFailures.Add(1)
 			r.holdSendFailures.Add(1)
 		}
+	}
+}
+
+// noteReplayDelivery is called only after a successful send, under forwardMu.
+func (r *Relay) noteReplayDelivery(h *sessionHold, p heldPacket, to netip.AddrPort) {
+	if !p.media {
+		return
+	}
+	h.delivered[p.ssrc] = max(h.delivered[p.ssrc], p.index)
+	if s := r.bufferSession(h.id); s != nil {
+		s.noteReplayTarget(to, 0)
+		if s.replayedTarget != to || s.replayedTenure != s.routeTenure {
+			s.replayedTarget, s.replayedTenure = to, s.routeTenure
+			s.replayedThrough = make(map[uint32]uint64)
+		}
+		s.replayedThrough[p.ssrc] = max(s.replayedThrough[p.ssrc], p.index)
 	}
 }
 

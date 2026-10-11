@@ -32,6 +32,7 @@ import (
 
 type bufferFailureConfig struct {
 	buffer          relay.BufferConfig
+	holdTimeout     time.Duration
 	cache           bool
 	workers         int
 	workerHandler   func(int, http.Handler) http.Handler
@@ -71,7 +72,7 @@ func startBufferFailureSystem(t *testing.T, store sessionstore.Store, cfg buffer
 			frames = redisFrames
 		}
 	}
-	relayConfig := relay.Config{Owners: store, Buffer: &cfg.buffer}
+	relayConfig := relay.Config{Owners: store, Buffer: &cfg.buffer, HoldTimeout: cfg.holdTimeout}
 	if cfg.persist {
 		relayConfig.Routes = store.(sessionstore.Routes)
 	}
@@ -339,7 +340,7 @@ func firstBufferContent(call *Call, report *Report, killed, end time.Time) (stri
 
 func TestRelayBufferFailurePaths(t *testing.T) {
 	relayBufferStores(t, func(t *testing.T, store sessionstore.Store) {
-		for _, path := range []string{"failed-adoption", "failed-adoption-loss", "retried-target", "retried-replay", "second-crash-during", "second-crash-after", "sequence-wrap", "frame-cache-complete", "frame-cache-replay", "overflow", "expiry", "relay-restart"} {
+		for _, path := range []string{"failed-adoption", "failed-adoption-loss", "retried-target", "retried-replay", "second-crash-during", "second-crash-after", "second-crash-canceled", "sequence-wrap", "frame-cache-complete", "frame-cache-replay", "overflow", "expiry", "relay-restart"} {
 			t.Run(path, func(t *testing.T) { testBufferFailure(t, store, path) })
 		}
 	})
@@ -372,7 +373,7 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 	case "retried-replay":
 		reply = &bufferResumeReplyFault{path: "/replay"}
 		cfg.relayTransport = reply
-	case "second-crash-during", "second-crash-after":
+	case "second-crash-during", "second-crash-after", "second-crash-canceled":
 		cfg.buffer.ReplayBatchPackets = 1
 		cfg.buffer.ReplayInterval = 5 * time.Millisecond
 	case "frame-cache-complete":
@@ -394,6 +395,24 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 	defer replayAckOnce.Do(func() { close(replayDoneAck) })
 	replayDone := make(chan struct{})
 	var replayOnce sync.Once
+	cancelReplay := make(chan context.CancelFunc, 1)
+	var canceledReplay atomic.Bool
+	if path == "second-crash-canceled" {
+		cfg.relayHandler = func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasSuffix(r.URL.Path, "/replay") && canceledReplay.CompareAndSwap(false, true) {
+					ctx, cancel := context.WithCancel(r.Context())
+					defer cancel()
+					cancelReplay <- cancel
+					next.ServeHTTP(w, r.WithContext(ctx))
+					close(replayDone)
+					<-replayDoneAck
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		}
+	}
 	if path == "second-crash-after" {
 		cfg.relayHandler = func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -442,20 +461,44 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 
 	echoed := make(chan struct{})
 	var echoedOnce sync.Once
-	if path == "second-crash-during" {
+	if path == "second-crash-during" || path == "second-crash-canceled" {
 		require.NoError(t, workerprobe.SetAfterEcho(sys.workers[1].LocalAddr(), func(_ context.Context, id string, _ []byte) {
 			if id == call.SessionID() {
-				echoedOnce.Do(func() { close(echoed) })
+				echoedOnce.Do(func() {
+					if path == "second-crash-canceled" {
+						(<-cancelReplay)()
+					}
+					close(echoed)
+				})
 			}
 		}))
+	}
+	var processedMu sync.Mutex
+	type inboundPacket struct {
+		ssrc  uint32
+		index uint64
+	}
+	processedB, processedC := make(map[inboundPacket]bool), make(map[inboundPacket]bool)
+	if path == "second-crash-after" || path == "second-crash-canceled" {
+		// Prevent B from checkpointing its drained input before the second kill.
+		require.NoError(t, workerprobe.SetBeforeSnapshot(sys.workers[1].LocalAddr(), func(ctx context.Context, _ string) { <-ctx.Done() }))
+		for i, packets := range map[int]map[inboundPacket]bool{1: processedB, 2: processedC} {
+			require.NoError(t, workerprobe.SetAfterDecrypt(sys.workers[i].LocalAddr(), func(id string, ssrc uint32, index uint64) {
+				if id == call.SessionID() {
+					processedMu.Lock()
+					packets[inboundPacket{ssrc, index}] = true
+					processedMu.Unlock()
+				}
+			}))
+		}
 	}
 	killed := time.Now()
 	sys.h.RecordProcessKill("0", killed)
 	require.NoError(t, workerprobe.Kill(sys.workers[0].LocalAddr()))
 	expected := 1
-	if path == "second-crash-during" || path == "second-crash-after" {
+	if path == "second-crash-during" || path == "second-crash-after" || path == "second-crash-canceled" {
 		boundary := echoed
-		if path == "second-crash-after" {
+		if path == "second-crash-after" || path == "second-crash-canceled" {
 			boundary = replayDone
 		}
 		select {
@@ -463,7 +506,7 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		}
-		if path == "second-crash-during" {
+		if path == "second-crash-during" || path == "second-crash-canceled" {
 			require.Equal(t, 1, sys.r.Stats().Holds, "second kill occurs while replay still gates live input")
 		}
 		failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
@@ -471,10 +514,13 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		require.Zero(t, failures)
 		sys.h.RecordProcessKill("1", time.Now())
 		require.NoError(t, workerprobe.Kill(sys.workers[1].LocalAddr()))
-		if path == "second-crash-after" {
+		if path == "second-crash-after" || path == "second-crash-canceled" {
 			replayAckOnce.Do(func() { close(replayDoneAck) })
 		}
 		expected = 2
+		if path == "second-crash-canceled" {
+			expected = 1
+		}
 	}
 	status := waitBufferTakeovers(t, ctx, sys.h, expected)
 	lostCall := path == "failed-adoption-loss"
@@ -495,6 +541,20 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		failures, err := sys.workers[target].SessionDecryptFailures(call.SessionID())
 		require.NoError(t, err)
 		require.Zero(t, failures)
+	}
+	if path == "second-crash-after" || path == "second-crash-canceled" {
+		require.Equal(t, "2", status.Calls[0].Owner)
+		processedMu.Lock()
+		count := len(processedB)
+		var missing []inboundPacket
+		for packet := range processedB {
+			if !processedC[packet] {
+				missing = append(missing, packet)
+			}
+		}
+		processedMu.Unlock()
+		require.Positive(t, count, "B decrypted uncheckpointed input before the kill")
+		require.Empty(t, missing, "C must decrypt all of B's uncheckpointed indexes")
 	}
 	if adoption != nil {
 		require.True(t, adoption.committed.Load())
@@ -591,3 +651,165 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 // Compile-time guard: the failure wrapper retains the store's checkpoint
 // metadata capability, needed by the age envelope in a real takeover.
 var _ sessionstore.Store = (*bufferAdoptionFault)(nil)
+
+// Execute export but discard its reply: recovery must release the existing
+// planned hold to the adopted owner, even with the default buffer enabled.
+func TestRelayBufferUncertainExport(t *testing.T) {
+	relayBufferStores(t, func(t *testing.T, store sessionstore.Store) {
+		var exported atomic.Bool
+		sys := startBufferFailureSystem(t, store, bufferFailureConfig{workers: 2, workerHandler: func(i int, next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if i == 1 && r.URL.Path == "/resume" {
+					time.Sleep(100 * time.Millisecond)
+				}
+				if i == 0 && strings.HasSuffix(r.URL.Path, "/export") && exported.CompareAndSwap(false, true) {
+					next.ServeHTTP(httptest.NewRecorder(), r)
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		}})
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		call, err := sys.h.Dial(ctx, CallOptions{Video: true, Worker: 0})
+		require.NoError(t, err)
+		o := observeBufferCall(call)
+		mediaCtx, stop := context.WithCancel(ctx)
+		sent := make(chan error, 1)
+		go func() { sent <- call.SendMedia(mediaCtx, 7*time.Second) }()
+		defer func() { stop(); require.ErrorIs(t, <-sent, context.Canceled) }()
+		time.Sleep(650 * time.Millisecond)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, sys.h.external.SignalingURL+"/"+call.SessionID()+"/move?to=1", nil)
+		require.NoError(t, err)
+		response, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer func() { _ = response.Body.Close() }()
+		require.Equal(t, http.StatusOK, response.StatusCode, "uncertain export must recover before the planned hold expires")
+		var move controlplane.MoveResult
+		require.NoError(t, json.NewDecoder(response.Body).Decode(&move))
+		require.Positive(t, move.Result.HeldPackets)
+		require.False(t, move.Result.HoldExpired)
+		require.True(t, exported.Load())
+		require.Zero(t, sys.r.Stats().Holds)
+		require.Zero(t, sys.r.Stats().HoldTimeouts)
+		time.Sleep(300 * time.Millisecond)
+		failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
+		require.NoError(t, err)
+		require.Zero(t, failures)
+		sentDuring, lost := bufferPacketLoss(t, o, move.Start, move.End)
+		require.Positive(t, sentDuring)
+		require.Zero(t, lost, "held caller input must reach the adopted worker")
+		stop()
+		report, err := call.Hangup(ctx)
+		require.NoError(t, err)
+		require.Zero(t, report.DecryptionFailures.Total())
+		require.True(t, report.ConnectedThroughout())
+	})
+}
+
+// The first target request is uncertain and unadopted until the planned hold
+// has expired. Recovery must recreate and prepare one gate with one source.
+type bufferUnadoptedResumeFault struct {
+	expired func() bool
+	once    atomic.Bool
+}
+
+func (f *bufferUnadoptedResumeFault) RoundTrip(req *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(req.URL.Path, "/resume") && f.once.CompareAndSwap(false, true) {
+		defer func() { _ = req.Body.Close() }()
+		tick := time.NewTicker(5 * time.Millisecond)
+		defer tick.Stop()
+		for !f.expired() {
+			select {
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
+			case <-tick.C:
+			}
+		}
+		return nil, errors.New("injected lost resume request before adoption")
+	}
+	return http.DefaultTransport.RoundTrip(req)
+}
+func TestRelayBufferUncertainExportAfterHoldExpiry(t *testing.T) {
+	relayBufferStores(t, func(t *testing.T, store sessionstore.Store) {
+		var sys *bufferFailureSystem
+		fault := &bufferUnadoptedResumeFault{expired: func() bool { return sys.r.Stats().HoldTimeouts > 0 }}
+		var exported atomic.Bool
+		var mu sync.Mutex
+		var begins []relay.ReplayRequest
+		sys = startBufferFailureSystem(t, store, bufferFailureConfig{
+			workers: 2, holdTimeout: 500 * time.Millisecond, targetTransport: fault,
+			workerHandler: func(i int, next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if i == 0 && strings.HasSuffix(r.URL.Path, "/export") && exported.CompareAndSwap(false, true) {
+						next.ServeHTTP(httptest.NewRecorder(), r)
+						w.WriteHeader(http.StatusServiceUnavailable)
+						return
+					}
+					next.ServeHTTP(w, r)
+				})
+			},
+			relayHandler: func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if strings.HasSuffix(r.URL.Path, "/begin-replay") {
+						body, err := io.ReadAll(r.Body)
+						if err != nil {
+							w.WriteHeader(http.StatusBadRequest)
+							return
+						}
+						r.Body = io.NopCloser(bytes.NewReader(body))
+						var begin relay.ReplayRequest
+						if err = json.Unmarshal(body, &begin); err != nil {
+							w.WriteHeader(http.StatusBadRequest)
+							return
+						}
+						mu.Lock()
+						begins = append(begins, begin)
+						mu.Unlock()
+					}
+					next.ServeHTTP(w, r)
+				})
+			},
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		call, err := sys.h.Dial(ctx, CallOptions{Video: true, Worker: 0})
+		require.NoError(t, err)
+		mediaCtx, stop := context.WithCancel(ctx)
+		sent := make(chan error, 1)
+		go func() { sent <- call.SendMedia(mediaCtx, 7*time.Second) }()
+		defer func() { stop(); require.ErrorIs(t, <-sent, context.Canceled) }()
+		time.Sleep(650 * time.Millisecond)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, sys.h.external.SignalingURL+"/"+call.SessionID()+"/move?to=1", nil)
+		require.NoError(t, err)
+		response, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		_ = response.Body.Close()
+		require.Equal(t, http.StatusInternalServerError, response.StatusCode, "first adoption remains uncertain after the original hold expires")
+		status := waitBufferTakeovers(t, ctx, sys.h, 1)
+		require.False(t, status.Takeovers[0].Lost)
+		require.True(t, status.Takeovers[0].Result.RelayReplayComplete)
+		require.Positive(t, status.Takeovers[0].Result.RelayReplayPackets)
+		require.Equal(t, "1", status.Calls[0].Owner)
+		require.EqualValues(t, 1, sys.r.Stats().HoldTimeouts, "recovery must not wait for a second hold expiry")
+		require.Zero(t, sys.r.Stats().Holds)
+		mu.Lock()
+		observed := append([]relay.ReplayRequest(nil), begins...)
+		mu.Unlock()
+		require.GreaterOrEqual(t, len(observed), 3)
+		for _, begin := range observed {
+			require.Equal(t, sys.workers[0].LocalAddr(), begin.From, "gate creation and checkpoint preparation use the same original source")
+		}
+		failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
+		require.NoError(t, err)
+		require.Zero(t, failures)
+		time.Sleep(300 * time.Millisecond)
+		stop()
+		report, err := call.Hangup(ctx)
+		require.NoError(t, err)
+		require.Zero(t, report.DecryptionFailures.Total())
+		require.True(t, report.ConnectedThroughout())
+		require.Zero(t, report.SentVideo.KeyframeRequests)
+	})
+}

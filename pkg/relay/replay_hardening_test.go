@@ -15,7 +15,9 @@ import (
 
 // The UDP send path checks the lease permission itself. A fenced send must
 // not suppress that same input during a later recovery.
-func TestReplayFailedSendDoesNotAdvanceFloor(t *testing.T) {
+func TestReplayFailedSendDoesNotAdvanceFloor(t *testing.T)        { testReplayFailedSend(t, false) }
+func TestReleaseReplayFailedSendDoesNotAdvanceFloor(t *testing.T) { testReplayFailedSend(t, true) }
+func testReplayFailedSend(t *testing.T, release bool) {
 	var permitted atomic.Bool
 	permitted.Store(true)
 	sys := startTestRelay(t, Config{Buffer: &BufferConfig{}, HoldTimeout: time.Hour, ForwardingAllowed: permitted.Load})
@@ -33,13 +35,26 @@ func TestReplayFailedSendDoesNotAdvanceFloor(t *testing.T) {
 	hold := sys.relay.holds[sessionA]
 	sys.relay.forwardMu.Unlock()
 	permitted.Store(false)
-	result, err := sys.relay.ReplaySession(context.Background(), sessionA, b.addr())
+	var result ReplayResult
+	if release {
+		_, err = sys.relay.ReleaseSession(sessionA, b.addr())
+		sys.relay.forwardMu.Lock()
+		result = cloneReplayResult(hold.replayResult)
+		result.Complete = hold.replayComplete
+		sys.relay.forwardMu.Unlock()
+	} else {
+		result, err = sys.relay.ReplaySession(context.Background(), sessionA, b.addr())
+	}
 	require.NoError(t, err)
 	require.Equal(t, 1, result.SendFailures)
 	require.Zero(t, result.Packets)
 	require.False(t, result.Complete)
-	require.EqualValues(t, 10, hold.delivered[42], "failed send cannot advance the checkpoint floor")
-	require.Zero(t, sys.relay.buffer.sessions[sessionA].replayedThrough[42], "failed send cannot record delivery")
+	sys.relay.forwardMu.Lock()
+	delivered := hold.delivered[42]
+	through := sys.relay.buffer.sessions[sessionA].replayedThrough[42]
+	sys.relay.forwardMu.Unlock()
+	require.EqualValues(t, 10, delivered, "failed send cannot advance the checkpoint floor")
+	require.Zero(t, through, "failed send cannot record delivery")
 	b.expectNothing(t)
 	permitted.Store(true)
 	transferTestLease(t, sys.cfg.Owners, sessionA, a.addr())
@@ -55,8 +70,17 @@ func TestReplayFailedSendDoesNotAdvanceFloor(t *testing.T) {
 	a.expect(t, caller.addr(), packet)
 }
 
-func TestReplayStopsWhenTargetMoves(t *testing.T) {
-	sys := startTestRelay(t, Config{Buffer: &BufferConfig{ReplayBatchPackets: 1, ReplayInterval: 200 * time.Millisecond}, HoldTimeout: time.Hour})
+func TestReplayStopsWhenTargetMoves(t *testing.T)           { testReplayRetarget(t, false, false) }
+func TestReplayCanceledDrainMovesToNextTarget(t *testing.T) { testReplayRetarget(t, true, false) }
+func TestReplayRetargetPreservesGatedInputAfterRingExpiry(t *testing.T) {
+	testReplayRetarget(t, true, true)
+}
+func testReplayRetarget(t *testing.T, canceled, expired bool) {
+	buffer := &BufferConfig{ReplayBatchPackets: 1, ReplayInterval: 200 * time.Millisecond}
+	if expired {
+		buffer.Window = 50 * time.Millisecond
+	}
+	sys := startTestRelay(t, Config{Buffer: buffer, HoldTimeout: time.Hour})
 	a, b, c := sys.worker(t, sessionA), sys.worker(t, sessionB), sys.worker(t, sessionC)
 	caller := newTestCaller(t)
 	sys.connect(t, caller, a, sessionA)
@@ -80,19 +104,55 @@ func TestReplayStopsWhenTargetMoves(t *testing.T) {
 	defer cancel()
 	go func() { result, err := sys.relay.ReplaySession(ctx, sessionA, b.addr()); done <- outcome{result, err} }()
 	b.expect(t, caller.addr(), bufferRTP(t, 42, 11))
+	caller.send(t, bufferRTP(t, 42, 14), sys.relay.PublicAddr())
+	require.Eventually(t, func() bool {
+		sys.relay.forwardMu.Lock()
+		defer sys.relay.forwardMu.Unlock()
+		return len(sys.relay.holds[sessionA].queue) == 3
+	}, 100*time.Millisecond, time.Millisecond)
+	var out outcome
+	if canceled {
+		cancel()
+		out = <-done
+	}
+	if expired {
+		time.Sleep(60 * time.Millisecond)
+	}
 	transferTestLease(t, sys.cfg.Owners, sessionA, c.addr())
 	require.NoError(t, sys.relay.MoveSession(sessionA, b.addr(), c.addr()))
-	out := <-done
-	require.Error(t, out.err, "a moved target must stop the old drain")
+	if canceled {
+		require.ErrorIs(t, out.err, context.Canceled)
+	} else {
+		out = <-done
+		require.ErrorIs(t, out.err, ErrReplayTargetChanged, "a moved target must stop the old drain")
+	}
 	require.Equal(t, 1, out.result.Packets)
-	require.False(t, out.result.Complete, "a partial drain cannot advertise completion on the new target")
+	if !canceled {
+		require.False(t, out.result.Complete, "a partial drain cannot advertise completion on the new target")
+	}
 	require.Equal(t, 1, sys.relay.Stats().Holds, "the undrained queue remains gated")
 	b.expectNothing(t)
 	c.expectNothing(t)
 	sys.relay.forwardMu.Lock()
 	remaining := len(sys.relay.holds[sessionA].queue)
 	sys.relay.forwardMu.Unlock()
-	require.Equal(t, 2, remaining)
+	require.Equal(t, 3, remaining)
+	plan, err := sys.relay.BeginReplay(context.Background(), sessionA, a.addr(), map[uint32]uint64{42: 10})
+	require.NoError(t, err)
+	first, count := uint16(11), 4
+	if expired {
+		first, count = 12, 3
+	}
+	require.Equal(t, count, plan.Packets, "C needs all retained input after its checkpoint, including index 11 sent to B when available")
+	require.Equal(t, !expired, plan.Complete)
+	result, err := sys.relay.ReplaySession(context.Background(), sessionA, c.addr())
+	require.NoError(t, err)
+	require.Equal(t, !expired, result.Complete)
+	require.Equal(t, count, result.Packets)
+	for seq := first; seq <= 14; seq++ {
+		c.expect(t, caller.addr(), bufferRTP(t, 42, seq))
+	}
+	require.Zero(t, sys.relay.Stats().Holds)
 }
 
 // Returning to an address is a new routing tenure, not confirmation of the
@@ -168,4 +228,25 @@ func TestReplayReceiptUsesTransferredEpochAtSameAddress(t *testing.T) {
 	require.True(t, result.Complete)
 	b.expect(t, caller.addr(), bufferRTP(t, 42, 11))
 	b.expect(t, caller.addr(), bufferRTP(t, 42, 12))
+}
+
+func TestReleaseReplayRecordsSuccessfulDelivery(t *testing.T) {
+	sys := startTestRelay(t, Config{Buffer: &BufferConfig{}, HoldTimeout: time.Hour})
+	a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+	caller := newTestCaller(t)
+	sys.connect(t, caller, a, sessionA)
+	packet := bufferRTP(t, 42, 11)
+	caller.send(t, packet, sys.relay.PublicAddr())
+	a.expect(t, caller.addr(), packet)
+	_, err := sys.relay.BeginReplay(context.Background(), sessionA, a.addr(), map[uint32]uint64{42: 10})
+	require.NoError(t, err)
+	transferTestLease(t, sys.cfg.Owners, sessionA, b.addr())
+	require.NoError(t, sys.relay.MoveSession(sessionA, a.addr(), b.addr()))
+	_, err = sys.relay.ReleaseSession(sessionA, b.addr())
+	require.NoError(t, err)
+	b.expect(t, caller.addr(), packet)
+	sys.relay.forwardMu.Lock()
+	through := sys.relay.buffer.sessions[sessionA].replayedThrough[42]
+	sys.relay.forwardMu.Unlock()
+	require.EqualValues(t, 11, through)
 }

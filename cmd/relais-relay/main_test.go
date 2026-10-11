@@ -800,3 +800,28 @@ func commandIdentity(t *testing.T, owner string, pid int, start string) sessions
 	require.NoError(t, err)
 	return sessionstore.RelayProcess{Owner: owner, PID: pid, Start: start, Host: id.Host, Namespace: id.Namespace, Executable: id.Executable}
 }
+
+func TestBufferBoundsIncludeDerivedHolds(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		session, total int
+		valid          bool
+	}{
+		{"defaults", relay.DefaultMaxBufferedBytes, relay.DefaultMaxTotalBufferedBytes, true},
+		{"session exceeds total", 65 << 20, 64 << 20, false},
+		{"held budget exceeds total", 3 << 20, 64 << 20, false},
+		{"base hold exceeds total", 1, 8 << 20, false},
+		{"upper bound", 32 << 20, 1 << 30, true},
+		{"over upper bound", 1 << 20, (1 << 30) + 1, false},
+		{"zero", 0, 64 << 20, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateBufferBounds(time.Second, tc.session, tc.total, 16)
+			if tc.valid {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
