@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/privateapi"
+	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/metrics"
@@ -211,6 +212,7 @@ type takeoverState struct {
 	transientResume    bool
 	resumeState        []byte
 	resumeTarget       *registration
+	agentFailure       error // preserve the actionable cause if no compatible target remains
 	checkpointAge      time.Duration
 	snapshotAge        time.Duration
 	checkpointStoredAt time.Time
@@ -403,7 +405,11 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			}
 			noTargetAttempts++
 			if noTargetAttempts == maxResumeAttempts {
-				complete(true, pickErr)
+				cause := pickErr
+				if pending.agentFailure != nil {
+					cause = fmt.Errorf("controlplane: no compatible agent target: %w", pending.agentFailure)
+				}
+				complete(true, cause)
 				return
 			}
 			select {
@@ -529,7 +535,11 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		if !pending.planned {
 			pending.plannedState = nil
 		}
-		_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: transferred,
+		kind := agent.Takeover
+		if pending.planned && !pending.crashMargins {
+			kind = agent.PlannedMove
+		}
+		_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Kind: kind, Lease: transferred,
 			Context: ctx, CallerSequenceReserve: pending.reserve, CheckpointAge: pending.checkpointAge, SnapshotAge: pending.snapshotAge, CheckpointStoredAt: pending.checkpointStoredAt, SequenceMargin: margin, SRTCPIndexMargin: rtcpMargin})
 		res.Result.Resume += time.Since(started)
 		p.unreserve(target)
@@ -548,7 +558,12 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			complete(false, nil)
 			return
 		}
-		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, privateapi.ErrUncertain) {
+		// Typed adoption failures are definitive even when their callback
+		// cause is a deadline. Match the HTTP worker's agent error mapping.
+		agentFailure := errors.Is(err, agent.ErrRestore) || errors.Is(err, agent.ErrVersion) || errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrSave)
+		if agentFailure {
+			pending.agentFailure = err
+		} else if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, privateapi.ErrUncertain) {
 			pending.transientResume = true
 			return
 		}
