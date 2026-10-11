@@ -545,11 +545,13 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		p.unreserve(target)
 		if err == nil {
 			now := time.Now()
+			c.stateMu.Lock()
 			c.lastMove, c.lastMoveKind = &now, res.Kind
 			c.moveCount++
 			if !pending.planned {
 				c.takeoverCount++
 			}
+			c.stateMu.Unlock()
 			if pending.planned || pending.held {
 				held, releaseErr := r.ReleaseSession(c.id, target.addr)
 				res.Result.HeldPackets = held

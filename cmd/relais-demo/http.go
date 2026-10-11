@@ -199,6 +199,8 @@ func (d *demo) kill(ctx context.Context, id string) (actionResult, error) {
 	}
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
+	var takeover controlplane.MoveResult
+	completed := false
 	for {
 		status, err := d.status(ctx)
 		if err != nil {
@@ -210,12 +212,17 @@ func (d *demo) kill(ctx context.Context, id string) (actionResult, error) {
 				recovered = w.Dead && !w.Recovering
 			}
 		}
-		for _, call := range status.Calls {
-			if call.ID == owner.ID && call.Owner != owner.Owner {
-				result.To = call.Owner
+		// Ownership changes before resume, so a new owner alone cannot prove
+		// recovery. Use this kill's terminal event, excluding earlier takeovers.
+		for _, event := range status.Takeovers {
+			if event.ID == owner.ID && event.From == owner.Owner && !event.Start.Before(result.At) {
+				takeover, completed = event, true
 			}
 		}
-		if recovered {
+		if recovered && completed {
+			if !takeover.Lost {
+				result.To = takeover.To
+			}
 			break
 		}
 		select {
@@ -229,7 +236,7 @@ func (d *demo) kill(ctx context.Context, id string) (actionResult, error) {
 	if err != nil {
 		return result, err
 	}
-	if result.To == "" {
+	if takeover.Lost || result.To == "" {
 		return result, errors.New("call was lost during takeover")
 	}
 	return result, nil
