@@ -3,9 +3,11 @@ package mediaworker
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/pion/srtp/v3"
+	"github.com/prometheus/common/expfmt"
 	"github.com/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
@@ -14,6 +16,22 @@ func metricsBody(w *Worker) string {
 	r := httptest.NewRecorder()
 	w.PrivateHandler().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	return r.Body.String()
+}
+
+func checkpointWritesFromScrape(t *testing.T, w *Worker, result string) float64 {
+	t.Helper()
+	var parser expfmt.TextParser
+	families, err := parser.TextToMetricFamilies(strings.NewReader(metricsBody(w)))
+	require.NoError(t, err)
+	family := families["relais_checkpoint_writes_total"]
+	require.NotNil(t, family)
+	for _, metric := range family.Metric {
+		if len(metric.Label) == 1 && metric.Label[0].GetName() == "result" && metric.Label[0].GetValue() == result {
+			return metric.Counter.GetValue()
+		}
+	}
+	t.Fatalf("missing checkpoint write result %q", result)
+	return 0
 }
 
 func TestWorkerMetricsRetainDecryptionFailuresAfterSessionEnds(t *testing.T) {

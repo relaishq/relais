@@ -35,6 +35,7 @@ type RelayStatus struct {
 // PrivateHandler controls a relay on a trusted loopback HTTP listener.
 func (r *Relay) PrivateHandler() http.Handler {
 	mux := http.NewServeMux()
+	// Register #27's ring-use, drop and replay collectors here when available.
 	mux.Handle("GET /metrics", metrics.ProcessHandler(r.metricSamples))
 	mux.HandleFunc("POST /workers", func(w http.ResponseWriter, req *http.Request) {
 		var body WorkerRequest

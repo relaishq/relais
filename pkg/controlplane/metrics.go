@@ -9,7 +9,7 @@ import (
 type planeMetrics struct {
 	calls, callErrors, moves, moveErrors           atomic.Uint64
 	takeovers, takeoverErrors, drains, drainErrors atomic.Uint64
-	rollbackLosses, detections                     atomic.Uint64
+	detections                                     atomic.Uint64
 }
 
 func (p *Plane) metricSamples() []metrics.Sample {
@@ -26,7 +26,7 @@ func (p *Plane) metricSamples() []metrics.Sample {
 		metrics.Counter("relais_control_takeover_errors_total", "Terminal failed crash takeovers; transient retries are excluded.", p.metrics.takeoverErrors.Load()),
 		metrics.Counter("relais_control_drains_total", "Successfully completed worker drain requests.", p.metrics.drains.Load()),
 		metrics.Counter("relais_control_drain_errors_total", "Failed or partially failed worker drain requests.", p.metrics.drainErrors.Load()),
-		metrics.Counter("relais_control_losses_total", "Definitively lost calls during planned or crash recovery.", lost+p.metrics.rollbackLosses.Load()),
+		metrics.Counter("relais_control_losses_total", "Definitively lost calls during planned or crash recovery.", lost),
 		metrics.Counter("relais_control_detection_events_total", "Worker transitions from live to declared dead; recovery retries are excluded.", p.metrics.detections.Load()),
 	}
 }

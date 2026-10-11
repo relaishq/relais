@@ -616,7 +616,11 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 		}
 	case "move":
 		if lost || cause != nil {
-			p.metrics.moveErrors.Add(1)
+			// An immediate rollback failure is counted by move's defer.
+			// Only retained recovery completes a separate attempt here.
+			if pending != nil {
+				p.metrics.moveErrors.Add(1)
+			}
 		} else {
 			p.metrics.moves.Add(1)
 		}

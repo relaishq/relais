@@ -26,3 +26,23 @@ func TestProcessHandlerIsolatesRegistriesAndAllowsAdditionalCollectors(t *testin
 		require.NotContains(t, r.Body.String(), "go_")
 	}
 }
+
+func TestProcessHandlerExportsOnlySelectedCheckpointCollectors(t *testing.T) {
+	handler := ProcessHandler(func() []Sample { return nil }, CheckpointCollectors()...)
+	r := httptest.NewRecorder()
+	handler.ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	require.Equal(t, http.StatusOK, r.Code)
+	for _, sample := range []string{
+		`relais_checkpoint_writes_total{result="success"}`,
+		`relais_checkpoint_writes_total{result="failure"}`,
+		`relais_checkpoint_envelope_events_total{policy="scaled"}`,
+		`relais_checkpoint_envelope_events_total{policy="definitive-loss"}`,
+		"relais_checkpoint_age_seconds_bucket",
+		"relais_checkpoint_age_seconds_count",
+	} {
+		require.Contains(t, r.Body.String(), sample)
+	}
+	for _, unrelated := range []string{"relais_egress_", "relais_http_", "relais_redis_", "go_"} {
+		require.NotContains(t, r.Body.String(), unrelated)
+	}
+}

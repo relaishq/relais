@@ -585,7 +585,6 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 		metrics.CheckpointEnvelopeEvents.WithLabelValues(res.CheckpointPolicy).Inc()
 	}
 	if err != nil {
-		p.metrics.rollbackLosses.Add(1)
 		loss := fmt.Errorf("controlplane: call lost: move failed (%v), rollback failed: %w", cause, err)
 		p.completeTakeover(source, c, lease, &res, true, loss)
 		return loss

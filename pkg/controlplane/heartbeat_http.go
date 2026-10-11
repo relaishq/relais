@@ -58,7 +58,7 @@ func (p *Plane) remoteHeartbeat(name string, req HeartbeatRequest) (HeartbeatRep
 // trusted loopback: these prototype control endpoints have no authentication.
 func (p *Plane) ProcessHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /metrics", metrics.ProcessHandler(p.metricSamples))
+	mux.Handle("GET /metrics", metrics.ProcessHandler(p.metricSamples, metrics.CheckpointCollectors()...))
 	mux.Handle("/", p.Handler())
 	mux.HandleFunc("POST /private/workers/{name}/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		var req HeartbeatRequest

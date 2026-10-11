@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,16 +30,26 @@ func readMetrics(t *testing.T, handler http.Handler) map[string]float64 {
 	require.NoError(t, err)
 	values := make(map[string]float64)
 	for name, family := range families {
-		require.Len(t, family.Metric, 1, name)
-		metric := family.Metric[0]
-		require.Empty(t, metric.Label, "no caller or session labels")
-		if metric.Counter != nil {
-			values[name] = metric.Counter.GetValue()
-		} else {
-			values[name] = metric.Gauge.GetValue()
+		for _, metric := range family.Metric {
+			key := name
+			for _, label := range metric.Label {
+				require.True(t, strings.HasPrefix(name, "relais_checkpoint_"))
+				require.Contains(t, []string{"result", "policy"}, label.GetName(), "no caller or session labels")
+				key += "{" + label.GetName() + "=" + strconv.Quote(label.GetValue()) + "}"
+			}
+			switch {
+			case metric.Counter != nil:
+				values[key] = metric.Counter.GetValue()
+			case metric.Histogram != nil:
+				values[key+"_count"] = float64(metric.Histogram.GetSampleCount())
+				values[key+"_sum"] = metric.Histogram.GetSampleSum()
+			default:
+				values[key] = metric.Gauge.GetValue()
+			}
 		}
 	}
 	require.NotContains(t, values, "relais_egress_empty_polls_total")
+	require.NotContains(t, values, "relais_http_requests_in_flight")
 	return values
 }
 
@@ -86,6 +98,8 @@ func TestMetricsAcrossHTTPMoveAndTakeover(t *testing.T) {
 	require.EqualValues(t, 1, moved["relais_worker_handovers_resumed_total"])
 	require.Zero(t, moved["relais_worker_takeovers_resumed_total"])
 	require.Zero(t, readMetrics(t, workers[0].PrivateHandler())["relais_worker_active_sessions"])
+	beforeTakeover := readMetrics(t, plane.ProcessHandler())
+	beforeWrites := moved[`relais_checkpoint_writes_total{result="success"}`]
 	require.NoError(t, workerprobe.Kill(workers[1].LocalAddr()))
 	require.Eventually(t, func() bool {
 		status, err := plane.Status(ctx)
@@ -104,6 +118,9 @@ func TestMetricsAcrossHTTPMoveAndTakeover(t *testing.T) {
 	}
 	require.EqualValues(t, 1, control["relais_control_active_calls"])
 	require.Zero(t, control["relais_control_losses_total"])
+	require.Equal(t, beforeTakeover["relais_checkpoint_age_seconds_count"]+1, control["relais_checkpoint_age_seconds_count"])
+	require.Greater(t, control["relais_checkpoint_age_seconds_sum"], beforeTakeover["relais_checkpoint_age_seconds_sum"])
+	require.Greater(t, resumed[`relais_checkpoint_writes_total{result="success"}`], beforeWrites)
 	relayAfter := readMetrics(t, r.PrivateHandler())
 	require.Greater(t, relayAfter["relais_relay_caller_packets_total"], relayBefore["relais_relay_caller_packets_total"])
 	require.Greater(t, relayAfter["relais_relay_worker_packets_total"], relayBefore["relais_relay_worker_packets_total"])

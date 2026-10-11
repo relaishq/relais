@@ -39,11 +39,23 @@ func (c processCollector) Collect(ch chan<- prometheus.Metric) {
 
 // ProcessHandler uses an isolated registry for this instance, excluding the
 // global egress and HTTP metrics. Mount it only on the process's private API.
-// Additional collectors are the extension point for checkpoint (#34) and
-// replay-buffer (#27) metrics when those counters become available.
+// Additional collectors are the extension point for replay-buffer (#27)
+// ring use, drops and replays when those counters become available.
 func ProcessHandler(snapshot func() []Sample, additional ...prometheus.Collector) http.Handler {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(processCollector{snapshot: snapshot})
 	registry.MustRegister(additional...)
 	return promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
+}
+
+// CheckpointCollectors selects only the checkpoint collectors from the global
+// registry. Their lifetime is process-wide, so multiple in-process workers or
+// control planes share these observations; separate binaries do not.
+func CheckpointCollectors() []prometheus.Collector {
+	// Expose all bounded outcomes, including zeroes before the first event.
+	CheckpointWrites.WithLabelValues("success")
+	CheckpointWrites.WithLabelValues("failure")
+	CheckpointEnvelopeEvents.WithLabelValues("scaled")
+	CheckpointEnvelopeEvents.WithLabelValues("definitive-loss")
+	return []prometheus.Collector{CheckpointWrites, CheckpointEnvelopeEvents, CheckpointAge}
 }
