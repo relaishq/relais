@@ -575,7 +575,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 					pending.transientResume = true
 					return
 				}
-				if !res.Result.RelayReplayComplete && canRecoverReplay {
+				if pending.replayPlan.Complete && !res.Result.RelayReplayComplete && canRecoverReplay {
 					if err := recovery.RequestKeyframe(ctx, c.id); err != nil {
 						pending.transientResume = true
 						return

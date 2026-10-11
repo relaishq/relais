@@ -43,14 +43,19 @@ packet for packet/list/queue and allocator overhead. A local GC measurement of
 These are local retained-heap measurements, not a bound on process RSS or
 transient allocation. Metadata for streams is separately capped.
 
-Replay pins retained datagrams in the existing hold. Per-session bytes are
-capped by both cache and hold limits. With buffering enabled, the default
-`MaxTotalHeldBytes` is at least `TakeoverParallelism × MaxSessionBytes`: 16 MiB
-with 16 parallel takeovers and 1 MiB rings. Set `BufferConfig.TakeoverParallelism`
-to match the plane's configured concurrency. Phase-1 holds retain their 8 MiB
-default. `MaxHeldSessions` caps concurrent holds at 1,024. Pinned references
-remain accounted even when the cache evicts their packets. New held traffic
-also spends the hold budget.
+Replay pins retained datagrams in the existing hold. Its per-session byte
+cap is `MaxHeldBytes`. With buffering enabled, that defaults to at least
+`2 × MaxSessionBytes`: 2 MiB for a 1 MiB ring. One ring budget pins history;
+the second leaves room for live traffic gated during resume and replay.
+This is bounded headroom, not a guarantee against a stalled or slower drain.
+The default `MaxTotalHeldBytes` is at least
+`TakeoverParallelism × MaxHeldBytes`: 32 MiB for 16 parallel takeovers with
+2 MiB holds. Set `BufferConfig.TakeoverParallelism` to match the plane's
+configured concurrency. Explicit hold limits override these defaults.
+Phase-1 holds retain their 1 MiB per-session and 8 MiB total defaults.
+`MaxHeldSessions` caps concurrent holds at 1,024. Pinned references remain
+accounted even when the cache evicts their packets. New held traffic also
+spends the hold budget.
 
 Hold overflow retains #6's counted drop-newest policy and makes replay
 incomplete, including live drops after the complete plan was handed to resume.
@@ -127,6 +132,15 @@ ciphertext again. A fresh gate takes its target from the current route and
 filters against `max(checkpoint, replayedThrough)`. If a different recovery's
 copy predates that through floor, its plan remains incomplete and uses PLI
 recovery. Flow-removal events or explicit forget discard the bounded metadata.
+
+Known limitation, assigned to #35: `replayedThrough` currently applies across
+all later targets and tenures. If A→B replay delivers caller indexes 11–12,
+then B crashes before its checkpoint advances past 10, a B→A takeover filters
+11–12 out. That audio is lost and ordinary PLI fallback runs because the plan
+is incomplete. #35 will key the floor to the receipt's target and tenure;
+this ticket does not implement that change. The at-least-once statement above
+therefore excludes this immediate second-crash case.
+
 Replay refuses a gate whose
 checkpoint has not been supplied. A trimmed index above
 the checkpoint, unavailable ring, metadata limit, or hold overflow marks the
@@ -158,11 +172,14 @@ takeover loss forgets the session: this atomically discards the gate, held packe
 and ring before any legacy release can flush input to a failed target.
 `ReplayResult` reports `Complete`, `Dropped`, `SendFailures`, and `Expired`,
 including loss after resume. Expiry or any send/drop failure clears completion.
-When the adopted replay is incomplete or its hold vanished (including restart),
-the plane calls `POST /sessions/{id}/keyframe` on the worker. This uses its
-existing encrypted, rate-bounded PLI path; unknown video SSRCs keep the request
-pending until video arrives. An uncertain recovery request keeps takeover
-retryable. The in-process expiry test on both stores observes a worker PLI and
+Context cancellation keeps the queued packets and completeness intact; retrying
+the same lossless hold still tells resume to skip frame-cache/PLI recovery.
+When resume was told the plan was complete but replay later loses packets or
+its hold vanishes (including restart), the plane calls
+`POST /sessions/{id}/keyframe` on the worker. This uses its existing encrypted, rate-bounded PLI path. A plan already known to be incomplete
+uses the worker's ordinary resume recovery and receives no second control-plane
+keyframe request. Unknown video SSRCs keep the request pending until video
+arrives. An uncertain recovery request keeps takeover retryable. The in-process expiry test on both stores observes a worker PLI and
 no receiver PLI, with zero decryption failures. Full real-process restarts,
 failed adoption, a second immediate crash and frame-cache coexistence remain
 #35's acceptance scope.
@@ -172,7 +189,9 @@ failed adoption, a second immediate crash and frame-cache coexistence remain
 Default replay uses a shared bucket per target worker, allowing at most 16
 packets or 16 KiB per millisecond across every session replaying to that worker.
 Tokens refill with elapsed time; starting another session cannot reset the
-target's burst allowance. A single oversized datagram may exceed the batch byte target,
+target's burst allowance. Filtering stale ciphertext happens before token
+admission, so discarded duplicates spend no sender capacity. A single oversized
+datagram may exceed the batch byte target,
 but still spends the bounded cache/hold budget. This restores freshness quickly
 without dumping the entire ring into the worker socket at once. All sender
 timers, HTTP servers, worker actors and test Redis instances are task-owned.

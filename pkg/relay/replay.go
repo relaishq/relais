@@ -267,10 +267,10 @@ func (r *Relay) appendReplay(h *sessionHold, p heldPacket) bool {
 		r.replayFiltered.Add(1)
 		return true
 	}
-	// Replay uses the cache's per-session byte bound rather than #6's
-	// 256-packet move cap. The existing total hold budget bounds all pinned
-	// cache references plus new packets, even if the ring evicts during replay.
-	if h.bytes+packetCost(p.datagram) > min(r.buffer.cfg.MaxSessionBytes, r.cfg.MaxHeldBytes) || r.heldBytes+packetCost(p.datagram) > r.cfg.MaxTotalHeldBytes {
+	// Replay uses the hold byte bound rather than #6's 256-packet move cap.
+	// The default allows a full ring plus gated live traffic. The total hold
+	// budget accounts for both even if the ring evicts during replay.
+	if h.bytes+packetCost(p.datagram) > r.cfg.MaxHeldBytes || r.heldBytes+packetCost(p.datagram) > r.cfg.MaxTotalHeldBytes {
 		r.replayDrop(h)
 		return false
 	}
@@ -374,11 +374,10 @@ func (r *Relay) ReplaySession(ctx context.Context, id string, to netip.AddrPort)
 	r.forwardMu.Unlock()
 	started := time.Now()
 	finishLocked := func(err error) (ReplayResult, error) {
-		if err != nil {
-			h.replayComplete = false
-		}
+		// Cancellation leaves the queue intact. Only actual loss or expiry
+		// clears completeness, so a lossless retry can preserve codec continuity.
 		h.replaying = false
-		if errors.Is(err, ErrHoldExpired) {
+		if errors.Is(err, ErrHoldExpired) || r.ctx.Err() != nil {
 			h.replayComplete = false
 			h.replayResult.Expired = true
 		}
@@ -417,7 +416,7 @@ func (r *Relay) ReplaySession(ctx context.Context, id string, to netip.AddrPort)
 		case <-ctx.Done():
 			return finish(ctx.Err())
 		case <-r.ctx.Done():
-			return finish(errors.New("relay: closed"))
+			return finish(ErrHoldExpired)
 		case <-h.released:
 			return finish(ErrHoldExpired)
 		case <-timer.C:
@@ -462,7 +461,9 @@ func (p *replayPacer) take(now time.Time, size int) bool {
 func (r *Relay) drainReplayBatch(h *sessionHold, to netip.AddrPort, pacer *replayPacer) {
 	for count := 0; len(h.queue) > 0 && count < r.buffer.cfg.ReplayBatchPackets; count++ {
 		p := h.queue[0]
-		if !pacer.take(time.Now(), len(p.datagram)) {
+		floor, known := h.delivered[p.ssrc]
+		filtered := p.media && known && p.index <= floor
+		if !filtered && !pacer.take(time.Now(), len(p.datagram)) {
 			break
 		}
 		h.queue[0] = heldPacket{}
@@ -470,7 +471,7 @@ func (r *Relay) drainReplayBatch(h *sessionHold, to netip.AddrPort, pacer *repla
 		h.bytes -= packetCost(p.datagram)
 		r.heldBytes -= packetCost(p.datagram)
 		r.heldPackets--
-		if floor, known := h.delivered[p.ssrc]; p.media && known && p.index <= floor {
+		if filtered {
 			h.replayResult.Filtered++
 			r.replayFiltered.Add(1)
 			continue

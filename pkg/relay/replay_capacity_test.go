@@ -199,8 +199,8 @@ func TestReplayWindowUsesConfiguredEnvelope(t *testing.T) {
 	require.Equal(t, 3*time.Second, cfg.defaults().Window)
 	r := Config{Buffer: &BufferConfig{MaxSessionBytes: 2 << 20, TakeoverParallelism: 32}}
 	applyDefaults(&r)
-	require.Equal(t, 64<<20, r.MaxTotalHeldBytes)
-	require.Equal(t, 2<<20, r.MaxHeldBytes)
+	require.Equal(t, 128<<20, r.MaxTotalHeldBytes)
+	require.Equal(t, 4<<20, r.MaxHeldBytes)
 }
 
 // Production batch seam: even a 32K queue must incur only one batch of lock

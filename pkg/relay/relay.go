@@ -460,14 +460,14 @@ func applyDefaults(cfg *Config) {
 	if cfg.MaxHeldBytes <= 0 {
 		cfg.MaxHeldBytes = DefaultMaxHeldBytes
 		if cfg.Buffer != nil {
-			cfg.MaxHeldBytes = max(cfg.MaxHeldBytes, cfg.Buffer.defaults().MaxSessionBytes)
+			cfg.MaxHeldBytes = max(cfg.MaxHeldBytes, 2*cfg.Buffer.defaults().MaxSessionBytes)
 		}
 	}
 	if cfg.MaxTotalHeldBytes <= 0 {
 		cfg.MaxTotalHeldBytes = DefaultMaxTotalHeldBytes
 		if cfg.Buffer != nil {
 			b := cfg.Buffer.defaults()
-			cfg.MaxTotalHeldBytes = max(cfg.MaxTotalHeldBytes, b.TakeoverParallelism*b.MaxSessionBytes)
+			cfg.MaxTotalHeldBytes = max(cfg.MaxTotalHeldBytes, b.TakeoverParallelism*cfg.MaxHeldBytes)
 		}
 	}
 	if cfg.LoggerFactory == nil {

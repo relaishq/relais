@@ -17,6 +17,7 @@ import (
 type checkpointReplayRelay struct {
 	*fakeRelay
 	gated, forgotten bool
+	incompletePlan   bool
 	prepared         []map[uint32]uint64
 	sentOnLoss       int
 	replayResult     relay.ReplayResult
@@ -28,7 +29,7 @@ func (r *checkpointReplayRelay) BeginReplay(_ context.Context, _ string, _ netip
 	if inbound != nil {
 		r.prepared = append(r.prepared, inbound)
 	}
-	return relay.ReplayPlan{Complete: inbound != nil}, nil
+	return relay.ReplayPlan{Complete: inbound != nil && !r.incompletePlan}, nil
 }
 func (r *checkpointReplayRelay) ReplaySession(context.Context, string, netip.AddrPort) (relay.ReplayResult, error) {
 	r.gated = false
@@ -324,4 +325,24 @@ func TestCheckpointReplayRecoveryFailureRemainsRetryable(t *testing.T) {
 	require.False(t, p.recentTakeovers()[0].Lost)
 	require.True(t, p.recentTakeovers()[0].Result.RelayReplayRecoveryPLI)
 	require.Equal(t, 1, p.recentTakeovers()[0].Result.RelayReplaySendFailures)
+}
+
+func TestCheckpointIncompleteReplayPlanUsesResumeRecoveryOnly(t *testing.T) {
+	p, _, baseB, baseR := setup(t)
+	p.relay = &checkpointReplayRelay{fakeRelay: baseR, incompletePlan: true, replayResult: relay.ReplayResult{Dropped: 1}}
+	target := &replayCheckpointWorker{takeoverWorker: &takeoverWorker{fakeWorker: baseB}}
+	p.workers["b"].worker = target
+	ctx := context.Background()
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	lease, err := p.store.Get(ctx, id)
+	require.NoError(t, err)
+	require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
+	p.workers["a"].dead = true
+	p.takeover(ctx, p.workers["a"], lease, time.Now())
+	require.False(t, target.opts.RelayReplay, "resume already uses its frame-cache/PLI recovery")
+	require.Zero(t, target.keyframes, "an incomplete plan must not request a second recovery PLI")
+	require.Len(t, p.recentTakeovers(), 1)
+	require.False(t, p.recentTakeovers()[0].Result.RelayReplayComplete)
+	require.False(t, p.recentTakeovers()[0].Result.RelayReplayRecoveryPLI)
 }
