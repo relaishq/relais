@@ -558,6 +558,13 @@ func (r *Relay) AddWorker(worker netip.AddrPort) {
 // addresses: those still require the worker's authenticated binding answer.
 // A zero from repairs an uncertain prior route, re-pointing every session route.
 func (r *Relay) MoveSession(sessionID string, from, to netip.AddrPort) error {
+	return r.MoveSessionAtEpoch(sessionID, from, to, 0)
+}
+
+// MoveSessionAtEpoch carries the transferred owner lease epoch. It distinguishes
+// a fresh receiver at a reused address from idempotent route confirmation.
+// Epoch zero keeps compatibility with callers that only identify route changes.
+func (r *Relay) MoveSessionAtEpoch(sessionID string, from, to netip.AddrPort, epoch uint64) error {
 	from, to = unmap(from), unmap(to)
 	if sessionID == "" || from.IsValid() && !r.registered(from) || !r.registered(to) {
 		return errors.New("relay: move needs a session and registered workers")
@@ -574,6 +581,9 @@ func (r *Relay) MoveSession(sessionID string, from, to netip.AddrPort) error {
 		lookup.generation++
 	}
 	r.lookups.mu.Unlock()
+	if s := r.bufferSession(sessionID); s != nil {
+		s.noteReplayTarget(to, epoch)
+	}
 	r.flows.moveSession(sessionID, from, to)
 	for _, caller := range r.flows.sessionCallers(sessionID) {
 		r.persist(caller, true)

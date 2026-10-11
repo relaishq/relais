@@ -32,6 +32,11 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 	restoreOff := flag.Bool("route-restore-off", false, "disable persisted-route restore for baseline measurement")
 	restoreTimeout := flag.Duration("route-restore-timeout", 5*time.Second, "startup route restore budget; continue with partial results on expiry")
 	maxFlows := flag.Int("max-flows", 65536, "maximum confirmed and pending caller routes")
+	bufferOff := flag.Bool("buffer-off", false, "disable caller SRTP buffering and use frame-cache/PLI recovery")
+	bufferWindow := flag.Duration("buffer-window", relay.DefaultBufferWindow, "caller ciphertext retention window")
+	bufferSession := flag.Int("buffer-session-bytes", relay.DefaultMaxBufferedBytes, "maximum buffered bytes per session, including relay headers")
+	bufferTotal := flag.Int("buffer-total-bytes", relay.DefaultMaxTotalBufferedBytes, "maximum buffered bytes across all sessions")
+	bufferSSRCs := flag.Int("buffer-ssrcs", relay.DefaultMaxBufferedSSRCs, "maximum buffered caller SSRCs per session")
 	standby := flag.Bool("standby", false, "wait without binding any sockets, then fence and take over")
 	hostID := flag.String("host-id", processrun.Env("RELAIS_HOST_ID", ""), "unique host identity; overrides machine ID discovery (required for standby when unavailable)")
 	leaseKey := flag.String("relay-lease", "default", "same-host relay lease key; shared by active and standby")
@@ -40,6 +45,13 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 	leasePoll := flag.Duration("relay-lease-poll", relaylease.DefaultPoll, "standby claim polling interval")
 	bindTimeout := flag.Duration("relay-bind-timeout", socketbind.DefaultTimeout, "shared public, worker-leg and HTTP socket bind retry budget after fencing")
 	flag.Parse()
+	if err := validateBufferBounds(*bufferWindow, *bufferSession, *bufferTotal, *bufferSSRCs); err != nil {
+		return err
+	}
+	var buffer *relay.BufferConfig
+	if !*bufferOff {
+		buffer = &relay.BufferConfig{Window: *bufferWindow, MaxSessionBytes: *bufferSession, MaxTotalBytes: *bufferTotal, MaxSSRCs: *bufferSSRCs, TakeoverParallelism: bufferTakeoverParallelism}
+	}
 	if err := validatePlatform(*standby); err != nil {
 		return err
 	}
@@ -98,7 +110,7 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 		return bindFailed(err)
 	}
 	defer func() { _ = listener.Close() }()
-	r, err := relay.New(relay.Config{InstanceID: process.Owner, ForwardingAllowed: guard.Allowed, Continuity: continuity, BindContext: bindCtx, PublicAddr: *public, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, RouteRestoreTimeout: *restoreTimeout, MaxFlows: *maxFlows, HoldTimeout: *hold})
+	r, err := relay.New(relay.Config{InstanceID: process.Owner, ForwardingAllowed: guard.Allowed, Continuity: continuity, BindContext: bindCtx, PublicAddr: *public, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, RouteRestoreTimeout: *restoreTimeout, MaxFlows: *maxFlows, HoldTimeout: *hold, Buffer: buffer})
 	if err != nil {
 		return bindFailed(err)
 	}
@@ -148,6 +160,29 @@ func validateAddresses(standby bool, public, leg, httpAddr string) error {
 	n, err := strconv.Atoi(port)
 	if err != nil || n < 0 || n > 65535 || standby && n == 0 {
 		return fmt.Errorf("invalid relay HTTP port: %s", httpAddr)
+	}
+	return nil
+}
+
+const (
+	maxBufferTotalBytes       = 1 << 30 // bounded to 1 GiB, including on 32-bit hosts
+	bufferTakeoverParallelism = 16
+)
+
+func validateBufferBounds(window time.Duration, session, total, ssrcs int) error {
+	if window <= 0 || session <= 0 || total <= 0 || ssrcs <= 0 {
+		return fmt.Errorf("buffer bounds must be positive")
+	}
+	if total > maxBufferTotalBytes {
+		return fmt.Errorf("buffer total bytes must not exceed 1 GiB")
+	}
+	if session > total {
+		return fmt.Errorf("buffer session bytes must not exceed total bytes")
+	}
+	// The ring and held queues each have a global cap. The derived held cap
+	// must fit that same configured budget; division avoids overflow.
+	if session > total/(2*bufferTakeoverParallelism) || total < bufferTakeoverParallelism*relay.DefaultMaxHeldBytes {
+		return fmt.Errorf("derived replay hold bytes must not exceed buffer total bytes")
 	}
 	return nil
 }

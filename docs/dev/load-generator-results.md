@@ -6,6 +6,9 @@ This is a shared developer Mac. These short runs do not establish sustained
 host capacity or a hosted Linux result. Worker build, lint and test checks
 finished before these runtime measurements; no worker checks overlapped them.
 
+These baselines predate the default caller relay buffer and used buffering off.
+The load topology now keeps the product default buffer enabled.
+
 ## Correction to previous evidence
 
 The earlier base `b2ce35e` advanced a deadline once per sent frame, while the

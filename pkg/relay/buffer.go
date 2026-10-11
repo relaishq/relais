@@ -93,6 +93,11 @@ type bufferedSession struct {
 	trimmed          map[uint32]uint64
 	untracked        bool
 	replayedThrough  map[uint32]uint64
+	replayedTarget   netip.AddrPort
+	replayedTenure   uint64
+	routeTarget      netip.AddrPort
+	routeTenure      uint64
+	routeEpoch       uint64
 	replayGeneration uint64
 	receipt          *replayReceipt
 }

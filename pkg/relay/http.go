@@ -13,10 +13,11 @@ var RemoteErrors = map[string]error{
 	"barrier_timeout": ErrBarrierTimeout, "held": ErrHeld,
 	"hold_limit": ErrHoldLimit, "hold_expired": ErrHoldExpired,
 	"buffer_disabled": ErrBufferDisabled, "replay_in_progress": ErrReplayInProgress,
-	"replay_not_ready": ErrReplayNotReady,
+	"replay_not_ready": ErrReplayNotReady, "replay_target_changed": ErrReplayTargetChanged,
 }
 
 type RouteRequest struct {
+	Epoch  uint64         `json:"epoch,omitempty"`
 	Repair bool           `json:"repair,omitempty"`
 	From   netip.AddrPort `json:"from"`
 	To     netip.AddrPort `json:"to"`
@@ -127,7 +128,7 @@ func (r *Relay) PrivateHandler() http.Handler {
 			http.Error(w, "from is required unless repair is explicit", http.StatusBadRequest)
 			return
 		}
-		if err := r.MoveSession(req.PathValue("id"), body.From, body.To); err != nil {
+		if err := r.MoveSessionAtEpoch(req.PathValue("id"), body.From, body.To, body.Epoch); err != nil {
 			privateapi.Error(w, err, RemoteErrors)
 			return
 		}

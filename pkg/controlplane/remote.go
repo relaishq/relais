@@ -71,6 +71,9 @@ func (r *RemoteRelay) HoldSession(ctx context.Context, id string, from netip.Add
 func (r *RemoteRelay) MoveSession(id string, from, to netip.AddrPort) error {
 	return r.route(context.Background(), id, "move", from, to, nil)
 }
+func (r *RemoteRelay) MoveSessionAtEpoch(id string, from, to netip.AddrPort, epoch uint64) error {
+	return privateapi.Do(context.Background(), remoteClient(r.Client), r.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/move", relay.RouteRequest{From: from, To: to, Repair: !from.IsValid(), Epoch: epoch}, nil, relay.RemoteErrors)
+}
 func (r *RemoteRelay) ReleaseSession(id string, to netip.AddrPort) (int, error) {
 	var reply relay.ReleaseReply
 	err := r.route(context.Background(), id, "release", netip.AddrPort{}, to, &reply)
