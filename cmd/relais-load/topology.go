@@ -17,6 +17,7 @@ import (
 
 	"github.com/relais/internal/capacity"
 	"github.com/relais/internal/clusterprocess"
+	"github.com/relais/internal/loadgen"
 	"github.com/relais/internal/nettopology"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/callharness"
@@ -29,6 +30,8 @@ type workerLaunch struct {
 }
 
 type topology struct {
+	Sentinel                              int
+	Rejoins                               []loadgen.WorkerRejoin
 	Launch                                map[int]*workerLaunch
 	Manager                               *clusterprocess.Manager
 	Dir, RedisAddr, RedisPassword, Prefix string

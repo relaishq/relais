@@ -1,12 +1,43 @@
-// Package processrss samples current resident memory of owned processes.
+// Package processrss samples current memory of owned processes.
 package processrss
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"os"
+	"runtime"
+)
 
-// Current returns current RSS in bytes, never a lifetime high-water mark.
-func Current(pid int) (uint64, error) {
+var ErrUnavailable = errors.New("current memory sampling unavailable")
+
+type Sample struct{ ResidentBytes, PhysicalFootprintBytes uint64 }
+
+// Read retains resident size on every supported host. Darwin additionally
+// reports physical footprint, which is the memory trend used by soak.
+func Read(pid int) (Sample, error) {
 	if pid <= 0 {
-		return 0, fmt.Errorf("invalid owned PID")
+		return Sample{}, fmt.Errorf("invalid owned PID")
 	}
-	return current(pid)
+	return read(pid)
+}
+func Current(pid int) (uint64, error) { s, err := Read(pid); return s.ResidentBytes, err }
+func Check() error {
+	sample, err := Read(os.Getpid())
+	if err != nil {
+		return err
+	}
+	value := sample.ResidentBytes
+	if runtime.GOOS == "darwin" {
+		value = sample.PhysicalFootprintBytes
+	}
+	if value == 0 {
+		return fmt.Errorf("%w: zero process memory", ErrUnavailable)
+	}
+	return nil
+}
+func TrendMetric() string {
+	if runtime.GOOS == "darwin" {
+		return "physical-footprint"
+	}
+	return "rss"
 }

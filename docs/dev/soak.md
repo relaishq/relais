@@ -48,7 +48,10 @@ one of each. It also chooses cyclic worker-selection offsets. The complete
 plan is printed before media and saved in `schedule`; replaying the same seed,
 workers, duration and interval reproduces that plan exactly.
 
-At execution, an offset selects from the sorted occupied pool for drain/kill.
+Worker 0 is the recorded memory sentinel. Chaos never drains or kills it.
+It remains eligible for moves and takeover adoptions for the whole run.
+At execution, an offset selects from the sorted occupied non-sentinel pool
+for drain/kill.
 Moves use the least-loaded live destination, with the worker name breaking
 ties. This avoids no-op kills and prevents moves over the worker floor.
 Resolved workers, affected session IDs, action timestamps and per-call rows
@@ -58,12 +61,15 @@ state: a seed reproduces the planned choices, not network timing or placement.
 Kills use SIGKILL. The driver waits for real detection and ownership recovery,
 then starts an empty incarnation on the original private endpoints. After a
 drain it stops the empty worker and performs the same recycle. The private
-`POST /private/workers/{name}/replace` endpoint exposes existing `Plane.Replace`
-for the original registered address/interface only. It keeps the dead,
-fully-recovered, zero-lease, zero-reservation and race guards. It accepts no
-new address or arbitrary URL. This clears the drain flag through replacement,
-without changing heartbeat or drain policy. Every new incarnation has its own
-log directory and PID. The pool must be fully ready before the next event.
+`POST /private/workers/{name}/replace` endpoint only clears `draining` on the
+existing dead, fully recovered registration. It checks zero leases, zero
+reservations and registration races. It leaves the registration dead and
+preserves the rejoin token fence. A resumed old process cannot return with a
+bare heartbeat. The driver starts the new process, then waits for a fresh
+heartbeat and live membership through the real rejoin handshake. It verifies
+every recycle, including the final one, and records old/new PIDs, launch time,
+heartbeat time and completion time in `run.worker_rejoins`. Every incarnation
+has its own log directory and PID. The pool must be ready before the next event.
 
 ## Verdict and generator exclusions
 
@@ -79,7 +85,8 @@ ordinary load/calibration reports keep their existing 256-sample cap.
 Each event includes its preceding one-second baseline and the caller's saved
 loss-observation, settling and freshness horizons. A conservative seven-second
 recovery tail also covers incomplete event evidence. Any overlapping excluded interval makes that event and
-its rows inconclusive, with raw trusted/failure counts retained. Such an event
+its rows inconclusive, with raw trusted/failure counts retained. A confirmed
+event failure still fails even when its window is saturated. Such an event
 is listed with its cause in the JSON and log. Inconclusive events do not each
 invalidate the entire run. The run needs at least 95% conclusive events, using
 an exact fraction, plus at least one conclusive pass of each kind: move, drain
@@ -90,14 +97,24 @@ A separately confirmed service crash still fails, using #40's
 `confirmedServiceFailure` rule. Direct caller/worker decryption failures,
 control-plane lost calls, excessive worker peaks, memory growth and observed
 leaks also remain failures. Other caller continuity, move/takeover gap,
-threshold coverage and telemetry checks reuse capacity judgment.
+threshold coverage and telemetry checks reuse capacity judgment. The recorder
+retains up to 4096 timestamped gaps over 150 ms per track for the whole call,
+separate from its 15 s rolling arrival history. An unscheduled gap fails unless
+it overlaps a saturated interval of that caller's generator; that gap is then
+inconclusive. Saturation in another generator cannot excuse it. Gap inventory
+overflow fails safe; old reports without the inventory are inconclusive.
 
 ## Flat memory
 
-Services sample current RSS (Linux `/proc/PID/statm`, macOS `proc_pid_rusage`, with cgo enabled) and Go heap
-spans in use through private metrics. Callers sample their current RSS and
-`runtime.MemStats.HeapInuse`. Redis current RSS is sampled too; it has no Go
-heap. Lifetime RSS peaks remain separate capacity telemetry.
+Linux services sample current RSS from `/proc/PID/statm`. macOS uses
+`proc_pid_rusage` with cgo: `ri_phys_footprint` is the memory trend metric;
+`ri_resident_size` remains informational. Both fields are retained separately
+([Apple structure](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/resource.h)).
+Services also sample Go heap spans in use through private metrics. Callers
+sample the same process metrics and `runtime.MemStats.HeapInuse`. Redis has no
+Go heap. Lifetime RSS peaks remain separate capacity telemetry. Soak fails
+before starting the topology when current process sampling is unavailable;
+a Darwin build without cgo can build, and sampling tests skip with a reason.
 
 Ignore the first `min(duration/10, 5m)`, then fit an ordinary least-squares
 line. Fail if projected growth over one hour exceeds
@@ -117,6 +134,12 @@ for at least one hour), `outcome=pass`, and conclusive memory for every
 long-lived process. Relay, control, Redis and caller processes always require
 memory proof for acceptance. A worker incarnation observed for at least ten
 minutes also requires it; shorter incarnations remain explicitly unjudged.
+The uninterrupted sentinel requires conclusive process-memory and heap
+verdicts from one PID. Otherwise acceptance includes "worker memory unproven".
+Recycled workers report informational RSS/footprint at matched age 30 s after
+their first sample, plus the RSS change between available incarnations. Missing
+matched-age observations are labeled unavailable. They do not gate acceptance
+or substitute for the sentinel.
 Missing role verdicts prevent acceptance. The report marks each metric's
 `long_lived` status and lists `acceptance_reasons`; the log prints the boolean
 and every reason. A short run always has `acceptance=false`.
@@ -128,7 +151,9 @@ worker sessions. It keeps the relay running for `FlowTimeout + 5s` (35 seconds
 with this topology), then requires zero buffers, holds, routes and pending
 routes. The wait and observation time are recorded. It finishes telemetry before shutdown, stops
 all services while keeping its Redis alive, and SCANs exactly the run prefix.
-It does not delete keys or wait for TTL expiry to manufacture clean evidence.
+The scan must find both positive controls: `session_epoch` and the default
+relay fencing hash. A missing control makes cleanup inconclusive. It does not
+delete keys or wait for TTL expiry to manufacture clean evidence.
 It then stops Redis and checks owned PIDs and process groups. Loopback TCP/UDP
 addresses must bind again. For netns, successful owned namespace deletion
 removes its private/media listeners; host caller listener bind checks remain.
@@ -139,13 +164,16 @@ TTL in milliseconds (`-1` means no key expiry), and applicable limit:
 
 - Per-session lease/state/record/epoch/routes keys need TTL >0 and <=308 s:
   control lease 3 s + store retention 5 min + margin 5 s.
+- `frames:{sess:…}` frame-cache keys need TTL >0 and <=30 s, matching the
+  frame cache's default idle TTL.
 - The global `session_epoch` counter may persist without TTL.
 - Worker index metadata has a separate <=605 s bound, from default index grace
   5 min + retention 5 min + margin 5 s. It still needs a positive TTL.
 - The relay fencing hash persists to preserve its monotone epoch. Its lease
   lifetime is stored in an `expires` field rather than Redis PTTL. The driver
   checks that field against Redis `TIME` atomically: remaining lifetime must
-  be <=600 ms, or the hash must be absent. Clean shutdown releases the holder,
+  be <=600 ms. A missing default hash makes cleanup inconclusive. Clean
+  shutdown releases the holder,
   forwarder and previous-holder identities and sets expiry to zero. The report
   includes physical TTL, logical remaining lifetime and release status.
 - Unknown keys, missing expiry evidence, immortal session/index keys and
@@ -162,7 +190,8 @@ relay state is freed at once. That change is outside #41.
 
 The registered `load-calibration.yml` workflow has a separate `soak` job,
 90-minute job budget and 80-minute measurement budget. It does not invoke
-`crash-run`. Nightly uses six calls for ten minutes, 30-second events, seed
+`crash-run`. Nightly uses six calls for 10m10s, giving 20 events. The exact
+95% rule tolerates one inconclusive event. It uses 30-second events, seed
 41, three workers, two callers per generator, ubuntu-latest, namespace LAN and
 measured worker/relay floors of eight. Runner metadata, report and every child
 log are uploaded always, including failure. Namespace cleanup is checked.
@@ -170,8 +199,8 @@ log are uploaded always, including failure. Namespace cleanup is checked.
 After the workflow change is published, short dispatch:
 
 ```sh
-gh workflow run load-calibration.yml --repo relaishq/relais --ref feat/41-soak \
-  -f mode=soak -f soak_callers=6 -f soak_duration=10m -f chaos_interval=30s \
+gh workflow run load-calibration.yml --repo relaishq/relais \
+  -f mode=soak -f soak_callers=6 -f soak_duration=10m10s -f chaos_interval=30s \
   -f seed=41 -f runner_label=ubuntu-latest -f callers_per_process=2 \
   -f soak_workers=3 -f worker_floor=8 -f relay_floor=8
 ```
@@ -180,9 +209,16 @@ Full dispatch, after the project lead chooses the hardware and matching
 measured floors (for three workers, worker floor >=26 and relay floor >=50):
 
 ```sh
-gh workflow run load-calibration.yml --repo relaishq/relais --ref feat/41-soak \
+gh workflow run load-calibration.yml --repo relaishq/relais \
   -f mode=soak -f soak_callers=50 -f soak_duration=1h -f chaos_interval=30s \
   -f seed=41 -f runner_label="$SOAK_RUNNER" -f callers_per_process=2 \
   -f generator_processes=25 -f soak_workers=3 \
   -f worker_floor="$MEASURED_WORKER_FLOOR" -f relay_floor="$MEASURED_RELAY_FLOOR"
+```
+
+Stable log verdict lines start with `soak outcome=`, `soak cause:`,
+`soak acceptance=`, or `soak acceptance reason:`. For example:
+
+```sh
+grep -E '^soak (outcome|cause|acceptance)' bin/soak-linux.log
 ```

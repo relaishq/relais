@@ -28,9 +28,10 @@ type Target struct {
 	Err                      func() error
 }
 type MemorySample struct {
-	At             time.Time `json:"at"`
-	RSSBytes       uint64    `json:"rss_bytes"`
-	HeapInUseBytes uint64    `json:"heap_in_use_bytes,omitempty"`
+	PhysicalFootprintBytes uint64    `json:"physical_footprint_bytes,omitempty"`
+	At                     time.Time `json:"at"`
+	RSSBytes               uint64    `json:"rss_bytes"`
+	HeapInUseBytes         uint64    `json:"heap_in_use_bytes,omitempty"`
 }
 
 type Process struct {
@@ -169,11 +170,11 @@ func (m *Monitor) sample(ctx context.Context) {
 			}
 			now := time.Now()
 			if m.memory {
-				current, rssErr := processrss.Current(t.PID)
+				current, rssErr := processrss.Read(t.PID)
 				if rssErr != nil {
 					p.Errors = append(p.Errors, "current RSS: "+rssErr.Error())
 				} else {
-					p.Memory = append(p.Memory, MemorySample{At: now, RSSBytes: current, HeapInUseBytes: uint64(values["relais_process_heap_in_use_bytes"])})
+					p.Memory = append(p.Memory, MemorySample{At: now, RSSBytes: current.ResidentBytes, PhysicalFootprintBytes: current.PhysicalFootprintBytes, HeapInUseBytes: uint64(values["relais_process_heap_in_use_bytes"])})
 				}
 			}
 			if p.Samples > 0 {

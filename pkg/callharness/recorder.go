@@ -87,6 +87,8 @@ type trackRecord struct {
 	lastArrival        time.Duration
 	gap                time.Duration // longest interval between consecutive packets
 	gapEndedAt         time.Duration
+	mediaGaps          []MediaGap
+	mediaGapOverflow   int
 	lastSeq            uint16
 	seqDiscontinuities int
 	duplicatePackets   int
@@ -343,7 +345,15 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 	prior, seen := track.seenPackets[pkt.SequenceNumber]
 	duplicate := seen && prior == pkt.Timestamp
 	if track.packets > 0 {
-		if gap := at - track.lastArrival; gap > track.gap {
+		gap := at - track.lastArrival
+		if gap > 150*time.Millisecond {
+			if len(track.mediaGaps) < MaxRetainedMediaGaps {
+				track.mediaGaps = append(track.mediaGaps, MediaGap{EndedAt: at, Duration: gap})
+			} else {
+				track.mediaGapOverflow++
+			}
+		}
+		if gap > track.gap {
 			track.gap = gap
 			track.gapEndedAt = at
 		}
@@ -602,6 +612,9 @@ func (r *recorder) report() *Report {
 			LastArrival:             track.lastArrival,
 			MediaGap:                track.gap,
 			MediaGapEndedAt:         track.gapEndedAt,
+			MediaGaps:               append([]MediaGap(nil), track.mediaGaps...),
+			MediaGapsRecorded:       true,
+			MediaGapOverflow:        track.mediaGapOverflow,
 			SequenceDiscontinuities: track.seqDiscontinuities,
 			UnmatchedPayloads:       track.unmatchedPayloads,
 			DuplicatePackets:        track.duplicatePackets,

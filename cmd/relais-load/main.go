@@ -21,6 +21,7 @@ import (
 	"github.com/relais/internal/capacity"
 	"github.com/relais/internal/clusterprocess"
 	"github.com/relais/internal/loadgen"
+	"github.com/relais/internal/processrss"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/controlplane"
 	"github.com/relais/pkg/mediaworker"
@@ -350,6 +351,11 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 	if err != nil {
 		return report, err
 	}
+	if c.Soak {
+		report.SentinelWorker = fmt.Sprintf("worker-%d", t.Sentinel)
+		report.MemoryMetric = processrss.TrendMetric()
+	}
+	defer func() { report.WorkerRejoins = append([]loadgen.WorkerRejoin(nil), t.Rejoins...) }()
 	defer func() { runErr = errors.Join(runErr, t.close()) }()
 	defer func() {
 		report.DriverStatusRequests = t.statusRequests
@@ -591,6 +597,11 @@ func run() error {
 		return err
 	}
 	c.Bin = bin
+	if c.Soak {
+		if err := processrss.Check(); err != nil {
+			return fmt.Errorf("soak memory sampling unavailable: %w", err)
+		}
+	}
 	for _, name := range []string{"relais-relay", "relais-worker", "relais-control"} {
 		s, err := os.Stat(filepath.Join(bin, name))
 		if err != nil || s.IsDir() || s.Mode()&0111 == 0 {

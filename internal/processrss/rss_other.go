@@ -4,6 +4,6 @@ package processrss
 
 import "fmt"
 
-func current(_ int) (uint64, error) {
-	return 0, fmt.Errorf("current RSS needs Linux or macOS with cgo")
+func read(_ int) (Sample, error) {
+	return Sample{}, fmt.Errorf("%w: needs Linux or macOS with cgo", ErrUnavailable)
 }

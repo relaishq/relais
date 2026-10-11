@@ -165,8 +165,15 @@ func TestProcessReplacementAfterDrainRequiresSettledDeadWorker(t *testing.T) {
 	require.NoError(t, replace())
 	p.mu.Lock()
 	require.False(t, p.workers["a"].draining)
-	require.False(t, p.workers["a"].dead)
+	require.True(t, p.workers["a"].dead, "reset must not bypass the rejoin fence")
 	require.Equal(t, a.addr, p.workers["a"].addr)
 	p.mu.Unlock()
-	require.Error(t, replace(), "repeating replacement cannot reset a live registration")
+	var challenge HeartbeatReply
+	require.NoError(t, privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/private/workers/a/heartbeat", HeartbeatRequest{Address: a.addr}, &challenge, nil))
+	require.NotEmpty(t, challenge.Token, "a paused old process needs the rejoin token")
+	p.mu.Lock()
+	require.True(t, p.workers["a"].dead)
+	p.mu.Unlock()
+	require.NoError(t, privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/private/workers/a/heartbeat", HeartbeatRequest{Address: a.addr, Token: challenge.Token}, nil, nil))
+	require.Error(t, replace(), "rejoined live registration cannot be reset")
 }

@@ -14,7 +14,7 @@ on:
         type: string
       soak_duration:
         description: Soak media duration (Go duration)
-        default: '10m'
+        default: '10m10s'
         type: string
       chaos_interval:
         description: Time between seeded soak events
@@ -197,7 +197,7 @@ jobs:
         timeout-minutes: 80
         env:
           CALLS: ${{ inputs.soak_callers || '6' }}
-          DURATION: ${{ inputs.soak_duration || '10m' }}
+          DURATION: ${{ inputs.soak_duration || '10m10s' }}
           INTERVAL: ${{ inputs.chaos_interval || '30s' }}
           SEED: ${{ inputs.seed || '41' }}
           PROCESSES: ${{ inputs.generator_processes || '0' }}

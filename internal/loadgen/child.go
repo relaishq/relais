@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/clusterprocess"
+	"github.com/relais/internal/processrss"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/callharness"
 	"github.com/relais/pkg/controlplane"
@@ -43,6 +44,11 @@ type MoveRequest struct {
 // RunChild exposes only a loopback operator endpoint. Topology injection keeps
 // signaling separate from media and accepts #36's setns socket factory.
 func RunChild(ctx context.Context, o ChildOptions) error {
+	if o.Soak {
+		if err := processrss.Check(); err != nil {
+			return fmt.Errorf("soak memory sampling unavailable: %w", err)
+		}
+	}
 	if o.Callers < 1 || o.Duration <= 0 || o.SampleEvery <= 0 {
 		return errors.New("invalid child counts or durations")
 	}

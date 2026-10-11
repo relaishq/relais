@@ -23,7 +23,7 @@ func memorySamples(at time.Time, duration time.Duration, rate float64) []capacit
 	var samples []capacity.MemorySample
 	for t := time.Duration(0); t <= duration; t += time.Second {
 		value := uint64(float64(100<<20) + rate*t.Seconds())
-		samples = append(samples, capacity.MemorySample{At: at.Add(t), RSSBytes: value, HeapInUseBytes: value})
+		samples = append(samples, capacity.MemorySample{At: at.Add(t), RSSBytes: value, PhysicalFootprintBytes: value, HeapInUseBytes: value})
 	}
 	return samples
 }
@@ -67,6 +67,7 @@ func TestSoakSeedReproducesPlanAndMix(t *testing.T) {
 	require.Equal(t, first, soakSchedule(time.Hour, 30*time.Second, 41, 3))
 	require.False(t, reflect.DeepEqual(first, soakSchedule(time.Hour, 30*time.Second, 42, 3)))
 	require.Len(t, first, 119)
+	require.Len(t, soakSchedule(10*time.Minute+10*time.Second, 30*time.Second, 41, 3), 20, "nightly has one-event headroom under exact 95% coverage")
 	seen := map[string]bool{}
 	for _, e := range first[:3] {
 		seen[e.Kind] = true
@@ -100,6 +101,7 @@ func soakFixtureEvents(count int, interval time.Duration) (config, loadgen.RunRe
 	c := config{Soak: true, Duration: 20 * time.Minute, Callers: 2, Processes: 1, Workers: 3, WorkerFloor: 8, RelayFloor: 8, StoreOpsBudget: 100, StoreBytesBudget: 128 << 10}
 	r := capacityFixture()
 	r.StartedAt, r.Duration, r.Limits = at, c.Duration, loadgen.DefaultLimits()
+	r.SentinelWorker = "worker-0"
 	template := r.Processes[0].Calls[0].Call.Moves[0]
 	template.Measurement.AudioLoss.Trusted = true
 	template.Measurement.Audio.Verdict.Trusted = true
@@ -117,7 +119,8 @@ func soakFixtureEvents(count int, interval time.Duration) (config, loadgen.RunRe
 			move.From, move.To = 1, 0
 		}
 		if kind == "kill" {
-			event.Worker = 0
+			event.Worker = 1
+			move.From, move.To = 1, 0
 			move.Kind = "takeover"
 			takeovers++
 		}
@@ -134,7 +137,7 @@ func soakFixtureEvents(count int, interval time.Duration) (config, loadgen.RunRe
 	for i := range r.Telemetry.Processes {
 		r.Telemetry.Processes[i].Memory = memorySamples(at, c.Duration, 0)
 	}
-	r.Leaks = loadgen.LeakReport{Checked: true}
+	r.Leaks = loadgen.LeakReport{Checked: true, ScanControls: map[string]bool{"session_epoch": true, "relay-fencing-hash": true}}
 	r.Judge()
 	return c, r
 }
@@ -234,6 +237,23 @@ func TestSoakRedisScanFindsSeededLeftover(t *testing.T) {
 			require.Equal(t, tc.want, boundedSoakKey(k))
 		})
 	}
+
+	for _, tc := range []struct {
+		name string
+		ttl  time.Duration
+		want bool
+	}{{"bounded", 30 * time.Second, true}, {"missing TTL", 0, false}, {"overlong", 31 * time.Second, false}} {
+		t.Run("frames/"+tc.name, func(t *testing.T) {
+			key := prefix + "frames:{sess:frame-test}"
+			require.NoError(t, client.Set(context.Background(), key, "frame", tc.ttl).Err())
+			defer func() { require.NoError(t, client.Del(context.Background(), key).Err()) }()
+			observation, err := observeSoakKey(context.Background(), client, prefix, key)
+			require.NoError(t, err)
+			require.Equal(t, "frame-cache", observation.Class)
+			require.EqualValues(t, 30000, observation.LimitMS)
+			require.Equal(t, tc.want, boundedSoakKey(observation))
+		})
+	}
 	relayKey := prefix + "relay:{relay:ZGVmYXVsdA}"
 	require.NoError(t, client.HSet(context.Background(), relayKey, "holder", "", "expires", 0, "forwarder", "", "previous", "").Err())
 	defer func() { require.NoError(t, client.Del(context.Background(), relayKey).Err()) }()
@@ -242,6 +262,21 @@ func TestSoakRedisScanFindsSeededLeftover(t *testing.T) {
 	require.EqualValues(t, -1, k.TTLMS)
 	require.True(t, k.Released)
 	require.True(t, boundedSoakKey(k))
+
+	counter := prefix + "session_epoch"
+	require.NoError(t, client.Set(context.Background(), counter, 1, 0).Err())
+	defer func() { require.NoError(t, client.Del(context.Background(), counter).Err()) }()
+	scanned, err := scanSoakKeys(context.Background(), client, prefix)
+	require.NoError(t, err)
+	controls := soakScanControls(scanned, prefix)
+	require.True(t, controls["session_epoch"])
+	require.True(t, controls["relay-fencing-hash"])
+	wrong, err := scanSoakKeys(context.Background(), client, prefix+"wrong:")
+	require.NoError(t, err)
+	require.Empty(t, wrong)
+	for _, found := range soakScanControls(wrong, prefix) {
+		require.False(t, found)
+	}
 	now, err := client.Time(context.Background()).Result()
 	require.NoError(t, err)
 	require.NoError(t, client.HSet(context.Background(), relayKey, "holder", "held", "expires", now.Add(time.Minute).UnixMilli()).Err())
@@ -275,6 +310,9 @@ func TestSoakIndependentWorkerFailureAndCallerLifetime(t *testing.T) {
 }
 
 func TestSoakDetectsOwnedLiveProcessAndReapedProcess(t *testing.T) {
+	if err := processrss.Check(); err != nil {
+		t.Skipf("current memory sampling unavailable in this build: %v", err)
+	}
 	child, err := clusterprocess.Start(t.TempDir(), "seeded-process", os.Environ(), "sleep", "2")
 	require.NoError(t, err)
 	defer child.Stop()
@@ -330,7 +368,7 @@ func TestSoakBoundedRetention(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, r := soakFixture()
-			r.Leaks = loadgen.LeakReport{Checked: true, Keys: tc.keys, RelayWait: soakRelayWait, RelayObservedAt: time.Now(), Sessions: map[string]int{"relay-routes": tc.routes}}
+			r.Leaks = loadgen.LeakReport{Checked: true, ScanControls: map[string]bool{"session_epoch": true, "relay-fencing-hash": true}, Keys: tc.keys, RelayWait: soakRelayWait, RelayObservedAt: time.Now(), Sessions: map[string]int{"relay-routes": tc.routes}}
 			for _, k := range tc.keys {
 				r.Leaks.StoreKeys = append(r.Leaks.StoreKeys, k.Key)
 			}
@@ -402,6 +440,8 @@ func TestSoakEventCoveragePolicy(t *testing.T) {
 			r.Events[i].Event.Worker = 1
 			c.Events[i].Worker = 1
 			r.Processes[0].Calls[0].Call.Moves[i].Kind = "move"
+			r.Processes[0].Calls[0].Call.Moves[i].From = 0
+			r.Processes[0].Calls[0].Call.Moves[i].To = 1
 		}
 	}
 	r.Telemetry.Processes[1].Last["relais_control_takeovers_total"] = 1
@@ -477,4 +517,29 @@ func TestSoakEventCoverageDoesNotHideIncompleteGenerators(t *testing.T) {
 	r.Processes[0].Complete = false
 	r.Judge()
 	require.Equal(t, "inconclusive", judgeSoak(c, r).Outcome)
+}
+
+func TestSoakAcceptanceCannotIgnoreAllWorkerMemory(t *testing.T) {
+	c, r := soakFixture()
+	c.Callers, c.Duration = 50, time.Hour
+	for i := range r.Telemetry.Processes {
+		if strings.HasPrefix(r.Telemetry.Processes[i].Name, "worker-") {
+			r.Telemetry.Processes[i].Memory = memorySamples(r.StartedAt, 3*time.Minute, 180*float64(1<<20)/3600)
+		}
+	}
+	v := judgeSoak(c, r)
+	require.False(t, v.Acceptance, "short recycled workers cannot prove worker memory")
+	require.Contains(t, v.AcceptanceReasons, "worker memory unproven")
+}
+
+func TestSoakConfirmedEventFailureSurvivesSaturation(t *testing.T) {
+	c, r := soakFixture()
+	r.Events[0].Failed = true
+	r.Processes[0].Saturated = true
+	r.Processes[0].Samples[31].IntervalLateness.P99 = 21 * time.Millisecond
+	r.Judge()
+	v := judgeSoak(c, r)
+	require.True(t, v.Events[0].Saturated)
+	require.Equal(t, "fail", v.Events[0].Outcome)
+	require.Equal(t, "fail", v.Outcome)
 }

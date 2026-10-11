@@ -60,24 +60,18 @@ func (p *Plane) ProcessHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", metrics.ProcessHandler(p.metricSamples, metrics.CheckpointCollectors()...))
 	mux.Handle("/", p.Handler())
-	// Recycle only the original registered process endpoint after death and
-	// complete recovery. Replace retains its lease and race guards. This is
-	// needed after a drain, whose registration intentionally stays draining.
+	// Reset only draining on the settled dead registration. Keeping it dead
+	// preserves the remote rejoin token handshake and fencing of old sessions.
 	mux.HandleFunc("POST /private/workers/{name}/replace", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		p.mu.Lock()
-		old := p.workers[name]
-		var worker Worker
-		var address netip.AddrPort
-		if old != nil {
-			worker, address = old.worker, old.addr
-		}
+		exists := p.workers[name] != nil
 		p.mu.Unlock()
-		if old == nil {
+		if !exists {
 			http.Error(w, "unknown worker", http.StatusNotFound)
 			return
 		}
-		if err := p.Replace(name, address, worker); err != nil {
+		if err := p.resetRecoveredDrain(name); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}

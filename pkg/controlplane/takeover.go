@@ -932,3 +932,28 @@ func alignReplayIndex(high uint64, seq uint16) uint64 {
 	}
 	return roc<<16 | uint64(seq)
 }
+
+// resetRecoveredDrain leaves the registration and its death/rejoin cycle
+// intact. Never use Replace for recycling a remote process at the same address.
+func (p *Plane) resetRecoveredDrain(name string) error {
+	p.mu.Lock()
+	old := p.workers[name]
+	if old == nil || !old.dead || !old.recovered || old.recovering || old.reserved != 0 {
+		p.mu.Unlock()
+		return errors.New("controlplane: drain reset requires a recovered dead worker")
+	}
+	p.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	leases, err := p.store.ListByWorker(ctx, old.addr)
+	if err != nil || len(leases) != 0 {
+		return errors.New("controlplane: drain reset still has leases")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.workers[name] != old || !old.dead || !old.recovered || old.recovering || old.reserved != 0 {
+		return errors.New("controlplane: drain reset raced with rejoin or recovery")
+	}
+	old.draining = false
+	return nil
+}

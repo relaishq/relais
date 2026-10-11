@@ -20,6 +20,7 @@ import (
 	"github.com/relais/internal/capacity"
 	"github.com/relais/internal/clusterprocess"
 	"github.com/relais/internal/loadgen"
+	"github.com/relais/internal/processrss"
 	"github.com/relais/internal/relaylease"
 	"github.com/relais/pkg/controlplane"
 	"github.com/relais/pkg/mediaworker"
@@ -81,6 +82,9 @@ func judgeMemory(name string, pid int, metric string, samples []capacity.MemoryS
 			continue
 		}
 		value := s.RSSBytes
+		if metric == "physical-footprint" {
+			value = s.PhysicalFootprintBytes
+		}
 		if metric == "heap-in-use" {
 			value = s.HeapInUseBytes
 		}
@@ -225,32 +229,34 @@ type soakEventVerdict struct {
 	Rows      []loadgen.MetricRow `json:"rows"`
 }
 type soakReport struct {
-	GOOS                   string             `json:"goos"`
-	GOARCH                 string             `json:"goarch"`
-	GoVersion              string             `json:"go_version"`
-	Runner                 string             `json:"runner"`
-	Topology               string             `json:"topology"`
-	Video                  bool               `json:"video"`
-	GOMAXPROCS             int                `json:"gomaxprocs"`
-	Seed                   int64              `json:"seed"`
-	Schedule               []loadgen.Event    `json:"schedule"`
-	WorkerFloor            int                `json:"worker_floor"`
-	RelayFloor             int                `json:"relay_floor"`
-	Workers                int                `json:"workers"`
-	Processes              int                `json:"generator_processes"`
-	CallersPerProcess      int                `json:"callers_per_process"`
-	Interval               time.Duration      `json:"interval_ns"`
-	FullScale              bool               `json:"full_scale"`
-	Acceptance             bool               `json:"acceptance"`
-	AcceptanceReasons      []string           `json:"acceptance_reasons"`
-	ConclusiveEvents       int                `json:"conclusive_events"`
-	ConclusiveEventPercent float64            `json:"conclusive_event_percent"`
-	Saturation             saturationBudget   `json:"saturation"`
-	Memory                 []memoryVerdict    `json:"memory"`
-	Events                 []soakEventVerdict `json:"events"`
-	Outcome                string             `json:"outcome"`
-	Causes                 []string           `json:"causes"`
-	Run                    loadgen.RunReport  `json:"run"`
+	SentinelWorker         string                `json:"sentinel_worker"`
+	WorkerTrends           []recycledWorkerTrend `json:"recycled_worker_trends"`
+	GOOS                   string                `json:"goos"`
+	GOARCH                 string                `json:"goarch"`
+	GoVersion              string                `json:"go_version"`
+	Runner                 string                `json:"runner"`
+	Topology               string                `json:"topology"`
+	Video                  bool                  `json:"video"`
+	GOMAXPROCS             int                   `json:"gomaxprocs"`
+	Seed                   int64                 `json:"seed"`
+	Schedule               []loadgen.Event       `json:"schedule"`
+	WorkerFloor            int                   `json:"worker_floor"`
+	RelayFloor             int                   `json:"relay_floor"`
+	Workers                int                   `json:"workers"`
+	Processes              int                   `json:"generator_processes"`
+	CallersPerProcess      int                   `json:"callers_per_process"`
+	Interval               time.Duration         `json:"interval_ns"`
+	FullScale              bool                  `json:"full_scale"`
+	Acceptance             bool                  `json:"acceptance"`
+	AcceptanceReasons      []string              `json:"acceptance_reasons"`
+	ConclusiveEvents       int                   `json:"conclusive_events"`
+	ConclusiveEventPercent float64               `json:"conclusive_event_percent"`
+	Saturation             saturationBudget      `json:"saturation"`
+	Memory                 []memoryVerdict       `json:"memory"`
+	Events                 []soakEventVerdict    `json:"events"`
+	Outcome                string                `json:"outcome"`
+	Causes                 []string              `json:"causes"`
+	Run                    loadgen.RunReport     `json:"run"`
 }
 
 func leakCauses(l loadgen.LeakReport) []string {
@@ -293,6 +299,8 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 		result.Causes = append(result.Causes, reason)
 	}
 	fail := func(reason string) { result.Outcome = "fail"; result.Causes = append(result.Causes, reason) }
+	result.SentinelWorker = r.SentinelWorker
+	result.WorkerTrends = recycledWorkerTrends(r.Telemetry.Processes, r.SentinelWorker)
 	result.Saturation = judgeSaturation(r)
 	// Rejudge a copy without process-wide saturation. Its intervals remain intact
 	// in the original report, and the budget/event windows control validity here.
@@ -337,14 +345,20 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 				}
 			}
 		}
-		if e.Failed || e.Error != "" {
+		if e.Failed {
+			v.Outcome = "fail"
+			v.Causes = append(v.Causes, "confirmed event failure")
+		}
+		if e.Error != "" {
 			v.Causes = append(v.Causes, "action failed: "+e.Error)
 			if !v.Saturated {
 				v.Outcome = "fail"
 			}
 		}
 		if v.Saturated {
-			v.Outcome = "inconclusive"
+			if v.Outcome != "fail" {
+				v.Outcome = "inconclusive"
+			}
 			v.Causes = append(v.Causes, "event window overlaps generator saturation")
 		}
 		if len(v.Rows) == 0 {
@@ -419,13 +433,17 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 		inconclusive("chaos schedule incomplete")
 	}
 	addMemory := func(name string, pid int, samples []capacity.MemorySample, worker bool, heap bool, observedSeconds float64) {
-		metrics := []string{"rss"}
+		memoryMetric := r.MemoryMetric
+		if memoryMetric == "" {
+			memoryMetric = "rss"
+		}
+		metrics := []string{memoryMetric}
 		if heap {
 			metrics = append(metrics, "heap-in-use")
 		}
 		for _, metric := range metrics {
 			v := judgeMemory(name, pid, metric, samples, r.StartedAt, r.Duration, worker)
-			if worker && observedSeconds >= (10*time.Minute).Seconds() {
+			if name == r.SentinelWorker || worker && observedSeconds >= (10*time.Minute).Seconds() {
 				v.LongLived = true
 			}
 			result.Memory = append(result.Memory, v)
@@ -451,10 +469,19 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 	for _, p := range r.Processes {
 		var samples []capacity.MemorySample
 		for _, s := range p.Samples {
-			samples = append(samples, capacity.MemorySample{At: s.At, RSSBytes: s.RSSBytes, HeapInUseBytes: s.HeapInUseBytes})
+			samples = append(samples, capacity.MemorySample{At: s.At, RSSBytes: s.RSSBytes, PhysicalFootprintBytes: s.PhysicalFootprintBytes, HeapInUseBytes: s.HeapInUseBytes})
 		}
 		addMemory("caller", p.PID, samples, true, true, 0)
 		for _, m := range p.Calls {
+			if m.Call != nil {
+				for _, cause := range soakContinuityCauses(r, p, m, result.Saturation) {
+					if cause.Failed {
+						fail(cause.Reason)
+					} else {
+						inconclusive(cause.Reason)
+					}
+				}
+			}
 			if m.Call == nil {
 				continue
 			}
@@ -480,6 +507,11 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 	}
 	if len(r.Leaks.StoreKeys) != len(r.Leaks.Keys) {
 		inconclusive("Redis retention observations missing")
+	}
+	for _, control := range []string{"session_epoch", "relay-fencing-hash"} {
+		if !r.Leaks.ScanControls[control] {
+			inconclusive("Redis scan positive control missing: " + control)
+		}
 	}
 	if !r.Leaks.Checked || len(r.Leaks.Errors) > 0 {
 		inconclusive("leak checks incomplete: " + strings.Join(r.Leaks.Errors, "; "))
@@ -519,6 +551,21 @@ func (r *soakReport) judgeAcceptance() {
 		if !roles[role] {
 			r.AcceptanceReasons = append(r.AcceptanceReasons, "missing "+role+" memory verdicts")
 		}
+	}
+	workerMetrics := map[string]bool{}
+	workerPIDs := map[int]bool{}
+	for _, m := range r.Memory {
+		if r.SentinelWorker != "" && m.Name == r.SentinelWorker && m.LongLived && m.Outcome == "pass" {
+			workerMetrics[m.Metric] = true
+			workerPIDs[m.PID] = true
+		}
+	}
+	metric := r.Run.MemoryMetric
+	if metric == "" {
+		metric = "rss"
+	}
+	if !workerMetrics[metric] || !workerMetrics["heap-in-use"] || len(workerPIDs) != 1 {
+		r.AcceptanceReasons = append(r.AcceptanceReasons, "worker memory unproven")
 	}
 	r.Acceptance = len(r.AcceptanceReasons) == 0
 }
@@ -596,7 +643,7 @@ func resolveSoakEvent(ctx context.Context, t *topology, e loadgen.Event, floor i
 	for _, w := range status.Workers {
 		if !w.Dead && !w.Draining && !w.Recovering {
 			live = append(live, w)
-			if w.Calls > 0 {
+			if w.Calls > 0 && (e.Kind == "move" || w.Name != strconv.Itoa(t.Sentinel)) {
 				occupied = append(occupied, w)
 			}
 			if w.Calls > floor {
@@ -627,6 +674,9 @@ func resolveSoakEvent(ctx context.Context, t *topology, e loadgen.Event, floor i
 }
 
 func (t *topology) recycle(ctx context.Context, id int) error {
+	if id == t.Sentinel {
+		return errors.New("cannot recycle the memory sentinel")
+	}
 	name := fmt.Sprintf("worker-%d", id)
 	launch := t.Launch[id]
 	if launch == nil {
@@ -662,6 +712,8 @@ func (t *topology) recycle(ctx context.Context, id int) error {
 	if err := request(deadline, http.MethodPost, controlURL+"/private/workers/"+strconv.Itoa(id)+"/replace", nil, nil); err != nil {
 		return err
 	}
+	oldPID := t.Workers[id].PID()
+	startedAt := time.Now()
 	launch.Incarnation++
 	dir := filepath.Join(t.Dir, fmt.Sprintf("%s-incarnation-%03d", name, launch.Incarnation))
 	if err := os.Mkdir(dir, 0700); err != nil {
@@ -673,12 +725,37 @@ func (t *topology) recycle(ctx context.Context, id int) error {
 	}
 	t.processes = append(t.processes, child)
 	t.Workers[id] = child
+	rejoinIndex := len(t.Rejoins)
+	t.Rejoins = append(t.Rejoins, loadgen.WorkerRejoin{Worker: name, OldPID: oldPID, PID: child.PID(), StartedAt: startedAt})
 	ready, err := child.Ready(deadline)
 	if err != nil {
 		return err
 	}
 	if ready.HTTP != launch.URL {
 		return errors.New("replacement changed registered worker endpoint")
+	}
+	// HTTP readiness does not prove membership. Require a fresh heartbeat
+	// after launch, and a live registration reached through the token handshake.
+	for {
+		var status controlplane.Status
+		t.statusRequests++
+		if err := request(deadline, http.MethodGet, controlURL+"/status", nil, &status); err != nil {
+			return err
+		}
+		joined := false
+		for _, worker := range status.Workers {
+			if worker.Name == strconv.Itoa(id) && !worker.Dead && !worker.Draining && !worker.Recovering && worker.LastHeartbeat.After(startedAt) {
+				t.Rejoins[rejoinIndex].CompletedAt = time.Now()
+				t.Rejoins[rejoinIndex].LastHeartbeat = worker.LastHeartbeat
+				joined = true
+			}
+		}
+		if joined {
+			break
+		}
+		if err := waitUntil(deadline, time.Now().Add(50*time.Millisecond)); err != nil {
+			return err
+		}
 	}
 	delete(t.Killed, id)
 	target := capacity.Target{Name: name, PID: child.PID(), URL: ready.HTTP, Done: child.Done(), Err: child.Err}
@@ -763,6 +840,12 @@ func (t *topology) checkSoakLeaks(generators []generator) loadgen.LeakReport {
 	client := redis.NewClient(&redis.Options{Addr: t.RedisAddr, Password: t.RedisPassword, MaxRetries: -1, ReadTimeout: time.Second, WriteTimeout: time.Second})
 	keys, err := scanSoakKeys(ctx, client, t.Prefix)
 	l.StoreKeys = keys
+	l.ScanControls = soakScanControls(keys, t.Prefix)
+	for name, found := range l.ScanControls {
+		if !found {
+			l.Errors = append(l.Errors, "Redis scan positive control missing: "+name)
+		}
+	}
 	recordError(err)
 	for _, key := range keys {
 		observation, err := observeSoakKey(ctx, client, t.Prefix, key)
@@ -818,6 +901,7 @@ func (t *topology) checkSoakLeaks(generators []generator) loadgen.LeakReport {
 }
 
 func runSoak(ctx context.Context, m *clusterprocess.Manager, c config, root string) error {
+	fmt.Printf("soak sentinel-worker=worker-0 memory-metric=%s\n", processrss.TrendMetric())
 	fmt.Printf("soak seed=%d calls=%d processes=%d interval=%s duration=%s worker-floor=%d relay-floor=%d\n", c.Seed, c.Callers, c.Processes, c.ChaosInterval, c.Duration, c.WorkerFloor, c.RelayFloor)
 	for i, e := range c.Events {
 		fmt.Printf("schedule index=%d after=%s kind=%s selection-offset=%d\n", i, e.After, e.Kind, e.Worker)
@@ -966,6 +1050,8 @@ func boundedSoakKey(k loadgen.RetainedKey) bool {
 		// The hash persists for its monotone epoch. Release clears the identities;
 		// expiry is a field, not PTTL. Missing expiry evidence must fail.
 		return k.LeaseRemainingMS != nil && (*k.LeaseRemainingMS <= relaylease.DefaultTTL.Milliseconds())
+	case "frame-cache":
+		return k.TTLMS > 0 && k.TTLMS <= (30*time.Second).Milliseconds()
 	case "session", "worker-index":
 		limit := soakSessionLimit.Milliseconds()
 		if k.Class == "worker-index" {
@@ -996,6 +1082,8 @@ func observeSoakKey(ctx context.Context, client *redis.Client, prefix, key strin
 	case ttl == -2:
 		// SCAN and PTTL are separate reads; positive-TTL keys can expire between them.
 		k.Class = "expired"
+	case strings.HasPrefix(suffix, "frames:{sess:") && strings.HasSuffix(suffix, "}"):
+		k.Class, k.LimitMS = "frame-cache", (30 * time.Second).Milliseconds()
 	case suffix == "session_epoch":
 		k.Class = "session-counter"
 	case strings.HasPrefix(suffix, "worker:"):
@@ -1043,4 +1131,116 @@ func printSoakVerdict(r soakReport, output string) {
 	for _, reason := range r.AcceptanceReasons {
 		fmt.Println("soak acceptance reason:", reason)
 	}
+}
+
+// Recycled-worker RSS at matched age is informational. It never substitutes
+// for the uninterrupted sentinel's conclusive memory verdict.
+type workerTrendPoint struct {
+	PID                    int       `json:"pid"`
+	StartedAt              time.Time `json:"started_at"`
+	SampleAt               time.Time `json:"sample_at"`
+	RSSBytes               uint64    `json:"rss_bytes"`
+	PhysicalFootprintBytes uint64    `json:"physical_footprint_bytes,omitempty"`
+	Available              bool      `json:"available"`
+}
+type recycledWorkerTrend struct {
+	Worker              string             `json:"worker"`
+	MatchedAge          time.Duration      `json:"matched_age"`
+	Informational       bool               `json:"informational"`
+	Points              []workerTrendPoint `json:"points"`
+	TrendAvailable      bool               `json:"trend_available"`
+	RSSFirstToLastBytes int64              `json:"rss_first_to_last_bytes"`
+}
+
+func recycledWorkerTrends(processes []capacity.Process, sentinel string) []recycledWorkerTrend {
+	byName := map[string]*recycledWorkerTrend{}
+	for _, p := range processes {
+		if !strings.HasPrefix(p.Name, "worker-") || p.Name == sentinel {
+			continue
+		}
+		trend := byName[p.Name]
+		if trend == nil {
+			trend = &recycledWorkerTrend{Worker: p.Name, MatchedAge: 30 * time.Second, Informational: true}
+			byName[p.Name] = trend
+		}
+		point := workerTrendPoint{PID: p.PID}
+		if len(p.Memory) > 0 {
+			point.StartedAt = p.Memory[0].At
+			target := point.StartedAt.Add(trend.MatchedAge)
+			for _, s := range p.Memory {
+				if !s.At.Before(target) && s.At.Before(target.Add(2*time.Second)) {
+					point.SampleAt, point.RSSBytes, point.PhysicalFootprintBytes, point.Available = s.At, s.RSSBytes, s.PhysicalFootprintBytes, s.RSSBytes > 0
+					break
+				}
+			}
+		}
+		trend.Points = append(trend.Points, point)
+	}
+	var result []recycledWorkerTrend
+	for _, trend := range byName {
+		sort.Slice(trend.Points, func(i, j int) bool { return trend.Points[i].StartedAt.Before(trend.Points[j].StartedAt) })
+		var available []workerTrendPoint
+		for _, p := range trend.Points {
+			if p.Available {
+				available = append(available, p)
+			}
+		}
+		if len(available) > 1 {
+			trend.TrendAvailable = true
+			trend.RSSFirstToLastBytes = int64(available[len(available)-1].RSSBytes) - int64(available[0].RSSBytes)
+		}
+		result = append(result, *trend)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Worker < result[j].Worker })
+	return result
+}
+
+type continuityCause struct {
+	Failed bool
+	Reason string
+}
+
+func soakContinuityCauses(r loadgen.RunReport, p loadgen.ProcessReport, message loadgen.Message, b saturationBudget) []continuityCause {
+	var causes []continuityCause
+	for _, track := range message.Call.Tracks {
+		if !track.MediaGapsRecorded {
+			causes = append(causes, continuityCause{Reason: track.Kind + " whole-call gap inventory unavailable"})
+			continue
+		}
+		if track.MediaGapOverflow > 0 {
+			causes = append(causes, continuityCause{Failed: true, Reason: track.Kind + " whole-call gap inventory overflow"})
+		}
+		for _, gap := range track.MediaGaps {
+			if !gapOutsideScheduledEvent(r.Events, message.Session, message.Call, gap.EndedAt, gap.Duration) {
+				continue
+			}
+			end := message.Call.StartedAt.Add(gap.EndedAt)
+			start := end.Add(-gap.Duration)
+			saturated := false
+			for _, s := range b.Excluded {
+				if s.PID == p.PID && s.Start.Before(end) && s.End.After(start) {
+					saturated = true
+					break
+				}
+			}
+			reason := fmt.Sprintf("%s unscheduled media gap %s ended at %s", track.Kind, gap.Duration, gap.EndedAt)
+			if saturated {
+				reason += " overlaps this caller's generator saturation"
+			}
+			causes = append(causes, continuityCause{Failed: !saturated, Reason: reason})
+		}
+	}
+	return causes
+}
+func soakScanControls(keys []string, prefix string) map[string]bool {
+	controls := map[string]bool{"session_epoch": false, "relay-fencing-hash": false}
+	for _, key := range keys {
+		if key == prefix+"session_epoch" {
+			controls["session_epoch"] = true
+		}
+		if key == prefix+"relay:{relay:ZGVmYXVsdA}" {
+			controls["relay-fencing-hash"] = true
+		}
+	}
+	return controls
 }

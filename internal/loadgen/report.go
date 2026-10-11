@@ -182,18 +182,30 @@ type RetainedKey struct {
 	Released         bool   `json:"released,omitempty"`
 }
 type LeakReport struct {
-	Keys            []RetainedKey  `json:"keys"`
-	RelayWait       time.Duration  `json:"relay_wait"`
-	RelayObservedAt time.Time      `json:"relay_observed_at"`
-	Checked         bool           `json:"checked"`
-	Sessions        map[string]int `json:"sessions"`
-	StoreKeys       []string       `json:"store_keys"`
-	Processes       []int          `json:"processes"`
-	Listeners       []string       `json:"listeners"`
-	Errors          []string       `json:"errors,omitempty"`
+	ScanControls    map[string]bool `json:"scan_controls"`
+	Keys            []RetainedKey   `json:"keys"`
+	RelayWait       time.Duration   `json:"relay_wait"`
+	RelayObservedAt time.Time       `json:"relay_observed_at"`
+	Checked         bool            `json:"checked"`
+	Sessions        map[string]int  `json:"sessions"`
+	StoreKeys       []string        `json:"store_keys"`
+	Processes       []int           `json:"processes"`
+	Listeners       []string        `json:"listeners"`
+	Errors          []string        `json:"errors,omitempty"`
 }
 
+type WorkerRejoin struct {
+	Worker        string    `json:"worker"`
+	OldPID        int       `json:"old_pid"`
+	PID           int       `json:"pid"`
+	StartedAt     time.Time `json:"started_at"`
+	CompletedAt   time.Time `json:"completed_at"`
+	LastHeartbeat time.Time `json:"last_heartbeat"`
+}
 type RunReport struct {
+	SentinelWorker                string             `json:"sentinel_worker,omitempty"`
+	MemoryMetric                  string             `json:"memory_metric,omitempty"`
+	WorkerRejoins                 []WorkerRejoin     `json:"worker_rejoins,omitempty"`
 	Leaks                         LeakReport         `json:"leaks,omitempty"`
 	Telemetry                     capacity.Telemetry `json:"telemetry"`
 	WorkerPeaks                   map[string]int     `json:"worker_peak_calls"`

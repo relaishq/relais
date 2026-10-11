@@ -133,6 +133,7 @@ func (l Limits) Validate() error {
 }
 
 type Stats struct {
+	PhysicalFootprintBytes  uint64        `json:"physical_footprint_bytes,omitempty"`
 	RSSBytes                uint64        `json:"rss_bytes,omitempty"`
 	HeapInUseBytes          uint64        `json:"heap_in_use_bytes,omitempty"`
 	At                      time.Time     `json:"at"`
@@ -189,7 +190,9 @@ func (s *Sampler) Sample(m *Meter) (Stats, error) {
 		var heap runtime.MemStats
 		runtime.ReadMemStats(&heap)
 		out.HeapInUseBytes = heap.HeapInuse
-		out.RSSBytes, err = processrss.Current(os.Getpid())
+		var memory processrss.Sample
+		memory, err = processrss.Read(os.Getpid())
+		out.RSSBytes, out.PhysicalFootprintBytes = memory.ResidentBytes, memory.PhysicalFootprintBytes
 		if err != nil {
 			return Stats{}, err
 		}

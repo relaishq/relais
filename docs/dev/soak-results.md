@@ -1,5 +1,80 @@
 # Soak implementation and local evidence (#41)
 
+The rework 3 contract is in [soak.md](soak.md): an uninterrupted memory
+sentinel, whole-call gap inventory, token-based rejoin and Redis scan positive
+controls. Earlier sections below record historical judgments. Old artifacts
+without the new evidence cannot prove the new contract.
+
+## Rework 3 verification
+
+Verification used macOS/arm64, Go 1.26.9, and GOMAXPROCS=4 for Go tools.
+Changes remain uncommitted. No GitHub writes or hosted/full-hour run were
+performed in this stage. Redis 6379 was never used.
+
+| Check | Status | Evidence / limit |
+| --- | --- | --- |
+| Formatting and static checks | VERIFIED | Changed tracked/untracked Go files are gofmt clean; diff whitespace, native/Linux vet, golangci-lint v2.14.0, make build and actionlint passed. |
+| Memory race suite | VERIFIED | All six changed packages passed `-race -short -p=1`: relais-load, loadgen, capacity, processrss, controlplane and callharness. |
+| Redis race assertions | VERIFIED | First five packages passed. All 160 compiled race-build harness tests completed or intentionally skipped across three bounded invocations. Required Redis servers on 53915, 58059 and 59564 were reaped and independently confirmed absent. |
+| One uninterrupted Redis harness invocation | PARTIAL | Initial 10 m limit and follow-up 6 m limit expired in existing recovery trials. No earlier assertion failure or race report. Remaining top-level tests were rerun in full; the final invocation passed. Timeout logs are retained. |
+| Sentinel and memory policy | VERIFIED | Growing one-hour sentinel plus short recycled workers fails memory/outcome and cannot establish acceptance. Missing sentinel proof reports `worker memory unproven`. Resolver protects worker 0 from drain/kill while allowing moves; N+1/floor tests pass. Matched-age recycled-worker trends remain informational. |
+| Whole-call gap inventory | VERIFIED | Actual recorder packet seam retains old mid-run gaps after rolling history expires; cap/overflow tests pass. Unscheduled 500 ms freeze cannot hide behind a larger scheduled takeover gap. Only saturation in that caller's generator makes it inconclusive. Missing inventory is inconclusive; overflow fails. |
+| Rejoin fence and real recycle | VERIFIED | Private reset preserves death and token state. A paused process with a bare heartbeat remains dead and gets a challenge. Owned real-process recycle passes in both race-suite invocations, with a fresh heartbeat and completed membership before return. |
+| Darwin metrics and no-cgo behavior | VERIFIED | Native API reports resident size and physical footprint separately; judgment ignores resident growth when footprint is flat, and fails footprint growth. `CGO_ENABLED=0 go build ./...` and no-cgo tests pass with clear sampling skips. No-cgo soak exits before creating a topology directory. |
+| Scan controls and frame retention | VERIFIED | Real Redis scan finds epoch counter/default relay hash; wrong prefix finds neither. Frame keys with 30 s TTL are accepted; missing/31 s TTL rejected. Missing controls make cleanup inconclusive. |
+| Nightly and log format | VERIFIED | Six-call workflow default/fallback use 10m10s. Schedule test confirms 20 events, permitting one inconclusive under exact 95%. Playbook uses stable verdict prefixes and no branch-specific dispatch ref. |
+| Production-source mutations | VERIFIED | Nine weakened guards fail their targeted tests: sentinel proof/protection, confirmed failure, gap retention/overflow, caller saturation ownership, rejoin fence, scan controls and Darwin metric choice. Source restored; regression suite green. |
+| Linux runtime and hosted/full-hour memory | NOT-RUN | Linux source vetted; runtime, publication and larger-runner choice remain with the orchestrator/project lead. Local short runs cannot establish flat memory. |
+
+Evidence is retained in ignored `bin/soak-verification/rework3-*` files.
+`rework3-race-redis-combined-inventory.log` records compiled test coverage and
+server absence. One source test, `TestAcceptanceRelayBufferTakeover`, has a
+`!race` build constraint and is excluded from that inventory.
+
+## Rework 3 local soak
+
+One new macOS/arm64 loopback run used four calls, three minutes, seed 41,
+three workers and two callers per generator. It ran after race tests stopped;
+this shared Mac could still be contended. The command exited 1 with
+`outcome=inconclusive`, `acceptance=false`. No policy was relaxed to pass it.
+
+```sh
+./bin/relais-load -soak -callers=4 -duration=3m -chaos-interval=30s \
+  -seed=41 -workers=3 -worker-floor=8 -relay-floor=8 \
+  -callers-per-process=2 -output=bin/soak-mac-rework3.json \
+  > bin/soak-mac-rework3.log 2>&1
+```
+
+| Local check | Status | Evidence / limit |
+| --- | --- | --- |
+| Sentinel lifecycle/churn | VERIFIED | Worker 0 kept PID 97417, with 182 samples over 180.512 s, peak two sessions, a move away and a handover into it. Every drain/kill resolved to worker 1 or 2. The sentinel stays eligible for takeover; this short run's takeovers went to worker 2. |
+| Recycles including the last | VERIFIED | Worker 2: 97430 → 388; worker 1: 97429 → 1512 → 4042. All three records have fresh heartbeats and completed rejoin after launch. Last recycle completed at 10:15:54.678702-07:00, before media ended. |
+| Calls and failure counters | VERIFIED | All four calls cover intended lifetime. Six affected/recorded call events match. Zero caller/worker decryption failures and zero lost calls. No telemetry errors. Maximum worker sessions two, below floor eight. |
+| Whole-call gap capture | VERIFIED | All eight tracks declare the inventory recorded; four retained gaps, all attributable to scheduled events. No overflow and no unscheduled-gap cause. Each generator retained 181 samples. |
+| Event validity | PARTIAL | Four of five events pass; first drain overlaps saturation and is inconclusive. Coverage 80% is below exact 95%; all kinds have a conclusive pass. |
+| Generator validity | PARTIAL | 8/180 wall-clock seconds saturated (4.444% >1%). Excluded process intervals are retained; run remains inconclusive. |
+| Memory trend evidence | PARTIAL | All 21 metrics are insufficient-data. Physical footprint and resident samples are separate. Sentinel memory is explicitly unproven; short duration prevents acceptance. Both recycled-worker trends have matched-age observations for every incarnation and remain informational. |
+| Cleanup and scan controls | VERIFIED | After 35.000088542 s relay wait, zero sessions/routes/pending routes/buffers/holds. Both Redis scan controls found. Four retained epoch keys have 266957–267915 ms TTLs within 308000 ms. Released relay hash and epoch counter are bounded retention. No remaining processes/listeners/errors. |
+| Independent process/group proof | VERIFIED | All 22 owned PID/group probes absent after shutdown. |
+| Greppable verdict | VERIFIED | Log includes `soak outcome=`, both `soak cause:` lines, `soak acceptance=false`, and `soak acceptance reason: worker memory unproven`. |
+| Hosted/full-hour proof | NOT-RUN | Orchestrator owns publication/dispatch; larger hardware and capacity floors still required. |
+
+| Offset | Kind | Worker | Affected / recorded | Outcome |
+| --- | --- | ---: | ---: | --- |
+| 30 s | Move | 1 | 1 / 1 | Pass |
+| 60 s | Drain | 2 | 1 / 1 | Inconclusive: saturation |
+| 90 s | SIGKILL | 1 | 2 / 2 | Pass |
+| 120 s | Move | 1 | 1 / 1 | Pass |
+| 150 s | Drain | 1 | 1 / 1 | Pass |
+
+Ignored artifacts: `bin/soak-mac-rework3.json`,
+`bin/soak-mac-rework3.log`, `bin/load-run-2181169564/`,
+`bin/soak-verification/rework3-local-proof.log` and
+`bin/soak-verification/rework3-process-probes.log`.
+The initial post-run Python helper rejected Go's five-digit RFC3339 fraction;
+timestamp normalization fixed the offline assertions. Raw report/log data
+were unchanged and no second soak ran. The initial parser log is retained.
+
 ## Hosted report rejudged after rework 2
 
 The orchestrator published commit `8ac0040` and supplied downloaded artifacts
