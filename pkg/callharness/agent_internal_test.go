@@ -39,6 +39,7 @@ type harnessCounterAgent struct {
 	resumes         chan agentResumeObservation
 	restoreFailure  bool
 	callbackTimeout string
+	resumeSave      bool
 	processDelay    time.Duration
 }
 
@@ -57,7 +58,11 @@ func (a *harnessCounterAgent) Process(ctx context.Context, _ agent.Input) (agent
 	binary.BigEndian.PutUint64(payload[len(payload)-8:], a.count)
 	return agent.Output{Audio: payload, Changed: true}, nil
 }
-func (a *harnessCounterAgent) Save(context.Context) (agent.State, error) {
+func (a *harnessCounterAgent) Save(ctx context.Context) (agent.State, error) {
+	if a.callbackTimeout == "save" && a.resumeSave {
+		<-ctx.Done()
+		return agent.State{}, ctx.Err()
+	}
 	data := make([]byte, 16)
 	binary.BigEndian.PutUint64(data, a.count)
 	binary.BigEndian.PutUint64(data[8:], uint64(a.consumedAt))
@@ -85,6 +90,10 @@ func (a *harnessCounterAgent) Resume(ctx context.Context, notice agent.ResumeNot
 	if a.callbackTimeout == "resume" {
 		<-ctx.Done()
 		return ctx.Err()
+	}
+	if a.callbackTimeout == "save" {
+		a.resumeSave = true
+		return nil
 	}
 	a.resumes <- agentResumeObservation{notice, a.count}
 	return nil
@@ -502,7 +511,7 @@ func TestAgentSaveRateAndAtomicProgress(t *testing.T) {
 }
 
 func TestAgentCallbackTimeoutRollsBackPlannedCall(t *testing.T) {
-	for _, callback := range []string{"restore", "resume"} {
+	for _, callback := range []string{"restore", "resume", "save"} {
 		t.Run(callback, func(t *testing.T) {
 			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 				sys := startAgentHarness(t, store, agentHarnessSettings{targetCallbackTimeout: callback})
@@ -515,13 +524,18 @@ func TestAgentCallbackTimeoutRollsBackPlannedCall(t *testing.T) {
 				require.Eventually(t, func() bool { return len(counts.snapshot()) >= 10 }, time.Second, time.Millisecond)
 
 				result, err := sys.plane.Move(ctx, call.SessionID(), "1")
-				require.ErrorIs(t, err, agent.ErrRestore)
+				if callback == "save" {
+					require.ErrorIs(t, err, agent.ErrSave)
+					require.EqualValues(t, 1, sys.workers[1].AgentStats().SaveFailures)
+				} else {
+					require.ErrorIs(t, err, agent.ErrRestore)
+					require.EqualValues(t, 1, sys.workers[1].AgentStats().RestoreFailures)
+				}
 				require.ErrorIs(t, err, context.DeadlineExceeded)
 				require.True(t, result.Result.RolledBack)
 				require.False(t, result.Lost)
 				require.Equal(t, 1, sys.workers[0].SessionCount())
 				require.Zero(t, sys.workers[1].SessionCount())
-				require.EqualValues(t, 1, sys.workers[1].AgentStats().RestoreFailures)
 				require.EqualValues(t, 1, sys.workers[1].AgentStats().CallbackDeadlines)
 				resumed := awaitAgentResume(t, sys)
 				require.Equal(t, agent.PlannedMove, resumed.notice.Kind)

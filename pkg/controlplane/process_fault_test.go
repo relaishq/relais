@@ -14,7 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pion/rtp"
+	"github.com/relais/internal/privateapi"
 	"github.com/relais/internal/workerprobe"
+	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/callharness"
 	"github.com/relais/pkg/controlplane"
 	"github.com/relais/pkg/mediaworker"
@@ -86,11 +89,20 @@ type httpSystem struct {
 }
 
 func newHTTPSystem(t *testing.T, source, target, routing *lostReply, counts ...int) *httpSystem {
+	return newHTTPSystemWithSettings(t, source, target, routing, httpSystemSettings{}, counts...)
+}
+
+type httpSystemSettings struct {
+	holdTimeout time.Duration
+	agent       mediaworker.AgentConfig
+}
+
+func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply, settings httpSystemSettings, counts ...int) *httpSystem {
 	t.Helper()
 	cleanupProbe := workerprobe.Enable()
 	t.Cleanup(cleanupProbe)
 	store := sessionstore.NewMemory()
-	r, err := relay.New(relay.Config{PublicAddr: "127.0.0.1:0", WorkerAddr: "127.0.0.1:0", Owners: store})
+	r, err := relay.New(relay.Config{PublicAddr: "127.0.0.1:0", WorkerAddr: "127.0.0.1:0", Owners: store, HoldTimeout: settings.holdTimeout})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, r.Close()) })
 	rs := httptest.NewServer(r.PrivateHandler())
@@ -107,7 +119,7 @@ func newHTTPSystem(t *testing.T, source, target, routing *lostReply, counts ...i
 	}
 	for i := range count {
 		name := strconv.Itoa(i)
-		w, err := mediaworker.New(mediaworker.Config{ListenAddr: "127.0.0.1:0", Relay: &mediaworker.RelayConfig{Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr(), Owners: store}})
+		w, err := mediaworker.New(mediaworker.Config{ListenAddr: "127.0.0.1:0", Agent: settings.agent, Relay: &mediaworker.RelayConfig{Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr(), Owners: store}})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, w.Close()) })
 		ws := httptest.NewServer(w.PrivateHandler())
@@ -258,6 +270,57 @@ func TestHTTPMoveLostReplies(t *testing.T) {
 		})
 	}
 }
+
+// Wrapping Echo exercises the custom-agent output path, whose sequence is
+// allocated independently of the caller's sequence.
+type lostReplyAudioAgent struct{ agent.Echo }
+
+func TestHTTPMoveUncertainAgentCauseAfterTargetAudio(t *testing.T) {
+	source := &lostReply{path: "/never"}
+	target := &lostReply{path: "/resume", failure: agent.ErrRestore}
+	s := newHTTPSystemWithSettings(t, source, target, nil, httpSystemSettings{
+		holdTimeout: 200 * time.Millisecond,
+		agent: mediaworker.AgentConfig{Factory: func(string) agent.Agent {
+			return &lostReplyAudioAgent{}
+		}},
+	})
+	var targetAudio atomic.Uint64
+	require.NoError(t, workerprobe.SetAfterEcho(s.workers[1].LocalAddr(), func(_ context.Context, _ string, packet []byte) {
+		var header rtp.Header
+		if _, err := header.Unmarshal(packet); err == nil && header.PayloadType == 111 {
+			targetAudio.Add(1)
+		}
+	}))
+	target.afterCommit = func() {
+		// Keep the lost reply in flight until the hold expires and the
+		// adopted target has encrypted and sent audio with advanced indexes.
+		require.Eventually(t, func() bool {
+			return s.relay.Stats().HoldTimeouts == 1 && targetAudio.Load() >= 10
+		}, time.Second, time.Millisecond)
+	}
+	report := flowingCall(t, s, func(ctx context.Context, call *callharness.Call) {
+		target.armed.Store(true)
+		move, err := s.plane.Move(ctx, call.SessionID(), "1")
+		require.ErrorIs(t, err, privateapi.ErrUncertain)
+		require.ErrorIs(t, err, agent.ErrRestore)
+		require.True(t, move.Result.RolledBack)
+		require.False(t, move.Lost)
+		require.GreaterOrEqual(t, targetAudio.Load(), uint64(10))
+		resumes := source.requests()
+		require.Len(t, resumes, 1)
+		require.Equal(t, agent.Takeover, resumes[0].Kind)
+		require.GreaterOrEqual(t, resumes[0].SequenceMargin, uint16(8192))
+		require.GreaterOrEqual(t, resumes[0].SRTCPIndexMargin, uint32(128))
+		status, err := s.plane.Status(ctx)
+		require.NoError(t, err)
+		require.Zero(t, status.LostCount)
+		require.Len(t, status.Calls, 1)
+		require.Equal(t, "0", status.Calls[0].Owner)
+	})
+	require.True(t, target.dropped.Load())
+	require.Zero(t, report.DecryptionFailures.Total())
+}
+
 func TestHTTPTakeoverLostRouteReplyAndRejoinFence(t *testing.T) {
 	route := &lostReply{path: "/move", failure: errors.New("route reply lost")}
 	route.armed.Store(true)

@@ -86,6 +86,7 @@ func TestMoveAgentFailureBeforeResumeUncertainty(t *testing.T) {
 		{"transport-deadline", context.DeadlineExceeded, true},
 		{"transport-canceled", context.Canceled, true},
 		{"transport-uncertain", privateapi.ErrUncertain, true},
+		{"transport-uncertain-restore", privateapi.Uncertain(agent.ErrRestore), true},
 	} {
 		t.Run(failure.name, func(t *testing.T) {
 			p, baseA, baseB, _ := setup(t)
