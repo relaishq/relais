@@ -34,6 +34,8 @@ func TestTopologyBindingsAndOptions(t *testing.T) {
 }
 func TestDriverDoesNotInheritPrivateAllowList(t *testing.T) {
 	t.Setenv("RELAIS_PRIVATE_NETS", "10.0.0.0/8")
+	t.Setenv("RELAIS_REDIS_PASSWORD", "inherited-credential")
 	require.Empty(t, envValue(processEnv("key", "127.0.0.1:16379", "prefix"), "RELAIS_PRIVATE_NETS"))
+	require.Empty(t, envValue(processEnv("key", "127.0.0.1:16379", "prefix"), "RELAIS_REDIS_PASSWORD"))
 	require.NotEmpty(t, os.Getenv("RELAIS_PRIVATE_NETS"))
 }

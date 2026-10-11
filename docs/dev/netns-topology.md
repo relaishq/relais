@@ -56,6 +56,11 @@ sudo -E env RELAIS_TEST_NETNS_REQUIRE=1 ./bin/nettopology.test -test.v -test.tim
 
 The store binds its own private address on port 16379. Existing external
 Redis addresses are refused in this topology; port 6379 remains reserved.
+Redis retains protected mode and requires a random per-run password. The
+driver passes it to all store and frame-cache clients through
+`RELAIS_REDIS_PASSWORD`. A private temporary configuration keeps the password
+out of command arguments and uploaded run logs; it is removed after Redis
+startup. The driver requires an authenticated Redis PING before trials.
 Private HTTP listeners receive only the explicit datacentre CIDR through
 `RELAIS_PRIVATE_NETS`. Without this setting they accept loopback only;
 wildcard and public listeners are always refused.

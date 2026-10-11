@@ -24,7 +24,7 @@ import (
 
 // StoreConfig requires an explicit Redis address. Snapshot users also need a key.
 // It does not inherit the older storage package's localhost:6379 default.
-type StoreConfig struct{ Address, Prefix string }
+type StoreConfig struct{ Address, Prefix, Password string }
 
 func Env(name, fallback string) string {
 	if value := os.Getenv(name); value != "" {
@@ -35,6 +35,8 @@ func Env(name, fallback string) string {
 func (c *StoreConfig) Flags(fs *flag.FlagSet) {
 	fs.StringVar(&c.Address, "redis", Env("RELAIS_REDIS_ADDR", ""), "explicit Redis host:port (6379 is refused)")
 	fs.StringVar(&c.Prefix, "redis-prefix", Env("RELAIS_REDIS_PREFIX", "relais:process:"), "shared session-store namespace")
+	// Keep credentials out of command-line flags and readiness output.
+	c.Password = os.Getenv("RELAIS_REDIS_PASSWORD")
 }
 func ValidateRedis(addr string) error { return redisendpoint.Validate(addr) }
 
@@ -46,7 +48,7 @@ func (c StoreConfig) Open(ctx context.Context) (*sessionstore.Redis, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix}, key)
+	return sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix, Password: c.Password}, key)
 }
 
 // OpenFrames shares the snapshot master key, using a separate HKDF domain.
@@ -58,7 +60,7 @@ func (c StoreConfig) OpenFrames(ctx context.Context) (*framecache.Redis, error) 
 	if err != nil {
 		return nil, err
 	}
-	return framecache.NewRedis(ctx, storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix}, key, framecache.Limits{})
+	return framecache.NewRedis(ctx, storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix, Password: c.Password}, key, framecache.Limits{})
 }
 func storeKey() ([]byte, error) {
 	encoded := os.Getenv("RELAIS_SESSIONSTORE_KEY")
@@ -127,5 +129,5 @@ func (c StoreConfig) OpenOwners(ctx context.Context) (*sessionstore.RedisOwners,
 	if err := ValidateRedis(c.Address); err != nil {
 		return nil, err
 	}
-	return sessionstore.NewRedisOwners(ctx, storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix})
+	return sessionstore.NewRedisOwners(ctx, storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix, Password: c.Password})
 }

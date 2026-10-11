@@ -50,7 +50,7 @@ func processEnv(key, addr, prefix string) []string {
 	env := []string{}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if name == "RELAIS_SESSIONSTORE_KEY" || name == "RELAIS_REDIS_ADDR" || name == "RELAIS_REDIS_PREFIX" || name == "RELAIS_PRIVATE_NETS" {
+		if name == "RELAIS_SESSIONSTORE_KEY" || name == "RELAIS_REDIS_ADDR" || name == "RELAIS_REDIS_PREFIX" || name == "RELAIS_REDIS_PASSWORD" || name == "RELAIS_PRIVATE_NETS" {
 			continue
 		}
 		env = append(env, entry)
@@ -71,12 +71,15 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		}
 		c, err := startRole(manager, topology, dir, name, childEnv, args...)
 		if err != nil {
-			return nil, clusterprocess.Ready{}, err
+			return nil, clusterprocess.Ready{}, fmt.Errorf("%s launch: %w", name, err)
 		}
 		processes = append(processes, c)
 		startup, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
 		r, err := c.Ready(startup)
+		if err != nil {
+			err = fmt.Errorf("%s readiness: %w", name, err)
+		}
 		return c, r, err
 	}
 	_, relayReady, err := start("relay", filepath.Join(bin, "relais-relay"), "-media", roleBind(topology, "relay", true), "-leg", roleBind(topology, "relay", false), "-http", roleBind(topology, "relay", false))
@@ -324,22 +327,42 @@ func run() (err error) {
 		}
 	}()
 	addr := *redisAddr
+	password := ""
+	if topology != nil {
+		var secret [32]byte
+		if _, err := rand.Read(secret[:]); err != nil {
+			return err
+		}
+		password = hex.EncodeToString(secret[:])
+	}
 	if addr == "" {
 		addr, err = redisAddress(topology)
 		if err != nil {
 			return err
 		}
 		_, port, _ := net.SplitHostPort(addr)
-		redis, err := startRole(manager, topology, dir, "redis", os.Environ(), *redisBinary, "--bind", redisHost(topology), "--port", port, "--save", "", "--appendonly", "no", "--dir", dir)
+		args, removeConfig, err := redisCommand(topology, *redisBinary, port, dir, password)
 		if err != nil {
 			return err
+		}
+		defer removeConfig()
+		if err := manager.AddCleanup(removeConfig); err != nil {
+			return err
+		}
+		redis, err := startRole(manager, topology, dir, "redis", os.Environ(), args...)
+		if err != nil {
+			return fmt.Errorf("store launch: %w", err)
 		}
 		defer redis.Stop()
 		startup, stop := context.WithTimeout(ctx, 5*time.Second)
 		err = clusterprocess.WaitTCP(startup, addr, redis)
+		if err == nil && topology != nil {
+			err = pingRedis(startup, addr, password)
+		}
 		stop()
+		removeConfig()
 		if err != nil {
-			return err
+			return fmt.Errorf("store readiness: %w (log %s)", err, filepath.Join(dir, "redis.log"))
 		}
 	}
 	if err := processrun.ValidateRedis(addr); err != nil {
@@ -374,23 +397,23 @@ func run() (err error) {
 			}
 			env := processEnv(hex.EncodeToString(key[:]), addr, fmt.Sprintf("relais:crash:%s:%s:%d:", filepath.Base(dir), label, i))
 			if topology != nil {
-				env = append(env, "RELAIS_PRIVATE_NETS="+topology.Plan.PrivateNets())
+				env = append(env, "RELAIS_PRIVATE_NETS="+topology.Plan.PrivateNets(), "RELAIS_REDIS_PASSWORD="+password)
 			}
 			trialCtx, stop := context.WithTimeout(ctx, *after+30*time.Second)
 			// Identical phases for both modes, sampling #9's unchanged budget.
 			warmup := 1550*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
 			r, err := trial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, *terminate, off, topology)
 			stop()
+			if err != nil {
+				return trialFailure(i+1, label, trialDir, err)
+			}
 			all[m] = append(all[m], r)
 			printTable(all[m])
-			if err != nil {
-				return err
-			}
 			if !r.Pass {
-				return errors.New("caller-observed process handover threshold failed")
+				return trialFailure(i+1, label, trialDir, errors.New("caller-observed process handover threshold failed"))
 			}
 			if !*terminate && off && (r.Path != "Keyframe" || r.ReplayPackets != 0) {
-				return errors.New("cache-off run did not prove PLI attribution")
+				return trialFailure(i+1, label, trialDir, errors.New("cache-off run did not prove PLI attribution"))
 			}
 		}
 	}
