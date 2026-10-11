@@ -217,3 +217,53 @@ func TestBufferGateBeforeSnapshotAndRouteFence(t *testing.T) {
 	b.expect(t, caller.addr(), bufferRTP(t, 0, 11))
 	require.Zero(t, sys.relay.Stats().HeldBytes)
 }
+
+func TestBufferCheckpointLossDiscardsGateWithoutSending(t *testing.T) {
+	sys := startTestRelay(t, Config{Buffer: &BufferConfig{}, HoldTimeout: time.Hour})
+	a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+	caller := newTestCaller(t)
+	sys.connect(t, caller, a, sessionA)
+	p := bufferRTP(t, 42, 10)
+	caller.send(t, p, sys.relay.PublicAddr())
+	a.expect(t, caller.addr(), p)
+	_, err := sys.relay.BeginReplay(context.Background(), sessionA, a.addr(), nil)
+	require.NoError(t, err)
+	transferTestLease(t, sys.cfg.Owners, sessionA, b.addr())
+	require.NoError(t, sys.relay.MoveSession(sessionA, a.addr(), b.addr()))
+	caller.send(t, bufferRTP(t, 42, 11), sys.relay.PublicAddr())
+	require.Eventually(t, func() bool { return sys.relay.Stats().HeldPackets == 2 }, time.Second, time.Millisecond)
+	// Terminal cleanup must discard an unprepared gate immediately. Neither
+	// a later release nor the timeout may replay ciphertext to the failed leg.
+	sys.relay.ForgetSession(sessionA)
+	stats := sys.relay.Stats()
+	require.Zero(t, stats.Holds)
+	require.Zero(t, stats.HeldBytes)
+	require.Zero(t, stats.HeldPackets)
+	require.Zero(t, stats.BufferedPackets)
+	require.Zero(t, stats.BufferedSessions)
+	_, err = sys.relay.ReleaseSession(sessionA, b.addr())
+	require.ErrorIs(t, err, ErrHoldExpired)
+	_, err = sys.relay.ReplaySession(context.Background(), sessionA, b.addr())
+	require.ErrorIs(t, err, ErrHoldExpired)
+	a.expectNothing(t)
+	b.expectNothing(t)
+}
+
+func TestBufferCheckpointGateTimeoutDoesNotReplayToUnadoptedTarget(t *testing.T) {
+	sys := startTestRelay(t, Config{Buffer: &BufferConfig{}, HoldTimeout: 50 * time.Millisecond})
+	a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+	caller := newTestCaller(t)
+	sys.connect(t, caller, a, sessionA)
+	p := bufferRTP(t, 42, 10)
+	caller.send(t, p, sys.relay.PublicAddr())
+	a.expect(t, caller.addr(), p)
+	_, err := sys.relay.BeginReplay(context.Background(), sessionA, a.addr(), nil)
+	require.NoError(t, err)
+	transferTestLease(t, sys.cfg.Owners, sessionA, b.addr())
+	require.NoError(t, sys.relay.MoveSession(sessionA, a.addr(), b.addr()))
+	require.Eventually(t, func() bool { return sys.relay.Stats().HoldTimeouts == 1 }, time.Second, time.Millisecond)
+	require.Zero(t, sys.relay.Stats().Holds)
+	require.Zero(t, sys.relay.Stats().HeldBytes)
+	a.expectNothing(t)
+	b.expectNothing(t)
+}

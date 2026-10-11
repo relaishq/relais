@@ -65,13 +65,28 @@ Within a target replay, repeated ciphertext indexes are filtered and per-SSRC
 input is ordered, so the new worker never encrypts the same input twice. The
 returned content can repeat even though outbound SRTP indexes never do.
 Timestamps and frame PictureIDs retain their source identity. A receiver must
-handle repeated content; an agent's duplicated-input callback belongs to #39.
+handle repeated content; agent notification integration belongs to #46.
 
 The window is determined by the exact snapshot's inbound map and retained
-packets, rather than an assumed checkpoint cadence. #34's store-clock age seam
-has not landed on this base. Its age metadata and policy must be integrated and
-the age-window acceptance rerun after the orchestrator merges it. Fixed phase-1
-counter margins and the existing resume-attempt budget are retained here.
+packets, rather than an assumed checkpoint cadence. ADR 0002's checkpoint
+metadata is validated against those same bytes before fixing the replay filter.
+Takeover performs one blob read per attempt; a concurrent replacement retries
+with fresh bytes while leaving the gate unprepared. The validated counter copy
+supplies both caller inbound indexes and the scaled margin/reserve decision.
+An unsafe age or counter envelope produces definitive loss without resuming.
+
+The takeover resume result exposes `InputMayBeDuplicated` and
+`InputDuplicationWindow`. The latter retains the largest conservative
+`SnapshotAge` validated in this recovery, bounding the prior owner's post-copy
+processing span. A failed target can persist a newer counter reservation;
+that write cannot shrink the warning while the original input queue survives.
+It includes counter-copy-to-write delay and metadata reply latency; write age
+alone would understate the window after a delayed successful put. This is a time
+span in which replayed input may have been processed, not a count of duplicates
+or a bound on source RTP timestamp age. Newly gated input was never delivered
+to the prior owner. Agents can use this warning without learning media keys.
+The original write time and both ages remain available on the takeover event
+and in the resumed worker's checkpoint observations.
 
 ## Gate and private protocol
 
@@ -79,8 +94,9 @@ After lease transfer, the control plane calls `BeginReplay` with a null inbound
 map to install the gate, then fences the old leg by switching the route. This
 precedes snapshot I/O: a stalled store must not leave the old owner forwarding.
 A dead source needs no drain acknowledgement. The plane then reads the snapshot,
-extracts its inbound map, and calls `BeginReplay` again with that exact map before
-resume. An empty map is valid; null means that the checkpoint is not ready yet.
+validates its bound age metadata and counter envelope, extracts its inbound map,
+and calls `BeginReplay` again with that exact map before resume. An empty map is
+valid; null means that the checkpoint is not ready yet.
 Preparation filters the bounded, pinned queue against the checkpoint. A repeated
 request for the same checkpoint reuses the queue. Replay refuses a gate whose
 checkpoint has not been supplied. A trimmed index above
@@ -101,8 +117,12 @@ Both operations are available through private HTTP:
 `POST /sessions/{id}/begin-replay` takes source and nullable inbound indexes;
 `POST /sessions/{id}/replay` takes the resumed target. Worker resume carries the
 complete-plan flag through its existing private API. Neither relay endpoint
-receives media keys. The existing bounded hold timeout releases abandoned work;
-timeout/drop/send counters must be checked before claiming complete replay.
+receives media keys. The bounded hold timeout ends an abandoned replay gate by
+discarding queued ciphertext; it cannot identify an adopted live recipient
+safely. Normal planned-move timeout behavior is unchanged. Every terminal
+takeover loss forgets the session: this atomically discards the gate, held packets
+and ring before any legacy release can flush input to a failed target.
+Timeout/drop/send counters must be checked before claiming complete replay.
 Retried HTTP outcomes, failed adoption, a second immediate crash and frame-cache
 coexistence are intentionally #35's acceptance scope, not proven by this build.
 
@@ -153,6 +173,15 @@ the recorder/report/recovery files owned by #32. This proves packet return and
 codec continuity, not a browser jitter buffer's audio playout/concealment policy.
 The new #32 yardstick's first-content, late-delivery, concealment and freshness
 measurements still need a run after its merge.
+
+The #34 integration tests exercise metadata replacement between the blob read
+and validation, terminal loss with an allocated gate/ring on both stores, and
+compressed replay through the production SRTP decrypt/echo path. That path
+measures caller index advance against original RTP timestamps, not arrival time
+or the outbound margin. Delivering 2.4 source seconds in a burst measured about
+50 packets/s for Opus and 500 packets/s for VP8. No rate estimate is produced
+before two media seconds. Replay therefore does not manufacture an arrival-rate
+peak that would inflate the next checkpoint's safety margin.
 
 ## Failure detection measurement
 

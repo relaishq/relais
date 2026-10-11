@@ -924,6 +924,9 @@ func unmap(addr netip.AddrPort) netip.AddrPort {
 func (r *Relay) ForgetSession(id string) {
 	r.forwardMu.Lock()
 	defer r.forwardMu.Unlock()
+	if h := r.holds[id]; h != nil {
+		r.discardHold(h)
+	}
 	r.routeMu.Lock()
 	defer r.routeMu.Unlock()
 	r.lookups.mu.Lock()

@@ -216,6 +216,9 @@ func testRelayBufferTakeover(t *testing.T, store sessionstore.Store, enabled, st
 	require.Empty(t, move.Error)
 	if enabled {
 		require.True(t, move.Result.RelayReplayComplete)
+		require.True(t, move.Result.InputMayBeDuplicated)
+		require.Equal(t, move.SnapshotAge, move.Result.InputDuplicationWindow)
+		require.GreaterOrEqual(t, move.Result.InputDuplicationWindow, move.CheckpointAge)
 		require.Positive(t, move.Result.RelayReplayPackets)
 		require.False(t, move.Result.HoldExpired)
 		require.Zero(t, sys.r.Stats().HoldDrops)
