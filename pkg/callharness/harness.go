@@ -100,6 +100,10 @@ type Harness struct {
 	signalingURL string
 	httpClient   *http.Client
 
+	// statusPollMu excludes periodic status reads from planned moves/drains.
+	// Moves share the read lock, preserving actual overlapping-move rejection.
+	statusPollMu sync.RWMutex
+
 	// callsMu guards the calls not closed yet and closed (see lifecycle.go).
 	callsMu      sync.Mutex
 	calls        map[*Call]struct{}

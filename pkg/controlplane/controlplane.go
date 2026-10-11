@@ -88,9 +88,12 @@ type registration struct {
 
 type call struct {
 	// hungUp records a completed End; retained retries keep this call.
-	hungUp        atomic.Bool
-	mu            sync.Mutex
-	id            string
+	hungUp atomic.Bool
+	mu     sync.Mutex // serializes moves, takeovers and End; never used by Status
+	id     string
+	// stateMu protects the completed-move metadata below. Never hold it
+	// across I/O or while acquiring mu or the plane's registry lock.
+	stateMu       sync.Mutex
 	lastMove      *time.Time
 	moveCount     uint64
 	takeoverCount uint64
@@ -535,10 +538,12 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 
 	releaseTo = target.addr
 	now := time.Now()
+	c.stateMu.Lock()
 	c.lastMove = &now
 	c.moveCount++
-	moved = true
 	c.lastMoveKind = "move"
+	c.stateMu.Unlock()
+	moved = true
 	return res, nil
 }
 
@@ -772,7 +777,7 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 	for _, w := range p.workers {
 		workers = append(workers, w)
 	}
-	// Copy registry flags here; metadata is read under each call lock below.
+	// Copy registry flags here; metadata uses its own brief lock below.
 	status := Status{Workers: []WorkerStatus{}, Calls: []CallStatus{}, Takeovers: p.recentTakeovers(), LostCount: p.lostCount}
 	for _, w := range workers {
 		status.Workers = append(status.Workers, WorkerStatus{Name: w.name, Address: w.addr, Draining: w.draining, Dead: w.dead, Recovering: w.recovering, LastHeartbeat: w.lastHeartbeat})
@@ -784,19 +789,23 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 	}
 	p.mu.Unlock()
 	for _, c := range calls {
-		c.mu.Lock()
+		// Sample completed-move metadata before reading authoritative ownership.
+		// An in-flight transfer may advance the lease before its move completes;
+		// the next poll will include that move's metadata. Polling never takes
+		// the coordination lock, even briefly, so it cannot reject a real move.
+		c.stateMu.Lock()
+		cs := CallStatus{ID: c.id, LastMove: c.lastMove, MoveCount: c.moveCount, TakeoverCount: c.takeoverCount, LastMoveKind: c.lastMoveKind}
+		c.stateMu.Unlock()
 		lease, err := p.store.Get(ctx, c.id)
 		if errors.Is(err, sessionstore.ErrNotFound) {
 			p.forget(c)
-			c.mu.Unlock()
 			continue
 		}
 		if err != nil {
-			c.mu.Unlock()
 			return Status{}, err
 		}
 
-		cs := CallStatus{ID: c.id, Address: lease.Worker, Epoch: lease.Epoch, LastMove: c.lastMove, MoveCount: c.moveCount, TakeoverCount: c.takeoverCount, LastMoveKind: c.lastMoveKind}
+		cs.Address, cs.Epoch = lease.Worker, lease.Epoch
 		for i := range status.Workers {
 			if status.Workers[i].Address == lease.Worker {
 				cs.Owner = status.Workers[i].Name
@@ -805,7 +814,6 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 		}
 
 		status.Calls = append(status.Calls, cs)
-		c.mu.Unlock()
 	}
 	sort.Slice(status.Workers, func(i, j int) bool { return status.Workers[i].Name < status.Workers[j].Name })
 	sort.Slice(status.Calls, func(i, j int) bool { return status.Calls[i].ID < status.Calls[j].ID })

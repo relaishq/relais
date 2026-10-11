@@ -11,6 +11,7 @@ import (
 // Report is what the caller observed during one call. Times are offsets from
 // the moment the caller started dialing.
 type Report struct {
+	Recording RecordingReport
 	// StartedAt aligns packet observations across calls sharing a worker.
 	StartedAt time.Time
 	// OfferAnswerExchanges counts the HTTP offer/answer exchanges the caller
@@ -105,8 +106,8 @@ type TrackReport struct {
 	SSRC        uint32
 	PayloadType uint8
 
-	// Packets counts packets the caller decrypted on this track, and
-	// Arrivals holds the arrival time of each.
+	// Packets counts all packets the caller decrypted on this track.
+	// Arrivals holds the rolling history named by Report.Recording.
 	Packets      int
 	Arrivals     []time.Duration
 	FirstArrival time.Duration
@@ -138,11 +139,15 @@ type TrackReport struct {
 // frames it reassembled and whether they decode. See video.go for the
 // method.
 type VideoReport struct {
+	OnlineDecode OnlineDecodeReport
 	// Frames counts complete frames (every packet, in order, ending with the
 	// marker bit). IncompleteFrames counts frames that lost packets.
 	Frames           int
 	Keyframes        int
 	IncompleteFrames int
+	// RepeatedFrames counts exact pictures already decoded. They remain
+	// complete receipts, but are excluded from decoder inputs and samples.
+	RepeatedFrames int
 	// FrameGaps counts complete frames that did not directly follow the
 	// previous complete frame: frames were lost or reordered between them.
 	FrameGaps int
@@ -160,7 +165,7 @@ type VideoReport struct {
 	KeyframeDecodeErrors int
 	LastDecodeError      string
 
-	// DecodableFrames counts frames that decode: decoded keyframes, and
+	// DecodableFrames counts unique frames that decode: decoded keyframes, and
 	// interframes in an unbroken run of complete frames since one.
 	// FramesBeforeFirstKeyframe counts frames that arrived before any
 	// keyframe decoded (a receiver waits for a keyframe). UndecodableFrames
@@ -174,22 +179,32 @@ type VideoReport struct {
 	FirstDecodedFrameAt time.Duration
 	Width, Height       int
 
-	// FullDecode is ffmpeg's decode of every frame from the first decoded
-	// keyframe on, interframes included.
+	// FullDecode is ffmpeg's complete short-call check. Long calls select
+	// OnlineDecode; offline history is capped and a truncated check is skipped.
 	FullDecode FullDecode
 }
 
 // FullDecode is the result of decoding the received video with ffmpeg.
 type FullDecode struct {
-	// Skipped says why the decode did not run (for example, ffmpeg is not
-	// on PATH); empty when it ran.
+	// Skipped says why the decode did not finish (for example, a timeout or
+	// ffmpeg not on PATH); empty when it completed.
 	Skipped string
 
 	Decoder       string // the ffmpeg binary
 	FramesIn      int    // frames given to the decoder
 	FramesDecoded int    // frames the decoder output
 	Errors        string // the decoder's error output; empty when clean
+	Failure       DecodeFailure
 }
+
+// DecodeFailure separates confirmed invalid bitstreams from an unavailable
+// check (timeout, missing decoder, or execution failure).
+type DecodeFailure string
+
+const (
+	DecodeInvalid     DecodeFailure = "invalid bitstream"
+	DecodeUnavailable DecodeFailure = "unavailable"
+)
 
 // Ran reports whether the full decode ran.
 func (f FullDecode) Ran() bool {
@@ -343,6 +358,7 @@ func (r *Report) Summary() string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "call harness report\n")
+	fmt.Fprintf(&b, "  recording: history=%s packets=%d units=%d frames=%d payload_bytes=%d event_summaries=%d\n", r.Recording.History, r.Recording.Packets, r.Recording.ContentUnits, r.Recording.FrameMarks, r.Recording.HistoryBytes, r.Recording.EventSummaries)
 	fmt.Fprintf(&b, "  signaling:        %d offer/answer exchange(s); answer ice-lite=%t bundle=%v rtcp-mux=%t host candidates=%d\n",
 		r.OfferAnswerExchanges, r.Answer.ICELite, r.Answer.Bundle, r.Answer.RTCPMux, len(r.Answer.HostCandidates()))
 	fmt.Fprintf(&b, "  answer media:     %s\n", formatAnswerMedia(r.Answer.Media))
@@ -382,8 +398,8 @@ func (r *Report) Summary() string {
 }
 
 func writeVideoSummary(b *strings.Builder, r *Report, v *VideoReport) {
-	fmt.Fprintf(b, "    frames:         %d complete (%d keyframes), %d incomplete, %d gaps, %d unmatched\n",
-		v.Frames, v.Keyframes, v.IncompleteFrames, v.FrameGaps, v.UnmatchedFrames)
+	fmt.Fprintf(b, "    frames:         %d complete (%d keyframes), %d repeated, %d incomplete, %d gaps, %d unmatched\n",
+		v.Frames, v.Keyframes, v.RepeatedFrames, v.IncompleteFrames, v.FrameGaps, v.UnmatchedFrames)
 	if v.FirstDecodedFrameAt == 0 {
 		fmt.Fprintf(b, "    first decoded:  none\n")
 	} else {
@@ -397,7 +413,12 @@ func writeVideoSummary(b *strings.Builder, r *Report, v *VideoReport) {
 		fmt.Fprintf(b, " (last keyframe error: %s)", v.LastDecodeError)
 	}
 	b.WriteString("\n")
+	if v.OnlineDecode.Every > 0 {
+		fmt.Fprintf(b, "    online decode: every=%d sampled=%d decoded=%d rate=%.4f dropped=%d unavailable=%d errors=%d conclusive=%t\n", v.OnlineDecode.Every, v.OnlineDecode.Sampled, v.OnlineDecode.Decoded, v.OnlineDecode.SampleRate(v.Frames), v.OnlineDecode.Dropped, v.OnlineDecode.Unavailable, v.OnlineDecode.Errors, v.OnlineDecode.Conclusive())
+	}
 	switch full := v.FullDecode; {
+	case !full.Ran() && v.OnlineDecode.Every > 0:
+		fmt.Fprintf(b, "    whole-call decode: SKIPPED (%s)\n", full.Skipped)
 	case !full.Ran():
 		fmt.Fprintf(b, "    full decode:    SKIPPED (%s); interframes checked for completeness and order only\n", full.Skipped)
 	case full.Errors != "":
