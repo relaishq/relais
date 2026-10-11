@@ -115,6 +115,56 @@ func TestCapacityCallerStallMakesOutsideEventGapInconclusive(t *testing.T) {
 	}
 }
 
+func TestCapacityStallDoesNotMaskOtherFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*loadgen.RunReport)
+		want   string
+		cause  string
+	}{
+		{"stall alone", func(*loadgen.RunReport) {}, "inconclusive", "generator maximum send lateness"},
+		{"decryption failures", func(r *loadgen.RunReport) {
+			r.Processes[0].Calls[0].Call.DecryptionFailures.AuthTag = 5
+		}, "fail", "caller decryption failure or reconnect"},
+		{"takeover mismatch", func(r *loadgen.RunReport) {
+			r.Telemetry.Processes[1].Last["relais_control_takeovers_total"] = 1
+		}, "fail", "control takeovers 1 do not match 0 scheduled-kill calls"},
+		{"yardstick failure", func(r *loadgen.RunReport) {
+			r.Yardstick[0].Outcome = "fail"
+		}, "fail", "move resume"},
+		{"move p95", func(r *loadgen.RunReport) {
+			r.Processes[0].Calls[0].Call.Moves[0].Tracks[0].Gap = 200 * time.Millisecond
+		}, "fail", "move p95 exceeds"},
+		{"store commands budget", func(r *loadgen.RunReport) {
+			r.Telemetry.Processes[0].RatesPerCallSecond[`relais_store_commands_total{store="session"}`] = 101
+		}, "fail", "store budget exceeded"},
+		{"store bytes budget", func(r *loadgen.RunReport) {
+			r.Telemetry.Processes[0].RatesPerCallSecond[`relais_transport_bytes_total{direction="out",transport="redis"}`] = 200 << 10
+		}, "fail", "store budget exceeded"},
+		{"unexplained gap", func(r *loadgen.RunReport) {
+			r.Processes[0].Calls[0].Call.Tracks = append(r.Processes[0].Calls[0].Call.Tracks,
+				callharness.TrackReport{Kind: "video", MediaGap: 400 * time.Millisecond, MediaGapEndedAt: 15 * time.Second})
+		}, "fail", "video whole-call media gap outside scheduled events"},
+		{"saturated generator still authoritative", func(r *loadgen.RunReport) {
+			r.Outcome = "inconclusive"
+			r.Causes = []string{"saturated interval"}
+			r.Processes[0].Saturated = true
+			r.Processes[0].Calls[0].Call.DecryptionFailures.AuthTag = 5
+		}, "inconclusive", "generator invalid: saturated interval"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := capacityFixture()
+			r.Processes[0].Lateness.Max = 10 * time.Millisecond
+			r.Processes[0].Calls[0].Call.Tracks = []callharness.TrackReport{{Kind: "audio", MediaGap: 160 * time.Millisecond, MediaGapEndedAt: 15 * time.Second}}
+			tc.mutate(&r)
+			step := judgeCapacity("relay", r, 100, 128<<10)
+			require.Equal(t, tc.want, step.Verdict)
+			require.Contains(t, strings.Join(step.Causes, ";"), tc.cause)
+			require.Contains(t, strings.Join(step.Causes, ";"), "generator maximum send lateness")
+		})
+	}
+}
+
 func TestCapacityTakeoverAllowsLaterVideoWithinTakeoverBound(t *testing.T) {
 	at := time.Now()
 	r := capacityFixture()

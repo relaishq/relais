@@ -87,7 +87,6 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 	}
 	gaps := map[string][]time.Duration{}
 	excess := map[string][]time.Duration{}
-	generatorGapAmbiguity := false
 	for _, p := range r.Processes {
 		for _, c := range p.Calls {
 			if c.Call == nil {
@@ -111,7 +110,8 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 					// A stall in this call's generator can explain the amount
 					// above the 150ms ceiling even when interval p99 is valid.
 					if p.Lateness.Max >= gap-150*time.Millisecond {
-						generatorGapAmbiguity = true
+						// Only this gap is ambiguous. The severity helper
+						// retains any independent failure in the step.
 						inconclusive(fmt.Sprintf("%s %s: generator maximum send lateness %s can explain gap excess %s", track.Kind, description, p.Lateness.Max, gap-150*time.Millisecond))
 						return
 					}
@@ -232,9 +232,9 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 			s.DrainSeconds = e.FinishedAt.Sub(e.At).Seconds()
 		}
 	}
-	// Generator ambiguity cannot establish a service failure, except when
-	// independent evidence confirms a crash or a failed drain.
-	if (r.Outcome != "valid" || generatorGapAmbiguity) && !confirmedServiceFailure(r) {
+	// Generator saturation remains authoritative except when independent
+	// evidence confirms a crash or a failed drain.
+	if r.Outcome != "valid" && !confirmedServiceFailure(r) {
 		s.Verdict = "inconclusive"
 	}
 	return s

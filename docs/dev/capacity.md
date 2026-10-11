@@ -83,8 +83,10 @@ Control-plane takeover counter delta must equal the number of calls affected
 by scheduled kills: zero in every other step. A whole-call or retained arrival
 gap above 150 ms fails outside the affected call's matched scheduled event.
 If that call's generator process has maximum send lateness at least as large
-as the gap's excess above 150 ms, the step is inconclusive: a caller stall
-can explain the excess even when interval p99 passes. A confirmed service
+as the gap's excess above 150 ms, that gap is inconclusive: a caller stall
+can explain the excess even when interval p99 passes. With a valid generator,
+other failures still fail the step; gap ambiguity cannot hide decryption,
+takeover-count, yardstick, move-gap or store-budget failures. A confirmed service
 crash remains a failure. The allowed gap window brackets the event's API/resume
 interval. Takeovers allow later tracks to recover within the row's two-second
 bound, rather than ending at the earliest track's resume. Both allow up to
