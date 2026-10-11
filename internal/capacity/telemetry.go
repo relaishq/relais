@@ -28,6 +28,7 @@ type Target struct {
 	Err                      func() error
 }
 type MemorySample struct {
+	HeapLiveBytes          uint64    `json:"heap_live_bytes,omitempty"` // Caller live set after GC; service sampling leaves this unset.
 	PhysicalFootprintBytes uint64    `json:"physical_footprint_bytes,omitempty"`
 	At                     time.Time `json:"at"`
 	RSSBytes               uint64    `json:"rss_bytes"`

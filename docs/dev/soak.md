@@ -111,8 +111,11 @@ Linux services sample current RSS from `/proc/PID/statm`. macOS uses
 `ri_resident_size` remains informational. Both fields are retained separately
 ([Apple structure](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/resource.h)).
 Services also sample Go heap spans in use through private metrics. Callers
-sample the same process metrics and `runtime.MemStats.HeapInuse`. Redis has no
-Go heap. Lifetime RSS peaks remain separate capacity telemetry. Soak fails
+sample the same process metrics and `runtime.MemStats.HeapInuse`, plus
+`/gc/heap/live:bytes` from Go 1.26's `runtime/metrics`: the live objects marked
+by the previous GC. Sampling reads the latest natural GC result; it does not
+force collection. Redis has no Go heap. Lifetime RSS peaks remain separate
+capacity telemetry. Soak fails
 before starting the topology when current process sampling is unavailable;
 a Darwin build without cgo can build, and sampling tests skip with a reason.
 
@@ -127,12 +130,31 @@ shorter incarnations are `insufficient-data`, never called flat. Replacements
 use separate PID windows and their own warm-up. A short smoke can test the
 regression and sampling, but cannot prove flat worker/caller memory.
 
+Caller processes are test tooling. Their leak signal is retained live memory,
+so only their `heap-live` trend gates the run and acceptance. Caller `rss`,
+`physical-footprint` and `heap-in-use` trends retain their slopes, projections,
+thresholds and outcomes with `diagnostic=true`; even a diagnostic `fail` does
+not fail the run or prevent acceptance. A metric unavailable on the host stays
+explicitly `insufficient-data`. Caller live heap uses the same warm-up,
+five-minute post-warm-up minimum, ten-minute per-PID minimum and hourly slope
+threshold above. Missing live-heap samples cannot prove caller memory.
+
+Product processes retain both process-memory and heap-in-use gates: relay,
+control plane and every sufficiently long-lived worker, including the
+sentinel. Redis retains its process-memory gate. Process memory means RSS on
+Linux and physical footprint on macOS, as above. This rule is unchanged:
+product RSS limits capacity. The caller decision follows the observed harness
+allocation churn and page retention; see [caller memory findings](caller-memory.md).
+
 `outcome` judges execution and event coverage. Insufficient memory does not
-prevent a short nightly from passing; observed memory growth still fails.
+prevent a short nightly from passing; observed growth in a gating memory metric
+still fails.
 `acceptance` is a separate boolean. It requires full scale (at least 50 calls
 for at least one hour), `outcome=pass`, and conclusive memory for every
 long-lived process. Relay, control, Redis and caller processes always require
-memory proof for acceptance. A worker incarnation observed for at least ten
+memory proof for acceptance. Every caller PID needs a conclusive passing
+`heap-live` verdict; a different caller's pass or old RSS-only samples cannot
+supply that proof. A worker incarnation observed for at least ten
 minutes also requires it; shorter incarnations remain explicitly unjudged.
 The uninterrupted sentinel requires conclusive process-memory and heap
 verdicts from one PID. Otherwise acceptance includes "worker memory unproven".
@@ -143,6 +165,14 @@ or substitute for the sentinel.
 Missing role verdicts prevent acceptance. The report marks each metric's
 `long_lived` status and lists `acceptance_reasons`; the log prints the boolean
 and every reason. A short run always has `acceptance=false`.
+
+Soak callers also report heap objects, unused spans, free and released pages,
+Go stacks, reported OS stacks, other runtime memory, cumulative allocations
+and goroutine count. These fixed-size metrics are sampled once per second only
+in soak mode. The existing loopback operator endpoint offers `/debug/memory`,
+`/debug/pprof/heap` and `/debug/pprof/allocs`. Profiles are generated only on
+request; `heap?gc=1` explicitly forces GC and can affect the experiment. No
+global HTTP profiling handlers or additional listeners are installed.
 
 ## Cleanup evidence
 

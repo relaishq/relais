@@ -126,6 +126,9 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	var startMu sync.Mutex
 	started := false
 	mux := http.NewServeMux()
+	if o.Soak {
+		registerMemoryDiagnostics(mux, calls)
+	}
 	mux.HandleFunc("GET /sessions", func(w http.ResponseWriter, _ *http.Request) {
 		ids := make([]string, len(calls))
 		for i, c := range calls {

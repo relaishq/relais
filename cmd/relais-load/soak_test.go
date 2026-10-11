@@ -23,13 +23,13 @@ func memorySamples(at time.Time, duration time.Duration, rate float64) []capacit
 	var samples []capacity.MemorySample
 	for t := time.Duration(0); t <= duration; t += time.Second {
 		value := uint64(float64(100<<20) + rate*t.Seconds())
-		samples = append(samples, capacity.MemorySample{At: at.Add(t), RSSBytes: value, PhysicalFootprintBytes: value, HeapInUseBytes: value})
+		samples = append(samples, capacity.MemorySample{At: at.Add(t), RSSBytes: value, PhysicalFootprintBytes: value, HeapInUseBytes: value, HeapLiveBytes: value})
 	}
 	return samples
 }
 func TestSoakMemoryRegression(t *testing.T) {
 	at := time.Unix(1000, 0)
-	for _, metric := range []string{"rss", "heap-in-use"} {
+	for _, metric := range []string{"rss", "heap-in-use", "heap-live"} {
 		for _, tc := range []struct {
 			name        string
 			duration    time.Duration
@@ -131,7 +131,7 @@ func soakFixtureEvents(count int, interval time.Duration) (config, loadgen.RunRe
 	r.Telemetry.Processes[1].Last["relais_control_takeovers_total"] = float64(takeovers)
 	r.Processes = []loadgen.ProcessReport{{PID: 42, Complete: true, ExpectedCalls: 2, Lateness: loadgen.Lateness{Packets: 1}, Calls: []loadgen.Message{{Session: "a", Call: &callharness.Report{StartedAt: at, HungUpAt: c.Duration, Moves: moves}}, {Session: "b", Call: &callharness.Report{StartedAt: at, HungUpAt: c.Duration}}}}}
 	for _, sample := range memorySamples(at, c.Duration, 0) {
-		r.Processes[0].Samples = append(r.Processes[0].Samples, loadgen.Stats{At: sample.At, Interval: time.Second, RSSBytes: sample.RSSBytes, HeapInUseBytes: sample.HeapInUseBytes})
+		r.Processes[0].Samples = append(r.Processes[0].Samples, loadgen.Stats{At: sample.At, Interval: time.Second, RSSBytes: sample.RSSBytes, PhysicalFootprintBytes: sample.PhysicalFootprintBytes, HeapInUseBytes: sample.HeapInUseBytes, RuntimeMemory: &loadgen.RuntimeMemory{HeapLiveBytes: sample.HeapLiveBytes}})
 	}
 	r.Telemetry.Processes = append(r.Telemetry.Processes, capacity.Process{Name: "store", PID: 45}, capacity.Process{Name: "worker-0", PID: 46})
 	for i := range r.Telemetry.Processes {
@@ -495,6 +495,8 @@ func TestSoakShortRunCanPassWithoutMemoryEvidence(t *testing.T) {
 	}
 	for i := range r.Processes[0].Samples {
 		r.Processes[0].Samples[i].RSSBytes, r.Processes[0].Samples[i].HeapInUseBytes = 0, 0
+		r.Processes[0].Samples[i].PhysicalFootprintBytes = 0
+		r.Processes[0].Samples[i].RuntimeMemory = nil
 	}
 	v := judgeSoak(c, r)
 	require.Equal(t, "pass", v.Outcome)

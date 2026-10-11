@@ -46,6 +46,7 @@ func soakSchedule(duration, interval time.Duration, seed int64, workers int) []l
 }
 
 type memoryVerdict struct {
+	Diagnostic          bool    `json:"diagnostic,omitempty"`
 	Name                string  `json:"name"`
 	PID                 int     `json:"pid"`
 	Metric              string  `json:"metric"`
@@ -61,7 +62,7 @@ type memoryVerdict struct {
 }
 
 func judgeMemory(name string, pid int, metric string, samples []capacity.MemorySample, start time.Time, duration time.Duration, incarnation bool) memoryVerdict {
-	v := memoryVerdict{Name: name, PID: pid, Metric: metric, Outcome: "insufficient-data", RawSamples: len(samples)}
+	v := memoryVerdict{Name: name, PID: pid, Metric: metric, Outcome: "insufficient-data", RawSamples: len(samples), Diagnostic: name == "caller" && metric != "heap-live"}
 	v.LongLived = !incarnation || name == "caller" || (len(samples) >= 2 && samples[len(samples)-1].At.Sub(samples[0].At) >= 10*time.Minute)
 	warmup := min(duration/10, 5*time.Minute)
 	if len(samples) < 2 {
@@ -87,6 +88,9 @@ func judgeMemory(name string, pid int, metric string, samples []capacity.MemoryS
 		}
 		if metric == "heap-in-use" {
 			value = s.HeapInUseBytes
+		}
+		if metric == "heap-live" {
+			value = s.HeapLiveBytes
 		}
 		if value == 0 {
 			continue
@@ -441,13 +445,16 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 		if heap {
 			metrics = append(metrics, "heap-in-use")
 		}
+		if name == "caller" {
+			metrics = []string{"heap-live", "rss", "physical-footprint", "heap-in-use"}
+		}
 		for _, metric := range metrics {
 			v := judgeMemory(name, pid, metric, samples, r.StartedAt, r.Duration, worker)
 			if name == r.SentinelWorker || worker && observedSeconds >= (10*time.Minute).Seconds() {
 				v.LongLived = true
 			}
 			result.Memory = append(result.Memory, v)
-			if v.Outcome == "fail" {
+			if v.Outcome == "fail" && !v.Diagnostic {
 				fail(fmt.Sprintf("%s pid=%d %s projects %.0f bytes/hour above %.0f", name, pid, metric, v.ProjectedHourBytes, v.LimitBytes))
 			}
 		}
@@ -469,7 +476,11 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 	for _, p := range r.Processes {
 		var samples []capacity.MemorySample
 		for _, s := range p.Samples {
-			samples = append(samples, capacity.MemorySample{At: s.At, RSSBytes: s.RSSBytes, PhysicalFootprintBytes: s.PhysicalFootprintBytes, HeapInUseBytes: s.HeapInUseBytes})
+			sample := capacity.MemorySample{At: s.At, RSSBytes: s.RSSBytes, PhysicalFootprintBytes: s.PhysicalFootprintBytes, HeapInUseBytes: s.HeapInUseBytes}
+			if s.RuntimeMemory != nil {
+				sample.HeapLiveBytes = s.RuntimeMemory.HeapLiveBytes
+			}
+			samples = append(samples, sample)
 		}
 		addMemory("caller", p.PID, samples, true, true, 0)
 		for _, m := range p.Calls {
@@ -537,7 +548,20 @@ func (r *soakReport) judgeAcceptance() {
 		r.AcceptanceReasons = append(r.AcceptanceReasons, "no process memory verdicts")
 	}
 	roles := map[string]bool{}
+	callerPIDs := map[int]bool{}
+	for _, p := range r.Run.Processes {
+		callerPIDs[p.PID] = false
+	}
 	for _, m := range r.Memory {
+		if m.Name == "caller" {
+			callerPIDs[m.PID] = callerPIDs[m.PID] || (m.Metric == "heap-live" && !m.Diagnostic && m.LongLived && m.Outcome == "pass")
+			if m.Metric != "heap-live" {
+				continue
+			}
+		}
+		if m.Diagnostic {
+			continue
+		}
 		role := m.Name
 		if strings.HasPrefix(role, "worker-") {
 			role = "worker"
@@ -552,10 +576,20 @@ func (r *soakReport) judgeAcceptance() {
 			r.AcceptanceReasons = append(r.AcceptanceReasons, "missing "+role+" memory verdicts")
 		}
 	}
+	var callers []int
+	for pid := range callerPIDs {
+		callers = append(callers, pid)
+	}
+	sort.Ints(callers)
+	for _, pid := range callers {
+		if !callerPIDs[pid] {
+			r.AcceptanceReasons = append(r.AcceptanceReasons, fmt.Sprintf("caller pid=%d live heap memory unproven", pid))
+		}
+	}
 	workerMetrics := map[string]bool{}
 	workerPIDs := map[int]bool{}
 	for _, m := range r.Memory {
-		if r.SentinelWorker != "" && m.Name == r.SentinelWorker && m.LongLived && m.Outcome == "pass" {
+		if r.SentinelWorker != "" && m.Name == r.SentinelWorker && !m.Diagnostic && m.LongLived && m.Outcome == "pass" {
 			workerMetrics[m.Metric] = true
 			workerPIDs[m.PID] = true
 		}
