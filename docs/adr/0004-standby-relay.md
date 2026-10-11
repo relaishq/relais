@@ -3,7 +3,7 @@
 A relay restart loses every call's media until its sockets and routes recover.
 The standalone `relais-relay` now owns a fenced relay lease. A second instance
 with `-standby` waits without binding sockets and takes over the same public UDP,
-worker-leg UDP and private HTTP addresses after lease expiry. Both processes use
+worker-leg UDP and private HTTP addresses after verified process exit or lease expiry. Both processes use
 the same Redis namespace and `-relay-lease` key (default `default`). Each socket
 set needs a distinct key. Standby addresses must have fixed, nonzero ports.
 Neither UDP socket uses `SO_REUSEPORT`; kernel socket exclusivity remains a
@@ -28,14 +28,22 @@ an NTP step on the Redis host shifts lease expiry.
 
 Takeover follows this order:
 
-1. Observe the same expired holder and epoch on two polls separated by at least
-   one renewal interval, then claim it, advancing its epoch. The store reports
-   expiry using its own clock; a client's wall clock never authorizes a claim.
-   A live tenure, changed holder/epoch, or failed read resets that observation.
-   Bootstrap and an explicitly released tenure can be claimed immediately.
-   An uncertain store result is
-   never permission to signal or bind. Repeating a claim for the identical
-   process identity settles it idempotently if that tenure still exists.
+1. Read the lease and observe both its holder and last possible forwarder with
+   the same kernel identity checks used for fencing, without sending a signal.
+   If both are verifiably gone, claim immediately, bypassing expiry and recovery
+   grace. `ClaimDeadRelay` atomically checks the observed epoch, holder,
+   forwarder and previous-holder evidence before advancing the epoch. A changed
+   record rejects the claim and requires fresh observations. A renewal changing
+   only expiry does not resurrect a dead process; it may complete before the
+   claim, but renewals of the replaced epoch are rejected afterwards.
+   Otherwise, observe the same expired holder and epoch on two polls separated
+   by at least one renewal interval, then make an ordinary expired-lease claim.
+   The store reports expiry using its own clock; a client's wall clock never
+   authorizes a claim. A live tenure, changed holder/epoch, or failed read resets
+   that grace observation. Bootstrap and an explicitly released tenure can be
+   claimed immediately. An uncertain store result never permits signalling or
+   binding. Repeating a claim for the identical process identity settles it
+   idempotently if that tenure still exists.
 2. Start renewing the new tenure, including during fencing and route restore.
 3. Fence the old lease holder and the last possible forwarder, deduplicating
    identical targets. Linux opens a pidfd first, brackets `/proc` identity and
@@ -80,8 +88,27 @@ identities, not an unbounded chain of failed candidates.
 
 ## Timings and self-fencing
 
+The dead-holder check applies to both plain startup and every standby poll.
+ESRCH, a zombie, or a start-time/boot-ID mismatch proves the recorded process
+exited. No executable lookup is possible or needed for an absent/reused/dead
+identity; a matching live identity undergoes the executable check and a second
+identity read. Linux uses the pinned pidfd throughout. A stopped process remains
+live and does not qualify. EPERM, a failed executable check, or an unconfirmable
+state also does not qualify; the candidate keeps the expiry-and-grace path.
+Both holder and forwarder must qualify, so a dead pending claimant cannot hide a
+live predecessor. The normal post-claim fencing, activation and exclusive binds
+still run before media starts, including the bounded zombie socket-release wait.
+
+A plain restart is expected to claim on its first successful startup observation
+of the dead holder, without a TTL or grace delay. A standby normally detects a
+SIGKILLed holder by its next poll, about 100 ms with defaults. Socket/route startup
+and worker re-registration add time to both paths. A SIGSTOPed or live holder
+retains the expiry, grace and verified SIGKILL path. These are expected decision
+timings, not a caller-gap guarantee on a loaded host or slow store.
+
 Defaults are a **600 ms lease**, **200 ms renewal**, and **100 ms claim poll**.
-An expired tenure needs a further 200 ms recovery grace, so ordinary failure
+A holder whose exit is not verified needs a further 200 ms expiry recovery
+grace, so frozen-holder failure
 recognition can take about 900 ms with poll rounding. This reduces the time
 left for fencing, route restore and worker re-registration within the one-second
 caller budget. These are configurable with `-relay-lease-ttl`,
@@ -116,7 +143,8 @@ release the matching holder/epoch with a bounded store operation. Release clears
 process identities and expires the tenure while retaining its epoch. A plain
 restart can claim it immediately, without waiting for the old TTL or recovery
 grace. A stale release cannot erase a successor. A crash or failed release
-retains fencing evidence and uses the normal expiry path.
+retains fencing evidence; verified exit permits the fast claim, while unknown
+exit retains the expiry-and-grace path.
 
 ## Evidence and limits
 
@@ -163,7 +191,11 @@ Production-command tests cover a real Redis transport outage, successor-induced
 self-fencing, Redis key deletion with continued bidirectional UDP forwarding,
 store outage recovery without killing the healthy active, graceful SIGTERM
 release, and mismatched kernel identity recovery without signalling the reused
-PID. Unit tests
+PID. Command tests also require plain restart and a waiting standby to become
+ready within 500 ms after SIGKILL despite a 3 s lease, and prove a stopped holder
+is not claimed early. Unit tests cover EPERM/unknown exit, a changed holder during
+the identity check, a dead holder with a live forwarder, and the claim/renew race
+in both stores. Unit tests
 cover both stores, competing claims, interrupted claimants, expired activation,
 identity/signalling failures, and a stopped child killed by the identity helper.
 

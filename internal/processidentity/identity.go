@@ -94,3 +94,39 @@ func sameExecutable(target, self string) error {
 	}
 	return nil
 }
+
+// Gone verifies that the recorded process has exited, without signalling it.
+// A live or stopped matching identity returns false. Unknown states are errors,
+// never evidence of exit. Socket exclusivity remains required after a zombie.
+func Gone(ctx context.Context, id Identity) (bool, error) { return gonePlatform(ctx, id) }
+func gone(ctx context.Context, id Identity, read func(int) (string, bool, error), executable func(int) error) (bool, error) {
+	if id.PID <= 0 || id.Start == "" {
+		return false, errors.New("invalid process identity")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	check := func() (bool, error) {
+		start, dead, err := read(id.PID)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		return start != id.Start || dead, nil
+	}
+	exited, err := check()
+	if err != nil || exited {
+		return exited, err
+	}
+	if err := executable(id.PID); err != nil {
+		return false, err
+	}
+	// Recheck after the executable lookup. Absence, mismatch and zombies do
+	// not need executable access, because the recorded process is already gone.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	return check()
+}

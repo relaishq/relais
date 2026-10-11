@@ -62,6 +62,9 @@ func TestLinuxBootIdentityMakesSameTicksFromOldBootAlreadyFenced(t *testing.T) {
 	_, ticks, ok := strings.Cut(id.Start, ":")
 	require.True(t, ok)
 	require.NoError(t, Fence(context.Background(), Identity{PID: id.PID, Start: "previous-boot:" + ticks}))
+	exited, err := Gone(context.Background(), Identity{PID: id.PID, Start: "previous-boot:" + ticks})
+	require.NoError(t, err)
+	require.True(t, exited)
 }
 func TestPidfdIdentityRejectsInvalidNamespaceAndRecognizesExit(t *testing.T) {
 	require.NoError(t, checkPidfd("Pid:\t42\nNSpid:\t42\n", 42))

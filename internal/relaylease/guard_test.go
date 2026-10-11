@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ func process(owner string) sessionstore.RelayProcess {
 	return sessionstore.RelayProcess{Owner: owner, PID: 42, Start: "start"}
 }
 func config(s sessionstore.RelayLeases) Config {
-	return Config{Store: s, Key: "one", Process: process("b"), TTL: 90 * time.Millisecond, Renew: 20 * time.Millisecond, Poll: 5 * time.Millisecond}
+	return Config{Store: s, Key: "one", Process: process("b"), TTL: 90 * time.Millisecond, Renew: 20 * time.Millisecond, Poll: 5 * time.Millisecond, Gone: func(context.Context, processidentity.Identity) (bool, error) { return false, nil }}
 }
 func TestFenceFailurePreventsActivationAndBinding(t *testing.T) {
 	for _, failure := range []error{processidentity.ErrExecutable, errors.New("permission denied")} {
@@ -271,4 +272,116 @@ func TestActivationRetryStopsOnLossOrCancellation(t *testing.T) {
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 		}
 	}
+}
+
+// A live-looking lease whose actual kernel holder has died must not force a
+// candidate to wait for the TTL plus recovery grace.
+func TestDeadHolderImmediatelyClaimed(t *testing.T) {
+	id, err := processidentity.Current()
+	require.NoError(t, err)
+	old := sessionstore.RelayProcess{Owner: "old-instance", PID: id.PID, Start: "previous:" + id.Start}
+	s := sessionstore.NewMemory()
+	l, err := s.ClaimRelay(context.Background(), "one", old, 3*time.Second)
+	require.NoError(t, err)
+	_, err = s.ActivateRelay(context.Background(), l)
+	require.NoError(t, err)
+	cfg := config(s)
+	cfg.TTL = 3 * time.Second
+	cfg.Renew = time.Second
+	cfg.Gone = nil
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	g, err := Acquire(ctx, cfg)
+	require.NoError(t, err, "verifiably exited identity must bypass unexpired TTL")
+	defer g.Close()
+	require.Greater(t, g.Lease().Epoch, l.Epoch)
+}
+
+func TestDeadHolderFastPathRequiresDeadForwarder(t *testing.T) {
+	s := sessionstore.NewMemory()
+	ctx := context.Background()
+	a, err := s.ClaimRelay(ctx, "one", process("a"), time.Second)
+	require.NoError(t, err)
+	a, err = s.ActivateRelay(ctx, a)
+	require.NoError(t, err)
+	pending := process("pending")
+	pending.PID = 43
+	pending.Start = "pending"
+	l, err := s.TransferRelay(ctx, a, pending, time.Second)
+	require.NoError(t, err)
+	cfg := config(s)
+	cfg.Gone = func(_ context.Context, id processidentity.Identity) (bool, error) { return id.PID == 43, nil }
+	cfg.Fence = func(context.Context, processidentity.Identity) error {
+		t.Fatal("must not fence live forwarder before expiry")
+		return nil
+	}
+	limit, cancel := context.WithTimeout(ctx, 40*time.Millisecond)
+	defer cancel()
+	g, err := Acquire(limit, cfg)
+	require.Nil(t, g)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	current, err := s.GetRelay(ctx, "one")
+	require.NoError(t, err)
+	require.Equal(t, l.Holder, current.Holder)
+}
+func TestUncertainGoneWaitsForExpiry(t *testing.T) {
+	for _, uncertain := range []error{syscall.EPERM, errors.New("unconfirmed exit")} {
+		s := sessionstore.NewMemory()
+		ctx := context.Background()
+		l, err := s.ClaimRelay(ctx, "one", process("a"), time.Second)
+		require.NoError(t, err)
+		cfg := config(s)
+		cfg.Gone = func(context.Context, processidentity.Identity) (bool, error) { return false, uncertain }
+		cfg.Fence = func(context.Context, processidentity.Identity) error {
+			t.Fatal("uncertain identity must not signal before expiry")
+			return nil
+		}
+		limit, cancel := context.WithTimeout(ctx, 40*time.Millisecond)
+		g, err := Acquire(limit, cfg)
+		cancel()
+		require.Nil(t, g)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		current, err := s.GetRelay(ctx, "one")
+		require.NoError(t, err)
+		require.Equal(t, l.Holder, current.Holder)
+	}
+}
+func TestChangedHolderDuringGoneCheckIsReevaluated(t *testing.T) {
+	s := sessionstore.NewMemory()
+	ctx := context.Background()
+	old, err := s.ClaimRelay(ctx, "one", process("a"), time.Second)
+	require.NoError(t, err)
+	next := process("changed")
+	next.PID = 43
+	next.Start = "changed"
+	cfg := config(s)
+	checks := 0
+	cfg.Gone = func(_ context.Context, id processidentity.Identity) (bool, error) {
+		checks++
+		if id.PID == 42 {
+			_, err := s.TransferRelay(ctx, old, next, time.Second)
+			require.NoError(t, err)
+			return true, nil
+		}
+		return false, nil
+	}
+	cfg.Fence = func(context.Context, processidentity.Identity) error {
+		t.Fatal("stale process proof must not authorize fencing")
+		return nil
+	}
+	limit, cancel := context.WithTimeout(ctx, 40*time.Millisecond)
+	defer cancel()
+	g, err := Acquire(limit, cfg)
+	require.Nil(t, g)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	current, err := s.GetRelay(ctx, "one")
+	require.NoError(t, err)
+	require.Equal(t, next, current.Holder)
+	require.Greater(t, checks, 1, "changed record must cause a fresh identity check")
+}
+func (s *unavailable) ClaimDeadRelay(ctx context.Context, l sessionstore.RelayLease, p sessionstore.RelayProcess, ttl time.Duration) (sessionstore.RelayLease, error) {
+	if s.offline.Load() {
+		return sessionstore.RelayLease{}, sessionstore.ErrTransient
+	}
+	return s.RelayLeases.ClaimDeadRelay(ctx, l, p, ttl)
 }

@@ -55,31 +55,12 @@ func fencePlatform(ctx context.Context, id Identity) error {
 		return err
 	}
 	defer func() { _ = unix.Close(fd) }()
-	check := func() error {
-		data, err := os.ReadFile(fmt.Sprintf("/proc/self/fdinfo/%d", fd))
-		if err != nil {
-			return err
-		}
-		return checkPidfd(string(data), id.PID)
-	}
-	read := func(pid int) (string, bool, error) {
-		if err := check(); err != nil {
-			return "", false, err
-		}
-		start, dead, err := inspect(pid)
-		if err != nil {
-			return "", false, err
-		}
-		if err := check(); err != nil {
-			return "", false, err
-		}
-		return start, dead, nil
-	}
-	return fence(ctx, id, read, func(pid int) error {
+
+	return fence(ctx, id, func(pid int) (string, bool, error) { return inspectPinned(fd, pid) }, func(pid int) error {
 		if err := sameExecutable(fmt.Sprintf("/proc/%d/exe", pid), "/proc/self/exe"); err != nil {
 			return err
 		}
-		if err := check(); err != nil {
+		if err := checkPinned(fd, id.PID); err != nil {
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -106,4 +87,47 @@ func checkPidfd(info string, pid int) error {
 		}
 	}
 	return errors.New("pidfd has no process identity")
+}
+
+func checkPinned(fd, pid int) error {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/self/fdinfo/%d", fd))
+	if err != nil {
+		return err
+	}
+	return checkPidfd(string(data), pid)
+}
+func inspectPinned(fd, pid int) (string, bool, error) {
+	if err := checkPinned(fd, pid); err != nil {
+		return "", false, err
+	}
+	start, dead, err := inspect(pid)
+	if err != nil {
+		return "", false, err
+	}
+	if err := checkPinned(fd, pid); err != nil {
+		return "", false, err
+	}
+	return start, dead, nil
+}
+func gonePlatform(ctx context.Context, id Identity) (bool, error) {
+	if id.PID <= 0 || id.Start == "" {
+		return false, errors.New("invalid process identity")
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	fd, err := unix.PidfdOpen(id.PID, 0)
+	if errors.Is(err, unix.ESRCH) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = unix.Close(fd) }()
+	return gone(ctx, id, func(pid int) (string, bool, error) { return inspectPinned(fd, pid) }, func(pid int) error {
+		if err := sameExecutable(fmt.Sprintf("/proc/%d/exe", pid), "/proc/self/exe"); err != nil {
+			return err
+		}
+		return checkPinned(fd, pid)
+	})
 }

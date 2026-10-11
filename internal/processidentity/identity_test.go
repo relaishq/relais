@@ -219,6 +219,9 @@ func TestFenceUnreapedProcessReleasesSockets(t *testing.T) {
 	require.NoError(t, err, "child must still exist without parent reaping")
 	require.Equal(t, start, current)
 	require.True(t, dead, "Fence must return for an unreaped zombie")
+	exited, err := Gone(ctx, Identity{PID: cmd.Process.Pid, Start: start})
+	require.NoError(t, err)
+	require.True(t, exited, "dead-holder check must recognize an unreaped zombie")
 	bindCtx, stopBind := context.WithTimeout(context.Background(), socketbind.DefaultTimeout)
 	defer stopBind()
 	reported := false
@@ -273,4 +276,52 @@ func TestFenceOwnPreviousStartAlreadyFenced(t *testing.T) {
 	require.NoError(t, err)
 	id.Start = "previous-container:" + id.Start
 	require.NoError(t, Fence(context.Background(), id))
+}
+
+func TestGoneUsesIdentityWithoutSignalling(t *testing.T) {
+	for _, tc := range []struct {
+		name, start     string
+		dead            bool
+		readErr, exeErr error
+		want            bool
+	}{
+		{name: "absent ESRCH", readErr: syscall.ESRCH, want: true},
+		{name: "absent ENOENT", readErr: os.ErrNotExist, want: true},
+		{name: "zombie", start: "old", dead: true, want: true},
+		{name: "reused PID", start: "new", want: true},
+		{name: "live or stopped", start: "old"},
+		{name: "read EPERM", readErr: syscall.EPERM},
+		{name: "executable EPERM", start: "old", exeErr: syscall.EPERM},
+		{name: "other executable", start: "old", exeErr: ErrExecutable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			checks := 0
+			exited, err := gone(context.Background(), Identity{PID: 42, Start: "old"},
+				func(int) (string, bool, error) { return tc.start, tc.dead, tc.readErr }, func(int) error { checks++; return tc.exeErr })
+			require.Equal(t, tc.want, exited)
+			if tc.readErr != nil && !tc.want {
+				require.ErrorIs(t, err, tc.readErr)
+			} else if tc.exeErr != nil {
+				require.ErrorIs(t, err, tc.exeErr)
+			} else {
+				require.NoError(t, err)
+			}
+			if tc.want || tc.readErr != nil {
+				require.Zero(t, checks)
+			} else {
+				require.Equal(t, 1, checks)
+			}
+		})
+	}
+}
+func TestGoneLiveCurrentProcess(t *testing.T) {
+	id, err := Current()
+	require.NoError(t, err)
+	exited, err := Gone(context.Background(), id)
+	require.NoError(t, err)
+	require.False(t, exited)
+	id.Start = "previous:" + id.Start
+	exited, err = Gone(context.Background(), id)
+	require.NoError(t, err)
+	require.True(t, exited)
 }

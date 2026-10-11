@@ -491,3 +491,57 @@ func TestCommandSIGTERMReleasesLeaseBeforeTTL(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, current.Epoch, before.Epoch)
 }
+
+func TestCommandSIGKILLClaimsBeforeTTL(t *testing.T) {
+	for _, standby := range []bool{false, true} {
+		t.Run(fmt.Sprintf("standby=%t", standby), func(t *testing.T) {
+			s, addr, prefix := commandStore(t)
+			active := startCommand(t, addr, prefix, "-relay-lease-ttl", "3s")
+			ready := readyCommand(t, active)
+			old, err := s.GetRelay(context.Background(), "default")
+			require.NoError(t, err)
+			args := []string{"-media", ready.Media, "-leg", ready.Leg, "-http", strings.TrimPrefix(ready.HTTP, "http://"), "-relay-lease-ttl", "3s"}
+			var next *clusterprocess.Child
+			if standby {
+				next = startCommand(t, addr, prefix, append(args, "-standby")...)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				require.NoError(t, next.WaitLog(ctx, "STANDBY_WAIT"))
+			}
+			killed := time.Now()
+			require.NoError(t, active.SignalGroup(syscall.SIGKILL))
+			if !standby {
+				next = startCommand(t, addr, prefix, args...)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			_, err = next.Ready(ctx)
+			require.NoError(t, err, "must bypass the 3s lease and recovery grace")
+			t.Logf("SIGKILL standby=%t ready_ms=%.1f", standby, float64(time.Since(killed))/float64(time.Millisecond))
+			current, err := s.GetRelay(context.Background(), "default")
+			require.NoError(t, err)
+			require.Equal(t, next.PID(), current.Holder.PID)
+			require.Greater(t, current.Epoch, old.Epoch)
+		})
+	}
+}
+func TestCommandStoppedHolderCannotClaimImmediately(t *testing.T) {
+	s, addr, prefix := commandStore(t)
+	active := startCommand(t, addr, prefix, "-relay-lease-ttl", "3s")
+	ready := readyCommand(t, active)
+	old, err := s.GetRelay(context.Background(), "default")
+	require.NoError(t, err)
+	require.NoError(t, active.SignalGroup(syscall.SIGSTOP))
+	// Kill the owned stopped child before generic cleanup, which otherwise
+	// waits for SIGTERM on a process that cannot run its signal handler.
+	t.Cleanup(func() { _ = active.SignalGroup(syscall.SIGKILL) })
+	next := startCommand(t, addr, prefix, "-standby", "-media", ready.Media, "-leg", ready.Leg, "-http", strings.TrimPrefix(ready.HTTP, "http://"))
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	_, err = next.Ready(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	current, err := s.GetRelay(context.Background(), "default")
+	require.NoError(t, err)
+	require.Equal(t, old.Holder, current.Holder)
+	require.NoError(t, active.SignalGroup(0), "stopped holder must not be killed before expiry")
+}

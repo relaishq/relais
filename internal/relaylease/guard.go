@@ -28,6 +28,8 @@ type Config struct {
 	TTL, Renew, Poll time.Duration
 	// Fence is injectable for deterministic safety tests. Nil uses kernel identity.
 	Fence func(context.Context, processidentity.Identity) error
+	// Gone only observes identity; it must never signal a live or stopped holder.
+	Gone func(context.Context, processidentity.Identity) (bool, error)
 }
 type Timing struct {
 	ClaimAt         time.Time     `json:"claim_at"`
@@ -102,6 +104,9 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 	if cfg.Fence == nil {
 		cfg.Fence = processidentity.Fence
 	}
+	if cfg.Gone == nil {
+		cfg.Gone = processidentity.Gone
+	}
 	started := time.Now()
 	var l sessionstore.RelayLease
 	var err error
@@ -116,18 +121,27 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 		current, readErr := cfg.Store.GetRelay(op, cfg.Key)
 		cancel()
 		claim := errors.Is(readErr, sessionstore.ErrNotFound)
+		deadClaim := false
 		if readErr == nil {
 			switch {
 			case current.Holder.Owner == "", current.Holder == cfg.Process:
 				claim = true // bootstrap, graceful release, or settle an uncertain claim
-			case current.Expired:
-				if expiredAt.IsZero() || current.Epoch != observed.Epoch || current.Holder != observed.Holder {
-					observed, expiredAt = current, time.Now()
-				} else if time.Since(expiredAt) >= cfg.Renew {
-					claim = true
-				}
 			default:
-				expiredAt = time.Time{}
+				op, cancel = context.WithTimeout(ctx, cfg.Poll)
+				deadClaim = predecessorsGone(op, current, cfg.Gone)
+				cancel()
+				claim = deadClaim
+				if deadClaim {
+					expiredAt = time.Time{}
+				} else if current.Expired {
+					if expiredAt.IsZero() || current.Epoch != observed.Epoch || current.Holder != observed.Holder {
+						observed, expiredAt = current, time.Now()
+					} else if time.Since(expiredAt) >= cfg.Renew {
+						claim = true
+					}
+				} else {
+					expiredAt = time.Time{}
+				}
 			}
 		} else {
 			expiredAt = time.Time{}
@@ -135,14 +149,18 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 		err = readErr
 		if claim {
 			op, cancel = context.WithTimeout(ctx, cfg.Poll)
-			l, err = cfg.Store.ClaimRelay(op, cfg.Key, cfg.Process, cfg.TTL)
+			if deadClaim {
+				l, err = cfg.Store.ClaimDeadRelay(op, current, cfg.Process, cfg.TTL)
+			} else {
+				l, err = cfg.Store.ClaimRelay(op, cfg.Key, cfg.Process, cfg.TTL)
+			}
 			cancel()
 			if err == nil {
 				break
 			}
 			expiredAt = time.Time{} // a competing tenure or uncertain result resets grace
 		}
-		if err != nil && !errors.Is(err, sessionstore.ErrLeaseHeld) {
+		if err != nil && !errors.Is(err, sessionstore.ErrLeaseHeld) && !errors.Is(err, sessionstore.ErrLeaseLost) {
 			failures++
 			log.Printf("relay lease claim unavailable; no takeover: %v", err)
 		}
@@ -231,4 +249,26 @@ func (g *Guard) renew(cfg Config) {
 		}
 		tick.Reset(delay)
 	}
+}
+
+// Claim-before-expiry needs every possible forwarder to be verifiably gone.
+// The store CAS rechecks this snapshot's identities and epoch before replacing
+// it. Any permission failure or uncertainty preserves the normal expiry path.
+func predecessorsGone(ctx context.Context, l sessionstore.RelayLease, check func(context.Context, processidentity.Identity) (bool, error)) bool {
+	seen := make(map[processidentity.Identity]bool)
+	for _, p := range []sessionstore.RelayProcess{l.Holder, l.Forwarder} {
+		if p == (sessionstore.RelayProcess{}) {
+			continue
+		}
+		id := processidentity.Identity{PID: p.PID, Start: p.Start}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		exited, err := check(ctx, id)
+		if err != nil || !exited {
+			return false
+		}
+	}
+	return true
 }

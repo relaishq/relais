@@ -26,13 +26,18 @@ type RelayLease struct {
 	PreviousHolder RelayProcess `json:"previous_holder"`
 }
 
-// RelayLeases is independent of media snapshot access. Claim succeeds only
-// after expiry (or idempotently for the same holder). Activate must precede
+// RelayLeases is independent of media snapshot access. Ordinary claims require
+// expiry (or the identical holder); ClaimDeadRelay requires verified exit.
+// Activate must precede
 // binding, after both predecessor identities have been fenced. Renew can revive
 // an expired tenure only when no successor has claimed it: expiry alone is not
 // evidence of a second owner. All decisions are atomic in the store's clock.
 type RelayLeases interface {
 	ClaimRelay(context.Context, string, RelayProcess, time.Duration) (RelayLease, error)
+	// ClaimDeadRelay bypasses expiry only after the caller verifies both the
+	// recorded holder and forwarder are gone. CAS checks all identity evidence
+	// and the epoch; a delayed renewal cannot revive the replaced tenure.
+	ClaimDeadRelay(context.Context, RelayLease, RelayProcess, time.Duration) (RelayLease, error)
 	RenewRelay(context.Context, RelayLease, time.Duration) (RelayLease, error)
 	TransferRelay(context.Context, RelayLease, RelayProcess, time.Duration) (RelayLease, error)
 	ActivateRelay(context.Context, RelayLease) (RelayLease, error)
@@ -49,6 +54,9 @@ func sameRelay(a, b RelayLease) bool {
 
 func (m *Memory) ClaimRelay(ctx context.Context, key string, p RelayProcess, ttl time.Duration) (RelayLease, error) {
 	return m.changeRelay(ctx, "claim", RelayLease{Key: key}, p, ttl)
+}
+func (m *Memory) ClaimDeadRelay(ctx context.Context, l RelayLease, p RelayProcess, ttl time.Duration) (RelayLease, error) {
+	return m.changeRelay(ctx, "claim_dead", l, p, ttl)
 }
 func (m *Memory) RenewRelay(ctx context.Context, l RelayLease, ttl time.Duration) (RelayLease, error) {
 	return m.changeRelay(ctx, "renew", l, l.Holder, ttl)
@@ -90,7 +98,11 @@ func (m *Memory) changeRelay(ctx context.Context, op string, expected RelayLease
 	defer m.mu.Unlock()
 	l, ok := m.relayLeases[expected.Key]
 	now := time.Now()
-	if op == "claim" {
+	if op == "claim_dead" {
+		if !ok || !sameRelay(l, expected) || l.Forwarder != expected.Forwarder || l.PreviousHolder != expected.PreviousHolder {
+			return RelayLease{}, ErrLeaseLost
+		}
+	} else if op == "claim" {
 		if ok && l.Holder == p {
 			return l, nil
 		}
@@ -111,7 +123,7 @@ func (m *Memory) changeRelay(ctx context.Context, op string, expected RelayLease
 		return RelayLease{}, ErrLeaseLost
 	}
 	switch op {
-	case "claim", "transfer":
+	case "claim", "claim_dead", "transfer":
 		l.PreviousHolder = l.Holder
 		l.Holder = p
 		l.Key = expected.Key

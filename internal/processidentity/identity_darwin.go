@@ -25,15 +25,7 @@ func inspect(pid int) (string, bool, error) {
 
 func fencePlatform(ctx context.Context, id Identity) error {
 	return fence(ctx, id, inspect, func(pid int) error {
-		target, err := processPath(pid)
-		if err != nil {
-			return err
-		}
-		self, err := processPath(os.Getpid())
-		if err != nil {
-			return err
-		}
-		if err := sameExecutable(target, self); err != nil {
+		if err := verifyExecutable(pid); err != nil {
 			return err
 		}
 		// macOS has no pidfd. Recheck start time after the executable lookup.
@@ -67,4 +59,19 @@ func processPath(pid int) (string, error) {
 		return "", errors.New("empty process executable path")
 	}
 	return string(buf[:end]), nil
+}
+
+func verifyExecutable(pid int) error {
+	target, err := processPath(pid)
+	if err != nil {
+		return err
+	}
+	self, err := processPath(os.Getpid())
+	if err != nil {
+		return err
+	}
+	return sameExecutable(target, self)
+}
+func gonePlatform(ctx context.Context, id Identity) (bool, error) {
+	return gone(ctx, id, inspect, verifyExecutable)
 }

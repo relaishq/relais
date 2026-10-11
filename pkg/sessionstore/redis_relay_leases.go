@@ -24,6 +24,8 @@ if op=='get' then if not c[1] then return {3} end return reply() end
 if op=='claim' then
  if c[1]==holder then return reply() end
  if c[1] and tonumber(c[3])>now then return {0} end
+elseif op=='claim_dead' then
+ if c[1]~=ARGV[5] or c[2]~=epoch or (c[4] or '')~=ARGV[6] or (c[5] or '')~=ARGV[7] then return {2} end
 elseif op=='renew' and not c[1] then
  c={holder,epoch,string.format('%.0f',now+ttl),holder,''}
  redis.call('HSET',KEYS[1],'holder',holder,'epoch',epoch,'expires',c[3],'forwarder',holder,'previous','')
@@ -37,7 +39,7 @@ else
  elseif c[2]~=epoch then return {2} end
  if op~='renew' and op~='release' and tonumber(c[3])<=now then return {2} end
 end
-if op=='claim' or op=='transfer' then
+if op=='claim' or op=='claim_dead' or op=='transfer' then
  redis.call('HINCRBY',KEYS[1],'epoch',1)
  c[5]=c[1] or ''; c[1]=holder; c[2]=redis.call('HGET',KEYS[1],'epoch')
  c[3]=string.format('%.0f',now+ttl)
@@ -59,6 +61,9 @@ var relayLeaseScript = redis.NewScript(relayLeaseLua)
 
 func (r *Redis) ClaimRelay(ctx context.Context, key string, p RelayProcess, ttl time.Duration) (RelayLease, error) {
 	return r.relayOperation(ctx, "claim", RelayLease{Key: key}, p, ttl)
+}
+func (r *Redis) ClaimDeadRelay(ctx context.Context, l RelayLease, p RelayProcess, ttl time.Duration) (RelayLease, error) {
+	return r.relayOperation(ctx, "claim_dead", l, p, ttl)
 }
 func (r *Redis) RenewRelay(ctx context.Context, l RelayLease, ttl time.Duration) (RelayLease, error) {
 	return r.relayOperation(ctx, "renew", l, l.Holder, ttl)
@@ -83,7 +88,7 @@ func (r *Redis) relayOperation(ctx context.Context, op string, l RelayLease, p R
 	holder, _ := json.Marshal(p)
 	expected, _ := json.Marshal(l.Holder)
 	key := r.prefix + "relay:{relay:" + base64.RawURLEncoding.EncodeToString([]byte(l.Key)) + "}"
-	reply, err := relayLeaseScript.Run(ctx, r.client, []string{key}, op, string(holder), strconv.FormatUint(l.Epoch, 10), ttl.Milliseconds(), string(expected)).Slice()
+	reply, err := relayLeaseScript.Run(ctx, r.client, []string{key}, op, string(holder), strconv.FormatUint(l.Epoch, 10), ttl.Milliseconds(), string(expected), relayProcessEvidence(l.Forwarder), relayProcessEvidence(l.PreviousHolder)).Slice()
 	if err != nil {
 		return RelayLease{}, &TransientError{Op: "relay_" + op, Err: err}
 	}
@@ -158,4 +163,16 @@ func (r *RedisOwners) GetRelay(ctx context.Context, k string) (RelayLease, error
 
 func (r *RedisOwners) ReleaseRelay(ctx context.Context, l RelayLease) error {
 	return r.leases.ReleaseRelay(ctx, l)
+}
+
+// Redis represents absent predecessor evidence as an empty hash field.
+func relayProcessEvidence(p RelayProcess) string {
+	if p == (RelayProcess{}) {
+		return ""
+	}
+	data, _ := json.Marshal(p)
+	return string(data)
+}
+func (r *RedisOwners) ClaimDeadRelay(ctx context.Context, l RelayLease, p RelayProcess, ttl time.Duration) (RelayLease, error) {
+	return r.leases.ClaimDeadRelay(ctx, l, p, ttl)
 }

@@ -199,3 +199,80 @@ func TestRelayRenewRepairsOlderEpochButRejectsNewerEpoch(t *testing.T) {
 		require.ErrorIs(t, err, ErrLeaseLost)
 	})
 }
+
+func TestClaimDeadRelayCASAndRenewal(t *testing.T) {
+	forStores(t, func(t *testing.T, newStore func(*testing.T) Store) {
+		s := newStore(t).(RelayLeases)
+		ctx := context.Background()
+		for _, order := range []string{"renew-first", "claim-first", "concurrent"} {
+			t.Run(order, func(t *testing.T) {
+				a, err := s.ClaimRelay(ctx, order, relayProcess("a"), time.Second)
+				require.NoError(t, err)
+				a, err = s.ActivateRelay(ctx, a)
+				require.NoError(t, err)
+				var b RelayLease
+				var claimErr, renewErr error
+				renew := func() { _, renewErr = s.RenewRelay(ctx, a, time.Second) }
+				claim := func() { b, claimErr = s.ClaimDeadRelay(ctx, a, relayProcess("b"), time.Second) }
+				switch order {
+				case "renew-first":
+					renew()
+					claim()
+					require.NoError(t, renewErr)
+				case "claim-first":
+					claim()
+					renew()
+					require.ErrorIs(t, renewErr, ErrLeaseLost)
+				case "concurrent":
+					var wg sync.WaitGroup
+					wg.Go(renew)
+					wg.Go(claim)
+					wg.Wait()
+					if renewErr != nil {
+						require.ErrorIs(t, renewErr, ErrLeaseLost)
+					}
+				}
+				require.NoError(t, claimErr)
+				require.Greater(t, b.Epoch, a.Epoch)
+				require.Equal(t, a.Holder, b.PreviousHolder)
+				require.Equal(t, a.Forwarder, b.Forwarder)
+				_, err = s.RenewRelay(ctx, a, time.Second)
+				require.ErrorIs(t, err, ErrLeaseLost)
+				_, err = s.ClaimDeadRelay(ctx, a, relayProcess("c"), time.Second)
+				require.ErrorIs(t, err, ErrLeaseLost)
+				current, err := s.GetRelay(ctx, order)
+				require.NoError(t, err)
+				require.Equal(t, b.Holder, current.Holder)
+			})
+		}
+	})
+}
+func TestClaimDeadRelayRejectsChangedIdentityEvidence(t *testing.T) {
+	forStores(t, func(t *testing.T, newStore func(*testing.T) Store) {
+		s := newStore(t).(RelayLeases)
+		ctx := context.Background()
+		a, err := s.ClaimRelay(ctx, "one", relayProcess("a"), time.Second)
+		require.NoError(t, err)
+		// An activation can change forwarding evidence without changing the epoch.
+		before := a
+		a, err = s.ActivateRelay(ctx, a)
+		require.NoError(t, err)
+		_, err = s.ClaimDeadRelay(ctx, before, relayProcess("b"), time.Second)
+		require.ErrorIs(t, err, ErrLeaseLost)
+		for _, field := range []string{"holder", "epoch", "forwarder", "previous"} {
+			wrong := a
+			switch field {
+			case "holder":
+				wrong.Holder = relayProcess("changed")
+			case "epoch":
+				wrong.Epoch++
+			case "forwarder":
+				wrong.Forwarder = relayProcess("changed")
+			case "previous":
+				wrong.PreviousHolder = relayProcess("changed")
+			}
+			_, err = s.ClaimDeadRelay(ctx, wrong, relayProcess("b"), time.Second)
+			require.ErrorIs(t, err, ErrLeaseLost, field)
+		}
+	})
+}
