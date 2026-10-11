@@ -121,7 +121,7 @@
       try {
         const status = await json('/demo/status'); if (!active(s)) return;
         s.status = status; s.statusError = null;
-        if(status.selected_agent==='demo' && s.id) {
+        if(s.agentMode==='demo' && s.id) {
           try { s.agent=await json(`/demo/agent/${encodeURIComponent(s.id)}`);s.agentError=null; }
           catch(err) {s.agentError=String(err);s.agent=null;}
         }
@@ -136,17 +136,18 @@
     let hold=s.hold || {status:'not-run',reason:'no event yet'};
     if(s.hold && M.hiddenDuring(s.hiddenPeriods,s.hold.startedMs,Math.min(s.stoppedAtMs || performance.now(),s.hold.dueMs)))hold={...hold,status:'invalid',verdict:{status:'invalid',reasons:['page hidden']}};
     const entries=s.events.map((entry)=>{let verdict=M.combine(entry.windowVerdict,hold);
-      if(entry.agentVerdict && entry.agentVerdict.status!=='pass') {
-        const status=verdict.status==='invalid'?'invalid':verdict.status==='fail' || entry.agentVerdict.status==='fail'?'fail':'inconclusive';
-        verdict={status,reasons:[...verdict.reasons,...entry.agentVerdict.reasons.map((reason)=>`agent: ${reason}`)]};
+      const agentVerdict=entry.agentVerdict || (s.agentMode!=='echo' || entry.server?.agent_continuity?{status:'inconclusive',reasons:['required agent verdict missing']}:null);
+      if(agentVerdict && agentVerdict.status!=='pass') {
+        const status=verdict.status==='invalid'?'invalid':verdict.status==='fail' || agentVerdict.status==='fail'?'fail':'inconclusive';
+        verdict={status,reasons:[...verdict.reasons,...agentVerdict.reasons.map((reason)=>`agent: ${reason}`)]};
       }
-      return {...entry,verdict,pass:verdict.status==='pass'?true:verdict.status==='fail'?false:null};});
+      return {...entry,agentVerdict,verdict,pass:verdict.status==='pass'?true:verdict.status==='fail'?false:null};});
     const connectedThroughout=!!s.readyAtMs && s.transitions.every((e)=>e.atMs<s.readyAtMs || e.kind!=='connection' || e.state==='connected' || (s.stopped && e.state==='closed' && e.atMs>=s.stoppedAtMs));
     const noRenegotiation=!s.negotiations.length && !s.descriptionChanges.length && !s.restartCalls.length;
     const statuses=entries.map((e)=>e.verdict.status);
     const status=statuses.includes('invalid')?'invalid':statuses.includes('fail')?'fail':!statuses.length || statuses.includes('inconclusive')?'inconclusive':'pass';
     return {version:5,source:s.source,id:s.id,startedAt:s.startedAt,state:s.stopped?'ended':s.pc.connectionState,running:!!s.script || !!s.busy || !!s.checklist,
-      agentMode:s.status?.selected_agent || "unverified",agent:s.agent || null,agentStatusError:s.agentError || null,agentVerdict:{status:s.events.some((e)=>e.agentVerdict?.status==='fail')?'fail':s.events.length && s.events.every((e)=>e.agentVerdict?.status==='pass')?'pass':'inconclusive'},
+      agentMode:s.agentMode || "unverified",agent:s.agent || null,agentStatusError:s.agentError || null,agentVerdict:{status:entries.some((e)=>e.agentVerdict?.status==='fail')?'fail':entries.length && entries.every((e)=>e.agentVerdict?.status==='pass')?'pass':'inconclusive'},
       iceConnectionState:s.pc.iceConnectionState,owner:s.owner,workerPIDs:s.status?.worker_pids || {},poolSize:s.status?.pool_size,expectedPoolSize:s.status?.expected_pool_size,registrationError:s.status?.registration_error || null,
       thresholds:{moveGapMs:100,drainGapMs:100,killGapMs:2000,longHoldMs:60000},
       measurement:{video:'decoded counter: observation time minus previous presentation time',audio:'total concealedSamples at receiver sample rate',sampleRate:s.sampleRate,statsClock:'RTCStats.timestamp',settleAfterResponseMs:2000,sourceCadence:'median of up to 60 observed draw intervals before the measurement window; source gaps over 1.5 times cadence contribute only excess beyond cadence to starvation diagnostics; baselines are excluded only when source excess overlaps their largest video gap',timeToFirstLiveFrameMs:'kill events only; null for moves, drains, and baselines. Browser kill-request issuance to first decoded counter beyond the source watermark sampled at largest content-gap recovery; conservative upper bound including request transit and owner lookup, without subtracting server clocks. Missing kill evidence is unverified'},
@@ -252,6 +253,11 @@
     call=s;el.error.textContent='';observePage(s);attach(s);statuses(s);samples(s);
     starting=(async()=>{
       try {
+        // Pin the selected agent before media starts or events are armed. Status
+        // polling is diagnostic and must never decide continuity requirements.
+        const initialStatus=await json('/demo/status');
+        if(!['demo','echo'].includes(initialStatus.selected_agent))throw new Error('selected agent missing or invalid');
+        s.agentMode=initialStatus.selected_agent;
         const stream=await sourceStream(s);
         if(!active(s)){stream.getTracks().forEach((t)=>t.stop());throw new Error('call ended');}
         s.stream=stream;el.local.srcObject=stream;
@@ -318,6 +324,7 @@
   async function event(kind) {
     const s=call;
     if(!s || !s.armed || s.pc.connectionState!=='connected') throw new Error('start a connected call first');
+    if(!['demo','echo'].includes(s.agentMode))throw new Error('selected agent is not established');
     if(s.busy) throw new Error('an action is already in progress');
     s.busy=true;el.error.textContent='';clearTimeout(s.holdTimer);
     if(s.hold) s.hold.status='superseded';
@@ -356,11 +363,11 @@
       record.descriptionChanges=s.descriptionChanges.filter((e)=>e.atMs>=begin && e.atMs<=end);
       record.renegotiations=s.negotiations.filter((e)=>e.atMs>=begin && e.atMs<=end).length;
       record.iceRestarts=s.restartCalls.filter((e)=>e.atMs>=begin && e.atMs<=end).length+record.descriptionChanges.filter((e)=>e.iceRestart).length;
-      if(kind!=='baseline' && s.status?.selected_agent==='demo') {
+      if(kind!=='baseline' && (s.agentMode==='demo' || record.server?.agent_continuity)) {
         record.agentContinuity=record.server?.agent_continuity || null;
         if(record.agentContinuity) {
           try {record.agentContinuity.observed_after=await json(`/demo/agent/${encodeURIComponent(s.id)}`);}
-          catch(err) {record.agentContinuity.errors.push(`post-event: ${err}`);}
+          catch(err) {record.agentContinuity.errors=[...(Array.isArray(record.agentContinuity.errors)?record.agentContinuity.errors:[]),`post-event: ${err}`];}
         }
         record.agentVerdict=A.verdict(kind,record.agentContinuity);
       }

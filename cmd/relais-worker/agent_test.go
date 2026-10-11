@@ -54,11 +54,11 @@ func demoStores(t *testing.T, scenario func(*testing.T, sessionstore.Store)) {
 		scenario(t, store)
 	})
 }
-func startDemoSystem(t *testing.T, store sessionstore.Store) *demoSystem {
+func startDemoSystem(t *testing.T, store sessionstore.Store, buffer *relay.BufferConfig) *demoSystem {
 	t.Helper()
 	disable := workerprobe.Enable()
 	t.Cleanup(disable)
-	r, err := relay.New(relay.Config{Owners: store})
+	r, err := relay.New(relay.Config{Owners: store, Buffer: buffer})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, r.Close()) })
 	plane := controlplane.New(r, store)
@@ -97,7 +97,7 @@ func (s *demoSystem) status(t *testing.T, ctx context.Context, worker int, id st
 }
 func TestDemoAgentPlannedMoveMemoryAndRedis(t *testing.T) {
 	demoStores(t, func(t *testing.T, store sessionstore.Store) {
-		sys := startDemoSystem(t, store)
+		sys := startDemoSystem(t, store, nil)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		call, err := sys.h.Dial(ctx, callharness.CallOptions{})
@@ -143,8 +143,22 @@ func TestDemoAgentPlannedMoveMemoryAndRedis(t *testing.T) {
 	})
 }
 func TestDemoAgentTakeoverMemoryAndRedis(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		name := "without-replay"
+		if replay {
+			name = "with-replay"
+		}
+		t.Run(name, func(t *testing.T) { testDemoAgentTakeover(t, replay) })
+	}
+}
+func testDemoAgentTakeover(t *testing.T, replay bool) {
+	t.Helper()
 	demoStores(t, func(t *testing.T, store sessionstore.Store) {
-		sys := startDemoSystem(t, store)
+		var buffer *relay.BufferConfig
+		if replay {
+			buffer = &relay.BufferConfig{}
+		}
+		sys := startDemoSystem(t, store, buffer)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		call, err := sys.h.Dial(ctx, callharness.CallOptions{})
@@ -195,7 +209,19 @@ func TestDemoAgentTakeoverMemoryAndRedis(t *testing.T) {
 		require.Equal(t, float64(status.Takeovers[0].SnapshotAge)/1e6, after.LastResume.SnapshotAgeMS)
 		rollback := float64((before.Position.Count-checkpoint.Position.Count)*agentdemo.CountSamples) + float64(before.Position.PhaseSamples) - float64(checkpoint.Position.PhaseSamples)
 		require.LessOrEqual(t, rollback/48, after.LastResume.SnapshotAgeMS+20)
-		require.False(t, after.LastResume.InputMayBeDuplicated, "#27 replay is not installed on this base")
+		require.Equal(t, replay, after.LastResume.InputMayBeDuplicated)
+		require.Equal(t, replay, status.Takeovers[0].Result.InputMayBeDuplicated)
+		if replay {
+			require.NotEmpty(t, after.LastResume.DuplicateWindows)
+			require.NotEmpty(t, status.Takeovers[0].Result.DuplicateWindows)
+			for _, window := range after.LastResume.DuplicateWindows {
+				require.Equal(t, checkpoint.Progress.SSRC, window.SSRC)
+				require.Greater(t, window.First, checkpoint.Progress.Index, "saved input is already represented in count/phase")
+				require.GreaterOrEqual(t, window.Last, window.First)
+			}
+		} else {
+			require.Empty(t, after.LastResume.DuplicateWindows)
+		}
 		require.NoError(t, <-sent)
 		final := sys.status(t, ctx, 1, call.SessionID())
 		require.Greater(t, final.Progress.Consumed, checkpoint.Progress.Consumed+20)
@@ -209,7 +235,7 @@ func TestDemoAgentTakeoverMemoryAndRedis(t *testing.T) {
 		audio := report.Track("audio")
 		require.NotNil(t, audio)
 		require.Greater(t, audio.Packets, 50)
-		t.Logf("DEMO_TAKEOVER before=%+v checkpoint=%+v final=%+v checkpoint_age_ms=%.3f snapshot_age_ms=%.3f", before.Position, checkpoint.Position, final.Position, after.LastResume.CheckpointAgeMS, after.LastResume.SnapshotAgeMS)
+		t.Logf("DEMO_TAKEOVER before=%+v checkpoint=%+v final=%+v checkpoint_age_ms=%.3f snapshot_age_ms=%.3f duplicated=%t windows=%+v", before.Position, checkpoint.Position, final.Position, after.LastResume.CheckpointAgeMS, after.LastResume.SnapshotAgeMS, after.LastResume.InputMayBeDuplicated, after.LastResume.DuplicateWindows)
 	})
 }
 func TestDemoAgentSelectionAndBoundedHistory(t *testing.T) {

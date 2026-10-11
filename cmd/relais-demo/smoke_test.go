@@ -119,7 +119,11 @@ func TestDemoLocalNetworkSmoke(t *testing.T) {
 // caller. Browser presentation gaps and the 60 s browser hold remain NOT-RUN.
 func TestDemoExternalSmoke(t *testing.T)      { runExternalSmoke(t, "echo") }
 func TestDemoAgentExternalSmoke(t *testing.T) { runExternalSmoke(t, "demo") }
+func TestDemoAgentReworkSmoke(t *testing.T)   { runExternalSmokePlan(t, "demo", false, 2) }
 func runExternalSmoke(t *testing.T, agentName string) {
+	runExternalSmokePlan(t, agentName, true, 3)
+}
+func runExternalSmokePlan(t *testing.T, agentName string, drainFirst bool, kills int) {
 	if os.Getenv("RELAIS_DEMO_SMOKE") != "1" {
 		t.Skip("opt-in: make build, then RELAIS_DEMO_SMOKE=1 go test -run TestDemoExternalSmoke -v ./cmd/relais-demo")
 	}
@@ -226,19 +230,22 @@ func runExternalSmoke(t *testing.T, agentName string) {
 	t.Logf("move: %s -> %s, epoch=%d moves=%d", original, status.Calls[0].Owner, status.Calls[0].Epoch, status.Calls[0].MoveCount)
 	wait()
 	checkAgent("move", move.Agent)
-	var drain actionResult
-	require.NoError(t, privateapi.Do(ctx, server.Client(), server.URL, http.MethodPost, "/demo/drain", map[string]string{"id": call.SessionID()}, &drain, nil))
-	require.Empty(t, drain.Error)
-	require.NotEqual(t, drain.From, drain.To)
-	read()
-	require.Equal(t, drain.To, status.Calls[0].Owner)
-	require.Contains(t, status.WorkerPIDs, drain.Replacement)
-	t.Logf("drain: %s -> %s; replacement %s pid=%d", drain.From, drain.To, drain.Replacement, drain.ReplacementPID)
-	wait()
-	checkAgent("drain", drain.Agent)
-	replacements := map[string]bool{drain.Replacement: true}
+	replacements := map[string]bool{}
+	if drainFirst {
+		var drain actionResult
+		require.NoError(t, privateapi.Do(ctx, server.Client(), server.URL, http.MethodPost, "/demo/drain", map[string]string{"id": call.SessionID()}, &drain, nil))
+		require.Empty(t, drain.Error)
+		require.NotEqual(t, drain.From, drain.To)
+		read()
+		require.Equal(t, drain.To, status.Calls[0].Owner)
+		require.Contains(t, status.WorkerPIDs, drain.Replacement)
+		t.Logf("drain: %s -> %s; replacement %s pid=%d", drain.From, drain.To, drain.Replacement, drain.ReplacementPID)
+		wait()
+		checkAgent("drain", drain.Agent)
+		replacements[drain.Replacement] = true
+	}
 	killedReplacement := false
-	for i := 0; i < 3; i++ {
+	for i := 0; i < kills; i++ {
 		var kill actionResult
 		require.NoError(t, privateapi.Do(ctx, server.Client(), server.URL, http.MethodPost, "/demo/kill", map[string]string{"id": call.SessionID()}, &kill, nil))
 		h.RecordProcessKill(kill.From, kill.At)
@@ -260,7 +267,9 @@ func runExternalSmoke(t *testing.T, agentName string) {
 		}
 		t.Logf("kill %d: %s -> %s; replacement %s", i+1, kill.From, kill.To, kill.Replacement)
 	}
-	require.True(t, killedReplacement, "replacement must own the call and then lose it")
+	if drainFirst && kills >= 3 {
+		require.True(t, killedReplacement, "replacement must own the call and then lose it")
+	}
 	wait()
 	wait()
 	observed := time.Now()
