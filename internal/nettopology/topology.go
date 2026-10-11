@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -16,6 +17,7 @@ type Topology struct {
 	mu       sync.Mutex
 	closed   bool
 	closeErr error
+	media    netip.AddrPort
 	runner   func(context.Context, Command) (string, error)
 	logf     func(string, ...any)
 }
@@ -38,13 +40,21 @@ func (t *Topology) AllowMedia(ctx context.Context, addr netip.AddrPort) error {
 	if err != nil {
 		return err
 	}
-	return t.execute(ctx, commands)
+	if err := t.execute(ctx, commands); err != nil {
+		return err
+	}
+	t.media = addr
+	return nil
 }
 
 // VerifyPrivateAPIs first proves every private listener is live from the
-// driver, then attempts those same TCP endpoints from the caller namespace.
+// driver, then attempts those TCP ports on both the private addresses and the
+// relay's routable caller-side address. It also probes a non-media UDP port.
 // The real call separately proves the allowed UDP media path.
 func (t *Topology) VerifyPrivateAPIs(ctx context.Context, addresses []string) error {
+	t.mu.Lock()
+	media := t.media
+	t.mu.Unlock()
 	for _, addr := range addresses {
 		endpoint, err := netip.ParseAddrPort(addr)
 		if err != nil || endpoint.Port() == 6379 || !t.Plan.Datacentre.Contains(endpoint.Addr()) {
@@ -57,14 +67,10 @@ func (t *Topology) VerifyPrivateAPIs(ctx context.Context, addresses []string) er
 		}
 		_ = conn.Close()
 		err = withNamespace(t.Plan.Roles["caller"].Namespace, func() error {
-			d := net.Dialer{Timeout: 150 * time.Millisecond}
-			conn, err := d.DialContext(ctx, "tcp4", addr)
-			if err == nil {
-				_ = conn.Close()
-				return fmt.Errorf("caller reached private API %s", addr)
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
+			for _, target := range []string{addr, netip.AddrPortFrom(t.Plan.Roles["relay"].Public, endpoint.Port()).String()} {
+				if err := requireBlocked(ctx, "tcp4", target); err != nil {
+					return err
+				}
 			}
 			return nil
 		})
@@ -72,7 +78,50 @@ func (t *Topology) VerifyPrivateAPIs(ctx context.Context, addresses []string) er
 			return err
 		}
 	}
-	return nil
+	port := uint16(9)
+	if media.Port() == port {
+		port++
+	}
+	return withNamespace(t.Plan.Roles["caller"].Namespace, func() error {
+		return requireBlocked(ctx, "udp4", netip.AddrPortFrom(t.Plan.Roles["relay"].Public, port).String())
+	})
+}
+
+// A refusal proves the packet crossed the firewall, even with no listener.
+func isolationDenied(err error) bool {
+	var networkError net.Error
+	return errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.ENETUNREACH) ||
+		(errors.As(err, &networkError) && networkError.Timeout())
+}
+
+func requireBlocked(ctx context.Context, network, address string) error {
+	d := net.Dialer{Timeout: 150 * time.Millisecond}
+	conn, err := d.DialContext(ctx, network, address)
+	if err == nil {
+		defer conn.Close()
+		if network == "udp4" {
+			// UDP connect alone sends no packet. A connected read reports an
+			// ICMP refusal when an unfiltered destination has no listener.
+			err = conn.SetDeadline(time.Now().Add(150 * time.Millisecond))
+			if err == nil {
+				_, err = conn.Write([]byte("isolation"))
+			}
+			if err == nil {
+				var reply [64]byte
+				_, err = conn.Read(reply[:])
+			}
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if isolationDenied(err) {
+		return nil
+	}
+	if err == nil {
+		return fmt.Errorf("caller reached forbidden %s endpoint %s", network, address)
+	}
+	return fmt.Errorf("caller isolation not proven for %s %s: %w", network, address, err)
 }
 
 // Close is idempotent and uses a fresh context: canceled runs still clean up.

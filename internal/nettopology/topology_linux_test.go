@@ -36,6 +36,21 @@ func TestLinuxIsolationAndCleanup(t *testing.T) {
 	topology, err := Open(ctx, t.Logf)
 	require.NoError(t, err)
 	defer topology.Close()
+	for _, role := range []string{"caller", "relay"} {
+		for _, scope := range []string{"all", "default"} {
+			value, err := runCommand(ctx, Command{"ip", "netns", "exec", topology.Plan.Roles[role].Namespace, "sysctl", "-n", "net.ipv6.conf." + scope + ".disable_ipv6"})
+			require.NoError(t, err)
+			require.Equal(t, "1", strings.TrimSpace(value), role+" "+scope)
+		}
+		err := withNamespace(topology.Plan.Roles[role].Namespace, func() error {
+			conn, err := net.ListenPacket("udp6", "[::1]:0")
+			if conn != nil {
+				_ = conn.Close()
+			}
+			return err
+		})
+		require.ErrorIs(t, err, syscall.EADDRNOTAVAIL, "IPv6 must be unusable in %s", role)
+	}
 	var private []string
 	for _, role := range []string{"relay", "worker-0", "worker-1", "control", "store"} {
 		var listener net.Listener
@@ -57,12 +72,7 @@ func TestLinuxIsolationAndCleanup(t *testing.T) {
 	}))
 	defer publicTCP.Close()
 	require.NoError(t, withNamespace(topology.Plan.Roles["caller"].Namespace, func() error {
-		conn, err := net.DialTimeout("tcp4", publicTCP.Addr().String(), 150*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			return errors.New("caller reached relay public TCP listener")
-		}
-		return nil
+		return requireBlocked(ctx, "tcp4", publicTCP.Addr().String())
 	}))
 	makeEcho := func() net.PacketConn {
 		var conn net.PacketConn
@@ -99,6 +109,7 @@ func TestLinuxIsolationAndCleanup(t *testing.T) {
 	n, _, err := caller.ReadFrom(buffer)
 	require.NoError(t, err)
 	require.Equal(t, "media", string(buffer[:n]))
+	require.NoError(t, topology.VerifyPrivateAPIs(ctx, private), "per-trial probes must work after media is allowed")
 	require.NoError(t, caller.SetDeadline(time.Now().Add(150*time.Millisecond)))
 	_, err = caller.WriteTo([]byte("forbidden"), blocked.LocalAddr())
 	if err != nil {
@@ -110,6 +121,23 @@ func TestLinuxIsolationAndCleanup(t *testing.T) {
 		require.ErrorAs(t, err, &netErr, "only the selected media port may reply")
 		require.True(t, netErr.Timeout(), "unexpected blocked-port receive error: %v", err)
 	}
+	// A removed firewall must fail the production probe, even though the
+	// datacentre still has no route and caller-side private ports are closed.
+	for _, chain := range []string{"INPUT", "OUTPUT"} {
+		_, err := runCommand(ctx, Command{"ip", "netns", "exec", topology.Plan.Roles["caller"].Namespace, "iptables", "-w", "2", "-P", chain, "ACCEPT"})
+		require.NoError(t, err)
+	}
+	err = topology.VerifyPrivateAPIs(ctx, private)
+	require.ErrorIs(t, err, syscall.ECONNREFUSED)
+	require.ErrorContains(t, err, "caller isolation not proven")
+	require.ErrorIs(t, withNamespace(topology.Plan.Roles["caller"].Namespace, func() error {
+		return requireBlocked(ctx, "udp4", net.JoinHostPort(topology.Plan.Roles["relay"].Public.String(), "9"))
+	}), syscall.ECONNREFUSED)
+	for _, chain := range []string{"INPUT", "OUTPUT"} {
+		_, err := runCommand(ctx, Command{"ip", "netns", "exec", topology.Plan.Roles["caller"].Namespace, "iptables", "-w", "2", "-P", chain, "DROP"})
+		require.NoError(t, err)
+	}
+	require.NoError(t, topology.VerifyPrivateAPIs(ctx, private), "restoring the firewall must restore isolation")
 	// Real children must execute directly in the namespace with unchanged PID.
 	manager := &clusterprocess.Manager{}
 	require.NoError(t, manager.AddCleanup(func() { require.NoError(t, topology.Close()) }))
@@ -232,4 +260,51 @@ func TestLinuxStalePartialLinksAreReclaimed(t *testing.T) {
 	cleaner := &Topology{runner: runCommand, logf: t.Logf}
 	require.NoError(t, cleaner.cleanStale(ctx))
 	assertRemoved(t, plan)
+}
+
+func TestLinuxStaleCleanupContinuesPastDeletionFailure(t *testing.T) {
+	requireLinuxNamespaces(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	complete, err := Open(ctx, t.Logf)
+	require.NoError(t, err)
+	require.NoError(t, complete.Close())
+	owner := exec.Command("/bin/true")
+	require.NoError(t, owner.Run())
+	require.Equal(t, unix.ESRCH, unix.Kill(owner.Process.Pid, 0))
+	token := strings.TrimPrefix(complete.Plan.LinkPrefix, "rn")
+	stuck, err := NewPlan(os.Getuid(), owner.Process.Pid, token, 2)
+	require.NoError(t, err)
+	suffix := "0"
+	if strings.HasSuffix(token, suffix) {
+		suffix = "1"
+	}
+	other, err := NewPlan(os.Getuid(), owner.Process.Pid, token[:9]+suffix, 2)
+	require.NoError(t, err)
+	for _, plan := range []Plan{stuck, other} {
+		recovery := &Topology{Plan: plan, runner: runCommand}
+		defer recovery.Close()
+		_, err := runCommand(ctx, Command{"ip", "netns", "add", plan.FabricNamespace})
+		require.NoError(t, err)
+	}
+	_, err = runCommand(ctx, Command{"ip", "link", "add", stuck.ManagementHost, "type", "veth", "peer", "name", stuck.ManagementPeer})
+	require.NoError(t, err)
+	var logs []string
+	cleaner := &Topology{logf: func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }, runner: func(ctx context.Context, command Command) (string, error) {
+		if strings.Join(command, " ") == "ip netns delete "+stuck.FabricNamespace || strings.Join(command, " ") == "ip link delete "+stuck.ManagementHost {
+			return "", errors.New("injected stale deletion failure")
+		}
+		return runCommand(ctx, command)
+	}}
+	require.NoError(t, cleaner.cleanStale(ctx))
+	require.Contains(t, strings.Join(logs, "\n"), "cannot clean stale namespace "+stuck.FabricNamespace+"; continuing")
+	require.Contains(t, strings.Join(logs, "\n"), "cannot clean stale link "+stuck.ManagementHost+"; continuing")
+	namespaces, err := runCommand(ctx, Command{"ip", "netns", "list"})
+	require.NoError(t, err)
+	require.Contains(t, namespaces, stuck.FabricNamespace)
+	require.NotContains(t, namespaces, other.FabricNamespace)
+	// The stuck resource can be reclaimed on a later run when deletion works.
+	require.NoError(t, (&Topology{runner: runCommand, logf: t.Logf}).cleanStale(ctx))
+	assertRemoved(t, stuck)
+	assertRemoved(t, other)
 }

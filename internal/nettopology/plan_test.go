@@ -45,6 +45,9 @@ func TestAddressPlanAndCommands(t *testing.T) {
 		require.True(t, link.Address.Addr().IsPrivate())
 	}
 	commands := p.SetupCommands()
+	for _, role := range []string{"caller", "relay"} {
+		require.Contains(t, commands, Command{"ip", "netns", "exec", p.Roles[role].Namespace, "sysctl", "-q", "-w", "net.ipv6.conf.all.disable_ipv6=1", "net.ipv6.conf.default.disable_ipv6=1"})
+	}
 	require.Equal(t, Command{"ip", "netns", "add", p.FabricNamespace}, commands[0], "namespace marker must precede host links for stale cleanup")
 	for _, command := range commands {
 		text := strings.Join(command, " ")

@@ -107,6 +107,9 @@ func (p Plan) SetupCommands() []Command {
 		ns := p.Roles[link.Role].Namespace
 		if !seen[ns] {
 			commands = append(commands, Command{"ip", "netns", "add", ns}, Command{"ip", "-n", ns, "link", "set", "lo", "up"})
+			if link.Role == "caller" || link.Role == "relay" {
+				commands = append(commands, Command{"ip", "netns", "exec", ns, "sysctl", "-q", "-w", "net.ipv6.conf.all.disable_ipv6=1", "net.ipv6.conf.default.disable_ipv6=1"})
+			}
 			seen[ns] = true
 		}
 	}

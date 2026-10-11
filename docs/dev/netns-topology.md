@@ -15,9 +15,13 @@ rules, including Docker's host forwarding policy. The driver does not change
 the host's firewall or forwarding settings.
 
 The caller namespace permits UDP only to and from the relay's selected media
-port. It has no route to the datacentre. Every trial first checks that private
-HTTP and store listeners are live from the driver, then attempts those same
-ports from the caller namespace and requires failure. Linux integration tests
+port. IPv6 is disabled in both caller and relay namespaces. The caller has no
+route to the datacentre. Every trial first checks that private HTTP and store
+listeners are live from the driver, then attempts those same ports on both
+the private addresses and the relay's routable caller-side address. It also
+probes a non-media UDP port on that address. Only permission denied, no route,
+or timeout proves isolation; connection refused fails the check because the
+packet passed the firewall. Linux integration tests
 also check that the selected UDP port works, a second live UDP port does not,
 and relay public TCP is unreachable.
 
@@ -59,8 +63,10 @@ Redis addresses are refused in this topology; port 6379 remains reserved.
 Redis retains protected mode and requires a random per-run password. The
 driver passes it to all store and frame-cache clients through
 `RELAIS_REDIS_PASSWORD`. A private temporary configuration keeps the password
-out of command arguments and uploaded run logs; it is removed after Redis
-startup. The driver requires an authenticated Redis PING before trials.
+out of command arguments and uploaded run logs. The file is inside a root-owned
+0700 temporary directory under `/tmp`, so the checkout owner cannot replace
+it before Redis opens it. The directory is removed after Redis startup. The
+driver requires an authenticated Redis PING before trials.
 Private HTTP listeners receive only the explicit datacentre CIDR through
 `RELAIS_PRIVATE_NETS`. Without this setting they accept loopback only;
 wildcard and public listeners are always refused.
@@ -70,10 +76,23 @@ processes, namespaces, veth pairs and bridges on completion, failure, SIGINT,
 and SIGTERM, including a second interrupt during cleanup. At startup it
 removes stale namespaces with its exact prefix and UID only when their owner
 PID is absent. Living owner PIDs are preserved, including concurrent runs.
+If a stale resource cannot be deleted, the driver logs it and continues
+reclaiming other stale resources. Cleanup failures for the current run still
+fail that run.
 SIGKILL of the driver cannot run cleanup; the next run reclaims its stale
 resources. Logs remain under `bin/crash-run-*`. The `netns-crash-run` CI job
-runs nightly, manually, and on main pushes, and uploads logs on failure.
+runs nightly, manually, and on main pushes. It bounds the driver step at 28
+minutes, asserts no topology namespaces or links remain, restores log ownership,
+and uploads logs on failure or cancellation.
 Existing PR jobs are unchanged.
+
+A local root run leaves root-owned logs. Before normal-user `make clean`,
+restore ownership of this checkout's run directories:
+
+```sh
+sudo find bin -maxdepth 1 -type d -name 'crash-run-*' -exec chown -R "$(id -u):$(id -g)" {} +
+make clean
+```
 
 ## Run from a Mac
 

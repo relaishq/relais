@@ -114,8 +114,8 @@ func (t *Topology) cleanStale(ctx context.Context) error {
 		if len(fields) == 0 {
 			continue
 		}
-		_, prefix, stale := StaleOwner(fields[0], os.Getuid(), func(pid int) bool { return unix.Kill(pid, 0) != unix.ESRCH })
-		if !stale {
+		id, prefix, stale := StaleOwner(fields[0], os.Getuid(), func(pid int) bool { return unix.Kill(pid, 0) != unix.ESRCH })
+		if !stale || id == t.Plan.ID {
 			continue
 		}
 		t.logf("clean stale namespace %s", fields[0])
@@ -137,7 +137,7 @@ func (t *Topology) cleanStale(ctx context.Context) error {
 			for prefix := range bridges {
 				if OwnedLink(link.Name, prefix) {
 					if err := t.removeLink(link.Name); err != nil {
-						return err
+						t.logf("cannot clean stale link %s; continuing: %v", link.Name, err)
 					}
 				}
 			}
@@ -145,7 +145,7 @@ func (t *Topology) cleanStale(ctx context.Context) error {
 	}
 	for _, name := range staleNames {
 		if err := t.removeNamespace(name); err != nil {
-			return err
+			t.logf("cannot clean stale namespace %s; continuing: %v", name, err)
 		}
 	}
 	return nil

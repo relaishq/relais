@@ -28,13 +28,18 @@ func redisCommand(topology *nettopology.Topology, binary, port, dir, password st
 		if !redisSecretPattern.MatchString(password) {
 			return nil, removeConfig, errors.New("namespaced Redis requires a random per-run password")
 		}
-		// Keep the file outside crash-run-* artifact directories. CreateTemp
-		// uses mode 0600, including when the driver runs as root.
-		config, err := os.CreateTemp(filepath.Dir(dir), ".redis-auth-*")
+		// Linux netns runs as root. A root-owned 0700 directory under the
+		// system's sticky /tmp prevents the checkout owner swapping the file.
+		configDir, err := os.MkdirTemp("/tmp", "relais-redis-auth-*")
 		if err != nil {
 			return nil, removeConfig, err
 		}
-		removeConfig = func() { _ = os.Remove(config.Name()) }
+		removeConfig = func() { _ = os.RemoveAll(configDir) }
+		config, err := os.OpenFile(filepath.Join(configDir, "redis.conf"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			removeConfig()
+			return nil, removeConfig, err
+		}
 		_, writeErr := config.WriteString("requirepass " + password + "\n")
 		if err := errors.Join(writeErr, config.Close()); err != nil {
 			removeConfig()

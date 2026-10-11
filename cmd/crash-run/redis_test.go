@@ -29,7 +29,12 @@ func TestRedisCommandsPreserveLoopbackAndAuthenticateNetns(t *testing.T) {
 	require.NoError(t, err)
 	defer cleanup()
 	require.NotContains(t, strings.Join(args, " "), password)
-	require.Equal(t, filepath.Dir(dir), filepath.Dir(args[1]), "credentials must stay outside uploaded run directories")
+	configDir := filepath.Dir(args[1])
+	require.NotEqual(t, filepath.Dir(dir), configDir, "checkout owner must not be able to swap credentials")
+	require.Equal(t, "/tmp", filepath.Dir(configDir))
+	directory, err := os.Stat(configDir)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0700), directory.Mode().Perm())
 	require.Equal(t, []string{"--bind", plan.Roles["store"].Private.String(), "--port", "16379", "--save", "", "--appendonly", "no", "--dir", dir}, args[2:])
 	stat, err := os.Stat(args[1])
 	require.NoError(t, err)
@@ -39,6 +44,8 @@ func TestRedisCommandsPreserveLoopbackAndAuthenticateNetns(t *testing.T) {
 	require.Equal(t, "requirepass "+password+"\n", string(data))
 	cleanup()
 	_, err = os.Stat(args[1])
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(configDir)
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 

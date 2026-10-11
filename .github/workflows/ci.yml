@@ -220,10 +220,14 @@ jobs:
 
   netns-crash-run:
     timeout-minutes: 35
+    permissions:
+      contents: read
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
@@ -241,14 +245,36 @@ jobs:
           sudo -E env RELAIS_TEST_NETNS_REQUIRE=1 ./bin/nettopology.test -test.v -test.timeout=3m 2>&1 | tee bin/netns-tests.log
           sudo -E ./bin/clusterprocess.test -test.v -test.run='^Test(NamespaceCommand|ManagerCleanupAfterChildren|StopReapedChildCannotSignalReusedGroup|DriverDoubleSignalCleanup)$' -test.timeout=3m 2>&1 | tee bin/netns-process-tests.log
       - name: Run twenty namespaced LAN SIGKILL trials (ten per mode)
+        timeout-minutes: 28
         run: |
           set -o pipefail
           sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -topology=netns -profile=lan 2>&1 | tee bin/netns-crash-run.log
-      - name: Make root-owned driver logs readable for artifact upload
+      - name: Assert namespace and link cleanup
         if: always()
-        run: sudo find bin -maxdepth 1 -type d -name 'crash-run-*' -exec chmod -R a+rX {} +
+        timeout-minutes: 1
+        run: |
+          set -o pipefail
+          mkdir -p bin
+          sudo ip netns list | tee bin/netns-leftover-namespaces.log
+          sudo ip -j link show | tee bin/netns-leftover-links.log
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          namespaces = [line.split()[0] for line in Path('bin/netns-leftover-namespaces.log').read_text().splitlines() if line.strip()]
+          links = [link['ifname'] for link in json.loads(Path('bin/netns-leftover-links.log').read_text())]
+          leftovers = [name for name in namespaces if name.startswith('relais-net-')]
+          leftovers += [name for name in links if name.startswith('rn')]
+          if leftovers:
+              raise SystemExit('Namespace cleanup failed; remaining resources: ' + ', '.join(leftovers))
+          print('CLEANUP PASS: no relais-net-* namespaces or rn* links remain')
+          PY
+      - name: Restore ownership and readability of driver logs
+        if: always()
+        run: |
+          sudo find bin -maxdepth 1 -type d -name 'crash-run-*' -exec chown -R "$(id -u):$(id -g)" {} +
+          sudo find bin -maxdepth 1 -type d -name 'crash-run-*' -exec chmod -R a+rX {} +
       - name: Upload namespace failure logs
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v7
         with:
           name: netns-crash-run-logs
