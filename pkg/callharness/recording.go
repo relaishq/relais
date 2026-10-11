@@ -95,9 +95,15 @@ func (c *Call) maintainRecording(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			poll, cancel := context.WithTimeout(ctx, time.Second)
-			_ = c.collectTakeovers(poll) // Hangup still returns a failed final collection.
-			cancel()
+			// Status holds the control-plane call lock while reading the store.
+			// A planned move uses TryLock there, so our observer must not race it.
+			// Skip a busy poll rather than delay compaction behind a long move.
+			if c.harness.statusPollMu.TryLock() {
+				poll, cancel := context.WithTimeout(ctx, time.Second)
+				_ = c.collectTakeovers(poll) // Hangup still returns a failed final collection.
+				cancel()
+				c.harness.statusPollMu.Unlock()
+			}
 			c.rec.mu.Lock()
 			if !c.rec.hungUp {
 				c.rec.compact(time.Since(c.rec.start))

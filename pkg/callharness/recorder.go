@@ -441,7 +441,10 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 			receivedAt = r.since(frame.completedAt)
 		}
 		v.frames = append(v.frames, frameMark{at: r.since(decoded), decodable: v.DecodableFrames > decodable, firstArrival: r.since(frame.firstArrival), receivedAt: receivedAt, source: source, pictureID: frame.pictureID, restartsDecodeChain: restartsDecodeChain})
-		if v.DecodableFrames > decodable && source.at > 0 && source.written {
+		// The echo can decode before the source write returns. Retain its
+		// known identity now; repeat filtering still requires a confirmed
+		// write in the current send map.
+		if v.DecodableFrames > decodable && source.at > 0 {
 			if v.decodedPictures == nil {
 				v.decodedPictures = make(map[uint16]sentVideoFrame)
 			}

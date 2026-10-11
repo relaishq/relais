@@ -123,6 +123,8 @@ func (c *Call) Handover(opts HandoverOptions) error {
 		if opts.SequenceMargin != 0 {
 			return errors.New("callharness: relay planned moves require sequence margin 0")
 		}
+		c.harness.statusPollMu.RLock()
+		defer c.harness.statusPollMu.RUnlock()
 		t := ws.relay
 		started := time.Now()
 		owner, _ := c.harness.SessionOwner(sessionID)

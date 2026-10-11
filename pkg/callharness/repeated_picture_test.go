@@ -153,12 +153,12 @@ func TestRepeatedPicturesRequireDecodedExactIdentity(t *testing.T) {
 	data, key, err := src.next()
 	require.NoError(t, err)
 	require.True(t, key)
-	for _, test := range []string{"failed decode", "different epoch", "different payload", "exact repeat"} {
+	for _, test := range []string{"failed decode", "different epoch", "different payload", "unconfirmed write", "exact repeat"} {
 		t.Run(test, func(t *testing.T) {
 			r := newRecorder()
 			track := r.addTrack(kindVideo, 1, 96)
 			original := identifyVP8(data, 0)
-			r.sentVideoFrames[0] = sentVideoFrame{identity: 0, at: time.Second, data: string(original), written: true}
+			r.sentVideoFrames[0] = sentVideoFrame{identity: 0, at: time.Second, data: string(original), written: test != "unconfirmed write"}
 			f := &vp8Frame{data: original, keyframe: true, pictureID: 0, completedAt: r.start.Add(time.Second + time.Millisecond)}
 			size, decodeErr, repeated := r.decodeVideoFrame(track, f, f.completedAt)
 			require.False(t, repeated)
