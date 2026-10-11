@@ -136,13 +136,14 @@ func validateAddresses(standby bool, public, leg, httpAddr string) error {
 			return fmt.Errorf("standby requires fixed socket addresses: %s", addr)
 		}
 	}
-	host, port, err := net.SplitHostPort(httpAddr)
+	_, port, err := net.SplitHostPort(httpAddr)
 	if err != nil {
 		return err
 	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("private HTTP listener must use a literal loopback IP")
+	// Same rule as processrun.ListenPrivate: loopback, or an explicitly
+	// allowed private prefix (the netns topology), checked before startup.
+	if err := processrun.ValidatePrivateListener(httpAddr, os.Getenv("RELAIS_PRIVATE_NETS")); err != nil {
+		return err
 	}
 	n, err := strconv.Atoi(port)
 	if err != nil || n < 0 || n > 65535 || standby && n == 0 {
