@@ -99,13 +99,17 @@ not the displayed p95, so one pause at or above 2s still fails acceptance.
 Each track needs at least ten baseline intervals.
 A gap baseline p95-minus-median above 50ms makes the row inconclusive. This
 budget includes normal intra-frame packet bursts and video cadence. The
-independent #32 content-age baseline still needs ten samples and a spread of
-at most 20ms. The caller policy explicitly records content-age median ceilings:
+profile content-age baseline needs ten samples and a p95-minus-median spread
+of at most **20ms + applied caller round-trip jitter**. The jitter is summed
+from the caller→relay and relay→caller endpoints in the applied link plan.
+Private-link jitter does not increase this limit. Thus far caller allows 40ms;
+LAN, region and lossy DC retain 20ms. The caller policy explicitly records content-age median ceilings:
 LAN/lossy DC 50ms, region 150ms, far caller 250ms. These are **diagnostic**,
 not acceptance gates; they do not replace the **150ms move-gap ceiling**. #32's
 per-metric trust, loss and freshness reports are retained unchanged. Each row
-records `AudioSpreadMargin` and `VideoSpreadMargin`: 20ms minus that track's
-content-age p95-minus-median. The 20ms limit remains unchanged.
+records `AudioSpreadMargin` and `VideoSpreadMargin`: the profile spread limit
+minus that track's content-age p95-minus-median. The run records
+`ContentAgeSpreadLimit`, also printed in `PROFILE_POLICY`.
 
 Known failures take precedence over unknown metrics. Rows carry conclusive, fail or inconclusive states and reasons; move p95
 judgment belongs to the full run, not each individual trial. The run reports `pass`, `fail`, or `inconclusive`; both
@@ -270,6 +274,14 @@ cancellations also upload all logs. Always-run leftover checks detect owned
 namespaces or links after teardown. Move jobs use 20 trials, a 35-minute
 driver timeout and a 45-minute job timeout. Takeovers retain ten trials,
 a 20-minute driver timeout and a 30-minute job timeout.
+
+Only **lossy-dc × move** has a temporary `continue-on-error` exemption for
+[#87](https://github.com/relaishq/relais/issues/87), planned-move latency under
+DC loss. Its driver still exits nonzero on fail or inconclusive, its profile
+verdict remains unchanged, and its reports and failure logs still upload.
+The job summary names #87 and requires removal of the exemption when it is
+fixed. Every other matrix entry still fails the workflow on fail or
+inconclusive. No move latency threshold changes with this exemption.
 
 In run 38154313823, the DC trial process observation averaged 78.46s.
 Twenty such trials project to about 26 minutes before job setup, so the

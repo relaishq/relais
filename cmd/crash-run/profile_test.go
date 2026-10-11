@@ -98,7 +98,7 @@ func TestProfileInconclusiveCannotHideKnownFailure(t *testing.T) {
 	rows[0].AudioBaseline.P95 = 80 * time.Millisecond
 	require.Equal(t, "inconclusive", judgeProfile(options, rows, profileTestLinks(t, options.Name)).Verdict)
 	rows = goodProfileRows(10)
-	rows[0].Measurement.Video.BaselineP95 = 21 * time.Millisecond
+	rows[0].Measurement.Video.BaselineP95 = 41 * time.Millisecond
 	require.Equal(t, "inconclusive", judgeProfile(options, rows, profileTestLinks(t, options.Name)).Verdict)
 	require.Equal(t, "inconclusive", judgeProfile(options, goodProfileRows(10)[:1], profileTestLinks(t, options.Name)).Verdict)
 	options.Name = "lossy-dc"
@@ -106,6 +106,60 @@ func TestProfileInconclusiveCannotHideKnownFailure(t *testing.T) {
 	require.Equal(t, "inconclusive", r.Verdict)
 	require.Contains(t, r.Reasons, "barrier resend NOT-PROVEN")
 	require.Contains(t, r.Reasons, "injected discarded reply NOT-PROVEN")
+}
+func TestProfileContentAgeSpreadUsesAppliedCallerRoundTripJitter(t *testing.T) {
+	for _, name := range []string{"lan", "region", "far-caller", "lossy-dc"} {
+		for _, scenario := range []string{"move", "takeover"} {
+			t.Run(name+"/"+scenario, func(t *testing.T) {
+				limit := 20 * time.Millisecond
+				if name == "far-caller" {
+					limit = 40 * time.Millisecond
+				}
+				for _, excess := range []time.Duration{0, time.Nanosecond} {
+					rows := withProfileProbes(name, goodProfileRows(20))
+					rows[0].BarrierResends, rows[0].InjectedDiscardedReplies = 1, 1
+					rows[0].Measurement.Audio.BaselineP95 = limit + excess
+					rows[0].Measurement.Video.BaselineP95 = limit + excess
+					result := judgeProfile(profileTrialOptions{Name: name, Scenario: scenario}, rows, profileTestLinks(t, name))
+					want := "pass"
+					if excess > 0 {
+						want = "inconclusive"
+						for _, kind := range []string{"audio", "video"} {
+							require.Contains(t, result.Reasons, "trial 1: "+kind+" content-age baseline too small or noisy")
+						}
+					}
+					require.Equal(t, want, result.Verdict, result.Reasons)
+					require.Equal(t, limit, result.ContentAgeSpreadLimit)
+					require.Equal(t, -excess, result.Rows[0].AudioSpreadMargin)
+					require.Equal(t, -excess, result.Rows[0].VideoSpreadMargin)
+				}
+			})
+		}
+	}
+	// A changed applied plan overrides the named profile. Both caller legs
+	// count; private-link jitter does not contribute to this noise allowance.
+	links := profileTestLinks(t, "far-caller")
+	caller := 0
+	for i := range links {
+		if links[i].Role == "caller" {
+			links[i].Jitter = []time.Duration{2 * time.Millisecond, 7 * time.Millisecond}[caller]
+			caller++
+		} else {
+			links[i].Jitter = time.Second
+		}
+	}
+	require.Equal(t, 2, caller)
+	links = recordedProfileLinks(links)
+	rows := goodProfileRows(20)
+	rows[0].Measurement.Audio.BaselineP95 = 29 * time.Millisecond
+	result := judgeProfile(profileTrialOptions{Name: "far-caller", Scenario: "move"}, rows, links)
+	require.Equal(t, "pass", result.Verdict, result.Reasons)
+	require.Zero(t, result.Rows[0].AudioSpreadMargin)
+	rows[0].Measurement.Audio.BaselineP95++
+	require.Equal(t, "inconclusive", judgeProfile(profileTrialOptions{Name: "far-caller", Scenario: "move"}, rows, links).Verdict)
+	rows[0].Measurement.Audio.BaselineP95 = 0
+	rows[0].Measurement.Audio.BaselineSamples = 9
+	require.Equal(t, "inconclusive", judgeProfile(profileTrialOptions{Name: "far-caller", Scenario: "move"}, rows, links).Verdict)
 }
 func TestGapBaselineUsesOnlySameCallPreEventIntervals(t *testing.T) {
 	var arrivals []time.Duration

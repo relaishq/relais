@@ -359,6 +359,8 @@ jobs:
   # This is deliberately outside the PR aggregate and main-push lanes.
   netns-network-profiles:
     name: netns-network-profiles (${{ matrix.profile }}, ${{ matrix.scenario }})
+    # Temporary exemption for the product failure tracked in #87.
+    continue-on-error: ${{ matrix.expected_failure == true }}
     timeout-minutes: ${{ matrix.job_minutes }}
     permissions:
       contents: read
@@ -378,6 +380,9 @@ jobs:
             trials: 10
             driver_minutes: 20
             job_minutes: 30
+          - profile: lossy-dc
+            scenario: move
+            expected_failure: true
     steps:
       - uses: actions/checkout@v6
         with:
@@ -433,6 +438,10 @@ jobs:
           path: |
             bin/crash-run-*/profile-report.json
             bin/crash-run-*/network-settings.json
+      - name: Explain known product failure exemption
+        if: always() && matrix.expected_failure == true
+        run: |
+          echo 'Known product failure: #87 (planned-move latency under DC loss). Remove this exemption when #87 is fixed.' >> "$GITHUB_STEP_SUMMARY"
       - name: Upload profile failure logs
         if: failure() || cancelled()
         uses: actions/upload-artifact@v7

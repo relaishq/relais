@@ -183,7 +183,7 @@ func TestProfileFailureEvidenceAndNoiseCaps(t *testing.T) {
 	rows[0].Measurement.Audio.BaselineMedian = 150 * time.Millisecond
 	rows[0].Measurement.Audio.BaselineP95 = 167600 * time.Microsecond
 	result = judgeProfile(profileTrialOptions{Name: "far-caller", Scenario: "move"}, rows, profileTestLinks(t, "far-caller"))
-	require.Equal(t, 2400*time.Microsecond, result.Rows[0].AudioSpreadMargin)
+	require.Equal(t, 22400*time.Microsecond, result.Rows[0].AudioSpreadMargin)
 }
 
 func TestProfileNoisyTrialDoesNotRejectHealthyPooledBaseline(t *testing.T) {
