@@ -66,7 +66,7 @@ func TestAgentReplayNoticeMatchesDirectAndHTTP(t *testing.T) {
 				require.Equal(t, agent.Takeover, opts.Kind)
 				require.Equal(t, replay, opts.InputMayBeDuplicated)
 				require.Equal(t, mode == "complete", opts.RelayReplay)
-				require.Equal(t, replay, opts.RelayInputReplay)
+				require.Equal(t, mode == "incomplete", opts.RelayInputReplay)
 				require.Len(t, p.recentTakeovers(), 1)
 				if replay {
 					want := []agent.DuplicateWindow{{SSRC: 42, First: 11, Last: 11}}

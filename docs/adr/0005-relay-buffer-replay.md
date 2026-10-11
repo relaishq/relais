@@ -215,9 +215,16 @@ Both operations are available through private HTTP:
 `POST /sessions/{id}/replay` takes the resumed target. Worker resume carries the
 `RelayReplay` complete-plan flag and the separate `RelayInputReplay` flag
 through its existing private API (`relay_replay` and `relay_input_replay`).
-The latter means selected caller media is pending, without promising codec
-continuity. No selected media leaves it false. Both flags preserve the existing
-outbound sequence margins and cached-picture index reservations. Neither relay
+The latter means incomplete caller media is pending, without promising codec
+continuity. Complete plans use only `relay_replay`; incomplete plans with no
+selected media leave both recovery overrides false. `relay_input_replay` is
+omitted when false, so normal
+resumes and complete-ring takeovers do not send an unknown field to old workers.
+Workers and the control plane must upgrade together, as required by
+[ADR 0002](0002-checkpoint-age-envelope.md): private HTTP readers reject unknown
+fields with `DisallowUnknownFields`. Incomplete-ring takeovers require the new
+field on both sides. Both flags preserve the existing outbound sequence margins
+and cached-picture index reservations. Neither relay
 endpoint receives media keys. The bounded hold timeout ends an abandoned replay gate by
 discarding queued ciphertext; it cannot identify an adopted live recipient
 safely. Normal planned-move timeout behavior is unchanged. Every terminal
@@ -231,9 +238,12 @@ When resume deferred recovery for selected input and the drain is incomplete,
 or a complete plan later loses packets or its hold vanishes (including restart),
 the plane calls
 `POST /sessions/{id}/keyframe` on the worker. This uses its existing encrypted,
-rate-bounded PLI path. An incomplete plan with no selected media uses the
-worker's ordinary resume
-recovery and receives no second control-plane keyframe request. Overflow or
+rate-bounded PLI path. The plane retains the first possibly adopted tenure's
+deferred-recovery decision across confirmation retries. An empty expiry receipt
+cannot cancel it: idempotent resume retains the worker's first adoption flags.
+A new target records a new recovery decision. On first adoption, an incomplete
+plan with no selected media uses the worker's ordinary resume recovery and receives no
+second control-plane keyframe request. Overflow or
 expiry can leave a partial ring; any retained media is delivered before PLI.
 When nothing remains, or buffering is off or the relay restarts before preparing
 input, normal frame-cache/PLI recovery applies. On a badly incomplete ring,

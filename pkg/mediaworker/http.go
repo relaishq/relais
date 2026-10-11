@@ -47,7 +47,7 @@ type ResumeRequest struct {
 	SequenceMargin        uint16                  `json:"sequence_margin"`
 	SRTCPIndexMargin      uint32                  `json:"srtcp_index_margin"`
 	RelayReplay           bool                    `json:"relay_replay"`
-	RelayInputReplay      bool                    `json:"relay_input_replay"`
+	RelayInputReplay      bool                    `json:"relay_input_replay,omitempty"`
 }
 type ResumeReply struct {
 	ID string `json:"id"`

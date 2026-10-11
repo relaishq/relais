@@ -155,8 +155,8 @@ type ResumeOptions struct {
 	// RelayReplay means the gated caller-media ring has complete codec continuity.
 	// Keep the existing codec chain: no cached old pictures or proactive PLI.
 	RelayReplay bool
-	// RelayInputReplay means retained caller media is scheduled for delivery,
-	// even when the ring is incomplete. Skip cached pictures and resume PLI;
+	// RelayInputReplay means incomplete caller media is scheduled for delivery.
+	// Complete rings use RelayReplay. Skip cached pictures and resume PLI;
 	// the control plane requests a keyframe after an incomplete drain.
 	// Empty rings leave this false and use normal frame-cache/PLI recovery.
 	RelayInputReplay bool

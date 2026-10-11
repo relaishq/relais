@@ -213,6 +213,7 @@ type takeoverState struct {
 	transientResume         bool
 	resumeState             []byte
 	resumeTarget            *registration
+	deferredRecovery        bool // The possibly adopted tenure skipped its own resume PLI.
 	agentFailure            error
 	checkpointAge           time.Duration
 	snapshotAge             time.Duration
@@ -579,11 +580,6 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		}
 		res.Result.StateBytes = len(state)
 		started := time.Now()
-		if !pending.transientResume {
-			pending.attempts++
-			pending.resumeState = state
-			pending.resumeTarget = target
-		}
 		if !pending.planned {
 			pending.plannedState = nil
 		}
@@ -599,9 +595,18 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		// Retained input takes precedence over cached pictures even if a gap
 		// broke codec continuity. Cached replay would gate and discard this video.
 		// Require the post-drain PLI backstop before deferring resume recovery.
-		relayInputReplay := pending.replayPlan != nil && len(pending.replayPlan.Windows) > 0 && canRecoverReplay
+		relayReplay := pending.replayPlan != nil && pending.replayPlan.Complete && canRecoverReplay
+		relayInputReplay := pending.replayPlan != nil && !pending.replayPlan.Complete && len(pending.replayPlan.Windows) > 0 && canRecoverReplay
+		if !pending.transientResume {
+			pending.attempts++
+			pending.resumeState = state
+			pending.resumeTarget = target
+			// Confirmation is idempotent and retains the first adoption's flags.
+			// An expired receipt can lose its windows, but not this obligation.
+			pending.deferredRecovery = relayReplay || relayInputReplay
+		}
 		_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Kind: kind, RelayInputReplay: relayInputReplay, InputMayBeDuplicated: len(duplicateWindows) > 0, DuplicateWindows: duplicateWindows, Lease: transferred,
-			Context: ctx, CallerSequenceReserve: pending.reserve, CheckpointAge: pending.checkpointAge, SnapshotAge: pending.snapshotAge, CheckpointStoredAt: pending.checkpointStoredAt, SequenceMargin: margin, SRTCPIndexMargin: rtcpMargin, RelayReplay: pending.replayPlan != nil && pending.replayPlan.Complete && canRecoverReplay})
+			Context: ctx, CallerSequenceReserve: pending.reserve, CheckpointAge: pending.checkpointAge, SnapshotAge: pending.snapshotAge, CheckpointStoredAt: pending.checkpointStoredAt, SequenceMargin: margin, SRTCPIndexMargin: rtcpMargin, RelayReplay: relayReplay})
 		res.Result.Resume += time.Since(started)
 		p.unreserve(target)
 		if err == nil {
@@ -622,7 +627,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 					pending.transientResume = true
 					return
 				}
-				if (pending.replayPlan.Complete || relayInputReplay) && !res.Result.RelayReplayComplete && canRecoverReplay {
+				if pending.deferredRecovery && !res.Result.RelayReplayComplete && canRecoverReplay {
 					if err := recovery.RequestKeyframe(ctx, c.id); err != nil {
 						pending.transientResume = true
 						return

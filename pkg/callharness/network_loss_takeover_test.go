@@ -152,12 +152,54 @@ func TestNetworkLossTakeoverRetainsVideo(t *testing.T) {
 				if scenario.drop == vp8PayloadType {
 					require.Len(t, lost, 1, "only the deliberately dropped picture may be lost")
 					require.Equal(t, droppedPicture, lost[0].PictureID)
+					require.Positive(t, report.Moves[0].Recovery.FirstDecodedPLIAfterKill, "a PLI response must decode after the hole")
+					decodeNetworkLossAfterPLI(t, ctx, call, report, killed)
 				} else {
 					require.Empty(t, lost, "a missing audio packet must not discard retained video")
 				}
 			})
 		}
 	})
+}
+
+// Decode the received PLI keyframe and every subsequent received frame with
+// ffmpeg, including interframes. A returned picture alone does not prove repair.
+func decodeNetworkLossAfterPLI(t *testing.T, ctx context.Context, call *Call, report *Report, killed time.Time) {
+	t.Helper()
+	for i, track := range report.Tracks {
+		if track.Video == nil {
+			continue
+		}
+		frames, size := call.rec.decodeInput(i)
+		first := -1
+		call.rec.mu.Lock()
+		for j, frame := range frames {
+			source := call.rec.sentVideoFrames[frame.pictureID]
+			if frame.keyframe && source.pli && source.requestedAt >= killed.Sub(report.StartedAt) {
+				first = j
+				break
+			}
+		}
+		call.rec.mu.Unlock()
+		require.NotEqual(t, -1, first, "received history must contain the requested keyframe")
+		tail := frames[first:]
+		require.Greater(t, len(tail), minimumDecodedSamples)
+		interframes := 0
+		for _, frame := range tail {
+			if !frame.keyframe {
+				interframes++
+			}
+		}
+		require.Positive(t, interframes, "recovery must include pictures after the PLI keyframe")
+		decoded := fullDecode(ctx, tail, size)
+		require.Empty(t, decoded.Skipped)
+		require.Empty(t, decoded.Errors)
+		require.Empty(t, decoded.Failure)
+		require.Equal(t, len(tail), decoded.FramesDecoded)
+		t.Logf("NETWORK_LOSS_PLI_DECODE frames=%d interframes=%d decoded=%d", len(tail), interframes, decoded.FramesDecoded)
+		return
+	}
+	t.Fatal("no received video track")
 }
 
 type networkLossLostFrame struct {
