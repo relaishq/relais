@@ -54,6 +54,22 @@ func TestAcceptanceFreshnessGate(t *testing.T) {
 			event.Audio = measureFreshness(units, time.Second, 1400*time.Millisecond, limit, 0, FreshnessPolicy{AbsoluteLatencyCeiling: time.Second})
 		case "weak-lateness-cap":
 			event.Audio = measureFreshness(units, time.Second, 1400*time.Millisecond, limit, 0, FreshnessPolicy{LiveLatenessCap: time.Second})
+		case "matched-weak-recovery", "matched-short-recovery":
+			required.RecoveryLimit = 5 * time.Second
+			if scenario == "matched-short-recovery" {
+				required.RecoveryLimit = time.Second
+			}
+			event.Audio = measureFreshness(units, time.Second, 1400*time.Millisecond, limit, 0, required)
+		case "matched-weak-stability":
+			required.StabilityWindow = 50 * time.Millisecond
+			event.Audio = measureFreshness(units, time.Second, 1400*time.Millisecond, limit, 0, required)
+		case "matched-weak-lateness-cap":
+			required.LiveLatenessCap = time.Second
+			event.Audio = measureFreshness(units, time.Second, 1400*time.Millisecond, limit, 0, required)
+		case "matched-stronger-policy":
+			required.StabilityWindow = 4 * time.Second
+			required.LiveLatenessCap = 100 * time.Millisecond
+			event.Audio = measureFreshness(units, time.Second, 1400*time.Millisecond, limit, 0, required)
 		case "network-profile":
 			for i := range units {
 				units[i].returnedAt = units[i].at + 300*time.Millisecond
@@ -87,6 +103,7 @@ func TestAcceptanceFreshnessGate(t *testing.T) {
 		{"recovered", ""},
 		{"network-profile", ""},
 		{"stronger-policy", ""},
+		{"matched-stronger-policy", ""},
 		{"misnamed", "must be named TestAcceptance"},
 		{"loss-only", ""},
 		{"interleaved", "freshness"},
@@ -99,10 +116,16 @@ func TestAcceptanceFreshnessGate(t *testing.T) {
 		{"weak-stability", "stability window"},
 		{"weak-ceiling", "absolute ceiling"},
 		{"weak-lateness-cap", "live lateness cap"},
+		{"matched-weak-recovery", "recovery limit"},
+		{"matched-short-recovery", "recovery limit"},
+		{"matched-weak-stability", "stability window"},
+		{"matched-weak-lateness-cap", "live lateness cap"},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			cmd := exec.Command(os.Args[0], "-test.run=^TestAcceptanceFreshnessGate$")
-			cmd.Env = append(os.Environ(), probe+"="+scenario.name)
+			// These synchronous policy probes start no background workers. Avoid
+			// the race runtime's one-second exit wait for each passing child.
+			cmd.Env = append(os.Environ(), probe+"="+scenario.name, "GORACE="+os.Getenv("GORACE")+" atexit_sleep_ms=0")
 			output, err := cmd.CombinedOutput()
 			if scenario.reason == "" {
 				require.NoError(t, err, "%s", output)

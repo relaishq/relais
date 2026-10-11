@@ -15,6 +15,8 @@ import (
 // window first. Use
 // StrictAcceptancePolicy for in-process/LAN tests; #37 network profiles must
 // pass their required absolute ceiling explicitly.
+// The recovery limit is always 2s, stability is at least 3s, and live lateness
+// is at most 200ms, even if both the measurement and required policy are weaker.
 // Audio is required; video is required when the call expects video. Unknown
 // or failed freshness cannot pass this gate.
 func RequireFreshnessRecovered(t interface {
@@ -28,6 +30,10 @@ func RequireFreshnessRecovered(t interface {
 		return
 	}
 	required = required.defaults()
+	strict := StrictAcceptancePolicy()
+	required.RecoveryLimit = strict.RecoveryLimit
+	required.StabilityWindow = max(required.StabilityWindow, strict.StabilityWindow)
+	required.LiveLatenessCap = min(required.LiveLatenessCap, strict.LiveLatenessCap)
 	tracks := []struct {
 		name   string
 		report FreshnessReport
