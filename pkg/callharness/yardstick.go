@@ -13,15 +13,19 @@ import (
 )
 
 const (
-	baselineWindow           = time.Second
-	freshnessDeadline        = 2 * time.Second
-	freshnessStabilityWindow = 3 * time.Second
-	contentWindowMargin      = 250 * time.Millisecond
-	contentSettleWindow      = 500 * time.Millisecond
-	baselineMinSamples       = 10
-	baselineSpreadLimit      = 20 * time.Millisecond
-	freshnessTolerance       = 10 * time.Millisecond
-	freshnessSustainedUnits  = 3
+	baselineWindow            = time.Second
+	freshnessDeadline         = 2 * time.Second
+	freshnessStabilityWindow  = 3 * time.Second
+	contentWindowMargin       = 250 * time.Millisecond
+	contentSettleWindow       = 500 * time.Millisecond
+	baselineMinSamples        = 10
+	baselineSpreadLimit       = 20 * time.Millisecond
+	freshnessTolerance        = 10 * time.Millisecond
+	freshnessSustainedUnits   = 3
+	freshnessLateWindowUnits  = 10
+	freshnessLateWindowLimit  = 3
+	freshnessLatePercentLimit = 10
+	freshnessAbsoluteCeiling  = 50 * time.Millisecond
 )
 
 // MetricVerdict separates trust from an observed failure. Unknown metrics must
@@ -43,13 +47,17 @@ type MetricVerdict struct {
 // receipt before Start means cache, regardless of who replays the frame.
 // FirstNewContent skips those prior receipts. Its classes are keyframe (PLI/FIR
 // requested at/after Start), outage media (sent from WindowStart until resume
-// with latency above baseline p95+tolerance), or live (normal-age content,
-// including natural keyframes and ordinary in-flight frames).
+// with latency above baseline p95+tolerance), natural keyframe (a keyframe
+// restarting a broken decode chain without a post-event request), or live.
+// Ticket #27 passes its first-new-content gate only for "outage media"; a
+// natural keyframe wait does not pass it. Ordinary in-flight frames are live.
 // FirstNewFrame is event-to-decode for that new content. FirstLiveFrame retains
 // event-to-decode for the first frame sent at/after MediaResumedAt.
 // Each verdict applies to one metric. Inconclusive is informational: at least
 // one metric is unknown. Failed means at least one trusted metric failed.
 // Missing resume/decoded content/recovery are failures, not uncertainty.
+// Conflicting payload identities fail the affected video metrics, including
+// when their observation window or another metric is inconclusive.
 type EventMeasurement struct {
 	VideoExpected                                                 bool
 	AudioPause, VideoPause                                        time.Duration
@@ -78,47 +86,78 @@ type EventMeasurement struct {
 // no earlier than that event's measured audio/video recovery, or its end/resume
 // if recovery failed. A failed event cannot truncate every later baseline.
 // BaselineStart records the actual window start. Ten samples are required;
-// p95-minus-median must be <=20ms. PeakLatency includes every post-event cache/outage return,
+// p95-minus-median must be <=20ms. PeakLatency includes every post-event
+// cache/outage return,
 // even repeated content. Repeats cannot add samples or confirm recovery, but
 // a stale repeat interrupts a run of fresh units.
 // Recovery is evaluated only through EvaluationEnd: event start plus
 // RecoveryLimit (default 2s) and StabilityWindow (default 3s), clipped at the
-// next event/hangup. Later units do not affect this event, including its peak.
+// next event/hangup. StabilityObserved measures the observed portion after
+// Start+RecoveryLimit. A shortened window is inconclusive, unless a known
+// absolute-latency or identity failure applies. Later units do not affect this
+// event, including its peak.
 // BackToBaseline is the start of the last fresh run confirmed by three unique
 // units. Any post-resume receipt sent before resume breaks the run, regardless
-// of latency. Three consecutive late live units also break it. Shorter live
-// lateness streaks do not break recovery; JitterUnits and JitterMaxExcess report
+// of latency. After a candidate run starts, 3 or more late returns in any 10
+// consecutive eligible live returns break it. At window end, more than 10%
+// late returns since the final candidate start also break it. LateWindowUnits,
+// LateWindowLimit and LatePercentLimit record these rules. Fresh duplicates
+// cannot improve confirmation or dilute either budget. LiveUnits/LateLiveUnits
+// count eligible post-resume returns across the whole evaluation. Short live
+// lateness streaks remain diagnostics, independently of the budget verdict.
+// JitterUnits and JitterMaxExcess report
 // their count and maximum excess over baseline p95+tolerance. Repeats cannot
 // confirm recovery. LastAboveTolerance records the last above-threshold unit.
 // No recovery at window end, or recovery after RecoveryLimit, fails a trusted
 // metric. FirstBaseline* retain the first call baseline; LastingLag flags a
 // relative median/p95 above that trusted baseline by more than tolerance.
+// LastingLag is diagnostic-only: small-sample p95 changes do not gate.
+// AbsoluteLag fails when the trusted first baseline median exceeds the
+// configurable AbsoluteLatencyCeiling (50ms by default for in-process/LAN).
 // Freshness measures content age independently of whether it decoded.
 type FreshnessReport struct {
-	Verdict                                       MetricVerdict
-	RecoveryLimit, StabilityWindow, EvaluationEnd time.Duration
-	JitterUnits                                   int
-	JitterMaxExcess                               time.Duration
-	FirstBaselineTrusted                          bool
-	LastAboveTolerance                            time.Duration
-	FirstBaselineSamples                          int
-	FirstBaselineMedian, FirstBaselineP95         time.Duration
-	LastingLag                                    bool
-	BaselineStart                                 time.Duration
-	BaselineSamples, PostEventSamples             int
-	BaselineMedian, BaselineP95                   time.Duration
-	PeakLatency, PeakAboveBaseline                time.Duration
-	BackToBaseline                                time.Duration
-	Recovered                                     bool
-	Tolerance                                     time.Duration
-	SustainedUnits                                int
-	SpreadLimit                                   time.Duration
+	Verdict                                            MetricVerdict
+	RecoveryLimit, StabilityWindow, EvaluationEnd      time.Duration
+	StabilityObserved                                  time.Duration
+	AbsoluteLatencyCeiling                             time.Duration
+	AbsoluteLag                                        bool
+	LateWindowUnits, LateWindowLimit, LatePercentLimit int
+	LiveUnits, LateLiveUnits                           int
+	JitterUnits                                        int
+	JitterMaxExcess                                    time.Duration
+	FirstBaselineTrusted                               bool
+	LastAboveTolerance                                 time.Duration
+	FirstBaselineSamples                               int
+	FirstBaselineMedian, FirstBaselineP95              time.Duration
+	LastingLag                                         bool
+	BaselineStart                                      time.Duration
+	BaselineSamples, PostEventSamples                  int
+	BaselineMedian, BaselineP95                        time.Duration
+	PeakLatency, PeakAboveBaseline                     time.Duration
+	BackToBaseline                                     time.Duration
+	Recovered                                          bool
+	Tolerance                                          time.Duration
+	SustainedUnits                                     int
+	SpreadLimit                                        time.Duration
 }
 
 // FreshnessPolicy configures event recovery attribution. Nonpositive values
-// use the defaults: 2s to recover followed by 3s of stability observation.
+// use defaults: 2s recovery, 3s stability and a 50ms absolute median ceiling.
+// Set the ceiling per call for a different network latency profile.
+// RecoveryLimit is explicit through CallOptions.Freshness and retained on the
+// report. Buffered-takeover acceptance (#27) uses 2s without race via
+// RequireFreshnessRecovered. Existing phase-1 scenarios only report freshness,
+// with or without race. Defaults and measured recovery times never change
+// under the race detector.
 type FreshnessPolicy struct {
 	RecoveryLimit, StabilityWindow time.Duration
+	AbsoluteLatencyCeiling         time.Duration
+}
+
+// EvaluationWindow is the full event observation duration, applying defaults.
+func (p FreshnessPolicy) EvaluationWindow() time.Duration {
+	p = p.defaults()
+	return p.RecoveryLimit + p.StabilityWindow
 }
 
 func (p FreshnessPolicy) defaults() FreshnessPolicy {
@@ -127,6 +166,9 @@ func (p FreshnessPolicy) defaults() FreshnessPolicy {
 	}
 	if p.StabilityWindow <= 0 {
 		p.StabilityWindow = freshnessStabilityWindow
+	}
+	if p.AbsoluteLatencyCeiling <= 0 {
+		p.AbsoluteLatencyCeiling = freshnessAbsoluteCeiling
 	}
 	return p
 }
@@ -300,9 +342,6 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 		m.AudioLoss.untrust("content settle window truncated by hangup")
 		m.VideoLoss.untrust("content settle window truncated by hangup")
 	}
-	if r.contentIdentityErrors > 0 {
-		m.VideoLoss.untrust("conflicting video content identities")
-	}
 	if r.sentVideo.Frames > 32768 {
 		m.VideoLoss.untrust("video PictureID wrapped; attribution requires #33")
 	}
@@ -351,7 +390,7 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 	m.Audio = measureFreshness(audio, move.Start, m.MediaResumedAt, limit, baselineFloor, r.freshnessPolicy)
 	if m.VideoExpected {
 		m.Video = measureFreshness(video, move.Start, m.MediaResumedAt, limit, baselineFloor, r.freshnessPolicy)
-		if r.contentIdentityErrors > 0 || r.sentVideo.Frames > 32768 {
+		if r.sentVideo.Frames > 32768 {
 			m.Video.Verdict.untrust("video identity attribution unavailable")
 		}
 	} else {
@@ -405,7 +444,7 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 		if m.FirstLiveFrame == 0 {
 			m.FirstLiveVerdict.fail("no decoded frame sent after media resumed before limit")
 		}
-		if r.contentIdentityErrors > 0 || r.sentVideo.Frames > 32768 {
+		if r.sentVideo.Frames > 32768 {
 			for _, reason := range []string{"video identity attribution unavailable"} {
 				m.FirstContentVerdict.untrust(reason)
 				m.FirstNewContentVerdict.untrust(reason)
@@ -414,7 +453,7 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 		}
 		// Latency distinguishes normal in-flight live content from outage replay.
 		// Keyframe provenance and prior receipt remain known with a noisy baseline.
-		if !m.Video.Verdict.Trusted {
+		if !m.Video.baselineTrusted() {
 			if m.FirstContent == "live" || m.FirstContent == "outage media" {
 				m.FirstContentVerdict.untrust("video baseline cannot distinguish live from outage media")
 			}
@@ -423,8 +462,24 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 			}
 		}
 	}
+	r.failIdentityMetrics(&m)
 	m.updateJudgment()
 	return m
+}
+
+// Identity conflicts prove corruption independently of timing/coverage. A
+// known failure remains trusted even if another quantity is unmeasurable.
+func (r *recorder) failIdentityMetrics(m *EventMeasurement) {
+	if r.contentIdentityErrors == 0 {
+		return
+	}
+	const reason = "conflicting video content identities"
+	for _, v := range []*MetricVerdict{&m.VideoLoss, &m.Video.Verdict, &m.FirstContentVerdict, &m.FirstNewContentVerdict, &m.FirstLiveVerdict} {
+		v.Trusted, v.Failed = true, true
+		if !slices.Contains(v.Reasons, reason) {
+			v.Reasons = append(v.Reasons, reason)
+		}
+	}
 }
 
 func classifyContent(frame frameMark, start, windowStart, resumed time.Duration, f FreshnessReport) string {
@@ -444,6 +499,9 @@ func classifyContent(frame frameMark, start, windowStart, resumed time.Duration,
 	}
 	if source.at >= windowStart && source.at < resumed && arrived-source.at > f.BaselineP95+f.Tolerance {
 		return "outage media"
+	}
+	if frame.restartsDecodeChain {
+		return "natural keyframe"
 	}
 	return "live"
 }
@@ -529,7 +587,8 @@ func measureFreshness(units []contentUnit, start, resumed, limit, baselineFloor 
 	if len(policies) > 0 {
 		policy = policies[0].defaults()
 	}
-	f := FreshnessReport{RecoveryLimit: policy.RecoveryLimit, StabilityWindow: policy.StabilityWindow, EvaluationEnd: min(limit, start+policy.RecoveryLimit+policy.StabilityWindow), BaselineStart: max(0, start-baselineWindow, baselineFloor), Tolerance: freshnessTolerance, SustainedUnits: freshnessSustainedUnits, SpreadLimit: baselineSpreadLimit}
+	f := FreshnessReport{RecoveryLimit: policy.RecoveryLimit, StabilityWindow: policy.StabilityWindow, EvaluationEnd: min(limit, start+policy.RecoveryLimit+policy.StabilityWindow), BaselineStart: max(0, start-baselineWindow, baselineFloor), Tolerance: freshnessTolerance, SustainedUnits: freshnessSustainedUnits, SpreadLimit: baselineSpreadLimit, LateWindowUnits: freshnessLateWindowUnits, LateWindowLimit: freshnessLateWindowLimit, LatePercentLimit: freshnessLatePercentLimit, AbsoluteLatencyCeiling: policy.AbsoluteLatencyCeiling}
+	f.StabilityObserved = max(0, f.EvaluationEnd-start-f.RecoveryLimit)
 	var baseline []time.Duration
 	var post []contentUnit
 	seen := map[string]bool{}
@@ -569,6 +628,12 @@ func measureFreshness(units []contentUnit, start, resumed, limit, baselineFloor 
 		}
 		lateLive, lateExcess = 0, 0
 	}
+	var recent [freshnessLateWindowUnits]bool
+	recentNext, recentLate, runLive, runLate := 0, 0, 0, 0
+	resetRun := func() {
+		sustained, runStart, recentNext, recentLate, runLive, runLate = 0, 0, 0, 0, 0, 0
+		recent = [freshnessLateWindowUnits]bool{}
+	}
 	counted := map[string]bool{}
 	for _, unit := range post {
 		latency := unit.returnedAt - unit.at
@@ -582,37 +647,66 @@ func measureFreshness(units []contentUnit, start, resumed, limit, baselineFloor 
 		switch {
 		case unit.at < resumed:
 			flushJitter()
-			sustained, runStart = 0, 0
+			resetRun()
+			counted[unit.identity] = true
+			continue
 		case excess > 0:
 			lateLive++
 			lateExcess = max(lateExcess, excess)
-			if lateLive >= f.SustainedUnits {
-				sustained, runStart = 0, 0
-			}
+
 		default:
 			flushJitter()
-			if !counted[unit.identity] && !unit.replayed {
-				if sustained == 0 {
-					runStart = unit.returnedAt - start
-				}
-				sustained++
+			if counted[unit.identity] || unit.replayed {
+				continue
 			}
+			if sustained == 0 {
+				runStart = unit.returnedAt - start
+			}
+			sustained++
 		}
 		counted[unit.identity] = true
+		f.LiveUnits++
+		late := excess > 0
+		if late {
+			f.LateLiveUnits++
+		}
+		if sustained == 0 {
+			continue
+		}
+		runLive++
+		if recent[recentNext] {
+			recentLate--
+		}
+		recent[recentNext] = late
+		recentNext = (recentNext + 1) % len(recent)
+		if late {
+			recentLate++
+			runLate++
+		}
+		if recentLate >= f.LateWindowLimit {
+			resetRun()
+		}
 	}
 	flushJitter()
-	f.Recovered = resumed > 0 && sustained >= f.SustainedUnits
+	f.Recovered = resumed > 0 && sustained >= f.SustainedUnits && runLate*100 <= runLive*f.LatePercentLimit
 	if f.Recovered {
 		f.BackToBaseline = runStart
 	}
 	f.PeakAboveBaseline = max(0, f.PeakLatency-f.BaselineP95)
-	f.FirstBaselineTrusted = f.BaselineSamples >= baselineMinSamples && f.BaselineP95-f.BaselineMedian <= f.SpreadLimit
+	f.FirstBaselineTrusted = f.baselineTrusted()
 	f.updateVerdict()
 	return f
 }
 
+func (f FreshnessReport) baselineTrusted() bool {
+	return f.BaselineSamples >= baselineMinSamples && f.BaselineP95-f.BaselineMedian <= f.SpreadLimit
+}
+
 func (f *FreshnessReport) updateVerdict() {
 	f.Verdict = MetricVerdict{Trusted: true}
+	if f.StabilityObserved < f.StabilityWindow {
+		f.Verdict.untrust(fmt.Sprintf("stability window truncated: observed %s, need %s", f.StabilityObserved, f.StabilityWindow))
+	}
 	if f.BaselineSamples < baselineMinSamples {
 		f.Verdict.Trusted = false
 		f.Verdict.Reasons = append(f.Verdict.Reasons, fmt.Sprintf("baseline has %d samples (need %d)", f.BaselineSamples, baselineMinSamples))
@@ -621,19 +715,24 @@ func (f *FreshnessReport) updateVerdict() {
 		f.Verdict.Trusted = false
 		f.Verdict.Reasons = append(f.Verdict.Reasons, "baseline p95-minus-median exceeds 20ms")
 	}
+	if f.AbsoluteLatencyCeiling <= 0 {
+		f.AbsoluteLatencyCeiling = freshnessAbsoluteCeiling
+	}
+	f.AbsoluteLag = f.FirstBaselineTrusted && f.FirstBaselineSamples >= baselineMinSamples && f.FirstBaselineMedian > f.AbsoluteLatencyCeiling
+	if f.AbsoluteLag {
+		// The absolute failure is known even if post-event stability was truncated.
+		f.Verdict.Trusted = true
+		f.Verdict.fail(fmt.Sprintf("AbsoluteLag: first baseline median %s exceeds %s", f.FirstBaselineMedian, f.AbsoluteLatencyCeiling))
+	}
+	f.LastingLag = f.FirstBaselineTrusted && f.FirstBaselineSamples >= baselineMinSamples && (f.BaselineMedian > f.FirstBaselineMedian+f.Tolerance || f.BaselineP95 > f.FirstBaselineP95+f.Tolerance)
 	if f.Verdict.Trusted {
 		switch {
 		case !f.Recovered:
 			f.Verdict.Failed = true
-			f.Verdict.Reasons = append(f.Verdict.Reasons, "freshness not recovered before limit (need 3 sustained units)")
+			f.Verdict.Reasons = append(f.Verdict.Reasons, "freshness not recovered before window end (need 3 unique units and live lateness within budget)")
 		case f.BackToBaseline > f.RecoveryLimit:
 			f.Verdict.Failed = true
 			f.Verdict.Reasons = append(f.Verdict.Reasons, fmt.Sprintf("freshness recovery exceeds %s", f.RecoveryLimit))
-		}
-		f.LastingLag = f.FirstBaselineTrusted && f.FirstBaselineSamples >= baselineMinSamples && (f.BaselineMedian > f.FirstBaselineMedian+f.Tolerance || f.BaselineP95 > f.FirstBaselineP95+f.Tolerance)
-		if f.LastingLag {
-			f.Verdict.Failed = true
-			f.Verdict.Reasons = append(f.Verdict.Reasons, "relative baseline exceeds first baseline plus tolerance (lasting lag)")
 		}
 	}
 }
@@ -664,7 +763,7 @@ func (m EventMeasurement) Summary() string {
 }
 
 func (f FreshnessReport) summary() string {
-	return fmt.Sprintf("baseline_n=%d median=%s p95=%s peak=%s above_p95=%s back=%s tolerance=%s sustained=%d spread_limit=%s baseline_start=%s first_n=%d first_median=%s first_p95=%s first_trusted=%t lasting_lag=%t last_stale=%s recovery_limit=%s stability_window=%s evaluation_end=%s jitter_units=%d jitter_max_excess=%s verdict=%s", f.BaselineSamples, f.BaselineMedian, f.BaselineP95, f.PeakLatency, f.PeakAboveBaseline, observedDuration(f.BackToBaseline, f.Recovered), f.Tolerance, f.SustainedUnits, f.SpreadLimit, f.BaselineStart, f.FirstBaselineSamples, f.FirstBaselineMedian, f.FirstBaselineP95, f.FirstBaselineTrusted, f.LastingLag, observedDuration(f.LastAboveTolerance, f.LastAboveTolerance > 0), f.RecoveryLimit, f.StabilityWindow, f.EvaluationEnd, f.JitterUnits, f.JitterMaxExcess, f.Verdict.Summary())
+	return fmt.Sprintf("baseline_n=%d median=%s p95=%s peak=%s above_p95=%s back=%s tolerance=%s sustained=%d spread_limit=%s baseline_start=%s first_n=%d first_median=%s first_p95=%s first_trusted=%t lasting_lag=%t last_stale=%s recovery_limit=%s stability_window=%s evaluation_end=%s jitter_units=%d jitter_max_excess=%s stability_observed=%s late_window_units=%d late_window_limit=%d late_percent_limit=%d live_units=%d late_live_units=%d absolute_ceiling=%s absolute_lag=%t verdict=%s", f.BaselineSamples, f.BaselineMedian, f.BaselineP95, f.PeakLatency, f.PeakAboveBaseline, observedDuration(f.BackToBaseline, f.Recovered), f.Tolerance, f.SustainedUnits, f.SpreadLimit, f.BaselineStart, f.FirstBaselineSamples, f.FirstBaselineMedian, f.FirstBaselineP95, f.FirstBaselineTrusted, f.LastingLag, observedDuration(f.LastAboveTolerance, f.LastAboveTolerance > 0), f.RecoveryLimit, f.StabilityWindow, f.EvaluationEnd, f.JitterUnits, f.JitterMaxExcess, f.StabilityObserved, f.LateWindowUnits, f.LateWindowLimit, f.LatePercentLimit, f.LiveUnits, f.LateLiveUnits, f.AbsoluteLatencyCeiling, f.AbsoluteLag, f.Verdict.Summary())
 }
 
 func observedDuration(d time.Duration, observed bool) string {

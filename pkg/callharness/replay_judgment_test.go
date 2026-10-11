@@ -112,10 +112,10 @@ func TestConclusiveCoverageRejectsUnknownRun(t *testing.T) {
 }
 func TestSequentialBaselineKeepsFirstAndRecoversAfterFailure(t *testing.T) {
 	r := newRecorder()
-	r.hungUpAt = 6 * time.Second
-	r.moves = []moveRecord{{kind: "takeover", start: r.start.Add(1500 * time.Millisecond), end: r.start.Add(1800 * time.Millisecond)}, {kind: "takeover", start: r.start.Add(4 * time.Second), end: r.start.Add(4200 * time.Millisecond)}}
-	r.tracks = []*trackRecord{{kind: kindAudio, arrivals: []time.Duration{time.Second, 1800 * time.Millisecond, 3500 * time.Millisecond, 4200 * time.Millisecond}, headers: []rtpMark{{seq: 1}, {seq: 8193}, {seq: 8194}, {seq: 16386}}}}
-	for i := 0; i < 240; i++ {
+	r.hungUpAt = 13 * time.Second
+	r.moves = []moveRecord{{kind: "takeover", start: r.start.Add(1500 * time.Millisecond), end: r.start.Add(1800 * time.Millisecond)}, {kind: "takeover", start: r.start.Add(7 * time.Second), end: r.start.Add(7200 * time.Millisecond)}}
+	r.tracks = []*trackRecord{{kind: kindAudio, arrivals: []time.Duration{time.Second, 1800 * time.Millisecond, 6500 * time.Millisecond, 7200 * time.Millisecond}, headers: []rtpMark{{seq: 1}, {seq: 8193}, {seq: 8194}, {seq: 16386}}}}
+	for i := 0; i < 600; i++ {
 		at := 500*time.Millisecond + time.Duration(i)*20*time.Millisecond
 		latency := time.Millisecond
 		if at >= 1500*time.Millisecond {
@@ -131,7 +131,7 @@ func TestSequentialBaselineKeepsFirstAndRecoversAfterFailure(t *testing.T) {
 	require.Equal(t, time.Millisecond, second.FirstBaselineP95)
 	require.Equal(t, 100*time.Millisecond, second.BaselineP95)
 	require.True(t, second.LastingLag)
-	require.True(t, second.Verdict.Failed)
+	require.False(t, second.Verdict.Failed, "LastingLag is diagnostic-only")
 }
 
 func TestExplicitRequestAtTimeZeroAndAfterHangup(t *testing.T) {
@@ -157,7 +157,7 @@ func TestLastFreshRunStartsAfterStaleTailAndFailsAfterTwoSeconds(t *testing.T) {
 		at := 3200*time.Millisecond + time.Duration(i)*20*time.Millisecond
 		units = append(units, contentUnit{at: at - time.Millisecond, returnedAt: at})
 	}
-	f := measureFreshness(units, time.Second, 1400*time.Millisecond, 4*time.Second, 0)
+	f := measureFreshness(units, time.Second, 1400*time.Millisecond, 6*time.Second, 0)
 	require.True(t, f.Recovered)
 	require.Equal(t, 2200*time.Millisecond, f.BackToBaseline)
 	require.Equal(t, 2100*time.Millisecond, f.LastAboveTolerance)

@@ -209,7 +209,8 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	case err := <-sent:
 		senderJoined = true
 		return result{}, fmt.Errorf("media ended before observation finished: %v", err)
-	case <-time.After(after):
+	// Even developer runs observe the full default freshness window.
+	case <-time.After(max(after, (callharness.FreshnessPolicy{}).EvaluationWindow())):
 	}
 	observedUntil := time.Now()
 	stopMedia()

@@ -184,12 +184,13 @@ type rtpMark struct {
 
 // frameMark is a complete video frame the caller received.
 type frameMark struct {
-	receivedAt   time.Duration
-	at           time.Duration
-	decodable    bool
-	firstArrival time.Duration
-	source       sentVideoFrame
-	pictureID    uint16
+	restartsDecodeChain bool
+	receivedAt          time.Duration
+	at                  time.Duration
+	decodable           bool
+	firstArrival        time.Duration
+	source              sentVideoFrame
+	pictureID           uint16
 }
 
 // consentSample is the caller's running totals of consent checks sent and
@@ -333,17 +334,18 @@ func (r *recorder) moveReports() []MoveReport {
 			current *FreshnessReport
 			first   FreshnessReport
 		}{{&report.Measurement.Audio, firstAudio}, {&report.Measurement.Video, firstVideo}} {
-			pair.current.FirstBaselineTrusted = pair.first.Verdict.Trusted
+			pair.current.FirstBaselineTrusted = pair.first.baselineTrusted()
 			pair.current.FirstBaselineSamples = pair.first.BaselineSamples
 			pair.current.FirstBaselineMedian = pair.first.BaselineMedian
 			pair.current.FirstBaselineP95 = pair.first.BaselineP95
 			if pair.current == &report.Measurement.Audio || report.Measurement.VideoExpected {
 				pair.current.updateVerdict()
-				if pair.current == &report.Measurement.Video && (r.contentIdentityErrors > 0 || r.sentVideo.Frames > 32768) {
+				if pair.current == &report.Measurement.Video && r.sentVideo.Frames > 32768 {
 					pair.current.Verdict.untrust("video identity attribution unavailable")
 				}
 			}
 		}
+		r.failIdentityMetrics(&report.Measurement)
 		report.Measurement.updateJudgment()
 		if report.Kind == "takeover" {
 			previous := report.Measurement

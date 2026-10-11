@@ -27,7 +27,7 @@ func TestProbeFreshnessLatchesEarly(t *testing.T) {
 		arr := resumed + 100*time.Millisecond + time.Duration(i)*100*time.Millisecond
 		units = append(units, contentUnit{at: sent, returnedAt: arr, identity: "out" + string(rune(i))})
 	}
-	f := measureFreshness(units, start, resumed, 5*time.Second, 0)
+	f := measureFreshness(units, start, resumed, 6*time.Second, 0)
 	require.False(t, f.Recovered, "stale replay after an early fresh burst breaks recovery")
 	require.True(t, f.Verdict.Trusted)
 	require.True(t, f.Verdict.Failed)

@@ -32,6 +32,12 @@ const (
 // CallOptions shape the call the caller makes.
 type CallOptions struct {
 	// Freshness configures the caller's bounded recovery evaluation.
+	// Defaults stay strict (2s recovery + 3s stability), including under race.
+	// Acceptance callers such as #27 can set RecoveryLimit: 2*time.Second
+	// explicitly and use RequireFreshnessRecovered without race. Phase-1
+	// scenarios report freshness without gating it, with or without race.
+	// These defaults and measured recovery times remain strict. Allow
+	// enough media to observe Freshness.EvaluationWindow().
 	Freshness FreshnessPolicy
 
 	// InitialSequenceNumbers replaces random RTP starts for wrap tests. Nil
