@@ -27,6 +27,15 @@ harness topology. Nil selects Memory. External topology owns its stores in the
 separate processes. `relais-worker -frame-cache-off` disables writes and replay
 while keeping the takeover PLI enabled. It does not open a frame-cache client.
 
+When the relay has selected caller media for replay, it takes precedence over
+cached-picture replay even if the ring is incomplete. The private resume field
+`relay_input_replay` defers cached pictures and resume PLI; `relay_replay` still
+means complete codec continuity. The control plane requests a keyframe after an
+incomplete drain. Cached replay keeps its live-video gate whenever it runs.
+Empty rings and unavailable buffers retain the normal cache/PLI path. Overflow
+and expiry deliver any retained media before PLI; if no media remains, cache/PLI
+recovery applies. See [ADR 0005](../adr/0005-relay-buffer-replay.md).
+
 ## Binary records and encryption
 
 The plaintext record begins with version 1. Integers are big endian:
