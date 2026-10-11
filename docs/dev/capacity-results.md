@@ -1,14 +1,35 @@
 # Capacity evidence for #40
 
-## Hosted Linux — NOT-RUN
+## Hosted Linux — setup failed, capacity inconclusive
 
-The orchestrator must push `feat/40-capacity` and dispatch **Load generator calibration**
-(`load-calibration.yml`, `mode=capacity`), with `duration=30s`, `capacity_max=16`,
-`callers_per_process=2`. The default topology is emulated, unshaped LAN with
-three media workers and one relay/control/store. Supply `prices_json` only
-with explicit machine and transfer inputs. Record the runner specification,
-measured lower bounds or failure bracket, generator validity, N+1 results,
-drain and cost here after CI. The orchestrator posts the evidence on #31.
+Run **38135614200**, commit `3a6cad5`, dispatched `mode=capacity`,
+`duration=30s`, `capacity_max=16`, `callers_per_process=2`. The runner was
+Linux/amd64, Go 1.26.9, four logical CPUs on AMD EPYC 7763. The job selected
+`-topology=netns`: an emulated, unshaped LAN. Redis bound private port 16379;
+relay, control and two worker listeners started on their planned addresses.
+Private-listener and isolation probes completed before the caller launch.
+
+The first two-caller worker step failed before media. Its caller factory bound
+`0.0.0.0:0`, which the harness correctly refused with
+`callharness: caller socket must bind a specific IPv4 UDP address`.
+There were no successful media sends or caller reports. Worker and relay lower
+bounds were zero, and the planned load was **unverified**. This run provides
+setup evidence, not hosted service-capacity evidence. Artifacts were uploaded
+and the owned namespace cleanup completed.
+
+Rework passes the specific caller public-side bind address to the generator
+child and shares the namespace socket factory with `crash-run`. The real UDP
+listener regression failed on the old wildcard bind and passed after the fix.
+Plan/child-flag checks also cover the caller interface, private service binds,
+allowed networks, non-6379 Redis and password-file cleanup. The relay buffer
+switch remains unchanged pending the orchestrator's #35 merge.
+
+**NOT-RUN — corrected hosted namespace sample.** After committing/pushing the
+rework, the orchestrator must re-dispatch **Load generator calibration**
+(`load-calibration.yml`, `mode=capacity`) with the same inputs. Supply
+`prices_json` only with explicit machine and transfer inputs. Record the new
+runner, lower bounds or failure bracket, generator validity, N+1, drain and
+cost after CI. The orchestrator posts the evidence on #31.
 
 The earlier hosted **generator calibration**, run 38133371237 on main, is an
 input to sizing generators: four callers per process were valid, eight first
@@ -96,12 +117,14 @@ client. The final hook is on the shared Redis connection factory, and a real
 Redis regression proves that both encrypted PutState and NewRedisOwners/Owner
 produce command and byte counters. These **pre-fix command observations are
 lower bounds**, not final complete operation rates. Hosted CI must supply the
-complete counts. No further local ramp was run after the instrumentation fix.
+complete counts. The initial handoff had no local ramp after the instrumentation
+fix; the rework smoke below now covers the complete command hook.
 
 The stated budget is **256 client commands and 1 MiB of request+reply bytes per
 call-second**. All measured wire rates were below the byte budget, and the
 measured command lower bounds are below the command budget. Final complete
-operation-budget validation is **PARTIAL** pending hosted sampling. Checkpoint
+operation-budget validation for this older sample is **PARTIAL**; the rework
+smoke below has complete local counts. Hosted sampling remains required. Checkpoint
 cadence, snapshot-age safety and takeover margins were preserved. No cadence
 optimization was needed from the measured traffic; a hosted budget exceedance
 blocks planned-load approval and requires event-driven checkpoint work.
@@ -139,5 +162,56 @@ sample ran without this worker's checks overlapping it.
 | NOT-RUN | Hosted namespace sample, full harness matrix, region/far-caller, 60 s consent, sustained capacity | Orchestrator dispatch required; no Docker/VM was started |
 
 Final formatting, vet, pinned lint and build results are recorded separately
-in `bin/w40-vet.log`, `bin/w40-lint.log`, `bin/w40-build.log`. Changes remain
-uncommitted. No GitHub writes or delegation occurred.
+in `bin/w40-vet.log`, `bin/w40-lint.log`, `bin/w40-build.log`. The initial implementation was committed by the orchestrator as `3a6cad5`.
+Rework below remains uncommitted. No worker GitHub writes or delegation occurred.
+
+## Rework 1 — one bounded Mac loopback smoke
+
+Commit `3a6cad5` plus uncommitted caller-bind rework, darwin/arm64, Go 1.26.9.
+Exactly one local capacity command was run after the fix, with this worker's
+checks complete before media began:
+
+```sh
+./bin/relais-load -capacity -topology=loopback -capacity-start=2 \
+  -capacity-max=2 -duration=20s -callers-per-process=2 -workers=3 \
+  -output=bin/capacity-mac-rework1.json
+```
+
+Report/log: `bin/capacity-mac-rework1.json`, `bin/capacity-mac-rework1.log`,
+`bin/load-run-3566735516/`. Exit 0; all four generators valid, all **40**
+caller yardstick rows pass. Worker and relay lower bounds are two calls;
+relay throughput lower bound is **342.8 forwarded datagrams/s**. The derived
+two-call N+1 kill/move and drain both pass. Takeover audio/video gaps are
+447.5/457.2 ms; drain took **3.96 ms**. These are capped local observations.
+They do not prove the repaired Linux namespace path or a saturation limit.
+
+| Step | Complete application Redis commands/call-second | Redis wire bytes/call-second |
+| --- | ---: | ---: |
+| Worker | 67.88 | 86,428 |
+| Relay | 67.85 | 86,496 |
+| N+1 | 90.52 | 117,272 |
+| Drain | 68.14 | 85,888 |
+
+The final owners-client hook and heap byte-second fields were present at
+runtime. All steps are below 256 commands and 1 MiB of Redis wire bytes per
+call-second. Redis current RSS remains explicitly unavailable on this Mac;
+the relay-step mean allocated Redis memory is 0.92 MiB/call. Monetary cost
+remains NOT-RUN because no prices were supplied. No buffer or snapshot policy
+changed during rework.
+
+VERIFIED — UDP bind regression red (`0.0.0.0:<port>`) then green; parent/child
+namespace-and-bind flags and service address/auth checks pass. Evidence:
+`bin/w40-rework-bind-red.log`, `bin/w40-rework-bind-green.log`,
+`bin/w40-rework-unit.log`. Format/diff, vet, lint v2.14.0 (0 issues), Linux vet,
+Linux namespace-test cross-compilation and `make build` pass:
+`bin/w40-rework-vet.log`, `bin/w40-rework-lint.log`,
+`bin/w40-rework-linux-vet.log`, `bin/w40-rework-linux-test-build.log`,
+`bin/w40-rework-build.log`. Changed-package race tests include `relais-load`,
+`nettopology` and the affected `crash-run` consumer:
+`bin/w40-rework-race.log`. Workflow structure check confirms explicit netns
+invocation and always/bounded artifact ownership restoration:
+`bin/w40-rework-workflow-check.log`. All 27 recorded owned process PIDs are
+absent after the smoke: `bin/w40-rework-load-cleanup.json`.
+
+NOT-RUN — corrected native Linux namespace runtime and hosted capacity;
+re-dispatch required. The Linux cross-compilation is compile evidence only.

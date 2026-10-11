@@ -99,7 +99,7 @@ jobs:
         run: |
           { uname -a; lscpu; go version; } > bin/capacity-runner.txt
           if [ -n "$PRICE_INPUT" ]; then printf '%s\n' "$PRICE_INPUT" > bin/capacity-prices.json; fi
-      - name: Measure emulated LAN capacity and N+1
+      - name: Measure Linux namespace LAN capacity and N+1
         timeout-minutes: 15
         env:
           SAMPLE_DURATION: ${{ inputs.duration || '30s' }}

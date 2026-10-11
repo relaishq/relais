@@ -32,8 +32,8 @@ type topology struct {
 	Monitor        *capacity.Monitor
 }
 
-// Owned loopback topology; caller attachment is separate so namespace and
-// externally owned topologies can supply the same caller package later.
+// Owned loopback or Linux namespace topology. Caller attachment is separate
+// so only the media socket enters the caller namespace.
 func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir string, workers int, mode string, buffer bool) (_ *topology, runErr error) {
 	t := &topology{Workers: map[int]*clusterprocess.Child{}}
 	defer func() {

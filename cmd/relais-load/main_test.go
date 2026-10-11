@@ -45,9 +45,10 @@ func TestScheduleValidation(t *testing.T) {
 func TestEnvironmentDoesNotLeakStoreKeyToCallersOrRelay(t *testing.T) {
 	t.Setenv("RELAIS_SESSIONSTORE_KEY", "secret")
 	t.Setenv("RELAIS_PRIVATE_NETS", "untrusted")
+	t.Setenv("RELAIS_REDIS_PASSWORD", "inherited")
 	env := serviceEnv("", "", "")
 	for _, entry := range env {
-		if entry == "RELAIS_SESSIONSTORE_KEY=secret" || entry == "RELAIS_PRIVATE_NETS=untrusted" {
+		if entry == "RELAIS_SESSIONSTORE_KEY=secret" || entry == "RELAIS_PRIVATE_NETS=untrusted" || entry == "RELAIS_REDIS_PASSWORD=inherited" {
 			t.Fatal(entry)
 		}
 	}

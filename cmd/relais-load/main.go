@@ -9,7 +9,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -22,7 +21,6 @@ import (
 	"github.com/relais/internal/capacity"
 	"github.com/relais/internal/clusterprocess"
 	"github.com/relais/internal/loadgen"
-	"github.com/relais/internal/nettopology"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/pkg/controlplane"
 )
@@ -327,11 +325,9 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 		name := fmt.Sprintf("caller-%d", i)
 		env := serviceEnv("", "", "")
 		env = append(withoutEnv(env, "GOMAXPROCS"), "GOMAXPROCS="+strconv.Itoa(c.GOMAXPROCS))
-		namespace := ""
-		if t.Network != nil {
-			namespace = t.Network.Plan.Roles["caller"].Namespace
-		}
-		child, err := m.Start(dir, name, env, executable, "-caller-namespace", namespace, "-place-on-worker="+strconv.FormatBool(c.PlaceOnWorker), "-child", "-parent-pid", strconv.Itoa(os.Getpid()), "-callers", strconv.Itoa(n), "-duration", c.Duration.String(), "-sample-every", c.SampleEvery.String(), "-video="+strconv.FormatBool(c.Video), "-signaling", t.External.SignalingURL, "-relay", t.External.RelayAddr.String(), "-output", output)
+		args := append([]string{executable}, callerNetworkArgs(t.Network)...)
+		args = append(args, "-place-on-worker="+strconv.FormatBool(c.PlaceOnWorker), "-child", "-parent-pid", strconv.Itoa(os.Getpid()), "-callers", strconv.Itoa(n), "-duration", c.Duration.String(), "-sample-every", c.SampleEvery.String(), "-video="+strconv.FormatBool(c.Video), "-signaling", t.External.SignalingURL, "-relay", t.External.RelayAddr.String(), "-output", output)
+		child, err := m.Start(dir, name, env, args...)
 		if err != nil {
 			return report, err
 		}
@@ -435,6 +431,7 @@ func run() error {
 	signaling := fs.String("signaling", "", "child control-plane calls URL")
 	relay := fs.String("relay", "", "child relay media address")
 	callerNamespace := fs.String("caller-namespace", "", "internal owned caller namespace")
+	callerBind := fs.String("caller-bind", "", "internal specific caller IPv4 UDP bind address")
 	fs.BoolVar(&c.PlaceOnWorker, "place-on-worker", false, "internal capacity placement on worker zero")
 	parentPID := fs.Int("parent-pid", 0, "internal caller owner PID")
 	fs.IntVar(&c.Callers, "callers", 10, "total simultaneous harness callers")
@@ -474,9 +471,9 @@ func run() error {
 		}
 		ctx, stop := processrun.Context()
 		defer stop()
-		external := externalTopology(*signaling, addr)
-		if *callerNamespace != "" {
-			external.CallerSocket = func() (net.PacketConn, error) { return nettopology.CallerSocketInNamespace(*callerNamespace) }
+		external, err := childTopology(*signaling, addr, *callerNamespace, *callerBind)
+		if err != nil {
+			return err
 		}
 		return loadgen.RunChild(ctx, loadgen.ChildOptions{PlaceOnWorker: c.PlaceOnWorker, Topology: external, Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output, ParentPID: *parentPID})
 	}

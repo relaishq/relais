@@ -10,12 +10,17 @@ is used. Every step owns disposable Redis on a port other than 6379.
 ```
 
 On a disposable Linux runner, add `sudo -E` and `-topology=netns`. Install
-iproute2, iptables and procps first. Each service and the media sockets run in
-separate namespaces; signaling and generator operator HTTP stay on the
-management host. The driver proves private listener isolation before media.
+iproute2, iptables and procps first. Services run in separate namespaces.
+The generator process and its signaling/operator HTTP stay on the management
+host. Only its media socket enters the caller namespace, where it binds the
+caller's specific public-side IPv4 plan address, as in `crash-run`.
+The driver proves private listener isolation before media.
+
 Only the unshaped **LAN** profile is supported. This is the same namespace
 plan and cleanup implementation as [crash-run](netns-topology.md), extended
-from two to a configurable worker count. macOS refuses netns.
+from two to a configurable worker count. The hosted capacity job explicitly
+uses `-topology=netns`. macOS refuses netns; local Mac samples use
+`-topology=loopback`.
 
 Audio and the harness VP8 fixture are the default workload; these are not
 720p camera or production-traffic measurements. `-video=false` selects audio only.

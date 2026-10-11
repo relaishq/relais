@@ -45,3 +45,11 @@ func startRole(manager *clusterprocess.Manager, t *nettopology.Topology, dir, na
 	}
 	return manager.StartInNamespace(dir, name, t.Plan.Roles[role].Namespace, env, args...)
 }
+
+// Keep the management process on the host; only its UDP socket enters netns.
+func callerNetworkArgs(t *nettopology.Topology) []string {
+	if t == nil {
+		return nil
+	}
+	return []string{"-caller-namespace", t.Plan.Roles["caller"].Namespace, "-caller-bind", roleBind(t, "caller", true)}
+}
