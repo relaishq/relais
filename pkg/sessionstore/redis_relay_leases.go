@@ -19,14 +19,23 @@ local op,holder,epoch,ttl=ARGV[1],ARGV[2],ARGV[3],tonumber(ARGV[4])
 local t=redis.call('TIME')
 local now=tonumber(t[1])*1000+math.floor(tonumber(t[2])/1000)
 local c=redis.call('HMGET',KEYS[1],'holder','epoch','expires','forwarder','previous')
-local function reply() return {1,c[1],c[2],c[3],c[4] or '',c[5] or ''} end
+local function reply() return {1,c[1],c[2],c[3],c[4] or '',c[5] or '',tonumber(c[3])<=now and 1 or 0} end
 if op=='get' then if not c[1] then return {3} end return reply() end
 if op=='claim' then
  if c[1]==holder then return reply() end
  if c[1] and tonumber(c[3])>now then return {0} end
+elseif op=='renew' and not c[1] then
+ c={holder,epoch,string.format('%.0f',now+ttl),holder,''}
+ redis.call('HSET',KEYS[1],'holder',holder,'epoch',epoch,'expires',c[3],'forwarder',holder,'previous','')
+ return reply()
 else
- if c[1]~=ARGV[5] or c[2]~=epoch then return {2} end
- if op~='renew' and tonumber(c[3])<=now then return {2} end
+ if c[1]~=ARGV[5] then return {2} end
+ if op=='renew' then
+  -- Compare decimal epoch strings without Lua's floating-point precision loss.
+  if #c[2]>#epoch or (#c[2]==#epoch and c[2]>epoch) then return {2} end
+  if c[2]~=epoch then c[2]=epoch; redis.call('HSET',KEYS[1],'epoch',epoch) end
+ elseif c[2]~=epoch then return {2} end
+ if op~='renew' and op~='release' and tonumber(c[3])<=now then return {2} end
 end
 if op=='claim' or op=='transfer' then
  redis.call('HINCRBY',KEYS[1],'epoch',1)
@@ -36,6 +45,9 @@ if op=='claim' or op=='transfer' then
 elseif op=='renew' then
  c[3]=string.format('%.0f',now+ttl)
  redis.call('HSET',KEYS[1],'expires',c[3])
+elseif op=='release' then
+ c[1]=''; c[3]='0'; c[4]=''; c[5]=''
+ redis.call('HSET',KEYS[1],'holder','','expires','0','forwarder','','previous','')
 elseif op=='activate' then
  c[4]=c[1]; c[5]=''
  redis.call('HSET',KEYS[1],'forwarder',c[4],'previous','')
@@ -56,6 +68,10 @@ func (r *Redis) TransferRelay(ctx context.Context, l RelayLease, p RelayProcess,
 }
 func (r *Redis) ActivateRelay(ctx context.Context, l RelayLease) (RelayLease, error) {
 	return r.relayOperation(ctx, "activate", l, l.Holder, time.Millisecond)
+}
+func (r *Redis) ReleaseRelay(ctx context.Context, l RelayLease) error {
+	_, err := r.relayOperation(ctx, "release", l, l.Holder, time.Millisecond)
+	return err
 }
 func (r *Redis) GetRelay(ctx context.Context, key string) (RelayLease, error) {
 	return r.relayOperation(ctx, "get", RelayLease{Key: key}, RelayProcess{}, time.Millisecond)
@@ -86,7 +102,7 @@ func (r *Redis) relayOperation(ctx context.Context, op string, l RelayLease, p R
 	case 3:
 		return RelayLease{}, ErrNotFound
 	}
-	if code != 1 || len(reply) != 6 {
+	if code != 1 || len(reply) != 7 {
 		return RelayLease{}, errors.New("sessionstore: invalid relay lease reply")
 	}
 	texts := make([]string, 5)
@@ -97,8 +113,12 @@ func (r *Redis) relayOperation(ctx context.Context, op string, l RelayLease, p R
 		}
 		texts[i] = v
 	}
-	out := RelayLease{Key: l.Key}
-	if err := json.Unmarshal([]byte(texts[0]), &out.Holder); err != nil {
+	expired, ok := reply[6].(int64)
+	if !ok {
+		return RelayLease{}, errors.New("sessionstore: invalid relay expiry reply")
+	}
+	out := RelayLease{Key: l.Key, Expired: expired == 1}
+	if err := json.Unmarshal([]byte(texts[0]), &out.Holder); texts[0] != "" && err != nil {
 		return RelayLease{}, err
 	}
 	out.Epoch, err = strconv.ParseUint(texts[1], 10, 64)
@@ -134,4 +154,8 @@ func (r *RedisOwners) ActivateRelay(ctx context.Context, l RelayLease) (RelayLea
 }
 func (r *RedisOwners) GetRelay(ctx context.Context, k string) (RelayLease, error) {
 	return r.leases.GetRelay(ctx, k)
+}
+
+func (r *RedisOwners) ReleaseRelay(ctx context.Context, l RelayLease) error {
+	return r.leases.ReleaseRelay(ctx, l)
 }

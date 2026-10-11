@@ -3,15 +3,21 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/go-redis/redis/v8"
+	"github.com/pion/stun/v4"
+	"github.com/relais/pkg/relay"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -60,7 +66,9 @@ func startCommand(t *testing.T, addr, prefix string, args ...string) *clusterpro
 	t.Helper()
 	binary, err := os.Executable()
 	require.NoError(t, err)
-	env := append(os.Environ(), "RELAIS_W43_COMMAND_HELPER=1")
+	// The race runtime otherwise adds a 1s successful-exit sleep, obscuring
+	// the real command's graceful release and shutdown budget.
+	env := append(os.Environ(), "RELAIS_W43_COMMAND_HELPER=1", "GORACE="+os.Getenv("GORACE")+" atexit_sleep_ms=0")
 	command := []string{binary, "-test.run=^TestRelayCommandHelper$", "--", "-redis", addr, "-redis-prefix", prefix}
 	c, err := clusterprocess.Start(t.TempDir(), "relay", env, append(command, args...)...)
 	require.NoError(t, err)
@@ -83,7 +91,7 @@ func freeUDP(t *testing.T) string {
 	require.NoError(t, c.Close())
 	return a
 }
-func TestCommandMismatchedIdentityNeverBinds(t *testing.T) {
+func TestCommandMismatchedIdentityRecoversWithoutSignalling(t *testing.T) {
 	s, addr, prefix := commandStore(t)
 	target, err := clusterprocess.Start(t.TempDir(), "target", os.Environ(), "sleep", "30")
 	require.NoError(t, err)
@@ -97,24 +105,14 @@ func TestCommandMismatchedIdentityNeverBinds(t *testing.T) {
 	httpAddr, err := clusterprocess.FreeTCP()
 	require.NoError(t, err)
 	c := startCommand(t, addr, prefix, "-standby", "-media", public, "-leg", leg, "-http", httpAddr)
-	select {
-	case <-c.Done():
-		require.Error(t, c.Err())
-	case <-time.After(5 * time.Second):
-		t.Fatal("mismatched fencing did not stop")
-	}
-	require.NoError(t, target.SignalGroup(0), "identity mismatch must not signal target")
-	for _, a := range []string{public, leg} {
-		socket, err := net.ListenPacket("udp", a)
-		require.NoError(t, err, "no UDP bind after failed fence")
-		require.NoError(t, socket.Close())
-	}
-	listener, err := net.Listen("tcp", httpAddr)
-	require.NoError(t, err, "no HTTP bind after failed fence")
-	require.NoError(t, listener.Close())
+
+	readyCommand(t, c)
+	require.NoError(t, target.SignalGroup(0), "reused PID must not be signalled")
 	current, err := s.GetRelay(context.Background(), "default")
 	require.NoError(t, err)
-	require.Equal(t, l.Holder, current.Forwarder)
+	require.Equal(t, c.PID(), current.Forwarder.PID)
+	require.Greater(t, current.Epoch, l.Epoch)
+
 }
 func TestCommandSelfFencesOnObservedSuccessor(t *testing.T) {
 	s, addr, prefix := commandStore(t)
@@ -203,6 +201,7 @@ func (p *redisProxy) forward(in net.Conn) {
 	_ = in.Close()
 	<-done
 }
+func (p *redisProxy) recover() { p.mu.Lock(); p.offline = false; p.mu.Unlock() }
 func (p *redisProxy) cut() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -241,6 +240,13 @@ func TestRedisUnavailableNoStandbyTakeover(t *testing.T) {
 	default:
 	}
 	require.NotEqual(t, active.PID(), standby.PID())
+	p.recover()
+	time.Sleep(500 * time.Millisecond)
+	recovered, err := remote.Status(ctx)
+	require.NoError(t, err)
+	require.Equal(t, before.Instance, recovered.Instance)
+	require.Zero(t, recovered.Stats.SelfFences)
+
 	// All three original addresses still belong to the active relay, which
 	// cannot be fenced because the standby has no confirmed lease decision.
 	for _, addr := range []string{r.Media, r.Leg} {
@@ -394,4 +400,94 @@ func TestCommandLeaseLossCancelsBindWait(t *testing.T) {
 	listener, err := net.Listen("tcp", httpAddr)
 	require.NoError(t, err)
 	require.NoError(t, listener.Close())
+}
+
+// Real command, Redis DELETE, and bidirectional UDP forwarding: HTTP liveness
+// alone would miss the regression where the packet loops self-fence.
+func TestCommandMissingLeaseKeepsForwarding(t *testing.T) {
+	s, addr, prefix := commandStore(t)
+	c := startCommand(t, addr, prefix)
+	ready := readyCommand(t, c)
+	remote := &controlplane.RemoteRelay{URL: ready.HTTP}
+	worker, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer func() { _ = worker.Close() }()
+	caller, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer func() { _ = caller.Close() }()
+	session := "leasehashsession"
+	sessions, err := sessionstore.NewRedis(context.Background(), storage.RedisConfig{Addr: addr, Prefix: prefix}, make([]byte, 32))
+	require.NoError(t, err)
+	defer func() { _ = sessions.Close() }()
+	_, err = sessions.Claim(context.Background(), session, worker.LocalAddr().(*net.UDPAddr).AddrPort(), time.Minute)
+	require.NoError(t, err)
+	require.NoError(t, remote.AddWorker(context.Background(), worker.LocalAddr().(*net.UDPAddr).AddrPort()))
+	public := netip.MustParseAddrPort(ready.Media)
+	leg := netip.MustParseAddrPort(ready.Leg)
+	bind := stun.MustBuild(stun.TransactionID, stun.BindingRequest, stun.NewUsername(session+":caller"))
+	_, err = caller.WriteToUDPAddrPort(bind.Raw, public)
+	require.NoError(t, err)
+	receive := func(conn *net.UDPConn) []byte {
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(time.Second)))
+		buf := make([]byte, 2048)
+		n, _, err := conn.ReadFromUDPAddrPort(buf)
+		require.NoError(t, err)
+		return buf[:n]
+	}
+	routedCaller, payload, err := relay.ParseHeader(receive(worker))
+	require.NoError(t, err)
+	require.Equal(t, bind.Raw, payload)
+	success := stun.MustBuild(stun.NewTransactionIDSetter(bind.TransactionID), stun.BindingSuccess)
+	_, err = worker.WriteToUDPAddrPort(append(relay.AppendHeader(nil, routedCaller), success.Raw...), leg)
+	require.NoError(t, err)
+	require.Equal(t, success.Raw, receive(caller))
+	before, err := s.GetRelay(context.Background(), "default")
+	require.NoError(t, err)
+	client := redis.NewClient(&redis.Options{Addr: addr})
+	defer func() { _ = client.Close() }()
+	key := prefix + "relay:{relay:" + base64.RawURLEncoding.EncodeToString([]byte("default")) + "}"
+	require.NoError(t, client.Del(context.Background(), key).Err())
+	time.Sleep(350 * time.Millisecond)
+	after, err := s.GetRelay(context.Background(), "default")
+	require.NoError(t, err)
+	require.Equal(t, before.Holder, after.Holder)
+	require.Equal(t, before.Epoch, after.Epoch)
+	media := []byte{0x80, 0x60, 0, 1, 1, 2, 3, 4}
+	_, err = caller.WriteToUDPAddrPort(media, public)
+	require.NoError(t, err)
+	_, payload, err = relay.ParseHeader(receive(worker))
+	require.NoError(t, err)
+	require.Equal(t, media, payload)
+	_, err = worker.WriteToUDPAddrPort(append(relay.AppendHeader(nil, routedCaller), media...), leg)
+	require.NoError(t, err)
+	require.Equal(t, media, receive(caller))
+	status, err := remote.Status(context.Background())
+	require.NoError(t, err)
+	require.Zero(t, status.Stats.SelfFences)
+}
+func TestCommandSIGTERMReleasesLeaseBeforeTTL(t *testing.T) {
+	s, addr, prefix := commandStore(t)
+	c := startCommand(t, addr, prefix, "-relay-lease-ttl", "3s")
+	ready := readyCommand(t, c)
+	before, err := s.GetRelay(context.Background(), "default")
+	require.NoError(t, err)
+	require.NoError(t, c.SignalGroup(syscall.SIGTERM))
+	select {
+	case <-c.Done():
+		require.NoError(t, c.Err())
+	case <-time.After(time.Second):
+		t.Fatal("SIGTERM did not finish")
+	}
+	released, err := s.GetRelay(context.Background(), "default")
+	require.NoError(t, err)
+	require.Empty(t, released.Holder.Owner)
+	require.Empty(t, released.Forwarder.Owner)
+	require.True(t, released.Expired)
+	next := startCommand(t, addr, prefix, "-media", ready.Media, "-leg", ready.Leg, "-http", strings.TrimPrefix(ready.HTTP, "http://"))
+	started := time.Now()
+	readyCommand(t, next)
+	require.Less(t, time.Since(started), time.Second)
+	current, err := s.GetRelay(context.Background(), "default")
+	require.NoError(t, err)
+	require.Greater(t, current.Epoch, before.Epoch)
 }

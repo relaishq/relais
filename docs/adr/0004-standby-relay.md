@@ -12,31 +12,60 @@ second defence against simultaneous forwarding.
 ## Lease and fencing order
 
 Memory and Redis implement an independent `RelayLeases` capability with claim,
-renew, transfer, activation and read. The owner is a fresh instance token, with a
+renew, transfer, activation, release and read. The owner is a fresh instance token, with a
 monotone epoch, expiry, PID and kernel start time. The relay's keyless
 `RedisOwners` capability gains these metadata operations, not snapshot access.
 Redis uses one atomic Lua script and Redis `TIME`; memory uses its lease lock.
 The Redis hash is persistent: expiry must not erase fencing evidence or reset an
 epoch. Keep namespaces and keys stable while old processes can exist. Do not
-share a relay key across hosts or remove it while its processes can exist.
+share a relay key across hosts. A missing hash can be re-created by renewal
+when no successor is recorded: restore the same holder and epoch, with the
+forwarder set to self. An existing different holder or newer epoch rejects
+renewal. An older epoch for the same holder is repaired without decreasing the
+relay's epoch. A claim racing re-creation still has one atomic winner; a losing
+active observes the successor and self-fences. Redis `TIME` is a wall clock:
+an NTP step on the Redis host shifts lease expiry.
 
 Takeover follows this order:
 
-1. Claim the expired lease, advancing its epoch. An uncertain store result is
+1. Observe the same expired holder and epoch on two polls separated by at least
+   one renewal interval, then claim it, advancing its epoch. The store reports
+   expiry using its own clock; a client's wall clock never authorizes a claim.
+   A live tenure, changed holder/epoch, or failed read resets that observation.
+   Bootstrap and an explicitly released tenure can be claimed immediately.
+   An uncertain store result is
    never permission to signal or bind. Repeating a claim for the identical
    process identity settles it idempotently if that tenure still exists.
 2. Start renewing the new tenure, including during fencing and route restore.
 3. Fence the old lease holder and the last possible forwarder, deduplicating
-   identical targets. Check PID and kernel start time immediately before
-   `SIGKILL`, then wait for exit. A zombie confirms exit of the inspected task;
+   identical targets. Linux opens a pidfd first, brackets `/proc` identity and
+   executable checks with the pidfd's `fdinfo` PID, and uses `pidfd_send_signal`
+   so PID reuse cannot redirect the signal. The [pidfd API](https://github.com/mkerrisk/man-pages/blob/master/man2/pidfd_open.2)
+   requires Linux 5.3+ and working
+   pidfd syscalls; refusal or unavailable checks fail closed. macOS retains its
+   PID/start-time query and signal path, rechecking identity after its executable
+   lookup. Before signalling, require the target executable to have the same
+   inode as our own: Linux checks `/proc/<pid>/exe`; macOS obtains the kernel
+   executable vnode path with
+   [`PROC_PIDPATHINFO`](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/proc_info.c). This requires both cooperating
+   relays to run the same executable artifact, including during upgrades.
+   Then send `SIGKILL` and wait for exit. A zombie confirms exit of the
+   inspected task;
    it does not prove that all shared socket references have drained. Linux reads
    `/proc/<pid>/stat`; macOS reads `kern.proc.pid` through
    `golang.org/x/sys/unix`. A missing process is already fenced. A start-time
-   mismatch, permission failure or unconfirmed exit fails closed: log and count
-   the error, exit the candidate, and never bind. The controller does not signal
+   mismatch proves the recorded process exited: send no signal and proceed,
+   even when its PID is our own PID. Linux identities include the kernel
+   `boot_id` as well as start ticks, preventing a reboot from producing an exact
+   old identity. A relay may run as PID 1. An exact current-process identity is
+   refused; a permission failure, executable mismatch or unconfirmed exit fails
+   closed: log and count the error, exit the candidate, and never bind.
+   The controller does not signal
    process groups or arbitrary PIDs from a status endpoint.
-4. Confirm activation with an unexpired owner/epoch compare-and-set. This records
-   the new process as the possible forwarder **before** any socket bind.
+4. Confirm activation with an unexpired owner/epoch compare-and-set. Retry
+   transient or uncertain activation results while continuing renewal, until
+   activation succeeds, ownership is lost, or the process is cancelled. This
+   records the new process as the possible forwarder **before** any socket bind.
 5. Bind the original sockets with a shared, bounded retry budget, restore routes
    through ADR 0003, and start serving.
    The new instance token makes the control plane re-register its live workers.
@@ -52,16 +81,17 @@ identities, not an unbounded chain of failed candidates.
 ## Timings and self-fencing
 
 Defaults are a **600 ms lease**, **200 ms renewal**, and **100 ms claim poll**.
-They leave room for two missed renewal intervals, bound ordinary failure
-recognition to at most about 700 ms, and leave roughly 300 ms for local fencing,
-route restore and control-plane re-registration within the one-second caller
-budget. These are configurable with `-relay-lease-ttl`, `-relay-lease-renew` and
+An expired tenure needs a further 200 ms recovery grace, so ordinary failure
+recognition can take about 900 ms with poll rounding. This reduces the time
+left for fencing, route restore and worker re-registration within the one-second
+caller budget. These are configurable with `-relay-lease-ttl`,
+`-relay-lease-renew` and
 `-relay-lease-poll`; renewal must be positive and shorter than the lease. Loaded
 hosts, a slow store or a large route scan can exceed the measured loopback gap.
 The gap guarantee is established by the real-process driver, not by these
 configuration values alone.
 
-A successful renewal compare-and-set rejects any different owner or epoch.
+A renewal compare-and-set rejects a different holder or newer epoch.
 That observed lease loss immediately disables packet forwarding, closes both
 UDP sockets, cancels the HTTP service, and exits. The forwarding check is local
 and nonblocking on both packet directions, including held-packet releases.
@@ -74,8 +104,19 @@ expired tenure when it still has the same owner and epoch. While Redis is
 unreachable the active relay keeps forwarding existing routes; failed owner
 lookups and persistence retain their existing ADR 0003 behaviour. The standby
 cannot claim or activate, does not signal the active process, and does not bind.
-After Redis recovers, whichever atomic claim or renewal wins decides ownership.
-There is no takeover without a successful lease decision.
+While renewal fails, retry it every 50 ms (or the configured renewal interval
+if shorter). After Redis recovers, the two-poll recovery grace gives the healthy
+active time to renew before a standby can claim an expired tenure. This favors
+recovery but does not promise that a stalled active wins; the atomic claim or
+renewal still decides ownership. There is no takeover without a successful
+lease decision.
+
+On graceful exit, close both UDP sockets and HTTP, stop and join renewal, then
+release the matching holder/epoch with a bounded store operation. Release clears
+process identities and expires the tenure while retaining its epoch. A plain
+restart can claim it immediately, without waiting for the old TTL or recovery
+grace. A stale release cannot erase a successor. A crash or failed release
+retains fencing evidence and uses the normal expiry path.
 
 ## Evidence and limits
 
@@ -119,13 +160,18 @@ The unreaped-child test now uses the production bind retry and logs owned
 It requires both sockets to bind within the shared budget before parent reaping.
 
 Production-command tests cover a real Redis transport outage, successor-induced
-self-fencing and mismatched kernel identity with no socket binds. Unit tests
+self-fencing, Redis key deletion with continued bidirectional UDP forwarding,
+store outage recovery without killing the healthy active, graceful SIGTERM
+release, and mismatched kernel identity recovery without signalling the reused
+PID. Unit tests
 cover both stores, competing claims, interrupted claimants, expired activation,
 identity/signalling failures, and a stopped child killed by the identity helper.
 
 This design is for cooperating relay binaries on one Linux or macOS host, with
 permission to terminate one another, and a store whose acknowledged lease
-decisions are retained. PID/start-time verification uses the platform process
-query immediately before signalling; it is not a cross-host fencing primitive.
+decisions are retained. Identity verification uses the kernel process query
+on macOS and a pinned pidfd on Linux; it is not a cross-host fencing primitive.
+Unsupported platforms, including Windows, retain plain relay operation without
+this process lease; `-standby` is refused with a clear error.
 Cross-host failover, a floating public IP, durable Redis failover policy and
 supervision that relaunches failed standbys remain outside this decision.

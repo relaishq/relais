@@ -185,6 +185,8 @@ jobs:
   # Each lane runs twenty 60 s trials on an awake Linux runner. The driver
   # and relay children run as the same ordinary user; fencing reads /proc.
   relay-continuity:
+    permissions:
+      contents: read
     timeout-minutes: 35
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
@@ -194,6 +196,8 @@ jobs:
         mode: [relay-restart, relay-standby]
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@v7
         with:

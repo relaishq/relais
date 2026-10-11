@@ -3,10 +3,12 @@ package processidentity
 import (
 	"context"
 	"fmt"
+	"golang.org/x/sys/unix"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,4 +51,23 @@ func logSocketExitState(t *testing.T, pid int, udpAddr string) {
 	defer cancel()
 	output, err := exec.CommandContext(ctx, "ss", "-lunp", "sport = :"+port).CombinedOutput()
 	t.Logf("owned UDP socket ss=%s error=%v", output, err)
+}
+
+func TestLinuxBootIdentityMakesSameTicksFromOldBootAlreadyFenced(t *testing.T) {
+	id, err := Current()
+	require.NoError(t, err)
+	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(id.Start, strings.TrimSpace(string(boot))+":"))
+	_, ticks, ok := strings.Cut(id.Start, ":")
+	require.True(t, ok)
+	require.NoError(t, Fence(context.Background(), Identity{PID: id.PID, Start: "previous-boot:" + ticks}))
+}
+func TestPidfdIdentityRejectsInvalidNamespaceAndRecognizesExit(t *testing.T) {
+	require.NoError(t, checkPidfd("Pid:\t42\nNSpid:\t42\n", 42))
+	require.ErrorIs(t, checkPidfd("Pid:\t-1\n", 42), unix.ESRCH)
+	require.Error(t, checkPidfd("Pid:\t0\n", 42))
+	require.Error(t, checkPidfd("Pid:\t43\n", 42))
+	require.Error(t, checkPidfd("Pid:\tbroken\n", 42))
+	require.Error(t, checkPidfd("flags:\t02000002\n", 42))
 }

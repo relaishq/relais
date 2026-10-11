@@ -20,6 +20,7 @@ type RelayLease struct {
 	Key            string       `json:"key"`
 	Holder         RelayProcess `json:"holder"`
 	Epoch          uint64       `json:"epoch"`
+	Expired        bool         `json:"expired"` // Evaluated by the store clock on read.
 	ExpiresAt      time.Time    `json:"expires_at"`
 	Forwarder      RelayProcess `json:"forwarder"`
 	PreviousHolder RelayProcess `json:"previous_holder"`
@@ -35,11 +36,12 @@ type RelayLeases interface {
 	RenewRelay(context.Context, RelayLease, time.Duration) (RelayLease, error)
 	TransferRelay(context.Context, RelayLease, RelayProcess, time.Duration) (RelayLease, error)
 	ActivateRelay(context.Context, RelayLease) (RelayLease, error)
+	ReleaseRelay(context.Context, RelayLease) error
 	GetRelay(context.Context, string) (RelayLease, error)
 }
 
 func validRelay(key string, p RelayProcess, ttl time.Duration) bool {
-	return key != "" && p.Owner != "" && p.PID > 1 && p.Start != "" && ttl >= time.Millisecond
+	return key != "" && p.Owner != "" && p.PID > 0 && p.Start != "" && ttl >= time.Millisecond
 }
 func sameRelay(a, b RelayLease) bool {
 	return a.Key == b.Key && a.Holder == b.Holder && a.Epoch == b.Epoch
@@ -57,6 +59,13 @@ func (m *Memory) TransferRelay(ctx context.Context, l RelayLease, p RelayProcess
 func (m *Memory) ActivateRelay(ctx context.Context, l RelayLease) (RelayLease, error) {
 	return m.changeRelay(ctx, "activate", l, l.Holder, time.Millisecond)
 }
+
+// ReleaseRelay retains the epoch but clears identities only after forwarding
+// and sockets have stopped. A stale release cannot clear a successor.
+func (m *Memory) ReleaseRelay(ctx context.Context, l RelayLease) error {
+	_, err := m.changeRelay(ctx, "release", l, l.Holder, time.Millisecond)
+	return err
+}
 func (m *Memory) GetRelay(ctx context.Context, key string) (RelayLease, error) {
 	if err := ctx.Err(); err != nil {
 		return RelayLease{}, err
@@ -67,6 +76,7 @@ func (m *Memory) GetRelay(ctx context.Context, key string) (RelayLease, error) {
 	if !ok {
 		return RelayLease{}, ErrNotFound
 	}
+	l.Expired = !time.Now().Before(l.ExpiresAt)
 	return l, nil
 }
 func (m *Memory) changeRelay(ctx context.Context, op string, expected RelayLease, p RelayProcess, ttl time.Duration) (RelayLease, error) {
@@ -87,7 +97,17 @@ func (m *Memory) changeRelay(ctx context.Context, op string, expected RelayLease
 		if ok && now.Before(l.ExpiresAt) {
 			return RelayLease{}, ErrLeaseHeld
 		}
-	} else if !ok || !sameRelay(l, expected) || op != "renew" && !now.Before(l.ExpiresAt) {
+	} else if op == "renew" {
+		if !ok {
+			// No recorded successor: restore this tenure atomically, keeping its epoch.
+			l = expected
+			l.Forwarder = l.Holder
+			l.PreviousHolder = RelayProcess{}
+		} else if l.Holder != expected.Holder || l.Epoch > expected.Epoch {
+			return RelayLease{}, ErrLeaseLost
+		}
+		l.Epoch = expected.Epoch
+	} else if !ok || !sameRelay(l, expected) || op != "renew" && op != "release" && !now.Before(l.ExpiresAt) {
 		return RelayLease{}, ErrLeaseLost
 	}
 	switch op {
@@ -99,6 +119,11 @@ func (m *Memory) changeRelay(ctx context.Context, op string, expected RelayLease
 		l.ExpiresAt = now.Add(ttl)
 	case "renew":
 		l.ExpiresAt = now.Add(ttl)
+	case "release":
+		l.Holder = RelayProcess{}
+		l.Forwarder = RelayProcess{}
+		l.PreviousHolder = RelayProcess{}
+		l.ExpiresAt = now
 	case "activate":
 		l.Forwarder = l.Holder
 		l.PreviousHolder = RelayProcess{}
@@ -106,6 +131,7 @@ func (m *Memory) changeRelay(ctx context.Context, op string, expected RelayLease
 	if m.relayLeases == nil {
 		m.relayLeases = make(map[string]RelayLease)
 	}
+	l.Expired = !now.Before(l.ExpiresAt)
 	m.relayLeases[l.Key] = l
 	return l, nil
 }

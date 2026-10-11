@@ -26,11 +26,11 @@ func TestCurrentStable(t *testing.T) {
 func TestFenceMismatchSendsNoSignal(t *testing.T) {
 	signalled := false
 	err := fence(context.Background(), Identity{PID: 42, Start: "old"}, func(int) (string, bool, error) { return "new", false, nil }, func(int) error { signalled = true; return nil })
-	require.ErrorIs(t, err, ErrMismatch)
+	require.NoError(t, err)
 	require.False(t, signalled)
 }
 func TestFenceReadOrSignalFailure(t *testing.T) {
-	denied := errors.New("permission denied")
+	denied := syscall.EPERM
 	for _, readErr := range []error{denied, nil} {
 		signals := 0
 		err := fence(context.Background(), Identity{PID: 42, Start: "old"}, func(int) (string, bool, error) { return "old", false, readErr }, func(int) error { signals++; return denied })
@@ -43,7 +43,13 @@ func TestFenceReadOrSignalFailure(t *testing.T) {
 	}
 }
 func TestFenceStoppedProcess(t *testing.T) {
-	cmd := exec.Command("sleep", "30")
+	if os.Getenv("RELAIS_PROCESSIDENTITY_STOPPED_CHILD") == "1" {
+		for {
+			time.Sleep(time.Hour)
+		}
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestFenceStoppedProcess$")
+	cmd.Env = append(os.Environ(), "RELAIS_PROCESSIDENTITY_STOPPED_CHILD=1")
 	require.NoError(t, cmd.Start())
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -74,7 +80,7 @@ func TestRealMismatchedStartKeepsChildAlive(t *testing.T) {
 	require.NoError(t, cmd.Start())
 	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
 	err := Fence(context.Background(), Identity{PID: cmd.Process.Pid, Start: "wrong"})
-	require.ErrorIs(t, err, ErrMismatch)
+	require.NoError(t, err)
 	require.NoError(t, cmd.Process.Signal(syscall.Signal(0)))
 }
 
@@ -126,8 +132,8 @@ func TestFenceWaitStillFailsClosed(t *testing.T) {
 		err, want   error
 	}{
 		{name: "permission", err: syscall.EACCES, want: syscall.EACCES},
-		{name: "reused live PID", start: "new", want: ErrMismatch},
-		{name: "reused zombie PID", start: "new", dead: true, want: ErrMismatch},
+		{name: "reused live PID", start: "new"},
+		{name: "reused zombie PID", start: "new", dead: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reads := 0
@@ -139,7 +145,11 @@ func TestFenceWaitStillFailsClosed(t *testing.T) {
 					}
 					return tc.start, tc.dead, tc.err
 				}, func(int) error { return nil })
-			require.ErrorIs(t, err, tc.want)
+			if tc.want == nil {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, tc.want)
+			}
 		})
 	}
 }
@@ -230,4 +240,37 @@ func TestFenceUnreapedProcessReleasesSockets(t *testing.T) {
 	require.Equal(t, start, current)
 	require.True(t, dead, "socket release must not require parent reaping")
 	t.Logf("fenced unreaped child bind_wait_ms=%.3f", float64(udpWait+tcpWait)/float64(time.Millisecond))
+}
+
+func TestFenceReusedOwnPIDAndPIDOne(t *testing.T) {
+	for _, pid := range []int{os.Getpid(), 1} {
+		signals := 0
+		err := fence(context.Background(), Identity{PID: pid, Start: "previous-container-or-boot"},
+			func(int) (string, bool, error) { return "current", false, nil }, func(int) error { signals++; return nil })
+		require.NoError(t, err)
+		require.Zero(t, signals)
+	}
+}
+
+func TestFenceMatchingOtherExecutableFailsClosed(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	require.NoError(t, cmd.Start())
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	start, _, err := inspect(cmd.Process.Pid)
+	require.NoError(t, err)
+	err = Fence(context.Background(), Identity{PID: cmd.Process.Pid, Start: start})
+	require.ErrorIs(t, err, ErrExecutable)
+	require.NoError(t, cmd.Process.Signal(syscall.Signal(0)))
+}
+func TestFenceOwnCurrentIdentityFailsClosed(t *testing.T) {
+	id, err := Current()
+	require.NoError(t, err)
+	require.ErrorContains(t, Fence(context.Background(), id), "current process")
+}
+
+func TestFenceOwnPreviousStartAlreadyFenced(t *testing.T) {
+	id, err := Current()
+	require.NoError(t, err)
+	id.Start = "previous-container:" + id.Start
+	require.NoError(t, Fence(context.Background(), id))
 }

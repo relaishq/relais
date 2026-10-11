@@ -98,3 +98,104 @@ func TestRelayLeaseExpiredActivationAndTransfer(t *testing.T) {
 		require.ErrorIs(t, err, ErrNotFound)
 	})
 }
+
+func TestRelayRenewRecreatesMissingLease(t *testing.T) {
+	forStores(t, func(t *testing.T, newStore func(*testing.T) Store) {
+		store := newStore(t)
+		s := store.(RelayLeases)
+		ctx := context.Background()
+		a, err := s.ClaimRelay(ctx, "public", relayProcess("a"), time.Second)
+		require.NoError(t, err)
+		a, err = s.ActivateRelay(ctx, a)
+		require.NoError(t, err)
+		switch s := store.(type) {
+		case *Memory:
+			s.mu.Lock()
+			delete(s.relayLeases, a.Key)
+			s.mu.Unlock()
+		case *Redis:
+			keys, err := s.client.Keys(ctx, s.prefix+"relay:*").Result()
+			require.NoError(t, err)
+			require.Len(t, keys, 1)
+			require.NoError(t, s.client.Del(ctx, keys[0]).Err())
+		}
+		restored, err := s.RenewRelay(ctx, a, time.Second)
+		require.NoError(t, err, "store loss without a successor must not self-fence")
+		require.Equal(t, a.Holder, restored.Holder)
+		require.Equal(t, a.Holder, restored.Forwarder)
+		require.GreaterOrEqual(t, restored.Epoch, a.Epoch)
+		_, err = s.ClaimRelay(ctx, a.Key, relayProcess("b"), time.Second)
+		require.ErrorIs(t, err, ErrLeaseHeld)
+	})
+}
+func TestRelayLeaseAllowsPIDOne(t *testing.T) {
+	forStores(t, func(t *testing.T, newStore func(*testing.T) Store) {
+		s := newStore(t).(RelayLeases)
+		p := relayProcess("container")
+		p.PID = 1
+		_, err := s.ClaimRelay(context.Background(), "container", p, time.Second)
+		require.NoError(t, err)
+	})
+}
+
+func TestRelayReleaseRetainsEpochAndRejectsStaleRelease(t *testing.T) {
+	forStores(t, func(t *testing.T, newStore func(*testing.T) Store) {
+		s := newStore(t).(RelayLeases)
+		ctx := context.Background()
+		a, err := s.ClaimRelay(ctx, "one", relayProcess("a"), time.Second)
+		require.NoError(t, err)
+		_, err = s.ActivateRelay(ctx, a)
+		require.NoError(t, err)
+		require.NoError(t, s.ReleaseRelay(ctx, a))
+		released, err := s.GetRelay(ctx, a.Key)
+		require.NoError(t, err)
+		require.True(t, released.Expired)
+		require.Empty(t, released.Holder.Owner)
+		require.Empty(t, released.Forwarder.Owner)
+		require.Equal(t, a.Epoch, released.Epoch)
+		b, err := s.ClaimRelay(ctx, a.Key, relayProcess("b"), time.Second)
+		require.NoError(t, err)
+		require.Greater(t, b.Epoch, a.Epoch)
+		require.Empty(t, b.PreviousHolder.Owner)
+		require.ErrorIs(t, s.ReleaseRelay(ctx, a), ErrLeaseLost)
+		current, err := s.GetRelay(ctx, a.Key)
+		require.NoError(t, err)
+		require.Equal(t, b.Holder, current.Holder)
+	})
+}
+
+func TestRelayRenewRepairsOlderEpochButRejectsNewerEpoch(t *testing.T) {
+	forStores(t, func(t *testing.T, newStore func(*testing.T) Store) {
+		store := newStore(t)
+		s := store.(RelayLeases)
+		ctx := context.Background()
+		previous, err := s.ClaimRelay(ctx, "one", relayProcess("previous"), time.Second)
+		require.NoError(t, err)
+		a, err := s.TransferRelay(ctx, previous, relayProcess("a"), time.Second)
+		require.NoError(t, err)
+		_, err = s.ActivateRelay(ctx, a)
+		require.NoError(t, err)
+		setEpoch := func(epoch uint64) {
+			switch store := store.(type) {
+			case *Memory:
+				store.mu.Lock()
+				l := store.relayLeases[a.Key]
+				l.Epoch = epoch
+				store.relayLeases[a.Key] = l
+				store.mu.Unlock()
+			case *Redis:
+				keys, err := store.client.Keys(ctx, store.prefix+"relay:*").Result()
+				require.NoError(t, err)
+				require.Len(t, keys, 1)
+				require.NoError(t, store.client.HSet(ctx, keys[0], "epoch", epoch).Err())
+			}
+		}
+		setEpoch(a.Epoch - 1)
+		renewed, err := s.RenewRelay(ctx, a, time.Second)
+		require.NoError(t, err)
+		require.Equal(t, a.Epoch, renewed.Epoch)
+		setEpoch(a.Epoch + 1)
+		_, err = s.RenewRelay(ctx, a, time.Second)
+		require.ErrorIs(t, err, ErrLeaseLost)
+	})
+}

@@ -4,13 +4,13 @@ package processidentity
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"syscall"
 	"time"
 )
 
-var ErrMismatch = errors.New("process identity does not match")
+var ErrExecutable = errors.New("fencing target is not the relay executable")
+var ErrUnsupported = errors.New("standby process fencing requires Linux or macOS")
 
 type Identity struct {
 	PID   int
@@ -25,12 +25,12 @@ func Current() (Identity, error) {
 // Fence verifies start time immediately before SIGKILL and waits for exit.
 // A zombie ends the identity wait; shared socket references may drain later.
 // Callers must confirm exclusive binds before starting a new forwarder.
-// A reused PID is never signalled and prevents activation.
+// A reused PID proves the recorded process exited and is never signalled.
 func Fence(ctx context.Context, id Identity) error {
-	return fence(ctx, id, inspect, func(pid int) error { return syscall.Kill(pid, syscall.SIGKILL) })
+	return fencePlatform(ctx, id)
 }
 func fence(ctx context.Context, id Identity, read func(int) (string, bool, error), kill func(int) error) error {
-	if id.PID <= 1 || id.Start == "" || id.PID == os.Getpid() {
+	if id.PID <= 0 || id.Start == "" {
 		return errors.New("invalid fencing target")
 	}
 	start, dead, err := read(id.PID)
@@ -41,10 +41,13 @@ func fence(ctx context.Context, id Identity, read func(int) (string, bool, error
 		return err
 	}
 	if start != id.Start {
-		return fmt.Errorf("%w: pid %d", ErrMismatch, id.PID)
+		return nil
 	}
 	if dead {
 		return nil
+	}
+	if id.PID == os.Getpid() {
+		return errors.New("refusing to fence the current process")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -64,7 +67,7 @@ func fence(ctx context.Context, id Identity, read func(int) (string, bool, error
 			return err
 		}
 		if start != id.Start {
-			return fmt.Errorf("%w after fencing: pid %d", ErrMismatch, id.PID)
+			return nil
 		}
 		if dead {
 			return nil
@@ -75,4 +78,19 @@ func fence(ctx context.Context, id Identity, read func(int) (string, bool, error
 		case <-tick.C:
 		}
 	}
+}
+
+func sameExecutable(target, self string) error {
+	a, err := os.Stat(target)
+	if err != nil {
+		return err
+	}
+	b, err := os.Stat(self)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(a, b) {
+		return ErrExecutable
+	}
+	return nil
 }

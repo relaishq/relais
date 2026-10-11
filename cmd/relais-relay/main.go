@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/relais/internal/processidentity"
 	"github.com/relais/internal/processrun"
 	"github.com/relais/internal/relaylease"
 	"github.com/relais/internal/socketbind"
@@ -36,6 +35,9 @@ func run() error {
 	leasePoll := flag.Duration("relay-lease-poll", relaylease.DefaultPoll, "standby claim polling interval")
 	bindTimeout := flag.Duration("relay-bind-timeout", socketbind.DefaultTimeout, "shared public, worker-leg and HTTP socket bind retry budget after fencing")
 	flag.Parse()
+	if err := validatePlatform(*standby); err != nil {
+		return err
+	}
 	if *bindTimeout <= 0 {
 		return fmt.Errorf("relay bind timeout must be positive")
 	}
@@ -52,19 +54,24 @@ func run() error {
 		return err
 	}
 	defer func() { _ = store.Close() }()
-	identity, err := processidentity.Current()
-	if err != nil {
-		return err
-	}
-	process := sessionstore.RelayProcess{Owner: rand.Text(), PID: identity.PID, Start: identity.Start}
+	process := sessionstore.RelayProcess{Owner: rand.Text(), PID: os.Getpid()}
 	if *standby {
 		log.Printf("STANDBY_WAIT pid=%d lease=%s", os.Getpid(), *leaseKey)
 	}
-	guard, err := relaylease.Acquire(ctx, relaylease.Config{Store: store, Key: *leaseKey, Process: process, TTL: *leaseTTL, Renew: *leaseRenew, Poll: *leasePoll})
+	guard, err := acquireLease(ctx, *standby, relaylease.Config{Store: store, Key: *leaseKey, Process: process, TTL: *leaseTTL, Renew: *leaseRenew, Poll: *leasePoll})
 	if err != nil {
 		return err
 	}
-	defer guard.Close()
+	defer func() {
+		// Later defers close both packet sockets and HTTP before dropping identity
+		// evidence. Stop renewals before release, so they cannot restore the tenure.
+		guard.Close()
+		releaseCtx, stop := context.WithTimeout(context.Background(), *leaseRenew)
+		defer stop()
+		if err := guard.Release(releaseCtx); err != nil {
+			log.Printf("relay lease release not confirmed: %v", err)
+		}
+	}()
 	timing := guard.Timing()
 	continuity := &relay.ContinuityStatus{Epoch: guard.Lease().Epoch, ClaimAt: timing.ClaimAt, Wait: timing.Wait, Fence: timing.Fence, Activate: timing.Activate, FencingFailures: timing.FencingFailures, StoreFailures: timing.StoreFailures}
 	bindAt := time.Now()

@@ -2,8 +2,7 @@
 
 package processidentity
 
-import "errors"
+import "context"
 
-func inspect(int) (string, bool, error) {
-	return "", false, errors.New("standby process identity requires Linux or macOS")
-}
+func inspect(int) (string, bool, error)             { return "", false, ErrUnsupported }
+func fencePlatform(context.Context, Identity) error { return ErrUnsupported }

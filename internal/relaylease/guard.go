@@ -18,6 +18,7 @@ const (
 	DefaultTTL   = 600 * time.Millisecond
 	DefaultRenew = 200 * time.Millisecond
 	DefaultPoll  = 100 * time.Millisecond
+	RetryRenew   = 50 * time.Millisecond
 )
 
 type Config struct {
@@ -44,6 +45,7 @@ type Guard struct {
 	mu           sync.Mutex
 	onLost       func()
 	lostHookOnce sync.Once
+	store        sessionstore.RelayLeases
 	lease        sessionstore.RelayLease
 	timing       Timing
 	err          error
@@ -54,7 +56,10 @@ func (g *Guard) Allowed() bool                  { return g.valid.Load() && g.ctx
 func (g *Guard) Lease() sessionstore.RelayLease { return g.lease }
 func (g *Guard) Timing() Timing                 { return g.timing }
 func (g *Guard) Err() error                     { g.mu.Lock(); defer g.mu.Unlock(); return g.err }
-func (g *Guard) Close()                         { g.cancel(); <-g.done }
+
+// Release requires stopped forwarding and closed sockets. Close must run first.
+func (g *Guard) Release(ctx context.Context) error { return g.store.ReleaseRelay(ctx, g.lease) }
+func (g *Guard) Close()                            { g.cancel(); <-g.done }
 
 // OnLost installs the immediate packet-stop hook, including a loss that raced
 // relay construction. It must not wait for the relay's background goroutines.
@@ -91,7 +96,7 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 	if cfg.Poll == 0 {
 		cfg.Poll = DefaultPoll
 	}
-	if cfg.Store == nil || cfg.Key == "" || cfg.Process.Owner == "" || cfg.Process.PID <= 1 || cfg.Process.Start == "" || cfg.TTL < time.Millisecond || cfg.Renew <= 0 || cfg.Renew >= cfg.TTL || cfg.Poll <= 0 {
+	if cfg.Store == nil || cfg.Key == "" || cfg.Process.Owner == "" || cfg.Process.PID <= 0 || cfg.Process.Start == "" || cfg.TTL < time.Millisecond || cfg.Renew <= 0 || cfg.Renew >= cfg.TTL || cfg.Poll <= 0 {
 		return nil, errors.New("relay lease needs a store, key and 0 < renewal < TTL, poll > 0")
 	}
 	if cfg.Fence == nil {
@@ -103,14 +108,41 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 	var failures uint64
 	tick := time.NewTicker(cfg.Poll)
 	defer tick.Stop()
+
+	var observed sessionstore.RelayLease
+	var expiredAt time.Time
 	for {
 		op, cancel := context.WithTimeout(ctx, cfg.Poll)
-		l, err = cfg.Store.ClaimRelay(op, cfg.Key, cfg.Process, cfg.TTL)
+		current, readErr := cfg.Store.GetRelay(op, cfg.Key)
 		cancel()
-		if err == nil {
-			break
+		claim := errors.Is(readErr, sessionstore.ErrNotFound)
+		if readErr == nil {
+			switch {
+			case current.Holder.Owner == "", current.Holder == cfg.Process:
+				claim = true // bootstrap, graceful release, or settle an uncertain claim
+			case current.Expired:
+				if expiredAt.IsZero() || current.Epoch != observed.Epoch || current.Holder != observed.Holder {
+					observed, expiredAt = current, time.Now()
+				} else if time.Since(expiredAt) >= cfg.Renew {
+					claim = true
+				}
+			default:
+				expiredAt = time.Time{}
+			}
+		} else {
+			expiredAt = time.Time{}
 		}
-		if !errors.Is(err, sessionstore.ErrLeaseHeld) {
+		err = readErr
+		if claim {
+			op, cancel = context.WithTimeout(ctx, cfg.Poll)
+			l, err = cfg.Store.ClaimRelay(op, cfg.Key, cfg.Process, cfg.TTL)
+			cancel()
+			if err == nil {
+				break
+			}
+			expiredAt = time.Time{} // a competing tenure or uncertain result resets grace
+		}
+		if err != nil && !errors.Is(err, sessionstore.ErrLeaseHeld) {
 			failures++
 			log.Printf("relay lease claim unavailable; no takeover: %v", err)
 		}
@@ -120,8 +152,9 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 		case <-tick.C:
 		}
 	}
+
 	owned, cancel := context.WithCancel(ctx)
-	g := &Guard{ctx: owned, cancel: cancel, done: make(chan struct{}), lease: l, timing: Timing{ClaimAt: time.Now(), Wait: time.Since(started), StoreFailures: failures}}
+	g := &Guard{ctx: owned, cancel: cancel, done: make(chan struct{}), store: cfg.Store, lease: l, timing: Timing{ClaimAt: time.Now(), Wait: time.Since(started), StoreFailures: failures}}
 	g.valid.Store(true)
 	go g.renew(cfg)
 	fail := func(err error) (*Guard, error) { g.Close(); return nil, err }
@@ -143,12 +176,29 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 	}
 	g.timing.Fence = time.Since(fenceAt)
 	activateAt := time.Now()
-	op, stop := context.WithTimeout(owned, cfg.Renew)
-	_, err = cfg.Store.ActivateRelay(op, l)
-	stop()
-	if err != nil {
-		return fail(fmt.Errorf("relay activation not confirmed; refusing bind: %w", err))
+
+	for {
+		op, stop := context.WithTimeout(owned, cfg.Renew)
+		_, err = cfg.Store.ActivateRelay(op, l)
+		stop()
+		if err == nil {
+			break
+		}
+		if errors.Is(err, sessionstore.ErrLeaseLost) {
+			return fail(err)
+		}
+		if owned.Err() != nil {
+			return fail(owned.Err())
+		}
+		g.timing.StoreFailures++
+		log.Printf("relay activation unavailable; retrying without binding: %v", err)
+		select {
+		case <-owned.Done():
+			return fail(owned.Err())
+		case <-tick.C:
+		}
 	}
+
 	if !g.Allowed() {
 		return fail(sessionstore.ErrLeaseLost)
 	}
@@ -157,7 +207,7 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 }
 func (g *Guard) renew(cfg Config) {
 	defer close(g.done)
-	tick := time.NewTicker(cfg.Renew)
+	tick := time.NewTimer(cfg.Renew)
 	defer tick.Stop()
 	for {
 		select {
@@ -172,10 +222,13 @@ func (g *Guard) renew(cfg Config) {
 			g.lose(err)
 			return
 		}
+		delay := cfg.Renew
 		if err != nil && g.ctx.Err() == nil {
+			delay = min(RetryRenew, cfg.Renew)
 			// No expiry-based self-fence: during an outage only this process can
 			// forward. Once Redis returns, the CAS observes any successor.
 			log.Printf("relay lease renewal unavailable; retaining forwarding: %v", err)
 		}
+		tick.Reset(delay)
 	}
 }
