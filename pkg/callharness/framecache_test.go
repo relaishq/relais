@@ -32,7 +32,8 @@ func TestRelayFrameCacheModes(t *testing.T) {
 // assertCacheRecovery keeps content, resume and decode failures gated in
 // every run. Phase-1 cache recovery reports freshness without gating it,
 // with or without race: the 2s acceptance gate belongs to buffered takeovers
-// in #27. Per-metric coverage remains gated separately, including under race.
+// in #27. Loss and new-content coverage remain gated in every run; freshness
+// coverage needs the longer observation used outside short mode.
 func assertCacheRecovery(t *testing.T, measurement callharness.EventMeasurement) {
 	t.Helper()
 	for _, metric := range []struct {
@@ -55,10 +56,13 @@ func assertCacheRecovery(t *testing.T, measurement callharness.EventMeasurement)
 
 func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 	freshness := callharness.FreshnessPolicy{RecoveryLimit: 2 * time.Second, StabilityWindow: 3 * time.Second}
-	// Keep the full observation in -short too: the retained 80% freshness
-	// coverage gate requires a complete 3s stability window. A 3s recording
-	// would make every freshness verdict unknown after the crash.
+	// Full and timing lanes observe the complete freshness stability window.
+	// Short trials retain loss, recovery and decode gates without freshness
+	// coverage, since their recordings end before that window completes.
 	mediaDuration := freshness.EvaluationWindow() + time.Second
+	if testing.Short() {
+		mediaDuration = shortCallDuration
+	}
 	frames := selectedFrameCache(t, store)
 	for _, mode := range []struct {
 		name       string
@@ -165,7 +169,9 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 			}
 			require.True(t, callharness.EnoughConclusive(lossConclusive, 10), "loss coverage %d/10", lossConclusive)
 			require.True(t, callharness.EnoughConclusive(newConclusive, 10), "first new content coverage %d/10", newConclusive)
-			require.True(t, callharness.EnoughConclusive(freshnessConclusive, 10), "freshness coverage %d/10", freshnessConclusive)
+			if !testing.Short() {
+				require.True(t, callharness.EnoughConclusive(freshnessConclusive, 10), "freshness coverage %d/10", freshnessConclusive)
+			}
 			sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
 			require.Len(t, times, 10)
 			sort.Slice(liveTimes, func(i, j int) bool { return liveTimes[i] < liveTimes[j] })

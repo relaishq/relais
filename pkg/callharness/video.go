@@ -295,6 +295,10 @@ func fullDecode(ctx context.Context, frames []vp8Frame, size image.Point) FullDe
 		result.Failure = DecodeUnavailable
 		result.Skipped = "decode interrupted: " + ctx.Err().Error()
 		result.Errors = ""
+	} else if runErr == nil && result.FramesDecoded != result.FramesIn {
+		// Successful execution with missing or extra decoded frames proves a
+		// decode failure, even when ffmpeg prints no bitstream diagnostic.
+		result.Failure = DecodeInvalid
 	} else if result.Errors != "" || result.FramesDecoded != result.FramesIn {
 		// ffmpeg execution failures do not prove corrupt media. Only an
 		// explicit bitstream diagnostic can produce a trusted failure.
