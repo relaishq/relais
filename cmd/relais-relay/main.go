@@ -22,6 +22,11 @@ func run() error {
 	flag.Parse()
 	ctx, cancel := processrun.Context()
 	defer cancel()
+	listener, err := processrun.ListenPrivate(*httpAddr)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = listener.Close() }()
 	store, err := storeConfig.OpenOwners(ctx)
 	if err != nil {
 		return err
@@ -32,10 +37,6 @@ func run() error {
 		return err
 	}
 	defer func() { _ = r.Close() }()
-	listener, err := processrun.ListenPrivate(*httpAddr)
-	if err != nil {
-		return err
-	}
 	processrun.Ready(map[string]any{"http": "http://" + listener.Addr().String(), "media": r.PublicAddr(), "leg": r.WorkerAddr()})
 	return processrun.Serve(ctx, listener, r.PrivateHandler())
 }

@@ -189,7 +189,16 @@ func (w *Worker) ExportSession(sessionID string) ([]byte, error) {
 // packets here. A worker with its own socket only receives the caller's
 // packets if they reach that socket. Behind a relay, the control plane
 // transfers ownership first and supplies the new fenced lease in opts.
-func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error) {
+func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, resumeErr error) {
+	defer func() {
+		if resumeErr != nil {
+			if opts.SequenceMargin > 0 {
+				w.metrics.takeoverErrors.Add(1)
+			} else {
+				w.metrics.handoverErrors.Add(1)
+			}
+		}
+	}()
 	if opts.SequenceMargin >= 1<<15 {
 		return "", fmt.Errorf("mediaworker: sequence margin %d is not below 2^15", opts.SequenceMargin)
 	}
@@ -335,6 +344,11 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (string, error)
 	sess.mu.Unlock()
 	workerprobe.AfterResume(w.localAddr, sess.id, pendingPLI)
 	sess.log.Infof("session %s: resumed with %s", sess.id, snap.State.ICE.RemoteAddr)
+	if opts.SequenceMargin > 0 {
+		w.metrics.takeovers.Add(1)
+	} else {
+		w.metrics.handovers.Add(1)
+	}
 
 	return sess.id, nil
 }

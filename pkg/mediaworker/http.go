@@ -2,6 +2,8 @@ package mediaworker
 
 import (
 	"net/http"
+
+	"github.com/relais/pkg/metrics"
 	"net/netip"
 
 	"github.com/relais/internal/privateapi"
@@ -48,6 +50,7 @@ type WorkerStatus struct {
 // Session snapshots contain key material: this API must stay private.
 func (w *Worker) PrivateHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metrics.ProcessHandler(w.metricSamples))
 	mux.HandleFunc("POST /sessions", func(rw http.ResponseWriter, r *http.Request) {
 		var req CreateRequest
 		if !privateapi.Read(rw, r, &req) {

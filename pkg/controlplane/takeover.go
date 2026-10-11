@@ -111,6 +111,7 @@ func (p *Plane) Run(ctx context.Context) error {
 				}
 				if (!w.dead && now.Sub(w.lastHeartbeat) >= p.config.DeadAfter) || (w.dead && !w.recovered) {
 					if !w.dead {
+						p.metrics.detections.Add(1)
 						w.rejoinToken, w.acceptedToken = "", ""
 					}
 					w.dead, w.recovering, w.recovered, w.rejoinReady = true, true, false, false
@@ -533,6 +534,20 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 	p.mu.Lock()
 	if record {
 		p.recordTakeover(*res)
+	}
+	switch res.Kind {
+	case "takeover":
+		if lost || cause != nil {
+			p.metrics.takeoverErrors.Add(1)
+		} else {
+			p.metrics.takeovers.Add(1)
+		}
+	case "move":
+		if lost || cause != nil {
+			p.metrics.moveErrors.Add(1)
+		} else {
+			p.metrics.moves.Add(1)
+		}
 	}
 	if lost {
 		p.lostCount++

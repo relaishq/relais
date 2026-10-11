@@ -2,6 +2,8 @@ package relay
 
 import (
 	"net/http"
+
+	"github.com/relais/pkg/metrics"
 	"net/netip"
 
 	"github.com/relais/internal/privateapi"
@@ -33,6 +35,7 @@ type RelayStatus struct {
 // PrivateHandler controls a relay on a trusted loopback HTTP listener.
 func (r *Relay) PrivateHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", metrics.ProcessHandler(r.metricSamples))
 	mux.HandleFunc("POST /workers", func(w http.ResponseWriter, req *http.Request) {
 		var body WorkerRequest
 		if !privateapi.Read(w, req, &body) {
