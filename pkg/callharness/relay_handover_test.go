@@ -64,6 +64,7 @@ func testRelayPlannedHandover(t *testing.T, store sessionstore.Store) {
 	assertSignaling(t, report, "audio", "video")
 	assertCleanCall(t, report)
 	require.Len(t, report.Moves, 20)
+	assertContentCoverage(t, report.Moves)
 	gaps := make([]time.Duration, 0, 20)
 	for i, move := range report.Moves {
 		assertNoLostContent(t, move)
@@ -150,6 +151,7 @@ func testRelayDrainTenCalls(t *testing.T, store sessionstore.Store) {
 		assertCleanCall(t, report)
 		logRelayMoveDetails(t, "DRAIN_DETAILS", report.Moves)
 		require.Len(t, report.Moves, 1)
+		assertContentCoverage(t, report.Moves)
 		assertNoLostContent(t, report.Moves[0])
 		for _, track := range report.Moves[0].Tracks {
 			assert.Positive(t, track.PacketsAfter)

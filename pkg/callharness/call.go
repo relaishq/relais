@@ -31,6 +31,9 @@ const (
 
 // CallOptions shape the call the caller makes.
 type CallOptions struct {
+	// Freshness configures the caller's bounded recovery evaluation.
+	Freshness FreshnessPolicy
+
 	// InitialSequenceNumbers replaces random RTP starts for wrap tests. Nil
 	// keeps Pion's random starts. Both tracks keep their normal packetizers.
 	InitialSequenceNumbers *RTPSequenceNumbers
@@ -91,7 +94,7 @@ type Call struct {
 
 	// keyframeWanted holds the caller-clock time of the pending request;
 	// the video sender answers it the way a browser's encoder would.
-	keyframeWanted   atomic.Int64
+	keyframeWanted   atomic.Pointer[keyframeResponseRequest]
 	videoData        []byte
 	initialSequences *RTPSequenceNumbers
 
@@ -118,6 +121,7 @@ type Call struct {
 // with ErrHarnessClosed once the harness is closing.
 func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err error) {
 	rec := newRecorder()
+	rec.freshnessPolicy = opts.Freshness.defaults()
 
 	socket, err := newCallerSocket(rec)
 	if err != nil {
@@ -256,8 +260,8 @@ func (c *Call) addTrack(capability webrtc.RTPCodecCapability, kind string) (*web
 			}
 			for range keyframeRequests(packets, ssrc) {
 				requestedAt := c.rec.keyframeRequestReceived(kind)
-				if kind == kindVideo {
-					c.keyframeWanted.Store(int64(requestedAt))
+				if kind == kindVideo && requestedAt != nil {
+					c.keyframeWanted.Store(requestedAt)
 				}
 			}
 		}
@@ -310,7 +314,8 @@ func (c *Call) onTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 			if err != nil {
 				return
 			}
-			c.rec.packet(record, pkt, time.Now())
+			arrived := time.Now()
+			c.rec.packet(record, pkt, arrived)
 			if assembler == nil {
 				continue
 			}
@@ -322,6 +327,7 @@ func (c *Call) onTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 			if frame == nil {
 				continue
 			}
+			frame.completedAt = arrived
 			var size image.Point
 			var decodeErr error
 			if frame.keyframe {
@@ -425,8 +431,8 @@ func (c *Call) sendVideo(ctx context.Context, end time.Time) error {
 	defer ticker.Stop()
 
 	for time.Now().Before(end) {
-		requestedAt := time.Duration(c.keyframeWanted.Swap(0))
-		if requestedAt > 0 {
+		requestedAt := c.keyframeWanted.Swap(nil)
+		if requestedAt != nil {
 			if err := src.rewind(); err != nil {
 				return err
 			}

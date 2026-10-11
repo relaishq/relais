@@ -23,8 +23,9 @@ import (
 //     every packet in sequence and its marker bit.
 //  2. It decodes every keyframe in pure Go with golang.org/x/image/vp8, which
 //     implements keyframes only (it is the WebP lossy decoder).
-//  3. An interframe counts as decodable when it is complete and directly
-//     follows the previous complete frame, back to a keyframe that decoded.
+//  3. An interframe counts as decodable when its authenticated caller source
+//     follows the previous PictureID, back to a decoded keyframe. Unknown
+//     sources require output sequence adjacency. A source gap breaks the chain.
 //     Every frame is also compared byte for byte with the frames the caller
 //     sent.
 //  4. At hangup, when ffmpeg is on PATH, every frame from the first decoded
@@ -41,6 +42,7 @@ type vp8Frame struct {
 	keyframe     bool
 	pictureID    uint16
 	firstArrival time.Time
+	completedAt  time.Time
 }
 
 // vp8Assembler reassembles the VP8 frames of one track from its RTP packets
@@ -101,7 +103,7 @@ func (a *vp8Assembler) push(pkt *rtp.Packet) (frame *vp8Frame, incomplete int) {
 		firstSeq:  a.firstSeq,
 		lastSeq:   a.lastSeq,
 		keyframe:  isVP8Keyframe(data),
-		pictureID: a.pictureID, firstArrival: a.firstArrival,
+		pictureID: a.pictureID, firstArrival: a.firstArrival, completedAt: time.Now(),
 	}, incomplete
 }
 

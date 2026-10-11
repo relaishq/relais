@@ -20,7 +20,8 @@ const (
 // offsets from the moment the caller started dialing. Nothing is recorded
 // after hangup, so tearing the call down does not show up as a failure.
 type recorder struct {
-	start time.Time
+	freshnessPolicy FreshnessPolicy
+	start           time.Time
 
 	mu sync.Mutex
 
@@ -48,6 +49,7 @@ type recorder struct {
 	sentVideoFrames       map[uint16]sentVideoFrame
 	sentAudioUnits        map[string]contentUnit
 	audioIdentity         uint64
+	audioSeeded           bool
 	pendingAudio          string
 	contentAssemblies     map[videoAssemblyKey]*contentAssembly
 	contentIdentityErrors int
@@ -89,10 +91,12 @@ type trackRecord struct {
 type videoRecord struct {
 	VideoReport
 
-	chain    bool // every frame since the last decoded keyframe is decodable
-	haveLast bool
-	lastSeq  uint16 // last packet of the previous complete frame
-	lastTS   uint32
+	chain         bool // every frame since the last decoded keyframe is decodable
+	haveLast      bool
+	lastSeq       uint16 // last packet of the previous complete frame
+	lastTS        uint32
+	lastPictureID uint16
+	lastSourceAt  time.Duration
 
 	// decodeInput is every complete frame from the first decoded keyframe on,
 	// for the full decode at hangup.
@@ -253,9 +257,11 @@ func (r *recorder) sent(kind string, keyframe bool) {
 		source.written = true
 		r.sentVideoFrames[id] = source
 	} else {
-		unit := r.sentAudioUnits[r.pendingAudio]
-		unit.written = true
-		r.sentAudioUnits[r.pendingAudio] = unit
+		if unit, ok := r.sentAudioUnits[r.pendingAudio]; ok && r.pendingAudio != "" {
+			unit.written = true
+			r.sentAudioUnits[r.pendingAudio] = unit
+		}
+		r.pendingAudio = ""
 	}
 	track.Frames++
 	if keyframe {
@@ -263,21 +269,24 @@ func (r *recorder) sent(kind string, keyframe bool) {
 	}
 }
 
-// keyframeRequestReceived records a PLI or FIR for one of the caller's own
-// tracks.
-func (r *recorder) keyframeRequestReceived(kind string) time.Duration {
+// keyframeResponseRequest is nil when there is no accepted request. At=0
+// remains a valid caller-clock request time.
+type keyframeResponseRequest struct{ at time.Duration }
+
+// keyframeRequestReceived records a PLI/FIR, unless the call has hung up.
+func (r *recorder) keyframeRequestReceived(kind string) *keyframeResponseRequest {
 	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.hungUp {
-		return 0
+		return nil
 	}
 	if kind == kindVideo {
 		r.sentVideo.KeyframeRequests++
 	} else {
 		r.sentAudio.KeyframeRequests++
 	}
-	return r.since(now)
+	return &keyframeResponseRequest{at: r.since(now)}
 }
 
 func (r *recorder) keyframeRequestSent() {
@@ -344,7 +353,7 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 			unit.returnedAt = at
 			r.sentAudioUnits[string(pkt.Payload)] = unit
 		} else {
-			unit.returnedAt, unit.identity = at, string(pkt.Payload)
+			unit.returnedAt, unit.identity, unit.replayed = at, string(pkt.Payload), true
 			r.repeatedAudioReturns = append(r.repeatedAudioReturns, unit)
 		}
 	}
@@ -378,12 +387,16 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 	}
 	v := track.video
 	decodable := v.DecodableFrames
+	source := r.sentVideoFrames[frame.pictureID]
+	if source.data != string(frame.data) {
+		source = sentVideoFrame{}
+	}
 	defer func() {
-		source := r.sentVideoFrames[frame.pictureID]
-		if source.data != string(frame.data) {
-			source = sentVideoFrame{}
+		receivedAt := time.Duration(0)
+		if !frame.completedAt.IsZero() {
+			receivedAt = r.since(frame.completedAt)
 		}
-		v.frames = append(v.frames, frameMark{at: r.since(decoded), decodable: v.DecodableFrames > decodable, firstArrival: r.since(frame.firstArrival), source: source, pictureID: frame.pictureID})
+		v.frames = append(v.frames, frameMark{at: r.since(decoded), decodable: v.DecodableFrames > decodable, firstArrival: r.since(frame.firstArrival), receivedAt: receivedAt, source: source, pictureID: frame.pictureID})
 	}()
 
 	v.Frames++
@@ -394,18 +407,23 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 		v.UnmatchedFrames++
 	}
 
-	// A frame is in order when its first packet directly follows the previous
-	// complete frame's last packet: no frame was lost or reordered between.
+	// Authenticated caller identities follow the source PictureID chain even
+	// when a relay changes output sequence numbers. A missing source reference
+	// still breaks the decoder chain. Unknown sources retain strict RTP order.
 	if v.haveLast && int32(frame.timestamp-v.lastTS) <= 0 {
 		v.NonMonotonicTimestamps++
 	}
 	inOrder := !v.haveLast || (frame.firstSeq == v.lastSeq+1 && int32(frame.timestamp-v.lastTS) > 0)
+	if v.haveLast && v.lastSourceAt > 0 && source.at > 0 {
+		inOrder = frame.pictureID == (v.lastPictureID+1)&0x7fff && source.at > v.lastSourceAt && int32(frame.timestamp-v.lastTS) > 0
+	}
 	if !inOrder {
 		v.FrameGaps++
 	}
 	v.haveLast = true
 	v.lastSeq = frame.lastSeq
 	v.lastTS = frame.timestamp
+	v.lastPictureID, v.lastSourceAt = frame.pictureID, source.at
 
 	switch {
 	case frame.keyframe && decodeErr == nil:

@@ -184,6 +184,7 @@ type rtpMark struct {
 
 // frameMark is a complete video frame the caller received.
 type frameMark struct {
+	receivedAt   time.Duration
 	at           time.Duration
 	decodable    bool
 	firstArrival time.Duration
@@ -297,6 +298,7 @@ type ConsentReport struct {
 func (r *recorder) moveReports() []MoveReport {
 	reports := make([]MoveReport, 0, len(r.moves))
 	baselineFloor := time.Duration(0)
+	var firstAudio, firstVideo FreshnessReport
 	for _, move := range r.moves {
 		report := MoveReport{
 			Kind:          move.kind,
@@ -324,13 +326,33 @@ func (r *recorder) moveReports() []MoveReport {
 			report.Recovery = r.videoRecovery(report.Start, limit)
 		}
 		report.Measurement = r.eventMeasurement(report, limit, baselineFloor)
+		if len(reports) == 0 {
+			firstAudio, firstVideo = report.Measurement.Audio, report.Measurement.Video
+		}
+		for _, pair := range []struct {
+			current *FreshnessReport
+			first   FreshnessReport
+		}{{&report.Measurement.Audio, firstAudio}, {&report.Measurement.Video, firstVideo}} {
+			pair.current.FirstBaselineTrusted = pair.first.Verdict.Trusted
+			pair.current.FirstBaselineSamples = pair.first.BaselineSamples
+			pair.current.FirstBaselineMedian = pair.first.BaselineMedian
+			pair.current.FirstBaselineP95 = pair.first.BaselineP95
+			if pair.current == &report.Measurement.Audio || report.Measurement.VideoExpected {
+				pair.current.updateVerdict()
+				if pair.current == &report.Measurement.Video && (r.contentIdentityErrors > 0 || r.sentVideo.Frames > 32768) {
+					pair.current.Verdict.untrust("video identity attribution unavailable")
+				}
+			}
+		}
+		report.Measurement.updateJudgment()
 		if report.Kind == "takeover" {
 			previous := report.Measurement
 			if previous.Audio.Recovered && (r.sentVideo.Frames == 0 || previous.Video.Recovered) {
 				baselineFloor = report.Start + max(previous.Audio.BackToBaseline, previous.Video.BackToBaseline)
 			} else {
-				// No trusted recovery boundary exists for the next baseline.
-				baselineFloor = r.hungUpAt
+				// Keep the next window finite. Its own baseline is judged against
+				// the call's first baseline, so lasting lag cannot become normal.
+				baselineFloor = max(report.End, previous.MediaResumedAt)
 			}
 		}
 		firstResumed := time.Duration(0)

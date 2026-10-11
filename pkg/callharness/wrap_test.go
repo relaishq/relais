@@ -254,7 +254,7 @@ func seedWrapMedia(t *testing.T, call *Call) {
 	require.NoError(t, err)
 	frame, keyframe, err := video.next()
 	require.NoError(t, err)
-	call.rec.sendingVideo(frame, 0, video.frameDuration)
+	call.rec.sendingVideo(frame, nil, video.frameDuration)
 	require.NoError(t, call.video.WriteSample(media.Sample{Data: frame, Duration: video.frameDuration}))
 	call.rec.sent(kindVideo, keyframe)
 	require.Eventually(t, func() bool {

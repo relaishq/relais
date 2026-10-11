@@ -2,6 +2,7 @@ package callharness
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -214,6 +215,14 @@ func identifyOpus(frame []byte, id uint64) ([]byte, error) {
 func (r *recorder) sendingAudio(frame []byte, duration time.Duration) ([]byte, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if !r.audioSeeded {
+		var seed [8]byte
+		if _, err := rand.Read(seed[:]); err != nil {
+			return nil, fmt.Errorf("callharness: audio identity seed: %w", err)
+		}
+		r.audioIdentity = binary.BigEndian.Uint64(seed[:])
+		r.audioSeeded = true
+	}
 	r.audioIdentity++
 	packet, err := identifyOpus(frame, r.audioIdentity)
 	if err != nil {

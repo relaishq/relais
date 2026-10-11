@@ -24,8 +24,7 @@ func TestAudioIdentityRepeatsAndWriteFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, first, second)
 	require.Equal(t, first[3:len(first)-8], second[3:len(second)-8])
-	require.Equal(t, uint64(1), binary.BigEndian.Uint64(first[len(first)-8:]))
-	require.Equal(t, uint64(2), binary.BigEndian.Uint64(second[len(second)-8:]))
+	require.Equal(t, binary.BigEndian.Uint64(first[len(first)-8:])+1, binary.BigEndian.Uint64(second[len(second)-8:]))
 	require.True(t, r.sentAudioUnits[string(first)].written)
 	require.False(t, r.sentAudioUnits[string(second)].written, "a failed WriteSample is not sent content")
 	_, err = identifyOpus([]byte{0xf9, 1}, 3)
@@ -125,10 +124,12 @@ func TestEventMeasurementCountsMissingContentAndLateDelivery(t *testing.T) {
 	require.Equal(t, "keyframe", m.FirstContent)
 	require.Equal(t, move.Tracks[0].Gap, m.AudioPause)
 	require.Equal(t, move.Tracks[1].Gap, m.VideoPause)
-	// Delivery after the deadline must not silently turn the loss into zero.
+	// Delivery after settle is late, independent from missing content.
 	audio.returnedAt = 2600 * time.Millisecond
 	r.sentAudioUnits[string(rune(23))] = audio
-	require.Equal(t, 40*time.Millisecond, r.eventMeasurement(move, r.hungUpAt, 0).LostAudio)
+	late := r.eventMeasurement(move, r.hungUpAt, 0)
+	require.Equal(t, 20*time.Millisecond, late.LostAudio)
+	require.Equal(t, 20*time.Millisecond, late.LateAudio)
 }
 
 func TestEventMeasurementClassifiesFirstDecodedContent(t *testing.T) {
@@ -142,14 +143,18 @@ func TestEventMeasurementClassifiesFirstDecodedContent(t *testing.T) {
 		{"cache", time.Second, false, 0, "cache"},
 		{"outage", 1600 * time.Millisecond, false, 0, "outage media"},
 		{"response just before resume", 1799 * time.Millisecond, true, 1750 * time.Millisecond, "keyframe"},
-		{"response to pre-event request", 1700 * time.Millisecond, true, 1400 * time.Millisecond, "keyframe"},
+		{"response to pre-event request", 1700 * time.Millisecond, true, 1400 * time.Millisecond, "outage media"},
 		{"cached response", time.Second, true, 900 * time.Millisecond, "cache"},
 		{"requested keyframe", 1848 * time.Millisecond, true, 1820 * time.Millisecond, "keyframe"},
 		{"ordinary live", 1848 * time.Millisecond, false, 0, "live"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			r := testMeasurementRecorder(t)
-			r.tracks[0].video.frames[0].source = sentVideoFrame{at: tt.sent, pli: tt.pli, requestedAt: tt.request}
+			returned := time.Duration(0)
+			if tt.class == "cache" {
+				returned = tt.sent + time.Millisecond
+			}
+			r.tracks[0].video.frames[0].source = sentVideoFrame{at: tt.sent, returnedAt: returned, pli: tt.pli, requestedAt: tt.request}
 			m := r.eventMeasurement(testMeasurementMove(), r.hungUpAt, 0)
 			require.Equal(t, tt.class, m.FirstContent)
 			require.Positive(t, m.FirstLiveFrame)
@@ -164,7 +169,7 @@ func TestEventMeasurementInconclusive(t *testing.T) {
 		change func(*recorder)
 		reason string
 	}{
-		{"few samples", func(r *recorder) { r.sentAudioUnits = map[string]contentUnit{} }, "audio baseline has 0 samples"},
+		{"few samples", func(r *recorder) { r.sentAudioUnits = map[string]contentUnit{} }, "baseline has 0 samples"},
 		{"noisy", func(r *recorder) {
 			for key, u := range r.sentAudioUnits {
 				if u.at == time.Second || u.at == 1050*time.Millisecond {
@@ -172,8 +177,7 @@ func TestEventMeasurementInconclusive(t *testing.T) {
 					r.sentAudioUnits[key] = u
 				}
 			}
-		}, "audio baseline p95-minus-median exceeds 20ms"},
-		{"few decoded frames", func(r *recorder) { r.tracks[0].video.frames = r.tracks[0].video.frames[:1] }, "too few decoded"},
+		}, "baseline p95-minus-median exceeds 20ms"},
 		{"short settle", func(r *recorder) { r.hungUpAt = 2300 * time.Millisecond }, "settle window truncated"},
 		{"wrap", func(r *recorder) { r.sentVideo.Frames = 32769 }, "PictureID wrapped"},
 	} {
@@ -199,7 +203,7 @@ func TestFreshnessRecoveryNeedsSustainedUniqueUnits(t *testing.T) {
 	}
 	f := measureFreshness(units, time.Second, 1100*time.Millisecond, 2*time.Second, 0)
 	require.True(t, f.Recovered)
-	require.Equal(t, 600*time.Millisecond, f.BackToBaseline)
+	require.Equal(t, 200*time.Millisecond, f.BackToBaseline) // isolated live jitter does not reset recovery
 	require.Equal(t, 49*time.Millisecond, f.PeakAboveBaseline)
 }
 
@@ -253,6 +257,7 @@ func TestReorderedDuplicatedContentHasNoFalseLoss(t *testing.T) {
 			frame, _ := assembler.push(packet)
 			if frame != nil {
 				frame.firstArrival = r.start.Add(arrived)
+				frame.completedAt = r.start.Add(arrived)
 				size, decodeErr := decodeKeyframe(frame.data)
 				require.NoError(t, decodeErr)
 				r.videoFrame(video, frame, size, decodeErr, r.start.Add(arrived+100*time.Microsecond))
@@ -356,7 +361,10 @@ func TestUnknownResumeCannotAttributeFirstContent(t *testing.T) {
 	move := testMeasurementMove()
 	move.Recovery.MediaResumedAt = 0
 	m := r.eventMeasurement(move, r.hungUpAt, 0)
-	require.True(t, m.Inconclusive)
+	require.False(t, m.Inconclusive)
+	require.True(t, m.ResumeVerdict.Trusted)
+	require.True(t, m.ResumeVerdict.Failed)
+	require.True(t, m.FirstNewContentVerdict.Failed)
 	require.Empty(t, m.FirstContent)
 	require.Zero(t, m.FirstLiveFrame)
 	require.Zero(t, m.DecodedFrames)
@@ -438,16 +446,16 @@ func TestFreshnessBaselineStartsAfterPriorRecovery(t *testing.T) {
 func TestVideoResponseRetainsConsumedRequestTime(t *testing.T) {
 	r := newRecorder()
 	requestedAt := r.keyframeRequestReceived(kindVideo)
-	require.Positive(t, requestedAt)
+	require.NotNil(t, requestedAt)
 	r.sendingVideo([]byte{1}, requestedAt, time.Second/30)
 	response := r.sentVideoFrames[0]
 	require.True(t, response.pli)
-	require.Equal(t, requestedAt, response.requestedAt)
+	require.Equal(t, requestedAt.at, response.requestedAt)
 	// A later request cannot change the response's recorded provenance.
 	_ = r.keyframeRequestReceived(kindVideo)
-	require.Equal(t, requestedAt, r.sentVideoFrames[0].requestedAt)
+	require.Equal(t, requestedAt.at, r.sentVideoFrames[0].requestedAt)
 	r.sent(kindVideo, true)
-	r.sendingVideo([]byte{2}, 0, time.Second/30)
+	r.sendingVideo([]byte{2}, nil, time.Second/30)
 	require.False(t, r.sentVideoFrames[1].pli)
 	require.Zero(t, r.sentVideoFrames[1].requestedAt)
 }

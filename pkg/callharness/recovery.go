@@ -44,12 +44,17 @@ type sentVideoFrame struct {
 	returnedAt  time.Duration
 }
 
-func (r *recorder) sendingVideo(frame []byte, requestedAt, interval time.Duration) {
+func (r *recorder) sendingVideo(frame []byte, request *keyframeResponseRequest, interval time.Duration) {
 	r.sending(kindVideo, frame)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	id := uint16(r.sentVideo.Frames & 0x7fff)
-	r.sentVideoFrames[id] = sentVideoFrame{at: r.since(time.Now()), data: string(frame), pli: requestedAt > 0, requestedAt: requestedAt, duration: interval}
+	r.sentVideoFrames[id] = sentVideoFrame{at: r.since(time.Now()), data: string(frame), pli: request != nil, duration: interval}
+	if request != nil {
+		source := r.sentVideoFrames[id]
+		source.requestedAt = request.at
+		r.sentVideoFrames[id] = source
+	}
 	r.frameInterval = interval
 }
 
@@ -75,6 +80,9 @@ func (r *recorder) videoRecovery(start, limit time.Duration) VideoRecovery {
 			}
 			break
 		}
+	}
+	if result.MediaResumedAt == 0 {
+		result.MediaResumedAt = r.contentResume(start, limit)
 	}
 	if result.MediaResumedAt == 0 {
 		return result
@@ -125,7 +133,7 @@ func (r *recorder) videoRecovery(start, limit time.Duration) VideoRecovery {
 			continue
 		}
 		for _, f := range track.video.frames {
-			if !f.decodable || f.at < result.MediaResumedAt || f.firstArrival < result.MediaResumedAt || f.at >= limit {
+			if !f.decodable || f.at < result.MediaResumedAt || f.at >= limit {
 				continue
 			}
 			if f.source.at >= result.MediaResumedAt && result.FirstDecodedLiveAfterKill == 0 {
@@ -157,4 +165,44 @@ func (r *recorder) videoRecovery(start, limit time.Duration) VideoRecovery {
 
 func (f sentVideoFrame) unit() contentUnit {
 	return contentUnit{at: f.at, duration: f.duration, written: f.written, returnedAt: f.returnedAt}
+}
+
+// contentResume authenticates the first complete returning unit after an
+// observed outage gap. This fallback does not require a relay sequence margin.
+// Normal pacing (three frame intervals, at least 50ms) is not an outage.
+func (r *recorder) contentResume(start, limit time.Duration) time.Duration {
+	var units []contentUnit
+	for _, u := range r.sentAudioUnits {
+		units = append(units, u)
+	}
+	for _, f := range r.sentVideoFrames {
+		units = append(units, f.unit())
+	}
+	units = append(units, r.repeatedAudioReturns...)
+	units = append(units, r.repeatedVideoReturns...)
+	var resumed time.Duration
+	for _, track := range r.tracks {
+		interval := opusFrameDuration
+		if track.video != nil {
+			interval = r.frameInterval
+			if interval == 0 {
+				interval = time.Second / 30
+			}
+		}
+		for i := 1; i < len(track.arrivals); i++ {
+			at := track.arrivals[i]
+			if at <= start || at >= limit || at-track.arrivals[i-1] <= max(50*time.Millisecond, 3*interval) {
+				continue
+			}
+			for _, unit := range units {
+				if !unit.written || unit.returnedAt < unit.at || unit.returnedAt < at || unit.returnedAt >= limit {
+					continue
+				}
+				if resumed == 0 || unit.returnedAt < resumed {
+					resumed = unit.returnedAt
+				}
+			}
+		}
+	}
+	return resumed
 }

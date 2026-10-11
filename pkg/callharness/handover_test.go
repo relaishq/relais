@@ -218,6 +218,9 @@ func assertMoves(t *testing.T, report *callharness.Report, moves [][2]int, margi
 	t.Helper()
 
 	require.Len(t, report.Moves, len(moves), "moves")
+	if margin == 0 {
+		assertContentCoverage(t, report.Moves)
+	}
 	for i, move := range report.Moves {
 		if margin == 0 {
 			assertNoLostContent(t, move)
@@ -284,10 +287,29 @@ func assertVideoDecodes(t *testing.T, report *callharness.Report) {
 func assertNoLostContent(t *testing.T, move callharness.MoveReport) {
 	t.Helper()
 	require.Positive(t, move.Measurement.SettleWindow, "caller event measurement must be wired into the report")
-	if move.Measurement.Inconclusive {
-		t.Logf("content measurement inconclusive: %s", move.Measurement.Summary())
-		return
+	if move.Measurement.AudioLoss.Trusted {
+		assert.Zero(t, move.Measurement.LostAudio, "planned move lost sent audio")
+	} else {
+		t.Logf("audio loss inconclusive: %s", move.Measurement.AudioLoss.Summary())
 	}
-	assert.Zero(t, move.Measurement.LostAudio, "planned move lost sent audio")
-	assert.Zero(t, move.Measurement.LostVideoFrames, "planned move lost sent video")
+	if move.Measurement.VideoLoss.Trusted {
+		assert.Zero(t, move.Measurement.LostVideoFrames, "planned move lost sent video")
+	} else {
+		t.Logf("video loss inconclusive: %s", move.Measurement.VideoLoss.Summary())
+	}
+}
+
+func assertContentCoverage(t *testing.T, moves []callharness.MoveReport) {
+	t.Helper()
+	audio, video := 0, 0
+	for _, move := range moves {
+		if move.Measurement.SettleWindow > 0 && move.Measurement.AudioLoss.Trusted {
+			audio++
+		}
+		if move.Measurement.SettleWindow > 0 && move.Measurement.VideoLoss.Trusted {
+			video++
+		}
+	}
+	require.True(t, callharness.EnoughConclusive(audio, len(moves)), "audio loss coverage %d/%d (need at least %d%%)", audio, len(moves), callharness.MinimumConclusivePercent)
+	require.True(t, callharness.EnoughConclusive(video, len(moves)), "video loss coverage %d/%d (need at least %d%%)", video, len(moves), callharness.MinimumConclusivePercent)
 }

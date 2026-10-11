@@ -40,6 +40,7 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 			paths := map[string]int{}
 			liveReasons := map[string]int{}
 			within := 0
+			lossConclusive, newConclusive := 0, 0
 			for trial := range 10 {
 				t.Run(fmt.Sprint(trial), func(t *testing.T) {
 					h := startHarness(t, callharness.Options{Relay: true, SessionStore: store, FrameCache: frames, Workers: 2, DisableFrameCache: !mode.cache, DisableResumePLI: !mode.pli})
@@ -61,6 +62,13 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 					assert.Zero(t, report.Track("video").Video.NonMonotonicTimestamps)
 					require.Len(t, report.Moves, 1)
 					t.Logf("CALLER_EVENT run=%d mode=%s %s", trial+1, mode.name, report.Moves[0].Measurement.Summary())
+					measurement := report.Moves[0].Measurement
+					if measurement.LossConclusive() {
+						lossConclusive++
+					}
+					if measurement.FirstNewContentVerdict.Trusted {
+						newConclusive++
+					}
 					recovery := report.Moves[0].Recovery
 					stats, err := h.ReplayStats(1)
 					require.NoError(t, err)
@@ -84,6 +92,11 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 					}
 					if mode.name == "keyframe" {
 						require.Equal(t, "Keyframe", recovery.Path)
+						require.True(t, measurement.LossConclusive(), measurement.Summary())
+						require.True(t, measurement.FirstNewContentVerdict.Trusted, measurement.Summary())
+						require.Positive(t, measurement.LostAudio)
+						require.Positive(t, measurement.LostVideoFrames)
+						require.Equal(t, "keyframe", measurement.FirstNewContent)
 					}
 					if mode.pli {
 						assert.Positive(t, report.SentVideo.KeyframeRequests)
@@ -117,6 +130,8 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 					}
 				})
 			}
+			require.True(t, callharness.EnoughConclusive(lossConclusive, 10), "loss coverage %d/10", lossConclusive)
+			require.True(t, callharness.EnoughConclusive(newConclusive, 10), "first new content coverage %d/10", newConclusive)
 			sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
 			require.Len(t, times, 10)
 			sort.Slice(liveTimes, func(i, j int) bool { return liveTimes[i] < liveTimes[j] })
