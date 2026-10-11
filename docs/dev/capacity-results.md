@@ -1,6 +1,29 @@
 # Capacity evidence for #40
 
-## Latest hosted Linux run 38142256615
+## Final hosted Linux run 38147888686
+
+[Run 38147888686](https://github.com/relaishq/relais/actions/runs/38147888686),
+commit `b7e221b`, used the same settings as run 38142256615 below. The relay
+buffer was on (the product default). This run includes the final verdict rules:
+caller stalls, later-track takeover recovery, crashes with invalid generators,
+and ambiguous gaps that no longer hide independent failures.
+
+| Trial | Call counts | Usable result |
+| --- | --- | --- |
+| Concentrated worker, move all | 2, 4, 8 | Pass; worker floor 8 calls |
+| Concentrated worker at 16 | 16 | Inconclusive: generator saturated |
+| Relay, spread placement and one move | 2, 4, 8 | Pass; relay floor 8 calls and 1,370.7 forwarded datagrams/s |
+| Relay at 16 | 16 | Inconclusive: generator saturated |
+| N+1 kill, then planned move | 8 | Pass; validated T = 8 |
+| Loaded drain | 8 | Pass; 44 ms drain |
+
+Store use stayed at about 67 client commands and 85 KB of Redis request plus
+reply per call-second in every step, within the 100-command and 128 KiB
+budget. Cost is `NOT-RUN(no input prices)`. As with the earlier runs, these are
+floors set by the shared runner's load generator, not capacity limits. The
+relay packets-per-second limit remains **NOT-RUN**.
+
+## Earlier hosted Linux run 38142256615
 
 [Run 38142256615](https://github.com/relaishq/relais/actions/runs/38142256615),
 commit `be8901a`, passed the recorded acceptance policy with the **product-default
@@ -49,8 +72,8 @@ Buffer state comes from the running relay gauge, not from an inferred replay.
 
 ### Run-to-run variance
 
-At identical workload settings, the earlier buffered run demonstrated a relay
-floor of **8**, while this run demonstrated **4**. Both demonstrated worker
+At identical workload settings, runs 38136419832 and 38147888686 demonstrated a
+relay floor of **8**, while run 38142256615 demonstrated **4**. Both demonstrated worker
 floor **8**. The product and instrumentation changed between commits, and the
 shared runner's generator interval peaks constrain these floors. This is
 variance in usable evidence, not proof that relay capacity halved. Track trends
