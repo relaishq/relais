@@ -81,7 +81,7 @@ session from that address is dropped, even if its credentials are valid.
   stop renewing and lapse after one window. Rate limiting per caller would
   close this; it is not part of this decision.
 
-## Residual risk: lockout after a relay restart, and persisted routes (#42)
+## Restart gap in an address-only relay, and persisted routes (#42)
 
 A restarted relay has an empty flow table, so it does not know which
 addresses are active. Normal restart recovery still works: each caller's
@@ -99,9 +99,28 @@ The same lockout is possible before a caller's first answered check, on
 the relay or a shared socket, if an attacker can predict the caller's
 address and claim it first.
 
-Persisted routes (#42) close the restart case. They must restore the
+Persisted routes (#42) reduce the restart case for successfully restored addresses. They must restore the
 address, the session, and the last renewal time, and take the current
 worker from authoritative ownership. Restoring a route or moving it to
 another worker must never create a fresh renewal time. For the new-caller
 case, and until #42, the mitigation is outside this rule: ingress filtering
 that stops source-address spoofing (BCP 38), or rate limiting per caller.
+
+## Persisted-route addendum (#42)
+
+ADR 0003 implements restart protection when route persistence is enabled.
+The relay restores authenticated evidence before accepting any caller packets,
+uses the lease's current owner and generation, and preserves the original
+renewal time. Restored routes protect only the remainder of their original
+consent window. The separate relay process enables this by default. An
+address-only embedded relay, failed/dropped persistence writes, or the explicit
+restore-off measurement mode can still have the restart gap described above.
+
+Startup continues with partial evidence if restore reaches its deadline or
+capacity limit, or the store fails. This preserves availability: unrestored calls
+can recover on their next authenticated check instead of waiting for persisted
+records to expire before the relay starts. Unrestored addresses can still suffer
+the spoofing lockout described above. That risk is accepted. Restored routes
+retain their original window, and only they stop forwarding at its deadline
+until the first matched renewal. Persistence does not add a media deadline to
+live routes whose real checks were pushed out of the bounded request set.

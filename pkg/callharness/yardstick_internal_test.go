@@ -77,7 +77,7 @@ func TestAudioIdentityPreservesDecodedPCM(t *testing.T) {
 func testMeasurementRecorder(t *testing.T) *recorder {
 	t.Helper()
 	r := newRecorder()
-	r.hungUpAt = 4 * time.Second
+	r.hungUpAt = 7 * time.Second
 	r.sentVideo.Frames = 40
 	for i := 0; i < 40; i++ {
 		at := 500*time.Millisecond + time.Duration(i)*50*time.Millisecond
@@ -196,11 +196,11 @@ func TestFreshnessRecoveryNeedsSustainedUniqueUnits(t *testing.T) {
 		at := time.Duration(i) * 40 * time.Millisecond
 		units = append(units, contentUnit{at: at, returnedAt: at + time.Millisecond})
 	}
-	for i, latency := range []time.Duration{time.Millisecond, time.Millisecond, 50 * time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond} {
+	for i, latency := range []time.Duration{time.Millisecond, time.Millisecond, 50 * time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond} {
 		at := 1100*time.Millisecond + time.Duration(i)*100*time.Millisecond
 		units = append(units, contentUnit{at: at - latency, returnedAt: at})
 	}
-	f := measureFreshness(units, time.Second, 1100*time.Millisecond, 2*time.Second, 0)
+	f := measureFreshness(units, time.Second, 1100*time.Millisecond, 7*time.Second, 0)
 	require.True(t, f.Recovered)
 	require.Equal(t, 200*time.Millisecond, f.BackToBaseline) // isolated live jitter does not reset recovery
 	require.Equal(t, 49*time.Millisecond, f.PeakAboveBaseline)
@@ -293,7 +293,7 @@ func TestReorderedDuplicatedContentHasNoFalseLoss(t *testing.T) {
 	// source gap on the same caller clock as the live reader's deadline drain.
 	completed, _ := assembler.pushAll(nil, r.start.Add(2300*time.Millisecond))
 	recordFrames(completed, 2300*time.Millisecond)
-	r.hungUpAt = 3 * time.Second
+	r.hungUpAt = 7 * time.Second
 	m := r.eventMeasurement(MoveReport{Kind: "takeover", Start: 1600 * time.Millisecond, End: 1900 * time.Millisecond, Recovery: VideoRecovery{MediaResumedAt: 2 * time.Second}}, r.hungUpAt, 0)
 	require.False(t, m.Inconclusive, m.Reasons)
 	require.Zero(t, m.LostAudio)
@@ -316,7 +316,7 @@ func TestFreshnessIncludesStaleReplayWithoutDuplicateSamples(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		units = append(units, contentUnit{at: 1300 * time.Millisecond, returnedAt: 1301*time.Millisecond + time.Duration(i)*time.Millisecond, identity: "fresh"})
 	}
-	f := measureFreshness(units, time.Second, 1200*time.Millisecond, 2*time.Second, 0)
+	f := measureFreshness(units, time.Second, 1200*time.Millisecond, 7*time.Second, 0)
 	require.Equal(t, 800*time.Millisecond, f.PeakLatency)
 	require.Equal(t, 2, f.PostEventSamples)
 	require.False(t, f.Recovered)
@@ -336,7 +336,7 @@ func TestVideoCacheReplayIsFreshnessNotLostContent(t *testing.T) {
 	for i, payload := range packets {
 		r.packet(track, &rtp.Packet{Header: rtp.Header{Timestamp: 20, SequenceNumber: uint16(i + 8192), Marker: i == len(packets)-1}, Payload: payload}, r.start.Add(2*time.Second))
 	}
-	r.hungUpAt = 3 * time.Second
+	r.hungUpAt = 7 * time.Second
 	m := r.eventMeasurement(MoveReport{Kind: "takeover", Start: 1500 * time.Millisecond, End: 1900 * time.Millisecond, Recovery: VideoRecovery{MediaResumedAt: 2 * time.Second}}, r.hungUpAt, 0)
 	require.Zero(t, m.LostVideoFrames)
 	require.Equal(t, time.Second, m.Video.PeakLatency)
@@ -355,7 +355,7 @@ func TestStaleDuplicateInterruptsFreshnessRecovery(t *testing.T) {
 	}
 	// A late copy of the first good unit arrives between the second and third.
 	units = append(units, contentUnit{at: 1099 * time.Millisecond, returnedAt: 1250 * time.Millisecond, identity: string(rune(30))})
-	f := measureFreshness(units, time.Second, 1100*time.Millisecond, 2*time.Second, 0)
+	f := measureFreshness(units, time.Second, 1100*time.Millisecond, 7*time.Second, 0)
 	require.False(t, f.Recovered, "stale duplicates reset freshness, but cannot add units")
 	require.Equal(t, 3, f.PostEventSamples)
 }
@@ -391,7 +391,7 @@ func TestVideoReplaySameTimestampMeasuresAge(t *testing.T) {
 			r.packet(track, &rtp.Packet{Header: rtp.Header{Timestamp: 10, SequenceNumber: delivery.seq + uint16(i), Marker: i == len(packets)-1}, Payload: payload}, r.start.Add(delivery.at))
 		}
 	}
-	r.hungUpAt = 3 * time.Second
+	r.hungUpAt = 7 * time.Second
 	m := r.eventMeasurement(MoveReport{Kind: "takeover", Start: 1500 * time.Millisecond, End: 1900 * time.Millisecond, Recovery: VideoRecovery{MediaResumedAt: 2 * time.Second}}, r.hungUpAt, 0)
 	require.Zero(t, m.LostVideoFrames)
 	require.Equal(t, time.Second, m.Video.PeakLatency, "a new RTP transmission of old content exposes its stale age")
@@ -413,7 +413,7 @@ func TestPartialVideoThenSameTimestampReplayIsNotLost(t *testing.T) {
 	for _, i := range []int{1, 0, 1} {
 		r.packet(track, &rtp.Packet{Header: rtp.Header{Timestamp: 10, SequenceNumber: uint16(8193 + i), Marker: i == 1}, Payload: packets[i]}, r.start.Add(2*time.Second))
 	}
-	r.hungUpAt = 3 * time.Second
+	r.hungUpAt = 7 * time.Second
 	m := r.eventMeasurement(MoveReport{Kind: "takeover", Start: 1500 * time.Millisecond, End: 1900 * time.Millisecond, Recovery: VideoRecovery{MediaResumedAt: 2 * time.Second}}, r.hungUpAt, 0)
 	require.Zero(t, m.LostVideoFrames, "a complete replay repairs partial content delivery")
 	require.Equal(t, 600*time.Millisecond, m.Video.PeakLatency)
@@ -434,14 +434,14 @@ func TestFreshnessBaselineStartsAfterPriorRecovery(t *testing.T) {
 		at := 2100*time.Millisecond + time.Duration(i)*40*time.Millisecond
 		units = append(units, contentUnit{at: at, returnedAt: at + time.Millisecond, identity: string(rune(i + 30))})
 	}
-	original := measureFreshness(units, 2*time.Second, 2100*time.Millisecond, 3*time.Second, 0)
+	original := measureFreshness(units, 2*time.Second, 2100*time.Millisecond, 8*time.Second, 0)
 	require.Contains(t, freshnessReasons("video", original), "video baseline p95-minus-median exceeds 20ms")
-	recovered := measureFreshness(units, 2*time.Second, 2100*time.Millisecond, 3*time.Second, 1250*time.Millisecond)
+	recovered := measureFreshness(units, 2*time.Second, 2100*time.Millisecond, 8*time.Second, 1250*time.Millisecond)
 	require.Equal(t, 1250*time.Millisecond, recovered.BaselineStart)
 	require.Equal(t, 15, recovered.BaselineSamples)
 	require.Equal(t, time.Millisecond, recovered.BaselineP95)
 	require.Empty(t, freshnessReasons("video", recovered))
-	short := measureFreshness(units, 2*time.Second, 2100*time.Millisecond, 3*time.Second, 1700*time.Millisecond)
+	short := measureFreshness(units, 2*time.Second, 2100*time.Millisecond, 8*time.Second, 1700*time.Millisecond)
 	require.Equal(t, 5, short.BaselineSamples)
 	require.Contains(t, freshnessReasons("video", short), "video baseline has 5 samples (need 10)")
 	require.Equal(t, 20*time.Millisecond, short.SpreadLimit)

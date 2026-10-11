@@ -120,21 +120,14 @@ func (c *Child) Ready(ctx context.Context) (Ready, error) {
 		}
 		select {
 		case <-c.done:
-			return Ready{}, fmt.Errorf("process exited: %w; %s", c.err, data)
+			// The child can write its fatal error after the snapshot above.
+			data, logErr := os.ReadFile(c.path)
+			return Ready{}, fmt.Errorf("process exited: %w; log %s: %s", errors.Join(c.Err(), logErr), c.path, data)
 		case <-ctx.Done():
 			return Ready{}, fmt.Errorf("process readiness: %w; log %s", ctx.Err(), c.path)
 		case <-ticker.C:
 		}
 	}
-}
-func FreeTCP() (string, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	addr := listener.Addr().String()
-	err = listener.Close()
-	return addr, err
 }
 func WaitTCP(ctx context.Context, addr string, c *Child) error {
 	ticker := time.NewTicker(20 * time.Millisecond)

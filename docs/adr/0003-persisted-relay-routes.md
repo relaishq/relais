@@ -1,0 +1,115 @@
+# ADR 0003: Restore authenticated relay routes before serving packets
+
+## Context
+
+A relay restart loses its confirmed routes. Until the next authenticated ICE
+check, media is dropped and another session can claim an active caller's address
+(ADR 0001, #20). Ticket #42 requires a restart gap under one second, without
+reconnecting callers or exposing their media keys to the relay.
+
+## Decision
+
+- Persist only confirmed routing evidence: the caller address, session ID,
+  lease epoch as route generation, confirmation time, last authenticated request
+  arrival time, and consent deadline. Never persist a worker address in a route.
+  The relay's store capability cannot read media snapshots or mutate leases.
+  Redis route metadata, like lease metadata, is readable without a media key;
+  media snapshots remain encrypted and unavailable to the relay.
+- Use an **eager startup scan**, before starting either UDP packet loop. Each
+  record must have a live lease with the same generation. Its worker comes from
+  that lease. A stale record is ignored and deleted with a comparison against
+  the original record. On a store error, deadline, or
+  `MaxFlows` limit, start with the evidence already loaded, including an empty
+  table. Availability takes priority over full address protection. Count
+  restored routes, known skipped candidates, and failed startup attempts in
+  `RoutesRestored`, `RoutesRestoreSkipped`, and `RoutesRestoreFailed`, and log
+  the result. Unrestored addresses retain the spoofing lockout risk in ADR 0001;
+  this risk is accepted. SCAN pages and live loaded records are bounded. Hash
+  and lease reads are pipelined per page on each Redis Cluster master, with one
+  lease read per session hash. Successful masters retain their partial results
+  if another master fails. Expired fields are pruned before limits or lease
+  reads. For duplicate addresses, the latest authenticated time wins, then the
+  latest confirmation time; losing records are deleted. The newest loaded record
+  decides its address even when its lease read fails: count it as skipped and
+  leave the address unrestored, rather than route to an older session. Redis
+  retains failed lease candidates without owner entries so this decision is
+  independent of scan order, even when the batch is full for a loaded address.
+  UDP source floods never initiate restore reads or scans.
+- Preserve the original authenticated request time. Restoration, movement,
+  ordinary media, unanswered checks and unmatched/replayed successes never
+  renew consent. The restored address remains sticky for the remainder of its
+  original window. Only restored routes stop forwarding when their original
+  consent
+  expires, even if media keeps arriving. The first matched authenticated renewal
+  after restore removes that temporary bound. Live routes keep the original
+  forwarding behavior, including ADR 0001's request-set flood residual.
+- Keep writes off the packet loops, using one bounded asynchronous writer.
+  Updates coalesce by session and caller. Overflow and failed writes are
+  counted in `RouteWritesDropped` and `RouteWritesFailed`. Write on confirmation,
+  authenticated nomination, and trusted movement. Authenticated renewals write
+  at most once per second per route. The writer reads the current lease and
+  checks its owner against the local route before submitting its epoch-fenced
+  write. Delayed writes cannot overwrite newer confirmation or renewal evidence.
+- Redis stores records keyed by caller address within a per-session route hash.
+  That hash shares `{sess:ID}` with the lease, so writes check the lease epoch
+  atomically on standalone Redis and Redis Cluster. Matching release, expiry
+  pruning and lease transfer delete that session's route hash. Memory implements
+  the same lifecycle under its lease lock. Each session hash holds at most eight
+  address fields: writes prune
+  expired fields and evict the oldest authenticated evidence on address churn.
+  Memory applies the same cap. A nomination at an address not yet confirmed for
+  that session removes old addresses after the worker authenticates
+  `USE-CANDIDATE`. A nomination at an already confirmed session/address is an
+  ordinary throttled renewal, including a switch from the previously nominated
+  address to a confirmed backup. Both addresses keep forwarding and remain
+  eligible for restoration until their normal invalidation or expiry. The relay
+  does not track the session's last nominated address. This preserves confirmed
+  backup paths and the existing same-pair write rules. A nomination watermark
+  rejects delayed writes that would recreate an older address. Trusted movement
+  republishes the route with its new epoch and unchanged confirmation/consent
+  times. `ForgetSession` queues deletion even if the store still has a lease.
+- Route retention is the consent deadline plus a one-second cleanup margin,
+  independent of session/snapshot TTL. The margin never extends restoration or
+  stickiness. Renewals extend the deadline only from authenticated request times.
+- The control process detects a new relay instance through its private status
+  endpoint and tracks successful private-leg registrations per instance.
+  Every tick discovers live workers not yet registered, including late demo
+  registrations and workers that rejoin after startup. Dead or recovering
+  workers are excluded until they become live. The caller and workers keep their
+  original sockets and
+  cryptographic state. This is registry recovery, not lease transfer or a worker
+  rejoin acknowledgement.
+
+## Consequences
+
+Async writes are best effort: a restart before a confirmation or latest renewal
+is stored can still wait for the next ICE check. Persistence can trail a renewal
+by the write cadence plus queue/store delay, which shortens the restorable window.
+Overflow or store failures are observable and cannot stall established packet
+forwarding.
+Large installations pay bounded startup scan and owner-read costs and must size
+`MaxFlows` and `RouteRestoreTimeout`, exposed by the standalone relay as
+`-max-flows` (default 65,536) and `-route-restore-timeout` (default 5 s). Startup
+continues after this budget; missing routes recover on the next authenticated
+check. Known skipped candidates count separately from failed restore attempts;
+records never reached by a failed scan have an unknown count. The under-one-second
+claim is established
+by the real-process loopback driver, not an unmeasured scale or cloud claim.
+
+The existing address-only embedded relay API remains available with
+`Config.Routes == nil`. The separate relay process enables persistence by default.
+`-route-restore-off` keeps writes enabled and disables only restore, to measure
+consent-check recovery against the same topology and caller.
+
+`make crash-run CRASH_FLAGS="-relay-restart"` kills and reaps the old relay, starts
+its replacement on the same public, private-leg and HTTP ports, and reports ten
+runs each with restore on and off. Its caller-gap measurement uses actual
+successfully decrypted packet arrivals and the largest silence across the
+whole SIGKILL-to-end observation, including later stalls and trailing silence.
+Restore-on requires at least one `RoutesRestored`; restore-off requires zero. The
+existing worker
+crash/cache comparison remains the default driver mode. The driver caller's
+consent-check cadence is two seconds; its restore-off gap depends on the restart
+phase and does not establish the browser's broader two-to-five-second range.
+
+Two concurrently live relays and standby fencing remain ticket #43.

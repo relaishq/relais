@@ -436,8 +436,12 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 	}
 	v := track.video
 	decodable := v.DecodableFrames
+	restartsDecodeChain := false
 	source := r.sentVideoFrames[frame.pictureID]
 	if source.data != string(frame.data) {
+		if source.at > 0 && source.written && !previousVP8Epoch(frame.data, source, frame.pictureID) {
+			r.contentIdentityErrors++
+		}
 		source = sentVideoFrame{}
 	}
 	defer func() {
@@ -445,7 +449,7 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 		if !frame.completedAt.IsZero() {
 			receivedAt = r.since(frame.completedAt)
 		}
-		v.frames = append(v.frames, frameMark{at: r.since(decoded), decodable: v.DecodableFrames > decodable, firstArrival: r.since(frame.firstArrival), receivedAt: receivedAt, source: source, pictureID: frame.pictureID})
+		v.frames = append(v.frames, frameMark{at: r.since(decoded), decodable: v.DecodableFrames > decodable, firstArrival: r.since(frame.firstArrival), receivedAt: receivedAt, source: source, pictureID: frame.pictureID, restartsDecodeChain: restartsDecodeChain})
 	}()
 
 	v.Frames++
@@ -480,6 +484,7 @@ func (r *recorder) videoFrame(track *trackRecord, frame *vp8Frame, size image.Po
 	v.lastPictureID, v.lastSourceAt = frame.pictureID, source.at
 	v.lastIdentity = source.identity
 
+	restartsDecodeChain = frame.keyframe && decodeErr == nil && (!v.chain || !inOrder)
 	switch {
 	case frame.keyframe && decodeErr == nil:
 		v.KeyframesDecoded++

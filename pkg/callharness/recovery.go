@@ -228,3 +228,14 @@ func identifyVP8(frame []byte, identity uint64) []byte {
 	binary.BigEndian.PutUint64(marked[len(frame)+8:], identity)
 	return marked
 }
+
+// A delayed previous epoch can reuse PictureID without claiming the current
+// full identity. It has no retained source, so remains unknown; wrong bytes
+// claiming the current identity still constitute a conflict.
+func previousVP8Epoch(frame []byte, source sentVideoFrame, pictureID uint16) bool {
+	if len(frame) < 16 || len(source.data) < 16 || string(frame[len(frame)-16:len(frame)-8]) != "RelaisV1" || source.data[len(source.data)-16:len(source.data)-8] != "RelaisV1" {
+		return false
+	}
+	identity := binary.BigEndian.Uint64(frame[len(frame)-8:])
+	return identity&0x7fff == uint64(pictureID) && identity>>15 < source.identity>>15
+}

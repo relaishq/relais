@@ -74,7 +74,8 @@ func TestRecordingWrapEventsAndBoundedHistory(t *testing.T) {
 		if i == 0 {
 			oldPayloads = payloads
 		}
-		if i == 32730 || i == 32800 {
+		// Leave the full 2s recovery + 3s stability window between events.
+		if i == 32600 || i == 32800 {
 			r.move(moveRecord{start: r.start.Add(at), end: r.start.Add(at + time.Millisecond)})
 		}
 		// An ancient first-epoch payload cannot repair or match the current send.
@@ -110,6 +111,7 @@ func TestRecordingWrapEventsAndBoundedHistory(t *testing.T) {
 		require.Zero(t, m.Measurement.LostVideoFrames)
 		require.True(t, m.Measurement.Video.Verdict.Trusted, m.Measurement.Summary())
 		require.False(t, m.Measurement.Video.Verdict.Failed, m.Measurement.Summary())
+		require.Equal(t, m.Measurement.Video.StabilityWindow, m.Measurement.Video.StabilityObserved)
 	}
 	require.Less(t, report.Moves[0].Measurement.FirstNewContentIdentity, uint64(32768))
 	require.GreaterOrEqual(t, report.Moves[1].Measurement.FirstNewContentIdentity, uint64(32768))
@@ -214,6 +216,37 @@ func TestOnlineDecodeCoverageWithDroppedSamples(t *testing.T) {
 	m := r.eventMeasurement(testMeasurementMove(), r.hungUpAt, 0)
 	require.False(t, m.FirstNewContentVerdict.Trusted, "an event-local drop still makes decode attribution inconclusive")
 	require.True(t, m.VideoLoss.Trusted)
+}
+
+func TestOnlineDecodeBusyWorkerKeepsRecoveryBurst(t *testing.T) {
+	r := newRecorder()
+	r.recording.DecodeEvery = 30
+	track := r.addTrack(kindVideo, 1, 96)
+	track.video.sampleBurst = minimumDecodedSamples
+	s := &onlineSampler{
+		call: &Call{rec: r}, track: track,
+		queue: make(chan sampleJob, onlineDecodeQueueCapacity),
+		gop:   []vp8Frame{{data: []byte{0}, keyframe: true}},
+		size:  image.Point{X: 1, Y: 1}, bytes: 1,
+	}
+	// A routine target is waiting while the decoder is busy. The RTP reader
+	// then completes all three recovery targets before the worker can drain.
+	s.queue <- sampleJob{}
+	for i := 1; i <= minimumDecodedSamples; i++ {
+		track.video.Frames = i
+		at := time.Second + time.Duration(i)*time.Millisecond
+		data := []byte{byte(i)}
+		r.sentVideoFrames[uint16(i)] = sentVideoFrame{at: at - time.Millisecond, data: string(data)}
+		s.frame(&vp8Frame{pictureID: uint16(i), data: data, completedAt: r.start.Add(at)}, image.Point{}, nil)
+	}
+	require.Zero(t, track.video.OnlineDecode.Dropped)
+	require.Len(t, s.queue, 1+minimumDecodedSamples)
+	// Capacity remains a hard bound; another routine target is still dropped
+	// explicitly instead of blocking the media reader or growing the queue.
+	track.video.Frames = 30
+	s.frame(&vp8Frame{data: []byte{4}, completedAt: r.start.Add(2 * time.Second)}, image.Point{}, nil)
+	require.Equal(t, 1, track.video.OnlineDecode.Dropped)
+	require.Len(t, s.queue, onlineDecodeQueueCapacity)
 }
 
 func TestRecordingConsentPrefixKeepsTotalsAndSilentGaps(t *testing.T) {
@@ -323,4 +356,87 @@ func TestUnknownReturnedAudioDoesNotPassFreshness(t *testing.T) {
 	require.False(t, m.Audio.Verdict.Trusted)
 	require.True(t, m.Video.Verdict.Trusted, "unknown audio must not invalidate the independent video metric")
 	require.True(t, m.AudioLoss.Trusted)
+}
+
+func TestRecordingIdentityConflictOverridesExpiredHistoryAndUndersampling(t *testing.T) {
+	r := testMeasurementRecorder(t)
+	r.historyStart = time.Second
+	r.recording.DecodeEvery = 30
+	r.contentIdentityErrors = 1
+	r.move(moveRecord{start: r.start.Add(1500 * time.Millisecond), end: r.start.Add(1800 * time.Millisecond)})
+	m := r.report().Moves[0].Measurement
+	require.False(t, m.AudioLoss.Trusted, "expired loss history remains unknown")
+	for _, v := range []MetricVerdict{m.VideoLoss, m.Video.Verdict, m.FirstContentVerdict, m.FirstNewContentVerdict, m.FirstLiveVerdict} {
+		require.True(t, v.Trusted)
+		require.True(t, v.Failed, "known corruption cannot hide in missing history or sample coverage")
+		require.Contains(t, v.Reasons, "conflicting video content identities")
+	}
+}
+
+func TestRecordingAbsoluteLagOverridesExpiredHistory(t *testing.T) {
+	r := testMeasurementRecorder(t)
+	r.historyStart = time.Second
+	r.savedMoves = []MoveReport{{Start: time.Millisecond}}
+	r.firstAudio = FreshnessReport{BaselineSamples: 20, BaselineMedian: 300 * time.Millisecond, BaselineP95: 300 * time.Millisecond, SpreadLimit: baselineSpreadLimit}
+	r.firstVideo = FreshnessReport{BaselineSamples: 20, BaselineMedian: time.Millisecond, BaselineP95: time.Millisecond, SpreadLimit: baselineSpreadLimit}
+	r.move(moveRecord{start: r.start.Add(1500 * time.Millisecond), end: r.start.Add(1800 * time.Millisecond)})
+	m := r.report().Moves[1].Measurement
+	require.True(t, m.Audio.AbsoluteLag)
+	require.True(t, m.Audio.Verdict.Trusted)
+	require.True(t, m.Audio.Verdict.Failed)
+	require.False(t, m.Video.Verdict.Trusted, "independent expired video evidence stays unknown")
+}
+
+func TestRecordingOldVideoEpochIsUnknownNotConflicting(t *testing.T) {
+	src, err := newVP8Source(callerVideo)
+	require.NoError(t, err)
+	data, key, err := src.next()
+	require.NoError(t, err)
+	require.True(t, key)
+	old := identifyVP8(data, 0)
+	_, err = decodeKeyframe(old)
+	require.NoError(t, err)
+	for _, sameIdentity := range []bool{false, true} {
+		r := newRecorder()
+		track := r.addTrack(kindVideo, 1, 96)
+		r.sentVideoFrames[0] = sentVideoFrame{identity: 32768, at: 2 * time.Second, data: string(identifyVP8(data, 32768)), written: true}
+		returned := old
+		if sameIdentity {
+			// A different payload claiming the current full identity is still
+			// corruption, regardless of whether it could decode.
+			changed := bytes.Clone(data)
+			changed[0] ^= 1
+			returned = identifyVP8(changed, 32768)
+		}
+		at := r.start.Add(3 * time.Second)
+		size, decodeErr := decodeKeyframe(returned)
+		r.videoFrame(track, &vp8Frame{data: returned, keyframe: true, pictureID: 0, firstArrival: at, completedAt: at}, size, decodeErr, at)
+		if sameIdentity {
+			require.Equal(t, 1, r.contentIdentityErrors)
+		} else {
+			require.Zero(t, r.contentIdentityErrors, "an expired full identity does not conflict with the current epoch")
+			require.Zero(t, track.video.frames[0].source.at)
+			require.Equal(t, []time.Duration{3 * time.Second}, track.unmatchedTimes)
+		}
+		require.Zero(t, r.sentVideoFrames[0].returnedAt, "neither payload can repair the current send")
+	}
+}
+
+func TestRecordingSavedSummaryKeepsFiniteFreshnessWindow(t *testing.T) {
+	r := testMeasurementRecorder(t)
+	r.recording.History = 10 * time.Second
+	r.move(moveRecord{start: r.start.Add(1500 * time.Millisecond), end: r.start.Add(1800 * time.Millisecond)})
+	r.compact(13 * time.Second)
+	require.Empty(t, r.moves)
+	require.Len(t, r.savedMoves, 1)
+	saved := r.savedMoves[0]
+	require.Equal(t, 13*time.Second, saved.Measurement.ObservedUntil)
+	for _, f := range []FreshnessReport{saved.Measurement.Audio, saved.Measurement.Video} {
+		require.Equal(t, 6500*time.Millisecond, f.EvaluationEnd)
+		require.Equal(t, 3*time.Second, f.StabilityObserved)
+	}
+	r.compact(time.Hour)
+	require.Equal(t, saved.Measurement, r.savedMoves[0].Measurement)
+	require.Zero(t, r.memoryGauge().ContentUnits)
+	require.Zero(t, r.memoryGauge().FrameMarks)
 }

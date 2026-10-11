@@ -37,12 +37,13 @@ type relayTopology struct {
 	owners        sessionstore.Store
 	loggerFactory logging.LoggerFactory
 
-	mu               sync.Mutex
-	relay            *relay.Relay
-	plane            *controlplane.Plane
-	cancel           context.CancelFunc
-	done             chan struct{}
-	snapshotInterval time.Duration
+	mu                 sync.Mutex
+	relay              *relay.Relay
+	plane              *controlplane.Plane
+	cancel             context.CancelFunc
+	done               chan struct{}
+	snapshotInterval   time.Duration
+	checkpointEnvelope mediaworker.CheckpointEnvelope
 
 	frames                              framecache.Store
 	disableFrameCache, disableResumePLI bool
@@ -71,7 +72,10 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 		return nil, fmt.Errorf("callharness: start relay: %w", err)
 	}
 	topology.relay = r
-	topology.plane = controlplane.NewWithConfig(r, topology.owners, controlplane.Config{FrameCache: topology.frames})
+	planeConfig := opts.TakeoverConfig
+	planeConfig.FrameCache = topology.frames
+	topology.checkpointEnvelope = planeConfig.CheckpointEnvelope
+	topology.plane = controlplane.NewWithConfig(r, topology.owners, planeConfig)
 	topology.snapshotInterval = opts.SnapshotInterval
 	ctx, cancel := context.WithCancel(context.Background())
 	topology.cancel, topology.done = cancel, make(chan struct{})
@@ -80,6 +84,7 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 	ws := &workers{relay: topology}
 	for range count {
 		worker, err := mediaworker.New(mediaworker.Config{
+			CheckpointEnvelope:     topology.checkpointEnvelope,
 			ListenAddr:             "127.0.0.1:0",
 			FrameCache:             topology.frames,
 			DisableFrameCache:      opts.DisableFrameCache,

@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
+// Reserve the three recovery targets plus one routine target while a decoder
+// job is busy. This stays fixed; overflow remains explicit and nonblocking.
+const onlineDecodeQueueCapacity = minimumDecodedSamples + 1
+
 // OnlineDecodeReport counts checked target frames, not the reference frames
 // ffmpeg must decode before an interframe. Keyframes are always decoded in Go.
 // A full queue drops a sample explicitly; it never blocks the RTP reader.
@@ -50,7 +54,7 @@ type onlineSampler struct {
 }
 
 func (c *Call) newOnlineSampler(track *trackRecord) *onlineSampler {
-	s := &onlineSampler{call: c, track: track, queue: make(chan sampleJob, 2)}
+	s := &onlineSampler{call: c, track: track, queue: make(chan sampleJob, onlineDecodeQueueCapacity)}
 	c.rec.mu.Lock()
 	track.video.OnlineDecode.Every = c.rec.recording.DecodeEvery
 	c.rec.mu.Unlock()

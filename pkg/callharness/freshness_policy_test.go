@@ -23,6 +23,10 @@ func freshnessPolicyUnits() []contentUnit {
 
 func TestFreshnessIgnoresIsolatedLiveJitterAndLaterSpikes(t *testing.T) {
 	units := freshnessPolicyUnits()
+	for i := range 40 {
+		sent := 1500*time.Millisecond + time.Duration(i)*20*time.Millisecond
+		units = append(units, contentUnit{at: sent, returnedAt: sent + time.Millisecond, identity: fmt.Sprint("steady", i)})
+	}
 	for i, relative := range []time.Duration{1500 * time.Millisecond, 10800 * time.Millisecond, 44700 * time.Millisecond} {
 		arrival := time.Second + relative
 		units = append(units, contentUnit{at: arrival - []time.Duration{21 * time.Millisecond, 12700 * time.Microsecond, 21700 * time.Microsecond}[i], returnedAt: arrival, identity: fmt.Sprint("spike", i)})
@@ -32,7 +36,7 @@ func TestFreshnessIgnoresIsolatedLiveJitterAndLaterSpikes(t *testing.T) {
 	require.True(t, f.Verdict.Trusted)
 	require.False(t, f.Verdict.Failed)
 	require.Equal(t, 401*time.Millisecond, f.BackToBaseline)
-	require.Equal(t, 5, f.PostEventSamples, "later units are not attributed to the event")
+	require.Equal(t, 45, f.PostEventSamples, "later units are not attributed to the event")
 	require.Equal(t, 1, f.JitterUnits)
 	require.Equal(t, 10*time.Millisecond, f.JitterMaxExcess)
 	require.Equal(t, 6*time.Second, f.EvaluationEnd)

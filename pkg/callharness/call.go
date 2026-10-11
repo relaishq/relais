@@ -32,6 +32,13 @@ const (
 // CallOptions shape the call the caller makes.
 type CallOptions struct {
 	// Freshness configures the caller's bounded recovery evaluation.
+	// Defaults stay strict (2s recovery + 3s stability), including under race.
+	// Acceptance callers such as #27 can set RecoveryLimit: 2*time.Second
+	// explicitly and use RequireFreshnessRecovered with the required policy
+	// (StrictAcceptancePolicy by default) without race. Phase-1
+	// scenarios report freshness without gating it, with or without race.
+	// These defaults and measured recovery times remain strict. Allow
+	// enough media to observe Freshness.EvaluationWindow().
 	Freshness FreshnessPolicy
 	Recording RecordingOptions
 
@@ -130,7 +137,7 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 		return nil, fmt.Errorf("callharness: recording history must be at least %s", minimumHistory)
 	}
 
-	socket, err := newCallerSocket(rec)
+	socket, err := h.newCallerSocket(rec)
 	if err != nil {
 		return nil, err
 	}
@@ -609,7 +616,7 @@ func newCallerAPI(rec *recorder, browserLike bool, socket *callerSocket) (*webrt
 	settings := webrtc.SettingEngine{LoggerFactory: newCallerLoggerFactory(rec)}
 	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
 	settings.SetIncludeLoopbackCandidate(true)
-	settings.SetIPFilter(func(ip net.IP) bool { return ip.IsLoopback() })
+	settings.SetIPFilter(socket.acceptsCandidate)
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 	settings.SetICEUDPMux(socket.mux)
 
