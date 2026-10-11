@@ -3,7 +3,9 @@ package loadgen
 
 import (
 	"fmt"
+	"github.com/relais/internal/processrss"
 	"math"
+	"os"
 	"runtime"
 	"runtime/metrics"
 	"sync"
@@ -131,25 +133,30 @@ func (l Limits) Validate() error {
 }
 
 type Stats struct {
-	At                      time.Time     `json:"at"`
-	Interval                time.Duration `json:"interval_ns"`
-	CPUPercent              float64       `json:"cpu_percent_one_core"`
-	CPUPerGOMAXPROCS        float64       `json:"cpu_percent_per_gomaxprocs"`
-	GOMAXPROCS              int           `json:"gomaxprocs"`
-	HeapBytes               uint64        `json:"heap_bytes"`
-	RuntimeBytes            uint64        `json:"runtime_bytes"`
-	PeakRSSBytes            uint64        `json:"peak_rss_bytes"`
-	Lateness                Lateness      `json:"lateness"`
-	IntervalLateness        Lateness      `json:"interval_lateness"`
-	Pacing                  Pacing        `json:"pacing"`
-	IntervalPacing          Pacing        `json:"interval_pacing"`
-	StatusRequests          uint64        `json:"status_requests"`
-	IntervalStatusRequests  uint64        `json:"interval_status_requests"`
-	StatusRequestsPerSecond float64       `json:"status_requests_per_second"`
+	RuntimeMemory           *RuntimeMemory `json:"runtime_memory,omitempty"`
+	PhysicalFootprintBytes  uint64         `json:"physical_footprint_bytes,omitempty"`
+	RSSBytes                uint64         `json:"rss_bytes,omitempty"`
+	HeapInUseBytes          uint64         `json:"heap_in_use_bytes,omitempty"`
+	At                      time.Time      `json:"at"`
+	Interval                time.Duration  `json:"interval_ns"`
+	CPUPercent              float64        `json:"cpu_percent_one_core"`
+	CPUPerGOMAXPROCS        float64        `json:"cpu_percent_per_gomaxprocs"`
+	GOMAXPROCS              int            `json:"gomaxprocs"`
+	HeapBytes               uint64         `json:"heap_bytes"`
+	RuntimeBytes            uint64         `json:"runtime_bytes"`
+	PeakRSSBytes            uint64         `json:"peak_rss_bytes"`
+	Lateness                Lateness       `json:"lateness"`
+	IntervalLateness        Lateness       `json:"interval_lateness"`
+	Pacing                  Pacing         `json:"pacing"`
+	IntervalPacing          Pacing         `json:"interval_pacing"`
+	StatusRequests          uint64         `json:"status_requests"`
+	IntervalStatusRequests  uint64         `json:"interval_status_requests"`
+	StatusRequestsPerSecond float64        `json:"status_requests_per_second"`
 }
 type Sampler struct {
-	at  time.Time
-	cpu time.Duration
+	CurrentMemory bool
+	at            time.Time
+	cpu           time.Duration
 }
 
 func cpuUsage() (time.Duration, uint64, error) {
@@ -180,6 +187,19 @@ func (s *Sampler) Sample(m *Meter) (Stats, error) {
 	sample := m.sample()
 	pct := 100 * float64(cpu-s.cpu) / float64(elapsed)
 	out := Stats{At: now, Interval: elapsed, CPUPercent: pct, CPUPerGOMAXPROCS: pct / float64(runtime.GOMAXPROCS(0)), GOMAXPROCS: runtime.GOMAXPROCS(0), HeapBytes: samples[0].Value.Uint64(), RuntimeBytes: samples[1].Value.Uint64(), PeakRSSBytes: rss, Lateness: sample.all, IntervalLateness: sample.interval, Pacing: sample.pacing, IntervalPacing: sample.intervalPacing, StatusRequests: sample.requests, IntervalStatusRequests: sample.intervalRequests, StatusRequestsPerSecond: float64(sample.intervalRequests) / elapsed.Seconds()}
+	if s.CurrentMemory {
+		memoryClasses := readRuntimeMemory()
+		out.RuntimeMemory = &memoryClasses
+		var heap runtime.MemStats
+		runtime.ReadMemStats(&heap)
+		out.HeapInUseBytes = heap.HeapInuse
+		var memory processrss.Sample
+		memory, err = processrss.Read(os.Getpid())
+		out.RSSBytes, out.PhysicalFootprintBytes = memory.ResidentBytes, memory.PhysicalFootprintBytes
+		if err != nil {
+			return Stats{}, err
+		}
+	}
 	s.at, s.cpu = now, cpu
 	return out, nil
 }

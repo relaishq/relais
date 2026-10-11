@@ -60,6 +60,23 @@ func (p *Plane) ProcessHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", metrics.ProcessHandler(p.metricSamples, metrics.CheckpointCollectors()...))
 	mux.Handle("/", p.Handler())
+	// Reset only draining on the settled dead registration. Keeping it dead
+	// preserves the remote rejoin token handshake and fencing of old sessions.
+	mux.HandleFunc("POST /private/workers/{name}/replace", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		p.mu.Lock()
+		exists := p.workers[name] != nil
+		p.mu.Unlock()
+		if !exists {
+			http.Error(w, "unknown worker", http.StatusNotFound)
+			return
+		}
+		if err := p.resetRecoveredDrain(name); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		privateapi.Write(w, struct{}{})
+	})
 	mux.HandleFunc("POST /private/workers/{name}/heartbeat", func(w http.ResponseWriter, r *http.Request) {
 		var req HeartbeatRequest
 		if !privateapi.Read(w, r, &req) {
