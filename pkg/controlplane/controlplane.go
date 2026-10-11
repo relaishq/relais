@@ -24,6 +24,7 @@ import (
 
 	"github.com/relais/internal/privateapi"
 	"github.com/relais/pkg/mediaworker"
+	"github.com/relais/pkg/metrics"
 	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
 )
@@ -320,16 +321,23 @@ func (p *Plane) End(ctx context.Context, id string) error {
 // MoveResult records coordination timings; the harness measures media gaps
 // separately at the caller.
 type MoveResult struct {
-	Kind          string                     `json:"kind"`
-	DetectedAt    time.Time                  `json:"detected_at,omitempty"`
-	LastHeartbeat time.Time                  `json:"last_heartbeat,omitempty"`
-	Lost          bool                       `json:"lost,omitempty"`
-	ID            string                     `json:"id"`
-	From          string                     `json:"from"`
-	To            string                     `json:"to"`
-	Start         time.Time                  `json:"start"`
-	End           time.Time                  `json:"end"`
-	Result        mediaworker.HandoverResult `json:"result"`
+	SnapshotAge        time.Duration               `json:"snapshot_age,omitempty"`
+	CheckpointStoredAt time.Time                   `json:"checkpoint_stored_at"`
+	CheckpointAge      time.Duration               `json:"checkpoint_age,omitempty"`
+	Checkpoint         mediaworker.CheckpointState `json:"checkpoint"`
+	CheckpointPolicy   string                      `json:"checkpoint_policy,omitempty"`
+	SequenceMargin     uint16                      `json:"sequence_margin,omitempty"`
+	SRTCPIndexMargin   uint32                      `json:"srtcp_index_margin,omitempty"`
+	Kind               string                      `json:"kind"`
+	DetectedAt         time.Time                   `json:"detected_at,omitempty"`
+	LastHeartbeat      time.Time                   `json:"last_heartbeat,omitempty"`
+	Lost               bool                        `json:"lost,omitempty"`
+	ID                 string                      `json:"id"`
+	From               string                      `json:"from"`
+	To                 string                      `json:"to"`
+	Start              time.Time                   `json:"start"`
+	End                time.Time                   `json:"end"`
+	Result             mediaworker.HandoverResult  `json:"result"`
 	// Error is empty on success, otherwise the per-call drain/move failure.
 	Error string `json:"error,omitempty"`
 }
@@ -404,7 +412,13 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		p.mu.Lock()
 		pending := source.pending[c.id]
 		retained := pending != nil
+		lost := p.calls[c.id] != c
 		p.mu.Unlock()
+		if lost {
+			// Terminal cleanup already released the hold and forgot the call.
+			res.Lost = true
+			return
+		}
 		if retained {
 			return
 		}
@@ -434,7 +448,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 				source.pending = make(map[string]*takeoverState)
 			}
 			source.pending[c.id] = &takeoverState{call: c, lease: lease, routed: source.addr,
-				excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts, held: true}
+				excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts, held: true, outageStarted: res.Start}
 			p.mu.Unlock()
 			recovery, cancel := context.WithTimeout(context.Background(), takeoverBudget)
 			defer cancel()
@@ -477,15 +491,15 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	res.Result.StateBytes = len(state)
 	transferred, err := p.transfer(ctx, lease, target.addr)
 	if err != nil {
-		if p.retainUncertainMove(source, c, lease, source.addr, state, err) {
+		if p.retainUncertainMove(source, c, lease, source.addr, state, err, res.Start) {
 			return res, err
 		}
-		err = p.rollback(c, source, target, r, state, lease, false, false, false, &res.Result, err)
+		err = p.rollback(c, source, target, r, state, lease, false, false, false, &res.Result, err, res.Start)
 		return res, err
 	}
 
 	if err = r.MoveSession(c.id, source.addr, target.addr); err != nil {
-		err = p.rollback(c, source, target, r, state, transferred, true, true, false, &res.Result, err)
+		err = p.rollback(c, source, target, r, state, transferred, true, true, false, &res.Result, err, res.Start)
 		return res, err
 	}
 
@@ -493,7 +507,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Lease: transferred})
 	res.Result.Resume = time.Since(started)
 	if err != nil {
-		err = p.rollback(c, source, target, r, state, transferred, true, true, errors.Is(err, privateapi.ErrUncertain) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded), &res.Result, err)
+		err = p.rollback(c, source, target, r, state, transferred, true, true, errors.Is(err, privateapi.ErrUncertain) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded), &res.Result, err, res.Start)
 		return res, err
 	}
 
@@ -506,12 +520,14 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	return res, nil
 }
 
-func (p *Plane) rollback(c *call, source, target *registration, r Relay, state []byte, lease sessionstore.Lease, transferred, rerouted, uncertainResume bool, result *mediaworker.HandoverResult, cause error) error {
+func (p *Plane) rollback(c *call, source, target *registration, r Relay, state []byte, lease sessionstore.Lease, transferred, rerouted, uncertainResume bool, result *mediaworker.HandoverResult, cause error, moveStarted time.Time) error {
 	// Recovery uses a fresh context after the request has flushed its source.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	res := MoveResult{Kind: "move", ID: c.id, From: source.name, To: target.name, Start: moveStarted}
 	var err error
+	checkpointOutside := false
 	if transferred {
 		from := lease
 		lease, err = p.transfer(ctx, lease, source.addr)
@@ -519,7 +535,7 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 		if rerouted {
 			routed = netip.AddrPort{}
 		}
-		if p.retainUncertainMove(source, c, from, routed, state, err) {
+		if p.retainUncertainMove(source, c, from, routed, state, err, moveStarted) {
 			p.mu.Lock()
 			source.pending[c.id].crashMargins = uncertainResume
 			p.mu.Unlock()
@@ -534,17 +550,45 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 	// B never resumed, and the next authenticated consent check follows A's
 	// restored store ownership even if the relay itself needs to recover.
 	if err == nil {
-		opts := mediaworker.ResumeOptions{Lease: lease, Context: ctx}
+		resumeCtx := ctx
 		if uncertainResume {
-			opts.SequenceMargin, opts.SRTCPIndexMargin = p.config.SequenceMargin, p.config.SRTCPIndexMargin
+			var resumeCancel context.CancelFunc
+			resumeCtx, resumeCancel = context.WithTimeout(ctx, takeoverBudget)
+			defer resumeCancel()
 		}
-		_, err = source.worker.ResumeSession(state, opts)
+		opts := mediaworker.ResumeOptions{Lease: lease, Context: resumeCtx}
+		if uncertainResume {
+			// B may already have emitted media and persisted adjusted counters.
+			// Its fenced store state, rather than the final export from A, is now
+			// the only valid checkpoint for a rollback that needs crash margins.
+			state, err = p.store.GetState(ctx, c.id)
+			if err == nil {
+				var decision checkpointDecision
+				decision, err = p.checkpointDecision(resumeCtx, c.id, state, checkpointOutageBudget(resumeCtx, moveStarted))
+				res.CheckpointAge, res.SnapshotAge, res.CheckpointStoredAt = decision.age, decision.snapshotAge, decision.storedAt
+				res.Checkpoint, res.SequenceMargin, res.SRTCPIndexMargin = decision.info, decision.margin, decision.rtcpMargin
+				checkpointOutside = decision.outside
+				opts.SequenceMargin, opts.SRTCPIndexMargin = decision.margin, decision.rtcpMargin
+				opts.CallerSequenceReserve = decision.reserve
+				opts.CheckpointAge, opts.SnapshotAge, opts.CheckpointStoredAt = decision.age, decision.snapshotAge, decision.storedAt
+			}
+		}
+		if err == nil {
+			_, err = source.worker.ResumeSession(state, opts)
+		}
+	}
+	if checkpointOutside && (err == nil || checkpointEnvelopeLoss(err)) {
+		res.CheckpointPolicy = "scaled"
+		if err != nil {
+			res.CheckpointPolicy = "definitive-loss"
+		}
+		metrics.CheckpointEnvelopeEvents.WithLabelValues(res.CheckpointPolicy).Inc()
 	}
 	if err != nil {
 		p.metrics.rollbackLosses.Add(1)
-		p.forget(c)
-		_ = p.store.Release(ctx, lease)
-		return fmt.Errorf("controlplane: call lost: move failed (%v), rollback failed: %w", cause, err)
+		loss := fmt.Errorf("controlplane: call lost: move failed (%v), rollback failed: %w", cause, err)
+		p.completeTakeover(source, c, lease, &res, true, loss)
+		return loss
 	}
 
 	result.RolledBack = true
@@ -785,7 +829,7 @@ func (p *Plane) resolveCandidate(ctx context.Context, candidate sessionstore.Lea
 // Run retries these calls without declaring a healthy source worker dead or
 // exporting it again. The relay hold waits for adoption or its bounded
 // backstop; adopted retries explicitly release to the confirmed owner.
-func (p *Plane) retainUncertainMove(source *registration, c *call, from sessionstore.Lease, routed netip.AddrPort, state []byte, cause error) bool {
+func (p *Plane) retainUncertainMove(source *registration, c *call, from sessionstore.Lease, routed netip.AddrPort, state []byte, cause error, moveStarted time.Time) bool {
 	var transient *sessionstore.TransientError
 	if !errors.As(cause, &transient) || transient.Candidate == nil {
 		return false
@@ -799,7 +843,7 @@ func (p *Plane) retainUncertainMove(source *registration, c *call, from sessions
 	if transient.Candidate.Worker == source.addr {
 		excluded = map[netip.AddrPort]bool{from.Worker: true}
 	}
-	source.pending[c.id] = &takeoverState{call: c, lease: from, candidate: transient.Candidate, routed: routed, excluded: excluded, attemptLimit: maxResumeAttempts, plannedState: state, planned: true}
+	source.pending[c.id] = &takeoverState{call: c, lease: from, candidate: transient.Candidate, routed: routed, excluded: excluded, attemptLimit: maxResumeAttempts, plannedState: state, planned: true, outageStarted: moveStarted}
 	return true
 }
 
