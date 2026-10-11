@@ -69,7 +69,7 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 		cache, pli bool
 	}{{"cache", true, false}, {"keyframe", false, true}, {"both", true, true}} {
 		t.Run(mode.name, func(t *testing.T) {
-			var times, liveTimes []time.Duration
+			var times, liveTimes, pliTimes []time.Duration
 			paths := map[string]int{}
 			liveReasons := map[string]int{}
 			within := 0
@@ -107,6 +107,7 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 						newConclusive++
 					}
 					recovery := report.Moves[0].Recovery
+					t.Logf("PLI_RECOVERY mode=%s trial=%d common_start=kill decoded_pli=%s", mode.name, trial, recovery.FirstDecodedPLIAfterKill)
 					stats, err := h.ReplayStats(1)
 					require.NoError(t, err)
 					require.Positive(t, recovery.MediaResumedAt)
@@ -128,12 +129,15 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 						assert.Zero(t, report.SentVideo.KeyframeRequests)
 					}
 					if mode.name == "keyframe" {
-						require.Equal(t, "Keyframe", recovery.Path)
+						require.Zero(t, recovery.ReplayPackets)
+						require.Positive(t, recovery.FirstDecodedPLIAfterKill, "a natural keyframe alone cannot prove PLI recovery")
 						require.True(t, measurement.LossConclusive(), measurement.Summary())
 						require.True(t, measurement.FirstNewContentVerdict.Trusted, measurement.Summary())
 						require.Positive(t, measurement.LostAudio)
 						require.Positive(t, measurement.LostVideoFrames)
-						require.Equal(t, "keyframe", measurement.FirstNewContent)
+						if recovery.Path == "Keyframe" {
+							require.Equal(t, "keyframe", measurement.FirstNewContent)
+						}
 					}
 					if mode.pli {
 						assert.Positive(t, report.SentVideo.KeyframeRequests)
@@ -149,6 +153,9 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 					}
 					assert.Less(t, recovery.FirstDecodedAfterMediaResume, bound)
 					times = append(times, recovery.FirstDecodedAfterKill)
+					if recovery.FirstDecodedPLIAfterKill > 0 {
+						pliTimes = append(pliTimes, recovery.FirstDecodedPLIAfterKill)
+					}
 					if recovery.FirstDecodedLiveAfterKill > 0 {
 						liveTimes = append(liveTimes, recovery.FirstDecodedLiveAfterKill)
 					}
@@ -175,6 +182,10 @@ func testRelayFrameCacheModes(t *testing.T, store sessionstore.Store) {
 			sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
 			require.Len(t, times, 10)
 			sort.Slice(liveTimes, func(i, j int) bool { return liveTimes[i] < liveTimes[j] })
+			sort.Slice(pliTimes, func(i, j int) bool { return pliTimes[i] < pliTimes[j] })
+			if l := len(pliTimes); l > 0 {
+				t.Logf("PLI_METRICS mode=%s common_start=kill decoded=%d/%d median=%s max=%s", mode.name, l, len(times), (pliTimes[(l-1)/2]+pliTimes[l/2])/2, pliTimes[l-1])
+			}
 			n := len(times)
 			median := (times[(n-1)/2] + times[n/2]) / 2
 			liveMedian, liveMax := time.Duration(0), time.Duration(0)
@@ -315,7 +326,7 @@ func TestRelayFrameCacheLargeGroup(t *testing.T) {
 				require.Equal(t, "Cache", recovery.Path)
 			} else {
 				require.Zero(t, recovery.ReplayPackets)
-				require.Equal(t, "Keyframe", recovery.Path)
+				require.Positive(t, recovery.FirstDecodedPLIAfterKill, "a natural keyframe alone cannot prove PLI recovery")
 			}
 			maxAudio, maxVideo := time.Duration(0), time.Duration(0)
 			burstStart := recovery.MediaResumedAt

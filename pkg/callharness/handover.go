@@ -558,6 +558,7 @@ func writeHandoverSummary(b *strings.Builder, r *Report) {
 				live = "not observed"
 			}
 			fmt.Fprintf(b, "  video recovery: first decoded %s, first live %s from kill; %s from media resume; path=%s live_path=%s picture_id=%d interval=%s keyframe_interval=%s within_interval=%t\n", recovery.FirstDecodedAfterKill, live, recovery.FirstDecodedAfterMediaResume, recovery.Path, recovery.LivePath, recovery.PictureID, recovery.FrameInterval, recovery.KeyframeInterval, recovery.WithinFrameInterval)
+			fmt.Fprintf(b, "  PLI recovery: first decoded requested keyframe %s from kill (0s means not proven)\n", recovery.FirstDecodedPLIAfterKill)
 		}
 		fmt.Fprintf(b, "  %s %d: worker %d -> %d at %s (detection %s, decrypt failures after resume %d)", move.Kind, i+1, move.From, move.To, ms(move.Start), ms(move.DetectionTime), move.DecryptionFailuresAfterResume)
 		if move.Error != "" {
