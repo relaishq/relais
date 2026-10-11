@@ -76,7 +76,10 @@ func (c *Call) collectStatusTakeovers(ctx context.Context, read func(context.Con
 		return err
 	}
 	for _, res := range status.Takeovers {
-		if res.ID != c.SessionID() {
+		// Deferred planned moves already have an operator caller record.
+		// The status history also retains those outcomes; they are not new
+		// automatic crash events and must not duplicate the probe inventory.
+		if res.Kind != "takeover" || res.ID != c.SessionID() {
 			continue
 		}
 		from, _ := strconv.Atoi(res.From)

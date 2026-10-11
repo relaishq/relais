@@ -138,12 +138,12 @@ and video. Each call must supply a baseline. Each track needs at least 100
 baseline sent units, at least as many baseline sent units as event sent units,
 and at least ten baseline windows. Missing or untrusted counts, insufficient
 coverage, or an untrusted caller loss verdict make that comparison
-**inconclusive**. A trial or pooled baseline above **10%** content loss is
-inconclusive
+**inconclusive**. A pooled baseline above **10%** content loss is inconclusive
 ("baseline too lossy to judge"). A 100%-loss baseline cannot pass. Expired event
 history stays inconclusive even when the earlier raw verdict set `Failed`.
 Definite lost calls, terminal takeover loss, and takeover timeouts fail.
-Other known failures still win.
+A single noisy trial does not invalidate a healthy pooled baseline. The pooled
+comparison remains diagnostic for moves. Other known failures still win.
 
 For media-link loss, calculate the measured baseline rate `baseline lost /
 baseline sent` and the expected event loss `event sent × baseline rate`.
@@ -209,7 +209,9 @@ resend attempts. Both scenario baselines start after the preliminary move's full
 six-second settling window. Forced probes are excluded from profile p95;
 their measurements remain in the report, and whole-call integrity covers
 them. Each lossy-DC trial must have exactly two earlier **move** probes; every
-other profile must have zero. Any earlier takeover fails. The barrier-resend
+other profile must have zero. Any earlier crash takeover (`Kind == "takeover"`)
+fails. Deferred planned-move outcomes in the status history keep their operator
+caller record and do not add an automatic crash event. The barrier-resend
 probe requires resumed audio/video and gaps at most **225ms** (150ms + 75ms).
 The uncertain-reply probe requires resumed audio/video and gaps strictly below
 **2s**; its operator error may represent a safe rollback. Both probe verdicts
@@ -220,8 +222,12 @@ count is inconclusive. `InjectedDiscardedReplies` counts
 proxy injections; `ObservedUncertainMoveResumes` separately counts controller
 uncertain target-resume paths through
 `relais_control_uncertain_move_resumes_total`. Missing controller samples are
-reported as unavailable, rather than zero. Neither counter proves a target
-commit. The driver proxy is private through the existing management link; the original DC
+reported as unavailable, rather than zero. Each lossy-DC trial requires a
+positive observed counter **delta**, measured from before the probes through
+the last successful scrape. Zero, missing samples, or a counter reset leaves
+that path NOT-PROVEN and acceptance inconclusive. Neither counter proves a
+target commit. The driver proxy is private through the existing management
+link; the original DC
 source/destination qdiscs still apply to both halves of the HTTP round trip.
 
 ### Slow move diagnosis

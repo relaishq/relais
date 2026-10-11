@@ -3,11 +3,13 @@ package main
 import (
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
 	"github.com/relais/internal/nettopology"
 	"github.com/relais/pkg/callharness"
+	"github.com/relais/pkg/controlplane"
 )
 
 const profileGapMargin = 20 * time.Millisecond
@@ -153,4 +155,29 @@ func poolProfileProbe(out *profileProbeVerdict, in profileProbeVerdict) {
 	out.VideoGap = max(out.VideoGap, in.VideoGap)
 	out.MediaResumed = out.MediaResumed && in.MediaResumed
 	out.Reasons = append(out.Reasons, in.Reasons...)
+}
+
+// crashTakeovers selects the automatic crash events from the status history.
+func crashTakeovers(events []controlplane.MoveResult) []controlplane.MoveResult {
+	var out []controlplane.MoveResult
+	for _, event := range events {
+		if event.Kind == "takeover" {
+			out = append(out, event)
+		}
+	}
+	return out
+}
+
+// A process counter is evidence only when both samples exist and its value
+// did not reset. Count paths observed during this trial, not an absolute total.
+func observedUncertainResumeDelta(before float64, beforeAvailable bool, after float64, afterAvailable bool) (uint64, bool) {
+	if !beforeAvailable || !afterAvailable || after < before {
+		return 0, false
+	}
+	for _, value := range []float64{before, after} {
+		if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value >= math.Exp2(64) || value != math.Trunc(value) {
+			return 0, false
+		}
+	}
+	return uint64(after - before), true
 }

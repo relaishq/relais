@@ -163,19 +163,3 @@ func poolContentLoss(rows []profileRow, video bool) (callharness.ContentLossCoun
 func lossRunAvailable(counts callharness.ContentLossCounts) bool {
 	return counts.Trusted && counts.RunTrusted && counts.LongestLostRun >= 0 && counts.LongestLostRun <= counts.Lost && (counts.Lost == 0 || counts.LongestLostRun > 0)
 }
-
-func trialLossBaseline(row profileRow, video bool) callharness.ContentLossCounts {
-	out := callharness.ContentLossCounts{Trusted: len(row.Measurement.ContentLoss.Baselines) > 0, RunTrusted: true}
-	for _, window := range row.Measurement.ContentLoss.Baselines {
-		counts := window.Audio
-		if video {
-			counts = window.Video
-		}
-		out.Sent += counts.Sent
-		out.Lost += counts.Lost
-		out.Trusted = out.Trusted && counts.Trusted
-		out.RunTrusted = out.RunTrusted && lossRunAvailable(counts)
-		out.LongestLostRun = max(out.LongestLostRun, counts.LongestLostRun)
-	}
-	return out
-}

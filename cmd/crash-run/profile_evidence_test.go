@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/relais/pkg/callharness"
+	"github.com/relais/pkg/controlplane"
 	"github.com/stretchr/testify/require"
 )
 
@@ -155,15 +156,7 @@ func TestProfileFailureEvidenceAndNoiseCaps(t *testing.T) {
 			require.Contains(t, got.Reasons, "baseline too lossy to judge")
 		}
 	}
-	rows := goodProfileRows(10)
-	for j := range rows[0].Measurement.ContentLoss.Baselines {
-		rows[0].Measurement.ContentLoss.Baselines[j].Video.Lost = 30
-		rows[0].Measurement.ContentLoss.Baselines[j].Video.LongestLostRun = 30
-	}
-	noisy := judgeProfile(profileTrialOptions{Name: "region", Scenario: "takeover"}, rows, profileTestLinks(t, "region"))
-	require.Equal(t, "inconclusive", noisy.Verdict)
-	require.Contains(t, noisy.Rows[0].Reasons, "trial 1: video baseline too lossy to judge")
-	rows = goodProfileRows(20)
+	rows := goodProfileRows(20)
 	rows[19].AudioGap = 2 * time.Second
 	result := judgeProfile(profileTrialOptions{Name: "region", Scenario: "move"}, rows, profileTestLinks(t, "region"))
 	require.Equal(t, 60*time.Millisecond, result.AudioP95)
@@ -191,4 +184,100 @@ func TestProfileFailureEvidenceAndNoiseCaps(t *testing.T) {
 	rows[0].Measurement.Audio.BaselineP95 = 167600 * time.Microsecond
 	result = judgeProfile(profileTrialOptions{Name: "far-caller", Scenario: "move"}, rows, profileTestLinks(t, "far-caller"))
 	require.Equal(t, 2400*time.Microsecond, result.Rows[0].AudioSpreadMargin)
+}
+
+func TestProfileNoisyTrialDoesNotRejectHealthyPooledBaseline(t *testing.T) {
+	for _, scenario := range []string{"move", "takeover"} {
+		t.Run(scenario, func(t *testing.T) {
+			rows := goodProfileRows(20)
+			for i := range rows {
+				for j := range rows[i].Measurement.ContentLoss.Baselines {
+					counts := &rows[i].Measurement.ContentLoss.Baselines[j].Video
+					counts.Sent = 16
+				}
+			}
+			// Five missing frames among only 48 baseline frames is noisy locally;
+			// it is still a healthy 5/960 pooled baseline in this run.
+			rows[0].Measurement.ContentLoss.Baselines[0].Video.Lost = 5
+			rows[0].Measurement.ContentLoss.Baselines[0].Video.LongestLostRun = 1
+			options := profileTrialOptions{Name: "far-caller", Scenario: scenario}
+			links := profileTestLinks(t, "far-caller")
+			result := judgeProfile(options, rows, links)
+			require.Equal(t, "pass", result.Verdict, result.Reasons)
+			require.Equal(t, "conclusive", result.Rows[0].Verdict, result.Rows[0].Reasons)
+			require.Equal(t, "pass", result.VideoContentLoss.Verdict)
+			for i := range rows {
+				for j := range rows[i].Measurement.ContentLoss.Baselines {
+					counts := &rows[i].Measurement.ContentLoss.Baselines[j].Video
+					counts.Lost = 2
+					counts.LongestLostRun = 1
+				}
+			}
+			result = judgeProfile(options, rows, links)
+			require.Equal(t, "inconclusive", result.VideoContentLoss.Verdict)
+			require.Contains(t, result.VideoContentLoss.Reasons, "baseline too lossy to judge")
+			if scenario == "takeover" {
+				require.Equal(t, "inconclusive", result.Verdict)
+			} else {
+				require.Equal(t, "pass", result.Verdict, "move content loss stays diagnostic")
+			}
+		})
+	}
+}
+
+func TestProfileBeforeAcceptanceIgnoresDeferredMoveStatus(t *testing.T) {
+	move := controlplane.MoveResult{Kind: "move", ID: "call"}
+	takeover := controlplane.MoveResult{Kind: "takeover", ID: "call"}
+	require.Empty(t, crashTakeovers([]controlplane.MoveResult{move}))
+	require.Equal(t, []controlplane.MoveResult{takeover}, crashTakeovers([]controlplane.MoveResult{move, takeover, move}))
+}
+
+func TestProfileRequiresObservedUncertainResumeEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		available bool
+		count     uint64
+		want      string
+	}{
+		{"positive delta", true, 1, "pass"}, {"no observed path", true, 0, "inconclusive"}, {"missing counter", false, 0, "inconclusive"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows := withProfileProbes("lossy-dc", goodProfileRows(20))
+			rows[0].BarrierResends = 1
+			rows[0].InjectedDiscardedReplies = 1
+			for i := range rows {
+				rows[i].ObservedUncertainMoveResumesAvailable = true
+				rows[i].ObservedUncertainMoveResumes = 1
+			}
+			rows[0].ObservedUncertainMoveResumesAvailable = tc.available
+			rows[0].ObservedUncertainMoveResumes = tc.count
+			result := judgeProfile(profileTrialOptions{Name: "lossy-dc", Scenario: "move"}, rows, profileTestLinks(t, "lossy-dc"))
+			require.Equal(t, tc.want, result.Verdict, result.Reasons)
+			if tc.want != "pass" {
+				require.Contains(t, result.Rows[0].Reasons, "trial 1: observed uncertain move-resume path NOT-PROVEN")
+			}
+		})
+	}
+}
+
+func TestProfileObservedResumeCountUsesDelta(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		before, after     float64
+		beforeOK, afterOK bool
+		delta             uint64
+		available         bool
+	}{
+		{"existing count is not a new path", 7, 7, true, true, 0, true},
+		{"only new paths", 7, 9, true, true, 2, true},
+		{"missing baseline", 0, 9, false, true, 0, false},
+		{"missing final", 7, 0, true, false, 0, false},
+		{"counter reset", 9, 1, true, true, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			delta, available := observedUncertainResumeDelta(tc.before, tc.beforeOK, tc.after, tc.afterOK)
+			require.Equal(t, tc.available, available)
+			require.Equal(t, tc.delta, delta)
+		})
+	}
 }

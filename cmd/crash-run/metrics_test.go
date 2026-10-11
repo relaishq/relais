@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -261,4 +262,28 @@ func TestMetricsRunDiscardsResponseAfterProcessExit(t *testing.T) {
 	require.True(t, exited)
 	require.Empty(t, scrapeError)
 	require.Zero(t, samples)
+}
+
+func TestProfileObservedResumeDeltaAcrossRealScrapes(t *testing.T) {
+	const counter = "relais_control_uncertain_move_resumes_total"
+	var total atomic.Uint64
+	total.Store(7)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, "# TYPE %s counter\n%s %d\n", counter, counter, total.Load())
+	}))
+	defer server.Close()
+	r := manualMetricsRun(t)
+	r.targets = []*metricsTarget{{url: server.URL, done: make(chan struct{}), data: ProcessMetrics{Process: "control"}}}
+	_, ok := r.value("control", counter)
+	require.False(t, ok)
+	r.sampleBeforeFault(context.Background())
+	before, beforeOK := r.value("control", counter)
+	require.True(t, beforeOK)
+	require.Equal(t, 7.0, before)
+	total.Store(9)
+	data := r.finish(t.TempDir())
+	after, afterOK := data[0].Values[counter]
+	delta, available := observedUncertainResumeDelta(before, beforeOK, after, afterOK)
+	require.True(t, available)
+	require.EqualValues(t, 2, delta, "previous paths must not inflate this trial's evidence")
 }

@@ -326,6 +326,9 @@ func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettop
 			}
 		}
 		if options.Name == "lossy-dc" {
+			if !row.ObservedUncertainMoveResumesAvailable || row.ObservedUncertainMoveResumes == 0 {
+				rowReason(false, prefix+"observed uncertain move-resume path NOT-PROVEN")
+			}
 			for _, probe := range []struct {
 				name    string
 				verdict profileProbeVerdict
@@ -342,13 +345,8 @@ func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettop
 		row.VideoSpreadMargin = 20*time.Millisecond - (m.Video.BaselineP95 - m.Video.BaselineMedian)
 		for _, track := range []struct {
 			kind            string
-			video           bool
 			event, baseline callharness.ContentLossCounts
-		}{{"audio", false, m.ContentLoss.Event.Audio, audioLossBaseline}, {"video", true, m.ContentLoss.Event.Video, videoLossBaseline}} {
-			baseline := trialLossBaseline(row, track.video)
-			if baseline.Sent > 0 && float64(baseline.Lost)/float64(baseline.Sent) > maximumLossBaselineRate {
-				rowReason(false, prefix+track.kind+" baseline too lossy to judge")
-			}
+		}{{"audio", m.ContentLoss.Event.Audio, audioLossBaseline}, {"video", m.ContentLoss.Event.Video, videoLossBaseline}} {
 			if options.Scenario == "takeover" {
 				if !lossRunAvailable(track.event) || !track.baseline.RunTrusted {
 					rowReason(false, prefix+track.kind+" consecutive-loss evidence unavailable")

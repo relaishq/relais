@@ -214,6 +214,8 @@ func withProfileProbes(name string, rows []profileRow) []profileRow {
 			out[i].ProbeEvents = []callharness.MoveReport{{Kind: "move"}, {Kind: "move"}}
 			out[i].UncertainReplyProbe = profileProbeVerdict{Verdict: "pass", Trials: 1, MediaResumed: true}
 			out[i].BarrierResendProbe = out[i].UncertainReplyProbe
+			out[i].ObservedUncertainMoveResumesAvailable = true
+			out[i].ObservedUncertainMoveResumes = 1
 		}
 	}
 	return out

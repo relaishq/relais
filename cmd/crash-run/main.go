@@ -76,6 +76,8 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		}
 	}()
 	systemMetrics := newMetricsRun()
+	var uncertainBefore float64
+	var uncertainBeforeAvailable bool
 	defer func() {
 		out.Metrics = systemMetrics.finish(dir)
 		if out.ProfileRow != nil {
@@ -85,8 +87,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 				}
 				if m.Process == "control" {
 					v, ok := m.Values["relais_control_uncertain_move_resumes_total"]
-					out.ProfileRow.ObservedUncertainMoveResumes = uint64(v)
-					out.ProfileRow.ObservedUncertainMoveResumesAvailable = ok
+					out.ProfileRow.ObservedUncertainMoveResumes, out.ProfileRow.ObservedUncertainMoveResumesAvailable = observedUncertainResumeDelta(uncertainBefore, uncertainBeforeAvailable, v, ok)
 				}
 			}
 		}
@@ -220,13 +221,17 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	if len(status.Calls) != 1 {
 		return result{}, definiteProfileFailure("lost call: expected one owning call in /status")
 	}
-	if profile != nil && len(status.Takeovers) > 0 {
+	if profile != nil && len(crashTakeovers(status.Takeovers)) > 0 {
 		return result{}, definiteProfileFailure("unexpected takeover before acceptance")
 	}
 	owner := status.Calls[0].Owner
 	worker := workerPIDs[owner]
 	if worker == nil {
 		return result{}, fmt.Errorf("unknown owning worker %q", owner)
+	}
+	if profile != nil {
+		systemMetrics.sampleBeforeFault(ctx)
+		uncertainBefore, uncertainBeforeAvailable = systemMetrics.value("control", "relais_control_uncertain_move_resumes_total")
 	}
 	if profile != nil && profile.Name == "lossy-dc" {
 		// The uncertain-reply probe is separate from the acceptance event. A
@@ -251,7 +256,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		if len(status.Calls) != 1 {
 			return result{}, definiteProfileFailure("uncertainty probe lost call")
 		}
-		if len(status.Takeovers) > 0 {
+		if len(crashTakeovers(status.Takeovers)) > 0 {
 			return result{}, definiteProfileFailure("unexpected takeover before acceptance")
 		}
 		owner = status.Calls[0].Owner
@@ -276,7 +281,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		if len(status.Calls) != 1 {
 			return result{}, definiteProfileFailure("barrier probe lost call")
 		}
-		if len(status.Takeovers) > 0 {
+		if len(crashTakeovers(status.Takeovers)) > 0 {
 			return result{}, definiteProfileFailure("unexpected takeover before acceptance")
 		}
 		owner = status.Calls[0].Owner
@@ -306,7 +311,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			h.RecordProcessKill(owner, killed)
 		}
 		fmt.Printf("%s worker=%s pid=%d session=%s relay=%s\n", label, owner, worker.PID(), call.SessionID(), relayReady.Media)
-		priorTakeovers := len(status.Takeovers)
+		priorTakeovers := len(crashTakeovers(status.Takeovers))
 		// Wait for a terminal takeover, then observe at least 60 s of consent in
 		// the default run. The short developer mode cannot claim that acceptance.
 		deadline := time.NewTimer(3 * time.Second)
@@ -316,7 +321,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		// SIGTERM exits this wait on the first owner change, which may precede
 		// move completion. The later worker-exit and media-freshness checks catch
 		// a failed drain or rollback; this poll alone does not prove success.
-		for len(status.Takeovers) == priorTakeovers && (!terminate || len(status.Calls) != 1 || status.Calls[0].Owner == owner) {
+		for len(crashTakeovers(status.Takeovers)) == priorTakeovers && (!terminate || len(status.Calls) != 1 || status.Calls[0].Owner == owner) {
 			select {
 			case <-ctx.Done():
 				return result{}, ctx.Err()
@@ -330,7 +335,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			}
 		}
 		if terminate {
-			if len(status.Takeovers) != 0 {
+			if len(crashTakeovers(status.Takeovers)) != 0 {
 				return result{}, errors.New("SIGTERM must drain through a planned move, not crash recovery")
 			}
 			select {
@@ -344,7 +349,8 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 				return result{}, errors.New("SIGTERM worker did not finish drain and exit")
 			}
 		} else {
-			takeover := status.Takeovers[len(status.Takeovers)-1]
+			takeovers := crashTakeovers(status.Takeovers)
+			takeover := takeovers[len(takeovers)-1]
 			if takeover.Lost || takeover.Error != "" {
 				return result{}, definiteProfileFailure(fmt.Sprintf("takeover lost=%t: %s", takeover.Lost, takeover.Error))
 			}
