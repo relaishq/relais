@@ -64,7 +64,9 @@ type RelayLeases interface {
 	// and the epoch; a delayed renewal cannot revive the replaced tenure.
 	ClaimDeadRelay(context.Context, RelayLease, RelayProcess, time.Duration) (RelayLease, error)
 	// ClaimExpiredUnknownRelay is only for plain relay startup without a standby.
-	// It checks expiry and all observed identity evidence atomically. Unknown
+	// It checks expiry and all observed identity evidence atomically. Any
+	// recorded identity may be unknown, including an interrupted claimant's
+	// predecessor. Known identities still require matching host/namespace. Unknown
 	// predecessors must not be probed or fenced. An identical holder can settle
 	// an uncertain earlier claim without advancing the epoch again.
 	ClaimExpiredUnknownRelay(context.Context, RelayLease, RelayProcess, time.Duration) (RelayLease, error)
@@ -132,7 +134,7 @@ func (m *Memory) changeRelay(ctx context.Context, op string, expected RelayLease
 	l, ok := m.relayLeases[expected.Key]
 	now := time.Now()
 	if op == "claim" || op == "claim_dead" || op == "claim_unknown" {
-		if op == "claim_unknown" && !unknownRestartEvidence(p, l) {
+		if op == "claim_unknown" && !unknownRestartEvidence(l) {
 			return RelayLease{}, processidentity.ErrForeignScope
 		}
 		if err := relayScope(p, l, op == "claim_unknown"); err != nil {
@@ -197,6 +199,6 @@ func (m *Memory) changeRelay(ctx context.Context, op string, expected RelayLease
 	return l, nil
 }
 
-func unknownRestartEvidence(p RelayProcess, l RelayLease) bool {
-	return l.Holder.Host == processidentity.UnknownHost || l.Holder == p && (l.Forwarder.Host == processidentity.UnknownHost || l.PreviousHolder.Host == processidentity.UnknownHost)
+func unknownRestartEvidence(l RelayLease) bool {
+	return l.Holder.Host == processidentity.UnknownHost || l.Forwarder.Host == processidentity.UnknownHost || l.PreviousHolder.Host == processidentity.UnknownHost
 }

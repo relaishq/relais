@@ -36,7 +36,7 @@ type Config struct {
 	Key              string
 	Process          sessionstore.RelayProcess
 	TTL, Renew, Poll time.Duration
-	// Only a plain relay starting up may reclaim an expired unknown-host holder.
+	// Only plain startup may reclaim an expired lease with unknown-host evidence.
 	AllowUnknownHostRestart bool
 	// Fence is injectable for deterministic safety tests. Nil uses kernel identity.
 	Fence func(context.Context, processidentity.Identity) error
@@ -154,7 +154,7 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 		deadClaim := false
 		unknownClaim = false
 		if readErr == nil {
-			unknownClaim = cfg.AllowUnknownHostRestart && (current.Expired && current.Holder.Host == processidentity.UnknownHost || current.Holder == cfg.Process && hasUnknownHost(current))
+			unknownClaim = cfg.AllowUnknownHostRestart && hasUnknownHost(current) && (current.Expired || current.Holder == cfg.Process)
 			for _, p := range []sessionstore.RelayProcess{current.Holder, current.Forwarder, current.PreviousHolder} {
 				if p == (sessionstore.RelayProcess{}) {
 					continue

@@ -27,12 +27,9 @@ if op=='claim' or op=='claim_dead' or op=='claim_unknown' then
  local allow_unknown=op=='claim_unknown'
  if allow_unknown then
   if not c[1] or c[1]=='' then return {4} end
-  local current=cjson.decode(c[1])
-  local unknown=current.host=='unknown'
-  if c[1]==holder then
-   for _,i in ipairs({4,5}) do
-    if c[i] and c[i]~='' and cjson.decode(c[i]).host=='unknown' then unknown=true end
-   end
+  local unknown=false
+  for _,i in ipairs({1,4,5}) do
+   if c[i] and c[i]~='' and cjson.decode(c[i]).host=='unknown' then unknown=true end
   end
   if not unknown then return {4} end
  end

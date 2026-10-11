@@ -120,6 +120,81 @@ func TestUnknownHostRestartSettlesUncertainClaim(t *testing.T) {
 		g.Close()
 	}
 }
+
+func TestPlainRestartAfterUnknownClaimBeforeActivation(t *testing.T) {
+	for _, forwarder := range []bool{false, true} {
+		for _, mode := range []string{"plain", "standby", "foreign-host", "foreign-namespace", "unknown-local", "fence-denied"} {
+			t.Run(fmt.Sprintf("forwarder=%t/%s", forwarder, mode), func(t *testing.T) {
+				s := sessionstore.NewMemory()
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				unknown := process("A")
+				unknown.Host = processidentity.UnknownHost
+				l, err := s.ClaimRelay(ctx, "one", unknown, time.Second)
+				require.NoError(t, err)
+				if forwarder {
+					l, err = s.ActivateRelay(ctx, l)
+					require.NoError(t, err)
+				}
+				_, err = s.RenewRelay(ctx, l, time.Millisecond)
+				require.NoError(t, err)
+				time.Sleep(3 * time.Millisecond)
+				known := process("K")
+				switch mode {
+				case "foreign-host":
+					known.Host = "foreign"
+				case "foreign-namespace":
+					known.Namespace = "foreign"
+				}
+				// K claims, but never activates or replaces unknown forwarder A.
+				pending, err := s.ClaimExpiredUnknownRelay(ctx, l, known, time.Millisecond)
+				require.NoError(t, err)
+				require.Equal(t, unknown, pending.PreviousHolder)
+				time.Sleep(3 * time.Millisecond)
+				cfg := config(s)
+				cfg.AllowUnknownHostRestart = mode != "standby"
+				if mode == "unknown-local" {
+					cfg.Process.Host = processidentity.UnknownHost
+				}
+				probes := 0
+				cfg.Gone = func(context.Context, processidentity.Identity) (bool, error) { probes++; return false, nil }
+				var fenced []processidentity.Identity
+				cfg.Fence = func(_ context.Context, id processidentity.Identity) error {
+					fenced = append(fenced, id)
+					if mode == "fence-denied" {
+						return syscall.EPERM
+					}
+					return nil
+				}
+				g, err := Acquire(ctx, cfg)
+				if g != nil {
+					defer g.Close()
+				}
+				require.Zero(t, probes, "unknown evidence must disable the dead-holder fast path")
+				switch mode {
+				case "plain":
+					require.NoError(t, err)
+					require.True(t, g.Allowed())
+					require.Equal(t, pending.Epoch+1, g.Lease().Epoch)
+					require.Equal(t, []processidentity.Identity{known.Identity()}, fenced)
+					current, err := s.GetRelay(ctx, "one")
+					require.NoError(t, err)
+					require.Equal(t, cfg.Process, current.Forwarder)
+				case "fence-denied":
+					require.ErrorIs(t, err, syscall.EPERM)
+					require.Equal(t, []processidentity.Identity{known.Identity()}, fenced)
+				default:
+					require.ErrorIs(t, err, processidentity.ErrForeignScope)
+					require.Empty(t, fenced)
+					current, err := s.GetRelay(ctx, "one")
+					require.NoError(t, err)
+					require.Equal(t, pending.Holder, current.Holder)
+					require.Equal(t, pending.Epoch, current.Epoch)
+				}
+			})
+		}
+	}
+}
 func TestFenceFailurePreventsActivationAndBinding(t *testing.T) {
 	for _, failure := range []error{processidentity.ErrExecutable, errors.New("permission denied")} {
 		s := sessionstore.NewMemory()

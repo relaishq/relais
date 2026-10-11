@@ -55,11 +55,76 @@ func TestRelayCommandHelper(t *testing.T) {
 			})
 		}
 	}
+	if os.Getenv("RELAIS_W43_HOLD_ACTIVATION") == "1" {
+		next := acquire
+		acquire = func(ctx context.Context, standby bool, hostID string, cfg relaylease.Config) (commandGuard, error) {
+			cfg.Store = commandActivationHold{cfg.Store}
+			return next(ctx, standby, hostID, cfg)
+		}
+	}
 	if err := runWithLease(acquire); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
 	os.Exit(0)
+}
+
+type commandActivationHold struct{ sessionstore.RelayLeases }
+
+func (commandActivationHold) ActivateRelay(ctx context.Context, _ sessionstore.RelayLease) (sessionstore.RelayLease, error) {
+	fmt.Fprintln(os.Stdout, "TEST_BEFORE_RELAY_ACTIVATION")
+	<-ctx.Done()
+	return sessionstore.RelayLease{}, ctx.Err()
+}
+
+func TestCommandPlainRecoveryAfterUnknownClaimBeforeActivation(t *testing.T) {
+	t.Setenv("RELAIS_W43_NO_MACHINE_ID", "0")
+	for _, signal := range []syscall.Signal{syscall.SIGKILL, syscall.SIGSTOP} {
+		t.Run(signal.String(), func(t *testing.T) {
+			s, addr, prefix := commandStore(t)
+			target, err := clusterprocess.Start(t.TempDir(), "unknown-target", os.Environ(), "sleep", "30")
+			require.NoError(t, err)
+			t.Cleanup(target.Stop)
+			unknown := commandIdentity(t, "A", target.PID(), "unverifiable")
+			unknown.Host = processidentity.UnknownHost
+			l, err := s.ClaimRelay(context.Background(), "default", unknown, time.Second)
+			require.NoError(t, err)
+			_, err = s.ActivateRelay(context.Background(), l)
+			require.NoError(t, err)
+			_, err = s.RenewRelay(context.Background(), l, time.Millisecond)
+			require.NoError(t, err)
+			time.Sleep(3 * time.Millisecond)
+			t.Setenv("RELAIS_W43_HOLD_ACTIVATION", "1")
+			pending := startCommand(t, addr, prefix, "-host-id", "recover-host", "-relay-lease-ttl", "90ms", "-relay-lease-renew", "20ms")
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			require.NoError(t, pending.WaitLog(ctx, "TEST_BEFORE_RELAY_ACTIVATION"))
+			claimed, err := s.GetRelay(ctx, "default")
+			require.NoError(t, err)
+			require.Equal(t, "host-id:recover-host", claimed.Holder.Host)
+			require.Equal(t, unknown, claimed.Forwarder)
+			require.Equal(t, unknown, claimed.PreviousHolder)
+			require.NoError(t, pending.SignalGroup(signal))
+			t.Cleanup(func() { _ = pending.SignalGroup(syscall.SIGKILL) })
+			require.Eventually(t, func() bool {
+				current, err := s.GetRelay(ctx, "default")
+				return err == nil && current.Expired
+			}, time.Second, 5*time.Millisecond)
+			t.Setenv("RELAIS_W43_HOLD_ACTIVATION", "0")
+			next := startCommand(t, addr, prefix, "-host-id", "recover-host")
+			readyCommand(t, next)
+			current, err := s.GetRelay(ctx, "default")
+			require.NoError(t, err)
+			require.Equal(t, claimed.Epoch+1, current.Epoch)
+			require.Equal(t, current.Holder, current.Forwarder)
+			select {
+			case <-pending.Done():
+			case <-time.After(100 * time.Millisecond):
+				t.Fatal("known pending claimant survived replacement readiness")
+			}
+			require.NoError(t, target.SignalGroup(0), "unknown identity must not be signalled")
+		})
+	}
 }
 
 func TestCommandWithoutMachineIDPlainRestartAndStandbyRefusal(t *testing.T) {

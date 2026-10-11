@@ -2,6 +2,7 @@ package sessionstore
 
 import (
 	"context"
+	"fmt"
 	"github.com/relais/internal/processidentity"
 	"strings"
 	"sync"
@@ -70,7 +71,7 @@ func TestExpiredUnknownRelayClaimAtomicBoundaries(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, next.Epoch, settled.Epoch)
 		_, err = s.ClaimExpiredUnknownRelay(ctx, next, relayProcess("other"), time.Second)
-		require.ErrorIs(t, err, processidentity.ErrForeignScope, "only the identical new holder may settle")
+		require.ErrorIs(t, err, ErrLeaseHeld, "a different replacement must still wait for expiry")
 		next, err = s.ActivateRelay(ctx, next)
 		require.NoError(t, err)
 		_, err = s.RenewRelay(ctx, next, time.Millisecond)
@@ -102,6 +103,51 @@ func TestUnknownRestartDoesNotAllowForeignForwarder(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, l.Holder, current.Holder)
 		require.Equal(t, l.Epoch, current.Epoch)
+	})
+}
+
+func TestUnknownEvidenceSurvivesInterruptedKnownClaim(t *testing.T) {
+	forStores(t, func(t *testing.T, newStore func(*testing.T) Store) {
+		for _, forwarder := range []bool{false, true} {
+			t.Run(fmt.Sprintf("forwarder=%t", forwarder), func(t *testing.T) {
+				s := newStore(t).(RelayLeases)
+				ctx := context.Background()
+				unknown := relayProcess("A")
+				unknown.Host = processidentity.UnknownHost
+				l, err := s.ClaimRelay(ctx, "trap", unknown, time.Second)
+				require.NoError(t, err)
+				if forwarder {
+					l, err = s.ActivateRelay(ctx, l)
+					require.NoError(t, err)
+				}
+				_, err = s.RenewRelay(ctx, l, time.Millisecond)
+				require.NoError(t, err)
+				time.Sleep(3 * time.Millisecond)
+				pending, err := s.ClaimExpiredUnknownRelay(ctx, l, relayProcess("K"), time.Second)
+				require.NoError(t, err)
+				require.Equal(t, unknown, pending.PreviousHolder)
+				_, err = s.ClaimExpiredUnknownRelay(ctx, pending, relayProcess("replacement"), time.Second)
+				require.ErrorIs(t, err, ErrLeaseHeld)
+				_, err = s.RenewRelay(ctx, pending, time.Millisecond)
+				require.NoError(t, err)
+				time.Sleep(3 * time.Millisecond)
+				for _, field := range []string{"host", "namespace"} {
+					foreign := relayProcess("foreign")
+					if field == "host" {
+						foreign.Host = "foreign"
+					} else {
+						foreign.Namespace = "foreign"
+					}
+					_, err = s.ClaimExpiredUnknownRelay(ctx, pending, foreign, time.Second)
+					require.ErrorIs(t, err, processidentity.ErrForeignScope)
+				}
+				next, err := s.ClaimExpiredUnknownRelay(ctx, pending, relayProcess("replacement"), time.Second)
+				require.NoError(t, err)
+				require.Equal(t, pending.Epoch+1, next.Epoch)
+				require.Equal(t, pending.Holder, next.PreviousHolder)
+				require.Equal(t, pending.Forwarder, next.Forwarder)
+			})
+		}
 	})
 }
 

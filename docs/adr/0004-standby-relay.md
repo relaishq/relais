@@ -36,14 +36,18 @@ Takeover follows this order:
    Both stores repeat this check inside every claim transaction, preventing a
    foreign record from racing the last read. Scope changes also invalidate a
    dead-holder claim's identity comparison.
-   The only startup exception is a plain relay reclaiming an expired holder
-   whose host is explicitly `unknown`, under the single-relay assumption below.
+   The only startup exception is a plain relay reclaiming an expired lease
+   with any identity explicitly `unknown` (holder, forwarder or previous
+   holder), under the single-relay assumption below.
    `ClaimExpiredUnknownRelay` atomically checks expiry, epoch and all predecessor
    evidence. A renewal after the expired read prevents the claim. It never
    bypasses expiry for a new holder, and cannot admit a foreign known-host
    forwarder or previous holder. An identical holder may settle an uncertain
    successful claim without advancing the epoch. Ordinary and dead-holder
-   claims continue to refuse unknown hosts.
+   claims continue to refuse unknown hosts. This also permits recovery when a
+   known claimant dies before activation, leaving an unknown predecessor in
+   the record. Known same-host predecessors still undergo verified fencing;
+   foreign known identities still refuse the claim.
    For verifiable hosts, observe both holder and last possible forwarder with the same kernel
    identity checks used for fencing, without a terminating signal.
    If both are verifiably gone, claim immediately, bypassing expiry and recovery
@@ -248,10 +252,14 @@ If neither file provides an ID, a plain relay still starts with the host marker
 must still be readable. Standby mode refuses startup without a resolvable host
 identity and tells the operator to set `-host-id` or `RELAIS_HOST_ID`.
 
-An unknown-host holder is unverifiable, including against another unknown-host
+An unknown-host identity is unverifiable, including against another unknown-host
 record: it has no dead-holder fast path and is never killed. A resolved standby
-also refuses an unknown-host holder. Only a plain relay starting up may reclaim
-an expired unknown-host holder. This is the single-relay container restart case:
+also refuses a record containing an unknown-host identity. Only a plain relay
+starting up may reclaim an expired lease containing any unknown-host identity.
+If a known relay claims such a lease and crashes before activation, the next
+plain relay can recover it after expiry. Known identities retain the normal
+scope verification and fencing rules; they are never skipped with the unknown
+identities. This is the single-relay container restart case:
 the operator has stopped the only relay before starting its replacement. It
 assumes no standby and no other surviving relay. Expiry does not prove that the
 old process stopped; exclusive socket binds still apply. Configure a host ID
