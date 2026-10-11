@@ -88,11 +88,13 @@ func (w *Worker) SessionCheckpoint(id string) (CheckpointState, error) {
 // Measurements cover at least two media seconds; peaks decay with a ten-second
 // half-life, including after a move. The configured contract remains the floor.
 type sourceRate struct {
-	anchored  bool
-	index     uint64
-	timestamp uint32
-	peak      float64
-	peakAt    time.Time
+	anchored      bool
+	index         uint64
+	timestamp     uint32
+	lastIndex     uint64
+	lastTimestamp uint32
+	peak          float64
+	peakAt        time.Time
 }
 
 const checkpointRTPBurst = 64
@@ -108,14 +110,23 @@ func (m *sourceRate) rate(now time.Time) float64 {
 func (m *sourceRate) observe(now time.Time, index uint64, timestamp, clockRate uint32) {
 	if !m.anchored {
 		m.anchored, m.index, m.timestamp = true, index, timestamp
+		m.lastIndex, m.lastTimestamp = index, timestamp
 		return
 	}
-	// Signed RTP timestamp delta handles rollover and ignores reordered media.
-	ticks := int32(timestamp - m.timestamp)
-	if index <= m.index || ticks < 0 {
+	// Ignore reordered sequence indexes before interpreting timestamp changes.
+	if index <= m.lastIndex {
 		return
 	}
-	if uint32(ticks) < 2*clockRate {
+	// Signed deltas preserve rollover. A backward timestamp on newer media
+	// starts a new measurement window, retaining the decaying prior peak.
+	backward := int32(timestamp-m.lastTimestamp) < 0
+	m.lastIndex, m.lastTimestamp = index, timestamp
+	if backward {
+		m.index, m.timestamp = index, timestamp
+		return
+	}
+	ticks := uint32(timestamp - m.timestamp)
+	if ticks < 2*clockRate {
 		return
 	}
 	measured := float64(index-m.index) * float64(clockRate) / float64(ticks)

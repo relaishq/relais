@@ -60,6 +60,9 @@ func TestCheckpointFullRelayHoldReleaseEchoed(t *testing.T) {
 }
 
 func TestCheckpointThreeSecondHoldSourceRateAndCrash(t *testing.T) {
+	if testing.Short() {
+		t.Skip("three-second relay backstop runs in the full harness lane")
+	}
 	h, err := Start(Options{Relay: true, Workers: 2, DisableFrameCache: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })

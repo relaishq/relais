@@ -2,6 +2,8 @@ package sessionstore
 
 import (
 	"context"
+	"crypto/hkdf"
+	"crypto/hmac"
 	"crypto/sha256"
 	"fmt"
 	"net/netip"
@@ -60,11 +62,17 @@ func TestCheckpointDigestHidesPlaintextFingerprint(t *testing.T) {
 	require.NoError(t, r.PutState(ctx, lease, data))
 	digest, err := r.client.HGet(ctx, r.keys(lease.SessionID)[0], "state_digest").Result()
 	require.NoError(t, err)
-	require.Equal(t, r.stateDigest(lease.SessionID, r.activeKey, data), digest)
+	expected, err := r.stateDigest(lease.SessionID, r.activeKey, data)
+	require.NoError(t, err)
+	require.Equal(t, expected, digest)
 	require.NotContains(t, digest, fmt.Sprintf("%x", sha256.Sum256(data)))
-	require.NotEqual(t, r.stateDigest("another-session", r.activeKey, data), digest)
+	differentSession, err := r.stateDigest("another-session", r.activeKey, data)
+	require.NoError(t, err)
+	require.NotEqual(t, differentSession, digest)
 	other := &Redis{keysByID: map[byte][]byte{r.activeKey: []byte("different master key")}}
-	require.NotEqual(t, other.stateDigest(lease.SessionID, r.activeKey, data), digest)
+	differentKey, err := other.stateDigest(lease.SessionID, r.activeKey, data)
+	require.NoError(t, err)
+	require.NotEqual(t, differentKey, digest)
 }
 
 type clockRoutingClient struct {
@@ -111,4 +119,47 @@ func TestCheckpointClockRegressionIsUnsafe(t *testing.T) {
 		_, err = store.Checkpoint(ctx, lease.SessionID, data)
 		require.ErrorIs(t, err, ErrUnsafeCheckpointClock)
 	})
+}
+
+func TestMemoryCheckpointExpiryForgetsRoutes(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemory()
+	lease, err := store.Claim(ctx, "checkpoint-expiry", netip.MustParseAddrPort("127.0.0.1:1"), time.Minute)
+	require.NoError(t, err)
+	data := []byte("checkpoint")
+	require.NoError(t, store.PutState(ctx, lease, data))
+	route := routeFor(lease, netip.MustParseAddrPort("127.0.0.1:2"), time.Minute)
+	require.NoError(t, store.PutRoute(ctx, route, false))
+	store.mu.Lock()
+	lease.ExpiresAt = time.Now().Add(-time.Second)
+	store.leases[lease.SessionID] = lease
+	store.mu.Unlock()
+	_, err = store.Checkpoint(ctx, lease.SessionID, data)
+	require.ErrorIs(t, err, ErrNotFound)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	require.Empty(t, store.routes, "checkpoint expiry must remove the caller address index")
+	require.Empty(t, store.routeSessions, "checkpoint expiry must remove the session route index")
+	require.Empty(t, store.leases)
+	require.Empty(t, store.states)
+	require.Empty(t, store.checkpoints)
+}
+
+func TestCheckpointDigestUsesDistinctDerivedKey(t *testing.T) {
+	master := []byte("01234567890123456789012345678901")
+	store := &Redis{keysByID: map[byte][]byte{7: master}}
+	key, err := hkdf.Key(sha256.New, master, nil, "relais/sessionstore/checkpoint-digest/v1/session", 32)
+	require.NoError(t, err)
+	encryptionKey, err := hkdf.Key(sha256.New, master, nil, "relais/sessionstore/v1/session", 32)
+	require.NoError(t, err)
+	require.NotEqual(t, encryptionKey, key)
+	require.NotEqual(t, master, key)
+	mac := hmac.New(sha256.New, key)
+	mac.Write(stateAAD("session", "checkpoint-digest-v1", []byte{7}))
+	mac.Write([]byte("state"))
+	digest, err := store.stateDigest("session", 7, []byte("state"))
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("7:%x", mac.Sum(nil)), digest)
+	_, err = store.stateDigest("session", 8, []byte("state"))
+	require.Error(t, err)
 }

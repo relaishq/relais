@@ -12,7 +12,9 @@ writing use the same Cluster node; Memory uses its own clock. Before copying
 media counters,
 the worker samples that same store clock and persists the sample inside the
 encrypted version-6 snapshot. Takeover reads metadata bound to those exact
-bytes. Redis uses an HMAC over the plaintext, keyed from its store master key. The
+bytes. Redis uses an HMAC over the plaintext with a per-session HKDF key. A distinct
+`relais/sessionstore/checkpoint-digest/v1/` info label separates that key from
+the snapshot encryption key derived from the same store master key. The
 metadata does not expose an unkeyed plaintext fingerprint. Key rotation checks
 all configured active/old keys until their snapshots expire. Takeover exposes
 **checkpoint age** (since successful write) and **snapshot
@@ -78,7 +80,10 @@ Consequences: long stalls may end a call instead of sending undecryptable media.
 The SRTCP bucket can defer feedback above the configured send rate. Observed
 source rates above the configured bound can reduce the recovery budget or cause
 definitive loss. The guarantee requires callers to stay within the source bound.
-Planned live-export moves retain phase-1 behavior. The new owner receives the
+Planned live-export moves retain phase-1 behavior. Terminal planned-move losses
+also appear in the bounded `/status` `Takeovers` history with `Kind: "move"`
+and `Lost: true`, so callers can observe the same cleanup and loss outcome as
+crash takeovers. Successful planned moves do not enter that history. The new owner receives the
 original checkpoint write time, checkpoint age and snapshot age in ResumeOptions,
 also through the private HTTP API, and retains them in its subsequent snapshots
 for the relay buffer and agents. `SessionCheckpoint` exposes local age since the

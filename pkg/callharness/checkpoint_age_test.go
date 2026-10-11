@@ -63,12 +63,15 @@ func (s *checkpointFaultStore) PutState(ctx context.Context, lease sessionstore.
 }
 
 func TestRelayCheckpointAgePolicy(t *testing.T) {
-	forSessionStores(t, func(t *testing.T, store sessionstore.Store) {
+	scenario := func(t *testing.T, store sessionstore.Store) {
 		if store == nil {
 			store = sessionstore.NewMemory()
 		}
 		for _, mode := range []string{"fail", "stall", "delayed-success"} {
 			for _, loss := range []bool{false, true} {
+				if testing.Short() && mode != "fail" {
+					continue
+				}
 				name := mode + "/scaled"
 				rate := float64(5000)
 				policy := "scaled"
@@ -146,9 +149,13 @@ func TestRelayCheckpointAgePolicy(t *testing.T) {
 					}
 					require.NoError(t, json.Unmarshal(stale, &counters))
 					sequenceMu.Lock()
-					audioAdvance := uint16(latest[counters.State.Audio.SSRC] - uint16(counters.State.Audio.HighestSentIndex))
-					videoAdvance := uint16(latest[counters.State.Video.SSRC] - uint16(counters.State.Video.HighestSentIndex))
+					audioSequence, audioPresent := latest[counters.State.Audio.SSRC]
+					videoSequence, videoPresent := latest[counters.State.Video.SSRC]
 					sequenceMu.Unlock()
+					require.True(t, audioPresent, "negative control requires an echoed audio SSRC")
+					require.True(t, videoPresent, "negative control requires an echoed video SSRC")
+					audioAdvance := uint16(audioSequence - uint16(counters.State.Audio.HighestSentIndex))
+					videoAdvance := uint16(videoSequence - uint16(counters.State.Video.HighestSentIndex))
 					require.Greater(t, audioAdvance, uint16(8), "negative control: plain margin is smaller than stale audio advance")
 					require.Greater(t, videoAdvance, uint16(8), "negative control: plain margin is smaller than stale video advance")
 					t.Logf("CHECKPOINT_NEGATIVE_CONTROL plain_margin=8 backlog_allowance=1 audio_advance=%d video_advance=%d", audioAdvance, videoAdvance)
@@ -210,7 +217,12 @@ func TestRelayCheckpointAgePolicy(t *testing.T) {
 				})
 			}
 		}
-	})
+	}
+	if testing.Short() {
+		t.Run("memory", func(t *testing.T) { scenario(t, nil) })
+	} else {
+		forSessionStores(t, scenario)
+	}
 }
 
 func checkpointCounter(t *testing.T, counter prometheus.Counter) float64 {

@@ -3,6 +3,7 @@ package mediaworker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
@@ -206,4 +207,44 @@ func TestCheckpointCallerReserveAlsoBoundsCacheReplay(t *testing.T) {
 	frame.Packets = frame.Packets[:512]
 	require.True(t, sess.reserveReplay([]framecache.Frame{frame}, 8192))
 	require.Less(t, uint64(sess.state.Video.AdvanceSinceSend)+uint64(sess.callerSequenceReserve)+1, uint64(1<<15))
+}
+
+func TestSourceRateReanchorsAfterTimestampReset(t *testing.T) {
+	for _, reset := range []uint32{0, 45000} {
+		t.Run(fmt.Sprint(reset), func(t *testing.T) {
+			var meter sourceRate
+			now := time.Now()
+			meter.observe(now, 1000, 270000, 90000)
+			// Reordered packets cannot move the anchor, even with older timestamps.
+			meter.observe(now, 999, 0, 90000)
+			require.EqualValues(t, 1000, meter.index)
+			meter.observe(now, 1001, reset, 90000)
+			for i := uint64(1); i <= 1000; i++ {
+				meter.observe(now.Add(time.Duration(i)*2*time.Millisecond), 1001+i, reset+uint32(i)*180, 90000)
+			}
+			require.InDelta(t, 500, meter.rate(now.Add(2*time.Second)), 1)
+		})
+	}
+}
+
+func TestSourceRateTimestampRolloverPreservesMeasurement(t *testing.T) {
+	var meter sourceRate
+	now := time.Now()
+	start := uint32(math.MaxUint32 - 90000)
+	meter.observe(now, 0, start, 90000)
+	meter.observe(now.Add(2*time.Second), 1000, start+180000, 90000)
+	require.InDelta(t, 500, meter.rate(now.Add(2*time.Second)), 1)
+}
+
+func TestSourceRateReanchorsWithinMeasurementWindow(t *testing.T) {
+	var meter sourceRate
+	now := time.Now()
+	meter.observe(now, 0, 0, 90000)
+	meter.observe(now.Add(time.Second), 500, 90000, 90000)
+	// A reset can remain ahead of the old window anchor, yet behind the
+	// latest packet. Do not charge the old window's indexes to the new one.
+	meter.observe(now.Add(time.Second), 501, 9000, 90000)
+	meter.observe(now.Add(time.Second), 499, 8000, 90000)
+	meter.observe(now.Add(3*time.Second), 1501, 189000, 90000)
+	require.InDelta(t, 500, meter.rate(now.Add(3*time.Second)), 1)
 }

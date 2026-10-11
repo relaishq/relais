@@ -399,7 +399,13 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		p.mu.Lock()
 		pending := source.pending[c.id]
 		retained := pending != nil
+		lost := p.calls[c.id] != c
 		p.mu.Unlock()
+		if lost {
+			// Terminal cleanup already released the hold and forgot the call.
+			res.Lost = true
+			return
+		}
 		if retained {
 			return
 		}

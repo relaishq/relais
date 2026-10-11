@@ -699,7 +699,11 @@ func (r *Redis) PutState(ctx context.Context, lease Lease, state []byte) error {
 	}
 	blob := append(header, nonce...)
 	blob = seal.Seal(blob, nonce, state, stateAAD(lease.SessionID, seq, header))
-	_, err = r.run(ctx, "put", lease.SessionID, lease.Worker.String(), strconv.FormatUint(lease.Epoch, 10), 0, blob, seq, r.stateDigest(lease.SessionID, r.activeKey, state))
+	digest, err := r.stateDigest(lease.SessionID, r.activeKey, state)
+	if err != nil {
+		return err
+	}
+	_, err = r.run(ctx, "put", lease.SessionID, lease.Worker.String(), strconv.FormatUint(lease.Epoch, 10), 0, blob, seq, digest)
 	return err
 }
 func (r *Redis) GetState(ctx context.Context, id string) ([]byte, error) {
@@ -879,17 +883,29 @@ func (r *Redis) Clock(ctx context.Context, id string) (time.Time, error) {
 
 // Domain separation keeps the metadata authenticator independent of the AES
 // encryption key. Include session ID and key ID to prevent cross-record reuse.
-func (r *Redis) stateDigest(id string, keyID byte, state []byte) string {
-	mac := hmac.New(sha256.New, r.keysByID[keyID])
+func (r *Redis) stateDigest(id string, keyID byte, state []byte) (string, error) {
+	master, ok := r.keysByID[keyID]
+	if !ok {
+		return "", errors.New("sessionstore: unknown checkpoint key ID")
+	}
+	key, err := hkdf.Key(sha256.New, master, nil, "relais/sessionstore/checkpoint-digest/v1/"+id, 32)
+	if err != nil {
+		return "", err
+	}
+	mac := hmac.New(sha256.New, key)
 	mac.Write(stateAAD(id, "checkpoint-digest-v1", []byte{keyID}))
 	mac.Write(state)
-	return fmt.Sprintf("%d:%x", keyID, mac.Sum(nil))
+	return fmt.Sprintf("%d:%x", keyID, mac.Sum(nil)), nil
 }
 
 func (r *Redis) Checkpoint(ctx context.Context, id string, state []byte) (Checkpoint, error) {
 	digests := make([]string, 0, len(r.keysByID))
 	for keyID := range r.keysByID {
-		digests = append(digests, r.stateDigest(id, keyID, state))
+		digest, err := r.stateDigest(id, keyID, state)
+		if err != nil {
+			return Checkpoint{}, err
+		}
+		digests = append(digests, digest)
 	}
 	candidates, err := json.Marshal(digests)
 	if err != nil {

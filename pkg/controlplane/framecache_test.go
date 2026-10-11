@@ -2,6 +2,8 @@ package controlplane
 
 import (
 	"context"
+	"github.com/relais/pkg/relay"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -80,9 +82,24 @@ func TestUncertainRollbackCheckpointLossUsesTerminalCleanup(t *testing.T) {
 	require.True(t, p.recentTakeovers()[0].Lost)
 }
 
+type lossHoldRelay struct {
+	*fakeRelay
+	releases int
+}
+
+func (r *lossHoldRelay) ReleaseSession(_ string, _ netip.AddrPort) (int, error) {
+	r.releases++
+	if r.releases > 1 {
+		return 0, relay.ErrHoldExpired
+	}
+	return 0, nil
+}
+
 func TestRollbackLossCleansRouteFramesAndRecordsEvent(t *testing.T) {
 	p, a, b, r := setup(t)
 	a.resumeError, b.resumeError = true, true
+	holds := &lossHoldRelay{fakeRelay: r}
+	p.relay = holds
 	cache := framecache.NewMemory(framecache.Limits{})
 	p.config.FrameCache = cache
 	ctx := context.Background()
@@ -90,7 +107,11 @@ func TestRollbackLossCleansRouteFramesAndRecordsEvent(t *testing.T) {
 	require.NoError(t, err)
 	frame := framecache.Frame{Track: framecache.Track{Kind: "video", SSRC: 1}, Keyframe: true, Packets: []framecache.Packet{{Marker: true, Payload: []byte{0}}}}
 	require.NoError(t, cache.Append(ctx, id, frame))
-	_, err = p.Move(ctx, id, "b")
+	res, err := p.Move(ctx, id, "b")
+	require.True(t, res.Lost)
+	require.False(t, res.Result.HoldExpired)
+	require.NotContains(t, res.Error, "release caller hold")
+	require.Equal(t, 1, holds.releases, "loss cleanup owns the hold release")
 	require.ErrorContains(t, err, "call lost")
 	require.Empty(t, p.calls)
 	require.Equal(t, []string{id}, r.forgotten)
