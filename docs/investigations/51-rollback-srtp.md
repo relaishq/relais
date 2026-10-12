@@ -35,7 +35,7 @@ Results on 2026-10-11, all on Linux CI with private-route tuning:
 | Diagnostics | Rollbacks | Caller decryption failures |
 | --- | --- | --- |
 | Off (CI history since the profile lane landed) | about 210 | 1 (run 38174220164, trial 15) |
-| On, 20 trials × 60 s (11 runs) | 221 | 0 |
+| On, 20 trials × 60 s (12 runs; 1 aborted at trial 2) | 221 | 0 |
 | On, 50 trials × 10 s (6 runs) | 300 | 0 |
 
 The failure did not recur in 521 traced rollbacks. Either the rate is well
