@@ -24,7 +24,7 @@ on:
         type: boolean
         default: false
       profile_trials:
-        description: Override network-profile trials per job (diagnostic hunts)
+        description: Override trials for every selected network-profile cell (diagnostic hunts)
         type: string
         default: ''
       profile_after:
@@ -416,14 +416,25 @@ jobs:
         run: |
           set -o pipefail
           sudo -E env RELAIS_TEST_NETNS_REQUIRE=1 ./bin/nettopology.test -test.v -test.run='^TestLinuxProfile' -test.timeout=2m 2>&1 | tee bin/network-profile-tests.log
+      - name: Choose SRTP diagnostics
+        env:
+          REQUESTED: ${{ inputs.srtp_diagnostics && '1' || '0' }}
+          NIGHTLY_LOSSY_MOVE: ${{ github.event_name == 'schedule' && matrix.profile == 'lossy-dc' && matrix.scenario == 'move' }}
+        run: |
+          value="$REQUESTED"
+          # #51: traced nights leave packet evidence for a rare rollback auth
+          # failure; untraced nights keep judging timing without tracing cost
+          # and show whether tracing hides the fault. Failed runs upload logs.
+          if [ "$NIGHTLY_LOSSY_MOVE" = true ] && [ $((10#$(date -u +%j) % 2)) -eq 0 ]; then
+            value=1
+          fi
+          echo "RELAIS_SRTP_DIAGNOSTICS=$value" >> "$GITHUB_ENV"
+          echo "SRTP diagnostics: $value"
       - name: Judge buffered profile trials
         id: judge
         timeout-minutes: ${{ matrix.driver_minutes }}
         env:
           PRIVATE_ROUTE_TUNING: ${{ github.event_name != 'workflow_dispatch' || inputs.private_route_tuning }}
-          # Nightly lossy-dc moves trace SRTP so a rare #51 rollback failure
-          # leaves packet evidence; failed runs upload the worker logs.
-          RELAIS_SRTP_DIAGNOSTICS: ${{ (inputs.srtp_diagnostics || github.event_name == 'schedule' && matrix.profile == 'lossy-dc' && matrix.scenario == 'move') && '1' || '0' }}
           PROFILE_TRIALS: ${{ inputs.profile_trials || matrix.trials }}
           PROFILE_AFTER: ${{ inputs.profile_after || '60s' }}
         run: |

@@ -215,9 +215,9 @@ func (o *cryptoObserver) observe(raw []byte) {
 			sample.EstimatedIndex = diagnosticRTPIndex(sample.PreviousIndex, header.SequenceNumber)
 			_, err = o.receiver.DecryptRTP(nil, raw, &header)
 			if err == nil {
-				roc, _ := o.receiver.ROC(header.SSRC)
-				index := uint64(roc)<<16 | uint64(header.SequenceNumber)
-				o.highest[header.SSRC] = max(o.highest[header.SSRC], index)
+				// Pion's ROC is the context's highest, not this packet's. A late
+				// packet from before a wrap must not raise the index by 2^16.
+				o.highest[header.SSRC] = max(o.highest[header.SSRC], sample.EstimatedIndex)
 			} else if errors.Is(err, srtp.ErrFailedToVerifyAuthTag) && len(o.stats.Samples) < maxCryptoFailures {
 				sample.AuthenticatedIndex = o.authenticateAdjacentROC(raw, sample)
 			}

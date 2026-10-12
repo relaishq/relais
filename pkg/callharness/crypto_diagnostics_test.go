@@ -63,3 +63,44 @@ func TestCryptoDiagnosticWrongROC(t *testing.T) {
 		})
 	}
 }
+
+// A late pre-wrap packet authenticates with the older ROC. It must not move
+// the recorded index forward, or every later sample is one ROC too high.
+func TestCryptoDiagnosticLatePacketAcrossWrap(t *testing.T) {
+	for _, profile := range []srtp.ProtectionProfile{srtp.ProtectionProfileAes128CmHmacSha1_80, srtp.ProtectionProfileAeadAes128Gcm} {
+		t.Run(profile.String(), func(t *testing.T) {
+			keyLen, err := profile.KeyLen()
+			require.NoError(t, err)
+			saltLen, err := profile.SaltLen()
+			require.NoError(t, err)
+			key, salt := make([]byte, keyLen), make([]byte, saltLen)
+			observer := newCryptoObserver(time.Now())
+			observer.profile, observer.keys = profile, srtp.SessionKeys{RemoteMasterKey: key, RemoteMasterSalt: salt}
+			observer.receiver, err = srtp.CreateContext(key, salt, profile, srtp.SRTPReplayProtection(64))
+			require.NoError(t, err)
+			observer.stats.Ready = true
+			sender, err := srtp.CreateContext(key, salt, profile)
+			require.NoError(t, err)
+			sent := map[uint16][]byte{}
+			for _, seq := range []uint16{65530, 65531, 65532, 65533, 65534, 65535, 0, 1, 2, 3, 4} {
+				raw, err := (&rtp.Packet{Header: rtp.Header{Version: 2, PayloadType: 111, SSRC: 42, SequenceNumber: seq, Timestamp: uint32(seq) * 960}, Payload: []byte("media")}).Marshal()
+				require.NoError(t, err)
+				sent[seq], err = sender.EncryptRTP(nil, raw, nil)
+				require.NoError(t, err)
+			}
+			for _, seq := range []uint16{65530, 65531, 65532, 65533, 65535, 0, 1, 2, 3, 65534} {
+				observer.observe(sent[seq])
+			}
+			require.EqualValues(t, 1<<16|3, observer.highest[42], "the late packet keeps its own ROC")
+			corrupt := append([]byte(nil), sent[4]...)
+			corrupt[len(corrupt)-1] ^= 0xff
+			observer.observe(corrupt)
+			report := observer.report()
+			require.Equal(t, DecryptionFailures{AuthTag: 1}, report.Failures)
+			require.Len(t, report.Samples, 1)
+			require.EqualValues(t, 1<<16|3, report.Samples[0].PreviousIndex)
+			require.EqualValues(t, 1<<16|4, report.Samples[0].EstimatedIndex)
+			require.Nil(t, report.Samples[0].AuthenticatedIndex, "corruption is not a ROC mismatch")
+		})
+	}
+}

@@ -41,8 +41,10 @@ Results on 2026-10-11, all on Linux CI with private-route tuning:
 The failure did not recur in 521 traced rollbacks. Either the rate is well
 below 1 in 200, or tracing changes the timing enough to hide it. Active
 hunting stopped there. The nightly `lossy-dc, move` job now runs with
-diagnostics, and a failed run uploads the worker logs, so the next natural
-occurrence leaves a trace.
+diagnostics on even UTC days of the year and without them on odd days. A
+failed run uploads the worker logs, so a traced occurrence leaves evidence.
+Untraced nights keep judging timing without the tracing cost, and a failure
+that appears only on them would show that tracing hides the fault.
 
 The same diagnostic switch works for a local driver:
 
@@ -81,8 +83,9 @@ differ from a reordered packet's counter. SRTCP `Index` is explicit on wire.
 Use this state evidence together with the caller's authenticated-index probe
 to locate a state/context disagreement. Headers and tenure show whether the
 packet predates or follows rollback. A sent trace does not prove the relay delivered that packet;
-the caller sample provides that second boundary. All diagnostic-run worker
-logs are uploaded, including when the acceptance verdict passes.
+the caller sample provides that second boundary. A manual dispatch with
+`srtp_diagnostics=true` uploads all worker logs, including when the acceptance
+verdict passes. Nightly runs upload them only on failure.
 
 Only metadata is retained. The DTLS debug-secret callback is consumed in
 memory to derive shadow-receiver keys using Pion's TLS PRF and SRTP exporter.
