@@ -93,9 +93,11 @@ func newHTTPSystem(t *testing.T, source, target, routing *lostReply, counts ...i
 }
 
 type httpSystemSettings struct {
-	holdTimeout time.Duration
-	agent       mediaworker.AgentConfig
-	store       sessionstore.Store
+	holdTimeout     time.Duration
+	agent           mediaworker.AgentConfig
+	store           sessionstore.Store
+	buffer          *relay.BufferConfig
+	targetTransport http.RoundTripper
 }
 
 func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply, settings httpSystemSettings, counts ...int) *httpSystem {
@@ -106,7 +108,7 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 	if store == nil {
 		store = sessionstore.NewMemory()
 	}
-	r, err := relay.New(relay.Config{PublicAddr: "127.0.0.1:0", WorkerAddr: "127.0.0.1:0", Owners: store, HoldTimeout: settings.holdTimeout})
+	r, err := relay.New(relay.Config{PublicAddr: "127.0.0.1:0", WorkerAddr: "127.0.0.1:0", Owners: store, HoldTimeout: settings.holdTimeout, Buffer: settings.buffer})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, r.Close()) })
 	rs := httptest.NewServer(r.PrivateHandler())
@@ -138,6 +140,9 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 		}
 		if fault != nil {
 			rw.Client = &http.Client{Transport: fault, Timeout: 2 * time.Second}
+		}
+		if i == 1 && settings.targetTransport != nil {
+			rw.Client = &http.Client{Transport: settings.targetTransport, Timeout: 2 * time.Second}
 		}
 		require.NoError(t, rr.AddWorker(context.Background(), w.LocalAddr()))
 		require.NoError(t, plane.Register(name, w.LocalAddr(), rw))

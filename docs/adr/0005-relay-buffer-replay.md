@@ -239,8 +239,10 @@ or a complete plan later loses packets or its hold vanishes (including restart),
 the plane calls
 `POST /sessions/{id}/keyframe` on the worker. This uses its existing encrypted,
 rate-bounded PLI path. The plane retains the first possibly adopted tenure's
-deferred-recovery decision across confirmation retries. An empty expiry receipt
-cannot cancel it: idempotent resume retains the worker's first adoption flags.
+deferred-recovery decision and resends that attempt's recovery flags across
+confirmation retries, even if the first request never reached the worker.
+An empty expiry receipt cannot cancel it, and newly gated input cannot replace
+the first attempt's ordinary resume recovery with deferred recovery.
 A new target records a new recovery decision. On first adoption, an incomplete
 plan with no selected media uses the worker's ordinary resume recovery and receives no
 second control-plane keyframe request. Overflow or
