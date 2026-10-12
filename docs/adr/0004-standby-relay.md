@@ -58,7 +58,9 @@ Takeover follows this order:
    claim, but renewals of the replaced epoch are rejected afterwards.
    Otherwise, the candidate observes the same holder, epoch, predecessor
    evidence and lease deadline across successful store polls. Only intervals
-   bounded by two successful polls with that unchanged evidence accrue time.
+   bounded by two successful polls with that unchanged evidence accrue time,
+   capped at the configured renewal interval (200 ms by default) per interval.
+   A long unobserved host stall cannot supply a full TTL of staleness at once.
    Only a full lease TTL without a deadline advance, measured on the candidate's
    local monotonic clock, permits an expired-tenure claim. Observation starts
    while the lease is live, so a frozen holder is recognized about one TTL after
