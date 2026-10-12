@@ -421,7 +421,9 @@ jobs:
         timeout-minutes: ${{ matrix.driver_minutes }}
         env:
           PRIVATE_ROUTE_TUNING: ${{ github.event_name != 'workflow_dispatch' || inputs.private_route_tuning }}
-          RELAIS_SRTP_DIAGNOSTICS: ${{ inputs.srtp_diagnostics && '1' || '0' }}
+          # Nightly lossy-dc moves trace SRTP so a rare #51 rollback failure
+          # leaves packet evidence; failed runs upload the worker logs.
+          RELAIS_SRTP_DIAGNOSTICS: ${{ (inputs.srtp_diagnostics || github.event_name == 'schedule' && matrix.profile == 'lossy-dc' && matrix.scenario == 'move') && '1' || '0' }}
           PROFILE_TRIALS: ${{ inputs.profile_trials || matrix.trials }}
           PROFILE_AFTER: ${{ inputs.profile_after || '60s' }}
         run: |

@@ -25,8 +25,24 @@ reproduce Linux loss/reorder behavior or prove a root fix.
 
 Dispatch CI with `network_profile_lane=lossy-dc-move`,
 `private_route_tuning=true`, and `srtp_diagnostics=true`. Each dispatch runs
-20 trials. Start with ten dispatches (200 uncertain-reply probes) and stop
-when a failure provides a useful trace. Linux netns is required.
+20 trials of 60 s by default. For a faster hunt, add `profile_trials=50` and
+`profile_after=10s`: each trial still injects one uncertain-reply rollback and
+still fails on any caller decryption failure, but it skips the 60 s consent
+acceptance, so the verdict is inconclusive. Linux netns is required.
+
+Results on 2026-10-11, all on Linux CI with private-route tuning:
+
+| Diagnostics | Rollbacks | Caller decryption failures |
+| --- | --- | --- |
+| Off (CI history since the profile lane landed) | about 210 | 1 (run 38174220164, trial 15) |
+| On, 20 trials × 60 s (11 runs) | 221 | 0 |
+| On, 50 trials × 10 s (6 runs) | 300 | 0 |
+
+The failure did not recur in 521 traced rollbacks. Either the rate is well
+below 1 in 200, or tracing changes the timing enough to hide it. Active
+hunting stopped there. The nightly `lossy-dc, move` job now runs with
+diagnostics, and a failed run uploads the worker logs, so the next natural
+occurrence leaves a trace.
 
 The same diagnostic switch works for a local driver:
 
