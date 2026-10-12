@@ -65,13 +65,13 @@ func enum(value string, allowed ...string) string {
 	}
 	return "unknown"
 }
-func sanitizeStatus(in controlplane.Status) publicStatus {
+func sanitizeStatus(in controlplane.Status, workerKey []byte) publicStatus {
 	out := publicStatus{Workers: []workerStatus{}, Calls: []callStatus{}, Takeovers: []eventStatus{}, LostCount: in.LostCount}
 	for _, w := range in.Workers {
-		out.Workers = append(out.Workers, workerStatus{Name: workerID(w.Name), Draining: w.Draining, Recovering: w.Recovering, Dead: w.Dead, LastHeartbeat: w.LastHeartbeat, Calls: w.Calls})
+		out.Workers = append(out.Workers, workerStatus{Name: workerID(w.Name, workerKey), Draining: w.Draining, Recovering: w.Recovering, Dead: w.Dead, LastHeartbeat: w.LastHeartbeat, Calls: w.Calls})
 	}
 	for _, c := range in.Calls {
-		out.Calls = append(out.Calls, callStatus{ID: c.ID, Owner: workerID(c.Owner), Epoch: c.Epoch, LastMove: c.LastMove, MoveCount: c.MoveCount, TakeoverCount: c.TakeoverCount, LastMoveKind: enum(c.LastMoveKind, "move", "takeover")})
+		out.Calls = append(out.Calls, callStatus{ID: c.ID, Owner: workerID(c.Owner, workerKey), Epoch: c.Epoch, LastMove: c.LastMove, MoveCount: c.MoveCount, TakeoverCount: c.TakeoverCount, LastMoveKind: enum(c.LastMoveKind, "move", "takeover")})
 	}
 	for _, e := range in.Takeovers {
 		result := sanitizeResult(e.ID, e.Result)
@@ -80,8 +80,8 @@ func sanitizeStatus(in controlplane.Status) publicStatus {
 			Kind: enum(e.Kind,
 				"move",
 				"takeover"),
-			From:          workerID(e.From),
-			To:            workerID(e.To),
+			From:          workerID(e.From, workerKey),
+			To:            workerID(e.To, workerKey),
 			Start:         e.Start,
 			End:           e.End,
 			DetectedAt:    e.DetectedAt,

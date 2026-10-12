@@ -48,12 +48,12 @@ func TestConfigAndTokenSources(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, testToken, token)
 	file := filepath.Join(t.TempDir(), "token")
-	require.NoError(t, os.WriteFile(file, []byte("file-token\n"), 0600))
+	require.NoError(t, os.WriteFile(file, []byte("file-token-with-at-least-32-characters\n"), 0600))
 	c.TokenFile = file
 	token, err = loadToken(c)
 	require.NoError(t, err)
-	require.Equal(t, "file-token", token)
-	for _, contents := range []string{"", "secret with spaces", "secret\ninjection", strings.Repeat("x", (16<<10)+1)} {
+	require.Equal(t, "file-token-with-at-least-32-characters", token)
+	for _, contents := range []string{"", testToken + " with spaces", testToken + "\ninjection", strings.Repeat("x", (16<<10)+1)} {
 		require.NoError(t, os.WriteFile(file, []byte(contents), 0600))
 		_, err := loadToken(c)
 		require.Error(t, err)
@@ -163,4 +163,26 @@ func TestRunHTTPSAndShutdown(t *testing.T) {
 	require.NoError(t, secondListener.Close())
 	err = run(context.Background(), config{Listen: secondAddr, Control: c.Control, AdvertiseIPs: c.AdvertiseIPs, TokenEnv: c.TokenEnv, CertOut: c.CertOut}, readyOutput{ready})
 	require.ErrorContains(t, err, "file exists")
+}
+
+func TestTokenMinimumLength(t *testing.T) {
+	c := config{TokenEnv: "RELAIS_SIGNAL_TEST_TOKEN"}
+	for _, size := range []int{0, 1, 31, 32, 64} {
+		t.Setenv(c.TokenEnv, strings.Repeat("a", size))
+		_, err := loadToken(c)
+		if size < 32 {
+			require.Error(t, err, "token length %d", size)
+		} else {
+			require.NoError(t, err)
+		}
+		c.TokenFile = filepath.Join(t.TempDir(), "token")
+		require.NoError(t, os.WriteFile(c.TokenFile, []byte(strings.Repeat("b", size)+"\n"), 0600))
+		_, err = loadToken(c)
+		if size < 32 {
+			require.Error(t, err, "file token length %d", size)
+		} else {
+			require.NoError(t, err)
+		}
+		c.TokenFile = ""
+	}
 }

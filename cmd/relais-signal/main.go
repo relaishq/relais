@@ -95,11 +95,11 @@ func loadToken(c config) (string, error) {
 		value = string(data)
 	}
 	value = strings.TrimSpace(value)
-	if value == "" || len(value) > 16<<10 {
-		return "", errors.New("bearer token is required from the environment or a file")
+	if len(value) < 32 || len(value) > 16<<10 {
+		return "", errors.New("bearer token must contain 32 to 16384 characters from the environment or a file")
 	}
 	for _, char := range value {
-		if !((char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || strings.ContainsRune("-._~+/=", char)) {
+		if !isTokenChar(char) {
 			return "", errors.New("bearer token contains invalid characters")
 		}
 	}
@@ -108,13 +108,14 @@ func loadToken(c config) (string, error) {
 
 func newServer(handler http.Handler, cert tls.Certificate) *http.Server {
 	return &http.Server{
-		Handler:           handler,
-		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}},
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       30 * time.Second,
-		MaxHeaderBytes:    32 << 10,
+		Handler:                      handler,
+		DisableGeneralOptionsHandler: true,
+		TLSConfig:                    &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}},
+		ReadHeaderTimeout:            5 * time.Second,
+		ReadTimeout:                  15 * time.Second,
+		WriteTimeout:                 15 * time.Second,
+		IdleTimeout:                  30 * time.Second,
+		MaxHeaderBytes:               32 << 10,
 	}
 }
 
@@ -138,7 +139,7 @@ func run(ctx context.Context, c config, output io.Writer) error {
 	defer func() { _ = listener.Close() }()
 	if c.CertOut != "" {
 		// Never silently replace a prior run's trust root.
-		file, err := os.OpenFile(c.CertOut, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		file, err := os.OpenFile(c.CertOut, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
 		if err != nil {
 			return fmt.Errorf("write public certificate: %w", err)
 		}
@@ -150,7 +151,11 @@ func run(ctx context.Context, c config, output io.Writer) error {
 	}
 	transport := upstreamTransport()
 	defer transport.CloseIdleConnections()
-	server := newServer(newHandler(target, token, transport), cert)
+	handler, err := newHandler(target, token, transport)
+	if err != nil {
+		return err
+	}
+	server := newServer(handler, cert)
 	done := make(chan error, 1)
 	go func() { done <- server.ServeTLS(listener, "", "") }()
 	if _, err := fmt.Fprintf(output, "https=%s certificate_sha256=%s\n", listener.Addr(), fingerprint); err != nil {
@@ -190,4 +195,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "relais-signal:", err)
 		os.Exit(1)
 	}
+}
+
+func isTokenChar(char rune) bool {
+	return isIDChar(char) || strings.ContainsRune(".~+/=", char)
 }

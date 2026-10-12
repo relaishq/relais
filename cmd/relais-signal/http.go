@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -25,18 +27,31 @@ const requestTimeout = 10 * time.Second
 
 // Match the demo's reverse-proxy pattern, but expose only the two signaling
 // operations. Do not forward client credentials or trust forwarded headers.
-func newHandler(target *url.URL, token string, transport http.RoundTripper) http.Handler {
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	proxy.Transport = transport
-	director := proxy.Director
-	proxy.Director = func(r *http.Request) {
-		director(r)
-		r.Host = target.Host
-		r.Trailer = nil
-		r.TransferEncoding = nil
-		r.Header = http.Header{"Content-Type": r.Header.Values("Content-Type")}
-		// Suppress ReverseProxy's automatic X-Forwarded-For insertion.
-		r.Header["X-Forwarded-For"] = nil
+func newHandler(target *url.URL, token string, transport http.RoundTripper) (http.Handler, error) {
+	var workerKey [32]byte
+	if _, err := rand.Read(workerKey[:]); err != nil {
+		return nil, err
+	}
+	expectedToken := sha256.Sum256([]byte(token))
+	proxy := &httputil.ReverseProxy{
+		Transport: transport,
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(target)
+			pr.Out.Header = http.Header{"Content-Type": pr.In.Header.Values("Content-Type")}
+			pr.Out.Trailer = nil
+			pr.Out.TransferEncoding = nil
+			// Build a new query from the single validated public placement parameter.
+			// Do not forward client query text or add X-Forwarded headers.
+			pr.Out.URL.RawQuery = ""
+			pr.Out.URL.ForceQuery = false
+			if pr.In.Method == http.MethodPost {
+				query := url.Values{}
+				if worker := pr.In.URL.Query().Get("worker"); worker != "" {
+					query.Set("worker", worker)
+				}
+				pr.Out.URL.RawQuery = query.Encode()
+			}
+		},
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
 		http.Error(w, "signaling unavailable; operation outcome may be uncertain", http.StatusBadGateway)
@@ -64,7 +79,6 @@ func newHandler(target *url.URL, token string, transport http.RoundTripper) http
 		} else {
 			return errors.New("unexpected signaling response")
 		}
-		headers.Set("Cache-Control", "no-store")
 		r.Header = headers
 		r.Trailer = nil
 		r.ContentLength = int64(len(data))
@@ -76,7 +90,15 @@ func newHandler(target *url.URL, token string, transport http.RoundTripper) http
 		received := time.Now().UTC()
 		w.Header().Set("Cache-Control", "no-store")
 		auth := r.Header.Values("Authorization")
-		if len(auth) != 1 || subtle.ConstantTimeCompare([]byte(auth[0]), []byte("Bearer "+token)) != 1 {
+		presented := ""
+		if len(auth) == 1 {
+			scheme, value, _ := strings.Cut(auth[0], " ")
+			if strings.EqualFold(scheme, "Bearer") {
+				presented = value
+			}
+		}
+		presentedToken := sha256.Sum256([]byte(presented))
+		if len(auth) != 1 || subtle.ConstantTimeCompare(presentedToken[:], expectedToken[:]) != 1 {
 			w.Header().Set("WWW-Authenticate", "Bearer")
 			http.Error(w, "bearer token required", http.StatusUnauthorized)
 			return
@@ -102,6 +124,10 @@ func newHandler(target *url.URL, token string, transport http.RoundTripper) http
 		if r.Method != method {
 			w.Header().Set("Allow", method)
 			http.Error(w, "method refused", http.StatusMethodNotAllowed)
+			return
+		}
+		if !validQuery(r) {
+			http.Error(w, "query refused", http.StatusBadRequest)
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), requestTimeout)
@@ -141,13 +167,13 @@ func newHandler(target *url.URL, token string, transport http.RoundTripper) http
 				http.Error(w, "status unavailable", http.StatusBadGateway)
 				return
 			}
-			writeJSON(w, sanitizeStatus(status))
+			writeJSON(w, sanitizeStatus(status, workerKey[:]))
 			return
 		}
 		r.Body = io.NopCloser(bytes.NewReader(data))
 		r.ContentLength = int64(len(data))
 		proxy.ServeHTTP(w, r)
-	})
+	}), nil
 }
 
 func callPath(path string) bool {
@@ -156,7 +182,7 @@ func callPath(path string) bool {
 		return false
 	}
 	for _, c := range id {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+		if !isIDChar(c) {
 			return false
 		}
 	}
@@ -188,7 +214,7 @@ type clockSample struct {
 
 // Numeric worker generations stay compatible with caller polling. Other names
 // become stable opaque identifiers, so an address used as a name cannot leak.
-func workerID(name string) string {
+func workerID(name string, key []byte) string {
 	if name == "" {
 		return ""
 	}
@@ -202,8 +228,9 @@ func workerID(name string) string {
 	if numeric {
 		return name
 	}
-	hash := sha256.Sum256([]byte(name))
-	return fmt.Sprintf("worker-%x", hash[:16])
+	hash := hmac.New(sha256.New, key)
+	_, _ = hash.Write([]byte(name))
+	return fmt.Sprintf("worker-%x", hash.Sum(nil)[:16])
 }
 
 // Missing status collections are unavailable state, not proof of zero calls.
@@ -219,6 +246,23 @@ func validStatus(status controlplane.Status) bool {
 	}
 	for _, e := range status.Takeovers {
 		if !callPath("/calls/" + e.ID) {
+			return false
+		}
+	}
+	return true
+}
+
+func isIDChar(char rune) bool {
+	return (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_'
+}
+
+func validQuery(r *http.Request) bool {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		return false
+	}
+	for key, values := range query {
+		if r.Method != http.MethodPost || r.URL.Path != "/calls" || key != "worker" || len(values) != 1 || !callPath("/calls/"+values[0]) {
 			return false
 		}
 	}

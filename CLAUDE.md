@@ -120,6 +120,7 @@ Relais is a distributed media server. Live WebRTC media runs in the media worker
   - `pkg/sessionstore/` - Session store: fenced ownership leases (owner, epoch, expiry) and resumable state blobs; in-memory or encrypted Redis
   - `pkg/controlplane/` - Control plane: places calls, moves live calls between workers behind the relay, drains workers, detects heartbeat failures, takes over crashed workers' calls, and serves `GET /status`
   - `cmd/relais-relay`, `cmd/relais-worker`, `cmd/relais-control` - Separate media processes using Redis session state, private HTTP coordination, UDP relay legs and explicit rejoin acknowledgement
+  - `cmd/relais-signal` - Authenticated HTTPS test signaling frontend: call creation/deletion, sanitized status and frontend-host clock samples; forwards only the allowed requests to private control
   - `cmd/crash-run` - Starts the process topology and a dedicated throwaway Redis, runs the Pion caller and SIGKILLs the owning worker (`make crash-run`)
   - `cmd/echo-demo` - Browser echo demo: two media workers on one socket, with a "Move call" button (`make demo`)
 

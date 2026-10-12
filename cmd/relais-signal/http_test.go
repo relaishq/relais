@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -21,10 +23,11 @@ import (
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-const testToken = "test-secret-token"
+const testToken = "test-secret-token-with-at-least-32-characters"
 
 func frontend(t *testing.T, upstream http.Handler) (*httptest.Server, *http.Client) {
 	t.Helper()
@@ -36,7 +39,9 @@ func frontend(t *testing.T, upstream http.Handler) (*httptest.Server, *http.Clie
 	t.Cleanup(transport.CloseIdleConnections)
 	cert, _, _, err := certificate(config{AdvertiseIPs: "127.0.0.1"})
 	require.NoError(t, err)
-	srv := httptest.NewUnstartedServer(newHandler(target, testToken, transport))
+	handler, err := newHandler(target, testToken, transport)
+	require.NoError(t, err)
+	srv := httptest.NewUnstartedServer(handler)
 	srv.Config = newServer(srv.Config.Handler, cert)
 	srv.TLS = srv.Config.TLSConfig
 	srv.StartTLS()
@@ -159,7 +164,7 @@ func TestAuthenticationAndRefusedRoutes(t *testing.T) {
 	var forwarded atomic.Int32
 	srv, client := frontend(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { forwarded.Add(1); w.WriteHeader(http.StatusOK) }))
 	for _, path := range []string{"/calls", "/calls/id", "/status", "/clock", "/metrics", "/workers/a/drain"} {
-		for _, token := range []string{"", "wrong"} {
+		for _, token := range []string{"", "wrong", testToken + "x", testToken[:len(testToken)-1], strings.Repeat("x", len(testToken))} {
 			resp, _ := request(t, client, http.MethodGet, srv.URL+path, "", token)
 			require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 		}
@@ -225,11 +230,13 @@ func TestRequestLimitsAndProxyBoundary(t *testing.T) {
 	var forwarded atomic.Int32
 	srv, client := frontend(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		forwarded.Add(1)
-		require.Empty(t, r.Header.Get("Authorization"))
-		require.Empty(t, r.Header.Get("X-Forwarded-For"))
-		require.Empty(t, r.Header.Get("X-Forwarded-Host"))
-		require.Empty(t, r.Header.Get("Cookie"))
-		require.Equal(t, "/calls", r.URL.Path)
+		assert.Empty(t, r.Header.Get("Authorization"))
+		assert.Empty(t, r.Header.Get("X-Forwarded-For"))
+		assert.Empty(t, r.Header.Get("X-Forwarded-Host"))
+		assert.Empty(t, r.Header.Get("X-Forwarded-Proto"))
+		assert.Empty(t, r.Trailer)
+		assert.Empty(t, r.Header.Get("Cookie"))
+		assert.Equal(t, "/calls", r.URL.Path)
 		w.Header().Set("Location", "http://10.42.0.9:9200/calls/id")
 		w.Header().Set("X-Private", "10.42.0.9")
 		w.WriteHeader(http.StatusConflict)
@@ -254,6 +261,9 @@ func TestRequestLimitsAndProxyBoundary(t *testing.T) {
 	req.Header.Set("Cookie", "secret=1")
 	req.Header.Set("X-Forwarded-For", "10.42.0.9")
 	req.Header.Set("X-Forwarded-Host", "private")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.ContentLength = -1
+	req.Trailer = http.Header{"X-Private-Trailer": []string{"secret"}}
 	resp, err := client.Do(req)
 	require.NoError(t, err)
 	body, err := io.ReadAll(resp.Body)
@@ -356,4 +366,96 @@ func TestUpstreamTimeout(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out request was not canceled at control")
 	}
+}
+
+func TestQueryBoundary(t *testing.T) {
+	var forwarded atomic.Int32
+	srv, client := frontend(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwarded.Add(1)
+		if r.Method == http.MethodPost {
+			assert.Equal(t, "worker=worker_1", r.URL.RawQuery)
+			w.Header().Set("Location", "/calls/id")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, "answer")
+		} else {
+			assert.Empty(t, r.URL.RawQuery)
+			assert.False(t, r.URL.ForceQuery)
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	for _, tc := range []struct{ method, path string }{
+		{"POST", "/calls?debug=1"}, {"POST", "/calls?worker=0&debug=1"},
+		{"POST", "/calls?worker=0&worker=1"}, {"POST", "/calls?worker="},
+		{"POST", "/calls?worker=10.42.0.9%3A9300"}, {"POST", "/calls?worker=../status"},
+		{"POST", "/calls?worker=" + strings.Repeat("a", 257)},
+		{"POST", "/calls?worker=%zz"}, {"POST", "/calls?worker=0;debug=1"},
+		{"DELETE", "/calls/id?worker=0"}, {"DELETE", "/calls/id?debug=1"},
+		{"GET", "/status?debug=1"}, {"GET", "/clock?worker=0"},
+	} {
+		t.Run(tc.method+tc.path, func(t *testing.T) {
+			resp, _ := request(t, client, tc.method, srv.URL+tc.path, "offer", testToken)
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		})
+	}
+	require.Zero(t, forwarded.Load(), "invalid queries must never reach control")
+	resp, _ := request(t, client, http.MethodPost, srv.URL+"/calls?%77orker=worker%5F1", "offer", testToken)
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	resp, _ = request(t, client, http.MethodDelete, srv.URL+"/calls/id?", "", testToken)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, int32(2), forwarded.Load())
+}
+
+func TestGeneralOPTIONSRequiresAuthentication(t *testing.T) {
+	srv, client := frontend(t, http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { t.Error("OPTIONS reached upstream") }))
+	endpoint, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	transport, ok := client.Transport.(*http.Transport)
+	require.True(t, ok)
+	for _, token := range []string{"", testToken} {
+		conn, err := tls.Dial("tcp", endpoint.Host, transport.TLSClientConfig)
+		require.NoError(t, err)
+		require.NoError(t, conn.SetDeadline(time.Now().Add(3*time.Second)))
+		header := ""
+		if token != "" {
+			header = "Authorization: Bearer " + token + "\r\n"
+		}
+		_, err = fmt.Fprintf(conn, "OPTIONS * HTTP/1.1\r\nHost: %s\r\n%sConnection: close\r\n\r\n", endpoint.Host, header)
+		require.NoError(t, err)
+		resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodOptions})
+		require.NoError(t, err)
+		_, err = io.Copy(io.Discard, resp.Body)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		require.NoError(t, conn.Close())
+		expected := http.StatusUnauthorized
+		if token != "" {
+			expected = http.StatusNotFound
+		}
+		require.Equal(t, expected, resp.StatusCode)
+	}
+}
+
+func TestWorkerAliasesAreScopedToFrontendRun(t *testing.T) {
+	status := controlplane.Status{
+		Workers:   []controlplane.WorkerStatus{{Name: "10.42.0.9:9300"}, {Name: "0"}},
+		Calls:     []controlplane.CallStatus{{ID: "publiccall", Owner: "10.42.0.9:9300"}},
+		Takeovers: []controlplane.MoveResult{},
+	}
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, status) })
+	first, firstClient := frontend(t, upstream)
+	second, secondClient := frontend(t, upstream)
+	read := func(srv *httptest.Server, client *http.Client) controlplane.Status {
+		resp, body := request(t, client, http.MethodGet, srv.URL+"/status", "", testToken)
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var out controlplane.Status
+		require.NoError(t, json.Unmarshal([]byte(body), &out))
+		require.Equal(t, out.Workers[0].Name, out.Calls[0].Owner)
+		require.Equal(t, "0", out.Workers[1].Name)
+		return out
+	}
+	a := read(first, firstClient)
+	b := read(first, firstClient)
+	c := read(second, secondClient)
+	require.Equal(t, a.Workers[0].Name, b.Workers[0].Name)
+	require.NotEqual(t, a.Workers[0].Name, c.Workers[0].Name)
 }
