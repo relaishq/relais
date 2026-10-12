@@ -30,6 +30,10 @@ import (
 // fencing/dropping its old sessions. Remote workers need an explicit token
 // for this acknowledgment; the in-process contract uses the next heartbeat.
 type Config struct {
+	// StoreOutageBudget must match the workers (zero selects 30 seconds).
+	StoreOutageBudget time.Duration
+	// LeaseTTL overrides transfer lifetime, including outage headroom.
+	LeaseTTL time.Duration
 	// CheckpointEnvelope must match the workers' source-rate contract.
 	CheckpointEnvelope mediaworker.CheckpointEnvelope
 	// FrameCache is shared with the workers, for hangup/lost-call cleanup.
@@ -43,6 +47,9 @@ type Config struct {
 
 func (c Config) defaults() Config {
 	c.CheckpointEnvelope = c.CheckpointEnvelope.Defaults()
+	if c.LeaseTTL <= 0 {
+		c.LeaseTTL = sessionstore.WorkerLeaseTTL(c.StoreOutageBudget)
+	}
 	if c.DeadAfter <= 0 {
 		c.DeadAfter = 400 * time.Millisecond
 	}
@@ -113,7 +120,7 @@ func (p *Plane) Run(ctx context.Context) error {
 			reconcileMu.Lock()
 			if !reconciling && !now.Before(nextReconcile) {
 				reconciling = true
-				nextReconcile = now.Add(p.ttl / 2)
+				nextReconcile = now.Add(min(p.ttl/2, 1500*time.Millisecond))
 				wg.Go(func() {
 					p.reconcileOwnership(ctx)
 					reconcileMu.Lock()

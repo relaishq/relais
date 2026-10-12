@@ -489,7 +489,7 @@ func TestRedisUnavailableNoStandbyTakeover(t *testing.T) {
 	}
 	require.NotEqual(t, active.PID(), standby.PID())
 	p.recover()
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(2 * relaylease.DefaultTTL)
 	recovered, err := remote.Status(ctx)
 	require.NoError(t, err)
 	require.Equal(t, before.Instance, recovered.Instance)

@@ -112,7 +112,7 @@ Built-in local and remote workers return the placed lease in the creation
 acknowledgement, before a control-plane store read can fail. Legacy worker
 adapters retain the existing ownership-read fallback and must implement
 `CreateSessionWithLease` to provide that placement guarantee during an outage.
-Its detector sweeps the registry at half the lease TTL, independently of worker heartbeat death
+Its detector sweeps the registry at the smaller of half the lease TTL and 1.5 seconds, independently of worker heartbeat death
 and `/status` polling. An authoritative `ErrNotFound` for ownership means
 `ownership_expired`: never resume or re-claim that vanished tenure. Store errors
 are unknown outcomes and retain the call for retry. Recovery inventory alone
@@ -179,3 +179,11 @@ and conditional cleanup private API.
 The registry, counters and bounded event history do not survive a control-plane
 restart. Durable call inventory is outside #99. Lease lifetimes and the
 checkpoint envelope are unchanged; the outage budget is separate work (#100).
+
+## Live store outages (#100)
+
+[ADR 0008](0008-store-outage-budget.md) retains worker leases and snapshots for
+the configurable outage budget plus four seconds (34 s default), keeping the
+one-second renewal and 100 ms snapshot cadence. Retention changes; checkpoint
+safety does not. Live sessions keep current keys/counters. Crash recovery still
+passes the age/margin/cap policy. Actual expiry uses the #99 counted-loss rules.

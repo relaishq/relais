@@ -1,0 +1,53 @@
+package relaylease
+
+import (
+	"time"
+
+	"github.com/relais/pkg/sessionstore"
+)
+
+// staleness counts only intervals bounded by two successful polls of the same
+// unchanged lease. Brief failures add no time; a continuous failure streak of
+// at least the renewal interval discards the evidence. All elapsed time uses
+// the candidate's monotonic clock, never the store expiry clock.
+type staleness struct {
+	lease           sessionstore.RelayLease
+	missing         bool
+	lastSuccess     time.Time
+	elapsed         time.Duration
+	failureSince    time.Time
+	previousSuccess bool
+}
+
+func (s *staleness) reset() { *s = staleness{} }
+func (s *staleness) clearEvidence() {
+	s.lease = sessionstore.RelayLease{}
+	s.lastSuccess = time.Time{}
+	s.elapsed = 0
+	s.previousSuccess = false
+}
+func (s *staleness) observe(l sessionstore.RelayLease, missing bool, pollErr error, now time.Time, ttl, renew time.Duration) bool {
+	if pollErr != nil && !missing {
+		if s.failureSince.IsZero() {
+			s.failureSince = now
+		}
+		if now.Sub(s.failureSince) >= renew {
+			s.clearEvidence()
+		}
+		s.previousSuccess = false
+		return false
+	}
+	if !s.failureSince.IsZero() {
+		if now.Sub(s.failureSince) >= renew {
+			s.clearEvidence()
+		}
+		s.failureSince = time.Time{}
+	}
+	if s.lastSuccess.IsZero() || s.missing != missing || l.Epoch != s.lease.Epoch || l.Holder != s.lease.Holder || l.Forwarder != s.lease.Forwarder || l.PreviousHolder != s.lease.PreviousHolder || !l.ExpiresAt.Equal(s.lease.ExpiresAt) {
+		s.lease, s.missing, s.elapsed = l, missing, 0
+	} else if s.previousSuccess {
+		s.elapsed += now.Sub(s.lastSuccess)
+	}
+	s.lastSuccess, s.previousSuccess = now, true
+	return s.elapsed >= ttl
+}

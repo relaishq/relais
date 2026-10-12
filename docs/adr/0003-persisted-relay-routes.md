@@ -128,4 +128,12 @@ crash/cache comparison remains the default driver mode. The driver caller's
 consent-check cadence is two seconds; its restore-off gap depends on the restart
 phase and does not establish the browser's broader two-to-five-second range.
 
-Two concurrently live relays and standby fencing remain ticket #43.
+Same-host standby fencing is recorded in ADR 0004.
+
+## Store outage budget (#100)
+
+[ADR 0008](0008-store-outage-budget.md) increases ownership retention. Persisted
+route consent deadlines stay unchanged. Live cached routes survive store errors
+and continue authenticating checks. Subsequent checks republish evidence after
+recovery. Redis unavailability must never create a new consent deadline. A relay
+restart during the outage retains the partial-restore limitation above.

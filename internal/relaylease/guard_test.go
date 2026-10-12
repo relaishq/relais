@@ -330,7 +330,7 @@ func TestActivationRetriesAfterFencingWithRenewals(t *testing.T) {
 	require.EqualValues(t, 9, s.activations.Load())
 	require.Positive(t, s.renewals.Load(), "activation retry must keep renewing")
 }
-func TestRecoveredExpiredEpochNeedsTwoSeparatedPolls(t *testing.T) {
+func TestRecoveredExpiredEpochNeedsFullReachableTTL(t *testing.T) {
 	s := sessionstore.NewMemory()
 	cfg := config(&firstReadUnavailable{RelayLeases: s})
 	_, err := s.ClaimRelay(context.Background(), cfg.Key, process("a"), time.Millisecond)
@@ -341,21 +341,22 @@ func TestRecoveredExpiredEpochNeedsTwoSeparatedPolls(t *testing.T) {
 	g, err := Acquire(context.Background(), cfg)
 	require.NoError(t, err)
 	defer g.Close()
-	require.GreaterOrEqual(t, time.Since(started), cfg.Renew)
+	require.GreaterOrEqual(t, time.Since(started), cfg.TTL)
 }
-func TestContinuousStoreAccessClaimsExpiredWithoutGrace(t *testing.T) {
+func TestContinuousStoreAccessWaitsForReachableStaleness(t *testing.T) {
 	s := sessionstore.NewMemory()
 	cfg := config(s)
-	cfg.TTL, cfg.Renew = time.Second, 200*time.Millisecond
 	_, err := s.ClaimRelay(context.Background(), cfg.Key, process("a"), time.Millisecond)
 	require.NoError(t, err)
 	time.Sleep(3 * time.Millisecond)
 	cfg.Fence = func(context.Context, processidentity.Identity) error { return nil }
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	started := time.Now()
 	g, err := Acquire(ctx, cfg)
-	require.NoError(t, err, "a candidate with no store outage must not add recovery grace")
+	require.NoError(t, err)
 	defer g.Close()
+	require.GreaterOrEqual(t, time.Since(started), cfg.TTL)
 }
 func TestAcquireAllowsOwnPIDOne(t *testing.T) {
 	cfg := config(sessionstore.NewMemory())
@@ -465,7 +466,7 @@ func TestActivationRetryStopsOnLossOrCancellation(t *testing.T) {
 }
 
 // A live-looking lease whose actual kernel holder has died must not force a
-// candidate to wait for the TTL plus recovery grace.
+// candidate to wait for the TTL of reachable staleness.
 func TestDeadHolderImmediatelyClaimed(t *testing.T) {
 	id, err := processidentity.Current()
 	require.NoError(t, err)
@@ -590,7 +591,7 @@ func (s *firstReadUnavailable) GetRelay(ctx context.Context, key string) (sessio
 	return s.RelayLeases.GetRelay(ctx, key)
 }
 
-func TestActiveOnlyStorePartitionIsFencedWithoutCandidateGrace(t *testing.T) {
+func TestActiveOnlyStorePartitionIsFencedAfterReachableStaleness(t *testing.T) {
 	base := sessionstore.NewMemory()
 	s := &unavailable{RelayLeases: base}
 	activeCfg := config(s)
@@ -602,16 +603,32 @@ func TestActiveOnlyStorePartitionIsFencedWithoutCandidateGrace(t *testing.T) {
 	time.Sleep(activeCfg.TTL + 20*time.Millisecond)
 	require.True(t, active.Allowed())
 	cfg := config(base)
-	cfg.TTL, cfg.Renew = time.Second, 200*time.Millisecond
+	cfg.TTL, cfg.Renew = activeCfg.TTL, activeCfg.Renew
 	fences := 0
-	cfg.Fence = func(context.Context, processidentity.Identity) error { fences++; return nil }
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	cfg.Fence = func(_ context.Context, id processidentity.Identity) error {
+		require.Equal(t, active.Lease().Holder.Identity(), id)
+		current, err := base.GetRelay(context.Background(), cfg.Key)
+		require.NoError(t, err)
+		require.Equal(t, active.Lease().Holder, current.Forwarder, "activation must wait for predecessor fencing")
+		fences++
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	started := time.Now()
 	g, err := Acquire(ctx, cfg)
-	require.NoError(t, err, "only the active lost store access; the candidate needs no recovery grace")
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, time.Since(started), cfg.TTL)
 	defer g.Close()
 	require.Equal(t, 1, fences)
 	require.Zero(t, g.Timing().StoreFailures)
+	current, err := base.GetRelay(context.Background(), cfg.Key)
+	require.NoError(t, err)
+	require.Greater(t, current.Epoch, active.Lease().Epoch)
+	require.Equal(t, cfg.Process, current.Forwarder)
+	s.offline.Store(false)
+	require.Eventually(t, func() bool { return !active.Allowed() }, time.Second, time.Millisecond)
+	require.ErrorIs(t, active.Err(), sessionstore.ErrLeaseLost)
 }
 
 type recreatingLease struct {
@@ -704,4 +721,52 @@ func TestForeignHolderOrForwarderRefusesClaim(t *testing.T) {
 			require.Equal(t, l.Holder, current.Holder)
 		})
 	}
+}
+
+func TestDefaultRelayLeaseKeepsFrozenHolderBudget(t *testing.T) {
+	require.Equal(t, 600*time.Millisecond, DefaultTTL)
+	cfg := config(sessionstore.NewMemory())
+	cfg.TTL = 0
+	cfg.Renew = 0
+	g, e := Acquire(context.Background(), cfg)
+	require.NoError(t, e)
+	defer g.Close()
+	require.InDelta(t, .6, time.Until(g.Lease().ExpiresAt).Seconds(), .05)
+}
+
+type isolatedPollBlips struct {
+	sessionstore.RelayLeases
+	reads atomic.Uint64
+}
+
+func (s *isolatedPollBlips) GetRelay(ctx context.Context, key string) (sessionstore.RelayLease, error) {
+	if s.reads.Add(1)%3 == 0 {
+		return sessionstore.RelayLease{}, sessionstore.ErrTransient
+	}
+	return s.RelayLeases.GetRelay(ctx, key)
+}
+
+// Exercise Acquire's error branch, not just the observer: resetting evidence
+// again while logging each failed poll would make this never take over.
+func TestAcquireFrozenHolderSurvivesIsolatedPollBlips(t *testing.T) {
+	base := sessionstore.NewMemory()
+	old, e := base.ClaimRelay(context.Background(), "one", process("a"), time.Millisecond)
+	require.NoError(t, e)
+	_, e = base.ActivateRelay(context.Background(), old)
+	require.NoError(t, e)
+	time.Sleep(3 * time.Millisecond)
+	s := &isolatedPollBlips{RelayLeases: base}
+	cfg := config(s)
+	fenced := 0
+	cfg.Fence = func(context.Context, processidentity.Identity) error { fenced++; return nil }
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	g, e := Acquire(ctx, cfg)
+	require.NoError(t, e)
+	defer g.Close()
+	require.GreaterOrEqual(t, time.Since(start), cfg.TTL)
+	require.Equal(t, 1, fenced)
+	require.Positive(t, g.Timing().StoreFailures)
+	t.Logf("FLAPPING_ACQUIRE ttl=%s poll=%s renew=%s failures=33%% takeover=%s", cfg.TTL, cfg.Poll, cfg.Renew, time.Since(start))
 }

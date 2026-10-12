@@ -49,7 +49,7 @@ func TestProfileProcessLoopbackProbe(t *testing.T) {
 			env := processEnv(strings.Repeat("00", 32), addr, fmt.Sprintf("relais:profile-probe:%s:%s:", filepath.Base(dir), scenario))
 			trialCtx, stop := context.WithTimeout(ctx, 30*time.Second)
 			defer stop()
-			r, err := trial(trialCtx, manager, bin, trialDir, env, 5*time.Second, 5*time.Second, false, false, false, nil, &options)
+			r, err := trial(trialCtx, manager, bin, trialDir, env, 5*time.Second, 5*time.Second, false, false, false, false, nil, &options)
 			require.NoError(t, err)
 			require.NotNil(t, r.ProfileRow)
 			require.Positive(t, r.ProfileRow.EventResult.Duration, "acceptance event must retain real controller timings")

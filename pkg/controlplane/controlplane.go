@@ -151,7 +151,7 @@ func NewWithConfig(r Relay, store sessionstore.Store, config Config) *Plane {
 		workers:         make(map[string]*registration),
 		calls:           make(map[string]*call),
 		lossesByCause:   make(map[string]uint64),
-		ttl:             3 * time.Second,
+		ttl:             config.LeaseTTL,
 		incomingChanged: make(chan struct{}),
 	}
 }

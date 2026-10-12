@@ -24,7 +24,7 @@ func run() error {
 
 func runWithLease(acquire func(context.Context, bool, string, relaylease.Config) (commandGuard, error)) error {
 	var storeConfig processrun.StoreConfig
-	storeConfig.Flags(flag.CommandLine)
+	storeConfig.ConnectionFlags(flag.CommandLine)
 	public := flag.String("media", processrun.Env("RELAIS_RELAY_MEDIA", "127.0.0.1:0"), "public UDP address")
 	leg := flag.String("leg", processrun.Env("RELAIS_RELAY_LEG", "127.0.0.1:0"), "private worker-leg UDP address")
 	httpAddr := flag.String("http", processrun.Env("RELAIS_RELAY_HTTP", "127.0.0.1:0"), "private control HTTP address")
@@ -40,7 +40,7 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 	standby := flag.Bool("standby", false, "wait without binding any sockets, then fence and take over")
 	hostID := flag.String("host-id", processrun.Env("RELAIS_HOST_ID", ""), "unique host identity; overrides machine ID discovery (required for standby when unavailable)")
 	leaseKey := flag.String("relay-lease", "default", "same-host relay lease key; shared by active and standby")
-	leaseTTL := flag.Duration("relay-lease-ttl", relaylease.DefaultTTL, "relay lease lifetime")
+	leaseTTL := flag.Duration("relay-lease-ttl", relaylease.DefaultTTL, "relay lease lifetime and reachable staleness interval")
 	leaseRenew := flag.Duration("relay-lease-renew", relaylease.DefaultRenew, "relay lease renewal interval")
 	leasePoll := flag.Duration("relay-lease-poll", relaylease.DefaultPoll, "standby claim polling interval")
 	bindTimeout := flag.Duration("relay-bind-timeout", socketbind.DefaultTimeout, "shared public, worker-leg and HTTP socket bind retry budget after fencing")

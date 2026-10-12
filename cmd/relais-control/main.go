@@ -46,7 +46,7 @@ func run() error {
 		return err
 	}
 	defer func() { _ = frames.Close() }()
-	plane := controlplane.NewWithConfig(r, store, controlplane.Config{FrameCache: frames})
+	plane := controlplane.NewWithConfig(r, store, controlplane.Config{FrameCache: frames, StoreOutageBudget: storeConfig.OutageBudget})
 	// Serve heartbeats during registration. A slow later worker must not make
 	// an earlier healthy registration age past DeadAfter before Run starts.
 	handler := plane.ProcessHandler()
