@@ -242,7 +242,10 @@ rate-bounded PLI path. The plane retains the first possibly adopted tenure's
 deferred-recovery decision and resends that attempt's recovery flags across
 confirmation retries, even if the first request never reached the worker.
 An empty expiry receipt cannot cancel it, and newly gated input cannot replace
-the first attempt's ordinary resume recovery with deferred recovery.
+the first attempt's ordinary resume recovery with deferred recovery. A
+confirmation that resends deferred recovery also skips cached-picture replay,
+as a landed first adoption does, so the first picture waits for the post-drain
+keyframe.
 A new target records a new recovery decision. On first adoption, an incomplete
 plan with no selected media uses the worker's ordinary resume recovery and receives no
 second control-plane keyframe request. Overflow or

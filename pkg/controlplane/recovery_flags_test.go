@@ -141,6 +141,12 @@ func TestHTTPRecoveryConfirmationRetainsFirstFlags(t *testing.T) {
 				resumes := append([]mediaworker.ResumeRequest(nil), fault.resumes...)
 				fault.mu.Unlock()
 				require.Len(t, resumes, 2)
+				// Tie each scenario to the confirmation request the worker received.
+				if scenario == "empty-to-incomplete" {
+					require.NotEmpty(t, resumes[1].DuplicateWindows, "gated input must reach the confirmation plan")
+				} else {
+					require.Empty(t, resumes[1].DuplicateWindows)
+				}
 				assert.Equal(t, first.RelayReplay, resumes[1].RelayReplay, "confirmation retains complete-input recovery flag")
 				assert.Equal(t, first.RelayInputReplay, resumes[1].RelayInputReplay, "confirmation retains incomplete-input recovery flag")
 				require.Equal(t, first.Lease.Epoch, resumes[1].Lease.Epoch)
