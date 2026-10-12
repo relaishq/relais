@@ -23,6 +23,14 @@ on:
         description: Capture caller SRTP failures and worker ciphertext metadata
         type: boolean
         default: false
+      profile_trials:
+        description: Override network-profile trials per job (diagnostic hunts)
+        type: string
+        default: ''
+      profile_after:
+        description: Override post-event observation, e.g. 10s (below 60s skips consent acceptance)
+        type: string
+        default: ''
 
 # Only superseded PR runs share a cancellation group. Each full run is distinct.
 concurrency:
@@ -414,13 +422,15 @@ jobs:
         env:
           PRIVATE_ROUTE_TUNING: ${{ github.event_name != 'workflow_dispatch' || inputs.private_route_tuning }}
           RELAIS_SRTP_DIAGNOSTICS: ${{ inputs.srtp_diagnostics && '1' || '0' }}
+          PROFILE_TRIALS: ${{ inputs.profile_trials || matrix.trials }}
+          PROFILE_AFTER: ${{ inputs.profile_after || '60s' }}
         run: |
           set -o pipefail
           {
             uname -a
             if [ -r /proc/version_signature ]; then cat /proc/version_signature; fi
           } | tee bin/network-profile-kernel.log
-          sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -private-route-tuning="$PRIVATE_ROUTE_TUNING" -topology=netns -profile=${{ matrix.profile }} -scenario=${{ matrix.scenario }} -runs=${{ matrix.trials }} -after=60s 2>&1 | tee bin/network-profile-driver.log
+          sudo -E env RELAIS_REDIS_ADDR= ./bin/crash-run -private-route-tuning="$PRIVATE_ROUTE_TUNING" -topology=netns -profile=${{ matrix.profile }} -scenario=${{ matrix.scenario }} -runs="$PROFILE_TRIALS" -after="$PROFILE_AFTER" 2>&1 | tee bin/network-profile-driver.log
       - name: Assert namespace and link cleanup
         if: always()
         timeout-minutes: 1
