@@ -26,7 +26,8 @@ import (
 )
 
 type result struct {
-	ProfileRow                                       *profileRow `json:"profile_row,omitempty"`
+	StoreStall                                       *storeStallEvidence `json:"store_stall,omitempty"`
+	ProfileRow                                       *profileRow         `json:"profile_row,omitempty"`
 	BufferEvidence                                   *bufferEvidence
 	Metrics                                          []ProcessMetrics `json:"metrics,omitempty"`
 	Gap                                              time.Duration
@@ -86,7 +87,11 @@ func processEnv(key, addr, prefix string) []string {
 	}
 	return append(env, "RELAIS_SESSIONSTORE_KEY="+key, "RELAIS_REDIS_ADDR="+addr, "RELAIS_REDIS_PREFIX="+prefix)
 }
-func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, after, warmup time.Duration, verbose, terminate, cacheOff bool, topology *nettopology.Topology, profile *profileTrialOptions) (out result, trialErr error) {
+func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, after, warmup time.Duration, verbose, terminate, cacheOff bool, topology *nettopology.Topology, profile *profileTrialOptions, stalls ...*storeStallOptions) (out result, trialErr error) {
+	var stall *storeStallOptions
+	if len(stalls) > 0 {
+		stall = stalls[0]
+	}
 	var processes []*clusterprocess.Child
 	defer func() {
 		for i := len(processes) - 1; i >= 0; i-- {
@@ -144,6 +149,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	}
 	controlURL := "http://" + controlAddr
 	workerPIDs := map[string]*clusterprocess.Child{}
+	workerURLs := map[string]string{}
 	var faults []*uncertainProxy
 	defer func() {
 		for _, f := range faults {
@@ -165,6 +171,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			return result{}, err
 		}
 		workerPIDs[name] = c
+		workerURLs[name] = r.HTTP
 		privateAPIs = append(privateAPIs, strings.TrimPrefix(r.HTTP, "http://"))
 		endpoint := r.HTTP
 		if profile != nil && profile.Name == "lossy-dc" {
@@ -217,6 +224,9 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	defer stopMedia()
 	sent := make(chan error, 1)
 	mediaDuration := after + 15*time.Second
+	if stall != nil {
+		mediaDuration += stall.Duration
+	}
 	if profile != nil {
 		mediaDuration = after + 40*time.Second
 	}
@@ -315,9 +325,35 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	if profile != nil && profile.Scenario == "move" {
 		tcpBefore = topology.SnapshotTCP(ctx)
 	}
+	var stalledAt time.Time
+	if stall != nil {
+		stall.SessionID, stall.Owner, stall.WorkerURL = call.SessionID(), owner, workerURLs[owner]
+		if err := stall.prepare(ctx, env, call.SessionID(), controlURL); err != nil {
+			return result{}, err
+		}
+		defer stall.close()
+		if err := stall.Redis.Signal(syscall.SIGSTOP); err != nil {
+			return result{}, err
+		}
+		defer func() { _ = stall.Redis.Signal(syscall.SIGCONT) }()
+		stalledAt = time.Now()
+		fmt.Printf("SIGSTOP store pid=%d session=%s stall=%s\n", stall.Redis.PID(), call.SessionID(), stall.Duration)
+		select {
+		case <-ctx.Done():
+			return result{}, ctx.Err()
+		case err := <-sent:
+			senderJoined = true
+			return result{}, fmt.Errorf("media ended during store stall: %v", err)
+		case <-time.After(stall.Duration):
+		}
+	}
 	killed := time.Now()
 	var profileActionErr error
-	if profile != nil && profile.Scenario == "move" {
+	if stall != nil && stall.Variant == "live" {
+		if err := stall.resume(stalledAt); err != nil {
+			return result{}, err
+		}
+	} else if profile != nil && profile.Scenario == "move" {
 		err = profileMove(ctx, call, owner)
 		// Keep the caller record even on a definitive/uncertain move error. The
 		// report judges it; stopping here would discard the failure's media evidence.
@@ -339,6 +375,16 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			h.RecordProcessKill(owner, killed)
 		}
 		fmt.Printf("%s worker=%s pid=%d session=%s relay=%s\n", label, owner, worker.PID(), call.SessionID(), relayReady.Media)
+		if stall != nil {
+			select {
+			case <-ctx.Done():
+				return result{}, ctx.Err()
+			case <-worker.Done():
+			}
+			if err := stall.resume(stalledAt); err != nil {
+				return result{}, err
+			}
+		}
 		priorTakeovers := len(crashTakeovers(status.Takeovers))
 		// Wait for a terminal takeover, then observe at least 60 s of consent in
 		// the default run. The short developer mode cannot claim that acceptance.
@@ -349,11 +395,16 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		// SIGTERM exits this wait on the first owner change, which may precede
 		// move completion. The later worker-exit and media-freshness checks catch
 		// a failed drain or rollback; this poll alone does not prove success.
+	waitTakeover:
 		for len(crashTakeovers(status.Takeovers)) == priorTakeovers && (!terminate || len(status.Calls) != 1 || status.Calls[0].Owner == owner) {
 			select {
 			case <-ctx.Done():
 				return result{}, ctx.Err()
 			case <-deadline.C:
+				if stall != nil {
+					stall.TimedOut = true
+					break waitTakeover
+				}
 				return result{}, definiteProfileFailure("takeover did not complete within 3 s")
 			case <-tick.C:
 				status, err = h.Status(ctx)
@@ -376,31 +427,63 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			case <-time.After(6 * time.Second):
 				return result{}, errors.New("SIGTERM worker did not finish drain and exit")
 			}
-		} else {
+		} else if stall == nil || !stall.TimedOut {
 			takeovers := crashTakeovers(status.Takeovers)
 			takeover := takeovers[len(takeovers)-1]
-			if takeover.Lost || takeover.Error != "" {
+			if stall == nil && (takeover.Lost || takeover.Error != "") {
 				return result{}, definiteProfileFailure(fmt.Sprintf("takeover lost=%t: %s", takeover.Lost, takeover.Error))
 			}
 		}
 	}
-	select {
-	case <-ctx.Done():
-		return result{}, ctx.Err()
-	case err := <-sent:
-		senderJoined = true
-		return result{}, fmt.Errorf("media ended before observation finished: %v", err)
-	// Even developer runs observe the full default freshness window.
-	case <-time.After(max(after, (callharness.FreshnessPolicy{}).EvaluationWindow())):
+	if stall != nil {
+		status, err = h.Status(ctx)
+		if err != nil {
+			stall.ObservationErrors = append(stall.ObservationErrors, "post-resume status: "+err.Error())
+		}
+		stall.capture(ctx, status, relayReady.HTTP)
+	}
+	observation := time.NewTimer(max(after, (callharness.FreshnessPolicy{}).EvaluationWindow()))
+	defer observation.Stop()
+observe:
+	for {
+		select {
+		case <-ctx.Done():
+			return result{}, ctx.Err()
+		case err := <-sent:
+			senderJoined = true
+			if stall == nil {
+				return result{}, fmt.Errorf("media ended before observation finished: %v", err)
+			}
+			stall.MediaError = fmt.Sprint(err)
+			sent = nil // Preserve the full observation horizon after a sender failure.
+		case <-observation.C:
+			break observe
+		}
 	}
 	observedUntil := time.Now()
 	stopMedia()
-	mediaErr := <-sent
-	senderJoined = true
+	var mediaErr error
+	if !senderJoined {
+		mediaErr = <-sent
+		senderJoined = true
+	}
 	if mediaErr != nil && !errors.Is(mediaErr, context.Canceled) {
-		return result{}, mediaErr
+		if stall == nil {
+			return result{}, mediaErr
+		}
+		stall.MediaError = mediaErr.Error()
+	}
+	if stall != nil {
+		status, err = h.Status(ctx)
+		if err != nil {
+			stall.ObservationErrors = append(stall.ObservationErrors, "final status: "+err.Error())
+		}
+		stall.capture(ctx, status, relayReady.HTTP)
 	}
 	report, err := call.Hangup(ctx)
+	if stall != nil {
+		return stall.judge(ctx, report, err, status, relayReady, stalledAt, killed, observedUntil, dir)
+	}
 	if err != nil {
 		return result{}, err
 	}
@@ -491,7 +574,12 @@ func run() (err error) {
 	restoreOff := flag.Bool("route-restore-off", false, "disable route restore in relay-restart baseline trials")
 	compareRestore := flag.Bool("compare-restore", true, "compare restore on/off in relay-restart mode")
 	flag.DurationVar(&metricsInterval, "metrics-interval", time.Second, "private metrics scrape interval; 0 disables periodic scraping (pre-fault and final samples remain)")
+	storeStall := flag.String("store-stall", "", "store-stall variant: moderate (1.5s), long (5s), or live (5s, no worker kill); owns throwaway Redis, loopback only")
+	stallDuration := flag.Duration("store-stall-duration", 0, "override selected store-stall duration")
 	flag.Parse()
+	if err := validateStoreStall(*storeStall, *stallDuration, *redisAddr, *topologyOption, *scenario != "" || *bufferOn || *compareBuffer || *replayLoss || *relayRestart || *relayStandby || *terminate || *cacheOff || *restoreOff); err != nil {
+		return err
+	}
 	if *scenario != "" {
 		if err := validateProfileScenario(*topologyOption, *scenario, *bufferOn || *compareBuffer || *replayLoss || *relayRestart || *relayStandby || *terminate || *cacheOff || *restoreOff); err != nil {
 			return err
@@ -607,6 +695,7 @@ func run() (err error) {
 		}
 		password = hex.EncodeToString(secret[:])
 	}
+	var ownedRedis *clusterprocess.Child
 	if addr == "" {
 		addr, err = redisAddress(topology)
 		if err != nil {
@@ -625,6 +714,7 @@ func run() (err error) {
 		if err != nil {
 			return fmt.Errorf("store launch: %w", err)
 		}
+		ownedRedis = redis
 		defer redis.Stop()
 		startup, stop := context.WithTimeout(ctx, 5*time.Second)
 		err = clusterprocess.WaitTCP(startup, addr, redis)
@@ -646,6 +736,9 @@ func run() (err error) {
 	}
 	if *after < 60*time.Second {
 		fmt.Println("DEVELOPMENT RUN: 60 s post-takeover consent acceptance NOT-RUN")
+	}
+	if *storeStall != "" {
+		return runStoreStallTrials(ctx, manager, ownedRedis, bin, dir, hex.EncodeToString(key[:]), addr, *storeStall, *stallDuration, *runs, *after, *verbose)
 	}
 	if *scenario != "" {
 		return runProfileTrials(ctx, manager, topology, bin, dir, hex.EncodeToString(key[:]), addr, password, profileTrialOptions{Name: *profile, Scenario: *scenario, PrivateRouteTuning: *privateRouteTuning, PrivateRoutes: privateRoutes, KernelRelease: kernelRelease}, settings, *runs, *after, *verbose)
