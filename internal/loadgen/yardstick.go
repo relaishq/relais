@@ -54,6 +54,10 @@ func MatchesEvent(e EventResult, report *callharness.Report, move callharness.Mo
 func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []string) {
 	var result []MetricRow
 	var causes []string
+	pooled, pooledCauses, distributed := distributedTrials(processes)
+	if distributed && pooled == "inconclusive" {
+		causes = append(causes, pooledCauses...)
+	}
 	for i := range events {
 		e := &events[i]
 		e.Recorded = 0
@@ -107,7 +111,7 @@ func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []
 				m := matching[0].Measurement
 				if matching[0].Distributed != nil {
 					d := matching[0].Distributed
-					v := callharness.MetricVerdict{Trusted: d.Outcome != "inconclusive", Failed: d.Outcome == "fail"}
+					v := callharness.MetricVerdict{Trusted: pooled != "inconclusive", Failed: pooled == "fail"}
 					r := row("distributed_window")
 					if v.Trusted {
 						r.Trusted++
@@ -118,7 +122,7 @@ func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []
 					if matching[0].Measurement.Inconclusive {
 						causes = append(causes, fmt.Sprintf("event %d session %s: content classification not proven across clock interval", i+1, c.Session))
 					}
-					for _, cause := range d.Causes {
+					for _, cause := range windowCauses(d) {
 						causes = append(causes, fmt.Sprintf("event %d session %s: %s", i+1, c.Session, cause))
 					}
 				}
@@ -165,4 +169,48 @@ func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []
 		}
 	}
 	return result, causes
+}
+
+// Pool every caller's trials for this run. Per-call summaries may lack the
+// minimum trial counts even when the run supplies enough trials.
+func distributedTrials(processes []ProcessReport) (string, []string, bool) {
+	var moves []callharness.MoveReport
+	var causes []string
+	run := ""
+	present := false
+	for _, p := range processes {
+		for _, c := range p.Calls {
+			if c.Call == nil || c.Call.Distributed == nil {
+				continue
+			}
+			present = true
+			d := c.Call.Distributed
+			if run == "" {
+				run = d.RunID
+			} else if run != d.RunID {
+				causes = append(causes, "mixed distributed run identities")
+			}
+			if d.ClockError != "" {
+				causes = append(causes, d.ClockError)
+			}
+			if len(d.Missing) > 0 {
+				causes = append(causes, "armed distributed receipt missing")
+			}
+			moves = append(moves, c.Call.Moves...)
+		}
+	}
+	if !present {
+		return "", nil, false
+	}
+	outcome, judged := callharness.JudgeDistributedTrials(moves)
+	if len(causes) > 0 && outcome != "fail" {
+		outcome = "inconclusive"
+	}
+	return outcome, append(causes, judged...), true
+}
+func windowCauses(d *callharness.DistributedMeasurement) []string {
+	if d.WindowOutcome == "pass" || d.WindowOutcome == "fail" {
+		return nil
+	}
+	return d.Causes
 }

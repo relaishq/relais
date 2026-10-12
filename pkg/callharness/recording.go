@@ -104,11 +104,7 @@ func (c *Call) maintainRecording(ctx context.Context) {
 				cancel()
 				c.harness.statusPollMu.Unlock()
 			}
-			c.rec.mu.Lock()
-			if !c.rec.hungUp {
-				c.rec.compact(time.Since(c.rec.start))
-			}
-			c.rec.mu.Unlock()
+			c.rec.compactRecording(time.Since(c.rec.start))
 		}
 	}
 }
@@ -147,11 +143,20 @@ func (r *recorder) compact(now time.Duration) {
 	r.hungUpAt = now
 	reports := r.measureMoves(now, count)
 	r.hungUpAt = oldUntil
+	r.finishCompact(now, count, reports)
+}
+
+func (r *recorder) finishCompact(now time.Duration, count int, reports []MoveReport) {
+	cutoff := now - r.recording.History
 	for _, rep := range reports {
-		rep.decryptFailuresAtSave = r.decryptionFailures.Total()
+		if r.distributed == nil {
+			rep.decryptFailuresAtSave = r.decryptionFailures.Total()
+		}
 		for i := range rep.Tracks {
-			rep.Tracks[i].packetCounter = r.tracks[i]
-			rep.Tracks[i].packetsAtSave = r.tracks[i].packets
+			if rep.Tracks[i].packetCounter == nil {
+				rep.Tracks[i].packetCounter = r.tracks[i]
+				rep.Tracks[i].packetsAtSave = r.tracks[i].packets
+			}
 		}
 		r.savedMoves = append(r.savedMoves, rep)
 		if len(r.savedMoves) == 1 {
@@ -167,14 +172,39 @@ func (r *recorder) compact(now time.Duration) {
 		}
 	}
 	r.moves = slices.Clone(r.moves[count:])
-	for key, u := range r.sentAudioUnits {
-		if u.at < cutoff {
-			delete(r.sentAudioUnits, key)
+	if r.distributed != nil && len(r.audioSends) > 0 {
+		for _, ref := range r.audioSends {
+			if ref.at >= cutoff {
+				break
+			}
+			if u, ok := r.sentAudioUnits[ref.audio]; ok && u.at == ref.at {
+				delete(r.sentAudioUnits, ref.audio)
+				delete(r.sentFrames[kindAudio], ref.audio)
+			}
+		}
+	} else {
+		for key, u := range r.sentAudioUnits {
+			if u.at < cutoff {
+				delete(r.sentAudioUnits, key)
+				delete(r.sentFrames[kindAudio], key)
+			}
 		}
 	}
-	for key, f := range r.sentVideoFrames {
-		if f.at < cutoff {
-			delete(r.sentVideoFrames, key)
+	if r.distributed != nil && len(r.videoSends) > 0 {
+		for _, ref := range r.videoSends {
+			if ref.at >= cutoff {
+				break
+			}
+			if f, ok := r.sentVideoFrames[ref.video]; ok && f.identity == ref.generation && f.at == ref.at {
+				delete(r.sentVideoFrames, ref.video)
+				delete(r.sentFrames[kindVideo], f.data)
+			}
+		}
+	} else {
+		for key, f := range r.sentVideoFrames {
+			if f.at < cutoff {
+				delete(r.sentVideoFrames, key)
+			}
 		}
 	}
 	// A rate spike may exhaust the count bound before the time bound. Advance
@@ -192,12 +222,14 @@ func (r *recorder) compact(now time.Duration) {
 			}
 		}
 	}
-	r.sentFrames = map[string]map[string]struct{}{kindAudio: {}, kindVideo: {}}
-	for key := range r.sentAudioUnits {
-		r.sentFrames[kindAudio][key] = struct{}{}
-	}
-	for _, f := range r.sentVideoFrames {
-		r.sentFrames[kindVideo][f.data] = struct{}{}
+	if r.distributed == nil {
+		r.sentFrames = map[string]map[string]struct{}{kindAudio: {}, kindVideo: {}}
+		for key := range r.sentAudioUnits {
+			r.sentFrames[kindAudio][key] = struct{}{}
+		}
+		for _, f := range r.sentVideoFrames {
+			r.sentFrames[kindVideo][f.data] = struct{}{}
+		}
 	}
 	for key, a := range r.contentAssemblies {
 		if a.lastAt < now-time.Second {
@@ -214,12 +246,21 @@ func (r *recorder) compact(now time.Duration) {
 			first = len(t.arrivals) - maxHistoryPackets
 			cutoff = max(cutoff, t.arrivals[first])
 		}
+		if r.distributed != nil {
+			for _, mark := range t.headers[:min(first, len(t.headers))] {
+				if timestamp, ok := t.seenPackets[mark.seq]; ok && timestamp == mark.timestamp {
+					delete(t.seenPackets, mark.seq)
+				}
+			}
+		}
 		t.arrivals = slices.Clone(t.arrivals[first:])
 		t.headers = slices.Clone(t.headers[first:])
 		t.unmatchedTimes = slices.Clone(slices.DeleteFunc(t.unmatchedTimes, func(at time.Duration) bool { return at < cutoff }))
-		t.seenPackets = make(map[uint16]uint32, len(t.headers))
-		for _, mark := range t.headers {
-			t.seenPackets[mark.seq] = mark.timestamp
+		if r.distributed == nil {
+			t.seenPackets = make(map[uint16]uint32, len(t.headers))
+			for _, mark := range t.headers {
+				t.seenPackets[mark.seq] = mark.timestamp
+			}
 		}
 		if t.video != nil {
 			for id, picture := range t.video.decodedPictures {
@@ -235,6 +276,10 @@ func (r *recorder) compact(now time.Duration) {
 	first := sort.Search(len(r.decryptFailureTimes), func(i int) bool { return r.decryptFailureTimes[i] >= cutoff })
 	// Saved events use counter snapshots; reporting adds subsequent failures.
 	r.decryptFailureTimes = slices.Clone(r.decryptFailureTimes[first:])
+	r.audioSends = pruneEvidenceRefs(r.audioSends, cutoff)
+	r.videoSends = pruneEvidenceRefs(r.videoSends, cutoff)
+	r.audioReturns = pruneEvidenceRefs(r.audioReturns, cutoff)
+	r.videoReturns = pruneEvidenceRefs(r.videoReturns, cutoff)
 	r.historyStart = max(r.historyStart, cutoff)
 }
 

@@ -540,7 +540,7 @@ func runArgs(args []string) error {
 	runID := fs.String("run-id", "", "distributed run identity")
 	controlBound := fs.Duration("frontend-control-bound", -1, "measured absolute control-minus-frontend clock error")
 	workerBound := fs.Duration("frontend-worker-bound", -1, "measured absolute worker-minus-frontend clock error for all workers")
-	driftPPM := fs.Float64("clock-drift-ppm", 100, "worst-case relative clock drift in parts per million")
+	driftPPM := fs.Float64("clock-drift-ppm", -1, "worst-case relative clock drift in parts per million")
 	retention := fs.Duration("event-retention", 0, "caller event history; default 15s local, 180s distributed")
 	bearerTokenFile := fs.String("bearer-token-file", "", "file containing the HTTPS signaling bearer token")
 	fs.BoolVar(&c.PlaceOnWorker, "place-on-worker", false, "internal capacity placement on worker zero")
@@ -625,6 +625,9 @@ func runArgs(args []string) error {
 		if *distributed {
 			if !*externalCaller {
 				return errors.New("distributed mode requires -external-caller")
+			}
+			if !flagWasSet(fs, "clock-drift-ppm") {
+				return errors.New("distributed mode requires -clock-drift-ppm")
 			}
 			distributedConfig = &loadgen.DistributedConfig{RunID: *runID, FrontendControlBound: *controlBound, FrontendWorkerBound: *workerBound, DriftPPM: *driftPPM}
 		} else {

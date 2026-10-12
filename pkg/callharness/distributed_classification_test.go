@@ -13,6 +13,13 @@ import (
 func classificationFixture(t *testing.T, width time.Duration) (*recorder, moveRecord) {
 	t.Helper()
 	r := testMeasurementRecorder(t)
+	for _, track := range r.tracks {
+		if track.video != nil {
+			for i := range track.video.frames {
+				track.video.frames[i].source.written = true
+			}
+		}
+	}
 	r.start = time.Now().Add(-10 * time.Second)
 	var arrivals []time.Duration
 	for at := 500 * time.Millisecond; at < 1500*time.Millisecond; at += 20 * time.Millisecond {
@@ -195,4 +202,40 @@ func TestDistributedShortSettleDoesNotHideKnownResume(t *testing.T) {
 	require.True(t, rep.Measurement.ResumeVerdict.Trusted, rep.Measurement.ResumeVerdict.Reasons)
 	require.False(t, rep.Measurement.ResumeVerdict.Failed)
 	require.True(t, rep.Measurement.FirstContentVerdict.Trusted, rep.Measurement.FirstContentVerdict.Reasons)
+}
+
+func TestDistributedEndAxisInteriorClassification(t *testing.T) {
+	r, _ := classificationFixture(t, 0)
+	r.distributed.ControlOffset = OffsetInterval{Lower: -50 * time.Millisecond, Upper: 50 * time.Millisecond}
+	t0 := r.start
+	r.moves[0].kind = "move"
+	r.moves[0].event.Kind = "move"
+	r.moves[0].event.Start = t0.Add(1500 * time.Millisecond)
+	r.moves[0].event.End = t0.Add(1800 * time.Millisecond)
+	track := r.tracks[0]
+	track.arrivals = nil
+	track.headers = nil
+	for at := 10 * time.Millisecond; at < 7*time.Second; at += 10 * time.Millisecond {
+		track.arrivals = append(track.arrivals, at)
+		track.headers = append(track.headers, rtpMark{})
+	}
+	track.video.frames = nil
+	for i, at := range []time.Duration{1770 * time.Millisecond, 1820 * time.Millisecond, 1870 * time.Millisecond} {
+		source := sentVideoFrame{at: at - time.Millisecond, returnedAt: at, written: true, pli: i == 1, requestedAt: 1600 * time.Millisecond}
+		track.video.frames = append(track.video.frames, frameMark{at: at, receivedAt: at, decodable: true, source: source})
+	}
+	point := func(end time.Duration) EventMeasurement {
+		return r.eventMeasurement(MoveReport{Kind: "move", Start: 1500 * time.Millisecond, End: end}, r.hungUpAt, 0)
+	}
+	require.Equal(t, "live", point(1750*time.Millisecond).FirstContent)
+	require.Equal(t, "keyframe", point(1800*time.Millisecond).FirstContent)
+	require.Equal(t, "live", point(1850*time.Millisecond).FirstContent)
+	for _, end := range []time.Duration{1750 * time.Millisecond, 1850 * time.Millisecond} {
+		require.True(t, point(end).FirstContentVerdict.Trusted)
+	}
+	report := MoveReport{Kind: "move", Start: 1500 * time.Millisecond, End: 1800 * time.Millisecond, Receipt: r.moves[0].event, Measurement: point(1800 * time.Millisecond), Distributed: &DistributedMeasurement{Mapped: true, WindowOutcome: "pass", Start: TimeInterval{Earliest: t0.Add(1500 * time.Millisecond), Latest: t0.Add(1500 * time.Millisecond)}, End: TimeInterval{Earliest: t0.Add(1750 * time.Millisecond), Latest: t0.Add(1850 * time.Millisecond)}, AudioLoss: MetricVerdict{Trusted: true}, VideoLoss: MetricVerdict{Trusted: true}}}
+	r.prepareMeasurementIndex()
+	r.classifyDistributedEvent(&report, r.hungUpAt, DurationInterval{}, nil, true)
+	require.False(t, report.Measurement.FirstContentVerdict.Trusted)
+	require.Contains(t, strings.Join(report.Measurement.FirstContentVerdict.Reasons, ";"), "classification changes")
 }

@@ -336,3 +336,14 @@ func TestProfileReportRetainsOutlierPhasesAndPrintsThem(t *testing.T) {
 	require.Contains(t, profileResultLine(report), "slowest_phases=unavailable")
 	require.Contains(t, profileResultLine(profileReport{}), "slowest_trial=unavailable slowest_phases=unavailable")
 }
+
+func TestLocalCrashJudgesRefuseDistributedEvidence(t *testing.T) {
+	report := &callharness.Report{Distributed: &callharness.DistributedRecording{RunID: "run"}}
+	require.False(t, measure(report, "", time.Minute).Pass)
+	require.False(t, measureDrain(report, "", time.Now()).Pass)
+	require.False(t, measureRelayRestart(report, "", time.Now(), time.Now(), false, 0).Pass)
+	row := measureProfile(report, "", profileTrialOptions{Name: "dc", Scenario: "move"}, time.Minute)
+	require.True(t, row.Distributed)
+	judged := judgeProfile(profileTrialOptions{Name: "dc", Scenario: "move"}, []profileRow{row}, nil)
+	require.Equal(t, "inconclusive", judged.Verdict)
+}

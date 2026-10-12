@@ -343,7 +343,7 @@ func judgeDistributedGap(kind string, arrivals []time.Duration, startLo, startHi
 	if rank >= 0 {
 		lower = baseCertain[rank]
 	}
-	upper := basePossible[len(basePossible)-1]
+	upper := baselineQuantileBounds(baseCertain, basePossible, 95).Upper
 	g.BaselineP95 = DurationInterval{Lower: lower, Upper: upper}
 	g.EventGap = DurationInterval{Lower: minEvent, Upper: maxEvent}
 	pass := maxEvent < 2*time.Second
@@ -410,7 +410,7 @@ func JudgeDistributedTrials(moves []MoveReport) (string, []string) {
 			} else if g.EventGap.Upper >= 2*time.Second {
 				unknown(g.Kind + " pause may reach 2s within clock interval")
 			}
-			if g.BaselinePossible[len(g.BaselinePossible)-1]-g.BaselinePossible[0] > 50*time.Millisecond {
+			if baselineQuantileBounds(g.BaselineCertain, g.BaselinePossible, 95).Upper-baselineQuantileBounds(g.BaselineCertain, g.BaselinePossible, 50).Lower > 50*time.Millisecond {
 				unknown(g.Kind + " baseline spread not proven within 50ms")
 			}
 			if m.Kind != "move" {
@@ -430,12 +430,8 @@ func JudgeDistributedTrials(moves []MoveReport) (string, []string) {
 	for kind, p := range pools {
 		slices.Sort(p.certain)
 		slices.Sort(p.possible)
-		rank := (95*len(p.possible)+99)/100 - 1 - (len(p.possible) - len(p.certain))
-		baselineLo := time.Duration(0)
-		if rank >= 0 {
-			baselineLo = p.certain[rank]
-		}
-		baselineHi := p.possible[len(p.possible)-1]
+		baseline := baselineQuantileBounds(p.certain, p.possible, 95)
+		baselineLo, baselineHi := baseline.Lower, baseline.Upper
 		lower, upper := durationP95(p.lower), durationP95(p.upper)
 		if lower > 150*time.Millisecond || lower > baselineHi+50*time.Millisecond {
 			fail(kind + " move p95 exceeds policy across clock interval")
@@ -466,7 +462,8 @@ func (c *Call) ClockProbes() []ClockProbe {
 
 // DistributedRecording makes clock evidence reviewable in the final artifact.
 type DistributedRecording struct {
-	DriftPPM float64 `json:"drift_ppm"`
+	ObservedRate *ClockRateInterval `json:"observed_rate_ppm,omitempty"`
+	DriftPPM     float64            `json:"drift_ppm"`
 
 	Armed   []OperationIdentity `json:"armed"`
 	Missing []OperationIdentity `json:"missing_receipts,omitempty"`
@@ -524,4 +521,70 @@ func (r *recorder) intervalContentLoss(kind string, startLo, startHi, endLo, end
 		v.fail("conflicting video content identities")
 	}
 	return v
+}
+
+// Every candidate baseline contains the certain set and a subset of possible.
+// Zero padding gives a conservative lower quantile. The upper quantile uses
+// the guaranteed count, padding with the largest optional samples; merely
+// taking p95 of the union would underestimate a candidate with fewer samples.
+func baselineQuantileBounds(certain, possible []time.Duration, percentile int) DurationInterval {
+	if len(certain) == 0 || len(possible) < len(certain) {
+		return DurationInterval{}
+	}
+	certain, possible = slices.Clone(certain), slices.Clone(possible)
+	slices.Sort(certain)
+	slices.Sort(possible)
+	rank := (percentile*len(possible)+99)/100 - 1 - (len(possible) - len(certain))
+	lower := time.Duration(0)
+	if rank >= 0 {
+		lower = certain[rank]
+	}
+	// Remove the guaranteed multiset to obtain optional samples.
+	optional := make([]time.Duration, 0, len(possible)-len(certain))
+	j := 0
+	for _, value := range possible {
+		if j < len(certain) && value == certain[j] {
+			j++
+			continue
+		}
+		optional = append(optional, value)
+	}
+	upper := certain[(percentile*len(certain)+99)/100-1]
+	// A quantile can reach value v exactly when the guaranteed samples below
+	// v fit below its rank after adding all optional samples >=v. Sweep the
+	// sorted sets once instead of sorting one candidate for every subset size.
+	ci, oi := len(certain), len(optional)
+	for i := len(possible) - 1; i >= 0; i-- {
+		value := possible[i]
+		for ci > 0 && certain[ci-1] >= value {
+			ci--
+		}
+		for oi > 0 && optional[oi-1] >= value {
+			oi--
+		}
+		count := len(certain) + len(optional) - oi
+		if ci <= (percentile*count+99)/100-1 {
+			upper = value
+			break
+		}
+	}
+	return DurationInterval{Lower: lower, Upper: upper}
+}
+
+// mappedMoveTimes is also used by content baselines and online decode sampling;
+// raw server times must never enter those caller-local windows.
+func (r *recorder) mappedMoveTimes(move moveRecord) (DurationInterval, DurationInterval, error) {
+	if move.event == nil {
+		return DurationInterval{}, DurationInterval{}, errors.New("event identity unavailable")
+	}
+	host := r.distributed.ControlOffset
+	if move.kind == "takeover" {
+		host = r.distributed.WorkerOffset
+	}
+	start, err := r.distributed.Clock.Map(move.event.Start, host)
+	if err != nil {
+		return DurationInterval{}, DurationInterval{}, err
+	}
+	end, err := r.distributed.Clock.Map(move.event.End, r.distributed.ControlOffset)
+	return DurationInterval{Lower: r.since(start.Earliest), Upper: r.since(start.Latest)}, DurationInterval{Lower: r.since(end.Earliest), Upper: r.since(end.Latest)}, err
 }

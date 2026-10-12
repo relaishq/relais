@@ -19,7 +19,8 @@ The two host bounds are **measured input assumptions**: the absolute difference
 between each host's clock and the frontend clock throughout this run. The
 worker bound must cover every worker generation used by the run. Zero means
 measured agreement, not an omitted check. Both flags are required in distributed
-mode. Supply the bounds from independent clock-error measurements. A configured
+mode. `-clock-drift-ppm` is also required; there is no implicit rate bound.
+Supply the bounds from independent clock-error measurements. A configured
 time source alone does not establish them. The drift rate is the worst relative
 clock rate error between caller and any event host, in parts per million.
 
@@ -53,7 +54,10 @@ operator endpoint. The body is one identity:
 Never reuse it for a replacement. `epoch` is the affected ownership tenure,
 not the recovery target's new epoch. Each affected session has its own identity,
 with the same operation ID for a shared kill. Wait for all arm acknowledgments
-before acting. The arm timestamp is captured locally by the caller.
+before acting, then wait **more than twice the relevant absolute host bound
+plus the drift widening at the action**. After completion, wait the same margin
+before posting the receipt. This lets the whole mapped interval fit inside the
+caller-local arm/receipt bracket. The arm timestamp is captured locally by the caller.
 
 After the operation, send `POST /record-events` with an array of receipts:
 
@@ -125,7 +129,10 @@ Caller media gaps, content ages and connection observations stay on the caller
 clock. Controller phase durations remain on the control clock. Timestamp probe
 ordering errors, disjoint intervals beyond the drift allowance and detected
 caller wall/monotonic disagreement invalidate clock trust for the run. Failed
-periodic probes also invalidate trust. Later samples cannot erase a detected
+periodic probes are missing samples; existing probes still apply with drift
+widening. Probe pairs bound the observed average relative rate. A rate interval
+entirely outside the stated ppm bound invalidates trust, with the observed
+interval and configured bound in the cause. Later samples cannot erase a detected
 jump. Saved event summaries are downgraded if later clock evidence becomes
 invalid. Interval overflow and missing samples are inconclusive.
 
@@ -153,8 +160,12 @@ baseline p95 +50 ms and at most 150 ms. Every pause must remain below 2 seconds.
 At least 20 move trials and 10 takeover trials are required. A single move-gap
 outlier does not fail pooled p95 unless it changes that percentile. Per-event
 `distributed.outcome` is a window diagnostic; the final call's
-`distributed.outcome` applies the pooled trial counts/policy. One move and one
-kill cannot establish acceptance.
+`distributed.outcome` applies counts/policy within that call. The load report
+`distributed.outcome` and its `distributed_window` rows pool trials **across all
+calls in the run**. The run requires one run ID. Per-event move outliers do not
+poison generator validity when pooled p95 passes. Gap baseline qualification
+uses a conservative p95 upper bound minus a median lower bound, at most 50 ms,
+rather than max-minus-min. One move and one kill cannot establish acceptance.
 
 Freshness, lateness, resume and decoded-content verdicts are evaluated at both
 ends of the event interval and at every observation or policy boundary where a
@@ -175,7 +186,10 @@ and event-interval width in the reason. Resume and first-content rows retain
 the existing availability/provenance policy, which has no separate elapsed-time
 ceiling; the elapsed intervals are reported without inventing a new threshold.
 Caller-local packet gaps, content ages and the selected raw observations remain
-unchanged. A zero interval gives the same measurement verdicts as local mode.
+unchanged. Independent union/intersection content-loss and identified-live
+proofs are merged with classification verdicts; an unknown proof is never
+replaced by a trusted RTP-only classification. Windows stop at the earliest mapped start of the next event. An unmapped event widens the possible baseline floor
+through its observation limit and cannot reset it to zero. A zero interval gives the same measurement verdicts as local mode.
 
 A move's start and completion share a control clock, so they move together
 within the offset interval. Its measured span widens for relative rate error
@@ -183,6 +197,10 @@ and possible variation within the supplied control-host error bound. Takeover
 start and completion use their respective worker/control bounds. Possible
 first-event baselines and recovery floors remain possible references for later
 events; one selected baseline cannot stand in for an uncertain earlier window.
+Recording snapshots only event-relevant evidence under the recorder lock,
+using send/return time indexes. Classification runs outside that lock and reads
+indexed windows; it does not pause caller sends or packet recording. Video unit
+identities are prepared once per snapshot.
 Evaluation is bounded at 4096 classification cells/references per event. An
 exhausted budget is explicitly inconclusive, rather than a partial-sampling
 pass. Known server loss and independent content corruption still fail.
@@ -204,6 +222,21 @@ gaps belong to the event window, without adding tens of milliseconds to a gap.
 Steady windows can therefore be conclusive; a window containing an ambiguous
 outlier or a recovery near its limit must remain inconclusive.
 
+## Point estimates and local compatibility
+
+The presence of `Report.distributed` marks event-relative scalar fields as
+**point estimates**: `MoveReport.start/end`, `Tracks[].Gap`,
+`Tracks[].BaselineGapP95`, `Tracks[].PacketsAfter`,
+`DecryptionFailuresAfterResume`, and `Measurement.ContentLoss.Event` counts.
+Use `distributed.gaps`, `distributed.durations` and the interval verdicts for
+acceptance. Local capacity, soak and crash-run judges refuse distributed
+reports rather than accepting those scalar fields. Content-loss comparison
+baselines and online decode sampling use mapped event times in this mode.
+
+There is one intentional local behavior change: `RecordExternalMove` now keeps
+`Error`, `Lost` and `LossCause` from the supplied result. Local capacity therefore
+fails on a recorded **move error** instead of silently dropping that evidence.
+
 ## Verification
 
 Unit tests cover interval composition/drift/overflow, jump rejection, all
@@ -220,6 +253,8 @@ it does not claim a native OS SIGKILL timestamp or a real distributed run.
 
 ```sh
 go vet ./...
+# Native 5ms recorder-lock performance gate; race checks the lock handoff.
+go test -count=1 ./pkg/callharness -run '^TestDistributedLongHistoryDoesNotHoldCallerLock$'
 go test -race -count=1 ./internal/loadgen ./cmd/relais-load ./cmd/relais-signal ./pkg/callharness
 make test-harness-short
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run \

@@ -199,6 +199,9 @@ func (s *storeStallOptions) close() {
 
 // Pure judging seam: exercise rejected evidence without launching processes.
 func judgeStoreStall(report *callharness.Report, status controlplane.Status, e *storeStallEvidence, relay string, stalledAt, killed, until time.Time) []string {
+	if report.HasDistributedEvidence() {
+		return []string{"local crash policy refuses distributed point estimates"}
+	}
 	var failures []string
 	check := func(ok bool, why string) {
 		if !ok {
@@ -408,6 +411,9 @@ func (s *storeStallOptions) judge(ctx context.Context, report *callharness.Repor
 
 // Common caller integrity and fault-evidence checks for live and loss trials.
 func judgeLiveStoreStall(report *callharness.Report, e *storeStallEvidence, stalledAt, resumedAt time.Time) []string {
+	if report.HasDistributedEvidence() {
+		return []string{"local crash policy refuses distributed point estimates"}
+	}
 	var failures []string
 	if report == nil {
 		return []string{"missing caller report"}
@@ -482,6 +488,9 @@ func lossCounter(cause string) string { return `relais_control_losses_total{caus
 // Ownership is absent, so no checkpoint age/margins can be inferred. Judge
 // terminal accounting and integrity directly instead of inventing an age.
 func judgeOwnershipExpired(report *callharness.Report, status controlplane.Status, e *storeStallEvidence, relay string, stalledAt, actionAt time.Time) []string {
+	if report.HasDistributedEvidence() {
+		return []string{"local crash policy refuses distributed point estimates"}
+	}
 	e.ExpectedOutcome, e.Outcome = "definitive-loss", "definitive-loss"
 	failures := judgeLiveStoreStall(report, e, stalledAt, actionAt)
 	check := func(ok bool, why string) {
@@ -531,6 +540,9 @@ func judgeOwnershipExpired(report *callharness.Report, status controlplane.Statu
 
 // Judge live availability independently of the checkpoint recovery policy.
 func judgeLiveSurvival(report *callharness.Report, status controlplane.Status, e *storeStallEvidence, relay string, stalledAt, resumedAt, until time.Time) []string {
+	if report.HasDistributedEvidence() {
+		return []string{"local crash policy refuses distributed point estimates"}
+	}
 	e.ExpectedOutcome, e.Outcome = "survive", "survive"
 	failures := judgeLiveStoreStall(report, e, stalledAt, resumedAt)
 	check := func(ok bool, why string) {

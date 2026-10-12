@@ -478,3 +478,20 @@ func formatStates(changes []StateChange) string {
 func ms(d time.Duration) string {
 	return d.Round(time.Millisecond).String()
 }
+
+// HasDistributedEvidence marks event-relative scalar fields as point estimates.
+// Local capacity/soak/crash judges must not use them as clock-proven evidence.
+func (r *Report) HasDistributedEvidence() bool {
+	if r == nil {
+		return false
+	}
+	if r.Distributed != nil {
+		return true
+	}
+	for _, m := range r.Moves {
+		if m.Distributed != nil {
+			return true
+		}
+	}
+	return false
+}

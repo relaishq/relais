@@ -199,6 +199,9 @@ func relayStandbyTrial(ctx context.Context, manager *clusterprocess.Manager, bin
 }
 
 func measureRelayStandby(report *callharness.Report, public string, killed, until time.Time, oldStatus, status relay.RelayStatus, readyAfter, registeredAfter time.Duration) result {
+	if report.HasDistributedEvidence() {
+		return result{Unsupported: "local crash policy refuses distributed point estimates"}
+	}
 	r := measureRelayRestart(report, public, killed, until, false, status.Stats.RoutesRestored)
 	for _, track := range report.Tracks {
 		r.Duplicates += track.DuplicatePackets

@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+var ErrClockEvidence = errors.New("invalid clock evidence")
+
 // OffsetInterval is server minus caller time. Bounds are inclusive. Durations
 // and media gaps always stay on the caller's monotonic clock.
 type OffsetInterval struct {
@@ -121,7 +123,13 @@ func ProbeClock(ctx context.Context, client *http.Client, endpoint string) (Cloc
 	if err != nil {
 		return p, err
 	}
+	if p.ServerReceive.IsZero() || p.ServerSend.IsZero() {
+		return p, errors.New("clock probe timestamps unavailable")
+	}
 	_, err = p.Offset()
+	if err != nil {
+		err = fmt.Errorf("%w: %v", ErrClockEvidence, err)
+	}
 	return p, err
 }
 
@@ -132,6 +140,7 @@ type ClockTracker struct {
 	probes  []ClockProbe
 	ppm     float64
 	invalid error
+	rate    *ClockRateInterval
 }
 
 func NewClockTracker(ppm float64) (*ClockTracker, error) {
@@ -147,14 +156,44 @@ func (c *ClockTracker) Add(p ClockProbe) error {
 		return c.invalid
 	}
 	next, err := p.Offset()
-	if err == nil && len(c.probes) > 0 {
-		old := c.probes[len(c.probes)-1]
-		elapsed := p.CallerSend.Sub(old.CallerSend)
-		wall := p.CallerSend.Round(0).Sub(old.CallerSend.Round(0))
-		prev, _ := old.Offset()
-		prev, err = prev.Widen(elapsed, c.ppm)
-		if elapsed < 0 || absDuration(wall-elapsed) > time.Millisecond || next.Lower > prev.Upper || prev.Lower > next.Upper {
-			err = errors.New("clock jump between probes")
+	if err == nil {
+		for _, old := range c.probes {
+			elapsed := p.CallerSend.Sub(old.CallerSend)
+			wall := p.CallerSend.Round(0).Sub(old.CallerSend.Round(0))
+			if elapsed <= 0 || absDuration(wall-elapsed) > time.Millisecond {
+				err = errors.New("clock jump or invalid ordering between probes")
+				break
+			}
+			prev, _ := old.Offset()
+			// Each offset was observed somewhere within its RTT. Include that
+			// anchor uncertainty before deriving a conservative relative rate.
+			uncertainty := max(old.CallerReceive.Sub(old.CallerSend), p.CallerReceive.Sub(p.CallerSend))
+			// Float subtraction avoids duration overflow for remote wall clocks.
+			distance := float64(elapsed) + float64(uncertainty)
+			lowerDelta, upperDelta := float64(next.Lower)-float64(prev.Upper), float64(next.Upper)-float64(prev.Lower)
+			rate := ClockRateInterval{LowerPPM: lowerDelta / distance * 1e6, UpperPPM: upperDelta / distance * 1e6}
+			if elapsed > uncertainty {
+				// Negative lower / positive upper use the shortest anchor distance.
+				// Overlapping request brackets give no finite measured rate bound.
+				shortest := float64(elapsed - uncertainty)
+				if lowerDelta < 0 {
+					rate.LowerPPM = lowerDelta / shortest * 1e6
+				}
+				if upperDelta > 0 {
+					rate.UpperPPM = upperDelta / shortest * 1e6
+				}
+				if c.rate == nil {
+					observed := rate
+					c.rate = &observed
+				} else {
+					c.rate.LowerPPM = min(c.rate.LowerPPM, rate.LowerPPM)
+					c.rate.UpperPPM = max(c.rate.UpperPPM, rate.UpperPPM)
+				}
+			}
+			if rate.LowerPPM > c.ppm || rate.UpperPPM < -c.ppm {
+				err = fmt.Errorf("clock jump or observed rate [%g,%g] ppm exceeds stated drift bound %g ppm", rate.LowerPPM, rate.UpperPPM, c.ppm)
+				break
+			}
 		}
 	}
 	if err != nil {
@@ -238,3 +277,21 @@ func (c *ClockTracker) Invalidate(err error) {
 
 // DriftPPM is the immutable relative rate bound used for event mapping.
 func (c *ClockTracker) DriftPPM() float64 { return c.ppm }
+
+// ClockRateInterval is the envelope of frontend-minus-caller average rate
+// bounds from probe pairs; the relative rate need not stay constant. A WAN
+// pair may provide only a wide bound; its midpoint is never treated as a rate.
+type ClockRateInterval struct {
+	LowerPPM float64 `json:"lower_ppm"`
+	UpperPPM float64 `json:"upper_ppm"`
+}
+
+func (c *ClockTracker) ObservedRate() *ClockRateInterval {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.rate == nil {
+		return nil
+	}
+	rate := *c.rate
+	return &rate
+}

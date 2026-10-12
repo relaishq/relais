@@ -320,6 +320,7 @@ func (r *recorder) classifyDistributedEvent(report *MoveReport, limit time.Durat
 	d := report.Distributed
 	if !d.Mapped {
 		invalidateDistributedContent(&report.Measurement, "event clock mapping unavailable")
+		d.BaselineFloor = DurationInterval{Lower: floor.Lower, Upper: max(floor.Upper, limit)}
 		return
 	}
 	lo, hi := r.since(d.Start.Earliest), r.since(d.Start.Latest)
@@ -345,7 +346,7 @@ func (r *recorder) classifyDistributedEvent(report *MoveReport, limit time.Durat
 		p := *report
 		p.Start, p.End = start, end
 		if p.Kind == "takeover" {
-			p.Recovery = r.videoRecovery(start, limit)
+			p.Recovery = r.classificationRecovery(start, limit)
 		}
 		m := r.classificationMeasurement(p, limit, baselineFloor)
 		refs := first
@@ -452,13 +453,22 @@ func (r *recorder) classifyDistributedEvent(report *MoveReport, limit time.Durat
 		d.FirstBaselines = nil
 		d.BaselineFloor = DurationInterval{Lower: floor.Lower, Upper: max(floor.Upper, limit)}
 	}
+	// The union/intersection loss proof and identified-live proof are independent
+	// of the classification cells. Neither can be replaced by an RTP point result.
+	mergeIntervalVerdict(&report.Measurement.AudioLoss, d.AudioLoss)
+	mergeIntervalVerdict(&report.Measurement.VideoLoss, d.VideoLoss)
+	if report.Kind == "takeover" && d.KillToLive == nil {
+		report.Measurement.FirstLiveVerdict.untrust("first identified post-recovery live content unavailable")
+	}
 	r.failIdentityMetrics(&report.Measurement)
 	report.Measurement.ContentLoss.Event.Audio.Trusted = report.Measurement.ContentLoss.Event.Audio.Trusted && report.Measurement.AudioLoss.Trusted
 	report.Measurement.ContentLoss.Event.Video.Trusted = report.Measurement.ContentLoss.Event.Video.Trusted && report.Measurement.VideoLoss.Trusted
 	report.Measurement.updateJudgment()
 	d.AudioLoss, d.VideoLoss = report.Measurement.AudioLoss, report.Measurement.VideoLoss
-	d.WindowOutcome = "pass"
-	d.Causes = slices.Clone(report.Measurement.Reasons)
+	if d.WindowOutcome == "" {
+		d.WindowOutcome = "pass"
+	}
+	d.Causes = append(d.Causes, report.Measurement.Reasons...)
 	if report.Measurement.Inconclusive {
 		d.WindowOutcome = "inconclusive"
 	}
@@ -487,6 +497,18 @@ func (r *recorder) classifyDistributedEvent(report *MoveReport, limit time.Durat
 			d.KillToLive = &live
 		} else {
 			d.KillToLive = nil
+		}
+	}
+}
+
+// Both independent interval proofs must establish trust. Identity corruption is
+// reapplied separately because it proves failure independently of clock trust.
+func mergeIntervalVerdict(dst *MetricVerdict, proof MetricVerdict) {
+	dst.Trusted = dst.Trusted && proof.Trusted
+	dst.Failed = dst.Trusted && (dst.Failed || proof.Failed)
+	for _, reason := range proof.Reasons {
+		if !slices.Contains(dst.Reasons, reason) {
+			dst.Reasons = append(dst.Reasons, reason)
 		}
 	}
 }

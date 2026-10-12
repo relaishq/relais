@@ -1,6 +1,7 @@
 package callharness
 
 import (
+	"fmt"
 	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
@@ -87,4 +88,34 @@ func TestClockIntersectsManyWANProbes(t *testing.T) {
 	require.Less(t, mapped.Latest.Sub(mapped.Earliest), 23*time.Millisecond, "older 20ms probe beats nearest 70ms probe, including drift and host error")
 	require.True(t, mapped.Earliest.Before(at.Add(1100*time.Millisecond)))
 	require.True(t, mapped.Latest.After(at.Add(1100*time.Millisecond)))
+}
+
+func TestClockAsymmetricHostComposition(t *testing.T) {
+	caller := time.Unix(1000, 0)
+	tracker, err := NewClockTracker(0)
+	require.NoError(t, err)
+	require.NoError(t, tracker.Add(ClockProbe{CallerSend: caller, CallerReceive: caller.Add(2 * time.Millisecond), ServerReceive: caller.Add(3001 * time.Millisecond), ServerSend: caller.Add(3001 * time.Millisecond)}))
+	mapped, err := tracker.Map(caller.Add(3006*time.Millisecond), OffsetInterval{Lower: 4 * time.Millisecond, Upper: 9 * time.Millisecond})
+	require.NoError(t, err)
+	require.Equal(t, caller.Add(-4*time.Millisecond), mapped.Earliest)
+	require.Equal(t, caller.Add(3*time.Millisecond), mapped.Latest)
+}
+
+func TestClockObservedRateRejectsUnderstatedDrift(t *testing.T) {
+	for _, rate := range []float64{50, 200, -200} {
+		t.Run(fmt.Sprint(rate), func(t *testing.T) {
+			tracker, err := NewClockTracker(100)
+			require.NoError(t, err)
+			at := time.Unix(1000, 0)
+			require.NoError(t, tracker.Add(probeAt(at, 0, time.Millisecond)))
+			err = tracker.Add(probeAt(at.Add(100*time.Second), time.Duration(rate*100)*time.Microsecond, time.Millisecond))
+			if rate == 50 {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "exceeds stated drift bound")
+				require.Error(t, tracker.Err())
+			}
+			require.NotNil(t, tracker.ObservedRate())
+		})
+	}
 }

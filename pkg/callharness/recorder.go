@@ -21,8 +21,13 @@ const (
 // offsets from the moment the caller started dialing. Nothing is recorded
 // after hangup, so tearing the call down does not show up as a failure.
 type recorder struct {
-	distributed *DistributedOptions
-	armed       map[OperationIdentity]time.Time
+	distributed                *DistributedOptions
+	armed                      map[OperationIdentity]time.Time
+	audioSends, videoSends     []evidenceRef
+	audioReturns, videoReturns []evidenceRef
+	prepared                   *measurementIndex
+	measurementMu              sync.Mutex
+	measurementLockTime        time.Duration
 
 	recording              RecordingOptions
 	lastCompact            time.Duration
@@ -402,6 +407,7 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 		if unit.returnedAt == 0 {
 			unit.returnedAt = at
 			r.sentAudioUnits[string(pkt.Payload)] = unit
+			r.audioReturns = append(r.audioReturns, evidenceRef{at: at, audio: string(pkt.Payload)})
 		} else {
 			unit.returnedAt, unit.identity, unit.replayed = at, string(pkt.Payload), true
 			r.repeatedAudioReturns = r.appendRepeat(r.repeatedAudioReturns, unit)
@@ -589,7 +595,6 @@ func (r *recorder) decodeInput(i int) ([]vp8Frame, image.Point) {
 // report returns the measurements. Call it after hangup.
 func (r *recorder) report() *Report {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	rep := &Report{
 		StartedAt:            r.start,
@@ -635,13 +640,24 @@ func (r *recorder) report() *Report {
 		rep.Tracks = append(rep.Tracks, report)
 	}
 	rep.Recording = r.memoryGauge()
-	rep.Moves = r.moveReports()
 	rep.Consent = r.consentReport()
+	view := r
+	if r.distributed != nil {
+		view = r.measurementSnapshot(r.hungUpAt, len(r.moves))
+	} else {
+		rep.Moves = r.moveReports()
+	}
+	r.mu.Unlock()
+	if view != r {
+		view.prepareMeasurementIndex()
+		rep.Moves = view.moveReports()
+	}
+
 	if r.distributed != nil {
 		d := r.distributed
-		rep.Distributed = &DistributedRecording{DriftPPM: d.Clock.DriftPPM(), RunID: d.RunID, ControlOffset: d.ControlOffset, WorkerOffset: d.WorkerOffset, Probes: d.Clock.Probes()}
+		rep.Distributed = &DistributedRecording{ObservedRate: d.Clock.ObservedRate(), DriftPPM: d.Clock.DriftPPM(), RunID: d.RunID, ControlOffset: d.ControlOffset, WorkerOffset: d.WorkerOffset, Probes: d.Clock.Probes()}
 		rep.Distributed.Outcome, rep.Distributed.Causes = JudgeDistributedTrials(rep.Moves)
-		for id := range r.armed {
+		for id := range view.armed {
 			rep.Distributed.Armed = append(rep.Distributed.Armed, id)
 		}
 		slices.SortFunc(rep.Distributed.Armed, func(a, b OperationIdentity) int {

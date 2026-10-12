@@ -1,8 +1,13 @@
 package loadgen
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"github.com/relais/pkg/callharness"
 	"github.com/stretchr/testify/require"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -75,4 +80,95 @@ func TestDistributedReportNeverFallsBackToTimestampJoin(t *testing.T) {
 	r := &callharness.Report{StartedAt: at, Distributed: &callharness.DistributedRecording{RunID: "run"}}
 	move := callharness.MoveReport{Kind: "takeover", From: 0}
 	require.False(t, MatchesEvent(e, r, move), "missing distributed identities cannot use the local timestamp matcher")
+}
+
+func TestFailedPeriodicProbeIsMissingSample(t *testing.T) {
+	mode := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if mode == 3 {
+			_, err := w.Write([]byte("{}"))
+			require.NoError(t, err)
+			return
+		}
+		if mode == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		received := time.Now()
+		sent := received
+		if mode == 2 {
+			sent = received.Add(-time.Second)
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(map[string]time.Time{"received_at": received, "sent_at": sent}))
+	}))
+	defer server.Close()
+	tracker, err := callharness.NewClockTracker(100)
+	require.NoError(t, err)
+	require.NoError(t, sampleDistributedClock(context.Background(), tracker, server.Client(), server.URL))
+	mode = 1
+	require.Error(t, sampleDistributedClock(context.Background(), tracker, server.Client(), server.URL))
+	require.NoError(t, tracker.Err())
+	require.Len(t, tracker.Probes(), 1)
+	mode = 3
+	require.Error(t, sampleDistributedClock(context.Background(), tracker, server.Client(), server.URL))
+	require.NoError(t, tracker.Err())
+	require.Len(t, tracker.Probes(), 1)
+	mode = 0
+	require.NoError(t, sampleDistributedClock(context.Background(), tracker, server.Client(), server.URL))
+	require.Len(t, tracker.Probes(), 2)
+	mode = 2
+	require.Error(t, sampleDistributedClock(context.Background(), tracker, server.Client(), server.URL))
+	require.Error(t, tracker.Err())
+}
+
+func TestDistributedRunPoolsAcrossCallsAndAllowsMoveOutlier(t *testing.T) {
+	baseline := make([]time.Duration, 50)
+	for i := range baseline {
+		baseline[i] = 20 * time.Millisecond
+	}
+	v := callharness.MetricVerdict{Trusted: true}
+	var calls []Message
+	var events []EventResult
+	for i := 0; i < 20; i++ {
+		session := fmt.Sprint("session-", i)
+		id := callharness.OperationIdentity{RunID: "run", OperationID: fmt.Sprint("move-", i), SessionID: session, Worker: "0", Epoch: 1}
+		gap := 20 * time.Millisecond
+		individual := "pass"
+		if i == 19 {
+			gap = 180 * time.Millisecond
+			individual = "fail"
+		}
+		m := callharness.MoveReport{Kind: "move", Identity: &id, Measurement: callharness.EventMeasurement{AudioLoss: v, ResumeVerdict: v, Audio: callharness.FreshnessReport{Verdict: v}}, Distributed: &callharness.DistributedMeasurement{WindowOutcome: "pass", Outcome: individual, Gaps: []callharness.DistributedGap{{Kind: "audio", BaselineCertain: baseline, BaselinePossible: baseline, EventGap: callharness.DurationInterval{Lower: gap, Upper: gap}}}}}
+		call := &callharness.Report{Distributed: &callharness.DistributedRecording{RunID: "run", Outcome: "inconclusive"}, Moves: []callharness.MoveReport{m}}
+		events = append(events, EventResult{Event: Event{Kind: "move"}, Affected: 1, Sessions: []string{session}, Identities: []callharness.OperationIdentity{id}})
+		if i < 10 {
+			kill := id
+			kill.OperationID = fmt.Sprint("kill-", i)
+			takeover := m
+			takeover.Kind = "takeover"
+			takeover.Identity = &kill
+			takeover.Distributed = &callharness.DistributedMeasurement{WindowOutcome: "pass", Outcome: "pass"}
+			call.Moves = append(call.Moves, takeover)
+			events = append(events, EventResult{Event: Event{Kind: "kill"}, Affected: 1, Sessions: []string{session}, Identities: []callharness.OperationIdentity{kill}})
+		}
+		calls = append(calls, Message{Session: session, Call: call})
+	}
+	r := RunReport{Callers: 20, Processes: []ProcessReport{{Complete: true, Calls: calls}}, Events: events}
+	r.Judge()
+	require.NotNil(t, r.Distributed)
+	require.Equal(t, "pass", r.Distributed.Outcome, r.Distributed.Causes)
+	require.Equal(t, "valid", r.Outcome, r.Causes)
+	for _, row := range r.Yardstick {
+		require.Equal(t, "pass", row.Outcome, row)
+	}
+	// A second outlier changes pooled p95 and must fail the distributed row.
+	calls[18].Call.Moves[0].Distributed.Gaps[0].EventGap = callharness.DurationInterval{Lower: 180 * time.Millisecond, Upper: 180 * time.Millisecond}
+	r.Judge()
+	require.Equal(t, "fail", r.Distributed.Outcome)
+	require.Equal(t, "valid", r.Outcome, "known caller failure does not invalidate generator evidence")
+	for _, row := range r.Yardstick {
+		if row.Metric == "distributed_window" {
+			require.Equal(t, "fail", row.Outcome)
+		}
+	}
 }

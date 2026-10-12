@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/relais/internal/loadgen"
+	"github.com/relais/pkg/callharness"
+	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -99,4 +103,18 @@ func TestMoveExcludesUndetectedKilledOwners(t *testing.T) {
 	if result.Error != "" || result.Affected != 1 || !reflect.DeepEqual(result.Sessions, []string{"live"}) || !reflect.DeepEqual(moved, result.Sessions) || result.FinishedAt.Before(result.At) {
 		t.Fatalf("%+v moved=%v", result, moved)
 	}
+}
+
+func TestLocalCapacityAndSoakRefuseDistributedEvidence(t *testing.T) {
+	r := loadgen.RunReport{Outcome: "valid", Processes: []loadgen.ProcessReport{{Calls: []loadgen.Message{{Call: &callharness.Report{Distributed: &callharness.DistributedRecording{RunID: "run"}}}}}}}
+	require.Equal(t, "inconclusive", judgeCapacity("move", r, 1, 1).Verdict)
+	require.Contains(t, judgeCapacity("move", r, 1, 1).Causes[0], "distributed point estimates")
+	require.Equal(t, "inconclusive", judgeSoak(config{}, r).Outcome)
+}
+
+func TestDistributedRequiresExplicitDrift(t *testing.T) {
+	old := runtime.GOMAXPROCS(0)
+	defer runtime.GOMAXPROCS(old)
+	err := runArgs([]string{"-external-caller", "-distributed", "-run-id=run", "-frontend-control-bound=1ms", "-frontend-worker-bound=1ms", "-signaling=http://127.0.0.1:9/calls", "-relay=127.0.0.1:9", "-output=" + filepath.Join(t.TempDir(), "caller.jsonl")})
+	require.ErrorContains(t, err, "requires -clock-drift-ppm")
 }

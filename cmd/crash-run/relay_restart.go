@@ -155,6 +155,9 @@ func relayRestartTrial(ctx context.Context, manager *clusterprocess.Manager, bin
 }
 
 func measureRelayRestart(report *callharness.Report, relayAddr string, killed, until time.Time, restoreOff bool, restored uint64) result {
+	if report.HasDistributedEvidence() {
+		return result{Unsupported: "local crash policy refuses distributed point estimates"}
+	}
 	r := result{Decrypt: report.DecryptionFailures.Total(), Reconnects: report.ICERestarts, Renegotiations: report.Renegotiations, RoutesRestored: restored}
 	at := killed.Sub(report.StartedAt)
 	flowing := len(report.Tracks) == 2

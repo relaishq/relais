@@ -350,7 +350,9 @@ func (r *recorder) moveReports() []MoveReport {
 		report.Tracks = slices.Clone(report.Tracks)
 		for j := range report.Tracks {
 			track := &report.Tracks[j]
-			track.PacketsAfter += track.packetCounter.packets - track.packetsAtSave
+			if track.packetCounter != nil {
+				track.PacketsAfter += track.packetCounter.packets - track.packetsAtSave
+			}
 		}
 		if report.resumedAfterEnd > 0 {
 			report.DecryptionFailuresAfterResume += r.decryptionFailures.Total() - report.decryptFailuresAtSave
@@ -362,6 +364,10 @@ func (r *recorder) moveReports() []MoveReport {
 // measureMoves measures only the pending prefix requested by the caller. A
 // maintenance tick must not remeasure later events whose history is retained.
 func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
+	if r.distributed != nil {
+		r.prepareMeasurementIndex()
+		defer func() { r.prepared = nil }()
+	}
 	reports := make([]MoveReport, 0, count)
 	baselineFloor := r.baselineFloor
 	firstAudio, firstVideo := r.firstAudio, r.firstVideo
@@ -420,8 +426,17 @@ func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
 			report.Tracks = append(report.Tracks, around)
 		}
 		limit := until
-		if move.event == nil && moveIndex+1 < len(r.moves) {
-			limit = r.since(r.moves[moveIndex+1].start)
+		if moveIndex+1 < len(r.moves) {
+			next := r.moves[moveIndex+1]
+			if move.event != nil {
+				if start, _, err := r.mappedMoveTimes(next); err == nil {
+					limit = min(limit, start.Lower)
+				} else {
+					limit = min(limit, r.since(next.armedAt))
+				}
+			} else {
+				limit = min(limit, r.since(next.start))
+			}
 		}
 		if report.Kind == "takeover" {
 			report.Recovery = r.videoRecovery(report.Start, limit)

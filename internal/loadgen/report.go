@@ -204,24 +204,30 @@ type WorkerRejoin struct {
 	CompletedAt   time.Time `json:"completed_at"`
 	LastHeartbeat time.Time `json:"last_heartbeat"`
 }
+type DistributedTrialResult struct {
+	Outcome string   `json:"outcome"`
+	Causes  []string `json:"causes,omitempty"`
+}
+
 type RunReport struct {
-	SentinelWorker                string             `json:"sentinel_worker,omitempty"`
-	MemoryMetric                  string             `json:"memory_metric,omitempty"`
-	WorkerRejoins                 []WorkerRejoin     `json:"worker_rejoins,omitempty"`
-	Leaks                         LeakReport         `json:"leaks,omitempty"`
-	Telemetry                     capacity.Telemetry `json:"telemetry"`
-	WorkerPeaks                   map[string]int     `json:"worker_peak_calls"`
-	StartedAt                     time.Time          `json:"started_at"`
-	Duration                      time.Duration      `json:"duration_ns"`
-	Callers                       int                `json:"callers"`
-	Limits                        Limits             `json:"limits"`
-	Processes                     []ProcessReport    `json:"processes"`
-	Events                        []EventResult      `json:"events"`
-	Yardstick                     []MetricRow        `json:"yardstick"`
-	Outcome                       string             `json:"outcome"`
-	Causes                        []string           `json:"causes"`
-	DriverStatusRequests          uint64             `json:"driver_status_requests"`
-	DriverStatusRequestsPerSecond float64            `json:"driver_status_requests_per_second"`
+	Distributed                   *DistributedTrialResult `json:"distributed,omitempty"`
+	SentinelWorker                string                  `json:"sentinel_worker,omitempty"`
+	MemoryMetric                  string                  `json:"memory_metric,omitempty"`
+	WorkerRejoins                 []WorkerRejoin          `json:"worker_rejoins,omitempty"`
+	Leaks                         LeakReport              `json:"leaks,omitempty"`
+	Telemetry                     capacity.Telemetry      `json:"telemetry"`
+	WorkerPeaks                   map[string]int          `json:"worker_peak_calls"`
+	StartedAt                     time.Time               `json:"started_at"`
+	Duration                      time.Duration           `json:"duration_ns"`
+	Callers                       int                     `json:"callers"`
+	Limits                        Limits                  `json:"limits"`
+	Processes                     []ProcessReport         `json:"processes"`
+	Events                        []EventResult           `json:"events"`
+	Yardstick                     []MetricRow             `json:"yardstick"`
+	Outcome                       string                  `json:"outcome"`
+	Causes                        []string                `json:"causes"`
+	DriverStatusRequests          uint64                  `json:"driver_status_requests"`
+	DriverStatusRequestsPerSecond float64                 `json:"driver_status_requests_per_second"`
 }
 
 // Judge keeps generator validity separate from caller failures. A saturated or
@@ -229,6 +235,10 @@ type RunReport struct {
 func (r *RunReport) Judge() {
 	var eventCauses []string
 	r.Yardstick, eventCauses = yardstick(r.Processes, r.Events)
+	r.Distributed = nil
+	if outcome, causes, present := distributedTrials(r.Processes); present {
+		r.Distributed = &DistributedTrialResult{Outcome: outcome, Causes: causes}
+	}
 	r.Outcome = "valid"
 	r.Causes = nil
 	if len(eventCauses) > 0 {

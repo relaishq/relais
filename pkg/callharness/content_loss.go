@@ -77,13 +77,33 @@ func (r *recorder) contentLossEvidence(move MoveReport, m EventMeasurement, audi
 	// Exclude earlier moves/probes as well as takeovers. Retained summaries
 	// and pending records both matter when a long call has compacted history.
 	for _, previous := range r.savedMoves {
-		if previous.Start < move.Start {
-			floor = max(floor, previous.Measurement.WindowEnd+contentSettleWindow, previous.End+contentWindowMargin+contentSettleWindow)
+		start, end, windowEnd := previous.Start, previous.End, previous.Measurement.WindowEnd
+		if d := previous.Distributed; d != nil {
+			if !d.Mapped {
+				floor = max(floor, m.WindowStart)
+				continue
+			}
+			start, end = r.since(d.Start.Earliest), r.since(d.End.Latest)
+			if resume, ok := d.Durations["resume"]; ok {
+				windowEnd = max(windowEnd, r.since(d.Start.Latest)+resume.Upper+contentWindowMargin)
+			}
+		}
+		if start < move.Start {
+			floor = max(floor, windowEnd+contentSettleWindow, end+contentWindowMargin+contentSettleWindow)
 		}
 	}
 	for _, previous := range r.moves {
-		if r.since(previous.start) < move.Start {
-			floor = max(floor, r.since(previous.end)+contentWindowMargin+contentSettleWindow)
+		start, end := r.since(previous.start), r.since(previous.end)
+		if previous.event != nil {
+			a, b, err := r.mappedMoveTimes(previous)
+			if err != nil {
+				floor = max(floor, m.WindowStart)
+				continue
+			}
+			start, end = a.Lower, b.Upper
+		}
+		if start < move.Start {
+			floor = max(floor, end+contentWindowMargin+contentSettleWindow)
 		}
 	}
 	end := m.WindowStart - contentSettleWindow

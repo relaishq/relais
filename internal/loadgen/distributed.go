@@ -50,16 +50,7 @@ func startDistributedClock(ctx context.Context, signaling string, client *http.C
 		return nil, err
 	}
 	endpoint := strings.TrimSuffix(signaling, "/calls") + "/clock"
-	sample := func() error {
-		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		p, err := callharness.ProbeClock(probeCtx, client, endpoint)
-		if err != nil {
-			tracker.Invalidate(err)
-			return err
-		}
-		return tracker.Add(p)
-	}
+	sample := func() error { return sampleDistributedClock(ctx, tracker, client, endpoint) }
 	if err := sample(); err != nil {
 		return nil, err
 	}
@@ -131,4 +122,19 @@ func registerDistributedFeed(mux *http.ServeMux, calls []*callharness.Call) {
 		}
 		_ = json.NewEncoder(w).Encode(calls[0].ClockProbes())
 	})
+}
+
+// A missing transport sample leaves prior probes and their drift widening
+// intact. Only a completed probe carrying invalid timestamps poisons trust.
+func sampleDistributedClock(ctx context.Context, tracker *callharness.ClockTracker, client *http.Client, endpoint string) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	p, err := callharness.ProbeClock(probeCtx, client, endpoint)
+	if err != nil {
+		if errors.Is(err, callharness.ErrClockEvidence) {
+			tracker.Invalidate(err)
+		}
+		return err
+	}
+	return tracker.Add(p)
 }

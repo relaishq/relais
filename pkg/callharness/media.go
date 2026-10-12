@@ -232,5 +232,6 @@ func (r *recorder) sendingAudio(frame []byte, duration time.Duration) ([]byte, e
 	r.pendingAudio = key
 	r.sentFrames[kindAudio][key] = struct{}{}
 	r.sentAudioUnits[key] = contentUnit{at: r.since(time.Now()), duration: duration}
+	r.audioSends = append(r.audioSends, evidenceRef{at: r.sentAudioUnits[key].at, audio: key})
 	return packet, nil
 }
