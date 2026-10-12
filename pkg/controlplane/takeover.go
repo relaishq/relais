@@ -100,6 +100,9 @@ func (p *Plane) Run(ctx context.Context) error {
 	ticker := time.NewTicker(p.config.CheckInterval)
 	defer ticker.Stop()
 	var wg sync.WaitGroup
+	var reconciling bool
+	var nextReconcile time.Time
+	var reconcileMu sync.Mutex
 	defer wg.Wait()
 	for {
 		select {
@@ -107,6 +110,18 @@ func (p *Plane) Run(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 			now := time.Now()
+			reconcileMu.Lock()
+			if !reconciling && !now.Before(nextReconcile) {
+				reconciling = true
+				nextReconcile = now.Add(p.ttl / 2)
+				wg.Go(func() {
+					p.reconcileOwnership(ctx)
+					reconcileMu.Lock()
+					reconciling = false
+					reconcileMu.Unlock()
+				})
+			}
+			reconcileMu.Unlock()
 			p.mu.Lock()
 			dead := []*registration{}
 			planned := []*registration{}
@@ -207,6 +222,7 @@ type takeoverState struct {
 	plannedHoldTarget       *registration // A planned hold may auto-release to this possibly adopted target.
 	crashMargins            bool
 	routed                  netip.AddrPort
+	routedLease             sessionstore.Lease
 	excluded                map[netip.AddrPort]bool
 	attempts                int
 	attemptLimit            int
@@ -256,12 +272,21 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 	if pending := source.pending[listed.SessionID]; pending != nil && pending.call != nil {
 		c = pending.call
 	}
-	if c == nil {
-		// A live lease is authoritative even if a racing move lost metadata.
-		c = &call{id: listed.SessionID}
-		p.calls[c.id] = c
-	}
 	p.mu.Unlock()
+	if c == nil {
+		// A stale inventory must not recreate a call already terminally counted.
+		current, err := p.store.Get(ctx, listed.SessionID)
+		if err != nil {
+			return
+		}
+		p.mu.Lock()
+		c = p.calls[listed.SessionID]
+		if c == nil {
+			c = &call{id: listed.SessionID, lease: current}
+			p.calls[c.id] = c
+		}
+		p.mu.Unlock()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	p.takeoverLocked(ctx, source, c, listed, detected)
@@ -271,10 +296,19 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 // A non-nil outcome has completed terminal accounting, independent of the
 // bounded status history. Nil means recovery is pending or ownership changed.
 func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *call, listed sessionstore.Lease, detected time.Time) (outcome *MoveResult) {
+	if c.terminal {
+		return nil
+	}
 	p.mu.Lock()
 	existing := source.pending[c.id]
+	if existing != nil && existing.routedLease.Epoch == 0 && existing.routed == listed.Worker {
+		existing.routedLease = listed
+	}
 	p.mu.Unlock()
 	lease, err := p.store.Get(ctx, c.id)
+	if err == nil {
+		c.rememberLease(lease)
+	}
 	if existing != nil && existing.candidate != nil {
 		candidate := *existing.candidate
 		if err == nil && lease.Worker == candidate.Worker && lease.Epoch == candidate.Epoch {
@@ -304,7 +338,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		}
 	}
 	if err != nil || lease.Worker != listed.Worker || lease.Epoch != listed.Epoch {
-		if errors.Is(err, sessionstore.ErrNotFound) {
+		if errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrEnded) {
 			p.mu.Lock()
 			pending := source.pending[c.id]
 			lastHeartbeat := source.lastHeartbeat
@@ -324,14 +358,18 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 					res.LastHeartbeat = time.Time{}
 				}
 				lost := true
-				if c.hungUp.Load() {
-					// Only End's completed hang-up explains a vanished pending lease.
+				if errors.Is(err, sessionstore.ErrEnded) || c.hungUp.Load() {
+					c.hungUp.Store(true)
+					// A committed release explains a normally ended pending lease.
 					// Keep cleanup, including any retained relay hold.
-					p.lose(c, pending.lease, pending.planned || pending.held)
+					p.lose(c, pending.lease, pending.planned || pending.held, pending.routedLease)
 					lost = false
 					if !pending.planned {
 						res.Kind = "ended"
 					}
+				}
+				if lost {
+					res.LossCause = "ownership_expired"
 				}
 				p.completeTakeover(source, c, pending.lease, &res, lost,
 					fmt.Errorf("controlplane: pending takeover lease vanished: %w", err))
@@ -355,7 +393,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		return
 	}
 	if pending == nil {
-		pending = &takeoverState{call: c, lease: lease, routed: lease.Worker,
+		pending = &takeoverState{call: c, lease: lease, routed: lease.Worker, routedLease: lease,
 			excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts}
 		source.pending[c.id] = pending
 	}
@@ -480,6 +518,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			return
 		}
 		pending.routed = target.addr
+		pending.routedLease = transferred
 		state := pending.plannedState
 		if pending.crashMargins {
 			state = nil
@@ -705,13 +744,32 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 // cancellation. Expired pending leases are terminal too, never silent exits.
 func (p *Plane) completeTakeover(source *registration, c *call, lease sessionstore.Lease,
 	res *MoveResult, lost bool, cause error) {
+	if c.terminal {
+		p.finishPending(source, c.id)
+		return
+	}
+	if lost {
+		c.terminal = true
+		if res.LossCause == "" {
+			res.LossCause = "recovery_failed"
+			if errors.Is(cause, sessionstore.ErrNotFound) {
+				res.LossCause = "checkpoint_missing"
+			} else if checkpointEnvelopeLoss(cause) {
+				res.LossCause = "checkpoint_unsafe"
+			}
+		}
+	}
 	record := res.Kind == "takeover" || res.Kind == "ended" || lost
 	if lost {
 		p.mu.Lock()
 		pending := source.pending[c.id]
 		held := pending != nil && pending.held
+		routedLease := sessionstore.Lease{}
+		if pending != nil {
+			routedLease = pending.routedLease
+		}
 		p.mu.Unlock()
-		p.lose(c, lease, res.Kind == "move" || held)
+		p.lose(c, lease, res.Kind == "move" || held, routedLease)
 	}
 	p.mu.Lock()
 	pending := source.pending[c.id]
@@ -767,8 +825,13 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 	}
 	if lost {
 		p.lostCount++
+		p.lossesByCause[res.LossCause]++
 	}
 	p.mu.Unlock()
+	// Publish terminal accounting before a slow or failed cleanup attempt.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	p.cleanupExpired(ctx, c)
 }
 
 func (p *Plane) finishPending(source *registration, id string) {
@@ -794,22 +857,20 @@ func (p *Plane) recentTakeovers() []MoveResult {
 	return out
 }
 
-func (p *Plane) lose(c *call, lease sessionstore.Lease, planned bool) {
-	// Cleanup outlives a cancelled detector context, as with move rollback.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	_ = p.store.Release(ctx, lease)
-	p.deleteFrames(c.id)
-	p.mu.Lock()
-	r := p.relay
-	p.mu.Unlock()
-	// Forget atomically discards held input and the ring before any legacy
-	// release can flush packets to a target that failed to resume.
-	r.ForgetSession(c.id)
-	if planned {
-		_, _ = r.ReleaseSession(c.id, netip.AddrPort{})
+func (p *Plane) lose(c *call, lease sessionstore.Lease, planned bool, routed ...sessionstore.Lease) {
+	c.lossLease = lease
+	c.cleanupLeases = nil
+	for _, old := range routed {
+		if old.Epoch != 0 && !sameTenure(old, lease) {
+			c.cleanupLeases = append(c.cleanupLeases, old)
+		}
 	}
-	p.forget(c)
+	// Also preserve unconditional local cleanup for legacy/fake relays, after
+	// verifying there is no successor. Built-in relays always compare tenures.
+	c.cleanupLegacy, c.cleanupPlanned = true, planned
+	p.mu.Lock()
+	c.cleanupPending = true
+	p.mu.Unlock()
 }
 
 // Replace swaps a dead, fully recovered registration for a fresh worker.

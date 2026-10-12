@@ -277,6 +277,35 @@ jobs:
           name: crash-run-buffer-logs
           path: bin/crash-run-*
 
+  store-stall:
+    timeout-minutes: 25
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+      - name: Install Redis and ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
+      - name: Build process driver
+        run: make build
+      # Only driver-owned Redis is paused. All three variants get five independent
+      # calls; loss trials observe silence, resume trials observe ongoing media.
+      - name: Accept five moderate store stalls
+        run: ./bin/crash-run -store-stall=moderate -runs=5 -after=10s
+      - name: Accept five long store stalls
+        run: ./bin/crash-run -store-stall=long -runs=5 -after=10s
+      - name: Accept five live-worker store stalls
+        run: ./bin/crash-run -store-stall=live -runs=5 -after=10s
+      - name: Upload store-stall failure logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: store-stall-logs
+          path: bin/crash-run-*
+
   cluster-tests-gate:
     runs-on: ubuntu-latest
     outputs:

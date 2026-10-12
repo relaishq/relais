@@ -1,12 +1,14 @@
 package controlplane
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,4 +50,20 @@ func TestHTTPOfferMoveStatusAndHangup(t *testing.T) {
 	require.Equal(t, http.StatusOK, hungup.Code, hungup.Body.String())
 	missing := request(http.MethodDelete, resource, "", "")
 	require.Equal(t, http.StatusNotFound, missing.Code)
+}
+
+func TestHTTPMoveEndedCallReturnsNotFound(t *testing.T) {
+	p, a, _, _ := setup(t)
+	id, _, err := p.Create(context.Background(), "offer", "a")
+	require.NoError(t, err)
+	require.NoError(t, a.EndSession(id))
+	// The registry still contains the call; the authoritative read must supply
+	// the compatible ended/not-found error before detector reconciliation.
+	_, err = p.Move(context.Background(), id, "b")
+	require.ErrorIs(t, err, sessionstore.ErrEnded)
+	require.ErrorIs(t, err, sessionstore.ErrNotFound)
+	response := httptest.NewRecorder()
+	p.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/calls/"+id+"/move", nil))
+	require.Equal(t, http.StatusNotFound, response.Code, response.Body.String())
+	require.Zero(t, p.lostCount)
 }

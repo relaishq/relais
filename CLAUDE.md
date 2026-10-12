@@ -90,7 +90,11 @@ main pushes and nightly runs are not cancelled by this policy.
 
 Nightly at 08:00 UTC, pushes to `main`, and manual `workflow_dispatch` runs
 add the full race harness and timing gates on memory and Redis, benchmarks,
-and `make crash-run`. The optional Redis Cluster gate is unchanged. To run
+and `make crash-run`. The `store-stall` job adds five trials of each of three real-process store-stall variants
+(moderate, long and live) on nightly and manual dispatch only, with failure
+logs and a 25-minute limit. Moderate resumes with scaled margins and no loss;
+long and live record one `ownership_expired` loss with conditional cleanup.
+The optional Redis Cluster gate is unchanged. To run
 manually, select **Actions → CI → Run workflow** on the desired branch.
 The short targets clear the Redis test address and disable its requirement,
 so all Redis subtests skip even when the invoking shell has Redis configured.

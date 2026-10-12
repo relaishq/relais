@@ -3,6 +3,7 @@ package clusterprocess
 import (
 	"context"
 	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -53,5 +54,22 @@ func TestReadyIncludesFinalExitLog(t *testing.T) {
 		cancel()
 		require.ErrorContains(t, err, "fatal startup: Redis authentication failed")
 		require.ErrorContains(t, err, "status 23")
+	}
+}
+
+func TestReapedChildSignalCannotTargetReusedPID(t *testing.T) {
+	exited, err := Start(t.TempDir(), "exited", os.Environ(), "/usr/bin/true")
+	require.NoError(t, err)
+	<-exited.Done()
+	defer exited.Stop()
+	victim, err := Start(t.TempDir(), "victim", os.Environ(), "/bin/sleep", "60")
+	require.NoError(t, err)
+	defer victim.Stop()
+	exited.pid = victim.pid
+	require.ErrorIs(t, exited.Signal(syscall.SIGKILL), os.ErrProcessDone)
+	select {
+	case <-victim.Done():
+		t.Fatal("reaped child's signal hit reused PID")
+	case <-time.After(100 * time.Millisecond):
 	}
 }

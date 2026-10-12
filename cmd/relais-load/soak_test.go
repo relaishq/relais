@@ -298,6 +298,12 @@ func TestSoakIndependentWorkerFailureAndCallerLifetime(t *testing.T) {
 			r.Telemetry.Processes = append(r.Telemetry.Processes, capacity.Process{Name: "worker-0", Peaks: map[string]float64{"relais_worker_active_sessions": 9}})
 		}},
 		{"lost call", func(r *loadgen.RunReport) { r.Telemetry.Processes[1].Last["relais_control_losses_total"] = 1 }},
+		{"expired ownership loss", func(r *loadgen.RunReport) {
+			r.Telemetry.Processes[1].Last[`relais_control_losses_total{cause="ownership_expired"}`] = 1
+		}},
+		{"checkpoint loss", func(r *loadgen.RunReport) {
+			r.Telemetry.Processes[1].Last[`relais_control_losses_total{cause="checkpoint_unsafe"}`] = 1
+		}},
 		{"early hangup", func(r *loadgen.RunReport) { r.Processes[0].Calls[0].Call.HungUpAt = r.Duration - time.Second }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

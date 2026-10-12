@@ -30,6 +30,7 @@ func readMetrics(t *testing.T, handler http.Handler) map[string]float64 {
 	require.NoError(t, err)
 	values := make(map[string]float64)
 	allowedLabels := map[string][]string{
+		"relais_control_losses_total":  {"cause"},
 		"relais_store_commands_total":  {"store"},
 		"relais_transport_bytes_total": {"transport", "client", "direction"},
 	}
@@ -126,7 +127,11 @@ func TestMetricsAcrossHTTPMoveAndTakeover(t *testing.T) {
 		require.EqualValues(t, 1, control["relais_control_"+name+"_total"], name)
 	}
 	require.EqualValues(t, 1, control["relais_control_active_calls"])
-	require.Zero(t, control["relais_control_losses_total"])
+	for _, cause := range []string{"ownership_expired", "checkpoint_missing", "checkpoint_unsafe", "recovery_failed"} {
+		key := `relais_control_losses_total{cause="` + cause + `"}`
+		require.Contains(t, control, key)
+		require.Zero(t, control[key])
+	}
 	require.Equal(t, beforeTakeover["relais_checkpoint_age_seconds_count"]+1, control["relais_checkpoint_age_seconds_count"])
 	require.Greater(t, control["relais_checkpoint_age_seconds_sum"], beforeTakeover["relais_checkpoint_age_seconds_sum"])
 	require.Greater(t, resumed[`relais_checkpoint_writes_total{result="success"}`], beforeWrites)

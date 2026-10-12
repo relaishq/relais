@@ -13,6 +13,7 @@ type Sample struct {
 	Name, Help string
 	Type       prometheus.ValueType
 	Value      float64
+	Labels     prometheus.Labels
 }
 
 func Counter(name, help string, value uint64) Sample {
@@ -27,13 +28,13 @@ type processCollector struct{ snapshot func() []Sample }
 
 func (c processCollector) Describe(ch chan<- *prometheus.Desc) {
 	for _, sample := range c.snapshot() {
-		ch <- prometheus.NewDesc(sample.Name, sample.Help, nil, nil)
+		ch <- prometheus.NewDesc(sample.Name, sample.Help, nil, sample.Labels)
 	}
 }
 
 func (c processCollector) Collect(ch chan<- prometheus.Metric) {
 	for _, sample := range c.snapshot() {
-		ch <- prometheus.MustNewConstMetric(prometheus.NewDesc(sample.Name, sample.Help, nil, nil), sample.Type, sample.Value)
+		ch <- prometheus.MustNewConstMetric(prometheus.NewDesc(sample.Name, sample.Help, nil, sample.Labels), sample.Type, sample.Value)
 	}
 }
 

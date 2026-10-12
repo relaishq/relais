@@ -25,8 +25,9 @@ type CreateRequest struct {
 	Offer string `json:"offer"`
 }
 type CreateReply struct {
-	ID     string `json:"id"`
-	Answer string `json:"answer"`
+	Lease  sessionstore.Lease `json:"lease"`
+	ID     string             `json:"id"`
+	Answer string             `json:"answer"`
 }
 type ExportReply struct {
 	State []byte `json:"state"`
@@ -69,12 +70,12 @@ func (w *Worker) PrivateHandler() http.Handler {
 		if !privateapi.Read(rw, r, &req) {
 			return
 		}
-		id, answer, err := w.CreateSession(r.Context(), req.Offer)
+		id, answer, lease, err := w.CreateSessionWithLease(r.Context(), req.Offer)
 		if err != nil {
 			workerAPIError(rw, err)
 			return
 		}
-		privateapi.Write(rw, CreateReply{ID: id, Answer: answer})
+		privateapi.Write(rw, CreateReply{ID: id, Answer: answer, Lease: lease})
 	})
 	mux.HandleFunc("DELETE /sessions/{id}", func(rw http.ResponseWriter, r *http.Request) {
 		if err := w.EndSession(r.PathValue("id")); err != nil {

@@ -190,7 +190,7 @@ func (r *Redis) keys(id string) []string {
 		tagID = "~" + base64.RawURLEncoding.EncodeToString([]byte(id))
 	}
 	tag := "{sess:" + tagID + "}"
-	return []string{r.prefix + "lease:" + tag, r.prefix + "state:" + tag, r.prefix + "record:" + tag, r.prefix + "epoch:" + tag, r.prefix + "routes:" + tag}
+	return []string{r.prefix + "lease:" + tag, r.prefix + "state:" + tag, r.prefix + "record:" + tag, r.prefix + "epoch:" + tag, r.prefix + "routes:" + tag, r.prefix + "ended:" + tag}
 }
 
 // All per-session transitions, including read/prune and fenced snapshot writes,
@@ -213,6 +213,7 @@ local function retain(candidate)
  redis.call('PEXPIREAT',KEYS[4],math.max(now(),tonumber(current[3]) or 0)+retention)
 end
 local function write(worker, nextEpoch)
+ redis.call('DEL',KEYS[6])
  local expires=string.format('%.0f',now()+ttl)
  redis.call('HSET',KEYS[1],'worker',worker,'epoch',nextEpoch,'expires',expires)
  redis.call('PEXPIREAT',KEYS[1],expires)
@@ -243,6 +244,10 @@ elseif op=='claim' then
 elseif op=='get' or op=='state' or op=='checkpoint' then
  if not current[1] then
   redis.call('DEL',KEYS[2],KEYS[3],KEYS[5])
+  if op=='get' then
+   local ended=redis.call('HMGET',KEYS[6],'worker','epoch','expires')
+   if ended[1] then return {4,ended[1],ended[2],ended[3]} end
+  end
   return {0}
  end
  if op=='get' then return reply() end
@@ -261,6 +266,11 @@ elseif op=='get' or op=='state' or op=='checkpoint' then
  if not blob then return {0} end
  return {1,blob,redis.call('HGET',KEYS[1],'state_seq') or ''}
 elseif op=='release' then
+ if matches() then
+  local expires=string.format('%.0f',now()+tonumber(ARGV[6]))
+  redis.call('HSET',KEYS[6],'worker',owner,'epoch',epoch,'expires',expires)
+  redis.call('PEXPIREAT',KEYS[6],expires)
+ end
  if matches() or (not current[1] and redis.call('GET',KEYS[3])==owner .. '/' .. epoch) then
   redis.call('DEL',KEYS[1],KEYS[2],KEYS[3],KEYS[5])
  end
@@ -579,7 +589,11 @@ func (r *Redis) Get(ctx context.Context, id string) (Lease, error) {
 	if err != nil {
 		return Lease{}, err
 	}
-	return decodeLease(id, result)
+	lease, err := decodeLease(id, result)
+	if err == nil && result[0].(int64) == 4 {
+		return lease, ErrEnded
+	}
+	return lease, err
 }
 func (r *Redis) Owner(ctx context.Context, id string) (netip.AddrPort, error) {
 	lease, err := r.Get(ctx, id)
@@ -652,7 +666,7 @@ func (r *Redis) transfer(ctx context.Context, from Lease, to netip.AddrPort, ttl
 	return lease, err
 }
 func (r *Redis) Release(ctx context.Context, lease Lease) error {
-	_, err := r.run(ctx, "release", lease.SessionID, lease.Worker.String(), strconv.FormatUint(lease.Epoch, 10), 0)
+	_, err := r.run(ctx, "release", lease.SessionID, lease.Worker.String(), strconv.FormatUint(lease.Epoch, 10), 0, EndedRetention.Milliseconds())
 	if err == nil {
 		r.unindex(lease)
 	}

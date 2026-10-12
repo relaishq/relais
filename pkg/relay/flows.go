@@ -100,6 +100,36 @@ type callerFlows struct {
 type flow struct {
 	worker  netip.AddrPort
 	session string
+	epoch   uint64 // trusted move/restore generation; zero only for legacy address-only stores
+}
+
+func (t *flowTable) noteEpoch(id string, worker netip.AddrPort, epoch uint64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, c := range t.sessions[id] {
+		for _, f := range []*flow{c.route, c.candidate} {
+			if f != nil && f.session == id && f.worker == worker && epoch >= f.epoch {
+				f.epoch = epoch
+			}
+		}
+	}
+}
+
+func (t *flowTable) forgetTenure(lease sessionstore.Lease) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, c := range t.sessions[lease.SessionID] {
+		matches := func(f *flow) bool {
+			return f != nil && f.session == lease.SessionID && f.worker == lease.Worker && (f.epoch == 0 || f.epoch == lease.Epoch)
+		}
+		if matches(c.candidate) {
+			t.dropCandidate(c)
+		}
+		if matches(c.route) {
+			t.dropRoute(c)
+		}
+	}
+	return len(t.sessions[lease.SessionID]) == 0
 }
 
 type flowLimits struct {
@@ -228,6 +258,7 @@ func (t *flowTable) moveSession(session string, from, to netip.AddrPort) {
 		}
 		if c.route != nil && c.route.session == session && (!from.IsValid() || c.route.worker == from) {
 			c.route.worker = to
+			c.route.epoch = 0 // address-only moves re-read the authoritative generation
 			c.routeChecks = bindingChecks{}
 		}
 	}
@@ -388,7 +419,7 @@ func (t *flowTable) propose(caller netip.AddrPort, f flow, now time.Time) (*call
 		return nil, false
 	}
 	if c != nil && c.candidate != nil {
-		if *c.candidate == f {
+		if c.candidate.worker == f.worker && c.candidate.session == f.session {
 			return c, true
 		}
 		t.dropCandidate(c) // frees a slot for the new candidate
@@ -650,7 +681,7 @@ func (t *flowTable) snapshot(caller netip.AddrPort, force bool, now time.Time) (
 	}
 	c.lastPersistQueued = now
 	c.lastPersistAuthenticated = c.lastAuthenticated
-	snapshot := routeSnapshot{record: sessionstore.Route{Caller: caller, SessionID: c.route.session, ConfirmedAt: c.confirmedAt, LastAuthenticated: c.lastAuthenticated, ExpiresAt: c.consentDeadline}, worker: c.route.worker, nominated: c.nominationPending}
+	snapshot := routeSnapshot{record: sessionstore.Route{Caller: caller, SessionID: c.route.session, Generation: c.route.epoch, ConfirmedAt: c.confirmedAt, LastAuthenticated: c.lastAuthenticated, ExpiresAt: c.consentDeadline}, worker: c.route.worker, nominated: c.nominationPending}
 	c.nominationPending = false
 	return snapshot, true
 }
@@ -681,7 +712,7 @@ func (t *flowTable) restore(record sessionstore.Route, worker netip.AddrPort, no
 	if t.routes.Len()+t.pending.Len() >= t.maxFlows {
 		return false
 	}
-	c = &callerFlows{caller: record.Caller, route: &flow{worker: worker, session: record.SessionID}, lastSeen: now, lastAuthenticated: record.LastAuthenticated, confirmedAt: record.ConfirmedAt, consentBound: true, consentDeadline: minTime(record.ExpiresAt, record.LastAuthenticated.Add(t.stickinessWindow))}
+	c = &callerFlows{caller: record.Caller, route: &flow{worker: worker, session: record.SessionID, epoch: record.Generation}, lastSeen: now, lastAuthenticated: record.LastAuthenticated, confirmedAt: record.ConfirmedAt, consentBound: true, consentDeadline: minTime(record.ExpiresAt, record.LastAuthenticated.Add(t.stickinessWindow))}
 	t.callers[c.caller] = c
 	c.routeElem = t.routes.PushFront(c)
 	t.index(c, record.SessionID)

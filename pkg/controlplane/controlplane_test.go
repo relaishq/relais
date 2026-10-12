@@ -275,8 +275,9 @@ func TestPrunesCallsEndedOutsideControlPlane(t *testing.T) {
 				require.NoError(t, err)
 				require.Empty(t, status.Calls)
 			} else {
-				require.Error(t, p.End(context.Background(), id))
+				require.NoError(t, p.End(context.Background(), id))
 			}
+			p.reconcileOwnership(context.Background())
 			require.Empty(t, p.calls, "ended calls must not accumulate metadata")
 		})
 	}
@@ -331,7 +332,7 @@ func TestEndPrunesMissingSessionWithLiveLease(t *testing.T) {
 	require.ErrorIs(t, p.End(context.Background(), id), mediaworker.ErrUnknownSession)
 	require.Empty(t, p.calls)
 	_, err = p.store.Get(context.Background(), id)
-	require.ErrorIs(t, err, sessionstore.ErrNotFound)
+	require.ErrorIs(t, err, sessionstore.ErrEnded)
 }
 
 func (r *fakeRelay) ForgetSession(id string) {

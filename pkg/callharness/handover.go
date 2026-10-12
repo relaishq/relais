@@ -169,6 +169,8 @@ func (c *Call) sessionID() (string, error) {
 // moveRecord is one handover the harness made.
 type moveRecord struct {
 	kind       string
+	lost       bool
+	lossCause  string
 	detection  time.Duration
 	from, to   int
 	start, end time.Time
@@ -227,6 +229,8 @@ func (r *recorder) move(record moveRecord) {
 // the system reported about it.
 type MoveReport struct {
 	resumedAfterEnd time.Duration
+	Lost            bool   `json:"lost,omitempty"`
+	LossCause       string `json:"loss_cause,omitempty"`
 	// Recovery measures video recovery from the caller's first post-margin RTP
 	// packet, including replay received while ResumeSession is still returning.
 	Recovery VideoRecovery
@@ -341,6 +345,8 @@ func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
 	for moveIndex, move := range r.moves[:count] {
 		report := MoveReport{
 			Kind:          move.kind,
+			Lost:          move.lost,
+			LossCause:     move.lossCause,
 			DetectionTime: move.detection,
 			From:          move.from,
 			To:            move.to,

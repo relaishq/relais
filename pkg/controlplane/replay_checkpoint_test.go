@@ -198,7 +198,9 @@ func TestCheckpointReplayTerminalFailuresDiscardBeforeRelease(t *testing.T) {
 			source.pending = map[string]*takeoverState{id: {call: p.calls[id], lease: lease, routed: lease.Worker, held: true,
 				replayPlan: &relay.ReplayPlan{}, excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts}}
 			if failure == "vanished-lease" {
-				require.NoError(t, p.store.Release(ctx, lease))
+				_, err = p.store.Renew(ctx, lease, time.Millisecond)
+				require.NoError(t, err)
+				time.Sleep(5 * time.Millisecond)
 			}
 			p.takeover(ctx, source, lease, time.Now())
 			require.True(t, r.forgotten)

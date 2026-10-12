@@ -55,3 +55,14 @@ func (c *Child) SignalGroup(signal syscall.Signal) error {
 	}
 	return syscall.Kill(-c.pid, signal)
 }
+
+// Signal targets only the owned child PID. Like SignalGroup, it holds the
+// reaping lock so that the PID cannot be reused between the check and syscall.
+func (c *Child) Signal(signal syscall.Signal) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.reaped {
+		return os.ErrProcessDone
+	}
+	return syscall.Kill(c.pid, signal)
+}

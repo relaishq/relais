@@ -344,13 +344,9 @@ func TestPendingTakeoverVanishedLeaseRecordsLossAndForgetsRoute(t *testing.T) {
 			require.Empty(t, r.forgotten)
 			current, err := p.store.Get(ctx, id)
 			require.NoError(t, err)
-			if step == "snapshot-vanished" {
-				require.NoError(t, p.store.Release(ctx, current))
-			} else {
-				_, err = p.store.Renew(ctx, current, time.Millisecond)
-				require.NoError(t, err)
-				time.Sleep(5 * time.Millisecond)
-			}
+			_, err = p.store.Renew(ctx, current, time.Millisecond)
+			require.NoError(t, err)
+			time.Sleep(5 * time.Millisecond)
 			require.True(t, p.recoverWorker(ctx, source, time.Now()))
 			status, err := p.Status(ctx)
 			require.NoError(t, err)
@@ -492,7 +488,9 @@ func TestUncertainExportTerminalOutcomeReleasesHold(t *testing.T) {
 			if ended {
 				require.NoError(t, p.End(ctx, id))
 			} else {
-				require.NoError(t, p.store.Release(ctx, lease))
+				_, err = p.store.Renew(ctx, lease, time.Millisecond)
+				require.NoError(t, err)
+				time.Sleep(5 * time.Millisecond)
 			}
 			p.takeover(ctx, source, lease, time.Now())
 			require.Empty(t, source.pending)
@@ -753,5 +751,5 @@ func TestHangupDuringRetainedPlannedMove(t *testing.T) {
 	body := planeMetricsBody(p)
 	require.Contains(t, body, "relais_control_moves_total 0\n")
 	require.Contains(t, body, "relais_control_move_errors_total 1\n", "hangup adds no second error")
-	require.Contains(t, body, "relais_control_losses_total 0\n")
+	requireControlLosses(t, body, 0)
 }

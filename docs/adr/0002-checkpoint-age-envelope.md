@@ -103,3 +103,79 @@ The changed status JSON uses explicit snake_case checkpoint fields.
 Metrics count successful/failed writes, terminal envelope policy events and
 write age (since the successful checkpoint commit), without per-session labels.
 Full export remains #39.
+
+## Missing ownership is a definitive loss (#99)
+
+The control plane retains every placed call in its existing in-memory registry
+until a terminal outcome, including the last observed owner and lease epoch.
+Built-in local and remote workers return the placed lease in the creation
+acknowledgement, before a control-plane store read can fail. Legacy worker
+adapters retain the existing ownership-read fallback and must implement
+`CreateSessionWithLease` to provide that placement guarantee during an outage.
+Its detector sweeps the registry at half the lease TTL, independently of worker heartbeat death
+and `/status` polling. An authoritative `ErrNotFound` for ownership means
+`ownership_expired`: never resume or re-claim that vanished tenure. Store errors
+are unknown outcomes and retain the call for retry. Recovery inventory alone
+is insufficient because expired leases disappear from `ListByWorker`.
+
+Reconciliation rechecks ownership under the same per-call coordination lock
+used by moves, recovery and hangup. Pending recovery remains owned by its
+existing retry path. A terminal guard records exactly one loss and one bounded
+`/status` event (`Lost: true`, `loss_cause: "ownership_expired"`). The existing
+`relais_control_losses_total` now has a bounded `cause` label for every loss:
+`ownership_expired`, `checkpoint_missing`, `checkpoint_unsafe`, or
+`recovery_failed`. Summing causes preserves the total loss count.
+
+A live worker still fences and closes on renewal or checkpoint `ErrLeaseLost`.
+It does not publish another loss report. Registry reconciliation accounts for
+the absent ownership even while that worker keeps sending healthy heartbeats.
+Successful hangup remains a terminal end rather than a loss. A matching
+release of a live lease atomically deletes the lease, snapshot and persisted
+routes and writes a five-minute **ended tombstone** containing that owner and
+epoch. Redis keeps the marker in a separate `ended:{sess:ID}` key on the same
+Cluster slot; ownership read/pruning never removes it with the record key.
+Memory has the same retention and lookup semantics. Authoritative `Get` returns
+`ErrEnded` with the released tenure. It also matches `ErrNotFound` for
+compatibility; callers distinguishing normal ends check `ErrEnded` first. A new
+claim supersedes the marker and stale releases cannot mark or delete its state.
+This covers worker-side DTLS close, consent timeout, connection/agent failure
+and a PeerConnection close racing a DELETE. These outcomes add no loss or
+checkpoint event. No separate normal-end counter is introduced.
+
+An explicit DELETE also conditionally releases the retained lease through the
+control plane when the worker's best-effort release fails. Committed ended
+evidence completes that hangup without a loss. If the control plane cannot
+commit or confirm the release either, inventory remains until reconciliation.
+
+This classification has a known limit: `Worker.Close` after a failed or
+timed-out drain, and agent failure, also release with the ended marker when the
+store is reachable. Those calls count as normal ends rather than losses, even
+when their termination was unintended. The marker proves a release, not the
+reason for that release. This behaviour is unchanged.
+
+If release fails while the store is unavailable, and the lease then expires,
+there is no committed ended evidence. That genuinely ambiguous outcome still
+counts as `ownership_expired`. The control plane cannot infer a normal end
+from an absent lease alone.
+
+Cleanup releases only the recorded owner/epoch, which atomically fences lease,
+snapshot and persisted-route deletion. The relay uses conditional tenure cleanup
+(ADR 0003), including the known routed tenure of an unfinished move. A successor
+observed during cleanup is preserved. Accounting happens on authoritative
+absence and does not wait for cleanup replies. The registry keeps the exact
+lost token for retry until cleanup finishes; pending terminal cleanup does not
+count as an active call or allow another move/resume. Retries never count a
+second loss. Both vanished-ownership and checkpoint/recovery losses retain
+cleanup jobs. Retries back off from 250 ms to a 30-second cap and are serviced
+by the detector, never inline in `/status`. A relay HTTP 404 or 405 on the
+conditional cleanup endpoint is logged and treated as a final no-op during a
+rolling upgrade; it never falls back to unsafe session-ID deletion. Frame cleanup stays serialized with
+control-plane coordination. Missing ownership has no checkpoint age evidence:
+it increments the loss counter, not the checkpoint envelope counter. No zero
+age or zero margin proves a fresh snapshot.
+
+Workers, control and relay must upgrade together for the placed-lease reply
+and conditional cleanup private API.
+The registry, counters and bounded event history do not survive a control-plane
+restart. Durable call inventory is outside #99. Lease lifetimes and the
+checkpoint envelope are unchanged; the outage budget is separate work (#100).

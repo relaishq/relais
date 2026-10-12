@@ -806,6 +806,11 @@ func newGatedOwners() *gatedOwners {
 }
 
 func (g *gatedOwners) Owner(ctx context.Context, sessionID string) (netip.AddrPort, error) {
+	lease, err := g.Get(ctx, sessionID)
+	return lease.Worker, err
+}
+
+func (g *gatedOwners) Get(ctx context.Context, sessionID string) (sessionstore.Lease, error) {
 	g.mu.Lock()
 	g.lookups[sessionID]++
 	gate := g.gate
@@ -815,11 +820,11 @@ func (g *gatedOwners) Owner(ctx context.Context, sessionID string) (netip.AddrPo
 		select {
 		case <-gate:
 		case <-ctx.Done():
-			return netip.AddrPort{}, ctx.Err()
+			return sessionstore.Lease{}, ctx.Err()
 		}
 	}
 
-	return g.Memory.Owner(ctx, sessionID)
+	return g.Memory.Get(ctx, sessionID)
 }
 
 func (g *gatedOwners) block() {

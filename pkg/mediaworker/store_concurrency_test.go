@@ -221,7 +221,7 @@ func TestFailedClaimCandidateIsCleanedUpInBackground(t *testing.T) {
 				require.NoError(t, err)
 				require.Greater(t, current.Epoch, lease.Epoch)
 			} else {
-				require.ErrorIs(t, err, sessionstore.ErrNotFound)
+				require.ErrorIs(t, err, sessionstore.ErrEnded)
 			}
 		})
 	}

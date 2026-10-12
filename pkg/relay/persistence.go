@@ -103,7 +103,7 @@ func (p *routeWrites) write(snapshot routeSnapshot) {
 		}
 		return
 	}
-	if lease.Worker != snapshot.worker {
+	if lease.Worker != snapshot.worker || snapshot.record.Generation != 0 && snapshot.record.Generation != lease.Epoch {
 		return
 	}
 	current, ok := r.flows.forwardRoute(snapshot.record.Caller)
@@ -150,9 +150,13 @@ func (r *Relay) restoreRoutes() {
 			}
 			seen[route.SessionID] = true
 			lease, err := r.cfg.Routes.Get(ctx, route.SessionID)
-			if err == nil || errors.Is(err, sessionstore.ErrNotFound) {
+			if err == nil {
 				leases[route.SessionID] = lease
-			} else if !errors.Is(err, sessionstore.ErrNotFound) {
+			} else if errors.Is(err, sessionstore.ErrNotFound) {
+				// ErrEnded carries the released tenure, not a live owner. Preserve
+				// known absence without accidentally restoring that token's epoch.
+				leases[route.SessionID] = sessionstore.Lease{}
+			} else {
 				loadErr = errors.Join(loadErr, err)
 			}
 		}
