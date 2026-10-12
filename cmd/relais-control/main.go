@@ -22,6 +22,8 @@ func run() error {
 	relayURL := flag.String("relay", processrun.Env("RELAIS_RELAY_URL", ""), "relay control HTTP URL")
 	httpAddr := flag.String("http", processrun.Env("RELAIS_CONTROL_HTTP", "127.0.0.1:0"), "WHIP and private heartbeat HTTP address")
 	demoRegister := flag.Bool("demo-register", false, "enable loopback demo replacement registration")
+	var testWorkers testWorkerAllowlist
+	flag.Var(&testWorkers, "test-register-worker", "enable private test registration for IP=HTTP-first-last,UDP-first-last (repeat per host)")
 	var registered workers
 	flag.Var(&registered, "worker", "name=http://worker-address (repeat for each worker)")
 	flag.Parse()
@@ -49,10 +51,7 @@ func run() error {
 	plane := controlplane.NewWithConfig(r, store, controlplane.Config{FrameCache: frames, StoreOutageBudget: storeConfig.OutageBudget})
 	// Serve heartbeats during registration. A slow later worker must not make
 	// an earlier healthy registration age past DeadAfter before Run starts.
-	handler := plane.ProcessHandler()
-	if *demoRegister {
-		handler = demoHandler(plane, r)
-	}
+	handler := controlHandler(plane, r, *demoRegister, testWorkers, testWorkerClient())
 	served := make(chan struct{})
 	serveErr := make(chan error, 1)
 	go func() { defer close(served); serveErr <- processrun.Serve(ctx, listener, handler) }()

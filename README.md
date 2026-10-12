@@ -449,11 +449,51 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   while it starts. Each process prints one JSON readiness line with its PID
   and bound addresses; ephemeral loopback ports are the defaults.
 
+For distributed process tests, the control binary has a separate opt-in
+`POST /private/test/register` route. Enable it with a repeatable flag that names
+each exact private worker IP and its inclusive HTTP and UDP port ranges:
+
+```text
+-test-register-worker=10.0.0.10=9300-9399,41010-41109
+-test-register-worker=10.0.0.11=9400-9499,42000-42099
+```
+
+The request is JSON, for example. Names must contain printable characters,
+use at most 64 UTF-8 bytes, and contain at least one non-space character:
+
+```json
+{"name":"fresh-2","url":"http://10.0.0.10:9301","address":"10.0.0.10:41011"}
+```
+
+Hosts must be literal RFC 1918 or IPv6 unique-local addresses. DNS names,
+loopback, public IPs, CIDRs and duplicate host flags are refused. The URL must
+use HTTP with an explicit allowed port and no credentials, path, query or
+fragment. The media address must use the same host and an allowed UDP port.
+The worker's `/status` must report that exact media address before registration.
+Worker requests use no environment proxy and do not follow redirects.
+Successful registration returns HTTP 200 with `name` and `address`; invalid
+requests return 400, and worker, relay or duplicate-registration failures return
+409. The relay accepts the verified media address before the control plane can
+select the worker. A failed relay update prevents control-plane registration.
+`Plane.Register` still rejects reused names and media addresses. Such a rejection
+can leave the verified, in-bounds address in the relay allowlist; forwarding still
+requires a confirmed caller flow. The route does not replace or revive an old
+registration. Use a fresh name and ports for each replacement process. The
+existing relay-sync loop continues to restore registrations after relay restarts.
+
+This route is disabled when no `-test-register-worker` flags are supplied.
+It does not enable or broaden the loopback-only `-demo-register` route or change
+local defaults. Like the other private control routes, it has **no authentication**
+and is **private-network only**. Restrict access to trusted test participants.
+For a private control listener, explicitly allow its private prefix through
+`RELAIS_PRIVATE_NETS`; the worker allowlist does not grant listener access.
+
 The loopback control listener serves WHIP-style `POST /calls`, `DELETE /calls/{id}`,
 move/drain endpoints and `GET /status`, plus a private heartbeat endpoint. The
 worker API wraps create/end/export/resume/status; the relay API wraps worker
-registration/removal and move/forget/hold/release. Private HTTP listeners refuse
-non-loopback binds. These unauthenticated APIs are a local prototype limit:
+registration/removal and move/forget/hold/release. Private HTTP listeners allow
+loopback by default, or explicitly allowed private prefixes through
+`RELAIS_PRIVATE_NETS`. These unauthenticated APIs are a prototype limit:
 loopback is not a security boundary on a multi-user host. Any local user able
 to connect can invoke mutations and read worker snapshot key material.
 Snapshots containing key material travel over this private HTTP leg.
