@@ -183,7 +183,7 @@ checkpoint envelope are unchanged; the outage budget is separate work (#100).
 ## Live store outages (#100)
 
 [ADR 0008](0008-store-outage-budget.md) retains worker leases and snapshots for
-the configurable outage budget plus three seconds (33 s default), keeping the
+the configurable outage budget plus four seconds (34 s default), keeping the
 one-second renewal and 100 ms snapshot cadence. Retention changes; checkpoint
 safety does not. Live sessions keep current keys/counters. Crash recovery still
 passes the age/margin/cap policy. Actual expiry uses the #99 counted-loss rules.

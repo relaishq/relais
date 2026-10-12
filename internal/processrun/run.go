@@ -39,6 +39,11 @@ func Env(name, fallback string) string {
 }
 func (c *StoreConfig) Flags(fs *flag.FlagSet) {
 	fs.DurationVar(&c.OutageBudget, "store-outage-budget", sessionstore.DefaultStoreOutageBudget, "live-call store outage retention budget; match on worker and control")
+	c.ConnectionFlags(fs)
+}
+
+// ConnectionFlags registers Redis connection settings without worker retention policy.
+func (c *StoreConfig) ConnectionFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.Address, "redis", Env("RELAIS_REDIS_ADDR", ""), "explicit Redis host:port (6379 is refused)")
 	fs.StringVar(&c.Prefix, "redis-prefix", Env("RELAIS_REDIS_PREFIX", "relais:process:"), "shared session-store namespace")
 	// Keep credentials out of command-line flags and readiness output.

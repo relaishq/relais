@@ -5,7 +5,9 @@ import "time"
 // DefaultStoreOutageBudget is retention headroom for established live calls.
 // It grants neither ownership nor permission to resume an old checkpoint.
 const DefaultStoreOutageBudget = 30 * time.Second
-const WorkerLeaseHeadroom = 3 * time.Second
+
+// Headroom covers renewal phase, one in-flight command deadline and recovery margin.
+const WorkerLeaseHeadroom = DefaultWorkerRenewInterval + transitionCommandLimit + time.Second
 const DefaultWorkerLeaseTTL = WorkerLeaseHeadroom + DefaultStoreOutageBudget
 const DefaultWorkerRenewInterval = time.Second
 

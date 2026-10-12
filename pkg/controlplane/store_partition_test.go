@@ -100,6 +100,20 @@ func (s *partitionedStore) ListByWorker(c context.Context, a netip.AddrPort) ([]
 	return s.Store.ListByWorker(c, a)
 }
 
+// Initially forwards the real HTTP heartbeats; the test cuts future sends
+// at the same fault boundary as A's store adapter.
+type partitionHeartbeats struct {
+	next    mediaworker.Heartbeats
+	blocked *atomic.Bool
+}
+
+func (h *partitionHeartbeats) Heartbeat(addr netip.AddrPort) error {
+	if h.blocked.Load() {
+		return errors.New("heartbeat partition")
+	}
+	return h.next.Heartbeat(addr)
+}
+
 type partitionWire struct {
 	net.PacketConn
 	mu       sync.Mutex
@@ -123,10 +137,11 @@ func (c *partitionWire) ReadFrom(b []byte) (int, net.Addr, error) {
 func TestPartitionedWorkerStoreTransferHasExclusiveCallerMedia(t *testing.T) {
 	forHTTPRecoveryStores(t, func(t *testing.T, store sessionstore.Store) {
 		aStore := &partitionedStore{Store: store}
+		var heartbeatGate atomic.Bool
 		conn, e := net.ListenPacket("udp4", "127.0.0.1:0")
 		require.NoError(t, e)
 		wire := &partitionWire{PacketConn: conn, received: map[string]bool{}}
-		s := newHTTPSystemWithSettings(t, nil, nil, nil, httpSystemSettings{store: store, workerStores: []sessionstore.Store{aStore}, skipSourceHeartbeats: true, deadAfter: 1200 * time.Millisecond, callerSocket: func() (net.PacketConn, error) { return wire, nil }})
+		s := newHTTPSystemWithSettings(t, nil, nil, nil, httpSystemSettings{store: store, workerStores: []sessionstore.Store{aStore}, sourceHeartbeatGate: &heartbeatGate, callerSocket: func() (net.PacketConn, error) { return wire, nil }})
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		call, e := s.harness.Dial(ctx, callharness.CallOptions{Video: true, Worker: 0})
@@ -141,6 +156,7 @@ func TestPartitionedWorkerStoreTransferHasExclusiveCallerMedia(t *testing.T) {
 		zombie, e := workerprobe.Zombie(s.workers[0].LocalAddr(), call.SessionID())
 		require.NoError(t, e)
 		aStore.blocked.Store(true)
+		heartbeatGate.Store(true)
 		require.Eventually(t, func() bool {
 			st, e := s.plane.Status(ctx)
 			return e == nil && len(st.Calls) == 1 && st.Calls[0].Owner == "1" && len(st.Takeovers) == 1 && st.Takeovers[0].Error == "" && !st.Takeovers[0].Lost
@@ -151,6 +167,10 @@ func TestPartitionedWorkerStoreTransferHasExclusiveCallerMedia(t *testing.T) {
 		require.True(t, time.Now().Before(old.ExpiresAt), "CAS takeover must precede old expiry")
 		require.Equal(t, 1, s.workers[0].SessionCount(), "transient failures must leave A's live session running")
 		require.Positive(t, aStore.failures.Load())
+		// Discard pre-transfer observations: the positive control must see B.
+		wire.mu.Lock()
+		wire.received = make(map[string]bool)
+		wire.mu.Unlock()
 		var stale [][]byte
 		for range 40 {
 			b, e := zombie([]byte("PARTITIONED-WORKER-A"))
@@ -159,14 +179,18 @@ func TestPartitionedWorkerStoreTransferHasExclusiveCallerMedia(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 		}
 		time.Sleep(100 * time.Millisecond)
-		wire.mu.Lock()
-		accepted := 0
-		for _, b := range stale {
-			if wire.received[string(b)] {
-				accepted++
+		accepted := func() int {
+			wire.mu.Lock()
+			defer wire.mu.Unlock()
+			require.NotEmpty(t, wire.received, "B must reach the caller after transfer")
+			n := 0
+			for _, b := range stale {
+				if wire.received[string(b)] {
+					n++
+				}
 			}
-		}
-		wire.mu.Unlock()
+			return n
+		}()
 		require.Zero(t, accepted, "stale A ciphertext reached caller while B owned the route")
 		// Restore A's access. Its next renewal/checkpoint observes B's epoch and
 		// fences; it must never silently re-claim or change the relay back to A.

@@ -57,14 +57,21 @@ Takeover follows this order:
    only expiry does not resurrect a dead process; it may complete before the
    claim, but renewals of the replaced epoch are rejected afterwards.
    Otherwise, the candidate observes the same holder, epoch, predecessor
-   evidence and lease deadline across consecutive successful store polls.
+   evidence and lease deadline across successful store polls. Only intervals
+   bounded by two successful polls with that unchanged evidence accrue time.
    Only a full lease TTL without a deadline advance, measured on the candidate's
    local monotonic clock, permits an expired-tenure claim. Observation starts
    while the lease is live, so a frozen holder is recognized about one TTL after
    its last observed renewal, rather than adding another TTL after expiry.
-   Any failed or timed-out store poll resets the observation; an advancing
-   deadline or changed identity/epoch also resets it. A read after an outage
-   starts fresh evidence. The active normally renews within 200 ms, before the
+   A failed or timed-out poll adds no time. A short failure blip preserves
+   previously accumulated staleness; intervals touching failed polls are
+   uncounted. A continuous failure streak lasting at least the configured
+   renewal interval (200 ms by default) resets the evidence. Recovery after
+   such a streak starts fresh. An advancing deadline or changed identity/epoch
+   always resets it. Sustained failure streaks longer than the renewal interval
+   delay frozen-holder takeover until the store supplies a full TTL of
+   reachable staleness; there is no fixed takeover bound under arbitrary flapping.
+   The active normally renews within 200 ms, before the
    candidate can accumulate 600 ms of reachable staleness. Store expiry remains
    an additional claim precondition; the local observation never bypasses it.
    A renewal that wins before the claim extends expiry and the atomic claim
@@ -144,10 +151,12 @@ A plain restart claims a verifiably dead holder on its first successful
 observation. A standby normally detects SIGKILL by the next 100 ms poll. Socket
 startup, route restoration and worker registration still add time. A SIGSTOPped
 holder retains a live identity: the standby requires a full TTL of successful,
-unchanged lease observations and store-confirmed expiry before claiming it.
+accumulated unchanged lease observation time and store-confirmed expiry before
+claiming it. Short poll failures do not erase successful observation intervals.
 
 Defaults remain **600 ms lease**, **200 ms renewal**, and **100 ms poll**.
-A shared Redis outage resets every standby's staleness evidence. The active
+A shared Redis outage with a failure streak of at least one renewal interval
+resets every standby's staleness evidence. The active
 continues forwarding and retries renewal; matching holder/epoch renewal can
 revive its expired but unclaimed logical lease. When Redis returns, a healthy
 renewal advances the deadline before a fresh 600 ms observation can authorize
@@ -180,7 +189,9 @@ unreachable the active relay keeps forwarding existing routes; failed owner
 lookups and persistence retain their existing ADR 0003 behaviour. The standby
 cannot claim or activate, does not signal the active process, and does not bind.
 While renewal fails, retry it every 50 ms (or the configured renewal interval
-if shorter). Failed polls reset the staleness observer. On successful recovery,
+if shorter). Short failed polls contribute no staleness time. A continuous
+failure streak of at least one renewal interval resets the observer. On recovery
+after that streak,
 a full TTL of unchanged evidence is required before an expiry claim, giving a
 healthy active time to renew or recreate its record. A continuously connected
 candidate follows the same observation rule, so an active-only partition is

@@ -45,9 +45,10 @@ that standby must remain waiting and the relay epoch must remain unchanged.
 ## Live outage budget acceptance (#100)
 
 The default budget is 30 s. Matching `-store-outage-budget` flags on worker and
-control configure it. Worker lease and snapshot retention is budget plus 3 s.
+control configure it. Worker lease and snapshot retention is budget plus 4 s.
 Relay TTL stays 600 ms: standby takeover needs a full TTL of successful unchanged
-observations, and failed polls reset that evidence. Renewal cadence stays at one
+observations, and short failed polls add no time, and a failure streak of at least one renewal
+interval resets that evidence. Renewal cadence stays at one
 second for workers and 200 ms for relays. Persisted route consent deadlines stay unchanged.
 Retention headroom makes this a supported budget, not an exact termination timer:
 some pauses over 30 s may survive. A 35 s default pause expires ownership.
@@ -117,7 +118,7 @@ restore limit; cross-host relay failover is outside this budget.
 ## Frozen worker and relay checks
 
 `crash-run -worker-stop -compare-cache=false -runs=1 -after=3s` SIGSTOPs the owner
-without ending its process or expiring its 33 s lease. HTTP heartbeat detection
+without ending its process or expiring its 34 s lease. HTTP heartbeat detection
 still transfers ownership after 400 ms plus the 50 ms detector tick. The driver
 records the pause as the failure start, measures decrypted media recovery, and
 kills/reaps the frozen child during cleanup.

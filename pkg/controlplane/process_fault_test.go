@@ -96,18 +96,18 @@ func newHTTPSystem(t *testing.T, source, target, routing *lostReply, counts ...i
 }
 
 type httpSystemSettings struct {
-	workerStores         []sessionstore.Store
-	skipSourceHeartbeats bool
-	deadAfter            time.Duration
-	holdTimeout          time.Duration
-	agent                mediaworker.AgentConfig
-	store                sessionstore.Store
-	buffer               *relay.BufferConfig
-	targetTransport      http.RoundTripper
-	cache                framecache.Store
-	callerSocket         func() (net.PacketConn, error)
-	diagnostics          bool
-	packetTrace          func(mediaworker.PacketTrace)
+	workerStores        []sessionstore.Store
+	sourceHeartbeatGate *atomic.Bool
+	deadAfter           time.Duration
+	holdTimeout         time.Duration
+	agent               mediaworker.AgentConfig
+	store               sessionstore.Store
+	buffer              *relay.BufferConfig
+	targetTransport     http.RoundTripper
+	cache               framecache.Store
+	callerSocket        func() (net.PacketConn, error)
+	diagnostics         bool
+	packetTrace         func(mediaworker.PacketTrace)
 }
 
 func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply, settings httpSystemSettings, counts ...int) *httpSystem {
@@ -127,7 +127,7 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 	if routing != nil {
 		rr.Client = &http.Client{Transport: routing, Timeout: 2 * time.Second}
 	}
-	plane := controlplane.NewWithConfig(rr, store, controlplane.Config{DeadAfter: settings.deadAfter})
+	plane := controlplane.New(rr, store)
 	system := &httpSystem{plane: plane, relay: r, diagnostics: settings.diagnostics}
 	count := 2
 	if len(counts) > 0 {
@@ -166,11 +166,12 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 	ps := httptest.NewServer(plane.ProcessHandler())
 	t.Cleanup(ps.Close)
 	for i := range count {
-		if i == 0 && settings.skipSourceHeartbeats {
-			continue
-		}
 		name := strconv.Itoa(i)
-		system.workers[i].StartHeartbeats(&controlplane.RemoteHeartbeats{URL: ps.URL, Name: name})
+		var heartbeats mediaworker.Heartbeats = &controlplane.RemoteHeartbeats{URL: ps.URL, Name: name}
+		if i == 0 && settings.sourceHeartbeatGate != nil {
+			heartbeats = &partitionHeartbeats{next: heartbeats, blocked: settings.sourceHeartbeatGate}
+		}
+		system.workers[i].StartHeartbeats(heartbeats)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

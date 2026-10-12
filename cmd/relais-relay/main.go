@@ -24,7 +24,7 @@ func run() error {
 
 func runWithLease(acquire func(context.Context, bool, string, relaylease.Config) (commandGuard, error)) error {
 	var storeConfig processrun.StoreConfig
-	storeConfig.Flags(flag.CommandLine)
+	storeConfig.ConnectionFlags(flag.CommandLine)
 	public := flag.String("media", processrun.Env("RELAIS_RELAY_MEDIA", "127.0.0.1:0"), "public UDP address")
 	leg := flag.String("leg", processrun.Env("RELAIS_RELAY_LEG", "127.0.0.1:0"), "private worker-leg UDP address")
 	httpAddr := flag.String("http", processrun.Env("RELAIS_RELAY_HTTP", "127.0.0.1:0"), "private control HTTP address")

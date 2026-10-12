@@ -113,3 +113,14 @@ func TestSecondSignalExitsDuringDrain(t *testing.T) {
 		t.Fatal("second SIGTERM was ignored while draining")
 	}
 }
+
+func TestRelayConnectionFlagsExcludeOutageBudget(t *testing.T) {
+	var c StoreConfig
+	relay := flag.NewFlagSet("relay", flag.ContinueOnError)
+	c.ConnectionFlags(relay)
+	require.Nil(t, relay.Lookup("store-outage-budget"))
+	require.NotNil(t, relay.Lookup("redis"))
+	worker := flag.NewFlagSet("worker", flag.ContinueOnError)
+	c.Flags(worker)
+	require.NotNil(t, worker.Lookup("store-outage-budget"))
+}

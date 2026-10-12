@@ -148,7 +148,7 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 		cancel()
 		claim := errors.Is(readErr, sessionstore.ErrNotFound)
 		missing := claim
-		stale := observation.observe(current, missing, readErr, time.Now(), cfg.TTL)
+		stale := observation.observe(current, missing, readErr, time.Now(), cfg.TTL, cfg.Renew)
 		if readErr != nil && !missing {
 			hadStoreFailure = true
 		}
@@ -206,7 +206,6 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 			observation.reset() // rejected or uncertain claim needs fresh evidence
 		}
 		if err != nil && !errors.Is(err, sessionstore.ErrNotFound) && !errors.Is(err, sessionstore.ErrLeaseHeld) && !errors.Is(err, sessionstore.ErrLeaseLost) {
-			observation.reset()
 			hadStoreFailure = true
 			failures++
 			log.Printf("relay lease claim unavailable; no takeover: %v", err)

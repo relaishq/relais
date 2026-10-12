@@ -733,3 +733,40 @@ func TestDefaultRelayLeaseKeepsFrozenHolderBudget(t *testing.T) {
 	defer g.Close()
 	require.InDelta(t, .6, time.Until(g.Lease().ExpiresAt).Seconds(), .05)
 }
+
+type isolatedPollBlips struct {
+	sessionstore.RelayLeases
+	reads atomic.Uint64
+}
+
+func (s *isolatedPollBlips) GetRelay(ctx context.Context, key string) (sessionstore.RelayLease, error) {
+	if s.reads.Add(1)%3 == 0 {
+		return sessionstore.RelayLease{}, sessionstore.ErrTransient
+	}
+	return s.RelayLeases.GetRelay(ctx, key)
+}
+
+// Exercise Acquire's error branch, not just the observer: resetting evidence
+// again while logging each failed poll would make this never take over.
+func TestAcquireFrozenHolderSurvivesIsolatedPollBlips(t *testing.T) {
+	base := sessionstore.NewMemory()
+	old, e := base.ClaimRelay(context.Background(), "one", process("a"), time.Millisecond)
+	require.NoError(t, e)
+	_, e = base.ActivateRelay(context.Background(), old)
+	require.NoError(t, e)
+	time.Sleep(3 * time.Millisecond)
+	s := &isolatedPollBlips{RelayLeases: base}
+	cfg := config(s)
+	fenced := 0
+	cfg.Fence = func(context.Context, processidentity.Identity) error { fenced++; return nil }
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	g, e := Acquire(ctx, cfg)
+	require.NoError(t, e)
+	defer g.Close()
+	require.GreaterOrEqual(t, time.Since(start), cfg.TTL)
+	require.Equal(t, 1, fenced)
+	require.Positive(t, g.Timing().StoreFailures)
+	t.Logf("FLAPPING_ACQUIRE ttl=%s poll=%s renew=%s failures=33%% takeover=%s", cfg.TTL, cfg.Poll, cfg.Renew, time.Since(start))
+}

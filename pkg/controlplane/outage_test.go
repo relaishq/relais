@@ -22,10 +22,10 @@ func (s *outageSweepStore) Get(ctx context.Context, id string) (sessionstore.Lea
 }
 
 // Expire just after the first sweep. The next sweep must keep the old 1.5s
-// cadence, rather than waiting half the new 33s retention lifetime.
+// cadence, rather than waiting half the new 34s retention lifetime.
 func TestOutageRetentionDoesNotSlowOwnershipExpiryDetection(t *testing.T) {
 	p, _, _, _ := setup(t)
-	require.Equal(t, 33*time.Second, p.ttl)
+	require.Equal(t, 34*time.Second, p.ttl)
 	p.config.DeadAfter = time.Hour // isolate ownership expiry from worker death
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -209,6 +209,9 @@ func judgeStoreStall(report *callharness.Report, status controlplane.Status, e *
 		return []string{"missing caller report"}
 	}
 	if e.Takeover.LossCause == "ownership_expired" {
+		if e.Variant == "long" {
+			return []string{"long requires checkpoint_unsafe with one envelope event; ownership expired"}
+		}
 		return judgeOwnershipExpired(report, status, e, relay, stalledAt, killed)
 	}
 	if len(status.Takeovers) == 0 {
@@ -223,6 +226,9 @@ func judgeStoreStall(report *callharness.Report, status controlplane.Status, e *
 		return failures
 	}
 	t := e.Takeover
+	if e.Variant == "long" {
+		check(t.LossCause == "checkpoint_unsafe", "long requires checkpoint_unsafe")
+	}
 	e.RequiredRTP, e.RequiredSRTCP, e.DefaultRTPCap = storeStallMargins(t.SnapshotAge, t.Checkpoint)
 	e.ExpectedOutcome = "resume"
 	if max(e.RequiredRTP, 8192) > e.DefaultRTPCap || e.RequiredSRTCP > 1<<31-1 {
@@ -484,7 +490,7 @@ func judgeOwnershipExpired(report *callharness.Report, status controlplane.Statu
 		}
 	}
 	t := e.Takeover
-	check((e.Variant == "long" || e.Variant == "live" || e.Variant == "expired") && e.ActualStall > 3*time.Second, "duration did not expire ownership")
+	check((e.Variant == "live" || e.Variant == "expired") && e.ActualStall > 3*time.Second, "duration did not expire ownership")
 	check(t.Lost && t.LossCause == "ownership_expired" && len(status.Takeovers) == 1 && len(status.Calls) == 0 && status.LostCount == 1, "ownership loss missing, duplicated or call retained")
 	check(e.LossEvents == 1 && e.ControlCounters[lossCounter("ownership_expired")] == 1, "ownership loss metric missing or duplicated")
 	check(e.EnvelopeEvents == 0, "absent checkpoint falsely counted as envelope decision")
