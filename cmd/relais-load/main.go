@@ -590,6 +590,14 @@ func runArgs(args []string) error {
 		if *externalCaller && (!addr.Addr().Is4() || addr.Addr().IsUnspecified() || addr.Port() == 0) {
 			return errors.New("relay requires a specific IPv4 media address and nonzero port")
 		}
+		if *externalCaller {
+			if !addr.Addr().IsLoopback() && *callerBind == "" {
+				return errors.New("external caller with a non-loopback relay requires -caller-bind to select a local IPv4 media address")
+			}
+			if bind, err := netip.ParseAddrPort(*callerBind); err == nil && bind.Port() != 0 && c.Callers > 1 {
+				return errors.New("multiple external callers require -caller-bind port 0 so each caller gets its own socket")
+			}
+		}
 		ctx, stop := processrun.Context()
 		defer stop()
 		external, err := childTopology(*signaling, addr, *callerNamespace, *callerBind)

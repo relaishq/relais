@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -42,6 +43,9 @@ func callerHTTPClient(signaling, certFile, tokenFile string) (*http.Client, erro
 		if err != nil {
 			return nil, fmt.Errorf("parse signaling certificate: %w", err)
 		}
+		if now := time.Now(); now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
+			return nil, errors.New("signaling certificate is outside its validity dates")
+		}
 		roots := x509.NewCertPool()
 		roots.AddCert(cert)
 		transport.TLSClientConfig = &tls.Config{
@@ -57,13 +61,26 @@ func callerHTTPClient(signaling, certFile, tokenFile string) (*http.Client, erro
 	}
 	var token string
 	if tokenFile != "" {
-		data, err := os.ReadFile(tokenFile)
+		file, err := os.Open(tokenFile)
 		if err != nil {
 			return nil, fmt.Errorf("read bearer token: %w", err)
 		}
+		defer func() { _ = file.Close() }()
+		info, err := file.Stat()
+		if err != nil {
+			return nil, fmt.Errorf("stat bearer token file: %w", err)
+		}
+		data, err := io.ReadAll(file)
+		if err != nil {
+			return nil, fmt.Errorf("read bearer token: %w", err)
+		}
+		// Remove surrounding whitespace while rejecting whitespace within a token.
 		token = strings.TrimSpace(string(data))
 		if token == "" || strings.ContainsAny(token, " \t\r\n") {
 			return nil, errors.New("bearer token file must contain one nonempty token")
+		}
+		if info.Mode().Perm()&0044 != 0 {
+			fmt.Fprintln(os.Stderr, "warning: bearer token file is group- or world-readable; restrict read access to its owner")
 		}
 	}
 	return &http.Client{
@@ -80,6 +97,9 @@ type callerTransport struct {
 
 func (t *callerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL.Scheme != t.origin.Scheme || !strings.EqualFold(req.URL.Host, t.origin.Host) {
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
 		return nil, errors.New("caller HTTP request leaves the signaling origin")
 	}
 	cloned := req.Clone(req.Context())

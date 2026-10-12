@@ -58,28 +58,31 @@ addresses are independent; HTTPS success does not prove UDP reachability.
 | `-signaling` | HTTP(S) URL ending in `/calls`, without URL credentials, query or fragment |
 | `-relay` | Literal relay IPv4 media address with a nonzero UDP port |
 | `-signaling-cert` | One PEM server certificate obtained through a trusted channel; optional when system trust is sufficient |
-| `-bearer-token-file` | File containing one bearer token; trailing whitespace is removed; requires HTTPS |
+| `-bearer-token-file` | File containing one bearer token; surrounding whitespace is removed; requires HTTPS |
 | `-caller-bind` | Literal local IPv4 address and UDP port; `:0` gives each caller its own allocated port |
 | `-caller-namespace` | Optional existing Linux network namespace; requires `-caller-bind` |
 | `-callers`, `-gomaxprocs` | Concurrent callers and this process's Go CPU budget; no child generators are spawned |
 | `-duration`, `-sample-every` | Media duration after `/start` and resource sample interval; duration >=1s, samples in [100ms,duration] |
 | `-video` | Audio plus sampled VP8 by default; `false` needs no video decoder |
 | `-output` | Required JSON-lines output file, overwritten at startup; also written to stdout |
-| `-parent-pid` | Optional original parent PID to watch; defaults to the launching process's parent |
+| `-parent-pid` | Optional original parent PID to watch; defaults to the launcher's PID (`os.Getppid()`) |
 
-Keep the token file private. The token is attached to signaling, status and
+Keep the token file private. Group- or world-readable token files produce a
+warning and remain usable. The token is attached to signaling, status and
 hangup requests through the same HTTP client and is never printed in readiness
 or caller reports. A pinned PEM replaces system roots and must match the exact
 server certificate. Normal certificate validity and IP SAN or hostname checks
 still apply. With an IP URL, the certificate must name that IP in its SAN.
-Certificate rotation requires a new trusted PEM. No insecure TLS option is
+Pins outside their validity dates are rejected when loaded. Certificate
+rotation requires a new trusted PEM. No insecure TLS option is
 provided. Requests using a pin or token cannot leave the signaling origin,
 including redirects and call resource URLs. HTTP without transport flags
 remains available for trusted local tests.
 
 With no namespace, `-caller-bind` binds directly on the host. A literal bind
 is required; hostnames, wildcard addresses and IPv6 are rejected. Each caller
-needs a distinct port, so use port zero for multiple calls. With no bind, the
+needs a distinct port, so multiple callers must use port zero. A non-loopback
+relay requires an explicit bind. With a loopback relay and no bind, the
 existing loopback socket and candidate behavior is preserved. Linux namespace
 callers still use the existing namespace socket factory. The internal `-child`
 mode remains available to the owned process driver.

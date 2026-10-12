@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -35,19 +36,30 @@ import (
 
 func testCallerCertificate(t *testing.T, ip string) (tls.Certificate, string) {
 	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	require.NoError(t, err)
-	cert := &x509.Certificate{
-		SerialNumber: serial, Subject: pkix.Name{CommonName: "caller test"},
+	return testSignedCallerCertificate(t, &x509.Certificate{
+		Subject:   pkix.Name{CommonName: "caller test"},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
 		IPAddresses:           []net.IP{net.ParseIP(ip)},
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
+	}, nil, nil)
+}
+
+func testSignedCallerCertificate(t *testing.T, cert, parent *x509.Certificate, signingKey *ecdsa.PrivateKey) (tls.Certificate, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	require.NoError(t, err)
+	cert.SerialNumber = serial
+	if parent == nil {
+		parent = cert
 	}
-	der, err := x509.CreateCertificate(rand.Reader, cert, cert, &key.PublicKey, key)
+	if signingKey == nil {
+		signingKey = key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, cert, parent, &key.PublicKey, signingKey)
 	require.NoError(t, err)
 	file := filepath.Join(t.TempDir(), "server.pem")
 	require.NoError(t, os.WriteFile(file, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600))
@@ -136,8 +148,11 @@ func TestExternalCallerHTTPS(t *testing.T) {
 				}
 			})
 			var ready bool
+			var capturedStdout bytes.Buffer
 			scanner := bufio.NewScanner(stdout)
 			for scanner.Scan() {
+				capturedStdout.Write(scanner.Bytes())
+				capturedStdout.WriteByte('\n')
 				var message struct {
 					Type string `json:"type"`
 					HTTP string `json:"http"`
@@ -155,6 +170,11 @@ func TestExternalCallerHTTPS(t *testing.T) {
 			}
 			waitErr := cmd.Wait()
 			require.NoError(t, scanner.Err())
+			require.NotContains(t, capturedStdout.String(), "test-caller-token", "token disclosed on stdout")
+			require.NotContains(t, stderr.String(), "test-caller-token", "token disclosed on stderr")
+			data, err := os.ReadFile(output)
+			require.NoError(t, err)
+			require.NotContains(t, string(data), "test-caller-token", "token disclosed in output file")
 			if tc.failure != "" {
 				require.Error(t, waitErr)
 				require.Contains(t, stderr.String(), tc.failure)
@@ -174,8 +194,6 @@ func TestExternalCallerHTTPS(t *testing.T) {
 				}
 			}
 			require.Equal(t, 1, deletes)
-			data, err := os.ReadFile(output)
-			require.NoError(t, err)
 			var calls int
 			for _, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
 				var message loadgen.Message
@@ -188,6 +206,88 @@ func TestExternalCallerHTTPS(t *testing.T) {
 				}
 			}
 			require.Equal(t, 1, calls)
+		})
+	}
+}
+
+func TestCallerCertificateExactPin(t *testing.T) {
+	ca, pinFile := testSignedCallerCertificate(t, &x509.Certificate{
+		Subject:   pkix.Name{CommonName: "test pin CA"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageCertSign, IsCA: true, BasicConstraintsValid: true,
+	}, nil, nil)
+	parent, err := x509.ParseCertificate(ca.Certificate[0])
+	require.NoError(t, err)
+	leaf, _ := testSignedCallerCertificate(t, &x509.Certificate{
+		Subject:   pkix.Name{CommonName: "different server leaf"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		IPAddresses: []net.IP{net.ParseIP("127.0.0.1")},
+		KeyUsage:    x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}, parent, ca.PrivateKey.(*ecdsa.PrivateKey))
+	parsedLeaf, err := x509.ParseCertificate(leaf.Certificate[0])
+	require.NoError(t, err)
+	roots := x509.NewCertPool()
+	roots.AddCert(parent)
+	_, err = parsedLeaf.Verify(x509.VerifyOptions{Roots: roots, DNSName: "127.0.0.1"})
+	require.NoError(t, err, "normal chain and IP SAN verification must accept this leaf")
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{leaf}, MinVersion: tls.VersionTLS12}
+	server.StartTLS()
+	defer server.Close()
+	client, err := callerHTTPClient(server.URL+"/calls", pinFile, "")
+	require.NoError(t, err)
+	defer client.CloseIdleConnections()
+	response, err := client.Get(server.URL + "/calls")
+	if response != nil {
+		_ = response.Body.Close()
+	}
+	require.ErrorContains(t, err, "does not match the pin")
+}
+
+func TestCallerCertificateValidityAtLoad(t *testing.T) {
+	for _, tc := range []struct {
+		name                string
+		notBefore, notAfter time.Time
+	}{
+		{"expired", time.Now().Add(-2 * time.Hour), time.Now().Add(-time.Hour)},
+		{"not yet valid", time.Now().Add(time.Hour), time.Now().Add(2 * time.Hour)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, pin := testSignedCallerCertificate(t, &x509.Certificate{NotBefore: tc.notBefore, NotAfter: tc.notAfter, IPAddresses: []net.IP{net.ParseIP("127.0.0.1")}, KeyUsage: x509.KeyUsageDigitalSignature}, nil, nil)
+			_, err := callerHTTPClient("https://127.0.0.1/calls", pin, "")
+			require.ErrorContains(t, err, "outside its validity dates")
+		})
+	}
+}
+
+func TestCallerTokenFilePermissionsWarning(t *testing.T) {
+	for _, mode := range []os.FileMode{0600, 0640, 0604} {
+		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
+			tokenFile := filepath.Join(t.TempDir(), "token")
+			require.NoError(t, os.WriteFile(tokenFile, []byte(" \ttest-private-token\r\n"), mode))
+			info, err := os.Stat(tokenFile)
+			require.NoError(t, err)
+			warningFile := filepath.Join(t.TempDir(), "warnings")
+			warnings, err := os.Create(warningFile)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = warnings.Close() })
+			client, err := func() (*http.Client, error) {
+				previous := os.Stderr
+				os.Stderr = warnings
+				defer func() { os.Stderr = previous }()
+				return callerHTTPClient("https://127.0.0.1/calls", "", tokenFile)
+			}()
+			require.NoError(t, err, "file permissions only warn")
+			defer client.CloseIdleConnections()
+			require.Equal(t, "test-private-token", client.Transport.(*callerTransport).token)
+			data, err := os.ReadFile(warningFile)
+			require.NoError(t, err)
+			require.NotContains(t, string(data), "test-private-token")
+			if info.Mode().Perm()&0044 != 0 {
+				require.Contains(t, string(data), "group- or world-readable")
+			} else {
+				require.Empty(t, data)
+			}
 		})
 	}
 }
@@ -212,7 +312,23 @@ func TestCallerTransportRejectsOtherOrigins(t *testing.T) {
 	require.ErrorContains(t, err, "leaves the signaling origin")
 	_, err = client.Get(other.URL + "/calls/other")
 	require.ErrorContains(t, err, "leaves the signaling origin")
+	body := &callerRequestBody{Reader: strings.NewReader("request content")}
+	req, err := http.NewRequest(http.MethodPost, other.URL+"/calls", body)
+	require.NoError(t, err)
+	_, err = client.Transport.RoundTrip(req)
+	require.ErrorContains(t, err, "leaves the signaling origin")
+	require.True(t, body.closed, "RoundTrip must close the body when it rejects a request")
 	require.False(t, received.Load(), "redirects and resource URLs cannot disclose the token")
+}
+
+type callerRequestBody struct {
+	io.Reader
+	closed bool
+}
+
+func (b *callerRequestBody) Close() error {
+	b.closed = true
+	return nil
 }
 
 func TestExternalCallerFlagValidation(t *testing.T) {
