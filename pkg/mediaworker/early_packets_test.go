@@ -96,7 +96,7 @@ func TestEarlyPacketsRetainOrderAndCountOverflow(t *testing.T) {
 			require.Eventually(t, func() bool {
 				s.mu.Lock()
 				defer s.mu.Unlock()
-				return s.srtpIn != nil && s.earlyPackets == nil && s.earlyDrain == nil
+				return s.srtpIn != nil && s.earlyPackets == nil
 			}, 5*time.Second, time.Millisecond)
 			if tc.fence {
 				s.handlePacket(testEncrypt(t, caller, 456, 4))
@@ -132,7 +132,7 @@ func TestEarlyPacketsRetainOrderAndCountOverflow(t *testing.T) {
 				require.NoError(t, err)
 				resumed := target.session(call.id)
 				resumed.mu.Lock()
-				ready, unused := resumed.srtpIn != nil, resumed.earlyPackets == nil && resumed.earlyDrain == nil
+				ready, unused := resumed.srtpIn != nil, resumed.earlyPackets == nil
 				resumed.mu.Unlock()
 				require.True(t, ready)
 				require.True(t, unused)

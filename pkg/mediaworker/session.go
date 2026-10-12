@@ -73,7 +73,6 @@ type session struct {
 	srtpIn       *srtp.Context // decrypts caller to worker
 	srtpOut      *srtp.Context // encrypts worker to caller
 	earlyPackets []earlyPacket // guarded by mu; ciphertext awaiting initial SRTP keys
-	earlyDrain   chan struct{} // guarded by mu; later media waits for queued frame appends
 
 	// fenced is set under mu when exported, when its lease is lost, or when
 	// a failed resume must close without disturbing the continuing caller.
@@ -409,25 +408,19 @@ func (s *session) startSRTP(conn *dtls.Conn) (srtp.SessionKeys, error) {
 	// Install and drain under one lock: a later packet cannot overtake input
 	// received during the handshake. Resume has no registered caller yet.
 	var results []mediaPacketResult
-	draining := len(s.earlyPackets) > 0
-	if draining {
-		s.earlyDrain = make(chan struct{})
-	}
 	for _, pkt := range s.earlyPackets {
 		if !s.fenced.Load() {
-			results = append(results, s.processSRTPPacketLocked(pkt))
+			result := s.processSRTPPacketLocked(pkt)
+			// Admission cannot block on a cache channel: the shared pending cap
+			// includes queued and in-flight work and matches channel capacity.
+			s.appendFrame(result.complete)
+			results = append(results, result)
 		}
 	}
 	s.earlyPackets = nil
 	s.mu.Unlock()
 	for _, result := range results {
-		s.finishMediaPacket(result)
-	}
-	if draining {
-		s.mu.Lock()
-		close(s.earlyDrain)
-		s.earlyDrain = nil
-		s.mu.Unlock()
+		s.logDecryptFailure(result.protocol, result.failure, result.decryptErr)
 	}
 
 	return config.Keys, nil
