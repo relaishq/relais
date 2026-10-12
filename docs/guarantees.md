@@ -10,10 +10,12 @@ sample applies only to its stated workload and topology. Independent machines,
 real cameras and sustained load cannot be inferred from namespace or loopback
 tests.
 
-The full soak is **pending [#41][soak-ticket], run by Derek through [#85][full-soak]**. Real devices are
-**pending [#45][device-ticket]**. Cloud confirmation is **pending [#48][cloud]**. The checkpoint-envelope
-row is **pending [#95][store-stall]**, a real-process store-stall run. The unresolved rollback failure in **#51** and
-agent-test flake in **#94** remain visible in this draft.
+The full soak is **pending [#41][soak-ticket], run by Derek through [#85][full-soak]**.
+Desktop Chrome with a real camera is **pending [#45][device-ticket]**. Mobile
+browsers are deferred to [#98][mobile]. Cloud confirmation is **pending
+[#48][cloud]**. The checkpoint-envelope row now passes the cited real-process
+store-stall sample. [PR #103][outage-pr] and [ADR 0008][outage-adr] add a bounded
+store-outage guarantee. **#51 remains open**; **#94 is fixed by [PR #97][early-media-pr]**.
 
 ## How to read the matrix
 
@@ -131,8 +133,9 @@ loss. On lossy links, a passing move is not a promise that the network loses
 no packets.
 
 **Status:** **Pass for the cited profile matrix and short LAN load sample.**
-Real-camera and Android results are pending #45; real-internet confirmation is
-pending #48. **#51 remains a known exception on aborted/rolled-back moves**;
+Desktop real-camera results are pending #45; mobile browsers are deferred to
+#98; real-internet confirmation is pending #48. **#51 remains a known exception
+on aborted/rolled-back moves**;
 the successful-move sample does not resolve it.
 
 ## Crash takeover with the relay buffer
@@ -187,8 +190,8 @@ controls on Memory and Redis. Buffer-off controls lost **340 ms of audio and
 measurements, not a browser audio-playback comparison.
 
 **Status:** **Pass within the cited buffer, checkpoint, profile and load
-conditions.** Pending #45 for real encoders and phone playback; pending #48 for
-the real internet. Overflow, expiry, relay-buffer loss and terminal adoption
+conditions.** Pending #45 for the desktop camera; mobile playback is deferred
+to #98; pending #48 for the real internet. Overflow, expiry, relay-buffer loss and terminal adoption
 failure can lose content or end a call. They have counted fallback/cleanup
 paths, not a universal no-loss guarantee. [PR #77][buffer-pr] and
 [ADR 0005][buffer-adr] record those failure paths. The incomplete-ring fix
@@ -255,6 +258,66 @@ after the active also dies.
 Cross-host relay failover is excluded. Loaded, shaped and cloud standby timing
 are not measured.
 
+## Store outages
+
+**Guarantee:** With live worker, relay and control-plane processes, established
+calls retain their owner, keys and counters through a store outage within the
+configured budget. The default budget is **30 seconds**. The tested live calls
+stay connected, with caller gaps below **one second** and no standby takeover.
+A worker crash still needs safe checkpoint margins. Unsafe checkpoints and
+expired ownership end as counted losses instead of unsafe resumes.
+
+**Conditions:** Worker, control plane and relay upgraded together; matching
+worker/control budgets and sufficient lease TTL; retained acknowledged Redis
+decisions; stable store clock; continued caller consent and media; bounded host
+scheduling delay. [ADR 0008][outage-adr] retains leases and snapshots for
+**34 seconds** by default: the budget plus **four seconds** of renewal, command
+and recovery headroom. This does not widen [ADR 0002's][checkpoint-adr]
+cryptographic envelope. New calls, moves, takeovers and hang-ups need the store;
+they can wait or fail during an outage.
+
+The [PR #103 CI store-stall job][outage-job] ran on `a363b60`, with separate
+processes on one Linux host, one fixture call per trial and the driver's own
+Redis paused by SIGSTOP. The table uses its `STORE_STALL` and
+`STORE_STALL_CALLER` records. Local results and regression tests are labelled
+separately; these samples do not establish loaded or shaped-profile timing.
+
+| Scenario | Guarantee and measured result | Status and source |
+| --- | --- | --- |
+| Live worker; 5, 15 and 29 s store pauses | Same call and ownership survive. 5/5 at each duration; caller gaps 34.5–39.9 ms across all live trials; zero losses, decryption failures, reconnects or renegotiations. The standby stays waiting. | **Pass in CI sample**; [store-stall job][outage-job] |
+| Worker crash; 1.5 s store pause | 5/5 resume with scaled margins. Snapshot age 1.985–1.988 s; RTP margin 12,475–12,493; SRTCP margin 266; caller gaps 420.4–460.6 ms. Each counts one envelope event, with zero losses, decryption failures or reconnects. | **Pass in CI sample**; [store-stall job][outage-job] |
+| Worker crash; 5 s store pause | 5/5 counted definitive losses, each `checkpoint_unsafe` and one envelope event. Snapshot age 5.485–5.488 s; required RTP margin 34,344–34,362 exceeds the 22,702 cap. No resume margins spent; zero decryption failures or reconnects. | **Pass of safe-loss policy**; [store-stall job][outage-job] |
+| Live worker; 35 s pause and actual ownership expiry | 5/5 count one `ownership_expired` loss each, with zero decryption failures and no resume. Checkpoint age is **not measured** because ownership and snapshot are gone; no checkpoint-envelope event is invented. Local cleanup was confirmed 0.6–0.75 s after recovery, with no later media. | **Pass of expiry policy**; [CI accounting][outage-job]; [PR #103 local cleanup][outage-pr] |
+| Worker partitioned from its store adapter while ownership transfers | Memory and Redis regression tests move epoch 1→2 before expiry. None of 40 deliberately stale ciphertext packets from the old worker reach the caller; successor media continues. The old worker fences when access returns. Full-budget transport-partition survival is **not measured**. | **Pass of exclusivity test**; [PR #103][outage-pr]; [ADR 0008][outage-adr] |
+
+The budget is not an exact termination timer. Headroom can allow longer pauses.
+Forwarding can continue while Redis is unavailable even after ownership expires;
+fencing and terminal accounting occur when authoritative access returns.
+[PR #101][expiry-pr] counts actual absence once and cleans only the recorded
+owner/epoch. A committed **five-minute ended marker** distinguishes a released
+call from expired ownership. Failed release followed by expiry remains ambiguous
+and counts as `ownership_expired`. Drain-timeout and agent-failure releases can
+still count as normal ends; the marker proves release, not its reason.
+
+[PR #105][outage-followup-pr] closes #102's uncounted move-time expiry path and
+#104's excessive standby staleness credit after an unobserved host stall.
+[ADR 0004][standby-adr] still requires a store claim, verified predecessor
+fencing and exclusive sockets before forwarding. Store flapping has no fixed
+standby takeover bound.
+
+Persisted routes can expire after roughly **25–28 seconds** without a successful
+store write. A later consent check republishes them, about **two seconds** in
+the driver or **five seconds** in a browser. Relay restart inside that window
+retains ADR 0003's partial-restore limits. The budget does not extend consent.
+Source: [ADR 0008][outage-adr].
+
+**Status:** **Pass for the cited pause, accounting and exclusivity samples.**
+The CI job explicitly reports **60-second post-takeover consent acceptance
+NOT-RUN**. Full-budget worker transport partitions, Redis failover with a hung
+renewal, control-plane or relay restart during the outage, lost store data,
+loaded/profile timing and cloud survival are **not measured**. The headroom
+calculation is a configuration bound, not evidence for those outage types.
+
 ## Agent continuity
 
 **Guarantee:** A compatible audio agent restores its accepted state and consumed
@@ -289,9 +352,10 @@ conservative duplication window before callbacks start. Applications must
 make external side effects safe to repeat themselves.
 
 **Status:** **Pass for the reported local Chrome run and cited hosting/replay
-contract tests.** #94 remains an unresolved pre-move agent-test flake. Android,
-real-camera and cloud runs remain pending their tickets. No universal no-loss
-application or exactly-once side-effect guarantee is established.
+contract tests.** #94's startup packet loss is fixed by [PR #97][early-media-pr].
+Desktop real-camera and cloud runs remain pending; mobile browsers are deferred
+to #98. No universal no-loss application or exactly-once side-effect guarantee
+is established.
 
 ## Capacity and soak
 
@@ -356,12 +420,12 @@ lead's later disposition.
 | Takeover under `region` and `far-caller`: pause <2 s; no lost content with buffer; zero decryption failures; no reconnect | **Pass under the implemented lossy-link policy** | [Final #37 matrix][network-result]. [Profile rules][profiles] judge loss against the network baseline and burst guard; exact zero loss applies only to lossless media paths. |
 | Relay restart or standby: gap <1 s; no reconnect; pause → takeover → resume never creates two forwarders | **Pass** | [Main restart][restart-job] restore-on and [standby][standby-job] SIGKILL/SIGSTOP tables pass; old process dead before new readiness; zero duplicate media. Single-call loopback scope. |
 | Planned load with N+1, including after forced worker death: move/takeover rules hold; drain time reported | **Pass for short LAN sample** | [Final capacity evidence][capacity-results]: validated T=8, death then move pass, drain 44 ms. Shaped-profile load and full consent at that load are not measured. |
-| Checkpoint-age envelope: a store stall beyond it never produces undecryptable takeover; policy counted and documented | **Pending [#95][store-stall]: real-process run** | [Main harness][harness-job] `TestRelayCheckpointAgePolicy` passes failed-write, stalled-write and delayed-success cases on both stores with zero decryption failures. [ADR 0002][checkpoint-adr] defines scaled margins or counted definitive loss. [PR #53][checkpoint-pr] reports normal real-process takeovers, but a separate-process store-stall trial beyond the envelope was not found: NOT-RUN. No product failure is inferred from this missing evidence. |
+| Checkpoint-age envelope: a store stall beyond it never produces undecryptable takeover; policy counted and documented | **Pass for cited real-process sample** | [PR #103 CI job][outage-job]: moderate crash 5/5 resumes with scaled margins and one envelope event each; long crash 5/5 counts `checkpoint_unsafe` with one envelope event each and no margins spent; live pauses pass 5/5 at each tested duration. Zero decryption failures. [Main harness][harness-job] supplies both-store failed/stalled/delayed-write controls. [ADR 0002][checkpoint-adr] and [ADR 0008][outage-adr] define the policy. Separate 60 s consent acceptance is NOT-RUN. |
 | Soak: ≥50 calls for ≥1 h with chaos; zero decryption failures/unintended lost calls; flat memory; no leaked sessions, keys or processes | **Pending #41/#85** | Full hardware-specific N+1 run must meet [soak acceptance][soak], including `outcome=pass`, `acceptance=true`, conclusive required memory rows and bounded cleanup. [Short run][soak-results] is supporting evidence only. |
 | Real camera at 720p in desktop Chrome: planned-move and takeover rows hold | **Pending #45** | Save buffer-on and buffer-off records using the [device checklist][devices]. Verify actual camera dimensions, per-track move/takeover verdicts, first-live-frame times, visibility and the completed consent hold. Results not measured. |
-| Android Chrome on local network: planned-move and takeover rows hold | **Pending #45** | The same device record and buffer comparison on Android; retain device identity and any blocked/invalid/inconclusive result. Results not measured. |
-| Agent continuity: exact planned continuation; bounded checkpoint rollback on takeover; duplicated input flagged | **Pass for cited local demo and harness contract** | [Browser report][agent-result], [ADR 0006 hosting/replay tests][agent-adr] and [ADR 0005 notices][buffer-adr]. State-age interpretation uses snapshot age. #94 remains unresolved and does not prove a continuity failure after a move. |
-| Cloud confirmation: move/takeover rows hold over real internet | **Pending #48** | Separate VMs in one region; external Chrome plus callers on another network; both driver and browser evidence. Approved provider/budget before spend, total ≤$25 including egress; final cost and teardown evidence. See [#48][cloud]. Results not measured. |
+| Android Chrome on local network: planned-move and takeover rows hold | **Deferred; explicit non-guarantee** | [#45 scope change][device-ticket] defers mobile browsers to [#98][mobile]. Results not measured. |
+| Agent continuity: exact planned continuation; bounded checkpoint rollback on takeover; duplicated input flagged | **Pass for cited local demo and harness contract** | [Browser report][agent-result], [ADR 0006 hosting/replay tests][agent-adr] and [ADR 0005 notices][buffer-adr]. State-age interpretation uses snapshot age. [PR #97][early-media-pr] fixes #94's pre-move early-media loss. |
+| Cloud confirmation: move/takeover rows hold over real internet | **Pending #48** | Separate VMs in one region; callers over the real internet. Kit in progress; Lean (no remote browser mode) versus Full remains Derek's choice. AWS and the $25 cap are [approved][cloud-approval]. Driver/browser results, final cost and teardown proof are not measured. The kit supplies no run evidence. |
 
 ## Open residuals and source differences
 
@@ -374,23 +438,32 @@ failures**; workers counted **zero decryption failures**. Media continued and
 later moves were clean. The cause remains unknown; no root-cause regression or
 fix is established.
 
-[The latest #37 result][network-result] updates the observed frequency to
-**one failing rollback in about 230 untraced rollbacks**, including the final
-matrix, versus **zero in 521 traced rollbacks**. These are observed counts, not
-a stable rate or reliability bound. The [investigation][rollback-doc] retains
-the earlier untraced denominator of about **210**. Tracing may change timing.
-The nightly lossy-DC move lane alternates traced and untraced runs; failures
-retain caller records and worker logs. Monitoring remains active. A passing
+[The latest #51 comment][rollback-counts] records **one failing rollback in
+about 210 untraced rollbacks**, versus **zero in 521 traced rollbacks**. The
+later [#31 network summary][phase-result] reports about **230** untraced
+rollbacks. The sources report different totals, not a stable rate or reliability
+bound. Of the traced trials, **300** used short
+observations and explicitly did not run the **60-second consent acceptance**.
+Tracing may change timing. [PR #93][diagnostics-pr] enables tracing on alternate
+nights for the nightly `lossy-dc` move lane; failures retain caller records and
+worker logs. Monitoring remains active. A passing
 matrix does not remove this exception to a blanket zero-decryption-failure claim.
 
-### #94: agent test stops short before the planned move
+### #94: resolved early-media startup loss
 
-[Issue #94][agent-flake] records one Redis test failure in run **38179543910**:
-the agent consumed **33 of 34** successfully written inputs, with **zero input
-drops and callback deadlines**. The assertion failed before the move. Its
-frequency and cause are **not measured**. It may reflect loss or late input;
-the source does not establish which. It is separate from #51. The related older
-[#76][old-agent-flake] is closed; that does not close this new failure.
+[Issue #94][agent-flake] is closed by [PR #97][early-media-pr]. Caller media
+could arrive before the worker installed SRTP keys and was silently dropped.
+Early SRTP/SRTCP packets now wait in a **64-packet** queue and drain in order
+when the keys are ready. Overflow drops the oldest packet and counts it; this
+is bounded startup protection, not unlimited no-loss input.
+
+With a forced **50 ms** key-installation delay, the old code failed **3/3** on
+each store with the original **34 written, 33 consumed, InputDrops 0** signature.
+The fix passed **50/50** on Memory and **50/50** on Redis under the race detector,
+then **20/20** per store after review simplification. Real UDP tests cover
+ordering, overflow, SRTCP replay rejection and resumed sessions. Source:
+[PR #97][early-media-pr]. Natural failure frequency remains **not measured**.
+This closes #94's residual; it does not fix #51.
 
 ### Differences that affect interpretation
 
@@ -402,6 +475,10 @@ the source does not establish which. It is separate from #51. The related older
 | [#31 agent spec][spec] and [ADR 0006][agent-adr] | Spec asks for decoded audio. The implemented interface accepts encoded Opus; a resumable decoded-audio adapter is deferred. | No decoded-audio or portable codec-state guarantee. |
 | [#37 earlier result][old-network-result] and [final result][network-result] | Earlier lossy-DC moves failed; the final tuned main matrix passes. | Final result supersedes the earlier matrix for these conditions. Untuned private-route performance is not accepted by the final sample. |
 | [PR #53][checkpoint-pr] and [ADR 0002][checkpoint-adr] | Earlier PR describes an RTP send limiter; current ADR measures caller source sequence rate without a send limiter. | Current ADR governs the caller input bound; no claim that a send limiter enforces it. |
+| [#95 closing comment][stall-close] / [PR #101][expiry-pr] and [PR #103][outage-pr] / [ADR 0008][outage-adr] | Before the longer retention, a 5 s crash or live stall counted `ownership_expired`. With the budget, the crash counts `checkpoint_unsafe` and the live call survives. | Use the PR #103 sample for the new budget. Older results prove the earlier accounting fix. |
+| [#31 store summary][store-result] and [PR #103][outage-pr] / [ADR 0008][outage-adr] / [PR #105][outage-followup-pr] | Summary still lists #102/#104 as follow-ups; both are now closed by PR #105. “Over 30 s” omits retention headroom; its “before” row for all outages under 30 s omits the old 3 s expiry boundary. | Follow the merged fixes and ADRs. Actual ownership expiry, not the budget boundary alone, triggers `ownership_expired`. |
+| [Latest #51 comment][rollback-counts] and [#31 network summary][phase-result] | About 210 versus about 230 untraced rollbacks; both report one failing rollback and zero failures in 521 traced rollbacks. | Keep both sourced totals and their observation scope. No inferred failure rate. |
+| [#45 title/older playbook][device-ticket] and its current scope / [#98][mobile] | The title and playbook still include Android. The current issue body defers mobile browsers. | Desktop Chrome only for phase 2; Android Chrome and iOS Safari are explicit non-guarantees. |
 
 ## Explicit non-guarantees
 
@@ -409,6 +486,7 @@ the source does not establish which. It is separate from #51. The related older
 | --- | --- |
 | Cross-host relay failover, floating public IP, anycast, or multiple relays across hosts | [#31 out of scope][spec]; [ADR 0004][standby-adr] |
 | Safari or data channels | [#31 out of scope and guarantee-matrix section][spec] |
+| Mobile browsers (Android Chrome, iOS Safari) | [#45 scope change][device-ticket]; deferred to [#98][mobile] |
 | Multi-region operation, Kubernetes or production orchestration | [#31 out of scope][spec] |
 | Multi-party rooms, fan-out, simulcast or SVC | [#31 out of scope][spec] |
 | TURN, TCP or TLS **media fallback** | [#31 out of scope][spec]. Private HTTP/Redis TCP tuning is a separate matter. |
@@ -427,15 +505,17 @@ the source does not establish which. It is separate from #51. The related older
   per-process memory verdicts and cleanup inventory. Replace the pending row
   only with a sourced full-run result.
 - **#45:** Analyse all device/buffer records. Keep media gap, first new content
-  and first live frame separate. Add actual device/camera settings and every
-  failure or inconclusive cause.
-- **#48:** Add driver and browser records, topology, workload, observed network
-  conditions, checkpoint ages, final cost and teardown proof.
-- **Checkpoint envelope:** Add the real-process store-stall result from
-  [#95][store-stall]. Normal takeovers do not exercise that fault.
-- Keep #51 and #94 open in the evidence until their causes and dispositions
-  are recorded. Publication and the later phase decision belong to the project
-  lead and orchestrator.
+  and first live frame separate. Scope is desktop Chrome only. Add actual
+  device/camera settings and every failure or inconclusive cause.
+- **#48:** After the Lean/Full kit choice and the run, add driver and browser
+  records for the chosen scope, topology, workload, observed network conditions,
+  checkpoint ages, final cost and teardown proof. Kit progress is not a result.
+- **Store outages:** Add full-budget transport-partition or Redis-failover
+  evidence if those cases are run. Keep loaded/profile timing and the separate
+  consent acceptance unmeasured until sourced results arrive.
+- Keep #51 open until a trace identifies the cause and a regression covers the
+  fix. #94 is resolved by PR #97. Publication and the later phase decision
+  belong to the project lead and orchestrator.
 
 [spec]: https://github.com/relaishq/relais/issues/31
 [ticket]: https://github.com/relaishq/relais/issues/49
@@ -455,12 +535,17 @@ the source does not establish which. It is separate from #51. The related older
 [incomplete-ring]: https://github.com/relaishq/relais/issues/82
 [recovery-flags]: https://github.com/relaishq/relais/issues/84
 [rollback-hit]: https://github.com/relaishq/relais/issues/51#issuecomment-6114094148
+[rollback-counts]: https://github.com/relaishq/relais/issues/51#issuecomment-6116570763
+[diagnostics-pr]: https://github.com/relaishq/relais/pull/93
 [agent-flake]: https://github.com/relaishq/relais/issues/94
+[early-media-pr]: https://github.com/relaishq/relais/pull/97
 [old-agent-flake]: https://github.com/relaishq/relais/issues/76
 [cloud]: https://github.com/relaishq/relais/issues/48
+[cloud-approval]: https://github.com/relaishq/relais/issues/48#issuecomment-6122720643
 [soak-ticket]: https://github.com/relaishq/relais/issues/41
 [full-soak]: https://github.com/relaishq/relais/issues/85
 [device-ticket]: https://github.com/relaishq/relais/issues/45
+[mobile]: https://github.com/relaishq/relais/issues/98
 [profiles]: dev/network-profiles.md
 [topology]: dev/netns-topology.md
 [capacity]: dev/capacity.md
@@ -479,5 +564,12 @@ the source does not establish which. It is separate from #51. The related older
 [buffer-adr]: adr/0005-relay-buffer-replay.md
 [agent-adr]: adr/0006-agent-interface.md
 [tcp-adr]: adr/0007-private-route-tcp-recovery.md
+[outage-adr]: adr/0008-store-outage-budget.md
 [rollback-doc]: investigations/51-rollback-srtp.md
 [store-stall]: https://github.com/relaishq/relais/issues/95
+[stall-close]: https://github.com/relaishq/relais/issues/95#issuecomment-6126635047
+[expiry-pr]: https://github.com/relaishq/relais/pull/101
+[outage-pr]: https://github.com/relaishq/relais/pull/103
+[outage-followup-pr]: https://github.com/relaishq/relais/pull/105
+[outage-job]: https://github.com/relaishq/relais/actions/runs/38268515100/job/114876708573
+[store-result]: https://github.com/relaishq/relais/issues/31#issuecomment-6128574992
