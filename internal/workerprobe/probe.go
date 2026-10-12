@@ -25,6 +25,7 @@ type registration struct {
 	ignoredBarriers       int
 	lifecycle             Lifecycle
 	beforeSnapshot        func(context.Context, string)
+	beforeSRTP            func(context.Context, string)
 	beforeInitialSnapshot func(context.Context, string)
 	afterEcho             func(context.Context, string, []byte)
 	afterDecrypt          func(string, uint32, uint64)
@@ -209,6 +210,34 @@ func BeforeSnapshot(addr netip.AddrPort, ctx context.Context, id string) {
 	var hook func(context.Context, string)
 	if w := registry.workers[addr]; w != nil {
 		hook = w.beforeSnapshot
+	}
+	registry.Unlock()
+	if hook != nil {
+		hook(ctx, id)
+	}
+}
+
+// SetBeforeSRTP gates a new session after its DTLS handshake, before installing
+// the SRTP contexts. It never gates resume and is inert outside Enable scopes.
+func SetBeforeSRTP(addr netip.AddrPort, hook func(context.Context, string)) error {
+	registry.Lock()
+	defer registry.Unlock()
+	w := registry.workers[addr]
+	if w == nil {
+		return errors.New("workerprobe: no SRTP startup probe")
+	}
+	w.beforeSRTP = hook
+	return nil
+}
+
+func BeforeSRTP(addr netip.AddrPort, ctx context.Context, id string) {
+	if !enabled.Load() {
+		return
+	}
+	registry.Lock()
+	var hook func(context.Context, string)
+	if w := registry.workers[addr]; w != nil {
+		hook = w.beforeSRTP
 	}
 	registry.Unlock()
 	if hook != nil {

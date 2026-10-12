@@ -66,12 +66,14 @@ type session struct {
 	worker       *Worker
 	log          logging.LeveledLogger
 
-	mu       sync.Mutex
-	state    sessionState
-	lease    sessionstore.Lease // guarded by mu; never part of the media snapshot
-	dtlsConn *dtls.Conn
-	srtpIn   *srtp.Context // decrypts caller to worker
-	srtpOut  *srtp.Context // encrypts worker to caller
+	mu           sync.Mutex
+	state        sessionState
+	lease        sessionstore.Lease // guarded by mu; never part of the media snapshot
+	dtlsConn     *dtls.Conn
+	srtpIn       *srtp.Context // decrypts caller to worker
+	srtpOut      *srtp.Context // encrypts worker to caller
+	earlyPackets []earlyPacket // guarded by mu; ciphertext awaiting initial SRTP keys
+	earlyDrain   chan struct{} // guarded by mu; later media waits for queued frame appends
 
 	// fenced is set under mu when exported, when its lease is lost, or when
 	// a failed resume must close without disturbing the continuing caller.
@@ -281,6 +283,7 @@ func (s *session) connect() (*dtls.Conn, error) {
 	if err := dtlsConn.HandshakeContext(connectCtx); err != nil {
 		return dtlsConn, fmt.Errorf("DTLS handshake: %w", err)
 	}
+	workerprobe.BeforeSRTP(s.worker.localAddr, connectCtx, s.id)
 	if _, err := s.startSRTP(dtlsConn); err != nil {
 		return dtlsConn, fmt.Errorf("start SRTP: %w", err)
 	}
@@ -403,7 +406,29 @@ func (s *session) startSRTP(conn *dtls.Conn) (srtp.SessionKeys, error) {
 	s.state.SRTP.Profile = profile
 	s.srtpIn = in
 	s.srtpOut = out
+	// Install and drain under one lock: a later packet cannot overtake input
+	// received during the handshake. Resume has no registered caller yet.
+	var results []mediaPacketResult
+	draining := len(s.earlyPackets) > 0
+	if draining {
+		s.earlyDrain = make(chan struct{})
+	}
+	for _, pkt := range s.earlyPackets {
+		if !s.fenced.Load() {
+			results = append(results, s.processSRTPPacketLocked(pkt))
+		}
+	}
+	s.earlyPackets = nil
 	s.mu.Unlock()
+	for _, result := range results {
+		s.finishMediaPacket(result)
+	}
+	if draining {
+		s.mu.Lock()
+		close(s.earlyDrain)
+		s.earlyDrain = nil
+		s.mu.Unlock()
+	}
 
 	return config.Keys, nil
 }
@@ -425,15 +450,11 @@ func (s *session) handlePacket(pkt []byte) {
 // outbound track for its payload type (Opus on the audio track, VP8 on the
 // video track).
 func (s *session) handleRTP(pkt []byte) {
-	var complete *framecache.Frame
-	var failure uint64
-	var decryptErr error
-	s.mu.Lock()
-	defer func() { s.mu.Unlock(); s.logDecryptFailure("SRTP", failure, decryptErr); s.appendFrame(complete) }()
+	s.handleSRTPPacket(earlyPacket{data: pkt})
+}
 
-	if s.srtpIn == nil || s.fenced.Load() {
-		return // SRTP keys are not ready yet, or the session has moved.
-	}
+// handleRTPLocked is the ordinary authenticated media path; callers hold mu.
+func (s *session) handleRTPLocked(pkt []byte) (complete *framecache.Frame, failure uint64, decryptErr error) {
 
 	// A successful decryption advances the inbound SRTP context's rollover
 	// counter and replay window, so the session state records the packet's
@@ -544,6 +565,7 @@ func (s *session) handleRTP(pkt []byte) {
 		s.requestKeyframe("resume-first-video")
 	}
 	workerprobe.AfterEcho(s.worker.localAddr, s.ctx, s.id, s.plainBuf[:n])
+	return
 }
 
 // trackFor returns the outbound track that echoes a payload type, or nil.
@@ -563,14 +585,10 @@ func (s *session) trackFor(payloadType uint8) *trackState {
 // asks the caller for a keyframe on the caller's source video. Other RTCP
 // (reports, NACKs, ...) is not acted on.
 func (s *session) handleRTCP(pkt []byte) {
-	var failure uint64
-	var decryptErr error
-	s.mu.Lock()
-	defer func() { s.mu.Unlock(); s.logDecryptFailure("SRTCP", failure, decryptErr) }()
+	s.handleSRTPPacket(earlyPacket{data: pkt, rtcp: true})
+}
 
-	if s.srtpIn == nil || s.fenced.Load() {
-		return
-	}
+func (s *session) handleRTCPLocked(pkt []byte) (failure uint64, decryptErr error) {
 	plain, err := s.srtpIn.DecryptRTCP(s.rtcpBuf, pkt, nil)
 	if err != nil {
 		failure, decryptErr = s.decryptFailures.Add(1), err
@@ -590,6 +608,7 @@ func (s *session) handleRTCP(pkt []byte) {
 	if trigger := keyframeRequest(packets, s.state.Video.SSRC); trigger != "" {
 		s.requestKeyframe(trigger)
 	}
+	return
 }
 
 // keyframeRequest returns "PLI" or "FIR" when a compound RTCP packet asks

@@ -112,9 +112,34 @@ func testDemoAgentPlannedMove(t *testing.T, stallSender bool) {
 		defer cancel()
 		var sent atomic.Uint64
 		var stallNext atomic.Bool
+		var startupEntered, firstWritten chan struct{}
+		if stallSender {
+			// Pin the startup race: the caller can connect before the worker
+			// installs SRTP keys. The first successful write stalls for 80 ms,
+			// so a 50 ms key delay should retain exactly one early input.
+			// Wait for that write before starting the delay, so a slow caller
+			// cannot bypass the regression by sending after key installation.
+			startupEntered, firstWritten = make(chan struct{}), make(chan struct{})
+			require.NoError(t, workerprobe.SetBeforeSRTP(sys.workers[0].LocalAddr(), func(ctx context.Context, _ string) {
+				close(startupEntered)
+				select {
+				case <-firstWritten:
+				case <-ctx.Done():
+					return
+				}
+				timer := time.NewTimer(50 * time.Millisecond)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+				}
+			}))
+		}
 		call, err := sys.h.Dial(ctx, callharness.CallOptions{SendTiming: func(kind string, _, _ time.Time) {
 			if kind == "audio" {
-				sent.Add(1)
+				if sent.Add(1) == 1 && firstWritten != nil {
+					close(firstWritten)
+				}
 				if stallNext.Swap(false) {
 					// Model a scheduled-out sender. SendMedia has a wall-clock
 					// deadline, so missed ticks are not extra input packets.
@@ -123,6 +148,13 @@ func testDemoAgentPlannedMove(t *testing.T, stallSender bool) {
 			}
 		}})
 		require.NoError(t, err)
+		if startupEntered != nil {
+			select {
+			case <-startupEntered:
+			case <-ctx.Done():
+				t.Fatal("worker did not reach the SRTP startup gate")
+			}
+		}
 		defer func() {
 			if !t.Failed() {
 				return

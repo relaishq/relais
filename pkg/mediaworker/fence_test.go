@@ -183,6 +183,21 @@ func TestOverlappingHandoverIsRefused(t *testing.T) {
 // with the certificate its offer's fingerprint names.
 func dialDTLSCaller(t *testing.T, worker *Worker) (*testCall, *dtls.Conn) {
 	t.Helper()
+	call, client, _ := handshakeDTLSCaller(t, worker)
+	sess := worker.session(call.id)
+	require.NotNil(t, sess)
+	require.Eventually(t, func() bool {
+		sess.mu.Lock()
+		defer sess.mu.Unlock()
+		return sess.srtpIn != nil
+	}, 5*time.Second, 10*time.Millisecond, "worker established the session")
+	return call, client
+}
+
+// handshakeDTLSCaller returns at the caller's handshake completion, without
+// waiting for the worker to install its keys.
+func handshakeDTLSCaller(t *testing.T, worker *Worker) (*testCall, *dtls.Conn, *testEndpoint) {
+	t.Helper()
 
 	cert, err := selfsign.GenerateSelfSigned()
 	require.NoError(t, err)
@@ -211,16 +226,7 @@ func dialDTLSCaller(t *testing.T, worker *Worker) (*testCall, *dtls.Conn) {
 	defer cancel()
 	require.NoError(t, client.HandshakeContext(ctx))
 
-	sess := worker.session(id)
-	require.NotNil(t, sess)
-	require.Eventually(t, func() bool {
-		sess.mu.Lock()
-		defer sess.mu.Unlock()
-
-		return sess.srtpIn != nil
-	}, 5*time.Second, 10*time.Millisecond, "worker established the session")
-
-	return call, client
+	return call, client, caller
 }
 
 // sendAndReceive writes msg to the endpoint's address through port, and

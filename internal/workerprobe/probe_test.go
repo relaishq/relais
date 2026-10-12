@@ -72,6 +72,7 @@ func TestDisabledHotProbesDoNotAcquireRegistryLock(t *testing.T) {
 	go func() {
 		AfterEcho(addr, context.Background(), "id", nil)
 		BeforeSnapshot(addr, context.Background(), "id")
+		BeforeSRTP(addr, context.Background(), "id")
 		AfterResume(addr, "id", false)
 		BarrierIgnored(addr)
 		close(done)
