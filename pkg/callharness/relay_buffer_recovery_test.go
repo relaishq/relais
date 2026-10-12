@@ -111,7 +111,8 @@ func TestRelayBufferIncompleteReplayConfirmationAfterExpiry(t *testing.T) {
 		require.True(t, observed[0].RelayInputReplay, "first adoption defers its own resume recovery")
 		require.False(t, observed[0].RelayReplay, "the first ring is already incomplete")
 		require.NotEmpty(t, observed[0].DuplicateWindows)
-		require.False(t, observed[1].RelayInputReplay, "the expiry receipt has no retained media")
+		require.True(t, observed[1].RelayInputReplay, "confirmation retains the first attempt's recovery flags despite the empty expiry receipt")
+		require.False(t, observed[1].RelayReplay)
 		require.Empty(t, observed[1].DuplicateWindows)
 		require.Equal(t, observed[0].Lease.Epoch, observed[1].Lease.Epoch, "confirmation acknowledges the original adoption")
 		result := status.Takeovers[0].Result

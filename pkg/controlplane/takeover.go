@@ -214,6 +214,8 @@ type takeoverState struct {
 	resumeState             []byte
 	resumeTarget            *registration
 	deferredRecovery        bool // The possibly adopted tenure skipped its own resume PLI.
+	resumeRelayReplay       bool
+	resumeRelayInputReplay  bool
 	agentFailure            error
 	checkpointAge           time.Duration
 	snapshotAge             time.Duration
@@ -597,12 +599,17 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		// Require the post-drain PLI backstop before deferring resume recovery.
 		relayReplay := pending.replayPlan != nil && pending.replayPlan.Complete && canRecoverReplay
 		relayInputReplay := pending.replayPlan != nil && !pending.replayPlan.Complete && len(pending.replayPlan.Windows) > 0 && canRecoverReplay
-		if !pending.transientResume {
+		if pending.transientResume {
+			// The first request may not have reached the worker. Match its
+			// recovery flags to the retained post-drain recovery obligation.
+			relayReplay, relayInputReplay = pending.resumeRelayReplay, pending.resumeRelayInputReplay
+		} else {
 			pending.attempts++
 			pending.resumeState = state
 			pending.resumeTarget = target
-			// Confirmation is idempotent and retains the first adoption's flags.
-			// An expired receipt can lose its windows, but not this obligation.
+			// A new attempt records its flags; confirmations reuse them even
+			// when the current relay plan has gained or lost selected input.
+			pending.resumeRelayReplay, pending.resumeRelayInputReplay = relayReplay, relayInputReplay
 			pending.deferredRecovery = relayReplay || relayInputReplay
 		}
 		_, err = target.worker.ResumeSession(state, mediaworker.ResumeOptions{Kind: kind, RelayInputReplay: relayInputReplay, InputMayBeDuplicated: len(duplicateWindows) > 0, DuplicateWindows: duplicateWindows, Lease: transferred,
