@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"log"
 	"net/netip"
@@ -23,6 +24,7 @@ func run() error {
 	control := flag.String("control", processrun.Env("RELAIS_CONTROL_URL", ""), "control-plane HTTP URL for heartbeats")
 	httpAddr := flag.String("http", processrun.Env("RELAIS_WORKER_HTTP", "127.0.0.1:0"), "private worker HTTP address")
 	cacheOff := flag.Bool("frame-cache-off", false, "disable cache writes and takeover replay (PLI remains enabled)")
+	cryptoTrace := flag.Bool("srtp-diagnostics", false, "log sent SRTP/SRTCP ciphertext metadata for fault investigations")
 	agentName := flag.String("agent", "echo", "audio agent: echo or demo")
 	drainTimeout := flag.Duration("drain-timeout", 5*time.Second, "SIGTERM drain deadline before closing")
 	flag.Parse()
@@ -65,7 +67,16 @@ func run() error {
 		defer func() { _ = client.Close() }()
 		frames = client
 	}
-	worker, err := mediaworker.New(mediaworker.Config{Agent: agentConfig, ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store}})
+	cfg := mediaworker.Config{Agent: agentConfig, ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store}}
+	if *cryptoTrace {
+		cfg.PacketTrace = func(packet mediaworker.PacketTrace) {
+			data, err := json.Marshal(packet)
+			if err == nil {
+				log.Printf("SRTP_EGRESS %s", data)
+			}
+		}
+	}
+	worker, err := mediaworker.New(cfg)
 	if err != nil {
 		return err
 	}

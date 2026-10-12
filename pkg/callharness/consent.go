@@ -129,6 +129,9 @@ func (o *stunObserver) ReadFrom(p []byte) (int, net.Addr, error) {
 	if err != nil {
 		return n, addr, err
 	}
+	if o.rec.crypto != nil {
+		o.rec.crypto.observe(p[:n])
+	}
 	o.mu.Lock()
 	if o.inspect != nil {
 		o.inspect(p[:n])

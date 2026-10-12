@@ -354,6 +354,9 @@ func (s *session) sendReplay(packets [][]byte) {
 			return
 		}
 		_, err := s.worker.send(packet, remote)
+		if err == nil {
+			s.tracePacket(packet, "frame-cache")
+		}
 		s.mu.Unlock()
 		if err != nil {
 			s.log.Debugf("session %s: cache replay: %v", s.id, err)

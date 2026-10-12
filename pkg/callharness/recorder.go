@@ -47,6 +47,7 @@ type recorder struct {
 	renegotiations       int
 	iceRestarts          int
 	decryptionFailures   DecryptionFailures
+	crypto               *cryptoObserver
 	decryptFailureTimes  []time.Duration
 
 	// Recent caller sends, by kind. Identity maps expire with the rolling
@@ -600,6 +601,9 @@ func (r *recorder) report() *Report {
 		SentVideo:            r.sentVideo,
 		FirstVideoSentAt:     r.firstVideoSentAt,
 		KeyframeRequestsSent: r.keyframeRequests,
+	}
+	if r.crypto != nil {
+		rep.SRTPDiagnostics = r.crypto.report()
 	}
 	for _, track := range r.tracks {
 		report := TrackReport{

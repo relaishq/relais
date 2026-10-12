@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -20,6 +21,7 @@ import (
 	"github.com/relais/pkg/agent"
 	"github.com/relais/pkg/callharness"
 	"github.com/relais/pkg/controlplane"
+	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
@@ -81,11 +83,12 @@ func (f *lostReply) requests() []mediaworker.ResumeRequest {
 }
 
 type httpSystem struct {
-	plane   *controlplane.Plane
-	relay   *relay.Relay
-	workers []*mediaworker.Worker
-	remote  []*controlplane.RemoteWorker
-	harness *callharness.Harness
+	plane       *controlplane.Plane
+	relay       *relay.Relay
+	workers     []*mediaworker.Worker
+	remote      []*controlplane.RemoteWorker
+	harness     *callharness.Harness
+	diagnostics bool
 }
 
 func newHTTPSystem(t *testing.T, source, target, routing *lostReply, counts ...int) *httpSystem {
@@ -98,6 +101,10 @@ type httpSystemSettings struct {
 	store           sessionstore.Store
 	buffer          *relay.BufferConfig
 	targetTransport http.RoundTripper
+	cache           framecache.Store
+	callerSocket    func() (net.PacketConn, error)
+	diagnostics     bool
+	packetTrace     func(mediaworker.PacketTrace)
 }
 
 func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply, settings httpSystemSettings, counts ...int) *httpSystem {
@@ -118,14 +125,14 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 		rr.Client = &http.Client{Transport: routing, Timeout: 2 * time.Second}
 	}
 	plane := controlplane.New(rr, store)
-	system := &httpSystem{plane: plane, relay: r}
+	system := &httpSystem{plane: plane, relay: r, diagnostics: settings.diagnostics}
 	count := 2
 	if len(counts) > 0 {
 		count = counts[0]
 	}
 	for i := range count {
 		name := strconv.Itoa(i)
-		w, err := mediaworker.New(mediaworker.Config{ListenAddr: "127.0.0.1:0", Agent: settings.agent, Relay: &mediaworker.RelayConfig{Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr(), Owners: store}})
+		w, err := mediaworker.New(mediaworker.Config{ListenAddr: "127.0.0.1:0", Agent: settings.agent, FrameCache: settings.cache, PacketTrace: settings.packetTrace, Relay: &mediaworker.RelayConfig{Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr(), Owners: store}})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, w.Close()) })
 		ws := httptest.NewServer(w.PrivateHandler())
@@ -159,7 +166,7 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 	done := make(chan struct{})
 	go func() { defer close(done); _ = plane.Run(ctx) }()
 	t.Cleanup(func() { cancel(); <-done })
-	h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: ps.URL + "/calls", RelayAddr: r.PublicAddr()}})
+	h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: ps.URL + "/calls", RelayAddr: r.PublicAddr(), CallerSocket: settings.callerSocket}})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
 	system.harness = h
@@ -169,7 +176,7 @@ func flowingCall(t *testing.T, s *httpSystem, action func(context.Context, *call
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	call, err := s.harness.Dial(ctx, callharness.CallOptions{Video: true, Worker: 0})
+	call, err := s.harness.Dial(ctx, callharness.CallOptions{Video: true, Worker: 0, SRTPDiagnostics: s.diagnostics})
 	require.NoError(t, err)
 	media, stop := context.WithCancel(ctx)
 	sent := make(chan error, 1)

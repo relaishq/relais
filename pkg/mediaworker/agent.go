@@ -510,6 +510,8 @@ func (s *session) sendAgentAudio(header rtp.Header, payload []byte, state agentS
 	}
 	if _, err := s.worker.send(encrypted, s.state.ICE.RemoteAddr); err != nil {
 		s.log.Debugf("session %s: send agent audio: %v", s.id, err)
+	} else {
+		s.tracePacket(encrypted, "agent")
 	}
 	workerprobe.AfterEcho(s.worker.localAddr, s.ctx, s.id, s.plainBuf[:n])
 }

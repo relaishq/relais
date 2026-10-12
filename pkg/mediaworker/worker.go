@@ -130,6 +130,9 @@ type Heartbeats interface{ Heartbeat(netip.AddrPort) error }
 
 // Config configures a media worker.
 type Config struct {
+	// PacketTrace optionally records ciphertext metadata after successful sends.
+	// It is for fault investigations; the callback must return promptly.
+	PacketTrace func(PacketTrace)
 	// Agent selects per-call audio logic. Zero values keep the default echo.
 	Agent AgentConfig
 
