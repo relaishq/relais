@@ -1,4 +1,4 @@
-// relais-load runs harness callers across owned generator processes.
+// relais-load runs harness callers against owned or external systems.
 package main
 
 import (
@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -521,14 +522,21 @@ func printReport(r loadgen.RunReport) {
 	}
 }
 func run() error {
+	return runArgs(os.Args[1:])
+}
+
+func runArgs(args []string) error {
 	fs := flag.NewFlagSet("relais-load", flag.ContinueOnError)
 	c := config{Limits: loadgen.DefaultLimits()}
 	var events eventFlags
 	child := fs.Bool("child", false, "internal caller-process mode")
-	signaling := fs.String("signaling", "", "child control-plane calls URL")
-	relay := fs.String("relay", "", "child relay media address")
-	callerNamespace := fs.String("caller-namespace", "", "internal owned caller namespace")
-	callerBind := fs.String("caller-bind", "", "internal specific caller IPv4 UDP bind address")
+	externalCaller := fs.Bool("external-caller", false, "run callers against an existing system; starts no services, waits for local /start")
+	signaling := fs.String("signaling", "", "external caller HTTP(S) calls URL")
+	relay := fs.String("relay", "", "external relay IPv4 media address:port")
+	callerNamespace := fs.String("caller-namespace", "", "optional Linux caller network namespace (requires -caller-bind)")
+	callerBind := fs.String("caller-bind", "", "literal caller IPv4 UDP address:port; port 0 allocates a port, no namespace required")
+	signalingCert := fs.String("signaling-cert", "", "PEM file containing the pinned HTTPS server certificate (normal IP SAN verification)")
+	bearerTokenFile := fs.String("bearer-token-file", "", "file containing the HTTPS signaling bearer token")
 	fs.BoolVar(&c.PlaceOnWorker, "place-on-worker", false, "internal capacity placement on worker zero")
 	parentPID := fs.Int("parent-pid", 0, "internal caller owner PID")
 	fs.IntVar(&c.Callers, "callers", 10, "total simultaneous harness callers")
@@ -560,16 +568,27 @@ func run() error {
 	fs.IntVar(&c.CalibrationStart, "calibration-start", 1, "first calibration caller count")
 	fs.IntVar(&c.CalibrationMax, "calibration-max", 128, "maximum calibration count (a lower bound if unsaturated)")
 	fs.Var(&events, "event", "repeat after,move|kill|drain,count,worker; move count=0 means all eligible calls")
-	if err := fs.Parse(os.Args[1:]); err != nil {
+	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
 	}
-	if *child {
+	if *externalCaller && *child {
+		return errors.New("external-caller and child are separate modes")
+	}
+	if *externalCaller {
+		if err := validateExternalCaller(fs, c); err != nil {
+			return err
+		}
+	}
+	if *child || *externalCaller {
 		addr, err := netip.ParseAddrPort(*relay)
 		if err != nil {
 			return err
+		}
+		if *externalCaller && (!addr.Addr().Is4() || addr.Addr().IsUnspecified() || addr.Port() == 0) {
+			return errors.New("relay requires a specific IPv4 media address and nonzero port")
 		}
 		ctx, stop := processrun.Context()
 		defer stop()
@@ -577,7 +596,23 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		client, err := callerHTTPClient(*signaling, *signalingCert, *bearerTokenFile)
+		if err != nil {
+			return err
+		}
+		if client != nil {
+			defer client.CloseIdleConnections()
+		}
+		external.HTTPClient = client
+		if *externalCaller {
+			runtime.GOMAXPROCS(c.GOMAXPROCS)
+		}
 		return loadgen.RunChild(ctx, loadgen.ChildOptions{PlaceOnWorker: c.PlaceOnWorker, Topology: external, Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output, ParentPID: *parentPID, Soak: c.Soak})
+	}
+	for _, name := range []string{"signaling", "relay", "caller-namespace", "caller-bind", "signaling-cert", "bearer-token-file", "parent-pid"} {
+		if flagWasSet(fs, name) {
+			return fmt.Errorf("-%s requires -external-caller or -child", name)
+		}
 	}
 	c.Events = []loadgen.Event(events)
 	if c.Soak {

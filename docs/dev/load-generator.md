@@ -31,6 +31,83 @@ time. It polls its original parent PID every 250 ms and cancels its work on
 reparenting. Caller cleanup then closes its connections and operator endpoint.
 Logs survive for diagnosis. The existing `crash-run` modes are unchanged.
 
+## External caller test interface
+
+`-external-caller` is a supported test interface for an already running
+system. It starts callers and a loopback operator endpoint only. It owns no
+relay, control, worker or Redis processes. Build just the caller with
+`go build -o bin/relais-load ./cmd/relais-load`; audio-only runs need no Redis
+or ffmpeg installation on the caller host.
+
+```sh
+./bin/relais-load -external-caller \
+  -signaling=https://192.0.2.10/calls -relay=192.0.2.10:41000 \
+  -signaling-cert=server.pem -bearer-token-file=caller-token.txt \
+  -caller-bind=192.0.2.20:0 -callers=3 -gomaxprocs=1 \
+  -duration=60s -sample-every=1s -video=false -output=caller.jsonl
+```
+
+The example addresses must be replaced with the real server address and a
+local interface address on the caller host. The signaling frontend must
+serve the WHIP-style `POST /calls`, `DELETE /calls/{id}` and `GET /status`
+with the existing control-plane response formats. Signaling and relay media
+addresses are independent; HTTPS success does not prove UDP reachability.
+
+| Flag | External caller meaning |
+| --- | --- |
+| `-signaling` | HTTP(S) URL ending in `/calls`, without URL credentials, query or fragment |
+| `-relay` | Literal relay IPv4 media address with a nonzero UDP port |
+| `-signaling-cert` | One PEM server certificate obtained through a trusted channel; optional when system trust is sufficient |
+| `-bearer-token-file` | File containing one bearer token; trailing whitespace is removed; requires HTTPS |
+| `-caller-bind` | Literal local IPv4 address and UDP port; `:0` gives each caller its own allocated port |
+| `-caller-namespace` | Optional existing Linux network namespace; requires `-caller-bind` |
+| `-callers`, `-gomaxprocs` | Concurrent callers and this process's Go CPU budget; no child generators are spawned |
+| `-duration`, `-sample-every` | Media duration after `/start` and resource sample interval; duration >=1s, samples in [100ms,duration] |
+| `-video` | Audio plus sampled VP8 by default; `false` needs no video decoder |
+| `-output` | Required JSON-lines output file, overwritten at startup; also written to stdout |
+| `-parent-pid` | Optional original parent PID to watch; defaults to the launching process's parent |
+
+Keep the token file private. The token is attached to signaling, status and
+hangup requests through the same HTTP client and is never printed in readiness
+or caller reports. A pinned PEM replaces system roots and must match the exact
+server certificate. Normal certificate validity and IP SAN or hostname checks
+still apply. With an IP URL, the certificate must name that IP in its SAN.
+Certificate rotation requires a new trusted PEM. No insecure TLS option is
+provided. Requests using a pin or token cannot leave the signaling origin,
+including redirects and call resource URLs. HTTP without transport flags
+remains available for trusted local tests.
+
+With no namespace, `-caller-bind` binds directly on the host. A literal bind
+is required; hostnames, wildcard addresses and IPv6 are rejected. Each caller
+needs a distinct port, so use port zero for multiple calls. With no bind, the
+existing loopback socket and candidate behavior is preserved. Linux namespace
+callers still use the existing namespace socket factory. The internal `-child`
+mode remains available to the owned process driver.
+
+After all callers connect, stdout emits a JSON readiness line with `type`,
+`pid`, `callers` and `http` (a loopback URL). The caller then waits for its
+controller to issue `POST <http>/start` with a common start time:
+
+```json
+{"at":"2026-01-01T12:00:00Z"}
+```
+
+`at` must be an RFC 3339 timestamp. A past time starts media immediately. The
+three-minute start deadline includes waiting for a future time. The loopback
+operator endpoint also provides `GET /sessions`, `POST /kill` (records a fault
+observation), `POST /move` and `POST /record-moves`, using the existing
+`internal/loadgen` request types. Move execution needs an operator-capable
+signaling endpoint; a frontend that exposes only calls and status will reject
+it. The caller never kills external processes. Keep this unauthenticated local
+operator endpoint on loopback. It closes when the run ends or is cancelled.
+
+Output contains `stats`, per-call `call` and final `done` JSON lines. Inspect
+per-call `error` and reports as well as process stats: process exit alone is
+not a media or capacity verdict. This interface supplies caller evidence; it
+does not aggregate separate hosts or establish cross-host clock accuracy.
+Owned-mode flags such as `-processes`, `-workers`, `-event`, `-capacity`,
+`-calibrate` and `-soak` are rejected in external caller mode.
+
 ## Generator validity
 
 Every child writes periodic stats and one existing caller report per call as

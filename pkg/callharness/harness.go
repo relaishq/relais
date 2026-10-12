@@ -44,6 +44,10 @@ import (
 type ExternalTopology struct {
 	SignalingURL string
 	RelayAddr    netip.AddrPort
+	// HTTPClient supplies signaling and control requests, including status and
+	// hangup. Nil uses the ordinary ten-second client. The caller owns the
+	// client and its transport; the harness neither changes nor closes them.
+	HTTPClient *http.Client
 	// CallerSocket creates the caller's UDP4 media socket. Nil preserves the
 	// loopback socket and candidates. A supplied socket must bind a specific
 	// IPv4 address; the harness owns and closes it. Signaling stays separate.
@@ -129,7 +133,11 @@ func Start(opts Options) (*Harness, error) {
 			return nil, errors.New("callharness: external topology needs a signaling URL and relay address")
 		}
 		external := *opts.External
-		return &Harness{external: &external, workers: &workers{}, failures: make(map[string][]time.Time), signalingURL: external.SignalingURL, httpClient: &http.Client{Timeout: 10 * time.Second}}, nil
+		client := external.HTTPClient
+		if client == nil {
+			client = &http.Client{Timeout: 10 * time.Second}
+		}
+		return &Harness{external: &external, workers: &workers{}, failures: make(map[string][]time.Time), signalingURL: external.SignalingURL, httpClient: client}, nil
 	}
 
 	disableProbe := workerprobe.Enable()
