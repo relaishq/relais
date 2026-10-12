@@ -25,6 +25,20 @@ type MetricRow struct {
 
 // MatchesEvent ties a recorded move to one scheduled action.
 func MatchesEvent(e EventResult, report *callharness.Report, move callharness.MoveReport) bool {
+	if len(e.Identities) > 0 {
+		if move.Identity == nil || !move.Identity.Valid() {
+			return false
+		}
+		for _, id := range e.Identities {
+			if id.Valid() && id == *move.Identity {
+				return (e.Event.Kind == "kill" && move.Kind == "takeover") || ((e.Event.Kind == "move" || e.Event.Kind == "drain") && move.Kind == "move")
+			}
+		}
+		return false
+	}
+	if report.Distributed != nil || move.Distributed != nil {
+		return false
+	}
 	at := report.StartedAt.Add(move.Start)
 	if e.Event.Kind == "kill" {
 		delta := at.Sub(e.At)
@@ -91,6 +105,23 @@ func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []
 				seen[c.Session] = true
 				e.Recorded++
 				m := matching[0].Measurement
+				if matching[0].Distributed != nil {
+					d := matching[0].Distributed
+					v := callharness.MetricVerdict{Trusted: d.Outcome != "inconclusive", Failed: d.Outcome == "fail"}
+					r := row("distributed_window")
+					if v.Trusted {
+						r.Trusted++
+						if v.Failed {
+							r.Failed++
+						}
+					}
+					if matching[0].Measurement.Inconclusive {
+						causes = append(causes, fmt.Sprintf("event %d session %s: content classification not proven across clock interval", i+1, c.Session))
+					}
+					for _, cause := range d.Causes {
+						causes = append(causes, fmt.Sprintf("event %d session %s: %s", i+1, c.Session, cause))
+					}
+				}
 				verdicts := map[string]callharness.MetricVerdict{"audio_loss": m.AudioLoss, "audio_freshness": m.Audio.Verdict, "resume": m.ResumeVerdict}
 				if m.VideoExpected {
 					verdicts["video_loss"] = m.VideoLoss

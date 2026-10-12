@@ -19,6 +19,9 @@ import (
 )
 
 type ChildOptions struct {
+	EventRetention time.Duration
+	Distributed    *DistributedConfig
+
 	Soak                  bool
 	Topology              callharness.ExternalTopology
 	Callers               int
@@ -51,6 +54,18 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	}
 	if o.Callers < 1 || o.Duration <= 0 || o.SampleEvery <= 0 {
 		return errors.New("invalid child counts or durations")
+	}
+	history, err := eventRetention(o.EventRetention, o.Distributed != nil)
+	if err != nil {
+		return err
+	}
+	if o.Distributed != nil {
+		clock, err := startDistributedClock(ctx, o.Topology.SignalingURL, o.Topology.HTTPClient, *o.Distributed)
+		if err != nil {
+			return err
+		}
+		defer clock.stop()
+		o.Topology.Distributed = clock.options
 	}
 	if o.ParentPID == 0 {
 		o.ParentPID = os.Getppid()
@@ -97,7 +112,7 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 			if o.PlaceOnWorker {
 				worker = 0
 			}
-			call, err := h.Dial(dial, callharness.CallOptions{Video: o.Video, Worker: worker, Recording: callharness.RecordingOptions{History: 15 * time.Second, DecodeEvery: 30}, SendTiming: meter.Observe, SendPacing: meter.ObservePacing})
+			call, err := h.Dial(dial, callharness.CallOptions{Video: o.Video, Worker: worker, Recording: callharness.RecordingOptions{History: history, DecodeEvery: 30}, SendTiming: meter.Observe, SendPacing: meter.ObservePacing})
 			if err != nil {
 				errs <- fmt.Errorf("dial %d: %w", i, err)
 				return
@@ -126,6 +141,9 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	var startMu sync.Mutex
 	started := false
 	mux := http.NewServeMux()
+	if o.Distributed != nil {
+		registerDistributedFeed(mux, calls)
+	}
 	if o.Soak {
 		registerMemoryDiagnostics(mux, calls)
 	}
@@ -152,6 +170,10 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 		start <- req.At
 	})
 	mux.HandleFunc("POST /kill", func(w http.ResponseWriter, r *http.Request) {
+		if o.Distributed != nil {
+			http.Error(w, "use identity-bearing /record-events", http.StatusBadRequest)
+			return
+		}
 		var req KillRequest
 		if json.NewDecoder(r.Body).Decode(&req) != nil || req.At.IsZero() {
 			http.Error(w, "invalid kill", http.StatusBadRequest)
@@ -160,6 +182,10 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 		h.RecordProcessKill(req.Worker, req.At)
 	})
 	mux.HandleFunc("POST /move", func(w http.ResponseWriter, r *http.Request) {
+		if o.Distributed != nil {
+			http.Error(w, "use identity-bearing /record-events", http.StatusBadRequest)
+			return
+		}
 		var req MoveRequest
 		if json.NewDecoder(r.Body).Decode(&req) != nil {
 			http.Error(w, "invalid move", http.StatusBadRequest)
@@ -184,6 +210,10 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 		}
 	})
 	mux.HandleFunc("POST /record-moves", func(w http.ResponseWriter, r *http.Request) {
+		if o.Distributed != nil {
+			http.Error(w, "use identity-bearing /record-events", http.StatusBadRequest)
+			return
+		}
 		var moves []controlplane.MoveResult
 		if json.NewDecoder(r.Body).Decode(&moves) != nil {
 			http.Error(w, "invalid moves", http.StatusBadRequest)

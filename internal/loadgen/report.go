@@ -160,6 +160,8 @@ type Event struct {
 	Worker int `json:"worker"`
 }
 type EventResult struct {
+	Identities []callharness.OperationIdentity `json:"identities,omitempty"`
+
 	Event      Event     `json:"event"`
 	At         time.Time `json:"at"`
 	FinishedAt time.Time `json:"finished_at"`

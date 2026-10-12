@@ -31,6 +31,11 @@ const testToken = "test-secret-token-with-at-least-32-characters"
 
 func frontend(t *testing.T, upstream http.Handler) (*httptest.Server, *http.Client) {
 	t.Helper()
+	return frontendWithClock(t, upstream, time.Now)
+}
+
+func frontendWithClock(t *testing.T, upstream http.Handler, now func() time.Time) (*httptest.Server, *http.Client) {
+	t.Helper()
 	private := httptest.NewServer(upstream)
 	t.Cleanup(private.Close)
 	target, err := url.Parse(private.URL)
@@ -39,7 +44,7 @@ func frontend(t *testing.T, upstream http.Handler) (*httptest.Server, *http.Clie
 	t.Cleanup(transport.CloseIdleConnections)
 	cert, _, _, err := certificate(config{AdvertiseIPs: "127.0.0.1"})
 	require.NoError(t, err)
-	handler, err := newHandler(target, testToken, transport)
+	handler, err := newHandlerWithClock(target, testToken, transport, now)
 	require.NoError(t, err)
 	srv := httptest.NewUnstartedServer(handler)
 	srv.Config = newServer(srv.Config.Handler, cert)

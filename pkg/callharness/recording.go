@@ -132,7 +132,11 @@ func (r *recorder) compact(now time.Duration) {
 	}
 	count := 0
 	for _, move := range r.moves {
-		if r.since(move.start)-baselineWindow >= cutoff+2*time.Second {
+		start := move.start
+		if move.event != nil {
+			start = move.armedAt
+		}
+		if r.since(start)-baselineWindow >= cutoff+2*time.Second {
 			break
 		}
 		count++

@@ -11,6 +11,8 @@ import (
 // Report is what the caller observed during one call. Times are offsets from
 // the moment the caller started dialing.
 type Report struct {
+	Distributed *DistributedRecording `json:"distributed,omitempty"`
+
 	Recording RecordingReport
 	// StartedAt aligns packet observations across calls sharing a worker.
 	StartedAt time.Time

@@ -346,6 +346,15 @@ func (r *recorder) returnedVideo(track *trackRecord, pkt *rtp.Packet, at time.Du
 }
 
 func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.Duration) EventMeasurement {
+	return r.measureEvent(move, limit, baselineFloor, false)
+}
+
+// Classification evaluations share the production yardstick. Raw denominator
+// windows are computed once for the published point, not repeatedly per cell.
+func (r *recorder) classificationMeasurement(move MoveReport, limit, baselineFloor time.Duration) EventMeasurement {
+	return r.measureEvent(move, limit, baselineFloor, true)
+}
+func (r *recorder) measureEvent(move MoveReport, limit, baselineFloor time.Duration, classificationOnly bool) EventMeasurement {
 	m := EventMeasurement{WindowStart: max(0, move.Start-contentWindowMargin), SettleWindow: contentSettleWindow, MediaResumedAt: move.Recovery.MediaResumedAt, ObservedUntil: r.hungUpAt, VideoExpected: r.sentVideo.Frames > 0 || r.sentVideo.SSRC != 0}
 	for _, track := range move.Tracks {
 		switch track.Kind {
@@ -414,9 +423,23 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 	if m.VideoLoss.Failed {
 		m.VideoLoss.Reasons = append(m.VideoLoss.Reasons, "sent video never returned complete")
 	}
-	m.ContentLoss = r.contentLossEvidence(move, m, audio, video, baselineFloor)
+	if !classificationOnly {
+		m.ContentLoss = r.contentLossEvidence(move, m, audio, video, baselineFloor)
+	}
 	audio = append(audio, r.repeatedAudioReturns...)
 	video = append(video, r.repeatedVideoReturns...)
+	if classificationOnly {
+		// Identified sends are unique; repeats are explicitly marked as replay.
+		// Older returns cannot contribute a baseline or post-event sample. Loss
+		// and source availability were already evaluated on the full input above.
+		policy := r.freshnessPolicy.defaults()
+		lower := min(move.Start, max(0, move.Start-baselineWindow, baselineFloor))
+		upper := min(limit, move.Start+policy.EvaluationWindow())
+		keep := func(units []contentUnit) []contentUnit {
+			return slices.DeleteFunc(units, func(u contentUnit) bool { return u.returnedAt < lower || u.returnedAt > upper })
+		}
+		audio, video = keep(audio), keep(video)
+	}
 	m.Audio = measureFreshness(audio, move.Start, m.MediaResumedAt, limit, baselineFloor, r.freshnessPolicy)
 	if m.VideoExpected {
 		m.Video = measureFreshness(video, move.Start, m.MediaResumedAt, limit, baselineFloor, r.freshnessPolicy)

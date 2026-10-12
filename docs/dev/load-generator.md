@@ -279,3 +279,6 @@ worker recycling, a 1% run saturation budget, per-event exclusions, memory
 regression by incarnation and shutdown leak inventories. See
 [soak.md](soak.md) for the exact gates, capacity inputs and CI dispatches.
 Ordinary load and capacity retain their strict any-saturated-interval rule.
+
+For callers on separate hosts, see [distributed event evidence](distributed-evidence.md)
+for the opt-in identity feed, retention and clock-interval requirements.

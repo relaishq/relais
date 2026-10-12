@@ -536,6 +536,12 @@ func runArgs(args []string) error {
 	callerNamespace := fs.String("caller-namespace", "", "optional Linux caller network namespace (requires -caller-bind)")
 	callerBind := fs.String("caller-bind", "", "literal caller IPv4 UDP address:port; port 0 allocates a port, no namespace required")
 	signalingCert := fs.String("signaling-cert", "", "PEM file containing the pinned HTTPS server certificate (normal IP SAN verification)")
+	distributed := fs.Bool("distributed", false, "opt-in identity feed and interval clock evidence; external caller only")
+	runID := fs.String("run-id", "", "distributed run identity")
+	controlBound := fs.Duration("frontend-control-bound", -1, "measured absolute control-minus-frontend clock error")
+	workerBound := fs.Duration("frontend-worker-bound", -1, "measured absolute worker-minus-frontend clock error for all workers")
+	driftPPM := fs.Float64("clock-drift-ppm", 100, "worst-case relative clock drift in parts per million")
+	retention := fs.Duration("event-retention", 0, "caller event history; default 15s local, 180s distributed")
 	bearerTokenFile := fs.String("bearer-token-file", "", "file containing the HTTPS signaling bearer token")
 	fs.BoolVar(&c.PlaceOnWorker, "place-on-worker", false, "internal capacity placement on worker zero")
 	parentPID := fs.Int("parent-pid", 0, "internal caller owner PID")
@@ -615,9 +621,22 @@ func runArgs(args []string) error {
 		if *externalCaller {
 			runtime.GOMAXPROCS(c.GOMAXPROCS)
 		}
-		return loadgen.RunChild(ctx, loadgen.ChildOptions{PlaceOnWorker: c.PlaceOnWorker, Topology: external, Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output, ParentPID: *parentPID, Soak: c.Soak})
+		var distributedConfig *loadgen.DistributedConfig
+		if *distributed {
+			if !*externalCaller {
+				return errors.New("distributed mode requires -external-caller")
+			}
+			distributedConfig = &loadgen.DistributedConfig{RunID: *runID, FrontendControlBound: *controlBound, FrontendWorkerBound: *workerBound, DriftPPM: *driftPPM}
+		} else {
+			for _, name := range []string{"run-id", "frontend-control-bound", "frontend-worker-bound", "clock-drift-ppm"} {
+				if flagWasSet(fs, name) {
+					return fmt.Errorf("-%s requires -distributed", name)
+				}
+			}
+		}
+		return loadgen.RunChild(ctx, loadgen.ChildOptions{EventRetention: *retention, Distributed: distributedConfig, PlaceOnWorker: c.PlaceOnWorker, Topology: external, Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output, ParentPID: *parentPID, Soak: c.Soak})
 	}
-	for _, name := range []string{"signaling", "relay", "caller-namespace", "caller-bind", "signaling-cert", "bearer-token-file", "parent-pid"} {
+	for _, name := range []string{"signaling", "relay", "caller-namespace", "caller-bind", "signaling-cert", "bearer-token-file", "parent-pid", "distributed", "run-id", "frontend-control-bound", "frontend-worker-bound", "clock-drift-ppm", "event-retention"} {
 		if flagWasSet(fs, name) {
 			return fmt.Errorf("-%s requires -external-caller or -child", name)
 		}
