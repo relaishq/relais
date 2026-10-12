@@ -1,0 +1,150 @@
+package main
+
+import (
+	"context"
+	"github.com/relais/internal/clusterprocess"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/relais/pkg/callharness"
+	"github.com/relais/pkg/controlplane"
+	"github.com/relais/pkg/mediaworker"
+	"github.com/stretchr/testify/require"
+)
+
+func TestStoreStallADRArithmetic(t *testing.T) {
+	for _, tc := range []struct {
+		age       time.Duration
+		rtp, rtcp uint64
+	}{{1500 * time.Millisecond, 9440, 205}, {5 * time.Second, 31315, 642}} {
+		rtp, rtcp, cap := storeStallMargins(tc.age, mediaworker.CheckpointState{})
+		require.Equal(t, tc.rtp, rtp)
+		require.Equal(t, tc.rtcp, rtcp)
+		require.EqualValues(t, 22702, cap)
+	}
+	rtp, _, cap := storeStallMargins(time.Second, mediaworker.CheckpointState{RTPPacketRate: 10000})
+	require.EqualValues(t, 12565, rtp)
+	require.EqualValues(t, 12702, cap)
+}
+
+func stallFixture(loss bool) (*callharness.Report, controlplane.Status, *storeStallEvidence, time.Time, time.Time, time.Time) {
+	start := time.Unix(100, 0)
+	stalled, killed, until := start.Add(time.Second), start.Add(2500*time.Millisecond), start.Add(10*time.Second)
+	age := 1600 * time.Millisecond
+	if loss {
+		age = 5 * time.Second
+		killed = start.Add(6 * time.Second)
+	}
+	event := controlplane.MoveResult{ID: "session", Kind: "takeover", From: "0", To: "1", SnapshotAge: age, CheckpointAge: age - time.Millisecond, CheckpointStoredAt: start, Checkpoint: mediaworker.CheckpointState{Successes: 5}, End: killed.Add(500 * time.Millisecond), CheckpointPolicy: "scaled"}
+	rtp, rtcp, _ := storeStallMargins(age, event.Checkpoint)
+	event.SequenceMargin = uint16(rtp)
+	event.SRTCPIndexMargin = uint32(rtcp)
+	e := &storeStallEvidence{Variant: "moderate", Takeover: event, EnvelopeEvents: 1}
+	status := controlplane.Status{Calls: []controlplane.CallStatus{{Owner: "1"}}, Takeovers: []controlplane.MoveResult{event}}
+	report := &callharness.Report{StartedAt: start, OfferAnswerExchanges: 1, RemoteAddr: "127.0.0.1:1234", ConnectionStates: []callharness.StateChange{{State: "connected"}}, Moves: []callharness.MoveReport{{}}, Tracks: []callharness.TrackReport{{Kind: "audio", Arrivals: []time.Duration{2 * time.Second}, LastArrival: 10 * time.Second}, {Kind: "video", Arrivals: []time.Duration{2 * time.Second}, LastArrival: 10 * time.Second}}}
+	if loss {
+		e.Variant = "long"
+		e.Takeover.Lost = true
+		e.Takeover.CheckpointPolicy = "definitive-loss"
+		e.Takeover.SequenceMargin = 0
+		e.Takeover.SRTCPIndexMargin = 0
+		e.LossEvents = 1
+		e.LeaseReleased = true
+		e.RoutesCleared = true
+		status.Calls = nil
+		status.LostCount = 1
+		status.Takeovers[0] = e.Takeover
+		for i := range report.Tracks {
+			report.Tracks[i].LastArrival = killed.Sub(start)
+		}
+	}
+	return report, status, e, stalled, killed, until
+}
+
+func TestJudgeStoreStall(t *testing.T) {
+	for _, loss := range []bool{false, true} {
+		report, status, e, stalled, killed, until := stallFixture(loss)
+		require.Empty(t, judgeStoreStall(report, status, e, report.RemoteAddr, stalled, killed, until))
+	}
+	for _, tc := range []struct {
+		name   string
+		loss   bool
+		mutate func(*callharness.Report, *controlplane.Status, *storeStallEvidence)
+	}{
+		{"decryption", false, func(r *callharness.Report, _ *controlplane.Status, _ *storeStallEvidence) {
+			r.DecryptionFailures.AuthTag = 1
+		}},
+		{"reconnect", false, func(r *callharness.Report, _ *controlplane.Status, _ *storeStallEvidence) { r.ICERestarts = 1 }},
+		{"renegotiation", false, func(r *callharness.Report, _ *controlplane.Status, _ *storeStallEvidence) { r.Renegotiations = 1 }},
+		{"no-stalled-media", false, func(r *callharness.Report, _ *controlplane.Status, _ *storeStallEvidence) { r.Tracks[0].Arrivals = nil }},
+		{"no-resumed-media", false, func(r *callharness.Report, _ *controlplane.Status, _ *storeStallEvidence) {
+			r.Tracks[0].LastArrival = 2 * time.Second
+		}},
+		{"plain-margin", false, func(_ *callharness.Report, _ *controlplane.Status, e *storeStallEvidence) {
+			e.Takeover.SequenceMargin = 8192
+		}},
+		{"missing-counter", false, func(_ *callharness.Report, _ *controlplane.Status, e *storeStallEvidence) { e.EnvelopeEvents = 0 }},
+		{"double-counter", false, func(_ *callharness.Report, _ *controlplane.Status, e *storeStallEvidence) { e.EnvelopeEvents = 2 }},
+		{"resume-over-cap", true, func(_ *callharness.Report, _ *controlplane.Status, e *storeStallEvidence) { e.Takeover.Lost = false }},
+		{"loss-media", true, func(r *callharness.Report, _ *controlplane.Status, _ *storeStallEvidence) {
+			r.Tracks[0].LastArrival = 10 * time.Second
+		}},
+		{"lease-retained", true, func(_ *callharness.Report, _ *controlplane.Status, e *storeStallEvidence) { e.LeaseReleased = false }},
+		{"route-retained", true, func(_ *callharness.Report, _ *controlplane.Status, e *storeStallEvidence) { e.RoutesCleared = false }},
+		{"loss-not-counted", true, func(_ *callharness.Report, s *controlplane.Status, _ *storeStallEvidence) { s.LostCount = 0 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, s, e, a, k, u := stallFixture(tc.loss)
+			tc.mutate(r, &s, e)
+			require.NotEmpty(t, judgeStoreStall(r, s, e, r.RemoteAddr, a, k, u))
+		})
+	}
+}
+
+func TestValidateStoreStall(t *testing.T) {
+	require.NoError(t, validateStoreStall("moderate", 0, "", "loopback", false))
+	require.NoError(t, validateStoreStall("long", 6*time.Second, "", "loopback", false))
+	require.NoError(t, validateStoreStall("live", 3500*time.Millisecond, "", "loopback", false))
+	for _, tc := range []struct {
+		variant        string
+		duration       time.Duration
+		addr, topology string
+		other          bool
+	}{
+		{"", time.Second, "", "loopback", false}, {"other", 0, "", "loopback", false}, {"moderate", -time.Second, "", "loopback", false}, {"long", 0, "127.0.0.1:6379", "loopback", false}, {"moderate", 0, "", "netns", false}, {"long", 0, "", "loopback", true},
+	} {
+		require.Error(t, validateStoreStall(tc.variant, tc.duration, tc.addr, tc.topology, tc.other))
+	}
+}
+
+func TestMissingTakeoverStillCollectsAndJudgesCallerReport(t *testing.T) {
+	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("# TYPE relais_checkpoint_envelope_events_total counter\nrelais_checkpoint_envelope_events_total{policy=\"scaled\"} 0\nrelais_checkpoint_envelope_events_total{policy=\"definitive-loss\"} 0\n"))
+	}))
+	defer metrics.Close()
+	report, _, e, stalled, killed, until := stallFixture(true)
+	report.DecryptionFailures.AuthTag = 1
+	options := &storeStallOptions{Variant: "long", Duration: 5 * time.Second, Actual: 5 * time.Second, TimedOut: true, controlURL: metrics.URL, before: map[string]float64{envelopeCounter("scaled"): 0, envelopeCounter("definitive-loss"): 0}}
+	dir := t.TempDir()
+	result, err := options.judge(context.Background(), report, nil, controlplane.Status{}, clusterprocess.Ready{Media: report.RemoteAddr}, stalled, killed, until, dir)
+	require.NoError(t, err)
+	require.False(t, result.Pass)
+	require.Equal(t, "missing-takeover", result.StoreStall.Outcome)
+	require.True(t, result.StoreStall.TimedOut)
+	require.Equal(t, 1, result.Decrypt)
+	require.Contains(t, result.StoreStall.Failures, "caller decryption failures")
+	for _, name := range []string{"caller-report.json", "store-stall.json"} {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		require.NoError(t, err)
+		require.NotEmpty(t, b)
+	}
+	e.Observations = []storeStallObservation{{}}
+	report.DecryptionFailures.AuthTag = 0
+	require.Empty(t, judgeLiveStoreStall(report, e, stalled, killed))
+	report.Tracks[0].Arrivals = nil
+	require.Contains(t, judgeLiveStoreStall(report, e, stalled, killed), "no audio media past envelope during stall")
+}
