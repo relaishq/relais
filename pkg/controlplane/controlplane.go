@@ -609,7 +609,13 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 			// A hard-killed source has no memory but can still own a live
 			// lease and snapshot. Preserve that record for crash recovery.
 			current, getErr := p.store.Get(ctx, c.id)
-			if errors.Is(getErr, sessionstore.ErrNotFound) || getErr == nil &&
+			if errors.Is(getErr, sessionstore.ErrEnded) {
+				p.forget(c)
+			} else if errors.Is(getErr, sessionstore.ErrNotFound) {
+				c.rememberLease(lease)
+				p.expiredLocked(ctx, c)
+				res.Lost, res.LossCause = true, "ownership_expired"
+			} else if getErr == nil &&
 				(current.Worker != lease.Worker || current.Epoch != lease.Epoch) {
 				p.forget(c)
 			}

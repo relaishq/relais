@@ -28,7 +28,7 @@ one second independently of TTL; explicit short TTLs retain the old TTL/3 cadenc
 | Worker lease and encrypted snapshot | Coupled expiry at budget + 4 s by default. Transient errors retain live media/keys; authoritative renewal or checkpoint `ErrLeaseLost` still fences and closes. |
 | Session epoch, transition metadata, worker indexes | Existing lease-relative record/index retention follows the longer TTL. Global epoch stays persistent. Index refresh stays on each renewal tick. Missing ownership cannot be re-claimed for resume. |
 | Ended tombstone | Existing separate five-minute marker remains. Successful release is a normal end; uncommitted release can still count as expiry. |
-| Relay lease and fencing evidence | Persistent fencing record; 600 ms logical TTL, 200 ms renewal, 100 ms poll. A standby accrues a full TTL only from intervals bounded by successful unchanged polls. Short blips add no time; a failure streak of at least the renewal interval resets evidence. Matching expired-but-unclaimed renewal is existing Lua/Memory behavior, preserved here. |
+| Relay lease and fencing evidence | Persistent fencing record; 600 ms logical TTL, 200 ms renewal, 100 ms poll. A standby accrues a full TTL only from intervals bounded by successful unchanged polls, each capped at the configured renewal interval. Short blips add no time; a failure streak of at least the renewal interval resets evidence. Matching expired-but-unclaimed renewal is existing Lua/Memory behavior, preserved here. |
 | Persisted routes | Original authenticated consent deadline plus one-second hash cleanup margin, unchanged. No fabricated consent during failure. Live cached routes continue forwarding/authenticating; later checks republish after recovery. Relay restart retains ADR 0003 partial-restore limits. |
 | Local relay flow/hold/replay state | Unchanged. Lookup errors preserve established routes; bounded coordination holds still time out. |
 | Frame cache | Best effort, encrypted, existing 30 s idle expiry. Missing cache/write failure never fences live calls. Checkpoint policy still governs recovery. |
@@ -74,6 +74,9 @@ session. Passing decryption alone is not proof; raw packet absence is checked.
 Verified relay process death still bypasses expiry on the next 100 ms standby
 poll. A frozen holder is detected after about one 600 ms TTL of reachable
 staleness, retaining #43's under-one-second loopback caller gap on defaults.
+Each successful interval credits at most the configured renewal interval
+(200 ms by default). A long gap caused by a host stall does not count as a full
+TTL observed by the standby, even when both bounding polls succeed.
 Short failed polls leave only intervals touching those failures uncounted. A
 continuous failure streak of at least the configured renewal interval (200 ms
 default) resets evidence; after shared-store recovery the healthy active renews

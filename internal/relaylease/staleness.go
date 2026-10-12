@@ -7,8 +7,9 @@ import (
 )
 
 // staleness counts only intervals bounded by two successful polls of the same
-// unchanged lease. Brief failures add no time; a continuous failure streak of
-// at least the renewal interval discards the evidence. All elapsed time uses
+// unchanged lease, capped at one renewal interval each. Brief failures add no
+// time; a continuous failure streak of at least the renewal interval discards
+// the evidence. All elapsed time uses
 // the candidate's monotonic clock, never the store expiry clock.
 type staleness struct {
 	lease           sessionstore.RelayLease
@@ -46,7 +47,7 @@ func (s *staleness) observe(l sessionstore.RelayLease, missing bool, pollErr err
 	if s.lastSuccess.IsZero() || s.missing != missing || l.Epoch != s.lease.Epoch || l.Holder != s.lease.Holder || l.Forwarder != s.lease.Forwarder || l.PreviousHolder != s.lease.PreviousHolder || !l.ExpiresAt.Equal(s.lease.ExpiresAt) {
 		s.lease, s.missing, s.elapsed = l, missing, 0
 	} else if s.previousSuccess {
-		s.elapsed += now.Sub(s.lastSuccess)
+		s.elapsed += min(now.Sub(s.lastSuccess), renew)
 	}
 	s.lastSuccess, s.previousSuccess = now, true
 	return s.elapsed >= ttl
