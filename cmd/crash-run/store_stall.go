@@ -196,6 +196,9 @@ func judgeStoreStall(report *callharness.Report, status controlplane.Status, e *
 	if report == nil {
 		return []string{"missing caller report"}
 	}
+	if e.Takeover.LossCause == "ownership_expired" {
+		return judgeOwnershipExpired(report, status, e, relay, stalledAt, killed)
+	}
 	if len(status.Takeovers) == 0 {
 		e.Outcome = "missing-takeover"
 		e.ExpectedOutcome = "resume"
@@ -309,15 +312,29 @@ func (s *storeStallOptions) judge(ctx context.Context, report *callharness.Repor
 	}
 	e.ControlCounters = map[string]float64{}
 	for _, name := range []string{"relais_control_losses_total", "relais_control_takeovers_total", "relais_control_detection_events_total"} {
-		e.ControlCounters[name] = values[name] - s.before[name]
+		if name == "relais_control_losses_total" {
+			for _, cause := range []string{"ownership_expired", "checkpoint_unsafe", "checkpoint_missing", "recovery_failed"} {
+				key := lossCounter(cause)
+				before, bOK := s.before[key]
+				after, aOK := values[key]
+				if !bOK || !aOK {
+					return result{}, fmt.Errorf("missing loss counter %s", key)
+				}
+				e.ControlCounters[key] = after - before
+				e.ControlCounters[name] += after - before
+			}
+		} else {
+			e.ControlCounters[name] = values[name] - s.before[name]
+		}
 	}
+	e.LossEvents = e.ControlCounters["relais_control_losses_total"]
 	if s.Variant == "live" {
 		e.ExpectedOutcome = "observation"
 		e.Outcome = "media-flowing"
 		if e.MediaStopped {
 			e.Outcome = "media-stopped"
 		}
-		e.Failures = judgeLiveStoreStall(report, e, stalledAt, killed)
+		e.Failures = judgeOwnershipExpired(report, status, e, ready.Media, stalledAt, killed)
 	} else {
 		e.Failures = judgeStoreStall(report, status, e, ready.Media, stalledAt, killed, until)
 	}
@@ -399,9 +416,9 @@ func runStoreStallTrials(ctx context.Context, manager *clusterprocess.Manager, r
 			return trialFailure(i+1, "store-stall-"+variant, trialDir, err)
 		}
 		e := r.StoreStall
-		fmt.Printf("STORE_STALL run=%d variant=%s stall=%s snapshot_age=%s checkpoint_age=%s required_rtp=%d cap=%d rtp_margin=%d srtcp_margin=%d outcome=%s decrypt=%d reconnects=%d renegotiations=%d envelope_events=%g pass=%t failures=%q\n", i+1, variant, e.ActualStall, e.Takeover.SnapshotAge, e.Takeover.CheckpointAge, e.RequiredRTP, e.DefaultRTPCap, e.Takeover.SequenceMargin, e.Takeover.SRTCPIndexMargin, e.Outcome, r.Decrypt, r.Reconnects, r.Renegotiations, e.EnvelopeEvents, r.Pass, e.Failures)
-		if len(e.Observations) > 0 && len(e.Observations[len(e.Observations)-1].Status.Takeovers) == 0 {
-			fmt.Println("CHECKPOINT_AT_TAKEOVER NOT-RUN: no terminal takeover or checkpoint policy observation")
+		fmt.Printf("STORE_STALL run=%d variant=%s stall=%s snapshot_age=%s checkpoint_age=%s required_rtp=%d cap=%d rtp_margin=%d srtcp_margin=%d outcome=%s losses=%g cause=%s decrypt=%d reconnects=%d renegotiations=%d envelope_events=%g pass=%t failures=%q\n", i+1, variant, e.ActualStall, e.Takeover.SnapshotAge, e.Takeover.CheckpointAge, e.RequiredRTP, e.DefaultRTPCap, e.Takeover.SequenceMargin, e.Takeover.SRTCPIndexMargin, e.Outcome, e.LossEvents, e.Takeover.LossCause, r.Decrypt, r.Reconnects, r.Renegotiations, e.EnvelopeEvents, r.Pass, e.Failures)
+		if e.Takeover.LossCause == "ownership_expired" || len(e.Observations) > 0 && len(e.Observations[len(e.Observations)-1].Status.Takeovers) == 0 {
+			fmt.Println("CHECKPOINT_AT_TAKEOVER NOT-RUN: no retained checkpoint age; ownership expiry is judged through terminal accounting")
 		}
 		fmt.Printf("STORE_STALL_CALLER run=%d gap=%s stopped=%t connection=%s ice=%s connected_throughout=%t timeout=%t observations=%+v\n", i+1, r.Gap, e.MediaStopped, e.LastConnectionState, e.LastICEState, e.ConnectedThroughout, e.TimedOut, e.Observations)
 		if !r.Pass {
@@ -409,9 +426,48 @@ func runStoreStallTrials(ctx context.Context, manager *clusterprocess.Manager, r
 		}
 	}
 	if variant == "live" {
-		fmt.Printf("OBSERVED: %d/%d live store-stall trials; caller integrity checked, survival is reported separately\n", runs, runs)
+		fmt.Printf("PASS: %d/%d live store-stall trials; expired ownership counted and cleaned\n", runs, runs)
 	} else {
 		fmt.Printf("PASS: %d/%d real-process store-stall trials variant=%s\n", runs, runs, variant)
 	}
 	return nil
+}
+
+func lossCounter(cause string) string { return `relais_control_losses_total{cause="` + cause + `"}` }
+
+// Ownership is absent, so no checkpoint age/margins can be inferred. Judge
+// terminal accounting and integrity directly instead of inventing an age.
+func judgeOwnershipExpired(report *callharness.Report, status controlplane.Status, e *storeStallEvidence, relay string, stalledAt, actionAt time.Time) []string {
+	e.ExpectedOutcome, e.Outcome = "definitive-loss", "definitive-loss"
+	failures := judgeLiveStoreStall(report, e, stalledAt, actionAt)
+	check := func(ok bool, why string) {
+		if !ok {
+			failures = append(failures, why)
+		}
+	}
+	t := e.Takeover
+	check((e.Variant == "long" || e.Variant == "live") && e.ActualStall > 3*time.Second, "duration did not expire ownership")
+	check(t.Lost && t.LossCause == "ownership_expired" && len(status.Takeovers) == 1 && len(status.Calls) == 0 && status.LostCount == 1, "ownership loss missing, duplicated or call retained")
+	check(e.LossEvents == 1 && e.ControlCounters[lossCounter("ownership_expired")] == 1, "ownership loss metric missing or duplicated")
+	check(e.EnvelopeEvents == 0, "absent checkpoint falsely counted as envelope decision")
+	check(t.SequenceMargin == 0 && t.SRTCPIndexMargin == 0 && t.SnapshotAge == 0, "expired ownership spent margins or invented checkpoint age")
+	check(e.LeaseReleased && e.RoutesCleared, "ownership loss retained lease or persisted relay route")
+	if len(e.Observations) > 0 {
+		latest := e.Observations[len(e.Observations)-1]
+		check(latest.RelayRoutes == 0, "ownership loss retained cached relay route")
+		check(!latest.LeaseExists && !latest.SnapshotExists, "ownership loss retained lease or snapshot")
+		if e.Variant == "live" {
+			check(latest.WorkerSessions == 0 && e.ControlCounters["relais_control_detection_events_total"] == 0, "live worker fence was missing or misreported as worker death")
+		}
+	}
+	if report != nil {
+		check(report.RemoteAddr == relay && len(report.Moves) == 1, "missing terminal caller event or changed address")
+		if len(report.Moves) == 1 {
+			check(report.Moves[0].Lost && report.Moves[0].LossCause == "ownership_expired", "caller report missing loss cause")
+		}
+		for _, track := range report.Tracks {
+			check(!report.StartedAt.Add(track.LastArrival).After(t.End.Add(50*time.Millisecond)), "media resumed after definitive loss")
+		}
+	}
+	return failures
 }

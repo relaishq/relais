@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"github.com/relais/internal/clusterprocess"
 	"net/http"
 	"net/http/httptest"
@@ -123,12 +124,18 @@ func TestValidateStoreStall(t *testing.T) {
 
 func TestMissingTakeoverStillCollectsAndJudgesCallerReport(t *testing.T) {
 	metrics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		for _, cause := range []string{"ownership_expired", "checkpoint_unsafe", "checkpoint_missing", "recovery_failed"} {
+			_, _ = fmt.Fprintf(w, "%s 0\n", lossCounter(cause))
+		}
 		_, _ = w.Write([]byte("# TYPE relais_checkpoint_envelope_events_total counter\nrelais_checkpoint_envelope_events_total{policy=\"scaled\"} 0\nrelais_checkpoint_envelope_events_total{policy=\"definitive-loss\"} 0\n"))
 	}))
 	defer metrics.Close()
 	report, _, e, stalled, killed, until := stallFixture(true)
 	report.DecryptionFailures.AuthTag = 1
 	options := &storeStallOptions{Variant: "long", Duration: 5 * time.Second, Actual: 5 * time.Second, TimedOut: true, controlURL: metrics.URL, before: map[string]float64{envelopeCounter("scaled"): 0, envelopeCounter("definitive-loss"): 0}}
+	for _, cause := range []string{"ownership_expired", "checkpoint_unsafe", "checkpoint_missing", "recovery_failed"} {
+		options.before[lossCounter(cause)] = 0
+	}
 	dir := t.TempDir()
 	result, err := options.judge(context.Background(), report, nil, controlplane.Status{}, clusterprocess.Ready{Media: report.RemoteAddr}, stalled, killed, until, dir)
 	require.NoError(t, err)
@@ -147,4 +154,47 @@ func TestMissingTakeoverStillCollectsAndJudgesCallerReport(t *testing.T) {
 	require.Empty(t, judgeLiveStoreStall(report, e, stalled, killed))
 	report.Tracks[0].Arrivals = nil
 	require.Contains(t, judgeLiveStoreStall(report, e, stalled, killed), "no audio media past envelope during stall")
+}
+
+func TestJudgeOwnershipExpiredStoreStall(t *testing.T) {
+	for _, variant := range []string{"long", "live"} {
+		for _, mutation := range []string{"none", "missing-metric", "double-metric", "missing-status", "double-status", "wrong-cause", "cached-route", "resumed-media", "decryption"} {
+			t.Run(variant+"/"+mutation, func(t *testing.T) {
+				report, status, e, stalled, killed, _ := stallFixture(true)
+				e.Variant, e.ActualStall = variant, 5*time.Second
+				report.Moves[0].Lost, report.Moves[0].LossCause = true, "ownership_expired"
+				e.EnvelopeEvents = 0
+				e.Takeover.LossCause = "ownership_expired"
+				e.Takeover.CheckpointPolicy = ""
+				e.Takeover.SnapshotAge, e.Takeover.CheckpointAge = 0, 0
+				e.ControlCounters = map[string]float64{lossCounter("ownership_expired"): 1}
+				status.Takeovers = []controlplane.MoveResult{e.Takeover}
+				e.Observations = []storeStallObservation{{RelayRoutes: 0}}
+				switch mutation {
+				case "missing-metric":
+					e.LossEvents = 0
+				case "double-metric":
+					e.LossEvents = 2
+				case "missing-status":
+					status.Takeovers = nil
+				case "double-status":
+					status.Takeovers = append(status.Takeovers, e.Takeover)
+				case "wrong-cause":
+					e.Takeover.LossCause = "recovery_failed"
+				case "cached-route":
+					e.Observations[0].RelayRoutes = 1
+				case "resumed-media":
+					report.Tracks[0].LastArrival = 10 * time.Second
+				case "decryption":
+					report.DecryptionFailures.AuthTag = 1
+				}
+				failures := judgeOwnershipExpired(report, status, e, report.RemoteAddr, stalled, killed)
+				if mutation == "none" {
+					require.Empty(t, failures)
+				} else {
+					require.NotEmpty(t, failures)
+				}
+			})
+		}
+	}
 }

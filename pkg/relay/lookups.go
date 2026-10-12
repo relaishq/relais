@@ -156,7 +156,7 @@ func (l *ownerLookups) lookUp(ctx context.Context, sessionID string) {
 	lookup := l.pending[sessionID]
 	generation := lookup.generation
 	l.mu.Unlock()
-	owner, err := l.relay.owner(sessionID)
+	owner, epoch, err := l.relay.owner(sessionID)
 	l.mu.Lock()
 	nWaiters := len(lookup.waiters)
 	l.mu.Unlock()
@@ -185,6 +185,9 @@ func (l *ownerLookups) lookUp(ctx context.Context, sessionID string) {
 	}
 	l.mu.Unlock()
 	forwards := l.relay.resolved(sessionID, owner, err, waiters)
+	if err == nil {
+		l.relay.flows.noteEpoch(sessionID, owner, epoch)
+	}
 	l.relay.routeMu.Unlock()
 	for _, w := range forwards {
 		l.relay.forward(w.datagram, w.caller, owner)

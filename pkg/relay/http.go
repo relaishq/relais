@@ -7,6 +7,7 @@ import (
 
 	"github.com/relais/internal/privateapi"
 	"github.com/relais/pkg/metrics"
+	"github.com/relais/pkg/sessionstore"
 )
 
 var RemoteErrors = map[string]error{
@@ -148,6 +149,21 @@ func (r *Relay) PrivateHandler() http.Handler {
 	})
 	mux.HandleFunc("DELETE /sessions/{id}", func(w http.ResponseWriter, req *http.Request) {
 		r.ForgetSession(req.PathValue("id"))
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /sessions/{id}/forget-tenure", func(w http.ResponseWriter, req *http.Request) {
+		var lease sessionstore.Lease
+		if !privateapi.Read(w, req, &lease) {
+			return
+		}
+		if lease.SessionID != req.PathValue("id") {
+			http.Error(w, "session mismatch", http.StatusBadRequest)
+			return
+		}
+		if err := r.ForgetSessionTenure(req.Context(), lease); err != nil {
+			privateapi.Error(w, err, RemoteErrors)
+			return
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, _ *http.Request) {

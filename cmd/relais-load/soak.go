@@ -465,8 +465,13 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 		if worker && p.Peaks["relais_worker_active_sessions"] > float64(c.WorkerFloor) {
 			fail(p.Name + " exceeded measured worker floor")
 		}
-		if p.Name == "control" && p.Last["relais_control_losses_total"] > 0 {
-			fail("control reports unintended lost calls")
+		if p.Name == "control" {
+			for name, value := range p.Last {
+				if (name == "relais_control_losses_total" || strings.HasPrefix(name, "relais_control_losses_total{")) && value > 0 {
+					fail("control reports unintended lost calls")
+					break
+				}
+			}
 		}
 		// Counters are absent from Peaks; inspect the last raw counter too.
 		if worker && p.Last["relais_worker_decryption_failures_total"] > 0 {

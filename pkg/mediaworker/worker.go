@@ -396,7 +396,18 @@ func (w *Worker) LocalAddr() netip.AddrPort {
 // a single host candidate. Behind a relay, the session is claimed in the
 // session-owner store before the answer is returned, so the relay can route
 // the caller's first ICE check.
-func (w *Worker) CreateSession(ctx context.Context, offerSDP string) (sessionID, answerSDP string, err error) {
+func (w *Worker) CreateSession(ctx context.Context, offerSDP string) (string, string, error) {
+	return w.createSession(ctx, offerSDP, nil)
+}
+
+// CreateSessionWithLease returns the placed tenure in the same acknowledgement,
+// so a control-plane store outage cannot erase its cleanup token.
+func (w *Worker) CreateSessionWithLease(ctx context.Context, offerSDP string) (id, answer string, lease sessionstore.Lease, err error) {
+	id, answer, err = w.createSession(ctx, offerSDP, func(placed sessionstore.Lease) { lease = placed })
+	return
+}
+
+func (w *Worker) createSession(ctx context.Context, offerSDP string, placed func(sessionstore.Lease)) (sessionID, answerSDP string, err error) {
 	offer, err := parseOffer(offerSDP)
 	if err != nil {
 		return "", "", err
@@ -428,6 +439,9 @@ func (w *Worker) CreateSession(ctx context.Context, offerSDP string) (sessionID,
 		return "", "", ErrClosed
 	}
 	w.sessions[sess.id] = sess
+	if placed != nil {
+		placed(sess.lease)
+	} // before any renewal/close can inspect the registered session
 	w.running.Add(3)
 	w.mu.Unlock()
 	go func() { defer w.running.Done(); sess.agentLoop() }()

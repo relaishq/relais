@@ -103,7 +103,7 @@ func (p *routeWrites) write(snapshot routeSnapshot) {
 		}
 		return
 	}
-	if lease.Worker != snapshot.worker {
+	if lease.Worker != snapshot.worker || snapshot.record.Generation != 0 && snapshot.record.Generation != lease.Epoch {
 		return
 	}
 	current, ok := r.flows.forwardRoute(snapshot.record.Caller)

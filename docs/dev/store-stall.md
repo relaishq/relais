@@ -8,11 +8,11 @@ env -u RELAIS_REDIS_ADDR ./bin/crash-run -store-stall=moderate -runs=5 -after=10
 env -u RELAIS_REDIS_ADDR ./bin/crash-run -store-stall=long -runs=5 -after=10s
 ```
 
-Each trial establishes a live audio/video call, pauses the driver's throwaway
+Each crash trial establishes a live audio/video call, pauses the driver's throwaway
 Redis with SIGSTOP, and continues media past the 550 ms checkpoint envelope.
 It SIGKILLs and reaps the owning worker while Redis remains paused, then sends
 SIGCONT to that exact Redis child. The control plane detects the dead worker
-and completes a takeover. The driver never pauses an external store; `-redis`
+and completes recovery or records definitive ownership loss. The driver never pauses an external store; `-redis`
 and `RELAIS_REDIS_ADDR` are rejected for this scenario. Redis uses a free,
 non-6379 loopback port. Signals use the child tracking/reaping lock, which
 prevents a reused PID from being signalled.
@@ -32,9 +32,12 @@ age. Delayed successful writes can make checkpoint age smaller than snapshot
 age. Safety uses snapshot age. The adoption deadline's enlarged caller reserve
 and retained advances can reduce the effective cap further.
 
-Both variants require zero caller decryption failures, no reconnect or
-renegotiation, and exactly one envelope event. Moderate requires continuing
-media on both tracks. Long requires one counted loss, no resumed media, no
+All variants require zero caller decryption failures and no reconnect or
+renegotiation. Moderate requires exactly one scaled envelope event and zero
+losses. Long and live require exactly one `ownership_expired` loss in status,
+the cause-labelled loss metric, and the run report, with zero envelope events
+when ownership and the checkpoint expired before recovery. Moderate requires continuing
+media on both tracks. Long and live require one counted loss, no resumed media, no
 live call, a released lease, and cleared persisted relay routes. Each track
 must show media flowing beyond the envelope while Redis was stopped.
 
@@ -50,7 +53,7 @@ end, so their hangup DELETE can return 404.
 CI runs five trials of each variant with ten seconds of observation on nightly
 and manual dispatch only. The job has a 15-minute limit and uploads failure logs.
 
-## Live-worker investigation and missing takeovers
+## Live-worker expiry acceptance
 
 The investigation variant leaves both workers alive:
 
@@ -59,9 +62,9 @@ env -u RELAIS_REDIS_ADDR ./bin/crash-run -store-stall=live -store-stall-duration
 env -u RELAIS_REDIS_ADDR ./bin/crash-run -store-stall=live -store-stall-duration=3.5s -runs=3 -after=35s
 ```
 
-Live defaults to five seconds. `OBSERVED` means the driver collected valid
-observations and found no caller decryption failures or reconnects. It does
-not assert that the call survived. The report records media silence (including
+Live defaults to five seconds. `PASS` requires counted definitive loss and
+conditional cleanup after the three-second lease expires; it does not require
+the call to survive. Surviving a longer outage is #100. The report records media silence (including
 trailing silence), whether media stopped, connection/ICE states, worker session
 count, control status/counters, relay route count, and lease/snapshot presence.
 These observations precede Hangup, which can otherwise remove a live call.
@@ -74,8 +77,24 @@ Caller integrity is still judged. No zero-valued takeover metadata proves a
 fresh checkpoint: `CHECKPOINT_AT_TAKEOVER NOT-RUN` identifies the absent
 observation. An already missing call can return 404 on Hangup.
 
-On the current product, a stall beyond the three-second session lease can
-expire both the lease and snapshot before checkpoint policy runs. Live workers
-then fence their sessions; crash recovery can miss the session in lease
-enumeration. The requested long-stall acceptance remains failing. Product
-behaviour and ADR policy have not been changed by this driver work.
+A stall beyond the three-second session lease expires the lease and snapshot
+before checkpoint policy runs. Live workers fence their sessions. The control
+plane's retained placed-call registry now detects this independently of worker
+death and lease enumeration, and records exactly one `ownership_expired` loss.
+Its in-memory registry and history do not survive a control-plane restart.
+
+Expired ownership has no measurable takeover checkpoint age. The report's
+`loss_cause` identifies this path, and `CHECKPOINT_AT_TAKEOVER NOT-RUN` explains
+the unavailable age. Zero-valued age fields are not fresh-checkpoint evidence.
+The driver checks zero resume margins, one bounded terminal status event,
+`relais_control_losses_total{cause="ownership_expired"}` increasing by one,
+absence of the lease/snapshot and persisted routes, and zero cached relay routes.
+The moderate variant still uses ADR 0002's age formula and scaled margins.
+
+Ticket #99's required local verification uses three trials of each variant:
+
+```sh
+env -u RELAIS_REDIS_ADDR ./bin/crash-run -store-stall=moderate -runs=3 -after=10s
+env -u RELAIS_REDIS_ADDR ./bin/crash-run -store-stall=long -runs=3 -after=10s
+env -u RELAIS_REDIS_ADDR ./bin/crash-run -store-stall=live -store-stall-duration=5s -runs=3 -after=10s
+```

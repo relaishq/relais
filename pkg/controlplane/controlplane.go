@@ -94,9 +94,13 @@ type registration struct {
 }
 
 type call struct {
+	terminal       bool               // guarded by mu; terminal loss is accounted once
+	lease          sessionstore.Lease // guarded by stateMu; last observed placed tenure
+	lossLease      sessionstore.Lease // guarded by mu; immutable token for terminal cleanup
+	cleanupPending bool               // guarded by the plane registry lock
 	// hungUp records a completed End; retained retries keep this call.
 	hungUp atomic.Bool
-	mu     sync.Mutex // serializes moves, takeovers and End; never used by Status
+	mu     sync.Mutex // serializes moves, takeovers, End and terminal reconciliation
 	id     string
 	// stateMu protects the completed-move metadata below. Never hold it
 	// across I/O or while acquiring mu or the plane's registry lock.
@@ -123,6 +127,7 @@ type Plane struct {
 	eventNext       int
 	eventCount      int
 	lostCount       uint64
+	lossesByCause   map[string]uint64
 	running         bool
 }
 
@@ -140,6 +145,7 @@ func NewWithConfig(r Relay, store sessionstore.Store, config Config) *Plane {
 		store:           store,
 		workers:         make(map[string]*registration),
 		calls:           make(map[string]*call),
+		lossesByCause:   make(map[string]uint64),
 		ttl:             3 * time.Second,
 		incomingChanged: make(chan struct{}),
 	}
@@ -287,14 +293,31 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 	}
 	defer p.unreserve(w)
 
-	id, answer, err := w.worker.CreateSession(ctx, offer)
+	var id, answer string
+	var placed sessionstore.Lease
+	if worker, ok := w.worker.(interface {
+		CreateSessionWithLease(context.Context, string) (string, string, sessionstore.Lease, error)
+	}); ok {
+		id, answer, placed, err = worker.CreateSessionWithLease(ctx, offer)
+	} else {
+		id, answer, err = w.worker.CreateSession(ctx, offer)
+	}
 	if err != nil {
 		return "", "", err
 	}
 
 	p.mu.Lock()
-	p.calls[id] = &call{id: id}
+	if placed.Epoch == 0 {
+		placed = sessionstore.Lease{SessionID: id, Worker: w.addr}
+	}
+	c := &call{id: id, lease: placed}
+	p.calls[id] = c
 	p.mu.Unlock()
+	if placed.Epoch == 0 {
+		if lease, err := p.store.Get(ctx, id); err == nil {
+			c.rememberLease(lease)
+		}
+	}
 	return id, answer, nil
 }
 
@@ -307,12 +330,15 @@ func (p *Plane) End(ctx context.Context, id string) error {
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.terminal {
+		p.expiredLocked(ctx, c)
+		return sessionstore.ErrNotFound
+	}
 
 	lease, err := p.store.Get(ctx, id)
 	if err != nil {
 		if errors.Is(err, sessionstore.ErrNotFound) {
-			p.forget(c)
-			p.deleteFrames(id)
+			p.expiredLocked(ctx, c)
 		}
 
 		return err
@@ -327,6 +353,20 @@ func (p *Plane) End(ctx context.Context, id string) error {
 
 	if err := w.worker.EndSession(id); err != nil {
 		if errors.Is(err, mediaworker.ErrUnknownSession) {
+			// Fencing may remove ownership after End's first read. A worker's
+			// missing session does not prove that an explicit hangup ended it.
+			current, readErr := p.store.Get(ctx, id)
+			if errors.Is(readErr, sessionstore.ErrNotFound) {
+				p.expiredLocked(ctx, c)
+				return err
+			}
+			if readErr != nil {
+				return readErr
+			}
+			if current.Worker != lease.Worker || current.Epoch != lease.Epoch {
+				c.rememberLease(current)
+				return sessionstore.ErrLeaseLost
+			}
 			p.forget(c)
 			if p.store.Release(ctx, lease) == nil {
 				c.hungUp.Store(true)
@@ -355,6 +395,7 @@ type MoveResult struct {
 	Kind               string                      `json:"kind"`
 	DetectedAt         time.Time                   `json:"detected_at,omitempty"`
 	LastHeartbeat      time.Time                   `json:"last_heartbeat,omitempty"`
+	LossCause          string                      `json:"loss_cause,omitempty"`
 	Lost               bool                        `json:"lost,omitempty"`
 	ID                 string                      `json:"id"`
 	From               string                      `json:"from"`
@@ -388,6 +429,9 @@ func (p *Plane) moveRequest(ctx context.Context, id, to string) (MoveResult, err
 		return MoveResult{}, ErrMoveInProgress
 	}
 	defer c.mu.Unlock()
+	if c.terminal {
+		return MoveResult{}, ErrUnknownCall
+	}
 
 	lease, err := p.store.Get(ctx, id)
 	if err != nil {
@@ -488,7 +532,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 			if source.pending == nil {
 				source.pending = make(map[string]*takeoverState)
 			}
-			source.pending[c.id] = &takeoverState{call: c, lease: lease, routed: source.addr,
+			source.pending[c.id] = &takeoverState{call: c, lease: lease, routed: source.addr, routedLease: lease,
 				excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts, held: true, outageStarted: res.Start}
 			p.mu.Unlock()
 			recovery, cancel := context.WithTimeout(context.Background(), takeoverBudget)
@@ -798,7 +842,7 @@ type Status struct {
 	LostCount uint64         `json:"lost_count"`
 }
 
-// Status lists live calls and prunes metadata whose lease has disappeared.
+// Status lists live calls and reconciles definitive ownership loss.
 func (p *Plane) Status(ctx context.Context) (Status, error) {
 	p.mu.Lock()
 	workers := make([]*registration, 0, len(p.workers))
@@ -817,22 +861,37 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 	}
 	p.mu.Unlock()
 	for _, c := range calls {
+		p.mu.Lock()
+		pendingCleanup := c.cleanupPending
+		p.mu.Unlock()
+		if pendingCleanup {
+			if c.mu.TryLock() {
+				p.expiredLocked(ctx, c)
+				c.mu.Unlock()
+			}
+			continue
+		}
 		// Sample completed-move metadata before reading authoritative ownership.
 		// An in-flight transfer may advance the lease before its move completes;
-		// the next poll will include that move's metadata. Polling never takes
-		// the coordination lock, even briefly, so it cannot reject a real move.
+		// the next poll will include that move's metadata. Live polling never takes
+		// the coordination lock, so it cannot reject a real move. Missing
+		// ownership uses TryLock and an authoritative recheck for termination.
 		c.stateMu.Lock()
 		cs := CallStatus{ID: c.id, LastMove: c.lastMove, MoveCount: c.moveCount, TakeoverCount: c.takeoverCount, LastMoveKind: c.lastMoveKind}
 		c.stateMu.Unlock()
 		lease, err := p.store.Get(ctx, c.id)
 		if errors.Is(err, sessionstore.ErrNotFound) {
-			p.forget(c)
+			if c.mu.TryLock() {
+				p.expiredLocked(ctx, c)
+				c.mu.Unlock()
+			}
 			continue
 		}
 		if err != nil {
 			return Status{}, err
 		}
 
+		c.rememberLease(lease)
 		cs.Address, cs.Epoch = lease.Worker, lease.Epoch
 		for i := range status.Workers {
 			if status.Workers[i].Address == lease.Worker {
@@ -843,6 +902,9 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 
 		status.Calls = append(status.Calls, cs)
 	}
+	p.mu.Lock()
+	status.Takeovers, status.LostCount = p.recentTakeovers(), p.lostCount
+	p.mu.Unlock()
 	sort.Slice(status.Workers, func(i, j int) bool { return status.Workers[i].Name < status.Workers[j].Name })
 	sort.Slice(status.Calls, func(i, j int) bool { return status.Calls[i].ID < status.Calls[j].ID })
 	return status, nil
@@ -858,11 +920,19 @@ func drainParallelism() int {
 // prove a negative; a failed Get must never trigger rollback of a committed move.
 func (p *Plane) transfer(ctx context.Context, from sessionstore.Lease, to netip.AddrPort) (sessionstore.Lease, error) {
 	lease, err := p.store.Transfer(ctx, from, to, p.ttl)
+	defer func() {
+		if err == nil {
+			if c, e := p.lookup(from.SessionID); e == nil {
+				c.rememberLease(lease)
+			}
+		}
+	}()
 	var transient *sessionstore.TransientError
 	if !errors.As(err, &transient) || transient.Candidate == nil {
 		return lease, err
 	}
-	return p.resolveCandidate(ctx, *transient.Candidate, err)
+	lease, err = p.resolveCandidate(ctx, *transient.Candidate, err)
+	return lease, err
 }
 func (p *Plane) resolveCandidate(ctx context.Context, candidate sessionstore.Lease, cause error) (sessionstore.Lease, error) {
 	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
@@ -901,7 +971,7 @@ func (p *Plane) retainUncertainMove(source *registration, c *call, from sessions
 	if transient.Candidate.Worker == source.addr {
 		excluded = map[netip.AddrPort]bool{from.Worker: true}
 	}
-	source.pending[c.id] = &takeoverState{call: c, lease: from, candidate: transient.Candidate, routed: routed, excluded: excluded, attemptLimit: maxResumeAttempts, plannedState: state, planned: true, outageStarted: moveStarted}
+	source.pending[c.id] = &takeoverState{call: c, lease: from, candidate: transient.Candidate, routed: routed, routedLease: from, excluded: excluded, attemptLimit: maxResumeAttempts, plannedState: state, planned: true, outageStarted: moveStarted}
 	return true
 }
 

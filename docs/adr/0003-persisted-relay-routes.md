@@ -68,6 +68,18 @@ reconnecting callers or exposing their media keys to the relay.
   rejects delayed writes that would recreate an older address. Trusted movement
   republishes the route with its new epoch and unchanged confirmation/consent
   times. `ForgetSession` queues deletion even if the store still has a lease.
+  Definitive-loss cleanup uses `ForgetSessionTenure` instead: compare the
+  recorded owner/epoch against authoritative ownership while serializing
+  cache cleanup with trusted moves and owner-lookup application. A newer live
+  tenure makes cleanup a no-op. Cached routes carry the authoritative owner lookup and trusted move/restore
+  epoch so a successor at the same address is also preserved. Unknown-epoch
+  address-only routes can be removed only for the recorded worker after this
+  authoritative check. Retained moves also keep their known routed lease so
+  an abandoned source route/hold can be cleared with its own token. Matching
+  cleanup invalidates stale pending lookups and discards held/replay input.
+  It never queues `ForgetRoutes` by session ID: persisted cleanup remains the
+  session store's atomic matching release or expiry pruning. Store read errors
+  preserve routes and return an error for reconciliation retry.
 - Route retention is the consent deadline plus a one-second cleanup margin,
   independent of session/snapshot TTL. The margin never extends restoration or
   stickiness. Renewals extend the deadline only from authenticated request times.

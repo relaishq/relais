@@ -588,6 +588,7 @@ func (r *Relay) MoveSessionAtEpoch(sessionID string, from, to netip.AddrPort, ep
 		s.noteReplayTarget(to, epoch)
 	}
 	r.flows.moveSession(sessionID, from, to)
+	r.flows.noteEpoch(sessionID, to, epoch)
 	for _, caller := range r.flows.sessionCallers(sessionID) {
 		r.persist(caller, true)
 	}
@@ -820,11 +821,18 @@ func (r *Relay) sendCaller(datagram []byte, caller, worker netip.AddrPort) bool 
 	return true
 }
 
-func (r *Relay) owner(sessionID string) (netip.AddrPort, error) {
+func (r *Relay) owner(sessionID string) (netip.AddrPort, uint64, error) {
 	ctx, cancel := context.WithTimeout(r.ctx, r.cfg.OwnerLookupTimeout)
 	defer cancel()
 
-	return r.cfg.Owners.Owner(ctx, sessionID)
+	if owners, ok := r.cfg.Owners.(interface {
+		Get(context.Context, string) (sessionstore.Lease, error)
+	}); ok {
+		lease, err := owners.Get(ctx, sessionID)
+		return lease.Worker, lease.Epoch, err
+	}
+	owner, err := r.cfg.Owners.Owner(ctx, sessionID)
+	return owner, 0, err
 }
 
 // resolved acts on a session's owner lookup for the callers waiting on it:
@@ -1025,6 +1033,48 @@ func (r *Relay) ForgetSession(id string) {
 	if r.persistence != nil {
 		r.persistence.enqueue(id, nil)
 	}
+}
+
+// ForgetSessionTenure clears only the lost owner/epoch. The route locks keep a
+// racing move or owner-lookup result from installing successor routes between
+// the authoritative read and cache cleanup. Persisted state is removed by the
+// store's fenced Release/expiry, never an asynchronous ForgetRoutes by ID.
+func (r *Relay) ForgetSessionTenure(ctx context.Context, lease sessionstore.Lease) error {
+	if lease.Epoch == 0 || !lease.Worker.IsValid() {
+		return nil
+	}
+	owners, ok := r.cfg.Owners.(interface {
+		Get(context.Context, string) (sessionstore.Lease, error)
+	})
+	if !ok {
+		return errors.New("relay: tenure cleanup requires fenced ownership reads")
+	}
+	r.forwardMu.Lock()
+	defer r.forwardMu.Unlock()
+	r.routeMu.Lock()
+	defer r.routeMu.Unlock()
+	current, err := owners.Get(ctx, lease.SessionID)
+	if err == nil && (current.Worker != lease.Worker || current.Epoch != lease.Epoch) {
+		return nil
+	}
+	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) {
+		return err
+	}
+	r.lookups.mu.Lock()
+	if lookup := r.lookups.pending[lease.SessionID]; lookup != nil {
+		lookup.generation++
+	}
+	r.lookups.mu.Unlock()
+	if r.flows.forgetTenure(lease) {
+		if h := r.holds[lease.SessionID]; h != nil && h.worker == lease.Worker {
+			r.discardHold(h)
+		}
+		if r.buffer != nil {
+			r.buffer.forget(lease.SessionID)
+			r.flows.unwatchEmpty(lease.SessionID)
+		}
+	}
+	return nil
 }
 
 // Fence stops both packet paths synchronously. Close later joins background

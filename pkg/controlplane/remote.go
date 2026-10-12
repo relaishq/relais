@@ -11,6 +11,7 @@ import (
 	"github.com/relais/internal/privateapi"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/relay"
+	"github.com/relais/pkg/sessionstore"
 )
 
 // RemoteWorker implements Worker with bounded HTTP requests. No mutation is
@@ -36,9 +37,13 @@ func remoteClient(client *http.Client) *http.Client {
 }
 
 func (w *RemoteWorker) CreateSession(ctx context.Context, offer string) (string, string, error) {
+	id, answer, _, err := w.CreateSessionWithLease(ctx, offer)
+	return id, answer, err
+}
+func (w *RemoteWorker) CreateSessionWithLease(ctx context.Context, offer string) (string, string, sessionstore.Lease, error) {
 	var reply mediaworker.CreateReply
 	err := privateapi.Do(ctx, remoteClient(w.Client), w.URL, http.MethodPost, "/sessions", mediaworker.CreateRequest{Offer: offer}, &reply, mediaworker.RemoteErrors)
-	return reply.ID, reply.Answer, err
+	return reply.ID, reply.Answer, reply.Lease, err
 }
 func (w *RemoteWorker) EndSession(id string) error {
 	return privateapi.Do(context.Background(), remoteClient(w.Client), w.URL, http.MethodDelete, "/sessions/"+url.PathEscape(id), nil, nil, mediaworker.RemoteErrors)
@@ -98,6 +103,9 @@ func (r *RemoteRelay) ReplaySession(ctx context.Context, id string, to netip.Add
 // ForgetSession cannot report errors through Relay's existing interface.
 // Forget returns the transport result for applications that need it.
 func (r *RemoteRelay) ForgetSession(id string) { _ = r.Forget(context.Background(), id) }
+func (r *RemoteRelay) ForgetSessionTenure(ctx context.Context, lease sessionstore.Lease) error {
+	return privateapi.Do(ctx, remoteClient(r.Client), r.URL, http.MethodPost, "/sessions/"+url.PathEscape(lease.SessionID)+"/forget-tenure", lease, nil, relay.RemoteErrors)
+}
 func (r *RemoteRelay) Forget(ctx context.Context, id string) error {
 	return privateapi.Do(ctx, remoteClient(r.Client), r.URL, http.MethodDelete, "/sessions/"+url.PathEscape(id), nil, nil, relay.RemoteErrors)
 }

@@ -50,7 +50,7 @@ func TestControlMetricsCountMoveRollbackLossAndFailedDrain(t *testing.T) {
 	body := planeMetricsBody(p)
 	require.Contains(t, body, "relais_control_moves_total 0\n")
 	require.Contains(t, body, "relais_control_move_errors_total 1\n")
-	require.Contains(t, body, "relais_control_losses_total 1\n")
+	requireControlLosses(t, body, 1)
 	_, err = p.Drain(ctx, "unknown")
 	require.Error(t, err)
 	require.Contains(t, planeMetricsBody(p), "relais_control_drain_errors_total 1\n")
@@ -66,7 +66,7 @@ func TestControlMetricsCountTerminalTakeoverLoss(t *testing.T) {
 	body := planeMetricsBody(p)
 	require.Contains(t, body, "relais_control_takeovers_total 0\n")
 	require.Contains(t, body, "relais_control_takeover_errors_total 1\n")
-	require.Contains(t, body, "relais_control_losses_total 1\n")
+	requireControlLosses(t, body, 1)
 }
 
 func TestControlMetricsCountRolledBackMove(t *testing.T) {
@@ -79,7 +79,7 @@ func TestControlMetricsCountRolledBackMove(t *testing.T) {
 	require.True(t, result.Result.RolledBack)
 	body := planeMetricsBody(p)
 	require.Contains(t, body, "relais_control_move_errors_total 1\n")
-	require.Contains(t, body, "relais_control_losses_total 0\n")
+	requireControlLosses(t, body, 0)
 }
 
 func TestControlMetricsCountRetainedMoveCompletion(t *testing.T) {
@@ -97,7 +97,7 @@ func TestControlMetricsCountRetainedMoveCompletion(t *testing.T) {
 	body := planeMetricsBody(p)
 	require.Contains(t, body, "relais_control_moves_total 1\n")
 	require.Contains(t, body, "relais_control_move_errors_total 1\n")
-	require.Contains(t, body, "relais_control_losses_total 0\n")
+	requireControlLosses(t, body, 0)
 }
 
 func TestControlMetricsStayOffSignalingHandler(t *testing.T) {
@@ -134,7 +134,7 @@ func TestControlMetricsUncertainExportIsOneMove(t *testing.T) {
 			body := planeMetricsBody(p)
 			require.Contains(t, body, fmt.Sprintf("relais_control_moves_total %d\n", moves))
 			require.Contains(t, body, fmt.Sprintf("relais_control_move_errors_total %d\n", failures))
-			require.Contains(t, body, fmt.Sprintf("relais_control_losses_total %d\n", failures))
+			requireControlLosses(t, body, float64(failures))
 			require.Contains(t, body, "relais_control_takeovers_total 0\n")
 			require.Contains(t, body, "relais_control_takeover_errors_total 0\n")
 		})
@@ -197,7 +197,7 @@ func TestControlMetricsUncertainExportConcurrentTransferCountsOneMoveError(t *te
 	body := planeMetricsBody(p)
 	require.Contains(t, body, "relais_control_moves_total 0\n")
 	require.Contains(t, body, "relais_control_move_errors_total 1\n")
-	require.Contains(t, body, "relais_control_losses_total 0\n")
+	requireControlLosses(t, body, 0)
 	require.Contains(t, body, "relais_control_takeovers_total 0\n")
 	require.Contains(t, body, "relais_control_takeover_errors_total 0\n")
 	status, err := p.Status(ctx)
@@ -240,7 +240,7 @@ func TestControlMetricsRetainedUncertainExportCountsOnlyTerminalMove(t *testing.
 			body := planeMetricsBody(p)
 			require.Contains(t, body, fmt.Sprintf("relais_control_moves_total %d\n", moves))
 			require.Contains(t, body, fmt.Sprintf("relais_control_move_errors_total %d\n", failures))
-			require.Contains(t, body, fmt.Sprintf("relais_control_losses_total %d\n", failures))
+			requireControlLosses(t, body, float64(failures))
 			require.Contains(t, body, "relais_control_takeovers_total 0\n")
 			require.Contains(t, body, "relais_control_takeover_errors_total 0\n")
 		})
@@ -301,7 +301,7 @@ func TestControlMetricsRecoveryOutcomeSurvivesHistoryEviction(t *testing.T) {
 			body := planeMetricsBody(p)
 			require.Contains(t, body, fmt.Sprintf("relais_control_moves_total %d\n", moves))
 			require.Contains(t, body, fmt.Sprintf("relais_control_move_errors_total %d\n", failures))
-			require.Contains(t, body, fmt.Sprintf("relais_control_losses_total %d\n", failures))
+			requireControlLosses(t, body, float64(failures))
 			require.Contains(t, body, "relais_control_takeovers_total 0\n")
 			require.Contains(t, body, "relais_control_takeover_errors_total 0\n")
 		})
@@ -325,7 +325,7 @@ func TestControlMetricsFinalReleaseFailureIsOneMoveError(t *testing.T) {
 	body := planeMetricsBody(p)
 	require.Contains(t, body, "relais_control_moves_total 0\n")
 	require.Contains(t, body, "relais_control_move_errors_total 1\n")
-	require.Contains(t, body, "relais_control_losses_total 0\n")
+	requireControlLosses(t, body, 0)
 }
 
 type metricsUncertainResumeWorker struct{ *fakeWorker }
@@ -358,4 +358,18 @@ func TestControlMetricsCountObservedUncertainResumePaths(t *testing.T) {
 			require.Contains(t, planeMetricsBody(p), fmt.Sprintf("relais_control_uncertain_move_resumes_total %d\n", want))
 		})
 	}
+}
+
+func requireControlLosses(t *testing.T, body string, want float64) {
+	t.Helper()
+	var parser expfmt.TextParser
+	families, err := parser.TextToMetricFamilies(strings.NewReader(body))
+	require.NoError(t, err)
+	family := families["relais_control_losses_total"]
+	require.NotNil(t, family)
+	var total float64
+	for _, m := range family.Metric {
+		total += m.Counter.GetValue()
+	}
+	require.Equal(t, want, total)
 }

@@ -85,6 +85,9 @@ func (c *Call) collectStatusTakeovers(ctx context.Context, read func(context.Con
 		from, _ := strconv.Atoi(res.From)
 		to, _ := strconv.Atoi(res.To)
 		start := res.LastHeartbeat
+		if start.IsZero() {
+			start = res.Start
+		}
 		c.harness.callsMu.Lock()
 		actions := append([]time.Time{}, c.harness.failures[res.From]...)
 		c.harness.callsMu.Unlock()
@@ -97,7 +100,11 @@ func (c *Call) collectStatusTakeovers(ctx context.Context, read func(context.Con
 		if res.Error != "" {
 			moveErr = errors.New(res.Error)
 		}
-		c.rec.move(moveRecord{kind: "takeover", detection: res.DetectedAt.Sub(start), from: from, to: to, start: start, end: res.End, result: res.Result, err: moveErr})
+		detection := time.Duration(0)
+		if !res.DetectedAt.IsZero() {
+			detection = res.DetectedAt.Sub(start)
+		}
+		c.rec.move(moveRecord{kind: "takeover", lost: res.Lost, lossCause: res.LossCause, detection: detection, from: from, to: to, start: start, end: res.End, result: res.Result, err: moveErr})
 	}
 	return nil
 }
