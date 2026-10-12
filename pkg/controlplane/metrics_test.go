@@ -267,7 +267,9 @@ func TestControlMetricsRecoveryOutcomeSurvivesHistoryEviction(t *testing.T) {
 			require.Error(t, err)
 			store.fail = false
 			if recovery == "vanished lease" {
-				require.NoError(t, p.store.Release(ctx, lease))
+				_, err = p.store.Renew(ctx, lease, time.Millisecond)
+				require.NoError(t, err)
+				time.Sleep(5 * time.Millisecond)
 			}
 			source := p.workers["a"]
 			c := p.calls[id]

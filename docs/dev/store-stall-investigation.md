@@ -1,8 +1,15 @@
 # Ticket 95: expiry during real-process store stalls
 
-Investigation only. Product code and ADR policy are unchanged. Checkout:
-`feat/95-store-stall`, base `765db53`. Each trial uses the driver's throwaway
-Redis and separate relay/control/two-worker processes, with one loopback caller.
+Historical #95 baseline investigation at `feat/95-store-stall`, base `765db53`.
+The measurements below describe that baseline. #99 subsequently changed product
+accounting and ADR 0002: expired placed calls now produce exactly one
+`ownership_expired` loss, and conditional cleanup preserves newer tenures.
+PR #101 review rework distinguishes normal matching release with an ended
+tombstone and keeps relay cleanup store reads off media locks. The current
+three-variant acceptance is in [store-stall.md](store-stall.md).
+
+Each historical trial used the driver's throwaway Redis and separate
+relay/control/two-worker processes, with one loopback caller.
 
 ## Live workers, no SIGKILL
 
@@ -167,5 +174,11 @@ Artifact roots (all include driver logs, child logs and metrics):
 
 VERIFIED — all requested investigation runs and five total moderate trials;
 vet, crash-run/child-tracking race tests, actionlint and diff checks pass.
-The crash long-stall acceptance is deliberately red; product fixes were not
-implemented. Hosted CI and 60-second consent acceptance are NOT-RUN.
+The crash long-stall acceptance was deliberately red in this historical
+investigation. #99 now requires long and live stalls to pass through counted
+definitive loss, while moderate stalls still resume with scaled margins and no
+loss. Current nightly/manual CI runs five trials of each of those three
+variants with a 25-minute limit. Normal successful release is an end rather
+than a loss; a failed release during store unavailability remains ambiguous
+and can count as ownership expiry. Hosted CI and the separate 60-second
+consent acceptance were NOT-RUN in this baseline investigation.

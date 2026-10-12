@@ -184,6 +184,7 @@ func (l *ownerLookups) lookUp(ctx context.Context, sessionID string) {
 		l.bytes -= len(w.datagram)
 	}
 	l.mu.Unlock()
+	l.relay.invalidateCleanup(sessionID)
 	forwards := l.relay.resolved(sessionID, owner, err, waiters)
 	if err == nil {
 		l.relay.flows.noteEpoch(sessionID, owner, epoch)

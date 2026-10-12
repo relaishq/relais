@@ -323,6 +323,8 @@ type Relay struct {
 
 	// routeMu serializes generation validation with route application only.
 	routeMu sync.Mutex
+	// Only in-flight cleanup reads retain generations; no ended-session history.
+	cleanupReads map[string]*cleanupRead
 
 	// forwardMu orders caller sends, holds and private drain barriers. No
 	// socket write takes routeMu. Queued releases precede new caller sends.
@@ -564,6 +566,18 @@ func (r *Relay) MoveSession(sessionID string, from, to netip.AddrPort) error {
 	return r.MoveSessionAtEpoch(sessionID, from, to, 0)
 }
 
+type cleanupRead struct {
+	generation uint64
+	readers    int
+}
+
+// Called under routeMu by moves, lookup application and cache deletion.
+func (r *Relay) invalidateCleanup(id string) {
+	if read := r.cleanupReads[id]; read != nil {
+		read.generation++
+	}
+}
+
 // MoveSessionAtEpoch carries the transferred owner lease epoch. It distinguishes
 // a fresh receiver at a reused address from idempotent route confirmation.
 // Epoch zero keeps compatibility with callers that only identify route changes.
@@ -579,6 +593,7 @@ func (r *Relay) MoveSessionAtEpoch(sessionID string, from, to netip.AddrPort, ep
 	if r.ctx.Err() != nil {
 		return errors.New("relay: closed")
 	}
+	r.invalidateCleanup(sessionID)
 	r.lookups.mu.Lock()
 	if lookup := r.lookups.pending[sessionID]; lookup != nil {
 		lookup.generation++
@@ -863,7 +878,7 @@ func (r *Relay) resolved(sessionID string, owner netip.AddrPort, err error, wait
 			r.stunRouted.Add(1)
 			forwards = append(forwards, w)
 		}
-	case errors.Is(err, sessionstore.ErrNotFound):
+	case errors.Is(err, sessionstore.ErrNotFound), errors.Is(err, sessionstore.ErrEnded):
 		for _, w := range waiters {
 			if w.datagram == nil {
 				r.flows.forget(w.caller, sessionID)
@@ -1020,6 +1035,7 @@ func (r *Relay) ForgetSession(id string) {
 	}
 	r.routeMu.Lock()
 	defer r.routeMu.Unlock()
+	r.invalidateCleanup(id)
 	r.lookups.mu.Lock()
 	if lookup := r.lookups.pending[id]; lookup != nil {
 		lookup.generation++
@@ -1035,10 +1051,10 @@ func (r *Relay) ForgetSession(id string) {
 	}
 }
 
-// ForgetSessionTenure clears only the lost owner/epoch. The route locks keep a
-// racing move or owner-lookup result from installing successor routes between
-// the authoritative read and cache cleanup. Persisted state is removed by the
-// store's fenced Release/expiry, never an asynchronous ForgetRoutes by ID.
+// ForgetSessionTenure clears only the lost owner/epoch. Store I/O runs outside
+// the media locks; a scoped generation rejects racing moves or owner lookups.
+// Persisted state is removed by the store's fenced Release/expiry, never an
+// asynchronous ForgetRoutes by ID.
 func (r *Relay) ForgetSessionTenure(ctx context.Context, lease sessionstore.Lease) error {
 	if lease.Epoch == 0 || !lease.Worker.IsValid() {
 		return nil
@@ -1049,17 +1065,43 @@ func (r *Relay) ForgetSessionTenure(ctx context.Context, lease sessionstore.Leas
 	if !ok {
 		return errors.New("relay: tenure cleanup requires fenced ownership reads")
 	}
-	r.forwardMu.Lock()
-	defer r.forwardMu.Unlock()
+	// Register a generation before reading, but never keep either media lock
+	// across store I/O. A racing move or lookup makes this result unusable.
 	r.routeMu.Lock()
-	defer r.routeMu.Unlock()
+	if r.cleanupReads == nil {
+		r.cleanupReads = make(map[string]*cleanupRead)
+	}
+	read := r.cleanupReads[lease.SessionID]
+	if read == nil {
+		read = &cleanupRead{}
+		r.cleanupReads[lease.SessionID] = read
+	}
+	read.readers++
+	generation := read.generation
+	r.routeMu.Unlock()
+	defer func() {
+		r.routeMu.Lock()
+		read.readers--
+		if read.readers == 0 {
+			delete(r.cleanupReads, lease.SessionID)
+		}
+		r.routeMu.Unlock()
+	}()
 	current, err := owners.Get(ctx, lease.SessionID)
 	if err == nil && (current.Worker != lease.Worker || current.Epoch != lease.Epoch) {
 		return nil
 	}
-	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) {
+	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) && !errors.Is(err, sessionstore.ErrEnded) {
 		return err
 	}
+	r.forwardMu.Lock()
+	defer r.forwardMu.Unlock()
+	r.routeMu.Lock()
+	defer r.routeMu.Unlock()
+	if read.generation != generation {
+		return errors.New("relay: tenure cleanup raced with route change")
+	}
+	r.invalidateCleanup(lease.SessionID)
 	r.lookups.mu.Lock()
 	if lookup := r.lookups.pending[lease.SessionID]; lookup != nil {
 		lookup.generation++

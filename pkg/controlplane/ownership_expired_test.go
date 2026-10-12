@@ -55,7 +55,9 @@ func TestOwnershipExpiredDetectorWithoutStatusPoll(t *testing.T) {
 	require.NoError(t, err)
 	lease, err := p.store.Get(ctx, id)
 	require.NoError(t, err)
-	require.NoError(t, p.store.Release(ctx, lease))
+	_, err = p.store.Renew(ctx, lease, time.Millisecond)
+	require.NoError(t, err)
+	time.Sleep(5 * time.Millisecond)
 	done := make(chan error, 1)
 	go func() { done <- p.Run(ctx) }()
 	t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
@@ -150,9 +152,10 @@ func (w *fenceDuringEndWorker) EndSession(id string) error {
 	if err != nil {
 		return err
 	}
-	if err := w.store.Release(context.Background(), lease); err != nil {
+	if _, err := w.store.Renew(context.Background(), lease, time.Millisecond); err != nil {
 		return err
 	}
+	time.Sleep(5 * time.Millisecond)
 	return mediaworker.ErrUnknownSession
 }
 func TestOwnershipExpiredFenceDuringEndCounted(t *testing.T) {
@@ -222,6 +225,8 @@ func TestOwnershipExpiredPlacementRetainsLeaseAcrossReadFailure(t *testing.T) {
 	status, err := p.Status(ctx)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, status.LostCount)
+	require.Zero(t, routed.cleanup.Epoch, "status must not run cleanup")
+	p.reconcileOwnership(ctx)
 	require.Equal(t, old.Worker, routed.cleanup.Worker)
 	require.Equal(t, old.Epoch, routed.cleanup.Epoch)
 }
@@ -257,6 +262,13 @@ func TestOwnershipExpiredLossCountedBeforeCleanupRetry(t *testing.T) {
 	require.Len(t, status.Takeovers, 1)
 	require.Empty(t, status.Calls)
 	require.Contains(t, planeMetricsBody(p), `relais_control_losses_total{cause="ownership_expired"} 1`)
+	require.Zero(t, retry.attempts, "status must not run cleanup")
+	p.reconcileOwnership(ctx)
+	require.Equal(t, 1, retry.attempts)
+	p.reconcileOwnership(ctx)
+	require.Equal(t, 1, retry.attempts, "backoff must suppress immediate retries")
+	time.Sleep(300 * time.Millisecond)
+	p.reconcileOwnership(ctx)
 	status, err = p.Status(ctx)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, status.LostCount)

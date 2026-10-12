@@ -24,6 +24,9 @@ import (
 )
 
 var (
+	// ErrEnded means a matching live tenure was explicitly released. Get returns
+	// its owner/epoch until the release tombstone expires, never a live lease.
+	ErrEnded = errors.New("sessionstore: session ended")
 	// ErrNotFound means no live lease exists, including an expired lease.
 	ErrNotFound = errors.New("sessionstore: session not found")
 	// ErrLeaseHeld means Claim found an existing record, even if expired.
@@ -31,6 +34,9 @@ var (
 	// ErrLeaseLost means an epoch or owner is stale, or the lease expired.
 	ErrLeaseLost = errors.New("sessionstore: lease lost")
 )
+
+// EndedRetention exceeds the detector window and ordinary transient outages.
+const EndedRetention = 5 * time.Minute
 
 // Lease identifies one tenure of a session's private relay-leg owner.
 type Lease struct {
@@ -87,11 +93,13 @@ type Store interface {
 	// its epoch. A stale token returns ErrLeaseLost without changing anything.
 	Transfer(ctx context.Context, from Lease, to netip.AddrPort, ttl time.Duration) (Lease, error)
 
-	// Get returns the current unexpired lease, or ErrNotFound. Expired records
+	// Get returns the current unexpired lease, ErrEnded with its released token,
+	// or ErrNotFound. Expired records
 	// can be deleted here; the old token remains invalid after any new claim.
 	Get(ctx context.Context, sessionID string) (Lease, error)
 
-	// Release removes only the matching owner and epoch. Stale release is a
+	// Release removes only the matching owner and epoch. A live matching release
+	// also retains an ended tombstone for EndedRetention. Stale release is a
 	// successful no-op, including when the address has become owner again.
 	Release(ctx context.Context, lease Lease) error
 
@@ -112,6 +120,8 @@ type Memory struct {
 	relayLeases      map[string]RelayLease
 	mu               sync.RWMutex
 	leases           map[string]Lease
+	ended            map[string]Lease // ExpiresAt is the tombstone retention deadline
+	endedPruneAt     time.Time
 	states           map[string][]byte
 	checkpoints      map[string]Checkpoint
 	routes           map[netip.AddrPort]Route
@@ -124,7 +134,7 @@ var _ Store = (*Memory)(nil)
 
 // NewMemory returns an empty in-memory fenced store.
 func NewMemory() *Memory {
-	return &Memory{leases: make(map[string]Lease), states: make(map[string][]byte), checkpoints: make(map[string]Checkpoint), routes: make(map[netip.AddrPort]Route), routeNominations: make(map[string]Route), routeSessions: make(map[string]map[netip.AddrPort]struct{})}
+	return &Memory{leases: make(map[string]Lease), ended: make(map[string]Lease), states: make(map[string][]byte), checkpoints: make(map[string]Checkpoint), routes: make(map[netip.AddrPort]Route), routeNominations: make(map[string]Route), routeSessions: make(map[string]map[netip.AddrPort]struct{})}
 }
 
 func valid(id string, worker netip.AddrPort, ttl time.Duration) bool {
@@ -136,6 +146,7 @@ func same(a, b Lease) bool {
 }
 
 func (m *Memory) next(id string, worker netip.AddrPort, ttl time.Duration) Lease {
+	delete(m.ended, id)
 	m.epoch++
 	lease := Lease{SessionID: id, Worker: worker, Epoch: m.epoch, ExpiresAt: time.Now().Add(ttl)}
 	m.leases[id] = lease
@@ -219,6 +230,12 @@ func (m *Memory) Get(ctx context.Context, id string) (Lease, error) {
 		delete(m.states, id)
 		delete(m.checkpoints, id)
 		m.forgetRoutes(id)
+		if ended, ok := m.ended[id]; ok {
+			if time.Now().Before(ended.ExpiresAt) {
+				return ended, ErrEnded
+			}
+			delete(m.ended, id)
+		}
 		return Lease{}, ErrNotFound
 	}
 
@@ -240,7 +257,20 @@ func (m *Memory) Release(ctx context.Context, lease Lease) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	now := time.Now()
+	if !now.Before(m.endedPruneAt) {
+		for id, ended := range m.ended {
+			if !now.Before(ended.ExpiresAt) {
+				delete(m.ended, id)
+			}
+		}
+		m.endedPruneAt = now.Add(time.Minute)
+	}
 	if current, ok := m.leases[lease.SessionID]; ok && same(current, lease) {
+		if time.Now().Before(current.ExpiresAt) {
+			current.ExpiresAt = time.Now().Add(EndedRetention)
+			m.ended[lease.SessionID] = current
+		}
 		delete(m.leases, lease.SessionID)
 		delete(m.states, lease.SessionID)
 		delete(m.checkpoints, lease.SessionID)

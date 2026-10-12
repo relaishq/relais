@@ -532,7 +532,7 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		require.Empty(t, status.Calls)
 		require.EqualValues(t, 2, rejected.Load())
 		_, err := store.Get(ctx, call.SessionID())
-		require.ErrorIs(t, err, sessionstore.ErrNotFound)
+		require.ErrorIs(t, err, sessionstore.ErrEnded)
 	} else {
 		require.Len(t, status.Calls, 1)
 		target, err := strconv.Atoi(status.Calls[0].Owner)

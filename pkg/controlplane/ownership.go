@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"time"
 
 	"github.com/relais/pkg/mediaworker"
@@ -27,16 +28,16 @@ func (c *call) rememberLease(lease sessionstore.Lease) {
 // errors retain the registry; only authoritative ErrNotFound proves a loss.
 func (p *Plane) reconcileOwnership(ctx context.Context) {
 	p.mu.Lock()
+	// Build the pending set once, instead of scanning workers for each call.
+	pending := make(map[string]bool)
+	for _, w := range p.workers {
+		for id := range w.pending {
+			pending[id] = true
+		}
+	}
 	calls := make([]*call, 0, len(p.calls))
 	for id, c := range p.calls {
-		pending := false
-		for _, w := range p.workers {
-			if w.pending[id] != nil {
-				pending = true
-				break
-			}
-		}
-		if !pending {
+		if !pending[id] {
 			calls = append(calls, c)
 		}
 	}
@@ -50,7 +51,7 @@ func (p *Plane) reconcileOwnership(ctx context.Context) {
 		p.mu.Unlock()
 		if pendingCleanup {
 			if c.mu.TryLock() {
-				p.expiredLocked(ctx, c)
+				p.cleanupExpired(ctx, c)
 				c.mu.Unlock()
 			}
 			continue
@@ -60,10 +61,11 @@ func (p *Plane) reconcileOwnership(ctx context.Context) {
 			c.rememberLease(lease)
 			continue
 		}
-		if !errors.Is(err, sessionstore.ErrNotFound) || !c.mu.TryLock() {
+		if (!errors.Is(err, sessionstore.ErrNotFound) && !errors.Is(err, sessionstore.ErrEnded)) || !c.mu.TryLock() {
 			continue
 		}
 		p.expiredLocked(ctx, c)
+		p.cleanupExpired(ctx, c)
 		c.mu.Unlock()
 	}
 }
@@ -71,16 +73,7 @@ func (p *Plane) reconcileOwnership(ctx context.Context) {
 // The caller holds c.mu. Re-read under that lock: a stale status read must not
 // declare a racing transfer lost. Moves, recovery and End share this lock.
 func (p *Plane) expiredLocked(ctx context.Context, c *call) {
-	if c.hungUp.Load() {
-		return
-	}
-	if c.terminal {
-		p.mu.Lock()
-		pending := c.cleanupPending
-		p.mu.Unlock()
-		if pending {
-			p.cleanupExpired(ctx, c)
-		}
+	if c.terminal || c.hungUp.Load() {
 		return
 	}
 	lease, err := p.store.Get(ctx, c.id)
@@ -88,7 +81,7 @@ func (p *Plane) expiredLocked(ctx context.Context, c *call) {
 		c.rememberLease(lease)
 		return
 	}
-	if !errors.Is(err, sessionstore.ErrNotFound) {
+	if !errors.Is(err, sessionstore.ErrNotFound) && !errors.Is(err, sessionstore.ErrEnded) {
 		return
 	}
 	c.stateMu.Lock()
@@ -103,6 +96,13 @@ func (p *Plane) expiredLocked(ctx context.Context, c *call) {
 		}
 	}
 	if !tracked {
+		p.mu.Unlock()
+		return
+	}
+	if errors.Is(err, sessionstore.ErrEnded) {
+		// Explicit release is authoritative evidence of a normal worker-side end.
+		c.hungUp.Store(true)
+		c.terminal, c.lossLease, c.cleanupPending = true, lease, true
 		p.mu.Unlock()
 		return
 	}
@@ -121,32 +121,60 @@ func (p *Plane) expiredLocked(ctx context.Context, c *call) {
 	p.lossesByCause[res.LossCause]++
 	p.recordTakeover(res)
 	p.mu.Unlock()
-	p.cleanupExpired(ctx, c)
 }
 
 // The call lock protects lossLease; registry membership is retained on any
 // unknown cleanup result. Retrying never increments terminal counters again.
 func (p *Plane) cleanupExpired(ctx context.Context, c *call) {
+	p.mu.Lock()
+	pending := c.cleanupPending
+	r := p.relay
+	p.mu.Unlock()
+	if !pending || time.Now().Before(c.cleanupAfter) {
+		return
+	}
+	// One job per call, with capped backoff even when the store or relay stays down.
+	if c.cleanupDelay == 0 {
+		c.cleanupDelay = 250 * time.Millisecond
+	} else {
+		c.cleanupDelay = min(2*c.cleanupDelay, 30*time.Second)
+	}
+	c.cleanupAfter = time.Now().Add(c.cleanupDelay)
 	cleanupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	lost := c.lossLease
 	if err := p.store.Release(cleanupCtx, lost); err != nil {
 		return
 	}
-	p.mu.Lock()
-	r := p.relay
-	p.mu.Unlock()
 	if relay, ok := r.(TenureCleanupRelay); ok {
-		if err := relay.ForgetSessionTenure(cleanupCtx, lost); err != nil {
+		for _, token := range append([]sessionstore.Lease{lost}, c.cleanupLeases...) {
+			if token.Epoch != 0 {
+				if err := relay.ForgetSessionTenure(cleanupCtx, token); err != nil {
+					return
+				}
+			}
+		}
+	} else if c.cleanupLegacy {
+		// Legacy local/fake relays have no conditional API. Preserve their existing
+		// terminal-loss cleanup only after verifying no successor owns the ID.
+		current, err := p.store.Get(cleanupCtx, c.id)
+		if err != nil && !errors.Is(err, sessionstore.ErrNotFound) && !errors.Is(err, sessionstore.ErrEnded) {
 			return
+		}
+		if err != nil || sameTenure(current, lost) {
+			r.ForgetSession(c.id)
+			if c.cleanupPlanned {
+				if _, err := r.ReleaseSession(c.id, netip.AddrPort{}); err != nil {
+					return
+				}
+			}
 		}
 	}
 	current, err := p.store.Get(cleanupCtx, c.id)
-	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) {
+	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) && !errors.Is(err, sessionstore.ErrEnded) {
 		return
 	}
 	// A new claim after proven absence is not a resume of this lost call.
-	// Preserve its state, including shared frames, without reviving the old call.
 	if err == nil {
 		c.rememberLease(current)
 	} else {
@@ -158,4 +186,8 @@ func (p *Plane) cleanupExpired(ctx context.Context, c *call) {
 		delete(p.calls, c.id)
 	}
 	p.mu.Unlock()
+}
+
+func sameTenure(a, b sessionstore.Lease) bool {
+	return a.Worker == b.Worker && a.Epoch == b.Epoch
 }

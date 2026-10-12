@@ -202,7 +202,7 @@ func TestLostRetainedMoveReleasesRelayHold(t *testing.T) {
 	require.Zero(t, r.Stats().HoldTimeouts)
 	require.Empty(t, source.pending)
 	_, err = store.Get(ctx, id)
-	require.ErrorIs(t, err, sessionstore.ErrNotFound)
+	require.ErrorIs(t, err, sessionstore.ErrEnded)
 }
 
 type reverseReplyLostStore struct {

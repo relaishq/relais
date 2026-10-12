@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -153,6 +154,9 @@ func TestRedisMetadataRetentionAndIndexCleanup(t *testing.T) {
 		ttl, err := r.client.PTTL(ctx, key).Result()
 		require.NoError(t, err)
 		require.Positive(t, ttl)
+		if strings.HasPrefix(key, r.prefix+"ended:") {
+			require.Greater(t, ttl, 4*time.Minute, "ended retention is independent of record retention")
+		}
 	}
 	require.Eventually(t, func() bool {
 		keys, err := r.client.Keys(ctx, r.prefix+"*").Result()
@@ -160,7 +164,7 @@ func TestRedisMetadataRetentionAndIndexCleanup(t *testing.T) {
 			return false
 		}
 		for _, key := range keys {
-			if key != r.prefix+"session_epoch" && key != r.indexKey(a) && key != r.indexKey(b) {
+			if key != r.prefix+"session_epoch" && key != r.indexKey(a) && key != r.indexKey(b) && !strings.HasPrefix(key, r.prefix+"ended:") {
 				return false
 			}
 		}

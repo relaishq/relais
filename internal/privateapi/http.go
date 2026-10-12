@@ -32,6 +32,15 @@ func (e *uncertainError) Is(target error) bool { return target == ErrUncertain }
 // Uncertain preserves the transport cause, including context cancellation.
 func Uncertain(err error) error { return &uncertainError{err} }
 
+// HTTPError preserves the response status alongside the decoded API cause.
+type HTTPError struct {
+	StatusCode int
+	Err        error
+}
+
+func (e *HTTPError) Error() string { return e.Err.Error() }
+func (e *HTTPError) Unwrap() error { return e.Err }
+
 type Failure struct {
 	Code      string              `json:"code"`
 	Message   string              `json:"message"`
@@ -127,6 +136,7 @@ func Do(ctx context.Context, client *http.Client, base, method, path string, inp
 		return Uncertain(errors.New("privateapi: response too large"))
 	}
 	if resp.StatusCode/100 != 2 {
+		defer func() { resultErr = &HTTPError{StatusCode: resp.StatusCode, Err: resultErr} }()
 		var failure Failure
 		if json.Unmarshal(data, &failure) != nil || failure.Message == "" {
 			return fmt.Errorf("privateapi: %s: %s", resp.Status, strings.TrimSpace(string(data)))

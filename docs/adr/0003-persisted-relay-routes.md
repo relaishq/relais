@@ -69,8 +69,12 @@ reconnecting callers or exposing their media keys to the relay.
   republishes the route with its new epoch and unchanged confirmation/consent
   times. `ForgetSession` queues deletion even if the store still has a lease.
   Definitive-loss cleanup uses `ForgetSessionTenure` instead: compare the
-  recorded owner/epoch against authoritative ownership while serializing
-  cache cleanup with trusted moves and owner-lookup application. A newer live
+  recorded owner/epoch against authoritative ownership off the media locks.
+  A scoped per-session generation, retained only during an in-flight cleanup
+  read, validates that read under the route/forward locks before cache cleanup.
+  Trusted moves, owner-lookup application and cache deletion invalidate it;
+  a changed generation aborts cleanup for detector retry. Redis I/O never runs
+  under either lock. A newer live
   tenure makes cleanup a no-op. Cached routes carry the authoritative owner lookup and trusted move/restore
   epoch so a successor at the same address is also preserved. Unknown-epoch
   address-only routes can be removed only for the recorded worker after this

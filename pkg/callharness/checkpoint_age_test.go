@@ -178,7 +178,7 @@ func TestRelayCheckpointAgePolicy(t *testing.T) {
 						require.Empty(t, status.Calls)
 						require.EqualValues(t, 1, status.LostCount)
 						_, err = store.Get(ctx, call.SessionID())
-						require.ErrorIs(t, err, sessionstore.ErrNotFound)
+						require.ErrorIs(t, err, sessionstore.ErrEnded)
 					} else {
 						require.Empty(t, event.Error)
 						require.Greater(t, event.SequenceMargin, uint16(8))

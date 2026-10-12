@@ -2,6 +2,8 @@ package controlplane
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -104,7 +106,13 @@ func (r *RemoteRelay) ReplaySession(ctx context.Context, id string, to netip.Add
 // Forget returns the transport result for applications that need it.
 func (r *RemoteRelay) ForgetSession(id string) { _ = r.Forget(context.Background(), id) }
 func (r *RemoteRelay) ForgetSessionTenure(ctx context.Context, lease sessionstore.Lease) error {
-	return privateapi.Do(ctx, remoteClient(r.Client), r.URL, http.MethodPost, "/sessions/"+url.PathEscape(lease.SessionID)+"/forget-tenure", lease, nil, relay.RemoteErrors)
+	err := privateapi.Do(ctx, remoteClient(r.Client), r.URL, http.MethodPost, "/sessions/"+url.PathEscape(lease.SessionID)+"/forget-tenure", lease, nil, relay.RemoteErrors)
+	var response *privateapi.HTTPError
+	if errors.As(err, &response) && (response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusMethodNotAllowed) {
+		slog.Warn("relay tenure cleanup unavailable; skipping older relay", "status", response.StatusCode)
+		return nil
+	}
+	return err
 }
 func (r *RemoteRelay) Forget(ctx context.Context, id string) error {
 	return privateapi.Do(ctx, remoteClient(r.Client), r.URL, http.MethodDelete, "/sessions/"+url.PathEscape(id), nil, nil, relay.RemoteErrors)

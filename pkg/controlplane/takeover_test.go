@@ -82,7 +82,7 @@ func TestTakeoverFailuresReleaseLeaseAndRecordLoss(t *testing.T) {
 				require.Empty(t, status.Calls)
 				require.EqualValues(t, 1, status.LostCount)
 				_, err := p.store.Get(ctx, id)
-				require.ErrorIs(t, err, sessionstore.ErrNotFound)
+				require.ErrorIs(t, err, sessionstore.ErrEnded)
 			}
 			_, err = p.store.GetState(ctx, id)
 			require.ErrorIs(t, err, sessionstore.ErrNotFound)

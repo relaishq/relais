@@ -94,10 +94,15 @@ type registration struct {
 }
 
 type call struct {
-	terminal       bool               // guarded by mu; terminal loss is accounted once
-	lease          sessionstore.Lease // guarded by stateMu; last observed placed tenure
-	lossLease      sessionstore.Lease // guarded by mu; immutable token for terminal cleanup
-	cleanupPending bool               // guarded by the plane registry lock
+	terminal       bool                 // guarded by mu; terminal loss is accounted once
+	lease          sessionstore.Lease   // guarded by stateMu; last observed placed tenure
+	lossLease      sessionstore.Lease   // guarded by mu; immutable token for terminal cleanup
+	cleanupPending bool                 // guarded by the plane registry lock
+	cleanupLeases  []sessionstore.Lease // guarded by mu; retained routed tenures
+	cleanupLegacy  bool
+	cleanupPlanned bool
+	cleanupAfter   time.Time
+	cleanupDelay   time.Duration
 	// hungUp records a completed End; retained retries keep this call.
 	hungUp atomic.Bool
 	mu     sync.Mutex // serializes moves, takeovers, End and terminal reconciliation
@@ -331,12 +336,18 @@ func (p *Plane) End(ctx context.Context, id string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.terminal {
-		p.expiredLocked(ctx, c)
+		if c.hungUp.Load() {
+			return nil
+		}
 		return sessionstore.ErrNotFound
 	}
 
 	lease, err := p.store.Get(ctx, id)
 	if err != nil {
+		if errors.Is(err, sessionstore.ErrEnded) {
+			p.expiredLocked(ctx, c)
+			return nil
+		}
 		if errors.Is(err, sessionstore.ErrNotFound) {
 			p.expiredLocked(ctx, c)
 		}
@@ -356,6 +367,10 @@ func (p *Plane) End(ctx context.Context, id string) error {
 			// Fencing may remove ownership after End's first read. A worker's
 			// missing session does not prove that an explicit hangup ended it.
 			current, readErr := p.store.Get(ctx, id)
+			if errors.Is(readErr, sessionstore.ErrEnded) {
+				p.expiredLocked(ctx, c)
+				return nil
+			}
 			if errors.Is(readErr, sessionstore.ErrNotFound) {
 				p.expiredLocked(ctx, c)
 				return err
@@ -367,19 +382,43 @@ func (p *Plane) End(ctx context.Context, id string) error {
 				c.rememberLease(current)
 				return sessionstore.ErrLeaseLost
 			}
-			p.forget(c)
 			if p.store.Release(ctx, lease) == nil {
-				c.hungUp.Store(true)
+				// Release is a successful no-op for a stale or expired token. A
+				// committed marker, not a nil reply alone, proves a normal end.
+				_, releaseReadErr := p.store.Get(ctx, id)
+				if errors.Is(releaseReadErr, sessionstore.ErrEnded) {
+					c.hungUp.Store(true)
+					p.forget(c)
+					p.deleteFrames(id)
+				} else if errors.Is(releaseReadErr, sessionstore.ErrNotFound) {
+					p.expiredLocked(ctx, c)
+				}
 			}
-			p.deleteFrames(id)
 		}
 
 		return err
 	}
-	c.hungUp.Store(true)
-	p.forget(c)
-	p.deleteFrames(id)
-	return nil
+	// EndSession closes the worker even when its best-effort store release
+	// fails. Only committed ended evidence permits us to forget the inventory.
+	current, readErr := p.store.Get(ctx, id)
+	if errors.Is(readErr, sessionstore.ErrEnded) {
+		c.hungUp.Store(true)
+		p.forget(c)
+		p.deleteFrames(id)
+		return nil
+	}
+	if errors.Is(readErr, sessionstore.ErrNotFound) {
+		p.expiredLocked(ctx, c)
+		return readErr
+	}
+	if readErr != nil {
+		return readErr
+	}
+	c.rememberLease(current)
+	if !sameTenure(current, lease) {
+		return sessionstore.ErrLeaseLost
+	}
+	return fmt.Errorf("controlplane: end release unconfirmed: %w", sessionstore.ErrTransient)
 }
 
 // MoveResult records coordination timings; the harness measures media gaps
@@ -865,10 +904,6 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 		pendingCleanup := c.cleanupPending
 		p.mu.Unlock()
 		if pendingCleanup {
-			if c.mu.TryLock() {
-				p.expiredLocked(ctx, c)
-				c.mu.Unlock()
-			}
 			continue
 		}
 		// Sample completed-move metadata before reading authoritative ownership.
@@ -880,7 +915,7 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 		cs := CallStatus{ID: c.id, LastMove: c.lastMove, MoveCount: c.moveCount, TakeoverCount: c.takeoverCount, LastMoveKind: c.lastMoveKind}
 		c.stateMu.Unlock()
 		lease, err := p.store.Get(ctx, c.id)
-		if errors.Is(err, sessionstore.ErrNotFound) {
+		if errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrEnded) {
 			if c.mu.TryLock() {
 				p.expiredLocked(ctx, c)
 				c.mu.Unlock()

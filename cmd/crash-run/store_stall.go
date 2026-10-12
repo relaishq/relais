@@ -121,7 +121,7 @@ func (s *storeStallOptions) capture(ctx context.Context, status controlplane.Sta
 	}
 	_, err = s.store.Get(ctx, s.SessionID)
 	o.LeaseExists = err == nil
-	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) {
+	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) && !errors.Is(err, sessionstore.ErrEnded) {
 		o.Errors = append(o.Errors, "lease read: "+err.Error())
 	}
 	_, err = s.store.GetState(ctx, s.SessionID)
@@ -280,7 +280,7 @@ func (s *storeStallOptions) judge(ctx context.Context, report *callharness.Repor
 	}
 	if e.Takeover.Lost {
 		_, err := s.store.Get(ctx, e.Takeover.ID)
-		e.LeaseReleased = errors.Is(err, sessionstore.ErrNotFound)
+		e.LeaseReleased = errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrEnded)
 		routes, err := s.store.LoadRoutes(ctx, 100)
 		if err != nil {
 			return result{}, err
@@ -345,7 +345,7 @@ func (s *storeStallOptions) judge(ctx context.Context, report *callharness.Repor
 	if hangupErr != nil {
 		e.HangupError = hangupErr.Error()
 	}
-	if hangupErr != nil && !((e.Takeover.Lost || len(status.Calls) == 0) && strings.Contains(hangupErr.Error(), "404")) {
+	if hangupErr != nil && ((!e.Takeover.Lost && len(status.Calls) != 0) || !strings.Contains(hangupErr.Error(), "404")) {
 		e.Failures = append(e.Failures, "hangup: "+hangupErr.Error())
 	}
 	r := result{StoreStall: e, Pass: len(e.Failures) == 0, Decrypt: report.DecryptionFailures.Total(), Reconnects: report.ICERestarts, Renegotiations: report.Renegotiations}

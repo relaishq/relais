@@ -6,6 +6,7 @@ loopback topology, with no external Redis configured:
 ```sh
 env -u RELAIS_REDIS_ADDR ./bin/crash-run -store-stall=moderate -runs=5 -after=10s
 env -u RELAIS_REDIS_ADDR ./bin/crash-run -store-stall=long -runs=5 -after=10s
+env -u RELAIS_REDIS_ADDR ./bin/crash-run -store-stall=live -runs=5 -after=10s
 ```
 
 Each crash trial establishes a live audio/video call, pauses the driver's throwaway
@@ -50,8 +51,8 @@ consent window; shorter runs prove this store-stall scenario but do not claim
 the separate 60 s post-takeover consent acceptance. Loss calls intentionally
 end, so their hangup DELETE can return 404.
 
-CI runs five trials of each variant with ten seconds of observation on nightly
-and manual dispatch only. The job has a 15-minute limit and uploads failure logs.
+CI runs five trials of each of the three variants (moderate, long and live) with ten seconds of observation on nightly
+and manual dispatch only. The job has a 25-minute limit and uploads failure logs.
 
 ## Live-worker expiry acceptance
 
@@ -98,3 +99,21 @@ env -u RELAIS_REDIS_ADDR ./bin/crash-run -store-stall=moderate -runs=3 -after=10
 env -u RELAIS_REDIS_ADDR ./bin/crash-run -store-stall=long -runs=3 -after=10s
 env -u RELAIS_REDIS_ADDR ./bin/crash-run -store-stall=live -store-stall-duration=5s -runs=3 -after=10s
 ```
+
+## Normal endings and expiry
+
+A successful matching store release retains a five-minute ended tombstone for
+that owner and epoch. A worker-side DTLS close, consent timeout or other normal
+session end therefore remains a terminal end, including a PeerConnection close
+before DELETE. It does not increment `ownership_expired` or an envelope event.
+The marker is separate from the pruned record and snapshot, and a new claim
+supersedes it. Conditional cleanup cannot delete the new owner's state.
+
+If a call ends while the store is unreachable, release may fail and the lease
+may expire. With no committed ended marker, that ambiguous outcome counts as
+`ownership_expired`. Detector sweeps run at half the lease TTL; cleanup retries
+use capped backoff and run outside `/status`. No lease duration or checkpoint
+margin changes are included here (#100 remains separate).
+
+PR #101 review revalidation uses two runs of each variant with `-after=10s`;
+the original #99 acceptance above and CI retain their stated run counts.

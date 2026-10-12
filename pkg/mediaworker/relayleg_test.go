@@ -83,7 +83,7 @@ func TestWorkerBehindRelay(t *testing.T) {
 
 	require.NoError(t, worker.EndSession(id))
 	_, err = owners.Owner(context.Background(), id)
-	require.ErrorIs(t, err, sessionstore.ErrNotFound, "session released when it ends")
+	require.ErrorIs(t, err, sessionstore.ErrEnded, "session released when it ends")
 }
 
 // TestRelayLegCarriesFullSizePackets sends a caller's ICE check as large as
