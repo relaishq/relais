@@ -23,6 +23,7 @@ func TestReleaseTombstoneDistinguishesEndFromExpiry(t *testing.T) {
 		for range 3 {
 			ended, err := store.Get(ctx, "ended")
 			require.ErrorIs(t, err, ErrEnded)
+			require.ErrorIs(t, err, ErrNotFound, "ended remains compatible with missing-ownership callers")
 			require.Equal(t, lease.Worker, ended.Worker)
 			require.Equal(t, lease.Epoch, ended.Epoch)
 			require.True(t, ended.ExpiresAt.After(time.Now().Add(4*time.Minute)))

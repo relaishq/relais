@@ -158,8 +158,19 @@ func TestUncommittedEndRetainsInventoryUntilOwnershipExpires(t *testing.T) {
 			ctx := context.Background()
 			id, _, err := p.Create(ctx, "offer", "a")
 			require.NoError(t, err)
-			require.Error(t, p.End(ctx, id))
 			c := p.calls[id]
+			if !unknown {
+				require.NoError(t, p.End(ctx, id), "healthy control must commit the explicit hangup")
+				require.True(t, c.hungUp.Load())
+				require.NotContains(t, p.calls, id)
+				_, err = base.Get(ctx, id)
+				require.ErrorIs(t, err, sessionstore.ErrEnded)
+				p.reconcileOwnership(ctx)
+				require.Zero(t, p.lostCount)
+				requireControlLosses(t, planeMetricsBody(p), 0)
+				return
+			}
+			require.Error(t, p.End(ctx, id))
 			require.NotNil(t, c, "unconfirmed release must not discard placed inventory")
 			require.False(t, c.hungUp.Load())
 			require.Zero(t, p.lostCount)
@@ -207,7 +218,7 @@ func TestOlderRelayCleanupDoesNotRetainLostCall(t *testing.T) {
 type expiresBeforeReleaseStore struct{ sessionstore.Store }
 
 func (s *expiresBeforeReleaseStore) Release(ctx context.Context, lease sessionstore.Lease) error {
-	if _, err := s.Store.Renew(ctx, lease, time.Millisecond); err == nil {
+	if _, err := s.Renew(ctx, lease, time.Millisecond); err == nil {
 		time.Sleep(5 * time.Millisecond)
 	}
 	return s.Store.Release(ctx, lease)
@@ -226,4 +237,41 @@ func TestEndNoopReleaseDoesNotHideRacingExpiry(t *testing.T) {
 	require.EqualValues(t, 1, status.LostCount)
 	require.Equal(t, "ownership_expired", status.Takeovers[0].LossCause)
 	require.False(t, p.calls[id].hungUp.Load(), "a no-op release is not ended evidence")
+}
+
+type endWithUnavailableControlStore struct {
+	*unconfirmedEndWorker
+	unavailable *failedEndStore
+}
+
+func (w *endWithUnavailableControlStore) EndSession(id string) error {
+	err := w.unconfirmedEndWorker.EndSession(id)
+	w.unavailable.getErr = sessionstore.ErrTransient
+	return err
+}
+
+func TestExplicitEndWithUnavailableControlStoreRemainsAmbiguous(t *testing.T) {
+	p, a, _, _ := setup(t)
+	base := p.store
+	unavailable := &failedEndStore{Store: base, releaseErr: sessionstore.ErrTransient}
+	p.store = unavailable
+	p.workers["a"].worker = &endWithUnavailableControlStore{
+		unconfirmedEndWorker: &unconfirmedEndWorker{fakeWorker: a}, unavailable: unavailable,
+	}
+	ctx := context.Background()
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	require.ErrorIs(t, p.End(ctx, id), sessionstore.ErrTransient)
+	c := p.calls[id]
+	require.NotNil(t, c)
+	require.False(t, c.hungUp.Load())
+	lease, err := base.Get(ctx, id)
+	require.NoError(t, err)
+	_, err = base.Renew(ctx, lease, time.Millisecond)
+	require.NoError(t, err)
+	time.Sleep(5 * time.Millisecond)
+	p.store = base
+	p.reconcileOwnership(ctx)
+	require.EqualValues(t, 1, p.lostCount)
+	require.Equal(t, "ownership_expired", p.recentTakeovers()[0].LossCause)
 }

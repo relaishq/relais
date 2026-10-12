@@ -18,17 +18,19 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/netip"
 	"sync"
 	"time"
 )
 
 var (
-	// ErrEnded means a matching live tenure was explicitly released. Get returns
-	// its owner/epoch until the release tombstone expires, never a live lease.
-	ErrEnded = errors.New("sessionstore: session ended")
 	// ErrNotFound means no live lease exists, including an expired lease.
 	ErrNotFound = errors.New("sessionstore: session not found")
+	// ErrEnded means a matching live tenure was explicitly released. Get returns
+	// its owner/epoch until the release tombstone expires, never a live lease.
+	// It also matches ErrNotFound; callers distinguishing ends check it first.
+	ErrEnded = fmt.Errorf("sessionstore: session ended: %w", ErrNotFound)
 	// ErrLeaseHeld means Claim found an existing record, even if expired.
 	ErrLeaseHeld = errors.New("sessionstore: lease held")
 	// ErrLeaseLost means an epoch or owner is stale, or the lease expired.

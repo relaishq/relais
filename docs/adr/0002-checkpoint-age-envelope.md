@@ -135,11 +135,23 @@ routes and writes a five-minute **ended tombstone** containing that owner and
 epoch. Redis keeps the marker in a separate `ended:{sess:ID}` key on the same
 Cluster slot; ownership read/pruning never removes it with the record key.
 Memory has the same retention and lookup semantics. Authoritative `Get` returns
-`ErrEnded` with the released tenure, distinct from `ErrNotFound`; a new claim
-supersedes the marker and stale releases cannot mark or delete its state.
+`ErrEnded` with the released tenure. It also matches `ErrNotFound` for
+compatibility; callers distinguishing normal ends check `ErrEnded` first. A new
+claim supersedes the marker and stale releases cannot mark or delete its state.
 This covers worker-side DTLS close, consent timeout, connection/agent failure
 and a PeerConnection close racing a DELETE. These outcomes add no loss or
 checkpoint event. No separate normal-end counter is introduced.
+
+An explicit DELETE also conditionally releases the retained lease through the
+control plane when the worker's best-effort release fails. Committed ended
+evidence completes that hangup without a loss. If the control plane cannot
+commit or confirm the release either, inventory remains until reconciliation.
+
+This classification has a known limit: `Worker.Close` after a failed or
+timed-out drain, and agent failure, also release with the ended marker when the
+store is reachable. Those calls count as normal ends rather than losses, even
+when their termination was unintended. The marker proves a release, not the
+reason for that release. This behaviour is unchanged.
 
 If release fails while the store is unavailable, and the lease then expires,
 there is no committed ended evidence. That genuinely ambiguous outcome still

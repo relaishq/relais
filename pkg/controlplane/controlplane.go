@@ -399,7 +399,9 @@ func (p *Plane) End(ctx context.Context, id string) error {
 		return err
 	}
 	// EndSession closes the worker even when its best-effort store release
-	// fails. Only committed ended evidence permits us to forget the inventory.
+	// fails. Commit the explicit hangup ourselves with the retained fenced token;
+	// a stale release cannot remove a successor's ownership.
+	releaseErr := p.store.Release(ctx, lease)
 	current, readErr := p.store.Get(ctx, id)
 	if errors.Is(readErr, sessionstore.ErrEnded) {
 		c.hungUp.Store(true)
@@ -417,6 +419,9 @@ func (p *Plane) End(ctx context.Context, id string) error {
 	c.rememberLease(current)
 	if !sameTenure(current, lease) {
 		return sessionstore.ErrLeaseLost
+	}
+	if releaseErr != nil {
+		return releaseErr
 	}
 	return fmt.Errorf("controlplane: end release unconfirmed: %w", sessionstore.ErrTransient)
 }
