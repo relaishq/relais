@@ -98,7 +98,6 @@ func newHTTPSystem(t *testing.T, source, target, routing *lostReply, counts ...i
 type httpSystemSettings struct {
 	workerStores        []sessionstore.Store
 	sourceHeartbeatGate *atomic.Bool
-	deadAfter           time.Duration
 	holdTimeout         time.Duration
 	agent               mediaworker.AgentConfig
 	store               sessionstore.Store
