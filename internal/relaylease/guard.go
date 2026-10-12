@@ -139,10 +139,8 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 	tick := time.NewTicker(cfg.Poll)
 	defer tick.Stop()
 
-	var observed sessionstore.RelayLease
-	var expiredAt time.Time
-	var lastStoreFailure time.Time
-	var observedMissing bool
+	var observation staleness
+	var hadStoreFailure, sawRecord bool
 	var unknownClaim bool
 	for {
 		op, cancel := context.WithTimeout(ctx, cfg.Poll)
@@ -150,10 +148,17 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 		cancel()
 		claim := errors.Is(readErr, sessionstore.ErrNotFound)
 		missing := claim
-		graceClaim := missing
+		stale := observation.observe(current, missing, readErr, time.Now(), cfg.TTL)
+		if readErr != nil && !missing {
+			hadStoreFailure = true
+		}
+		// Fresh empty-store bootstrap is immediate. Absence after a failed poll
+		// or previously observed holder gives that active a full TTL to restore.
+		claim = missing && (!hadStoreFailure && !sawRecord || stale)
 		deadClaim := false
 		unknownClaim = false
 		if readErr == nil {
+			sawRecord = true
 			unknownClaim = cfg.AllowUnknownHostRestart && hasUnknownHost(current) && (current.Expired || current.Holder == cfg.Process)
 			for _, p := range []sessionstore.RelayProcess{current.Holder, current.Forwarder, current.PreviousHolder} {
 				if p == (sessionstore.RelayProcess{}) {
@@ -168,7 +173,7 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 			}
 			switch {
 			case unknownClaim:
-				claim, graceClaim = true, current.Holder != cfg.Process
+				claim = current.Holder == cfg.Process || current.Expired && stale
 			case current.Holder.Owner == "", current.Holder == cfg.Process:
 				claim = true // bootstrap, graceful release, or settle an uncertain claim
 			default:
@@ -176,22 +181,10 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 				deadClaim = predecessorsGone(op, current, cfg.Gone)
 				cancel()
 				claim = deadClaim
-				if !deadClaim && current.Expired {
-					claim, graceClaim = true, true
+				if !deadClaim && current.Expired && stale {
+					claim = true
 				}
 			}
-		} else if !missing {
-			lastStoreFailure = time.Now()
-		}
-		// Give the active one renewal interval only when this candidate itself
-		// recently lost store access. Continuous access needs no recovery grace.
-		if graceClaim && !lastStoreFailure.IsZero() && time.Since(lastStoreFailure) < cfg.TTL {
-			if expiredAt.IsZero() || observedMissing != missing || current.Epoch != observed.Epoch || current.Holder != observed.Holder {
-				observed, observedMissing, expiredAt = current, missing, time.Now()
-			}
-			claim = time.Since(expiredAt) >= cfg.Renew
-		} else {
-			expiredAt = time.Time{}
 		}
 		err = readErr
 		if claim {
@@ -210,10 +203,11 @@ func Acquire(ctx context.Context, cfg Config) (*Guard, error) {
 			if errors.Is(err, processidentity.ErrForeignScope) {
 				return nil, configurationError(err)
 			}
-			expiredAt = time.Time{} // a competing tenure or uncertain result resets grace
+			observation.reset() // rejected or uncertain claim needs fresh evidence
 		}
 		if err != nil && !errors.Is(err, sessionstore.ErrNotFound) && !errors.Is(err, sessionstore.ErrLeaseHeld) && !errors.Is(err, sessionstore.ErrLeaseLost) {
-			lastStoreFailure = time.Now()
+			observation.reset()
+			hadStoreFailure = true
 			failures++
 			log.Printf("relay lease claim unavailable; no takeover: %v", err)
 		}

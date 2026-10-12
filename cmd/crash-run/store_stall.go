@@ -25,6 +25,8 @@ import (
 type storeStallOptions struct {
 	ResumedAt                               time.Time
 	Redis                                   *clusterprocess.Child
+	Standby                                 *clusterprocess.Child
+	RelayEpoch                              uint64
 	Variant                                 string
 	Duration, Actual                        time.Duration
 	store                                   *sessionstore.Redis
@@ -52,6 +54,8 @@ type storeStallEvidence struct {
 	MediaError                                    string
 	Observations                                  []storeStallObservation
 	MediaStopped                                  bool
+	RelayEpochBefore, RelayEpochAfter             uint64
+	StandbyWaiting                                bool
 	ConnectedThroughout                           bool
 	LastConnectionState, LastICEState             string
 	MediaSilence                                  map[string]time.Duration
@@ -66,8 +70,8 @@ func validateStoreStall(variant string, duration time.Duration, redis, topology 
 		}
 		return nil
 	}
-	if variant != "moderate" && variant != "long" && variant != "live" {
-		return errors.New("store-stall must be moderate, long or live")
+	if variant != "moderate" && variant != "long" && variant != "live" && variant != "expired" {
+		return errors.New("store-stall must be moderate, long, live or expired")
 	}
 	if duration < 0 {
 		return errors.New("store-stall-duration must be positive")
@@ -82,6 +86,7 @@ func validateStoreStall(variant string, duration time.Duration, redis, topology 
 }
 
 type storeStallObservation struct {
+	CompletedAt                 time.Time
 	At                          time.Time
 	Status                      controlplane.Status
 	RelayRoutes                 int
@@ -111,7 +116,7 @@ func (s *storeStallOptions) capture(ctx context.Context, status controlplane.Sta
 	} else {
 		o.RelayRoutes = r.Stats.Flows
 	}
-	if s.Variant == "live" {
+	if s.Variant == "live" || s.Variant == "expired" {
 		w, err := (&controlplane.RemoteWorker{URL: s.WorkerURL}).Status(ctx)
 		if err != nil {
 			o.Errors = append(o.Errors, "worker status: "+err.Error())
@@ -129,6 +134,7 @@ func (s *storeStallOptions) capture(ctx context.Context, status controlplane.Sta
 	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) {
 		o.Errors = append(o.Errors, "snapshot read: "+err.Error())
 	}
+	o.CompletedAt = time.Now()
 	s.Observations = append(s.Observations, o)
 }
 
@@ -172,6 +178,12 @@ func (s *storeStallOptions) prepare(ctx context.Context, env []string, id, contr
 		s.close()
 		return fmt.Errorf("pre-stall checkpoint not established: successes=%d error=%v", info.Successes, err)
 	}
+	relayLease, err := s.store.GetRelay(ctx, "default")
+	if err != nil {
+		s.close()
+		return err
+	}
+	s.RelayEpoch = relayLease.Epoch
 	s.controlURL = controlURL
 	s.before, _, err = scrapeMetrics(ctx, &http.Client{Timeout: time.Second}, controlURL+"/metrics")
 	if err != nil {
@@ -328,13 +340,37 @@ func (s *storeStallOptions) judge(ctx context.Context, report *callharness.Repor
 		}
 	}
 	e.LossEvents = e.ControlCounters["relais_control_losses_total"]
-	if s.Variant == "live" {
+	var relayLease sessionstore.RelayLease
+	var relayErr error
+	if s.store != nil {
+		relayLease, relayErr = s.store.GetRelay(ctx, "default")
+	}
+	e.RelayEpochBefore, e.RelayEpochAfter = s.RelayEpoch, relayLease.Epoch
+	if s.Standby != nil {
+		select {
+		case <-s.Standby.Done():
+		default:
+			e.StandbyWaiting = true
+		}
+		data, readErr := os.ReadFile(filepath.Join(dir, "relay-standby.log"))
+		if readErr != nil || strings.Contains(string(data), `"http"`) {
+			e.StandbyWaiting = false
+		}
+	}
+	if relayErr != nil {
+		s.ObservationErrors = append(s.ObservationErrors, "relay lease: "+relayErr.Error())
+	}
+	if s.Variant == "live" || s.Variant == "expired" {
 		e.ExpectedOutcome = "observation"
 		e.Outcome = "media-flowing"
 		if e.MediaStopped {
 			e.Outcome = "media-stopped"
 		}
-		e.Failures = judgeOwnershipExpired(report, status, e, ready.Media, stalledAt, killed)
+		if s.Variant == "live" {
+			e.Failures = judgeLiveSurvival(report, status, e, ready.Media, stalledAt, killed, until)
+		} else {
+			e.Failures = judgeOwnershipExpired(report, status, e, ready.Media, stalledAt, killed)
+		}
 	} else {
 		e.Failures = judgeStoreStall(report, status, e, ready.Media, stalledAt, killed, until)
 	}
@@ -364,8 +400,7 @@ func (s *storeStallOptions) judge(ctx context.Context, report *callharness.Repor
 	return r, nil
 }
 
-// Live trials judge evidence completeness and caller integrity, not survival.
-// A fenced, silent call is an observed product behaviour, not acceptance.
+// Common caller integrity and fault-evidence checks for live and loss trials.
 func judgeLiveStoreStall(report *callharness.Report, e *storeStallEvidence, stalledAt, resumedAt time.Time) []string {
 	var failures []string
 	if report == nil {
@@ -401,6 +436,9 @@ func runStoreStallTrials(ctx context.Context, manager *clusterprocess.Manager, r
 		if variant == "long" || variant == "live" {
 			duration = 5 * time.Second
 		}
+		if variant == "expired" {
+			duration = 35 * time.Second
+		}
 	}
 	for i := 0; i < runs; i++ {
 		trialDir := filepath.Join(dir, fmt.Sprintf("store-stall-%s-%02d", variant, i+1))
@@ -410,14 +448,14 @@ func runStoreStallTrials(ctx context.Context, manager *clusterprocess.Manager, r
 		options := &storeStallOptions{Redis: redis, Variant: variant, Duration: duration}
 		env := processEnv(key, addr, fmt.Sprintf("relais:crash:%s:stall:%d:", filepath.Base(dir), i))
 		trialCtx, stop := context.WithTimeout(ctx, after+duration+30*time.Second)
-		r, err := trial(trialCtx, manager, bin, trialDir, env, after, 1550*time.Millisecond+time.Duration(i)*7*time.Millisecond, verbose, false, false, nil, nil, options)
+		r, err := trial(trialCtx, manager, bin, trialDir, env, after, 1550*time.Millisecond+time.Duration(i)*7*time.Millisecond, verbose, false, false, false, nil, nil, options)
 		stop()
 		if err != nil {
 			return trialFailure(i+1, "store-stall-"+variant, trialDir, err)
 		}
 		e := r.StoreStall
 		fmt.Printf("STORE_STALL run=%d variant=%s stall=%s snapshot_age=%s checkpoint_age=%s required_rtp=%d cap=%d rtp_margin=%d srtcp_margin=%d outcome=%s losses=%g cause=%s decrypt=%d reconnects=%d renegotiations=%d envelope_events=%g pass=%t failures=%q\n", i+1, variant, e.ActualStall, e.Takeover.SnapshotAge, e.Takeover.CheckpointAge, e.RequiredRTP, e.DefaultRTPCap, e.Takeover.SequenceMargin, e.Takeover.SRTCPIndexMargin, e.Outcome, e.LossEvents, e.Takeover.LossCause, r.Decrypt, r.Reconnects, r.Renegotiations, e.EnvelopeEvents, r.Pass, e.Failures)
-		if e.Takeover.LossCause == "ownership_expired" || len(e.Observations) > 0 && len(e.Observations[len(e.Observations)-1].Status.Takeovers) == 0 {
+		if e.Takeover.LossCause == "ownership_expired" {
 			fmt.Println("CHECKPOINT_AT_TAKEOVER NOT-RUN: no retained checkpoint age; ownership expiry is judged through terminal accounting")
 		}
 		fmt.Printf("STORE_STALL_CALLER run=%d gap=%s stopped=%t connection=%s ice=%s connected_throughout=%t timeout=%t observations=%+v\n", i+1, r.Gap, e.MediaStopped, e.LastConnectionState, e.LastICEState, e.ConnectedThroughout, e.TimedOut, e.Observations)
@@ -426,7 +464,7 @@ func runStoreStallTrials(ctx context.Context, manager *clusterprocess.Manager, r
 		}
 	}
 	if variant == "live" {
-		fmt.Printf("PASS: %d/%d live store-stall trials; expired ownership counted and cleaned\n", runs, runs)
+		fmt.Printf("PASS: %d/%d live store-stall trials; live calls survived; standby stayed waiting\n", runs, runs)
 	} else {
 		fmt.Printf("PASS: %d/%d real-process store-stall trials variant=%s\n", runs, runs, variant)
 	}
@@ -446,7 +484,7 @@ func judgeOwnershipExpired(report *callharness.Report, status controlplane.Statu
 		}
 	}
 	t := e.Takeover
-	check((e.Variant == "long" || e.Variant == "live") && e.ActualStall > 3*time.Second, "duration did not expire ownership")
+	check((e.Variant == "long" || e.Variant == "live" || e.Variant == "expired") && e.ActualStall > 3*time.Second, "duration did not expire ownership")
 	check(t.Lost && t.LossCause == "ownership_expired" && len(status.Takeovers) == 1 && len(status.Calls) == 0 && status.LostCount == 1, "ownership loss missing, duplicated or call retained")
 	check(e.LossEvents == 1 && e.ControlCounters[lossCounter("ownership_expired")] == 1, "ownership loss metric missing or duplicated")
 	check(e.EnvelopeEvents == 0, "absent checkpoint falsely counted as envelope decision")
@@ -456,7 +494,7 @@ func judgeOwnershipExpired(report *callharness.Report, status controlplane.Statu
 		latest := e.Observations[len(e.Observations)-1]
 		check(latest.RelayRoutes == 0, "ownership loss retained cached relay route")
 		check(!latest.LeaseExists && !latest.SnapshotExists, "ownership loss retained lease or snapshot")
-		if e.Variant == "live" {
+		if e.Variant == "live" || e.Variant == "expired" {
 			check(latest.WorkerSessions == 0 && e.ControlCounters["relais_control_detection_events_total"] == 0, "live worker fence was missing or misreported as worker death")
 		}
 	}
@@ -465,9 +503,47 @@ func judgeOwnershipExpired(report *callharness.Report, status controlplane.Statu
 		if len(report.Moves) == 1 {
 			check(report.Moves[0].Lost && report.Moves[0].LossCause == "ownership_expired", "caller report missing loss cause")
 		}
-		for _, track := range report.Tracks {
-			check(!report.StartedAt.Add(track.LastArrival).After(t.End.Add(50*time.Millisecond)), "media resumed after definitive loss")
+		// The loss event is recorded before asynchronous tenure cleanup. Live
+		// old media may continue until that cleanup or worker renewal fences it;
+		// judge no resumption from the first independently confirmed cleanup.
+		boundary := t.End
+		if e.Variant == "expired" {
+			for _, o := range e.Observations {
+				if o.RelayRoutes == 0 && o.WorkerSessions == 0 && !o.LeaseExists && !o.SnapshotExists && !o.CompletedAt.IsZero() {
+					boundary = o.CompletedAt
+					break
+				}
+			}
+			check(boundary != t.End && boundary.Sub(e.ResumedAt) < 3*time.Second, "ownership expiry cleanup was not confirmed within three seconds of store recovery")
 		}
+		for _, track := range report.Tracks {
+			check(!report.StartedAt.Add(track.LastArrival).After(boundary.Add(50*time.Millisecond)), "media resumed after definitive loss cleanup")
+		}
+	}
+	return failures
+}
+
+// Judge live availability independently of the checkpoint recovery policy.
+func judgeLiveSurvival(report *callharness.Report, status controlplane.Status, e *storeStallEvidence, relay string, stalledAt, resumedAt, until time.Time) []string {
+	e.ExpectedOutcome, e.Outcome = "survive", "survive"
+	failures := judgeLiveStoreStall(report, e, stalledAt, resumedAt)
+	check := func(ok bool, why string) {
+		if !ok {
+			failures = append(failures, why)
+		}
+	}
+	check(len(status.Calls) == 1 && status.Calls[0].Owner == e.Owner && status.LostCount == 0 && len(status.Takeovers) == 0, "live call lost or moved")
+	check(e.LossEvents == 0 && e.EnvelopeEvents == 0, "live outage counted a loss or envelope event")
+	check(e.RelayEpochBefore != 0 && e.RelayEpochBefore == e.RelayEpochAfter && e.StandbyWaiting, "relay standby took over or evidence missing")
+	check(report.ConnectedThroughout() && report.RemoteAddr == relay && len(report.Moves) == 0, "caller connection or address changed")
+	if len(e.Observations) > 0 {
+		o := e.Observations[len(e.Observations)-1]
+		check(o.WorkerSessions == 1 && o.RelayRoutes > 0 && o.LeaseExists && o.SnapshotExists, "live session state missing after recovery")
+	}
+	for _, track := range report.Tracks {
+		gap, _, _ := relayRestartGap(track.Arrivals, stalledAt.Sub(report.StartedAt), until.Sub(report.StartedAt))
+		check(gap < time.Second, track.Kind+" media gap reached one second")
+		check(until.Sub(report.StartedAt.Add(track.LastArrival)) < 200*time.Millisecond, "no continuing "+track.Kind+" media")
 	}
 	return failures
 }

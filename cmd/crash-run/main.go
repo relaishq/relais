@@ -87,7 +87,7 @@ func processEnv(key, addr, prefix string) []string {
 	}
 	return append(env, "RELAIS_SESSIONSTORE_KEY="+key, "RELAIS_REDIS_ADDR="+addr, "RELAIS_REDIS_PREFIX="+prefix)
 }
-func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, after, warmup time.Duration, verbose, terminate, cacheOff bool, topology *nettopology.Topology, profile *profileTrialOptions, stalls ...*storeStallOptions) (out result, trialErr error) {
+func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, after, warmup time.Duration, verbose, terminate, pauseWorker, cacheOff bool, topology *nettopology.Topology, profile *profileTrialOptions, stalls ...*storeStallOptions) (out result, trialErr error) {
 	var stall *storeStallOptions
 	if len(stalls) > 0 {
 		stall = stalls[0]
@@ -117,7 +117,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	}()
 	start := func(name string, args ...string) (*clusterprocess.Child, clusterprocess.Ready, error) {
 		childEnv := env
-		if name == "relay" {
+		if name == "relay" || name == "relay-standby" {
 			childEnv = withoutKey(env)
 		}
 		c, err := startRole(manager, topology, dir, name, childEnv, args...)
@@ -142,6 +142,20 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	_, relayReady, err := start("relay", relayArgs...)
 	if err != nil {
 		return result{}, err
+	}
+	if stall != nil && stall.Variant == "live" {
+		standby, err := manager.Start(dir, "relay-standby", withoutKey(env), filepath.Join(bin, "relais-relay"), "-standby", "-buffer-off", "-media", relayReady.Media, "-leg", relayReady.Leg, "-http", strings.TrimPrefix(relayReady.HTTP, "http://"))
+		if err != nil {
+			return result{}, err
+		}
+		processes = append(processes, standby)
+		stall.Standby = standby
+		wait, stop := context.WithTimeout(ctx, 3*time.Second)
+		err = standby.WaitLog(wait, "STANDBY_WAIT")
+		stop()
+		if err != nil {
+			return result{}, err
+		}
 	}
 	controlAddr, err := controlAddress(topology)
 	if err != nil {
@@ -349,7 +363,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	}
 	killed := time.Now()
 	var profileActionErr error
-	if stall != nil && stall.Variant == "live" {
+	if stall != nil && (stall.Variant == "live" || stall.Variant == "expired") {
 		if err := stall.resume(stalledAt); err != nil {
 			return result{}, err
 		}
@@ -365,6 +379,9 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	} else {
 		signal := syscall.SIGKILL
 		label := "SIGKILL"
+		if pauseWorker {
+			signal, label = syscall.SIGSTOP, "SIGSTOP"
+		}
 		if terminate {
 			signal, label = syscall.SIGTERM, "SIGTERM"
 		}
@@ -441,6 +458,25 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			stall.ObservationErrors = append(stall.ObservationErrors, "post-resume status: "+err.Error())
 		}
 		stall.capture(ctx, status, relayReady.HTTP)
+		if stall.Variant == "expired" {
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) {
+				o := stall.Observations[len(stall.Observations)-1]
+				if o.RelayRoutes == 0 && o.WorkerSessions == 0 && !o.LeaseExists && !o.SnapshotExists {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return result{}, ctx.Err()
+				case <-time.After(50 * time.Millisecond):
+				}
+				status, err = h.Status(ctx)
+				if err != nil {
+					return result{}, err
+				}
+				stall.capture(ctx, status, relayReady.HTTP)
+			}
+		}
 	}
 	observation := time.NewTimer(max(after, (callharness.FreshnessPolicy{}).EvaluationWindow()))
 	defer observation.Stop()
@@ -564,6 +600,7 @@ func run() (err error) {
 	compareBuffer := flag.Bool("compare-buffer", false, "interleave buffer on/off with the same frame-cache mode; requires source checkout and Go")
 	compare := flag.Bool("compare-cache", true, "compare Redis cache+PLI with cache-off PLI (runs per mode)")
 	cacheOff := flag.Bool("frame-cache-off", false, "run PLI only; disable cache writes and replay (overrides comparison)")
+	pauseWorker := flag.Bool("worker-stop", false, "SIGSTOP the owning worker; prove heartbeat takeover without waiting for lease expiry")
 	terminate := flag.Bool("sigterm", false, "verify graceful owning-worker drain instead of crash takeover")
 	relayStandby := flag.Bool("relay-standby", false, "fenced standby takeover after SIGKILL and SIGSTOP, ten runs each")
 	topologyOption := flag.String("topology", "loopback", "loopback or netns (Linux/root only)")
@@ -574,9 +611,12 @@ func run() (err error) {
 	restoreOff := flag.Bool("route-restore-off", false, "disable route restore in relay-restart baseline trials")
 	compareRestore := flag.Bool("compare-restore", true, "compare restore on/off in relay-restart mode")
 	flag.DurationVar(&metricsInterval, "metrics-interval", time.Second, "private metrics scrape interval; 0 disables periodic scraping (pre-fault and final samples remain)")
-	storeStall := flag.String("store-stall", "", "store-stall variant: moderate (1.5s), long (5s), or live (5s, no worker kill); owns throwaway Redis, loopback only")
+	storeStall := flag.String("store-stall", "", "store-stall variant: moderate (1.5s), long (5s), live (5s, survival), or expired (35s, no worker kill); owns throwaway Redis, loopback only")
 	stallDuration := flag.Duration("store-stall-duration", 0, "override selected store-stall duration")
 	flag.Parse()
+	if *pauseWorker && (*terminate || *relayRestart || *relayStandby || *storeStall != "" || *scenario != "" || *bufferOn || *compareBuffer) {
+		return errors.New("worker-stop requires the plain worker takeover scenario")
+	}
 	if err := validateStoreStall(*storeStall, *stallDuration, *redisAddr, *topologyOption, *scenario != "" || *bufferOn || *compareBuffer || *replayLoss || *relayRestart || *relayStandby || *terminate || *cacheOff || *restoreOff); err != nil {
 		return err
 	}
@@ -818,7 +858,7 @@ func run() (err error) {
 				warmup = 2250*time.Millisecond + time.Duration(i%10)*7*time.Millisecond
 				r, err = relayRestartTrial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, off)
 			} else {
-				r, err = trial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, *terminate, off, topology, nil)
+				r, err = trial(trialCtx, manager, bin, trialDir, env, *after, warmup, *verbose, *terminate, *pauseWorker, off, topology, nil)
 			}
 			stop()
 			if err != nil {
@@ -872,6 +912,9 @@ func run() (err error) {
 		return nil
 	}
 	signal := "SIGKILL"
+	if *pauseWorker {
+		signal = "SIGSTOP"
+	}
 	if *terminate {
 		signal = "SIGTERM drain"
 	}
@@ -882,10 +925,10 @@ func run() (err error) {
 		}
 		fmt.Printf("CALLER_COVERAGE mode=%s conclusive=%d/%d minimum=%d%%\n", labels[m], conclusive, len(results), callharness.MinimumConclusivePercent)
 		fmt.Printf("PASS: %d/%d real-process %s trials mode=%s cache_attributed=%d/%d\n", len(results), *runs, signal, labels[m], cacheAttributions(results), len(results))
-		printPathMedians(labels[m], results)
+		printPathMedians(labels[m], results, signal)
 	}
 	if len(all) == 2 {
-		printComparison(all[0], all[1])
+		printComparison(all[0], all[1], signal)
 		if cacheAttributions(all[0]) == 0 {
 			return errors.New("cross-process cached decode NOT-PROVEN: cache_attributed=0; every run fell back to PLI")
 		}
@@ -932,8 +975,12 @@ func measureDrain(report *callharness.Report, relayAddr string, observedUntil ti
 
 // All durations share SIGKILL as their origin. Cache frames restore old pixels;
 // only live_ms measures a frame sent by the caller after that kill.
-func printComparison(cache, pli []result) {
-	fmt.Println("CACHE_VS_PLI common_start=SIGKILL (cached picture predates crash)")
+func printComparison(cache, pli []result, starts ...string) {
+	origin := "SIGKILL"
+	if len(starts) > 0 {
+		origin = starts[0]
+	}
+	fmt.Printf("CACHE_VS_PLI common_start=%s (cached picture predates fault)\n", origin)
 	fmt.Println("run  cache_decoded_ms  cache_live_ms  cache_path  cache_live_path  pli_decoded_ms  pli_live_ms  pli_path  pli_live_path  pli_keyframe_ms")
 	for i, c := range cache {
 		p := pli[i]
@@ -958,7 +1005,11 @@ func median(values []time.Duration) time.Duration {
 	}
 	return values[n/2-1] + (values[n/2]-values[n/2-1])/2
 }
-func printPathMedians(mode string, results []result) {
+func printPathMedians(mode string, results []result, starts ...string) {
+	origin := "SIGKILL"
+	if len(starts) > 0 {
+		origin = starts[0]
+	}
 	var pli []time.Duration
 	for _, r := range results {
 		if r.PLI > 0 {
@@ -966,7 +1017,7 @@ func printPathMedians(mode string, results []result) {
 		}
 	}
 	if len(pli) > 0 {
-		fmt.Printf("PLI_MEDIAN mode=%s common_start=SIGKILL decoded_runs=%d pli_keyframe_ms=%.1f\n", mode, len(pli), float64(median(pli))/float64(time.Millisecond))
+		fmt.Printf("PLI_MEDIAN mode=%s common_start=%s decoded_runs=%d pli_keyframe_ms=%.1f\n", mode, origin, len(pli), float64(median(pli))/float64(time.Millisecond))
 	}
 	for _, path := range []string{"Cache", "Keyframe", "Live"} {
 		var decoded, live []time.Duration

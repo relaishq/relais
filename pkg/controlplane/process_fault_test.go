@@ -96,15 +96,18 @@ func newHTTPSystem(t *testing.T, source, target, routing *lostReply, counts ...i
 }
 
 type httpSystemSettings struct {
-	holdTimeout     time.Duration
-	agent           mediaworker.AgentConfig
-	store           sessionstore.Store
-	buffer          *relay.BufferConfig
-	targetTransport http.RoundTripper
-	cache           framecache.Store
-	callerSocket    func() (net.PacketConn, error)
-	diagnostics     bool
-	packetTrace     func(mediaworker.PacketTrace)
+	workerStores         []sessionstore.Store
+	skipSourceHeartbeats bool
+	deadAfter            time.Duration
+	holdTimeout          time.Duration
+	agent                mediaworker.AgentConfig
+	store                sessionstore.Store
+	buffer               *relay.BufferConfig
+	targetTransport      http.RoundTripper
+	cache                framecache.Store
+	callerSocket         func() (net.PacketConn, error)
+	diagnostics          bool
+	packetTrace          func(mediaworker.PacketTrace)
 }
 
 func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply, settings httpSystemSettings, counts ...int) *httpSystem {
@@ -124,7 +127,7 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 	if routing != nil {
 		rr.Client = &http.Client{Transport: routing, Timeout: 2 * time.Second}
 	}
-	plane := controlplane.New(rr, store)
+	plane := controlplane.NewWithConfig(rr, store, controlplane.Config{DeadAfter: settings.deadAfter})
 	system := &httpSystem{plane: plane, relay: r, diagnostics: settings.diagnostics}
 	count := 2
 	if len(counts) > 0 {
@@ -132,7 +135,11 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 	}
 	for i := range count {
 		name := strconv.Itoa(i)
-		w, err := mediaworker.New(mediaworker.Config{ListenAddr: "127.0.0.1:0", Agent: settings.agent, FrameCache: settings.cache, PacketTrace: settings.packetTrace, Relay: &mediaworker.RelayConfig{Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr(), Owners: store}})
+		workerStore := store
+		if i < len(settings.workerStores) && settings.workerStores[i] != nil {
+			workerStore = settings.workerStores[i]
+		}
+		w, err := mediaworker.New(mediaworker.Config{ListenAddr: "127.0.0.1:0", Agent: settings.agent, FrameCache: settings.cache, PacketTrace: settings.packetTrace, Relay: &mediaworker.RelayConfig{Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr(), Owners: workerStore}})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, w.Close()) })
 		ws := httptest.NewServer(w.PrivateHandler())
@@ -159,6 +166,9 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 	ps := httptest.NewServer(plane.ProcessHandler())
 	t.Cleanup(ps.Close)
 	for i := range count {
+		if i == 0 && settings.skipSourceHeartbeats {
+			continue
+		}
 		name := strconv.Itoa(i)
 		system.workers[i].StartHeartbeats(&controlplane.RemoteHeartbeats{URL: ps.URL, Name: name})
 	}

@@ -67,7 +67,7 @@ func run() error {
 		defer func() { _ = client.Close() }()
 		frames = client
 	}
-	cfg := mediaworker.Config{Agent: agentConfig, ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store}}
+	cfg := mediaworker.Config{Agent: agentConfig, ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store, StoreOutageBudget: storeConfig.OutageBudget}}
 	if *cryptoTrace {
 		cfg.PacketTrace = func(packet mediaworker.PacketTrace) {
 			data, err := json.Marshal(packet)

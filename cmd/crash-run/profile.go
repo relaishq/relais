@@ -524,7 +524,7 @@ func runProfileTrials(ctx context.Context, manager *clusterprocess.Manager, t *n
 			env = append(env, "RELAIS_MOVE_DIAGNOSTICS=1")
 		}
 		trialCtx, cancel := context.WithTimeout(ctx, after+50*time.Second)
-		r, err := trial(trialCtx, manager, bin, trialDir, env, after, 5*time.Second, verbose, false, false, t, &options)
+		r, err := trial(trialCtx, manager, bin, trialDir, env, after, 5*time.Second, verbose, false, false, false, t, &options)
 		cancel()
 		if err != nil {
 			rows = append(rows, profileFailureRow(i+1, err))

@@ -291,14 +291,18 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
       - name: Build process driver
         run: make build
-      # Only driver-owned Redis is paused. All three variants get five independent
-      # calls; loss trials observe silence, resume trials observe ongoing media.
+      # Only driver-owned Redis is paused; five calls per duration and variant.
       - name: Accept five moderate store stalls
         run: ./bin/crash-run -store-stall=moderate -runs=5 -after=10s
       - name: Accept five long store stalls
         run: ./bin/crash-run -store-stall=long -runs=5 -after=10s
-      - name: Accept five live-worker store stalls
-        run: ./bin/crash-run -store-stall=live -runs=5 -after=10s
+      - name: Accept five live-worker stalls at each budget duration
+        run: |
+          for duration in 5s 15s 29s; do
+            ./bin/crash-run -store-stall=live -store-stall-duration="$duration" -runs=5 -after=10s
+          done
+      - name: Accept five beyond-budget ownership losses
+        run: ./bin/crash-run -store-stall=expired -store-stall-duration=35s -runs=5 -after=10s
       - name: Upload store-stall failure logs
         if: failure()
         uses: actions/upload-artifact@v7

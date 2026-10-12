@@ -223,8 +223,15 @@ type RelayConfig struct {
 	// returns the answer, and releases the session when it ends.
 	Owners sessionstore.Store
 
-	// LeaseTTL bounds ownership without renewal. Defaults to three seconds.
+	// StoreOutageBudget is live-call retention headroom (default 30 seconds).
+	// Match the control plane and relay. It does not change checkpoint safety.
+	StoreOutageBudget time.Duration
+	// LeaseTTL overrides ownership lifetime, including outage headroom.
+	// Zero selects 3 seconds plus StoreOutageBudget.
 	LeaseTTL time.Duration
+	// LeaseRenewInterval is independent of expiry. Default one second; an
+	// explicit short LeaseTTL retains its historical TTL/3 cadence.
+	LeaseRenewInterval time.Duration
 }
 
 // Worker is a media worker. It owns one UDP socket, or shares one with other
@@ -289,7 +296,10 @@ func New(cfg Config) (*Worker, error) {
 	if cfg.Relay != nil {
 		relayCfg := *cfg.Relay
 		if relayCfg.LeaseTTL <= 0 {
-			relayCfg.LeaseTTL = 3 * time.Second
+			relayCfg.LeaseTTL = sessionstore.WorkerLeaseTTL(relayCfg.StoreOutageBudget)
+		}
+		if relayCfg.LeaseRenewInterval <= 0 {
+			relayCfg.LeaseRenewInterval = min(sessionstore.DefaultWorkerRenewInterval, max(relayCfg.LeaseTTL/3, time.Millisecond))
 		}
 		cfg.Relay = &relayCfg
 	}
@@ -701,7 +711,11 @@ func (w *Worker) release(sess *session) {
 func (w *Worker) renewLeases() {
 	defer w.running.Done()
 
-	ticker := time.NewTicker(max(w.cfg.Relay.LeaseTTL/3, time.Millisecond))
+	interval := w.cfg.Relay.LeaseRenewInterval
+	if interval <= 0 {
+		interval = min(sessionstore.DefaultWorkerRenewInterval, max(w.cfg.Relay.LeaseTTL/3, time.Millisecond))
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {

@@ -26,7 +26,10 @@ import (
 
 // StoreConfig requires an explicit Redis address. Snapshot users also need a key.
 // It does not inherit the older storage package's localhost:6379 default.
-type StoreConfig struct{ Address, Prefix, Password string }
+type StoreConfig struct {
+	Address, Prefix, Password string
+	OutageBudget              time.Duration
+}
 
 func Env(name, fallback string) string {
 	if value := os.Getenv(name); value != "" {
@@ -35,6 +38,7 @@ func Env(name, fallback string) string {
 	return fallback
 }
 func (c *StoreConfig) Flags(fs *flag.FlagSet) {
+	fs.DurationVar(&c.OutageBudget, "store-outage-budget", sessionstore.DefaultStoreOutageBudget, "live-call store outage retention budget; match on worker and control")
 	fs.StringVar(&c.Address, "redis", Env("RELAIS_REDIS_ADDR", ""), "explicit Redis host:port (6379 is refused)")
 	fs.StringVar(&c.Prefix, "redis-prefix", Env("RELAIS_REDIS_PREFIX", "relais:process:"), "shared session-store namespace")
 	// Keep credentials out of command-line flags and readiness output.

@@ -5,8 +5,9 @@ The measurements below describe that baseline. #99 subsequently changed product
 accounting and ADR 0002: expired placed calls now produce exactly one
 `ownership_expired` loss, and conditional cleanup preserves newer tenures.
 PR #101 review rework distinguishes normal matching release with an ended
-tombstone and keeps relay cleanup store reads off media locks. The current
-three-variant acceptance is in [store-stall.md](store-stall.md).
+tombstone and keeps relay cleanup store reads off media locks. #100 adds a 30 s
+store outage budget; these old measurements remain historical. Current acceptance
+is in [store-stall.md](store-stall.md), with the decision in ADR 0008.
 
 Each historical trial used the driver's throwaway Redis and separate
 relay/control/two-worker processes, with one loopback caller.

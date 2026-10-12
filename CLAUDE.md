@@ -90,10 +90,14 @@ main pushes and nightly runs are not cancelled by this policy.
 
 Nightly at 08:00 UTC, pushes to `main`, and manual `workflow_dispatch` runs
 add the full race harness and timing gates on memory and Redis, benchmarks,
-and `make crash-run`. The `store-stall` job adds five trials of each of three real-process store-stall variants
-(moderate, long and live) on nightly and manual dispatch only, with failure
-logs and a 25-minute limit. Moderate resumes with scaled margins and no loss;
-long and live record one `ownership_expired` loss with conditional cleanup.
+and `make crash-run`. The `store-stall` job adds five trials per case on nightly/manual dispatch,
+with failure logs and a 25-minute limit: live workers survive 5 s, 15 s and 29 s
+pauses with a waiting standby; 1.5 s crash resumes with scaled margins; 5 s crash
+counts checkpoint-unsafe loss; 35 s live pause counts `ownership_expired` loss.
+All require zero decryption failures. The default store outage budget is 30 s;
+configure matching `-store-outage-budget` on worker and control (ADR 0008).
+Relay TTL stays 600 ms; reachable staleness observation preserves fast frozen
+relay takeover while failed polls prevent outage-driven takeover (ADR 0004).
 The optional Redis Cluster gate is unchanged. To run
 manually, select **Actions → CI → Run workflow** on the desired branch.
 The short targets clear the Redis test address and disable its requirement,

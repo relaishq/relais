@@ -50,24 +50,34 @@ Takeover follows this order:
    foreign known identities still refuse the claim.
    For verifiable hosts, observe both holder and last possible forwarder with the same kernel
    identity checks used for fencing, without a terminating signal.
-   If both are verifiably gone, claim immediately, bypassing expiry and recovery
-   grace. `ClaimDeadRelay` atomically checks the observed epoch, holder,
+   If both are verifiably gone, claim immediately, bypassing expiry and staleness
+   observation. `ClaimDeadRelay` atomically checks the observed epoch, holder,
    forwarder and previous-holder evidence before advancing the epoch. A changed
    record rejects the claim and requires fresh observations. A renewal changing
    only expiry does not resurrect a dead process; it may complete before the
    claim, but renewals of the replaced epoch are rejected afterwards.
-   Otherwise, a candidate with continuous store access may claim an expired
-   tenure immediately. Only a candidate that itself failed a store operation
-   within the last TTL observes the same expired holder and epoch on two polls
-   separated by at least one renewal interval. The same recovery grace applies
-   to a missing hash after that candidate reconnects, giving the active time to
-   re-create its tenure. A missing hash with continuous access needs no grace.
-   The store reports expiry using its own clock; a client's wall clock never
-   authorizes a claim. A live tenure, changed holder/epoch, or failed read resets
-   that grace observation. An explicitly released tenure can be claimed
-   immediately. An uncertain store result never permits signalling or
-   binding. Repeating a claim for the identical process identity settles it
-   idempotently if that tenure still exists.
+   Otherwise, the candidate observes the same holder, epoch, predecessor
+   evidence and lease deadline across consecutive successful store polls.
+   Only a full lease TTL without a deadline advance, measured on the candidate's
+   local monotonic clock, permits an expired-tenure claim. Observation starts
+   while the lease is live, so a frozen holder is recognized about one TTL after
+   its last observed renewal, rather than adding another TTL after expiry.
+   Any failed or timed-out store poll resets the observation; an advancing
+   deadline or changed identity/epoch also resets it. A read after an outage
+   starts fresh evidence. The active normally renews within 200 ms, before the
+   candidate can accumulate 600 ms of reachable staleness. Store expiry remains
+   an additional claim precondition; the local observation never bypasses it.
+   A renewal that wins before the claim extends expiry and the atomic claim
+   refuses it. A winning claim fences all subsequent old-holder renewals.
+
+   Fresh empty-store bootstrap and an explicitly released tenure remain
+   immediate. Missing records after a store failure or an observed holder
+   require a full TTL of successful absence observations, allowing the active
+   to recreate its persistent record. Plain unknown-host restart retains the
+   existing single-relay assumption, expiry check and identity restrictions;
+   a new holder also waits for reachable staleness. An uncertain operation is
+   never permission to signal or bind. Repeating a claim for the identical
+   process identity settles it idempotently if that tenure still exists.
 2. Start renewing the new tenure, including during fencing and route restore.
 3. Fence the old lease holder and the last possible forwarder, deduplicating
    identical targets. Unknown-host predecessors in the plain startup exception
@@ -125,31 +135,36 @@ read fails, recheck the pidfd and probe it with signal 0; an unreadable/hidden
 entry for a still-live process is an error, not proof of exit. A stopped process remains
 live and does not qualify. EPERM, a failed executable check, or an unconfirmable
 state also does not qualify; the candidate keeps the normal expiry path,
-including recovery grace only if that candidate recently lost store access.
+requiring successful unchanged observations for a full TTL before expiry takeover.
 Both holder and forwarder must qualify, so a dead pending claimant cannot hide a
 live predecessor. The normal post-claim fencing, activation and exclusive binds
 still run before media starts, including the bounded zombie socket-release wait.
 
-A plain restart is expected to claim on its first successful startup observation
-of the dead holder, without a TTL or grace delay. A standby normally detects a
-SIGKILLed holder by its next poll, about 100 ms with defaults. Socket/route startup
-and worker re-registration add time to both paths. A SIGSTOPed or live holder
-retains the expiry and verified SIGKILL path, with recovery grace only after a
-candidate-side store failure. These are expected decision
-timings, not a caller-gap guarantee on a loaded host or slow store.
+A plain restart claims a verifiably dead holder on its first successful
+observation. A standby normally detects SIGKILL by the next 100 ms poll. Socket
+startup, route restoration and worker registration still add time. A SIGSTOPped
+holder retains a live identity: the standby requires a full TTL of successful,
+unchanged lease observations and store-confirmed expiry before claiming it.
 
-Defaults are a **600 ms lease**, **200 ms renewal**, and **100 ms claim poll**.
-With continuous store access, frozen-holder recognition takes up to about
-700 ms with poll rounding. A candidate-side store failure within the last TTL
-adds a 200 ms recovery grace, taking recognition up to about 900 ms. A partition
-seen only by the active does not earn grace: the connected candidate can fence
-it after expiry. Fencing, route restore, and worker registration still need to
-fit within the one-second caller budget. These are configurable with `-relay-lease-ttl`,
-`-relay-lease-renew` and
-`-relay-lease-poll`; renewal must be positive and shorter than the lease. Loaded
-hosts, a slow store or a large route scan can exceed the measured loopback gap.
-The gap guarantee is established by the real-process driver, not by these
-configuration values alone.
+Defaults remain **600 ms lease**, **200 ms renewal**, and **100 ms poll**.
+A shared Redis outage resets every standby's staleness evidence. The active
+continues forwarding and retries renewal; matching holder/epoch renewal can
+revive its expired but unclaimed logical lease. When Redis returns, a healthy
+renewal advances the deadline before a fresh 600 ms observation can authorize
+an expiry takeover. A partition seen only by the active does not protect it:
+a reachable standby observes a full TTL of staleness, claims and fences it.
+Both frozen-holder and dead-holder driver cases use these defaults; no short-TTL
+override hides a product regression. These are local measurements, not a loaded
+host or slow-store guarantee. Flags remain `-relay-lease-ttl`,
+`-relay-lease-renew` and `-relay-lease-poll`; use consistent relay settings.
+
+Observation only decides when to try the claim. It never grants forwarding.
+The store serializes claim and renewal; takeover preserves holder/forwarder
+identity evidence. The winner must verify and terminate every old possible
+forwarder, activate its own tenure, and exclusively bind the original sockets.
+A fencing failure refuses activation/binding. Thus even an active-only partition,
+an observation race, or uncertain claim cannot create two forwarders. Redis must
+preserve acknowledged decisions, as required by the existing lease contract.
 
 A renewal compare-and-set rejects a different holder or newer epoch.
 That observed lease loss immediately disables packet forwarding, closes both
@@ -165,20 +180,20 @@ unreachable the active relay keeps forwarding existing routes; failed owner
 lookups and persistence retain their existing ADR 0003 behaviour. The standby
 cannot claim or activate, does not signal the active process, and does not bind.
 While renewal fails, retry it every 50 ms (or the configured renewal interval
-if shorter). After a candidate's own store access recovers, its two-poll grace
-gives the healthy active time to renew or re-create a missing hash before that
-candidate claims. A candidate that never lost store access does not add grace.
-This favors recovery but does not promise that a stalled active wins; the atomic claim or
-renewal still decides ownership. There is no takeover without a successful
-lease decision.
+if shorter). Failed polls reset the staleness observer. On successful recovery,
+a full TTL of unchanged evidence is required before an expiry claim, giving a
+healthy active time to renew or recreate its record. A continuously connected
+candidate follows the same observation rule, so an active-only partition is
+still fenced after reachable staleness. There is no takeover without a successful
+store decision, verified predecessor fencing and activation.
 
 On graceful exit, close both UDP sockets and HTTP, stop and join renewal, then
 release the matching holder/epoch with a bounded store operation. Release clears
 process identities and expires the tenure while retaining its epoch. A plain
-restart can claim it immediately, without waiting for the old TTL or recovery
-grace. A stale release cannot erase a successor. A crash or failed release
+restart can claim it immediately, without waiting for the old TTL or staleness
+observation. A stale release cannot erase a successor. A crash or failed release
 retains fencing evidence; verified exit permits the fast claim, while unknown
-exit retains the normal expiry path with candidate-side recovery grace.
+exit retains the expired-tenure path with full reachable-staleness observation.
 
 ## Evidence and limits
 
@@ -230,7 +245,7 @@ ready within 500 ms after SIGKILL despite a 3 s lease, and prove a stopped holde
 is not claimed early. Unit tests cover EPERM/unknown exit, a changed holder during
 the identity check, a dead holder with a live forwarder, and the claim/renew race
 in both stores. Regressions also cover candidate-side recovery versus an
-active-only partition, missing-hash re-creation during recovery grace, foreign
+active-only partition, missing-hash re-creation after failed polls, foreign
 host/namespace refusal before any claim, atomic store scope checks, Linux
 hidden identity reads, and an upgraded executable fencing a stopped old relay.
 The upgrade and foreign-scope paths run through real command/Redis tests.

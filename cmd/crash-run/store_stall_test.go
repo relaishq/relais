@@ -198,3 +198,96 @@ func TestJudgeOwnershipExpiredStoreStall(t *testing.T) {
 		}
 	}
 }
+
+func TestJudgeLiveSurvivalRejectsLossGapAndStandbyTakeover(t *testing.T) {
+	for _, mutation := range []string{"none", "loss", "gap", "standby", "epoch", "stopped", "fenced", "decrypt"} {
+		t.Run(mutation, func(t *testing.T) {
+			report, status, e, stalled, _, until := stallFixture(false)
+			resumed := stalled.Add(5 * time.Second)
+			e.Owner = "0"
+			e.Variant = "live"
+			e.LossEvents = 0
+			e.EnvelopeEvents = 0
+			e.RelayEpochBefore = 1
+			e.RelayEpochAfter = 1
+			e.StandbyWaiting = true
+			e.Observations = []storeStallObservation{{WorkerSessions: 1, RelayRoutes: 1, LeaseExists: true, SnapshotExists: true}}
+			status.Calls[0].Owner = "0"
+			status.Takeovers = nil
+			report.Moves = nil
+			for i := range report.Tracks {
+				report.Tracks[i].Arrivals = nil
+				for at := time.Second; at <= 10*time.Second; at += 100 * time.Millisecond {
+					report.Tracks[i].Arrivals = append(report.Tracks[i].Arrivals, at)
+				}
+			}
+			switch mutation {
+			case "loss":
+				status.LostCount = 1
+			case "gap":
+				report.Tracks[0].Arrivals = []time.Duration{time.Second, 5 * time.Second, 10 * time.Second}
+			case "standby":
+				e.StandbyWaiting = false
+			case "epoch":
+				e.RelayEpochAfter = 2
+			case "stopped":
+				report.Tracks[0].LastArrival = 6 * time.Second
+			case "fenced":
+				e.Observations[0].WorkerSessions = 0
+			case "decrypt":
+				report.DecryptionFailures.AuthTag = 1
+			}
+			f := judgeLiveSurvival(report, status, e, report.RemoteAddr, stalled, resumed, until)
+			if mutation == "none" {
+				require.Empty(t, f)
+			} else {
+				require.NotEmpty(t, f)
+			}
+		})
+	}
+}
+
+// Accounting precedes asynchronous fencing. Confirm a bounded cleanup before
+// checking that old media cannot resume, rather than treating continued old
+// forwarding as a new snapshot adoption.
+func TestExpiredStoreStallRequiresBoundedConfirmedCleanup(t *testing.T) {
+	for _, mutation := range []string{"none", "missing-cleanup", "slow-cleanup", "media-after-cleanup"} {
+		t.Run(mutation, func(t *testing.T) {
+			report, status, e, stalled, _, _ := stallFixture(true)
+			resumed := report.StartedAt.Add(36 * time.Second)
+			e.Variant = "expired"
+			e.ActualStall = 35 * time.Second
+			e.ResumedAt = resumed
+			e.Takeover.End = resumed.Add(100 * time.Millisecond)
+			e.Takeover.LossCause = "ownership_expired"
+			e.Takeover.CheckpointPolicy = ""
+			e.Takeover.SnapshotAge = 0
+			e.Takeover.CheckpointAge = 0
+			e.EnvelopeEvents = 0
+			e.ControlCounters = map[string]float64{lossCounter("ownership_expired"): 1}
+			status.Takeovers = []controlplane.MoveResult{e.Takeover}
+			report.Moves[0].Lost = true
+			report.Moves[0].LossCause = "ownership_expired"
+			completed := resumed.Add(time.Second)
+			e.Observations = []storeStallObservation{{CompletedAt: resumed.Add(200 * time.Millisecond), RelayRoutes: 1, WorkerSessions: 1}, {CompletedAt: completed}}
+			for i := range report.Tracks {
+				report.Tracks[i].LastArrival = completed.Sub(report.StartedAt) - 50*time.Millisecond
+			}
+			switch mutation {
+			case "missing-cleanup":
+				e.Observations = e.Observations[:1]
+			case "slow-cleanup":
+				e.Observations[1].CompletedAt = resumed.Add(4 * time.Second)
+			case "media-after-cleanup":
+				report.Tracks[0].LastArrival = completed.Sub(report.StartedAt) + 100*time.Millisecond
+			}
+			failures := judgeOwnershipExpired(report, status, e, report.RemoteAddr, stalled, resumed)
+			if mutation == "none" {
+				require.Empty(t, failures)
+			} else {
+				require.NotEmpty(t, failures)
+			}
+		})
+	}
+	require.NoError(t, validateStoreStall("expired", 35*time.Second, "", "loopback", false))
+}
