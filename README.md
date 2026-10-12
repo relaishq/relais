@@ -458,7 +458,8 @@ each exact private worker IP and its inclusive HTTP and UDP port ranges:
 -test-register-worker=10.0.0.11=9400-9499,42000-42099
 ```
 
-The request is JSON, for example:
+The request is JSON, for example. Names must contain printable characters,
+use at most 64 UTF-8 bytes, and contain at least one non-space character:
 
 ```json
 {"name":"fresh-2","url":"http://10.0.0.10:9301","address":"10.0.0.10:41011"}
@@ -471,13 +472,14 @@ fragment. The media address must use the same host and an allowed UDP port.
 The worker's `/status` must report that exact media address before registration.
 Worker requests use no environment proxy and do not follow redirects.
 Successful registration returns HTTP 200 with `name` and `address`; invalid
-requests return 400, and worker or duplicate-registration failures return 409.
-The existing relay-sync loop adds accepted media addresses on its next poll
-(every 100 ms); a failed relay update is retried by that loop. HTTP 200 confirms
-control-plane registration, not immediate relay readiness. Rejected requests
-never add a relay address. `Plane.Register` still rejects reused names and media
-addresses; the route does not replace or revive an old registration. Use a fresh name and
-ports for each replacement process.
+requests return 400, and worker, relay or duplicate-registration failures return
+409. The relay accepts the verified media address before the control plane can
+select the worker. A failed relay update prevents control-plane registration.
+`Plane.Register` still rejects reused names and media addresses. Such a rejection
+can leave the verified, in-bounds address in the relay allowlist; forwarding still
+requires a confirmed caller flow. The route does not replace or revive an old
+registration. Use a fresh name and ports for each replacement process. The
+existing relay-sync loop continues to restore registrations after relay restarts.
 
 This route is disabled when no `-test-register-worker` flags are supplied.
 It does not enable or broaden the loopback-only `-demo-register` route or change

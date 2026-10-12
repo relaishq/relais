@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -10,9 +11,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/relais/internal/privateapi"
 	"github.com/relais/pkg/controlplane"
+	"github.com/relais/pkg/metrics"
 )
 
 type testPortRange struct{ first, last uint16 }
@@ -84,8 +87,11 @@ type testRegistrationRequest struct {
 }
 
 func (a testWorkerAllowlist) validate(req testRegistrationRequest) error {
+	if len(req.Name) > 64 || strings.TrimSpace(req.Name) == "" || strings.ContainsFunc(req.Name, func(c rune) bool { return !unicode.IsPrint(c) }) {
+		return errors.New("worker name must contain printable characters and use 1-64 UTF-8 bytes")
+	}
 	u, err := url.Parse(req.URL)
-	if err != nil || u.Scheme != "http" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || strings.TrimSpace(req.Name) == "" {
+	if err != nil || u.Scheme != "http" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
 		return errors.New("name, literal HTTP worker URL and media address required")
 	}
 	host, port, err := net.SplitHostPort(u.Host)
@@ -112,6 +118,17 @@ func (a testWorkerAllowlist) validate(req testRegistrationRequest) error {
 func testWorkerClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
+	dial := transport.DialContext
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		conn, err := dial(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		return metrics.TrafficConn(conn, "http"), nil
+	}
 	return &http.Client{
 		Timeout:   privateapi.Timeout,
 		Transport: transport,
@@ -148,8 +165,10 @@ func controlHandler(plane *controlplane.Plane, relay *controlplane.RemoteRelay, 
 			err = errors.New("worker status does not match requested media address")
 		}
 		if err == nil {
-			// The existing relay-sync loop discovers accepted registrations.
-			// Register first so rejected identities never widen the relay registry.
+			// The relay must accept the address before the plane can select it.
+			err = relay.AddWorker(r.Context(), req.Address)
+		}
+		if err == nil {
 			err = plane.Register(req.Name, req.Address, worker)
 		}
 		if err != nil {

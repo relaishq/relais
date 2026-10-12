@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -76,7 +77,7 @@ func TestTestRegistrationDisabledByDefault(t *testing.T) {
 func TestTestRegistrationProductionFlag(t *testing.T) {
 	oldFlags, oldArgs := flag.CommandLine, os.Args
 	t.Cleanup(func() { flag.CommandLine, os.Args = oldFlags, oldArgs })
-	for _, input := range [][]string{nil, {"-test-register-worker", "10.0.0.10=9300-9399,41010-41109"}} {
+	for _, input := range [][]string{nil, {"-test-register-worker", "10.0.0.10=9300-9399,41010-41109", "-demo-register"}} {
 		flag.CommandLine = flag.NewFlagSet("registration-test", flag.ContinueOnError)
 		os.Args = append([]string{"registration-test", "-http", "0.0.0.0:0", "-relay", "http://127.0.0.1:1", "-worker", "0=http://127.0.0.1:2"}, input...)
 		// Stop before opening a store or making any outbound connection.
@@ -88,6 +89,7 @@ func TestTestRegistrationProductionFlag(t *testing.T) {
 			require.Empty(t, option.Value.String())
 		} else {
 			require.Equal(t, input[1], option.Value.String())
+			require.Equal(t, "true", flag.Lookup("demo-register").Value.String())
 		}
 	}
 }
@@ -105,7 +107,7 @@ func TestTestRegistrationBoundsAndUniqueIdentities(t *testing.T) {
 		privateapi.Write(w, mediaworker.WorkerStatus{Address: advertised.Load().(netip.AddrPort)})
 	}))
 	t.Cleanup(workerServer.Close)
-	relayAddresses := make(chan netip.AddrPort, 3)
+	relayAddresses := make(chan netip.AddrPort, 8)
 	relayServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/status" {
 			privateapi.Write(w, relay.RelayStatus{Instance: "test"})
@@ -173,6 +175,9 @@ func TestTestRegistrationBoundsAndUniqueIdentities(t *testing.T) {
 	} {
 		cases = append(cases, registrationCase{name: endpoint, req: request("bad", endpoint, good.Address.String()), status: http.StatusBadRequest})
 	}
+	for _, name := range []string{strings.Repeat("x", 65), "line\nbreak", "tab\t", "null\x00", "escape\x1b", "delete\x7f", "hidden\u200b"} {
+		cases = append(cases, registrationCase{name: "invalid name " + name, req: request(name, good.URL, good.Address.String()), status: http.StatusBadRequest})
+	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			address := tc.req.Address
@@ -197,7 +202,11 @@ func TestTestRegistrationBoundsAndUniqueIdentities(t *testing.T) {
 			} else {
 				require.Equal(t, beforeWorkers, workerCalls.Load())
 			}
-			require.Equal(t, beforeRelay, relayCalls.Load(), "registration must not directly mutate the relay")
+			if tc.probe && tc.advertised == "" {
+				require.Equal(t, beforeRelay+1, relayCalls.Load(), "verified addresses reach the relay before identity checks")
+			} else {
+				require.Equal(t, beforeRelay, relayCalls.Load(), "invalid or mismatched addresses must not reach the relay")
+			}
 		})
 	}
 	status, err := plane.Status(context.Background())
@@ -207,11 +216,19 @@ func TestTestRegistrationBoundsAndUniqueIdentities(t *testing.T) {
 		require.Contains(t, []string{"fresh", "upper", "second"}, worker.Name)
 		require.False(t, worker.Draining)
 	}
-	// Exercise the same sync used by registerRestartedRelay in the command.
-	// Only accepted names and media addresses may reach the relay allowlist.
+	require.EqualValues(t, 5, relayCalls.Load())
+	for range 5 {
+		require.Contains(t, []netip.AddrPort{
+			netip.MustParseAddrPort("10.0.0.10:41010"),
+			netip.MustParseAddrPort("10.0.0.10:41011"), // Verified address from the rejected reused name.
+			netip.MustParseAddrPort("10.0.0.10:41012"),
+			netip.MustParseAddrPort("10.0.0.11:42000"),
+		}, <-relayAddresses)
+	}
+	// Restart sync still discovers accepted registrations, including late workers.
 	var registry controlplane.RelayWorkerRegistry
 	require.NoError(t, registry.Sync(context.Background(), plane, remoteRelay))
-	require.EqualValues(t, 3, relayCalls.Load())
+	require.EqualValues(t, 8, relayCalls.Load())
 	for range 3 {
 		require.Contains(t, []netip.AddrPort{
 			netip.MustParseAddrPort("10.0.0.10:41010"),
@@ -220,7 +237,7 @@ func TestTestRegistrationBoundsAndUniqueIdentities(t *testing.T) {
 		}, <-relayAddresses)
 	}
 	require.NoError(t, registry.Sync(context.Background(), plane, remoteRelay))
-	require.EqualValues(t, 3, relayCalls.Load())
+	require.EqualValues(t, 8, relayCalls.Load())
 }
 
 func TestTestRegistrationClientRefusesRedirectsAndProxies(t *testing.T) {
@@ -245,14 +262,22 @@ func TestTestRegistrationClientRefusesRedirectsAndProxies(t *testing.T) {
 	}
 	var allowed testWorkerAllowlist
 	require.NoError(t, allowed.Set("10.0.0.10=9300-9300,41010-41010"))
-	plane := controlplane.New(nil, sessionstore.NewMemory())
-	server := httptest.NewServer(controlHandler(plane, nil, false, allowed, client))
+	var relayCalls atomic.Int32
+	relayServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		relayCalls.Add(1)
+		http.Error(w, "redirect must not register with the relay", http.StatusBadRequest)
+	}))
+	t.Cleanup(relayServer.Close)
+	remoteRelay := &controlplane.RemoteRelay{URL: relayServer.URL}
+	plane := controlplane.New(remoteRelay, sessionstore.NewMemory())
+	server := httptest.NewServer(controlHandler(plane, remoteRelay, false, allowed, client))
 	t.Cleanup(server.Close)
 	err := privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/private/test/register", testRegistrationRequest{
 		Name: "redirect", URL: "http://10.0.0.10:9300", Address: netip.MustParseAddrPort("10.0.0.10:41010"),
 	}, nil, nil)
 	require.ErrorContains(t, err, "302")
 	require.Zero(t, escaped.Load())
+	require.Zero(t, relayCalls.Load())
 	status, err := plane.Status(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, status.Workers)
