@@ -159,7 +159,7 @@ func TestSharedStatusPollerCoalescesSuccessesAndFailures(t *testing.T) {
 			}))
 			defer server.Close()
 			meter := &Meter{}
-			poller := newStatusPoller(server.URL+"/calls", meter)
+			poller := newStatusPoller(server.URL+"/calls", meter, nil)
 			at := time.Now()
 			poller.now = func() time.Time { return at }
 			h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: server.URL + "/calls", RelayAddr: netip.MustParseAddrPort("127.0.0.1:20000"), Status: poller.Get}})

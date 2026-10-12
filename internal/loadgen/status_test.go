@@ -47,7 +47,7 @@ func TestCancelledCallerPollDoesNotFailAnotherHangup(t *testing.T) {
 		proxy.ServeHTTP(w, r)
 	}))
 	defer server.Close()
-	poller := newStatusPoller(server.URL+"/calls", &Meter{})
+	poller := newStatusPoller(server.URL+"/calls", &Meter{}, nil)
 	h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: server.URL + "/calls", RelayAddr: system.RelayAddr(), Status: poller.Get, FinalStatus: poller.GetFinal}})
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestFinalStatusRefreshSurvivesSlowPeriodicTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 	meter := &Meter{}
-	poller := newStatusPoller(server.URL+"/calls", meter)
+	poller := newStatusPoller(server.URL+"/calls", meter, nil)
 	if poller.client.Timeout != 0 || poller.pollTimeout != time.Second || poller.finalTimeout != 10*time.Second {
 		t.Fatal("final collection still has a hard one-second client deadline")
 	}
@@ -138,7 +138,7 @@ func TestCallerDeadlineIsNotCachedAsPollerError(t *testing.T) {
 		}
 	}))
 	defer func() { unblock(); server.Close() }()
-	poller := newStatusPoller(server.URL+"/calls", &Meter{})
+	poller := newStatusPoller(server.URL+"/calls", &Meter{}, nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	done := make(chan error, 1)

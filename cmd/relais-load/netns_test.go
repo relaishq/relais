@@ -40,7 +40,7 @@ func TestCapacityCallerNamespaceAndBindFlags(t *testing.T) {
 	external, err = childTopology("http://control/calls", netip.MustParseAddrPort("127.0.0.1:20000"), "", "")
 	require.NoError(t, err)
 	require.Nil(t, external.CallerSocket)
-	for _, invalid := range [][2]string{{*namespace, ""}, {*namespace, "0.0.0.0:0"}, {*namespace, "[::1]:0"}, {"", *bind}} {
+	for _, invalid := range [][2]string{{*namespace, ""}, {*namespace, "0.0.0.0:0"}, {*namespace, "[::1]:0"}, {"", "localhost:0"}, {"", "0.0.0.0:0"}, {"", "[::1]:0"}} {
 		_, err = childTopology("http://control/calls", external.RelayAddr, invalid[0], invalid[1])
 		require.ErrorContains(t, err, "specific IPv4 UDP bind address")
 	}

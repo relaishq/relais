@@ -61,7 +61,7 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 		o.StartTimeout = 3 * time.Minute
 	}
 	meter := &Meter{}
-	poller := newStatusPoller(o.Topology.SignalingURL, meter)
+	poller := newStatusPoller(o.Topology.SignalingURL, meter, o.Topology.HTTPClient)
 	o.Topology.Status = poller.Get
 	o.Topology.FinalStatus = poller.GetFinal
 	h, err := callharness.Start(callharness.Options{External: &o.Topology})

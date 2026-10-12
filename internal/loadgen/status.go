@@ -29,8 +29,11 @@ type statusPoller struct {
 	pollTimeout, finalTimeout time.Duration
 }
 
-func newStatusPoller(signaling string, meter *Meter) *statusPoller {
-	return &statusPoller{endpoint: strings.TrimSuffix(signaling, "/calls") + "/status", client: &http.Client{}, meter: meter, every: time.Second, now: time.Now, pollTimeout: time.Second, finalTimeout: 10 * time.Second}
+func newStatusPoller(signaling string, meter *Meter, client *http.Client) *statusPoller {
+	if client == nil {
+		client = &http.Client{}
+	}
+	return &statusPoller{endpoint: strings.TrimSuffix(signaling, "/calls") + "/status", client: client, meter: meter, every: time.Second, now: time.Now, pollTimeout: time.Second, finalTimeout: 10 * time.Second}
 }
 
 func (p *statusPoller) Get(ctx context.Context) (controlplane.Status, error) {
