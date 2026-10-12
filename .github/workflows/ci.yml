@@ -297,6 +297,8 @@ jobs:
         run: ./bin/crash-run -store-stall=moderate -runs=5 -after=10s
       - name: Accept five long store stalls
         run: ./bin/crash-run -store-stall=long -runs=5 -after=10s
+      - name: Accept five live-worker store stalls
+        run: ./bin/crash-run -store-stall=live -runs=5 -after=10s
       - name: Upload store-stall failure logs
         if: failure()
         uses: actions/upload-artifact@v7
