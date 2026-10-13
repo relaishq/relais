@@ -70,6 +70,11 @@ func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget floa
 // excluded is used only by soak for individually inconclusive event windows.
 func judgeCapacityExcept(kind string, r loadgen.RunReport, opsBudget, bytesBudget float64, excluded map[int]bool) capacityStep {
 	s := capacityStep{Kind: kind, Run: r, Verdict: "pass", StoreBytesByClient: map[string]float64{}}
+	if hasDistributedCalls(r) {
+		s.Verdict = "inconclusive"
+		s.Causes = []string{"local capacity policy refuses distributed point estimates"}
+		return s
+	}
 	inconclusive := func(reason string) {
 		if s.Verdict != "fail" {
 			s.Verdict = "inconclusive"
@@ -557,4 +562,18 @@ func calculateCost(p priceInput, workers, callers int, egress float64) costRepor
 	cost.TransferPerCallHour = egress * 3600 / (1 << 30) * p.PublicEgressPerGiB
 	cost.TotalPerCallHour = cost.MachinePerCallHour + cost.TransferPerCallHour
 	return cost
+}
+
+func hasDistributedCalls(r loadgen.RunReport) bool {
+	if r.Distributed != nil {
+		return true
+	}
+	for _, p := range r.Processes {
+		for _, c := range p.Calls {
+			if c.Call.HasDistributedEvidence() {
+				return true
+			}
+		}
+	}
+	return false
 }

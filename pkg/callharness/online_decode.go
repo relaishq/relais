@@ -101,9 +101,17 @@ func (s *onlineSampler) frame(f *vp8Frame, size image.Point, err error) {
 		}
 	}
 	for _, move := range r.moves {
-		if at >= r.since(move.start) && r.since(move.start) > v.lastSampleEvent {
+		start := r.since(move.start)
+		if move.event != nil {
+			mapped, _, err := r.mappedMoveTimes(move)
+			if err != nil {
+				continue
+			}
+			start = mapped.Lower
+		}
+		if at >= start && start > v.lastSampleEvent {
 			v.sampleBurst = max(v.sampleBurst, 3)
-			v.lastSampleEvent = r.since(move.start)
+			v.lastSampleEvent = start
 		}
 	}
 	wanted := f.keyframe || (v.Frames-v.RepeatedFrames)%r.recording.DecodeEvery == 0 || v.sampleBurst > 0

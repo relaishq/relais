@@ -31,6 +31,7 @@ type gapBaseline struct {
 	Median, P95 time.Duration
 }
 type profileRow struct {
+	Distributed     bool             `json:"distributed,omitempty"`
 	MoveDiagnostics *moveDiagnostics `json:"move_diagnostics,omitempty"`
 	TrialError      string           `json:"trial_error,omitempty"`
 	// Raw per-row counts are in Measurement.ContentLoss. These comparisons
@@ -124,6 +125,9 @@ func quantile(values []time.Duration, q float64) time.Duration {
 }
 func measureProfile(report *callharness.Report, relay string, options profileTrialOptions, after time.Duration) profileRow {
 	row := profileRow{Integrity: callharness.MetricVerdict{Trusted: true}}
+	if report.HasDistributedEvidence() {
+		return profileRow{Distributed: true, Verdict: "inconclusive", Reasons: []string{"local crash profile refuses distributed point estimates"}}
+	}
 	fail := func(reason string) {
 		row.Integrity.Failed = true
 		row.Integrity.Reasons = append(row.Integrity.Reasons, reason)
@@ -247,6 +251,13 @@ func mediaPathHasLoss(links []nettopology.LinkSetting) (bool, error) {
 func judgeProfile(options profileTrialOptions, rows []profileRow, links []nettopology.LinkSetting) profileReport {
 	p, _ := nettopology.ParseProfile(options.Name)
 	out := profileReport{PrivateRouteTuning: options.PrivateRouteTuning, PrivateRoutes: options.PrivateRoutes, KernelRelease: options.KernelRelease, Profile: options.Name, Scenario: options.Scenario, Load: 1, Rows: rows, Links: links, ContentAgeSpreadLimit: profileContentAgeSpreadLimit(links), GapAllowance: 50 * time.Millisecond, AbsoluteGapCeiling: 150 * time.Millisecond, FreshnessCeiling: p.FreshnessCeiling, PauseCeiling: 2 * time.Second, MinimumTrials: 10, Verdict: "pass", DurationUnit: "nanoseconds"}
+	for _, row := range rows {
+		if row.Distributed {
+			out.Verdict = "inconclusive"
+			out.Reasons = []string{"local crash profile refuses distributed point estimates"}
+			return out
+		}
+	}
 	if options.Scenario == "move" {
 		out.MinimumTrials = 20
 	}

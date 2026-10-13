@@ -28,6 +28,11 @@ const requestTimeout = 10 * time.Second
 // Match the demo's reverse-proxy pattern, but expose only the two signaling
 // operations. Do not forward client credentials or trust forwarded headers.
 func newHandler(target *url.URL, token string, transport http.RoundTripper) (http.Handler, error) {
+	return newHandlerWithClock(target, token, transport, time.Now)
+}
+
+// Clock injection is local test tooling; production always uses time.Now.
+func newHandlerWithClock(target *url.URL, token string, transport http.RoundTripper, now func() time.Time) (http.Handler, error) {
 	var workerKey [32]byte
 	if _, err := rand.Read(workerKey[:]); err != nil {
 		return nil, err
@@ -87,7 +92,7 @@ func newHandler(target *url.URL, token string, transport http.RoundTripper) (htt
 	}
 	client := &http.Client{Transport: transport, Timeout: requestTimeout, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		received := time.Now().UTC()
+		received := now().UTC()
 		w.Header().Set("Cache-Control", "no-store")
 		auth := r.Header.Values("Authorization")
 		presented := ""
@@ -144,7 +149,7 @@ func newHandler(target *url.URL, token string, transport http.RoundTripper) (htt
 			return
 		}
 		if r.URL.Path == "/clock" {
-			writeJSON(w, clockSample{ReceivedAt: received, SentAt: time.Now().UTC()})
+			writeJSON(w, clockSample{ReceivedAt: received, SentAt: now().UTC()})
 			return
 		}
 		if r.URL.Path == "/status" {

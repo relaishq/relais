@@ -67,6 +67,7 @@ func (r *recorder) sendingVideo(frame []byte, request *keyframeResponseRequest, 
 	}
 	id := uint16(r.sentVideo.Frames & 0x7fff)
 	r.sentVideoFrames[id] = sentVideoFrame{identity: uint64(r.sentVideo.Frames), at: r.since(time.Now()), data: data, pli: request != nil, duration: interval}
+	r.videoSends = append(r.videoSends, evidenceRef{at: r.sentVideoFrames[id].at, video: id, generation: identity})
 	if request != nil {
 		source := r.sentVideoFrames[id]
 		source.requestedAt = request.at

@@ -26,6 +26,7 @@ import (
 )
 
 type result struct {
+	Unsupported                                      string              `json:"unsupported,omitempty"`
 	StoreStall                                       *storeStallEvidence `json:"store_stall,omitempty"`
 	ProfileRow                                       *profileRow         `json:"profile_row,omitempty"`
 	BufferEvidence                                   *bufferEvidence
@@ -554,6 +555,9 @@ observe:
 	return measure(report, relayReady.Media, after), nil
 }
 func measure(report *callharness.Report, relayAddr string, after time.Duration) result {
+	if report.HasDistributedEvidence() {
+		return result{Unsupported: "local crash policy refuses distributed point estimates"}
+	}
 	r := result{Decrypt: report.DecryptionFailures.Total(), Reconnects: report.ICERestarts, Renegotiations: report.Renegotiations}
 	if len(report.Moves) != 1 {
 		return r
@@ -961,6 +965,9 @@ func withoutKey(env []string) []string {
 // Measure the actual caller's longest media gap and require packets continuing
 // through hangup, clean full decoding, and the original connection identity.
 func measureDrain(report *callharness.Report, relayAddr string, observedUntil time.Time) result {
+	if report.HasDistributedEvidence() {
+		return result{Unsupported: "local crash policy refuses distributed point estimates"}
+	}
 	r := result{Decrypt: report.DecryptionFailures.Total(), Reconnects: report.ICERestarts, Renegotiations: report.Renegotiations}
 	flowing := len(report.Tracks) == 2
 	for _, track := range report.Tracks {

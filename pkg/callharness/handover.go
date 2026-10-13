@@ -168,6 +168,9 @@ func (c *Call) sessionID() (string, error) {
 
 // moveRecord is one handover the harness made.
 type moveRecord struct {
+	event               *DistributedEvent
+	armedAt, receivedAt time.Time
+
 	kind       string
 	lost       bool
 	lossCause  string
@@ -209,12 +212,12 @@ func (r *recorder) move(record moveRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for _, existing := range r.moves {
-		if existing.start.Equal(record.start) && existing.end.Equal(record.end) && existing.kind == record.kind {
+		if existing.event == nil && record.event == nil && existing.start.Equal(record.start) && existing.end.Equal(record.end) && existing.kind == record.kind {
 			return
 		}
 	}
 	for _, existing := range r.savedMoves {
-		if existing.Start == r.since(record.start) && existing.End == r.since(record.end) && existing.Kind == record.kind {
+		if existing.Identity == nil && record.event == nil && existing.Start == r.since(record.start) && existing.End == r.since(record.end) && existing.Kind == record.kind {
 			return
 		}
 	}
@@ -228,6 +231,11 @@ func (r *recorder) move(record moveRecord) {
 // MoveReport is one planned handover as the caller observed it, plus what
 // the system reported about it.
 type MoveReport struct {
+	Receipt *DistributedEvent `json:"receipt,omitempty"`
+
+	Identity    *OperationIdentity      `json:"identity,omitempty"`
+	Distributed *DistributedMeasurement `json:"distributed,omitempty"`
+
 	resumedAfterEnd time.Duration
 	Lost            bool   `json:"lost,omitempty"`
 	LossCause       string `json:"loss_cause,omitempty"`
@@ -324,10 +332,27 @@ func (r *recorder) moveReports() []MoveReport {
 	reports := slices.Clone(r.savedMoves)
 	for i := range reports {
 		report := &reports[i]
+		if report.Distributed != nil && r.distributed.Clock.Err() != nil {
+			d := *report.Distributed
+			d.Mapped = false
+			d.KillToLive = nil
+			if d.Outcome != "fail" {
+				d.Outcome = "inconclusive"
+			}
+			if d.WindowOutcome != "fail" {
+				d.WindowOutcome = "inconclusive"
+			}
+			d.Causes = append(slices.Clone(d.Causes), r.distributed.Clock.Err().Error())
+			report.Distributed = &d
+			invalidateDistributedContent(&report.Measurement, "clock trust invalidated after event summary")
+			r.failIdentityMetrics(&report.Measurement)
+		}
 		report.Tracks = slices.Clone(report.Tracks)
 		for j := range report.Tracks {
 			track := &report.Tracks[j]
-			track.PacketsAfter += track.packetCounter.packets - track.packetsAtSave
+			if track.packetCounter != nil {
+				track.PacketsAfter += track.packetCounter.packets - track.packetsAtSave
+			}
 		}
 		if report.resumedAfterEnd > 0 {
 			report.DecryptionFailuresAfterResume += r.decryptionFailures.Total() - report.decryptFailuresAtSave
@@ -339,9 +364,43 @@ func (r *recorder) moveReports() []MoveReport {
 // measureMoves measures only the pending prefix requested by the caller. A
 // maintenance tick must not remeasure later events whose history is retained.
 func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
+	// Receipts may arrive out of event order. Keep their storage order (also
+	// used by maintenance snapshots), but find window limits on the mapped
+	// event-time axis. An unmapped receipt provides no safe truncation point.
+	var mappedStarts []time.Duration
+	var startsByEvent map[*DistributedEvent]time.Duration
+	if r.distributed != nil {
+		r.prepareMeasurementIndex()
+		defer func() { r.prepared = nil }()
+		startsByEvent = make(map[*DistributedEvent]time.Duration, len(r.moves))
+		for _, move := range r.moves {
+			start, end, err := r.mappedMoveTimes(move)
+			if err != nil {
+				continue
+			}
+			startTime := TimeInterval{Earliest: r.start.Add(start.Lower), Latest: r.start.Add(start.Upper)}
+			endTime := TimeInterval{Earliest: r.start.Add(end.Lower), Latest: r.start.Add(end.Upper)}
+			if !distributedEventOrderingValid(move, startTime, endTime) {
+				continue
+			}
+			mappedStarts = append(mappedStarts, start.Lower)
+			startsByEvent[move.event] = start.Lower
+		}
+		slices.Sort(mappedStarts)
+	}
 	reports := make([]MoveReport, 0, count)
 	baselineFloor := r.baselineFloor
 	firstAudio, firstVideo := r.firstAudio, r.firstVideo
+	distributedFloor := DurationInterval{Lower: baselineFloor, Upper: baselineFloor}
+	var firstDistributed []FirstBaselines
+	if len(r.savedMoves) > 0 {
+		if d := r.savedMoves[0].Distributed; d != nil {
+			firstDistributed = d.FirstBaselines
+		}
+		if d := r.savedMoves[len(r.savedMoves)-1].Distributed; d != nil {
+			distributedFloor = d.BaselineFloor
+		}
+	}
 	for moveIndex, move := range r.moves[:count] {
 		report := MoveReport{
 			Kind:          move.kind,
@@ -353,6 +412,16 @@ func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
 			Start:         r.since(move.start),
 			End:           r.since(move.end),
 			Result:        move.result,
+		}
+		if move.event != nil {
+			report.Identity = &move.event.Identity
+			report.Receipt = move.event
+			report.Distributed = r.distributedMeasurement(move, until)
+			if report.Distributed.Mapped {
+				r.selectDistributedPoint(&report)
+			} else {
+				report.Start, report.End = 0, 0
+			}
 		}
 		if report.Kind == "" {
 			report.Kind = "move"
@@ -377,8 +446,15 @@ func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
 			report.Tracks = append(report.Tracks, around)
 		}
 		limit := until
-		if moveIndex+1 < len(r.moves) {
-			limit = r.since(r.moves[moveIndex+1].start)
+		if move.event != nil {
+			if start, ok := startsByEvent[move.event]; ok {
+				next := sort.Search(len(mappedStarts), func(i int) bool { return mappedStarts[i] > start })
+				if next < len(mappedStarts) {
+					limit = min(limit, mappedStarts[next])
+				}
+			}
+		} else if moveIndex+1 < len(r.moves) {
+			limit = min(limit, r.since(r.moves[moveIndex+1].start))
 		}
 		if report.Kind == "takeover" {
 			report.Recovery = r.videoRecovery(report.Start, limit)
@@ -407,6 +483,12 @@ func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
 					}
 				}
 			}
+		}
+		if report.Distributed != nil {
+			self := len(r.savedMoves) == 0 && len(reports) == 0
+			r.classifyDistributedEvent(&report, limit, distributedFloor, firstDistributed, self)
+			firstDistributed = report.Distributed.FirstBaselines
+			distributedFloor = report.Distributed.BaselineFloor
 		}
 		r.failIdentityMetrics(&report.Measurement)
 		report.Measurement.updateJudgment()
@@ -513,10 +595,10 @@ func (r *recorder) consentReport() ConsentReport {
 	if report.Since == 0 {
 		report.Since = r.connectedAt
 	}
-	if len(r.savedMoves) > 0 {
+	if len(r.savedMoves) > 0 && r.distributed == nil {
 		report.Since = r.savedMoves[len(r.savedMoves)-1].End
 	}
-	if n := len(r.moves); n > 0 {
+	if n := len(r.moves); n > 0 && r.distributed == nil {
 		report.Since = r.since(r.moves[n-1].end)
 	}
 	end := r.consentEnd()
@@ -572,7 +654,14 @@ func writeHandoverSummary(b *strings.Builder, r *Report) {
 	for i, move := range r.Moves {
 		fmt.Fprintf(b, "  caller event %d (%s): %s\n", i+1, move.Kind, move.Measurement.Summary())
 		res := move.Result
-		if move.Kind == "takeover" {
+		if move.Distributed != nil {
+			d := move.Distributed
+			fmt.Fprintf(b, "  distributed event: identity=%+v mapped=%t outcome=%s start=[%s,%s] end=[%s,%s]\n", move.Identity, d.Mapped, d.Outcome, d.Start.Earliest, d.Start.Latest, d.End.Earliest, d.End.Latest)
+			if d.KillToLive != nil {
+				fmt.Fprintf(b, "  kill-to-live interval: [%s,%s]\n", d.KillToLive.Lower, d.KillToLive.Upper)
+			}
+		}
+		if move.Kind == "takeover" && move.Distributed == nil {
 			recovery := move.Recovery
 			live := recovery.FirstDecodedLiveAfterKill.String()
 			if recovery.LivePath == "" {

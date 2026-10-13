@@ -140,11 +140,17 @@ type Call struct {
 // with ErrHarnessClosed once the harness is closing.
 func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err error) {
 	rec := newRecorder()
+	if h.external != nil {
+		rec.distributed = h.external.Distributed
+	}
 	if opts.SRTPDiagnostics {
 		rec.crypto = newCryptoObserver(rec.start)
 	}
 	rec.freshnessPolicy = opts.Freshness.defaults()
 	rec.recording = opts.Recording.defaults()
+	if rec.distributed != nil && rec.recording.History < 180*time.Second {
+		return nil, errors.New("callharness: distributed history must be at least 180s")
+	}
 	minimumHistory := rec.freshnessPolicy.RecoveryLimit + rec.freshnessPolicy.StabilityWindow + baselineWindow + 3*time.Second
 	if rec.recording.History < minimumHistory {
 		return nil, fmt.Errorf("callharness: recording history must be at least %s", minimumHistory)

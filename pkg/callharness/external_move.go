@@ -13,6 +13,9 @@ import (
 // MoveExternal uses the operator HTTP endpoint and records the same caller
 // yardstick as Handover. Worker names in the process driver are integer IDs.
 func (c *Call) MoveExternal(ctx context.Context, to int) error {
+	if c.rec.distributed != nil {
+		return errors.New("callharness: distributed moves require an armed identity and durable server receipt")
+	}
 	if c.harness.external == nil || to < 0 {
 		return errors.New("callharness: external move needs an external topology and worker ID")
 	}
@@ -43,5 +46,9 @@ func (c *Call) RecordExternalMove(result controlplane.MoveResult) {
 	if err != nil {
 		to = -1
 	}
-	c.rec.move(moveRecord{from: from, to: to, start: result.Start, end: result.End, result: result.Result})
+	var moveErr error
+	if result.Error != "" {
+		moveErr = errors.New(result.Error)
+	}
+	c.rec.move(moveRecord{from: from, to: to, start: result.Start, end: result.End, result: result.Result, lost: result.Lost, lossCause: result.LossCause, err: moveErr})
 }

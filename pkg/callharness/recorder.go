@@ -2,6 +2,7 @@ package callharness
 
 import (
 	"image"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,14 @@ const (
 // offsets from the moment the caller started dialing. Nothing is recorded
 // after hangup, so tearing the call down does not show up as a failure.
 type recorder struct {
+	distributed                *DistributedOptions
+	armed                      map[OperationIdentity]time.Time
+	audioSends, videoSends     []evidenceRef
+	audioReturns, videoReturns []evidenceRef
+	prepared                   *measurementIndex
+	measurementMu              sync.Mutex
+	measurementLockTime        time.Duration
+
 	recording              RecordingOptions
 	lastCompact            time.Duration
 	historyStart           time.Duration
@@ -398,6 +407,7 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 		if unit.returnedAt == 0 {
 			unit.returnedAt = at
 			r.sentAudioUnits[string(pkt.Payload)] = unit
+			r.audioReturns = append(r.audioReturns, evidenceRef{at: at, audio: string(pkt.Payload)})
 		} else {
 			unit.returnedAt, unit.identity, unit.replayed = at, string(pkt.Payload), true
 			r.repeatedAudioReturns = r.appendRepeat(r.repeatedAudioReturns, unit)
@@ -585,7 +595,6 @@ func (r *recorder) decodeInput(i int) ([]vp8Frame, image.Point) {
 // report returns the measurements. Call it after hangup.
 func (r *recorder) report() *Report {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 
 	rep := &Report{
 		StartedAt:            r.start,
@@ -631,8 +640,82 @@ func (r *recorder) report() *Report {
 		rep.Tracks = append(rep.Tracks, report)
 	}
 	rep.Recording = r.memoryGauge()
-	rep.Moves = r.moveReports()
 	rep.Consent = r.consentReport()
+	view := r
+	if r.distributed != nil {
+		view = r.measurementSnapshot(r.hungUpAt, len(r.moves))
+	} else {
+		rep.Moves = r.moveReports()
+	}
+	r.mu.Unlock()
+	if view != r {
+		view.prepareMeasurementIndex()
+		rep.Moves = view.moveReports()
+	}
+
+	if r.distributed != nil {
+		d := r.distributed
+		rep.Distributed = &DistributedRecording{ObservedRate: d.Clock.ObservedRate(), DriftPPM: d.Clock.DriftPPM(), RunID: d.RunID, ControlOffset: d.ControlOffset, WorkerOffset: d.WorkerOffset, Probes: d.Clock.Probes()}
+		rep.Distributed.Outcome, rep.Distributed.Causes = JudgeDistributedTrials(rep.Moves)
+		for id := range view.armed {
+			rep.Distributed.Armed = append(rep.Distributed.Armed, id)
+		}
+		slices.SortFunc(rep.Distributed.Armed, func(a, b OperationIdentity) int {
+			if a.OperationID < b.OperationID {
+				return -1
+			}
+			if a.OperationID > b.OperationID {
+				return 1
+			}
+			if a.Worker < b.Worker {
+				return -1
+			}
+			if a.Worker > b.Worker {
+				return 1
+			}
+			if a.Epoch < b.Epoch {
+				return -1
+			}
+			if a.Epoch > b.Epoch {
+				return 1
+			}
+			return 0
+		})
+		for _, id := range rep.Distributed.Armed {
+			found := false
+			for _, m := range rep.Moves {
+				if m.Identity != nil && *m.Identity == id {
+					found = true
+					break
+				}
+			}
+			if !found {
+				rep.Distributed.Missing = append(rep.Distributed.Missing, id)
+				if rep.Distributed.Outcome != "fail" {
+					rep.Distributed.Outcome = "inconclusive"
+				}
+				rep.Distributed.Causes = append(rep.Distributed.Causes, "armed event receipt missing: "+id.OperationID)
+			}
+		}
+		for _, m := range rep.Moves {
+			if m.Measurement.Failed {
+				rep.Distributed.Outcome = "fail"
+				rep.Distributed.Causes = append(rep.Distributed.Causes, "known caller content failure")
+			}
+			if m.Identity == nil || m.Measurement.Inconclusive {
+				if rep.Distributed.Outcome != "fail" {
+					rep.Distributed.Outcome = "inconclusive"
+				}
+				rep.Distributed.Causes = append(rep.Distributed.Causes, "content classifications not proven across full clock interval")
+			}
+		}
+		if err := d.Clock.Err(); err != nil {
+			rep.Distributed.ClockError = err.Error()
+			if rep.Distributed.Outcome != "fail" {
+				rep.Distributed.Outcome = "inconclusive"
+			}
+		}
+	}
 
 	return rep
 }

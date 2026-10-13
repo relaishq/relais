@@ -11,6 +11,8 @@ import (
 // Report is what the caller observed during one call. Times are offsets from
 // the moment the caller started dialing.
 type Report struct {
+	Distributed *DistributedRecording `json:"distributed,omitempty"`
+
 	Recording RecordingReport
 	// StartedAt aligns packet observations across calls sharing a worker.
 	StartedAt time.Time
@@ -475,4 +477,21 @@ func formatStates(changes []StateChange) string {
 
 func ms(d time.Duration) string {
 	return d.Round(time.Millisecond).String()
+}
+
+// HasDistributedEvidence marks event-relative scalar fields as point estimates.
+// Local capacity/soak/crash judges must not use them as clock-proven evidence.
+func (r *Report) HasDistributedEvidence() bool {
+	if r == nil {
+		return false
+	}
+	if r.Distributed != nil {
+		return true
+	}
+	for _, m := range r.Moves {
+		if m.Distributed != nil {
+			return true
+		}
+	}
+	return false
 }

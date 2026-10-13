@@ -42,6 +42,8 @@ import (
 // ExternalTopology connects the real caller to an already running system.
 // The harness owns only its callers; it never stops external processes.
 type ExternalTopology struct {
+	Distributed *DistributedOptions
+
 	SignalingURL string
 	RelayAddr    netip.AddrPort
 	// HTTPClient supplies signaling and control requests, including status and
@@ -133,6 +135,9 @@ func Start(opts Options) (*Harness, error) {
 			return nil, errors.New("callharness: external topology needs a signaling URL and relay address")
 		}
 		external := *opts.External
+		if d := external.Distributed; d != nil && (d.RunID == "" || d.Clock == nil || !d.ControlOffset.Valid() || !d.WorkerOffset.Valid()) {
+			return nil, errors.New("callharness: distributed topology needs run ID, clock tracker and valid host bounds")
+		}
 		client := external.HTTPClient
 		if client == nil {
 			client = &http.Client{Timeout: 10 * time.Second}

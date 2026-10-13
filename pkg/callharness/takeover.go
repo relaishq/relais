@@ -68,6 +68,11 @@ func (c *Call) collectFinalTakeovers(ctx context.Context) error {
 }
 
 func (c *Call) collectStatusTakeovers(ctx context.Context, read func(context.Context) (controlplane.Status, error)) error {
+	// Distributed receipts carry identity and actual kill time; a sanitized
+	// status event alone cannot identify the operator action.
+	if c.harness.external != nil && c.harness.external.Distributed != nil {
+		return nil
+	}
 	if c.harness.workers.relay == nil && c.harness.external == nil {
 		return nil
 	}

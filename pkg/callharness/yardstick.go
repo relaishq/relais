@@ -5,6 +5,8 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -337,15 +339,25 @@ func (r *recorder) returnedVideo(track *trackRecord, pkt *rtp.Packet, at time.Du
 	if source.returnedAt == 0 {
 		source.returnedAt = at
 		r.sentVideoFrames[desc.PictureID] = source
+		r.videoReturns = append(r.videoReturns, evidenceRef{at: at, video: desc.PictureID, generation: source.identity})
 	} else {
 		unit := source.unit()
-		unit.returnedAt, unit.identity, unit.replayed = at, fmt.Sprint(source.identity, ":", desc.PictureID), true
+		unit.returnedAt, unit.identity, unit.replayed = at, strconv.FormatUint(source.identity, 10)+":"+strconv.FormatUint(uint64(desc.PictureID), 10), true
 		r.repeatedVideoReturns = r.appendRepeat(r.repeatedVideoReturns, unit)
 	}
 	a.finish(span)
 }
 
 func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.Duration) EventMeasurement {
+	return r.measureEvent(move, limit, baselineFloor, false)
+}
+
+// Classification evaluations share the production yardstick. Raw denominator
+// windows are computed once for the published point, not repeatedly per cell.
+func (r *recorder) classificationMeasurement(move MoveReport, limit, baselineFloor time.Duration) EventMeasurement {
+	return r.measureEvent(move, limit, baselineFloor, true)
+}
+func (r *recorder) measureEvent(move MoveReport, limit, baselineFloor time.Duration, classificationOnly bool) EventMeasurement {
 	m := EventMeasurement{WindowStart: max(0, move.Start-contentWindowMargin), SettleWindow: contentSettleWindow, MediaResumedAt: move.Recovery.MediaResumedAt, ObservedUntil: r.hungUpAt, VideoExpected: r.sentVideo.Frames > 0 || r.sentVideo.SSRC != 0}
 	for _, track := range move.Tracks {
 		switch track.Kind {
@@ -357,7 +369,8 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 	}
 	if move.Kind != "takeover" {
 		for _, track := range r.tracks {
-			for _, at := range track.arrivals {
+			first := sort.Search(len(track.arrivals), func(i int) bool { return track.arrivals[i] >= move.End })
+			for _, at := range track.arrivals[first:] {
 				if at >= move.End && at < limit {
 					if m.MediaResumedAt == 0 || at < m.MediaResumedAt {
 						m.MediaResumedAt = at
@@ -375,29 +388,21 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 		m.VideoLoss.untrust("content settle window truncated by hangup")
 	}
 	var audio, video []contentUnit
-	for identity, unit := range r.sentAudioUnits {
-		if !unit.written {
-			continue
+	if r.prepared != nil {
+		audio, video = r.prepared.audio.sent, r.prepared.video.sent
+	} else {
+		for identity, u := range r.sentAudioUnits {
+			if u.written {
+				u.identity = identity
+				audio = append(audio, u)
+			}
 		}
-		unit.identity = identity
-		audio = append(audio, unit)
-		if missingInWindow(unit, m) {
-			m.LostAudio += unit.duration
-		} else if lateInWindow(unit, m) {
-			m.LateAudio += unit.duration
-		}
-	}
-	for identity, source := range r.sentVideoFrames {
-		if !source.written {
-			continue
-		}
-		unit := source.unit()
-		unit.identity = fmt.Sprint(source.identity, ":", identity)
-		video = append(video, unit)
-		if missingInWindow(unit, m) {
-			m.LostVideoFrames++
-		} else if lateInWindow(unit, m) {
-			m.LateVideoFrames++
+		for identity, f := range r.sentVideoFrames {
+			if f.written {
+				u := f.unit()
+				u.identity = strconv.FormatUint(f.identity, 10) + ":" + strconv.FormatUint(uint64(identity), 10)
+				video = append(video, u)
+			}
 		}
 	}
 	if len(audio) == 0 {
@@ -405,6 +410,25 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 	}
 	if m.VideoExpected && len(video) == 0 {
 		m.VideoLoss.untrust("no identified sent video")
+	}
+	lossAudio, lossVideo := audio, video
+	if classificationOnly && r.prepared != nil {
+		lossAudio = r.indexedUnits(false, false, m.WindowStart, m.WindowEnd)
+		lossVideo = r.indexedUnits(true, false, m.WindowStart, m.WindowEnd)
+	}
+	for _, u := range lossAudio {
+		if missingInWindow(u, m) {
+			m.LostAudio += u.duration
+		} else if lateInWindow(u, m) {
+			m.LateAudio += u.duration
+		}
+	}
+	for _, u := range lossVideo {
+		if missingInWindow(u, m) {
+			m.LostVideoFrames++
+		} else if lateInWindow(u, m) {
+			m.LateVideoFrames++
+		}
 	}
 	m.AudioLoss.Failed = m.AudioLoss.Trusted && m.LostAudio > 0
 	m.VideoLoss.Failed = m.VideoLoss.Trusted && m.LostVideoFrames > 0
@@ -414,9 +438,18 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 	if m.VideoLoss.Failed {
 		m.VideoLoss.Reasons = append(m.VideoLoss.Reasons, "sent video never returned complete")
 	}
-	m.ContentLoss = r.contentLossEvidence(move, m, audio, video, baselineFloor)
-	audio = append(audio, r.repeatedAudioReturns...)
-	video = append(video, r.repeatedVideoReturns...)
+	if !classificationOnly {
+		m.ContentLoss = r.contentLossEvidence(move, m, audio, video, baselineFloor)
+	}
+	if classificationOnly && r.prepared != nil {
+		lower := min(move.Start, max(0, move.Start-baselineWindow, baselineFloor))
+		upper := min(limit, move.Start+r.freshnessPolicy.EvaluationWindow())
+		audio = r.indexedUnits(false, true, lower, upper)
+		video = r.indexedUnits(true, true, lower, upper)
+	} else {
+		audio = append(slices.Clone(audio), r.repeatedAudioReturns...)
+		video = append(slices.Clone(video), r.repeatedVideoReturns...)
+	}
 	m.Audio = measureFreshness(audio, move.Start, m.MediaResumedAt, limit, baselineFloor, r.freshnessPolicy)
 	if m.VideoExpected {
 		m.Video = measureFreshness(video, move.Start, m.MediaResumedAt, limit, baselineFloor, r.freshnessPolicy)
@@ -443,13 +476,24 @@ func (r *recorder) eventMeasurement(move MoveReport, limit, baselineFloor time.D
 	if m.VideoExpected {
 		seenDecoded := map[time.Duration]bool{}
 		var frames []frameMark
-		for _, track := range r.tracks {
-			if track.video != nil {
-				frames = append(frames, track.video.frames...)
+		if classificationOnly && r.prepared != nil {
+			frames = r.prepared.frames
+		} else {
+			for _, track := range r.tracks {
+				if track.video != nil {
+					frames = append(frames, track.video.frames...)
+				}
 			}
+			slices.SortFunc(frames, func(a, b frameMark) int { return cmp.Compare(a.at, b.at) })
 		}
-		slices.SortFunc(frames, func(a, b frameMark) int { return cmp.Compare(a.at, b.at) })
+		if classificationOnly {
+			first := sort.Search(len(frames), func(i int) bool { return frames[i].at >= m.MediaResumedAt })
+			frames = frames[first:]
+		}
 		for _, frame := range frames {
+			if classificationOnly && (frame.at >= limit || (m.FirstContent != "" && m.FirstNewContent != "" && m.FirstLiveFrame > 0)) {
+				break
+			}
 			if m.MediaResumedAt == 0 || !frame.decodable || frame.at < m.MediaResumedAt || frame.at >= limit {
 				continue
 			}
@@ -684,7 +728,7 @@ func measureFreshness(units []contentUnit, start, resumed, limit, baselineFloor 
 			continue
 		}
 		if unit.identity == "" {
-			unit.identity = fmt.Sprint(i)
+			unit.identity = strconv.Itoa(i)
 		}
 		if !seen[unit.identity] && !unit.replayed && unit.returnedAt >= f.BaselineStart && unit.returnedAt < start && unit.at < start {
 			baseline = append(baseline, unit.returnedAt-unit.at)

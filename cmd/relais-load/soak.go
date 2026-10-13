@@ -296,6 +296,11 @@ func leakCauses(l loadgen.LeakReport) []string {
 func judgeSoak(c config, r loadgen.RunReport) soakReport {
 	host, _ := os.Hostname()
 	result := soakReport{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, GoVersion: runtime.Version(), Runner: host, Topology: c.Topology, Video: c.Video, GOMAXPROCS: c.GOMAXPROCS, Seed: c.Seed, Schedule: c.Events, Workers: c.Workers, Processes: c.Processes, CallersPerProcess: c.CallersPerProcess, Interval: c.ChaosInterval, WorkerFloor: c.WorkerFloor, RelayFloor: c.RelayFloor, FullScale: c.Callers >= 50 && c.Duration >= time.Hour, Outcome: "pass", Run: r}
+	if hasDistributedCalls(r) {
+		result.Outcome = "inconclusive"
+		result.Causes = []string{"local soak policy refuses distributed point estimates"}
+		return result
+	}
 	inconclusive := func(reason string) {
 		if result.Outcome != "fail" {
 			result.Outcome = "inconclusive"

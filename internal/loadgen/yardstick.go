@@ -25,6 +25,20 @@ type MetricRow struct {
 
 // MatchesEvent ties a recorded move to one scheduled action.
 func MatchesEvent(e EventResult, report *callharness.Report, move callharness.MoveReport) bool {
+	if len(e.Identities) > 0 {
+		if move.Identity == nil || !move.Identity.Valid() {
+			return false
+		}
+		for _, id := range e.Identities {
+			if id.Valid() && id == *move.Identity {
+				return (e.Event.Kind == "kill" && move.Kind == "takeover") || ((e.Event.Kind == "move" || e.Event.Kind == "drain") && move.Kind == "move")
+			}
+		}
+		return false
+	}
+	if report.Distributed != nil || move.Distributed != nil {
+		return false
+	}
 	at := report.StartedAt.Add(move.Start)
 	if e.Event.Kind == "kill" {
 		delta := at.Sub(e.At)
@@ -40,6 +54,10 @@ func MatchesEvent(e EventResult, report *callharness.Report, move callharness.Mo
 func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []string) {
 	var result []MetricRow
 	var causes []string
+	pooled, pooledCauses, distributed := distributedTrials(processes)
+	if distributed && pooled == "inconclusive" {
+		causes = append(causes, pooledCauses...)
+	}
 	for i := range events {
 		e := &events[i]
 		e.Recorded = 0
@@ -91,6 +109,23 @@ func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []
 				seen[c.Session] = true
 				e.Recorded++
 				m := matching[0].Measurement
+				if matching[0].Distributed != nil {
+					d := matching[0].Distributed
+					v := callharness.MetricVerdict{Trusted: pooled != "inconclusive", Failed: pooled == "fail"}
+					r := row("distributed_window")
+					if v.Trusted {
+						r.Trusted++
+						if v.Failed {
+							r.Failed++
+						}
+					}
+					if matching[0].Measurement.Inconclusive {
+						causes = append(causes, fmt.Sprintf("event %d session %s: content classification not proven across clock interval", i+1, c.Session))
+					}
+					for _, cause := range windowCauses(d) {
+						causes = append(causes, fmt.Sprintf("event %d session %s: %s", i+1, c.Session, cause))
+					}
+				}
 				verdicts := map[string]callharness.MetricVerdict{"audio_loss": m.AudioLoss, "audio_freshness": m.Audio.Verdict, "resume": m.ResumeVerdict}
 				if m.VideoExpected {
 					verdicts["video_loss"] = m.VideoLoss
@@ -134,4 +169,48 @@ func yardstick(processes []ProcessReport, events []EventResult) ([]MetricRow, []
 		}
 	}
 	return result, causes
+}
+
+// Pool every caller's trials for this run. Per-call summaries may lack the
+// minimum trial counts even when the run supplies enough trials.
+func distributedTrials(processes []ProcessReport) (string, []string, bool) {
+	var moves []callharness.MoveReport
+	var causes []string
+	run := ""
+	present := false
+	for _, p := range processes {
+		for _, c := range p.Calls {
+			if c.Call == nil || c.Call.Distributed == nil {
+				continue
+			}
+			present = true
+			d := c.Call.Distributed
+			if run == "" {
+				run = d.RunID
+			} else if run != d.RunID {
+				causes = append(causes, "mixed distributed run identities")
+			}
+			if d.ClockError != "" {
+				causes = append(causes, d.ClockError)
+			}
+			if len(d.Missing) > 0 {
+				causes = append(causes, "armed distributed receipt missing")
+			}
+			moves = append(moves, c.Call.Moves...)
+		}
+	}
+	if !present {
+		return "", nil, false
+	}
+	outcome, judged := callharness.JudgeDistributedTrials(moves)
+	if len(causes) > 0 && outcome != "fail" {
+		outcome = "inconclusive"
+	}
+	return outcome, append(causes, judged...), true
+}
+func windowCauses(d *callharness.DistributedMeasurement) []string {
+	if d.WindowOutcome == "pass" || d.WindowOutcome == "fail" {
+		return nil
+	}
+	return d.Causes
 }
