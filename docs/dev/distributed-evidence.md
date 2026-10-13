@@ -105,6 +105,17 @@ and returns an error for unknown sessions or invalid identities. Identical
 pending receipt retries are idempotent; conflicting receipts are rejected.
 The arm/receipt inventory is bounded at 4096 identities per caller.
 
+A failed planned move with a non-empty result returns the usual error status
+(400, 404, 409 or 500) and JSON `{"error":"...","result":MoveResult}`.
+Errors with an empty result retain the existing plain-text response. The
+`Relais-Error-Codes` response header preserves matching Go error identities,
+including uncertainty and its underlying context error. Error text alone cannot
+identify uncertainty because it may contain only the transport cause.
+`privateapi.Do` decodes `result` into the supplied output even when it returns
+an error; operator clients pass `controlplane.RemoteErrors` for move sentinels.
+Keep the response header when proxying these results. The demo's agent-mode
+move route preserves it and the upstream status.
+
 The legacy caller `/kill`, `/move` and `/record-moves` routes are refused in
 this mode. Automatic sanitized status polling cannot supply an operation ID or
 actual kill timestamp; it does not create duplicate distributed takeover
@@ -236,9 +247,10 @@ acceptance. Local capacity, soak and crash-run judges refuse distributed
 reports rather than accepting those scalar fields. Content-loss comparison
 baselines and online decode sampling use mapped event times in this mode.
 
-There is one intentional local behavior change: `RecordExternalMove` now keeps
-`Error`, `Lost` and `LossCause` from the supplied result. Local capacity therefore
-fails on a recorded **move error** instead of silently dropping that evidence.
+`RecordExternalMove` and `MoveExternal` keep `Error`, `Lost` and `LossCause`
+from the supplied result, including failed operator moves. Local capacity
+therefore fails on a recorded **move error** instead of silently dropping that
+evidence. Returned timings and handover diagnostics remain in the caller report.
 
 ## Verification
 

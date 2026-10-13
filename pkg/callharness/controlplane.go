@@ -2,14 +2,13 @@ package callharness
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/relais/internal/privateapi"
 	"github.com/relais/pkg/controlplane"
 )
 
@@ -70,23 +69,5 @@ func (h *Harness) controlRequest(ctx context.Context, method, path string, resul
 		return errors.New("callharness: control plane needs Options.Relay")
 	}
 
-	endpoint := strings.TrimSuffix(h.signalingURL, "/calls") + path
-	req, err := http.NewRequestWithContext(ctx, method, endpoint, nil)
-	if err != nil {
-		return err
-	}
-
-	resp, err := h.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusMultiStatus {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("callharness: %s: %s", resp.Status, strings.TrimSpace(string(body)))
-	}
-
-	return json.NewDecoder(resp.Body).Decode(result)
+	return privateapi.Do(ctx, h.httpClient, strings.TrimSuffix(h.signalingURL, "/calls"), method, path, nil, result, controlplane.RemoteErrors)
 }

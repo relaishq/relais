@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"mime"
 	"net/http"
+	"reflect"
 
+	"github.com/relais/internal/privateapi"
 	"github.com/relais/pkg/mediaworker"
+	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -16,6 +20,24 @@ import (
 type DrainResult struct {
 	Moves []MoveResult `json:"moves"`
 	Error string       `json:"error,omitempty"`
+}
+
+// RemoteErrors identifies move failures across the operator HTTP boundary.
+// Common store/context causes and transport uncertainty are handled by privateapi.
+var RemoteErrors = func() map[string]error {
+	codes := maps.Clone(mediaworker.RemoteErrors)
+	maps.Copy(codes, relay.RemoteErrors)
+	maps.Copy(codes, map[string]error{
+		"unknown_call": ErrUnknownCall, "move_in_progress": ErrMoveInProgress, "no_target": ErrNoTarget,
+		"ended": sessionstore.ErrEnded,
+	})
+	return codes
+}()
+
+// MoveFailure retains the planned outcome alongside the request failure.
+type MoveFailure struct {
+	Error  string     `json:"error"`
+	Result MoveResult `json:"result"`
 }
 
 // Handler is the local WHIP-style signaling and coordination endpoint.
@@ -58,6 +80,13 @@ func (p *Plane) Handler() http.Handler {
 	mux.HandleFunc("POST /calls/{id}/move", func(w http.ResponseWriter, r *http.Request) {
 		result, err := p.Move(r.Context(), r.PathValue("id"), r.URL.Query().Get("to"))
 		if err != nil {
+			if !reflect.ValueOf(result).IsZero() {
+				w.Header().Set("Content-Type", "application/json")
+				privateapi.WriteErrorCodes(w, err, RemoteErrors)
+				w.WriteHeader(errorStatus(err))
+				writeJSON(w, MoveFailure{Error: err.Error(), Result: result})
+				return
+			}
 			writeError(w, err)
 			return
 		}
@@ -95,6 +124,10 @@ func writeJSON(w http.ResponseWriter, value any) {
 }
 
 func writeError(w http.ResponseWriter, err error) {
+	http.Error(w, err.Error(), errorStatus(err))
+}
+
+func errorStatus(err error) int {
 	code := http.StatusInternalServerError
 	switch {
 	case errors.Is(err, ErrUnknownCall), errors.Is(err, sessionstore.ErrNotFound), errors.Is(err, mediaworker.ErrUnknownSession):
@@ -104,5 +137,5 @@ func writeError(w http.ResponseWriter, err error) {
 	case errors.Is(err, mediaworker.ErrUnsupportedOffer):
 		code = http.StatusBadRequest
 	}
-	http.Error(w, err.Error(), code)
+	return code
 }

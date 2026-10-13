@@ -31,7 +31,11 @@ func (c *Call) MoveExternal(ctx context.Context, to int) error {
 	if parseErr != nil {
 		from = -1
 	}
-	c.rec.move(moveRecord{from: from, to: to, start: result.Start, end: result.End, result: result.Result, err: err})
+	recordErr := err
+	if result.Error != "" {
+		recordErr = errors.New(result.Error)
+	}
+	c.rec.move(moveRecord{from: from, to: to, start: result.Start, end: result.End, result: result.Result, lost: result.Lost, lossCause: result.LossCause, err: recordErr})
 	return err
 }
 

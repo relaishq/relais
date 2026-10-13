@@ -413,3 +413,32 @@ func TestReplacementLostRegistrationReply(t *testing.T) {
 		})
 	}
 }
+
+func TestDemoAgentMovePreservesFailureResult(t *testing.T) {
+	result := controlplane.MoveResult{ID: "call", Kind: "move", From: "0", To: "1", Lost: true, LossCause: "ownership_expired", Error: "move failed"}
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/status":
+			privateapi.Write(w, controlplane.Status{Calls: []controlplane.CallStatus{{ID: "call", Owner: "0"}}})
+		case "/calls/call/move":
+			privateapi.WriteErrorCodes(w, privateapi.Uncertain(context.DeadlineExceeded), controlplane.RemoteErrors)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			privateapi.Write(w, controlplane.MoveFailure{Error: "move failed", Result: result})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer control.Close()
+	d := &demo{ctx: context.Background(), control: control.URL, client: control.Client(), agentName: "demo"}
+	server := httptest.NewServer(d.handler(http.NotFoundHandler()))
+	defer server.Close()
+	var returned controlplane.MoveResult
+	err := privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/calls/call/move", nil, &returned, controlplane.RemoteErrors)
+	require.ErrorIs(t, err, privateapi.ErrUncertain)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	var failure *privateapi.HTTPError
+	require.ErrorAs(t, err, &failure)
+	require.Equal(t, http.StatusInternalServerError, failure.StatusCode)
+	require.Equal(t, result, returned)
+}

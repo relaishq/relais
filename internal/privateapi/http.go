@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +21,44 @@ import (
 
 const MaxBody = 4 << 20
 const Timeout = 2 * time.Second
+
+// ErrorCodesHeader carries sentinel identities when an error envelope has no
+// code field. In particular, Uncertain's text only contains its transport cause.
+const ErrorCodesHeader = "Relais-Error-Codes"
+
+// WriteErrorCodes preserves all matching causes, including joined errors.
+func WriteErrorCodes(w http.ResponseWriter, err error, codes map[string]error) {
+	matched := make(map[string]bool)
+	for code, sentinel := range CommonErrors {
+		if errors.Is(err, sentinel) {
+			matched[code] = true
+		}
+	}
+	for code, sentinel := range codes {
+		if errors.Is(err, sentinel) {
+			matched[code] = true
+		}
+	}
+	if errors.Is(err, ErrUncertain) {
+		matched["uncertain"] = true
+	}
+	names := make([]string, 0, len(matched))
+	for code := range matched {
+		names = append(names, code)
+	}
+	sort.Strings(names)
+	if len(names) > 0 {
+		w.Header().Set(ErrorCodesHeader, strings.Join(names, ","))
+	}
+}
+
+type envelopeError struct {
+	message string
+	causes  []error
+}
+
+func (e *envelopeError) Error() string   { return e.message }
+func (e *envelopeError) Unwrap() []error { return e.causes }
 
 // ErrUncertain means the request may have committed without a usable reply.
 var ErrUncertain = errors.New("privateapi: operation outcome uncertain")
@@ -137,6 +176,31 @@ func Do(ctx context.Context, client *http.Client, base, method, path string, inp
 	}
 	if resp.StatusCode/100 != 2 {
 		defer func() { resultErr = &HTTPError{StatusCode: resp.StatusCode, Err: resultErr} }()
+		var envelope struct {
+			Error  string          `json:"error"`
+			Result json.RawMessage `json:"result"`
+		}
+		if json.Unmarshal(data, &envelope) == nil && envelope.Error != "" {
+			failure := &envelopeError{message: envelope.Error}
+			for _, code := range strings.Split(resp.Header.Get(ErrorCodesHeader), ",") {
+				cause := codes[code]
+				if cause == nil {
+					cause = CommonErrors[code]
+				}
+				if code == "uncertain" {
+					cause = ErrUncertain
+				}
+				if cause != nil {
+					failure.causes = append(failure.causes, cause)
+				}
+			}
+			if output != nil && len(envelope.Result) > 0 && string(envelope.Result) != "null" {
+				if err := json.Unmarshal(envelope.Result, output); err != nil {
+					return errors.Join(failure, Uncertain(err))
+				}
+			}
+			return failure
+		}
 		var failure Failure
 		if json.Unmarshal(data, &failure) != nil || failure.Message == "" {
 			return fmt.Errorf("privateapi: %s: %s", resp.Status, strings.TrimSpace(string(data)))
