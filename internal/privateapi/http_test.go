@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -47,4 +48,75 @@ func TestNoResponseIsUncertainAndPreservesCause(t *testing.T) {
 	err := Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/resume", nil, nil, nil)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.NotErrorIs(t, err, ErrUncertain, "an explicit handler failure has a reply")
+}
+
+func TestErrorEnvelopePreservesResultAndCauses(t *testing.T) {
+	sentinel := errors.New("injected rollback")
+	for _, withOutput := range []bool{true, false} {
+		t.Run(strconv.FormatBool(withOutput), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"error":"move failed","codes":["rollback","canceled","uncertain"],"result":{"lost":true,"loss_cause":"ownership_expired","error":"rollback failed"}}`))
+			}))
+			defer server.Close()
+			var result struct {
+				Lost      bool   `json:"lost"`
+				LossCause string `json:"loss_cause"`
+				Error     string `json:"error"`
+			}
+			var output any
+			if withOutput {
+				output = &result
+			}
+			err := DoResult(context.Background(), server.Client(), server.URL, http.MethodPost, "/move", nil, output, map[string]error{"rollback": sentinel})
+			require.EqualError(t, err, "move failed")
+			require.ErrorIs(t, err, sentinel)
+			require.ErrorIs(t, err, ErrUncertain)
+			require.ErrorIs(t, err, context.Canceled)
+			var failure *HTTPError
+			require.ErrorAs(t, err, &failure)
+			require.Equal(t, http.StatusConflict, failure.StatusCode)
+			if withOutput {
+				require.True(t, result.Lost)
+				require.Equal(t, "ownership_expired", result.LossCause)
+				require.Equal(t, "rollback failed", result.Error)
+			}
+		})
+	}
+}
+
+func TestMalformedErrorEnvelopeResultPreservesStatusAndCause(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"move failed","codes":["deadline"],"result":"invalid result"}`))
+	}))
+	defer server.Close()
+	var result map[string]any
+	err := DoResult(context.Background(), server.Client(), server.URL, http.MethodPost, "/move", nil, &result, nil)
+	require.ErrorContains(t, err, "move failed")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, ErrUncertain)
+	var failure *HTTPError
+	require.ErrorAs(t, err, &failure)
+	require.Equal(t, http.StatusInternalServerError, failure.StatusCode)
+}
+
+func TestPlainDoDoesNotDecodeResultEnvelope(t *testing.T) {
+	const body = `{"error":"peer failed","codes":["uncertain","deadline"],"result":{"lost":true}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+	var result map[string]any
+	err := Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/resume", nil, &result, nil)
+	require.EqualError(t, err, "privateapi: 500 Internal Server Error: "+body)
+	require.NotErrorIs(t, err, ErrUncertain)
+	require.NotErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, result)
+	var failure *HTTPError
+	require.ErrorAs(t, err, &failure)
+	require.Equal(t, http.StatusInternalServerError, failure.StatusCode)
 }

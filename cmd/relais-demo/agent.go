@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"time"
@@ -101,8 +102,19 @@ func (d *demo) moveAgent(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
 		path += "?" + r.URL.RawQuery
 	}
-	err = privateapi.Do(ctx, d.client, d.control, http.MethodPost, path, nil, &move, nil)
+	err = privateapi.DoResult(ctx, d.client, d.control, http.MethodPost, path, nil, &move, controlplane.RemoteErrors)
 	if err != nil {
+		if move.ID != "" {
+			code := http.StatusConflict
+			var failure *privateapi.HTTPError
+			if errors.As(err, &failure) {
+				code = failure.StatusCode
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(code)
+			privateapi.Write(w, controlplane.MoveFailure{Error: err.Error(), Codes: privateapi.ErrorCodes(err, controlplane.RemoteErrors), Result: move})
+			return
+		}
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

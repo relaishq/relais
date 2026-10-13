@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,6 +21,39 @@ import (
 
 const MaxBody = 4 << 20
 const Timeout = 2 * time.Second
+
+// ErrorCodes returns all matching sentinel codes for an operator result envelope.
+// Uncertainty is explicit because its text may contain only the transport cause.
+func ErrorCodes(err error, codes map[string]error) []string {
+	matched := make(map[string]bool)
+	for code, sentinel := range CommonErrors {
+		if errors.Is(err, sentinel) {
+			matched[code] = true
+		}
+	}
+	for code, sentinel := range codes {
+		if errors.Is(err, sentinel) {
+			matched[code] = true
+		}
+	}
+	if errors.Is(err, ErrUncertain) {
+		matched["uncertain"] = true
+	}
+	names := make([]string, 0, len(matched))
+	for code := range matched {
+		names = append(names, code)
+	}
+	sort.Strings(names)
+	return names
+}
+
+type envelopeError struct {
+	message string
+	causes  []error
+}
+
+func (e *envelopeError) Error() string   { return e.message }
+func (e *envelopeError) Unwrap() []error { return e.causes }
 
 // ErrUncertain means the request may have committed without a usable reply.
 var ErrUncertain = errors.New("privateapi: operation outcome uncertain")
@@ -97,7 +131,19 @@ func Read(w http.ResponseWriter, r *http.Request, value any) bool {
 	return true
 }
 
-func Do(ctx context.Context, client *http.Client, base, method, path string, input, output any, codes map[string]error) (resultErr error) {
+// Do keeps the peer API's code/message error decoding. An explicit error
+// response is never classified as uncertain because of an operator envelope.
+func Do(ctx context.Context, client *http.Client, base, method, path string, input, output any, codes map[string]error) error {
+	return do(ctx, client, base, method, path, input, output, codes, false)
+}
+
+// DoResult opts an operator move client into error/codes/result decoding.
+// It fills output on failure and preserves every recognized error sentinel.
+func DoResult(ctx context.Context, client *http.Client, base, method, path string, input, output any, codes map[string]error) error {
+	return do(ctx, client, base, method, path, input, output, codes, true)
+}
+
+func do(ctx context.Context, client *http.Client, base, method, path string, input, output any, codes map[string]error, resultEnvelope bool) (resultErr error) {
 	if client.Transport == nil {
 		copy := *client
 		copy.Transport = metrics.HTTPTransport()
@@ -137,6 +183,34 @@ func Do(ctx context.Context, client *http.Client, base, method, path string, inp
 	}
 	if resp.StatusCode/100 != 2 {
 		defer func() { resultErr = &HTTPError{StatusCode: resp.StatusCode, Err: resultErr} }()
+		if resultEnvelope {
+			var envelope struct {
+				Codes  []string        `json:"codes"`
+				Error  string          `json:"error"`
+				Result json.RawMessage `json:"result"`
+			}
+			if json.Unmarshal(data, &envelope) == nil && envelope.Error != "" {
+				failure := &envelopeError{message: envelope.Error}
+				for _, code := range envelope.Codes {
+					cause := codes[code]
+					if cause == nil {
+						cause = CommonErrors[code]
+					}
+					if code == "uncertain" {
+						cause = ErrUncertain
+					}
+					if cause != nil {
+						failure.causes = append(failure.causes, cause)
+					}
+				}
+				if output != nil && len(envelope.Result) > 0 && string(envelope.Result) != "null" {
+					if err := json.Unmarshal(envelope.Result, output); err != nil {
+						return errors.Join(failure, Uncertain(err))
+					}
+				}
+				return failure
+			}
+		}
 		var failure Failure
 		if json.Unmarshal(data, &failure) != nil || failure.Message == "" {
 			return fmt.Errorf("privateapi: %s: %s", resp.Status, strings.TrimSpace(string(data)))

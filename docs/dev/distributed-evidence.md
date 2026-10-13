@@ -115,6 +115,31 @@ identities. `MatchesEvent` compares all five fields and the scenario. It never
 uses timestamp equality for distributed reports. Missing, duplicate and failed
 receipts remain inspectable evidence.
 
+### Planned move failures
+
+A failed planned move with a result ID returns the usual error status
+(400, 404, 409 or 500) and JSON
+`{"error":"...","codes":["uncertain","deadline"],"result":MoveResult}`.
+The `codes` array carries every recognized Go error identity. Error text alone
+cannot identify uncertainty because it may contain only the transport cause.
+Codes travel in the body, so rebuilding response headers cannot discard them.
+Errors with an empty result retain the existing plain-text response, including
+when diagnostics add a trace ID before a move is planned.
+
+Operator move clients opt in through `privateapi.DoResult`, with
+`controlplane.RemoteErrors` for move sentinels. It decodes `result` into the
+supplied output even when it returns an error. The harness uses this path only
+for move requests, and the demo's agent-mode move wrapper preserves the body
+codes and upstream status. These move requests have privateapi's 4 MiB response
+cap and classify transport failures as uncertain. Harness status and drain
+requests keep their previous error text, response-size behavior and transport
+error classification. Plain `privateapi.Do` keeps its peer code/message decoder;
+operator body codes cannot turn a peer's explicit failure reply into uncertainty.
+
+For #109, the operator attaches the returned result to the durable receipt.
+`RecordDistributedEvent` ingests the receipt's `Result`, including its error and
+loss fields. Distributed evidence does not use `MoveExternal`.
+
 ## Clock intervals and judgment
 
 A probe retains caller send/receive and frontend receive/send timestamps. For
@@ -236,9 +261,14 @@ acceptance. Local capacity, soak and crash-run judges refuse distributed
 reports rather than accepting those scalar fields. Content-loss comparison
 baselines and online decode sampling use mapped event times in this mode.
 
-There is one intentional local behavior change: `RecordExternalMove` now keeps
-`Error`, `Lost` and `LossCause` from the supplied result. Local capacity therefore
-fails on a recorded **move error** instead of silently dropping that evidence.
+`RecordExternalMove` and `MoveExternal` keep `Error`, `Lost` and `LossCause`
+from the supplied result, including failed operator moves. `Harness.Drain` also
+records the loss fields for every returned move. Preserving `Lost` and
+`LossCause` on successful move responses is an intentional local behavior
+change: a successful HTTP request cannot hide server-reported call loss.
+Local capacity therefore fails on recorded move errors or loss instead of
+silently dropping that evidence. Returned timings and handover diagnostics
+remain in the caller report.
 
 ## Verification
 
