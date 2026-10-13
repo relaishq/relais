@@ -3,6 +3,7 @@ package callharness
 import (
 	"cmp"
 	"maps"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -24,14 +25,16 @@ func refsAfter(refs []evidenceRef, lower time.Duration) []evidenceRef {
 	return refs[first:]
 }
 func pruneEvidenceRefs(refs []evidenceRef, lower time.Duration) []evidenceRef {
-	return slices.Clone(refsAfter(refs, lower))
+	first := sort.Search(len(refs), func(i int) bool { return refs[i].at >= lower })
+	return slices.Delete(refs, 0, first)
 }
 
 type unitIndex struct{ sent, returned []contentUnit }
 type measurementIndex struct {
-	audio, video     unitIndex
-	frames           []frameMark
-	margins, outages []time.Duration
+	audio, video         unitIndex
+	audioWork, videoWork freshnessWorkspace
+	frames               []frameMark
+	margins, outages     []time.Duration
 }
 
 // measurementSnapshot runs under r.mu. Copy only evidence that can contribute
@@ -226,6 +229,7 @@ func (r *recorder) prepareMeasurementIndex() {
 		}
 	}
 	for _, index := range []*unitIndex{&p.audio, &p.video} {
+		runtime.Gosched()
 		slices.SortFunc(index.sent, func(a, b contentUnit) int { return cmp.Compare(a.at, b.at) })
 		for _, u := range index.sent {
 			if u.returnedAt > 0 {
@@ -235,7 +239,31 @@ func (r *recorder) prepareMeasurementIndex() {
 	}
 	p.audio.returned = append(p.audio.returned, r.repeatedAudioReturns...)
 	p.video.returned = append(p.video.returned, r.repeatedVideoReturns...)
-	for _, index := range []*unitIndex{&p.audio, &p.video} {
+	for k, index := range []*unitIndex{&p.audio, &p.video} {
+		ids := map[string]int{}
+		ordinal := func(u *contentUnit) {
+			if u.identity == "" {
+				return
+			}
+			id, ok := ids[u.identity]
+			if !ok {
+				id = len(ids) + 1
+				ids[u.identity] = id
+			}
+			u.ordinal = id
+		}
+		for i := range index.sent {
+			ordinal(&index.sent[i])
+		}
+		for i := range index.returned {
+			ordinal(&index.returned[i])
+		}
+		work := &p.audioWork
+		if k == 1 {
+			work = &p.videoWork
+		}
+		work.visits = make([]identityVisits, len(ids)+1)
+		work.ordinals = ids
 		slices.SortFunc(index.returned, func(a, b contentUnit) int { return cmp.Compare(a.returnedAt, b.returnedAt) })
 	}
 	for _, t := range r.tracks {
@@ -261,6 +289,7 @@ func (r *recorder) prepareMeasurementIndex() {
 	slices.Sort(p.outages)
 	slices.SortFunc(p.frames, func(a, b frameMark) int { return cmp.Compare(a.at, b.at) })
 	r.prepared = p
+	runtime.Gosched()
 }
 func (r *recorder) indexedUnits(video, byReturn bool, lower, upper time.Duration) []contentUnit {
 	if upper < lower {
@@ -346,12 +375,20 @@ func (r *recorder) compactRecordingBeforeEvaluation(now time.Duration, beforeEva
 		}
 		count++
 	}
+	if count == 0 {
+		r.lastCompact = now
+		r.finishCompact(now, 0, nil)
+		r.measurementLockTime = time.Since(lockedAt)
+		r.mu.Unlock()
+		return
+	}
 	s := r.measurementSnapshot(now, count)
 	copyHeld := time.Since(lockedAt)
 	r.mu.Unlock()
 	if beforeEvaluation != nil {
 		beforeEvaluation()
 	}
+	runtime.Gosched()
 	s.prepareMeasurementIndex()
 	reports := s.measureMoves(now, count)
 	r.mu.Lock()

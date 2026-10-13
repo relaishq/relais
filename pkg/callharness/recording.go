@@ -171,7 +171,9 @@ func (r *recorder) finishCompact(now time.Duration, count int, reports []MoveRep
 			}
 		}
 	}
-	r.moves = slices.Clone(r.moves[count:])
+	// Measurement views and published arrival arrays own their copies. Reuse
+	// bounded history buffers here; slices.Delete clears removed pointer slots.
+	r.moves = slices.Delete(r.moves, 0, count)
 	if r.distributed != nil && len(r.audioSends) > 0 {
 		for _, ref := range r.audioSends {
 			if ref.at >= cutoff {
@@ -237,8 +239,8 @@ func (r *recorder) finishCompact(now time.Duration, count int, reports []MoveRep
 			delete(r.contentAssemblies, key)
 		}
 	}
-	r.repeatedAudioReturns = slices.Clone(slices.DeleteFunc(r.repeatedAudioReturns, func(u contentUnit) bool { return u.returnedAt < cutoff }))
-	r.repeatedVideoReturns = slices.Clone(slices.DeleteFunc(r.repeatedVideoReturns, func(u contentUnit) bool { return u.returnedAt < cutoff }))
+	r.repeatedAudioReturns = slices.DeleteFunc(r.repeatedAudioReturns, func(u contentUnit) bool { return u.returnedAt < cutoff })
+	r.repeatedVideoReturns = slices.DeleteFunc(r.repeatedVideoReturns, func(u contentUnit) bool { return u.returnedAt < cutoff })
 	for _, t := range r.tracks {
 		first := sort.Search(len(t.arrivals), func(i int) bool { return t.arrivals[i] >= cutoff })
 		// Keep the predecessor to measure a gap that crosses the window edge.
@@ -254,9 +256,9 @@ func (r *recorder) finishCompact(now time.Duration, count int, reports []MoveRep
 				}
 			}
 		}
-		t.arrivals = slices.Clone(t.arrivals[first:])
-		t.headers = slices.Clone(t.headers[first:])
-		t.unmatchedTimes = slices.Clone(slices.DeleteFunc(t.unmatchedTimes, func(at time.Duration) bool { return at < cutoff }))
+		t.arrivals = slices.Delete(t.arrivals, 0, first)
+		t.headers = slices.Delete(t.headers, 0, first)
+		t.unmatchedTimes = slices.DeleteFunc(t.unmatchedTimes, func(at time.Duration) bool { return at < cutoff })
 		if r.distributed == nil {
 			t.seenPackets = make(map[uint16]uint32, len(t.headers))
 			for _, mark := range t.headers {
@@ -269,14 +271,14 @@ func (r *recorder) finishCompact(now time.Duration, count int, reports []MoveRep
 					delete(t.video.decodedPictures, id)
 				}
 			}
-			t.video.frames = slices.Clone(slices.DeleteFunc(t.video.frames, func(f frameMark) bool { return f.at < cutoff }))
-			t.video.sampleResults = slices.Clone(slices.DeleteFunc(t.video.sampleResults, func(s decodeSample) bool { return s.at < cutoff }))
+			t.video.frames = slices.DeleteFunc(t.video.frames, func(f frameMark) bool { return f.at < cutoff })
+			t.video.sampleResults = slices.DeleteFunc(t.video.sampleResults, func(s decodeSample) bool { return s.at < cutoff })
 		}
 	}
 	r.compactConsent(cutoff)
 	first := sort.Search(len(r.decryptFailureTimes), func(i int) bool { return r.decryptFailureTimes[i] >= cutoff })
 	// Saved events use counter snapshots; reporting adds subsequent failures.
-	r.decryptFailureTimes = slices.Clone(r.decryptFailureTimes[first:])
+	r.decryptFailureTimes = slices.Delete(r.decryptFailureTimes, 0, first)
 	r.audioSends = pruneEvidenceRefs(r.audioSends, cutoff)
 	r.videoSends = pruneEvidenceRefs(r.videoSends, cutoff)
 	r.audioReturns = pruneEvidenceRefs(r.audioReturns, cutoff)
@@ -308,7 +310,7 @@ func (r *recorder) compactConsent(cutoff time.Duration) {
 		}
 		r.consentBaseResponses = sample.responses
 	}
-	r.consent = slices.Clone(r.consent[first:])
+	r.consent = slices.Delete(r.consent, 0, first)
 }
 
 func (r *recorder) appendRepeat(history []contentUnit, unit contentUnit) []contentUnit {
