@@ -27,10 +27,13 @@ func TestHTTPMoveFailurePreservesResult(t *testing.T) {
 	require.Equal(t, "application/json", response.Header().Get("Content-Type"))
 	var reply struct {
 		Error  string     `json:"error"`
+		Codes  []string   `json:"codes"`
 		Result MoveResult `json:"result"`
 	}
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &reply))
 	require.Contains(t, reply.Error, "rolled back")
+	require.Equal(t, []string{"closed"}, reply.Codes)
+	require.Empty(t, response.Header().Get("Relais-Error-Codes"))
 	require.Equal(t, reply.Error, reply.Result.Error)
 	require.Equal(t, id, reply.Result.ID)
 	require.Equal(t, "a", reply.Result.From)
@@ -42,7 +45,7 @@ func TestHTTPMoveFailurePreservesResult(t *testing.T) {
 	server := httptest.NewServer(p.Handler())
 	defer server.Close()
 	var result MoveResult
-	err = privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/calls/"+id+"/move?to=b", nil, &result, RemoteErrors)
+	err = privateapi.DoResult(context.Background(), server.Client(), server.URL, http.MethodPost, "/calls/"+id+"/move?to=b", nil, &result, RemoteErrors)
 	require.ErrorIs(t, err, mediaworker.ErrClosed)
 	var failure *privateapi.HTTPError
 	require.ErrorAs(t, err, &failure)
@@ -55,46 +58,51 @@ func TestHTTPMoveFailurePreservesResult(t *testing.T) {
 }
 
 func TestHTTPMoveEmptyErrorPreservesResponse(t *testing.T) {
-	for _, scenario := range []string{"unknown", "no-target", "in-progress", "ended"} {
-		t.Run(scenario, func(t *testing.T) {
-			p, source, _, _ := setup(t)
-			id, _, err := p.Create(context.Background(), "offer", "a")
-			require.NoError(t, err)
-			var cause error
-			to := "b"
-			switch scenario {
-			case "unknown":
-				id, cause = "missing", ErrUnknownCall
-			case "no-target":
-				to, cause = "a", ErrNoTarget
-			case "in-progress":
-				p.calls[id].mu.Lock()
-				defer p.calls[id].mu.Unlock()
-				cause = ErrMoveInProgress
-			case "ended":
-				require.NoError(t, source.EndSession(id))
-				cause = sessionstore.ErrEnded
+	for _, diagnostics := range []string{"0", "1"} {
+		t.Run("diagnostics="+diagnostics, func(t *testing.T) {
+			t.Setenv("RELAIS_MOVE_DIAGNOSTICS", diagnostics)
+			for _, scenario := range []string{"unknown", "no-target", "in-progress", "ended"} {
+				t.Run(scenario, func(t *testing.T) {
+					p, source, _, _ := setup(t)
+					id, _, err := p.Create(context.Background(), "offer", "a")
+					require.NoError(t, err)
+					var cause error
+					to := "b"
+					switch scenario {
+					case "unknown":
+						id, cause = "missing", ErrUnknownCall
+					case "no-target":
+						to, cause = "a", ErrNoTarget
+					case "in-progress":
+						p.calls[id].mu.Lock()
+						defer p.calls[id].mu.Unlock()
+						cause = ErrMoveInProgress
+					case "ended":
+						require.NoError(t, source.EndSession(id))
+						cause = sessionstore.ErrEnded
+					}
+					response := httptest.NewRecorder()
+					p.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/calls/"+id+"/move?to="+to, nil))
+					legacy := httptest.NewRecorder()
+					code := http.StatusConflict
+					if errors.Is(cause, ErrUnknownCall) || errors.Is(cause, sessionstore.ErrNotFound) {
+						code = http.StatusNotFound
+					}
+					http.Error(legacy, cause.Error(), code)
+					require.Equal(t, legacy.Code, response.Code)
+					require.Equal(t, legacy.Header(), response.Header())
+					require.Equal(t, legacy.Body.Bytes(), response.Body.Bytes())
+					server := httptest.NewServer(p.Handler())
+					defer server.Close()
+					var result MoveResult
+					err = privateapi.DoResult(context.Background(), server.Client(), server.URL, http.MethodPost, "/calls/"+id+"/move?to="+to, nil, &result, RemoteErrors)
+					require.ErrorContains(t, err, cause.Error())
+					var failure *privateapi.HTTPError
+					require.ErrorAs(t, err, &failure)
+					require.Equal(t, code, failure.StatusCode)
+					require.Zero(t, result)
+				})
 			}
-			response := httptest.NewRecorder()
-			p.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/calls/"+id+"/move?to="+to, nil))
-			legacy := httptest.NewRecorder()
-			code := http.StatusConflict
-			if errors.Is(cause, ErrUnknownCall) || errors.Is(cause, sessionstore.ErrNotFound) {
-				code = http.StatusNotFound
-			}
-			http.Error(legacy, cause.Error(), code)
-			require.Equal(t, legacy.Code, response.Code)
-			require.Equal(t, legacy.Header(), response.Header())
-			require.Equal(t, legacy.Body.Bytes(), response.Body.Bytes())
-			server := httptest.NewServer(p.Handler())
-			defer server.Close()
-			var result MoveResult
-			err = privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/calls/"+id+"/move?to="+to, nil, &result, RemoteErrors)
-			require.ErrorContains(t, err, cause.Error())
-			var failure *privateapi.HTTPError
-			require.ErrorAs(t, err, &failure)
-			require.Equal(t, code, failure.StatusCode)
-			require.Zero(t, result)
 		})
 	}
 }
@@ -119,10 +127,13 @@ func TestHTTPMoveUncertainPreservesResult(t *testing.T) {
 	require.Equal(t, "application/json", response.Header().Get("Content-Type"))
 	var reply struct {
 		Error  string     `json:"error"`
+		Codes  []string   `json:"codes"`
 		Result MoveResult `json:"result"`
 	}
 	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &reply))
 	require.Equal(t, context.DeadlineExceeded.Error(), reply.Error)
+	require.Equal(t, []string{"deadline", "uncertain"}, reply.Codes)
+	require.Empty(t, response.Header().Get("Relais-Error-Codes"))
 	require.Equal(t, reply.Error, reply.Result.Error)
 	require.Equal(t, id, reply.Result.ID)
 	require.False(t, reply.Result.Start.IsZero())
@@ -165,7 +176,7 @@ func TestHTTPMoveFailureStatusAndSentinels(t *testing.T) {
 			server := httptest.NewServer(p.Handler())
 			defer server.Close()
 			var result MoveResult
-			err = privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/calls/"+id+"/move?to=b", nil, &result, RemoteErrors)
+			err = privateapi.DoResult(context.Background(), server.Client(), server.URL, http.MethodPost, "/calls/"+id+"/move?to=b", nil, &result, RemoteErrors)
 			require.Error(t, err)
 			for _, sentinel := range test.sentinels {
 				require.ErrorIs(t, err, sentinel)

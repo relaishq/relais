@@ -421,10 +421,9 @@ func TestDemoAgentMovePreservesFailureResult(t *testing.T) {
 		case "/status":
 			privateapi.Write(w, controlplane.Status{Calls: []controlplane.CallStatus{{ID: "call", Owner: "0"}}})
 		case "/calls/call/move":
-			privateapi.WriteErrorCodes(w, privateapi.Uncertain(context.DeadlineExceeded), controlplane.RemoteErrors)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
-			privateapi.Write(w, controlplane.MoveFailure{Error: "move failed", Result: result})
+			privateapi.Write(w, controlplane.MoveFailure{Error: "move failed", Codes: privateapi.ErrorCodes(privateapi.Uncertain(context.DeadlineExceeded), controlplane.RemoteErrors), Result: result})
 		default:
 			http.NotFound(w, r)
 		}
@@ -434,7 +433,7 @@ func TestDemoAgentMovePreservesFailureResult(t *testing.T) {
 	server := httptest.NewServer(d.handler(http.NotFoundHandler()))
 	defer server.Close()
 	var returned controlplane.MoveResult
-	err := privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/calls/call/move", nil, &returned, controlplane.RemoteErrors)
+	err := privateapi.DoResult(context.Background(), server.Client(), server.URL, http.MethodPost, "/calls/call/move", nil, &returned, controlplane.RemoteErrors)
 	require.ErrorIs(t, err, privateapi.ErrUncertain)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	var failure *privateapi.HTTPError

@@ -2,8 +2,10 @@ package callharness
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -54,7 +56,7 @@ func (h *Harness) Drain(worker int) error {
 			if res.Error != "" {
 				moveErr = errors.New(res.Error)
 			}
-			c.rec.move(moveRecord{from: from, to: to, start: res.Start, end: res.End, result: res.Result, err: moveErr})
+			c.rec.move(moveRecord{from: from, to: to, start: res.Start, end: res.End, result: res.Result, lost: res.Lost, lossCause: res.LossCause, err: moveErr})
 		}
 	}
 	if reply.Error != "" {
@@ -69,5 +71,24 @@ func (h *Harness) controlRequest(ctx context.Context, method, path string, resul
 		return errors.New("callharness: control plane needs Options.Relay")
 	}
 
-	return privateapi.Do(ctx, h.httpClient, strings.TrimSuffix(h.signalingURL, "/calls"), method, path, nil, result, controlplane.RemoteErrors)
+	base := strings.TrimSuffix(h.signalingURL, "/calls")
+	route, _, _ := strings.Cut(path, "?")
+	if method == http.MethodPost && strings.HasPrefix(route, "/calls/") && strings.HasSuffix(route, "/move") {
+		return privateapi.DoResult(ctx, h.httpClient, base, method, path, nil, result, controlplane.RemoteErrors)
+	}
+	// Status and drain retain their original transport and error behavior.
+	req, err := http.NewRequestWithContext(ctx, method, base+path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusMultiStatus {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("callharness: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	return json.NewDecoder(resp.Body).Decode(result)
 }

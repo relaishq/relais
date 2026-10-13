@@ -59,10 +59,9 @@ func TestExternalMoveRecordsFailedResult(t *testing.T) {
 			}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				require.Equal(t, "/calls/test-call/move?to=1", r.URL.RequestURI())
-				privateapi.WriteErrorCodes(w, privateapi.Uncertain(context.DeadlineExceeded), controlplane.RemoteErrors)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusInternalServerError)
-				privateapi.Write(w, controlplane.MoveFailure{Error: "transport reply uncertain", Result: result})
+				privateapi.Write(w, controlplane.MoveFailure{Error: "transport reply uncertain", Codes: privateapi.ErrorCodes(privateapi.Uncertain(context.DeadlineExceeded), controlplane.RemoteErrors), Result: result})
 			}))
 			defer server.Close()
 			h, err := Start(Options{External: &ExternalTopology{SignalingURL: server.URL + "/calls", RelayAddr: netip.MustParseAddrPort("127.0.0.1:20000")}})

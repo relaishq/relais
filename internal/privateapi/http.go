@@ -22,12 +22,9 @@ import (
 const MaxBody = 4 << 20
 const Timeout = 2 * time.Second
 
-// ErrorCodesHeader carries sentinel identities when an error envelope has no
-// code field. In particular, Uncertain's text only contains its transport cause.
-const ErrorCodesHeader = "Relais-Error-Codes"
-
-// WriteErrorCodes preserves all matching causes, including joined errors.
-func WriteErrorCodes(w http.ResponseWriter, err error, codes map[string]error) {
+// ErrorCodes returns all matching sentinel codes for an operator result envelope.
+// Uncertainty is explicit because its text may contain only the transport cause.
+func ErrorCodes(err error, codes map[string]error) []string {
 	matched := make(map[string]bool)
 	for code, sentinel := range CommonErrors {
 		if errors.Is(err, sentinel) {
@@ -47,9 +44,7 @@ func WriteErrorCodes(w http.ResponseWriter, err error, codes map[string]error) {
 		names = append(names, code)
 	}
 	sort.Strings(names)
-	if len(names) > 0 {
-		w.Header().Set(ErrorCodesHeader, strings.Join(names, ","))
-	}
+	return names
 }
 
 type envelopeError struct {
@@ -136,7 +131,19 @@ func Read(w http.ResponseWriter, r *http.Request, value any) bool {
 	return true
 }
 
-func Do(ctx context.Context, client *http.Client, base, method, path string, input, output any, codes map[string]error) (resultErr error) {
+// Do keeps the peer API's code/message error decoding. An explicit error
+// response is never classified as uncertain because of an operator envelope.
+func Do(ctx context.Context, client *http.Client, base, method, path string, input, output any, codes map[string]error) error {
+	return do(ctx, client, base, method, path, input, output, codes, false)
+}
+
+// DoResult opts an operator move client into error/codes/result decoding.
+// It fills output on failure and preserves every recognized error sentinel.
+func DoResult(ctx context.Context, client *http.Client, base, method, path string, input, output any, codes map[string]error) error {
+	return do(ctx, client, base, method, path, input, output, codes, true)
+}
+
+func do(ctx context.Context, client *http.Client, base, method, path string, input, output any, codes map[string]error, resultEnvelope bool) (resultErr error) {
 	if client.Transport == nil {
 		copy := *client
 		copy.Transport = metrics.HTTPTransport()
@@ -176,30 +183,33 @@ func Do(ctx context.Context, client *http.Client, base, method, path string, inp
 	}
 	if resp.StatusCode/100 != 2 {
 		defer func() { resultErr = &HTTPError{StatusCode: resp.StatusCode, Err: resultErr} }()
-		var envelope struct {
-			Error  string          `json:"error"`
-			Result json.RawMessage `json:"result"`
-		}
-		if json.Unmarshal(data, &envelope) == nil && envelope.Error != "" {
-			failure := &envelopeError{message: envelope.Error}
-			for _, code := range strings.Split(resp.Header.Get(ErrorCodesHeader), ",") {
-				cause := codes[code]
-				if cause == nil {
-					cause = CommonErrors[code]
-				}
-				if code == "uncertain" {
-					cause = ErrUncertain
-				}
-				if cause != nil {
-					failure.causes = append(failure.causes, cause)
-				}
+		if resultEnvelope {
+			var envelope struct {
+				Codes  []string        `json:"codes"`
+				Error  string          `json:"error"`
+				Result json.RawMessage `json:"result"`
 			}
-			if output != nil && len(envelope.Result) > 0 && string(envelope.Result) != "null" {
-				if err := json.Unmarshal(envelope.Result, output); err != nil {
-					return errors.Join(failure, Uncertain(err))
+			if json.Unmarshal(data, &envelope) == nil && envelope.Error != "" {
+				failure := &envelopeError{message: envelope.Error}
+				for _, code := range envelope.Codes {
+					cause := codes[code]
+					if cause == nil {
+						cause = CommonErrors[code]
+					}
+					if code == "uncertain" {
+						cause = ErrUncertain
+					}
+					if cause != nil {
+						failure.causes = append(failure.causes, cause)
+					}
 				}
+				if output != nil && len(envelope.Result) > 0 && string(envelope.Result) != "null" {
+					if err := json.Unmarshal(envelope.Result, output); err != nil {
+						return errors.Join(failure, Uncertain(err))
+					}
+				}
+				return failure
 			}
-			return failure
 		}
 		var failure Failure
 		if json.Unmarshal(data, &failure) != nil || failure.Message == "" {

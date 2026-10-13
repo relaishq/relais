@@ -105,17 +105,6 @@ and returns an error for unknown sessions or invalid identities. Identical
 pending receipt retries are idempotent; conflicting receipts are rejected.
 The arm/receipt inventory is bounded at 4096 identities per caller.
 
-A failed planned move with a non-empty result returns the usual error status
-(400, 404, 409 or 500) and JSON `{"error":"...","result":MoveResult}`.
-Errors with an empty result retain the existing plain-text response. The
-`Relais-Error-Codes` response header preserves matching Go error identities,
-including uncertainty and its underlying context error. Error text alone cannot
-identify uncertainty because it may contain only the transport cause.
-`privateapi.Do` decodes `result` into the supplied output even when it returns
-an error; operator clients pass `controlplane.RemoteErrors` for move sentinels.
-Keep the response header when proxying these results. The demo's agent-mode
-move route preserves it and the upstream status.
-
 The legacy caller `/kill`, `/move` and `/record-moves` routes are refused in
 this mode. Automatic sanitized status polling cannot supply an operation ID or
 actual kill timestamp; it does not create duplicate distributed takeover
@@ -125,6 +114,31 @@ For load-report joining, populate `EventResult.identities` with the affected
 identities. `MatchesEvent` compares all five fields and the scenario. It never
 uses timestamp equality for distributed reports. Missing, duplicate and failed
 receipts remain inspectable evidence.
+
+### Planned move failures
+
+A failed planned move with a result ID returns the usual error status
+(400, 404, 409 or 500) and JSON
+`{"error":"...","codes":["uncertain","deadline"],"result":MoveResult}`.
+The `codes` array carries every recognized Go error identity. Error text alone
+cannot identify uncertainty because it may contain only the transport cause.
+Codes travel in the body, so rebuilding response headers cannot discard them.
+Errors with an empty result retain the existing plain-text response, including
+when diagnostics add a trace ID before a move is planned.
+
+Operator move clients opt in through `privateapi.DoResult`, with
+`controlplane.RemoteErrors` for move sentinels. It decodes `result` into the
+supplied output even when it returns an error. The harness uses this path only
+for move requests, and the demo's agent-mode move wrapper preserves the body
+codes and upstream status. These move requests have privateapi's 4 MiB response
+cap and classify transport failures as uncertain. Harness status and drain
+requests keep their previous error text, response-size behavior and transport
+error classification. Plain `privateapi.Do` keeps its peer code/message decoder;
+operator body codes cannot turn a peer's explicit failure reply into uncertainty.
+
+For #109, the operator attaches the returned result to the durable receipt.
+`RecordDistributedEvent` ingests the receipt's `Result`, including its error and
+loss fields. Distributed evidence does not use `MoveExternal`.
 
 ## Clock intervals and judgment
 
@@ -248,9 +262,13 @@ reports rather than accepting those scalar fields. Content-loss comparison
 baselines and online decode sampling use mapped event times in this mode.
 
 `RecordExternalMove` and `MoveExternal` keep `Error`, `Lost` and `LossCause`
-from the supplied result, including failed operator moves. Local capacity
-therefore fails on a recorded **move error** instead of silently dropping that
-evidence. Returned timings and handover diagnostics remain in the caller report.
+from the supplied result, including failed operator moves. `Harness.Drain` also
+records the loss fields for every returned move. Preserving `Lost` and
+`LossCause` on successful move responses is an intentional local behavior
+change: a successful HTTP request cannot hide server-reported call loss.
+Local capacity therefore fails on recorded move errors or loss instead of
+silently dropping that evidence. Returned timings and handover diagnostics
+remain in the caller report.
 
 ## Verification
 

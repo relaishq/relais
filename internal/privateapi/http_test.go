@@ -55,10 +55,9 @@ func TestErrorEnvelopePreservesResultAndCauses(t *testing.T) {
 	for _, withOutput := range []bool{true, false} {
 		t.Run(strconv.FormatBool(withOutput), func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				WriteErrorCodes(w, errors.Join(sentinel, Uncertain(context.Canceled)), map[string]error{"rollback": sentinel})
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
-				_, _ = w.Write([]byte(`{"error":"move failed","result":{"lost":true,"loss_cause":"ownership_expired","error":"rollback failed"}}`))
+				_, _ = w.Write([]byte(`{"error":"move failed","codes":["rollback","canceled","uncertain"],"result":{"lost":true,"loss_cause":"ownership_expired","error":"rollback failed"}}`))
 			}))
 			defer server.Close()
 			var result struct {
@@ -70,7 +69,7 @@ func TestErrorEnvelopePreservesResultAndCauses(t *testing.T) {
 			if withOutput {
 				output = &result
 			}
-			err := Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/move", nil, output, map[string]error{"rollback": sentinel})
+			err := DoResult(context.Background(), server.Client(), server.URL, http.MethodPost, "/move", nil, output, map[string]error{"rollback": sentinel})
 			require.EqualError(t, err, "move failed")
 			require.ErrorIs(t, err, sentinel)
 			require.ErrorIs(t, err, ErrUncertain)
@@ -89,16 +88,34 @@ func TestErrorEnvelopePreservesResultAndCauses(t *testing.T) {
 
 func TestMalformedErrorEnvelopeResultPreservesStatusAndCause(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		WriteErrorCodes(w, context.DeadlineExceeded, nil)
 		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"error":"move failed","result":"invalid result"}`))
+		_, _ = w.Write([]byte(`{"error":"move failed","codes":["deadline"],"result":"invalid result"}`))
 	}))
 	defer server.Close()
 	var result map[string]any
-	err := Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/move", nil, &result, nil)
+	err := DoResult(context.Background(), server.Client(), server.URL, http.MethodPost, "/move", nil, &result, nil)
 	require.ErrorContains(t, err, "move failed")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.ErrorIs(t, err, ErrUncertain)
+	var failure *HTTPError
+	require.ErrorAs(t, err, &failure)
+	require.Equal(t, http.StatusInternalServerError, failure.StatusCode)
+}
+
+func TestPlainDoDoesNotDecodeResultEnvelope(t *testing.T) {
+	const body = `{"error":"peer failed","codes":["uncertain","deadline"],"result":{"lost":true}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+	var result map[string]any
+	err := Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/resume", nil, &result, nil)
+	require.EqualError(t, err, "privateapi: 500 Internal Server Error: "+body)
+	require.NotErrorIs(t, err, ErrUncertain)
+	require.NotErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, result)
 	var failure *HTTPError
 	require.ErrorAs(t, err, &failure)
 	require.Equal(t, http.StatusInternalServerError, failure.StatusCode)

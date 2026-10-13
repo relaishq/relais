@@ -7,7 +7,6 @@ import (
 	"maps"
 	"mime"
 	"net/http"
-	"reflect"
 
 	"github.com/relais/internal/privateapi"
 	"github.com/relais/pkg/mediaworker"
@@ -37,6 +36,7 @@ var RemoteErrors = func() map[string]error {
 // MoveFailure retains the planned outcome alongside the request failure.
 type MoveFailure struct {
 	Error  string     `json:"error"`
+	Codes  []string   `json:"codes"`
 	Result MoveResult `json:"result"`
 }
 
@@ -80,11 +80,10 @@ func (p *Plane) Handler() http.Handler {
 	mux.HandleFunc("POST /calls/{id}/move", func(w http.ResponseWriter, r *http.Request) {
 		result, err := p.Move(r.Context(), r.PathValue("id"), r.URL.Query().Get("to"))
 		if err != nil {
-			if !reflect.ValueOf(result).IsZero() {
+			if result.ID != "" {
 				w.Header().Set("Content-Type", "application/json")
-				privateapi.WriteErrorCodes(w, err, RemoteErrors)
 				w.WriteHeader(errorStatus(err))
-				writeJSON(w, MoveFailure{Error: err.Error(), Result: result})
+				writeJSON(w, MoveFailure{Error: err.Error(), Codes: privateapi.ErrorCodes(err, RemoteErrors), Result: result})
 				return
 			}
 			writeError(w, err)
