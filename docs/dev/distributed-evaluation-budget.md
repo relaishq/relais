@@ -66,6 +66,11 @@ The first event established one distinct first-baseline reference.
 | 3 ms | ±3 ms | 9 ms | 156 | 64 |
 | 4 ms | ±3 ms | 10 ms | 144 | 72 |
 
+These pre-123 counts came from the earlier fixture, which lacks real takeover
+replay/decode boundary density. Do not use them to size the live takeover budget.
+See [takeover-budget.md](takeover-budget.md) for the replacement fixture, measured
+CPU, current reductions and cap rule.
+
 These counts depend on branch boundaries and the correlated planned-move
 span; they need not increase monotonically with width. Every count matches an
 independent cell enumeration and remains below 4096. They are fixture results,

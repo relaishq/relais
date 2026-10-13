@@ -192,7 +192,7 @@ func (r *recorder) legacyClassifyDistributedEvent(report *MoveReport, limit time
 	d.FirstBaselines = slices.Clone(first)
 	d.BaselineFloor = DurationInterval{Lower: time.Duration(math.MaxInt64), Upper: time.Duration(math.MinInt64)}
 	var agreements [len(contentMetricNames)]verdictAgreement
-	floors := r.floorClassificationPoints(floor)
+	floors := r.classificationFloors(floor, lo, report.Kind)
 	startBoundaries, endBoundaries := r.legacyEventClassificationPoints(limit, floors)
 	var span DurationInterval
 	if report.Kind == "move" {
@@ -202,7 +202,7 @@ func (r *recorder) legacyClassifyDistributedEvent(report *MoveReport, limit time
 		}
 		startBoundaries = append(startBoundaries, endLo-span.Lower, endLo-span.Upper, endHi-span.Lower, endHi-span.Upper)
 	}
-	starts := classificationPoints(lo, hi, startBoundaries)
+	starts := classificationStartPoints(lo, hi, startBoundaries)
 	complete := true
 	evaluate := func(start, end, baselineFloor time.Duration) {
 		if d.Evaluations >= maxClassificationEvaluations {
@@ -635,6 +635,9 @@ func TestDistributedReportBudgetEvidenceEquivalent(t *testing.T) {
 		t.Skip("opt-in full work-budget legacy oracle")
 	}
 	r := costCalls(t, 30)[0].rec
+	// Dominated floors now make the original narrow fixture complete. Widen
+	// only this cap oracle's worker bounds so it still tests actual exhaustion.
+	r.distributed.WorkerOffset = OffsetInterval{Lower: -250 * time.Millisecond, Upper: 250 * time.Millisecond}
 	oldView := r.measurementSnapshot(r.hungUpAt, len(r.moves))
 	newView := r.measurementSnapshot(r.hungUpAt, len(r.moves))
 	expected := oldView.legacyMeasureMoves(r.hungUpAt, len(r.moves))

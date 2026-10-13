@@ -30,7 +30,7 @@ func (r *recorder) referenceCountClassify(report *MoveReport, limit time.Duratio
 	d.FirstBaselines = slices.Clone(first)
 	d.BaselineFloor = DurationInterval{Lower: time.Duration(math.MaxInt64), Upper: time.Duration(math.MinInt64)}
 	var agreements [len(contentMetricNames)]verdictAgreement
-	floors := r.floorClassificationPoints(floor)
+	floors := r.classificationFloors(floor, lo, report.Kind)
 	var span DurationInterval
 	if report.Kind == "move" {
 		span = r.plannedMoveSpan(report.Receipt)
@@ -48,7 +48,7 @@ func (r *recorder) referenceCountClassify(report *MoveReport, limit time.Duratio
 		}
 		startBoundaries = append(startBoundaries, endLo-span.Lower, endLo-span.Upper, endHi-span.Lower, endHi-span.Upper)
 	}
-	starts := classificationPoints(lo, hi, startBoundaries)
+	starts := classificationStartPoints(lo, hi, startBoundaries)
 	complete := true
 	evaluate := func(start, end, baselineFloor time.Duration) {
 		p := *report
@@ -233,7 +233,7 @@ func budgetCells(r *recorder, p MoveReport, limit time.Duration, floor DurationI
 	d := p.Distributed
 	lo, hi := r.since(d.Start.Earliest), r.since(d.Start.Latest)
 	endLo, endHi := r.since(d.End.Earliest), r.since(d.End.Latest)
-	floors := r.floorClassificationPoints(floor)
+	floors := r.classificationFloors(floor, lo, p.Kind)
 	sb, eb := r.legacyEventClassificationPoints(limit, floors)
 	var span DurationInterval
 	if p.Kind == "move" {
@@ -244,7 +244,7 @@ func budgetCells(r *recorder, p MoveReport, limit time.Duration, floor DurationI
 		sb = append(sb, endLo-span.Lower, endLo-span.Upper, endHi-span.Lower, endHi-span.Upper)
 	}
 	cells := 0
-	for _, start := range classificationPoints(lo, hi, sb) {
+	for _, start := range classificationStartPoints(lo, hi, sb) {
 		lower, upper := endLo, endHi
 		if p.Kind == "move" {
 			lower = max(lower, start+span.Lower)
