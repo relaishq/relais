@@ -56,10 +56,11 @@ type DurationInterval struct {
 // Union windows prove passes; intersection windows can prove failures. A
 // failure seen only in the uncertainty margin is inconclusive.
 type DistributedMeasurement struct {
-	Durations      map[string]DurationInterval `json:"durations,omitempty"`
-	Evaluations    int                         `json:"evaluations"`
-	FirstBaselines []FirstBaselines            `json:"first_baselines,omitempty"`
-	BaselineFloor  DurationInterval            `json:"baseline_floor"`
+	Durations map[string]DurationInterval `json:"durations,omitempty"`
+	// Evaluations counts start/end/floor cells, each checked against all first baselines.
+	Evaluations    int              `json:"evaluations"`
+	FirstBaselines []FirstBaselines `json:"first_baselines,omitempty"`
+	BaselineFloor  DurationInterval `json:"baseline_floor"`
 
 	Mapped bool `json:"mapped"`
 

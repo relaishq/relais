@@ -13,8 +13,10 @@ import (
 	"time"
 )
 
-// Frozen pre-118 evaluation pipeline. Keep this oracle independent of the
-// optimized freshness and boundary paths; all MoveReport evidence is compared.
+// Pre-118 evaluation pipeline with #120's cell budget and baseline handoff.
+// Keep it independent of the optimized freshness and boundary paths; compare
+// every field of MoveReport evidence. The frozen pre-120 budget oracle lives
+// in distributed_budget_test.go.
 func (r *recorder) legacyMeasureMoves(until time.Duration, count int) []MoveReport {
 	// Receipts may arrive out of event order. Keep their storage order (also
 	// used by maintenance snapshots), but find window limits on the mapped
@@ -139,7 +141,9 @@ func (r *recorder) legacyMeasureMoves(until time.Duration, count int) []MoveRepo
 		if report.Distributed != nil {
 			self := len(r.savedMoves) == 0 && len(reports) == 0
 			r.legacyClassifyDistributedEvent(&report, limit, distributedFloor, firstDistributed, self)
-			firstDistributed = report.Distributed.FirstBaselines
+			if self {
+				firstDistributed = report.Distributed.FirstBaselines
+			}
 			distributedFloor = report.Distributed.BaselineFloor
 		}
 		r.failIdentityMetrics(&report.Measurement)
@@ -201,6 +205,11 @@ func (r *recorder) legacyClassifyDistributedEvent(report *MoveReport, limit time
 	starts := classificationPoints(lo, hi, startBoundaries)
 	complete := true
 	evaluate := func(start, end, baselineFloor time.Duration) {
+		if d.Evaluations >= maxClassificationEvaluations {
+			complete = false
+			return
+		}
+		d.Evaluations++
 		p := *report
 		p.Start, p.End = start, end
 		if p.Kind == "takeover" {
@@ -219,11 +228,6 @@ func (r *recorder) legacyClassifyDistributedEvent(report *MoveReport, limit time
 			refs = []FirstBaselines{firstBaselinesOf(m)}
 		}
 		for _, ref := range refs {
-			if d.Evaluations >= maxClassificationEvaluations {
-				complete = false
-				return
-			}
-			d.Evaluations++
 			candidate := m
 			normalizeEventFreshness(&candidate, ref)
 			if !self && len(first) == 0 {
