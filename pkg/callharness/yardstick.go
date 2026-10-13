@@ -189,6 +189,7 @@ func (p FreshnessPolicy) defaults() FreshnessPolicy {
 type contentUnit struct {
 	at, duration, returnedAt time.Duration
 	identity                 string
+	ordinal                  int // measurement-view identity; zero uses the string fallback
 	written                  bool
 	replayed                 bool
 }
@@ -450,9 +451,14 @@ func (r *recorder) measureEvent(move MoveReport, limit, baselineFloor time.Durat
 		audio = append(slices.Clone(audio), r.repeatedAudioReturns...)
 		video = append(slices.Clone(video), r.repeatedVideoReturns...)
 	}
-	m.Audio = measureFreshness(audio, move.Start, m.MediaResumedAt, limit, baselineFloor, r.freshnessPolicy)
+	audioWork, videoWork := &freshnessWorkspace{}, &freshnessWorkspace{}
+	if r.prepared != nil {
+		audioWork, videoWork = &r.prepared.audioWork, &r.prepared.videoWork
+	}
+	audioWork.ordered, videoWork.ordered = classificationOnly && r.prepared != nil, classificationOnly && r.prepared != nil
+	m.Audio = r.measureFreshnessCell(audio, move.Start, m.MediaResumedAt, limit, baselineFloor, audioWork)
 	if m.VideoExpected {
-		m.Video = measureFreshness(video, move.Start, m.MediaResumedAt, limit, baselineFloor, r.freshnessPolicy)
+		m.Video = r.measureFreshnessCell(video, move.Start, m.MediaResumedAt, limit, baselineFloor, videoWork)
 	} else {
 		m.Video.Verdict.Trusted = true
 	}
@@ -711,36 +717,113 @@ func (m *EventMeasurement) updateJudgment() {
 	}
 }
 
+// A measurement view owns this scratch space. Reuse it across interval cells;
+// published reports contain only values, never references to these buffers.
+type identityVisits struct{ seen, post, counted uint64 }
+
+type freshnessKey struct {
+	start, resumed, limit, firstReturn time.Duration
+	units                              int
+}
+
+type freshnessWorkspace struct {
+	ordered                 bool
+	cache                   map[freshnessKey]FreshnessReport
+	baseline                []time.Duration
+	post                    []contentUnit
+	seen, seenPost, counted map[string]uint64
+	generation              uint64
+	visits                  []identityVisits
+	ordinals                map[string]int
+}
+
+// Floors between adjacent returns select the same baseline and post-event
+// units. Cache that exact computation, then retain the requested BaselineStart
+// in the published value. No classification cell or evaluation is omitted.
+func (r *recorder) measureFreshnessCell(units []contentUnit, start, resumed, limit, floor time.Duration, work *freshnessWorkspace) FreshnessReport {
+	if !work.ordered {
+		return measureFreshnessWithWorkspace(units, start, resumed, limit, floor, work, r.freshnessPolicy)
+	}
+	key := freshnessKey{start: start, resumed: resumed, limit: limit, units: len(units)}
+	if len(units) > 0 {
+		key.firstReturn = units[0].returnedAt
+	}
+	if f, ok := work.cache[key]; ok {
+		f.BaselineStart = max(0, start-baselineWindow, floor)
+		return f
+	}
+	f := measureFreshnessWithWorkspace(units, start, resumed, limit, floor, work, r.freshnessPolicy)
+	if work.cache == nil {
+		work.cache = make(map[freshnessKey]FreshnessReport)
+	}
+	f.Verdict.Reasons = slices.Clip(f.Verdict.Reasons)
+	work.cache[key] = f
+	return f
+}
+
 func measureFreshness(units []contentUnit, start, resumed, limit, baselineFloor time.Duration, policies ...FreshnessPolicy) FreshnessReport {
+	return measureFreshnessWithWorkspace(units, start, resumed, limit, baselineFloor, &freshnessWorkspace{}, policies...)
+}
+func measureFreshnessWithWorkspace(units []contentUnit, start, resumed, limit, baselineFloor time.Duration, work *freshnessWorkspace, policies ...FreshnessPolicy) FreshnessReport {
 	policy := FreshnessPolicy{}.defaults()
 	if len(policies) > 0 {
 		policy = policies[0].defaults()
 	}
 	f := FreshnessReport{RecoveryLimit: policy.RecoveryLimit, StabilityWindow: policy.StabilityWindow, EvaluationEnd: min(limit, start+policy.RecoveryLimit+policy.StabilityWindow), BaselineStart: max(0, start-baselineWindow, baselineFloor), Tolerance: freshnessTolerance, SustainedUnits: freshnessSustainedUnits, SpreadLimit: baselineSpreadLimit, LateWindowUnits: freshnessLateWindowUnits, LateWindowLimit: freshnessLateWindowLimit, LatePercentLimit: freshnessLatePercentLimit, AbsoluteLatencyCeiling: policy.AbsoluteLatencyCeiling, LiveLatenessCap: policy.LiveLatenessCap}
 	f.StabilityObserved = max(0, f.EvaluationEnd-start-f.RecoveryLimit)
-	var baseline []time.Duration
-	var post []contentUnit
-	seen := map[string]bool{}
-	seenPost := map[string]bool{}
-	slices.SortFunc(units, func(a, b contentUnit) int { return cmp.Compare(a.returnedAt, b.returnedAt) })
+	baseline, post := work.baseline[:0], work.post[:0]
+	if work.seen == nil {
+		work.seen, work.seenPost, work.counted = map[string]uint64{}, map[string]uint64{}, map[string]uint64{}
+	}
+	work.generation++
+	generation := work.generation
+	seen, seenPost := work.seen, work.seenPost
+	if !work.ordered {
+		slices.SortFunc(units, func(a, b contentUnit) int { return cmp.Compare(a.returnedAt, b.returnedAt) })
+	}
 	for i, unit := range units {
 		if unit.returnedAt == 0 || unit.returnedAt < unit.at {
 			continue
 		}
 		if unit.identity == "" {
 			unit.identity = strconv.Itoa(i)
+			unit.ordinal = work.ordinals[unit.identity]
+		} else if unit.ordinal == 0 {
+			// Published point measurements mix indexed sends with raw repeats.
+			// Resolve both to the same identity before deduplicating observations.
+			unit.ordinal = work.ordinals[unit.identity]
 		}
-		if !seen[unit.identity] && !unit.replayed && unit.returnedAt >= f.BaselineStart && unit.returnedAt < start && unit.at < start {
+		var seenBefore bool
+		if unit.ordinal > 0 && unit.ordinal < len(work.visits) {
+			seenBefore = work.visits[unit.ordinal].seen == generation
+		} else {
+			seenBefore = seen[unit.identity] == generation
+		}
+		if !seenBefore && !unit.replayed && unit.returnedAt >= f.BaselineStart && unit.returnedAt < start && unit.at < start {
 			baseline = append(baseline, unit.returnedAt-unit.at)
 		}
-		seen[unit.identity] = true
+		if unit.ordinal > 0 && unit.ordinal < len(work.visits) {
+			work.visits[unit.ordinal].seen = generation
+		} else {
+			seen[unit.identity] = generation
+		}
 		if unit.returnedAt >= start && unit.returnedAt <= f.EvaluationEnd {
 			f.PeakLatency = max(f.PeakLatency, unit.returnedAt-unit.at)
 			post = append(post, unit)
-			seenPost[unit.identity] = true
+			var newPost bool
+			if unit.ordinal > 0 && unit.ordinal < len(work.visits) {
+				newPost = work.visits[unit.ordinal].post != generation
+				work.visits[unit.ordinal].post = generation
+			} else {
+				newPost = seenPost[unit.identity] != generation
+				seenPost[unit.identity] = generation
+			}
+			if newPost {
+				f.PostEventSamples++
+			}
 		}
 	}
-	f.BaselineSamples, f.PostEventSamples = len(baseline), len(seenPost)
+	f.BaselineSamples = len(baseline)
 	slices.Sort(baseline)
 	if len(baseline) > 0 {
 		f.BaselineMedian = baseline[len(baseline)/2]
@@ -763,7 +846,20 @@ func measureFreshness(units []contentUnit, start, resumed, limit, baselineFloor 
 		sustained, runStart, recentNext, recentLate, runLive, runLate = 0, 0, 0, 0, 0, 0
 		recent = [freshnessLateWindowUnits]bool{}
 	}
-	counted := map[string]bool{}
+	counted := work.counted
+	count := func(u contentUnit) {
+		if u.ordinal > 0 && u.ordinal < len(work.visits) {
+			work.visits[u.ordinal].counted = generation
+		} else {
+			counted[u.identity] = generation
+		}
+	}
+	wasCounted := func(u contentUnit) bool {
+		if u.ordinal > 0 && u.ordinal < len(work.visits) {
+			return work.visits[u.ordinal].counted == generation
+		}
+		return counted[u.identity] == generation
+	}
 	for _, unit := range post {
 		latency := unit.returnedAt - unit.at
 		excess := latency - f.BaselineP95 - f.Tolerance
@@ -777,12 +873,12 @@ func measureFreshness(units []contentUnit, start, resumed, limit, baselineFloor 
 		case unit.at < resumed:
 			flushJitter()
 			resetRun()
-			counted[unit.identity] = true
+			count(unit)
 			continue
 		case latency-f.BaselineP95 > f.LiveLatenessCap:
 			flushJitter()
 			resetRun()
-			counted[unit.identity] = true
+			count(unit)
 			f.LiveUnits++
 			f.LateLiveUnits++
 			continue
@@ -792,7 +888,7 @@ func measureFreshness(units []contentUnit, start, resumed, limit, baselineFloor 
 
 		default:
 			flushJitter()
-			if counted[unit.identity] || unit.replayed {
+			if wasCounted(unit) || unit.replayed {
 				continue
 			}
 			if sustained == 0 {
@@ -800,7 +896,7 @@ func measureFreshness(units []contentUnit, start, resumed, limit, baselineFloor 
 			}
 			sustained++
 		}
-		counted[unit.identity] = true
+		count(unit)
 		f.LiveUnits++
 		late := excess > 0
 		if late {
@@ -831,6 +927,7 @@ func measureFreshness(units []contentUnit, start, resumed, limit, baselineFloor 
 	f.PeakAboveBaseline = max(0, f.PeakLatency-f.BaselineP95)
 	f.FirstBaselineTrusted = f.baselineTrusted()
 	f.updateVerdict()
+	work.baseline, work.post = baseline, post
 	return f
 }
 

@@ -32,7 +32,14 @@ type ContentLossEvidence struct {
 func countContentLoss(units []contentUnit, start, end, until time.Duration) ContentLossCounts {
 	out := ContentLossCounts{Trusted: true}
 	window := EventMeasurement{WindowStart: start, WindowEnd: end, ObservedUntil: until}
-	ordered := append([]contentUnit(nil), units...)
+	// Only members of this window affect counts or the consecutive loss run.
+	// Filter before sorting to avoid copying the entire retained recording.
+	var ordered []contentUnit
+	for _, u := range units {
+		if u.written && u.at >= start && u.at < end {
+			ordered = append(ordered, u)
+		}
+	}
 	sort.Slice(ordered, func(i, j int) bool {
 		if ordered[i].at == ordered[j].at {
 			return ordered[i].identity < ordered[j].identity

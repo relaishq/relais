@@ -594,6 +594,7 @@ func (r *recorder) decodeInput(i int) ([]vp8Frame, image.Point) {
 
 // report returns the measurements. Call it after hangup.
 func (r *recorder) report() *Report {
+	began := time.Now()
 	r.mu.Lock()
 
 	rep := &Report{
@@ -717,5 +718,6 @@ func (r *recorder) report() *Report {
 		}
 	}
 
+	rep.ReportBuildDuration = time.Since(began)
 	return rep
 }

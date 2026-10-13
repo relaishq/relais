@@ -3,6 +3,7 @@ package callharness
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"sort"
 	"time"
@@ -81,23 +82,63 @@ func invalidateDistributedContent(m *EventMeasurement, cause string) {
 // only varying verdict quantity (recovery delay) is affine in event start; its
 // limit crossing is included too. Evaluate the boundary and both adjacent
 // nanoseconds to cover strict and inclusive comparisons, not a sampling grid.
-func (r *recorder) eventClassificationPoints(limit time.Duration, floors []time.Duration) (starts, ends []time.Duration) {
+func (r *recorder) eventClassificationPoints(limit time.Duration, floors []time.Duration, startBounds, endBounds DurationInterval) (starts, ends []time.Duration) {
 	policy := r.freshnessPolicy.defaults()
-	starts = []time.Duration{0, r.historyStart + baselineWindow, limit - policy.EvaluationWindow()}
-	ends = []time.Duration{limit - contentWindowMargin - contentSettleWindow}
-	for _, floor := range floors {
-		starts = append(starts, floor+baselineWindow)
+	// Restrict retained boundaries, never the cells evaluated. End bounds also
+	// cover the planned-span translation into start boundaries.
+	var packets []time.Duration
+	for _, t := range r.tracks {
+		packets = append(packets, t.arrivals...)
 	}
+	slices.Sort(packets)
+	appendStart := func(at time.Duration) {
+		if at >= startBounds.Lower && at <= startBounds.Upper {
+			starts = append(starts, at)
+		}
+	}
+	appendEnd := func(at time.Duration) {
+		if at >= endBounds.Lower && at <= endBounds.Upper {
+			ends = append(ends, at)
+		}
+	}
+	thresholdsVisited := 0
+	predecessor := func(at time.Duration) {
+		thresholdsVisited++
+		if thresholdsVisited%1024 == 0 {
+			runtime.Gosched()
+		}
+		i := sort.Search(len(packets), func(i int) bool { return packets[i] > at }) - 1
+		if i >= 0 {
+			appendEnd(packets[i])
+		}
+	}
+	addEnd := func(at time.Duration) { appendEnd(at); predecessor(at) }
+	appendStart(0)
+	appendStart(r.historyStart + baselineWindow)
+	appendStart(limit - policy.EvaluationWindow())
+	addEnd(limit - contentWindowMargin - contentSettleWindow)
+	for _, floor := range floors {
+		appendStart(floor + baselineWindow)
+	}
+	unitsVisited := 0
 	unit := func(u contentUnit) {
-		starts = append(starts, u.at, u.at+contentWindowMargin, u.returnedAt, u.returnedAt+baselineWindow, u.returnedAt-policy.EvaluationWindow(), u.returnedAt-policy.RecoveryLimit)
-		ends = append(ends, u.at-contentWindowMargin, u.returnedAt-contentWindowMargin-contentSettleWindow, u.returnedAt)
+		unitsVisited++
+		if unitsVisited%256 == 0 {
+			runtime.Gosched()
+		}
+		for _, at := range []time.Duration{u.at, u.at + contentWindowMargin, u.returnedAt, u.returnedAt + baselineWindow, u.returnedAt - policy.EvaluationWindow(), u.returnedAt - policy.RecoveryLimit} {
+			appendStart(at)
+		}
+		for _, at := range []time.Duration{u.at - contentWindowMargin, u.returnedAt - contentWindowMargin - contentSettleWindow, u.returnedAt} {
+			addEnd(at)
+		}
 	}
 	for _, u := range r.sentAudioUnits {
 		unit(u)
 	}
 	for _, f := range r.sentVideoFrames {
 		unit(f.unit())
-		starts = append(starts, f.requestedAt)
+		appendStart(f.requestedAt)
 	}
 	for _, u := range r.repeatedAudioReturns {
 		unit(u)
@@ -119,60 +160,56 @@ func (r *recorder) eventClassificationPoints(limit time.Duration, floors []time.
 			gap := t.arrivals[i] - t.arrivals[i-1]
 			margin := i < len(t.headers) && int16(t.headers[i].seq-t.headers[i-1].seq) >= 8192-5500
 			if margin || gap > max(50*time.Millisecond, 3*interval) {
-				starts = append(starts, t.arrivals[i])
+				appendStart(t.arrivals[i])
 			}
 		}
-		starts = append(starts, t.unmatchedTimes...)
 		for _, at := range t.unmatchedTimes {
-			starts = append(starts, at+baselineWindow, at-policy.EvaluationWindow())
+			appendStart(at)
+		}
+		for _, at := range t.unmatchedTimes {
+			appendStart(at + baselineWindow)
+			appendStart(at - policy.EvaluationWindow())
 		}
 
 		if t.video != nil {
 			for _, f := range t.video.frames {
-				starts = append(starts, f.at, f.source.at, f.source.returnedAt, f.source.requestedAt, f.source.at+contentWindowMargin)
-				ends = append(ends, f.at, f.source.at, f.source.returnedAt)
+				for _, at := range []time.Duration{f.at, f.source.at, f.source.returnedAt, f.source.requestedAt, f.source.at + contentWindowMargin} {
+					appendStart(at)
+				}
+				addEnd(f.at)
+				addEnd(f.source.at)
+				addEnd(f.source.returnedAt)
 				unit(f.source.unit())
 			}
 			for _, s := range t.video.sampleResults {
-				starts = append(starts, s.at)
+				appendStart(s.at)
 			}
 		}
 	}
-	// For a move, resume is the first RTP arrival at/after end. Its
-	// classification changes only when that arrival crosses a send, return,
-	// decode or content-window boundary. Dense fragments between two such
-	// observations need only their first/last resume values (the endpoints
-	// already cover duration extrema). Retain the predecessor packet at each
-	// boundary, with adjacent-nanosecond evaluations supplied by the caller.
-	var packets []time.Duration
-	for _, t := range r.tracks {
-		packets = append(packets, t.arrivals...)
-	}
-	slices.Sort(packets)
-	thresholds := slices.Clone(ends)
+	// Include predecessors of every original threshold, including thresholds
+	// outside the bounds whose predecessor is inside the event interval.
 	for _, u := range r.sentAudioUnits {
-		thresholds = append(thresholds, u.at, u.returnedAt)
+		predecessor(u.at)
+		predecessor(u.returnedAt)
 	}
 	for _, f := range r.sentVideoFrames {
-		thresholds = append(thresholds, f.at, f.returnedAt)
+		predecessor(f.at)
+		predecessor(f.returnedAt)
 	}
 	for _, u := range r.repeatedAudioReturns {
-		thresholds = append(thresholds, u.at, u.returnedAt)
+		predecessor(u.at)
+		predecessor(u.returnedAt)
 	}
 	for _, u := range r.repeatedVideoReturns {
-		thresholds = append(thresholds, u.at, u.returnedAt)
+		predecessor(u.at)
+		predecessor(u.returnedAt)
 	}
 	if len(packets) > 0 {
-		ends = append(ends, packets[len(packets)-1])
-		for _, at := range thresholds {
-			i := sort.Search(len(packets), func(i int) bool { return packets[i] > at }) - 1
-			if i >= 0 {
-				ends = append(ends, packets[i])
-			}
-		}
+		appendEnd(packets[len(packets)-1])
 	}
 	return starts, ends
 }
+
 func classificationPoints(lo, hi time.Duration, boundaries []time.Duration) []time.Duration {
 	points := []time.Duration{lo, hi}
 	for _, at := range boundaries {
@@ -259,16 +296,31 @@ func measurementDurations(ranges map[string]DurationInterval, p MoveReport, m Ev
 	recordDuration(ranges, "first_live", m.FirstLiveFrame, m.VideoExpected && m.FirstLiveFrame > 0)
 	first := time.Duration(0)
 	if m.VideoExpected && m.MediaResumedAt > 0 {
-		for _, t := range r.tracks {
-			if t.video != nil {
-				for _, f := range t.video.frames {
-					if f.decodable && f.at >= m.MediaResumedAt && f.at < limit && (first == 0 || f.at < first) {
-						first = f.at
+		if r.prepared != nil {
+			frames := r.prepared.frames
+			i := sort.Search(len(frames), func(i int) bool { return frames[i].at >= m.MediaResumedAt })
+			for _, f := range frames[i:] {
+				if f.at >= limit {
+					break
+				}
+				if f.decodable {
+					first = f.at
+					break
+				}
+			}
+		} else {
+			for _, t := range r.tracks {
+				if t.video != nil {
+					for _, f := range t.video.frames {
+						if f.decodable && f.at >= m.MediaResumedAt && f.at < limit && (first == 0 || f.at < first) {
+							first = f.at
+						}
 					}
 				}
 			}
 		}
 	}
+
 	recordDuration(ranges, "first_content", first-p.Start, first > 0)
 }
 func nextBaselineFloor(p MoveReport, m EventMeasurement, current time.Duration) time.Duration {
@@ -318,6 +370,10 @@ func (r *recorder) selectDistributedPoint(report *MoveReport) {
 // rate error, so WAN offset uncertainty cannot make a short move reverse time.
 func (r *recorder) classifyDistributedEvent(report *MoveReport, limit time.Duration, floor DurationInterval, first []FirstBaselines, self bool) {
 	d := report.Distributed
+	if r.prepared != nil {
+		clear(r.prepared.audioWork.cache)
+		clear(r.prepared.videoWork.cache)
+	}
 	if !d.Mapped {
 		invalidateDistributedContent(&report.Measurement, "event clock mapping unavailable")
 		d.BaselineFloor = DurationInterval{Lower: floor.Lower, Upper: max(floor.Upper, limit)}
@@ -331,10 +387,18 @@ func (r *recorder) classifyDistributedEvent(report *MoveReport, limit time.Durat
 	d.BaselineFloor = DurationInterval{Lower: time.Duration(math.MaxInt64), Upper: time.Duration(math.MinInt64)}
 	var agreements [len(contentMetricNames)]verdictAgreement
 	floors := r.floorClassificationPoints(floor)
-	startBoundaries, endBoundaries := r.eventClassificationPoints(limit, floors)
 	var span DurationInterval
 	if report.Kind == "move" {
 		span = r.plannedMoveSpan(report.Receipt)
+	}
+	startBounds := DurationInterval{Lower: lo, Upper: hi}
+	endBounds := DurationInterval{Lower: endLo, Upper: endHi}
+	if report.Kind == "move" {
+		endBounds.Lower = min(endLo, lo+span.Lower)
+		endBounds.Upper = max(endHi, hi+span.Upper)
+	}
+	startBoundaries, endBoundaries := r.eventClassificationPoints(limit, floors, startBounds, endBounds)
+	if report.Kind == "move" {
 		for _, at := range endBoundaries {
 			startBoundaries = append(startBoundaries, at-span.Lower, at-span.Upper)
 		}
@@ -366,6 +430,9 @@ func (r *recorder) classifyDistributedEvent(report *MoveReport, limit time.Durat
 				return
 			}
 			d.Evaluations++
+			if d.Evaluations%32 == 0 {
+				runtime.Gosched()
+			}
 			candidate := m
 			normalizeEventFreshness(&candidate, ref)
 			if !self && len(first) == 0 {

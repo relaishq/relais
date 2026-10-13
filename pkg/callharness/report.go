@@ -11,7 +11,10 @@ import (
 // Report is what the caller observed during one call. Times are offsets from
 // the moment the caller started dialing.
 type Report struct {
-	Distributed *DistributedRecording `json:"distributed,omitempty"`
+	// ReportBuildDuration measures evidence snapshot, evaluation and judgment.
+	// It excludes call teardown, optional offline decoding and JSON transport.
+	ReportBuildDuration time.Duration         `json:"report_build_duration_ns,omitempty"`
+	Distributed         *DistributedRecording `json:"distributed,omitempty"`
 
 	Recording RecordingReport
 	// StartedAt aligns packet observations across calls sharing a worker.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -87,6 +88,49 @@ func denseDistributedCall(t *testing.T, video bool, rtt, bound time.Duration) (*
 	b := OffsetInterval{Lower: -bound, Upper: bound}
 	r.distributed = &DistributedOptions{RunID: "run", Clock: clock, ControlOffset: b, WorkerOffset: b}
 	return r, &Call{rec: r, remoteUfrag: "session"}
+}
+
+// Match the live recorder's repeat lists: first-return index entries and raw
+// repeated returns share a content identity, but repeats have no ordinal yet.
+func addDenseRepeatedReturns(r *recorder) {
+	for key, u := range r.sentAudioUnits {
+		if int(u.at/opusFrameDuration)%8 != 0 {
+			continue
+		}
+		u.identity, u.replayed = key, true
+		u.returnedAt += 3 * time.Millisecond
+		r.repeatedAudioReturns = append(r.repeatedAudioReturns, u)
+	}
+	for key, f := range r.sentVideoFrames {
+		if f.identity%8 != 0 {
+			continue
+		}
+		u := f.unit()
+		u.identity = strconv.FormatUint(f.identity, 10) + ":" + strconv.FormatUint(uint64(key), 10)
+		u.replayed = true
+		u.returnedAt += 3 * time.Millisecond
+		r.repeatedVideoReturns = append(r.repeatedVideoReturns, u)
+	}
+	for _, units := range [][]contentUnit{r.repeatedAudioReturns, r.repeatedVideoReturns} {
+		slices.SortFunc(units, func(a, b contentUnit) int { return cmp.Compare(a.returnedAt, b.returnedAt) })
+	}
+	for _, track := range r.tracks {
+		track.unmatchedTimes = []time.Duration{5200 * time.Millisecond, 11200 * time.Millisecond}
+		if track.video != nil {
+			var repeats []frameMark
+			for _, f := range track.video.frames {
+				if f.source.identity%8 != 0 {
+					continue
+				}
+				f.repeated = true
+				f.at += 3 * time.Millisecond
+				f.receivedAt += 3 * time.Millisecond
+				repeats = append(repeats, f)
+			}
+			track.video.frames = append(track.video.frames, repeats...)
+			slices.SortFunc(track.video.frames, func(a, b frameMark) int { return cmp.Compare(a.at, b.at) })
+		}
+	}
 }
 
 func recordDenseEvent(t *testing.T, r *recorder, c *Call, op, kind string, start, end time.Duration) {
