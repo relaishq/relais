@@ -369,6 +369,12 @@ func (r *recorder) selectDistributedPoint(report *MoveReport) {
 // share a control clock: keep their measured span, widened only for relative
 // rate error, so WAN offset uncertainty cannot make a short move reverse time.
 func (r *recorder) classifyDistributedEvent(report *MoveReport, limit time.Duration, floor DurationInterval, first []FirstBaselines, self bool) {
+	r.classifyDistributedEventWithBudget(report, limit, floor, first, self, maxClassificationEvaluations)
+}
+
+// The caller always uses the fixed production cap. Tests can remove the cap
+// to compare complete classification evidence against the reference algorithm.
+func (r *recorder) classifyDistributedEventWithBudget(report *MoveReport, limit time.Duration, floor DurationInterval, first []FirstBaselines, self bool, budget int) {
 	d := report.Distributed
 	if r.prepared != nil {
 		clear(r.prepared.audioWork.cache)
@@ -407,6 +413,16 @@ func (r *recorder) classifyDistributedEvent(report *MoveReport, limit time.Durat
 	starts := classificationPoints(lo, hi, startBoundaries)
 	complete := true
 	evaluate := func(start, end, baselineFloor time.Duration) {
+		// One cell is evaluated against every first-baseline reference. References
+		// do not consume extra budget and must never be cut off within a cell.
+		if d.Evaluations >= budget {
+			complete = false
+			return
+		}
+		d.Evaluations++
+		if d.Evaluations%32 == 0 {
+			runtime.Gosched()
+		}
 		p := *report
 		p.Start, p.End = start, end
 		if p.Kind == "takeover" {
@@ -425,14 +441,6 @@ func (r *recorder) classifyDistributedEvent(report *MoveReport, limit time.Durat
 			refs = []FirstBaselines{firstBaselinesOf(m)}
 		}
 		for _, ref := range refs {
-			if d.Evaluations >= maxClassificationEvaluations {
-				complete = false
-				return
-			}
-			d.Evaluations++
-			if d.Evaluations%32 == 0 {
-				runtime.Gosched()
-			}
 			candidate := m
 			normalizeEventFreshness(&candidate, ref)
 			if !self && len(first) == 0 {
@@ -508,7 +516,7 @@ func (r *recorder) classifyDistributedEvent(report *MoveReport, limit time.Durat
 	}
 	for i, v := range contentVerdicts(&report.Measurement) {
 		if !complete || d.Evaluations == 0 {
-			*v = MetricVerdict{Reasons: []string{fmt.Sprintf("interval evaluation unavailable or exceeds %d evaluations; width=%s", maxClassificationEvaluations, width)}}
+			*v = MetricVerdict{Reasons: []string{fmt.Sprintf("interval evaluation unavailable or exceeds %d evaluations; width=%s", budget, width)}}
 		} else {
 			*v = agreements[i].result(contentMetricNames[i], max(width, endHi-endLo))
 		}

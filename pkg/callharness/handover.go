@@ -487,7 +487,11 @@ func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
 		if report.Distributed != nil {
 			self := len(r.savedMoves) == 0 && len(reports) == 0
 			r.classifyDistributedEvent(&report, limit, distributedFloor, firstDistributed, self)
-			firstDistributed = report.Distributed.FirstBaselines
+			// Only a completed self evaluation establishes the call's first
+			// baseline. Later exhausted/unmapped events cannot erase that evidence.
+			if self {
+				firstDistributed = report.Distributed.FirstBaselines
+			}
 			distributedFloor = report.Distributed.BaselineFloor
 		}
 		r.failIdentityMetrics(&report.Measurement)

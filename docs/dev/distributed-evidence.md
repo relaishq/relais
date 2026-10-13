@@ -229,9 +229,10 @@ Recording snapshots only event-relevant evidence under the recorder lock,
 using send/return time indexes. Classification runs outside that lock and reads
 indexed windows; it does not pause caller sends or packet recording. Video unit
 identities are prepared once per snapshot.
-Evaluation is bounded at 4096 classification cells/references per event. An
+Evaluation is bounded at 4096 classification cells (start x end x floor) per
+event; every first-event baseline reference is evaluated within each cell. An
 exhausted budget is explicitly inconclusive, rather than a partial-sampling
-pass. Known server loss and independent content corruption still fail.
+pass, and it does not erase the first-event baselines of later events. Known server loss and independent content corruption still fail.
 
 For a WAN probe, the full offset interval has width RTT minus frontend handler
 processing time. RTT/2 is its **half-width**, not its full width. A 20–70 ms RTT

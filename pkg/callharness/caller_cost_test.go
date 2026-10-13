@@ -18,9 +18,14 @@ import (
 // packets/frame), production indexes, three callers sharing one scheduler P.
 func costCalls(t *testing.T, events int) []*Call {
 	t.Helper()
+	return costCallsWithClock(t, events, 50*time.Millisecond, time.Millisecond)
+}
+
+func costCallsWithClock(t *testing.T, events int, rtt, bound time.Duration) []*Call {
+	t.Helper()
 	calls := make([]*Call, 3)
 	for i := range calls {
-		r, c := denseDistributedCall(t, true, 50*time.Millisecond, time.Millisecond)
+		r, c := denseDistributedCall(t, true, rtt, bound)
 		addDenseRepeatedReturns(r)
 		for key, u := range r.sentAudioUnits {
 			r.audioSends = append(r.audioSends, evidenceRef{at: u.at, audio: key})
@@ -159,4 +164,34 @@ func TestCallerCostPreparedPointEvidenceEquivalent(t *testing.T) {
 	actual := r.eventMeasurement(point, 10*time.Second, 0)
 	t.Logf("post-event samples audio legacy=%d new=%d; video legacy=%d new=%d", expected.Audio.PostEventSamples, actual.Audio.PostEventSamples, expected.Video.PostEventSamples, actual.Video.PostEventSamples)
 	require.Equal(t, expected, actual)
+}
+
+// Use the same retained recordings and production indexes as the #118 cost
+// harness, with a measured clock width rather than the old WAN-sized bound.
+func TestCallerEvaluationCounts(t *testing.T) {
+	if os.Getenv("RELAIS_MEASURE_CALLER_COST") != "1" {
+		t.Skip("opt-in retained-history evaluation counts")
+	}
+	prev := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(prev)
+	for _, tc := range []struct{ rtt, bound time.Duration }{{3 * time.Millisecond, 2 * time.Millisecond}, {4 * time.Millisecond, 2 * time.Millisecond}, {3 * time.Millisecond, 3 * time.Millisecond}, {4 * time.Millisecond, 3 * time.Millisecond}} {
+		calls := costCallsWithClock(t, 2, tc.rtt, tc.bound)
+		for _, c := range calls {
+			r := c.rec
+			reports := r.measureMoves(r.hungUpAt, len(r.moves))
+			next, _, err := r.mappedMoveTimes(r.moves[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			moveCells := budgetCells(r, reports[0], next.Lower, DurationInterval{})
+			killCells := budgetCells(r, reports[1], r.hungUpAt, reports[0].Distributed.BaselineFloor)
+			if reports[0].Distributed.Evaluations != moveCells || reports[1].Distributed.Evaluations != killCells {
+				t.Fatal("reported evaluations differ from cell cardinality")
+			}
+			if moveCells >= maxClassificationEvaluations || killCells >= maxClassificationEvaluations {
+				t.Fatal("narrow clock interval exhausted the cell budget")
+			}
+			t.Logf("RTT=%s host_bound=±%s mapped_width=%s move=%d cells (%d first baselines), takeover=%d cells", tc.rtt, tc.bound, reports[0].Distributed.Start.Latest.Sub(reports[0].Distributed.Start.Earliest), moveCells, len(reports[0].Distributed.FirstBaselines), killCells)
+		}
+	}
 }
