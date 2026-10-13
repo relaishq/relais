@@ -82,7 +82,7 @@ func invalidateDistributedContent(m *EventMeasurement, cause string) {
 // only varying verdict quantity (recovery delay) is affine in event start; its
 // limit crossing is included too. Evaluate the boundary and both adjacent
 // nanoseconds to cover strict and inclusive comparisons, not a sampling grid.
-func (r *recorder) eventClassificationPoints(limit time.Duration, floors []time.Duration, bounds ...DurationInterval) (starts, ends []time.Duration) {
+func (r *recorder) eventClassificationPoints(limit time.Duration, floors []time.Duration, startBounds, endBounds DurationInterval) (starts, ends []time.Duration) {
 	policy := r.freshnessPolicy.defaults()
 	// Restrict retained boundaries, never the cells evaluated. End bounds also
 	// cover the planned-span translation into start boundaries.
@@ -92,12 +92,12 @@ func (r *recorder) eventClassificationPoints(limit time.Duration, floors []time.
 	}
 	slices.Sort(packets)
 	appendStart := func(at time.Duration) {
-		if len(bounds) == 0 || at >= bounds[0].Lower && at <= bounds[0].Upper {
+		if at >= startBounds.Lower && at <= startBounds.Upper {
 			starts = append(starts, at)
 		}
 	}
 	appendEnd := func(at time.Duration) {
-		if len(bounds) == 0 || at >= bounds[1].Lower && at <= bounds[1].Upper {
+		if at >= endBounds.Lower && at <= endBounds.Upper {
 			ends = append(ends, at)
 		}
 	}

@@ -45,7 +45,12 @@ report building plus JSON encoding below 10 s for the offline fixture. Timing
 is opt-in because shared runner load and race instrumentation affect results.
 The ordinary tests compare complete `MoveReport` evidence, judge outcomes,
 freshness fields, content-loss counts and classification points against frozen
-pre-change implementations. The expensive full-budget oracle is opt-in.
+pre-change implementations. The expensive full-budget oracle is opt-in. Run
+`RELAIS_MEASURE_CALLER_COST=1 go test ./pkg/callharness -run '^TestDistributedReportBudgetEvidenceEquivalent$' -count=1 -v`
+to exercise the 4096-cap legacy comparison; ordinary `go test` skips it.
+The dense repeated-return variant and cost fixture include audio/video repeats
+and unmatched observations. Their published point fields, including unique
+`PostEventSamples`, are compared against the legacy implementation.
 
 ## Cost and change
 

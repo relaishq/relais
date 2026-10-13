@@ -589,7 +589,7 @@ func (r *recorder) legacyMeasureEvent(move MoveReport, limit, baselineFloor time
 
 func TestDistributedReportEvidenceEquivalent(t *testing.T) {
 	for _, bound := range []time.Duration{0, time.Millisecond, 25 * time.Millisecond} {
-		for _, variant := range []string{"normal", "missing", "unknown", "reversed"} {
+		for _, variant := range []string{"normal", "missing", "unknown", "reversed", "repeated"} {
 			t.Run(fmt.Sprint(bound, "/", variant), func(t *testing.T) {
 				r, c := denseDistributedCall(t, true, 50*time.Millisecond, bound)
 				recordDenseEvent(t, r, c, "move", "move", 5*time.Second, 5030*time.Millisecond)
@@ -605,6 +605,8 @@ func TestDistributedReportEvidenceEquivalent(t *testing.T) {
 				case "unknown":
 					r.contentIdentityErrors = 1
 					r.tracks[0].unmatchedTimes = []time.Duration{5100 * time.Millisecond}
+				case "repeated":
+					addDenseRepeatedReturns(r)
 				case "reversed":
 					slices.Reverse(r.moves)
 				}

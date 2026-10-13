@@ -209,3 +209,20 @@ func TestIndexedFreshnessCacheEquivalent(t *testing.T) {
 		}
 	}
 }
+
+func TestFreshnessCacheReasonsDoNotAlias(t *testing.T) {
+	r := newRecorder()
+	work := &freshnessWorkspace{ordered: true}
+	units := []contentUnit{
+		{at: time.Second, returnedAt: 1010 * time.Millisecond, identity: "a", written: true},
+		{at: 1100 * time.Millisecond, returnedAt: 1110 * time.Millisecond, identity: "b", written: true},
+		{at: 1200 * time.Millisecond, returnedAt: 1400 * time.Millisecond, identity: "c", written: true},
+	}
+	first := r.measureFreshnessCell(units, 2*time.Second, 2*time.Second, 2100*time.Millisecond, 0, work)
+	require.Len(t, first.Verdict.Reasons, 3)
+	first.Verdict.Reasons = append(first.Verdict.Reasons, "first consumer")
+	second := r.measureFreshnessCell(units, 2*time.Second, 2*time.Second, 2100*time.Millisecond, 0, work)
+	second.Verdict.Reasons = append(second.Verdict.Reasons, "second consumer")
+	require.Equal(t, "first consumer", first.Verdict.Reasons[3])
+	require.Equal(t, "second consumer", second.Verdict.Reasons[3])
+}

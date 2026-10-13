@@ -756,6 +756,7 @@ func (r *recorder) measureFreshnessCell(units []contentUnit, start, resumed, lim
 	if work.cache == nil {
 		work.cache = make(map[freshnessKey]FreshnessReport)
 	}
+	f.Verdict.Reasons = slices.Clip(f.Verdict.Reasons)
 	work.cache[key] = f
 	return f
 }
@@ -786,6 +787,10 @@ func measureFreshnessWithWorkspace(units []contentUnit, start, resumed, limit, b
 		}
 		if unit.identity == "" {
 			unit.identity = strconv.Itoa(i)
+			unit.ordinal = work.ordinals[unit.identity]
+		} else if unit.ordinal == 0 {
+			// Published point measurements mix indexed sends with raw repeats.
+			// Resolve both to the same identity before deduplicating observations.
 			unit.ordinal = work.ordinals[unit.identity]
 		}
 		var seenBefore bool

@@ -10,6 +10,8 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Offline reproduction: retained 185s at 50Hz audio/30fps video (three
@@ -19,6 +21,7 @@ func costCalls(t *testing.T, events int) []*Call {
 	calls := make([]*Call, 3)
 	for i := range calls {
 		r, c := denseDistributedCall(t, true, 50*time.Millisecond, time.Millisecond)
+		addDenseRepeatedReturns(r)
 		for key, u := range r.sentAudioUnits {
 			r.audioSends = append(r.audioSends, evidenceRef{at: u.at, audio: key})
 			r.audioReturns = append(r.audioReturns, evidenceRef{at: u.returnedAt, audio: key})
@@ -146,4 +149,14 @@ func TestCallerCost(t *testing.T) {
 			t.Fatal("final report exceeds offline 10s budget")
 		}
 	}
+}
+
+func TestCallerCostPreparedPointEvidenceEquivalent(t *testing.T) {
+	r := costCalls(t, 2)[0].rec
+	r.prepareMeasurementIndex()
+	point := MoveReport{Kind: "move", Start: 5 * time.Second, End: 5030 * time.Millisecond}
+	expected := r.legacyMeasureEvent(point, 10*time.Second, 0, false)
+	actual := r.eventMeasurement(point, 10*time.Second, 0)
+	t.Logf("post-event samples audio legacy=%d new=%d; video legacy=%d new=%d", expected.Audio.PostEventSamples, actual.Audio.PostEventSamples, expected.Video.PostEventSamples, actual.Video.PostEventSamples)
+	require.Equal(t, expected, actual)
 }
