@@ -80,8 +80,8 @@ func invalidateDistributedContent(m *EventMeasurement, cause string) {
 // classifyContent, videoRecovery and online decode coverage. Between boundaries
 // membership, identities, percentiles and lateness counts are constant. The
 // only varying verdict quantity (recovery delay) is affine in event start; its
-// limit crossing is included too. Evaluate the boundary and both adjacent
-// nanoseconds to cover strict and inclusive comparisons, not a sampling grid.
+// limit crossing is included too. End/floor grids need a boundary and its left
+// neighbour. Start grids also retain right neighbours for affine duration extrema.
 func (r *recorder) eventClassificationPoints(limit time.Duration, floors []time.Duration, startBounds, endBounds DurationInterval) (starts, ends []time.Duration) {
 	policy := r.freshnessPolicy.defaults()
 	// Restrict retained boundaries, never the cells evaluated. End bounds also
@@ -220,13 +220,25 @@ func classificationPoints(lo, hi time.Duration, boundaries []time.Duration) []ti
 		if at > lo {
 			points = append(points, at-1)
 		}
-		if at < hi {
+	}
+	slices.Sort(points)
+	return slices.Compact(points)
+}
+
+// Start is the origin of elapsed durations. A right-hand branch can jump to a
+// new observation; its greatest elapsed duration occurs at b+1, not next-1.
+// Keep that corner even though the two points suffice for constant verdicts.
+func classificationStartPoints(lo, hi time.Duration, boundaries []time.Duration) []time.Duration {
+	points := classificationPoints(lo, hi, boundaries)
+	for _, at := range boundaries {
+		if at >= lo && at < hi {
 			points = append(points, at+1)
 		}
 	}
 	slices.Sort(points)
 	return slices.Compact(points)
 }
+
 func (r *recorder) floorClassificationPoints(floor DurationInterval) []time.Duration {
 	var boundaries []time.Duration
 	for _, u := range r.sentAudioUnits {
@@ -238,6 +250,23 @@ func (r *recorder) floorClassificationPoints(floor DurationInterval) []time.Dura
 	return classificationPoints(floor.Lower, floor.Upper, boundaries)
 }
 
+// A previous recovery floor at/before every possible baseline window start
+// cannot change any measurement: BaselineStart = max(start-window, floor).
+// Takeover's next floor is computed from recovery/end, so one representative
+// suffices. Moves carry the input floor forward; retain its two extrema.
+func (r *recorder) classificationFloors(floor DurationInterval, startLower time.Duration, kind string) []time.Duration {
+	if floor.Upper <= max(0, startLower-baselineWindow) {
+		if kind == "takeover" || floor.Lower == floor.Upper {
+			return []time.Duration{floor.Lower}
+		}
+		return []time.Duration{floor.Lower, floor.Upper}
+	}
+	return r.floorClassificationPoints(floor)
+}
+
+// Keep the existing 4096-cell limit. The replay fixture's 15 ms takeover uses
+// 1224 cells after removing dominated floors (< half the cap). Recheck the
+// opt-in CPU and pacer gates before resizing; see docs/dev/takeover-budget.md.
 const maxClassificationEvaluations = 4096
 
 type verdictAgreement struct {
@@ -392,7 +421,7 @@ func (r *recorder) classifyDistributedEventWithBudget(report *MoveReport, limit 
 	d.FirstBaselines = slices.Clone(first)
 	d.BaselineFloor = DurationInterval{Lower: time.Duration(math.MaxInt64), Upper: time.Duration(math.MinInt64)}
 	var agreements [len(contentMetricNames)]verdictAgreement
-	floors := r.floorClassificationPoints(floor)
+	floors := r.classificationFloors(floor, lo, report.Kind)
 	var span DurationInterval
 	if report.Kind == "move" {
 		span = r.plannedMoveSpan(report.Receipt)
@@ -410,7 +439,7 @@ func (r *recorder) classifyDistributedEventWithBudget(report *MoveReport, limit 
 		}
 		startBoundaries = append(startBoundaries, endLo-span.Lower, endLo-span.Upper, endHi-span.Lower, endHi-span.Upper)
 	}
-	starts := classificationPoints(lo, hi, startBoundaries)
+	starts := classificationStartPoints(lo, hi, startBoundaries)
 	complete := true
 	evaluate := func(start, end, baselineFloor time.Duration) {
 		// One cell is evaluated against every first-baseline reference. References

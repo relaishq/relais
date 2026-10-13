@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -57,7 +58,15 @@ func TestCallerCost(t *testing.T) {
 	if os.Getenv("RELAIS_MEASURE_CALLER_COST") != "1" {
 		t.Skip("opt-in offline timing; run without race instrumentation")
 	}
-	prev := runtime.GOMAXPROCS(1)
+	procs := 1
+	if value := os.Getenv("RELAIS_CALLER_COST_PROCS"); value != "" {
+		var err error
+		procs, err = strconv.Atoi(value)
+		if err != nil || procs < 1 || procs > 2 {
+			t.Fatal("RELAIS_CALLER_COST_PROCS must be 1 or 2")
+		}
+	}
+	prev := runtime.GOMAXPROCS(procs)
 	defer runtime.GOMAXPROCS(prev)
 	calls := costCalls(t, 30)
 	var before, after runtime.MemStats
