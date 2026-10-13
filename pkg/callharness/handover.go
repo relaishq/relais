@@ -364,9 +364,29 @@ func (r *recorder) moveReports() []MoveReport {
 // measureMoves measures only the pending prefix requested by the caller. A
 // maintenance tick must not remeasure later events whose history is retained.
 func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
+	// Receipts may arrive out of event order. Keep their storage order (also
+	// used by maintenance snapshots), but find window limits on the mapped
+	// event-time axis. An unmapped receipt provides no safe truncation point.
+	var mappedStarts []time.Duration
+	var startsByEvent map[*DistributedEvent]time.Duration
 	if r.distributed != nil {
 		r.prepareMeasurementIndex()
 		defer func() { r.prepared = nil }()
+		startsByEvent = make(map[*DistributedEvent]time.Duration, len(r.moves))
+		for _, move := range r.moves {
+			start, end, err := r.mappedMoveTimes(move)
+			if err != nil {
+				continue
+			}
+			startTime := TimeInterval{Earliest: r.start.Add(start.Lower), Latest: r.start.Add(start.Upper)}
+			endTime := TimeInterval{Earliest: r.start.Add(end.Lower), Latest: r.start.Add(end.Upper)}
+			if !distributedEventOrderingValid(move, startTime, endTime) {
+				continue
+			}
+			mappedStarts = append(mappedStarts, start.Lower)
+			startsByEvent[move.event] = start.Lower
+		}
+		slices.Sort(mappedStarts)
 	}
 	reports := make([]MoveReport, 0, count)
 	baselineFloor := r.baselineFloor
@@ -426,17 +446,15 @@ func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
 			report.Tracks = append(report.Tracks, around)
 		}
 		limit := until
-		if moveIndex+1 < len(r.moves) {
-			next := r.moves[moveIndex+1]
-			if move.event != nil {
-				if start, _, err := r.mappedMoveTimes(next); err == nil {
-					limit = min(limit, start.Lower)
-				} else {
-					limit = min(limit, r.since(next.armedAt))
+		if move.event != nil {
+			if start, ok := startsByEvent[move.event]; ok {
+				next := sort.Search(len(mappedStarts), func(i int) bool { return mappedStarts[i] > start })
+				if next < len(mappedStarts) {
+					limit = min(limit, mappedStarts[next])
 				}
-			} else {
-				limit = min(limit, r.since(next.start))
 			}
+		} else if moveIndex+1 < len(r.moves) {
+			limit = min(limit, r.since(r.moves[moveIndex+1].start))
 		}
 		if report.Kind == "takeover" {
 			report.Recovery = r.videoRecovery(report.Start, limit)

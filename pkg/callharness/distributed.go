@@ -151,6 +151,12 @@ func (c *Call) RecordDistributedEvent(e DistributedEvent) error {
 	return nil
 }
 
+func distributedEventOrderingValid(move moveRecord, start, end TimeInterval) bool {
+	e := move.event
+	return !start.Earliest.Before(move.armedAt) && !start.Latest.After(move.receivedAt) && !end.Latest.After(move.receivedAt) &&
+		(e.Kind != "takeover" || !end.Earliest.Before(start.Latest)) && (e.Kind != "move" || !e.End.Before(e.Start))
+}
+
 func (r *recorder) distributedMeasurement(move moveRecord, until time.Duration) *DistributedMeasurement {
 	e := move.event
 	d := &DistributedMeasurement{Outcome: "pass"}
@@ -187,7 +193,7 @@ func (r *recorder) distributedMeasurement(move moveRecord, until time.Duration) 
 		unknown(err.Error())
 		return d
 	}
-	if d.Start.Earliest.Before(move.armedAt) || d.Start.Latest.After(move.receivedAt) || d.End.Latest.After(move.receivedAt) || (e.Kind == "takeover" && d.End.Earliest.Before(d.Start.Latest)) || (e.Kind == "move" && e.End.Before(e.Start)) {
+	if !distributedEventOrderingValid(move, d.Start, d.End) {
 		unknown("mapped event violates arm/receipt ordering or host clock bound")
 		return d
 	}

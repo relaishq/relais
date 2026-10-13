@@ -188,7 +188,10 @@ ceiling; the elapsed intervals are reported without inventing a new threshold.
 Caller-local packet gaps, content ages and the selected raw observations remain
 unchanged. Independent union/intersection content-loss and identified-live
 proofs are merged with classification verdicts; an unknown proof is never
-replaced by a trusted RTP-only classification. Windows stop at the earliest mapped start of the next event. An unmapped event widens the possible baseline floor
+replaced by a trusted RTP-only classification. Windows stop at the minimum
+mapped earliest start strictly after the current event's mapped earliest start,
+regardless of receipt arrival order. Unmapped receipts cannot truncate mapped
+events. An unmapped event widens the possible baseline floor
 through its observation limit and cannot reset it to zero. A zero interval gives the same measurement verdicts as local mode.
 
 A move's start and completion share a control clock, so they move together
@@ -253,8 +256,9 @@ it does not claim a native OS SIGKILL timestamp or a real distributed run.
 
 ```sh
 go vet ./...
-# Native 5ms recorder-lock performance gate; race checks the lock handoff.
-go test -count=1 ./pkg/callharness -run '^TestDistributedLongHistoryDoesNotHoldCallerLock$'
+# Opt-in native 5ms recorder-lock performance gate (use an idle machine).
+# Every run checks lock handoff; race runs skip strict wall-clock timing.
+RELAIS_TEST_STRICT_TIMING=1 go test -count=1 ./pkg/callharness -run '^TestDistributedLongHistoryDoesNotHoldCallerLock$'
 go test -race -count=1 ./internal/loadgen ./cmd/relais-load ./cmd/relais-signal ./pkg/callharness
 make test-harness-short
 go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run \

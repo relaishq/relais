@@ -219,6 +219,7 @@ func (r *recorder) finishCompact(now time.Duration, count int, reports []MoveRep
 		for key, u := range r.sentAudioUnits {
 			if u.at < cutoff {
 				delete(r.sentAudioUnits, key)
+				delete(r.sentFrames[kindAudio], key)
 			}
 		}
 	}
