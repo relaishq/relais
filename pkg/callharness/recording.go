@@ -117,11 +117,7 @@ func (r *recorder) compact(now time.Duration) {
 		return
 	}
 	r.lastCompact = now
-	for key, a := range r.contentAssemblies {
-		if a.lastAt < now-time.Second {
-			delete(r.contentAssemblies, key)
-		}
-	}
+	r.expireAssemblies(now, false)
 	cutoff := now - r.recording.History
 	if cutoff <= 0 {
 		return
@@ -234,11 +230,7 @@ func (r *recorder) finishCompact(now time.Duration, count int, reports []MoveRep
 			r.sentFrames[kindVideo][f.data] = struct{}{}
 		}
 	}
-	for key, a := range r.contentAssemblies {
-		if a.lastAt < now-time.Second {
-			delete(r.contentAssemblies, key)
-		}
-	}
+	r.expireAssemblies(now, false)
 	r.repeatedAudioReturns = slices.DeleteFunc(r.repeatedAudioReturns, func(u contentUnit) bool { return u.returnedAt < cutoff })
 	r.repeatedVideoReturns = slices.DeleteFunc(r.repeatedVideoReturns, func(u contentUnit) bool { return u.returnedAt < cutoff })
 	for _, t := range r.tracks {
@@ -284,6 +276,19 @@ func (r *recorder) finishCompact(now time.Duration, count int, reports []MoveRep
 	r.audioReturns = pruneEvidenceRefs(r.audioReturns, cutoff)
 	r.videoReturns = pruneEvidenceRefs(r.videoReturns, cutoff)
 	r.historyStart = max(r.historyStart, cutoff)
+}
+
+// expireAssemblies runs under r.mu. Assemblies idle for a second expire.
+// Before the retention cutoff, distributed maintenance keeps unfinished
+// fragments, because a delayed fragment can still complete them. Completed
+// assemblies still expire, so they cannot fill the count limit whose eviction
+// advances historyStart over evidence that time-based retention still covers.
+func (r *recorder) expireAssemblies(now time.Duration, keepUnfinished bool) {
+	for key, a := range r.contentAssemblies {
+		if a.lastAt < now-time.Second && (!keepUnfinished || len(a.parts) == 0) {
+			delete(r.contentAssemblies, key)
+		}
+	}
 }
 
 func (r *recorder) resetConsent(since time.Duration) {

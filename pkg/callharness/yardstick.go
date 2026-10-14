@@ -273,7 +273,8 @@ func (a *contentAssembly) finish(span contentPacketSpan) {
 // returnedVideo measures completeness separately from the arrival-order decoder
 // used by phase 1. It accepts reordered fragments and exact duplicates, and
 // checks the reassembled payload against the send identified by PictureID.
-// Assemblies expire after one second and have fixed count/fragment limits.
+// Idle assemblies expire after one second; before a distributed call outlives
+// its retention, only completed ones do. Fixed count/fragment limits apply.
 // The epoch trailer makes (PictureID, payload) unique across source wraps.
 func (r *recorder) returnedVideo(track *trackRecord, pkt *rtp.Packet, at time.Duration) {
 	var desc codecs.VP8Packet
