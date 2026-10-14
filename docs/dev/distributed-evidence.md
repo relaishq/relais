@@ -215,8 +215,9 @@ unchanged. Independent union/intersection content-loss and identified-live
 proofs are merged with classification verdicts; an unknown proof is never
 replaced by a trusted RTP-only classification. Windows stop at the minimum
 mapped earliest start strictly after the current event's mapped earliest start,
-regardless of receipt arrival order. Unmapped receipts cannot truncate mapped
-events. An unmapped event widens the possible baseline floor
+regardless of receipt arrival order. This includes a later event that
+maintenance already saved before the earlier receipt arrived. Unmapped
+receipts cannot truncate mapped events. An unmapped event widens the possible baseline floor
 through its observation limit and cannot reset it to zero. A zero interval gives the same measurement verdicts as local mode.
 
 A move's start and completion share a control clock, so they move together

@@ -145,3 +145,39 @@ func TestDistributedInvalidReceiptOrderingDoesNotTruncateMappedEvent(t *testing.
 	require.True(t, rep.Moves[0].Measurement.ResumeVerdict.Trusted)
 	require.False(t, rep.Moves[0].Measurement.ResumeVerdict.Failed)
 }
+
+// #115: maintenance saves a later event before an earlier event's receipt
+// arrives. The earlier window still ends at the saved event's mapped start,
+// exactly as it does when both receipts are pending.
+func TestDistributedCompactedLaterEventEndsEarlierWindow(t *testing.T) {
+	measure := func(compactLater bool) (earlier, later MoveReport) {
+		r, c := receiptOrderCall(t, false)
+		r.recording.History = 20 * time.Second
+		recordDenseEvent(t, r, c, "later", "move", 12*time.Second, 12030*time.Millisecond)
+		if compactLater {
+			r.compactRecording(29 * time.Second)
+			require.Len(t, r.savedMoves, 1)
+			require.Empty(t, r.moves)
+		}
+		recordDenseEvent(t, r, c, "earlier", "move", 10500*time.Millisecond, 10530*time.Millisecond)
+		r.hungUp = true
+		rep := r.report()
+		require.Len(t, rep.Moves, 2)
+		for _, m := range rep.Moves {
+			require.True(t, m.Distributed.Mapped, m.Identity.OperationID)
+			if m.Identity.OperationID == "earlier" {
+				earlier = m
+			} else {
+				later = m
+			}
+		}
+		return earlier, later
+	}
+	pending, _ := measure(false)
+	earlier, later := measure(true)
+	require.Less(t, later.Start, earlier.Start+FreshnessPolicy{}.EvaluationWindow(), "the saved event starts inside the earlier evaluation window")
+	require.Equal(t, later.Start, earlier.Measurement.Audio.EvaluationEnd)
+	require.Equal(t, pending.Measurement.Audio, earlier.Measurement.Audio)
+	require.Equal(t, pending.Measurement.ResumeVerdict, earlier.Measurement.ResumeVerdict)
+	require.Equal(t, pending.Distributed.Durations, earlier.Distributed.Durations)
+}
