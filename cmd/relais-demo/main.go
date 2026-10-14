@@ -1,4 +1,4 @@
-// relais-demo owns a browser demo and its separate media processes.
+// relais-demo serves a browser demo with an owned or externally managed cluster.
 package main
 
 import (
@@ -24,7 +24,11 @@ import (
 //go:embed web
 var web embed.FS
 
-type config struct{ Bin, HTTP, Redis, RedisBinary, LocalNetwork, Agent, RelayBuffer string }
+type config struct {
+	Bin, HTTP, Redis, RedisBinary, LocalNetwork, Agent, RelayBuffer string
+	AttachControl, AttachAuthFile, FaultHook, ResultsDir            string
+	ActionTimeout                                                   time.Duration
+}
 
 func processEnv(key, addr, prefix string, withKey bool) []string {
 	env := []string{}
@@ -43,11 +47,14 @@ func processEnv(key, addr, prefix string, withKey bool) []string {
 }
 
 func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*demo, error) {
+	if cfg.AttachControl != "" {
+		return launchAttached(ctx, cfg)
+	}
 	id, err := newLaunchID()
 	if err != nil {
 		return nil, err
 	}
-	token, err := launchToken(cfg.LocalNetwork)
+	token, err := configToken(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +122,10 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 		return nil, err
 	}
 	d := &demo{ctx: ctx, client: &http.Client{Timeout: 10 * time.Second}, control: "http://" + controlAddr, relay: relay.Media, redis: addr, dir: dir, workers: map[string]*workerProcess{}, publicHost: cfg.LocalNetwork, launchToken: token, launchID: id, agentName: selectedAgent(cfg), relayBuffer: selectedRelayBuffer(cfg)}
+	if err := d.prepareResults(cfg.ResultsDir); err != nil {
+		return nil, err
+	}
+	d.actionTimeout = cfg.ActionTimeout
 	usedMedia := map[string]bool{}
 	d.spawn = func(ctx context.Context, name string) (*workerProcess, error) {
 		media, err := freshUDP(usedMedia)
@@ -191,6 +202,9 @@ func selectedRelayBuffer(cfg config) string {
 }
 
 func validateConfig(cfg config) error {
+	if err := validateAttachConfig(cfg); err != nil {
+		return err
+	}
 	if selectedRelayBuffer(cfg) != "on" && selectedRelayBuffer(cfg) != "off" {
 		return errors.New("-relay-buffer must be on or off")
 	}
@@ -217,8 +231,21 @@ func validateConfig(cfg config) error {
 }
 
 func configureFlags(flags *flag.FlagSet, cfg *config) {
-	cfg.RelayBuffer = "on"
-	flags.Func("relay-buffer", "relay caller SRTP buffer: on or off (default on)", func(mode string) error {
+	flags.StringVar(&cfg.AttachControl, "attach-control", "", "existing control base URL; starts no cluster processes")
+	flags.StringVar(&cfg.AttachAuthFile, "attach-auth-file", "", "private API credential file (current API has no credential authentication)")
+	flags.StringVar(&cfg.FaultHook, "fault-hook", "", "executable for attach kill and replacement")
+	cfg.ActionTimeout = 0
+	flags.Func("action-timeout", "deadline including takeover and replacement (0 uses local 15s or attach 90s)", func(value string) error {
+		timeout, err := time.ParseDuration(value)
+		if err != nil || timeout < 0 {
+			return errors.New("-action-timeout must be non-negative")
+		}
+		cfg.ActionTimeout = timeout
+		return nil
+	})
+	flags.StringVar(&cfg.ResultsDir, "results-dir", "", "create-only results upload directory")
+	cfg.RelayBuffer = ""
+	flags.Func("relay-buffer", "relay caller SRTP buffer: on or off (local default on; required in attach mode)", func(mode string) error {
 		if mode != "on" && mode != "off" {
 			return errors.New("-relay-buffer must be on or off")
 		}
