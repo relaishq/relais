@@ -93,6 +93,7 @@ import (
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
 
+	"github.com/relais/internal/udpbuffer"
 	"github.com/relais/internal/workerprobe"
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/sessionstore"
@@ -205,6 +206,10 @@ type Config struct {
 	// socket, set by Socket.NewWorker, is a media socket shared with other
 	// workers; the worker attaches to it instead of listening on ListenAddr.
 	socket *Socket
+
+	// socketBuffers is what the worker's socket, or the shared one,
+	// requested and got.
+	socketBuffers udpbuffer.Result
 }
 
 // RelayConfig puts a media worker behind a relay. A worker behind a relay
@@ -314,6 +319,7 @@ func New(cfg Config) (*Worker, error) {
 		if err != nil {
 			return nil, err
 		}
+		cfg.socketBuffers = cfg.socket.buffers
 
 		return start(cfg, port, cfg.socket.LocalAddr()), nil
 	}
@@ -337,6 +343,7 @@ func New(cfg Config) (*Worker, error) {
 		return nil, fmt.Errorf("mediaworker: unexpected local address %T", conn.LocalAddr())
 	}
 	localAddr := udpAddr.AddrPort()
+	cfg.socketBuffers = udpbuffer.Apply(conn, udpbuffer.Worker)
 
 	if cfg.Relay != nil {
 		return start(cfg, newRelayConn(conn, cfg.Relay.Addr), localAddr), nil
@@ -398,6 +405,12 @@ func (w *Worker) MediaAddr() netip.AddrPort {
 // the session-owner store.
 func (w *Worker) LocalAddr() netip.AddrPort {
 	return w.localAddr
+}
+
+// SocketBuffers reports the buffer sizes requested and got on the UDP
+// socket LocalAddr names.
+func (w *Worker) SocketBuffers() udpbuffer.Result {
+	return w.cfg.socketBuffers
 }
 
 // CreateSession answers a caller's SDP offer. It creates a session that

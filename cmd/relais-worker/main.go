@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/relais/internal/processrun"
+	"github.com/relais/internal/udpbuffer"
 	"github.com/relais/pkg/controlplane"
 	"github.com/relais/pkg/framecache"
 	"github.com/relais/pkg/mediaworker"
@@ -81,6 +82,7 @@ func run() error {
 		return err
 	}
 	defer func() { _ = worker.Close() }()
+	udpbuffer.Log(log.Printf, "worker "+*name+" media", worker.SocketBuffers())
 	processrun.Ready(map[string]any{"http": "http://" + listener.Addr().String(), "media": worker.LocalAddr(), "name": *name})
 	worker.StartHeartbeats(&controlplane.RemoteHeartbeats{URL: *control, Name: *name})
 	// Keep this HTTP API and heartbeats alive while the control plane exports

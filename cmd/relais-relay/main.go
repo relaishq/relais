@@ -14,6 +14,7 @@ import (
 	"github.com/relais/internal/processrun"
 	"github.com/relais/internal/relaylease"
 	"github.com/relais/internal/socketbind"
+	"github.com/relais/internal/udpbuffer"
 	"github.com/relais/pkg/relay"
 	"github.com/relais/pkg/sessionstore"
 )
@@ -120,6 +121,9 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 		return sessionstore.ErrLeaseLost
 	}
 	continuity.BindRestore = time.Since(bindAt)
+	publicBuffers, legBuffers := r.SocketBuffers()
+	udpbuffer.Log(log.Printf, "relay media", publicBuffers)
+	udpbuffer.Log(log.Printf, "relay leg", legBuffers)
 	processrun.Ready(map[string]any{"instance": process.Owner, "epoch": guard.Lease().Epoch, "http": "http://" + listener.Addr().String(), "media": r.PublicAddr(), "leg": r.WorkerAddr()})
 	err = processrun.Serve(guard.Context(), listener, r.PrivateHandler())
 	if lost := guard.Err(); lost != nil {

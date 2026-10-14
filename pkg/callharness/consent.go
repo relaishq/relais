@@ -13,6 +13,7 @@ import (
 
 	"github.com/pion/ice/v4"
 	"github.com/pion/logging"
+	"github.com/relais/internal/udpbuffer"
 )
 
 // The caller observes its ICE consent checks on its own UDP socket, not
@@ -55,6 +56,7 @@ func newCallerSocket(rec *recorder) (*callerSocket, error) {
 }
 
 func wrapCallerSocket(rec *recorder, conn net.PacketConn) *callerSocket {
+	udpbuffer.Apply(conn, udpbuffer.Caller) // the echo arrives here; best effort, silent
 	observer := &stunObserver{conn: conn, rec: rec, unanswered: make(map[[stunTransactionSize]byte]struct{})}
 
 	return &callerSocket{
