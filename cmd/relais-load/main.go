@@ -399,7 +399,7 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 		env := serviceEnv("", "", "")
 		env = append(withoutEnv(env, "GOMAXPROCS"), "GOMAXPROCS="+strconv.Itoa(c.GOMAXPROCS))
 		args := append([]string{executable}, callerNetworkArgs(t.Network)...)
-		args = append(args, "-soak="+strconv.FormatBool(c.Soak), "-place-on-worker="+strconv.FormatBool(c.PlaceOnWorker), "-child", "-parent-pid", strconv.Itoa(os.Getpid()), "-callers", strconv.Itoa(n), "-duration", c.Duration.String(), "-sample-every", c.SampleEvery.String(), "-video="+strconv.FormatBool(c.Video), "-signaling", t.External.SignalingURL, "-relay", t.External.RelayAddr.String(), "-output", output)
+		args = append(args, "-soak="+strconv.FormatBool(c.Soak), "-place-on-worker="+strconv.FormatBool(c.PlaceOnWorker), "-child", "-parent-pid", strconv.Itoa(os.Getpid()), "-seed", strconv.FormatInt(c.Seed, 10), "-caller-process", strconv.Itoa(i), "-callers", strconv.Itoa(n), "-duration", c.Duration.String(), "-sample-every", c.SampleEvery.String(), "-video="+strconv.FormatBool(c.Video), "-signaling", t.External.SignalingURL, "-relay", t.External.RelayAddr.String(), "-output", output)
 		child, err := m.Start(dir, name, env, args...)
 		if err != nil {
 			return report, err
@@ -545,6 +545,7 @@ func runArgs(args []string) error {
 	bearerTokenFile := fs.String("bearer-token-file", "", "file containing the HTTPS signaling bearer token")
 	fs.BoolVar(&c.PlaceOnWorker, "place-on-worker", false, "internal capacity placement on worker zero")
 	parentPID := fs.Int("parent-pid", 0, "internal caller owner PID")
+	callerProcess := fs.Int("caller-process", 0, "generator process index; with -seed it seeds each caller's media start offset and periodic-work phases")
 	fs.IntVar(&c.Callers, "callers", 10, "total simultaneous harness callers")
 	fs.IntVar(&c.Processes, "processes", 2, "generator processes (balanced caller distribution)")
 	fs.IntVar(&c.Workers, "workers", 3, "owned media workers")
@@ -559,7 +560,7 @@ func runArgs(args []string) error {
 	fs.BoolVar(&c.Video, "video", true, "send harness audio plus video with bounded online decode sampling")
 	fs.BoolVar(&c.Soak, "soak", false, "continuous calls with seeded moves, drains and restarted SIGKILL workers")
 	fs.DurationVar(&c.ChaosInterval, "chaos-interval", 30*time.Second, "time between soak events")
-	fs.Int64Var(&c.Seed, "seed", 41, "reproducible soak schedule seed")
+	fs.Int64Var(&c.Seed, "seed", 41, "reproducible soak schedule and caller start-offset seed")
 	fs.IntVar(&c.WorkerFloor, "worker-floor", 8, "measured per-worker call floor; supply matching capacity evidence")
 	fs.IntVar(&c.RelayFloor, "relay-floor", 8, "measured relay call floor; supply matching capacity evidence")
 	fs.BoolVar(&c.Capacity, "capacity", false, "bounded service ramps followed by derived N+1 kill/move and drain")
@@ -589,6 +590,9 @@ func runArgs(args []string) error {
 		}
 	}
 	if *child || *externalCaller {
+		if *callerProcess < 0 {
+			return errors.New("caller-process must be >= 0")
+		}
 		addr, err := netip.ParseAddrPort(*relay)
 		if err != nil {
 			return err
@@ -637,9 +641,9 @@ func runArgs(args []string) error {
 				}
 			}
 		}
-		return loadgen.RunChild(ctx, loadgen.ChildOptions{EventRetention: *retention, Distributed: distributedConfig, PlaceOnWorker: c.PlaceOnWorker, Topology: external, Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output, ParentPID: *parentPID, Soak: c.Soak})
+		return loadgen.RunChild(ctx, loadgen.ChildOptions{EventRetention: *retention, Distributed: distributedConfig, PlaceOnWorker: c.PlaceOnWorker, Topology: external, Callers: c.Callers, Duration: c.Duration, SampleEvery: c.SampleEvery, Video: c.Video, Output: c.Output, ParentPID: *parentPID, Soak: c.Soak, Desync: loadgen.Desync{Seed: c.Seed, Process: *callerProcess}})
 	}
-	for _, name := range []string{"signaling", "relay", "caller-namespace", "caller-bind", "signaling-cert", "bearer-token-file", "parent-pid", "distributed", "run-id", "frontend-control-bound", "frontend-worker-bound", "clock-drift-ppm", "event-retention"} {
+	for _, name := range []string{"signaling", "relay", "caller-namespace", "caller-bind", "signaling-cert", "bearer-token-file", "parent-pid", "caller-process", "distributed", "run-id", "frontend-control-bound", "frontend-worker-bound", "clock-drift-ppm", "event-retention"} {
 		if flagWasSet(fs, name) {
 			return fmt.Errorf("-%s requires -external-caller or -child", name)
 		}

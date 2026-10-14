@@ -31,6 +31,45 @@ time. It polls its original parent PID every 250 ms and cancels its work on
 reparenting. Caller cleanup then closes its connections and operator endpoint.
 Logs survive for diagnosis. The existing `crash-run` modes are unchanged.
 
+## Callers do not start together
+
+Real callers start independently, so their frame ticks, keyframes and
+housekeeping never line up. Before #85, every synthetic caller started media
+on the same instant and ran its one-second work on the same phase. Once per
+second, every call's keyframe, audio and video ticks and recording maintenance
+landed within about 40 ms. The worker queued that burst, echo arrived up to
+about 80 ms late inside it, and takeovers failed freshness when a burst fell
+a few seconds after a kill. Those runs measured the generator's synchrony,
+not Relais.
+
+Each call now starts media at its own offset in [0, 1 s) after the common
+start time. Its audio and video ticks and the fixture's one-second keyframes
+follow that start. Each call also runs its one-second recording maintenance
+(automatic-event discovery and history pruning) on its own phase in [0, 1 s),
+and each generator process takes resource samples on its own phase. All three
+are a fixed hash of `-seed`, the generator process index and, for per-call
+values, the call index, so the same seed reproduces them exactly. Draws are independent, as real
+callers are, so a few calls can still start close together. Each `call` JSON
+line records its `media_offset_ns` and `maintenance_phase_ns`.
+
+- Every call sends media for the full `-duration`, counted from its own start.
+  The last calls end up to one second after `start + duration`.
+- One second after the start, every call is sending. Events need at least 3 s
+  of warm-up (capacity uses 6 s, soak its chaos interval of at least 20 s), so
+  each event finds every caller sending with its one-second baseline.
+- The first resource sample covers `-sample-every` plus the process phase.
+  Later samples keep the interval and stay contiguous.
+- Windows that end at `start + duration`, such as the soak saturation budget
+  and capacity service telemetry, do not cover up to the last second of the
+  latest calls' media. Those calls' own reports and final samples still do,
+  and the soak and capacity generator guards judge samples up to each
+  process's last media send.
+- In-process harness tests are unchanged. Only `relais-load` callers use
+  offsets and phases.
+
+Calibration, capacity and soak results recorded before this change measured
+synchronised callers.
+
 ## External caller test interface
 
 `-external-caller` is a supported test interface for an already running
@@ -66,6 +105,7 @@ addresses are independent; HTTPS success does not prove UDP reachability.
 | `-video` | Audio plus sampled VP8 by default; `false` needs no video decoder |
 | `-output` | Required JSON-lines output file, overwritten at startup; also written to stdout |
 | `-parent-pid` | Optional original parent PID to watch; defaults to the launcher's PID (`os.Getppid()`) |
+| `-seed`, `-caller-process` | Seed (default 41) and process index (default 0) for the callers' start offsets and phases; give each caller host its own index, or hosts start their nth callers together |
 
 Keep the token file private. Group- or world-readable token files produce a
 warning and remain usable. The token is attached to signaling, status and
@@ -122,7 +162,8 @@ controller to issue `POST <http>/start` with a common start time:
 {"at":"2026-01-01T12:00:00Z"}
 ```
 
-`at` must be an RFC 3339 timestamp. A past time starts media immediately. The
+`at` must be an RFC 3339 timestamp. Each call starts media at its own offset
+in [0, 1 s) after `at`; a past time starts counting those offsets at once. The
 three-minute start deadline includes waiting for a future time. The loopback
 operator endpoint also provides `GET /sessions`, `POST /kill` (records a fault
 observation), `POST /move` and `POST /record-moves`, using the existing
@@ -165,7 +206,8 @@ Decoder subprocess CPU is excluded from child `RUSAGE_SELF`; its scheduling
 impact remains visible in packet-send lateness. This is a conservative pacing
 validity check, not a measurement of the topology's total CPU cost.
 
-The first sample starts immediately. Later samples use the actual timestamp
+The first sample starts at the common start time and covers `-sample-every`
+plus the process's seeded phase. Later samples use the actual timestamp
 from the ticker. A short stall can delay a queued tick, but it does not leave
 permanent schedule debt in later intervals. Gaps between delivered tick
 timestamps count dropped frame opportunities separately. A final accounting
@@ -181,7 +223,8 @@ still invalidate the measurement. Optional callbacks must be fast and safe for
 concurrent audio and video sends.
 
 Each caller process has one shared, demand-driven status poller. Callers keep
-their existing one-second observation cadence and read the same snapshot.
+their existing one-second observation cadence, each on its own phase, and read
+the same snapshot.
 Periodic HTTP reads use a poller-owned one-second timeout, independent of a
 caller's cancellation or deadline. Successful snapshots and poller errors are
 cached for one second from completion; caller cancellation errors stay local

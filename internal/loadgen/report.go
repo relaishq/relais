@@ -24,6 +24,11 @@ type Message struct {
 	Call    *callharness.Report     `json:"call,omitempty"`
 	Dial    *callharness.DialReport `json:"dial,omitempty"`
 	Error   string                  `json:"error,omitempty"`
+	// MediaOffset and MaintenancePhase are a "call" message's seeded media
+	// start offset after the common start and its recording maintenance
+	// phase (#85).
+	MediaOffset      time.Duration `json:"media_offset_ns,omitempty"`
+	MaintenancePhase time.Duration `json:"maintenance_phase_ns,omitempty"`
 }
 type Writer struct {
 	mu      sync.Mutex

@@ -31,6 +31,9 @@ type ChildOptions struct {
 	ParentPID             int
 	StartTimeout          time.Duration
 	PlaceOnWorker         bool
+	// Desync gives each call a seeded media start offset and maintenance
+	// phase, and this process a seeded sampling phase (#85).
+	Desync Desync
 }
 type StartRequest struct {
 	At time.Time `json:"at"`
@@ -143,7 +146,8 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 			if o.PlaceOnWorker {
 				worker = 0
 			}
-			call, err := h.Dial(dial, callharness.CallOptions{Video: o.Video, Worker: worker, Recording: callharness.RecordingOptions{History: history, DecodeEvery: 30}, SendTiming: meter.Observe, SendPacing: meter.ObservePacing})
+			recording := callharness.RecordingOptions{History: history, DecodeEvery: 30, MaintenancePhase: o.Desync.Maintenance(i)}
+			call, err := h.Dial(dial, callharness.CallOptions{Video: o.Video, Worker: worker, Recording: recording, SendTiming: meter.Observe, SendPacing: meter.ObservePacing})
 			if err != nil {
 				errs[i], m.Error = err, err.Error()
 				var failure *callharness.DialError
@@ -279,12 +283,17 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sendErr := c.SendMedia(lifetime, o.Duration)
+			// Real callers do not start together. Each call starts media at
+			// its own seeded offset in [0, 1s) after the common start, then
+			// sends for the whole duration, so its frame ticks and keyframes
+			// keep that phase and it ends up to one second after the others.
+			offset := o.Desync.MediaStart(i)
+			sendErr := sendAfter(lifetime, offset, o.Duration, c.SendMedia)
 			// Allow the 10s final status read plus echo drain and deletion.
 			hangup, stop := context.WithTimeout(context.Background(), 15*time.Second)
 			defer stop()
 			rep, hangErr := c.Hangup(hangup)
-			m := Message{Type: "call", PID: os.Getpid(), CallID: i, Session: c.SessionID(), Call: rep}
+			m := Message{Type: "call", PID: os.Getpid(), CallID: i, Session: c.SessionID(), Call: rep, MediaOffset: offset, MaintenancePhase: o.Desync.Maintenance(i)}
 			if err := errors.Join(sendErr, hangErr); err != nil {
 				m.Error = err.Error()
 			}
@@ -292,8 +301,18 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 		}()
 	}
 	go func() { wg.Wait(); close(finished) }()
-	tick := time.NewTicker(o.SampleEvery)
-	defer tick.Stop()
+	// Generator processes sample on their own seeded phases, so they do not
+	// all read CPU and memory on the same instant. Only the first interval is
+	// longer (SampleEvery plus the phase); later samples keep SampleEvery.
+	first := time.NewTimer(o.SampleEvery + o.Desync.SamplePhase(o.SampleEvery))
+	defer first.Stop()
+	ticks := first.C
+	var tick *time.Ticker
+	defer func() {
+		if tick != nil {
+			tick.Stop()
+		}
+	}()
 	sample := func() error {
 		stats, err := sampler.Sample(meter)
 		if err != nil {
@@ -306,7 +325,11 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 running:
 	for {
 		select {
-		case <-tick.C:
+		case <-ticks:
+			if tick == nil {
+				tick = time.NewTicker(o.SampleEvery)
+				ticks = tick.C
+			}
 			if err := sample(); err != nil {
 				sampleErr = err
 				cancel()

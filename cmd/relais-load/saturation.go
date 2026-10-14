@@ -72,9 +72,21 @@ func sampleSaturated(samples []loadgen.Stats, i int, l loadgen.Limits, start, en
 	return len(saturationCauses(samples, i, l, start, end)) > 0
 }
 
+// mediaEnd is when process p's last call stops sending media: the run window
+// end plus its largest seeded start offset (#85). Reports without offsets end
+// at the run window.
+func mediaEnd(r loadgen.RunReport, p loadgen.ProcessReport) time.Time {
+	var offset time.Duration
+	for _, c := range p.Calls {
+		offset = max(offset, c.MediaOffset)
+	}
+	return r.StartedAt.Add(r.Duration + offset)
+}
+
 // consecutiveExcess reports a time-adjacent neighbour of sample i that is
 // also above a limit. Startup or hangup-only samples cannot establish
-// persistence.
+// persistence: a neighbour must overlap [start, end), where end is the
+// process's media end (mediaEnd).
 func consecutiveExcess(samples []loadgen.Stats, i int, l loadgen.Limits, start, end time.Time) bool {
 	s := samples[i]
 	for _, j := range []int{i - 1, i + 1} {
