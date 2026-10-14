@@ -125,7 +125,8 @@ func TestRunChildReportsEveryDial(t *testing.T) {
 		assert.Equal(t, callharness.DialFailed, m.Dial.Outcome)
 		assert.Equal(t, callharness.DialFailurePathNeverOpened, m.Dial.Failure)
 		assert.Contains(t, m.Error, "waiting for connected: context deadline exceeded")
-		assert.GreaterOrEqual(t, m.Dial.Elapsed, dialTimeout)
+		// The report's clock starts after the dial deadline is set (CI saw 19.9994 s).
+		assert.GreaterOrEqual(t, m.Dial.Elapsed, dialTimeout-100*time.Millisecond)
 		assert.Equal(t, "checking", m.Dial.ICEState)
 		assert.Equal(t, "new", m.Dial.DTLSState)
 		assert.Equal(t, "connecting", m.Dial.ConnectionState)
