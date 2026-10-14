@@ -87,6 +87,33 @@ existing loopback socket and candidate behavior is preserved. Linux namespace
 callers still use the existing namespace socket factory. The internal `-child`
 mode remains available to the owned process driver.
 
+Each dial has 20 seconds to connect. While connecting, the caller sends an
+ICE connectivity check every 200 ms for about 10 seconds (50 checks) before
+it gives a candidate pair up, as a browser does. Pion's default gives up
+after 8 checks (1.6 seconds). The ICE-lite server never sends checks of its
+own, so after the caller gives up nothing revives the pair. With the longer
+budget, a short UDP stall at call start, such as a firewall rule that is
+still propagating, does not fail the dial. A server that never answers
+still fails at the 20-second deadline.
+
+Each dial writes one `dial` JSON line when it connects or fails, before
+readiness. Its `dial` object has the `outcome` (`connected` or `failed`),
+the session ID, the ICE, DTLS and connection states with their change
+histories, and per-candidate-pair `checks_sent` and `responses_received`
+counted on the caller's socket. A failed dial also has `failure`, its kind:
+
+| `failure` | Meaning |
+| --- | --- |
+| `setup` | Failed before the offer was sent |
+| `signaling` | The offer/answer exchange failed |
+| `path_never_opened` | No connectivity check got a response: the UDP path never opened |
+| `ice_stalled` | Some checks got responses, but ICE never connected |
+| `ice_connected_stalled` | ICE connected, but DTLS or the connected state did not follow: a product failure |
+| `harness_closed` | The caller shut down during the dial |
+
+If any dial fails, the caller exits nonzero and names every failed dial
+with its kind, not only the first.
+
 After all callers connect, stdout emits a JSON readiness line with `type`,
 `pid`, `callers` and `http` (a loopback URL). The caller then waits for its
 controller to issue `POST <http>/start` with a common start time:
@@ -104,7 +131,7 @@ signaling endpoint; a frontend that exposes only calls and status will reject
 it. The caller never kills external processes. Keep this unauthenticated local
 operator endpoint on loopback. It closes when the run ends or is cancelled.
 
-Output contains `stats`, per-call `call` and final `done` JSON lines. Inspect
+Output contains per-dial `dial`, `stats`, per-call `call` and final `done` JSON lines. Inspect
 per-call `error` and reports as well as process stats: process exit alone is
 not a media or capacity verdict. This interface supplies caller evidence; it
 does not aggregate separate hosts or establish cross-host clock accuracy.
@@ -113,9 +140,11 @@ Owned-mode flags such as `-processes`, `-workers`, `-event`, `-capacity`,
 
 ## Generator validity
 
-Every child writes periodic stats and one existing caller report per call as
-JSON lines to its `.jsonl` file and stdout. The parent aggregates these into
-`report.json` and prints a process table. `-output` selects another report path.
+Every child writes one `dial` record per dial, periodic stats and one existing
+caller report per call as JSON lines to its `.jsonl` file and stdout. The
+parent aggregates these into `report.json` and prints a process table. It keeps
+the `dial` records in each process's `dials`; each failed dial is a cause.
+`-output` selects another report path.
 Durations in JSON use nanoseconds; timestamps use RFC 3339.
 
 The default limits are documented inputs, stored in each report:

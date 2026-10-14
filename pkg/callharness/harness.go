@@ -122,6 +122,10 @@ type Harness struct {
 	closed       bool
 	disableProbe func()
 	failures     map[string][]time.Time
+
+	// iceChecks replaces callerICEChecks for the calls a test dials; zero
+	// keeps it.
+	iceChecks uint16
 }
 
 // Start starts a local topology, or attaches callers to Options.External.

@@ -13,14 +13,17 @@ import (
 
 // Message is the child JSON-lines protocol. Call is the existing caller-side
 // report, including every affected call's per-event yardstick and verdicts.
+// Dial is what the caller observed while a "dial" message's call connected
+// or failed to.
 type Message struct {
-	Type    string              `json:"type"`
-	PID     int                 `json:"pid"`
-	CallID  int                 `json:"call_id,omitempty"`
-	Session string              `json:"session,omitempty"`
-	Stats   *Stats              `json:"stats,omitempty"`
-	Call    *callharness.Report `json:"call,omitempty"`
-	Error   string              `json:"error,omitempty"`
+	Type    string                  `json:"type"`
+	PID     int                     `json:"pid"`
+	CallID  int                     `json:"call_id,omitempty"`
+	Session string                  `json:"session,omitempty"`
+	Stats   *Stats                  `json:"stats,omitempty"`
+	Call    *callharness.Report     `json:"call,omitempty"`
+	Dial    *callharness.DialReport `json:"dial,omitempty"`
+	Error   string                  `json:"error,omitempty"`
 }
 type Writer struct {
 	mu      sync.Mutex
@@ -41,6 +44,7 @@ func (w *Writer) Err() error { w.mu.Lock(); defer w.mu.Unlock(); return w.err }
 type ProcessReport struct {
 	PID                         int           `json:"pid"`
 	ExpectedCalls               int           `json:"expected_calls"`
+	Dials                       []Message     `json:"dials,omitempty"`
 	Calls                       []Message     `json:"calls"`
 	Samples                     []Stats       `json:"samples"`
 	SamplesDropped              int           `json:"samples_dropped"`
@@ -72,7 +76,7 @@ func ReadSoakProcess(r io.Reader, pid, expected int, limits Limits) (ProcessRepo
 func readProcess(r io.Reader, pid, expected int, limits Limits, all bool) (ProcessReport, error) {
 	out := ProcessReport{PID: pid, ExpectedCalls: expected}
 	decoder := json.NewDecoder(r)
-	seen := map[int]bool{}
+	seen, dialed := map[int]bool{}, map[int]bool{}
 	var statusRequests uint64
 	var measured time.Duration
 	var peakPacing Pacing
@@ -91,6 +95,18 @@ func readProcess(r io.Reader, pid, expected int, limits Limits, all bool) (Proce
 			return out, fmt.Errorf("message after terminal done")
 		}
 		switch m.Type {
+		case "dial":
+			if m.CallID < 0 || m.CallID >= expected || dialed[m.CallID] {
+				return out, fmt.Errorf("invalid or duplicate dial %d", m.CallID)
+			}
+			dialed[m.CallID] = true
+			out.Dials = append(out.Dials, m)
+			switch {
+			case m.Dial == nil:
+				out.Causes = append(out.Causes, fmt.Sprintf("dial %d: %s", m.CallID, m.Error))
+			case m.Dial.Outcome != callharness.DialConnected:
+				out.Causes = append(out.Causes, fmt.Sprintf("dial %d: %s: %s", m.CallID, m.Dial.Failure, m.Error))
+			}
 		case "call":
 			if m.CallID < 0 || m.CallID >= expected || seen[m.CallID] {
 				return out, fmt.Errorf("invalid or duplicate call %d", m.CallID)
