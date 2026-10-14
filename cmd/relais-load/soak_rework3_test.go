@@ -92,7 +92,7 @@ func TestSoakWholeCallGapCannotHideBehindScheduledMaximum(t *testing.T) {
 			// outside the 15 s arrival history and outside every scheduled event.
 			r.Processes[0].Calls[0].Call.Tracks = []callharness.TrackReport{{Kind: "audio", MediaGap: 2 * time.Second, MediaGapEndedAt: 152 * time.Second, MediaGapsRecorded: true, MediaGaps: []callharness.MediaGap{{EndedAt: 152 * time.Second, Duration: 2 * time.Second}, {EndedAt: 600 * time.Second, Duration: 500 * time.Millisecond}}, Arrivals: []time.Duration{1190 * time.Second, 1190*time.Second + 20*time.Millisecond}}}
 			if tc.saturatedPID != 0 {
-				sample := loadgen.Stats{At: r.StartedAt.Add(600 * time.Second), Interval: time.Second, IntervalLateness: loadgen.Lateness{P99: 21 * time.Millisecond}}
+				sample := loadgen.Stats{At: r.StartedAt.Add(600 * time.Second), Interval: time.Second, IntervalLateness: loadgen.Lateness{P99: 41 * time.Millisecond}}
 				if tc.saturatedPID == 42 {
 					r.Processes[0].Samples[600] = sample
 				} else {
@@ -106,7 +106,7 @@ func TestSoakWholeCallGapCannotHideBehindScheduledMaximum(t *testing.T) {
 			require.Equal(t, tc.want == "fail", causes[0].Failed)
 			require.Contains(t, causes[0].Reason, "500ms")
 			if tc.saturatedPID == 42 {
-				r.Processes[0].Lateness.Max = 21 * time.Millisecond
+				r.Processes[0].Lateness.Max = 41 * time.Millisecond
 			}
 			require.Equal(t, tc.want, judgeSoak(c, r).Outcome)
 		})

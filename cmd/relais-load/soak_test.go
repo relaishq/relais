@@ -77,7 +77,7 @@ func TestSoakSeedReproducesPlanAndMix(t *testing.T) {
 func TestSoakSaturationBudgetAndOverlap(t *testing.T) {
 	at := time.Unix(1000, 0)
 	r := loadgen.RunReport{StartedAt: at, Duration: 100 * time.Second, Limits: loadgen.DefaultLimits()}
-	sample := loadgen.Stats{At: at.Add(10 * time.Second), Interval: time.Second, IntervalLateness: loadgen.Lateness{P99: 21 * time.Millisecond}}
+	sample := loadgen.Stats{At: at.Add(10 * time.Second), Interval: time.Second, IntervalLateness: loadgen.Lateness{P99: 41 * time.Millisecond}}
 	r.Processes = []loadgen.ProcessReport{{PID: 42, Samples: []loadgen.Stats{sample}}, {PID: 43, Samples: []loadgen.Stats{sample}}}
 	b := judgeSaturation(r)
 	require.Equal(t, "pass", b.Outcome)
@@ -144,12 +144,12 @@ func soakFixtureEvents(count int, interval time.Duration) (config, loadgen.RunRe
 func TestSoakVerdictRetainsIndependentFailures(t *testing.T) {
 	c, r := soakFixture()
 	require.Equal(t, "pass", judgeSoak(c, r).Outcome)
-	r.Processes[0].Samples[10].IntervalLateness.P99 = 21 * time.Millisecond
+	r.Processes[0].Samples[10].IntervalLateness.P99 = 41 * time.Millisecond
 	r.Processes[0].Saturated = true
 	r.Judge()
 	v := judgeSoak(c, r)
 	require.Equal(t, "pass", v.Outcome, "an isolated excluded interval away from chaos is within budget")
-	r.Processes[0].Samples[31].IntervalLateness.P99 = 21 * time.Millisecond
+	r.Processes[0].Samples[31].IntervalLateness.P99 = 41 * time.Millisecond
 	v = judgeSoak(c, r)
 	require.Equal(t, "inconclusive", v.Events[0].Outcome)
 	require.True(t, v.Events[0].Saturated)
@@ -415,7 +415,7 @@ func TestSoakEventCoveragePolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c, r := soakFixtureEvents(20, 30*time.Second)
 			for _, index := range tc.excluded {
-				r.Processes[0].Samples[31+index*30].IntervalLateness.P99 = 21 * time.Millisecond
+				r.Processes[0].Samples[31+index*30].IntervalLateness.P99 = 41 * time.Millisecond
 			}
 			if tc.fail {
 				r.Processes[0].Calls[0].Call.Moves[0].Tracks[0].Gap = 151 * time.Millisecond
@@ -431,7 +431,7 @@ func TestSoakEventCoveragePolicy(t *testing.T) {
 		})
 	}
 	c, r := soakFixtureEvents(19, 30*time.Second)
-	r.Processes[0].Samples[31].IntervalLateness.P99 = 21 * time.Millisecond
+	r.Processes[0].Samples[31].IntervalLateness.P99 = 41 * time.Millisecond
 	r.Judge()
 	boundary := judgeSoak(c, r)
 	require.Equal(t, "inconclusive", boundary.Outcome, "18/19 is below the exact 95% threshold")
@@ -451,7 +451,7 @@ func TestSoakEventCoveragePolicy(t *testing.T) {
 		}
 	}
 	r.Telemetry.Processes[1].Last["relais_control_takeovers_total"] = 1
-	r.Processes[0].Samples[91].IntervalLateness.P99 = 21 * time.Millisecond
+	r.Processes[0].Samples[91].IntervalLateness.P99 = 41 * time.Millisecond
 	r.Judge()
 	v := judgeSoak(c, r)
 	require.Equal(t, 95.0, v.ConclusiveEventPercent)
@@ -544,7 +544,7 @@ func TestSoakConfirmedEventFailureSurvivesSaturation(t *testing.T) {
 	c, r := soakFixture()
 	r.Events[0].Failed = true
 	r.Processes[0].Saturated = true
-	r.Processes[0].Samples[31].IntervalLateness.P99 = 21 * time.Millisecond
+	r.Processes[0].Samples[31].IntervalLateness.P99 = 41 * time.Millisecond
 	r.Judge()
 	v := judgeSoak(c, r)
 	require.True(t, v.Events[0].Saturated)
