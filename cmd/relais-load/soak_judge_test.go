@@ -111,7 +111,9 @@ func TestSoakSaturationPersistenceAndImmediateSignals(t *testing.T) {
 		second int
 		want   int
 	}{
-		{"live skipped frames", loadgen.Pacing{SentFrames: 157, SkippedFrames: 2}, 0, 10, 1},
+		{"isolated skipped frames", loadgen.Pacing{SentFrames: 157, SkippedFrames: 2}, 0, 10, 0},
+		{"exactly twice the skipped limit", loadgen.Pacing{SentFrames: 98, SkippedFrames: 2}, 0, 10, 0},
+		{"skipped frames above twice the limit", loadgen.Pacing{SentFrames: 155, SkippedFrames: 5}, 0, 10, 1},
 		{"live zero-send stall", loadgen.Pacing{SkippedFrames: 50}, 0, 10, 1},
 		{"exact skipped limit", loadgen.Pacing{SentFrames: 99, SkippedFrames: 1}, 0, 10, 0},
 		{"CPU excess", loadgen.Pacing{}, 86, 10, 1},
@@ -326,7 +328,7 @@ func TestSoakExclusionNamesItsCauses(t *testing.T) {
 		{"severe lateness with skipped frames", 45 * time.Millisecond, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := loadgen.Stats{At: at.Add(10 * time.Second), Interval: time.Second, Lateness: loadgen.Lateness{Packets: 1}, IntervalLateness: loadgen.Lateness{P99: tc.late}, IntervalPacing: loadgen.Pacing{SentFrames: 98, SkippedFrames: 2}}
+			s := loadgen.Stats{At: at.Add(10 * time.Second), Interval: time.Second, Lateness: loadgen.Lateness{Packets: 1}, IntervalLateness: loadgen.Lateness{P99: tc.late}, IntervalPacing: loadgen.Pacing{SentFrames: 97, SkippedFrames: 3}}
 			r := loadgen.RunReport{StartedAt: at, Duration: 100 * time.Second, Limits: loadgen.DefaultLimits(), Processes: []loadgen.ProcessReport{{PID: 42, Samples: []loadgen.Stats{s}}}}
 			b := judgeSaturation(r)
 			require.Len(t, b.Excluded, 1)

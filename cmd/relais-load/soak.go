@@ -143,6 +143,8 @@ type excludedInterval struct {
 type saturationBudget struct {
 	LatenessPersistenceSamples int                `json:"lateness_persistence_samples"`
 	ImmediateLatenessLimit     time.Duration      `json:"immediate_p99_lateness_limit_ns"`
+	ImmediateSkippedPercent    float64            `json:"immediate_skipped_frame_percent"`
+	MaxToleratedStall          time.Duration      `json:"max_tolerated_stall_ns"`
 	Intervals                  int                `json:"one_second_intervals"`
 	Saturated                  int                `json:"saturated_one_second_intervals"`
 	Percent                    float64            `json:"saturated_percent"`
@@ -155,7 +157,7 @@ type saturationBudget struct {
 // generators stall together that second counts once, with every process named.
 // A delayed saturated sample excludes every second it overlaps, conservatively.
 func judgeSaturation(r loadgen.RunReport) saturationBudget {
-	b := saturationBudget{LatenessPersistenceSamples: 2, ImmediateLatenessLimit: 2 * r.Limits.P99, LimitPercent: 1, Outcome: "pass", Intervals: int((r.Duration + time.Second - 1) / time.Second)}
+	b := saturationBudget{LatenessPersistenceSamples: 2, ImmediateLatenessLimit: 2 * r.Limits.P99, ImmediateSkippedPercent: 2 * r.Limits.SkippedPercent, MaxToleratedStall: maxToleratedStall, LimitPercent: 1, Outcome: "pass", Intervals: int((r.Duration + time.Second - 1) / time.Second)}
 	seen := map[int]bool{}
 	end := r.StartedAt.Add(r.Duration)
 	for _, p := range r.Processes {
@@ -164,18 +166,9 @@ func judgeSaturation(r loadgen.RunReport) saturationBudget {
 			if !last.After(first) {
 				continue
 			}
-			late := soakLatenessSaturated(p.Samples, i, r.Limits.P99, r.StartedAt, end)
-			if !late && s.IntervalPacing.SkippedPercent() <= r.Limits.SkippedPercent && s.CPUPerGOMAXPROCS <= r.Limits.CPUPercent {
+			causes := saturationCauses(p.Samples, i, r.Limits, r.StartedAt, end)
+			if len(causes) == 0 {
 				continue
-			}
-			// Name lateness only when it excludes this sample by itself.
-			limits := r.Limits
-			if !late {
-				limits.P99 = max(limits.P99, s.IntervalLateness.P99)
-			}
-			causes := limits.Causes(s)
-			if late && s.IntervalLateness.P99 <= b.ImmediateLatenessLimit {
-				causes = append(causes, "send-lateness exceeds limit in consecutive samples")
 			}
 			b.Excluded = append(b.Excluded, excludedInterval{PID: p.PID, Start: first, End: last, Causes: causes})
 			for i := int(first.Sub(r.StartedAt) / time.Second); i < b.Intervals && r.StartedAt.Add(time.Duration(i)*time.Second).Before(last); i++ {
@@ -193,40 +186,6 @@ func judgeSaturation(r loadgen.RunReport) saturationBudget {
 	return b
 }
 
-// A modest, isolated tick slip is not evidence of sustained generator overload.
-// Retain both samples of a consecutive excess, including the first second of
-// an event. A slip beyond two audio ticks, skipped frames, and CPU excess still
-// exclude immediately. This policy is soak-only; raw limits/samples and the
-// calibration/capacity gates remain unchanged.
-func soakLatenessSaturated(samples []loadgen.Stats, i int, limit time.Duration, start, end time.Time) bool {
-	s := samples[i]
-	if s.IntervalLateness.P99 <= limit {
-		return false
-	}
-	if s.IntervalLateness.P99-limit > limit {
-		return true
-	}
-	for _, j := range []int{i - 1, i + 1} {
-		if j < 0 || j >= len(samples) || samples[j].IntervalLateness.P99 <= limit {
-			continue
-		}
-		// Startup or hangup-only lateness cannot turn a media slip into overload.
-		if !samples[j].At.After(start) || !samples[j].At.Add(-samples[j].Interval).Before(end) {
-			continue
-		}
-		previous, next := s, samples[j]
-		if j < i {
-			previous, next = samples[j], s
-		}
-		// Samples must cover consecutive time, not just be adjacent entries in
-		// an incomplete report. Permit only timestamp rounding/clock noise.
-		gap := next.At.Add(-next.Interval).Sub(previous.At)
-		if previous.Interval > 0 && next.Interval > 0 && next.At.After(previous.At) && gap >= -time.Millisecond && gap <= time.Millisecond {
-			return true
-		}
-	}
-	return false
-}
 func maxTime(a, b time.Time) time.Time {
 	if a.After(b) {
 		return a
@@ -1351,7 +1310,16 @@ func soakContinuityCauses(r loadgen.RunReport, p loadgen.ProcessReport, message 
 		if track.MediaGapOverflow > 0 {
 			causes = append(causes, continuityCause{Failed: true, Reason: track.Kind + " whole-call gap inventory overflow"})
 		}
+		if reason := gapInventoryFullCause(track); reason != "" {
+			causes = append(causes, continuityCause{Reason: reason})
+		}
 		for _, gap := range track.MediaGaps {
+			// A near-ceiling gap that this caller's stall could have shortened
+			// is unproven (#133).
+			if reason := stalledGapCause(r, p, message.Session, message.Call, track.Kind, gap.EndedAt, gap.Duration); reason != "" {
+				causes = append(causes, continuityCause{Reason: reason})
+				continue
+			}
 			if !gapOutsideScheduledEvent(r.Events, message.Session, message.Call, gap.EndedAt, gap.Duration) {
 				continue
 			}

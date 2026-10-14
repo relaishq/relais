@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -31,7 +32,13 @@ type capacityStep struct {
 	RelayPacketsPerSecond          float64            `json:"relay_packets_per_second"`
 	PublicEgressBytesPerCallSecond float64            `json:"public_egress_bytes_per_call_second"`
 	DrainSeconds                   float64            `json:"drain_seconds,omitempty"`
-	Run                            loadgen.RunReport  `json:"run"`
+	// GeneratorOutcome is generator validity under the capacity rule; Run
+	// keeps the strict loadgen judge and processes[].saturated as raw evidence.
+	GeneratorOutcome string `json:"generator_outcome"`
+	// ToleratedSlips lists isolated lateness or skipped-frame samples that did
+	// not invalidate the generator (#133).
+	ToleratedSlips []string          `json:"tolerated_lateness_slips,omitempty"`
+	Run            loadgen.RunReport `json:"run"`
 }
 type capacityReport struct {
 	GOOS                     string         `json:"goos"`
@@ -63,13 +70,94 @@ type capacityReport struct {
 // judgeCapacity never converts generator validity into a service pass. It
 // additionally requires caller continuity, complete threshold rows, resource
 // evidence, and the stated store budget. A trusted failure remains visible.
+// An isolated generator tick slip does not invalidate the step (#133), but
+// its stall bound keeps a near-threshold move or takeover gap from passing.
 func judgeCapacity(kind string, r loadgen.RunReport, opsBudget, bytesBudget float64) capacityStep {
-	return judgeCapacityExcept(kind, r, opsBudget, bytesBudget, nil)
+	generator, tolerated := capacityGenerator(r)
+	s := judgeCapacityStep(kind, generator, opsBudget, bytesBudget, nil, true)
+	s.Run, s.ToleratedSlips = r, tolerated
+	return s
 }
 
 // excluded is used only by soak for individually inconclusive event windows.
+// The soak bounds caller stalls per event in soakGapRows instead.
 func judgeCapacityExcept(kind string, r loadgen.RunReport, opsBudget, bytesBudget float64, excluded map[int]bool) capacityStep {
-	s := capacityStep{Kind: kind, Run: r, Verdict: "pass", StoreBytesByClient: map[string]float64{}}
+	return judgeCapacityStep(kind, r, opsBudget, bytesBudget, excluded, false)
+}
+
+// capacityGenerator judges generator validity for capacity on a copy of r
+// with the soak's rule (saturationCauses): one isolated sample with lateness
+// p99 or skipped frames in (limit, 2x limit] does not invalidate a step by
+// itself. Processes with dropped samples and any cause added after
+// RunReport.Judge, such as an execution error, stay strict. It returns the
+// copy and each tolerated sample; r is unchanged.
+func capacityGenerator(r loadgen.RunReport) (loadgen.RunReport, []string) {
+	if r.Outcome == "valid" {
+		return r, nil
+	}
+	strict := r
+	strict.Events = append([]loadgen.EventResult(nil), r.Events...)
+	strict.Judge()
+	if strict.Outcome != r.Outcome || !slices.Equal(strict.Causes, r.Causes) {
+		return r, nil
+	}
+	view := r
+	view.Processes = append([]loadgen.ProcessReport(nil), r.Processes...)
+	view.Events = append([]loadgen.EventResult(nil), r.Events...)
+	end := r.StartedAt.Add(r.Duration)
+	var tolerated []string
+	for i := range view.Processes {
+		p := &view.Processes[i]
+		if !p.Saturated || p.SamplesDropped > 0 || p.PeakCPUPerGOMAXPROCS > r.Limits.CPUPercent {
+			continue
+		}
+		var slips []string
+		sustained := false
+		// Lateness 1 keeps "no successful media sends" out of the peak causes.
+		peak := loadgen.Stats{Lateness: loadgen.Lateness{Packets: 1}, IntervalLateness: loadgen.Lateness{P99: p.PeakIntervalP99}}
+		for j, s := range p.Samples {
+			if sampleSaturated(p.Samples, j, r.Limits, r.StartedAt, end) {
+				sustained = true
+				break
+			}
+			// ReadProcess keeps the first sample with the largest skip share.
+			if s.IntervalPacing.SkippedPercent() > peak.IntervalPacing.SkippedPercent() {
+				peak.IntervalPacing = s.IntervalPacing
+			}
+			if overLimit(s, r.Limits) {
+				var excess []string
+				if s.IntervalLateness.P99 > r.Limits.P99 {
+					excess = append(excess, fmt.Sprintf("interval send-lateness p99 %s exceeds %s", s.IntervalLateness.P99, r.Limits.P99))
+				}
+				if s.IntervalPacing.SkippedPercent() > r.Limits.SkippedPercent {
+					excess = append(excess, fmt.Sprintf("skipped frames %.2f%% exceeds %.2f%%", s.IntervalPacing.SkippedPercent(), r.Limits.SkippedPercent))
+				}
+				slips = append(slips, fmt.Sprintf("process %d: isolated %s in the sample ending %s after start", p.PID, strings.Join(excess, " and "), s.At.Sub(r.StartedAt).Round(time.Millisecond)))
+			}
+		}
+		if sustained || len(slips) == 0 {
+			continue
+		}
+		// Drop only the peak lateness and skipped-frame causes that
+		// ReadProcess derived from these samples; every other cause remains.
+		tolerable := r.Limits.Causes(peak)
+		p.Causes = slices.DeleteFunc(slices.Clone(p.Causes), func(c string) bool { return slices.Contains(tolerable, c) })
+		p.Saturated = false
+		tolerated = append(tolerated, slips...)
+	}
+	if len(tolerated) == 0 {
+		return r, nil
+	}
+	view.Judge()
+	return view, tolerated
+}
+
+// judgeCapacityStep is the shared step judge. With stallGuard, each move's
+// caller stall bound is added to its gap checks: a pass that the bound could
+// turn into a failure is inconclusive, a measured failure still fails, and no
+// track leaves a percentile.
+func judgeCapacityStep(kind string, r loadgen.RunReport, opsBudget, bytesBudget float64, excluded map[int]bool, stallGuard bool) capacityStep {
+	s := capacityStep{Kind: kind, Run: r, Verdict: "pass", GeneratorOutcome: r.Outcome, StoreBytesByClient: map[string]float64{}}
 	if hasDistributedCalls(r) {
 		s.Verdict = "inconclusive"
 		s.Causes = []string{"local capacity policy refuses distributed point estimates"}
@@ -100,6 +188,7 @@ func judgeCapacityExcept(kind string, r loadgen.RunReport, opsBudget, bytesBudge
 	}
 	gaps := map[string][]time.Duration{}
 	excess := map[string][]time.Duration{}
+	worstGaps, worstExcess := map[string][]time.Duration{}, map[string][]time.Duration{}
 	for _, p := range r.Processes {
 		for _, c := range p.Calls {
 			if c.Call == nil {
@@ -139,6 +228,33 @@ func judgeCapacityExcept(kind string, r loadgen.RunReport, opsBudget, bytesBudge
 						break
 					}
 				}
+				if !stallGuard {
+					continue
+				}
+				// A tolerated stall can shorten a real interruption to a passing
+				// gap (#133). Judge every retained gap, not only the longest.
+				for _, gap := range track.MediaGaps {
+					if gap.EndedAt != track.MediaGapEndedAt && gapOutsideScheduledEvent(r.Events, c.Session, report, gap.EndedAt, gap.Duration) {
+						outsideGap(gap.EndedAt, gap.Duration, "retained media gap")
+					}
+				}
+				if reason := gapInventoryFullCause(track); reason != "" {
+					inconclusive(reason)
+				}
+				seen := map[time.Duration]bool{}
+				near := func(end, gap time.Duration) {
+					if reason := stalledGapCause(r, p, c.Session, report, track.Kind, end, gap); reason != "" && !seen[end] {
+						seen[end] = true
+						inconclusive(reason)
+					}
+				}
+				near(track.MediaGapEndedAt, track.MediaGap)
+				for i := 1; i < len(track.Arrivals); i++ {
+					near(track.Arrivals[i], track.Arrivals[i]-track.Arrivals[i-1])
+				}
+				for _, gap := range track.MediaGaps {
+					near(gap.EndedAt, gap.Duration)
+				}
 			}
 			for _, move := range report.Moves {
 				skip := false
@@ -153,6 +269,11 @@ func judgeCapacityExcept(kind string, r loadgen.RunReport, opsBudget, bytesBudge
 				if move.Error != "" {
 					fail("move error: " + move.Error)
 				}
+				// Only this call's generator can shorten its gaps (#129).
+				var bound time.Duration
+				if stallGuard {
+					bound = stallBound(p.Samples, r.Limits.P99, report.StartedAt.Add(move.Start-time.Second), report.StartedAt.Add(max(move.End, move.Measurement.MediaResumedAt)))
+				}
 				for _, track := range move.Tracks {
 					if track.PacketsAfter == 0 {
 						fail("no " + track.Kind + " packets after event")
@@ -160,6 +281,8 @@ func judgeCapacityExcept(kind string, r loadgen.RunReport, opsBudget, bytesBudge
 					if move.Kind == "takeover" {
 						if track.Gap >= 2*time.Second {
 							fail(track.Kind + " takeover gap >=2s")
+						} else if track.Gap+bound >= 2*time.Second {
+							inconclusive(fmt.Sprintf("%s takeover gap %s is within caller stall bound %s of 2s", track.Kind, track.Gap, bound))
 						}
 						continue
 					}
@@ -169,6 +292,8 @@ func judgeCapacityExcept(kind string, r loadgen.RunReport, opsBudget, bytesBudge
 					}
 					gaps[track.Kind] = append(gaps[track.Kind], track.Gap)
 					excess[track.Kind] = append(excess[track.Kind], track.Gap-track.BaselineGapP95)
+					worstGaps[track.Kind] = append(worstGaps[track.Kind], track.Gap+bound)
+					worstExcess[track.Kind] = append(worstExcess[track.Kind], track.Gap-track.BaselineGapP95+bound)
 				}
 			}
 		}
@@ -176,6 +301,8 @@ func judgeCapacityExcept(kind string, r loadgen.RunReport, opsBudget, bytesBudge
 	for kind, values := range gaps {
 		if percentile95(values) > 150*time.Millisecond || percentile95(excess[kind]) > 50*time.Millisecond {
 			fail(kind + " move p95 exceeds baseline p95 +50ms or 150ms ceiling")
+		} else if percentile95(worstGaps[kind]) > 150*time.Millisecond || percentile95(worstExcess[kind]) > 50*time.Millisecond {
+			inconclusive(kind + " move p95 is within the caller stall bound of baseline p95 +50ms or 150ms ceiling")
 		}
 	}
 	if len(r.Telemetry.Processes) == 0 || len(r.Telemetry.Errors) > 0 {
@@ -291,9 +418,11 @@ func confirmedServiceFailure(r loadgen.RunReport) bool {
 // one move-ceiling allowance for the bounding packet on either side. Another
 // call's event, an unrecorded takeover, or a distant gap cannot excuse it.
 func gapOutsideScheduledEvent(events []loadgen.EventResult, session string, report *callharness.Report, end, gap time.Duration) bool {
-	if gap <= 150*time.Millisecond {
-		return false
-	}
+	return gap > callharness.MediaGapCeiling && unscheduledGap(events, session, report, end, gap)
+}
+
+// unscheduledGap applies the same event windows to a gap of any length.
+func unscheduledGap(events []loadgen.EventResult, session string, report *callharness.Report, end, gap time.Duration) bool {
 	for _, event := range events {
 		affected := false
 		for _, id := range event.Sessions {
@@ -324,12 +453,14 @@ func gapOutsideScheduledEvent(events []loadgen.EventResult, session string, repo
 
 func recordCapacityStep(dir, output string, result *capacityReport, step capacityStep) (capacityStep, error) {
 	if step.Kind == "relay" || step.Kind == "n-plus-one" || step.Kind == "drain" {
+		// Judge generator validity as judgeCapacity does; Run stays raw.
+		generator, _ := capacityGenerator(step.Run)
 		for worker, peak := range step.Run.WorkerPeaks {
 			if peak <= result.WorkerCapacityLowerBound {
 				continue
 			}
 			step.Causes = append(step.Causes, fmt.Sprintf("%s observed %d calls exceeds proven worker lower bound %d", worker, peak, result.WorkerCapacityLowerBound))
-			if (step.Kind == "relay" || step.Run.Outcome != "valid") && !confirmedServiceFailure(step.Run) {
+			if (step.Kind == "relay" || generator.Outcome != "valid") && !confirmedServiceFailure(generator) {
 				step.Verdict = "inconclusive"
 			} else {
 				step.Verdict = "fail"
@@ -392,7 +523,10 @@ func runCapacity(ctx context.Context, m *clusterprocess.Manager, c config, root 
 			judged.Causes = append(judged.Causes, runErr.Error())
 		}
 		judged, writeErr := recordCapacityStep(dir, c.Output, &result, judged)
-		fmt.Printf("capacity kind=%s callers=%d service=%s store-commands/call-s=%.2f store-bytes/call-s=%.0f relay-pps=%.1f drain-s=%.3f\n", kind, count, judged.Verdict, judged.StoreCommandsPerCallSecond, judged.StoreBytesPerCallSecond, judged.RelayPacketsPerSecond, judged.DrainSeconds)
+		for _, slip := range judged.ToleratedSlips {
+			fmt.Println("tolerated:", slip)
+		}
+		fmt.Printf("capacity kind=%s callers=%d service=%s generator=%s store-commands/call-s=%.2f store-bytes/call-s=%.0f relay-pps=%.1f drain-s=%.3f\n", kind, count, judged.Verdict, judged.GeneratorOutcome, judged.StoreCommandsPerCallSecond, judged.StoreBytesPerCallSecond, judged.RelayPacketsPerSecond, judged.DrainSeconds)
 		return judged, writeErr
 	}
 	for _, kind := range []string{"worker", "relay"} {

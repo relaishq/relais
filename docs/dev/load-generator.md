@@ -288,6 +288,15 @@ first step saturates, no positive caller count was proven on that machine.
 A short run cannot establish long-run capacity. Shared host CPU and scheduler
 noise can lower the result even when the child's own CPU remains low.
 
+Calibration keeps the strict rule: one saturated sample ends the ramp. It
+measures where one generator process saturates, and capacity and soak choose
+callers per process from that result. Their tolerance for one isolated slip
+(#128, #133) assumes the generator runs well below that point. A strict
+calibration can understate the limit, but it cannot overstate it. On the
+16-vCPU #85 VM, 16 callers per process saturated on one 25.4 ms sample. Its
+whole-step p99 was already 14.8 ms, against 1.5 ms at 8 callers. That
+lateness was broad load, not an isolated slip.
+
 The separate **Load generator calibration** workflow runs nightly at 09:30 UTC
 and on `workflow_dispatch`, never on pull requests. It uses hosted Ubuntu,
 one generator with GOMAXPROCS 1, a 30-second ramp per step capped at 128 callers,
@@ -307,7 +316,9 @@ acceptance and input-priced cost, see [capacity.md](capacity.md).
 worker recycling, a 1% run saturation budget, per-event exclusions, memory
 regression by incarnation and shutdown leak inventories. See
 [soak.md](soak.md) for the exact gates, capacity inputs and CI dispatches.
-Ordinary load and capacity retain their strict any-saturated-interval rule.
+Ordinary load and calibration retain their strict any-saturated-interval rule.
+Capacity tolerates one isolated lateness or skipped-frame slip; see
+[capacity.md](capacity.md).
 
 For callers on separate hosts, see [distributed event evidence](distributed-evidence.md)
 for the opt-in identity feed, retention and clock-interval requirements.
