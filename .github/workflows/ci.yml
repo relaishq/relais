@@ -208,13 +208,16 @@ jobs:
         run: go test -race -v -count=1 -timeout 5m -run '^TestDemoAttachExternalSmoke$' ./cmd/relais-demo/
       # The driver starts and stops its own Redis on a free loopback port.
       - name: Run twenty interleaved SIGKILL trials (ten per mode)
+        if: ${{ !cancelled() }}
         run: make crash-run
       - name: Upload crash-run failure logs
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: crash-run-logs
-          path: bin/crash-run-*
+          path: |
+            bin/crash-run-*
+            bin/attach-smoke-*
 
   # Each lane runs twenty 60 s trials on an awake Linux runner. The driver
   # and relay children run as the same ordinary user; fencing reads /proc.

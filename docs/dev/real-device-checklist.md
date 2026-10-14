@@ -84,6 +84,8 @@ Credential fields and secret environment values of at least eight characters
 are redacted. Each hook runs in its own process group. Cancellation kills that
 whole group, including subprocesses. Remote work must be idempotent or
 cancellable because killing the local hook cannot undo a remote action.
+Hooks must be non-interactive (for example `ssh -o BatchMode=yes`): a prompt
+from the background process group stalls until the action timeout.
 The hook protocol is:
 
 ```text

@@ -86,7 +86,12 @@ func TestDemoAttachExternalSmoke(t *testing.T) {
 	require.NoError(t, os.MkdirAll(bin, 0755))
 	dir, err := os.MkdirTemp(bin, "attach-smoke-")
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+	// Keep binaries and process logs when the test fails; CI uploads them.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			require.NoError(t, os.RemoveAll(dir))
+		}
+	})
 	for _, name := range []string{"relais-relay", "relais-worker", "relais-control", "relais-demo"} {
 		cmd := exec.CommandContext(buildCtx, "go", "build", "-o", filepath.Join(dir, name), "./cmd/"+name)
 		cmd.Dir = filepath.Join("..", "..")
