@@ -7,13 +7,13 @@ const M=require('./web/metrics.js');
 
 // Run production page functions in a DOM-free harness. Snapshot tests hold
 // media evidence passing to expose a missing required agent verdict.
-function page(search='',renderPage=false,status) {
+function page(search='',renderPage=false,status,hash='') {
  const element=()=>({value:'pattern',replaceChildren(){},append(){},click(){},textContent:''});
  const elements=new Map();
- const context={window:{relaisMetrics:M,relaisContinuity:A,addEventListener(){}},document:{getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,addEventListener(){},removeEventListener(){},hidden:false},location:{search,hash:''},URLSearchParams,Headers,Blob,URL:{createObjectURL(blob){context.savedBlob=blob;return 'blob:test';},revokeObjectURL(){}},performance:{now:()=>10000,timeOrigin:0},setInterval(){},clearInterval(){},clearTimeout(){},setTimeout(fn){fn();},fetch:async()=>{if(status)return {ok:true,text:async()=>JSON.stringify(status)};throw new Error('status unavailable');}};
+ const context={window:{relaisMetrics:M,relaisContinuity:A,addEventListener(){}},document:{getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,addEventListener(){},removeEventListener(){},hidden:false},location:{pathname:'/',search,hash},history:{replaceState(...args){context.replacedHistory=args;}},URLSearchParams,Headers,Blob,URL:{createObjectURL(blob){context.savedBlob=blob;return 'blob:test';},revokeObjectURL(){}},performance:{now:()=>10000,timeOrigin:0},setInterval(){},clearInterval(){},clearTimeout(){},setTimeout(fn){fn();},fetch:async()=>{if(status)return {ok:true,text:async()=>JSON.stringify(status)};throw new Error('status unavailable');}};
  const source=fs.readFileSync(require.resolve('./web/demo.js'),'utf8');
  const instrument=`
- window.testPage={setCall(s){call=s;},snapshot,event,start,saveResults};
+ window.testPage={setCall(s){call=s;},snapshot,event,start,saveResults,render,runChecklist,setChecklistSteps(){run=async()=>{};waitForLongHold=async()=>{};}};
  sample=async()=>{};
  observePage=()=>{};attach=()=>{};statuses=()=>{};samples=()=>{};
  sourceStream=async()=>{window.sourceAcquired=true;throw new Error("media started");};
@@ -108,3 +108,41 @@ for(const launchId of [undefined,'',42]) {
   assert.equal(context.window.sourceAcquired,undefined);
  });
 }
+
+test('token is removed from address bar and retained for results mutations',async()=>{
+ const {api,context}=page('?source=camera',false,{results_enabled:true},'#token=launch-secret');
+ assert.deepEqual(Array.from(context.replacedHistory),[null,'','/?source=camera']);
+ await new Promise(setImmediate);
+ const requests=[];
+ context.fetch=async(path,options)=>{requests.push({path,options});return {ok:true,status:201};};
+ api.setCall(call());api.saveResults();
+ await Promise.resolve();
+ assert.equal(requests.length,1);assert.equal(requests[0].path,'/demo/results');
+ assert.equal(requests[0].options.headers.get('X-Relais-Demo-Token'),'launch-secret');
+ assert.equal(JSON.parse(requests[0].options.body).version,5);
+ assert.equal(JSON.parse(await context.savedBlob.text()).version,5);
+});
+test('checklist completion uploads its final snapshot and 404 disables further uploads',async()=>{
+ const {api,context}=page('',false,{results_enabled:true});
+ await new Promise(setImmediate);
+ const requests=[];
+ context.fetch=async(path,options)=>{requests.push({path,options});return {ok:false,status:404};};
+ api.setCall(call());api.setChecklistSteps();
+ const result=await api.runChecklist();
+ assert.equal(result.running,false);assert.equal(requests.length,1);
+ assert.equal(JSON.parse(requests[0].options.body).running,false);
+ api.saveResults();await Promise.resolve();assert.equal(requests.length,1);
+});
+test('without results directory Save results downloads and skips upload',async()=>{
+ const {api,context}=page();api.setCall(call());
+ let requests=0;context.fetch=async()=>{requests++;throw new Error('unexpected upload');};
+ api.saveResults();await Promise.resolve();assert.equal(requests,0);
+ assert.equal(JSON.parse(await context.savedBlob.text()).version,5);
+});
+test('two-worker attached pool permits move and kill while drain is disabled',()=>{
+ const {api,elements}=page('',true);const s=call();s.agentMode='echo';
+ s.status={attach_mode:true,pool_size:2,expected_pool_size:2,workers:[{name:'a'},{name:'b'}]};
+ api.setCall(s);api.render();
+ assert.equal(api.snapshot(s).poolSize,2);
+ assert.equal(elements.get('move').disabled,false);assert.equal(elements.get('kill').disabled,false);assert.equal(elements.get('drain').disabled,true);
+});

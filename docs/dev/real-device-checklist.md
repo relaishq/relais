@@ -42,6 +42,94 @@ media on loopback.
 `make demo` runs the older shared-socket echo page. Use `make demo-cluster` for
 this checklist, which requires separate processes and kill controls.
 
+## Attach to an existing cluster
+
+Run the page server on the operator's machine. It connects to an existing
+control plane through a local forwarded port. Attach mode starts no relay,
+control, workers or Redis. Stopping the page server leaves that cluster running.
+The cluster owner supplies its lifecycle hook and tunnel separately.
+
+Build with `make build`, then select free loopback ports for the page and
+forwarded control. For example, with control forwarded to `localhost:19402`:
+
+```sh
+./bin/relais-demo -http=127.0.0.1:19401 \
+  -attach-control=http://localhost:19402 \
+  -fault-hook=/path/to/fault-hook -action-timeout=90s \
+  -results-dir=bin/attached-results
+```
+
+`-attach-control` cannot be combined with `-redis` or `-local-network`. `-http`
+must remain a literal loopback address. Open the printed
+`http://localhost:<page-port>/?source=camera&autostart=0#token=…` URL in desktop
+Chrome. It selects the camera without starting a call. The page captures the
+per-launch token, then removes the fragment from the address bar. Keep the
+printed URL private. Reopen it to restore controls after a reload; the removed
+fragment is not saved by the page. Host and Origin checks also remain active.
+
+The current `internal/privateapi` and control plane have **no credential
+HTTP authentication**. Keep control private through the tunnel. Omit
+`-attach-auth-file`. The flag checks a supplied regular file for mode 0600 or
+stricter and reads it once, but rejects non-empty credentials. It does not
+invent a Bearer or Basic authentication format. No credential is logged.
+
+The hook is optional for moves and required for kills. The page server executes
+it directly, with no shell, and passes the server's environment unchanged.
+Launch the server with only the environment the hook needs. The hook must keep
+secrets out of stdout and stderr. Failure receipts retain at most 4 KiB of
+stderr, with credential fields and known secret environment values redacted.
+The hook protocol is:
+
+```text
+<executable> kill --worker <current-owner> --session <session-id>
+{"ok":true,"action":"kill","worker":"<current-owner>","pid":123,"killedAt":"2026-10-13T12:00:00.123456789Z"}
+
+<executable> replace --worker <old-owner>
+{"ok":true,"action":"replace","worker":"<old-owner>","replacement":"<new-name>","readyAt":"2026-10-13T12:00:01Z"}
+```
+
+Each invocation must exit 0 and emit exactly one JSON object, with no extra
+stdout. Use a UTC RFC3339Nano `killedAt` for the actual kill. `readyAt` accepts
+RFC3339Nano. Non-zero exit, `ok:false`, invalid output or timeout fails the
+action. The default action deadline is 90 seconds for the complete kill,
+takeover, replacement and pool check. Hook stdout is bounded to 64 KiB.
+
+The page waits for control's completed takeover before invoking `replace`.
+It then waits for the named replacement to be healthy and registered, and for
+the pool to return to the healthy count observed at page startup. Two workers
+support the checklist: moves choose the other worker and kills target the
+current owner. Drain returns `unsupported in attach mode`. Status comes from
+control registrations and heartbeat state; no local PIDs are inferred. The
+hook's `killedAt` is recorded as `event.server.at`. Keep control and hook clocks
+aligned so takeover events can be matched to the kill.
+
+Attach mode preserves the worker's SDP. The operator's network must reach the
+relay's advertised UDP media port. Forwarding control alone does not forward
+media. Pass `-relay-buffer=on` or `off` to match the existing relay; this flag
+labels the measurement and does not reconfigure the attached cluster. The
+current checklist uses the echo agent. Direct worker agent diagnostics are not
+available through attachment alone.
+
+With `-results-dir`, the page automatically uploads the record after the
+checklist ends (including a failed run) and on **Save results**. Save still
+downloads the JSON. Token-protected `POST /demo/results` accepts one JSON object
+with `Content-Type: application/json`, up to 8 MiB. Each successful request
+creates `results-<launchId>-<n>.json` with mode 0600 and returns 201; existing
+files are never replaced. Without the directory, the endpoint returns 404 and
+the page quietly skips uploads. Retain failed and inconclusive records.
+
+The process integration test uses two externally owned workers and a test hook:
+
+```sh
+RELAIS_TEST_REDIS_REQUIRE=1 RELAIS_HARNESS_REQUIRE_FFMPEG=1 \
+  go test -race -count=1 -run '^TestDemoAttachExternalSmoke$' ./cmd/relais-demo
+```
+
+It builds its own binaries under `bin/attach-smoke-*/`, starts a separate
+throwaway Redis on a free non-default loopback port, then performs two moves
+and two owner kills. The test stops all processes it starts. Desktop Chrome
+camera presentation and the full browser checklist still need a device run.
+
 ## Desktop Chrome: real camera at 720p
 
 1. Open the printed HTTPS URL. On **Your connection is not private**, choose

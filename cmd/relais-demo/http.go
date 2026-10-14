@@ -26,6 +26,13 @@ type workerProcess struct {
 	URL   string
 }
 type demo struct {
+	attached                   bool
+	faultHook                  string
+	actionTimeout              time.Duration
+	expectedPoolSize           int
+	resultsDir                 string
+	resultsMu                  sync.Mutex
+	resultsNext                uint64
 	ctx                        context.Context
 	client                     *http.Client
 	control, relay, redis, dir string
@@ -47,6 +54,8 @@ var errRegistrationUncertain = errors.New("replacement registration unverified")
 
 type demoStatus struct {
 	controlplane.Status
+	AttachMode        bool           `json:"attach_mode"`
+	ResultsEnabled    bool           `json:"results_enabled"`
 	LaunchID          string         `json:"launchId"`
 	RelayBuffer       string         `json:"relayBuffer"`
 	SelectedAgent     string         `json:"selected_agent"`
@@ -64,6 +73,7 @@ func (d *demo) status(ctx context.Context) (demoStatus, error) {
 	if err != nil {
 		return status, err
 	}
+	status.AttachMode, status.ResultsEnabled = d.attached, d.resultsDir != ""
 	status.Relay, status.Redis = d.relay, d.redis
 	status.LaunchID = d.launchID
 	status.RelayBuffer = selectedRelayBuffer(config{RelayBuffer: d.relayBuffer})
@@ -72,6 +82,10 @@ func (d *demo) status(ctx context.Context) (demoStatus, error) {
 		status.SelectedAgent = "echo"
 	}
 	status.WorkerPIDs = map[string]int{}
+	if d.attached {
+		status.PoolSize, status.ExpectedPoolSize = healthyPool(status.Workers), d.expectedPoolSize
+		return status, nil
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for name, worker := range d.workers {
@@ -191,6 +205,9 @@ type actionResult struct {
 // Kill waits for the real detector/takeover before adding a fresh target. It
 // never tells the control plane a worker died or changes crash recovery.
 func (d *demo) kill(ctx context.Context, id string) (actionResult, error) {
+	if d.attached {
+		return d.killAttached(ctx, id)
+	}
 	owner, err := d.owner(ctx, id)
 	if err != nil {
 		return actionResult{}, err
@@ -212,39 +229,12 @@ func (d *demo) kill(ctx context.Context, id string) (actionResult, error) {
 	case <-ctx.Done():
 		return result, ctx.Err()
 	}
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	var takeover controlplane.MoveResult
-	completed := false
-	for {
-		status, err := d.status(ctx)
-		if err != nil {
-			return result, err
-		}
-		recovered := false
-		for _, w := range status.Workers {
-			if w.Name == owner.Owner {
-				recovered = w.Dead && !w.Recovering
-			}
-		}
-		// Ownership changes before resume, so a new owner alone cannot prove
-		// recovery. Use this kill's terminal event, excluding earlier takeovers.
-		for _, event := range status.Takeovers {
-			if event.ID == owner.ID && event.From == owner.Owner && !event.Start.Before(result.At) {
-				takeover, completed = event, true
-			}
-		}
-		if recovered && completed {
-			if !takeover.Lost {
-				result.To = takeover.To
-			}
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
-		case <-ticker.C:
-		}
+	takeover, err := d.waitTakeover(ctx, owner, result.At)
+	if err != nil {
+		return result, err
+	}
+	if !takeover.Lost {
+		result.To = takeover.To
 	}
 	d.finishAgent(ctx, owner.ID, result.From, result.To, "kill", continuity)
 	worker.child.Stop() // closes the killed child's log without signalling a reaped PID
@@ -258,6 +248,9 @@ func (d *demo) kill(ctx context.Context, id string) (actionResult, error) {
 	return result, nil
 }
 func (d *demo) drain(ctx context.Context, name string) (actionResult, error) {
+	if d.attached {
+		return actionResult{Kind: "drain", From: name}, errors.New("unsupported in attach mode")
+	}
 	d.mu.Lock()
 	worker := d.workers[name]
 	d.mu.Unlock()
@@ -319,7 +312,7 @@ func (d *demo) handler(files http.Handler) http.Handler {
 	mux.HandleFunc("POST /calls/{id}/move", func(w http.ResponseWriter, r *http.Request) {
 		d.op.Lock()
 		defer d.op.Unlock()
-		if d.agentName == "demo" {
+		if d.agentName == "demo" && !d.attached {
 			d.moveAgent(w, r)
 		} else {
 			proxy.ServeHTTP(w, r)
@@ -363,11 +356,13 @@ func (d *demo) handler(files http.Handler) http.Handler {
 			d.op.Lock()
 			defer d.op.Unlock()
 			// Launcher lifetime, not a disconnected browser, owns replacement work.
-			ctx, cancel := context.WithTimeout(d.ctx, 15*time.Second)
+			ctx, cancel := context.WithTimeout(d.ctx, d.actionDuration())
 			defer cancel()
 			var result actionResult
 			var err error
-			if kind == "kill" {
+			if kind == "drain" && d.attached {
+				result, err = d.drain(ctx, "")
+			} else if kind == "kill" {
 				result, err = d.kill(ctx, req.ID)
 			} else {
 				var owner controlplane.CallStatus
@@ -393,12 +388,13 @@ func (d *demo) handler(files http.Handler) http.Handler {
 			privateapi.Write(w, result)
 		}
 	}
+	mux.HandleFunc("POST /demo/results", d.uploadResults)
 	mux.HandleFunc("POST /demo/kill", action("kill"))
 	mux.HandleFunc("POST /demo/drain", action("drain"))
 	mux.HandleFunc("POST /workers/{name}/drain", func(w http.ResponseWriter, r *http.Request) {
 		d.op.Lock()
 		defer d.op.Unlock()
-		ctx, cancel := context.WithTimeout(d.ctx, 15*time.Second)
+		ctx, cancel := context.WithTimeout(d.ctx, d.actionDuration())
 		defer cancel()
 		result, err := d.drain(ctx, r.PathValue("name"))
 		if err != nil {
@@ -424,7 +420,11 @@ func (d *demo) handler(files http.Handler) http.Handler {
 			http.Error(w, "demo Host refused", http.StatusForbidden)
 			return
 		}
-		if d.publicHost != "" && r.Method != http.MethodGet && (d.launchToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Relais-Demo-Token")), []byte(d.launchToken)) != 1) {
+		needsToken := d.publicHost != "" || d.attached || r.URL.Path == "/demo/results" && d.resultsDir != ""
+		if r.URL.Path == "/demo/results" && d.resultsDir == "" {
+			needsToken = false // disabled endpoint has no mutation and returns 404
+		}
+		if needsToken && r.Method != http.MethodGet && (d.launchToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Relais-Demo-Token")), []byte(d.launchToken)) != 1) {
 			http.Error(w, "demo launch token required", http.StatusForbidden)
 			return
 		}

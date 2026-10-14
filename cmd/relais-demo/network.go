@@ -75,6 +75,13 @@ func pageCertificate(host string) (tls.Certificate, string, error) {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, hex.EncodeToString(sum[:]), nil
 }
 
+func configToken(cfg config) (string, error) {
+	if cfg.AttachControl != "" || cfg.ResultsDir != "" {
+		return launchToken("required")
+	}
+	return launchToken(cfg.LocalNetwork)
+}
+
 func launchToken(localHost string) (string, error) {
 	if localHost == "" {
 		return "", nil
@@ -99,7 +106,14 @@ func demoPageURL(cfg config, address, token string) string {
 		return "https://" + address + "/?source=camera&autostart=0#token=" + token
 	}
 	_, port, _ := net.SplitHostPort(address)
-	return "http://localhost:" + port + "/?source=test&autostart=0"
+	if cfg.AttachControl != "" {
+		return "http://localhost:" + port + "/?source=camera&autostart=0#token=" + token
+	}
+	page := "http://localhost:" + port + "/?source=test&autostart=0"
+	if token != "" {
+		page += "#token=" + token
+	}
+	return page
 }
 
 func listenPage(cfg config) (net.Listener, string, error) {
