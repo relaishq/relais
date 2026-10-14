@@ -133,13 +133,33 @@ type Call struct {
 	recordingCancel context.CancelFunc
 	closeOnce       sync.Once
 	closeErr        error
+
+	// dialMu guards dtlsStates, the DTLS transport's state changes, which
+	// the dial report reads (dial_report.go). dialReport is set once the
+	// call connects.
+	dialMu     sync.Mutex
+	dtlsStates []StateChange
+	dialReport DialReport
 }
 
 // Dial starts a call: it makes one WHIP-style offer/answer exchange with the
 // system and waits until the caller's connection is "connected". It fails
-// with ErrHarnessClosed once the harness is closing.
+// with ErrHarnessClosed once the harness is closing. Every error it returns
+// is a *DialError that carries what the caller observed.
 func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err error) {
 	rec := newRecorder()
+	// A failed dial reads its evidence before it closes the call, so the
+	// teardown does not appear in the report.
+	defer func() {
+		if err != nil {
+			failure := newDialError(err, h, rec, call)
+			if call != nil {
+				_ = call.close()
+				call = nil
+			}
+			err = failure
+		}
+	}()
 	if h.external != nil {
 		rec.distributed = h.external.Distributed
 	}
@@ -161,7 +181,11 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 		return nil, err
 	}
 	socket.observer.sendTiming = opts.SendTiming
-	api, err := newCallerAPI(rec, opts.BrowserLikeOffer, socket)
+	checks := h.iceChecks
+	if checks == 0 {
+		checks = callerICEChecks
+	}
+	api, err := newCallerAPI(rec, opts.BrowserLikeOffer, socket, checks)
 	if err != nil {
 		return nil, errors.Join(err, socket.close())
 	}
@@ -173,12 +197,7 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 	if err := h.addCall(call); err != nil {
 		return nil, errors.Join(err, call.close())
 	}
-	defer func() {
-		if err != nil {
-			_ = call.close()
-			call = nil
-		}
-	}()
+	pc.SCTP().Transport().OnStateChange(call.dtlsStateChange)
 
 	call.audio, call.audioSSRC, err = call.addTrack(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: opusSampleRate, Channels: 2}, kindAudio)
@@ -260,6 +279,8 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 		call.readers.Add(1)
 		call.mu.Unlock()
 		go func() { defer call.readers.Done(); call.maintainRecording(maintenance) }()
+		call.dialReport = dialReport(rec, call)
+		call.dialReport.Outcome = DialConnected
 		return call, nil
 	case state := <-failed:
 		return call, fmt.Errorf("callharness: connection %s before connecting", state)
@@ -632,8 +653,9 @@ func (c *Call) close() error {
 // newCallerAPI builds the caller's Pion API: Opus and VP8 (or a browser-like
 // codec list), Pion's default interceptors, a host candidate on the caller's
 // own loopback socket (through its UDP mux, which observes consent checks),
+// iceChecks connectivity checks per candidate pair (see callerICEChecks),
 // and a logger factory that counts SRTP decryption failures.
-func newCallerAPI(rec *recorder, browserLike bool, socket *callerSocket) (*webrtc.API, error) {
+func newCallerAPI(rec *recorder, browserLike bool, socket *callerSocket, iceChecks uint16) (*webrtc.API, error) {
 	mediaEngine := &webrtc.MediaEngine{}
 	register := registerCallerCodecs
 	if browserLike {
@@ -658,6 +680,8 @@ func newCallerAPI(rec *recorder, browserLike bool, socket *callerSocket) (*webrt
 	settings.SetIPFilter(socket.acceptsCandidate)
 	settings.SetICEMulticastDNSMode(ice.MulticastDNSModeDisabled)
 	settings.SetICEUDPMux(socket.mux)
+	// Pion sends one more check than this limit before it fails the pair.
+	settings.SetICEMaxBindingRequests(iceChecks - 1)
 
 	return webrtc.NewAPI(
 		webrtc.WithMediaEngine(mediaEngine),

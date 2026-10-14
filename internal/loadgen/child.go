@@ -44,6 +44,34 @@ type MoveRequest struct {
 	To       int      `json:"to"`
 }
 
+// dialTimeout bounds each dial. It is longer than the caller's ICE checking
+// (about 10 s), so a short UDP stall at call start can still connect, and a
+// server that never answers fails here.
+const dialTimeout = 20 * time.Second
+
+// dialFailures returns every failed dial, not only the first, with the kind
+// of each failure.
+func dialFailures(errs []error) error {
+	var failed []error
+	for i, err := range errs {
+		if err == nil {
+			continue
+		}
+		var failure *callharness.DialError
+		if errors.As(err, &failure) {
+			err = fmt.Errorf("dial %d (%s): %w", i, failure.Report.Failure, err)
+		} else {
+			err = fmt.Errorf("dial %d: %w", i, err)
+		}
+		failed = append(failed, err)
+	}
+	if len(failed) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("%d of %d dials failed:\n%w", len(failed), len(errs), errors.Join(failed...))
+}
+
 // RunChild exposes only a loopback operator endpoint. Topology injection keeps
 // signaling separate from media and accepts #36's setns socket factory.
 func RunChild(ctx context.Context, o ChildOptions) error {
@@ -94,19 +122,22 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 	// Bounded setup concurrency prevents signaling setup from flooding the server.
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, 4)
-	errs := make(chan error, o.Callers)
+	errs := make([]error, o.Callers)
 	for i := range calls {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// Every dial reports its outcome as it ends, connected or not.
+			m := Message{Type: "dial", PID: os.Getpid(), CallID: i}
+			defer func() { writer.Write(m) }()
 			select {
 			case slots <- struct{}{}:
 			case <-ctx.Done():
-				errs <- ctx.Err()
+				errs[i], m.Error = ctx.Err(), ctx.Err().Error()
 				return
 			}
 			defer func() { <-slots }()
-			dial, stop := context.WithTimeout(ctx, 20*time.Second)
+			dial, stop := context.WithTimeout(ctx, dialTimeout)
 			defer stop()
 			worker := -1
 			if o.PlaceOnWorker {
@@ -114,18 +145,21 @@ func RunChild(ctx context.Context, o ChildOptions) error {
 			}
 			call, err := h.Dial(dial, callharness.CallOptions{Video: o.Video, Worker: worker, Recording: callharness.RecordingOptions{History: history, DecodeEvery: 30}, SendTiming: meter.Observe, SendPacing: meter.ObservePacing})
 			if err != nil {
-				errs <- fmt.Errorf("dial %d: %w", i, err)
+				errs[i], m.Error = err, err.Error()
+				var failure *callharness.DialError
+				if errors.As(err, &failure) {
+					m.Session, m.Dial = failure.Report.Session, &failure.Report
+				}
 				return
 			}
 			calls[i] = call
+			report := call.DialReport()
+			m.Session, m.Dial = call.SessionID(), &report
 		}()
 	}
 	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			return err
-		}
+	if err := dialFailures(errs); err != nil {
+		return err
 	}
 	address, err := clusterprocess.FreeTCP()
 	if err != nil {

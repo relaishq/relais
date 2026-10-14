@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -78,10 +80,20 @@ type stunObserver struct {
 	audioSchedule, videoSchedule atomic.Pointer[time.Time]
 	rec                          *recorder
 
-	mu          sync.Mutex
-	unanswered  map[[stunTransactionSize]byte]struct{}
+	mu         sync.Mutex
+	unanswered map[[stunTransactionSize]byte]struct{}
+	// checks counts the binding requests sent to, and the answers received
+	// from, each remote address. The caller has one local socket, so each
+	// remote address is one candidate pair. The dial report reads them.
+	checks      map[string]*pairChecks
 	inspectSend func([]byte) // test-only observation of caller ciphertext headers
 	inspect     func([]byte) // test-only raw caller observation; nil normally
+}
+
+// pairChecks counts one candidate pair's binding requests and answers.
+type pairChecks struct {
+	sent, answered                    uint64
+	firstSent, lastSent, lastAnswered time.Time
 }
 
 // WriteTo sends a packet. A binding request counts as sent only once the
@@ -120,6 +132,7 @@ func (o *stunObserver) WriteTo(p []byte, addr net.Addr) (int, error) {
 		return n, err
 	}
 	o.rec.consentRequest(sentAt)
+	o.countCheck(addr, sentAt, false)
 
 	return n, nil
 }
@@ -143,11 +156,65 @@ func (o *stunObserver) ReadFrom(p []byte) (int, net.Addr, error) {
 		delete(o.unanswered, txID)
 		o.mu.Unlock()
 		if answers {
-			o.rec.consentResponse(time.Now())
+			now := time.Now()
+			o.rec.consentResponse(now)
+			o.countCheck(addr, now, true)
 		}
 	}
 
 	return n, addr, nil
+}
+
+// countCheck counts a binding request sent to addr, or an answer from it.
+func (o *stunObserver) countCheck(addr net.Addr, at time.Time, answer bool) {
+	if addr == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.checks == nil {
+		o.checks = make(map[string]*pairChecks)
+	}
+	pair := o.checks[addr.String()]
+	if pair == nil {
+		pair = &pairChecks{}
+		o.checks[addr.String()] = pair
+	}
+	if answer {
+		pair.answered++
+		pair.lastAnswered = at
+		return
+	}
+	pair.sent++
+	if pair.firstSent.IsZero() {
+		pair.firstSent = at
+	}
+	pair.lastSent = at
+}
+
+// candidatePairs returns the checks counted so far, one entry per remote
+// address in address order, with times as offsets from the dial's start.
+func (o *stunObserver) candidatePairs() []CandidatePairChecks {
+	local := o.conn.LocalAddr().String()
+	offset := func(at time.Time) time.Duration {
+		if at.IsZero() {
+			return 0
+		}
+		return o.rec.since(at)
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	pairs := make([]CandidatePairChecks, 0, len(o.checks))
+	for remote, pair := range o.checks {
+		pairs = append(pairs, CandidatePairChecks{
+			Local: local, Remote: remote,
+			ChecksSent: pair.sent, ResponsesReceived: pair.answered,
+			FirstCheck: offset(pair.firstSent), LastCheck: offset(pair.lastSent), LastResponse: offset(pair.lastAnswered),
+		})
+	}
+	slices.SortFunc(pairs, func(a, b CandidatePairChecks) int { return strings.Compare(a.Remote, b.Remote) })
+
+	return pairs
 }
 
 func (o *stunObserver) Close() error                       { return o.conn.Close() }
