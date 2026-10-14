@@ -76,6 +76,7 @@ import (
 
 	"github.com/relais/internal/relayleg"
 	"github.com/relais/internal/socketbind"
+	"github.com/relais/internal/udpbuffer"
 	"github.com/relais/pkg/sessionstore"
 )
 
@@ -121,14 +122,8 @@ const (
 	DefaultMaxTotalHeldBytes = 8 << 20
 )
 
-const (
-	// maxDatagram is the largest UDP payload.
-	maxDatagram = 65535
-
-	// socketBufferSize is requested for both relay sockets (best effort):
-	// every call on the relay shares them.
-	socketBufferSize = 4 << 20
-)
+// maxDatagram is the largest UDP payload.
+const maxDatagram = 65535
 
 // Config configures a relay.
 type Config struct {
@@ -317,6 +312,8 @@ type Relay struct {
 	workers         *net.UDPConn
 	publicAddr      netip.AddrPort
 	workerAddr      netip.AddrPort
+	publicBuffers   udpbuffer.Result
+	workerBuffers   udpbuffer.Result
 	flows           *flowTable
 	lookups         *ownerLookups
 	persistence     *routeWrites
@@ -407,6 +404,9 @@ func New(cfg Config) (*Relay, error) {
 		workers:    workers,
 		publicAddr: publicAddr,
 		workerAddr: workerAddr,
+		// Best effort: every call on the relay shares both sockets.
+		publicBuffers: udpbuffer.Apply(public, udpbuffer.Relay),
+		workerBuffers: udpbuffer.Apply(workers, udpbuffer.Relay),
 		flows: newFlowTable(flowLimits{
 			stickinessWindow: cfg.RouteStickinessWindow,
 			idleTimeout:      cfg.FlowTimeout,
@@ -524,8 +524,6 @@ func listen(ctx context.Context, name, addr string) (*net.UDPConn, netip.AddrPor
 	if err != nil {
 		return nil, netip.AddrPort{}, wait, fmt.Errorf("relay: listen on %s address: %w", name, err)
 	}
-	_ = conn.SetReadBuffer(socketBufferSize)
-	_ = conn.SetWriteBuffer(socketBufferSize)
 
 	local, ok := conn.LocalAddr().(*net.UDPAddr)
 	if !ok {
@@ -547,6 +545,12 @@ func (r *Relay) PublicAddr() netip.AddrPort {
 // send to.
 func (r *Relay) WorkerAddr() netip.AddrPort {
 	return r.workerAddr
+}
+
+// SocketBuffers reports the buffer sizes the relay requested and got on its
+// public and worker-leg sockets.
+func (r *Relay) SocketBuffers() (public, worker udpbuffer.Result) {
+	return r.publicBuffers, r.workerBuffers
 }
 
 // AddWorker registers a media worker's relay-leg address, so the relay

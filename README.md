@@ -558,6 +558,36 @@ versions**, then upgrade writers, and retain old-version decoding until old
 snapshots are gone. The current single-version decoder does not provide that
 rollout compatibility by itself.
 
+### UDP socket buffers
+
+A UDP socket on the OS default receive buffer drops datagrams in the kernel
+when its read loop stalls briefly. Every socket on the media path therefore
+requests larger buffers:
+
+| Socket | Receive | Send |
+| --- | --- | --- |
+| Relay media and worker leg | 16 MiB | 4 MiB |
+| Worker media | 8 MiB | 4 MiB |
+| Call-harness caller | 4 MiB | 1 MiB |
+
+The kernel caps each request without an error. `relais-relay` and
+`relais-worker` log the requested and effective sizes at startup, and print a
+warning that names the host limit when it caps a request. On Linux, raise the
+limits on the host; a container cannot change them. For example, in
+`/etc/sysctl.d/60-relais-udp.conf`:
+
+```conf
+net.core.rmem_max = 16777216
+net.core.wmem_max = 4194304
+```
+
+Apply it with `sudo sysctl --system`. Leave `rmem_default` and `wmem_default`
+unchanged; they apply to every socket. Linux 6.18 and later default both limits
+to 4 MiB; older kernels default to 212992 bytes. `ss -uamn` and `getsockopt`
+show double the granted size; the startup log shows the granted size. Check
+for kernel drops with `nstat -az UdpRcvbufErrors`. macOS caps each buffer at
+`kern.ipc.maxsockbuf`.
+
 ## Getting Started
 
 ### Prerequisites

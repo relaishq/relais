@@ -13,6 +13,7 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
+	"github.com/relais/internal/udpbuffer"
 	"github.com/relais/pkg/agent"
 )
 
@@ -89,6 +90,7 @@ type SocketConfig struct {
 type Socket struct {
 	conn      *net.UDPConn
 	localAddr netip.AddrPort
+	buffers   udpbuffer.Result // every attached worker shares it
 	log       logging.LeveledLogger
 	readDone  chan struct{}
 
@@ -158,6 +160,7 @@ func ListenSocket(cfg SocketConfig) (*Socket, error) {
 	s := &Socket{
 		conn:             conn,
 		localAddr:        netip.AddrPortFrom(local.Addr().Unmap(), local.Port()),
+		buffers:          udpbuffer.Apply(conn, udpbuffer.Worker),
 		log:              cfg.LoggerFactory.NewLogger("mediasocket"),
 		readDone:         make(chan struct{}),
 		ports:            make(map[*socketPort]struct{}),
