@@ -358,10 +358,10 @@ func (r *recorder) packet(track *trackRecord, pkt *rtp.Packet, arrived time.Time
 	duplicate := seen && prior == pkt.Timestamp
 	if track.packets > 0 {
 		gap := at - track.lastArrival
-		if gap > 150*time.Millisecond {
+		if gap > MediaGapRetention {
 			if len(track.mediaGaps) < MaxRetainedMediaGaps {
 				track.mediaGaps = append(track.mediaGaps, MediaGap{EndedAt: at, Duration: gap})
-			} else {
+			} else if gap > MediaGapCeiling {
 				track.mediaGapOverflow++
 			}
 		}

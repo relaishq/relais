@@ -92,8 +92,8 @@ func (c config) validate() error {
 	if c.Capacity && c.Limits != loadgen.DefaultLimits() {
 		return errors.New("capacity requires the unchanged generator saturation limits")
 	}
-	if c.Capacity && (c.Calibrate || len(c.Events) > 0 || c.CapacityStart < 1 || c.CapacityMax < c.CapacityStart || c.CapacityMax > 1024 || c.CallersPerProcess < 1 || c.CallersPerProcess > 4 || c.Workers < 3 || c.Workers > 16 || c.Duration < 20*time.Second || c.Duration > 3*time.Minute || !(c.StoreOpsBudget > 0 && c.StoreOpsBudget <= 100) || !(c.StoreBytesBudget > 0 && c.StoreBytesBudget <= 128<<10)) {
-		return errors.New("capacity needs 3..16 workers, 20s..3m duration, 1..4 callers/process, budgets in (0,100 commands] and (0,128 KiB], 1 <= start <= max <= 1024 and no custom events/calibration")
+	if c.Capacity && (c.Calibrate || len(c.Events) > 0 || c.CapacityStart < 1 || c.CapacityMax < c.CapacityStart || c.CapacityMax > 1024 || c.CallersPerProcess < 1 || c.CallersPerProcess > 4 || c.Workers < 3 || c.Workers > 16 || c.Duration < 20*time.Second || c.Duration > 3*time.Minute || c.SampleEvery != time.Second || !(c.StoreOpsBudget > 0 && c.StoreOpsBudget <= 100) || !(c.StoreBytesBudget > 0 && c.StoreBytesBudget <= 128<<10)) {
+		return errors.New("capacity needs 3..16 workers, 20s..3m duration, 1s samples, 1..4 callers/process, budgets in (0,100 commands] and (0,128 KiB], 1 <= start <= max <= 1024 and no custom events/calibration")
 	}
 	if c.Soak {
 		if c.Capacity || c.Calibrate || c.Workers < 3 || c.Workers > 16 || c.Duration < 20*time.Second || c.Duration > 24*time.Hour || c.ChaosInterval < 20*time.Second || c.ChaosInterval+7*time.Second >= c.Duration || c.SampleEvery != time.Second || c.CallersPerProcess < 1 || c.CallersPerProcess > 4 || c.Limits != loadgen.DefaultLimits() || c.Callers > plannedLoad(c.Workers, c.WorkerFloor, c.RelayFloor) || c.Callers < 2 {

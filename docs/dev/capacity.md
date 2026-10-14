@@ -37,18 +37,38 @@ steps. Passing a capped ramp does not find the exact worker or relay limit.
 The relay packets/s lower bound sums caller-to-worker and worker-to-caller
 forwarded datagrams in a valid relay step. It is observed throughput, not a
 NIC packet-rate guarantee. Saturation ends usable capacity evidence; it never
-becomes a service-capacity threshold. Nothing relaxes the generator's default
-20 ms interval p99, 1% skipped-frame, and 85% CPU/core limits in capacity mode.
+becomes a service-capacity threshold. Capacity mode cannot change the
+generator's default 20 ms interval p99, 1% skipped-frame and 85% CPU/core
+limits, or its 1 s sample interval.
 
 Use at most four callers per generator process. The main hosted calibration
 on run 38133371237 proved four and first saturated at eight per process with
 GOMAXPROCS=1. Capacity defaults to two, to leave more pacing margin on a shared
 runner. Reports preserve each process's exact caller count, CPU, lateness,
 skips and causes. The cause label `interval send-lateness p99 peak` denotes
-the largest one-second-interval p99, not the whole-step p99. A single saturated
-interval makes capacity evidence inconclusive. An independently confirmed
-service crash still fails, with the generator cause retained. The #41 soak
-policy proposal does not change the generator limits.
+the largest one-second-interval p99, not the whole-step p99.
+
+Capacity judges generator validity with the soak's rule (#128, #133). One
+isolated sample whose interval send-lateness p99 is above 20 ms but at most
+40 ms, or whose skipped frames are above 1% but at most 2%, does not make a
+step inconclusive. On the #85 VMs these slips occurred while each 2-caller
+generator's whole-step p99 stayed at or below 4.6 ms. Slips of 23-33 ms often
+came with two skipped frames of about 160 (1.25%). The step stays
+inconclusive for any of these:
+
+- two consecutive samples from one generator above any limit;
+- lateness p99 above 40 ms or skipped frames above 2% in any sample;
+- CPU above 85% per GOMAXPROCS in any sample;
+- a sample above a limit whose interval maximum lateness exceeds 40 ms, so
+  its stall could hide a gap the recorder does not retain;
+- a process whose earlier samples were dropped, so isolation cannot be shown;
+- any cause added after the generator judge, such as an execution error.
+
+The raw `run.outcome` and `run.processes[].saturated` keep the strict
+single-sample gate as evidence. Each step records its own `generator_outcome`
+and lists the slips it tolerated in `tolerated_lateness_slips`. The console
+prints them as `tolerated:` lines. An independently confirmed service crash
+still fails, with the generator cause retained.
 
 ## Demonstrated load floor and acceptance
 
@@ -91,6 +111,28 @@ crash remains a failure. The allowed gap window brackets the event's API/resume
 interval. Takeovers allow later tracks to recover within the row's two-second
 bound, rather than ending at the earliest track's resume. Both allow up to
 150 ms for bounding packets. Another call's event cannot excuse the gap.
+
+A tolerated slip can still shorten a measured move gap. A stall that covers
+the last packet before an outage stamps that packet late, as in the soak
+(#129). Each move therefore has a stall bound: the largest interval maximum
+send lateness above 20 ms, plus one 20 ms audio tick. Only samples from the
+moved call's own generator that overlap [move start - 1 s, media resumption]
+count. Samples whose maximum stays within 20 ms add nothing; they are the
+existing measurement envelope. The move p95 gates are judged again with each
+track's bound added. A measured pass that fails there is inconclusive, never a
+pass. A takeover gap below 2 s by no more than its bound is also inconclusive.
+A measured failure still fails, and no track leaves a percentile.
+
+The same stall can shorten an unscheduled whole-call interruption. The
+recorder therefore retains every gap above 90 ms: 150 ms minus the largest
+tolerated stall (`callharness.MaxToleratedStall`, two 20 ms lateness limits
+plus one 20 ms audio tick). Capacity judges every retained gap, its longest
+gap and its rolling arrival history. An unscheduled gap above 150 ms keeps the
+rule above. An unscheduled gap at or below 150 ms is inconclusive when the gap
+plus its stall bound exceeds 150 ms. That bound uses this caller's generator
+samples that overlap [gap start - 1 s, gap end]. A full gap inventory may have
+dropped a gap, so it is also inconclusive. A capacity step of at most three
+minutes cannot fill the 4096-gap inventory.
 
 `worker_peak_calls` retains each sampled worker-session peak. A survivor
 above C blocks approval even when its caller rows pass. The post-kill move

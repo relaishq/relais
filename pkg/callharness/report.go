@@ -110,9 +110,28 @@ type SentTrack struct {
 
 // MediaGap records an interval between successfully decrypted packets.
 // These sparse observations survive rolling history, up to MaxRetainedMediaGaps.
+// Only gaps above MediaGapRetention are kept. MediaGapOverflow counts dropped
+// gaps above MediaGapCeiling; a full inventory may also omit shorter gaps.
 type MediaGap struct{ EndedAt, Duration time.Duration }
 
 const MaxRetainedMediaGaps = 4096
+
+// MediaGapCeiling is the whole-call interruption limit that the load judges
+// apply outside scheduled events.
+const MediaGapCeiling = 150 * time.Millisecond
+
+// MaxToleratedStall is the largest caller stall the load judges tolerate in an
+// isolated generator sample: two 20 ms send-lateness limits plus one audio
+// frame. Such a stall can stamp the packet before an outage late and shorten
+// the measured gap by up to this much (#133).
+const MaxToleratedStall = 2*toleratedSendLateness + opusFrameDuration
+
+// toleratedSendLateness is the load generator's default interval p99 limit.
+const toleratedSendLateness = 20 * time.Millisecond
+
+// MediaGapRetention is the shortest gap kept in MediaGaps. A gap above
+// MediaGapCeiling that a tolerated stall shortened is still retained.
+const MediaGapRetention = MediaGapCeiling - MaxToleratedStall
 
 // TrackReport describes a track the caller received.
 type TrackReport struct {

@@ -53,3 +53,38 @@ func TestRecorderGapInventoryIsBoundedAndCountsOverflow(t *testing.T) {
 	require.Len(t, report.MediaGaps, MaxRetainedMediaGaps)
 	require.Equal(t, 3, report.MediaGapOverflow)
 }
+
+// #133: a tolerated caller stall can shorten a gap above the ceiling by up to
+// MaxToleratedStall, so near-ceiling gaps are retained too. Overflow still
+// counts only dropped gaps above the ceiling.
+func TestRecorderRetainsNearCeilingGaps(t *testing.T) {
+	require.Equal(t, 90*time.Millisecond, MediaGapRetention)
+	r := newRecorder()
+	track := r.addTrack(kindAudio, 1, 111)
+	at := time.Second
+	r.packet(track, &rtp.Packet{}, r.start.Add(at))
+	var want []MediaGap
+	for i, gap := range []time.Duration{20 * time.Millisecond, MediaGapRetention, MediaGapRetention + time.Millisecond, MediaGapCeiling, MediaGapCeiling + time.Millisecond} {
+		at += gap
+		r.packet(track, &rtp.Packet{Header: rtp.Header{SequenceNumber: uint16(i + 1)}}, r.start.Add(at))
+		if gap > MediaGapRetention {
+			want = append(want, MediaGap{EndedAt: at, Duration: gap})
+		}
+	}
+	require.Len(t, want, 3)
+	require.Equal(t, want, r.report().Tracks[0].MediaGaps)
+
+	r = newRecorder()
+	track = r.addTrack(kindAudio, 1, 111)
+	at = time.Second
+	for i := 0; i < MaxRetainedMediaGaps+3; i++ {
+		at += 100 * time.Millisecond
+		if i == MaxRetainedMediaGaps+2 {
+			at += 100 * time.Millisecond
+		}
+		r.packet(track, &rtp.Packet{Header: rtp.Header{SequenceNumber: uint16(i)}}, r.start.Add(at))
+	}
+	report := r.report().Tracks[0]
+	require.Len(t, report.MediaGaps, MaxRetainedMediaGaps)
+	require.Equal(t, 1, report.MediaGapOverflow, "only the dropped 200ms gap is above the ceiling")
+}

@@ -3,7 +3,8 @@
 `relais-load -soak` extends the real-process driver. It uses the existing
 harness caller, bounded recording, content/freshness yardstick, service metrics,
 owned process groups, disposable non-6379 Redis and optional Linux LAN namespaces.
-It changes neither capacity nor calibration acceptance.
+It changes neither capacity nor calibration acceptance. Capacity shares only
+the generator lateness rule below (#133).
 
 ```sh
 make build
@@ -74,16 +75,27 @@ has its own log directory and PID. The pool must be ready before the next event.
 ## Verdict and generator exclusions
 
 Soak retains the #38 raw limits: interval send-lateness p99 >20 ms, skipped
-frames >1%, and CPU per GOMAXPROCS >85%. A modest lateness excess must occur
-in two consecutive samples from the same generator to exclude those intervals.
-Both samples are excluded, including the first second of overload. An isolated
-one-tick slip remains visible in the raw samples but does not establish overload.
-Lateness p99 above 2× `-lateness-limit` (40 ms by default), skipped frames >1%,
-or CPU per GOMAXPROCS >85% excludes immediately. Exactly a limit is permitted.
-An excluded interval names lateness only when lateness alone excludes it. Missing intervals do not establish
-persistence. Capacity and calibration retain their strict single-sample gates;
-the raw `run.processes[].saturated` field also retains that strict gate. The soak
-`saturation` object records its persistence and immediate-lateness limits.
+frames >1%, and CPU per GOMAXPROCS >85%. A modest lateness or skipped-frame
+excess (at most 2x its limit) must persist to exclude intervals: the next or
+previous sample of the same generator must also exceed a limit. Both samples
+are excluded, including the first second of overload. An isolated one-tick
+slip remains visible in the raw samples but does not establish overload
+(#128, #133). These exclude immediately:
+
+- lateness p99 above 2x `-lateness-limit` (40 ms by default);
+- skipped frames above 2x `-skipped-frame-limit` (2% by default);
+- CPU per GOMAXPROCS above 85%;
+- a sample above a limit whose interval maximum lateness exceeds 40 ms. A
+  longer stall could shorten a gap below the recorder's 90 ms retention
+  threshold (`callharness.MaxToleratedStall`, 60 ms with one audio tick).
+
+Exactly a limit is permitted. An excluded interval names lateness or skipped
+frames only when that excess alone excludes it. Missing intervals do not establish
+persistence. Capacity uses the same rule for its steps (see
+[capacity.md](capacity.md)). Calibration retains the strict single-sample gate,
+and so does the raw `run.processes[].saturated` field. The soak
+`saturation` object records its persistence, immediate-lateness,
+immediate-skipped-frame and maximum-stall limits.
 At most 1% of the run's one-second wall-clock intervals may be saturated. A
 second counts once if any generator is saturated; every excluded process
 interval is named with its start, end and causes. A delayed saturated sample
@@ -115,11 +127,18 @@ A separately confirmed service crash still fails, using #40's
 control-plane lost calls, excessive worker peaks, memory growth and observed
 leaks also remain failures. Other caller continuity, move/takeover gap,
 threshold coverage and telemetry checks reuse capacity judgment. The recorder
-retains up to 4096 timestamped gaps over 150 ms per track for the whole call,
-separate from its 15 s rolling arrival history. An unscheduled gap fails unless
-it overlaps a saturated interval of that caller's generator; that gap is then
-inconclusive. Saturation in another generator cannot excuse it. Gap inventory
-overflow fails safe; old reports without the inventory are inconclusive.
+retains up to 4096 timestamped gaps over 90 ms per track for the whole call,
+separate from its 15 s rolling arrival history. An unscheduled gap above
+150 ms fails unless it overlaps a saturated interval of that caller's
+generator; that gap is then inconclusive. Saturation in another generator
+cannot excuse it. A tolerated stall can stamp the packet before an outage late
+and shorten a real interruption below 150 ms (#133). An unscheduled gap at or
+below 150 ms is therefore inconclusive when the gap plus its stall bound
+exceeds 150 ms. The bound is the largest interval maximum lateness above 20 ms,
+plus one 20 ms audio tick, among this caller's generator samples that overlap
+[gap start - 1 s, gap end]. Gap inventory overflow counts dropped gaps above
+150 ms and fails safe. A full inventory may also have dropped shorter gaps, so
+it is inconclusive. Old reports without the inventory are inconclusive.
 
 ## Whole-call delivery
 
