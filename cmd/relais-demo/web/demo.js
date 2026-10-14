@@ -4,8 +4,18 @@
   const A = window.relaisContinuity;
   const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check','relay-buffer'].map((id) => [id,document.getElementById(id)]));
   const params = new URLSearchParams(location.search);
-  const launchToken = new URLSearchParams(location.hash.slice(1)).get('token') || '';
-  if(launchToken)history.replaceState(null,'',location.pathname+location.search);
+  let launchToken = new URLSearchParams(location.hash.slice(1)).get('token') || '';
+  let tokenLaunchId = null;
+  function captureAttachToken(status) {
+    if(!status.attach_mode || typeof status.launchId!=='string' || !status.launchId || tokenLaunchId)return;
+    tokenLaunchId=status.launchId;
+    const key='relais-demo-token:'+status.launchId;
+    try {
+      if(launchToken)sessionStorage.setItem(key,launchToken);
+      else launchToken=sessionStorage.getItem(key) || '';
+    }catch(err){error(new Error('Cannot retain attach token for reload: '+err.message));}
+    if(location.hash)history.replaceState(null,'',location.pathname+location.search);
+  }
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve,ms));
   let pageRelayBuffer = M.UNKNOWN, resultsEnabled = false;
   let call = null, lastResult = null, starting = null, lastResultsRender = -Infinity;
@@ -122,7 +132,7 @@
     while (active(s)) {
       try {
         const status = await json('/demo/status'); if (!active(s)) return;
-        s.status = status; s.statusError = null;resultsEnabled=!!status.results_enabled;
+        s.status = status; s.statusError = null;resultsEnabled=!!status.results_enabled;captureAttachToken(status);
         if(s.agentMode==='demo' && s.id) {
           try { s.agent=await json(`/demo/agent/${encodeURIComponent(s.id)}`);s.agentError=null; }
           catch(err) {s.agentError=String(err);s.agent=null;}
@@ -258,7 +268,7 @@
       try {
         // Pin the selected agent before media starts or events are armed. Status
         // polling is diagnostic and must never decide continuity requirements.
-        const initialStatus=await json('/demo/status');resultsEnabled=!!initialStatus.results_enabled;s.status=initialStatus;
+        const initialStatus=await json('/demo/status');resultsEnabled=!!initialStatus.results_enabled;captureAttachToken(initialStatus);s.status=initialStatus;
         if(!['demo','echo'].includes(initialStatus.selected_agent))throw new Error('selected agent missing or invalid');
         s.agentMode=initialStatus.selected_agent;
         if(!['on','off'].includes(initialStatus.relayBuffer))throw new Error('relay buffer mode missing or invalid');
@@ -434,22 +444,32 @@
       await run('kill',10);ensureCall();
       await waitForLongHold();ensureCall();
     }
-    finally{s.checklist=false;render();await uploadResults(snapshot(s));}
+    finally{s.checklist=false;render();void uploadResults(snapshot(s));}
     return snapshot(s);
   }
-  async function uploadResults(record) {
+  async function uploadResults(body) {
     if(!resultsEnabled)return;
+    let timer;
     try {
-      const response=await request('/demo/results',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(record)});
+      if(typeof body!=='string')body=JSON.stringify(body);
+      const controller=new AbortController();
+      const expired=new Promise((_,reject)=>controller.signal.addEventListener('abort',()=>reject(new Error('Results upload timed out after 10 s')),{once:true}));
+      timer=setTimeout(()=>controller.abort(),10000);
+      // Race the deadline as well as aborting transport, so even an adapter
+      // that ignores AbortSignal cannot leave a pending upload forever.
+      const response=await Promise.race([
+        request('/demo/results',{method:'POST',headers:{'Content-Type':'application/json'},body,signal:controller.signal}),
+        expired
+      ]);
       if(response.status===404){resultsEnabled=false;return;}
       if(!response.ok)throw new Error(`Results upload failed: HTTP ${response.status}`);
-    }catch(err){error(err);}
+    }catch(err){error(err);}finally{clearTimeout(timer);}
   }
   function saveResults() {
-    const record=snapshot(call),blob=new Blob([JSON.stringify(record,null,2)+'\n'],{type:'application/json'});
+    const record=snapshot(call),body=JSON.stringify(record,null,2)+'\n',blob=new Blob([body],{type:'application/json'});
     const url=URL.createObjectURL(blob),a=document.createElement('a');
     a.href=url;a.download=`relais-${record.source || 'idle'}-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;
-    a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);void uploadResults(record);return record;
+    a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);void uploadResults(body);return record;
   }
   el.source.value=params.get('source')==='camera'?'camera':'pattern';
   window.relaisDemo={runChecklist,saveResults,start,runBaseline:(n=call?.baselineCount || 5,ms)=>run('baseline',n,ms),runMoves:(n,ms)=>run('move',n,ms),runKills:(n,ms)=>run('kill',n,ms),runDrains:(n,ms)=>run('drain',n,ms),results:()=>snapshot(call),agentStatus:async()=>{if(!call?.id)throw new Error("start a call first");return json(`/demo/agent/${encodeURIComponent(call.id)}`);},waitForLongHold,stop};
@@ -460,7 +480,7 @@
   document.addEventListener('pointerdown',()=>{if(call && !call.stopped && call.audioContext?.state==='suspended') call.audioContext.resume().catch(error);});
   window.addEventListener('pagehide',()=>{if(call?.resource)request(call.resource,{method:'DELETE',keepalive:true}).catch(()=>{});});
   json('/demo/status').then((status)=>{
-    resultsEnabled=!!status.results_enabled;
+    resultsEnabled=!!status.results_enabled;captureAttachToken(status);
     if(['on','off'].includes(status.relayBuffer))pageRelayBuffer=status.relayBuffer;
     render();
   }).catch(()=>{});

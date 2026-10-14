@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/relais/pkg/controlplane"
@@ -21,13 +22,19 @@ import (
 
 func validateAttachConfig(cfg config) error {
 	if cfg.ActionTimeout < 0 {
-		return errors.New("-action-timeout must be positive")
+		return errors.New("-action-timeout must be non-negative")
 	}
 	if cfg.AttachControl == "" {
 		if cfg.AttachAuthFile != "" || cfg.FaultHook != "" {
 			return errors.New("-attach-auth-file and -fault-hook require -attach-control")
 		}
 		return nil
+	}
+	if selectedAgent(cfg) == "demo" {
+		return errors.New("-agent=demo is unsupported in attach mode")
+	}
+	if cfg.RelayBuffer != "on" && cfg.RelayBuffer != "off" {
+		return errors.New("-relay-buffer=on or off is required in attach mode")
 	}
 	if cfg.Redis != "" || cfg.LocalNetwork != "" {
 		return errors.New("-attach-control is mutually exclusive with -redis and -local-network")
@@ -133,15 +140,40 @@ func (d *demo) actionDuration() time.Duration {
 	return 15 * time.Second // preserve the local launcher's existing deadline
 }
 
-// Both process ownership modes require a terminal detector event, rather than
-// treating an early lease-owner change as proof that media resumed.
-func (d *demo) waitTakeover(ctx context.Context, owner controlplane.CallStatus, killedAt time.Time) (controlplane.MoveResult, error) {
+// A baseline identifies events by control's own times. Hook and page clocks
+// cannot decide whether a remote takeover is new.
+type takeoverKey struct {
+	ID, From   string
+	Start, End string
+}
+type takeoverBaseline map[takeoverKey]struct{}
+
+func eventKey(event controlplane.MoveResult) takeoverKey {
+	return takeoverKey{event.ID, event.From, event.Start.UTC().Format(time.RFC3339Nano), event.End.UTC().Format(time.RFC3339Nano)}
+}
+func baselineTakeovers(events []controlplane.MoveResult) takeoverBaseline {
+	baseline := make(takeoverBaseline, len(events))
+	for _, event := range events {
+		baseline[eventKey(event)] = struct{}{}
+	}
+	return baseline
+}
+
+// Both ownership modes require a new terminal event and a settled dead owner.
+func (d *demo) waitTakeover(ctx context.Context, owner controlplane.CallStatus, baseline takeoverBaseline) (controlplane.MoveResult, error) {
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
+	var candidates []controlplane.MoveResult
+	failure := func(err error) (controlplane.MoveResult, error) {
+		// Only matching candidates from the last status sample, bounded by the
+		// control API's recent-event ring. Preserve the underlying deadline cause.
+		data, _ := json.Marshal(candidates)
+		return controlplane.MoveResult{}, fmt.Errorf("takeover wait: %w; last candidate events: %s", err, data)
+	}
 	for {
 		status, err := d.status(ctx)
 		if err != nil {
-			return controlplane.MoveResult{}, err
+			return failure(err)
 		}
 		recovered := false
 		for _, w := range status.Workers {
@@ -149,14 +181,22 @@ func (d *demo) waitTakeover(ctx context.Context, owner controlplane.CallStatus, 
 				recovered = w.Dead && !w.Recovering
 			}
 		}
+		candidates = nil
 		for _, event := range status.Takeovers {
-			if recovered && event.ID == owner.ID && event.From == owner.Owner && !event.Start.Before(killedAt) && !event.End.IsZero() {
+			if event.ID != owner.ID || event.From != owner.Owner {
+				continue
+			}
+			candidates = append(candidates, event)
+		}
+		for _, event := range candidates {
+			_, existed := baseline[eventKey(event)]
+			if recovered && !existed && !event.End.IsZero() {
 				return event, nil
 			}
 		}
 		select {
 		case <-ctx.Done():
-			return controlplane.MoveResult{}, ctx.Err()
+			return failure(ctx.Err())
 		case <-ticker.C:
 		}
 	}
@@ -186,12 +226,13 @@ func (d *demo) killAttached(ctx context.Context, id string) (actionResult, error
 	if !ownerHealthy || status.PoolSize != d.expectedPoolSize || status.PoolSize < 2 {
 		return result, errors.New("attached worker pool is not ready for kill")
 	}
+	baseline := baselineTakeovers(status.Takeovers)
 	killed, err := d.runHook(ctx, "kill", owner.Owner, owner.ID)
 	if err != nil {
 		return result, err
 	}
 	result.PID, result.At = killed.PID, killed.KilledAt
-	takeover, err := d.waitTakeover(ctx, owner, result.At)
+	takeover, err := d.waitTakeover(ctx, owner, baseline)
 	if err != nil {
 		return result, err
 	}
@@ -244,7 +285,7 @@ type hookReceipt struct {
 }
 
 // Bound memory even when a faulty hook floods either stream. Stdout must fit;
-// stderr retains only its last 4 KiB. Writers always consume the entire write.
+// stderr retains a raw 64 KiB tail for redaction before its 4 KiB result. Writers always consume the entire write.
 type hookOutput struct {
 	data           []byte
 	limit          int
@@ -285,13 +326,18 @@ func redactHookStderr(data []byte, env []string) string {
 	for _, entry := range env {
 		name, value, _ := strings.Cut(entry, "=")
 		name = strings.ToUpper(name)
-		if value != "" && (strings.Contains(name, "KEY") || strings.Contains(name, "TOKEN") || strings.Contains(name, "SECRET") || strings.Contains(name, "PASSWORD") || strings.Contains(name, "CREDENTIAL") || strings.Contains(name, "AUTH")) {
+		if len(value) >= 8 && (strings.Contains(name, "KEY") || strings.Contains(name, "TOKEN") || strings.Contains(name, "SECRET") || strings.Contains(name, "PASSWORD") || strings.Contains(name, "CREDENTIAL") || strings.Contains(name, "AUTH")) {
 			s = strings.ReplaceAll(s, value, "[redacted]")
 		}
 	}
 	s = credentialText.ReplaceAllString(s, "$1$2[redacted]")
 	if len(s) > 4096 {
 		s = s[len(s)-4096:]
+		if newline := strings.IndexByte(s, '\n'); newline >= 0 {
+			s = s[newline+1:]
+		} else {
+			s = ""
+		}
 	}
 	return strings.TrimSpace(s)
 }
@@ -305,9 +351,17 @@ func (d *demo) runHook(ctx context.Context, action, worker, session string) (hoo
 	// the hook's minimal environment when launching the page server.
 	cmd := exec.CommandContext(ctx, d.faultHook, args...)
 	cmd.Env = os.Environ()
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
 	cmd.WaitDelay = 250 * time.Millisecond
 	stdout := &hookOutput{limit: 64 << 10}
-	stderr := &hookOutput{limit: 4096, tail: true}
+	stderr := &hookOutput{limit: 64 << 10, tail: true}
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	err := cmd.Run()
 	failure := func(reason string) (hookReceipt, error) {

@@ -63,8 +63,8 @@ jobs:
         run: make build
 
       # The demo page's verdict logic decides the browser go/no-go.
-      - name: Run demo metric tests
-        run: node --test cmd/relais-demo/metrics.test.cjs
+      - name: Run demo page tests
+        run: node --test cmd/relais-demo/*.test.cjs
 
   # The build job is the aggregate gate while all work runs in parallel.
   # Making it required in GitHub settings is a separate admin decision.
@@ -199,6 +199,13 @@ jobs:
           go-version-file: 'go.mod'
       - name: Install Redis and ffmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
+      # Separate-process attachment builds its own binaries and owns Redis.
+      # Keep this in the existing process lane until its cold-build PR cost is measured.
+      - name: Verify attached demo process faults (race detector)
+        env:
+          RELAIS_TEST_REDIS_REQUIRE: "1"
+          RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
+        run: go test -race -v -count=1 -timeout 5m -run '^TestDemoAttachExternalSmoke$' ./cmd/relais-demo/
       # The driver starts and stops its own Redis on a free loopback port.
       - name: Run twenty interleaved SIGKILL trials (ten per mode)
         run: make crash-run

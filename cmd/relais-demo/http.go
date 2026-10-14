@@ -218,6 +218,11 @@ func (d *demo) kill(ctx context.Context, id string) (actionResult, error) {
 	if worker == nil {
 		return actionResult{}, errors.New("owner is not a launcher-owned process")
 	}
+	status, err := d.status(ctx)
+	if err != nil {
+		return actionResult{}, err
+	}
+	baseline := baselineTakeovers(status.Takeovers)
 	continuity := d.beforeAgent(ctx, owner.ID, owner.Owner)
 	result := actionResult{Agent: continuity, Kind: "kill", ID: owner.ID, From: owner.Owner, PID: worker.child.PID(), At: time.Now()}
 	if err := worker.child.SignalGroup(syscall.SIGKILL); err != nil {
@@ -229,7 +234,7 @@ func (d *demo) kill(ctx context.Context, id string) (actionResult, error) {
 	case <-ctx.Done():
 		return result, ctx.Err()
 	}
-	takeover, err := d.waitTakeover(ctx, owner, result.At)
+	takeover, err := d.waitTakeover(ctx, owner, baseline)
 	if err != nil {
 		return result, err
 	}
@@ -292,7 +297,11 @@ func (d *demo) drain(ctx context.Context, name string) (actionResult, error) {
 }
 func (d *demo) handler(files http.Handler) http.Handler {
 	target, _ := url.Parse(d.control)
-	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+		r.SetURL(target)
+		r.Out.Header.Del("X-Relais-Demo-Token")
+		r.Out.Host = target.Host
+	}}
 	proxy.Transport = &http.Transport{ResponseHeaderTimeout: 10 * time.Second}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, err error) {
 		http.Error(w, err.Error(), http.StatusBadGateway)

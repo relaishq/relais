@@ -234,18 +234,18 @@ func configureFlags(flags *flag.FlagSet, cfg *config) {
 	flags.StringVar(&cfg.AttachControl, "attach-control", "", "existing control base URL; starts no cluster processes")
 	flags.StringVar(&cfg.AttachAuthFile, "attach-auth-file", "", "private API credential file (current API has no credential authentication)")
 	flags.StringVar(&cfg.FaultHook, "fault-hook", "", "executable for attach kill and replacement")
-	cfg.ActionTimeout = 90 * time.Second
-	flags.Func("action-timeout", "deadline including takeover and replacement (default 90s)", func(value string) error {
+	cfg.ActionTimeout = 0
+	flags.Func("action-timeout", "deadline including takeover and replacement (0 uses local 15s or attach 90s)", func(value string) error {
 		timeout, err := time.ParseDuration(value)
-		if err != nil || timeout <= 0 {
-			return errors.New("-action-timeout must be positive")
+		if err != nil || timeout < 0 {
+			return errors.New("-action-timeout must be non-negative")
 		}
 		cfg.ActionTimeout = timeout
 		return nil
 	})
 	flags.StringVar(&cfg.ResultsDir, "results-dir", "", "create-only results upload directory")
-	cfg.RelayBuffer = "on"
-	flags.Func("relay-buffer", "relay caller SRTP buffer: on or off (default on)", func(mode string) error {
+	cfg.RelayBuffer = ""
+	flags.Func("relay-buffer", "relay caller SRTP buffer: on or off (local default on; required in attach mode)", func(mode string) error {
 		if mode != "on" && mode != "off" {
 			return errors.New("-relay-buffer must be on or off")
 		}
