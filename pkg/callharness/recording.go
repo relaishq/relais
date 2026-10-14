@@ -27,6 +27,12 @@ const (
 type RecordingOptions struct {
 	History     time.Duration
 	DecodeEvery int
+	// MaintenancePhase delays the call's one-second recording maintenance
+	// (automatic event discovery and history pruning) by this much, so it
+	// runs at connect + phase + k seconds. Zero keeps connect + k seconds.
+	// Load generators give each call its own phase in [0, 1s), so many
+	// callers do not run this work on the same instant (#85).
+	MaintenancePhase time.Duration
 }
 
 func (o RecordingOptions) defaults() RecordingOptions {
@@ -36,6 +42,7 @@ func (o RecordingOptions) defaults() RecordingOptions {
 	if o.DecodeEvery < 0 {
 		o.DecodeEvery = 0
 	}
+	o.MaintenancePhase = max(o.MaintenancePhase, 0)
 	return o
 }
 
@@ -155,6 +162,15 @@ func (c *Call) Recording() RecordingReport {
 // maintainRecording discovers automatic events before their baseline expires.
 // It also prunes idle calls (no media arrivals are needed to expire history).
 func (c *Call) maintainRecording(ctx context.Context) {
+	if phase := c.rec.recording.MaintenancePhase; phase > 0 {
+		delay := time.NewTimer(phase)
+		select {
+		case <-ctx.Done():
+			delay.Stop()
+			return
+		case <-delay.C:
+		}
+	}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {

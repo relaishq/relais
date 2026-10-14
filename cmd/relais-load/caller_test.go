@@ -41,3 +41,13 @@ func TestExternalCallerRejectsSharedFixedBindPort(t *testing.T) {
 	err := runArgs([]string{"-external-caller", "-relay=127.0.0.1:41000", "-caller-bind=127.0.0.1:41001", "-callers=2", "-output=" + filepath.Join(t.TempDir(), "caller.jsonl")})
 	require.ErrorContains(t, err, "multiple external callers require -caller-bind port 0")
 }
+
+func TestCallerProcessFlag(t *testing.T) {
+	output := filepath.Join(t.TempDir(), "caller.jsonl")
+	err := runArgs([]string{"-caller-process=1", "-output=" + output})
+	require.ErrorContains(t, err, "-caller-process requires -external-caller or -child")
+	err = runArgs([]string{"-external-caller", "-seed=7", "-caller-process=-1", "-relay=127.0.0.1:41000", "-output=" + output})
+	require.ErrorContains(t, err, "caller-process must be >= 0", "external callers accept -seed and -caller-process")
+	_, err = os.Stat(output)
+	require.ErrorIs(t, err, os.ErrNotExist, "reject before creating output or dialing")
+}
