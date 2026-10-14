@@ -129,7 +129,7 @@ func soakFixtureEvents(count int, interval time.Duration) (config, loadgen.RunRe
 		r.Events = append(r.Events, loadgen.EventResult{Event: event, At: at.Add(after), FinishedAt: at.Add(after + time.Second), Affected: 1, Sessions: []string{"a"}})
 	}
 	r.Telemetry.Processes[1].Last["relais_control_takeovers_total"] = float64(takeovers)
-	r.Processes = []loadgen.ProcessReport{{PID: 42, Complete: true, ExpectedCalls: 2, Lateness: loadgen.Lateness{Packets: 1}, Calls: []loadgen.Message{{Session: "a", Call: &callharness.Report{StartedAt: at, HungUpAt: c.Duration, Moves: moves}}, {Session: "b", Call: &callharness.Report{StartedAt: at, HungUpAt: c.Duration}}}}}
+	r.Processes = []loadgen.ProcessReport{{PID: 42, Complete: true, ExpectedCalls: 2, Lateness: loadgen.Lateness{Packets: 1}, Calls: []loadgen.Message{{Session: "a", Call: &callharness.Report{StartedAt: at, HungUpAt: c.Duration, Moves: moves, Recording: callharness.RecordingReport{Delivery: &callharness.WholeCallDelivery{}}}}, {CallID: 1, Session: "b", Call: &callharness.Report{StartedAt: at, HungUpAt: c.Duration, Recording: callharness.RecordingReport{Delivery: &callharness.WholeCallDelivery{}}}}}}}
 	for _, sample := range memorySamples(at, c.Duration, 0) {
 		r.Processes[0].Samples = append(r.Processes[0].Samples, loadgen.Stats{At: sample.At, Interval: time.Second, RSSBytes: sample.RSSBytes, PhysicalFootprintBytes: sample.PhysicalFootprintBytes, HeapInUseBytes: sample.HeapInUseBytes, RuntimeMemory: &loadgen.RuntimeMemory{HeapLiveBytes: sample.HeapLiveBytes}})
 	}

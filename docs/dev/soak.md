@@ -121,6 +121,50 @@ it overlaps a saturated interval of that caller's generator; that gap is then
 inconclusive. Saturation in another generator cannot excuse it. Gap inventory
 overflow fails safe; old reports without the inventory are inconclusive.
 
+## Whole-call delivery
+
+Event rows judge content only inside each affected call's event windows. A call
+that never moves can still lose echoed content, for example when the kernel
+drops datagrams on a full UDP receive buffer (#127). Whole-call delivery covers
+the rest of every call.
+
+The caller counts each successfully written audio unit and video frame once,
+by content identity, not by RTP sequence number. A unit settles when it leaves
+the rolling history, or at hangup when it was sent at least 500 ms (the
+yardstick's settle window) before hangup. Later units are `unsettled` and are
+not judged. Lost uses the event yardstick's rule: no valid complete return by
+settlement. A late return is not lost. The counts survive history expiry, and
+each kind keeps the send time of up to 4096 lost units (`Recording.Delivery` in
+each call report).
+
+Soak media paths are unshaped, so the steady state has the same expectation as
+the event windows: zero lost units. The rule is:
+
+- A lost unit sent inside `[WindowStart, WindowEnd)` of one of its call's
+  moves that matches an event affecting that call is judged only by that
+  event's `audio_loss` or `video_loss` row. It is never counted twice.
+- Any other lost unit fails the soak.
+- A lost unit whose send time plus 500 ms overlaps a saturated interval of its
+  own generator is inconclusive instead, as for unscheduled gaps. Saturation
+  in another generator cannot excuse it.
+- More than 4096 lost units of one kind in one call cannot be placed, and fail.
+  A missing `Delivery` (old reports), or counts that do not cover every written
+  unit, are inconclusive.
+
+The `delivery` object holds per-call and run-total `sent`, `returned`, `lost`,
+`unsettled`, `lost_in_event_windows`, `lost_outside_event_windows`,
+`lost_outside_saturated`, `lost_inventory_overflow` and
+`sequence_discontinuities`, and the first outside loss time per call. RTP
+sequence discontinuities are diagnostic only: takeover replays and planned
+resumes also break the echoed sequence.
+
+On Linux, the driver reads `/proc/net/snmp` `Udp:` `RcvbufErrors` and, when
+present, `/proc/net/snmp6` `Udp6RcvbufErrors` before and after the run.
+`kernel_udp` and the log report the change. These counters belong to the
+driver's network namespace: they cover every role in a loopback run, but not
+the roles' own namespaces in a netns run. Other systems report "not
+available". The counters are diagnostic and never change the outcome.
+
 ## Flat memory
 
 Linux services sample current RSS from `/proc/PID/statm`. macOS uses
@@ -267,8 +311,11 @@ gh workflow run load-calibration.yml --repo relaishq/relais \
 ```
 
 Stable log verdict lines start with `soak outcome=`, `soak cause:`,
-`soak acceptance=`, or `soak acceptance reason:`. For example:
+`soak acceptance=`, or `soak acceptance reason:`. Run totals for whole-call
+delivery start with `soak delivery outcome=`; each non-passing call adds a
+`soak delivery pid=` line. The kernel diagnostic starts with
+`soak kernel-udp`. For example:
 
 ```sh
-grep -E '^soak (outcome|cause|acceptance)' bin/soak-linux.log
+grep -E '^soak (outcome|cause|acceptance|delivery|kernel-udp)' bin/soak-linux.log
 ```

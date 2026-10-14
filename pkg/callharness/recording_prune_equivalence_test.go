@@ -183,6 +183,17 @@ func TestRecordingPruneEvidenceEquivalent(t *testing.T) {
 	newer.audioReturns = slices.Clone(old.audioReturns)
 	newer.videoSends = slices.Clone(old.videoSends)
 	newer.videoReturns = slices.Clone(old.videoReturns)
+	writtenAudio, writtenVideo := 0, 0
+	for _, u := range newer.sentAudioUnits {
+		if u.written {
+			writtenAudio++
+		}
+	}
+	for _, f := range newer.sentVideoFrames {
+		if f.written {
+			writtenVideo++
+		}
+	}
 	for _, now := range []time.Duration{190 * time.Second, 191 * time.Second, 200 * time.Second} {
 		old.legacyFinishCompact(now, 0, nil)
 		newer.finishCompact(now, 0, nil)
@@ -195,6 +206,12 @@ func TestRecordingPruneEvidenceEquivalent(t *testing.T) {
 		require.Equal(t, old.tracks, newer.tracks)
 		a, b := old.report(), newer.report()
 		a.ReportBuildDuration, b.ReportBuildDuration = 0, 0
+		// The frozen oracle predates whole-call delivery (#134); pruning must
+		// still settle every written unit it drops.
+		d := b.Recording.Delivery
+		require.Equal(t, writtenAudio, d.Audio.Sent+d.Audio.Unsettled)
+		require.Equal(t, writtenVideo, d.Video.Sent+d.Video.Unsettled)
+		a.Recording.Delivery, b.Recording.Delivery = nil, nil
 		require.Equal(t, a, b)
 	}
 }

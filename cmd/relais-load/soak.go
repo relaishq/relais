@@ -306,6 +306,8 @@ type soakReport struct {
 	Saturation             saturationBudget      `json:"saturation"`
 	Memory                 []memoryVerdict       `json:"memory"`
 	Events                 []soakEventVerdict    `json:"events"`
+	Delivery               soakDelivery          `json:"delivery"`
+	KernelUDP              kernelUDPDrops        `json:"kernel_udp"`
 	Outcome                string                `json:"outcome"`
 	Causes                 []string              `json:"causes"`
 	Run                    loadgen.RunReport     `json:"run"`
@@ -561,6 +563,15 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 				fail("caller decryption failures")
 			}
 		}
+	}
+	// Whole-call delivery covers loss the event windows do not (#134).
+	result.Delivery = judgeDelivery(r, result.Saturation)
+	failures, unknown := result.Delivery.causes()
+	for _, cause := range failures {
+		fail(cause)
+	}
+	for _, cause := range unknown {
+		inconclusive(cause)
 	}
 	leaks := r.Leaks
 	leaks.Checked = true
@@ -1000,8 +1011,11 @@ func runSoak(ctx context.Context, m *clusterprocess.Manager, c config, root stri
 	}
 	runCtx, cancel := context.WithTimeout(ctx, 4*time.Minute+c.Duration)
 	defer cancel()
+	kernelStart, kernelStartErr := sampleKernelUDP()
 	report, runErr := execute(runCtx, m, c, root)
+	kernelEnd, kernelEndErr := sampleKernelUDP()
 	result := judgeSoak(c, report)
+	result.KernelUDP = kernelUDPDelta(runtime.GOOS, c.Topology, kernelStart, kernelEnd, kernelStartErr, kernelEndErr)
 	if runErr != nil {
 		result.Causes = append(result.Causes, runErr.Error())
 		if result.Outcome != "fail" {
@@ -1249,6 +1263,7 @@ func printSoakVerdict(r soakReport, output string) {
 			fmt.Printf("soak event=%d cause=%s\n", e.Index, cause)
 		}
 	}
+	printSoakDelivery(r.Delivery, r.KernelUDP)
 	fmt.Printf("soak outcome=%s saturation=%.3f%% conclusive-events=%d/%d (%.3f%%) report=%s\n", r.Outcome, r.Saturation.Percent, r.ConclusiveEvents, len(r.Events), r.ConclusiveEventPercent, output)
 	for _, cause := range r.Causes {
 		fmt.Println("soak cause:", cause)

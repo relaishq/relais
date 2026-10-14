@@ -77,6 +77,8 @@ type recorder struct {
 	frameInterval         time.Duration
 	keyframeInterval      time.Duration
 	keyframeRequests      int // PLI/FIR the caller sent for the echoed video
+	// Whole-call counts of units that already left rolling history.
+	audioDelivery, videoDelivery ContentDelivery
 
 	tracks []*trackRecord
 
@@ -641,6 +643,7 @@ func (r *recorder) report() *Report {
 		rep.Tracks = append(rep.Tracks, report)
 	}
 	rep.Recording = r.memoryGauge()
+	rep.Recording.Delivery = r.wholeCallDelivery()
 	rep.Consent = r.consentReport()
 	view := r
 	if r.distributed != nil {
