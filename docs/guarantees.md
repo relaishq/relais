@@ -10,14 +10,20 @@ sample applies only to its stated workload and topology. Independent machines,
 real cameras and sustained load cannot be inferred from namespace or loopback
 tests.
 
-The full soak is **pending [#41][soak-ticket], run by Derek through [#85][full-soak]**.
-Desktop Chrome with a real camera is **pending [#45][device-ticket]**. Mobile
-browsers are deferred to [#98][mobile]. Cloud confirmation is **Pass for the
-real-process driver [#48][cloud]**; the demo-page run with Derek's Chrome over
-the real internet remains **Pending #48**. The checkpoint-envelope row now
-passes the cited real-process store-stall sample. [PR #103][outage-pr] and
-[ADR 0008][outage-adr] add a bounded
-store-outage guarantee. **#51 remains open**; **#94 is fixed by [PR #97][early-media-pr]**.
+The first full soak **failed** ([#85 result][soak-fail]). It had zero decryption
+failures and zero lost calls, but 9 of 432 planned move recoveries lost content
+([#127][move-loss]). Each affected track lost one packet or frame; two
+recoveries lost both. Its two judge bugs ([#128][judge-bugs]) are fixed by
+[PR #129][judge-pr]. A rerun after #127 is **pending [#41][soak-ticket]/[#85][full-soak]**.
+Desktop Chrome with a real 720p camera **passes** with the relay buffer on and
+off ([#45 result][device-result]). Mobile browsers are deferred to [#98][mobile].
+Cloud confirmation is **Pass for the real-process driver** ([#48 result][cloud-result]).
+The demo-page run with Derek's Chrome over the real internet is **accepted with
+a stated limit**: its browser-side crash gaps were not measurable
+([#48 browser result][cloud-browser]). The checkpoint-envelope row passes the
+cited real-process store-stall sample ([#95][store-stall] is closed).
+[PR #103][outage-pr] and [ADR 0008][outage-adr] add a bounded store-outage
+guarantee. **#51 and #127 remain open**; **#94 is fixed by [PR #97][early-media-pr]**.
 
 ## How to read the matrix
 
@@ -134,11 +140,33 @@ even if p95 passes. Moves record content loss but do not gate on zero content
 loss. On lossy links, a passing move is not a promise that the network loses
 no packets.
 
-**Status:** **Pass for the cited profile matrix, short LAN load sample and
-real-process cloud confirmation [#48][cloud].**
-Desktop real-camera results are pending #45; mobile browsers are deferred to
-#98; the demo-page run with Derek's Chrome over the real internet is pending
-#48. **#51 remains a known exception
+Browser samples use the camera's own frame cadence, so video gaps are larger
+than in the harness:
+
+| Browser sample | Moves | Audio gap | Video gap | Source |
+| --- | --- | --- | --- | --- |
+| Desktop Chrome, 1280×720 camera, buffer on | 10/10 pass | 0 ms max | 80 / 92 / 92 ms median / p95 / max | [#45 result][device-result] |
+| Desktop Chrome, 1280×720 camera, buffer off | 10/10 pass | 0 ms max | 79 / 92 / 92 ms median / p95 / max | [#45 result][device-result] |
+| Desktop Chrome over the real internet, buffer on | 7 pass, 3 inconclusive | 0 ms on every move | 85–106 ms; median 94.5 ms | [#48 browser result][cloud-browser] |
+
+In #45, the camera's no-event video gaps were **75–91 ms**, so move gaps stayed
+within camera cadence. The three #48 inconclusive moves had **102–106 ms** gaps
+that overlapped camera frame starvation; the page limit is **100 ms**.
+
+The [first full soak][soak-fail] ran **432 planned moves** at **50 calls**.
+Audio pause was **p50 20 ms, p95 33 ms**. **Nine move recoveries (2.1%) lost
+content.** Each affected track lost one audio packet or one video frame; two
+recoveries lost both. The pause stayed at one frame interval and every call
+stayed connected ([#127][move-loss]; [loss rows][soak-gist]). This guarantee bounds the gap.
+It does not claim zero content loss: the [profile policy][profiles] does not gate
+moves on raw content loss. A lossless planned move under load is **not
+established** while #127 is open.
+
+**Status:** **Pass for the cited profile matrix, short LAN load sample,
+real-process cloud confirmation [#48][cloud-result] and desktop Chrome real
+camera [#45][device-result].** The #48 browser run is accepted with a stated
+limit. Mobile browsers are deferred to #98. **#127 is an open residual** for
+content loss in moves under load. **#51 remains a known exception
 on aborted/rolled-back moves**;
 the successful-move sample does not resolve it.
 
@@ -157,8 +185,8 @@ evict packets before the time limit. Default worker failure detection remains
 
 Profile timing is measured at one call per trial. Loaded recovery is separately
 validated on short LAN steps at eight calls with N+1. The separate real-process
-cloud confirmation passes [#48][cloud]; browser-over-real-internet scope
-remains pending.
+cloud confirmation passes [#48][cloud-result]. The browser run over the real
+internet could not measure crash gaps; see [Cloud confirmation](#cloud-confirmation).
 
 | Profile | Audio takeover gap p95 | Video takeover gap p95 | Content-loss rule | Status |
 | --- | ---: | ---: | --- | --- |
@@ -194,10 +222,37 @@ controls on Memory and Redis. Buffer-off controls lost **340 ms of audio and
 **0 audio and 0 video** and returned outage media first. These are harness
 measurements, not a browser audio-playback comparison.
 
+The [#45 desktop Chrome run][device-result] is the browser comparison. It used a
+**1280×720, 30 fps** camera, a same-Mac local cluster (relay, control and three
+workers as separate processes) and ten SIGKILL takeovers per mode. The
+[saved records][device-records] give these per-kill values, rounded to the
+nearest millisecond:
+
+| Measure | Buffer on | Buffer off |
+| --- | --- | --- |
+| Takeovers passed (2 s bound) | 10/10 | 10/10 |
+| Video gap median / max | 391 / 450 ms | 448 / 506 ms |
+| Audio gap | 0 ms in 5 kills; 41 ms in 1; 218–354 ms in 4 | 354–441 ms in every kill |
+| First live frame after the kill, median / max | 434 / 521 ms | 494 / 536 ms |
+| 60 s hold; reconnects / renegotiations / ICE restarts | Pass; 0 / 0 / 0 | Pass; 0 / 0 / 0 |
+
+First live frame starts at the browser's kill request, so it is an upper bound.
+Chrome does not expose SRTP decryption failures; both records mark them
+`unverified`. Checkpoint ages are **not measured** in these records. The first
+four buffered kills still had **218–354 ms** audio gaps. Their cause is **not
+known**. The #48 browser run could not re-check them, because its crash gaps
+were unverified. Every kill still passed the page's verdict.
+
+In the [first full soak][soak-fail], **900 takeovers** at **50 calls** had audio
+pause **p50 424 ms, p95 477 ms, max 513 ms**. **One takeover lost one video
+frame** ([#127][move-loss]).
+
 **Status:** **Pass within the cited buffer, checkpoint, profile and load
-conditions, including the real-process cloud confirmation [#48][cloud].**
-Pending #45 for the desktop camera; mobile playback is deferred to #98; the
-demo-page run with Derek's Chrome over the real internet is pending #48.
+conditions, including the real-process cloud confirmation [#48][cloud-result]
+and desktop Chrome real camera [#45][device-result].** The #48 browser run
+completed **10/10** takeovers with **0 lost calls**, but its browser-side crash
+gaps are unverified. Mobile playback is deferred to #98. The single soak
+video-frame loss is tracked with #127.
 Overflow, expiry, relay-buffer loss and terminal adoption
 failure can lose content or end a call. They have counted fallback/cleanup
 paths, not a universal no-loss guarantee. [PR #77][buffer-pr] and
@@ -360,9 +415,11 @@ make external side effects safe to repeat themselves.
 
 **Status:** **Pass for the reported local Chrome run and cited hosting/replay
 contract tests.** #94's startup packet loss is fixed by [PR #97][early-media-pr].
-Desktop real-camera and cloud runs remain pending; mobile browsers are deferred
-to #98. No universal no-loss application or exactly-once side-effect guarantee
-is established.
+The #45 records ran in echo mode, with the agent verdict `inconclusive`
+([records][device-records]). The #48 results report no agent evidence. Agent
+continuity with a real camera or over the real internet is **not measured**.
+Mobile browsers are deferred to #98. No universal no-loss application or
+exactly-once side-effect guarantee is established.
 
 ## Capacity and soak
 
@@ -392,7 +449,7 @@ Agent-state workload cost is not isolated by this echo/fixture capacity sample.
 rules through repeated moves, drains and kills, with no unintended lost calls,
 decryption failures or leaked resources and no sustained memory growth.
 
-**Conditions still to prove:** At least **50 calls for one hour**, an event
+**Conditions:** At least **50 calls for one hour**, an event
 every **30 seconds**, hardware-specific capacity floors with N+1, and the
 same checkpoint envelope. The [soak policy][soak] requires `outcome=pass` and
 `acceptance=true`. It permits at most **1%** saturated wall-clock intervals and
@@ -411,12 +468,47 @@ growth projected **2.8–3.4 MiB/hour** against a **16 MiB/hour** limit in this
 sample. `acceptance=false`: it does not prove the full soak.
 Source: [soak-results.md][soak-results].
 
-**Status:** **Pending #41/#85.** Full-run memory trends, event coverage and
-cleanup results are not measured until that run arrives.
+A spare Mac could not carry the full soak: its relay floor was **R = 4**
+because its generator saturated ([#85 Mac result][soak-mac]). The
+[first full run][soak-fail] then used a temporary **32-vCPU arm64 Linux VM** at
+`b4fe991`. One generator process carried **16 callers**. Capacity with eight
+workers gave **C = 32** and **R = 50**, so **W = 3**. The run had **50 calls
+for one hour**, **119 events** and **1,332 call recoveries**.
+
+| Full-run check | Result |
+| --- | --- |
+| Verdict | `outcome=fail`, `acceptance=false` |
+| Decryption failures | 0 across all 50 calls |
+| Lost calls | 0; all 50 calls stayed connected for the hour |
+| Memory | Flat: control, relay, store, sentinel worker and all 25 generators pass the slope check |
+| Leaked sessions | 0 in control, relay or workers. 50 `ended:` keys were flagged; each expires in about 265 s |
+| Planned moves (432) | Audio pause p50 20 ms, p95 33 ms; 9 recoveries lost content: one packet or frame per affected track, both tracks in 2 |
+| Takeovers (900) | Audio pause p50 424 ms, p95 477 ms, max 513 ms; 1 lost one video frame |
+| Events | 72 pass, 2 fail, 45 inconclusive |
+| Generator saturation | 6.528% against a 1% budget; 74/119 conclusive events |
+
+Source: [#85 result][soak-fail] and its [results gist][soak-gist].
+
+The run failed for three reasons. First, events 1 and 2 (a drain at one
+minute and a kill at 1.5 minutes) failed: three calls lost content
+([#127][move-loss]). The [loss rows][soak-gist] show one packet or frame per
+affected track; one drain recovery lost both an audio packet and a video frame. Second, the leak check did not know the
+bounded `ended:` key ([#128][judge-bugs]). Third, single send-tick slips just
+over 20 ms marked generators saturated ([#128][judge-bugs]). [PR #129][judge-pr]
+fixes both judge bugs. Its replay of the new judge on the same report gives
+**0.417%** saturation and **116/119** conclusive events. The replay still fails
+on the #127 losses.
+
+**Status:** **Fail in the first full run; rerun pending after #127
+([#41][soak-ticket]/[#85][full-soak]).** The result reports zero decryption
+failures, zero lost calls, flat memory and zero leaked sessions; the flagged
+keys were bounded. It does not report process leaks separately. The run did not
+meet the [soak policy][soak], which also judges each event. A pass needs a rerun
+with `outcome=pass` and `acceptance=true`.
 
 ## Cloud confirmation
 
-The [official #48 result][cloud] is **Pass for the real-process driver** for
+The [official #48 result][cloud-result] is **Pass for the real-process driver** for
 planned moves and crash takeovers. Three internet callers ran on GitHub runners,
 each with three audio/video calls, against **separate cloud VMs in one region**.
 This is **one 75-minute run**, with **one judged caller (three calls)**.
@@ -442,10 +534,35 @@ not establish results for other callers or repeated runs. [#125][history-waterma
 the history watermark in a call's first retention window, is a **harness limit
 worked around by scheduling**. [#122][caller-ice] (caller ICE checks) remains open.
 
-**Status:** **Pass for the cited real-process driver sample.** The demo-page run
-with Derek's Chrome over the real internet remains **Pending [#48][cloud]**;
-browser-over-real-internet evidence is still pending. The full soak, desktop
-real-camera and mobile scopes keep their separate pending or deferred status.
+The [demo-page run][cloud-browser] used Derek's desktop Chrome over the real
+internet against the same separate-VM topology, with the relay buffer on.
+Media went straight to the relay's public UDP port. Derek accepted it with a
+stated limit; its own stage verdict is **INCONCLUSIVE** because of the
+measurement method.
+
+| Measure | Demo-page result |
+| --- | --- |
+| Camera | 1280×720 at 30 fps |
+| Planned moves (10) | 0 ms audio gap on every move; video gap 85–106 ms, median 94.5 ms; 7 pass, 3 inconclusive |
+| Crash takeovers (10) | 10/10 completed; control `lost_count=0`; detection about 390 ms after SIGKILL; takeover 7–9 ms |
+| Call continuity | Connected throughout; no renegotiation or ICE restart; 60 s hold pass |
+| Browser-side crash gaps | **Unverified** |
+| Decryption after resume | **Not measured** for this run |
+
+Each cloud crash action took about **20 seconds** through a remote-command
+path. The SIGKILL landed about **5.5 seconds** after the click. The page assumes
+an immediate kill, so every crash gap is `unverified`. Workers do not journal
+resumes or decryption counters, and Chrome does not expose caller SRTP
+decryption failures. #45 covers the browser crash measurement locally; the
+real-process run covers internet crash timing and decryption. A freeze Derek
+saw about six minutes into the call was the stage's planned teardown after the
+results upload ([#48 clarification][cloud-teardown]).
+
+**Status:** **Pass for the cited real-process driver sample.** The demo-page
+run is **accepted with a stated limit**: moves are 7 pass and 3 inconclusive,
+and browser-side crash gaps are unverified. [#48][cloud] is closed. The settled cost
+figure is still to be posted on #48. The full soak and mobile scopes keep their
+separate fail/rerun or deferred status.
 
 ## Every threshold in the phase-2 spec
 
@@ -456,16 +573,16 @@ lead's later disposition.
 | Spec threshold | Status | Evidence or what the blocking run must show |
 | --- | --- | --- |
 | Takeover with relay buffer (`lan`): no lost content or keyframe wait; pause reported against phase 1; freshness back to baseline within 2 s | **Pass** | [Main buffered process job][buffer-job]: 10/10, median 413.4 ms versus 416 ms; zero loss; outage media first; freshness recovered. [Strict harness controls][harness-job] pass on both stores. |
-| Planned move under `region` and `far-caller`: each track p95 ≤ baseline + 50 ms and ≤150 ms; zero decryption failures; no reconnect | **Pass in final sample** | [Final #37 matrix][network-result]. #51 remains a known integrity failure on an uncertain-reply rollback outside a successful planned move. |
+| Planned move under `region` and `far-caller`: each track p95 ≤ baseline + 50 ms and ≤150 ms; zero decryption failures; no reconnect | **Pass in final sample** | [Final #37 matrix][network-result]. #51 remains a known integrity failure on an uncertain-reply rollback outside a successful planned move. This row does not gate content loss; [#127][move-loss] records content loss in move recoveries under load. |
 | Takeover under `region` and `far-caller`: pause <2 s; no lost content with buffer; zero decryption failures; no reconnect | **Pass under the implemented lossy-link policy** | [Final #37 matrix][network-result]. [Profile rules][profiles] judge loss against the network baseline and burst guard; exact zero loss applies only to lossless media paths. |
 | Relay restart or standby: gap <1 s; no reconnect; pause → takeover → resume never creates two forwarders | **Pass** | [Main restart][restart-job] restore-on and [standby][standby-job] SIGKILL/SIGSTOP tables pass; old process dead before new readiness; zero duplicate media. Single-call loopback scope. |
-| Planned load with N+1, including after forced worker death: move/takeover rules hold; drain time reported | **Pass for short LAN sample** | [Final capacity evidence][capacity-results]: validated T=8, death then move pass, drain 44 ms. Shaped-profile load and full consent at that load are not measured. |
+| Planned load with N+1, including after forced worker death: move/takeover rules hold; drain time reported | **Pass for short LAN sample; #127 open at 50 calls** | [Final capacity evidence][capacity-results]: validated T=8, death then move pass, drain 44 ms. Shaped-profile load and full consent at that load are not measured. At 50 calls with W=3, the [full soak][soak-fail] had 9 of 432 move recoveries and 1 of 900 takeovers lose content, one packet or frame per affected track ([#127][move-loss]). |
 | Checkpoint-age envelope: a store stall beyond it never produces undecryptable takeover; policy counted and documented | **Pass for cited real-process sample** | [PR #103 CI job][outage-job]: moderate crash 5/5 resumes with scaled margins and one envelope event each; long crash 5/5 counts `checkpoint_unsafe` with one envelope event each and no margins spent; live pauses pass 5/5 at each tested duration. Zero decryption failures. [Main harness][harness-job] supplies both-store failed/stalled/delayed-write controls. [ADR 0002][checkpoint-adr] and [ADR 0008][outage-adr] define the policy. Separate 60 s consent acceptance is NOT-RUN. |
-| Soak: ≥50 calls for ≥1 h with chaos; zero decryption failures/unintended lost calls; flat memory; no leaked sessions, keys or processes | **Pending #41/#85** | Full hardware-specific N+1 run must meet [soak acceptance][soak], including `outcome=pass`, `acceptance=true`, conclusive required memory rows and bounded cleanup. [Short run][soak-results] is supporting evidence only. |
-| Real camera at 720p in desktop Chrome: planned-move and takeover rows hold | **Pending #45** | Save buffer-on and buffer-off records using the [device checklist][devices]. Verify actual camera dimensions, per-track move/takeover verdicts, first-live-frame times, visibility and the completed consent hold. Results not measured. |
+| Soak: ≥50 calls for ≥1 h with chaos; zero decryption failures/unintended lost calls; flat memory; no leaked sessions, keys or processes | **Fail in first full run; rerun pending after #127** | [First full run][soak-fail]: 50 calls for 1 h, `outcome=fail`, `acceptance=false`. 0 decryption failures, 0 lost calls, flat memory, 0 leaked sessions. Fails on #127 content losses and two judge bugs ([#128][judge-bugs], fixed by [PR #129][judge-pr]). The rerun must meet [soak acceptance][soak], including `outcome=pass` and `acceptance=true`. |
+| Real camera at 720p in desktop Chrome: planned-move and takeover rows hold | **Pass** | [#45 result][device-result] and [records][device-records]: 1280×720 at 30 fps; buffer on and off each pass 10/10 moves, 10/10 takeovers and the 60 s hold. Takeover video gap max 450 ms (on) and 506 ms (off). First live frame median 434 ms (on) and 494 ms (off). Caller decryption failures are `unverified` in Chrome. |
 | Android Chrome on local network: planned-move and takeover rows hold | **Deferred; explicit non-guarantee** | [#45 scope change][device-ticket] defers mobile browsers to [#98][mobile]. Results not measured. |
-| Agent continuity: exact planned continuation; bounded checkpoint rollback on takeover; duplicated input flagged | **Pass for cited local demo and harness contract** | [Browser report][agent-result], [ADR 0006 hosting/replay tests][agent-adr] and [ADR 0005 notices][buffer-adr]. State-age interpretation uses snapshot age. [PR #97][early-media-pr] fixes #94's pre-move early-media loss. |
-| Cloud confirmation: move/takeover rows hold over real internet | **Pass for real-process driver; Pending #48 for browser** | [Official #48 result][cloud]: one judged caller (3 calls), one 75-minute run; 25 moves and 30 takeovers pass, with zero lost audio/video and zero decryption failures after resume; 315/315 yardstick rows pass. Method, timing and harness limits are recorded above. The demo-page run with Derek's Chrome over the real internet remains pending. |
+| Agent continuity: exact planned continuation; bounded checkpoint rollback on takeover; duplicated input flagged | **Pass for cited local demo and harness contract** | [Browser report][agent-result], [ADR 0006 hosting/replay tests][agent-adr] and [ADR 0005 notices][buffer-adr]. State-age interpretation uses snapshot age. [PR #97][early-media-pr] fixes #94's pre-move early-media loss. Real-camera and real-internet agent runs are not measured. |
+| Cloud confirmation: move/takeover rows hold over real internet | **Pass for real-process driver; browser accepted with a stated limit** | [Official #48 result][cloud-result]: one judged caller (3 calls), one 75-minute run; 25 moves and 30 takeovers pass, with zero lost audio/video and zero decryption failures after resume; 315/315 yardstick rows pass. [Demo-page run][cloud-browser]: 7 moves pass and 3 are inconclusive from camera starvation; 10/10 takeovers complete with 0 lost calls, but browser crash gaps are unverified. |
 
 ## Open residuals and source differences
 
@@ -488,6 +605,52 @@ Tracing may change timing. [PR #93][diagnostics-pr] enables tracing on alternate
 nights for the nightly `lossy-dc` move lane; failures retain caller records and
 worker logs. Monitoring remains active. A passing
 matrix does not remove this exception to a blanket zero-decryption-failure claim.
+
+### #127: content loss in planned moves under load
+
+[Issue #127][move-loss] is open. In the [first full soak][soak-fail],
+**9 of 432** planned move recoveries (2.1%) lost content. Each affected track
+lost one audio packet or one video frame. The [loss rows][soak-gist] show that
+two recoveries lost both: caller 15 at 61.3 s and caller 0 at 1,291.3 s.
+**One of 900** takeovers also lost one video frame. The longest lost run on a
+track was one. The pause stayed at one frame interval: audio
+**19–22 ms**, video **29–36 ms**. Every call stayed connected. Most failures came
+from drains that moved **17–22** calls at once; single moves were also affected.
+The earlier 16-vCPU capacity ramp showed the same signature in **2 of 32** calls
+of a mass move. Source: [#127][move-loss].
+
+[The #127 findings][move-loss-findings] report two results. No fix is merged.
+
+**A proven mechanism.** The drain marker's acknowledgement proves only what the
+old worker received before the marker. A caller datagram that reaches the old
+worker after the marker is discarded once the session is exported; planned
+moves do not replay it. The opt-in test `TestPlannedMoveReorderedPrivateInput`
+(commit `5218e86` on `fix/127-move-loss`, not merged) delays one ciphertext
+datagram on a loopback proxy. With the race detector, 20 runs per case gave:
+
+| Case | Lost units |
+| --- | --- |
+| Ordered move | 0 |
+| Delayed datagram, with a move | Exactly 1 audio unit; 0 held packets, worker no-flow drops and decryption failures |
+| Delayed datagram, no move | 0 |
+
+This race's role in the soak losses is **not yet established**.
+
+**A Linux coincidence, not a proven trigger.** A 20-minute diagnostic soak ran on
+a temporary 32-vCPU arm64 Linux VM at `22f922f`. Events 21 and 25 lost content
+in 8 moves, with **0.000%** saturation and **39/39** conclusive events. The
+kernel counted **1,133** `UdpRcvbufErrors`; about **1,080** were on worker
+sockets. Event 21's loss second had **43** drops on a worker socket. Event 25's
+loss second had **45** kernel drops on a socket the per-socket sample did not
+attribute. The losses **coincide with** these receive-buffer drops. Calls that
+never moved also showed echo sequence gaps, for example **20 gaps with 0
+moves**. The soak's event yardstick does not measure those gaps. Worker sockets
+set no buffer size, so each uses the **208 KiB** default.
+
+The next step is larger, logged UDP socket buffers, then a soak rerun with drop
+sampling. If loss remains with zero drops, the marker race needs a protocol
+decision. This residual limits the claim that a planned move loses no media.
+The move gap guarantee above still holds in the cited samples.
 
 ### #94: resolved early-media startup loss
 
@@ -519,6 +682,11 @@ This closes #94's residual; it does not fix #51.
 | [#31 store summary][store-result] and [PR #103][outage-pr] / [ADR 0008][outage-adr] / [PR #105][outage-followup-pr] | Summary still lists #102/#104 as follow-ups; both are now closed by PR #105. “Over 30 s” omits retention headroom; its “before” row for all outages under 30 s omits the old 3 s expiry boundary. | Follow the merged fixes and ADRs. Actual ownership expiry, not the budget boundary alone, triggers `ownership_expired`. |
 | [Latest #51 comment][rollback-counts] and [#31 network summary][phase-result] | About 210 versus about 230 untraced rollbacks; both report one failing rollback and zero failures in 521 traced rollbacks. | Keep both sourced totals and their observation scope. No inferred failure rate. |
 | [#45 title/older playbook][device-ticket] and its current scope / [#98][mobile] | The title and playbook still include Android. The current issue body defers mobile browsers. | Desktop Chrome only for phase 2; Android Chrome and iOS Safari are explicit non-guarantees. |
+| [#45 result][device-result] / [#31 device summary][device-summary] and the [#45 records][device-records] | The summaries say the buffer removed the takeover audio gap in 6 of 10 kills. The per-kill list and records show 0 ms in 5 kills and a 40.875 ms gap in one. | Use the per-kill record values, rounded to the nearest millisecond: 5 zero-gap kills, one 41 ms gap and four 218–354 ms gaps. |
+| [#48 browser result][cloud-browser] and the [#45 records][device-records] | #48 cites #45 takeover video as “about 390–506 ms”. The records span 330.8–506.3 ms; 390.75 ms is the buffer-on median. | Use the #45 record values, rounded to the nearest millisecond: 331–506 ms, buffer-on median 391 ms. |
+| [#127][move-loss] and the [profile policy][profiles] / this matrix | #127 says the guarantee promises that a planned move loses no media. The profile policy does not gate moves on raw content loss, and the move guarantee here bounds the gap. | Lossless planned moves are a phase goal and a soak gate, not an established guarantee while #127 is open. |
+| [#41 verdict][soak-verdict] / [#31 soak summary][soak-summary] and [#85 result][soak-fail] / [#127][move-loss] | The summaries say moves lost “one packet”; #85 says each lost “exactly one packet or frame”. The [loss rows][soak-gist] show two move recoveries that lost one audio packet **and** one video frame. | Nine move recoveries lost content; each affected track lost one packet or frame, and two recoveries lost both. |
+| [#31 soak row][spec] and [soak policy][soak] / [#85 result][soak-fail] | The run met the row's listed checks for decryption, lost calls, memory and sessions. The soak policy also fails on event rows and saturation. | The soak policy governs; the row stays failed until a rerun passes. |
 
 ## Explicit non-guarantees
 
@@ -540,17 +708,17 @@ This closes #94's residual; it does not fix #51.
 
 ## Evidence to add when runs arrive
 
-- **#41/#85:** Record code revision, machine and capacity calibration, chosen
-  N+1 floors, full duration/load, chaos coverage, generator exclusions,
-  per-process memory verdicts and cleanup inventory. Replace the pending row
-  only with a sourced full-run result.
-- **#45:** Analyse all device/buffer records. Keep media gap, first new content
-  and first live frame separate. Scope is desktop Chrome only. Add actual
-  device/camera settings and every failure or inconclusive cause.
-- **#48:** The real-process driver confirmation passes the cited sample. Add
-  the pending demo-page records from Derek's Chrome over the real internet,
-  with workload, observed network conditions and checkpoint ages. The final
-  cost report remains pending; the official result reports verified teardown.
+- **#41/#85 rerun:** After #127, rerun the full soak with the PR #129 judge.
+  Record code revision, machine and capacity calibration, chosen N+1 floors,
+  chaos coverage, generator exclusions, per-process memory verdicts and cleanup
+  inventory. Replace the failed row only with a sourced passing result.
+- **#127:** Record the root cause with its evidence, and either the fix with a
+  regression test or Derek's decision on a bounded allowance.
+- **#45 buffered audio gaps:** The cause of the four 218–354 ms buffered audio
+  gaps is not known, and no issue tracks it. A later browser crash run with
+  verified kill timing can re-check it.
+- **#48:** Both parts are closed. Add the settled cost figure when #48 posts it.
+  Monetary cost per call-hour remains not measured.
 - **Store outages:** Add full-budget transport-partition or Redis-failover
   evidence if those cases are run. Keep loaded/profile timing and the separate
   consent acceptance unmeasured until sourced results arrive.
@@ -582,6 +750,21 @@ This closes #94's residual; it does not fix #51.
 [early-media-pr]: https://github.com/relaishq/relais/pull/97
 [old-agent-flake]: https://github.com/relaishq/relais/issues/76
 [cloud]: https://github.com/relaishq/relais/issues/48
+[cloud-result]: https://github.com/relaishq/relais/issues/48#issuecomment-6158341764
+[cloud-browser]: https://github.com/relaishq/relais/issues/48#issuecomment-6166965901
+[cloud-teardown]: https://github.com/relaishq/relais/issues/48#issuecomment-6166974978
+[device-result]: https://github.com/relaishq/relais/issues/45#issuecomment-6162503619
+[device-records]: https://gist.github.com/Derek-X-Wang/16b752e167d73b3b952ccf56605e50c9
+[device-summary]: https://github.com/relaishq/relais/issues/31#issuecomment-6162504981
+[soak-fail]: https://github.com/relaishq/relais/issues/85#issuecomment-6169232937
+[soak-gist]: https://gist.github.com/Derek-X-Wang/00e92ca2f8f9787bdc64c1d545a1c87c
+[soak-mac]: https://github.com/relaishq/relais/issues/85#issuecomment-6167483622
+[soak-verdict]: https://github.com/relaishq/relais/issues/41#issuecomment-6169235072
+[soak-summary]: https://github.com/relaishq/relais/issues/31#issuecomment-6169235593
+[move-loss]: https://github.com/relaishq/relais/issues/127
+[move-loss-findings]: https://github.com/relaishq/relais/issues/127#issuecomment-6176025694
+[judge-bugs]: https://github.com/relaishq/relais/issues/128
+[judge-pr]: https://github.com/relaishq/relais/pull/129
 [history-watermark]: https://github.com/relaishq/relais/issues/125
 [caller-ice]: https://github.com/relaishq/relais/issues/122
 [cloud-approval]: https://github.com/relaishq/relais/issues/48#issuecomment-6122720643
