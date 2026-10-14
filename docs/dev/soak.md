@@ -73,8 +73,17 @@ has its own log directory and PID. The pool must be ready before the next event.
 
 ## Verdict and generator exclusions
 
-Soak keeps the #38 limits: interval send-lateness p99 >20 ms, skipped frames
->1%, or CPU per GOMAXPROCS >85% means saturation. Exactly a limit is permitted.
+Soak retains the #38 raw limits: interval send-lateness p99 >20 ms, skipped
+frames >1%, and CPU per GOMAXPROCS >85%. A modest lateness excess must occur
+in two consecutive samples from the same generator to exclude those intervals.
+Both samples are excluded, including the first second of overload. An isolated
+one-tick slip remains visible in the raw samples but does not establish overload.
+Lateness p99 above 2× `-lateness-limit` (40 ms by default), skipped frames >1%,
+or CPU per GOMAXPROCS >85% excludes immediately. Exactly a limit is permitted.
+An excluded interval names lateness only when lateness alone excludes it. Missing intervals do not establish
+persistence. Capacity and calibration retain their strict single-sample gates;
+the raw `run.processes[].saturated` field also retains that strict gate. The soak
+`saturation` object records its persistence and immediate-lateness limits.
 At most 1% of the run's one-second wall-clock intervals may be saturated. A
 second counts once if any generator is saturated; every excluded process
 interval is named with its start, end and causes. A delayed saturated sample
@@ -85,7 +94,15 @@ ordinary load/calibration reports keep their existing 256-sample cap.
 Each event includes its preceding one-second baseline and the caller's saved
 loss-observation, settling and freshness horizons. A conservative seven-second
 recovery tail also covers incomplete event evidence. Any overlapping excluded interval makes that event and
-its rows inconclusive, with raw trusted/failure counts retained. A confirmed
+its rows inconclusive, with raw trusted/failure counts retained. An unexcluded
+caller stall can still shorten a measured gap. Its bound is the largest interval
+maximum lateness above the limit, plus one 20 ms audio tick, among the affected
+call's generator samples overlapping [move start − 1 s, media resumption]. A
+takeover track that passes 2 s by less than its bound is untrusted. Move tracks
+are all kept; the p95 gates are also judged with each bound added, and a
+measured pass that fails there is inconclusive. A measured failure still fails.
+Stalls whose sends stay within the limit are the existing measurement envelope
+and are judged as before. A confirmed
 event failure still fails even when its window is saturated. Such an event
 is listed with its cause in the JSON and log. Inconclusive events do not each
 invalidate the entire run. The run needs at least 95% conclusive events, using
@@ -194,6 +211,9 @@ TTL in milliseconds (`-1` means no key expiry), and applicable limit:
 
 - Per-session lease/state/record/epoch/routes keys need TTL >0 and <=308 s:
   control lease 3 s + store retention 5 min + margin 5 s.
+- `ended:{sess:…}` tombstones need TTL >0 and <=300 s. Redis release sets
+  their expiry to server time plus `sessionstore.EndedRetention` (5 min),
+  independently of the lease and metadata retention.
 - `frames:{sess:…}` frame-cache keys need TTL >0 and <=30 s, matching the
   frame cache's default idle TTL.
 - The global `session_epoch` counter may persist without TTL.

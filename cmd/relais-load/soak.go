@@ -25,6 +25,7 @@ import (
 	"github.com/relais/pkg/controlplane"
 	"github.com/relais/pkg/mediaworker"
 	"github.com/relais/pkg/relay"
+	"github.com/relais/pkg/sessionstore"
 )
 
 // Schedule workers are cyclic selection offsets into the occupied/live pool.
@@ -140,31 +141,43 @@ type excludedInterval struct {
 	Causes     []string `json:"causes"`
 }
 type saturationBudget struct {
-	Intervals    int                `json:"one_second_intervals"`
-	Saturated    int                `json:"saturated_one_second_intervals"`
-	Percent      float64            `json:"saturated_percent"`
-	LimitPercent float64            `json:"limit_percent"`
-	Outcome      string             `json:"outcome"`
-	Excluded     []excludedInterval `json:"excluded"`
+	LatenessPersistenceSamples int                `json:"lateness_persistence_samples"`
+	ImmediateLatenessLimit     time.Duration      `json:"immediate_p99_lateness_limit_ns"`
+	Intervals                  int                `json:"one_second_intervals"`
+	Saturated                  int                `json:"saturated_one_second_intervals"`
+	Percent                    float64            `json:"saturated_percent"`
+	LimitPercent               float64            `json:"limit_percent"`
+	Outcome                    string             `json:"outcome"`
+	Excluded                   []excludedInterval `json:"excluded"`
 }
 
 // The denominator is wall-clock seconds, not process-seconds. If several
 // generators stall together that second counts once, with every process named.
 // A delayed saturated sample excludes every second it overlaps, conservatively.
 func judgeSaturation(r loadgen.RunReport) saturationBudget {
-	b := saturationBudget{LimitPercent: 1, Outcome: "pass", Intervals: int((r.Duration + time.Second - 1) / time.Second)}
+	b := saturationBudget{LatenessPersistenceSamples: 2, ImmediateLatenessLimit: 2 * r.Limits.P99, LimitPercent: 1, Outcome: "pass", Intervals: int((r.Duration + time.Second - 1) / time.Second)}
 	seen := map[int]bool{}
 	end := r.StartedAt.Add(r.Duration)
 	for _, p := range r.Processes {
-		for _, s := range p.Samples {
-			if s.IntervalLateness.P99 <= r.Limits.P99 && s.IntervalPacing.SkippedPercent() <= r.Limits.SkippedPercent && s.CPUPerGOMAXPROCS <= r.Limits.CPUPercent {
-				continue
-			}
+		for i, s := range p.Samples {
 			first, last := maxTime(s.At.Add(-s.Interval), r.StartedAt), minTime(s.At, end)
 			if !last.After(first) {
 				continue
 			}
-			b.Excluded = append(b.Excluded, excludedInterval{PID: p.PID, Start: first, End: last, Causes: r.Limits.Causes(s)})
+			late := soakLatenessSaturated(p.Samples, i, r.Limits.P99, r.StartedAt, end)
+			if !late && s.IntervalPacing.SkippedPercent() <= r.Limits.SkippedPercent && s.CPUPerGOMAXPROCS <= r.Limits.CPUPercent {
+				continue
+			}
+			// Name lateness only when it excludes this sample by itself.
+			limits := r.Limits
+			if !late {
+				limits.P99 = max(limits.P99, s.IntervalLateness.P99)
+			}
+			causes := limits.Causes(s)
+			if late && s.IntervalLateness.P99 <= b.ImmediateLatenessLimit {
+				causes = append(causes, "send-lateness exceeds limit in consecutive samples")
+			}
+			b.Excluded = append(b.Excluded, excludedInterval{PID: p.PID, Start: first, End: last, Causes: causes})
 			for i := int(first.Sub(r.StartedAt) / time.Second); i < b.Intervals && r.StartedAt.Add(time.Duration(i)*time.Second).Before(last); i++ {
 				seen[i] = true
 			}
@@ -178,6 +191,41 @@ func judgeSaturation(r loadgen.RunReport) saturationBudget {
 		b.Outcome = "inconclusive"
 	}
 	return b
+}
+
+// A modest, isolated tick slip is not evidence of sustained generator overload.
+// Retain both samples of a consecutive excess, including the first second of
+// an event. A slip beyond two audio ticks, skipped frames, and CPU excess still
+// exclude immediately. This policy is soak-only; raw limits/samples and the
+// calibration/capacity gates remain unchanged.
+func soakLatenessSaturated(samples []loadgen.Stats, i int, limit time.Duration, start, end time.Time) bool {
+	s := samples[i]
+	if s.IntervalLateness.P99 <= limit {
+		return false
+	}
+	if s.IntervalLateness.P99-limit > limit {
+		return true
+	}
+	for _, j := range []int{i - 1, i + 1} {
+		if j < 0 || j >= len(samples) || samples[j].IntervalLateness.P99 <= limit {
+			continue
+		}
+		// Startup or hangup-only lateness cannot turn a media slip into overload.
+		if !samples[j].At.After(start) || !samples[j].At.Add(-samples[j].Interval).Before(end) {
+			continue
+		}
+		previous, next := s, samples[j]
+		if j < i {
+			previous, next = samples[j], s
+		}
+		// Samples must cover consecutive time, not just be adjacent entries in
+		// an incomplete report. Permit only timestamp rounding/clock noise.
+		gap := next.At.Add(-next.Interval).Sub(previous.At)
+		if previous.Interval > 0 && next.Interval > 0 && next.At.After(previous.At) && gap >= -time.Millisecond && gap <= time.Millisecond {
+			return true
+		}
+	}
+	return false
 }
 func maxTime(a, b time.Time) time.Time {
 	if a.After(b) {
@@ -1009,11 +1057,16 @@ func soakProcesses(children []*clusterprocess.Child) ([]int, error) {
 	return remaining, problems
 }
 
+// soakAudioTick matches the caller's unexported 20 ms Opus send interval.
+const soakAudioTick = 20 * time.Millisecond
+
 // Apply #40's interruption rows to each event, in addition to whole-run p95.
 // A single slow event must not disappear inside hours of other successful moves.
 func soakGapRows(r loadgen.RunReport, e loadgen.EventResult, index int) []loadgen.MetricRow {
 	rows := map[string]*loadgen.MetricRow{}
 	gaps, excess := map[string][]time.Duration{}, map[string][]time.Duration{}
+	// Worst cases add each track's stall bound; unaffected tracks are unchanged.
+	worstGaps, worstExcess := map[string][]time.Duration{}, map[string][]time.Duration{}
 	for _, p := range r.Processes {
 		for _, c := range p.Calls {
 			if c.Call == nil {
@@ -1021,6 +1074,18 @@ func soakGapRows(r loadgen.RunReport, e loadgen.EventResult, index int) []loadge
 			}
 			for _, move := range c.Call.Moves {
 				if loadgen.MatchesEvent(e, c.Call, move) {
+					// A caller stall that covers the last packet before an outage is
+					// stamped late after ReadRTP, so it can shorten the measured gap.
+					// With GOMAXPROCS=1 a process stall of D delays the next send by at
+					// least D minus one tick, so D <= interval max lateness + one tick.
+					// Sends within the limit are the existing measurement envelope.
+					var bound time.Duration
+					from, to := c.Call.StartedAt.Add(move.Start-time.Second), c.Call.StartedAt.Add(max(move.End, move.Measurement.MediaResumedAt))
+					for _, s := range p.Samples {
+						if s.IntervalLateness.Max > r.Limits.P99 && s.At.After(from) && s.At.Add(-s.Interval).Before(to) {
+							bound = max(bound, s.IntervalLateness.Max+soakAudioTick)
+						}
+					}
 					for _, track := range move.Tracks {
 						row := rows[track.Kind]
 						if row == nil {
@@ -1033,6 +1098,10 @@ func soakGapRows(r loadgen.RunReport, e loadgen.EventResult, index int) []loadge
 							continue
 						}
 						if move.Kind == "takeover" {
+							// A pass within the stall bound of 2 s is untrusted.
+							if track.Gap < 2*time.Second && track.Gap+bound >= 2*time.Second {
+								continue
+							}
 							row.Trusted++
 							if track.Gap >= 2*time.Second {
 								row.Failed++
@@ -1045,6 +1114,8 @@ func soakGapRows(r loadgen.RunReport, e loadgen.EventResult, index int) []loadge
 						row.Trusted++
 						gaps[track.Kind] = append(gaps[track.Kind], track.Gap)
 						excess[track.Kind] = append(excess[track.Kind], track.Gap-track.BaselineGapP95)
+						worstGaps[track.Kind] = append(worstGaps[track.Kind], track.Gap+bound)
+						worstExcess[track.Kind] = append(worstExcess[track.Kind], track.Gap-track.BaselineGapP95+bound)
 					}
 				}
 			}
@@ -1066,6 +1137,11 @@ func soakGapRows(r loadgen.RunReport, e loadgen.EventResult, index int) []loadge
 		}
 		row.Outcome = "pass"
 		if row.Events == 0 || row.TrustedCoverage < .8 {
+			row.Outcome = "inconclusive"
+		}
+		// A measured pass that a stall bound could turn into a failure is
+		// unproven. The worst case only adds, so a measured failure still fails.
+		if percentile95(worstGaps[kind]) > 150*time.Millisecond || percentile95(worstExcess[kind]) > 50*time.Millisecond {
 			row.Outcome = "inconclusive"
 		}
 		if row.Failed > 0 {
@@ -1096,6 +1172,8 @@ func boundedSoakKey(k loadgen.RetainedKey) bool {
 		return k.LeaseRemainingMS != nil && (*k.LeaseRemainingMS <= relaylease.DefaultTTL.Milliseconds())
 	case "frame-cache":
 		return k.TTLMS > 0 && k.TTLMS <= (30*time.Second).Milliseconds()
+	case "session-ended":
+		return k.TTLMS > 0 && k.TTLMS <= sessionstore.EndedRetention.Milliseconds()
 	case "session", "worker-index":
 		limit := soakSessionLimit.Milliseconds()
 		if k.Class == "worker-index" {
@@ -1128,6 +1206,10 @@ func observeSoakKey(ctx context.Context, client *redis.Client, prefix, key strin
 		k.Class = "expired"
 	case strings.HasPrefix(suffix, "frames:{sess:") && strings.HasSuffix(suffix, "}"):
 		k.Class, k.LimitMS = "frame-cache", (30 * time.Second).Milliseconds()
+	case strings.HasPrefix(suffix, "ended:{sess:") && strings.HasSuffix(suffix, "}"):
+		// Release passes EndedRetention as ARGV[6]; release Lua expires this
+		// tombstone at Redis TIME + ARGV[6], independently of the lease TTL.
+		k.Class, k.LimitMS = "session-ended", sessionstore.EndedRetention.Milliseconds()
 	case suffix == "session_epoch":
 		k.Class = "session-counter"
 	case strings.HasPrefix(suffix, "worker:"):
