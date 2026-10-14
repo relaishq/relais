@@ -42,6 +42,7 @@ func (o RecordingOptions) defaults() RecordingOptions {
 // RecordingReport is a caller-owned memory gauge, separate from process heap.
 // EventSummaries grow only with events, not with packets or call duration.
 // HistoryBytes counts retained payload bytes; it excludes Go object overhead.
+// Delivery is set only in a call's final report; live gauges leave it nil.
 type RecordingReport struct {
 	History                                                      time.Duration
 	HistoryStart                                                 time.Duration
@@ -49,6 +50,72 @@ type RecordingReport struct {
 	EventSummaries                                               int
 	DecodedPictures                                              int
 	HistoryBytes                                                 int64
+	Delivery                                                     *WholeCallDelivery `json:",omitempty"`
+}
+
+// MaxRetainedLostUnits bounds each kind's whole-call lost-unit inventory.
+const MaxRetainedLostUnits = 4096
+
+// ContentDelivery counts one kind's identified content over the whole call,
+// once per successfully written audio unit or video frame. A unit settles
+// when it leaves rolling history, or at hangup when it was sent at least the
+// 500ms content settle window earlier; later units are Unsettled and unjudged.
+// Lost uses the yardstick's rule: no valid complete return by then. Late
+// returns are not lost. LostAt holds each lost unit's send time (caller clock,
+// sorted), up to MaxRetainedLostUnits; further losses only add LostOverflow.
+type ContentDelivery struct {
+	Sent, Returned, Lost, Unsettled int
+	LostAt                          []time.Duration
+	LostOverflow                    int
+}
+
+// WholeCallDelivery survives rolling history as running counts, so a long
+// call reports every unit without retaining every unit.
+type WholeCallDelivery struct {
+	Audio, Video ContentDelivery
+}
+
+// settle runs under r.mu, before a written unit leaves rolling history.
+func (d *ContentDelivery) settle(u contentUnit) {
+	if !u.written {
+		return
+	}
+	d.Sent++
+	if u.returnedAt > 0 && u.returnedAt >= u.at {
+		d.Returned++
+		return
+	}
+	d.Lost++
+	if len(d.LostAt) < MaxRetainedLostUnits {
+		d.LostAt = append(d.LostAt, u.at)
+	} else {
+		d.LostOverflow++
+	}
+}
+
+// wholeCallDelivery runs under r.mu after hangup. Units still in history
+// settle on a copy; running counts are not changed.
+func (r *recorder) wholeCallDelivery() *WholeCallDelivery {
+	d := &WholeCallDelivery{Audio: r.audioDelivery, Video: r.videoDelivery}
+	d.Audio.LostAt = slices.Clone(r.audioDelivery.LostAt)
+	d.Video.LostAt = slices.Clone(r.videoDelivery.LostAt)
+	horizon := r.hungUpAt - contentSettleWindow
+	remaining := func(out *ContentDelivery, u contentUnit) {
+		if u.written && u.at > horizon {
+			out.Unsettled++
+		} else {
+			out.settle(u)
+		}
+	}
+	for _, u := range r.sentAudioUnits {
+		remaining(&d.Audio, u)
+	}
+	for _, f := range r.sentVideoFrames {
+		remaining(&d.Video, f.unit())
+	}
+	slices.Sort(d.Audio.LostAt)
+	slices.Sort(d.Video.LostAt)
+	return d
 }
 
 func (r *recorder) memoryGauge() RecordingReport {
@@ -176,6 +243,7 @@ func (r *recorder) finishCompact(now time.Duration, count int, reports []MoveRep
 				break
 			}
 			if u, ok := r.sentAudioUnits[ref.audio]; ok && u.at == ref.at {
+				r.audioDelivery.settle(u)
 				delete(r.sentAudioUnits, ref.audio)
 				delete(r.sentFrames[kindAudio], ref.audio)
 			}
@@ -183,6 +251,7 @@ func (r *recorder) finishCompact(now time.Duration, count int, reports []MoveRep
 	} else {
 		for key, u := range r.sentAudioUnits {
 			if u.at < cutoff {
+				r.audioDelivery.settle(u)
 				delete(r.sentAudioUnits, key)
 				delete(r.sentFrames[kindAudio], key)
 			}
@@ -194,6 +263,7 @@ func (r *recorder) finishCompact(now time.Duration, count int, reports []MoveRep
 				break
 			}
 			if f, ok := r.sentVideoFrames[ref.video]; ok && f.identity == ref.generation && f.at == ref.at {
+				r.videoDelivery.settle(f.unit())
 				delete(r.sentVideoFrames, ref.video)
 				delete(r.sentFrames[kindVideo], f.data)
 			}
@@ -201,6 +271,7 @@ func (r *recorder) finishCompact(now time.Duration, count int, reports []MoveRep
 	} else {
 		for key, f := range r.sentVideoFrames {
 			if f.at < cutoff {
+				r.videoDelivery.settle(f.unit())
 				delete(r.sentVideoFrames, key)
 			}
 		}
@@ -216,6 +287,7 @@ func (r *recorder) finishCompact(now time.Duration, count int, reports []MoveRep
 		cutoff = max(cutoff, ats[len(ats)-maxHistoryUnits])
 		for key, u := range r.sentAudioUnits {
 			if u.at < cutoff {
+				r.audioDelivery.settle(u)
 				delete(r.sentAudioUnits, key)
 				delete(r.sentFrames[kindAudio], key)
 			}
