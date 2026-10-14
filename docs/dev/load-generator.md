@@ -61,7 +61,9 @@ line records its `media_offset_ns` and `maintenance_phase_ns`.
   Later samples keep the interval and stay contiguous.
 - Windows that end at `start + duration`, such as the soak saturation budget
   and capacity service telemetry, do not cover up to the last second of the
-  latest calls' media. Those calls' own reports and final samples still do.
+  latest calls' media. Those calls' own reports and final samples still do,
+  and the soak and capacity generator guards judge samples up to each
+  process's last media send.
 - In-process harness tests are unchanged. Only `relais-load` callers use
   offsets and phases.
 

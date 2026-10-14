@@ -104,7 +104,6 @@ func capacityGenerator(r loadgen.RunReport) (loadgen.RunReport, []string) {
 	view := r
 	view.Processes = append([]loadgen.ProcessReport(nil), r.Processes...)
 	view.Events = append([]loadgen.EventResult(nil), r.Events...)
-	end := r.StartedAt.Add(r.Duration)
 	var tolerated []string
 	for i := range view.Processes {
 		p := &view.Processes[i]
@@ -116,7 +115,7 @@ func capacityGenerator(r loadgen.RunReport) (loadgen.RunReport, []string) {
 		// Lateness 1 keeps "no successful media sends" out of the peak causes.
 		peak := loadgen.Stats{Lateness: loadgen.Lateness{Packets: 1}, IntervalLateness: loadgen.Lateness{P99: p.PeakIntervalP99}}
 		for j, s := range p.Samples {
-			if sampleSaturated(p.Samples, j, r.Limits, r.StartedAt, end) {
+			if sampleSaturated(p.Samples, j, r.Limits, r.StartedAt, mediaEnd(r, *p)) {
 				sustained = true
 				break
 			}

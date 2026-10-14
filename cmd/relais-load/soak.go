@@ -156,22 +156,30 @@ type saturationBudget struct {
 // The denominator is wall-clock seconds, not process-seconds. If several
 // generators stall together that second counts once, with every process named.
 // A delayed saturated sample excludes every second it overlaps, conservatively.
+// Callers with a late start offset send past start + duration, up to the
+// process's mediaEnd (#85). A sample that overlaps that media is judged, and
+// Excluded keeps its whole interval, so the per-unit, per-gap and event guards
+// still see this caller's saturation in the tail. The budget counts only the
+// run window's seconds; samples after the media are hangup-only.
 func judgeSaturation(r loadgen.RunReport) saturationBudget {
 	b := saturationBudget{LatenessPersistenceSamples: 2, ImmediateLatenessLimit: 2 * r.Limits.P99, ImmediateSkippedPercent: 2 * r.Limits.SkippedPercent, MaxToleratedStall: maxToleratedStall, LimitPercent: 1, Outcome: "pass", Intervals: int((r.Duration + time.Second - 1) / time.Second)}
 	seen := map[int]bool{}
 	end := r.StartedAt.Add(r.Duration)
 	for _, p := range r.Processes {
+		media := mediaEnd(r, p)
 		for i, s := range p.Samples {
-			first, last := maxTime(s.At.Add(-s.Interval), r.StartedAt), minTime(s.At, end)
-			if !last.After(first) {
+			first, last := maxTime(s.At.Add(-s.Interval), r.StartedAt), s.At
+			if !minTime(last, media).After(first) {
 				continue
 			}
-			causes := saturationCauses(p.Samples, i, r.Limits, r.StartedAt, end)
+			causes := saturationCauses(p.Samples, i, r.Limits, r.StartedAt, media)
 			if len(causes) == 0 {
 				continue
 			}
 			b.Excluded = append(b.Excluded, excludedInterval{PID: p.PID, Start: first, End: last, Causes: causes})
-			for i := int(first.Sub(r.StartedAt) / time.Second); i < b.Intervals && r.StartedAt.Add(time.Duration(i)*time.Second).Before(last); i++ {
+			// A tail-only sample is excluded but never counts toward the budget.
+			counted := minTime(last, end)
+			for i := int(first.Sub(r.StartedAt) / time.Second); counted.After(first) && i < b.Intervals && r.StartedAt.Add(time.Duration(i)*time.Second).Before(counted); i++ {
 				seen[i] = true
 			}
 		}

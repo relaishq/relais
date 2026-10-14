@@ -106,9 +106,12 @@ second counts once if any generator is saturated; every excluded process
 interval is named with its start, end and causes. A delayed saturated sample
 excludes all wall-clock seconds it overlaps. Hangup-only intervals are outside
 the media budget. So is up to the last second of media from calls with late
-start offsets, which end up to one second after `start + duration`. All raw
-generator samples are retained in soak reports; ordinary load/calibration
-reports keep their existing 256-sample cap.
+start offsets, which end up to one second after `start + duration` (#85).
+Those tail samples are still judged: they can establish persistence, and each
+excluded interval keeps its whole span. Event windows, whole-call delivery and
+the continuity gap guard therefore treat this caller's saturation in the tail
+as they do before the boundary. All raw generator samples are retained in soak
+reports; ordinary load/calibration reports keep their existing 256-sample cap.
 
 Each event includes its preceding one-second baseline and the caller's saved
 loss-observation, settling and freshness horizons. A conservative seven-second
