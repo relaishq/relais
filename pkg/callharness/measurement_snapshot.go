@@ -364,6 +364,8 @@ func (r *recorder) compactRecordingBeforeEvaluation(now time.Duration, beforeEva
 	}
 	cutoff := now - r.recording.History
 	if cutoff <= 0 {
+		// Nothing expires yet, but completed video assemblies still do.
+		r.expireAssemblies(now, true)
 		r.lastCompact = now
 		r.mu.Unlock()
 		return

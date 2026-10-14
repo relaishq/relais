@@ -367,6 +367,8 @@ func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
 	// Receipts may arrive out of event order. Keep their storage order (also
 	// used by maintenance snapshots), but find window limits on the mapped
 	// event-time axis. An unmapped receipt provides no safe truncation point.
+	// A later event may already be saved before an earlier receipt arrives;
+	// its retained mapped start still ends the earlier event's window.
 	var mappedStarts []time.Duration
 	var startsByEvent map[*DistributedEvent]time.Duration
 	if r.distributed != nil {
@@ -385,6 +387,11 @@ func (r *recorder) measureMoves(until time.Duration, count int) []MoveReport {
 			}
 			mappedStarts = append(mappedStarts, start.Lower)
 			startsByEvent[move.event] = start.Lower
+		}
+		for _, saved := range r.savedMoves {
+			if d := saved.Distributed; d != nil && d.Mapped {
+				mappedStarts = append(mappedStarts, r.since(d.Start.Earliest))
+			}
 		}
 		slices.Sort(mappedStarts)
 	}
