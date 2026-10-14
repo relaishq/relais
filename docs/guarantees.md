@@ -12,9 +12,11 @@ tests.
 
 The full soak is **pending [#41][soak-ticket], run by Derek through [#85][full-soak]**.
 Desktop Chrome with a real camera is **pending [#45][device-ticket]**. Mobile
-browsers are deferred to [#98][mobile]. Cloud confirmation is **pending
-[#48][cloud]**. The checkpoint-envelope row now passes the cited real-process
-store-stall sample. [PR #103][outage-pr] and [ADR 0008][outage-adr] add a bounded
+browsers are deferred to [#98][mobile]. Cloud confirmation is **Pass for the
+real-process driver [#48][cloud]**; the demo-page run with Derek's Chrome over
+the real internet remains **Pending #48**. The checkpoint-envelope row now
+passes the cited real-process store-stall sample. [PR #103][outage-pr] and
+[ADR 0008][outage-adr] add a bounded
 store-outage guarantee. **#51 remains open**; **#94 is fixed by [PR #97][early-media-pr]**.
 
 ## How to read the matrix
@@ -132,9 +134,11 @@ even if p95 passes. Moves record content loss but do not gate on zero content
 loss. On lossy links, a passing move is not a promise that the network loses
 no packets.
 
-**Status:** **Pass for the cited profile matrix and short LAN load sample.**
+**Status:** **Pass for the cited profile matrix, short LAN load sample and
+real-process cloud confirmation [#48][cloud].**
 Desktop real-camera results are pending #45; mobile browsers are deferred to
-#98; real-internet confirmation is pending #48. **#51 remains a known exception
+#98; the demo-page run with Derek's Chrome over the real internet is pending
+#48. **#51 remains a known exception
 on aborted/rolled-back moves**;
 the successful-move sample does not resolve it.
 
@@ -152,8 +156,9 @@ evict packets before the time limit. Default worker failure detection remains
 **400 ms**; faster detection has not been accepted.
 
 Profile timing is measured at one call per trial. Loaded recovery is separately
-validated on short LAN steps at eight calls with N+1. Browser and cloud scope
-remain pending.
+validated on short LAN steps at eight calls with N+1. The separate real-process
+cloud confirmation passes [#48][cloud]; browser-over-real-internet scope
+remains pending.
 
 | Profile | Audio takeover gap p95 | Video takeover gap p95 | Content-loss rule | Status |
 | --- | ---: | ---: | --- | --- |
@@ -190,8 +195,10 @@ controls on Memory and Redis. Buffer-off controls lost **340 ms of audio and
 measurements, not a browser audio-playback comparison.
 
 **Status:** **Pass within the cited buffer, checkpoint, profile and load
-conditions.** Pending #45 for the desktop camera; mobile playback is deferred
-to #98; pending #48 for the real internet. Overflow, expiry, relay-buffer loss and terminal adoption
+conditions, including the real-process cloud confirmation [#48][cloud].**
+Pending #45 for the desktop camera; mobile playback is deferred to #98; the
+demo-page run with Derek's Chrome over the real internet is pending #48.
+Overflow, expiry, relay-buffer loss and terminal adoption
 failure can lose content or end a call. They have counted fallback/cleanup
 paths, not a universal no-loss guarantee. [PR #77][buffer-pr] and
 [ADR 0005][buffer-adr] record those failure paths. The incomplete-ring fix
@@ -407,6 +414,39 @@ Source: [soak-results.md][soak-results].
 **Status:** **Pending #41/#85.** Full-run memory trends, event coverage and
 cleanup results are not measured until that run arrives.
 
+## Cloud confirmation
+
+The [official #48 result][cloud] is **Pass for the real-process driver** for
+planned moves and crash takeovers. Three internet callers ran on GitHub runners,
+each with three audio/video calls, against **separate cloud VMs in one region**.
+This is **one 75-minute run**, with **one judged caller (three calls)**.
+
+Before any fault, the judged caller was pre-registered by measured clock-probe
+round trip **≤10 ms**. The two far callers were diagnostics only: a far caller's
+own measurements cannot fail the run. **Server-side failure signals count on
+every call.** Host clock bounds were evidenced from chrony: **2 ms for control**
+and **3 ms for the worker**.
+
+The judged results are pooled over the three calls. All times are milliseconds.
+
+| Measure | Planned moves | Crash takeovers |
+| --- | ---: | ---: |
+| Trials | 25 | 30 |
+| Media resume p50 / max | 17 / 30 | 386 / 443 |
+| Event gap max | 38 | 464 |
+| Lost audio / video frames | 0 / 0 | 0 / 0 |
+| Decryption failures after resume | 0 | 0 |
+
+Every judged trial passed; **315/315 yardstick rows** passed. This sample does
+not establish results for other callers or repeated runs. [#125][history-watermark],
+the history watermark in a call's first retention window, is a **harness limit
+worked around by scheduling**. [#122][caller-ice] (caller ICE checks) remains open.
+
+**Status:** **Pass for the cited real-process driver sample.** The demo-page run
+with Derek's Chrome over the real internet remains **Pending [#48][cloud]**;
+browser-over-real-internet evidence is still pending. The full soak, desktop
+real-camera and mobile scopes keep their separate pending or deferred status.
+
 ## Every threshold in the phase-2 spec
 
 This table preserves all rows of [#31's threshold table][spec]. A pass is
@@ -425,7 +465,7 @@ lead's later disposition.
 | Real camera at 720p in desktop Chrome: planned-move and takeover rows hold | **Pending #45** | Save buffer-on and buffer-off records using the [device checklist][devices]. Verify actual camera dimensions, per-track move/takeover verdicts, first-live-frame times, visibility and the completed consent hold. Results not measured. |
 | Android Chrome on local network: planned-move and takeover rows hold | **Deferred; explicit non-guarantee** | [#45 scope change][device-ticket] defers mobile browsers to [#98][mobile]. Results not measured. |
 | Agent continuity: exact planned continuation; bounded checkpoint rollback on takeover; duplicated input flagged | **Pass for cited local demo and harness contract** | [Browser report][agent-result], [ADR 0006 hosting/replay tests][agent-adr] and [ADR 0005 notices][buffer-adr]. State-age interpretation uses snapshot age. [PR #97][early-media-pr] fixes #94's pre-move early-media loss. |
-| Cloud confirmation: move/takeover rows hold over real internet | **Pending #48** | Separate VMs in one region; callers over the real internet. Kit in progress; Lean (no remote browser mode) versus Full remains Derek's choice. AWS and the $25 cap are [approved][cloud-approval]. Driver/browser results, final cost and teardown proof are not measured. The kit supplies no run evidence. |
+| Cloud confirmation: move/takeover rows hold over real internet | **Pass for real-process driver; Pending #48 for browser** | [Official #48 result][cloud]: one judged caller (3 calls), one 75-minute run; 25 moves and 30 takeovers pass, with zero lost audio/video and zero decryption failures after resume; 315/315 yardstick rows pass. Method, timing and harness limits are recorded above. The demo-page run with Derek's Chrome over the real internet remains pending. |
 
 ## Open residuals and source differences
 
@@ -507,9 +547,10 @@ This closes #94's residual; it does not fix #51.
 - **#45:** Analyse all device/buffer records. Keep media gap, first new content
   and first live frame separate. Scope is desktop Chrome only. Add actual
   device/camera settings and every failure or inconclusive cause.
-- **#48:** After the Lean/Full kit choice and the run, add driver and browser
-  records for the chosen scope, topology, workload, observed network conditions,
-  checkpoint ages, final cost and teardown proof. Kit progress is not a result.
+- **#48:** The real-process driver confirmation passes the cited sample. Add
+  the pending demo-page records from Derek's Chrome over the real internet,
+  with workload, observed network conditions and checkpoint ages. The final
+  cost report remains pending; the official result reports verified teardown.
 - **Store outages:** Add full-budget transport-partition or Redis-failover
   evidence if those cases are run. Keep loaded/profile timing and the separate
   consent acceptance unmeasured until sourced results arrive.
@@ -541,6 +582,8 @@ This closes #94's residual; it does not fix #51.
 [early-media-pr]: https://github.com/relaishq/relais/pull/97
 [old-agent-flake]: https://github.com/relaishq/relais/issues/76
 [cloud]: https://github.com/relaishq/relais/issues/48
+[history-watermark]: https://github.com/relaishq/relais/issues/125
+[caller-ice]: https://github.com/relaishq/relais/issues/122
 [cloud-approval]: https://github.com/relaishq/relais/issues/48#issuecomment-6122720643
 [soak-ticket]: https://github.com/relaishq/relais/issues/41
 [full-soak]: https://github.com/relaishq/relais/issues/85
