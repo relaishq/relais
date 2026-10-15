@@ -906,4 +906,4 @@ Operational notes:
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Relais is licensed under the [Apache License 2.0](LICENSE). Copyright 2024-2026 Derek Wang; see [NOTICE](NOTICE).
