@@ -88,7 +88,11 @@ output from before the export fence.
    is accepted only while the route still names it. The retained
    uncertain-transfer path uses the same call when it resumes from the
    retained export without crash margins. Crash takeovers keep
-   `MoveSessionAtEpoch`.
+   `MoveSessionAtEpoch`. A retry whose earlier route call failed no longer
+   knows the routed source and cannot drain it. It uses the existing route
+   repair: `MoveSessionAtEpoch` with an empty source, or `/move` with
+   `repair`. It never sends an empty source to `move-after-export`, which
+   rejects one with 400.
 4. **The control plane passes the export's consumed input to the relay.**
    After a successful export it reads `{High, Window, Exact}` per SSRC from the
    exact export bytes. It releases the hold with `ReleaseAfterExport(id, to,
@@ -135,7 +139,10 @@ output from before the export fence.
      `Complete` and `LockHeld` (how long the release held `forwardMu`).
      `Complete` is false when ring eviction or SSRC admission limits covered an
      unconsumed window index that the ring had observed: indexes below an SSRC's
-     first retained index are never counted. The relay exports
+     lowest observed index are never counted. That lowest index is lifetime
+     metadata and may be rollovers old. Alignment shifts it by the high water
+     mark's correction instead of rebuilding it from 16 bits, which would move
+     it into the anchor's epoch and hide eviction after a wrap. The relay exports
      `relais_relay_planned_releases_total`, `_recovered_total`,
      `_filtered_total`, `_incomplete_total`,
      `relais_relay_planned_release_lock_nanoseconds_total` and the
@@ -337,6 +344,7 @@ restart or renegotiation.
 | Sparse masks, independent SSRCs, index 0, `H < 63`, `H-63` sent and `H-64` not, unknown SSRC, held duplicates, inexact export | `TestReleaseAfterExportRecoversUnconsumedInput` |
 | Window tracking, priming across a wrap and below 63 | `TestReceiveWindowTracksAuthenticatedInput`, `TestRestoreInboundWindowMatchesExporter` |
 | Cold-ring rollover, `[0, 65534]` at `H=65535` and `[1, 65535]` at `H=65536`, for planned release and crash replay | `TestColdRingRolloverAlignment` (fails on the old single-offset alignment in all four cases) |
+| Eviction after a rollover, with a lifetime lowest index from an earlier epoch, for planned release and crash replay | `TestRolloverEvictionIsReported` (the planned case reported `Complete=true` before the fix) |
 | Combined rollover and reordering | `TestPlannedDrainReorderedPrivateInput` starts each call's audio and video sequences just below 65535, staggered so they wrap during the drain and move rounds under reorder injection; the cold-ring unit cases pin the boundary |
 | Agent arrivals during the export flush | `TestPlannedMoveAgentFlushRecoversLateAudio`, `TestAgentPlannedFlushDrainsAcceptedQueue` |
 | Agent pause leaves video and SRTCP active | `TestPausedAgentLeavesVideoAndRTCPActive` |
@@ -346,6 +354,7 @@ restart or renegotiation.
 | Return-path output drain, its bound and resend | `TestMoveSessionAfterExportForwardsPreFenceOutput`, `TestMoveSessionAfterExportBounds` |
 | Success, rollback, crash-margin transition | `TestMoveReleasesAfterExactExport` |
 | Retained uncertain transfer | `TestRetainedPlannedMoveReleasesAfterExport`, `TestRelayUncertainTransferSurvives/deferred-move` |
+| Retained retry after a failed route call, through the real relay HTTP handler | `TestRetainedPlannedMoveRetriesAfterRouteFailure` (never adopted in three attempts before the fix); `TestRemoteMoveAfterExportFallback` covers the empty-source repair |
 | Lost reply on the route or release call | `TestHTTPMoveLostReplies/forward-route`, `/release-after-export` |
 | Hold expiry, eviction, buffer off | `TestReleaseAfterExportEdges`, `TestReleaseAfterExportReportsEviction`, `TestReleaseAfterExportWithoutBuffer`, the buffer-off subtest |
 | Relay restart and standby activation | Cold-ring cases above; `TestRelayBufferFailurePaths/*/relay-restart` and the `relay-continuity` CI jobs |
