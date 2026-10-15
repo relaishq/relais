@@ -373,7 +373,10 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 	case "retried-replay":
 		reply = &bufferResumeReplyFault{path: "/replay"}
 		cfg.relayTransport = reply
-	case "second-crash-during", "second-crash-after", "second-crash-canceled":
+	case "second-crash-during", "second-crash-canceled":
+		// Slow replay keeps the second kill inside the drain. The after path
+		// keeps default pacing: B's only checkpoint is its resume copy, and a
+		// slow drain under CPU load ages it past the envelope (#114).
 		cfg.buffer.ReplayBatchPackets = 1
 		cfg.buffer.ReplayInterval = 5 * time.Millisecond
 	case "frame-cache-complete":
@@ -508,6 +511,14 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		}
 		if path == "second-crash-during" || path == "second-crash-canceled" {
 			require.Equal(t, 1, sys.r.Stats().Holds, "second kill occurs while replay still gates live input")
+		}
+		if path == "second-crash-after" {
+			// A fast drain can return before B decrypts any replayed input.
+			require.Eventually(t, func() bool {
+				processedMu.Lock()
+				defer processedMu.Unlock()
+				return len(processedB) > 0
+			}, 2*time.Second, time.Millisecond, "B decrypts uncheckpointed input before the second kill")
 		}
 		failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
 		require.NoError(t, err)
