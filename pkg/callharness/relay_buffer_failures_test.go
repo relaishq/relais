@@ -440,11 +440,15 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 			})
 		}
 	}
+	// #114 experiment: DIAG114_REPLAY_EXTRA lengthens B's tenure after the
+	// first replay, as a starved replay would, before the second kill.
+	replayExtra, _ := time.ParseDuration(os.Getenv("DIAG114_REPLAY_EXTRA"))
 	if path == "second-crash-after" {
 		cfg.relayHandler = func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				next.ServeHTTP(w, r)
 				if strings.HasSuffix(r.URL.Path, "/replay") {
+					time.Sleep(replayExtra)
 					replayOnce.Do(func() { close(replayDone) })
 					<-replayDoneAck
 				}
