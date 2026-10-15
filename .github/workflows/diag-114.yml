@@ -1,0 +1,74 @@
+# Temporary investigation workflow for #114. Remove before any merge.
+name: diag-114 second-crash contention
+
+on:
+  push:
+    branches: [investigate/114-second-crash]
+
+permissions:
+  contents: read
+
+jobs:
+  contention:
+    name: ${{ matrix.runner }} copies=${{ matrix.copies }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest, copies: 1, count: 20 }
+          - { runner: ubuntu-latest, copies: 2, count: 10 }
+          - { runner: ubuntu-latest, copies: 4, count: 10 }
+          - { runner: ubuntu-latest, copies: 6, count: 10 }
+          - { runner: ubuntu-24.04-arm, copies: 1, count: 20 }
+          - { runner: ubuntu-24.04-arm, copies: 6, count: 10 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+
+      - name: Build race test binary
+        run: go test -race -c -o "$RUNNER_TEMP/callharness.test" ./pkg/callharness
+
+      - name: Run concurrent copies
+        env:
+          COPIES: ${{ matrix.copies }}
+          COUNT: ${{ matrix.count }}
+          TEST_FILTER: ${{ vars.DIAG114_FILTER || '^TestRelayBufferFailurePaths$/^memory$/^second-crash-after$' }}
+        run: |
+          out="$RUNNER_TEMP/out"
+          mkdir -p "$out/diag"
+          export DIAG114_DIR="$out/diag"
+          nproc | tee "$out/nproc.txt"
+          cd pkg/callharness
+          pids=()
+          start=$(date +%s)
+          for i in $(seq 1 "$COPIES"); do
+            "$RUNNER_TEMP/callharness.test" -test.run "$TEST_FILTER" -test.count="$COUNT" -test.timeout 40m -test.v > "$out/copy-$i.log" 2>&1 &
+            pids+=($!)
+          done
+          for p in "${pids[@]}"; do wait "$p" || true; done
+          echo "wall_seconds=$(( $(date +%s) - start ))" | tee "$out/wall.txt"
+          cd "$out"
+          pass=$(cat copy-*.log | grep -c -- '--- PASS: TestRelayBufferFailurePaths/memory/second-crash-after' || true)
+          fail=$(cat copy-*.log | grep -c -- '--- FAIL: TestRelayBufferFailurePaths/memory/second-crash-after' || true)
+          echo "pass=$pass fail=$fail" | tee summary.txt
+          grep -h -A3 'Error Trace' copy-*.log | grep -o 'relay_buffer_failures_test.go:[0-9]*' | sort | uniq -c | tee -a summary.txt || true
+          grep -h 'DIAG114 takeover window' copy-*.log | tee -a summary.txt || true
+          python3 -I "$GITHUB_WORKSPACE/.github/diag114_summary.py" "$out/diag" | tee -a summary.txt || true
+          cat summary.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: diag114-${{ matrix.runner }}-c${{ matrix.copies }}
+          path: ${{ runner.temp }}/out
+          retention-days: 7

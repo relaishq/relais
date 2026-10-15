@@ -216,11 +216,34 @@ func observeBufferCall(call *Call) *bufferCallerObservation {
 func waitBufferTakeovers(t *testing.T, ctx context.Context, h *Harness, n int) controlplane.Status {
 	t.Helper()
 	var status controlplane.Status
-	require.Eventually(t, func() bool {
-		var err error
-		status, err = h.Status(ctx)
-		return err == nil && len(status.Takeovers) == n
-	}, 3*time.Second, 5*time.Millisecond)
+	var statusErr error
+	start := time.Now()
+	deadline := start.Add(3 * time.Second)
+	for {
+		time.Sleep(5 * time.Millisecond)
+		status, statusErr = h.Status(ctx)
+		if statusErr == nil && len(status.Takeovers) == n {
+			return status
+		}
+		if !time.Now().Before(deadline) {
+			break
+		}
+	}
+	// #114 diagnostics: record the window's last view, then keep polling to
+	// show whether the takeover is merely late, lost or never completes.
+	rec := diag114Record{Event: "takeover-timeout", Want: n, WaitStart: start, Status: &status}
+	if statusErr != nil {
+		rec.StatusError = statusErr.Error()
+	}
+	diag114Write(t, rec)
+	lateAt, late, lateErr := diag114Late(h, n, 8*time.Second)
+	rec = diag114Record{Event: "takeover-late", Want: n, WaitStart: start, LateAt: lateAt, LateCount: len(late.Takeovers), Status: &late}
+	if lateErr != nil {
+		rec.StatusError = lateErr.Error()
+	}
+	diag114Write(t, rec)
+	t.Fatalf("DIAG114 takeover window: want %d takeovers within 3s, got %d (err %v); late_at=%v late_count=%d",
+		n, len(status.Takeovers), statusErr, lateAt.Sub(start), len(late.Takeovers))
 	return status
 }
 
@@ -425,6 +448,14 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		}
 	}
 	sys := startBufferFailureSystem(t, store, cfg)
+	var dm diag114Marks
+	var diagStatus *controlplane.Status
+	if strings.HasPrefix(path, "second-crash") {
+		t.Cleanup(func() {
+			stats := sys.r.Stats()
+			diag114Write(t, diag114Record{Event: "outcome", Failed: t.Failed(), Marks: dm.snapshot(), Status: diagStatus, Relay: &stats})
+		})
+	}
 	if adoption != nil {
 		adoption.target = sys.workers[1].LocalAddr()
 		adoption.armed.Store(true)
@@ -493,6 +524,7 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		}
 	}
 	killed := time.Now()
+	dm.mark("kill_a", killed)
 	sys.h.RecordProcessKill("0", killed)
 	require.NoError(t, workerprobe.Kill(sys.workers[0].LocalAddr()))
 	expected := 1
@@ -503,6 +535,7 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		}
 		select {
 		case <-boundary:
+			dm.mark("boundary", time.Now())
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		}
@@ -512,6 +545,7 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
 		require.NoError(t, err)
 		require.Zero(t, failures)
+		dm.mark("kill_b", time.Now())
 		sys.h.RecordProcessKill("1", time.Now())
 		require.NoError(t, workerprobe.Kill(sys.workers[1].LocalAddr()))
 		if path == "second-crash-after" || path == "second-crash-canceled" {
@@ -522,7 +556,10 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 			expected = 1
 		}
 	}
+	dm.mark("wait_start", time.Now())
 	status := waitBufferTakeovers(t, ctx, sys.h, expected)
+	dm.mark("wait_done", time.Now())
+	diagStatus = &status
 	lostCall := path == "failed-adoption-loss"
 	require.Equal(t, lostCall, status.Takeovers[len(status.Takeovers)-1].Lost)
 	require.EqualValues(t, map[bool]int{false: 0, true: 1}[lostCall], status.LostCount)
