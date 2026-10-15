@@ -28,10 +28,12 @@ func (p exportPacket) raw(t *testing.T) []byte { return bufferRTP(t, p.ssrc, p.s
 type exportScenario struct {
 	cfg     Config
 	restart bool // relay restarts before the call's media: a cold ring
-	pre     []exportPacket
-	held    []exportPacket
-	input   map[uint32]ConsumedInput
-	settle  time.Duration
+	// old is sent first and left to expire from the ring before pre.
+	old    []exportPacket
+	pre    []exportPacket
+	held   []exportPacket
+	input  map[uint32]ConsumedInput
+	settle time.Duration
 }
 
 func runExportScenario(t *testing.T, sc exportScenario) (ReleaseReply, []exportPacket, *testSystem) {
@@ -46,6 +48,13 @@ func runExportScenario(t *testing.T, sc exportScenario) (ReleaseReply, []exportP
 		sys.restart(t)
 	}
 	sys.connect(t, caller, a, sessionA)
+	for _, p := range sc.old {
+		caller.send(t, p.raw(t), sys.relay.PublicAddr())
+		a.expect(t, caller.addr(), p.raw(t))
+	}
+	if len(sc.old) > 0 {
+		time.Sleep(sys.relay.buffer.cfg.Window + 50*time.Millisecond)
+	}
 	for _, p := range sc.pre {
 		caller.send(t, p.raw(t), sys.relay.PublicAddr())
 		a.expect(t, caller.addr(), p.raw(t))
@@ -380,5 +389,68 @@ func TestMoveSessionAfterExportBounds(t *testing.T) {
 			RouteRequest{From: a.addr(), To: b.addr()}, nil, RemoteErrors))
 		caller.send(t, bufferRTP(t, 42, 1), sys.relay.PublicAddr())
 		b.expect(t, caller.addr(), bufferRTP(t, 42, 1))
+	})
+}
+
+// The ring's lowest observed index is lifetime metadata from an earlier
+// rollover epoch. Aligning to the export must not re-extend it into the
+// anchor's epoch, or eviction of unconsumed input after a wrap would be
+// reported as complete (implementation review P3). The crash path shares
+// the alignment and must still see the eviction above its checkpoint.
+func TestRolloverEvictionIsReported(t *testing.T) {
+	// The stream starts at sequence 10 (lifetime lowest), jumps near the wrap,
+	// and its oldest packets, ending at 65510, expire before the move. The
+	// export (H = 65560) consumed everything retained but never saw 65510.
+	old := append([]exportPacket{{42, 10}}, seqs(42, 65500, 65510)...)
+	pre := append(seqs(42, 65511, 65535), seqs(42, 0, 24)...)
+	cfg := Config{Buffer: &BufferConfig{Window: 300 * time.Millisecond}}
+	t.Run("planned", func(t *testing.T) {
+		var consumed []uint64
+		for index := uint64(65497); index <= 65560; index++ {
+			if index != 65510 {
+				consumed = append(consumed, index)
+			}
+		}
+		reply, got, sys := runExportScenario(t, exportScenario{cfg: cfg, old: old, pre: pre,
+			input: map[uint32]ConsumedInput{42: {High: 65560, Window: window(65560, consumed...), Exact: true}}})
+		require.Empty(t, got)
+		require.False(t, reply.Complete, "evicted unconsumed 65510 is reported")
+		require.EqualValues(t, 1, sys.relay.Stats().PlannedIncomplete)
+		sys.relay.forwardMu.Lock()
+		defer sys.relay.forwardMu.Unlock()
+		require.EqualValues(t, 10, sys.relay.buffer.sessions[sessionA].lowest[42], "lifetime lowest keeps its epoch")
+	})
+	t.Run("crash", func(t *testing.T) {
+		cfg := cfg
+		cfg.HoldTimeout = time.Hour
+		sys := startTestRelay(t, cfg)
+		a, b := sys.worker(t, sessionA), sys.worker(t, sessionB)
+		caller := newTestCaller(t)
+		sys.connect(t, caller, a, sessionA)
+		for _, p := range old {
+			caller.send(t, p.raw(t), sys.relay.PublicAddr())
+			a.expect(t, caller.addr(), p.raw(t))
+		}
+		time.Sleep(cfg.Buffer.Window + 50*time.Millisecond)
+		for _, p := range pre {
+			caller.send(t, p.raw(t), sys.relay.PublicAddr())
+			a.expect(t, caller.addr(), p.raw(t))
+		}
+		_, err := sys.relay.BeginReplay(context.Background(), sessionA, a.addr(), nil)
+		require.NoError(t, err)
+		transferTestLease(t, sys.cfg.Owners, sessionA, b.addr())
+		require.NoError(t, sys.relay.MoveSession(sessionA, a.addr(), b.addr()))
+		// The checkpoint (65505) predates the evicted 65510: replay is incomplete
+		// and still sends every retained index above the checkpoint, in order.
+		plan, err := sys.relay.BeginReplay(context.Background(), sessionA, a.addr(), map[uint32]uint64{42: 65505})
+		require.NoError(t, err)
+		require.False(t, plan.Complete)
+		result, err := sys.relay.ReplaySession(context.Background(), sessionA, b.addr())
+		require.NoError(t, err)
+		require.Equal(t, len(pre), result.Packets)
+		for _, p := range pre {
+			b.expect(t, caller.addr(), p.raw(t))
+		}
+		b.expectNothing(t)
 	})
 }

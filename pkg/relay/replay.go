@@ -309,18 +309,27 @@ func anchorIndex(anchor uint64) func(uint64) uint64 {
 // align rebuilds one SSRC's retained indexes, trims and high water mark in
 // the anchor's index space. Retained packets are within the ring window, far
 // inside the half-space envelope, so a warm ring keeps the same indexes.
+// The lowest observed index is lifetime metadata, possibly many rollovers
+// old: it moves by the high water mark's correction instead of being
+// re-extended from its 16 bits, which would misplace it into the anchor's
+// epoch. A cold ring can only under-label indexes, so it stays a lower bound.
 func (b *packetBuffer) align(s *bufferedSession, ssrc uint32, anchor uint64) {
 	highest, known := s.indexes[ssrc]
 	if !known {
 		return
 	}
 	translate := anchorIndex(anchor)
-	highest = translate(highest)
+	aligned := translate(highest)
+	if lowest, ok := s.lowest[ssrc]; ok {
+		if aligned >= highest {
+			s.lowest[ssrc] = lowest + (aligned - highest)
+		} else {
+			s.lowest[ssrc] = lowest - min(lowest, highest-aligned)
+		}
+	}
+	highest = aligned
 	if trimmed, ok := s.trimmed[ssrc]; ok {
 		s.trimmed[ssrc] = translate(trimmed)
-	}
-	if lowest, ok := s.lowest[ssrc]; ok {
-		s.lowest[ssrc] = translate(lowest)
 	}
 	for item := s.packets.Front(); item != nil; item = item.Next() {
 		p := item.Value.(*bufferedPacket)
