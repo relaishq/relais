@@ -29,7 +29,8 @@ a stated limit**: its browser-side crash gaps were not measurable
 ([#48 browser result][cloud-browser]). The checkpoint-envelope row passes the
 cited real-process store-stall sample ([#95][store-stall] is closed).
 [PR #103][outage-pr] and [ADR 0008][outage-adr] add a bounded store-outage
-guarantee. **#51, #114 and #127 remain open**; **#94 is fixed by [PR #97][early-media-pr]**.
+guarantee. **#51 and #127 remain open**; **#94 is fixed by [PR #97][early-media-pr]**;
+**#114 was a test timing assumption, fixed by [PR #143][second-crash-fix]**.
 
 ## How to read the matrix
 
@@ -270,9 +271,10 @@ cloud confirmation [#48][cloud-result] and desktop Chrome real camera
 completed **10/10** takeovers with **0 lost calls**, but its browser-side crash
 gaps are unverified. Mobile playback is deferred to #98. The first soak's
 single video-frame loss did not recur after [PR #132][udp-buffer-pr].
-[#114][second-crash-flake] is open and unclassified: under CPU contention, a
-harness test sometimes sees a second takeover counted as lost or late. The
-passing soak does not resolve it.
+[#114][second-crash-flake] was a test timing assumption, not a product
+failure: under heavy CPU starvation a harness test built an unusually old
+checkpoint, which the takeover correctly refused. [PR #143][second-crash-fix]
+fixes the test.
 Overflow, expiry, relay-buffer loss and terminal adoption
 failure can lose content or end a call. They have counted fallback/cleanup
 paths, not a universal no-loss guarantee. [PR #77][buffer-pr] and
@@ -602,8 +604,8 @@ browsers stay deferred.
 
 This table preserves all rows of [#31's threshold table][spec]. A pass is
 limited to the cited conditions. The project lead's disposition: #127 and #51
-are published as known limits, and #114 stays an open caveat while its
-classification runs.
+are published as known limits. #114 was classified as a test timing
+assumption and fixed by [PR #143][second-crash-fix].
 
 | Spec threshold | Status | Evidence or what the blocking run must show |
 | --- | --- | --- |
@@ -611,7 +613,7 @@ classification runs.
 | Planned move under `region` and `far-caller`: each track p95 ≤ baseline + 50 ms and ≤150 ms; zero decryption failures; no reconnect | **Pass in final sample** | [Final #37 matrix][network-result]. #51 remains a known integrity failure on an uncertain-reply rollback outside a successful planned move. This row does not gate content loss. [#127][move-loss] stays open for a planned-move ordering race; the first soak's move content loss did not recur after [PR #132][udp-buffer-pr]. |
 | Takeover under `region` and `far-caller`: pause <2 s; no lost content with buffer; zero decryption failures; no reconnect | **Pass under the implemented lossy-link policy** | [Final #37 matrix][network-result]. [Profile rules][profiles] judge loss against the network baseline and burst guard; exact zero loss applies only to lossless media paths. |
 | Relay restart or standby: gap <1 s; no reconnect; pause → takeover → resume never creates two forwarders | **Pass** | [Main restart][restart-job] restore-on and [standby][standby-job] SIGKILL/SIGSTOP tables pass; old process dead before new readiness; zero duplicate media. Single-call loopback scope. |
-| Planned load with N+1, including after forced worker death: move/takeover rules hold; drain time reported | **Pass for short LAN sample and 50-call full soak** | [Final capacity evidence][capacity-results]: validated T=8, death then move pass, drain 44 ms. Shaped-profile load and full consent at that load are not measured. [Passing full soak][soak-pass]: N+1 capacity validated at 50 calls with W=3 and no manual overrides; 424 call moves (moves and drains) and 893 takeovers lost 0 content; audio pause max 31 ms (moves) and 515 ms (takeovers). The [first full soak][soak-fail] lost one packet or frame per affected track in 9 of 432 move recoveries and 1 of 900 takeovers; that loss did not recur after [PR #132][udp-buffer-pr]. [#127][move-loss] stays open for a planned-move ordering race. [#114][second-crash-flake] stays open and unclassified: under CPU contention, a harness second-crash takeover is sometimes counted as lost or late. |
+| Planned load with N+1, including after forced worker death: move/takeover rules hold; drain time reported | **Pass for short LAN sample and 50-call full soak** | [Final capacity evidence][capacity-results]: validated T=8, death then move pass, drain 44 ms. Shaped-profile load and full consent at that load are not measured. [Passing full soak][soak-pass]: N+1 capacity validated at 50 calls with W=3 and no manual overrides; 424 call moves (moves and drains) and 893 takeovers lost 0 content; audio pause max 31 ms (moves) and 515 ms (takeovers). The [first full soak][soak-fail] lost one packet or frame per affected track in 9 of 432 move recoveries and 1 of 900 takeovers; that loss did not recur after [PR #132][udp-buffer-pr]. [#127][move-loss] stays open for a planned-move ordering race. [#114][second-crash-flake], a harness second-crash failure under CPU starvation, was a test timing assumption ([PR #143][second-crash-fix]). |
 | Checkpoint-age envelope: a store stall beyond it never produces undecryptable takeover; policy counted and documented | **Pass for cited real-process sample** | [PR #103 CI job][outage-job]: moderate crash 5/5 resumes with scaled margins and one envelope event each; long crash 5/5 counts `checkpoint_unsafe` with one envelope event each and no margins spent; live pauses pass 5/5 at each tested duration. Zero decryption failures. [Main harness][harness-job] supplies both-store failed/stalled/delayed-write controls. [ADR 0002][checkpoint-adr] and [ADR 0008][outage-adr] define the policy. Separate 60 s consent acceptance is NOT-RUN. |
 | Soak: ≥50 calls for ≥1 h with chaos; zero decryption failures/unintended lost calls; flat memory; no leaked sessions, keys or processes | **Pass** | [#85 passing result][soak-pass] at `f779ec3`: 50 calls for 1 h, chaos every 30 s, `outcome=pass`, `acceptance=true`. 119/119 events pass; 0 of 3,600 intervals saturated; 0 decryption failures; 0 lost calls; 0 of 9,000,000 audio units and 0 of 5,400,000 video frames lost; memory passes for every judged process; no leaked sessions, unbounded keys, processes or listeners. One run on one Linux VM. The [first full run][soak-fail] failed on #127 content losses and two judge bugs ([#128][judge-bugs], fixed by [PR #129][judge-pr]). |
 | Real camera at 720p in desktop Chrome: planned-move and takeover rows hold | **Pass** | [#45 result][device-result] and [records][device-records]: 1280×720 at 30 fps; buffer on and off each pass 10/10 moves, 10/10 takeovers and the 60 s hold. Takeover video gap max 450 ms (on) and 506 ms (off). First live frame median 434 ms (on) and 494 ms (off). Caller decryption failures are `unverified` in Chrome. |
@@ -686,22 +688,31 @@ cited samples.
 
 **Disposition:** known limit. A fix is planned early in the next phase.
 
-### #114: second crash under CPU contention
+### #114: resolved second-crash test timing
 
-[Issue #114][second-crash-flake] is open and not yet classified. The test
-`TestRelayBufferFailurePaths/memory/second-crash-after` sometimes fails under
-CPU contention. Either the control plane's own `/status` counts the second
-takeover as `Lost`, or the takeover does not appear within **3 seconds**. On
-main at `8da806a`, six concurrent copies of the package test, 10 runs each,
-failed **21 of 60**, including the `Lost` assertion twice. Two concurrent
-copies passed **30 of 30**. CI has not failed on it so far.
+[Issue #114][second-crash-flake] is closed. The test
+`TestRelayBufferFailurePaths/memory/second-crash-after` failed under CPU
+contention. Either the control plane's own `/status` counted the second
+takeover as `Lost`, or the takeover did not appear within **3 seconds**.
 
-Whether the counted loss is real under load or a test timing assumption is
-**not established**. The passing soak's zero content loss does not resolve it.
-Until it is classified, it is a caveat on loaded takeover results.
+The [classification][second-crash-class] found a **test timing assumption**,
+not a product failure. The test blocked worker B's checkpoints and slowed relay
+replay about 80 times, so B's only checkpoint was old. Under heavy CPU
+starvation on GitHub-hosted runners, the first replay stretched from about
+0.3 s to 1.1–1.3 s. At a snapshot age of about **1.51 s** or more, the takeover
+correctly refused the checkpoint as `checkpoint_unsafe` under
+[ADR 0002][checkpoint-adr]. Otherwise the 1.5 s takeover budget expired, and a
+retry completed the takeover at 3.0–3.6 s. Without CPU burners, **244 of 244**
+runs passed.
 
-**Disposition:** open caveat. Classification is in progress on GitHub-hosted
-runners.
+[PR #143][second-crash-fix] uses the default replay pacing for this path and
+waits for B to decrypt input before the second kill. The assertions are
+unchanged. The fix passed **300 of 300** runs at 16–48 burners in the
+classification, and **60 of 60** on x64 and on arm at 32 burners.
+
+The `second-crash-during` path keeps the slow pacing on purpose. Under extreme
+starvation it can still miss its 3 s window ([#144][second-crash-during]).
+None of those failures reported `Lost`.
 
 ### #94: resolved early-media startup loss
 
@@ -762,8 +773,6 @@ This closes #94's residual; it does not fix #51.
 
 - **#127:** The planned-move ordering race is a known limit until its fix,
   planned early in the next phase. Record that fix with its regression test.
-- **#114:** Record the classification result, product failure or test timing,
-  with its evidence.
 - **#45 buffered audio gaps:** The cause of the four 218–354 ms buffered audio
   gaps is not known, and no issue tracks it. A later browser crash run with
   verified kill timing can re-check it.
@@ -817,6 +826,9 @@ This closes #94's residual; it does not fix #51.
 [move-loss]: https://github.com/relaishq/relais/issues/127
 [move-loss-findings]: https://github.com/relaishq/relais/issues/127#issuecomment-6176025694
 [second-crash-flake]: https://github.com/relaishq/relais/issues/114
+[second-crash-class]: https://github.com/relaishq/relais/issues/114#issuecomment-6183382466
+[second-crash-fix]: https://github.com/relaishq/relais/pull/143
+[second-crash-during]: https://github.com/relaishq/relais/issues/144
 [judge-bugs]: https://github.com/relaishq/relais/issues/128
 [judge-pr]: https://github.com/relaishq/relais/pull/129
 [udp-buffer-pr]: https://github.com/relaishq/relais/pull/132
