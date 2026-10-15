@@ -35,7 +35,6 @@ guarantee. **#51, #114 and #127 remain open**; **#94 is fixed by [PR #97][early-
 
 - **Pass** means the cited sample met its acceptance rules. It does not mean
   that every deployment or every failure path has passed.
-- **Pending** means the named run has not supplied its required evidence.
 - **Fail/inconclusive** records a known failure or evidence that cannot prove
   the complete row. Missing measurements are written as **not measured**.
 - A **planned move** transfers a live session to another media worker. A
@@ -689,7 +688,7 @@ cited samples.
 
 ### #114: second crash under CPU contention
 
-[Issue #114][second-crash-flake] is open and not yet triaged. The test
+[Issue #114][second-crash-flake] is open and not yet classified. The test
 `TestRelayBufferFailurePaths/memory/second-crash-after` sometimes fails under
 CPU contention. Either the control plane's own `/status` counts the second
 takeover as `Lost`, or the takeover does not appear within **3 seconds**. On
