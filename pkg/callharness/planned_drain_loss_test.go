@@ -49,8 +49,8 @@ type plannedDrainOptions struct {
 	sequences func(i int) *RTPSequenceNumbers
 	wrapped   *int
 	rounds    int
-	media    time.Duration
-	workers  []netip.AddrPort
+	media     time.Duration
+	workers   []netip.AddrPort
 }
 
 func testPlannedDrainCalls(t *testing.T, h *Harness, opts plannedDrainOptions) []*Report {
