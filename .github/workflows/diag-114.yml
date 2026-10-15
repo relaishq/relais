@@ -15,14 +15,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Run 2 (38672822606) reproduced late takeovers with 16 burners.
-          # Heavier burners look for natural losses; default pacing is the A/B.
-          - { runner: ubuntu-latest, copies: 6, count: 10, burners: 32, pacing: test }
+          # Run 3 (38673191262) reproduced natural checkpoint_unsafe losses
+          # at 32 burners. Run 4 verifies the full proposed test fix under
+          # the heaviest loads: default pacing plus a B-decrypt sync point.
+          - { runner: ubuntu-latest, copies: 6, count: 10, burners: 16, pacing: default }
           - { runner: ubuntu-latest, copies: 6, count: 10, burners: 32, pacing: default }
-          - { runner: ubuntu-latest, copies: 6, count: 10, burners: 48, pacing: test }
           - { runner: ubuntu-latest, copies: 6, count: 10, burners: 48, pacing: default }
-          - { runner: ubuntu-24.04-arm, copies: 6, count: 10, burners: 32, pacing: test }
           - { runner: ubuntu-24.04-arm, copies: 6, count: 10, burners: 32, pacing: default }
+          - { runner: ubuntu-24.04-arm, copies: 6, count: 10, burners: 48, pacing: default }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
@@ -88,43 +88,3 @@ jobs:
           path: ${{ runner.temp }}/out
           retention-days: 7
 
-  # Deterministic loss threshold: lengthen B's tenure without contention.
-  threshold:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: 'go.mod'
-
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-
-      - name: Build race test binary
-        run: go test -race -c -o "$RUNNER_TEMP/callharness.test" ./pkg/callharness
-
-      - name: Sweep extra tenure
-        run: |
-          out="$RUNNER_TEMP/out"
-          cd pkg/callharness
-          for extra in 0s 600ms 750ms 900ms 1000ms; do
-            mkdir -p "$out/$extra/diag"
-            DIAG114_DIR="$out/$extra/diag" DIAG114_REPLAY_EXTRA="$extra" "$RUNNER_TEMP/callharness.test" -test.run '^TestRelayBufferFailurePaths$/^memory$/^second-crash-after$' -test.count=4 -test.timeout 10m -test.v > "$out/$extra/copy-1.log" 2>&1 || true
-            pass=$(grep -c -- '--- PASS: TestRelayBufferFailurePaths/memory/second-crash-after' "$out/$extra/copy-1.log" || true)
-            fail=$(grep -c -- '--- FAIL: TestRelayBufferFailurePaths/memory/second-crash-after' "$out/$extra/copy-1.log" || true)
-            echo "== extra=$extra pass=$pass fail=$fail" | tee -a "$out/summary.txt"
-            grep -h -A3 'Error Trace' "$out/$extra/copy-1.log" | grep -o 'relay_buffer_failures_test.go:[0-9]*' | sort | uniq -c | tee -a "$out/summary.txt" || true
-            python3 -I "$GITHUB_WORKSPACE/.github/diag114_summary.py" "$out/$extra/diag" second-crash-after | tee -a "$out/summary.txt" || true
-          done
-          cat "$out/summary.txt" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: diag114-threshold
-          path: ${{ runner.temp }}/out
-          retention-days: 7

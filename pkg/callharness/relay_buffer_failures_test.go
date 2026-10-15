@@ -550,6 +550,15 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		if path == "second-crash-during" || path == "second-crash-canceled" {
 			require.Equal(t, 1, sys.r.Stats().Holds, "second kill occurs while replay still gates live input")
 		}
+		if path == "second-crash-after" && os.Getenv("DIAG114_AFTER_DEFAULT_PACING") == "1" {
+			// #114 proposed fix: a fast replay can end before B decrypts any
+			// of it. Make the precondition a sync point instead of a race.
+			require.Eventually(t, func() bool {
+				processedMu.Lock()
+				defer processedMu.Unlock()
+				return len(processedB) > 0
+			}, 2*time.Second, time.Millisecond, "B decrypts uncheckpointed input before the kill")
+		}
 		failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
 		require.NoError(t, err)
 		require.Zero(t, failures)
