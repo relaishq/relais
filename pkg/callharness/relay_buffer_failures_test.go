@@ -397,8 +397,12 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		reply = &bufferResumeReplyFault{path: "/replay"}
 		cfg.relayTransport = reply
 	case "second-crash-during", "second-crash-after", "second-crash-canceled":
-		cfg.buffer.ReplayBatchPackets = 1
-		cfg.buffer.ReplayInterval = 5 * time.Millisecond
+		// #114 experiment: DIAG114_AFTER_DEFAULT_PACING=1 keeps the relay's
+		// default replay pacing for the after path only.
+		if path != "second-crash-after" || os.Getenv("DIAG114_AFTER_DEFAULT_PACING") != "1" {
+			cfg.buffer.ReplayBatchPackets = 1
+			cfg.buffer.ReplayInterval = 5 * time.Millisecond
+		}
 	case "frame-cache-complete":
 		cfg.cache = true
 	case "incomplete-ring-cache-on":

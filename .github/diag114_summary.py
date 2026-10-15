@@ -60,7 +60,7 @@ def takeover_view(t):
     }
 
 
-def main(directory):
+def main(directory, only=""):
     rows = []
     for path in sorted(glob.glob(os.path.join(directory, "*.jsonl"))):
         pending = []
@@ -70,6 +70,9 @@ def main(directory):
                 pending.append(rec)
                 continue
             if rec["event"] != "outcome":
+                continue
+            if only and not rec["test"].endswith(only):
+                pending = []
                 continue
             marks = {k: ts(v) for k, v in (rec.get("marks") or {}).items()}
             row = {"pid": rec["pid"], "failed": rec.get("failed", False), "kind": "pass"}
@@ -144,4 +147,4 @@ def main(directory):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[2] if len(sys.argv) > 2 else "")

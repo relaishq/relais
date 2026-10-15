@@ -10,17 +10,19 @@ permissions:
 
 jobs:
   contention:
-    name: ${{ matrix.runner }} copies=${{ matrix.copies }}
+    name: ${{ matrix.runner }} c=${{ matrix.copies }} b=${{ matrix.burners }} pacing=${{ matrix.pacing }} ${{ matrix.filter && 'all-paths' || '' }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-latest, copies: 1, count: 20 }
-          - { runner: ubuntu-latest, copies: 2, count: 10 }
-          - { runner: ubuntu-latest, copies: 4, count: 10 }
-          - { runner: ubuntu-latest, copies: 6, count: 10 }
-          - { runner: ubuntu-24.04-arm, copies: 1, count: 20 }
-          - { runner: ubuntu-24.04-arm, copies: 6, count: 10 }
+          # Run 1 (all copies of the lone subtest passed 220/220) showed the
+          # subtest is mostly idle; busy-loop burners add real CPU starvation.
+          - { runner: ubuntu-latest, copies: 6, count: 10, burners: 8, pacing: test }
+          - { runner: ubuntu-latest, copies: 6, count: 10, burners: 8, pacing: default }
+          - { runner: ubuntu-latest, copies: 6, count: 10, burners: 16, pacing: test }
+          - { runner: ubuntu-latest, copies: 6, count: 10, burners: 16, pacing: default }
+          - { runner: ubuntu-24.04-arm, copies: 6, count: 10, burners: 16, pacing: test }
+          - { runner: ubuntu-latest, copies: 6, count: 4, burners: 0, pacing: test, filter: '^TestRelayBufferFailurePaths$/^memory$' }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
@@ -41,12 +43,21 @@ jobs:
         env:
           COPIES: ${{ matrix.copies }}
           COUNT: ${{ matrix.count }}
-          TEST_FILTER: ${{ vars.DIAG114_FILTER || '^TestRelayBufferFailurePaths$/^memory$/^second-crash-after$' }}
+          BURNERS: ${{ matrix.burners }}
+          DIAG114_AFTER_DEFAULT_PACING: ${{ matrix.pacing == 'default' && '1' || '0' }}
+          TEST_FILTER: ${{ matrix.filter || '^TestRelayBufferFailurePaths$/^memory$/^second-crash-after$' }}
         run: |
           out="$RUNNER_TEMP/out"
           mkdir -p "$out/diag"
           export DIAG114_DIR="$out/diag"
           nproc | tee "$out/nproc.txt"
+          vmstat 5 > "$out/vmstat.txt" &
+          vmstat_pid=$!
+          burn=()
+          for i in $(seq 1 "$BURNERS"); do
+            bash -c 'while :; do :; done' &
+            burn+=($!)
+          done
           cd pkg/callharness
           pids=()
           start=$(date +%s)
@@ -56,19 +67,23 @@ jobs:
           done
           for p in "${pids[@]}"; do wait "$p" || true; done
           echo "wall_seconds=$(( $(date +%s) - start ))" | tee "$out/wall.txt"
+          for p in "${burn[@]}"; do kill "$p" || true; done
+          kill "$vmstat_pid" || true
           cd "$out"
           pass=$(cat copy-*.log | grep -c -- '--- PASS: TestRelayBufferFailurePaths/memory/second-crash-after' || true)
           fail=$(cat copy-*.log | grep -c -- '--- FAIL: TestRelayBufferFailurePaths/memory/second-crash-after' || true)
-          echo "pass=$pass fail=$fail" | tee summary.txt
+          echo "second-crash-after pass=$pass fail=$fail" | tee summary.txt
+          echo "all subtests:" | tee -a summary.txt
+          cat copy-*.log | grep -E -- '--- (PASS|FAIL): TestRelayBufferFailurePaths/memory/' | awk '{print $2, $3}' | sort | uniq -c | tee -a summary.txt || true
           grep -h -A3 'Error Trace' copy-*.log | grep -o 'relay_buffer_failures_test.go:[0-9]*' | sort | uniq -c | tee -a summary.txt || true
           grep -h 'DIAG114 takeover window' copy-*.log | tee -a summary.txt || true
-          python3 -I "$GITHUB_WORKSPACE/.github/diag114_summary.py" "$out/diag" | tee -a summary.txt || true
+          python3 -I "$GITHUB_WORKSPACE/.github/diag114_summary.py" "$out/diag" second-crash-after | tee -a summary.txt || true
           cat summary.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: diag114-${{ matrix.runner }}-c${{ matrix.copies }}
+          name: diag114-${{ matrix.runner }}-c${{ matrix.copies }}-b${{ matrix.burners }}-${{ matrix.pacing }}${{ matrix.filter && '-allpaths' || '' }}
           path: ${{ runner.temp }}/out
           retention-days: 7
