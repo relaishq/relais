@@ -17,9 +17,10 @@ or video frame was lost. [#41][soak-ticket] and [#85][full-soak] are closed.
 The first full soak **failed** ([#85 first result][soak-fail]): 9 of 432 planned
 move recoveries and 1 of 900 takeovers lost one packet or frame per affected
 track. The passing result names kernel UDP receive-buffer drops as the cause;
-[PR #132][udp-buffer-pr] sizes the media socket buffers. [#127][move-loss] stays
-open for a planned-move ordering race that a test reproduces; the passing soak
-did not show it. The estimated cost is **about $0.01–0.02 per call-hour** for
+[PR #132][udp-buffer-pr] sizes the media socket buffers. A remaining
+planned-move ordering race, which a test reproduced, is fixed by
+[PR #146][move-fix-pr] ([ADR 0009][move-fix-adr]) when the relay buffer is on.
+The estimated cost is **about $0.01–0.02 per call-hour** for
 the echo/fixture workload ([#31 cost estimate][cost]).
 Desktop Chrome with a real 720p camera **passes** with the relay buffer on and
 off ([#45 result][device-result]). Mobile browsers are deferred to [#98][mobile].
@@ -29,7 +30,8 @@ a stated limit**: its browser-side crash gaps were not measurable
 ([#48 browser result][cloud-browser]). The checkpoint-envelope row passes the
 cited real-process store-stall sample ([#95][store-stall] is closed).
 [PR #103][outage-pr] and [ADR 0008][outage-adr] add a bounded store-outage
-guarantee. **#51 and #127 remain open**; **#94 is fixed by [PR #97][early-media-pr]**;
+guarantee. **#51 remains open**; **#127 is fixed by [PR #146][move-fix-pr]**;
+**#94 is fixed by [PR #97][early-media-pr]**;
 **#114 was a test timing assumption, fixed by [PR #143][second-crash-fix]**.
 
 ## How to read the matrix
@@ -170,16 +172,18 @@ video pause was **34 / 43 / 44 ms**. **No move lost content.** The
 one audio packet or video frame per affected track, both tracks in two
 ([loss rows][soak-gist]). That loss did not recur after
 [PR #132][udp-buffer-pr] sized the UDP socket buffers ([#127][move-loss]).
-This guarantee bounds the gap. It does not claim zero content loss: the
-[profile policy][profiles] does not gate moves on raw content loss. A lossless
-planned move under load is **observed in the passing soak but not
-established** while #127's ordering race is open.
+This guarantee bounds the gap. The [profile policy][profiles] does not gate
+moves on raw content loss. Zero content loss is **observed in the passing
+soak**. With the relay buffer on, regression tests also show zero loss when
+private-leg packets are reordered around the move ([PR #146][move-fix-pr]).
+The full soak has not been rerun since that fix.
 
 **Status:** **Pass for the cited profile matrix, short LAN load sample, 50-call
 full soak [#85][soak-pass], real-process cloud confirmation [#48][cloud-result]
 and desktop Chrome real camera [#45][device-result].** The #48 browser run is
-accepted with a stated limit. Mobile browsers are deferred to #98. **#127 is an
-open residual** for a planned-move ordering race. **#51 remains a known exception
+accepted with a stated limit. Mobile browsers are deferred to #98. **#127's ordering
+race is fixed** by [PR #146][move-fix-pr] when the relay buffer is on; with the
+buffer off it remains a documented limit. **#51 remains a known exception
 on aborted/rolled-back moves**;
 the successful-move sample does not resolve it.
 
@@ -603,17 +607,18 @@ browsers stay deferred.
 ## Every threshold in the phase-2 spec
 
 This table preserves all rows of [#31's threshold table][spec]. A pass is
-limited to the cited conditions. The project lead's disposition: #127 and #51
-are published as known limits. #114 was classified as a test timing
+limited to the cited conditions. The project lead's disposition: #51 is published
+as a known limit. #127 was published as a known limit and is now fixed by
+[PR #146][move-fix-pr]. #114 was classified as a test timing
 assumption and fixed by [PR #143][second-crash-fix].
 
 | Spec threshold | Status | Evidence or what the blocking run must show |
 | --- | --- | --- |
 | Takeover with relay buffer (`lan`): no lost content or keyframe wait; pause reported against phase 1; freshness back to baseline within 2 s | **Pass** | [Main buffered process job][buffer-job]: 10/10, median 413.4 ms versus 416 ms; zero loss; outage media first; freshness recovered. [Strict harness controls][harness-job] pass on both stores. |
-| Planned move under `region` and `far-caller`: each track p95 ≤ baseline + 50 ms and ≤150 ms; zero decryption failures; no reconnect | **Pass in final sample** | [Final #37 matrix][network-result]. #51 remains a known integrity failure on an uncertain-reply rollback outside a successful planned move. This row does not gate content loss. [#127][move-loss] stays open for a planned-move ordering race; the first soak's move content loss did not recur after [PR #132][udp-buffer-pr]. |
+| Planned move under `region` and `far-caller`: each track p95 ≤ baseline + 50 ms and ≤150 ms; zero decryption failures; no reconnect | **Pass in final sample** | [Final #37 matrix][network-result]. #51 remains a known integrity failure on an uncertain-reply rollback outside a successful planned move. This row does not gate content loss. The first soak's move content loss did not recur after [PR #132][udp-buffer-pr]. The remaining ordering race ([#127][move-loss]) is fixed by [PR #146][move-fix-pr] when the relay buffer is on. |
 | Takeover under `region` and `far-caller`: pause <2 s; no lost content with buffer; zero decryption failures; no reconnect | **Pass under the implemented lossy-link policy** | [Final #37 matrix][network-result]. [Profile rules][profiles] judge loss against the network baseline and burst guard; exact zero loss applies only to lossless media paths. |
 | Relay restart or standby: gap <1 s; no reconnect; pause → takeover → resume never creates two forwarders | **Pass** | [Main restart][restart-job] restore-on and [standby][standby-job] SIGKILL/SIGSTOP tables pass; old process dead before new readiness; zero duplicate media. Single-call loopback scope. |
-| Planned load with N+1, including after forced worker death: move/takeover rules hold; drain time reported | **Pass for short LAN sample and 50-call full soak** | [Final capacity evidence][capacity-results]: validated T=8, death then move pass, drain 44 ms. Shaped-profile load and full consent at that load are not measured. [Passing full soak][soak-pass]: N+1 capacity validated at 50 calls with W=3 and no manual overrides; 424 call moves (moves and drains) and 893 takeovers lost 0 content; audio pause max 31 ms (moves) and 515 ms (takeovers). The [first full soak][soak-fail] lost one packet or frame per affected track in 9 of 432 move recoveries and 1 of 900 takeovers; that loss did not recur after [PR #132][udp-buffer-pr]. [#127][move-loss] stays open for a planned-move ordering race. [#114][second-crash-flake], a harness second-crash failure under CPU starvation, was a test timing assumption ([PR #143][second-crash-fix]). |
+| Planned load with N+1, including after forced worker death: move/takeover rules hold; drain time reported | **Pass for short LAN sample and 50-call full soak** | [Final capacity evidence][capacity-results]: validated T=8, death then move pass, drain 44 ms. Shaped-profile load and full consent at that load are not measured. [Passing full soak][soak-pass]: N+1 capacity validated at 50 calls with W=3 and no manual overrides; 424 call moves (moves and drains) and 893 takeovers lost 0 content; audio pause max 31 ms (moves) and 515 ms (takeovers). The [first full soak][soak-fail] lost one packet or frame per affected track in 9 of 432 move recoveries and 1 of 900 takeovers; that loss did not recur after [PR #132][udp-buffer-pr]. The planned-move ordering race ([#127][move-loss]) is fixed by [PR #146][move-fix-pr]. [#114][second-crash-flake], a harness second-crash failure under CPU starvation, was a test timing assumption ([PR #143][second-crash-fix]). |
 | Checkpoint-age envelope: a store stall beyond it never produces undecryptable takeover; policy counted and documented | **Pass for cited real-process sample** | [PR #103 CI job][outage-job]: moderate crash 5/5 resumes with scaled margins and one envelope event each; long crash 5/5 counts `checkpoint_unsafe` with one envelope event each and no margins spent; live pauses pass 5/5 at each tested duration. Zero decryption failures. [Main harness][harness-job] supplies both-store failed/stalled/delayed-write controls. [ADR 0002][checkpoint-adr] and [ADR 0008][outage-adr] define the policy. Separate 60 s consent acceptance is NOT-RUN. |
 | Soak: ≥50 calls for ≥1 h with chaos; zero decryption failures/unintended lost calls; flat memory; no leaked sessions, keys or processes | **Pass** | [#85 passing result][soak-pass] at `f779ec3`: 50 calls for 1 h, chaos every 30 s, `outcome=pass`, `acceptance=true`. 119/119 events pass; 0 of 3,600 intervals saturated; 0 decryption failures; 0 lost calls; 0 of 9,000,000 audio units and 0 of 5,400,000 video frames lost; memory passes for every judged process; no leaked sessions, unbounded keys, processes or listeners. One run on one Linux VM. The [first full run][soak-fail] failed on #127 content losses and two judge bugs ([#128][judge-bugs], fixed by [PR #129][judge-pr]). |
 | Real camera at 720p in desktop Chrome: planned-move and takeover rows hold | **Pass** | [#45 result][device-result] and [records][device-records]: 1280×720 at 30 fps; buffer on and off each pass 10/10 moves, 10/10 takeovers and the 60 s hold. Takeover video gap max 450 ms (on) and 506 ms (off). First live frame median 434 ms (on) and 494 ms (off). Caller decryption failures are `unverified` in Chrome. |
@@ -645,9 +650,9 @@ matrix does not remove this exception to a blanket zero-decryption-failure claim
 
 **Disposition:** known limit, monitored nightly.
 
-### #127: planned-move ordering race
+### #127: resolved planned-move ordering race
 
-[Issue #127][move-loss] is open. It began with content loss in the
+[Issue #127][move-loss] is closed. It began with content loss in the
 [first full soak][soak-fail]: **9 of 432** planned move recoveries (2.1%) and
 **one of 900** takeovers lost one audio packet or one video frame per affected
 track. The [loss rows][soak-gist] show that two move recoveries lost both. The
@@ -667,7 +672,7 @@ datagrams and lost content in **0 of about 1,350** recoveries. The
 and **0** lost audio units or video frames. It names the buffer drops as the
 root cause of the soak loss.
 
-**The open residual: an ordering race.** The drain marker's acknowledgement
+**The ordering race: fixed.** Before the fix, the drain marker's acknowledgement
 proves only what the old worker received before the marker. It does not prove
 that every packet the relay sent before the marker arrived. A caller datagram
 that reaches the old worker after the marker is discarded once the session is
@@ -682,11 +687,31 @@ detector, 20 runs per case gave:
 | Delayed datagram, with a move | Exactly 1 audio unit; 0 held packets, worker no-flow drops and decryption failures |
 | Delayed datagram, no move | 0 |
 
-The passing soak did not show this race. This residual limits the claim that a
-planned move loses no media. The move gap guarantee above still holds in the
-cited samples.
+The passing soak did not show this race.
 
-**Disposition:** known limit. A fix is planned early in the next phase.
+[PR #146][move-fix-pr] fixes it as described in [ADR 0009][move-fix-adr]. The
+old worker's export now records which recent caller packets it consumed. When
+the relay releases the move hold, it first sends the retained packets that the
+export did not consume, then the held queue. The new worker restores the
+receive window, so SRTP replay protection rejects duplicates. A second drain
+marker on the return path keeps the old worker's last echoes. The ADR's
+evidence section records the results:
+
+| Test | Result |
+| --- | --- |
+| `TestPlannedMoveReorderedPrivateInput`, now a regular test | 20/20 with the race detector; 0 lost units |
+| 10-call drain stress, reordering around every marker, race detector | 6/6 runs; 0 lost units; 105–136 late packets recovered per run; 3 runs wrapped sequence numbers |
+| Same with 20 calls, no race detector | 8/8 runs; 0 lost units; 191–273 recovered per run; in 3 runs all 40 streams wrapped |
+| Full CI matrix at the merged head | [Run 38706006218][move-fix-run]: every job passes |
+
+The added cost is small; the ADR records the move, drain and release timings.
+The fix needs the relay buffer, which is on by default. With the buffer off
+(`-buffer-off`), a late inbound datagram is still lost. Reordering on the
+worker→relay leg, ring eviction, late SRTCP or STUN, and rollbacks with crash
+margins are not recovered. The full soak has not been rerun since the fix.
+
+**Disposition:** fixed by PR #146 when the relay buffer is on. The buffer-off
+case is a documented limit.
 
 ### #114: resolved second-crash test timing
 
@@ -746,7 +771,7 @@ This closes #94's residual; it does not fix #51.
 | [#45 title/older playbook][device-ticket] and its current scope / [#98][mobile] | The title and playbook still include Android. The current issue body defers mobile browsers. | Desktop Chrome only for phase 2; Android Chrome and iOS Safari are explicit non-guarantees. |
 | [#45 result][device-result] / [#31 device summary][device-summary] and the [#45 records][device-records] | The summaries say the buffer removed the takeover audio gap in 6 of 10 kills. The per-kill list and records show 0 ms in 5 kills and a 40.875 ms gap in one. | Use the per-kill record values, rounded to the nearest millisecond: 5 zero-gap kills, one 41 ms gap and four 218–354 ms gaps. |
 | [#48 browser result][cloud-browser] and the [#45 records][device-records] | #48 cites #45 takeover video as “about 390–506 ms”. The records span 330.8–506.3 ms; 390.75 ms is the buffer-on median. | Use the #45 record values, rounded to the nearest millisecond: 331–506 ms, buffer-on median 391 ms. |
-| [#127][move-loss] and the [profile policy][profiles] / this matrix | #127 says the guarantee promises that a planned move loses no media. The profile policy does not gate moves on raw content loss, and the move guarantee here bounds the gap. | Lossless planned moves are a phase goal and a soak gate. The [passing soak][soak-pass] met it, but it is not an established guarantee while #127's ordering race is open. |
+| [#127][move-loss] and the [profile policy][profiles] / this matrix | #127 says the guarantee promises that a planned move loses no media. The profile policy does not gate moves on raw content loss, and the move guarantee here bounds the gap. | Lossless planned moves are a phase goal and a soak gate. The [passing soak][soak-pass] met it, and [PR #146][move-fix-pr] fixes the ordering race when the relay buffer is on. The move guarantee still bounds the gap; zero loss rests on the cited soak and regression tests, not on the profile policy. |
 | [#41 verdict][soak-verdict] / [#31 soak summary][soak-summary] and [#85 first result][soak-fail] / [#127][move-loss] | The summaries say moves lost “one packet”; #85 says each lost “exactly one packet or frame”. The [loss rows][soak-gist] show two move recoveries that lost one audio packet **and** one video frame. | Nine move recoveries lost content; each affected track lost one packet or frame, and two recoveries lost both. |
 | [#31 soak row][spec] and [soak policy][soak] / [#85 first result][soak-fail] | The first run met the row's listed checks for decryption, lost calls, memory and sessions. The soak policy also fails on event rows and saturation. | The soak policy governs. The first run failed it; the [passing run][soak-pass] meets both the row and the policy. |
 | [#85 passing result][soak-pass] and [#138][report-fields] | The soak verdict is `pass`, but the report's raw nested `run.outcome` reads `inconclusive` because of one 20.1 ms generator sample. | The soak verdict governs; its judge tolerates an isolated sample under twice the limit. The nested field is a known report mismatch. |
@@ -765,14 +790,15 @@ This closes #94's residual; it does not fix #51.
 | Control/private API authentication beyond private addresses and firewalls; a proven public signaling front | [#31][spec]; [topology signaling limit][topology] |
 | Unconditional route protection after failed/dropped persistence or partial restoration; protection from stolen session credentials or compromised workers | [ADR 0001][stickiness-adr]; [ADR 0003][routes-adr] |
 | No-loss recovery after buffer loss, overflow, expiry, agent queue overflow or unsafe checkpoint loss; exactly-once application side effects | [ADR 0002][checkpoint-adr]; [ADR 0005][buffer-adr]; [ADR 0006][agent-adr] |
+| Lossless planned moves with the relay buffer off, under worker→relay reordering, or after ring eviction | [ADR 0009][move-fix-adr] |
 | Video input for agents, validated resumable PCM decoding, unprompted agent output, or speech/LLM-provider integration | [#31][spec]; [ADR 0006][agent-adr] |
 | Recording, SIP, MoQ or GPU transforms | [#31 out of scope][spec] |
 | Windows standby fencing, general mixed-version rollout compatibility, or fixed global Redis frame-cache memory | [ADR 0004][standby-adr]; [ADR 0006 compatibility rules][agent-adr]; [frame-cache limits][frame-cache] |
 
 ## Evidence to add when runs arrive
 
-- **#127:** The planned-move ordering race is a known limit until its fix,
-  planned early in the next phase. Record that fix with its regression test.
+- **#127:** The ordering-race fix is proven by regression tests and CI. The
+  next full soak should confirm zero move loss with it.
 - **#45 buffered audio gaps:** The cause of the four 218–354 ms buffered audio
   gaps is not known, and no issue tracks it. A later browser crash run with
   verified kill timing can re-check it.
@@ -829,6 +855,8 @@ This closes #94's residual; it does not fix #51.
 [second-crash-class]: https://github.com/relaishq/relais/issues/114#issuecomment-6183382466
 [second-crash-fix]: https://github.com/relaishq/relais/pull/143
 [second-crash-during]: https://github.com/relaishq/relais/issues/144
+[move-fix-pr]: https://github.com/relaishq/relais/pull/146
+[move-fix-run]: https://github.com/relaishq/relais/actions/runs/38706006218
 [judge-bugs]: https://github.com/relaishq/relais/issues/128
 [judge-pr]: https://github.com/relaishq/relais/pull/129
 [udp-buffer-pr]: https://github.com/relaishq/relais/pull/132
@@ -858,6 +886,7 @@ This closes #94's residual; it does not fix #51.
 [agent-adr]: adr/0006-agent-interface.md
 [tcp-adr]: adr/0007-private-route-tcp-recovery.md
 [outage-adr]: adr/0008-store-outage-budget.md
+[move-fix-adr]: adr/0009-planned-move-export-replay.md
 [store-stall]: https://github.com/relaishq/relais/issues/95
 [stall-close]: https://github.com/relaishq/relais/issues/95#issuecomment-6126635047
 [expiry-pr]: https://github.com/relaishq/relais/pull/101
