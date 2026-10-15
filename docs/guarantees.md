@@ -699,10 +699,10 @@ evidence section records the results:
 
 | Test | Result |
 | --- | --- |
-| `TestPlannedMoveReorderedPrivateInput`, now a regular test | 20/20 with the race detector; 0 lost units |
+| `TestPlannedMoveReorderedPrivateInput`, now a regular test | 20/20 with the race detector; zero loss in supported cases; the older-relay and buffer-off subtests confirm the loss limit |
 | 10-call drain stress, reordering around every marker, race detector | 6/6 runs; 0 lost units; 105–136 late packets recovered per run; 3 runs wrapped sequence numbers |
 | Same with 20 calls, no race detector | 8/8 runs; 0 lost units; 191–273 recovered per run; in 3 runs all 40 streams wrapped |
-| Full CI matrix at the merged head | [Run 38706006218][move-fix-run]: every job passes |
+| Full CI matrix at PR #146's final head `54f699b` | [Run 38706006218][move-fix-run]: all executed jobs pass; two jobs skipped |
 
 The added cost is small; the ADR records the move, drain and release timings.
 The fix needs the relay buffer, which is on by default. With the buffer off
