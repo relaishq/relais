@@ -1,8 +1,9 @@
-# Phase-2 guarantee matrix — draft
+# Phase-2 guarantee matrix
 
 This document records the evidence for [phase 2 (#31)][spec] and
 [ticket #49][ticket]. It describes the tested conditions, not a production
-service-level agreement. It does not make a phase-2 go/no-go decision.
+service-level agreement. The project lead's phase-2 decision is **GO**, with
+the known limits below, recorded on [#31][spec].
 
 The main reference is commit `765db53`, [CI run 38197061923][main-run].
 Capacity, soak and browser evidence have their own sources below. A passing
@@ -422,7 +423,7 @@ continues; it is not a promise to process every sent packet.
 The [#31 browser result comment][agent-result] reports **seven passing events**:
 **three moves and one drain** restored exactly; **three kills** restored
 checkpoints **372–460 ms** old; the **60-second hold** passed. The reported
-recording includes a takeover from a **445 ms** checkpoint. This draft cites
+recording includes a takeover from a **445 ms** checkpoint. This document cites
 Derek's result comment; it does not independently inspect the private recording
 or claim that it is publicly available.
 
@@ -601,8 +602,9 @@ browsers stay deferred.
 ## Every threshold in the phase-2 spec
 
 This table preserves all rows of [#31's threshold table][spec]. A pass is
-limited to the cited conditions. The residuals below still require the project
-lead's later disposition.
+limited to the cited conditions. The project lead's disposition: #127 and #51
+are published as known limits, and #114 stays an open caveat while its
+classification runs.
 
 | Spec threshold | Status | Evidence or what the blocking run must show |
 | --- | --- | --- |
@@ -639,6 +641,8 @@ Tracing may change timing. [PR #93][diagnostics-pr] enables tracing on alternate
 nights for the nightly `lossy-dc` move lane; failures retain caller records and
 worker logs. Monitoring remains active. A passing
 matrix does not remove this exception to a blanket zero-decryption-failure claim.
+
+**Disposition:** known limit, monitored nightly.
 
 ### #127: planned-move ordering race
 
@@ -677,9 +681,11 @@ detector, 20 runs per case gave:
 | Delayed datagram, with a move | Exactly 1 audio unit; 0 held packets, worker no-flow drops and decryption failures |
 | Delayed datagram, no move | 0 |
 
-The passing soak did not show this race. Whether to fix it or to publish it as
-a known limit is still open. This residual limits the claim that a planned move
-loses no media. The move gap guarantee above still holds in the cited samples.
+The passing soak did not show this race. This residual limits the claim that a
+planned move loses no media. The move gap guarantee above still holds in the
+cited samples.
+
+**Disposition:** known limit. A fix is planned early in the next phase.
 
 ### #114: second crash under CPU contention
 
@@ -694,6 +700,9 @@ copies passed **30 of 30**. CI has not failed on it so far.
 Whether the counted loss is real under load or a test timing assumption is
 **not established**. The passing soak's zero content loss does not resolve it.
 Until it is classified, it is a caveat on loaded takeover results.
+
+**Disposition:** open caveat. Classification is in progress on GitHub-hosted
+runners.
 
 ### #94: resolved early-media startup loss
 
@@ -752,8 +761,10 @@ This closes #94's residual; it does not fix #51.
 
 ## Evidence to add when runs arrive
 
-- **#127:** Record either a fix for the planned-move ordering race with a
-  regression test, or Derek's decision to publish it as a known limit.
+- **#127:** The planned-move ordering race is a known limit until its fix,
+  planned early in the next phase. Record that fix with its regression test.
+- **#114:** Record the classification result, product failure or test timing,
+  with its evidence.
 - **#45 buffered audio gaps:** The cause of the four 218–354 ms buffered audio
   gaps is not known, and no issue tracks it. A later browser crash run with
   verified kill timing can re-check it.
@@ -763,8 +774,8 @@ This closes #94's residual; it does not fix #51.
   evidence if those cases are run. Keep loaded/profile timing and the separate
   consent acceptance unmeasured until sourced results arrive.
 - Keep #51 open until a trace identifies the cause and a regression covers the
-  fix. #94 is resolved by PR #97. Publication and the later phase decision
-  belong to the project lead and orchestrator.
+  fix. #94 is resolved by PR #97. Publication belongs to the project lead and
+  orchestrator.
 
 [spec]: https://github.com/relaishq/relais/issues/31
 [ticket]: https://github.com/relaishq/relais/issues/49
