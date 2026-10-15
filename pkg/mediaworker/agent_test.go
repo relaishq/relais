@@ -249,8 +249,10 @@ func TestAgentPlannedFlushDrainsAcceptedQueue(t *testing.T) {
 	flushed := make(chan error, 1)
 	go func() { flushed <- s.flushAgent() }()
 	require.Eventually(t, func() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.agent.paused }, time.Second, time.Millisecond)
-	// Audio arriving after the export barrier is explicitly dropped, never
-	// accepted into the state that the source can no longer transfer.
+	// Audio arriving after the export barrier is never accepted into the
+	// state that the source can no longer transfer. It is not even
+	// authenticated (ADR 0009): the export does not claim it, so the relay
+	// replays it to the next owner instead of the agent dropping it here.
 	s.handleRTP(testEncrypt(t, caller, 456, 4))
 	close(release)
 	require.NoError(t, <-flushed)
@@ -259,7 +261,12 @@ func TestAgentPlannedFlushDrainsAcceptedQueue(t *testing.T) {
 	require.EqualValues(t, 3, binary.BigEndian.Uint64(state.Bytes))
 	require.EqualValues(t, 3, p.Consumed)
 	require.EqualValues(t, 3, p.Index)
-	require.EqualValues(t, 1, w.AgentStats().InputDrops)
+	require.Zero(t, w.AgentStats().InputDrops)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	require.EqualValues(t, 3, s.state.SRTP.Inbound[456], "paused agent audio is not authenticated")
+	require.EqualValues(t, 0b111, s.state.SRTP.Received[456])
+	require.Zero(t, s.decryptFailures.Load())
 }
 
 func TestAgentResumeNoticeCarriesDuplicateWindow(t *testing.T) {

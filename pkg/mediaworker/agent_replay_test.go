@@ -66,7 +66,7 @@ func TestAgentReplayRestoresReceiveWindowBeforeQueuedAudio(t *testing.T) {
 				require.NoError(t, err)
 				s.handleRTP(encrypted)
 			}
-			require.Zero(t, s.decryptFailures.Load(), "replay must admit the queued input, including across ROC wrap")
+			require.Zero(t, s.decryptFailures.Load()+s.replayRejections.Load(), "replay must admit the queued input, including across ROC wrap")
 			for index := first; index <= first+queued-1; index++ {
 				select {
 				case got := <-consumed:

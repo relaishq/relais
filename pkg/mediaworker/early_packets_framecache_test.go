@@ -168,6 +168,7 @@ func TestEarlyVP8FramesReachCacheBeforeLiveFrames(t *testing.T) {
 	require.Equal(t, []framecache.Packet{{SequenceNumber: 2, Payload: []byte{0x10, 1}}, {SequenceNumber: 3, Marker: true, Payload: []byte{0, 1}}}, frames[1].Packets)
 	require.Equal(t, []framecache.Packet{{SequenceNumber: 4, Marker: true, Payload: []byte{0x10, 1}}}, frames[2].Packets)
 	require.EqualValues(t, 1, s.decryptFailures.Load(), "only the intentional truncated packet fails")
+	require.Zero(t, s.replayRejections.Load())
 	require.Zero(t, w.ReplayStats().AppendDropped)
 	require.Zero(t, w.ReplayStats().AppendErrors)
 }

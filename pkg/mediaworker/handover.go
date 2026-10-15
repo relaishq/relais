@@ -401,8 +401,9 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 }
 
 // SessionDecryptFailures returns how many of the caller's SRTP and SRTCP
-// packets this worker could not decrypt in a session it runs. A resumed
-// session counts from its resume.
+// packets this worker could not authenticate or decrypt in a session it
+// runs, excluding replay-window rejections. A resumed session counts from
+// its resume.
 func (w *Worker) SessionDecryptFailures(sessionID string) (uint64, error) {
 	sess := w.session(sessionID)
 	if sess == nil {
@@ -410,6 +411,18 @@ func (w *Worker) SessionDecryptFailures(sessionID string) (uint64, error) {
 	}
 
 	return sess.decryptFailures.Load(), nil
+}
+
+// SessionReplayRejections returns how many caller SRTP and SRTCP packets the
+// session's replay window rejected as duplicate or too old. These are not
+// decryption failures; a resumed session counts from its resume.
+func (w *Worker) SessionReplayRejections(sessionID string) (uint64, error) {
+	sess := w.session(sessionID)
+	if sess == nil {
+		return 0, ErrUnknownSession
+	}
+
+	return sess.replayRejections.Load(), nil
 }
 
 // adopt registers a resumed session and serves it.
@@ -469,6 +482,11 @@ func (s *session) export() ([]byte, error) {
 		return nil, ErrNotEstablished
 	}
 	if err := s.flushAgent(); err != nil {
+		s.mu.Lock()
+		if !s.fenced.Load() && s.ctx.Err() == nil && s.agent != nil {
+			s.agent.paused = false
+		}
+		s.mu.Unlock()
 		return nil, err
 	}
 	s.mu.Lock()
@@ -633,7 +651,7 @@ func (s *session) resumeTrack(track *trackState, opts ResumeOptions) error {
 	// Conservatively advance the persisted floor to the snapshot's high water
 	// mark, including reserved but unsent indexes. In particular a margin-zero
 	// handover cannot re-encrypt recently accepted source packets there.
-	if track.ReplayFloor > 0 {
+	if track.ReplayFloor > 0 && !s.exactPlannedVideo(track, opts) {
 		track.ReplayFloor = track.HighestSentIndex
 	}
 	if track.Packets == 0 {
@@ -673,6 +691,17 @@ func (s *session) resumeTrack(track *trackState, opts ResumeOptions) error {
 	return nil
 }
 
+// exactPlannedVideo reports whether a positive ReplayFloor may stay where it
+// is (ADR 0009). That needs a margin-zero resume of the video track whose
+// inbound replay window was actually restored from an exact export: then no
+// caller index any earlier owner accepted can be accepted, and so echoed, again.
+// Mask presence or margin zero alone is not enough; every other resume
+// advances the floor to the snapshot high water mark as before.
+func (s *session) exactPlannedVideo(track *trackState, opts ResumeOptions) bool {
+	return track == &s.state.Video && track.Anchored && opts.SequenceMargin == 0 &&
+		!opts.InputMayBeDuplicated && s.restoredWindows[track.InboundSSRC]
+}
+
 // pion/srtp cannot set an SSRC's full SRTP index (rollover counter and
 // highest sequence number). SetROC sets only the rollover counter and makes
 // the next packet's sequence number the highest, so a sequence-number wrap
@@ -706,6 +735,44 @@ func restoreInboundIndex(in *srtp.Context, keys srtp.SessionKeys, profile srtp.P
 	}
 
 	return checkROC(in, ssrc, roc)
+}
+
+// restoreInboundWindow restores an inbound context's replay window, not only
+// its highest index: window bit i marks index high-i as already seen. One
+// primer context encrypts every marked index in ascending order, ending at
+// high. The receiver's ROC is set once, before the first primer, so later
+// primers cross a sequence wrap by the ordinary RFC 3711 estimate.
+func restoreInboundWindow(in *srtp.Context, keys srtp.SessionKeys, profile srtp.ProtectionProfile,
+	ssrc uint32, high, window uint64,
+) error {
+	primer, err := srtp.CreateContext(keys.RemoteMasterKey, keys.RemoteMasterSalt, profile)
+	if err != nil {
+		return err
+	}
+	first := true
+	for offset := uint64(replayWindow - 1); ; offset-- {
+		if offset <= high && (offset == 0 || window&(1<<offset) != 0) {
+			index := high - offset
+			roc := uint32(index >> 16) //nolint:gosec // an SRTP index is 48 bits
+			primer.SetROC(ssrc, roc)
+			encrypted, err := primer.EncryptRTP(nil, primingPacket(ssrc, uint16(index)), nil) //nolint:gosec // low 16 bits
+			if err != nil {
+				return err
+			}
+			if first {
+				in.SetROC(ssrc, roc)
+				first = false
+			}
+			if _, err := in.DecryptRTP(nil, encrypted, nil); err != nil {
+				return err
+			}
+		}
+		if offset == 0 {
+			break
+		}
+	}
+
+	return checkROC(in, ssrc, uint32(high>>16)) //nolint:gosec // an SRTP index is 48 bits
 }
 
 // restoreOutboundIndex makes an outbound context continue a stream whose
@@ -773,6 +840,19 @@ func (s *session) restoreReplayInbound(keys srtp.SessionKeys, opts ResumeOptions
 			if known {
 				continue
 			}
+		}
+		window, exact := s.state.SRTP.Received[ssrc]
+		if exact && index == high {
+			// A margin-zero planned export is exact: restore its whole replay
+			// window, so input any earlier owner consumed is rejected again.
+			if err := restoreInboundWindow(s.srtpIn, keys, s.state.SRTP.Profile, ssrc, index, window); err != nil {
+				return fmt.Errorf("restore inbound SRTP window for ssrc %d: %w", ssrc, err)
+			}
+			if s.restoredWindows == nil {
+				s.restoredWindows = make(map[uint32]bool)
+			}
+			s.restoredWindows[ssrc] = true
+			continue
 		}
 		if err := restoreInboundIndex(s.srtpIn, keys, s.state.SRTP.Profile, ssrc, index); err != nil {
 			return fmt.Errorf("restore inbound SRTP index for ssrc %d: %w", ssrc, err)

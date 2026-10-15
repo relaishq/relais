@@ -69,6 +69,45 @@ type TenureRelay interface {
 	MoveSessionAtEpoch(string, netip.AddrPort, netip.AddrPort, uint64) error
 }
 
+// ExportReleaseRelay releases a planned hold to an owner that resumed from
+// an exact, margin-zero export, replaying retained input that export did not
+// consume (ADR 0009). *relay.Relay and RemoteRelay implement it.
+type ExportReleaseRelay interface {
+	ReleaseAfterExport(string, netip.AddrPort, map[uint32]relay.ConsumedInput) (relay.ReleaseReply, error)
+}
+
+// ExportMoveRelay moves a planned hold's route only after the old owner's
+// output up to its export fence has been forwarded (ADR 0009).
+type ExportMoveRelay interface {
+	MoveSessionAfterExport(string, netip.AddrPort, netip.AddrPort, uint64) error
+}
+
+// moveAfterExport keeps the existing route call when the capability is absent.
+// A retry whose previous route call failed no longer knows the routed source,
+// so it cannot drain that source's output: it uses the existing route repair.
+func moveAfterExport(r Relay, id string, from, to netip.AddrPort, epoch uint64) error {
+	if mover, ok := r.(ExportMoveRelay); ok && from.IsValid() {
+		return mover.MoveSessionAfterExport(id, from, to, epoch)
+	}
+	if tenure, ok := r.(TenureRelay); ok && epoch != 0 {
+		return tenure.MoveSessionAtEpoch(id, from, to, epoch)
+	}
+	return r.MoveSession(id, from, to)
+}
+
+// releaseHold releases with the export's consumed input when both it and the
+// relay capability are available, and otherwise exactly as before.
+func releaseHold(r Relay, id string, to netip.AddrPort, input map[uint32]relay.ConsumedInput, result *mediaworker.HandoverResult) error {
+	if exporter, ok := r.(ExportReleaseRelay); ok && input != nil {
+		reply, err := exporter.ReleaseAfterExport(id, to, input)
+		result.HeldPackets, result.RecoveredPackets, result.ReleaseLockHeld = reply.Packets, reply.Recovered, reply.LockHeld
+		return err
+	}
+	held, err := r.ReleaseSession(id, to)
+	result.HeldPackets = held
+	return err
+}
+
 // ReplayRelay is the optional phase-2 caller-media cache capability. Both
 // *relay.Relay and RemoteRelay implement it; phase-1/fake relays remain valid.
 type ReplayRelay interface {
@@ -531,8 +570,11 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	res.Result.Drain = time.Since(started)
 	// Successful/rolled-back resume releases to its owner. An uncertain final
 	// export retains the hold until adoption, bounded by the relay backstop.
+	// exported is set only while the releasing owner resumed from the exact,
+	// margin-zero export: the hold then also replays input it never consumed.
 	releaseTo := source.addr
 	released := false
+	var exported map[uint32]relay.ConsumedInput
 	defer func() {
 		if released {
 			return
@@ -550,8 +592,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		if retained {
 			return
 		}
-		held, releaseErr := diagnosticRelay(r, movediag.Phase(ctx, "release")).ReleaseSession(c.id, releaseTo)
-		res.Result.HeldPackets = held
+		releaseErr := releaseHold(diagnosticRelay(r, movediag.Phase(ctx, "release")), c.id, releaseTo, exported, &res.Result)
 		if errors.Is(releaseErr, relay.ErrHoldExpired) {
 			res.Result.HoldExpired = true
 			if err == nil {
@@ -625,6 +666,8 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	}
 
 	res.Result.StateBytes = len(state)
+	// A malformed copy keeps the plain release; resume would reject it anyway.
+	exported, _ = mediaworker.SnapshotConsumedInput(state)
 	transferred, err := p.transfer(movediag.Phase(ctx, "transfer"), lease, target.addr)
 	if err != nil {
 		if p.retainUncertainMove(source, c, lease, source.addr, state, err, res.Start) {
@@ -634,7 +677,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		return res, err
 	}
 
-	if err = diagnosticRelay(r, movediag.Phase(ctx, "transfer")).MoveSession(c.id, source.addr, target.addr); err != nil {
+	if err = moveAfterExport(diagnosticRelay(r, movediag.Phase(ctx, "transfer")), c.id, source.addr, target.addr, 0); err != nil {
 		err = p.rollback(c, source, target, r, state, transferred, true, true, false, &res.Result, err, res.Start)
 		return res, err
 	}
@@ -653,6 +696,9 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		uncertainResume := errors.Is(err, privateapi.ErrUncertain) || (!agentFailure && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)))
 		if uncertainResume {
 			p.metrics.uncertainMoveResumes.Add(1)
+			// The source resumes from a store checkpoint with crash margins.
+			// That copy may predate the export, so keep the plain release.
+			exported = nil
 		}
 		err = p.rollback(c, source, target, r, state, transferred, true, true, uncertainResume, &res.Result, err, res.Start)
 		return res, err

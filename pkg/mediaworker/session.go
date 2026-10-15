@@ -82,8 +82,13 @@ type session struct {
 	fenced atomic.Bool
 
 	// decryptFailures counts SRTP and SRTCP packets from the caller that this
-	// worker could not decrypt.
-	decryptFailures      atomic.Uint64
+	// worker could not authenticate or decrypt. replayRejections separately
+	// counts packets the replay window rejected as duplicate or too old.
+	decryptFailures  atomic.Uint64
+	replayRejections atomic.Uint64
+	// restoredWindows names caller SSRCs whose exact replay window this
+	// resume restored; it is set before adoption and never persisted.
+	restoredWindows      map[uint32]bool
 	lastCheckpoint       time.Time   // guarded by mu; local acknowledgment time of last successful write
 	audioRate, videoRate sourceRate  // guarded by mu
 	rtcpRate             packetMeter // guarded by mu
@@ -457,6 +462,9 @@ func (s *session) handleRTPLocked(pkt []byte) (complete *framecache.Frame, failu
 	var authenticated rtp.Header
 	plain, err := s.srtpIn.DecryptRTP(s.decryptBuf, pkt, &authenticated)
 	if err != nil {
+		if s.rejectedReplay(err) {
+			return
+		}
 		failure, decryptErr = s.decryptFailures.Add(1), err
 		s.worker.metrics.decryptFailures.Add(1)
 
@@ -584,6 +592,9 @@ func (s *session) handleRTCP(pkt []byte) {
 func (s *session) handleRTCPLocked(pkt []byte) (failure uint64, decryptErr error) {
 	plain, err := s.srtpIn.DecryptRTCP(s.rtcpBuf, pkt, nil)
 	if err != nil {
+		if s.rejectedReplay(err) {
+			return
+		}
 		failure, decryptErr = s.decryptFailures.Add(1), err
 		s.worker.metrics.decryptFailures.Add(1)
 
@@ -797,6 +808,21 @@ func randomString(n int) (string, error) {
 }
 
 // Rate-limit failure logs and run them after releasing the packet-path lock.
+// rejectedReplay counts a replay-window rejection (a duplicate or too-old
+// index) separately from authentication and decryption failures. Pion's
+// error type is unexported; TestReplayRejectionIsNotDecryptFailure pins
+// its message. Runs under mu.
+func (s *session) rejectedReplay(err error) bool {
+	if !strings.Contains(err.Error(), "duplicated packet") {
+		return false
+	}
+	if count := s.replayRejections.Add(1); count&(count-1) == 0 {
+		s.log.Debugf("session %s: replay_rejections=%d: %v", s.id, count, err)
+	}
+	s.worker.metrics.replayRejections.Add(1)
+	return true
+}
+
 func (s *session) logDecryptFailure(kind string, count uint64, err error) {
 	if count != 0 && count&(count-1) == 0 {
 		s.log.Infof("session %s: %s decryption_failures=%d: %v", s.id, kind, count, err)

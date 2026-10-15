@@ -26,12 +26,12 @@ func TestPlannedDrainTwentyCallsNoContentLoss(t *testing.T) {
 		h, err := Start(Options{Relay: true, Workers: 3})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, h.Close()) })
-		testPlannedDrainTwentyCalls(t, h, false, h.workers.list[0].LocalAddr(), h.workers.list[1].LocalAddr(), h.workers.list[2].LocalAddr())
+		testPlannedDrainCalls(t, h, plannedDrainOptions{workers: []netip.AddrPort{h.workers.list[0].LocalAddr(), h.workers.list[1].LocalAddr(), h.workers.list[2].LocalAddr()}})
 	})
 	t.Run("http-buffer", func(t *testing.T) {
 		relayBufferStores(t, func(t *testing.T, store sessionstore.Store) {
 			sys := startBufferFailureSystem(t, store, bufferFailureConfig{workers: 3, persist: true, cache: true})
-			testPlannedDrainTwentyCalls(t, sys.h, true, sys.workers[0].LocalAddr(), sys.workers[1].LocalAddr(), sys.workers[2].LocalAddr())
+			testPlannedDrainCalls(t, sys.h, plannedDrainOptions{external: true, workers: []netip.AddrPort{sys.workers[0].LocalAddr(), sys.workers[1].LocalAddr(), sys.workers[2].LocalAddr()}})
 			require.Zero(t, sys.r.Stats().HoldDrops)
 			require.Zero(t, sys.r.Stats().HoldSendFailures)
 			require.Zero(t, sys.r.Stats().WorkerNoFlow)
@@ -39,11 +39,37 @@ func TestPlannedDrainTwentyCallsNoContentLoss(t *testing.T) {
 	})
 }
 
-func testPlannedDrainTwentyCalls(t *testing.T, h *Harness, external bool, workers ...netip.AddrPort) {
+// plannedDrainOptions shape the 20-call drain. Zero rounds and media select
+// the original 16 move rounds and 25 s of media.
+type plannedDrainOptions struct {
+	external bool
+	calls    int // 20 when zero
+	// sequences optionally fixes call i's first RTP sequence numbers;
+	// wrapped then receives how many caller SSRCs crossed a sequence wrap.
+	sequences func(i int) *RTPSequenceNumbers
+	wrapped   *int
+	rounds    int
+	media     time.Duration
+	workers   []netip.AddrPort
+}
+
+func testPlannedDrainCalls(t *testing.T, h *Harness, opts plannedDrainOptions) []*Report {
+	external, workers := opts.external, opts.workers
+	rounds, mediaDuration := opts.rounds, opts.media
+	if rounds == 0 {
+		rounds = 16
+	}
+	if mediaDuration == 0 {
+		mediaDuration = 25 * time.Second
+	}
 	trace := newPlannedMovePacketTrace(t, workers)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), mediaDuration+35*time.Second)
 	defer cancel()
-	calls := make([]*Call, 20)
+	callCount := opts.calls
+	if callCount == 0 {
+		callCount = 20
+	}
+	calls := make([]*Call, callCount)
 	sent := make(chan error, len(calls))
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, 4)
@@ -53,7 +79,11 @@ func testPlannedDrainTwentyCalls(t *testing.T, h *Harness, external bool, worker
 			slots <- struct{}{}
 			defer func() { <-slots }()
 			var dialErr error
-			calls[i], dialErr = h.Dial(ctx, CallOptions{Video: true, Worker: 0, Recording: RecordingOptions{History: 15 * time.Second, DecodeEvery: 30}})
+			var sequences *RTPSequenceNumbers
+			if opts.sequences != nil {
+				sequences = opts.sequences(i)
+			}
+			calls[i], dialErr = h.Dial(ctx, CallOptions{Video: true, Worker: 0, InitialSequenceNumbers: sequences, Recording: RecordingOptions{History: 15 * time.Second, DecodeEvery: 30}})
 			errs <- dialErr
 		})
 	}
@@ -61,12 +91,12 @@ func testPlannedDrainTwentyCalls(t *testing.T, h *Harness, external bool, worker
 	for range calls {
 		require.NoError(t, <-errs)
 	}
-	t.Log("20 callers connected")
+	t.Logf("%d callers connected", len(calls))
 	for _, c := range calls {
 		trace.observeCaller(c)
 	}
 	for _, c := range calls {
-		go func() { sent <- c.SendMedia(ctx, 25*time.Second) }()
+		go func() { sent <- c.SendMedia(ctx, mediaDuration) }()
 	}
 	time.Sleep(time.Second)
 	if external {
@@ -88,7 +118,7 @@ func testPlannedDrainTwentyCalls(t *testing.T, h *Harness, external bool, worker
 		require.NoError(t, h.Drain(0))
 	}
 	t.Log("drain complete")
-	for range 16 {
+	for range rounds {
 		for _, c := range calls {
 			wg.Go(func() {
 				c.rec.mu.Lock()
@@ -111,10 +141,12 @@ func testPlannedDrainTwentyCalls(t *testing.T, h *Harness, external bool, worker
 		require.NoError(t, <-sent)
 	}
 	t.Log("media send complete")
+	var reports []*Report
 	for i, c := range calls {
 		report, err := c.Hangup(ctx)
 		require.NoError(t, err)
-		require.Len(t, report.Moves, 17)
+		reports = append(reports, report)
+		require.Len(t, report.Moves, rounds+1)
 		for _, m := range report.Moves {
 			if m.Measurement.AudioLoss.Failed || m.Measurement.VideoLoss.Failed {
 				trace.logMissing(t, c.SessionID())
@@ -138,6 +170,12 @@ func testPlannedDrainTwentyCalls(t *testing.T, h *Harness, external bool, worker
 		}
 		require.Zero(t, report.DecryptionFailures.Total())
 	}
+	if opts.wrapped != nil {
+		trace.mu.Lock()
+		*opts.wrapped = len(trace.wrapped)
+		trace.mu.Unlock()
+	}
+	return reports
 }
 
 // Retain ciphertext headers at both caller socket boundaries and the existing
@@ -151,15 +189,19 @@ type plannedMovePacketTrace struct {
 	mu             sync.Mutex
 	sent, returned map[string]map[plannedPacketKey]int
 	decrypted      map[plannedPacketKey]int
+	wrapped        map[uint32]bool // caller SSRCs authenticated past one ROC
 	echoed         map[string]map[plannedPacketKey]int
 }
 
 func newPlannedMovePacketTrace(t *testing.T, workers []netip.AddrPort) *plannedMovePacketTrace {
-	p := &plannedMovePacketTrace{sent: map[string]map[plannedPacketKey]int{}, returned: map[string]map[plannedPacketKey]int{}, decrypted: map[plannedPacketKey]int{}, echoed: map[string]map[plannedPacketKey]int{}}
+	p := &plannedMovePacketTrace{sent: map[string]map[plannedPacketKey]int{}, returned: map[string]map[plannedPacketKey]int{}, decrypted: map[plannedPacketKey]int{}, wrapped: map[uint32]bool{}, echoed: map[string]map[plannedPacketKey]int{}}
 	for _, w := range workers {
 		require.NoError(t, workerprobe.SetAfterDecrypt(w, func(_ string, ssrc uint32, index uint64) {
 			p.mu.Lock()
 			p.decrypted[plannedPacketKey{ssrc: ssrc, seq: uint16(index)}]++
+			if index > 0xffff {
+				p.wrapped[ssrc] = true
+			}
 			p.mu.Unlock()
 		}))
 		require.NoError(t, workerprobe.SetAfterEcho(w, func(_ context.Context, id string, raw []byte) { p.note(p.echoed, id, raw) }))

@@ -122,6 +122,8 @@ func TestMetricsAcrossHTTPMoveAndTakeover(t *testing.T) {
 	require.Positive(t, resumed["relais_worker_packets_in_total"])
 	require.Positive(t, resumed["relais_worker_packets_out_total"])
 	require.Zero(t, resumed["relais_worker_decryption_failures_total"])
+	require.Contains(t, resumed, "relais_worker_replay_rejections_total")
+	require.Zero(t, resumed["relais_worker_replay_rejections_total"])
 	control := readMetrics(t, plane.ProcessHandler())
 	for _, name := range []string{"calls", "moves", "takeovers", "detection_events"} {
 		require.EqualValues(t, 1, control["relais_control_"+name+"_total"], name)

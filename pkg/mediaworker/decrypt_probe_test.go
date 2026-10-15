@@ -49,7 +49,7 @@ func TestDecryptProbeRecordsReorderedPacketIndex(t *testing.T) {
 			for _, i := range tc.order {
 				sess.handleRTP(encrypted[i])
 			}
-			require.Zero(t, sess.decryptFailures.Load())
+			require.Zero(t, sess.decryptFailures.Load()+sess.replayRejections.Load())
 			require.Equal(t, tc.want, observed, "late authenticated input keeps its own index")
 		})
 	}

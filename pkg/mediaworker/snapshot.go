@@ -55,6 +55,7 @@ func (s *session) captureSnapshotAt(captured time.Time) ([]byte, agentState, err
 	}
 	s.checkpointRates(&state.Checkpoint)
 	state.SRTP.Inbound = maps.Clone(state.SRTP.Inbound)
+	state.SRTP.Received = maps.Clone(state.SRTP.Received)
 	state.Agent = cloneAgentState(state.Agent)
 	// Certificate/key byte slices are immutable throughout a session.
 	s.mu.Unlock()

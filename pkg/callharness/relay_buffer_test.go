@@ -239,7 +239,7 @@ func testRelayBufferTakeover(t *testing.T, store sessionstore.Store, enabled, st
 		require.Zero(t, sys.r.Stats().HoldSendFailures)
 	}
 	require.NoError(t, <-sent)
-	workerFailures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
+	workerFailures, err := workerInputRejections(sys.workers[1], call.SessionID())
 	require.NoError(t, err)
 	report, err := call.Hangup(ctx)
 	require.NoError(t, err)
@@ -423,7 +423,7 @@ func TestRelayBufferReplayWindow(t *testing.T) {
 	releaseOnce.Do(func() { close(release) })
 	require.Eventually(t, func() bool { status, err := sys.h.Status(ctx); return err == nil && len(status.Takeovers) == 1 }, 2*time.Second, time.Millisecond)
 	require.NoError(t, call.SendMedia(ctx, 500*time.Millisecond))
-	failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
+	failures, err := workerInputRejections(sys.workers[1], call.SessionID())
 	require.NoError(t, err)
 	report, err := call.Hangup(ctx)
 	require.NoError(t, err)

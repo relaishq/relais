@@ -68,7 +68,7 @@ func TestAgentRelayBufferReplaysQueuedCheckpointAudio(t *testing.T) {
 		high := transport[notice.Progress.SSRC]
 		require.Greater(t, high, notice.Progress.Index, "exercise transport input queued but not yet consumed at checkpoint")
 		require.NoError(t, <-sent)
-		decryptFailures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
+		decryptFailures, err := workerInputRejections(sys.workers[1], call.SessionID())
 		require.NoError(t, err)
 		report, err := call.Hangup(ctx)
 		require.NoError(t, err)

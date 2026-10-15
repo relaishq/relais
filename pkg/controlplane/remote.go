@@ -90,6 +90,39 @@ func (r *RemoteRelay) ReleaseSession(id string, to netip.AddrPort) (int, error) 
 	return reply.Packets, err
 }
 
+// MoveSessionAfterExport uses the ADR 0009 route endpoint, falling back to
+// the existing /move only when an older relay's mux answers 404 or 405.
+func (r *RemoteRelay) MoveSessionAfterExport(id string, from, to netip.AddrPort, epoch uint64) error {
+	if !from.IsValid() {
+		// The ADR 0009 route needs a source to drain; this is a route repair.
+		return r.MoveSessionAtEpoch(id, from, to, epoch)
+	}
+	err := privateapi.Do(movediag.Copy(context.Background(), r.diagnosticContext), remoteClient(r.Client), r.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/move-after-export", relay.RouteRequest{From: from, To: to, Epoch: epoch}, nil, relay.RemoteErrors)
+	if olderRelay(err) {
+		return r.MoveSessionAtEpoch(id, from, to, epoch)
+	}
+	return err
+}
+
+func olderRelay(err error) bool {
+	var response *privateapi.HTTPError
+	return errors.As(err, &response) && (response.StatusCode == http.StatusNotFound || response.StatusCode == http.StatusMethodNotAllowed)
+}
+
+// ReleaseAfterExport uses the ADR 0009 endpoint. A relay without that route
+// answers 404 or 405 from its mux (domain errors are 409), and only then is
+// the hold released with the existing /release, which keeps the old limit.
+// Uncertain and other errors are returned, never retried.
+func (r *RemoteRelay) ReleaseAfterExport(id string, to netip.AddrPort, input map[uint32]relay.ConsumedInput) (relay.ReleaseReply, error) {
+	var reply relay.ReleaseReply
+	err := privateapi.Do(movediag.Copy(context.Background(), r.diagnosticContext), remoteClient(r.Client), r.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/release-after-export", relay.ExportReleaseRequest{To: to, Input: input}, &reply, relay.RemoteErrors)
+	if olderRelay(err) {
+		held, err := r.ReleaseSession(id, to)
+		return relay.ReleaseReply{Packets: held}, err
+	}
+	return reply, err
+}
+
 func (r *RemoteRelay) BeginReplay(ctx context.Context, id string, from netip.AddrPort, inbound map[uint32]uint64) (relay.ReplayPlan, error) {
 	var reply relay.ReplayPlan
 	err := privateapi.Do(ctx, remoteClient(r.Client), r.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/begin-replay", relay.ReplayRequest{From: from, Inbound: inbound}, &reply, relay.RemoteErrors)

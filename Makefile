@@ -122,8 +122,8 @@ test-harness-short: ## Run the PR call harness with -race and -short (5 s baseli
 test-harness-smoke: ## Enforce PR timing thresholds without -race: 20 moves, 20 kills and planned wrap, memory only; requires ffmpeg
 	RELAIS_TEST_REDIS_ADDR= RELAIS_TEST_REDIS_REQUIRE=0 $(GOTEST) -v -count=1 -timeout 10m -run '^TestRelay(PlannedHandover|HardKillTakeover|PlannedWrap)$$' ./pkg/callharness/
 
-test-harness-timing: ## Run the relay move, drain and takeover timing tests without the race detector, which enforce issues #6/#7/#8's gap targets (needs ffmpeg on PATH)
-	$(GOTEST) -v -count=1 -timeout 30m -run '^TestAcceptance|^TestRelay(PlannedHandover|DrainTenCalls|HardKillTakeover|StaleSnapshotTakeover|MidKeyframeTakeover|FirstKeyframeTakeover|FrameCacheModes|FrameCacheMidKeyframe|FrameCacheWithoutSource|FrameCacheLargeGroup|PlannedWrap|TakeoverWrap)$$' ./pkg/callharness/
+test-harness-timing: ## Run the relay move, drain and takeover timing tests without the race detector, which enforce issues #6/#7/#8's gap targets, plus the 20-call #127 reorder stress (needs ffmpeg on PATH)
+	$(GOTEST) -v -count=1 -timeout 30m -run '^TestAcceptance|^TestRelay(PlannedHandover|DrainTenCalls|HardKillTakeover|StaleSnapshotTakeover|MidKeyframeTakeover|FirstKeyframeTakeover|FrameCacheModes|FrameCacheMidKeyframe|FrameCacheWithoutSource|FrameCacheLargeGroup|PlannedWrap|TakeoverWrap)$$|^TestPlannedDrainReorderedPrivateInput$$' ./pkg/callharness/
 
 test-full: ## Run race units and the full in-process race/timing matrix; requires dedicated Redis and ffmpeg
 	$(MAKE) test-unit

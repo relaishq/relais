@@ -499,6 +499,11 @@ func judgeSoak(c config, r loadgen.RunReport) soakReport {
 		if worker && p.Last["relais_worker_decryption_failures_total"] > 0 {
 			fail(p.Name + " worker decryption failures")
 		}
+		// Replay-window rejections were decryption failures before ADR 0009;
+		// a duplicate delivery still fails the soak.
+		if worker && p.Last["relais_worker_replay_rejections_total"] > 0 {
+			fail(p.Name + " worker replay rejections")
+		}
 	}
 	for _, p := range r.Processes {
 		var samples []capacity.MemorySample

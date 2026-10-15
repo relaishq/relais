@@ -58,6 +58,9 @@ type sessionHold struct {
 	replayGeneration uint64
 	replayTarget     netip.AddrPort
 	replayTenure     uint64
+	// drainNonce and drained track the post-export output drain marker.
+	drainNonce uint64
+	drained    chan struct{}
 }
 
 // HoldSession brackets a planned move. Caller packets stop being forwarded
@@ -151,12 +154,194 @@ func (r *Relay) ReleaseSession(id string, to netip.AddrPort) (int, error) {
 	return r.releaseHold(h, to), nil
 }
 
+// ConsumedInput is one caller SSRC of a final planned export (ADR 0009):
+// the highest authenticated inbound index and, when Exact, the 64-index
+// receive window below it (bit i: High-i was consumed).
+type ConsumedInput struct {
+	High   uint64 `json:"high"`
+	Window uint64 `json:"window,omitempty"`
+	Exact  bool   `json:"exact,omitempty"`
+}
+
+// exportWindow matches the workers' SRTP replay window.
+const exportWindow = 64
+
+// keep reports whether media at index is unconsumed by the export. Held
+// input that an inexact export cannot classify keeps today's behavior.
+func (in ConsumedInput) keep(index uint64, held bool) bool {
+	switch {
+	case index > in.High:
+		return true
+	case !in.Exact:
+		return held
+	case in.High-index >= exportWindow:
+		return false // SRTP rejects it as too old, with or without a move
+	default:
+		return in.Window&(1<<(in.High-index)) == 0
+	}
+}
+
+// ReleaseAfterExport ends a planned hold after `to` resumed from the exact,
+// margin-zero export that input describes. Besides the held queue, it sends
+// retained caller media the export did not consume: a datagram reordered
+// behind the drain marker reached the source after its fence and was
+// discarded there. Held media the export already consumed is not sent.
+// Selected media is ordered per SSRC and sent before the hold is removed,
+// so live input cannot overtake it. Without a caller buffer only the held
+// queue can be sent. A crash replay gate is released as by ReleaseSession.
+func (r *Relay) ReleaseAfterExport(id string, to netip.AddrPort, input map[uint32]ConsumedInput) (ReleaseReply, error) {
+	for _, in := range input {
+		if in.High >= 1<<48 {
+			return ReleaseReply{}, errors.New("relay: inbound SRTP index exceeds 48 bits")
+		}
+	}
+	to = unmap(to)
+	r.forwardMu.Lock()
+	locked := time.Now()
+	defer func() {
+		held := time.Since(locked)
+		r.forwardMu.Unlock()
+		r.plannedLockNanos.Add(uint64(held)) //nolint:gosec // non-negative
+		for {
+			longest := r.plannedLockMax.Load()
+			if uint64(held) <= longest || r.plannedLockMax.CompareAndSwap(longest, uint64(held)) { //nolint:gosec // non-negative
+				break
+			}
+		}
+	}()
+	h := r.holds[id]
+	if h == nil {
+		return ReleaseReply{}, ErrHoldExpired
+	}
+	if h.replay {
+		return ReleaseReply{Packets: r.releaseHold(h, to)}, nil
+	}
+	reply := r.releaseExported(h, to, input)
+	reply.LockHeld = time.Since(locked)
+	return reply, nil
+}
+
+// evicted reports whether eviction of the ring's indexes lowest..trimmed
+// could have removed input this export did not consume. An unconsumed index
+// can also be plain caller loss; the relay cannot tell them apart, so this is
+// conservative. Indexes below the ring's first observation are never counted.
+func (in ConsumedInput) evicted(lowest, trimmed uint64) bool {
+	if trimmed > in.High {
+		return true
+	}
+	if !in.Exact {
+		return false
+	}
+	for distance := in.High - trimmed; distance < exportWindow && distance <= in.High && in.High-distance >= lowest; distance++ {
+		if in.Window&(1<<distance) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+type mediaKey struct {
+	ssrc  uint32
+	index uint64
+}
+
+// releaseExported runs under forwardMu.
+func (r *Relay) releaseExported(h *sessionHold, to netip.AddrPort, input map[uint32]ConsumedInput) ReleaseReply {
+	reply := ReleaseReply{Packets: len(h.queue), Complete: true}
+	s := r.bufferSession(h.id)
+	if s != nil {
+		r.buffer.expire(time.Now())
+		for ssrc, in := range input {
+			r.buffer.align(s, ssrc, in.High)
+		}
+	} else {
+		reply.Complete = false
+	}
+	// Classify held media in the export's index space. An SSRC the export
+	// does not name uses the ring's own space, or stays unclassified.
+	sent := make(map[mediaKey]bool, len(h.queue))
+	list := make([]heldPacket, 0, len(h.queue))
+	for _, p := range h.queue {
+		if ssrc, seq, ok := callerIndex(p.datagram[MaxHeaderLen:]); ok {
+			if in, named := input[ssrc]; named {
+				p.media, p.ssrc, p.index = true, ssrc, inboundIndex(in.High, seq)
+				if !in.keep(p.index, true) || sent[mediaKey{ssrc, p.index}] {
+					reply.Filtered++
+					continue
+				}
+			} else if highest, tracked := r.trackedIndex(s, ssrc); tracked {
+				p.media, p.ssrc, p.index = true, ssrc, inboundIndex(highest, seq)
+				if sent[mediaKey{ssrc, p.index}] {
+					reply.Filtered++
+					continue
+				}
+			}
+			if p.media {
+				sent[mediaKey{p.ssrc, p.index}] = true
+			}
+		}
+		list = append(list, p)
+	}
+	// Retained media the export did not consume precedes held input.
+	var recovered []heldPacket
+	if s != nil {
+		for item := s.packets.Front(); item != nil; item = item.Next() {
+			p := item.Value.(*bufferedPacket)
+			key := mediaKey{p.ssrc, p.index}
+			if sent[key] {
+				continue
+			}
+			if in, named := input[p.ssrc]; named && !in.keep(p.index, false) {
+				continue
+			}
+			sent[key] = true
+			recovered = append(recovered, heldPacket{caller: p.caller, datagram: p.datagram, ssrc: p.ssrc, index: p.index, media: true})
+		}
+		// The ring may have evicted unconsumed input, or never tracked a stream.
+		for ssrc, trimmed := range s.trimmed {
+			if in, named := input[ssrc]; !named || in.evicted(s.lowest[ssrc], trimmed) {
+				reply.Complete = false
+			}
+		}
+		if s.untracked {
+			reply.Complete = false
+		}
+	}
+	reply.Recovered = len(recovered)
+	list = append(recovered, list...)
+	orderReplay(list)
+	r.releaseHoldWith(h, to, list)
+	r.plannedReleases.Add(1)
+	r.plannedRecovered.Add(uint64(reply.Recovered)) //nolint:gosec // non-negative
+	r.plannedFiltered.Add(uint64(reply.Filtered))   //nolint:gosec // non-negative
+	if !reply.Complete {
+		r.plannedIncomplete.Add(1)
+	}
+	return reply
+}
+
+func (r *Relay) trackedIndex(s *bufferedSession, ssrc uint32) (uint64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	highest, tracked := s.indexes[ssrc]
+	return highest, tracked
+}
+
 func (r *Relay) acknowledgeBarrier(id uint64, from netip.AddrPort) {
 	r.forwardMu.Lock()
 	defer r.forwardMu.Unlock()
 
 	// Holds are bounded; acknowledgements never allocate lookup state.
 	for _, h := range r.holds {
+		if h.drained != nil && h.drainNonce == id && h.source == from {
+			select {
+			case <-h.drained:
+			default:
+				close(h.drained)
+			}
+			return
+		}
 		if h.barrier == id && h.source == from && !h.acknowledged {
 			h.acknowledged = true
 			h.timer.Stop()
@@ -233,6 +418,15 @@ func (r *Relay) discardHold(h *sessionHold) {
 // releaseHold runs under forwardMu and sends without routeMu. Re-admitting
 // held binding requests preserves consent authentication for confirmed callers.
 func (r *Relay) releaseHold(h *sessionHold, to netip.AddrPort) int {
+	if h.replay {
+		orderReplay(h.queue)
+	}
+	return r.releaseHoldWith(h, to, h.queue)
+}
+
+// releaseHoldWith removes the hold and sends list in order. Accounting still
+// releases every packet the hold queued, including any left out of list.
+func (r *Relay) releaseHoldWith(h *sessionHold, to netip.AddrPort, list []heldPacket) int {
 	delete(r.holds, h.id)
 	h.timer.Stop()
 	close(h.released)
@@ -242,10 +436,7 @@ func (r *Relay) releaseHold(h *sessionHold, to netip.AddrPort) int {
 	}
 
 	count := len(h.queue)
-	if h.replay {
-		orderReplay(h.queue)
-	}
-	for _, packet := range h.queue {
+	for _, packet := range list {
 		if floor, known := h.delivered[packet.ssrc]; h.replay && packet.media && known && packet.index <= floor {
 			r.replayFiltered.Add(1)
 			continue

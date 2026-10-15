@@ -89,6 +89,14 @@ type srtpState struct {
 	// extended sequence number (rollover counter << 16 | sequence number)
 	// the worker has decrypted.
 	Inbound map[uint32]uint64
+
+	// Received is each caller SSRC's receive window below Inbound: bit i is
+	// set when index Inbound[ssrc]-i was authenticated (bit 0 is Inbound
+	// itself). It spans the 64-index SRTP replay window, so a planned export
+	// states exactly which recent input it consumed (ADR 0009). A missing
+	// entry is inexact; tracking then starts by assuming every index at or
+	// below Inbound was consumed. Older workers ignore this optional field.
+	Received map[uint32]uint64 `json:",omitempty"`
 }
 
 // trackState is one of the worker's outbound tracks. The worker echoes one
@@ -180,15 +188,32 @@ func (t *trackState) noteSent(header *rtp.Header) {
 
 // noteInbound records a packet the worker has decrypted.
 func (s *srtpState) noteInbound(ssrc uint32, seq uint16) {
+	if s.Received == nil {
+		s.Received = make(map[uint32]uint64)
+	}
 	highest, ok := s.Inbound[ssrc]
 	if !ok {
 		s.Inbound[ssrc] = uint64(seq)
+		s.Received[ssrc] = 1
 
 		return
 	}
-	if index := extendIndex(highest, seq); index > highest {
-		s.Inbound[ssrc] = index
+	window, exact := s.Received[ssrc]
+	if !exact {
+		window = ^uint64(0) // conservative: an inherited export named no window
 	}
+	switch index := extendIndex(highest, seq); {
+	case index > highest:
+		if shift := index - highest; shift < replayWindow {
+			window = window<<shift | 1
+		} else {
+			window = 1
+		}
+		s.Inbound[ssrc] = index
+	case highest-index < replayWindow:
+		window |= 1 << (highest - index)
+	}
+	s.Received[ssrc] = window
 }
 
 // extendIndex estimates the extended sequence number (rollover counter << 16

@@ -238,7 +238,7 @@ func TestHTTPTakeoverLostResumeReply(t *testing.T) {
 	}
 }
 func TestHTTPMoveLostReplies(t *testing.T) {
-	for _, step := range []string{"export", "export-not-run", "forward-route", "resume", "hold"} {
+	for _, step := range []string{"export", "export-not-run", "forward-route", "resume", "hold", "release-after-export"} {
 		t.Run(step, func(t *testing.T) {
 			fault := &lostReply{failure: errors.New("reply lost after commit")}
 			var source, target, routing *lostReply
@@ -252,10 +252,15 @@ func TestHTTPMoveLostReplies(t *testing.T) {
 				target = fault
 				source = &lostReply{path: "/never"}
 			case "forward-route":
-				fault.path = "/move"
+				// A planned move switches its route after the export (ADR 0009).
+				fault.path = "/move-after-export"
 				routing = fault
 			case "hold":
 				fault.path = "/hold"
+				routing = fault
+			case "release-after-export":
+				// The release committed; only its reply is lost (ADR 0009).
+				fault.path = "/release-after-export"
 				routing = fault
 			}
 			s := newHTTPSystem(t, source, target, routing)
@@ -267,8 +272,12 @@ func TestHTTPMoveLostReplies(t *testing.T) {
 					require.Equal(t, "takeover", move.Kind)
 				} else {
 					require.Error(t, err)
-					if step != "hold" {
+					if step != "hold" && step != "release-after-export" {
 						require.True(t, move.Result.RolledBack)
+					}
+					if step == "release-after-export" {
+						require.ErrorIs(t, err, privateapi.ErrUncertain)
+						require.False(t, move.Result.RolledBack, "the resumed target keeps the call")
 					}
 				}
 				require.Zero(t, s.relay.Stats().Holds)
@@ -277,7 +286,7 @@ func TestHTTPMoveLostReplies(t *testing.T) {
 				require.Zero(t, status.LostCount)
 				require.Len(t, status.Calls, 1)
 				owner := "0"
-				if strings.HasPrefix(step, "export") {
+				if strings.HasPrefix(step, "export") || step == "release-after-export" {
 					owner = "1"
 				}
 				require.Equal(t, owner, status.Calls[0].Owner)

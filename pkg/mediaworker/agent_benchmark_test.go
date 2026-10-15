@@ -63,5 +63,5 @@ func BenchmarkEchoAudioPacket(b *testing.B) {
 		first += n
 	}
 	require.EqualValues(b, b.N, s.state.Audio.Packets)
-	require.Zero(b, s.decryptFailures.Load())
+	require.Zero(b, s.decryptFailures.Load()+s.replayRejections.Load())
 }

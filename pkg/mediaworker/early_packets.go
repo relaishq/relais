@@ -43,6 +43,13 @@ func (s *session) handleSRTPPacket(pkt earlyPacket) {
 		s.mu.Unlock()
 		return
 	}
+	if !pkt.rtcp && s.agent != nil && s.agent.paused && s.state.Audio.negotiated() && len(pkt.data) > 1 && pkt.data[1]&0x7f == s.state.Audio.PayloadType {
+		// A custom audio agent is flushing for export (ADR 0009). Its audio is
+		// not authenticated, so the export never claims it; the relay replays it
+		// to the next owner. Video and SRTCP keep their unchanged paths.
+		s.mu.Unlock()
+		return
+	}
 	result := s.processSRTPPacketLocked(pkt)
 	s.mu.Unlock()
 	s.finishMediaPacket(result)

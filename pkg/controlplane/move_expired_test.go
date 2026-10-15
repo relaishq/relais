@@ -147,6 +147,7 @@ func TestMoveUnknownExportClassifiesExpiredAndEnded(t *testing.T) {
 					metrics := readMetrics(t, worker.PrivateHandler())
 					require.Contains(t, metrics, "relais_worker_decryption_failures_total")
 					require.Zero(t, metrics["relais_worker_decryption_failures_total"])
+					require.Zero(t, metrics["relais_worker_replay_rejections_total"])
 					require.Zero(t, metrics["relais_worker_handovers_resumed_total"])
 					require.Zero(t, metrics["relais_worker_takeovers_resumed_total"])
 				}

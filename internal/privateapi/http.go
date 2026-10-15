@@ -239,7 +239,7 @@ func do(ctx context.Context, client *http.Client, base, method, path string, inp
 // DiagnosticOperation records only operation names. Session/worker identifiers stay private.
 func DiagnosticOperation(path string) string {
 	if strings.HasPrefix(path, "/sessions/") {
-		for _, op := range []string{"export", "hold", "move", "release", "keyframe", "begin-replay", "replay"} {
+		for _, op := range []string{"export", "hold", "move", "release", "move-after-export", "release-after-export", "keyframe", "begin-replay", "replay"} {
 			if strings.HasSuffix(path, "/"+op) {
 				return "/sessions/:id/" + op
 			}

@@ -260,7 +260,8 @@ func TestReplayLatePacketsNeverReuseIndex(t *testing.T) {
 				require.Equal(t, beforeLate, sess.state.Video.Packets, "planned resume drops all indexes at or below snapshot high water mark")
 			}
 			// Older than the new inbound 64-packet window: rejected, never echoed.
-			require.EqualValues(t, 20, sess.decryptFailures.Load())
+			require.Zero(t, sess.decryptFailures.Load())
+			require.EqualValues(t, 20, sess.replayRejections.Load())
 		})
 	}
 }
@@ -509,7 +510,7 @@ func TestReplayFloorAndLiveClock(t *testing.T) {
 	require.NoError(t, err)
 	sess.handleRTP(packet)
 	require.EqualValues(t, 10, sess.state.Video.Packets, "persistent floor rejects before encrypt even without runtime replay flags")
-	require.Zero(t, sess.decryptFailures.Load(), "caller packet authenticated successfully")
+	require.Zero(t, sess.decryptFailures.Load()+sess.replayRejections.Load(), "caller packet authenticated successfully")
 	sess.replayAnchorAt = time.Now().Add(-3 * time.Second)
 	header := rtp.Header{}
 	sess.continueAfterReplay(&rtp.Packet{Header: rtp.Header{Timestamp: 12000}}, &header)
