@@ -43,7 +43,12 @@ func TestPlannedDrainTwentyCallsNoContentLoss(t *testing.T) {
 // the original 16 move rounds and 25 s of media.
 type plannedDrainOptions struct {
 	external bool
-	rounds   int
+	calls    int // 20 when zero
+	// sequences optionally fixes call i's first RTP sequence numbers;
+	// wrapped then receives how many caller SSRCs crossed a sequence wrap.
+	sequences func(i int) *RTPSequenceNumbers
+	wrapped   *int
+	rounds    int
 	media    time.Duration
 	workers  []netip.AddrPort
 }
@@ -60,7 +65,11 @@ func testPlannedDrainCalls(t *testing.T, h *Harness, opts plannedDrainOptions) [
 	trace := newPlannedMovePacketTrace(t, workers)
 	ctx, cancel := context.WithTimeout(context.Background(), mediaDuration+35*time.Second)
 	defer cancel()
-	calls := make([]*Call, 20)
+	callCount := opts.calls
+	if callCount == 0 {
+		callCount = 20
+	}
+	calls := make([]*Call, callCount)
 	sent := make(chan error, len(calls))
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, 4)
@@ -70,7 +79,11 @@ func testPlannedDrainCalls(t *testing.T, h *Harness, opts plannedDrainOptions) [
 			slots <- struct{}{}
 			defer func() { <-slots }()
 			var dialErr error
-			calls[i], dialErr = h.Dial(ctx, CallOptions{Video: true, Worker: 0, Recording: RecordingOptions{History: 15 * time.Second, DecodeEvery: 30}})
+			var sequences *RTPSequenceNumbers
+			if opts.sequences != nil {
+				sequences = opts.sequences(i)
+			}
+			calls[i], dialErr = h.Dial(ctx, CallOptions{Video: true, Worker: 0, InitialSequenceNumbers: sequences, Recording: RecordingOptions{History: 15 * time.Second, DecodeEvery: 30}})
 			errs <- dialErr
 		})
 	}
@@ -78,7 +91,7 @@ func testPlannedDrainCalls(t *testing.T, h *Harness, opts plannedDrainOptions) [
 	for range calls {
 		require.NoError(t, <-errs)
 	}
-	t.Log("20 callers connected")
+	t.Logf("%d callers connected", len(calls))
 	for _, c := range calls {
 		trace.observeCaller(c)
 	}
@@ -157,6 +170,11 @@ func testPlannedDrainCalls(t *testing.T, h *Harness, opts plannedDrainOptions) [
 		}
 		require.Zero(t, report.DecryptionFailures.Total())
 	}
+	if opts.wrapped != nil {
+		trace.mu.Lock()
+		*opts.wrapped = len(trace.wrapped)
+		trace.mu.Unlock()
+	}
 	return reports
 }
 
@@ -171,15 +189,19 @@ type plannedMovePacketTrace struct {
 	mu             sync.Mutex
 	sent, returned map[string]map[plannedPacketKey]int
 	decrypted      map[plannedPacketKey]int
+	wrapped        map[uint32]bool // caller SSRCs authenticated past one ROC
 	echoed         map[string]map[plannedPacketKey]int
 }
 
 func newPlannedMovePacketTrace(t *testing.T, workers []netip.AddrPort) *plannedMovePacketTrace {
-	p := &plannedMovePacketTrace{sent: map[string]map[plannedPacketKey]int{}, returned: map[string]map[plannedPacketKey]int{}, decrypted: map[plannedPacketKey]int{}, echoed: map[string]map[plannedPacketKey]int{}}
+	p := &plannedMovePacketTrace{sent: map[string]map[plannedPacketKey]int{}, returned: map[string]map[plannedPacketKey]int{}, decrypted: map[plannedPacketKey]int{}, wrapped: map[uint32]bool{}, echoed: map[string]map[plannedPacketKey]int{}}
 	for _, w := range workers {
 		require.NoError(t, workerprobe.SetAfterDecrypt(w, func(_ string, ssrc uint32, index uint64) {
 			p.mu.Lock()
 			p.decrypted[plannedPacketKey{ssrc: ssrc, seq: uint16(index)}]++
+			if index > 0xffff {
+				p.wrapped[ssrc] = true
+			}
 			p.mu.Unlock()
 		}))
 		require.NoError(t, workerprobe.SetAfterEcho(w, func(_ context.Context, id string, raw []byte) { p.note(p.echoed, id, raw) }))

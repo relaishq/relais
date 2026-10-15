@@ -173,9 +173,10 @@ func startReorderTopology(t *testing.T, opts reorderOptions) *reorderTopology {
 	for range count {
 		sys.legs = append(sys.legs, newPrivateLeg(t))
 	}
-	// The race detector can slow a loaded worker's read loop well past the
-	// production output-drain bound; this harness must observe every drain.
-	cfg := relay.Config{Owners: legOwners{store: store, addrs: addrs}, HoldTimeout: 3 * time.Second, OutputDrainTimeout: 2 * time.Second}
+	// The race detector and the proxies' extra hop can slow a loaded worker's
+	// read loop well past the production marker bounds; this harness must
+	// observe every drain rather than an aborted move.
+	cfg := relay.Config{Owners: legOwners{store: store, addrs: addrs}, HoldTimeout: 5 * time.Second, BarrierTimeout: 3 * time.Second, OutputDrainTimeout: 2 * time.Second}
 	if opts.buffer {
 		cfg.Buffer = &relay.BufferConfig{}
 	}

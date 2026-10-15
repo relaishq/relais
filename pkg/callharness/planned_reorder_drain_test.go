@@ -135,12 +135,18 @@ func (r *legReorderer) intercept(datagram []byte) bool {
 
 // Twenty real Pion callers drain off one worker, then move between two
 // others in repeated rounds, while every private leg reorders caller media
-// around drain markers. No content may be lost or duplicated (#127).
+// around drain markers. No content may be lost or duplicated (#127). The
+// proxies forward every datagram through one goroutine per leg; under the
+// race detector ten calls keep them from becoming the bottleneck. The full
+// 20-call form runs without it in make test-harness-timing.
 func TestPlannedDrainReorderedPrivateInput(t *testing.T) {
 	if testing.Short() {
 		t.Skip("20-call reorder stress runs in the full harness")
 	}
-	rounds, media := 6, 10*time.Second
+	calls, rounds, media := 20, 6, 10*time.Second
+	if densityRaceDetector {
+		calls = 10
+	}
 	if v := os.Getenv("RELAIS_REORDER_ROUNDS"); v != "" {
 		var err error
 		rounds, err = strconv.Atoi(v)
@@ -157,7 +163,13 @@ func TestPlannedDrainReorderedPrivateInput(t *testing.T) {
 		stats := sys.relay.Stats()
 		t.Logf("REORDER_DRAIN_RELAY worker_no_flow=%d hold_drops=%d recovered=%d releases=%d output_drains=%d output_drain_timeouts=%d", stats.WorkerNoFlow, stats.HoldDrops, stats.PlannedRecovered, stats.PlannedReleases, stats.OutputDrains, stats.OutputDrainTimeouts)
 	})
-	reports := testPlannedDrainCalls(t, sys.h, plannedDrainOptions{external: true, rounds: rounds, media: media,
+	// Sequences wrap during the drain and move rounds, staggered per call, so
+	// rollover and reordering meet in the same window (P1-A of the review).
+	wrap := func(i int) *RTPSequenceNumbers {
+		return &RTPSequenceNumbers{Audio: uint16(65535 - 40 - 10*i), Video: uint16(65535 - 40 - 5*i)} //nolint:gosec // small i
+	}
+	var wrapped int
+	reports := testPlannedDrainCalls(t, sys.h, plannedDrainOptions{external: true, calls: calls, sequences: wrap, wrapped: &wrapped, rounds: rounds, media: media,
 		workers: []netip.AddrPort{sys.workers[0].LocalAddr(), sys.workers[1].LocalAddr(), sys.workers[2].LocalAddr()}})
 	dropsAfter := kernelUDPDrops(t)
 	var delayed, swapped uint64
@@ -188,11 +200,12 @@ func TestPlannedDrainReorderedPrivateInput(t *testing.T) {
 		require.Zero(t, sys.workerMetric(t, i, "relais_worker_decryption_failures_total"), "worker %d", i)
 		require.Zero(t, sys.workerMetric(t, i, "relais_worker_replay_rejections_total"), "worker %d", i)
 	}
-	t.Logf("REORDER_DRAIN moves=%d recovered=%d relay_recovered=%d filtered=%d incomplete=%d delayed=%d swapped=%d move_p50=%s move_p99=%s move_max=%s lock_p50=%s lock_p99=%s lock_max=%s relay_lock_max=%s audio_gap_p50=%s audio_gap_p99=%s audio_gap_max=%s kernel_udp_drops=%d",
-		moves, recovered, stats.PlannedRecovered, stats.PlannedFiltered, stats.PlannedIncomplete, delayed, swapped,
+	t.Logf("REORDER_DRAIN wrapped_streams=%d moves=%d recovered=%d relay_recovered=%d filtered=%d incomplete=%d delayed=%d swapped=%d move_p50=%s move_p99=%s move_max=%s lock_p50=%s lock_p99=%s lock_max=%s relay_lock_max=%s audio_gap_p50=%s audio_gap_p99=%s audio_gap_max=%s kernel_udp_drops=%d",
+		wrapped, moves, recovered, stats.PlannedRecovered, stats.PlannedFiltered, stats.PlannedIncomplete, delayed, swapped,
 		percentile(durations, 50), percentile(durations, 99), percentile(durations, 100),
 		percentile(locks, 50), percentile(locks, 99), percentile(locks, 100), stats.PlannedReleaseLockMax,
 		percentile(audioGaps, 50), percentile(audioGaps, 99), percentile(audioGaps, 100), dropsAfter-dropsBefore)
+	require.Equal(t, 2*calls, wrapped, "every audio and video stream wrapped during the run")
 	require.EqualValues(t, moves, stats.PlannedReleases, "every move released after its exact export")
 	require.Positive(t, delayed, "the reorderer delayed datagrams past drain markers")
 	require.Positive(t, recovered, "the relay recovered late pre-marker input")
