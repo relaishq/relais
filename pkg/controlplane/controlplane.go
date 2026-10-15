@@ -83,8 +83,10 @@ type ExportMoveRelay interface {
 }
 
 // moveAfterExport keeps the existing route call when the capability is absent.
+// A retry whose previous route call failed no longer knows the routed source,
+// so it cannot drain that source's output: it uses the existing route repair.
 func moveAfterExport(r Relay, id string, from, to netip.AddrPort, epoch uint64) error {
-	if mover, ok := r.(ExportMoveRelay); ok {
+	if mover, ok := r.(ExportMoveRelay); ok && from.IsValid() {
 		return mover.MoveSessionAfterExport(id, from, to, epoch)
 	}
 	if tenure, ok := r.(TenureRelay); ok && epoch != 0 {

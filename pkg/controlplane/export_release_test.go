@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -211,6 +213,12 @@ func TestRemoteMoveAfterExportFallback(t *testing.T) {
 			server := httptest.NewServer(mux)
 			defer server.Close()
 			from, to := netip.MustParseAddrPort("127.0.0.1:1"), netip.MustParseAddrPort("127.0.0.1:2")
+			// No known source: a route repair, never an empty-source drain.
+			require.NoError(t, (&RemoteRelay{URL: server.URL}).MoveSessionAfterExport("call", netip.AddrPort{}, to, 7))
+			require.Zero(t, exported)
+			require.Equal(t, 1, moved)
+			require.Equal(t, relay.RouteRequest{To: to, Epoch: 7, Repair: true}, request)
+			moved, request = 0, relay.RouteRequest{}
 			err := (&RemoteRelay{URL: server.URL}).MoveSessionAfterExport("call", from, to, 7)
 			require.Equal(t, 1, exported)
 			if !tc.fallback {
@@ -269,4 +277,61 @@ func TestRetainedPlannedMoveReleasesAfterExport(t *testing.T) {
 	require.True(t, r.releases[0].exported)
 	require.Equal(t, b.addr, r.releases[0].to)
 	require.Equal(t, exportedInput, r.releases[0].input)
+}
+
+// A retained planned move whose route call failed retries with no known
+// source. The retry must repair the route through the real relay HTTP API
+// rather than send an empty source to move-after-export (implementation
+// review P2): the old path returned 400 on every attempt and never adopted.
+func TestRetainedPlannedMoveRetriesAfterRouteFailure(t *testing.T) {
+	m := sessionstore.NewMemory()
+	r, err := relay.New(relay.Config{Owners: m})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, r.Close()) })
+	var failRoute atomic.Bool
+	failRoute.Store(true)
+	var routes []string
+	var mu sync.Mutex
+	private := r.PrivateHandler()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case strings.HasSuffix(req.URL.Path, "/hold"):
+			w.WriteHeader(http.StatusNoContent) // fake workers cannot acknowledge a marker
+			return
+		case strings.HasSuffix(req.URL.Path, "/move-after-export") || strings.HasSuffix(req.URL.Path, "/move"):
+			mu.Lock()
+			routes = append(routes, req.URL.Path[strings.LastIndex(req.URL.Path, "/"):])
+			mu.Unlock()
+			if failRoute.CompareAndSwap(true, false) {
+				privateapi.Error(w, relay.ErrHeld, relay.RemoteErrors)
+				return
+			}
+		}
+		private.ServeHTTP(w, req)
+	}))
+	t.Cleanup(server.Close)
+	p := New(&RemoteRelay{URL: server.URL}, m)
+	a := &fakeWorker{store: m, addr: netip.MustParseAddrPort("127.0.0.1:1"), running: map[string]bool{}}
+	b := &fakeWorker{store: m, addr: netip.MustParseAddrPort("127.0.0.1:2"), running: map[string]bool{}}
+	r.AddWorker(a.addr)
+	r.AddWorker(b.addr)
+	require.NoError(t, p.Register("a", a.addr, a))
+	require.NoError(t, p.Register("b", b.addr, b))
+	ctx := context.Background()
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	p.store = &retainedMoveStore{Store: p.store}
+	_, err = p.Move(ctx, id, "b")
+	require.Error(t, err)
+	source := p.workers["a"]
+	for attempt := 0; attempt < 3 && !b.runs(id); attempt++ {
+		pending := source.pending[id]
+		require.NotNil(t, pending)
+		p.takeover(ctx, source, pending.lease, time.Now())
+	}
+	require.True(t, b.runs(id), "a retry repairs the route and adopts the target")
+	require.Empty(t, source.pending)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"/move-after-export", "/move"}, routes, "the failed drain is retried as a route repair")
 }

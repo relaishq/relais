@@ -93,6 +93,10 @@ func (r *RemoteRelay) ReleaseSession(id string, to netip.AddrPort) (int, error) 
 // MoveSessionAfterExport uses the ADR 0009 route endpoint, falling back to
 // the existing /move only when an older relay's mux answers 404 or 405.
 func (r *RemoteRelay) MoveSessionAfterExport(id string, from, to netip.AddrPort, epoch uint64) error {
+	if !from.IsValid() {
+		// The ADR 0009 route needs a source to drain; this is a route repair.
+		return r.MoveSessionAtEpoch(id, from, to, epoch)
+	}
 	err := privateapi.Do(movediag.Copy(context.Background(), r.diagnosticContext), remoteClient(r.Client), r.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/move-after-export", relay.RouteRequest{From: from, To: to, Epoch: epoch}, nil, relay.RemoteErrors)
 	if olderRelay(err) {
 		return r.MoveSessionAtEpoch(id, from, to, epoch)
