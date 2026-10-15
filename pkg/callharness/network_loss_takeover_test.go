@@ -102,7 +102,7 @@ func TestNetworkLossTakeoverRetainsVideo(t *testing.T) {
 				wire.release()
 				status := waitBufferTakeovers(t, ctx, sys.h, 1)
 				require.NoError(t, <-sent)
-				workerFailures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
+				workerFailures, err := workerInputRejections(sys.workers[1], call.SessionID())
 				require.NoError(t, err)
 				require.Zero(t, workerFailures)
 				report, err := call.Hangup(ctx)

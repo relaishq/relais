@@ -520,7 +520,7 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 				return len(processedB) > 0
 			}, 2*time.Second, time.Millisecond, "B decrypts uncheckpointed input before the second kill")
 		}
-		failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
+		failures, err := workerInputRejections(sys.workers[1], call.SessionID())
 		require.NoError(t, err)
 		require.Zero(t, failures)
 		sys.h.RecordProcessKill("1", time.Now())
@@ -549,7 +549,7 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		target, err := strconv.Atoi(status.Calls[0].Owner)
 		require.NoError(t, err)
 		time.Sleep(500 * time.Millisecond)
-		failures, err := sys.workers[target].SessionDecryptFailures(call.SessionID())
+		failures, err := workerInputRejections(sys.workers[target], call.SessionID())
 		require.NoError(t, err)
 		require.Zero(t, failures)
 	}
@@ -704,7 +704,7 @@ func TestRelayBufferUncertainExport(t *testing.T) {
 		require.Zero(t, sys.r.Stats().Holds)
 		require.Zero(t, sys.r.Stats().HoldTimeouts)
 		time.Sleep(300 * time.Millisecond)
-		failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
+		failures, err := workerInputRejections(sys.workers[1], call.SessionID())
 		require.NoError(t, err)
 		require.Zero(t, failures)
 		sentDuring, lost := bufferPacketLoss(t, o, move.Start, move.End)
@@ -843,7 +843,7 @@ func testRelayBufferUncertainExportAfterHoldExpiry(t *testing.T, adopted bool) {
 		}
 		status := waitBufferTakeovers(t, ctx, sys.h, 1)
 		time.Sleep(300 * time.Millisecond)
-		failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
+		failures, err := workerInputRejections(sys.workers[1], call.SessionID())
 		require.NoError(t, err)
 		require.Zero(t, failures, "confirmation must not replay packets to a possibly live B")
 		require.False(t, status.Takeovers[0].Lost)

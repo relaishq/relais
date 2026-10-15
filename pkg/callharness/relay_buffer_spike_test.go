@@ -43,7 +43,7 @@ func TestRelayBufferSpike(t *testing.T) {
 	require.NoError(t, err)
 	require.Positive(t, count)
 	require.NoError(t, <-sent)
-	workerFailures, err := b.SessionDecryptFailures(call.SessionID())
+	workerFailures, err := workerInputRejections(b, call.SessionID())
 	require.NoError(t, err)
 	report, err := call.Hangup(ctx)
 	require.NoError(t, err)

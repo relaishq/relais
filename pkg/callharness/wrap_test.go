@@ -40,7 +40,7 @@ func testRelayPlannedWrap(t *testing.T, store sessionstore.Store) {
 				}
 				require.NoError(t, call.SendMedia(ctx, duration))
 			}
-			failures, err := h.workers.list[1].SessionDecryptFailures(call.SessionID())
+			failures, err := workerInputRejections(h.workers.list[1], call.SessionID())
 			require.NoError(t, err)
 			require.Zero(t, failures)
 			report, err := call.Hangup(ctx)
@@ -173,7 +173,7 @@ func testRelayTakeoverWrap(t *testing.T, store sessionstore.Store) {
 					return err == nil && len(status.Takeovers) == 1 && len(status.Calls) == 1 && status.Calls[0].Owner == "1" && !status.Takeovers[0].Lost && !status.Workers[0].Recovering
 				}, 2*time.Second, 5*time.Millisecond)
 				require.NoError(t, <-sent)
-				failures, err := h.workers.list[1].SessionDecryptFailures(call.SessionID())
+				failures, err := workerInputRejections(h.workers.list[1], call.SessionID())
 				require.NoError(t, err)
 				require.Zero(t, failures, "resumed ingress decrypts across the wrap")
 				report, err := call.Hangup(ctx)

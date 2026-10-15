@@ -31,7 +31,7 @@ func TestAcceptanceRelayBufferTakeover(t *testing.T) {
 				sys.h.RecordProcessKill("0", time.Now())
 				require.NoError(t, workerprobe.Kill(sys.workers[0].LocalAddr()))
 				require.NoError(t, <-sent)
-				workerFailures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
+				workerFailures, err := workerInputRejections(sys.workers[1], call.SessionID())
 				require.NoError(t, err)
 				report, err := call.Hangup(ctx)
 				require.NoError(t, err)

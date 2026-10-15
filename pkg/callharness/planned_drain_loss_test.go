@@ -26,12 +26,12 @@ func TestPlannedDrainTwentyCallsNoContentLoss(t *testing.T) {
 		h, err := Start(Options{Relay: true, Workers: 3})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, h.Close()) })
-		testPlannedDrainTwentyCalls(t, h, false, h.workers.list[0].LocalAddr(), h.workers.list[1].LocalAddr(), h.workers.list[2].LocalAddr())
+		testPlannedDrainCalls(t, h, plannedDrainOptions{workers: []netip.AddrPort{h.workers.list[0].LocalAddr(), h.workers.list[1].LocalAddr(), h.workers.list[2].LocalAddr()}})
 	})
 	t.Run("http-buffer", func(t *testing.T) {
 		relayBufferStores(t, func(t *testing.T, store sessionstore.Store) {
 			sys := startBufferFailureSystem(t, store, bufferFailureConfig{workers: 3, persist: true, cache: true})
-			testPlannedDrainTwentyCalls(t, sys.h, true, sys.workers[0].LocalAddr(), sys.workers[1].LocalAddr(), sys.workers[2].LocalAddr())
+			testPlannedDrainCalls(t, sys.h, plannedDrainOptions{external: true, workers: []netip.AddrPort{sys.workers[0].LocalAddr(), sys.workers[1].LocalAddr(), sys.workers[2].LocalAddr()}})
 			require.Zero(t, sys.r.Stats().HoldDrops)
 			require.Zero(t, sys.r.Stats().HoldSendFailures)
 			require.Zero(t, sys.r.Stats().WorkerNoFlow)
@@ -39,9 +39,26 @@ func TestPlannedDrainTwentyCallsNoContentLoss(t *testing.T) {
 	})
 }
 
-func testPlannedDrainTwentyCalls(t *testing.T, h *Harness, external bool, workers ...netip.AddrPort) {
+// plannedDrainOptions shape the 20-call drain. Zero rounds and media select
+// the original 16 move rounds and 25 s of media.
+type plannedDrainOptions struct {
+	external bool
+	rounds   int
+	media    time.Duration
+	workers  []netip.AddrPort
+}
+
+func testPlannedDrainCalls(t *testing.T, h *Harness, opts plannedDrainOptions) []*Report {
+	external, workers := opts.external, opts.workers
+	rounds, mediaDuration := opts.rounds, opts.media
+	if rounds == 0 {
+		rounds = 16
+	}
+	if mediaDuration == 0 {
+		mediaDuration = 25 * time.Second
+	}
 	trace := newPlannedMovePacketTrace(t, workers)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), mediaDuration+35*time.Second)
 	defer cancel()
 	calls := make([]*Call, 20)
 	sent := make(chan error, len(calls))
@@ -66,7 +83,7 @@ func testPlannedDrainTwentyCalls(t *testing.T, h *Harness, external bool, worker
 		trace.observeCaller(c)
 	}
 	for _, c := range calls {
-		go func() { sent <- c.SendMedia(ctx, 25*time.Second) }()
+		go func() { sent <- c.SendMedia(ctx, mediaDuration) }()
 	}
 	time.Sleep(time.Second)
 	if external {
@@ -88,7 +105,7 @@ func testPlannedDrainTwentyCalls(t *testing.T, h *Harness, external bool, worker
 		require.NoError(t, h.Drain(0))
 	}
 	t.Log("drain complete")
-	for range 16 {
+	for range rounds {
 		for _, c := range calls {
 			wg.Go(func() {
 				c.rec.mu.Lock()
@@ -111,10 +128,12 @@ func testPlannedDrainTwentyCalls(t *testing.T, h *Harness, external bool, worker
 		require.NoError(t, <-sent)
 	}
 	t.Log("media send complete")
+	var reports []*Report
 	for i, c := range calls {
 		report, err := c.Hangup(ctx)
 		require.NoError(t, err)
-		require.Len(t, report.Moves, 17)
+		reports = append(reports, report)
+		require.Len(t, report.Moves, rounds+1)
 		for _, m := range report.Moves {
 			if m.Measurement.AudioLoss.Failed || m.Measurement.VideoLoss.Failed {
 				trace.logMissing(t, c.SessionID())
@@ -138,6 +157,7 @@ func testPlannedDrainTwentyCalls(t *testing.T, h *Harness, external bool, worker
 		}
 		require.Zero(t, report.DecryptionFailures.Total())
 	}
+	return reports
 }
 
 // Retain ciphertext headers at both caller socket boundaries and the existing
