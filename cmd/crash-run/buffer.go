@@ -256,6 +256,10 @@ func validateBufferMetrics(out result, off, replayLoss bool) error {
 		if value != 0 {
 			return fmt.Errorf("surviving worker %s recorded decryption failures: %g", process.Process, value)
 		}
+		// Replay-window rejections were decryption failures before ADR 0009.
+		if replays := process.Values["relais_worker_replay_rejections_total"]; replays != 0 {
+			return fmt.Errorf("surviving worker %s recorded replay rejections: %g", process.Process, replays)
+		}
 	}
 	if surviving != 1 {
 		return fmt.Errorf("expected one surviving worker, got %d", surviving)

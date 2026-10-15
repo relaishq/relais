@@ -89,8 +89,12 @@ type bufferedSession struct {
 	packets *list.List
 	bytes   int
 	// Highest indexes survive time expiry, so silent tracks retain their ROC.
-	indexes          map[uint32]uint64
-	trimmed          map[uint32]uint64
+	indexes map[uint32]uint64
+	trimmed map[uint32]uint64
+	// lowest is each SSRC's lowest index this ring observed, so a planned
+	// release reports possible eviction only for input that could have been
+	// retained (ADR 0009), not for indexes before the stream began.
+	lowest           map[uint32]uint64
 	untracked        bool
 	replayedThrough  map[uint32]uint64
 	replayedTarget   netip.AddrPort
@@ -161,7 +165,7 @@ func (b *packetBuffer) addWithCheckpoint(id string, caller netip.AddrPort, packe
 			b.untracked++
 			return
 		}
-		s = &bufferedSession{packets: list.New(), indexes: make(map[uint32]uint64), trimmed: make(map[uint32]uint64)}
+		s = &bufferedSession{packets: list.New(), indexes: make(map[uint32]uint64), trimmed: make(map[uint32]uint64), lowest: make(map[uint32]uint64)}
 		b.sessions[id] = s
 	}
 	highest, seen := s.indexes[ssrc]
@@ -184,6 +188,9 @@ func (b *packetBuffer) addWithCheckpoint(id string, caller netip.AddrPort, packe
 	}
 	if !seen || index > highest {
 		s.indexes[ssrc] = index
+	}
+	if lowest, known := s.lowest[ssrc]; !known || index < lowest {
+		s.lowest[ssrc] = index
 	}
 	size := MaxHeaderLen + len(packet) + bufferPacketOverhead
 	// Evict oldest first even when one incoming datagram cannot fit.

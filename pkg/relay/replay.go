@@ -184,7 +184,7 @@ func (r *Relay) rebuildReplay(h *sessionHold, inbound map[uint32]uint64) {
 	if s != nil {
 		// Align before filtering so checkpoint ROC changes use one index space.
 		for ssrc, floor := range inbound {
-			translate := indexTranslation(s.indexes[ssrc], floor)
+			translate := anchorIndex(floor)
 			for i := range gated {
 				if gated[i].media && gated[i].ssrc == ssrc {
 					gated[i].index = translate(gated[i].index)
@@ -235,7 +235,7 @@ func (r *Relay) configureReplay(h *sessionHold, inbound map[uint32]uint64) (Repl
 			if _, known := h.replayInbound[ssrc]; h.replayCheckpoint && known {
 				continue
 			}
-			translate := indexTranslation(s.indexes[ssrc], floor)
+			translate := anchorIndex(floor)
 			for i := range h.queue {
 				if h.queue[i].media && h.queue[i].ssrc == ssrc {
 					h.queue[i].index = translate(h.queue[i].index)
@@ -296,32 +296,40 @@ func (r *Relay) configureReplay(h *sessionHold, inbound map[uint32]uint64) (Repl
 	return replayPlan(h), nil
 }
 
-func indexTranslation(highest, floor uint64) func(uint64) uint64 {
-	localFloor := inboundIndex(highest, uint16(floor)) //nolint:gosec // low 16 bits
-	return func(index uint64) uint64 {
-		if floor >= localFloor {
-			return index + floor - localFloor
-		}
-		return index - min(index, localFloor-floor)
-	}
+// anchorIndex re-extends a retained caller index around a worker's
+// authenticated anchor, within the RFC 3711 half-space envelope. A relay
+// restored mid-call starts its own ROC at zero and cannot represent a
+// sequence observed before a wrap it never saw, so no single offset can
+// align a reordered cold ring (seq 0 then 65534 around anchor 65535). Each
+// retained index is rebuilt from its own 16-bit sequence instead.
+func anchorIndex(anchor uint64) func(uint64) uint64 {
+	return func(index uint64) uint64 { return inboundIndex(anchor, uint16(index)) } //nolint:gosec // low 16 bits
 }
 
-func (b *packetBuffer) align(s *bufferedSession, ssrc uint32, floor uint64) {
+// align rebuilds one SSRC's retained indexes, trims and high water mark in
+// the anchor's index space. Retained packets are within the ring window, far
+// inside the half-space envelope, so a warm ring keeps the same indexes.
+func (b *packetBuffer) align(s *bufferedSession, ssrc uint32, anchor uint64) {
 	highest, known := s.indexes[ssrc]
 	if !known {
 		return
 	}
-	translate := indexTranslation(highest, floor)
-	s.indexes[ssrc] = translate(highest)
+	translate := anchorIndex(anchor)
+	highest = translate(highest)
 	if trimmed, ok := s.trimmed[ssrc]; ok {
 		s.trimmed[ssrc] = translate(trimmed)
+	}
+	if lowest, ok := s.lowest[ssrc]; ok {
+		s.lowest[ssrc] = translate(lowest)
 	}
 	for item := s.packets.Front(); item != nil; item = item.Next() {
 		p := item.Value.(*bufferedPacket)
 		if p.ssrc == ssrc {
 			p.index = translate(p.index)
+			highest = max(highest, p.index)
 		}
 	}
+	s.indexes[ssrc] = highest
 }
 
 func (r *Relay) enqueueReplay(h *sessionHold, caller netip.AddrPort, packet []byte) {

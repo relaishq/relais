@@ -15,6 +15,9 @@ func TestBufferMetricsRequireSurvivingWorkerDecryptEvidence(t *testing.T) {
 		metrics[2].Values["relais_relay_"+name] = 0
 	}
 	require.NoError(t, validateBufferMetrics(result{Metrics: metrics}, true, false))
+	metrics[1].Values["relais_worker_replay_rejections_total"] = 1
+	require.ErrorContains(t, validateBufferMetrics(result{Metrics: metrics}, true, false), "recorded replay rejections")
+	metrics[1].Values["relais_worker_replay_rejections_total"] = 0
 	metrics[1].Values["relais_worker_decryption_failures_total"] = 1
 	require.ErrorContains(t, validateBufferMetrics(result{Metrics: metrics}, true, false), "recorded decryption failures")
 	delete(metrics[1].Values, "relais_worker_decryption_failures_total")

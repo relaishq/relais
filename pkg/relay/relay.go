@@ -62,6 +62,7 @@ package relay
 import (
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -110,6 +111,11 @@ const (
 	// below the multi-second ICE connectivity failure window. No export or
 	// ownership change occurs during this wait.
 	DefaultBarrierTimeout = time.Second
+
+	// DefaultOutputDrainTimeout bounds the second drain marker a planned move
+	// sends after a successful export (ADR 0009). A live source answers it in
+	// one private-leg round trip; a source that died after export costs this.
+	DefaultOutputDrainTimeout = 100 * time.Millisecond
 
 	// DefaultHoldTimeout bounds abandoned cross-process coordination below
 	// the shortest (5 s) caller connectivity window. Healthy loopback moves
@@ -207,6 +213,10 @@ type Config struct {
 	// Defaults to DefaultBarrierTimeout.
 	BarrierTimeout time.Duration
 
+	// OutputDrainTimeout bounds MoveSessionAfterExport's output drain marker.
+	// Defaults to DefaultOutputDrainTimeout.
+	OutputDrainTimeout time.Duration
+
 	// HoldTimeout is the coordination backstop after acknowledgement; every
 	// normal move exit releases explicitly. Defaults to DefaultHoldTimeout.
 	// The packet and byte limits apply per session; total bytes and session count
@@ -240,8 +250,21 @@ type Stats struct {
 	ReplaySendFailures uint64
 	ReplayExpiries     uint64
 	Replays            uint64
-	SelfFences         uint64
-	Workers            int
+	// Planned releases after an exact export (ADR 0009): PlannedRecovered
+	// retained input the export had not consumed, PlannedFiltered held media
+	// it had, and the time each release held forwardMu (total and maximum).
+	PlannedReleases        uint64
+	PlannedRecovered       uint64
+	PlannedFiltered        uint64
+	PlannedIncomplete      uint64
+	PlannedReleaseLockTime time.Duration
+	PlannedReleaseLockMax  time.Duration
+	// OutputDrains counts acknowledged post-export drain markers and
+	// OutputDrainTimeouts those that expired before the route moved.
+	OutputDrains        uint64
+	OutputDrainTimeouts uint64
+	SelfFences          uint64
+	Workers             int
 
 	RoutesRestored       uint64
 	RoutesRestoreSkipped uint64
@@ -341,6 +364,14 @@ type Relay struct {
 	replaySendFailures atomic.Uint64
 	replayExpiries     atomic.Uint64
 	replays            atomic.Uint64
+	plannedReleases    atomic.Uint64
+	plannedRecovered   atomic.Uint64
+	plannedFiltered    atomic.Uint64
+	plannedIncomplete  atomic.Uint64
+	plannedLockNanos   atomic.Uint64
+	plannedLockMax     atomic.Uint64
+	outputDrains       atomic.Uint64
+	outputDrainExpired atomic.Uint64
 
 	replayPacing map[netip.AddrPort]*replayPacer
 	registryMu   sync.RWMutex
@@ -482,6 +513,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.OwnerLookupTimeout <= 0 {
 		cfg.OwnerLookupTimeout = DefaultOwnerLookupTimeout
 	}
+	if cfg.OutputDrainTimeout <= 0 {
+		cfg.OutputDrainTimeout = DefaultOutputDrainTimeout
+	}
 	if cfg.BarrierTimeout <= 0 {
 		cfg.BarrierTimeout = DefaultBarrierTimeout
 	}
@@ -582,6 +616,66 @@ func (r *Relay) invalidateCleanup(id string) {
 	}
 }
 
+// MoveSessionAfterExport moves a planned hold's route after its source
+// exported successfully (ADR 0009). The source may have consumed a datagram
+// reordered behind the drain marker before its export fence; the echo of
+// that input follows the first acknowledgement on the worker leg. A second
+// drain marker, acknowledged by the same read loop after the fence, makes
+// the relay read and forward that output before the route moves, so the old
+// owner's legitimate output is never dropped as unrouted. A missing
+// acknowledgement waits at most OutputDrainTimeout, then moves as before.
+// Without such a hold it is MoveSessionAtEpoch.
+func (r *Relay) MoveSessionAfterExport(sessionID string, from, to netip.AddrPort, epoch uint64) error {
+	r.drainExportedOutput(sessionID, unmap(from), unmap(to))
+	return r.MoveSessionAtEpoch(sessionID, from, to, epoch)
+}
+
+func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort) {
+	var nonce [8]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return
+	}
+	r.forwardMu.Lock()
+	h := r.holds[id]
+	if h == nil || h.replay || !h.acknowledged || !from.IsValid() || h.source != from || from == to || h.drained != nil || !r.registered(from) {
+		r.forwardMu.Unlock()
+		return
+	}
+	h.drainNonce = binary.BigEndian.Uint64(nonce[:])
+	drained := make(chan struct{})
+	h.drained = drained
+	_, err := r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.drainNonce, false), from)
+	r.forwardMu.Unlock()
+	if err != nil {
+		return
+	}
+	timer := time.NewTimer(r.cfg.OutputDrainTimeout)
+	defer timer.Stop()
+	resend := time.NewTicker(max(r.cfg.OutputDrainTimeout/4, time.Millisecond))
+	defer resend.Stop()
+	for {
+		select {
+		case <-drained:
+			r.outputDrains.Add(1)
+			return
+		case <-resend.C:
+			// A lost marker or acknowledgement is resent with the same nonce.
+			r.forwardMu.Lock()
+			if r.holds[id] == h && h.drained == drained {
+				_, _ = r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.drainNonce, false), from)
+			}
+			r.forwardMu.Unlock()
+		case <-timer.C:
+			r.outputDrainExpired.Add(1)
+			return
+		case <-h.released:
+			return
+		case <-r.ctx.Done():
+			return
+		}
+	}
+}
+
 // MoveSessionAtEpoch carries the transferred owner lease epoch. It distinguishes
 // a fresh receiver at a reused address from idempotent route confirmation.
 // Epoch zero keeps compatibility with callers that only identify route changes.
@@ -658,6 +752,9 @@ func (r *Relay) Stats() Stats {
 		BufferedSessions: bufferStats.BufferedSessions, BufferedPackets: bufferStats.BufferedPackets, BufferedBytes: bufferStats.BufferedBytes,
 		BufferDrops: bufferStats.BufferDrops, BufferExpired: bufferStats.BufferExpired, BufferUntracked: bufferStats.BufferUntracked,
 		ReplayPackets: r.replayPackets.Load(), ReplayFiltered: r.replayFiltered.Load(), ReplayDrops: r.replayDrops.Load(), ReplaySendFailures: r.replaySendFailures.Load(), ReplayExpiries: r.replayExpiries.Load(), Replays: r.replays.Load(),
+		PlannedReleases: r.plannedReleases.Load(), PlannedRecovered: r.plannedRecovered.Load(), PlannedFiltered: r.plannedFiltered.Load(), PlannedIncomplete: r.plannedIncomplete.Load(),
+		PlannedReleaseLockTime: time.Duration(r.plannedLockNanos.Load()), PlannedReleaseLockMax: time.Duration(r.plannedLockMax.Load()), //nolint:gosec // nanoseconds
+		OutputDrains: r.outputDrains.Load(), OutputDrainTimeouts: r.outputDrainExpired.Load(),
 		SelfFences: r.selfFences.Load(), Workers: workers,
 		RoutesRestored: r.routesRestored.Load(), RoutesRestoreSkipped: r.routesRestoreSkipped.Load(), RoutesRestoreFailed: r.routesRestoreFailed.Load(), RouteWrites: r.routeWritesDone.Load(), RouteWritesDropped: r.routeWritesDropped.Load(), RouteWritesFailed: r.routeWritesFailed.Load(),
 		BarrierTimeouts: r.barrierTimeouts.Load(),

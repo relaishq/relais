@@ -6,6 +6,7 @@ import (
 	"maps"
 
 	"github.com/relais/pkg/agent"
+	"github.com/relais/pkg/relay"
 )
 
 // SnapshotInboundIndexes reads the exact checkpoint's CALLER inbound SRTP
@@ -21,6 +22,24 @@ func SnapshotInboundIndexes(state []byte) (map[uint32]uint64, error) {
 	inbound := make(map[uint32]uint64, len(snap.State.SRTP.Inbound))
 	maps.Copy(inbound, snap.State.SRTP.Inbound)
 	return inbound, nil
+}
+
+// SnapshotConsumedInput reads a final planned export's consumed caller input:
+// each SSRC's high water mark and, when the exporting worker recorded one,
+// its exact 64-index receive window (ADR 0009). The relay replays retained
+// input outside this set to the owner that resumes from these exact bytes.
+// An export without a window is inexact: only input above High is unconsumed.
+func SnapshotConsumedInput(state []byte) (map[uint32]relay.ConsumedInput, error) {
+	snap, err := decodeSnapshot(state)
+	if err != nil {
+		return nil, err
+	}
+	input := make(map[uint32]relay.ConsumedInput, len(snap.State.SRTP.Inbound))
+	for ssrc, high := range snap.State.SRTP.Inbound {
+		window, exact := snap.State.SRTP.Received[ssrc]
+		input[ssrc] = relay.ConsumedInput{High: high, Window: window, Exact: exact}
+	}
+	return input, nil
 }
 
 // SnapshotReplayIndexes reads the caller floors used for relay replay.

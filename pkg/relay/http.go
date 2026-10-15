@@ -26,8 +26,23 @@ type RouteRequest struct {
 type WorkerRequest struct {
 	Address netip.AddrPort `json:"address"`
 }
+
+// ReleaseReply reports a hold release. Packets counts held arrivals. A
+// release after an exact export also reports Recovered retained input the
+// export had not consumed, Filtered held media it had, whether the ring
+// could cover the receive window, and how long the release held forwardMu.
 type ReleaseReply struct {
-	Packets int `json:"packets"`
+	Packets   int           `json:"packets"`
+	Recovered int           `json:"recovered,omitempty"`
+	Filtered  int           `json:"filtered,omitempty"`
+	Complete  bool          `json:"complete,omitempty"`
+	LockHeld  time.Duration `json:"lock_held_ns,omitempty"`
+}
+
+// ExportReleaseRequest releases a planned hold after an exact export.
+type ExportReleaseRequest struct {
+	To    netip.AddrPort           `json:"to"`
+	Input map[uint32]ConsumedInput `json:"input"`
 }
 type ReplayRequest struct {
 	From    netip.AddrPort    `json:"from"`
@@ -146,6 +161,37 @@ func (r *Relay) PrivateHandler() http.Handler {
 			return
 		}
 		privateapi.Write(w, ReleaseReply{Packets: count})
+	})
+	mux.HandleFunc("POST /sessions/{id}/move-after-export", func(w http.ResponseWriter, req *http.Request) {
+		var body RouteRequest
+		if !privateapi.Read(w, req, &body) {
+			return
+		}
+		if !body.From.IsValid() {
+			http.Error(w, "from is required", http.StatusBadRequest)
+			return
+		}
+		if err := r.MoveSessionAfterExport(req.PathValue("id"), body.From, body.To, body.Epoch); err != nil {
+			privateapi.Error(w, err, RemoteErrors)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /sessions/{id}/release-after-export", func(w http.ResponseWriter, req *http.Request) {
+		var body ExportReleaseRequest
+		if !privateapi.Read(w, req, &body) {
+			return
+		}
+		if !body.To.IsValid() {
+			http.Error(w, "to is required", http.StatusBadRequest)
+			return
+		}
+		reply, err := r.ReleaseAfterExport(req.PathValue("id"), body.To, body.Input)
+		if err != nil {
+			privateapi.Error(w, err, RemoteErrors)
+			return
+		}
+		privateapi.Write(w, reply)
 	})
 	mux.HandleFunc("DELETE /sessions/{id}", func(w http.ResponseWriter, req *http.Request) {
 		r.ForgetSession(req.PathValue("id"))

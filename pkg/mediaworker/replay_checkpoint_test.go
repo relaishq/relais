@@ -51,7 +51,7 @@ func TestCheckpointRelayReplayMeasuresSourceTimeThroughEcho(t *testing.T) {
 			}
 			elapsed := time.Since(started)
 			require.Less(t, elapsed, 2*time.Second, "prove compressed arrival, not normal source pacing")
-			require.Zero(t, sess.decryptFailures.Load())
+			require.Zero(t, sess.decryptFailures.Load()+sess.replayRejections.Load())
 			packets := sess.state.Audio.Packets
 			if kind == "video" {
 				packets = sess.state.Video.Packets

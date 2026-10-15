@@ -294,6 +294,9 @@ func TestSoakIndependentWorkerFailureAndCallerLifetime(t *testing.T) {
 		{"worker decryption", func(r *loadgen.RunReport) {
 			r.Telemetry.Processes = append(r.Telemetry.Processes, capacity.Process{Name: "worker-0", Last: map[string]float64{"relais_worker_decryption_failures_total": 1}})
 		}},
+		{"worker replay rejection", func(r *loadgen.RunReport) {
+			r.Telemetry.Processes = append(r.Telemetry.Processes, capacity.Process{Name: "worker-0", Last: map[string]float64{"relais_worker_replay_rejections_total": 1}})
+		}},
 		{"worker overload", func(r *loadgen.RunReport) {
 			r.Telemetry.Processes = append(r.Telemetry.Processes, capacity.Process{Name: "worker-0", Peaks: map[string]float64{"relais_worker_active_sessions": 9}})
 		}},

@@ -482,6 +482,12 @@ type HandoverResult struct {
 	// socket held them and delivered them to the new owner, in order.
 	HeldPackets int
 
+	// RecoveredPackets counts retained caller media the final export had not
+	// consumed, sent by the relay on release (ADR 0009). ReleaseLockHeld is
+	// how long that release held the relay's forwarding lock.
+	RecoveredPackets int
+	ReleaseLockHeld  time.Duration
+
 	// HoldExpired warns that a relay hold auto-released before coordination
 	// finished. It is counted in relay HoldTimeouts and does not turn a
 	// completed resume into a failed move. Shared-socket moves leave it false.

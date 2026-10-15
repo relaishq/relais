@@ -117,10 +117,11 @@ func TestEarlyPacketsRetainOrderAndCountOverflow(t *testing.T) {
 			got := slices.Clone(observed)
 			s.mu.Unlock()
 			require.Equal(t, want, got)
-			require.Zero(t, s.decryptFailures.Load())
+			require.Zero(t, s.decryptFailures.Load()+s.replayRejections.Load())
 			if tc.rtcp {
 				s.handlePacket(control)
-				require.EqualValues(t, 1, s.decryptFailures.Load(), "early SRTCP was processed: replay is rejected")
+				require.Zero(t, s.decryptFailures.Load())
+				require.EqualValues(t, 1, s.replayRejections.Load(), "early SRTCP was processed: replay is rejected")
 				target := newTestWorker(t)
 				workerprobe.Register(target.LocalAddr(), nil)
 				t.Cleanup(func() { workerprobe.Remove(target.LocalAddr()) })

@@ -514,7 +514,10 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		}
 		// Gate and old-leg fencing precede snapshot I/O. Store errors must not
 		// leave the previous owner able to send after its lease was transferred.
-		if tenureRelay, ok := r.(TenureRelay); ok {
+		if pending.planned && !pending.crashMargins {
+			// The retained export succeeded: forward its pre-fence output first.
+			err = moveAfterExport(r, c.id, pending.routed, target.addr, transferred.Epoch)
+		} else if tenureRelay, ok := r.(TenureRelay); ok {
 			err = tenureRelay.MoveSessionAtEpoch(c.id, pending.routed, target.addr, transferred.Epoch)
 		} else {
 			err = r.MoveSession(c.id, pending.routed, target.addr)
@@ -690,8 +693,13 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 				pending.held = false
 			}
 			if pending.replayPlan == nil && (pending.planned || pending.held) {
-				held, releaseErr := r.ReleaseSession(c.id, target.addr)
-				res.Result.HeldPackets = held
+				// A margin-zero resume of the retained export is exact (ADR 0009).
+				// Crash margins resume from a checkpoint that may predate it.
+				var exported map[uint32]relay.ConsumedInput
+				if pending.planned && !pending.crashMargins && margin == 0 {
+					exported, _ = mediaworker.SnapshotConsumedInput(state)
+				}
+				releaseErr := releaseHold(r, c.id, target.addr, exported, &res.Result)
 				res.Result.HoldExpired = errors.Is(releaseErr, relay.ErrHoldExpired)
 				if res.Result.HoldExpired && confirmPlannedTarget && canRecoverReplay {
 					// Idempotent resume does not re-request video recovery. Account
