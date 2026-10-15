@@ -96,6 +96,44 @@ func (u *reorderUnits) send(t *testing.T, kind string) func() bool {
 	}
 }
 
+// settleLeg waits until no caller RTP has crossed the leg for quiet, so a
+// frame still in flight from earlier media cannot be mistaken for the unit
+// a test is about to send.
+func settleLeg(t *testing.T, leg *privateLeg, quiet time.Duration) {
+	t.Helper()
+	var last atomic.Int64
+	last.Store(time.Now().UnixNano())
+	leg.setIntercept(func(datagram []byte) bool {
+		if _, payload, err := relay.ParseHeader(datagram); err == nil && len(payload) >= 12 && payload[0]>>6 == 2 {
+			last.Store(time.Now().UnixNano())
+		}
+		return false
+	})
+	require.Eventually(t, func() bool { return time.Since(time.Unix(0, last.Load())) >= quiet }, 5*time.Second, time.Millisecond)
+	leg.setIntercept(nil)
+}
+
+// sentSequence records the RTP sequence of each payload type's latest packet
+// on the caller's own socket, before any network handling.
+func sentSequence(call *Call) func(payloadType byte) uint16 {
+	var mu sync.Mutex
+	latest := make(map[byte]uint16)
+	call.socket.observer.mu.Lock()
+	call.socket.observer.inspectSend = func(raw []byte) {
+		if len(raw) >= 12 && raw[0]>>6 == 2 && (raw[1] < 192 || raw[1] > 223) {
+			mu.Lock()
+			latest[raw[1]&0x7f] = uint16(raw[2])<<8 | uint16(raw[3])
+			mu.Unlock()
+		}
+	}
+	call.socket.observer.mu.Unlock()
+	return func(payloadType byte) uint16 {
+		mu.Lock()
+		defer mu.Unlock()
+		return latest[payloadType]
+	}
+}
+
 // captureNext arms a leg to take the next caller RTP datagram of kind.
 // Ordered capture only observes it and lets it pass.
 func captureNext(leg *privateLeg, kind string, take bool) <-chan []byte {
@@ -204,9 +242,16 @@ func testPlannedMovePrivateInputOrder(t *testing.T, tc plannedReorderCase) {
 	call, err := sys.h.Dial(ctx, CallOptions{Video: true, Worker: 0})
 	require.NoError(t, err)
 	require.NoError(t, call.SendMedia(ctx, 300*time.Millisecond))
+	settleLeg(t, sys.legs[0], 100*time.Millisecond)
 	units := newReorderUnits(t, call)
+	sent := sentSequence(call)
 	captured := captureNext(sys.legs[0], tc.kind, tc.reorder)
+	payloadType := byte(opusPayloadType)
+	if tc.kind == kindVideo {
+		payloadType = vp8PayloadType
+	}
 	returned := units.send(t, tc.kind)
+	unitSeq := sent(payloadType)
 	var late []byte
 	select {
 	case late = <-captured:
@@ -215,6 +260,12 @@ func testPlannedMovePrivateInputOrder(t *testing.T, tc plannedReorderCase) {
 	}
 	sys.legs[0].setIntercept(nil)
 	header := capturedHeader(t, late)
+	// The proxy delayed the unit under test: the audio packet, or the first
+	// packet of the video frame.
+	require.GreaterOrEqual(t, int16(unitSeq-header.SequenceNumber), int16(0)) //nolint:gosec // serial distance
+	if tc.kind == kindAudio {
+		require.Equal(t, unitSeq, header.SequenceNumber)
+	}
 	for range tc.overtake {
 		units.send(t, tc.kind)
 	}
@@ -361,6 +412,7 @@ func TestPlannedMoveAgentFlushRecoversLateAudio(t *testing.T) {
 	call, err := sys.h.Dial(ctx, CallOptions{Worker: 0})
 	require.NoError(t, err)
 	require.NoError(t, call.SendMedia(ctx, 300*time.Millisecond))
+	settleLeg(t, sys.legs[0], 100*time.Millisecond)
 	units := newReorderUnits(t, call)
 	block.Store(true)
 	units.send(t, kindAudio) // enters the agent and holds its callback open
@@ -465,6 +517,7 @@ func TestPlannedMoveRollbackRecoversLateInput(t *testing.T) {
 			require.NoError(t, err)
 			id := call.SessionID()
 			require.NoError(t, call.SendMedia(ctx, 300*time.Millisecond))
+			settleLeg(t, sys.legs[0], 100*time.Millisecond)
 			units := newReorderUnits(t, call)
 			captured := captureNext(sys.legs[0], kindAudio, true)
 			returned := units.send(t, kindAudio)
