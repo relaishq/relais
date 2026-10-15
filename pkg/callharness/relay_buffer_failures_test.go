@@ -216,34 +216,11 @@ func observeBufferCall(call *Call) *bufferCallerObservation {
 func waitBufferTakeovers(t *testing.T, ctx context.Context, h *Harness, n int) controlplane.Status {
 	t.Helper()
 	var status controlplane.Status
-	var statusErr error
-	start := time.Now()
-	deadline := start.Add(3 * time.Second)
-	for {
-		time.Sleep(5 * time.Millisecond)
-		status, statusErr = h.Status(ctx)
-		if statusErr == nil && len(status.Takeovers) == n {
-			return status
-		}
-		if !time.Now().Before(deadline) {
-			break
-		}
-	}
-	// #114 diagnostics: record the window's last view, then keep polling to
-	// show whether the takeover is merely late, lost or never completes.
-	rec := diag114Record{Event: "takeover-timeout", Want: n, WaitStart: start, Status: &status}
-	if statusErr != nil {
-		rec.StatusError = statusErr.Error()
-	}
-	diag114Write(t, rec)
-	lateAt, late, lateErr := diag114Late(h, n, 8*time.Second)
-	rec = diag114Record{Event: "takeover-late", Want: n, WaitStart: start, LateAt: lateAt, LateCount: len(late.Takeovers), Status: &late}
-	if lateErr != nil {
-		rec.StatusError = lateErr.Error()
-	}
-	diag114Write(t, rec)
-	t.Fatalf("DIAG114 takeover window: want %d takeovers within 3s, got %d (err %v); late_at=%v late_count=%d",
-		n, len(status.Takeovers), statusErr, lateAt.Sub(start), len(late.Takeovers))
+	require.Eventually(t, func() bool {
+		var err error
+		status, err = h.Status(ctx)
+		return err == nil && len(status.Takeovers) == n
+	}, 3*time.Second, 5*time.Millisecond)
 	return status
 }
 
@@ -396,13 +373,12 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 	case "retried-replay":
 		reply = &bufferResumeReplyFault{path: "/replay"}
 		cfg.relayTransport = reply
-	case "second-crash-during", "second-crash-after", "second-crash-canceled":
-		// #114 experiment: DIAG114_AFTER_DEFAULT_PACING=1 keeps the relay's
-		// default replay pacing for the after path only.
-		if path != "second-crash-after" || os.Getenv("DIAG114_AFTER_DEFAULT_PACING") != "1" {
-			cfg.buffer.ReplayBatchPackets = 1
-			cfg.buffer.ReplayInterval = 5 * time.Millisecond
-		}
+	case "second-crash-during", "second-crash-canceled":
+		// Slow replay keeps the second kill inside the drain. The after path
+		// keeps default pacing: B's only checkpoint is its resume copy, and a
+		// slow drain under CPU load ages it past the envelope (#114).
+		cfg.buffer.ReplayBatchPackets = 1
+		cfg.buffer.ReplayInterval = 5 * time.Millisecond
 	case "frame-cache-complete":
 		cfg.cache = true
 	case "incomplete-ring-cache-on":
@@ -440,15 +416,11 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 			})
 		}
 	}
-	// #114 experiment: DIAG114_REPLAY_EXTRA lengthens B's tenure after the
-	// first replay, as a starved replay would, before the second kill.
-	replayExtra, _ := time.ParseDuration(os.Getenv("DIAG114_REPLAY_EXTRA"))
 	if path == "second-crash-after" {
 		cfg.relayHandler = func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				next.ServeHTTP(w, r)
 				if strings.HasSuffix(r.URL.Path, "/replay") {
-					time.Sleep(replayExtra)
 					replayOnce.Do(func() { close(replayDone) })
 					<-replayDoneAck
 				}
@@ -456,14 +428,6 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		}
 	}
 	sys := startBufferFailureSystem(t, store, cfg)
-	var dm diag114Marks
-	var diagStatus *controlplane.Status
-	if strings.HasPrefix(path, "second-crash") {
-		t.Cleanup(func() {
-			stats := sys.r.Stats()
-			diag114Write(t, diag114Record{Event: "outcome", Failed: t.Failed(), Marks: dm.snapshot(), Status: diagStatus, Relay: &stats})
-		})
-	}
 	if adoption != nil {
 		adoption.target = sys.workers[1].LocalAddr()
 		adoption.armed.Store(true)
@@ -532,7 +496,6 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		}
 	}
 	killed := time.Now()
-	dm.mark("kill_a", killed)
 	sys.h.RecordProcessKill("0", killed)
 	require.NoError(t, workerprobe.Kill(sys.workers[0].LocalAddr()))
 	expected := 1
@@ -543,26 +506,23 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 		}
 		select {
 		case <-boundary:
-			dm.mark("boundary", time.Now())
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		}
 		if path == "second-crash-during" || path == "second-crash-canceled" {
 			require.Equal(t, 1, sys.r.Stats().Holds, "second kill occurs while replay still gates live input")
 		}
-		if path == "second-crash-after" && os.Getenv("DIAG114_AFTER_DEFAULT_PACING") == "1" {
-			// #114 proposed fix: a fast replay can end before B decrypts any
-			// of it. Make the precondition a sync point instead of a race.
+		if path == "second-crash-after" {
+			// A fast drain can return before B decrypts any replayed input.
 			require.Eventually(t, func() bool {
 				processedMu.Lock()
 				defer processedMu.Unlock()
 				return len(processedB) > 0
-			}, 2*time.Second, time.Millisecond, "B decrypts uncheckpointed input before the kill")
+			}, 2*time.Second, time.Millisecond, "B decrypts uncheckpointed input before the second kill")
 		}
 		failures, err := sys.workers[1].SessionDecryptFailures(call.SessionID())
 		require.NoError(t, err)
 		require.Zero(t, failures)
-		dm.mark("kill_b", time.Now())
 		sys.h.RecordProcessKill("1", time.Now())
 		require.NoError(t, workerprobe.Kill(sys.workers[1].LocalAddr()))
 		if path == "second-crash-after" || path == "second-crash-canceled" {
@@ -573,10 +533,7 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 			expected = 1
 		}
 	}
-	dm.mark("wait_start", time.Now())
 	status := waitBufferTakeovers(t, ctx, sys.h, expected)
-	dm.mark("wait_done", time.Now())
-	diagStatus = &status
 	lostCall := path == "failed-adoption-loss"
 	require.Equal(t, lostCall, status.Takeovers[len(status.Takeovers)-1].Lost)
 	require.EqualValues(t, map[bool]int{false: 0, true: 1}[lostCall], status.LostCount)

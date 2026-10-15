@@ -10,19 +10,17 @@ permissions:
 
 jobs:
   contention:
-    name: ${{ matrix.runner }} c=${{ matrix.copies }} b=${{ matrix.burners }} pacing=${{ matrix.pacing }} ${{ matrix.filter && 'all-paths' || '' }}
+    name: ${{ matrix.runner }} c=${{ matrix.copies }} b=${{ matrix.burners }} pacing=${{ matrix.pacing }} ${{ matrix.filter }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Run 3 (38673191262) reproduced natural checkpoint_unsafe losses
-          # at 32 burners. Run 4 verifies the full proposed test fix under
-          # the heaviest loads: default pacing plus a B-decrypt sync point.
-          - { runner: ubuntu-latest, copies: 6, count: 10, burners: 16, pacing: default }
-          - { runner: ubuntu-latest, copies: 6, count: 10, burners: 32, pacing: default }
-          - { runner: ubuntu-latest, copies: 6, count: 10, burners: 48, pacing: default }
-          - { runner: ubuntu-24.04-arm, copies: 6, count: 10, burners: 32, pacing: default }
-          - { runner: ubuntu-24.04-arm, copies: 6, count: 10, burners: 48, pacing: default }
+          # Starvation check of the exact fix commit cb0d08e (no env switches).
+          - { runner: ubuntu-latest, copies: 6, count: 10, burners: 32, pacing: fix }
+          - { runner: ubuntu-24.04-arm, copies: 6, count: 10, burners: 32, pacing: fix }
+          # Report only: do the slow-paced paths share the exposure?
+          - { runner: ubuntu-latest, copies: 6, count: 10, burners: 16, pacing: fix, filter: '^TestRelayBufferFailurePaths$/^memory$/^second-crash-during$' }
+          - { runner: ubuntu-latest, copies: 6, count: 10, burners: 16, pacing: fix, filter: '^TestRelayBufferFailurePaths$/^memory$/^second-crash-canceled$' }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
@@ -76,15 +74,14 @@ jobs:
           echo "all subtests:" | tee -a summary.txt
           cat copy-*.log | grep -E -- '--- (PASS|FAIL): TestRelayBufferFailurePaths/memory/' | awk '{print $2, $3}' | sort | uniq -c | tee -a summary.txt || true
           grep -h -A3 'Error Trace' copy-*.log | grep -o 'relay_buffer_failures_test.go:[0-9]*' | sort | uniq -c | tee -a summary.txt || true
-          grep -h 'DIAG114 takeover window' copy-*.log | tee -a summary.txt || true
-          python3 -I "$GITHUB_WORKSPACE/.github/diag114_summary.py" "$out/diag" second-crash-after | tee -a summary.txt || true
+          grep -h -A8 'Error Trace' copy-*.log | grep -E 'Error:|Messages:|expected|actual' | sed -E 's/^[[:space:]]+//' | sort | uniq -c | tee -a summary.txt || true
           cat summary.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: diag114-${{ matrix.runner }}-c${{ matrix.copies }}-b${{ matrix.burners }}-${{ matrix.pacing }}${{ matrix.filter && '-allpaths' || '' }}
+          name: diag114-${{ matrix.runner }}-c${{ matrix.copies }}-b${{ matrix.burners }}-${{ matrix.pacing }}${{ strategy.job-index }}
           path: ${{ runner.temp }}/out
           retention-days: 7
 
