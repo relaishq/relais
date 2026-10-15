@@ -5,9 +5,9 @@ import (
 	"net/netip"
 	"sync"
 
-	"github.com/relais/internal/relayleg"
-	"github.com/relais/internal/workerprobe"
-	"github.com/relais/pkg/relay"
+	"github.com/relaishq/relais/internal/relayleg"
+	"github.com/relaishq/relais/internal/workerprobe"
+	"github.com/relaishq/relais/pkg/relay"
 )
 
 // relayConn is the worker's end of the relay leg: the worker's private UDP

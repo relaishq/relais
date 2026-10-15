@@ -15,7 +15,7 @@ COMMIT ?= $(shell git rev-parse --short HEAD)
 BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 
 # Linker flags (populate pkg/buildinfo)
-LDFLAGS=-ldflags "-X github.com/relais/pkg/buildinfo.Version=$(VERSION) -X github.com/relais/pkg/buildinfo.Commit=$(COMMIT) -X github.com/relais/pkg/buildinfo.Date=$(BUILD_TIME)"
+LDFLAGS=-ldflags "-X github.com/relaishq/relais/pkg/buildinfo.Version=$(VERSION) -X github.com/relaishq/relais/pkg/buildinfo.Commit=$(COMMIT) -X github.com/relaishq/relais/pkg/buildinfo.Date=$(BUILD_TIME)"
 
 .PHONY: all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo demo-cluster demo-agent crash-run help
 
@@ -102,7 +102,7 @@ test-cluster: ## Run Redis Cluster integration tests (requires RELAIS_TEST_REDIS
 
 # Cover all packages except the call harness, which has a separate CI job.
 # Include the plugin and pipeline suites previously covered by make test.
-UNIT_PKGS=$(shell $(GOCMD) list ./pkg/... ./internal/... ./cmd/... ./plugins/... ./test/... | awk '$$0 != "github.com/relais/pkg/callharness"')
+UNIT_PKGS=$(shell $(GOCMD) list ./pkg/... ./internal/... ./cmd/... ./plugins/... ./test/... | awk '$$0 != "github.com/relaishq/relais/pkg/callharness"')
 
 test-unit: ## Run all non-harness tests with the race detector; set RELAIS_TEST_REDIS_ADDR for Redis suites
 	$(GOTEST) -race -v -count=1 -timeout 10m $(UNIT_PKGS)

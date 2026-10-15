@@ -10,7 +10,7 @@ import (
 
 	"github.com/pion/rtcp"
 	"github.com/pion/srtp/v3"
-	"github.com/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/stretchr/testify/require"
 )
 

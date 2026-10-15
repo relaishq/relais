@@ -8,9 +8,9 @@ import (
 
 	"github.com/pion/logging"
 
-	"github.com/relais/pkg/mediaworker"
-	"github.com/relais/pkg/relay"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // mediaSystem is the demo's media side: by default two workers sharing one

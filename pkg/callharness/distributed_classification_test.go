@@ -2,7 +2,7 @@ package callharness
 
 import (
 	"fmt"
-	"github.com/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/stretchr/testify/require"
 	"slices"
 	"strings"

@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/netip"
 
-	"github.com/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/relay"
 )
 
 // RegisterRelayWorkers restores a restarted relay's private-leg allowlist.

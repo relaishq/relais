@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/relais/internal/movediag"
+	"github.com/relaishq/relais/internal/movediag"
 	"github.com/stretchr/testify/require"
 )
 

@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/relais/internal/loadgen"
-	"github.com/relais/internal/processrun"
-	"github.com/relais/pkg/callharness"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 

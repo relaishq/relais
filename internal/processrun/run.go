@@ -16,12 +16,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/relais/internal/movediag"
-	"github.com/relais/internal/redisendpoint"
-	"github.com/relais/pkg/framecache"
-	"github.com/relais/pkg/metrics"
-	"github.com/relais/pkg/sessionstore"
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/internal/movediag"
+	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/metrics"
+	"github.com/relaishq/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/storage"
 )
 
 // StoreConfig requires an explicit Redis address. Snapshot users also need a key.

@@ -5,9 +5,9 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/pkg/metrics"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/pkg/metrics"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 var RemoteErrors = map[string]error{

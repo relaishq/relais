@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/redisendpoint"
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/pkg/storage"
 )
 
 // Setup uses the real epoch-fenced writer; only the eager restore is timed.

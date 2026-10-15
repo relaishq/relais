@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/loadgen"
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/stretchr/testify/require"
 )
 

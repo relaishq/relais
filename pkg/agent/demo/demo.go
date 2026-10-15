@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/relais/pkg/agent"
+	"github.com/relaishq/relais/pkg/agent"
 )
 
 const (

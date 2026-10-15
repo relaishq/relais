@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"errors"
-	"github.com/relais/internal/processidentity"
-	"github.com/relais/internal/relaylease"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/processidentity"
+	"github.com/relaishq/relais/internal/relaylease"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"log"
 )
 

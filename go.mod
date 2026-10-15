@@ -1,4 +1,4 @@
-module github.com/relais
+module github.com/relaishq/relais
 
 go 1.26.0
 

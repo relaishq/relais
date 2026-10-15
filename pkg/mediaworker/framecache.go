@@ -7,7 +7,7 @@ import (
 
 	"github.com/pion/rtp"
 	"github.com/pion/rtp/codecs"
-	"github.com/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/framecache"
 )
 
 // frameCollector accepts only complete VP8 frames with a partition-zero

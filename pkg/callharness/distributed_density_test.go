@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/stretchr/testify/require"
 )
 

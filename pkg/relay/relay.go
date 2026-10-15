@@ -75,10 +75,10 @@ import (
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
 
-	"github.com/relais/internal/relayleg"
-	"github.com/relais/internal/socketbind"
-	"github.com/relais/internal/udpbuffer"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/relayleg"
+	"github.com/relaishq/relais/internal/socketbind"
+	"github.com/relaishq/relais/internal/udpbuffer"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // Defaults for Config.

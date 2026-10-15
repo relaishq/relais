@@ -6,7 +6,7 @@ import (
 
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
-	"github.com/relais/internal/workerprobe"
+	"github.com/relaishq/relais/internal/workerprobe"
 )
 
 // captureZombie is reachable only through workerprobe.Enable and its

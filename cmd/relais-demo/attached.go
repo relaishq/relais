@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/controlplane"
 )
 
 func validateAttachConfig(cfg config) error {

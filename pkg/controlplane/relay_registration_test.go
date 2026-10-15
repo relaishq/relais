@@ -6,7 +6,7 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/relay"
 	"github.com/stretchr/testify/require"
 )
 

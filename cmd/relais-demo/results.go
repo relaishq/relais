@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/privateapi"
 )
 
 const maxResultsBody = 8 << 20

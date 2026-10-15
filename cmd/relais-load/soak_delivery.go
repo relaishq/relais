@@ -5,8 +5,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/relais/internal/loadgen"
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 // soakDeliverySettle matches the caller yardstick's unexported 500 ms content

@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/relais/internal/capacity"
-	"github.com/relais/internal/clusterprocess"
-	"github.com/relais/internal/loadgen"
-	"github.com/relais/internal/processrss"
-	"github.com/relais/internal/processrun"
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/internal/capacity"
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/internal/processrss"
+	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/stretchr/testify/require"
 )
 

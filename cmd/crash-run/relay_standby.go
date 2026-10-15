@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/relais/internal/clusterprocess"
-	"github.com/relais/pkg/callharness"
-	"github.com/relais/pkg/controlplane"
-	"github.com/relais/pkg/relay"
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/relay"
 )
 
 // relayStandbyTrial leaves callers, workers and control alive while an already

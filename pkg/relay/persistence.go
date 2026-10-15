@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/pion/stun/v4"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // routeWrites coalesces by session and caller. A single off-path writer orders

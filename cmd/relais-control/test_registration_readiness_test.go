@@ -13,13 +13,13 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/internal/relayleg"
-	"github.com/relais/pkg/controlplane"
-	"github.com/relais/pkg/mediaworker"
-	"github.com/relais/pkg/metrics"
-	"github.com/relais/pkg/relay"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/relayleg"
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/metrics"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 

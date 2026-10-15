@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/controlplane"
 )
 
 // OperationIdentity is supplied by the operator feed, on arming and on the

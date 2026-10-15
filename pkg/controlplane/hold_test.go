@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/relayleg"
-	"github.com/relais/pkg/relay"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/relayleg"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 

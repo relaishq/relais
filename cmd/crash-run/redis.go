@@ -10,8 +10,8 @@ import (
 	"regexp"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/relais/internal/nettopology"
-	"github.com/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/nettopology"
+	"github.com/relaishq/relais/internal/processrun"
 )
 
 var redisSecretPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)

@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/relais/internal/movediag"
-	"github.com/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/movediag"
+	"github.com/relaishq/relais/internal/privateapi"
 	"io"
 	"net"
 	"net/http"

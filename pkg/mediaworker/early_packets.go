@@ -3,7 +3,7 @@ package mediaworker
 import (
 	"slices"
 
-	"github.com/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/framecache"
 )
 
 const maxEarlyPackets = 64

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/internal/relayleg"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/relayleg"
 	"github.com/stretchr/testify/require"
 )
 

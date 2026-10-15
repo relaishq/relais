@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/socketbind"
+	"github.com/relaishq/relais/internal/socketbind"
 	"github.com/stretchr/testify/require"
 )
 

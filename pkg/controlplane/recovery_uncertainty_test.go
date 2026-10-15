@@ -13,13 +13,13 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
-	"github.com/relais/internal/redisendpoint"
-	"github.com/relais/internal/workerprobe"
-	"github.com/relais/pkg/agent"
-	"github.com/relais/pkg/callharness"
-	"github.com/relais/pkg/mediaworker"
-	"github.com/relais/pkg/sessionstore"
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/workerprobe"
+	"github.com/relaishq/relais/pkg/agent"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
 

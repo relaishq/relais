@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
 

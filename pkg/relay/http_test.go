@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 

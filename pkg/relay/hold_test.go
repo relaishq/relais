@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/relayleg"
+	"github.com/relaishq/relais/internal/relayleg"
 	"github.com/stretchr/testify/require"
 )
 

@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/pkg/callharness"
-	"github.com/relais/pkg/controlplane"
-	"github.com/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/stretchr/testify/require"
 )
 

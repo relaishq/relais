@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 // TestDialRacingCloseFailsCleanly dials several calls while the harness

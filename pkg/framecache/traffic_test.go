@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/prometheus/common/expfmt"
-	"github.com/relais/pkg/metrics"
+	"github.com/relaishq/relais/pkg/metrics"
 	"github.com/stretchr/testify/require"
 )
 

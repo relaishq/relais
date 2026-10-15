@@ -9,11 +9,11 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/relais/internal/movediag"
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/pkg/mediaworker"
-	"github.com/relais/pkg/relay"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/movediag"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // RemoteWorker implements Worker with bounded HTTP requests. No mutation is

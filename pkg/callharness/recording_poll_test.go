@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/pkg/controlplane"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 

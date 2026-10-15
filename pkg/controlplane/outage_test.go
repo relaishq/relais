@@ -2,7 +2,7 @@ package controlplane
 
 import (
 	"context"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 	"sync"
 	"testing"

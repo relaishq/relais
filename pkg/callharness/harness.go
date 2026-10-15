@@ -32,11 +32,11 @@ import (
 	"time"
 
 	"github.com/pion/logging"
-	"github.com/relais/internal/workerprobe"
-	"github.com/relais/pkg/controlplane"
-	"github.com/relais/pkg/framecache"
-	"github.com/relais/pkg/mediaworker"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/workerprobe"
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // ExternalTopology connects the real caller to an already running system.

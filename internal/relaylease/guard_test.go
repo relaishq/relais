@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/processidentity"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/processidentity"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 

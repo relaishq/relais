@@ -5,8 +5,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/relais/pkg/plugins"
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/pkg/plugins"
+	"github.com/relaishq/relais/pkg/storage"
 )
 
 // CameraPlugin implements IngressPlugin for camera input.

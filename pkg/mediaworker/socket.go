@@ -13,8 +13,8 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
-	"github.com/relais/internal/udpbuffer"
-	"github.com/relais/pkg/agent"
+	"github.com/relaishq/relais/internal/udpbuffer"
+	"github.com/relaishq/relais/pkg/agent"
 )
 
 // packetConn is a worker's media transport: its own UDP socket, or a port on

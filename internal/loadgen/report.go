@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/relais/internal/capacity"
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/internal/capacity"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 // Message is the child JSON-lines protocol. Call is the existing caller-side

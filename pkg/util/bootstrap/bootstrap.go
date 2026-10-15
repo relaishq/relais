@@ -3,10 +3,10 @@ package bootstrap
 import (
 	"context"
 
-	"github.com/relais/pkg/buildinfo"
-	"github.com/relais/pkg/config"
-	"github.com/relais/pkg/logging"
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/pkg/buildinfo"
+	"github.com/relaishq/relais/pkg/config"
+	"github.com/relaishq/relais/pkg/logging"
+	"github.com/relaishq/relais/pkg/storage"
 )
 
 // Init sets up config, logger, and storage for runner binaries and logs startup info.

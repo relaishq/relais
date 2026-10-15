@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/relais/pkg/metrics"
+	"github.com/relaishq/relais/pkg/metrics"
 )
 
 // RedisStorage implements the Storage interface using Redis as the backend.

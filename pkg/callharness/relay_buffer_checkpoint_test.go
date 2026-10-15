@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/workerprobe"
-	"github.com/relais/pkg/controlplane"
-	"github.com/relais/pkg/relay"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/workerprobe"
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 

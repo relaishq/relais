@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/relais/pkg/plugins"
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/pkg/plugins"
+	"github.com/relaishq/relais/pkg/storage"
 )
 
 // Egress reads frames from storage and outputs them via WebRTC.

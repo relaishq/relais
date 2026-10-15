@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/pkg/agent"
-	"github.com/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/pkg/agent"
+	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/stretchr/testify/require"
 )
 

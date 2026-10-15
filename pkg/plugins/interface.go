@@ -6,7 +6,7 @@ package plugins
 import (
 	"context"
 
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/pkg/storage"
 )
 
 // Plugin represents the base interface for all plugin types.

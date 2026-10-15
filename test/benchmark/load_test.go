@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/pkg/storage"
-	"github.com/relais/plugins/ingress/camera"
+	"github.com/relaishq/relais/pkg/storage"
+	"github.com/relaishq/relais/plugins/ingress/camera"
 	"github.com/stretchr/testify/require"
 )
 

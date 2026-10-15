@@ -7,8 +7,8 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/pkg/controlplane"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/pkg/controlplane"
 )
 
 // The context bounds both coordination and waiting; the worker remains live

@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/controlplane"
 )
 
 const maxRequestBytes = 64 << 10

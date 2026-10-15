@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/pion/logging"
-	"github.com/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/mediaworker"
 )
 
 // maxMoveLog bounds the moves the demo remembers per call.

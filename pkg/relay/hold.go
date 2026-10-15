@@ -8,7 +8,7 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/relais/internal/relayleg"
+	"github.com/relaishq/relais/internal/relayleg"
 )
 
 var (

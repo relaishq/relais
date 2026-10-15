@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	"github.com/relais/internal/clusterprocess"
-	"github.com/relais/internal/processidentity"
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/processidentity"
 	"time"
 )
 

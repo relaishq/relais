@@ -10,7 +10,7 @@ import (
 	"runtime/metrics"
 	"testing"
 
-	"github.com/relais/internal/processrss"
+	"github.com/relaishq/relais/internal/processrss"
 )
 
 func TestRuntimeMemoryAccountsForReservedClasses(t *testing.T) {

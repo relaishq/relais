@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/relais/internal/movediag"
-	"github.com/relais/pkg/metrics"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/movediag"
+	"github.com/relaishq/relais/pkg/metrics"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 const MaxBody = 4 << 20

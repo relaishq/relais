@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/controlplane"
 )
 
 // statusPoller coalesces callers' existing one-second polls. Final reads

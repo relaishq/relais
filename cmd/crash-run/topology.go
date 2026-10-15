@@ -6,8 +6,8 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/relais/internal/clusterprocess"
-	"github.com/relais/internal/nettopology"
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/nettopology"
 )
 
 func validateTopologyOptions(topology, profile, redis string) error {

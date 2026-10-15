@@ -2,7 +2,7 @@ package relay
 
 import (
 	"context"
-	"github.com/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/privateapi"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"

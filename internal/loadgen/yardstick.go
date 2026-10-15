@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 // MetricRow retains the existing per-call verdicts for one scheduled event.

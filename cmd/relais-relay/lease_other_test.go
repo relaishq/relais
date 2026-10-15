@@ -6,8 +6,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/relais/internal/processidentity"
-	"github.com/relais/internal/relaylease"
+	"github.com/relaishq/relais/internal/processidentity"
+	"github.com/relaishq/relais/internal/relaylease"
 	"github.com/stretchr/testify/require"
 )
 

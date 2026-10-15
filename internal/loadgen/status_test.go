@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 func TestCancelledCallerPollDoesNotFailAnotherHangup(t *testing.T) {

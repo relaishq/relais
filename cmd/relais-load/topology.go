@@ -15,12 +15,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/relais/internal/capacity"
-	"github.com/relais/internal/clusterprocess"
-	"github.com/relais/internal/loadgen"
-	"github.com/relais/internal/nettopology"
-	"github.com/relais/internal/processrun"
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/internal/capacity"
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/internal/nettopology"
+	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 type workerLaunch struct {

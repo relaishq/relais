@@ -11,8 +11,8 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
-	"github.com/relais/pkg/framecache"
-	"github.com/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/relay"
 	"github.com/stretchr/testify/require"
 )
 

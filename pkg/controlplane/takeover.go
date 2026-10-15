@@ -8,13 +8,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/pkg/agent"
-	"github.com/relais/pkg/framecache"
-	"github.com/relais/pkg/mediaworker"
-	"github.com/relais/pkg/metrics"
-	"github.com/relais/pkg/relay"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/pkg/agent"
+	"github.com/relaishq/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/metrics"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // Config bounds crash detection and recovery. Zero values select defaults.

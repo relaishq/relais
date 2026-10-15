@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/relais/internal/nettopology"
-	"github.com/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/nettopology"
+	"github.com/relaishq/relais/internal/processrun"
 	"github.com/stretchr/testify/require"
 )
 

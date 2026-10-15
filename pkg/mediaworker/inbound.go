@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"maps"
 
-	"github.com/relais/pkg/agent"
-	"github.com/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/agent"
+	"github.com/relaishq/relais/pkg/relay"
 )
 
 // SnapshotInboundIndexes reads the exact checkpoint's CALLER inbound SRTP

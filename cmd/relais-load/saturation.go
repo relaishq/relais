@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/relais/internal/loadgen"
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 // Generator overload rules shared by the soak (#128) and capacity (#133)

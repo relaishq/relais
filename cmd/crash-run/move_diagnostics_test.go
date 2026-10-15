@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/movediag"
-	"github.com/relais/internal/nettopology"
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/internal/movediag"
+	"github.com/relaishq/relais/internal/nettopology"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/stretchr/testify/require"
 )
 

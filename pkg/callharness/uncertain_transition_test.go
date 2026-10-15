@@ -3,8 +3,8 @@ package callharness_test
 import (
 	"context"
 	"errors"
-	"github.com/relais/pkg/callharness"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 	"net/netip"
 	"sync"

@@ -93,10 +93,10 @@ import (
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
 
-	"github.com/relais/internal/udpbuffer"
-	"github.com/relais/internal/workerprobe"
-	"github.com/relais/pkg/framecache"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/udpbuffer"
+	"github.com/relaishq/relais/internal/workerprobe"
+	"github.com/relaishq/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 const (

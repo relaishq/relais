@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 const (

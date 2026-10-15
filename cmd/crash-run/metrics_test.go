@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/pkg/metrics"
+	"github.com/relaishq/relais/pkg/metrics"
 	"github.com/stretchr/testify/require"
 )
 

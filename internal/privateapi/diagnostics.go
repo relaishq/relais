@@ -5,7 +5,7 @@ import (
 	"net/http/httptrace"
 	"sync"
 
-	"github.com/relais/internal/movediag"
+	"github.com/relaishq/relais/internal/movediag"
 )
 
 // Allocate trace state only for an enabled, traced coordination request.

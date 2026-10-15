@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/processrun"
 )
 
 // No wildcard, DNS resolution, or public address can broaden this opt-in.

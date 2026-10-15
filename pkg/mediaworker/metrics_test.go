@@ -8,7 +8,7 @@ import (
 
 	"github.com/pion/srtp/v3"
 	"github.com/prometheus/common/expfmt"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 

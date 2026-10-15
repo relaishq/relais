@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"

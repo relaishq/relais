@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/pion/srtp/v3"
-	"github.com/relais/pkg/relay"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"hash/fnv"
 	"net"
 	"net/netip"
@@ -16,7 +16,7 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/pion/rtp"
-	"github.com/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/framecache"
 	"github.com/stretchr/testify/require"
 )
 

@@ -10,7 +10,7 @@ import (
 
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
-	"github.com/relais/pkg/agent"
+	"github.com/relaishq/relais/pkg/agent"
 	"github.com/stretchr/testify/require"
 )
 

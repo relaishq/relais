@@ -4,8 +4,8 @@ package main
 
 import (
 	"context"
-	"github.com/relais/internal/processidentity"
-	"github.com/relais/internal/relaylease"
+	"github.com/relaishq/relais/internal/processidentity"
+	"github.com/relaishq/relais/internal/relaylease"
 )
 
 func acquireLease(ctx context.Context, standby bool, hostID string, cfg relaylease.Config) (commandGuard, error) {

@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/workerprobe"
-	"github.com/relais/pkg/callharness"
-	"github.com/relais/pkg/mediaworker"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/workerprobe"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 
