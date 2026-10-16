@@ -92,8 +92,7 @@ func TestV2UnsupportedEffectsRollback(t *testing.T) {
 		message string
 	}{
 		{"resumed-start", agent.Resumed, agent.Effects{StartTasks: []agent.TaskSpec{{Kind: "stt/v1"}}}, "StartTasks from Resumed is forbidden"},
-		{"start", agent.Started, agent.Effects{StartTasks: []agent.TaskSpec{{}}}, "StartTasks not supported in this slice"},
-		{"cancel", agent.Started, agent.Effects{CancelTasks: []agent.TaskID{"task"}}, "task cancellation not supported in this slice"},
+		{"start", agent.Started, agent.Effects{StartTasks: []agent.TaskSpec{{}}}, "invalid task specification"},
 		{"cancel-before", agent.Started, agent.Effects{CancelBefore: &turn}, "task cancellation not supported in this slice"},
 		{"timer", agent.Started, agent.Effects{SetTimers: []agent.TimerSpec{{ID: "timer"}}}, "timers not supported in this slice"},
 		{"cancel-timer", agent.Started, agent.Effects{CancelTimers: []string{"timer"}}, "timers not supported in this slice"},

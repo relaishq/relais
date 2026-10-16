@@ -61,6 +61,7 @@ type agentInput struct {
 }
 type agentMoveExport struct {
 	payload []byte
+	tasks   []taskMove
 }
 
 type agentFlush struct {
@@ -111,6 +112,7 @@ func cloneAgentState(state agentState) agentState {
 	if state.V2 != nil {
 		e := *state.V2
 		e.TaskKinds = slices.Clone(e.TaskKinds)
+		e.Tasks = cloneTaskIntents(e.Tasks)
 		state.V2 = &e
 	}
 	return state
@@ -359,17 +361,8 @@ func (s *session) agentLoop() {
 		return
 	}
 	if s.agent.v2 != nil {
-		select {
-		case <-s.agent.v2.ready:
-		case <-s.ctx.Done():
-			return
-		}
-		if !s.agent.latest.V2.Started {
-			if err := s.handleV2Event(agentv2.Event{ID: agentv2.EventID("started/" + s.id), Kind: agentv2.Started}); err != nil {
-				s.agentFailed(err)
-				return
-			}
-		}
+		s.v2AgentLoop()
+		return
 	}
 	if _, echo := s.agent.instance.(*agent.Echo); echo {
 		for {
@@ -422,6 +415,7 @@ func (s *session) finishAgentFlush(request agentFlush) bool {
 		}
 		s.agent.paused = true
 		s.mu.Unlock()
+		s.stopTaskAttempts()
 	}
 	var err error
 	reserve := s.worker.cfg.Agent.CallbackTimeout

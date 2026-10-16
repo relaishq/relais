@@ -20,6 +20,7 @@ var RemoteErrors = map[string]error{
 	"sequence_budget": ErrSequenceBudgetExhausted, "session_exists": errSessionExists,
 	"srtcp_exhausted":    ErrSRTCPIndexExhausted,
 	"agent_incompatible": agentv2.ErrIncompatibleAgent,
+	"agent_capacity":     agentv2.ErrCapacity,
 	"move_budget":        ErrMoveBudget, "export_not_flushed": ErrExportNotFlushed,
 	"agent_version": agent.ErrVersion, "agent_oversize": agent.ErrStateTooLarge, "agent_save": agent.ErrSave, "agent_restore": agent.ErrRestore,
 }

@@ -561,7 +561,7 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		if err != nil {
 			return nil, release, err
 		}
-		payload = &movePayload{Bytes: export.payload}
+		payload = &movePayload{Bytes: export.payload, Tasks: export.tasks}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

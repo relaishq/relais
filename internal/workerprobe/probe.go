@@ -20,6 +20,7 @@ type Sender func([]byte) ([]byte, error)
 type Capture func(string) (Sender, error)
 
 type registration struct {
+	holdTaskResults       bool
 	initialSequence       *[2]uint16
 	capture               Capture
 	ignoredBarriers       int

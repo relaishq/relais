@@ -1,14 +1,13 @@
 // Package agent defines the experimental v2 event contract. It is experimental
 // until ADR 0010 slice 6. Worker registration is not public yet. This slice hosts
-// Started, AudioInput and Resumed; Control is reserved and is never delivered.
+// Started, AudioInput, TaskMessage and Resumed; Control is reserved.
 // After a crash before Started is checkpointed, the target delivers Resumed
 // before redelivering Started. An AudioInput Handle deadline outside Save drops
 // that input after quarantine and Restore. Save failures/deadlines, other callback
 // errors, invalid state and unsupported effects fail closed. A Save that grows
 // move-only length beyond the available worker memory fails closed with
 // mediaworker.ErrMoveBudget.
-// Task, timer and playback effect declarations describe requests only: every
-// nonempty effect is rejected as unsupported until its host slice is implemented.
+// Host-run tasks are supported. Timers and playback remain unsupported.
 package agent
 
 import (
@@ -16,6 +15,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/relaishq/relais/internal/taskrun"
 	legacy "github.com/relaishq/relais/pkg/agent"
 )
 
@@ -23,6 +23,8 @@ var (
 	ErrVersion           = legacy.ErrVersion
 	ErrStateTooLarge     = legacy.ErrStateTooLarge
 	ErrIncompatibleAgent = errors.New("agent: incompatible registration")
+	ErrBackpressure      = errors.New("agent: task mailbox backpressure")
+	ErrCapacity          = errors.New("agent: task capacity")
 )
 
 // State holds crash-recoverable bytes and O(1) metadata about move-only data.
@@ -64,18 +66,18 @@ type Agent interface {
 }
 
 type EventID string
-type TaskID string
-type Turn uint64
 type EventKind string
 
 const (
-	Started    EventKind = "started"
-	AudioInput EventKind = "audio_input"
-	Resumed    EventKind = "resumed"
-	Control    EventKind = "control" // reserved, never delivered in this slice
+	Started     EventKind = "started"
+	AudioInput  EventKind = "audio_input"
+	TaskMessage EventKind = "task_message"
+	Resumed     EventKind = "resumed"
+	Control     EventKind = "control" // reserved, never delivered in this slice
 )
 
 type Event struct {
+	Result  *TaskResult
 	ID      EventID
 	Kind    EventKind
 	Input   *legacy.Input
@@ -83,9 +85,7 @@ type Event struct {
 	Control *ControlMessage
 }
 
-// Effects are validated atomically. Nonempty requests currently return a clear
-// unsupported error; the host never silently drops them. Task execution, timers
-// and paced audio are deferred to the next implementation slices.
+// Effects are validated atomically. Timers and paced audio remain unsupported.
 type Effects struct {
 	StartTasks             []TaskSpec
 	CancelTasks            []TaskID
@@ -109,34 +109,31 @@ type TimerSpec struct {
 	ID    string
 	After time.Duration
 }
-type TaskClass string
-type ResumePolicy string
+
+// Task declarations remain experimental until the worker registration slice.
+type TaskID = taskrun.TaskID
+type Turn = taskrun.Turn
+type TaskClass = taskrun.TaskClass
+type ResumePolicy = taskrun.ResumePolicy
+type TaskSpec = taskrun.TaskSpec
+type Outcome = taskrun.Outcome
+type EncodedAudio = taskrun.EncodedAudio
+type Chunk = taskrun.Chunk
+type TaskResult = taskrun.TaskResult
+type TaskRun = taskrun.TaskRun
+type TaskHandler = taskrun.TaskHandler
 
 const (
-	ReadOnly      TaskClass    = "read_only"
-	SideEffecting TaskClass    = "side_effecting"
-	Retry         ResumePolicy = "retry"
-	Abandon       ResumePolicy = "abandon"
-)
-
-type TaskSpec struct {
-	Step    string
-	Kind    string
-	Turn    Turn
-	Class   TaskClass
-	Resume  ResumePolicy
-	Request []byte
-	Timeout time.Duration
-}
-type Outcome string
-
-const (
-	OK             Outcome = "ok"
-	Failed         Outcome = "failed"
-	Timeout        Outcome = "timeout"
-	Canceled       Outcome = "canceled"
-	OutcomeUnknown Outcome = "outcome_unknown"
-	Capacity       Outcome = "capacity"
+	ReadOnly       = taskrun.ReadOnly
+	SideEffecting  = taskrun.SideEffecting
+	Retry          = taskrun.Retry
+	Abandon        = taskrun.Abandon
+	OK             = taskrun.OK
+	Failed         = taskrun.Failed
+	Timeout        = taskrun.Timeout
+	Canceled       = taskrun.Canceled
+	OutcomeUnknown = taskrun.OutcomeUnknown
+	Capacity       = taskrun.Capacity
 )
 
 type ControlMessage struct {
