@@ -72,6 +72,7 @@ type taskMove struct {
 	ID      agent.TaskID
 	Request []byte
 	Results []agent.TaskResult
+	Audio   []agent.TaskResult // consumed audio payloads retained through acknowledgement/horizon
 	// An exact export can prove a prepared handler did not cross admission.
 	NeverLaunched bool
 }
@@ -79,6 +80,7 @@ type localTask struct {
 	intent        taskIntent
 	request       []byte
 	results       []agent.TaskResult
+	audio         []agent.TaskResult
 	launched      bool
 	prepared      bool
 	interrupted   bool
@@ -180,7 +182,10 @@ func (s *session) taskBudget(tasks []*localTask, appBytes int) error {
 	return s.taskBudgetWithRefusals(tasks, appBytes, s.agent.latest.V2.Capacity)
 }
 func (s *session) taskBudgetWithRefusals(tasks []*localTask, appBytes int, refusals []taskRefusal) error {
-	n := int64(appBytes)
+	s.mu.Lock()
+	queueBytes := audioRefsBytes(s.agent.v2.playback.queue)
+	s.mu.Unlock()
+	n := int64(appBytes + queueBytes)
 	intents := make([]taskIntent, 0, len(tasks))
 	for _, t := range tasks {
 		intents = append(intents, t.intent)
@@ -201,6 +206,9 @@ func (s *session) taskBudgetWithRefusals(tasks []*localTask, appBytes int, refus
 }
 func (s *session) taskMetadataBudget(intents []taskIntent, refusals []taskRefusal, admission bool) error {
 	envelope := *s.agent.latest.V2
+	s.mu.Lock()
+	envelope.Playback = s.playbackSnapshotLocked()
+	s.mu.Unlock()
 	envelope.Tasks = intents
 	envelope.Capacity = refusals
 	metadata, _ := json.Marshal(envelope)
@@ -256,6 +264,15 @@ func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, b
 		pending[r.ID] = true
 	}
 	now := s.taskNow()
+	// Reserve the complete callback's compact outcomes before admitting a
+	// task. Admission never evicts an already admitted task to fit refusals.
+	var anticipated []taskRefusal
+	for _, spec := range effects.StartTasks {
+		id := deriveTaskID(s.id, h.registration.Name, cause.ID, spec.Step)
+		if !pending[id] && !slices.ContainsFunc(base, func(t *localTask) bool { return t.intent.ID == id }) {
+			anticipated = append(anticipated, taskRefusal{ID: id, Turn: spec.Turn})
+		}
+	}
 	for _, spec := range effects.StartTasks {
 		if spec.Step == "" || spec.Kind == "" || spec.Timeout < 0 || steps[spec.Step] ||
 			(spec.Class != agent.ReadOnly && spec.Class != agent.SideEffecting) ||
@@ -268,10 +285,18 @@ func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, b
 		}
 		steps[spec.Step] = true
 		id := deriveTaskID(s.id, h.registration.Name, cause.ID, spec.Step)
+		anticipated = slices.DeleteFunc(anticipated, func(r taskRefusal) bool { return r.ID == id })
 		if pending[id] {
 			continue
 		}
 		capacity := agent.TaskResult{TaskID: id, Sequence: 1, Turn: spec.Turn, Outcome: agent.Capacity, Final: true, Detail: "task admission capacity"}
+		floor := s.agent.latest.V2.CancelFloor
+		if effects.CancelBefore != nil {
+			floor = max(floor, *effects.CancelBefore)
+		}
+		if spec.Turn < floor {
+			return nil, nil, fmt.Errorf("%w: task below cancellation turn floor", agent.ErrIncompatibleAgent)
+		}
 		if len(spec.Request) > h.registration.Bounds.MaxMailboxBytes || len(spec.Step)+len(spec.Kind) > h.registration.Bounds.MaxPendingBytes || (spec.Class == agent.SideEffecting && len(spec.Request) > h.registration.Bounds.MaxPendingBytes) {
 			refused = append(refused, capacity)
 			continue
@@ -303,7 +328,11 @@ func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, b
 		t := &localTask{intent: intent, request: spec.Request}
 		t.terminalBytes = taskTerminalBytes(intent)
 		next = append(next, t)
-		if err := s.taskAdmissionBudget(next, s.agent.latest.V2.MoveOnlyLength, refusals); err != nil {
+		guard := slices.Concat(refusals, anticipated)
+		for _, r := range refused {
+			guard = append(guard, taskRefusal{ID: r.TaskID, Turn: r.Turn})
+		}
+		if err := s.taskAdmissionBudget(next, s.agent.latest.V2.MoveOnlyLength, guard); err != nil {
 			if errors.Is(err, agent.ErrCapacity) || errors.Is(err, ErrMoveBudget) {
 				next = next[:len(next)-1]
 				refused = append(refused, capacity)
@@ -332,22 +361,13 @@ func uniqueTaskRefusals(in []taskRefusal) []taskRefusal {
 	}
 	return out
 }
-func (s *session) fitTaskRefusals(base, tasks []*localTask, prior, refusals []taskRefusal) ([]*localTask, []taskRefusal, error) {
-	for {
-		intents := make([]taskIntent, len(tasks))
-		for i, t := range tasks {
-			intents[i] = t.intent
-		}
-		if err := s.taskMetadataBudget(intents, refusals, true); err == nil {
-			return tasks, refusals, nil
-		}
-		if len(tasks) <= len(base) {
-			break
-		}
-		// This task belongs to the current callback and has never been launched.
-		t := tasks[len(tasks)-1]
-		tasks = tasks[:len(tasks)-1]
-		refusals = append([]taskRefusal{{ID: t.intent.ID, Turn: t.intent.Turn}}, refusals...)
+func (s *session) fitTaskRefusals(_, tasks []*localTask, prior, refusals []taskRefusal) ([]*localTask, []taskRefusal, error) {
+	intents := make([]taskIntent, len(tasks))
+	for i, t := range tasks {
+		intents[i] = t.intent
+	}
+	if err := s.taskMetadataBudget(intents, refusals, true); err == nil {
+		return tasks, refusals, nil
 	}
 	old := map[agent.TaskID]bool{}
 	for _, r := range prior {
@@ -389,6 +409,15 @@ func cloneTaskIntents(ts []taskIntent) []taskIntent {
 func (s *session) acceptTaskEffects(tasks []*localTask, effects agent.Effects) {
 	h := s.agent.v2
 	h.tasks = tasks
+	floor := s.agent.latest.V2.CancelFloor
+	if effects.CancelBefore != nil {
+		floor = max(floor, *effects.CancelBefore)
+	}
+	for _, t := range h.tasks {
+		if t.intent.Turn < floor && (!t.intent.Final || len(t.results) > 0) && t.intent.Phase != taskCanceled {
+			s.cancelTask(t)
+		}
+	}
 	for _, id := range effects.CancelTasks {
 		for _, t := range h.tasks {
 			if t.intent.ID == id && !t.intent.Final {
@@ -405,8 +434,16 @@ func (s *session) cancelTask(t *localTask) {
 	t.attempt++ // fence all parked and late results from this attempt
 	t.launched = false
 	t.prepared = false
+	s.mu.Lock()
+	for _, r := range t.results {
+		delete(s.agent.v2.playback.payloads, audioKey{r.TaskID, r.Sequence})
+	}
+	s.mu.Unlock()
 	t.results = nil
 	t.mailboxBytes = 0
+	for _, r := range t.audio {
+		t.mailboxBytes += taskResultBytes(r)
+	}
 	t.intent.Published = t.intent.Cursor
 	t.intent.Phase = taskCanceled
 	s.terminalTask(t, agent.Canceled, "")
@@ -426,7 +463,7 @@ func (s *session) terminalTask(t *localTask, outcome agent.Outcome, detail strin
 	t.launched = false
 }
 func (s *session) retireTaskRequest(t *localTask) {
-	if t.intent.Class == agent.ReadOnly || (t.intent.Final && t.intent.Cursor == t.intent.Published) {
+	if t.intent.Final && (t.intent.Class == agent.ReadOnly || t.intent.Cursor == t.intent.Published) {
 		t.request = nil
 		t.intent.Request = nil
 	}
@@ -660,7 +697,7 @@ func (s *session) acceptEmission(e taskEmission) {
 	s.mu.Lock()
 	paused := s.agent.paused || s.fenced.Load()
 	s.mu.Unlock()
-	if paused || t == nil || t.attempt != e.attempt || t.intent.Final || e.ctx.Err() != nil {
+	if paused || t == nil || t.attempt != e.attempt || t.intent.Final || t.intent.Turn < s.agent.latest.V2.CancelFloor || e.ctx.Err() != nil {
 		e.reply <- context.Canceled
 		return
 	}
@@ -674,6 +711,12 @@ func (s *session) acceptEmission(e taskEmission) {
 		if _, ok := chunkSize(e.chunk, h.registration.Bounds.MaxMailboxBytes); !ok {
 			e.reply <- agent.ErrCapacity
 			return
+		}
+		if e.chunk.Audio != nil {
+			if _, err := validateOpus(e.chunk.Audio); err != nil {
+				e.reply <- err
+				return
+			}
 		}
 		r := agent.TaskResult{TaskID: e.id, Sequence: e.sequence, Turn: t.intent.Turn, Outcome: agent.OK, Chunk: e.chunk}
 		bytes := taskResultBytes(r)
@@ -694,6 +737,13 @@ func (s *session) acceptEmission(e taskEmission) {
 			return
 		}
 		t.results[len(t.results)-1].Chunk = cloneChunk(e.chunk)
+		s.mu.Lock()
+		err = s.registerAudioLocked(t.results[len(t.results)-1])
+		s.mu.Unlock()
+		if err != nil {
+			e.reply <- err
+			return
+		}
 		t.intent.Published = e.sequence
 	}
 	s.taskStateChanged()
@@ -827,10 +877,25 @@ func (s *session) validateTaskMoves(intents []taskIntent, move *movePayload) err
 				return fmt.Errorf("%w: missing or duplicate task mailbox", agent.ErrIncompatibleAgent)
 			}
 			request = exact.Request
+			audioSeq := uint64(0)
+			for _, r := range exact.Audio {
+				if r.TaskID != intent.ID || r.Turn != intent.Turn || r.Sequence <= audioSeq || r.Sequence > intent.Cursor || r.Chunk.Audio == nil || r.Final {
+					return fmt.Errorf("%w: invalid retained audio", agent.ErrIncompatibleAgent)
+				}
+				if _, err := validateOpus(r.Chunk.Audio); err != nil {
+					return err
+				}
+				audioSeq = r.Sequence
+			}
 			seq := intent.Cursor
 			for i, r := range exact.Results {
 				if r.TaskID != intent.ID || r.Sequence <= seq || r.Sequence > intent.Published || !taskrun.ValidOutcome(r.Outcome) || r.Turn != intent.Turn || (r.Final && (i != len(exact.Results)-1 || !intent.Final || r.Outcome != intent.Terminal)) {
 					return fmt.Errorf("%w: invalid exact task result", agent.ErrIncompatibleAgent)
+				}
+				if r.Chunk.Audio != nil {
+					if _, err := validateOpus(r.Chunk.Audio); err != nil {
+						return err
+					}
 				}
 				seq = r.Sequence
 			}
@@ -872,6 +937,11 @@ func (s *session) restoreTasks(move *movePayload) error {
 			exact = findTaskMove(move, intent.ID)
 			t.request = slices.Clone(exact.Request)
 			t.results = slices.Clone(exact.Results)
+			t.audio = slices.Clone(exact.Audio)
+			for i, r := range t.audio {
+				t.mailboxBytes += taskResultBytes(r)
+				t.audio[i].Chunk = cloneChunk(r.Chunk)
+			}
 			for i, r := range t.results {
 				r.Detail = taskDetail(r.Detail)
 				t.results[i].Detail = r.Detail
@@ -922,7 +992,7 @@ func (s *session) restoreTasks(move *movePayload) error {
 func (s *session) taskMoveViews() []taskMove {
 	out := make([]taskMove, len(s.agent.v2.tasks))
 	for i, t := range s.agent.v2.tasks {
-		out[i] = taskMove{ID: t.intent.ID, Request: t.request, Results: t.results, NeverLaunched: !t.launched}
+		out[i] = taskMove{ID: t.intent.ID, Request: t.request, Results: t.results, Audio: t.audio, NeverLaunched: !t.launched}
 	}
 	return out
 }
@@ -945,7 +1015,10 @@ func (s *session) exportTasks() []taskMove {
 	h := s.agent.v2
 	out := make([]taskMove, len(h.tasks))
 	for i, t := range h.tasks {
-		out[i] = taskMove{ID: t.intent.ID, Request: slices.Clone(t.request), NeverLaunched: !t.launched, Results: slices.Clone(t.results)}
+		out[i] = taskMove{ID: t.intent.ID, Request: slices.Clone(t.request), NeverLaunched: !t.launched, Results: slices.Clone(t.results), Audio: slices.Clone(t.audio)}
+		for j, r := range out[i].Audio {
+			out[i].Audio[j].Chunk = cloneChunk(r.Chunk)
+		}
 		for j, r := range out[i].Results {
 			out[i].Results[j].Chunk = cloneChunk(r.Chunk)
 		}
@@ -962,6 +1035,8 @@ func (s *session) v2AgentLoop() {
 	s.worker.running.Add(1)
 	go func() { defer s.worker.running.Done(); s.taskCheckpointLoop() }()
 	defer s.stopTaskAttempts()
+	s.worker.running.Add(1)
+	go func() { defer s.worker.running.Done(); s.playbackLoop() }()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -983,6 +1058,10 @@ func (s *session) v2AgentLoop() {
 					s.agentFailed(err)
 					return
 				}
+			}
+			if err := s.deliverClockEvent(); err != nil && !errors.Is(err, errTaskAdmissionBackpressure) {
+				s.agentFailed(err)
+				return
 			}
 			s.pruneTasks()
 			s.launchTasks()
@@ -1044,7 +1123,7 @@ func taskResultBytes(r agent.TaskResult) int {
 		r.Chunk.Audio = &agent.EncodedAudio{}
 		n += 6 * len(c.Audio.Format)
 		for _, p := range c.Audio.Packets {
-			n += base64.StdEncoding.EncodedLen(len(p)) + 3
+			n += base64.StdEncoding.EncodedLen(len(p)) + 40 // owned packet slice and cached duration, sized per packet
 		}
 	}
 	b, _ := json.Marshal(r)
@@ -1067,7 +1146,40 @@ func (s *session) pruneTasks() {
 	received := maps.Clone(s.state.SRTP.Inbound)
 	s.mu.Unlock()
 	next := h.tasks[:0]
+	payloadChanged := false
 	for _, t := range h.tasks {
+		// A streaming producer must regain mailbox space before its terminal.
+		// Keep consumed audio until the checkpoint/horizon and last reference.
+		for _, d := range durable {
+			if d.ID != t.intent.ID {
+				continue
+			}
+			horizon := true
+			if cause := t.intent.InputCause; cause != nil {
+				high, known := received[cause.SSRC]
+				horizon = known && progress.SSRC == cause.SSRC && progress.Index >= cause.Index && high >= cause.Index && high-cause.Index >= replayWindow
+			}
+			if !horizon {
+				break
+			}
+			s.mu.Lock()
+			kept := t.audio[:0]
+			for _, r := range t.audio {
+				live := slices.ContainsFunc(h.playback.queue, func(a agent.Audio) bool { return a.Source.TaskID == r.TaskID && a.Source.Sequence == r.Sequence })
+				if r.Sequence <= d.Cursor && !live {
+					t.mailboxBytes -= taskResultBytes(r)
+					delete(h.playback.payloads, audioKey{r.TaskID, r.Sequence})
+					payloadChanged = true
+				} else {
+					kept = append(kept, r)
+				}
+			}
+			clear(t.audio[len(kept):])
+			t.audio = kept
+			s.mu.Unlock()
+			break
+		}
+
 		ack := false
 		if t.intent.Final && t.intent.Cursor == t.intent.Published && len(t.results) == 0 {
 			for _, d := range durable {
@@ -1081,11 +1193,23 @@ func (s *session) pruneTasks() {
 				ack = ack && progress.SSRC == cause.SSRC && progress.Index >= cause.Index && known && high >= cause.Index && high-cause.Index >= replayWindow
 			}
 		}
+		s.mu.Lock()
+		if slices.ContainsFunc(h.playback.queue, func(a agent.Audio) bool { return a.Source.TaskID == t.intent.ID }) {
+			ack = false
+		}
+		if ack {
+			for key := range h.playback.payloads {
+				if key.task == t.intent.ID {
+					delete(h.playback.payloads, key)
+				}
+			}
+		}
+		s.mu.Unlock()
 		if !ack {
 			next = append(next, t)
 		}
 	}
-	if len(next) != len(h.tasks) {
+	if len(next) != len(h.tasks) || payloadChanged {
 		h.tasks = next
 		_ = s.taskBudget(next, s.agent.latest.V2.MoveOnlyLength)
 		s.taskStateChanged()

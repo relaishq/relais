@@ -1,0 +1,5 @@
+The adjacent tts-opus-20ms.packets contains the first 80 raw packets of the
+2026-10-16 provider spike's generated TTS reply (reply.packets). Each packet is
+preceded by its four-byte big-endian length. These are 20 ms Opus packets,
+forwarded unchanged; no microphone audio, credentials or provider metadata.
+Tests compare exact packet bytes and RTP timestamps/sequence at the caller.

@@ -84,3 +84,26 @@ func TestAgentReplayRestoresReceiveWindowBeforeQueuedAudio(t *testing.T) {
 		})
 	}
 }
+
+func TestV2TakeoverRejectsPrunedCauseBelowConsumedFloor(t *testing.T) {
+	profile := srtp.ProtectionProfileAeadAes128Gcm
+	keys := testSessionKeys(t, profile)
+	w := newTestWorker(t)
+	s := sessionFromState(w, sessionState{SRTP: srtpState{Profile: profile, Inbound: map[uint32]uint64{42: 174}}, Audio: trackState{MID: "0", Anchored: true, InboundSSRC: 42}, Agent: agentState{V2: &v2Envelope{}, Progress: agent.Progress{SSRC: 42, Index: 120, Consumed: 10}}})
+	t.Cleanup(s.close)
+	s.srtpIn = testContext(t, keys.RemoteMasterKey, keys.RemoteMasterSalt, profile)
+	require.NoError(t, s.restoreReplayInbound(keys, ResumeOptions{InputMayBeDuplicated: true}))
+	caller := testContext(t, keys.RemoteMasterKey, keys.RemoteMasterSalt, profile)
+	for _, index := range []uint16{110, 120, 121} {
+		plain, err := (&rtp.Packet{Header: rtp.Header{Version: 2, SSRC: 42, SequenceNumber: index}, Payload: []byte{0xf8, 0xff, 0xfe}}).Marshal()
+		require.NoError(t, err)
+		encrypted, err := caller.EncryptRTP(nil, plain, nil)
+		require.NoError(t, err)
+		_, err = s.srtpIn.DecryptRTP(nil, encrypted, nil)
+		if index <= 120 {
+			require.Error(t, err, "a pruned cause cannot launch again")
+		} else {
+			require.NoError(t, err, "held new input remains replayable")
+		}
+	}
+}

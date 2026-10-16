@@ -1,6 +1,7 @@
 // Package agent defines the experimental v2 event contract. It is experimental
 // until ADR 0010 slice 6. Worker registration is not public yet. This slice hosts
-// Started, AudioInput, TaskMessage and Resumed; Control is reserved.
+// Started, AudioInput, TaskMessage, TimerFired, PlaybackFinished and Resumed;
+// Control is reserved.
 // After a crash before Started is checkpointed, the target delivers Resumed
 // before redelivering Started. An AudioInput Handle deadline outside Save drops
 // that input after quarantine and Restore. TaskMessage Handle errors and deadlines
@@ -11,7 +12,15 @@
 // errors, invalid state and unsupported effects fail closed. A Save that grows
 // move-only length beyond the available worker memory fails closed with
 // mediaworker.ErrMoveBudget.
-// Host-run tasks are supported. Timers and playback remain unsupported.
+// A callback whose compact task refusals cannot fit (about 33 at default
+// bounds) fails closed with ErrCapacity and ends the call. At default bounds
+// a width-20 fan-out admits 4 tasks; width 33 admits none. Admission reserves
+// refusal space before starting tasks; only excess tasks are refused.
+// TimerFired and PlaybackFinished callback errors/deadlines also fail closed.
+// Paced output marshal/encryption failures end the call without draining its cursor.
+// Audio references name immutable task-emitted Opus packets. Playback continues
+// independently of input and callbacks. A crash loses buffered audio and reports
+// Resumed.MoveOnly=OutcomeUnknown; restart the turn on a later event.
 package agent
 
 import (
@@ -77,23 +86,32 @@ type EventID string
 type EventKind string
 
 const (
-	Started     EventKind = "started"
-	AudioInput  EventKind = "audio_input"
-	TaskMessage EventKind = "task_message"
-	Resumed     EventKind = "resumed"
-	Control     EventKind = "control" // reserved, never delivered in this slice
+	Started          EventKind = "started"
+	AudioInput       EventKind = "audio_input"
+	TaskMessage      EventKind = "task_message"
+	Resumed          EventKind = "resumed"
+	TimerFired       EventKind = "timer_fired"
+	PlaybackFinished EventKind = "playback_finished"
+	Control          EventKind = "control" // reserved, never delivered in this slice
 )
 
 type Event struct {
-	Result  *TaskResult
-	ID      EventID
-	Kind    EventKind
-	Input   *legacy.Input
-	Resume  *ResumeNotice
-	Control *ControlMessage
+	Result   *TaskResult
+	ID       EventID
+	Kind     EventKind
+	Input    *legacy.Input
+	Resume   *ResumeNotice
+	Control  *ControlMessage
+	Timer    *TimerNotice
+	Playback *PlaybackNotice
 }
 
-// Effects are validated atomically. Timers and paced audio remain unsupported.
+// Effects are validated atomically. Audio appends individual packet references.
+// CancelBefore is a monotonic task turn floor; ClearAudioBefore clears queued
+// packets immediately. NotifyPlaybackFinished reports local send completion.
+// SetTimers resets each named timer with a new generation and a store-clock
+// deadline. CancelTimers invalidates its current generation. Timers with After=0
+// are due on the next actor transaction; negative durations are invalid.
 type Effects struct {
 	StartTasks             []TaskSpec
 	CancelTasks            []TaskID
@@ -113,6 +131,12 @@ type AudioRef struct {
 	Sequence     uint64
 	PacketOffset uint32
 }
+type TimerNotice struct {
+	ID         string
+	Generation uint64
+}
+type PlaybackNotice struct{ Turn Turn }
+
 type TimerSpec struct {
 	ID    string
 	After time.Duration

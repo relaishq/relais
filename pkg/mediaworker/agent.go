@@ -63,6 +63,7 @@ type agentInput struct {
 type agentMoveExport struct {
 	payload []byte
 	tasks   []taskMove
+	audio   []agentv2.Audio
 }
 
 type agentFlush struct {
@@ -115,6 +116,9 @@ func cloneAgentState(state agentState) agentState {
 		e.TaskKinds = slices.Clone(e.TaskKinds)
 		e.Tasks = cloneTaskIntents(e.Tasks)
 		e.Capacity = slices.Clone(e.Capacity)
+		e.Timers = slices.Clone(e.Timers)
+		e.Playback.Window = slices.Clone(e.Playback.Window)
+		e.Playback.Notify = slices.Clone(e.Playback.Notify)
 		state.V2 = &e
 	}
 	return state
@@ -282,6 +286,9 @@ func (s *session) publishAgent() {
 	s.mu.Lock()
 	if !s.fenced.Load() && s.ctx.Err() == nil {
 		s.state.Agent = cloneAgentState(s.agent.latest)
+		if s.agent.v2 != nil {
+			s.state.Agent.V2.Playback = s.playbackSnapshotLocked()
+		}
 	}
 	s.mu.Unlock()
 }
@@ -570,13 +577,17 @@ func (s *session) sendAgentAudio(header rtp.Header, payload []byte, state agentS
 	if s.fenced.Load() || s.ctx.Err() != nil || s.srtpOut == nil {
 		return
 	}
+	_ = s.sendAgentAudioLocked(header, payload, state)
+}
+
+func (s *session) sendAgentAudioLocked(header rtp.Header, payload []byte, state agentState) error {
 	changed := !agentStateEqual(s.state.Agent, state)
 	s.state.Agent = cloneAgentState(state)
 	if changed {
 		s.wantSnapshot()
 	}
 	if payload == nil {
-		return
+		return nil
 	}
 	track := &s.state.Audio
 	header.SequenceNumber = track.InitialSeq
@@ -588,11 +599,11 @@ func (s *session) sendAgentAudio(header rtp.Header, payload []byte, state agentS
 	out := rtp.Packet{Header: header, Payload: payload}
 	n, err := out.MarshalTo(s.plainBuf)
 	if err != nil {
-		return
+		return err
 	}
 	encrypted, err := s.srtpOut.EncryptRTP(s.encryptBuf, s.plainBuf[:n], nil)
 	if err != nil {
-		return
+		return err
 	}
 	s.encryptBuf = encrypted[:cap(encrypted)]
 	oldOutbound := track.HighestSentIndex
@@ -611,6 +622,7 @@ func (s *session) sendAgentAudio(header rtp.Header, payload []byte, state agentS
 		s.tracePacket(encrypted, "agent")
 	}
 	workerprobe.AfterEcho(s.worker.localAddr, s.ctx, s.id, s.plainBuf[:n])
+	return nil
 }
 
 // SessionAgent returns the saved state/progress pair, never the mutable agent.
