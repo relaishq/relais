@@ -247,6 +247,10 @@ func (s *session) releaseMoveBytes() {
 	s.moveClosed = true
 	s.worker.moveBytes.Add(-s.moveReserved)
 	s.moveReserved = 0
+	if s.exportScratch != nil {
+		s.exportScratch.release()
+		s.exportScratch = nil
+	}
 }
 func (s *session) acceptV2State(saved agent.State) {
 	s.state.Agent.State = legacy.State{Version: saved.Version, Bytes: saved.Bytes}
@@ -362,23 +366,54 @@ func (s *session) processV2Audio(in agentInput) error {
 	return s.handleV2Event(agent.Event{ID: agent.EventID(id), Kind: agent.AudioInput, Input: &in.input})
 }
 
+// Scratch stays session-owned until export claims it. Close also handles a
+// successful actor reply abandoned by a cancelled flush caller.
+type moveScratch struct{ release func() }
+
+// The actor calls this before pausing or consuming any queued input. A queued
+// Handle may grow the move data, so reserve the registered bound in that case.
+// Empty queues use the accepted length, including zero-length move payloads.
+func (s *session) reserveV2ExportScratch() error {
+	s.moveMu.Lock()
+	defer s.moveMu.Unlock()
+	if s.moveClosed {
+		return context.Canceled
+	}
+	if s.exportScratch != nil {
+		return nil
+	}
+	n := s.agent.latest.V2.MoveOnlyLength
+	if len(s.agent.queue) > 0 {
+		n = s.agent.v2.registration.Bounds.MaxMailboxBytes
+	}
+	scratch := int64(8 * n)
+	if !s.worker.reserveMoveBytes(scratch) {
+		return ErrExportNotFlushed
+	}
+	s.exportScratch = &moveScratch{release: sync.OnceFunc(func() { s.worker.moveBytes.Add(-scratch) })}
+	return nil
+}
+func (s *session) claimV2ExportScratch() (func(), error) {
+	s.moveMu.Lock()
+	defer s.moveMu.Unlock()
+	if s.moveClosed || s.exportScratch == nil {
+		return func() {}, context.Canceled
+	}
+	release := s.exportScratch.release
+	s.exportScratch = nil
+	return release, nil
+}
+
 // Called by the paused actor exactly once per export request, after the last
-// accepted Save. The separately reserved scratch covers payload copying plus
-// nested base64 export/resume serialization; it is never checkpoint memory.
+// accepted Save. The scratch was reserved before queue draining began.
 func (s *session) saveV2MoveOnly(deadline context.Context) (agentMoveExport, error) {
-	export := agentMoveExport{release: func() {}}
+	export := agentMoveExport{}
 	state := v2State(s.agent.latest)
 	if !state.HasMoveOnly {
 		return export, nil
 	}
-	scratch := int64(8 * state.MoveOnlyLength)
-	if !s.worker.reserveMoveBytes(scratch) {
-		return export, ErrExportNotFlushed
-	}
-	export.release = sync.OnceFunc(func() { s.worker.moveBytes.Add(-scratch) })
 	err := s.agentCall(func(ctx context.Context) error {
-		limit, ok := deadline.Deadline()
-		if ok {
+		if limit, ok := deadline.Deadline(); ok {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithDeadline(ctx, limit)
 			defer cancel()
@@ -400,10 +435,7 @@ func (s *session) saveV2MoveOnly(deadline context.Context) (agentMoveExport, err
 		return nil
 	}, true)
 	if err != nil {
-		export.release()
-		// A closing session can quarantine a callback still finishing its copy.
-		// Do not read its captured payload on the error path.
-		return agentMoveExport{release: func() {}}, err
+		return agentMoveExport{}, err
 	}
 	return export, nil
 }

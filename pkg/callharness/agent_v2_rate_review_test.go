@@ -36,6 +36,9 @@ func (s *reviewCountStore) PutState(ctx context.Context, lease sessionstore.Leas
 }
 
 func TestV2ReviewConstantStateCheckpointRate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("extended v2 matrix runs outside the PR short suite")
+	}
 	forAgentStores(t, func(t *testing.T, base sessionstore.Store) {
 		var counts [2]int64
 		for i, mode := range []string{"v2-const", "legacy-echo"} {

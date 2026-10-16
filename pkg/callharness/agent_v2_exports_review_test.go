@@ -2,6 +2,7 @@ package callharness
 
 import (
 	"context"
+	"errors"
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/mediaworker"
@@ -51,6 +52,9 @@ func (a *reviewExportAgent) Handle(_ context.Context, e agent.Event) (agent.Effe
 	return agent.Effects{}, nil
 }
 func TestV2ReviewSixteenConcurrentExports(t *testing.T) {
+	if testing.Short() {
+		t.Skip("extended v2 matrix runs outside the PR short suite")
+	}
 	old := runtime.GOMAXPROCS(16)
 	defer runtime.GOMAXPROCS(old)
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
@@ -135,6 +139,9 @@ func (a *reviewSlowAudioAgent) Restore(_ context.Context, state agent.State) err
 	return nil
 }
 func TestV2ReviewSlowAudioContinues(t *testing.T) {
+	if testing.Short() {
+		t.Skip("extended v2 matrix runs outside the PR short suite")
+	}
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		reg := agenthost.Registration{Name: "slow-audio/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &reviewSlowAudioAgent{} }}
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}})
@@ -157,12 +164,15 @@ func TestV2ReviewSlowAudioContinues(t *testing.T) {
 }
 
 func TestV2ReviewBudgetRetryThroughRemoteWorker(t *testing.T) {
+	if testing.Short() {
+		t.Skip("extended v2 matrix runs outside the PR short suite")
+	}
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		var attempts atomic.Int64
 		reg := agenthost.Registration{Name: "budget-retry/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &reviewSlowRestore{} }}
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}, remoteTarget: true, targetHandler: func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/resume" && attempts.Add(1) <= 5 {
+				if r.URL.Path == "/resume" && attempts.Add(1) <= 2 {
 					privateapi.Error(w, mediaworker.ErrMoveBudget, mediaworker.RemoteErrors)
 					return
 				}
@@ -179,9 +189,46 @@ func TestV2ReviewBudgetRetryThroughRemoteWorker(t *testing.T) {
 		status, err := sys.plane.Status(ctx)
 		require.NoError(t, err)
 		require.False(t, status.Takeovers[0].Lost, "temporary pressure must not become no-compatible-target loss")
-		require.GreaterOrEqual(t, attempts.Load(), int64(6))
+		require.GreaterOrEqual(t, attempts.Load(), int64(3))
 		require.Equal(t, 1, sys.workers[1].SessionCount())
 		_, err = call.Hangup(ctx)
 		require.NoError(t, err)
+	})
+}
+
+func TestV2ReviewBudgetExhaustedThroughRemoteWorker(t *testing.T) {
+	if testing.Short() {
+		t.Skip("extended v2 pressure recovery matrix")
+	}
+	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+		var attempts atomic.Int64
+		reg := agenthost.Registration{Name: "budget-loss/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &reviewSlowRestore{} }}
+		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}, remoteTarget: true, targetHandler: func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/resume" {
+					attempts.Add(1)
+					privateapi.Error(w, mediaworker.ErrMoveBudget, mediaworker.RemoteErrors)
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		}})
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		call, err := sys.h.Dial(ctx, CallOptions{})
+		require.NoError(t, err)
+		readV2Snapshot(t, store, call.SessionID(), true)
+		require.NoError(t, workerprobe.Kill(sys.workers[0].LocalAddr()))
+		require.Eventually(t, func() bool { status, err := sys.plane.Status(ctx); return err == nil && len(status.Takeovers) == 1 }, 4*time.Second, 10*time.Millisecond)
+		status, err := sys.plane.Status(ctx)
+		require.NoError(t, err)
+		require.True(t, status.Takeovers[0].Lost)
+		require.Equal(t, "move_budget_exhausted", status.Takeovers[0].LossCause)
+		require.LessOrEqual(t, attempts.Load(), int64(8))
+		require.Greater(t, attempts.Load(), int64(1))
+		require.Eventually(t, func() bool {
+			_, err := store.Get(ctx, call.SessionID())
+			return errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrEnded)
+		}, 2*time.Second, 5*time.Millisecond)
 	})
 }

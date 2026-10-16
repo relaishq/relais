@@ -60,14 +60,15 @@ var supportedSRTPProfiles = []dtls.SRTPProtectionProfile{
 // sends or receives is processed under it, so a snapshot taken under mu is
 // atomic with the counters (see export).
 type session struct {
-	moveMu       sync.Mutex
-	moveReserved int64
-	moveClosed   bool
-	agent        *agentHost
-	durableAgent agentState // guarded by mu; last acknowledged durable agent pair
-	id           string     // state.ID; never changes
-	worker       *Worker
-	log          logging.LeveledLogger
+	moveMu        sync.Mutex
+	moveReserved  int64
+	exportScratch *moveScratch
+	moveClosed    bool
+	agent         *agentHost
+	durableAgent  agentState // guarded by mu; last acknowledged durable agent pair
+	id            string     // state.ID; never changes
+	worker        *Worker
+	log           logging.LeveledLogger
 
 	mu           sync.Mutex
 	state        sessionState

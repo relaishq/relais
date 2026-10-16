@@ -160,6 +160,9 @@ func readV2Snapshot(t *testing.T, store sessionstore.Store, id string, started b
 func TestV2AgentPlannedMoveExact(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		payload := bytes.Repeat([]byte("recording"), 1<<16) // 576 KiB, far above crash-state budget
+		if testing.Short() {
+			payload = []byte("short exact move")
+		}
 		regs, stats := v2Registrations(payload)
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs})
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -236,6 +239,9 @@ func (s *freezeStartedStore) PutState(ctx context.Context, lease sessionstore.Le
 }
 
 func TestV2AgentTakeoverMoveOnlyUnknown(t *testing.T) {
+	if testing.Short() {
+		t.Skip("extended v2 matrix runs outside the PR short suite")
+	}
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		regs, stats := v2Registrations([]byte("crash-loses-recording"))
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs})
@@ -269,6 +275,9 @@ func TestV2AgentTakeoverMoveOnlyUnknown(t *testing.T) {
 }
 
 func TestV2AgentStartedRedeliveryUntilCheckpoint(t *testing.T) {
+	if testing.Short() {
+		t.Skip("extended v2 matrix runs outside the PR short suite")
+	}
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		frozen := &freezeStartedStore{Store: store}
 		regs, stats := v2Registrations(nil)
@@ -301,6 +310,9 @@ func TestV2AgentStartedRedeliveryUntilCheckpoint(t *testing.T) {
 }
 
 func TestV2AgentIncompatibleTargetTypedLoss(t *testing.T) {
+	if testing.Short() {
+		t.Skip("extended v2 matrix runs outside the PR short suite")
+	}
 	for _, mismatch := range []string{"name", "kinds", "bounds", "legacy-echo", "remote-name"} {
 		t.Run(mismatch, func(t *testing.T) {
 			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
@@ -360,4 +372,28 @@ func TestV2AgentIncompatibleTargetTypedLoss(t *testing.T) {
 			})
 		})
 	}
+}
+
+// Keep one inexpensive refusal in the PR short suite; the complete mismatch
+// and takeover matrix runs in the extended suite.
+func TestV2AgentFastRefusal(t *testing.T) {
+	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+		regs, stats := v2Registrations(nil)
+		regs[1].Name = "different/v1"
+		sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs, remoteTarget: true})
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		call, err := sys.h.Dial(ctx, CallOptions{})
+		require.NoError(t, err)
+		awaitV2(t, stats[0], agent.Started)
+		result, err := sys.plane.Move(ctx, call.SessionID(), "1")
+		// The public move endpoint preserves the typed incompatible cause.
+		require.ErrorIs(t, err, agent.ErrIncompatibleAgent)
+		require.True(t, result.Result.RolledBack)
+		require.False(t, result.Lost)
+		require.Zero(t, stats[1].saves.Load(), "mismatched target factory must never run")
+		require.Equal(t, 1, sys.workers[0].SessionCount())
+		_, err = call.Hangup(ctx)
+		require.NoError(t, err)
+	})
 }

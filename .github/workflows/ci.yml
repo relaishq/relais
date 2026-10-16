@@ -146,6 +146,8 @@ jobs:
   # PRs run the short memory matrix plus a Redis uncertainty regression.
   # Main, nightly and manual runs exercise both stores in full.
   call-harness:
+    # Includes the 15-minute PR suite and the longer main/nightly matrix.
+    timeout-minutes: 90
     runs-on: ubuntu-latest
     services:
       redis:

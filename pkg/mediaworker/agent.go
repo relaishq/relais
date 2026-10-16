@@ -61,7 +61,6 @@ type agentInput struct {
 }
 type agentMoveExport struct {
 	payload []byte
-	release func()
 }
 
 type agentFlush struct {
@@ -412,6 +411,18 @@ func (s *session) agentLoop() {
 // budget cannot fit it, discard the remaining queue and publish only the pair
 // already consumed. Enqueue is paused; the caller may also discard this queue.
 func (s *session) finishAgentFlush(request agentFlush) bool {
+	if request.moveOnly != nil {
+		// A definitive refusal must precede both queue drain and paused input
+		// drops. The actor serializes this admission with Handle and Save.
+		s.mu.Lock()
+		if err := s.reserveV2ExportScratch(); err != nil {
+			s.mu.Unlock()
+			request.done <- err
+			return true
+		}
+		s.agent.paused = true
+		s.mu.Unlock()
+	}
 	var err error
 	reserve := s.worker.cfg.Agent.CallbackTimeout
 	if request.moveOnly != nil {
@@ -442,10 +453,12 @@ drain:
 			request.moveOnly <- payload
 		}
 	}
-	request.done <- err
+	// Only the pre-pause admission may promise no dropped input. A callback
+	// cannot make a later failure definitive by returning that sentinel.
 	if errors.Is(err, ErrExportNotFlushed) {
-		return true
+		err = fmt.Errorf("mediaworker: export failed after pause: %v", err)
 	}
+	request.done <- err
 	if err != nil {
 		s.agentFailed(err)
 		return false
@@ -485,9 +498,11 @@ func (s *session) flushAgent(moveOnly ...chan agentMoveExport) error {
 	if _, echo := s.agent.instance.(*agent.Echo); echo {
 		return nil // Echo has no pending callbacks; fence atomically under mu.
 	}
-	s.mu.Lock()
-	s.agent.paused = true
-	s.mu.Unlock()
+	if len(moveOnly) == 0 {
+		s.mu.Lock()
+		s.agent.paused = true
+		s.mu.Unlock()
+	}
 	budget := min(time.Duration(cap(s.agent.queue)+2)*s.worker.cfg.Agent.CallbackTimeout, relay.DefaultHoldTimeout/2)
 	request := agentFlush{done: make(chan error, 1), deadline: time.Now().Add(budget)}
 	if len(moveOnly) > 0 {
@@ -512,7 +527,11 @@ func (s *session) flushAgent(moveOnly ...chan agentMoveExport) error {
 		case err := <-request.done:
 			return err
 		case <-expired:
-			s.dropAgentQueue()
+			// V2 admission belongs to the actor: the waiting caller must not
+			// discard input before its scratch reservation succeeds.
+			if request.moveOnly == nil {
+				s.dropAgentQueue()
+			}
 			expired = nil
 			// The one in-flight callback may still meet its own deadline.
 			// Wait for its paired publication, or actual quarantine below.

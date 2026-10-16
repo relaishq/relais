@@ -278,29 +278,68 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 		}
 	}
 
+	var sess *session
+	// V2 restore and Resumed.Save admit all move memory before extending
+	// ownership. These local callbacks cannot emit output or launch effects.
+	// Legacy retains its existing Renew-before-Restore ordering.
+	if snap.State.Agent.V2 != nil {
+		if w.cfg.Relay != nil {
+			if opts.Lease.SessionID != snap.State.ID || opts.Lease.Worker != w.localAddr {
+				return "", sessionstore.ErrLeaseLost
+			}
+			ctx, cancel := context.WithTimeout(parent, ownershipTimeout)
+			current, err := w.cfg.Relay.Owners.Get(ctx, snap.State.ID)
+			cancel()
+			if err != nil {
+				return "", err
+			}
+			if current.Worker != opts.Lease.Worker || current.Epoch != opts.Lease.Epoch {
+				return "", sessionstore.ErrLeaseLost
+			}
+		}
+		sess = sessionFromState(w, snap.State)
+		sess.lease = opts.Lease
+		if err := sess.initAgent(true, opts, snap.AgentMoveOnly); err != nil {
+			sess.fenced.Store(true)
+			sess.close()
+			return "", err
+		}
+	}
 	if w.cfg.Relay != nil {
 		if opts.Lease.SessionID != snap.State.ID || opts.Lease.Worker != w.localAddr {
+			if sess != nil {
+				sess.fenced.Store(true)
+				sess.close()
+			}
 			return "", sessionstore.ErrLeaseLost
 		}
 		ctx, cancel := context.WithTimeout(parent, ownershipTimeout)
 		lease, err := w.cfg.Relay.Owners.Renew(ctx, opts.Lease, w.cfg.Relay.LeaseTTL)
 		cancel()
 		if err != nil {
+			if sess != nil {
+				sess.fenced.Store(true)
+				sess.close()
+			}
 			return "", err
 		}
 		opts.Lease = lease
 	}
-	sess := sessionFromState(w, snap.State)
+	if sess == nil {
+		sess = sessionFromState(w, snap.State)
+	}
 	sess.lease = opts.Lease
 	sess.callerSequenceReserve = opts.CallerSequenceReserve
 	sess.state.Checkpoint.TakeoverAge = opts.CheckpointAge
 	sess.state.Checkpoint.TakeoverSnapshotAge = opts.SnapshotAge
 	sess.state.Checkpoint.TakeoverStoredAt = opts.CheckpointStoredAt
-	if err := sess.initAgent(true, opts, snap.AgentMoveOnly); err != nil {
-		sess.fenced.Store(true)
-		sess.close()
-		// The control plane owns rollback/retry and terminal lease cleanup.
-		return "", err
+	if sess.agent == nil {
+		if err := sess.initAgent(true, opts, snap.AgentMoveOnly); err != nil {
+			sess.fenced.Store(true)
+			sess.close()
+			// The control plane owns rollback/retry and terminal lease cleanup.
+			return "", err
+		}
 	}
 	dtlsConn, err := sess.resume(snap.DTLSConnection, opts)
 	if err != nil {
@@ -517,7 +556,11 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 	}
 	if move != nil {
 		export := <-move
-		release = export.release
+		var err error
+		release, err = s.claimV2ExportScratch()
+		if err != nil {
+			return nil, release, err
+		}
 		payload = &movePayload{Bytes: export.payload}
 	}
 	s.mu.Lock()

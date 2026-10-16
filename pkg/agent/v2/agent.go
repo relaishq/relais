@@ -4,7 +4,9 @@
 // After a crash before Started is checkpointed, the target delivers Resumed
 // before redelivering Started. An AudioInput Handle deadline outside Save drops
 // that input after quarantine and Restore. Save failures/deadlines, other callback
-// errors, invalid state and unsupported effects fail closed.
+// errors, invalid state and unsupported effects fail closed. A Save that grows
+// move-only length beyond the available worker memory fails closed with
+// mediaworker.ErrMoveBudget.
 // Task, timer and playback effect declarations describe requests only: every
 // nonempty effect is rejected as unsupported until its host slice is implemented.
 package agent

@@ -28,6 +28,9 @@ func (*reviewSlowRestore) Restore(context.Context, agent.State) error {
 }
 
 func TestV2ReviewTakeoverBurst(t *testing.T) {
+	if testing.Short() {
+		t.Skip("extended v2 matrix runs outside the PR short suite")
+	}
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		reg := agenthost.Registration{Name: "burst/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &reviewSlowRestore{} }}
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}})

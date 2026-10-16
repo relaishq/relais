@@ -217,6 +217,10 @@ func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected tim
 	return err == nil && len(remaining) == 0 && noIncoming
 }
 
+// ErrMoveBudgetExhausted marks terminal recovery loss after bounded worker
+// memory pressure retries. It is neither an agent fault nor incompatibility.
+var ErrMoveBudgetExhausted = errors.New("controlplane: move budget exhausted")
+
 // takeoverState survives transient errors even after Transfer changed the owner.
 // Its fields are accessed under the call lock; pending membership uses p.mu.
 type takeoverState struct {
@@ -235,6 +239,10 @@ type takeoverState struct {
 	attempts                int
 	attemptLimit            int
 	transientResume         bool
+	budgetStarted           time.Time
+	budgetNext              time.Time
+	budgetBackoff           time.Duration
+	budgetExcluded          map[netip.AddrPort]bool
 	resumeState             []byte
 	resumeTarget            *registration
 	deferredRecovery        bool // The possibly adopted tenure skipped its own resume PLI.
@@ -313,6 +321,12 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		existing.routedLease = listed
 	}
 	p.mu.Unlock()
+	// Read/reconcile ownership before declaring pressure loss: a committed
+	// hangup or an uncertain Transfer candidate takes precedence over the cap.
+	if existing != nil && !existing.budgetStarted.IsZero() &&
+		time.Since(existing.budgetStarted) < takeoverBudget && time.Now().Before(existing.budgetNext) {
+		return nil
+	}
 	lease, err := p.store.Get(ctx, c.id)
 	if err == nil {
 		c.rememberLease(lease)
@@ -378,6 +392,10 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 				}
 				if lost {
 					res.LossCause = "ownership_expired"
+					if !pending.budgetStarted.IsZero() {
+						res.LossCause = "move_budget_exhausted"
+						err = ErrMoveBudgetExhausted
+					}
 				}
 				p.completeTakeover(source, c, pending.lease, &res, lost,
 					fmt.Errorf("controlplane: pending takeover lease vanished: %w", err))
@@ -428,7 +446,12 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		outcome = &res
 	}
 
-	for noTargetAttempts := 0; pending.transientResume || pending.attempts < pending.attemptLimit; {
+	for noTargetAttempts := 0; pending.transientResume || !pending.budgetStarted.IsZero() || pending.attempts < pending.attemptLimit; {
+		if !pending.budgetStarted.IsZero() && time.Since(pending.budgetStarted) >= takeoverBudget {
+			res.LossCause = "move_budget_exhausted"
+			complete(true, ErrMoveBudgetExhausted)
+			return
+		}
 		name := ""
 		if pending.transientResume {
 			p.mu.Lock()
@@ -446,7 +469,17 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			}
 			p.mu.Unlock()
 		}
-		target, pickErr := p.pickExcluding(ctx, name, pending.excluded)
+		excluded := pending.excluded
+		if len(pending.budgetExcluded) > 0 {
+			excluded = make(map[netip.AddrPort]bool, len(pending.excluded)+len(pending.budgetExcluded))
+			for addr, skip := range pending.excluded {
+				excluded[addr] = skip
+			}
+			for addr := range pending.budgetExcluded {
+				excluded[addr] = true
+			}
+		}
+		target, pickErr := p.pickExcluding(ctx, name, excluded)
 		if pickErr != nil {
 			if !errors.Is(pickErr, ErrNoTarget) {
 				return
@@ -454,6 +487,14 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			// Eligibility can change after the pinned registration check.
 			// Retry next tick instead of declaring this uncertain adoption lost.
 			if pending.transientResume {
+				return
+			}
+			if !pending.budgetStarted.IsZero() {
+				// All currently eligible targets refused capacity. Reconsider them
+				// after backoff, while retaining the same absolute retry deadline.
+				pending.budgetExcluded = nil
+				pending.budgetBackoff = min(max(50*time.Millisecond, pending.budgetBackoff*2), 400*time.Millisecond)
+				pending.budgetNext = time.Now().Add(pending.budgetBackoff)
 				return
 			}
 			noTargetAttempts++
@@ -666,6 +707,13 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			Context: ctx, CallerSequenceReserve: pending.reserve, CheckpointAge: pending.checkpointAge, SnapshotAge: pending.snapshotAge, CheckpointStoredAt: pending.checkpointStoredAt, SequenceMargin: margin, SRTCPIndexMargin: rtcpMargin, RelayReplay: relayReplay})
 		res.Result.Resume += time.Since(started)
 		p.unreserve(target)
+		if !errors.Is(err, mediaworker.ErrMoveBudget) || errors.Is(err, privateapi.ErrUncertain) {
+			// Capacity is no longer the reason for retry. An uncertain reply may
+			// hide adoption and must use the existing confirmation rules.
+			pending.budgetStarted, pending.budgetNext = time.Time{}, time.Time{}
+			pending.budgetExcluded = nil
+			pending.budgetBackoff = 0
+		}
 		if err == nil {
 			if pending.replayPlan != nil {
 				replayed, replayErr := r.(ReplayRelay).ReplaySession(ctx, c.id, target.addr)
@@ -712,22 +760,38 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 					res.Result.RelayReplayRecoveryPLI = true
 				}
 			}
-			now := time.Now()
-			c.stateMu.Lock()
-			c.lastMove, c.lastMoveKind = &now, res.Kind
-			c.moveCount++
-			if !pending.planned {
-				c.takeoverCount++
+			if pending.planned && target == source {
+				// A delayed exact rollback continues the original owner; it is
+				// not a successful move to a different worker.
+				res.Result.RolledBack = true
+			} else {
+				now := time.Now()
+				c.stateMu.Lock()
+				c.lastMove, c.lastMoveKind = &now, res.Kind
+				c.moveCount++
+				if !pending.planned {
+					c.takeoverCount++
+				}
+				c.stateMu.Unlock()
 			}
-			c.stateMu.Unlock()
 			complete(false, nil)
 			return
 		}
-		if errors.Is(err, mediaworker.ErrMoveBudget) {
-			// No adoption happened. Retry the same bytes/tenure after other exports
-			// release memory; do not exclude a compatible target or spend margins.
-			pending.transientResume = true
-			return
+		if errors.Is(err, mediaworker.ErrMoveBudget) && !errors.Is(err, privateapi.ErrUncertain) {
+			// This typed refusal proves no adoption and no counter publication.
+			// Try another target without pinning or spending an adoption attempt.
+			if pending.budgetStarted.IsZero() {
+				pending.budgetStarted = time.Now()
+			}
+			if pending.budgetExcluded == nil {
+				pending.budgetExcluded = make(map[netip.AddrPort]bool)
+			}
+			pending.budgetExcluded[target.addr] = true
+			if !pending.transientResume {
+				pending.attempts--
+			}
+			pending.transientResume = false
+			continue
 		}
 		// Explicit transport uncertainty can hide an adopted target even with
 		// an agent cause. Confirm that target before treating typed failures as
@@ -774,6 +838,9 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 		c.terminal = true
 		if res.LossCause == "" {
 			res.LossCause = "recovery_failed"
+			if errors.Is(cause, ErrMoveBudgetExhausted) {
+				res.LossCause = "move_budget_exhausted"
+			}
 			if errors.Is(cause, sessionstore.ErrNotFound) {
 				res.LossCause = "checkpoint_missing"
 			} else if checkpointEnvelopeLoss(cause) {

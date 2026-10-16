@@ -75,8 +75,10 @@ func TestV2ReviewFlushReservesSaveMoveOnlyDeadline(t *testing.T) {
 	request := agentFlush{done: make(chan error, 1), deadline: time.Now().Add(1500 * time.Millisecond), moveOnly: make(chan agentMoveExport, 1)}
 	require.True(t, s.finishAgentFlush(request))
 	require.NoError(t, <-request.done)
-	export := <-request.moveOnly
-	defer export.release()
+	<-request.moveOnly
+	release, err := s.claimV2ExportScratch()
+	require.NoError(t, err)
+	defer release()
 	require.Zero(t, a.handles, "drain must keep two callback budgets before starting another Handle")
 	require.EqualValues(t, 8, s.worker.AgentStats().InputDrops)
 	require.Equal(t, 1, a.moveSaves)

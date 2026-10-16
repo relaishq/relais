@@ -116,8 +116,9 @@ test-harness: ## Run the call harness (audio+video echo calls, direct and throug
 
 # Disable Redis explicitly, including deeply nested uncertainty subtests,
 # even if the invoking shell has Redis configured and required.
+# The suite ran at 99% of the former 10-minute timeout before v2 coverage.
 test-harness-short: ## Run the PR call harness with -race and -short (5 s baseline calls), memory only; requires ffmpeg
-	RELAIS_TEST_REDIS_ADDR= RELAIS_TEST_REDIS_REQUIRE=0 $(GOTEST) -race -short -v -count=1 -timeout 10m ./pkg/callharness/
+	RELAIS_TEST_REDIS_ADDR= RELAIS_TEST_REDIS_REQUIRE=0 $(GOTEST) -race -short -v -count=1 -timeout 15m ./pkg/callharness/
 
 test-harness-smoke: ## Enforce PR timing thresholds without -race: 20 moves, 20 kills and planned wrap, memory only; requires ffmpeg
 	RELAIS_TEST_REDIS_ADDR= RELAIS_TEST_REDIS_REQUIRE=0 $(GOTEST) -v -count=1 -timeout 10m -run '^TestRelay(PlannedHandover|HardKillTakeover|PlannedWrap)$$' ./pkg/callharness/
