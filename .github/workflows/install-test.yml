@@ -1,0 +1,155 @@
+name: Install test
+
+on:
+  pull_request:
+    paths:
+      - 'cmd/**'
+      - 'pkg/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - 'scripts/release/**'
+      - 'scripts/install-test/**'
+      - 'deploy/local/**'
+      - '.github/workflows/install-test.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/**'
+      - 'pkg/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - 'scripts/release/**'
+      - 'scripts/install-test/**'
+      - 'deploy/local/**'
+      - '.github/workflows/install-test.yml'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      artifact_name:
+        description: Existing archive artifact to test; empty builds install-archives
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  archives:
+    if: ${{ inputs.artifact_name == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build all download archives
+        run: ./scripts/release/build-archives.sh "0.0.0-dev+$(git rev-parse --short HEAD)" dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: install-archives
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+          if-no-files-found: error
+
+  test:
+    needs: archives
+    # A supplied release artifact skips archives; explicitly allow that case.
+    if: ${{ !cancelled() && (needs.archives.result == 'success' || (needs.archives.result == 'skipped' && inputs.artifact_name != '')) }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os: linux
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            os: linux
+            arch: arm64
+          - runner: macos-latest
+            os: darwin
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact_name || 'install-archives' }}
+          path: downloads
+      - name: Verify and extract this runner's archive
+        env:
+          TARGET_OS: ${{ matrix.os }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          cd downloads
+          # Exactly one archive is expected for each target.
+          shopt -s nullglob
+          matches=(relais_*_"${TARGET_OS}"_"${TARGET_ARCH}".tar.gz)
+          test "${#matches[@]}" -eq 1
+          archive=${matches[0]}
+          awk -v archive="$archive" '$2 == archive' checksums.txt > selected-checksum.txt
+          test -s selected-checksum.txt
+          if command -v sha256sum >/dev/null; then
+            sha256sum -c selected-checksum.txt
+          else
+            shasum -a 256 -c selected-checksum.txt
+          fi
+          mkdir "$RUNNER_TEMP/extracted"
+          tar xzf "$archive" -C "$RUNNER_TEMP/extracted"
+          echo "EXTRACTED_DIR=$RUNNER_TEMP/extracted/${archive%.tar.gz}" >> "$GITHUB_ENV"
+      - name: Install dedicated Redis executable (no service)
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            brew install redis
+          else
+            # Prevent package installation from starting a system service.
+            printf '#!/bin/sh\nexit 101\n' > "$RUNNER_TEMP/policy-rc.d"
+            if [ -e /usr/sbin/policy-rc.d ]; then
+              sudo cp -p /usr/sbin/policy-rc.d "$RUNNER_TEMP/original-policy-rc.d"
+              trap 'sudo cp -p "$RUNNER_TEMP/original-policy-rc.d" /usr/sbin/policy-rc.d' EXIT
+            else
+              trap 'sudo rm -f /usr/sbin/policy-rc.d' EXIT
+            fi
+            sudo install -m 755 "$RUNNER_TEMP/policy-rc.d" /usr/sbin/policy-rc.d
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends redis-server
+          fi
+      # Ubuntu images ship go in /usr/bin, so the job PATH cannot exclude it.
+      # run.sh runs every Relais program with a PATH of linked system tools
+      # only and fails if go is reachable there.
+      - name: Prove the Go-free install path
+        env:
+          INSTALL_TEST_LOGS: ${{ runner.temp }}/install-logs
+        run: |
+          set -o pipefail
+          mkdir -p "$INSTALL_TEST_LOGS"
+          ./scripts/install-test/run.sh "$EXTRACTED_DIR" 2>&1 | tee "$INSTALL_TEST_LOGS/driver.log"
+      - name: Upload failure evidence (without secrets)
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: install-logs-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/install-logs/*.log
+            ${{ runner.temp }}/install-logs/*.stdout
+            ${{ runner.temp }}/install-logs/*.stderr
+            ${{ runner.temp }}/install-logs/*.json
+            ${{ runner.temp }}/install-logs/*.jsonl
+            ${{ runner.temp }}/install-logs/*.version
+            ${{ runner.temp }}/install-logs/topology/logs/
+            ${{ runner.temp }}/install-logs/topology/pids*
+            ${{ runner.temp }}/extracted/**/demo-cluster-*/*.log

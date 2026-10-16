@@ -24,6 +24,7 @@ import (
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/processrss"
 	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/pkg/buildinfo"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/mediaworker"
 )
@@ -527,6 +528,7 @@ func run() error {
 
 func runArgs(args []string) error {
 	fs := flag.NewFlagSet("relais-load", flag.ContinueOnError)
+	version := buildinfo.VersionFlag(fs)
 	c := config{Limits: loadgen.DefaultLimits()}
 	var events eventFlags
 	child := fs.Bool("child", false, "internal caller-process mode")
@@ -577,6 +579,9 @@ func runArgs(args []string) error {
 	fs.Var(&events, "event", "repeat after,move|kill|drain,count,worker; move count=0 means all eligible calls")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *version {
+		return buildinfo.PrintVersion(os.Stdout, "relais-load")
 	}
 	if fs.NArg() != 0 {
 		return errors.New("unexpected positional arguments")

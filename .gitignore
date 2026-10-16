@@ -31,3 +31,7 @@ vendor/
 bin
 
 examples/
+
+# Release archives and local topology state (contains generated secrets)
+/dist/
+.relais-local/

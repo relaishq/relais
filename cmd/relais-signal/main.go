@@ -18,9 +18,12 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/relaishq/relais/pkg/buildinfo"
 )
 
 type config struct {
+	Version                       bool
 	Listen, Control, AdvertiseIPs string
 	TokenEnv, TokenFile           string
 	CertFile, KeyFile, CertOut    string
@@ -29,6 +32,7 @@ type config struct {
 func parseConfig(args []string) (config, error) {
 	var c config
 	flags := flag.NewFlagSet("relais-signal", flag.ContinueOnError)
+	version := buildinfo.VersionFlag(flags)
 	flags.StringVar(&c.Listen, "listen", "", "explicit private or loopback IP:port for HTTPS (for example 127.0.0.1:9443)")
 	flags.StringVar(&c.Control, "control", "", "private control-plane HTTP(S) origin with a literal IP")
 	flags.StringVar(&c.AdvertiseIPs, "advertise-ips", "", "comma-separated advertised IP SANs; required for generated certificates")
@@ -40,6 +44,7 @@ func parseConfig(args []string) (config, error) {
 	if err := flags.Parse(args); err != nil {
 		return c, err
 	}
+	c.Version = *version
 	if flags.NArg() != 0 {
 		return c, errors.New("positional arguments are refused")
 	}
@@ -186,7 +191,9 @@ func main() {
 	if errors.Is(err, flag.ErrHelp) {
 		return
 	}
-	if err == nil {
+	if err == nil && c.Version {
+		err = buildinfo.PrintVersion(os.Stdout, "relais-signal")
+	} else if err == nil {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
 		err = run(ctx, c, os.Stdout)

@@ -15,6 +15,7 @@ import (
 	"github.com/relaishq/relais/internal/relaylease"
 	"github.com/relaishq/relais/internal/socketbind"
 	"github.com/relaishq/relais/internal/udpbuffer"
+	"github.com/relaishq/relais/pkg/buildinfo"
 	"github.com/relaishq/relais/pkg/relay"
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
@@ -45,7 +46,11 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 	leaseRenew := flag.Duration("relay-lease-renew", relaylease.DefaultRenew, "relay lease renewal interval")
 	leasePoll := flag.Duration("relay-lease-poll", relaylease.DefaultPoll, "standby claim polling interval")
 	bindTimeout := flag.Duration("relay-bind-timeout", socketbind.DefaultTimeout, "shared public, worker-leg and HTTP socket bind retry budget after fencing")
+	version := buildinfo.VersionFlag(flag.CommandLine)
 	flag.Parse()
+	if *version {
+		return buildinfo.PrintVersion(os.Stdout, "relais-relay")
+	}
 	if err := validateBufferBounds(*bufferWindow, *bufferSession, *bufferTotal, *bufferSSRCs); err != nil {
 		return err
 	}
