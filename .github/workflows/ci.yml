@@ -59,6 +59,9 @@ jobs:
         with:
           version: v2.14.0
 
+      - name: Build worker from an external module without CGO
+        run: go test -count=1 -run '^TestExternalModuleBuild$' ./pkg/workerapp
+
       - name: Build
         run: make build
 

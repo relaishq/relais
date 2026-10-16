@@ -22,6 +22,8 @@ Use `make clean` to remove build artifacts. `make demo-agent` runs the scripted
 agent, `make demo-cluster` runs the echo cluster, and `make demo` runs the older
 shared-socket page. See [demo instructions](docs/demo.md).
 
+The stock `cmd/relais-worker` delegates its lifecycle to the public `pkg/workerapp` package.
+
 ## Redis and tests
 
 Never connect tests or tools to Redis on port **6379**. Use a dedicated,
