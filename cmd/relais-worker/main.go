@@ -6,10 +6,12 @@ import (
 	"flag"
 	"log"
 	"net/netip"
+	"os"
 	"time"
 
 	"github.com/relaishq/relais/internal/processrun"
 	"github.com/relaishq/relais/internal/udpbuffer"
+	"github.com/relaishq/relais/pkg/buildinfo"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/framecache"
 	"github.com/relaishq/relais/pkg/mediaworker"
@@ -28,7 +30,11 @@ func run() error {
 	cryptoTrace := flag.Bool("srtp-diagnostics", false, "log sent SRTP/SRTCP ciphertext metadata for fault investigations")
 	agentName := flag.String("agent", "echo", "audio agent: echo or demo")
 	drainTimeout := flag.Duration("drain-timeout", 5*time.Second, "SIGTERM drain deadline before closing")
+	version := buildinfo.VersionFlag(flag.CommandLine)
 	flag.Parse()
+	if *version {
+		return buildinfo.PrintVersion(os.Stdout, "relais-worker")
+	}
 	if *drainTimeout <= 0 {
 		return &configError{}
 	}

@@ -5,10 +5,12 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/pkg/buildinfo"
 	"github.com/relaishq/relais/pkg/controlplane"
 )
 
@@ -26,7 +28,11 @@ func run() error {
 	flag.Var(&testWorkers, "test-register-worker", "enable private test registration for IP=HTTP-first-last,UDP-first-last (repeat per host)")
 	var registered workers
 	flag.Var(&registered, "worker", "name=http://worker-address (repeat for each worker)")
+	version := buildinfo.VersionFlag(flag.CommandLine)
 	flag.Parse()
+	if *version {
+		return buildinfo.PrintVersion(os.Stdout, "relais-control")
+	}
 	if *relayURL == "" || len(registered) < 1 {
 		return errors.New("control requires -relay and at least one -worker")
 	}

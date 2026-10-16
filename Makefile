@@ -137,3 +137,9 @@ demo: ## Run media workers A and B on one UDP socket plus the browser echo page 
 
 help: ## Display this help screen
 	@grep -h -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
+
+DIST_VERSION ?= 0.0.0-dev+$(COMMIT)
+DIST_DIR ?= dist
+.PHONY: dist
+dist: ## Build release archives for Linux and macOS on amd64 and arm64
+	./scripts/release/build-archives.sh "$(DIST_VERSION)" "$(DIST_DIR)"

@@ -19,6 +19,7 @@ import (
 
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/pkg/buildinfo"
 )
 
 //go:embed web
@@ -263,7 +264,11 @@ func configureFlags(flags *flag.FlagSet, cfg *config) {
 func run() error {
 	var cfg config
 	configureFlags(flag.CommandLine, &cfg)
+	version := buildinfo.VersionFlag(flag.CommandLine)
 	flag.Parse()
+	if *version {
+		return buildinfo.PrintVersion(os.Stdout, "relais-demo")
+	}
 	// Validate exposure and Redis before starting any child or dialing any store.
 	if err := validateConfig(cfg); err != nil {
 		return err
