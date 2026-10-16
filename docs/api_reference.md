@@ -1,5 +1,10 @@
 # Relais API Reference
 
+> This page covers the lower-level media-worker and older echo-demo test APIs,
+> plus the legacy plugin interfaces. To connect an application through the
+> authenticated `relais-signal` frontend, use [Connect an app](connect-an-app.md).
+> The production process worker uses a private API; this is not its public contract.
+
 ## Media Worker Signaling
 
 The media worker (`pkg/mediaworker`) serves WHIP-style signaling; `cmd/echo-demo` mounts it next to the demo page.
@@ -34,4 +39,6 @@ Plugins must implement one of:
 - EgressPlugin
 - TransformPlugin
 
-See pkg/plugins/interface.go for details.
+See [the interfaces](../pkg/plugins/interface.go) and
+[the legacy pipeline](legacy/plugin-pipeline.md). These plugins are not the
+live audio-agent interface.
