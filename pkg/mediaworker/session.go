@@ -60,6 +60,9 @@ var supportedSRTPProfiles = []dtls.SRTPProtectionProfile{
 // sends or receives is processed under it, so a snapshot taken under mu is
 // atomic with the counters (see export).
 type session struct {
+	data      *dataSession
+	endReason string // guarded by mu
+
 	moveMu        sync.Mutex
 	moveReserved  int64
 	exportScratch *moveScratch
@@ -185,6 +188,11 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 		Audio: audio,
 		Video: video,
 	})
+	if offer.data {
+		sess.state.Data = true
+		sess.state.Version = dataSessionStateVersion
+		sess.data = newDataSession(sess, offer.maxMessage)
+	}
 	if err := sess.initAgent(false, ResumeOptions{}); err != nil {
 		sess.close()
 		return nil, err
@@ -294,10 +302,12 @@ func (s *session) connect() (*dtls.Conn, error) {
 		return dtlsConn, fmt.Errorf("DTLS handshake: %w", err)
 	}
 	workerprobe.BeforeSRTP(s.worker.localAddr, connectCtx, s.id)
-	if _, err := s.startSRTP(dtlsConn); err != nil {
-		return dtlsConn, fmt.Errorf("start SRTP: %w", err)
-	}
+	if s.state.Audio.negotiated() || s.state.Video.negotiated() {
+		if _, err := s.startSRTP(dtlsConn); err != nil {
+			return dtlsConn, fmt.Errorf("start SRTP: %w", err)
+		}
 
+	}
 	workerprobe.BeforeInitialSnapshot(s.worker.localAddr, s.ctx, s.id)
 	// The background loop can store the handshake and then accept changed
 	// agent state before this attempt. A skip means a checkpoint is already
@@ -317,6 +327,10 @@ func (s *session) connect() (*dtls.Conn, error) {
 // read so alerts are processed: a close_notify from the caller ends the
 // session.
 func (s *session) serve(dtlsConn *dtls.Conn) {
+	if s.data != nil {
+		s.data.serve(dtlsConn)
+		return
+	}
 	buf := make([]byte, receiveMTU)
 	for {
 		if _, err := dtlsConn.Read(buf); err != nil {
@@ -701,6 +715,15 @@ func (s *session) consentExpired() {
 func (s *session) close() {
 	s.closeOnce.Do(func() {
 		s.cancel()
+		if s.data != nil {
+			s.mu.Lock()
+			reason := s.endReason
+			s.mu.Unlock()
+			if reason == "" {
+				reason = "session_ended"
+			}
+			s.data.end(reason)
+		}
 		s.releaseMoveBytes()
 		s.consent.Stop()
 

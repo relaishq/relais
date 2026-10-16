@@ -40,6 +40,7 @@ const sessionStateVersion = 7
 //     continue from the indexes below (restoreInboundIndex,
 //     restoreOutboundIndex and SetIndex).
 type sessionState struct {
+	Data       bool `json:",omitempty"` // Version 9: reconnect only; never transport-resumable.
 	Agent      agentState
 	Checkpoint CheckpointState
 	Version    int

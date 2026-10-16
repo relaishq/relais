@@ -218,6 +218,9 @@ func (w *Worker) exportSession(sessionID string) ([]byte, func(), error) {
 	if sess == nil {
 		return nil, func() {}, ErrUnknownSession
 	}
+	if sess.state.Data {
+		return nil, func() {}, ErrDataSessionNotMovable
+	}
 	state, release, err := sess.export()
 	if err != nil {
 		return nil, release, err
@@ -520,6 +523,9 @@ func (w *Worker) adopt(sess *session, dtlsConn *dtls.Conn, replayPackets [][]byt
 // counters in the snapshot are the final ones.
 func (s *session) export() (data []byte, release func(), exportErr error) {
 	release = func() {}
+	if s.state.Data {
+		return nil, release, ErrDataSessionNotMovable
+	}
 	defer func() {
 		if exportErr != nil {
 			release()
@@ -617,9 +623,18 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 }
 
 func decodeSnapshot(data []byte) (*snapshot, error) {
-	var version struct{ Version int }
+	var version struct {
+		Version int
+		State   struct {
+			Version int
+			Data    bool
+		}
+	}
 	if err := json.Unmarshal(data, &version); err != nil {
 		return nil, fmt.Errorf("%w: %w", errBadState, err)
+	}
+	if version.Version == dataSessionStateVersion || version.State.Version == dataSessionStateVersion || version.State.Data {
+		return nil, ErrDataSessionReconnectRequired
 	}
 	if version.Version != v2SessionStateVersion && version.Version != sessionStateVersion && version.Version != 6 {
 		return nil, fmt.Errorf("%w %d (want %d)", errStateVersion, version.Version, sessionStateVersion)

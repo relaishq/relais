@@ -36,6 +36,13 @@ func (s *session) snapshotBytesAt(captured time.Time) ([]byte, error) {
 // captureSnapshotAt returns the exact owned pair encoded in this snapshot.
 func (s *session) captureSnapshotAt(captured time.Time) ([]byte, agentState, error) {
 	s.mu.Lock()
+	if s.state.Data {
+		// This is a reconnect marker, not an SCTP or DTLS checkpoint.
+		marker := snapshot{Version: dataSessionStateVersion, State: sessionState{Version: dataSessionStateVersion, ID: s.id, Data: true}}
+		s.mu.Unlock()
+		data, err := json.Marshal(marker)
+		return data, agentState{}, err
+	}
 	if s.fenced.Load() || s.ctx.Err() != nil {
 		s.mu.Unlock()
 		return nil, agentState{}, errHandedOver
