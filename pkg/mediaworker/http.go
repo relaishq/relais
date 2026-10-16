@@ -18,11 +18,12 @@ var RemoteErrors = map[string]error{
 	"unknown_session": ErrUnknownSession, "unsupported_offer": ErrUnsupportedOffer,
 	"closed": ErrClosed, "not_established": ErrNotEstablished,
 	"sequence_budget": ErrSequenceBudgetExhausted, "session_exists": errSessionExists,
-	"srtcp_exhausted":    ErrSRTCPIndexExhausted,
-	"agent_incompatible": agentv2.ErrIncompatibleAgent,
-	"agent_capacity":     agentv2.ErrCapacity,
-	"uncertain":          privateapi.ErrUncertain,
-	"move_budget":        ErrMoveBudget, "export_not_flushed": ErrExportNotFlushed,
+	"srtcp_exhausted":     ErrSRTCPIndexExhausted,
+	"agent_incompatible":  agentv2.ErrIncompatibleAgent,
+	"agent_capacity":      agentv2.ErrCapacity,
+	"uncertain":           privateapi.ErrUncertain,
+	"export_incompatible": ErrExportIncompatible,
+	"move_budget":         ErrMoveBudget, "export_not_flushed": ErrExportNotFlushed,
 	"agent_version": agent.ErrVersion, "agent_oversize": agent.ErrStateTooLarge, "agent_save": agent.ErrSave, "agent_restore": agent.ErrRestore,
 }
 
@@ -135,6 +136,10 @@ func (w *Worker) SessionCount() int {
 func workerAPIError(rw http.ResponseWriter, err error) {
 	if errors.Is(err, privateapi.ErrUncertain) {
 		privateapi.Error(rw, err, map[string]error{"uncertain": privateapi.ErrUncertain})
+		return
+	}
+	if errors.Is(err, ErrExportIncompatible) {
+		privateapi.Error(rw, err, map[string]error{"export_incompatible": ErrExportIncompatible})
 		return
 	}
 	if errors.Is(err, ErrExportNotFlushed) {

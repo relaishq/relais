@@ -5,6 +5,8 @@
 // before redelivering Started. An AudioInput Handle deadline outside Save drops
 // that input after quarantine and Restore. TaskMessage Handle errors and deadlines
 // fail closed after Restore; this also applies to admission Capacity callbacks.
+// Admission refusals are queued as compact terminal intents. Each Capacity
+// callback runs in a later transaction; Handle is never called recursively.
 // Save failures/deadlines, other callback
 // errors, invalid state and unsupported effects fail closed. A Save that grows
 // move-only length beyond the available worker memory fails closed with

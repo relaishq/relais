@@ -114,6 +114,7 @@ func cloneAgentState(state agentState) agentState {
 		e := *state.V2
 		e.TaskKinds = slices.Clone(e.TaskKinds)
 		e.Tasks = cloneTaskIntents(e.Tasks)
+		e.Capacity = slices.Clone(e.Capacity)
 		state.V2 = &e
 	}
 	return state
@@ -407,7 +408,8 @@ func (s *session) agentLoop() {
 func (s *session) finishAgentFlush(request agentFlush) bool {
 	if request.moveOnly != nil {
 		if err := s.validateTaskMoves(s.agent.latest.V2.Tasks, &movePayload{Tasks: s.taskMoveViews()}); err != nil {
-			request.done <- errors.Join(ErrExportNotFlushed, err)
+			s.log.Warnf("session %s: export preflight incompatible: %v", s.id, err)
+			request.done <- errors.Join(ErrExportIncompatible, err)
 			return true
 		}
 		// A definitive refusal must precede both queue drain and paused input
@@ -432,6 +434,12 @@ drain:
 		select {
 		case in := <-s.agent.queue:
 			err = s.processAudio(in)
+			if errors.Is(err, errTaskAdmissionBackpressure) {
+				// Export the last accepted pair; the relay replays unconsumed input on
+				// the target, just as when the flush deadline leaves queued input.
+				err = nil
+				break drain
+			}
 			if err != nil {
 				break drain
 			}
@@ -457,7 +465,7 @@ drain:
 	if errors.Is(err, ErrExportNotFlushed) {
 		err = fmt.Errorf("mediaworker: export failed after pause: %v", err)
 	}
-	if errors.Is(err, agentv2.ErrCapacity) {
+	if errors.Is(err, agentv2.ErrCapacity) || errors.Is(err, errTaskAdmissionBackpressure) {
 		err = privateapi.Uncertain(err)
 	}
 	request.done <- err
@@ -469,6 +477,10 @@ drain:
 }
 
 func (s *session) dropAgentQueue() {
+	if s.agent.v2 != nil && s.agent.v2.pendingInput != nil {
+		s.agent.v2.pendingInput = nil
+		s.worker.agents.drops.Add(1)
+	}
 	for {
 		select {
 		case <-s.agent.queue:

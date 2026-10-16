@@ -144,12 +144,12 @@ func TestTaskReviewEmitWorkerPressureBackpressures(t *testing.T) {
 	require.ErrorIs(t, <-e.reply, agent.ErrBackpressure)
 	require.Empty(t, task.results)
 }
-func TestTaskReviewPreparedTasksDoNotOccupySlots(t *testing.T) {
+func TestTaskReviewPreparedTasksReserveSlots(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
 	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"test/v1": func(ctx context.Context, _ *agent.TaskRun) error { <-ctx.Done(); return ctx.Err() }}
-	for i := range 5 {
+	for i := range 6 {
 		class := agent.SideEffecting
 		policy := agent.Retry
 		if i == 4 {
@@ -160,7 +160,28 @@ func TestTaskReviewPreparedTasksDoNotOccupySlots(t *testing.T) {
 		s.agent.v2.tasks = append(s.agent.v2.tasks, &localTask{intent: intent, terminalBytes: taskTerminalBytes(intent)})
 	}
 	s.launchTasks()
-	require.True(t, s.agent.v2.tasks[4].launched, "ungranted side effects cannot block ReadOnly work")
+	require.False(t, s.agent.v2.tasks[4].launched, "prepared tasks reserve their slots")
+	for i, task := range s.agent.v2.tasks {
+		if i < 4 {
+			require.True(t, task.prepared)
+			require.Equal(t, taskStarted, task.intent.Phase)
+		} else {
+			require.False(t, task.prepared)
+			require.Equal(t, taskNever, task.intent.Phase)
+		}
+	}
+	s.mu.Lock()
+	s.durableAgent = cloneAgentState(s.state.Agent)
+	s.mu.Unlock()
+	s.launchTasks()
+	for i, task := range s.agent.v2.tasks {
+		if i < 4 {
+			require.True(t, task.launched)
+		} else {
+			require.False(t, task.launched)
+			require.Equal(t, taskNever, task.intent.Phase)
+		}
+	}
 }
 func TestTaskReviewExportMismatchIsDefinitiveBeforePause(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
@@ -174,7 +195,8 @@ func TestTaskReviewExportMismatchIsDefinitiveBeforePause(t *testing.T) {
 	request := agentFlush{done: make(chan error, 1), deadline: time.Now().Add(time.Second), moveOnly: make(chan agentMoveExport, 1)}
 	require.True(t, s.finishAgentFlush(request))
 	err := <-request.done
-	require.ErrorIs(t, err, ErrExportNotFlushed)
+	require.ErrorIs(t, err, ErrExportIncompatible)
+	require.NotErrorIs(t, err, ErrMoveBudget)
 	require.ErrorIs(t, err, agent.ErrIncompatibleAgent)
 	require.False(t, s.agent.paused)
 	require.False(t, s.fenced.Load())

@@ -35,7 +35,8 @@ type v2Envelope struct {
 	HasMoveOnly    bool
 	MoveOnlyLength int
 	Started        bool
-	Tasks          []taskIntent `json:",omitempty"`
+	Tasks          []taskIntent  `json:",omitempty"`
+	Capacity       []taskRefusal `json:",omitempty"`
 }
 
 type v2Host struct {
@@ -43,6 +44,7 @@ type v2Host struct {
 	registration agenthost.Registration
 	ready        chan struct{}
 	tasks        []*localTask // actor-owned
+	pendingInput *agentInput  // one backpressured, unconsumed input; actor-owned
 	emissions    chan taskEmission
 	force        chan struct{}
 }
@@ -129,7 +131,7 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 		outcome := agent.OK
 		if move == nil {
 			for _, t := range s.state.Agent.V2.Tasks {
-				if (t.Class == agent.ReadOnly && t.RequestLength > 0 && !(t.Final && t.Cursor == t.Published)) || t.Published > t.Cursor {
+				if (t.Class == agent.ReadOnly && t.RequestLength > 0 && (!t.Final || t.Cursor != t.Published)) || t.Published > t.Cursor {
 					outcome = agent.OutcomeUnknown
 					break
 				}
@@ -336,7 +338,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	var effects agent.Effects
 	var tasks []*localTask
 	var saving atomic.Bool
-	var taskCallback atomic.Bool
+	var refusals []taskRefusal
 	err := s.agentCall(func(ctx context.Context) error {
 		var err error
 		effects, err = h.v2.instance.Handle(ctx, event)
@@ -349,51 +351,29 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if err := validateV2Effects(event.Kind, effects); err != nil {
 			return err
 		}
-		// Admission refusals are consumed in the same bounded transaction as
-		// their cause. They have no pending mailbox: Save/progress commits the
-		// Capacity callbacks atomically, and rollback replays the same IDs.
-		tasks = slices.Clone(h.v2.tasks)
-		work := []struct {
-			cause   agent.Event
-			effects agent.Effects
-		}{{event, effects}}
-		effects = agent.Effects{}
-		for len(work) > 0 {
-			if err := ctx.Err(); err != nil {
-				return err
+		// Refusals are compact terminal intents, delivered as later transactions.
+		// Never recursively call Handle while accepting another callback's effects.
+		refusals = slices.Clone(before.V2.Capacity)
+		if event.Kind == agent.TaskMessage && len(refusals) > 0 && refusals[0].ID == event.Result.TaskID {
+			refusals = refusals[1:]
+		}
+		var refused []agent.TaskResult
+		tasks, refused, err = s.prepareTaskEffects(event, effects, h.v2.tasks, refusals)
+		if err != nil {
+			return err
+		}
+		for _, r := range refused {
+			refusals = append(refusals, taskRefusal{ID: r.TaskID, Turn: r.Turn})
+		}
+		intents := make([]taskIntent, len(tasks))
+		for i, t := range tasks {
+			intents[i] = t.intent
+		}
+		if err := s.taskMetadataBudget(intents, refusals, false); err != nil {
+			if errors.Is(err, agent.ErrCapacity) || errors.Is(err, ErrMoveBudget) {
+				return errTaskAdmissionBackpressure
 			}
-			item := work[0]
-			work = work[1:]
-			var refused []agent.TaskResult
-			tasks, refused, err = s.prepareTaskEffects(item.cause, item.effects, tasks)
-			if err != nil {
-				return err
-			}
-			effects.CancelTasks = append(effects.CancelTasks, item.effects.CancelTasks...)
-			for _, result := range refused {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				capacityEvent := agent.Event{ID: agent.EventID("task/" + string(result.TaskID) + "/1"), Kind: agent.TaskMessage, Result: &result}
-				taskCallback.Store(true)
-				follow, err := h.v2.instance.Handle(ctx, capacityEvent)
-				if err != nil {
-					return err
-				}
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if err := validateV2Effects(agent.TaskMessage, follow); err != nil {
-					return err
-				}
-				taskCallback.Store(false)
-				if len(follow.StartTasks) > 0 || len(follow.CancelTasks) > 0 {
-					work = append(work, struct {
-						cause   agent.Event
-						effects agent.Effects
-					}{capacityEvent, follow})
-				}
-			}
+			return err
 		}
 		saving.Store(true)
 		saved, err = h.v2.instance.Save(ctx)
@@ -403,7 +383,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if err := s.validateV2StateMetadata(saved); err != nil {
 			return err
 		}
-		if err := s.taskBudget(tasks, saved.MoveOnlyLength); err != nil {
+		if err := s.taskBudgetWithRefusals(tasks, saved.MoveOnlyLength, refusals); err != nil {
 			return err
 		}
 		saved = cloneV2State(saved)
@@ -424,9 +404,8 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		}
 		// A late AudioInput Handle is quarantined before Restore, just as in the
 		// legacy host. It cannot advance accepted state or consumed-input progress.
-		// TaskMessage failures, including nested admission Capacity callbacks,
-		// fail closed even when their causing event was AudioInput.
-		if !adoption && event.Kind == agent.AudioInput && !taskCallback.Load() && errors.Is(err, context.DeadlineExceeded) && !saving.Load() {
+		// Capacity TaskMessages get their own transaction and fail closed too.
+		if !adoption && event.Kind == agent.AudioInput && errors.Is(err, context.DeadlineExceeded) && !saving.Load() {
 			s.worker.agents.drops.Add(1)
 			return nil
 		}
@@ -441,6 +420,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	next := cloneAgentState(before)
 	next.State = legacy.State{Version: saved.Version, Bytes: saved.Bytes}
 	next.V2.HasMoveOnly, next.V2.MoveOnlyLength = saved.HasMoveOnly, saved.MoveOnlyLength
+	next.V2.Capacity = refusals
 	if event.Kind == agent.Started {
 		next.V2.Started = true
 	}
@@ -454,6 +434,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 				t.intent.Cursor = event.Result.Sequence
 				t.mailboxBytes -= taskResultBytes(t.results[0])
 				t.results = t.results[1:]
+				s.retireTaskRequest(t)
 			}
 		}
 	}

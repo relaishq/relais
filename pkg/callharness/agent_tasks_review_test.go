@@ -120,71 +120,7 @@ func TestV2TaskReviewMoveAfterTakeover(t *testing.T) {
 	for _, continuous := range []bool{false, true} {
 		t.Run(fmt.Sprint(continuous), func(t *testing.T) {
 			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
-				launched := make(chan struct{}, 8)
-				results := make(chan agent.TaskResult, 64)
-				handler := func(ctx context.Context, _ *agent.TaskRun) error {
-					launched <- struct{}{}
-					<-ctx.Done()
-					return ctx.Err()
-				}
-				spec := agent.TaskSpec{Step: "stt", Kind: "test/v1", Class: agent.ReadOnly, Request: []byte("recording")}
-				regs := make([]agenthost.Registration, 3)
-				for i := range regs {
-					regs[i] = agenthost.Registration{Name: "review/v1", Tasks: map[string]agent.TaskHandler{"test/v1": handler}, Factory: func(agent.FactoryArgs) agent.Agent {
-						return &taskReviewInputAgent{taskHarnessAgent: taskHarnessAgent{specs: []agent.TaskSpec{spec}, results: results}}
-					}, Bounds: agenthost.Bounds{MaxStateBytes: 4096}}
-				}
-				sys := startTaskReviewHarness3(t, store, regs)
-				ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-				defer cancel()
-				call, err := sys.h.Dial(ctx, CallOptions{})
-				require.NoError(t, err)
-				mediaCtx, stopMedia := context.WithCancel(ctx)
-				defer stopMedia()
-				if continuous {
-					done := make(chan struct{})
-					go func() { defer close(done); _ = call.SendMedia(mediaCtx, 10*time.Second) }()
-					defer func() { stopMedia(); <-done }()
-				} else {
-					require.NoError(t, call.SendMedia(ctx, 80*time.Millisecond))
-				}
-				select {
-				case <-launched:
-				case <-ctx.Done():
-					t.Fatal("task never launched")
-				}
-				taskCheckpointed(t, store, call.SessionID())
-				lease, err := store.Get(ctx, call.SessionID())
-				require.NoError(t, err)
-				owner := -1
-				for i, w := range sys.workers {
-					if w.LocalAddr() == lease.Worker {
-						owner = i
-					}
-				}
-				require.GreaterOrEqual(t, owner, 0)
-				require.NoError(t, workerprobe.Kill(sys.workers[owner].LocalAddr()))
-				final := takeTaskFinal(t, results)
-				require.Equal(t, agent.OutcomeUnknown, final[len(final)-1].Outcome)
-				// Silent input leaves the input-caused receipt below its duplicate horizon.
-				if !continuous {
-					time.Sleep(120 * time.Millisecond)
-				}
-				lease, err = store.Get(ctx, call.SessionID())
-				require.NoError(t, err)
-				target := -1
-				for i, w := range sys.workers {
-					if i != owner && w.LocalAddr() != lease.Worker {
-						target = i
-					}
-				}
-				require.GreaterOrEqual(t, target, 0)
-				moved, err := sys.plane.Move(ctx, call.SessionID(), strconv.Itoa(target))
-				require.NoError(t, err)
-				require.False(t, moved.Lost)
-				require.Equal(t, 1, sys.workers[target].SessionCount())
-				_, err = call.Hangup(ctx)
-				require.NoError(t, err)
+				runTaskReviewMoveAfterTakeover(t, store, continuous)
 			})
 		})
 	}
@@ -396,4 +332,76 @@ func TestV2TaskReviewCompletedRequestIsNotLostData(t *testing.T) {
 		_, err = call.Hangup(ctx)
 		require.NoError(t, err)
 	})
+}
+
+func runTaskReviewMoveAfterTakeover(t *testing.T, store sessionstore.Store, continuous bool) {
+	launched := make(chan struct{}, 8)
+	results := make(chan agent.TaskResult, 64)
+	handler := func(ctx context.Context, _ *agent.TaskRun) error {
+		launched <- struct{}{}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	spec := agent.TaskSpec{Step: "stt", Kind: "test/v1", Class: agent.ReadOnly, Request: []byte("recording")}
+	regs := make([]agenthost.Registration, 3)
+	for i := range regs {
+		regs[i] = agenthost.Registration{Name: "review/v1", Tasks: map[string]agent.TaskHandler{"test/v1": handler}, Factory: func(agent.FactoryArgs) agent.Agent {
+			return &taskReviewInputAgent{taskHarnessAgent: taskHarnessAgent{specs: []agent.TaskSpec{spec}, results: results}}
+		}, Bounds: agenthost.Bounds{MaxStateBytes: 4096}}
+	}
+	sys := startTaskReviewHarness3(t, store, regs)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	call, err := sys.h.Dial(ctx, CallOptions{})
+	require.NoError(t, err)
+	mediaCtx, stopMedia := context.WithCancel(ctx)
+	defer stopMedia()
+	if continuous {
+		done := make(chan struct{})
+		go func() { defer close(done); _ = call.SendMedia(mediaCtx, 10*time.Second) }()
+		defer func() { stopMedia(); <-done }()
+	} else {
+		require.NoError(t, call.SendMedia(ctx, 80*time.Millisecond))
+	}
+	select {
+	case <-launched:
+	case <-ctx.Done():
+		t.Fatal("task never launched")
+	}
+	taskCheckpointed(t, store, call.SessionID())
+	lease, err := store.Get(ctx, call.SessionID())
+	require.NoError(t, err)
+	owner := -1
+	for i, w := range sys.workers {
+		if w.LocalAddr() == lease.Worker {
+			owner = i
+		}
+	}
+	require.GreaterOrEqual(t, owner, 0)
+	require.NoError(t, workerprobe.Kill(sys.workers[owner].LocalAddr()))
+	final := takeTaskFinal(t, results)
+	require.Equal(t, agent.OutcomeUnknown, final[len(final)-1].Outcome)
+	// Silent input leaves the input-caused receipt below its duplicate horizon.
+	if !continuous {
+		time.Sleep(120 * time.Millisecond)
+	}
+	lease, err = store.Get(ctx, call.SessionID())
+	require.NoError(t, err)
+	target := -1
+	for i, w := range sys.workers {
+		if i != owner && w.LocalAddr() != lease.Worker {
+			target = i
+		}
+	}
+	require.GreaterOrEqual(t, target, 0)
+	moved, err := sys.plane.Move(ctx, call.SessionID(), strconv.Itoa(target))
+	require.NoError(t, err)
+	require.False(t, moved.Lost)
+	require.Equal(t, 1, sys.workers[target].SessionCount())
+	_, err = call.Hangup(ctx)
+	require.NoError(t, err)
+}
+
+func TestV2TaskFinalReviewMoveAfterTakeoverShort(t *testing.T) {
+	runTaskReviewMoveAfterTakeover(t, sessionstore.NewMemory(), false)
 }

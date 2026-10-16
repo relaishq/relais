@@ -19,6 +19,9 @@ import (
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 )
 
+// This host-generated refusal is distinct from errors returned by an agent.
+var errTaskAdmissionBackpressure = fmt.Errorf("%w: pending task admission outcomes", agent.ErrBackpressure)
+
 const (
 	taskNever       = "never_launched"
 	taskStarted     = "may_have_started"
@@ -52,6 +55,18 @@ type taskIntent struct {
 	Terminal      agent.Outcome      `json:"z,omitempty"`
 	Final         bool               `json:"f,omitempty"`
 }
+
+// A refusal has no request or result payload. These are terminal host intent
+// metadata, not a durable result inbox.
+type taskRefusal struct {
+	ID   agent.TaskID `json:"i"`
+	Turn agent.Turn   `json:"t,omitempty"`
+}
+
+func (r taskRefusal) result() agent.TaskResult {
+	return agent.TaskResult{TaskID: r.ID, Turn: r.Turn, Sequence: 1, Outcome: agent.Capacity, Final: true, Detail: "task admission capacity"}
+}
+
 type taskMove struct {
 	ID      agent.TaskID
 	Request []byte
@@ -161,6 +176,9 @@ func (s *session) taskNow() time.Time {
 	return time.Now()
 }
 func (s *session) taskBudget(tasks []*localTask, appBytes int) error {
+	return s.taskBudgetWithRefusals(tasks, appBytes, s.agent.latest.V2.Capacity)
+}
+func (s *session) taskBudgetWithRefusals(tasks []*localTask, appBytes int, refusals []taskRefusal) error {
 	n := int64(appBytes)
 	intents := make([]taskIntent, 0, len(tasks))
 	for _, t := range tasks {
@@ -172,18 +190,48 @@ func (s *session) taskBudget(tasks []*localTask, appBytes int) error {
 			n += int64(t.terminalBytes)
 		}
 	}
-	envelope := *s.agent.latest.V2
-	envelope.Tasks = intents
-	metadata, _ := json.Marshal(envelope)
-	if len(metadata) > min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes) {
-		return agent.ErrCapacity
+	if err := s.taskMetadataBudget(intents, refusals, false); err != nil {
+		return err
 	}
 	if n > int64(s.agent.v2.registration.Bounds.MaxMailboxBytes) {
 		return agent.ErrCapacity
 	}
 	return s.reserveMoveBytes(n)
 }
-func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, base []*localTask) ([]*localTask, []agent.TaskResult, error) {
+func (s *session) taskMetadataBudget(intents []taskIntent, refusals []taskRefusal, admission bool) error {
+	envelope := *s.agent.latest.V2
+	envelope.Tasks = intents
+	envelope.Capacity = refusals
+	metadata, _ := json.Marshal(envelope)
+	if admission {
+		// Reserve encoded metadata headroom from each real admitted intent. This
+		// changes new admission only: prior checkpoints retain their full capacity.
+		guard := slices.Clone(refusals)
+		for i := len(guard); i < len(intents); i++ {
+			guard = append(guard, taskRefusal{ID: intents[i].ID, Turn: intents[i].Turn})
+		}
+		envelope.Capacity = guard
+		guarded, _ := json.Marshal(envelope)
+		if len(guarded) > len(metadata) {
+			metadata = guarded
+		}
+	}
+	if len(metadata) > min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes) {
+		return agent.ErrCapacity
+	}
+	return nil
+}
+func (s *session) taskAdmissionBudget(tasks []*localTask, appBytes int, refusals []taskRefusal) error {
+	intents := make([]taskIntent, len(tasks))
+	for i, t := range tasks {
+		intents[i] = t.intent
+	}
+	if err := s.taskMetadataBudget(intents, refusals, true); err != nil {
+		return err
+	}
+	return s.taskBudgetWithRefusals(tasks, appBytes, refusals)
+}
+func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, base []*localTask, refusals []taskRefusal) ([]*localTask, []agent.TaskResult, error) {
 	h := s.agent.v2
 	next := slices.Clone(base)
 	var refused []agent.TaskResult
@@ -233,7 +281,7 @@ func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, b
 		t := &localTask{intent: intent, request: spec.Request}
 		t.terminalBytes = taskTerminalBytes(intent)
 		next = append(next, t)
-		if err := s.taskBudget(next, s.agent.latest.V2.MoveOnlyLength); err != nil {
+		if err := s.taskAdmissionBudget(next, s.agent.latest.V2.MoveOnlyLength, refusals); err != nil {
 			if errors.Is(err, agent.ErrCapacity) || errors.Is(err, ErrMoveBudget) {
 				next = next[:len(next)-1]
 				refused = append(refused, capacity)
@@ -299,13 +347,18 @@ func (s *session) terminalTask(t *localTask, outcome agent.Outcome, detail strin
 	t.mailboxBytes += taskResultBytes(t.results[len(t.results)-1])
 	t.intent.Terminal = outcome
 	t.intent.Final = true
-	t.request = nil
-	t.intent.Request = nil
+	s.retireTaskRequest(t)
 	if t.intent.Phase != taskCanceled {
 		t.intent.Phase = taskTerminal
 	}
 	t.prepared = false
 	t.launched = false
+}
+func (s *session) retireTaskRequest(t *localTask) {
+	if t.intent.Class == agent.ReadOnly || (t.intent.Final && t.intent.Cursor == t.intent.Published) {
+		t.request = nil
+		t.intent.Request = nil
+	}
 }
 func (s *session) taskStateChanged() {
 	before := s.agent.latest.V2.Tasks
@@ -345,7 +398,7 @@ func (s *session) launchTasks() {
 		}
 	}
 	for _, t := range h.tasks {
-		if t.launched {
+		if t.launched || t.prepared {
 			active++
 		}
 	}
@@ -355,15 +408,19 @@ func (s *session) launchTasks() {
 			continue
 		}
 		if !t.intent.Deadline.IsZero() && !s.taskNow().Before(t.intent.Deadline) {
+			if t.prepared {
+				active--
+			}
 			s.terminalTask(t, agent.Timeout, "")
 			changed = true
 			continue
 		}
-		if active >= h.registration.Bounds.MaxActiveTasks {
+		if !t.prepared && active >= h.registration.Bounds.MaxActiveTasks {
 			continue
 		}
 		if t.intent.Class == agent.SideEffecting {
 			if !t.prepared {
+				active++
 				t.prepared = true
 				t.intent.Phase = taskStarted
 				changed = true
@@ -380,7 +437,9 @@ func (s *session) launchTasks() {
 				continue
 			}
 		}
-		active++
+		if !t.prepared {
+			active++
+		}
 		// The actor owns cancellation and attempt state. The final fence/route check
 		// is under the same lock used by export and ownership loss.
 		s.mu.Lock()
@@ -390,6 +449,7 @@ func (s *session) launchTasks() {
 		}
 		if !t.intent.Deadline.IsZero() && !s.taskClockLocked().Before(t.intent.Deadline) {
 			s.mu.Unlock()
+			active--
 			s.terminalTask(t, agent.Timeout, "")
 			changed = true
 			continue
@@ -582,11 +642,23 @@ func (s *session) deliverTaskResult() (bool, error) {
 		result.Chunk = cloneChunk(result.Chunk)
 		id := agent.EventID("task/" + string(result.TaskID) + "/" + strconv.FormatUint(result.Sequence, 10))
 		if err := s.handleV2Event(agent.Event{ID: id, Kind: agent.TaskMessage, Result: &result}); err != nil {
+			if errors.Is(err, errTaskAdmissionBackpressure) {
+				continue
+			}
 			return false, err
 		}
 		// handleV2Event commits the cursor and removes this exact mailbox entry
 		// atomically with application state, before publishing the pair.
 		return true, nil
+	}
+	if pending := s.agent.latest.V2.Capacity; len(pending) > 0 {
+		result := pending[0].result()
+		err := s.handleV2Event(agent.Event{ID: agent.EventID("task/" + string(result.TaskID) + "/1"), Kind: agent.TaskMessage, Result: &result})
+		if errors.Is(err, errTaskAdmissionBackpressure) {
+			return false, nil
+		}
+		// Yield to emissions/export/ticker before another refusal transaction.
+		return false, err
 	}
 	return false, nil
 }
@@ -658,6 +730,12 @@ func taskIntentsEqual(a, b []taskIntent) bool {
 // It reads owned payloads without copying them or changing actor state.
 func (s *session) validateTaskMoves(intents []taskIntent, move *movePayload) error {
 	seen := map[agent.TaskID]bool{}
+	for _, r := range s.agent.latest.V2.Capacity {
+		if r.ID == "" || seen[r.ID] {
+			return fmt.Errorf("%w: invalid capacity intent", agent.ErrIncompatibleAgent)
+		}
+		seen[r.ID] = true
+	}
 	if move != nil && len(move.Tasks) != len(intents) {
 		return fmt.Errorf("%w: unexpected exact task mailbox", agent.ErrIncompatibleAgent)
 	}
@@ -733,8 +811,7 @@ func (s *session) restoreTasks(move *movePayload) error {
 			}
 		}
 		if intent.Final {
-			t.request = nil
-			t.intent.Request = nil
+			s.retireTaskRequest(t)
 		}
 
 		if intent.Final && intent.Cursor == intent.Published {
@@ -746,12 +823,13 @@ func (s *session) restoreTasks(move *movePayload) error {
 			t.intent.Final = false
 			// A persisted terminal with no missing chunks can be regenerated exactly
 			// from metadata. In particular a canceled/expired intent must never rerun.
-			if intent.Final && intent.Published == intent.Cursor+1 && taskrun.ValidOutcome(intent.Terminal) {
+			if intent.Final && intent.Published == intent.Cursor+1 && taskrun.ValidOutcome(intent.Terminal) &&
+				(intent.Class != agent.SideEffecting || intent.Resume != agent.Retry || intent.Terminal == agent.Canceled || intent.Terminal == agent.Timeout) {
 				s.terminalTask(t, intent.Terminal, "")
 				h.tasks = append(h.tasks, t)
 				continue
 			}
-			if (intent.Final && intent.RequestLength > 0) || (intent.Class == agent.ReadOnly && (intent.RequestLength > 0 || (intent.Published > 0 && intent.Resume != agent.Retry))) || (intent.Phase != taskNever && intent.Resume == agent.Abandon) {
+			if (intent.Final && intent.Class == agent.SideEffecting && len(t.request) != intent.RequestLength) || (intent.Class == agent.ReadOnly && (intent.RequestLength > 0 || (intent.Published > 0 && intent.Resume != agent.Retry))) || (intent.Phase != taskNever && intent.Resume == agent.Abandon) {
 				s.terminalTask(t, agent.OutcomeUnknown, "task payload or uncertain effect lost on takeover")
 			} else {
 				t.intent.Phase = taskNever
@@ -812,12 +890,6 @@ func (s *session) v2AgentLoop() {
 	s.worker.running.Add(1)
 	go func() { defer s.worker.running.Done(); s.taskCheckpointLoop() }()
 	defer s.stopTaskAttempts()
-	if !s.agent.latest.V2.Started {
-		if err := s.handleV2Event(agent.Event{ID: agent.EventID("started/" + s.id), Kind: agent.Started}); err != nil {
-			s.agentFailed(err)
-			return
-		}
-	}
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -834,6 +906,12 @@ func (s *session) v2AgentLoop() {
 		paused := s.agent.paused
 		s.mu.Unlock()
 		if !paused {
+			if !s.agent.latest.V2.Started {
+				if err := s.handleV2Event(agent.Event{ID: agent.EventID("started/" + s.id), Kind: agent.Started}); err != nil && !errors.Is(err, errTaskAdmissionBackpressure) {
+					s.agentFailed(err)
+					return
+				}
+			}
 			s.pruneTasks()
 			s.launchTasks()
 			if delivered, err := s.deliverTaskResult(); err != nil {
@@ -842,6 +920,18 @@ func (s *session) v2AgentLoop() {
 			} else if delivered {
 				continue
 			}
+		}
+		if !paused && h.pendingInput != nil {
+			if err := s.processAudio(*h.pendingInput); err == nil {
+				h.pendingInput = nil
+			} else if !errors.Is(err, errTaskAdmissionBackpressure) {
+				s.agentFailed(err)
+				return
+			}
+		}
+		input := s.agent.queue
+		if h.pendingInput != nil || !s.agent.latest.V2.Started {
+			input = nil
 		}
 		select {
 		case <-s.ctx.Done():
@@ -852,10 +942,14 @@ func (s *session) v2AgentLoop() {
 			}
 		case e := <-h.emissions:
 			s.acceptEmission(e)
-		case in := <-s.agent.queue:
+		case in := <-input:
 			if err := s.processAudio(in); err != nil {
-				s.agentFailed(err)
-				return
+				if errors.Is(err, errTaskAdmissionBackpressure) {
+					h.pendingInput = &in
+				} else {
+					s.agentFailed(err)
+					return
+				}
 			}
 		case <-ticker.C:
 		}
