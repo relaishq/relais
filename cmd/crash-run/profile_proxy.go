@@ -40,6 +40,9 @@ func newUncertainProxy(host, endpoint string) (*uncertainProxy, error) {
 	proxy.Transport = diagnosticProxyTransport{base: fault.transport}
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		if resp.Request.Method == http.MethodPost && resp.Request.URL.Path == "/resume" && resp.StatusCode/100 == 2 && fault.armed.CompareAndSwap(true, false) {
+			// Discard only the caller-visible reply. Finish reading the real reply
+			// so this injected fault does not also force a new upstream TCP dial.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, privateapi.MaxBody+1))
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(strings.NewReader("{"))
 			resp.ContentLength = 1
