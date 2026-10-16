@@ -10,7 +10,7 @@ import (
 )
 
 func TestTaskCapacityReviewWideCallback(t *testing.T) {
-	for _, width := range []int{20, 100} {
+	for _, width := range []int{20, 33, 100} {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
 			a := &v2UnitAgent{state: agent.State{Version: 1}}
 			_, s := v2UnitSession(t, a)
@@ -27,6 +27,9 @@ func TestTaskCapacityReviewWideCallback(t *testing.T) {
 			}
 			require.NoError(t, err)
 			require.True(t, s.agent.latest.V2.Started)
+			if width == 33 {
+				require.Empty(t, s.agent.v2.tasks)
+			}
 			require.Equal(t, width, len(s.agent.v2.tasks)+len(s.agent.latest.V2.Capacity))
 			require.NoError(t, s.taskBudget(s.agent.v2.tasks, 0))
 			for _, task := range s.agent.v2.tasks {

@@ -84,7 +84,6 @@ func TestV2UnknownAndControlIgnored(t *testing.T) {
 	require.Equal(t, before, s.state.Agent)
 }
 func TestV2UnsupportedEffectsRollback(t *testing.T) {
-	turn := agent.Turn(1)
 	cases := []struct {
 		name    string
 		kind    agent.EventKind
@@ -93,12 +92,7 @@ func TestV2UnsupportedEffectsRollback(t *testing.T) {
 	}{
 		{"resumed-start", agent.Resumed, agent.Effects{StartTasks: []agent.TaskSpec{{Kind: "stt/v1"}}}, "StartTasks from Resumed is forbidden"},
 		{"start", agent.Started, agent.Effects{StartTasks: []agent.TaskSpec{{}}}, "invalid task specification"},
-		{"cancel-before", agent.Started, agent.Effects{CancelBefore: &turn}, "task cancellation not supported in this slice"},
-		{"timer", agent.Started, agent.Effects{SetTimers: []agent.TimerSpec{{ID: "timer"}}}, "timers not supported in this slice"},
-		{"cancel-timer", agent.Started, agent.Effects{CancelTimers: []string{"timer"}}, "timers not supported in this slice"},
-		{"audio", agent.Started, agent.Effects{Audio: []agent.Audio{{}}}, "pacer effects not supported in this slice"},
-		{"clear", agent.Started, agent.Effects{ClearAudioBefore: &turn}, "pacer effects not supported in this slice"},
-		{"notify", agent.Started, agent.Effects{NotifyPlaybackFinished: &turn}, "pacer effects not supported in this slice"},
+		{"audio", agent.Started, agent.Effects{Audio: []agent.Audio{{}}}, "audio reference has no payload"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

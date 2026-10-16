@@ -139,6 +139,11 @@ func (m *sourceRate) observe(now time.Time, index uint64, timestamp, clockRate u
 func (s *session) checkpointRates(info *CheckpointState) {
 	now := time.Now()
 	info.RTPPacketRate = max(s.audioRate.rate(now), s.videoRate.rate(now))
+	if s.state.Agent.V2 != nil {
+		// The independent Opus pacer can produce 2.5 ms packets under DTX.
+		// Preserve this floor even when the configured caller rate is smaller.
+		info.RTPPacketRate = max(info.RTPPacketRate, 400)
+	}
 	info.SRTCPPacketRate = s.rtcpRate.rate(now)
 }
 

@@ -9,10 +9,12 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/relaishq/relais/internal/agenthost"
 	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 const (
@@ -28,15 +30,19 @@ const (
 
 // Only v8 contains this subtree. The legacy state/progress encoding is unchanged.
 type v2Envelope struct {
-	Name           string
-	Contract       string
-	TaskKinds      []string
-	Bounds         agenthost.Bounds
-	HasMoveOnly    bool
-	MoveOnlyLength int
-	Started        bool
-	Tasks          []taskIntent  `json:",omitempty"`
-	Capacity       []taskRefusal `json:",omitempty"`
+	Name            string
+	Contract        string
+	TaskKinds       []string
+	Bounds          agenthost.Bounds
+	HasMoveOnly     bool
+	MoveOnlyLength  int
+	Started         bool
+	Tasks           []taskIntent  `json:",omitempty"`
+	Capacity        []taskRefusal `json:",omitempty"`
+	CancelFloor     agent.Turn    `json:"cf,omitempty"`
+	TimerGeneration uint64        `json:"tg,omitempty"`
+	Timers          []hostTimer   `json:"tm,omitempty"`
+	Playback        playbackState `json:"pb,omitzero"`
 }
 
 type v2Host struct {
@@ -46,6 +52,8 @@ type v2Host struct {
 	tasks        []*localTask // actor-owned
 	pendingInput *agentInput  // one backpressured, unconsumed input; actor-owned
 	emissions    chan taskEmission
+	playback     playbackRuntime // guarded by session.mu
+	wakePlayback chan struct{}
 	force        chan struct{}
 }
 
@@ -53,7 +61,8 @@ type v2Host struct {
 // A checkpoint never includes this field or calls SaveMoveOnly.
 type movePayload struct {
 	Bytes []byte
-	Tasks []taskMove `json:",omitempty"`
+	Tasks []taskMove    `json:",omitempty"`
+	Audio []agent.Audio `json:",omitempty"`
 }
 
 func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeOptions, move *movePayload) error {
@@ -90,12 +99,15 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 	if opts.Kind == legacy.Takeover || opts.SequenceMargin > 0 {
 		move = nil
 	}
-	if restoring && move != nil && (len(move.Bytes) > 0 || len(move.Tasks) > 0) {
-		scratch := int64(len(move.Bytes))
+	if restoring && move != nil && (len(move.Bytes) > 0 || len(move.Tasks) > 0 || len(move.Audio) > 0) {
+		scratch := int64(len(move.Bytes) + audioRefsBytes(move.Audio))
 		for _, t := range move.Tasks {
 			scratch += int64(len(t.Request))
 			for _, r := range t.Results {
 				scratch += int64(taskResultBytes(r))
+			}
+			for _, r := range t.Audio {
+				scratch += int64(taskRetainedAudioBytes(r))
 			}
 		}
 		if scratch > int64(reg.Bounds.MaxMailboxBytes) {
@@ -107,8 +119,20 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 		defer s.worker.moveBytes.Add(-scratch)
 	}
 
-	h := &v2Host{registration: reg, ready: make(chan struct{}), emissions: make(chan taskEmission), force: make(chan struct{}, 1)}
+	h := &v2Host{registration: reg, ready: make(chan struct{}), emissions: make(chan taskEmission), force: make(chan struct{}, 1), wakePlayback: make(chan struct{}, 1)}
 	s.agent.v2 = h
+	if restoring && s.worker.cfg.Relay != nil {
+		ctx, cancel := context.WithTimeout(s.ctx, ownershipTimeout)
+		now, err := s.worker.cfg.Relay.Owners.Clock(ctx, s.id)
+		cancel()
+		if err != nil {
+			return err
+		}
+		if now.Before(s.state.Checkpoint.CapturedAt) {
+			return sessionstore.ErrUnsafeCheckpointClock
+		}
+		s.storeClock, s.storeClockAt = now, time.Now()
+	}
 	// Factory follows the legacy factory rule: quick, nonblocking construction.
 	h.instance = reg.Factory(agent.FactoryArgs{SessionID: s.id, AgentName: reg.Name, MaxStateBytes: reg.Bounds.MaxStateBytes})
 	if h.instance == nil {
@@ -137,6 +161,9 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 				}
 			}
 		}
+		if move == nil && s.state.Agent.V2.Playback.Pending > 0 {
+			outcome = agent.OutcomeUnknown
+		}
 		if state.HasMoveOnly {
 			if move != nil {
 				if len(move.Bytes) != state.MoveOnlyLength {
@@ -164,6 +191,9 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 			InputMayBeDuplicated: opts.InputMayBeDuplicated, DuplicateWindows: slices.Clone(opts.DuplicateWindows), Progress: s.state.Agent.Progress}, MoveOnly: outcome}
 		s.agent.latest = cloneAgentState(s.state.Agent)
 		if err := s.restoreTasks(move); err != nil {
+			return s.v2RestoreError(err)
+		}
+		if err := s.restorePlayback(move); err != nil {
 			return s.v2RestoreError(err)
 		}
 		s.publishTaskIntents()
@@ -309,14 +339,7 @@ func validateV2Effects(kind agent.EventKind, e agent.Effects) error {
 	if kind == agent.Resumed && len(e.StartTasks) != 0 {
 		return errors.New("agent: StartTasks from Resumed is forbidden")
 	}
-	switch {
-	case e.CancelBefore != nil:
-		return errors.New("agent: task cancellation not supported in this slice")
-	case len(e.SetTimers) > 0 || len(e.CancelTimers) > 0:
-		return errors.New("agent: timers not supported in this slice")
-	case len(e.Audio) > 0 || e.ClearAudioBefore != nil || e.NotifyPlaybackFinished != nil:
-		return errors.New("agent: pacer effects not supported in this slice")
-	}
+
 	return nil
 }
 
@@ -328,17 +351,28 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	// Reserved and future kinds have no delivery route in this slice. Do not call
 	// the agent or Save, so an unknown event cannot alter accepted state.
 	switch event.Kind {
-	case agent.Started, agent.AudioInput, agent.Resumed, agent.TaskMessage:
+	case agent.Started, agent.AudioInput, agent.Resumed, agent.TaskMessage, agent.TimerFired, agent.PlaybackFinished:
 	default:
 		return nil
 	}
 	h := s.agent
 	before := cloneAgentState(h.latest)
+	// The actor can stop attempts as soon as session cancellation releases
+	// agentCall, even if its callback goroutine is still running. Copy task
+	// nodes before dispatch so its staging never copies live attempt bookkeeping.
+	// Payloads are immutable here; only their headers and task fields need copies.
+	base := slices.Clone(h.v2.tasks)
+	for i, t := range base {
+		node := *t
+		base[i] = &node
+	}
 	var saved agent.State
 	var effects agent.Effects
 	var tasks []*localTask
 	var saving atomic.Bool
 	var refusals []taskRefusal
+	var timers []hostTimer
+	var timerGeneration uint64
 	err := s.agentCall(func(ctx context.Context) error {
 		var err error
 		effects, err = h.v2.instance.Handle(ctx, event)
@@ -351,6 +385,17 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if err := validateV2Effects(event.Kind, effects); err != nil {
 			return err
 		}
+		effects = filterAudioEffects(effects, before.V2.CancelFloor)
+		timers, timerGeneration, err = prepareTimers(before.V2.Timers, before.V2.TimerGeneration, event, effects, s.taskNow())
+		if err != nil {
+			return err
+		}
+		if err = s.validateAudioEffects(effects, event); err != nil {
+			return err
+		}
+		s.mu.Lock()
+		projection := s.projectedPlaybackLocked(effects, event).snapshot()
+		s.mu.Unlock()
 		// Refusals are compact terminal intents, delivered as later transactions.
 		// Never recursively call Handle while accepting another callback's effects.
 		refusals = uniqueTaskRefusals(before.V2.Capacity)
@@ -358,7 +403,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 			refusals = refusals[1:]
 		}
 		var refused []agent.TaskResult
-		tasks, refused, err = s.prepareTaskEffects(event, effects, h.v2.tasks, refusals)
+		tasks, refused, err = s.prepareTaskEffects(event, effects, base, refusals, projection)
 		if err != nil {
 			return err
 		}
@@ -372,7 +417,12 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 				if t.intent.ID == event.Result.TaskID {
 					next := *t
 					next.intent.Cursor = event.Result.Sequence
-					next.mailboxBytes -= taskResultBytes(t.results[0])
+					if t.results[0].Chunk.Audio != nil {
+						next.audio = append(slices.Clone(t.audio), t.results[0])
+						next.mailboxBytes -= taskAudioRefBytes(t.results[0])
+					} else {
+						next.mailboxBytes -= taskResultBytes(t.results[0])
+					}
 					next.results = t.results[1:]
 					s.retireTaskRequest(&next)
 					tasks[i] = &next
@@ -383,7 +433,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if event.Kind == agent.TaskMessage && len(prior) > 0 && prior[0].ID == event.Result.TaskID {
 			prior = prior[1:]
 		}
-		tasks, refusals, err = s.fitTaskRefusals(h.v2.tasks, tasks, prior, refusals)
+		tasks, refusals, err = s.fitTaskRefusals(base, tasks, prior, refusals, projection)
 		if err != nil {
 			return err
 		}
@@ -395,7 +445,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if err := s.validateV2StateMetadata(saved); err != nil {
 			return err
 		}
-		if err := s.taskBudgetWithRefusals(tasks, saved.MoveOnlyLength, refusals); err != nil {
+		if err := s.hostEffectsBudget(effects, event, timers, tasks, refusals, saved.MoveOnlyLength, timerGeneration); err != nil {
 			return err
 		}
 		saved = cloneV2State(saved)
@@ -441,10 +491,24 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		next.Progress.Consumed = before.Progress.Consumed + 1
 	}
 	s.acceptTaskEffects(tasks, effects)
+	if effects.CancelBefore != nil {
+		next.V2.CancelFloor = max(next.V2.CancelFloor, *effects.CancelBefore)
+	}
+	next.V2.Timers = timers
+	next.V2.TimerGeneration = timerGeneration
+	// App state, timer/task cursors and playback admission share one publication
+	// fence. Neither the pacer nor a snapshot can observe half this transaction.
+	s.mu.Lock()
+	h.v2.playback = s.projectedPlaybackLocked(effects, event)
+	next.V2.Playback = s.playbackSnapshotLocked()
 	next.V2.Tasks = cloneTaskIntents(h.latest.V2.Tasks)
 	next.Revision++
 	h.latest = next
-	s.publishAgent()
+	if !s.fenced.Load() && s.ctx.Err() == nil {
+		s.state.Agent = cloneAgentState(next)
+	}
+	s.mu.Unlock()
+	s.wakePacer()
 	if !agentStateEqual(before, next) {
 		s.wantSnapshot()
 	}
@@ -475,7 +539,7 @@ func (s *session) reserveV2ExportScratch() error {
 	if s.exportScratch != nil {
 		return nil
 	}
-	n := s.agent.latest.V2.MoveOnlyLength
+	n := s.agent.latest.V2.MoveOnlyLength + audioRefsBytes(s.agent.v2.playback.queue)
 	for _, t := range s.agent.v2.tasks {
 		n += len(t.request)
 		n += t.mailboxBytes
@@ -506,7 +570,10 @@ func (s *session) claimV2ExportScratch() (func(), error) {
 // Called by the paused actor exactly once per export request, after the last
 // accepted Save. The scratch was reserved before queue draining began.
 func (s *session) saveV2MoveOnly(deadline context.Context) (agentMoveExport, error) {
-	export := agentMoveExport{tasks: s.exportTasks()}
+	s.mu.Lock()
+	audio := slices.Clone(s.agent.v2.playback.queue)
+	s.mu.Unlock()
+	export := agentMoveExport{tasks: s.exportTasks(), audio: audio}
 	state := v2State(s.agent.latest)
 	if !state.HasMoveOnly {
 		return export, nil
@@ -544,7 +611,8 @@ func v2EnvelopeEqual(a, b *v2Envelope) bool {
 		return a == b
 	}
 	return a.Name == b.Name && a.Contract == b.Contract && slices.Equal(a.TaskKinds, b.TaskKinds) && a.Bounds == b.Bounds &&
-		a.HasMoveOnly == b.HasMoveOnly && a.MoveOnlyLength == b.MoveOnlyLength && a.Started == b.Started && taskIntentsEqual(a.Tasks, b.Tasks)
+		a.HasMoveOnly == b.HasMoveOnly && a.MoveOnlyLength == b.MoveOnlyLength && a.Started == b.Started && taskIntentsEqual(a.Tasks, b.Tasks) && slices.Equal(a.Capacity, b.Capacity) &&
+		a.CancelFloor == b.CancelFloor && a.TimerGeneration == b.TimerGeneration && slices.Equal(a.Timers, b.Timers) && playbackEqual(a.Playback, b.Playback)
 }
 
 func validateV2Wire(data []byte) error {

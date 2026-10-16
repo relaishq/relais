@@ -551,6 +551,9 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		s.mu.Lock()
 		if !s.fenced.Load() && s.ctx.Err() == nil && s.agent != nil {
 			s.agent.paused = false
+			if s.agent.v2 != nil {
+				s.wakePacer()
+			}
 		}
 		s.mu.Unlock()
 		return nil, release, flushErr
@@ -562,13 +565,16 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		if err != nil {
 			return nil, release, err
 		}
-		payload = &movePayload{Bytes: export.payload, Tasks: export.tasks}
+		payload = &movePayload{Bytes: export.payload, Tasks: export.tasks, Audio: export.audio}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer func() {
 		if !s.fenced.Load() && s.ctx.Err() == nil && s.agent != nil {
 			s.agent.paused = false
+			if s.agent.v2 != nil {
+				s.wakePacer()
+			}
 		}
 	}()
 
@@ -934,6 +940,15 @@ func (s *session) restoreReplayInbound(keys srtp.SessionKeys, opts ResumeOptions
 			if known {
 				continue
 			}
+		}
+		if opts.InputMayBeDuplicated && s.state.Agent.V2 != nil && s.state.Agent.Progress.Consumed > 0 &&
+			ssrc == s.state.Agent.Progress.SSRC && index == s.state.Agent.Progress.Index {
+			// V2 receipts may be pruned once received input passes their cause,
+			// even while an input waits. Never reopen already consumed causes.
+			if err := restoreInboundWindow(s.srtpIn, keys, s.state.SRTP.Profile, ssrc, index, ^uint64(0)); err != nil {
+				return err
+			}
+			continue
 		}
 		window, exact := s.state.SRTP.Received[ssrc]
 		if exact && index == high {
