@@ -535,6 +535,19 @@ func testBufferFailure(t *testing.T, store sessionstore.Store, path string) {
 	}
 	status := waitBufferTakeovers(t, ctx, sys.h, expected)
 	lostCall := path == "failed-adoption-loss"
+	if lostCall {
+		// Status reads call ownership before refreshing terminal events. A poll
+		// can therefore contain the new loss event and a pre-loss call. Also,
+		// terminal accounting precedes fenced relay cleanup. Poll both views
+		// until cleanup completes; keep the exact loss count, ended lease and
+		// zero gate assertions below, without accepting hold timeout cleanup.
+		require.Eventually(t, func() bool {
+			var err error
+			status, err = sys.h.Status(ctx)
+			return err == nil && len(status.Takeovers) == expected && len(status.Calls) == 0 && sys.r.Stats().Holds == 0
+		}, 2*time.Second, 5*time.Millisecond, "terminal loss removes the call and discards the gate")
+		require.Zero(t, sys.r.Stats().HoldTimeouts, "terminal cleanup must not rely on hold expiry")
+	}
 	require.Equal(t, lostCall, status.Takeovers[len(status.Takeovers)-1].Lost)
 	require.EqualValues(t, map[bool]int{false: 0, true: 1}[lostCall], status.LostCount)
 	require.Zero(t, sys.r.Stats().Holds, "no terminal path retains a gate")
