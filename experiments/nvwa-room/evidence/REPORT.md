@@ -1,349 +1,219 @@
-# Nvwa 房间原型：DataChannel 与 WebSocket 配对验证
+# Nvwa 房间 spike：25d8e35 最终配对验收
 
-日期：2026-10-16。stage-2 历史基线：`spike/nvwa-room` / `866a07d02270312bddd9bb60a74185d953248997`。历史 stage-2 由编排器提交为 `705b3e2`。本次审查修复基于该提交，修改实验目录、`pkg/workerapp/agent.go` 的导入和新增 `internal/spike/roomaudio`；未修改 W1 的 `pkg/mediaworker`、`pkg/controlplane`、`pkg/workerapp/app.go`、agent v2 或 task 代码。本次修改未提交、push 或写入 GitHub。
+日期：2026-10-16。生产基线 `25d8e35a7e0edf53e14bbe3cfc531820964282a1`，包含 W2 审查修复及 W1 DataChannel hardening。本轮只改实验驱动、测试探针与浏览器页面，没有修改生产包、agent v2 或 task；未 commit、push、发 PR 或写 GitHub。主24轮使用同一组固定二进制；burst接收探针随后单独修复，重跑两种burst，其room二进制另存hash，生产Relais二进制始终不变。SHA-256 和源文件清单位于 `stage3/`。
 
-**总状态：PARTIAL / HOLD。** 小消息、权威房间和“新连接恢复应用”路径有本机运行证据。浏览器消息已运行，但指定音调输入读取失败。严格入站分片边界仍为 W1 的 HOLD；完整默认媒体回归门也未全绿。不能据此宣布正式 Nvwa 接入或生产就绪。
+**结论：GO（受限本地实验）；整体PARTIAL，公网/正式采用HOLD** 只针对本机、受信的两个客户端、小消息、房间进程存活、允许显式新连接的模型。此结果不证明公网/全球互通、正式 Nvwa 接入或生产容量。
 
-## 1. 精确启动、停止与清理
+历史原件保留：[stage-1](REPORT.stage1.md)、[stage-2 与审查修复](REPORT.stage2-review-fixes.md)，原始 `stage2/`、`review-fixes/` 均未覆盖。
 
-所有命令从仓库根目录运行。使用新任务目录，已有缓存模块；`GOPROXY=off`、`-mod=readonly` 禁止新增模块下载。先完成构建，再固定二进制进行比较。
+## 1. 精确启动、运行、停止与清理（VERIFIED）
+
+从仓库根目录执行。模块只用本地缓存，禁止新增下载；动态 loopback 端口排除6379、9101、9201。
 
 ```sh
-nvwa_scratch=$(mktemp -d /private/tmp/nvwa-room-stage2.XXXXXX)
+nvwa_scratch=$(mktemp -d /private/tmp/nvwa-room-stage3.XXXXXX)
 bash experiments/nvwa-room/scripts/build.sh "$nvwa_scratch"
 
-# WS 数据 + Relais 音频。启动器自建专用 Redis、relay、两名 worker、control、signal、房间。
+# WS应用数据 + Relais音频；启动器自建 Redis/relay/control/signal/两worker/room。
 "$nvwa_scratch/bin/topology" -bin "$nvwa_scratch/bin" \
  -out "$nvwa_scratch/manual-ws" > "$nvwa_scratch/manual-ws.log" 2>&1 &
 nvwa_topology_pid=$!
-# 日志/topology.json 给出 room_url；页面为 ROOM_URL/web/。
-# 只停止刚创建并保存 PID 的这个启动器；它逐个等待自己的子进程退出。
+# manual-ws/topology.json 中的 room_url/web/ 是浏览器页面。
+# 停止时只使用本次保存的PID；启动器逐个等待自己启动的子进程。
 kill -TERM "$nvwa_topology_pid"
 wait "$nvwa_topology_pid"
 
-# DC 与音频共享 PeerConnection。房间上游由启动器写入 worker 配置。
+# DC与音频共享PC；其余拓扑相同。
 "$nvwa_scratch/bin/topology" -bin "$nvwa_scratch/bin" \
  -out "$nvwa_scratch/manual-dc" -datachannel > "$nvwa_scratch/manual-dc.log" 2>&1 &
 nvwa_topology_pid=$!
-# 验证后同样 kill -TERM "$nvwa_topology_pid"; wait "$nvwa_topology_pid"
-```
+# 同样 kill -TERM "$nvwa_topology_pid"; wait "$nvwa_topology_pid"
 
-启动器实际配置 worker：`-agent=room-audio -room-audio-bus=udp://127.0.0.1:PORT -frame-cache-off`。DC 另加 `-datachannel -datachannel-upstream=ws://127.0.0.1:ROOM_PORT/relais-upstream`；上限保持 1024 B / 16384 B / 4 channels。所有监听使用动态、互不重复的 loopback 端口；排除 6379、9101、9201。没有使用已有 Redis、Derek 的 Chrome 或共享 DevTools。
-
-单次运行和故障复现：
-
-```sh
-"$nvwa_scratch/bin/driver" -bin "$nvwa_scratch/bin" \
- -out "$nvwa_scratch/one-dc-normal" -datachannel \
+# 每次 -out 必须为新的任务目录；driver 退出会清理自己的拓扑。
+"$nvwa_scratch/bin/driver" -bin "$nvwa_scratch/bin" -out "$nvwa_scratch/one-dc" \
  -tone-a "$nvwa_scratch/tone-440.ogg" -tone-b "$nvwa_scratch/tone-880.ogg" \
- -count 1000 -rate 30 -fault normal
-# -fault 可替换为 disconnect、worker-kill、lost-receipt。
-# 去掉 -datachannel 即同协议 WS 对照。每次使用新的 -out。
+ -count 1000 -rate 30 -fault disconnect -datachannel
+# fault可为normal/disconnect/worker-kill/lost-receipt；去掉-datachannel即WS。
 
-wefty exec --detach --json --max-runtime 18m -- \
- python3 experiments/nvwa-room/scripts/run-matrix.py --scratch "$nvwa_scratch" --transport paired
-# wefty inspect RUN_ID --json
-# wefty logs RUN_ID --follow
-# 仅需中止本任务时：wefty cancel RUN_ID
+# 两个完整回归门：unit直接跑；长harness使用wefty。
+python3 experiments/nvwa-room/scripts/regression-stage2.py \
+ --out "$nvwa_scratch/unit" --gate test-unit
+wefty exec --detach --json --max-runtime 20m -- \
+ python3 experiments/nvwa-room/scripts/regression-stage2.py \
+ --out "$nvwa_scratch/harness" --gate test-harness-short
+# 此wrapper保留make真实非零状态。unit脚本会启动并回收专用非6379 Redis。
 
-"$nvwa_scratch/bin/backpressure" -bin "$nvwa_scratch/bin" \
- -out "$nvwa_scratch/pressure-dc" -datachannel \
+# 待两个门结束后，交替运行24次配对矩阵和短aux试验。
+wefty exec --detach --json --max-runtime 35m -- \
+ python3 experiments/nvwa-room/scripts/run-stage3.py --scratch "$nvwa_scratch"
+# 不需回归等待的独立复跑：
+# python3 experiments/nvwa-room/scripts/run-matrix.py --scratch "$nvwa_scratch" --transport paired
+wefty inspect RUN_ID --json
+wefty logs RUN_ID --follow
+# 只中止本任务的run时：wefty cancel RUN_ID；不按进程名/端口杀进程。
+
+# 单独复跑aux；参数相同，每次使用新out。
+"$nvwa_scratch/bin/burst" -bin "$nvwa_scratch/bin" -out "$nvwa_scratch/burst-dc-manual" \
+ -tone-a "$nvwa_scratch/tone-440.ogg" -tone-b "$nvwa_scratch/tone-880.ogg" -datachannel
+"$nvwa_scratch/bin/backpressure" -bin "$nvwa_scratch/bin" -out "$nvwa_scratch/pressure-dc-manual" \
+ -tone-a "$nvwa_scratch/tone-440.ogg" -tone-b "$nvwa_scratch/tone-880.ogg" -datachannel
+"$nvwa_scratch/bin/policies" -bin "$nvwa_scratch/bin" -out "$nvwa_scratch/policies-dc-manual" \
  -tone-a "$nvwa_scratch/tone-440.ogg" -tone-b "$nvwa_scratch/tone-880.ogg"
-"$nvwa_scratch/bin/policies" -bin "$nvwa_scratch/bin" \
- -out "$nvwa_scratch/policies-dc" \
- -tone-a "$nvwa_scratch/tone-440.ogg" -tone-b "$nvwa_scratch/tone-880.ogg"
+# burst/backpressure去掉-datachannel即可WS对照。
 ```
 
-`driver` 正常结束会回收其拓扑。`worker-kill` 只向自身 `Child.Process` 对象发送 SIGKILL，记录 PID/时间；房间和 Redis 保持运行。不要按进程名或端口 kill，不要关闭机器网络。保留 scratch 供审查；不删除共享状态。进程回收证据是启动器的逐个 `Process.Wait`，不是全机器 PID 扫描。
+worker 配置为 `-agent=room-audio -room-audio-bus=udp://127.0.0.1:PORT -frame-cache-off`。DC另开 `-datachannel -datachannel-upstream=ws://127.0.0.1:ROOM/relais-upstream`，默认1 KiB消息、16 KiB pending/channel、4次channel admission。Redis、TLS证书和bearer均由任务启动器独立创建；没有使用用户Redis或浏览器。保留scratch供审查；清理由各启动器的子进程句柄与Wait完成，不扫描全机PID，也不删除共享状态。
 
-## 2. 构建、启动、功能、故障、音频与测量状态
+## 2. 构建、启动、功能、故障、音频与测量
 
-| 检查 | 状态 | 证据与边界 |
+| 范围 | 状态 | 实际证据与边界 |
 | --- | --- | --- |
-| 构建 / vet | VERIFIED | 合并基线重新构建；实验包、workerapp vet 和 JS 语法检查通过；二进制和源码 hash 已保留。 |
-| 实际启动 | VERIFIED | 每次独立 Redis/relay/control/signal/两 worker/房间进程。signal 验证 TLS 和 bearer；浏览器只持有本地 lobby capability。 |
-| 房间功能 | VERIFIED | Go 双客户端的命令应用、固定 wave v1/起始 tick、stop、快照、查询、join/leave；两传输共用 Room.Handle 和同一去重账本。浏览器每传输每人 90 操作另有实际收据。 |
-| 连接恢复 | VERIFIED（有界） | 仅脚本主动重建传输；保持 room_epoch、玩家身份、已确认动作和最新状态，generation 1→2，最终房间版本一致。不声称自动故障检测或原通道存活。 |
-| 丢回执 | VERIFIED | 房间先应用并记录，故障丢掉一次收据，先 query 再同 ID 重试；每次一个 dedup、一个内容冲突，副作用只一次。 |
-| Move / Drain | VERIFIED | Move 明确拒绝且原调用继续；房间记录 Drain 的 op 3/reconnect_required，新 signal session 恢复原身份及结果。详见下文。 |
-| 双向音频 | VERIFIED（Go）；PARTIAL（浏览器） | Go 实收数据匹配对方的互斥 Opus 参考音，排除自身回声。浏览器 WAV 读取失败，不能算指定音调验收通过。不是人声质量验收。 |
-| 测量 | VERIFIED（本机样本） | 逐操作 RTT、状态年龄、收据序列、去重、队列、恢复和包到达间隔。完整原始数据及独立导出检查已保留。全栈 RSS/队列占用未测。 |
-| 默认媒体完整回归 | PARTIAL / FAIL | 两个指定 make 门都实际运行，均保留红灯；定向绿灯不覆盖全量失败。 |
+| 构建、vet、全模块lint | VERIFIED | golangci-lint v2.14.0运行`./...`，无目录排除；stock worker依赖与符号不含experiments包。internal opt-in音频实现仍链接。 |
+| 实际启动 | VERIFIED | 每轮独立Redis/relay/两worker/control/TLS+bearer signal/room；两个不同session和服务器绑定玩家。 |
+| 房间功能 | VERIFIED | join、wave v1/start_tick、stop、snapshot、query；同一Room.Handle和epoch/player/command_id账本。原生角色/动画不在范围内。 |
+| 在途故障恢复 | VERIFIED（新连接） | 真Send后、房间提交后、回执前切断；new signal session、同token、generation1→2、query/retry一致、去重一次、副作用一次。恢复由脚本主动触发，非自主检测延迟。 |
+| 丢回执 | VERIFIED | 房间已应用并记账后丢一次应用收据；query/retry返回原结果；变化input_seq显式冲突。 |
+| 双向音频 | VERIFIED（合成音调） | Go匹配对方的互斥Opus参考包；浏览器FFT识别对方440/880 Hz，非自身echo。不代表真人音质。 |
+| 测量 | VERIFIED（本机样本） | 同机逐操作RTT、状态年龄、实际收据journal、队列字节/年龄、重连及音频包间隔；全栈RSS和音频源端延迟未测。 |
+| 默认媒体回归 | PARTIAL | 两个完整make门均实际运行，失败原文保留。 |
 
-应用语义：token 绑定服务端玩家；generation 不进入 `(epoch, player, command_id)` 去重键。相同 type/input_seq/payload digest 返回原结果，变化内容返回冲突。`applied:true` 只表示房间已应用并记账，不表示网络 Write/ACK。高频状态只保留新序号，重连不补播输入。房间重新构造会产生新 epoch，旧 epoch 请求返回显式 `epoch_reset`；这条合同仅有单元测试。**真实房间进程 kill/restart 后新 epoch/reset 试验：NOT-RUN**。内存账本不提供崩溃持久恢复。
+身份由无登录的本地lobby发放有限token；服务器不接受自报player_id。连接有服务端generation，旧订阅停止、旧代次更新拒绝；generation不进入去重键。成功表示房间已经应用且记录结果，非Write/SCTP ACK。state仅采用更新序号，重连不补播旧高频输入。
 
-**非本地使用限制：** resume token 是原型级 capability。`/lobby` 没有登录认证；`/relais-upstream` 从 query string 取得 session ID，不独立认证其来源；token 不轮换；最新 `join` 无条件获胜，没有 compare-and-set。loopback、Origin 检查及随机有期限 token 不能替代面向公网的认证、会话绑定和并发 takeover 协议。
+**非本地安全限制（PARTIAL）：** `/lobby`无认证；`/relais-upstream`从query string接收session ID，不独立认证发送者；token不轮换；最新join获胜，没有compare-and-set。30分钟随机token、Origin和loopback限制不能替代公网身份/会话安全。
 
-### 故障 cut 与解释
+**房间重启（NOT-RUN）：** 新构造产生新epoch，旧epoch返回显式`epoch_reset`仅有单元测试；本轮没有真实room进程重启试验，内存账本也不提供崩溃持久恢复。
 
-以下三条描述历史 stage-2 矩阵，不能当作本次新增在途试验。审查指出前两条在请求之间切断，没有待确认命令，因此没有覆盖断线后的 retry/dedup。新增 writer 屏障及 WS 结果另列于第7节；DC 在途试验等待 W1 合并后执行。
+## 3. 同条件配对原始结果（VERIFIED）
 
-- `disconnect`：第 250 号操作前关闭 A 的任务自有应用连接和媒体 PC，等待 250 ms，再通过 signal 新建。没有切机器网络。
-- `worker-kill`：同一操作边界 SIGKILL 自建 w1，随后重建 A 的调用和房间连接。DC 与音频共用 PC，因此音频也中断。WS 本来独立于媒体 worker；为使用同一恢复合同，对照脚本也主动重连 WS。**这不是 WS 必须受 worker 故障影响的证据。**
-- `lost-receipt`：第 250 号命令已提交后只丢其应用收据；等待 150 ms，查询、重试，再验证内容冲突。该 RTT 包含超时和恢复查询。
-- 所有恢复均由脚本知道 fault cut 后执行；未测客户端自主发现故障的时间。音频中断列是最大编码包到达间隔，未把它当主观声音质量或源端音频延迟。
+固定每人1000编号操作：500 trigger/stop可靠命令、500 state，30 Hz；payload固定；Opus20 ms/32 kb/s，A440 Hz/B880 Hz。DC reliable ordered control与unordered/maxRetransmits=0 state共用音频PC；WS只替换应用适配，音频仍走同一Relais路径。每对交替谁先运行，同一组固定二进制。自身完整回归门结束后开始矩阵；首条WS正常试验短暂与一个功能性burst预检重叠，原记录未删除。未做全机CPU/网络隔离，不能据微小本机延迟差异归因或外推公网。
 
-### Move / Drain / 背压
+RTT包含故障目标命令的恢复/query/retry时间。状态年龄是接收快照时最后状态的同机墙钟年龄，包含离线期间变老；不是跨机时钟测量。队列列为房间输出含在写普通消息，另预留终止错误帧。音频中断为编码包最大到达间隔，不是主观听感或端到端音频延迟。
 
-Move 返回 HTTP **500**，携带 typed code `data_session_not_movable`。这属于明确拒绝，不是成功或不确定迁移；原调用音频计数由 20 增至 36，应用快照仍可读取。随后对 w1 的 Drain 确实结束同一旧 session，亦验证该调用未迁至 w2。
+| Run | RTT mean A/B ms | RTT max A/B ms | State age max A/B ms | Queue B / age ms | Recovery A ms | Audio gap A/B ms | Version |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| normal-1-ws | 0.494/0.494 | 7.556/7.600 | 74.698/74.021 | 952/1.527 | 0.000 | 41.009/39.020 | 2002 |
+| normal-1-dc | 1.398/1.388 | 11.876/13.858 | 75.492/75.757 | 970/2.943 | 0.000 | 35.197/30.692 | 2002 |
+| normal-2-ws | 0.594/0.589 | 8.342/8.300 | 79.663/79.770 | 952/3.093 | 0.000 | 43.572/59.419 | 2002 |
+| normal-2-dc | 1.440/1.331 | 46.163/20.041 | 90.584/75.481 | 970/3.484 | 0.000 | 52.848/65.461 | 2002 |
+| normal-3-ws | 0.575/0.646 | 9.667/27.290 | 89.184/94.874 | 952/2.962 | 0.000 | 54.607/64.021 | 2002 |
+| normal-3-dc | 1.421/1.409 | 14.478/12.491 | 82.007/78.679 | 970/1.219 | 0.000 | 39.717/31.745 | 2002 |
+| disconnect-1-ws | 0.768/0.364 | 263.537/2.964 | 299.681/295.773 | 894/1.345 | 295.368 | 485.099/399.657 | 2003 |
+| disconnect-1-dc | 1.951/1.345 | 478.906/60.649 | 543.645/538.692 | 965/6.243 | 475.577 | 483.263/400.021 | 2003 |
+| disconnect-2-ws | 0.948/0.687 | 280.000/235.029 | 333.264/319.743 | 940/7.932 | 279.537 | 496.667/419.107 | 2003 |
+| disconnect-2-dc | 3.284/2.655 | 491.047/87.905 | 533.334/583.374 | 965/8.797 | 521.845 | 507.128/439.072 | 2003 |
+| disconnect-3-ws | 0.462/0.184 | 258.013/7.243 | 301.071/291.352 | 894/2.511 | 257.691 | 491.946/420.031 | 2003 |
+| disconnect-3-dc | 1.021/0.593 | 472.767/12.498 | 533.071/504.418 | 912/2.190 | 471.526 | 490.240/420.032 | 2003 |
+| worker-kill-1-ws | 0.255/0.270 | 9.001/17.770 | 74.971/75.859 | 897/4.684 | 8.550 | 245.824/240.172 | 2003 |
+| worker-kill-1-dc | 1.457/1.205 | 221.757/23.460 | 267.644/261.733 | 961/8.323 | 220.392 | 237.438/160.538 | 2003 |
+| worker-kill-2-ws | 0.394/0.445 | 61.202/64.629 | 101.734/102.330 | 897/3.155 | 5.733 | 239.982/240.040 | 2003 |
+| worker-kill-2-dc | 1.382/1.122 | 227.049/35.323 | 267.022/259.989 | 965/12.283 | 259.036 | 248.366/180.158 | 2003 |
+| worker-kill-3-ws | 0.621/0.521 | 50.962/26.158 | 98.296/108.232 | 943/1.531 | 7.158 | 242.453/239.854 | 2003 |
+| worker-kill-3-dc | 2.131/1.903 | 218.800/58.155 | 267.750/251.383 | 915/11.989 | 250.771 | 249.691/165.654 | 2003 |
+| lost-receipt-1-ws | 0.793/0.576 | 193.738/18.300 | 225.946/93.019 | 952/4.149 | 0.000 | 71.495/64.495 | 2002 |
+| lost-receipt-1-dc | 1.691/1.533 | 151.879/36.251 | 167.150/98.287 | 970/1.344 | 0.000 | 74.470/84.459 | 2002 |
+| lost-receipt-2-ws | 0.646/0.515 | 151.184/38.336 | 172.293/89.748 | 952/3.436 | 0.000 | 81.671/72.577 | 2002 |
+| lost-receipt-2-dc | 1.066/0.894 | 152.742/8.061 | 168.107/81.248 | 970/0.702 | 0.000 | 27.747/29.972 | 2002 |
+| lost-receipt-3-ws | 0.812/0.689 | 151.215/47.828 | 166.230/85.787 | 952/4.758 | 0.000 | 100.460/136.365 | 2002 |
+| lost-receipt-3-dc | 1.693/1.589 | 152.583/124.782 | 192.486/215.142 | 970/1.985 | 0.000 | 168.971/170.238 | 2002 |
 
-Drain 返回 HTTP **200 / kind=ended**。房间实际记录同一 session 的 `op 3 / reconnect_required`。客户端随后经 signal 获得不同 session ID，以原 token 加入并获得 generation **2**，查询和重试仍返回原命令结果；应用计数仍为1、dedup为1。恢复 **212.705 ms**，跨会话音频包间隔 **227.727 ms**；B 接收 A 的 peer 包计数从 36 增至 61。终止原因在房间上游事件中可见；未声称旧 PC 能可靠将该原因直接通知浏览器。
+24轮均每人1000操作完成、每轮1000次总命令应用、0额外命令应用、两端最终state_seq=1000且房间版本一致。12次在途cut均generation1→2/dedup=1/目标副作用=1；6次lost-receipt均drop=1/dedup=1/conflict=1。共48,000编号操作、80,160个peer参考包，self/unknown均0；独立验证480个实收Opus样本属于对方互斥参考集合。每轮missing=0/0，实际收据journal重复/乱序=0/0；但每客户端基本串行等待应用回执，后两者主要受驱动构造约束，不是主动乱序/复制网络验收。
 
-| 传输 | 应用命令数 | 房间队列峰值 B / 年龄 ms | typed slow_consumer | peer包 A/B | 音频最大间隔 A/B ms |
+### 在途断连与worker SIGKILL
+
+每次目标命令p1-0250：`RequestWithSent`在实际传输Send完成后发信号；房间只在测试模式中暂停真实writer回执，最长2秒。只读metrics屏障确认命令已应用、原请求仍等待，再执行cut。query与retry均在新generation，结果和原结果版本必须相同。断连不是丢回执故障替身；该切点固定提交后，不覆盖提交前的不确定结果分支。
+
+| 运行 | Send→cut ms | cut→恢复 ms | generation | dedup / 目标副作用 | 原结果版本 |
 | --- | ---: | ---: | --- | ---: | ---: |
-| ws | 80 | 15349 / 529.384 | True | 71/72 | 21.328/21.708 |
-| dc | 80 | 15026 / 555.569 | True | 85/87 | 60.886/35.730 |
+| disconnect-1-ws | 0.805 | 262.376 | 1→2 | 1/1 | 503 |
+| disconnect-1-dc | 2.702 | 474.272 | 1→2 | 1/1 | 504 |
+| disconnect-2-ws | 4.651 | 274.431 | 1→2 | 1/1 | 504 |
+| disconnect-2-dc | 6.358 | 483.500 | 1→2 | 1/1 | 503 |
+| disconnect-3-ws | 2.520 | 255.267 | 1→2 | 1/1 | 504 |
+| disconnect-3-dc | 2.207 | 469.805 | 1→2 | 1/1 | 504 |
+| worker-kill-1-ws | 1.588 | 7.189 | 1→2 | 1/1 | 504 |
+| worker-kill-1-dc | 7.326 | 213.583 | 1→2 | 1/1 | 504 |
+| worker-kill-2-ws | 1.017 | 4.931 | 1→2 | 1/1 | 504 |
+| worker-kill-2-dc | 4.955 | 221.412 | 1→2 | 1/1 | 503 |
+| worker-kill-3-ws | 0.723 | 6.636 | 1→2 | 1/1 | 504 |
+| worker-kill-3-dc | 1.794 | 215.943 | 1→2 | 1/1 | 503 |
 
-背压暂停的是一个真实应用发送者，不是全机网络；producer 80 条命令仍全部应用。该检查证明房间队列的界限和媒体共存，不能代替所有 SCTP 缓冲饱和场景。两个背压短测早于正式配对矩阵，并与回归阶段共享本机资源；不以它们的延迟差异归因于传输。
+worker-kill只SIGKILL本轮topology记录的worker-1，room/Redis存活。**DC与音频共享PC，worker丢失会中断音频。** WS应用本来独立于worker，脚本主动关闭WS并重建以对齐恢复合同；这不是WS必须跟随worker故障重连的证据。
 
-### 浏览器：实际运行与失败复现
+### Burst、背压、Move和Drain
 
-本次 stage-2 的具体授权允许经 wefty 启动两个任务自有 Chromium。各使用独立 scratch `--user-data-dir`、`--use-fake-device-for-media-stream`、`--use-fake-ui-for-media-stream` 和不同 `--use-file-for-fake-audio-capture` 文件，没有连接或关闭用户 Chrome。
+Burst是**传输诊断**：每人向有界测试echo lane瞬发200个4字节编号消息，无逐条应用回执等待；正常房间120输入/秒合同不变，未把限速关闭后冒充正常应用容量。DC使用同一PC第三条可靠burst channel，经真实worker/op0上游；WS用同一room的`/test-burst`。仅`-test-faults`启用，每连接最多200条，普通16 KiB/128条输出队列界限保持。正常应用snapshot与两路peer音频必须在burst后继续。最初DC burst通过、WS burst失败；WS驱动收到非4字节回复，同类race复现明确slow_consumer，暴露探针可先积压到128条。修复仅让测试echo等待真实writer完成再读取下一条，实施有界接收背压；客户端仍一次发200条、不逐条等回执，普通房间限速/队列未变。两种burst随后均用同一修复后的room探针重跑；原始失败和两版hash保留，不混充24轮矩阵的二进制。它不证明正常命令可无限突发，也不证明部分可靠通道的拥塞收益。
+
+| 传输 | 发送/实收 A、B | 瞬发耗时 A/B ms | RTT均值 A/B ms | RTT最大 A/B ms | peer包前→后 A、B | 音频间隔 A/B ms |
+| --- | --- | ---: | ---: | ---: | --- | ---: |
+| dc | 200/200, 200/200 | 1.527/1.807 | 3.957/5.281 | 4.626/6.443 | 20→40, 20→40 | 27.919/29.929 |
+| ws | 200/200, 200/200 | 1.580/2.881 | 1.743/1.685 | 2.174/2.579 | 20→40, 20→41 | 21.155/21.197 |
+
+| 传输 | 全部应用 | 队列峰值 B / 年龄 ms | typed slow_consumer | peer包 A/B | 音频间隔 A/B ms |
+| --- | ---: | ---: | --- | ---: | ---: |
+| dc | 80 | 15026/519.241 | False | 83/83 | 22.945/22.526 |
+| ws | 80 | 15350/528.303 | True | 71/72 | 21.663/23.765 |
+
+**背压界限/媒体继续 VERIFIED；DC客户端typed原因送达 PARTIAL。** 两端producer命令全部应用，room各记录一次slow_consumer。WS客户端实际读到typed slow_consumer；DC只见datachannel_closed，未读到typed应用帧。驱动原接受条件允许数据通道关闭且room原因明确，导出器额外保留了这一差别，未把退出0误写成typed帧送达。关闭前最后错误帧是best effort；若产品要求客户端必达typed原因，需要后续通知/查询协议，不能靠可靠通道名称作保证。
+
+Move实际返回 **HTTP 409 / data_session_not_movable**；原调用仍可snapshot，peer包由20增至35。Drain为 **HTTP 200 / ended**，room实收原session的op3/reconnect_required；新session ID不同，generation=2，恢复217.066 ms，跨session音频间隔229.546 ms。原命令query/retry一致，applied=1、dedup=1。不是原PC迁移。
+
+原始结果、每条收据/屏障/音频到达时间、包样本和校验值见[stage3/summary.json](stage3/summary.json)、[stage3/manifest.json](stage3/manifest.json)、[stage3/auxiliary-summary.json](stage3/auxiliary-summary.json)、[stage3/auxiliary-manifest.json](stage3/auxiliary-manifest.json)。统计与原始数据由独立导出检查相互核对。
+
+## 4. 浏览器双向音调（VERIFIED（本机Chromium））
 
 ```sh
 wefty exec --detach --json --max-runtime 2m -- \
- python3 experiments/nvwa-room/scripts/browser-smoke.py --scratch "$nvwa_scratch" --transport ws
-# 在同一新 scratch 中使用 --transport dc，启动器会使用另一组独立目录。
+ python3 experiments/nvwa-room/scripts/browser-smoke.py --scratch "$nvwa_scratch" \
+ --transport ws --audio-test-mode service-unsandboxed --attempt final
+# 在同一scratch用--transport dc，即另一组独立拓扑、进程与profile。
 ```
 
-WS：`run_da8207ac1be5f505e032a6a3750b46ac`，29.295 s。DC：`run_f90b5c06a30226e4978a1240d4b56ef2`，13.858 s。两种传输均有两个不同的服务端玩家、同一 epoch；每人完成 45 个已应用命令和 45 个 state 回复，未报应用错误。
+每个进程均为任务自有 `/opt/homebrew/bin/chromium --headless=new --no-first-run --no-default-browser-check --disable-gpu --no-proxy-server --use-fake-device-for-media-stream --use-fake-ui-for-media-stream --use-file-for-fake-audio-capture=RUN_CWD/tone-HZ.wav --autoplay-policy=no-user-gesture-required --user-data-dir=TASK_SCRATCH/profile-HZ`，只加载本地`http://127.0.0.1:PORT/web/?auto=1&count=90&tone=HZ&transport=ws|dc`。最终成功运行额外使用 **`--disable-features=AudioServiceSandbox`**，这是局部测试设置，不是生产推荐。早期`--no-sandbox`尝试也仅作用于同一类隔离本地实例；失败记录完整保留。未操作Derek的Chrome或共享DevTools。
 
-但两次声调验收都失败：`peer_tone_samples=0`、`peer_over_self_db=null`。Chromium 的原始错误为：
+PCM fixture在wefty执行CWD中生成并验证：RIFF signed16-bit LE、mono、48 kHz、96000 frames、192044 B；不是调用方scratch路径缺失。窄标志消除了文件打开错误，但初次仍静音：输入media-source有能量、RTP包到达，AudioContext running，jitterBufferEmittedCount却为0。非零analyser gain试验无效；`--no-sandbox`也无效。实际修复是将远端track接到HTML audio sink并play，使Chrome开始拉取解码音频；sink音量1e-6避免测试声响，FFT仍取未衰减的远端track。此路径与[Chromium记录的WebAudio远端流限制](https://issues.chromium.org/issues/40094084)一致，不能用“收到RTP包”冒充解码后音调证据。
 
-```text
-ERROR:simple_sources.cc(32) Failed to read .../tone-440.wav as input to the fake device.
-Try disabling the sandbox with --no-sandbox.
-```
+| 传输 | 玩家 / 输入→peer Hz | 有效peer样本 | peer高于自身频率 dB |
+| --- | --- | ---: | ---: |
+| ws | p2 / 880→440 | 67 | 60.339 |
+| ws | p1 / 440→880 | 67 | 58.515 |
+| dc | p1 / 440→880 | 64 | 58.700 |
+| dc | p2 / 880→440 | 64 | 59.506 |
 
-880 Hz 文件同样失败。这些历史运行只确认音频服务读取失败，当时未定位具体原因。本次已把 fixture 放在 wefty 运行工作目录并校验 PCM，仍复现打开失败；详见第7节。未添加 `--no-sandbox`，也未修改机器或常用浏览器配置。**有效指定输入的浏览器双向音调证明仍为 NOT-RUN**，需编排器提供允许 Chromium 音频进程读取 fake capture 文件的独立执行环境。页面启动与消息功能的成功不能补成音频成功。早先 Codex 沙箱的进程握手失败作为 stage-1 历史失败保留，未抹掉。
+每人每传输90应用操作（45命令/45状态），无应用错误。采样窗口要求peer峰值>-50 dB、有效样本至少10个、peer相对own均值至少15 dB；实际值如上。两种方向都须满足，自己的echo不可能同时满足对方频率。完整FFT时间序列、RTC统计、原始命令行和失败尝试均保留。未检验浏览器故障矩阵、Safari/mobile或真人音质。
 
-## 3. 同条件配对结果、缓冲预算与维护成本
+## 5. 缓冲、维护成本与能力边界（PARTIAL）
 
-配对 wefty：`run_73fde15b9fdcf201fa568aba4fa22040`，**succeeded**；24/24 独立试验完成。ledger 存活 1103.971 s 包含等待回归结束，不能当纯测量时间。24 次试验原始 duration 合计 **829.261 s**。
+房间每消息<=1024 B、state payload<=128 B、pending<=16384 B含在写及终止预留、普通队列<=128条；最多两玩家/每人4096结果/16连接/120输入每秒，音频只保留两路最新<=1200 B包并100 ms过期。W1每channel应用队列16 KiB及SCTP发送payload16 KiB，最多4次生命周期admission；两预算各最多64 KiB/session，另有4×1024 B取出待写。读取scratch4×64 KiB、SCTP receive window64 KiB、observer TSN bitset8192 B/最多64 stream记录，库/内核/allocator开销另计。这是组件预算，**不是严格进程RSS上限**。
 
-本次实际调度命令另加 `--after-regression "$nvwa_scratch/harness/result.json"`，并用 `--max-runtime 25m` 包含等待时间。独立复跑可用第1节的18分钟版本；它不包含等待。
+**分片超限已改策略，仍有边界：** 移除16-entry reassembly cap后合法小消息burst可继续。完整超限消息按通道策略拒绝/计数；非合规分片导致超限pending且无应用交付时，约2秒看门狗加200 ms reset宽限后关闭该session所有数据通道、停止本地SCTP，DTLS reader和媒体继续；不发会导致peer关闭共享DTLS的SCTP ABORT。SCTP接收窗口不是严格分片字节admission或RSS上限，不能宣称每个不可信peer都被硬限制为1 KiB内存。此行为由W1真实DATA/I-DATA和媒体回归提供证据，本W2轮没有另做恶意分片注入。第5条channel仅reset其自身；此项也沿用W1测试证据，不冒充本轮burst测试了第5条。
 
-固定配置：每客户端 1000 条编号操作（500 个可靠命令、500 个可替换状态），30 Hz；Opus 20 ms / 32 kb/s；A=440 Hz、B=880 Hz。同一组二进制、payload、房间代码、音频实现和故障 cut。WS/DC 相邻运行，并轮换谁先运行。本任务的完整重回归先结束，再开始配对测量；未做机器级负载隔离，不能将本机数值外推公网。
+op3结束通知是50 ms预算的best effort；上游拥塞时可能丢失原因，不应依赖必达。data session禁止原通道迁移，Drain采用终止后重连。正常WS与DC应用合同相同，但WS可靠有序、DC state部分可靠的传输保证并不相同；本轮无注入公网丢包，不能证明DC状态时效更优。
 
-下表 A/B 是服务端 p1/p2。RTT 为应用收据时间；状态年龄是收到快照时“最新状态”的最大年龄，包含断连时对方最后状态继续变老的区间。队列列只量房间普通输出（含在写消息）；另有预留的终止错误帧。恢复列是 A 最后权威观察到新 join 快照的间隔，cut 到恢复另存 JSON。B 不重连。版本是两端最终同值。
+复用了Relais TLS/bearer signal、控制面放置、真实relay/worker媒体、Redis所有权/代次与legacy agent。新增工作仍包括权威房间、lobby/token/generation、应用账本与冲突/状态协议、两客户端/recorder及跨session UDP音频bus；它不是现成多人SFU，不做混音、重定时或质量保障。WS应用路径更直接，故障域与音频分离；DC增加SCTP生命周期、worker→room hop、缓冲/看门狗和禁迁移策略，维护面更大。采用DC必须有复用PC或客户端能力的实际产品收益。
 
-| 运行 | RTT均值 A/B ms | RTT最大 A/B ms | 状态年龄最大 A/B ms | 队列 B / 年龄 ms | 恢复 A ms | 音频间隔 A/B ms | 版本 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| normal-1-ws | 1.190/1.058 | 94.902/80.250 | 110.830/110.123 | 952/13.841 | 0.000 | 236.943/156.268 | 2002 |
-| normal-1-dc | 1.779/1.784 | 17.388/18.135 | 81.017/84.207 | 970/5.726 | 0.000 | 40.425/40.839 | 2002 |
-| normal-2-ws | 0.740/0.744 | 11.809/13.551 | 80.403/78.234 | 952/4.999 | 0.000 | 60.337/57.844 | 2002 |
-| normal-2-dc | 1.614/1.613 | 27.204/23.823 | 82.123/89.312 | 970/3.449 | 0.000 | 62.960/56.374 | 2002 |
-| normal-3-ws | 0.751/0.726 | 13.449/13.928 | 75.931/83.461 | 952/2.733 | 0.000 | 40.938/40.609 | 2002 |
-| normal-3-dc | 1.852/1.861 | 36.591/49.502 | 97.744/121.553 | 970/1.316 | 0.000 | 63.484/64.085 | 2002 |
-| disconnect-1-ws | 0.585/0.802 | 11.990/24.216 | 334.524/310.838 | 943/3.644 | 309.263 | 517.745/419.697 | 2003 |
-| disconnect-1-dc | 0.810/0.863 | 18.021/17.259 | 533.378/500.877 | 965/2.795 | 499.841 | 499.072/398.989 | 2003 |
-| disconnect-2-ws | 0.618/0.664 | 15.720/15.239 | 332.111/312.491 | 897/8.229 | 307.734 | 519.367/400.051 | 2003 |
-| disconnect-2-dc | 1.666/1.847 | 18.042/23.404 | 533.590/519.963 | 912/4.761 | 518.140 | 511.780/420.029 | 2003 |
-| disconnect-3-ws | 0.513/0.642 | 8.367/12.544 | 335.903/304.964 | 947/5.482 | 304.157 | 507.983/437.743 | 2003 |
-| disconnect-3-dc | 1.482/1.618 | 24.304/14.577 | 534.341/508.911 | 958/8.417 | 500.795 | 496.639/399.205 | 2003 |
-| worker-kill-1-ws | 0.360/0.364 | 9.485/7.717 | 70.817/87.356 | 947/1.695 | 44.367 | 237.904/240.676 | 2003 |
-| worker-kill-1-dc | 0.605/0.645 | 10.073/9.528 | 267.356/247.582 | 965/2.034 | 246.744 | 245.504/159.065 | 2003 |
-| worker-kill-2-ws | 0.226/0.288 | 6.071/20.522 | 70.279/69.682 | 897/1.787 | 42.006 | 244.833/240.498 | 2003 |
-| worker-kill-2-dc | 2.318/2.310 | 186.558/305.140 | 333.577/383.470 | 965/20.860 | 311.356 | 291.432/221.617 | 2003 |
-| worker-kill-3-ws | 0.258/0.252 | 23.216/20.726 | 71.750/68.496 | 894/1.506 | 43.852 | 248.948/239.867 | 2003 |
-| worker-kill-3-dc | 1.751/1.779 | 43.605/43.012 | 300.743/282.422 | 965/8.802 | 277.240 | 262.618/180.861 | 2003 |
-| lost-receipt-1-ws | 0.831/0.700 | 151.105/6.627 | 167.204/74.044 | 952/2.991 | 0.000 | 45.823/39.657 | 2002 |
-| lost-receipt-1-dc | 1.608/1.407 | 152.497/20.279 | 168.117/79.709 | 970/3.246 | 0.000 | 70.830/59.032 | 2002 |
-| lost-receipt-2-ws | 0.702/0.542 | 150.560/5.810 | 167.119/71.959 | 952/4.602 | 0.000 | 31.648/30.565 | 2002 |
-| lost-receipt-2-dc | 1.622/1.459 | 151.596/31.567 | 167.054/76.395 | 970/2.203 | 0.000 | 56.694/51.406 | 2002 |
-| lost-receipt-3-ws | 0.657/0.492 | 151.122/6.354 | 166.669/84.311 | 952/2.213 | 0.000 | 73.884/70.418 | 2002 |
-| lost-receipt-3-dc | 1.543/1.397 | 153.608/11.794 | 170.631/75.877 | 970/1.037 | 0.000 | 39.958/35.442 | 2002 |
+## 6. GO / HOLD / NO-GO 与未验证清单
 
+- **GO：** 本机loopback、受信客户端、合法小消息、room持续存活、允许新signal会话恢复的应用原型；保留WS作为简单基线，DC可继续验证消费端复用PC的产品价值。Go与两浏览器均证明对方音调到达。
+- **HOLD：** 正式Rust/Nvwa采用、公网发布、生产容量或安全承诺；需真实消费端/平台覆盖、认证与session绑定、持久恢复方案、跨机/TURN测试及可运行完整unit门的环境。全模块lint和本机harness绿灯不等于CI已绿。
+- **NO-GO（本版本不承诺）：** 原DataChannel/DTLS/SCTP透明迁移或崩溃续接；不可信分片peer的严格1 KiB内存硬界；房间崩溃后持久命令恢复。若产品必须具备这些条件，本版本不能采用。
 
-历史每行均观察到 **1000/1000 操作完成、1000 次总命令应用、0/0 未恢复应用消息、0/0 重复收据、0/0 乱序收据、0 额外命令应用**。**证明边界：** 每个客户端仅一个顺序请求在途，故成功请求返回中的重复/乱序为0基本由驱动构造决定；这不是主动重复/乱序网络的覆盖。历史 disconnect/worker-kill 又恰在请求间隙切断，去重路径没有执行，不能据此声称“传输丢失时命令只执行一次”。只有历史 lost-receipt 直接覆盖了 query/retry/dedup。第7节新增真正待回执的 WS cut，仍不把收据为0外推为网络可靠性结论。normal/lost-receipt 两端收敛于版本2002；disconnect/worker-kill 收敛于2003。两端最终 state_seq=1000。每个重连行 A 重连1次、B为0；每个 lost-receipt 行 dropped_receipts=1、dedup=1、conflict=1。
+**NOT-RUN：** 原生Rust consumer和正式Nvwa native/Web接入、角色/骨骼资产播放、公网/TURN/TCP/TLS fallback、跨主机/跨区域/全球网络、Safari和mobile、真实room进程重启、房间崩溃持久恢复、负载容量/长期稳定性、原DataChannel/DTLS/SCTP迁移、全栈RSS/缓冲占用、真人音质。浏览器成功只代表这两个本机Chromium测试方向。
 
-共48,000条编号操作，Go 实收 **80,213** 个 peer 参考包，self/unknown均为0；独立校验 **480** 个实收 Opus 样本，均属于对方且不属于自己。两份参考集合互不相交，因此自己的 echo 不能满足此证据。音频包丢失率、源端音频延迟和人声质量未测。
+## 7. 测试、失败、审查与CI
 
-简表给出观察范围，不是可靠性比例或分位数：
-
-| 条件 | 传输 | 客户端平均RTT范围 ms | 最高单条RTT ms | 最大状态年龄 ms | 队列峰值范围 B | 恢复A范围 ms | 音频包间隔范围 ms |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| normal | ws | 0.726–1.190 | 94.902 | 110.830 | 952–952 | 0.000–0.000 | 40.609–236.943 |
-| normal | dc | 1.613–1.861 | 49.502 | 121.553 | 970–970 | 0.000–0.000 | 40.425–64.085 |
-| disconnect | ws | 0.513–0.802 | 24.216 | 335.903 | 897–947 | 304.157–309.263 | 400.051–519.367 |
-| disconnect | dc | 0.810–1.847 | 24.304 | 534.341 | 912–965 | 499.841–518.140 | 398.989–511.780 |
-| worker-kill | ws | 0.226–0.364 | 23.216 | 87.356 | 894–947 | 42.006–44.367 | 237.904–248.948 |
-| worker-kill | dc | 0.605–2.318 | 305.140 | 383.470 | 965–965 | 246.744–311.356 | 159.065–291.432 |
-| lost-receipt | ws | 0.492–0.831 | 151.122 | 167.204 | 952–952 | 0.000–0.000 | 30.565–73.884 |
-| lost-receipt | dc | 1.397–1.622 | 153.608 | 170.631 | 970–970 | 0.000–0.000 | 35.442–70.830 |
-
-原始结果见 [stage2/summary.json](stage2/summary.json)、[stage2/manifest.json](stage2/manifest.json)、`stage2/raw/*.json.gz`。包括每条操作的 RTT/结果、输入序号、实际收据 journal、房间版本/代次、session ID、包到达时间和有限的实收 Opus 样本。导出器独立检查每代 request ID 的重复/乱序、session 唯一性、kill PID 归属、恢复时 wave v1/start_tick=0 与 state_seq=250，以及音频字节确实来自对方。
-
-反压、策略、浏览器收据和完整测试日志在 `stage2/auxiliary/`，校验值及原始 scratch 路径在 [stage2/auxiliary-manifest.json](stage2/auxiliary-manifest.json)。stage-1 旧报告保留为 [REPORT.stage1.md](REPORT.stage1.md)；旧端口分配冲突未混入或替换本轮行。
-
-### 缓冲预算与严格边界
-
-以下为配置/代码预算，不是整个进程 RSS 上限；只有房间队列字节/年龄进行了逐次峰值记录。W1 内部队列峰值、TCP/SCTP 实际占用和全进程 RSS 为 NOT-MEASURED。
-
-| 层 | 预算 / 实际保证 |
-| --- | --- |
-| 房间应用消息 | 1024 B；输入状态 payload <=128 B；每连接 pending <=16 KiB，含在写普通消息及终止错误帧预留；最多128个普通输出条目。 |
-| 房间总状态 | 两名玩家、每人4096条命令结果、16连接、120条输入/秒/连接及身份；音频只留两个最新 <=1200 B Opus 包，100 ms 过期；最多64条上游结束事件。 |
-| W1 每 channel 输出 | 应用队列16 KiB，加 SCTP BufferedAmount 16 KiB；最多4 channel，两个预算各最多64 KiB/session；最多另有4×1024 B 已取出待写数据。测试实际开 control/state 两个 channel。 |
-| W1 读取 / SCTP | 4×64 KiB 固定 channel 读取 scratch；SCTP receive window 64 KiB/association、默认每 stream 16个重组条目；这**不是严格分片字节上限**。SCTP/DCEP 各有8 KiB scratch，库 accept 队列16。 |
-| worker 上游 WS | 无额外应用发送队列；序列化1 s 写；帧默认<=1281 B；bufio读/写各4 KiB，TCP内核缓冲另计。 |
-| 已有 DTLS / session | raw record packetio 1,000,000 B；一个解密记录槽及<=8192 B输入记录；预握手加密队列<=100条/819,200 B；握手片段<2,000,000 B/1000片；session scratch为32,768 B，预密钥SRTP队列<=64 datagram/524,288 B。本轮frame-cache-off；对象、控制数据、caller及音频bus开销另计。 |
-| 内核 UDP 配置 | 本地启动日志：relay public/leg 与两 worker 这四个 socket 各有效 read=8 MiB、write=4 MiB，共48 MiB配置容量；不表示占用或RSS。caller/音频bus及其它缓冲另计。 |
-
-**承接 W1 的 HOLD，未修复：** 违反协商上限的 peer 发送分片 128 KiB 消息时，可能在 Pion 只交付完整消息前卡住 channel，不能及时得到 typed close；64 KiB receive window 不能补成硬 admission。该诊断由 W1 提供，本轮没有重跑或改 Pion。浏览器遵守 `max-message-size`，本轮合法小消息路径不依赖绕过此限制，但不能面向不可信公网 peer 宣称严格 1 KiB 入站保障。
-
-W1 另保留会话生命周期策略：最多4次 channel admission，标签不复用；上游 WS 超大帧若无法安全取得 label，会关闭该 session 的所有 DataChannel，媒体继续。本轮每次只开 control/state 两个 channel，重连创建新 session，没有证明同 session 内标签重开。
-
-### 复用、新增与成本判断
-
-复用了 Relais 的 TLS/bearer signal、控制面放置、实际 relay/worker 媒体路径、Redis 所有权/代次，以及 legacy agent 接口。DataChannel 复用了同一 WebRTC PC，W1 新增 SCTP/DCEP、队列、上游 WS 适配和 data-session 禁迁移/终止策略。
-
-权威房间、lobby/resume token、连接代次、命令账本/冲突、动作/状态协议、两种客户端和 recorder 都是新增应用工作。跨会话音频 UDP bus 也是本实验新增；Relais 原来的一 caller echo 没有自动变成多人房间或 SFU。它只替换最新 peer Opus 包，不做混音、重定时或质量保障。
-
-直接 WS 的数据路径和故障域更简单，音频连接失败不必让应用连接重建。DC 增加 SCTP/DTLS 共享生命周期、额外 worker→room hop、缓冲预算和拒绝迁移策略；维护面更大。是否值得取决于复用 WebRTC 连接/客户端能力的具体收益。当前小样本不支持宣称部分可靠状态通道在丢包网络中更优；本轮没有模拟这种网络条件。
-
-## 4. GO / HOLD / NO-GO
-
-- **GO（窄范围）**：保留独立房间合同与 WS 基线；在本机、受信客户端、合法小消息、允许显式新连接的条件下继续消费端实验。Go 合成音频已证明 A→B/B→A，不是各自 echo。
-- **HOLD（采用/发布）**：正式 Nvwa 或公网部署；需完成浏览器指定音频输入、严格分片 admission、独立审查，并查清完整媒体回归红灯。不能用定向复跑或单机矩阵代替这些门。
-- **NO-GO（当前版本不承诺的能力）**：原 DataChannel/DTLS/SCTP 的透明迁移或崩溃续接；不可信 peer 的严格 1 KiB 分片保障；把内存账本当房间崩溃后的持久结果。当前实现采用显式拒绝/终止后重连，不能包装成这些能力已经完成。
-
-## 5. 未验证清单
-
-NOT-RUN：原生 Rust consumer、真实 Nvwa native/Web runtime、角色资产/骨骼播放；公网与 TURN/TCP/TLS fallback；跨主机、跨区域及全球网络；Safari/mobile；房间进程死亡后的持久恢复；负载容量/长期稳定性；原通道迁移。全栈内存/缓冲占用与真人音质也未验收。
-
-浏览器真实消息路径已有90条/人/传输证据，但不等于完整浏览器故障矩阵或音频验收。Go/浏览器成功均不补成 Rust/Nvwa 完成。
-
-## 6. 测试、真实失败与 CI
-
-| 检查 | 实际结果 | 墙钟时间 / 条件 |
+| 检查 | 状态 | 墙钟 / 证据 |
 | --- | --- | --- |
-| 重新构建、vet、JS语法 | PASS | 本机缓存依赖；未下载模块；实验源码/二进制 hash 保留。 |
-| 705b3e2 实验包测试的旧声明 | **撤回 PASS** | 审查和本次定向复现均显示 `TestUpstreamSessionEndReasonIsRecorded` 失败；`Metrics().Events` 别名污染状态。旧整包绿灯声明不成立。修复后的实际验证另见第7节。 |
-| make test-unit + 自建Redis | FAIL / PARTIAL | **251.257 s**；Redis 127.0.0.1:55351，自己启动并回收；GOMAXPROCS=4、go test -p 2。 |
-| make test-harness-short | FAIL / PARTIAL | **653.657 s**；包测试644.857 s；内存模式，按Make目标清空Redis。 |
-| TestStallIntervalsRecover 定向race/count=3 | PASS | **9.511 s**；不覆盖前一完整门的失败。 |
-| relay-restart 定向race/short/count=3 | PASS | **8.666 s**；不覆盖前一完整门的失败。 |
-| 配对矩阵、策略和背压 | PASS | 上述原始数值与可解压收据；每次任务进程均有自己的清理。 |
+| make test-unit + 自建Redis | PARTIAL / FAIL | 258.644秒，exit=2；仅两个sysctl用例失败。 |
+| make test-harness-short | VERIFIED / PASS | 642.251秒，exit=0。 |
+| stock-worker build | VERIFIED / PASS | 真实go list deps + build + nm，排除experiments包/符号。 |
+| golangci-lint v2.14.0 ./... | VERIFIED / PASS | 全模块0 issues，无目录排除。 |
+| go vet ./...、JS/Python语法、diff check | VERIFIED / PASS | 本轮实际执行。 |
+| 实验包与internal音频agent race/short/count10 | VERIFIED / PASS | 包含新测试lane opt-in及200条生命周期界限；早期race失败日志另存。 |
+| 配对、burst、策略、浏览器 | VERIFIED / PASS | 本文原始数据及gzip收据；初始WS burst失败另存。 |
+| 背压 | VERIFIED（界限/媒体） / PARTIAL（DC typed帧） | DC关闭和room slow_consumer计数已验证，客户端未收到typed应用帧。 |
 
-完整单元门的真实失败：`internal/udpbuffer` 的 `TestApplyReportsEffectiveSize`、`TestApplyReportsClampWithoutFailing` 在读取 `sysctl -n kern.ipc.maxsockbuf` 时 exit status 1，与 W1 已报告的沙箱限制位置一致；没有用 wefty 绕过这个已知限制。`internal/loadgen/TestStallIntervalsRecover` 的恢复窗口发送迟到25.974 ms（门槛20 ms）且出现跳帧，故红灯。
+unit门专用Redis `127.0.0.1:60938`，GOMAXPROCS=4、go test -p2，启动器已回收。仅`internal/udpbuffer/TestApplyReportsEffectiveSize`和`TestApplyReportsClampWithoutFailing`的`sysctl -n kern.ipc.maxsockbuf`在沙箱内exit1；未通过wefty绕过该已知限制，未修改断言/阈值。完整harness走wefty、memory/short；表中墙钟采用wrapper记录的make实际时间，不混用ledger等待时间。
 
-完整 harness 的真实失败：`TestRelayBufferFailurePaths/memory/relay-restart`，断言期望 `RelayReplayComplete=false`，实际为true。后来单独运行这个子例连续三次通过；发送节拍子例也三次通过。本次编排器转交的独立审查结论：`TestStallIntervalsRecover` 在 CI 通过；`relay-restart` 的 checkpoint 可在 kill 前落地，导致测试时序竞争。CI 的 unit-tests 红灯来自本分支未改动的 `pkg/relay/TestSelfFenceStopsBothPacketPathsAndCounters`。这些是编排器提供的 CI/审查证据，本 worker 未访问 CI 或修改相关生产/测试代码。第7节提供固定主线提交的本机5次对照；未声称已修复这些测试。
+本轮新增burst gate单测初版一次在race/count10遇到显式slow_consumer，因为把200个未读取回执直接压入既有128-entry队列。实际WS burst也暴露同类探针输出积压。测试echo后来增加writer完成背压，正常队列策略未放宽；单测恢复成200条先全发后全收，并在race/count10通过。独立cmd/burst两传输仍各实跑200瞬发，早期失败原文保留。
 
-复现上述命名门：
-
-```sh
-python3 experiments/nvwa-room/scripts/regression-stage2.py --out "$nvwa_scratch/units" --gate test-unit
-wefty exec --detach --json --max-runtime 20m -- \
- python3 experiments/nvwa-room/scripts/regression-stage2.py --out "$nvwa_scratch/harness" --gate test-harness-short
-```
-
-单元门直接运行是因为已知sysctl沙箱限制，未将它迁到wefty。长harness已用wefty；实际门槛以 result.json/FAIL日志为准。
-
-
-默认行为的相关用例（echo旧快照/导出、V7 wire、audio-only、browser-like audio/video、Chrome offer等）均有通过记录，但不能据此把整个默认媒体回归填为 VERIFIED。完整日志为准。
-
-本轮未修改失败测试、阈值或生产策略。也未修复 W1 的分片问题。新增的是房间对 frozen op2/op3 结束原因的有限记录及真实 WS 单测、DC 背压选择、Move/Drain 消费者、配对 runner、双传输浏览器选择与导出。`regression-stage2.py` 首版没有把 make 的非零状态传到 wrapper 进程，现已修复；本次旧 wrapper 的 wefty `succeeded` **只表示 wrapper 正常退出**，实际 harness `result.json.exit_code=2` 和 FAIL 日志决定门槛结论。
-
-全部测试为本机直接执行或本机 wefty；没有触发 hosted CI、没有云资源或 paid API，没有新模块/工具链下载。独立代码审查仍由编排器安排，不在本报告中冒充完成。
-
-
-## 7. 705b3e2 审查修复（W2，本次未提交）
-
-### 代码与证据修正
-
-- **VERIFIED：lint/打包。** HTTP 数字状态改为标准库常量；动作分支改为 switch；去掉未用字段。音频 agent 移至 `internal/spike/roomaudio`，worker 仅导入 internal 包；默认 echo 选择及 room-audio 开关保持原合同。`scripts/check-stock-worker.sh` 实际构建 stock worker，检查完整生产依赖及二进制符号均无 `experiments/`。internal spike 的 opt-in 实现仍链接在 stock binary 中，这是本次选择 internal 方案的明确边界，没有宣称使用 build tag 完全移除该实现。
-- **VERIFIED：Metrics。** 修复前 `TestUpstreamSessionEndReasonIsRecorded -race -count=3` 三次均因内部切片被改成 `changed` 失败；现于锁内 `slices.Clone`，并加入真实 `/metrics` HTTP 编码与事件滚动并发测试。room/client 包 race 10次通过。已撤回第6节旧 PASS 声明。
-- **VERIFIED（WS）；NOT-RUN（DC）：在途命令恢复。** `RequestWithSent` 在实际 Send 返回后发信号；测试命令经真实 room writer 暂停回执（`-test-faults` 下，最长2秒），`/metrics` 只读屏障证实命令已经应用，客户端原请求仍等待。随后断开或杀自有 worker；新 signal 会话/同 token/new generation 加入，先 query 后 retry 原命令；原结果必须一致、dedup=1、目标命令应用次数=1、全房间总应用=1000。没有用掉回执故障来代替此 writer 屏障。代码对 WS/DC 共用；本轮按派工只跑 WS 的3+3，等 W1 合并再跑 DC。仍每人1000操作、30 Hz，应用 payload 与两种音调不变；仅故障目标命令额外携带测试暂停字段。此 cut 固定在提交后/回执前，不覆盖提交前失败或自主故障检测。
-- **NOT-RUN：真实 room 进程重启。** 第2节已明确 epoch/reset 只有单元覆盖；并列出无认证 lobby、query session、token 不轮换和 newest-join 无 CAS 的非本地风险。
-
-本轮复现命令：
-
-```sh
-bash experiments/nvwa-room/scripts/build.sh "$nvwa_scratch"
-python3 experiments/nvwa-room/scripts/run-matrix.py --scratch "$nvwa_scratch" \
- --transport ws --faults disconnect worker-kill
-python3 experiments/nvwa-room/scripts/export-inflight.py --scratch "$nvwa_scratch" \
- --out experiments/nvwa-room/evidence/review-fixes
-bash experiments/nvwa-room/scripts/check-stock-worker.sh "$nvwa_scratch/stock"
-# 固定历史树，不写共享 worktree Git 元数据。
-mkdir -p "$nvwa_scratch/main-7dfde0b"
-git archive 7dfde0b | tar -x -C "$nvwa_scratch/main-7dfde0b"
-python3 experiments/nvwa-room/scripts/compare-regressions.py \
- --main "$nvwa_scratch/main-7dfde0b" --out "$nvwa_scratch/main-comparison"
-```
-
-### WS 新增在途试验原始结果
-
-每轮每人1000操作/30 Hz，总命令应用1000，A重连1次、B为0；原请求均 `connection_closed`。下表 query/retry 原结果版本相同，generation 均1→2，dedup均1、目标命令副作用均1，dropped_receipts均0。writer 屏障在切断前已被观察到，原命令回执在切断前的原始 journal 中不存在。导出器另核对 kill PID 属于本轮 worker-1，Redis 均非6379。
-
-| 运行 | 命令 | Send→cut ms | 原结果版本 | dedup / 副作用 |
-| --- | --- | ---: | ---: | ---: |
-| disconnect-1 | p1-0250 | 0.831 | 503 | 1/1 |
-| disconnect-2 | p1-0250 | 0.485 | 504 | 1/1 |
-| disconnect-3 | p1-0250 | 1.438 | 503 | 1/1 |
-| worker-kill-1 | p1-0250 | 1.866 | 504 | 1/1 |
-| worker-kill-2 | p1-0250 | 5.042 | 504 | 1/1 |
-| worker-kill-3 | p1-0250 | 0.814 | 504 | 1/1 |
-
-A/B仍对应服务端p1/p2。恢复前者是最后权威观察→新join，后者是cut→新join；RTT包含该目标命令的重建/query/retry耗时。
-
-| 运行 | RTT均值 A/B ms | RTT最大 A/B ms | 状态年龄最大 A/B ms | 队列 B / 年龄 ms | 恢复 / cut恢复 A ms | 音频间隔 A/B ms |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| disconnect-1 | 0.699/0.359 | 263.301/6.224 | 299.647/295.507 | 952/2.086 | 295.372/261.743 | 496.226/420.275 |
-| disconnect-2 | 0.613/0.402 | 262.258/14.825 | 300.340/295.710 | 947/4.125 | 261.793/261.482 | 500.240/419.612 |
-| disconnect-3 | 0.590/0.315 | 260.274/10.718 | 300.899/293.628 | 943/2.047 | 293.414/258.304 | 495.318/420.921 |
-| worker-kill-1 | 0.751/0.807 | 13.725/18.335 | 82.884/71.431 | 947/4.522 | 12.030/10.468 | 234.006/221.402 |
-| worker-kill-2 | 0.355/0.356 | 33.297/11.759 | 77.535/76.891 | 952/5.310 | 32.870/27.755 | 248.422/239.390 |
-| worker-kill-3 | 0.414/0.331 | 10.327/4.226 | 71.563/72.758 | 894/3.037 | 9.549/8.977 | 241.019/259.942 |
-
-六轮均 `missing=0/0`、成功请求返回中的 duplicate/reorder=0/0；后两者仍受串行 driver 构造限制，不是主动重复或乱序网络试验。此次真正执行了断线后同 ID 重试，所以“目标副作用一次”由该命令应用计数、全房间总计数和原结果一致性共同验证。没有推导可靠性比例或分位数。
-
-原始全量收据/包到达与命令屏障时间：[review-fixes/raw/](review-fixes/raw/)；逐轮数值：[review-fixes/summary.json](review-fixes/summary.json)；gzip校验：[review-fixes/manifest.json](review-fixes/manifest.json)。此六轮是审查修复后的新记录，不替换 stage2 历史24轮。
-
-### 浏览器 fixture 定位
-
-WS `run_e0755648f6dfa76280dfde6e2570ef87`、DC `run_a2c8160a77c77b2eb1dd3f68bcdbfd88` 均实际重试并退出1。每个新 WAV 在 **wefty 执行工作目录** 生成，存在且 launcher 可读；canonical RIFF PCM signed little-endian、16 bit、单声道、48,000 Hz、96,000 frames、192,044 B，校验及 SHA-256 保留在 `review-fixes/browser-{ws,dc}/tone-*-fixture.json`。无需从调用方 scratch 带入。每传输两个玩家仍各完成90条应用操作，但 peer_tone_samples 均为0，不能通过音调验收。
-
-新路径仍报：
-
-```text
-ERROR:simple_sources.cc(32) Failed to read .../work/nvwa-browser-fixtures-.../tone-440.wav as input to the fake device. Try disabling the sandbox with --no-sandbox.
-```
-
-880 Hz 相同。Chromium 的 [ReadWavFile](https://raw.githubusercontent.com/chromium/chromium/main/media/audio/simple_sources.cc) 在文件打开失败时打印此错误，WAV 解析失败是另一条错误。上游 [macOS fake capture 沙箱说明](https://chromium.googlesource.com/chromium/src.git/+/167f34ae932ed8f702d9127339acbff246b4eb47) 记录同一限制。已排除本轮 fixture 缺失和 PCM 格式错误；观察与 Chromium 音频进程自己的 macOS 沙箱拒读一致，未采集系统审计日志或 errno，故不把推断包装成 OS 审计证据。
-
-Chromium 的 [WAV validator](https://raw.githubusercontent.com/chromium/chromium/main/media/audio/wav_audio_handler.cc) 接受16-bit PCM 与非零采样率，FileSource 会作音频转换；并没有固定必须16 kHz的合同。本次使用48 kHz并明确验证，不靠 ffmpeg 的默认输出。未添加 `--no-sandbox` 或修改任何用户浏览器配置。**浏览器指定音调：PARTIAL（启动/消息已验证；音调实际尝试失败），成功的双向音调证明仍 NOT-RUN**。仅在 Codex 外重跑未必解决 Chromium 自己的沙箱限制；需要编排器选择允许 fixture 文件的测试执行方式。
-
-
-### 主线与本分支的两项红灯对照
-
-固定 `7dfde0b7fbb52debf0651b5f23766e1ab09dd9fd` 的 `git archive` 内容置于 scratch，未切换当前 worktree。先完成编译，然后 main/branch 交替顺序执行；均 `GOMAXPROCS=4`、`-race -short`，harness 固定 memory、无 Redis，本轮不同时运行其它自有测试门或矩阵。前一轮伴随构建的预热试验未作下表数据。两个目标的测试源文件与该主线相同。
-
-| 测试 | 树 | 5次退出码 | 5次墙钟秒 |
-| --- | --- | --- | --- |
-| stall | main | 0,0,0,0,0 | 4.053, 3.765, 3.745, 3.758, 3.752 |
-| stall | branch | 0,0,0,0,0 | 4.058, 3.744, 3.811, 3.747, 3.750 |
-| relay-restart | main | 0,0,0,0,0 | 3.853, 3.358, 3.377, 3.334, 3.336 |
-| relay-restart | branch | 0,0,0,0,0 | 3.712, 3.334, 3.449, 3.346, 3.339 |
-
-**VERIFIED：这20次定向执行均通过；PARTIAL：旧全套负载下的失败归因。** 本轮 main 各5次均未失败，branch 也各5次未失败；所以没有通过本机定向试验复现“主线也失败”。未重建历史完整 make 的包并发/瞬时机器负载，不把这组绿灯当作“历史时序竞争已消失”的证明。编排器提供的 CI/独立审查结论另列第6节；未触发新的 hosted CI。
-
-原始命令、每次输出和时间：[review-fixes/main-comparison/summary.json](review-fixes/main-comparison/summary.json) 及同目录日志。
-
-### 本次验证门
-
-| 门 | 状态 | 墙钟秒 |
-| --- | --- | ---: |
-| vet | VERIFIED / PASS | 0.889 |
-| lint | VERIFIED / PASS | 1.270 |
-| race-10 | VERIFIED / PASS | 3.010 |
-| stock | VERIFIED / PASS | 0.349 |
-| diff-check | VERIFIED / PASS | 0.021 |
-
-`go vet -mod=readonly ./...`；golangci-lint **v2.14.0** 对 `./experiments/... ./pkg/workerapp/... ./internal/spike/roomaudio/...`，新建专用缓存，未排除实验目录；room/client 均 race/count=10，包含新的真实 HTTP 并发编码与在途 WS 测试。stock build 检查的是生产依赖和最终符号。原始输出与命令见 [review-fixes/verification.json](review-fixes/verification.json)。移包后的 audio-agent 及 workerapp race/short 包测试也实际通过；本次没有重跑两个完整 make 门或完整 DC 矩阵。
-
-新浏览器 ledger 墙钟 WS **17.991 s**、DC **12.021 s**；它们都是 failed/exit1，不能作为音调 PASS。wefty 使用明细在派工 scratch `wefty-exec-log.md`。
-
-
-独立审查另发现的四项生产问题（16条重组上限遇突发17条、flag-OFF Drain、第五条 channel 结束媒体、Move 应返回409）由 W1 在其它 worktree 负责。本次未修改相关生产文件，也未在本分支声称这些问题已经修好；合并后的验证是后续门。第3节旧 buffer 表及 HTTP500 仅代表历史测量基线，不能冒充合并后结果。
+W1独立生产修复/红绿测试由编排器交付的`W1-REVIEW-FIXES.md`记录；本worker未重新执行全部W1恶意peer测试，也不声称独立审查已完成。此前主线5次定向对照及审查结论保留于历史报告。配对wefty bundle `run_5b5c53e01df3448865d722bd4a4594ab`最终为failed，原因是初版WS burst探针；其24轮矩阵阶段exit0，后续两种修正burst直接复跑均exit0。这些结果分开记录，未把bundle改写为成功。本轮没有触发hosted CI、没有GitHub写入或新模块/工具链下载；全模块lint/本地回归不等于CI已绿。所有wefty调用与结果均记入派工scratch的`wefty-exec-log.md`。

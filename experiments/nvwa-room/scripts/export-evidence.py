@@ -17,6 +17,18 @@ for mode in ['normal','disconnect','worker-kill','lost-receipt']:
   trial,transport=trial_transport
   name=f'{mode}-{trial}'+(f'-{transport}' if a.matrix=='paired' else '');path=s/('paired-matrix' if a.matrix=='paired' else transport+'-matrix')/name/'result.json';d=json.loads(path.read_text());assert d['transport']==('relais-datachannel' if transport=='dc' else 'websocket');assert not d['errors'],(name,d['errors']);row={'run':name,'transport':transport,'duration_ms':d['duration_ms'],'queue_bytes':d['room_metrics']['max_queue_bytes'],'queue_age_ms':d['room_metrics']['max_queue_age_ms'],'applied':d['room_metrics']['applied'],'dedup':d['room_metrics']['deduplicated'],'conflicts':d['room_metrics']['conflicts'],'dropped_receipts':d['room_metrics']['dropped_receipts'],'duplicate_side_effects':d['room_metrics']['applied']-1000,'players':[]}
   assert row['duplicate_side_effects']==0
+  assert all(p['state_seq']==1000 for p in d['snapshot']['players'])
+  assert len({p['final_room_version'] for p in d['players']})==1
+  proof=d.get('in_flight_cut')
+  if mode in ['disconnect','worker-kill']:
+   assert proof and proof['pending_at_cut'] and proof['original_error']=='connection_closed'
+   assert proof['sent_ns']<=proof['applied_barrier_ns']<=proof['cut_ns']<proof['sent_ns']+2_000_000_000
+   assert proof['query']==proof['retry'] and proof['query']['applied']
+   assert proof['old_generation']==1 and proof['new_generation']==2
+   assert proof['deduplicated']==row['dedup']==1 and proof['side_effects']==d['room_metrics']['held_command_applications']==1
+   assert d['room_metrics']['dropped_receipts']==0
+   row['in_flight_cut']=proof
+  elif mode=='lost-receipt':assert row['dedup']==row['conflicts']==row['dropped_receipts']==1
   if mode=='worker-kill':
    topology=json.loads((path.parent/'topology.json').read_text());owned=[c['pid'] for c in topology['children'] if c['name']=='worker-1'];assert owned==[d['kill_pid']]
   assert len({x['session_id'] for player in d['players'] for x in player['audio_sessions']})==sum(len(player['audio_sessions']) for player in d['players'])
@@ -27,7 +39,9 @@ for mode in ['normal','disconnect','worker-kill','lost-receipt']:
    if mode in ['disconnect','worker-kill'] and i==0:
     assert [j['connection_generation'] for j in joined]==[1,2]
     recovered=[p for p in joined[1]['players'] if p['id']==player['player_id']][0]
-    assert recovered['state_seq']==250 and recovered['action']=={'id':'wave','version':1,'start_tick':0},recovered
+    assert recovered['state_seq']==250
+    if d.get('in_flight_cut'):assert recovered.get('action') is None,recovered
+    else:assert recovered['action']=={'id':'wave','version':1,'start_tick':0},recovered
    else:assert len(joined)==1
 
    seen=set();last={};generation=0;duplicates=reordered=0
@@ -45,7 +59,7 @@ for mode in ['normal','disconnect','worker-kill','lost-receipt']:
     for encoded in session.get('evidence_packets',[]):
      payload=base64.b64decode(encoded);assert payload in tones[1-i] and payload not in tones[i],(name,i,'bad peer packet');verified_packets+=1
    assert verified_packets>=8,(name,'missing raw audio specimens')
-   wire=[m['bytes']+len(m['reply']['request_id'])-5 for m in player['messages']]
+   wire=[m['bytes']+(len('r'+str(m['index']+2)) if proof and i==0 and m['index']==d['fault_index'] else len(m['reply']['request_id']))-5 for m in player['messages']]
    row['players'].append({'id':player['player_id'],'rtt_mean_ms':player['rtt_mean_ms'],'rtt_max_ms':player['rtt_max_ms'],'state_age_max_ms':player['latest_state_age_max_ms'],'missing':player['missing'],'duplicate_receipts':duplicates,'reordered_receipts':reordered,'reconnects':player['reconnects'],'recovery_ms':player['recovery_ms'],'cut_to_recovered_ms':player['cut_to_recovered_ms'],'audio_gap_ms':player['audio_max_gap_ms'],'audio_received':sum(x['received'] for x in player['audio_sessions']),'audio_peer':sum(x['peer_payload'] for x in player['audio_sessions']),'audio_self':sum(x['self_payload'] for x in player['audio_sessions']),'audio_unknown':sum(x['unknown_payload'] for x in player['audio_sessions']),'verified_raw_peer_packets':verified_packets,'wire_bytes_min':min(wire),'wire_bytes_max':max(wire),'version':player['final_room_version']})
   payload=json.dumps(d,separators=(',',':')).encode();target=raw/(name+'.json.gz');target.write_bytes(gzip.compress(payload,mtime=0));manifest[str(target.relative_to(dest))]={'sha256':hashlib.sha256(target.read_bytes()).hexdigest(),'source':str(path),'uncompressed_bytes':len(payload)};rows.append(row)
 for name in ['tone-440.ogg','tone-880.ogg','build-sha256.txt','runtime-source-sha256.json']:

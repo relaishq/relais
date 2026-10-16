@@ -123,7 +123,7 @@ func run(bin, out, a, b string) error {
 	if e != nil {
 		return e
 	}
-	if moveStatus < 400 || !strings.Contains(string(moveBody), "data_session_not_movable") {
+	if moveStatus != http.StatusConflict || !strings.Contains(string(moveBody), "data_session_not_movable") {
 		return fmt.Errorf("move not definitively refused: %d %s", moveStatus, moveBody)
 	}
 	afterMove, e := consumers[0].Request(ctx, room.Message{Type: "snapshot"})

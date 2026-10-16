@@ -1,6 +1,6 @@
 # Nvwa two-player room spike
 
-> Stage 2 已合并 W1（基线 `866a07d`）。当前双传输结果、原始数据与 GO/HOLD/NO-GO 以 [中文最终报告](evidence/REPORT.md) 为准。下方保留协议和单次运行细节；DataChannel 已集成，严格分片超限边界仍为 HOLD。
+> Stage 3 基线 `25d8e35` 已完成最终配对运行。当前数值、原始证据和 GO/HOLD/NO-GO 以[中文最终报告](evidence/REPORT.md)为准；历史报告已另存。分片超限采用数据侧 watchdog，不宣称严格1 KiB重组内存硬界。
 
 ## Stage 2 配对运行
 
@@ -20,7 +20,7 @@ python3 experiments/nvwa-room/scripts/export-evidence.py --scratch "$nvwa_scratc
 # Ctrl-C / SIGTERM 给这个自建拓扑进程，等待其逐个回收子进程。
 ```
 
-单次 `driver` 和 `backpressure` 加 `-datachannel` 即选择共享音频 PeerConnection 的 DataChannel；不加则为直接 WS。`policies` 固定测试 DataChannel 的 Move 拒绝与 Drain 后重连。`browser-smoke.py --transport ws|dc` 使用各自独立 profile；本次通过 wefty 已验证消息页面，但 Chromium 内部音频沙箱无法读取 WAV，音调验收未通过。没有添加 `--no-sandbox`。
+单次 `driver` 和 `backpressure` 加 `-datachannel` 即选择共享音频 PeerConnection 的 DataChannel；不加则为直接 WS。`policies` 固定测试 DataChannel 的 Move 拒绝与 Drain 后重连。`browser-smoke.py --transport ws|dc --audio-test-mode service-unsandboxed` 使用各自独立 profile，测试专用 `--disable-features=AudioServiceSandbox`。两种传输的 peer 音调均已验证；更宽 `--no-sandbox` 只在派工授权的早期隔离本地试验中尝试，未用于最终成功运行。页面挂接实际远端 media element 后才开始拉取解码样本。
 
 Disposable app protocol and WebSocket comparison for #162/#163. This is a message/action-reference demo, not a character or animation player. The room has no durable storage. Relais production media defaults remain unchanged. Only `-agent=room-audio -room-audio-bus=udp://127.0.0.1:PORT` selects the experimental audio bridge.
 
@@ -106,7 +106,7 @@ python3 experiments/nvwa-room/scripts/browser-smoke.py --scratch "$nvwa_scratch"
 # is an explicit alternative, still using only task-owned separate profiles.
 ```
 
-It launches the requested executable with separate scratch `--user-data-dir`, fake-device/fake-UI flags, and a different `--use-file-for-fake-audio-capture` WAV for each caller. It creates no shared DevTools connection. It terminates only its own Popen children. Browser runtime requires the executor to permit Chromium's macOS process handshake; it is NOT-RUN when that launch is denied. Do not bypass a sandbox denial through wefty.
+It launches the requested executable with separate scratch `--user-data-dir`, fake-device/fake-UI flags, and a different `--use-file-for-fake-audio-capture` WAV for each caller. It creates no shared DevTools connection. It terminates only its own Popen children. Browser runtime requires the executor to permit Chromium's macOS process handshake; it is NOT-RUN when that launch is denied. This dispatch explicitly authorized the isolated, local-page browser run through wefty and the documented test-only audio flags; other sandbox denials still require the receiving session authorization.
 
 ## Protocol
 
@@ -130,18 +130,18 @@ Replies are `joined`, `snapshot`, `state`, `result`, or `error`; they carry `roo
 
 Restart creates a random new epoch. An old-epoch request gets explicit `epoch_reset`; an unknown command in the new epoch is not inferred successful. The ledger is memory-only. A room crash is outside the recovery guarantee. Actual room-process restart is NOT-RUN; epoch/reset currently has unit coverage only. Resume tokens are prototype-grade: `/lobby` has no authentication, upstream session IDs come from query strings, tokens never rotate, and the newest join wins without compare-and-set.
 
-Frozen worker upstream is `/relais-upstream?session=ID&worker=NAME`. Frames are `[op, labelLength, label, payload]` with open=1, message=0, close=2, end=3, exactly as the dispatch's `INTERFACE.md`. One upstream connection is capped at four labels. The core has framing coverage. Stage-2 runtime evidence is in the Chinese report; W1 retains HOLD on strict oversized fragmented inbound messages.
+Frozen worker upstream is `/relais-upstream?session=ID&worker=NAME`. Frames are `[op, labelLength, label, payload]` with open=1, message=0, close=2, end=3, exactly as the dispatch's `INTERFACE.md`. One upstream connection is capped at four labels. The core has framing coverage. Stage-3 runtime evidence and W1 watchdog limits are in the Chinese report. Fragmented stalled oversize stops the affected session data side after the watchdog/reset grace; media continues. It is not a hard reassembly byte/RSS ceiling.
 
 ## Bounds and measurement limits
 
 - At most two capabilities, 4,096 admitted command results per player, 16 simultaneous sockets, four upstream labels, 120 incoming app/framing messages per connection per second, and 120 authorized operations per identity per second.
 - Max app payload 1 KiB. Worker framing adds at most 257 bytes. Receive allocation is explicitly limited; no fragment reassembly queue is implemented in the app.
 - Max pending output, including a write in progress, is 16 KiB per connection. A terminal error frame is reserved inside that cap. The queue also has a 128-entry limit. Slow consumers receive typed `slow_consumer` when the socket can still deliver it and are disconnected; a blocked socket has a bounded write timeout and may expose only closure. Commands remain queryable if the receipt is lost.
-- Additional bounded app allocations: one inbound message, one JSON output temporary, queue timestamps/slots, and two latest Opus packets (<=1,200 encoded bytes each). Library WebSocket framing/IO, TLS, Pion media buffers and kernel UDP/TCP socket buffers are additional costs. The recorder measures app queue bytes/age, not whole-process/kernel buffering or SCTP buffering; those are NOT-MEASURED in stage 1. W1 must account for SCTP/DataChannel budgets in stage 2.
+- Additional bounded app allocations: one inbound message, one JSON output temporary, queue timestamps/slots, and two latest Opus packets (<=1,200 encoded bytes each). Library WebSocket framing/IO, TLS, Pion media buffers and kernel UDP/TCP socket buffers are additional costs. The recorder measures app queue bytes/age, not whole-process/kernel buffering or SCTP buffering; those are NOT-MEASURED in stage 1. The final Chinese report records W1 SCTP/DataChannel component budgets and the unmeasured whole-process costs.
 - No arbitrary asset/media bodies go on the app path. The audio bus caps datagrams at 1,500 bytes, stores only current two joined sessions, and expires peer packets after 100 ms. Agent callbacks use a fresh UDP socket with a 4 ms deadline, avoiding retained sockets without an Agent.Close hook. A missing peer packet suppresses output.
 - Room metrics include applied/dedup/conflict/stale/fenced counts, dropped receipts, slow consumers and peak app queue bytes/age. Queue peaks are finalized when the connection closes. Raw client observations and per-operation RTT are retained. The exporter derives duplicate/reordered receipts from actual incoming request IDs within each generation; the driver receipt counters alone only cover successful state request returns. The intentional lost receipt is recorded separately from unrecovered app-message loss. Latest-state age is same-host wall-clock age at receipt, including the peer's last state during a pause, not clock-synchronized cross-host latency. Peer media reports retain packet arrivals and exact peer/self/unknown Opus matches; audio interruption is the largest observed arrival gap, not perceived human quality.
 - Fault recovery is explicitly driven by the harness; no automatic browser detection time is claimed. `disconnect` closes A's owned app and media connections and waits 250 ms. `worker-kill` SIGKILLs the recorded owned worker while room/Redis stay alive, then recreates A's app/media connections. WS is independent of the worker and is deliberately rejoined to use the same recovery contract. Recovery time spans the last authoritative observation to the new join snapshot; cut-to-recovered is recorded separately. Reconnect does not migrate the old connection.
-- `disconnect` / `worker-kill` now hold one committed command receipt in the real room writer (test mode, <=2 s), wait for its server barrier while the client request remains pending, then cut. After signal reconnect/new generation, query and retry the same command; require dedup=1 and one application. The implementation covers both transports; review-fix runs are WebSocket only until W1 merges. Historical stage-2 cuts occurred between requests and did not exercise this path.
+- `disconnect` / `worker-kill` now hold one committed command receipt in the real room writer (test mode, <=2 s), wait for its server barrier while the client request remains pending, then cut. After signal reconnect/new generation, query and retry the same command; require dedup=1 and one application. The implementation and final stage-3 in-flight runs cover both transports. Historical stage-2 cuts occurred between requests and did not exercise this path.
 - `lost-receipt` applies one reliable command, drops only its app receipt using the test flag, waits 150 ms, queries, retries unchanged ID and checks a changed-content conflict. Side effects must remain exactly one. `test_pause` (test mode only, <=2 s) pauses one writer to exercise real queue overflow with media continuing.
 
 ## Verification commands
@@ -156,4 +156,20 @@ GOPROXY=off go test -mod=readonly -race -short -count=1 ./pkg/callharness \
  -run 'Test(AudioOnlyCall|BrowserLikeOfferCall|ChromeOfferIsAnswered)$'
 ```
 
-No paid API, model generation, new module download, cloud or Nvwa source changes. Native Rust/Bevy, actual animation playback, Internet/TURN, cross-host/region, Safari/mobile, production capacity and persistence after room death remain NOT-RUN. See the stage-2 Chinese report for the measured comparison and bounded verdict; independent review remains with the orchestrator.
+No paid API, model generation, new module download, cloud or Nvwa source changes. Native Rust/Bevy, actual animation playback, Internet/TURN, cross-host/region, Safari/mobile, production capacity and persistence after room death remain NOT-RUN. See the stage-3 Chinese report for the measured comparison and bounded verdict; independent review remains with the orchestrator.
+
+
+Stage-3 replay after both owned regression result files exist:
+
+```sh
+wefty exec --detach --json --max-runtime 35m -- \
+ python3 experiments/nvwa-room/scripts/run-stage3.py --scratch "$nvwa_scratch"
+```
+
+`cmd/burst` sends 200 numbered four-byte messages per player without waiting for
+individual receipts. It uses an opt-in test echo lane (third DC channel `burst`,
+or `/test-burst` for WS), with a 200-message lifetime cap and bounded writer
+backpressure. Normal application admission remains 120 messages/s, with the same
+16 KiB/128-entry output bounds. This is a transport probe, not room command burst
+capacity. The first WS probe's queue failure and the corrected two-transport
+rechecks are both retained in the final evidence.

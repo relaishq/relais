@@ -1,0 +1,357 @@
+{
+  "auxiliary/burst-dc.json.gz": {
+    "sha256": "4f9836e4971ad01cc8bbc98f2a1777bcfa273171e82fc47c93395c37400fb961",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/burst-dc-recheck/result.json",
+    "uncompressed_bytes": 62237
+  },
+  "auxiliary/backpressure-dc.json.gz": {
+    "sha256": "736464d95ae5ead9583ba126e6f09a9564a34a7573bbda9709d74ff2042d71b0",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/backpressure-dc/result.json",
+    "uncompressed_bytes": 8772
+  },
+  "auxiliary/burst-ws.json.gz": {
+    "sha256": "e58314a2be19545857149cd364f98afc53e5a5dd5e0c3482f6786c46cf98fa66",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/burst-ws-recheck/result.json",
+    "uncompressed_bytes": 61746
+  },
+  "auxiliary/backpressure-ws.json.gz": {
+    "sha256": "da414634e3a5d4357e35ef74b211f73a939a444917c1aa3dcb8cb3682da9d188",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/backpressure-ws/result.json",
+    "uncompressed_bytes": 8256
+  },
+  "auxiliary/initial-burst-dc.json.gz": {
+    "sha256": "4890fac2f9e4afa5c5965126db9f64fd66487edbf0ce9a6b3a804ae54d29b7dd",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/burst-dc/result.json",
+    "uncompressed_bytes": 62229
+  },
+  "auxiliary/initial-probe-burst-dc.json.gz": {
+    "sha256": "df1e67b0c02a08381e29139827e3910fdbc5ab0095a08ec800da3773a411aa56",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/probe-burst-dc/result.json",
+    "uncompressed_bytes": 62587
+  },
+  "auxiliary/policies-dc.json.gz": {
+    "sha256": "3a28988c48b3116eb046a61b7e64c353e5aafe67664bd664b48c6587fa2ac942",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/policies-dc/result.json",
+    "uncompressed_bytes": 18613
+  },
+  "auxiliary/browser-smoke-dc-service-unsandboxed-media-sink/player-2.json.gz": {
+    "sha256": "2f75f12322905141e97e0c66e96eb0fc658e1ae39e4d1987fb1baaeb5076121e",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-dc-service-unsandboxed-media-sink/player-2.json",
+    "uncompressed_bytes": 200756
+  },
+  "auxiliary/browser-smoke-dc-service-unsandboxed-media-sink/player-1.json.gz": {
+    "sha256": "22382f383428d65776ebc26dc22f27282ef240b7b26e44893121e2b2ae7b887a",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-dc-service-unsandboxed-media-sink/player-1.json",
+    "uncompressed_bytes": 201078
+  },
+  "auxiliary/browser-smoke-dc-service-unsandboxed-media-sink/chromium-880.log.gz": {
+    "sha256": "c614a40ea354234c2cdbbfefd14c89f91559ebac2498c75ec2fd150e7a538093",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-dc-service-unsandboxed-media-sink/chromium-880.log",
+    "uncompressed_bytes": 163
+  },
+  "auxiliary/browser-smoke-dc-service-unsandboxed-media-sink/chromium-440.log.gz": {
+    "sha256": "5f781ed441ced513106c553c43663a08d496793160ab19ef6389c004caa96644",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-dc-service-unsandboxed-media-sink/chromium-440.log",
+    "uncompressed_bytes": 163
+  },
+  "auxiliary/browser-smoke-dc-service-unsandboxed-media-sink/chromium-880-command.json.gz": {
+    "sha256": "311aa38c558a3fa977a0b61506a4853889b2fef1ef41657a63faedf56a5451a2",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-dc-service-unsandboxed-media-sink/chromium-880-command.json",
+    "uncompressed_bytes": 794
+  },
+  "auxiliary/browser-smoke-dc-service-unsandboxed-media-sink/chromium-440-command.json.gz": {
+    "sha256": "9ff6b9b8799c1b616ebdf31d60dd6430115ac13e04b66ba78f0ff27ad9fdf196",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-dc-service-unsandboxed-media-sink/chromium-440-command.json",
+    "uncompressed_bytes": 794
+  },
+  "auxiliary/browser-smoke-dc-service-unsandboxed-media-sink/tone-440-fixture.json.gz": {
+    "sha256": "8b73ae84668f142a941ed0ec61d59b0dcea60407c3f70b77f36f01c47cdb30b4",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-dc-service-unsandboxed-media-sink/tone-440-fixture.json",
+    "uncompressed_bytes": 464
+  },
+  "auxiliary/browser-smoke-dc-service-unsandboxed-media-sink/tone-880-fixture.json.gz": {
+    "sha256": "2db43abab8b43f9165013e61992ead1bde76ab0817b108b791da95d9a90cc044",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-dc-service-unsandboxed-media-sink/tone-880-fixture.json",
+    "uncompressed_bytes": 464
+  },
+  "auxiliary/browser-smoke-ws-all-unsandboxed/player-2.json.gz": {
+    "sha256": "274b7b2cea0c05828d15f499cdc025d20b47674a0c668131b1720c4e45ed3668",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-all-unsandboxed/player-2.json",
+    "uncompressed_bytes": 190594
+  },
+  "auxiliary/browser-smoke-ws-all-unsandboxed/player-1.json.gz": {
+    "sha256": "be0c6dbd9e285a7eb2c034faa6e54bf8c2d05e830ef34d48eef2119941aa66b4",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-all-unsandboxed/player-1.json",
+    "uncompressed_bytes": 190643
+  },
+  "auxiliary/browser-smoke-ws-all-unsandboxed/chromium-880.log.gz": {
+    "sha256": "b61ec6c14d43366a4d65ce4d3c9d013d065ed597c3db75fe21d7b97f477746b6",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-all-unsandboxed/chromium-880.log",
+    "uncompressed_bytes": 338
+  },
+  "auxiliary/browser-smoke-ws-all-unsandboxed/chromium-440.log.gz": {
+    "sha256": "b069c06c7183af900c5dbeaa4c8dc11c2ae9ff54e6b717f5713c177ef5bc1148",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-all-unsandboxed/chromium-440.log",
+    "uncompressed_bytes": 338
+  },
+  "auxiliary/browser-smoke-ws-all-unsandboxed/chromium-880-command.json.gz": {
+    "sha256": "04ab5e8c251dc97cc1ec1520c4c0d4a55826be366e6a99e15af917ca50ae63a8",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-all-unsandboxed/chromium-880-command.json",
+    "uncompressed_bytes": 752
+  },
+  "auxiliary/browser-smoke-ws-all-unsandboxed/chromium-440-command.json.gz": {
+    "sha256": "db99d321ce0a01d941ced5062341e3a8d79a5d7c6d6896576654736f7c1fa74b",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-all-unsandboxed/chromium-440-command.json",
+    "uncompressed_bytes": 752
+  },
+  "auxiliary/browser-smoke-ws-all-unsandboxed/tone-440-fixture.json.gz": {
+    "sha256": "f0ae9bf02de1dc3510817da149236230b9af01c946cc0aa398722f44d0a26276",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-all-unsandboxed/tone-440-fixture.json",
+    "uncompressed_bytes": 462
+  },
+  "auxiliary/browser-smoke-ws-all-unsandboxed/tone-880-fixture.json.gz": {
+    "sha256": "c5c44e5684420c6008d7d02f0a59e07c3c769089afa054f030746ce7df7a4eaa",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-all-unsandboxed/tone-880-fixture.json",
+    "uncompressed_bytes": 462
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed/player-2.json.gz": {
+    "sha256": "be7989ff615aec39557bb63221f72f9fae3e3d7ae5e9dfa063e9a4a92a7cadc3",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed/player-2.json",
+    "uncompressed_bytes": 191746
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed/player-1.json.gz": {
+    "sha256": "6d5ea9c745a1a2913f2560f7142933fba3b7cb2c3851e8df29ac07762b0c8f52",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed/player-1.json",
+    "uncompressed_bytes": 189533
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed/chromium-880.log.gz": {
+    "sha256": "62408f6182406d17b0dd105d5bb4ba517e9c640a62091a3ff7cf06f575325a03",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed/chromium-880.log",
+    "uncompressed_bytes": 163
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed/chromium-440.log.gz": {
+    "sha256": "b1d708df1dd5960392734342a9376f147dd60185008f2733c6f253fdb537bb44",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed/chromium-440.log",
+    "uncompressed_bytes": 163
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed/chromium-880-command.json.gz": {
+    "sha256": "4bda8ddc61fd4ed8fc37e910e230163b79720439328064f9dbda8023241f93cf",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed/chromium-880-command.json",
+    "uncompressed_bytes": 782
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed/chromium-440-command.json.gz": {
+    "sha256": "ff6779414daf0b06a06bff08a873a08e65280faf06d0832360c1d1770339ae02",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed/chromium-440-command.json",
+    "uncompressed_bytes": 782
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed/tone-440-fixture.json.gz": {
+    "sha256": "ed39c8b96dfce584bad917ebcf9ed5ecba97a42dceb5d45fb9243ff665924995",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed/tone-440-fixture.json",
+    "uncompressed_bytes": 462
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed/tone-880-fixture.json.gz": {
+    "sha256": "ac55fa263812a2de3ce6b4ba6e20b1ccda7a4118ddffc021a2df0b2b04fe5af7",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed/tone-880-fixture.json",
+    "uncompressed_bytes": 462
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-diagnostics/player-2.json.gz": {
+    "sha256": "ad1abe7636f6f22d633c6f940c71a74e2f368da5e1b926381ebf69239292b852",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-diagnostics/player-2.json",
+    "uncompressed_bytes": 199594
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-diagnostics/player-1.json.gz": {
+    "sha256": "88bdd47e8f64779a7d519b255f3f650e90811e4d7ae65c1df597bf16e313a078",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-diagnostics/player-1.json",
+    "uncompressed_bytes": 199727
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-diagnostics/chromium-880.log.gz": {
+    "sha256": "e09afb592d332adef77f090b33224b597536c1a55d6238efb25cc19b0c0912a5",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-diagnostics/chromium-880.log",
+    "uncompressed_bytes": 163
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-diagnostics/chromium-440.log.gz": {
+    "sha256": "5536f12b9463f9ee892ef2def76c792c5188852f51ea86621800e749e73bb283",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-diagnostics/chromium-440.log",
+    "uncompressed_bytes": 163
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-diagnostics/chromium-880-command.json.gz": {
+    "sha256": "40516fd6f865e6b072c2601b8f50846b26519bad66d1f348411bad7c12c52d05",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-diagnostics/chromium-880-command.json",
+    "uncompressed_bytes": 795
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-diagnostics/chromium-440-command.json.gz": {
+    "sha256": "9134a5d36152c737864c459d2fcb9594a3c88ba6dd0bc8565746365db4e28558",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-diagnostics/chromium-440-command.json",
+    "uncompressed_bytes": 795
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-diagnostics/tone-440-fixture.json.gz": {
+    "sha256": "bcdc0cc0a9c0d043feb99541ad0be0db9e61232842c356e31dd2849d30ed4494",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-diagnostics/tone-440-fixture.json",
+    "uncompressed_bytes": 464
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-diagnostics/tone-880-fixture.json.gz": {
+    "sha256": "e0cc07a27e5ef68f242df7a435311da21a903aa2eefbc60137c1202a6326a768",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-diagnostics/tone-880-fixture.json",
+    "uncompressed_bytes": 464
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-media-sink/player-2.json.gz": {
+    "sha256": "6866a9684728fc1b3ba02d3af68bc6fcffb47b0aa3e1ecf8914e5ba9da38e64c",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-media-sink/player-2.json",
+    "uncompressed_bytes": 201975
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-media-sink/player-1.json.gz": {
+    "sha256": "948702d8e3f8723a759f778c723ba8ecc4c82e9bf548f74d20d1c5ba5702bdf7",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-media-sink/player-1.json",
+    "uncompressed_bytes": 201191
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-media-sink/chromium-880.log.gz": {
+    "sha256": "e587b540c0dab960f48992745414057322d05eb2668ce49f3c202678aa361698",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-media-sink/chromium-880.log",
+    "uncompressed_bytes": 163
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-media-sink/chromium-440.log.gz": {
+    "sha256": "de82a8eebe69c2dadcf56aa4bc8f665c4fa91fcf8a9e0f1d4d681ae64a017dd8",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-media-sink/chromium-440.log",
+    "uncompressed_bytes": 163
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-media-sink/chromium-880-command.json.gz": {
+    "sha256": "f87d42874ba895c41e524beb67a83a0da821af6588429ed4f90bece4b5e88142",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-media-sink/chromium-880-command.json",
+    "uncompressed_bytes": 794
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-media-sink/chromium-440-command.json.gz": {
+    "sha256": "1632fbb91e6775b9b3a50d9561a749e1f2575090f6258c13572edf0894f085b5",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-media-sink/chromium-440-command.json",
+    "uncompressed_bytes": 794
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-media-sink/tone-440-fixture.json.gz": {
+    "sha256": "fa711033527f5a58de64da0e52d4bed0ff457cc20396db97e1c346ef1779f874",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-media-sink/tone-440-fixture.json",
+    "uncompressed_bytes": 464
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-media-sink/tone-880-fixture.json.gz": {
+    "sha256": "86c874c3417e68bd88f13639fc35ca4dfd1030ff267303a2b0b384ecc21819ba",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-media-sink/tone-880-fixture.json",
+    "uncompressed_bytes": 464
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-nonzero-sink/player-2.json.gz": {
+    "sha256": "4daef5c084fd8d0505bb75b82d194210004fa85e7821d7693dd317546bdba8bd",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-nonzero-sink/player-2.json",
+    "uncompressed_bytes": 194587
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-nonzero-sink/player-1.json.gz": {
+    "sha256": "f893d12db9bf0f63bdc35d09e55e42c0283e625d9f251747d06a7e4f9c3a0989",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-nonzero-sink/player-1.json",
+    "uncompressed_bytes": 200963
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-nonzero-sink/chromium-880.log.gz": {
+    "sha256": "5009045cfb7e52177420780d4a8d9e969c9cf6f86aa551959c6f1f4b97476d59",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-nonzero-sink/chromium-880.log",
+    "uncompressed_bytes": 163
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-nonzero-sink/chromium-440.log.gz": {
+    "sha256": "d5ec7b9ff3d0016e7975cdb95641a162e43954acd081a9c9896b99d9272e9119",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-nonzero-sink/chromium-440.log",
+    "uncompressed_bytes": 163
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-nonzero-sink/chromium-880-command.json.gz": {
+    "sha256": "f24e60b254fc60904de037b0e4df67f0776d930edbbda88b9037d88875498013",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-nonzero-sink/chromium-880-command.json",
+    "uncompressed_bytes": 796
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-nonzero-sink/chromium-440-command.json.gz": {
+    "sha256": "eb297ff3c2e608a53216dd257d7eebbbefd4385f0d635e008ffab908be099d3c",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-nonzero-sink/chromium-440-command.json",
+    "uncompressed_bytes": 796
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-nonzero-sink/tone-440-fixture.json.gz": {
+    "sha256": "8e32de9cff7dd980fbb66958f7d398be4c45513c4e6646621a7599024fb8573b",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-nonzero-sink/tone-440-fixture.json",
+    "uncompressed_bytes": 464
+  },
+  "auxiliary/browser-smoke-ws-service-unsandboxed-nonzero-sink/tone-880-fixture.json.gz": {
+    "sha256": "1f9beccb690efd71cdbd3b71e20ae01a470ce3ba5157567bc7778a922d0ddcb3",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/browser-smoke-ws-service-unsandboxed-nonzero-sink/tone-880-fixture.json",
+    "uncompressed_bytes": 464
+  },
+  "auxiliary/unit/result.json.gz": {
+    "sha256": "95d0d160e7180e9d371f7dfc2fa845bdf48f5be3c5209a67dff18e66e3de8605",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/unit/result.json",
+    "uncompressed_bytes": 152
+  },
+  "auxiliary/unit/test-unit.log.gz": {
+    "sha256": "f85cbd6f0ba4b18d58a3e5c1c765f589f5189869a69b0ffcc6da9c3f4f008864",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/unit/test-unit.log",
+    "uncompressed_bytes": 569332
+  },
+  "auxiliary/harness/result.json.gz": {
+    "sha256": "50de2d3c4f5d25cac57fd8ddba3e83421f7f7aab519b6c128395385abfe0e333",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/harness/result.json",
+    "uncompressed_bytes": 145
+  },
+  "auxiliary/harness/test-harness-short.log.gz": {
+    "sha256": "93fda97de16daa67c02d1a4f65d13b3362fd7b0c3f735a1f79d4e0eeaaa7e22a",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/harness/test-harness-short.log",
+    "uncompressed_bytes": 435927
+  },
+  "auxiliary/lint-final.log.gz": {
+    "sha256": "bafcb04d67f6157ff3d4a1fdf228afd2df6cc6d786c61642c1125b1fe879e728",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/lint-final.log",
+    "uncompressed_bytes": 10
+  },
+  "auxiliary/vet.log.gz": {
+    "sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/vet.log",
+    "uncompressed_bytes": 0
+  },
+  "auxiliary/stock.log.gz": {
+    "sha256": "529a36c765366a4f99cab726e916ee283286eb23ca2546a854c70c79deaf792c",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/stock.log",
+    "uncompressed_bytes": 99
+  },
+  "auxiliary/experiments-race-10.log.gz": {
+    "sha256": "bf31ea0acd85f735664d28a343e49e6cdbb65403a6f8fe53c2ba505ed767c3c7",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/experiments-race-10.log",
+    "uncompressed_bytes": 1736
+  },
+  "auxiliary/experiments-race-10-initial-failure.log.gz": {
+    "sha256": "bf31ea0acd85f735664d28a343e49e6cdbb65403a6f8fe53c2ba505ed767c3c7",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/experiments-race-10-initial-failure.log",
+    "uncompressed_bytes": 1736
+  },
+  "auxiliary/experiments-race-10-final.log.gz": {
+    "sha256": "a4a07771d866e1af24b1d268aecdb6bb08176e3564192e39b4ccdc83dc20e774",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/experiments-race-10-final.log",
+    "uncompressed_bytes": 927
+  },
+  "auxiliary/verification.json.gz": {
+    "sha256": "ece99da8c87a6edade3052c6b17c4e142be39499001cbacfa7a4dfb94fdcbbdb",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/verification.json",
+    "uncompressed_bytes": 1335
+  },
+  "auxiliary/wefty-runs.json.gz": {
+    "sha256": "272682a6363b0352c8036ba120f6cb33c9b83abe79493db3ab2ebf5f622f481c",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/wefty-runs.json",
+    "uncompressed_bytes": 5133
+  },
+  "auxiliary/stage3-run.json.gz": {
+    "sha256": "5937ef55c98bbc75bc1a1925da2dc7f01cbf1a17cc7c0982acb6f99c5a13eb9c",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/stage3-run.json",
+    "uncompressed_bytes": 6562
+  },
+  "auxiliary/burst-rechecks.json.gz": {
+    "sha256": "5e00df9732ce2de469d0a2e9cd08fcca2ace3cef9546b779f71a5f69a094dff8",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/burst-rechecks.json",
+    "uncompressed_bytes": 2391
+  },
+  "auxiliary/burst-recheck-sha256.txt.gz": {
+    "sha256": "45e4116f66e9f4fd942c83b31b53bb53b75f16a2d07d7ba4f75968a19faec37b",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/burst-recheck-sha256.txt",
+    "uncompressed_bytes": 2425
+  },
+  "auxiliary/burst-recheck-runtime-source-sha256.json.gz": {
+    "sha256": "06a98964b39527304fbbb1470c234c65c92a905f4a2f35cfb6f261cb2264d429",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage3-25d8e35/burst-recheck-runtime-source-sha256.json",
+    "uncompressed_bytes": 2035
+  }
+}

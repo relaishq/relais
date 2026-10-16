@@ -12,8 +12,9 @@ import (
 )
 
 type queued struct {
-	data []byte
-	at   time.Time
+	data    []byte
+	at      time.Time
+	written chan struct{}
 }
 type Connection struct {
 	room            *Room
@@ -58,6 +59,11 @@ func (c *Connection) send(v Reply, label string) bool {
 		c.stop("outbound_message_too_large")
 		return false
 	}
+	return c.enqueue(data, label)
+}
+
+// enqueue shares the same byte budget for JSON replies and bounded test probes.
+func (c *Connection) enqueue(data []byte, label string, written ...chan struct{}) bool {
 	if c.framed {
 		c.mu.Lock()
 		if label == "control" {
@@ -90,7 +96,12 @@ func (c *Connection) send(v Reply, label string) bool {
 		c.maxPending = c.pending
 	}
 	select {
-	case c.queue <- queued{data, at}:
+	case c.queue <- queued{data: data, at: at, written: func() chan struct{} {
+		if len(written) > 0 {
+			return written[0]
+		}
+		return nil
+	}()}:
 		c.mu.Unlock()
 		return true
 	default:
@@ -152,6 +163,9 @@ func (c *Connection) writer() {
 				c.maxAge = age
 			}
 			c.mu.Unlock()
+			if q.written != nil {
+				close(q.written)
+			}
 			if err != nil {
 				return
 			}
@@ -204,7 +218,7 @@ func (r *Room) serveWS(ws *websocket.Conn, framed bool) {
 		}
 	}()
 	labels := map[string]bool{}
-	rateAt, rate := time.Now(), 0
+	rateAt, rate, burst := time.Now(), 0, 0
 	for {
 		_ = ws.SetReadDeadline(time.Now().Add(30 * time.Second))
 		var data []byte
@@ -212,15 +226,6 @@ func (r *Room) serveWS(ws *websocket.Conn, framed bool) {
 			if errors.Is(err, websocket.ErrFrameTooLarge) {
 				c.stop("message_too_large")
 			}
-			return
-		}
-		if time.Since(rateAt) >= time.Second {
-			rateAt = time.Now()
-			rate = 0
-		}
-		rate++
-		if rate > MaxRate {
-			c.stop("rate_limit")
 			return
 		}
 		label := "control"
@@ -264,6 +269,36 @@ func (r *Room) serveWS(ws *websocket.Conn, framed bool) {
 				return
 			}
 		}
+		if r.AllowFaults && (label == "burst" || (!framed && ws.Request().URL.Path == "/test-burst")) {
+			// Transport diagnostic only: not a room command or a rate-limit change.
+			// A lifetime cap and the ordinary pending-byte budget bound this lane.
+			burst++
+			if len(data) != 4 || burst > 200 {
+				c.stop("test_burst_limit")
+				return
+			}
+			written := make(chan struct{})
+			if !c.enqueue(data, "burst", written) {
+				return
+			}
+			// Backpressure only the diagnostic echo lane. A slow reader cannot
+			// accumulate 200 response entries ahead of the ordinary writer.
+			select {
+			case <-written:
+			case <-c.done:
+				return
+			}
+			continue
+		}
+		if time.Since(rateAt) >= time.Second {
+			rateAt = time.Now()
+			rate = 0
+		}
+		rate++
+		if rate > MaxRate {
+			c.stop("rate_limit")
+			return
+		}
 		if len(data) > MaxMessage {
 			c.send(Reply{Type: "error", Error: "message_too_large", RoomID: r.ID, Epoch: r.Epoch}, label)
 			return
@@ -300,7 +335,11 @@ func (r *Room) Handler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"token": token, "player_id": id, "room_id": r.ID, "room_epoch": r.Epoch})
 	})
-	for _, path := range []string{"/ws", "/relais-upstream"} {
+	paths := []string{"/ws", "/relais-upstream"}
+	if r.AllowFaults {
+		paths = append(paths, "/test-burst")
+	}
+	for _, path := range paths {
 		framed := path == "/relais-upstream"
 		mux.Handle(path, websocket.Server{Handshake: func(_ *websocket.Config, q *http.Request) error {
 			if !localOrigin(q) {

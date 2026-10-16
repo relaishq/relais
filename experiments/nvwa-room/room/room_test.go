@@ -1,7 +1,9 @@
 package room
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -240,4 +242,41 @@ func TestMetricsEncodingWhileTransportEventsRollOver(t *testing.T) {
 		require.LessOrEqual(t, len(metrics.Events), 64)
 	}
 	require.Len(t, r.Metrics().Events, 64)
+}
+
+func TestBurstProbeIsBoundedAndOptIn(t *testing.T) {
+	plain := httptest.NewServer(New("plain").Handler())
+	defer plain.Close()
+	response, err := plain.Client().Get(plain.URL + "/test-burst")
+	require.NoError(t, err)
+	_ = response.Body.Close()
+	require.Equal(t, http.StatusNotFound, response.StatusCode)
+	r := New("probe")
+	r.AllowFaults = true
+	server := httptest.NewServer(r.Handler())
+	defer server.Close()
+	ws, err := websocket.Dial("ws"+server.URL[4:]+"/test-burst", "", "http://localhost")
+	require.NoError(t, err)
+	defer ws.Close()
+	_ = ws.SetDeadline(time.Now().Add(3 * time.Second))
+	for n := range 200 {
+		var b [4]byte
+		binary.BigEndian.PutUint32(b[:], uint32(n))
+		require.NoError(t, websocket.Message.Send(ws, b[:]))
+	}
+	for n := range 200 {
+		var b []byte
+		require.NoError(t, websocket.Message.Receive(ws, &b))
+		require.Len(t, b, 4)
+		require.EqualValues(t, n, binary.BigEndian.Uint32(b))
+	}
+	require.NoError(t, websocket.Message.Send(ws, []byte{0, 0, 0, 0}))
+	var b []byte
+	err = websocket.Message.Receive(ws, &b)
+	if err == nil {
+		var reply Reply
+		require.NoError(t, json.Unmarshal(b, &reply))
+		require.Equal(t, "test_burst_limit", reply.Error)
+	}
+	require.Zero(t, r.Metrics().Applied)
 }
