@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/relais/internal/clusterprocess"
-	"github.com/relais/internal/nettopology"
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/nettopology"
 	"net"
 	"net/netip"
 )

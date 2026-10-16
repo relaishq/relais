@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/relais/pkg/callharness"
-	"github.com/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/relay"
 	"github.com/stretchr/testify/require"
 	"testing"
 	"time"

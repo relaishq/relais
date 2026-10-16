@@ -7,9 +7,9 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/relais/internal/privateapi"
-	agentdemo "github.com/relais/pkg/agent/demo"
-	"github.com/relais/pkg/controlplane"
+	"github.com/relaishq/relais/internal/privateapi"
+	agentdemo "github.com/relaishq/relais/pkg/agent/demo"
+	"github.com/relaishq/relais/pkg/controlplane"
 )
 
 // Continuity uses independent source/export and target/resume observations.

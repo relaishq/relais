@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/pkg/agent"
-	"github.com/relais/pkg/relay"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/agent"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 

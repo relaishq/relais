@@ -8,11 +8,11 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/relais/internal/processrun"
-	"github.com/relais/internal/udpbuffer"
-	"github.com/relais/pkg/controlplane"
-	"github.com/relais/pkg/framecache"
-	"github.com/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/udpbuffer"
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/mediaworker"
 )
 
 func run() error {

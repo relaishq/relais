@@ -8,8 +8,8 @@ import (
 	"runtime/metrics"
 	"runtime/pprof"
 
-	"github.com/relais/internal/processrss"
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/internal/processrss"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 // RuntimeMemory separates heap objects (including garbage awaiting collection)

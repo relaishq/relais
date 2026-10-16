@@ -9,10 +9,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/relais/pkg/logging"
-	"github.com/relais/pkg/plugins"
-	"github.com/relais/pkg/util/bootstrap"
-	"github.com/relais/plugins/ingress/camera"
+	"github.com/relaishq/relais/pkg/logging"
+	"github.com/relaishq/relais/pkg/plugins"
+	"github.com/relaishq/relais/pkg/util/bootstrap"
+	"github.com/relaishq/relais/plugins/ingress/camera"
 )
 
 func main() {

@@ -19,13 +19,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/relais/internal/capacity"
-	"github.com/relais/internal/clusterprocess"
-	"github.com/relais/internal/loadgen"
-	"github.com/relais/internal/processrss"
-	"github.com/relais/internal/processrun"
-	"github.com/relais/pkg/controlplane"
-	"github.com/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/internal/capacity"
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/internal/processrss"
+	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/mediaworker"
 )
 
 type config struct {

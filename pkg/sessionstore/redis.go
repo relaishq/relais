@@ -22,8 +22,8 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/relais/pkg/metrics"
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/pkg/metrics"
+	"github.com/relaishq/relais/pkg/storage"
 )
 
 // ErrTransient means Redis could not establish an operation's outcome. Callers

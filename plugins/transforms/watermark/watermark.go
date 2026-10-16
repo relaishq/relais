@@ -8,8 +8,8 @@ import (
 	"image/png"
 	"time"
 
-	"github.com/relais/pkg/plugins"
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/pkg/plugins"
+	"github.com/relaishq/relais/pkg/storage"
 )
 
 // WatermarkPlugin implements TransformPlugin for adding watermarks

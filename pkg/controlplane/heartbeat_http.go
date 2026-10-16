@@ -8,8 +8,8 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/pkg/metrics"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/pkg/metrics"
 )
 
 type HeartbeatRequest struct {

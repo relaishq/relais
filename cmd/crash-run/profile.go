@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/relais/internal/clusterprocess"
-	"github.com/relais/internal/nettopology"
-	"github.com/relais/pkg/callharness"
-	"github.com/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/nettopology"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/mediaworker"
 )
 
 type profileTrialOptions struct {

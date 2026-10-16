@@ -17,7 +17,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/prometheus/common/expfmt"
-	"github.com/relais/internal/processrss"
+	"github.com/relaishq/relais/internal/processrss"
 )
 
 type Target struct {

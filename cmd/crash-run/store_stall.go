@@ -14,12 +14,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/relais/internal/clusterprocess"
-	"github.com/relais/pkg/callharness"
-	"github.com/relais/pkg/controlplane"
-	"github.com/relais/pkg/mediaworker"
-	"github.com/relais/pkg/sessionstore"
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/storage"
 )
 
 type storeStallOptions struct {

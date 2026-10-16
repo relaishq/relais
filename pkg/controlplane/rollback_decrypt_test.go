@@ -9,12 +9,12 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/internal/workerprobe"
-	"github.com/relais/pkg/callharness"
-	"github.com/relais/pkg/framecache"
-	"github.com/relais/pkg/relay"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/workerprobe"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 

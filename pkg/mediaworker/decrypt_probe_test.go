@@ -2,7 +2,7 @@ package mediaworker
 
 import (
 	"github.com/pion/srtp/v3"
-	"github.com/relais/internal/workerprobe"
+	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/stretchr/testify/require"
 	"net"
 	"testing"

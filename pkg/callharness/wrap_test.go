@@ -10,8 +10,8 @@ import (
 
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4/pkg/media"
-	"github.com/relais/internal/workerprobe"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/workerprobe"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 

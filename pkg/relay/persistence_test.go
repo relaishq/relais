@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"github.com/pion/stun/v4"
-	"github.com/relais/internal/redisendpoint"
-	"github.com/relais/pkg/sessionstore"
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
 

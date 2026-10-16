@@ -11,11 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/relais/internal/clusterprocess"
-	"github.com/relais/internal/processrss"
-	"github.com/relais/internal/processrun"
-	"github.com/relais/pkg/callharness"
-	"github.com/relais/pkg/controlplane"
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/processrss"
+	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/controlplane"
 )
 
 type ChildOptions struct {

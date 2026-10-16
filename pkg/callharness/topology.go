@@ -13,11 +13,11 @@ import (
 
 	"github.com/pion/logging"
 
-	"github.com/relais/pkg/controlplane"
-	"github.com/relais/pkg/framecache"
-	"github.com/relais/pkg/mediaworker"
-	"github.com/relais/pkg/relay"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // The relay topology (Options.Relay): one or more media workers, each on its

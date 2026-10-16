@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
-	"github.com/relais/internal/workerprobe"
-	"github.com/relais/pkg/agent"
-	"github.com/relais/pkg/relay"
+	"github.com/relaishq/relais/internal/workerprobe"
+	"github.com/relaishq/relais/pkg/agent"
+	"github.com/relaishq/relais/pkg/relay"
 )
 
 // AgentConfig bounds per-call application work. Zero values use the defaults.

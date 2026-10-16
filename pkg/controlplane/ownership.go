@@ -6,8 +6,8 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/relais/pkg/mediaworker"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // TenureCleanupRelay must compare ownership before clearing a route. Legacy

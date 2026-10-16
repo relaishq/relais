@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/pkg/storage"
 )
 
 // RedisOwners exposes live leases, route metadata and connection lifecycle.

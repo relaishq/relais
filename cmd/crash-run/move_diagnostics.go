@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/relais/internal/movediag"
-	"github.com/relais/internal/nettopology"
-	"github.com/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/movediag"
+	"github.com/relaishq/relais/internal/nettopology"
+	"github.com/relaishq/relais/internal/privateapi"
 )
 
 type movePhaseCalls struct {

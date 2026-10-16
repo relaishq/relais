@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/capacity"
-	"github.com/relais/internal/loadgen"
+	"github.com/relaishq/relais/internal/capacity"
+	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/stretchr/testify/require"
 )
 

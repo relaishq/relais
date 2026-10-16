@@ -3,7 +3,7 @@ package sessionstore
 import (
 	"context"
 	"fmt"
-	"github.com/relais/internal/processidentity"
+	"github.com/relaishq/relais/internal/processidentity"
 	"strings"
 	"sync"
 	"sync/atomic"

@@ -12,10 +12,10 @@ import (
 
 	"crypto/rand"
 	"encoding/hex"
-	"github.com/relais/pkg/callharness"
-	"github.com/relais/pkg/framecache"
-	"github.com/relais/pkg/sessionstore"
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

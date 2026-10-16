@@ -8,10 +8,10 @@ import (
 	"mime"
 	"net/http"
 
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/pkg/mediaworker"
-	"github.com/relais/pkg/relay"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // DrainResult preserves every per-call outcome even if part of a drain fails.

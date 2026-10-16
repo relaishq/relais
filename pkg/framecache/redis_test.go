@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
 

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/loadgen"
+	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/stretchr/testify/require"
 )
 

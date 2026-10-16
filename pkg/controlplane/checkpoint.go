@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/relais/pkg/mediaworker"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 var errUnsafeCheckpointState = errors.New("controlplane: invalid checkpoint state")

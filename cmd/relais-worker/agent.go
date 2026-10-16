@@ -9,10 +9,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/pkg/agent"
-	agentdemo "github.com/relais/pkg/agent/demo"
-	"github.com/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/pkg/agent"
+	agentdemo "github.com/relaishq/relais/pkg/agent/demo"
+	"github.com/relaishq/relais/pkg/mediaworker"
 )
 
 func selectAgent(name string) (mediaworker.AgentConfig, error) {

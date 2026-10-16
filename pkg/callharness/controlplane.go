@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/relais/internal/privateapi"
-	"github.com/relais/pkg/controlplane"
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/pkg/controlplane"
 )
 
 // Status reads the control plane's public HTTP view of ownership and moves.

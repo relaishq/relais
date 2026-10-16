@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // Replay seeded poll failures through the production observer using its default

@@ -3,7 +3,7 @@ package loadgen
 
 import (
 	"fmt"
-	"github.com/relais/internal/processrss"
+	"github.com/relaishq/relais/internal/processrss"
 	"math"
 	"os"
 	"runtime"

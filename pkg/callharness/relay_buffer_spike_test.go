@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/stretchr/testify/require"
 )
 

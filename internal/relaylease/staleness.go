@@ -3,7 +3,7 @@ package relaylease
 import (
 	"time"
 
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // staleness counts only intervals bounded by two successful polls of the same

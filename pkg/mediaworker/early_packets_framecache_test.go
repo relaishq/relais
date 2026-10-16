@@ -11,8 +11,8 @@ import (
 	"github.com/pion/logging"
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
-	"github.com/relais/internal/workerprobe"
-	"github.com/relais/pkg/framecache"
+	"github.com/relaishq/relais/internal/workerprobe"
+	"github.com/relaishq/relais/pkg/framecache"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

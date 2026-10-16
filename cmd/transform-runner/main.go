@@ -7,10 +7,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/relais/pkg/logging"
-	"github.com/relais/pkg/plugins"
-	"github.com/relais/pkg/util/bootstrap"
-	"github.com/relais/plugins/transforms/watermark"
+	"github.com/relaishq/relais/pkg/logging"
+	"github.com/relaishq/relais/pkg/plugins"
+	"github.com/relaishq/relais/pkg/util/bootstrap"
+	"github.com/relaishq/relais/plugins/transforms/watermark"
 )
 
 func main() {

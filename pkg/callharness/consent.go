@@ -13,7 +13,7 @@ import (
 
 	"github.com/pion/ice/v4"
 	"github.com/pion/logging"
-	"github.com/relais/internal/udpbuffer"
+	"github.com/relaishq/relais/internal/udpbuffer"
 )
 
 // The caller observes its ICE consent checks on its own UDP socket, not

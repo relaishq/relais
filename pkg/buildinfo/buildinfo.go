@@ -1,7 +1,7 @@
 package buildinfo
 
 // These variables can be set via -ldflags at build time, e.g.:
-// -ldflags "-X github.com/relais/pkg/buildinfo.Version=v0.1.0 -X github.com/relais/pkg/buildinfo.Commit=$(GIT_COMMIT) -X github.com/relais/pkg/buildinfo.Date=$(DATE)"
+// -ldflags "-X github.com/relaishq/relais/pkg/buildinfo.Version=v0.1.0 -X github.com/relaishq/relais/pkg/buildinfo.Commit=$(GIT_COMMIT) -X github.com/relaishq/relais/pkg/buildinfo.Date=$(DATE)"
 var (
 	Version = ""
 	Commit  = ""

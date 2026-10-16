@@ -10,8 +10,8 @@ import (
 
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
-	"github.com/relais/pkg/relay"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
 

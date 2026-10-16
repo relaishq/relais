@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/relais/internal/clusterprocess"
-	"github.com/relais/internal/loadgen"
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 type capacityStep struct {

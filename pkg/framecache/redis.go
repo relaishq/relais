@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/relais/pkg/metrics"
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/pkg/metrics"
+	"github.com/relaishq/relais/pkg/storage"
 )
 
 // Redis retains one current group per track in a single per-session hash. One

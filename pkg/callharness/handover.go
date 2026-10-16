@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/relais/pkg/framecache"
-	"github.com/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/mediaworker"
 )
 
 // workers are the system's media workers. A single worker owns its UDP

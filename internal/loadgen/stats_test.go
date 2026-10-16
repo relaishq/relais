@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 func TestMeterCountsMissedScheduleAndResetsOnlyInterval(t *testing.T) {

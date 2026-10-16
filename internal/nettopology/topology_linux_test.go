@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 )

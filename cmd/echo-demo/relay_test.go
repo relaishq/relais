@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/pkg/mediaworker"
 )
 
 // TestRelayMode checks the -relay media side: a relay on the media address

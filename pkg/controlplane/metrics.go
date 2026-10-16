@@ -4,7 +4,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"sync/atomic"
 
-	"github.com/relais/pkg/metrics"
+	"github.com/relaishq/relais/pkg/metrics"
 )
 
 type planeMetrics struct {

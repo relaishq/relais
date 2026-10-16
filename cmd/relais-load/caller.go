@@ -8,8 +8,8 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/relais/internal/nettopology"
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/internal/nettopology"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 func externalTopology(signaling string, relay netip.AddrPort) callharness.ExternalTopology {

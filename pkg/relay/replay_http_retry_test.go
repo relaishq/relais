@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/stretchr/testify/require"
 )
 

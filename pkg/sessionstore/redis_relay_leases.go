@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/relais/internal/processidentity"
+	"github.com/relaishq/relais/internal/processidentity"
 )
 
 // A single persistent hash retains fencing evidence and the monotone epoch.

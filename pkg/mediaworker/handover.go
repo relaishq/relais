@@ -10,10 +10,10 @@ import (
 	"github.com/pion/dtls/v3"
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
-	"github.com/relais/internal/workerprobe"
-	"github.com/relais/pkg/agent"
-	"github.com/relais/pkg/framecache"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/workerprobe"
+	"github.com/relaishq/relais/pkg/agent"
+	"github.com/relaishq/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // A session moves between workers as bytes: ExportSession on the old owner,

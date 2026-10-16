@@ -3,7 +3,7 @@ package mediaworker
 import (
 	"sync/atomic"
 
-	"github.com/relais/pkg/metrics"
+	"github.com/relaishq/relais/pkg/metrics"
 )
 
 // Lifetime observations survive local session removal and are never restored

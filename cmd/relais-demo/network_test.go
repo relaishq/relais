@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/processrun"
 	"github.com/stretchr/testify/require"
 )
 

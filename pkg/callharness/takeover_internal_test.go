@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/workerprobe"
-	"github.com/relais/pkg/mediaworker"
+	"github.com/relaishq/relais/internal/workerprobe"
+	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

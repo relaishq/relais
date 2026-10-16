@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/relais/internal/clusterprocess"
-	"github.com/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/processrun"
 )
 
 //go:embed web

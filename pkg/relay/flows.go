@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/pion/stun/v4"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // maxOutstandingChecks is how many unanswered binding requests a caller's

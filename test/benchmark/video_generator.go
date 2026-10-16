@@ -7,7 +7,7 @@ import (
 	"image/jpeg"
 	"time"
 
-	"github.com/relais/pkg/storage"
+	"github.com/relaishq/relais/pkg/storage"
 )
 
 // VideoGenerator creates synthetic video frames for testing and benchmarking.

@@ -1,6 +1,6 @@
 package relay
 
-import "github.com/relais/pkg/metrics"
+import "github.com/relaishq/relais/pkg/metrics"
 
 func (r *Relay) metricSamples() []metrics.Sample {
 	s := r.Stats()

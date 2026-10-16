@@ -3,7 +3,7 @@ package sessionstore
 import (
 	"context"
 	"errors"
-	"github.com/relais/internal/processidentity"
+	"github.com/relaishq/relais/internal/processidentity"
 	"time"
 )
 

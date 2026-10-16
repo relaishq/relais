@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/pkg/storage"
-	webrtcegress "github.com/relais/plugins/egress/webrtc"
-	"github.com/relais/plugins/ingress/camera"
-	"github.com/relais/plugins/transforms/watermark"
+	"github.com/relaishq/relais/pkg/storage"
+	webrtcegress "github.com/relaishq/relais/plugins/egress/webrtc"
+	"github.com/relaishq/relais/plugins/ingress/camera"
+	"github.com/relaishq/relais/plugins/transforms/watermark"
 	"github.com/stretchr/testify/assert"
 )
 

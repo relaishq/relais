@@ -11,12 +11,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/relais/internal/processrun"
-	"github.com/relais/internal/relaylease"
-	"github.com/relais/internal/socketbind"
-	"github.com/relais/internal/udpbuffer"
-	"github.com/relais/pkg/relay"
-	"github.com/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/relaylease"
+	"github.com/relaishq/relais/internal/socketbind"
+	"github.com/relaishq/relais/internal/udpbuffer"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 func run() error {

@@ -3,9 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/relais/internal/capacity"
-	"github.com/relais/internal/loadgen"
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/internal/capacity"
+	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/stretchr/testify/require"
 	"math"
 	"os"

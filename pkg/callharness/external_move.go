@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/relais/pkg/controlplane"
+	"github.com/relaishq/relais/pkg/controlplane"
 )
 
 // MoveExternal uses the operator HTTP endpoint and records the same caller

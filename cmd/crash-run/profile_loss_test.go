@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relais/internal/nettopology"
-	"github.com/relais/pkg/callharness"
+	"github.com/relaishq/relais/internal/nettopology"
+	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/stretchr/testify/require"
 )
 
