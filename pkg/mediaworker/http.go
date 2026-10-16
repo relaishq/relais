@@ -15,7 +15,10 @@ import (
 
 // RemoteErrors identifies coordination errors across the private HTTP boundary.
 var RemoteErrors = map[string]error{
-	"unknown_session": ErrUnknownSession, "unsupported_offer": ErrUnsupportedOffer,
+	"data_session_not_movable":        ErrDataSessionNotMovable,
+	"data_session_reconnect_required": ErrDataSessionReconnectRequired,
+	"datachannel_offer":               ErrDataChannelOffer,
+	"unknown_session":                 ErrUnknownSession, "unsupported_offer": ErrUnsupportedOffer,
 	"closed": ErrClosed, "not_established": ErrNotEstablished,
 	"sequence_budget": ErrSequenceBudgetExhausted, "session_exists": errSessionExists,
 	"srtcp_exhausted":     ErrSRTCPIndexExhausted,
@@ -60,10 +63,11 @@ type ResumeReply struct {
 	ID string `json:"id"`
 }
 type WorkerStatus struct {
-	Address  netip.AddrPort `json:"address"`
-	Sessions int            `json:"sessions"`
-	Replay   ReplayStats    `json:"replay"`
-	Agents   AgentStats     `json:"agents"`
+	Address      netip.AddrPort    `json:"address"`
+	Sessions     int               `json:"sessions"`
+	Replay       ReplayStats       `json:"replay"`
+	DataChannels *DataChannelStats `json:"datachannels,omitempty"`
+	Agents       AgentStats        `json:"agents"`
 }
 
 // PrivateHandler exposes the existing worker operations on trusted loopback.
@@ -85,6 +89,26 @@ func (w *Worker) PrivateHandler() http.Handler {
 	})
 	mux.HandleFunc("DELETE /sessions/{id}", func(rw http.ResponseWriter, r *http.Request) {
 		if err := w.EndSession(r.PathValue("id")); err != nil {
+			workerAPIError(rw, err)
+			return
+		}
+		rw.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /sessions/{id}/move-check", func(rw http.ResponseWriter, r *http.Request) {
+		if err := w.CheckSessionMove(r.PathValue("id")); err != nil {
+			workerAPIError(rw, err)
+			return
+		}
+		rw.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /sessions/{id}/end-reason", func(rw http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Reason string `json:"reason"`
+		}
+		if !privateapi.Read(rw, r, &req) {
+			return
+		}
+		if err := w.EndSessionReason(r.PathValue("id"), req.Reason); err != nil {
 			workerAPIError(rw, err)
 			return
 		}
@@ -119,7 +143,12 @@ func (w *Worker) PrivateHandler() http.Handler {
 		privateapi.Write(rw, ResumeReply{ID: id})
 	})
 	mux.HandleFunc("GET /status", func(rw http.ResponseWriter, _ *http.Request) {
-		privateapi.Write(rw, WorkerStatus{Address: w.LocalAddr(), Sessions: w.SessionCount(), Replay: w.ReplayStats(), Agents: w.AgentStats()})
+		status := WorkerStatus{Address: w.LocalAddr(), Sessions: w.SessionCount(), Replay: w.ReplayStats(), Agents: w.AgentStats()}
+		if w.cfg.DataChannel != nil {
+			data := w.DataChannelStats()
+			status.DataChannels = &data
+		}
+		privateapi.Write(rw, status)
 	})
 	return mux
 }
@@ -134,6 +163,10 @@ func (w *Worker) SessionCount() int {
 // Agent errors can wrap more than one sentinel. Choose one code explicitly;
 // map iteration must not turn an unknown version into a generic restore error.
 func workerAPIError(rw http.ResponseWriter, err error) {
+	if errors.Is(err, ErrDataChannelOffer) {
+		privateapi.Error(rw, err, map[string]error{"datachannel_offer": ErrDataChannelOffer})
+		return
+	}
 	if errors.Is(err, privateapi.ErrUncertain) {
 		privateapi.Error(rw, err, map[string]error{"uncertain": privateapi.ErrUncertain})
 		return

@@ -19,7 +19,7 @@ type workerMetrics struct {
 
 func (w *Worker) metricSamples() []metrics.Sample {
 	a := w.AgentStats()
-	return []metrics.Sample{
+	samples := []metrics.Sample{
 		metrics.Counter("relais_worker_udp_bytes_in_total", "UDP payload bytes received, excluding relay headers.", w.metrics.bytesIn.Load()),
 		metrics.Counter("relais_worker_udp_bytes_out_total", "UDP payload bytes sent, excluding relay headers.", w.metrics.bytesOut.Load()),
 		metrics.Counter("relais_worker_agent_input_drops_total", "Agent audio inputs dropped by bounds or deadlines.", a.InputDrops),
@@ -40,4 +40,16 @@ func (w *Worker) metricSamples() []metrics.Sample {
 		metrics.Counter("relais_worker_handover_resume_errors_total", "Failed zero-margin resume requests; retries are separate attempts.", w.metrics.handoverErrors.Load()),
 		metrics.Counter("relais_worker_takeover_resume_errors_total", "Failed crash-margin resume requests; retries are separate attempts.", w.metrics.takeoverErrors.Load()),
 	}
+	if w.cfg.DataChannel != nil {
+		d := w.DataChannelStats()
+		samples = append(samples, []metrics.Sample{
+			metrics.Counter("relais_worker_datachannel_opened_total", "Accepted DataChannels.", d.Opened),
+			metrics.Counter("relais_worker_datachannel_closed_total", "Closed DataChannels.", d.Closed),
+			metrics.Counter("relais_worker_datachannel_oversized_total", "Oversized messages or upstream frames.", d.Oversized),
+			metrics.Counter("relais_worker_datachannel_pending_overflow_total", "Pending queue overflows.", d.PendingOverflow),
+			metrics.Counter("relais_worker_datachannel_drop_oldest_total", "Oldest unreliable pending messages dropped.", d.DroppedOldest),
+			metrics.Counter("relais_worker_datachannel_unknown_label_total", "Upstream messages for unknown labels.", d.UnknownLabel),
+		}...)
+	}
+	return samples
 }

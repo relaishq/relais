@@ -221,6 +221,12 @@ func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected tim
 // memory pressure retries. It is neither an agent fault nor incompatibility.
 var ErrMoveBudgetExhausted = errors.New("controlplane: move budget exhausted")
 
+// ErrDataSessionReconnectRequired is definitive transport loss. The caller
+// must create a fresh session; the old association cannot be resumed.
+var ErrDataSessionReconnectRequired = mediaworker.ErrDataSessionReconnectRequired
+
+const LossCauseDataSessionReconnectRequired = "data_session_reconnect_required"
+
 // takeoverState survives transient errors even after Transfer changed the owner.
 // Its fields are accessed under the call lock; pending membership uses p.mu.
 type takeoverState struct {
@@ -500,6 +506,13 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			}
 			noTargetAttempts++
 			if noTargetAttempts == maxResumeAttempts {
+				// A reconnect-only session is terminal even with no standby.
+				if state, readErr := p.store.GetState(ctx, c.id); readErr == nil {
+					if data, err := mediaworker.SnapshotIsDataSession(state); err == nil && data {
+						complete(true, mediaworker.ErrDataSessionReconnectRequired)
+						return
+					}
+				}
 				cause := pickErr
 				if pending.agentFailure != nil {
 					cause = fmt.Errorf("controlplane: no compatible agent target: %w", pending.agentFailure)
@@ -588,6 +601,13 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			if errors.Is(stateErr, sessionstore.ErrNotFound) {
 				complete(true, fmt.Errorf("controlplane: no takeover snapshot: %w", stateErr))
 			}
+			return
+		}
+		// Inspect the same exact blob used by checkpoint validation. Never
+		// prepare a replay filter or invoke Resume for a data marker.
+		if data, err := mediaworker.SnapshotIsDataSession(state); err == nil && data {
+			p.unreserve(target)
+			complete(true, mediaworker.ErrDataSessionReconnectRequired)
 			return
 		}
 		margin, rtcpMargin := p.config.SequenceMargin, p.config.SRTCPIndexMargin
@@ -839,6 +859,9 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 		c.terminal = true
 		if res.LossCause == "" {
 			res.LossCause = "recovery_failed"
+			if errors.Is(cause, mediaworker.ErrDataSessionReconnectRequired) {
+				res.LossCause = LossCauseDataSessionReconnectRequired
+			}
 			if errors.Is(cause, ErrMoveBudgetExhausted) {
 				res.LossCause = "move_budget_exhausted"
 			}

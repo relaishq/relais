@@ -141,6 +141,9 @@ type Heartbeats interface{ Heartbeat(netip.AddrPort) error }
 
 // Config configures a media worker.
 type Config struct {
+	// DataChannel is opt-in; nil preserves media-only negotiation.
+	DataChannel *DataChannelConfig
+
 	// PacketTrace optionally records ciphertext metadata after successful sends.
 	// It is for fault investigations; the callback must return promptly.
 	PacketTrace func(PacketTrace)
@@ -252,12 +255,13 @@ type RelayConfig struct {
 // Worker is a media worker. It owns one UDP socket, or shares one with other
 // workers (see Socket), and the sessions that run over it.
 type Worker struct {
-	moveBytes atomic.Int64
-	agents    agentCounters
-	metrics   workerMetrics
-	cfg       Config
-	log       logging.LeveledLogger
-	conn      packetConn // its own UDP socket, a port on a shared Socket, or the relay leg (relayConn)
+	moveBytes    atomic.Int64
+	agents       agentCounters
+	metrics      workerMetrics
+	dataCounters dataCounters
+	cfg          Config
+	log          logging.LeveledLogger
+	conn         packetConn // its own UDP socket, a port on a shared Socket, or the relay leg (relayConn)
 	// localAddr is the UDP socket the worker reads: its own or the shared
 	// Socket's. mediaAddr is where callers send: localAddr, or behind a
 	// relay the relay's public address.
@@ -286,6 +290,13 @@ type Worker struct {
 
 // New starts a media worker listening on cfg.ListenAddr.
 func New(cfg Config) (*Worker, error) {
+	if cfg.DataChannel != nil {
+		data := *cfg.DataChannel
+		if err := data.defaults(); err != nil {
+			return nil, err
+		}
+		cfg.DataChannel = &data
+	}
 	cfg.Agent = cfg.Agent.defaults()
 	cfg.CheckpointEnvelope = cfg.CheckpointEnvelope.Defaults()
 	if cfg.SnapshotInterval <= 0 {
@@ -442,7 +453,7 @@ func (w *Worker) CreateSessionWithLease(ctx context.Context, offerSDP string) (i
 }
 
 func (w *Worker) createSession(ctx context.Context, offerSDP string, placed func(sessionstore.Lease)) (sessionID, answerSDP string, err error) {
-	offer, err := parseOffer(offerSDP)
+	offer, err := parseOfferWithData(offerSDP, w.cfg.DataChannel)
 	if err != nil {
 		return "", "", err
 	}
@@ -462,6 +473,20 @@ func (w *Worker) createSession(ctx context.Context, offerSDP string, placed func
 		sess.close()
 
 		return "", "", err
+	}
+
+	// Persist the non-resumable classification before publishing the answer,
+	// including death before the first ICE/DTLS packet.
+	if offer.data && w.cfg.Relay != nil {
+		state, err := sess.snapshotBytes()
+		if err == nil {
+			err = w.cfg.Relay.Owners.PutState(ctx, sess.lease, state)
+		}
+		if err != nil {
+			sess.close()
+			w.release(sess)
+			return "", "", err
+		}
 	}
 
 	w.mu.Lock()

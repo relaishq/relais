@@ -60,7 +60,9 @@ type remoteOffer struct {
 	// the worker's candidate.
 	bundle []string
 
-	media []*offeredMedia
+	data       bool
+	maxMessage int
+	media      []*offeredMedia
 }
 
 // offeredMedia is one m-line of the offer.
@@ -86,7 +88,9 @@ type codec struct {
 // the first sendrecv audio m-line that offers Opus and the first sendrecv
 // video m-line that offers VP8. Both must be in one BUNDLE group. Every
 // other m-line, and every other codec, is rejected in the answer.
-func parseOffer(raw string) (*remoteOffer, error) {
+func parseOffer(raw string) (*remoteOffer, error) { return parseOfferWithData(raw, nil) }
+
+func parseOfferWithData(raw string, data *DataChannelConfig) (*remoteOffer, error) {
 	var desc sdp.SessionDescription
 	if err := desc.UnmarshalString(raw); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrUnsupportedOffer, err)
@@ -99,6 +103,30 @@ func parseOffer(raw string) (*remoteOffer, error) {
 		media := &offeredMedia{desc: md, mid: mid, kind: md.MediaName.Media}
 		offer.media = append(offer.media, media)
 
+		if data != nil && media.kind == "application" && md.MediaName.Port.Value != 0 {
+			if offer.data || mid == "" || strings.Join(md.MediaName.Protos, "/") != "UDP/DTLS/SCTP" || len(md.MediaName.Formats) != 1 || md.MediaName.Formats[0] != "webrtc-datachannel" {
+				return nil, fmt.Errorf("%w: unsupported application m-line", ErrDataChannelOffer)
+			}
+			port, err := strconv.Atoi(attribute(&desc, md, "sctp-port"))
+			if err != nil || port != 5000 {
+				return nil, fmt.Errorf("%w: sctp-port must be 5000", ErrDataChannelOffer)
+			}
+			offer.maxMessage = data.MaxMessage
+			if value := attribute(&desc, md, "max-message-size"); value != "" {
+				size, err := strconv.ParseUint(value, 10, 32)
+				if err != nil {
+					return nil, fmt.Errorf("%w: invalid max-message-size", ErrDataChannelOffer)
+				}
+				if size != 0 && size < uint64(offer.maxMessage) {
+					offer.maxMessage = int(size)
+				}
+			}
+			offer.data, media.accepted = true, true
+			if first == nil {
+				first = media
+			}
+			continue
+		}
 		spec, supported := supportedCodecs[media.kind]
 		if !supported || offer.accepted(media.kind) != nil || md.MediaName.Port.Value == 0 || !isSendRecv(&desc, md) {
 			continue
@@ -135,6 +163,9 @@ func parseOffer(raw string) (*remoteOffer, error) {
 	for _, media := range offer.media {
 		if media.accepted && !slices.Contains(group, media.mid) {
 			media.accepted = false
+			if media.kind == "application" && data != nil {
+				return nil, fmt.Errorf("%w: application must share BUNDLE", ErrDataChannelOffer)
+			}
 		}
 	}
 	for _, mid := range group {
@@ -231,6 +262,15 @@ func buildAnswer(offer *remoteOffer, params answerParams) (string, error) {
 		if !media.accepted {
 			desc.WithMedia(rejectedMedia(media))
 
+			continue
+		}
+		if media.kind == "application" {
+			md := &sdp.MediaDescription{MediaName: sdp.MediaName{Media: "application", Port: sdp.RangedPort{Value: int(params.candidate.Port())}, Protos: []string{"UDP", "DTLS", "SCTP"}, Formats: []string{"webrtc-datachannel"}}, ConnectionInformation: &sdp.ConnectionInformation{NetworkType: "IN", AddressType: addressType, Address: &sdp.Address{Address: params.candidate.Addr().String()}}}
+			md.WithValueAttribute("mid", media.mid).WithICECredentials(params.iceUfrag, params.icePwd).WithFingerprint("sha-256", params.fingerprint).WithValueAttribute("setup", "passive").WithValueAttribute("sctp-port", "5000").WithValueAttribute("max-message-size", strconv.Itoa(offer.maxMessage))
+			if media.mid == offer.bundle[0] {
+				md.WithValueAttribute(sdp.AttrKeyCandidate, hostCandidate(params.candidate)).WithPropertyAttribute(sdp.AttrKeyEndOfCandidates)
+			}
+			desc.WithMedia(md)
 			continue
 		}
 		track, ok := params.tracks[media.mid]

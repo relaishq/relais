@@ -41,6 +41,12 @@ var (
 	ErrNoTarget = errors.New("controlplane: no non-draining target worker")
 )
 
+// DataSessionWorker is the optional reconnect-only data policy boundary.
+type DataSessionWorker interface {
+	CheckSessionMove(string) error
+	EndSessionReason(string, string) error
+}
+
 // Worker is the media boundary, local or remote. Resume must either adopt the
 // supplied lease and run the session, or fail without running it.
 type Worker interface {
@@ -134,6 +140,9 @@ type registration struct {
 }
 
 type call struct {
+	data       bool // immutable; negotiated application m-line in the accepted answer
+	classified bool // immutable; false for reconstructed call metadata
+
 	terminal       bool                 // guarded by mu; terminal loss is accounted once
 	lease          sessionstore.Lease   // guarded by stateMu; last observed placed tenure
 	lossLease      sessionstore.Lease   // guarded by mu; immutable token for terminal cleanup
@@ -355,7 +364,7 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 	if placed.Epoch == 0 {
 		placed = sessionstore.Lease{SessionID: id, Worker: w.addr}
 	}
-	c := &call{id: id, lease: placed}
+	c := &call{id: id, lease: placed, data: answerHasDataChannel(answer), classified: true}
 	p.calls[id] = c
 	p.mu.Unlock()
 	if placed.Epoch == 0 {
@@ -367,7 +376,8 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 }
 
 // End waits for a move already in progress, then hangs up the current owner.
-func (p *Plane) End(ctx context.Context, id string) error {
+func (p *Plane) End(ctx context.Context, id string) error { return p.end(ctx, id, "") }
+func (p *Plane) end(ctx context.Context, id, reason string) error {
 	c, err := p.lookup(id)
 	if err != nil {
 		return err
@@ -402,7 +412,13 @@ func (p *Plane) End(ctx context.Context, id string) error {
 		return ErrUnknownCall
 	}
 
-	if err := w.worker.EndSession(id); err != nil {
+	end := func() error {
+		if data, ok := w.worker.(DataSessionWorker); ok && reason != "" {
+			return data.EndSessionReason(id, reason)
+		}
+		return w.worker.EndSession(id)
+	}
+	if err := end(); err != nil {
 		if errors.Is(err, mediaworker.ErrUnknownSession) {
 			// Fencing may remove ownership after End's first read. A worker's
 			// missing session does not prove that an explicit hangup ended it.
@@ -522,6 +538,22 @@ func (p *Plane) moveRequest(ctx context.Context, id, to string) (MoveResult, err
 		return MoveResult{}, err
 	}
 
+	if c.data {
+		return MoveResult{Kind: "move", ID: id}, mediaworker.ErrDataSessionNotMovable
+	}
+	if !c.classified {
+		p.mu.Lock()
+		source := p.owner(lease.Worker)
+		p.mu.Unlock()
+		if source != nil {
+			if data, ok := source.worker.(DataSessionWorker); ok {
+				if err := data.CheckSessionMove(id); err != nil {
+					return MoveResult{Kind: "move", ID: id, From: source.name, To: to}, err
+				}
+			}
+		}
+	}
+
 	target, err := p.pick(ctx, to, lease.Worker)
 	if err != nil {
 		return MoveResult{}, err
@@ -559,6 +591,16 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 			res.Error = err.Error()
 		}
 	}()
+	if c.data {
+		return res, mediaworker.ErrDataSessionNotMovable
+	}
+	if !c.classified {
+		if data, ok := source.worker.(DataSessionWorker); ok {
+			if err = data.CheckSessionMove(c.id); err != nil {
+				return res, err
+			}
+		}
+	}
 	started := time.Now()
 	// Missing acknowledgement aborts before export; the relay replays to A.
 	if err = diagnosticRelay(r, movediag.Phase(ctx, "barrier")).HoldSession(movediag.Phase(ctx, "barrier"), c.id, source.addr); err != nil {
@@ -864,14 +906,41 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 		c      *call
 	}
 
-	jobs := make([]job, 0, len(leases))
+	var ended []MoveResult
+	mediaLeases := make([]sessionstore.Lease, 0, len(leases))
 	for _, lease := range leases {
+		p.mu.Lock()
+		c := p.calls[lease.SessionID]
+		p.mu.Unlock()
+		var checkErr error
+		if c != nil && c.data {
+			checkErr = mediaworker.ErrDataSessionNotMovable
+		} else if c == nil || !c.classified {
+			if data, ok := w.worker.(DataSessionWorker); ok {
+				checkErr = data.CheckSessionMove(lease.SessionID)
+			}
+		}
+		if errors.Is(checkErr, mediaworker.ErrDataSessionNotMovable) {
+			if err := p.end(ctx, lease.SessionID, "reconnect_required"); err != nil {
+				return ended, err
+			}
+			ended = append(ended, MoveResult{Kind: "ended", ID: lease.SessionID, From: w.name})
+			continue
+		}
+		if checkErr != nil {
+			return ended, checkErr
+		}
+
+		mediaLeases = append(mediaLeases, lease)
+	}
+	jobs := make([]job, 0, len(mediaLeases))
+	for _, lease := range mediaLeases {
 		target, pickErr := p.pick(ctx, "", w.addr)
 		if pickErr != nil {
 			for _, j := range jobs {
 				p.unreserve(j.target)
 			}
-			return nil, pickErr
+			return ended, pickErr
 		}
 
 		p.mu.Lock()
@@ -923,7 +992,7 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 		})
 	}
 	wg.Wait()
-	return results, errors.Join(errs...)
+	return append(ended, results...), errors.Join(errs...)
 }
 
 // WorkerStatus describes one registered worker and its live lease count.
@@ -1093,7 +1162,7 @@ func uncertainExport(err error) bool {
 	if errors.Is(err, privateapi.ErrUncertain) {
 		return true
 	}
-	for _, known := range []error{mediaworker.ErrUnknownSession, mediaworker.ErrClosed, mediaworker.ErrNotEstablished, mediaworker.ErrExportNotFlushed, mediaworker.ErrExportIncompatible,
+	for _, known := range []error{mediaworker.ErrUnknownSession, mediaworker.ErrClosed, mediaworker.ErrNotEstablished, mediaworker.ErrExportNotFlushed, mediaworker.ErrExportIncompatible, mediaworker.ErrDataSessionNotMovable,
 		sessionstore.ErrNotFound, sessionstore.ErrLeaseLost, sessionstore.ErrTransient, agentv2.ErrCapacity} {
 		if errors.Is(err, known) {
 			return false

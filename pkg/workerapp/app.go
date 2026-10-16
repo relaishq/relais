@@ -60,6 +60,11 @@ func Run(ctx context.Context, args []string, _ Options) error {
 	httpAddr := flags.String("http", processrun.Env("RELAIS_WORKER_HTTP", "127.0.0.1:0"), "private worker HTTP address")
 	cacheOff := flags.Bool("frame-cache-off", false, "disable cache writes and takeover replay (PLI remains enabled)")
 	cryptoTrace := flags.Bool("srtp-diagnostics", false, "log sent SRTP/SRTCP ciphertext metadata for fault investigations")
+	dataEnabled := flags.Bool("datachannel", false, "enable reconnect-only SCTP DataChannels")
+	dataUpstream := flags.String("datachannel-upstream", "", "required session WebSocket upstream")
+	dataMessage := flags.Int("datachannel-max-message", 1024, "maximum DataChannel message bytes")
+	dataPending := flags.Int("datachannel-max-pending", 16384, "maximum queued client bytes per channel")
+	dataChannels := flags.Int("datachannel-max-channels", 4, "maximum channels per session")
 	agentName := flags.String("agent", "echo", "audio agent: echo or demo")
 	drainTimeout := flags.Duration("drain-timeout", 5*time.Second, "SIGTERM drain deadline before closing")
 	version := buildinfo.VersionFlag(flags)
@@ -107,6 +112,9 @@ func Run(ctx context.Context, args []string, _ Options) error {
 		frames = client
 	}
 	cfg := mediaworker.Config{Agent: agentConfig, ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store, StoreOutageBudget: storeConfig.OutageBudget}}
+	if *dataEnabled {
+		cfg.DataChannel = &mediaworker.DataChannelConfig{Upstream: *dataUpstream, WorkerName: *name, MaxMessage: *dataMessage, MaxPending: *dataPending, MaxChannels: *dataChannels}
+	}
 	if *cryptoTrace {
 		cfg.PacketTrace = func(packet mediaworker.PacketTrace) {
 			data, err := json.Marshal(packet)
