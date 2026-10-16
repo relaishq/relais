@@ -2,7 +2,9 @@ package bootstrap
 
 import (
 	"context"
+	"os"
 
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/buildinfo"
 	"github.com/relaishq/relais/pkg/config"
 	"github.com/relaishq/relais/pkg/logging"
@@ -22,28 +24,23 @@ func Init(ctx context.Context, process string, pluginType string) (*logging.Logg
 	// Build storage from config
 	var store storage.Storage
 	if cfg.Storage.Type == "redis" {
-		// Prefer cluster config when enabled
-		if cfg.Storage.RedisClusterEnable {
-			rc := storage.RedisConfig{
-				Addrs:    cfg.Storage.RedisClusterAddrs,
-				Cluster:  true,
-				Password: cfg.Storage.RedisPassword,
-				DB:       cfg.Storage.RedisDB,
-				Prefix:   cfg.Storage.RedisPrefix,
-			}
-			store, err = storage.NewRedisStorage(rc)
-		} else {
-			// Single-node via URL
-			rc := storage.RedisConfig{
-				Addr:     cfg.Storage.RedisURL,
-				Cluster:  false,
-				Password: cfg.Storage.RedisPassword,
-				DB:       cfg.Storage.RedisDB,
-				Prefix:   cfg.Storage.RedisPrefix,
-			}
-			// NewRedisStorage accepts either string or RedisConfig; use config for consistency
-			store, err = storage.NewRedisStorage(rc)
+		transport, tlsErr := redisendpoint.TLSFromEnv()
+		if tlsErr != nil {
+			return logger, nil, cfg, tlsErr
 		}
+		rc := storage.RedisConfig{
+			Addr:      cfg.Storage.RedisURL,
+			Cluster:   cfg.Storage.RedisClusterEnable,
+			Username:  os.Getenv("RELAIS_REDIS_USERNAME"),
+			Password:  cfg.Storage.RedisPassword,
+			TLSConfig: transport,
+			DB:        cfg.Storage.RedisDB,
+			Prefix:    cfg.Storage.RedisPrefix,
+		}
+		if rc.Cluster {
+			rc.Addrs = cfg.Storage.RedisClusterAddrs
+		}
+		store, err = storage.NewRedisStorage(rc)
 	} else {
 		store = storage.NewMemoryStorage()
 	}

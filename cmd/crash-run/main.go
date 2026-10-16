@@ -21,7 +21,7 @@ import (
 
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/nettopology"
-	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/callharness"
 )
 
@@ -81,7 +81,7 @@ func processEnv(key, addr, prefix string) []string {
 	env := []string{}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if name == "RELAIS_MOVE_DIAGNOSTICS" || name == "RELAIS_SESSIONSTORE_KEY" || name == "RELAIS_REDIS_ADDR" || name == "RELAIS_REDIS_PREFIX" || name == "RELAIS_REDIS_PASSWORD" || name == "RELAIS_PRIVATE_NETS" {
+		if name == "RELAIS_MOVE_DIAGNOSTICS" || name == "RELAIS_SESSIONSTORE_KEY" || strings.HasPrefix(name, "RELAIS_REDIS_") || name == "RELAIS_PRIVATE_NETS" {
 			continue
 		}
 		env = append(env, entry)
@@ -771,7 +771,7 @@ func run() (err error) {
 			return fmt.Errorf("store readiness: %w (log %s)", err, filepath.Join(dir, "redis.log"))
 		}
 	}
-	if err := processrun.ValidateRedis(addr); err != nil {
+	if err := redisendpoint.ValidateDev(addr); err != nil {
 		return err
 	}
 	var key [32]byte

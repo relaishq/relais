@@ -177,7 +177,7 @@ func forAgentStores(t *testing.T, scenario func(*testing.T, sessionstore.Store))
 			}
 			t.Skip("dedicated Redis not configured")
 		}
-		require.NoError(t, redisendpoint.Validate(addr))
+		require.NoError(t, redisendpoint.ValidateDev(addr))
 		token := make([]byte, 16)
 		_, err := rand.Read(token)
 		require.NoError(t, err)

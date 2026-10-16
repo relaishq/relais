@@ -20,7 +20,7 @@ type ServerConfig struct {
 
 type StorageConfig struct {
 	Type     string // "redis" or "memory"
-	RedisURL string
+	RedisURL string `mapstructure:"redis_url"`
 	// Redis Streams and retention options
 	RedisStreamsEnable bool  `mapstructure:"redis_streams_enable"`
 	RedisStreamsMaxLen int64 `mapstructure:"redis_streams_maxlen"`

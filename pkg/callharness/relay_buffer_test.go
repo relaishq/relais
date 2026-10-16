@@ -110,7 +110,7 @@ func relayBufferStores(t *testing.T, scenario func(*testing.T, sessionstore.Stor
 			}
 			t.Skip("set RELAIS_TEST_REDIS_ADDR to dedicated Redis")
 		}
-		require.NoError(t, redisendpoint.Validate(addr))
+		require.NoError(t, redisendpoint.ValidateDev(addr))
 		prefix := "buffer-harness:" + rand.Text() + ":"
 		store, err := sessionstore.NewRedis(context.Background(), storage.RedisConfig{Addr: addr, Prefix: prefix}, make([]byte, 32))
 		require.NoError(t, err)

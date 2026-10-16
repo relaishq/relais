@@ -59,7 +59,8 @@ mkdir -p "$state/logs" "$state/secrets" "$state/redis"
 [[ -f $state/secrets/sessionstore.key ]] || openssl rand -hex 32 > "$state/secrets/sessionstore.key"
 [[ -f $state/secrets/signal.token ]] || openssl rand -hex 32 > "$state/secrets/signal.token"
 # Never inherit a user's Redis credentials, prefix, or non-loopback settings.
-unset RELAIS_REDIS_PASSWORD RELAIS_SESSIONSTORE_KEY RELAIS_PRIVATE_NETS RELAIS_SIGNAL_TOKEN
+for redis_var in "${!RELAIS_REDIS_@}"; do unset "$redis_var"; done
+unset RELAIS_SESSIONSTORE_KEY RELAIS_PRIVATE_NETS RELAIS_SIGNAL_TOKEN
 export RELAIS_REDIS_ADDR="127.0.0.1:$redis_port"
 export RELAIS_REDIS_PREFIX="relais:local:$redis_port:"
 ctrl="http://127.0.0.1:$((port_base+10))"

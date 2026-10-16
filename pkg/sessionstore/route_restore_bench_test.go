@@ -19,7 +19,7 @@ func BenchmarkRedisRouteRestore(b *testing.B) {
 	if addr == "" {
 		b.Skip("dedicated Redis not configured")
 	}
-	if err := redisendpoint.Validate(addr); err != nil {
+	if err := redisendpoint.ValidateDev(addr); err != nil {
 		b.Fatal(err)
 	}
 	for _, count := range []int{1000, 10000} {

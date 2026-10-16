@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/go-redis/redis/v8"
 	"github.com/pion/stun/v4"
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/relay"
 	"io"
 	"net"
@@ -24,7 +25,6 @@ import (
 
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/processidentity"
-	"github.com/relaishq/relais/internal/processrun"
 	"github.com/relaishq/relais/internal/relaylease"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/sessionstore"
@@ -239,7 +239,7 @@ func commandStore(t *testing.T) (*sessionstore.RedisOwners, string, string) {
 		}
 		t.Skip("dedicated Redis not configured")
 	}
-	require.NoError(t, processrun.ValidateRedis(addr))
+	require.NoError(t, redisendpoint.ValidateDev(addr))
 	prefix := "relay-command-test:" + rand.Text() + ":"
 	s, err := sessionstore.NewRedisOwners(context.Background(), storage.RedisConfig{Addr: addr, Prefix: prefix})
 	require.NoError(t, err)

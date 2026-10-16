@@ -25,7 +25,7 @@ func testRedis(t *testing.T, limits Limits, options ...RedisOptions) *Redis {
 		}
 		t.Skip("Redis requires RELAIS_TEST_REDIS_ADDR")
 	}
-	require.NoError(t, redisendpoint.Validate(addr), "tests must use a dedicated Redis")
+	require.NoError(t, redisendpoint.ValidateDev(addr), "tests must use a dedicated Redis")
 	var token [16]byte
 	_, err := rand.Read(token[:])
 	require.NoError(t, err)

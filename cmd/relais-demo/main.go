@@ -19,6 +19,7 @@ import (
 
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/buildinfo"
 )
 
@@ -35,7 +36,7 @@ func processEnv(key, addr, prefix string, withKey bool) []string {
 	env := []string{}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if name == "RELAIS_SESSIONSTORE_KEY" || name == "RELAIS_REDIS_ADDR" || name == "RELAIS_REDIS_PREFIX" {
+		if name == "RELAIS_SESSIONSTORE_KEY" || strings.HasPrefix(name, "RELAIS_REDIS_") {
 			continue
 		}
 		env = append(env, entry)
@@ -80,7 +81,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 		if err != nil {
 			return nil, err
 		}
-		if err := processrun.ValidateRedis(addr); err != nil {
+		if err := redisendpoint.ValidateDev(addr); err != nil {
 			return nil, err
 		}
 		_, port, _ := net.SplitHostPort(addr)
@@ -95,7 +96,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 			return nil, err
 		}
 	}
-	if err := processrun.ValidateRedis(addr); err != nil {
+	if err := redisendpoint.ValidateDev(addr); err != nil {
 		return nil, err
 	}
 	var key [32]byte
@@ -213,7 +214,7 @@ func validateConfig(cfg config) error {
 		return errors.New("-agent must be echo or demo")
 	}
 	if cfg.Redis != "" {
-		if err := processrun.ValidateRedis(cfg.Redis); err != nil {
+		if err := redisendpoint.ValidateDev(cfg.Redis); err != nil {
 			return err
 		}
 	}

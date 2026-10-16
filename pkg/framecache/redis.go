@@ -80,17 +80,19 @@ func NewRedis(ctx context.Context, cfg storage.RedisConfig, key []byte, limits L
 		}
 		keys[id] = append([]byte(nil), old...)
 	}
+	connection, err := cfg.ConnectionOptions()
+	if err != nil {
+		return nil, err
+	}
+	// A lost append reply must not duplicate a frame or clear the current group.
+	connection.MaxRetries, connection.MaxRedirects = -1, -1
 	var client redis.UniversalClient
-	// Never inherit storage's localhost:6379 default. Disable network retries:
-	// a lost append reply must not duplicate a frame or clear the current group.
 	if cfg.Cluster || len(cfg.Addrs) > 0 {
-		addrs := cfg.Addrs
-		if len(addrs) == 0 {
-			addrs = []string{cfg.Addr}
-		}
-		client = redis.NewClusterClient(&redis.ClusterOptions{Addrs: addrs, Password: cfg.Password, MaxRetries: -1, MaxRedirects: -1, NewClient: func(opts *redis.Options) *redis.Client { return metrics.RedisClient(opts, "frame") }})
+		cluster := connection.Cluster()
+		cluster.NewClient = func(opts *redis.Options) *redis.Client { return metrics.RedisClient(opts, "frame") }
+		client = redis.NewClusterClient(cluster)
 	} else {
-		client = metrics.RedisClient(&redis.Options{Addr: cfg.Addr, Password: cfg.Password, DB: cfg.DB, MaxRetries: -1}, "frame")
+		client = metrics.RedisClient(connection.Simple(), "frame")
 	}
 	client.AddHook(metrics.StoreHook("frame"))
 	r := &Redis{client: client, prefix: cfg.Prefix, limits: defaultLimits(limits), activeKey: opts.KeyID, keysByID: keys}

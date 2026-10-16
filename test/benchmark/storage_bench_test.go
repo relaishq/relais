@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -75,6 +76,7 @@ func benchmarkStore(b *testing.B, name string) storage.Storage {
 		}
 		b.Skip("skipping: RELAIS_TEST_REDIS_ADDR not set")
 	}
+	require.NoError(b, redisendpoint.ValidateDev(addr), "benchmarks require dedicated Redis")
 	token := make([]byte, 16)
 	_, err := rand.Read(token)
 	require.NoError(b, err)

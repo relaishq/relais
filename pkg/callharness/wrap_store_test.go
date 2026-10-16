@@ -5,12 +5,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"github.com/go-redis/redis/v8"
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"net"
 	"os"
 	"testing"
 	"time"
 
-	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
@@ -29,7 +29,7 @@ func forWrapSessionStores(t *testing.T, scenario func(*testing.T, sessionstore.S
 			}
 			t.Skip("Redis harness requires RELAIS_TEST_REDIS_ADDR")
 		}
-		require.NoError(t, redisendpoint.Validate(addr), "tests must use a dedicated Redis")
+		require.NoError(t, redisendpoint.ValidateDev(addr), "tests must use a dedicated Redis")
 		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 		if err != nil {
 			if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {

@@ -21,7 +21,7 @@ import (
 
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/privateapi"
-	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/stretchr/testify/require"
@@ -105,7 +105,7 @@ func TestDemoAttachExternalSmoke(t *testing.T) {
 	defer manager.Stop(false)
 	redisAddr, err := clusterprocess.FreeTCP()
 	require.NoError(t, err)
-	require.NoError(t, processrun.ValidateRedis(redisAddr))
+	require.NoError(t, redisendpoint.ValidateDev(redisAddr))
 	_, port, err := net.SplitHostPort(redisAddr)
 	require.NoError(t, err)
 	redis, err := manager.Start(dir, "redis", os.Environ(), redisBinary, "--bind", "127.0.0.1", "--port", port, "--save", "", "--appendonly", "no", "--dir", dir)

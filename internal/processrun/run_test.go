@@ -12,14 +12,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/stretchr/testify/require"
 )
 
 func TestProcessConfigurationRequiresDedicatedStore(t *testing.T) {
+	t.Setenv("RELAIS_REDIS_ALLOW_LOCAL_6379", "")
 	for _, addr := range []string{"", "localhost:6379", "127.0.0.1:6379", "[::1]:6379", "not-an-address", "127.0.0.1:06379", "127.0.0.1:redis", "127.0.0.1:0"} {
-		require.Error(t, ValidateRedis(addr), addr)
+		require.Error(t, ValidateProductionRedis(addr), addr)
 	}
-	require.NoError(t, ValidateRedis("127.0.0.1:16379"))
+	require.NoError(t, ValidateProductionRedis("127.0.0.1:16379"))
 	t.Setenv("RELAIS_SESSIONSTORE_KEY", "")
 	_, err := (StoreConfig{Address: "127.0.0.1:1"}).Open(context.Background())
 	require.ErrorContains(t, err, "32 bytes")
@@ -41,7 +43,7 @@ func TestStoreConfigAuthenticatedConnections(t *testing.T) {
 		t.Skip("set RELAIS_TEST_REDIS_PASSWORD with a dedicated password-protected Redis")
 	}
 	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
-	require.NoError(t, ValidateRedis(addr))
+	require.NoError(t, redisendpoint.ValidateDev(addr))
 	t.Setenv("RELAIS_REDIS_ADDR", addr)
 	t.Setenv("RELAIS_REDIS_PASSWORD", password)
 	t.Setenv("RELAIS_SESSIONSTORE_KEY", hex.EncodeToString(make([]byte, 32)))
@@ -123,4 +125,35 @@ func TestRelayConnectionFlagsExcludeOutageBudget(t *testing.T) {
 	worker := flag.NewFlagSet("worker", flag.ContinueOnError)
 	c.Flags(worker)
 	require.NotNil(t, worker.Lookup("store-outage-budget"))
+}
+
+func TestRedisCredentialsAndStartupTLSValidation(t *testing.T) {
+	t.Setenv("RELAIS_REDIS_USERNAME", "private-username-sentinel")
+	t.Setenv("RELAIS_REDIS_PASSWORD", "private-password-sentinel")
+	t.Setenv("RELAIS_REDIS_TLS", "")
+	t.Setenv("RELAIS_REDIS_TLS_CA_FILE", "")
+	t.Setenv("RELAIS_REDIS_TLS_CERT_FILE", "")
+	t.Setenv("RELAIS_REDIS_TLS_KEY_FILE", "")
+	t.Setenv("RELAIS_REDIS_TLS_SERVER_NAME", "")
+	var config StoreConfig
+	flags := flag.NewFlagSet("credentials", flag.ContinueOnError)
+	config.ConnectionFlags(flags)
+	cfg, err := config.redisConfig()
+	require.NoError(t, err)
+	require.Equal(t, "private-username-sentinel", cfg.Username)
+	require.Equal(t, "private-password-sentinel", cfg.Password)
+	require.Nil(t, cfg.TLSConfig)
+	for _, name := range []string{"redis-password", "redis-username", "redis-tls-key-file"} {
+		require.Nil(t, flags.Lookup(name))
+	}
+	t.Setenv("RELAIS_SESSIONSTORE_KEY", hex.EncodeToString(make([]byte, 32)))
+	t.Setenv("RELAIS_REDIS_TLS_CA_FILE", "private-file-path-sentinel")
+	config.Address = "cache.example.invalid:6379"
+	_, err = config.Open(context.Background())
+	require.ErrorContains(t, err, "RELAIS_REDIS_TLS=1")
+	_, err = config.OpenFrames(context.Background())
+	require.ErrorContains(t, err, "RELAIS_REDIS_TLS=1")
+	_, err = config.OpenOwners(context.Background())
+	require.ErrorContains(t, err, "RELAIS_REDIS_TLS=1")
+	require.NotContains(t, err.Error(), "private-")
 }

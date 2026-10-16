@@ -37,8 +37,8 @@ can repeat. Applications must make external side effects safe to repeat.
   cross-host relay failover is not established. See
   [relay restart](docs/guarantees.md#relay-restart) and the optional
   [same-host standby](docs/guarantees.md#same-host-standby-relay).
-- Multi-process runs require Redis. The process binaries refuse Redis on port
-  6379 and do not support Redis TLS or ACL usernames yet ([#151](https://github.com/relaishq/relais/issues/151)).
+- Multi-process runs require Redis. Redis TLS and ACL usernames are supported.
+  Loopback Redis port 6379 is refused by default; see [Managed Redis](docs/deploy.md#managed-redis).
 - Custom agents need a fork today. The built-ins echo media or play a tone script.
 - Desktop Chrome is tested; Safari is not. Agent continuity over the real
   internet is not measured. See [non-guarantees](docs/guarantees.md#explicit-non-guarantees).
@@ -62,7 +62,8 @@ can repeat. Applications must make external side effects safe to repeat.
 Use macOS or Linux, Go 1.26+, Git, current Chrome, and `redis-server` on PATH.
 Install Redis with `brew install redis` or `sudo apt install redis-server`.
 You do not need to start a Redis service: the demo starts its own throwaway
-Redis on a free port. The Relais process binaries refuse Redis port **6379**.
+Redis on a free port. The Relais process binaries refuse loopback Redis port
+**6379** by default; dev tools refuse port **6379** on every host.
 
 Build from source; this is the install path that works today:
 
