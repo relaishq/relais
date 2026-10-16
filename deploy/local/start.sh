@@ -64,13 +64,30 @@ export RELAIS_REDIS_ADDR="127.0.0.1:$redis_port"
 export RELAIS_REDIS_PREFIX="relais:local:$redis_port:"
 ctrl="http://127.0.0.1:$((port_base+10))"
 start() {
-  local name=$1 pid stamp
+  local name=$1 pid stamp comm identity_recorded=0 i
   shift
   if [[ -f $state/logs/$name.log ]]; then mv "$state/logs/$name.log" "$state/logs/$name.previous.log"; fi
   nohup "$@" > "$state/logs/$name.log" 2>&1 < /dev/null &
   pid=$!
-  stamp=$(LC_ALL=C ps -p "$pid" -o lstart=) || { echo "$name exited before PID recording" >&2; return 1; }
-  printf '%s|%s|%s\n' "$name" "$pid" "$stamp" >> "$state/pids"
+  # nohup may not have exec'd the program when the first ps runs.
+  for ((i=0; i<100; i++)); do
+    if ! stamp=$(LC_ALL=C ps -p "$pid" -o lstart=) || ! comm=$(LC_ALL=C ps -p "$pid" -o comm=); then break; fi
+    comm=${comm#"${comm%%[![:space:]]*}"}
+    comm=${comm%"${comm##*[![:space:]]}"}
+    comm=${comm##*/}
+    # Keep only the executable name: macOS ps reports a rewritten process
+    # title (redis-server shows "redis-server 127.0.0.1:PORT").
+    comm=${comm%% *}
+    if [[ $comm == "${1##*/}" ]]; then identity_recorded=1; break; fi
+    sleep 0.01
+  done
+  if [[ $identity_recorded != 1 ]]; then
+    echo "$name identity could not be recorded; stopping our child $pid" >&2
+    kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    return 1
+  fi
+  printf '%s|%s|%s|%s\n' "$name" "$pid" "$stamp" "$comm" >> "$state/pids"
 }
 wait_ready() {
   local name=$1 pattern=$2 pid i
@@ -94,11 +111,12 @@ worker() {
 }
 if [[ -n $restart ]]; then
   name="worker-${restart#w}"
-  while IFS='|' read -r recorded pid stamp; do
-    if [[ $recorded == "$name" ]] && kill -0 "$pid" 2>/dev/null; then
-      echo "$name has a live recorded PID; refusing duplicate start" >&2; exit 1
-    fi
-  done < "$state/pids"
+  "$here/stop.sh" -state "$state" -check-worker "$name" || {
+    echo "$name is still running or has uncertain identity; refusing duplicate start" >&2; exit 1;
+  }
+  # Replace this worker's old record, preserving the other topology processes.
+  awk -F '|' -v name="$name" '$1 != name' "$state/pids" > "$state/pids.next"
+  mv "$state/pids.next" "$state/pids"
   worker "${restart#w}"
   echo "$restart restarted; PID recorded in $state/pids"
   exit 0

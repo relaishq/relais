@@ -58,18 +58,26 @@ def parse_timestamp(value):
     return datetime.datetime.fromisoformat(value)
 
 def assert_media_resumed(report):
-    for move in report['Moves']:
-        tracks = move['Tracks']
-        assert tracks, f"no tracks after {move['Kind']}"
-        assert all(track['PacketsAfter'] > 0 for track in tracks), move
     hung_up_at = report['HungUpAt']
     assert hung_up_at > 0, report
+    for move in report['Moves']:
+        tracks = move['Tracks']
+        assert len(tracks) == 2 and {track['Kind'] for track in tracks} == {'audio', 'video'}, move
+        assert all(track['PacketsAfter'] > 0 for track in tracks), move
+        # callharness Report.HungUpAt and MoveReport.End are time.Duration
+        # offsets from dialing; MoveTrackReport.TypicalInterval is a duration.
+        # encoding/json emits all three as nanoseconds, so their ratio is packets.
+        remaining = hung_up_at - move['End']
+        assert move['End'] > 0 and remaining > 0, move
+        audio = next(track for track in tracks if track['Kind'] == 'audio')
+        assert audio['TypicalInterval'] > 0, audio
+        assert audio['PacketsAfter'] >= 0.5 * remaining / audio['TypicalInterval'], move
     for field in ('ConnectionStates', 'ICEConnectionStates'):
         history = report[field]
         assert history, f'missing connection state history: {field}'
         for change in history:
             state_name, at = change['State'], change['At']
-            assert state_name != 'failed' or at >= hung_up_at, (field, change)
+            assert state_name not in ('failed', 'disconnected') or at >= hung_up_at, (field, change)
 
 def save(name, data):
     (logs / name).write_text(json.dumps(data, indent=2) + '\n')
@@ -262,7 +270,7 @@ try:
     assert_media_resumed(report)
     save('status-finished.json', request(ctrl + '/status'))
     assert request(ctrl + '/status')['lost_count'] == 0
-    print('(h) PASS: caller exit=0, one completed call, media after move+takeover, no failed connection/reconnect/decrypt failures', flush=True)
+    print('(h) PASS: caller exit=0, one completed call, media after move+takeover, no failed/disconnected states or reconnect/decrypt failures', flush=True)
     success = True
 finally:
     stop_owned(caller)
@@ -277,7 +285,7 @@ finally:
             stopped = subprocess.run([str(archive / 'stop.sh'), '-state', str(state)], cwd=archive, env=env,
                                      stdout=output, stderr=subprocess.STDOUT, timeout=120)
         assert stopped.returncode == 0, f'stop.sh failed; see {logs / "stop.log"}'
-        records = [line.split('|') for line in (state / 'pids').read_text().splitlines()]
+        records = [line.split('|') for line in (state / 'pids.stopped').read_text().splitlines()]
         assert all(not exists(int(row[1])) for row in records), 'recorded process remains'
     for handle in handles:
         handle.close()

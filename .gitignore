@@ -34,4 +34,4 @@ examples/
 
 # Release archives and local topology state (contains generated secrets)
 /dist/
-deploy/local/.relais-local/
+.relais-local/

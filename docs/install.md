@@ -177,9 +177,10 @@ killed worker must have `dead: false`, `recovering: false`, and a fresh
 `last_heartbeat`. The caller must exit 0. Its JSONL report contains one `call`
 and one `done` message, plus the move and takeover observations.
 
-`stop.sh` signals only recorded PIDs whose start times still match, stops
+`stop.sh` signals only recorded PIDs whose command names and start times still match, stops
 workers while control is available, and verifies shutdown. Logs and secrets
-remain for inspection and later restarts. If a startup fails, see
+remain for inspection and later restarts. After a verified stop, the PID file
+is saved as `.relais-local/pids.stopped`. If a startup fails, see
 `.relais-local/logs/`; the script stops the processes it recorded.
 
 ## Checking the build

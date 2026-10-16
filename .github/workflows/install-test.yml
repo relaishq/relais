@@ -151,5 +151,5 @@ jobs:
             ${{ runner.temp }}/install-logs/*.jsonl
             ${{ runner.temp }}/install-logs/*.version
             ${{ runner.temp }}/install-logs/topology/logs/
-            ${{ runner.temp }}/install-logs/topology/pids
+            ${{ runner.temp }}/install-logs/topology/pids*
             ${{ runner.temp }}/extracted/**/demo-cluster-*/*.log
