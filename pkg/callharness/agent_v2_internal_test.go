@@ -183,6 +183,7 @@ func TestV2AgentPlannedMoveExact(t *testing.T) {
 		require.Equal(t, legacy.PlannedMove, resumed.event.Resume.Kind)
 		require.Equal(t, agent.OK, resumed.event.Resume.MoveOnly)
 		require.Equal(t, payload, resumed.payload)
+		require.Positive(t, resumed.audio, "planned move must include consumed audio")
 		require.EqualValues(t, resumed.audio, resumed.event.Resume.Progress.Consumed)
 		require.Equal(t, 1, resumed.starts, "checkpointed Started must not redeliver")
 		require.EqualValues(t, 1, stats[0].exports.Load(), "exactly one SaveMoveOnly per export")
@@ -300,19 +301,19 @@ func TestV2AgentStartedRedeliveryUntilCheckpoint(t *testing.T) {
 }
 
 func TestV2AgentIncompatibleTargetTypedLoss(t *testing.T) {
-	for _, mismatch := range []string{"name", "kinds", "bounds", "legacy-echo"} {
+	for _, mismatch := range []string{"name", "kinds", "bounds", "legacy-echo", "remote-name"} {
 		t.Run(mismatch, func(t *testing.T) {
 			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 				regs, stats := v2Registrations([]byte("private-recording"))
 				switch mismatch {
-				case "name":
+				case "name", "remote-name":
 					regs[1].Name = "different/v1"
 				case "kinds":
 					regs[1].TaskKinds = []string{"other/v1"}
 				case "bounds":
 					regs[1].Bounds.MaxStateBytes = 2048
 				}
-				sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs, targetEcho: mismatch == "legacy-echo"})
+				sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs, targetEcho: mismatch == "legacy-echo", remoteTarget: mismatch == "remote-name"})
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				call, err := sys.h.Dial(ctx, CallOptions{})
@@ -332,7 +333,12 @@ func TestV2AgentIncompatibleTargetTypedLoss(t *testing.T) {
 				require.Zero(t, sys.workers[1].SessionCount())
 				awaitV2(t, stats[0], agent.Resumed)
 				require.NoError(t, call.SendMedia(ctx, 100*time.Millisecond))
-				require.Zero(t, stats[1].saves.Load(), "refuse before target callbacks")
+				if mismatch == "legacy-echo" {
+					require.Zero(t, sys.workers[1].AgentStats().CallbackFailures)
+					require.EqualValues(t, 1, sys.workers[1].AgentStats().RestoreFailures, "native Echo target must report identity refusal before adoption")
+				} else {
+					require.Zero(t, stats[1].saves.Load(), "refuse before target callbacks")
+				}
 				// With the compatible source gone, takeover must use typed loss cleanup.
 				require.NoError(t, workerprobe.Kill(sys.workers[0].LocalAddr()))
 				require.Eventually(t, func() bool {

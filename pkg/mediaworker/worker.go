@@ -107,6 +107,13 @@ const (
 )
 
 var (
+	// ErrMoveBudget is temporary worker move-memory pressure. It is never an
+	// agent Restore/identity failure and can be retried after reservations drain.
+	ErrMoveBudget = errors.New("mediaworker: worker move budget unavailable")
+	// ErrExportNotFlushed is a move-budget refusal that proves the source was
+	// not fenced or removed by export. It also matches ErrMoveBudget.
+	// A failed move can return this source to service without crash recovery.
+	ErrExportNotFlushed = fmt.Errorf("%w: export has not flushed", ErrMoveBudget)
 	// ErrUnsupportedOffer is returned when an SDP offer cannot be answered:
 	// it is malformed, or it asks for something the media worker does not
 	// support.

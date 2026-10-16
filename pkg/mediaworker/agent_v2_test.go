@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ type v2UnitAgent struct {
 	moveRestores int
 	lastEvent    agent.Event
 	effects      agent.Effects
+	moveCallback func(context.Context) error
 	callback     func(context.Context)
 	payload      []byte
 }
@@ -46,8 +48,13 @@ func (a *v2UnitAgent) Restore(_ context.Context, state agent.State) error {
 	a.state = state
 	return nil
 }
-func (a *v2UnitAgent) SaveMoveOnly(context.Context) ([]byte, error) {
+func (a *v2UnitAgent) SaveMoveOnly(ctx context.Context) ([]byte, error) {
 	a.moveSaves++
+	if a.moveCallback != nil {
+		if err := a.moveCallback(ctx); err != nil {
+			return nil, err
+		}
+	}
 	return a.payload, nil
 }
 func (a *v2UnitAgent) RestoreMoveOnly(_ context.Context, data []byte) error {
@@ -164,7 +171,7 @@ func TestV2MoveBudgetAndExportLength(t *testing.T) {
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
 	require.EqualValues(t, 1, w.moveBytes.Load())
 	require.True(t, w.reserveMoveBytes(v2MoveWorkerBytes-1))
-	require.ErrorContains(t, s.validateV2State(agent.State{Version: 1, HasMoveOnly: true, MoveOnlyLength: 2}), "worker budget")
+	require.ErrorContains(t, s.validateV2State(agent.State{Version: 1, HasMoveOnly: true, MoveOnlyLength: 2}), ErrMoveBudget.Error())
 	w.moveBytes.Add(-(v2MoveWorkerBytes - 1))
 	_, err := s.saveV2MoveOnly(context.Background())
 	require.ErrorContains(t, err, "differs from accepted Save")
@@ -185,6 +192,19 @@ func TestV2IncompatibleHTTPErrorIdentity(t *testing.T) {
 // The current legacy writer's full v7 snapshot must round-trip byte for byte,
 // including agent state, then restore through the actual transport boundary.
 func TestV7SnapshotWireRoundTripUnchanged(t *testing.T) {
+	// Captured by 787127e004cd95decfd64c8d63da679ac5822e16's live v7 writer
+	// in a scratch checkout. The cert/key are generated for this test fixture.
+	golden, err := os.ReadFile("testdata/v7-787127e.json")
+	require.NoError(t, err)
+	saved, err := decodeSnapshot(golden)
+	require.NoError(t, err)
+	reencoded, err := json.Marshal(saved)
+	require.NoError(t, err)
+	require.Equal(t, string(golden), string(reencoded), "main's golden v7 snapshot must cross-encode identically")
+	fixtureWorker := newTestWorker(t)
+	_, err = fixtureWorker.ResumeSession(golden, ResumeOptions{})
+	require.NoError(t, err)
+
 	w := newTestWorker(t)
 	call, client := dialDTLSCaller(t, w)
 	defer func() { _ = client.Close() }()
@@ -300,6 +320,6 @@ func TestV2HTTPHeldExportCountsAgainstWorkerBudget(t *testing.T) {
 		t.Fatal("export did not reach HTTP write")
 	}
 	require.Zero(t, w.SessionCount())
-	require.EqualValues(t, v2ExportScratchBytes, w.moveBytes.Load(), "export serialization remains reserved until HTTP write returns")
+	require.EqualValues(t, 8, w.moveBytes.Load(), "export serialization remains reserved until HTTP write returns")
 	require.Equal(t, 1, a.moveSaves)
 }

@@ -1,6 +1,10 @@
 // Package agent defines the experimental v2 event contract. It is experimental
 // until ADR 0010 slice 6. Worker registration is not public yet. This slice hosts
 // Started, AudioInput and Resumed; Control is reserved and is never delivered.
+// After a crash before Started is checkpointed, the target delivers Resumed
+// before redelivering Started. An AudioInput Handle deadline outside Save drops
+// that input after quarantine and Restore. Save failures/deadlines, other callback
+// errors, invalid state and unsupported effects fail closed.
 // Task, timer and playback effect declarations describe requests only: every
 // nonempty effect is rejected as unsupported until its host slice is implemented.
 package agent
@@ -30,6 +34,8 @@ type State struct {
 
 // MoveOnlyState is required when State.HasMoveOnly is true. Its callbacks run
 // only at a paused exact export or exact restore, never at a checkpoint.
+// SaveMoveOnly must be non-destructive and repeatable: a failed export can return
+// the session to service, and a retry calls SaveMoveOnly again.
 type MoveOnlyState interface {
 	SaveMoveOnly(context.Context) ([]byte, error)
 	RestoreMoveOnly(context.Context, []byte) error

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"sync"
+	"sync/atomic"
 
 	"github.com/relaishq/relais/internal/agenthost"
 	legacy "github.com/relaishq/relais/pkg/agent"
@@ -21,7 +23,7 @@ const (
 	v2MaxWireBytes        = 4 << 20
 	v2HostMetadataBytes   = 2 << 10
 	// Keep one export's worst-case copy/base64 scratch available at admission.
-	v2ExportScratchBytes = 8*v2MoveSessionBytes + 128<<10
+	v2ExportScratchBytes = 8 * v2MoveSessionBytes
 )
 
 // Only v8 contains this subtree. The legacy state/progress encoding is unchanged.
@@ -74,12 +76,19 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 	if len(metadata) > min(reg.Bounds.MaxPendingBytes, v2HostMetadataBytes) {
 		return s.agentError(fmt.Errorf("%w: registration metadata exceeds internal host budget", agent.ErrIncompatibleAgent))
 	}
-	if restoring {
-		if !s.worker.reserveMoveBytes(v2ExportScratchBytes) {
-			return s.agentError(fmt.Errorf("%w: restore exceeds worker move budget", legacy.ErrRestore))
-		}
-		defer s.worker.moveBytes.Add(-v2ExportScratchBytes)
+	// Crash metadata has no payload to copy or reserve. Exact restores only
+	// reserve the one move-payload copy they make, for its actual byte length.
+	if opts.Kind == legacy.Takeover || opts.SequenceMargin > 0 {
+		move = nil
 	}
+	if restoring && move != nil && len(move.Bytes) > 0 {
+		scratch := int64(len(move.Bytes))
+		if !s.worker.reserveMoveBytes(scratch) {
+			return ErrMoveBudget
+		}
+		defer s.worker.moveBytes.Add(-scratch)
+	}
+
 	h := &v2Host{registration: reg, ready: make(chan struct{})}
 	s.agent.v2 = h
 	// Factory follows the legacy factory rule: quick, nonblocking construction.
@@ -89,17 +98,19 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 	}
 	if restoring {
 		state := v2State(s.state.Agent)
-		if err := s.validateV2State(state); err != nil {
-			return s.agentError(fmt.Errorf("%w: %w", legacy.ErrRestore, err))
+		if err := s.validateV2StateMetadata(state); err != nil {
+			return s.v2RestoreError(err)
+		}
+		if move != nil {
+			if err := s.reserveMoveBytes(int64(state.MoveOnlyLength)); err != nil {
+				return err
+			}
 		}
 		s.durableAgent = cloneAgentState(s.state.Agent)
 		if err := s.agentCall(func(ctx context.Context) error { return h.instance.Restore(ctx, cloneV2State(state)) }); err != nil {
-			return s.agentError(fmt.Errorf("%w: %w", legacy.ErrRestore, err))
+			return s.v2RestoreError(err)
 		}
 		outcome := agent.OK
-		if opts.Kind == legacy.Takeover || opts.SequenceMargin > 0 {
-			move = nil
-		}
 		if state.HasMoveOnly {
 			if move != nil {
 				if len(move.Bytes) != state.MoveOnlyLength {
@@ -108,7 +119,7 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 				if err := s.agentCall(func(ctx context.Context) error {
 					return h.instance.(agent.MoveOnlyState).RestoreMoveOnly(ctx, slices.Clone(move.Bytes))
 				}); err != nil {
-					return s.agentError(fmt.Errorf("%w: %w", legacy.ErrRestore, err))
+					return s.v2RestoreError(err)
 				}
 			} else {
 				outcome = agent.OutcomeUnknown
@@ -132,7 +143,7 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 			return err
 		}
 		if err := s.handleV2EventMode(agent.Event{ID: agent.EventID("resumed/" + s.id + "/" + attempt), Kind: agent.Resumed, Resume: notice}, true); err != nil {
-			return s.agentError(fmt.Errorf("%w: %w", legacy.ErrRestore, err))
+			return s.v2RestoreError(err)
 		}
 		close(h.ready)
 	} else {
@@ -164,7 +175,20 @@ func cloneV2State(state agent.State) agent.State {
 func v2State(pair agentState) agent.State {
 	return agent.State{Version: pair.State.Version, Bytes: pair.State.Bytes, HasMoveOnly: pair.V2.HasMoveOnly, MoveOnlyLength: pair.V2.MoveOnlyLength}
 }
+func (s *session) v2RestoreError(err error) error {
+	if errors.Is(err, ErrMoveBudget) {
+		return err
+	}
+	return s.agentError(fmt.Errorf("%w: %w", legacy.ErrRestore, err))
+}
+
 func (s *session) validateV2State(state agent.State) error {
+	if err := s.validateV2StateMetadata(state); err != nil {
+		return err
+	}
+	return s.reserveMoveBytes(int64(state.MoveOnlyLength))
+}
+func (s *session) validateV2StateMetadata(state agent.State) error {
 	if state.Version == 0 {
 		return agent.ErrVersion
 	}
@@ -182,7 +206,7 @@ func (s *session) validateV2State(state agent.State) error {
 			return errors.New("agent: HasMoveOnly requires MoveOnlyState")
 		}
 	}
-	return s.reserveMoveBytes(int64(state.MoveOnlyLength))
+	return nil
 }
 
 // Reservation tracks admitted move data without reading it during Save. Close
@@ -195,7 +219,7 @@ func (s *session) reserveMoveBytes(n int64) error {
 	}
 	delta := n - s.moveReserved
 	if delta > 0 && !s.worker.reserveMoveBytesWithin(delta, v2MoveWorkerBytes-v2ExportScratchBytes) {
-		return errors.New("agent: move-only data exceeds worker budget")
+		return ErrMoveBudget
 	}
 	if delta < 0 {
 		s.worker.moveBytes.Add(delta)
@@ -263,6 +287,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	h := s.agent
 	before := cloneAgentState(h.latest)
 	var saved agent.State
+	var saving atomic.Bool
 	err := s.agentCall(func(ctx context.Context) error {
 		effects, err := h.v2.instance.Handle(ctx, event)
 		if err != nil {
@@ -274,6 +299,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if err := validateV2Effects(event.Kind, effects); err != nil {
 			return err
 		}
+		saving.Store(true)
 		saved, err = h.v2.instance.Save(ctx)
 		if err != nil {
 			return fmt.Errorf("%w: %w", legacy.ErrSave, err)
@@ -294,9 +320,20 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if restoreErr := s.agentCall(func(ctx context.Context) error { return h.v2.instance.Restore(ctx, cloneV2State(v2State(before))) }); restoreErr != nil {
 			return fmt.Errorf("%w: %w", legacy.ErrRestore, restoreErr)
 		}
-		// A rejected callback may have mutated move-only bytes. End the call rather
-		// than publish or export a payload that no longer matches the accepted pair.
-		_ = s.reserveMoveBytes(int64(before.V2.MoveOnlyLength))
+		if reserveErr := s.reserveMoveBytes(int64(before.V2.MoveOnlyLength)); reserveErr != nil {
+			return reserveErr
+		}
+		// A late AudioInput Handle is quarantined before Restore, just as in the
+		// legacy host. It cannot advance accepted state or consumed-input progress.
+		if !adoption && event.Kind == agent.AudioInput && errors.Is(err, context.DeadlineExceeded) && !saving.Load() {
+			s.worker.agents.drops.Add(1)
+			return nil
+		}
+		// Save deadlines, other callback failures, invalid state and rejected effects
+		// remain terminal. No later event may publish a rejected callback's changes.
+		if errors.Is(err, context.DeadlineExceeded) && saving.Load() {
+			return fmt.Errorf("%w: %w", legacy.ErrSave, err)
+		}
 		return err
 	}
 	// actor owns latest; publish only after Handle, effects and Save all succeed.
@@ -313,7 +350,9 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	next.Revision++
 	h.latest = next
 	s.publishAgent()
-	s.wantSnapshot()
+	if !agentStateEqual(before, next) {
+		s.wantSnapshot()
+	}
 	return nil
 }
 
@@ -326,12 +365,17 @@ func (s *session) processV2Audio(in agentInput) error {
 // Called by the paused actor exactly once per export request, after the last
 // accepted Save. The separately reserved scratch covers payload copying plus
 // nested base64 export/resume serialization; it is never checkpoint memory.
-func (s *session) saveV2MoveOnly(deadline context.Context) ([]byte, error) {
+func (s *session) saveV2MoveOnly(deadline context.Context) (agentMoveExport, error) {
+	export := agentMoveExport{release: func() {}}
 	state := v2State(s.agent.latest)
 	if !state.HasMoveOnly {
-		return nil, nil
+		return export, nil
 	}
-	var payload []byte
+	scratch := int64(8 * state.MoveOnlyLength)
+	if !s.worker.reserveMoveBytes(scratch) {
+		return export, ErrExportNotFlushed
+	}
+	export.release = sync.OnceFunc(func() { s.worker.moveBytes.Add(-scratch) })
 	err := s.agentCall(func(ctx context.Context) error {
 		limit, ok := deadline.Deadline()
 		if ok {
@@ -352,10 +396,16 @@ func (s *session) saveV2MoveOnly(deadline context.Context) ([]byte, error) {
 		if len(data) != state.MoveOnlyLength {
 			return errors.New("agent: move-only length differs from accepted Save")
 		}
-		payload = slices.Clone(data)
+		export.payload = slices.Clone(data)
 		return nil
 	}, true)
-	return payload, err
+	if err != nil {
+		export.release()
+		// A closing session can quarantine a callback still finishing its copy.
+		// Do not read its captured payload on the error path.
+		return agentMoveExport{release: func() {}}, err
+	}
+	return export, nil
 }
 
 func v2EnvelopeEqual(a, b *v2Envelope) bool {

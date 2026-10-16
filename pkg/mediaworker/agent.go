@@ -59,10 +59,15 @@ type agentInput struct {
 	input  agent.Input
 	header rtp.Header
 }
+type agentMoveExport struct {
+	payload []byte
+	release func()
+}
+
 type agentFlush struct {
 	done     chan error
 	deadline time.Time
-	moveOnly chan []byte
+	moveOnly chan agentMoveExport
 }
 type agentHost struct {
 	instance agent.Agent
@@ -236,6 +241,10 @@ func (s *session) agentCall(fn func(context.Context) error, waitLate ...bool) er
 }
 
 func (s *session) agentError(err error) error {
+	// Worker memory pressure is a resource refusal, not an agent callback fault.
+	if errors.Is(err, ErrMoveBudget) {
+		return err
+	}
 	switch {
 	case errors.Is(err, agent.ErrStateTooLarge):
 		s.worker.agents.oversize.Add(1)
@@ -404,8 +413,12 @@ func (s *session) agentLoop() {
 // already consumed. Enqueue is paused; the caller may also discard this queue.
 func (s *session) finishAgentFlush(request agentFlush) bool {
 	var err error
+	reserve := s.worker.cfg.Agent.CallbackTimeout
+	if request.moveOnly != nil {
+		reserve *= 2
+	}
 drain:
-	for time.Until(request.deadline) >= s.worker.cfg.Agent.CallbackTimeout {
+	for time.Until(request.deadline) >= reserve {
 		select {
 		case in := <-s.agent.queue:
 			err = s.processAudio(in)
@@ -422,7 +435,7 @@ drain:
 	}
 	if err == nil && request.moveOnly != nil {
 		ctx, cancel := context.WithDeadline(s.ctx, request.deadline)
-		var payload []byte
+		var payload agentMoveExport
 		payload, err = s.saveV2MoveOnly(ctx)
 		cancel()
 		if err == nil {
@@ -430,6 +443,9 @@ drain:
 		}
 	}
 	request.done <- err
+	if errors.Is(err, ErrExportNotFlushed) {
+		return true
+	}
 	if err != nil {
 		s.agentFailed(err)
 		return false
@@ -462,7 +478,7 @@ func (s *session) agentFailed(err error) {
 	}
 }
 
-func (s *session) flushAgent(moveOnly ...chan []byte) error {
+func (s *session) flushAgent(moveOnly ...chan agentMoveExport) error {
 	if s.agent == nil {
 		return nil
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/pion/dtls/v3"
@@ -498,18 +497,9 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		return nil, release, ErrNotEstablished
 	}
 	var payload *movePayload
-	var move chan []byte
+	var move chan agentMoveExport
 	if s.agent != nil && s.agent.v2 != nil {
-		s.mu.Lock()
-		n := s.state.Agent.V2.MoveOnlyLength
-		s.mu.Unlock()
-		// Allow a full session payload to be accepted by the flush before capture.
-		scratch := int64(v2ExportScratchBytes)
-		if n > v2MoveSessionBytes || !s.worker.reserveMoveBytes(scratch) {
-			return nil, release, errors.New("agent: exact export exceeds worker move budget")
-		}
-		release = sync.OnceFunc(func() { s.worker.moveBytes.Add(-scratch) })
-		move = make(chan []byte, 1)
+		move = make(chan agentMoveExport, 1)
 	}
 	var flushErr error
 	if move != nil {
@@ -526,7 +516,9 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		return nil, release, flushErr
 	}
 	if move != nil {
-		payload = &movePayload{Bytes: <-move}
+		export := <-move
+		release = export.release
+		payload = &movePayload{Bytes: export.payload}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

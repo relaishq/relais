@@ -723,6 +723,12 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			complete(false, nil)
 			return
 		}
+		if errors.Is(err, mediaworker.ErrMoveBudget) {
+			// No adoption happened. Retry the same bytes/tenure after other exports
+			// release memory; do not exclude a compatible target or spend margins.
+			pending.transientResume = true
+			return
+		}
 		// Explicit transport uncertainty can hide an adopted target even with
 		// an agent cause. Confirm that target before treating typed failures as
 		// definitive, including callback deadlines.
