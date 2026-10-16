@@ -20,13 +20,19 @@ same_process() {
   [[ $actual == "$stamp" ]]
 }
 failed=0
+uncertain=0
+identity_mismatch() {
+  echo "PID $pid ($name): start time changed or could not be read; not signalling it" >&2
+  uncertain=$((uncertain+1))
+  failed=1
+}
 # Keep control and Redis alive while workers drain.
 for role in signal worker-1 worker-2 control relay redis; do
   while IFS='|' read -r name pid stamp; do
     [[ $name == "$role" && $pid =~ ^[0-9]+$ && -n $stamp ]] || continue
     if ! same_process; then
       if kill -0 "$pid" 2>/dev/null; then
-        echo "PID $pid identity changed; not signalling it" >&2
+        identity_mismatch
       fi
       continue
     fi
@@ -40,8 +46,15 @@ for role in signal worker-1 worker-2 control relay redis; do
       kill -KILL "$pid" 2>/dev/null || true
       for ((i=0; i<30; i++)); do same_process || break; sleep 0.1; done
     fi
-    if same_process; then echo "still alive: $name $pid" >&2; failed=1; fi
+    if same_process; then
+      echo "still alive: $name $pid" >&2; failed=1
+    elif kill -0 "$pid" 2>/dev/null; then
+      identity_mismatch
+    fi
   done < "$state/pids"
 done
+if [[ $uncertain -gt 0 ]]; then
+  echo "shutdown not verified: $uncertain recorded PID(s) have uncertain identity" >&2
+fi
 [[ $failed == 0 ]] || exit 1
 echo 'all recorded processes stopped'

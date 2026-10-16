@@ -27,6 +27,13 @@ on:
       - 'deploy/local/**'
       - '.github/workflows/install-test.yml'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      artifact_name:
+        description: Existing archive artifact to test; empty builds install-archives
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -36,7 +43,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
+  archives:
+    if: ${{ inputs.artifact_name == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -55,7 +63,9 @@ jobs:
           if-no-files-found: error
 
   test:
-    needs: build
+    needs: archives
+    # A supplied release artifact skips archives; explicitly allow that case.
+    if: ${{ !cancelled() && (needs.archives.result == 'success' || (needs.archives.result == 'skipped' && inputs.artifact_name != '')) }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -75,25 +85,16 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: Remove Go from the test job PATH
-        run: |
-          mkdir -p "$RUNNER_TEMP/install-tools"
-          # System utilities only. Redis from Homebrew is linked after install.
-          safe="$RUNNER_TEMP/install-tools:/usr/bin:/bin:/usr/sbin:/sbin"
-          PATH="$safe"
-          if command -v go >/dev/null 2>&1; then echo "Go must be absent from PATH" >&2; exit 1; fi
-          echo "PATH=$safe" >> "$GITHUB_ENV"
       - uses: actions/checkout@v6
       - uses: actions/download-artifact@v8
         with:
-          name: install-archives
+          name: ${{ inputs.artifact_name || 'install-archives' }}
           path: downloads
       - name: Verify and extract this runner's archive
         env:
           TARGET_OS: ${{ matrix.os }}
           TARGET_ARCH: ${{ matrix.arch }}
         run: |
-          if command -v go >/dev/null 2>&1; then echo "Go must be absent from PATH" >&2; exit 1; fi
           cd downloads
           # Exactly one archive is expected for each target.
           shopt -s nullglob
@@ -112,10 +113,8 @@ jobs:
           echo "EXTRACTED_DIR=$RUNNER_TEMP/extracted/${archive%.tar.gz}" >> "$GITHUB_ENV"
       - name: Install dedicated Redis executable (no service)
         run: |
-          if command -v go >/dev/null 2>&1; then echo "Go must be absent from PATH" >&2; exit 1; fi
           if [ "$RUNNER_OS" = macOS ]; then
-            /opt/homebrew/bin/brew install redis
-            ln -s /opt/homebrew/bin/redis-server "$RUNNER_TEMP/install-tools/redis-server"
+            brew install redis
           else
             # Prevent package installation from starting a system service.
             printf '#!/bin/sh\nexit 101\n' > "$RUNNER_TEMP/policy-rc.d"
@@ -129,11 +128,13 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends redis-server
           fi
+      # Ubuntu images ship go in /usr/bin, so the job PATH cannot exclude it.
+      # run.sh runs every Relais program with a PATH of linked system tools
+      # only and fails if go is reachable there.
       - name: Prove the Go-free install path
         env:
           INSTALL_TEST_LOGS: ${{ runner.temp }}/install-logs
         run: |
-          if command -v go >/dev/null 2>&1; then echo "Go must be absent from PATH" >&2; exit 1; fi
           set -o pipefail
           mkdir -p "$INSTALL_TEST_LOGS"
           ./scripts/install-test/run.sh "$EXTRACTED_DIR" 2>&1 | tee "$INSTALL_TEST_LOGS/driver.log"

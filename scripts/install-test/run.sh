@@ -21,6 +21,7 @@ python3 - <<'PY'
 import datetime
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import socket
@@ -47,6 +48,28 @@ handles = []
 demo = caller = None
 demo_children = set()
 success = False
+
+def parse_timestamp(value):
+    # Python 3.9/3.10 accept 3 or 6 fractional digits; Go can emit up to 9.
+    value = re.sub(r'\.(\d+)(?=Z$|[+-]\d{2}:\d{2}$)',
+                   lambda match: '.' + (match.group(1) + '000000')[:6], value)
+    if value.endswith('Z'):
+        value = value[:-1] + '+00:00'
+    return datetime.datetime.fromisoformat(value)
+
+def assert_media_resumed(report):
+    for move in report['Moves']:
+        tracks = move['Tracks']
+        assert tracks, f"no tracks after {move['Kind']}"
+        assert all(track['PacketsAfter'] > 0 for track in tracks), move
+    hung_up_at = report['HungUpAt']
+    assert hung_up_at > 0, report
+    for field in ('ConnectionStates', 'ICEConnectionStates'):
+        history = report[field]
+        assert history, f'missing connection state history: {field}'
+        for change in history:
+            state_name, at = change['State'], change['At']
+            assert state_name != 'failed' or at >= hung_up_at, (field, change)
 
 def save(name, data):
     (logs / name).write_text(json.dumps(data, indent=2) + '\n')
@@ -91,7 +114,7 @@ def ready(process, name):
     return poll(f'{name} readiness', check)
 
 def descendants(pid):
-    rows = subprocess.check_output(['ps', '-axo', 'pid=,ppid='], text=True)
+    rows = subprocess.check_output(['ps', '-A', '-o', 'pid=,ppid='], text=True)
     pairs = [tuple(map(int, row.split())) for row in rows.splitlines()]
     found = {pid}
     while True:
@@ -215,7 +238,7 @@ try:
     def rejoined():
         status = request(ctrl + '/status')
         worker = next(w for w in status['workers'] if w['name'] == owner)
-        if not worker['dead'] and not worker['recovering'] and datetime.datetime.fromisoformat(worker['last_heartbeat'].replace('Z', '+00:00')) > datetime.datetime.fromisoformat(killed_at):
+        if not worker['dead'] and not worker['recovering'] and parse_timestamp(worker['last_heartbeat']) > parse_timestamp(killed_at):
             return status
     status = poll('worker rejoin', rejoined)
     save('status-rejoined.json', status)
@@ -236,9 +259,10 @@ try:
     moves = report['Moves']
     assert len(moves) == 2 and sorted(m['Kind'] for m in moves) == ['move', 'takeover'], moves
     assert all(not m.get('lost') and not m['Error'] and m['Result']['Duration'] > 0 for m in moves), moves
+    assert_media_resumed(report)
     save('status-finished.json', request(ctrl + '/status'))
     assert request(ctrl + '/status')['lost_count'] == 0
-    print('(h) PASS: caller exit=0, one completed call, move+takeover results, no reconnect/decrypt failures', flush=True)
+    print('(h) PASS: caller exit=0, one completed call, media after move+takeover, no failed connection/reconnect/decrypt failures', flush=True)
     success = True
 finally:
     stop_owned(caller)

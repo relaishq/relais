@@ -61,7 +61,7 @@ A message that the attribute does not exist means that file needs no change.
 
 ## Redis
 
-Install the executable; do not start a system service:
+Install the Redis executable:
 
 ```bash
 # Debian/Ubuntu
@@ -71,6 +71,17 @@ sudo apt-get install redis-server
 # macOS (Homebrew)
 brew install redis
 ```
+
+On Debian/Ubuntu, installing `redis-server` normally starts a system Redis
+service on port 6379. Relais does not use that service. If nothing else needs
+it, you may stop it and disable automatic startup:
+
+```bash
+sudo systemctl disable --now redis-server
+```
+
+Keep the service running if another application needs it. `brew install redis`
+does not start a service.
 
 Relais refuses Redis port 6379 ([#151](https://github.com/relaishq/relais/issues/151)).
 The demo starts a throwaway Redis on a free port. `start.sh` starts its own Redis

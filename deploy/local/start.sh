@@ -85,9 +85,11 @@ wait_ready() {
 }
 worker() {
   local n=$1
-  start "worker-$n" env RELAIS_SESSIONSTORE_KEY="$(cat "$state/secrets/sessionstore.key")" \
-    "$bin/relais-worker" -name "w$n" -media "127.0.0.1:$((port_base+10+n))" -http "127.0.0.1:$((port_base+n))" \
+  RELAIS_SESSIONSTORE_KEY=$(cat "$state/secrets/sessionstore.key")
+  export RELAIS_SESSIONSTORE_KEY
+  start "worker-$n" "$bin/relais-worker" -name "w$n" -media "127.0.0.1:$((port_base+10+n))" -http "127.0.0.1:$((port_base+n))" \
     -relay-leg "127.0.0.1:$((port_base+81))" -relay-media "127.0.0.1:$((port_base+80))" -control "$ctrl" -agent "$agent"
+  unset RELAIS_SESSIONSTORE_KEY
   wait_ready "worker-$n" '"pid"'
 }
 if [[ -n $restart ]]; then
@@ -106,13 +108,17 @@ printf 'bin=%q\nredis_port=%q\nport_base=%q\nagent=%q\n' "$bin" "$redis_port" "$
 started=1
 start redis redis-server --bind 127.0.0.1 --port "$redis_port" --save '' --appendonly no --dir "$state/redis"
 wait_ready redis 'Ready to accept connections'
+unset RELAIS_SESSIONSTORE_KEY
 start relay "$bin/relais-relay" -media "127.0.0.1:$((port_base+80))" -leg "127.0.0.1:$((port_base+81))" -http "127.0.0.1:$port_base"
 wait_ready relay '"pid"'
 worker 1
 worker 2
-start control env RELAIS_SESSIONSTORE_KEY="$(cat "$state/secrets/sessionstore.key")" "$bin/relais-control" \
+RELAIS_SESSIONSTORE_KEY=$(cat "$state/secrets/sessionstore.key")
+export RELAIS_SESSIONSTORE_KEY
+start control "$bin/relais-control" \
   -http "127.0.0.1:$((port_base+10))" -relay "http://127.0.0.1:$port_base" \
   -worker "w1=http://127.0.0.1:$((port_base+1))" -worker "w2=http://127.0.0.1:$((port_base+2))"
+unset RELAIS_SESSIONSTORE_KEY
 wait_ready control '"pid"'
 if [[ -f $state/secrets/signal.pem ]]; then mv "$state/secrets/signal.pem" "$state/secrets/signal.previous.pem"; fi
 start signal "$bin/relais-signal" -listen "127.0.0.1:$((port_base+43))" -control "$ctrl" \
