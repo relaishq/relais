@@ -57,6 +57,7 @@ func TestTaskFinalReviewSideEffectRetryAfterUnconsumedFinal(t *testing.T) {
 	require.Equal(t, []byte("args"), rt.intent.Request)
 	_, err = target.deliverTaskResult()
 	require.NoError(t, err)
+	rt = target.agent.v2.tasks[0] // result consumption commits an owned task node
 	require.Empty(t, rt.request)
 	require.Empty(t, rt.intent.Request)
 }

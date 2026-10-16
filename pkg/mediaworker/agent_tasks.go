@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -211,6 +212,20 @@ func (s *session) taskMetadataBudget(intents []taskIntent, refusals []taskRefusa
 			guard = append(guard, taskRefusal{ID: intents[i].ID, Turn: intents[i].Turn})
 		}
 		envelope.Capacity = guard
+		// A launched task may finish before the next admission. Reserve its
+		// terminal fields and consumed cursor from the real intent now, including
+		// while compact refusals occupy the rest of the metadata area.
+		envelope.Tasks = slices.Clone(intents)
+		for i, intent := range envelope.Tasks {
+			if !intent.Final {
+				intent.Phase = taskStarted
+				intent.Final = true
+				intent.Terminal = agent.OutcomeUnknown
+				intent.Published++
+			}
+			intent.Cursor = intent.Published
+			envelope.Tasks[i] = intent
+		}
 		guarded, _ := json.Marshal(envelope)
 		if len(guarded) > len(metadata) {
 			metadata = guarded
@@ -236,6 +251,10 @@ func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, b
 	next := slices.Clone(base)
 	var refused []agent.TaskResult
 	steps := map[string]bool{}
+	pending := map[agent.TaskID]bool{}
+	for _, r := range refusals {
+		pending[r.ID] = true
+	}
 	now := s.taskNow()
 	for _, spec := range effects.StartTasks {
 		if spec.Step == "" || spec.Kind == "" || spec.Timeout < 0 || steps[spec.Step] ||
@@ -249,6 +268,9 @@ func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, b
 		}
 		steps[spec.Step] = true
 		id := deriveTaskID(s.id, h.registration.Name, cause.ID, spec.Step)
+		if pending[id] {
+			continue
+		}
 		capacity := agent.TaskResult{TaskID: id, Sequence: 1, Turn: spec.Turn, Outcome: agent.Capacity, Final: true, Detail: "task admission capacity"}
 		if len(spec.Request) > h.registration.Bounds.MaxMailboxBytes || len(spec.Step)+len(spec.Kind) > h.registration.Bounds.MaxPendingBytes || (spec.Class == agent.SideEffecting && len(spec.Request) > h.registration.Bounds.MaxPendingBytes) {
 			refused = append(refused, capacity)
@@ -294,6 +316,55 @@ func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, b
 	}
 	return next, refused, nil
 }
+
+// uniqueTaskRefusals repairs old checkpoints without changing the first result.
+func uniqueTaskRefusals(in []taskRefusal) []taskRefusal {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]taskRefusal, 0, len(in))
+	seen := map[agent.TaskID]bool{}
+	for _, r := range in {
+		if !seen[r.ID] {
+			seen[r.ID] = true
+			out = append(out, r)
+		}
+	}
+	return out
+}
+func (s *session) fitTaskRefusals(base, tasks []*localTask, prior, refusals []taskRefusal) ([]*localTask, []taskRefusal, error) {
+	for {
+		intents := make([]taskIntent, len(tasks))
+		for i, t := range tasks {
+			intents[i] = t.intent
+		}
+		if err := s.taskMetadataBudget(intents, refusals, true); err == nil {
+			return tasks, refusals, nil
+		}
+		if len(tasks) <= len(base) {
+			break
+		}
+		// This task belongs to the current callback and has never been launched.
+		t := tasks[len(tasks)-1]
+		tasks = tasks[:len(tasks)-1]
+		refusals = append([]taskRefusal{{ID: t.intent.ID, Turn: t.intent.Turn}}, refusals...)
+	}
+	old := map[agent.TaskID]bool{}
+	for _, r := range prior {
+		old[r.ID] = true
+	}
+	var fresh []taskRefusal
+	for _, r := range refusals {
+		if !old[r.ID] {
+			fresh = append(fresh, r)
+		}
+	}
+	if err := s.taskMetadataBudget(nil, fresh, false); err != nil {
+		return nil, nil, fmt.Errorf("%w: callback task refusals exceed host metadata", agent.ErrCapacity)
+	}
+	return nil, nil, errTaskAdmissionBackpressure
+}
+
 func (s *session) publishTaskIntents() {
 	h := s.agent.v2
 	s.agent.latest.V2.Tasks = nil
@@ -731,7 +802,7 @@ func taskIntentsEqual(a, b []taskIntent) bool {
 func (s *session) validateTaskMoves(intents []taskIntent, move *movePayload) error {
 	seen := map[agent.TaskID]bool{}
 	for _, r := range s.agent.latest.V2.Capacity {
-		if r.ID == "" || seen[r.ID] {
+		if r.ID == "" {
 			return fmt.Errorf("%w: invalid capacity intent", agent.ErrIncompatibleAgent)
 		}
 		seen[r.ID] = true
@@ -790,6 +861,7 @@ func findTaskMove(move *movePayload, id agent.TaskID) *taskMove {
 }
 func (s *session) restoreTasks(move *movePayload) error {
 	h := s.agent.v2
+	s.agent.latest.V2.Capacity = uniqueTaskRefusals(s.agent.latest.V2.Capacity)
 	if err := s.validateTaskMoves(s.agent.latest.V2.Tasks, move); err != nil {
 		return err
 	}
@@ -914,11 +986,9 @@ func (s *session) v2AgentLoop() {
 			}
 			s.pruneTasks()
 			s.launchTasks()
-			if delivered, err := s.deliverTaskResult(); err != nil {
+			if _, err := s.deliverTaskResult(); err != nil {
 				s.agentFailed(err)
 				return
-			} else if delivered {
-				continue
 			}
 		}
 		if !paused && h.pendingInput != nil {
@@ -983,7 +1053,8 @@ func taskResultBytes(r agent.TaskResult) int {
 
 // Internal task events cannot be replayed past their committed cursor; Started
 // cannot replay past its committed flag. Input-caused receipts additionally wait
-// for the real SRTP replay window and consumed-input floor to pass the cause.
+// for the receive replay window to pass the cause and the consumed-input
+// floor to include it. Reception advances even while application input waits.
 // An older retained export carries its own receipts. No wall-clock TTL is used.
 func (s *session) pruneTasks() {
 	h := s.agent.v2
@@ -993,6 +1064,7 @@ func (s *session) pruneTasks() {
 		durable = cloneTaskIntents(s.durableAgent.V2.Tasks)
 	}
 	progress := s.state.Agent.Progress
+	received := maps.Clone(s.state.SRTP.Inbound)
 	s.mu.Unlock()
 	next := h.tasks[:0]
 	for _, t := range h.tasks {
@@ -1005,7 +1077,8 @@ func (s *session) pruneTasks() {
 				}
 			}
 			if cause := t.intent.InputCause; cause != nil {
-				ack = ack && progress.SSRC == cause.SSRC && progress.Index >= cause.Index && progress.Index-cause.Index >= replayWindow
+				high, known := received[cause.SSRC]
+				ack = ack && progress.SSRC == cause.SSRC && progress.Index >= cause.Index && known && high >= cause.Index && high-cause.Index >= replayWindow
 			}
 		}
 		if !ack {

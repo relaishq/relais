@@ -190,12 +190,13 @@ func TestTaskReceiptsHaveNoLifetimeCap(t *testing.T) {
 	s.mu.Lock()
 	s.durableAgent = cloneAgentState(s.state.Agent)
 	s.state.Agent.Progress.SSRC = 42
-	s.state.Agent.Progress.Index = 73
+	s.state.Agent.Progress.Index = 10
+	s.state.SRTP.Inbound = map[uint32]uint64{42: 73}
 	s.mu.Unlock()
 	s.pruneTasks()
 	require.Len(t, s.agent.v2.tasks, 1)
 	s.mu.Lock()
-	s.state.Agent.Progress.Index = 74
+	s.state.SRTP.Inbound[42] = 74
 	s.mu.Unlock()
 	s.pruneTasks()
 	require.Empty(t, s.agent.v2.tasks)

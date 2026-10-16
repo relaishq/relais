@@ -353,7 +353,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		}
 		// Refusals are compact terminal intents, delivered as later transactions.
 		// Never recursively call Handle while accepting another callback's effects.
-		refusals = slices.Clone(before.V2.Capacity)
+		refusals = uniqueTaskRefusals(before.V2.Capacity)
 		if event.Kind == agent.TaskMessage && len(refusals) > 0 && refusals[0].ID == event.Result.TaskID {
 			refusals = refusals[1:]
 		}
@@ -365,14 +365,26 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		for _, r := range refused {
 			refusals = append(refusals, taskRefusal{ID: r.TaskID, Turn: r.Turn})
 		}
-		intents := make([]taskIntent, len(tasks))
-		for i, t := range tasks {
-			intents[i] = t.intent
-		}
-		if err := s.taskMetadataBudget(intents, refusals, false); err != nil {
-			if errors.Is(err, agent.ErrCapacity) || errors.Is(err, ErrMoveBudget) {
-				return errTaskAdmissionBackpressure
+		// Stage consumption on an owned node before checking the complete metadata.
+		// The accepted cursor must not make a previously checked envelope overflow.
+		if event.Kind == agent.TaskMessage {
+			for i, t := range tasks {
+				if t.intent.ID == event.Result.TaskID {
+					next := *t
+					next.intent.Cursor = event.Result.Sequence
+					next.mailboxBytes -= taskResultBytes(t.results[0])
+					next.results = t.results[1:]
+					s.retireTaskRequest(&next)
+					tasks[i] = &next
+				}
 			}
+		}
+		prior := uniqueTaskRefusals(before.V2.Capacity)
+		if event.Kind == agent.TaskMessage && len(prior) > 0 && prior[0].ID == event.Result.TaskID {
+			prior = prior[1:]
+		}
+		tasks, refusals, err = s.fitTaskRefusals(h.v2.tasks, tasks, prior, refusals)
+		if err != nil {
 			return err
 		}
 		saving.Store(true)
@@ -427,16 +439,6 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	if event.Kind == agent.AudioInput {
 		next.Progress = event.Input.Progress
 		next.Progress.Consumed = before.Progress.Consumed + 1
-	}
-	if event.Kind == agent.TaskMessage {
-		for _, t := range tasks {
-			if t.intent.ID == event.Result.TaskID {
-				t.intent.Cursor = event.Result.Sequence
-				t.mailboxBytes -= taskResultBytes(t.results[0])
-				t.results = t.results[1:]
-				s.retireTaskRequest(t)
-			}
-		}
 	}
 	s.acceptTaskEffects(tasks, effects)
 	next.V2.Tasks = cloneTaskIntents(h.latest.V2.Tasks)
