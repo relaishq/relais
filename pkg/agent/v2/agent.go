@@ -32,6 +32,11 @@
 // Audio references name immutable task-emitted Opus packets. Playback continues
 // independently of input and callbacks. A crash loses buffered audio and reports
 // Resumed.MoveOnly=OutcomeUnknown; restart the turn on a later event.
+// Handler terminal publication can wait up to 100 ms for Emit spacing; a move
+// during that wait follows the task's Retry/Abandon rules or reports OutcomeUnknown.
+// Registration identity persists declared Limits (zeros mean host defaults).
+// Workers resolve effective limits locally and refuse restored content that
+// exceeds those limits without truncation.
 package agent
 
 import (
@@ -192,7 +197,8 @@ type ControlMessage struct {
 }
 
 // Limits bounds application state, serialized host metadata, and move memory.
-// Zero fields use host defaults. Registrations cannot increase operator budgets.
+// Zero fields use host defaults and remain zero in persisted identity. Effective
+// limits respect local operator ceilings; registrations cannot increase budgets.
 type Limits struct {
 	MaxStateBytes    int
 	MaxPendingBytes  int

@@ -451,7 +451,11 @@ V2 custom agents can produce task-emitted Opus output without caller input.
 The bounded host, pacing, planned continuation and move-only crash-loss rules are
 specified in [ADR 0010](adr/0010-pluggable-agents.md). Pools must use the same
 registration and restore prior app state and pending task schemas. Restoration
-uses the persisted agent name and refuses mismatches without an Echo fallback.
+uses the persisted agent name, task kinds and declared limits (including zeros
+for host defaults), and refuses mismatches without an Echo fallback. Effective
+limits are computed on each worker from local operator ceilings. Restored content
+must fit those limits; an oversized adoption refuses with typed capacity, without
+truncation. Older experimental v8 envelopes retain their original bounds check.
 Public registration does not
 establish provider integration or custom-worker capacity approval. The manual
 capacity, Save-CPU and store-stall gates remain pending. A default 1 KiB app state
@@ -462,7 +466,13 @@ restores prior app state and produces a typed `Capacity` notice. Required transp
 state which cannot fit refuses adoption or ends the call with explicit capacity
 evidence. Failed store writes consume no byte tokens and do not produce `Capacity`.
 Emit backpressures with cancellation; its first chunk is immediate and later chunks
-and handler terminals share one 100 ms publication interval per task. The raw move
+and handler terminals share one 100 ms publication interval per task. A terminal
+can wait up to 100 ms; a move during that wait follows Retry/Abandon or reports
+`OutcomeUnknown`. The byte rate must cover periodic maximum-size snapshots plus
+one maximum-size forced write per second; burst must cover two maximum snapshots.
+Wall-clock rollback never subtracts tokens and refill resumes from the new clock.
+Planned export carries the current remaining quota. Drain task-wait flags are
+reserved for slice 9 and are not exposed yet. The raw move
 memory flag can tighten the supported 1 MiB per-session ceiling; larger payloads
 need a new wire-budget admission design before they can be enabled safely.
 

@@ -340,8 +340,9 @@ for slot exhaustion. Other limits respect operator caps; legacy 8 KiB defaults s
 
 Worker-only flags, not Limits fields (registrations cannot raise store/shutdown budgets):
 -agent-max-snapshot-bytes=7168; -agent-snapshot-bytes-per-second=81920;
--agent-snapshot-burst-bytes=28672; -agent-drain-task-budget=2s. -agent-drain-move-reserve has
-**no default**: unset means no quiescence and urgent export for every v2 session.
+-agent-snapshot-burst-bytes=28672. Slice 9 adds -agent-drain-task-budget=2s and
+-agent-drain-move-reserve with quiescence; slice 6 does not expose these flags.
+The reserve has **no default**: unset means no quiescence and urgent export for every v2 session.
 Snapshot arithmetic: 3,474 + 42 + 1,368 (base64 of 1,024) + 2,048 = **6,932 B**, leaving 236 B under
 7,168. This is a derived allocation; validate actual v8/counters, never assume the base is fixed
 for all calls. At 10/s, 7,168*10 = **71,680 B/s**. The 81,920 B/s payload budget leaves 10,240 B/s
@@ -389,9 +390,14 @@ the representative custom workload remains unvalidated. Keep ceilings; over-budg
 ## E — Identity and safe refusal; same-registration pools
 
 Use envelope v8 for custom agents, containing agent name, contract, State.Version, required task
-kinds and bounds, with the exact state/progress/cursors. Stock echo/demo retain their legacy
-profiles. A custom target checks name/kinds/configured bounds and Restore validates state before
-adoption, output or task launch. Mismatch returns ErrIncompatibleAgent; never substitute Echo.
+kinds and declared Limits, with the exact state/progress/cursors. Zero limit fields remain
+zero in identity and mean host defaults; effective bounds are resolved and capped locally,
+never persisted as identity. Stock echo/demo retain their legacy profiles. A custom target
+checks name/kinds/declared limits and validates restored content against local effective state,
+host metadata, mailbox, active-task and audio bounds before adoption, output or task launch.
+Identity mismatch returns ErrIncompatibleAgent; content exceeding local capacity returns
+ErrCapacity without truncation. Never substitute Echo. Main f6428f2 experimental v8 envelopes
+retain their previous resolved-bounds compatibility check.
 Identity-free custom snapshots need a declared profile or drain; version 1 does not identify an app (`docs/adr/0006-agent-interface.md:165-177`).
 Pools are **same-registration only**; compatible names alone do not authorize mixing task code.
 New builds must Restore prior state/pending task schemas and retain compatible recovery capacity.

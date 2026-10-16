@@ -371,6 +371,20 @@ func (s *session) restorePlayback(move *movePayload) error {
 			}
 		}
 	}
+	// Payloads retained for deduplication count too, even after playout. A
+	// different worker's local ceiling must never silently discard accepted audio.
+	bounds := s.agent.v2.registration.Bounds
+	retainedBytes := 0
+	var retainedDuration time.Duration
+	for _, payload := range p.payloads {
+		for i, packet := range payload.audio.Packets {
+			retainedBytes += len(packet)
+			retainedDuration += payload.durations[i]
+		}
+	}
+	if retainedBytes > bounds.MaxAudioBytes || (bounds.MaxAudioDuration > 0 && retainedDuration > bounds.MaxAudioDuration) {
+		return fmt.Errorf("%w: restored audio payload exceeds local limit", agent.ErrCapacity)
+	}
 	if move != nil {
 		p.queue = slices.Clone(move.Audio)
 		p.length = 0

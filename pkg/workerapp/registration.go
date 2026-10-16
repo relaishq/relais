@@ -26,26 +26,9 @@ func registeredAgents(options Options, selected string, limits mediaworker.Snaps
 			return mediaworker.AgentConfig{}, fmt.Errorf("%w: invalid or duplicate registration %q", agent.ErrIncompatibleAgent, r.Name)
 		}
 		bounds := agenthost.Bounds(r.Limits)
-		// State is a declaration: fail rather than shrink it. Other resource limits
-		// can only tighten operator/host ceilings.
-		if bounds.MaxPendingBytes > 2048 {
-			bounds.MaxPendingBytes = 2048
-		}
-		if bounds.MaxMailboxBytes > limits.MoveBytesPerSession {
-			bounds.MaxMailboxBytes = limits.MoveBytesPerSession
-		}
-		if bounds.MaxMailboxBytes == 0 {
-			bounds.MaxMailboxBytes = limits.MoveBytesPerSession
-		}
-		if bounds.MaxActiveTasks > 4 {
-			bounds.MaxActiveTasks = 4
-		}
-		if bounds.MaxAudioBytes > bounds.MaxMailboxBytes {
-			bounds.MaxAudioBytes = bounds.MaxMailboxBytes
-		}
 		f := agenthost.Factory(agenthost.Registration{Name: r.Name, Factory: r.Factory, Tasks: r.Tasks, Bounds: bounds})
 		resolved := f("").(*agenthost.Adapter).Registration
-		if err := mediaworker.ValidateAgentRegistration(resolved.Name, resolved.TaskKinds, agent.Limits(resolved.Bounds), limits); err != nil {
+		if err := mediaworker.ValidateAgentRegistration(resolved.Name, resolved.TaskKinds, r.Limits, limits); err != nil {
 			return mediaworker.AgentConfig{}, err
 		}
 		for kind, handler := range r.Tasks {
@@ -61,7 +44,7 @@ func registeredAgents(options Options, selected string, limits mediaworker.Snaps
 		err = nil
 	}
 	if err != nil {
-		return cfg, err
+		return cfg, invalidAgentName(selected, factories)
 	}
 	cfg.Registrations = factories
 	return cfg, nil

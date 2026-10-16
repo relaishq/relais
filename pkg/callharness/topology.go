@@ -92,6 +92,7 @@ func startRelayedWorkers(opts Options) (*workers, error) {
 			ReplayMaxBurstDuration: opts.ReplayMaxBurstDuration,
 			LoggerFactory:          opts.WorkerLoggerFactory,
 			SnapshotInterval:       opts.SnapshotInterval,
+			SnapshotLimits:         harnessSnapshotLimits(opts.SnapshotInterval),
 			Relay: &mediaworker.RelayConfig{
 				Addr:       r.WorkerAddr(),
 				PublicAddr: r.PublicAddr(),
@@ -244,4 +245,13 @@ func (c *Call) selectedRemoteAddr() string {
 	}
 
 	return net.JoinHostPort(pair.Remote.Address, strconv.Itoa(int(pair.Remote.Port)))
+}
+
+// The harness owns its worker budgets. Faster test-only checkpoint cadences
+// need the corresponding periodic byte rate plus a maximum forced write/second.
+func harnessSnapshotLimits(interval time.Duration) mediaworker.SnapshotLimits {
+	if interval <= 0 || interval >= 100*time.Millisecond {
+		return mediaworker.SnapshotLimits{}
+	}
+	return mediaworker.SnapshotLimits{BytesPerSecond: int((7168*int64(time.Second)-1)/int64(interval) + 1 + 7168)}
 }

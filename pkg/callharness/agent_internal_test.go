@@ -111,6 +111,7 @@ type agentHarnessSystem struct {
 
 type agentHarnessSettings struct {
 	v2                    []agenthost.Registration
+	snapshotLimits        []mediaworker.SnapshotLimits
 	targetEcho            bool
 	remoteTarget          bool
 	targetHandler         func(http.Handler) http.Handler
@@ -140,7 +141,11 @@ func startAgentHarness(t *testing.T, store sessionstore.Store, settings ...agent
 		config = settings[0]
 	}
 	for i := range 2 {
-		w, err := mediaworker.New(mediaworker.Config{SnapshotInterval: config.snapshotInterval, Agent: mediaworker.AgentConfig{SaveInterval: config.saveInterval, Factory: func(id string) agent.Agent {
+		limits := harnessSnapshotLimits(config.snapshotInterval)
+		if len(config.snapshotLimits) > i {
+			limits = config.snapshotLimits[i]
+		}
+		w, err := mediaworker.New(mediaworker.Config{SnapshotLimits: limits, SnapshotInterval: config.snapshotInterval, Agent: mediaworker.AgentConfig{SaveInterval: config.saveInterval, Factory: func(id string) agent.Agent {
 			if i == 1 && config.targetEcho {
 				return &agent.Echo{}
 			}

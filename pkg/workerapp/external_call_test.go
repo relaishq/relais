@@ -57,6 +57,9 @@ func testExternalRegisteredCall(t *testing.T, binary string) {
 	start := func(name, selected, registration string) *externalWorker {
 		p := &externalWorker{messages: make(chan map[string]json.RawMessage, 64), done: make(chan error, 1)}
 		p.cmd = exec.CommandContext(ctx, binary, "-name", name, "-agent", selected, "-control", control.URL, "-relay-leg", r.WorkerAddr().String(), "-relay-media", r.PublicAddr().String(), "-redis", addr, "-redis-prefix", prefix, "-frame-cache-off")
+		if name == "1" {
+			p.cmd.Args = append(p.cmd.Args, "-agent-move-bytes-per-session", "131072")
+		}
 		p.cmd.Env = append(os.Environ(), "RELAIS_SESSIONSTORE_KEY="+hex.EncodeToString(make([]byte, 32)), "EXTERNAL_AGENT_NAME="+registration)
 		output, err := p.cmd.StdoutPipe()
 		require.NoError(t, err)

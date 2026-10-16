@@ -67,15 +67,13 @@ func Run(ctx context.Context, args []string, options Options) error {
 	if defaultAgent == "" {
 		defaultAgent = "echo"
 	}
-	agentName := flags.String("agent", defaultAgent, "audio agent: echo or demo")
+	agentName := flags.String("agent", defaultAgent, "audio agent: echo, demo or a registered name")
 	limits := mediaworker.SnapshotLimits{}
 	flags.IntVar(&limits.MaxBytes, "agent-max-snapshot-bytes", 7168, "v2 whole encrypted snapshot byte cap")
 	flags.IntVar(&limits.BytesPerSecond, "agent-snapshot-bytes-per-second", 81920, "v2 snapshot payload bytes per second per session")
 	flags.IntVar(&limits.BurstBytes, "agent-snapshot-burst-bytes", 28672, "v2 snapshot payload burst bytes per session")
 	flags.IntVar(&limits.MoveBytesPerSession, "agent-move-bytes-per-session", 1<<20, "v2 move memory bytes per session")
 	flags.Int64Var(&limits.MoveBytesTotal, "agent-move-bytes-total", 64<<20, "v2 move memory bytes per worker including export scratch")
-	taskBudget := flags.Duration("agent-drain-task-budget", 2*time.Second, "maximum v2 handler wait during drain (requires measured move reserve)")
-	moveReserve := flags.Duration("agent-drain-move-reserve", 0, "measured drain move reserve; zero disables handler wait")
 	drainTimeout := flags.Duration("drain-timeout", 5*time.Second, "SIGTERM drain deadline before closing")
 	version := buildinfo.VersionFlag(flags)
 	if err := flags.Parse(args); err != nil {
@@ -86,9 +84,6 @@ func Run(ctx context.Context, args []string, options Options) error {
 	}
 	if *drainTimeout <= 0 {
 		return &configError{}
-	}
-	if *taskBudget < 0 || *taskBudget > 2*time.Second || *moveReserve < 0 {
-		return errors.New("invalid agent drain budget")
 	}
 	if err := limits.Validate(); err != nil {
 		return err

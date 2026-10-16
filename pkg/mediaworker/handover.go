@@ -567,6 +567,12 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		}
 		payload = &movePayload{Bytes: export.payload, Tasks: export.tasks, Audio: export.audio}
 	}
+	// Finish any in-flight acknowledged write before capturing its byte debit.
+	// Never wait for store I/O while holding the packet lock.
+	if move != nil {
+		s.snapshotMu.Lock()
+		defer s.snapshotMu.Unlock()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer func() {
@@ -601,10 +607,19 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		return nil, release, fmt.Errorf("mediaworker: export DTLS state: %w", err)
 	}
 	s.checkpointRates(&s.state.Checkpoint)
+	exported := s.state
+	if exported.Agent.V2 != nil {
+		exported.Agent = cloneAgentState(s.state.Agent)
+		now := time.Now()
+		if !s.storeClockAt.IsZero() {
+			now = s.storeClock.Add(time.Since(s.storeClockAt))
+		}
+		exported.Agent.V2.Quota = s.captureSnapshotQuota(now)
+	}
 	state, err := json.Marshal(snapshot{
 		Version:        s.state.Version,
 		AgentMoveOnly:  payload,
-		State:          s.state,
+		State:          exported,
 		DTLSConnection: dtlsState,
 	})
 	if err != nil {

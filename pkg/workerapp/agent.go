@@ -3,9 +3,10 @@ package workerapp
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -22,8 +23,18 @@ func selectAgent(name string) (mediaworker.AgentConfig, error) {
 	case "demo":
 		return mediaworker.AgentConfig{Factory: agentdemo.Factory}, nil
 	default:
-		return mediaworker.AgentConfig{}, errors.New("-agent must be echo or demo")
+		return mediaworker.AgentConfig{}, invalidAgentName(name, nil)
 	}
+}
+
+// Names in diagnostics are deterministic, including an invalid DefaultAgent.
+func invalidAgentName(name string, registrations map[string]agent.Factory) error {
+	names := []string{"echo", "demo"}
+	for name := range registrations {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return fmt.Errorf("invalid -agent %q; valid names: %s", name, strings.Join(names, ", "))
 }
 
 // The demo wrapper observes the existing private protocol; it never changes

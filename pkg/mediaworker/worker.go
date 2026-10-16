@@ -290,12 +290,12 @@ type Worker struct {
 func New(cfg Config) (*Worker, error) {
 	cfg.Agent = cfg.Agent.defaults()
 	cfg.SnapshotLimits = cfg.SnapshotLimits.defaults()
-	if err := cfg.SnapshotLimits.Validate(); err != nil {
-		return nil, err
-	}
 	cfg.CheckpointEnvelope = cfg.CheckpointEnvelope.Defaults()
 	if cfg.SnapshotInterval <= 0 {
 		cfg.SnapshotInterval = 100 * time.Millisecond
+	}
+	if err := cfg.SnapshotLimits.ValidateForInterval(cfg.SnapshotInterval); err != nil {
+		return nil, err
 	}
 	if cfg.HeartbeatInterval <= 0 {
 		cfg.HeartbeatInterval = 100 * time.Millisecond

@@ -34,7 +34,8 @@ type v2Envelope struct {
 	Name            string
 	Contract        string
 	TaskKinds       []string
-	Bounds          agenthost.Bounds
+	Bounds          agenthost.Bounds `json:",omitzero"` // main f6428f2 legacy v8 identity
+	Limits          *agent.Limits    `json:"limits,omitempty"`
 	HasMoveOnly     bool
 	MoveOnlyLength  int
 	Started         bool
@@ -68,6 +69,8 @@ type movePayload struct {
 
 func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeOptions, move *movePayload) error {
 	reg := r.Registration
+	legacyBounds := reg.Bounds
+	reg.Bounds = effectiveAgentBounds(reg.Declared, s.worker.cfg.SnapshotLimits)
 	if reg.Name == "" || reg.Name == "echo" || reg.Name == "demo" || reg.Factory == nil ||
 		reg.Bounds.MaxStateBytes <= 0 || reg.Bounds.MaxStateBytes > 64<<10 || reg.Bounds.MaxPendingBytes <= 0 ||
 		reg.Bounds.MaxMailboxBytes <= 0 || reg.Bounds.MaxMailboxBytes > s.worker.cfg.SnapshotLimits.MoveBytesPerSession || reg.Bounds.MaxActiveTasks <= 0 ||
@@ -81,14 +84,17 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 	}
 	if restoring {
 		e := s.state.Agent.V2
-		if e == nil || e.Contract != v2Contract || e.Name != reg.Name || !slices.Equal(e.TaskKinds, reg.TaskKinds) || e.Bounds != reg.Bounds {
+		if e == nil || e.Contract != v2Contract || e.Name != reg.Name || !slices.Equal(e.TaskKinds, reg.TaskKinds) || (e.Limits != nil && *e.Limits != reg.Declared) || (e.Limits == nil && e.Bounds != legacyBounds) {
 			return s.agentError(fmt.Errorf("%w: %w", legacy.ErrRestore, agent.ErrIncompatibleAgent))
+		}
+		if err := s.validateRestoredAgentBounds(reg.Bounds); err != nil {
+			return s.v2RestoreError(err)
 		}
 	} else {
 		s.state.Version = v2SessionStateVersion
-		s.state.Agent.V2 = &v2Envelope{Name: reg.Name, Contract: v2Contract, TaskKinds: slices.Clone(reg.TaskKinds), Bounds: reg.Bounds}
+		s.state.Agent.V2 = &v2Envelope{Name: reg.Name, Contract: v2Contract, TaskKinds: slices.Clone(reg.TaskKinds), Limits: &reg.Declared}
 	}
-	metadata, err := json.Marshal(v2Envelope{Name: reg.Name, Contract: v2Contract, TaskKinds: reg.TaskKinds, Bounds: reg.Bounds})
+	metadata, err := json.Marshal(v2Envelope{Name: reg.Name, Contract: v2Contract, TaskKinds: reg.TaskKinds, Limits: &reg.Declared})
 	if err != nil {
 		return s.agentError(err)
 	}
@@ -268,7 +274,7 @@ func (s *session) validateV2StateMetadata(state agent.State) error {
 		return errors.New("agent: invalid move-only metadata")
 	}
 	if state.MoveOnlyLength > s.agent.v2.registration.Bounds.MaxMailboxBytes || state.MoveOnlyLength > s.worker.cfg.SnapshotLimits.MoveBytesPerSession {
-		return errors.New("agent: move-only data exceeds session budget")
+		return fmt.Errorf("%w: move-only data exceeds session budget", agent.ErrCapacity)
 	}
 	if state.HasMoveOnly {
 		if _, ok := s.agent.v2.instance.(agent.MoveOnlyState); !ok {
@@ -491,8 +497,9 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 			if required > limits.BurstBytes {
 				return errSnapshotAdmissionCapacity
 			}
+			now := s.taskNow()
 			s.snapshotBudgetMu.Lock()
-			available := s.snapshotBytesBudget.available(limits, s.taskNow())
+			available := s.snapshotBytesBudget.available(limits, now)
 			s.snapshotBudgetMu.Unlock()
 			if available < float64(required) {
 				return errTaskAdmissionBackpressure
@@ -663,9 +670,16 @@ func v2EnvelopeEqual(a, b *v2Envelope) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.Name == b.Name && a.Contract == b.Contract && slices.Equal(a.TaskKinds, b.TaskKinds) && a.Bounds == b.Bounds &&
+	return a.Name == b.Name && a.Contract == b.Contract && slices.Equal(a.TaskKinds, b.TaskKinds) && a.Bounds == b.Bounds && limitsEqual(a.Limits, b.Limits) &&
 		a.HasMoveOnly == b.HasMoveOnly && a.MoveOnlyLength == b.MoveOnlyLength && a.Started == b.Started && taskIntentsEqual(a.Tasks, b.Tasks) && slices.Equal(a.Capacity, b.Capacity) &&
 		a.CancelFloor == b.CancelFloor && a.TimerGeneration == b.TimerGeneration && slices.Equal(a.Timers, b.Timers) && playbackEqual(a.Playback, b.Playback)
+}
+
+func limitsEqual(a, b *agent.Limits) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func validateV2Wire(data []byte) error {
