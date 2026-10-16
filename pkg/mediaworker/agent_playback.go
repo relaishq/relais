@@ -293,9 +293,19 @@ func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers [
 		envelope.Tasks[i] = t.intent
 	}
 	data, _ := json.Marshal(envelope)
-	if len(data) > min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes) {
+	metadataLimit := min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes)
+	if len(data) > metadataLimit {
 		if len(e.Audio) > 0 {
-			return errTaskAdmissionBackpressure
+			// Only retry growth that removing this callback's audio can resolve.
+			// Timers and other effects cannot make progress by draining playback.
+			e.Audio = nil
+			s.mu.Lock()
+			envelope.Playback = s.projectedPlaybackLocked(e, event).snapshot()
+			s.mu.Unlock()
+			withoutAudio, _ := json.Marshal(envelope)
+			if len(withoutAudio) <= metadataLimit {
+				return errTaskAdmissionBackpressure
+			}
 		}
 		return fmt.Errorf("%w: playback/timer metadata", agent.ErrCapacity)
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/pion/srtp/v3"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -292,4 +293,26 @@ func TestPlaybackReviewReferenceStorageReservedBeforeDelivery(t *testing.T) {
 	s.agent.v2.registration.Bounds.MaxMailboxBytes = int(reserved)
 	appendUnitAudio(t, s, a, r)
 	require.LessOrEqual(t, s.moveReserved, reserved, "delivery transfers the reference reservation; it cannot require new mailbox space")
+}
+
+func TestPlaybackReviewNonAudioMetadataOverflowIsTerminal(t *testing.T) {
+	for _, withAudio := range []bool{false, true} {
+		t.Run(fmt.Sprint("audio=", withAudio), func(t *testing.T) {
+			s, a, r := audioUnitSession(t, 1)
+			for i := range 40 {
+				a.effects.SetTimers = append(a.effects.SetTimers, agent.TimerSpec{
+					ID: fmt.Sprintf("timer/%02d/%s", i, strings.Repeat("x", 100)), After: time.Hour,
+				})
+			}
+			if withAudio {
+				a.effects.Audio = []agent.Audio{{Turn: r.Turn, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence}}}
+			}
+			delivered, err := s.deliverTaskResult()
+			require.ErrorIs(t, err, agent.ErrCapacity, "the actor must terminate on the first delivery, rather than retry unchanged non-audio overflow")
+			require.False(t, delivered)
+			require.EqualValues(t, 0, s.agent.v2.tasks[0].intent.Cursor)
+			require.Empty(t, s.agent.v2.playback.queue)
+			require.Empty(t, s.agent.latest.V2.Timers)
+		})
+	}
 }

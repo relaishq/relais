@@ -172,9 +172,29 @@ func assertPacerSequence(t *testing.T, all []pacedPacket, packets [][]byte, cloc
 	}
 }
 func TestV2PacerSilentCallerAndFinished(t *testing.T) {
+	testV2PacerSilentCallerAndFinished(t, false)
+}
+func TestV2PacerSilentCallerAndFinishedAfterStall(t *testing.T) {
+	testV2PacerSilentCallerAndFinished(t, true)
+}
+func testV2PacerSilentCallerAndFinished(t *testing.T, stall bool) {
+	t.Helper()
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		regs, events, gate, _ := pacerRegistrations(t, 20, false, false)
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs, remoteTarget: true})
+		if stall {
+			var sent atomic.Int64
+			require.NoError(t, workerprobe.SetAfterEcho(sys.workers[0].LocalAddr(), func(ctx context.Context, _ string, _ []byte) {
+				if sent.Add(1) == 5 {
+					timer := time.NewTimer(60 * time.Millisecond)
+					defer timer.Stop()
+					select {
+					case <-timer.C:
+					case <-ctx.Done():
+					}
+				}
+			}))
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
 		call, err := sys.h.Dial(ctx, CallOptions{})
@@ -185,8 +205,14 @@ func TestV2PacerSilentCallerAndFinished(t *testing.T) {
 		for range 20 {
 			all = append(all, nextPaced(t, received))
 		}
-		assertPacerSequence(t, all, pacerFixtures(t, 20))
-		require.InDelta(t, float64(380*time.Millisecond), float64(all[19].at.Sub(all[0].at)), float64(380*time.Millisecond)/50+float64(5*time.Millisecond), "steady output clock during caller silence")
+		clockSpan := time.Duration(uint32(all[19].packet.Timestamp-all[0].packet.Timestamp)) * time.Second / 48000
+		if stall {
+			require.Greater(t, clockSpan, 380*time.Millisecond, "the injected stall must exercise a clock rebase")
+		}
+		// A bounded rebase advances both clocks. Accumulated pacing delay advances
+		// arrival time alone, so it must still fail this tight span comparison.
+		require.InDelta(t, float64(clockSpan), float64(all[19].at.Sub(all[0].at)), float64(380*time.Millisecond)/50+float64(5*time.Millisecond), "output RTP clock follows arrival time during caller silence")
+		assertPacerSequence(t, all, pacerFixtures(t, 20), true)
 		finished := awaitPacerEvent(t, events[0], agent.PlaybackFinished)
 		require.EqualValues(t, 1, finished.Playback.Turn)
 		timer := awaitPacerEvent(t, events[0], agent.TimerFired)
