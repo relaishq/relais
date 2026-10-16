@@ -787,7 +787,7 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 		}
 		source.pending[c.id] = &takeoverState{call: c, lease: lease, routed: source.addr, routedLease: lease,
 			planned: true, plannedState: state, crashMargins: uncertainResume, held: true, excluded: excluded,
-			attemptLimit: maxResumeAttempts, outageStarted: moveStarted, budgetStarted: time.Now(),
+			attemptLimit: maxResumeAttempts, outageStarted: moveStarted, budgetRollback: true, budgetStarted: time.Now(),
 			budgetExcluded: map[netip.AddrPort]bool{source.addr: true, target.addr: true}}
 		p.mu.Unlock()
 		return fmt.Errorf("controlplane: rollback awaiting move budget: %w", err)

@@ -141,6 +141,11 @@ func TestMoveBudgetRetryAlternateAndRollback(t *testing.T) {
 				require.Contains(t, hold.releases, c.addr)
 				status, err := p.Status(ctx)
 				require.NoError(t, err)
+				require.Len(t, status.Calls, 1)
+				require.EqualValues(t, 1, status.Calls[0].MoveCount)
+				require.NotNil(t, status.Calls[0].LastMove)
+				require.Equal(t, "move", status.Calls[0].LastMoveKind)
+				require.Contains(t, planeMetricsBody(p), "relais_control_moves_total 1\n")
 				for _, result := range status.Takeovers {
 					require.False(t, result.Lost)
 				}
@@ -215,6 +220,9 @@ func TestMoveBudgetRetryRollbackReturnsToSource(t *testing.T) {
 		require.Zero(t, status.LostCount)
 		require.Len(t, status.Calls, 1)
 		require.Zero(t, status.Calls[0].MoveCount, "delayed rollback must preserve successful move counters")
+		require.Nil(t, status.Calls[0].LastMove)
+		require.Empty(t, status.Calls[0].LastMoveKind)
+		require.Contains(t, planeMetricsBody(p), "relais_control_moves_total 0\n", "budget rollback is not a successful move")
 		require.NoError(t, p.End(ctx, id))
 	})
 }

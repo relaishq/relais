@@ -239,6 +239,7 @@ type takeoverState struct {
 	attempts                int
 	attemptLimit            int
 	transientResume         bool
+	budgetRollback          bool // Retained after rollback itself refused move memory.
 	budgetStarted           time.Time
 	budgetNext              time.Time
 	budgetBackoff           time.Duration
@@ -760,9 +761,9 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 					res.Result.RelayReplayRecoveryPLI = true
 				}
 			}
-			if pending.planned && target == source {
-				// A delayed exact rollback continues the original owner; it is
-				// not a successful move to a different worker.
+			if pending.budgetRollback && target == source {
+				// Only a move-budget rollback has these semantics. Legacy
+				// uncertain transfers keep their established move accounting.
 				res.Result.RolledBack = true
 			} else {
 				now := time.Now()
@@ -908,7 +909,7 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 			if pending != nil {
 				p.metrics.moveErrors.Add(1)
 			}
-		} else {
+		} else if !res.Result.RolledBack {
 			p.metrics.moves.Add(1)
 		}
 	}
