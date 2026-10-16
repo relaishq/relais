@@ -25,8 +25,8 @@ shared-socket page. See [demo instructions](docs/demo.md).
 ## Redis and tests
 
 Never connect tests or tools to Redis on port **6379**. Use a dedicated,
-throwaway instance. The process binaries refuse 6379; legacy defaults are not
-permission to use it. For example, start this Redis in a separate terminal,
+throwaway instance. The process binaries refuse loopback 6379 by default; dev tools
+refuse 6379 on every host. For example, start this Redis in a separate terminal,
 wait for its ready log, and stop it with Ctrl-C after your tests:
 
 ```sh

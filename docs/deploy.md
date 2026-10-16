@@ -147,12 +147,17 @@ before: TLS protects transport; it does not replace encrypted snapshots.
 | `RELAIS_REDIS_TLS_KEY_FILE` | Optional client private key; requires the certificate file. |
 | `RELAIS_REDIS_ALLOW_LOCAL_6379` | Set to `1` to permit loopback 6379 in production processes; unset or `0` keeps the refusal. |
 
+Cluster nodes often advertise IPs, so set `RELAIS_REDIS_TLS_SERVER_NAME` or use
+certificates with IP SANs.
+
 Production processes accept port 6379 on remote hosts. Literal loopback IPs
 (`127.0.0.0/8`, `::1`, including mapped IPv4) and `localhost` refuse 6379 by
 default. The opt-in exists to protect a developer's own Redis. Unspecified
 addresses such as `0.0.0.0`, `::`, or an empty host are always refused.
-Other hostnames count as remote; validation does not look up DNS. Use a dedicated
-endpoint and check where a hostname resolves when you configure it.
+Localhost subdomains and ambiguous numeric or hex host spellings also count as
+local; `0` is unspecified. Other hostnames count as remote; validation does not
+look up DNS. Use a dedicated endpoint and check where a hostname resolves when
+you configure it.
 
 The demo, `crash-run`, `relais-load`, local deployment scripts, install tests,
 and test helpers always refuse 6379 on every host and ignore the opt-in.
@@ -181,7 +186,9 @@ The Go store constructors also accept `storage.RedisConfig.Username` and
 `storage.RedisConfig.TLSConfig`, including Redis Cluster connections. The
 process flags do not enable Cluster discovery. Legacy plugin runners also use
 the TLS and ACL environment settings when their storage type is Redis; existing
-storage configuration still selects their Cluster seed addresses.
+storage configuration still selects their Cluster seed addresses. Their addresses
+and passwords remain under `RELAIS_STORAGE_REDIS_URL` and
+`RELAIS_STORAGE_REDIS_PASSWORD`.
 
 ## Other hosts and security
 

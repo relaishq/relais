@@ -62,7 +62,8 @@ can repeat. Applications must make external side effects safe to repeat.
 Use macOS or Linux, Go 1.26+, Git, current Chrome, and `redis-server` on PATH.
 Install Redis with `brew install redis` or `sudo apt install redis-server`.
 You do not need to start a Redis service: the demo starts its own throwaway
-Redis on a free port. The Relais process binaries refuse Redis port **6379**.
+Redis on a free port. The Relais process binaries refuse loopback Redis port
+**6379** by default; dev tools refuse port **6379** on every host.
 
 Build from source; this is the install path that works today:
 

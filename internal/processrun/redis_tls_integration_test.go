@@ -135,6 +135,7 @@ func TestRedisTLSACLIntegration(t *testing.T) {
 		{name: "TLS and ACL", ca: ca, user: username, tls: "1"},
 		{name: "mutual TLS", ca: ca, user: username, tls: "1", cert: cert, key: key, requireClientCert: true},
 		{name: "server name override", ca: ca, user: username, tls: "1", server: "redis.test", cert: cert, key: key},
+		{name: "wrong server name", ca: ca, user: username, tls: "1", server: "wrong.test", cert: cert, key: key, wantError: true},
 		{name: "wrong CA", ca: wrongCA, user: username, tls: "1", cert: cert, key: key, wantError: true},
 		{name: "wrong user", ca: ca, user: "wrong-" + username, tls: "1", cert: cert, key: key, wantError: true},
 		{name: "plaintext", user: username, wantError: true},
@@ -186,6 +187,11 @@ func TestRedisTLSACLIntegration(t *testing.T) {
 						}
 					case "bootstrap":
 						t.Setenv("RELAIS_STORAGE_TYPE", "redis")
+						t.Setenv("RELAIS_STORAGE_REDIS_URL", addr)
+						t.Setenv("RELAIS_STORAGE_REDIS_PASSWORD", password)
+						// Production process settings must not switch the legacy endpoint or password.
+						t.Setenv("RELAIS_REDIS_ADDR", "must-not-dial.example.invalid:1")
+						t.Setenv("RELAIS_REDIS_PASSWORD", "")
 						_, client, _, e := bootstrap.Init(ctx, "tls-test", "test")
 						err = e
 						if client != nil {

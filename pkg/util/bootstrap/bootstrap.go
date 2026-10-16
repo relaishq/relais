@@ -40,14 +40,6 @@ func Init(ctx context.Context, process string, pluginType string) (*logging.Logg
 		if rc.Cluster {
 			rc.Addrs = cfg.Storage.RedisClusterAddrs
 		}
-		// Keep the legacy config fields, with the shared production environment
-		// taking precedence when supplied.
-		if addr := os.Getenv("RELAIS_REDIS_ADDR"); addr != "" {
-			rc.Addr = addr
-		}
-		if password, set := os.LookupEnv("RELAIS_REDIS_PASSWORD"); set {
-			rc.Password = password
-		}
 		store, err = storage.NewRedisStorage(rc)
 	} else {
 		store = storage.NewMemoryStorage()

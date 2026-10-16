@@ -50,10 +50,13 @@ func (c *StoreConfig) ConnectionFlags(fs *flag.FlagSet) {
 	c.Password = os.Getenv("RELAIS_REDIS_PASSWORD")
 	c.Username = os.Getenv("RELAIS_REDIS_USERNAME")
 }
-func ValidateRedis(addr string) error { return redisendpoint.Validate(addr) }
+
+// ValidateProductionRedis applies the production endpoint policy.
+// Development and test code must use redisendpoint.ValidateDev instead.
+func ValidateProductionRedis(addr string) error { return redisendpoint.Validate(addr) }
 
 func (c StoreConfig) Open(ctx context.Context) (*sessionstore.Redis, error) {
-	if err := ValidateRedis(c.Address); err != nil {
+	if err := ValidateProductionRedis(c.Address); err != nil {
 		return nil, err
 	}
 	key, err := storeKey()
@@ -69,7 +72,7 @@ func (c StoreConfig) Open(ctx context.Context) (*sessionstore.Redis, error) {
 
 // OpenFrames shares the snapshot master key, using a separate HKDF domain.
 func (c StoreConfig) OpenFrames(ctx context.Context) (*framecache.Redis, error) {
-	if err := ValidateRedis(c.Address); err != nil {
+	if err := ValidateProductionRedis(c.Address); err != nil {
 		return nil, err
 	}
 	key, err := storeKey()
@@ -150,7 +153,7 @@ func Serve(ctx context.Context, listener net.Listener, handler http.Handler) err
 
 // OpenOwners grants the relay only address lookup, with no snapshot key.
 func (c StoreConfig) OpenOwners(ctx context.Context) (*sessionstore.RedisOwners, error) {
-	if err := ValidateRedis(c.Address); err != nil {
+	if err := ValidateProductionRedis(c.Address); err != nil {
 		return nil, err
 	}
 	cfg, err := c.redisConfig()

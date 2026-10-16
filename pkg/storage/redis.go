@@ -562,14 +562,14 @@ func (c RedisConfig) ConnectionOptions() (*redis.UniversalOptions, error) {
 	transport := c.TLSConfig
 	if transport != nil {
 		if transport.InsecureSkipVerify {
-			return nil, errors.New("Redis TLS requires certificate verification")
+			return nil, errors.New("redis TLS requires certificate verification")
 		}
 		transport = transport.Clone()
 		if transport.MinVersion < tls.VersionTLS12 {
 			transport.MinVersion = tls.VersionTLS12
 		}
 		if transport.MaxVersion != 0 && transport.MaxVersion < transport.MinVersion {
-			return nil, errors.New("Redis TLS maximum version must allow TLS 1.2 or newer and the configured minimum")
+			return nil, errors.New("redis TLS maximum version must allow TLS 1.2 or newer and the configured minimum")
 		}
 	}
 	return &redis.UniversalOptions{Addrs: addrs, Username: c.Username, Password: c.Password, DB: c.DB, TLSConfig: transport}, nil

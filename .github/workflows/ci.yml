@@ -118,12 +118,25 @@ jobs:
     env:
       RELAIS_TEST_REDIS_ADDR: "127.0.0.1:16379"
       RELAIS_TEST_REDIS_REQUIRE: "1"
+      RELAIS_TEST_REDIS_TLS_REQUIRE: "1"
     steps:
       - uses: actions/checkout@v6
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
+      - name: Install Redis executable without starting a service
+        run: |
+          printf '#!/bin/sh\nexit 101\n' > "$RUNNER_TEMP/policy-rc.d"
+          if [ -e /usr/sbin/policy-rc.d ]; then
+            sudo cp -p /usr/sbin/policy-rc.d "$RUNNER_TEMP/original-policy-rc.d"
+            trap 'sudo cp -p "$RUNNER_TEMP/original-policy-rc.d" /usr/sbin/policy-rc.d' EXIT
+          else
+            trap 'sudo rm -f /usr/sbin/policy-rc.d' EXIT
+          fi
+          sudo install -m 755 "$RUNNER_TEMP/policy-rc.d" /usr/sbin/policy-rc.d
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends redis-server
       - name: Run non-harness tests (race detector, Redis required)
         run: make test-unit
 

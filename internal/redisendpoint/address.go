@@ -11,7 +11,8 @@ import (
 )
 
 // Validate permits managed Redis ports, while protecting a local developer's Redis.
-// Hostnames other than localhost count as remote. Validation never resolves DNS.
+// Localhost names and ambiguous numeric forms are local; other hostnames are
+// remote. Validation never resolves DNS.
 func Validate(addr string) error {
 	return validate(addr, false)
 }
@@ -31,13 +32,21 @@ func validate(addr string, dev bool) error {
 	if err != nil || number < 1 || number > 65535 {
 		return errors.New("redis requires a numeric port between 1 and 65535")
 	}
-	local := strings.EqualFold(strings.TrimSuffix(host, "."), "localhost")
+	normalized := strings.ToLower(strings.TrimSuffix(host, "."))
+	if normalized == "0" {
+		return errors.New("redis requires a specific host, not an unspecified address")
+	}
+	local := normalized == "localhost" || strings.HasSuffix(normalized, ".localhost")
 	if ip, err := netip.ParseAddr(host); err == nil {
 		ip = ip.Unmap()
 		if ip.IsUnspecified() {
-			return errors.New("Redis requires a specific host, not an unspecified address")
+			return errors.New("redis requires a specific host, not an unspecified address")
 		}
 		local = ip.IsLoopback()
+	} else if strings.HasPrefix(normalized, "0x") || strings.Trim(normalized, "0123456789.") == "" {
+		// System resolvers can interpret abbreviated, integer or hex IPv4 names.
+		// Conservatively protect these forms without asking DNS where they lead.
+		local = true
 	}
 	if dev {
 		if number == 6379 {

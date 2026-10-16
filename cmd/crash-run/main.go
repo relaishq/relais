@@ -81,7 +81,7 @@ func processEnv(key, addr, prefix string) []string {
 	env := []string{}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if name == "RELAIS_MOVE_DIAGNOSTICS" || name == "RELAIS_SESSIONSTORE_KEY" || name == "RELAIS_REDIS_ADDR" || name == "RELAIS_REDIS_PREFIX" || name == "RELAIS_REDIS_PASSWORD" || name == "RELAIS_PRIVATE_NETS" {
+		if name == "RELAIS_MOVE_DIAGNOSTICS" || name == "RELAIS_SESSIONSTORE_KEY" || strings.HasPrefix(name, "RELAIS_REDIS_") || name == "RELAIS_PRIVATE_NETS" {
 			continue
 		}
 		env = append(env, entry)

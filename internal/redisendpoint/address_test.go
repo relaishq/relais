@@ -9,7 +9,7 @@ func TestAddressPolicy(t *testing.T) {
 	for _, optIn := range []string{"", "0", "1"} {
 		t.Run("opt_in_"+optIn, func(t *testing.T) {
 			t.Setenv("RELAIS_REDIS_ALLOW_LOCAL_6379", optIn)
-			for _, host := range []string{"localhost", "LOCALHOST", "localhost.", "127.0.0.1", "127.8.9.10", "[::1]", "[::ffff:127.0.0.2]"} {
+			for _, host := range []string{"localhost", "LOCALHOST", "localhost.", "127.0.0.1", "127.8.9.10", "[::1]", "[::ffff:127.0.0.2]", "127.1", "2130706433", "0x7f000001", "0X7F000001", "foo.localhost", "FOO.LOCALHOST.", "1.2", "12345"} {
 				for _, port := range []string{"6379", "06379", "0006379"} {
 					addr := host + ":" + port
 					err := Validate(addr)
@@ -48,7 +48,7 @@ func TestAddressPolicy(t *testing.T) {
 
 func TestInvalidAddressAndOptIn(t *testing.T) {
 	t.Setenv("RELAIS_REDIS_ALLOW_LOCAL_6379", "1")
-	for _, addr := range []string{"", "missing-port", ":6379", ":16379", "0.0.0.0:6379", "[::]:6379", "[::ffff:0.0.0.0]:6379", "0.0.0.0:16379", "[::]:16379", "127.0.0.1:redis", "127.0.0.1:0", "127.0.0.1:65536", "user:password@cache:6379"} {
+	for _, addr := range []string{"", "missing-port", ":6379", ":16379", "0:6379", "0:16379", "0.:6379", "0.0.0.0:6379", "[::]:6379", "[::ffff:0.0.0.0]:6379", "0.0.0.0:16379", "[::]:16379", "127.0.0.1:redis", "127.0.0.1:0", "127.0.0.1:65536", "user:password@cache:6379"} {
 		if Validate(addr) == nil {
 			t.Errorf("accepted %q", addr)
 		}

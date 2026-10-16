@@ -27,6 +27,6 @@ func TestPrivateListenerAllowList(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, listener.Close())
 	// Private listeners do not change the production Redis address policy.
-	require.NoError(t, ValidateRedis("10.130.4.4:6379"))
-	require.NoError(t, ValidateRedis("10.130.4.4:16379"))
+	require.NoError(t, ValidateProductionRedis("10.130.4.4:6379"))
+	require.NoError(t, ValidateProductionRedis("10.130.4.4:16379"))
 }

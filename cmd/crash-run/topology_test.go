@@ -40,3 +40,26 @@ func TestDriverDoesNotInheritPrivateAllowList(t *testing.T) {
 	require.Empty(t, envValue(processEnv("key", "127.0.0.1:16379", "prefix"), "RELAIS_REDIS_PASSWORD"))
 	require.NotEmpty(t, os.Getenv("RELAIS_PRIVATE_NETS"))
 }
+
+func TestProcessEnvDropsInheritedRedisSettings(t *testing.T) {
+	for _, name := range []string{
+		"RELAIS_REDIS_ADDR", "RELAIS_REDIS_PREFIX", "RELAIS_REDIS_PASSWORD",
+		"RELAIS_REDIS_USERNAME", "RELAIS_REDIS_TLS", "RELAIS_REDIS_TLS_CA_FILE",
+		"RELAIS_REDIS_TLS_SERVER_NAME", "RELAIS_REDIS_TLS_CERT_FILE", "RELAIS_REDIS_TLS_KEY_FILE",
+		"RELAIS_REDIS_ALLOW_LOCAL_6379", "RELAIS_REDIS_FUTURE_SETTING",
+	} {
+		t.Setenv(name, "inherited-value")
+	}
+	t.Setenv("RELAIS_TEST_CHILD_MARKER", "preserved")
+	env := processEnv("owned-key", "127.0.0.1:16379", "owned-prefix:")
+	redisSettings := map[string]string{}
+	for _, entry := range env {
+		name, value, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(name, "RELAIS_REDIS_") {
+			require.NotContains(t, redisSettings, name, "owned settings must appear once")
+			redisSettings[name] = value
+		}
+	}
+	require.Equal(t, map[string]string{"RELAIS_REDIS_ADDR": "127.0.0.1:16379", "RELAIS_REDIS_PREFIX": "owned-prefix:"}, redisSettings)
+	require.Contains(t, env, "RELAIS_TEST_CHILD_MARKER=preserved")
+}

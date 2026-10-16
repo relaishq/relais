@@ -21,7 +21,7 @@ func TLSFromEnv() (*tls.Config, error) {
 	key := os.Getenv("RELAIS_REDIS_TLS_KEY_FILE")
 	if !enabled {
 		if ca != "" || server != "" || cert != "" || key != "" {
-			return nil, errors.New("Redis TLS settings require RELAIS_REDIS_TLS=1")
+			return nil, errors.New("redis TLS settings require RELAIS_REDIS_TLS=1")
 		}
 		return nil, nil
 	}

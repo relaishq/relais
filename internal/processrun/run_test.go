@@ -19,9 +19,9 @@ import (
 func TestProcessConfigurationRequiresDedicatedStore(t *testing.T) {
 	t.Setenv("RELAIS_REDIS_ALLOW_LOCAL_6379", "")
 	for _, addr := range []string{"", "localhost:6379", "127.0.0.1:6379", "[::1]:6379", "not-an-address", "127.0.0.1:06379", "127.0.0.1:redis", "127.0.0.1:0"} {
-		require.Error(t, ValidateRedis(addr), addr)
+		require.Error(t, ValidateProductionRedis(addr), addr)
 	}
-	require.NoError(t, ValidateRedis("127.0.0.1:16379"))
+	require.NoError(t, ValidateProductionRedis("127.0.0.1:16379"))
 	t.Setenv("RELAIS_SESSIONSTORE_KEY", "")
 	_, err := (StoreConfig{Address: "127.0.0.1:1"}).Open(context.Background())
 	require.ErrorContains(t, err, "32 bytes")
