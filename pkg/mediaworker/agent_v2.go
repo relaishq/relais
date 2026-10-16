@@ -30,18 +30,19 @@ const (
 
 // Only v8 contains this subtree. The legacy state/progress encoding is unchanged.
 type v2Envelope struct {
-	Name           string
-	Contract       string
-	TaskKinds      []string
-	Bounds         agenthost.Bounds
-	HasMoveOnly    bool
-	MoveOnlyLength int
-	Started        bool
-	Tasks          []taskIntent  `json:",omitempty"`
-	Capacity       []taskRefusal `json:",omitempty"`
-	CancelFloor    agent.Turn    `json:"cf,omitempty"`
-	Timers         []hostTimer   `json:"tm,omitempty"`
-	Playback       playbackState `json:"pb,omitzero"`
+	Name            string
+	Contract        string
+	TaskKinds       []string
+	Bounds          agenthost.Bounds
+	HasMoveOnly     bool
+	MoveOnlyLength  int
+	Started         bool
+	Tasks           []taskIntent  `json:",omitempty"`
+	Capacity        []taskRefusal `json:",omitempty"`
+	CancelFloor     agent.Turn    `json:"cf,omitempty"`
+	TimerGeneration uint64        `json:"tg,omitempty"`
+	Timers          []hostTimer   `json:"tm,omitempty"`
+	Playback        playbackState `json:"pb,omitzero"`
 }
 
 type v2Host struct {
@@ -102,8 +103,11 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 		scratch := int64(len(move.Bytes) + audioRefsBytes(move.Audio))
 		for _, t := range move.Tasks {
 			scratch += int64(len(t.Request))
-			for _, r := range append(slices.Clone(t.Results), t.Audio...) {
+			for _, r := range t.Results {
 				scratch += int64(taskResultBytes(r))
+			}
+			for _, r := range t.Audio {
+				scratch += int64(taskRetainedAudioBytes(r))
 			}
 		}
 		if scratch > int64(reg.Bounds.MaxMailboxBytes) {
@@ -359,6 +363,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	var saving atomic.Bool
 	var refusals []taskRefusal
 	var timers []hostTimer
+	var timerGeneration uint64
 	err := s.agentCall(func(ctx context.Context) error {
 		var err error
 		effects, err = h.v2.instance.Handle(ctx, event)
@@ -371,13 +376,17 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if err := validateV2Effects(event.Kind, effects); err != nil {
 			return err
 		}
-		timers, err = prepareTimers(before.V2.Timers, event, effects, s.taskNow())
+		effects = filterAudioEffects(effects, before.V2.CancelFloor)
+		timers, timerGeneration, err = prepareTimers(before.V2.Timers, before.V2.TimerGeneration, event, effects, s.taskNow())
 		if err != nil {
 			return err
 		}
 		if err = s.validateAudioEffects(effects, event); err != nil {
 			return err
 		}
+		s.mu.Lock()
+		projection := s.projectedPlaybackLocked(effects, event).snapshot()
+		s.mu.Unlock()
 		// Refusals are compact terminal intents, delivered as later transactions.
 		// Never recursively call Handle while accepting another callback's effects.
 		refusals = uniqueTaskRefusals(before.V2.Capacity)
@@ -385,7 +394,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 			refusals = refusals[1:]
 		}
 		var refused []agent.TaskResult
-		tasks, refused, err = s.prepareTaskEffects(event, effects, h.v2.tasks, refusals)
+		tasks, refused, err = s.prepareTaskEffects(event, effects, h.v2.tasks, refusals, projection)
 		if err != nil {
 			return err
 		}
@@ -401,6 +410,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 					next.intent.Cursor = event.Result.Sequence
 					if t.results[0].Chunk.Audio != nil {
 						next.audio = append(slices.Clone(t.audio), t.results[0])
+						next.mailboxBytes -= taskAudioRefBytes(t.results[0])
 					} else {
 						next.mailboxBytes -= taskResultBytes(t.results[0])
 					}
@@ -414,7 +424,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if event.Kind == agent.TaskMessage && len(prior) > 0 && prior[0].ID == event.Result.TaskID {
 			prior = prior[1:]
 		}
-		tasks, refusals, err = s.fitTaskRefusals(h.v2.tasks, tasks, prior, refusals)
+		tasks, refusals, err = s.fitTaskRefusals(h.v2.tasks, tasks, prior, refusals, projection)
 		if err != nil {
 			return err
 		}
@@ -426,7 +436,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if err := s.validateV2StateMetadata(saved); err != nil {
 			return err
 		}
-		if err := s.hostEffectsBudget(effects, event, timers, tasks, refusals, saved.MoveOnlyLength); err != nil {
+		if err := s.hostEffectsBudget(effects, event, timers, tasks, refusals, saved.MoveOnlyLength, timerGeneration); err != nil {
 			return err
 		}
 		saved = cloneV2State(saved)
@@ -476,6 +486,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		next.V2.CancelFloor = max(next.V2.CancelFloor, *effects.CancelBefore)
 	}
 	next.V2.Timers = timers
+	next.V2.TimerGeneration = timerGeneration
 	// App state, timer/task cursors and playback admission share one publication
 	// fence. Neither the pacer nor a snapshot can observe half this transaction.
 	s.mu.Lock()
@@ -592,7 +603,7 @@ func v2EnvelopeEqual(a, b *v2Envelope) bool {
 	}
 	return a.Name == b.Name && a.Contract == b.Contract && slices.Equal(a.TaskKinds, b.TaskKinds) && a.Bounds == b.Bounds &&
 		a.HasMoveOnly == b.HasMoveOnly && a.MoveOnlyLength == b.MoveOnlyLength && a.Started == b.Started && taskIntentsEqual(a.Tasks, b.Tasks) && slices.Equal(a.Capacity, b.Capacity) &&
-		a.CancelFloor == b.CancelFloor && slices.Equal(a.Timers, b.Timers) && playbackEqual(a.Playback, b.Playback)
+		a.CancelFloor == b.CancelFloor && a.TimerGeneration == b.TimerGeneration && slices.Equal(a.Timers, b.Timers) && playbackEqual(a.Playback, b.Playback)
 }
 
 func validateV2Wire(data []byte) error {

@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pion/rtp"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
@@ -14,6 +15,7 @@ import (
 const (
 	playbackWindowDuration = 300 * time.Millisecond
 	playbackWindowBytes    = 4 << 10
+	playbackRebaseAfter    = 20 * time.Millisecond
 	// RTP header plus the largest negotiated SRTP tag must fit receiveMTU.
 	opusPacketMTU = receiveMTU - 12 - 16
 )
@@ -24,45 +26,49 @@ type hostTimer struct {
 	At         time.Time `json:"a,omitzero"`
 }
 
-func prepareTimers(before []hostTimer, event agent.Event, effects agent.Effects, now time.Time) ([]hostTimer, error) {
-	timers := slices.Clone(before)
-	if event.Kind == agent.TimerFired {
-		for i := range timers {
-			if timers[i].ID == event.Timer.ID && timers[i].Generation == event.Timer.Generation {
-				timers[i].At = time.Time{}
-			}
+const timerIDMaxBytes = 128
+
+func prepareTimers(before []hostTimer, generation uint64, event agent.Event, effects agent.Effects, now time.Time) ([]hostTimer, uint64, error) {
+	// Older experimental checkpoints stored per-ID tombstones. Retain their
+	// highest generation, then discard fired/cancelled entries at this boundary.
+	timers := make([]hostTimer, 0, len(before))
+	for _, timer := range before {
+		generation = max(generation, timer.Generation)
+		if timer.At.IsZero() {
+			continue
 		}
+		if event.Kind == agent.TimerFired && timer.ID == event.Timer.ID && timer.Generation == event.Timer.Generation {
+			continue
+		}
+		timers = append(timers, timer)
 	}
 	update := func(id string, after time.Duration, armed bool) error {
-		if id == "" || after < 0 {
-			return fmt.Errorf("%w: invalid timer", agent.ErrIncompatibleAgent)
+		if id == "" || len(id) > timerIDMaxBytes || !utf8.ValidString(id) || after < 0 {
+			return fmt.Errorf("%w: invalid timer ID or duration", agent.ErrIncompatibleAgent)
 		}
-		i := slices.IndexFunc(timers, func(t hostTimer) bool { return t.ID == id })
-		if i < 0 {
-			i = len(timers)
-			timers = append(timers, hostTimer{ID: id})
+		if !armed {
+			timers = slices.DeleteFunc(timers, func(t hostTimer) bool { return t.ID == id })
+			return nil
 		}
-		if timers[i].Generation == ^uint64(0) {
+		if generation == ^uint64(0) {
 			return fmt.Errorf("%w: timer generation exhausted", agent.ErrCapacity)
 		}
-		timers[i].Generation++
-		timers[i].At = time.Time{}
-		if armed {
-			timers[i].At = now.Add(after)
-		}
+		generation++
+		timers = slices.DeleteFunc(timers, func(t hostTimer) bool { return t.ID == id })
+		timers = append(timers, hostTimer{ID: id, Generation: generation, At: now.Add(after)})
 		return nil
 	}
 	for _, id := range effects.CancelTimers {
 		if err := update(id, 0, false); err != nil {
-			return nil, err
+			return nil, generation, err
 		}
 	}
 	for _, spec := range effects.SetTimers {
 		if err := update(spec.ID, spec.After, true); err != nil {
-			return nil, err
+			return nil, generation, err
 		}
 	}
-	return timers, nil
+	return timers, generation, nil
 }
 
 // Called only by the actor. Each due generation is its own bounded transaction.
@@ -126,22 +132,26 @@ type audioSpan struct {
 	Count    uint32       `json:"n"`
 }
 type playbackState struct {
-	NextAt      time.Time    `json:"a,omitzero"`
-	NextTS      uint32       `json:"t,omitempty"`
-	Initialized bool         `json:"i,omitempty"`
-	Pending     int          `json:"p,omitempty"`
-	Length      int          `json:"l,omitempty"`
-	Window      []audioSpan  `json:"w,omitempty"`
-	Notify      []agent.Turn `json:"f,omitempty"`
+	NextAt         time.Time     `json:"a,omitzero"`
+	NextTS         uint32        `json:"t,omitempty"`
+	Initialized    bool          `json:"i,omitempty"`
+	Pending        int           `json:"p,omitempty"`
+	Length         int           `json:"l,omitempty"`
+	Duration       time.Duration `json:"d,omitempty"`
+	referenceBytes int
+	Window         []audioSpan  `json:"w,omitempty"`
+	Notify         []agent.Turn `json:"f,omitempty"`
 }
 type playbackRuntime struct {
-	queue       []agent.Audio
-	payloads    map[audioKey]playbackPayload
-	nextAt      time.Time
-	nextTS      uint32
-	initialized bool
-	length      int
-	notify      []agent.Turn
+	queue          []agent.Audio
+	payloads       map[audioKey]playbackPayload
+	nextAt         time.Time
+	nextTS         uint32
+	initialized    bool
+	length         int
+	duration       time.Duration
+	referenceBytes int
+	notify         []agent.Turn
 }
 
 func audioRefsBytes(refs []agent.Audio) int {
@@ -152,7 +162,7 @@ func audioRefsBytes(refs []agent.Audio) int {
 	return n
 }
 func playbackEqual(a, b playbackState) bool {
-	return a.NextAt.Equal(b.NextAt) && a.NextTS == b.NextTS && a.Initialized == b.Initialized && a.Pending == b.Pending && a.Length == b.Length && slices.Equal(a.Window, b.Window) && slices.Equal(a.Notify, b.Notify)
+	return a.NextAt.Equal(b.NextAt) && a.NextTS == b.NextTS && a.Initialized == b.Initialized && a.Pending == b.Pending && a.Length == b.Length && a.Duration == b.Duration && slices.Equal(a.Window, b.Window) && slices.Equal(a.Notify, b.Notify)
 }
 func (p *playbackRuntime) packet(a agent.Audio) ([]byte, time.Duration, bool) {
 	payload, ok := p.payloads[audioKey{a.Source.TaskID, a.Source.Sequence}]
@@ -162,8 +172,8 @@ func (p *playbackRuntime) packet(a agent.Audio) ([]byte, time.Duration, bool) {
 	}
 	return payload.audio.Packets[offset], payload.durations[offset], true
 }
-func (p *playbackRuntime) snapshot() playbackState {
-	state := playbackState{NextAt: p.nextAt, NextTS: p.nextTS, Initialized: p.initialized, Pending: len(p.queue), Length: p.length, Notify: slices.Clone(p.notify)}
+func (p playbackRuntime) snapshot() playbackState {
+	state := playbackState{NextAt: p.nextAt, NextTS: p.nextTS, Initialized: p.initialized, Pending: len(p.queue), Length: p.length, Duration: p.duration, referenceBytes: p.referenceBytes, Notify: slices.Clone(p.notify)}
 	var duration time.Duration
 	bytes := 0
 	for _, ref := range p.queue {
@@ -180,13 +190,34 @@ func (p *playbackRuntime) snapshot() playbackState {
 		n := len(state.Window)
 		if n > 0 && state.Window[n-1].Task == ref.Source.TaskID && state.Window[n-1].Sequence == ref.Source.Sequence && state.Window[n-1].Turn == ref.Turn && state.Window[n-1].Offset+state.Window[n-1].Count == ref.Source.PacketOffset {
 			state.Window[n-1].Count++
-		} else {
+		} else if n == 0 {
 			state.Window = append(state.Window, audioSpan{Task: ref.Source.TaskID, Sequence: ref.Source.Sequence, Turn: ref.Turn, Offset: ref.Source.PacketOffset, Count: 1})
+		} else {
+			break
 		}
 	}
 	return state
 }
 func (s *session) playbackSnapshotLocked() playbackState { return s.agent.v2.playback.snapshot() }
+
+func filterAudioEffects(e agent.Effects, floor agent.Turn) agent.Effects {
+	if e.CancelBefore != nil {
+		floor = max(floor, *e.CancelBefore)
+	}
+	if e.ClearAudioBefore != nil {
+		floor = max(floor, *e.ClearAudioBefore)
+	}
+	if len(e.Audio) > 0 {
+		audio := make([]agent.Audio, 0, len(e.Audio))
+		for _, ref := range e.Audio {
+			if ref.Turn >= floor {
+				audio = append(audio, ref)
+			}
+		}
+		e.Audio = audio
+	}
+	return e
+}
 
 func (s *session) validateAudioEffects(e agent.Effects, event agent.Event) error {
 	s.mu.Lock()
@@ -200,8 +231,8 @@ func (s *session) validateAudioEffects(e agent.Effects, event agent.Event) error
 		if task < 0 || s.agent.v2.tasks[task].intent.Turn != ref.Turn {
 			return fmt.Errorf("%w: audio reference turn mismatch", agent.ErrIncompatibleAgent)
 		}
-		if ref.Source.Sequence > s.agent.v2.tasks[task].intent.Cursor && (event.Result == nil || event.Result.TaskID != ref.Source.TaskID || event.Result.Sequence != ref.Source.Sequence) {
-			return fmt.Errorf("%w: audio reference was not delivered", agent.ErrIncompatibleAgent)
+		if event.Kind != agent.TaskMessage || event.Result == nil || event.Result.Chunk.Audio == nil || ref.Source.TaskID != event.Result.TaskID || ref.Source.Sequence != event.Result.Sequence || ref.Turn != event.Result.Turn {
+			return fmt.Errorf("%w: audio must reference the current task result", agent.ErrIncompatibleAgent)
 		}
 	}
 	return nil
@@ -221,9 +252,13 @@ func (s *session) projectedPlaybackLocked(e agent.Effects, event agent.Event) pl
 	}
 	p.queue = append(p.queue, e.Audio...)
 	p.length = 0
+	p.duration = 0
+	p.referenceBytes = 0
 	for _, ref := range p.queue {
-		data, _, _ := p.packet(ref)
+		data, d, _ := p.packet(ref)
 		p.length += len(data)
+		p.duration += d
+		p.referenceBytes += len(ref.Source.TaskID) + 32
 	}
 	p.notify = slices.Clone(p.notify)
 	if event.Kind == agent.PlaybackFinished {
@@ -234,7 +269,7 @@ func (s *session) projectedPlaybackLocked(e agent.Effects, event agent.Event) pl
 	}
 	return p
 }
-func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers []hostTimer, tasks []*localTask, refusals []taskRefusal, appBytes int) error {
+func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers []hostTimer, tasks []*localTask, refusals []taskRefusal, appBytes int, timerGeneration ...uint64) error {
 	s.mu.Lock()
 	p := s.projectedPlaybackLocked(e, event)
 	envelope := *s.agent.latest.V2
@@ -242,6 +277,13 @@ func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers [
 	queueBytes := audioRefsBytes(p.queue)
 	s.mu.Unlock()
 	envelope.Timers = timers
+	if len(timerGeneration) > 0 {
+		envelope.TimerGeneration = timerGeneration[0]
+	} else {
+		for _, timer := range timers {
+			envelope.TimerGeneration = max(envelope.TimerGeneration, timer.Generation)
+		}
+	}
 	envelope.Capacity = refusals
 	if e.CancelBefore != nil {
 		envelope.CancelFloor = max(envelope.CancelFloor, *e.CancelBefore)
@@ -252,6 +294,9 @@ func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers [
 	}
 	data, _ := json.Marshal(envelope)
 	if len(data) > min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes) {
+		if len(e.Audio) > 0 {
+			return errTaskAdmissionBackpressure
+		}
 		return fmt.Errorf("%w: playback/timer metadata", agent.ErrCapacity)
 	}
 	n := int64(appBytes + queueBytes)
@@ -262,9 +307,18 @@ func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers [
 		}
 	}
 	if n > int64(s.agent.v2.registration.Bounds.MaxMailboxBytes) {
+		if len(e.Audio) > 0 {
+			return errTaskAdmissionBackpressure
+		}
 		return agent.ErrCapacity
 	}
-	return s.reserveMoveBytes(n)
+	if err := s.reserveMoveBytes(n); err != nil {
+		if len(e.Audio) > 0 {
+			return errTaskAdmissionBackpressure
+		}
+		return err
+	}
+	return nil
 }
 func (s *session) wakePacer() {
 	select {
@@ -309,27 +363,54 @@ func (s *session) restorePlayback(move *movePayload) error {
 	if move != nil {
 		p.queue = slices.Clone(move.Audio)
 		p.length = 0
+		p.duration = 0
+		p.referenceBytes = 0
 		for _, ref := range p.queue {
 			task := slices.IndexFunc(s.agent.v2.tasks, func(t *localTask) bool { return t.intent.ID == ref.Source.TaskID })
 			if task < 0 || s.agent.v2.tasks[task].intent.Turn != ref.Turn || ref.Source.Sequence > s.agent.v2.tasks[task].intent.Cursor {
 				return fmt.Errorf("%w: invalid exact audio reference", agent.ErrIncompatibleAgent)
 			}
-			if data, _, ok := p.packet(ref); !ok {
+			if data, d, ok := p.packet(ref); !ok {
 				return fmt.Errorf("%w: missing exact audio payload", agent.ErrIncompatibleAgent)
 			} else {
 				p.length += len(data)
+				p.duration += d
+				p.referenceBytes += len(ref.Source.TaskID) + 32
 			}
 		}
 		actual := p.snapshot()
+		// Read initial experimental v8 exports whose window had multiple spans
+		// and no cached duration. Exact payload/reference validation still applies.
+		if saved.Duration == 0 {
+			saved.Duration = actual.Duration
+			if len(saved.Window) > 1 {
+				saved.Window = saved.Window[:1]
+			}
+		}
 		if !playbackEqual(actual, saved) {
 			return fmt.Errorf("%w: exact playback window mismatch", agent.ErrIncompatibleAgent)
 		}
-	} else {
+	} else if saved.Pending > 0 {
 		// No persisted reference is activated without its payload. The notice tells
 		// the application to clear unsent speech and restart on a later event.
 		p.notify = nil
 	}
+	if p.initialized {
+		p.rebase(s.taskNow())
+	}
 	return nil
+}
+
+// rtpClockTicks avoids overflowing an int64 nanosecond duration when a saved
+// clock is far in the past. RTP timestamp wrap is intentional.
+func rtpClockTicks(elapsed time.Duration) uint32 {
+	return uint32(uint64(elapsed/time.Second)*48000 + uint64(elapsed%time.Second)*48000/uint64(time.Second))
+}
+func (p *playbackRuntime) rebase(now time.Time) {
+	if !p.nextAt.IsZero() && now.After(p.nextAt) {
+		p.nextTS += rtpClockTicks(now.Sub(p.nextAt))
+		p.nextAt = now
+	}
 }
 
 // A dedicated output loop keeps DTX and slow callbacks out of the send clock.
@@ -363,7 +444,7 @@ func (s *session) paceOne() (time.Duration, error) {
 	defer s.mu.Unlock()
 	p := &s.agent.v2.playback
 	if s.agent.paused || s.worker.paused.Load() || s.fenced.Load() || s.ctx.Err() != nil || s.srtpOut == nil || len(p.queue) == 0 {
-		return 10 * time.Millisecond, nil
+		return time.Hour, nil
 	}
 	now := s.taskClockLocked()
 	if now.Before(p.nextAt) {
@@ -372,25 +453,33 @@ func (s *session) paceOne() (time.Duration, error) {
 	ref := p.queue[0]
 	payload, duration, ok := p.packet(ref)
 	if !ok {
-		return 10 * time.Millisecond, nil
-	} // restore/admission reject missing data
+		return 0, fmt.Errorf("%w: missing paced audio payload", agent.ErrIncompatibleAgent)
+	}
+	clockAt, clockTS, clockInitialized := p.nextAt, p.nextTS, p.initialized
 	if !p.initialized {
 		p.nextTS = s.state.Audio.InitialTS
 		p.initialized = true
+		p.nextAt = now
+	}
+	// Small scheduler delays are absorbed by the absolute schedule. A stall
+	// beyond 20 ms rebases once, including RTP media time.
+	if now.Sub(p.nextAt) >= playbackRebaseAfter {
+		p.rebase(now)
 	}
 	header := rtp.Header{Version: 2, PayloadType: s.state.Audio.PayloadType, SSRC: s.state.Audio.SSRC, Timestamp: p.nextTS}
 	if err := s.sendAgentAudioLocked(header, payload, s.state.Agent); err != nil {
+		p.nextAt, p.nextTS, p.initialized = clockAt, clockTS, clockInitialized
 		return 0, fmt.Errorf("paced audio encryption: %w", err)
 	}
-	// Rebase every overdue send. A stalled worker sends one packet, then waits
-	// its full duration; it never drains elapsed deadlines in a catch-up loop.
-	p.nextAt = now.Add(duration)
-	p.nextTS += uint32(int64(duration) * 48000 / int64(time.Second))
+	p.nextAt = p.nextAt.Add(duration)
+	p.nextTS += rtpClockTicks(duration)
 	p.length -= len(payload)
+	p.duration -= duration
+	p.referenceBytes -= len(ref.Source.TaskID) + 32
 	p.queue[0] = agent.Audio{}
 	p.queue = p.queue[1:]
 	s.state.Agent.V2.Playback = p.snapshot()
-	return duration, nil
+	return max(0, p.nextAt.Sub(s.taskClockLocked())), nil
 }
 
 // RFC 6716 section 3 framing validation (https://www.rfc-editor.org/rfc/rfc6716.html#section-3).

@@ -551,6 +551,9 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		s.mu.Lock()
 		if !s.fenced.Load() && s.ctx.Err() == nil && s.agent != nil {
 			s.agent.paused = false
+			if s.agent.v2 != nil {
+				s.wakePacer()
+			}
 		}
 		s.mu.Unlock()
 		return nil, release, flushErr
@@ -569,6 +572,9 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 	defer func() {
 		if !s.fenced.Load() && s.ctx.Err() == nil && s.agent != nil {
 			s.agent.paused = false
+			if s.agent.v2 != nil {
+				s.wakePacer()
+			}
 		}
 	}()
 

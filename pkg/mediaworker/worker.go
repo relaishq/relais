@@ -385,7 +385,18 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 	if cfg.Relay != nil {
 		workerprobe.Register(localAddr, worker.captureZombie)
 		workerprobe.RegisterLifecycle(localAddr, workerprobe.Lifecycle{
-			Kill: worker.kill, Pause: worker.paused.Store,
+			Kill: worker.kill, Pause: func(paused bool) {
+				worker.paused.Store(paused)
+				if !paused {
+					worker.mu.Lock()
+					for _, s := range worker.sessions {
+						if s.agent != nil && s.agent.v2 != nil {
+							s.wakePacer()
+						}
+					}
+					worker.mu.Unlock()
+				}
+			},
 			SnapshotReady: func(id string) bool { s := worker.session(id); return s != nil && s.snapshotStored.Load() },
 		})
 	}

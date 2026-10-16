@@ -106,7 +106,12 @@ type Event struct {
 	Playback *PlaybackNotice
 }
 
-// Effects are validated atomically. Audio appends individual packet references.
+// Effects are validated atomically. Audio appends individual packet references
+// only to the TaskMessage currently being delivered. Append references in that
+// callback; older results can be pruned after acknowledgement. References below
+// CancelBefore, the saved cancellation floor, or this callback's ClearAudioBefore
+// are ignored. Timers use a session-wide generation, including after ID reuse.
+// Timer IDs must be valid UTF-8 and at most 128 bytes.
 // CancelBefore is a monotonic task turn floor; ClearAudioBefore clears queued
 // packets immediately. NotifyPlaybackFinished reports local send completion.
 // SetTimers resets each named timer with a new generation and a store-clock

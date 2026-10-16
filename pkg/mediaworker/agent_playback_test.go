@@ -119,30 +119,30 @@ func TestPlaybackPacerRebasesAndKeepsCounters(t *testing.T) {
 	}
 	delay, err := s.paceOne()
 	require.NoError(t, err)
-	require.Equal(t, 20*time.Millisecond, delay)
+	require.InDelta(t, float64(20*time.Millisecond), float64(delay), float64(2*time.Millisecond))
 	first := receive()
 	require.EqualValues(t, 65534, first.SequenceNumber)
 	s.storeClock = now.Add(time.Second)
 	s.storeClockAt = time.Now() // long output stall
 	delay, err = s.paceOne()
 	require.NoError(t, err)
-	require.Equal(t, 20*time.Millisecond, delay)
+	require.InDelta(t, float64(20*time.Millisecond), float64(delay), float64(2*time.Millisecond))
 	second := receive()
 	require.EqualValues(t, 65535, second.SequenceNumber)
-	require.Equal(t, first.Timestamp+960, second.Timestamp)
+	require.InDelta(t, float64(first.Timestamp+48000), float64(second.Timestamp), 48, "RTP clock includes the one-second stall")
 	delay, err = s.paceOne()
 	require.NoError(t, err)
 	require.Greater(t, delay, 15*time.Millisecond, "no catch-up after a stall")
 	require.EqualValues(t, 2, s.state.Audio.Packets)
 	s.storeClock = now.Add(2 * time.Second)
 	s.storeClockAt = time.Now()
-	s.paceOne()
+	_, _ = s.paceOne()
 	third := receive()
 	require.Zero(t, third.SequenceNumber)
 	require.EqualValues(t, 65536, s.state.Audio.HighestSentIndex)
 	// Empty playback allocates no further SRTP indexes.
 	s.agent.v2.playback.queue = nil
-	s.paceOne()
+	_, _ = s.paceOne()
 	require.EqualValues(t, 3, s.state.Audio.Packets)
 	var rates CheckpointState
 	s.checkpointRates(&rates)
@@ -177,10 +177,10 @@ func TestTimerGenerationResetCancelAndRestore(t *testing.T) {
 	require.Equal(t, handles, a.handles)
 	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: time.Second}}, CancelTimers: []string{"a/12:"}}
 	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
-	require.EqualValues(t, 4, s.agent.latest.V2.Timers[0].Generation)
+	require.EqualValues(t, 3, s.agent.latest.V2.Timers[0].Generation)
 	a.effects = agent.Effects{CancelTimers: []string{"a/12:"}}
 	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
-	require.True(t, s.agent.latest.V2.Timers[0].At.IsZero())
+	require.Empty(t, s.agent.latest.V2.Timers)
 	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "negative", After: -1}}}
 	require.ErrorIs(t, s.handleV2Event(agent.Event{Kind: agent.Started}), agent.ErrIncompatibleAgent)
 	require.NotEqual(t, clockEventID("timer", "a", 12), clockEventID("timer", "a1", 2))
@@ -370,11 +370,15 @@ func TestPlaybackVariablePacketDurations(t *testing.T) {
 	s.state.Audio = trackState{MID: "0", SSRC: 123, PayloadType: 111, InitialSeq: 100, InitialTS: 1}
 	expectedTS := uint32(1)
 	for i, d := range []time.Duration{2500 * time.Microsecond, 60 * time.Millisecond, 120 * time.Millisecond} {
-		s.storeClock = time.Date(2020, 1, 1, 0, 0, i, 0, time.UTC)
+		if i == 0 {
+			s.storeClock = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+		} else {
+			s.storeClock = s.agent.v2.playback.nextAt
+		}
 		s.storeClockAt = time.Now()
 		delay, err := s.paceOne()
 		require.NoError(t, err)
-		require.Equal(t, d, delay)
+		require.InDelta(t, float64(d), float64(delay), float64(2*time.Millisecond))
 		require.Equal(t, expectedTS, s.state.Audio.LastTimestamp)
 		expectedTS += uint32(int64(d) * 48000 / int64(time.Second))
 		require.Equal(t, expectedTS, s.agent.v2.playback.nextTS)

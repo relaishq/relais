@@ -181,9 +181,12 @@ func (s *session) taskNow() time.Time {
 func (s *session) taskBudget(tasks []*localTask, appBytes int) error {
 	return s.taskBudgetWithRefusals(tasks, appBytes, s.agent.latest.V2.Capacity)
 }
-func (s *session) taskBudgetWithRefusals(tasks []*localTask, appBytes int, refusals []taskRefusal) error {
+func (s *session) taskBudgetWithRefusals(tasks []*localTask, appBytes int, refusals []taskRefusal, projection ...playbackState) error {
 	s.mu.Lock()
 	queueBytes := audioRefsBytes(s.agent.v2.playback.queue)
+	if len(projection) > 0 {
+		queueBytes = projection[0].referenceBytes
+	}
 	s.mu.Unlock()
 	n := int64(appBytes + queueBytes)
 	intents := make([]taskIntent, 0, len(tasks))
@@ -196,7 +199,7 @@ func (s *session) taskBudgetWithRefusals(tasks []*localTask, appBytes int, refus
 			n += int64(t.terminalBytes)
 		}
 	}
-	if err := s.taskMetadataBudget(intents, refusals, false); err != nil {
+	if err := s.taskMetadataBudget(intents, refusals, false, projection...); err != nil {
 		return err
 	}
 	if n > int64(s.agent.v2.registration.Bounds.MaxMailboxBytes) {
@@ -204,10 +207,13 @@ func (s *session) taskBudgetWithRefusals(tasks []*localTask, appBytes int, refus
 	}
 	return s.reserveMoveBytes(n)
 }
-func (s *session) taskMetadataBudget(intents []taskIntent, refusals []taskRefusal, admission bool) error {
+func (s *session) taskMetadataBudget(intents []taskIntent, refusals []taskRefusal, admission bool, projection ...playbackState) error {
 	envelope := *s.agent.latest.V2
 	s.mu.Lock()
 	envelope.Playback = s.playbackSnapshotLocked()
+	if len(projection) > 0 {
+		envelope.Playback = projection[0]
+	}
 	s.mu.Unlock()
 	envelope.Tasks = intents
 	envelope.Capacity = refusals
@@ -244,17 +250,17 @@ func (s *session) taskMetadataBudget(intents []taskIntent, refusals []taskRefusa
 	}
 	return nil
 }
-func (s *session) taskAdmissionBudget(tasks []*localTask, appBytes int, refusals []taskRefusal) error {
+func (s *session) taskAdmissionBudget(tasks []*localTask, appBytes int, refusals []taskRefusal, projection ...playbackState) error {
 	intents := make([]taskIntent, len(tasks))
 	for i, t := range tasks {
 		intents[i] = t.intent
 	}
-	if err := s.taskMetadataBudget(intents, refusals, true); err != nil {
+	if err := s.taskMetadataBudget(intents, refusals, true, projection...); err != nil {
 		return err
 	}
-	return s.taskBudgetWithRefusals(tasks, appBytes, refusals)
+	return s.taskBudgetWithRefusals(tasks, appBytes, refusals, projection...)
 }
-func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, base []*localTask, refusals []taskRefusal) ([]*localTask, []agent.TaskResult, error) {
+func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, base []*localTask, refusals []taskRefusal, projection ...playbackState) ([]*localTask, []agent.TaskResult, error) {
 	h := s.agent.v2
 	next := slices.Clone(base)
 	var refused []agent.TaskResult
@@ -332,7 +338,7 @@ func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, b
 		for _, r := range refused {
 			guard = append(guard, taskRefusal{ID: r.TaskID, Turn: r.Turn})
 		}
-		if err := s.taskAdmissionBudget(next, s.agent.latest.V2.MoveOnlyLength, guard); err != nil {
+		if err := s.taskAdmissionBudget(next, s.agent.latest.V2.MoveOnlyLength, guard, projection...); err != nil {
 			if errors.Is(err, agent.ErrCapacity) || errors.Is(err, ErrMoveBudget) {
 				next = next[:len(next)-1]
 				refused = append(refused, capacity)
@@ -361,12 +367,12 @@ func uniqueTaskRefusals(in []taskRefusal) []taskRefusal {
 	}
 	return out
 }
-func (s *session) fitTaskRefusals(_, tasks []*localTask, prior, refusals []taskRefusal) ([]*localTask, []taskRefusal, error) {
+func (s *session) fitTaskRefusals(_, tasks []*localTask, prior, refusals []taskRefusal, projection ...playbackState) ([]*localTask, []taskRefusal, error) {
 	intents := make([]taskIntent, len(tasks))
 	for i, t := range tasks {
 		intents[i] = t.intent
 	}
-	if err := s.taskMetadataBudget(intents, refusals, true); err == nil {
+	if err := s.taskMetadataBudget(intents, refusals, true, projection...); err == nil {
 		return tasks, refusals, nil
 	}
 	old := map[agent.TaskID]bool{}
@@ -379,7 +385,7 @@ func (s *session) fitTaskRefusals(_, tasks []*localTask, prior, refusals []taskR
 			fresh = append(fresh, r)
 		}
 	}
-	if err := s.taskMetadataBudget(nil, fresh, false); err != nil {
+	if err := s.taskMetadataBudget(nil, fresh, false, projection...); err != nil {
 		return nil, nil, fmt.Errorf("%w: callback task refusals exceed host metadata", agent.ErrCapacity)
 	}
 	return nil, nil, errTaskAdmissionBackpressure
@@ -442,7 +448,7 @@ func (s *session) cancelTask(t *localTask) {
 	t.results = nil
 	t.mailboxBytes = 0
 	for _, r := range t.audio {
-		t.mailboxBytes += taskResultBytes(r)
+		t.mailboxBytes += taskRetainedAudioBytes(r)
 	}
 	t.intent.Published = t.intent.Cursor
 	t.intent.Phase = taskCanceled
@@ -939,7 +945,7 @@ func (s *session) restoreTasks(move *movePayload) error {
 			t.results = slices.Clone(exact.Results)
 			t.audio = slices.Clone(exact.Audio)
 			for i, r := range t.audio {
-				t.mailboxBytes += taskResultBytes(r)
+				t.mailboxBytes += taskRetainedAudioBytes(r)
 				t.audio[i].Chunk = cloneChunk(r.Chunk)
 			}
 			for i, r := range t.results {
@@ -1039,7 +1045,10 @@ func (s *session) v2AgentLoop() {
 	go func() { defer s.worker.running.Done(); s.playbackLoop() }()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
+	ready := make(chan struct{})
+	close(ready)
 	for {
+		var again <-chan struct{}
 		// Export has priority over new work and over mailbox consumption.
 		select {
 		case request := <-s.agent.flush:
@@ -1063,19 +1072,28 @@ func (s *session) v2AgentLoop() {
 				s.agentFailed(err)
 				return
 			}
+			if h.pendingInput == nil && s.agent.latest.V2.Started {
+				select {
+				case in := <-s.agent.queue:
+					h.pendingInput = &in
+				default:
+				}
+			}
+			if !paused && h.pendingInput != nil {
+				if err := s.processAudio(*h.pendingInput); err == nil {
+					h.pendingInput = nil
+				} else if !errors.Is(err, errTaskAdmissionBackpressure) {
+					s.agentFailed(err)
+					return
+				}
+			}
 			s.pruneTasks()
 			s.launchTasks()
-			if _, err := s.deliverTaskResult(); err != nil {
+			if delivered, err := s.deliverTaskResult(); err != nil {
 				s.agentFailed(err)
 				return
-			}
-		}
-		if !paused && h.pendingInput != nil {
-			if err := s.processAudio(*h.pendingInput); err == nil {
-				h.pendingInput = nil
-			} else if !errors.Is(err, errTaskAdmissionBackpressure) {
-				s.agentFailed(err)
-				return
+			} else if delivered {
+				again = ready
 			}
 		}
 		input := s.agent.queue
@@ -1101,6 +1119,7 @@ func (s *session) v2AgentLoop() {
 				}
 			}
 		case <-ticker.C:
+		case <-again:
 		}
 	}
 }
@@ -1123,7 +1142,7 @@ func taskResultBytes(r agent.TaskResult) int {
 		r.Chunk.Audio = &agent.EncodedAudio{}
 		n += 6 * len(c.Audio.Format)
 		for _, p := range c.Audio.Packets {
-			n += base64.StdEncoding.EncodedLen(len(p)) + 40 // owned packet slice and cached duration, sized per packet
+			n += base64.StdEncoding.EncodedLen(len(p)) + 40 + len(r.TaskID) + 32 // owned packet slice and cached duration, sized per packet
 		}
 	}
 	b, _ := json.Marshal(r)
@@ -1144,6 +1163,12 @@ func (s *session) pruneTasks() {
 	}
 	progress := s.state.Agent.Progress
 	received := maps.Clone(s.state.SRTP.Inbound)
+	liveAudio := make(map[audioKey]struct{}, len(h.playback.queue))
+	liveTasks := make(map[agent.TaskID]struct{})
+	for _, ref := range h.playback.queue {
+		liveAudio[audioKey{ref.Source.TaskID, ref.Source.Sequence}] = struct{}{}
+		liveTasks[ref.Source.TaskID] = struct{}{}
+	}
 	s.mu.Unlock()
 	next := h.tasks[:0]
 	payloadChanged := false
@@ -1165,9 +1190,9 @@ func (s *session) pruneTasks() {
 			s.mu.Lock()
 			kept := t.audio[:0]
 			for _, r := range t.audio {
-				live := slices.ContainsFunc(h.playback.queue, func(a agent.Audio) bool { return a.Source.TaskID == r.TaskID && a.Source.Sequence == r.Sequence })
+				_, live := liveAudio[audioKey{r.TaskID, r.Sequence}]
 				if r.Sequence <= d.Cursor && !live {
-					t.mailboxBytes -= taskResultBytes(r)
+					t.mailboxBytes -= taskRetainedAudioBytes(r)
 					delete(h.playback.payloads, audioKey{r.TaskID, r.Sequence})
 					payloadChanged = true
 				} else {
@@ -1194,7 +1219,7 @@ func (s *session) pruneTasks() {
 			}
 		}
 		s.mu.Lock()
-		if slices.ContainsFunc(h.playback.queue, func(a agent.Audio) bool { return a.Source.TaskID == t.intent.ID }) {
+		if _, live := liveTasks[t.intent.ID]; live {
 			ack = false
 		}
 		if ack {
@@ -1215,3 +1240,13 @@ func (s *session) pruneTasks() {
 		s.taskStateChanged()
 	}
 }
+
+// Reference storage is reserved before Emit copies a chunk, then transferred
+// from its result reservation to the actual playback queue on consumption.
+func taskAudioRefBytes(r agent.TaskResult) int {
+	if r.Chunk.Audio == nil {
+		return 0
+	}
+	return len(r.Chunk.Audio.Packets) * (len(r.TaskID) + 32)
+}
+func taskRetainedAudioBytes(r agent.TaskResult) int { return taskResultBytes(r) - taskAudioRefBytes(r) }

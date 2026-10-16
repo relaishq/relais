@@ -155,14 +155,19 @@ func awaitPacerEvent(t *testing.T, ch <-chan agent.Event, kind agent.EventKind) 
 		}
 	}
 }
-func assertPacerSequence(t *testing.T, all []pacedPacket, packets [][]byte) {
+func assertPacerSequence(t *testing.T, all []pacedPacket, packets [][]byte, clockGaps ...bool) {
 	t.Helper()
 	require.Len(t, all, len(packets))
 	for i, p := range all {
 		require.Equal(t, packets[i], p.packet.Payload, "packet %d", i)
 		if i > 0 {
 			require.Equal(t, all[i-1].packet.SequenceNumber+1, p.packet.SequenceNumber, "sequence %d", i)
-			require.Equal(t, all[i-1].packet.Timestamp+960, p.packet.Timestamp, "timestamp %d", i)
+			if len(clockGaps) > 0 && clockGaps[0] {
+				actual := time.Duration(uint32(p.packet.Timestamp-all[0].packet.Timestamp)) * time.Second / 48000
+				require.InDelta(t, float64(p.at.Sub(all[0].at)), float64(actual), float64(50*time.Millisecond), "timestamp %d follows output time", i)
+			} else {
+				require.Equal(t, all[i-1].packet.Timestamp+960, p.packet.Timestamp, "timestamp %d", i)
+			}
 		}
 	}
 }
@@ -181,7 +186,7 @@ func TestV2PacerSilentCallerAndFinished(t *testing.T) {
 			all = append(all, nextPaced(t, received))
 		}
 		assertPacerSequence(t, all, pacerFixtures(t, 20))
-		require.GreaterOrEqual(t, all[19].at.Sub(all[0].at), 340*time.Millisecond, "no burst during caller silence")
+		require.InDelta(t, float64(380*time.Millisecond), float64(all[19].at.Sub(all[0].at)), float64(380*time.Millisecond)/50+float64(5*time.Millisecond), "steady output clock during caller silence")
 		finished := awaitPacerEvent(t, events[0], agent.PlaybackFinished)
 		require.EqualValues(t, 1, finished.Playback.Turn)
 		timer := awaitPacerEvent(t, events[0], agent.TimerFired)
@@ -222,7 +227,7 @@ func TestV2PacerNoCatchupAfterStall(t *testing.T) {
 		for range 20 {
 			all = append(all, nextPaced(t, received))
 		}
-		assertPacerSequence(t, all, pacerFixtures(t, 20))
+		assertPacerSequence(t, all, pacerFixtures(t, 20), true)
 		require.Greater(t, all[5].at.Sub(all[4].at), 120*time.Millisecond)
 		require.GreaterOrEqual(t, all[19].at.Sub(all[5].at), 250*time.Millisecond, "overdue deadlines cannot drain as a burst")
 		_, err = call.Hangup(ctx)
@@ -251,7 +256,7 @@ func TestV2PacerExactMoveAndTimer(t *testing.T) {
 		for len(all) < 80 {
 			all = append(all, nextPaced(t, received))
 		}
-		assertPacerSequence(t, all, pacerFixtures(t, 80))
+		assertPacerSequence(t, all, pacerFixtures(t, 80), true)
 		timer := awaitPacerEvent(t, events[1], agent.TimerFired)
 		require.EqualValues(t, 1, timer.Timer.Generation)
 		finish := awaitPacerEvent(t, events[1], agent.PlaybackFinished)
@@ -404,7 +409,7 @@ func TestV2PacerMoveWhileGenerating(t *testing.T) {
 		for len(all) < 80 {
 			all = append(all, nextPaced(t, received))
 		}
-		assertPacerSequence(t, all, packets)
+		assertPacerSequence(t, all, packets, true)
 		awaitPacerEvent(t, events[1], agent.PlaybackFinished)
 		_, err = call.Hangup(ctx)
 		require.NoError(t, err)
