@@ -434,7 +434,7 @@ or claim that it is publicly available.
 
 State rollback uses **snapshot age**, not write age alone. The demo verdict
 allows snapshot age plus **one 20 ms input packet**, as documented in the
-[README agent-continuity rules][readme]. Replay can repeat work after the saved
+[demo agent-continuity rules](demo.md#agent-continuity-verdicts). Replay can repeat work after the saved
 input floor. [ADR 0005][buffer-adr] supplies duplicate input ranges and the
 conservative duplication window before callbacks start. Applications must
 make external side effects safe to repeat themselves.
@@ -665,7 +665,8 @@ drop bursts ([#127 findings][move-loss-findings]). Worker sockets set no buffer
 size, so each used the **208 KiB** default. [PR #132][udp-buffer-pr] (merged,
 part of #127) sizes the relay, worker and caller UDP buffers and reads back what
 the kernel grants. The relay and worker log a warning when the kernel clamps a
-request. The README documents the recommended `rmem_max`/`wmem_max` values. The
+request. The [deployment guide](deploy.md#udp-socket-buffers) documents the recommended
+`rmem_max`/`wmem_max` values. The
 [rerun after PR #132][soak-rerun] counted **0** kernel drops in 65 million
 datagrams and lost content in **0 of about 1,350** recoveries. The
 [passing full soak][soak-pass] also had **0** kernel UDP receive-buffer errors
@@ -761,7 +762,7 @@ This closes #94's residual; it does not fix #51.
 | --- | --- | --- |
 | [#31 spec][spec] / [latest summary][phase-result] and [profile policy][profiles] | Spec says “no lost content” on lossy networks; the summary also uses that shorthand. The implemented gate permits network loss within a statistical bound. | Exact zero loss only on lossless media paths; no measured excess over baseline on lossy paths. |
 | [#31 spec][spec] and [ADR 0002][checkpoint-adr] / [ADR 0006][agent-adr] | Spec describes state staleness using checkpoint write age. ADRs distinguish snapshot-copy age, which can be older. | Use snapshot age for recovery safety and application rollback; report both ages. |
-| [README][readme] and [frame-cache documentation][frame-cache] / [ADR 0005][buffer-adr] | README retains older statements that the frame cache is process-local and the agent base does not replay input. Current docs describe Redis frame storage and agent input replay. | Use the current ADR contracts and scoped result evidence. The older README passages need separate cleanup. |
+| [README][readme] and [frame-cache documentation][frame-cache] / [ADR 0005][buffer-adr] | Earlier README claims of process-local caching and no input replay are corrected. | Redis frame storage and agent input replay follow current ADR contracts and scoped result evidence. |
 | [#31 agent spec][spec] and [ADR 0006][agent-adr] | Spec asks for decoded audio. The implemented interface accepts encoded Opus; a resumable decoded-audio adapter is deferred. | No decoded-audio or portable codec-state guarantee. |
 | [#37 earlier result][old-network-result] and [final result][network-result] | Earlier lossy-DC moves failed; the final tuned main matrix passes. | Final result supersedes the earlier matrix for these conditions. Untuned private-route performance is not accepted by the final sample. |
 | [PR #53][checkpoint-pr] and [ADR 0002][checkpoint-adr] | Earlier PR describes an RTP send limiter; current ADR measures caller source sequence rate without a send limiter. | Current ADR governs the caller input bound; no claim that a send limiter enforces it. |

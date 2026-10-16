@@ -1,53 +1,85 @@
-# Relais Media Server Architecture
+# Live media architecture
 
-## Overview
+Relais keeps a caller's WebRTC connection alive while its media worker changes.
+The live path uses Pion v4 protocol libraries directly, so it can save and restore
+connection state. It does not use the [legacy stored-frame pipeline](legacy/plugin-pipeline.md).
+The earlier `relais-core`, `pkg/server`, and Pion v3 signaling path are retired.
 
-Relais is a distributed media server that supports flexible ingress and egress of media streams through a plugin system. The architecture is designed for horizontal scalability and modularity.
+## Components and flow
 
-## Core Components
+```text
+App backend -- authenticated HTTPS --> relais-signal --> Control plane
+                                                            |
+Caller <== encrypted UDP ==> Relay <== private UDP ==> Media workers
+                              |                             |
+                              +---- Redis ownership --------+
+                                   + encrypted checkpoints
+```
 
-### 1. Media Worker (prototype)
-- `pkg/mediaworker`: a minimal WebRTC endpoint built from Pion v4 component libraries (ICE-lite, DTLS-SRTP, RTP) instead of Pion's PeerConnection, so session state can be exported and resumed on another worker
-- WHIP-style signaling: one HTTP exchange per call
-- Currently echoes the caller's Opus audio and VP8 video
-- Planned handover: several workers can share one UDP socket (`Socket`), and a live session moves between them as exported bytes (ICE credentials, DTLS connection state, SRTP indexes, outbound track counters) without the caller reconnecting
-- Tested through the call harness (`pkg/callharness`) and demonstrated by the browser echo demo (`cmd/echo-demo`)
+- **Media worker (`pkg/mediaworker`):** terminates WebRTC, using ICE-lite
+  (the caller drives network-path checks), DTLS (the encryption handshake),
+  and SRTP/SRTCP (encrypted media and control packets). The accepted media is
+  Opus audio and VP8 video. Audio runs through a per-call agent; video is echoed.
+- **Relay (`pkg/relay`):** supplies the single public UDP address advertised in
+  each answer. It reads STUN network checks, looks up the session owner, and
+  forwards other encrypted packets without decoding them. A bounded flow table
+  caches ownership. A caller route changes only after the owning worker
+  authenticates a binding request. A versioned private-leg header carries the
+  caller address between relay and worker.
+- **Control plane (`pkg/controlplane`):** places calls, moves them, drains workers
+  (moves their calls away), and detects failed workers. A takeover assigns a
+  crashed worker's call to an eligible survivor. Heartbeats also support explicit
+  rejoin acknowledgement before a returning worker can serve calls again.
+- **Session store (`pkg/sessionstore`):** records ownership leases and versioned,
+  encrypted checkpoints. An increasing lease epoch fences out an old owner: it
+  cannot keep writing as the current owner. Separate processes require Redis;
+  in-process tests can use memory. Only workers and control receive the snapshot
+  encryption key; the relay has ownership access without snapshot decryption.
+- **Signaling (`cmd/relais-signal`):** wraps private control with a bounded,
+  bearer-authenticated HTTPS API for controlled tests. It starts no media services.
+  See [connect an app](connect-an-app.md).
 
-### Relay (prototype)
-- `pkg/relay`: one public UDP address in front of the media workers; every answer advertises it as the single host candidate
-- Reads only STUN: a binding request's ICE username fragment is the session ID, which the relay looks up in the session-owner store (`pkg/sessionstore`) to find the owning worker
-- Forwards DTLS, SRTP and SRTCP without parsing them, by a bounded flow table (caller address to worker) that is only a cache of the store; a caller's route changes only after the owning worker has authenticated one of its binding requests
-- Workers bind only private sockets and reach callers through the relay over the relay leg, where a small versioned header carries the caller's address
+## Moving and restoring a call
 
-The earlier `relais-core` server (Pion v3 signaling, session control plane API) has been retired.
+A successful planned move exports ICE credentials, DTLS connection state,
+SRTP packet indexes, outbound track counters, and the accepted agent state with
+its consumed-input position. The relay holds packets while ownership changes.
+A drain applies that same move path to a worker's calls before stopping it.
+The caller receives no second offer/answer exchange and keeps the same address.
 
-### 2. Plugin System
-- Ingress plugins for media input
-- Egress plugins for media output
-- Transform plugins for media processing
-- Each plugin type runs in its own runner binary (`cmd/ingress-runner`, `cmd/egress-runner`, `cmd/transform-runner`)
+After a worker crash, control fences the old owner and restores a safe checkpoint
+on another worker. The relay buffers caller ciphertext, then replays selected
+input through the new owner. A shared encrypted Redis frame cache also supports
+video replay; a cache miss can request a live keyframe. The agent receives
+checkpoint and snapshot ages plus possible duplicate-input ranges. Recent work
+can repeat; applications must make external effects safe to repeat themselves.
+See [agent continuity](guarantees.md#agent-continuity) and
+[ADR 0006](adr/0006-agent-interface.md).
 
-### 3. Storage Backend
-- Distributed storage for media frames
-- Supports multiple implementations (Redis, Memory)
+Session snapshots carry a format version. Workers must use compatible agent
+factories and state versions. A general mixed-version upgrade is not guaranteed;
+operators must preserve compatible readers before changing writers.
 
-## Data Flow
+## Evidence and boundaries
 
-Live calls terminate on the media worker and do not use storage yet. The plugin pipeline works on stored frames:
+The [guarantee matrix](guarantees.md) gives measured conditions, known failures,
+and explicit non-guarantees. These include uncertain-reply rollback failures,
+buffer overflow or expiry, and untested cross-host relay failover. A relay
+restart can restore persisted routes at the same addresses; an optional standby
+is limited to the same host. Control-plane crash recovery is not established.
 
-1. Ingress plugins capture media and store frames
-2. Transform plugins process stored frames
-3. Egress plugins deliver frames to destinations
+Private HTTP coordination is unauthenticated and can carry snapshot key material.
+Restrict it to trusted hosts and users; loopback does not isolate local users.
+DTLS-SRTP protects the caller-to-worker media leg. Redis has no TLS or ACL
+username support yet. See [deployment](deploy.md) for ports and security limits.
 
-## Scaling
+## Test and demo surfaces
 
-The system scales horizontally by:
-- Running multiple plugin instances
-- Using distributed storage
-- Running multiple media workers: sessions can move between workers on one UDP socket today, and separate workers can sit behind one relay address; planned moves and automatic crash takeovers through the relay preserve the caller's transport
+[`pkg/callharness`](../pkg/callharness) supplies a Pion caller for in-process
+and external topologies. [`cmd/relais-demo`](../cmd/relais-demo) runs the browser
+cluster demo. The older [`cmd/echo-demo`](../cmd/echo-demo) shares one UDP socket
+between in-process workers, or runs one relayed worker. See [demo guide](demo.md).
 
-## Security
-
-- Session-based access control
-- Optional authentication layer
-- DTLS-SRTP media encryption between caller and media worker
+The historical plugin system has ingress, transform, and egress runners with
+Redis or memory frame storage. Its camera is simulated and its WebRTC egress
+polls storage. It is experimental, unmaintained, and separate from this media path.

@@ -69,7 +69,7 @@ Tune thresholds based on expected traffic patterns and claim behavior.
 ## Troubleshooting
 
 - Missing metrics:
-  - Verify Relais Streams + Groups config (environment variables in `README.md`).
+  - Verify Relais Streams + Groups config (environment variables in [the legacy pipeline guide](../legacy/plugin-pipeline.md)).
   - Confirm Prometheus is scraping the core’s `/metrics` endpoint.
   - Check Relais logs for storage/Redis errors.
 - Grafana panels empty:
