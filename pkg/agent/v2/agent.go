@@ -3,7 +3,9 @@
 // Started, AudioInput, TaskMessage and Resumed; Control is reserved.
 // After a crash before Started is checkpointed, the target delivers Resumed
 // before redelivering Started. An AudioInput Handle deadline outside Save drops
-// that input after quarantine and Restore. Save failures/deadlines, other callback
+// that input after quarantine and Restore. TaskMessage Handle errors and deadlines
+// fail closed after Restore; this also applies to admission Capacity callbacks.
+// Save failures/deadlines, other callback
 // errors, invalid state and unsupported effects fail closed. A Save that grows
 // move-only length beyond the available worker memory fails closed with
 // mediaworker.ErrMoveBudget.
@@ -23,8 +25,10 @@ var (
 	ErrVersion           = legacy.ErrVersion
 	ErrStateTooLarge     = legacy.ErrStateTooLarge
 	ErrIncompatibleAgent = errors.New("agent: incompatible registration")
-	ErrBackpressure      = errors.New("agent: task mailbox backpressure")
-	ErrCapacity          = errors.New("agent: task capacity")
+	// ErrBackpressure is retried internally. Emit waits with cancellation and
+	// never returns this sentinel to a handler.
+	ErrBackpressure = errors.New("agent: task mailbox backpressure")
+	ErrCapacity     = errors.New("agent: task capacity")
 )
 
 // State holds crash-recoverable bytes and O(1) metadata about move-only data.
@@ -45,6 +49,8 @@ type MoveOnlyState interface {
 	RestoreMoveOnly(context.Context, []byte) error
 }
 
+// ResumeNotice reports lost app move data or outstanding task payloads. A
+// completed, consumed ReadOnly task does not count as lost move data.
 type ResumeNotice struct {
 	legacy.ResumeNotice
 	MoveOnly Outcome

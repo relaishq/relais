@@ -11,6 +11,7 @@ import (
 
 	"github.com/pion/rtp"
 	"github.com/relaishq/relais/internal/agenthost"
+	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/agent"
 	agentv2 "github.com/relaishq/relais/pkg/agent/v2"
@@ -405,6 +406,10 @@ func (s *session) agentLoop() {
 // already consumed. Enqueue is paused; the caller may also discard this queue.
 func (s *session) finishAgentFlush(request agentFlush) bool {
 	if request.moveOnly != nil {
+		if err := s.validateTaskMoves(s.agent.latest.V2.Tasks, &movePayload{Tasks: s.taskMoveViews()}); err != nil {
+			request.done <- errors.Join(ErrExportNotFlushed, err)
+			return true
+		}
 		// A definitive refusal must precede both queue drain and paused input
 		// drops. The actor serializes this admission with Handle and Save.
 		s.mu.Lock()
@@ -451,6 +456,9 @@ drain:
 	// cannot make a later failure definitive by returning that sentinel.
 	if errors.Is(err, ErrExportNotFlushed) {
 		err = fmt.Errorf("mediaworker: export failed after pause: %v", err)
+	}
+	if errors.Is(err, agentv2.ErrCapacity) {
+		err = privateapi.Uncertain(err)
 	}
 	request.done <- err
 	if err != nil {

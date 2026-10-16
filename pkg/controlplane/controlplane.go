@@ -1094,7 +1094,7 @@ func uncertainExport(err error) bool {
 		return true
 	}
 	for _, known := range []error{mediaworker.ErrUnknownSession, mediaworker.ErrClosed, mediaworker.ErrNotEstablished, mediaworker.ErrExportNotFlushed,
-		sessionstore.ErrNotFound, sessionstore.ErrLeaseLost, sessionstore.ErrTransient} {
+		sessionstore.ErrNotFound, sessionstore.ErrLeaseLost, sessionstore.ErrTransient, agentv2.ErrCapacity} {
 		if errors.Is(err, known) {
 			return false
 		}

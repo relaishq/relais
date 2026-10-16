@@ -429,17 +429,31 @@ func TestV2TasksForcedCheckpointOutage(t *testing.T) {
 				}
 				timeout := 5 * time.Second
 				if expired {
-					timeout = 150 * time.Millisecond
+					timeout = 3 * time.Second
 				}
 				specs := []agent.TaskSpec{{Step: "effect", Kind: "test/v1", Class: agent.SideEffecting, Resume: agent.Abandon, Timeout: timeout}}
 				regs, results := taskRegistrations(specs, [2]agent.TaskHandler{handler, handler}, false)
+				// Suppress coalesced writes while the intent differs from the last
+				// acknowledged state, so every observed failure is a forced retry.
 				sys := startAgentHarness(t, gate, agentHarnessSettings{v2: regs, saveInterval: time.Hour})
 				gate.source = sys.workers[0].LocalAddr()
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				call, err := sys.h.Dial(ctx, CallOptions{})
 				require.NoError(t, err)
-				require.Eventually(t, func() bool { return gate.failed.Load() > 0 }, time.Second, time.Millisecond)
+				deadline := time.NewTimer(4 * time.Second)
+				tick := time.NewTicker(time.Millisecond)
+				for gate.failed.Load() < 5 {
+					select {
+					case launch := <-launched:
+						t.Fatalf("task launched before durable acknowledgment: %+v", launch)
+					case <-tick.C:
+					case <-deadline.C:
+						t.Fatal("fewer than five failed forced writes")
+					}
+				}
+				tick.Stop()
+				deadline.Stop()
 				require.Empty(t, launched)
 				require.Empty(t, results[0], "outage must never produce Capacity")
 				if expired {
@@ -448,6 +462,15 @@ func TestV2TasksForcedCheckpointOutage(t *testing.T) {
 					require.Empty(t, launched)
 				}
 				gate.blocked.Store(false)
+				if expired {
+					_, err = sys.plane.Move(ctx, call.SessionID(), "1")
+					require.NoError(t, err)
+					readTaskSnapshot(t, store, call.SessionID(), func(s taskSnapshot) bool {
+						var history taskHarnessState
+						return json.Unmarshal(s.State.Agent.State.Bytes, &history) == nil && len(history.Results) == 1 && history.Results[0].Outcome == agent.Timeout
+					})
+					require.Empty(t, launched, "expired task cannot launch after store recovery")
+				}
 				if !expired {
 					takeTaskLaunch(t, launched)
 					all := takeTaskFinal(t, results[0])

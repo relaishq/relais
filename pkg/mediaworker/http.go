@@ -21,6 +21,7 @@ var RemoteErrors = map[string]error{
 	"srtcp_exhausted":    ErrSRTCPIndexExhausted,
 	"agent_incompatible": agentv2.ErrIncompatibleAgent,
 	"agent_capacity":     agentv2.ErrCapacity,
+	"uncertain":          privateapi.ErrUncertain,
 	"move_budget":        ErrMoveBudget, "export_not_flushed": ErrExportNotFlushed,
 	"agent_version": agent.ErrVersion, "agent_oversize": agent.ErrStateTooLarge, "agent_save": agent.ErrSave, "agent_restore": agent.ErrRestore,
 }
@@ -132,6 +133,10 @@ func (w *Worker) SessionCount() int {
 // Agent errors can wrap more than one sentinel. Choose one code explicitly;
 // map iteration must not turn an unknown version into a generic restore error.
 func workerAPIError(rw http.ResponseWriter, err error) {
+	if errors.Is(err, privateapi.ErrUncertain) {
+		privateapi.Error(rw, err, map[string]error{"uncertain": privateapi.ErrUncertain})
+		return
+	}
 	if errors.Is(err, ErrExportNotFlushed) {
 		privateapi.Error(rw, err, map[string]error{"export_not_flushed": ErrExportNotFlushed})
 		return

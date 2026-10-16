@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/relaishq/relais/internal/taskrun"
 	"github.com/relaishq/relais/internal/workerprobe"
@@ -92,11 +94,63 @@ func deriveTaskID(session, name string, cause agent.EventID, step string) agent.
 	}
 	return agent.TaskID(base64.RawURLEncoding.EncodeToString(h.Sum(nil)))
 }
+
+// The version and fixed field list are independent of TaskSpec's JSON schema.
 func taskDigest(spec agent.TaskSpec) string {
-	data, _ := json.Marshal(spec)
-	sum := sha256.Sum256(data)
-	return base64.RawURLEncoding.EncodeToString(sum[:])
+	h := sha256.New()
+	h.Write([]byte("relais/task-arguments/v1"))
+	for _, field := range [][]byte{[]byte(spec.Step), []byte(spec.Kind), []byte(strconv.FormatUint(uint64(spec.Turn), 10)), []byte(spec.Class), []byte(spec.Resume), spec.Request, []byte(strconv.FormatInt(int64(spec.Timeout), 10))} {
+		var size [8]byte
+		binary.BigEndian.PutUint64(size[:], uint64(len(field)))
+		h.Write(size[:])
+		h.Write(field)
+	}
+	return "v1:" + base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 }
+func taskDigestMatches(spec agent.TaskSpec, digest string) bool {
+	if strings.HasPrefix(digest, "v1:") {
+		return taskDigest(spec) == digest
+	}
+	// Read checkpoints written by the initial experimental slice. Freeze that
+	// schema as well, and accept both historical encodings of an empty request.
+	legacySpec := struct {
+		Step    string
+		Kind    string
+		Turn    agent.Turn
+		Class   agent.TaskClass
+		Resume  agent.ResumePolicy
+		Request []byte
+		Timeout time.Duration
+	}{spec.Step, spec.Kind, spec.Turn, spec.Class, spec.Resume, spec.Request, spec.Timeout}
+	for i := 0; i < 2; i++ {
+		data, _ := json.Marshal(legacySpec)
+		sum := sha256.Sum256(data)
+		if base64.RawURLEncoding.EncodeToString(sum[:]) == digest {
+			return true
+		}
+		if len(legacySpec.Request) > 0 {
+			break
+		}
+		if legacySpec.Request == nil {
+			legacySpec.Request = []byte{}
+		} else {
+			legacySpec.Request = nil
+		}
+	}
+	return false
+}
+func taskDetail(detail string) string {
+	detail = strings.ToValidUTF8(detail, "�")
+	if len(detail) > taskDetailBytes {
+		end := taskDetailBytes
+		for end > 0 && !utf8.RuneStart(detail[end]) {
+			end--
+		}
+		detail = detail[:end]
+	}
+	return detail
+}
+
 func (s *session) taskNow() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,9 +183,10 @@ func (s *session) taskBudget(tasks []*localTask, appBytes int) error {
 	}
 	return s.reserveMoveBytes(n)
 }
-func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects) ([]*localTask, error) {
+func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, base []*localTask) ([]*localTask, []agent.TaskResult, error) {
 	h := s.agent.v2
-	next := slices.Clone(h.tasks)
+	next := slices.Clone(base)
+	var refused []agent.TaskResult
 	steps := map[string]bool{}
 	now := s.taskNow()
 	for _, spec := range effects.StartTasks {
@@ -139,22 +194,24 @@ func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects) (
 			(spec.Class != agent.ReadOnly && spec.Class != agent.SideEffecting) ||
 			(spec.Class == agent.SideEffecting && spec.Resume != agent.Retry && spec.Resume != agent.Abandon) ||
 			(spec.Resume != "" && spec.Resume != agent.Retry && spec.Resume != agent.Abandon) {
-			return nil, fmt.Errorf("%w: invalid task specification or duplicate Step", agent.ErrIncompatibleAgent)
+			return nil, nil, fmt.Errorf("%w: invalid task specification or duplicate Step", agent.ErrIncompatibleAgent)
 		}
 		if h.registration.Tasks[spec.Kind] == nil {
-			return nil, fmt.Errorf("%w: missing task handler %q", agent.ErrIncompatibleAgent, spec.Kind)
-		}
-		if len(spec.Request) > h.registration.Bounds.MaxMailboxBytes || len(spec.Step)+len(spec.Kind) > h.registration.Bounds.MaxPendingBytes || (spec.Class == agent.SideEffecting && len(spec.Request) > h.registration.Bounds.MaxPendingBytes) {
-			return nil, agent.ErrCapacity
+			return nil, nil, fmt.Errorf("%w: missing task handler %q", agent.ErrIncompatibleAgent, spec.Kind)
 		}
 		steps[spec.Step] = true
 		id := deriveTaskID(s.id, h.registration.Name, cause.ID, spec.Step)
+		capacity := agent.TaskResult{TaskID: id, Sequence: 1, Turn: spec.Turn, Outcome: agent.Capacity, Final: true, Detail: "task admission capacity"}
+		if len(spec.Request) > h.registration.Bounds.MaxMailboxBytes || len(spec.Step)+len(spec.Kind) > h.registration.Bounds.MaxPendingBytes || (spec.Class == agent.SideEffecting && len(spec.Request) > h.registration.Bounds.MaxPendingBytes) {
+			refused = append(refused, capacity)
+			continue
+		}
 		digest := taskDigest(spec)
 		duplicate := false
 		for _, t := range next {
 			if t.intent.ID == id {
-				if t.intent.Digest != digest {
-					return nil, fmt.Errorf("%w: conflicting task arguments", agent.ErrIncompatibleAgent)
+				if !taskDigestMatches(spec, t.intent.Digest) {
+					return nil, nil, fmt.Errorf("%w: conflicting task arguments", agent.ErrIncompatibleAgent)
 				}
 				duplicate = true
 				break
@@ -177,10 +234,17 @@ func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects) (
 		t.terminalBytes = taskTerminalBytes(intent)
 		next = append(next, t)
 		if err := s.taskBudget(next, s.agent.latest.V2.MoveOnlyLength); err != nil {
-			return nil, err
+			if errors.Is(err, agent.ErrCapacity) || errors.Is(err, ErrMoveBudget) {
+				next = next[:len(next)-1]
+				refused = append(refused, capacity)
+				continue
+			}
+			return nil, nil, err
 		}
+		t.request = slices.Clone(t.request)
+		t.intent.Request = slices.Clone(t.intent.Request)
 	}
-	return next, nil
+	return next, refused, nil
 }
 func (s *session) publishTaskIntents() {
 	h := s.agent.v2
@@ -205,12 +269,6 @@ func cloneTaskIntents(ts []taskIntent) []taskIntent {
 }
 func (s *session) acceptTaskEffects(tasks []*localTask, effects agent.Effects) {
 	h := s.agent.v2
-	for _, t := range tasks {
-		if !slices.Contains(h.tasks, t) {
-			t.request = slices.Clone(t.request)
-			t.intent.Request = slices.Clone(t.intent.Request)
-		}
-	}
 	h.tasks = tasks
 	for _, id := range effects.CancelTasks {
 		for _, t := range h.tasks {
@@ -235,14 +293,14 @@ func (s *session) cancelTask(t *localTask) {
 	s.terminalTask(t, agent.Canceled, "")
 }
 func (s *session) terminalTask(t *localTask, outcome agent.Outcome, detail string) {
-	if len(detail) > taskDetailBytes {
-		detail = detail[:taskDetailBytes]
-	}
+	detail = taskDetail(detail)
 	t.intent.Published++
 	t.results = append(t.results, agent.TaskResult{TaskID: t.intent.ID, Sequence: t.intent.Published, Turn: t.intent.Turn, Outcome: outcome, Final: true, Detail: detail})
 	t.mailboxBytes += taskResultBytes(t.results[len(t.results)-1])
 	t.intent.Terminal = outcome
 	t.intent.Final = true
+	t.request = nil
+	t.intent.Request = nil
 	if t.intent.Phase != taskCanceled {
 		t.intent.Phase = taskTerminal
 	}
@@ -262,7 +320,7 @@ func (s *session) taskStateChanged() {
 func (s *session) launchTasks() {
 	h := s.agent.v2
 	s.mu.Lock()
-	paused := s.agent.paused || s.fenced.Load() || s.ctx.Err() != nil
+	paused := s.agent.paused || s.worker.paused.Load() || s.fenced.Load() || s.ctx.Err() != nil
 	var durable []taskIntent
 	if s.durableAgent.V2 != nil {
 		durable = cloneTaskIntents(s.durableAgent.V2.Tasks)
@@ -287,7 +345,7 @@ func (s *session) launchTasks() {
 		}
 	}
 	for _, t := range h.tasks {
-		if t.launched || t.prepared {
+		if t.launched {
 			active++
 		}
 	}
@@ -301,13 +359,12 @@ func (s *session) launchTasks() {
 			changed = true
 			continue
 		}
-		if !t.prepared && active >= h.registration.Bounds.MaxActiveTasks {
+		if active >= h.registration.Bounds.MaxActiveTasks {
 			continue
 		}
 		if t.intent.Class == agent.SideEffecting {
 			if !t.prepared {
 				t.prepared = true
-				active++
 				t.intent.Phase = taskStarted
 				changed = true
 				force = true
@@ -322,9 +379,8 @@ func (s *session) launchTasks() {
 			if !granted {
 				continue
 			}
-		} else {
-			active++
 		}
+		active++
 		// The actor owns cancellation and attempt state. The final fence/route check
 		// is under the same lock used by export and ownership loss.
 		s.mu.Lock()
@@ -500,7 +556,7 @@ func (s *session) acceptEmission(e taskEmission) {
 		if err != nil {
 			t.results = t.results[:len(t.results)-1]
 			t.mailboxBytes -= bytes
-			if errors.Is(err, agent.ErrCapacity) {
+			if errors.Is(err, agent.ErrCapacity) || errors.Is(err, ErrMoveBudget) {
 				err = agent.ErrBackpressure
 			}
 			e.reply <- err
@@ -534,27 +590,60 @@ func (s *session) deliverTaskResult() (bool, error) {
 	}
 	return false, nil
 }
+
+// Read published intent and acknowledged state under the media lock; the
+// dispatcher never reads actor-owned prepared/attempt fields.
+func (s *session) taskCheckpointPending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fenced.Load() || s.ctx.Err() != nil || s.state.Agent.V2 == nil {
+		return false
+	}
+	for _, t := range s.state.Agent.V2.Tasks {
+		if t.Class != agent.SideEffecting || t.Phase != taskStarted || t.Final {
+			continue
+		}
+		granted := false
+		if s.durableAgent.V2 != nil {
+			for _, d := range s.durableAgent.V2.Tasks {
+				if d.ID == t.ID && d.Digest == t.Digest && d.Phase == taskStarted && !d.Final {
+					granted = true
+					break
+				}
+			}
+		}
+		if !granted {
+			return true
+		}
+	}
+	return false
+}
 func (s *session) taskCheckpointLoop() {
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-s.agent.v2.force:
-			if err := s.persistSnapshotMode(s.ctx, true); err != nil {
-				timer := time.NewTimer(100 * time.Millisecond)
-				select {
-				case <-timer.C:
-					select {
-					case s.agent.v2.force <- struct{}{}:
-					default:
-					}
-				case <-s.ctx.Done():
-					timer.Stop()
-					return
+		}
+		backoff := 100 * time.Millisecond
+		for s.taskCheckpointPending() {
+			s.mu.Lock()
+			paused := s.agent.paused
+			s.mu.Unlock()
+			if !paused && !s.worker.paused.Load() {
+				_ = s.persistSnapshotMode(s.ctx, true)
+				if !s.taskCheckpointPending() {
+					break
 				}
 			}
-			// Failed writes grant nothing. The normal snapshot cadence retries current
-			// state; no immediate retry spin, no store read, and no Capacity outcome.
+			timer := time.NewTimer(backoff)
+			select {
+			case <-timer.C:
+			case <-s.ctx.Done():
+				timer.Stop()
+				return
+			}
+			backoff = min(2*backoff, time.Second)
 		}
 	}
 }
@@ -564,58 +653,90 @@ func taskIntentsEqual(a, b []taskIntent) bool {
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
 }
-func (s *session) restoreTasks(move *movePayload) error {
-	h := s.agent.v2
+
+// validateTaskMoves is shared by source preflight and target restoration.
+// It reads owned payloads without copying them or changing actor state.
+func (s *session) validateTaskMoves(intents []taskIntent, move *movePayload) error {
 	seen := map[agent.TaskID]bool{}
-	for _, intent := range s.agent.latest.V2.Tasks {
-		if seen[intent.ID] || intent.ID == "" || h.registration.Tasks[intent.Kind] == nil || intent.Cursor > intent.Published ||
+	if move != nil && len(move.Tasks) != len(intents) {
+		return fmt.Errorf("%w: unexpected exact task mailbox", agent.ErrIncompatibleAgent)
+	}
+	for _, intent := range intents {
+		if seen[intent.ID] || intent.ID == "" || s.agent.v2.registration.Tasks[intent.Kind] == nil || intent.Cursor > intent.Published ||
 			(intent.Class != agent.ReadOnly && intent.Class != agent.SideEffecting) ||
 			(intent.Class == agent.SideEffecting && intent.Resume != agent.Retry && intent.Resume != agent.Abandon) ||
 			(intent.Phase != taskNever && intent.Phase != taskStarted && intent.Phase != taskTerminal && intent.Phase != taskCanceled) ||
-			intent.RequestLength < 0 || (intent.Class == agent.SideEffecting && len(intent.Request) != intent.RequestLength) || (intent.Final && !taskrun.ValidOutcome(intent.Terminal)) || (intent.Class == agent.ReadOnly && len(intent.Request) > 0) {
+			intent.RequestLength < 0 || (!intent.Final && intent.Class == agent.SideEffecting && len(intent.Request) != intent.RequestLength) ||
+			(intent.Final && !taskrun.ValidOutcome(intent.Terminal)) || (intent.Class == agent.ReadOnly && len(intent.Request) > 0) {
 			return fmt.Errorf("%w: invalid restored task intent", agent.ErrIncompatibleAgent)
 		}
 		seen[intent.ID] = true
+		request := intent.Request
+		if move != nil {
+			exact := findTaskMove(move, intent.ID)
+			if exact == nil {
+				return fmt.Errorf("%w: missing or duplicate task mailbox", agent.ErrIncompatibleAgent)
+			}
+			request = exact.Request
+			seq := intent.Cursor
+			for i, r := range exact.Results {
+				if r.TaskID != intent.ID || r.Sequence <= seq || r.Sequence > intent.Published || !taskrun.ValidOutcome(r.Outcome) || r.Turn != intent.Turn || (r.Final && (i != len(exact.Results)-1 || !intent.Final || r.Outcome != intent.Terminal)) {
+					return fmt.Errorf("%w: invalid exact task result", agent.ErrIncompatibleAgent)
+				}
+				seq = r.Sequence
+			}
+			if (intent.Final && intent.Cursor < intent.Published && (len(exact.Results) == 0 || !exact.Results[len(exact.Results)-1].Final)) || seq != intent.Published || (!intent.Final && len(request) != intent.RequestLength) {
+				return fmt.Errorf("%w: incomplete exact task mailbox", agent.ErrIncompatibleAgent)
+			}
+		}
+		if !intent.Final && (move != nil || intent.Class == agent.SideEffecting || intent.RequestLength == 0) {
+			spec := agent.TaskSpec{Step: intent.Step, Kind: intent.Kind, Turn: intent.Turn, Class: intent.Class, Resume: intent.Resume, Request: request, Timeout: intent.Timeout}
+			if !taskDigestMatches(spec, intent.Digest) {
+				return fmt.Errorf("%w: restored task arguments do not match intent", agent.ErrIncompatibleAgent)
+			}
+		}
+	}
+	return nil
+}
+func findTaskMove(move *movePayload, id agent.TaskID) *taskMove {
+	var found *taskMove
+	for i := range move.Tasks {
+		if move.Tasks[i].ID == id {
+			if found != nil {
+				return nil
+			}
+			found = &move.Tasks[i]
+		}
+	}
+	return found
+}
+func (s *session) restoreTasks(move *movePayload) error {
+	h := s.agent.v2
+	if err := s.validateTaskMoves(s.agent.latest.V2.Tasks, move); err != nil {
+		return err
+	}
+	for _, intent := range s.agent.latest.V2.Tasks {
 		t := &localTask{intent: cloneTaskIntent(intent), request: slices.Clone(intent.Request), terminalBytes: taskTerminalBytes(intent)}
 		var exact *taskMove
 		if move != nil {
-			for i := range move.Tasks {
-				if move.Tasks[i].ID == intent.ID {
-					if exact != nil {
-						return fmt.Errorf("%w: duplicate task mailbox", agent.ErrIncompatibleAgent)
-					}
-					exact = &move.Tasks[i]
-				}
-			}
-		}
-		if move != nil && exact == nil {
-			return fmt.Errorf("%w: missing exact task mailbox", agent.ErrIncompatibleAgent)
-		}
-		if exact != nil {
+			exact = findTaskMove(move, intent.ID)
 			t.request = slices.Clone(exact.Request)
 			t.results = slices.Clone(exact.Results)
-			seq := intent.Cursor
 			for i, r := range t.results {
-				if r.TaskID != intent.ID || r.Sequence <= seq || r.Sequence > intent.Published || !taskrun.ValidOutcome(r.Outcome) || r.Turn != intent.Turn || len(r.Detail) > taskDetailBytes || (r.Final && (i != len(t.results)-1 || !intent.Final || r.Outcome != intent.Terminal)) {
-					return fmt.Errorf("%w: invalid exact task result", agent.ErrIncompatibleAgent)
-				}
+				r.Detail = taskDetail(r.Detail)
+				t.results[i].Detail = r.Detail
 				t.mailboxBytes += taskResultBytes(r)
 				t.results[i].Chunk = cloneChunk(r.Chunk)
-				seq = r.Sequence
-			}
-			if (intent.Final && intent.Cursor < intent.Published && (len(t.results) == 0 || !t.results[len(t.results)-1].Final)) || seq != intent.Published || len(t.request) != intent.RequestLength {
-				return fmt.Errorf("%w: incomplete exact task mailbox", agent.ErrIncompatibleAgent)
 			}
 			if exact.NeverLaunched && !intent.Final {
 				t.intent.Phase = taskNever
 			}
 		}
-		if exact != nil || intent.Class == agent.SideEffecting || intent.RequestLength == 0 {
-			spec := agent.TaskSpec{Step: intent.Step, Kind: intent.Kind, Turn: intent.Turn, Class: intent.Class, Resume: intent.Resume, Request: t.request, Timeout: intent.Timeout}
-			if taskDigest(spec) != intent.Digest {
-				return fmt.Errorf("%w: restored task arguments do not match intent", agent.ErrIncompatibleAgent)
-			}
+		if intent.Final {
+			t.request = nil
+			t.intent.Request = nil
 		}
+
 		if intent.Final && intent.Cursor == intent.Published {
 			h.tasks = append(h.tasks, t)
 			continue
@@ -630,7 +751,7 @@ func (s *session) restoreTasks(move *movePayload) error {
 				h.tasks = append(h.tasks, t)
 				continue
 			}
-			if (intent.Class == agent.ReadOnly && (intent.RequestLength > 0 || (intent.Published > 0 && intent.Resume != agent.Retry))) || (intent.Phase != taskNever && intent.Resume == agent.Abandon) {
+			if (intent.Final && intent.RequestLength > 0) || (intent.Class == agent.ReadOnly && (intent.RequestLength > 0 || (intent.Published > 0 && intent.Resume != agent.Retry))) || (intent.Phase != taskNever && intent.Resume == agent.Abandon) {
 				s.terminalTask(t, agent.OutcomeUnknown, "task payload or uncertain effect lost on takeover")
 			} else {
 				t.intent.Phase = taskNever
@@ -642,11 +763,20 @@ func (s *session) restoreTasks(move *movePayload) error {
 		}
 		h.tasks = append(h.tasks, t)
 	}
-	if move != nil && len(move.Tasks) != len(h.tasks) {
-		return fmt.Errorf("%w: unexpected exact task mailbox", agent.ErrIncompatibleAgent)
+	appBytes := 0
+	if move != nil {
+		appBytes = s.agent.latest.V2.MoveOnlyLength
 	}
-	return s.taskBudget(h.tasks, s.agent.latest.V2.MoveOnlyLength)
+	return s.taskBudget(h.tasks, appBytes)
 }
+func (s *session) taskMoveViews() []taskMove {
+	out := make([]taskMove, len(s.agent.v2.tasks))
+	for i, t := range s.agent.v2.tasks {
+		out[i] = taskMove{ID: t.intent.ID, Request: t.request, Results: t.results, NeverLaunched: !t.launched}
+	}
+	return out
+}
+
 func (s *session) stopTaskAttempts() {
 	if s.agent.v2 == nil {
 		return
@@ -679,7 +809,8 @@ func (s *session) v2AgentLoop() {
 	case <-s.ctx.Done():
 		return
 	}
-	go s.taskCheckpointLoop()
+	s.worker.running.Add(1)
+	go func() { defer s.worker.running.Done(); s.taskCheckpointLoop() }()
 	defer s.stopTaskAttempts()
 	if !s.agent.latest.V2.Started {
 		if err := s.handleV2Event(agent.Event{ID: agent.EventID("started/" + s.id), Kind: agent.Started}); err != nil {

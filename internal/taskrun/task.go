@@ -77,9 +77,15 @@ func (r *TaskRun) Spec() TaskSpec { s := r.spec; s.Request = slices.Clone(s.Requ
 func (r *TaskRun) ID() TaskID     { return r.id }
 func (r *TaskRun) Key() string    { return string(r.id) }
 func (r *TaskRun) After() uint64  { return r.after }
+
+// Emit publishes an owned chunk or waits for memory with cancellation. A
+// chunk that can never fit returns ErrCapacity from the host.
 func (r *TaskRun) Emit(ctx context.Context, seq uint64, chunk Chunk) error {
 	return r.emit(ctx, seq, chunk)
 }
+
+// Fail only constructs an error. The handler must return that error for the
+// host to publish the supplied terminal outcome; ignoring it records nothing.
 func (*TaskRun) Fail(outcome Outcome, detail string) error {
 	if !ValidOutcome(outcome) || outcome == OK {
 		return &Failure{Outcome: Failed, Detail: "invalid failure outcome"}
