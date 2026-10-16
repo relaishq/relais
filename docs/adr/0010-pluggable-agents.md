@@ -7,16 +7,16 @@ Baseline: `f74798267771395caff9e4e6f2c73fd2918f1387`. “v1” is this proposed 
 
 - A developer registers an agent and task handlers in a small Go main.
 - The host runs slow work and plays queued replies independently of caller input.
-- On shutdown the worker stops new placements, then briefly waits for handlers to finish.
-- It moves buffered speech without waiting for the caller to finish hearing it.
-- An urgent move pauses playout and carries buffered audio; unfinished generation is interrupted.
-- A crash loses recordings, read-only requests and buffered speech, then restarts the turn.
-- Side effects still need stable keys and a checkpoint before launch; retries can cost money.
-- Default crash state is small; recordings and full replies have a separate memory/export budget.
-- Store and shutdown budgets belong to the operator, not the app registration.
+- On shutdown it waits for handlers when the operator sets a measured move reserve.
+- With no reserve set, shutdown uses urgent export and skips that wait.
+- Moves carry buffered speech; unfinished generation can be interrupted.
+- The default 1 KiB state budget cannot keep normal conversation history across a crash.
+- A crash can forget earlier conversation, not just the current turn, and loses recordings/audio.
+- Side effects need stable keys and a checkpoint before launch; retries can cost money.
+- Store/shutdown budgets belong to the operator; move-only bytes have a separate memory budget.
 - Pools use the same registration; new builds must restore prior state and pending work.
-- The keyless example needs a manual capacity gate; Demo A uses a larger budget with no capacity claim.
-- Approve the API, recovery limits and budgets before implementation.
+- The keyless example needs a manual gate; Demo A needs a larger budget and makes no capacity claim.
+- A later store-schema ADR must land before claiming conversations survive crashes on defaults.
 
 ## Current contract and constraints
 
@@ -75,10 +75,14 @@ import (
     "time"
     legacy "github.com/relaishq/relais/pkg/agent"
 )
-type State struct { Version uint32; Bytes []byte; MoveOnly []byte }
-// Bytes survive checkpoints; MoveOnly survives exact moves, not worker crashes.
+type State struct { Version uint32; Bytes []byte; HasMoveOnly bool; MoveOnlyLength int }
+// Save returns small crash state and O(1) move-data metadata, never move-only bytes.
+type MoveOnlyState interface { // optional; required if HasMoveOnly is true
+    SaveMoveOnly(context.Context) ([]byte, error)
+    RestoreMoveOnly(context.Context, []byte) error
+}
 type ResumeNotice struct { legacy.ResumeNotice; MoveOnly Outcome }
-type FactoryArgs struct { SessionID string; AgentName string }
+type FactoryArgs struct { SessionID string; AgentName string; MaxStateBytes int } // effective admitted budget
 type Factory func(FactoryArgs) Agent
 type Agent interface {
     Handle(context.Context, Event) (Effects, error)
@@ -177,19 +181,23 @@ including its pending task descriptors; otherwise a crash can lose an uncheckpoi
 Choose **retry-only**, not a durable result journal, for v1. Results are **delivered at least
 once, committed once** in the saved logical history. A callback can run again after rollback;
 a network request or audible rendering can also repeat. Planned export carries the exact
-bounded move-only mailbox. Crash checkpoints contain digests/lengths of ReadOnly requests,
-State.MoveOnly recordings and audio payloads, never their bytes. Keep recording/playback phase
-and task descriptors in small durable state; Restore gets MoveOnly=nil if lost. Resumed.MoveOnly
-is OutcomeUnknown when that state was present; missing ReadOnly requests/results get typed
-OutcomeUnknown tasks. The agent clears unsent speech and restarts the turn on a later input,
-Control or timer event, not StartTasks from Resumed. Never activate refs with absent payloads;
-a digest is not a retrievable audio reference.
+bounded move-only mailbox. Crash checkpoints record presence/length of move-only recordings,
+ReadOnly requests and audio, never their bytes. Resumed.MoveOnly is OutcomeUnknown when data was
+present but lost; missing ReadOnly requests/results get typed OutcomeUnknown tasks. Keep the
+phase in Bytes; clear unsent speech and restart on later input/Control/timer, not StartTasks from
+Resumed. Never activate refs with absent payloads. Checksums needed for local task dedup/retry
+are computed once at admission, not by repeatedly hashing recordings during Save.
+At exact export, pause the actor and call optional SaveMoveOnly within the export deadline,
+consistent with its last accepted Bytes/HasMoveOnly/MoveOnlyLength. Validate declared length and
+memory/wire bounds; copy only then. On exact resume, Restore small State, then RestoreMoveOnly
+before Resumed. On crash resume do not call RestoreMoveOnly; deliver OutcomeUnknown instead.
+Missing optional methods with HasMoveOnly=true fail state acceptance, not the eventual move.
 
 - ReadOnly (STT/LLM/TTS) launches immediately after local acceptance on an active route,
   without waiting for a checkpoint. Extra starts wait as never_launched when all four default
   slots are busy; keep deadlines and FIFO fairness, not a Capacity result for slot exhaustion.
   Its Request bytes are move-only, even for never_launched tasks. A crash cannot reconstruct
-  them from a digest: report OutcomeUnknown and restart the turn. Replayed fresh causes keep
+  their bytes: report OutcomeUnknown and restart the turn. Replayed fresh causes keep
   stable IDs; repeated computation/charges are allowed by this class, not deduplicated by Relais.
   Interrupted ReadOnly Retry needs a reproducible/resumable prefix; otherwise report
   OutcomeUnknown. Never regenerate different audio under an existing reference.
@@ -202,7 +210,7 @@ a digest is not a retrievable audio reference.
   never_launched; do not pre-mark it as started while it is waiting for a slot.
   Abandon reports OutcomeUnknown if it may have started; it never repeats an uncertain effect.
 - Persist phase `never_launched`, `may_have_started`, or terminal/canceled, kind, absolute
-  deadline and cursors; ReadOnly stores request digest/length only. The forced launch checkpoint conservatively records
+  deadline and cursors; ReadOnly stores request presence/length only. The forced launch checkpoint conservatively records
   `may_have_started`. Exact export can prove a handler never crossed local launch admission:
   mark it `never_launched`; the target launches it normally, including Abandon tasks. Recheck
   local fence/attempt/turn immediately before any launch, including after checkpoint I/O. A crash
@@ -211,7 +219,7 @@ a digest is not a retrievable audio reference.
   Recheck that deadline immediately before launch, including after store recovery or a slot
   wait; report Timeout rather than call an expired task. TaskRun.After remains a safe replay
   floor separate from committed result progress. Move resumes have exact payloads; a SideEffecting
-  retry can refill a result only with the same digest/sequence. Missing ReadOnly bytes yield
+  retry requires provider-stable result identity/sequence. Missing ReadOnly bytes yield
   OutcomeUnknown, not an automatic refill. This leaves room for a later durable inbox.
 - The **first Emit chunk is immediate** if memory permits; later chunks publish at most once
   per 100 ms per task. Coalesce/backpressure with cancellation; merge or delay terminal
@@ -224,7 +232,7 @@ a digest is not a retrievable audio reference.
   into app state, or negotiate credit. Remove AwaitAudio/AudioDemand/AudioCredit entirely.
   Optional NotifyPlaybackFinished emits PlaybackFinished after that turn's tasks/results finish
   and queued audio is sent; this is local send completion, not proof the caller heard it.
-- Checkpoints retain only a bounded playback cursor/reference window and payload digests;
+- Checkpoints retain only a bounded playback cursor/reference window and payload presence/length;
   exact exports also carry the full backlog/payloads. Audio.Format is unnecessary: the referenced
   EncodedAudio owns the format. Do not tick callbacks/Save on idle playback. Keep requests and
   payloads until their references drain and required acknowledgement/horizon passes.
@@ -320,16 +328,20 @@ app alone needs 10,924 encoded bytes. That default could not work.
 
 New **v2** app-state default: **1 KiB** raw Bytes (configurable maximum 64 KiB); serialized
 crash-persistent host metadata/request/ref allowance: **2 KiB**, including v8/counter growth.
-ReadOnly Request and State.MoveOnly recording bytes are excluded from checkpoints; store their
-length/digest and recovery phase only. SideEffecting request bytes stay inside the 2 KiB host
+ReadOnly requests/recordings stay move-only: checkpoint only presence/length and recovery phase;
+ordinary Save never serializes/copies/hashes those bytes, even for a 1 MiB recording. SideEffecting request bytes stay inside the 2 KiB host
 allowance (Limits.MaxPendingBytes counts that encoded host subtree; MaxStateBytes counts Bytes
-only). Limits.MaxMailboxBytes bounds separate move memory. Default active tasks **4**; queue
+only). MaxStateBytes in FactoryArgs exposes the effective admitted budget. Reject startup if a
+registration's declared MaxStateBytes cannot fit the operator snapshot cap plus validated host
+reserves; never silently shrink it. Resolve default limits before this check; recheck actual size
+at runtime. Limits.MaxMailboxBytes bounds separate move memory. Default active tasks **4**; queue
 additional starts as never_launched without Capacity
-for slot exhaustion. Operator flags clamp registration limits; legacy 8 KiB defaults stay unchanged.
+for slot exhaustion. Other limits respect operator caps; legacy 8 KiB defaults stay unchanged.
 
 Worker-only flags, not Limits fields (registrations cannot raise store/shutdown budgets):
 -agent-max-snapshot-bytes=7168; -agent-snapshot-bytes-per-second=81920;
--agent-snapshot-burst-bytes=28672; -agent-drain-task-budget=2s.
+-agent-snapshot-burst-bytes=28672; -agent-drain-task-budget=2s. -agent-drain-move-reserve has
+**no default**: unset means no quiescence and urgent export for every v2 session.
 Snapshot arithmetic: 3,474 + 42 + 1,368 (base64 of 1,024) + 2,048 = **6,932 B**, leaving 236 B under
 7,168. This is a derived allocation; validate actual v8/counters, never assume the base is fixed
 for all calls. At 10/s, 7,168*10 = **71,680 B/s**. The 81,920 B/s payload budget leaves 10,240 B/s
@@ -449,12 +461,12 @@ and stock/demo/drain behavior (`cmd/relais-worker/agent_test.go:99-103,222-318`;
 
 | Seam | Required new proof (all NOT-RUN) |
 | --- | --- |
-| External module | Import public packages only; build custom/stock worker CGO_ENABLED=0; preserve flags, readiness, heartbeat/rejoin, metrics and drain. |
+| External module | Public imports only; CGO_ENABLED=0 custom/stock build; effective FactoryArgs budget; oversized declaration fails startup without clamping; preserve flags/readiness/heartbeat/metrics/drain. |
 | Host/Memory/Redis | Started redelivery; ignore unknown kinds; reject StartTasks from Resumed; immediate ReadOnly versus forced SideEffecting launch; uncertain writes; stable IDs; typed outcomes; never-launched Abandon export. |
-| Call harness | Move exact recordings/requests/full reply and cursor; takeover reports missing move-only data OutcomeUnknown and restarts turn; delivered at least once, committed once; duplicate windows keep new work; sparse inputs/wraps. |
+| Call harness | Move exact recordings/requests/reply/cursor; SaveMoveOnly runs only at paused export, once; checkpoints use presence/length without copying/hashing recording; crash OutcomeUnknown; delivered at least once, committed once; duplicate windows/sparse inputs/wraps. |
 | Flow/cancel | Host appends refs and backpressures Emit; first chunk immediate; optional PlaybackFinished is send-only evidence; turn-tagged clear/cancel and late-result drop; no pacer/checkpoint deadlock; >150 turns without lifetime cap. |
 | Clocks/limits | Packetless and DTX input; variable packet duration, queue/lead bounds, no catch-up; timer generation/reset; size at limit and limit+1; ciphertext/token budget including forced writes; no lock cycle or skipped required checkpoint. |
-| Process | Worker-local SIGTERM mark-only placement fence, concurrent handler-only wait without call locks/drain slots, measured-round deadline reserve; urgent move during full-reply playout; kills/lost replies/mismatch cleanup/zombies; ADR 0009 regressions. |
+| Process | Worker-local SIGTERM mark-only placement fence; unset reserve skips wait; configured reserve enables concurrent handler-only wait without call locks/drain slots; urgent full-reply move; kills/lost replies/mismatch cleanup/zombies; ADR 0009 regressions. |
 | Outage gate | Extend store-stall (`.github/workflows/ci.yml:290-315`): 5/15/29 s, no token debit/Capacity on failed forced writes, launch on later successful intent checkpoint, deadline Timeout before launch, local Emit/terminals, unknown move-only data on stale takeover and 35 s expiry. |
 | Capacity/audio | Custom-worker relais-load gate in C, Save CPU, checkpoint-age p99; known Ogg lacing/CRC/pre-skip/trim decode fixtures; real Chrome DTX capture; Demo A provider-format tests. Source inspection is not runtime proof. |
 
@@ -476,17 +488,28 @@ Durable inbox and result blobs with fencing/retention (stronger recovery, extra 
 LegacyFactory; public ReadVersions/WriteVersion, heartbeat capabilities and bridge-rollout recipe;
 256 KiB state; public WriteOgg trim/gain handling; public IdempotencyKey and OpusPacket.Samples;
 streaming task input/Realtime, PCM codecs and resumable decoder state; ControlSender/ControlReceipt
-in Demo A. Later ADR: write constant DTLS state once to a separate same-slot key and app state
-only on change, freeing history space and reducing echo store cost. Do not design it here.
-Keep TaskRun.After/Emit compatible with future durable results. No single-render promise.
+in Demo A. Keep TaskRun.After/Emit compatible with future durable results. No single-render promise.
+One **store-schema ADR** must cover both constant DTLS/transport setup state written once in a
+separate same-slot key, and app state written only on change in the **same fenced EVAL**, with
+the changing transport blob carrying the exact app-state revision and digest. Do not design it here.
+Reviewer estimates: splitting DTLS alone frees 2,072 B/checkpoint, giving only about **2.7 KiB**
+raw app room: (7,168-(3,474-2,072)-42-2,048)*3/4 = 2,757 B. It does not make 8 KiB affordable.
+Writing 8 KiB history once per turn is about **2 KB/s** at roughly one update per 5-6 s, versus
+**109 KB/s** at 10 Hz (10,924 B/update). Today's constant DTLS bytes cost **20.7 KB/s/call**,
+about **41%** of 50,277 B/s session traffic and **24%** of 84,904 B/s total
+(`docs/dev/capacity-results.md:61-70`). These are arithmetic projections, not new measurements.
+Slices **1-7 do not wait** for this ADR. Demo A needs an explicit operator budget, with no capacity
+claim. The store-schema ADR must land **before any default-budget conversation crash-survival claim**.
 
 ## Guarantee impact and approval
 
 Legacy guarantees and ADR 0009 remain gates. V2 planned continuation includes the exact accepted
 mailbox/references. Takeover loses move-only recordings/ReadOnly requests/buffered speech,
 reports OutcomeUnknown and restarts the turn; side effects retain Retry/Abandon. Speech can pause
-or repeat and restarted turns can incur new charges. Worker-local drain waits for handlers only,
-then moves buffered playout; urgent moves preserve buffered audio but interrupt unfinished generation.
+or repeat and restarted turns can incur new charges. Default 1 KiB cannot preserve normal history;
+this is not merely current-turn loss. Worker-local drain waits for handlers only **when the operator
+sets a measured move reserve**; unset skips waiting. Then buffered playout moves; urgent exports
+preserve buffered audio but interrupt unfinished generation.
 During ADR 0008 outages, media continues but side-effect launches wait and local mailboxes can
 backpressure. Snapshot budgets add explicit v2 capacity refusal/end conditions; they must not be
 hidden as loss-free continuation. No general mixed-version, side-effect transaction, or seamless
