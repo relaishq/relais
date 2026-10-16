@@ -19,7 +19,7 @@ import (
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/nettopology"
-	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/callharness"
 )
 
@@ -66,7 +66,7 @@ func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir stri
 	if err != nil {
 		return nil, err
 	}
-	if err := processrun.ValidateRedis(addr); err != nil {
+	if err := redisendpoint.ValidateDev(addr); err != nil {
 		return nil, err
 	}
 	_, port, _ := net.SplitHostPort(addr)

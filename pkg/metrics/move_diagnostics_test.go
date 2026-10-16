@@ -3,12 +3,12 @@ package metrics
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"os"
 	"testing"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/relaishq/relais/internal/movediag"
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,9 +20,7 @@ func TestMoveDiagnosticsThroughRealRedisClient(t *testing.T) {
 		}
 		t.Skip("dedicated Redis not configured")
 	}
-	_, port, err := net.SplitHostPort(addr)
-	require.NoError(t, err)
-	require.NotEqual(t, "6379", port)
+	require.NoError(t, redisendpoint.ValidateDev(addr))
 	t.Setenv("RELAIS_MOVE_DIAGNOSTICS", "1")
 	client := RedisClient(&redis.Options{Addr: addr, MaxRetries: -1}, "move-test")
 	defer client.Close()
@@ -39,7 +37,7 @@ func TestMoveDiagnosticsThroughRealRedisClient(t *testing.T) {
 		require.NotEqual(t, movediag.ID(ctx), event.TraceID)
 	}
 	require.Equal(t, redis.Nil, client.Get(ctx, "move-diagnostic-missing-key").Err())
-	_, err = client.Pipelined(ctx, func(p redis.Pipeliner) error { p.Ping(ctx); p.Echo(ctx, "secret-payload"); return nil })
+	_, err := client.Pipelined(ctx, func(p redis.Pipeliner) error { p.Ping(ctx); p.Echo(ctx, "secret-payload"); return nil })
 	require.NoError(t, err)
 	var events []movediag.Event
 	for _, event := range movediag.Default.Snapshot().Events {

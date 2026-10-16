@@ -199,6 +199,12 @@ jobs:
           go-version-file: 'go.mod'
       - name: Install Redis and ffmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
+      # Ubuntu's redis-server package is built with TLS. Require the fixture
+      # here so a missing executable or TLS support cannot silently skip CI.
+      - name: Verify Redis TLS and ACL connections (race detector)
+        env:
+          RELAIS_TEST_REDIS_TLS_REQUIRE: "1"
+        run: go test -race -v -count=1 -timeout 1m -run '^TestRedisTLSACLIntegration$' ./internal/processrun/
       # Separate-process attachment builds its own binaries and owns Redis.
       # Keep this in the existing process lane until its cold-build PR cost is measured.
       - name: Verify attached demo process faults (race detector)

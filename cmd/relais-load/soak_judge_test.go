@@ -9,7 +9,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/relaishq/relais/internal/loadgen"
-	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
@@ -23,7 +23,7 @@ func TestSoakEndedKeyRetention(t *testing.T) {
 		}
 		t.Skip("dedicated Redis not supplied")
 	}
-	require.NoError(t, processrun.ValidateRedis(addr))
+	require.NoError(t, redisendpoint.ValidateDev(addr))
 	client := redis.NewClient(&redis.Options{Addr: addr, MaxRetries: -1})
 	defer func() { require.NoError(t, client.Close()) }()
 	prefix := "relais:soak-ended-test:" + strconvID() + ":"

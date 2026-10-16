@@ -98,8 +98,9 @@ on both for plain audio echo. The default worker and demo-launcher agent is echo
 The shared key must encode 32 bytes as hex or base64. Relay must not receive it.
 `-redis` / `RELAIS_REDIS_ADDR` selects the store; `-redis-prefix` /
 `RELAIS_REDIS_PREFIX` must agree across relay, workers, and control.
-`RELAIS_REDIS_PASSWORD` supplies an optional password. Redis TLS, ACL usernames,
-and the legacy Redis Cluster setting are not supported by these process flags.
+`RELAIS_REDIS_PASSWORD` supplies an optional password. TLS and ACL users are
+configured through the environment; see [Managed Redis](#managed-redis).
+The legacy Redis Cluster setting is not exposed by these process flags.
 
 Stop signal first to prevent new calls. Stop workers while control is still up,
 so SIGTERM can drain them. Then stop control, relay, and this owned Redis:
@@ -125,6 +126,62 @@ control running and restart that worker with its original name and addresses.
 The rejoin handshake fences old sessions before placement resumes. Adding a new
 registration is not a general production autoscaling interface; the dynamic
 registration routes below are test-only.
+
+## Managed Redis
+
+`relais-relay`, `relais-worker`, and `relais-control` use the same Redis
+connection settings. `relais-signal` reaches Redis through control and has no
+Redis client of its own. Keep the session-store encryption key configured as
+before: TLS protects transport; it does not replace encrypted snapshots.
+
+| Variable | Meaning |
+| --- | --- |
+| `RELAIS_REDIS_ADDR` | Explicit Redis `host:port`; `-redis` overrides it. |
+| `RELAIS_REDIS_PREFIX` | Shared namespace; `-redis-prefix` overrides it. |
+| `RELAIS_REDIS_USERNAME` | Optional Redis ACL username. |
+| `RELAIS_REDIS_PASSWORD` | Password for the ACL user, or for the default user when no username is set. |
+| `RELAIS_REDIS_TLS` | Set to `1` to enable TLS; unset or `0` disables it. Minimum TLS version: 1.2. |
+| `RELAIS_REDIS_TLS_CA_FILE` | Optional PEM CA bundle. Unset uses system roots. |
+| `RELAIS_REDIS_TLS_SERVER_NAME` | Optional certificate verification name and SNI override. Defaults to the connection host. |
+| `RELAIS_REDIS_TLS_CERT_FILE` | Optional client PEM certificate chain for mutual TLS; requires the key file. |
+| `RELAIS_REDIS_TLS_KEY_FILE` | Optional client private key; requires the certificate file. |
+| `RELAIS_REDIS_ALLOW_LOCAL_6379` | Set to `1` to permit loopback 6379 in production processes; unset or `0` keeps the refusal. |
+
+Production processes accept port 6379 on remote hosts. Literal loopback IPs
+(`127.0.0.0/8`, `::1`, including mapped IPv4) and `localhost` refuse 6379 by
+default. The opt-in exists to protect a developer's own Redis. Unspecified
+addresses such as `0.0.0.0`, `::`, or an empty host are always refused.
+Other hostnames count as remote; validation does not look up DNS. Use a dedicated
+endpoint and check where a hostname resolves when you configure it.
+
+The demo, `crash-run`, `relais-load`, local deployment scripts, install tests,
+and test helpers always refuse 6379 on every host and ignore the opt-in.
+The opt-in does not change those tools.
+
+Example for a TLS managed service with an ACL user (placeholder values only):
+
+```sh
+export RELAIS_REDIS_ADDR='cache.example.invalid:6379'
+export RELAIS_REDIS_TLS=1
+export RELAIS_REDIS_USERNAME='relais-service'
+# Supply RELAIS_REDIS_PASSWORD from your deployment's secret store.
+# For a private CA, also set RELAIS_REDIS_TLS_CA_FILE=/path/to/ca-bundle.pem.
+# For mutual TLS, set both RELAIS_REDIS_TLS_CERT_FILE and RELAIS_REDIS_TLS_KEY_FILE.
+# Keep RELAIS_SESSIONSTORE_KEY configured on workers and control as before.
+./bin/relais-control # Add the remaining topology flags from your deployment.
+```
+
+Give each Redis-using process the appropriate credentials and TLS settings.
+Certificate verification is always enabled. TLS settings without
+`RELAIS_REDIS_TLS=1`, an unreadable or invalid CA bundle, and a missing or invalid
+certificate/key pair cause startup to fail. Credentials are environment-only;
+do not put them in command-line arguments or logs.
+
+The Go store constructors also accept `storage.RedisConfig.Username` and
+`storage.RedisConfig.TLSConfig`, including Redis Cluster connections. The
+process flags do not enable Cluster discovery. Legacy plugin runners also use
+the TLS and ACL environment settings when their storage type is Redis; existing
+storage configuration still selects their Cluster seed addresses.
 
 ## Other hosts and security
 
@@ -284,8 +341,9 @@ It creates a fresh shared encryption key and a unique Redis namespace for each
 run, and stops every child and its Redis on completion, failure or SIGINT/SIGTERM.
 Process logs stay under `bin/crash-run-*/`. To use an existing **dedicated**
 instance, set `RELAIS_REDIS_ADDR=127.0.0.1:16379`, or pass `-redis=...`; it will
-not stop that instance or flush its data. These binaries and this target refuse
-port **6379** and have no Redis default address.
+not stop that instance or flush its data. Development drivers and this target
+refuse port **6379** on every host, even with the production local opt-in set.
+They have no Redis default address.
 
 ### Read the crash-run report
 

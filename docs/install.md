@@ -83,7 +83,11 @@ sudo systemctl disable --now redis-server
 Keep the service running if another application needs it. `brew install redis`
 does not start a service.
 
-Relais refuses Redis port 6379 ([#151](https://github.com/relaishq/relais/issues/151)).
+Production processes accept remote Redis on port 6379, with TLS and ACL users.
+Loopback port 6379 is refused by default to protect a developer's own Redis;
+`RELAIS_REDIS_ALLOW_LOCAL_6379=1` explicitly permits it. Unspecified addresses
+are refused. See [Managed Redis](deploy.md#managed-redis) for connection settings.
+Development and test tools ignore that opt-in and refuse 6379 on every host.
 The demo starts a throwaway Redis on a free port. `start.sh` starts its own Redis
 on port 16380 by default, with persistence disabled. To use another dedicated
 port, pass `-redis-port 16381`. It also refuses 6379.

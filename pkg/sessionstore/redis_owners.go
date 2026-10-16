@@ -27,7 +27,10 @@ func NewRedisOwners(ctx context.Context, cfg storage.RedisConfig) (*RedisOwners,
 	if strings.ContainsAny(cfg.Prefix, "{}") {
 		return nil, errors.New("sessionstore: prefix cannot contain braces")
 	}
-	client := connectRedis(cfg, "owners")
+	client, err := connectRedis(cfg, "owners")
+	if err != nil {
+		return nil, err
+	}
 	leases := &Redis{client: client, prefix: cfg.Prefix, retention: 5 * time.Minute}
 	if err := leases.retryRead(ctx, "session_ping", func() error { return client.Ping(ctx).Err() }); err != nil {
 		_ = client.Close()

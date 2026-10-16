@@ -10,7 +10,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/relaishq/relais/internal/nettopology"
-	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/redisendpoint"
 )
 
 var redisSecretPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -20,7 +20,7 @@ var redisSecretPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 func redisCommand(topology *nettopology.Topology, binary, port, dir, password string) ([]string, func(), error) {
 	args := []string{binary}
 	removeConfig := func() {}
-	if err := processrun.ValidateRedis(net.JoinHostPort(redisHost(topology), port)); err != nil {
+	if err := redisendpoint.ValidateDev(net.JoinHostPort(redisHost(topology), port)); err != nil {
 		return nil, removeConfig, err
 	}
 	if topology != nil {
@@ -51,7 +51,7 @@ func redisCommand(topology *nettopology.Topology, binary, port, dir, password st
 }
 
 func pingRedis(ctx context.Context, addr, password string) error {
-	if err := processrun.ValidateRedis(addr); err != nil {
+	if err := redisendpoint.ValidateDev(addr); err != nil {
 		return err
 	}
 	client := redis.NewClient(&redis.Options{Addr: addr, Password: password, MaxRetries: -1})

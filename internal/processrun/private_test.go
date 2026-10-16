@@ -26,7 +26,7 @@ func TestPrivateListenerAllowList(t *testing.T) {
 	listener, err := ListenPrivate("127.0.0.1:0")
 	require.NoError(t, err)
 	require.NoError(t, listener.Close())
-	// Reserved Redis addresses remain rejected even with private listeners enabled.
-	require.Error(t, ValidateRedis("10.130.4.4:6379"))
+	// Private listeners do not change the production Redis address policy.
+	require.NoError(t, ValidateRedis("10.130.4.4:6379"))
 	require.NoError(t, ValidateRedis("10.130.4.4:16379"))
 }

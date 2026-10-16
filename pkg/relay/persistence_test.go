@@ -30,7 +30,7 @@ func routeStores(t *testing.T, test func(*testing.T, sessionstore.Store, session
 			}
 			t.Skip("dedicated Redis not configured")
 		}
-		require.NoError(t, redisendpoint.Validate(addr))
+		require.NoError(t, redisendpoint.ValidateDev(addr))
 		store, err := sessionstore.NewRedis(context.Background(), storage.RedisConfig{Addr: addr, Prefix: "relay-route-test:" + rand.Text() + ":"}, make([]byte, 32))
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, store.Close()) })

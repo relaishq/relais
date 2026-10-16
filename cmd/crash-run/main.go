@@ -21,7 +21,7 @@ import (
 
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/nettopology"
-	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/callharness"
 )
 
@@ -771,7 +771,7 @@ func run() (err error) {
 			return fmt.Errorf("store readiness: %w (log %s)", err, filepath.Join(dir, "redis.log"))
 		}
 	}
-	if err := processrun.ValidateRedis(addr); err != nil {
+	if err := redisendpoint.ValidateDev(addr); err != nil {
 		return err
 	}
 	var key [32]byte

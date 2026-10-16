@@ -2,7 +2,9 @@ package storage
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"net"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/metrics"
 )
 
@@ -535,11 +538,41 @@ type RedisConfig struct {
 	// Single-node options
 	Addr string // Redis server address (e.g., "localhost:6379")
 	// Cluster options (if Addrs is non-empty or Cluster is true, cluster client is used)
-	Addrs    []string // Redis Cluster addresses
-	Cluster  bool     // Force cluster client
-	Password string   // Redis password (optional)
-	DB       int      // Redis database number (single-node only)
-	Prefix   string   // Key prefix for namespacing (optional)
+	Addrs     []string    // Redis Cluster addresses
+	Cluster   bool        // Force cluster client
+	Password  string      // Redis password (optional)
+	Username  string      // Redis ACL user (optional)
+	TLSConfig *tls.Config // Verified transport settings (optional)
+	DB        int         // Redis database number (single-node only)
+	Prefix    string      // Key prefix for namespacing (optional)
+}
+
+// ConnectionOptions is the common transport/auth builder for all Redis stores.
+// Retry and instrumentation policy remain with each caller.
+func (c RedisConfig) ConnectionOptions() (*redis.UniversalOptions, error) {
+	addrs := append([]string(nil), c.Addrs...)
+	if len(addrs) == 0 {
+		addrs = []string{c.Addr}
+	}
+	for _, addr := range addrs {
+		if err := redisendpoint.Validate(addr); err != nil {
+			return nil, err
+		}
+	}
+	transport := c.TLSConfig
+	if transport != nil {
+		if transport.InsecureSkipVerify {
+			return nil, errors.New("Redis TLS requires certificate verification")
+		}
+		transport = transport.Clone()
+		if transport.MinVersion < tls.VersionTLS12 {
+			transport.MinVersion = tls.VersionTLS12
+		}
+		if transport.MaxVersion != 0 && transport.MaxVersion < transport.MinVersion {
+			return nil, errors.New("Redis TLS maximum version must allow TLS 1.2 or newer and the configured minimum")
+		}
+	}
+	return &redis.UniversalOptions{Addrs: addrs, Username: c.Username, Password: c.Password, DB: c.DB, TLSConfig: transport}, nil
 }
 
 // NewRedisStorage creates a new RedisStorage instance.
@@ -551,35 +584,29 @@ type RedisConfig struct {
 // - Invalid configuration parameters
 // - Redis ping fails
 func NewRedisStorage(config interface{}) (*RedisStorage, error) {
-	var client redis.UniversalClient
-
-	switch cfg := config.(type) {
+	var cfg RedisConfig
+	switch value := config.(type) {
 	case string:
-		// Backward compatibility: treat string as Redis address
-		client = redis.NewClient(&redis.Options{Addr: cfg})
+		cfg.Addr = value
 	case RedisConfig:
-		if cfg.Cluster || len(cfg.Addrs) > 0 {
-			addrs := cfg.Addrs
-			if len(addrs) == 0 && cfg.Addr != "" {
-				addrs = []string{cfg.Addr}
-			}
-			client = redis.NewClusterClient(&redis.ClusterOptions{
-				Addrs:    addrs,
-				Password: cfg.Password,
-			})
-		} else {
-			client = redis.NewClient(&redis.Options{
-				Addr:     cfg.Addr,
-				Password: cfg.Password,
-				DB:       cfg.DB,
-			})
-		}
+		cfg = value
 	default:
 		return nil, fmt.Errorf("invalid configuration type: expected string or RedisConfig")
+	}
+	options, err := cfg.ConnectionOptions()
+	if err != nil {
+		return nil, err
+	}
+	var client redis.UniversalClient
+	if cfg.Cluster || len(cfg.Addrs) > 0 {
+		client = redis.NewClusterClient(options.Cluster())
+	} else {
+		client = redis.NewClient(options.Simple())
 	}
 
 	// Verify connection
 	if err := client.Ping(context.Background()).Err(); err != nil {
+		_ = client.Close()
 		return nil, fmt.Errorf("redis connection failed: %v", err)
 	}
 

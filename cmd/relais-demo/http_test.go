@@ -441,3 +441,10 @@ func TestDemoAgentMovePreservesFailureResult(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, failure.StatusCode)
 	require.Equal(t, result, returned)
 }
+
+func TestDemoIgnoresLocal6379OptIn(t *testing.T) {
+	t.Setenv("RELAIS_REDIS_ALLOW_LOCAL_6379", "1")
+	for _, addr := range []string{"127.0.0.1:6379", "cache.example.invalid:6379"} {
+		require.ErrorContains(t, validateConfig(config{HTTP: "127.0.0.1:0", Redis: addr}), "reserved")
+	}
+}

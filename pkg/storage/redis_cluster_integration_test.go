@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/redisendpoint"
 )
 
 func requireRedisCluster(t *testing.T) []string {
@@ -17,6 +19,11 @@ func requireRedisCluster(t *testing.T) []string {
 	addrs := strings.Split(addrCSV, ",")
 	if len(addrs) == 0 {
 		t.Skip("skipping: no cluster addrs provided")
+	}
+	for _, addr := range addrs {
+		if err := redisendpoint.ValidateDev(addr); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// Try to connect
 	rs, err := NewRedisStorage(RedisConfig{Addrs: addrs, Cluster: true})

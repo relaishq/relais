@@ -9,6 +9,7 @@ import (
 
 	"github.com/relaishq/relais/internal/nettopology"
 	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/stretchr/testify/require"
 )
 
@@ -64,7 +65,7 @@ func TestCapacityPrivateRoleBindings(t *testing.T) {
 	store, err := redisAddress(topology)
 	require.NoError(t, err)
 	require.Equal(t, netip.AddrPortFrom(topology.Plan.Roles["store"].Private, 16379).String(), store)
-	require.NoError(t, processrun.ValidateRedis(store))
+	require.NoError(t, redisendpoint.ValidateDev(store))
 }
 
 func TestCapacityRedisConfigKeepsPasswordOutOfArguments(t *testing.T) {
