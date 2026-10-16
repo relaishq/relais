@@ -107,6 +107,13 @@ const (
 )
 
 var (
+	// ErrMoveBudget is temporary worker move-memory pressure. It is never an
+	// agent Restore/identity failure and can be retried after reservations drain.
+	ErrMoveBudget = errors.New("mediaworker: worker move budget unavailable")
+	// ErrExportNotFlushed is a move-budget refusal that proves the source was
+	// not fenced or removed by export. It also matches ErrMoveBudget.
+	// A failed move can return this source to service without crash recovery.
+	ErrExportNotFlushed = fmt.Errorf("%w: export has not flushed", ErrMoveBudget)
 	// ErrUnsupportedOffer is returned when an SDP offer cannot be answered:
 	// it is malformed, or it asks for something the media worker does not
 	// support.
@@ -242,11 +249,12 @@ type RelayConfig struct {
 // Worker is a media worker. It owns one UDP socket, or shares one with other
 // workers (see Socket), and the sessions that run over it.
 type Worker struct {
-	agents  agentCounters
-	metrics workerMetrics
-	cfg     Config
-	log     logging.LeveledLogger
-	conn    packetConn // its own UDP socket, a port on a shared Socket, or the relay leg (relayConn)
+	moveBytes atomic.Int64
+	agents    agentCounters
+	metrics   workerMetrics
+	cfg       Config
+	log       logging.LeveledLogger
+	conn      packetConn // its own UDP socket, a port on a shared Socket, or the relay leg (relayConn)
 	// localAddr is the UDP socket the worker reads: its own or the shared
 	// Socket's. mediaAddr is where callers send: localAddr, or behind a
 	// relay the relay's public address.

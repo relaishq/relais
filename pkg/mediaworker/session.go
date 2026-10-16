@@ -60,11 +60,15 @@ var supportedSRTPProfiles = []dtls.SRTPProtectionProfile{
 // sends or receives is processed under it, so a snapshot taken under mu is
 // atomic with the counters (see export).
 type session struct {
-	agent        *agentHost
-	durableAgent agentState // guarded by mu; last acknowledged durable agent pair
-	id           string     // state.ID; never changes
-	worker       *Worker
-	log          logging.LeveledLogger
+	moveMu        sync.Mutex
+	moveReserved  int64
+	exportScratch *moveScratch
+	moveClosed    bool
+	agent         *agentHost
+	durableAgent  agentState // guarded by mu; last acknowledged durable agent pair
+	id            string     // state.ID; never changes
+	worker        *Worker
+	log           logging.LeveledLogger
 
 	mu           sync.Mutex
 	state        sessionState
@@ -298,6 +302,9 @@ func (s *session) connect() (*dtls.Conn, error) {
 	// durable; the loop will persist the newer pair after the save interval.
 	if err := s.persistSnapshot(); err != nil && !errors.Is(err, errCheckpointSkipped) {
 		return dtlsConn, err
+	}
+	if s.agent != nil && s.agent.v2 != nil {
+		close(s.agent.v2.ready)
 	}
 	return dtlsConn, nil
 }
@@ -692,6 +699,7 @@ func (s *session) consentExpired() {
 func (s *session) close() {
 	s.closeOnce.Do(func() {
 		s.cancel()
+		s.releaseMoveBytes()
 		s.consent.Stop()
 
 		s.mu.Lock()

@@ -66,7 +66,7 @@ func (s *session) captureSnapshotAt(captured time.Time) ([]byte, agentState, err
 	if err != nil {
 		return nil, agentState{}, fmt.Errorf("mediaworker: snapshot DTLS: %w", err)
 	}
-	data, err := json.Marshal(snapshot{Version: sessionStateVersion, State: state, DTLSConnection: binary})
+	data, err := json.Marshal(snapshot{Version: state.Version, State: state, DTLSConnection: binary})
 	return data, state.Agent, err
 }
 

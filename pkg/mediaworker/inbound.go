@@ -57,7 +57,7 @@ func SnapshotReplayIndexes(state []byte) (map[uint32]uint64, error) {
 func replayInboundIndexes(state sessionState) (map[uint32]uint64, error) {
 	inbound := make(map[uint32]uint64, len(state.SRTP.Inbound))
 	maps.Copy(inbound, state.SRTP.Inbound)
-	if state.Agent.legacy || isEchoState(state.Agent.State) || !state.Audio.Anchored {
+	if state.Agent.legacy || (state.Agent.V2 == nil && isEchoState(state.Agent.State)) || !state.Audio.Anchored {
 		return inbound, nil
 	}
 	ssrc := state.Audio.InboundSSRC

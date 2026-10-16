@@ -160,7 +160,9 @@ func TestRemoteErrorsAndTimeouts(t *testing.T) {
 	for code, sentinel := range mediaworker.RemoteErrors {
 		t.Run("worker/"+code, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				privateapi.Error(w, sentinel, mediaworker.RemoteErrors)
+				// Test decoding this specific wire code. A child sentinel such as
+				// export_not_flushed also matches its move_budget parent.
+				privateapi.Error(w, sentinel, map[string]error{code: sentinel})
 			}))
 			defer server.Close()
 			_, err := (&RemoteWorker{URL: server.URL, Client: server.Client()}).ResumeSession(nil, mediaworker.ResumeOptions{})

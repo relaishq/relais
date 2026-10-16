@@ -25,6 +25,7 @@ import (
 	"github.com/relaishq/relais/internal/movediag"
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/pkg/agent"
+	agentv2 "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/metrics"
 	"github.com/relaishq/relais/pkg/relay"
@@ -692,7 +693,7 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	if err != nil {
 		// Explicit transport uncertainty can hide a committed adoption, even
 		// with an agent cause. Otherwise typed callback failures are definitive.
-		agentFailure := errors.Is(err, agent.ErrRestore) || errors.Is(err, agent.ErrVersion) || errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrSave)
+		agentFailure := errors.Is(err, agentv2.ErrIncompatibleAgent) || errors.Is(err, agent.ErrRestore) || errors.Is(err, agent.ErrVersion) || errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrSave)
 		uncertainResume := errors.Is(err, privateapi.ErrUncertain) || (!agentFailure && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)))
 		if uncertainResume {
 			p.metrics.uncertainMoveResumes.Add(1)
@@ -772,6 +773,24 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 		if err == nil {
 			_, err = source.worker.ResumeSession(state, opts)
 		}
+	}
+	if errors.Is(err, mediaworker.ErrMoveBudget) && !errors.Is(err, privateapi.ErrUncertain) {
+		// Both targets refused before adoption. Keep the exact export and hold;
+		// the bounded recovery loop can retry either live worker or an alternate.
+		p.mu.Lock()
+		if source.pending == nil {
+			source.pending = make(map[string]*takeoverState)
+		}
+		excluded := make(map[netip.AddrPort]bool)
+		if source.dead {
+			excluded[source.addr] = true
+		}
+		source.pending[c.id] = &takeoverState{call: c, lease: lease, routed: source.addr, routedLease: lease,
+			planned: true, plannedState: state, crashMargins: uncertainResume, held: true, excluded: excluded,
+			attemptLimit: maxResumeAttempts, outageStarted: moveStarted, budgetRollback: true, budgetStarted: time.Now(),
+			budgetExcluded: map[netip.AddrPort]bool{source.addr: true, target.addr: true}}
+		p.mu.Unlock()
+		return fmt.Errorf("controlplane: rollback awaiting move budget: %w", err)
 	}
 	if checkpointOutside && (err == nil || checkpointEnvelopeLoss(err)) {
 		res.CheckpointPolicy = "scaled"
@@ -1067,13 +1086,14 @@ func (p *Plane) retainUncertainMove(source *registration, c *call, from sessions
 	return true
 }
 
-// Typed pre-export failures are definite. All other errors could follow a
-// flushed source, including an HTTP internal error whose cause was not mapped.
+// Only typed errors proving no flush and no discarded input are definitive.
+// A successful scratch admission may already have consumed or dropped input;
+// subsequent callback, encoding and transport errors require crash recovery.
 func uncertainExport(err error) bool {
 	if errors.Is(err, privateapi.ErrUncertain) {
 		return true
 	}
-	for _, known := range []error{mediaworker.ErrUnknownSession, mediaworker.ErrClosed, mediaworker.ErrNotEstablished,
+	for _, known := range []error{mediaworker.ErrUnknownSession, mediaworker.ErrClosed, mediaworker.ErrNotEstablished, mediaworker.ErrExportNotFlushed,
 		sessionstore.ErrNotFound, sessionstore.ErrLeaseLost, sessionstore.ErrTransient} {
 		if errors.Is(err, known) {
 			return false

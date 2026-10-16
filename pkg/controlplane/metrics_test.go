@@ -375,3 +375,25 @@ func requireControlLosses(t *testing.T, body string, want float64) {
 	}
 	require.Equal(t, want, total)
 }
+
+// Legacy uncertain reverse transfers retain their established move accounting,
+// even when the eventual owner is the source of the original move.
+func TestControlMetricsRetainedSourceResumeKeepsLegacyAccounting(t *testing.T) {
+	p, a, b, r := setup(t)
+	ctx := context.Background()
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	p.relay = &failedRouteRelay{fakeRelay: r, route: a.addr, target: b.addr, failForward: true}
+	p.store = &reverseReplyLostStore{retainedMoveStore: &retainedMoveStore{Store: p.store}, source: a.addr}
+	_, err = p.Move(ctx, id, "b")
+	require.Error(t, err)
+	p.retryPlannedMoves(ctx, p.workers["a"], time.Now())
+	status, err := p.Status(ctx)
+	require.NoError(t, err)
+	require.Len(t, status.Calls, 1)
+	require.Equal(t, "a", status.Calls[0].Owner)
+	require.EqualValues(t, 1, status.Calls[0].MoveCount)
+	require.NotNil(t, status.Calls[0].LastMove)
+	require.Equal(t, "move", status.Calls[0].LastMoveKind)
+	require.Contains(t, planeMetricsBody(p), "relais_control_moves_total 1\n")
+}

@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
+	"github.com/relaishq/relais/internal/agenthost"
 	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/agent"
@@ -108,6 +110,10 @@ type agentHarnessSystem struct {
 }
 
 type agentHarnessSettings struct {
+	v2                    []agenthost.Registration
+	targetEcho            bool
+	remoteTarget          bool
+	targetHandler         func(http.Handler) http.Handler
 	snapshotInterval      time.Duration
 	saveInterval          time.Duration
 	targetRestoreFailure  bool
@@ -134,7 +140,13 @@ func startAgentHarness(t *testing.T, store sessionstore.Store, settings ...agent
 		config = settings[0]
 	}
 	for i := range 2 {
-		w, err := mediaworker.New(mediaworker.Config{SnapshotInterval: config.snapshotInterval, Agent: mediaworker.AgentConfig{SaveInterval: config.saveInterval, Factory: func(string) agent.Agent {
+		w, err := mediaworker.New(mediaworker.Config{SnapshotInterval: config.snapshotInterval, Agent: mediaworker.AgentConfig{SaveInterval: config.saveInterval, Factory: func(id string) agent.Agent {
+			if i == 1 && config.targetEcho {
+				return &agent.Echo{}
+			}
+			if len(config.v2) > 0 {
+				return agenthost.Factory(config.v2[i])(id)
+			}
 			if config.echo {
 				return &agent.Echo{}
 			}
@@ -151,7 +163,20 @@ func startAgentHarness(t *testing.T, store sessionstore.Store, settings ...agent
 		sys.workers = append(sys.workers, w)
 		t.Cleanup(func() { require.NoError(t, w.Close()) })
 		r.AddWorker(w.LocalAddr())
-		require.NoError(t, plane.Register(strconv.Itoa(i), w.LocalAddr(), w))
+		var registered controlplane.Worker = w
+		if i == 1 && config.remoteTarget {
+			handler := w.PrivateHandler()
+			if config.targetHandler != nil {
+				handler = config.targetHandler(handler)
+			}
+			private := httptest.NewServer(handler)
+			t.Cleanup(private.Close)
+			registered = &controlplane.RemoteWorker{URL: private.URL, Client: private.Client()}
+		}
+		require.NoError(t, plane.Register(strconv.Itoa(i), w.LocalAddr(), registered))
+		if i == 1 && config.remoteTarget {
+			w.StartHeartbeats(plane)
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
