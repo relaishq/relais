@@ -60,8 +60,17 @@ func TestRelayBufferCheckpointDefinitiveLossDropsGateAndRing(t *testing.T) {
 		require.Equal(t, "definitive-loss", status.Takeovers[0].CheckpointPolicy)
 		require.Greater(t, clock.gatePackets.Load(), int64(10), "terminal policy must exercise an allocated ring and gate")
 		require.Zero(t, resumes.Load(), "unsafe checkpoint never reaches resume")
+		// Terminal accounting is published before fenced store/relay cleanup.
+		// Seeing the loss event is not a cleanup barrier, especially with Redis.
+		// Wait for both allocations to disappear, then retain every zero-state
+		// and no-forwarding assertion below. Timeout expiry is not cleanup.
+		require.Eventually(t, func() bool {
+			stats := sys.r.Stats()
+			return stats.Holds == 0 && stats.BufferedSessions == 0
+		}, 2*time.Second, 5*time.Millisecond, "terminal loss discards the gate and ring")
 		stats := sys.r.Stats()
 		require.Equal(t, clock.forwarded.Load(), stats.CallerPackets, "loss never flushes held ciphertext to the target")
+		require.Zero(t, stats.HoldTimeouts, "terminal cleanup must not rely on hold expiry")
 		require.Zero(t, stats.Holds)
 		require.Zero(t, stats.HeldPackets)
 		require.Zero(t, stats.HeldBytes)
