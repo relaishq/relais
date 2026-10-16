@@ -43,6 +43,8 @@ func (w *Worker) metricSamples() []metrics.Sample {
 	if w.cfg.DataChannel != nil {
 		d := w.DataChannelStats()
 		samples = append(samples, []metrics.Sample{
+			metrics.Counter("relais_worker_datachannel_rejected_total", "DataChannel admissions refused by channel limit.", d.Rejected),
+			metrics.Counter("relais_worker_datachannel_reassembly_stalls_total", "Data sides stopped after fragmented input made no delivery progress.", d.ReassemblyStalls),
 			metrics.Counter("relais_worker_datachannel_opened_total", "Accepted DataChannels.", d.Opened),
 			metrics.Counter("relais_worker_datachannel_closed_total", "Closed DataChannels.", d.Closed),
 			metrics.Counter("relais_worker_datachannel_oversized_total", "Oversized messages or upstream frames.", d.Oversized),

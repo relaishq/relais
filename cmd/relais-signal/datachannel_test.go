@@ -135,10 +135,16 @@ func dialDC(t *testing.T, sys *dcSystem, audio bool) *dcCaller {
 	return dialDCOnWorker(t, sys, audio, "0", 1024)
 }
 func dialDCOnWorker(t *testing.T, sys *dcSystem, audio bool, worker string, peerLimit int) *dcCaller {
+	return dialDCWithSettings(t, sys, audio, worker, peerLimit, nil)
+}
+func dialDCWithSettings(t *testing.T, sys *dcSystem, audio bool, worker string, peerLimit int, configure func(*webrtc.SettingEngine)) *dcCaller {
 	t.Helper()
 	c := &dcCaller{}
 	se := webrtc.SettingEngine{}
 	se.SetIncludeLoopbackCandidate(true)
+	if configure != nil {
+		configure(&se)
+	}
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(se))
 	pc, err := api.NewPeerConnection(webrtc.Configuration{})
 	require.NoError(t, err)

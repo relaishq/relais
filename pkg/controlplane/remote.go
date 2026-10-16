@@ -206,7 +206,10 @@ func diagnosticRelay(r Relay, ctx context.Context) Relay {
 }
 
 func (w *RemoteWorker) CheckSessionMove(id string) error {
-	err := privateapi.Do(context.Background(), remoteClient(w.Client), w.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/move-check", nil, nil, mediaworker.RemoteErrors)
+	return w.CheckSessionMoveContext(context.Background(), id)
+}
+func (w *RemoteWorker) CheckSessionMoveContext(ctx context.Context, id string) error {
+	err := privateapi.Do(ctx, remoteClient(w.Client), w.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/move-check", nil, nil, mediaworker.RemoteErrors)
 	if olderRelay(err) {
 		return nil
 	}

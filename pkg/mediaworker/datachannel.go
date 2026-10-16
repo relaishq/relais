@@ -18,8 +18,8 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-// Version 9 is deliberately unreadable by media-only v7/v8 workers. It is a
-// reconnect marker, never a partial SCTP checkpoint. Media envelopes stay v7/v8.
+// Version 9 keeps old workers from reading this reconnect-only envelope.
+// Classification depends ONLY on State.Data, never on the version number.
 const dataSessionStateVersion = 9
 const dataReceiveBytes = 64 << 10
 const dataIOTimeout = time.Second
@@ -86,7 +86,7 @@ func SnapshotIsDataSession(raw []byte) (bool, error) {
 	if err := json.Unmarshal(raw, &marker); err != nil {
 		return false, fmt.Errorf("%w: %v", errBadState, err)
 	}
-	if marker.Version == dataSessionStateVersion || marker.State.Version == dataSessionStateVersion || marker.State.Data {
+	if marker.State.Data {
 		return true, nil
 	}
 	return false, nil
@@ -118,24 +118,28 @@ func (w *Worker) EndSessionReason(id, reason string) error {
 	return nil
 }
 
-type dataCounters struct{ opened, closed, oversize, overflow, dropped, unknown atomic.Uint64 }
-type DataChannelStats struct{ Opened, Closed, Oversized, PendingOverflow, DroppedOldest, UnknownLabel uint64 }
+type dataCounters struct{ opened, closed, oversize, overflow, dropped, unknown, rejected, stalls atomic.Uint64 }
+type DataChannelStats struct{ Opened, Closed, Oversized, PendingOverflow, DroppedOldest, UnknownLabel, Rejected, ReassemblyStalls uint64 }
 
 func (w *Worker) DataChannelStats() DataChannelStats {
 	c := &w.dataCounters
-	return DataChannelStats{c.opened.Load(), c.closed.Load(), c.oversize.Load(), c.overflow.Load(), c.dropped.Load(), c.unknown.Load()}
+	return DataChannelStats{c.opened.Load(), c.closed.Load(), c.oversize.Load(), c.overflow.Load(), c.dropped.Load(), c.unknown.Load(), c.rejected.Load(), c.stalls.Load()}
 }
 
 type dataSession struct {
-	s          *session
-	cfg        DataChannelConfig
-	maxMessage int
-	mu         sync.Mutex
-	channels   map[string]*dataPipe
-	ws         *websocket.Conn
-	stopped    bool
-	ending     bool
-	writeMu    sync.Mutex
+	s            *session
+	cfg          DataChannelConfig
+	maxMessage   int
+	mu           sync.Mutex
+	channels     map[string]*dataPipe
+	ws           *websocket.Conn
+	stopped      bool
+	ending       bool
+	writeMu      sync.Mutex
+	transport    *dataTransport
+	dataFailOnce sync.Once
+	failureCode  string
+	failureCause error
 }
 type dataPipe struct {
 	owner    *dataSession
@@ -163,11 +167,58 @@ func (d *dataSession) report(label, code string, cause error) *DataChannelError 
 // SCTP is the ONLY reader of DTLS application records for a data session.
 // No transparent resume is attempted even if SCTP ends while media continues.
 func (d *dataSession) serve(conn *dtls.Conn) {
-	a, err := sctp.ServerWithOptions(sctp.Config{NetConn: conn, MaxReceiveBufferSize: dataReceiveBytes, MaxMessageSize: uint32(max(d.maxMessage, 1024)), LoggerFactory: d.s.worker.cfg.LoggerFactory}, sctp.WithMaxReassemblyQueueEntries(uint32(max(16, (d.maxMessage+1023)/1024))))
-	if err != nil {
-		return
+	t := newDataTransport(conn)
+	d.mu.Lock()
+	d.transport = t
+	d.mu.Unlock()
+	go t.pump()
+
+	a, err := sctp.ServerWithOptions(sctp.Config{NetConn: t, MaxReceiveBufferSize: dataReceiveBytes, MaxMessageSize: uint32(max(d.maxMessage, 1024)), LoggerFactory: d.s.worker.cfg.LoggerFactory})
+	if err == nil {
+		go d.watchReassembly(t)
+		d.acceptChannels(a)
+		_ = a.Close()
 	}
-	defer func() { _ = a.Close() }()
+	_ = t.Close()
+	d.stopChannels("datachannel_closed", nil)
+	// Only DTLS closure ends media. SCTP closure keeps this sole DTLS reader.
+	<-t.readDone
+}
+func (d *dataSession) watchReassembly(t *dataTransport) {
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-d.s.ctx.Done():
+			return
+		case <-t.stopped:
+			return
+		case now := <-ticker.C:
+			if t.monitor.stalled(now, d.maxMessage) {
+				d.dataFailOnce.Do(func() {
+					d.s.worker.dataCounters.oversize.Add(1)
+					d.s.worker.dataCounters.stalls.Add(1)
+					d.mu.Lock()
+					d.failureCode = "datachannel_message_too_large"
+					d.failureCause = ErrDataChannelMessageTooLarge
+					d.mu.Unlock()
+					// Reset streams first. SCTP ABORT makes some WebRTC peers
+					// close DTLS as well, so it is deliberately not sent.
+					d.stopChannels("datachannel_message_too_large", ErrDataChannelMessageTooLarge)
+					timer := time.NewTimer(200 * time.Millisecond)
+					select {
+					case <-timer.C:
+					case <-d.s.ctx.Done():
+						timer.Stop()
+					}
+					_ = t.Close()
+				})
+				return
+			}
+		}
+	}
+}
+func (d *dataSession) acceptChannels(a *sctp.Association) {
 	// Bound association setup/accept by the session lifetime through conn.Close.
 	for accepted := 0; ; accepted++ {
 		stream, err := a.AcceptStream()
@@ -175,14 +226,18 @@ func (d *dataSession) serve(conn *dtls.Conn) {
 			return
 		}
 		if accepted >= d.cfg.MaxChannels {
+			d.s.worker.dataCounters.rejected.Add(1)
 			_ = d.report("", "datachannel_max_channels", ErrDataChannelUnsupported)
-			return
+			_ = stream.Close()
+			d.transport.monitor.forget(stream.StreamIdentifier())
+			continue
 		}
 		_ = stream.SetReadDeadline(time.Now().Add(2 * dataIOTimeout))
 		dc, err := datachannel.Server(stream, &datachannel.Config{LoggerFactory: d.s.worker.cfg.LoggerFactory})
 		if err != nil {
 			_ = d.report("", "datachannel_unsupported", errors.Join(ErrDataChannelUnsupported, err))
 			_ = stream.Close()
+			d.transport.monitor.forget(stream.StreamIdentifier())
 			continue
 		}
 		_ = dc.SetReadDeadline(time.Time{})
@@ -191,6 +246,7 @@ func (d *dataSession) serve(conn *dtls.Conn) {
 		}
 	}
 }
+
 func (d *dataSession) add(dc *datachannel.DataChannel) error {
 	switch dc.ChannelType {
 	case datachannel.ChannelTypeReliable, datachannel.ChannelTypeReliableUnordered, datachannel.ChannelTypePartialReliableRexmit, datachannel.ChannelTypePartialReliableRexmitUnordered:
@@ -256,7 +312,26 @@ func (d *dataSession) add(dc *datachannel.DataChannel) error {
 	return nil
 }
 func (d *dataSession) send(op byte, label string, payload []byte) error {
-	d.writeMu.Lock()
+	d.mu.Lock()
+	ending := d.ending
+	d.mu.Unlock()
+	if ending && op != 3 {
+		return io.ErrClosedPipe
+	}
+	deadline := time.Now().Add(dataIOTimeout)
+	if op == 3 {
+		deadline = time.Now().Add(dataEndTimeout)
+	}
+	if op == 3 {
+		for !d.writeMu.TryLock() {
+			if !time.Now().Before(deadline) {
+				return context.DeadlineExceeded
+			}
+			time.Sleep(time.Millisecond)
+		}
+	} else {
+		d.writeMu.Lock()
+	}
 	defer d.writeMu.Unlock()
 	d.mu.Lock()
 	ws := d.ws
@@ -265,7 +340,7 @@ func (d *dataSession) send(op byte, label string, payload []byte) error {
 	if rejected || ws == nil {
 		return io.ErrClosedPipe
 	}
-	_ = ws.SetWriteDeadline(time.Now().Add(dataIOTimeout))
+	_ = ws.SetWriteDeadline(deadline)
 	frame := make([]byte, 2+len(label)+len(payload))
 	frame[0] = op
 	frame[1] = byte(len(label))
@@ -309,6 +384,7 @@ func (d *dataSession) stopChannels(code string, cause error) {
 	for _, p := range d.channels {
 		pipes = append(pipes, p)
 	}
+	clear(d.channels)
 	d.mu.Unlock()
 	for _, p := range pipes {
 		p.close(code, cause)
@@ -318,20 +394,29 @@ func (d *dataSession) end(reason string) {
 	d.mu.Lock()
 	d.ending = true
 	d.stopped = true
+	ws, t := d.ws, d.transport
 	d.mu.Unlock()
-	payload, _ := json.Marshal(struct {
-		Reason string `json:"reason"`
-	}{reason})
-	// One bounded write precedes close; if the peer is gone this is best effort.
-	_ = d.send(3, "", payload)
-	d.mu.Lock()
-	ws := d.ws
-	d.mu.Unlock()
-	if ws != nil {
-		_ = ws.Close()
+	if t != nil {
+		_ = t.Close()
 	}
-	d.stopChannels(reason, nil)
+	// Do not let the session close/rejoin path wait on an upstream write lock.
+	// One goroutine per ended session has an absolute 50 ms notification budget.
+	go func() {
+		if ws != nil {
+			_ = ws.SetWriteDeadline(time.Now().Add(dataEndTimeout))
+		}
+		payload, _ := json.Marshal(struct {
+			Reason string `json:"reason"`
+		}{reason})
+		_ = d.send(3, "", payload)
+		if ws != nil {
+			_ = ws.SetWriteDeadline(time.Now())
+			_ = ws.Close()
+		}
+		d.stopChannels(reason, nil)
+	}()
 }
+
 func (p *dataPipe) signal() {
 	select {
 	case p.wake <- struct{}{}:
@@ -339,6 +424,11 @@ func (p *dataPipe) signal() {
 	}
 }
 func (p *dataPipe) close(code string, cause error) {
+	p.owner.mu.Lock()
+	if p.owner.failureCause != nil {
+		code, cause = p.owner.failureCode, p.owner.failureCause
+	}
+	p.owner.mu.Unlock()
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
@@ -348,6 +438,9 @@ func (p *dataPipe) close(code string, cause error) {
 	p.queue = nil
 	p.pending = 0
 	p.mu.Unlock()
+	if transport := p.owner.transport; transport != nil {
+		transport.monitor.forget(p.dc.StreamIdentifier())
+	}
 	p.owner.s.worker.dataCounters.closed.Add(1)
 	if cause != nil {
 		_ = p.owner.report(p.dc.Label, code, cause)
@@ -376,12 +469,16 @@ func (p *dataPipe) read() {
 	for {
 		n, _, err := p.dc.ReadDataChannel(buf)
 		if errors.Is(err, io.ErrShortBuffer) {
+			p.owner.s.worker.dataCounters.oversize.Add(1)
 			p.close("datachannel_message_too_large", ErrDataChannelMessageTooLarge)
 			return
 		}
 		if err != nil {
 			p.close("channel_closed", nil)
 			return
+		}
+		if transport := p.owner.transport; transport != nil {
+			transport.monitor.consumed(p.dc.StreamIdentifier(), n)
 		}
 		p.mu.Lock()
 		closed := p.closed
