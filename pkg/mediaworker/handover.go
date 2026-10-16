@@ -10,6 +10,7 @@ import (
 	"github.com/pion/dtls/v3"
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
+	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/agent"
 	"github.com/relaishq/relais/pkg/framecache"
@@ -561,7 +562,7 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		if err != nil {
 			return nil, release, err
 		}
-		payload = &movePayload{Bytes: export.payload}
+		payload = &movePayload{Bytes: export.payload, Tasks: export.tasks}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -609,7 +610,7 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 	if payload != nil {
 		if err := validateV2Wire(state); err != nil {
 			s.fenced.Store(false)
-			return nil, release, err
+			return nil, release, privateapi.Uncertain(err)
 		}
 	}
 	return state, release, nil

@@ -65,6 +65,8 @@ type session struct {
 	exportScratch *moveScratch
 	moveClosed    bool
 	agent         *agentHost
+	storeClock    time.Time // guarded by mu; last successful store-clock observation
+	storeClockAt  time.Time
 	durableAgent  agentState // guarded by mu; last acknowledged durable agent pair
 	id            string     // state.ID; never changes
 	worker        *Worker

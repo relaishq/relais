@@ -35,17 +35,26 @@ type v2Envelope struct {
 	HasMoveOnly    bool
 	MoveOnlyLength int
 	Started        bool
+	Tasks          []taskIntent  `json:",omitempty"`
+	Capacity       []taskRefusal `json:",omitempty"`
 }
 
 type v2Host struct {
 	instance     agent.Agent
 	registration agenthost.Registration
 	ready        chan struct{}
+	tasks        []*localTask // actor-owned
+	pendingInput *agentInput  // one backpressured, unconsumed input; actor-owned
+	emissions    chan taskEmission
+	force        chan struct{}
 }
 
 // movePayload exists only in exact exports, including an empty exact export.
 // A checkpoint never includes this field or calls SaveMoveOnly.
-type movePayload struct{ Bytes []byte }
+type movePayload struct {
+	Bytes []byte
+	Tasks []taskMove `json:",omitempty"`
+}
 
 func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeOptions, move *movePayload) error {
 	reg := r.Registration
@@ -81,15 +90,24 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 	if opts.Kind == legacy.Takeover || opts.SequenceMargin > 0 {
 		move = nil
 	}
-	if restoring && move != nil && len(move.Bytes) > 0 {
+	if restoring && move != nil && (len(move.Bytes) > 0 || len(move.Tasks) > 0) {
 		scratch := int64(len(move.Bytes))
+		for _, t := range move.Tasks {
+			scratch += int64(len(t.Request))
+			for _, r := range t.Results {
+				scratch += int64(taskResultBytes(r))
+			}
+		}
+		if scratch > int64(reg.Bounds.MaxMailboxBytes) {
+			return s.v2RestoreError(agent.ErrCapacity)
+		}
 		if !s.worker.reserveMoveBytes(scratch) {
 			return ErrMoveBudget
 		}
 		defer s.worker.moveBytes.Add(-scratch)
 	}
 
-	h := &v2Host{registration: reg, ready: make(chan struct{})}
+	h := &v2Host{registration: reg, ready: make(chan struct{}), emissions: make(chan taskEmission), force: make(chan struct{}, 1)}
 	s.agent.v2 = h
 	// Factory follows the legacy factory rule: quick, nonblocking construction.
 	h.instance = reg.Factory(agent.FactoryArgs{SessionID: s.id, AgentName: reg.Name, MaxStateBytes: reg.Bounds.MaxStateBytes})
@@ -111,6 +129,14 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 			return s.v2RestoreError(err)
 		}
 		outcome := agent.OK
+		if move == nil {
+			for _, t := range s.state.Agent.V2.Tasks {
+				if (t.Class == agent.ReadOnly && t.RequestLength > 0 && (!t.Final || t.Cursor != t.Published)) || t.Published > t.Cursor {
+					outcome = agent.OutcomeUnknown
+					break
+				}
+			}
+		}
 		if state.HasMoveOnly {
 			if move != nil {
 				if len(move.Bytes) != state.MoveOnlyLength {
@@ -137,6 +163,10 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 		notice := &agent.ResumeNotice{ResumeNotice: legacy.ResumeNotice{Kind: kind, CheckpointAge: opts.CheckpointAge, SnapshotAge: opts.SnapshotAge,
 			InputMayBeDuplicated: opts.InputMayBeDuplicated, DuplicateWindows: slices.Clone(opts.DuplicateWindows), Progress: s.state.Agent.Progress}, MoveOnly: outcome}
 		s.agent.latest = cloneAgentState(s.state.Agent)
+		if err := s.restoreTasks(move); err != nil {
+			return s.v2RestoreError(err)
+		}
+		s.publishTaskIntents()
 		// Resumed is per adoption attempt. It is not a durable task cause.
 		attempt, err := randomString(16)
 		if err != nil {
@@ -186,6 +216,9 @@ func (s *session) validateV2State(state agent.State) error {
 	if err := s.validateV2StateMetadata(state); err != nil {
 		return err
 	}
+	if s.agent.latest.V2 != nil {
+		return s.taskBudget(s.agent.v2.tasks, state.MoveOnlyLength)
+	}
 	return s.reserveMoveBytes(int64(state.MoveOnlyLength))
 }
 func (s *session) validateV2StateMetadata(state agent.State) error {
@@ -218,11 +251,24 @@ func (s *session) reserveMoveBytes(n int64) error {
 		return context.Canceled
 	}
 	delta := n - s.moveReserved
+	var scratchDelta int64
+	if s.exportScratch != nil {
+		scratchDelta = max(0, 8*n-s.exportScratch.bytes.Load())
+	}
+	if scratchDelta > 0 {
+		if !s.worker.reserveMoveBytes(scratchDelta) {
+			return ErrMoveBudget
+		}
+	}
 	if delta > 0 && !s.worker.reserveMoveBytesWithin(delta, v2MoveWorkerBytes-v2ExportScratchBytes) {
+		s.worker.moveBytes.Add(-scratchDelta)
 		return ErrMoveBudget
 	}
 	if delta < 0 {
 		s.worker.moveBytes.Add(delta)
+	}
+	if scratchDelta > 0 {
+		s.exportScratch.bytes.Add(scratchDelta)
 	}
 	s.moveReserved = n
 	return nil
@@ -264,9 +310,7 @@ func validateV2Effects(kind agent.EventKind, e agent.Effects) error {
 		return errors.New("agent: StartTasks from Resumed is forbidden")
 	}
 	switch {
-	case len(e.StartTasks) > 0:
-		return errors.New("agent: StartTasks not supported in this slice")
-	case len(e.CancelTasks) > 0 || e.CancelBefore != nil:
+	case e.CancelBefore != nil:
 		return errors.New("agent: task cancellation not supported in this slice")
 	case len(e.SetTimers) > 0 || len(e.CancelTimers) > 0:
 		return errors.New("agent: timers not supported in this slice")
@@ -284,16 +328,20 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	// Reserved and future kinds have no delivery route in this slice. Do not call
 	// the agent or Save, so an unknown event cannot alter accepted state.
 	switch event.Kind {
-	case agent.Started, agent.AudioInput, agent.Resumed:
+	case agent.Started, agent.AudioInput, agent.Resumed, agent.TaskMessage:
 	default:
 		return nil
 	}
 	h := s.agent
 	before := cloneAgentState(h.latest)
 	var saved agent.State
+	var effects agent.Effects
+	var tasks []*localTask
 	var saving atomic.Bool
+	var refusals []taskRefusal
 	err := s.agentCall(func(ctx context.Context) error {
-		effects, err := h.v2.instance.Handle(ctx, event)
+		var err error
+		effects, err = h.v2.instance.Handle(ctx, event)
 		if err != nil {
 			return err
 		}
@@ -303,12 +351,51 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if err := validateV2Effects(event.Kind, effects); err != nil {
 			return err
 		}
+		// Refusals are compact terminal intents, delivered as later transactions.
+		// Never recursively call Handle while accepting another callback's effects.
+		refusals = uniqueTaskRefusals(before.V2.Capacity)
+		if event.Kind == agent.TaskMessage && len(refusals) > 0 && refusals[0].ID == event.Result.TaskID {
+			refusals = refusals[1:]
+		}
+		var refused []agent.TaskResult
+		tasks, refused, err = s.prepareTaskEffects(event, effects, h.v2.tasks, refusals)
+		if err != nil {
+			return err
+		}
+		for _, r := range refused {
+			refusals = append(refusals, taskRefusal{ID: r.TaskID, Turn: r.Turn})
+		}
+		// Stage consumption on an owned node before checking the complete metadata.
+		// The accepted cursor must not make a previously checked envelope overflow.
+		if event.Kind == agent.TaskMessage {
+			for i, t := range tasks {
+				if t.intent.ID == event.Result.TaskID {
+					next := *t
+					next.intent.Cursor = event.Result.Sequence
+					next.mailboxBytes -= taskResultBytes(t.results[0])
+					next.results = t.results[1:]
+					s.retireTaskRequest(&next)
+					tasks[i] = &next
+				}
+			}
+		}
+		prior := uniqueTaskRefusals(before.V2.Capacity)
+		if event.Kind == agent.TaskMessage && len(prior) > 0 && prior[0].ID == event.Result.TaskID {
+			prior = prior[1:]
+		}
+		tasks, refusals, err = s.fitTaskRefusals(h.v2.tasks, tasks, prior, refusals)
+		if err != nil {
+			return err
+		}
 		saving.Store(true)
 		saved, err = h.v2.instance.Save(ctx)
 		if err != nil {
 			return fmt.Errorf("%w: %w", legacy.ErrSave, err)
 		}
-		if err := s.validateV2State(saved); err != nil {
+		if err := s.validateV2StateMetadata(saved); err != nil {
+			return err
+		}
+		if err := s.taskBudgetWithRefusals(tasks, saved.MoveOnlyLength, refusals); err != nil {
 			return err
 		}
 		saved = cloneV2State(saved)
@@ -324,11 +411,12 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if restoreErr := s.agentCall(func(ctx context.Context) error { return h.v2.instance.Restore(ctx, cloneV2State(v2State(before))) }); restoreErr != nil {
 			return fmt.Errorf("%w: %w", legacy.ErrRestore, restoreErr)
 		}
-		if reserveErr := s.reserveMoveBytes(int64(before.V2.MoveOnlyLength)); reserveErr != nil {
+		if reserveErr := s.taskBudget(h.v2.tasks, before.V2.MoveOnlyLength); reserveErr != nil {
 			return reserveErr
 		}
 		// A late AudioInput Handle is quarantined before Restore, just as in the
 		// legacy host. It cannot advance accepted state or consumed-input progress.
+		// Capacity TaskMessages get their own transaction and fail closed too.
 		if !adoption && event.Kind == agent.AudioInput && errors.Is(err, context.DeadlineExceeded) && !saving.Load() {
 			s.worker.agents.drops.Add(1)
 			return nil
@@ -344,6 +432,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	next := cloneAgentState(before)
 	next.State = legacy.State{Version: saved.Version, Bytes: saved.Bytes}
 	next.V2.HasMoveOnly, next.V2.MoveOnlyLength = saved.HasMoveOnly, saved.MoveOnlyLength
+	next.V2.Capacity = refusals
 	if event.Kind == agent.Started {
 		next.V2.Started = true
 	}
@@ -351,6 +440,8 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		next.Progress = event.Input.Progress
 		next.Progress.Consumed = before.Progress.Consumed + 1
 	}
+	s.acceptTaskEffects(tasks, effects)
+	next.V2.Tasks = cloneTaskIntents(h.latest.V2.Tasks)
 	next.Revision++
 	h.latest = next
 	s.publishAgent()
@@ -368,11 +459,13 @@ func (s *session) processV2Audio(in agentInput) error {
 
 // Scratch stays session-owned until export claims it. Close also handles a
 // successful actor reply abandoned by a cancelled flush caller.
-type moveScratch struct{ release func() }
+type moveScratch struct {
+	release func()
+	bytes   atomic.Int64
+}
 
-// The actor calls this before pausing or consuming any queued input. A queued
-// Handle may grow the move data, so reserve the registered bound in that case.
-// Empty queues use the accepted length, including zero-length move payloads.
+// The actor reserves actual accepted payloads before pausing. If queued work
+// grows them, reserveMoveBytes grows this hold before accepting that work.
 func (s *session) reserveV2ExportScratch() error {
 	s.moveMu.Lock()
 	defer s.moveMu.Unlock()
@@ -383,14 +476,20 @@ func (s *session) reserveV2ExportScratch() error {
 		return nil
 	}
 	n := s.agent.latest.V2.MoveOnlyLength
-	if len(s.agent.queue) > 0 {
-		n = s.agent.v2.registration.Bounds.MaxMailboxBytes
+	for _, t := range s.agent.v2.tasks {
+		n += len(t.request)
+		n += t.mailboxBytes
+		n += len(t.intent.ID) + 64
 	}
+
 	scratch := int64(8 * n)
 	if !s.worker.reserveMoveBytes(scratch) {
 		return ErrExportNotFlushed
 	}
-	s.exportScratch = &moveScratch{release: sync.OnceFunc(func() { s.worker.moveBytes.Add(-scratch) })}
+	hold := &moveScratch{}
+	hold.bytes.Store(scratch)
+	hold.release = sync.OnceFunc(func() { s.worker.moveBytes.Add(-hold.bytes.Swap(0)) })
+	s.exportScratch = hold
 	return nil
 }
 func (s *session) claimV2ExportScratch() (func(), error) {
@@ -407,7 +506,7 @@ func (s *session) claimV2ExportScratch() (func(), error) {
 // Called by the paused actor exactly once per export request, after the last
 // accepted Save. The scratch was reserved before queue draining began.
 func (s *session) saveV2MoveOnly(deadline context.Context) (agentMoveExport, error) {
-	export := agentMoveExport{}
+	export := agentMoveExport{tasks: s.exportTasks()}
 	state := v2State(s.agent.latest)
 	if !state.HasMoveOnly {
 		return export, nil
@@ -445,7 +544,7 @@ func v2EnvelopeEqual(a, b *v2Envelope) bool {
 		return a == b
 	}
 	return a.Name == b.Name && a.Contract == b.Contract && slices.Equal(a.TaskKinds, b.TaskKinds) && a.Bounds == b.Bounds &&
-		a.HasMoveOnly == b.HasMoveOnly && a.MoveOnlyLength == b.MoveOnlyLength && a.Started == b.Started
+		a.HasMoveOnly == b.HasMoveOnly && a.MoveOnlyLength == b.MoveOnlyLength && a.Started == b.Started && taskIntentsEqual(a.Tasks, b.Tasks)
 }
 
 func validateV2Wire(data []byte) error {
@@ -457,7 +556,7 @@ func validateV2Wire(data []byte) error {
 		}
 		// Leave room for lease, margins, ages and replay metadata on actual resume.
 		if len(wire) >= v2MaxWireBytes-(64<<10) {
-			return errors.New("agent: exact export exceeds private API wire budget")
+			return fmt.Errorf("%w: exact export exceeds private API wire budget", agent.ErrCapacity)
 		}
 	}
 	return nil

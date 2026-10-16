@@ -11,6 +11,7 @@ import (
 
 	"github.com/pion/rtp"
 	"github.com/relaishq/relais/internal/agenthost"
+	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/agent"
 	agentv2 "github.com/relaishq/relais/pkg/agent/v2"
@@ -61,6 +62,7 @@ type agentInput struct {
 }
 type agentMoveExport struct {
 	payload []byte
+	tasks   []taskMove
 }
 
 type agentFlush struct {
@@ -111,6 +113,8 @@ func cloneAgentState(state agentState) agentState {
 	if state.V2 != nil {
 		e := *state.V2
 		e.TaskKinds = slices.Clone(e.TaskKinds)
+		e.Tasks = cloneTaskIntents(e.Tasks)
+		e.Capacity = slices.Clone(e.Capacity)
 		state.V2 = &e
 	}
 	return state
@@ -359,17 +363,8 @@ func (s *session) agentLoop() {
 		return
 	}
 	if s.agent.v2 != nil {
-		select {
-		case <-s.agent.v2.ready:
-		case <-s.ctx.Done():
-			return
-		}
-		if !s.agent.latest.V2.Started {
-			if err := s.handleV2Event(agentv2.Event{ID: agentv2.EventID("started/" + s.id), Kind: agentv2.Started}); err != nil {
-				s.agentFailed(err)
-				return
-			}
-		}
+		s.v2AgentLoop()
+		return
 	}
 	if _, echo := s.agent.instance.(*agent.Echo); echo {
 		for {
@@ -412,6 +407,11 @@ func (s *session) agentLoop() {
 // already consumed. Enqueue is paused; the caller may also discard this queue.
 func (s *session) finishAgentFlush(request agentFlush) bool {
 	if request.moveOnly != nil {
+		if err := s.validateTaskMoves(s.agent.latest.V2.Tasks, &movePayload{Tasks: s.taskMoveViews()}); err != nil {
+			s.log.Warnf("session %s: export preflight incompatible: %v", s.id, err)
+			request.done <- errors.Join(ErrExportIncompatible, err)
+			return true
+		}
 		// A definitive refusal must precede both queue drain and paused input
 		// drops. The actor serializes this admission with Handle and Save.
 		s.mu.Lock()
@@ -422,6 +422,7 @@ func (s *session) finishAgentFlush(request agentFlush) bool {
 		}
 		s.agent.paused = true
 		s.mu.Unlock()
+		s.stopTaskAttempts()
 	}
 	var err error
 	reserve := s.worker.cfg.Agent.CallbackTimeout
@@ -433,6 +434,12 @@ drain:
 		select {
 		case in := <-s.agent.queue:
 			err = s.processAudio(in)
+			if errors.Is(err, errTaskAdmissionBackpressure) {
+				// Export the last accepted pair; the relay replays unconsumed input on
+				// the target, just as when the flush deadline leaves queued input.
+				err = nil
+				break drain
+			}
 			if err != nil {
 				break drain
 			}
@@ -458,6 +465,9 @@ drain:
 	if errors.Is(err, ErrExportNotFlushed) {
 		err = fmt.Errorf("mediaworker: export failed after pause: %v", err)
 	}
+	if errors.Is(err, agentv2.ErrCapacity) || errors.Is(err, errTaskAdmissionBackpressure) {
+		err = privateapi.Uncertain(err)
+	}
 	request.done <- err
 	if err != nil {
 		s.agentFailed(err)
@@ -467,6 +477,10 @@ drain:
 }
 
 func (s *session) dropAgentQueue() {
+	if s.agent.v2 != nil && s.agent.v2.pendingInput != nil {
+		s.agent.v2.pendingInput = nil
+		s.worker.agents.drops.Add(1)
+	}
 	for {
 		select {
 		case <-s.agent.queue:

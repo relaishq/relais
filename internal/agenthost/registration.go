@@ -5,6 +5,7 @@ package agenthost
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"time"
 
@@ -26,13 +27,18 @@ type Registration struct {
 	Name      string
 	Factory   agent.Factory
 	TaskKinds []string
+	Tasks     map[string]agent.TaskHandler
 	Bounds    Bounds
 }
 
 // Factory carries a registration through the existing legacy configuration
 // field. Only the v2 host unwraps it; it cannot accidentally behave like Echo.
 func Factory(r Registration) legacy.Factory {
+	r.Tasks = maps.Clone(r.Tasks)
 	r.TaskKinds = slices.Clone(r.TaskKinds)
+	for kind := range r.Tasks {
+		r.TaskKinds = append(r.TaskKinds, kind)
+	}
 	slices.Sort(r.TaskKinds)
 	r.TaskKinds = slices.Compact(r.TaskKinds)
 	if r.Bounds.MaxStateBytes == 0 {

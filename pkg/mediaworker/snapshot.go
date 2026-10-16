@@ -107,6 +107,12 @@ func (s *session) persistSnapshotMode(parent context.Context, force bool) error 
 	s.state.Checkpoint.Attempts++
 	s.mu.Unlock()
 	captured, err := s.worker.cfg.Relay.Owners.Clock(ctx, s.id)
+	if err == nil {
+		s.mu.Lock()
+		s.storeClock = captured
+		s.storeClockAt = time.Now()
+		s.mu.Unlock()
+	}
 	var state []byte
 	var pair agentState
 	if err == nil {
