@@ -7,6 +7,10 @@ are available, [install](install.md) them first. The live topology needs
 
 ## One machine
 
+The [install guide](install.md) provides `start.sh` and `stop.sh` for this full
+loopback topology. The manual recipe below is an alternative; do not run both
+at once.
+
 This loopback setup is for a trusted development machine. It is not a public
 production deployment. Install Go 1.26+ and `redis-server` on PATH with
 `brew install redis` or `sudo apt install redis-server`, then run `make build`.
@@ -146,8 +150,93 @@ Signal provides sanitized status but no metrics or move/drain routes.
 The relay is one process by default; read [restart conditions](guarantees.md#relay-restart)
 and [same-host standby limits](guarantees.md#same-host-standby-relay) before planning recovery.
 
-## Real processes: WebRTC you can kill -9
+## Process flags and private APIs
 
+`make build` also produces the individual binaries for manual process runs.
+All three require `-redis` (or `RELAIS_REDIS_ADDR`), with an optional shared
+`-redis-prefix` / `RELAIS_REDIS_PREFIX`. Only workers and the control plane need
+the same `RELAIS_SESSIONSTORE_KEY` (32 bytes encoded as hex or base64). The relay
+uses an ownership-only store with no snapshot key or decryption API; start it
+without that environment variable (`env -u RELAIS_SESSIONSTORE_KEY ...`). The
+driver strips the key from the relay environment. Run each with `-h` for flags:
+
+- `relais-relay`: `-media` (public UDP), `-leg` (worker UDP), `-http` (private
+  control HTTP), `-hold-timeout` (default 3 s).
+- `relais-worker`: `-name`, `-media` (private UDP), `-http`, `-relay-leg`,
+  `-relay-media`, `-control` (control-plane HTTP URL), `-drain-timeout` (5 s).
+- `relais-control`: `-http`, `-relay` (relay control URL), and a repeated
+  `-worker name=http://worker-address` for each worker. Start the relay and
+  worker HTTP listeners before the control plane. Workers retry heartbeats
+  while it starts. Each process prints one JSON readiness line with its PID
+  and bound addresses; ephemeral loopback ports are the defaults.
+
+WHIP-style means a single WebRTC-HTTP offer/answer exchange, not full WHIP
+compliance. SRTP is encrypted media; SRTCP is its encrypted control traffic.
+ICE is WebRTC network-path setup.
+
+The loopback control listener serves WHIP-style `POST /calls`, `DELETE /calls/{id}`,
+move/drain endpoints and `GET /status`, plus a private heartbeat endpoint. The
+worker API wraps create/end/export/resume/status; the relay API wraps worker
+registration/removal and move/forget/hold/release. Private HTTP listeners allow
+loopback by default, or explicitly allowed private prefixes through
+`RELAIS_PRIVATE_NETS`. These unauthenticated APIs are a security limit:
+loopback is not a security boundary on a multi-user host. Any local user able
+to connect can invoke mutations and read worker snapshot key material.
+Snapshots containing key material travel over this private HTTP leg.
+
+## Worker shutdown
+
+On SIGTERM (or SIGINT), `relais-worker` asks the control plane to drain its
+calls through the existing planned move path. Its HTTP listener and heartbeats
+remain live until sessions are gone or `-drain-timeout` expires (default 5 s).
+A second SIGINT or SIGTERM during drain uses the default immediate exit.
+It then closes. An unreachable control plane or failed drain is logged; the
+worker closes remaining sessions after the bounded attempt.
+
+Separate processes share an encrypted Redis frame cache. A resumed worker can
+replay cached video; on a cache miss it asks the caller for a fresh keyframe
+with a Picture Loss Indication (PLI). The relay also buffers caller encrypted
+media for takeover. Neither cache is a durable no-loss log; see
+[frame-cache limits](dev/frame-cache.md) and
+[buffered takeover](guarantees.md#crash-takeover-with-the-relay-buffer). Session snapshots have an explicit format version. A mixed-version
+rollout must first deploy decoders accepting **both old and new snapshot
+versions**, then upgrade writers, and retain old-version decoding until old
+snapshots are gone. The current single-version decoder does not provide that
+rollout compatibility by itself.
+
+## UDP socket buffers
+
+A UDP socket on the OS default receive buffer drops datagrams in the kernel
+when its read loop stalls briefly. Every socket on the media path therefore
+requests larger buffers:
+
+| Socket | Receive | Send |
+| --- | --- | --- |
+| Relay media and worker leg | 16 MiB | 4 MiB |
+| Worker media | 8 MiB | 4 MiB |
+| Call-harness caller | 4 MiB | 1 MiB |
+
+The kernel caps each request without an error. `relais-relay` and
+`relais-worker` log the requested and effective sizes at startup, and print a
+warning that names the host limit when it caps a request. On Linux, raise the
+limits on the host; a container cannot change them. For example, in
+`/etc/sysctl.d/60-relais-udp.conf`:
+
+```conf
+net.core.rmem_max = 16777216
+net.core.wmem_max = 4194304
+```
+
+Apply it with `sudo sysctl --system`. Leave `rmem_default` and `wmem_default`
+unchanged; they apply to every socket. Linux 6.18 and later default both limits
+to 4 MiB; older kernels default to 212992 bytes. `ss -uamn` and `getsockopt`
+show double the granted size; the startup log shows the granted size. Check
+for kernel drops with `nstat -az UdpRcvbufErrors`. macOS caps each buffer at
+`kern.ipc.maxsockbuf`.
+
+## Contributor test tools
+
+### Real processes: WebRTC you can kill -9
 
 For Linux emulated machines, private API isolation, and running inside an
 existing Linux VM or container from a Mac, see
@@ -170,12 +259,16 @@ part of the full CI matrix (nightly, pushes to `main`, and manual runs). It stay
 out of PR CI.
 
 ```bash
-make crash-run                              # ten consecutive acceptance runs
-make crash-run CRASH_FLAGS="-runs=1 -verbose" # one full run and caller report
+make crash-run                              # ten interleaved trials per mode: twenty total
+make crash-run CRASH_FLAGS="-runs=1 -verbose" # one trial per mode: two total
 make crash-run CRASH_FLAGS="-runs=1 -after=3s" # developer smoke test only
 ```
 
-The default takes about eleven minutes. Each run requires a media gap below
+The default interleaves ten trials with Redis cache plus PLI and ten with
+cache-off PLI: 20 trials total. PLI requests a fresh video keyframe. Each trial
+lasts at least 61.5 seconds, including warmup and the post-takeover observation,
+so budget more than 20 minutes plus build and startup time. `-runs=1` still runs
+one trial per mode, for two trials total. Each trial requires a media gap below
 2 seconds, zero decryption failures after the first resumed packet, zero ICE
 restarts/reconnects or renegotiations, resumed audio and video, clean full VP8
 decode with ffmpeg, and a connected caller with answered consent checks for
@@ -198,8 +291,7 @@ port **6379** and have no Redis default address.
 
 The report includes `run`, `gap_ms`, `decrypt(total/after)`, `reconnects`,
 `renegotiations`, `decoded_ms`, `live_ms`, `detection_ms`, and `result`.
-The old README's local timing table duplicated this output example. For
-accepted measured values and their exact conditions, use the
+For accepted measured values and their exact conditions, use the
 [native-process table in the guarantee matrix](guarantees.md#crash-takeover-with-the-relay-buffer).
 Do not treat an example report as a performance promise.
 
@@ -208,23 +300,7 @@ External call-harness placement uses literal registration names: the zero value
 `CallOptions{Worker: -1}` for unpinned control-plane placement. Owned topologies
 keep their existing worker-index semantics.
 
-`make build` also produces the individual binaries for manual process runs.
-All three require `-redis` (or `RELAIS_REDIS_ADDR`), with an optional shared
-`-redis-prefix` / `RELAIS_REDIS_PREFIX`. Only workers and the control plane need
-the same `RELAIS_SESSIONSTORE_KEY` (32 bytes encoded as hex or base64). The relay
-uses an ownership-only store with no snapshot key or decryption API; start it
-without that environment variable (`env -u RELAIS_SESSIONSTORE_KEY ...`). The
-driver strips the key from the relay environment. Run each with `-h` for flags:
-
-- `relais-relay`: `-media` (public UDP), `-leg` (worker UDP), `-http` (private
-  control HTTP), `-hold-timeout` (default 3 s).
-- `relais-worker`: `-name`, `-media` (private UDP), `-http`, `-relay-leg`,
-  `-relay-media`, `-control` (control-plane HTTP URL), `-drain-timeout` (5 s).
-- `relais-control`: `-http`, `-relay` (relay control URL), and a repeated
-  `-worker name=http://worker-address` for each worker. Start the relay and
-  worker HTTP listeners before the control plane. Workers retry heartbeats
-  while it starts. Each process prints one JSON readiness line with its PID
-  and bound addresses; ephemeral loopback ports are the defaults.
+### Distributed test registration
 
 For distributed process tests, the control binary has a separate opt-in
 `POST /private/test/register` route. Enable it with a repeatable flag that names
@@ -265,19 +341,8 @@ and is **private-network only**. Restrict access to trusted test participants.
 For a private control listener, explicitly allow its private prefix through
 `RELAIS_PRIVATE_NETS`; the worker allowlist does not grant listener access.
 
-WHIP-style means a single WebRTC-HTTP offer/answer exchange, not full WHIP
-compliance. SRTP is encrypted media; SRTCP is its encrypted control traffic.
-ICE is WebRTC network-path setup.
+### Private coordination internals
 
-The loopback control listener serves WHIP-style `POST /calls`, `DELETE /calls/{id}`,
-move/drain endpoints and `GET /status`, plus a private heartbeat endpoint. The
-worker API wraps create/end/export/resume/status; the relay API wraps worker
-registration/removal and move/forget/hold/release. Private HTTP listeners allow
-loopback by default, or explicitly allowed private prefixes through
-`RELAIS_PRIVATE_NETS`. These unauthenticated APIs are a security limit:
-loopback is not a security boundary on a multi-user host. Any local user able
-to connect can invoke mutations and read worker snapshot key material.
-Snapshots containing key material travel over this private HTTP leg.
 Remote requests have a two-second client bound and never automatically retry
 media mutations. Resume uses the caller's coordination context when provided.
 A lost transport reply is an uncertain outcome. Takeover retries the same
@@ -305,14 +370,7 @@ Healthy local coordination finishes in milliseconds. Slow coordination and
 worst-case rollback can exceed the 3 s backstop and report an expired hold. It bounds packet holding, and does
 not make a crashed control plane durably resumable.
 
-On SIGTERM (or SIGINT), `relais-worker` asks the control plane to drain its
-calls through the existing planned move path. Its HTTP listener and heartbeats
-remain live until sessions are gone or `-drain-timeout` expires (default 5 s).
-A second SIGINT or SIGTERM during drain uses the default immediate exit.
-It then closes. An unreachable control plane or failed drain is logged; the
-worker closes remaining sessions after the bounded attempt. Verify this
-operator path with `make crash-run CRASH_FLAGS="-runs 1 -after 3s -sigterm -verbose"`;
-this short run checks the planned gap below 100 ms, not the 60 s crash window.
+### Driver cleanup
 
 Each driver's Redis, relay, worker and control child has its own process group.
 Cleanup sends group signals only while the child leader remains unreaped;
@@ -330,45 +388,4 @@ Redis startup log, and verify each with `lsof -p <pid>` (command and `cwd` must
 match that run). Terminate only those groups with `kill -TERM -- -<child-pid>`;
 use `kill -KILL -- -<child-pid>` only for a group that does not stop. Redis uses
 no persistence. Do not target another run or the reserved Redis on port 6379.
-
-Separate processes share an encrypted Redis frame cache. A resumed worker can
-replay cached video; on a cache miss it asks the caller for a fresh keyframe
-with a Picture Loss Indication (PLI). The relay also buffers caller encrypted
-media for takeover. Neither cache is a durable no-loss log; see
-[frame-cache limits](dev/frame-cache.md) and
-[buffered takeover](guarantees.md#crash-takeover-with-the-relay-buffer). Session snapshots have an explicit format version. A mixed-version
-rollout must first deploy decoders accepting **both old and new snapshot
-versions**, then upgrade writers, and retain old-version decoding until old
-snapshots are gone. The current single-version decoder does not provide that
-rollout compatibility by itself.
-
-### UDP socket buffers
-
-A UDP socket on the OS default receive buffer drops datagrams in the kernel
-when its read loop stalls briefly. Every socket on the media path therefore
-requests larger buffers:
-
-| Socket | Receive | Send |
-| --- | --- | --- |
-| Relay media and worker leg | 16 MiB | 4 MiB |
-| Worker media | 8 MiB | 4 MiB |
-| Call-harness caller | 4 MiB | 1 MiB |
-
-The kernel caps each request without an error. `relais-relay` and
-`relais-worker` log the requested and effective sizes at startup, and print a
-warning that names the host limit when it caps a request. On Linux, raise the
-limits on the host; a container cannot change them. For example, in
-`/etc/sysctl.d/60-relais-udp.conf`:
-
-```conf
-net.core.rmem_max = 16777216
-net.core.wmem_max = 4194304
-```
-
-Apply it with `sudo sysctl --system`. Leave `rmem_default` and `wmem_default`
-unchanged; they apply to every socket. Linux 6.18 and later default both limits
-to 4 MiB; older kernels default to 212992 bytes. `ss -uamn` and `getsockopt`
-show double the granted size; the startup log shows the granted size. Check
-for kernel drops with `nstat -az UdpRcvbufErrors`. macOS caps each buffer at
-`kern.ipc.maxsockbuf`.
 

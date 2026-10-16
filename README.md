@@ -1,6 +1,6 @@
 # Relais
 
-**Deploy your voice or video AI agent while its call keeps running.**
+**Deploy your voice AI agent while its call keeps running.**
 
 Relais is a self-hosted WebRTC media server written in Go. A live call keeps
 running when its media worker is redeployed, drained, or crashes (`kill -9`).
@@ -13,17 +13,22 @@ the media and recovery layer; you supply the speech and AI services.
 
 Measured evidence, with workload and failure limits:
 
-- Planned moves: **44 ms maximum video pause** in the passing full soak.
+- Planned moves: **44 ms maximum video pause** in the one-hour test run.
   [Planned-move evidence](docs/guarantees.md#planned-move).
-- Worker crashes: **529 ms maximum video pause** in that soak.
+- Worker crashes: **529 ms maximum video pause** in that run.
   [Takeover evidence](docs/guarantees.md#crash-takeover-with-the-relay-buffer).
-- Capacity: **50 concurrent calls** in the full-soak capacity check on the
+- Capacity: **50 concurrent calls** in the capacity check on the
   documented Linux host. This is a demonstrated load, not a maximum.
   [Capacity and soak](docs/guarantees.md#capacity-and-soak).
 
+Measured in a one-hour run of 50 synthetic echo calls on one 32-vCPU Linux VM,
+with every process and Redis on that host and the relay buffer on. Separate
+hosts and real agent workloads at this load are not measured.
+[Run conditions](docs/guarantees.md#capacity-and-soak).
+
 ## Status and limits
 
-**Pre-1.0. Phase 2 is complete.** The [guarantee matrix](docs/guarantees.md)
+**Pre-1.0.** The [guarantee matrix](docs/guarantees.md)
 is the evidence and the boundary of each claim. A surviving connection can
 still have a media pause. Agent takeover restores a checkpoint; recent work
 can repeat. Applications must make external side effects safe to repeat.
@@ -32,12 +37,21 @@ can repeat. Applications must make external side effects safe to repeat.
   cross-host relay failover is not established. See
   [relay restart](docs/guarantees.md#relay-restart) and the optional
   [same-host standby](docs/guarantees.md#same-host-standby-relay).
-- Multi-process runs require Redis. Redis TLS and ACL usernames are not
-  supported yet ([#151](https://github.com/relaishq/relais/issues/151)).
+- Multi-process runs require Redis. The process binaries refuse Redis on port
+  6379 and do not support Redis TLS or ACL usernames yet ([#151](https://github.com/relaishq/relais/issues/151)).
 - Custom agents need a fork today. The built-ins echo media or play a tone script.
 - Desktop Chrome is tested; Safari is not. Agent continuity over the real
   internet is not measured. See [non-guarantees](docs/guarantees.md#explicit-non-guarantees).
-- Aborted moves have a known [rollback integrity exception](docs/guarantees.md#51-caller-decryption-failure-after-rollback).
+- After an aborted move, a caller could not decrypt three packets. This occurred
+  once in about 210 untraced rollbacks. The cause is unknown; this is not a stable
+  failure rate. See [#51](docs/guarantees.md#51-caller-decryption-failure-after-rollback).
+- Redeploying a changed agent or Relais build mid-call works only if the new
+  build can read the old agent state and snapshot versions. Mixed-version rollout
+  is not guaranteed. See [limits](docs/guarantees.md#explicit-non-guarantees) and
+  [ADR 0006](docs/adr/0006-agent-interface.md#resume-and-replay).
+- One caller per call: no rooms, fan-out, simulcast, or SVC (layered video). Media
+  uses UDP only, with no TURN relay or TCP/TLS fallback. Control-plane crash
+  recovery is not established. See [non-guarantees](docs/guarantees.md#explicit-non-guarantees).
 - Private control APIs are unauthenticated. The signaling frontend is for
   controlled tests; a proven public service is outside the current evidence.
 - The [legacy stored-frame pipeline](docs/legacy/plugin-pipeline.md) is
@@ -48,7 +62,7 @@ can repeat. Applications must make external side effects safe to repeat.
 Use macOS or Linux, Go 1.26+, Git, current Chrome, and `redis-server` on PATH.
 Install Redis with `brew install redis` or `sudo apt install redis-server`.
 You do not need to start a Redis service: the demo starts its own throwaway
-Redis on a free port. Relais refuses Redis port **6379**.
+Redis on a free port. The Relais process binaries refuse Redis port **6379**.
 
 Build from source; this is the install path that works today:
 
@@ -97,9 +111,11 @@ leases prevent two workers from sending as the same session. See the
 
 ## Run it yourself
 
-Start with [installation](docs/install.md), then follow the
-[deployment guide](docs/deploy.md) for a one-machine topology, ports, keys,
-start/stop order, private networks, and UDP buffer settings. Redis is required.
+The `start.sh` and `stop.sh` scripts start and stop the full topology on one
+machine, including a dedicated Redis. They live in each release archive, or
+under `deploy/local/` in a checkout. See [installation](docs/install.md) for
+commands, then [deployment](docs/deploy.md) for ports, keys, start/stop order,
+private networks, and UDP buffer settings.
 The demo launcher is a test tool, not a production process supervisor.
 
 ## Connect your app

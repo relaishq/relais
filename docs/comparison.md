@@ -79,8 +79,7 @@ to another region. This documents a regional recovery feature, without supplying
 a node-migration protocol contract. [Region pinning](https://docs.livekit.io/deploy/admin/regions/region-pinning/).
 Checked 2026-10-15.
 
-Twilio Video remains supported; its FAQ records the reversal of the announced
-end of life. Do not exclude it on the basis of the old announcement.
+Twilio Video remains supported after the reversal of its announced end of life.
 [Video FAQ](https://www.twilio.com/docs/video/faq).
 Checked 2026-10-15.
 
