@@ -146,6 +146,8 @@ type Config struct {
 	PacketTrace func(PacketTrace)
 	// Agent selects per-call audio logic. Zero values keep the default echo.
 	Agent AgentConfig
+	// SnapshotLimits belongs to the operator, independently of registrations.
+	SnapshotLimits SnapshotLimits
 
 	// CheckpointEnvelope configures source index rates for safe crash recovery.
 	CheckpointEnvelope CheckpointEnvelope
@@ -287,6 +289,10 @@ type Worker struct {
 // New starts a media worker listening on cfg.ListenAddr.
 func New(cfg Config) (*Worker, error) {
 	cfg.Agent = cfg.Agent.defaults()
+	cfg.SnapshotLimits = cfg.SnapshotLimits.defaults()
+	if err := cfg.SnapshotLimits.Validate(); err != nil {
+		return nil, err
+	}
 	cfg.CheckpointEnvelope = cfg.CheckpointEnvelope.Defaults()
 	if cfg.SnapshotInterval <= 0 {
 		cfg.SnapshotInterval = 100 * time.Millisecond

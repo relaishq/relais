@@ -1,5 +1,4 @@
-// Package agenthost is the internal v2 registration seam. It deliberately does
-// not expose a workerapp registration API before tasks, pacing and limits land.
+// Package agenthost carries public workerapp registrations to the v2 host.
 package agenthost
 
 import (
@@ -13,7 +12,7 @@ import (
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 )
 
-// Bounds are resolved internally until operator admission lands in slice 6.
+// Bounds are the resolved effective registration limits.
 type Bounds struct {
 	MaxStateBytes    int
 	MaxPendingBytes  int

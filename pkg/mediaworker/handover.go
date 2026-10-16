@@ -666,7 +666,7 @@ func decodeSnapshot(data []byte) (*snapshot, error) {
 		state.Version = sessionStateVersion
 		snap.Version = sessionStateVersion
 	}
-	if snap.AgentMoveOnly != nil && len(snap.AgentMoveOnly.Bytes) > v2MoveSessionBytes {
+	if snap.AgentMoveOnly != nil && len(snap.AgentMoveOnly.Bytes) > v2MaxWireBytes {
 		return nil, fmt.Errorf("%w: oversized move payload", errBadState)
 	}
 	if state.SRTP.Inbound == nil {

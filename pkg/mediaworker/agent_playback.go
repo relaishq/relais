@@ -219,7 +219,7 @@ func filterAudioEffects(e agent.Effects, floor agent.Turn) agent.Effects {
 	return e
 }
 
-func (s *session) validateAudioEffects(e agent.Effects, event agent.Event) error {
+func (s *session) validateAudioEffects(e agent.Effects, event agent.Event, tasks []*localTask) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := &s.agent.v2.playback
@@ -227,8 +227,8 @@ func (s *session) validateAudioEffects(e agent.Effects, event agent.Event) error
 		if _, _, ok := p.packet(ref); !ok {
 			return fmt.Errorf("%w: audio reference has no payload", agent.ErrIncompatibleAgent)
 		}
-		task := slices.IndexFunc(s.agent.v2.tasks, func(t *localTask) bool { return t.intent.ID == ref.Source.TaskID })
-		if task < 0 || s.agent.v2.tasks[task].intent.Turn != ref.Turn {
+		task := slices.IndexFunc(tasks, func(t *localTask) bool { return t.intent.ID == ref.Source.TaskID })
+		if task < 0 || tasks[task].intent.Turn != ref.Turn {
 			return fmt.Errorf("%w: audio reference turn mismatch", agent.ErrIncompatibleAgent)
 		}
 		if event.Kind != agent.TaskMessage || event.Result == nil || event.Result.Chunk.Audio == nil || ref.Source.TaskID != event.Result.TaskID || ref.Source.Sequence != event.Result.Sequence || ref.Turn != event.Result.Turn {
@@ -276,6 +276,7 @@ func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers [
 	envelope.Playback = p.snapshot()
 	queueBytes := audioRefsBytes(p.queue)
 	s.mu.Unlock()
+	envelope.Quota = s.captureSnapshotQuota(s.taskNow())
 	envelope.Timers = timers
 	if len(timerGeneration) > 0 {
 		envelope.TimerGeneration = timerGeneration[0]
@@ -593,4 +594,35 @@ func opusDuration(p []byte) (time.Duration, error) {
 		return invalid()
 	}
 	return time.Duration(count) * frame, nil
+}
+
+// Audio limits count actual immutable payloads, including chunks which have not
+// reached the callback yet and consumed chunks retained for replay/reference use.
+func (s *session) admitTaskAudio(audio *agent.EncodedAudio) error {
+	durations, err := validateOpus(audio)
+	if err != nil {
+		return err
+	}
+	bounds := s.agent.v2.registration.Bounds
+	bytes := 0
+	var duration time.Duration
+	for i, packet := range audio.Packets {
+		bytes += len(packet)
+		duration += durations[i]
+	}
+	if (bounds.MaxAudioBytes > 0 && bytes > bounds.MaxAudioBytes) || (bounds.MaxAudioDuration > 0 && duration > bounds.MaxAudioDuration) {
+		return agent.ErrCapacity
+	}
+	s.mu.Lock()
+	for _, payload := range s.agent.v2.playback.payloads {
+		for i, packet := range payload.audio.Packets {
+			bytes += len(packet)
+			duration += payload.durations[i]
+		}
+	}
+	s.mu.Unlock()
+	if (bounds.MaxAudioBytes > 0 && bytes > bounds.MaxAudioBytes) || (bounds.MaxAudioDuration > 0 && duration > bounds.MaxAudioDuration) {
+		return agent.ErrBackpressure
+	}
+	return nil
 }

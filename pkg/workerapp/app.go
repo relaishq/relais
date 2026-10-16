@@ -18,9 +18,12 @@ import (
 	"github.com/relaishq/relais/pkg/mediaworker"
 )
 
-// Options configures the worker application. Agent registration will arrive with
-// pkg/agent/v2; this slice supports the built-in echo and demo agents only.
-type Options struct{}
+// Options registers agents and selects the default for new calls. Restore uses
+// the persisted name; every worker in a pool must use the same registrations.
+type Options struct {
+	Agents       []Registration
+	DefaultAgent string
+}
 
 // Main runs the worker with os.Args[1:], handles interrupt and SIGTERM signals,
 // and drains within -drain-timeout before closing. It reports errors and exits
@@ -48,7 +51,7 @@ func (e *flagError) Unwrap() error { return e.error }
 // Run runs the worker with args (excluding the program name). It does not
 // install signal handlers or call os.Exit. Canceling ctx starts the same bounded
 // drain as SIGTERM in Main. Run returns flag.ErrHelp after printing help.
-func Run(ctx context.Context, args []string, _ Options) error {
+func Run(ctx context.Context, args []string, options Options) error {
 	flags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	var storeConfig processrun.StoreConfig
 	storeConfig.Flags(flags)
@@ -60,7 +63,19 @@ func Run(ctx context.Context, args []string, _ Options) error {
 	httpAddr := flags.String("http", processrun.Env("RELAIS_WORKER_HTTP", "127.0.0.1:0"), "private worker HTTP address")
 	cacheOff := flags.Bool("frame-cache-off", false, "disable cache writes and takeover replay (PLI remains enabled)")
 	cryptoTrace := flags.Bool("srtp-diagnostics", false, "log sent SRTP/SRTCP ciphertext metadata for fault investigations")
-	agentName := flags.String("agent", "echo", "audio agent: echo or demo")
+	defaultAgent := options.DefaultAgent
+	if defaultAgent == "" {
+		defaultAgent = "echo"
+	}
+	agentName := flags.String("agent", defaultAgent, "audio agent: echo or demo")
+	limits := mediaworker.SnapshotLimits{}
+	flags.IntVar(&limits.MaxBytes, "agent-max-snapshot-bytes", 7168, "v2 whole encrypted snapshot byte cap")
+	flags.IntVar(&limits.BytesPerSecond, "agent-snapshot-bytes-per-second", 81920, "v2 snapshot payload bytes per second per session")
+	flags.IntVar(&limits.BurstBytes, "agent-snapshot-burst-bytes", 28672, "v2 snapshot payload burst bytes per session")
+	flags.IntVar(&limits.MoveBytesPerSession, "agent-move-bytes-per-session", 1<<20, "v2 move memory bytes per session")
+	flags.Int64Var(&limits.MoveBytesTotal, "agent-move-bytes-total", 64<<20, "v2 move memory bytes per worker including export scratch")
+	taskBudget := flags.Duration("agent-drain-task-budget", 2*time.Second, "maximum v2 handler wait during drain (requires measured move reserve)")
+	moveReserve := flags.Duration("agent-drain-move-reserve", 0, "measured drain move reserve; zero disables handler wait")
 	drainTimeout := flags.Duration("drain-timeout", 5*time.Second, "SIGTERM drain deadline before closing")
 	version := buildinfo.VersionFlag(flags)
 	if err := flags.Parse(args); err != nil {
@@ -72,7 +87,13 @@ func Run(ctx context.Context, args []string, _ Options) error {
 	if *drainTimeout <= 0 {
 		return &configError{}
 	}
-	agentConfig, err := selectAgent(*agentName)
+	if *taskBudget < 0 || *taskBudget > 2*time.Second || *moveReserve < 0 {
+		return errors.New("invalid agent drain budget")
+	}
+	if err := limits.Validate(); err != nil {
+		return err
+	}
+	agentConfig, err := registeredAgents(options, *agentName, limits)
 	if err != nil {
 		return err
 	}
@@ -106,7 +127,7 @@ func Run(ctx context.Context, args []string, _ Options) error {
 		defer func() { _ = client.Close() }()
 		frames = client
 	}
-	cfg := mediaworker.Config{Agent: agentConfig, ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store, StoreOutageBudget: storeConfig.OutageBudget}}
+	cfg := mediaworker.Config{Agent: agentConfig, SnapshotLimits: limits, ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store, StoreOutageBudget: storeConfig.OutageBudget}}
 	if *cryptoTrace {
 		cfg.PacketTrace = func(packet mediaworker.PacketTrace) {
 			data, err := json.Marshal(packet)

@@ -88,6 +88,7 @@ type localTask struct {
 	attempt       uint64
 	mailboxBytes  int
 	terminalBytes int
+	lastEmission  time.Time // actor-owned monotonic rate clock, never read by callbacks
 }
 type taskEmission struct {
 	id       agent.TaskID
@@ -209,6 +210,7 @@ func (s *session) taskBudgetWithRefusals(tasks []*localTask, appBytes int, refus
 }
 func (s *session) taskMetadataBudget(intents []taskIntent, refusals []taskRefusal, admission bool, projection ...playbackState) error {
 	envelope := *s.agent.latest.V2
+	envelope.Quota = s.captureSnapshotQuota(s.taskNow())
 	s.mu.Lock()
 	envelope.Playback = s.playbackSnapshotLocked()
 	if len(projection) > 0 {
@@ -628,9 +630,18 @@ func (s *session) taskClockLocked() time.Time {
 	}
 	return time.Now()
 }
+
+// A rate wait carries only an owned duration back to the producer. Memory
+// pressure retains its short retry interval; neither wait holds actor locks.
+type taskEmissionWait struct{ after time.Duration }
+
+func (e *taskEmissionWait) Error() string { return agent.ErrBackpressure.Error() }
+func (*taskEmissionWait) Unwrap() error   { return agent.ErrBackpressure }
+
 func (s *session) emitTask(attemptCtx context.Context, e taskEmission) error {
 	e.reply = make(chan error, 1)
 	for {
+		retryAfter := 10 * time.Millisecond
 		select {
 		case <-attemptCtx.Done():
 			return attemptCtx.Err()
@@ -643,12 +654,16 @@ func (s *session) emitTask(attemptCtx context.Context, e taskEmission) error {
 			if !errors.Is(err, agent.ErrBackpressure) {
 				return err
 			}
+			var rateWait *taskEmissionWait
+			if errors.As(err, &rateWait) {
+				retryAfter = rateWait.after
+			}
 		case <-attemptCtx.Done():
 			return attemptCtx.Err()
 		case <-e.ctx.Done():
 			return e.ctx.Err()
 		}
-		timer := time.NewTimer(10 * time.Millisecond)
+		timer := time.NewTimer(retryAfter)
 		select {
 		case <-timer.C:
 		case <-attemptCtx.Done():
@@ -707,6 +722,13 @@ func (s *session) acceptEmission(e taskEmission) {
 		e.reply <- context.Canceled
 		return
 	}
+	// The first publication is immediate. Later chunks and the terminal share
+	// one interval. Backpressure waits in emitTask, outside actor/media locks.
+	sinceEmission := time.Since(t.lastEmission)
+	if !t.lastEmission.IsZero() && sinceEmission < 100*time.Millisecond {
+		e.reply <- &taskEmissionWait{after: 100*time.Millisecond - sinceEmission}
+		return
+	}
 	if e.final {
 		s.terminalTask(t, e.outcome, e.detail)
 	} else {
@@ -719,7 +741,7 @@ func (s *session) acceptEmission(e taskEmission) {
 			return
 		}
 		if e.chunk.Audio != nil {
-			if _, err := validateOpus(e.chunk.Audio); err != nil {
+			if err := s.admitTaskAudio(e.chunk.Audio); err != nil {
 				e.reply <- err
 				return
 			}
@@ -730,10 +752,13 @@ func (s *session) acceptEmission(e taskEmission) {
 			e.reply <- agent.ErrCapacity
 			return
 		}
+		previousIntent := t.intent
+		t.intent.Published = e.sequence
 		t.mailboxBytes += bytes
 		t.results = append(t.results, r)
 		err := s.taskBudget(h.tasks, s.agent.latest.V2.MoveOnlyLength)
 		if err != nil {
+			t.intent = previousIntent
 			t.results = t.results[:len(t.results)-1]
 			t.mailboxBytes -= bytes
 			if errors.Is(err, agent.ErrCapacity) || errors.Is(err, ErrMoveBudget) {
@@ -752,6 +777,7 @@ func (s *session) acceptEmission(e taskEmission) {
 		}
 		t.intent.Published = e.sequence
 	}
+	t.lastEmission = time.Now()
 	s.taskStateChanged()
 	e.reply <- nil
 }
@@ -830,7 +856,7 @@ func (s *session) taskCheckpointLoop() {
 			paused := s.agent.paused
 			s.mu.Unlock()
 			if !paused && !s.worker.paused.Load() {
-				_ = s.persistSnapshotMode(s.ctx, true)
+				_ = s.persistSnapshotBudget(s.ctx, true, true)
 				if !s.taskCheckpointPending() {
 					break
 				}
@@ -938,6 +964,11 @@ func (s *session) restoreTasks(move *movePayload) error {
 	}
 	for _, intent := range s.agent.latest.V2.Tasks {
 		t := &localTask{intent: cloneTaskIntent(intent), request: slices.Clone(intent.Request), terminalBytes: taskTerminalBytes(intent)}
+		// A prior publication cannot grant a fresh immediate chunk at adoption.
+		// One conservative full local interval avoids comparing worker clocks.
+		if intent.Published > 0 {
+			t.lastEmission = time.Now()
+		}
 		var exact *taskMove
 		if move != nil {
 			exact = findTaskMove(move, intent.ID)
