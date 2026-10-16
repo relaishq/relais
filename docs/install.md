@@ -2,8 +2,8 @@
 
 Relais downloads contain six programs for Linux and macOS on amd64 and arm64.
 You do not need Go. You need Redis to run the browser demo or local topology.
-No release is published yet. The commands below apply after the owner publishes
-the first release; replace `VERSION` with its tag number without the leading `v`.
+Download the [latest release](https://github.com/relaishq/relais/releases/latest);
+set `VERSION` to its tag number without the leading `v`.
 
 ## Download
 
@@ -11,7 +11,7 @@ Choose `linux` or `darwin` (macOS), and `amd64` (Intel/AMD) or `arm64` (Apple
 silicon/ARM). For example, on an Apple silicon Mac:
 
 ```bash
-VERSION=0.1.0 # Example only; no release is published yet.
+VERSION=0.1.0
 OS=darwin
 ARCH=arm64
 ARCHIVE="relais_${VERSION}_${OS}_${ARCH}.tar.gz"
