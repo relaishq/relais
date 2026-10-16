@@ -59,18 +59,26 @@ can repeat. Applications must make external side effects safe to repeat.
 
 ## Five-minute quick start
 
-Use macOS or Linux, Go 1.26+, Git, current Chrome, and `redis-server` on PATH.
-Install Redis with `brew install redis` or `sudo apt install redis-server`.
+Use macOS or Linux, current Chrome, and `redis-server` on PATH. Go is not
+needed. Install Redis with `brew install redis` or `sudo apt install redis-server`.
 You do not need to start a Redis service: the demo starts its own throwaway
 Redis on a free port. The Relais process binaries refuse loopback Redis port
 **6379** by default; dev tools refuse port **6379** on every host.
 
-Build from source; this is the install path that works today:
+Download the [latest release](https://github.com/relaishq/relais/releases/latest)
+for your platform. On an Apple silicon Mac:
 
 ```sh
-git clone https://github.com/relaishq/relais && cd relais && make build
-./bin/relais-demo -agent=demo
+curl -fLO https://github.com/relaishq/relais/releases/download/v0.1.0/relais_0.1.0_darwin_arm64.tar.gz
+tar -xzf relais_0.1.0_darwin_arm64.tar.gz && cd relais_0.1.0_darwin_arm64
+./relais-demo -bin . -agent=demo
 ```
+
+Use `linux` instead of `darwin`, and `amd64` instead of `arm64`, as needed.
+[Installation](docs/install.md) covers checksums and the macOS download
+warning. To build from source instead (Go 1.26+), run
+`git clone https://github.com/relaishq/relais && cd relais && make build`,
+then `./bin/relais-demo -agent=demo`.
 
 Open the printed URL in Chrome. Click **Start call** and keep **Play returned
 audio** enabled. You will see a canvas test pattern returned through the relay
@@ -83,11 +91,8 @@ the count continue. A crash can repeat tones since the last checkpoint.
 
 The demo runs a relay, control plane, and three workers as separate processes.
 Ctrl-C stops its children and its Redis. If the page port is busy, run
-`./bin/relais-demo -agent=demo -http=127.0.0.1:9201`.
+`./relais-demo -bin . -agent=demo -http=127.0.0.1:9201`.
 See [demo controls, camera mode, and continuity checks](docs/demo.md).
-
-No release exists yet. When the first release is published, see
-[installation](docs/install.md) for archive downloads and checksums.
 
 ## How it works
 
