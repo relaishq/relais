@@ -1,0 +1,74 @@
+package main
+
+import (
+	"flag"
+	"github.com/relaishq/relais/experiments/nvwa-room/media"
+	"github.com/relaishq/relais/experiments/nvwa-room/room"
+	"log"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+)
+
+func main() {
+	addr := flag.String("http", "127.0.0.1:38690", "loopback HTTP")
+	audio := flag.String("audio", "127.0.0.1:38691", "loopback UDP audio bus")
+	web := flag.String("web", "experiments/nvwa-room/web", "browser page directory")
+	signal := flag.String("signal", "", "signal HTTPS URL")
+	cert := flag.String("signal-cert", "", "signal CA")
+	token := flag.String("signal-token", "", "signal token file")
+	faults := flag.Bool("test-faults", false, "allow receipt suppression")
+	flag.Parse()
+	for _, s := range []string{*addr, *audio} {
+		a, e := netip.ParseAddrPort(s)
+		if e != nil || !a.Addr().IsLoopback() {
+			log.Fatal("loopback endpoints required")
+		}
+	}
+	r := room.New("nvwa-spike")
+	r.AllowFaults = *faults
+	udp, e := net.ResolveUDPAddr("udp", *audio)
+	if e != nil {
+		log.Fatal(e)
+	}
+	conn, e := net.ListenUDP("udp", udp)
+	if e != nil {
+		log.Fatal(e)
+	}
+	defer conn.Close()
+	go func() { _ = r.ServeAudio(conn) }()
+	handler := r.Handler()
+	if *signal != "" {
+		s := &media.Signal{URL: *signal, CertFile: *cert, TokenFile: *token}
+		if e = s.Init(); e != nil {
+			log.Fatal(e)
+		}
+		handler = r.WithMediaProxy(handler, s)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/", handler)
+	mux.Handle("GET /web/", http.StripPrefix("/web/", http.FileServer(http.Dir(*web))))
+	mux.HandleFunc("POST /browser-evidence", func(w http.ResponseWriter, q *http.Request) {
+		if q.ContentLength > 1<<20 {
+			http.Error(w, "too big", 413)
+			return
+		}
+		f, e := os.CreateTemp("", "nvwa-browser-*.json")
+		if e != nil {
+			http.Error(w, e.Error(), 500)
+			return
+		}
+		defer f.Close()
+		q.Body = http.MaxBytesReader(w, q.Body, 1<<20)
+		_, e = f.ReadFrom(q.Body)
+		if e != nil {
+			http.Error(w, e.Error(), 400)
+			return
+		}
+		log.Printf("browser_evidence=%s", f.Name())
+		w.WriteHeader(200)
+	})
+	log.Printf("room_http=%s room_epoch=%s audio_udp=%s", *addr, r.Epoch, *audio)
+	log.Fatal(http.ListenAndServe(*addr, mux))
+}

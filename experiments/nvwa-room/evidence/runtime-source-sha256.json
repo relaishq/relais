@@ -1,0 +1,20 @@
+{
+  "experiments/nvwa-room/audioagent/agent.go": "fb0146cae8f757afa88452df838a5509440dd664b3f74c75b92de23afbb822ac",
+  "experiments/nvwa-room/client/client.go": "3ad748d39d5bb4c70a280a649affd48eea9465b750e6c6e137892b2115ebc92e",
+  "experiments/nvwa-room/cmd/backpressure/main.go": "b92a8f813c97c2f9b064c582e49b174e48a63ee01baaa1a987aed7568b56d4df",
+  "experiments/nvwa-room/cmd/driver/main.go": "2c914a89e9b71ac21197b473b9feb29b3f8bd8c00db39c4d43307c76812c60b3",
+  "experiments/nvwa-room/cmd/room/main.go": "001ffe67dd517d01af829dab73c2c5c0151a1a60f47652f98f2cf89cdc2fc723",
+  "experiments/nvwa-room/cmd/topology/main.go": "ea0757d676d8908672c27d912941d081bdeaf4cde32f9d378c167d7ebccf5134",
+  "experiments/nvwa-room/harness/topology.go": "6272ba36ba4ebc9617c1810e454859c90bf88b032a4f1df5390b1b177b054867",
+  "experiments/nvwa-room/media/call.go": "da2e7bb337fd97dee8131654efe7b6a7d15650024b12a3f023f4b409919bd628",
+  "experiments/nvwa-room/media/data.go": "94897843c98583ae1574ffd091a473747826903ea337db94571f1b6cd14f73d1",
+  "experiments/nvwa-room/room/audio.go": "32818c99c822a6fe0c5dfd09cd77d4de49dcd714b2552ff69bf95b0123ec7dea",
+  "experiments/nvwa-room/room/protocol.go": "97fbc48898b82d363e8a21a0a5967ec03afa4c49692f6f6603aa5db938126e91",
+  "experiments/nvwa-room/room/room.go": "d59d322e4a1bdf5e9bea70f36550ddf90cfda7880bb61b2759a60e6c60fb94fe",
+  "experiments/nvwa-room/room/signal.go": "376a5d49622cf705f8ec9619e3da7b52c833feedd73d5f381f907343f4b1251e",
+  "experiments/nvwa-room/room/transport.go": "bfc2eb17da18dbedb7bbfc711349a51a6776b5ed46529b25d6a31a6c82af6bc8",
+  "experiments/nvwa-room/web/app.js": "c49f2756d86168a275816c7ea6368bd7c6271c1196ad281a63c7a652797deba0",
+  "experiments/nvwa-room/web/index.html": "2d637518457b61641710ff55ea48d4bc23bbc3423a15b2ecb7531bd449a6c8de",
+  "pkg/workerapp/agent.go": "916d7e1cf2045276e7a1b9591dd270236c8cd21e0c357f2ae0b7c108b938bf01",
+  "pkg/workerapp/app.go": "bece6e2f527e506a231097fa6803d0a9ee8755e1b8592476f3475dbacaca1b63"
+}

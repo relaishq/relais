@@ -1,0 +1,17 @@
+ok  	github.com/relaishq/relais/experiments/nvwa-room/audioagent	1.228s
+ok  	github.com/relaishq/relais/experiments/nvwa-room/client	1.229s
+?   	github.com/relaishq/relais/experiments/nvwa-room/cmd/backpressure	[no test files]
+?   	github.com/relaishq/relais/experiments/nvwa-room/cmd/driver	[no test files]
+?   	github.com/relaishq/relais/experiments/nvwa-room/cmd/room	[no test files]
+?   	github.com/relaishq/relais/experiments/nvwa-room/cmd/topology	[no test files]
+?   	github.com/relaishq/relais/experiments/nvwa-room/harness	[no test files]
+?   	github.com/relaishq/relais/experiments/nvwa-room/media	[no test files]
+ok  	github.com/relaishq/relais/experiments/nvwa-room/room	1.232s
+ok  	github.com/relaishq/relais/pkg/workerapp	13.866s
+
+Additional targeted regressions passed: pkg/mediaworker default echo legacy restore/export/state identity; pkg/callharness AudioOnlyCall, BrowserLikeOfferCall, ChromeOfferIsAnswered (race, short, count=1; 9.435 s).
+Go vet for experiment packages and workerapp passed. node --check web/app.js passed.
+Redis unit-test subcases were skipped when RELAIS_TEST_REDIS_ADDR was unset; the process matrix itself uses its own real dedicated Redis each run.
+
+Final explicit memory-only workerapp regression (RELAIS_TEST_REDIS_ADDR empty, REQUIRE=0):
+ok  	github.com/relaishq/relais/pkg/workerapp	13.597s

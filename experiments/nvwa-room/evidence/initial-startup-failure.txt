@@ -1,0 +1,6 @@
+Preliminary matrix run_a927ccaabbd2f3b05bea7ad15947ab80: disconnect-3 failed before clients.
+Harness selected duplicate ephemeral UDP port for room and worker.
+Fixed by unique TCP/UDP endpoint sets, before the final matrix.
+
+2026/10/16 10:04:58 wait 127.0.0.1:57746: context deadline exceeded
+2026/10/16 10:04:44 listen udp 127.0.0.1:61584: bind: address already in use

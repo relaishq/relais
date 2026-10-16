@@ -60,7 +60,8 @@ func Run(ctx context.Context, args []string, _ Options) error {
 	httpAddr := flags.String("http", processrun.Env("RELAIS_WORKER_HTTP", "127.0.0.1:0"), "private worker HTTP address")
 	cacheOff := flags.Bool("frame-cache-off", false, "disable cache writes and takeover replay (PLI remains enabled)")
 	cryptoTrace := flags.Bool("srtp-diagnostics", false, "log sent SRTP/SRTCP ciphertext metadata for fault investigations")
-	agentName := flags.String("agent", "echo", "audio agent: echo or demo")
+	agentName := flags.String("agent", "echo", "audio agent: echo, demo or spike-only room-audio")
+	roomAudioBus := flags.String("room-audio-bus", "", "spike-only UDP peer audio bus")
 	drainTimeout := flags.Duration("drain-timeout", 5*time.Second, "SIGTERM drain deadline before closing")
 	version := buildinfo.VersionFlag(flags)
 	if err := flags.Parse(args); err != nil {
@@ -72,7 +73,7 @@ func Run(ctx context.Context, args []string, _ Options) error {
 	if *drainTimeout <= 0 {
 		return &configError{}
 	}
-	agentConfig, err := selectAgent(*agentName)
+	agentConfig, err := selectAgent(*agentName, *roomAudioBus)
 	if err != nil {
 		return err
 	}

@@ -1,0 +1,1 @@
+applied=80 typed_slow_consumer=true max_queue_bytes=15349 max_queue_age_ms=526.208 audio_packets=70/71 audio_max_gap_ms=21.646/22.016

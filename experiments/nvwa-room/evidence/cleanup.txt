@@ -1,0 +1,3 @@
+VERIFIED: all successful driver/topology supervisors completed their per-child Process.Wait cleanup; matrix ledger succeeded. Browser launcher finally block completed after startup failure.
+NOT-RUN: independent post-run PID sweep; spawning ps was denied by the sandbox. No retry through wefty and no broad kill was attempted.
+No shared service, existing Chrome, or host-network action was used.

@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Nvwa room message spike</title>
+<style>body{font:16px system-ui;max-width:1050px;margin:32px auto;padding:0 20px;background:#101820;color:#e8f0f4}button,select{font:inherit;margin:5px;padding:8px}pre{white-space:pre-wrap;background:#182733;padding:16px;border-radius:8px}#status{color:#81dfba}.note{color:#aabfcd}</style>
+<h1>Nvwa room message spike</h1><p class="note">Two-player authoritative action messages. This page does not render a character or play an animation asset. Audio uses the real Relais relay and worker.</p>
+<label>App transport <select id="transport"><option value="ws">WebSocket</option><option value="dc">Relais DataChannel (stage 2)</option></select></label>
+<button id="join">Join with audio</button><button id="trigger">Wave v1</button><button id="stop">Stop action</button><button id="snapshot">Snapshot</button><button id="query">Query last command</button><button id="reconnect">Reconnect</button><button id="leave">Leave</button>
+<p id="status">Idle</p><pre id="state">No authoritative snapshot</pre><pre id="metrics"></pre><script src="app.js"></script></html>

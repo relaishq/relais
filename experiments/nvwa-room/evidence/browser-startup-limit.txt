@@ -1,0 +1,11 @@
+Two separate task-owned Chromium processes with scratch user-data-dir and fake WAV input aborted before page execution. Browser runtime is NOT-RUN.
+
+[1016/100242.925146:ERROR:bootstrap.cc(65)] bootstrap_check_in org.chromium.crashpad.child_port_handshake.19207.113974842.IIBOFPYUHYSREZAC: Permission denied (1100)
+[1016/100242.925461:FATAL:child_port_handshake.cc(117)] Check failed: server_port.is_valid(). 
+[1016/100242.927165:ERROR:bootstrap.cc(65)] bootstrap_check_in org.chromium.crashpad.child_port_handshake.19203.113974837.HCFCDZTKHXRUQBEW: Permission denied (1100)
+[1016/100242.927315:FATAL:child_port_handshake.cc(117)] Check failed: server_port.is_valid(). 
+[1016/100242.928281:ERROR:file_io_posix.cc(207)] open /Users/derekxwang/Library/Application Support/Chromium/Crashpad/settings.dat: Operation not permitted (1)
+[1016/100242.928456:ERROR:file_io_posix.cc(207)] open /Users/derekxwang/Library/Application Support/Chromium/Crashpad/settings.dat: Operation not permitted (1)
+
+Full logs: /private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/browser-smoke
+No wefty bypass, settings changes, shared browser connection or user Chrome was used.

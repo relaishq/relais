@@ -9,20 +9,27 @@ import (
 	"strings"
 	"sync"
 
+	roomaudio "github.com/relaishq/relais/experiments/nvwa-room/audioagent"
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/pkg/agent"
 	agentdemo "github.com/relaishq/relais/pkg/agent/demo"
 	"github.com/relaishq/relais/pkg/mediaworker"
 )
 
-func selectAgent(name string) (mediaworker.AgentConfig, error) {
+func selectAgent(name string, bus ...string) (mediaworker.AgentConfig, error) {
 	switch name {
 	case "echo":
 		return mediaworker.AgentConfig{}, nil
+	case "room-audio":
+		if len(bus) != 1 {
+			return mediaworker.AgentConfig{}, errors.New("room-audio requires -room-audio-bus")
+		}
+		factory, err := roomaudio.Factory(bus[0])
+		return mediaworker.AgentConfig{Factory: factory}, err
 	case "demo":
 		return mediaworker.AgentConfig{Factory: agentdemo.Factory}, nil
 	default:
-		return mediaworker.AgentConfig{}, errors.New("-agent must be echo or demo")
+		return mediaworker.AgentConfig{}, errors.New("-agent must be echo, demo or room-audio")
 	}
 }
 
