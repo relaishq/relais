@@ -541,19 +541,6 @@ func (p *Plane) moveRequest(ctx context.Context, id, to string) (MoveResult, err
 	if c.data {
 		return MoveResult{Kind: "move", ID: id}, mediaworker.ErrDataSessionNotMovable
 	}
-	if !c.classified {
-		p.mu.Lock()
-		source := p.owner(lease.Worker)
-		p.mu.Unlock()
-		if source != nil {
-			if data, ok := source.worker.(DataSessionWorker); ok {
-				if err := data.CheckSessionMove(id); err != nil {
-					return MoveResult{Kind: "move", ID: id, From: source.name, To: to}, err
-				}
-			}
-		}
-	}
-
 	target, err := p.pick(ctx, to, lease.Worker)
 	if err != nil {
 		return MoveResult{}, err
@@ -593,13 +580,6 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	}()
 	if c.data {
 		return res, mediaworker.ErrDataSessionNotMovable
-	}
-	if !c.classified {
-		if data, ok := source.worker.(DataSessionWorker); ok {
-			if err = data.CheckSessionMove(c.id); err != nil {
-				return res, err
-			}
-		}
 	}
 	started := time.Now()
 	// Missing acknowledgement aborts before export; the relay replays to A.
@@ -917,7 +897,13 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 			checkErr = mediaworker.ErrDataSessionNotMovable
 		} else if c == nil || !c.classified {
 			if data, ok := w.worker.(DataSessionWorker); ok {
-				checkErr = data.CheckSessionMove(lease.SessionID)
+				if contextual, ok := w.worker.(interface {
+					CheckSessionMoveContext(context.Context, string) error
+				}); ok {
+					checkErr = contextual.CheckSessionMoveContext(ctx, lease.SessionID)
+				} else {
+					checkErr = data.CheckSessionMove(lease.SessionID)
+				}
 			}
 		}
 		if errors.Is(checkErr, mediaworker.ErrDataSessionNotMovable) {
@@ -927,10 +913,8 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 			ended = append(ended, MoveResult{Kind: "ended", ID: lease.SessionID, From: w.name})
 			continue
 		}
-		if checkErr != nil {
-			return ended, checkErr
-		}
-
+		// Only a definitive data classification changes the old drain path.
+		// Export remains the authoritative, fail-safe source preflight.
 		mediaLeases = append(mediaLeases, lease)
 	}
 	jobs := make([]job, 0, len(mediaLeases))

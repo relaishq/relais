@@ -2,8 +2,10 @@ package mediaworker
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -67,4 +69,54 @@ func TestDataChannelMarkerExistsBeforeHandshakeAndCannotResume(t *testing.T) {
 	_, _, err = w.session(id).export()
 	require.ErrorIs(t, err, ErrDataSessionNotMovable)
 	require.Equal(t, 1, w.SessionCount())
+}
+
+func TestDataMarkerDoesNotClaimFutureMediaVersion(t *testing.T) {
+	raw := []byte(`{"Version":9,"State":{"Version":9,"Data":false}}`)
+	data, err := SnapshotIsDataSession(raw)
+	require.NoError(t, err)
+	require.False(t, data, "a future media envelope must not become a data session")
+	_, err = decodeSnapshot(raw)
+	require.ErrorIs(t, err, errStateVersion)
+	require.NotErrorIs(t, err, ErrDataSessionReconnectRequired)
+	for _, version := range []int{7, 8, 9, 42} {
+		raw := []byte(fmt.Sprintf(`{"Version":%d,"State":{"Version":%d,"Data":true}}`, version, version))
+		data, err := SnapshotIsDataSession(raw)
+		require.NoError(t, err)
+		require.True(t, data)
+		_, err = decodeSnapshot(raw)
+		require.ErrorIs(t, err, ErrDataSessionReconnectRequired)
+	}
+}
+
+func TestDataSessionEndDoesNotWaitForUpstreamWriter(t *testing.T) {
+	for _, closeWorker := range []bool{false, true} {
+		t.Run(fmt.Sprint(closeWorker), func(t *testing.T) {
+			w, err := New(Config{DataChannel: &DataChannelConfig{Upstream: "ws://127.0.0.1/"}})
+			require.NoError(t, err)
+			defer w.Close()
+			id, _, err := w.CreateSession(context.Background(), dataSDPOffer(false))
+			require.NoError(t, err)
+			d := w.session(id).data
+			// A writer can hold this serialization lock while its upstream write stalls.
+			// Exercise the public end/close path without waiting on that writer.
+			d.writeMu.Lock()
+			defer d.writeMu.Unlock()
+			done := make(chan error, 1)
+			go func() {
+				if closeWorker {
+					done <- w.Close()
+				} else {
+					done <- w.EndSessionReason(id, "reconnect_required")
+				}
+			}()
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(100 * time.Millisecond):
+				t.Fatal("session end blocked behind upstream writer")
+			}
+			require.Zero(t, w.SessionCount())
+		})
+	}
 }

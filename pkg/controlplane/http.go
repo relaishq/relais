@@ -131,7 +131,7 @@ func errorStatus(err error) int {
 	switch {
 	case errors.Is(err, ErrUnknownCall), errors.Is(err, sessionstore.ErrNotFound), errors.Is(err, mediaworker.ErrUnknownSession):
 		code = http.StatusNotFound
-	case errors.Is(err, ErrMoveInProgress), errors.Is(err, ErrNoTarget), errors.Is(err, sessionstore.ErrLeaseLost):
+	case errors.Is(err, ErrMoveInProgress), errors.Is(err, ErrNoTarget), errors.Is(err, sessionstore.ErrLeaseLost), errors.Is(err, mediaworker.ErrDataSessionNotMovable):
 		code = http.StatusConflict
 	case errors.Is(err, mediaworker.ErrUnsupportedOffer):
 		code = http.StatusBadRequest

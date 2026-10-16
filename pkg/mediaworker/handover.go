@@ -633,7 +633,7 @@ func decodeSnapshot(data []byte) (*snapshot, error) {
 	if err := json.Unmarshal(data, &version); err != nil {
 		return nil, fmt.Errorf("%w: %w", errBadState, err)
 	}
-	if version.Version == dataSessionStateVersion || version.State.Version == dataSessionStateVersion || version.State.Data {
+	if version.State.Data {
 		return nil, ErrDataSessionReconnectRequired
 	}
 	if version.Version != v2SessionStateVersion && version.Version != sessionStateVersion && version.Version != 6 {
