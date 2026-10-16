@@ -26,6 +26,7 @@ Caller <== encrypted UDP ==> Relay <== private UDP ==> Media workers
   caches ownership. A caller route changes only after the owning worker
   authenticates a binding request. A versioned private-leg header carries the
   caller address between relay and worker.
+- **Worker application (`pkg/workerapp`):** owns process configuration, startup, private HTTP, heartbeats, metrics, and bounded drain; `cmd/relais-worker` is its thin entrypoint.
 - **Control plane (`pkg/controlplane`):** places calls, moves them, drains workers
   (moves their calls away), and detects failed workers. A takeover assigns a
   crashed worker's call to an eligible survivor. Heartbeats also support explicit
