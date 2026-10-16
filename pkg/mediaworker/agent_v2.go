@@ -357,6 +357,15 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	}
 	h := s.agent
 	before := cloneAgentState(h.latest)
+	// The actor can stop attempts as soon as session cancellation releases
+	// agentCall, even if its callback goroutine is still running. Copy task
+	// nodes before dispatch so its staging never copies live attempt bookkeeping.
+	// Payloads are immutable here; only their headers and task fields need copies.
+	base := slices.Clone(h.v2.tasks)
+	for i, t := range base {
+		node := *t
+		base[i] = &node
+	}
 	var saved agent.State
 	var effects agent.Effects
 	var tasks []*localTask
@@ -394,7 +403,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 			refusals = refusals[1:]
 		}
 		var refused []agent.TaskResult
-		tasks, refused, err = s.prepareTaskEffects(event, effects, h.v2.tasks, refusals, projection)
+		tasks, refused, err = s.prepareTaskEffects(event, effects, base, refusals, projection)
 		if err != nil {
 			return err
 		}
@@ -424,7 +433,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if event.Kind == agent.TaskMessage && len(prior) > 0 && prior[0].ID == event.Result.TaskID {
 			prior = prior[1:]
 		}
-		tasks, refusals, err = s.fitTaskRefusals(h.v2.tasks, tasks, prior, refusals, projection)
+		tasks, refusals, err = s.fitTaskRefusals(base, tasks, prior, refusals, projection)
 		if err != nil {
 			return err
 		}

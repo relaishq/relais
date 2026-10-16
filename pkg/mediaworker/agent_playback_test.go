@@ -246,6 +246,7 @@ func TestTurnClearCancelAndLateResults(t *testing.T) {
 	turn := agent.Turn(2)
 	a.effects = agent.Effects{ClearAudioBefore: &turn, CancelBefore: &turn}
 	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
+	task = s.agent.v2.tasks[0] // The callback commits its owned task snapshot.
 	require.Empty(t, s.agent.v2.playback.queue)
 	require.Equal(t, agent.Turn(2), s.state.Agent.V2.CancelFloor)
 	require.ErrorIs(t, cancelCtx.Err(), context.Canceled)
