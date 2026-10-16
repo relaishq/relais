@@ -10,6 +10,7 @@ import (
 
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/pkg/agent"
+	agentv2 "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/framecache"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/metrics"
@@ -725,7 +726,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		// Explicit transport uncertainty can hide an adopted target even with
 		// an agent cause. Confirm that target before treating typed failures as
 		// definitive, including callback deadlines.
-		agentFailure := errors.Is(err, agent.ErrRestore) || errors.Is(err, agent.ErrVersion) || errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrSave)
+		agentFailure := errors.Is(err, agentv2.ErrIncompatibleAgent) || errors.Is(err, agent.ErrRestore) || errors.Is(err, agent.ErrVersion) || errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrSave)
 		if errors.Is(err, privateapi.ErrUncertain) || (!agentFailure && (ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))) {
 			pending.transientResume = true
 			return

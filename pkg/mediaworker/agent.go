@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/pion/rtp"
+	"github.com/relaishq/relais/internal/agenthost"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/agent"
+	agentv2 "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/relay"
 )
 
@@ -46,6 +48,7 @@ func (c AgentConfig) defaults() AgentConfig {
 // agentState is copied with media counters inside the encrypted session blob.
 // Revision is local ordering evidence, not a schema version.
 type agentState struct {
+	V2       *v2Envelope `json:",omitempty"`
 	State    agent.State
 	Progress agent.Progress
 	Revision uint64
@@ -59,9 +62,11 @@ type agentInput struct {
 type agentFlush struct {
 	done     chan error
 	deadline time.Time
+	moveOnly chan []byte
 }
 type agentHost struct {
 	instance agent.Agent
+	v2       *v2Host
 	queue    chan agentInput
 	flush    chan agentFlush
 	late     chan struct{}
@@ -99,13 +104,28 @@ func (w *Worker) AgentStats() AgentStats {
 
 func cloneAgentState(state agentState) agentState {
 	state.State.Bytes = slices.Clone(state.State.Bytes)
+	if state.V2 != nil {
+		e := *state.V2
+		e.TaskKinds = slices.Clone(e.TaskKinds)
+		state.V2 = &e
+	}
 	return state
 }
 
-func (s *session) initAgent(restoring bool, opts ResumeOptions) error {
+func (s *session) initAgent(restoring bool, opts ResumeOptions, move ...*movePayload) error {
 	cfg := s.worker.cfg.Agent
 	h := &agentHost{instance: cfg.Factory(s.id), queue: make(chan agentInput, cfg.QueueCapacity), flush: make(chan agentFlush, 1), late: make(chan struct{}, 1)}
 	s.agent = h
+	if adapter, ok := h.instance.(*agenthost.Adapter); ok {
+		var payload *movePayload
+		if len(move) > 0 {
+			payload = move[0]
+		}
+		return s.initV2Agent(adapter, restoring, opts, payload)
+	}
+	if restoring && s.state.Agent.V2 != nil {
+		return s.agentError(fmt.Errorf("%w: %w", agent.ErrRestore, agentv2.ErrIncompatibleAgent))
+	}
 	if h.instance == nil {
 		return s.agentError(errors.New("agent: nil factory result"))
 	}
@@ -256,6 +276,9 @@ func (s *session) publishAgent() {
 
 func (s *session) processAudio(in agentInput) error {
 	h := s.agent
+	if h.v2 != nil {
+		return s.processV2Audio(in)
+	}
 	before := cloneAgentState(h.latest)
 	in.input.Progress.Consumed = before.Progress.Consumed + 1
 	var output agent.Output
@@ -327,6 +350,19 @@ func (s *session) agentLoop() {
 	if s.agent == nil {
 		return
 	}
+	if s.agent.v2 != nil {
+		select {
+		case <-s.agent.v2.ready:
+		case <-s.ctx.Done():
+			return
+		}
+		if !s.agent.latest.V2.Started {
+			if err := s.handleV2Event(agentv2.Event{ID: agentv2.EventID("started/" + s.id), Kind: agentv2.Started}); err != nil {
+				s.agentFailed(err)
+				return
+			}
+		}
+	}
 	if _, echo := s.agent.instance.(*agent.Echo); echo {
 		for {
 			select {
@@ -384,6 +420,15 @@ drain:
 	if err == nil {
 		s.publishAgent()
 	}
+	if err == nil && request.moveOnly != nil {
+		ctx, cancel := context.WithDeadline(s.ctx, request.deadline)
+		var payload []byte
+		payload, err = s.saveV2MoveOnly(ctx)
+		cancel()
+		if err == nil {
+			request.moveOnly <- payload
+		}
+	}
 	request.done <- err
 	if err != nil {
 		s.agentFailed(err)
@@ -417,7 +462,7 @@ func (s *session) agentFailed(err error) {
 	}
 }
 
-func (s *session) flushAgent() error {
+func (s *session) flushAgent(moveOnly ...chan []byte) error {
 	if s.agent == nil {
 		return nil
 	}
@@ -429,6 +474,9 @@ func (s *session) flushAgent() error {
 	s.mu.Unlock()
 	budget := min(time.Duration(cap(s.agent.queue)+2)*s.worker.cfg.Agent.CallbackTimeout, relay.DefaultHoldTimeout/2)
 	request := agentFlush{done: make(chan error, 1), deadline: time.Now().Add(budget)}
+	if len(moveOnly) > 0 {
+		request.moveOnly = moveOnly[0]
+	}
 	// A callback already quarantined before the move cannot produce a safe
 	// export. Queue exhaustion alone never makes a healthy agent terminal.
 	if s.agent.overdue.Load() {
@@ -529,5 +577,5 @@ func (w *Worker) SessionAgent(id string) (agent.State, agent.Progress, error) {
 }
 
 func agentStateEqual(a, b agentState) bool {
-	return a.State.Version == b.State.Version && bytes.Equal(a.State.Bytes, b.State.Bytes)
+	return a.State.Version == b.State.Version && bytes.Equal(a.State.Bytes, b.State.Bytes) && v2EnvelopeEqual(a.V2, b.V2)
 }

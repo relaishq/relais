@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/pion/dtls/v3"
@@ -195,6 +196,7 @@ type snapshot struct {
 	// DTLSConnection is pion/dtls State.MarshalBinary of the session's
 	// dtls.Conn.
 	DTLSConnection []byte
+	AgentMoveOnly  *movePayload `json:",omitempty"`
 }
 
 // ExportSession freezes a live session, snapshots it to bytes and drops it
@@ -203,17 +205,25 @@ type snapshot struct {
 // the worker processes none of the session's packets and sends the caller
 // nothing, so the snapshot is final and no packet is handled by two workers.
 func (w *Worker) ExportSession(sessionID string) ([]byte, error) {
+	state, release, err := w.exportSession(sessionID)
+	defer release()
+	// The returned bytes now belong to the caller, outside worker accounting.
+	return state, err
+}
+
+// The private HTTP handler retains the export reservation until its response
+// has been serialized and written, including concurrently held exports.
+func (w *Worker) exportSession(sessionID string) ([]byte, func(), error) {
 	sess := w.session(sessionID)
 	if sess == nil {
-		return nil, ErrUnknownSession
+		return nil, func() {}, ErrUnknownSession
 	}
-	state, err := sess.export()
+	state, release, err := sess.export()
 	if err != nil {
-		return nil, err
+		return nil, release, err
 	}
 	sess.close() // fenced: its close_notify never leaves the worker
-
-	return state, nil
+	return state, release, nil
 }
 
 // ResumeSession continues a session from bytes made by ExportSession, on
@@ -287,7 +297,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 	sess.state.Checkpoint.TakeoverAge = opts.CheckpointAge
 	sess.state.Checkpoint.TakeoverSnapshotAge = opts.SnapshotAge
 	sess.state.Checkpoint.TakeoverStoredAt = opts.CheckpointStoredAt
-	if err := sess.initAgent(true, opts); err != nil {
+	if err := sess.initAgent(true, opts, snap.AgentMoveOnly); err != nil {
 		sess.fenced.Store(true)
 		sess.close()
 		// The control plane owns rollback/retry and terminal lease cleanup.
@@ -469,25 +479,54 @@ func (w *Worker) adopt(sess *session, dtlsConn *dtls.Conn, replayPackets [][]byt
 // export fences the session and snapshots it. The fence and the snapshot
 // happen under mu, which every packet the session handles holds, so the
 // counters in the snapshot are the final ones.
-func (s *session) export() ([]byte, error) {
+func (s *session) export() (data []byte, release func(), exportErr error) {
+	release = func() {}
+	defer func() {
+		if exportErr != nil {
+			release()
+		}
+	}()
 	// An export attempted before handshake must leave audio accepting input.
 	s.mu.Lock()
 	established := s.dtlsConn != nil && s.srtpIn != nil
 	fenced := s.fenced.Load()
 	s.mu.Unlock()
 	if fenced {
-		return nil, errHandedOver
+		return nil, release, errHandedOver
 	}
 	if !established {
-		return nil, ErrNotEstablished
+		return nil, release, ErrNotEstablished
 	}
-	if err := s.flushAgent(); err != nil {
+	var payload *movePayload
+	var move chan []byte
+	if s.agent != nil && s.agent.v2 != nil {
+		s.mu.Lock()
+		n := s.state.Agent.V2.MoveOnlyLength
+		s.mu.Unlock()
+		// Allow a full session payload to be accepted by the flush before capture.
+		scratch := int64(v2ExportScratchBytes)
+		if n > v2MoveSessionBytes || !s.worker.reserveMoveBytes(scratch) {
+			return nil, release, errors.New("agent: exact export exceeds worker move budget")
+		}
+		release = sync.OnceFunc(func() { s.worker.moveBytes.Add(-scratch) })
+		move = make(chan []byte, 1)
+	}
+	var flushErr error
+	if move != nil {
+		flushErr = s.flushAgent(move)
+	} else {
+		flushErr = s.flushAgent()
+	}
+	if flushErr != nil {
 		s.mu.Lock()
 		if !s.fenced.Load() && s.ctx.Err() == nil && s.agent != nil {
 			s.agent.paused = false
 		}
 		s.mu.Unlock()
-		return nil, err
+		return nil, release, flushErr
+	}
+	if move != nil {
+		payload = &movePayload{Bytes: <-move}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -498,10 +537,10 @@ func (s *session) export() ([]byte, error) {
 	}()
 
 	if s.fenced.Load() {
-		return nil, errHandedOver
+		return nil, release, errHandedOver
 	}
 	if s.dtlsConn == nil || s.srtpIn == nil {
-		return nil, ErrNotEstablished
+		return nil, release, ErrNotEstablished
 	}
 
 	// Fence first, so the DTLS connection cannot send a record the snapshot
@@ -511,27 +550,34 @@ func (s *session) export() ([]byte, error) {
 	if !ok {
 		s.fenced.Store(false)
 
-		return nil, errors.New("mediaworker: DTLS connection state unavailable")
+		return nil, release, errors.New("mediaworker: DTLS connection state unavailable")
 	}
 	dtlsState, err := connState.MarshalBinary()
 	if err != nil {
 		s.fenced.Store(false)
 
-		return nil, fmt.Errorf("mediaworker: export DTLS state: %w", err)
+		return nil, release, fmt.Errorf("mediaworker: export DTLS state: %w", err)
 	}
 	s.checkpointRates(&s.state.Checkpoint)
 	state, err := json.Marshal(snapshot{
-		Version:        sessionStateVersion,
+		Version:        s.state.Version,
+		AgentMoveOnly:  payload,
 		State:          s.state,
 		DTLSConnection: dtlsState,
 	})
 	if err != nil {
 		s.fenced.Store(false)
 
-		return nil, fmt.Errorf("mediaworker: encode session state: %w", err)
+		return nil, release, fmt.Errorf("mediaworker: encode session state: %w", err)
 	}
 
-	return state, nil
+	if payload != nil {
+		if err := validateV2Wire(state); err != nil {
+			s.fenced.Store(false)
+			return nil, release, err
+		}
+	}
+	return state, release, nil
 }
 
 func decodeSnapshot(data []byte) (*snapshot, error) {
@@ -539,7 +585,7 @@ func decodeSnapshot(data []byte) (*snapshot, error) {
 	if err := json.Unmarshal(data, &version); err != nil {
 		return nil, fmt.Errorf("%w: %w", errBadState, err)
 	}
-	if version.Version != sessionStateVersion && version.Version != 6 {
+	if version.Version != v2SessionStateVersion && version.Version != sessionStateVersion && version.Version != 6 {
 		return nil, fmt.Errorf("%w %d (want %d)", errStateVersion, version.Version, sessionStateVersion)
 	}
 
@@ -567,8 +613,20 @@ func decodeSnapshot(data []byte) (*snapshot, error) {
 		}
 		state.Agent.legacy = len(legacy.State.Agent) == 0
 	}
-	state.Version = sessionStateVersion
-	snap.Version = sessionStateVersion
+	if version.Version == v2SessionStateVersion {
+		if state.Agent.V2 == nil || state.Agent.V2.Contract != v2Contract {
+			return nil, fmt.Errorf("%w: missing v2 identity", errBadState)
+		}
+	} else {
+		if state.Agent.V2 != nil || snap.AgentMoveOnly != nil {
+			return nil, fmt.Errorf("%w: v2 data in legacy envelope", errBadState)
+		}
+		state.Version = sessionStateVersion
+		snap.Version = sessionStateVersion
+	}
+	if snap.AgentMoveOnly != nil && len(snap.AgentMoveOnly.Bytes) > v2MoveSessionBytes {
+		return nil, fmt.Errorf("%w: oversized move payload", errBadState)
+	}
 	if state.SRTP.Inbound == nil {
 		state.SRTP.Inbound = make(map[uint32]uint64)
 	}

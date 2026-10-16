@@ -242,11 +242,12 @@ type RelayConfig struct {
 // Worker is a media worker. It owns one UDP socket, or shares one with other
 // workers (see Socket), and the sessions that run over it.
 type Worker struct {
-	agents  agentCounters
-	metrics workerMetrics
-	cfg     Config
-	log     logging.LeveledLogger
-	conn    packetConn // its own UDP socket, a port on a shared Socket, or the relay leg (relayConn)
+	moveBytes atomic.Int64
+	agents    agentCounters
+	metrics   workerMetrics
+	cfg       Config
+	log       logging.LeveledLogger
+	conn      packetConn // its own UDP socket, a port on a shared Socket, or the relay leg (relayConn)
 	// localAddr is the UDP socket the worker reads: its own or the shared
 	// Socket's. mediaAddr is where callers send: localAddr, or behind a
 	// relay the relay's public address.

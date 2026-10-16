@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/pion/webrtc/v4"
+	"github.com/relaishq/relais/internal/agenthost"
 	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/agent"
@@ -108,6 +109,8 @@ type agentHarnessSystem struct {
 }
 
 type agentHarnessSettings struct {
+	v2                    []agenthost.Registration
+	targetEcho            bool
 	snapshotInterval      time.Duration
 	saveInterval          time.Duration
 	targetRestoreFailure  bool
@@ -134,7 +137,13 @@ func startAgentHarness(t *testing.T, store sessionstore.Store, settings ...agent
 		config = settings[0]
 	}
 	for i := range 2 {
-		w, err := mediaworker.New(mediaworker.Config{SnapshotInterval: config.snapshotInterval, Agent: mediaworker.AgentConfig{SaveInterval: config.saveInterval, Factory: func(string) agent.Agent {
+		w, err := mediaworker.New(mediaworker.Config{SnapshotInterval: config.snapshotInterval, Agent: mediaworker.AgentConfig{SaveInterval: config.saveInterval, Factory: func(id string) agent.Agent {
+			if i == 1 && config.targetEcho {
+				return &agent.Echo{}
+			}
+			if len(config.v2) > 0 {
+				return agenthost.Factory(config.v2[i])(id)
+			}
 			if config.echo {
 				return &agent.Echo{}
 			}

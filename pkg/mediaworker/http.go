@@ -8,6 +8,7 @@ import (
 
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/pkg/agent"
+	agentv2 "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/metrics"
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
@@ -17,8 +18,9 @@ var RemoteErrors = map[string]error{
 	"unknown_session": ErrUnknownSession, "unsupported_offer": ErrUnsupportedOffer,
 	"closed": ErrClosed, "not_established": ErrNotEstablished,
 	"sequence_budget": ErrSequenceBudgetExhausted, "session_exists": errSessionExists,
-	"srtcp_exhausted": ErrSRTCPIndexExhausted,
-	"agent_version":   agent.ErrVersion, "agent_oversize": agent.ErrStateTooLarge, "agent_save": agent.ErrSave, "agent_restore": agent.ErrRestore,
+	"srtcp_exhausted":    ErrSRTCPIndexExhausted,
+	"agent_incompatible": agentv2.ErrIncompatibleAgent,
+	"agent_version":      agent.ErrVersion, "agent_oversize": agent.ErrStateTooLarge, "agent_save": agent.ErrSave, "agent_restore": agent.ErrRestore,
 }
 
 type CreateRequest struct {
@@ -85,7 +87,8 @@ func (w *Worker) PrivateHandler() http.Handler {
 		rw.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /sessions/{id}/export", func(rw http.ResponseWriter, r *http.Request) {
-		state, err := w.ExportSession(r.PathValue("id"))
+		state, release, err := w.exportSession(r.PathValue("id"))
+		defer release()
 		if err != nil {
 			workerAPIError(rw, err)
 			return
@@ -127,7 +130,7 @@ func (w *Worker) SessionCount() int {
 // Agent errors can wrap more than one sentinel. Choose one code explicitly;
 // map iteration must not turn an unknown version into a generic restore error.
 func workerAPIError(rw http.ResponseWriter, err error) {
-	for _, code := range []string{"agent_version", "agent_oversize", "agent_save", "agent_restore"} {
+	for _, code := range []string{"agent_incompatible", "agent_version", "agent_oversize", "agent_save", "agent_restore"} {
 		if sentinel := RemoteErrors[code]; errors.Is(err, sentinel) {
 			privateapi.Error(rw, err, map[string]error{code: sentinel})
 			return
