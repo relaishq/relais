@@ -192,3 +192,20 @@ func TestLeaveFencesNewMutationButKeepsLedger(t *testing.T) {
 	require.Equal(t, "not_joined", r.Handle(c, m).Error)
 	require.EqualValues(t, 2, r.Metrics().Applied)
 }
+
+func TestUpstreamSessionEndReasonIsRecorded(t *testing.T) {
+	r := New("end")
+	server := httptest.NewServer(r.Handler())
+	defer server.Close()
+	ws, err := websocket.Dial("ws"+server.URL[4:]+"/relais-upstream?session=ended-call&worker=w1", "", "http://localhost")
+	require.NoError(t, err)
+	defer ws.Close()
+	require.NoError(t, websocket.Message.Send(ws, append([]byte{3, 0}, []byte(`{"reason":"reconnect_required"}`)...)))
+	require.Eventually(t, func() bool {
+		events := r.Metrics().Events
+		return len(events) == 1 && events[0].SessionID == "ended-call" && events[0].Op == 3 && events[0].Reason == "reconnect_required"
+	}, time.Second, time.Millisecond)
+	copied := r.Metrics()
+	copied.Events[0].Reason = "changed"
+	require.Equal(t, "reconnect_required", r.Metrics().Events[0].Reason)
+}

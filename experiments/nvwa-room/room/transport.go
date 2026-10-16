@@ -247,12 +247,14 @@ func (r *Room) serveWS(ws *websocket.Conn, framed bool) {
 				labels[label] = true
 				continue
 			case 2:
+				r.recordTransportEvent(c, 2, label, data)
 				delete(labels, label)
 				if label == c.controlLabel {
 					return
 				}
 				continue
 			case 3:
+				r.recordTransportEvent(c, 3, label, data)
 				return
 			case 0:
 				if !labels[label] {
@@ -322,4 +324,24 @@ func localOrigin(r *http.Request) bool {
 	}
 	u, e := url.Parse(origin)
 	return e == nil && (u.Host == r.Host || u.Host == "localhost" || u.Host == "127.0.0.1")
+}
+
+func (r *Room) recordTransportEvent(c *Connection, op byte, label string, payload []byte) {
+	var reason struct {
+		Reason string `json:"reason"`
+	}
+	if json.Unmarshal(payload, &reason) != nil {
+		return
+	}
+	if len(reason.Reason) > 256 {
+		return
+	}
+	event := TransportEvent{SessionID: c.upstreamSession, Op: op, Label: label, Reason: reason.Reason, AtNS: time.Now().UnixNano()}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.metrics.Events) == 64 {
+		copy(r.metrics.Events, r.metrics.Events[1:])
+		r.metrics.Events = r.metrics.Events[:63]
+	}
+	r.metrics.Events = append(r.metrics.Events, event)
 }

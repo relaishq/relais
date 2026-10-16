@@ -1,0 +1,102 @@
+{
+  "auxiliary/test-unit.log.gz": {
+    "sha256": "a11b98fa261bb5f5b0aff3d3231a3266e83883f54c9de845a56ae2452ce9d6c9",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/unit/test-unit.log",
+    "uncompressed_bytes": 564463
+  },
+  "auxiliary/test-harness-short.log.gz": {
+    "sha256": "a43068817314c7f53cfa24c7c830f328dbb3982b5e133091c5aefaf666088291",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/harness/test-harness-short.log",
+    "uncompressed_bytes": 436576
+  },
+  "auxiliary/unit-result.json.gz": {
+    "sha256": "ff0b48745b72e32ee901ddb98893b367a3ca491041f79986da1ddb239276db09",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/unit/result.json",
+    "uncompressed_bytes": 157
+  },
+  "auxiliary/harness-result.json.gz": {
+    "sha256": "e6ca925334d3b7af6f084754c45f50133458f10b6589a609e0286c377cba2fba",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/harness/result.json",
+    "uncompressed_bytes": 145
+  },
+  "auxiliary/loadgen-recheck.log.gz": {
+    "sha256": "88b88d6ca83d469579dbae5e3868c9e2ee1900e6f2a718eb37691e5c5916aca4",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/loadgen-recheck.log",
+    "uncompressed_bytes": 56
+  },
+  "auxiliary/relay-restart-recheck.log.gz": {
+    "sha256": "55be5f3bd4e3e78a1f5ba045dd930ecd19547a987ba67f3de624d7c2199882ab",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/relay-restart-recheck.log",
+    "uncompressed_bytes": 55
+  },
+  "auxiliary/experiment-tests.log.gz": {
+    "sha256": "1fc1245db42683d476d016741b66d48688555445046a990d9332c439b489d382",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/final-experiment-tests.log",
+    "uncompressed_bytes": 1493
+  },
+  "auxiliary/policies.json.gz": {
+    "sha256": "f91a76556c13af5aa615722eaf9654bf5a3573aab7c27df8e36aaaeeaef62219",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/policies-dc-final/result.json",
+    "uncompressed_bytes": 18612
+  },
+  "auxiliary/backpressure-dc.json.gz": {
+    "sha256": "76e9f5196050419d6dfaf8c85fbdfa365a73e19d579e023ddda89c4205af2061",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/backpressure-dc/result.json",
+    "uncompressed_bytes": 9218
+  },
+  "auxiliary/backpressure-ws.json.gz": {
+    "sha256": "ae309e2fed01ec256d2c87e7a703295477adab794d360dbc16aaeacb865e3d36",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/backpressure-ws/result.json",
+    "uncompressed_bytes": 8256
+  },
+  "auxiliary/browser-ws-player-1.json.gz": {
+    "sha256": "e731492286531cc5e9312397a1c7e212024b4cd2b348ffbd74e69429395d419a",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/browser-smoke-ws/player-1.json",
+    "uncompressed_bytes": 190771
+  },
+  "auxiliary/browser-ws-player-2.json.gz": {
+    "sha256": "e200b7ee5b300f0364c350c7521e642bcbb1244d88f2e2cadbef7f8f0de52812",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/browser-smoke-ws/player-2.json",
+    "uncompressed_bytes": 190295
+  },
+  "auxiliary/browser-ws-chromium-440.log.gz": {
+    "sha256": "87d3dc7bef3e0a094f98b4764f25b47bbc0fe4aaf0575a3bb8167e57707e9e61",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/browser-smoke-ws/chromium-440.log",
+    "uncompressed_bytes": 481
+  },
+  "auxiliary/browser-ws-chromium-880.log.gz": {
+    "sha256": "0c210a425a7e3998ae034882106a8c2bb498e76a0ac8a8031a2b1db76d177ea5",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/browser-smoke-ws/chromium-880.log",
+    "uncompressed_bytes": 481
+  },
+  "auxiliary/browser-ws-topology-room.log.gz": {
+    "sha256": "4a0de1afa14000528e0f3d0eacf071384e38d8c5908073533fcf09dc17af2db2",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/browser-smoke-ws/topology/room.log",
+    "uncompressed_bytes": 345
+  },
+  "auxiliary/browser-dc-player-1.json.gz": {
+    "sha256": "27179896ee9c8884202c401a977309cb9371dae451b0470ce3d4419f1e6d0f31",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/browser-smoke-dc/player-1.json",
+    "uncompressed_bytes": 190316
+  },
+  "auxiliary/browser-dc-player-2.json.gz": {
+    "sha256": "b14b837bfac31ceddf42e57b382d8d5c29c61a9e77d79f6a76def6ab98cc1d47",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/browser-smoke-dc/player-2.json",
+    "uncompressed_bytes": 190059
+  },
+  "auxiliary/browser-dc-chromium-440.log.gz": {
+    "sha256": "860889fd24f88b99b947d225a791fe3f1877888ff7f19fa123183d7b7b4a04ec",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/browser-smoke-dc/chromium-440.log",
+    "uncompressed_bytes": 483
+  },
+  "auxiliary/browser-dc-chromium-880.log.gz": {
+    "sha256": "39ab99eac9559a831e030c6656d086c3f20c677035357d82def374681170a5a2",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/browser-smoke-dc/chromium-880.log",
+    "uncompressed_bytes": 483
+  },
+  "auxiliary/browser-dc-topology-room.log.gz": {
+    "sha256": "5486f1b5e778c946e32b41ea3ba0c59e63b2344a67c60e931c77b6605bc14a8e",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/stage2/browser-smoke-dc/topology/room.log",
+    "uncompressed_bytes": 346
+  }
+}

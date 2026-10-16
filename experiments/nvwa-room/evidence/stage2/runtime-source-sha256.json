@@ -1,0 +1,22 @@
+{
+  "experiments/nvwa-room/audioagent/agent.go": "fb0146cae8f757afa88452df838a5509440dd664b3f74c75b92de23afbb822ac",
+  "experiments/nvwa-room/client/client.go": "3ad748d39d5bb4c70a280a649affd48eea9465b750e6c6e137892b2115ebc92e",
+  "experiments/nvwa-room/cmd/backpressure/main.go": "72beccf3b1832c795fb6909f15ef0fdaa3d4efebc0d901eae1007ab7a25b625a",
+  "experiments/nvwa-room/cmd/dcprobe/main.go": "4a1da322f1f1c246fe9f64f57491828547bb70cd1a04d2c7c8b237cf3881a12d",
+  "experiments/nvwa-room/cmd/driver/main.go": "2c914a89e9b71ac21197b473b9feb29b3f8bd8c00db39c4d43307c76812c60b3",
+  "experiments/nvwa-room/cmd/policies/main.go": "54bbddf309127e7daacc6a1e5ec6f87aa7852d3281d1c037086027f95c0d62c2",
+  "experiments/nvwa-room/cmd/room/main.go": "001ffe67dd517d01af829dab73c2c5c0151a1a60f47652f98f2cf89cdc2fc723",
+  "experiments/nvwa-room/cmd/topology/main.go": "ea0757d676d8908672c27d912941d081bdeaf4cde32f9d378c167d7ebccf5134",
+  "experiments/nvwa-room/harness/topology.go": "6272ba36ba4ebc9617c1810e454859c90bf88b032a4f1df5390b1b177b054867",
+  "experiments/nvwa-room/media/call.go": "da2e7bb337fd97dee8131654efe7b6a7d15650024b12a3f023f4b409919bd628",
+  "experiments/nvwa-room/media/data.go": "94897843c98583ae1574ffd091a473747826903ea337db94571f1b6cd14f73d1",
+  "experiments/nvwa-room/room/audio.go": "32818c99c822a6fe0c5dfd09cd77d4de49dcd714b2552ff69bf95b0123ec7dea",
+  "experiments/nvwa-room/room/protocol.go": "97fbc48898b82d363e8a21a0a5967ec03afa4c49692f6f6603aa5db938126e91",
+  "experiments/nvwa-room/room/room.go": "e220b5f7cca04853e54a83b011ae9108bb33dbda6d6f646d4e749524c60c11be",
+  "experiments/nvwa-room/room/signal.go": "376a5d49622cf705f8ec9619e3da7b52c833feedd73d5f381f907343f4b1251e",
+  "experiments/nvwa-room/room/transport.go": "32d377db1963438ccc497f3181daab7f7f939371ce603734fb6b1eb32153b432",
+  "experiments/nvwa-room/web/app.js": "c49f2756d86168a275816c7ea6368bd7c6271c1196ad281a63c7a652797deba0",
+  "experiments/nvwa-room/web/index.html": "2d637518457b61641710ff55ea48d4bc23bbc3423a15b2ecb7531bd449a6c8de",
+  "pkg/workerapp/agent.go": "916d7e1cf2045276e7a1b9591dd270236c8cd21e0c357f2ae0b7c108b938bf01",
+  "pkg/workerapp/app.go": "1618dc0daec5d975446d1bde91d5bce537907132e1a3750af80c387c328fcc41"
+}

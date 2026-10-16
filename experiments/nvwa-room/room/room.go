@@ -19,17 +19,26 @@ type identity struct {
 	rateAt  time.Time
 	rate    int
 }
+type TransportEvent struct {
+	SessionID string `json:"session_id"`
+	Op        byte   `json:"op"`
+	Label     string `json:"label,omitempty"`
+	Reason    string `json:"reason"`
+	AtNS      int64  `json:"at_ns"`
+}
+
 type Metrics struct {
-	Applied         uint64  `json:"applied"`
-	Deduplicated    uint64  `json:"deduplicated"`
-	Conflicts       uint64  `json:"conflicts"`
-	StaleState      uint64  `json:"stale_state"`
-	Fenced          uint64  `json:"fenced"`
-	SlowConsumers   uint64  `json:"slow_consumers"`
-	DroppedReceipts uint64  `json:"dropped_receipts"`
-	MaxQueueBytes   int     `json:"max_queue_bytes"`
-	MaxQueueAgeMS   float64 `json:"max_queue_age_ms"`
-	Connections     int     `json:"connections"`
+	Events          []TransportEvent `json:"transport_events,omitempty"`
+	Applied         uint64           `json:"applied"`
+	Deduplicated    uint64           `json:"deduplicated"`
+	Conflicts       uint64           `json:"conflicts"`
+	StaleState      uint64           `json:"stale_state"`
+	Fenced          uint64           `json:"fenced"`
+	SlowConsumers   uint64           `json:"slow_consumers"`
+	DroppedReceipts uint64           `json:"dropped_receipts"`
+	MaxQueueBytes   int              `json:"max_queue_bytes"`
+	MaxQueueAgeMS   float64          `json:"max_queue_age_ms"`
+	Connections     int              `json:"connections"`
 }
 type Room struct {
 	mu          sync.Mutex

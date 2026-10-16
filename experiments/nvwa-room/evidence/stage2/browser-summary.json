@@ -1,0 +1,58 @@
+[
+  {
+    "transport": "ws",
+    "app_verified": true,
+    "audio_tone_verified": false,
+    "pages": [
+      {
+        "player_id": "p1",
+        "transport": "ws",
+        "count": 90,
+        "own_hz": 440,
+        "peer_hz": 880,
+        "peer_tone_samples": 0,
+        "peer_over_self_db": null,
+        "error": null
+      },
+      {
+        "player_id": "p2",
+        "transport": "ws",
+        "count": 90,
+        "own_hz": 880,
+        "peer_hz": 440,
+        "peer_tone_samples": 0,
+        "peer_over_self_db": null,
+        "error": null
+      }
+    ],
+    "epoch": "303c314c25b52372723584d07c4a4063"
+  },
+  {
+    "transport": "dc",
+    "app_verified": true,
+    "audio_tone_verified": false,
+    "pages": [
+      {
+        "player_id": "p2",
+        "transport": "dc",
+        "count": 90,
+        "own_hz": 440,
+        "peer_hz": 880,
+        "peer_tone_samples": 0,
+        "peer_over_self_db": null,
+        "error": null
+      },
+      {
+        "player_id": "p1",
+        "transport": "dc",
+        "count": 90,
+        "own_hz": 880,
+        "peer_hz": 440,
+        "peer_tone_samples": 0,
+        "peer_over_self_db": null,
+        "error": null
+      }
+    ],
+    "epoch": "8254e9233f2a3bd145e1508e11262993"
+  }
+]

@@ -1,12 +1,34 @@
 # Nvwa two-player room spike
 
+> Stage 2 已合并 W1（基线 `866a07d`）。当前双传输结果、原始数据与 GO/HOLD/NO-GO 以 [中文最终报告](evidence/REPORT.md) 为准。下方保留协议和单次运行细节；DataChannel 已集成，严格分片超限边界仍为 HOLD。
+
+## Stage 2 配对运行
+
+先使用新的任务目录构建，之后保持该目录中的二进制不变。两种传输逐对交替，使用同一速率、消息数、音调与故障 cut。
+
+```sh
+nvwa_scratch=$(mktemp -d /private/tmp/nvwa-room-stage2.XXXXXX)
+bash experiments/nvwa-room/scripts/build.sh "$nvwa_scratch"
+wefty exec --detach --json --max-runtime 18m -- \
+ python3 experiments/nvwa-room/scripts/run-matrix.py --scratch "$nvwa_scratch" --transport paired
+# 输出在 $nvwa_scratch/paired-matrix；每种传输 12 次独立试验。
+python3 experiments/nvwa-room/scripts/export-evidence.py --scratch "$nvwa_scratch" \
+ --matrix paired --dest experiments/nvwa-room/evidence/stage2
+
+# 单独启动 DataChannel + audio 拓扑；不加 -datachannel 则是直接 WS + 同一媒体路径。
+"$nvwa_scratch/bin/topology" -bin "$nvwa_scratch/bin" -out "$nvwa_scratch/manual-dc" -datachannel
+# Ctrl-C / SIGTERM 给这个自建拓扑进程，等待其逐个回收子进程。
+```
+
+单次 `driver` 和 `backpressure` 加 `-datachannel` 即选择共享音频 PeerConnection 的 DataChannel；不加则为直接 WS。`policies` 固定测试 DataChannel 的 Move 拒绝与 Drain 后重连。`browser-smoke.py --transport ws|dc` 使用各自独立 profile；本次通过 wefty 已验证消息页面，但 Chromium 内部音频沙箱无法读取 WAV，音调验收未通过。没有添加 `--no-sandbox`。
+
 Disposable app protocol and WebSocket comparison for #162/#163. This is a message/action-reference demo, not a character or animation player. The room has no durable storage. Relais production media defaults remain unchanged. Only `-agent=room-audio -room-audio-bus=udp://127.0.0.1:PORT` selects the experimental audio bridge.
 
 ## Layout
 
 - `room/`: shared authoritative room core, direct WebSocket adapter, frozen upstream framing, capability lobby, signal proxy, UDP audio bus.
 - `client/`: Go protocol consumer over a bounded message connection.
-- `media/`: Pion caller through real `relais-signal`; stage-2 DataChannel seam.
+- `media/`: Pion caller through real `relais-signal`; integrated DataChannel consumer.
 - `audioagent/`: opt-in legacy `pkg/agent` implementation. No agent v2 or task changes.
 - `cmd/room`: standalone room process and browser page.
 - `cmd/topology`: owned Redis, relay, two workers, control, signal and room processes.
@@ -108,7 +130,7 @@ Replies are `joined`, `snapshot`, `state`, `result`, or `error`; they carry `roo
 
 Restart creates a random new epoch. An old-epoch request gets explicit `epoch_reset`; an unknown command in the new epoch is not inferred successful. The ledger is memory-only. A room crash is outside the recovery guarantee.
 
-Frozen worker upstream is `/relais-upstream?session=ID&worker=NAME`. Frames are `[op, labelLength, label, payload]` with open=1, message=0, close=2, end=3, exactly as the dispatch's `INTERFACE.md`. One upstream connection is capped at four labels. The core has framing coverage; real DataChannel negotiation, worker forwarding and its move/drain/crash policies require W1 and stage 2.
+Frozen worker upstream is `/relais-upstream?session=ID&worker=NAME`. Frames are `[op, labelLength, label, payload]` with open=1, message=0, close=2, end=3, exactly as the dispatch's `INTERFACE.md`. One upstream connection is capped at four labels. The core has framing coverage. Stage-2 runtime evidence is in the Chinese report; W1 retains HOLD on strict oversized fragmented inbound messages.
 
 ## Bounds and measurement limits
 
@@ -133,4 +155,4 @@ GOPROXY=off go test -mod=readonly -race -short -count=1 ./pkg/callharness \
  -run 'Test(AudioOnlyCall|BrowserLikeOfferCall|ChromeOfferIsAnswered)$'
 ```
 
-No paid API, model generation, new module download, cloud or Nvwa source changes. Native Rust/Bevy, actual animation playback, Internet/TURN, cross-host/region, Safari/mobile, production capacity and persistence after room death remain NOT-RUN. Adoption decision and DataChannel/WebSocket comparison wait for stage 2 and orchestrator review.
+No paid API, model generation, new module download, cloud or Nvwa source changes. Native Rust/Bevy, actual animation playback, Internet/TURN, cross-host/region, Safari/mobile, production capacity and persistence after room death remain NOT-RUN. See the stage-2 Chinese report for the measured comparison and bounded verdict; independent review remains with the orchestrator.

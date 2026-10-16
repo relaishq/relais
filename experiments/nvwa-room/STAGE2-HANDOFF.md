@@ -1,5 +1,7 @@
 # Stage 2 integration handoff
 
+> Historical stage-1 handoff. W1 was merged at 866a07d; current results and remaining gates are in evidence/REPORT.md.
+
 Stage 1 implements the room, app consumers, real Relais peer audio, direct WebSocket workload/fault recorder, and frozen upstream handler. DataChannel runtime remains NOT-RUN until W1 is merged. Browser startup is blocked in this worker sandbox, before page execution; the parent must supply an authorized isolated browser executor.
 
 ## Merge points

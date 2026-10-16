@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Own isolated headless browser processes; never attaches to an existing browser."""
 import argparse,json,pathlib,subprocess,time,urllib.request,os,signal,shutil
-p=argparse.ArgumentParser();p.add_argument('--scratch',required=True);p.add_argument('--browser',default='/opt/homebrew/bin/chromium');a=p.parse_args();s=pathlib.Path(a.scratch).resolve();out=s/'browser-smoke';out.mkdir(exist_ok=True)
+p=argparse.ArgumentParser();p.add_argument('--scratch',required=True);p.add_argument('--transport',choices=['ws','dc'],default='ws');p.add_argument('--browser',default='/opt/homebrew/bin/chromium');a=p.parse_args();s=pathlib.Path(a.scratch).resolve();out=s/('browser-smoke-'+a.transport);out.mkdir(exist_ok=True)
 children=[];files=[]
 def start(args,log):
  f=open(out/log,'w');files.append(f);child=subprocess.Popen(args,stdout=f,stderr=f);children.append(child);return child
 try:
- topology=start([str(s/'bin/topology'),'-bin',str(s/'bin'),'-out',str(out/'topology')],'topology.log')
+ topology_args=[str(s/'bin/topology'),'-bin',str(s/'bin'),'-out',str(out/'topology')]
+ if a.transport=='dc':topology_args.append('-datachannel')
+ topology=start(topology_args,'topology.log')
  deadline=time.monotonic()+20
  while not (out/'topology/topology.json').exists():
   if topology.poll() is not None:raise RuntimeError('topology failed; see log')
@@ -16,7 +18,7 @@ try:
  for index,hz in enumerate([440,880]):
   wav=out/f'tone-{hz}.wav'
   subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i',f'sine=frequency={hz}:sample_rate=48000:duration=45','-ac','1','-y',str(wav)],check=True)
-  args=[a.browser,'--headless=new','--no-first-run','--no-default-browser-check','--disable-gpu','--no-proxy-server','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream',f'--use-file-for-fake-audio-capture={wav}','--autoplay-policy=no-user-gesture-required',f'--user-data-dir={out / ("profile-"+str(hz))}',config['room_url']+f'/web/?auto=1&count=90&tone={hz}']
+  args=[a.browser,'--headless=new','--no-first-run','--no-default-browser-check','--disable-gpu','--no-proxy-server','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream',f'--use-file-for-fake-audio-capture={wav}','--autoplay-policy=no-user-gesture-required',f'--user-data-dir={out / ("profile-"+str(hz))}',config['room_url']+f'/web/?auto=1&count=90&tone={hz}&transport={a.transport}']
   start(args,f'chromium-{hz}.log');time.sleep(.5)
  deadline=time.monotonic()+30;paths=[]
  roomlog=out/'topology/room.log'

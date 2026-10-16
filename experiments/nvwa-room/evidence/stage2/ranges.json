@@ -1,0 +1,178 @@
+[
+  {
+    "mode": "normal",
+    "transport": "ws",
+    "rtt_mean_range": [
+      0.725851441,
+      1.1895795759999996
+    ],
+    "rtt_max": 94.902458,
+    "state_age_max": 110.83,
+    "queue_range": [
+      952,
+      952
+    ],
+    "recovery_range": [
+      0,
+      0
+    ],
+    "audio_gap_range": [
+      40.609,
+      236.943
+    ]
+  },
+  {
+    "mode": "normal",
+    "transport": "dc",
+    "rtt_mean_range": [
+      1.6129500890000001,
+      1.860733180000001
+    ],
+    "rtt_max": 49.502333,
+    "state_age_max": 121.553,
+    "queue_range": [
+      970,
+      970
+    ],
+    "recovery_range": [
+      0,
+      0
+    ],
+    "audio_gap_range": [
+      40.425,
+      64.085
+    ]
+  },
+  {
+    "mode": "disconnect",
+    "transport": "ws",
+    "rtt_mean_range": [
+      0.5132424909999999,
+      0.8016235590000006
+    ],
+    "rtt_max": 24.215625,
+    "state_age_max": 335.903,
+    "queue_range": [
+      897,
+      947
+    ],
+    "recovery_range": [
+      304.157,
+      309.263
+    ],
+    "audio_gap_range": [
+      400.051,
+      519.367
+    ]
+  },
+  {
+    "mode": "disconnect",
+    "transport": "dc",
+    "rtt_mean_range": [
+      0.8098369790000005,
+      1.8467447869999993
+    ],
+    "rtt_max": 24.303583,
+    "state_age_max": 534.341,
+    "queue_range": [
+      912,
+      965
+    ],
+    "recovery_range": [
+      499.841,
+      518.14
+    ],
+    "audio_gap_range": [
+      398.989,
+      511.78
+    ]
+  },
+  {
+    "mode": "worker-kill",
+    "transport": "ws",
+    "rtt_mean_range": [
+      0.22572600300000004,
+      0.3641139640000003
+    ],
+    "rtt_max": 23.215958,
+    "state_age_max": 87.356,
+    "queue_range": [
+      894,
+      947
+    ],
+    "recovery_range": [
+      42.006,
+      44.367
+    ],
+    "audio_gap_range": [
+      237.904,
+      248.948
+    ]
+  },
+  {
+    "mode": "worker-kill",
+    "transport": "dc",
+    "rtt_mean_range": [
+      0.6045561749999993,
+      2.317749283999998
+    ],
+    "rtt_max": 305.1405,
+    "state_age_max": 383.47,
+    "queue_range": [
+      965,
+      965
+    ],
+    "recovery_range": [
+      246.744,
+      311.356
+    ],
+    "audio_gap_range": [
+      159.065,
+      291.432
+    ]
+  },
+  {
+    "mode": "lost-receipt",
+    "transport": "ws",
+    "rtt_mean_range": [
+      0.49166954800000034,
+      0.8311884140000002
+    ],
+    "rtt_max": 151.122125,
+    "state_age_max": 167.204,
+    "queue_range": [
+      952,
+      952
+    ],
+    "recovery_range": [
+      0,
+      0
+    ],
+    "audio_gap_range": [
+      30.565,
+      73.884
+    ]
+  },
+  {
+    "mode": "lost-receipt",
+    "transport": "dc",
+    "rtt_mean_range": [
+      1.3972981900000006,
+      1.6222602960000005
+    ],
+    "rtt_max": 153.608042,
+    "state_age_max": 170.631,
+    "queue_range": [
+      970,
+      970
+    ],
+    "recovery_range": [
+      0,
+      0
+    ],
+    "audio_gap_range": [
+      35.442,
+      70.83
+    ]
+  }
+]

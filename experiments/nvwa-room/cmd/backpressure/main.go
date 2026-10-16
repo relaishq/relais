@@ -21,18 +21,19 @@ func main() {
 	out := flag.String("out", "", "output directory")
 	toneA := flag.String("tone-a", "", "440Hz Ogg")
 	toneB := flag.String("tone-b", "", "880Hz Ogg")
+	data := flag.Bool("datachannel", false, "same-PC data+audio transport")
 	flag.Parse()
-	if e := run(*bin, *out, *toneA, *toneB); e != nil {
+	if e := run(*bin, *out, *toneA, *toneB, *data); e != nil {
 		log.Fatal(e)
 	}
 }
-func run(bin, out, a, b string) error {
+func run(bin, out, a, b string, data bool) error {
 	root, _ := os.Getwd()
 	bin, _ = filepath.Abs(bin)
 	out, _ = filepath.Abs(out)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	top, e := harness.Start(ctx, bin, root, out, false)
+	top, e := harness.Start(ctx, bin, root, out, data)
 	if e != nil {
 		return e
 	}
@@ -57,12 +58,17 @@ func run(bin, out, a, b string) error {
 		if e != nil {
 			return e
 		}
-		calls[i], e = media.Dial(ctx, signal, fmt.Sprintf("w%d", i+1), tones[i], tones[1-i], false)
+		calls[i], e = media.Dial(ctx, signal, fmt.Sprintf("w%d", i+1), tones[i], tones[1-i], data)
 		if e != nil {
 			return e
 		}
 		defer calls[i].Close()
-		conn, e := client.DialWS(client.WSURL(top.Config.RoomURL))
+		var conn client.MessageConn
+		if data {
+			conn = calls[i].DataConn()
+		} else {
+			conn, e = client.DialWS(client.WSURL(top.Config.RoomURL))
+		}
 		if e != nil {
 			return e
 		}
@@ -107,14 +113,17 @@ func run(bin, out, a, b string) error {
 	if e != nil {
 		return e
 	}
+	closedCtx, closedCancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	_, closeErr := clients[0].Request(closedCtx, room.Message{Type: "snapshot"})
+	closedCancel()
 	reports := []media.AudioReport{calls[0].Report(), calls[1].Report()}
-	result := map[string]any{"applied": applied, "typed_slow_consumer": typed, "metrics": metrics, "audio": reports, "observations": observed}
+	result := map[string]any{"applied": applied, "typed_slow_consumer": typed, "client_close_error": fmt.Sprint(closeErr), "datachannel": data, "metrics": metrics, "audio": reports, "observations": observed}
 	encoded, _ := json.MarshalIndent(result, "", "  ")
 	if e = os.WriteFile(filepath.Join(out, "result.json"), encoded, 0600); e != nil {
 		return e
 	}
 	fmt.Printf("applied=%d typed_slow_consumer=%t max_queue_bytes=%d max_queue_age_ms=%.3f audio_packets=%d/%d audio_max_gap_ms=%.3f/%.3f\n", applied, typed, metrics.MaxQueueBytes, metrics.MaxQueueAgeMS, reports[0].PeerPayload, reports[1].PeerPayload, reports[0].MaxGapMS, reports[1].MaxGapMS)
-	if !typed || metrics.SlowConsumers != 1 || metrics.MaxQueueBytes > room.MaxPending || metrics.Applied != uint64(applied) || reports[0].PeerPayload < 30 || reports[1].PeerPayload < 30 || reports[0].SelfPayload != 0 || reports[1].SelfPayload != 0 {
+	if (!typed && (!data || closeErr == nil)) || metrics.SlowConsumers != 1 || metrics.MaxQueueBytes > room.MaxPending || metrics.Applied != uint64(applied) || reports[0].PeerPayload < 30 || reports[1].PeerPayload < 30 || reports[0].SelfPayload != 0 || reports[1].SelfPayload != 0 {
 		return fmt.Errorf("backpressure acceptance failed")
 	}
 	return nil

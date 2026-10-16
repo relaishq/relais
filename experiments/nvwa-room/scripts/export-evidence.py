@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Export bounded raw receipts plus independently derived receipt/audio checks."""
 import argparse,base64,gzip,hashlib,json,pathlib,shutil,statistics
-p=argparse.ArgumentParser();p.add_argument('--scratch',required=True);p.add_argument('--dest',default='experiments/nvwa-room/evidence');a=p.parse_args();s=pathlib.Path(a.scratch).resolve();dest=pathlib.Path(a.dest);dest.mkdir(parents=True,exist_ok=True)
+p=argparse.ArgumentParser();p.add_argument('--scratch',required=True);p.add_argument('--dest',default='experiments/nvwa-room/evidence');p.add_argument('--matrix',choices=['ws','dc','paired'],default='ws');a=p.parse_args();s=pathlib.Path(a.scratch).resolve();dest=pathlib.Path(a.dest);dest.mkdir(parents=True,exist_ok=True)
 def packets(path):
  b=path.read_bytes();i=0;out=set()
  while i<len(b):
@@ -13,8 +13,9 @@ tones=[packets(s/'tone-440.ogg'),packets(s/'tone-880.ogg')]
 assert not tones[0]&tones[1], 'the peer/self audio references must be disjoint'
 rows=[];manifest={};raw=dest/'raw';raw.mkdir(exist_ok=True)
 for mode in ['normal','disconnect','worker-kill','lost-receipt']:
- for trial in range(1,4):
-  name=f'{mode}-{trial}';path=s/'ws-matrix'/name/'result.json';d=json.loads(path.read_text());assert not d['errors'],(name,d['errors']);row={'run':name,'duration_ms':d['duration_ms'],'queue_bytes':d['room_metrics']['max_queue_bytes'],'queue_age_ms':d['room_metrics']['max_queue_age_ms'],'applied':d['room_metrics']['applied'],'dedup':d['room_metrics']['deduplicated'],'conflicts':d['room_metrics']['conflicts'],'dropped_receipts':d['room_metrics']['dropped_receipts'],'duplicate_side_effects':d['room_metrics']['applied']-1000,'players':[]}
+ for trial_transport in [(trial,transport) for trial in range(1,4) for transport in (['ws','dc'] if a.matrix=='paired' else [a.matrix])]:
+  trial,transport=trial_transport
+  name=f'{mode}-{trial}'+(f'-{transport}' if a.matrix=='paired' else '');path=s/('paired-matrix' if a.matrix=='paired' else transport+'-matrix')/name/'result.json';d=json.loads(path.read_text());assert d['transport']==('relais-datachannel' if transport=='dc' else 'websocket');assert not d['errors'],(name,d['errors']);row={'run':name,'transport':transport,'duration_ms':d['duration_ms'],'queue_bytes':d['room_metrics']['max_queue_bytes'],'queue_age_ms':d['room_metrics']['max_queue_age_ms'],'applied':d['room_metrics']['applied'],'dedup':d['room_metrics']['deduplicated'],'conflicts':d['room_metrics']['conflicts'],'dropped_receipts':d['room_metrics']['dropped_receipts'],'duplicate_side_effects':d['room_metrics']['applied']-1000,'players':[]}
   assert row['duplicate_side_effects']==0
   if mode=='worker-kill':
    topology=json.loads((path.parent/'topology.json').read_text());owned=[c['pid'] for c in topology['children'] if c['name']=='worker-1'];assert owned==[d['kill_pid']]
