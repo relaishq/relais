@@ -1,0 +1,22 @@
+{
+  "experiments/nvwa-room/client/client.go": "d55358ec078529eb1b540137f0efe63a0ce1e5781854f6a89c1b4fd89e04a685",
+  "experiments/nvwa-room/client/client_test.go": "b1689d8b5741406a4b5f7c2225083f252a4c5ba4e3242ede015b8d35d1704022",
+  "experiments/nvwa-room/cmd/backpressure/main.go": "72beccf3b1832c795fb6909f15ef0fdaa3d4efebc0d901eae1007ab7a25b625a",
+  "experiments/nvwa-room/cmd/dcprobe/main.go": "4a1da322f1f1c246fe9f64f57491828547bb70cd1a04d2c7c8b237cf3881a12d",
+  "experiments/nvwa-room/cmd/driver/main.go": "04c2394c2b341b3af3f27256ff1d0ef67defc5112decc9312e26d8e01280f778",
+  "experiments/nvwa-room/cmd/policies/main.go": "54bbddf309127e7daacc6a1e5ec6f87aa7852d3281d1c037086027f95c0d62c2",
+  "experiments/nvwa-room/cmd/room/main.go": "7615a6bb51d07c0c52eea68a68920401ab732cb64d5c670b2308d0490f453134",
+  "experiments/nvwa-room/cmd/topology/main.go": "ea0757d676d8908672c27d912941d081bdeaf4cde32f9d378c167d7ebccf5134",
+  "experiments/nvwa-room/harness/topology.go": "eb69222eee670e5863917208a8f0865906694d277c4e79555234896640d0729c",
+  "experiments/nvwa-room/media/call.go": "da2e7bb337fd97dee8131654efe7b6a7d15650024b12a3f023f4b409919bd628",
+  "experiments/nvwa-room/media/data.go": "94897843c98583ae1574ffd091a473747826903ea337db94571f1b6cd14f73d1",
+  "experiments/nvwa-room/room/audio.go": "32818c99c822a6fe0c5dfd09cd77d4de49dcd714b2552ff69bf95b0123ec7dea",
+  "experiments/nvwa-room/room/protocol.go": "97fbc48898b82d363e8a21a0a5967ec03afa4c49692f6f6603aa5db938126e91",
+  "experiments/nvwa-room/room/room.go": "78630ce1b57450fcec46628a2feea3bc14949f449357345b03d85575753167b2",
+  "experiments/nvwa-room/room/room_test.go": "32928618b802276994f5596b6cb0f3c7800a649f7a3a890e7b3714f2fbf8ceea",
+  "experiments/nvwa-room/room/signal.go": "8fd77908c176f4c909bd5d51a69deac8064c9bbe086e3adea0dc65ed69f91711",
+  "experiments/nvwa-room/room/transport.go": "bf19c52231fc51c763b9f77f8ad354bd8cccadf1fa96b533f68f8d9008f4dea8",
+  "internal/spike/roomaudio/agent.go": "797a3c7f31b938a36b14c092667a16135d714760551d91c6935393fff46625d9",
+  "internal/spike/roomaudio/agent_test.go": "5bbe5461c8a5fcde19b51a8cecfe28fc2c79abe2ff9f79f6a0e730db9c9838e0",
+  "pkg/workerapp/agent.go": "ef3d263d518e3b4f07901b9aa78124414cc925c3bb73a81840620b294fd93643"
+}

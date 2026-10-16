@@ -1,0 +1,38 @@
+[
+  {
+    "run": "disconnect-1",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/ws-matrix/disconnect-1/result.json",
+    "file": "raw/disconnect-1.json.gz",
+    "sha256": "f8190a58c70c165b4dcd94cd21f436b457290b34cb4169cc398124a206356a1b"
+  },
+  {
+    "run": "disconnect-2",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/ws-matrix/disconnect-2/result.json",
+    "file": "raw/disconnect-2.json.gz",
+    "sha256": "8b4385e01789e557837e846a10b8ffcdd0f5ff7efb4e2a57971a336af1f7ed39"
+  },
+  {
+    "run": "disconnect-3",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/ws-matrix/disconnect-3/result.json",
+    "file": "raw/disconnect-3.json.gz",
+    "sha256": "cb97e82a852b68b0ada65a224316df5d09651c61b683fa6904793f8c818f8bb8"
+  },
+  {
+    "run": "worker-kill-1",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/ws-matrix/worker-kill-1/result.json",
+    "file": "raw/worker-kill-1.json.gz",
+    "sha256": "722f18bd019cfa828adf80fc11d06f34ec9c581bfaa7359262a2cd363ca0d3e4"
+  },
+  {
+    "run": "worker-kill-2",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/ws-matrix/worker-kill-2/result.json",
+    "file": "raw/worker-kill-2.json.gz",
+    "sha256": "56b8b1bb5b808cde864776c568a4da577403eafb1bf5698e3603678d0c134f67"
+  },
+  {
+    "run": "worker-kill-3",
+    "source": "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/ws-matrix/worker-kill-3/result.json",
+    "file": "raw/worker-kill-3.json.gz",
+    "sha256": "95156e08c0855142f43f33add0bdb8baa926c9dadbb680f91709ec35b19a5a81"
+  }
+]

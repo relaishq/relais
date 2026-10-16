@@ -1,4 +1,4 @@
-package audioagent_test
+package roomaudio_test
 
 import (
 	"context"
@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relaishq/relais/experiments/nvwa-room/audioagent"
 	"github.com/relaishq/relais/experiments/nvwa-room/client"
 	"github.com/relaishq/relais/experiments/nvwa-room/room"
+	audioagent "github.com/relaishq/relais/internal/spike/roomaudio"
 	"github.com/relaishq/relais/pkg/agent"
 	"github.com/stretchr/testify/require"
 )

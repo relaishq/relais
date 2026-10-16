@@ -1,0 +1,326 @@
+[
+  {
+    "run": "disconnect-1",
+    "command_id": "p1-0250",
+    "sent_to_cut_ms": 0.831,
+    "generations": [
+      1,
+      2
+    ],
+    "dedup": 1,
+    "command_side_effects": 1,
+    "total_applied": 1000,
+    "rtt_mean_ms": [
+      0.6987559800000015,
+      0.3590060570000004
+    ],
+    "rtt_max_ms": [
+      263.30075,
+      6.223959
+    ],
+    "latest_state_age_max_ms": [
+      299.647,
+      295.507
+    ],
+    "missing": [
+      0,
+      0
+    ],
+    "duplicate_receipts": [
+      0,
+      0
+    ],
+    "reordered_receipts": [
+      0,
+      0
+    ],
+    "reconnects": [
+      1,
+      0
+    ],
+    "recovery_ms": 295.372,
+    "cut_to_recovered_ms": 261.74325,
+    "audio_max_gap_ms": [
+      496.226,
+      420.275
+    ],
+    "max_queue_bytes": 952,
+    "max_queue_age_ms": 2.086458,
+    "duration_ms": 34634.3365,
+    "kill_pid": null,
+    "pending_at_cut": true,
+    "result_version": 503,
+    "owned_redis": "127.0.0.1:49225",
+    "owned_worker_1_pid": 87829
+  },
+  {
+    "run": "disconnect-2",
+    "command_id": "p1-0250",
+    "sent_to_cut_ms": 0.485,
+    "generations": [
+      1,
+      2
+    ],
+    "dedup": 1,
+    "command_side_effects": 1,
+    "total_applied": 1000,
+    "rtt_mean_ms": [
+      0.6131008790000001,
+      0.40160852999999996
+    ],
+    "rtt_max_ms": [
+      262.257833,
+      14.825125
+    ],
+    "latest_state_age_max_ms": [
+      300.34,
+      295.71
+    ],
+    "missing": [
+      0,
+      0
+    ],
+    "duplicate_receipts": [
+      0,
+      0
+    ],
+    "reordered_receipts": [
+      0,
+      0
+    ],
+    "reconnects": [
+      1,
+      0
+    ],
+    "recovery_ms": 261.793,
+    "cut_to_recovered_ms": 261.482125,
+    "audio_max_gap_ms": [
+      500.24,
+      419.612
+    ],
+    "max_queue_bytes": 947,
+    "max_queue_age_ms": 4.125333,
+    "duration_ms": 34548.757459,
+    "kill_pid": null,
+    "pending_at_cut": true,
+    "result_version": 504,
+    "owned_redis": "127.0.0.1:49323",
+    "owned_worker_1_pid": 90155
+  },
+  {
+    "run": "disconnect-3",
+    "command_id": "p1-0250",
+    "sent_to_cut_ms": 1.438,
+    "generations": [
+      1,
+      2
+    ],
+    "dedup": 1,
+    "command_side_effects": 1,
+    "total_applied": 1000,
+    "rtt_mean_ms": [
+      0.590036791999999,
+      0.3151454970000004
+    ],
+    "rtt_max_ms": [
+      260.273583,
+      10.717667
+    ],
+    "latest_state_age_max_ms": [
+      300.899,
+      293.628
+    ],
+    "missing": [
+      0,
+      0
+    ],
+    "duplicate_receipts": [
+      0,
+      0
+    ],
+    "reordered_receipts": [
+      0,
+      0
+    ],
+    "reconnects": [
+      1,
+      0
+    ],
+    "recovery_ms": 293.414,
+    "cut_to_recovered_ms": 258.304125,
+    "audio_max_gap_ms": [
+      495.318,
+      420.921
+    ],
+    "max_queue_bytes": 943,
+    "max_queue_age_ms": 2.046583,
+    "duration_ms": 34530.304167,
+    "kill_pid": null,
+    "pending_at_cut": true,
+    "result_version": 503,
+    "owned_redis": "127.0.0.1:49467",
+    "owned_worker_1_pid": 92573
+  },
+  {
+    "run": "worker-kill-1",
+    "command_id": "p1-0250",
+    "sent_to_cut_ms": 1.866,
+    "generations": [
+      1,
+      2
+    ],
+    "dedup": 1,
+    "command_side_effects": 1,
+    "total_applied": 1000,
+    "rtt_mean_ms": [
+      0.7509991579999992,
+      0.807384912
+    ],
+    "rtt_max_ms": [
+      13.724791,
+      18.33475
+    ],
+    "latest_state_age_max_ms": [
+      82.884,
+      71.431
+    ],
+    "missing": [
+      0,
+      0
+    ],
+    "duplicate_receipts": [
+      0,
+      0
+    ],
+    "reordered_receipts": [
+      0,
+      0
+    ],
+    "reconnects": [
+      1,
+      0
+    ],
+    "recovery_ms": 12.03,
+    "cut_to_recovered_ms": 10.467709,
+    "audio_max_gap_ms": [
+      234.006,
+      221.402
+    ],
+    "max_queue_bytes": 947,
+    "max_queue_age_ms": 4.522208,
+    "duration_ms": 34281.844292,
+    "kill_pid": 94758,
+    "pending_at_cut": true,
+    "result_version": 504,
+    "owned_redis": "127.0.0.1:49831",
+    "owned_worker_1_pid": 94758
+  },
+  {
+    "run": "worker-kill-2",
+    "command_id": "p1-0250",
+    "sent_to_cut_ms": 5.042,
+    "generations": [
+      1,
+      2
+    ],
+    "dedup": 1,
+    "command_side_effects": 1,
+    "total_applied": 1000,
+    "rtt_mean_ms": [
+      0.35467319999999997,
+      0.35634866499999973
+    ],
+    "rtt_max_ms": [
+      33.296958,
+      11.758667
+    ],
+    "latest_state_age_max_ms": [
+      77.535,
+      76.891
+    ],
+    "missing": [
+      0,
+      0
+    ],
+    "duplicate_receipts": [
+      0,
+      0
+    ],
+    "reordered_receipts": [
+      0,
+      0
+    ],
+    "reconnects": [
+      1,
+      0
+    ],
+    "recovery_ms": 32.87,
+    "cut_to_recovered_ms": 27.755,
+    "audio_max_gap_ms": [
+      248.422,
+      239.39
+    ],
+    "max_queue_bytes": 952,
+    "max_queue_age_ms": 5.31025,
+    "duration_ms": 34373.286625,
+    "kill_pid": 98253,
+    "pending_at_cut": true,
+    "result_version": 504,
+    "owned_redis": "127.0.0.1:50492",
+    "owned_worker_1_pid": 98253
+  },
+  {
+    "run": "worker-kill-3",
+    "command_id": "p1-0250",
+    "sent_to_cut_ms": 0.814,
+    "generations": [
+      1,
+      2
+    ],
+    "dedup": 1,
+    "command_side_effects": 1,
+    "total_applied": 1000,
+    "rtt_mean_ms": [
+      0.4140581269999992,
+      0.3311369939999998
+    ],
+    "rtt_max_ms": [
+      10.326667,
+      4.2265
+    ],
+    "latest_state_age_max_ms": [
+      71.563,
+      72.758
+    ],
+    "missing": [
+      0,
+      0
+    ],
+    "duplicate_receipts": [
+      0,
+      0
+    ],
+    "reordered_receipts": [
+      0,
+      0
+    ],
+    "reconnects": [
+      1,
+      0
+    ],
+    "recovery_ms": 9.549,
+    "cut_to_recovered_ms": 8.977125,
+    "audio_max_gap_ms": [
+      241.019,
+      259.942
+    ],
+    "max_queue_bytes": 894,
+    "max_queue_age_ms": 3.03725,
+    "duration_ms": 34318.949458,
+    "kill_pid": 1084,
+    "pending_at_cut": true,
+    "result_version": 504,
+    "owned_redis": "127.0.0.1:51793",
+    "owned_worker_1_pid": 1084
+  }
+]

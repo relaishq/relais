@@ -1,0 +1,9 @@
+{
+  "head": "705b3e2c7092576e29ac7d8414c97e252a2ecddd",
+  "command": "GOPROXY=off go test -mod=readonly -race -count=3 ./experiments/nvwa-room/room -run ^TestUpstreamSessionEndReasonIsRecorded$",
+  "exit_code": 1,
+  "failed_iterations": 3,
+  "expected_reason": "reconnect_required",
+  "actual_reason": "changed",
+  "note": "Observed in worker tool transcript before modifying Metrics; compact reproduction record, not a raw terminal log."
+}

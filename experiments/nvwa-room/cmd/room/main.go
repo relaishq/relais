@@ -51,23 +51,23 @@ func main() {
 	mux.Handle("GET /web/", http.StripPrefix("/web/", http.FileServer(http.Dir(*web))))
 	mux.HandleFunc("POST /browser-evidence", func(w http.ResponseWriter, q *http.Request) {
 		if q.ContentLength > 1<<20 {
-			http.Error(w, "too big", 413)
+			http.Error(w, "too big", http.StatusRequestEntityTooLarge)
 			return
 		}
 		f, e := os.CreateTemp("", "nvwa-browser-*.json")
 		if e != nil {
-			http.Error(w, e.Error(), 500)
+			http.Error(w, e.Error(), http.StatusInternalServerError)
 			return
 		}
 		defer f.Close()
 		q.Body = http.MaxBytesReader(w, q.Body, 1<<20)
 		_, e = f.ReadFrom(q.Body)
 		if e != nil {
-			http.Error(w, e.Error(), 400)
+			http.Error(w, e.Error(), http.StatusBadRequest)
 			return
 		}
 		log.Printf("browser_evidence=%s", f.Name())
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	})
 	log.Printf("room_http=%s room_epoch=%s audio_udp=%s", *addr, r.Epoch, *audio)
 	log.Fatal(http.ListenAndServe(*addr, mux))

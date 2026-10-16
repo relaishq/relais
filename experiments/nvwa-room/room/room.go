@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
@@ -28,17 +29,20 @@ type TransportEvent struct {
 }
 
 type Metrics struct {
-	Events          []TransportEvent `json:"transport_events,omitempty"`
-	Applied         uint64           `json:"applied"`
-	Deduplicated    uint64           `json:"deduplicated"`
-	Conflicts       uint64           `json:"conflicts"`
-	StaleState      uint64           `json:"stale_state"`
-	Fenced          uint64           `json:"fenced"`
-	SlowConsumers   uint64           `json:"slow_consumers"`
-	DroppedReceipts uint64           `json:"dropped_receipts"`
-	MaxQueueBytes   int              `json:"max_queue_bytes"`
-	MaxQueueAgeMS   float64          `json:"max_queue_age_ms"`
-	Connections     int              `json:"connections"`
+	// Test-only barrier: a command was applied while its receipt writer is paused.
+	HeldCommandID           string           `json:"held_command_id,omitempty"`
+	HeldCommandApplications uint64           `json:"held_command_applications,omitempty"`
+	Events                  []TransportEvent `json:"transport_events,omitempty"`
+	Applied                 uint64           `json:"applied"`
+	Deduplicated            uint64           `json:"deduplicated"`
+	Conflicts               uint64           `json:"conflicts"`
+	StaleState              uint64           `json:"stale_state"`
+	Fenced                  uint64           `json:"fenced"`
+	SlowConsumers           uint64           `json:"slow_consumers"`
+	DroppedReceipts         uint64           `json:"dropped_receipts"`
+	MaxQueueBytes           int              `json:"max_queue_bytes"`
+	MaxQueueAgeMS           float64          `json:"max_queue_age_ms"`
+	Connections             int              `json:"connections"`
 }
 type Room struct {
 	mu          sync.Mutex
@@ -88,7 +92,13 @@ func (r *Room) snapshot(m Message, kind string) Reply {
 	}
 	return v
 }
-func (r *Room) Metrics() Metrics { r.mu.Lock(); defer r.mu.Unlock(); return r.metrics }
+func (r *Room) Metrics() Metrics {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	metrics := r.metrics
+	metrics.Events = slices.Clone(r.metrics.Events)
+	return metrics
+}
 func (r *Room) Snapshot() Reply {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -225,6 +235,9 @@ func (r *Room) Handle(c *Connection, m Message) *Reply {
 		if !p.player.Joined {
 			return fail("not_joined")
 		}
+		if m.TestPauseMS != 0 && (!r.AllowFaults || m.TestPauseMS < 1 || m.TestPauseMS > 2000) {
+			return fail("invalid_test_pause")
+		}
 		if len(p.ledger) >= MaxCommands {
 			return fail("ledger_full")
 		}
@@ -236,20 +249,32 @@ func (r *Room) Handle(c *Connection, m Message) *Reply {
 			v.Error = code
 			return &v
 		}
-		if m.Type == "trigger" {
+		switch m.Type {
+		case "trigger":
 			var action Action
 			if json.Unmarshal(m.Payload, &action) != nil || action.ID != "wave" || action.Version != 1 || action.StartTick < 0 || action.StartTick > time.Since(r.start).Milliseconds()+60000 {
 				return reject("invalid_action")
 			}
 			p.player.Action = &action
-		} else if m.Type == "stop" {
+		case "stop":
 			p.player.Action = nil
-		} else {
+		default:
 			p.player.Joined = false
 			p.session = ""
 		}
 		r.version++
 		r.metrics.Applied++
+		if r.AllowFaults {
+			if m.TestPauseMS > 0 {
+				r.metrics.HeldCommandID = m.CommandID
+				c.mu.Lock()
+				c.pauseUntil = time.Now().Add(time.Duration(m.TestPauseMS) * time.Millisecond)
+				c.mu.Unlock()
+			}
+			if m.CommandID == r.metrics.HeldCommandID {
+				r.metrics.HeldCommandApplications++
+			}
+		}
 		result := Result{CommandID: m.CommandID, Type: m.Type, InputSeq: m.InputSeq, Digest: m.Digest, Version: r.version, Applied: true}
 		p.ledger[m.CommandID] = result
 		r.broadcast(c)

@@ -1,0 +1,59 @@
+[
+  {
+    "check": "vet",
+    "command": [
+      "go",
+      "vet",
+      "-mod=readonly",
+      "./..."
+    ],
+    "exit_code": 0,
+    "wall_seconds": 0.889056167
+  },
+  {
+    "check": "lint",
+    "command": [
+      "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/golangci-lint-2.14.0/golangci-lint-2.14.0-darwin-arm64/golangci-lint",
+      "run",
+      "./experiments/...",
+      "./pkg/workerapp/...",
+      "./internal/spike/roomaudio/..."
+    ],
+    "exit_code": 0,
+    "wall_seconds": 1.2698646670000002
+  },
+  {
+    "check": "race-10",
+    "command": [
+      "go",
+      "test",
+      "-mod=readonly",
+      "-race",
+      "-count=10",
+      "./experiments/nvwa-room/room",
+      "./experiments/nvwa-room/client"
+    ],
+    "exit_code": 0,
+    "wall_seconds": 3.010373542
+  },
+  {
+    "check": "stock",
+    "command": [
+      "bash",
+      "experiments/nvwa-room/scripts/check-stock-worker.sh",
+      "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/stock"
+    ],
+    "exit_code": 0,
+    "wall_seconds": 0.34927437500000025
+  },
+  {
+    "check": "diff-check",
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "exit_code": 0,
+    "wall_seconds": 0.020967917000000114
+  }
+]

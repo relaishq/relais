@@ -130,6 +130,12 @@ func (c *Client) read() {
 	}
 }
 func (c *Client) Request(ctx context.Context, m room.Message) (room.Reply, error) {
+	return c.RequestWithSent(ctx, m, nil)
+}
+
+// RequestWithSent calls onSent after the transport accepted the serialized message.
+// It lets the fault driver cut a connection while this request still awaits its receipt.
+func (c *Client) RequestWithSent(ctx context.Context, m room.Message, onSent func()) (room.Reply, error) {
 	m.RequestID = fmt.Sprintf("r%d", c.counter.Add(1))
 	m.RoomID = c.Credentials.RoomID
 	m.Epoch = c.Credentials.Epoch
@@ -151,6 +157,9 @@ func (c *Client) Request(ctx context.Context, m room.Message) (room.Reply, error
 	c.sendMu.Unlock()
 	if err != nil {
 		return room.Reply{}, err
+	}
+	if onSent != nil {
+		onSent()
 	}
 	select {
 	case v := <-ch:

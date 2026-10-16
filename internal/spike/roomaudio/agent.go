@@ -1,5 +1,5 @@
-// Package audioagent is an opt-in spike-only Opus cross-session adapter.
-package audioagent
+// Package roomaudio is an opt-in spike-only Opus cross-session adapter.
+package roomaudio
 
 import (
 	"context"

@@ -1,0 +1,313 @@
+{
+  "main_commit": "7dfde0b7fbb52debf0651b5f23766e1ab09dd9fd",
+  "conditions": {
+    "GOMAXPROCS": 4,
+    "race": true,
+    "short": true,
+    "redis": false,
+    "parallel_other_gates": false,
+    "historic_full_suite_load_recreated": false
+  },
+  "runs": [
+    {
+      "test": "stall",
+      "trial": 1,
+      "tree": "main",
+      "exit_code": 0,
+      "wall_seconds": 4.052962291000001,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/main-stall.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestStallIntervalsRecover$"
+      ]
+    },
+    {
+      "test": "stall",
+      "trial": 1,
+      "tree": "branch",
+      "exit_code": 0,
+      "wall_seconds": 4.057642749999999,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/branch-stall.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestStallIntervalsRecover$"
+      ]
+    },
+    {
+      "test": "stall",
+      "trial": 2,
+      "tree": "branch",
+      "exit_code": 0,
+      "wall_seconds": 3.7443001249999988,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/branch-stall.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestStallIntervalsRecover$"
+      ]
+    },
+    {
+      "test": "stall",
+      "trial": 2,
+      "tree": "main",
+      "exit_code": 0,
+      "wall_seconds": 3.7645173750000005,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/main-stall.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestStallIntervalsRecover$"
+      ]
+    },
+    {
+      "test": "stall",
+      "trial": 3,
+      "tree": "main",
+      "exit_code": 0,
+      "wall_seconds": 3.7447550000000014,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/main-stall.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestStallIntervalsRecover$"
+      ]
+    },
+    {
+      "test": "stall",
+      "trial": 3,
+      "tree": "branch",
+      "exit_code": 0,
+      "wall_seconds": 3.8105733750000006,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/branch-stall.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestStallIntervalsRecover$"
+      ]
+    },
+    {
+      "test": "stall",
+      "trial": 4,
+      "tree": "branch",
+      "exit_code": 0,
+      "wall_seconds": 3.746748291999996,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/branch-stall.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestStallIntervalsRecover$"
+      ]
+    },
+    {
+      "test": "stall",
+      "trial": 4,
+      "tree": "main",
+      "exit_code": 0,
+      "wall_seconds": 3.7581159160000013,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/main-stall.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestStallIntervalsRecover$"
+      ]
+    },
+    {
+      "test": "stall",
+      "trial": 5,
+      "tree": "main",
+      "exit_code": 0,
+      "wall_seconds": 3.7517755410000007,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/main-stall.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestStallIntervalsRecover$"
+      ]
+    },
+    {
+      "test": "stall",
+      "trial": 5,
+      "tree": "branch",
+      "exit_code": 0,
+      "wall_seconds": 3.750235541000002,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/branch-stall.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestStallIntervalsRecover$"
+      ]
+    },
+    {
+      "test": "relay-restart",
+      "trial": 1,
+      "tree": "main",
+      "exit_code": 0,
+      "wall_seconds": 3.8534592079999967,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/main-relay-restart.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestRelayBufferFailurePaths$/^memory$/^relay-restart$"
+      ]
+    },
+    {
+      "test": "relay-restart",
+      "trial": 1,
+      "tree": "branch",
+      "exit_code": 0,
+      "wall_seconds": 3.711870165999997,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/branch-relay-restart.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestRelayBufferFailurePaths$/^memory$/^relay-restart$"
+      ]
+    },
+    {
+      "test": "relay-restart",
+      "trial": 2,
+      "tree": "branch",
+      "exit_code": 0,
+      "wall_seconds": 3.3341672919999965,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/branch-relay-restart.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestRelayBufferFailurePaths$/^memory$/^relay-restart$"
+      ]
+    },
+    {
+      "test": "relay-restart",
+      "trial": 2,
+      "tree": "main",
+      "exit_code": 0,
+      "wall_seconds": 3.357822791000004,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/main-relay-restart.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestRelayBufferFailurePaths$/^memory$/^relay-restart$"
+      ]
+    },
+    {
+      "test": "relay-restart",
+      "trial": 3,
+      "tree": "main",
+      "exit_code": 0,
+      "wall_seconds": 3.376843750000006,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/main-relay-restart.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestRelayBufferFailurePaths$/^memory$/^relay-restart$"
+      ]
+    },
+    {
+      "test": "relay-restart",
+      "trial": 3,
+      "tree": "branch",
+      "exit_code": 0,
+      "wall_seconds": 3.449407208000011,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/branch-relay-restart.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestRelayBufferFailurePaths$/^memory$/^relay-restart$"
+      ]
+    },
+    {
+      "test": "relay-restart",
+      "trial": 4,
+      "tree": "branch",
+      "exit_code": 0,
+      "wall_seconds": 3.3456087499999967,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/branch-relay-restart.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestRelayBufferFailurePaths$/^memory$/^relay-restart$"
+      ]
+    },
+    {
+      "test": "relay-restart",
+      "trial": 4,
+      "tree": "main",
+      "exit_code": 0,
+      "wall_seconds": 3.333854790999993,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/main-relay-restart.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestRelayBufferFailurePaths$/^memory$/^relay-restart$"
+      ]
+    },
+    {
+      "test": "relay-restart",
+      "trial": 5,
+      "tree": "main",
+      "exit_code": 0,
+      "wall_seconds": 3.336408917,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/main-relay-restart.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestRelayBufferFailurePaths$/^memory$/^relay-restart$"
+      ]
+    },
+    {
+      "test": "relay-restart",
+      "trial": 5,
+      "tree": "branch",
+      "exit_code": 0,
+      "wall_seconds": 3.3391612499999894,
+      "command": [
+        "/private/tmp/claude-502/-Users-derekxwang-Development-incubator-Relais-relais/a2bfcd9b-5841-47a6-90b2-9ab4c397f9fc/scratchpad/wnvapp/review-fixes/main-comparison-controlled/branch-relay-restart.test",
+        "-test.v",
+        "-test.short",
+        "-test.count=1",
+        "-test.timeout=30s",
+        "-test.run=^TestRelayBufferFailurePaths$/^memory$/^relay-restart$"
+      ]
+    }
+  ]
+}

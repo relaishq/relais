@@ -10,6 +10,7 @@ import time
 p = argparse.ArgumentParser()
 p.add_argument('--scratch', required=True)
 p.add_argument('--count', type=int, default=1000)
+p.add_argument('--faults', nargs='+', choices=['normal','disconnect','worker-kill','lost-receipt'], default=['normal','disconnect','worker-kill','lost-receipt'])
 p.add_argument('--after-regression', help='wait for the owned gate result before starting measurement')
 p.add_argument('--transport', choices=['ws', 'dc', 'paired'], default='ws')
 a = p.parse_args()
@@ -32,7 +33,7 @@ if a.after_regression:
     # The gate's failure is retained; this only separates its CPU work from measurements.
     start = time.monotonic()
 failed = []
-for mode in ['normal', 'disconnect', 'worker-kill', 'lost-receipt']:
+for mode in a.faults:
     for trial in range(1, 4):
         order = (['ws', 'dc'] if trial % 2 else ['dc', 'ws']) if a.transport == 'paired' else [a.transport]
         for transport in order:

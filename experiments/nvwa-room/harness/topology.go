@@ -41,7 +41,6 @@ type Topology struct {
 	Dir, Bin, Root string
 	children       []*Child
 	mu             sync.Mutex
-	workerArgs     []string
 	env            []string
 	data           bool
 }

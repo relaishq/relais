@@ -289,12 +289,12 @@ func (r *Room) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /lobby", func(w http.ResponseWriter, q *http.Request) {
 		if !localOrigin(q) {
-			http.Error(w, "origin_refused", 403)
+			http.Error(w, "origin_refused", http.StatusForbidden)
 			return
 		}
 		token, id, err := r.Lobby()
 		if err != nil {
-			http.Error(w, err.Error(), 409)
+			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

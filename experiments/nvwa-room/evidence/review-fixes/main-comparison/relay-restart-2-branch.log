@@ -1,0 +1,8 @@
+=== RUN   TestRelayBufferFailurePaths
+=== RUN   TestRelayBufferFailurePaths/memory
+=== RUN   TestRelayBufferFailurePaths/memory/relay-restart
+    relay_buffer_failures_test.go:344: BUFFER_FAILURE path=relay-restart outcome=continued loss_count=0 caller_decrypt=0 gate_released=true first_content=Outage first_content_ms=348.2 outage_sent=31 outage_lost=0 replay_packets=31
+--- PASS: TestRelayBufferFailurePaths (2.31s)
+    --- PASS: TestRelayBufferFailurePaths/memory (2.31s)
+        --- PASS: TestRelayBufferFailurePaths/memory/relay-restart (2.31s)
+PASS

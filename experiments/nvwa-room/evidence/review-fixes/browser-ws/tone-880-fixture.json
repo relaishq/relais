@@ -1,0 +1,11 @@
+{
+  "path": "/private/var/folders/5d/q9gt4gxj7bj29zjmfqv39vlm0000gp/T/wefty-exec/wefty-exec-2845950530/work/nvwa-browser-fixtures-8b5wd358/tone-880.wav",
+  "exists": true,
+  "readable": true,
+  "bytes": 192044,
+  "sha256": "ccf90db7ce8230237429cc4c09b803fdc1030c9baeb51af3761958c6cd78a0d8",
+  "channels": 1,
+  "bits_per_sample": 16,
+  "sample_rate": 48000,
+  "cwd": "/private/var/folders/5d/q9gt4gxj7bj29zjmfqv39vlm0000gp/T/wefty-exec/wefty-exec-2845950530/work"
+}

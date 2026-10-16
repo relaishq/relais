@@ -209,3 +209,35 @@ func TestUpstreamSessionEndReasonIsRecorded(t *testing.T) {
 	copied.Events[0].Reason = "changed"
 	require.Equal(t, "reconnect_required", r.Metrics().Events[0].Reason)
 }
+
+func TestMetricsEncodingWhileTransportEventsRollOver(t *testing.T) {
+	r := New("metrics-race")
+	c := newConnection(r, nil, true)
+	c.upstreamSession = "owned-session"
+	server := httptest.NewServer(r.Handler())
+	defer server.Close()
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			r.recordTransportEvent(c, 3, "", []byte(`{"reason":"reconnect_required"}`))
+		}
+	}()
+	defer func() { close(stop); <-done }()
+	require.Eventually(t, func() bool { return len(r.Metrics().Events) == 64 }, time.Second, time.Millisecond)
+	for range 64 {
+		response, err := server.Client().Get(server.URL + "/metrics")
+		require.NoError(t, err)
+		var metrics Metrics
+		err = json.NewDecoder(response.Body).Decode(&metrics)
+		_ = response.Body.Close()
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(metrics.Events), 64)
+	}
+	require.Len(t, r.Metrics().Events, 64)
+}

@@ -46,7 +46,22 @@ type PlayerReport struct {
 	Version          uint64               `json:"final_room_version"`
 	Errors           []string             `json:"errors"`
 }
+type InFlightCut struct {
+	CommandID        string       `json:"command_id"`
+	SentNS           int64        `json:"sent_ns"`
+	AppliedBarrierNS int64        `json:"applied_barrier_ns"`
+	CutNS            int64        `json:"cut_ns"`
+	PendingAtCut     bool         `json:"pending_at_cut"`
+	OriginalError    string       `json:"original_error"`
+	OldGeneration    uint64       `json:"old_generation"`
+	NewGeneration    uint64       `json:"new_generation"`
+	Query            *room.Result `json:"query"`
+	Retry            *room.Result `json:"retry"`
+	Deduplicated     uint64       `json:"deduplicated"`
+	SideEffects      uint64       `json:"side_effects"`
+}
 type Run struct {
+	InFlight   *InFlightCut    `json:"in_flight_cut,omitempty"`
 	Mode       string          `json:"mode"`
 	Transport  string          `json:"transport"`
 	Started    string          `json:"started"`
@@ -129,7 +144,7 @@ func run(bin, out, toneA, toneB, fault string, count, rate int, data bool) error
 			return err
 		}
 	}
-	run := Run{Mode: fault, Transport: "websocket", Started: start.UTC().Format(time.RFC3339Nano), Count: count, Rate: rate, FaultIndex: count / 4, Players: make([]PlayerReport, 2)}
+	run := Run{Mode: fault, Transport: "websocket", Started: start.UTC().Format(time.RFC3339Nano), Count: count, Rate: rate, FaultIndex: ((count / 4) / 2) * 2, Players: make([]PlayerReport, 2)}
 	if data {
 		run.Transport = "relais-datachannel"
 	}
@@ -201,39 +216,6 @@ func run(bin, out, toneA, toneB, fault string, count, rate int, data bool) error
 						return
 					}
 				}
-				if i == 0 && n == count/4 && !faultDone && (fault == "disconnect" || fault == "worker-kill") {
-					faultDone = true
-					obs := clients[i].Observations()
-					last := time.Now()
-					if len(obs) > 0 {
-						last = time.Unix(0, obs[len(obs)-1].AtNS)
-					}
-					cut := time.Now()
-					if fault == "worker-kill" {
-						pid, at, e := top.KillWorker("worker-1")
-						run.KillPID = pid
-						run.KillAt = at.UTC().Format(time.RFC3339Nano)
-						if e != nil {
-							p.Errors = append(p.Errors, e.Error())
-							return
-						}
-					}
-					p.Observations = append(p.Observations, obs...)
-					_ = clients[i].Close()
-					calls[i].Close()
-					p.Audio = append(p.Audio, calls[i].Report())
-					if fault == "disconnect" {
-						time.Sleep(250 * time.Millisecond)
-					}
-					if e := connect(i, "w2"); e != nil {
-						p.Errors = append(p.Errors, e.Error())
-						return
-					}
-					p.Reconnects++
-					p.RecoveryMS = float64(time.Since(last)) / 1e6
-					p.CutToRecoveredMS = float64(time.Since(cut)) / 1e6
-					next = time.Now() // no replay/burst of missed high-rate inputs
-				}
 				payload := json.RawMessage(`{"x":7,"y":11,"pad":"0123456789abcdef0123456789abcdef"}`)
 				m := room.Message{Type: "state", Seq: uint64(n + 1), SentNS: time.Now().UnixNano(), Payload: payload}
 				if n%2 == 0 {
@@ -248,6 +230,10 @@ func run(bin, out, toneA, toneB, fault string, count, rate int, data bool) error
 					m.Digest = room.Digest(m.Payload)
 				}
 				drop := i == 0 && fault == "lost-receipt" && n == ((count/4)/2)*2
+				inFlight := i == 0 && n == ((count/4)/2)*2 && !faultDone && (fault == "disconnect" || fault == "worker-kill")
+				if inFlight {
+					m.TestPauseMS = 2000
+				}
 				m.DropReceipt = drop
 				wire := m
 				wire.RequestID = "r0000"
@@ -261,8 +247,109 @@ func run(bin, out, toneA, toneB, fault string, count, rate int, data bool) error
 					timeout = 150 * time.Millisecond
 				}
 				request, cancel := context.WithTimeout(ctx, timeout)
-				v, e := clients[i].Request(request, m)
-				cancel()
+				var v room.Reply
+				var e error
+				if inFlight {
+					faultDone = true
+					cancel()
+					proof := &InFlightCut{CommandID: m.CommandID, OldGeneration: clients[i].Generation}
+					run.InFlight = proof
+					sent := make(chan int64, 1)
+					pending := make(chan error, 1)
+					request, cancel = context.WithTimeout(ctx, 4*time.Second)
+					go func() {
+						_, err := clients[i].RequestWithSent(request, m, func() { sent <- time.Now().UnixNano() })
+						pending <- err
+					}()
+					select {
+					case proof.SentNS = <-sent:
+					case <-request.Done():
+						cancel()
+						p.Errors = append(p.Errors, "in-flight command was not sent")
+						return
+					}
+					deadline := time.Now().Add(time.Second)
+					for {
+						var metrics room.Metrics
+						if err := fetch(top.Config.RoomURL+"/metrics", &metrics); err != nil {
+							cancel()
+							p.Errors = append(p.Errors, err.Error())
+							return
+						}
+						if metrics.HeldCommandID == m.CommandID && metrics.HeldCommandApplications == 1 {
+							proof.AppliedBarrierNS = time.Now().UnixNano()
+							break
+						}
+						if time.Now().After(deadline) {
+							cancel()
+							p.Errors = append(p.Errors, "room did not reach applied/held-receipt barrier")
+							return
+						}
+						time.Sleep(time.Millisecond)
+					}
+					select {
+					case <-pending:
+						cancel()
+						p.Errors = append(p.Errors, "receipt arrived before cut")
+						return
+					default:
+						proof.PendingAtCut = true
+					}
+					obs := clients[i].Observations()
+					last := time.Now()
+					if len(obs) > 0 {
+						last = time.Unix(0, obs[len(obs)-1].AtNS)
+					}
+					cut := time.Now()
+					proof.CutNS = cut.UnixNano()
+					if fault == "worker-kill" {
+						pid, at, err := top.KillWorker("worker-1")
+						run.KillPID, run.KillAt = pid, at.UTC().Format(time.RFC3339Nano)
+						if err != nil {
+							cancel()
+							p.Errors = append(p.Errors, err.Error())
+							return
+						}
+					}
+					p.Observations = append(p.Observations, obs...)
+					_ = clients[i].Close()
+					original := <-pending
+					cancel()
+					if original == nil {
+						p.Errors = append(p.Errors, "cut request unexpectedly succeeded")
+						return
+					}
+					proof.OriginalError = original.Error()
+					calls[i].Close()
+					p.Audio = append(p.Audio, calls[i].Report())
+					if fault == "disconnect" {
+						time.Sleep(250 * time.Millisecond)
+					}
+					if err := connect(i, "w2"); err != nil {
+						p.Errors = append(p.Errors, err.Error())
+						return
+					}
+					proof.NewGeneration = clients[i].Generation
+					p.Reconnects++
+					p.RecoveryMS = float64(time.Since(last)) / 1e6
+					p.CutToRecoveredMS = float64(time.Since(cut)) / 1e6
+					next = time.Now()
+					request, cancel = context.WithTimeout(ctx, time.Second)
+					q, qe := clients[i].Request(request, room.Message{Type: "query", CommandID: m.CommandID})
+					cancel()
+					proof.Query = q.Result
+					m.TestPauseMS = 0
+					request, cancel = context.WithTimeout(ctx, time.Second)
+					v, e = clients[i].Request(request, m)
+					cancel()
+					proof.Retry = v.Result
+					if qe != nil || q.Error != "" || q.Result == nil || !q.Result.Applied || v.Result == nil || *q.Result != *v.Result || proof.NewGeneration <= proof.OldGeneration {
+						p.Errors = append(p.Errors, "in-flight query/retry/generation assertion failed")
+					}
+				} else {
+					v, e = clients[i].Request(request, m)
+					cancel()
+				}
 				if drop {
 					if !errors.Is(e, context.DeadlineExceeded) {
 						p.Errors = append(p.Errors, "receipt fault did not time out")
@@ -363,6 +450,13 @@ func run(bin, out, toneA, toneB, fault string, count, rate int, data bool) error
 	time.Sleep(100 * time.Millisecond)
 	_ = fetch(top.Config.RoomURL+"/metrics", &run.Metrics)
 	_ = fetch(top.Config.RoomURL+"/snapshot", &run.Snapshot)
+	if run.InFlight != nil {
+		run.InFlight.Deduplicated = run.Metrics.Deduplicated
+		run.InFlight.SideEffects = run.Metrics.HeldCommandApplications
+		if run.InFlight.Deduplicated != 1 || run.InFlight.SideEffects != 1 {
+			run.Errors = append(run.Errors, "in-flight dedup/side-effect count must each be exactly one")
+		}
+	}
 	run.Status, _ = top.Status(ctx)
 	run.DurationMS = float64(time.Since(start)) / 1e6
 	if run.Metrics.Applied != uint64(2*((count+1)/2)) {

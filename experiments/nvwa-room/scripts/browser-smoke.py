@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Own isolated headless browser processes; never attaches to an existing browser."""
-import argparse,json,pathlib,subprocess,time,urllib.request,os,signal,shutil
+import argparse,json,pathlib,subprocess,time,urllib.request,os,signal,shutil,math,struct,wave,tempfile,hashlib
 p=argparse.ArgumentParser();p.add_argument('--scratch',required=True);p.add_argument('--transport',choices=['ws','dc'],default='ws');p.add_argument('--browser',default='/opt/homebrew/bin/chromium');a=p.parse_args();s=pathlib.Path(a.scratch).resolve();out=s/('browser-smoke-'+a.transport);out.mkdir(exist_ok=True)
+# Fixtures belong to this execution's working directory, not the caller's scratch.
+fixtures=pathlib.Path(tempfile.mkdtemp(prefix='nvwa-browser-fixtures-',dir=pathlib.Path.cwd()))
 children=[];files=[]
 def start(args,log):
  f=open(out/log,'w');files.append(f);child=subprocess.Popen(args,stdout=f,stderr=f);children.append(child);return child
@@ -16,8 +18,16 @@ try:
   time.sleep(.1)
  config=json.loads((out/'topology/topology.json').read_text())
  for index,hz in enumerate([440,880]):
-  wav=out/f'tone-{hz}.wav'
-  subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i',f'sine=frequency={hz}:sample_rate=48000:duration=45','-ac','1','-y',str(wav)],check=True)
+  wav=fixtures/f'tone-{hz}.wav'
+  # Canonical RIFF PCM, signed 16-bit little endian, mono, 48 kHz, no metadata chunks.
+  with wave.open(str(wav),'wb') as capture:
+   capture.setnchannels(1);capture.setsampwidth(2);capture.setframerate(48000)
+   capture.writeframes(b''.join(struct.pack('<h',round(8192*math.sin(2*math.pi*hz*n/48000))) for n in range(48000*2)))
+  with wave.open(str(wav),'rb') as capture:
+   params=capture.getparams();assert params.nchannels==1 and params.sampwidth==2 and params.framerate==48000 and params.comptype=='NONE'
+  metadata={'path':str(wav),'exists':wav.is_file(),'readable':os.access(wav,os.R_OK),'bytes':wav.stat().st_size,'sha256':hashlib.sha256(wav.read_bytes()).hexdigest(),'channels':1,'bits_per_sample':16,'sample_rate':48000,'cwd':str(pathlib.Path.cwd())}
+  (out/f'tone-{hz}-fixture.json').write_text(json.dumps(metadata,indent=2));shutil.copy2(wav,out/wav.name)
+  print(json.dumps({'fixture':metadata}),flush=True)
   args=[a.browser,'--headless=new','--no-first-run','--no-default-browser-check','--disable-gpu','--no-proxy-server','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream',f'--use-file-for-fake-audio-capture={wav}','--autoplay-policy=no-user-gesture-required',f'--user-data-dir={out / ("profile-"+str(hz))}',config['room_url']+f'/web/?auto=1&count=90&tone={hz}&transport={a.transport}']
   start(args,f'chromium-{hz}.log');time.sleep(.5)
  deadline=time.monotonic()+30;paths=[]
@@ -39,3 +49,4 @@ finally:
    try:child.wait(timeout=6)
    except subprocess.TimeoutExpired:child.kill();child.wait(timeout=3)
  for f in files:f.close()
+ shutil.rmtree(fixtures)

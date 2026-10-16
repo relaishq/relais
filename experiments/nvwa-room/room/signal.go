@@ -37,12 +37,12 @@ func (r *Room) WithMediaProxy(base http.Handler, s Signaler) http.Handler {
 	mux.HandleFunc("POST /media", func(w http.ResponseWriter, q *http.Request) {
 		token := authorize(q)
 		if token == "" {
-			http.Error(w, "unauthorized", 401)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		b, err := io.ReadAll(http.MaxBytesReader(w, q.Body, 65536))
 		if err != nil {
-			http.Error(w, "offer too large", 413)
+			http.Error(w, "offer too large", http.StatusRequestEntityTooLarge)
 			return
 		}
 		mu.Lock()
@@ -54,12 +54,12 @@ func (r *Room) WithMediaProxy(base http.Handler, s Signaler) http.Handler {
 			}
 		}
 		if count >= 4 {
-			http.Error(w, "call limit", 429)
+			http.Error(w, "call limit", http.StatusTooManyRequests)
 			return
 		}
 		answer, path, err := s.Offer(q.Context(), string(b))
 		if err != nil {
-			http.Error(w, err.Error(), 502)
+			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		calls[path] = token
@@ -71,15 +71,15 @@ func (r *Room) WithMediaProxy(base http.Handler, s Signaler) http.Handler {
 		mu.Lock()
 		defer mu.Unlock()
 		if token == "" || calls[path] != token {
-			http.Error(w, "unauthorized", 401)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		if err := s.Delete(q.Context(), path); err != nil {
-			http.Error(w, err.Error(), 502)
+			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 		delete(calls, path)
-		w.WriteHeader(200)
+		w.WriteHeader(http.StatusOK)
 	})
 	return mux
 }
