@@ -185,6 +185,13 @@ is saved as `.relais-local/pids.stopped`. If a startup fails, see
 
 ## Checking the build
 
+Tag releases create a draft only after the tagged commit is on `main` and its
+latest `ci.yml` push run on `main` succeeds. The release gate waits up to 90
+minutes for that run. If a main CI job flakes, a maintainer can re-run the failed
+CI jobs, then re-run the failed release workflow jobs. The gate reads the latest
+CI attempt, including partial reruns. Manual `workflow_dispatch` runs remain
+artifacts-only and skip this gate.
+
 All six programs accept `-version` without starting services:
 
 ```bash
