@@ -76,7 +76,7 @@ func pageCertificate(host string) (tls.Certificate, string, error) {
 }
 
 func configToken(cfg config) (string, error) {
-	if cfg.AttachControl != "" || cfg.ResultsDir != "" {
+	if cfg.AttachControl != "" || cfg.ResultsDir != "" || selectedAgent(cfg) == "voice-agent/v1" {
 		return launchToken("required")
 	}
 	return launchToken(cfg.LocalNetwork)
@@ -109,7 +109,11 @@ func demoPageURL(cfg config, address, token string) string {
 	if cfg.AttachControl != "" {
 		return "http://localhost:" + port + "/?source=camera&autostart=0#token=" + token
 	}
-	page := "http://localhost:" + port + "/?source=test&autostart=0"
+	source := "test"
+	if selectedAgent(cfg) == "voice-agent/v1" {
+		source = "microphone"
+	}
+	page := "http://localhost:" + port + "/?source=" + source + "&autostart=0"
 	if token != "" {
 		page += "#token=" + token
 	}

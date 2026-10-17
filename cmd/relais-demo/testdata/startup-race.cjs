@@ -5,7 +5,7 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const [base,scenario]=process.argv.slice(2);
 let savedBlob,tracksStopped=0;
-const element=()=>({value:'camera',replaceChildren(){},append(){},click(){},textContent:''});
+const element=()=>({addEventListener(){},value:'camera',replaceChildren(){},append(){},click(){},textContent:''});
 const elements=new Map();
 const context={window:{relaisMetrics:require('../web/metrics.js'),relaisContinuity:require('../web/continuity.js'),addEventListener(){}},
  document:{getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,addEventListener(){},removeEventListener(){},hidden:false},

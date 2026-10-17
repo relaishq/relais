@@ -32,6 +32,7 @@ bin
 
 /examples/*
 !/examples/delayed-loopback/
+!/examples/voice-agent/
 
 # Release archives and local topology state (contains generated secrets)
 /dist/

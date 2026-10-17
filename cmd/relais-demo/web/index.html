@@ -10,7 +10,7 @@
 </head>
 <body><main>
 <h1>Relais cluster demo</h1>
-<p>One relay, one control plane and three separate media workers. Publish a test pattern or your camera with a readable frame counter and a synthetic tone, and see the echo.</p>
+<p id="intro">One relay, one control plane and three separate media workers. Publish a test pattern or your camera with a readable frame counter and a synthetic tone, and see the echo.</p>
 <p>Relay buffer: <span id="relay-buffer">unverified</span></p>
 <div class="controls">
 <label>Source <select id="source"><option value="pattern">Test pattern and tone</option><option value="camera">Camera with counter and tone (720p)</option><option value="microphone">Microphone and test pattern</option></select></label>
@@ -21,6 +21,7 @@
 <button id="save" disabled>Save results</button>
 <label><input id="audio" type="checkbox" checked> Play returned audio</label>
 </div>
+<section id="voice" hidden><h2>Hold to talk</h2><p>Hold the button, speak, then release to hear the answer. The voice is AI-generated. Move preserves the turn; Kill can lose unsaved speech and audio.</p><button id="ptt" disabled style="touch-action:none">Hold to talk</button><p id="voice-notice" role="status" aria-live="polite"></p><dl><dt>Phase</dt><dd id="voice-phase">idle</dd><dt>You said</dt><dd id="voice-transcript"></dd><dt>Reply</dt><dd id="voice-reply"></dd></dl></section>
 <p id="error" class="error" role="alert"></p>
 <div class="videos"><figure><video id="local" autoplay playsinline muted></video><figcaption>Local source</figcaption></figure>
 <figure><video id="remote" autoplay playsinline></video><figcaption>Audio agent or echo from the current owner</figcaption></figure></div>
@@ -41,4 +42,4 @@ The checklist runs five baselines, ten moves, ten kills, then a 60 s hold. Keep 
 Results version 5 adds agent count and phase before, restored and after each event, duplicate-input evidence, measured checkpoint and snapshot ages, and a separate continuity verdict. Version 4 added time to the first live frame after takeover: the first counter from content sent after observed media recovery, measured from kill request issuance. Save results downloads JSON to your browser’s Downloads folder.
 The browser cannot report SRTP decryption failures directly; undecryptable packets appear as loss or freezes.
 Worker logs provide their decryption-failure counts.</p><pre id="results">{}</pre>
-</main><script src="metrics.js"></script><script src="continuity.js"></script><script src="demo.js"></script></body></html>
+</main><script src="metrics.js"></script><script src="continuity.js"></script><script src="ptt.js"></script><script src="demo.js"></script></body></html>
