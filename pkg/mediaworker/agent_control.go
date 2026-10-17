@@ -306,3 +306,23 @@ func (s *session) processControl(m agent.ControlMessage) (agent.ControlReceipt, 
 	}
 	return controlReceipt(controlRecord{ID: controlID(m.ID), Sequence: m.Sequence, Digest: digest}, m.ID, ack), nil
 }
+
+// Receipt detail is only a duplicate-response cache. Under admission pressure,
+// discard its acknowledged prefix, preserving the durable sequence floor.
+// Callers use owned candidates and publish compaction with the admitted change.
+func (s *session) compactControlMetadata(e *v2Envelope, limit int) int {
+	n := v2MetadataCharge(*e, limit)
+	if n <= limit {
+		return n
+	}
+	s.mu.Lock()
+	ack := s.controlAck
+	s.mu.Unlock()
+	count := 0
+	for count < len(e.Controls) && e.Controls[count].Sequence <= ack {
+		e.ControlFloor = e.Controls[count].Sequence
+		count++
+	}
+	e.Controls = e.Controls[count:]
+	return v2MetadataCharge(*e, limit)
+}

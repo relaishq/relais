@@ -199,6 +199,20 @@ type snapshot struct {
 	AgentMoveOnly  *movePayload `json:",omitempty"`
 }
 
+// Control-bearing snapshots require a version old workers refuse before decoding
+// agent metadata. Calls that never use Control retain their existing wire version.
+func (s snapshot) MarshalJSON() ([]byte, error) {
+	type plain snapshot
+	if s.State.Agent.V2 != nil {
+		s.Version = v2SessionStateVersion
+		if s.State.Agent.V2.ControlHigh > 0 {
+			s.Version = controlSessionStateVersion
+		}
+		s.State.Version = s.Version
+	}
+	return json.Marshal(plain(s))
+}
+
 // ExportSession freezes a live session, snapshots it to bytes and drops it
 // from this worker without telling the caller: the old owner's half of a
 // planned handover (see Socket.Handover). From the moment of the snapshot
@@ -637,7 +651,7 @@ func decodeSnapshot(data []byte) (*snapshot, error) {
 	if err := json.Unmarshal(data, &version); err != nil {
 		return nil, fmt.Errorf("%w: %w", errBadState, err)
 	}
-	if version.Version != v2SessionStateVersion && version.Version != sessionStateVersion && version.Version != 6 {
+	if version.Version != controlSessionStateVersion && version.Version != v2SessionStateVersion && version.Version != sessionStateVersion && version.Version != 6 {
 		return nil, fmt.Errorf("%w %d (want %d)", errStateVersion, version.Version, sessionStateVersion)
 	}
 
@@ -665,7 +679,7 @@ func decodeSnapshot(data []byte) (*snapshot, error) {
 		}
 		state.Agent.legacy = len(legacy.State.Agent) == 0
 	}
-	if version.Version == v2SessionStateVersion {
+	if version.Version == v2SessionStateVersion || version.Version == controlSessionStateVersion {
 		if state.Agent.V2 == nil || state.Agent.V2.Contract != v2Contract {
 			return nil, fmt.Errorf("%w: missing v2 identity", errBadState)
 		}

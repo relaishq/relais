@@ -18,17 +18,18 @@ import (
 )
 
 const (
-	v2SessionStateVersion = 8
-	v2Contract            = "agent/v2"
-	v2MoveSessionBytes    = 1 << 20
-	v2MoveWorkerBytes     = 64 << 20
-	v2MaxWireBytes        = 4 << 20
-	v2HostMetadataBytes   = 2 << 10
+	v2SessionStateVersion      = 8
+	controlSessionStateVersion = 9
+	v2Contract                 = "agent/v2"
+	v2MoveSessionBytes         = 1 << 20
+	v2MoveWorkerBytes          = 64 << 20
+	v2MaxWireBytes             = 4 << 20
+	v2HostMetadataBytes        = 2 << 10
 	// Keep one export's worst-case copy/base64 scratch available at admission.
 	v2ExportScratchBytes = 8 * v2MoveSessionBytes
 )
 
-// Only v8 contains this subtree. The legacy state/progress encoding is unchanged.
+// Versions 8 and 9 contain this subtree. The legacy state/progress encoding is unchanged.
 type v2Envelope struct {
 	Controls        []controlRecord `json:"ct,omitempty"`
 	ControlFloor    uint64          `json:"cl,omitempty"`
@@ -55,7 +56,9 @@ type v2Host struct {
 	registration agenthost.Registration
 	ready        chan struct{}
 	tasks        []*localTask // actor-owned
-	pendingInput *agentInput  // one backpressured, unconsumed input; actor-owned
+	retryAfter   time.Time    // actor-owned; bounds retries while receipt acknowledgements stall
+	retryAck     uint64
+	pendingInput *agentInput // one backpressured, unconsumed input; actor-owned
 	emissions    chan taskEmission
 	playback     playbackRuntime // guarded by session.mu
 	wakePlayback chan struct{}
@@ -376,7 +379,8 @@ func (s *session) handleV2Event(event agent.Event) error {
 	return s.handleV2EventMode(event, false)
 }
 
-func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
+func (s *session) handleV2EventMode(event agent.Event, adoption bool) (result error) {
+
 	// Future kinds have no delivery route. Do not call
 	// the agent or Save, so an unknown event cannot alter accepted state.
 	switch event.Kind {
@@ -393,6 +397,23 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		event.Control = &owned
 	}
 	h := s.agent
+	if h.latest.V2.ControlHigh > 0 {
+		s.mu.Lock()
+		ack := s.controlAck
+		s.mu.Unlock()
+		if !adoption && ack == h.v2.retryAck && time.Now().Before(h.v2.retryAfter) {
+			return errTaskAdmissionBackpressure
+		}
+		defer func() {
+			if errors.Is(result, errTaskAdmissionBackpressure) && len(h.latest.V2.Controls) > 0 && h.latest.V2.ControlHigh > ack {
+				h.v2.retryAfter = time.Now().Add(250 * time.Millisecond)
+				h.v2.retryAck = ack
+			} else {
+				h.v2.retryAfter = time.Time{}
+			}
+		}()
+	}
+
 	before := cloneAgentState(h.latest)
 	// The actor can stop attempts as soon as session cancellation releases
 	// agentCall, even if its callback goroutine is still running. Copy task
@@ -411,6 +432,8 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	var refusals []taskRefusal
 	var timers []hostTimer
 	var timerGeneration uint64
+	var admittedControls []controlRecord
+	var admittedFloor uint64
 	err := s.agentCall(func(ctx context.Context) error {
 		var err error
 		s.worker.metrics.agentEvents.Add(1)
@@ -518,6 +541,14 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 			candidate.Progress.Consumed = before.Progress.Consumed + 1
 		}
 		stageControl(candidate.V2, event)
+		// Reserve future task terminal fields as well as the immediate effects.
+		// Compaction remains local until the whole callback transaction commits.
+		if len(candidate.V2.Controls) > 0 {
+			guarded := taskMetadataGuard(*candidate.V2)
+			s.compactControlMetadata(&guarded, min(h.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes))
+			candidate.V2.Controls, candidate.V2.ControlFloor = guarded.Controls, guarded.ControlFloor
+		}
+		admittedControls, admittedFloor = candidate.V2.Controls, candidate.V2.ControlFloor
 		candidate.Revision++
 		size, err := s.admissionSnapshot(candidate)
 		if err != nil {
@@ -588,6 +619,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	next.V2.HasMoveOnly, next.V2.MoveOnlyLength = saved.HasMoveOnly, saved.MoveOnlyLength
 	next.V2.Capacity = refusals
 	stageControl(next.V2, event)
+	next.V2.Controls, next.V2.ControlFloor = admittedControls, admittedFloor
 	if event.Kind == agent.Started {
 		next.V2.Started = true
 	}

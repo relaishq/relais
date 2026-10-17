@@ -421,8 +421,11 @@ Control-bearing snapshots pack task-refusal digests and sparse turns into a
 versioned binary representation, preserving every task ID, order and outcome.
 This keeps refusal-only fan-out representable even when the receipt cap is full.
 Upgrade every pool worker to this slice before enabling Control clients. The new
-reader also accepts the previous object-form refusals; older workers cannot read
-the new packed Control-bearing form.
+reader also accepts the previous object-form refusals; older workers refuse
+any Control-bearing snapshot: its session state version is 9. Snapshots without
+Control remain version 8, and the current reader accepts both versions.
+Pool workers should use the same agent ceilings, or effective limits can make
+Control support differ between workers.
 
 For the default-limit unit registration, read-only tasks with short steps and
 zero turns admit the following numbers; remaining tasks receive Capacity:
@@ -435,13 +438,17 @@ zero turns admit the following numbers; remaining tasks receive Capacity:
 
 Exact capacity depends on registration metadata, turns, timers and task contents.
 If retained Control prevents an otherwise representable refusal-only transaction,
-the host restores it and returns backpressure instead of ending the call. The
-actor keeps its event/cursors for a later attempt. Oversized callbacks that cannot
-fit even without Control still fail closed.
+the host drops acknowledged receipt details within the accepting transaction,
+keeping the sequence floor and high mark. If unacknowledged receipts still block
+admission, the host restores the callback and returns backpressure. The actor
+keeps the event/cursors and retries callbacks at most once per 250 ms during
+receipt backpressure; a new checkpoint acknowledgement permits an immediate retry.
+Oversized callbacks that cannot fit even without Control still fail closed.
 
 The callback's real encoded `data` also counts while admitted. A full Control cap
 returns retryable `agent_capacity` without invoking Handle or consuming a sequence.
-Only acknowledged prefixes may compact; at defaults a prefix more than one
+Only acknowledged prefixes may compact, including under task, timer, audio or
+emission admission pressure; at defaults a prefix more than one
 sequence behind the new sequence can expire. Smaller pending limits may compact
 acknowledged prefixes earlier. If the runtime registration's pending limit cannot
 hold even one record at maximum counter widths plus registration/quota metadata,

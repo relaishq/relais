@@ -35,7 +35,10 @@
 // Control-bearing snapshots compact refusals; other registrations keep their
 // original encoding/accounting. Retained Control can reduce task admission, but
 // never makes an otherwise representable refusal-only callback terminal: it is
-// restored and held under backpressure instead. Admission reserves refusal space
+// admitted after dropping acknowledged receipt details, or restored and held
+// under backpressure for unacknowledged receipts. Receipt backpressure retries
+// callbacks at most once per 250 ms, or immediately after acknowledgement.
+// Admission reserves refusal space
 // before starting tasks; only excess tasks are refused.
 // TimerFired and PlaybackFinished callback errors/deadlines also fail closed.
 // Paced output marshal/encryption failures end the call without draining its cursor.
