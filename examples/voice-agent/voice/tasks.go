@@ -28,6 +28,12 @@ type replyRequest struct {
 	History    []Exchange `json:"history"`
 }
 
+type speechRequest struct {
+	Text  string        `json:"text"`
+	Bytes int           `json:"bytes"`
+	Nanos time.Duration `json:"nanos"`
+}
+
 func handlers(p Provider) map[string]agent.TaskHandler {
 	return map[string]agent.TaskHandler{
 		TranscribeKind: func(ctx context.Context, run *agent.TaskRun) error {
@@ -62,20 +68,24 @@ func handlers(p Provider) map[string]agent.TaskHandler {
 			if err != nil {
 				return taskFailure(run, err)
 			}
-			return run.Emit(ctx, 1, agent.Chunk{Data: []byte(boundedText(text, 1024))})
+			return run.Emit(ctx, 1, agent.Chunk{Data: []byte(boundedText(text, MaxReplyBytes))})
 		},
 		SpeechKind: func(ctx context.Context, run *agent.TaskRun) error {
 			if run.After() > 0 {
 				return nil
 			}
+			var request speechRequest
+			if err := json.Unmarshal(run.Spec().Request, &request); err != nil || request.Bytes <= 1 || request.Bytes > MaxSegmentBytes || request.Nanos <= 0 || request.Nanos > 8*time.Second {
+				return run.Fail(agent.Failed, "invalid_request")
+			}
 			var audio []byte
 			err := retryOnce(ctx, func() error {
-				body, err := p.Speech(ctx, run.Key(), string(run.Spec().Request))
+				body, err := p.Speech(ctx, run.Key(), request.Text)
 				if err != nil {
 					return err
 				}
 				defer func() { _ = body.Close() }()
-				audio, err = readSpeech(ctx, body)
+				audio, err = readSpeechBound(ctx, body, request.Bytes, request.Nanos)
 				return err
 			})
 			if err != nil {
@@ -228,8 +238,11 @@ func rewriteCRC(page []byte) {
 	binary.LittleEndian.PutUint32(page[22:26], crc)
 }
 func readSpeech(ctx context.Context, body io.Reader) ([]byte, error) {
+	return readSpeechBound(ctx, body, MaxSpeechBytes, SpeechTime)
+}
+func readSpeechBound(ctx context.Context, body io.Reader, byteLimit int, durationLimit time.Duration) ([]byte, error) {
 	// Limit the wire response as well as the retained packets and duration.
-	reader, err := opusio.NewReader(io.LimitReader(body, 2*MaxSpeechBytes+1))
+	reader, err := opusio.NewReader(io.LimitReader(body, int64(2*byteLimit+1)))
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +265,7 @@ func readSpeech(ctx context.Context, body io.Reader) ([]byte, error) {
 				return nil, err
 			}
 			span += d
-			if len(p) > 1200 || len(b)+2+len(p) > MaxSpeechBytes || span > SpeechTime {
+			if len(p) > 1200 || len(b)+2+len(p) > byteLimit || span > durationLimit {
 				return nil, errors.New("voice: speech bound")
 			}
 			b = binary.BigEndian.AppendUint16(b, uint16(len(p)))
@@ -268,7 +281,7 @@ func readSpeech(ctx context.Context, body io.Reader) ([]byte, error) {
 // Play emits stable 100 ms chunks from a fully accepted speech rendering. An
 // exact move retries this request above After, without paying for speech again.
 func Play(ctx context.Context, run *agent.TaskRun) error {
-	packets, err := decodePackets(run.Spec().Request, MaxSpeechBytes)
+	packets, err := decodePackets(run.Spec().Request, MaxSegmentBytes)
 	if err != nil {
 		return run.Fail(agent.Failed, "invalid_speech")
 	}

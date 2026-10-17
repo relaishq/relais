@@ -188,3 +188,66 @@ func TestTakeoverBeforeRecordingCheckpointIsVisible(t *testing.T) {
 	require.NotEmpty(t, a.state.Notice)
 	require.Equal(t, "idle", a.state.Phase)
 }
+
+func TestSentenceSegmentsDeterministicAndBounded(t *testing.T) {
+	for _, input := range []string{
+		"Hi. Here is the next sentence with enough words! Third sentence is also long enough?",
+		strings.Repeat("😀汉", 512),
+		strings.Repeat("a ", 512),
+		strings.Repeat("A sufficiently long sentence. ", 40),
+		strings.Repeat("aaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ", 20),
+		"Hello。第二个句子使用中文而且要有足够的字符才能独立成为片段！Third.",
+		"", "\xffinvalid UTF-8. Still readable.",
+	} {
+		reply := boundedText(input, 512)
+		segments := Segments(reply)
+		require.Equal(t, segments, Segments(reply))
+		require.LessOrEqual(t, len(segments), MaxSegments)
+		for _, segment := range segments {
+			require.True(t, utf8.ValidString(segment))
+			require.LessOrEqual(t, utf8.RuneCountInString(segment), MaxSegmentRunes)
+			require.NotEmpty(t, segment)
+		}
+		// Only inter-segment whitespace may change; no saved text can disappear.
+		normalize := func(s string) string { return strings.Join(strings.Fields(s), "") }
+		require.Equal(t, normalize(reply), normalize(strings.Join(segments, "")))
+	}
+	require.Equal(t, []string{"Hi. Here is a sufficiently long next sentence.", "Another sufficiently long sentence."}, Segments("Hi. Here is a sufficiently long next sentence. Another sufficiently long sentence."))
+}
+
+func TestSegmentAudioBoundsRefuseBeforePlayback(t *testing.T) {
+	for _, cut := range []string{"total_bytes", "total_time", "segment_time"} {
+		t.Run(cut, func(t *testing.T) {
+			a := Registration(NewOpenAI("test-not-a-key")).Factory(agent.FactoryArgs{}).(*Agent)
+			a.state = State{Turn: 9, Phase: "synthesizing", Reply: "Here is a sufficiently long sentence."}
+			data := recording(100)
+			switch cut {
+			case "total_bytes":
+				a.state.SpeechBytes = MaxSpeechBytes - 10
+			case "total_time":
+				a.state.SpeechNanos = SpeechTime - time.Second
+			case "segment_time":
+				data = recording(450)
+			}
+			effects, err := a.Handle(context.Background(), agent.Event{Kind: agent.TaskMessage, Result: &agent.TaskResult{Turn: 10, TaskID: "speech", Sequence: 1, Chunk: agent.Chunk{Data: data}}})
+			require.NoError(t, err)
+			require.Equal(t, agent.Failed, a.state.Outcome)
+			require.Equal(t, "invalid_speech", a.state.Error)
+			require.NotNil(t, effects.ClearAudioBefore)
+			require.Empty(t, effects.Audio)
+			require.Empty(t, effects.StartTasks)
+			saved, err := a.Save(context.Background())
+			require.NoError(t, err)
+			require.False(t, saved.HasMoveOnly)
+		})
+	}
+}
+
+func TestRestoreRefusesOversizedPendingSegment(t *testing.T) {
+	a := Registration(NewOpenAI("test-not-a-key")).Factory(agent.FactoryArgs{}).(*Agent)
+	a.state = State{Turn: 9, Phase: "synthesizing", Reply: "A sufficiently long spoken sentence."}
+	saved, err := a.Save(context.Background())
+	require.NoError(t, err)
+	saved.HasMoveOnly, saved.MoveOnlyLength = true, MaxSegmentBytes+1
+	require.Error(t, a.Restore(context.Background(), saved), "restore must retain the per-segment bound")
+}

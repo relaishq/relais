@@ -555,7 +555,7 @@ not a general mixed-version deployment promise.
 ## Run Demo A
 
 The [voice-agent example](../examples/voice-agent) is a push-to-talk worker in
-this module. It registers `voice-agent/v1` and four versioned ReadOnly tasks.
+this module. It registers `voice-agent/v1` and four versioned ReadOnly task kinds.
 It uses public imports only and is built by `make build`.
 
 ```sh
@@ -622,25 +622,36 @@ The task chain is deliberately small and split at paid-result boundaries:
    pre-skip. Caller RTP has no Ogg encoder preroll, so this writer sets pre-skip
    to zero and updates the header CRC. Even one 20 ms packet retains its duration.
 2. `voice/reply/v1` sends the saved transcript plus at most four recent
-   exchanges to `gpt-6-luna`. The response is limited to 128 tokens and asks
-   for at most 35 spoken words. Text is bounded at UTF-8 rune boundaries,
-   including its JSON escaping cost.
+   exchanges to `gpt-6-luna`. The response is limited to 96 tokens and asks
+   for at most three short spoken sentences (at most 30 words). The saved reply
+   is limited to 512 JSON bytes at UTF-8 rune boundaries, including escaping.
 3. `voice/speech/v1` requests `gpt-4o-mini-tts`, voice `coral`, with
    `response_format: opus`. `opusio.Reader` reads its Ogg/Opus response. The
-   result is bounded to 128 KiB / 20 seconds, mono, with no discarded packets.
+   result is bounded per segment to 64 KiB / 8 seconds, mono, with no discarded
+   packets; all segments together are limited to 128 KiB / 20 seconds.
 4. `voice/play/v1` emits unchanged packets in stable 100 ms chunks, with the
    first chunk immediately available to the pacer. A move resumes above
    `TaskRun.After()` from the same accepted speech bytes.
 
-Speech is fully buffered before playback. The provider supports streamed
-transfer, but regenerating a canceled TTS request can return different audio.
-A fully accepted move-only rendering gives deterministic cursor replay without
-an external audio store or resumable provider connection. This trades first
-audio latency for exact move behavior; incremental TTS playback is deferred.
+The saved reply splits deterministically at sentence ends. Very short pieces
+merge forward; long sentences split at whitespace or a rune boundary. There
+are at most eight segments of 64 Unicode characters each. The first segment
+plays as soon as its complete rendering is accepted. While it plays, exactly
+one later segment may render. A short inter-segment gap is possible.
+
+Each segment gets a separate playback turn from a reserved range, so local
+send completion can advance to the next segment while its successor renders.
+The cursor is the segment index plus that playback task's chunk sequence.
+Completed audio stays move-only in either the pending segment buffer or the
+playback request. A move carries those exact bytes; it never regenerates a
+completed or playing segment. An interrupted, unpublished render may repeat,
+because none of its audio has played. This uses the existing ADR task and
+playback contracts without a provider connection or external audio store.
 
 Only transcript/reply text, four bounded exchanges, phase and cursor metadata
-enter version-1 app state. Save never reads/copies/hashes audio. A stage whose
-result was already accepted skips its provider call when retried with a
+enter version-2 app state. Version-1 app snapshots are refused; drain old
+voice calls before deploying this incompatible example update. Save never
+reads/copies/hashes audio. A stage whose result was already accepted skips its provider call when retried with a
 nonzero `After()`. Later stages take saved text, so STT is not repeated after
 the transcript exists, and the LLM is not repeated after the reply exists.
 Provider transport/5xx/429 uncertainty gets one same-key retry, then a typed

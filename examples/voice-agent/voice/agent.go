@@ -28,7 +28,7 @@ const (
 	RecordTime        = 8 * time.Second
 	SpeechTime        = 20 * time.Second
 	recordTimer       = "voice/record/v1"
-	stateVersion      = 1
+	stateVersion      = 2
 )
 
 type Exchange struct {
@@ -39,17 +39,26 @@ type Exchange struct {
 // State is the complete durable schema. It contains no provider credentials,
 // audio, provider response IDs, or host notices. Text limits count JSON bytes.
 type State struct {
-	Turn       agent.Turn    `json:"turn"`
-	Phase      string        `json:"phase"`
-	Transcript string        `json:"transcript,omitempty"`
-	Reply      string        `json:"reply,omitempty"`
-	History    []Exchange    `json:"history,omitempty"`
-	Outcome    agent.Outcome `json:"outcome,omitempty"`
-	Error      string        `json:"error,omitempty"`
-	Notice     string        `json:"notice,omitempty"`
-	Cursor     uint64        `json:"cursor,omitempty"`
-	Task       agent.TaskID  `json:"task,omitempty"`
-	Seen       Window        `json:"seen"`
+	Turn         agent.Turn    `json:"turn"`
+	Phase        string        `json:"phase"`
+	Transcript   string        `json:"transcript,omitempty"`
+	Reply        string        `json:"reply,omitempty"`
+	History      []Exchange    `json:"history,omitempty"`
+	Outcome      agent.Outcome `json:"outcome,omitempty"`
+	Error        string        `json:"error,omitempty"`
+	Notice       string        `json:"notice,omitempty"`
+	Cursor       uint64        `json:"cursor,omitempty"`
+	Task         agent.TaskID  `json:"task,omitempty"`
+	Segment      int           `json:"segment,omitempty"` // zero-based current/waiting playback segment
+	Render       int           `json:"render,omitempty"`  // at most one segment ahead
+	RenderTask   agent.TaskID  `json:"render_task,omitempty"`
+	RenderCursor uint64        `json:"render_cursor,omitempty"`
+	RenderReady  bool          `json:"render_ready,omitempty"`
+	PlayTask     agent.TaskID  `json:"play_task,omitempty"`
+	PlayCursor   uint64        `json:"play_cursor,omitempty"`
+	SpeechBytes  int           `json:"speech_bytes,omitempty"`
+	SpeechNanos  time.Duration `json:"speech_nanos,omitempty"`
+	Seen         Window        `json:"seen"`
 }
 
 type Agent struct {
@@ -73,8 +82,11 @@ func Registration(provider Provider) workerapp.Registration {
 func (a *Agent) reset(outcome agent.Outcome, code, notice string) agent.Effects {
 	a.state.Phase, a.state.Outcome, a.state.Error, a.state.Notice = "idle", outcome, code, notice
 	a.state.Task, a.state.Cursor = "", 0
+	a.state.RenderTask, a.state.PlayTask = "", ""
+	a.state.RenderCursor, a.state.PlayCursor = 0, 0
+	a.state.RenderReady = false
 	a.buffer, a.length = nil, 0
-	floor := a.state.Turn + 1
+	floor := a.state.Turn + MaxSegments + 1
 	return agent.Effects{CancelBefore: &floor, ClearAudioBefore: &floor, CancelTimers: []string{recordTimer}}
 }
 func (a *Agent) task(kind, phase string, request []byte) agent.Effects {
@@ -105,10 +117,10 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 		}
 		switch e.Control.Name {
 		case "ptt.start":
-			if a.state.Turn >= agent.Turn(math.MaxUint64-2) {
+			if a.state.Turn >= agent.Turn(math.MaxUint64-2*(MaxSegments+1)) {
 				return a.reset(agent.Capacity, "turn_limit", "Start a new call."), nil
 			}
-			a.state.Turn++
+			a.state.Turn += MaxSegments + 1
 			effects := a.reset(agent.OK, "", "")
 			floor := a.state.Turn
 			effects.CancelBefore, effects.ClearAudioBefore = &floor, &floor
@@ -116,6 +128,7 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 				return a.reset(agent.Failed, "provider_unavailable", "OPENAI_API_KEY is not configured on the worker. No turn was sent."), nil
 			}
 			a.state.Phase, a.state.Transcript, a.state.Reply = "recording", "", ""
+			a.state.Segment, a.state.Render, a.state.SpeechBytes, a.state.SpeechNanos = 0, 0, 0, 0
 			effects.SetTimers = []agent.TimerSpec{{ID: recordTimer, After: RecordTime}}
 			return effects, nil
 		case "ptt.stop":
@@ -163,6 +176,9 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 		if r.Turn == 0 && r.Outcome == agent.Capacity {
 			return a.reset(agent.Capacity, "capacity", "Input or work was refused by a resource limit. Hold to talk again."), nil
 		}
+		if r.Turn > a.state.Turn && r.Turn <= a.state.Turn+MaxSegments && a.state.Phase != "idle" && a.state.Phase != "recording" {
+			return a.speechResult(r), nil
+		}
 		if r.Turn != a.state.Turn || a.state.Phase == "idle" || a.state.Phase == "recording" || r.Sequence <= a.state.Cursor {
 			break
 		}
@@ -182,19 +198,16 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 				b, _ := json.Marshal(replyRequest{Transcript: a.state.Transcript, History: a.state.History})
 				return a.task(ReplyKind, "replying", b), nil
 			case "replying":
-				if a.state.Reply == "" {
+				if len(Segments(a.state.Reply)) == 0 {
 					return a.reset(agent.Failed, "empty_reply", "No reply was returned. Hold to talk again."), nil
 				}
 				a.state.History = append(a.state.History, Exchange{boundedText(a.state.Transcript, 512), boundedText(a.state.Reply, 512)})
 				if len(a.state.History) > 4 {
 					a.state.History = append([]Exchange(nil), a.state.History[len(a.state.History)-4:]...)
 				}
-				return a.task(SpeechKind, "synthesizing", []byte(a.state.Reply)), nil
-			case "synthesizing":
-				if a.length == 0 {
-					return a.reset(agent.Failed, "empty_speech", "The speech provider returned no audio. Hold to talk again."), nil
-				}
-				return a.task(PlayKind, "playing", a.buffer), nil
+				a.state.Phase = "synthesizing"
+				a.state.Task, a.state.Cursor = "", 0
+				return agent.Effects{StartTasks: []agent.TaskSpec{a.render(0)}}, nil
 			}
 			break
 		}
@@ -202,27 +215,19 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 		case "transcribing":
 			a.state.Transcript = boundedText(string(r.Chunk.Data), 1024)
 		case "replying":
-			a.state.Reply = boundedText(string(r.Chunk.Data), 1024)
-		case "synthesizing":
-			if _, err := decodePackets(r.Chunk.Data, MaxSpeechBytes); err != nil {
-				return a.reset(agent.Failed, "invalid_speech", "The speech provider returned invalid audio."), nil
-			}
-			a.buffer = append([]byte(nil), r.Chunk.Data...)
-			a.length = len(a.buffer)
-		case "playing":
-			effects := agent.Effects{}
-			if r.Chunk.Audio != nil {
-				turn := a.state.Turn
-				effects.NotifyPlaybackFinished = &turn
-				for i := range r.Chunk.Audio.Packets {
-					effects.Audio = append(effects.Audio, agent.Audio{Turn: turn, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence, PacketOffset: uint32(i)}})
-				}
-			}
-			return effects, nil
+			a.state.Reply = boundedText(string(r.Chunk.Data), MaxReplyBytes)
 		}
 	case agent.PlaybackFinished:
-		if e.Playback != nil && e.Playback.Turn == a.state.Turn && a.state.Phase == "playing" {
-			return a.reset(agent.OK, "", a.state.Notice), nil
+		if e.Playback != nil && e.Playback.Turn == a.segmentTurn(a.state.Segment) && a.state.Phase == "playing" {
+			a.state.Segment++
+			a.state.PlayTask, a.state.PlayCursor = "", 0
+			if a.state.Segment == len(Segments(a.state.Reply)) {
+				return a.reset(agent.OK, "", a.state.Notice), nil
+			}
+			a.state.Phase = "synthesizing"
+			if a.state.RenderReady {
+				return a.play(), nil
+			}
 		}
 	}
 	return agent.Effects{}, nil
@@ -250,11 +255,14 @@ func (a *Agent) Restore(_ context.Context, s agent.State) error {
 	default:
 		return errors.New("voice: invalid phase")
 	}
-	if (state.Phase == "recording" && s.MoveOnlyLength > MaxRecordingBytes) || (s.HasMoveOnly && state.Phase != "recording" && state.Phase != "synthesizing") {
+	if (state.Phase == "recording" && s.MoveOnlyLength > MaxRecordingBytes) || (s.HasMoveOnly && state.Phase != "recording" && state.Phase != "synthesizing" && state.Phase != "playing") {
 		return errors.New("voice: invalid move phase/size")
 	}
-	if state.Turn >= agent.Turn(math.MaxUint64-1) || len(state.History) > 4 || s.MoveOnlyLength < 0 || s.MoveOnlyLength > MaxSpeechBytes || s.HasMoveOnly != (s.MoveOnlyLength > 0) {
+	if state.Turn >= agent.Turn(math.MaxUint64-(MaxSegments+1)) || len(state.History) > 4 || s.MoveOnlyLength < 0 || s.MoveOnlyLength > max(MaxRecordingBytes, MaxSegmentBytes) || s.HasMoveOnly != (s.MoveOnlyLength > 0) {
 		return errors.New("voice: invalid state")
+	}
+	if state.Segment < 0 || state.Segment > MaxSegments || state.Render < 0 || state.Render >= MaxSegments || state.SpeechBytes < 0 || state.SpeechBytes > MaxSpeechBytes || state.SpeechNanos < 0 || state.SpeechNanos > SpeechTime {
+		return errors.New("voice: invalid segment state")
 	}
 	a.state, a.length = state, s.MoveOnlyLength
 	// Preserve a matching immutable buffer on callback rollback; a fresh crash
@@ -276,7 +284,11 @@ func (a *Agent) RestoreMoveOnly(_ context.Context, b []byte) error {
 	if len(b) != a.length {
 		return errors.New("voice: move length mismatch")
 	}
-	if _, err := decodePackets(b, MaxSpeechBytes); err != nil {
+	limit := MaxSegmentBytes
+	if a.state.Phase == "recording" {
+		limit = MaxRecordingBytes
+	}
+	if _, err := decodePackets(b, limit); err != nil {
 		return err
 	}
 	a.buffer = append([]byte(nil), b...)

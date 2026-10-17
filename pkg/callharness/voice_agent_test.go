@@ -290,8 +290,10 @@ func TestVoiceAgentBargeIn(t *testing.T) {
 		})
 		voiceControl(t, sys, id, 2, "ptt.stop")
 		nextPaced(t, received)
+		previous, ok := voiceState(sys.workers[0], id)
+		require.True(t, ok)
 		voiceControl(t, sys, id, 3, "ptt.start")
-		s := waitVoice(t, sys.workers[0], id, func(s voice.State) bool { return s.Phase == "recording" && s.Turn == 2 })
+		s := waitVoice(t, sys.workers[0], id, func(s voice.State) bool { return s.Phase == "recording" && s.Turn > previous.Turn })
 		require.Empty(t, s.Reply)
 		// Wait past in-flight network media, then require the old turn to stay silent.
 		time.Sleep(150 * time.Millisecond)
