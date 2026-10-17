@@ -39,7 +39,9 @@ can repeat. Applications must make external side effects safe to repeat.
   [same-host standby](docs/guarantees.md#same-host-standby-relay).
 - Multi-process runs require Redis. Redis TLS and ACL usernames are supported.
   Loopback Redis port 6379 is refused by default; see [Managed Redis](docs/deploy.md#managed-redis).
-- Custom agents need a fork today. The built-ins echo media or play a tone script.
+- Custom agents are separate Go workers built with the agent SDK; no fork is
+  needed. The SDK is on `main` and is not in a release yet. The built-ins echo
+  media or play a tone script.
 - Desktop Chrome is tested; Safari is not. Agent continuity over the real
   internet is not measured. See [non-guarantees](docs/guarantees.md#explicit-non-guarantees).
 - After an aborted move, a caller could not decrypt three packets. This occurred
@@ -134,10 +136,10 @@ See [connect an app](docs/connect-an-app.md) for requests and certificate setup.
 
 ## Build your agent
 
-Implement `Process`, `Save`, `Restore`, and `Resume` from
-[`pkg/agent`](pkg/agent/agent.go). Today you must fork Relais, add your factory to
-the worker's built-in selection, and rebuild. All workers need compatible agents.
-There is no runtime plugin or subprocess interface for live agents.
+Build a keyless custom worker with the [Build your agent guide](docs/build-an-agent.md).
+You write a small Go `main` with `pkg/workerapp` and `pkg/agent/v2`; no fork is
+needed. The SDK is on `main` and is not in a release yet. All workers need
+compatible agents. There is no runtime plugin or subprocess interface for live agents.
 
 Agents receive encoded Opus audio, a compressed audio format; video stays on the
 echo path. Speech-provider integration and resumable audio decoding are not
@@ -158,7 +160,7 @@ in [the fact-checked comparison](docs/comparison.md); it is not a benchmark.
 | Try moves and crashes | [Demo guide](docs/demo.md) |
 | Install and operate | [Install](docs/install.md) · [Deploy](docs/deploy.md) |
 | Connect a caller | [App guide](docs/connect-an-app.md) |
-| Write an audio agent | [Agent contract](docs/adr/0006-agent-interface.md) |
+| Write an audio agent | [Agent guide](docs/build-an-agent.md) · [Agent contract](docs/adr/0006-agent-interface.md) |
 | Understand proof and limits | [Guarantees](docs/guarantees.md) |
 | Understand the design | [Architecture](docs/architecture.md) · [Decisions](docs/adr/) |
 | Compare tools | [Comparison](docs/comparison.md) |

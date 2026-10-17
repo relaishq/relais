@@ -9,8 +9,9 @@ make Relais a complete conferencing or voice-AI platform.
 limits. It covers successful planned moves, worker crash takeover, relay restart,
 same-host standby, store outages, and agent continuity under stated conditions.
 It also records known rollback failures, untested cases, and explicit exclusions.
-Custom agents currently need a fork, and external side effects must tolerate
-repeated input. Relais does not promise lossless recovery after every failure.
+Custom agents are separate Go workers built with the agent SDK, which is on
+`main` and not yet released. External side effects must tolerate repeated
+input. Relais does not promise lossless recovery after every failure.
 
 Checked 2026-10-15. This is a comparison of documented mechanisms, not runtime
 testing of other products or a head-to-head benchmark. A media server, an agent
