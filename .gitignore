@@ -36,3 +36,6 @@ bin
 # Release archives and local topology state (contains generated secrets)
 /dist/
 .relais-local/
+
+# Python bytecode from local script tests
+__pycache__/
