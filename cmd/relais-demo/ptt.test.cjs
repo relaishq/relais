@@ -28,3 +28,10 @@ test('refusal classes cover the API table; unfamiliar codes are uncertain',()=>{
  for(const [label,set] of [['retryable',retryable],['definite',definite]]) {const line=docs.split('\n').find(s=>s.startsWith(`| ${label} |`));const codes=[...line.matchAll(/`([^`]+)`/g)].map(m=>m[1]);for(const code of codes)assert.ok(set.has(code),code);assert.equal(set.size,codes.length);}
  assert.equal(classify('future_code'),'uncertain');assert.equal(classify('closed'),'retryable');
 });
+
+test('all three Control error classes form one contiguous Markdown table',()=>{
+ for(const file of ['docs/api_reference.md','docs/build-an-agent.md']){
+  const lines=fs.readFileSync(file,'utf8').split('\n'),start=lines.findIndex(s=>s.startsWith('| retryable |'));
+  assert.match(lines[start+1],/^\| definite \|/,file);assert.match(lines[start+2],/^\| uncertain \|/,file);
+ }
+});

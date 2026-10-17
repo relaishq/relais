@@ -495,6 +495,7 @@ Control error classes (codes preserve the existing HTTP status):
 | --- | --- | --- |
 | retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session` | Retry the identical message with bounded backoff and a deadline. |
 | definite | `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
+| uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
 
 `control_order` is retryable while an earlier sequence from this controller is
 unconfirmed (neither a checkpointed 200 nor `control_stale`). A takeover can
@@ -506,7 +507,6 @@ nonaccepting `agent_capacity`, `control_not_ready`, `control_rejected`, or
 `agent_backpressure` refusals, the demo reports "not accepted" and reuses the
 sequence. Any uncertain response prevents that reuse.
 
-| uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
 
 `move_budget` is definite for Control: exceeding move-memory admission fails
 closed under the existing host contract. `agent_incompatible` is definite because the registration, state or callback effects need a software
@@ -633,14 +633,14 @@ The task chain is deliberately small and split at paid-result boundaries:
    pre-skip. Caller RTP has no Ogg encoder preroll, so this writer sets pre-skip
    to zero and updates the header CRC. Even one 20 ms packet retains its duration.
 2. `voice/reply/v1` sends the saved transcript plus at most four recent
-   exchanges to `gpt-6-luna`. The response is limited to 96 tokens and asks
-   for at most three short spoken sentences (at most 30 words). The saved reply
+   exchanges to `gpt-6-luna`. The response is limited to 48 tokens and asks
+   for at most three short spoken sentences (at most 20 words). The saved reply
    is limited to 512 JSON bytes at UTF-8 rune boundaries, including escaping.
-3. `voice/speech/v1` requests `gpt-4o-mini-tts`, voice `coral`, with
+3. `voice/speech/v2` requests `gpt-4o-mini-tts`, voice `coral`, with
    `response_format: opus`. `opusio.Reader` reads its Ogg/Opus response. The
    result is bounded per segment to 64 KiB / 8 seconds, mono, with no discarded
    packets; all segments together are limited to 128 KiB / 20 seconds.
-4. `voice/play/v1` emits unchanged packets in stable 100 ms chunks, with the
+4. `voice/play/v2` emits unchanged packets in stable 100 ms chunks, with the
    first chunk immediately available to the pacer. A move resumes above
    `TaskRun.After()` from the same accepted speech bytes.
 
@@ -654,10 +654,37 @@ Each segment gets a separate playback turn from a reserved range, so local
 send completion can advance to the next segment while its successor renders.
 The cursor is the segment index plus that playback task's chunk sequence.
 Completed audio stays move-only in either the pending segment buffer or the
-playback request. A move carries those exact bytes; it never regenerates a
+playback request. While Play admission waits, both the current and next accepted
+segments can reside in app move memory, in a versioned binary envelope. A move carries those exact bytes; it never regenerates a
 completed or playing segment. An interrupted, unpublished render may repeat,
 because none of its audio has played. This uses the existing ADR task and
 playback contracts without a provider connection or external audio store.
+
+Task admission also has a separate **2,048-byte host metadata limit**. It
+includes task intents, registration, Controls, timers and playback metadata, and
+reserves terminal/refusal headroom. Measuring the production accounting with
+this registration, two retained Controls and representative 45 s / 120-byte
+speech requests gives 1,691 bytes for three guarded task entries and 2,054 for
+four, before timers/playback. Without those Controls, four entries use 1,834
+bytes and five use 2,197. These are examples, not fixed capacity promises:
+counter widths, requests, timers and playback change the remaining space.
+Only two pipeline tasks run together (current Play and next Speech); Warm is
+cancelled before STT. A maximum eight-segment turn can nevertheless leave
+**19 task entries** awaiting checkpoints: Warm + STT + Reply + 8 Speech + 8 Play.
+Completed entries cannot be removed until a checkpoint acknowledges them, so
+all 19 cannot fit during a store outage. Move-memory admission separately
+charges each task request twice; the 1 MiB mailbox does not enlarge metadata.
+
+A refused Speech or Play admission preserves accepted audio. It retries on
+playback completion and a 500 ms store-clock timer, with one 30 s window from
+the first refusal. A refusal never cancels current playback. If capacity still
+fails at the deadline, current audio finishes before a visible `Capacity`
+notice ends the turn; gaps while waiting are acceptable. Later provider errors
+also let current audio finish. The agent never sends a zero-budget speech
+request: exhausted speech bounds, or a definite `speech_limit` result, end
+cleanly with an OK outcome and a “reply truncated” notice. `speech_limit` is a
+stop result, with no provider retry. The takeover restart warning expires on
+a 60 s store-clock timer, matching the browser retry window.
 
 Only transcript/reply text, four bounded exchanges, phase and cursor metadata
 enter version-3 app state. Version-1 and version-2 app snapshots are refused; drain old
@@ -708,6 +735,7 @@ On `ptt.start`, Demo A starts a best-effort ReadOnly connection-warming task
 with a 3 s timeout. It sends an unauthenticated `HEAD /v1/models` through the
 same keep-alive client used for STT, reply and speech. This is not a billed
 inference request and sends no API key. Its reserved turn and ignored result
-cannot capture a provider cursor or delay segment completion. App-state version
+cannot capture a provider cursor. Starting transcription cancels warming; it no
+longer helps after release. A refused warm task is ignored. App-state version
 3 reserves ten task turns per press; workers running earlier app versions must
 not share a pool with this version.

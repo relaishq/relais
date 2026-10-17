@@ -110,12 +110,12 @@ func (p *OpenAI) Transcribe(ctx context.Context, key string, ogg []byte) (string
 	return result.Text, err
 }
 func (p *OpenAI) Reply(ctx context.Context, key, transcript string, history []Exchange) (string, error) {
-	messages := []map[string]string{{"role": "system", "content": "You are the Relais voice demo. Reply in at most three short spoken sentences, at most 30 words total. Do not use markdown."}}
+	messages := []map[string]string{{"role": "system", "content": "You are the Relais voice demo. Reply in at most three short spoken sentences, at most 20 words total. Do not use markdown."}}
 	for _, h := range history {
 		messages = append(messages, map[string]string{"role": "user", "content": h.User}, map[string]string{"role": "assistant", "content": h.Assistant})
 	}
 	messages = append(messages, map[string]string{"role": "user", "content": transcript})
-	b, _ := json.Marshal(map[string]any{"model": ReplyModel, "messages": messages, "max_completion_tokens": 96, "reasoning_effort": "none", "store": false})
+	b, _ := json.Marshal(map[string]any{"model": ReplyModel, "messages": messages, "max_completion_tokens": 48, "reasoning_effort": "none", "store": false})
 	body, err := p.request(ctx, "/chat/completions", "application/json", key, b)
 	if err != nil {
 		return "", err

@@ -236,6 +236,9 @@ func rewriteCRC(page []byte) {
 	}
 	binary.LittleEndian.PutUint32(page[22:26], crc)
 }
+
+var errSpeechLimit = errors.New("voice: speech bound")
+
 func readSpeech(ctx context.Context, body io.Reader) ([]byte, error) {
 	return readSpeechBound(ctx, body, MaxSpeechBytes, SpeechTime)
 }
@@ -264,8 +267,11 @@ func readSpeechBound(ctx context.Context, body io.Reader, byteLimit int, duratio
 				return nil, err
 			}
 			span += d
-			if len(p) > 1200 || len(b)+2+len(p) > byteLimit || span > durationLimit {
-				return nil, errors.New("voice: speech bound")
+			if len(p) > 1200 {
+				return nil, errors.New("voice: oversized speech packet")
+			}
+			if len(b)+2+len(p) > byteLimit || span > durationLimit {
+				return nil, errSpeechLimit
 			}
 			b = binary.BigEndian.AppendUint16(b, uint16(len(p)))
 			b = append(b, p...)
@@ -327,6 +333,9 @@ func renderSpeech(ctx context.Context, p Provider, key string, request speechReq
 		}
 		defer func() { _ = body.Close() }()
 		audio, err = readSpeechBound(ctx, &speechBody{Reader: body}, request.Bytes, request.Nanos)
+		if errors.Is(err, errSpeechLimit) {
+			return &ProviderError{Code: "speech_limit"}
+		}
 		if err != nil {
 			var provider *ProviderError
 			if errors.As(err, &provider) || ctx.Err() != nil {
