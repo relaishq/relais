@@ -62,7 +62,10 @@ port_base=$((10#$port_base))
 worker_bin=${worker_bin:-$bin/relais-worker}
 [[ -x $worker_bin ]] || { echo "missing worker binary: $worker_bin" >&2; exit 1; }
 # Persist an absolute path so restart does not depend on its working directory.
-worker_bin=$(cd "$(dirname "$worker_bin")" && pwd)/$(basename "$worker_bin")
+# Shell expansion only: the install test runs with a minimal tool PATH.
+worker_dir=.
+[[ $worker_bin == */* ]] && worker_dir=${worker_bin%/*}
+worker_bin=$(cd "${worker_dir:-/}" && pwd)/${worker_bin##*/}
 for name in relais-relay relais-control relais-signal; do
   [[ -x $bin/$name ]] || { echo "missing binary: $bin/$name (use -bin bin in a source checkout)" >&2; exit 1; }
 done
