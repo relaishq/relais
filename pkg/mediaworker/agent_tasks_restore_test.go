@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/relaishq/relais/internal/agenthost"
-	legacy "github.com/relaishq/relais/pkg/agent"
-	"github.com/relaishq/relais/pkg/sessionstore"
 	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/agenthost"
+	legacy "github.com/relaishq/relais/pkg/agent"
+	"github.com/relaishq/relais/pkg/sessionstore"
 
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/stretchr/testify/require"

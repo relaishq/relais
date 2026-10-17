@@ -1,9 +1,10 @@
 package relay
 
 import (
-	"github.com/stretchr/testify/require"
 	"sync/atomic"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestSelfFenceStopsBothPacketPathsAndCounters(t *testing.T) {

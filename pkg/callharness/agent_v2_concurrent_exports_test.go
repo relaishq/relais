@@ -3,14 +3,15 @@ package callharness
 import (
 	"context"
 	"errors"
-	"github.com/relaishq/relais/internal/privateapi"
-	"github.com/relaishq/relais/internal/workerprobe"
-	"github.com/relaishq/relais/pkg/mediaworker"
 	"net/http"
 	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/workerprobe"
+	"github.com/relaishq/relais/pkg/mediaworker"
 
 	"github.com/relaishq/relais/internal/agenthost"
 	legacy "github.com/relaishq/relais/pkg/agent"

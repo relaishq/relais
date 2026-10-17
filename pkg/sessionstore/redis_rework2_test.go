@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/go-redis/redis/v8"
 	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/go-redis/redis/v8"
 
 	"github.com/stretchr/testify/require"
 )

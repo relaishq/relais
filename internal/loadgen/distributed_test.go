@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/relaishq/relais/pkg/callharness"
-	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEventRetention(t *testing.T) {

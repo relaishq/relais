@@ -4,6 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+	"unicode/utf8"
+
 	"github.com/relaishq/relais/internal/agenthost"
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/internal/workerprobe"
@@ -14,14 +23,6 @@ import (
 	"github.com/relaishq/relais/pkg/relay"
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
-	"net/http"
-	"net/http/httptest"
-	"strconv"
-	"strings"
-	"sync/atomic"
-	"testing"
-	"time"
-	"unicode/utf8"
 )
 
 func TestV2TaskCapacityDoesNotEndCall(t *testing.T) {

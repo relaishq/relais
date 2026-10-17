@@ -1,10 +1,11 @@
 package callharness
 
 import (
-	"github.com/relaishq/relais/pkg/controlplane"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/stretchr/testify/require"
 )
 
 func TestRecordExternalMovePreservesFailure(t *testing.T) {

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"github.com/relaishq/relais/internal/movediag"
-	"github.com/relaishq/relais/internal/privateapi"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +11,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/relaishq/relais/internal/movediag"
+	"github.com/relaishq/relais/internal/privateapi"
 )
 
 // Driver-only fault: let real resume commit, then discard exactly one reply.

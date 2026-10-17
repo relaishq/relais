@@ -2,10 +2,11 @@ package controlplane
 
 import (
 	"context"
-	"github.com/relaishq/relais/pkg/relay"
 	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/pkg/relay"
 
 	"github.com/relaishq/relais/pkg/framecache"
 	"github.com/relaishq/relais/pkg/mediaworker"

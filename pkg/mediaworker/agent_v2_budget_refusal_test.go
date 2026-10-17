@@ -2,13 +2,14 @@ package mediaworker
 
 import (
 	"context"
-	"github.com/relaishq/relais/internal/agenthost"
-	"github.com/relaishq/relais/internal/privateapi"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/agenthost"
+	"github.com/relaishq/relais/internal/privateapi"
 
 	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"

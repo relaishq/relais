@@ -2,12 +2,13 @@ package callharness
 
 import (
 	"cmp"
-	"github.com/stretchr/testify/require"
 	"math/rand/v2"
 	"slices"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Frozen pre-118 yardstick oracle.

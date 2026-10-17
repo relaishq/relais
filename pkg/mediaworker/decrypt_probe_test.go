@@ -1,11 +1,12 @@
 package mediaworker
 
 import (
+	"net"
+	"testing"
+
 	"github.com/pion/srtp/v3"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/stretchr/testify/require"
-	"net"
-	"testing"
 )
 
 func TestDecryptProbeRecordsReorderedPacketIndex(t *testing.T) {

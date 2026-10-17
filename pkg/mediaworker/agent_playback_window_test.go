@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/pion/srtp/v3"
 	"net"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pion/srtp/v3"
 
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/stretchr/testify/require"

@@ -3,10 +3,11 @@
 package metrics
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
 	"runtime"
 	runtimemetrics "runtime/metrics"
 	"syscall"
+
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func processResources() []Sample {

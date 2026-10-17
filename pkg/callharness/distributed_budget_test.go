@@ -2,12 +2,13 @@ package callharness
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"math"
 	"runtime"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Frozen pre-120 classification: budget counts each baseline reference.

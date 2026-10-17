@@ -3,11 +3,12 @@ package callharness
 import (
 	"errors"
 	"fmt"
-	"github.com/relaishq/relais/pkg/controlplane"
-	"github.com/stretchr/testify/require"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/stretchr/testify/require"
 )
 
 func steadyArrivals() []time.Duration {

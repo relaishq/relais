@@ -3,7 +3,6 @@ package loadgen
 
 import (
 	"fmt"
-	"github.com/relaishq/relais/internal/processrss"
 	"math"
 	"os"
 	"runtime"
@@ -11,6 +10,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/relaishq/relais/internal/processrss"
 )
 
 // Lateness uses bounded, conservative 100us buckets up to one second. Overflow

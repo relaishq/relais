@@ -2,11 +2,12 @@ package callharness
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"math/rand/v2"
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Frozen pre-118 counting oracle.

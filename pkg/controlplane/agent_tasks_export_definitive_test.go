@@ -2,11 +2,12 @@ package controlplane
 
 import (
 	"errors"
+	"testing"
+
 	"github.com/relaishq/relais/internal/privateapi"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestTaskCapacityExportIsDefinitive(t *testing.T) {

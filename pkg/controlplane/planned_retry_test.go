@@ -3,14 +3,15 @@ package controlplane
 import (
 	"context"
 	"errors"
-	"github.com/relaishq/relais/internal/relayleg"
-	"github.com/relaishq/relais/pkg/relay"
 	"net"
 	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/relayleg"
+	"github.com/relaishq/relais/pkg/relay"
 
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"

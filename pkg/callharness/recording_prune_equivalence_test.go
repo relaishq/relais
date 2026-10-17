@@ -1,11 +1,12 @@
 package callharness
 
 import (
-	"github.com/stretchr/testify/require"
 	"slices"
 	"sort"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Frozen pre-118 pruning oracle. Capacity may differ; retained evidence cannot.

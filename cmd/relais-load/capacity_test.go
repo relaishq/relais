@@ -3,16 +3,17 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/relaishq/relais/internal/capacity"
-	"github.com/relaishq/relais/internal/loadgen"
-	"github.com/relaishq/relais/pkg/callharness"
-	"github.com/stretchr/testify/require"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/capacity"
+	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/stretchr/testify/require"
 )
 
 func capacityFixture() loadgen.RunReport {

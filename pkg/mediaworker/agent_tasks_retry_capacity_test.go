@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/relaishq/relais/internal/privateapi"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/privateapi"
 
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/stretchr/testify/require"

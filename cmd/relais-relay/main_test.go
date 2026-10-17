@@ -7,10 +7,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"github.com/go-redis/redis/v8"
-	"github.com/pion/stun/v4"
-	"github.com/relaishq/relais/internal/redisendpoint"
-	"github.com/relaishq/relais/pkg/relay"
 	"io"
 	"net"
 	"net/http"
@@ -22,6 +18,11 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/go-redis/redis/v8"
+	"github.com/pion/stun/v4"
+	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/pkg/relay"
 
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/processidentity"

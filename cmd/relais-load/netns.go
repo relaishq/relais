@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/relaishq/relais/internal/clusterprocess"
-	"github.com/relaishq/relais/internal/nettopology"
 	"net"
 	"net/netip"
+
+	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/nettopology"
 )
 
 func roleBind(t *nettopology.Topology, role string, public bool) string {

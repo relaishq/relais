@@ -3,7 +3,6 @@ package callharness
 import (
 	"cmp"
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"math"
 	"os"
 	"slices"
@@ -11,6 +10,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Pre-118 evaluation pipeline with #120's cell budget and baseline handoff.
