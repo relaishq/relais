@@ -186,3 +186,18 @@ func TestControlAcknowledgedReceiptsReleaseEmission(t *testing.T) {
 	require.Equal(t, s.agent.latest.V2.Controls, s.state.Agent.V2.Controls)
 	require.Len(t, task.results, 1)
 }
+
+// This fixed wire fixture protects version selection independently of the writer.
+func TestControlSnapshotFixture(t *testing.T) {
+	wire, err := os.ReadFile("testdata/v9-control.json")
+	require.NoError(t, err)
+	snap, err := decodeSnapshot(wire)
+	require.NoError(t, err)
+	require.Equal(t, 9, snap.Version)
+	require.Equal(t, 9, snap.State.Version)
+	require.EqualValues(t, 1, snap.State.Agent.V2.ControlHigh)
+	require.Len(t, snap.State.Agent.V2.Controls, 1)
+	encoded, err := json.Marshal(snap)
+	require.NoError(t, err)
+	require.Equal(t, string(wire), string(encoded))
+}

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"slices"
 	"time"
@@ -325,4 +326,56 @@ func (s *session) compactControlMetadata(e *v2Envelope, limit int) int {
 	}
 	e.Controls = e.Controls[count:]
 	return v2MetadataCharge(*e, limit)
+}
+
+// Receipt pressure remains ordinary task backpressure at the API boundary, but
+// only these two admission fallbacks may arm the event-specific retry delay.
+var errControlReceiptBackpressure = fmt.Errorf("%w: unacknowledged Control receipts", errTaskAdmissionBackpressure)
+
+type receiptRetryKey struct {
+	kind     agent.EventKind
+	id       agent.EventID
+	sequence uint64
+}
+type receiptRetry struct {
+	key   receiptRetryKey
+	after time.Time
+	ack   uint64
+}
+
+func controlReceiptRetryKey(event agent.Event) receiptRetryKey {
+	key := receiptRetryKey{kind: event.Kind, id: event.ID}
+	if event.Kind == agent.Control && event.Control != nil {
+		// The next ordered sequence is one pending event, even if a refused client
+		// changes its ID/body. Client-selected IDs cannot grow the retry cache.
+		key.id, key.sequence = "", event.Control.Sequence
+	}
+	return key
+}
+func (s *session) receiptEventThrottled(event agent.Event) bool {
+	s.mu.Lock()
+	ack := s.controlAck
+	s.mu.Unlock()
+	now := time.Now()
+	h := s.agent.v2
+	h.receiptRetries = slices.DeleteFunc(h.receiptRetries, func(r receiptRetry) bool { return r.ack != ack || !now.Before(r.after) })
+	key := controlReceiptRetryKey(event)
+	return slices.ContainsFunc(h.receiptRetries, func(r receiptRetry) bool { return r.key == key })
+}
+func (s *session) throttleReceiptEvent(event agent.Event) {
+	s.mu.Lock()
+	ack := s.controlAck
+	s.mu.Unlock()
+	e, h := s.agent.latest.V2, s.agent.v2
+	if ack >= e.ControlHigh {
+		return
+	}
+	// Only current mailbox heads, timers, playback notices and refusal records
+	// can block, plus Started, one input and the next ordered Control. Size the
+	// transient cache from those real sources rather than reserving memory.
+	limit := len(h.tasks) + len(e.Capacity) + len(e.Timers) + len(e.Playback.Notify) + 3
+	if len(h.receiptRetries) >= limit {
+		h.receiptRetries = slices.Delete(h.receiptRetries, 0, 1)
+	}
+	h.receiptRetries = append(h.receiptRetries, receiptRetry{key: controlReceiptRetryKey(event), after: time.Now().Add(250 * time.Millisecond), ack: ack})
 }

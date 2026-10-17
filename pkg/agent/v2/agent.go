@@ -37,7 +37,9 @@
 // never makes an otherwise representable refusal-only callback terminal: it is
 // admitted after dropping acknowledged receipt details, or restored and held
 // under backpressure for unacknowledged receipts. Receipt backpressure retries
-// callbacks at most once per 250 ms, or immediately after acknowledgement.
+// only the blocked event at most once per 250 ms, or immediately after
+// acknowledgement; unrelated callbacks and playback/mailbox pressure keep their
+// normal admission behavior.
 // Admission reserves refusal space
 // before starting tasks; only excess tasks are refused.
 // TimerFired and PlaybackFinished callback errors/deadlines also fail closed.

@@ -420,7 +420,9 @@ agents without Control retain their original encoding and accounting.
 Control-bearing snapshots pack task-refusal digests and sparse turns into a
 versioned binary representation, preserving every task ID, order and outcome.
 This keeps refusal-only fan-out representable even when the receipt cap is full.
-Upgrade every pool worker to this slice before enabling Control clients. The new
+Upgrade every pool worker and `relais-control` to this slice before enabling
+Control clients. Rolling back workers or `relais-control` while Control calls
+exist breaks takeovers for those calls. The new
 reader also accepts the previous object-form refusals; older workers refuse
 any Control-bearing snapshot: its session state version is 9. Snapshots without
 Control remain version 8, and the current reader accepts both versions.
@@ -441,8 +443,9 @@ If retained Control prevents an otherwise representable refusal-only transaction
 the host drops acknowledged receipt details within the accepting transaction,
 keeping the sequence floor and high mark. If unacknowledged receipts still block
 admission, the host restores the callback and returns backpressure. The actor
-keeps the event/cursors and retries callbacks at most once per 250 ms during
-receipt backpressure; a new checkpoint acknowledgement permits an immediate retry.
+keeps the event/cursors and retries each receipt-blocked event at most once per
+250 ms; other events continue normally. Playback/mailbox backpressure does not
+arm this delay. A new checkpoint acknowledgement permits an immediate retry.
 Oversized callbacks that cannot fit even without Control still fail closed.
 
 The callback's real encoded `data` also counts while admitted. A full Control cap

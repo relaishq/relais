@@ -310,7 +310,7 @@ func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers [
 		without := envelope
 		without.Controls = nil
 		if envelope.ControlHigh > 0 && v2MetadataCharge(without, metadataLimit) <= metadataLimit {
-			return errTaskAdmissionBackpressure
+			return errControlReceiptBackpressure
 		}
 		return fmt.Errorf("%w: playback/timer metadata", agent.ErrCapacity)
 	}

@@ -406,7 +406,7 @@ func (s *session) fitTaskRefusals(_, tasks []*localTask, prior, refusals []taskR
 		// representable refusal-only callback into a terminal capacity failure.
 		// Preserve prior state and cursors; the actor retries after backpressure.
 		if s.agent.latest.V2.ControlHigh > 0 && s.taskMetadataBudgetMode(nil, fresh, false, true, projection...) == nil {
-			return nil, nil, errTaskAdmissionBackpressure
+			return nil, nil, errControlReceiptBackpressure
 		}
 		return nil, nil, fmt.Errorf("%w: callback task refusals exceed host metadata", agent.ErrCapacity)
 	}

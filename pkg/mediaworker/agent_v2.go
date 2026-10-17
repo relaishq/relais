@@ -52,18 +52,17 @@ type v2Envelope struct {
 }
 
 type v2Host struct {
-	instance     agent.Agent
-	registration agenthost.Registration
-	ready        chan struct{}
-	tasks        []*localTask // actor-owned
-	retryAfter   time.Time    // actor-owned; bounds retries while receipt acknowledgements stall
-	retryAck     uint64
-	pendingInput *agentInput // one backpressured, unconsumed input; actor-owned
-	emissions    chan taskEmission
-	playback     playbackRuntime // guarded by session.mu
-	wakePlayback chan struct{}
-	controls     chan controlRequest
-	force        chan struct{}
+	instance       agent.Agent
+	registration   agenthost.Registration
+	ready          chan struct{}
+	tasks          []*localTask   // actor-owned
+	receiptRetries []receiptRetry // actor-owned; only receipt-blocked events wait
+	pendingInput   *agentInput    // one backpressured, unconsumed input; actor-owned
+	emissions      chan taskEmission
+	playback       playbackRuntime // guarded by session.mu
+	wakePlayback   chan struct{}
+	controls       chan controlRequest
+	force          chan struct{}
 }
 
 // movePayload exists only in exact exports, including an empty exact export.
@@ -379,7 +378,7 @@ func (s *session) handleV2Event(event agent.Event) error {
 	return s.handleV2EventMode(event, false)
 }
 
-func (s *session) handleV2EventMode(event agent.Event, adoption bool) (result error) {
+func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 
 	// Future kinds have no delivery route. Do not call
 	// the agent or Save, so an unknown event cannot alter accepted state.
@@ -397,21 +396,8 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) (result er
 		event.Control = &owned
 	}
 	h := s.agent
-	if h.latest.V2.ControlHigh > 0 {
-		s.mu.Lock()
-		ack := s.controlAck
-		s.mu.Unlock()
-		if !adoption && ack == h.v2.retryAck && time.Now().Before(h.v2.retryAfter) {
-			return errTaskAdmissionBackpressure
-		}
-		defer func() {
-			if errors.Is(result, errTaskAdmissionBackpressure) && len(h.latest.V2.Controls) > 0 && h.latest.V2.ControlHigh > ack {
-				h.v2.retryAfter = time.Now().Add(250 * time.Millisecond)
-				h.v2.retryAck = ack
-			} else {
-				h.v2.retryAfter = time.Time{}
-			}
-		}()
+	if !adoption && len(h.v2.receiptRetries) > 0 && s.receiptEventThrottled(event) {
+		return errControlReceiptBackpressure
 	}
 
 	before := cloneAgentState(h.latest)
@@ -610,6 +596,9 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) (result er
 		// remain terminal. No later event may publish a rejected callback's changes.
 		if errors.Is(err, context.DeadlineExceeded) && saving.Load() {
 			return fmt.Errorf("%w: %w", legacy.ErrSave, err)
+		}
+		if !adoption && errors.Is(err, errControlReceiptBackpressure) {
+			s.throttleReceiptEvent(event)
 		}
 		return err
 	}
