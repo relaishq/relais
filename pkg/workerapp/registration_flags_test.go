@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRound1AgentNames(t *testing.T) {
+func TestAgentNames(t *testing.T) {
 	options := Options{DefaultAgent: "missing", Agents: []Registration{
 		{Name: "zeta/v1", Factory: func(agent.FactoryArgs) agent.Agent { return nil }},
 		{Name: "alpha/v1", Factory: func(agent.FactoryArgs) agent.Agent { return nil }},
@@ -19,13 +19,13 @@ func TestRound1AgentNames(t *testing.T) {
 	require.ErrorContains(t, err, "missing")
 	require.ErrorContains(t, err, "alpha/v1, demo, echo, zeta/v1")
 }
-func TestRound1RemovedDrainFlags(t *testing.T) {
+func TestRemovedDrainFlags(t *testing.T) {
 	for _, name := range []string{"agent-drain-task-budget", "agent-drain-move-reserve"} {
 		err := Run(context.Background(), []string{"-" + name, "0s"}, Options{})
 		require.ErrorContains(t, err, "flag provided but not defined: -"+name)
 	}
 }
-func TestRound1FlagBudgetValidation(t *testing.T) {
+func TestFlagBudgetValidation(t *testing.T) {
 	for _, tc := range []struct {
 		flag    string
 		value   int

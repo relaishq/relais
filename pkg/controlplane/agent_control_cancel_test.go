@@ -26,16 +26,16 @@ func TestControlCancellationPublishedWithHolder(t *testing.T) {
 	cancel()
 }
 
-type round2RefusingWorker struct{ *fakeWorker }
+type refusingWorker struct{ *fakeWorker }
 
-func (w *round2RefusingWorker) AgentControl(context.Context, string, agent.ControlMessage) (agent.ControlReceipt, error) {
+func (w *refusingWorker) AgentControl(context.Context, string, agent.ControlMessage) (agent.ControlReceipt, error) {
 	return agent.ControlReceipt{}, agent.ErrBackpressure
 }
 
 // Adapt the reviewer's untyped-worker probe to the now-typed refusal path.
 func TestControlWorkerRefusalEnvelope(t *testing.T) {
 	p, base, _, _ := setup(t)
-	p.workers["a"].worker = &round2RefusingWorker{fakeWorker: base}
+	p.workers["a"].worker = &refusingWorker{fakeWorker: base}
 	id, _, err := p.Create(context.Background(), "offer", "a")
 	require.NoError(t, err)
 	server := httptest.NewServer(p.Handler())

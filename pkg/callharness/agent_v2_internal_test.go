@@ -323,7 +323,7 @@ func TestV2AgentIncompatibleTargetTypedLoss(t *testing.T) {
 		t.Run(mismatch, func(t *testing.T) {
 			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 				if mismatch == "legacy-echo" {
-					store = &round2DelayedReleaseStore{Store: store}
+					store = &delayedReleaseStore{Store: store}
 				}
 				regs, stats := v2Registrations([]byte("private-recording"))
 				switch mismatch {
@@ -361,7 +361,7 @@ func TestV2AgentIncompatibleTargetTypedLoss(t *testing.T) {
 					require.Zero(t, stats[1].saves.Load(), "refuse before target callbacks")
 				}
 				// With the compatible source gone, takeover must use typed loss cleanup.
-				if delayed, ok := store.(*round2DelayedReleaseStore); ok {
+				if delayed, ok := store.(*delayedReleaseStore); ok {
 					delayed.armed.Store(true)
 				}
 				require.NoError(t, workerprobe.Kill(sys.workers[0].LocalAddr()))

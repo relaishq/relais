@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRound1DifferentOperatorLimits(t *testing.T) {
+func TestDifferentOperatorLimits(t *testing.T) {
 	if testing.Short() {
 		t.Skip("move/takeover between operator configurations; fast content refusal tests run in units")
 	}
@@ -60,26 +60,26 @@ func TestRound1DifferentOperatorLimits(t *testing.T) {
 	})
 }
 
-type round1MoveBudgetAgent struct{ payload []byte }
+type moveBudgetAgent struct{ payload []byte }
 
-func (*round1MoveBudgetAgent) Handle(context.Context, agent.Event) (agent.Effects, error) {
+func (*moveBudgetAgent) Handle(context.Context, agent.Event) (agent.Effects, error) {
 	return agent.Effects{}, nil
 }
-func (a *round1MoveBudgetAgent) Save(context.Context) (agent.State, error) {
+func (a *moveBudgetAgent) Save(context.Context) (agent.State, error) {
 	return agent.State{Version: 1, HasMoveOnly: true, MoveOnlyLength: len(a.payload)}, nil
 }
-func (*round1MoveBudgetAgent) Restore(context.Context, agent.State) error     { return nil }
-func (a *round1MoveBudgetAgent) SaveMoveOnly(context.Context) ([]byte, error) { return a.payload, nil }
-func (a *round1MoveBudgetAgent) RestoreMoveOnly(_ context.Context, p []byte) error {
+func (*moveBudgetAgent) Restore(context.Context, agent.State) error     { return nil }
+func (a *moveBudgetAgent) SaveMoveOnly(context.Context) ([]byte, error) { return a.payload, nil }
+func (a *moveBudgetAgent) RestoreMoveOnly(_ context.Context, p []byte) error {
 	a.payload = append([]byte(nil), p...)
 	return nil
 }
-func TestRound1LocalMoveCeilingRefuses(t *testing.T) {
+func TestLocalMoveCeilingRefuses(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real typed move refusal on both stores; unit content checks cover the fast path")
 	}
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
-		reg := agenthost.Registration{Name: "local-ceiling/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &round1MoveBudgetAgent{payload: make([]byte, 4096)} }}
+		reg := agenthost.Registration{Name: "local-ceiling/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &moveBudgetAgent{payload: make([]byte, 4096)} }}
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}, snapshotLimits: []mediaworker.SnapshotLimits{{MoveBytesPerSession: 1 << 20}, {MoveBytesPerSession: 2048}}})
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
