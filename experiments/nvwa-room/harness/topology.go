@@ -22,11 +22,12 @@ import (
 )
 
 type Child struct {
-	Name string `json:"name"`
-	PID  int    `json:"pid"`
-	cmd  *exec.Cmd
-	done chan struct{}
-	log  *os.File
+	Name    string `json:"name"`
+	PID     int    `json:"pid"`
+	cmd     *exec.Cmd
+	done    chan struct{}
+	log     *os.File
+	waitErr error
 }
 type Config struct {
 	Media     string   `json:"media"`
@@ -48,6 +49,7 @@ type Topology struct {
 	data           bool
 	network        *nettopology.Topology
 	networkState   bool
+	redisPassword  string
 }
 
 func tcpPort() (int, error) {
@@ -106,23 +108,10 @@ func (t *Topology) start(name, binary string, args []string, env []string) (*Chi
 	c := &Child{Name: name, PID: cmd.Process.Pid, cmd: cmd, done: make(chan struct{}), log: f}
 	t.children = append(t.children, c)
 	t.Config.Children = t.children
-	go func() { _ = cmd.Wait(); _ = f.Close(); close(c.done) }()
+	go func() { c.waitErr = cmd.Wait(); _ = f.Close(); close(c.done) }()
 	return c, nil
 }
-func waitTCP(ctx context.Context, addr string) error {
-	for {
-		conn, e := net.DialTimeout("tcp", addr, 100*time.Millisecond)
-		if e == nil {
-			conn.Close()
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("wait %s: %w", addr, ctx.Err())
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
-}
+
 func Start(ctx context.Context, bin, root, dir string, data bool) (*Topology, error) {
 	return start(ctx, bin, root, dir, data, nil, false)
 }
@@ -212,18 +201,36 @@ func start(ctx context.Context, bin, root, dir string, data bool, network *netto
 		t.env = append(t.env, "RELAIS_PRIVATE_NETS="+network.Plan.PrivateNets())
 	}
 	t.env = append(t.env, "RELAIS_REDIS_ADDR="+address(redis), "RELAIS_REDIS_PREFIX=nvwa:"+randomHex()+":", "RELAIS_SESSIONSTORE_KEY="+randomHex())
-	_, e := t.start("redis", "redis-server", []string{"--bind", strings.Split(address(redis), ":")[0], "--port", fmt.Sprint(redis), "--save", "", "--appendonly", "no", "--dir", dir}, t.env)
+	redisArgs, password, removeConfig, e := redisLaunch(strings.Split(address(redis), ":")[0], fmt.Sprint(redis), dir, network != nil)
 	if e != nil {
 		return fail(e)
 	}
-	if e = waitTCP(ctx, address(redis)); e != nil {
+	defer removeConfig()
+	t.redisPassword = password
+	if password != "" {
+		t.env = append(t.env, "RELAIS_REDIS_PASSWORD="+password)
+	}
+	_, e = t.start("redis", "redis-server", redisArgs, t.env)
+	if e != nil {
 		return fail(e)
 	}
+	if e = t.waitReady(ctx, "redis", address(redis), 30*time.Second); e != nil {
+		return fail(e)
+	}
+	if network != nil {
+		ready, cancel := context.WithTimeout(ctx, 5*time.Second)
+		e = pingRedis(ready, address(redis), password)
+		cancel()
+		if e != nil {
+			return fail(fmt.Errorf("authenticated Redis readiness: %w", e))
+		}
+	}
+	removeConfig()
 	_, e = t.start("relay", filepath.Join(bin, "relais-relay"), []string{"-media", address(up[0]), "-leg", address(up[1]), "-http", address(relayHTTP)}, t.env)
 	if e != nil {
 		return fail(e)
 	}
-	if e = waitTCP(ctx, address(relayHTTP)); e != nil {
+	if e = t.waitReady(ctx, "relay", address(relayHTTP), 30*time.Second); e != nil {
 		return fail(e)
 	}
 	worker := func(n int, port, media int) error {
@@ -235,7 +242,7 @@ func start(ctx context.Context, bin, root, dir string, data bool, network *netto
 		if err != nil {
 			return err
 		}
-		return waitTCP(ctx, address(port))
+		return t.waitReady(ctx, fmt.Sprintf("worker-%d", n), address(port), 30*time.Second)
 	}
 	if e = worker(1, worker1, up[2]); e != nil {
 		return fail(e)
@@ -247,14 +254,14 @@ func start(ctx context.Context, bin, root, dir string, data bool, network *netto
 	if e != nil {
 		return fail(e)
 	}
-	if e = waitTCP(ctx, address(control)); e != nil {
+	if e = t.waitReady(ctx, "control", address(control), 30*time.Second); e != nil {
 		return fail(e)
 	}
 	_, e = t.start("signal", filepath.Join(bin, "relais-signal"), []string{"-listen", address(signal), "-control", httpURL(control), "-advertise-ips", strings.Split(address(signal), ":")[0], "-token-file", t.Config.Token, "-cert-out", t.Config.Cert}, t.env)
 	if e != nil {
 		return fail(e)
 	}
-	if e = waitTCP(ctx, address(signal)); e != nil {
+	if e = t.waitReady(ctx, "signal", address(signal), 30*time.Second); e != nil {
 		return fail(e)
 	}
 	roomArgs := []string{"-http", address(roomHTTP), "-audio", address(up[4]), "-test-faults", "-web", filepath.Join(root, "experiments/nvwa-room/web"), "-signal", t.Config.SignalURL, "-signal-cert", t.Config.Cert, "-signal-token", t.Config.Token}
@@ -268,7 +275,7 @@ func start(ctx context.Context, bin, root, dir string, data bool, network *netto
 	if e != nil {
 		return fail(e)
 	}
-	if e = waitTCP(ctx, address(roomHTTP)); e != nil {
+	if e = t.waitReady(ctx, "room", address(roomHTTP), 30*time.Second); e != nil {
 		return fail(e)
 	}
 	b, _ := json.MarshalIndent(t.Config, "", "  ")

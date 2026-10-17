@@ -1,10 +1,10 @@
 # Stage 4: DataChannel versus WebSocket across emulated networks
 
-Status: Linux profile results are **NOT-RUN** until the orchestrator pushes this
-spike branch and dispatches the manual lane. macOS loopback checks validate code
-paths only. They do not answer whether DC wins on impaired networks. This branch
-will not merge to main. The existing decision remains WS for game data plus
-Relais for voice until this evidence supports a different decision.
+Status: CI round 1 (`38997613714`) ran all five profile jobs, but every
+completed cell failed during startup because private Redis lacked a password.
+The comparison therefore still has **no Linux performance results**. The fixes
+below await the orchestrator's next push and dispatch. This spike will not merge
+to main; the existing WS-for-data decision remains unchanged.
 
 ## Method
 
@@ -35,8 +35,13 @@ DC sequentially, with the order reversed on the second repeat. The middle
 position rotates by scenario. There are 24 fresh topologies per profile. Sending
 lasts about 33.3 s, followed by command drainage and 5 s of observation. Fault
 injection follows that steady window. This keeps fault recovery separate from
-network tail latency and state-gap statistics. A run has a 3 minute cap; the
-comparison step has a 28 minute cap; the whole job has a 35 minute cap.
+network tail latency and state-gap statistics. Each process has a 30 s readiness bound, with an immediate failure if any
+started child exits; the error includes that first child's last 20 log lines
+(up to 8 KiB), with the Redis credential redacted. The whole setup has a 60 s
+bound; a run retains its 3 minute cap. Two consecutive startup failures stop the
+profile. A 24 minute internal profile budget sends TERM to the current driver
+and waits up to 20 s for cleanup before escalation. The comparison step retains
+its 28 minute cap and the whole job its 35 minute cap.
 
 ## Namespace paths and isolation
 
@@ -71,7 +76,12 @@ are saved in `network-settings.json`. No `rto_min`/quickack tuning is applied.
 
 Unix-socket control provides only driver-owned metrics, status and worker kill.
 It does not carry game traffic or recovery requests. Credentials and signal
-setup cross the caller link. Each topology owns its Redis on an ephemeral port;
+setup cross the caller link. Private Redis keeps protected mode enabled and requires a random per-run
+password, supplied in a run-directory `redis-auth.conf` with mode 0600. Clients
+receive it only through `RELAIS_REDIS_PASSWORD`; it is absent from argv, public
+configuration and artifacts. The config is removed after authenticated readiness
+(or startup failure). Loopback Redis arguments remain unchanged. Each topology
+owns Redis on an ephemeral port;
 6379, 9101 and 9201 are excluded. Only owned children are stopped. No browsers,
 DevTools, Docker, VMs or paid infrastructure are used.
 
@@ -187,10 +197,39 @@ gh workflow run ci.yml --repo relaishq/relais --ref spike/nvwa-room \
 
 Only this lane runs when selected. All other jobs, including the aggregate,
 quality, media matrices and self-hosted cluster gate, skip. Five `ubuntu-latest`
-jobs run independently, typically about 20–30 minutes each including setup,
-roughly 100–150 runner minutes total. Account concurrency can extend wall time.
+jobs run independently. The round-2 budget keeps two repeats and 1,000
+messages/client for all 24 cells. The measured local mean was 40.36 s/cell.
+Because sends are independent of receipts, added RTT does not multiply by 1,000.
+The following are planning allowances, not Linux measurements:
+
+| Profile | Budget per cell | 24-cell comparison | Expected job including 3–5 min setup |
+|---|---|---|---|
+| `lan` | 40.4 s measured local baseline | 16.2 min | 19–21 min |
+| `region` | 42.5 s | 17.0 min | 20–22 min |
+| `far-caller` | 55 s | 22.0 min | 25–27 min |
+| `lossy-dc` | 45 s | 18.0 min | 21–23 min |
+| `poor-wifi` | 50 s | 20.0 min | 23–25 min |
+
+The added allowances cover serial signaling/reconnect requests, delayed command
+drainage, loss tails, and namespace setup. The far-caller plan leaves about
+6 minutes below the comparison step limit and 8 minutes below the job limit
+at its expected upper duration. The internal 24-minute budget leaves nearly
+4 minutes for graceful shutdown and step overhead before the external timeout.
+If those allowances are insufficient, the profile fails explicitly with partial
+evidence; it does not silently reduce the trial count. Expected total consumption
+is roughly 110–120 runner minutes. Account concurrency can extend wall time.
 Namespace isolation/profile tests run before each matrix; cleanup assertions and
-ownership restoration run even on failure. Redis package installation is
+ownership restoration run even on failure. The runner forwards SIGTERM and
+SIGINT to its owned driver and waits for that driver's topology cleanup.
+Before namespace creation, each driver writes a 0600 `namespace-owner.json`
+with its UID/PID. An `if: always()` workflow step invokes
+`network-driver -cleanup-root PROFILE_OUTPUT` before the unchanged cleanup
+assertion. This reuses `internal/nettopology` stale cleanup with a mandatory
+allowlist from that profile's owner records. It accepts only exact owned names
+for the current UID, skips living or reused PIDs, and deletes links only for
+matched stale topology tokens. It never performs a broad UID-only sweep. A new
+native Linux regression preserves an unrelated stale owner and a live owner;
+that test cannot run on macOS. Redis package installation is
 prevented from starting a system service. Artifacts are named:
 
 ```text
@@ -203,8 +242,8 @@ nvwa-network-poor-wifi
 
 Each contains `summary.json`, `summary.md`, the ledger, gzipped raw results,
 network settings, topology metadata, logs, cleanup evidence, kernel description,
-and binary/source hashes. Signal tokens, private certificates and caller config
-are excluded. To merge downloaded artifacts into the results section:
+and binary/source hashes. Signal tokens, private certificates, Redis auth config and caller config
+are excluded. Ownership restoration keeps any residual Redis auth file at 0600. To merge downloaded artifacts into the results section:
 
 ```bash
 gh run download RUN_ID --repo relaishq/relais --pattern 'nvwa-network-*' --dir "$ARTIFACTS"
@@ -264,3 +303,25 @@ subnet deployment. Netem loss is independent across paired runs, not a replayed
 identical packet-loss trace. Use the paired reversals and raw tails to judge
 noise. Failures remain failures in the ledger and summary; they do not become
 successful zero-latency or zero-loss samples.
+
+## CI round 1 follow-up verification
+
+The private Redis credential construction regression was observed red before
+its fix. A local real-process test then bound Redis to a non-loopback private
+address, rejected an unauthenticated ping, and accepted both an authenticated
+ping and the actual Relais `processrun.StoreConfig` client. Protected mode stayed
+enabled. Unit checks also verify the unchanged loopback command, private config
+mode/removal, fast child-exit diagnostics, credential redaction, and a bounded
+readiness timeout. Python process tests exercise two-startup-failure stop,
+SIGTERM/SIGINT forwarding with cleanup, and the profile budget. Linux namespace
+reclamation remains NOT-RUN locally and is included in the next CI test binary.
+
+Round-2 local results: all 12 loopback smoke cells passed in 103.69 s, with
+240/240 commands and 240/240 peer state updates per transport. Real runner/driver
+SIGTERM and SIGINT checks returned in 0.686 s and 0.645 s respectively, with all
+owned room, signal, control and Redis listeners closed. Uncached race tests for
+all spike packages plus `internal/nettopology` passed in 3.17 s. `go vet ./...`
+passed in 1.26 s; golangci-lint v2.14.0 on `./...` passed in 2.96 s with zero
+issues. All three reducer tests and three runner process tests passed (0.42 s
+and 1.94 s wall time). Linux driver/test cross-builds, gofmt and actionlint passed.
+These timings are local; no namespace runtime success is claimed.

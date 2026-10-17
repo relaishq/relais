@@ -106,7 +106,30 @@ func runCommand(ctx context.Context, command Command) (string, error) {
 	}
 	return string(output), nil
 }
+
+// ReclaimStaleOwners reuses normal stale cleanup with a mandatory allowlist.
+// It creates no topology and never touches a live owner's resources.
+func ReclaimStaleOwners(ctx context.Context, owners []OwnerRecord, logf func(string, ...any)) error {
+	if os.Geteuid() != 0 {
+		return errors.New("namespace cleanup requires root")
+	}
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	t := &Topology{runner: runCommand, logf: logf}
+	return t.cleanStaleMatching(ctx, func(name string) bool {
+		for _, owner := range owners {
+			if owner.UID == os.Getuid() && owner.OwnsNamespace(name) {
+				return true
+			}
+		}
+		return false
+	})
+}
 func (t *Topology) cleanStale(ctx context.Context) error {
+	return t.cleanStaleMatching(ctx, nil)
+}
+func (t *Topology) cleanStaleMatching(ctx context.Context, allowed func(string) bool) error {
 	output, err := t.runner(ctx, Command{"ip", "netns", "list"})
 	if err != nil {
 		return err
@@ -115,7 +138,7 @@ func (t *Topology) cleanStale(ctx context.Context) error {
 	var staleNames []string
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) == 0 {
+		if len(fields) == 0 || (allowed != nil && !allowed(fields[0])) {
 			continue
 		}
 		id, prefix, stale := StaleOwner(fields[0], os.Getuid(), func(pid int) bool { return unix.Kill(pid, 0) != unix.ESRCH })

@@ -334,3 +334,42 @@ func TestLinuxStaleCleanupContinuesPastDeletionFailure(t *testing.T) {
 	assertRemoved(t, stuck)
 	assertRemoved(t, other)
 }
+
+func TestLinuxReclaimRecordedOwnersLeavesOtherAndLiveOwners(t *testing.T) {
+	requireLinuxNamespaces(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	complete, err := Open(ctx, t.Logf)
+	require.NoError(t, err)
+	require.NoError(t, complete.Close())
+	token := strings.TrimPrefix(complete.Plan.LinkPrefix, "rn")
+	plans := make([]Plan, 3)
+	owners := make([]OwnerRecord, 3)
+	for i := range plans {
+		pid := os.Getpid()
+		if i < 2 {
+			child := exec.Command("/bin/true")
+			require.NoError(t, child.Run())
+			pid = child.Process.Pid
+			require.Equal(t, unix.ESRCH, unix.Kill(pid, 0))
+		}
+		owners[i] = OwnerRecord{UID: os.Getuid(), PID: pid}
+		plans[i], err = NewPlan(os.Getuid(), pid, token[:9]+fmt.Sprint(i), 2)
+		require.NoError(t, err)
+		recovery := &Topology{Plan: plans[i], runner: runCommand}
+		defer recovery.Close()
+		_, err = runCommand(ctx, Command{"ip", "netns", "add", plans[i].FabricNamespace})
+		require.NoError(t, err)
+		_, err = runCommand(ctx, Command{"ip", "link", "add", plans[i].ManagementHost, "type", "veth", "peer", "name", plans[i].ManagementPeer})
+		require.NoError(t, err)
+	}
+	require.NoError(t, ReclaimStaleOwners(ctx, []OwnerRecord{owners[0], owners[2]}, t.Logf))
+	assertRemoved(t, plans[0])
+	names, err := runCommand(ctx, Command{"ip", "netns", "list"})
+	require.NoError(t, err)
+	for _, i := range []int{1, 2} {
+		require.Contains(t, names, plans[i].FabricNamespace)
+		_, err = runCommand(ctx, Command{"ip", "link", "show", "dev", plans[i].ManagementHost})
+		require.NoError(t, err)
+	}
+}

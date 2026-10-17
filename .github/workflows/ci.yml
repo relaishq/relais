@@ -600,6 +600,7 @@ jobs:
         run: |
           go test -race ./experiments/nvwa-room/...
           python3 experiments/nvwa-room/scripts/test_network_summary.py
+          python3 experiments/nvwa-room/scripts/test_network_runner.py
       - name: Verify namespace isolation, profile delay and cleanup
         shell: bash
         run: |
@@ -615,6 +616,16 @@ jobs:
           cp "$RUNNER_TEMP/nvwa-build/build-sha256.txt" "$RUNNER_TEMP/nvwa-build/runtime-source-sha256.json" bin/nvwa-network/
           uname -a | tee bin/nvwa-network/kernel.log
           sudo -E python3 experiments/nvwa-room/scripts/run-network.py --scratch "$RUNNER_TEMP/nvwa-build" --out bin/nvwa-network/${{ matrix.profile }} --topology netns --profile ${{ matrix.profile }}
+      - name: Reclaim this profile's recorded stale topology owners
+        if: always()
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bin/nvwa-network
+          if [ -x "$RUNNER_TEMP/nvwa-build/bin/network-driver" ]; then
+            sudo -E "$RUNNER_TEMP/nvwa-build/bin/network-driver" -cleanup-root bin/nvwa-network/${{ matrix.profile }} 2>&1 | tee bin/nvwa-network/reclaim.log
+          fi
       - name: Assert namespace and link cleanup
         if: always()
         timeout-minutes: 1
@@ -641,7 +652,9 @@ jobs:
         run: |
           mkdir -p bin/nvwa-network
           sudo chown -R "$(id -u):$(id -g)" bin/nvwa-network
-          sudo chmod -R a+rX bin/nvwa-network
+          sudo find bin/nvwa-network -type d -exec chmod a+rx {} +
+          sudo find bin/nvwa-network -type f ! -name redis-auth.conf -exec chmod a+r {} +
+          sudo find bin/nvwa-network -type f -name redis-auth.conf -exec chmod 600 {} +
       - name: Publish summary table
         if: always()
         shell: bash
@@ -662,6 +675,9 @@ jobs:
             bin/nvwa-network/**/*.log
             bin/nvwa-network/**/ledger.json
             bin/nvwa-network/**/matrix-plan.json
+            bin/nvwa-network/**/cell-status.json
+            bin/nvwa-network/**/runner-status.json
+            bin/nvwa-network/**/namespace-owner.json
             bin/nvwa-network/**/result.json.gz
             bin/nvwa-network/**/network-settings.json
             bin/nvwa-network/**/topology.json

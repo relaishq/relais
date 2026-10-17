@@ -126,3 +126,12 @@ func TestOwnedLinkNames(t *testing.T) {
 	}
 	require.False(t, OwnedLink("docker0", ""))
 }
+
+func TestRecordedCleanupOwnerMatchesOnlyExactUIDAndPID(t *testing.T) {
+	owner := OwnerRecord{UID: 1000, PID: 123}
+	require.True(t, owner.OwnsNamespace("relais-net-1000-123-0102030405-relay"))
+	for _, name := range []string{"relais-net-1000-124-0102030405-relay", "relais-net-1001-123-0102030405-relay", "relais-net-1000-123-0102030405-unknown", "prefix-relais-net-1000-123-0102030405-relay"} {
+		require.False(t, owner.OwnsNamespace(name))
+	}
+	require.False(t, (OwnerRecord{UID: 1000, PID: 0}).OwnsNamespace("relais-net-1000-123-0102030405-relay"))
+}

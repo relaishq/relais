@@ -24,3 +24,5 @@ func OpenManagedWorkers(context.Context, func(string, ...any), func(func()) erro
 	return nil, errLinux
 }
 func CallerSocketInNamespace(string, netip.AddrPort) (net.PacketConn, error) { return nil, errLinux }
+
+func ReclaimStaleOwners(context.Context, []OwnerRecord, func(string, ...any)) error { return errLinux }

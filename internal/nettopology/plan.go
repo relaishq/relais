@@ -153,3 +153,15 @@ func (p Plan) MediaCommands(media netip.AddrPort) ([]Command, error) {
 		{"ip", "netns", "exec", ns, "iptables", "-w", "2", "-A", "INPUT", "-p", "udp", "-s", media.Addr().String(), "--sport", strconv.Itoa(int(media.Port())), "-j", "ACCEPT"},
 	}, nil
 }
+
+// OwnerRecord is written by a driver before namespace setup. It grants cleanup
+// only for exact namespace names from that UID/PID, and only after the PID dies.
+type OwnerRecord struct {
+	UID int `json:"uid"`
+	PID int `json:"pid"`
+}
+
+func (o OwnerRecord) OwnsNamespace(name string) bool {
+	match := ownedNamespace.FindStringSubmatch(name)
+	return o.UID >= 0 && o.PID > 0 && match != nil && match[1] == strconv.Itoa(o.UID) && match[2] == strconv.Itoa(o.PID)
+}

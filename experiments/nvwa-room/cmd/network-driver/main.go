@@ -109,6 +109,7 @@ func main() {
 	flag.StringVar(&o.Fault, "fault", "normal", "normal, disconnect, worker-kill, lost-receipt")
 	flag.IntVar(&o.Count, "count", 1000, "messages per client, alternating command/state")
 	flag.IntVar(&o.Rate, "rate", 30, "total messages/sec/client")
+	cleanupRoot := flag.String("cleanup-root", "", "reclaim only stale owners recorded below this profile output root")
 	callerConfig := flag.String("caller-config", "", "internal re-exec configuration")
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -116,7 +117,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
 	var err error
-	if *callerConfig != "" {
+	if *cleanupRoot != "" {
+		err = reclaimRecorded(ctx, *cleanupRoot)
+	} else if *callerConfig != "" {
 		var b []byte
 		b, err = os.ReadFile(*callerConfig)
 		if err == nil {
@@ -175,25 +178,42 @@ func runOwner(ctx context.Context, o options) (retErr error) {
 	if err = os.Mkdir(o.Out, 0700); err != nil {
 		return err
 	}
+	phase := "startup"
+	defer func() {
+		state := map[string]any{"phase": phase, "ok": retErr == nil}
+		if retErr != nil {
+			state["error"] = retErr.Error()
+		}
+		retErr = errors.Join(retErr, writeJSON(filepath.Join(o.Out, "cell-status.json"), state))
+	}()
+	if err = writeJSON(filepath.Join(o.Out, "cell-status.json"), map[string]any{"phase": phase, "ok": false}); err != nil {
+		return err
+	}
+	startup, cancelStartup := context.WithTimeout(ctx, 60*time.Second)
+	defer cancelStartup()
 	var n *nettopology.Topology
 	if o.Topology == "netns" {
-		n, err = nettopology.Open(ctx, log.Printf)
+		if err = writeJSON(filepath.Join(o.Out, "namespace-owner.json"), nettopology.OwnerRecord{UID: os.Getuid(), PID: os.Getpid()}); err != nil {
+			return err
+		}
+		n, err = nettopology.Open(startup, log.Printf)
 		if err != nil {
 			return err
 		}
 		defer func() { retErr = errors.Join(retErr, n.Close()) }()
 	}
-	top, err := harness.StartNetwork(ctx, o.Bin, root, o.Out, o.Variant != "ws", n)
+	top, err := harness.StartNetwork(startup, o.Bin, root, o.Out, o.Variant != "ws", n)
 	if err != nil {
 		return err
 	}
 	defer top.Close()
 	o.Config = top.Config
 	if n != nil {
-		if err = harness.ConfigureNetwork(ctx, n, top.Config, o.Profile, o.Out); err != nil {
+		if err = harness.ConfigureNetwork(startup, n, top.Config, o.Profile, o.Out); err != nil {
 			return err
 		}
 	}
+	cancelStartup()
 	// A Unix control socket keeps kill/metrics traffic off both measured paths.
 	// Use a short temporary path: macOS Unix sockets cap paths at 104 bytes.
 	socketDir, err := os.MkdirTemp("", "nvwa-net-")
@@ -246,6 +266,10 @@ func runOwner(ctx context.Context, o options) (retErr error) {
 		cmd = exec.CommandContext(ctx, "ip", append([]string{"netns", "exec", n.Plan.Roles["caller"].Namespace, binary}, args...)...)
 	}
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	phase = "workload"
+	if err = writeJSON(filepath.Join(o.Out, "cell-status.json"), map[string]any{"phase": phase, "ok": false}); err != nil {
+		return err
+	}
 	return cmd.Run()
 }
 func runCaller(ctx context.Context, o options) (retErr error) {
