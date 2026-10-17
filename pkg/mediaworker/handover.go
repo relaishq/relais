@@ -601,10 +601,19 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		return nil, release, fmt.Errorf("mediaworker: export DTLS state: %w", err)
 	}
 	s.checkpointRates(&s.state.Checkpoint)
+	exported := s.state
+	if exported.Agent.V2 != nil {
+		exported.Agent = cloneAgentState(s.state.Agent)
+		now := time.Now()
+		if !s.storeClockAt.IsZero() {
+			now = s.storeClock.Add(time.Since(s.storeClockAt))
+		}
+		exported.Agent.V2.Quota = s.captureSnapshotQuotaMode(now, true)
+	}
 	state, err := json.Marshal(snapshot{
 		Version:        s.state.Version,
 		AgentMoveOnly:  payload,
-		State:          s.state,
+		State:          exported,
 		DTLSConnection: dtlsState,
 	})
 	if err != nil {
@@ -666,7 +675,7 @@ func decodeSnapshot(data []byte) (*snapshot, error) {
 		state.Version = sessionStateVersion
 		snap.Version = sessionStateVersion
 	}
-	if snap.AgentMoveOnly != nil && len(snap.AgentMoveOnly.Bytes) > v2MoveSessionBytes {
+	if snap.AgentMoveOnly != nil && len(snap.AgentMoveOnly.Bytes) > v2MaxWireBytes {
 		return nil, fmt.Errorf("%w: oversized move payload", errBadState)
 	}
 	if state.SRTP.Inbound == nil {

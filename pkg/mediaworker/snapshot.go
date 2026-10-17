@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/workerprobe"
+	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/metrics"
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
@@ -35,6 +36,10 @@ func (s *session) snapshotBytesAt(captured time.Time) ([]byte, error) {
 
 // captureSnapshotAt returns the exact owned pair encoded in this snapshot.
 func (s *session) captureSnapshotAt(captured time.Time) ([]byte, agentState, error) {
+	return s.captureSnapshotCandidate(captured, nil)
+}
+
+func (s *session) captureSnapshotCandidate(captured time.Time, candidate *agentState) ([]byte, agentState, error) {
 	s.mu.Lock()
 	if s.fenced.Load() || s.ctx.Err() != nil {
 		s.mu.Unlock()
@@ -57,6 +62,9 @@ func (s *session) captureSnapshotAt(captured time.Time) ([]byte, agentState, err
 	state.SRTP.Inbound = maps.Clone(state.SRTP.Inbound)
 	state.SRTP.Received = maps.Clone(state.SRTP.Received)
 	state.Agent = cloneAgentState(state.Agent)
+	if candidate != nil {
+		state.Agent = cloneAgentState(*candidate)
+	}
 	// Certificate/key byte slices are immutable throughout a session.
 	s.mu.Unlock()
 	if !ok {
@@ -66,7 +74,34 @@ func (s *session) captureSnapshotAt(captured time.Time) ([]byte, agentState, err
 	if err != nil {
 		return nil, agentState{}, fmt.Errorf("mediaworker: snapshot DTLS: %w", err)
 	}
-	data, err := json.Marshal(snapshot{Version: state.Version, State: state, DTLSConnection: binary})
+	now := captured
+	if now.IsZero() {
+		now = s.taskNow()
+	}
+	if state.Agent.V2 != nil {
+		state.Agent.V2.Quota = s.captureSnapshotQuota(now)
+	}
+	value := snapshot{Version: state.Version, State: state, DTLSConnection: binary}
+	data, err := json.Marshal(value)
+	if err == nil && state.Agent.V2 != nil && !captured.IsZero() {
+		// The fixed-width balance has the same encoded size before/after debit.
+		// Commit it only if the enclosing fenced write succeeds.
+		quota := state.Agent.V2.Quota
+		available, parseErr := quota.balance()
+		if parseErr != nil {
+			return nil, agentState{}, parseErr
+		}
+		cost := uint64(len(data) + snapshotEnvelopeBytes)
+		if available > cost {
+			quota.Balance = quotaBalance(available - cost)
+		} else {
+			quota.Balance = quotaBalance(0)
+		}
+		data, err = json.Marshal(value)
+	}
+	if err == nil && state.Agent.V2 != nil {
+		err = s.checkSnapshotSize(data)
+	}
 	return data, state.Agent, err
 }
 
@@ -87,6 +122,10 @@ func (s *session) persistSnapshotContext(parent context.Context) error {
 }
 
 func (s *session) persistSnapshotMode(parent context.Context, force bool) error {
+	return s.persistSnapshotBudget(parent, force, false)
+}
+
+func (s *session) persistSnapshotBudget(parent context.Context, force, intent bool) error {
 	if s.worker.cfg.Relay == nil {
 		return nil
 	}
@@ -95,11 +134,25 @@ func (s *session) persistSnapshotMode(parent context.Context, force bool) error 
 	s.snapshotMu.Lock()
 	defer s.snapshotMu.Unlock()
 	s.mu.Lock()
+	v2 := s.state.Agent.V2 != nil
+	if v2 && (s.fenced.Load() || s.ctx.Err() != nil) {
+		s.mu.Unlock()
+		return errHandedOver
+	}
 	changed := !agentStateEqual(s.state.Agent, s.durableAgent)
 	tooSoon := s.snapshotStored.Load() && time.Since(s.lastCheckpoint) < s.worker.cfg.Agent.SaveInterval
-	s.mu.Unlock()
 	if !force && changed && tooSoon {
+		s.mu.Unlock()
 		return errCheckpointSkipped
+	}
+	if v2 {
+		s.snapshotBudgetMu.Lock()
+		s.snapshotWriteInFlight = true
+		s.snapshotBudgetMu.Unlock()
+	}
+	s.mu.Unlock()
+	if v2 {
+		defer func() { s.snapshotBudgetMu.Lock(); s.snapshotWriteInFlight = false; s.snapshotBudgetMu.Unlock() }()
 	}
 	ctx, cancel := context.WithTimeout(parent, ownershipTimeout)
 	defer cancel()
@@ -138,8 +191,33 @@ func (s *session) persistSnapshotMode(parent context.Context, force bool) error 
 		s.mu.Unlock()
 		return errCheckpointSkipped
 	}
+	wireBytes := len(state) + snapshotEnvelopeBytes
+	if pair.V2 != nil {
+		if err := s.checkSnapshotSize(state); err != nil {
+			return err
+		}
+		s.snapshotBudgetMu.Lock()
+		available := s.snapshotBytesBudget.available(s.worker.cfg.SnapshotLimits, captured)
+		s.snapshotBudgetMu.Unlock()
+		required := wireBytes
+		if intent {
+			required += s.worker.cfg.SnapshotLimits.MaxBytes
+		}
+		if available < float64(required) {
+			if intent {
+				return errCheckpointSkipped
+			}
+			return fmt.Errorf("%w: required v2 snapshot byte budget", agent.ErrCapacity)
+		}
+	}
 	err = s.worker.cfg.Relay.Owners.PutState(ctx, lease, state)
 	if err == nil {
+		if pair.V2 != nil {
+			s.snapshotBudgetMu.Lock()
+			s.snapshotBytesBudget.debit(s.worker.cfg.SnapshotLimits, wireBytes, captured)
+			s.snapshotWriteInFlight = false
+			s.snapshotBudgetMu.Unlock()
+		}
 		s.snapshotStored.Store(true)
 		s.mu.Lock()
 		s.state.Checkpoint.Successes++
@@ -194,6 +272,10 @@ func (s *session) snapshotLoop() {
 		}
 		if err := s.persistSnapshot(); err != nil && !errors.Is(err, ErrNotEstablished) && !errors.Is(err, errCheckpointSkipped) && s.ctx.Err() == nil {
 			s.log.Warnf("session %s: snapshot: %v", s.id, err)
+			if errors.Is(err, agent.ErrCapacity) {
+				s.agentFailed(err)
+				return
+			}
 		}
 	}
 }

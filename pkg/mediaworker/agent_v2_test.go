@@ -62,9 +62,13 @@ func (a *v2UnitAgent) RestoreMoveOnly(_ context.Context, data []byte) error {
 	a.payload = data
 	return nil
 }
-func v2UnitSession(t *testing.T, a agent.Agent) (*Worker, *session) {
+func v2UnitSession(t *testing.T, a agent.Agent, opts ...func(*AgentConfig)) (*Worker, *session) {
 	t.Helper()
-	w, err := New(Config{Agent: AgentConfig{Factory: agenthost.Factory(agenthost.Registration{Name: "unit/v1", Factory: func(agent.FactoryArgs) agent.Agent { return a }})}})
+	cfg := AgentConfig{Factory: agenthost.Factory(agenthost.Registration{Name: "unit/v1", Factory: func(agent.FactoryArgs) agent.Agent { return a }})}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	w, err := New(Config{Agent: cfg})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, w.Close()) })
 	s := sessionFromState(w, sessionState{Version: 7, ID: "v2-unit"})

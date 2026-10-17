@@ -26,12 +26,13 @@ type v2Observation struct {
 	payload []byte
 }
 type v2HarnessStats struct {
-	events    chan v2Observation
-	saves     atomic.Int64
-	exports   atomic.Int64
-	imports   atomic.Int64
-	callbacks atomic.Int64
-	overlap   atomic.Bool
+	events        chan v2Observation
+	saves         atomic.Int64
+	exports       atomic.Int64
+	imports       atomic.Int64
+	callbacks     atomic.Int64
+	overlap       atomic.Bool
+	factoryBudget atomic.Int64
 }
 type v2HarnessAgent struct {
 	stats *v2HarnessStats
@@ -103,7 +104,8 @@ func v2Registrations(payload []byte) ([]agenthost.Registration, []*v2HarnessStat
 	stats := make([]*v2HarnessStats, 2)
 	for i := range regs {
 		stats[i] = &v2HarnessStats{events: make(chan v2Observation, 32)}
-		regs[i] = agenthost.Registration{Name: "harness/v1", TaskKinds: []string{"stt/v1", "tts/v1"}, Factory: func(agent.FactoryArgs) agent.Agent {
+		regs[i] = agenthost.Registration{Name: "harness/v1", TaskKinds: []string{"stt/v1", "tts/v1"}, Factory: func(args agent.FactoryArgs) agent.Agent {
+			stats[i].factoryBudget.Store(int64(args.MaxStateBytes))
 			var data []byte
 			if i == 0 {
 				data = bytes.Clone(payload)
@@ -140,6 +142,7 @@ type v2HarnessSnapshot struct {
 				Contract       string
 				TaskKinds      []string
 				Bounds         agenthost.Bounds
+				Limits         *agent.Limits `json:"limits"`
 			}
 		}
 	}
@@ -178,7 +181,10 @@ func TestV2AgentPlannedMoveExact(t *testing.T) {
 		require.Equal(t, "harness/v1", snap.State.Agent.V2.Name)
 		require.Equal(t, "agent/v2", snap.State.Agent.V2.Contract)
 		require.Equal(t, []string{"stt/v1", "tts/v1"}, snap.State.Agent.V2.TaskKinds)
-		require.EqualValues(t, 1024, snap.State.Agent.V2.Bounds.MaxStateBytes)
+		require.NotNil(t, snap.State.Agent.V2.Limits)
+		require.Equal(t, agent.Limits{}, *snap.State.Agent.V2.Limits, "identity retains declared host defaults")
+		require.Zero(t, snap.State.Agent.V2.Bounds, "effective bounds must not leak into new identity")
+		require.EqualValues(t, 1024, stats[0].factoryBudget.Load(), "FactoryArgs receives the effective admitted state budget")
 		require.Zero(t, stats[0].exports.Load())
 		_, err = sys.plane.Move(ctx, call.SessionID(), "1")
 		require.NoError(t, err)
@@ -316,6 +322,9 @@ func TestV2AgentIncompatibleTargetTypedLoss(t *testing.T) {
 	for _, mismatch := range []string{"name", "kinds", "bounds", "legacy-echo", "remote-name"} {
 		t.Run(mismatch, func(t *testing.T) {
 			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+				if mismatch == "legacy-echo" {
+					store = &round2DelayedReleaseStore{Store: store}
+				}
 				regs, stats := v2Registrations([]byte("private-recording"))
 				switch mismatch {
 				case "name", "remote-name":
@@ -352,6 +361,9 @@ func TestV2AgentIncompatibleTargetTypedLoss(t *testing.T) {
 					require.Zero(t, stats[1].saves.Load(), "refuse before target callbacks")
 				}
 				// With the compatible source gone, takeover must use typed loss cleanup.
+				if delayed, ok := store.(*round2DelayedReleaseStore); ok {
+					delayed.armed.Store(true)
+				}
 				require.NoError(t, workerprobe.Kill(sys.workers[0].LocalAddr()))
 				require.Eventually(t, func() bool {
 					status, err := sys.plane.Status(ctx)
@@ -360,10 +372,16 @@ func TestV2AgentIncompatibleTargetTypedLoss(t *testing.T) {
 				status, err := sys.plane.Status(ctx)
 				require.NoError(t, err)
 				require.Contains(t, status.Takeovers[len(status.Takeovers)-1].Error, agent.ErrIncompatibleAgent.Error())
-				_, err = store.Get(ctx, call.SessionID())
-				require.Error(t, err)
-				_, err = store.GetState(ctx, call.SessionID())
-				require.Error(t, err)
+				// Lost accounting is intentionally published before conditional cleanup.
+				// Wait for authoritative removal, not an arbitrary store/transport error.
+				require.Eventually(t, func() bool {
+					_, leaseErr := store.Get(ctx, call.SessionID())
+					_, stateErr := store.GetState(ctx, call.SessionID())
+					absent := func(err error) bool {
+						return errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrEnded)
+					}
+					return absent(leaseErr) && absent(stateErr)
+				}, 4*time.Second, 5*time.Millisecond)
 				require.Zero(t, sys.workers[1].SessionCount())
 				require.Zero(t, stats[1].exports.Load())
 				require.Zero(t, stats[1].imports.Load())

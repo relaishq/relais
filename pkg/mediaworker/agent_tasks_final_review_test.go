@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/stretchr/testify/require"
@@ -29,8 +30,16 @@ func TestTaskFinalReviewSideEffectRetryAfterUnconsumedFinal(t *testing.T) {
 		{id: task.intent.ID, attempt: 1, ctx: context.Background(), sequence: 1, chunk: agent.Chunk{Data: []byte("receipt")}, reply: make(chan error, 1)},
 		{id: task.intent.ID, attempt: 1, ctx: context.Background(), final: true, outcome: agent.OK, reply: make(chan error, 1)},
 	} {
-		s.acceptEmission(e)
-		require.NoError(t, <-e.reply)
+		// Handler terminals share the 100 ms Emit publication interval.
+		require.Eventually(t, func() bool {
+			s.acceptEmission(e)
+			err := <-e.reply
+			if errors.Is(err, agent.ErrBackpressure) {
+				return false
+			}
+			require.NoError(t, err)
+			return true
+		}, time.Second, time.Millisecond)
 	}
 	data, err := json.Marshal(s.state.Agent)
 	require.NoError(t, err)

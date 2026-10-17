@@ -1,5 +1,7 @@
-// Package agent defines the experimental v2 event contract. It is experimental
-// until ADR 0010 slice 6. Worker registration is not public yet. This slice hosts
+// Package agent defines the supported v2 event contract. Pin pre-1.0 releases:
+// public signatures remain compatible within a minor, with deprecation before
+// removal in a later minor and migration notes for breaking minors. Snapshot
+// compatibility is tested separately. The host delivers
 // Started, AudioInput, TaskMessage, TimerFired, PlaybackFinished and Resumed;
 // Control is reserved.
 // After a crash before Started is checkpointed, the target delivers Resumed
@@ -8,6 +10,15 @@
 // fail closed after Restore; this also applies to admission Capacity callbacks.
 // Admission refusals are queued as compact terminal intents. Each Capacity
 // callback runs in a later transaction; Handle is never called recursively.
+// Snapshot admission refuses oversized callback state with a later Capacity
+// TaskMessage, after restoring prior app state. For non-task events this notice
+// has a host-derived task ID and no payload. Refused input is counted as consumed
+// with the prior app state plus the refusal, so it cannot replay without its
+// typed outcome. A refused task result becomes a terminal Capacity at its stable
+// sequence. Capacity handlers which themselves exceed limits fail closed.
+// Required transport snapshots which cannot fit the operator byte/size budget
+// refuse adoption or end the call with ErrCapacity. Store errors never produce
+// Capacity or debit successful-write tokens.
 // Save failures/deadlines, other callback
 // errors, invalid state and unsupported effects fail closed. A Save that grows
 // move-only length beyond the available worker memory fails closed with
@@ -21,6 +32,12 @@
 // Audio references name immutable task-emitted Opus packets. Playback continues
 // independently of input and callbacks. A crash loses buffered audio and reports
 // Resumed.MoveOnly=OutcomeUnknown; restart the turn on a later event.
+// Handler terminal publication can wait up to 100 ms for Emit spacing; a move
+// during that wait follows the task's Retry/Abandon rules or reports OutcomeUnknown.
+// Registration identity persists declared Limits (zeros mean host defaults).
+// Workers resolve effective limits locally and refuse restored content that
+// exceeds those limits without truncation. Crash-lost move-only data and audio
+// do not consume the adopting worker's payload limits; they report OutcomeUnknown.
 package agent
 
 import (
@@ -147,7 +164,7 @@ type TimerSpec struct {
 	After time.Duration
 }
 
-// Task declarations remain experimental until the worker registration slice.
+// Task declarations describe bounded work executed outside agent callbacks.
 type TaskID = taskrun.TaskID
 type Turn = taskrun.Turn
 type TaskClass = taskrun.TaskClass
@@ -178,4 +195,16 @@ type ControlMessage struct {
 	Sequence uint64
 	Name     string
 	Data     []byte
+}
+
+// Limits bounds application state, serialized host metadata, and move memory.
+// Zero fields use host defaults and remain zero in persisted identity. Effective
+// limits respect local operator ceilings; registrations cannot increase budgets.
+type Limits struct {
+	MaxStateBytes    int
+	MaxPendingBytes  int
+	MaxMailboxBytes  int
+	MaxActiveTasks   int
+	MaxAudioBytes    int
+	MaxAudioDuration time.Duration
 }

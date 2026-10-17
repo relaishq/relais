@@ -146,6 +146,8 @@ type Config struct {
 	PacketTrace func(PacketTrace)
 	// Agent selects per-call audio logic. Zero values keep the default echo.
 	Agent AgentConfig
+	// SnapshotLimits belongs to the operator, independently of registrations.
+	SnapshotLimits SnapshotLimits
 
 	// CheckpointEnvelope configures source index rates for safe crash recovery.
 	CheckpointEnvelope CheckpointEnvelope
@@ -287,9 +289,21 @@ type Worker struct {
 // New starts a media worker listening on cfg.ListenAddr.
 func New(cfg Config) (*Worker, error) {
 	cfg.Agent = cfg.Agent.defaults()
+	cfg.SnapshotLimits = cfg.SnapshotLimits.defaults()
 	cfg.CheckpointEnvelope = cfg.CheckpointEnvelope.Defaults()
 	if cfg.SnapshotInterval <= 0 {
 		cfg.SnapshotInterval = 100 * time.Millisecond
+	}
+	// Resource limits remain validated for every worker. The cadence rule is
+	// v2-only; never instantiate a legacy factory without a real session just
+	// to classify it. Factory-only adapters also check cadence in initV2Agent.
+	if err := cfg.SnapshotLimits.validateResourceLimits(); err != nil {
+		return nil, err
+	}
+	if len(cfg.Agent.Registrations) > 0 {
+		if err := cfg.SnapshotLimits.ValidateForInterval(cfg.SnapshotInterval); err != nil {
+			return nil, err
+		}
 	}
 	if cfg.HeartbeatInterval <= 0 {
 		cfg.HeartbeatInterval = 100 * time.Millisecond

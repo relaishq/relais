@@ -340,8 +340,9 @@ for slot exhaustion. Other limits respect operator caps; legacy 8 KiB defaults s
 
 Worker-only flags, not Limits fields (registrations cannot raise store/shutdown budgets):
 -agent-max-snapshot-bytes=7168; -agent-snapshot-bytes-per-second=81920;
--agent-snapshot-burst-bytes=28672; -agent-drain-task-budget=2s. -agent-drain-move-reserve has
-**no default**: unset means no quiescence and urgent export for every v2 session.
+-agent-snapshot-burst-bytes=28672. Slice 9 adds -agent-drain-task-budget=2s and
+-agent-drain-move-reserve with quiescence; slice 6 does not expose these flags.
+The reserve has **no default**: unset means no quiescence and urgent export for every v2 session.
 Snapshot arithmetic: 3,474 + 42 + 1,368 (base64 of 1,024) + 2,048 = **6,932 B**, leaving 236 B under
 7,168. This is a derived allocation; validate actual v8/counters, never assume the base is fixed
 for all calls. At 10/s, 7,168*10 = **71,680 B/s**. The 81,920 B/s payload budget leaves 10,240 B/s
@@ -349,8 +350,9 @@ for forced writes; plus measured frame/owners 31,371+3,256 gives **116,547 B/s**
 under 131,072 for session protocol/reads/retries. This is **not measured capacity approval**
 (`docs/dev/capacity-results.md:61-70`; `docs/dev/capacity.md:180-225`). An explicit 8 KiB app needs
 at least 3,474+42+10,924+2,048 = **16,488 B/checkpoint**, already 164,880 B/s before other clients.
-Demo A uses an explicit larger **operator** budget: e.g. 24 KiB snapshots, 256 KiB/s and
-96 KiB burst for an 8 KiB app. It makes **no capacity claim** and does not raise the approval ceilings.
+Demo A uses an explicit larger **operator** budget: e.g. 24 KiB snapshots, 264 KiB/s and
+96 KiB burst for an 8 KiB app. At 10 checkpoints/s, 24,576*10 = 245,760 B/s;
+264 KiB/s = 270,336 B/s adds one maximum forced snapshot/s. Burst is four maximum snapshots. It makes **no capacity claim** and does not raise the approval ceilings.
 
 Preflight actual whole ciphertext size before state acceptance and again at capture; reserve
 periodic/required transport work before new side-effect intent. Successful checkpoints consume
@@ -389,9 +391,14 @@ the representative custom workload remains unvalidated. Keep ceilings; over-budg
 ## E — Identity and safe refusal; same-registration pools
 
 Use envelope v8 for custom agents, containing agent name, contract, State.Version, required task
-kinds and bounds, with the exact state/progress/cursors. Stock echo/demo retain their legacy
-profiles. A custom target checks name/kinds/configured bounds and Restore validates state before
-adoption, output or task launch. Mismatch returns ErrIncompatibleAgent; never substitute Echo.
+kinds and declared Limits, with the exact state/progress/cursors. Zero limit fields remain
+zero in identity and mean host defaults; effective bounds are resolved and capped locally,
+never persisted as identity. Stock echo/demo retain their legacy profiles. A custom target
+checks name/kinds/declared limits and validates restored content against local effective state,
+host metadata, mailbox, active-task and audio bounds before adoption, output or task launch.
+Identity mismatch returns ErrIncompatibleAgent; content exceeding local capacity returns
+ErrCapacity without truncation. Never substitute Echo. Main f6428f2 experimental v8 envelopes
+retain their previous resolved-bounds compatibility check.
 Identity-free custom snapshots need a declared profile or drain; version 1 does not identify an app (`docs/adr/0006-agent-interface.md:165-177`).
 Pools are **same-registration only**; compatible names alone do not authorize mixing task code.
 New builds must Restore prior state/pending task schemas and retain compatible recovery capacity.

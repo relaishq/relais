@@ -20,7 +20,13 @@ import (
 
 // AgentConfig bounds per-call application work. Zero values use the defaults.
 type AgentConfig struct {
-	Factory         agent.Factory
+	// Factory preserves the legacy single-factory seam. V2 hosts also supply
+	// Registrations for startup cadence validation; an opaque factory-only v2
+	// adapter is validated when resolved, without probing legacy factories.
+	Factory agent.Factory
+	// Registrations resolves v2 restores by their persisted name, independently
+	// of the factory selected for new calls. Nil preserves the single-factory seam.
+	Registrations   map[string]agent.Factory
 	QueueCapacity   int           // default 32 packets
 	CallbackTimeout time.Duration // default 100 ms, including state encoding
 	SaveInterval    time.Duration // default 100 ms between durable changed-state writes
@@ -126,7 +132,15 @@ func cloneAgentState(state agentState) agentState {
 
 func (s *session) initAgent(restoring bool, opts ResumeOptions, move ...*movePayload) error {
 	cfg := s.worker.cfg.Agent
-	h := &agentHost{instance: cfg.Factory(s.id), queue: make(chan agentInput, cfg.QueueCapacity), flush: make(chan agentFlush, 1), late: make(chan struct{}, 1)}
+	factory := cfg.Factory
+	if restoring && s.state.Agent.V2 != nil && cfg.Registrations != nil {
+		var ok bool
+		factory, ok = cfg.Registrations[s.state.Agent.V2.Name]
+		if !ok {
+			return s.agentError(fmt.Errorf("%w: %w", agent.ErrRestore, agentv2.ErrIncompatibleAgent))
+		}
+	}
+	h := &agentHost{instance: factory(s.id), queue: make(chan agentInput, cfg.QueueCapacity), flush: make(chan agentFlush, 1), late: make(chan struct{}, 1)}
 	s.agent = h
 	if adapter, ok := h.instance.(*agenthost.Adapter); ok {
 		var payload *movePayload

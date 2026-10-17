@@ -1,5 +1,4 @@
-// Package agenthost is the internal v2 registration seam. It deliberately does
-// not expose a workerapp registration API before tasks, pacing and limits land.
+// Package agenthost carries public workerapp registrations to the v2 host.
 package agenthost
 
 import (
@@ -13,7 +12,7 @@ import (
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 )
 
-// Bounds are resolved internally until operator admission lands in slice 6.
+// Bounds are the resolved effective registration limits.
 type Bounds struct {
 	MaxStateBytes    int
 	MaxPendingBytes  int
@@ -29,11 +28,14 @@ type Registration struct {
 	TaskKinds []string
 	Tasks     map[string]agent.TaskHandler
 	Bounds    Bounds
+	// Declared retains the app declaration before resolving host defaults.
+	Declared agent.Limits
 }
 
 // Factory carries a registration through the existing legacy configuration
 // field. Only the v2 host unwraps it; it cannot accidentally behave like Echo.
 func Factory(r Registration) legacy.Factory {
+	r.Declared = agent.Limits(r.Bounds)
 	r.Tasks = maps.Clone(r.Tasks)
 	r.TaskKinds = slices.Clone(r.TaskKinds)
 	for kind := range r.Tasks {
@@ -41,19 +43,25 @@ func Factory(r Registration) legacy.Factory {
 	}
 	slices.Sort(r.TaskKinds)
 	r.TaskKinds = slices.Compact(r.TaskKinds)
-	if r.Bounds.MaxStateBytes == 0 {
-		r.Bounds.MaxStateBytes = 1 << 10
-	}
-	if r.Bounds.MaxPendingBytes == 0 {
-		r.Bounds.MaxPendingBytes = 2 << 10
-	}
-	if r.Bounds.MaxMailboxBytes == 0 {
-		r.Bounds.MaxMailboxBytes = 1 << 20
-	}
-	if r.Bounds.MaxActiveTasks == 0 {
-		r.Bounds.MaxActiveTasks = 4
-	}
+	r.Bounds = r.Bounds.Defaults()
 	return func(string) legacy.Agent { return &Adapter{Registration: r} }
+}
+
+// Defaults resolves the host defaults while retaining the original declaration.
+func (b Bounds) Defaults() Bounds {
+	if b.MaxStateBytes == 0 {
+		b.MaxStateBytes = 1 << 10
+	}
+	if b.MaxPendingBytes == 0 {
+		b.MaxPendingBytes = 2 << 10
+	}
+	if b.MaxMailboxBytes == 0 {
+		b.MaxMailboxBytes = 1 << 20
+	}
+	if b.MaxActiveTasks == 0 {
+		b.MaxActiveTasks = 4
+	}
+	return b
 }
 
 type Adapter struct{ Registration Registration }

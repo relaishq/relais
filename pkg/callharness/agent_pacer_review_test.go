@@ -70,7 +70,9 @@ func TestPacerReviewStreamingCadence(t *testing.T) {
 				for i := range packets {
 					packets[i] = tc.packet
 				}
-				regs, events, gate, _ := reviewStreamRegs(packets, 1, 0)
+				// Emit publishes at most every 100 ms. Batch packet durations while
+				// retaining the same 10 ms/2.5 ms/20 ms packet-level pacer proof.
+				regs, events, gate, _ := reviewStreamRegs(packets, int(100*time.Millisecond/tc.duration), 0)
 				if tc.name == "20ms-live-tasks" {
 					for i := range regs {
 						regs[i].Factory = func(agent.FactoryArgs) agent.Agent {
@@ -133,7 +135,7 @@ func TestPacerReviewSaturatedMailbox(t *testing.T) {
 		for i := range packets {
 			packets[i] = fixture[i%len(fixture)]
 		}
-		regs, _, gate, done := reviewStreamRegs(packets, 5, 128<<10)
+		regs, _, gate, done := reviewStreamRegs(packets, 50, 128<<10)
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs})
 		ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
 		defer cancel()
@@ -151,7 +153,9 @@ func TestPacerReviewSaturatedMailbox(t *testing.T) {
 		}
 		select {
 		case duration := <-done:
-			require.Greater(t, duration, 500*time.Millisecond, "Emit must wait for paced drain")
+			// Twelve publications need only 1.1 s under the Emit rate limit.
+			// Exceeding 3 s proves that the 128 KiB mailbox also blocks them.
+			require.Greater(t, duration, 3*time.Second, "Emit must wait for mailbox space from paced drain")
 		case <-ctx.Done():
 			t.Fatal("producer did not complete")
 		}

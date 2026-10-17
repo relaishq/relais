@@ -78,8 +78,11 @@ func (r *TaskRun) ID() TaskID     { return r.id }
 func (r *TaskRun) Key() string    { return string(r.id) }
 func (r *TaskRun) After() uint64  { return r.after }
 
-// Emit publishes an owned chunk or waits for memory with cancellation. A
-// chunk that can never fit returns ErrCapacity from the host.
+// Emit publishes an owned chunk or waits with cancellation for memory/rate
+// admission. The first chunk is immediate; later chunks and handler terminals
+// publish at most once per 100 ms. Batch at least 100 ms of encoded audio per
+// chunk for continuous playout. A restored task with a prior publication waits
+// one full interval before its next chunk. A chunk that can never fit returns ErrCapacity.
 func (r *TaskRun) Emit(ctx context.Context, seq uint64, chunk Chunk) error {
 	return r.emit(ctx, seq, chunk)
 }

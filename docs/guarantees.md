@@ -418,7 +418,7 @@ relay replay conditions. The demo is deterministic, audio-only and uses encoded
 Opus clips without an external service. Profile-by-load or N+1 agent timing is
 **not measured**. The browser evidence is a single call in the local demo.
 
-[ADR 0006][agent-adr] defines **8 KiB** default state size, a **32-packet** input
+Legacy agents keep [ADR 0006][agent-adr]'s **8 KiB** default state size, a **32-packet** input
 queue, **100 ms** callback deadlines and **100 ms** minimum changed-state write
 interval. Queue overflow and callback timeout can drop input and count it. A
 planned export drains accepted work within its budget and can count dropped
@@ -446,6 +446,38 @@ The #45 records ran in echo mode, with the agent verdict `inconclusive`
 continuity with a real camera or over the real internet is **not measured**.
 Mobile browsers are deferred to #98. No universal no-loss application or
 exactly-once side-effect guarantee is established.
+
+V2 custom agents can produce task-emitted Opus output without caller input.
+The bounded host, pacing, planned continuation and move-only crash-loss rules are
+specified in [ADR 0010](adr/0010-pluggable-agents.md). Pools must use the same
+registration and restore prior app state and pending task schemas. Restoration
+uses the persisted agent name, task kinds and declared limits (including zeros
+for host defaults), and refuses mismatches without an Echo fallback. Effective
+limits are computed on each worker from local operator ceilings. Restored content
+must fit those limits; an oversized adoption refuses with typed capacity, without
+truncation. Crash-lost app data and audio do not consume target payload limits;
+takeover reports the existing typed loss instead. Older experimental v8 envelopes retain their original bounds check.
+Public registration does not
+establish provider integration or custom-worker capacity approval. The manual
+capacity, Save-CPU and store-stall gates remain pending. A default 1 KiB app state
+cannot preserve normal conversation history across a crash.
+
+V2 snapshots have operator byte and rate limits. Ordinary callback state overflow
+restores prior app state and produces a typed `Capacity` notice. Required transport
+state which cannot fit refuses adoption or ends the call with explicit capacity
+evidence. Failed store writes consume no byte tokens and do not produce `Capacity`.
+Emit backpressures with cancellation; its first chunk is immediate and later chunks
+and handler terminals share one 100 ms publication interval per task. A terminal
+can wait up to 100 ms; a move during that wait follows Retry/Abandon or reports
+`OutcomeUnknown`. The byte rate must cover periodic maximum-size snapshots plus
+one maximum-size forced write per second; burst must cover two maximum snapshots.
+Wall-clock rollback never subtracts tokens and refill resumes from the new clock.
+Planned export carries the current remaining quota without waiting for store I/O.
+An in-flight snapshot conservatively reserves one maximum snapshot in the exported
+quota, floored at zero; failed writes still never debit the live bucket. Drain task-wait flags are
+reserved for slice 9 and are not exposed yet. The raw move
+memory flag can tighten the supported 1 MiB per-session ceiling; larger payloads
+need a new wire-budget admission design before they can be enabled safely.
 
 ## Capacity and soak
 
@@ -792,7 +824,7 @@ This closes #94's residual; it does not fix #51.
 | Unconditional route protection after failed/dropped persistence or partial restoration; protection from stolen session credentials or compromised workers | [ADR 0001][stickiness-adr]; [ADR 0003][routes-adr] |
 | No-loss recovery after buffer loss, overflow, expiry, agent queue overflow or unsafe checkpoint loss; exactly-once application side effects | [ADR 0002][checkpoint-adr]; [ADR 0005][buffer-adr]; [ADR 0006][agent-adr] |
 | Lossless planned moves with the relay buffer off, under worker→relay reordering, or after ring eviction | [ADR 0009][move-fix-adr] |
-| Video input for agents, validated resumable PCM decoding, unprompted agent output, or speech/LLM-provider integration | [#31][spec]; [ADR 0006][agent-adr] |
+| Video input for agents, validated resumable PCM decoding, or speech/LLM-provider integration | [#31][spec]; [ADR 0006][agent-adr] |
 | Recording, SIP, MoQ or GPU transforms | [#31 out of scope][spec] |
 | Windows standby fencing, general mixed-version rollout compatibility, or fixed global Redis frame-cache memory | [ADR 0004][standby-adr]; [ADR 0006 compatibility rules][agent-adr]; [frame-cache limits][frame-cache] |
 

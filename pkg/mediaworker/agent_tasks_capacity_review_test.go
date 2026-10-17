@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/stretchr/testify/require"
@@ -13,7 +14,9 @@ func TestTaskCapacityReviewWideCallback(t *testing.T) {
 	for _, width := range []int{20, 33, 100} {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
 			a := &v2UnitAgent{state: agent.State{Version: 1}}
-			_, s := v2UnitSession(t, a)
+			// Admission must refuse by width, not by the 100 ms callback deadline,
+			// which a 100-task callback can reach under -race on a CI runner.
+			_, s := v2UnitSession(t, a, func(c *AgentConfig) { c.CallbackTimeout = 5 * time.Second })
 			require.NoError(t, s.initAgent(false, ResumeOptions{}))
 			s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"x/v1": func(context.Context, *agent.TaskRun) error { return nil }}
 			for i := range width {
