@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 make deps
 
 # Build plugin runners plus relais-relay, relais-worker, relais-control
-# and the opt-in crash-run and relais-demo drivers
+# and the opt-in crash-run, relais-demo and delayed-loopback binaries
 make build
 
 # Run media workers A and B on one UDP socket plus the browser echo page on

@@ -9,6 +9,9 @@ URL, certificate, and existing token, then skip to [Place a call](#place-a-call)
 Do not start another frontend or generate a replacement token for that setup.
 For your own topology without signal, see [Start signal yourself](#start-signal-yourself).
 
+To replace the worker's audio behavior, see [Build your agent](build-an-agent.md)
+for the keyless custom-worker example and its move/crash contract.
+
 ## Place a call
 
 For `start.sh`, use the printed **Signal URL**, **CA certificate**, and **Token
