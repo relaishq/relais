@@ -71,3 +71,12 @@ func TestBusValidation(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+func TestNamespaceBusAddresses(t *testing.T) {
+	for _, address := range []string{"udp://10.189.80.4:16380", "udp://172.16.0.4:16380", "udp://192.168.1.4:16380", "udp://127.0.0.1:16380", "udp://[::1]:16380"} {
+		t.Run(address, func(t *testing.T) { _, err := audioagent.Factory(address); require.NoError(t, err) })
+	}
+	for _, address := range []string{"udp://0.0.0.0:16380", "udp://[::]:16380", "udp://8.8.8.8:16380", "udp://172.15.0.4:16380", "udp://172.32.0.4:16380", "udp://100.64.0.1:16380", "udp://169.254.1.1:16380", "udp://[fd00::1]:16380", "udp://user@10.0.0.1:16380", "udp://10.0.0.1:16380?x=1", "udp://10.0.0.1:16380#fragment"} {
+		t.Run(address, func(t *testing.T) { _, err := audioagent.Factory(address); require.Error(t, err) })
+	}
+}

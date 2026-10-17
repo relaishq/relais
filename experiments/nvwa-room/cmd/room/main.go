@@ -7,13 +7,12 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 )
 
 func main() {
-	addr := flag.String("http", "127.0.0.1:38690", "loopback HTTP")
-	audio := flag.String("audio", "127.0.0.1:38691", "loopback UDP audio bus")
+	addr := flag.String("http", "127.0.0.1:38690", "HTTP bind: loopback, or within -spike-private-net")
+	audio := flag.String("audio", "127.0.0.1:38691", "UDP audio bind: loopback, or within -spike-private-net")
 	web := flag.String("web", "experiments/nvwa-room/web", "browser page directory")
 	signal := flag.String("signal", "", "signal HTTPS URL")
 	cert := flag.String("signal-cert", "", "signal CA")
@@ -22,12 +21,8 @@ func main() {
 	networkState := flag.Bool("network-state-channel", false, "spike-only state broadcasts on state channel")
 	faults := flag.Bool("test-faults", false, "allow receipt suppression")
 	flag.Parse()
-	for _, s := range []string{*addr, *audio} {
-		a, e := netip.ParseAddrPort(s)
-		prefix, _ := netip.ParsePrefix(*privateNet)
-		if e != nil || (!a.Addr().IsLoopback() && !prefix.Contains(a.Addr())) {
-			log.Fatal("loopback endpoints required")
-		}
+	if err := validateListeners(*privateNet, *addr, *audio); err != nil {
+		log.Fatal(err)
 	}
 	r := room.New("nvwa-spike")
 	r.AllowFaults = *faults

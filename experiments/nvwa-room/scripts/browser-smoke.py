@@ -17,7 +17,7 @@ try:
   if time.monotonic()>deadline:raise RuntimeError('topology timeout')
   time.sleep(.1)
  config=json.loads((out/'topology/topology.json').read_text())
- assert config['room_url'].startswith('http://127.0.0.1:'), 'sandbox exception is local-test-only'
+ assert config['room_url'].startswith('http://127.0.0.1:'), 'browser-smoke.py supports loopback only; use run-network.py for netns'
  for index,hz in enumerate([440,880]):
   wav=fixtures/f'tone-{hz}.wav'
   # Canonical RIFF PCM, signed 16-bit little endian, mono, 48 kHz, no metadata chunks.

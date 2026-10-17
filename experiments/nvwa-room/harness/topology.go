@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,6 +122,22 @@ func StartNetwork(ctx context.Context, bin, root, dir string, data bool, network
 	return start(ctx, bin, root, dir, data, network, true)
 }
 func start(ctx context.Context, bin, root, dir string, data bool, network *nettopology.Topology, networkState bool) (*Topology, error) {
+	return startBound(ctx, bin, root, dir, data, network, networkState, netip.Addr{})
+}
+
+// startBound lets the integration test exercise every private listener on an
+// existing local address. It changes no interface configuration or default.
+func startBound(ctx context.Context, bin, root, dir string, data bool, network *nettopology.Topology, networkState bool, localPrivate netip.Addr) (*Topology, error) {
+	privateNets := ""
+	if localPrivate.IsValid() {
+		if network != nil || !localPrivate.Is4() || !localPrivate.IsPrivate() {
+			return nil, fmt.Errorf("local private test bind requires an RFC1918 IPv4 address and no namespaces")
+		}
+		privateNets = localPrivate.String() + "/32"
+	}
+	if network != nil {
+		privateNets = network.Plan.PrivateNets()
+	}
 	t := &Topology{Dir: dir, Bin: bin, Root: root, data: data, network: network, networkState: networkState}
 	if e := os.MkdirAll(dir, 0700); e != nil {
 		return nil, e
@@ -168,6 +185,9 @@ func start(ctx context.Context, bin, root, dir string, data bool, network *netto
 	}
 	address := func(p int) string {
 		host := "127.0.0.1"
+		if localPrivate.IsValid() {
+			host = localPrivate.String()
+		}
 		if network != nil {
 			role := "relay"
 			switch p {
@@ -197,11 +217,11 @@ func start(ctx context.Context, bin, root, dir string, data bool, network *netto
 			t.env = append(t.env, entry)
 		}
 	}
-	if network != nil {
-		t.env = append(t.env, "RELAIS_PRIVATE_NETS="+network.Plan.PrivateNets())
+	if privateNets != "" {
+		t.env = append(t.env, "RELAIS_PRIVATE_NETS="+privateNets)
 	}
 	t.env = append(t.env, "RELAIS_REDIS_ADDR="+address(redis), "RELAIS_REDIS_PREFIX=nvwa:"+randomHex()+":", "RELAIS_SESSIONSTORE_KEY="+randomHex())
-	redisArgs, password, removeConfig, e := redisLaunch(strings.Split(address(redis), ":")[0], fmt.Sprint(redis), dir, network != nil)
+	redisArgs, password, removeConfig, e := redisLaunch(strings.Split(address(redis), ":")[0], fmt.Sprint(redis), dir, privateNets != "")
 	if e != nil {
 		return fail(e)
 	}
@@ -217,7 +237,7 @@ func start(ctx context.Context, bin, root, dir string, data bool, network *netto
 	if e = t.waitReady(ctx, "redis", address(redis), 30*time.Second); e != nil {
 		return fail(e)
 	}
-	if network != nil {
+	if privateNets != "" {
 		ready, cancel := context.WithTimeout(ctx, 5*time.Second)
 		e = pingRedis(ready, address(redis), password)
 		cancel()
@@ -268,8 +288,8 @@ func start(ctx context.Context, bin, root, dir string, data bool, network *netto
 	if networkState {
 		roomArgs = append(roomArgs, "-network-state-channel")
 	}
-	if network != nil {
-		roomArgs = append(roomArgs, "-spike-private-net", network.Plan.PrivateNets())
+	if privateNets != "" {
+		roomArgs = append(roomArgs, "-spike-private-net", privateNets)
 	}
 	_, e = t.start("room", filepath.Join(bin, "room"), roomArgs, t.env)
 	if e != nil {

@@ -16,12 +16,12 @@ const stateVersion = 0x52415544
 
 func Factory(bus string) (agent.Factory, error) {
 	u, err := url.Parse(bus)
-	if err != nil || u.Scheme != "udp" || u.Path != "" {
-		return nil, errors.New("room-audio requires udp://loopback-IP:port")
+	if err != nil || u.Scheme != "udp" || u.Path != "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return nil, errors.New("room-audio requires udp://loopback-or-RFC1918-IP:port without credentials, path, query or fragment")
 	}
 	addr, err := net.ResolveUDPAddr("udp", u.Host)
-	if err != nil || addr.IP == nil || !addr.IP.IsLoopback() || addr.Port == 0 {
-		return nil, errors.New("room-audio bus must be a loopback UDP address")
+	if err != nil || addr.IP == nil || (!addr.IP.IsLoopback() && (addr.IP.To4() == nil || !addr.IP.IsPrivate())) || addr.Port == 0 {
+		return nil, errors.New("room-audio bus must be a loopback or RFC1918 IPv4 UDP address with a nonzero port")
 	}
 	return func(id string) agent.Agent { return &Agent{id: id, addr: addr} }, nil
 }

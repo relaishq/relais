@@ -596,9 +596,11 @@ jobs:
           bash experiments/nvwa-room/scripts/build.sh "$RUNNER_TEMP/nvwa-build"
           go test -c -o "$RUNNER_TEMP/nvwa-build/bin/nettopology.test" ./internal/nettopology
           go test -c -o "$RUNNER_TEMP/nvwa-build/bin/clusterprocess.test" ./internal/clusterprocess
-      - name: Verify comparison policies and evidence reducer
+      - name: Verify comparison policies, private bindings and evidence reducer
+        env:
+          RELAIS_NVWA_TEST_BIN: ${{ runner.temp }}/nvwa-build/bin
         run: |
-          go test -race ./experiments/nvwa-room/...
+          go test -race ./experiments/nvwa-room/... ./internal/spike/...
           python3 experiments/nvwa-room/scripts/test_network_summary.py
           python3 experiments/nvwa-room/scripts/test_network_runner.py
       - name: Verify namespace isolation, profile delay and cleanup

@@ -1,10 +1,11 @@
 # Stage 4: DataChannel versus WebSocket across emulated networks
 
-Status: CI round 1 (`38997613714`) ran all five profile jobs, but every
-completed cell failed during startup because private Redis lacked a password.
-The comparison therefore still has **no Linux performance results**. The fixes
-below await the orchestrator's next push and dispatch. This spike will not merge
-to main; the existing WS-for-data decision remains unchanged.
+Status: CI round 2 (`39002753889`) confirmed private Redis authentication and
+fast startup failure handling. Workers then rejected the private room-audio bus;
+no Linux performance result was produced. The audio-address fix and complete
+[address audit](netns-address-audit.md) await the orchestrator's next dispatch.
+This spike will not merge to main; the existing WS-for-data decision remains
+unchanged.
 
 ## Method
 
@@ -184,7 +185,7 @@ python3 experiments/nvwa-room/scripts/run-network.py \
 CI runs the **same** build script and comparison command, changing only paths,
 `--topology netns`, `--profile PROFILE`, and running the comparison with sudo for
 namespace setup. The comparison defaults remain two repeats, 1,000 messages,
-30 Hz. `go test -race ./experiments/nvwa-room/...` checks channel policies, the
+30 Hz. `RELAIS_NVWA_TEST_BIN="$SCRATCH/bin" go test -race ./experiments/nvwa-room/... ./internal/spike/...` checks private-address integration, bus validation, channel policies, the
 real room send queue, reliable snapshot isolation, and fault barriers locally.
 `go vet ./...`, gofmt, and golangci-lint v2.14.0 cover the checkout.
 
@@ -325,3 +326,24 @@ passed in 1.26 s; golangci-lint v2.14.0 on `./...` passed in 2.96 s with zero
 issues. All three reducer tests and three runner process tests passed (0.42 s
 and 1.94 s wall time). Linux driver/test cross-builds, gofmt and actionlint passed.
 These timings are local; no namespace runtime success is claimed.
+
+## CI round 2 address follow-up
+
+The spike audio factory now accepts RFC1918 IPv4 bus addresses as well as
+loopback, while rejecting public and unspecified destinations. Local defaults
+stay on loopback. Room listener failures now explain the required explicit
+private CIDR instead of incorrectly demanding loopback. The full executable
+address/URL/Origin audit and unchanged local-only tools are listed in
+[netns-address-audit.md](netns-address-audit.md). No `pkg/` production default was
+changed. The new combined private-bind integration test passed for all three
+transports, including the real worker upstream WS, private-IP TLS signal,
+commands, state delivery and two-way audio. It changes no machine interface.
+
+Round-3 verification: the full uncached race suite, with private binding enabled,
+passed in 6.74 s (all three private-address variants passed in 3.27 s within that
+suite). The 12-cell loopback smoke passed in 102.54 s with 240/240 commands and
+240/240 peer states per transport and zero duplicates. `go vet ./...` passed in
+1.31 s, golangci-lint v2.14.0 on `./...` in 2.57 s with zero issues, and gofmt in
+0.09 s. All three reducer tests and all three runner tests passed (0.26 s and
+1.77 s wall time), as did actionlint and the Linux driver cross-build (1.39 s).
+Native Linux namespace/profile execution remains NOT-RUN locally.

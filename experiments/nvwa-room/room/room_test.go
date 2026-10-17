@@ -331,3 +331,16 @@ func TestNetworkBarrierDoesNotPauseSurvivingWebSocket(t *testing.T) {
 	require.EqualValues(t, 1, r.Metrics().Applied)
 	require.EqualValues(t, 1, r.Metrics().Deduplicated)
 }
+
+func TestPrivateRoomOriginsAreHeadersNotLoopbackDestinations(t *testing.T) {
+	for _, test := range []struct {
+		origin  string
+		allowed bool
+	}{
+		{"", true}, {"http://10.189.80.4:33001", true}, {"http://localhost", true}, {"http://localhost/", true}, {"http://8.8.8.8:33001", false},
+	} {
+		request := httptest.NewRequest("POST", "http://10.189.80.4:33001/lobby", nil)
+		request.Header.Set("Origin", test.origin)
+		require.Equal(t, test.allowed, localOrigin(request), test.origin)
+	}
+}
