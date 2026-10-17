@@ -16,6 +16,7 @@ import (
 	"github.com/relaishq/relais/examples/delayed-loopback/ledger"
 	"github.com/relaishq/relais/examples/delayed-loopback/loopback"
 	"github.com/relaishq/relais/internal/agenthost"
+	"github.com/relaishq/relais/internal/taskrun"
 	"github.com/relaishq/relais/internal/workerprobe"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/mediaworker"
@@ -69,6 +70,21 @@ func loopRegs(cut string) ([]agenthost.Registration, []chan []byte) {
 				<-ctx.Done()
 				return ctx.Err()
 			}
+			if i == 0 && cut == "mid-emission" {
+				// Pause the source after its first real admission. The exact
+				// move must retry this unfinished production handler at After>0.
+				proxy := taskrun.New(run.Spec(), run.ID(), run.After(), func(ctx context.Context, seq uint64, chunk agent.Chunk) error {
+					if err := run.Emit(ctx, seq, chunk); err != nil {
+						return err
+					}
+					if seq == 1 {
+						<-ctx.Done()
+						return ctx.Err()
+					}
+					return nil
+				})
+				return loopback.Play(ctx, proxy)
+			}
 			return loopback.Play(ctx, run)
 		}
 		regs[i] = exampleRegistration(r)
@@ -103,7 +119,7 @@ func TestDelayedLoopbackMoveCuts(t *testing.T) {
 	if testing.Short() {
 		t.Skip("full cut matrix; recording/timer proof remains in short mode")
 	}
-	for _, cut := range []string{"processing", "playout"} {
+	for _, cut := range []string{"processing", "playout", "mid-emission"} {
 		t.Run(cut, func(t *testing.T) { testLoopMove(t, cut) })
 	}
 }
@@ -119,13 +135,22 @@ func testLoopMove(t *testing.T, cut string) {
 		call, err := sys.h.Dial(ctx, CallOptions{})
 		require.NoError(t, err)
 		received := receivePacer(call)
-		want := pacerFixtures(t, 20)
+		n := 20
+		if cut == "mid-emission" {
+			n = 40
+		}
+		want := pacerFixtures(t, n)
 		sendLoopPackets(t, call, want)
-		waitLoopState(t, sys.workers[0], call.SessionID(), func(s loopback.State) bool { return s.Packets == 20 })
+		waitLoopState(t, sys.workers[0], call.SessionID(), func(s loopback.State) bool { return s.Packets == uint32(n) })
 		var all []pacedPacket
 		switch cut {
 		case "processing":
 			require.Equal(t, encodedLoopPackets(want), waitLoopRequest(t, requests[0]))
+		case "mid-emission":
+			require.Equal(t, encodedLoopPackets(want), waitLoopRequest(t, requests[0]))
+			for range 5 {
+				all = append(all, nextPaced(t, received))
+			}
 		case "playout":
 			require.Equal(t, encodedLoopPackets(want), waitLoopRequest(t, requests[0]))
 			readTaskSnapshot(t, store, call.SessionID(), func(s taskSnapshot) bool { return len(s.State.Agent.V2.Tasks) == 1 && s.State.Agent.V2.Tasks[0].Final })
@@ -138,6 +163,11 @@ func testLoopMove(t *testing.T, cut string) {
 			all = append(all, nextPaced(t, received))
 		}
 		assertLoopPackets(t, all, want)
+		if cut == "mid-emission" {
+			gap := all[5].at.Sub(all[4].at)
+			t.Logf("MID_EMISSION_MOVE_GAP=%s", gap)
+			require.Less(t, gap, 250*time.Millisecond, "retry must not add the initial 300ms processing delay")
+		}
 		state := waitLoopState(t, sys.workers[1], call.SessionID(), func(s loopback.State) bool { return s.Turn == 2 })
 		require.NotNil(t, state.Resume)
 		require.Equal(t, agent.OK, state.Resume.MoveOnly)

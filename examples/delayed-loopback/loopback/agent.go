@@ -20,19 +20,32 @@ const (
 	MaxRecordingBytes = 64 << 10
 	RecordTime        = 2 * time.Second
 	recordTimer       = "record/v1"
+	stateVersion      = 2
+	// Leave room for a 1200-byte encoded packet and its two-byte length prefix.
+	recordingPacketHeadroom = 1200 + 2
 )
 
 // State is bounded metadata, suitable for the default 1 KiB app budget.
 // Cursor counts task chunks accepted by the app, not packets heard by a caller.
 type State struct {
-	Refused uint64              `json:"refused,omitempty"`
-	Turn    agent.Turn          `json:"turn"`
-	Phase   string              `json:"phase"`
-	Cursor  uint64              `json:"cursor"`
-	Packets uint32              `json:"packets"`
-	Seen    Window              `json:"seen"`
-	Outcome agent.Outcome       `json:"outcome,omitempty"`
-	Resume  *agent.ResumeNotice `json:"resume,omitempty"`
+	Refused uint64         `json:"refused,omitempty"`
+	Turn    agent.Turn     `json:"turn"`
+	Phase   string         `json:"phase"`
+	Cursor  uint64         `json:"cursor"`
+	Packets uint32         `json:"packets"`
+	Seen    Window         `json:"seen"`
+	Outcome agent.Outcome  `json:"outcome,omitempty"`
+	Resume  *ResumeSummary `json:"resume,omitempty"`
+}
+
+// ResumeSummary owns the app's persisted diagnostic schema. Host notices can
+// gain fields without changing these keys or the app's state-byte budget.
+type ResumeSummary struct {
+	Kind                 string        `json:"kind"`
+	CheckpointAge        time.Duration `json:"checkpoint_age_ns"`
+	SnapshotAge          time.Duration `json:"snapshot_age_ns"`
+	InputMayBeDuplicated bool          `json:"input_may_be_duplicated"`
+	MoveOnly             agent.Outcome `json:"move_only"`
 }
 
 // Window remembers sparse extended RTP indexes, including gaps and sequence
@@ -127,21 +140,14 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 	case agent.Started: // Started can be redelivered after an uncheckpointed start.
 	case agent.Resumed:
 		if e.Resume != nil {
-			notice := *e.Resume
-			// Duplicate ranges are host evidence, bounded independently. Keep compact
-			// notice metadata here; the sparse app window already tracks accepted input.
-			notice.DuplicateWindows = nil
-			a.state.Resume = &notice
-			if notice.MoveOnly == agent.OutcomeUnknown {
+			a.state.Resume = &ResumeSummary{Kind: string(e.Resume.Kind), CheckpointAge: e.Resume.CheckpointAge, SnapshotAge: e.Resume.SnapshotAge, InputMayBeDuplicated: e.Resume.InputMayBeDuplicated, MoveOnly: e.Resume.MoveOnly}
+			if e.Resume.MoveOnly == agent.OutcomeUnknown {
 				return a.next(agent.OutcomeUnknown), nil
 			}
 		}
 	case agent.AudioInput:
 		if e.Input == nil {
 			return agent.Effects{}, nil
-		}
-		if a.state.Seen.Set && a.state.Seen.SSRC != e.Input.Progress.SSRC {
-			return a.next(agent.Failed), nil
 		}
 		if !a.state.Seen.Accept(e.Input.Progress.SSRC, e.Input.Progress.Index) {
 			return agent.Effects{}, nil
@@ -170,7 +176,7 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 		a.recording = append(a.recording, packet...)
 		a.length = len(a.recording)
 		a.state.Packets++
-		if a.length >= MaxRecordingBytes-1202 {
+		if a.length >= MaxRecordingBytes-recordingPacketHeadroom {
 			return a.finish(), nil
 		}
 		if first {
@@ -216,15 +222,34 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 }
 func (a *Agent) Save(context.Context) (agent.State, error) {
 	data, err := json.Marshal(a.state)
-	return agent.State{Version: 1, Bytes: data, HasMoveOnly: a.length > 0, MoveOnlyLength: a.length}, err
+	return agent.State{Version: stateVersion, Bytes: data, HasMoveOnly: a.length > 0, MoveOnlyLength: a.length}, err
 }
 func (a *Agent) Restore(_ context.Context, s agent.State) error {
-	if s.Version != 1 {
+	if s.Version != 1 && s.Version != stateVersion {
 		return agent.ErrVersion
 	}
 	var state State
 	if err := json.Unmarshal(s.Bytes, &state); err != nil {
 		return err
+	}
+	// Read the first example's version 1 diagnostic shape without depending
+	// on the host struct. Every subsequent Save writes only version 2 app keys.
+	if s.Version == 1 {
+		var old struct {
+			Resume *struct {
+				Kind                 string        `json:"Kind"`
+				CheckpointAge        time.Duration `json:"CheckpointAge"`
+				SnapshotAge          time.Duration `json:"SnapshotAge"`
+				InputMayBeDuplicated bool          `json:"InputMayBeDuplicated"`
+				MoveOnly             agent.Outcome `json:"MoveOnly"`
+			} `json:"resume"`
+		}
+		if err := json.Unmarshal(s.Bytes, &old); err != nil {
+			return err
+		}
+		if r := old.Resume; r != nil {
+			state.Resume = &ResumeSummary{Kind: r.Kind, CheckpointAge: r.CheckpointAge, SnapshotAge: r.SnapshotAge, InputMayBeDuplicated: r.InputMayBeDuplicated, MoveOnly: r.MoveOnly}
+		}
 	}
 	if state.Turn == 0 || (state.Phase != "recording" && state.Phase != "processing" && state.Phase != "playout") {
 		return errors.New("loopback: invalid state")

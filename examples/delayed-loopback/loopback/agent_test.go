@@ -105,7 +105,7 @@ func TestBoundAndUnknownEvent(t *testing.T) {
 }
 func TestStateWorstCaseBudget(t *testing.T) {
 	a := New(agent.FactoryArgs{}).(*Agent)
-	a.state = State{Turn: math.MaxUint64, Phase: "processing", Cursor: math.MaxUint64, Packets: math.MaxUint32, Outcome: agent.OutcomeUnknown, Seen: Window{SSRC: math.MaxUint32, High: math.MaxUint64, Mask: [2]uint64{math.MaxUint64, math.MaxUint64}, Set: true}, Resume: &agent.ResumeNotice{ResumeNotice: legacy.ResumeNotice{Kind: legacy.Takeover, CheckpointAge: math.MaxInt64, SnapshotAge: math.MaxInt64, InputMayBeDuplicated: true, Progress: legacy.Progress{SSRC: math.MaxUint32, Index: math.MaxUint64, Timestamp: math.MaxUint32, Consumed: math.MaxUint64}}, MoveOnly: agent.OutcomeUnknown}}
+	a.state = State{Turn: math.MaxUint64, Phase: "processing", Cursor: math.MaxUint64, Packets: math.MaxUint32, Outcome: agent.OutcomeUnknown, Seen: Window{SSRC: math.MaxUint32, High: math.MaxUint64, Mask: [2]uint64{math.MaxUint64, math.MaxUint64}, Set: true}, Resume: &ResumeSummary{Kind: string(legacy.Takeover), CheckpointAge: math.MaxInt64, SnapshotAge: math.MaxInt64, InputMayBeDuplicated: true, MoveOnly: agent.OutcomeUnknown}}
 	s, err := a.Save(context.Background())
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(s.Bytes), 1024)

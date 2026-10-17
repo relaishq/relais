@@ -17,7 +17,10 @@ func TestDeliveredAtLeastOnceCommittedOnceAndReopen(t *testing.T) {
 	l, err := Open(path)
 	require.NoError(t, err)
 	commit := func(l *Ledger, value string) int {
-		body, err := json.Marshal(map[string]string{"key": "same-logical-task", "value": value})
+		body, err := json.Marshal(struct {
+			Key   string `json:"key"`
+			Value []byte `json:"value"`
+		}{"same-logical-task", []byte(value)})
 		require.NoError(t, err)
 		response := httptest.NewRecorder()
 		l.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/commit", bytes.NewReader(body)))
@@ -48,7 +51,7 @@ func TestOnlyLoopback(t *testing.T) {
 
 func TestRefusesUnterminatedRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ledger.jsonl")
-	data, err := json.Marshal(entry{Version: 1, Key: "one", Value: "effect", Number: 1})
+	data, err := json.Marshal(entry{Version: 2, Key: "one", Value: []byte("effect"), Number: 1})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, data, 0600))
 	l, err := Open(path)
@@ -56,4 +59,26 @@ func TestRefusesUnterminatedRecord(t *testing.T) {
 		require.NoError(t, l.Close())
 	}
 	require.Error(t, err, "an interrupted append must not concatenate the next record")
+}
+
+func TestReopensLegacyTextAndBinaryRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("{\"version\":1,\"key\":\"old\",\"value\":\"effect\",\"number\":1}\n"), 0600))
+	l, err := Open(path)
+	require.NoError(t, err)
+	body := []byte(`{"key":"new","value":"/w=="}`)
+	reply := httptest.NewRecorder()
+	l.ServeHTTP(reply, httptest.NewRequest(http.MethodPost, "/commit", bytes.NewReader(body)))
+	require.Equal(t, http.StatusOK, reply.Code)
+	require.NoError(t, l.Close())
+	l, err = Open(path)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, l.Close()) }()
+	for _, body := range []string{`{"key":"old","value":"ZWZmZWN0"}`, `{"key":"new","value":"/w=="}`} {
+		reply := httptest.NewRecorder()
+		l.ServeHTTP(reply, httptest.NewRequest(http.MethodPost, "/commit", bytes.NewBufferString(body)))
+		require.Equal(t, http.StatusOK, reply.Code)
+	}
+	_, commits := l.Counts()
+	require.Equal(t, 2, commits)
 }

@@ -17,7 +17,8 @@ CGO_ENABLED=0 go test ./examples/delayed-loopback/...
 ```
 
 The stable build target is `./examples/delayed-loopback`; the resulting worker is
-`bin/delayed-loopback`. Its default agent is `delayed-loopback/v1`. It accepts
+`bin/delayed-loopback`. The shared workerapp entrypoint makes `-version` print
+`relais-worker version=…`. Its default agent is `delayed-loopback/v1`. It accepts
 the stock worker's flags, including `-agent`, `-name`, `-media`, `-http`,
 `-control`, `-relay-leg`, `-relay-media`, `-redis`, `-redis-prefix`,
 `-frame-cache-off`, and `-drain-timeout`. Use this binary in place of
@@ -69,6 +70,8 @@ because a failed move can return the source to service. `RestoreMoveOnly` restor
 the exact bytes on a planned target. The loopback uses a version byte followed by
 big-endian packet lengths and encoded payloads. Its ordinary state holds the
 turn, phase, chunk cursor, packet and refusal counts, and a bounded sparse input window.
+State version 2 stores only app-owned diagnostic keys and reads the previous
+version 1 state for same-registration upgrades.
 That window accepts previously unseen indexes within its range, including gaps
 and RTP sequence wrap, while rejecting recorded duplicates.
 
@@ -88,10 +91,12 @@ only during the recording phase. Input during processing and playout is consumed
 without recording, and its indexes still enter the seen window.
 
 At the boundary the app replaces its recording state with a bounded `ReadOnly`
-task request. The handler waits 300 ms, computes SHA-256 over the versioned
-recording, then emits encoded chunks with stable sequences. Normal 20 ms input
+task request. Before its first accepted chunk, the handler waits 300 ms and
+computes SHA-256 over the versioned recording, then emits encoded chunks with
+stable sequences. Normal 20 ms input
 produces five packets per 100 ms chunk. Other packet durations keep their packet
 boundaries; chunks reach at least 100 ms and the final chunk may be shorter.
+A retry with accepted chunks skips that initial wait and resumes above `After()`.
 The host validates output framing, duration, MTU, and budgets. This example does
 not decode, encode, or resample audio.
 
@@ -121,7 +126,9 @@ it does not repeat an uncertain effect. Set a bounded timeout. The host preserve
 the absolute deadline on restore, so retry cannot extend it indefinitely.
 
 The separate [local ledger](../examples/delayed-loopback/ledger/ledger.go)
-demonstrates `SideEffecting` plus `Retry`. Inspect its server options with:
+demonstrates `SideEffecting` plus `Retry`. Set each ledger worker's
+`DELAYED_LOOPBACK_LEDGER_URL` to the ledger server's printed HTTP origin and
+select `-agent=local-ledger/v1`. Inspect its server options with:
 
 ```sh
 ./bin/delayed-loopback ledger -h
@@ -129,17 +136,21 @@ demonstrates `SideEffecting` plus `Retry`. Inspect its server options with:
 
 Run its `ledger` mode as a separate process on a literal loopback address, with
 `-file` naming its private JSON-lines file. Keep exactly one ledger server per
-file. Set each demo worker's `DELAYED_LOOPBACK_LEDGER_URL` to the printed HTTP
-origin and select `-agent=local-ledger/v1`. This separate registration commits one
-demonstration entry per call. It uses no provider and accepts only loopback HTTP.
+file. This separate registration commits one demonstration entry per call. It uses no provider and accepts only loopback HTTP.
 The loopback audio agent does not require the ledger.
 
 The ledger syncs a first commit before acknowledging it and returns the same
-receipt for the same key and value. Delivery can occur more than once; commit
-occurs once per logical key. A different value for that key is a conflict. The
-file survives worker and ledger restarts. Lost replies, server uncertainty, and
-unverifiable receipts end with `OutcomeUnknown`; they do not prove that no commit
-occurred. A write error makes the running ledger
+receipt for the same key and exact request bytes. JSON carries those bytes as
+base64, including non-UTF-8 requests. New ledger records use version 2; the
+reader also accepts version 1 text records. Upgrade the ledger server and workers
+together: the base64 HTTP value differs from the original text wire format.
+Delivery can occur more than once; commit occurs once per logical key. A different value for that key is a conflict. The
+file survives worker and ledger restarts. After a lost reply, server uncertainty,
+or an unverifiable receipt, the handler makes one same-key retry with identical
+request bytes within the remaining 10-second task budget. Cancellation stops the
+retry. If both deliveries remain uncertain, it returns `OutcomeUnknown`; that
+does not prove that no commit occurred. Conflicts and definitive failures are
+not retried. A write error makes the running ledger
 refuse further writes; a malformed file is refused on reopen. Inspect such a
 file before recovery. This small example is bounded at 4,096 entries and is not a
 production database or an atomic transaction between Relais and a provider.
@@ -220,6 +231,7 @@ checks that crash-lost bytes do not block adoption. Heavy matrices skip under
 Private worker `GET /status?agent-session=<id>` shows copied app metadata,
 input/task cursors, pending move reservations, recording/request/playback bytes,
 current checkpoint and snapshot ages, and the app's last resume/replay notice.
+An unknown session returns HTTP **409** with `unknown_session`.
 It reads accepted cached state without calling Save. Pending reservations include
 bookkeeping; they are not exported HTTP sizes. Signal does not expose this query
 or the private diagnostic state.

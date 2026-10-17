@@ -34,7 +34,7 @@ const maxEntries = 4096
 type entry struct {
 	Version int    `json:"version"`
 	Key     string `json:"key"`
-	Value   string `json:"value"`
+	Value   []byte `json:"value"`
 	Number  int    `json:"number"`
 }
 
@@ -76,11 +76,11 @@ func Open(path string) (*Ledger, error) {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		var e entry
-		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
+		if err := decodeEntry(scanner.Bytes(), &e); err != nil {
 			_ = f.Close()
 			return nil, fmt.Errorf("ledger: malformed record: %w", err)
 		}
-		if e.Version != 1 || e.Key == "" || e.Number != len(l.entries)+1 || len(l.entries) >= maxEntries {
+		if e.Version != 2 || e.Key == "" || e.Number != len(l.entries)+1 || len(l.entries) >= maxEntries {
 			_ = f.Close()
 			return nil, errors.New("ledger: invalid record")
 		}
@@ -96,6 +96,37 @@ func Open(path string) (*Ledger, error) {
 	}
 	return l, nil
 }
+
+// Version 2 stores bytes as JSON base64. Read version 1's text records for
+// existing example files; decoding never treats old text as base64.
+func decodeEntry(data []byte, e *entry) error {
+	var wire struct {
+		Version int             `json:"version"`
+		Key     string          `json:"key"`
+		Value   json.RawMessage `json:"value"`
+		Number  int             `json:"number"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	*e = entry{Version: 2, Key: wire.Key, Number: wire.Number}
+	switch wire.Version {
+	case 1:
+		var text string
+		if err := json.Unmarshal(wire.Value, &text); err != nil {
+			return err
+		}
+		e.Value = []byte(text)
+	case 2:
+		if err := json.Unmarshal(wire.Value, &e.Value); err != nil {
+			return err
+		}
+	default:
+		return errors.New("ledger: unknown record version")
+	}
+	return nil
+}
+
 func (l *Ledger) Close() error { return l.file.Close() }
 
 // Counts is local test/diagnostic evidence: delivery can exceed commit count.
@@ -111,7 +142,7 @@ func (l *Ledger) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var incoming struct {
 		Key   string `json:"key"`
-		Value string `json:"value"`
+		Value []byte `json:"value"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
@@ -127,7 +158,7 @@ func (l *Ledger) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	e, exists := l.entries[incoming.Key]
-	if exists && e.Value != incoming.Value {
+	if exists && !bytes.Equal(e.Value, incoming.Value) {
 		http.Error(w, "idempotency conflict", http.StatusConflict)
 		return
 	}
@@ -136,7 +167,7 @@ func (l *Ledger) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "ledger capacity", http.StatusInsufficientStorage)
 			return
 		}
-		e = entry{Version: 1, Key: incoming.Key, Value: incoming.Value, Number: len(l.entries) + 1}
+		e = entry{Version: 2, Key: incoming.Key, Value: incoming.Value, Number: len(l.entries) + 1}
 		data, err := json.Marshal(e)
 		if err == nil {
 			data = append(data, '\n')
@@ -184,55 +215,72 @@ func Handler(origin string) agent.TaskHandler {
 		if err != nil {
 			return run.Fail(agent.Failed, err.Error())
 		}
+		request := run.Spec().Request
 		data, err := json.Marshal(struct {
 			Key   string `json:"key"`
-			Value string `json:"value"`
-		}{run.Key(), string(run.Spec().Request)})
+			Value []byte `json:"value"`
+		}{run.Key(), request})
 		if err != nil {
 			return err
 		}
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String()+"/commit", bytes.NewReader(data))
-		if err != nil {
-			return err
-		}
-		req.Header.Set("Content-Type", "application/json")
-		// No proxies, redirects, or in-handler retry. Move/takeover retry uses the
-		// SAME run.Key; a new key would turn an uncertain delivery into another effect.
+		// A task attempt gets at most two deliveries. Both use the same key,
+		// immutable request bytes, and parent deadline; cancellation stops retry.
 		client := &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 		defer client.CloseIdleConnections()
-		response, err := client.Do(req)
-		if err != nil {
+		var reply []byte
+		for attempt := 0; attempt < 2; attempt++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			var outcome agent.Outcome
+			reply, outcome, err = commitAttempt(ctx, client, u.String()+"/commit", data, run.Key(), request)
+			if err == nil {
+				break
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			return run.Fail(agent.OutcomeUnknown, "ledger delivery has no verified reply")
-		}
-		defer func() { _ = response.Body.Close() }()
-		if response.StatusCode == 507 {
-			return run.Fail(agent.Capacity, "ledger is full")
-		}
-		if response.StatusCode != http.StatusOK {
-			if response.StatusCode >= 400 && response.StatusCode < 500 {
-				return run.Fail(agent.Failed, "ledger refused commit")
+			if outcome != agent.OutcomeUnknown || attempt == 1 {
+				return run.Fail(outcome, err.Error())
 			}
-			return run.Fail(agent.OutcomeUnknown, "ledger commit is unverified")
-		}
-		reply, err := io.ReadAll(io.LimitReader(response.Body, 4097))
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return run.Fail(agent.OutcomeUnknown, "ledger receipt was lost")
-		}
-		var receipt entry
-		if len(reply) > 4096 || json.Unmarshal(reply, &receipt) != nil || receipt.Version != 1 || receipt.Key != run.Key() || receipt.Value != string(run.Spec().Request) {
-			return run.Fail(agent.OutcomeUnknown, "unverified ledger receipt")
 		}
 		if run.After() < 1 {
 			return run.Emit(ctx, 1, agent.Chunk{Data: reply})
 		}
 		return nil
 	}
+}
+
+// commitAttempt owns and closes one HTTP response before another delivery.
+func commitAttempt(ctx context.Context, client *http.Client, endpoint string, data []byte, key string, request []byte) ([]byte, agent.Outcome, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(data))
+	if err != nil {
+		return nil, agent.Failed, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(req)
+	if err != nil {
+		return nil, agent.OutcomeUnknown, errors.New("ledger delivery has no verified reply")
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode == http.StatusInsufficientStorage {
+		return nil, agent.Capacity, errors.New("ledger is full")
+	}
+	if response.StatusCode != http.StatusOK {
+		if response.StatusCode >= 400 && response.StatusCode < 500 {
+			return nil, agent.Failed, errors.New("ledger refused commit")
+		}
+		return nil, agent.OutcomeUnknown, errors.New("ledger commit is unverified")
+	}
+	reply, err := io.ReadAll(io.LimitReader(response.Body, 4097))
+	if err != nil {
+		return nil, agent.OutcomeUnknown, errors.New("ledger receipt was lost")
+	}
+	var receipt entry
+	if len(reply) > 4096 || json.Unmarshal(reply, &receipt) != nil || receipt.Version != 2 || receipt.Key != key || !bytes.Equal(receipt.Value, request) {
+		return nil, agent.OutcomeUnknown, errors.New("unverified ledger receipt")
+	}
+	return reply, agent.OK, nil
 }
 
 type demoAgent struct {

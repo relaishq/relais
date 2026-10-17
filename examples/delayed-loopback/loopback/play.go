@@ -13,12 +13,17 @@ import (
 // packets. Partitioning and sequence numbers depend only on the request. After
 // skips already accepted chunks on a retried attempt, including an exact move.
 func Play(ctx context.Context, run *agent.TaskRun) error {
-	timer := time.NewTimer(300 * time.Millisecond)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-	case <-ctx.Done():
-		return ctx.Err()
+	if run.After() == 0 {
+		timer := time.NewTimer(300 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	request := run.Spec().Request
 	recording, err := packets(request)

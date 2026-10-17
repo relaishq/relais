@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,7 +38,9 @@ func TestLedgerExampleTypedOutcomes(t *testing.T) {
 				require.NoError(t, err)
 				defer func() { require.NoError(t, service.Close()) }()
 			}
+			var requests atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
 				if tc.status == 0 {
 					service.ServeHTTP(httptest.NewRecorder(), r)
 					conn, _, err := w.(http.Hijacker).Hijack()
@@ -60,9 +63,14 @@ func TestLedgerExampleTypedOutcomes(t *testing.T) {
 			var failure *taskrun.Failure
 			require.True(t, errors.As(err, &failure), "handler must return a typed outcome: %v", err)
 			require.Equal(t, tc.outcome, failure.Outcome)
+			want := int32(1)
+			if tc.outcome == agent.OutcomeUnknown {
+				want = 2
+			}
+			require.Equal(t, want, requests.Load(), "uncertain retries are bounded; definitive outcomes are not retried")
 			if service != nil {
 				deliveries, commits := service.Counts()
-				require.Equal(t, 1, deliveries)
+				require.Equal(t, 2, deliveries)
 				require.Equal(t, 1, commits)
 			}
 		})
