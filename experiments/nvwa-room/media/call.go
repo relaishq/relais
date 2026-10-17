@@ -103,6 +103,10 @@ type Call struct {
 }
 
 func Dial(ctx context.Context, signal *Signal, worker string, samples, peer [][]byte, data bool) (*Call, error) {
+	return DialPolicy(ctx, signal, worker, samples, peer, data, false)
+}
+
+func DialPolicy(ctx context.Context, signal *Signal, worker string, samples, peer [][]byte, data, reliableState bool) (*Call, error) {
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{BundlePolicy: webrtc.BundlePolicyMaxBundle, RTCPMuxPolicy: webrtc.RTCPMuxPolicyRequire})
 	if err != nil {
 		return nil, err
@@ -165,7 +169,7 @@ func Dial(ctx context.Context, signal *Signal, worker string, samples, peer [][]
 		}
 	})
 	if data {
-		c.dc, err = NewDC(pc)
+		c.dc, err = NewDCPolicy(pc, reliableState)
 		if err != nil {
 			_ = pc.Close()
 			return nil, err

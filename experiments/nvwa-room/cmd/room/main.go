@@ -18,16 +18,20 @@ func main() {
 	signal := flag.String("signal", "", "signal HTTPS URL")
 	cert := flag.String("signal-cert", "", "signal CA")
 	token := flag.String("signal-token", "", "signal token file")
+	privateNet := flag.String("spike-private-net", "", "spike-only owned namespace CIDR")
+	networkState := flag.Bool("network-state-channel", false, "spike-only state broadcasts on state channel")
 	faults := flag.Bool("test-faults", false, "allow receipt suppression")
 	flag.Parse()
 	for _, s := range []string{*addr, *audio} {
 		a, e := netip.ParseAddrPort(s)
-		if e != nil || !a.Addr().IsLoopback() {
+		prefix, _ := netip.ParsePrefix(*privateNet)
+		if e != nil || (!a.Addr().IsLoopback() && !prefix.Contains(a.Addr())) {
 			log.Fatal("loopback endpoints required")
 		}
 	}
 	r := room.New("nvwa-spike")
 	r.AllowFaults = *faults
+	r.NetworkStateChannel = *networkState
 	udp, e := net.ResolveUDPAddr("udp", *audio)
 	if e != nil {
 		log.Fatal(e)

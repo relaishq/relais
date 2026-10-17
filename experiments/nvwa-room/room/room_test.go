@@ -280,3 +280,54 @@ func TestBurstProbeIsBoundedAndOptIn(t *testing.T) {
 	}
 	require.Zero(t, r.Metrics().Applied)
 }
+
+// The actual send queue must route state broadcasts onto the selected state
+// channel. A control-only snapshot would hide the partial-reliability variant.
+func TestNetworkStateBroadcastUsesStateChannel(t *testing.T) {
+	r, c, m := bound(t)
+	r.NetworkStateChannel = true
+	token, _, err := r.Lobby()
+	require.NoError(t, err)
+	peer := newConnection(r, nil, true)
+	joined := r.Handle(peer, Message{Type: "join", RoomID: r.ID, Token: token})
+	require.Empty(t, joined.Error)
+	m.Type, m.Seq, m.SentNS, m.Payload = "state", 2, 123, json.RawMessage(`{"x":2}`)
+	require.Empty(t, r.Handle(c, m).Error)
+	frame := <-peer.queue
+	size := int(frame.data[1])
+	require.Equal(t, "state", string(frame.data[2:2+size]))
+	var update Reply
+	require.NoError(t, json.Unmarshal(frame.data[2+size:], &update))
+	require.Equal(t, "state-update", update.Type)
+	require.EqualValues(t, 2, update.Seq)
+	require.EqualValues(t, 123, update.SentNS)
+	require.Equal(t, "p1", update.PlayerID)
+	require.Equal(t, m.Payload, update.Players[0].State)
+	// Commands still broadcast on control.
+	m = trigger(m)
+	require.True(t, r.Handle(c, m).Result.Applied)
+	frame = <-peer.queue
+	require.Equal(t, "control", string(frame.data[2:2+int(frame.data[1])]))
+	update = Reply{}
+	require.NoError(t, json.Unmarshal(frame.data[2+int(frame.data[1]):], &update))
+	for _, player := range update.Players {
+		require.Empty(t, player.State)
+		require.Zero(t, player.StateSeq)
+		require.Zero(t, player.StateSentNS)
+	}
+}
+
+func TestNetworkBarrierDoesNotPauseSurvivingWebSocket(t *testing.T) {
+	r, c, m := bound(t)
+	r.AllowFaults = true
+	m = trigger(m)
+	m.TestBarrier, m.DropReceipt = true, true
+	require.Nil(t, r.Handle(c, m))
+	require.EqualValues(t, 1, r.Metrics().HeldCommandApplications)
+	require.True(t, c.pauseUntil.IsZero())
+	m.DropReceipt, m.TestBarrier = false, false
+	retry := r.Handle(c, m)
+	require.True(t, retry.Result.Applied)
+	require.EqualValues(t, 1, r.Metrics().Applied)
+	require.EqualValues(t, 1, r.Metrics().Deduplicated)
+}

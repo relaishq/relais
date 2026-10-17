@@ -177,3 +177,15 @@ func (c *Client) Observations() []Observation {
 	return append([]Observation(nil), c.observations...)
 }
 func WSURL(base string) string { return "ws" + strings.TrimPrefix(base, "http") + "/ws" }
+
+// SendState sends at the producer cadence without waiting for an unreliable receipt.
+func (c *Client) SendState(m room.Message) (int, error) {
+	m.RoomID, m.Epoch, m.Generation = c.Credentials.RoomID, c.Credentials.Epoch, c.Generation
+	b, err := json.Marshal(m)
+	if err != nil {
+		return 0, err
+	}
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	return len(b), c.Conn.Send(b)
+}

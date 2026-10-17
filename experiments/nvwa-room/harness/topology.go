@@ -17,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/relaishq/relais/internal/nettopology"
 )
 
 type Child struct {
@@ -27,6 +29,7 @@ type Child struct {
 	log  *os.File
 }
 type Config struct {
+	Media     string   `json:"media"`
 	RoomURL   string   `json:"room_url"`
 	Audio     string   `json:"audio_bus"`
 	SignalURL string   `json:"signal_url"`
@@ -43,6 +46,8 @@ type Topology struct {
 	mu             sync.Mutex
 	env            []string
 	data           bool
+	network        *nettopology.Topology
+	networkState   bool
 }
 
 func tcpPort() (int, error) {
@@ -74,6 +79,22 @@ func (t *Topology) start(name, binary string, args []string, env []string) (*Chi
 		return nil, e
 	}
 	cmd := exec.Command(binary, args...)
+	if t.network != nil {
+		role := name
+		if name == "worker-1" {
+			role = "worker-0"
+		}
+		if name == "worker-2" {
+			role = "worker-1"
+		}
+		switch name {
+		case "redis", "room":
+			role = "store"
+		case "signal":
+			role = "relay"
+		}
+		cmd = exec.Command("ip", append([]string{"netns", "exec", t.network.Plan.Roles[role].Namespace, binary}, args...)...)
+	}
 	cmd.Env = env
 	cmd.Dir = t.Root
 	cmd.Stdout = f
@@ -103,7 +124,15 @@ func waitTCP(ctx context.Context, addr string) error {
 	}
 }
 func Start(ctx context.Context, bin, root, dir string, data bool) (*Topology, error) {
-	t := &Topology{Dir: dir, Bin: bin, Root: root, data: data}
+	return start(ctx, bin, root, dir, data, nil, false)
+}
+
+// StartNetwork keeps all namespace changes in the disposable spike.
+func StartNetwork(ctx context.Context, bin, root, dir string, data bool, network *nettopology.Topology) (*Topology, error) {
+	return start(ctx, bin, root, dir, data, network, true)
+}
+func start(ctx context.Context, bin, root, dir string, data bool, network *nettopology.Topology, networkState bool) (*Topology, error) {
+	t := &Topology{Dir: dir, Bin: bin, Root: root, data: data, network: network, networkState: networkState}
 	if e := os.MkdirAll(dir, 0700); e != nil {
 		return nil, e
 	}
@@ -130,6 +159,10 @@ func Start(ctx context.Context, bin, root, dir string, data bool) (*Topology, er
 	}
 	up := make([]int, 5)
 	usedUDP := map[int]bool{6379: true, 9101: true, 9201: true}
+	// Address selection below keys by port, so keep TCP and UDP numbers distinct.
+	for _, port := range ports {
+		usedUDP[port] = true
+	}
 	for i := range up {
 		p, e := udpPort()
 		if e != nil {
@@ -144,9 +177,29 @@ func Start(ctx context.Context, bin, root, dir string, data bool) (*Topology, er
 		usedUDP[p] = true
 		up[i] = p
 	}
-	address := func(p int) string { return fmt.Sprintf("127.0.0.1:%d", p) }
+	address := func(p int) string {
+		host := "127.0.0.1"
+		if network != nil {
+			role := "relay"
+			switch p {
+			case redis, roomHTTP, up[4]:
+				role = "store"
+			case control:
+				role = "control"
+			case worker1, up[2]:
+				role = "worker-0"
+			case worker2, up[3]:
+				role = "worker-1"
+			}
+			host = network.Plan.Roles[role].Private.String()
+			if p == up[0] {
+				host = network.Plan.Roles["relay"].Public.String()
+			}
+		}
+		return net.JoinHostPort(host, fmt.Sprint(p))
+	}
 	httpURL := func(p int) string { return "http://" + address(p) }
-	t.Config = Config{RoomURL: httpURL(roomHTTP), Audio: "udp://" + address(up[4]), SignalURL: "https://" + address(signal), Cert: filepath.Join(dir, "signal.pem"), Token: filepath.Join(dir, "signal.token"), Control: httpURL(control), Redis: address(redis)}
+	t.Config = Config{Media: address(up[0]), RoomURL: httpURL(roomHTTP), Audio: "udp://" + address(up[4]), SignalURL: "https://" + address(signal), Cert: filepath.Join(dir, "signal.pem"), Token: filepath.Join(dir, "signal.token"), Control: httpURL(control), Redis: address(redis)}
 	if e := os.WriteFile(t.Config.Token, []byte(randomHex()), 0600); e != nil {
 		return fail(e)
 	}
@@ -155,8 +208,11 @@ func Start(ctx context.Context, bin, root, dir string, data bool) (*Topology, er
 			t.env = append(t.env, entry)
 		}
 	}
+	if network != nil {
+		t.env = append(t.env, "RELAIS_PRIVATE_NETS="+network.Plan.PrivateNets())
+	}
 	t.env = append(t.env, "RELAIS_REDIS_ADDR="+address(redis), "RELAIS_REDIS_PREFIX=nvwa:"+randomHex()+":", "RELAIS_SESSIONSTORE_KEY="+randomHex())
-	_, e := t.start("redis", "redis-server", []string{"--bind", "127.0.0.1", "--port", fmt.Sprint(redis), "--save", "", "--appendonly", "no", "--dir", dir}, t.env)
+	_, e := t.start("redis", "redis-server", []string{"--bind", strings.Split(address(redis), ":")[0], "--port", fmt.Sprint(redis), "--save", "", "--appendonly", "no", "--dir", dir}, t.env)
 	if e != nil {
 		return fail(e)
 	}
@@ -194,14 +250,21 @@ func Start(ctx context.Context, bin, root, dir string, data bool) (*Topology, er
 	if e = waitTCP(ctx, address(control)); e != nil {
 		return fail(e)
 	}
-	_, e = t.start("signal", filepath.Join(bin, "relais-signal"), []string{"-listen", address(signal), "-control", httpURL(control), "-advertise-ips", "127.0.0.1", "-token-file", t.Config.Token, "-cert-out", t.Config.Cert}, t.env)
+	_, e = t.start("signal", filepath.Join(bin, "relais-signal"), []string{"-listen", address(signal), "-control", httpURL(control), "-advertise-ips", strings.Split(address(signal), ":")[0], "-token-file", t.Config.Token, "-cert-out", t.Config.Cert}, t.env)
 	if e != nil {
 		return fail(e)
 	}
 	if e = waitTCP(ctx, address(signal)); e != nil {
 		return fail(e)
 	}
-	_, e = t.start("room", filepath.Join(bin, "room"), []string{"-http", address(roomHTTP), "-audio", address(up[4]), "-test-faults", "-web", filepath.Join(root, "experiments/nvwa-room/web"), "-signal", t.Config.SignalURL, "-signal-cert", t.Config.Cert, "-signal-token", t.Config.Token}, t.env)
+	roomArgs := []string{"-http", address(roomHTTP), "-audio", address(up[4]), "-test-faults", "-web", filepath.Join(root, "experiments/nvwa-room/web"), "-signal", t.Config.SignalURL, "-signal-cert", t.Config.Cert, "-signal-token", t.Config.Token}
+	if networkState {
+		roomArgs = append(roomArgs, "-network-state-channel")
+	}
+	if network != nil {
+		roomArgs = append(roomArgs, "-spike-private-net", network.Plan.PrivateNets())
+	}
+	_, e = t.start("room", filepath.Join(bin, "room"), roomArgs, t.env)
 	if e != nil {
 		return fail(e)
 	}

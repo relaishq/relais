@@ -20,7 +20,12 @@ type DC struct {
 }
 
 func NewDC(pc *webrtc.PeerConnection) (*DC, error) {
-	d := &DC{incoming: make(chan []byte, 16), done: make(chan struct{})}
+	return NewDCPolicy(pc, false)
+}
+
+// NewDCPolicy changes only the state channel; control is always reliable.
+func NewDCPolicy(pc *webrtc.PeerConnection, reliableState bool) (*DC, error) {
+	d := &DC{incoming: make(chan []byte, 512), done: make(chan struct{})}
 	var err error
 	d.control, err = pc.CreateDataChannel("control", nil)
 	if err != nil {
@@ -28,7 +33,11 @@ func NewDC(pc *webrtc.PeerConnection) (*DC, error) {
 	}
 	ordered := false
 	retries := uint16(0)
-	d.state, err = pc.CreateDataChannel("state", &webrtc.DataChannelInit{Ordered: &ordered, MaxRetransmits: &retries})
+	stateInit := &webrtc.DataChannelInit{Ordered: &ordered, MaxRetransmits: &retries}
+	if reliableState {
+		stateInit = nil
+	}
+	d.state, err = pc.CreateDataChannel("state", stateInit)
 	if err != nil {
 		return nil, err
 	}

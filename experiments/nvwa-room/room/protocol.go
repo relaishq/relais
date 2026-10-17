@@ -15,6 +15,7 @@ const MaxRate = 120
 
 // Message is shared by both transports. Identity is obtained only from Token.
 type Message struct {
+	TestBarrier bool            `json:"test_barrier,omitempty"`
 	TestPauseMS int             `json:"test_pause_ms,omitempty"`
 	Type        string          `json:"type"`
 	RequestID   string          `json:"request_id,omitempty"`

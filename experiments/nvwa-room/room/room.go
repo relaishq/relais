@@ -45,13 +45,14 @@ type Metrics struct {
 	Connections             int              `json:"connections"`
 }
 type Room struct {
-	mu          sync.Mutex
-	ID, Epoch   string
-	version     uint64
-	start       time.Time
-	identities  map[string]*identity
-	metrics     Metrics
-	AllowFaults bool
+	mu                  sync.Mutex
+	ID, Epoch           string
+	version             uint64
+	start               time.Time
+	identities          map[string]*identity
+	metrics             Metrics
+	AllowFaults         bool
+	NetworkStateChannel bool
 }
 
 func randomID() string {
@@ -215,7 +216,18 @@ func (r *Room) Handle(c *Connection, m Message) *Reply {
 		p.player.StateSentNS = m.SentNS
 		r.version++
 		v.Version = r.version
-		r.broadcast(c)
+		if r.NetworkStateChannel {
+			update := r.reply(Message{}, "state-update")
+			update.PlayerID, update.Seq, update.SentNS = p.player.ID, m.Seq, m.SentNS
+			update.Players = []Player{p.player}
+			for _, other := range r.identities {
+				if other.conn != nil && other.conn != c && other.player.Joined {
+					other.conn.send(update, "state")
+				}
+			}
+		} else {
+			r.broadcast(c)
+		}
 		return &v
 	case "trigger", "stop", "leave":
 		if m.CommandID == "" || len(m.CommandID) > 64 || m.InputSeq == 0 || m.Digest == "" || m.Digest != Digest(m.Payload) {
@@ -265,10 +277,12 @@ func (r *Room) Handle(c *Connection, m Message) *Reply {
 		r.version++
 		r.metrics.Applied++
 		if r.AllowFaults {
-			if m.TestPauseMS > 0 {
+			if m.TestPauseMS > 0 || m.TestBarrier {
 				r.metrics.HeldCommandID = m.CommandID
 				c.mu.Lock()
-				c.pauseUntil = time.Now().Add(time.Duration(m.TestPauseMS) * time.Millisecond)
+				if m.TestPauseMS > 0 {
+					c.pauseUntil = time.Now().Add(time.Duration(m.TestPauseMS) * time.Millisecond)
+				}
 				c.mu.Unlock()
 			}
 			if m.CommandID == r.metrics.HeldCommandID {
@@ -291,6 +305,14 @@ func (r *Room) Handle(c *Connection, m Message) *Reply {
 }
 func (r *Room) broadcast(except *Connection) {
 	v := r.snapshot(Message{}, "snapshot")
+	if r.NetworkStateChannel {
+		// Keep reliable command snapshots from becoming a second state delivery path.
+		for i := range v.Players {
+			v.Players[i].State = nil
+			v.Players[i].StateSeq = 0
+			v.Players[i].StateSentNS = 0
+		}
+	}
 	for _, p := range r.identities {
 		if p.conn != nil && p.conn != except && p.player.Joined {
 			p.conn.send(v, "control")

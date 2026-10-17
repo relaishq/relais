@@ -11,9 +11,9 @@ on:
   workflow_dispatch:
     inputs:
       network_profile_lane:
-        description: Network profile matrix to run (other CI jobs still run)
+        description: Network profile lane (nvwa-dc-vs-ws runs only the spike comparison)
         type: choice
-        options: [all, lossy-dc-move]
+        options: [all, lossy-dc-move, nvwa-dc-vs-ws]
         default: all
       private_route_tuning:
         description: Tune private DC namespace routes with rto_min 5ms and quickack
@@ -39,6 +39,7 @@ concurrency:
 
 jobs:
   quality:
+    if: inputs.network_profile_lane != 'nvwa-dc-vs-ws'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -74,7 +75,7 @@ jobs:
   # always() turns a failed dependency into a failed check, rather than a skip.
   build:
     needs: [quality, unit-tests, timing-smoke, call-harness]
-    if: ${{ always() }}
+    if: ${{ inputs.network_profile_lane != 'nvwa-dc-vs-ws' && (always()) }}
     runs-on: ubuntu-latest
     steps:
       - name: Require all essential checks
@@ -93,7 +94,7 @@ jobs:
           fi
 
   benchmark:
-    if: github.event_name != 'pull_request'
+    if: ${{ inputs.network_profile_lane != 'nvwa-dc-vs-ws' && (github.event_name != 'pull_request') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -107,6 +108,7 @@ jobs:
         run: make bench
 
   unit-tests:
+    if: inputs.network_profile_lane != 'nvwa-dc-vs-ws'
     runs-on: ubuntu-latest
     services:
       redis:
@@ -146,6 +148,7 @@ jobs:
   # PRs run the short memory matrix plus a Redis uncertainty regression.
   # Main, nightly and manual runs exercise both stores in full.
   call-harness:
+    if: inputs.network_profile_lane != 'nvwa-dc-vs-ws'
     # Includes the 15-minute PR suite and the longer main/nightly matrix.
     timeout-minutes: 90
     runs-on: ubuntu-latest
@@ -190,7 +193,7 @@ jobs:
         run: make test-harness-timing
 
   timing-smoke:
-    if: github.event_name == 'pull_request'
+    if: ${{ inputs.network_profile_lane != 'nvwa-dc-vs-ws' && (github.event_name == 'pull_request') }}
     runs-on: ubuntu-latest
     env:
       RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
@@ -207,7 +210,7 @@ jobs:
 
   crash-run:
     timeout-minutes: 35
-    if: github.event_name != 'pull_request'
+    if: ${{ inputs.network_profile_lane != 'nvwa-dc-vs-ws' && (github.event_name != 'pull_request') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -249,7 +252,7 @@ jobs:
     permissions:
       contents: read
     timeout-minutes: 35
-    if: github.event_name != 'pull_request'
+    if: ${{ inputs.network_profile_lane != 'nvwa-dc-vs-ws' && (github.event_name != 'pull_request') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -292,7 +295,7 @@ jobs:
   # separate from the phase-1 cache and relay-continuity comparisons.
   crash-run-buffer:
     timeout-minutes: 35
-    if: github.event_name != 'pull_request'
+    if: ${{ inputs.network_profile_lane != 'nvwa-dc-vs-ws' && (github.event_name != 'pull_request') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -313,7 +316,7 @@ jobs:
 
   store-stall:
     timeout-minutes: 25
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: ${{ inputs.network_profile_lane != 'nvwa-dc-vs-ws' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -345,6 +348,7 @@ jobs:
           path: bin/crash-run-*
 
   cluster-tests-gate:
+    if: inputs.network_profile_lane != 'nvwa-dc-vs-ws'
     runs-on: ubuntu-latest
     outputs:
       should_run: ${{ steps.gate.outputs.should_run }}
@@ -362,7 +366,7 @@ jobs:
 
   cluster-tests:
     needs: cluster-tests-gate
-    if: ${{ needs.cluster-tests-gate.outputs.should_run == 'true' }}
+    if: ${{ inputs.network_profile_lane != 'nvwa-dc-vs-ws' && (needs.cluster-tests-gate.outputs.should_run == 'true') }}
     env:
       RELAIS_TEST_REDIS_CLUSTER_ADDRS: ${{ secrets.RELAIS_TEST_REDIS_CLUSTER_ADDRS }}
     runs-on: self-hosted
@@ -384,7 +388,7 @@ jobs:
     timeout-minutes: 35
     permissions:
       contents: read
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: ${{ inputs.network_profile_lane != 'nvwa-dc-vs-ws' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -457,7 +461,7 @@ jobs:
     timeout-minutes: ${{ matrix.job_minutes }}
     permissions:
       contents: read
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: ${{ inputs.network_profile_lane != 'nvwa-dc-vs-ws' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -553,3 +557,111 @@ jobs:
           path: |
             bin/network-profile-*.log
             bin/crash-run-*
+
+  # Disposable spike lane: never enters the normal aggregate or main defaults.
+  nvwa-dc-vs-ws:
+    if: github.event_name == 'workflow_dispatch' && inputs.network_profile_lane == 'nvwa-dc-vs-ws'
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [lan, region, far-caller, lossy-dc, poor-wifi]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install namespace tools and fixtures without starting Redis
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '#!/bin/sh\nexit 101\n' > "$RUNNER_TEMP/policy-rc.d"
+          if [ -e /usr/sbin/policy-rc.d ]; then
+            sudo cp -p /usr/sbin/policy-rc.d "$RUNNER_TEMP/original-policy-rc.d"
+            trap 'sudo cp -p "$RUNNER_TEMP/original-policy-rc.d" /usr/sbin/policy-rc.d' EXIT
+          else
+            trap 'sudo rm -f /usr/sbin/policy-rc.d' EXIT
+          fi
+          sudo install -m 755 "$RUNNER_TEMP/policy-rc.d" /usr/sbin/policy-rc.d
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends iproute2 iptables procps redis-server ffmpeg
+      - name: Build spike and namespace checks as the normal user
+        run: |
+          go mod download
+          bash experiments/nvwa-room/scripts/build.sh "$RUNNER_TEMP/nvwa-build"
+          go test -c -o "$RUNNER_TEMP/nvwa-build/bin/nettopology.test" ./internal/nettopology
+          go test -c -o "$RUNNER_TEMP/nvwa-build/bin/clusterprocess.test" ./internal/clusterprocess
+      - name: Verify comparison policies and evidence reducer
+        run: |
+          go test -race ./experiments/nvwa-room/...
+          python3 experiments/nvwa-room/scripts/test_network_summary.py
+      - name: Verify namespace isolation, profile delay and cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bin/nvwa-network
+          sudo -E env RELAIS_TEST_NETNS_REQUIRE=1 "$RUNNER_TEMP/nvwa-build/bin/nettopology.test" -test.v -test.timeout=4m 2>&1 | tee bin/nvwa-network/netns-tests.log
+          sudo -E "$RUNNER_TEMP/nvwa-build/bin/clusterprocess.test" -test.v -test.run='^Test(NamespaceCommand|ManagerCleanupAfterChildren|StopReapedChildCannotSignalReusedGroup|DriverDoubleSignalCleanup)$' -test.timeout=3m 2>&1 | tee bin/nvwa-network/netns-process-tests.log
+      - name: Run paired fixed-cadence comparison
+        timeout-minutes: 28
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp "$RUNNER_TEMP/nvwa-build/build-sha256.txt" "$RUNNER_TEMP/nvwa-build/runtime-source-sha256.json" bin/nvwa-network/
+          uname -a | tee bin/nvwa-network/kernel.log
+          sudo -E python3 experiments/nvwa-room/scripts/run-network.py --scratch "$RUNNER_TEMP/nvwa-build" --out bin/nvwa-network/${{ matrix.profile }} --topology netns --profile ${{ matrix.profile }}
+      - name: Assert namespace and link cleanup
+        if: always()
+        timeout-minutes: 1
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bin/nvwa-network
+          sudo ip netns list | tee bin/nvwa-network/leftover-namespaces.log
+          sudo ip -j link show | tee bin/nvwa-network/leftover-links.log
+          python3 - <<'PYTHON'
+          import json
+          from pathlib import Path
+          root = Path('bin/nvwa-network')
+          namespaces = [line.split()[0] for line in (root / 'leftover-namespaces.log').read_text().splitlines() if line.strip()]
+          links = [link['ifname'] for link in json.loads((root / 'leftover-links.log').read_text())]
+          leftovers = [name for name in namespaces if name.startswith('relais-net-')]
+          leftovers += [name for name in links if name.startswith('rn')]
+          if leftovers:
+              raise SystemExit('Namespace cleanup failed: ' + ', '.join(leftovers))
+          print('CLEANUP PASS: no owned namespaces or links remain')
+          PYTHON
+      - name: Restore evidence ownership and readability
+        if: always()
+        run: |
+          mkdir -p bin/nvwa-network
+          sudo chown -R "$(id -u):$(id -g)" bin/nvwa-network
+          sudo chmod -R a+rX bin/nvwa-network
+      - name: Publish summary table
+        if: always()
+        shell: bash
+        run: |
+          python3 experiments/nvwa-room/scripts/summarize-network.py bin/nvwa-network
+          cat bin/nvwa-network/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload raw comparison and summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: nvwa-network-${{ matrix.profile }}
+          if-no-files-found: error
+          path: |
+            bin/nvwa-network/build-sha256.txt
+            bin/nvwa-network/runtime-source-sha256.json
+            bin/nvwa-network/summary.json
+            bin/nvwa-network/summary.md
+            bin/nvwa-network/**/*.log
+            bin/nvwa-network/**/ledger.json
+            bin/nvwa-network/**/matrix-plan.json
+            bin/nvwa-network/**/result.json.gz
+            bin/nvwa-network/**/network-settings.json
+            bin/nvwa-network/**/topology.json
