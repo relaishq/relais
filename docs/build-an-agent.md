@@ -411,18 +411,43 @@ checkpoint acknowledgement. A 202 can be lost on a crash: the callback can run
 again with the same EventID on the new owner. Only committed logical history is
 deduplicated; external effects still need the task class and provider rules above.
 
-Receipts store fixed-size SHA-256 digests of the ID and body, rather than raw
-IDs. Their versioned binary encoding is 73 bytes per record (102 bytes in JSON).
-Control has a separate sub-budget within pending host metadata, measured from
-five encoded records and maximum-width sequence/floor counters, capped at one
-third of the pending limit. At default limits at most five unacknowledged
-Controls fit. Other events keep the remaining metadata allowance independently
-of receipt occupancy; agents that never use Control keep their full allowance.
-The callback's real encoded `data` also counts while admitted. A full Control
-budget returns typed retryable `agent_capacity` before invoking Handle or
-consuming a sequence. An acknowledged prefix more than four sequences behind
-the new sequence can be compacted. Smaller pending limits can compact
-acknowledged prefixes earlier to make room. Old sequences remain closed after
+Receipts store fixed-size SHA-256 ID/body digests. Their versioned binary encoding
+is 73 bytes per record (102 bytes in JSON). Control has a separate byte cap
+measured from **two** records and maximum-width sequence/floor counters, at most
+one third of pending metadata. At default limits at most two unacknowledged
+Controls fit. Timer/task admission charges only receipt bytes actually held;
+agents without Control retain their original encoding and accounting.
+Control-bearing snapshots pack task-refusal digests and sparse turns into a
+versioned binary representation, preserving every task ID, order and outcome.
+This keeps refusal-only fan-out representable even when the receipt cap is full.
+Upgrade every pool worker to this slice before enabling Control clients. The new
+reader also accepts the previous object-form refusals; older workers cannot read
+the new packed Control-bearing form.
+
+For the default-limit unit registration, read-only tasks with short steps and
+zero turns admit the following numbers; remaining tasks receive Capacity:
+
+| Fan-out width | No Control | One held receipt | Two held receipts (full) |
+| --- | --- | --- | --- |
+| 20 | 4 | 4 | 4 |
+| 24 | 3 | 3 | 2 |
+| 33 | 0 | 1 | 0 |
+
+Exact capacity depends on registration metadata, turns, timers and task contents.
+If retained Control prevents an otherwise representable refusal-only transaction,
+the host restores it and returns backpressure instead of ending the call. The
+actor keeps its event/cursors for a later attempt. Oversized callbacks that cannot
+fit even without Control still fail closed.
+
+The callback's real encoded `data` also counts while admitted. A full Control cap
+returns retryable `agent_capacity` without invoking Handle or consuming a sequence.
+Only acknowledged prefixes may compact; at defaults a prefix more than one
+sequence behind the new sequence can expire. Smaller pending limits may compact
+acknowledged prefixes earlier. If the runtime registration's pending limit cannot
+hold even one record at maximum counter widths plus registration/quota metadata,
+Control is definitely `control_unsupported`; increase the agent limits rather than
+retrying the same message. This does not disable its other v2 events.
+Old sequences remain closed after
 compaction and return `control_stale`, never another callback. For a client
 retrying its own original message, `control_stale` proves **durable acceptance**:
 sequences are contiguous and only checkpointed prefixes can compact. Stop
@@ -452,6 +477,22 @@ deployment constraints; this adds no per-call authorization or public Internet
 control-authentication guarantee. The private worker endpoint is
 `POST /sessions/{id}/agent/control`; trusted control resolves live store ownership
 under the existing call lock.
+
+
+Control error classes (codes preserve the existing HTTP status):
+
+| Class | Codes | Client action |
+| --- | --- | --- |
+| retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session` | Retry the identical message with bounded backoff and a deadline. |
+| definite | `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
+| uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
+
+`move_budget` is definite for Control: exceeding move-memory admission fails
+closed under the existing host contract. `agent_incompatible` is definite because the registration, state or callback effects need a software
+or operator fix; replaying the same message does not repair them. `closed` means
+retry on the live route. Unknown/missing codes are uncertain on every status,
+including 409. Only a non-envelope 400 (private JSON decoding failure) becomes
+`control_invalid`; an unfamiliar JSON error envelope remains uncertain.
 
 ## Reading provider Ogg/Opus
 

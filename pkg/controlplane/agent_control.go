@@ -33,13 +33,9 @@ func (p *Plane) AgentControl(ctx context.Context, id string, message agent.Contr
 		return agent.ControlReceipt{}, err
 	}
 	defer c.unlockControl()
-	// Leave most of the takeover budget available for recovery. Transport may
-	// time out after acceptance; the same message can safely be retried.
-	ctx, holdCancel := context.WithTimeout(ctx, takeoverBudget/3)
-	defer holdCancel()
-	c.controlMu.Lock()
-	c.controlCancel = holdCancel
-	c.controlMu.Unlock()
+	// lockControl creates the hold context before acquisition and publishes its
+	// cancellation atomically with the holder. Takeover can cancel immediately.
+	ctx = c.controlContext
 	if c.terminal || c.hungUp.Load() {
 		return agent.ControlReceipt{}, sessionstore.ErrEnded
 	}
@@ -68,6 +64,13 @@ func (p *Plane) AgentControl(ctx context.Context, id string, message agent.Contr
 }
 
 func (c *call) lockControl(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, takeoverBudget/3)
+	acquired := false
+	defer func() {
+		if !acquired {
+			cancel()
+		}
+	}()
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -77,6 +80,9 @@ func (c *call) lockControl(ctx context.Context) error {
 		c.controlMu.Lock()
 		if c.controlWaiters == 0 && c.mu.TryLock() {
 			c.controlActive = true
+			c.controlCancel = cancel
+			c.controlContext = ctx
+			acquired = true
 			c.controlMu.Unlock()
 			return nil
 		}
@@ -90,7 +96,8 @@ func (c *call) lockControl(ctx context.Context) error {
 }
 func (c *call) unlockControl() {
 	c.controlMu.Lock()
-	c.controlActive, c.controlCancel = false, nil
+	c.controlCancel()
+	c.controlActive, c.controlCancel, c.controlContext = false, nil, nil
 	c.mu.Unlock()
 	c.controlMu.Unlock()
 }

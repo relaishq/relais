@@ -27,6 +27,7 @@ var RemoteErrors = map[string]error{
 	"checkpoint_clock":    sessionstore.ErrUnsafeCheckpointClock,
 	"agent_incompatible":  agentv2.ErrIncompatibleAgent,
 	"agent_capacity":      agentv2.ErrCapacity,
+	"agent_backpressure":  agentv2.ErrBackpressure,
 	"uncertain":           privateapi.ErrUncertain,
 	"export_incompatible": ErrExportIncompatible,
 	"move_budget":         ErrMoveBudget, "export_not_flushed": ErrExportNotFlushed,

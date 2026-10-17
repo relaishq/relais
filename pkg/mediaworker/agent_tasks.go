@@ -209,7 +209,15 @@ func (s *session) taskBudgetWithRefusals(tasks []*localTask, appBytes int, refus
 	return s.reserveMoveBytes(n)
 }
 func (s *session) taskMetadataBudget(intents []taskIntent, refusals []taskRefusal, admission bool, projection ...playbackState) error {
+	return s.taskMetadataBudgetMode(intents, refusals, admission, false, projection...)
+}
+func (s *session) taskMetadataBudgetMode(intents []taskIntent, refusals []taskRefusal, admission, withoutControl bool, projection ...playbackState) error {
 	envelope := *s.agent.latest.V2
+	if withoutControl {
+		envelope.Controls = nil
+		envelope.ControlHigh = 0
+		envelope.ControlFloor = 0
+	}
 	envelope.Quota = s.captureSnapshotQuota(s.taskNow())
 	s.mu.Lock()
 	envelope.Playback = s.playbackSnapshotLocked()
@@ -389,6 +397,12 @@ func (s *session) fitTaskRefusals(_, tasks []*localTask, prior, refusals []taskR
 		}
 	}
 	if err := s.taskMetadataBudget(nil, fresh, false, projection...); err != nil {
+		// Retained Control may delay this transaction, but must never turn a
+		// representable refusal-only callback into a terminal capacity failure.
+		// Preserve prior state and cursors; the actor retries after backpressure.
+		if s.agent.latest.V2.ControlHigh > 0 && s.taskMetadataBudgetMode(nil, fresh, false, true, projection...) == nil {
+			return nil, nil, errTaskAdmissionBackpressure
+		}
 		return nil, nil, fmt.Errorf("%w: callback task refusals exceed host metadata", agent.ErrCapacity)
 	}
 	return nil, nil, errTaskAdmissionBackpressure

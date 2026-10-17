@@ -28,10 +28,15 @@
 // errors, invalid state and unsupported effects fail closed. A Save that grows
 // move-only length beyond the available worker memory fails closed with
 // mediaworker.ErrMoveBudget.
-// A callback whose compact task refusals cannot fit (about 33 at default
-// bounds) fails closed with ErrCapacity and ends the call. At default bounds
-// a width-20 fan-out admits 4 tasks; width 33 admits none. Admission reserves
-// refusal space before starting tasks; only excess tasks are refused.
+// A callback whose compact task refusals cannot fit fails closed with
+// ErrCapacity. At default limits for short-step read-only tasks and zero turns,
+// widths 20/24/33 admit 4/3/0 tasks without Control, 4/3/1 with one receipt,
+// and 4/2/0 with the full two-receipt Control cap. Other tasks receive Capacity.
+// Control-bearing snapshots compact refusals; other registrations keep their
+// original encoding/accounting. Retained Control can reduce task admission, but
+// never makes an otherwise representable refusal-only callback terminal: it is
+// restored and held under backpressure instead. Admission reserves refusal space
+// before starting tasks; only excess tasks are refused.
 // TimerFired and PlaybackFinished callback errors/deadlines also fail closed.
 // Paced output marshal/encryption failures end the call without draining its cursor.
 // Audio references name immutable task-emitted Opus packets. Playback continues
@@ -242,5 +247,5 @@ var (
 	// ErrControlStale proves that this sequence was durably accepted and compacted.
 	// A client retrying its own original message can stop retrying.
 	ErrControlStale       = errors.New("agent: control sequence outside retained window")
-	ErrControlUnsupported = errors.New("agent: control requires a v2 agent")
+	ErrControlUnsupported = errors.New("agent: control unsupported by registration or limits")
 )

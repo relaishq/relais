@@ -242,6 +242,9 @@ func TestBoundedRandomInputs(t *testing.T) {
 func FuzzReader(f *testing.F) {
 	f.Add(stream([]byte{0xf8, 0xff, 0xfe}))
 	f.Add(prefix())
+	good := []byte{0xf8, 0xff, 0xfe}
+	f.Add(append(prefix(), page(2, 4, 1800, []byte{3, 1, 3}, append(append(append([]byte{}, good...), 0xfb), good...))...))
+	f.Add(append(prefix(), page(2, 0, 0, []byte{3, 3, 1}, append(append(append([]byte{}, good...), good...), 0xfb))...))
 	f.Add([]byte("OggS"))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		if len(b) > 256<<10 {

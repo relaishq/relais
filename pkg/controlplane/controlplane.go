@@ -152,6 +152,7 @@ type call struct {
 	controlMu      sync.Mutex
 	controlActive  bool
 	controlCancel  context.CancelFunc
+	controlContext context.Context // immutable while the Control holder owns mu
 	controlWaiters int
 	// stateMu protects the completed-move metadata below. Never hold it
 	// across I/O or while acquiring mu or the plane's registry lock.

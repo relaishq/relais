@@ -9,17 +9,19 @@ import (
 	"errors"
 	"math"
 	"slices"
+	"time"
 	"unicode/utf8"
 
 	"github.com/relaishq/relais/internal/privateapi"
+	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
-// Keep receipts across four newer sequence positions. Prefix compaction needs
+// Keep one older receipt beside the newest sequence position. Prefix compaction needs
 // checkpoint acknowledgement too. Each retained export has its own exact window;
 // there is no wall-clock receipt TTL or assumption about HTTP retry latency.
-const controlWindow = 4
+const controlWindow = 1
 
 // Both identities are fixed-size SHA-256 digests. Raw client IDs never occupy
 // checkpoint metadata. A retry supplies its original ID for the receipt.
@@ -82,18 +84,34 @@ func controlID(id string) string {
 // Charge the Control sub-budget from actual wire records, including maximum
 // counter widths. At most one third of pending metadata belongs to Control.
 // No memory is preallocated. Agents that never use Control keep their existing
-// allowance. Once enabled, ordinary event admission is independent of receipt
-// occupancy, so a stalled store cannot take timer/task headroom away.
-func controlMetadataBudget(limit int) int {
+// allowance. Other events charge actual held bytes. Compact refusal encoding
+// keeps the widest default refusal-only callback representable at a full cap.
+func controlMetadataBudget(limit int) int { return min(limit/3, controlMetadataBytes(controlWindow+1)) }
+func controlMetadataBytes(records int) int {
 	record := controlRecord{ID: controlID(""), Sequence: math.MaxUint64, Digest: controlID("")}
-	envelope := v2Envelope{ControlHigh: math.MaxUint64, ControlFloor: math.MaxUint64, Controls: make([]controlRecord, controlWindow+1)}
+	envelope := v2Envelope{ControlHigh: math.MaxUint64, ControlFloor: math.MaxUint64, Controls: make([]controlRecord, records)}
 	for i := range envelope.Controls {
 		envelope.Controls[i] = record
 	}
 	full, _ := json.Marshal(envelope)
 	envelope.Controls, envelope.ControlHigh, envelope.ControlFloor = nil, 0, 0
 	bare, _ := json.Marshal(envelope)
-	return min(limit/3, len(full)-len(bare))
+	return len(full) - len(bare)
+}
+
+// Capability is known from the runtime registration, without reserving memory
+// or disabling small-limit agents that never need Control. Reserve no bytes:
+// this checks whether even one empty message can ever fit at maximum counters.
+func (s *session) controlSupported() bool {
+	r := s.agent.v2.registration
+	limit := min(r.Bounds.MaxPendingBytes, v2HostMetadataBytes)
+	one := controlMetadataBytes(1)
+	if controlMetadataBudget(limit) < one {
+		return false
+	}
+	baseline := v2Envelope{Name: r.Name, Contract: v2Contract, TaskKinds: r.TaskKinds, Limits: &r.Declared, Quota: &snapshotQuota{Version: 1, Balance: quotaBalance(0), At: time.Date(2000, 1, 1, 0, 0, 0, 999999999, time.UTC)}}
+	metadata, _ := json.Marshal(baseline)
+	return len(metadata)+one+4 <= limit // actual JSON null for absent callback Data
 }
 func v2MetadataCharge(envelope v2Envelope, limit int) int {
 	full, err := json.Marshal(envelope)
@@ -112,7 +130,7 @@ func v2MetadataCharge(envelope v2Envelope, limit int) int {
 	if len(full)-len(bare) > budget {
 		return limit + 1
 	}
-	return len(bare) + budget
+	return len(full)
 }
 
 type controlRequest struct {
@@ -136,6 +154,9 @@ func (w *Worker) AgentControl(ctx context.Context, id string, message agent.Cont
 		return agent.ControlReceipt{}, ErrUnknownSession
 	}
 	if s.agent == nil || s.agent.v2 == nil {
+		return agent.ControlReceipt{}, agent.ErrControlUnsupported
+	}
+	if !s.controlSupported() {
 		return agent.ControlReceipt{}, agent.ErrControlUnsupported
 	}
 	request := controlRequest{message: message, done: make(chan controlReply, 1)}
@@ -209,7 +230,10 @@ func validateControlWindow(e *v2Envelope, ack uint64) error {
 	return nil
 }
 func controlRefusal(err error) bool {
-	return errors.Is(err, agent.ErrControlRejected) || errors.Is(err, agent.ErrControlNotReady) || errors.Is(err, agent.ErrControlInvalid) || errors.Is(err, agent.ErrControlConflict) || errors.Is(err, agent.ErrControlStale) || errors.Is(err, agent.ErrControlOrder) || errors.Is(err, agent.ErrCapacity) || errors.Is(err, errTaskAdmissionBackpressure) || errors.Is(err, sessionstore.ErrLeaseLost)
+	if errors.Is(err, legacy.ErrSave) || errors.Is(err, legacy.ErrRestore) {
+		return false
+	}
+	return errors.Is(err, agent.ErrControlUnsupported) || errors.Is(err, agent.ErrControlRejected) || errors.Is(err, agent.ErrControlNotReady) || errors.Is(err, agent.ErrControlInvalid) || errors.Is(err, agent.ErrControlConflict) || errors.Is(err, agent.ErrControlStale) || errors.Is(err, agent.ErrControlOrder) || errors.Is(err, agent.ErrCapacity) || errors.Is(err, agent.ErrBackpressure) || errors.Is(err, sessionstore.ErrLeaseLost)
 }
 func (s *session) processControl(m agent.ControlMessage) (agent.ControlReceipt, error) {
 	s.mu.Lock()
@@ -221,6 +245,9 @@ func (s *session) processControl(m agent.ControlMessage) (agent.ControlReceipt, 
 	}
 	if err := validateControl(m); err != nil {
 		return agent.ControlReceipt{}, err
+	}
+	if !s.controlSupported() {
+		return agent.ControlReceipt{}, agent.ErrControlUnsupported
 	}
 	e := s.agent.latest.V2
 	if !e.Started {

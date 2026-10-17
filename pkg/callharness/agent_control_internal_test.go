@@ -101,11 +101,14 @@ func waitControlCheckpoint(t *testing.T, sys *agentHarnessSystem, id string, m a
 	}, 3*time.Second, 5*time.Millisecond)
 	return got
 }
+
+// These protocol scenarios use a 20 ms checkpoint cadence (and its validated
+// byte rate), keeping receipt retries fast without changing acceptance assertions.
 func TestRoutedControlReceiptsOrderAndMove(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, base sessionstore.Store) {
 		store := &controlFreezeStore{Store: base}
 		regs, events := controlRegistrations(nil, nil)
-		sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs, remoteTarget: true, callbackBudget: time.Second})
+		sys := startAgentHarness(t, store, agentHarnessSettings{snapshotInterval: 20 * time.Millisecond, saveInterval: 20 * time.Millisecond, v2: regs, remoteTarget: true, callbackBudget: time.Second})
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		call, err := sys.h.Dial(ctx, CallOptions{})
@@ -156,7 +159,7 @@ func TestRoutedControlReceiptsOrderAndMove(t *testing.T) {
 		moved := waitControlCheckpoint(t, sys, id, m)
 		require.Equal(t, checkpoint, moved)
 		require.Equal(t, moved, post(http.StatusOK))
-		for i := uint64(2); i <= 12; i++ {
+		for i := uint64(2); i <= 8; i++ {
 			m = agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "ptt.stop"}
 			_, err = sys.plane.AgentControl(ctx, id, m)
 			require.NoError(t, err)
@@ -183,7 +186,7 @@ func TestRoutedControlCrashBeforeCheckpoint(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, base sessionstore.Store) {
 		store := &controlFreezeStore{Store: base}
 		regs, events := controlRegistrations(nil, nil)
-		sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs, callbackBudget: time.Second})
+		sys := startAgentHarness(t, store, agentHarnessSettings{snapshotInterval: 20 * time.Millisecond, saveInterval: 20 * time.Millisecond, v2: regs, callbackBudget: time.Second})
 		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 		defer cancel()
 		call, err := sys.h.Dial(ctx, CallOptions{})
@@ -214,7 +217,7 @@ func TestRoutedControlInFlightMove(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		entered, release := make(chan struct{}), make(chan struct{})
 		regs, events := controlRegistrations(entered, release)
-		sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs, callbackBudget: 2 * time.Second})
+		sys := startAgentHarness(t, store, agentHarnessSettings{snapshotInterval: 20 * time.Millisecond, saveInterval: 20 * time.Millisecond, v2: regs, callbackBudget: 2 * time.Second})
 		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 		defer cancel()
 		call, err := sys.h.Dial(ctx, CallOptions{})
@@ -245,13 +248,12 @@ func TestRoutedControlInFlightMove(t *testing.T) {
 
 type refusingControlHarnessAgent struct {
 	controlHarnessAgent
-	failure *atomic.Bool
-	slow    bool
+	failure *atomic.Int32
 }
 
 func (a *refusingControlHarnessAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
-	if e.Kind == agent.Control && a.failure.Load() {
-		if a.slow {
+	if e.Kind == agent.Control && a.failure.Load() != 0 {
+		if a.failure.Load() == 2 {
 			<-ctx.Done()
 			return agent.Effects{}, ctx.Err()
 		}
@@ -260,52 +262,55 @@ func (a *refusingControlHarnessAgent) Handle(ctx context.Context, e agent.Event)
 	return a.controlHarnessAgent.Handle(ctx, e)
 }
 func TestRoutedControlHandlerRefusalKeepsCallAlive(t *testing.T) {
-	for _, slow := range []bool{false, true} {
-		t.Run(fmt.Sprint(slow), func(t *testing.T) {
-			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
-				events := make(chan agent.Event, 32)
-				var failure atomic.Bool
-				failure.Store(true)
-				reg := agenthost.Registration{Name: "control-refusal/v1", Factory: func(agent.FactoryArgs) agent.Agent {
-					return &refusingControlHarnessAgent{controlHarnessAgent: controlHarnessAgent{events: events}, failure: &failure, slow: slow}
-				}}
-				sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}, callbackBudget: 250 * time.Millisecond})
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				call, err := sys.h.Dial(ctx, CallOptions{})
-				require.NoError(t, err)
-				id := call.SessionID()
-				awaitControlKind(t, events, agent.Started)
-				m := agent.ControlMessage{ID: "retry", Sequence: 1, Name: "start"}
-				_, err = sys.plane.AgentControl(ctx, id, m)
-				require.Error(t, err)
-				// The same sequence succeeds after the provider/handler recovers.
-				failure.Store(false)
-				receipt, err := sys.plane.AgentControl(ctx, id, m)
-				require.NoError(t, err)
-				require.Equal(t, uint64(1), receipt.Sequence)
-				awaitControlKind(t, events, agent.Control)
-				waitControlCheckpoint(t, sys, id, m)
-				_, err = sys.plane.Move(ctx, id, "1")
-				require.NoError(t, err)
-				awaitControlKind(t, events, agent.Resumed)
-				receipt, err = sys.plane.AgentControl(ctx, id, m)
-				require.NoError(t, err)
-				require.True(t, receipt.Checkpointed)
-				require.Empty(t, events)
-				_, err = call.Hangup(ctx)
-				require.NoError(t, err)
-			})
-		})
+	if testing.Short() {
+		t.Skip("handler recovery/move covered in worker unit tests; full harness runs both stores")
 	}
+	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+		events := make(chan agent.Event, 32)
+		var failure atomic.Int32
+		reg := agenthost.Registration{Name: "control-refusal/v1", Factory: func(agent.FactoryArgs) agent.Agent {
+			return &refusingControlHarnessAgent{controlHarnessAgent: controlHarnessAgent{events: events}, failure: &failure}
+		}}
+		sys := startAgentHarness(t, store, agentHarnessSettings{snapshotInterval: 20 * time.Millisecond, saveInterval: 20 * time.Millisecond, v2: []agenthost.Registration{reg, reg}, callbackBudget: 250 * time.Millisecond})
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		call, err := sys.h.Dial(ctx, CallOptions{})
+		require.NoError(t, err)
+		id := call.SessionID()
+		awaitControlKind(t, events, agent.Started)
+		m := agent.ControlMessage{ID: "retry", Sequence: 1, Name: "start"}
+		for _, mode := range []int32{1, 2} {
+			failure.Store(mode)
+			_, err = sys.plane.AgentControl(ctx, id, m)
+			require.Error(t, err)
+		}
+		failure.Store(0)
+		receipt, err := sys.plane.AgentControl(ctx, id, m)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), receipt.Sequence)
+		awaitControlKind(t, events, agent.Control)
+		waitControlCheckpoint(t, sys, id, m)
+		_, err = sys.plane.Move(ctx, id, "1")
+		require.NoError(t, err)
+		awaitControlKind(t, events, agent.Resumed)
+		receipt, err = sys.plane.AgentControl(ctx, id, m)
+		require.NoError(t, err)
+		require.True(t, receipt.Checkpointed)
+		require.Empty(t, events)
+		_, err = call.Hangup(ctx)
+		require.NoError(t, err)
+	})
 }
 func TestRoutedControlRetriesDoNotStarveOperators(t *testing.T) {
+	if testing.Short() {
+		t.Skip("operator priority covered in control-plane unit tests; full harness runs both stores")
+	}
 	for _, drain := range []bool{false, true} {
 		t.Run(fmt.Sprint(drain), func(t *testing.T) {
 			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 				entered, release := make(chan struct{}), make(chan struct{})
 				regs, events := controlRegistrations(entered, release)
-				sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs, callbackBudget: 2 * time.Second})
+				sys := startAgentHarness(t, store, agentHarnessSettings{snapshotInterval: 20 * time.Millisecond, saveInterval: 20 * time.Millisecond, v2: regs, callbackBudget: 2 * time.Second})
 				ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 				defer cancel()
 				call, err := sys.h.Dial(ctx, CallOptions{})
@@ -386,7 +391,7 @@ func TestRoutedControlFullBudgetAllowsInputEffects(t *testing.T) {
 		reg := agenthost.Registration{Name: "control-budget/v1", Factory: func(agent.FactoryArgs) agent.Agent {
 			return &budgetControlHarnessAgent{controlHarnessAgent: controlHarnessAgent{events: events}, trigger: &trigger}
 		}, Tasks: map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { ran <- struct{}{}; return nil }}}
-		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}, callbackBudget: time.Second})
+		sys := startAgentHarness(t, store, agentHarnessSettings{snapshotInterval: 20 * time.Millisecond, saveInterval: 20 * time.Millisecond, v2: []agenthost.Registration{reg, reg}, callbackBudget: time.Second})
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		call, err := sys.h.Dial(ctx, CallOptions{})

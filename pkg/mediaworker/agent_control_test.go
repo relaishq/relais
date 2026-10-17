@@ -79,7 +79,7 @@ func TestControlCapacityDoesNotSucceedOrConsume(t *testing.T) {
 	require.NoError(t, initControlUnit(s))
 	s.agent.v2.registration.Bounds.MaxPendingBytes = 1
 	_, err := s.processControl(agent.ControlMessage{ID: "1", Sequence: 1, Name: "start"})
-	require.ErrorIs(t, err, agent.ErrCapacity)
+	require.ErrorIs(t, err, agent.ErrControlUnsupported)
 	require.Zero(t, a.handles)
 	require.Zero(t, s.agent.latest.V2.ControlHigh)
 }

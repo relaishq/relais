@@ -156,7 +156,7 @@ func (r *Reader) next(ctx context.Context) (agent.EncodedAudio, error) {
 		r.discarded++
 		r.damagedPage = true
 		if r.segment == len(r.laces) {
-			if err := r.resyncDamagedPage(); err != nil {
+			if err := r.resyncDamagedPage(0); err != nil {
 				return agent.EncodedAudio{}, err
 			}
 		}
@@ -168,7 +168,7 @@ func (r *Reader) next(ctx context.Context) (agent.EncodedAudio, error) {
 	r.decoded += samples
 	end := r.decoded
 	if r.segment == len(r.laces) && r.damagedPage {
-		if err := r.resyncDamagedPage(); err != nil {
+		if err := r.resyncDamagedPage(samples); err != nil {
 			return agent.EncodedAudio{}, err
 		}
 		end = r.decoded
@@ -199,8 +199,8 @@ func (r *Reader) next(ctx context.Context) (agent.EncodedAudio, error) {
 
 // Unknown durations create a gap in the local packet clock. A valid page
 // granule anchors the next page without inventing samples for discarded audio.
-func (r *Reader) resyncDamagedPage() error {
-	if r.granule == ^uint64(0) || r.granule < r.previousGranule || (r.eos && r.granule < uint64(r.header.PreSkip)) {
+func (r *Reader) resyncDamagedPage(lastSamples uint64) error {
+	if r.granule == ^uint64(0) || r.granule < r.previousGranule || (!r.eos && r.granule < r.decoded) || (r.eos && (r.granule < r.decoded-lastSamples || r.granule < uint64(r.header.PreSkip))) {
 		return ErrGranule
 	}
 	r.decoded, r.previousGranule = r.granule, r.granule
