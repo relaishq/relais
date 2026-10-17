@@ -99,7 +99,13 @@ func (w *Worker) PrivateHandler() http.Handler {
 			workerAPIError(rw, err)
 			return
 		}
-		privateapi.Write(rw, ExportReply{State: state})
+		counted := &exportResponseWriter{ResponseWriter: rw}
+		privateapi.Write(counted, ExportReply{State: state})
+		for old := w.metrics.exportHTTPPeakBytes.Load(); uint64(counted.bytes) > old; old = w.metrics.exportHTTPPeakBytes.Load() {
+			if w.metrics.exportHTTPPeakBytes.CompareAndSwap(old, uint64(counted.bytes)) {
+				break
+			}
+		}
 	})
 	mux.HandleFunc("POST /sessions/{id}/keyframe", func(rw http.ResponseWriter, r *http.Request) {
 		if err := w.RequestKeyframe(r.Context(), r.PathValue("id")); err != nil {
@@ -168,4 +174,16 @@ func workerAPIError(rw http.ResponseWriter, err error) {
 		}
 	}
 	privateapi.Error(rw, err, RemoteErrors)
+}
+
+// exportResponseWriter observes the response body without retaining key material.
+type exportResponseWriter struct {
+	http.ResponseWriter
+	bytes int
+}
+
+func (w *exportResponseWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	w.bytes += n
+	return n, err
 }

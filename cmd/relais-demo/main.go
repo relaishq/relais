@@ -20,6 +20,7 @@ import (
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/processrun"
 	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/workerdriver"
 	"github.com/relaishq/relais/pkg/buildinfo"
 )
 
@@ -28,6 +29,7 @@ var web embed.FS
 
 type config struct {
 	Bin, HTTP, Redis, RedisBinary, LocalNetwork, Agent, RelayBuffer string
+	WorkerBin                                                       string
 	AttachControl, AttachAuthFile, FaultHook, ResultsDir            string
 	ActionTimeout                                                   time.Duration
 }
@@ -64,7 +66,11 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 	if err != nil {
 		return nil, err
 	}
-	for _, name := range []string{"relais-relay", "relais-worker", "relais-control"} {
+	worker := workerdriver.Options{Binary: cfg.WorkerBin}
+	if err := worker.Check(bin); err != nil {
+		return nil, err
+	}
+	for _, name := range []string{"relais-relay", "relais-control"} {
 		info, err := os.Stat(filepath.Join(bin, name))
 		if err != nil || info.IsDir() || info.Mode()&0111 == 0 {
 			return nil, fmt.Errorf("build %s first (make build)", name)
@@ -141,7 +147,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 			}
 		}
 		workerEnv = append(workerEnv, "PION_LOG_INFO=session")
-		child, ready, err := start(ctx, "worker-"+name, workerEnv, filepath.Join(bin, "relais-worker"), "-media", media, "-http", "127.0.0.1:0", "-name", name, "-control", d.control, "-relay-leg", relay.Leg, "-relay-media", relay.Media, "-agent", selectedAgent(cfg))
+		child, ready, err := start(ctx, "worker-"+name, workerEnv, worker.Path(bin), "-media", media, "-http", "127.0.0.1:0", "-name", name, "-control", d.control, "-relay-leg", relay.Leg, "-relay-media", relay.Media, "-agent", selectedAgent(cfg))
 		if err != nil {
 			return nil, err
 		}
@@ -210,7 +216,7 @@ func validateConfig(cfg config) error {
 	if selectedRelayBuffer(cfg) != "on" && selectedRelayBuffer(cfg) != "off" {
 		return errors.New("-relay-buffer must be on or off")
 	}
-	if selectedAgent(cfg) != "echo" && selectedAgent(cfg) != "demo" {
+	if cfg.WorkerBin == "" && selectedAgent(cfg) != "echo" && selectedAgent(cfg) != "demo" {
 		return errors.New("-agent must be echo or demo")
 	}
 	if cfg.Redis != "" {
@@ -254,7 +260,8 @@ func configureFlags(flags *flag.FlagSet, cfg *config) {
 		cfg.RelayBuffer = mode
 		return nil
 	})
-	flags.StringVar(&cfg.Agent, "agent", "echo", "worker audio agent: echo or demo")
+	flags.StringVar(&cfg.Agent, "agent", "echo", "worker audio agent: echo or demo; custom name with -worker-bin")
+	flags.StringVar(&cfg.WorkerBin, "worker-bin", "", "worker executable path (default relais-worker in -bin)")
 	flags.StringVar(&cfg.Bin, "bin", "bin", "directory containing built relay, worker and control")
 	flags.StringVar(&cfg.HTTP, "http", "127.0.0.1:9101", "literal loopback page address")
 	flags.StringVar(&cfg.LocalNetwork, "local-network", "", "opt in to HTTPS and public media on this literal local IPv4 address; uses the -http port, private APIs remain on loopback")

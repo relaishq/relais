@@ -21,6 +21,7 @@ import (
 )
 
 type Target struct {
+	AgentSessions            []string
 	Name, URL                string
 	RedisAddr, RedisPassword string
 	PID                      int
@@ -62,20 +63,22 @@ type Process struct {
 	at                      time.Time
 }
 type Telemetry struct {
-	WindowSeconds float64   `json:"window_seconds"`
-	Processes     []Process `json:"processes"`
-	Errors        []string  `json:"errors,omitempty"`
+	Agents        AgentSamples `json:"agent_diagnostics,omitempty"`
+	WindowSeconds float64      `json:"window_seconds"`
+	Processes     []Process    `json:"processes"`
+	Errors        []string     `json:"errors,omitempty"`
 }
 type Monitor struct {
-	memory  bool
-	targets []Target
-	data    Telemetry
-	cancel  context.CancelFunc
-	done    chan struct{}
-	client  *http.Client
-	stores  []*redis.Client
-	retired []atomic.Bool
-	started time.Time
+	agentDone chan struct{}
+	memory    bool
+	targets   []Target
+	data      Telemetry
+	cancel    context.CancelFunc
+	done      chan struct{}
+	client    *http.Client
+	stores    []*redis.Client
+	retired   []atomic.Bool
+	started   time.Time
 }
 
 func Start(ctx context.Context, targets []Target, every time.Duration) *Monitor {
@@ -101,6 +104,18 @@ func start(ctx context.Context, targets []Target, every time.Duration, memory bo
 			kind = "redis_current_rss"
 		}
 		m.data.Processes = append(m.data.Processes, Process{RSSKind: kind, Name: t.Name, PID: t.PID, Peaks: map[string]float64{}})
+	}
+	m.agentDone = make(chan struct{})
+	hasAgents := false
+	for _, target := range targets {
+		if len(target.AgentSessions) > 0 {
+			hasAgents = true
+		}
+	}
+	if hasAgents {
+		go func() { defer close(m.agentDone); m.sampleAgents(ctx) }()
+	} else {
+		close(m.agentDone)
 	}
 	m.started = time.Now()
 	m.sample(ctx)
@@ -209,6 +224,7 @@ func (m *Monitor) sample(ctx context.Context) {
 func (m *Monitor) Finish(callers int) Telemetry {
 	m.cancel()
 	<-m.done
+	<-m.agentDone
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	m.sample(ctx)

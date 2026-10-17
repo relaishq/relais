@@ -30,9 +30,11 @@ func readMetrics(t *testing.T, handler http.Handler) map[string]float64 {
 	require.NoError(t, err)
 	values := make(map[string]float64)
 	allowedLabels := map[string][]string{
-		"relais_control_losses_total":  {"cause"},
-		"relais_store_commands_total":  {"store"},
-		"relais_transport_bytes_total": {"transport", "client", "direction"},
+		"relais_control_losses_total":            {"cause"},
+		"relais_store_commands_total":            {"store"},
+		"relais_store_wire_commands_total":       {"client"},
+		"relais_store_wire_parse_failures_total": {"client"},
+		"relais_transport_bytes_total":           {"transport", "client", "direction"},
 	}
 	for name, family := range families {
 		for _, metric := range family.Metric {

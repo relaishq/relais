@@ -309,3 +309,14 @@ func TestLongStoreStallRejectsOwnershipExpiry(t *testing.T) {
 	require.NotEmpty(t, judgeStoreStall(r, status, e, r.RemoteAddr, stalled, killed, until))
 	require.NotEmpty(t, judgeOwnershipExpired(r, status, e, r.RemoteAddr, stalled, killed))
 }
+
+func TestCustomStaleTakeoverAllowsIntentionalAudioSilence(t *testing.T) {
+	report, status, e, stalled, killed, until := stallFixture(false)
+	e.Agent = &storeStallAgentEvidence{Name: "delayed-loopback/v1"}
+	// The delayed agent returns audio after takeover, then records another turn.
+	// It need not still be emitting in the last 200ms before Hangup.
+	report.Tracks[0].LastArrival = e.Takeover.End.Sub(report.StartedAt) + time.Second
+	require.Empty(t, judgeStoreStall(report, status, e, report.RemoteAddr, stalled, killed, until))
+	report.Tracks[0].LastArrival = e.Takeover.End.Sub(report.StartedAt) - time.Millisecond
+	require.Contains(t, judgeStoreStall(report, status, e, report.RemoteAddr, stalled, killed, until), "no custom audio after stale takeover")
+}

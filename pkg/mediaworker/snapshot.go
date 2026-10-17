@@ -158,6 +158,9 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	defer cancel()
 	s.mu.Lock()
 	s.state.Checkpoint.Attempts++
+	if v2 && intent {
+		s.worker.metrics.forcedAttempts.Add(1)
+	}
 	s.mu.Unlock()
 	captured, err := s.worker.cfg.Relay.Owners.Clock(ctx, s.id)
 	if err == nil {
@@ -174,6 +177,9 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	if err != nil {
 		s.mu.Lock()
 		s.state.Checkpoint.Failures++
+		if v2 && intent {
+			s.worker.metrics.forcedFailures.Add(1)
+		}
 		s.mu.Unlock()
 		metrics.CheckpointWrites.WithLabelValues("failure").Inc()
 		return err
@@ -215,6 +221,10 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 		if pair.V2 != nil {
 			s.snapshotBudgetMu.Lock()
 			s.snapshotBytesBudget.debit(s.worker.cfg.SnapshotLimits, wireBytes, captured)
+			s.worker.metrics.snapshotDebitBytes.Add(uint64(wireBytes))
+			if intent {
+				s.worker.metrics.forcedSuccesses.Add(1)
+			}
 			s.snapshotWriteInFlight = false
 			s.snapshotBudgetMu.Unlock()
 		}
@@ -230,6 +240,9 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	} else {
 		s.mu.Lock()
 		s.state.Checkpoint.Failures++
+		if v2 && intent {
+			s.worker.metrics.forcedFailures.Add(1)
+		}
 		s.mu.Unlock()
 		metrics.CheckpointWrites.WithLabelValues("failure").Inc()
 	}

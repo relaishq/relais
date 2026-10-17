@@ -33,6 +33,45 @@ build. Go then enforces the public import boundary. Relais's public SDK has
 internal implementation dependencies; applications must not import those
 packages directly. No dependency or tool is installed by the example.
 
+## Hear it in your browser
+
+Start an owned three-worker demo on a separate loopback port:
+
+```sh
+./bin/relais-demo -http=127.0.0.1:19101 -worker-bin=bin/delayed-loopback -agent=delayed-loopback/v1
+```
+
+Open the launch URL printed by this process. Select **Microphone and test pattern**, use headphones, allow microphone access,
+start the call, and speak for about two seconds. Then listen for delayed playback. The recording ends after two seconds or 64 KiB of encoded Opus. The
+local task waits 300 ms before returning the recorded packets. Input during
+processing/playback is consumed without recording. The next recording starts
+when that playback finishes. Move, Drain, and Kill use the same worker binary
+and registration, including replacement workers.
+
+The page accepts the custom name, but its echo audio gap/loss/freshness checks
+and demo tone/count continuity verdict do not establish custom application
+continuity. Custom events stay **inconclusive** with that explanation; raw media
+measurements remain in downloaded results. Listen and inspect private agent
+status for application behavior. A kill loses move-only audio; an exact Move
+or Drain preserves accepted buffered playback. The scripted API smoke verifies
+returned encoded audio, decoded video, Move/Drain/Kill, and process cleanup.
+It does not prove browser microphone capture or that a person heard playback.
+
+Run it in the local topology with the same overrides (use a private state
+folder and separate ports):
+
+```sh
+PORT_BASE=35600 deploy/local/start.sh -bin bin -worker-bin bin/delayed-loopback -agent delayed-loopback/v1 -state /tmp/relais-custom-local -redis-port 19380
+deploy/local/stop.sh -state /tmp/relais-custom-local
+```
+
+`start.sh` also accepts `WORKER_BIN` and `AGENT`. It saves the resolved worker
+path and agent for `-restart-worker`. All drivers accept `-worker-bin`; the
+load/crash drivers accept `-agent` too. With no override they retain the stock
+worker behavior. A worker path is relative to the directory where you run the
+driver, not its per-trial log directory. The local topology needs `ps` to verify
+process identity; a sandbox that denies `ps` cannot complete this smoke.
+
 ## Register the factory and tasks
 
 The [example main](../examples/delayed-loopback/main.go) calls
@@ -206,13 +245,67 @@ an unavoidable transport snapshot overflow can refuse adoption or end the call
 with `ErrCapacity`. A store failure is a different outcome. The exact export and
 resume request must also fit the private HTTP wire bound, including base64.
 
-**The manual custom-worker capacity/Save-CPU and store-stall gates arrive with
-slice 7b.** Green CI is not capacity approval. Before enabling v2, attach the
-exact build, operator settings, and measured manual results for review. ADR 0010
-requires all store clients/retries, 100 commands and 128 KiB request+reply per
-call-second, checkpoint-age and snapshot-age p99 at most 550 ms, plus Save CPU/time.
-Export HTTP size and memory need separate evidence. This example makes no new
-capacity claim, and Demo A's larger budgets will not make one either.
+The custom-worker capacity/Save-CPU gate is **manual only** in
+`.github/workflows/load-calibration.yml`, mode `custom-capacity`, on
+`ubuntu-latest`. It never runs on schedule and is not a release gate. From
+GitHub Actions, select **Load generator calibration**, the exact pushed ref,
+**Run workflow**, and mode **custom-capacity**. Set `duration`, `capacity_max`,
+`callers_per_process`, `save_cpu_us`, and `save_wall_us` for the proposed operating
+load. Defaults are 30 s/step, at most 16 callers, two callers/generator, and
+1,000 microseconds of Save CPU and wall time per Handle event. Those Save limits
+are explicit operator inputs, not new SDK guarantees. The orchestrator dispatches
+the workflow after pushing; this guide's author did not dispatch a workflow.
+
+The workload uses continuous harness Opus input and VP8 video. Delayed-loopback
+records up to two seconds / 64 KiB, replies in bounded chunks after 300 ms, then
+records again. **100 Redis commands and 128 KiB request+reply per call-second are
+upper budgets**, not a request to generate artificial store traffic or 100 app
+tasks per second. This keyless example does not model provider processing.
+
+The report measures both current checkpoint-age and snapshot-age p99 with 100 ms
+private diagnostic sampling. Both must be at most **550 ms**. It reports Save
+wall time and Linux thread CPU per Handle event and per call-second, Save/event
+counts, forced intent attempts/successes/failures, successful byte debits, all
+session/owners/frame clients, logical operations, and actual Redis wire command
+starts and request+reply bytes. Wire starts count go-redis's internal retries and
+connection setup; the custom gate uses those counts for the 100-command budget.
+Driver diagnostics/Redis INFO monitoring are separate from application store
+traffic. A Redis wire parser error blocks approval. The example uses ReadOnly
+work, so zero forced writes is expected; the store-stall semantic lane separately
+exercises failed and successful forced writes.
+
+Export evidence is the largest actual encoded HTTP response body, below 4 MiB.
+Move reservations, worker heap/RSS, and HTTP bytes are reported separately. Save
+CPU excludes concurrent packet readers, task handlers, and host serialization.
+Non-Linux runs mark per-Save CPU unavailable and block approval. The report keeps
+raw echo audio measurements, while the custom judge enforces transport/video
+continuity and returned audio presence. Delayed audio cannot pass an echo
+freshness limit. Exact audio preservation and crash loss use the separate cut
+matrix; loaded audible continuity still needs application review.
+
+A local loopback step can collect preliminary evidence:
+
+```sh
+./bin/relais-load -capacity -worker-bin=bin/delayed-loopback -agent=delayed-loopback/v1 -duration=20s -capacity-start=2 -capacity-max=2 -output=bin/custom-local-final.json
+```
+
+Linux namespace isolation and the N+1/drain ramp require the manual Linux run.
+Over-budget ages, Save limits, store traffic, missing measurements, invalid
+load generation, process failure, or an unvalidated N+1 load **block approval**.
+The artifact and job summary say either **BLOCKING APPROVAL** or **EVIDENCE READY
+FOR OWNER REVIEW**. Neither grants approval automatically. Approval binds to the
+exact commit, worker binary SHA-256, workload, runner, and operator ceilings in
+the artifact. Green main CI alone is not approval, and larger Demo A budgets do
+not create a capacity claim.
+
+The existing nightly/manual `store-stall` CI job adds custom-worker live stalls
+of 5/15/29 s, a stale takeover, and 35 s ownership expiry. Real processes pause
+only driver-owned Redis and retain custom diagnostics/caller reports. Focused
+production host tests on memory and dedicated Redis assert no byte-token debit
+or Capacity after failed forced writes, launch only after a later acknowledged
+intent checkpoint, Timeout before launch, and local Emit/terminal delivery during
+outage. These semantic fault-injection tests complement the custom binary cuts;
+they do not simulate an external provider.
 
 ## Move, kill, and drain evidence
 

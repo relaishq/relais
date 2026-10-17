@@ -123,7 +123,11 @@ func TestDemoAgentReworkSmoke(t *testing.T)   { runExternalSmokePlan(t, "demo", 
 func runExternalSmoke(t *testing.T, agentName string) {
 	runExternalSmokePlan(t, agentName, true, 3)
 }
-func runExternalSmokePlan(t *testing.T, agentName string, drainFirst bool, kills int) {
+func TestDemoCustomExternalSmoke(t *testing.T) {
+	runExternalSmokePlan(t, "delayed-loopback/v1", true, 1, filepath.Join("..", "..", "bin", "delayed-loopback"))
+}
+
+func runExternalSmokePlan(t *testing.T, agentName string, drainFirst bool, kills int, workerBinary ...string) {
 	if os.Getenv("RELAIS_DEMO_SMOKE") != "1" {
 		t.Skip("opt-in: make build, then RELAIS_DEMO_SMOKE=1 go test -run TestDemoExternalSmoke -v ./cmd/relais-demo")
 	}
@@ -131,7 +135,11 @@ func runExternalSmokePlan(t *testing.T, agentName string, drainFirst bool, kills
 	defer cancel()
 	manager := &clusterprocess.Manager{}
 	defer manager.Stop(false)
-	d, err := launch(ctx, manager, config{Bin: filepath.Join("..", "..", "bin"), RedisBinary: "redis-server", Agent: agentName})
+	cfg := config{Bin: filepath.Join("..", "..", "bin"), RedisBinary: "redis-server", Agent: agentName}
+	if len(workerBinary) > 0 {
+		cfg.WorkerBin = workerBinary[0]
+	}
+	d, err := launch(ctx, manager, cfg)
 	require.NoError(t, err)
 	// Retain all started process identities and assert they're reaped by cleanup.
 	var children []*clusterprocess.Child
@@ -291,7 +299,9 @@ func runExternalSmokePlan(t *testing.T, agentName string, drainFirst bool, kills
 	require.Len(t, report.Tracks, 2)
 	for _, track := range report.Tracks {
 		require.Greater(t, track.Packets, 0)
-		require.Less(t, observed.Sub(report.StartedAt.Add(track.LastArrival)), 200*time.Millisecond, "%s echo did not continue after kill", track.Kind)
+		if track.Kind != "audio" || len(workerBinary) == 0 {
+			require.Less(t, observed.Sub(report.StartedAt.Add(track.LastArrival)), 200*time.Millisecond, "%s echo did not continue after kill", track.Kind)
+		}
 	}
 	video := report.Track("video")
 	require.NotNil(t, video)

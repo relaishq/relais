@@ -20,13 +20,26 @@ func TrafficConn(conn net.Conn, transport string) net.Conn {
 	return trafficConnForClient(conn, transport, "")
 }
 
+var storeWireParseFailures = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "relais_store_wire_parse_failures_total", Help: "Connections with uncountable Redis commands; custom approval must block."}, []string{"client"})
+
+var storeWireCommands = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "relais_store_wire_commands_total", Help: "RESP command starts written to Redis, including library retries and connection setup."}, []string{"client"})
+
 type trafficConn struct {
+	wireCommands      prometheus.Counter
+	wireParseFailures prometheus.Counter
+	writeMu           sync.Mutex
+	parser            redisCommandCounter
 	net.Conn
 	readBytes, writeBytes prometheus.Counter
 }
 
 func trafficConnForClient(conn net.Conn, transport, client string) net.Conn {
-	return &trafficConn{Conn: conn, readBytes: transportBytes.WithLabelValues(transport, client, "in"), writeBytes: transportBytes.WithLabelValues(transport, client, "out")}
+	var commands, parseFailures prometheus.Counter
+	if transport == "redis" {
+		commands = storeWireCommands.WithLabelValues(client)
+		parseFailures = storeWireParseFailures.WithLabelValues(client)
+	}
+	return &trafficConn{wireParseFailures: parseFailures, wireCommands: commands, Conn: conn, readBytes: transportBytes.WithLabelValues(transport, client, "in"), writeBytes: transportBytes.WithLabelValues(transport, client, "out")}
 }
 
 func (c *trafficConn) Read(p []byte) (int, error) {
@@ -35,8 +48,17 @@ func (c *trafficConn) Read(p []byte) (int, error) {
 	return n, err
 }
 func (c *trafficConn) Write(p []byte) (int, error) {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	n, err := c.Conn.Write(p)
 	c.writeBytes.Add(float64(n))
+	if c.wireCommands != nil {
+		wasInvalid := c.parser.invalid
+		c.wireCommands.Add(float64(c.parser.feed(p[:n])))
+		if !wasInvalid && c.parser.invalid {
+			c.wireParseFailures.Inc()
+		}
+	}
 	return n, err
 }
 
@@ -107,6 +129,8 @@ func (*storeHook) AfterProcessPipeline(context.Context, []redis.Cmder) error { r
 func TrafficCollectors() []prometheus.Collector {
 	for _, store := range []string{"session", "owners", "frame"} {
 		storeCommands.WithLabelValues(store)
+		storeWireCommands.WithLabelValues(store)
+		storeWireParseFailures.WithLabelValues(store)
 	}
 	for _, client := range []string{"session", "owners", "frame"} {
 		for _, direction := range []string{"in", "out"} {
@@ -117,7 +141,7 @@ func TrafficCollectors() []prometheus.Collector {
 		transportBytes.WithLabelValues("http", "", direction)
 	}
 
-	return []prometheus.Collector{storeCommands, transportBytes}
+	return []prometheus.Collector{storeWireParseFailures, storeWireCommands, storeCommands, transportBytes}
 }
 
 var httpTransportOnce sync.Once

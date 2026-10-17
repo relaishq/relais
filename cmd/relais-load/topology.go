@@ -20,6 +20,7 @@ import (
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/nettopology"
 	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/workerdriver"
 	"github.com/relaishq/relais/pkg/callharness"
 )
 
@@ -48,7 +49,11 @@ type topology struct {
 
 // Owned loopback or Linux namespace topology. Caller attachment is separate
 // so only the media socket enters the caller namespace.
-func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir string, workers int, mode string) (_ *topology, runErr error) {
+func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir string, workers int, mode string, selections ...workerdriver.Options) (_ *topology, runErr error) {
+	var worker workerdriver.Options
+	if len(selections) > 0 {
+		worker = selections[0]
+	}
 	t := &topology{Workers: map[int]*clusterprocess.Child{}, Launch: map[int]*workerLaunch{}, Manager: m, Dir: dir}
 	defer func() {
 		if runErr != nil {
@@ -169,7 +174,7 @@ func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir stri
 	args := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", relay.HTTP}
 	for i := range workers {
 		name := fmt.Sprint(i)
-		c, ready, err := start("worker-"+name, filepath.Join(bin, "relais-worker"), "-media", roleBind(t.Network, "worker-"+name, false), "-http", roleBind(t.Network, "worker-"+name, false), "-name", name, "-control", controlURL, "-relay-leg", relay.Leg, "-relay-media", relay.Media)
+		c, ready, err := start("worker-"+name, worker.Command(bin, "-media", roleBind(t.Network, "worker-"+name, false), "-http", roleBind(t.Network, "worker-"+name, false), "-name", name, "-control", controlURL, "-relay-leg", relay.Leg, "-relay-media", relay.Media)...)
 		if err != nil {
 			return nil, err
 		}

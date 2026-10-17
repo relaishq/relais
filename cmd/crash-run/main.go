@@ -22,6 +22,7 @@ import (
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/nettopology"
 	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/workerdriver"
 	"github.com/relaishq/relais/pkg/callharness"
 )
 
@@ -64,8 +65,13 @@ func recordPrivateRouteSettings(dir string, tuned bool, kernel string, routes []
 	return nil
 }
 
+var selectedWorker workerdriver.Options
+
 func binaries(bin string) error {
-	for _, name := range []string{"relais-relay", "relais-worker", "relais-control"} {
+	if err := selectedWorker.Check(bin); err != nil {
+		return err
+	}
+	for _, name := range []string{"relais-relay", "relais-control"} {
 		stat, err := os.Stat(filepath.Join(bin, name))
 		if err != nil || stat.IsDir() || stat.Mode()&0111 == 0 {
 			return fmt.Errorf("build %s first (make build)", name)
@@ -174,7 +180,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	privateAPIs := []string{strings.TrimPrefix(relayReady.HTTP, "http://"), controlAddr}
 	controlArgs := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", relayReady.HTTP}
 	for _, name := range []string{"0", "1"} {
-		args := []string{filepath.Join(bin, "relais-worker"), "-media", roleBind(topology, "worker-"+name, false), "-http", roleBind(topology, "worker-"+name, false), "-name", name, "-control", controlURL, "-relay-leg", relayReady.Leg, "-relay-media", relayReady.Media}
+		args := selectedWorker.Command(bin, "-media", roleBind(topology, "worker-"+name, false), "-http", roleBind(topology, "worker-"+name, false), "-name", name, "-control", controlURL, "-relay-leg", relayReady.Leg, "-relay-media", relayReady.Media)
 		if os.Getenv("RELAIS_SRTP_DIAGNOSTICS") == "1" {
 			args = append(args, "-srtp-diagnostics")
 		}
@@ -347,19 +353,51 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			return result{}, err
 		}
 		defer stall.close()
+		if stall.Agent != nil {
+			stall.Agent.Before = stall.observeAgent(ctx, stall.WorkerURL)
+		}
 		if err := stall.Redis.Signal(syscall.SIGSTOP); err != nil {
 			return result{}, err
 		}
 		defer func() { _ = stall.Redis.Signal(syscall.SIGCONT) }()
 		stalledAt = time.Now()
 		fmt.Printf("SIGSTOP store pid=%d session=%s stall=%s\n", stall.Redis.PID(), call.SessionID(), stall.Duration)
-		select {
-		case <-ctx.Done():
-			return result{}, ctx.Err()
-		case err := <-sent:
-			senderJoined = true
-			return result{}, fmt.Errorf("media ended during store stall: %v", err)
-		case <-time.After(stall.Duration):
+		if stall.Agent == nil {
+			select {
+			case <-ctx.Done():
+				return result{}, ctx.Err()
+			case err := <-sent:
+				senderJoined = true
+				return result{}, fmt.Errorf("media ended during store stall: %v", err)
+			case <-time.After(stall.Duration):
+			}
+		} else {
+			stallEnd := time.NewTimer(stall.Duration)
+			agentTick := time.NewTicker(100 * time.Millisecond)
+		waitStall:
+			for {
+				select {
+				case <-ctx.Done():
+					stallEnd.Stop()
+					agentTick.Stop()
+					return result{}, ctx.Err()
+				case err := <-sent:
+					stallEnd.Stop()
+					agentTick.Stop()
+					senderJoined = true
+					return result{}, fmt.Errorf("media ended during store stall: %v", err)
+				case <-stallEnd.C:
+					break waitStall
+				case <-agentTick.C:
+					if stall.Agent != nil {
+						if observed := stall.observeAgent(ctx, stall.WorkerURL); observed != nil {
+							stall.Agent.During = append(stall.Agent.During, *observed)
+						}
+					}
+				}
+			}
+			stallEnd.Stop()
+			agentTick.Stop()
 		}
 	}
 	killed := time.Now()
@@ -497,6 +535,9 @@ observe:
 			break observe
 		}
 	}
+	if stall != nil && stall.Agent != nil && stall.Variant != "expired" && len(status.Calls) == 1 {
+		stall.Agent.After = stall.observeAgent(ctx, workerURLs[status.Calls[0].Owner])
+	}
 	observedUntil := time.Now()
 	stopMedia()
 	var mediaErr error
@@ -569,7 +610,9 @@ func measure(report *callharness.Report, relayAddr string, after time.Duration) 
 	r.PLI = move.Recovery.FirstDecodedPLIAfterKill
 	flowing := len(move.Tracks) == 2
 	for _, track := range move.Tracks {
-		r.Gap = max(r.Gap, track.Gap)
+		if selectedWorker.Binary == "" || selectedWorker.Agent == "echo" || selectedWorker.Agent == "demo" || track.Kind != "audio" {
+			r.Gap = max(r.Gap, track.Gap)
+		}
 		flowing = flowing && track.PacketsAfter > 0
 	}
 	video := report.Track("video")
@@ -617,6 +660,7 @@ func run() (err error) {
 	flag.DurationVar(&metricsInterval, "metrics-interval", time.Second, "private metrics scrape interval; 0 disables periodic scraping (pre-fault and final samples remain)")
 	storeStall := flag.String("store-stall", "", "store-stall variant: moderate (1.5s), long (5s), live (5s, survival), or expired (35s, no worker kill); owns throwaway Redis, loopback only")
 	stallDuration := flag.Duration("store-stall-duration", 0, "override selected store-stall duration")
+	selectedWorker.Flags(flag.CommandLine)
 	flag.Parse()
 	if *pauseWorker && (*terminate || *relayRestart || *relayStandby || *storeStall != "" || *scenario != "" || *bufferOn || *compareBuffer) {
 		return errors.New("worker-stop requires the plain worker takeover scenario")
@@ -923,7 +967,11 @@ func run() (err error) {
 		signal = "SIGTERM drain"
 	}
 	for m, results := range all {
-		conclusive := conclusiveEvents(results)
+		custom := selectedWorker.Binary != "" && selectedWorker.Agent != "echo" && selectedWorker.Agent != "demo"
+		conclusive := conclusiveEvents(results, custom)
+		if custom {
+			fmt.Println("CUSTOM_AGENT_SCOPE: transport/video process smoke; echo audio loss/freshness acceptance NOT-APPLICABLE; raw caller measurements retained")
+		}
 		if !callharness.EnoughConclusive(conclusive, len(results)) {
 			return fmt.Errorf("mode=%s caller measurement coverage %d/%d below %d%%", labels[m], conclusive, len(results), callharness.MinimumConclusivePercent)
 		}
@@ -1047,10 +1095,18 @@ func printPathMedians(mode string, results []result, starts ...string) {
 	}
 }
 
-func conclusiveEvents(results []result) int {
+func conclusiveEvents(results []result, custom ...bool) int {
 	n := 0
 	for _, result := range results {
-		if result.Measurement.Conclusive() {
+		conclusive := result.Measurement.Conclusive()
+		if len(custom) > 0 && custom[0] {
+			m := result.Measurement
+			conclusive = m.SettleWindow > 0
+			for _, v := range []callharness.MetricVerdict{m.VideoLoss, m.Video.Verdict, m.ResumeVerdict, m.FirstContentVerdict, m.FirstNewContentVerdict, m.FirstLiveVerdict} {
+				conclusive = conclusive && v.Trusted
+			}
+		}
+		if conclusive {
 			n++
 		}
 	}

@@ -115,7 +115,7 @@ func bufferTrial(ctx context.Context, manager *clusterprocess.Manager, caller, b
 	workers := map[string]*clusterprocess.Child{}
 	controlArgs := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", relayReady.HTTP}
 	for _, name := range []string{"0", "1"} {
-		args := []string{filepath.Join(bin, "relais-worker"), "-media", "127.0.0.1:0", "-http", "127.0.0.1:0", "-name", name, "-control", controlURL, "-relay-leg", relayReady.Leg, "-relay-media", relayReady.Media}
+		args := selectedWorker.Command(bin, "-media", "127.0.0.1:0", "-http", "127.0.0.1:0", "-name", name, "-control", controlURL, "-relay-leg", relayReady.Leg, "-relay-media", relayReady.Media)
 		if cacheOff {
 			args = append(args, "-frame-cache-off")
 		}

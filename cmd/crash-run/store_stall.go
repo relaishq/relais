@@ -23,6 +23,7 @@ import (
 )
 
 type storeStallOptions struct {
+	Agent                                   *storeStallAgentEvidence
 	ResumedAt                               time.Time
 	Redis                                   *clusterprocess.Child
 	Standby                                 *clusterprocess.Child
@@ -39,6 +40,7 @@ type storeStallOptions struct {
 }
 
 type storeStallEvidence struct {
+	Agent                                         *storeStallAgentEvidence `json:"custom_agent,omitempty"`
 	StalledAt, ActionAt, ResumedAt, ObservedUntil time.Time
 	SessionID, Owner                              string
 	Variant                                       string                  `json:"variant"`
@@ -261,7 +263,11 @@ func judgeStoreStall(report *callharness.Report, status controlplane.Status, e *
 		if t.Lost {
 			check(!report.StartedAt.Add(track.LastArrival).After(t.End.Add(50*time.Millisecond)), "media resumed after definitive loss")
 		} else {
-			check(report.StartedAt.Add(track.LastArrival).After(t.End) && until.Sub(report.StartedAt.Add(track.LastArrival)) < 200*time.Millisecond, "no continuing "+track.Kind+" media after resume")
+			if e.Agent != nil && track.Kind == "audio" {
+				check(report.StartedAt.Add(track.LastArrival).After(t.End), "no custom audio after stale takeover")
+			} else {
+				check(report.StartedAt.Add(track.LastArrival).After(t.End) && until.Sub(report.StartedAt.Add(track.LastArrival)) < 200*time.Millisecond, "no continuing "+track.Kind+" media after resume")
+			}
 		}
 	}
 	if t.Lost {
@@ -277,7 +283,7 @@ func judgeStoreStall(report *callharness.Report, status controlplane.Status, e *
 }
 
 func (s *storeStallOptions) judge(ctx context.Context, report *callharness.Report, hangupErr error, status controlplane.Status, ready clusterprocess.Ready, stalledAt, killed, until time.Time, dir string) (result, error) {
-	e := &storeStallEvidence{Variant: s.Variant, RequestedStall: s.Duration, ActualStall: s.Actual, TimedOut: s.TimedOut, MediaError: s.MediaError, Observations: s.Observations, StalledAt: stalledAt, ActionAt: killed, ResumedAt: s.ResumedAt, ObservedUntil: until, SessionID: s.SessionID, Owner: s.Owner}
+	e := &storeStallEvidence{Agent: s.Agent, Variant: s.Variant, RequestedStall: s.Duration, ActualStall: s.Actual, TimedOut: s.TimedOut, MediaError: s.MediaError, Observations: s.Observations, StalledAt: stalledAt, ActionAt: killed, ResumedAt: s.ResumedAt, ObservedUntil: until, SessionID: s.SessionID, Owner: s.Owner}
 	takeovers := crashTakeovers(status.Takeovers)
 	if len(takeovers) > 0 {
 		e.Takeover = takeovers[len(takeovers)-1]
@@ -383,6 +389,7 @@ func (s *storeStallOptions) judge(ctx context.Context, report *callharness.Repor
 	} else {
 		e.Failures = judgeStoreStall(report, status, e, ready.Media, stalledAt, killed, until)
 	}
+	e.Failures = append(e.Failures, judgeStoreStallAgent(e)...)
 	e.Failures = append(e.Failures, s.ObservationErrors...)
 	for _, o := range e.Observations {
 		e.Failures = append(e.Failures, o.Errors...)
@@ -458,6 +465,9 @@ func runStoreStallTrials(ctx context.Context, manager *clusterprocess.Manager, r
 			return err
 		}
 		options := &storeStallOptions{Redis: redis, Variant: variant, Duration: duration}
+		if selectedWorker.Binary != "" && selectedWorker.Agent == "delayed-loopback/v1" {
+			options.Agent = &storeStallAgentEvidence{Name: selectedWorker.Agent}
+		}
 		env := processEnv(key, addr, fmt.Sprintf("relais:crash:%s:stall:%d:", filepath.Base(dir), i))
 		trialCtx, stop := context.WithTimeout(ctx, after+duration+30*time.Second)
 		r, err := trial(trialCtx, manager, bin, trialDir, env, after, 1550*time.Millisecond+time.Duration(i)*7*time.Millisecond, verbose, false, false, false, nil, nil, options)
@@ -559,6 +569,16 @@ func judgeLiveSurvival(report *callharness.Report, status controlplane.Status, e
 		check(o.WorkerSessions == 1 && o.RelayRoutes > 0 && o.LeaseExists && o.SnapshotExists, "live session state missing after recovery")
 	}
 	for _, track := range report.Tracks {
+		if e.Agent != nil && track.Kind == "audio" {
+			continuing := false
+			for _, at := range track.Arrivals {
+				if report.StartedAt.Add(at).After(resumedAt) {
+					continuing = true
+				}
+			}
+			check(continuing, "no custom audio after store recovery")
+			continue
+		}
 		gap, _, _ := relayRestartGap(track.Arrivals, stalledAt.Sub(report.StartedAt), until.Sub(report.StartedAt))
 		check(gap < time.Second, track.Kind+" media gap reached one second")
 		check(until.Sub(report.StartedAt.Add(track.LastArrival)) < 200*time.Millisecond, "no continuing "+track.Kind+" media")

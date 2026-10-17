@@ -13,7 +13,7 @@ function page(search='',renderPage=false,status,hash='',storage=new Map()) {
  const context={window:{relaisMetrics:M,relaisContinuity:A,addEventListener(){}},document:{getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,addEventListener(){},removeEventListener(){},hidden:false},AbortController,sessionStorage:{getItem:key=>storage.get(key) || null,setItem:(key,value)=>storage.set(key,value)},location:{pathname:'/',search,hash},history:{replaceState(...args){context.replacedHistory=args;}},URLSearchParams,Headers,Blob,URL:{createObjectURL(blob){context.savedBlob=blob;return 'blob:test';},revokeObjectURL(){}},performance:{now:()=>10000,timeOrigin:0},setInterval(){},clearInterval(){},clearTimeout(){},setTimeout(fn,ms){if(ms===10000){context.uploadTimer=fn;return 10;}fn();},fetch:async()=>{if(status)return {ok:true,text:async()=>JSON.stringify(status)};throw new Error('status unavailable');}};
  const source=fs.readFileSync(require.resolve('./web/demo.js'),'utf8');
  const instrument=`
- window.testPage={setCall(s){call=s;},snapshot,event,start,saveResults,render,runChecklist,setChecklistSteps(){run=async()=>{};waitForLongHold=async()=>{};}};
+ window.testPage={setCall(s){call=s;},snapshot,event,start,sourceStream,cleanup,saveResults,render,runChecklist,setChecklistSteps(){run=async()=>{};waitForLongHold=async()=>{};}};
  sample=async()=>{};
  observePage=()=>{};attach=()=>{};statuses=()=>{};samples=()=>{};
  sourceStream=async()=>{window.sourceAcquired=true;throw new Error("media started");};
@@ -190,4 +190,58 @@ test('pending or failed results upload never blocks or changes checklist result'
   if(!fail)assert.equal(signal.aborted,true);
   assert.equal(api.snapshot(call()).version,5);
  }
+});
+
+
+test('custom agent selection reaches media and permits Move Drain Kill',async()=>{
+ const {api,context}=page();context.RTCPeerConnection=function(){return {close(){}};};
+ context.fetch=async()=>({ok:true,text:async()=>JSON.stringify({selected_agent:'delayed-loopback/v1',relayBuffer:'on',launchId:'custom'})});
+ await assert.rejects(api.start({source:'microphone'}),/media started/);
+ assert.equal(context.window.sourceAcquired,true);
+ const s=call();s.agentMode='delayed-loopback/v1';api.setCall(s);
+ for(const kind of ['move','drain','kill']) {
+  await api.event(kind);
+ }
+ const result=api.snapshot(s);
+ assert.equal(result.events.length,3);
+ for(const event of result.events) {
+  assert.equal(event.verdict.status,'inconclusive');
+  assert.ok(event.verdict.reasons.some(reason=>reason.includes('custom agent')));
+ }
+});
+
+
+function microphonePage(getUserMedia) {
+ const result=page('?source=microphone');const {context}=result;
+ const video={kind:'video',stop(){this.stopped=true;}};
+ const canvasStream={getVideoTracks:()=>[video],getTracks:()=>[video]};
+ const drawing=new Proxy({},{get:()=>()=>{},set:()=>true});
+ context.document.createElement=()=>({getContext:()=>drawing,captureStream:()=>canvasStream});
+ context.navigator={mediaDevices:{getUserMedia}};
+ context.MediaStream=class {constructor(tracks){this.tracks=tracks;}getTracks(){return this.tracks;}getAudioTracks(){return this.tracks.filter(track=>track.kind==='audio');}};
+ context.AudioContext=function(){throw new Error('microphone source must not create a synthetic tone');};
+ return {...result,video};
+}
+test('microphone source publishes the real audio track and releases it on hangup',async()=>{
+ const audio={kind:'audio',readyState:'live',stop(){this.stopped=true;}};
+ let request;
+ const {api,video}=microphonePage(async(options)=>{request=options;return {getAudioTracks:()=>[audio],getTracks:()=>[audio]};});
+ const s=call();s.source='microphone';s.sourceFrames=[];s.pc.close=()=>{};api.setCall(s);
+ const stream=await api.sourceStream(s);s.stream=stream;
+ assert.equal(JSON.stringify(request),JSON.stringify({audio:true,video:false}));
+ assert.equal(stream.getAudioTracks()[0],audio);
+ assert.equal(stream.getTracks()[1],video);
+ await api.cleanup(s);
+ assert.equal(audio.stopped,true);
+ assert.equal(video.stopped,true);
+});
+test('microphone permission arriving after cancellation releases the late track',async()=>{
+ const audio={kind:'audio',stop(){this.stopped=true;}};
+ let resolve;
+ const {api}=microphonePage(()=>new Promise(done=>{resolve=done;}));
+ const s=call();s.source='microphone';s.sourceFrames=[];api.setCall(s);
+ const pending=api.sourceStream(s);s.stopped=true;
+ resolve({getAudioTracks:()=>[audio],getTracks:()=>[audio]});
+ await assert.rejects(pending,/call ended/);
+ assert.equal(audio.stopped,true);
 });

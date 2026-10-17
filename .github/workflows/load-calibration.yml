@@ -7,7 +7,15 @@ on:
         description: Calibration, capacity, soak, or both ramps (separate jobs)
         default: 'calibration'
         type: choice
-        options: [calibration, capacity, both, soak]
+        options: [calibration, capacity, custom-capacity, both, soak]
+      save_cpu_us:
+        description: Custom gate operator Save CPU budget in microseconds per Handle event
+        default: '1000'
+        type: string
+      save_wall_us:
+        description: Custom gate operator Save wall-time budget in microseconds per Handle event
+        default: '1000'
+        type: string
       soak_callers:
         description: Concurrent soak calls
         default: '6'
@@ -236,6 +244,70 @@ jobs:
           name: soak-linux-${{ github.run_id }}
           path: |
             bin/soak-*
+            bin/load-run-*
+          if-no-files-found: warn
+          retention-days: 14
+
+
+  custom-capacity:
+    name: Manual custom-worker approval evidence
+    # Deliberately absent from schedules, required CI, and release dependencies.
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'custom-capacity'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install disposable topology dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg iproute2 iptables procps
+      - name: Build exact custom worker
+        run: |
+          make build
+          { uname -a; lscpu; go version; git rev-parse HEAD; sha256sum bin/delayed-loopback; ./bin/delayed-loopback -version; } > bin/custom-capacity-build.txt
+      - name: Measure custom-worker capacity with default operator ceilings
+        timeout-minutes: 20
+        env:
+          SAMPLE_DURATION: ${{ inputs.duration || '30s' }}
+          SAMPLE_MAX: ${{ inputs.capacity_max || '16' }}
+          GENERATOR_CALLERS: ${{ inputs.callers_per_process || '2' }}
+        run: |
+          # Driver owns every Redis/process/namespace. Stdout stays user-owned.
+          # shellcheck disable=SC2024
+          sudo -E ./bin/relais-load -capacity -topology=netns -workers=3 \
+            -worker-bin="$PWD/bin/delayed-loopback" -agent=delayed-loopback/v1 \
+            -duration="$SAMPLE_DURATION" -capacity-max="$SAMPLE_MAX" \
+            -callers-per-process="$GENERATOR_CALLERS" -gomaxprocs=1 \
+            -store-ops-budget=100 -store-bytes-budget=131072 \
+            -output=bin/custom-capacity-linux.json > bin/custom-capacity-linux.log 2>&1
+      - name: Restore artifact ownership and verify cleanup
+        if: always()
+        run: |
+          sudo find bin -maxdepth 1 -type d -name 'load-run-*' -exec chown -R "$(id -u):$(id -g)" {} +
+          sudo find bin -maxdepth 1 -type f -name 'custom-capacity-*' -exec chown "$(id -u):$(id -g)" {} +
+          if sudo ip netns list | grep -E '^relais-net-'; then
+            echo 'BLOCKING APPROVAL: owned topology namespaces remain'
+            exit 1
+          fi
+      - name: Report evidence for owner approval and block over-budget results
+        if: always()
+        env:
+          SAVE_CPU_US: ${{ inputs.save_cpu_us || '1000' }}
+          SAVE_WALL_US: ${{ inputs.save_wall_us || '1000' }}
+        run: |
+          if [ -f bin/custom-capacity-linux.log ]; then cat bin/custom-capacity-linux.log; fi
+          python3 scripts/ci/custom-capacity-report.py bin/custom-capacity-linux.json \
+            --save-cpu-us="$SAVE_CPU_US" --save-wall-us="$SAVE_WALL_US"
+      - name: Upload exact-build report and every process log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: custom-capacity-linux-${{ github.run_id }}
+          path: |
+            bin/custom-capacity-*
             bin/load-run-*
           if-no-files-found: warn
           retention-days: 14

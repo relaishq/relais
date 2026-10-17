@@ -29,6 +29,12 @@ launcher owns a throwaway Redis on a free port (never 6379) and reaps all child
 processes on Ctrl-C. No external audio service, data channel, native codec
 installation, or runtime encoder is needed.
 
+For a source-built custom worker, the launcher accepts `-worker-bin` and a
+custom `-agent` name, including replacement workers. See
+[Hear it in your browser](build-an-agent.md#hear-it-in-your-browser) for the
+keyless delayed-loopback command. Its delayed audio does not satisfy echo gap
+or tone/count checks; the page marks custom application continuity inconclusive.
+
 ## Browser cluster demo: move, drain and kill
 
 Run `make demo-cluster` with Go 1.26+ and `redis-server` on PATH, then open
