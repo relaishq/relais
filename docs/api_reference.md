@@ -93,6 +93,17 @@ Control error classes (codes preserve the existing HTTP status):
 | --- | --- | --- |
 | retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session` | Retry the identical message with bounded backoff and a deadline. |
 | definite | `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
+
+`control_order` is retryable while an earlier sequence from this controller is
+unconfirmed (neither a checkpointed 200 nor `control_stale`). A takeover can
+lose a 202-only start/stop pair and receive the stop retry first. Retry both
+identical messages until the gap closes. With no earlier unconfirmed message,
+`control_order` is definite. After a 202, allow at least the 30 s outage budget
+plus an acknowledgement margin (the demo allows 45 s). If all responses were
+nonaccepting `agent_capacity`, `control_not_ready`, `control_rejected`, or
+`agent_backpressure` refusals, the demo reports "not accepted" and reuses the
+sequence. Any uncertain response prevents that reuse.
+
 | uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
 
 `move_budget` is definite for Control: exceeding move-memory admission fails

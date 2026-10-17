@@ -2,7 +2,7 @@
 (() => {
   const M = window.relaisMetrics;
   const A = window.relaisContinuity;
-  const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check','relay-buffer','voice','ptt','voice-notice','voice-phase','voice-transcript','voice-reply'].map((id) => [id,document.getElementById(id)]));
+  const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check','relay-buffer','voice','ptt','voice-notice','voice-phase','voice-transcript','voice-reply','intro'].map((id) => [id,document.getElementById(id)]));
   const params = new URLSearchParams(location.search);
   let launchToken = new URLSearchParams(location.hash.slice(1)).get('token') || '';
   let tokenLaunchId = null;
@@ -134,14 +134,29 @@
       await sleep(Math.max(0,50-(performance.now()-at)));
     }
   }
+  // Voice status has its own bounded poll. Cluster diagnostics can wait behind
+  // an owner change and must not leave the last speaking phase on the page.
+  async function voiceStatuses(s) {
+    while(active(s)) {
+      const at=performance.now();
+      try {
+        const v=await json(`/demo/voice/${encodeURIComponent(s.id)}`,{signal:AbortSignal.timeout(2000)});
+        if(!active(s))return;
+        s.voice=v;el['voice-phase'].textContent=v.phase;
+        el['voice-transcript'].textContent=v.transcript || '';el['voice-reply'].textContent=v.reply || '';
+        el['voice-notice'].textContent=s.controlNotice || v.notice || v.error || (v.phase==='recording'?'Listening. Release to answer.':'');
+      }catch {if(active(s))el['voice-notice'].textContent='Voice status unavailable during owner change.';}
+      await sleep(Math.max(0,100-(performance.now()-at)));
+    }
+  }
+  function selectedIntro(name) {
+    if(name==='voice-agent/v1' && el.intro)el.intro.textContent='Hold the button, speak, then release to hear the voice agent answer. Move keeps the turn going. Kill shows what the worker could not save.';
+  }
   async function statuses(s) {
     while (active(s)) {
       try {
         const status = await json('/demo/status'); if (!active(s)) return;
-        s.status = status; s.statusError = null;resultsEnabled=!!status.results_enabled;captureAttachToken(status);
-        if(s.agentMode==='voice-agent/v1' && s.id) {
-          try { const v=await json(`/demo/voice/${encodeURIComponent(s.id)}`);if(active(s)){s.voice=v;el['voice-phase'].textContent=v.phase;el['voice-transcript'].textContent=v.transcript || '';el['voice-reply'].textContent=v.reply || '';el['voice-notice'].textContent=s.controlNotice || v.notice || v.error || (v.phase==='recording'?'Listening. Release to answer.':'');} } catch {if(active(s))el['voice-notice'].textContent='Voice status unavailable during owner change.';}
-        }
+        s.status = status; s.statusError = null;resultsEnabled=!!status.results_enabled;captureAttachToken(status);selectedIntro(status.selected_agent);
         if(s.agentMode==='demo' && s.id) {
           try { s.agent=await json(`/demo/agent/${encodeURIComponent(s.id)}`);s.agentError=null; }
           catch(err) {s.agentError=String(err);s.agent=null;}
@@ -284,7 +299,7 @@
         // polling is diagnostic and must never decide continuity requirements.
         const initialStatus=await json('/demo/status');resultsEnabled=!!initialStatus.results_enabled;captureAttachToken(initialStatus);s.status=initialStatus;
         if(typeof initialStatus.selected_agent!=='string' || !initialStatus.selected_agent.trim())throw new Error('selected agent missing or invalid');
-        s.agentMode=initialStatus.selected_agent;
+        s.agentMode=initialStatus.selected_agent;selectedIntro(s.agentMode);
         if(el.voice)el.voice.hidden=s.agentMode!=='voice-agent/v1';
         if(s.agentMode==='voice-agent/v1' && source!=='microphone')throw new Error('Select Microphone and test pattern for voice-agent.');
         if(!['on','off'].includes(initialStatus.relayBuffer))throw new Error('relay buffer mode missing or invalid');
@@ -303,7 +318,7 @@
         if(response.status!==201) throw new Error(`POST /calls ${response.status}: ${body}`);
         if(!location || !/^\/calls\/[^/]+$/.test(location)) throw new Error('invalid call Location');
         s.resource=location;s.id=decodeURIComponent(location.split('/').at(-1));
-        if(s.agentMode==='voice-agent/v1')s.ptt=new window.relaisPTT.Controller({request,path:`${s.resource}/agent/control`,notice:(message)=>{s.controlNotice=message;if(active(s))el['voice-notice'].textContent=message;}});
+        if(s.agentMode==='voice-agent/v1'){s.ptt=new window.relaisPTT.Controller({request,path:`${s.resource}/agent/control`,notice:(message)=>{s.controlNotice=message;if(active(s))el['voice-notice'].textContent=message;}});voiceStatuses(s);}
         if(!active(s)){await request(location,{method:'DELETE'});throw new Error('call ended');}
         await s.pc.setRemoteDescription({type:'answer',sdp:body});
         await waitFor(s,()=>mediaReady(s),15000,'media not ready; test tone may need a page click for Chrome autoplay');
@@ -491,7 +506,7 @@
   }
   function pttPress() {
     const s=call;if(!s || !active(s) || !s.ptt || s.pttHeld)return;
-    s.pttHeld=true;el.ptt.textContent='Release to answer';el['voice-notice'].textContent='Sending start…';
+    s.pttHeld=true;s.controlNotice='';el.ptt.textContent='Release to answer';el['voice-notice'].textContent='Sending start…';
     return s.ptt.send('ptt.start').catch(()=>{});
   }
   function pttRelease() {
@@ -515,7 +530,7 @@
   document.addEventListener('pointerdown',()=>{if(call && !call.stopped && call.audioContext?.state==='suspended') call.audioContext.resume().catch(error);});
   window.addEventListener('pagehide',()=>{if(call?.resource)request(call.resource,{method:'DELETE',keepalive:true}).catch(()=>{});});
   json('/demo/status').then((status)=>{
-    resultsEnabled=!!status.results_enabled;captureAttachToken(status);
+    resultsEnabled=!!status.results_enabled;captureAttachToken(status);selectedIntro(status.selected_agent);
     if(['on','off'].includes(status.relayBuffer))pageRelayBuffer=status.relayBuffer;
     render();
   }).catch(()=>{});

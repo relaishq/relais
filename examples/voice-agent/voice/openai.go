@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -41,6 +42,9 @@ func (p *OpenAI) Available() bool { return p != nil && p.key != "" }
 func (p *OpenAI) request(ctx context.Context, path, kind, key string, b []byte) (io.ReadCloser, error) {
 	if !p.Available() {
 		return nil, &ProviderError{Code: "provider_unavailable"}
+	}
+	if strings.ContainsAny(p.key, "\r\n") {
+		return nil, &ProviderError{Code: "provider_configuration"}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.origin+path, bytes.NewReader(b))
 	if err != nil {
@@ -134,4 +138,23 @@ func (p *OpenAI) Reply(ctx context.Context, key, transcript string, history []Ex
 func (p *OpenAI) Speech(ctx context.Context, key, text string) (io.ReadCloser, error) {
 	b, _ := json.Marshal(map[string]any{"model": SpeechModel, "input": text, "voice": "coral", "response_format": "opus"})
 	return p.request(ctx, "/audio/speech", "application/json", key, b)
+}
+
+// Warm establishes DNS/TCP/TLS and an idle keep-alive connection while the user
+// records. HEAD /models has no billable operation and sends no credentials.
+// The same HTTP client and transport serve every paid stage and later turn.
+func (p *OpenAI) Warm(ctx context.Context) {
+	if !p.Available() || strings.ContainsAny(p.key, "\r\n") {
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, p.origin+"/models", nil)
+	if err != nil {
+		return
+	}
+	response, err := p.client.Do(req)
+	if err != nil {
+		return
+	}
+	defer func() { _ = response.Body.Close() }()
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 8<<10))
 }

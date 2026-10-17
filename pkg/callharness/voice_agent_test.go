@@ -32,7 +32,8 @@ type voiceFixtureProvider struct {
 	oggHash       atomic.Value
 }
 
-func (*voiceFixtureProvider) Available() bool { return true }
+func (*voiceFixtureProvider) Available() bool      { return true }
+func (*voiceFixtureProvider) Warm(context.Context) {}
 func (p *voiceFixtureProvider) pause(ctx context.Context, phase string) error {
 	if p.cut != phase {
 		return nil

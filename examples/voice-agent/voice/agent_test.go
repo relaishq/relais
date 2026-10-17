@@ -184,7 +184,7 @@ func TestTakeoverBeforeRecordingCheckpointIsVisible(t *testing.T) {
 	// accepted before the worker died. Never infer absence of loss from idle.
 	_, err := a.Handle(context.Background(), agent.Event{Kind: agent.Resumed, Resume: &agent.ResumeNotice{ResumeNotice: legacy.ResumeNotice{Kind: legacy.Takeover}}})
 	require.NoError(t, err)
-	require.Equal(t, agent.OutcomeUnknown, a.state.Outcome)
+	require.Empty(t, a.state.Outcome, "idle takeover preserves earlier outcome")
 	require.NotEmpty(t, a.state.Notice)
 	require.Equal(t, "idle", a.state.Phase)
 }

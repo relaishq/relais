@@ -495,6 +495,17 @@ Control error classes (codes preserve the existing HTTP status):
 | --- | --- | --- |
 | retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session` | Retry the identical message with bounded backoff and a deadline. |
 | definite | `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
+
+`control_order` is retryable while an earlier sequence from this controller is
+unconfirmed (neither a checkpointed 200 nor `control_stale`). A takeover can
+lose a 202-only start/stop pair and receive the stop retry first. Retry both
+identical messages until the gap closes. With no earlier unconfirmed message,
+`control_order` is definite. After a 202, allow at least the 30 s outage budget
+plus an acknowledgement margin (the demo allows 45 s). If all responses were
+nonaccepting `agent_capacity`, `control_not_ready`, `control_rejected`, or
+`agent_backpressure` refusals, the demo reports "not accepted" and reuses the
+sequence. Any uncertain response prevents that reuse.
+
 | uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
 
 `move_budget` is definite for Control: exceeding move-memory admission fails
@@ -555,7 +566,7 @@ not a general mixed-version deployment promise.
 ## Run Demo A
 
 The [voice-agent example](../examples/voice-agent) is a push-to-talk worker in
-this module. It registers `voice-agent/v1` and four versioned ReadOnly task kinds.
+this module. It registers `voice-agent/v1` and five versioned ReadOnly task kinds (four turn stages plus connection warming).
 It uses public imports only and is built by `make build`.
 
 ```sh
@@ -649,7 +660,7 @@ because none of its audio has played. This uses the existing ADR task and
 playback contracts without a provider connection or external audio store.
 
 Only transcript/reply text, four bounded exchanges, phase and cursor metadata
-enter version-2 app state. Version-1 app snapshots are refused; drain old
+enter version-3 app state. Version-1 and version-2 app snapshots are refused; drain old
 voice calls before deploying this incompatible example update. Save never
 reads/copies/hashes audio. A stage whose result was already accepted skips its provider call when retried with a
 nonzero `After()`. Later stages take saved text, so STT is not repeated after
@@ -684,3 +695,19 @@ loaded only in process. They never run in CI or load an env file by default.
 Realtime/live STT, PCM conversion, durable conversation/result blobs, and provider
 connections that survive worker restart remain outside this slice. See
 [ADR 0010](adr/0010-pluggable-agents.md) for the accepted contract and later work.
+
+Speech response transport/read failures, including a truncated HTTP body, are
+`provider_uncertain`: retry the identical task key once, then report
+`OutcomeUnknown`. Malformed containers in a complete HTTP response are `Failed` / `invalid_speech`.
+Other unclassified task failures use the stage-neutral `task_failed` code.
+An invalid provider key header is a definite `provider_configuration` error;
+no provider request is sent. The attached fault hook and non-voice workers do
+not receive `OPENAI_API_KEY`.
+
+On `ptt.start`, Demo A starts a best-effort ReadOnly connection-warming task
+with a 3 s timeout. It sends an unauthenticated `HEAD /v1/models` through the
+same keep-alive client used for STT, reply and speech. This is not a billed
+inference request and sends no API key. Its reserved turn and ignored result
+cannot capture a provider cursor or delay segment completion. App-state version
+3 reserves ten task turns per press; workers running earlier app versions must
+not share a pool with this version.

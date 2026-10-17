@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/workerapp"
 )
@@ -22,13 +23,15 @@ const (
 	ReplyKind         = "voice/reply/v1"
 	SpeechKind        = "voice/speech/v1"
 	PlayKind          = "voice/play/v1"
+	WarmKind          = "voice/warm/v1"
 	MaxStateBytes     = 8 << 10
 	MaxRecordingBytes = 64 << 10
 	MaxSpeechBytes    = 128 << 10
 	RecordTime        = 8 * time.Second
 	SpeechTime        = 20 * time.Second
 	recordTimer       = "voice/record/v1"
-	stateVersion      = 2
+	stateVersion      = 3
+	turnStride        = MaxSegments + 2
 )
 
 type Exchange struct {
@@ -39,31 +42,33 @@ type Exchange struct {
 // State is the complete durable schema. It contains no provider credentials,
 // audio, provider response IDs, or host notices. Text limits count JSON bytes.
 type State struct {
-	Turn         agent.Turn    `json:"turn"`
-	Phase        string        `json:"phase"`
-	Transcript   string        `json:"transcript,omitempty"`
-	Reply        string        `json:"reply,omitempty"`
-	History      []Exchange    `json:"history,omitempty"`
-	Outcome      agent.Outcome `json:"outcome,omitempty"`
-	Error        string        `json:"error,omitempty"`
-	Notice       string        `json:"notice,omitempty"`
-	Cursor       uint64        `json:"cursor,omitempty"`
-	Task         agent.TaskID  `json:"task,omitempty"`
-	Segment      int           `json:"segment,omitempty"` // zero-based current/waiting playback segment
-	Render       int           `json:"render,omitempty"`  // at most one segment ahead
-	RenderTask   agent.TaskID  `json:"render_task,omitempty"`
-	RenderCursor uint64        `json:"render_cursor,omitempty"`
-	RenderReady  bool          `json:"render_ready,omitempty"`
-	PlayTask     agent.TaskID  `json:"play_task,omitempty"`
-	PlayCursor   uint64        `json:"play_cursor,omitempty"`
-	SpeechBytes  int           `json:"speech_bytes,omitempty"`
-	SpeechNanos  time.Duration `json:"speech_nanos,omitempty"`
-	Seen         Window        `json:"seen"`
+	Turn          agent.Turn    `json:"turn"`
+	Phase         string        `json:"phase"`
+	Transcript    string        `json:"transcript,omitempty"`
+	Reply         string        `json:"reply,omitempty"`
+	History       []Exchange    `json:"history,omitempty"`
+	Outcome       agent.Outcome `json:"outcome,omitempty"`
+	Error         string        `json:"error,omitempty"`
+	Notice        string        `json:"notice,omitempty"`
+	RestartNotice bool          `json:"restart_notice,omitempty"`
+	Cursor        uint64        `json:"cursor,omitempty"`
+	Task          agent.TaskID  `json:"task,omitempty"`
+	Segment       int           `json:"segment,omitempty"` // zero-based current/waiting playback segment
+	Render        int           `json:"render,omitempty"`  // at most one segment ahead
+	RenderTask    agent.TaskID  `json:"render_task,omitempty"`
+	RenderCursor  uint64        `json:"render_cursor,omitempty"`
+	RenderReady   bool          `json:"render_ready,omitempty"`
+	PlayTask      agent.TaskID  `json:"play_task,omitempty"`
+	PlayCursor    uint64        `json:"play_cursor,omitempty"`
+	SpeechBytes   int           `json:"speech_bytes,omitempty"`
+	SpeechNanos   time.Duration `json:"speech_nanos,omitempty"`
+	Seen          Window        `json:"seen"`
 }
 
 type Agent struct {
 	state     State
 	available bool
+	canWarm   bool
 	buffer    []byte // immutable between callback transactions; recording or speech
 	rollback  []byte
 	length    int // Save reads this O(1) metadata, never the payload
@@ -76,7 +81,8 @@ func Registration(provider Provider) workerapp.Registration {
 		if limit == 0 {
 			limit = MaxStateBytes
 		}
-		return &Agent{state: State{Phase: "idle"}, available: provider != nil && provider.Available(), limit: limit}
+		_, canWarm := provider.(interface{ Warm(context.Context) })
+		return &Agent{canWarm: canWarm, state: State{Phase: "idle"}, available: provider != nil && provider.Available(), limit: limit}
 	}, Tasks: handlers(provider), Limits: agent.Limits{MaxStateBytes: MaxStateBytes}}
 }
 func (a *Agent) reset(outcome agent.Outcome, code, notice string) agent.Effects {
@@ -86,7 +92,7 @@ func (a *Agent) reset(outcome agent.Outcome, code, notice string) agent.Effects 
 	a.state.RenderCursor, a.state.PlayCursor = 0, 0
 	a.state.RenderReady = false
 	a.buffer, a.length = nil, 0
-	floor := a.state.Turn + MaxSegments + 1
+	floor := a.state.Turn + turnStride
 	return agent.Effects{CancelBefore: &floor, ClearAudioBefore: &floor, CancelTimers: []string{recordTimer}}
 }
 func (a *Agent) task(kind, phase string, request []byte) agent.Effects {
@@ -117,11 +123,16 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 		}
 		switch e.Control.Name {
 		case "ptt.start":
-			if a.state.Turn >= agent.Turn(math.MaxUint64-2*(MaxSegments+1)) {
+			if a.state.Turn >= agent.Turn(math.MaxUint64-2*turnStride) {
 				return a.reset(agent.Capacity, "turn_limit", "Start a new call."), nil
 			}
-			a.state.Turn += MaxSegments + 1
-			effects := a.reset(agent.OK, "", "")
+			a.state.Turn += turnStride
+			notice := ""
+			if a.state.RestartNotice {
+				notice = "Recording restarted after a worker stop; earlier speech may be missing. Saved text is shown below."
+			}
+			a.state.RestartNotice = false
+			effects := a.reset(agent.OK, "", notice)
 			floor := a.state.Turn
 			effects.CancelBefore, effects.ClearAudioBefore = &floor, &floor
 			if !a.available {
@@ -130,11 +141,18 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 			a.state.Phase, a.state.Transcript, a.state.Reply = "recording", "", ""
 			a.state.Segment, a.state.Render, a.state.SpeechBytes, a.state.SpeechNanos = 0, 0, 0, 0
 			effects.SetTimers = []agent.TimerSpec{{ID: recordTimer, After: RecordTime}}
+			if a.canWarm {
+				// A separate ReadOnly task performs only an unauthenticated HEAD.
+				// It never occupies a speech/play cursor or a playback turn.
+				effects.StartTasks = []agent.TaskSpec{{Step: "warm", Kind: WarmKind, Turn: a.state.Turn + MaxSegments + 1, Class: agent.ReadOnly, Resume: agent.Retry, Timeout: 3 * time.Second}}
+			}
 			return effects, nil
 		case "ptt.stop":
 			if a.state.Phase == "recording" {
 				return a.finish(), nil
 			}
+		default:
+			a.state.Notice = "Unknown control. Use the hold-to-talk button."
 		}
 	case agent.AudioInput:
 		if e.Input == nil || !a.state.Seen.Accept(e.Input.Progress.SSRC, e.Input.Progress.Index) || a.state.Phase != "recording" {
@@ -165,14 +183,26 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 			return a.finish(), nil
 		}
 	case agent.Resumed:
-		if e.Resume != nil && (e.Resume.MoveOnly == agent.OutcomeUnknown || string(e.Resume.Kind) == "takeover") {
-			return a.reset(agent.OutcomeUnknown, "turn_interrupted", "The worker stopped. Uncheckpointed speech or audio may be lost; saved text is shown below. Hold to talk for a new turn."), nil
+		if e.Resume != nil && (e.Resume.MoveOnly == agent.OutcomeUnknown || e.Resume.Kind == legacy.Takeover) {
+			a.state.RestartNotice = true
+			notice := "The worker stopped; earlier speech may be missing. Saved text is shown below. Hold to talk for a new turn."
+			if a.state.Phase == "idle" && e.Resume.MoveOnly != agent.OutcomeUnknown {
+				// Idle does not prove absence of a later, 202-only lost press.
+				// Preserve the completed turn's outcome while retaining a warning
+				// through a possible redelivery of that press.
+				a.state.Notice = notice
+				return agent.Effects{}, nil
+			}
+			return a.reset(agent.OutcomeUnknown, "turn_interrupted", notice), nil
 		}
 	case agent.TaskMessage:
 		r := e.Result
 		if r == nil {
 			break
 		}
+		if r.Turn == a.state.Turn+MaxSegments+1 {
+			break
+		} // best-effort connection warming
 		if r.Turn == 0 && r.Outcome == agent.Capacity {
 			return a.reset(agent.Capacity, "capacity", "Input or work was refused by a resource limit. Hold to talk again."), nil
 		}
@@ -243,8 +273,11 @@ func (a *Agent) Restore(_ context.Context, s agent.State) error {
 	if s.Version != stateVersion {
 		return agent.ErrVersion
 	}
-	if len(s.Bytes) > a.limit || !utf8.Valid(s.Bytes) {
+	if len(s.Bytes) > a.limit {
 		return agent.ErrStateTooLarge
+	}
+	if !utf8.Valid(s.Bytes) {
+		return invalidStateEncoding{}
 	}
 	var state State
 	if err := json.Unmarshal(s.Bytes, &state); err != nil {
@@ -258,7 +291,7 @@ func (a *Agent) Restore(_ context.Context, s agent.State) error {
 	if (state.Phase == "recording" && s.MoveOnlyLength > MaxRecordingBytes) || (s.HasMoveOnly && state.Phase != "recording" && state.Phase != "synthesizing" && state.Phase != "playing") {
 		return errors.New("voice: invalid move phase/size")
 	}
-	if state.Turn >= agent.Turn(math.MaxUint64-(MaxSegments+1)) || len(state.History) > 4 || s.MoveOnlyLength < 0 || s.MoveOnlyLength > max(MaxRecordingBytes, MaxSegmentBytes) || s.HasMoveOnly != (s.MoveOnlyLength > 0) {
+	if state.Turn >= agent.Turn(math.MaxUint64-turnStride) || len(state.History) > 4 || s.MoveOnlyLength < 0 || s.MoveOnlyLength > max(MaxRecordingBytes, MaxSegmentBytes) || s.HasMoveOnly != (s.MoveOnlyLength > 0) {
 		return errors.New("voice: invalid state")
 	}
 	if state.Segment < 0 || state.Segment > MaxSegments || state.Render < 0 || state.Render >= MaxSegments || state.SpeechBytes < 0 || state.SpeechBytes > MaxSpeechBytes || state.SpeechNanos < 0 || state.SpeechNanos > SpeechTime {
@@ -317,3 +350,9 @@ func boundedText(s string, n int) string {
 }
 
 var _ agent.MoveOnlyState = (*Agent)(nil)
+
+// InvalidEncoding identifies a malformed state independently of its size.
+type invalidStateEncoding struct{}
+
+func (invalidStateEncoding) Error() string         { return "voice: invalid UTF-8 state" }
+func (invalidStateEncoding) InvalidEncoding() bool { return true }

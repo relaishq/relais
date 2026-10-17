@@ -141,16 +141,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 		if err != nil {
 			return nil, err
 		}
-		workerEnv := make([]string, 0, len(env)+1)
-		for _, entry := range env {
-			if !strings.HasPrefix(entry, "PION_LOG_INFO=") {
-				workerEnv = append(workerEnv, entry)
-			}
-		}
-		workerEnv = append(workerEnv, "PION_LOG_INFO=session")
-		if key := os.Getenv("OPENAI_API_KEY"); key != "" {
-			workerEnv = append(workerEnv, "OPENAI_API_KEY="+key)
-		}
+		workerEnv := workerProcessEnv(cfg, env)
 		args := []string{worker.Path(bin), "-media", media, "-http", "127.0.0.1:0", "-name", name, "-control", d.control, "-relay-leg", relay.Leg, "-relay-media", relay.Media, "-agent", selectedAgent(cfg)}
 		args = append(args, workerArgs(cfg)...)
 		child, ready, err := start(ctx, "worker-"+name, workerEnv, args...)
@@ -346,4 +337,18 @@ func workerArgs(cfg config) []string {
 		args = []string{"-agent-max-snapshot-bytes=24576", "-agent-snapshot-bytes-per-second=270336", "-agent-snapshot-burst-bytes=98304"}
 	}
 	return append(args, cfg.WorkerArgs...)
+}
+
+func workerProcessEnv(cfg config, env []string) []string {
+	workerEnv := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "PION_LOG_INFO=") {
+			workerEnv = append(workerEnv, entry)
+		}
+	}
+	workerEnv = append(workerEnv, "PION_LOG_INFO=session")
+	if key := os.Getenv("OPENAI_API_KEY"); key != "" && selectedAgent(cfg) == "voice-agent/v1" {
+		workerEnv = append(workerEnv, "OPENAI_API_KEY="+key)
+	}
+	return workerEnv
 }

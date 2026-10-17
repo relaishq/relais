@@ -36,6 +36,14 @@ type speechRequest struct {
 
 func handlers(p Provider) map[string]agent.TaskHandler {
 	return map[string]agent.TaskHandler{
+		WarmKind: func(ctx context.Context, run *agent.TaskRun) error {
+			if run.After() == 0 {
+				if provider, ok := p.(interface{ Warm(context.Context) }); ok {
+					provider.Warm(ctx)
+				}
+			}
+			return nil
+		},
 		TranscribeKind: func(ctx context.Context, run *agent.TaskRun) error {
 			if run.After() > 0 {
 				return nil
@@ -78,16 +86,7 @@ func handlers(p Provider) map[string]agent.TaskHandler {
 			if err := json.Unmarshal(run.Spec().Request, &request); err != nil || request.Bytes <= 1 || request.Bytes > MaxSegmentBytes || request.Nanos <= 0 || request.Nanos > 8*time.Second {
 				return run.Fail(agent.Failed, "invalid_request")
 			}
-			var audio []byte
-			err := retryOnce(ctx, func() error {
-				body, err := p.Speech(ctx, run.Key(), request.Text)
-				if err != nil {
-					return err
-				}
-				defer func() { _ = body.Close() }()
-				audio, err = readSpeechBound(ctx, body, request.Bytes, request.Nanos)
-				return err
-			})
+			audio, err := renderSpeech(ctx, p, run.Key(), request)
 			if err != nil {
 				return taskFailure(run, err)
 			}
@@ -107,7 +106,7 @@ func taskFailure(run *agent.TaskRun, err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	return run.Fail(agent.Failed, "invalid_speech")
+	return run.Fail(agent.Failed, "task_failed")
 }
 
 // Retry a failed idempotent provider request once, with the identical body/key.
@@ -129,7 +128,7 @@ func retryOnce(ctx context.Context, call func() error) error {
 }
 func safeCode(s string) string {
 	switch s {
-	case "provider_unavailable", "provider_refused", "provider_uncertain", "invalid_audio", "invalid_speech", "invalid_request":
+	case "provider_unavailable", "provider_refused", "provider_uncertain", "provider_configuration", "invalid_audio", "invalid_speech", "invalid_request":
 		return s
 	default:
 		return "task_failed"
@@ -303,4 +302,39 @@ func Play(ctx context.Context, run *agent.TaskRun) error {
 		start = end
 	}
 	return nil
+}
+
+// speechBody redacts failures at the transport boundary. A body read error
+// (including HTTP truncation) is uncertain. A normally completed HTTP body
+// containing an incomplete Ogg container is a definite format rejection.
+type speechBody struct{ io.Reader }
+
+func (r *speechBody) Read(b []byte) (int, error) {
+	n, err := r.Reader.Read(b)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return n, &ProviderError{Code: "provider_uncertain", Uncertain: true}
+	}
+	return n, err
+}
+
+// renderSpeech accepts a complete bounded segment before the task emits it.
+func renderSpeech(ctx context.Context, p Provider, key string, request speechRequest) ([]byte, error) {
+	var audio []byte
+	err := retryOnce(ctx, func() error {
+		body, err := p.Speech(ctx, key, request.Text)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = body.Close() }()
+		audio, err = readSpeechBound(ctx, &speechBody{Reader: body}, request.Bytes, request.Nanos)
+		if err != nil {
+			var provider *ProviderError
+			if errors.As(err, &provider) || ctx.Err() != nil {
+				return err
+			}
+			return &ProviderError{Code: "invalid_speech"}
+		}
+		return nil
+	})
+	return audio, err
 }
