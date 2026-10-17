@@ -22,7 +22,7 @@ class WorkerOverrides(unittest.TestCase):
                               self.run_driver(name, '-worker-bin=/bin/sh'))
 
     def test_echo_specific_crash_modes_refuse_custom(self):
-        for flag in ('-buffer', '-buffer-lossy', '-compare-buffer', '-relay-restart', '-relay-standby', '-scenario=move'):
+        for flag in ('-sigterm', '-buffer', '-buffer-lossy', '-compare-buffer', '-relay-restart', '-relay-standby', '-scenario=move'):
             with self.subTest(flag=flag):
                 self.assertIn('these modes require echo audio semantics',
                               self.run_driver('crash-run', '-worker-bin=/bin/sh', '-agent=custom/v1', flag))

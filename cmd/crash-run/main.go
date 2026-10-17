@@ -703,8 +703,8 @@ func run() (err error) {
 	if err := selectedWorker.Validate(); err != nil {
 		return err
 	}
-	if workerdriver.IsCustom(selectedWorker.Agent) && (*bufferOn || *compareBuffer || *replayLoss || *relayRestart || *relayStandby || *scenario != "") {
-		return errors.New("custom agents do not support -buffer, -buffer-lossy, -compare-buffer, -relay-restart, -relay-standby or -scenario: these modes require echo audio semantics")
+	if workerdriver.IsCustom(selectedWorker.Agent) && (*terminate || *bufferOn || *compareBuffer || *replayLoss || *relayRestart || *relayStandby || *scenario != "") {
+		return errors.New("custom agents do not support -sigterm, -buffer, -buffer-lossy, -compare-buffer, -relay-restart, -relay-standby or -scenario: these modes require echo audio semantics")
 	}
 	if err := validateStallAgent(*storeStall, selectedWorker); err != nil {
 		return err

@@ -73,7 +73,7 @@ worker behavior. A worker path is relative to the directory where you run the
 driver, not its per-trial log directory. The local topology needs `ps` to verify
 process identity; a sandbox that denies `ps` cannot complete this smoke.
 
-Custom agents support the plain crash-run worker takeover and drain paths.
+Custom agents support the plain crash-run worker takeover path. `-sigterm` (drain),
 `-buffer`, `-buffer-lossy`, `-compare-buffer`, `-relay-restart`, `-relay-standby`,
 and `-scenario` require echo audio semantics and reject custom agents before
 starting any process. Their stock rules remain unchanged. Store-stall modes

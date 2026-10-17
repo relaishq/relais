@@ -65,6 +65,10 @@ jobs:
       - name: Build
         run: make build
 
+      # The manual capacity gate and driver-override checks are judged by these scripts.
+      - name: Test CI evidence scripts
+        run: python3 -m unittest discover -s scripts/ci
+
       # The demo page's verdict logic decides the browser go/no-go.
       - name: Run demo page tests
         run: node --test cmd/relais-demo/*.test.cjs
