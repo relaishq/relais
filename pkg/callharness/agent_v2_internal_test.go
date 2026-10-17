@@ -322,6 +322,9 @@ func TestV2AgentIncompatibleTargetTypedLoss(t *testing.T) {
 	for _, mismatch := range []string{"name", "kinds", "bounds", "legacy-echo", "remote-name"} {
 		t.Run(mismatch, func(t *testing.T) {
 			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+				if mismatch == "legacy-echo" {
+					store = &round2DelayedReleaseStore{Store: store}
+				}
 				regs, stats := v2Registrations([]byte("private-recording"))
 				switch mismatch {
 				case "name", "remote-name":
@@ -358,6 +361,9 @@ func TestV2AgentIncompatibleTargetTypedLoss(t *testing.T) {
 					require.Zero(t, stats[1].saves.Load(), "refuse before target callbacks")
 				}
 				// With the compatible source gone, takeover must use typed loss cleanup.
+				if delayed, ok := store.(*round2DelayedReleaseStore); ok {
+					delayed.armed.Store(true)
+				}
 				require.NoError(t, workerprobe.Kill(sys.workers[0].LocalAddr()))
 				require.Eventually(t, func() bool {
 					status, err := sys.plane.Status(ctx)
@@ -366,10 +372,16 @@ func TestV2AgentIncompatibleTargetTypedLoss(t *testing.T) {
 				status, err := sys.plane.Status(ctx)
 				require.NoError(t, err)
 				require.Contains(t, status.Takeovers[len(status.Takeovers)-1].Error, agent.ErrIncompatibleAgent.Error())
-				_, err = store.Get(ctx, call.SessionID())
-				require.Error(t, err)
-				_, err = store.GetState(ctx, call.SessionID())
-				require.Error(t, err)
+				// Lost accounting is intentionally published before conditional cleanup.
+				// Wait for authoritative removal, not an arbitrary store/transport error.
+				require.Eventually(t, func() bool {
+					_, leaseErr := store.Get(ctx, call.SessionID())
+					_, stateErr := store.GetState(ctx, call.SessionID())
+					absent := func(err error) bool {
+						return errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrEnded)
+					}
+					return absent(leaseErr) && absent(stateErr)
+				}, 4*time.Second, 5*time.Millisecond)
 				require.Zero(t, sys.workers[1].SessionCount())
 				require.Zero(t, stats[1].exports.Load())
 				require.Zero(t, stats[1].imports.Load())

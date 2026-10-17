@@ -36,7 +36,8 @@
 // during that wait follows the task's Retry/Abandon rules or reports OutcomeUnknown.
 // Registration identity persists declared Limits (zeros mean host defaults).
 // Workers resolve effective limits locally and refuse restored content that
-// exceeds those limits without truncation.
+// exceeds those limits without truncation. Crash-lost move-only data and audio
+// do not consume the adopting worker's payload limits; they report OutcomeUnknown.
 package agent
 
 import (

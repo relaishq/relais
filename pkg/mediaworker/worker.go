@@ -294,8 +294,16 @@ func New(cfg Config) (*Worker, error) {
 	if cfg.SnapshotInterval <= 0 {
 		cfg.SnapshotInterval = 100 * time.Millisecond
 	}
-	if err := cfg.SnapshotLimits.ValidateForInterval(cfg.SnapshotInterval); err != nil {
+	// Resource limits remain validated for every worker. The cadence rule is
+	// v2-only; never instantiate a legacy factory without a real session just
+	// to classify it. Factory-only adapters also check cadence in initV2Agent.
+	if err := cfg.SnapshotLimits.validateResourceLimits(); err != nil {
 		return nil, err
+	}
+	if len(cfg.Agent.Registrations) > 0 {
+		if err := cfg.SnapshotLimits.ValidateForInterval(cfg.SnapshotInterval); err != nil {
+			return nil, err
+		}
 	}
 	if cfg.HeartbeatInterval <= 0 {
 		cfg.HeartbeatInterval = 100 * time.Millisecond

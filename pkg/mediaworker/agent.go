@@ -20,6 +20,9 @@ import (
 
 // AgentConfig bounds per-call application work. Zero values use the defaults.
 type AgentConfig struct {
+	// Factory preserves the legacy single-factory seam. V2 hosts also supply
+	// Registrations for startup cadence validation; an opaque factory-only v2
+	// adapter is validated when resolved, without probing legacy factories.
 	Factory agent.Factory
 	// Registrations resolves v2 restores by their persisted name, independently
 	// of the factory selected for new calls. Nil preserves the single-factory seam.

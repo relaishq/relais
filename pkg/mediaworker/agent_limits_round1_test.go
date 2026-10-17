@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/agenthost"
+	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/relay"
 	"github.com/relaishq/relais/pkg/sessionstore"
@@ -77,7 +78,7 @@ func TestRound1SnapshotSettings(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			l := SnapshotLimits{}.defaults()
 			tc.change(&l)
-			w, err := New(Config{SnapshotLimits: l, SnapshotInterval: tc.interval})
+			w, err := New(Config{SnapshotLimits: l, SnapshotInterval: tc.interval, Agent: AgentConfig{Registrations: map[string]legacy.Factory{"unit/v1": agenthost.Factory(agenthost.Registration{})}}})
 			if w != nil {
 				require.NoError(t, w.Close())
 			}
@@ -147,7 +148,7 @@ func TestRound1RestoreContentCeilings(t *testing.T) {
 			case "audio":
 				target.state.Agent.V2.Playback.Length = 2 << 20
 			}
-			err := target.initAgent(true, ResumeOptions{})
+			err := target.initAgent(true, ResumeOptions{}, &movePayload{})
 			require.ErrorIs(t, err, agent.ErrCapacity, "content exceeding a local ceiling must refuse with typed capacity")
 		})
 	}

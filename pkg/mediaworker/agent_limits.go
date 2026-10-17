@@ -51,6 +51,26 @@ func (l SnapshotLimits) Validate() error { return l.ValidateForInterval(100 * ti
 // periodic transport checkpoints. Intent admission also preserves one required
 // checkpoint in the bucket; excess forced work waits for replenishment.
 func (l SnapshotLimits) ValidateForInterval(interval time.Duration) error {
+	if err := l.validateResourceLimits(); err != nil {
+		return err
+	}
+	if interval <= 0 {
+		return fmt.Errorf("%w: snapshot interval must be positive", agent.ErrCapacity)
+	}
+	numerator := int64(l.MaxBytes) * int64(time.Second)
+	periodic := numerator / int64(interval)
+	if numerator%int64(interval) != 0 {
+		periodic++
+	}
+	minimum := periodic + int64(l.MaxBytes)
+	if int64(l.BytesPerSecond) < minimum {
+		return fmt.Errorf("%w: -agent-snapshot-bytes-per-second must be at least %d for snapshot interval %s", agent.ErrCapacity, minimum, interval)
+	}
+	return nil
+}
+
+// validateResourceLimits is independent of checkpoint cadence and agent kind.
+func (l SnapshotLimits) validateResourceLimits() error {
 	const maxByteFlag = 1<<30 - 1 // sums of two byte caps fit even a 32-bit int
 	for _, v := range []struct {
 		name    string
@@ -66,18 +86,6 @@ func (l SnapshotLimits) ValidateForInterval(interval time.Duration) error {
 		if v.value < 1 || v.value > v.maximum {
 			return fmt.Errorf("%w: -%s must be between 1 and %d bytes", agent.ErrCapacity, v.name, v.maximum)
 		}
-	}
-	if interval <= 0 {
-		return fmt.Errorf("%w: snapshot interval must be positive", agent.ErrCapacity)
-	}
-	numerator := int64(l.MaxBytes) * int64(time.Second)
-	periodic := numerator / int64(interval)
-	if numerator%int64(interval) != 0 {
-		periodic++
-	}
-	minimum := periodic + int64(l.MaxBytes)
-	if int64(l.BytesPerSecond) < minimum {
-		return fmt.Errorf("%w: -agent-snapshot-bytes-per-second must be at least %d for snapshot interval %s", agent.ErrCapacity, minimum, interval)
 	}
 	if l.BurstBytes < 2*l.MaxBytes {
 		return fmt.Errorf("%w: -agent-snapshot-burst-bytes must be at least %d", agent.ErrCapacity, 2*l.MaxBytes)
@@ -129,7 +137,7 @@ func ValidateAgentRegistration(name string, kinds []string, bounds agent.Limits,
 
 // validateRestoredAgentBounds checks the encoded content against this worker,
 // independently of identity. Never truncate an adopted state or payload.
-func (s *session) validateRestoredAgentBounds(b agenthost.Bounds) error {
+func (s *session) validateRestoredAgentBounds(b agenthost.Bounds, exact bool) error {
 	a := s.state.Agent
 	if len(a.State.Bytes) > b.MaxStateBytes {
 		return fmt.Errorf("%w: %w", agent.ErrCapacity, agent.ErrStateTooLarge)
@@ -141,7 +149,7 @@ func (s *session) validateRestoredAgentBounds(b agenthost.Bounds) error {
 	if len(metadata) > b.MaxPendingBytes {
 		return fmt.Errorf("%w: restored host metadata exceeds local limit", agent.ErrCapacity)
 	}
-	if a.V2.MoveOnlyLength > b.MaxMailboxBytes {
+	if exact && a.V2.MoveOnlyLength > b.MaxMailboxBytes {
 		return fmt.Errorf("%w: restored move data exceeds local limit", agent.ErrCapacity)
 	}
 	active := 0
@@ -150,11 +158,11 @@ func (s *session) validateRestoredAgentBounds(b agenthost.Bounds) error {
 			active++
 		}
 	}
-	if active > b.MaxActiveTasks {
+	if exact && active > b.MaxActiveTasks {
 		return fmt.Errorf("%w: restored active tasks exceed local limit", agent.ErrCapacity)
 	}
 	p := a.V2.Playback
-	if p.Length > b.MaxAudioBytes || (b.MaxAudioDuration > 0 && p.Duration > b.MaxAudioDuration) {
+	if exact && (p.Length > b.MaxAudioBytes || (b.MaxAudioDuration > 0 && p.Duration > b.MaxAudioDuration)) {
 		return fmt.Errorf("%w: restored audio exceeds local limit", agent.ErrCapacity)
 	}
 	return nil
@@ -300,8 +308,17 @@ func (q snapshotQuota) balance() (uint64, error) {
 	return n, nil
 }
 func (s *session) captureSnapshotQuota(now time.Time) *snapshotQuota {
+	return s.captureSnapshotQuotaMode(now, false)
+}
+
+// Export cannot wait for storage. Reserve one maximum snapshot while a writer
+// might still acknowledge, covering Clock, encoding and PutState under one flag.
+func (s *session) captureSnapshotQuotaMode(now time.Time, exporting bool) *snapshotQuota {
 	s.snapshotBudgetMu.Lock()
 	tokens := s.snapshotBytesBudget.available(s.worker.cfg.SnapshotLimits, now)
+	if exporting && s.snapshotWriteInFlight {
+		tokens = max(0, tokens-float64(s.worker.cfg.SnapshotLimits.MaxBytes))
+	}
 	s.snapshotBudgetMu.Unlock()
 	return &snapshotQuota{Version: 1, Balance: quotaBalance(uint64(max(0, tokens))), At: now}
 }

@@ -69,6 +69,14 @@ type movePayload struct {
 
 func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeOptions, move *movePayload) error {
 	reg := r.Registration
+	// The legacy Factory field is opaque until it returns an adapter. Public
+	// registrations are checked in New; factory-only v2 hosts are checked here.
+	if err := s.worker.cfg.SnapshotLimits.ValidateForInterval(s.worker.cfg.SnapshotInterval); err != nil {
+		return err
+	}
+	if opts.Kind == legacy.Takeover || opts.SequenceMargin > 0 {
+		move = nil
+	}
 	legacyBounds := reg.Bounds
 	reg.Bounds = effectiveAgentBounds(reg.Declared, s.worker.cfg.SnapshotLimits)
 	if reg.Name == "" || reg.Name == "echo" || reg.Name == "demo" || reg.Factory == nil ||
@@ -87,7 +95,7 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 		if e == nil || e.Contract != v2Contract || e.Name != reg.Name || !slices.Equal(e.TaskKinds, reg.TaskKinds) || (e.Limits != nil && *e.Limits != reg.Declared) || (e.Limits == nil && e.Bounds != legacyBounds) {
 			return s.agentError(fmt.Errorf("%w: %w", legacy.ErrRestore, agent.ErrIncompatibleAgent))
 		}
-		if err := s.validateRestoredAgentBounds(reg.Bounds); err != nil {
+		if err := s.validateRestoredAgentBounds(reg.Bounds, move != nil); err != nil {
 			return s.v2RestoreError(err)
 		}
 	} else {
@@ -103,9 +111,6 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 	}
 	// Crash metadata has no payload to copy or reserve. Exact restores only
 	// reserve the one move-payload copy they make, for its actual byte length.
-	if opts.Kind == legacy.Takeover || opts.SequenceMargin > 0 {
-		move = nil
-	}
 	if restoring && move != nil && (len(move.Bytes) > 0 || len(move.Tasks) > 0 || len(move.Audio) > 0) {
 		scratch := int64(len(move.Bytes) + audioRefsBytes(move.Audio))
 		for _, t := range move.Tasks {
@@ -152,7 +157,7 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 	}
 	if restoring {
 		state := v2State(s.state.Agent)
-		if err := s.validateV2StateMetadata(state); err != nil {
+		if err := s.validateV2StateMetadata(state, move == nil); err != nil {
 			return s.v2RestoreError(err)
 		}
 		if move != nil {
@@ -263,7 +268,7 @@ func (s *session) validateV2State(state agent.State) error {
 	}
 	return s.reserveMoveBytes(int64(state.MoveOnlyLength))
 }
-func (s *session) validateV2StateMetadata(state agent.State) error {
+func (s *session) validateV2StateMetadata(state agent.State, lostMoveData ...bool) error {
 	if state.Version == 0 {
 		return agent.ErrVersion
 	}
@@ -273,7 +278,7 @@ func (s *session) validateV2StateMetadata(state agent.State) error {
 	if state.MoveOnlyLength < 0 || (!state.HasMoveOnly && state.MoveOnlyLength != 0) {
 		return errors.New("agent: invalid move-only metadata")
 	}
-	if state.MoveOnlyLength > s.agent.v2.registration.Bounds.MaxMailboxBytes || state.MoveOnlyLength > s.worker.cfg.SnapshotLimits.MoveBytesPerSession {
+	if (len(lostMoveData) == 0 || !lostMoveData[0]) && (state.MoveOnlyLength > s.agent.v2.registration.Bounds.MaxMailboxBytes || state.MoveOnlyLength > s.worker.cfg.SnapshotLimits.MoveBytesPerSession) {
 		return fmt.Errorf("%w: move-only data exceeds session budget", agent.ErrCapacity)
 	}
 	if state.HasMoveOnly {

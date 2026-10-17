@@ -455,7 +455,8 @@ uses the persisted agent name, task kinds and declared limits (including zeros
 for host defaults), and refuses mismatches without an Echo fallback. Effective
 limits are computed on each worker from local operator ceilings. Restored content
 must fit those limits; an oversized adoption refuses with typed capacity, without
-truncation. Older experimental v8 envelopes retain their original bounds check.
+truncation. Crash-lost app data and audio do not consume target payload limits;
+takeover reports the existing typed loss instead. Older experimental v8 envelopes retain their original bounds check.
 Public registration does not
 establish provider integration or custom-worker capacity approval. The manual
 capacity, Save-CPU and store-stall gates remain pending. A default 1 KiB app state
@@ -471,7 +472,9 @@ can wait up to 100 ms; a move during that wait follows Retry/Abandon or reports
 `OutcomeUnknown`. The byte rate must cover periodic maximum-size snapshots plus
 one maximum-size forced write per second; burst must cover two maximum snapshots.
 Wall-clock rollback never subtracts tokens and refill resumes from the new clock.
-Planned export carries the current remaining quota. Drain task-wait flags are
+Planned export carries the current remaining quota without waiting for store I/O.
+An in-flight snapshot conservatively reserves one maximum snapshot in the exported
+quota, floored at zero; failed writes still never debit the live bucket. Drain task-wait flags are
 reserved for slice 9 and are not exposed yet. The raw move
 memory flag can tighten the supported 1 MiB per-session ceiling; larger payloads
 need a new wire-budget admission design before they can be enabled safely.

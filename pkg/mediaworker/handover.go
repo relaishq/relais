@@ -567,12 +567,6 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		}
 		payload = &movePayload{Bytes: export.payload, Tasks: export.tasks, Audio: export.audio}
 	}
-	// Finish any in-flight acknowledged write before capturing its byte debit.
-	// Never wait for store I/O while holding the packet lock.
-	if move != nil {
-		s.snapshotMu.Lock()
-		defer s.snapshotMu.Unlock()
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	defer func() {
@@ -614,7 +608,7 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		if !s.storeClockAt.IsZero() {
 			now = s.storeClock.Add(time.Since(s.storeClockAt))
 		}
-		exported.Agent.V2.Quota = s.captureSnapshotQuota(now)
+		exported.Agent.V2.Quota = s.captureSnapshotQuotaMode(now, true)
 	}
 	state, err := json.Marshal(snapshot{
 		Version:        s.state.Version,

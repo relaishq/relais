@@ -134,11 +134,25 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	s.snapshotMu.Lock()
 	defer s.snapshotMu.Unlock()
 	s.mu.Lock()
+	v2 := s.state.Agent.V2 != nil
+	if v2 && (s.fenced.Load() || s.ctx.Err() != nil) {
+		s.mu.Unlock()
+		return errHandedOver
+	}
 	changed := !agentStateEqual(s.state.Agent, s.durableAgent)
 	tooSoon := s.snapshotStored.Load() && time.Since(s.lastCheckpoint) < s.worker.cfg.Agent.SaveInterval
-	s.mu.Unlock()
 	if !force && changed && tooSoon {
+		s.mu.Unlock()
 		return errCheckpointSkipped
+	}
+	if v2 {
+		s.snapshotBudgetMu.Lock()
+		s.snapshotWriteInFlight = true
+		s.snapshotBudgetMu.Unlock()
+	}
+	s.mu.Unlock()
+	if v2 {
+		defer func() { s.snapshotBudgetMu.Lock(); s.snapshotWriteInFlight = false; s.snapshotBudgetMu.Unlock() }()
 	}
 	ctx, cancel := context.WithTimeout(parent, ownershipTimeout)
 	defer cancel()
@@ -201,6 +215,7 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 		if pair.V2 != nil {
 			s.snapshotBudgetMu.Lock()
 			s.snapshotBytesBudget.debit(s.worker.cfg.SnapshotLimits, wireBytes, captured)
+			s.snapshotWriteInFlight = false
 			s.snapshotBudgetMu.Unlock()
 		}
 		s.snapshotStored.Store(true)
