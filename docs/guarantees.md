@@ -418,6 +418,18 @@ relay replay conditions. The demo is deterministic, audio-only and uses encoded
 Opus clips without an external service. Profile-by-load or N+1 agent timing is
 **not measured**. The browser evidence is a single call in the local demo.
 
+V2 worker-local SIGTERM drain waits for task handlers only **when the operator
+sets a measured `-agent-drain-move-reserve`**. Unset skips waiting and uses urgent
+export for every v2 session. One shutdown deadline includes marking placement,
+the concurrent handler wait, moves, and waiting for sessions to leave. The wait
+never includes buffered playout: its backlog/cursor move exactly on a successful
+planned export. Unfinished handlers keep Retry/Abandon and typed outcomes.
+Heartbeats/private APIs stay live; direct control drain stays urgent. See
+[the guide](build-an-agent.md#sigterm-handler-quiescence) and
+[one-machine measurements](dev/drain-quiescence.md). These measurements add no
+capacity, provider, public-network, mixed-version, side-effect transaction, or
+seamless crash guarantee. Crash loss of move-only state remains unchanged.
+
 Legacy agents keep [ADR 0006][agent-adr]'s **8 KiB** default state size, a **32-packet** input
 queue, **100 ms** callback deadlines and **100 ms** minimum changed-state write
 interval. Queue overflow and callback timeout can drop input and count it. A

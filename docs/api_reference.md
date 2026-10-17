@@ -32,6 +32,31 @@ The current owner, the move log and the owner's count of the caller's packets it
 
 The control plane API (`/api/v1/sessions`, `/api/v1/plugins`) and the WebSocket signaling endpoint (`/ws/signaling`) were served by the retired `relais-core` server and no longer exist.
 
+## Private worker placement fence
+
+```text
+POST /private/workers/{name}/mark-draining
+204 No Content (including repeated marks)
+404 JSON {code:"not_found",message:...} for an unknown registration
+```
+
+This control-process endpoint marks only the named registration draining.
+Placement excludes it and `/status` reports `draining`; heartbeats do not clear
+it. It moves no calls, waits for no incoming reservations, and acquires no call
+lock or drain slot. Authentication is the same as private worker heartbeats:
+**none beyond the existing private listener/network restrictions**. Do not expose
+it through the public signal frontend. It grants no new public control authority.
+`POST /workers/{name}/drain` shares the mark and then runs existing planned moves.
+
+After the worker acknowledges the mark, it refuses raced `POST /sessions`
+creates with HTTP **409** and typed `worker_draining`. A raced offer through control or the
+existing authenticated signal frontend returns **503** JSON
+`{code:"worker_draining",message:"worker unavailable; retry placement",retryable:true}`
+and `Retry-After: 1`. No session was accepted. A fresh unpinned retry can use
+another worker; `no_target` uses the same retryable 503 envelope. Apply bounded
+backoff and a caller deadline. Unknown or lost responses remain uncertain;
+they do not grant permission to create another call. See [worker shutdown](deploy.md#worker-shutdown).
+
 ## Routed agent Control
 
 The authenticated `relais-signal` frontend accepts:
@@ -91,7 +116,7 @@ Control error classes (codes preserve the existing HTTP status):
 
 | Class | Codes | Client action |
 | --- | --- | --- |
-| retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session` | Retry the identical message with bounded backoff and a deadline. |
+| retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session`, `worker_draining` | Retry the identical message with bounded backoff and a deadline. |
 | definite | `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
 | uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
 

@@ -821,6 +821,24 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 	return fmt.Errorf("controlplane: move failed, rolled back: %w", cause)
 }
 
+// MarkDraining is an idempotent placement fence. It does not wait for
+// reservations, acquire call locks or drain slots, or move any sessions.
+func (p *Plane) MarkDraining(name string) error {
+	_, err := p.markDraining(name)
+	return err
+}
+
+func (p *Plane) markDraining(name string) (*registration, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	w := p.workers[name]
+	if w == nil {
+		return nil, sessionstore.ErrNotFound
+	}
+	w.draining = true
+	return w, nil
+}
+
 // Drain blocks new selections immediately. Existing calls move concurrently,
 // at most drainParallelism at a time: a call waiting its turn keeps flowing
 // on the old worker, so running more moves than there are CPUs would only
@@ -836,14 +854,11 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 			p.metrics.drains.Add(1)
 		}
 	}()
-	p.mu.Lock()
-	w := p.workers[name]
-	if w == nil {
-		p.mu.Unlock()
-		return nil, errors.New("controlplane: unknown worker")
+	w, err := p.markDraining(name)
+	if err != nil {
+		return nil, err
 	}
-
-	w.draining = true
+	p.mu.Lock()
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
 

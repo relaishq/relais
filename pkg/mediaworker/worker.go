@@ -92,7 +92,6 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
-
 	"github.com/relaishq/relais/internal/udpbuffer"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/framecache"
@@ -124,6 +123,9 @@ var (
 
 	// ErrClosed is returned when the media worker has been closed.
 	ErrClosed = errors.New("mediaworker: closed")
+	// ErrDraining is a definite, retryable create refusal. No session was
+	// accepted; the caller can place the offer on another worker.
+	ErrDraining = errors.New("mediaworker: draining; retry placement")
 
 	// ErrUnknownSession is returned when a session ID does not exist on this
 	// media worker.
@@ -254,6 +256,7 @@ type RelayConfig struct {
 // Worker is a media worker. It owns one UDP socket, or shares one with other
 // workers (see Socket), and the sessions that run over it.
 type Worker struct {
+	taskDrain taskDrain
 	moveBytes atomic.Int64
 	agents    agentCounters
 	metrics   workerMetrics
@@ -275,6 +278,7 @@ type Worker struct {
 	byAddr                    map[netip.AddrPort]*session // caller addresses that passed an ICE check
 	byAddrConsent             map[netip.AddrPort]time.Time
 	closed                    bool
+	draining                  bool
 	running                   sync.WaitGroup // session goroutines
 	replayStatsMu             sync.Mutex
 	replayStats               ReplayStats
@@ -467,6 +471,12 @@ func (w *Worker) CreateSessionWithLease(ctx context.Context, offerSDP string) (i
 }
 
 func (w *Worker) createSession(ctx context.Context, offerSDP string, placed func(sessionstore.Lease)) (sessionID, answerSDP string, err error) {
+	w.mu.Lock()
+	draining := w.draining
+	w.mu.Unlock()
+	if draining {
+		return "", "", ErrDraining
+	}
 	offer, err := parseOffer(offerSDP)
 	if err != nil {
 		return "", "", err
@@ -490,12 +500,16 @@ func (w *Worker) createSession(ctx context.Context, offerSDP string, placed func
 	}
 
 	w.mu.Lock()
-	if w.closed {
+	if w.closed || w.draining {
+		refusal := ErrClosed
+		if w.draining {
+			refusal = ErrDraining
+		}
 		w.mu.Unlock()
 		sess.close()
 		w.release(sess) // claimed above, never registered
 
-		return "", "", ErrClosed
+		return "", "", refusal
 	}
 	w.sessions[sess.id] = sess
 	if placed != nil {

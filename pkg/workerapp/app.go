@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/netip"
 	"os"
@@ -75,6 +76,8 @@ func Run(ctx context.Context, args []string, options Options) error {
 	flags.IntVar(&limits.MoveBytesPerSession, "agent-move-bytes-per-session", 1<<20, "v2 move memory bytes per session")
 	flags.Int64Var(&limits.MoveBytesTotal, "agent-move-bytes-total", 64<<20, "v2 move memory bytes per worker including export scratch")
 	drainTimeout := flags.Duration("drain-timeout", 5*time.Second, "SIGTERM drain deadline before closing")
+	taskBudget := flags.Duration("agent-drain-task-budget", 2*time.Second, "v2 handler quiescence cap (0 through 2s); requires a measured move reserve")
+	moveReserve := flags.Duration("agent-drain-move-reserve", 0, "measured time reserved for control drain; unset skips handler quiescence")
 	version := buildinfo.VersionFlag(flags)
 	if err := flags.Parse(args); err != nil {
 		return &flagError{err}
@@ -83,7 +86,19 @@ func Run(ctx context.Context, args []string, options Options) error {
 		return buildinfo.PrintVersion(os.Stdout, "relais-worker")
 	}
 	if *drainTimeout <= 0 {
-		return &configError{}
+		return fmt.Errorf("-drain-timeout must be greater than 0")
+	}
+	reserveSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "agent-drain-move-reserve" {
+			reserveSet = true
+		}
+	})
+	if *taskBudget < 0 || *taskBudget > 2*time.Second {
+		return fmt.Errorf("-agent-drain-task-budget must be between 0 and 2s")
+	}
+	if reserveSet && (*moveReserve <= 0 || *moveReserve >= *drainTimeout) {
+		return fmt.Errorf("-agent-drain-move-reserve must be greater than 0 and less than -drain-timeout (%s)", *drainTimeout)
 	}
 	if err := limits.Validate(); err != nil {
 		return err
@@ -151,6 +166,7 @@ func Run(ctx context.Context, args []string, options Options) error {
 	case <-ctx.Done():
 	}
 	drainCtx, stopDrain := context.WithTimeout(context.Background(), *drainTimeout)
+	quiesceWorker(drainCtx, *control, *name, worker, *taskBudget, *moveReserve)
 	if err := drainWorker(drainCtx, *control, *name, worker.SessionCount); err != nil {
 		log.Printf("worker %s: drain failed; closing remaining sessions: %v", *name, err)
 	}

@@ -61,7 +61,7 @@ func (p *Plane) Handler() http.Handler {
 
 		id, answer, err := p.Create(r.Context(), string(offer), r.URL.Query().Get("worker"))
 		if err != nil {
-			writeError(w, err)
+			writePlacementError(w, err)
 			return
 		}
 
@@ -137,6 +137,25 @@ func (p *Plane) Handler() http.Handler {
 func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+func writePlacementError(w http.ResponseWriter, err error) {
+	if errors.Is(err, mediaworker.ErrDraining) || errors.Is(err, ErrNoTarget) {
+		code := "no_target"
+		if errors.Is(err, mediaworker.ErrDraining) {
+			code = "worker_draining"
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, struct {
+			Code      string `json:"code"`
+			Message   string `json:"message"`
+			Retryable bool   `json:"retryable"`
+		}{code, "worker unavailable; retry placement", true})
+		return
+	}
+	writeError(w, err)
 }
 
 func writeError(w http.ResponseWriter, err error) {
