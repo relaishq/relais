@@ -21,7 +21,7 @@ LDFLAGS=-ldflags "-X github.com/relaishq/relais/pkg/buildinfo.Version=$(VERSION)
 
 all: test build
 
-build: ensure_bin_dir ## Build plugin runners, relay, worker, control, signal, crash-run and demo binaries
+build: ensure_bin_dir ## Build plugin runners, relay, worker, control, signal, crash-run and demo/example binaries
 	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-ingress -v $(LDFLAGS) ./cmd/ingress-runner
 	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-egress -v $(LDFLAGS) ./cmd/egress-runner
 	$(GOBUILD) -o $(BIN_DIR)/$(BINARY_NAME)-transform -v $(LDFLAGS) ./cmd/transform-runner
@@ -33,6 +33,8 @@ build: ensure_bin_dir ## Build plugin runners, relay, worker, control, signal, c
 	$(GOBUILD) -o $(BIN_DIR)/crash-run $(LDFLAGS) ./cmd/crash-run
 	$(GOBUILD) -o $(BIN_DIR)/relais-load $(LDFLAGS) ./cmd/relais-load
 	$(GOBUILD) -o $(BIN_DIR)/relais-demo $(LDFLAGS) ./cmd/relais-demo
+
+	$(GOBUILD) -o $(BIN_DIR)/delayed-loopback $(LDFLAGS) ./examples/delayed-loopback
 
 DEMO_CLUSTER_FLAGS ?=
 demo-cluster: build ## Run three separate workers and the browser move/drain/kill page on loopback; starts its own Redis (never 6379)
@@ -102,7 +104,7 @@ test-cluster: ## Run Redis Cluster integration tests (requires RELAIS_TEST_REDIS
 
 # Cover all packages except the call harness, which has a separate CI job.
 # Include the plugin and pipeline suites previously covered by make test.
-UNIT_PKGS=$(shell $(GOCMD) list ./pkg/... ./internal/... ./cmd/... ./plugins/... ./test/... | awk '$$0 != "github.com/relaishq/relais/pkg/callharness"')
+UNIT_PKGS=$(shell $(GOCMD) list ./pkg/... ./internal/... ./cmd/... ./examples/... ./plugins/... ./test/... | awk '$$0 != "github.com/relaishq/relais/pkg/callharness"')
 
 test-unit: ## Run all non-harness tests with the race detector; set RELAIS_TEST_REDIS_ADDR for Redis suites
 	$(GOTEST) -race -v -count=1 -timeout 10m $(UNIT_PKGS)

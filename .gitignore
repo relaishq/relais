@@ -30,7 +30,8 @@ vendor/
 
 bin
 
-examples/
+/examples/*
+!/examples/delayed-loopback/
 
 # Release archives and local topology state (contains generated secrets)
 /dist/

@@ -115,6 +115,7 @@ type agentHarnessSettings struct {
 	targetEcho            bool
 	remoteTarget          bool
 	targetHandler         func(http.Handler) http.Handler
+	callbackBudget        time.Duration
 	snapshotInterval      time.Duration
 	saveInterval          time.Duration
 	targetRestoreFailure  bool
@@ -145,7 +146,7 @@ func startAgentHarness(t *testing.T, store sessionstore.Store, settings ...agent
 		if len(config.snapshotLimits) > i {
 			limits = config.snapshotLimits[i]
 		}
-		w, err := mediaworker.New(mediaworker.Config{SnapshotLimits: limits, SnapshotInterval: config.snapshotInterval, Agent: mediaworker.AgentConfig{SaveInterval: config.saveInterval, Factory: func(id string) agent.Agent {
+		w, err := mediaworker.New(mediaworker.Config{SnapshotLimits: limits, SnapshotInterval: config.snapshotInterval, Agent: mediaworker.AgentConfig{CallbackTimeout: config.callbackBudget, SaveInterval: config.saveInterval, Factory: func(id string) agent.Agent {
 			if i == 1 && config.targetEcho {
 				return &agent.Echo{}
 			}

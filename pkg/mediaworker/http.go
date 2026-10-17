@@ -61,10 +61,11 @@ type ResumeReply struct {
 	ID string `json:"id"`
 }
 type WorkerStatus struct {
-	Address  netip.AddrPort `json:"address"`
-	Sessions int            `json:"sessions"`
-	Replay   ReplayStats    `json:"replay"`
-	Agents   AgentStats     `json:"agents"`
+	Address      netip.AddrPort      `json:"address"`
+	Sessions     int                 `json:"sessions"`
+	Replay       ReplayStats         `json:"replay"`
+	Agents       AgentStats          `json:"agents"`
+	AgentSession *AgentSessionStatus `json:"agent_session,omitempty"`
 }
 
 // PrivateHandler exposes the existing worker operations on trusted loopback.
@@ -119,8 +120,17 @@ func (w *Worker) PrivateHandler() http.Handler {
 		}
 		privateapi.Write(rw, ResumeReply{ID: id})
 	})
-	mux.HandleFunc("GET /status", func(rw http.ResponseWriter, _ *http.Request) {
-		privateapi.Write(rw, WorkerStatus{Address: w.LocalAddr(), Sessions: w.SessionCount(), Replay: w.ReplayStats(), Agents: w.AgentStats()})
+	mux.HandleFunc("GET /status", func(rw http.ResponseWriter, r *http.Request) {
+		status := WorkerStatus{Address: w.LocalAddr(), Sessions: w.SessionCount(), Replay: w.ReplayStats(), Agents: w.AgentStats()}
+		if id := r.URL.Query().Get("agent-session"); id != "" {
+			var err error
+			status.AgentSession, err = w.agentSessionStatus(id)
+			if err != nil {
+				workerAPIError(rw, err)
+				return
+			}
+		}
+		privateapi.Write(rw, status)
 	})
 	return mux
 }
