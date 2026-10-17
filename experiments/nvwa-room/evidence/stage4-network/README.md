@@ -280,11 +280,54 @@ scratch cache; no machine-wide tools or settings were installed or changed.
 
 <!-- RESULTS:START -->
 
-| Profile | Transport | Command RTT | State age | Longest state gap | Delivery/duplicates | Disconnect | Worker kill | Status |
-|---|---|---|---|---|---|---|---|---|
-| lan / region / far-caller / lossy-dc / poor-wifi | ws / dc-reliable / dc-unreliable | NOT-RUN | NOT-RUN | NOT-RUN | NOT-RUN | NOT-RUN | NOT-RUN | Pending CI |
+| Profile | Transport | Cmd RTT p50/p95/p99/max ms | State age p50/p95/p99 ms | Longest state gap ms | Commands delivered/expected | States unique/expected (duplicates) | Disconnect p50/max ms | Worker kill p50/max ms | Status |
+|---|---|---|---|---|---|---|---|---|---|
+| far-caller | dc-reliable | 155.21/345.21/607.10/1348.45 | 155.45/362.79/1091.43 | 3154.95 | 8000/8000 | 8000/8000 (0) | 2443.46/4269.55 | 2388.27/3012.67 | PASS |
+| far-caller | dc-unreliable | 155.43/359.62/887.28/1427.37 | 152.19/166.52/204.37 | 316.89 | 8000/8000 | 7691/8000 (0) | 2273.72/2305.28 | 2459.17/2903.09 | PASS |
+| far-caller | ws | 175.80/360.30/464.82/746.29 | 173.50/351.75/454.39 | 621.50 | 8000/8000 | 8000/8000 (0) | 1462.52/1478.89 | 150.26/160.44 | PASS |
+| lan | dc-reliable | 0.70/0.91/1.19/2.39 | 0.76/0.98/1.22 | 71.79 | 8000/8000 | 8000/8000 (0) | 466.62/467.07 | 579.11/579.12 | PASS |
+| lan | dc-unreliable | 0.70/0.92/1.20/2.38 | 0.75/0.96/1.21 | 71.82 | 8000/8000 | 8000/8000 (0) | 467.00/467.37 | 579.12/580.24 | PASS |
+| lan | ws | 0.23/0.33/0.44/2.08 | 0.25/0.34/0.41 | 70.80 | 8000/8000 | 8000/8000 (0) | 258.04/259.55 | 0.36/1.13 | PASS |
+| lossy-dc | dc-reliable | 3.68/4.02/4.26/39.48 | 3.74/4.07/4.29 | 102.77 | 8000/8000 | 8000/8000 (0) | 506.55/618.46 | 618.63/620.32 | PASS |
+| lossy-dc | dc-unreliable | 3.68/4.01/4.24/39.46 | 3.71/4.04/4.21 | 134.09 | 8000/8000 | 7972/8000 (0) | 507.35/616.59 | 592.61/621.29 | PASS |
+| lossy-dc | ws | 1.76/1.97/2.08/37.01 | 1.77/1.99/2.09 | 102.28 | 8000/8000 | 8000/8000 (0) | 281.94/282.29 | 1.81/2.14 | PASS |
+| poor-wifi | dc-reliable | 31.02/40.94/43.25/94.77 | 31.20/40.96/43.68 | 113.00 | 8000/8000 | 8000/8000 (0) | 800.55/845.40 | 929.10/982.04 | PASS |
+| poor-wifi | dc-unreliable | 31.18/40.90/43.36/45.33 | 30.23/40.29/43.23 | 262.54 | 8000/8000 | 7461/8000 (0) | 818.57/844.34 | 942.94/982.76 | PASS |
+| poor-wifi | ws | 30.87/40.75/43.21/79.92 | 30.90/40.81/43.23 | 128.39 | 8000/8000 | 8000/8000 (0) | 475.21/519.86 | 22.05/33.63 | PASS |
+| region | dc-reliable | 21.56/21.79/75.07/1022.55 | 21.55/21.81/74.92 | 275.98 | 8000/8000 | 8000/8000 (0) | 717.38/718.98 | 848.21/2050.23 | PASS |
+| region | dc-unreliable | 21.57/21.74/75.11/76.59 | 21.56/21.73/21.84 | 134.28 | 8000/8000 | 7915/8000 (0) | 719.10/719.88 | 822.57/824.44 | PASS |
+| region | ws | 20.76/20.89/48.82/75.56 | 20.76/20.89/49.29 | 153.89 | 8000/8000 | 8000/8000 (0) | 425.33/426.21 | 20.89/20.96 | PASS |
 
 <!-- RESULTS:END -->
+
+## Findings (run 39003679822, 2026-10-17)
+
+All 15 profile and transport cells passed. Every reliable command and every
+reliable state update was delivered once, with zero duplicates.
+
+1. **WebSocket is faster on good networks.** On `lan` and `lossy-dc`, WS command
+   RTT is about half of DC (0.23 vs 0.70 ms; 1.76 vs 3.68 ms p50). The DC path
+   has relay and worker hops plus an upstream WebSocket; WS goes straight to the room.
+2. **On a 20–30 ms link with loss (`region`, `poor-wifi`) there is no clear winner.**
+   Medians match within 1 ms. Reliable DC shows rare long stalls (`region` max
+   1023 ms, a 276 ms state gap) that WS does not.
+3. **Unreliable DC wins only for state freshness on a far, lossy link.** On
+   `far-caller` (150 ms RTT, 20 ms jitter, 2 % loss), unordered state with
+   `maxRetransmits=0` keeps state age at p95/p99 167/204 ms against WS 352/454 ms,
+   and its longest state gap is 317 ms against 622 ms. It drops 3.9 % of state
+   updates by design. On `poor-wifi`, correlated loss makes its longest gap worse
+   than WS (263 vs 128 ms) and drops 6.7 %.
+4. **Reliable DC is worse than WS under loss.** On `far-caller` its state age p99 is
+   1091 ms and its longest gap 3155 ms; command p99 is 607 ms against WS 465 ms.
+5. **Recovery is slower on DC in every profile.** Disconnect recovery takes 1.6–1.8×
+   longer than WS. A worker kill does not touch the WS path at all (0.4–150 ms),
+   while DC goes through Relais takeover (580–2460 ms).
+
+**Verdict:** the measurements support the accepted decision. Use WebSocket for room
+data and Relais for voice. An unreliable data channel only helps high-rate state
+for far or mobile players. If that becomes a need, measure it as a separate data
+transport (for example a separate PeerConnection or WebTransport datagrams), not
+on the movable audio session.
 
 ## Interpretation limits
 
