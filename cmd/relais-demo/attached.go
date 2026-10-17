@@ -350,7 +350,12 @@ func (d *demo) runHook(ctx context.Context, action, worker, session string) (hoo
 	// No shell, no added credentials or cluster variables. The operator supplies
 	// the hook's minimal environment when launching the page server.
 	cmd := exec.CommandContext(ctx, d.faultHook, args...)
-	cmd.Env = os.Environ()
+	cmd.Env = make([]string, 0) // empty must not mean inherit the parent environment
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "OPENAI_API_KEY=") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)

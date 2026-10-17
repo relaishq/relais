@@ -30,6 +30,7 @@ var web embed.FS
 type config struct {
 	Bin, HTTP, Redis, RedisBinary, LocalNetwork, Agent, RelayBuffer string
 	WorkerBin                                                       string
+	WorkerArgs                                                      []string
 	AttachControl, AttachAuthFile, FaultHook, ResultsDir            string
 	ActionTimeout                                                   time.Duration
 }
@@ -38,7 +39,7 @@ func processEnv(key, addr, prefix string, withKey bool) []string {
 	env := []string{}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if name == "RELAIS_SESSIONSTORE_KEY" || strings.HasPrefix(name, "RELAIS_REDIS_") {
+		if name == "OPENAI_API_KEY" || name == "RELAIS_SESSIONSTORE_KEY" || strings.HasPrefix(name, "RELAIS_REDIS_") {
 			continue
 		}
 		env = append(env, entry)
@@ -91,7 +92,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 			return nil, err
 		}
 		_, port, _ := net.SplitHostPort(addr)
-		redis, err := manager.Start(dir, "redis", os.Environ(), cfg.RedisBinary, "--bind", "127.0.0.1", "--port", port, "--save", "", "--appendonly", "no", "--dir", dir)
+		redis, err := manager.Start(dir, "redis", processEnv("", addr, "", false), cfg.RedisBinary, "--bind", "127.0.0.1", "--port", port, "--save", "", "--appendonly", "no", "--dir", dir)
 		if err != nil {
 			return nil, err
 		}
@@ -140,14 +141,10 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 		if err != nil {
 			return nil, err
 		}
-		workerEnv := make([]string, 0, len(env)+1)
-		for _, entry := range env {
-			if !strings.HasPrefix(entry, "PION_LOG_INFO=") {
-				workerEnv = append(workerEnv, entry)
-			}
-		}
-		workerEnv = append(workerEnv, "PION_LOG_INFO=session")
-		child, ready, err := start(ctx, "worker-"+name, workerEnv, worker.Path(bin), "-media", media, "-http", "127.0.0.1:0", "-name", name, "-control", d.control, "-relay-leg", relay.Leg, "-relay-media", relay.Media, "-agent", selectedAgent(cfg))
+		workerEnv := workerProcessEnv(cfg, env)
+		args := []string{worker.Path(bin), "-media", media, "-http", "127.0.0.1:0", "-name", name, "-control", d.control, "-relay-leg", relay.Leg, "-relay-media", relay.Media, "-agent", selectedAgent(cfg)}
+		args = append(args, workerArgs(cfg)...)
+		child, ready, err := start(ctx, "worker-"+name, workerEnv, args...)
 		if err != nil {
 			return nil, err
 		}
@@ -264,6 +261,7 @@ func configureFlags(flags *flag.FlagSet, cfg *config) {
 		return nil
 	})
 	flags.StringVar(&cfg.Agent, "agent", "", "worker audio agent (default echo; required with -worker-bin); echo, demo or custom name")
+	flags.Func("worker-arg", "extra worker flag (repeat; use -worker-arg=-flag=value); never put secrets here", func(value string) error { cfg.WorkerArgs = append(cfg.WorkerArgs, value); return nil })
 	flags.StringVar(&cfg.WorkerBin, "worker-bin", "", "worker executable path (default relais-worker in -bin)")
 	flags.StringVar(&cfg.Bin, "bin", "bin", "directory containing built relay, worker and control")
 	flags.StringVar(&cfg.HTTP, "http", "127.0.0.1:9101", "literal loopback page address")
@@ -329,4 +327,28 @@ func readyChild(ctx context.Context, child *clusterprocess.Child) (clusterproces
 		child.Stop()
 	}
 	return ready, err
+}
+
+// Demo A deliberately uses the larger ADR 0010 operator envelope. Every
+// replacement receives the same flags. Other registrations retain defaults.
+func workerArgs(cfg config) []string {
+	var args []string
+	if selectedAgent(cfg) == "voice-agent/v1" {
+		args = []string{"-agent-max-snapshot-bytes=24576", "-agent-snapshot-bytes-per-second=270336", "-agent-snapshot-burst-bytes=98304"}
+	}
+	return append(args, cfg.WorkerArgs...)
+}
+
+func workerProcessEnv(cfg config, env []string) []string {
+	workerEnv := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "PION_LOG_INFO=") {
+			workerEnv = append(workerEnv, entry)
+		}
+	}
+	workerEnv = append(workerEnv, "PION_LOG_INFO=session")
+	if key := os.Getenv("OPENAI_API_KEY"); key != "" && selectedAgent(cfg) == "voice-agent/v1" {
+		workerEnv = append(workerEnv, "OPENAI_API_KEY="+key)
+	}
+	return workerEnv
 }
