@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func forV2ReviewStores(t *testing.T, run func(*testing.T, sessionstore.Store)) {
+func forV2Stores(t *testing.T, run func(*testing.T, sessionstore.Store)) {
 	t.Helper()
 	t.Run("memory", func(t *testing.T) { run(t, sessionstore.NewMemory()) })
 	t.Run("redis", func(t *testing.T) {
@@ -31,16 +31,16 @@ func forV2ReviewStores(t *testing.T, run func(*testing.T, sessionstore.Store)) {
 			t.Skip("dedicated Redis not configured")
 		}
 		require.NoError(t, redisendpoint.ValidateDev(addr))
-		store, err := sessionstore.NewRedis(context.Background(), storage.RedisConfig{Addr: addr, Prefix: "v2-budget-review:" + rand.Text() + ":"}, make([]byte, 32))
+		store, err := sessionstore.NewRedis(context.Background(), storage.RedisConfig{Addr: addr, Prefix: "v2-budget:" + rand.Text() + ":"}, make([]byte, 32))
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, store.Close()) })
 		run(t, store)
 	})
 }
 
-// The reviewer's TestZZNotFlushedAfterFlush probe, strengthened to assert
+// Unflushed refusal check: asserts
 // queue preservation and subsequent consumption through the same actor seam.
-func TestV2ReviewUnflushedRefusalKeepsQueuedInput(t *testing.T) {
+func TestV2UnflushedRefusalKeepsQueuedInput(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1, HasMoveOnly: true, MoveOnlyLength: 1}, payload: []byte("m")}
 	w, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
@@ -72,7 +72,7 @@ func TestV2ReviewUnflushedRefusalKeepsQueuedInput(t *testing.T) {
 	require.Zero(t, w.moveBytes.Load())
 }
 
-func TestV2ReviewAbandonedExportScratchReleased(t *testing.T) {
+func TestV2AbandonedExportScratchReleased(t *testing.T) {
 	for _, claim := range []bool{false, true} {
 		t.Run(map[bool]string{false: "abandoned", true: "claimed"}[claim], func(t *testing.T) {
 			a := &v2UnitAgent{state: agent.State{Version: 1, HasMoveOnly: true, MoveOnlyLength: 1}, payload: []byte("m")}
@@ -89,7 +89,7 @@ func TestV2ReviewAbandonedExportScratchReleased(t *testing.T) {
 				require.NoError(t, err)
 			}
 			// No reader receives the successful buffered move reply in the abandoned
-			// case: this is the flushAgent ctx.Done/actor-success race from review.
+			// case: this is the flushAgent ctx.Done/actor-success race.
 			s.close()
 			if claim {
 				require.EqualValues(t, 8, w.moveBytes.Load())
@@ -101,20 +101,20 @@ func TestV2ReviewAbandonedExportScratchReleased(t *testing.T) {
 	}
 }
 
-type reviewRenewCounter struct {
+type renewCounter struct {
 	sessionstore.Store
 	renews atomic.Int64
 }
 
-func (s *reviewRenewCounter) Renew(ctx context.Context, lease sessionstore.Lease, ttl time.Duration) (sessionstore.Lease, error) {
+func (s *renewCounter) Renew(ctx context.Context, lease sessionstore.Lease, ttl time.Duration) (sessionstore.Lease, error) {
 	s.renews.Add(1)
 	return s.Store.Renew(ctx, lease, ttl)
 }
 
-func TestV2ReviewBudgetRefusalBeforeLeaseRenew(t *testing.T) {
+func TestV2BudgetRefusalBeforeLeaseRenew(t *testing.T) {
 	for _, growing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "initial", true: "resumed-save-growth"}[growing], func(t *testing.T) {
-			forV2ReviewStores(t, func(t *testing.T, store sessionstore.Store) {
+			forV2Stores(t, func(t *testing.T, store sessionstore.Store) {
 				reg := agenthost.Registration{Name: "pre-renew/v1", Factory: func(agent.FactoryArgs) agent.Agent {
 					return &v2UnitAgent{state: agent.State{Version: 1, HasMoveOnly: true, MoveOnlyLength: 1}, payload: []byte("m")}
 				}}
@@ -132,7 +132,7 @@ func TestV2ReviewBudgetRefusalBeforeLeaseRenew(t *testing.T) {
 						return a
 					}
 				}
-				owners := &reviewRenewCounter{Store: store}
+				owners := &renewCounter{Store: store}
 				target, err := New(Config{Agent: AgentConfig{Factory: agenthost.Factory(reg)}, Relay: &RelayConfig{Owners: owners, Addr: netip.MustParseAddrPort("127.0.0.1:12345"), PublicAddr: netip.MustParseAddrPort("127.0.0.1:12346")}})
 				require.NoError(t, err)
 				defer target.Close()
@@ -161,7 +161,7 @@ func TestV2ReviewBudgetRefusalBeforeLeaseRenew(t *testing.T) {
 
 // Legacy keeps one callback reserve. Only a v2 exact export needs the second
 // deadline for SaveMoveOnly; stock Echo bypasses flush entirely.
-func TestV2ReviewLegacyFlushKeepsOneCallbackReserve(t *testing.T) {
+func TestV2LegacyFlushKeepsOneCallbackReserve(t *testing.T) {
 	a := &countingAgent{}
 	w, err := New(Config{Agent: AgentConfig{Factory: func(string) legacy.Agent { return a }}})
 	require.NoError(t, err)
@@ -183,7 +183,7 @@ func TestV2ReviewLegacyFlushKeepsOneCallbackReserve(t *testing.T) {
 	require.False(t, s.agent.paused)
 }
 
-func TestV2ReviewPostPauseErrorIsNotDefinitive(t *testing.T) {
+func TestV2PostPauseErrorIsNotDefinitive(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1, HasMoveOnly: true}, moveCallback: func(context.Context) error { return ErrExportNotFlushed }}
 	w, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))

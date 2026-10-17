@@ -17,7 +17,7 @@ import (
 
 // Probe 7: SideEffecting Retry task finished (chunk + OK terminal) but nothing
 // consumed; crash restore from the checkpoint holding the Final intent.
-func TestTaskFinalReviewSideEffectRetryAfterUnconsumedFinal(t *testing.T) {
+func TestTaskSideEffectRetryAfterUnconsumedFinal(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
@@ -72,20 +72,20 @@ func TestTaskFinalReviewSideEffectRetryAfterUnconsumedFinal(t *testing.T) {
 }
 
 // A Capacity result that starts another refused task must yield to the actor.
-type finalReviewRetryCapacityAgent struct {
+type retryCapacityAgent struct {
 	v2UnitAgent
 	capacity int
 }
 
-func (a *finalReviewRetryCapacityAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
+func (a *retryCapacityAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
 	if e.Kind == agent.TaskMessage && e.Result.Outcome == agent.Capacity {
 		a.capacity++
 		return agent.Effects{StartTasks: []agent.TaskSpec{{Step: "retry", Kind: "test/v1", Class: agent.ReadOnly, Request: make([]byte, 2<<20)}}}, nil
 	}
 	return a.v2UnitAgent.Handle(ctx, e)
 }
-func TestTaskFinalReviewCapacityYields(t *testing.T) {
-	a := &finalReviewRetryCapacityAgent{v2UnitAgent: v2UnitAgent{state: agent.State{Version: 1}}}
+func TestTaskCapacityYields(t *testing.T) {
+	a := &retryCapacityAgent{v2UnitAgent: v2UnitAgent{state: agent.State{Version: 1}}}
 	_, s := v2UnitSession(t, &a.v2UnitAgent)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
 	s.agent.v2.instance = a
@@ -101,7 +101,7 @@ func TestTaskFinalReviewCapacityYields(t *testing.T) {
 	}
 }
 
-func TestTaskFinalReviewExportIncompatibleHTTP(t *testing.T) {
+func TestTaskExportIncompatibleHTTP(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		workerAPIError(w, errors.Join(ErrExportIncompatible, agent.ErrIncompatibleAgent))
 	}))
@@ -111,7 +111,7 @@ func TestTaskFinalReviewExportIncompatibleHTTP(t *testing.T) {
 	require.NotErrorIs(t, err, ErrMoveBudget)
 }
 
-func TestTaskFinalReviewCapacityAbandonMove(t *testing.T) {
+func TestTaskCapacityAbandonMove(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))

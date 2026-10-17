@@ -272,7 +272,7 @@ func TestCapacityRequiresOneSecondSamples(t *testing.T) {
 	}
 }
 
-// Review regression: a tolerated stall can stamp the packet before a real
+// Regression: a tolerated stall can stamp the packet before a real
 // interruption late, so an unscheduled 140 ms gap may truly exceed 150 ms.
 func TestCapacityUnscheduledGapCannotHideBehindStall(t *testing.T) {
 	ms := time.Millisecond

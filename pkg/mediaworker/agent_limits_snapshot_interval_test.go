@@ -95,7 +95,7 @@ func (b *blockedStore) PutState(ctx context.Context, l sessionstore.Lease, data 
 func TestExportDoesNotWaitForSnapshot(t *testing.T) {
 	for _, phase := range []string{"clock", "put"} {
 		t.Run(phase, func(t *testing.T) {
-			forV2ReviewStores(t, func(t *testing.T, base sessionstore.Store) {
+			forV2Stores(t, func(t *testing.T, base sessionstore.Store) {
 				store := &blockedStore{Store: base, phase: phase, entered: make(chan struct{}), release: make(chan struct{})}
 				r, err := relay.New(relay.Config{Owners: store})
 				require.NoError(t, err)

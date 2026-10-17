@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Adapted from the reviewer's unknown-conflict probe: refusal codes must survive
+// Unknown-conflict check: refusal codes must survive
 // the public boundary, and unfamiliar replies must never imply invalid input.
 func TestControlErrorOutcomes(t *testing.T) {
 	for _, tc := range []struct {

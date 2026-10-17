@@ -27,7 +27,7 @@ func (s *rollbackClockStore) Clock(ctx context.Context, id string) (time.Time, e
 }
 
 func TestSnapshotClockRollbackCallSurvives(t *testing.T) {
-	forV2ReviewStores(t, func(t *testing.T, base sessionstore.Store) {
+	forV2Stores(t, func(t *testing.T, base sessionstore.Store) {
 		store := &rollbackClockStore{Store: base}
 		r, err := relay.New(relay.Config{Owners: store})
 		require.NoError(t, err)
@@ -182,7 +182,7 @@ func TestMainV8BoundsRemainReadable(t *testing.T) {
 }
 
 func TestExportQuotaOnStores(t *testing.T) {
-	forV2ReviewStores(t, func(t *testing.T, store sessionstore.Store) {
+	forV2Stores(t, func(t *testing.T, store sessionstore.Store) {
 		r, err := relay.New(relay.Config{Owners: store})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, r.Close()) })

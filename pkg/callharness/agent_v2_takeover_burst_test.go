@@ -12,27 +12,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const reviewRestoreDelay = 40 * time.Millisecond
+const slowRestoreDelay = 40 * time.Millisecond
 
-type reviewSlowRestore struct{}
+type slowRestoreAgent struct{}
 
-func (*reviewSlowRestore) Handle(context.Context, agent.Event) (agent.Effects, error) {
+func (*slowRestoreAgent) Handle(context.Context, agent.Event) (agent.Effects, error) {
 	return agent.Effects{}, nil
 }
-func (*reviewSlowRestore) Save(context.Context) (agent.State, error) {
+func (*slowRestoreAgent) Save(context.Context) (agent.State, error) {
 	return agent.State{Version: 1, Bytes: []byte("s")}, nil
 }
-func (*reviewSlowRestore) Restore(context.Context, agent.State) error {
-	time.Sleep(reviewRestoreDelay) // within the 100 ms callback budget
+func (*slowRestoreAgent) Restore(context.Context, agent.State) error {
+	time.Sleep(slowRestoreDelay) // within the 100 ms callback budget
 	return nil
 }
 
-func TestV2ReviewTakeoverBurst(t *testing.T) {
+func TestV2TakeoverBurst(t *testing.T) {
 	if testing.Short() {
 		t.Skip("extended v2 matrix runs outside the PR short suite")
 	}
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
-		reg := agenthost.Registration{Name: "burst/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &reviewSlowRestore{} }}
+		reg := agenthost.Registration{Name: "burst/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &slowRestoreAgent{} }}
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}})
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()

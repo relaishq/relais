@@ -254,7 +254,7 @@ func TestDelayedLoopbackTakeoverCuts(t *testing.T) {
 				}
 				require.Empty(t, requests[1], "lost ReadOnly input cannot regenerate itself")
 				sendLoopPackets(t, call, want[:5])
-				all := collectReviewPackets(t, received, 5, 5*time.Second)
+				all := collectPackets(t, received, 5, 5*time.Second)
 				for i := range all {
 					require.Equal(t, want[i], all[i].packet.Payload)
 				}

@@ -19,20 +19,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The reviewer's zero-payload export probe, exercised through all sixteen
+// Zero-payload export check, exercised through all sixteen
 // control-plane drain slots instead of simulating counters in the worker.
-type reviewExportAgent struct {
-	reviewSlowRestore
+type exportAgent struct {
+	slowRestoreAgent
 	entered chan struct{}
 	release chan struct{}
 	resumed *atomic.Int64
 	unknown *atomic.Int64
 }
 
-func (a *reviewExportAgent) Save(context.Context) (agent.State, error) {
+func (a *exportAgent) Save(context.Context) (agent.State, error) {
 	return agent.State{Version: 1, Bytes: []byte("s"), HasMoveOnly: true}, nil
 }
-func (a *reviewExportAgent) SaveMoveOnly(ctx context.Context) ([]byte, error) {
+func (a *exportAgent) SaveMoveOnly(ctx context.Context) ([]byte, error) {
 	a.entered <- struct{}{}
 	select {
 	case <-a.release:
@@ -41,8 +41,8 @@ func (a *reviewExportAgent) SaveMoveOnly(ctx context.Context) ([]byte, error) {
 		return nil, ctx.Err()
 	}
 }
-func (*reviewExportAgent) RestoreMoveOnly(context.Context, []byte) error { return nil }
-func (a *reviewExportAgent) Handle(_ context.Context, e agent.Event) (agent.Effects, error) {
+func (*exportAgent) RestoreMoveOnly(context.Context, []byte) error { return nil }
+func (a *exportAgent) Handle(_ context.Context, e agent.Event) (agent.Effects, error) {
 	if e.Resume != nil {
 		a.resumed.Add(1)
 		if e.Resume.Kind != legacy.PlannedMove || e.Resume.MoveOnly != agent.OK {
@@ -51,7 +51,7 @@ func (a *reviewExportAgent) Handle(_ context.Context, e agent.Event) (agent.Effe
 	}
 	return agent.Effects{}, nil
 }
-func TestV2ReviewSixteenConcurrentExports(t *testing.T) {
+func TestV2SixteenConcurrentExports(t *testing.T) {
 	if testing.Short() {
 		t.Skip("extended v2 matrix runs outside the PR short suite")
 	}
@@ -61,7 +61,7 @@ func TestV2ReviewSixteenConcurrentExports(t *testing.T) {
 		entered, release := make(chan struct{}, 16), make(chan struct{})
 		var resumed, unknown atomic.Int64
 		reg := agenthost.Registration{Name: "exports/v1", Factory: func(agent.FactoryArgs) agent.Agent {
-			return &reviewExportAgent{entered: entered, release: release, resumed: &resumed, unknown: &unknown}
+			return &exportAgent{entered: entered, release: release, resumed: &resumed, unknown: &unknown}
 		}}
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}})
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -115,12 +115,12 @@ func TestV2ReviewSixteenConcurrentExports(t *testing.T) {
 
 // One deadline miss must drop its input, while the same actor accepts later
 // packets. The late mutation is rolled back through the real Restore callback.
-type reviewSlowAudioAgent struct {
+type slowAudioAgent struct {
 	seen  bool
 	count byte
 }
 
-func (a *reviewSlowAudioAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
+func (a *slowAudioAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
 	if e.Kind == agent.AudioInput {
 		a.count++
 		if !a.seen {
@@ -131,19 +131,19 @@ func (a *reviewSlowAudioAgent) Handle(ctx context.Context, e agent.Event) (agent
 	}
 	return agent.Effects{}, nil
 }
-func (a *reviewSlowAudioAgent) Save(context.Context) (agent.State, error) {
+func (a *slowAudioAgent) Save(context.Context) (agent.State, error) {
 	return agent.State{Version: 1, Bytes: []byte{a.count}}, nil
 }
-func (a *reviewSlowAudioAgent) Restore(_ context.Context, state agent.State) error {
+func (a *slowAudioAgent) Restore(_ context.Context, state agent.State) error {
 	a.count = state.Bytes[0]
 	return nil
 }
-func TestV2ReviewSlowAudioContinues(t *testing.T) {
+func TestV2SlowAudioContinues(t *testing.T) {
 	if testing.Short() {
 		t.Skip("extended v2 matrix runs outside the PR short suite")
 	}
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
-		reg := agenthost.Registration{Name: "slow-audio/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &reviewSlowAudioAgent{} }}
+		reg := agenthost.Registration{Name: "slow-audio/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &slowAudioAgent{} }}
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}})
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -163,13 +163,13 @@ func TestV2ReviewSlowAudioContinues(t *testing.T) {
 	})
 }
 
-func TestV2ReviewBudgetRetryThroughRemoteWorker(t *testing.T) {
+func TestV2BudgetRetryThroughRemoteWorker(t *testing.T) {
 	if testing.Short() {
 		t.Skip("extended v2 matrix runs outside the PR short suite")
 	}
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		var attempts atomic.Int64
-		reg := agenthost.Registration{Name: "budget-retry/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &reviewSlowRestore{} }}
+		reg := agenthost.Registration{Name: "budget-retry/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &slowRestoreAgent{} }}
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}, remoteTarget: true, targetHandler: func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/resume" && attempts.Add(1) <= 2 {
@@ -196,13 +196,13 @@ func TestV2ReviewBudgetRetryThroughRemoteWorker(t *testing.T) {
 	})
 }
 
-func TestV2ReviewBudgetExhaustedThroughRemoteWorker(t *testing.T) {
+func TestV2BudgetExhaustedThroughRemoteWorker(t *testing.T) {
 	if testing.Short() {
 		t.Skip("extended v2 pressure recovery matrix")
 	}
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		var attempts atomic.Int64
-		reg := agenthost.Registration{Name: "budget-loss/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &reviewSlowRestore{} }}
+		reg := agenthost.Registration{Name: "budget-loss/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &slowRestoreAgent{} }}
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}, remoteTarget: true, targetHandler: func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/resume" {

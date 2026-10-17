@@ -9,12 +9,12 @@ import (
 	"testing"
 )
 
-func TestTaskReviewCapacityExportIsDefinitive(t *testing.T) {
+func TestTaskCapacityExportIsDefinitive(t *testing.T) {
 	require.False(t, uncertainExport(agent.ErrCapacity))
 	require.True(t, uncertainExport(errors.Join(agent.ErrCapacity, privateapi.ErrUncertain)))
 }
 
-func TestTaskFinalReviewIncompatibleExportIsDefinitive(t *testing.T) {
+func TestTaskIncompatibleExportIsDefinitive(t *testing.T) {
 	require.False(t, uncertainExport(mediaworker.ErrExportIncompatible))
 	require.True(t, uncertainExport(errors.Join(mediaworker.ErrExportIncompatible, privateapi.ErrUncertain)))
 }

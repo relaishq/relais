@@ -46,7 +46,7 @@ func TestCrashLosesOversizedBacklog(t *testing.T) {
 		for len(packets)*len(fixture) < 240000 {
 			packets = append(packets, fixture)
 		}
-		regs, events, gate, _ := reviewStreamRegs(packets, len(packets), 0)
+		regs, events, gate, _ := streamRegs(packets, len(packets), 0)
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs, snapshotLimits: []mediaworker.SnapshotLimits{{MoveBytesPerSession: 1 << 20}, {MoveBytesPerSession: 128 << 10}}})
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTaskCapacityReviewWideCallback(t *testing.T) {
+func TestTaskCapacityWideCallback(t *testing.T) {
 	for _, width := range []int{20, 33, 100} {
 		t.Run(fmt.Sprint(width), func(t *testing.T) {
 			a := &v2UnitAgent{state: agent.State{Version: 1}}
@@ -51,7 +51,7 @@ func TestTaskCapacityReviewWideCallback(t *testing.T) {
 		})
 	}
 }
-func TestTaskCapacityReviewDuplicateCause(t *testing.T) {
+func TestTaskCapacityDuplicateCause(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
@@ -68,7 +68,7 @@ func TestTaskCapacityReviewDuplicateCause(t *testing.T) {
 	require.Equal(t, before, len(s.agent.latest.V2.Capacity))
 	require.NoError(t, s.validateTaskMoves(s.agent.latest.V2.Tasks, nil))
 }
-func TestTaskCapacityReviewDuplicateRestore(t *testing.T) {
+func TestTaskCapacityDuplicateRestore(t *testing.T) {
 	for _, exact := range []bool{false, true} {
 		t.Run(fmt.Sprint(exact), func(t *testing.T) {
 			_, s := v2UnitSession(t, &v2UnitAgent{state: agent.State{Version: 1}})
@@ -84,7 +84,7 @@ func TestTaskCapacityReviewDuplicateRestore(t *testing.T) {
 		})
 	}
 }
-func TestTaskCapacityReviewPruneUsesReceiveHorizon(t *testing.T) {
+func TestTaskCapacityPruneUsesReceiveHorizon(t *testing.T) {
 	_, s := v2UnitSession(t, &v2UnitAgent{state: agent.State{Version: 1}})
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
 	intent := taskIntent{ID: "receipt", Class: agent.ReadOnly, Phase: taskTerminal, Final: true, Terminal: agent.OK, Published: 1, Cursor: 1, InputCause: &taskCause{SSRC: 42, Index: 10}}

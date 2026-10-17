@@ -113,7 +113,7 @@ func TestProfileTakeoverBurstGuardDoesNotHideInPool(t *testing.T) {
 	rows[0].Measurement.ContentLoss.Event.Video.Lost = 15
 	rows[0].Measurement.ContentLoss.Event.Video.LongestLostRun = 15
 	result := judgeProfile(options, rows, links)
-	require.Equal(t, "pass", result.VideoContentLoss.Verdict, "reviewer's burst fits the pooled bound")
+	require.Equal(t, "pass", result.VideoContentLoss.Verdict, "burst fits the pooled bound")
 	require.Equal(t, "fail", result.Verdict)
 	require.Contains(t, result.Rows[0].Reasons, "trial 1: video loss burst: consecutive=15, limit=4")
 	rows[0].Measurement.ContentLoss.Event.Video.LongestLostRun = 1

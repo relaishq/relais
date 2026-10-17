@@ -39,7 +39,7 @@ func (a *finalRetryOnCapacityAgent) Handle(ctx context.Context, e agent.Event) (
 	}
 	return a.taskHarnessAgent.Handle(ctx, e)
 }
-func TestV2TaskFinalReviewCapacityRetryKeepsCall(t *testing.T) {
+func TestV2TaskCapacityRetryKeepsCall(t *testing.T) {
 	for _, batch := range []int{1, 32} {
 		t.Run(fmt.Sprint(batch), func(t *testing.T) {
 			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
@@ -76,7 +76,7 @@ func TestV2TaskFinalReviewCapacityRetryKeepsCall(t *testing.T) {
 		})
 	}
 }
-func TestV2TaskFinalReviewFinishedRetryTakeover(t *testing.T) {
+func TestV2TaskFinishedRetryTakeover(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		keys := make(chan string, 8)
 		handler := func(ctx context.Context, run *agent.TaskRun) error {
@@ -105,7 +105,7 @@ func TestV2TaskFinalReviewFinishedRetryTakeover(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
-func TestV2TaskFinalReviewPreparedSlots(t *testing.T) {
+func TestV2TaskPreparedSlots(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		gate := &taskOutageStore{Store: store}
 		gate.blocked.Store(true)

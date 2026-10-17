@@ -56,7 +56,7 @@ func TestSoakToleratedStallFitsGapRetention(t *testing.T) {
 	require.Equal(t, callharness.MediaGapCeiling-callharness.MaxToleratedStall, callharness.MediaGapRetention)
 }
 
-// Review regression for the soak: an unscheduled near-ceiling gap overlapping
+// Soak regression: an unscheduled near-ceiling gap overlapping
 // a tolerated stall of this caller's generator is not a pass.
 func TestSoakStalledNearCeilingGapIsInconclusive(t *testing.T) {
 	ms := time.Millisecond

@@ -48,7 +48,7 @@ func forBudgetRetryStores(t *testing.T, run func(*testing.T, sessionstore.Store)
 	})
 }
 
-// Based on the reviewer's retained planned-move probe. Budget refusals must
+// Retained planned move: budget refusals must
 // not enter the unlimited, pinned confirmation path for uncertain adoption.
 func TestMoveBudgetRetryBounded(t *testing.T) {
 	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {

@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The reviewer's reversed-receipt scenario: 50Hz identified audio, a 25ms
+// Reversed-receipt scenario: 50Hz identified audio, a 25ms
 // clock probe and a brief media outage. Receipt delivery is independent of
 // event order, and all assertions use the production report snapshot path.
 func receiptOrderCall(t *testing.T, takeover bool) (*recorder, *Call) {

@@ -12,15 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type reviewUnflushedWorker struct{ *fakeWorker }
+type unflushedWorker struct{ *fakeWorker }
 
-func (*reviewUnflushedWorker) ExportSession(string) ([]byte, error) {
+func (*unflushedWorker) ExportSession(string) ([]byte, error) {
 	return nil, errors.Join(mediaworker.ErrExportNotFlushed, mediaworker.ErrMoveBudget)
 }
 
-// The reviewer's uncertainty probe, with assertions at the real move boundary
+// Uncertainty check, with assertions at the real move boundary
 // for both in-process errors and their private HTTP representation.
-func TestReviewExportBudgetRefusalDoesNotTriggerCrashRecovery(t *testing.T) {
+func TestExportBudgetRefusalDoesNotTriggerCrashRecovery(t *testing.T) {
 	for _, remote := range []bool{false, true} {
 		t.Run(map[bool]string{false: "direct", true: "remote"}[remote], func(t *testing.T) {
 			p, a, b, _ := setup(t)
@@ -37,7 +37,7 @@ func TestReviewExportBudgetRefusalDoesNotTriggerCrashRecovery(t *testing.T) {
 				defer server.Close()
 				p.workers["a"].worker = &RemoteWorker{URL: server.URL, Client: server.Client()}
 			} else {
-				p.workers["a"].worker = &reviewUnflushedWorker{a}
+				p.workers["a"].worker = &unflushedWorker{a}
 			}
 			result, err := p.Move(ctx, id, "b")
 			require.ErrorIs(t, err, mediaworker.ErrMoveBudget)

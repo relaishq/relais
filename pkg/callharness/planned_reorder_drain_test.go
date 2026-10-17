@@ -164,7 +164,7 @@ func TestPlannedDrainReorderedPrivateInput(t *testing.T) {
 		t.Logf("REORDER_DRAIN_RELAY worker_no_flow=%d hold_drops=%d recovered=%d releases=%d output_drains=%d output_drain_timeouts=%d", stats.WorkerNoFlow, stats.HoldDrops, stats.PlannedRecovered, stats.PlannedReleases, stats.OutputDrains, stats.OutputDrainTimeouts)
 	})
 	// Sequences wrap during the drain and move rounds, staggered per call, so
-	// rollover and reordering meet in the same window (P1-A of the review).
+	// rollover and reordering meet in the same window.
 	wrap := func(i int) *RTPSequenceNumbers {
 		return &RTPSequenceNumbers{Audio: uint16(65535 - 40 - 10*i), Video: uint16(65535 - 40 - 5*i)} //nolint:gosec // small i
 	}

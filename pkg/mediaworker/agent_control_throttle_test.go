@@ -23,7 +23,7 @@ func controlThrottleSession(t *testing.T) (*session, *v2UnitAgent) {
 	return s, a
 }
 
-// Adapted from the reviewer probe: receipt pressure on a fan-out must not
+// Receipt pressure on a fan-out must not
 // prevent caller audio, or let unrelated successful callbacks reset its delay.
 func TestControlReceiptThrottleAllowsOtherEvents(t *testing.T) {
 	s, a := controlThrottleSession(t)

@@ -32,7 +32,7 @@ func (w *refusingWorker) AgentControl(context.Context, string, agent.ControlMess
 	return agent.ControlReceipt{}, agent.ErrBackpressure
 }
 
-// Adapt the reviewer's untyped-worker probe to the now-typed refusal path.
+// Untyped-worker refusal, adapted to the now-typed refusal path.
 func TestControlWorkerRefusalEnvelope(t *testing.T) {
 	p, base, _, _ := setup(t)
 	p.workers["a"].worker = &refusingWorker{fakeWorker: base}

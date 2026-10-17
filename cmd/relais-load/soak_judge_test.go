@@ -213,7 +213,7 @@ func TestSoakEventStallUntrustsNearGatePass(t *testing.T) {
 	}
 }
 
-// Review counterexample: p99 does not bound the stamping error. A 39 ms stall
+// Counterexample: p99 does not bound the stamping error. A 39 ms stall
 // on the last pre-outage packet turns a true 74 ms gap into 35 ms.
 func TestSoakStallMaximumBoundsGap(t *testing.T) {
 	c, r := soakFixture()
@@ -241,7 +241,7 @@ func TestSoakStallMaximumBoundsGap(t *testing.T) {
 	require.Equal(t, 1, row.Trusted)
 }
 
-// Review counterexample: 18 gaps of 40 ms, one of 140 ms and one of 151 ms
+// Counterexample: 18 gaps of 40 ms, one of 140 ms and one of 151 ms
 // have a passing p95 of 140 ms. Stall evidence must not shrink the denominator.
 func soakP95Fixture() loadgen.RunReport {
 	_, r := soakFixture()
