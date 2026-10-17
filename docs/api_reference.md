@@ -32,6 +32,76 @@ The current owner, the move log and the owner's count of the caller's packets it
 
 The control plane API (`/api/v1/sessions`, `/api/v1/plugins`) and the WebSocket signaling endpoint (`/ws/signaling`) were served by the retired `relais-core` server and no longer exist.
 
+## Routed agent Control
+
+The authenticated `relais-signal` frontend accepts:
+
+```text
+POST /calls/{id}/agent/control
+Content-Type: application/json
+Authorization: Bearer <existing deployment token>
+{"id":"press-1","sequence":1,"name":"ptt.start","data":"AP8="}
+```
+
+`data` is optional base64 binary data, at most 1 KiB decoded. IDs and names are
+nonempty UTF-8, at most 128 bytes. New messages use contiguous per-call sequences
+starting at 1 and unique IDs. Retries preserve the whole message across moves,
+takeovers and lost responses. No query parameters or private target are accepted.
+
+- **202**: locally accepted callback/state/receipt; crash loss is possible.
+- **200**: an acknowledged checkpoint records acceptance.
+- Both return `{id,sequence,event_id,checkpointed}`; only `checkpointed` changes
+  when the same retained receipt becomes durable.
+- **409**, with a typed JSON `code`: `control_conflict` (retained ID/sequence
+  collision), `control_stale` (durably accepted and compacted sequence; stop retrying your original message), `control_order` (future
+  sequence), `control_invalid`, `control_unsupported` (legacy agent or insufficient registration limits),
+  `agent_capacity`, or an existing route/store/uncertain outcome.
+- **400**: malformed JSON or refused query; **401**: existing bearer auth failure;
+  **413**: frontend request bound; **502**: uncertain upstream transport failure.
+
+The trusted control endpoint has the same call path. It resolves live store
+ownership under the move/takeover lock and forwards to the owning worker's private
+`POST /sessions/{id}/agent/control`. Never expose private worker/control APIs.
+A planned move carries the exact accepted state and dedup window. A crash can
+redeliver a 202-only message on the new owner with the same EventID. Checkpointed
+old prefixes compact after one newer sequence position; late duplicates then
+return `control_stale`. Since sequences are contiguous and only checkpointed
+prefixes compact, this proves durable acceptance for a retry of your own message:
+stop retrying even though its detailed receipt has expired. Control receipts use
+fixed-size digests and a separate measured sub-budget (at most one third of host
+pending metadata; two unacknowledged records at default limits). A full budget
+returns retryable `agent_capacity` before consuming the sequence and preserves
+timer/task refusal headroom. Only actual held receipt bytes count toward other
+event admission; Control-bearing snapshots use compact versioned task refusals.
+Insufficient registration limits return definite `control_unsupported` instead of
+retryable capacity. The decoded 1 KiB data also counts by its real encoded size.
+Before Started is accepted, retryable `control_not_ready` refuses admission.
+After quarantine and successful Restore, a Control Handle error/deadline outside
+Save returns retryable `control_rejected`, consumes no sequence and keeps the
+call alive. Save/Restore and invalid-effect failures remain terminal.
+Move/Drain wait a bounded time for Control with operator priority; each Control
+route hold is capped at 500 ms and takeover may cancel it. Routing/transport
+uncertainty still requires an identical retry. Malformed JSON, unknown fields,
+invalid base64 and wrong types return definite 400 `control_invalid`.
+See [the agent guide](build-an-agent.md#routed-control) for pending byte accounting,
+retry rules, and the unchanged deployment/authentication limits.
+
+
+Control error classes (codes preserve the existing HTTP status):
+
+| Class | Codes | Client action |
+| --- | --- | --- |
+| retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session` | Retry the identical message with bounded backoff and a deadline. |
+| definite | `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
+| uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
+
+`move_budget` is definite for Control: exceeding move-memory admission fails
+closed under the existing host contract. `agent_incompatible` is definite because the registration, state or callback effects need a software
+or operator fix; replaying the same message does not repair them. `closed` means
+retry on the live route. Unknown/missing codes are uncertain on every status,
+including 409. Only a non-envelope 400 (private JSON decoding failure) becomes
+`control_invalid`; an unfamiliar JSON error envelope remains uncertain.
+
 ## Plugin Development
 
 Plugins must implement one of:

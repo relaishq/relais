@@ -449,7 +449,12 @@ records it. Client retries with the same ID/sequence/body across routing changes
 sequences and a sparse dedup window checkpoint like input; compact old prefixes to reject late
 duplicates after receipts expire. Reject conflicts; bound control data to 1 KiB within pending bytes.
 Emit Control with stable EventID; no public control-authentication claim beyond existing deployment
-constraints (`docs/guarantees.md:791`). This is an HTTP/interface sketch, not implemented endpoints.
+constraints (`docs/guarantees.md:791`). Slice 8a implements these endpoints and
+`agent.ControlReceipt`; `controlplane.ControlSender` is an optional worker capability.
+There is no additional SDK sender abstraction; Demo A uses the HTTP route.
+New sequences start at 1 and must be contiguous; future sequences are refused
+without consumption. The retained sparse receipt window compacts acknowledged
+prefixes after four newer sequence positions, with no wall-clock TTL.
 
 Outline `docs/build-an-agent.md`: build keyless example; register main/factory/tasks; Save/Restore
 and IDs; read-only versus side-effect work; lost move-only data/outages; refs, turns and cancellation;
@@ -494,8 +499,9 @@ Implement after owner approval, in this order:
 Durable inbox and result blobs with fencing/retention (stronger recovery, extra store cost);
 LegacyFactory; public ReadVersions/WriteVersion, heartbeat capabilities and bridge-rollout recipe;
 256 KiB state; public WriteOgg trim/gain handling; public IdempotencyKey and OpusPacket.Samples;
-streaming task input/Realtime, PCM codecs and resumable decoder state; ControlSender/ControlReceipt
-in Demo A. Keep TaskRun.After/Emit compatible with future durable results. No single-render promise.
+streaming task input/Realtime, PCM codecs and resumable decoder state. The Demo A
+HTTP Control sender and receipt plumbing arrived in slice 8a; it is no longer deferred.
+Keep TaskRun.After/Emit compatible with future durable results. No single-render promise.
 One **store-schema ADR** must cover both constant DTLS/transport setup state written once in a
 separate same-slot key, and app state written only on change in the **same fenced EVAL**, with
 the changing transport blob carrying the exact app-state revision and digest. Do not design it here.

@@ -275,6 +275,7 @@ func (s *session) refuseSnapshotEvent(event agent.Event, before agentState) erro
 	if err := s.taskMetadataBudget(next.V2.Tasks, next.V2.Capacity, false); err != nil {
 		return err
 	}
+	s.compactControlMetadata(next.V2, min(h.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes))
 	next.Revision++
 	if _, err := s.admissionSnapshot(next); err != nil {
 		return err

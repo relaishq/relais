@@ -104,7 +104,7 @@ Selecting `echo` for new calls does not replace a restored custom registration.
 
 `Handle`, `Save`, `Restore`, and move callbacks have deadlines and run serially.
 Keep them short, honor cancellation, and never mutate app state after return.
-Ignore unknown events. `Control` is reserved in this slice.
+Ignore unknown events. Routed `Control` events carry a stable `EventID` and a copied `ControlMessage`.
 
 `Save` returns versioned crash-recoverable `State.Bytes` and O(1) presence/length
 metadata for move-only data. Ordinary Save must never serialize, copy, or hash a
@@ -378,6 +378,170 @@ handlers until slice 9.** That slice adds worker-local quiescence and a measured
 operator move reserve. Do not assume a five-second shutdown deadline includes a
 handler wait or that it waits for the whole reply to play.
 
+## Routed Control
+
+Send `POST /calls/{id}/agent/control` through `relais-signal` with the existing
+bearer token and `Content-Type: application/json`:
+
+```json
+{"id":"press-1","sequence":1,"name":"ptt.start","data":"AP8="}
+```
+
+`data` is base64 for binary bytes, as with Go `[]byte`. It is optional and is
+limited to 1,024 decoded bytes. IDs and names must be nonempty UTF-8 strings of
+at most 128 bytes. Use a new unique ID for each message. Start sequences at 1;
+send each new message with the next sequence. Retries keep the **same ID,
+sequence, name and bytes**. Future sequences return `control_order` without
+consumption; send missing messages first. This preserves callback order.
+
+A reply contains `{id, sequence, event_id, checkpointed}`. **202 Accepted** means
+the actor accepted the callback and saved its local state and dedup record.
+**200 OK** means a successful fenced checkpoint recorded that acceptance.
+Retry until 200 or `control_stale`, with bounded delay and an application deadline. A lost reply or
+routing error is uncertain: retry the same message, including after a move or
+takeover. Never mint a new ID to recover an uncertain request. Control has no
+media data channel. The client supplies no worker URL or private route.
+
+The agent receives `agent.Event{Kind: agent.Control, ID: ..., Control: ...}`.
+The ID is stable across identical retries, moves and crash redelivery. Local
+admission, callback state, effects and receipt share one publication transaction.
+An in-flight callback completes before export, or the request is refused and
+retried on the adopted route. Exact moves carry the receipt window and its
+checkpoint acknowledgement. A 202 can be lost on a crash: the callback can run
+again with the same EventID on the new owner. Only committed logical history is
+deduplicated; external effects still need the task class and provider rules above.
+
+Receipts store fixed-size SHA-256 ID/body digests. Their versioned binary encoding
+is 73 bytes per record (102 bytes in JSON). Control has a separate byte cap
+measured from **two** records and maximum-width sequence/floor counters, at most
+one third of pending metadata. At default limits at most two unacknowledged
+Controls fit. Timer/task admission charges only receipt bytes actually held;
+agents without Control retain their original encoding and accounting.
+Control-bearing snapshots pack task-refusal digests and sparse turns into a
+versioned binary representation, preserving every task ID, order and outcome.
+This keeps refusal-only fan-out representable even when the receipt cap is full.
+Upgrade every pool worker and `relais-control` to this slice before enabling
+Control clients. Rolling back workers or `relais-control` while Control calls
+exist breaks takeovers for those calls. The new
+reader also accepts the previous object-form refusals; older workers refuse
+any Control-bearing snapshot: its session state version is 9. Snapshots without
+Control remain version 8, and the current reader accepts both versions.
+Pool workers should use the same agent ceilings, or effective limits can make
+Control support differ between workers.
+
+For the default-limit unit registration, read-only tasks with short steps and
+zero turns admit the following numbers; remaining tasks receive Capacity:
+
+| Fan-out width | No Control | One held receipt | Two held receipts (full) |
+| --- | --- | --- | --- |
+| 20 | 4 | 4 | 4 |
+| 24 | 3 | 3 | 2 |
+| 33 | 0 | 1 | 0 |
+
+Exact capacity depends on registration metadata, turns, timers and task contents.
+If retained Control prevents an otherwise representable refusal-only transaction,
+the host drops acknowledged receipt details within the accepting transaction,
+keeping the sequence floor and high mark. If unacknowledged receipts still block
+admission, the host restores the callback and returns backpressure. The actor
+keeps the event/cursors and retries each receipt-blocked event at most once per
+250 ms; other events continue normally. Playback/mailbox backpressure does not
+arm this delay. A new checkpoint acknowledgement permits an immediate retry.
+Oversized callbacks that cannot fit even without Control still fail closed.
+
+The callback's real encoded `data` also counts while admitted. A full Control cap
+returns retryable `agent_capacity` without invoking Handle or consuming a sequence.
+Only acknowledged prefixes may compact, including under task, timer, audio or
+emission admission pressure; at defaults a prefix more than one
+sequence behind the new sequence can expire. Smaller pending limits may compact
+acknowledged prefixes earlier. If the runtime registration's pending limit cannot
+hold even one record at maximum counter widths plus registration/quota metadata,
+Control is definitely `control_unsupported`; increase the agent limits rather than
+retrying the same message. This does not disable its other v2 events.
+Old sequences remain closed after
+compaction and return `control_stale`, never another callback. For a client
+retrying its own original message, `control_stale` proves **durable acceptance**:
+sequences are contiguous and only checkpointed prefixes can compact. Stop
+retrying that message; its detailed receipt is no longer retained. Retained receipts
+return the original EventID; changed IDs, sequences or bodies that collide with a
+retained entry return `control_conflict`. IDs must remain unique even after an
+old receipt expires. This sparse receipt window has no wall-clock expiry.
+
+Before Started is accepted, Control returns retryable `control_not_ready`.
+A Control Handle error or deadline outside Save is quarantined; after successful
+Restore the host returns retryable `control_rejected` without consuming the
+sequence or ending the call. Retry the identical message with bounded backoff.
+Save/Restore failures and invalid state/effects remain terminal agent failures.
+Keep external side effects in Tasks, since Restore only rolls back app state.
+
+The route remains serialized with operator changes. Move and Drain wait a
+bounded time for an in-flight Control, and waiting operators take priority over
+new Control retries. A Control holds the route for at most 500 ms; takeover can
+cancel that RPC within its existing 1.5-second budget. A transport timeout may
+still follow worker acceptance: retry the same message on the live route.
+Malformed JSON, unknown fields, invalid base64 and wrong field types return
+400 `control_invalid`; identical retries cannot repair them.
+
+Legacy echo and demo registrations return `control_unsupported`. Their media
+behavior is unchanged. Authentication and network exposure retain the existing
+deployment constraints; this adds no per-call authorization or public Internet
+control-authentication guarantee. The private worker endpoint is
+`POST /sessions/{id}/agent/control`; trusted control resolves live store ownership
+under the existing call lock.
+
+
+Control error classes (codes preserve the existing HTTP status):
+
+| Class | Codes | Client action |
+| --- | --- | --- |
+| retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session` | Retry the identical message with bounded backoff and a deadline. |
+| definite | `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
+| uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
+
+`move_budget` is definite for Control: exceeding move-memory admission fails
+closed under the existing host contract. `agent_incompatible` is definite because the registration, state or callback effects need a software
+or operator fix; replaying the same message does not repair them. `closed` means
+retry on the live route. Unknown/missing codes are uncertain on every status,
+including 409. Only a non-envelope 400 (private JSON decoding failure) becomes
+`control_invalid`; an unfamiliar JSON error envelope remains uncertain.
+
+## Reading provider Ogg/Opus
+
+`pkg/agent/opusio` provides a pure-Go reader:
+
+```go
+reader, err := opusio.NewReader(body)
+// Handle err. NewReader validates OpusHead and OpusTags.
+for {
+    audio, err := reader.Next(ctx)
+    if err == io.EOF { break }
+    if err != nil { return err }
+    // Emit audio from the task handler; it contains one unchanged Opus packet.
+    _ = audio
+}
+```
+
+`Header()` reports channel count, input sample rate and pre-skip. Timing always
+uses 48 kHz. `PacketDuration()` reports the encoded packet duration from its TOC.
+`Position()` subtracts pre-skip and final granule trimming from reported audible
+time. Encoded packets retain preroll and padding; this is **not sample-exact
+PCM trimming**. The checked spike fixture is mono, 24 kHz input metadata,
+pre-skip 312 and 80 packets of 20 ms each. Tests rebuild Ogg from those packets
+with the pinned Pion writer; no provider connection runs in this slice.
+
+The reader keeps one page and one packet, each bounded near 64 KiB. Oversized
+headers/packets, CRC failures and truncation are errors. Empty or malformed
+audio packets are discarded per RFC 7845 section 3 and RFC 6716 section 3.4;
+`DiscardedPackets()` exposes the count. Timing resynchronizes at the next
+completed page's granule after a discard. Malformed Ogg structure and headers
+remain fatal typed errors (`ErrContainer`, `ErrCRC`, `ErrHeader`, `ErrGranule`,
+`ErrLimit`), rather than audio-packet errors. OpusHead versions 0–15 are accepted
+as compatible major version zero. Mapping family zero
+(mono/stereo) and zero output gain are supported. Chaining/multiplexing, other
+mappings, gain, and cropped streams with a nonzero initial granule offset are
+explicit typed errors. Cancellation is checked between reads; the underlying
+reader must provide its own cancellation/deadline for a blocked read. Read
+through EOF to validate the stream end and reject a chained stream.
+
 ## Same-registration upgrades and Demo A
 
 All pool members must restore the previous app `State.Version` and pending task
@@ -389,9 +553,8 @@ not a general mixed-version deployment promise.
 
 The next tutorial features **arrive with Demo A**:
 
-- Control push-to-talk and its routed HTTP sender/receipt path.
 - STT Ogg upload using the encoded packets and a validated Pion writer path.
-- The TTS packet reader with bounded Ogg packet assembly and format fixtures.
+- The provider TTS integration using the packet reader below.
 
 Realtime/live STT, PCM conversion, durable conversation/result blobs, and provider
 connections that survive worker restart remain outside this slice. See

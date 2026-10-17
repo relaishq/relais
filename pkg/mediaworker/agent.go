@@ -123,6 +123,7 @@ func cloneAgentState(state agentState) agentState {
 		e.Tasks = cloneTaskIntents(e.Tasks)
 		e.Capacity = slices.Clone(e.Capacity)
 		e.Timers = slices.Clone(e.Timers)
+		e.Controls = slices.Clone(e.Controls)
 		e.Playback.Window = slices.Clone(e.Playback.Window)
 		e.Playback.Notify = slices.Clone(e.Playback.Notify)
 		state.V2 = &e

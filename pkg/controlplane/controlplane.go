@@ -147,6 +147,13 @@ type call struct {
 	hungUp atomic.Bool
 	mu     sync.Mutex // serializes moves, takeovers, End and terminal reconciliation
 	id     string
+	// controlMu guards the routing holder and operator priority. Operators retain
+	// the ordinary fail-fast rule against other operators, but wait for Control.
+	controlMu      sync.Mutex
+	controlActive  bool
+	controlCancel  context.CancelFunc
+	controlContext context.Context // immutable while the Control holder owns mu
+	controlWaiters int
 	// stateMu protects the completed-move metadata below. Never hold it
 	// across I/O or while acquiring mu or the plane's registry lock.
 	stateMu       sync.Mutex
@@ -491,7 +498,8 @@ type MoveResult struct {
 	Error string `json:"error,omitempty"`
 }
 
-// Move fails fast if another move or drain holds the call. Empty to picks
+// Move waits within a bounded budget for Control and fails fast against
+// another move or drain. Empty to picks
 // the least-loaded non-draining worker other than the current owner.
 func (p *Plane) Move(ctx context.Context, id, to string) (res MoveResult, moveErr error) {
 	if !movediag.Enabled() {
@@ -509,8 +517,8 @@ func (p *Plane) moveRequest(ctx context.Context, id, to string) (MoveResult, err
 		return MoveResult{}, err
 	}
 
-	if !c.mu.TryLock() {
-		return MoveResult{}, ErrMoveInProgress
+	if err := c.lockOperator(ctx, false); err != nil {
+		return MoveResult{}, err
 	}
 	defer c.mu.Unlock()
 	if c.terminal {
@@ -901,8 +909,8 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 				return
 			}
 
-			if !j.c.mu.TryLock() {
-				errs[i] = ErrMoveInProgress
+			if err := j.c.lockOperator(ctx, false); err != nil {
+				errs[i] = err
 				return
 			}
 			defer j.c.mu.Unlock()

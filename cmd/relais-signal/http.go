@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/controlplane"
 )
 
@@ -25,8 +26,8 @@ const maxRequestBytes = 64 << 10
 const maxStatusBytes = 4 << 20
 const requestTimeout = 10 * time.Second
 
-// Match the demo's reverse-proxy pattern, but expose only the two signaling
-// operations. Do not forward client credentials or trust forwarded headers.
+// Match the demo's reverse-proxy pattern, exposing signaling
+// operations and routed agent Control. Do not forward client credentials or trust forwarded headers.
 func newHandler(target *url.URL, token string, transport http.RoundTripper) (http.Handler, error) {
 	return newHandlerWithClock(target, token, transport, time.Now)
 }
@@ -69,9 +70,39 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 			return errors.New("invalid signaling response")
 		}
 		headers := make(http.Header)
-		if r.StatusCode >= 400 && r.StatusCode <= 599 {
+		if controlPath(r.Request.URL.Path) && r.StatusCode >= 400 && r.StatusCode <= 599 {
+			var failure struct {
+				Code string `json:"code"`
+			}
+			var envelope map[string]json.RawMessage
+			isEnvelope := json.Unmarshal(data, &envelope) == nil && envelope != nil
+			_ = json.Unmarshal(data, &failure)
+			policy, known := controlErrors[failure.Code]
+			if !known || policy.class == "uncertain" {
+				failure.Code = "uncertain"
+				if r.StatusCode == http.StatusBadRequest && !isEnvelope {
+					failure.Code = "control_invalid"
+				}
+				policy = controlErrors[failure.Code]
+			}
+			data, _ = json.Marshal(struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{failure.Code, policy.message})
+			headers.Set("Content-Type", "application/json")
+		} else if r.StatusCode >= 400 && r.StatusCode <= 599 {
 			data = []byte("signaling request failed; operation outcome may be uncertain\n")
 			headers.Set("Content-Type", "text/plain; charset=utf-8")
+		} else if controlPath(r.Request.URL.Path) && (r.StatusCode == http.StatusAccepted || r.StatusCode == http.StatusOK) {
+			var receipt agent.ControlReceipt
+			if json.Unmarshal(data, &receipt) != nil || receipt.ID == "" || receipt.Sequence == 0 || receipt.EventID == "" || receipt.Checkpointed != (r.StatusCode == http.StatusOK) {
+				return errors.New("invalid control receipt")
+			}
+			data, err = json.Marshal(receipt)
+			if err != nil {
+				return err
+			}
+			headers.Set("Content-Type", "application/json")
 		} else if r.Request.Method == http.MethodPost && r.StatusCode == http.StatusCreated {
 			location := r.Header.Get("Location")
 			if !callPath(location) {
@@ -117,6 +148,8 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 		method := ""
 		switch {
 		case r.URL.Path == "/calls":
+			method = http.MethodPost
+		case controlPath(r.URL.Path):
 			method = http.MethodPost
 		case callPath(r.URL.Path):
 			method = http.MethodDelete
@@ -179,6 +212,11 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 		r.ContentLength = int64(len(data))
 		proxy.ServeHTTP(w, r)
 	}), nil
+}
+
+func controlPath(path string) bool {
+	base, ok := strings.CutSuffix(path, "/agent/control")
+	return ok && callPath(base)
 }
 
 func callPath(path string) bool {
@@ -272,4 +310,60 @@ func validQuery(r *http.Request) bool {
 		}
 	}
 	return true
+}
+
+// Only fixed public codes/messages may cross the trusted control boundary.
+// Never reflect worker addresses, callback details or operator error strings.
+type controlErrorPolicy struct {
+	class   string
+	message string
+}
+
+// Every private worker/control/store code has an explicit public policy. Keep
+// this exhaustive: the completeness test also checks the documented classes.
+var controlErrors = map[string]controlErrorPolicy{
+	"control_invalid":       {"definite", "invalid control message"},
+	"control_conflict":      {"definite", "control ID or sequence conflicts"},
+	"control_order":         {"definite", "send missing sequences first"},
+	"control_stale":         {"definite", "sequence durably accepted; stop retrying"},
+	"control_unsupported":   {"definite", "control unsupported by this agent or its limits"},
+	"control_not_ready":     {"retryable", "agent starting; retry the identical message"},
+	"control_rejected":      {"retryable", "control handler refused; retry the identical message"},
+	"agent_backpressure":    {"retryable", "agent backpressure; retry the identical message"},
+	"agent_capacity":        {"retryable", "control capacity unavailable; retry the identical message"},
+	"move_budget":           {"definite", "agent move-memory capacity exceeded; stop automatic retries"},
+	"closed":                {"retryable", "worker closed; retry the identical message on the live route"},
+	"not_established":       {"retryable", "call establishing; retry the identical message"},
+	"unknown_session":       {"retryable", "call route unavailable; retry the identical message"},
+	"lease_lost":            {"retryable", "call ownership changed; retry the identical message"},
+	"move_in_progress":      {"retryable", "call move in progress; retry the identical message"},
+	"no_target":             {"retryable", "worker unavailable; retry the identical message"},
+	"transient":             {"retryable", "control temporarily unavailable; retry the identical message"},
+	"deadline":              {"retryable", "control deadline exceeded before acceptance; retry the identical message"},
+	"canceled":              {"retryable", "control canceled before acceptance; retry the identical message"},
+	"session_exists":        {"retryable", "call route changing; retry the identical message"},
+	"checkpoint_clock":      {"retryable", "store clock unavailable; retry the identical message"},
+	"export_not_flushed":    {"retryable", "call export not ready; retry the identical message"},
+	"agent_incompatible":    {"definite", "agent registration or effects incompatible; stop automatic retries"},
+	"agent_save":            {"definite", "agent Save failed; call ended"},
+	"agent_restore":         {"definite", "agent Restore failed; call ended"},
+	"agent_version":         {"definite", "agent state version unsupported"},
+	"agent_oversize":        {"definite", "agent state exceeds its limit"},
+	"unknown_call":          {"definite", "unknown call"},
+	"not_found":             {"definite", "call not found"},
+	"ended":                 {"definite", "call ended"},
+	"unsupported_offer":     {"definite", "call offer unsupported"},
+	"sequence_budget":       {"definite", "call sequence budget exhausted"},
+	"srtcp_exhausted":       {"definite", "call RTCP budget exhausted"},
+	"export_incompatible":   {"definite", "call export incompatible"},
+	"barrier_timeout":       {"retryable", "route barrier unavailable; retry the identical message"},
+	"held":                  {"retryable", "route held; retry the identical message"},
+	"hold_limit":            {"retryable", "route hold capacity unavailable; retry the identical message"},
+	"hold_expired":          {"retryable", "route hold expired; retry the identical message"},
+	"buffer_disabled":       {"definite", "route buffering disabled"},
+	"replay_in_progress":    {"retryable", "route replay in progress; retry the identical message"},
+	"replay_not_ready":      {"retryable", "route replay not ready; retry the identical message"},
+	"replay_target_changed": {"retryable", "route replay target changed; retry the identical message"},
+	"uncertain":             {"uncertain", "control outcome uncertain; retry the identical message"},
+	"internal":              {"uncertain", "control outcome uncertain; retry the identical message"},
 }

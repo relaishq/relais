@@ -11,6 +11,7 @@ import (
 
 	"github.com/relaishq/relais/internal/movediag"
 	"github.com/relaishq/relais/internal/privateapi"
+	agentv2 "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/relay"
 	"github.com/relaishq/relais/pkg/sessionstore"
@@ -203,4 +204,10 @@ func diagnosticRelay(r Relay, ctx context.Context) Relay {
 		return &copy
 	}
 	return r
+}
+
+func (r *RemoteWorker) AgentControl(ctx context.Context, id string, message agentv2.ControlMessage) (agentv2.ControlReceipt, error) {
+	var receipt agentv2.ControlReceipt
+	err := privateapi.Do(ctx, remoteClient(r.Client), r.URL, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/agent/control", message, &receipt, mediaworker.RemoteErrors)
+	return receipt, err
 }

@@ -18,19 +18,23 @@ import (
 )
 
 const (
-	v2SessionStateVersion = 8
-	v2Contract            = "agent/v2"
-	v2MoveSessionBytes    = 1 << 20
-	v2MoveWorkerBytes     = 64 << 20
-	v2MaxWireBytes        = 4 << 20
-	v2HostMetadataBytes   = 2 << 10
+	v2SessionStateVersion      = 8
+	controlSessionStateVersion = 9
+	v2Contract                 = "agent/v2"
+	v2MoveSessionBytes         = 1 << 20
+	v2MoveWorkerBytes          = 64 << 20
+	v2MaxWireBytes             = 4 << 20
+	v2HostMetadataBytes        = 2 << 10
 	// Keep one export's worst-case copy/base64 scratch available at admission.
 	v2ExportScratchBytes = 8 * v2MoveSessionBytes
 )
 
-// Only v8 contains this subtree. The legacy state/progress encoding is unchanged.
+// Versions 8 and 9 contain this subtree. The legacy state/progress encoding is unchanged.
 type v2Envelope struct {
-	Quota           *snapshotQuota `json:"sq,omitempty"`
+	Controls        []controlRecord `json:"ct,omitempty"`
+	ControlFloor    uint64          `json:"cl,omitempty"`
+	ControlHigh     uint64          `json:"ch,omitempty"`
+	Quota           *snapshotQuota  `json:"sq,omitempty"`
 	Name            string
 	Contract        string
 	TaskKinds       []string
@@ -48,23 +52,26 @@ type v2Envelope struct {
 }
 
 type v2Host struct {
-	instance     agent.Agent
-	registration agenthost.Registration
-	ready        chan struct{}
-	tasks        []*localTask // actor-owned
-	pendingInput *agentInput  // one backpressured, unconsumed input; actor-owned
-	emissions    chan taskEmission
-	playback     playbackRuntime // guarded by session.mu
-	wakePlayback chan struct{}
-	force        chan struct{}
+	instance       agent.Agent
+	registration   agenthost.Registration
+	ready          chan struct{}
+	tasks          []*localTask   // actor-owned
+	receiptRetries []receiptRetry // actor-owned; only receipt-blocked events wait
+	pendingInput   *agentInput    // one backpressured, unconsumed input; actor-owned
+	emissions      chan taskEmission
+	playback       playbackRuntime // guarded by session.mu
+	wakePlayback   chan struct{}
+	controls       chan controlRequest
+	force          chan struct{}
 }
 
 // movePayload exists only in exact exports, including an empty exact export.
 // A checkpoint never includes this field or calls SaveMoveOnly.
 type movePayload struct {
-	Bytes []byte
-	Tasks []taskMove    `json:",omitempty"`
-	Audio []agent.Audio `json:",omitempty"`
+	ControlAck uint64 `json:",omitempty"`
+	Bytes      []byte
+	Tasks      []taskMove    `json:",omitempty"`
+	Audio      []agent.Audio `json:",omitempty"`
 }
 
 func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeOptions, move *movePayload) error {
@@ -131,7 +138,7 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 		defer s.worker.moveBytes.Add(-scratch)
 	}
 
-	h := &v2Host{registration: reg, ready: make(chan struct{}), emissions: make(chan taskEmission), force: make(chan struct{}, 1), wakePlayback: make(chan struct{}, 1)}
+	h := &v2Host{controls: make(chan controlRequest), registration: reg, ready: make(chan struct{}), emissions: make(chan taskEmission), force: make(chan struct{}, 1), wakePlayback: make(chan struct{}, 1)}
 	s.agent.v2 = h
 	if restoring && s.worker.cfg.Relay != nil {
 		ctx, cancel := context.WithTimeout(s.ctx, ownershipTimeout)
@@ -166,6 +173,13 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 			}
 		}
 		s.durableAgent = cloneAgentState(s.state.Agent)
+		s.controlAck = s.state.Agent.V2.ControlHigh
+		if move != nil {
+			s.controlAck = move.ControlAck
+		}
+		if err := validateControlWindow(s.state.Agent.V2, s.controlAck); err != nil {
+			return s.v2RestoreError(err)
+		}
 		if err := s.agentCall(func(ctx context.Context) error { return h.instance.Restore(ctx, cloneV2State(state)) }); err != nil {
 			return s.v2RestoreError(err)
 		}
@@ -365,14 +379,27 @@ func (s *session) handleV2Event(event agent.Event) error {
 }
 
 func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
-	// Reserved and future kinds have no delivery route in this slice. Do not call
+
+	// Future kinds have no delivery route. Do not call
 	// the agent or Save, so an unknown event cannot alter accepted state.
 	switch event.Kind {
-	case agent.Started, agent.AudioInput, agent.Resumed, agent.TaskMessage, agent.TimerFired, agent.PlaybackFinished:
+	case agent.Started, agent.AudioInput, agent.Resumed, agent.TaskMessage, agent.TimerFired, agent.PlaybackFinished, agent.Control:
 	default:
 		return nil
 	}
+	if event.Kind == agent.Control {
+		if event.Control == nil {
+			return agent.ErrControlInvalid
+		}
+		owned := *event.Control
+		owned.Data = slices.Clone(owned.Data)
+		event.Control = &owned
+	}
 	h := s.agent
+	if !adoption && len(h.v2.receiptRetries) > 0 && s.receiptEventThrottled(event) {
+		return errControlReceiptBackpressure
+	}
+
 	before := cloneAgentState(h.latest)
 	// The actor can stop attempts as soon as session cancellation releases
 	// agentCall, even if its callback goroutine is still running. Copy task
@@ -387,14 +414,24 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	var effects agent.Effects
 	var tasks []*localTask
 	var saving atomic.Bool
+	var handleFailed atomic.Bool
 	var refusals []taskRefusal
 	var timers []hostTimer
 	var timerGeneration uint64
+	var admittedControls []controlRecord
+	var admittedFloor uint64
 	err := s.agentCall(func(ctx context.Context) error {
 		var err error
 		s.worker.metrics.agentEvents.Add(1)
-		effects, err = h.v2.instance.Handle(ctx, event)
+		callbackEvent := event
+		if event.Control != nil {
+			message := *event.Control
+			message.Data = slices.Clone(message.Data)
+			callbackEvent.Control = &message
+		}
+		effects, err = h.v2.instance.Handle(ctx, callbackEvent)
 		if err != nil {
+			handleFailed.Store(true)
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -489,6 +526,15 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 			candidate.Progress = event.Input.Progress
 			candidate.Progress.Consumed = before.Progress.Consumed + 1
 		}
+		stageControl(candidate.V2, event)
+		// Reserve future task terminal fields as well as the immediate effects.
+		// Compaction remains local until the whole callback transaction commits.
+		if len(candidate.V2.Controls) > 0 {
+			guarded := taskMetadataGuard(*candidate.V2)
+			s.compactControlMetadata(&guarded, min(h.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes))
+			candidate.V2.Controls, candidate.V2.ControlFloor = guarded.Controls, guarded.ControlFloor
+		}
+		admittedControls, admittedFloor = candidate.V2.Controls, candidate.V2.ControlFloor
 		candidate.Revision++
 		size, err := s.admissionSnapshot(candidate)
 		if err != nil {
@@ -527,8 +573,17 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if reserveErr := s.taskBudget(h.v2.tasks, before.V2.MoveOnlyLength); reserveErr != nil {
 			return reserveErr
 		}
+		if event.Kind == agent.Control && errors.Is(err, errSnapshotAdmissionCapacity) {
+			return agent.ErrCapacity
+		}
 		if errors.Is(err, errSnapshotAdmissionCapacity) && !adoption {
 			return s.refuseSnapshotEvent(event, before)
+		}
+		// Control has no consumed input cursor. Quarantine a failed Handle and
+		// restore accepted state before refusing without advancing its sequence.
+		// Save/Restore failures and invalid effects remain terminal.
+		if event.Kind == agent.Control && !saving.Load() && (handleFailed.Load() || errors.Is(err, context.DeadlineExceeded)) {
+			return fmt.Errorf("%w: %v", agent.ErrControlRejected, err)
 		}
 		// A late AudioInput Handle is quarantined before Restore, just as in the
 		// legacy host. It cannot advance accepted state or consumed-input progress.
@@ -542,6 +597,9 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if errors.Is(err, context.DeadlineExceeded) && saving.Load() {
 			return fmt.Errorf("%w: %w", legacy.ErrSave, err)
 		}
+		if !adoption && errors.Is(err, errControlReceiptBackpressure) {
+			s.throttleReceiptEvent(event)
+		}
 		return err
 	}
 	// actor owns latest; publish only after Handle, effects and Save all succeed.
@@ -549,6 +607,8 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	next.State = legacy.State{Version: saved.Version, Bytes: saved.Bytes}
 	next.V2.HasMoveOnly, next.V2.MoveOnlyLength = saved.HasMoveOnly, saved.MoveOnlyLength
 	next.V2.Capacity = refusals
+	stageControl(next.V2, event)
+	next.V2.Controls, next.V2.ControlFloor = admittedControls, admittedFloor
 	if event.Kind == agent.Started {
 		next.V2.Started = true
 	}
@@ -678,6 +738,7 @@ func v2EnvelopeEqual(a, b *v2Envelope) bool {
 	}
 	return a.Name == b.Name && a.Contract == b.Contract && slices.Equal(a.TaskKinds, b.TaskKinds) && a.Bounds == b.Bounds && limitsEqual(a.Limits, b.Limits) &&
 		a.HasMoveOnly == b.HasMoveOnly && a.MoveOnlyLength == b.MoveOnlyLength && a.Started == b.Started && taskIntentsEqual(a.Tasks, b.Tasks) && slices.Equal(a.Capacity, b.Capacity) &&
+		a.ControlHigh == b.ControlHigh && a.ControlFloor == b.ControlFloor && slices.Equal(a.Controls, b.Controls) &&
 		a.CancelFloor == b.CancelFloor && a.TimerGeneration == b.TimerGeneration && slices.Equal(a.Timers, b.Timers) && playbackEqual(a.Playback, b.Playback)
 }
 

@@ -3,11 +3,16 @@
 // removal in a later minor and migration notes for breaking minors. Snapshot
 // compatibility is tested separately. The host delivers
 // Started, AudioInput, TaskMessage, TimerFired, PlaybackFinished and Resumed;
-// Control is reserved.
+// Control carries routed client messages.
 // After a crash before Started is checkpointed, the target delivers Resumed
 // before redelivering Started. An AudioInput Handle deadline outside Save drops
 // that input after quarantine and Restore. TaskMessage Handle errors and deadlines
 // fail closed after Restore; this also applies to admission Capacity callbacks.
+// Control is refused with ErrControlNotReady until Started has been accepted.
+// A Control Handle error or deadline outside Save is quarantined and restored,
+// then refused with ErrControlRejected without consuming its ID or sequence.
+// The client may retry the identical message. Save/Restore failures and invalid
+// effects still fail closed; agents must use Tasks for external side effects.
 // Admission refusals are queued as compact terminal intents. Each Capacity
 // callback runs in a later transaction; Handle is never called recursively.
 // Snapshot admission refuses oversized callback state with a later Capacity
@@ -23,10 +28,20 @@
 // errors, invalid state and unsupported effects fail closed. A Save that grows
 // move-only length beyond the available worker memory fails closed with
 // mediaworker.ErrMoveBudget.
-// A callback whose compact task refusals cannot fit (about 33 at default
-// bounds) fails closed with ErrCapacity and ends the call. At default bounds
-// a width-20 fan-out admits 4 tasks; width 33 admits none. Admission reserves
-// refusal space before starting tasks; only excess tasks are refused.
+// A callback whose compact task refusals cannot fit fails closed with
+// ErrCapacity. At default limits for short-step read-only tasks and zero turns,
+// widths 20/24/33 admit 4/3/0 tasks without Control, 4/3/1 with one receipt,
+// and 4/2/0 with the full two-receipt Control cap. Other tasks receive Capacity.
+// Control-bearing snapshots compact refusals; other registrations keep their
+// original encoding/accounting. Retained Control can reduce task admission, but
+// never makes an otherwise representable refusal-only callback terminal: it is
+// admitted after dropping acknowledged receipt details, or restored and held
+// under backpressure for unacknowledged receipts. Receipt backpressure retries
+// only the blocked event at most once per 250 ms, or immediately after
+// acknowledgement; unrelated callbacks and playback/mailbox pressure keep their
+// normal admission behavior.
+// Admission reserves refusal space
+// before starting tasks; only excess tasks are refused.
 // TimerFired and PlaybackFinished callback errors/deadlines also fail closed.
 // Paced output marshal/encryption failures end the call without draining its cursor.
 // Audio references name immutable task-emitted Opus packets. Playback continues
@@ -44,6 +59,7 @@ import (
 	"context"
 	"errors"
 	"time"
+	"unicode/utf8"
 
 	"github.com/relaishq/relais/internal/taskrun"
 	legacy "github.com/relaishq/relais/pkg/agent"
@@ -109,7 +125,7 @@ const (
 	Resumed          EventKind = "resumed"
 	TimerFired       EventKind = "timer_fired"
 	PlaybackFinished EventKind = "playback_finished"
-	Control          EventKind = "control" // reserved, never delivered in this slice
+	Control          EventKind = "control"
 )
 
 type Event struct {
@@ -191,10 +207,18 @@ const (
 )
 
 type ControlMessage struct {
-	ID       string
-	Sequence uint64
-	Name     string
-	Data     []byte
+	ID       string `json:"id"`
+	Sequence uint64 `json:"sequence"`
+	Name     string `json:"name"`
+	Data     []byte `json:"data,omitempty"`
+}
+
+// Validate checks the public Control bounds before any ownership lock or I/O.
+func (m ControlMessage) Validate() error {
+	if m.ID == "" || len(m.ID) > 128 || !utf8.ValidString(m.ID) || m.Sequence == 0 || m.Name == "" || len(m.Name) > 128 || !utf8.ValidString(m.Name) || len(m.Data) > 1024 {
+		return ErrControlInvalid
+	}
+	return nil
 }
 
 // Limits bounds application state, serialized host metadata, and move memory.
@@ -208,3 +232,25 @@ type Limits struct {
 	MaxAudioBytes    int
 	MaxAudioDuration time.Duration
 }
+
+// ControlReceipt identifies one locally committed callback. Checkpointed means
+// a successful fenced checkpoint recorded it; local acceptance alone can be lost
+// on a crash. Retry the identical ControlMessage until checkpointed or ErrControlStale.
+type ControlReceipt struct {
+	ID           string  `json:"id"`
+	Sequence     uint64  `json:"sequence"`
+	EventID      EventID `json:"event_id"`
+	Checkpointed bool    `json:"checkpointed"`
+}
+
+var (
+	ErrControlRejected = errors.New("agent: control Handle refused after Restore")
+	ErrControlNotReady = errors.New("agent: Started not yet accepted")
+	ErrControlInvalid  = errors.New("agent: invalid control message")
+	ErrControlConflict = errors.New("agent: control ID or sequence conflicts")
+	ErrControlOrder    = errors.New("agent: control sequence must be next in order")
+	// ErrControlStale proves that this sequence was durably accepted and compacted.
+	// A client retrying its own original message can stop retrying.
+	ErrControlStale       = errors.New("agent: control sequence outside retained window")
+	ErrControlUnsupported = errors.New("agent: control unsupported by registration or limits")
+)

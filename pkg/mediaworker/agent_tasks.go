@@ -209,7 +209,15 @@ func (s *session) taskBudgetWithRefusals(tasks []*localTask, appBytes int, refus
 	return s.reserveMoveBytes(n)
 }
 func (s *session) taskMetadataBudget(intents []taskIntent, refusals []taskRefusal, admission bool, projection ...playbackState) error {
+	return s.taskMetadataBudgetMode(intents, refusals, admission, false, projection...)
+}
+func (s *session) taskMetadataBudgetMode(intents []taskIntent, refusals []taskRefusal, admission, withoutControl bool, projection ...playbackState) error {
 	envelope := *s.agent.latest.V2
+	if withoutControl {
+		envelope.Controls = nil
+		envelope.ControlHigh = 0
+		envelope.ControlFloor = 0
+	}
 	envelope.Quota = s.captureSnapshotQuota(s.taskNow())
 	s.mu.Lock()
 	envelope.Playback = s.playbackSnapshotLocked()
@@ -219,38 +227,44 @@ func (s *session) taskMetadataBudget(intents []taskIntent, refusals []taskRefusa
 	s.mu.Unlock()
 	envelope.Tasks = intents
 	envelope.Capacity = refusals
-	metadata, _ := json.Marshal(envelope)
+	limit := min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes)
+	metadata := s.compactControlMetadata(&envelope, limit)
 	if admission {
 		// Reserve encoded metadata headroom from each real admitted intent. This
 		// changes new admission only: prior checkpoints retain their full capacity.
-		guard := slices.Clone(refusals)
-		for i := len(guard); i < len(intents); i++ {
-			guard = append(guard, taskRefusal{ID: intents[i].ID, Turn: intents[i].Turn})
-		}
-		envelope.Capacity = guard
-		// A launched task may finish before the next admission. Reserve its
-		// terminal fields and consumed cursor from the real intent now, including
-		// while compact refusals occupy the rest of the metadata area.
-		envelope.Tasks = slices.Clone(intents)
-		for i, intent := range envelope.Tasks {
-			if !intent.Final {
-				intent.Phase = taskStarted
-				intent.Final = true
-				intent.Terminal = agent.OutcomeUnknown
-				intent.Published++
-			}
-			intent.Cursor = intent.Published
-			envelope.Tasks[i] = intent
-		}
-		guarded, _ := json.Marshal(envelope)
-		if len(guarded) > len(metadata) {
+		envelope = taskMetadataGuard(envelope)
+		guarded := s.compactControlMetadata(&envelope, limit)
+		if guarded > metadata {
 			metadata = guarded
 		}
 	}
-	if len(metadata) > min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes) {
+	if metadata > limit {
 		return agent.ErrCapacity
 	}
 	return nil
+}
+func taskMetadataGuard(envelope v2Envelope) v2Envelope {
+	intents, refusals := envelope.Tasks, envelope.Capacity
+	guard := slices.Clone(refusals)
+	for i := len(guard); i < len(intents); i++ {
+		guard = append(guard, taskRefusal{ID: intents[i].ID, Turn: intents[i].Turn})
+	}
+	envelope.Capacity = guard
+	// A launched task may finish before the next admission. Reserve its
+	// terminal fields and consumed cursor from the real intent now, including
+	// while compact refusals occupy the rest of the metadata area.
+	envelope.Tasks = slices.Clone(intents)
+	for i, intent := range envelope.Tasks {
+		if !intent.Final {
+			intent.Phase = taskStarted
+			intent.Final = true
+			intent.Terminal = agent.OutcomeUnknown
+			intent.Published++
+		}
+		intent.Cursor = intent.Published
+		envelope.Tasks[i] = intent
+	}
+	return envelope
 }
 func (s *session) taskAdmissionBudget(tasks []*localTask, appBytes int, refusals []taskRefusal, projection ...playbackState) error {
 	intents := make([]taskIntent, len(tasks))
@@ -388,6 +402,12 @@ func (s *session) fitTaskRefusals(_, tasks []*localTask, prior, refusals []taskR
 		}
 	}
 	if err := s.taskMetadataBudget(nil, fresh, false, projection...); err != nil {
+		// Retained Control may delay this transaction, but must never turn a
+		// representable refusal-only callback into a terminal capacity failure.
+		// Preserve prior state and cursors; the actor retries after backpressure.
+		if s.agent.latest.V2.ControlHigh > 0 && s.taskMetadataBudgetMode(nil, fresh, false, true, projection...) == nil {
+			return nil, nil, errControlReceiptBackpressure
+		}
 		return nil, nil, fmt.Errorf("%w: callback task refusals exceed host metadata", agent.ErrCapacity)
 	}
 	return nil, nil, errTaskAdmissionBackpressure
@@ -401,6 +421,9 @@ func (s *session) publishTaskIntents() {
 	}
 	for i, t := range h.tasks {
 		s.agent.latest.V2.Tasks[i] = cloneTaskIntent(t.intent)
+	}
+	if len(s.agent.latest.V2.Controls) > 0 {
+		s.compactControlMetadata(s.agent.latest.V2, min(h.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes))
 	}
 }
 func cloneTaskIntent(t taskIntent) taskIntent { t.Request = slices.Clone(t.Request); return t }
@@ -1149,6 +1172,13 @@ func (s *session) v2AgentLoop() {
 			return
 		case request := <-s.agent.flush:
 			if !s.finishAgentFlush(request) {
+				return
+			}
+		case request := <-h.controls:
+			receipt, err := s.processControl(request.message)
+			request.done <- controlReply{receipt, err}
+			if err != nil && !controlRefusal(err) {
+				s.agentFailed(err)
 				return
 			}
 		case e := <-h.emissions:

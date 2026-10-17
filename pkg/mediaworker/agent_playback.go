@@ -1,7 +1,6 @@
 package mediaworker
 
 import (
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -9,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/pion/rtp"
+	"github.com/relaishq/relais/internal/opuspacket"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 )
 
@@ -276,6 +276,7 @@ func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers [
 	envelope.Playback = p.snapshot()
 	queueBytes := audioRefsBytes(p.queue)
 	s.mu.Unlock()
+	stageControl(&envelope, event)
 	envelope.Quota = s.captureSnapshotQuota(s.taskNow())
 	envelope.Timers = timers
 	if len(timerGeneration) > 0 {
@@ -293,9 +294,8 @@ func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers [
 	for i, t := range tasks {
 		envelope.Tasks[i] = t.intent
 	}
-	data, _ := json.Marshal(envelope)
 	metadataLimit := min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes)
-	if len(data) > metadataLimit {
+	if s.compactControlMetadata(&envelope, metadataLimit) > metadataLimit {
 		if len(e.Audio) > 0 {
 			// Only retry growth that removing this callback's audio can resolve.
 			// Timers and other effects cannot make progress by draining playback.
@@ -303,10 +303,14 @@ func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers [
 			s.mu.Lock()
 			envelope.Playback = s.projectedPlaybackLocked(e, event).snapshot()
 			s.mu.Unlock()
-			withoutAudio, _ := json.Marshal(envelope)
-			if len(withoutAudio) <= metadataLimit {
+			if s.compactControlMetadata(&envelope, metadataLimit) <= metadataLimit {
 				return errTaskAdmissionBackpressure
 			}
+		}
+		without := envelope
+		without.Controls = nil
+		if envelope.ControlHigh > 0 && v2MetadataCharge(without, metadataLimit) <= metadataLimit {
+			return errControlReceiptBackpressure
 		}
 		return fmt.Errorf("%w: playback/timer metadata", agent.ErrCapacity)
 	}
@@ -524,90 +528,14 @@ func validateOpus(audio *agent.EncodedAudio) ([]time.Duration, error) {
 	return durations, nil
 }
 func opusDuration(p []byte) (time.Duration, error) {
-	invalid := func() (time.Duration, error) {
+	if len(p) > opusPacketMTU {
 		return 0, fmt.Errorf("%w: invalid Opus packet", agent.ErrIncompatibleAgent)
 	}
-	if len(p) == 0 || len(p) > opusPacketMTU {
-		return invalid()
+	d, err := opuspacket.Duration(p)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", agent.ErrIncompatibleAgent, err)
 	}
-	config := p[0] >> 3
-	var frame time.Duration
-	switch {
-	case config >= 16:
-		frame = (2500 * time.Microsecond) << uint(config&3)
-	case config >= 12:
-		frame = (10 * time.Millisecond) << uint(config&1)
-	default:
-		frame = []time.Duration{10 * time.Millisecond, 20 * time.Millisecond, 40 * time.Millisecond, 60 * time.Millisecond}[config&3]
-	}
-	count := 1
-	data := p[1:]
-	vbr := false
-	switch p[0] & 3 {
-	case 1:
-		count = 2
-	case 2:
-		count = 2
-		vbr = true
-	case 3:
-		if len(data) == 0 {
-			return invalid()
-		}
-		flags := data[0]
-		data = data[1:]
-		count = int(flags & 63)
-		vbr = flags&128 != 0
-		if flags&64 != 0 {
-			padding := 0
-			for {
-				if len(data) == 0 {
-					return invalid()
-				}
-				v := int(data[0])
-				data = data[1:]
-				if v == 255 {
-					padding += 254
-				} else {
-					padding += v
-					break
-				}
-			}
-			if padding > len(data) {
-				return invalid()
-			}
-			data = data[:len(data)-padding]
-		}
-	}
-	if count == 0 || time.Duration(count)*frame > 120*time.Millisecond {
-		return invalid()
-	}
-	if vbr {
-		sizes := 0
-		for range count - 1 {
-			if len(data) == 0 {
-				return invalid()
-			}
-			n := int(data[0])
-			data = data[1:]
-			if n >= 252 {
-				if len(data) == 0 {
-					return invalid()
-				}
-				n += 4 * int(data[0])
-				data = data[1:]
-			}
-			if n > 1275 {
-				return invalid()
-			}
-			sizes += n
-		}
-		if sizes > len(data) || len(data)-sizes > 1275 {
-			return invalid()
-		}
-	} else if len(data)%count != 0 || len(data)/count > 1275 {
-		return invalid()
-	}
-	return time.Duration(count) * frame, nil
+	return d, nil
 }
 
 // Audio limits count actual immutable payloads, including chunks which have not

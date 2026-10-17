@@ -15,6 +15,11 @@ import (
 
 // RemoteErrors identifies coordination errors across the private HTTP boundary.
 var RemoteErrors = map[string]error{
+	"control_invalid": agentv2.ErrControlInvalid, "control_conflict": agentv2.ErrControlConflict,
+	"control_order":     agentv2.ErrControlOrder,
+	"control_not_ready": agentv2.ErrControlNotReady,
+	"control_rejected":  agentv2.ErrControlRejected,
+	"control_stale":     agentv2.ErrControlStale, "control_unsupported": agentv2.ErrControlUnsupported,
 	"unknown_session": ErrUnknownSession, "unsupported_offer": ErrUnsupportedOffer,
 	"closed": ErrClosed, "not_established": ErrNotEstablished,
 	"sequence_budget": ErrSequenceBudgetExhausted, "session_exists": errSessionExists,
@@ -22,6 +27,7 @@ var RemoteErrors = map[string]error{
 	"checkpoint_clock":    sessionstore.ErrUnsafeCheckpointClock,
 	"agent_incompatible":  agentv2.ErrIncompatibleAgent,
 	"agent_capacity":      agentv2.ErrCapacity,
+	"agent_backpressure":  agentv2.ErrBackpressure,
 	"uncertain":           privateapi.ErrUncertain,
 	"export_incompatible": ErrExportIncompatible,
 	"move_budget":         ErrMoveBudget, "export_not_flushed": ErrExportNotFlushed,
@@ -106,6 +112,22 @@ func (w *Worker) PrivateHandler() http.Handler {
 				break
 			}
 		}
+	})
+	mux.HandleFunc("POST /sessions/{id}/agent/control", func(rw http.ResponseWriter, r *http.Request) {
+		var req agentv2.ControlMessage
+		if !privateapi.Read(rw, r, &req) {
+			return
+		}
+		receipt, err := w.AgentControl(r.Context(), r.PathValue("id"), req)
+		if err != nil {
+			workerAPIError(rw, err)
+			return
+		}
+		rw.Header().Set("Content-Type", "application/json")
+		if !receipt.Checkpointed {
+			rw.WriteHeader(http.StatusAccepted)
+		}
+		privateapi.Write(rw, receipt)
 	})
 	mux.HandleFunc("POST /sessions/{id}/keyframe", func(rw http.ResponseWriter, r *http.Request) {
 		if err := w.RequestKeyframe(r.Context(), r.PathValue("id")); err != nil {

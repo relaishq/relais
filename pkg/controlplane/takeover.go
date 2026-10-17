@@ -304,7 +304,9 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 		}
 		p.mu.Unlock()
 	}
-	c.mu.Lock()
+	if err := c.lockOperator(ctx, true); err != nil {
+		return
+	}
 	defer c.mu.Unlock()
 	p.takeoverLocked(ctx, source, c, listed, detected)
 }
