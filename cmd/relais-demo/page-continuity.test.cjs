@@ -8,12 +8,12 @@ const M=require('./web/metrics.js');
 // Run production page functions in a DOM-free harness. Snapshot tests hold
 // media evidence passing to expose a missing required agent verdict.
 function page(search='',renderPage=false,status,hash='',storage=new Map()) {
- const element=()=>({value:'pattern',replaceChildren(){},append(){},click(){},textContent:''});
+ const element=()=>({addEventListener(){},value:'pattern',replaceChildren(){},append(){},click(){},textContent:''});
  const elements=new Map();
  const context={window:{relaisMetrics:M,relaisContinuity:A,addEventListener(){}},document:{getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,addEventListener(){},removeEventListener(){},hidden:false},AbortController,sessionStorage:{getItem:key=>storage.get(key) || null,setItem:(key,value)=>storage.set(key,value)},location:{pathname:'/',search,hash},history:{replaceState(...args){context.replacedHistory=args;}},URLSearchParams,Headers,Blob,URL:{createObjectURL(blob){context.savedBlob=blob;return 'blob:test';},revokeObjectURL(){}},performance:{now:()=>10000,timeOrigin:0},setInterval(){},clearInterval(){},clearTimeout(){},setTimeout(fn,ms){if(ms===10000){context.uploadTimer=fn;return 10;}fn();},fetch:async()=>{if(status)return {ok:true,text:async()=>JSON.stringify(status)};throw new Error('status unavailable');}};
  const source=fs.readFileSync(require.resolve('./web/demo.js'),'utf8');
  const instrument=`
- window.testPage={setCall(s){call=s;},snapshot,event,start,sourceStream,cleanup,saveResults,render,runChecklist,setChecklistSteps(){run=async()=>{};waitForLongHold=async()=>{};}};
+ window.testPage={setCall(s){call=s;},snapshot,event,start,mediaReady,sourceStream,cleanup,saveResults,render,runChecklist,setChecklistSteps(){run=async()=>{};waitForLongHold=async()=>{};}};
  sample=async()=>{};
  observePage=()=>{};attach=()=>{};statuses=()=>{};samples=()=>{};
  sourceStream=async()=>{window.sourceAcquired=true;throw new Error("media started");};
@@ -244,4 +244,9 @@ test('microphone permission arriving after cancellation releases the late track'
  resolve({getAudioTracks:()=>[audio],getTracks:()=>[audio]});
  await assert.rejects(pending,/call ended/);
  assert.equal(audio.stopped,true);
+});
+
+test('voice call readiness does not require speech before the first press',()=>{
+ const {api}=page();const s=call();s.lastVideo=1;s.owner='0';s.latest={audio:{packetsReceived:0}};s.agentMode='voice-agent/v1';
+ assert.equal(api.mediaReady(s),true);s.agentMode='echo';assert.equal(api.mediaReady(s),false);s.latest.audio.packetsReceived=1;assert.equal(api.mediaReady(s),true);
 });

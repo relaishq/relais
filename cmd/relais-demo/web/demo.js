@@ -2,7 +2,7 @@
 (() => {
   const M = window.relaisMetrics;
   const A = window.relaisContinuity;
-  const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check','relay-buffer'].map((id) => [id,document.getElementById(id)]));
+  const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check','relay-buffer','voice','ptt','voice-notice','voice-phase','voice-transcript','voice-reply'].map((id) => [id,document.getElementById(id)]));
   const params = new URLSearchParams(location.search);
   let launchToken = new URLSearchParams(location.hash.slice(1)).get('token') || '';
   let tokenLaunchId = null;
@@ -139,6 +139,9 @@
       try {
         const status = await json('/demo/status'); if (!active(s)) return;
         s.status = status; s.statusError = null;resultsEnabled=!!status.results_enabled;captureAttachToken(status);
+        if(s.agentMode==='voice-agent/v1' && s.id) {
+          try { const v=await json(`/demo/voice/${encodeURIComponent(s.id)}`);if(active(s)){s.voice=v;el['voice-phase'].textContent=v.phase;el['voice-transcript'].textContent=v.transcript || '';el['voice-reply'].textContent=v.reply || '';el['voice-notice'].textContent=s.controlNotice || v.notice || v.error || (v.phase==='recording'?'Listening. Release to answer.':'');} } catch {if(active(s))el['voice-notice'].textContent='Voice status unavailable during owner change.';}
+        }
         if(s.agentMode==='demo' && s.id) {
           try { s.agent=await json(`/demo/agent/${encodeURIComponent(s.id)}`);s.agentError=null; }
           catch(err) {s.agentError=String(err);s.agent=null;}
@@ -182,6 +185,7 @@
   function render() {
     const r=snapshot(call),s=call;
     el['relay-buffer'].textContent=r.relayBuffer || pageRelayBuffer;
+    if(el.ptt)el.ptt.disabled=!s || s.stopped || !s.id || s.pc.connectionState!=='connected' || !!s.ptt?.failed;
     el.start.disabled=!!s && !s.stopped;el.source.disabled=!!s && !s.stopped;el.stop.disabled=!s || s.stopped;el.save.disabled=!s && !lastResult;el.check.disabled=!s || !s.armed || s.busy || !!s.script || !!s.checklist;
     for(const id of ['move','drain','kill'])el[id].disabled=!s || !s.armed || s.pc.connectionState!=='connected' || s.busy || !!s.script || !!s.checklist || (id==='drain' && s.status?.attach_mode);
     const fmt=(ms)=>typeof ms==='number'?`${Math.round(ms)} ms`:'unverified';
@@ -262,6 +266,7 @@
     }
     if(!active(s)) throw new Error('call ended');
   }
+  function mediaReady(s) { return s.pc.connectionState==='connected' && s.lastVideo!==null && (s.agentMode==='voice-agent/v1' || s.latest?.audio.packetsReceived>0) && !!s.owner; }
   async function start({source=el.source.value,baselineCount=5,headroomRatio=0.8}={}) {
     if(starting) return starting;
     if(call && !call.stopped) { if(!call.armed) throw new Error('call is not ready');return snapshot(call); }
@@ -280,6 +285,8 @@
         const initialStatus=await json('/demo/status');resultsEnabled=!!initialStatus.results_enabled;captureAttachToken(initialStatus);s.status=initialStatus;
         if(typeof initialStatus.selected_agent!=='string' || !initialStatus.selected_agent.trim())throw new Error('selected agent missing or invalid');
         s.agentMode=initialStatus.selected_agent;
+        if(el.voice)el.voice.hidden=s.agentMode!=='voice-agent/v1';
+        if(s.agentMode==='voice-agent/v1' && source!=='microphone')throw new Error('Select Microphone and test pattern for voice-agent.');
         if(!['on','off'].includes(initialStatus.relayBuffer))throw new Error('relay buffer mode missing or invalid');
         s.relayBuffer=initialStatus.relayBuffer;
         if(typeof initialStatus.launchId!=='string' || !initialStatus.launchId)throw new Error('demo launch identity missing or invalid');
@@ -296,9 +303,10 @@
         if(response.status!==201) throw new Error(`POST /calls ${response.status}: ${body}`);
         if(!location || !/^\/calls\/[^/]+$/.test(location)) throw new Error('invalid call Location');
         s.resource=location;s.id=decodeURIComponent(location.split('/').at(-1));
+        if(s.agentMode==='voice-agent/v1')s.ptt=new window.relaisPTT.Controller({request,path:`${s.resource}/agent/control`,notice:(message)=>{s.controlNotice=message;if(active(s))el['voice-notice'].textContent=message;}});
         if(!active(s)){await request(location,{method:'DELETE'});throw new Error('call ended');}
         await s.pc.setRemoteDescription({type:'answer',sdp:body});
-        await waitFor(s,()=>s.pc.connectionState==='connected' && s.lastVideo!==null && s.latest?.audio.packetsReceived>0 && s.owner,15000,'media not ready; test tone may need a page click for Chrome autoplay');
+        await waitFor(s,()=>mediaReady(s),15000,'media not ready; test tone may need a page click for Chrome autoplay');
         descriptions(s);s.armed=true;s.readyAtMs=performance.now();return snapshot(s);
       }catch(err){error(err);await cleanup(s);throw err;}finally{starting=null;render();}
     })();
@@ -428,7 +436,7 @@
   async function cleanup(s) {
     if(s.stopped)return;
     if(s.hold?.status==='pending') {const hidden=M.hiddenDuring(s.hiddenPeriods,s.hold.startedMs,performance.now());s.hold.status=hidden?'invalid':'inconclusive';s.hold.verdict={status:s.hold.status,reasons:[hidden?'page hidden':'call stopped before 60 s']};}
-    s.stoppedAtMs=performance.now();s.stopped=true;clearInterval(s.sourceTimer);clearTimeout(s.holdTimer);
+    s.ptt?.close();s.stoppedAtMs=performance.now();s.stopped=true;clearInterval(s.sourceTimer);clearTimeout(s.holdTimer);
     if(s.frameCallback!==undefined) el.remote.cancelVideoFrameCallback(s.frameCallback);
     clearInterval(s.delayTimer);s.performanceObserver?.disconnect();s.intersection?.disconnect();document.removeEventListener('visibilitychange',s.visibilityListener);
     s.pc.close();note(s,'connection','closed');note(s,'ice','closed');
@@ -481,8 +489,25 @@
     a.href=url;a.download=`relais-${record.source || 'idle'}-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;
     a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);void uploadResults(body);return record;
   }
+  function pttPress() {
+    const s=call;if(!s || !active(s) || !s.ptt || s.pttHeld)return;
+    s.pttHeld=true;el.ptt.textContent='Release to answer';el['voice-notice'].textContent='Sending start…';
+    return s.ptt.send('ptt.start').catch(()=>{});
+  }
+  function pttRelease() {
+    const s=call;if(!s?.pttHeld)return;s.pttHeld=false;el.ptt.textContent='Hold to talk';
+    return s.ptt.send('ptt.stop').catch(()=>{});
+  }
+  if(el.ptt) {
+    el.ptt.addEventListener('pointerdown',(e)=>{if(e.button!==0)return;e.preventDefault();el.ptt.setPointerCapture?.(e.pointerId);pttPress();});
+    for(const name of ['pointerup','pointercancel','lostpointercapture'])el.ptt.addEventListener(name,()=>pttRelease());
+    el.ptt.addEventListener('keydown',(e)=>{if([' ','Enter'].includes(e.key)){e.preventDefault();if(!e.repeat)pttPress();}});
+    el.ptt.addEventListener('keyup',(e)=>{if([' ','Enter'].includes(e.key)){e.preventDefault();pttRelease();}});
+    window.addEventListener('blur',()=>pttRelease());
+    document.addEventListener('visibilitychange',()=>{if(document.hidden)pttRelease();});
+  }
   el.source.value=['camera','microphone'].includes(params.get('source'))?params.get('source'):'pattern';
-  window.relaisDemo={runChecklist,saveResults,start,runBaseline:(n=call?.baselineCount || 5,ms)=>run('baseline',n,ms),runMoves:(n,ms)=>run('move',n,ms),runKills:(n,ms)=>run('kill',n,ms),runDrains:(n,ms)=>run('drain',n,ms),results:()=>snapshot(call),agentStatus:async()=>{if(!call?.id)throw new Error("start a call first");return json(`/demo/agent/${encodeURIComponent(call.id)}`);},waitForLongHold,stop};
+  window.relaisDemo={pttStart:()=>pttPress(),pttStop:()=>pttRelease(),runChecklist,saveResults,start,runBaseline:(n=call?.baselineCount || 5,ms)=>run('baseline',n,ms),runMoves:(n,ms)=>run('move',n,ms),runKills:(n,ms)=>run('kill',n,ms),runDrains:(n,ms)=>run('drain',n,ms),results:()=>snapshot(call),agentStatus:async()=>{if(!call?.id)throw new Error("start a call first");return json(`/demo/agent/${encodeURIComponent(call.id)}`);},waitForLongHold,stop};
   el.save.onclick=saveResults;el.check.onclick=()=>runChecklist().catch(error);
   el.start.onclick=()=>start().catch(error);el.stop.onclick=()=>stop().catch(error);
   for(const kind of ['move','drain','kill']) el[kind].onclick=()=>event(kind).catch(error);

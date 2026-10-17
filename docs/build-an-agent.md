@@ -526,7 +526,8 @@ uses 48 kHz. `PacketDuration()` reports the encoded packet duration from its TOC
 time. Encoded packets retain preroll and padding; this is **not sample-exact
 PCM trimming**. The checked spike fixture is mono, 24 kHz input metadata,
 pre-skip 312 and 80 packets of 20 ms each. Tests rebuild Ogg from those packets
-with the pinned Pion writer; no provider connection runs in this slice.
+with the pinned Pion writer; no provider connection runs in those keyless tests.
+Demo A's opt-in local tests exercise the real speech endpoint.
 
 The reader keeps one page and one packet, each bounded near 64 KiB. Oversized
 headers/packets, CRC failures and truncation are errors. Empty or malformed
@@ -542,7 +543,7 @@ explicit typed errors. Cancellation is checked between reads; the underlying
 reader must provide its own cancellation/deadline for a blocked read. Read
 through EOF to validate the stream end and reject a chained stream.
 
-## Same-registration upgrades and Demo A
+## Same-registration upgrades
 
 All pool members must restore the previous app `State.Version` and pending task
 request/result schemas, and retain compatible recovery capacity. Test old
@@ -551,10 +552,123 @@ incompatible task code. Use another pool or end calls for an incompatible change
 Install v8-capable platform readers before enabling custom v2 snapshots; this is
 not a general mixed-version deployment promise.
 
-The next tutorial features **arrive with Demo A**:
+## Run Demo A
 
-- STT Ogg upload using the encoded packets and a validated Pion writer path.
-- The provider TTS integration using the packet reader below.
+The [voice-agent example](../examples/voice-agent) is a push-to-talk worker in
+this module. It registers `voice-agent/v1` and four versioned ReadOnly tasks.
+It uses public imports only and is built by `make build`.
+
+```sh
+CGO_ENABLED=0 make build
+# Set OPENAI_API_KEY in this shell through your secret manager. Do not put it
+# in a command argument, a recording, a result file, or a committed .env.
+./bin/relais-demo -http=127.0.0.1:19102 -worker-bin=bin/voice-agent -agent=voice-agent/v1
+```
+
+Open the printed launch URL, which includes a per-launch Control capability in
+its fragment. Use headphones. Start the microphone call, hold **Hold to talk**,
+speak, then release. The page shows the transcript, reply, phase and recovery
+notice. The returned voice is AI-generated. No key: the worker still starts,
+but each press reports `Failed` / `provider_unavailable` on the page and sends
+nothing to OpenAI. The example reads only `OPENAI_API_KEY` in the worker's
+process environment. The launcher passes it only to worker children, including
+replacements; it does not send it to the browser, relay, control or Redis.
+
+Demo A declares **8,192 raw app-state bytes**. Each worker needs these operator
+flags. `relais-demo` supplies them automatically for `voice-agent/v1`; a worker
+started in another topology needs all three explicitly:
+
+```sh
+-agent-max-snapshot-bytes=24576
+-agent-snapshot-bytes-per-second=270336
+-agent-snapshot-burst-bytes=98304
+```
+
+Keep the same ceilings and registration on all workers. The default 1 MiB
+move budget per call and 64 MiB per worker suffice for this bounded example.
+These are demo settings, **not a capacity claim**. They do not change the
+keyless example's manual capacity gate or the default worker ceilings.
+`relais-demo -worker-arg=-flag=value` passes an additional non-secret worker
+flag to every initial and replacement worker.
+
+### Push-to-talk Control
+
+The browser sends `ptt.start` and `ptt.stop` through the authenticated
+`POST /calls/{id}/agent/control` route. The owned demo checks its per-launch
+`X-Relais-Demo-Token` capability and proxies to trusted control. A deployment
+uses the existing bearer authentication on `relais-signal`. The browser retains each exact JSON message
+while retrying. A 202 permits the next sequence to be sent, so release can
+follow a press during a store stall. Each message continues retrying until
+200 with `checkpointed: true`, or `control_stale`. Retryable and unfamiliar
+codes use per-message backoff from 50 ms to 1 s, with a 15 s deadline. Definite
+refusals stop. A timeout reports uncertainty and disables new presses until a
+new call; it never invents another ID for an uncertain press. At most two
+unacknowledged Controls fit: the next press can wait on `agent_capacity`.
+Pointer release, cancellation, keyboard release, focus loss and a hidden page
+all release the button. Caller audio is never delayed behind Control retries.
+
+`start` cancels older tasks and clears their unsent audio. This is barge-in.
+`stop` submits the recording; an eight-second timer or 64 KiB bound also ends
+it. Empty or invalid recordings produce an explicit outcome. The agent accepts
+only unseen caller packet indexes and retains packets in move memory.
+
+### STT upload, saved text, and speech
+
+The task chain is deliberately small and split at paid-result boundaries:
+
+1. `voice/stt/v1` wraps the recorded packets with Pion `oggwriter` and uploads
+   **`recording.ogg`** to `gpt-transcribe`. The spike verified that these bytes
+   named `.ogg` work while `.opus` is rejected. Pion defaults to an 80 ms
+   pre-skip. Caller RTP has no Ogg encoder preroll, so this writer sets pre-skip
+   to zero and updates the header CRC. Even one 20 ms packet retains its duration.
+2. `voice/reply/v1` sends the saved transcript plus at most four recent
+   exchanges to `gpt-6-luna`. The response is limited to 128 tokens and asks
+   for at most 35 spoken words. Text is bounded at UTF-8 rune boundaries,
+   including its JSON escaping cost.
+3. `voice/speech/v1` requests `gpt-4o-mini-tts`, voice `coral`, with
+   `response_format: opus`. `opusio.Reader` reads its Ogg/Opus response. The
+   result is bounded to 128 KiB / 20 seconds, mono, with no discarded packets.
+4. `voice/play/v1` emits unchanged packets in stable 100 ms chunks, with the
+   first chunk immediately available to the pacer. A move resumes above
+   `TaskRun.After()` from the same accepted speech bytes.
+
+Speech is fully buffered before playback. The provider supports streamed
+transfer, but regenerating a canceled TTS request can return different audio.
+A fully accepted move-only rendering gives deterministic cursor replay without
+an external audio store or resumable provider connection. This trades first
+audio latency for exact move behavior; incremental TTS playback is deferred.
+
+Only transcript/reply text, four bounded exchanges, phase and cursor metadata
+enter version-1 app state. Save never reads/copies/hashes audio. A stage whose
+result was already accepted skips its provider call when retried with a
+nonzero `After()`. Later stages take saved text, so STT is not repeated after
+the transcript exists, and the LLM is not repeated after the reply exists.
+Provider transport/5xx/429 uncertainty gets one same-key retry, then a typed
+`OutcomeUnknown`; definitive failures report `Failed`. Neither ReadOnly nor
+an idempotency header guarantees exactly-once billing. Moves during an
+unfinished request can repeat that request and charge again.
+
+**Move / Drain:** recording, provider-task requests, accepted speech and the
+playback cursor move together; the turn continues. **Kill:** move-only input,
+provider requests and unsent audio are lost. The page reports
+`OutcomeUnknown` / `turn_interrupted`, preserves checkpointed text, clears the
+lost lengths, and accepts the next press. It never silently reconstructs a
+lost recording or restarts paid stages from `Resumed`.
+
+For a short 2–5 s input and a short spoken reply, allow roughly **$0.002–$0.01
+per turn**, depending mainly on generated speech length; unfinished retries
+can add charges. Current provider references: [transcription](https://developers.openai.com/api/docs/guides/speech-to-text),
+[GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna),
+[speech output](https://developers.openai.com/api/docs/guides/text-to-speech)
+and [pricing](https://developers.openai.com/api/docs/pricing).
+
+Keyless unit and harness tests use the recorded synthetic speech fixture and
+canned text behind the same Provider interface. Network cut tests skip under
+`-short`. Live tests are opt-in only. `RELAIS_VOICE_LIVE=1` runs the in-process real
+provider turns; `RELAIS_VOICE_LIVE_PROCESS=1` checks the shipped worker
+with a real OS SIGKILL. Both require `RELAIS_VOICE_LEDGER` and a key in the
+process environment, or an explicit private `RELAIS_VOICE_LIVE_ENV` file
+loaded only in process. They never run in CI or load an env file by default.
 
 Realtime/live STT, PCM conversion, durable conversation/result blobs, and provider
 connections that survive worker restart remain outside this slice. See

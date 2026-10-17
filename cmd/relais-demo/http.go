@@ -318,6 +318,8 @@ func (d *demo) handler(files http.Handler) http.Handler {
 	// The Pion external harness reads /status next to its signaling URL.
 	mux.Handle("GET /status", proxy)
 	mux.Handle("DELETE /calls/{id}", proxy)
+	mux.Handle("POST /calls/{id}/agent/control", proxy)
+	mux.HandleFunc("GET /demo/voice/{id}", d.voiceStatus)
 	mux.HandleFunc("POST /calls/{id}/move", func(w http.ResponseWriter, r *http.Request) {
 		d.op.Lock()
 		defer d.op.Unlock()
@@ -429,7 +431,7 @@ func (d *demo) handler(files http.Handler) http.Handler {
 			http.Error(w, "demo Host refused", http.StatusForbidden)
 			return
 		}
-		needsToken := d.publicHost != "" || d.attached || r.URL.Path == "/demo/results" && d.resultsDir != ""
+		needsToken := strings.HasSuffix(r.URL.Path, "/agent/control") || d.publicHost != "" || d.attached || r.URL.Path == "/demo/results" && d.resultsDir != ""
 		if r.URL.Path == "/demo/results" && d.resultsDir == "" {
 			needsToken = false // disabled endpoint has no mutation and returns 404
 		}

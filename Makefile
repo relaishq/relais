@@ -35,6 +35,7 @@ build: ensure_bin_dir ## Build plugin runners, relay, worker, control, signal, c
 	$(GOBUILD) -o $(BIN_DIR)/relais-demo $(LDFLAGS) ./cmd/relais-demo
 
 	$(GOBUILD) -o $(BIN_DIR)/delayed-loopback $(LDFLAGS) ./examples/delayed-loopback
+	$(GOBUILD) -o $(BIN_DIR)/voice-agent $(LDFLAGS) ./examples/voice-agent
 
 DEMO_CLUSTER_FLAGS ?=
 demo-cluster: build ## Run three separate workers and the browser move/drain/kill page on loopback; starts its own Redis (never 6379)
