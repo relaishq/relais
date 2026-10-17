@@ -32,6 +32,43 @@ The current owner, the move log and the owner's count of the caller's packets it
 
 The control plane API (`/api/v1/sessions`, `/api/v1/plugins`) and the WebSocket signaling endpoint (`/ws/signaling`) were served by the retired `relais-core` server and no longer exist.
 
+## Routed agent Control
+
+The authenticated `relais-signal` frontend accepts:
+
+```text
+POST /calls/{id}/agent/control
+Content-Type: application/json
+Authorization: Bearer <existing deployment token>
+{"id":"press-1","sequence":1,"name":"ptt.start","data":"AP8="}
+```
+
+`data` is optional base64 binary data, at most 1 KiB decoded. IDs and names are
+nonempty UTF-8, at most 128 bytes. New messages use contiguous per-call sequences
+starting at 1 and unique IDs. Retries preserve the whole message across moves,
+takeovers and lost responses. No query parameters or private target are accepted.
+
+- **202**: locally accepted callback/state/receipt; crash loss is possible.
+- **200**: an acknowledged checkpoint records acceptance.
+- Both return `{id,sequence,event_id,checkpointed}`; only `checkpointed` changes
+  when the same retained receipt becomes durable.
+- **409**, with a typed JSON `code`: `control_conflict` (retained ID/sequence
+  collision), `control_stale` (closed old sequence), `control_order` (future
+  sequence), `control_invalid`, `control_unsupported` (legacy agent),
+  `agent_capacity`, or an existing route/store/uncertain outcome.
+- **400**: malformed JSON or refused query; **401**: existing bearer auth failure;
+  **413**: frontend request bound; **502**: uncertain upstream transport failure.
+
+The trusted control endpoint has the same call path. It resolves live store
+ownership under the move/takeover lock and forwards to the owning worker's private
+`POST /sessions/{id}/agent/control`. Never expose private worker/control APIs.
+A planned move carries the exact accepted state and dedup window. A crash can
+redeliver a 202-only message on the new owner with the same EventID. Checkpointed
+old prefixes compact after four newer sequence positions; late duplicates then
+return `control_stale`. Full metadata refuses admission rather than dropping it.
+See [the agent guide](build-an-agent.md#routed-control) for pending byte accounting,
+retry rules, and the unchanged deployment/authentication limits.
+
 ## Plugin Development
 
 Plugins must implement one of:

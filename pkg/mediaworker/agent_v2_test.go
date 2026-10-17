@@ -75,12 +75,12 @@ func v2UnitSession(t *testing.T, a agent.Agent, opts ...func(*AgentConfig)) (*Wo
 	t.Cleanup(s.close)
 	return w, s
 }
-func TestV2UnknownAndControlIgnored(t *testing.T) {
+func TestV2UnknownIgnored(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1, Bytes: []byte("accepted")}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
 	before := cloneAgentState(s.state.Agent)
-	for _, kind := range []agent.EventKind{"future_kind", agent.Control} {
+	for _, kind := range []agent.EventKind{"future_kind"} {
 		require.NoError(t, s.handleV2Event(agent.Event{Kind: kind}))
 	}
 	require.Zero(t, a.handles)

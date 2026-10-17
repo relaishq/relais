@@ -3,7 +3,7 @@
 // removal in a later minor and migration notes for breaking minors. Snapshot
 // compatibility is tested separately. The host delivers
 // Started, AudioInput, TaskMessage, TimerFired, PlaybackFinished and Resumed;
-// Control is reserved.
+// Control carries routed client messages.
 // After a crash before Started is checkpointed, the target delivers Resumed
 // before redelivering Started. An AudioInput Handle deadline outside Save drops
 // that input after quarantine and Restore. TaskMessage Handle errors and deadlines
@@ -109,7 +109,7 @@ const (
 	Resumed          EventKind = "resumed"
 	TimerFired       EventKind = "timer_fired"
 	PlaybackFinished EventKind = "playback_finished"
-	Control          EventKind = "control" // reserved, never delivered in this slice
+	Control          EventKind = "control"
 )
 
 type Event struct {
@@ -191,10 +191,10 @@ const (
 )
 
 type ControlMessage struct {
-	ID       string
-	Sequence uint64
-	Name     string
-	Data     []byte
+	ID       string `json:"id"`
+	Sequence uint64 `json:"sequence"`
+	Name     string `json:"name"`
+	Data     []byte `json:"data,omitempty"`
 }
 
 // Limits bounds application state, serialized host metadata, and move memory.
@@ -208,3 +208,21 @@ type Limits struct {
 	MaxAudioBytes    int
 	MaxAudioDuration time.Duration
 }
+
+// ControlReceipt identifies one locally committed callback. Checkpointed means
+// a successful fenced checkpoint recorded it; local acceptance alone can be lost
+// on a crash. Retry the identical ControlMessage until checkpointed.
+type ControlReceipt struct {
+	ID           string  `json:"id"`
+	Sequence     uint64  `json:"sequence"`
+	EventID      EventID `json:"event_id"`
+	Checkpointed bool    `json:"checkpointed"`
+}
+
+var (
+	ErrControlInvalid     = errors.New("agent: invalid control message")
+	ErrControlConflict    = errors.New("agent: control ID or sequence conflicts")
+	ErrControlOrder       = errors.New("agent: control sequence must be next in order")
+	ErrControlStale       = errors.New("agent: control sequence outside retained window")
+	ErrControlUnsupported = errors.New("agent: control requires a v2 agent")
+)

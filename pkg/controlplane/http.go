@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/relaishq/relais/internal/privateapi"
+	agentv2 "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/relay"
 	"github.com/relaishq/relais/pkg/sessionstore"
@@ -76,6 +77,22 @@ func (p *Plane) Handler() http.Handler {
 		}
 
 		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("POST /calls/{id}/agent/control", func(w http.ResponseWriter, r *http.Request) {
+		var req agentv2.ControlMessage
+		if !privateapi.Read(w, r, &req) {
+			return
+		}
+		receipt, err := p.AgentControl(r.Context(), r.PathValue("id"), req)
+		if err != nil {
+			privateapi.Error(w, err, RemoteErrors)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if !receipt.Checkpointed {
+			w.WriteHeader(http.StatusAccepted)
+		}
+		writeJSON(w, receipt)
 	})
 	mux.HandleFunc("POST /calls/{id}/move", func(w http.ResponseWriter, r *http.Request) {
 		result, err := p.Move(r.Context(), r.PathValue("id"), r.URL.Query().Get("to"))

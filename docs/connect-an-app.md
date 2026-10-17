@@ -12,6 +12,10 @@ For your own topology without signal, see [Start signal yourself](#start-signal-
 To replace the worker's audio behavior, see [Build your agent](build-an-agent.md)
 for the keyless custom-worker example and its move/crash contract.
 
+For v2 agents, the same frontend also routes `POST /calls/{id}/agent/control`.
+See [Routed Control](build-an-agent.md#routed-control) for the request, receipts,
+ordered retries and move/crash rules. Legacy echo/demo agents reject this route.
+
 ## Place a call
 
 For `start.sh`, use the printed **Signal URL**, **CA certificate**, and **Token

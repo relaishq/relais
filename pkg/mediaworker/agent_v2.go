@@ -30,7 +30,10 @@ const (
 
 // Only v8 contains this subtree. The legacy state/progress encoding is unchanged.
 type v2Envelope struct {
-	Quota           *snapshotQuota `json:"sq,omitempty"`
+	Controls        []controlRecord `json:"ct,omitempty"`
+	ControlFloor    uint64          `json:"cl,omitempty"`
+	ControlHigh     uint64          `json:"ch,omitempty"`
+	Quota           *snapshotQuota  `json:"sq,omitempty"`
 	Name            string
 	Contract        string
 	TaskKinds       []string
@@ -56,15 +59,17 @@ type v2Host struct {
 	emissions    chan taskEmission
 	playback     playbackRuntime // guarded by session.mu
 	wakePlayback chan struct{}
+	controls     chan controlRequest
 	force        chan struct{}
 }
 
 // movePayload exists only in exact exports, including an empty exact export.
 // A checkpoint never includes this field or calls SaveMoveOnly.
 type movePayload struct {
-	Bytes []byte
-	Tasks []taskMove    `json:",omitempty"`
-	Audio []agent.Audio `json:",omitempty"`
+	ControlAck uint64 `json:",omitempty"`
+	Bytes      []byte
+	Tasks      []taskMove    `json:",omitempty"`
+	Audio      []agent.Audio `json:",omitempty"`
 }
 
 func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeOptions, move *movePayload) error {
@@ -131,7 +136,7 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 		defer s.worker.moveBytes.Add(-scratch)
 	}
 
-	h := &v2Host{registration: reg, ready: make(chan struct{}), emissions: make(chan taskEmission), force: make(chan struct{}, 1), wakePlayback: make(chan struct{}, 1)}
+	h := &v2Host{controls: make(chan controlRequest), registration: reg, ready: make(chan struct{}), emissions: make(chan taskEmission), force: make(chan struct{}, 1), wakePlayback: make(chan struct{}, 1)}
 	s.agent.v2 = h
 	if restoring && s.worker.cfg.Relay != nil {
 		ctx, cancel := context.WithTimeout(s.ctx, ownershipTimeout)
@@ -166,6 +171,13 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 			}
 		}
 		s.durableAgent = cloneAgentState(s.state.Agent)
+		s.controlAck = s.state.Agent.V2.ControlHigh
+		if move != nil {
+			s.controlAck = move.ControlAck
+		}
+		if err := validateControlWindow(s.state.Agent.V2, s.controlAck); err != nil {
+			return s.v2RestoreError(err)
+		}
 		if err := s.agentCall(func(ctx context.Context) error { return h.instance.Restore(ctx, cloneV2State(state)) }); err != nil {
 			return s.v2RestoreError(err)
 		}
@@ -365,12 +377,20 @@ func (s *session) handleV2Event(event agent.Event) error {
 }
 
 func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
-	// Reserved and future kinds have no delivery route in this slice. Do not call
+	// Future kinds have no delivery route. Do not call
 	// the agent or Save, so an unknown event cannot alter accepted state.
 	switch event.Kind {
-	case agent.Started, agent.AudioInput, agent.Resumed, agent.TaskMessage, agent.TimerFired, agent.PlaybackFinished:
+	case agent.Started, agent.AudioInput, agent.Resumed, agent.TaskMessage, agent.TimerFired, agent.PlaybackFinished, agent.Control:
 	default:
 		return nil
+	}
+	if event.Kind == agent.Control {
+		if event.Control == nil {
+			return agent.ErrControlInvalid
+		}
+		owned := *event.Control
+		owned.Data = slices.Clone(owned.Data)
+		event.Control = &owned
 	}
 	h := s.agent
 	before := cloneAgentState(h.latest)
@@ -393,7 +413,13 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	err := s.agentCall(func(ctx context.Context) error {
 		var err error
 		s.worker.metrics.agentEvents.Add(1)
-		effects, err = h.v2.instance.Handle(ctx, event)
+		callbackEvent := event
+		if event.Control != nil {
+			message := *event.Control
+			message.Data = slices.Clone(message.Data)
+			callbackEvent.Control = &message
+		}
+		effects, err = h.v2.instance.Handle(ctx, callbackEvent)
 		if err != nil {
 			return err
 		}
@@ -489,6 +515,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 			candidate.Progress = event.Input.Progress
 			candidate.Progress.Consumed = before.Progress.Consumed + 1
 		}
+		stageControl(candidate.V2, event)
 		candidate.Revision++
 		size, err := s.admissionSnapshot(candidate)
 		if err != nil {
@@ -527,6 +554,9 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if reserveErr := s.taskBudget(h.v2.tasks, before.V2.MoveOnlyLength); reserveErr != nil {
 			return reserveErr
 		}
+		if event.Kind == agent.Control && errors.Is(err, errSnapshotAdmissionCapacity) {
+			return agent.ErrCapacity
+		}
 		if errors.Is(err, errSnapshotAdmissionCapacity) && !adoption {
 			return s.refuseSnapshotEvent(event, before)
 		}
@@ -549,6 +579,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	next.State = legacy.State{Version: saved.Version, Bytes: saved.Bytes}
 	next.V2.HasMoveOnly, next.V2.MoveOnlyLength = saved.HasMoveOnly, saved.MoveOnlyLength
 	next.V2.Capacity = refusals
+	stageControl(next.V2, event)
 	if event.Kind == agent.Started {
 		next.V2.Started = true
 	}
@@ -678,6 +709,7 @@ func v2EnvelopeEqual(a, b *v2Envelope) bool {
 	}
 	return a.Name == b.Name && a.Contract == b.Contract && slices.Equal(a.TaskKinds, b.TaskKinds) && a.Bounds == b.Bounds && limitsEqual(a.Limits, b.Limits) &&
 		a.HasMoveOnly == b.HasMoveOnly && a.MoveOnlyLength == b.MoveOnlyLength && a.Started == b.Started && taskIntentsEqual(a.Tasks, b.Tasks) && slices.Equal(a.Capacity, b.Capacity) &&
+		a.ControlHigh == b.ControlHigh && a.ControlFloor == b.ControlFloor && slices.Equal(a.Controls, b.Controls) &&
 		a.CancelFloor == b.CancelFloor && a.TimerGeneration == b.TimerGeneration && slices.Equal(a.Timers, b.Timers) && playbackEqual(a.Playback, b.Playback)
 }
 

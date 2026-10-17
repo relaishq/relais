@@ -234,6 +234,9 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 		s.state.Checkpoint.CapturedAt = captured
 		s.checkpointRates(&s.state.Checkpoint)
 		s.durableAgent = pair
+		if pair.V2 != nil {
+			s.controlAck = max(s.controlAck, pair.V2.ControlHigh)
+		}
 		s.lastCheckpoint = time.Now()
 		s.mu.Unlock()
 		metrics.CheckpointWrites.WithLabelValues("success").Inc()

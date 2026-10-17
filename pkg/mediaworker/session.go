@@ -72,6 +72,7 @@ type session struct {
 	snapshotWriteInFlight bool             // guarded by snapshotBudgetMu; one serialized writer
 	sideEffectLaunches    uint64           // guarded by mu; process-local diagnostic, never checkpointed
 	lastTaskLaunch        *AgentTaskLaunch // guarded by mu; bounded last-launch witness
+	controlAck            uint64           // guarded by mu; checkpointed control prefix, carried by exact export
 	durableAgent          agentState       // guarded by mu; last acknowledged durable agent pair
 	id                    string           // state.ID; never changes
 	worker                *Worker

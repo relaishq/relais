@@ -1151,6 +1151,13 @@ func (s *session) v2AgentLoop() {
 			if !s.finishAgentFlush(request) {
 				return
 			}
+		case request := <-h.controls:
+			receipt, err := s.processControl(request.message)
+			request.done <- controlReply{receipt, err}
+			if err != nil && !controlRefusal(err) {
+				s.agentFailed(err)
+				return
+			}
 		case e := <-h.emissions:
 			s.acceptEmission(e)
 		case in := <-input:

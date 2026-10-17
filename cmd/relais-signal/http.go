@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/controlplane"
 )
 
@@ -25,8 +26,8 @@ const maxRequestBytes = 64 << 10
 const maxStatusBytes = 4 << 20
 const requestTimeout = 10 * time.Second
 
-// Match the demo's reverse-proxy pattern, but expose only the two signaling
-// operations. Do not forward client credentials or trust forwarded headers.
+// Match the demo's reverse-proxy pattern, exposing signaling
+// operations and routed agent Control. Do not forward client credentials or trust forwarded headers.
 func newHandler(target *url.URL, token string, transport http.RoundTripper) (http.Handler, error) {
 	return newHandlerWithClock(target, token, transport, time.Now)
 }
@@ -69,9 +70,34 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 			return errors.New("invalid signaling response")
 		}
 		headers := make(http.Header)
-		if r.StatusCode >= 400 && r.StatusCode <= 599 {
+		if controlPath(r.Request.URL.Path) && r.StatusCode >= 400 && r.StatusCode <= 599 {
+			var failure struct {
+				Code string `json:"code"`
+			}
+			_ = json.Unmarshal(data, &failure)
+			message, known := controlErrors[failure.Code]
+			if !known {
+				failure.Code = "uncertain"
+				message = "control request failed; retry the identical message"
+			}
+			data, _ = json.Marshal(struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{failure.Code, message})
+			headers.Set("Content-Type", "application/json")
+		} else if r.StatusCode >= 400 && r.StatusCode <= 599 {
 			data = []byte("signaling request failed; operation outcome may be uncertain\n")
 			headers.Set("Content-Type", "text/plain; charset=utf-8")
+		} else if controlPath(r.Request.URL.Path) && (r.StatusCode == http.StatusAccepted || r.StatusCode == http.StatusOK) {
+			var receipt agent.ControlReceipt
+			if json.Unmarshal(data, &receipt) != nil || receipt.ID == "" || receipt.Sequence == 0 || receipt.EventID == "" || receipt.Checkpointed != (r.StatusCode == http.StatusOK) {
+				return errors.New("invalid control receipt")
+			}
+			data, err = json.Marshal(receipt)
+			if err != nil {
+				return err
+			}
+			headers.Set("Content-Type", "application/json")
 		} else if r.Request.Method == http.MethodPost && r.StatusCode == http.StatusCreated {
 			location := r.Header.Get("Location")
 			if !callPath(location) {
@@ -117,6 +143,8 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 		method := ""
 		switch {
 		case r.URL.Path == "/calls":
+			method = http.MethodPost
+		case controlPath(r.URL.Path):
 			method = http.MethodPost
 		case callPath(r.URL.Path):
 			method = http.MethodDelete
@@ -179,6 +207,11 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 		r.ContentLength = int64(len(data))
 		proxy.ServeHTTP(w, r)
 	}), nil
+}
+
+func controlPath(path string) bool {
+	base, ok := strings.CutSuffix(path, "/agent/control")
+	return ok && callPath(base)
 }
 
 func callPath(path string) bool {
@@ -272,4 +305,23 @@ func validQuery(r *http.Request) bool {
 		}
 	}
 	return true
+}
+
+// Only fixed public codes/messages may cross the trusted control boundary.
+// Never reflect worker addresses, callback details or operator error strings.
+var controlErrors = map[string]string{
+	"control_invalid":     "invalid control message",
+	"control_conflict":    "control ID or sequence conflicts",
+	"control_order":       "control sequence must be next in order",
+	"control_stale":       "control receipt expired; sequence already closed",
+	"control_unsupported": "control requires a v2 agent",
+	"agent_capacity":      "control capacity unavailable",
+	"lease_lost":          "call ownership changed; retry the identical message",
+	"unknown_call":        "unknown call", "unknown_session": "call route unavailable",
+	"not_found": "call not found", "ended": "call ended",
+	"move_in_progress": "call move in progress; retry the identical message",
+	"transient":        "control temporarily unavailable; retry the identical message",
+	"uncertain":        "control outcome uncertain; retry the identical message",
+	"deadline":         "control deadline exceeded; retry the identical message",
+	"canceled":         "control canceled; retry the identical message",
 }

@@ -104,7 +104,7 @@ Selecting `echo` for new calls does not replace a restored custom registration.
 
 `Handle`, `Save`, `Restore`, and move callbacks have deadlines and run serially.
 Keep them short, honor cancellation, and never mutate app state after return.
-Ignore unknown events. `Control` is reserved in this slice.
+Ignore unknown events. Routed `Control` events carry a stable `EventID` and a copied `ControlMessage`.
 
 `Save` returns versioned crash-recoverable `State.Bytes` and O(1) presence/length
 metadata for move-only data. Ordinary Save must never serialize, copy, or hash a
@@ -378,6 +378,87 @@ handlers until slice 9.** That slice adds worker-local quiescence and a measured
 operator move reserve. Do not assume a five-second shutdown deadline includes a
 handler wait or that it waits for the whole reply to play.
 
+## Routed Control
+
+Send `POST /calls/{id}/agent/control` through `relais-signal` with the existing
+bearer token and `Content-Type: application/json`:
+
+```json
+{"id":"press-1","sequence":1,"name":"ptt.start","data":"AP8="}
+```
+
+`data` is base64 for binary bytes, as with Go `[]byte`. It is optional and is
+limited to 1,024 decoded bytes. IDs and names must be nonempty UTF-8 strings of
+at most 128 bytes. Use a new unique ID for each message. Start sequences at 1;
+send each new message with the next sequence. Retries keep the **same ID,
+sequence, name and bytes**. Future sequences return `control_order` without
+consumption; send missing messages first. This preserves callback order.
+
+A reply contains `{id, sequence, event_id, checkpointed}`. **202 Accepted** means
+the actor accepted the callback and saved its local state and dedup record.
+**200 OK** means a successful fenced checkpoint recorded that acceptance.
+Retry until 200, with bounded delay and an application deadline. A lost reply or
+routing error is uncertain: retry the same message, including after a move or
+takeover. Never mint a new ID to recover an uncertain request. Control has no
+media data channel. The client supplies no worker URL or private route.
+
+The agent receives `agent.Event{Kind: agent.Control, ID: ..., Control: ...}`.
+The ID is stable across identical retries, moves and crash redelivery. Local
+admission, callback state, effects and receipt share one publication transaction.
+An in-flight callback completes before export, or the request is refused and
+retried on the adopted route. Exact moves carry the receipt window and its
+checkpoint acknowledgement. A 202 can be lost on a crash: the callback can run
+again with the same EventID on the new owner. Only committed logical history is
+deduplicated; external effects still need the task class and provider rules above.
+
+Receipts use the existing pending metadata allowance. The callback's real encoded
+`data` also counts while admitted. Full metadata returns typed `agent_capacity`
+without accepting the message. An acknowledged prefix more than four sequences
+behind the new sequence can be compacted. Old sequences remain closed after
+compaction and return `control_stale`, never another callback. Retained receipts
+return the original EventID; changed IDs, sequences or bodies that collide with a
+retained entry return `control_conflict`. IDs must remain unique even after an
+old receipt expires. This sparse receipt window has no wall-clock expiry.
+
+Legacy echo and demo registrations return `control_unsupported`. Their media
+behavior is unchanged. Authentication and network exposure retain the existing
+deployment constraints; this adds no per-call authorization or public Internet
+control-authentication guarantee. The private worker endpoint is
+`POST /sessions/{id}/agent/control`; trusted control resolves live store ownership
+under the existing call lock.
+
+## Reading provider Ogg/Opus
+
+`pkg/agent/opusio` provides a pure-Go reader:
+
+```go
+reader, err := opusio.NewReader(body)
+// Handle err. NewReader validates OpusHead and OpusTags.
+for {
+    audio, err := reader.Next(ctx)
+    if err == io.EOF { break }
+    if err != nil { return err }
+    // Emit audio from the task handler; it contains one unchanged Opus packet.
+    _ = audio
+}
+```
+
+`Header()` reports channel count, input sample rate and pre-skip. Timing always
+uses 48 kHz. `PacketDuration()` reports the encoded packet duration from its TOC.
+`Position()` subtracts pre-skip and final granule trimming from reported audible
+time. Encoded packets retain preroll and padding; this is **not sample-exact
+PCM trimming**. The checked spike fixture is mono, 24 kHz input metadata,
+pre-skip 312 and 80 packets of 20 ms each. Tests rebuild Ogg from those packets
+with the pinned Pion writer; no provider connection runs in this slice.
+
+The reader keeps one page and one packet, each bounded near 64 KiB. Oversized
+headers/packets, CRC failures and truncation are errors. Mapping family zero
+(mono/stereo) and zero output gain are supported. Chaining/multiplexing, other
+mappings, gain, and cropped streams with a nonzero initial granule offset are
+explicit typed errors. Cancellation is checked between reads; the underlying
+reader must provide its own cancellation/deadline for a blocked read. Read
+through EOF to validate the stream end and reject a chained stream.
+
 ## Same-registration upgrades and Demo A
 
 All pool members must restore the previous app `State.Version` and pending task
@@ -389,9 +470,8 @@ not a general mixed-version deployment promise.
 
 The next tutorial features **arrive with Demo A**:
 
-- Control push-to-talk and its routed HTTP sender/receipt path.
 - STT Ogg upload using the encoded packets and a validated Pion writer path.
-- The TTS packet reader with bounded Ogg packet assembly and format fixtures.
+- The provider TTS integration using the packet reader below.
 
 Realtime/live STT, PCM conversion, durable conversation/result blobs, and provider
 connections that survive worker restart remain outside this slice. See

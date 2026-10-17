@@ -609,6 +609,7 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 			now = s.storeClock.Add(time.Since(s.storeClockAt))
 		}
 		exported.Agent.V2.Quota = s.captureSnapshotQuotaMode(now, true)
+		payload.ControlAck = s.controlAck
 	}
 	state, err := json.Marshal(snapshot{
 		Version:        s.state.Version,
