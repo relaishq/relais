@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,7 +15,6 @@ import (
 	"github.com/relaishq/relais/internal/agenthost"
 	"github.com/relaishq/relais/internal/workerprobe"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
-	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
 )
@@ -230,21 +230,7 @@ func TestRoutedControlInFlightMove(t *testing.T) {
 			t.Fatal(ctx.Err())
 		}
 		moved := make(chan error, 1)
-		go func() {
-			for {
-				_, err := sys.plane.Move(ctx, id, "1")
-				if !errors.Is(err, controlplane.ErrMoveInProgress) {
-					moved <- err
-					return
-				}
-				select {
-				case <-time.After(time.Millisecond):
-				case <-ctx.Done():
-					moved <- ctx.Err()
-					return
-				}
-			}
-		}()
+		go func() { _, err := sys.plane.Move(ctx, id, "1"); moved <- err }()
 		close(release)
 		require.NoError(t, <-sent)
 		require.NoError(t, <-moved)
@@ -252,6 +238,190 @@ func TestRoutedControlInFlightMove(t *testing.T) {
 		awaitControlKind(t, events[1], agent.Resumed)
 		waitControlCheckpoint(t, sys, id, m)
 		require.Empty(t, events[1])
+		_, err = call.Hangup(ctx)
+		require.NoError(t, err)
+	})
+}
+
+type refusingControlHarnessAgent struct {
+	controlHarnessAgent
+	failure *atomic.Bool
+	slow    bool
+}
+
+func (a *refusingControlHarnessAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
+	if e.Kind == agent.Control && a.failure.Load() {
+		if a.slow {
+			<-ctx.Done()
+			return agent.Effects{}, ctx.Err()
+		}
+		return agent.Effects{}, errors.New("provider unavailable")
+	}
+	return a.controlHarnessAgent.Handle(ctx, e)
+}
+func TestRoutedControlHandlerRefusalKeepsCallAlive(t *testing.T) {
+	for _, slow := range []bool{false, true} {
+		t.Run(fmt.Sprint(slow), func(t *testing.T) {
+			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+				events := make(chan agent.Event, 32)
+				var failure atomic.Bool
+				failure.Store(true)
+				reg := agenthost.Registration{Name: "control-refusal/v1", Factory: func(agent.FactoryArgs) agent.Agent {
+					return &refusingControlHarnessAgent{controlHarnessAgent: controlHarnessAgent{events: events}, failure: &failure, slow: slow}
+				}}
+				sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}, callbackBudget: 250 * time.Millisecond})
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				call, err := sys.h.Dial(ctx, CallOptions{})
+				require.NoError(t, err)
+				id := call.SessionID()
+				awaitControlKind(t, events, agent.Started)
+				m := agent.ControlMessage{ID: "retry", Sequence: 1, Name: "start"}
+				_, err = sys.plane.AgentControl(ctx, id, m)
+				require.Error(t, err)
+				// The same sequence succeeds after the provider/handler recovers.
+				failure.Store(false)
+				receipt, err := sys.plane.AgentControl(ctx, id, m)
+				require.NoError(t, err)
+				require.Equal(t, uint64(1), receipt.Sequence)
+				awaitControlKind(t, events, agent.Control)
+				waitControlCheckpoint(t, sys, id, m)
+				_, err = sys.plane.Move(ctx, id, "1")
+				require.NoError(t, err)
+				awaitControlKind(t, events, agent.Resumed)
+				receipt, err = sys.plane.AgentControl(ctx, id, m)
+				require.NoError(t, err)
+				require.True(t, receipt.Checkpointed)
+				require.Empty(t, events)
+				_, err = call.Hangup(ctx)
+				require.NoError(t, err)
+			})
+		})
+	}
+}
+func TestRoutedControlRetriesDoNotStarveOperators(t *testing.T) {
+	for _, drain := range []bool{false, true} {
+		t.Run(fmt.Sprint(drain), func(t *testing.T) {
+			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+				entered, release := make(chan struct{}), make(chan struct{})
+				regs, events := controlRegistrations(entered, release)
+				sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs, callbackBudget: 2 * time.Second})
+				ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+				defer cancel()
+				call, err := sys.h.Dial(ctx, CallOptions{})
+				require.NoError(t, err)
+				id := call.SessionID()
+				awaitControlKind(t, events[0], agent.Started)
+				m := agent.ControlMessage{ID: "press", Sequence: 1, Name: "start"}
+				sent := make(chan error, 1)
+				go func() { _, err := sys.plane.AgentControl(ctx, id, m); sent <- err }()
+				select {
+				case <-entered:
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+				// Keep identical retries active across the operator request and route change.
+				retryCtx, stop := context.WithCancel(ctx)
+				retried := make(chan struct{})
+				go func() {
+					defer close(retried)
+					for retryCtx.Err() == nil {
+						_, _ = sys.plane.AgentControl(retryCtx, id, m)
+						select {
+						case <-retryCtx.Done():
+							return
+						case <-time.After(time.Millisecond):
+						}
+					}
+				}()
+				moved := make(chan error, 1)
+				go func() {
+					if drain {
+						_, err := sys.plane.Drain(ctx, "0")
+						moved <- err
+					} else {
+						_, err := sys.plane.Move(ctx, id, "1")
+						moved <- err
+					}
+				}()
+				// Hold the first callback long enough to overlap the operator request.
+				time.Sleep(30 * time.Millisecond)
+				close(release)
+				require.NoError(t, <-sent)
+				require.NoError(t, <-moved)
+				stop()
+				<-retried
+				awaitControlKind(t, events[0], agent.Control)
+				awaitControlKind(t, events[1], agent.Resumed)
+				waitControlCheckpoint(t, sys, id, m)
+				require.Empty(t, events[1])
+				_, err = call.Hangup(ctx)
+				require.NoError(t, err)
+			})
+		})
+	}
+}
+
+type budgetControlHarnessAgent struct {
+	controlHarnessAgent
+	trigger *atomic.Bool
+}
+
+func (a *budgetControlHarnessAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
+	effects, err := a.controlHarnessAgent.Handle(ctx, e)
+	if e.Kind == agent.AudioInput && a.trigger.Swap(false) {
+		for i := range 4 {
+			effects.SetTimers = append(effects.SetTimers, agent.TimerSpec{ID: fmt.Sprintf("%d", i) + strings.Repeat("t", 63), After: time.Hour})
+		}
+		effects.StartTasks = []agent.TaskSpec{{Step: "wait", Kind: "wait/v1", Class: agent.ReadOnly}}
+	}
+	return effects, err
+}
+func TestRoutedControlFullBudgetAllowsInputEffects(t *testing.T) {
+	forAgentStores(t, func(t *testing.T, base sessionstore.Store) {
+		store := &controlFreezeStore{Store: base}
+		events := make(chan agent.Event, 64)
+		ran := make(chan struct{}, 1)
+		var trigger atomic.Bool
+		reg := agenthost.Registration{Name: "control-budget/v1", Factory: func(agent.FactoryArgs) agent.Agent {
+			return &budgetControlHarnessAgent{controlHarnessAgent: controlHarnessAgent{events: events}, trigger: &trigger}
+		}, Tasks: map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { ran <- struct{}{}; return nil }}}
+		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}, callbackBudget: time.Second})
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		call, err := sys.h.Dial(ctx, CallOptions{})
+		require.NoError(t, err)
+		id := call.SessionID()
+		awaitControlKind(t, events, agent.Started)
+		readV2Snapshot(t, base, id, true)
+		store.block.Store(true)
+		accepted := uint64(0)
+		for i := uint64(1); i <= 40; i++ {
+			m := agent.ControlMessage{ID: fmt.Sprintf("%03d", i) + strings.Repeat("x", 125), Sequence: i, Name: "press"}
+			receipt, err := sys.plane.AgentControl(ctx, id, m)
+			if err != nil {
+				require.Error(t, err)
+				break
+			}
+			require.False(t, receipt.Checkpointed)
+			accepted++
+			awaitControlKind(t, events, agent.Control)
+		}
+		require.Positive(t, accepted)
+		require.Less(t, accepted, uint64(40))
+		t.Logf("accepted %d unacknowledged Controls", accepted)
+		trigger.Store(true)
+		require.NoError(t, call.SendMedia(ctx, 100*time.Millisecond))
+		select {
+		case <-ran:
+		case <-time.After(2 * time.Second):
+			t.Fatal("full Control budget prevented ordinary input task/timer effects")
+		}
+		awaitControlKind(t, events, agent.TaskMessage)
+		store.block.Store(false)
+		_, err = sys.plane.Move(ctx, id, "1")
+		require.NoError(t, err)
+		awaitControlKind(t, events, agent.Resumed)
 		_, err = call.Hangup(ctx)
 		require.NoError(t, err)
 	})

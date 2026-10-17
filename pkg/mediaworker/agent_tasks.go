@@ -219,7 +219,8 @@ func (s *session) taskMetadataBudget(intents []taskIntent, refusals []taskRefusa
 	s.mu.Unlock()
 	envelope.Tasks = intents
 	envelope.Capacity = refusals
-	metadata, _ := json.Marshal(envelope)
+	limit := min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes)
+	metadata := v2MetadataCharge(envelope, limit)
 	if admission {
 		// Reserve encoded metadata headroom from each real admitted intent. This
 		// changes new admission only: prior checkpoints retain their full capacity.
@@ -242,12 +243,12 @@ func (s *session) taskMetadataBudget(intents []taskIntent, refusals []taskRefusa
 			intent.Cursor = intent.Published
 			envelope.Tasks[i] = intent
 		}
-		guarded, _ := json.Marshal(envelope)
-		if len(guarded) > len(metadata) {
+		guarded := v2MetadataCharge(envelope, limit)
+		if guarded > metadata {
 			metadata = guarded
 		}
 	}
-	if len(metadata) > min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes) {
+	if metadata > limit {
 		return agent.ErrCapacity
 	}
 	return nil

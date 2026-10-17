@@ -407,6 +407,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	var effects agent.Effects
 	var tasks []*localTask
 	var saving atomic.Bool
+	var handleFailed atomic.Bool
 	var refusals []taskRefusal
 	var timers []hostTimer
 	var timerGeneration uint64
@@ -421,6 +422,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		}
 		effects, err = h.v2.instance.Handle(ctx, callbackEvent)
 		if err != nil {
+			handleFailed.Store(true)
 			return err
 		}
 		if err := ctx.Err(); err != nil {
@@ -559,6 +561,12 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		}
 		if errors.Is(err, errSnapshotAdmissionCapacity) && !adoption {
 			return s.refuseSnapshotEvent(event, before)
+		}
+		// Control has no consumed input cursor. Quarantine a failed Handle and
+		// restore accepted state before refusing without advancing its sequence.
+		// Save/Restore failures and invalid effects remain terminal.
+		if event.Kind == agent.Control && !saving.Load() && (handleFailed.Load() || errors.Is(err, context.DeadlineExceeded)) {
+			return fmt.Errorf("%w: %v", agent.ErrControlRejected, err)
 		}
 		// A late AudioInput Handle is quarantined before Restore, just as in the
 		// legacy host. It cannot advance accepted state or consumed-input progress.

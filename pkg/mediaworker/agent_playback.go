@@ -1,7 +1,6 @@
 package mediaworker
 
 import (
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -295,9 +294,8 @@ func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers [
 	for i, t := range tasks {
 		envelope.Tasks[i] = t.intent
 	}
-	data, _ := json.Marshal(envelope)
 	metadataLimit := min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes)
-	if len(data) > metadataLimit {
+	if v2MetadataCharge(envelope, metadataLimit) > metadataLimit {
 		if len(e.Audio) > 0 {
 			// Only retry growth that removing this callback's audio can resolve.
 			// Timers and other effects cannot make progress by draining playback.
@@ -305,8 +303,7 @@ func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers [
 			s.mu.Lock()
 			envelope.Playback = s.projectedPlaybackLocked(e, event).snapshot()
 			s.mu.Unlock()
-			withoutAudio, _ := json.Marshal(envelope)
-			if len(withoutAudio) <= metadataLimit {
+			if v2MetadataCharge(envelope, metadataLimit) <= metadataLimit {
 				return errTaskAdmissionBackpressure
 			}
 		}

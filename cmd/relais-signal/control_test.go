@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/relaishq/relais/internal/privateapi"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/stretchr/testify/require"
 )
@@ -45,5 +46,31 @@ func TestControlFrontendReceiptsAndSafeErrors(t *testing.T) {
 	}
 	for _, path := range []string{"/calls/id/move/agent/control", "/calls/id/../agent/control", "/calls/%69d/agent/control", "/calls/id/agent/control/"} {
 		require.False(t, controlPath(path) || strings.HasSuffix(path, "%69d"))
+	}
+}
+
+func TestControlMalformedRequestsAreDefinite(t *testing.T) {
+	server, client := frontend(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var message agent.ControlMessage
+		if !privateapi.Read(w, r, &message) {
+			return
+		}
+		t.Error("malformed request reached admission")
+	}))
+	for _, body := range []string{
+		`{"id":"a","sequence":1,"name":"x","extra":1}`,
+		`{"id":"a","sequence":1,"name":"x","data":"!!notbase64"}`,
+		`{"id":"a","sequence":"1","name":"x"}`,
+		`not json`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			response, out := request(t, client, http.MethodPost, server.URL+"/calls/id/agent/control", body, testToken)
+			require.Equal(t, http.StatusBadRequest, response.StatusCode)
+			var failure struct {
+				Code string `json:"code"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(out), &failure))
+			require.Equal(t, "control_invalid", failure.Code)
+		})
 	}
 }

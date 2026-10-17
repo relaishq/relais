@@ -8,6 +8,11 @@
 // before redelivering Started. An AudioInput Handle deadline outside Save drops
 // that input after quarantine and Restore. TaskMessage Handle errors and deadlines
 // fail closed after Restore; this also applies to admission Capacity callbacks.
+// Control is refused with ErrControlNotReady until Started has been accepted.
+// A Control Handle error or deadline outside Save is quarantined and restored,
+// then refused with ErrControlRejected without consuming its ID or sequence.
+// The client may retry the identical message. Save/Restore failures and invalid
+// effects still fail closed; agents must use Tasks for external side effects.
 // Admission refusals are queued as compact terminal intents. Each Capacity
 // callback runs in a later transaction; Handle is never called recursively.
 // Snapshot admission refuses oversized callback state with a later Capacity
@@ -44,6 +49,7 @@ import (
 	"context"
 	"errors"
 	"time"
+	"unicode/utf8"
 
 	"github.com/relaishq/relais/internal/taskrun"
 	legacy "github.com/relaishq/relais/pkg/agent"
@@ -197,6 +203,14 @@ type ControlMessage struct {
 	Data     []byte `json:"data,omitempty"`
 }
 
+// Validate checks the public Control bounds before any ownership lock or I/O.
+func (m ControlMessage) Validate() error {
+	if m.ID == "" || len(m.ID) > 128 || !utf8.ValidString(m.ID) || m.Sequence == 0 || m.Name == "" || len(m.Name) > 128 || !utf8.ValidString(m.Name) || len(m.Data) > 1024 {
+		return ErrControlInvalid
+	}
+	return nil
+}
+
 // Limits bounds application state, serialized host metadata, and move memory.
 // Zero fields use host defaults and remain zero in persisted identity. Effective
 // limits respect local operator ceilings; registrations cannot increase budgets.
@@ -211,7 +225,7 @@ type Limits struct {
 
 // ControlReceipt identifies one locally committed callback. Checkpointed means
 // a successful fenced checkpoint recorded it; local acceptance alone can be lost
-// on a crash. Retry the identical ControlMessage until checkpointed.
+// on a crash. Retry the identical ControlMessage until checkpointed or ErrControlStale.
 type ControlReceipt struct {
 	ID           string  `json:"id"`
 	Sequence     uint64  `json:"sequence"`
@@ -220,9 +234,13 @@ type ControlReceipt struct {
 }
 
 var (
-	ErrControlInvalid     = errors.New("agent: invalid control message")
-	ErrControlConflict    = errors.New("agent: control ID or sequence conflicts")
-	ErrControlOrder       = errors.New("agent: control sequence must be next in order")
+	ErrControlRejected = errors.New("agent: control Handle refused after Restore")
+	ErrControlNotReady = errors.New("agent: Started not yet accepted")
+	ErrControlInvalid  = errors.New("agent: invalid control message")
+	ErrControlConflict = errors.New("agent: control ID or sequence conflicts")
+	ErrControlOrder    = errors.New("agent: control sequence must be next in order")
+	// ErrControlStale proves that this sequence was durably accepted and compacted.
+	// A client retrying its own original message can stop retrying.
 	ErrControlStale       = errors.New("agent: control sequence outside retained window")
 	ErrControlUnsupported = errors.New("agent: control requires a v2 agent")
 )

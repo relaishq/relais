@@ -16,8 +16,10 @@ import (
 // RemoteErrors identifies coordination errors across the private HTTP boundary.
 var RemoteErrors = map[string]error{
 	"control_invalid": agentv2.ErrControlInvalid, "control_conflict": agentv2.ErrControlConflict,
-	"control_order": agentv2.ErrControlOrder,
-	"control_stale": agentv2.ErrControlStale, "control_unsupported": agentv2.ErrControlUnsupported,
+	"control_order":     agentv2.ErrControlOrder,
+	"control_not_ready": agentv2.ErrControlNotReady,
+	"control_rejected":  agentv2.ErrControlRejected,
+	"control_stale":     agentv2.ErrControlStale, "control_unsupported": agentv2.ErrControlUnsupported,
 	"unknown_session": ErrUnknownSession, "unsupported_offer": ErrUnsupportedOffer,
 	"closed": ErrClosed, "not_established": ErrNotEstablished,
 	"sequence_budget": ErrSequenceBudgetExhausted, "session_exists": errSessionExists,

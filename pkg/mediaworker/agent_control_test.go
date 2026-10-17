@@ -2,9 +2,13 @@ package mediaworker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	legacy "github.com/relaishq/relais/pkg/agent"
 	"github.com/relaishq/relais/pkg/agent/demo"
@@ -15,7 +19,7 @@ import (
 func TestControlAtomicReceiptAndConflict(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
+	require.NoError(t, initControlUnit(s))
 	m := agent.ControlMessage{ID: "press", Sequence: 1, Name: "ptt.start", Data: []byte{0, 255}}
 	receipt, err := s.processControl(m)
 	require.NoError(t, err)
@@ -42,7 +46,7 @@ func TestControlAtomicReceiptAndConflict(t *testing.T) {
 func TestControlLimitsFloorAndCopy(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
+	require.NoError(t, initControlUnit(s))
 	m := agent.ControlMessage{ID: "1", Sequence: 1, Name: "start", Data: make([]byte, 1024)}
 	_, err := s.processControl(m)
 	require.NoError(t, err)
@@ -72,7 +76,7 @@ func TestControlLimitsFloorAndCopy(t *testing.T) {
 func TestControlCapacityDoesNotSucceedOrConsume(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
+	require.NoError(t, initControlUnit(s))
 	s.agent.v2.registration.Bounds.MaxPendingBytes = 1
 	_, err := s.processControl(agent.ControlMessage{ID: "1", Sequence: 1, Name: "start"})
 	require.ErrorIs(t, err, agent.ErrCapacity)
@@ -99,7 +103,7 @@ func TestControlLegacyRejected(t *testing.T) {
 func TestControlFailedCallbackHasNoReceipt(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}, effects: agent.Effects{StartTasks: []agent.TaskSpec{{}}}}
 	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
+	require.NoError(t, initControlUnit(s))
 	_, err := s.processControl(agent.ControlMessage{ID: "1", Sequence: 1, Name: "start"})
 	require.Error(t, err)
 	require.Zero(t, s.agent.latest.V2.ControlHigh)
@@ -119,7 +123,7 @@ func TestControlCanonicalIdentity(t *testing.T) {
 func TestControlExactRestoreDoesNotInventCheckpoint(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, source := v2UnitSession(t, a)
-	require.NoError(t, source.initAgent(false, ResumeOptions{}))
+	require.NoError(t, initControlUnit(source))
 	m := agent.ControlMessage{ID: "1", Sequence: 1, Name: "start"}
 	receipt, err := source.processControl(m)
 	require.NoError(t, err)
@@ -140,7 +144,7 @@ func TestControlCallbackCannotChangeReceiptIdentity(t *testing.T) {
 		a.lastEvent.Control.Data[0] = 99
 	}
 	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
+	require.NoError(t, initControlUnit(s))
 	m := agent.ControlMessage{ID: "original", Sequence: 1, Name: "start", Data: []byte{1}}
 	got, err := s.processControl(m)
 	require.NoError(t, err)
@@ -149,4 +153,135 @@ func TestControlCallbackCannotChangeReceiptIdentity(t *testing.T) {
 	require.Equal(t, got, same)
 	require.Equal(t, 1, a.handles)
 	require.Equal(t, controlDigest(m), s.state.Agent.V2.Controls[0].Digest)
+}
+
+// These focused receipt tests model the actor after its Started transaction.
+func initControlUnit(s *session) error {
+	if err := s.initAgent(false, ResumeOptions{}); err != nil {
+		return err
+	}
+	s.agent.latest.V2.Started = true
+	s.state.Agent.V2.Started = true
+	return nil
+}
+
+func TestControlWaitsForStarted(t *testing.T) {
+	a := &v2UnitAgent{state: agent.State{Version: 1}}
+	_, s := v2UnitSession(t, a)
+	require.NoError(t, s.initAgent(false, ResumeOptions{}))
+	message := agent.ControlMessage{ID: "before-start", Sequence: 1, Name: "start"}
+	_, err := s.processControl(message)
+	require.Error(t, err, "Control before Started must be refused")
+	require.True(t, controlRefusal(err), "not-ready must not end the call")
+	require.Zero(t, a.handles)
+	require.Zero(t, s.agent.latest.V2.ControlHigh)
+	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
+	receipt, err := s.processControl(message)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), receipt.Sequence)
+	require.Equal(t, 2, a.handles)
+}
+
+type controlRejectAgent struct {
+	v2UnitAgent
+	failure string
+}
+
+func (a *controlRejectAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
+	effects, err := a.v2UnitAgent.Handle(ctx, e)
+	if e.Kind != agent.Control {
+		return effects, err
+	}
+	switch a.failure {
+	case "deadline":
+		<-ctx.Done()
+		return agent.Effects{}, ctx.Err()
+	case "error":
+		return agent.Effects{}, errors.New("provider busy")
+	}
+	return effects, err
+}
+func TestControlHandlerRefusalRestoresAndRetries(t *testing.T) {
+	for _, failure := range []string{"deadline", "error"} {
+		t.Run(failure, func(t *testing.T) {
+			a := &controlRejectAgent{v2UnitAgent: v2UnitAgent{state: agent.State{Version: 1, Bytes: []byte("accepted")}}, failure: failure}
+			_, s := v2UnitSession(t, a, func(c *AgentConfig) { c.CallbackTimeout = 250 * time.Millisecond })
+			require.NoError(t, initControlUnit(s))
+			m := agent.ControlMessage{ID: "retry", Sequence: 1, Name: "ptt.start"}
+			before := cloneAgentState(s.state.Agent)
+			_, err := s.processControl(m)
+			require.Error(t, err)
+			require.True(t, controlRefusal(err), "Control Handle failure must not end the call: %v", err)
+			require.Equal(t, before, s.state.Agent)
+			require.Equal(t, before.State.Bytes, a.state.Bytes)
+			require.Equal(t, 1, a.restores)
+			a.failure = ""
+			receipt, err := s.processControl(m)
+			require.NoError(t, err)
+			require.Equal(t, uint64(1), receipt.Sequence)
+			require.Equal(t, 2, a.handles)
+		})
+	}
+}
+
+func TestControlFullReceiptsLeaveTimerAndTaskCapacity(t *testing.T) {
+	for _, withTask := range []bool{false, true} {
+		t.Run(fmt.Sprint(withTask), func(t *testing.T) {
+			a := &v2UnitAgent{state: agent.State{Version: 1}}
+			_, s := v2UnitSession(t, a)
+			require.NoError(t, initControlUnit(s))
+			// No store acknowledgement: fill the same receipt state as a stalled store.
+			accepted := 0
+			for i := uint64(1); i <= 40; i++ {
+				id := fmt.Sprintf("%03d", i) + strings.Repeat("x", 125)
+				_, err := s.processControl(agent.ControlMessage{ID: id, Sequence: i, Name: "press"})
+				if err != nil {
+					require.ErrorIs(t, err, agent.ErrCapacity)
+					break
+				}
+				accepted++
+			}
+			require.Positive(t, accepted)
+			require.Less(t, accepted, 40)
+			a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: strings.Repeat("t", 64), After: time.Second}}}
+			if withTask {
+				s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}
+				a.effects.StartTasks = []agent.TaskSpec{{Step: "wait", Kind: "wait/v1", Class: agent.ReadOnly}}
+			}
+			require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started, ID: "timer-task"}), "full receipts cannot starve non-Control metadata")
+			require.Len(t, s.state.Agent.V2.Timers, 1)
+			if withTask {
+				require.Len(t, s.agent.v2.tasks, 1)
+			}
+			t.Logf("unacknowledged Controls capped at %d", accepted)
+		})
+	}
+}
+
+func TestControlReceiptEncodingIsFixedAndRestorable(t *testing.T) {
+	for _, id := range []string{"short", strings.Repeat("x", 128)} {
+		a := &v2UnitAgent{state: agent.State{Version: 1}}
+		_, s := v2UnitSession(t, a)
+		require.NoError(t, initControlUnit(s))
+		m := agent.ControlMessage{ID: id, Sequence: 1, Name: "press"}
+		original, err := s.processControl(m)
+		require.NoError(t, err)
+		wire, err := json.Marshal(s.agent.latest.V2.Controls[0])
+		require.NoError(t, err)
+		require.Len(t, wire, 102)
+		require.NotContains(t, string(wire), id)
+		var record controlRecord
+		require.NoError(t, json.Unmarshal(wire, &record))
+		s.agent.latest.V2.Controls[0] = record
+		receipt, err := s.processControl(m)
+		require.NoError(t, err)
+		require.Equal(t, original, receipt)
+		old, err := json.Marshal(map[string]any{"i": id, "s": m.Sequence, "d": controlDigest(m)})
+		require.NoError(t, err)
+		require.NoError(t, json.Unmarshal(old, &record))
+		s.agent.latest.V2.Controls[0] = record
+		receipt, err = s.processControl(m)
+		require.NoError(t, err)
+		require.Equal(t, original, receipt, "initial slice-8a receipt reads migrate to digests")
+	}
 }

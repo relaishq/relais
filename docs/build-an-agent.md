@@ -397,7 +397,7 @@ consumption; send missing messages first. This preserves callback order.
 A reply contains `{id, sequence, event_id, checkpointed}`. **202 Accepted** means
 the actor accepted the callback and saved its local state and dedup record.
 **200 OK** means a successful fenced checkpoint recorded that acceptance.
-Retry until 200, with bounded delay and an application deadline. A lost reply or
+Retry until 200 or `control_stale`, with bounded delay and an application deadline. A lost reply or
 routing error is uncertain: retry the same message, including after a move or
 takeover. Never mint a new ID to recover an uncertain request. Control has no
 media data channel. The client supplies no worker URL or private route.
@@ -411,14 +411,40 @@ checkpoint acknowledgement. A 202 can be lost on a crash: the callback can run
 again with the same EventID on the new owner. Only committed logical history is
 deduplicated; external effects still need the task class and provider rules above.
 
-Receipts use the existing pending metadata allowance. The callback's real encoded
-`data` also counts while admitted. Full metadata returns typed `agent_capacity`
-without accepting the message. An acknowledged prefix more than four sequences
-behind the new sequence can be compacted. Old sequences remain closed after
-compaction and return `control_stale`, never another callback. Retained receipts
+Receipts store fixed-size SHA-256 digests of the ID and body, rather than raw
+IDs. Their versioned binary encoding is 73 bytes per record (102 bytes in JSON).
+Control has a separate sub-budget within pending host metadata, measured from
+five encoded records and maximum-width sequence/floor counters, capped at one
+third of the pending limit. At default limits at most five unacknowledged
+Controls fit. Other events keep the remaining metadata allowance independently
+of receipt occupancy; agents that never use Control keep their full allowance.
+The callback's real encoded `data` also counts while admitted. A full Control
+budget returns typed retryable `agent_capacity` before invoking Handle or
+consuming a sequence. An acknowledged prefix more than four sequences behind
+the new sequence can be compacted. Smaller pending limits can compact
+acknowledged prefixes earlier to make room. Old sequences remain closed after
+compaction and return `control_stale`, never another callback. For a client
+retrying its own original message, `control_stale` proves **durable acceptance**:
+sequences are contiguous and only checkpointed prefixes can compact. Stop
+retrying that message; its detailed receipt is no longer retained. Retained receipts
 return the original EventID; changed IDs, sequences or bodies that collide with a
 retained entry return `control_conflict`. IDs must remain unique even after an
 old receipt expires. This sparse receipt window has no wall-clock expiry.
+
+Before Started is accepted, Control returns retryable `control_not_ready`.
+A Control Handle error or deadline outside Save is quarantined; after successful
+Restore the host returns retryable `control_rejected` without consuming the
+sequence or ending the call. Retry the identical message with bounded backoff.
+Save/Restore failures and invalid state/effects remain terminal agent failures.
+Keep external side effects in Tasks, since Restore only rolls back app state.
+
+The route remains serialized with operator changes. Move and Drain wait a
+bounded time for an in-flight Control, and waiting operators take priority over
+new Control retries. A Control holds the route for at most 500 ms; takeover can
+cancel that RPC within its existing 1.5-second budget. A transport timeout may
+still follow worker acceptance: retry the same message on the live route.
+Malformed JSON, unknown fields, invalid base64 and wrong field types return
+400 `control_invalid`; identical retries cannot repair them.
 
 Legacy echo and demo registrations return `control_unsupported`. Their media
 behavior is unchanged. Authentication and network exposure retain the existing
@@ -452,7 +478,13 @@ pre-skip 312 and 80 packets of 20 ms each. Tests rebuild Ogg from those packets
 with the pinned Pion writer; no provider connection runs in this slice.
 
 The reader keeps one page and one packet, each bounded near 64 KiB. Oversized
-headers/packets, CRC failures and truncation are errors. Mapping family zero
+headers/packets, CRC failures and truncation are errors. Empty or malformed
+audio packets are discarded per RFC 7845 section 3 and RFC 6716 section 3.4;
+`DiscardedPackets()` exposes the count. Timing resynchronizes at the next
+completed page's granule after a discard. Malformed Ogg structure and headers
+remain fatal typed errors (`ErrContainer`, `ErrCRC`, `ErrHeader`, `ErrGranule`,
+`ErrLimit`), rather than audio-packet errors. OpusHead versions 0–15 are accepted
+as compatible major version zero. Mapping family zero
 (mono/stereo) and zero output gain are supported. Chaining/multiplexing, other
 mappings, gain, and cropped streams with a nonzero initial granule offset are
 explicit typed errors. Cancellation is checked between reads; the underlying

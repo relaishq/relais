@@ -156,7 +156,6 @@ func TestMalformedStreams(t *testing.T) {
 		{"crc", append(bytes.Clone(good[:len(good)-1]), 0), ErrCRC},
 		{"truncated", good[:len(good)-1], io.ErrUnexpectedEOF},
 		{"chained", append(bytes.Clone(good), good...), ErrChained},
-		{"packet", stream([]byte{0xfb}), ErrPacket},
 		{"continuation", append(prefix(), page(2, 5, 960, []byte{3}, []byte{0xf8, 0xff, 0xfe})...), ErrContainer},
 	}
 	for _, tc := range cases {
@@ -296,4 +295,43 @@ func TestTruncationAtEveryPageBoundaryIsNotEOF(t *testing.T) {
 func TestPositionDoesNotOverflowAfterTwoDays(t *testing.T) {
 	r := &Reader{position: 60 * 60 * 60 * 48000}
 	require.Equal(t, 60*time.Hour, r.Position())
+}
+
+func TestDiscardMalformedAudioPackets(t *testing.T) {
+	good := []byte{0xf8, 0xff, 0xfe}
+	for _, bad := range [][]byte{nil, {0xfb}, {0xf9, 1}} {
+		for _, sharedPage := range []bool{false, true} {
+			b := prefix()
+			if sharedPage {
+				b = append(b, page(2, 4, 1920, []byte{byte(len(bad)), 3}, append(bytes.Clone(bad), good...))...)
+			} else {
+				b = append(b, page(2, 0, 960, []byte{byte(len(bad))}, bad)...)
+				b = append(b, page(3, 4, 1920, []byte{3}, good)...)
+			}
+			r, err := NewReader(bytes.NewReader(b))
+			require.NoError(t, err)
+			audio, err := r.Next(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, [][]byte{good}, audio.Packets)
+			require.Equal(t, 33500*time.Microsecond, r.Position())
+			counter, ok := any(r).(interface{ DiscardedPackets() uint64 })
+			require.True(t, ok, "Reader must expose discarded audio packet count")
+			require.Equal(t, uint64(1), counter.DiscardedPackets())
+			_, err = r.Next(context.Background())
+			require.ErrorIs(t, err, io.EOF)
+		}
+	}
+	r, err := NewReader(bytes.NewReader(stream(nil)))
+	require.NoError(t, err)
+	_, err = r.Next(context.Background())
+	require.ErrorIs(t, err, io.EOF)
+}
+func TestOpusHeadCompatibleVersions(t *testing.T) {
+	for version := byte(0); version < 16; version++ {
+		h, tags := headers()
+		h[8] = version
+		b := append(page(0, 2, 0, []byte{19}, h), page(1, 0, 0, []byte{16}, tags)...)
+		_, err := NewReader(bytes.NewReader(b))
+		require.NoError(t, err, "version %d", version)
+	}
 }

@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"time"
 	"unicode/utf8"
@@ -20,12 +19,13 @@ var (
 	ErrContainer = errors.New("opusio: malformed Ogg stream")
 	ErrCRC       = errors.New("opusio: Ogg checksum mismatch")
 	ErrHeader    = errors.New("opusio: malformed Opus header")
-	ErrPacket    = errors.New("opusio: malformed Opus packet")
-	ErrChained   = errors.New("opusio: chained or multiplexed streams unsupported")
-	ErrMapping   = errors.New("opusio: channel mapping unsupported")
-	ErrGain      = errors.New("opusio: non-zero output gain unsupported")
-	ErrLimit     = errors.New("opusio: packet exceeds 64 KiB bound")
-	ErrGranule   = errors.New("opusio: granule position unsupported or invalid")
+	// ErrPacket is retained for source compatibility; malformed audio is now discarded.
+	ErrPacket  = errors.New("opusio: malformed Opus packet")
+	ErrChained = errors.New("opusio: chained or multiplexed streams unsupported")
+	ErrMapping = errors.New("opusio: channel mapping unsupported")
+	ErrGain    = errors.New("opusio: non-zero output gain unsupported")
+	ErrLimit   = errors.New("opusio: packet exceeds 64 KiB bound")
+	ErrGranule = errors.New("opusio: granule position unsupported or invalid")
 )
 
 const maxPacketBytes = 64 << 10
@@ -62,6 +62,8 @@ type Reader struct {
 	decoded         uint64
 	position        uint64
 	duration        time.Duration
+	discarded       uint64
+	damagedPage     bool
 	failed          error
 }
 
@@ -77,7 +79,7 @@ func NewReader(input io.Reader) (*Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(head) < 19 || !bytes.Equal(head[:8], []byte("OpusHead")) || head[8] == 0 || head[8] > 15 {
+	if len(head) < 19 || !bytes.Equal(head[:8], []byte("OpusHead")) || head[8] > 15 {
 		return nil, ErrHeader
 	}
 	if head[18] != 0 || head[9] < 1 || head[9] > 2 {
@@ -108,6 +110,11 @@ func NewReader(input io.Reader) (*Reader, error) {
 
 func (r *Reader) Header() Header { return r.header }
 
+// DiscardedPackets counts empty or malformed audio packets skipped by Next.
+// Header and Ogg framing errors remain fatal. After a discarded packet, timing
+// is resynchronized at the next completed page's granule position.
+func (r *Reader) DiscardedPackets() uint64 { return r.discarded }
+
 // Position is the audible position after the last returned packet. It accounts
 // for pre-skip and final granule trim without changing any encoded packet bytes.
 func (r *Reader) Position() time.Duration {
@@ -132,13 +139,27 @@ func (r *Reader) Next(ctx context.Context) (agent.EncodedAudio, error) {
 	return audio, err
 }
 func (r *Reader) next(ctx context.Context) (agent.EncodedAudio, error) {
-	p, err := r.packet(ctx)
-	if err != nil {
-		return agent.EncodedAudio{}, err
-	}
-	d, err := opuspacket.Duration(p)
-	if err != nil {
-		return agent.EncodedAudio{}, fmt.Errorf("%w: %w", ErrPacket, err)
+	var p []byte
+	var d time.Duration
+	for {
+		var err error
+		p, err = r.packet(ctx)
+		if err != nil {
+			return agent.EncodedAudio{}, err
+		}
+		d, err = opuspacket.Duration(p)
+		if err == nil {
+			break
+		}
+		// RFC 7845 section 3: malformed audio is discarded, not a container
+		// failure. No duration can be inferred from an invalid TOC sequence.
+		r.discarded++
+		r.damagedPage = true
+		if r.segment == len(r.laces) {
+			if err := r.resyncDamagedPage(); err != nil {
+				return agent.EncodedAudio{}, err
+			}
+		}
 	}
 	samples := uint64(d) * 48000 / uint64(time.Second)
 	if r.decoded > ^uint64(0)-samples {
@@ -146,7 +167,12 @@ func (r *Reader) next(ctx context.Context) (agent.EncodedAudio, error) {
 	}
 	r.decoded += samples
 	end := r.decoded
-	if r.segment == len(r.laces) {
+	if r.segment == len(r.laces) && r.damagedPage {
+		if err := r.resyncDamagedPage(); err != nil {
+			return agent.EncodedAudio{}, err
+		}
+		end = r.decoded
+	} else if r.segment == len(r.laces) {
 		if r.granule == ^uint64(0) || r.granule < r.previousGranule || r.granule > r.decoded {
 			return agent.EncodedAudio{}, ErrGranule
 		}
@@ -169,6 +195,17 @@ func (r *Reader) next(ctx context.Context) (agent.EncodedAudio, error) {
 	}
 	r.duration = d
 	return agent.EncodedAudio{Format: "audio/opus", Packets: [][]byte{p}}, nil
+}
+
+// Unknown durations create a gap in the local packet clock. A valid page
+// granule anchors the next page without inventing samples for discarded audio.
+func (r *Reader) resyncDamagedPage() error {
+	if r.granule == ^uint64(0) || r.granule < r.previousGranule || (r.eos && r.granule < uint64(r.header.PreSkip)) {
+		return ErrGranule
+	}
+	r.decoded, r.previousGranule = r.granule, r.granule
+	r.damagedPage = false
+	return nil
 }
 
 func (r *Reader) packet(ctx context.Context) ([]byte, error) {

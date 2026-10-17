@@ -78,7 +78,10 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 			message, known := controlErrors[failure.Code]
 			if !known {
 				failure.Code = "uncertain"
-				message = "control request failed; retry the identical message"
+				if r.StatusCode < 500 {
+					failure.Code = "control_invalid"
+				}
+				message = controlErrors[failure.Code]
 			}
 			data, _ = json.Marshal(struct {
 				Code    string `json:"code"`
@@ -311,6 +314,10 @@ func validQuery(r *http.Request) bool {
 // Never reflect worker addresses, callback details or operator error strings.
 var controlErrors = map[string]string{
 	"control_invalid":     "invalid control message",
+	"control_not_ready":   "agent starting; retry the identical message",
+	"control_rejected":    "control handler refused; retry the identical message",
+	"agent_save":          "agent Save failed; call ended",
+	"agent_restore":       "agent Restore failed; call ended",
 	"control_conflict":    "control ID or sequence conflicts",
 	"control_order":       "control sequence must be next in order",
 	"control_stale":       "control receipt expired; sequence already closed",
