@@ -312,7 +312,8 @@ jobs:
           path: bin/crash-run-*
 
   store-stall:
-    # Legacy 30 trials plus five custom process cuts and v2 semantic assertions.
+    # Legacy 30 trials plus six custom process cuts and v2 semantic assertions.
+    # The added ledger cut takes about 25s; it fits the existing 35m limit.
     timeout-minutes: 35
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -348,6 +349,10 @@ jobs:
             -store-stall=moderate -runs=1 -after=10s
           ./bin/crash-run -worker-bin="$PWD/bin/delayed-loopback" -agent=delayed-loopback/v1 \
             -store-stall=expired -store-stall-duration=35s -runs=1 -after=10s
+      - name: Accept real SideEffecting ledger intents under Redis SIGSTOP
+        run: |
+          ./bin/crash-run -worker-bin="$PWD/bin/delayed-loopback" -agent=local-ledger/store-stall-v1 \
+            -store-stall=ledger -runs=1 -after=10s
       - name: Assert forced intent, tokens, timeout, and local results during outage
         run: ./scripts/ci/store-stall-v2.sh
       - name: Upload store-stall evidence

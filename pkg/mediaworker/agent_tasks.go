@@ -579,6 +579,19 @@ func (s *session) launchTasks() {
 		t.cancel = cancel
 		t.attempt++
 		t.launched = true
+		if t.intent.Class == agent.SideEffecting {
+			witness := &AgentTaskLaunch{ID: t.intent.ID, Step: t.intent.Step, At: time.Now(), StoreAt: s.taskClockLocked(), Deadline: t.intent.Deadline, CheckpointAt: s.lastCheckpoint}
+			if s.durableAgent.V2 != nil {
+				for _, d := range s.durableAgent.V2.Tasks {
+					if d.ID == t.intent.ID && d.Digest == t.intent.Digest && d.Phase == taskStarted && !d.Final {
+						witness.Checkpointed = true
+						break
+					}
+				}
+			}
+			s.sideEffectLaunches++
+			s.lastTaskLaunch = witness
+		}
 		t.prepared = false
 		t.intent.Phase = taskStarted
 		attempt := t.attempt

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/workerdriver"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/mediaworker"
@@ -23,6 +24,7 @@ import (
 )
 
 type storeStallOptions struct {
+	Ledger                                  *ledgerStallEvidence
 	Agent                                   *storeStallAgentEvidence
 	ResumedAt                               time.Time
 	Redis                                   *clusterprocess.Child
@@ -40,6 +42,7 @@ type storeStallOptions struct {
 }
 
 type storeStallEvidence struct {
+	Ledger                                        *ledgerStallEvidence     `json:"ledger,omitempty"`
 	Agent                                         *storeStallAgentEvidence `json:"custom_agent,omitempty"`
 	StalledAt, ActionAt, ResumedAt, ObservedUntil time.Time
 	SessionID, Owner                              string
@@ -72,8 +75,8 @@ func validateStoreStall(variant string, duration time.Duration, redis, topology 
 		}
 		return nil
 	}
-	if variant != "moderate" && variant != "long" && variant != "live" && variant != "expired" {
-		return errors.New("store-stall must be moderate, long, live or expired")
+	if variant != "moderate" && variant != "long" && variant != "live" && variant != "expired" && variant != "ledger" {
+		return errors.New("store-stall must be moderate, long, live, expired or ledger")
 	}
 	if duration < 0 {
 		return errors.New("store-stall-duration must be positive")
@@ -283,7 +286,7 @@ func judgeStoreStall(report *callharness.Report, status controlplane.Status, e *
 }
 
 func (s *storeStallOptions) judge(ctx context.Context, report *callharness.Report, hangupErr error, status controlplane.Status, ready clusterprocess.Ready, stalledAt, killed, until time.Time, dir string) (result, error) {
-	e := &storeStallEvidence{Agent: s.Agent, Variant: s.Variant, RequestedStall: s.Duration, ActualStall: s.Actual, TimedOut: s.TimedOut, MediaError: s.MediaError, Observations: s.Observations, StalledAt: stalledAt, ActionAt: killed, ResumedAt: s.ResumedAt, ObservedUntil: until, SessionID: s.SessionID, Owner: s.Owner}
+	e := &storeStallEvidence{Ledger: s.Ledger, Agent: s.Agent, Variant: s.Variant, RequestedStall: s.Duration, ActualStall: s.Actual, TimedOut: s.TimedOut, MediaError: s.MediaError, Observations: s.Observations, StalledAt: stalledAt, ActionAt: killed, ResumedAt: s.ResumedAt, ObservedUntil: until, SessionID: s.SessionID, Owner: s.Owner}
 	takeovers := crashTakeovers(status.Takeovers)
 	if len(takeovers) > 0 {
 		e.Takeover = takeovers[len(takeovers)-1]
@@ -386,10 +389,21 @@ func (s *storeStallOptions) judge(ctx context.Context, report *callharness.Repor
 		} else {
 			e.Failures = judgeOwnershipExpired(report, status, e, ready.Media, stalledAt, killed)
 		}
-	} else {
+	} else if s.Variant != "ledger" {
 		e.Failures = judgeStoreStall(report, status, e, ready.Media, stalledAt, killed, until)
 	}
-	e.Failures = append(e.Failures, judgeStoreStallAgent(e)...)
+	if s.Variant == "ledger" {
+		e.ExpectedOutcome, e.Outcome = "ledger-intents", "ledger-intents"
+		e.Failures = judgeLedgerStall(e)
+		if len(status.Calls) != 1 || status.Calls[0].Owner != s.Owner || len(status.Takeovers) != 0 || status.LostCount != 0 || e.LossEvents != 0 || e.EnvelopeEvents != 0 {
+			e.Failures = append(e.Failures, "ledger call lost or moved")
+		}
+		if !report.ConnectedThroughout() || report.DecryptionFailures.Total() != 0 || report.ICERestarts != 0 || report.Renegotiations != 0 || report.OfferAnswerExchanges != 1 {
+			e.Failures = append(e.Failures, "ledger caller integrity failed")
+		}
+	} else {
+		e.Failures = append(e.Failures, judgeStoreStallAgent(e)...)
+	}
 	e.Failures = append(e.Failures, s.ObservationErrors...)
 	for _, o := range e.Observations {
 		e.Failures = append(e.Failures, o.Errors...)
@@ -455,6 +469,9 @@ func runStoreStallTrials(ctx context.Context, manager *clusterprocess.Manager, r
 		if variant == "long" || variant == "live" {
 			duration = 5 * time.Second
 		}
+		if variant == "ledger" {
+			duration = 8 * time.Second
+		}
 		if variant == "expired" {
 			duration = 35 * time.Second
 		}
@@ -465,7 +482,7 @@ func runStoreStallTrials(ctx context.Context, manager *clusterprocess.Manager, r
 			return err
 		}
 		options := &storeStallOptions{Redis: redis, Variant: variant, Duration: duration}
-		if selectedWorker.Binary != "" && selectedWorker.Agent == "delayed-loopback/v1" {
+		if workerdriver.IsCustom(selectedWorker.Agent) {
 			options.Agent = &storeStallAgentEvidence{Name: selectedWorker.Agent}
 		}
 		env := processEnv(key, addr, fmt.Sprintf("relais:crash:%s:stall:%d:", filepath.Base(dir), i))

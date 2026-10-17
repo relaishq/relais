@@ -136,6 +136,12 @@ func (l *Ledger) Counts() (deliveries, commits int) {
 	return l.deliveries, len(l.entries)
 }
 func (l *Ledger) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && r.URL.Path == "/status" {
+		deliveries, commits := l.Counts()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct{ Deliveries, Commits int }{deliveries, commits})
+		return
+	}
 	if r.Method != http.MethodPost || r.URL.Path != "/commit" {
 		http.NotFound(w, r)
 		return

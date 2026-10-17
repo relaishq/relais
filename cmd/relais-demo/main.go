@@ -66,7 +66,7 @@ func launch(ctx context.Context, manager *clusterprocess.Manager, cfg config) (*
 	if err != nil {
 		return nil, err
 	}
-	worker := workerdriver.Options{Binary: cfg.WorkerBin}
+	worker := workerdriver.Options{Binary: cfg.WorkerBin, Agent: cfg.Agent}
 	if err := worker.Check(bin); err != nil {
 		return nil, err
 	}
@@ -210,13 +210,16 @@ func selectedRelayBuffer(cfg config) string {
 }
 
 func validateConfig(cfg config) error {
+	if err := (workerdriver.Options{Binary: cfg.WorkerBin, Agent: cfg.Agent}).Validate(); err != nil {
+		return err
+	}
 	if err := validateAttachConfig(cfg); err != nil {
 		return err
 	}
 	if selectedRelayBuffer(cfg) != "on" && selectedRelayBuffer(cfg) != "off" {
 		return errors.New("-relay-buffer must be on or off")
 	}
-	if cfg.WorkerBin == "" && selectedAgent(cfg) != "echo" && selectedAgent(cfg) != "demo" {
+	if cfg.WorkerBin == "" && workerdriver.IsCustom(selectedAgent(cfg)) {
 		return errors.New("-agent must be echo or demo")
 	}
 	if cfg.Redis != "" {
@@ -260,7 +263,7 @@ func configureFlags(flags *flag.FlagSet, cfg *config) {
 		cfg.RelayBuffer = mode
 		return nil
 	})
-	flags.StringVar(&cfg.Agent, "agent", "echo", "worker audio agent: echo or demo; custom name with -worker-bin")
+	flags.StringVar(&cfg.Agent, "agent", "", "worker audio agent (default echo; required with -worker-bin); echo, demo or custom name")
 	flags.StringVar(&cfg.WorkerBin, "worker-bin", "", "worker executable path (default relais-worker in -bin)")
 	flags.StringVar(&cfg.Bin, "bin", "bin", "directory containing built relay, worker and control")
 	flags.StringVar(&cfg.HTTP, "http", "127.0.0.1:9101", "literal loopback page address")

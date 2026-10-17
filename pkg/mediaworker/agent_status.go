@@ -11,6 +11,8 @@ import (
 // AgentSessionStatus is opt-in private diagnostic metadata. Reading it never
 // calls the app, serializes move-only audio, or starts store I/O.
 type AgentSessionStatus struct {
+	SideEffectLaunches uint64           `json:"side_effect_launches"`
+	LastTaskLaunch     *AgentTaskLaunch `json:"last_task_launch,omitempty"`
 	// PendingBytes includes actual host move reservations and bookkeeping, not wire bytes.
 	PendingBytes    int64             `json:"pending_bytes"`
 	ID              string            `json:"id"`
@@ -27,12 +29,28 @@ type AgentSessionStatus struct {
 	CheckpointAgeMS float64           `json:"checkpoint_age_ms"`
 	SnapshotAgeMS   float64           `json:"snapshot_age_ms"`
 }
+
+// AgentTaskLaunch is copied at the handler launch boundary. The witness checks
+// the acknowledged pair independently of the actor's cached grant decision.
+// It contains no request or result payload and is never persisted or moved.
+type AgentTaskLaunch struct {
+	ID           agent.TaskID `json:"id"`
+	Step         string       `json:"step"`
+	At           time.Time    `json:"at"`
+	StoreAt      time.Time    `json:"store_at"`
+	Deadline     time.Time    `json:"deadline"`
+	CheckpointAt time.Time    `json:"checkpoint_at"`
+	Checkpointed bool         `json:"checkpointed"`
+}
 type AgentTaskStatus struct {
-	ID        agent.TaskID `json:"id"`
-	Turn      agent.Turn   `json:"turn"`
-	Phase     string       `json:"phase"`
-	Cursor    uint64       `json:"cursor"`
-	Published uint64       `json:"published"`
+	Step      string        `json:"step"`
+	Final     bool          `json:"final"`
+	Outcome   agent.Outcome `json:"outcome"`
+	ID        agent.TaskID  `json:"id"`
+	Turn      agent.Turn    `json:"turn"`
+	Phase     string        `json:"phase"`
+	Cursor    uint64        `json:"cursor"`
+	Published uint64        `json:"published"`
 }
 
 func (w *Worker) agentSessionStatus(id string) (*AgentSessionStatus, error) {
@@ -47,6 +65,11 @@ func (w *Worker) agentSessionStatus(id string) (*AgentSessionStatus, error) {
 	defer s.mu.Unlock()
 	pair := s.state.Agent
 	status := &AgentSessionStatus{PendingBytes: pendingBytes, ID: id, State: legacy.State{Version: pair.State.Version, Bytes: append([]byte(nil), pair.State.Bytes...)}, Progress: pair.Progress, CheckpointKnown: s.snapshotStored.Load()}
+	status.SideEffectLaunches = s.sideEffectLaunches
+	if s.lastTaskLaunch != nil {
+		copy := *s.lastTaskLaunch
+		status.LastTaskLaunch = &copy
+	}
 	if json.Valid(pair.State.Bytes) {
 		status.App = append(json.RawMessage(nil), pair.State.Bytes...)
 	}
@@ -66,7 +89,7 @@ func (w *Worker) agentSessionStatus(id string) (*AgentSessionStatus, error) {
 		status.PlaybackPackets = v2.Playback.Pending
 		for _, task := range v2.Tasks {
 			status.RequestBytes += task.RequestLength
-			status.Tasks = append(status.Tasks, AgentTaskStatus{ID: task.ID, Turn: task.Turn, Phase: task.Phase, Cursor: task.Cursor, Published: task.Published})
+			status.Tasks = append(status.Tasks, AgentTaskStatus{Step: task.Step, Final: task.Final, Outcome: task.Terminal, ID: task.ID, Turn: task.Turn, Phase: task.Phase, Cursor: task.Cursor, Published: task.Published})
 		}
 	}
 	return status, nil

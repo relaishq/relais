@@ -9,7 +9,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/relaishq/relais/internal/capacity"
 	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/internal/workerdriver"
 	"github.com/relaishq/relais/pkg/callharness"
 )
 
@@ -41,7 +43,7 @@ type customCapacityEvidence struct {
 }
 
 func customCapacity(c config) bool {
-	return c.Worker.Binary != "" && c.Worker.Agent != "echo" && c.Worker.Agent != "demo"
+	return workerdriver.IsCustom(c.Worker.Agent)
 }
 func customBuild(c config) (*customCapacityBuild, error) {
 	binary := c.Worker.Path(c.Bin)
@@ -97,7 +99,9 @@ func customEvidence(r loadgen.RunReport) *customCapacityEvidence {
 	block := func(reason string) { e.Verdict = "blocking-approval"; e.Blocking = append(e.Blocking, reason) }
 	ages := r.Telemetry.Agents
 	var checkpoints, snapshots []float64
+	coverage := map[string]int{}
 	for _, s := range ages.Samples {
+		coverage[s.Status.ID]++
 		checkpoints = append(checkpoints, s.Status.CheckpointAgeMS)
 		snapshots = append(snapshots, s.Status.SnapshotAgeMS)
 		e.MoveReservationPeakBytes = max(e.MoveReservationPeakBytes, s.Status.PendingBytes)
@@ -111,7 +115,27 @@ func customEvidence(r loadgen.RunReport) *customCapacityEvidence {
 		return values[int(math.Ceil(.99*float64(len(values))))-1]
 	}
 	e.CheckpointP99MS, e.SnapshotP99MS = p99(checkpoints), p99(snapshots)
-	if len(checkpoints) < int(float64(r.Callers)*r.Duration.Seconds()*5) || len(ages.Errors) > 0 {
+	ticks := r.Duration.Seconds() * 10
+	minimum := max(1, int(math.Floor(ticks*.9)))
+	expected := map[string]bool{}
+	for _, p := range r.Processes {
+		for _, c := range p.Calls {
+			expected[c.Session] = true
+		}
+	}
+	delete(expected, "")
+	if len(expected) != r.Callers {
+		block("missing per-session age coverage identities")
+	}
+	for id := range expected {
+		if coverage[id] < minimum {
+			block("incomplete 100ms age coverage for session " + id)
+		}
+	}
+	if ages.Missing > uint64(math.Ceil(float64(r.Callers)*ticks*.1)) {
+		block("more than 10% missing session age samples")
+	}
+	if len(checkpoints) < r.Callers*minimum || len(ages.Errors) > 0 {
 		block("missing or incomplete 100ms age samples")
 	}
 	if e.CheckpointP99MS > 550 || e.SnapshotP99MS > 550 {
@@ -129,9 +153,11 @@ func customEvidence(r loadgen.RunReport) *customCapacityEvidence {
 	}
 	var wall, cpu float64
 	for _, p := range r.Telemetry.Processes {
-		for name, rate := range p.RatesPerCallSecond {
-			if strings.HasPrefix(name, "relais_store_wire_parse_failures_total") && rate > 0 {
-				block("Redis wire command accounting failed")
+		for _, counters := range []map[string]float64{p.First, p.Last} {
+			for name, count := range counters {
+				if strings.HasPrefix(name, "relais_store_wire_parse_failures_total") && count > 0 {
+					block("Redis wire command accounting failed")
+				}
 			}
 		}
 	}
@@ -179,4 +205,18 @@ func customEvidence(r loadgen.RunReport) *customCapacityEvidence {
 		block(fmt.Sprintf("returned custom audio missing for %d/%d calls", r.Callers-audioCalls, r.Callers))
 	}
 	return e
+}
+
+// Stock agents have no v2 diagnostics and must incur no private agent sampling.
+func configureAgentSamples(c config, targets []capacity.Target, generators []generator) {
+	if !workerdriver.IsCustom(c.Worker.Agent) {
+		return
+	}
+	for i := range targets {
+		if strings.HasPrefix(targets[i].Name, "worker-") {
+			for _, g := range generators {
+				targets[i].AgentSessions = append(targets[i].AgentSessions, g.sessions...)
+			}
+		}
+	}
 }

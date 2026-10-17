@@ -66,11 +66,19 @@ deploy/local/stop.sh -state /tmp/relais-custom-local
 ```
 
 `start.sh` also accepts `WORKER_BIN` and `AGENT`. It saves the resolved worker
-path and agent for `-restart-worker`. All drivers accept `-worker-bin`; the
-load/crash drivers accept `-agent` too. With no override they retain the stock
+path and agent for `-restart-worker`. All drivers require an explicit `-agent` whenever `-worker-bin` is set,
+including when the path names the stock worker. `echo` and `demo` retain stock
+judging; every other agent name selects custom semantics. With no override they retain the stock
 worker behavior. A worker path is relative to the directory where you run the
 driver, not its per-trial log directory. The local topology needs `ps` to verify
 process identity; a sandbox that denies `ps` cannot complete this smoke.
+
+Custom agents support the plain crash-run worker takeover and drain paths.
+`-buffer`, `-buffer-lossy`, `-compare-buffer`, `-relay-restart`, `-relay-standby`,
+and `-scenario` require echo audio semantics and reject custom agents before
+starting any process. Their stock rules remain unchanged. Store-stall modes
+require the named example workload; unknown custom registrations are refused
+with an explanation.
 
 ## Register the factory and tasks
 
@@ -263,16 +271,21 @@ upper budgets**, not a request to generate artificial store traffic or 100 app
 tasks per second. This keyless example does not model provider processing.
 
 The report measures both current checkpoint-age and snapshot-age p99 with 100 ms
-private diagnostic sampling. Both must be at most **550 ms**. It reports Save
+private diagnostic sampling. Both must be at most **550 ms**. Each session needs at least 90% of its
+scheduled 100 ms samples; more than 10% missing samples overall blocks approval.
+These allowances cover brief owner handoffs, not an unsampled subset of calls.
+The sampler ignores requests retired during a deliberate worker kill and runs
+only for custom agent identities. It reports Save
 wall time and Linux thread CPU per Handle event and per call-second, Save/event
 counts, forced intent attempts/successes/failures, successful byte debits, all
 session/owners/frame clients, logical operations, and actual Redis wire command
 starts and request+reply bytes. Wire starts count go-redis's internal retries and
 connection setup; the custom gate uses those counts for the 100-command budget.
 Driver diagnostics/Redis INFO monitoring are separate from application store
-traffic. A Redis wire parser error blocks approval. The example uses ReadOnly
+traffic. A Redis wire parser error anywhere in the process lifetime blocks approval,
+including one before the measurement window. The example uses ReadOnly
 work, so zero forced writes is expected; the store-stall semantic lane separately
-exercises failed and successful forced writes.
+exercises failed and successful forced writes against the real ledger worker.
 
 Export evidence is the largest actual encoded HTTP response body, below 4 MiB.
 Move reservations, worker heap/RSS, and HTTP bytes are reported separately. Save
@@ -291,7 +304,12 @@ A local loopback step can collect preliminary evidence:
 
 Linux namespace isolation and the N+1/drain ramp require the manual Linux run.
 Over-budget ages, Save limits, store traffic, missing measurements, invalid
-load generation, process failure, or an unvalidated N+1 load **block approval**.
+load generation, process failure, or an unvalidated N+1 load **block approval**
+at the validated operating load. Approval requires every recorded worker/relay
+step at or below its validated lower bound, plus N+1 and drain at the candidate
+load. Steps above each lower bound are retained as raw data with their status
+and causes. An inconclusive stopping step from generator saturation does not
+invalidate the lower bound; a failure at or below that bound still blocks.
 The artifact and job summary say either **BLOCKING APPROVAL** or **EVIDENCE READY
 FOR OWNER REVIEW**. Neither grants approval automatically. Approval binds to the
 exact commit, worker binary SHA-256, workload, runner, and operator ceilings in
@@ -299,13 +317,33 @@ the artifact. Green main CI alone is not approval, and larger Demo A budgets do
 not create a capacity claim.
 
 The existing nightly/manual `store-stall` CI job adds custom-worker live stalls
-of 5/15/29 s, a stale takeover, and 35 s ownership expiry. Real processes pause
-only driver-owned Redis and retain custom diagnostics/caller reports. Focused
-production host tests on memory and dedicated Redis assert no byte-token debit
-or Capacity after failed forced writes, launch only after a later acknowledged
-intent checkpoint, Timeout before launch, and local Emit/terminal delivery during
-outage. These semantic fault-injection tests complement the custom binary cuts;
-they do not simulate an external provider.
+of 5/15/29 s, a stale takeover, and 35 s ownership expiry. Live Emit evidence
+requires a published task turn absent from the pre-stall task list; a reply
+already queued before the stall cannot satisfy it.
+
+The job also starts the example's local ledger service and runs its separate
+versioned `local-ledger/store-stall-v1` registration under Redis SIGSTOP:
+
+```sh
+./bin/crash-run -worker-bin=bin/delayed-loopback -agent=local-ledger/store-stall-v1 -store-stall=ledger -runs=1 -after=5s
+```
+
+This diagnostic workload waits for audio before creating two SideEffecting
+intents. The driver pauses only its own Redis, lets pre-pause writes time out
+for 2.2 s, takes the token baseline, then starts audio for the requested 8 s cut.
+It records failed forced attempts, zero successful forced writes and byte
+debits during the cut, no Capacity outcomes or ledger deliveries, and a local
+Timeout for the short-deadline task. After recovery it requires a later forced
+checkpoint, one successful commit, and a launch-boundary witness with the
+matching acknowledged intent and an unexpired deadline. The expired task must
+never launch. Session diagnostics retain only the last launch witness and a
+counter; these process-local fields are never checkpointed or moved.
+
+The normal `local-ledger/v1` teaching registration still commits on Started.
+The new registration is necessary to create intents after the store is paused.
+Unknown agents are refused in these workload-specific cuts. The existing
+in-process fault-injection tests remain and complement these real custom
+binary cuts. No cut simulates an external provider.
 
 ## Move, kill, and drain evidence
 

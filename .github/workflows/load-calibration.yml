@@ -299,6 +299,7 @@ jobs:
           SAVE_WALL_US: ${{ inputs.save_wall_us || '1000' }}
         run: |
           if [ -f bin/custom-capacity-linux.log ]; then cat bin/custom-capacity-linux.log; fi
+          python3 -m unittest discover -s scripts/ci
           python3 scripts/ci/custom-capacity-report.py bin/custom-capacity-linux.json \
             --save-cpu-us="$SAVE_CPU_US" --save-wall-us="$SAVE_WALL_US"
       - name: Upload exact-build report and every process log

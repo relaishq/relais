@@ -16,7 +16,12 @@ func TestWorkerSelection(t *testing.T) {
 	selected := Options{Binary: path, Agent: "delayed-loopback/v1"}
 	require.NoError(t, selected.Check(t.TempDir()), "stock worker need not exist")
 	require.Equal(t, append(append([]string{path}, args...), "-agent", "delayed-loopback/v1"), selected.Command("absent", args...))
-	require.Error(t, (Options{Binary: filepath.Dir(path)}).Check("bin"))
+	require.ErrorContains(t, (Options{Binary: filepath.Dir(path), Agent: selected.Agent}).Check("bin"), "missing executable worker")
 	require.NoError(t, os.Chmod(path, 0600))
 	require.Error(t, selected.Check("bin"))
+}
+
+func TestBinaryOverrideRequiresAgent(t *testing.T) {
+	o := Options{Binary: "/bin/sh"}
+	require.ErrorContains(t, o.Check(t.TempDir()), "-agent is required with -worker-bin")
 }

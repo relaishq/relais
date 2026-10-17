@@ -62,6 +62,11 @@ func (m *Monitor) sampleAgents(ctx context.Context) {
 				endpoint := t.URL + "/status?agent-session=" + url.QueryEscape(id)
 				m.data.Agents.Requests++
 				status, code, err := readAgentStatus(ctx, m.client, endpoint)
+				// A deliberate SIGKILL can race an in-flight request. Its result
+				// belongs to the retired owner and cannot invalidate the new owner.
+				if m.retired[i].Load() {
+					continue
+				}
 				if ctx.Err() != nil {
 					return
 				}

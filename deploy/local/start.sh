@@ -7,7 +7,7 @@ bin=${BIN:-$here}
 state=${STATE_DIR:-$here/.relais-local}
 redis_port=${REDIS_PORT:-16380}
 port_base=${PORT_BASE:-34700}
-agent=${AGENT:-echo}
+agent=${AGENT:-}
 worker_bin=${WORKER_BIN:-}
 restart=''
 while [[ $# -gt 0 ]]; do
@@ -18,10 +18,13 @@ while [[ $# -gt 0 ]]; do
     -state|--state) state=$2; shift 2 ;;
     -redis-port|--redis-port) redis_port=$2; shift 2 ;;
     -restart-worker|--restart-worker) restart=$2; shift 2 ;;
-    -h|--help) echo "usage: $0 [-bin DIR] [-worker-bin PATH] [-agent NAME] [-state DIR] [-redis-port PORT] [-restart-worker w1|w2]"; exit 0 ;;
+    -h|--help) echo "usage: $0 [-bin DIR] [-worker-bin PATH -agent NAME] [-agent NAME] [-state DIR] [-redis-port PORT] [-restart-worker w1|w2]"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+if [[ -z $restart && -n $worker_bin && -z ${agent//[[:space:]]/} ]]; then
+  echo '-agent is required with -worker-bin (or set AGENT with WORKER_BIN)' >&2; exit 2
+fi
 mkdir -p "$state"
 chmod 700 "$state"
 state=$(cd "$state" && pwd)
@@ -47,6 +50,8 @@ else
   fi
   bin=$(cd "$bin" && pwd)
 fi
+[[ -z $worker_bin || -n ${agent//[[:space:]]/} ]] || { echo '-agent is required with -worker-bin' >&2; exit 2; }
+agent=${agent:-echo}
 [[ $redis_port =~ ^[0-9]+$ && ${#redis_port} -le 5 ]] || { echo 'invalid Redis port' >&2; exit 2; }
 redis_port=$((10#$redis_port))
 [[ $redis_port -gt 0 && $redis_port -le 65535 && $redis_port != 6379 ]] || { echo 'Redis port 6379 is reserved; choose another port in 1..65535' >&2; exit 2; }

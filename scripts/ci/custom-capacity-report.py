@@ -23,16 +23,33 @@ if not data.get("custom_agent", {}).get("worker_sha256"):
 steps = []
 if not data.get("steps"):
     blocking.append("no capacity steps")
+bounds = {kind: data.get(kind + "_capacity_lower_bound", 0) for kind in ("worker", "relay")}
+for kind, bound in bounds.items():
+    if bound <= 0 or not any(s["kind"] == kind and s["run"]["callers"] == bound for s in data.get("steps", [])):
+        blocking.append(f"{kind}: validated lower bound proof is missing")
+for kind in ("n-plus-one", "drain"):
+    if not any(s["kind"] == kind and s["run"]["callers"] == data.get("candidate_n_plus_one_callers", 0)
+               for s in data.get("steps", [])):
+        blocking.append(f"{kind}: planned load proof is missing")
 for step in data.get("steps", []):
+    # A stopping ramp step measures the limit; it is not evidence at the
+    # validated operating load. Preserve it verbatim, including its failures.
+    required = step["kind"] not in bounds or step["run"]["callers"] <= bounds[step["kind"]]
     evidence = step.get("custom_agent", {})
-    if step.get("service_outcome") != "pass" or evidence.get("evidence_verdict") != "pass":
+    if required and (step.get("service_outcome") != "pass" or evidence.get("evidence_verdict") != "pass"):
         blocking.extend(step.get("causes", []) or ["incomplete custom-agent evidence"])
     for field, budget in (("save_cpu_seconds_per_event", args.save_cpu_us),
                           ("save_wall_seconds_per_event", args.save_wall_us)):
         value = evidence.get(field)
-        if value is None or not math.isfinite(value) or value < 0 or value * 1e6 > budget:
+        if required and (value is None or not math.isfinite(value) or value < 0 or value * 1e6 > budget):
             blocking.append(f"{step['kind']}: {field} exceeds operator budget {budget} us/event or is missing")
-    steps.append({"kind": step["kind"], "callers": step["run"]["callers"],
+    steps.append({"approval_scope": "required" if required else "raw-beyond-validated-bound",
+                  "causes": step.get("causes", []),
+                  "forced_writes": {"attempts": evidence.get("ForcedAttempts"),
+                                    "successes": evidence.get("ForcedSuccesses"),
+                                    "failures": evidence.get("ForcedFailures"),
+                                    "interpretation": "ReadOnly delayed-loopback tasks require no forced intent writes; zero is expected for this workload. SideEffecting forced-write behavior is exercised by the ledger store-stall cut."},
+                  "kind": step["kind"], "callers": step["run"]["callers"],
                   "service": step["service_outcome"], "custom_agent": evidence,
                   "store_commands_per_call_second": step["store_commands_per_call_second"],
                   "store_bytes_per_call_second": step["store_bytes_per_call_second"],

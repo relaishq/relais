@@ -436,15 +436,7 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 	}
 	var monitor *capacity.Monitor
 	if c.Capacity {
-		if c.Worker.Binary != "" || c.Worker.Agent != "" {
-			for i := range t.Targets {
-				if strings.HasPrefix(t.Targets[i].Name, "worker-") {
-					for _, g := range generators {
-						t.Targets[i].AgentSessions = append(t.Targets[i].AgentSessions, g.sessions...)
-					}
-				}
-			}
-		}
+		configureAgentSamples(c, t.Targets, generators)
 		monitor = capacity.Start(ctx, t.Targets, c.SampleEvery)
 		t.Monitor = monitor
 		defer func() {
@@ -590,6 +582,9 @@ func runArgs(args []string) error {
 	fs.IntVar(&c.CalibrationMax, "calibration-max", 128, "maximum calibration count (a lower bound if unsaturated)")
 	fs.Var(&events, "event", "repeat after,move|kill|drain,count,worker; move count=0 means all eligible calls")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := c.Worker.Validate(); err != nil {
 		return err
 	}
 	if *version {

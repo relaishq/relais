@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"time"
 
+	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/mediaworker"
 )
 
@@ -63,13 +64,19 @@ func judgeStoreStallAgent(e *storeStallEvidence) []string {
 	check(len(a.Errors) == 0, "diagnostics failed")
 	check(len(a.During) > 0, "no in-outage local diagnostic evidence")
 	if a.Before != nil {
-		advanced, playback := false, false
+		advanced, published := false, false
+		beforeTurns := map[agent.Turn]bool{}
+		for _, task := range a.Before.Tasks {
+			beforeTurns[task.Turn] = true
+		}
 		for _, d := range a.During {
 			advanced = advanced || d.Progress.Consumed > a.Before.Progress.Consumed
-			playback = playback || d.PlaybackPackets > 0
+			for _, task := range d.Tasks {
+				published = published || (!beforeTurns[task.Turn] && task.Published > 0)
+			}
 		}
 		check(advanced, "local input did not advance during store stall")
-		check(playback || e.Variant == "moderate", "local task Emit/playout not observed during store stall")
+		check(published || e.Variant == "moderate", "new local task publication not observed during store stall")
 	}
 	if e.Variant == "moderate" {
 		check(a.After != nil, "stale takeover diagnostics missing")
