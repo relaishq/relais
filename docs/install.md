@@ -229,6 +229,12 @@ deploy/local/stop.sh
 ```
 
 `BIN=/absolute/path/to/bin deploy/local/start.sh` is the environment equivalent.
+Source-built custom workers can use `-worker-bin PATH -agent NAME` with
+`relais-demo` and `deploy/local/start.sh`. The local script also accepts
+`WORKER_BIN`/`AGENT` and saves the resolved selection for worker restart. The
+[agent guide](build-an-agent.md#hear-it-in-your-browser) gives the keyless example.
+The download archive does not contain that example binary.
+
 To build all four download archives, run `make dist`. Override the output or
 version with `make dist DIST_VERSION=0.1.0 DIST_DIR=dist`.
 

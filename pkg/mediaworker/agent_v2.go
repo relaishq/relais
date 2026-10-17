@@ -227,7 +227,7 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 		var saved agent.State
 		if err := s.agentCall(func(ctx context.Context) error {
 			var err error
-			saved, err = h.instance.Save(ctx)
+			saved, err = s.measuredSave(ctx, h.instance)
 			if err != nil {
 				return fmt.Errorf("%w: %w", legacy.ErrSave, err)
 			}
@@ -392,6 +392,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	var timerGeneration uint64
 	err := s.agentCall(func(ctx context.Context) error {
 		var err error
+		s.worker.metrics.agentEvents.Add(1)
 		effects, err = h.v2.instance.Handle(ctx, event)
 		if err != nil {
 			return err
@@ -455,7 +456,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 			return err
 		}
 		saving.Store(true)
-		saved, err = h.v2.instance.Save(ctx)
+		saved, err = s.measuredSave(ctx, h.v2.instance)
 		if err != nil {
 			return fmt.Errorf("%w: %w", legacy.ErrSave, err)
 		}

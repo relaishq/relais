@@ -9,17 +9,31 @@ import (
 // Lifetime observations survive local session removal and are never restored
 // from snapshots. This prevents counting a moved session's packets twice.
 type workerMetrics struct {
-	packetsIn, packetsOut, decryptFailures atomic.Uint64
-	replayRejections                       atomic.Uint64
-	earlyPacketDrops                       atomic.Uint64
-	bytesIn, bytesOut                      atomic.Uint64
-	handovers, takeovers                   atomic.Uint64
-	handoverErrors, takeoverErrors         atomic.Uint64
+	agentEvents                                                         atomic.Uint64
+	saveCalls, saveWallNS, saveCPUNS, saveCPUUnknown                    atomic.Uint64
+	forcedAttempts, forcedSuccesses, forcedFailures, snapshotDebitBytes atomic.Uint64
+	exportHTTPPeakBytes                                                 atomic.Uint64
+	packetsIn, packetsOut, decryptFailures                              atomic.Uint64
+	replayRejections                                                    atomic.Uint64
+	earlyPacketDrops                                                    atomic.Uint64
+	bytesIn, bytesOut                                                   atomic.Uint64
+	handovers, takeovers                                                atomic.Uint64
+	handoverErrors, takeoverErrors                                      atomic.Uint64
 }
 
 func (w *Worker) metricSamples() []metrics.Sample {
 	a := w.AgentStats()
 	return []metrics.Sample{
+		metrics.Counter("relais_worker_agent_events_total", "V2 Handle invocations including refused callbacks.", w.metrics.agentEvents.Load()),
+		metrics.Counter("relais_worker_agent_save_calls_total", "V2 Save invocations, including initial and rejected saves.", w.metrics.saveCalls.Load()),
+		metrics.Counter("relais_worker_agent_save_wall_nanoseconds_total", "Wall time inside V2 Save, excluding host serialization.", w.metrics.saveWallNS.Load()),
+		metrics.Counter("relais_worker_agent_save_cpu_nanoseconds_total", "Linux thread CPU inside V2 Save, excluding other goroutines and host serialization.", w.metrics.saveCPUNS.Load()),
+		metrics.Counter("relais_worker_agent_save_cpu_unavailable_total", "V2 saves without thread CPU evidence; zero CPU is not a measurement on unsupported systems.", w.metrics.saveCPUUnknown.Load()),
+		metrics.Counter("relais_worker_agent_forced_checkpoint_attempts_total", "Forced V2 intent checkpoint attempts including failed clock calls.", w.metrics.forcedAttempts.Load()),
+		metrics.Counter("relais_worker_agent_forced_checkpoint_successes_total", "Acknowledged forced V2 intent checkpoints.", w.metrics.forcedSuccesses.Load()),
+		metrics.Counter("relais_worker_agent_forced_checkpoint_failures_total", "Failed forced V2 intent checkpoints.", w.metrics.forcedFailures.Load()),
+		metrics.Counter("relais_worker_agent_snapshot_debit_bytes_total", "Successful V2 snapshot bytes debited; failed writes debit zero.", w.metrics.snapshotDebitBytes.Load()),
+		metrics.Gauge("relais_worker_export_http_peak_bytes", "Largest actual encoded export HTTP response body in this worker lifetime.", int(w.metrics.exportHTTPPeakBytes.Load())),
 		metrics.Counter("relais_worker_udp_bytes_in_total", "UDP payload bytes received, excluding relay headers.", w.metrics.bytesIn.Load()),
 		metrics.Counter("relais_worker_udp_bytes_out_total", "UDP payload bytes sent, excluding relay headers.", w.metrics.bytesOut.Load()),
 		metrics.Counter("relais_worker_agent_input_drops_total", "Agent audio inputs dropped by bounds or deadlines.", a.InputDrops),

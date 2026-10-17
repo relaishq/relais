@@ -14,5 +14,5 @@ func main() {
 		ledger.Main(os.Args[2:])
 		return
 	}
-	workerapp.Main(workerapp.Options{DefaultAgent: loopback.Name, Agents: []workerapp.Registration{loopback.Registration(), ledger.Registration(os.Getenv("DELAYED_LOOPBACK_LEDGER_URL"))}})
+	workerapp.Main(workerapp.Options{DefaultAgent: loopback.Name, Agents: []workerapp.Registration{loopback.Registration(), ledger.Registration(os.Getenv("DELAYED_LOOPBACK_LEDGER_URL")), ledger.StallRegistration(os.Getenv("DELAYED_LOOPBACK_LEDGER_URL"))}})
 }

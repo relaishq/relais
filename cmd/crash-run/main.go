@@ -22,6 +22,7 @@ import (
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/nettopology"
 	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/workerdriver"
 	"github.com/relaishq/relais/pkg/callharness"
 )
 
@@ -64,8 +65,13 @@ func recordPrivateRouteSettings(dir string, tuned bool, kernel string, routes []
 	return nil
 }
 
+var selectedWorker workerdriver.Options
+
 func binaries(bin string) error {
-	for _, name := range []string{"relais-relay", "relais-worker", "relais-control"} {
+	if err := selectedWorker.Check(bin); err != nil {
+		return err
+	}
+	for _, name := range []string{"relais-relay", "relais-control"} {
 		stat, err := os.Stat(filepath.Join(bin, name))
 		if err != nil || stat.IsDir() || stat.Mode()&0111 == 0 {
 			return fmt.Errorf("build %s first (make build)", name)
@@ -99,6 +105,14 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			processes[i].Stop()
 		}
 	}()
+	if stall != nil && stall.Variant == "ledger" {
+		child, ledgerEnv, err := stall.startLedger(ctx, manager, bin, dir, env)
+		if err != nil {
+			return result{}, err
+		}
+		processes = append(processes, child)
+		env = ledgerEnv
+	}
 	systemMetrics := newMetricsRun()
 	var uncertainBefore float64
 	var uncertainBeforeAvailable bool
@@ -174,7 +188,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	privateAPIs := []string{strings.TrimPrefix(relayReady.HTTP, "http://"), controlAddr}
 	controlArgs := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", relayReady.HTTP}
 	for _, name := range []string{"0", "1"} {
-		args := []string{filepath.Join(bin, "relais-worker"), "-media", roleBind(topology, "worker-"+name, false), "-http", roleBind(topology, "worker-"+name, false), "-name", name, "-control", controlURL, "-relay-leg", relayReady.Leg, "-relay-media", relayReady.Media}
+		args := selectedWorker.Command(bin, "-media", roleBind(topology, "worker-"+name, false), "-http", roleBind(topology, "worker-"+name, false), "-name", name, "-control", controlURL, "-relay-leg", relayReady.Leg, "-relay-media", relayReady.Media)
 		if os.Getenv("RELAIS_SRTP_DIAGNOSTICS") == "1" {
 			args = append(args, "-srtp-diagnostics")
 		}
@@ -245,7 +259,19 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	if profile != nil {
 		mediaDuration = after + 40*time.Second
 	}
-	go func() { sent <- call.SendMedia(mediaCtx, mediaDuration) }()
+	mediaGate := make(chan struct{})
+	if stall == nil || stall.Variant != "ledger" {
+		close(mediaGate)
+	}
+	go func() {
+		select {
+		case <-mediaCtx.Done():
+			sent <- mediaCtx.Err()
+			return
+		case <-mediaGate:
+		}
+		sent <- call.SendMedia(mediaCtx, mediaDuration)
+	}()
 	senderJoined := false
 	defer func() {
 		stopMedia()
@@ -347,24 +373,71 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			return result{}, err
 		}
 		defer stall.close()
+		if stall.Agent != nil {
+			stall.Agent.Before = stall.observeAgent(ctx, stall.WorkerURL)
+		}
 		if err := stall.Redis.Signal(syscall.SIGSTOP); err != nil {
 			return result{}, err
 		}
 		defer func() { _ = stall.Redis.Signal(syscall.SIGCONT) }()
 		stalledAt = time.Now()
+		if stall.Variant == "ledger" {
+			// Let any pre-pause write finish timing out before the token baseline.
+			// No input/task exists until this baseline has been captured.
+			select {
+			case <-ctx.Done():
+				return result{}, ctx.Err()
+			case <-time.After(2200 * time.Millisecond):
+			}
+			stall.Ledger.Before = stall.observeLedger(ctx)
+			close(mediaGate)
+		}
 		fmt.Printf("SIGSTOP store pid=%d session=%s stall=%s\n", stall.Redis.PID(), call.SessionID(), stall.Duration)
-		select {
-		case <-ctx.Done():
-			return result{}, ctx.Err()
-		case err := <-sent:
-			senderJoined = true
-			return result{}, fmt.Errorf("media ended during store stall: %v", err)
-		case <-time.After(stall.Duration):
+		if stall.Agent == nil {
+			select {
+			case <-ctx.Done():
+				return result{}, ctx.Err()
+			case err := <-sent:
+				senderJoined = true
+				return result{}, fmt.Errorf("media ended during store stall: %v", err)
+			case <-time.After(stall.Duration):
+			}
+		} else {
+			stallEnd := time.NewTimer(stall.Duration)
+			agentTick := time.NewTicker(100 * time.Millisecond)
+		waitStall:
+			for {
+				select {
+				case <-ctx.Done():
+					stallEnd.Stop()
+					agentTick.Stop()
+					return result{}, ctx.Err()
+				case err := <-sent:
+					stallEnd.Stop()
+					agentTick.Stop()
+					senderJoined = true
+					return result{}, fmt.Errorf("media ended during store stall: %v", err)
+				case <-stallEnd.C:
+					break waitStall
+				case <-agentTick.C:
+					if stall.Agent != nil {
+						if stall.Variant == "ledger" {
+							if frame := stall.observeLedger(ctx); frame != nil {
+								stall.Ledger.During = append(stall.Ledger.During, *frame)
+							}
+						} else if observed := stall.observeAgent(ctx, stall.WorkerURL); observed != nil {
+							stall.Agent.During = append(stall.Agent.During, *observed)
+						}
+					}
+				}
+			}
+			stallEnd.Stop()
+			agentTick.Stop()
 		}
 	}
 	killed := time.Now()
 	var profileActionErr error
-	if stall != nil && (stall.Variant == "live" || stall.Variant == "expired") {
+	if stall != nil && (stall.Variant == "live" || stall.Variant == "expired" || stall.Variant == "ledger") {
 		if err := stall.resume(stalledAt); err != nil {
 			return result{}, err
 		}
@@ -497,6 +570,9 @@ observe:
 			break observe
 		}
 	}
+	if stall != nil && stall.Agent != nil && stall.Variant != "expired" && len(status.Calls) == 1 {
+		stall.Agent.After = stall.observeAgent(ctx, workerURLs[status.Calls[0].Owner])
+	}
 	observedUntil := time.Now()
 	stopMedia()
 	var mediaErr error
@@ -516,6 +592,9 @@ observe:
 			stall.ObservationErrors = append(stall.ObservationErrors, "final status: "+err.Error())
 		}
 		stall.capture(ctx, status, relayReady.HTTP)
+	}
+	if stall != nil && stall.Variant == "ledger" {
+		stall.Ledger.After = stall.observeLedger(ctx)
 	}
 	report, err := call.Hangup(ctx)
 	if stall != nil {
@@ -569,7 +648,9 @@ func measure(report *callharness.Report, relayAddr string, after time.Duration) 
 	r.PLI = move.Recovery.FirstDecodedPLIAfterKill
 	flowing := len(move.Tracks) == 2
 	for _, track := range move.Tracks {
-		r.Gap = max(r.Gap, track.Gap)
+		if !workerdriver.IsCustom(selectedWorker.Agent) || track.Kind != "audio" {
+			r.Gap = max(r.Gap, track.Gap)
+		}
 		flowing = flowing && track.PacketsAfter > 0
 	}
 	video := report.Track("video")
@@ -615,9 +696,19 @@ func run() (err error) {
 	restoreOff := flag.Bool("route-restore-off", false, "disable route restore in relay-restart baseline trials")
 	compareRestore := flag.Bool("compare-restore", true, "compare restore on/off in relay-restart mode")
 	flag.DurationVar(&metricsInterval, "metrics-interval", time.Second, "private metrics scrape interval; 0 disables periodic scraping (pre-fault and final samples remain)")
-	storeStall := flag.String("store-stall", "", "store-stall variant: moderate (1.5s), long (5s), live (5s, survival), or expired (35s, no worker kill); owns throwaway Redis, loopback only")
+	storeStall := flag.String("store-stall", "", "store-stall variant: moderate (1.5s), long (5s), live (5s, survival), expired (35s, no worker kill), or ledger (8s, SideEffecting proof); owns throwaway Redis, loopback only")
 	stallDuration := flag.Duration("store-stall-duration", 0, "override selected store-stall duration")
+	selectedWorker.Flags(flag.CommandLine)
 	flag.Parse()
+	if err := selectedWorker.Validate(); err != nil {
+		return err
+	}
+	if workerdriver.IsCustom(selectedWorker.Agent) && (*terminate || *bufferOn || *compareBuffer || *replayLoss || *relayRestart || *relayStandby || *scenario != "") {
+		return errors.New("custom agents do not support -sigterm, -buffer, -buffer-lossy, -compare-buffer, -relay-restart, -relay-standby or -scenario: these modes require echo audio semantics")
+	}
+	if err := validateStallAgent(*storeStall, selectedWorker); err != nil {
+		return err
+	}
 	if *pauseWorker && (*terminate || *relayRestart || *relayStandby || *storeStall != "" || *scenario != "" || *bufferOn || *compareBuffer) {
 		return errors.New("worker-stop requires the plain worker takeover scenario")
 	}
@@ -923,7 +1014,11 @@ func run() (err error) {
 		signal = "SIGTERM drain"
 	}
 	for m, results := range all {
-		conclusive := conclusiveEvents(results)
+		custom := workerdriver.IsCustom(selectedWorker.Agent)
+		conclusive := conclusiveEvents(results, custom)
+		if custom {
+			fmt.Println("CUSTOM_AGENT_SCOPE: transport/video process smoke; echo audio loss/freshness acceptance NOT-APPLICABLE; raw caller measurements retained")
+		}
 		if !callharness.EnoughConclusive(conclusive, len(results)) {
 			return fmt.Errorf("mode=%s caller measurement coverage %d/%d below %d%%", labels[m], conclusive, len(results), callharness.MinimumConclusivePercent)
 		}
@@ -1047,10 +1142,18 @@ func printPathMedians(mode string, results []result, starts ...string) {
 	}
 }
 
-func conclusiveEvents(results []result) int {
+func conclusiveEvents(results []result, custom ...bool) int {
 	n := 0
 	for _, result := range results {
-		if result.Measurement.Conclusive() {
+		conclusive := result.Measurement.Conclusive()
+		if len(custom) > 0 && custom[0] {
+			m := result.Measurement
+			conclusive = m.SettleWindow > 0
+			for _, v := range []callharness.MetricVerdict{m.VideoLoss, m.Video.Verdict, m.ResumeVerdict, m.FirstContentVerdict, m.FirstNewContentVerdict, m.FirstLiveVerdict} {
+				conclusive = conclusive && v.Trusted
+			}
+		}
+		if conclusive {
 			n++
 		}
 	}

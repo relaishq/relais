@@ -394,9 +394,10 @@ func TestV2TasksCancellationDropsLate(t *testing.T) {
 type taskOutageStore struct {
 	uncertain bool
 	sessionstore.Store
-	blocked atomic.Bool
-	failed  atomic.Int32
-	source  netip.AddrPort
+	blocked      atomic.Bool
+	failed       atomic.Int32
+	acknowledged atomic.Int32
+	source       netip.AddrPort
 }
 
 func (s *taskOutageStore) PutState(ctx context.Context, lease sessionstore.Lease, data []byte) error {
@@ -413,7 +414,11 @@ func (s *taskOutageStore) PutState(ctx context.Context, lease sessionstore.Lease
 		}
 		return sessionstore.ErrTransient
 	}
-	return s.Store.PutState(ctx, lease, data)
+	err := s.Store.PutState(ctx, lease, data)
+	if err == nil && lease.Worker == s.source && len(snap.State.Agent.V2.Tasks) > 0 {
+		s.acknowledged.Add(1)
+	}
+	return err
 }
 func TestV2TasksForcedCheckpointOutage(t *testing.T) {
 	for _, mode := range []string{"recover", "expire", "uncertain"} {
@@ -424,6 +429,9 @@ func TestV2TasksForcedCheckpointOutage(t *testing.T) {
 				gate.blocked.Store(true)
 				launched := make(chan taskLaunch, 8)
 				handler := func(_ context.Context, run *agent.TaskRun) error {
+					if gate.acknowledged.Load() == 0 {
+						return fmt.Errorf("launch before later acknowledged intent checkpoint")
+					}
 					launched <- taskLaunch{run.ID(), run.Key(), run.After(), run.Spec().Request}
 					return nil
 				}
@@ -544,4 +552,46 @@ func TestV2TasksRetryPrefix(t *testing.T) {
 			})
 		}
 	}
+}
+
+// Exercise the production actor/task/checkpoint boundary while every write
+// containing the new intent fails. Local results and terminal callbacks must
+// arrive before recovery; the SideEffecting handler must still wait.
+func TestV2TasksLocalResultsDuringOutage(t *testing.T) {
+	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+		gate := &taskOutageStore{Store: store}
+		gate.blocked.Store(true)
+		effects := make(chan taskLaunch, 8)
+		handler := func(ctx context.Context, run *agent.TaskRun) error {
+			if run.Spec().Class == agent.SideEffecting {
+				if gate.acknowledged.Load() == 0 {
+					return fmt.Errorf("launch without acknowledged intent")
+				}
+				effects <- taskLaunch{run.ID(), run.Key(), run.After(), run.Spec().Request}
+				return nil
+			}
+			return run.Emit(ctx, 1, agent.Chunk{Data: []byte("local result")})
+		}
+		specs := []agent.TaskSpec{{Step: "effect", Kind: "test/v1", Class: agent.SideEffecting, Resume: agent.Retry, Timeout: 10 * time.Second}, {Step: "local", Kind: "test/v1", Class: agent.ReadOnly, Request: []byte("recording"), Timeout: 10 * time.Second}}
+		regs, results := taskRegistrations(specs, [2]agent.TaskHandler{handler, handler}, false)
+		sys := startAgentHarness(t, gate, agentHarnessSettings{v2: regs, saveInterval: time.Hour})
+		gate.source = sys.workers[0].LocalAddr()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		call, err := sys.h.Dial(ctx, CallOptions{})
+		require.NoError(t, err)
+		local := takeTaskFinal(t, results[0])
+		require.Len(t, local, 2)
+		require.Equal(t, []byte("local result"), local[0].Chunk.Data)
+		require.Equal(t, agent.OK, local[1].Outcome)
+		require.True(t, gate.blocked.Load(), "results must arrive before store recovery")
+		require.Eventually(t, func() bool { return gate.failed.Load() > 0 }, time.Second, time.Millisecond)
+		require.Empty(t, effects, "side effect launched during outage")
+		gate.blocked.Store(false)
+		takeTaskLaunch(t, effects)
+		final := takeTaskFinal(t, results[0])
+		require.Equal(t, agent.OK, final[len(final)-1].Outcome)
+		_, err = call.Hangup(ctx)
+		require.NoError(t, err)
+	})
 }

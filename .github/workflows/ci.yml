@@ -65,6 +65,10 @@ jobs:
       - name: Build
         run: make build
 
+      # The manual capacity gate and driver-override checks are judged by these scripts.
+      - name: Test CI evidence scripts
+        run: python3 -m unittest discover -s scripts/ci
+
       # The demo page's verdict logic decides the browser go/no-go.
       - name: Run demo page tests
         run: node --test cmd/relais-demo/*.test.cjs
@@ -312,7 +316,9 @@ jobs:
           path: bin/crash-run-*
 
   store-stall:
-    timeout-minutes: 25
+    # Legacy 30 trials plus six custom process cuts and v2 semantic assertions.
+    # The added ledger cut takes about 25s; it fits the existing 35m limit.
+    timeout-minutes: 35
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -337,8 +343,24 @@ jobs:
           done
       - name: Accept five beyond-budget ownership losses
         run: ./bin/crash-run -store-stall=expired -store-stall-duration=35s -runs=5 -after=10s
-      - name: Upload store-stall failure logs
-        if: failure()
+      - name: Accept custom-worker live stalls and stale takeover
+        run: |
+          for duration in 5s 15s 29s; do
+            ./bin/crash-run -worker-bin="$PWD/bin/delayed-loopback" -agent=delayed-loopback/v1 \
+              -store-stall=live -store-stall-duration="$duration" -runs=1 -after=10s
+          done
+          ./bin/crash-run -worker-bin="$PWD/bin/delayed-loopback" -agent=delayed-loopback/v1 \
+            -store-stall=moderate -runs=1 -after=10s
+          ./bin/crash-run -worker-bin="$PWD/bin/delayed-loopback" -agent=delayed-loopback/v1 \
+            -store-stall=expired -store-stall-duration=35s -runs=1 -after=10s
+      - name: Accept real SideEffecting ledger intents under Redis SIGSTOP
+        run: |
+          ./bin/crash-run -worker-bin="$PWD/bin/delayed-loopback" -agent=local-ledger/store-stall-v1 \
+            -store-stall=ledger -runs=1 -after=10s
+      - name: Assert forced intent, tokens, timeout, and local results during outage
+        run: ./scripts/ci/store-stall-v2.sh
+      - name: Upload store-stall evidence
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: store-stall-logs

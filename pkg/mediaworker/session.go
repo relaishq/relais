@@ -68,10 +68,12 @@ type session struct {
 	storeClock            time.Time // guarded by mu; last successful store-clock observation
 	storeClockAt          time.Time
 	snapshotBudgetMu      sync.Mutex
-	snapshotBytesBudget   snapshotBucket // guarded by snapshotBudgetMu
-	snapshotWriteInFlight bool           // guarded by snapshotBudgetMu; one serialized writer
-	durableAgent          agentState     // guarded by mu; last acknowledged durable agent pair
-	id                    string         // state.ID; never changes
+	snapshotBytesBudget   snapshotBucket   // guarded by snapshotBudgetMu
+	snapshotWriteInFlight bool             // guarded by snapshotBudgetMu; one serialized writer
+	sideEffectLaunches    uint64           // guarded by mu; process-local diagnostic, never checkpointed
+	lastTaskLaunch        *AgentTaskLaunch // guarded by mu; bounded last-launch witness
+	durableAgent          agentState       // guarded by mu; last acknowledged durable agent pair
+	id                    string           // state.ID; never changes
 	worker                *Worker
 	log                   logging.LeveledLogger
 

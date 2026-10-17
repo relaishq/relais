@@ -71,6 +71,12 @@
       s.cameraCallback=s.cameraVideo.requestVideoFrameCallback(frame);
     }else {draw();s.sourceTimer=setInterval(draw,1000/30);}
     s.canvasStream=canvas.captureStream(30);
+    if(s.source==='microphone') {
+      const microphone=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
+      if(!active(s)){microphone.getTracks().forEach((track)=>track.stop());throw new Error('call ended');}
+      s.microphoneStream=microphone;
+      return new MediaStream([...microphone.getAudioTracks(),...s.canvasStream.getVideoTracks()]);
+    }
     s.audioContext=new AudioContext();
     const osc=s.audioContext.createOscillator(),gain=s.audioContext.createGain(),dest=s.audioContext.createMediaStreamDestination();
     osc.frequency.value=440;gain.gain.value=0.15;osc.connect(gain).connect(dest);osc.start();
@@ -148,10 +154,13 @@
     let hold=s.hold || {status:'not-run',reason:'no event yet'};
     if(s.hold && M.hiddenDuring(s.hiddenPeriods,s.hold.startedMs,Math.min(s.stoppedAtMs || performance.now(),s.hold.dueMs)))hold={...hold,status:'invalid',verdict:{status:'invalid',reasons:['page hidden']}};
     const entries=s.events.map((entry)=>{let verdict=M.combine(entry.windowVerdict,hold);
-      const agentVerdict=entry.agentVerdict || (s.agentMode!=='echo' || entry.server?.agent_continuity?{status:'inconclusive',reasons:['required agent verdict missing']}:null);
+      const agentVerdict=entry.agentVerdict || ((!s.agentMode || s.agentMode==='demo') || entry.server?.agent_continuity?{status:'inconclusive',reasons:['required agent verdict missing']}:null);
       if(agentVerdict && agentVerdict.status!=='pass') {
         const status=verdict.status==='invalid'?'invalid':verdict.status==='fail' || agentVerdict.status==='fail'?'fail':'inconclusive';
         verdict={status,reasons:[...verdict.reasons,...agentVerdict.reasons.map((reason)=>`agent: ${reason}`)]};
+      }
+      if(s.agentMode && !['echo','demo'].includes(s.agentMode)) {
+        verdict={status:'inconclusive',reasons:[...verdict.reasons,'custom agent: echo gap and demo continuity checks do not establish application continuity; listen and inspect private agent diagnostics']};
       }
       return {...entry,agentVerdict,verdict,pass:verdict.status==='pass'?true:verdict.status==='fail'?false:null};});
     const connectedThroughout=!!s.readyAtMs && s.transitions.every((e)=>e.atMs<s.readyAtMs || e.kind!=='connection' || e.state==='connected' || (s.stopped && e.state==='closed' && e.atMs>=s.stoppedAtMs));
@@ -165,7 +174,7 @@
       measurement:{video:'decoded counter: observation time minus previous presentation time',audio:'total concealedSamples at receiver sample rate',sampleRate:s.sampleRate,statsClock:'RTCStats.timestamp',settleAfterResponseMs:2000,sourceCadence:'median of up to 60 observed draw intervals before the measurement window; source gaps over 1.5 times cadence contribute only excess beyond cadence to starvation diagnostics; baselines are excluded only when source excess overlaps their largest video gap',timeToFirstLiveFrameMs:'kill events only; null for moves, drains, and baselines. Browser kill-request issuance to first decoded counter beyond the source watermark sampled at largest content-gap recovery; conservative upper bound including request transit and owner lookup, without subtracting server clocks. Missing kill evidence is unverified'},
       media:{videoGapMs:s.lastContent===null?M.UNKNOWN:(s.stoppedAtMs || performance.now())-s.lastContent,presentationGapMs:s.lastVideo===null?M.UNKNOWN:(s.stoppedAtMs || performance.now())-s.lastVideo,audioPacketGapMs:s.lastAudio===null?M.UNKNOWN:(s.stoppedAtMs || performance.now())-s.lastAudio},
       overall:s.latest,connectedThroughout,noRenegotiation,transitions:s.transitions,ownerChanges:s.owners,descriptionChanges:s.descriptionChanges,
-      negotiationNeeded:s.negotiations,iceRestartCalls:s.restartCalls,sampleErrors:s.sampleErrors,testAudioState:s.audioContext?.state || null,audioPlayback:s.playback || 'pending',statusError:s.statusError,
+      negotiationNeeded:s.negotiations,iceRestartCalls:s.restartCalls,sampleErrors:s.sampleErrors,testAudioState:s.microphoneStream?'microphone '+s.microphoneStream.getAudioTracks()[0]?.readyState:s.audioContext?.state || null,audioPlayback:s.playback || 'pending',statusError:s.statusError,
       cameraSettings:s.cameraSettings || null,configuration:{baselineCount:s.baselineCount,headroomRatio:s.headroomRatio,playoutCoverageMinimum:0.9},sourceCounter:s.sourceCounter ?? M.UNKNOWN,counterReadFailures:s.counterReadFailures,
       visibility:s.hiddenPeriods,longTasks:s.longTasks,longHold:hold,events:entries,baselines:s.baselines,noiseFloor:M.noiseFloor(s.baselines,s.baselineCount),noiseGate:M.noiseGate(M.noiseFloor(s.baselines,s.baselineCount),s.baselineCount,100,s.headroomRatio),
       verdict:{status,reasons:entries.flatMap((e)=>e.verdict.reasons)},pass:status==='pass'?true:status==='fail'?false:null,srtpDecryptionFailures:M.UNKNOWN};
@@ -177,7 +186,7 @@
     for(const id of ['move','drain','kill'])el[id].disabled=!s || !s.armed || s.pc.connectionState!=='connected' || s.busy || !!s.script || !!s.checklist || (id==='drain' && s.status?.attach_mode);
     const fmt=(ms)=>typeof ms==='number'?`${Math.round(ms)} ms`:'unverified';
     const pool=r.poolSize===undefined?'unknown':`${r.poolSize}/${r.expectedPoolSize}${r.poolSize<r.expectedPoolSize?' WARNING: pool short':''}`;
-    const rows=[['Agent',r.agentMode],['Agent count / phase',r.agent?`${r.agent.position.count} / ${Math.round(r.agent.position.phase_samples/48)} ms`:r.agentStatusError || '—'],['Last agent resume',r.agent?.last_resume?`${r.agent.last_resume.kind}; checkpoint ${fmt(r.agent.last_resume.checkpoint_age_ms)}, snapshot ${fmt(r.agent.last_resume.snapshot_age_ms)}; duplicated input ${r.agent.last_resume.input_may_be_duplicated}`:'—'],['Agent continuity',r.agentMode==='demo'?r.agentVerdict.status:'—'],['Connection',r.state],['ICE',r.iceConnectionState || '—'],['Owner',r.owner || '—'],['Worker PIDs',JSON.stringify(r.workerPIDs || {})],['Pool',pool],['60 s hold',r.longHold?.status || 'not-run'],['Test audio',r.testAudioState || 'pending'],['Returned audio',r.audioPlayback || 'pending'],['Status',r.registrationError || r.statusError || 'OK'],['Baseline video median / max',`${fmt(r.noiseFloor?.video.medianMs)} / ${fmt(r.noiseFloor?.video.maxMs)}`],['Baseline audio median / max',`${fmt(r.noiseFloor?.audio.medianMs)} / ${fmt(r.noiseFloor?.audio.maxMs)}`],['Planned-event gap failure authority',r.noiseGate?.ready?'ready':r.noiseGate?.reason || 'not measured']];
+    const rows=[['Agent',r.agentMode],['Agent count / phase',r.agent?`${r.agent.position.count} / ${Math.round(r.agent.position.phase_samples/48)} ms`:r.agentStatusError || '—'],['Last agent resume',r.agent?.last_resume?`${r.agent.last_resume.kind}; checkpoint ${fmt(r.agent.last_resume.checkpoint_age_ms)}, snapshot ${fmt(r.agent.last_resume.snapshot_age_ms)}; duplicated input ${r.agent.last_resume.input_may_be_duplicated}`:'—'],['Agent continuity',r.agentMode==='demo'?r.agentVerdict.status:!['echo','demo','unverified'].includes(r.agentMode)?'Custom agent: listen and inspect diagnostics; stock verdicts do not apply':'—'],['Connection',r.state],['ICE',r.iceConnectionState || '—'],['Owner',r.owner || '—'],['Worker PIDs',JSON.stringify(r.workerPIDs || {})],['Pool',pool],['60 s hold',r.longHold?.status || 'not-run'],['Test audio',r.testAudioState || 'pending'],['Returned audio',r.audioPlayback || 'pending'],['Status',r.registrationError || r.statusError || 'OK'],['Baseline video median / max',`${fmt(r.noiseFloor?.video.medianMs)} / ${fmt(r.noiseFloor?.video.maxMs)}`],['Baseline audio median / max',`${fmt(r.noiseFloor?.audio.medianMs)} / ${fmt(r.noiseFloor?.audio.maxMs)}`],['Planned-event gap failure authority',r.noiseGate?.ready?'ready':r.noiseGate?.reason || 'not measured']];
     el.summary.replaceChildren(...rows.flatMap(([k,v])=>{const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=k;dd.textContent=v;return [dt,dd];}));
     el.gap.textContent=`Content gap ${fmt(r.media?.videoGapMs)} · packet age (diagnostic) ${fmt(r.media?.audioPacketGapMs)}`;
     el.moves.replaceChildren(...r.events.map((entry)=>{const row=document.createElement('tr');for(const value of [entry.at.slice(11,23),entry.kind,`${entry.from || '?'} → ${entry.to || '?'}`,fmt(entry.video.maxMs),fmt(entry.audio.maxMs),`${entry.verdict.status.toUpperCase()}: ${entry.verdict.reasons.join(', ')}`,entry.agentVerdict?`${entry.agentVerdict.status.toUpperCase()}: #${entry.agentVerdict.positionBefore?.count ?? '?'} → #${entry.agentVerdict.positionRestored?.count ?? '?'} → #${entry.agentVerdict.positionAfter?.count ?? '?'}; duplicated ${entry.agentVerdict.inputMayBeDuplicated ?? 'unknown'}`:'—']){const td=document.createElement('td');td.textContent=value;row.append(td);}return row;}));
@@ -259,7 +268,7 @@
     if(!Number.isInteger(baselineCount) || baselineCount<1)throw new Error('baselineCount must be a positive integer');
     if(!Number.isFinite(headroomRatio) || headroomRatio<=0 || headroomRatio>1)throw new Error('headroomRatio must be greater than zero and at most one');
     if(source==='test')source='pattern';
-    if(!['pattern','camera'].includes(source)) throw new Error('source must be pattern (or test) or camera');
+    if(!['pattern','camera','microphone'].includes(source)) throw new Error('source must be pattern (or test), camera, or microphone');
     el.source.value=source;
     const s={source,baselineCount,headroomRatio,pc:new RTCPeerConnection({bundlePolicy:'max-bundle',rtcpMuxPolicy:'require'}),...stamp(),startedAt:new Date().toISOString(),
       transitions:[],owners:[],sourceFrames:[],frames:[],frameMeta:[],contentFrames:[],counterReadFailures:[],hiddenPeriods:[],longTasks:[],baselines:[],samples:[],events:[],descriptionChanges:[],negotiations:[],restartCalls:[],sampleErrors:[],lastVideo:null,lastAudio:null,lastContent:null,maxCounter:null,armed:false,stopped:false};
@@ -269,7 +278,7 @@
         // Pin the selected agent before media starts or events are armed. Status
         // polling is diagnostic and must never decide continuity requirements.
         const initialStatus=await json('/demo/status');resultsEnabled=!!initialStatus.results_enabled;captureAttachToken(initialStatus);s.status=initialStatus;
-        if(!['demo','echo'].includes(initialStatus.selected_agent))throw new Error('selected agent missing or invalid');
+        if(typeof initialStatus.selected_agent!=='string' || !initialStatus.selected_agent.trim())throw new Error('selected agent missing or invalid');
         s.agentMode=initialStatus.selected_agent;
         if(!['on','off'].includes(initialStatus.relayBuffer))throw new Error('relay buffer mode missing or invalid');
         s.relayBuffer=initialStatus.relayBuffer;
@@ -341,7 +350,7 @@
   async function event(kind) {
     const s=call;
     if(!s || !s.armed || s.pc.connectionState!=='connected') throw new Error('start a connected call first');
-    if(!['demo','echo'].includes(s.agentMode))throw new Error('selected agent is not established');
+    if(typeof s.agentMode!=='string' || !s.agentMode.trim())throw new Error('selected agent is not established');
     if(s.busy) throw new Error('an action is already in progress');
     s.busy=true;el.error.textContent='';clearTimeout(s.holdTimer);
     if(s.hold) s.hold.status='superseded';
@@ -425,6 +434,7 @@
     s.pc.close();note(s,'connection','closed');note(s,'ice','closed');
     if(s.cameraCallback!==undefined)s.cameraVideo.cancelVideoFrameCallback(s.cameraCallback);
     if(s.cameraVideo){s.cameraVideo.pause();s.cameraVideo.srcObject=null;}
+    s.microphoneStream?.getTracks().forEach((t)=>t.stop());
     s.cameraStream?.getTracks().forEach((t)=>t.stop());s.canvasStream?.getTracks().forEach((t)=>t.stop());
     s.stream?.getTracks().forEach((t)=>t.stop());
     if(s.audioContext) await s.audioContext.close();
@@ -471,7 +481,7 @@
     a.href=url;a.download=`relais-${record.source || 'idle'}-${new Date().toISOString().replace(/[:.]/g,'-')}.json`;
     a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);void uploadResults(body);return record;
   }
-  el.source.value=params.get('source')==='camera'?'camera':'pattern';
+  el.source.value=['camera','microphone'].includes(params.get('source'))?params.get('source'):'pattern';
   window.relaisDemo={runChecklist,saveResults,start,runBaseline:(n=call?.baselineCount || 5,ms)=>run('baseline',n,ms),runMoves:(n,ms)=>run('move',n,ms),runKills:(n,ms)=>run('kill',n,ms),runDrains:(n,ms)=>run('drain',n,ms),results:()=>snapshot(call),agentStatus:async()=>{if(!call?.id)throw new Error("start a call first");return json(`/demo/agent/${encodeURIComponent(call.id)}`);},waitForLongHold,stop};
   el.save.onclick=saveResults;el.check.onclick=()=>runChecklist().catch(error);
   el.start.onclick=()=>start().catch(error);el.stop.onclick=()=>stop().catch(error);

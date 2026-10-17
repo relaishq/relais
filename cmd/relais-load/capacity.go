@@ -22,16 +22,17 @@ import (
 )
 
 type capacityStep struct {
-	RelayBufferEnabled             *bool              `json:"relay_buffer_enabled"`
-	StoreBytesByClient             map[string]float64 `json:"store_bytes_by_client_per_call_second"`
-	Kind                           string             `json:"kind"`
-	Verdict                        string             `json:"service_outcome"`
-	Causes                         []string           `json:"causes,omitempty"`
-	StoreCommandsPerCallSecond     float64            `json:"store_commands_per_call_second"`
-	StoreBytesPerCallSecond        float64            `json:"store_bytes_per_call_second"`
-	RelayPacketsPerSecond          float64            `json:"relay_packets_per_second"`
-	PublicEgressBytesPerCallSecond float64            `json:"public_egress_bytes_per_call_second"`
-	DrainSeconds                   float64            `json:"drain_seconds,omitempty"`
+	Custom                         *customCapacityEvidence `json:"custom_agent,omitempty"`
+	RelayBufferEnabled             *bool                   `json:"relay_buffer_enabled"`
+	StoreBytesByClient             map[string]float64      `json:"store_bytes_by_client_per_call_second"`
+	Kind                           string                  `json:"kind"`
+	Verdict                        string                  `json:"service_outcome"`
+	Causes                         []string                `json:"causes,omitempty"`
+	StoreCommandsPerCallSecond     float64                 `json:"store_commands_per_call_second"`
+	StoreBytesPerCallSecond        float64                 `json:"store_bytes_per_call_second"`
+	RelayPacketsPerSecond          float64                 `json:"relay_packets_per_second"`
+	PublicEgressBytesPerCallSecond float64                 `json:"public_egress_bytes_per_call_second"`
+	DrainSeconds                   float64                 `json:"drain_seconds,omitempty"`
 	// GeneratorOutcome is generator validity under the capacity rule; Run
 	// keeps the strict loadgen judge and processes[].saturated as raw evidence.
 	GeneratorOutcome string `json:"generator_outcome"`
@@ -41,30 +42,31 @@ type capacityStep struct {
 	Run            loadgen.RunReport `json:"run"`
 }
 type capacityReport struct {
-	GOOS                     string         `json:"goos"`
-	GOARCH                   string         `json:"goarch"`
-	GoVersion                string         `json:"go_version"`
-	HostCPUs                 int            `json:"host_cpus"`
-	Runner                   string         `json:"runner"`
-	Topology                 string         `json:"topology"`
-	Profile                  string         `json:"profile"`
-	CallersPerProcess        int            `json:"callers_per_process"`
-	Workers                  int            `json:"workers"`
-	WorkerCapacityLowerBound int            `json:"worker_capacity_lower_bound"`
-	RelayCapacityLowerBound  int            `json:"relay_capacity_lower_bound"`
-	RelayPPSLowerBound       float64        `json:"relay_packets_per_second_lower_bound"`
-	PlannedCallers           int            `json:"candidate_n_plus_one_callers"`
-	PlannedPerWorker         float64        `json:"candidate_calls_per_worker"`
-	SurvivingPerWorker       int            `json:"candidate_max_calls_per_survivor"`
-	PlannedValidated         bool           `json:"planned_load_validated"`
-	Outcome                  string         `json:"outcome"`
-	StoreOpsBudget           float64        `json:"store_commands_budget_per_call_second"`
-	StoreBytesBudget         float64        `json:"store_bytes_budget_per_call_second"`
-	Steps                    []capacityStep `json:"steps"`
-	CostStatus               string         `json:"cost_status"`
-	RelayBufferEnabled       *bool          `json:"relay_buffer_enabled"`
-	Cost                     *costReport    `json:"cost,omitempty"`
-	Note                     string         `json:"note"`
+	Custom                   *customCapacityBuild `json:"custom_agent,omitempty"`
+	GOOS                     string               `json:"goos"`
+	GOARCH                   string               `json:"goarch"`
+	GoVersion                string               `json:"go_version"`
+	HostCPUs                 int                  `json:"host_cpus"`
+	Runner                   string               `json:"runner"`
+	Topology                 string               `json:"topology"`
+	Profile                  string               `json:"profile"`
+	CallersPerProcess        int                  `json:"callers_per_process"`
+	Workers                  int                  `json:"workers"`
+	WorkerCapacityLowerBound int                  `json:"worker_capacity_lower_bound"`
+	RelayCapacityLowerBound  int                  `json:"relay_capacity_lower_bound"`
+	RelayPPSLowerBound       float64              `json:"relay_packets_per_second_lower_bound"`
+	PlannedCallers           int                  `json:"candidate_n_plus_one_callers"`
+	PlannedPerWorker         float64              `json:"candidate_calls_per_worker"`
+	SurvivingPerWorker       int                  `json:"candidate_max_calls_per_survivor"`
+	PlannedValidated         bool                 `json:"planned_load_validated"`
+	Outcome                  string               `json:"outcome"`
+	StoreOpsBudget           float64              `json:"store_commands_budget_per_call_second"`
+	StoreBytesBudget         float64              `json:"store_bytes_budget_per_call_second"`
+	Steps                    []capacityStep       `json:"steps"`
+	CostStatus               string               `json:"cost_status"`
+	RelayBufferEnabled       *bool                `json:"relay_buffer_enabled"`
+	Cost                     *costReport          `json:"cost,omitempty"`
+	Note                     string               `json:"note"`
 }
 
 // judgeCapacity never converts generator validity into a service pass. It
@@ -490,6 +492,13 @@ func runCapacity(ctx context.Context, m *clusterprocess.Manager, c config, root 
 		profile = "lan"
 	}
 	result := capacityReport{GOOS: runtime.GOOS, GOARCH: runtime.GOARCH, GoVersion: runtime.Version(), HostCPUs: runtime.NumCPU(), Runner: host, Topology: c.Topology, Profile: profile, CallersPerProcess: c.CallersPerProcess, Workers: c.Workers, StoreOpsBudget: c.StoreOpsBudget, StoreBytesBudget: c.StoreBytesBudget, Outcome: "inconclusive", CostStatus: "NOT-RUN(measurement incomplete)", Note: "Bounded short-run lower bounds, not sustained capacity or exact limits. Stop on the first failed or inconclusive step; generator saturation never establishes service capacity. Loopback is Mac/local evidence; netns is emulated unshaped LAN only. Region/far-caller and 60-second consent are not proven by these samples."}
+	if customCapacity(c) {
+		var err error
+		result.Custom, err = customBuild(c)
+		if err != nil {
+			return err
+		}
+	}
 	defer func() { fmt.Println("cost=" + result.CostStatus) }()
 	var prices *priceInput
 	if c.Prices != "" {
@@ -517,6 +526,16 @@ func runCapacity(ctx context.Context, m *clusterprocess.Manager, c config, root 
 		report, runErr := execute(runCtx, m, step, dir)
 		printReport(report)
 		judged := judgeCapacity(kind, report, c.StoreOpsBudget, c.StoreBytesBudget)
+		if customCapacity(c) {
+			generator, tolerated := capacityGenerator(report)
+			judged = judgeCapacityStep(kind, asyncCapacityView(generator), c.StoreOpsBudget, c.StoreBytesBudget, nil, true)
+			judged.Run, judged.ToleratedSlips = report, tolerated
+			judged.Custom = customEvidence(report)
+			if judged.Custom.Verdict != "pass" {
+				judged.Verdict = "fail"
+				judged.Causes = append(judged.Causes, judged.Custom.Blocking...)
+			}
+		}
 		if runErr != nil {
 			judged.Verdict = "inconclusive"
 			judged.Causes = append(judged.Causes, runErr.Error())

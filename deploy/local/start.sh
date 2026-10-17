@@ -7,18 +7,24 @@ bin=${BIN:-$here}
 state=${STATE_DIR:-$here/.relais-local}
 redis_port=${REDIS_PORT:-16380}
 port_base=${PORT_BASE:-34700}
-agent=${AGENT:-echo}
+agent=${AGENT:-}
+worker_bin=${WORKER_BIN:-}
 restart=''
 while [[ $# -gt 0 ]]; do
   case $1 in
     -bin|--bin) bin=$2; shift 2 ;;
+    -worker-bin|--worker-bin) worker_bin=$2; shift 2 ;;
+    -agent|--agent) agent=$2; shift 2 ;;
     -state|--state) state=$2; shift 2 ;;
     -redis-port|--redis-port) redis_port=$2; shift 2 ;;
     -restart-worker|--restart-worker) restart=$2; shift 2 ;;
-    -h|--help) echo "usage: $0 [-bin DIR] [-state DIR] [-redis-port PORT] [-restart-worker w1|w2]"; exit 0 ;;
+    -h|--help) echo "usage: $0 [-bin DIR] [-worker-bin PATH -agent NAME] [-agent NAME] [-state DIR] [-redis-port PORT] [-restart-worker w1|w2]"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+if [[ -z $restart && -n $worker_bin && -z ${agent//[[:space:]]/} ]]; then
+  echo '-agent is required with -worker-bin (or set AGENT with WORKER_BIN)' >&2; exit 2
+fi
 mkdir -p "$state"
 chmod 700 "$state"
 state=$(cd "$state" && pwd)
@@ -44,14 +50,23 @@ else
   fi
   bin=$(cd "$bin" && pwd)
 fi
+[[ -z $worker_bin || -n ${agent//[[:space:]]/} ]] || { echo '-agent is required with -worker-bin' >&2; exit 2; }
+agent=${agent:-echo}
 [[ $redis_port =~ ^[0-9]+$ && ${#redis_port} -le 5 ]] || { echo 'invalid Redis port' >&2; exit 2; }
 redis_port=$((10#$redis_port))
 [[ $redis_port -gt 0 && $redis_port -le 65535 && $redis_port != 6379 ]] || { echo 'Redis port 6379 is reserved; choose another port in 1..65535' >&2; exit 2; }
 [[ $port_base =~ ^[0-9]+$ && ${#port_base} -le 5 ]] || { echo 'invalid PORT_BASE' >&2; exit 2; }
 port_base=$((10#$port_base))
 [[ $port_base -gt 0 && $port_base -le 65454 ]] || { echo 'PORT_BASE must be in 1..65454' >&2; exit 2; }
-[[ $agent == echo || $agent == demo ]] || { echo 'AGENT must be echo or demo' >&2; exit 2; }
-for name in relais-relay relais-worker relais-control relais-signal; do
+[[ -n $worker_bin || $agent == echo || $agent == demo ]] || { echo 'AGENT must be echo or demo unless -worker-bin is set' >&2; exit 2; }
+worker_bin=${worker_bin:-$bin/relais-worker}
+[[ -x $worker_bin ]] || { echo "missing worker binary: $worker_bin" >&2; exit 1; }
+# Persist an absolute path so restart does not depend on its working directory.
+# Shell expansion only: the install test runs with a minimal tool PATH.
+worker_dir=.
+[[ $worker_bin == */* ]] && worker_dir=${worker_bin%/*}
+worker_bin=$(cd "${worker_dir:-/}" && pwd)/${worker_bin##*/}
+for name in relais-relay relais-control relais-signal; do
   [[ -x $bin/$name ]] || { echo "missing binary: $bin/$name (use -bin bin in a source checkout)" >&2; exit 1; }
 done
 for tool in redis-server openssl curl ps nohup; do command -v "$tool" >/dev/null || { echo "missing dependency: $tool" >&2; exit 1; }; done
@@ -105,7 +120,7 @@ worker() {
   local n=$1
   RELAIS_SESSIONSTORE_KEY=$(cat "$state/secrets/sessionstore.key")
   export RELAIS_SESSIONSTORE_KEY
-  start "worker-$n" "$bin/relais-worker" -name "w$n" -media "127.0.0.1:$((port_base+10+n))" -http "127.0.0.1:$((port_base+n))" \
+  start "worker-$n" "$worker_bin" -name "w$n" -media "127.0.0.1:$((port_base+10+n))" -http "127.0.0.1:$((port_base+n))" \
     -relay-leg "127.0.0.1:$((port_base+81))" -relay-media "127.0.0.1:$((port_base+80))" -control "$ctrl" -agent "$agent"
   unset RELAIS_SESSIONSTORE_KEY
   wait_ready "worker-$n" '"pid"'
@@ -123,7 +138,7 @@ if [[ -n $restart ]]; then
   exit 0
 fi
 : > "$state/pids"
-printf 'bin=%q\nredis_port=%q\nport_base=%q\nagent=%q\n' "$bin" "$redis_port" "$port_base" "$agent" > "$state/config"
+printf 'bin=%q\nredis_port=%q\nport_base=%q\nagent=%q\nworker_bin=%q\n' "$bin" "$redis_port" "$port_base" "$agent" "$worker_bin" > "$state/config"
 started=1
 start redis redis-server --bind 127.0.0.1 --port "$redis_port" --save '' --appendonly no --dir "$state/redis"
 wait_ready redis 'Ready to accept connections'

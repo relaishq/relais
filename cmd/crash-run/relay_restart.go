@@ -60,7 +60,7 @@ func relayRestartTrial(ctx context.Context, manager *clusterprocess.Manager, bin
 	controlURL := "http://" + controlAddr
 	controlArgs := []string{filepath.Join(bin, "relais-control"), "-http", controlAddr, "-relay", ready.HTTP}
 	for _, name := range []string{"0", "1"} {
-		_, worker, err := start("worker-"+name, filepath.Join(bin, "relais-worker"), "-media", "127.0.0.1:0", "-http", "127.0.0.1:0", "-name", name, "-control", controlURL, "-relay-leg", ready.Leg, "-relay-media", ready.Media)
+		_, worker, err := start("worker-"+name, selectedWorker.Command(bin, "-media", "127.0.0.1:0", "-http", "127.0.0.1:0", "-name", name, "-control", controlURL, "-relay-leg", ready.Leg, "-relay-media", ready.Media)...)
 		if err != nil {
 			return result{}, err
 		}

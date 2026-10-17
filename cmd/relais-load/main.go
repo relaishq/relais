@@ -24,12 +24,14 @@ import (
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/processrss"
 	"github.com/relaishq/relais/internal/processrun"
+	"github.com/relaishq/relais/internal/workerdriver"
 	"github.com/relaishq/relais/pkg/buildinfo"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/mediaworker"
 )
 
 type config struct {
+	Worker                                        workerdriver.Options
 	Soak                                          bool
 	ChaosInterval                                 time.Duration
 	Seed                                          int64
@@ -349,7 +351,7 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 			report.Causes = append(report.Causes, runErr.Error())
 		}
 	}()
-	t, err := startTopology(ctx, m, c.Bin, dir, c.Workers, c.Topology)
+	t, err := startTopology(ctx, m, c.Bin, dir, c.Workers, c.Topology, c.Worker)
 	if err != nil {
 		return report, err
 	}
@@ -434,6 +436,7 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 	}
 	var monitor *capacity.Monitor
 	if c.Capacity {
+		configureAgentSamples(c, t.Targets, generators)
 		monitor = capacity.Start(ctx, t.Targets, c.SampleEvery)
 		t.Monitor = monitor
 		defer func() {
@@ -530,6 +533,7 @@ func runArgs(args []string) error {
 	fs := flag.NewFlagSet("relais-load", flag.ContinueOnError)
 	version := buildinfo.VersionFlag(fs)
 	c := config{Limits: loadgen.DefaultLimits()}
+	c.Worker.Flags(fs)
 	var events eventFlags
 	child := fs.Bool("child", false, "internal caller-process mode")
 	externalCaller := fs.Bool("external-caller", false, "run callers against an existing system; starts no services, waits for local /start")
@@ -578,6 +582,9 @@ func runArgs(args []string) error {
 	fs.IntVar(&c.CalibrationMax, "calibration-max", 128, "maximum calibration count (a lower bound if unsaturated)")
 	fs.Var(&events, "event", "repeat after,move|kill|drain,count,worker; move count=0 means all eligible calls")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := c.Worker.Validate(); err != nil {
 		return err
 	}
 	if *version {
@@ -676,7 +683,10 @@ func runArgs(args []string) error {
 			return fmt.Errorf("soak memory sampling unavailable: %w", err)
 		}
 	}
-	for _, name := range []string{"relais-relay", "relais-worker", "relais-control"} {
+	if err := c.Worker.Check(bin); err != nil {
+		return err
+	}
+	for _, name := range []string{"relais-relay", "relais-control"} {
 		s, err := os.Stat(filepath.Join(bin, name))
 		if err != nil || s.IsDir() || s.Mode()&0111 == 0 {
 			return fmt.Errorf("make build first: missing executable %s", name)
