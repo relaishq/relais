@@ -1,19 +1,19 @@
 # ADR 0012: Split session checkpoints and bounded conversation history
 
 Status: **Proposed** 2026-10-17 — awaiting owner approval. Part of #188.
-Baseline: `1afa7077a5a28220e9b5662d2f7b974434e89a36` (accepted ADR 0011; runtime baseline v0.2.0).
+Baseline: `656fcdedbf25a80753bae48b8d5509ba02233128` (accepted ADR 0011; runtime baseline v0.2.0).
 
 ## Owner summary
 
 - Today the call record is rewritten in full ten times a second. This design splits it into parts.
-- Save connection keys when the call starts. Save connection counters and agent progress ten times a second.
+- Save the connection setup when the call starts. Save connection counters and agent progress ten times a second.
 - Save the agent's working notes and history only when they change. Refresh their encryption when the encryption key changes.
 - Save all parts in one database step that only the worker owning the call can perform.
 - Give new agents **3 KiB for notes and 8 KiB for history**. These are proposed sizes, not measured limits.
 - Demo A keeps its last four exchanges. This is a short memory, not a full-call transcript.
 - Saved text survives a crash. Live audio and unfinished AI requests can be lost or repeated.
 - First upgrade every server so it can read and write the new format. Then turn it on for new calls.
-- An older worker cannot take over a new-format call. Keep a release that can read and write it until those calls end before rolling back further.
+- An older worker cannot take over a new-format call. To roll back, first wait for those calls to end.
 - Do not plan for more calls yet. Prove the default on free runners, then on the chosen database.
 
 ## Context and evidence
@@ -144,7 +144,11 @@ Fresh nonces/keyed digests are required. A failure preserves the old published t
 read before retry. Update the session-store guide: distribute both keys first, switch all writers, then retire the old
 key only after every live published tuple references the new key (or its lease has expired) and no old-key command can
 still commit. Verify key IDs, including uncertain/draining calls; elapsed lease time alone is insufficient. Unreferenced
-old banks need no decrypt key and are never restore fallback.
+old banks need no decrypt key and are never restore fallback. Rotation is a host action and never returns
+app Capacity: when a session lacks write budget for the rotation commit, it keeps making ordinary hot commits that
+reference the old-key parts (key IDs are verified, so a mixed tuple is safe) and retries rotation when the budget
+refills; retirement still waits for verification. The B/C slice adds a key-ID inventory across all primaries (a
+count in control status) so the retirement check is observable.
 
 Local primitive probe, **2026-10-17**, on an owned throwaway non-default-port Redis: `redis-cli -p "$PORT" EVAL
 "redis.call('SET',KEYS[1],'new'); error('injected-before-publish')" 1 'work:{probe}:1'` retained its inactive write
