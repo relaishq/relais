@@ -73,6 +73,23 @@ func advanceDTLSSequence(data []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// A captured plaintext epoch is an invalid checkpoint, not an ordinary session
+// still waiting for its handshake. Keep it distinct so it cannot be suppressed
+// by the normal ErrNotEstablished path.
+var errDTLSCheckpointEpoch = fmt.Errorf("%w: DTLS checkpoint captured plaintext epoch", errBadState)
+
+// armDTLSBound runs under session.mu before the first write is sent. Refuse
+// plaintext setup: its exempt epoch cannot bound subsequent encrypted records.
+func (s *session) armDTLSBound(next dtlsSequenceCheckpoint) error {
+	if next.epoch == 0 {
+		return fmt.Errorf("%w: epoch %d", errDTLSCheckpointEpoch, next.epoch)
+	}
+	if s.dtlsProvisional == nil && s.dtlsAcknowledged == nil {
+		s.dtlsProvisional = &next
+	}
+	return nil
+}
+
 // allowDTLSDatagram runs under session.mu, at the last point before a caller
 // datagram can leave the worker. A coalesced datagram is all-or-nothing: every
 // record must fit. No caller bytes are sent when any record cannot be parsed.

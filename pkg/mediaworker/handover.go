@@ -646,30 +646,60 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 	return state, release, nil
 }
 
+// validateSnapshot is shared by legacy decoding and component assembly. It
+// validates without normalizing, so legacy decoding retains its v6 migration
+// and error classes while components can also enforce semantic canonicality.
+func validateSnapshot(snap *snapshot) error {
+	if err := validateSnapshotVersion(snap.Version); err != nil {
+		return err
+	}
+	state := &snap.State
+	switch {
+	case state.Version != snap.Version:
+		return fmt.Errorf("%w %d (want %d)", errStateVersion, state.Version, sessionStateVersion)
+	case state.ID == "" || state.ID != state.ICE.LocalUfrag:
+		return fmt.Errorf("%w: session ID %q, ICE ufrag %q", errBadState, state.ID, state.ICE.LocalUfrag)
+	case !state.ICE.RemoteAddr.IsValid():
+		return fmt.Errorf("%w: no nominated caller address", errBadState)
+	case len(snap.DTLSConnection) == 0 || state.SRTP.Profile == 0:
+		return fmt.Errorf("%w: no DTLS connection state", errBadState)
+	}
+	if snap.Version == v2SessionStateVersion || snap.Version == controlSessionStateVersion {
+		if state.Agent.V2 == nil || state.Agent.V2.Contract != v2Contract {
+			return fmt.Errorf("%w: missing v2 identity", errBadState)
+		}
+	} else if state.Agent.V2 != nil || snap.AgentMoveOnly != nil {
+		return fmt.Errorf("%w: v2 data in legacy envelope", errBadState)
+	}
+	if snap.AgentMoveOnly != nil && len(snap.AgentMoveOnly.Bytes) > v2MaxWireBytes {
+		return fmt.Errorf("%w: oversized move payload", errBadState)
+	}
+	return nil
+}
+
+func validateSnapshotVersion(version int) error {
+	if version != controlSessionStateVersion && version != v2SessionStateVersion && version != sessionStateVersion && version != 6 {
+		return fmt.Errorf("%w %d (want %d)", errStateVersion, version, sessionStateVersion)
+	}
+	return nil
+}
+
 func decodeSnapshot(data []byte) (*snapshot, error) {
 	var version struct{ Version int }
 	if err := json.Unmarshal(data, &version); err != nil {
 		return nil, fmt.Errorf("%w: %w", errBadState, err)
 	}
-	if version.Version != controlSessionStateVersion && version.Version != v2SessionStateVersion && version.Version != sessionStateVersion && version.Version != 6 {
-		return nil, fmt.Errorf("%w %d (want %d)", errStateVersion, version.Version, sessionStateVersion)
+	if err := validateSnapshotVersion(version.Version); err != nil {
+		return nil, err
 	}
-
 	var snap snapshot
 	if err := json.Unmarshal(data, &snap); err != nil {
 		return nil, fmt.Errorf("%w: %w", errBadState, err)
 	}
-	state := &snap.State
-	switch {
-	case state.Version != version.Version:
-		return nil, fmt.Errorf("%w %d (want %d)", errStateVersion, state.Version, sessionStateVersion)
-	case state.ID == "" || state.ID != state.ICE.LocalUfrag:
-		return nil, fmt.Errorf("%w: session ID %q, ICE ufrag %q", errBadState, state.ID, state.ICE.LocalUfrag)
-	case !state.ICE.RemoteAddr.IsValid():
-		return nil, fmt.Errorf("%w: no nominated caller address", errBadState)
-	case len(snap.DTLSConnection) == 0 || state.SRTP.Profile == 0:
-		return nil, fmt.Errorf("%w: no DTLS connection state", errBadState)
+	if err := validateSnapshot(&snap); err != nil {
+		return nil, err
 	}
+	state := &snap.State
 	if version.Version == 6 {
 		var legacy struct {
 			State struct{ Agent json.RawMessage }
@@ -679,24 +709,13 @@ func decodeSnapshot(data []byte) (*snapshot, error) {
 		}
 		state.Agent.legacy = len(legacy.State.Agent) == 0
 	}
-	if version.Version == v2SessionStateVersion || version.Version == controlSessionStateVersion {
-		if state.Agent.V2 == nil || state.Agent.V2.Contract != v2Contract {
-			return nil, fmt.Errorf("%w: missing v2 identity", errBadState)
-		}
-	} else {
-		if state.Agent.V2 != nil || snap.AgentMoveOnly != nil {
-			return nil, fmt.Errorf("%w: v2 data in legacy envelope", errBadState)
-		}
+	if version.Version != v2SessionStateVersion && version.Version != controlSessionStateVersion {
 		state.Version = sessionStateVersion
 		snap.Version = sessionStateVersion
-	}
-	if snap.AgentMoveOnly != nil && len(snap.AgentMoveOnly.Bytes) > v2MaxWireBytes {
-		return nil, fmt.Errorf("%w: oversized move payload", errBadState)
 	}
 	if state.SRTP.Inbound == nil {
 		state.SRTP.Inbound = make(map[uint32]uint64)
 	}
-
 	return &snap, nil
 }
 

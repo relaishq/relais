@@ -19,7 +19,7 @@ import (
 // A lost-flight regression: the server's last flight (CCS epoch 0 + Finished epoch 1) is
 // lost once. The worker completes its handshake and writes the first
 // checkpoint (production order in connect). The real Pion client then
-// retransmits flight 5 on its own timer; can it ever complete?
+// retransmits flight 5 on its own timer and completes the handshake.
 func TestLostServerFinalFlightCompletesAfterCheckpoint(t *testing.T) {
 	store := sessionstore.NewMemory()
 	snap := dtlsFixture(t)
