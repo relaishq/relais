@@ -23,11 +23,12 @@ type Bounds struct {
 }
 
 type Registration struct {
-	Name      string
-	Factory   agent.Factory
-	TaskKinds []string
-	Tasks     map[string]agent.TaskHandler
-	Bounds    Bounds
+	Name          string
+	Factory       agent.Factory
+	TaskKinds     []string
+	Tasks         map[string]agent.TaskHandler
+	SkipDrainWait []string
+	Bounds        Bounds
 	// Declared retains the app declaration before resolving host defaults.
 	Declared agent.Limits
 }
@@ -37,6 +38,7 @@ type Registration struct {
 func Factory(r Registration) legacy.Factory {
 	r.Declared = agent.Limits(r.Bounds)
 	r.Tasks = maps.Clone(r.Tasks)
+	r.SkipDrainWait = slices.Clone(r.SkipDrainWait)
 	r.TaskKinds = slices.Clone(r.TaskKinds)
 	for kind := range r.Tasks {
 		r.TaskKinds = append(r.TaskKinds, kind)

@@ -32,7 +32,8 @@ func (w *Worker) BeginDrain() {
 }
 
 // QuiesceTasks stops new v2 task launches and waits concurrently for existing
-// handlers and their terminal mailbox admissions. Starts remain never_launched.
+// handlers and their terminal mailbox admissions, except ReadOnly tasks whose
+// kinds opt out via Registration.SkipDrainWait. Starts remain never_launched.
 // Actors, pacers, checkpoints and heartbeats continue independently. The launch
 // fence remains set after the context ends, through the following urgent drain.
 func (w *Worker) QuiesceTasks(ctx context.Context) error {

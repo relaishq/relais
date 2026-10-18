@@ -101,7 +101,7 @@ func Registration(provider Provider) workerapp.Registration {
 		}
 		_, canWarm := provider.(interface{ Warm(context.Context) })
 		return &Agent{canWarm: canWarm, state: State{Phase: "idle"}, available: provider != nil && provider.Available(), limit: limit}
-	}, Tasks: handlers(provider), Limits: agent.Limits{MaxStateBytes: MaxStateBytes}}
+	}, Tasks: handlers(provider), SkipDrainWait: []string{PlayKind}, Limits: agent.Limits{MaxStateBytes: MaxStateBytes}}
 }
 func (a *Agent) reset(outcome agent.Outcome, code, notice string) agent.Effects {
 	a.state.Phase, a.state.Outcome, a.state.Error, a.state.Notice = "idle", outcome, code, notice

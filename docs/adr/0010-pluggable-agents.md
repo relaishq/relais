@@ -297,6 +297,13 @@ Then call /workers/{name}/drain with the remaining deadline. Never-launched requ
 if the wait expires, unfinished handlers use urgent export. Heartbeats/private API stay live
 until moves finish (`cmd/relais-worker/main.go:94-111`; `cmd/relais-worker/drain.go:14-36`).
 
+A worker-local `workerapp.Registration.SkipDrainWait` list may exclude named task kinds
+from the handler wait, but only for tasks whose `TaskSpec.Class` is `ReadOnly`.
+`SideEffecting` tasks always count, even for a listed kind. Playback-only tasks can
+resume exactly above `After()` through the existing urgent export, so waiting buys
+nothing; list only `Retry` kinds that resume deterministically. The list is registration configuration, never persisted task or snapshot state;
+new launches remain fenced, and unfinished skipped tasks move when the wait ends.
+
 Use a monotonic output pacer independent of ingress, a 48 kHz RTP clock, and host-validated
 packet duration/MTU, SSRC, sequence and encryption counters. Encoded output type stays generic;
 v1 accepts `audio/opus` only. Parse duration in the host; no public Samples field. Initialize

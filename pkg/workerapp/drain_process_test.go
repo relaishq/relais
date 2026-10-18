@@ -39,9 +39,24 @@ type drainProcessResult struct {
 	Final   bool
 	Data    string
 }
-type drainProcessAgent struct{ Results []drainProcessResult }
+type drainProcessAgent struct {
+	Mode    string
+	Results []drainProcessResult
+}
 
 func (a *drainProcessAgent) Handle(_ context.Context, e agent.Event) (agent.Effects, error) {
+	if e.Kind == agent.Started && strings.HasPrefix(a.Mode, "playback-") {
+		class := agent.ReadOnly
+		if a.Mode == "playback-side-effecting" {
+			class = agent.SideEffecting
+		}
+		tasks := []agent.TaskSpec{{Step: "play", Kind: "drain/playback", Class: class, Resume: agent.Retry}}
+		if a.Mode == "playback-mixed" {
+			tasks = append(tasks, agent.TaskSpec{Step: "other", Kind: "drain/task", Class: agent.ReadOnly, Resume: agent.Retry, Request: []byte("other finished")})
+		}
+		tasks = append(tasks, agent.TaskSpec{Step: "queued", Kind: "drain/task", Class: agent.ReadOnly, Resume: agent.Abandon, Request: []byte("queued exact request")})
+		return agent.Effects{StartTasks: tasks}, nil
+	}
 	if e.Kind == agent.Started {
 		return agent.Effects{StartTasks: []agent.TaskSpec{
 			{Step: "running", Kind: "drain/task", Class: agent.ReadOnly, Resume: agent.Abandon, Request: []byte("running request")},
@@ -70,7 +85,8 @@ func TestDrainProcessWorker(t *testing.T) {
 	var args []string
 	require.NoError(t, json.Unmarshal([]byte(os.Getenv("RELAIS_DRAIN_TEST_ARGS")), &args))
 	os.Args = append([]string{os.Args[0]}, args...)
-	reg := workerapp.Registration{Name: "drain-test/v1", Factory: func(agent.FactoryArgs) agent.Agent { return new(drainProcessAgent) }, Limits: agent.Limits{MaxActiveTasks: 1}, Tasks: map[string]agent.TaskHandler{
+	mode := os.Getenv("RELAIS_DRAIN_TEST_MODE")
+	reg := workerapp.Registration{Name: "drain-test/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &drainProcessAgent{Mode: mode} }, Limits: agent.Limits{MaxActiveTasks: 1}, Tasks: map[string]agent.TaskHandler{
 		"drain/task": func(ctx context.Context, run *agent.TaskRun) error {
 			if os.Getenv("RELAIS_DRAIN_TEST_SOURCE") == "1" {
 				req, err := http.NewRequestWithContext(ctx, http.MethodGet, os.Getenv("RELAIS_DRAIN_TEST_GATE"), nil)
@@ -84,8 +100,49 @@ func TestDrainProcessWorker(t *testing.T) {
 				_, _ = io.Copy(io.Discard, response.Body)
 				_ = response.Body.Close()
 			}
+			if run.Spec().Step == "other" {
+				return nil // One terminal admission when the 300 ms gate opens.
+			}
 			return run.Emit(ctx, run.After()+1, agent.Chunk{Data: run.Spec().Request})
 		}}}
+	if strings.HasPrefix(mode, "playback-") {
+		reg.Limits.MaxStateBytes = 4096 // Retain the 16-chunk transcript in app state.
+		if mode != "playback-wait" {
+			reg.SkipDrainWait = []string{"drain/playback"}
+		}
+		if mode == "playback-mixed" {
+			reg.Limits.MaxActiveTasks = 2
+		}
+		reg.Tasks["drain/playback"] = func(ctx context.Context, run *agent.TaskRun) error {
+			notify := func(path string) error {
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, os.Getenv("RELAIS_DRAIN_TEST_GATE")+path, nil)
+				if err != nil {
+					return err
+				}
+				response, err := http.DefaultClient.Do(req)
+				if err != nil {
+					return err
+				}
+				return response.Body.Close()
+			}
+			if os.Getenv("RELAIS_DRAIN_TEST_SOURCE") != "1" {
+				if err := notify("/after/" + strconv.FormatUint(run.After(), 10)); err != nil {
+					return err
+				}
+			}
+			for seq := run.After() + 1; seq <= 16; seq++ {
+				if err := run.Emit(ctx, seq, agent.Chunk{Data: []byte(fmt.Sprintf("chunk/%02d", seq))}); err != nil {
+					return err
+				}
+				if seq == 1 && os.Getenv("RELAIS_DRAIN_TEST_SOURCE") == "1" {
+					if err := notify("/playback"); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}
+	}
 	workerapp.Main(workerapp.Options{DefaultAgent: reg.Name, Agents: []workerapp.Registration{reg}})
 }
 
@@ -104,6 +161,22 @@ func TestWorkerSIGTERMQuiescence(t *testing.T) {
 		t.Run(mode, func(t *testing.T) { testWorkerDrainProcess(t, addr, mode) })
 	}
 }
+func TestWorkerSIGTERMPlaybackDrainWait(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real process playback drain matrix")
+	}
+	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	if addr == "" {
+		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
+			t.Fatal("dedicated Redis required")
+		}
+		t.Skip("dedicated Redis not configured")
+	}
+	for _, mode := range []string{"playback-skip", "playback-wait", "playback-side-effecting", "playback-mixed"} {
+		t.Run(mode, func(t *testing.T) { testWorkerDrainProcess(t, addr, mode) })
+	}
+}
+
 func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
@@ -121,8 +194,26 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 	var release sync.Once
 	t.Cleanup(func() { release.Do(func() { close(gate) }) })
 	entered := make(chan struct{}, 128)
+	resumed := make(chan uint64, 1)
 	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/after/") {
+			after, err := strconv.ParseUint(strings.TrimPrefix(r.URL.Path, "/after/"), 10, 64)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			select {
+			case resumed <- after:
+			default:
+			}
+			w.WriteHeader(204)
+			return
+		}
 		entered <- struct{}{}
+		if r.URL.Path == "/playback" {
+			w.WriteHeader(204)
+			return
+		}
 		select {
 		case <-gate:
 		case <-r.Context().Done():
@@ -169,9 +260,12 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 		if mode != "unset" {
 			args = append(args, "-agent-drain-move-reserve=1s")
 		}
+		if strings.HasPrefix(mode, "playback-") {
+			args = append(args, "-agent-max-snapshot-bytes=16384", "-agent-snapshot-burst-bytes=65536", "-agent-snapshot-bytes-per-second=262144")
+		}
 		encoded, err := json.Marshal(args)
 		require.NoError(t, err)
-		env := append(os.Environ(), "RELAIS_DRAIN_TEST_CHILD=1", "RELAIS_DRAIN_TEST_ARGS="+string(encoded), "RELAIS_DRAIN_TEST_GATE="+service.URL, "RELAIS_DRAIN_TEST_SOURCE="+strconv.Itoa(1-i), "RELAIS_SESSIONSTORE_KEY="+hex.EncodeToString(make([]byte, 32)), "GORACE=atexit_sleep_ms=0")
+		env := append(os.Environ(), "RELAIS_DRAIN_TEST_CHILD=1", "RELAIS_DRAIN_TEST_MODE="+mode, "RELAIS_DRAIN_TEST_ARGS="+string(encoded), "RELAIS_DRAIN_TEST_GATE="+service.URL, "RELAIS_DRAIN_TEST_SOURCE="+strconv.Itoa(1-i), "RELAIS_SESSIONSTORE_KEY="+hex.EncodeToString(make([]byte, 32)), "GORACE=atexit_sleep_ms=0")
 		childDir := t.TempDir()
 		childLogs[i] = filepath.Join(childDir, "worker.log")
 		child, err := clusterprocess.Start(childDir, "worker", env, os.Args[0], "-test.run=^TestDrainProcessWorker$")
@@ -219,6 +313,13 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 			t.Fatal("handler never entered")
 		}
 	}
+	if mode == "playback-mixed" {
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			t.Fatal("other handler never entered")
+		}
+	}
 	// Kill recovery needs a durable launched task intent, not an empty checkpoint.
 	require.Eventually(t, func() bool {
 		b, err := store.GetState(ctx, calls[0].SessionID())
@@ -245,6 +346,19 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 		case <-ctx.Done():
 			t.Fatal("no placement mark")
 		}
+	}
+	if mode == "playback-mixed" {
+		// Release the unlisted handler 300 ms after SIGTERM, while playback
+		// remains active for about 1.6 s. No agent callback blocks on this gate.
+		if remaining := time.Until(start.Add(300 * time.Millisecond)); remaining > 0 {
+			time.Sleep(remaining)
+		}
+		select {
+		case <-drained:
+			t.Fatal("drain did not wait for the unlisted handler")
+		default:
+		}
+		release.Do(func() { close(gate) })
 	}
 	if mode == "concurrent" || mode == "kill" {
 		require.Eventually(t, func() bool {
@@ -307,7 +421,14 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 			if mode == "unset" || mode == "mark-fails" {
 				require.Less(t, elapsed, 500*time.Millisecond)
 			}
-			if mode == "budget" || mode == "store-stall" {
+			if mode == "playback-skip" {
+				require.Less(t, elapsed, 700*time.Millisecond, "listed ReadOnly playback must not spend the 1s task budget")
+			}
+			if mode == "playback-mixed" {
+				require.GreaterOrEqual(t, elapsed, 300*time.Millisecond)
+				require.Less(t, elapsed, 800*time.Millisecond, "only the unlisted handler and its terminal admission delay drain")
+			}
+			if mode == "budget" || mode == "store-stall" || mode == "playback-wait" || mode == "playback-side-effecting" {
 				require.Greater(t, elapsed, 850*time.Millisecond)
 				require.Less(t, elapsed, 1800*time.Millisecond)
 			}
@@ -329,17 +450,33 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 			t.Fatal("worker did not close within deadline")
 		}
 	}
+	if strings.HasPrefix(mode, "playback-") {
+		select {
+		case after := <-resumed:
+			require.Greater(t, after, uint64(0), "target must resume above the accepted source prefix")
+			require.Less(t, after, uint64(16))
+			t.Logf("playback resumed after=%d", after)
+		case <-ctx.Done():
+			t.Fatal("playback did not resume on target")
+		}
+	}
 	// The queued task's final result follows its first chunk by the host's
 	// 100 ms emission spacing, so concurrent mode must wait for all four.
 	wantResults := 3
 	if mode == "concurrent" {
 		wantResults = 4
 	}
+	if strings.HasPrefix(mode, "playback-") {
+		wantResults = 19 // 16 chunks + playback final + queued chunk and final
+		if mode == "playback-mixed" {
+			wantResults++
+		}
+	}
 	for _, call := range calls {
 		var state drainProcessAgent
 		var lastStatus mediaworker.WorkerStatus
 		var lastReadError error
-		require.Eventually(t, func() bool {
+		readResults := func() bool {
 			response, err := http.Get(remotes[1].URL + "/status?agent-session=" + call.SessionID())
 			if err != nil {
 				return false
@@ -353,8 +490,31 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 				return false
 			}
 			return len(state.Results) >= wantResults || mode == "kill" && len(state.Results) > 0
-		}, 8*time.Second, 10*time.Millisecond, "session %s results=%+v status=%+v read_error=%v", call.SessionID(), &state, &lastStatus, &lastReadError)
-		if mode == "concurrent" {
+		}
+		// Poll on this goroutine so a timeout cannot format state concurrently
+		// with an in-flight HTTP read or JSON decode.
+		deadline := time.Now().Add(8 * time.Second)
+		for !readResults() {
+			if time.Now().After(deadline) {
+				t.Fatalf("session %s results=%+v status=%+v read_error=%v", call.SessionID(), state, lastStatus, lastReadError)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if strings.HasPrefix(mode, "playback-") {
+			require.Len(t, state.Results, wantResults)
+			var chunks []string
+			for _, result := range state.Results {
+				require.Equal(t, agent.OK, result.Outcome)
+				if strings.HasPrefix(result.Data, "chunk/") {
+					chunks = append(chunks, result.Data)
+				}
+			}
+			var want []string
+			for seq := 1; seq <= 16; seq++ {
+				want = append(want, fmt.Sprintf("chunk/%02d", seq))
+			}
+			require.Equal(t, want, chunks, "accepted playback prefix and resumed suffix must have no gaps or duplicates")
+		} else if mode == "concurrent" {
 			require.Len(t, state.Results, 4)
 			for _, r := range state.Results {
 				require.Equal(t, agent.OK, r.Outcome)
@@ -362,8 +522,16 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 		} else {
 			require.Equal(t, agent.OutcomeUnknown, state.Results[0].Outcome)
 		}
-		if mode != "kill" {
+		if mode != "kill" && !strings.HasPrefix(mode, "playback-") {
 			require.Equal(t, "queued exact request", state.Results[len(state.Results)-2].Data)
+		} else if mode != "kill" {
+			var queued int
+			for _, result := range state.Results {
+				if result.Data == "queued exact request" {
+					queued++
+				}
+			}
+			require.Equal(t, 1, queued)
 		}
 		_, err = call.Hangup(ctx)
 		require.NoError(t, err)

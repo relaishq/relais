@@ -2,6 +2,7 @@ package workerapp
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	agent "github.com/relaishq/relais/pkg/agent/v2"
@@ -32,4 +33,21 @@ func TestRegistrationStartupAdmission(t *testing.T) {
 	cfg, err := registeredAgents(Options{Agents: []Registration{reg}}, reg.Name, limits)
 	require.NoError(t, err)
 	require.Len(t, cfg.Registrations, 1)
+}
+
+func TestRegistrationSkipDrainWaitAdmission(t *testing.T) {
+	for _, kind := range []string{"known/v1", "unknown/v1", "", string([]byte{0xff})} {
+		t.Run(fmt.Sprintf("%q", kind), func(t *testing.T) {
+			reg := Registration{Name: "external/v1", Factory: func(agent.FactoryArgs) agent.Agent { return nil },
+				Tasks:         map[string]agent.TaskHandler{"known/v1": func(context.Context, *agent.TaskRun) error { return nil }},
+				SkipDrainWait: []string{kind}}
+			_, err := registeredAgents(Options{Agents: []Registration{reg}}, reg.Name, mediaworker.SnapshotLimits{})
+			if kind == "known/v1" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, agent.ErrIncompatibleAgent)
+				require.ErrorContains(t, err, "skip-drain-wait")
+			}
+		})
+	}
 }
