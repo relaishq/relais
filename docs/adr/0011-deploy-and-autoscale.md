@@ -61,18 +61,22 @@ demonstrates customer-account installation and stack/parameter updates [E2]; it 
 Preview parameters: release/artifact digest, region/AZs, DNS/certificate, instance types, fixed worker count, capacity profile,
 drain budgets, retention and secret references. No vendor access role. Create a dedicated VPC; defer existing-VPC support until
 private API authentication. Public relay UDP and HTTPS signaling are the only ingress surfaces. Three static private worker IPs feed
-production `-worker name=http://address` bootstrap; no dynamic registration or autoscaling is needed for preview. Provision and
+production `-worker name=http://address` bootstrap; no dynamic registration or autoscaling is needed for preview. Until slice 2 lands,
+control exits if any listed worker's status or relay registration fails (`cmd/relais-control/main.go`); a restart with one worker
+down crash-loops and blocks new placement. Slice 2 adds tolerant fixed bootstrap. Provision and
 price private-subnet egress for artifacts, AWS APIs and providers. Measure private RTT and jitter before applying ADR 0007's Linux
 route tuning; do not extend it to public paths.
 
 Updates replace the pinned template through a reviewed change set [E4]. Keep secrets, store namespace, encryption key and relay
 address resources stable. Protect store/address resources from accidental replacement; deletion retains the store and secrets by
 default and documents their continuing cost. CloudFormation rollback cannot reverse a newly written agent state format. A release
-supplies a tested compatibility manifest and rollback boundary; reject an unsupported live upgrade before starting. Roll compatible
-workers one at a time with surge capacity, then relay/control per [ADR 0009's
-order](0009-planned-move-export-replay.md#compatibility-and-upgrade-order). Preview worker updates pre-drain through the running
-control process before stopping each worker; re-bootstrap control when the fixed topology changes. Later ASG updates use the drain
-coordinator. No TURN relay or TCP/TLS media fallback exists: callers whose networks block UDP fail (deploy guide).
+supplies a tested compatibility manifest and rollback boundary; reject an unsupported live upgrade before starting. Preview rolls
+compatible workers in place, one at a time: pre-drain, stop, wait for control to declare the old registration dead and recovery settled,
+then use `/private/workers/{name}/replace` and the existing rejoin handshake (`pkg/controlplane/heartbeat_http.go`, deploy guide).
+Admission tightens while N=2; pause rollout if remaining capacity is insufficient. Then update relay/control per
+[ADR 0009's order](0009-planned-move-export-replay.md#compatibility-and-upgrade-order). An alternative is a pre-listed surge slot:
+a seventh EC2 machine during rollout. Later ASG updates use the drain coordinator. No TURN or TCP/TLS media fallback exists;
+callers whose networks block UDP fail (deploy guide).
 
 CI on free GitHub-hosted runners: pinned `cfn-lint` schemas [E5], security-policy assertions, parameter branches, bootstrap/digest
 checks, and cloud-API fakes for create/update/delete/rollback and duplicate lifecycle events. Real-process Linux tests exercise
@@ -168,8 +172,8 @@ timeout above dispatch plus drain/confirmation. Proposed hook heartbeat timeout:
 
 **Hooks alone do not prevent eventual termination:** maximum wait is **48 h or 100 heartbeat intervals**, whichever is smaller [E7].
 With retention and default `ABANDON`, failed/timed-out drains retain the instance [E23]. Retention cannot save a lost machine or
-stop Spot reclamation; those bypass ASG protections [E24]. Start On-Demand. A direct SIGTERM outside this coordinator can still
-close remaining calls at its deadline; document that limit. Existing crash/rollback limits remain.
+stop Spot reclamation. Direct EC2 `TerminateInstances` also bypasses lifecycle policies [E24]; deny it on worker instances in IAM
+and use `TerminateInstanceInAutoScalingGroup`. Start On-Demand. Direct SIGTERM can still close calls at its deadline; existing limits remain.
 
 Measure `decision_to_empty` from the durable removal decision, before mark/dispatch, until independent empty verification. Also
 record decision-to-SIGTERM, last-adoption, full-drain, cloud termination and per-call decrypted audio/video gaps. Include failed,
@@ -321,9 +325,10 @@ them only when selected. Preview's proposed zero-call floor is:
 
 Counts are design choices, not measurements. ALB/WAF, NAT or endpoints and other managed services also cost money and are outside
 this machine count. A smaller evaluation profile is sensible: two workers, one relay host, shared control/signaling host and two
-store nodes (**four EC2 + two store nodes**). It gives up a worker failure plus a further move when only one worker survives; it
-also couples control and signaling failure/resource pressure. Use it for evaluation only, cap its load separately, and make no
-preview N+1-plus-move claim. Never reduce durable store replication. `P*` are dated regional On-Demand inputs, not inferred CPU
+store nodes (**four EC2 + two store nodes**). It explicitly overrides `N_required = max(3, …)` and “Keep at least 3 ready workers.”
+At `T = C - 1`, two workers can survive one worker death ([capacity policy](../dev/capacity.md)); the survivor has no target for a later
+move and no headroom to roll a worker. Shared control/signaling also couples failure and resource pressure. Cap evaluation load separately;
+make no preview N+1-plus-move claim and keep durable store replication. `P*` are dated regional On-Demand inputs, not inferred CPU
 prices; `T` must be a validated offered load with successful N+1 and drain. At low occupancy report actual integral allocation,
 including zero-call idle cost separately. The capacity tool prices only workers/relay/control/store and public egress; retain its
 report and add an explicit ledger for extra hosts, ALB, NAT or endpoints, EBS, IPv4, inter-AZ/region traffic, WAF, CloudWatch and
@@ -395,22 +400,24 @@ bounds the preview; durable-store client work cannot wait until later.
    disposable nodes. Prepare equivalent ElastiCache/MemoryDB compatibility gates. **Free.**
 2. **Hard per-worker cap, clean refusal and load telemetry.** Blockers: owner capacity direction.
    Use fixed production `-worker` bootstrap; no dynamic registration. Demo reservation races, per-worker
-   limits and clean refusal; report actual load/headroom. **Free.**
+   limits and clean refusal; report load/headroom. Add **tolerant fixed bootstrap: register the workers that answer and retry the rest
+   in the background**; retry relay registration too and gate placement on relay readiness. **Free.**
 3. **Preview template.** Blockers: 1, 2. Three static-IP workers, one service-managed control, one relay
    host with same-host standby, one signaling host, durable primary/replica, dedicated VPC/security
    groups, secrets, ALB/WAF, cfn-lint and bootstrap/update checks. Autoscaling off. Demo generated
    topology and local pre-drain/stop order; no mTLS or existing-VPC option yet. **Free.**
 4. **Preview cloud proof and launch link.** Blocker: 3. **Paid; separate approval/cap per run.** Install,
    prove store failover retains acknowledged epochs, roll workers by pre-drain, deploy relay processes,
-   restart control during live calls, and tear down. Measure gaps, unavailable operations, write tails,
+   restart control during live calls with one worker down, and tear down. Measure gaps, unavailable operations, write tails,
    cost, a bounded preview load profile and cleanup. If ElastiCache fails, test MemoryDB under another
    approval/cap and return results.
    Publish the link only with observed limits; do not label lost controller state recovered.
-5. **Single-instance control recovery, dynamic registration and lifecycle simulator.** Blocker: 4.
+5. **Single-instance control recovery, dynamic registration and lifecycle simulator.** Blocker: 3 for free local work; use 4's evidence when available.
    Durable inventory/operation reconciliation; demo restart during create/move/drain/end, authenticated
    registration, duplicate/lost events, retained failed drains and SIGTERM only after empty proof.
-   Measure restart readiness against the proposed 5 s target. **Free.**
-6. **Scale-out measurement and move-before-delete with retention.** Blocker: 5. **Paid; separate
+   Build the ASG template variant, EventBridge/SQS hook wiring, coordinator deployment and scoped IAM.
+   Measure restart readiness against the proposed 5 s target. **Free; may start after 3 if paid approval for 4 is slow.**
+6. **Scale-out measurement and move-before-delete with retention.** Blockers: 4, 5. **Paid; separate
    approval/cap per run.** Measure C/R/S, boot tails, arrival bursts, ENA allowances and admission.
    Demo health replacement/refresh failures retained alive, retry/cleanup, max count, missing telemetry,
    compatible worker rollout and N+1 death; report decision-to-empty, caller gaps and retained cost.
@@ -468,7 +475,7 @@ availability, pricing and schemas before implementation.
 - **E33** [MemoryDB supported nodes](https://docs.aws.amazon.com/memorydb/latest/devguide/nodes.supportedtypes.html).
 - **E34** [MemoryDB replication](https://docs.aws.amazon.com/memorydb/latest/devguide/replication.html).
 - **E35** [EC2 ENA allowance counters](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/monitoring-network-performance-ena.html).
-- **E36** AWS WAF [rate-based rules](https://docs.aws.amazon.com/waf/latest/developerguide/waf-rule-statement-type-rate-based.html) and [ALB application protection](https://docs.aws.amazon.com/waf/latest/developerguide/ddos-resiliency-example-tcp-udp.html).
+- **E36** AWS WAF [rate-based rules](https://docs.aws.amazon.com/waf/latest/developerguide/waf-rule-statement-type-rate-based.html) and [associating protection with an ALB](https://docs.aws.amazon.com/waf/latest/developerguide/web-acl-associating-aws-resource.html).
 
 - **E37** [AWS regions and Availability Zones](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html).
 
