@@ -810,8 +810,8 @@ not receive `OPENAI_API_KEY`.
 On `ptt.start` the worker sends three concurrent authenticated, non-billed
 `GET /v1/models/{model}` requests, for the transcription, reply and speech models,
 to warm the provider after idle; `RELAIS_VOICE_WARM=none` turns this off.
-In local measurements the first turn after 20 or more minutes idle was about
-1.6 s faster, and it is still about 1 s slower than later turns.
+In two local samples per setting, the first turn after 20 or more minutes idle
+was 1.3–1.9 s faster, and it stayed 0.4–1.3 s slower than the next turn.
 The best-effort ReadOnly warming task has a 3 s timeout and uses the same
 keep-alive client as transcription, reply and speech. Its setting never enters
 state or registration identity. Its reserved turn and ignored result

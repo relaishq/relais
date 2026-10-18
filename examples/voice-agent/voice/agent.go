@@ -4,8 +4,8 @@
 // GET /v1/models/{model} requests for the transcription, reply and speech models
 // to warm the provider after idle; RELAIS_VOICE_WARM=none turns this off.
 // RELAIS_VOICE_WARM accepts auth (default) or none; other values are startup errors.
-// In local measurements the first turn after 20 or more minutes idle was about
-// 1.6 s faster, and it is still about 1 s slower than later turns.
+// In two local samples per setting, the first turn after 20 or more minutes idle
+// was 1.3-1.9 s faster, and it stayed 0.4-1.3 s slower than the next turn.
 package voice
 
 import (
