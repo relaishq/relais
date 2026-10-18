@@ -108,7 +108,7 @@ func (a *Agent) retryPending() agent.Effects {
 	}
 	return effects
 }
-func (a *Agent) speechResult(r *agent.TaskResult) agent.Effects {
+func (a *Agent) speechResult(r *agent.TaskResult, at time.Time) agent.Effects {
 	index := int(r.Turn-a.state.Turn) - 1
 	rendering := index == a.state.Render && !a.state.RenderReady
 	playing := index == a.state.Segment && a.state.Phase == "playing"
@@ -168,6 +168,9 @@ func (a *Agent) speechResult(r *agent.TaskResult) agent.Effects {
 		a.state.PlayLength = 0 // the host owns the complete accepted Play request now
 		effects := agent.Effects{NotifyPlaybackFinished: &r.Turn}
 		if r.Chunk.Audio != nil {
+			if index == 0 && a.state.Timings.FirstQueued == 0 && len(r.Chunk.Audio.Packets) > 0 {
+				a.state.Timings.FirstQueued = a.offset(at)
+			}
 			for i := range r.Chunk.Audio.Packets {
 				effects.Audio = append(effects.Audio, agent.Audio{Turn: r.Turn, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence, PacketOffset: uint32(i)}})
 			}
@@ -187,6 +190,10 @@ func (a *Agent) speechResult(r *agent.TaskResult) agent.Effects {
 	a.clearCapacityNotice()
 	a.state.SpeechBytes += len(r.Chunk.Data)
 	a.state.SpeechNanos += span
+	if index == 0 {
+		a.state.Timings.SpeechFinished = a.offset(at)
+		a.state.Timings.SpeechAudio = int64(span)
+	}
 	a.buffer = append([]byte(nil), r.Chunk.Data...)
 	a.length = len(a.buffer)
 	return agent.Effects{}

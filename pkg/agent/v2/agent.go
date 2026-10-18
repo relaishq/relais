@@ -129,6 +129,14 @@ const (
 )
 
 type Event struct {
+	// At is the callback dispatch time, using the same clock as host timers.
+	// Every delivery gets a new time, including redelivery of the same EventID
+	// after a retry, move or takeover. It is not the event's creation time.
+	// It can step backward. Storeless sessions, and this owner's dispatches
+	// before its first store-clock observation, use the worker clock instead.
+	// The first observation can therefore jump by the worker/store clock skew.
+	// Across owners it is comparable only as store-clock time, not worker time.
+	At       time.Time
 	Result   *TaskResult
 	ID       EventID
 	Kind     EventKind

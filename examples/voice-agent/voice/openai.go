@@ -10,6 +10,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -30,13 +31,25 @@ type ProviderError struct {
 func (e *ProviderError) Error() string { return e.Code }
 
 type OpenAI struct {
+	// Trace observes the safe numeric request log. Set it before starting tasks.
+	Trace  func(RequestTrace)
 	key    string
 	client *http.Client
 	origin string
+	warm   string
 }
 
 func NewOpenAI(key string) *OpenAI {
-	return &OpenAI{key: key, client: &http.Client{Timeout: 40 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, origin: "https://api.openai.com/v1"}
+	return &OpenAI{key: key, warm: normalizeWarmMode(os.Getenv("RELAIS_VOICE_WARM")), client: &http.Client{Timeout: 40 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, origin: "https://api.openai.com/v1"}
+}
+
+// NewOpenAIWithClient allows a measurement to own a fresh connection pool.
+func NewOpenAIWithClient(key string, client *http.Client) *OpenAI {
+	p := NewOpenAI(key)
+	owned := *client
+	owned.CheckRedirect = p.client.CheckRedirect
+	p.client = &owned
+	return p
 }
 func (p *OpenAI) Available() bool { return p != nil && p.key != "" }
 func (p *OpenAI) request(ctx context.Context, path, kind, key string, b []byte) (io.ReadCloser, error) {
@@ -53,7 +66,14 @@ func (p *OpenAI) request(ctx context.Context, path, kind, key string, b []byte) 
 	req.Header.Set("Authorization", "Bearer "+p.key)
 	req.Header.Set("Content-Type", kind)
 	req.Header.Set("Idempotency-Key", key)
+	req, trace := p.traceRequest(req)
 	response, err := p.client.Do(req)
+	if err != nil {
+		trace.finish()
+	}
+	if response != nil {
+		response.Body = trace.response(response)
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -138,23 +158,4 @@ func (p *OpenAI) Reply(ctx context.Context, key, transcript string, history []Ex
 func (p *OpenAI) Speech(ctx context.Context, key, text string) (io.ReadCloser, error) {
 	b, _ := json.Marshal(map[string]any{"model": SpeechModel, "input": text, "voice": "coral", "response_format": "opus"})
 	return p.request(ctx, "/audio/speech", "application/json", key, b)
-}
-
-// Warm establishes DNS/TCP/TLS and an idle keep-alive connection while the user
-// records. HEAD /models has no billable operation and sends no credentials.
-// The same HTTP client and transport serve every paid stage and later turn.
-func (p *OpenAI) Warm(ctx context.Context) {
-	if !p.Available() || strings.ContainsAny(p.key, "\r\n") {
-		return
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, p.origin+"/models", nil)
-	if err != nil {
-		return
-	}
-	response, err := p.client.Do(req)
-	if err != nil {
-		return
-	}
-	defer func() { _ = response.Body.Close() }()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 8<<10))
 }

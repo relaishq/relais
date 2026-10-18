@@ -16,14 +16,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStartPreconnectsWithoutCredentialsAndReusesTLS(t *testing.T) {
+func TestStartWarmsModelMetadataAndReusesTLS(t *testing.T) {
+	t.Setenv("RELAIS_VOICE_WARM", "")
 	var handshakes atomic.Int32
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodHead {
-			require.Equal(t, "/models", r.URL.Path)
-			require.Empty(t, r.Header.Get("Authorization"))
+		if r.Method == http.MethodGet {
+			require.Contains(t, []string{"/models/" + TranscribeModel, "/models/" + ReplyModel, "/models/" + SpeechModel}, r.URL.Path)
+			require.Equal(t, "Bearer not-a-key", r.Header.Get("Authorization"))
 			require.Empty(t, r.Header.Get("Idempotency-Key"))
-			w.WriteHeader(http.StatusUnauthorized)
+			w.WriteHeader(http.StatusOK)
 			return
 		}
 		require.Equal(t, http.MethodPost, r.Method)
@@ -31,6 +32,7 @@ func TestStartPreconnectsWithoutCredentialsAndReusesTLS(t *testing.T) {
 		_, _ = io.WriteString(w, `{"text":"hello"}`)
 	}))
 	server.TLS = &tls.Config{MinVersion: tls.VersionTLS12, GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { handshakes.Add(1); return nil, nil }}
+	server.EnableHTTP2 = true
 	server.StartTLS()
 	defer server.Close()
 	p := NewOpenAI("not-a-key")
@@ -39,7 +41,7 @@ func TestStartPreconnectsWithoutCredentialsAndReusesTLS(t *testing.T) {
 	a := Registration(p).Factory(agent.FactoryArgs{}).(*Agent)
 	effects, err := a.Handle(context.Background(), agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{Name: "ptt.start"}})
 	require.NoError(t, err)
-	require.Len(t, effects.StartTasks, 1, "start should warm TLS while the user is speaking")
+	require.Len(t, effects.StartTasks, 1, "start should warm provider metadata while the user is speaking")
 	spec := effects.StartTasks[0]
 	require.Equal(t, "voice/warm/v1", spec.Kind)
 	require.Equal(t, agent.ReadOnly, spec.Class)
@@ -50,6 +52,7 @@ func TestStartPreconnectsWithoutCredentialsAndReusesTLS(t *testing.T) {
 	at := time.Now()
 	require.NoError(t, handler(context.Background(), run))
 	cold := time.Since(at)
+	warmHandshakes := handshakes.Load()
 	var reused bool
 	var mu sync.Mutex
 	ctx := httptrace.WithClientTrace(context.Background(), &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) { mu.Lock(); reused = info.Reused; mu.Unlock() }})
@@ -60,8 +63,8 @@ func TestStartPreconnectsWithoutCredentialsAndReusesTLS(t *testing.T) {
 	mu.Lock()
 	require.True(t, reused)
 	mu.Unlock()
-	require.EqualValues(t, 1, handshakes.Load())
-	t.Logf("local TLS stub cold preconnect=%s reused POST=%s handshakes=%d", cold, warm, handshakes.Load())
+	require.Equal(t, warmHandshakes, handshakes.Load())
+	t.Logf("local TLS stub metadata warm=%s reused POST=%s handshakes=%d", cold, warm, handshakes.Load())
 	// A late warm result cannot claim the STT task cursor or advance its phase.
 	a.state.Phase = "transcribing"
 	_, err = a.Handle(context.Background(), agent.Event{Kind: agent.TaskMessage, Result: &agent.TaskResult{Turn: spec.Turn, TaskID: "warm", Sequence: 1, Final: true, Outcome: agent.OK}})

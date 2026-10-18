@@ -108,7 +108,7 @@ func TestRestartNoticeExpiresOnStoreTimer(t *testing.T) {
 func TestSpeechRequestKindsAreVersioned(t *testing.T) {
 	require.Equal(t, "voice/speech/v2", SpeechKind)
 	require.Equal(t, "voice/play/v2", PlayKind)
-	require.EqualValues(t, 3, stateVersion)
+	require.EqualValues(t, 4, stateVersion)
 }
 func TestReplyTokenBudgetFitsShortSpeech(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

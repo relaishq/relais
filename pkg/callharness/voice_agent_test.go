@@ -177,7 +177,10 @@ func TestVoiceAgentMoveCuts(t *testing.T) {
 				if cut == "playing" {
 					prefix = append(prefix, nextPaced(t, received))
 				}
+				var beforeMove voice.Timings
 				if cut != "none" && cut != "recording" {
+					prior, _ := voiceState(sys.workers[0], id)
+					beforeMove = prior.Timings
 					_, err = sys.plane.Move(ctx, id, "1")
 					require.NoError(t, err)
 					source = 1
@@ -191,6 +194,33 @@ func TestVoiceAgentMoveCuts(t *testing.T) {
 				require.Equal(t, agent.OK, s.Outcome)
 				require.Equal(t, "Say hello.", s.Transcript)
 				require.Equal(t, "Hello from Relais.", s.Reply)
+				require.Positive(t, s.ReleaseAt)
+				require.Positive(t, s.Timings.TranscribeFinished)
+				require.Positive(t, s.Timings.ReplyFinished)
+				require.Positive(t, s.Timings.SpeechFinished)
+				require.Positive(t, s.Timings.FirstQueued)
+				require.GreaterOrEqual(t, s.Timings.ReplyStarted, s.Timings.TranscribeFinished)
+				require.GreaterOrEqual(t, s.Timings.ReplyFinished, s.Timings.ReplyStarted)
+				require.GreaterOrEqual(t, s.Timings.SpeechStarted, s.Timings.ReplyFinished)
+				require.GreaterOrEqual(t, s.Timings.SpeechFinished, s.Timings.SpeechStarted)
+				require.GreaterOrEqual(t, s.Timings.FirstQueued, s.Timings.SpeechFinished)
+				require.EqualValues(t, 1600*time.Millisecond, s.Timings.SpeechAudio)
+				require.Equal(t, len("Hello from Relais."), s.Timings.ReplyCharacters)
+				require.Equal(t, len("Hello from Relais."), s.Timings.FirstSentenceCharacters)
+				if beforeMove.TranscribeFinished > 0 {
+					require.Equal(t, beforeMove.TranscribeFinished, s.Timings.TranscribeFinished)
+				}
+				if beforeMove.ReplyFinished > 0 {
+					require.Equal(t, beforeMove.ReplyStarted, s.Timings.ReplyStarted)
+					require.Equal(t, beforeMove.ReplyFinished, s.Timings.ReplyFinished)
+				}
+				if beforeMove.SpeechFinished > 0 {
+					require.Equal(t, beforeMove.SpeechStarted, s.Timings.SpeechStarted)
+					require.Equal(t, beforeMove.SpeechFinished, s.Timings.SpeechFinished)
+				}
+				if beforeMove.FirstQueued > 0 {
+					require.Equal(t, beforeMove.FirstQueued, s.Timings.FirstQueued)
+				}
 				require.Len(t, s.History, 1)
 				if cut == "transcribing" {
 					require.Equal(t, p[0].oggHash.Load(), p[1].oggHash.Load(), "exact move must retain the same STT upload bytes")

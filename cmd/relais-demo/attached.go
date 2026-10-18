@@ -352,7 +352,7 @@ func (d *demo) runHook(ctx context.Context, action, worker, session string) (hoo
 	cmd := exec.CommandContext(ctx, d.faultHook, args...)
 	cmd.Env = make([]string, 0) // empty must not mean inherit the parent environment
 	for _, entry := range os.Environ() {
-		if !strings.HasPrefix(entry, "OPENAI_API_KEY=") {
+		if !strings.HasPrefix(entry, "OPENAI_API_KEY=") && !strings.HasPrefix(entry, "RELAIS_VOICE_WARM=") {
 			cmd.Env = append(cmd.Env, entry)
 		}
 	}

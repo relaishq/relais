@@ -39,7 +39,7 @@ func processEnv(key, addr, prefix string, withKey bool) []string {
 	env := []string{}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if name == "OPENAI_API_KEY" || name == "RELAIS_SESSIONSTORE_KEY" || strings.HasPrefix(name, "RELAIS_REDIS_") {
+		if name == "OPENAI_API_KEY" || name == "RELAIS_VOICE_WARM" || name == "RELAIS_SESSIONSTORE_KEY" || strings.HasPrefix(name, "RELAIS_REDIS_") {
 			continue
 		}
 		env = append(env, entry)
@@ -342,13 +342,16 @@ func workerArgs(cfg config) []string {
 func workerProcessEnv(cfg config, env []string) []string {
 	workerEnv := make([]string, 0, len(env)+1)
 	for _, entry := range env {
-		if !strings.HasPrefix(entry, "PION_LOG_INFO=") {
+		if !strings.HasPrefix(entry, "PION_LOG_INFO=") && !strings.HasPrefix(entry, "OPENAI_API_KEY=") && !strings.HasPrefix(entry, "RELAIS_VOICE_WARM=") {
 			workerEnv = append(workerEnv, entry)
 		}
 	}
 	workerEnv = append(workerEnv, "PION_LOG_INFO=session")
 	if key := os.Getenv("OPENAI_API_KEY"); key != "" && selectedAgent(cfg) == "voice-agent/v1" {
 		workerEnv = append(workerEnv, "OPENAI_API_KEY="+key)
+	}
+	if mode := os.Getenv("RELAIS_VOICE_WARM"); mode != "" && selectedAgent(cfg) == "voice-agent/v1" {
+		workerEnv = append(workerEnv, "RELAIS_VOICE_WARM="+mode)
 	}
 	return workerEnv
 }

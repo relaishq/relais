@@ -34,6 +34,17 @@ func (d *demo) voiceStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var app struct {
+		Timings struct {
+			TranscribeFinished      int64 `json:"transcribe_finished_ns"`
+			ReplyStarted            int64 `json:"reply_started_ns"`
+			ReplyFinished           int64 `json:"reply_finished_ns"`
+			ReplyCharacters         int   `json:"reply_characters"`
+			FirstSentenceCharacters int   `json:"first_sentence_characters"`
+			SpeechStarted           int64 `json:"speech_started_ns"`
+			SpeechFinished          int64 `json:"speech_finished_ns"`
+			SpeechAudio             int64 `json:"speech_audio_ns"`
+			FirstQueued             int64 `json:"first_queued_ns"`
+		} `json:"timings"`
 		Turn       uint64 `json:"turn"`
 		Phase      string `json:"phase"`
 		Segment    int    `json:"segment,omitempty"`

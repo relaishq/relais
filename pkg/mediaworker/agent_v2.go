@@ -400,6 +400,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		return errControlReceiptBackpressure
 	}
 
+	event.At = s.taskNow()
 	before := cloneAgentState(h.latest)
 	// The actor can stop attempts as soon as session cancellation releases
 	// agentCall, even if its callback goroutine is still running. Copy task

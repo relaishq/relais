@@ -2,7 +2,7 @@
 (() => {
   const M = window.relaisMetrics;
   const A = window.relaisContinuity;
-  const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check','relay-buffer','voice','ptt','voice-notice','voice-phase','voice-transcript','voice-reply','intro'].map((id) => [id,document.getElementById(id)]));
+  const el = Object.fromEntries(['start','stop','move','drain','kill','audio','local','remote','summary','gap','moves','transitions','results','error','source','save','check','relay-buffer','voice','ptt','voice-notice','voice-phase','voice-transcript','voice-reply','voice-timing','intro'].map((id) => [id,document.getElementById(id)]));
   const params = new URLSearchParams(location.search);
   let launchToken = new URLSearchParams(location.hash.slice(1)).get('token') || '';
   let tokenLaunchId = null;
@@ -143,6 +143,13 @@
         const v=await json(`/demo/voice/${encodeURIComponent(s.id)}`,{signal:AbortSignal.timeout(2000)});
         if(!active(s))return;
         s.voice=v;el['voice-phase'].textContent=v.phase;
+        const t=v.timings;
+        if(v.phase!=='idle')el['voice-timing'].textContent='';
+        if(v.phase==='idle' && t?.first_queued_ns>0 && (!s.voiceTimingPending || (!Number.isFinite(s.voiceTimingPreviousTurn) || v.turn>s.voiceTimingPreviousTurn))){
+          s.voiceTimingPending=false;
+          const seconds=n=>(Math.max(0,Number.isFinite(n)?n:0)/1e9).toFixed(1)+' s';
+          el['voice-timing'].textContent=`Last turn: transcribe ${seconds(t.transcribe_finished_ns??0)} · reply ${seconds((t.reply_finished_ns??0)-(t.reply_started_ns??0))} · first speech ${seconds((t.speech_finished_ns??0)-(t.speech_started_ns??0))} · first audio queued ${seconds(t.first_queued_ns??0)}`;
+        }
         el['voice-transcript'].textContent=v.transcript || '';el['voice-reply'].textContent=v.reply || '';
         el['voice-notice'].textContent=s.controlNotice || v.notice || v.error || (v.phase==='recording'?'Listening. Release to answer.':'');
       }catch {if(active(s))el['voice-notice'].textContent='Voice status unavailable during owner change.';}
@@ -289,7 +296,7 @@
     if(!Number.isFinite(headroomRatio) || headroomRatio<=0 || headroomRatio>1)throw new Error('headroomRatio must be greater than zero and at most one');
     if(source==='test')source='pattern';
     if(!['pattern','camera','microphone'].includes(source)) throw new Error('source must be pattern (or test), camera, or microphone');
-    el.source.value=source;
+    el.source.value=source;el['voice-timing'].textContent='';
     const s={source,baselineCount,headroomRatio,pc:new RTCPeerConnection({bundlePolicy:'max-bundle',rtcpMuxPolicy:'require'}),...stamp(),startedAt:new Date().toISOString(),
       transitions:[],owners:[],sourceFrames:[],frames:[],frameMeta:[],contentFrames:[],counterReadFailures:[],hiddenPeriods:[],longTasks:[],baselines:[],samples:[],events:[],descriptionChanges:[],negotiations:[],restartCalls:[],sampleErrors:[],lastVideo:null,lastAudio:null,lastContent:null,maxCounter:null,armed:false,stopped:false};
     call=s;el.error.textContent='';observePage(s);attach(s);statuses(s);samples(s);
@@ -506,6 +513,7 @@
   }
   function pttPress() {
     const s=call;if(!s || !active(s) || !s.ptt || s.pttHeld)return;
+    s.voiceTimingPending=true;s.voiceTimingPreviousTurn=s.voice?.turn;el['voice-timing'].textContent='';
     s.pttHeld=true;s.controlNotice='';el.ptt.textContent='Release to answer';el['voice-notice'].textContent='Sending start…';
     return s.ptt.send('ptt.start').catch(()=>{});
   }
