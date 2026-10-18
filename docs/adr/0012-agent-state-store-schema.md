@@ -1,6 +1,6 @@
 # ADR 0012: Split session checkpoints and bounded conversation history
 
-Status: **Proposed** 2026-10-17 — awaiting owner approval. Part of #188.
+Status: **Accepted** 2026-10-17 by the project lead — design and order only; no cloud spend is approved, and paid store validation needs its own approval and cost cap. Part of #188.
 Baseline: `656fcdedbf25a80753bae48b8d5509ba02233128` (accepted ADR 0011; runtime baseline v0.2.0).
 
 ## Owner summary
