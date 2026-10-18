@@ -102,7 +102,9 @@ reservations per worker. Concurrent placement and reservation settlement are
 covered by control-plane race tests. A full ready pool returns 503
 `at_capacity` with `Retry-After: 1`; no ready worker returns existing 409
 `no_target`. Default 0 retains unlimited placement. A crash takeover may exceed
-the cap rather than drop a live call; telemetry counts those over-cap calls.
+the cap rather than drop a live call; retained recovery of an exported planned
+move uses that same rule. Telemetry counts those over-cap calls. Source rollback
+slots protect placement without blocking unrelated drain or crash recovery.
 The cap is not a media performance guarantee or automatic scaling policy.
 
 The process bootstrap tests start control with a listed worker down and with

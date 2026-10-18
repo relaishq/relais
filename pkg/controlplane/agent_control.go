@@ -143,3 +143,19 @@ func (c *call) lockOperator(ctx context.Context, takeover bool) error {
 		}
 	}
 }
+
+// operatorInProgress detects an overlapping operator before Drain reserves a
+// duplicate destination. Control holders keep the existing bounded wait path.
+// The real job still takes lockOperator because ownership can change afterward.
+func (c *call) operatorInProgress() bool {
+	c.controlMu.Lock()
+	defer c.controlMu.Unlock()
+	if c.controlActive {
+		return false
+	}
+	if c.mu.TryLock() {
+		c.mu.Unlock()
+		return false
+	}
+	return true
+}

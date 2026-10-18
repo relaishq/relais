@@ -37,13 +37,15 @@ The control plane API (`/api/v1/sessions`, `/api/v1/plugins`) and the WebSocket 
 Control `POST /calls` counts live store leases plus incoming reservations against
 `-worker-call-cap` on each ready worker. Zero (the default) is unlimited.
 Planned moves and drain destinations use the same budget. A move also holds a
-source rollback reservation until its synchronous coordination settles. A lease
+separate source rollback slot until its synchronous coordination settles.
+Only placement load includes that slot; it is not incoming work or demand. A lease
 published before its outstanding reservation settles can count alongside that
 reservation, so admission is conservative while operations are in flight.
 A full destination
 leaves the call on its source and returns typed `at_capacity`; a drain that
 cannot reserve its destinations makes no moves. Crash takeover prefers the
-least-loaded survivor and may exceed the cap to preserve live calls.
+least-loaded survivor and may exceed the cap to preserve live calls. Recovery
+of an already-exported planned move uses the same overflow rule.
 
 | Admission outcome | HTTP status | Body | Retry-After |
 | --- | --- | --- | --- |
@@ -57,18 +59,22 @@ is unchanged; the private typed code remains `no_target`.
 
 Private control `GET /status` adds `ready` and one coherent `pool` observation:
 `demand` (calls plus reservations), `worker_call_cap`, `ready_workers`,
-`draining_workers`, `unreachable_workers`, `pending_workers`, `reservations`,
+`draining_workers`, `unreachable_workers`, `pending_workers`,
+`never_answered_workers` (configured workers whose address is still unknown), `reservations`,
 `refusals` (lifetime create counters by `at_capacity` / `no_target`),
 `over_cap_calls` (live calls above each worker's cap), `sampled_at`,
 `age_seconds`, and `stale`. Worker state counts are disjoint; pending includes
 configured workers not yet registered and workers awaiting relay registration.
-Readiness requires a reachable relay and at least one ready registered worker;
+Initial readiness requires relay registration and at least one ready registered
+worker. A failed relay poll preserves that readiness; an observed new relay
+instance gates creates until its allowlist is restored;
 a full ready pool remains ready and refuses new calls with `at_capacity`.
 
 Control refreshes this observation during status requests and its ownership
 reconciliation loop (at most 1.5 seconds between scheduled reconciliations).
 Store reads run outside the registry lock; a registry/reservation change
-invalidates the reads. All sample fields publish together under one lock.
+invalidates the reads. All observation fields publish together under one lock. Refusal counters are
+read live under that lock, independently of the cached observation.
 Failed refreshes keep the previous timestamp and demand and mark it stale.
 If ownership reads fail too, `/status` retains its error HTTP status and returns
 JSON `ready: false`, the cached `pool`, and `error`; it does not claim empty calls.
@@ -80,9 +86,13 @@ complete successful observation. Consumers must check validity and freshness.
 Private `/metrics` adds `relais_control_pool_demand`,
 `relais_control_worker_call_cap`, `relais_control_pool_workers{state="ready|draining|unreachable|pending"}`,
 `relais_control_pool_reservations`, `relais_control_refusals_total{reason="at_capacity|no_target"}`,
-`relais_control_pool_over_cap_calls`, `relais_control_pool_sample_timestamp_seconds`,
+`relais_control_pool_over_cap_calls`, `relais_control_pool_never_answered_workers`,
+`relais_control_pool_sample_timestamp_seconds`,
 `relais_control_pool_sample_age_seconds`, `relais_control_pool_sample_valid`, and
 `relais_control_pool_sample_stale`, alongside `relais_control_active_calls`.
+Before the first observation, all sample-derived metrics (demand, workers,
+reservations, over-cap calls, never-answered workers, timestamp and age) are
+omitted. Configuration and live refusal counters remain available.
 Missing demand omits the demand metric and sets valid=0, stale=1. Cached demand
 retains its value with stale=1 on failure or age expiry; scrapes do not relabel an
 old observation with the current timestamp.

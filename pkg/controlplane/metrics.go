@@ -59,30 +59,33 @@ func poolMetrics(pool PoolSample) []metrics.Sample {
 		metrics.Gauge("relais_control_pool_sample_valid", "Whether a pool observation exists; missing demand is never zero.", valid),
 		metrics.Gauge("relais_control_pool_sample_stale", "Whether the pool observation is missing, failed to refresh or too old.", stale),
 	}
+	samples = append(samples, metrics.Gauge("relais_control_worker_call_cap", "Configured per-worker call budget; zero means unlimited.", pool.Cap))
+	for _, reason := range []string{"no_target", "at_capacity"} {
+		sample := metrics.Counter("relais_control_refusals_total", "Definite call admission refusals by reason.", pool.Refusals[reason])
+		sample.Labels = prometheus.Labels{"reason": reason}
+		samples = append(samples, sample)
+	}
+	// Until an observation exists these values are unavailable, not zero.
+	if pool.SampledAt.IsZero() {
+		return samples
+	}
 	if pool.Demand != nil {
 		samples = append(samples, metrics.Gauge("relais_control_pool_demand", "Observed calls plus incoming reservations.", *pool.Demand))
 	}
 	samples = append(samples,
-		metrics.Gauge("relais_control_worker_call_cap", "Configured per-worker call budget; zero means unlimited.", pool.Cap),
 		metrics.Gauge("relais_control_pool_reservations", "Observed incoming placement reservations.", pool.Reservations),
 		metrics.Gauge("relais_control_pool_over_cap_calls", "Observed live calls exceeding per-worker budgets after recovery.", pool.OverCapCalls),
+		metrics.Gauge("relais_control_pool_never_answered_workers", "Configured workers whose address is still unknown, making aggregate demand unavailable.", pool.NeverAnswered),
 	)
-	if !pool.SampledAt.IsZero() {
-		timestamp := metrics.Gauge("relais_control_pool_sample_timestamp_seconds", "Unix timestamp of the pool observation.", 0)
-		timestamp.Value = float64(pool.SampledAt.UnixNano()) / 1e9
-		samples = append(samples, timestamp)
-	}
+	timestamp := metrics.Gauge("relais_control_pool_sample_timestamp_seconds", "Unix timestamp of the pool observation.", 0)
+	timestamp.Value = float64(pool.SampledAt.UnixNano()) / 1e9
+	samples = append(samples, timestamp)
 	age := metrics.Gauge("relais_control_pool_sample_age_seconds", "Seconds since the pool observation.", 0)
 	age.Value = pool.AgeSeconds
 	samples = append(samples, age)
 	for state, n := range map[string]int{"ready": pool.Ready, "draining": pool.Draining, "unreachable": pool.Unreachable, "pending": pool.Pending} {
 		sample := metrics.Gauge("relais_control_pool_workers", "Observed workers by placement state.", n)
 		sample.Labels = prometheus.Labels{"state": state}
-		samples = append(samples, sample)
-	}
-	for _, reason := range []string{"no_target", "at_capacity"} {
-		sample := metrics.Counter("relais_control_refusals_total", "Definite call admission refusals by reason.", pool.Refusals[reason])
-		sample.Labels = prometheus.Labels{"reason": reason}
 		samples = append(samples, sample)
 	}
 	return samples

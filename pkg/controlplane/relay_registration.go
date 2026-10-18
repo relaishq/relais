@@ -46,6 +46,9 @@ func (s *RelayWorkerRegistry) Sync(ctx context.Context, p *Plane, r interface {
 		return err
 	}
 	if s.registered == nil || status.Instance != s.instance {
+		// Reset admission only after observing a different relay instance.
+		// A failed status poll alone does not revoke established readiness.
+		p.SetRelayReady(false)
 		s.instance = status.Instance
 		s.registered = make(map[netip.AddrPort]bool)
 	}
@@ -71,5 +74,12 @@ func (s *RelayWorkerRegistry) Sync(ctx context.Context, p *Plane, r interface {
 		}
 		p.mu.Unlock()
 	}
+	p.SetRelayReady(true)
 	return nil
 }
+
+// Instance identifies the relay observed by this single polling loop.
+func (s *RelayWorkerRegistry) Instance() string { return s.instance }
+
+// Registered counts successful allowlist entries in the observed instance.
+func (s *RelayWorkerRegistry) Registered() int { return len(s.registered) }

@@ -12,18 +12,19 @@ import (
 // lease listing succeeds. Failed refreshes retain the last observation and its
 // timestamp; age and stale distinguish it from a current zero-demand pool.
 type PoolSample struct {
-	Demand       *int              `json:"demand"`
-	Cap          int               `json:"worker_call_cap"`
-	Ready        int               `json:"ready_workers"`
-	Draining     int               `json:"draining_workers"`
-	Unreachable  int               `json:"unreachable_workers"`
-	Pending      int               `json:"pending_workers"`
-	Reservations int               `json:"reservations"`
-	Refusals     map[string]uint64 `json:"refusals"`
-	OverCapCalls int               `json:"over_cap_calls"`
-	SampledAt    time.Time         `json:"sampled_at"`
-	AgeSeconds   float64           `json:"age_seconds"`
-	Stale        bool              `json:"stale"`
+	Demand        *int              `json:"demand"`
+	Cap           int               `json:"worker_call_cap"`
+	Ready         int               `json:"ready_workers"`
+	Draining      int               `json:"draining_workers"`
+	Unreachable   int               `json:"unreachable_workers"`
+	NeverAnswered int               `json:"never_answered_workers"`
+	Pending       int               `json:"pending_workers"`
+	Reservations  int               `json:"reservations"`
+	Refusals      map[string]uint64 `json:"refusals"`
+	OverCapCalls  int               `json:"over_cap_calls"`
+	SampledAt     time.Time         `json:"sampled_at"`
+	AgeSeconds    float64           `json:"age_seconds"`
+	Stale         bool              `json:"stale"`
 }
 
 // BeginBootstrap records the fixed configured pool before serving requests.
@@ -95,7 +96,7 @@ func (p *Plane) SamplePool(ctx context.Context) (err error) {
 			continue
 		}
 		demand := 0
-		sample := PoolSample{Cap: p.config.WorkerCallCap, Pending: len(p.pendingWorkers), SampledAt: sampledAt, Refusals: maps.Clone(p.refusals)}
+		sample := PoolSample{Cap: p.config.WorkerCallCap, Pending: len(p.pendingWorkers), SampledAt: sampledAt, NeverAnswered: len(p.pendingWorkers)}
 		for _, w := range workers {
 			demand += loads[w] + w.reserved
 			sample.Reservations += w.reserved
@@ -125,10 +126,10 @@ func (p *Plane) SamplePool(ctx context.Context) (err error) {
 
 func (p *Plane) poolLocked(now time.Time) PoolSample {
 	if p.pool == nil {
-		return PoolSample{Cap: p.config.WorkerCallCap, Refusals: maps.Clone(p.refusals), Stale: true}
+		return PoolSample{Cap: p.config.WorkerCallCap, NeverAnswered: len(p.pendingWorkers), Refusals: maps.Clone(p.refusals), Stale: true}
 	}
 	sample := *p.pool
-	sample.Refusals = maps.Clone(sample.Refusals)
+	sample.Refusals = maps.Clone(p.refusals)
 	sample.AgeSeconds = max(0, now.Sub(sample.SampledAt).Seconds())
 	sample.Stale = sample.Demand == nil || p.poolFailed || now.Before(sample.SampledAt) || now.Sub(sample.SampledAt) > p.config.PoolSampleMaxAge
 	return sample

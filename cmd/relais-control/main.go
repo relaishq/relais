@@ -114,6 +114,8 @@ func main() {
 // on each tick, including late registrations and rejoins in the same instance.
 func registerRestartedRelay(ctx context.Context, plane *controlplane.Plane, r *controlplane.RemoteRelay, first chan<- struct{}) {
 	var registry controlplane.RelayWorkerRegistry
+	healthy := false
+	lastInstance, lastRegistered := "", 0
 	for attempt, delay := 1, 100*time.Millisecond; ; attempt++ {
 		if ctx.Err() != nil {
 			return
@@ -121,8 +123,11 @@ func registerRestartedRelay(ctx context.Context, plane *controlplane.Plane, r *c
 		bounded, cancel := context.WithTimeout(ctx, time.Second)
 		err := registry.Sync(bounded, plane, r)
 		cancel()
-		plane.SetRelayReady(err == nil)
-		log.Printf("relay bootstrap attempt=%d result=%s", attempt, bootstrapResult(err))
+		instance, registered := registry.Instance(), registry.Registered()
+		if err != nil || !healthy || instance != lastInstance || registered != lastRegistered {
+			log.Printf("relay bootstrap attempt=%d instance=%s workers=%d result=%s", attempt, instance, registered, bootstrapResult(err))
+		}
+		healthy, lastInstance, lastRegistered = err == nil, instance, registered
 		if attempt == 1 {
 			close(first)
 		}

@@ -490,12 +490,11 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 				excluded[addr] = true
 			}
 		}
-		p.mu.Lock()
-		crashed := source.dead
-		p.mu.Unlock()
-		target, pickErr := p.pickCapacity(ctx, name, excluded, !pending.planned || crashed, c.id)
+		// An exported call cannot stay on its original running session. All
+		// retained recovery follows takeover's overflow rule to preserve it.
+		target, pickErr := p.pickCapacity(ctx, name, excluded, true, c.id)
 		if pickErr != nil {
-			if !errors.Is(pickErr, ErrNoTarget) {
+			if !errors.Is(pickErr, ErrNoTarget) && !errors.Is(pickErr, ErrAtCapacity) {
 				return
 			}
 			// Eligibility can change after the pinned registration check.

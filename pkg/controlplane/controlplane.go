@@ -125,6 +125,7 @@ type registration struct {
 	relayPending  bool // fixed bootstrap waits for the relay allowlist
 	draining      bool
 	reserved      int // incoming creates/moves; counted when balancing
+	rollbackSlots int // source protection, used only by placement load
 	lastHeartbeat time.Time
 	dead          bool
 	recovering    bool
@@ -312,7 +313,7 @@ func (p *Plane) pickCapacity(ctx context.Context, name string, excluded map[neti
 				continue
 			}
 			ready = true
-			n := loads[w] + w.reserved
+			n := loads[w] + w.reserved + w.rollbackSlots
 			if !overflow && p.config.WorkerCallCap > 0 && n >= p.config.WorkerCallCap {
 				continue
 			}
@@ -637,12 +638,17 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	// lease. Otherwise a concurrent create could fill it before rollback.
 	rollbackReserved := source != nil && p.config.WorkerCallCap > 0
 	if rollbackReserved {
-		source.reserved++
+		source.rollbackSlots++
 		p.loadVersion++
 	}
 	p.mu.Unlock()
 	if rollbackReserved {
-		defer p.unreserve(source)
+		defer func() {
+			p.mu.Lock()
+			source.rollbackSlots--
+			p.loadVersion++
+			p.mu.Unlock()
+		}()
 	}
 	if source == nil {
 		return res, ErrUnknownCall
@@ -981,21 +987,31 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 		lease  sessionstore.Lease
 		target *registration
 		c      *call
+		err    error
 	}
 
 	jobs := make([]job, 0, len(leases))
 	for _, lease := range leases {
+		p.mu.Lock()
+		c := p.calls[lease.SessionID]
+		p.mu.Unlock()
+		// Do not promise a second destination slot for a call whose operator
+		// already owns coordination. Keep its typed partial outcome while
+		// leaving capacity available to the other calls in this drain.
+		if p.config.WorkerCallCap > 0 && c != nil && c.operatorInProgress() {
+			jobs = append(jobs, job{lease: lease, c: c, err: ErrMoveInProgress})
+			continue
+		}
 		target, pickErr := p.pick(ctx, "", w.addr)
 		if pickErr != nil {
 			for _, j := range jobs {
-				p.unreserve(j.target)
+				if j.target != nil {
+					p.unreserve(j.target)
+				}
 			}
 			return nil, pickErr
 		}
 
-		p.mu.Lock()
-		c := p.calls[lease.SessionID]
-		p.mu.Unlock()
 		jobs = append(jobs, job{lease: lease, target: target, c: c})
 	}
 	results := make([]MoveResult, len(jobs))
@@ -1004,14 +1020,20 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 	sem := make(chan struct{}, drainParallelism())
 	for i, j := range jobs {
 		wg.Go(func() {
-			defer p.unreserve(j.target)
-
-			results[i] = MoveResult{ID: j.lease.SessionID, From: w.name, To: j.target.name}
+			results[i] = MoveResult{ID: j.lease.SessionID, From: w.name}
+			if j.target != nil {
+				defer p.unreserve(j.target)
+				results[i].To = j.target.name
+			}
 			defer func() {
 				if errs[i] != nil {
 					results[i].Error = errs[i].Error()
 				}
 			}()
+			if j.err != nil {
+				errs[i] = j.err
+				return
+			}
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
