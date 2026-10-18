@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -58,17 +57,6 @@ func decodeDTLSSerializedState(data []byte) (dtlsSerializedState, error) {
 	return state, nil
 }
 
-func checkpointDTLSSequence(data []byte) (dtlsSequenceCheckpoint, error) {
-	// Read the captured bytes, never the live connection after PutState. Pion
-	// may have allocated more records while the store write was in flight.
-	var snap struct{ DTLSConnection []byte }
-	if err := json.Unmarshal(data, &snap); err != nil {
-		return dtlsSequenceCheckpoint{}, err
-	}
-	state, err := decodeDTLSSerializedState(snap.DTLSConnection)
-	return dtlsSequenceCheckpoint{epoch: state.LocalEpoch, next: state.SequenceNumber}, err
-}
-
 func advanceDTLSSequence(data []byte) ([]byte, error) {
 	state, err := decodeDTLSSerializedState(data)
 	if err != nil {
@@ -96,7 +84,7 @@ func (s *session) allowDTLSDatagram(p []byte) bool {
 	if bound == nil {
 		return true // no checkpoint write has been attempted
 	}
-	// Invariant: every record this owner sends in the checkpointed epoch has
+	// Invariant: every encrypted record this owner sends has
 	// sequence < N_c + R for every checkpoint c that could be latest at takeover.
 	// The first capture arms the provisional bound under this same lock;
 	// only successful writes advance it. Serialized captures are monotone,
@@ -112,10 +100,12 @@ func (s *session) allowDTLSDatagram(p []byte) bool {
 		}
 		epoch := binary.BigEndian.Uint16(p[3:5])
 		sequence := uint64(binary.BigEndian.Uint16(p[5:7]))<<32 | uint64(binary.BigEndian.Uint32(p[7:11]))
-		// Pion exports only the current epoch's counter. Refuse any other epoch
-		// once checkpointed; old handshake retransmissions can be dropped safely.
-		// A new keyed epoch would require an explicitly supported rekey protocol.
-		if epoch != bound.epoch || sequence >= bound.next+dtlsSequenceReservation {
+		// Epoch zero is plaintext and has no AEAD nonce to reuse. Pion
+		// coalesces its retransmitted ChangeCipherSpec with encrypted Finished;
+		// allowing it is necessary to complete a handshake after packet loss.
+		// Only the checkpointed encrypted epoch is supported; a new keyed epoch
+		// would require an explicitly supported rekey protocol.
+		if epoch != 0 && (epoch != bound.epoch || sequence >= bound.next+dtlsSequenceReservation) {
 			return s.dropDTLSDatagram()
 		}
 		p = p[size:]
@@ -125,6 +115,9 @@ func (s *session) allowDTLSDatagram(p []byte) bool {
 
 func (s *session) dropDTLSDatagram() bool {
 	s.worker.metrics.dtlsSequenceDrops.Add(1)
-	s.wantSnapshot()
+	if !s.dtlsCheckpointRequested {
+		s.dtlsCheckpointRequested = true
+		s.wantSnapshot()
+	}
 	return false
 }

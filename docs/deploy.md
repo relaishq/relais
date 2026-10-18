@@ -295,7 +295,9 @@ media for takeover. Neither cache is a durable no-loss log; see
 rollout must first deploy decoders accepting **both old and new snapshot
 versions**, then upgrade writers, and retain old-version decoding until old
 snapshots are gone. The current single-version decoder does not provide that
-rollout compatibility by itself.
+rollout compatibility by itself. The encrypted DTLS sequence non-reuse guarantee
+applies only after every worker runs the sequence-reservation build and assumes
+the store never loses an acknowledged write (see [ADR 0011](adr/0011-deploy-and-autoscale.md)).
 
 ## UDP socket buffers
 

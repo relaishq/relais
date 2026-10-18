@@ -251,6 +251,16 @@ func TestCrashRestoreAfterLostFirstCheckpointReplyNeverRepeatsDTLSSequence(t *te
 			p = p[size:]
 		}
 	}
+	require.Len(t, seen, 64, "the provisional bound must allow encrypted Finished 1..64")
+	for sequence := uint64(1); sequence <= 64; sequence++ {
+		var pair [8]byte
+		binary.BigEndian.PutUint64(pair[:], uint64(1)<<48|sequence)
+		require.True(t, seen[pair], "encrypted Finished %d must be sent", sequence)
+	}
+	var blocked [8]byte
+	binary.BigEndian.PutUint64(blocked[:], uint64(1)<<48|65)
+	require.False(t, seen[blocked], "encrypted Finished 65 must be dropped")
+	require.EqualValues(t, 1, old.worker.metrics.dtlsSequenceDrops.Load())
 	close(store.reply)
 	require.ErrorIs(t, <-result, sessionstore.ErrTransient)
 	stale, err := base.GetState(context.Background(), old.id)
@@ -412,6 +422,39 @@ func TestDTLSGuardRequestsCheckpointAndResumesAfterAcknowledgment(t *testing.T) 
 	require.EqualValues(t, 1, s.worker.metrics.dtlsSequenceDrops.Load())
 }
 
+func TestDTLSGuardRequestsOneCheckpointPerBound(t *testing.T) {
+	base := sessionstore.NewMemory()
+	store := &dtlsWriteReplyStore{Store: base, commit: true}
+	snap := dtlsFixture(t)
+	lease, err := base.Claim(context.Background(), snap.State.ID, netip.MustParseAddrPort("127.0.0.1:10000"), time.Hour)
+	require.NoError(t, err)
+	s, _ := dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{})
+	require.NoError(t, s.persistSnapshot())
+	drop := func(want bool) {
+		t.Helper()
+		_, err := s.dtlsEndpoint.WriteTo(dtlsHeaderRecord(22, 1, 1000), nil)
+		require.NoError(t, err)
+		require.Equal(t, want, len(s.snapshotWanted) == 1)
+		if want {
+			<-s.snapshotWanted
+		}
+	}
+	drop(true)
+	drop(false) // draining the wakeup must not permit caller-driven writes
+	require.NoError(t, s.persistSnapshot())
+	drop(false) // an acknowledgment of the same bound does not rearm it
+	store.result = &sessionstore.TransientError{Op: "put_state", Err: context.DeadlineExceeded}
+	_, err = s.dtlsConn.Write([]byte("advance-capture"))
+	require.NoError(t, err)
+	require.ErrorIs(t, s.persistSnapshot(), sessionstore.ErrTransient)
+	drop(false) // uncertain commits never advance the bound or reset its latch
+	store.result = nil
+	require.NoError(t, s.persistSnapshot())
+	drop(true) // an acknowledged new bound permits one new request
+	drop(false)
+	require.EqualValues(t, 6, s.worker.metrics.dtlsSequenceDrops.Load())
+}
+
 func TestDTLSAutomaticCloseAlertUsesSequenceGuard(t *testing.T) {
 	for _, tail := range []int{0, 64} {
 		t.Run(fmt.Sprintf("tail=%d", tail), func(t *testing.T) {
@@ -450,9 +493,25 @@ func TestDTLSAutomaticHandshakeRetransmissionUsesSequenceGuard(t *testing.T) {
 	require.NoError(t, err)
 	s, wire := dtlsHandshakenSession(t, store, lease)
 	require.NoError(t, s.persistSnapshot())
-	s.dtlsEndpoint.deliver(dtlsRetransmitRequest(1000))
-	require.Eventually(t, func() bool { return s.worker.metrics.dtlsSequenceDrops.Load() > 0 }, 5*time.Second, time.Millisecond)
-	require.Empty(t, wire.packets, "unreferenced epoch in the coalesced last flight escaped")
+	for i := range 65 {
+		s.dtlsEndpoint.deliver(dtlsRetransmitRequest(uint64(1000 + i)))
+	}
+	require.Eventually(t, func() bool {
+		return uint64(len(wire.packets))+s.worker.metrics.dtlsSequenceDrops.Load() >= 65
+	}, 5*time.Second, time.Millisecond)
+	require.Len(t, wire.packets, 64, "plaintext ChangeCipherSpec must not block encrypted Finished within the bound")
+	for sequence := uint64(1); sequence <= 64; sequence++ {
+		p := dtlsPacket(t, wire)
+		require.Equal(t, byte(20), p[0], "retransmitted flight starts with ChangeCipherSpec")
+		require.Zero(t, binary.BigEndian.Uint16(p[3:5]))
+		size := 13 + int(binary.BigEndian.Uint16(p[11:13]))
+		require.Less(t, size, len(p), "Finished must follow in the same datagram")
+		finished := p[size:]
+		require.Equal(t, byte(22), finished[0])
+		pair := dtlsNonceInput(t, finished)
+		require.Equal(t, uint64(1)<<48|sequence, binary.BigEndian.Uint64(pair[:]))
+	}
+	require.EqualValues(t, 1, s.worker.metrics.dtlsSequenceDrops.Load(), "encrypted Finished 65 must be dropped")
 	select {
 	case <-s.snapshotWanted:
 	default:
@@ -475,6 +534,10 @@ func TestDTLSGuardChecksWholeDatagram(t *testing.T) {
 	require.NoError(t, err)
 	s, wire := dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{})
 	require.NoError(t, s.persistSnapshot())
+	plaintext := dtlsHeaderRecord(22, 0, recordlayer.MaxSequenceNumber)
+	_, err = s.dtlsEndpoint.WriteTo(plaintext, nil)
+	require.NoError(t, err)
+	require.Equal(t, plaintext, dtlsPacket(t, wire), "plaintext epoch zero has no nonce reservation")
 	for _, contentType := range []byte{21, 22, 23} {
 		valid := dtlsHeaderRecord(contentType, 1, 64)
 		_, err := s.dtlsEndpoint.WriteTo(valid, nil)
