@@ -129,6 +129,9 @@ const (
 )
 
 type Event struct {
+	// At is store-clock time at callback dispatch. It can step backward.
+	// Across owners it is comparable only as store-clock time, not worker time.
+	At       time.Time
 	Result   *TaskResult
 	ID       EventID
 	Kind     EventKind

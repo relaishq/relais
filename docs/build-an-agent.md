@@ -631,6 +631,7 @@ not a general mixed-version deployment promise.
 The [voice-agent example](../examples/voice-agent) is a push-to-talk worker in
 this module. It registers `voice-agent/v1` and five versioned ReadOnly task kinds (four turn stages plus connection warming).
 It uses public imports only and is built by `make build`.
+`RELAIS_VOICE_WARM` accepts `auth` (default) or `none`; any other value is a startup configuration error.
 
 ```sh
 CGO_ENABLED=0 make build
@@ -644,9 +645,10 @@ its fragment. Use headphones. Start the microphone call, hold **Hold to talk**,
 speak, then release. The page shows the transcript, reply, phase and recovery
 notice. The returned voice is AI-generated. No key: the worker still starts,
 but each press reports `Failed` / `provider_unavailable` on the page and sends
-nothing to OpenAI. The example reads only `OPENAI_API_KEY` in the worker's
-process environment. The launcher passes it only to worker children, including
-replacements; it does not send it to the browser, relay, control or Redis.
+nothing to OpenAI. The example reads `OPENAI_API_KEY` and `RELAIS_VOICE_WARM`
+from the worker's process environment. The launcher passes both only to
+voice worker children, including replacements; neither reaches the browser,
+relay, control, Redis, or fault hook.
 
 Demo A declares **8,192 raw app-state bytes**. Each worker needs these operator
 flags. `relais-demo` supplies them automatically for `voice-agent/v1`; a worker
@@ -794,11 +796,15 @@ An invalid provider key header is a definite `provider_configuration` error;
 no provider request is sent. The attached fault hook and non-voice workers do
 not receive `OPENAI_API_KEY`.
 
-On `ptt.start`, Demo A starts a best-effort ReadOnly connection-warming task
-with a 3 s timeout. It sends an unauthenticated `HEAD /v1/models` through the
-same keep-alive client used for STT, reply and speech. This is not a billed
-inference request and sends no API key. Its reserved turn and ignored result
+On `ptt.start` the worker sends three concurrent authenticated, non-billed
+`GET /v1/models/{model}` requests, for the transcription, reply and speech models,
+to warm the provider after idle; `RELAIS_VOICE_WARM=none` turns this off.
+In local measurements the first turn after 20 or more minutes idle was about
+1.6 s faster, and it is still about 1 s slower than later turns.
+The best-effort ReadOnly warming task has a 3 s timeout and uses the same
+keep-alive client as transcription, reply and speech. Its setting never enters
+state or registration identity. Its reserved turn and ignored result
 cannot capture a provider cursor. Starting transcription cancels warming; it no
 longer helps after release. A refused warm task is ignored. App-state version
-3 reserves ten task turns per press; workers running earlier app versions must
+4 reserves ten task turns per press; workers running earlier app versions must
 not share a pool with this version.

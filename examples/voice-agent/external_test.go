@@ -19,6 +19,7 @@ import (
 // public packages. Copy its production sources to a genuinely external module
 // as a second check that Go's internal-package boundary remains enforced.
 func TestPublicImportsAndExternalBuild(t *testing.T) {
+	t.Setenv("RELAIS_VOICE_WARM", "")
 	root, err := filepath.Abs("../..")
 	require.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -76,5 +77,17 @@ func TestPublicImportsAndExternalBuild(t *testing.T) {
 	require.NoError(t, err, "%s", out)
 	for _, flag := range []string{"(default \"voice-agent/v1\")", "-agent-max-snapshot-bytes", "-agent-snapshot-bytes-per-second", "-agent-snapshot-burst-bytes", "-agent-move-bytes-per-session", "-agent-move-bytes-total", "-drain-timeout"} {
 		require.Contains(t, string(out), flag)
+	}
+	for _, mode := range []string{"head", "unknown", "startup-stub-secret"} {
+		t.Run("invalid-warm-mode-"+mode, func(t *testing.T) {
+			t.Setenv("RELAIS_VOICE_WARM", mode)
+			t.Setenv("OPENAI_API_KEY", "startup-stub-secret")
+			command := exec.CommandContext(ctx, binary, "-h")
+			out, err := command.CombinedOutput()
+			require.Error(t, err, "%s", out)
+			require.Equal(t, 2, command.ProcessState.ExitCode())
+			require.Equal(t, "voice-agent: invalid RELAIS_VOICE_WARM: expected auth or none\n", string(out))
+			require.NotContains(t, string(out), "startup-stub-secret")
+		})
 	}
 }

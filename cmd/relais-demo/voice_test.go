@@ -32,7 +32,7 @@ func TestVoiceControlAuthenticationAndStatusWhitelist(t *testing.T) {
 	worker := testProcess(t, manager, t.TempDir(), "voice")
 	workerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, "call", r.URL.Query().Get("agent-session"))
-		privateapi.Write(w, map[string]any{"agent_session": map[string]any{"name": "voice-agent/v1", "app": map[string]any{"turn": 1, "phase": "idle", "transcript": "Hello.", "reply": "Hi.", "notice": "Ready.", "extra_private": "must-not-leak"}, "state": map[string]any{"Bytes": []byte("must-not-leak")}}})
+		privateapi.Write(w, map[string]any{"agent_session": map[string]any{"name": "voice-agent/v1", "app": map[string]any{"turn": 1, "phase": "idle", "transcript": "Hello.", "reply": "Hi.", "notice": "Ready.", "release_at_ns": 12345, "timings": map[string]any{"transcribe_finished_ns": 900000000, "reply_characters": 42, "unknown": "must-not-leak"}, "extra_private": "must-not-leak"}, "state": map[string]any{"Bytes": []byte("must-not-leak")}}})
 	}))
 	defer workerServer.Close()
 	worker.URL = workerServer.URL
@@ -69,4 +69,9 @@ func TestVoiceControlAuthenticationAndStatusWhitelist(t *testing.T) {
 	require.Contains(t, w.Body.String(), "Hello.")
 	require.NotContains(t, w.Body.String(), "must-not-leak")
 	require.NotContains(t, w.Body.String(), "extra_private")
+	require.NotContains(t, w.Body.String(), "release_at_ns")
+	require.NotContains(t, w.Body.String(), "unknown")
+	require.Contains(t, w.Body.String(), `"transcribe_finished_ns":900000000`)
+	require.Contains(t, w.Body.String(), `"reply_characters":42`)
+	require.Contains(t, w.Body.String(), `"recording_closed_ns":0`)
 }

@@ -55,13 +55,18 @@ func TestPipelineAcceptanceCursorsAndMoveRollback(t *testing.T) {
 }
 func TestPipelineWorstStateFitsDeclaredBudget(t *testing.T) {
 	a := Registration(NewOpenAI("")).Factory(agent.FactoryArgs{}).(*Agent)
-	text := strings.Repeat("\x00\"😀<汉", 3000)
-	a.state = State{Turn: math.MaxUint64 - 30, Phase: "playing", Transcript: boundedText(text, 1024), Reply: boundedText(text, MaxReplyBytes), Outcome: agent.OutcomeUnknown, Error: "turn_interrupted", Notice: "Recording restarted after a worker stop; earlier speech may be missing. Saved text is shown below.", RestartNotice: true, Cursor: math.MaxUint64, RenderCursor: math.MaxUint64, PlayCursor: math.MaxUint64, Task: agent.TaskID(strings.Repeat("A", 43)), RenderTask: agent.TaskID(strings.Repeat("B", 43)), PlayTask: agent.TaskID(strings.Repeat("C", 43)), Segment: 7, Render: 7, RenderReady: true, PlayLength: MaxSegmentBytes, RetryPlay: true, RetryRender: true, PlayRetryInFlight: true, RenderRetryInFlight: true, CapacityWindow: true, CapacityExpired: true, StopAfterPlayback: true, SpeechBytes: MaxSpeechBytes, SpeechNanos: SpeechTime, Seen: Window{SSRC: math.MaxUint32, High: math.MaxUint64, Mask: [2]uint64{math.MaxUint64, math.MaxUint64}, Set: true}}
+	text := strings.Repeat("x", 4096)
+	a.state = State{Turn: math.MaxUint64 - 30, Phase: "synthesizing", Transcript: boundedText(text, 1024), Reply: boundedText(text, MaxReplyBytes), Outcome: agent.OutcomeUnknown, Error: "provider_configuration", Notice: strings.Repeat("N", 106), RestartNotice: true, Cursor: math.MaxUint64, RenderCursor: math.MaxUint64, PlayCursor: math.MaxUint64, Task: agent.TaskID(strings.Repeat("A", 43)), RenderTask: agent.TaskID(strings.Repeat("B", 43)), PlayTask: agent.TaskID(strings.Repeat("C", 43)), Segment: 7, Render: 7, RenderReady: true, PlayLength: MaxSegmentBytes, RetryPlay: true, RetryRender: true, PlayRetryInFlight: true, RenderRetryInFlight: true, CapacityWindow: true, CapacityExpired: true, StopAfterPlayback: true, SpeechBytes: MaxSpeechBytes, SpeechNanos: SpeechTime, Seen: Window{SSRC: math.MaxUint32, High: math.MaxUint64, Mask: [2]uint64{math.MaxUint64, math.MaxUint64}, Set: true}}
 	for range 4 {
 		a.state.History = append(a.state.History, Exchange{boundedText(text, 512), boundedText(text, 512)})
 	}
+	a.state.ReleaseAt = math.MaxInt64
+	a.state.Timings = Timings{RecordingClosed: math.MaxInt64, TranscribeStarted: math.MaxInt64, TranscribeFinished: math.MaxInt64, ReplyStarted: math.MaxInt64, ReplyFinished: math.MaxInt64, ReplyCharacters: MaxReplyBytes, FirstSentenceCharacters: MaxSegmentRunes, SpeechStarted: math.MaxInt64, SpeechFinished: math.MaxInt64, SpeechAudio: math.MaxInt64, FirstQueued: math.MaxInt64}
 	saved, err := a.Save(context.Background())
 	require.NoError(t, err)
+	// 5,632 bounded text bytes + 106 notice bytes + 22 error bytes +
+	// 1,413 bytes of field names, punctuation, IDs, numbers and flags.
+	require.Equal(t, 5632+106+22+1413, len(saved.Bytes))
 	require.LessOrEqual(t, len(saved.Bytes), MaxStateBytes)
 	var roundTrip State
 	require.NoError(t, json.Unmarshal(saved.Bytes, &roundTrip))

@@ -267,3 +267,19 @@ test('voice selection shows a voice intro before the call starts; stock intro re
  await new Promise(r=>setImmediate(r));assert.equal(echo.elements.get('intro')?.textContent || '','');
  assert.match(fs.readFileSync('cmd/relais-demo/web/index.html','utf8'),/Publish a test pattern or your camera/);
 });
+
+test('completed voice timing line uses server spans and preserves the last turn while recording',async()=>{
+ const {api,context,elements}=page('',true);const s=call();s.agentMode='voice-agent/v1';api.setCall(s);
+ const timings={transcribe_started_ns:100000000,transcribe_finished_ns:1000000000,reply_started_ns:1100000000,reply_finished_ns:3200000000,speech_started_ns:3200000000,speech_finished_ns:4400000000,first_queued_ns:4500000000};
+ let polls=0;context.fetch=async()=>({ok:true,text:async()=>JSON.stringify({phase:++polls===1?'idle':'recording',timings})});
+ context.setTimeout=fn=>{if(polls>=2)s.stopped=true;fn();};await api.voiceStatuses(s);
+ assert.equal(elements.get('voice-timing').textContent,'Last turn: transcribe 0.9 s · reply 2.1 s · first speech 1.2 s · first audio queued 4.5 s');
+});
+
+test('voice timing line floors backward store-clock spans at zero',async()=>{
+ const {api,context,elements}=page('',true);const s=call();s.agentMode='voice-agent/v1';api.setCall(s);
+ const timings={transcribe_started_ns:1000000000,transcribe_finished_ns:500000000,reply_started_ns:1000000000,reply_finished_ns:500000000,speech_started_ns:1000000000,speech_finished_ns:500000000,first_queued_ns:2000000000};
+ context.fetch=async()=>({ok:true,text:async()=>JSON.stringify({phase:'idle',timings})});context.setTimeout=fn=>{s.stopped=true;fn();};
+ await api.voiceStatuses(s);
+ assert.equal(elements.get('voice-timing').textContent,'Last turn: transcribe 0.0 s · reply 0.0 s · first speech 0.0 s · first audio queued 2.0 s');
+});

@@ -39,7 +39,7 @@ func handlers(p Provider) map[string]agent.TaskHandler {
 		WarmKind: func(ctx context.Context, run *agent.TaskRun) error {
 			if run.After() == 0 {
 				if provider, ok := p.(interface{ Warm(context.Context) }); ok {
-					provider.Warm(ctx)
+					provider.Warm(requestContext(ctx, run.Spec().Turn+1, "warm"))
 				}
 			}
 			return nil
@@ -48,6 +48,7 @@ func handlers(p Provider) map[string]agent.TaskHandler {
 			if run.After() > 0 {
 				return nil
 			}
+			ctx = requestContext(ctx, run.Spec().Turn, "transcribe")
 			b, err := RecordingOgg(run.Spec().Request)
 			if err != nil {
 				return run.Fail(agent.Failed, "invalid_audio")
@@ -63,6 +64,7 @@ func handlers(p Provider) map[string]agent.TaskHandler {
 			if run.After() > 0 {
 				return nil
 			}
+			ctx = requestContext(ctx, run.Spec().Turn, "reply")
 			var request replyRequest
 			if err := json.Unmarshal(run.Spec().Request, &request); err != nil {
 				return run.Fail(agent.Failed, "invalid_request")
@@ -82,6 +84,7 @@ func handlers(p Provider) map[string]agent.TaskHandler {
 			if run.After() > 0 {
 				return nil
 			}
+			ctx = requestContext(ctx, run.Spec().Turn-agent.Turn(speechIndex(run.Spec().Step)+1), run.Spec().Step)
 			var request speechRequest
 			if err := json.Unmarshal(run.Spec().Request, &request); err != nil || request.Bytes <= 1 || request.Bytes > MaxSegmentBytes || request.Nanos <= 0 || request.Nanos > 8*time.Second {
 				return run.Fail(agent.Failed, "invalid_request")

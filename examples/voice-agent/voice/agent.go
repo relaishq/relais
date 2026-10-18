@@ -1,5 +1,11 @@
 // Package voice is a bounded push-to-talk tutorial. Audio exists only in move
 // memory. Four ReadOnly stages separate paid work from deterministic playback.
+// On ptt.start the worker sends three concurrent authenticated, non-billed
+// GET /v1/models/{model} requests for the transcription, reply and speech models
+// to warm the provider after idle; RELAIS_VOICE_WARM=none turns this off.
+// RELAIS_VOICE_WARM accepts auth (default) or none; other values are startup errors.
+// In local measurements the first turn after 20 or more minutes idle was about
+// 1.6 s faster, and it is still about 1 s slower than later turns.
 package voice
 
 import (
@@ -30,7 +36,7 @@ const (
 	RecordTime        = 8 * time.Second
 	SpeechTime        = 20 * time.Second
 	recordTimer       = "voice/record/v1"
-	stateVersion      = 3
+	stateVersion      = 4
 	turnStride        = MaxSegments + 2
 )
 
@@ -42,6 +48,8 @@ type Exchange struct {
 // State is the complete durable schema. It contains no provider credentials,
 // audio, provider response IDs, or host notices. Text limits count JSON bytes.
 type State struct {
+	ReleaseAt           int64         `json:"release_at_ns,omitempty"`
+	Timings             Timings       `json:"timings"`
 	Turn                agent.Turn    `json:"turn"`
 	Phase               string        `json:"phase"`
 	Transcript          string        `json:"transcript,omitempty"`
@@ -116,10 +124,15 @@ func (a *Agent) task(kind, phase string, request []byte) agent.Effects {
 	floor := a.state.Turn
 	return agent.Effects{CancelBefore: &floor, CancelTimers: []string{recordTimer}, StartTasks: []agent.TaskSpec{{Step: phase, Kind: kind, Turn: a.state.Turn, Class: agent.ReadOnly, Resume: agent.Retry, Timeout: 45 * time.Second, Request: request}}}
 }
-func (a *Agent) finish() agent.Effects {
+func (a *Agent) finish(at time.Time) agent.Effects {
+	if a.state.ReleaseAt == 0 && !at.IsZero() {
+		a.state.ReleaseAt = at.UnixNano()
+	}
+	a.state.Timings.RecordingClosed = a.offset(at)
 	if a.length <= 1 {
 		return a.reset(agent.Failed, "empty_recording", "No speech was recorded. Hold to talk again.")
 	}
+	a.state.Timings.TranscribeStarted = a.offset(at)
 	return a.task(TranscribeKind, "transcribing", a.buffer)
 }
 func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
@@ -145,6 +158,7 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 				return a.reset(agent.Capacity, "turn_limit", "Start a new call."), nil
 			}
 			a.state.Turn += turnStride
+			a.state.ReleaseAt, a.state.Timings = 0, Timings{}
 			notice := ""
 			if a.state.RestartNotice {
 				notice = "Recording restarted after a worker stop; earlier speech may be missing. Saved text is shown below."
@@ -161,14 +175,14 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 			a.state.Segment, a.state.Render, a.state.SpeechBytes, a.state.SpeechNanos = 0, 0, 0, 0
 			effects.SetTimers = []agent.TimerSpec{{ID: recordTimer, After: RecordTime}}
 			if a.canWarm {
-				// A separate ReadOnly task performs only an unauthenticated HEAD.
+				// A separate ReadOnly task warms the provider with model metadata GETs.
 				// It never occupies a speech/play cursor or a playback turn.
 				effects.StartTasks = []agent.TaskSpec{{Step: "warm", Kind: WarmKind, Turn: a.state.Turn - 1, Class: agent.ReadOnly, Resume: agent.Retry, Timeout: 3 * time.Second}}
 			}
 			return effects, nil
 		case "ptt.stop":
 			if a.state.Phase == "recording" {
-				return a.finish(), nil
+				return a.finish(e.At), nil
 			}
 		default:
 			a.state.Notice = "Unknown control. Use the hold-to-talk button."
@@ -183,7 +197,7 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 		}
 		if a.length+len(p)+2 > MaxRecordingBytes {
 			a.state.Notice = "Recording reached its byte limit; the last packet was not recorded."
-			return a.finish(), nil
+			return a.finish(e.At), nil
 		}
 		if a.length == 0 {
 			a.buffer = []byte{1}
@@ -194,7 +208,7 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 		a.length = len(a.buffer)
 		if a.length >= MaxRecordingBytes-1202 {
 			a.state.Notice = "Recording reached its byte limit."
-			return a.finish(), nil
+			return a.finish(e.At), nil
 		}
 	case agent.TimerFired:
 		if e.Timer != nil {
@@ -215,7 +229,7 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 		}
 		if e.Timer != nil && e.Timer.ID == recordTimer && a.state.Phase == "recording" {
 			a.state.Notice = "Recording stopped at its time limit."
-			return a.finish(), nil
+			return a.finish(e.At), nil
 		}
 	case agent.Resumed:
 		if e.Resume != nil && (e.Resume.MoveOnly == agent.OutcomeUnknown || e.Resume.Kind == legacy.Takeover) {
@@ -244,7 +258,7 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 			return a.failAfterPlayback(agent.Capacity, "capacity", "Input or work was refused by a resource limit. Hold to talk again."), nil
 		}
 		if r.Turn > a.state.Turn && r.Turn <= a.state.Turn+MaxSegments && a.state.Phase != "idle" && a.state.Phase != "recording" {
-			return a.speechResult(r), nil
+			return a.speechResult(r, e.At), nil
 		}
 		if r.Turn != a.state.Turn || a.state.Phase == "idle" || a.state.Phase == "recording" || r.Sequence <= a.state.Cursor {
 			break
@@ -263,6 +277,7 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 					return a.reset(agent.Failed, "empty_transcript", "No words were recognized. Hold to talk again."), nil
 				}
 				b, _ := json.Marshal(replyRequest{Transcript: a.state.Transcript, History: a.state.History})
+				a.state.Timings.ReplyStarted = a.offset(e.At)
 				return a.task(ReplyKind, "replying", b), nil
 			case "replying":
 				if len(Segments(a.state.Reply)) == 0 {
@@ -274,15 +289,22 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 				}
 				a.state.Phase = "synthesizing"
 				a.state.Task, a.state.Cursor = "", 0
+				a.state.Timings.SpeechStarted = a.offset(e.At)
 				return agent.Effects{StartTasks: []agent.TaskSpec{a.render(0)}}, nil
 			}
 			break
 		}
 		switch a.state.Phase {
 		case "transcribing":
+			a.state.Timings.TranscribeFinished = a.offset(e.At)
 			a.state.Transcript = boundedText(string(r.Chunk.Data), 1024)
 		case "replying":
+			a.state.Timings.ReplyFinished = a.offset(e.At)
 			a.state.Reply = boundedText(string(r.Chunk.Data), MaxReplyBytes)
+			a.state.Timings.ReplyCharacters = utf8.RuneCountInString(a.state.Reply)
+			if pieces := Segments(a.state.Reply); len(pieces) > 0 {
+				a.state.Timings.FirstSentenceCharacters = utf8.RuneCountInString(pieces[0])
+			}
 		}
 	case agent.PlaybackFinished:
 		if e.Playback != nil && e.Playback.Turn == a.segmentTurn(a.state.Segment) && a.state.Phase == "playing" {
