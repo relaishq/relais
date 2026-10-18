@@ -635,16 +635,25 @@ func (s *session) launchTasks() {
 		})
 		handler := h.registration.Tasks[t.intent.Kind]
 		s.mu.Unlock()
-		if s.worker.taskDrain.active == 0 {
-			s.worker.taskDrain.idle = make(chan struct{})
+		// Drain policy affects only the wait count, never launch admission or
+		// urgent export. Class belongs to this task, not its registered kind.
+		waitForDrain := spec.Class != agent.ReadOnly || !slices.Contains(h.registration.SkipDrainWait, spec.Kind)
+		if waitForDrain {
+			if s.worker.taskDrain.active == 0 {
+				s.worker.taskDrain.idle = make(chan struct{})
+			}
+			s.worker.taskDrain.active += 2
 		}
-		s.worker.taskDrain.active += 2
 		s.worker.taskDrain.mu.Unlock()
 		go func(id agent.TaskID) {
-			defer s.worker.taskDrain.finish()
+			if waitForDrain {
+				defer s.worker.taskDrain.finish()
+			}
 			done := make(chan error, 1)
 			go func() {
-				defer s.worker.taskDrain.finish()
+				if waitForDrain {
+					defer s.worker.taskDrain.finish()
+				}
 				done <- handler(ctx, run)
 			}()
 			var err error
