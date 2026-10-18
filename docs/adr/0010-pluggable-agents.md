@@ -301,7 +301,7 @@ A worker-local `workerapp.Registration.SkipDrainWait` list may exclude named tas
 from the handler wait, but only for tasks whose `TaskSpec.Class` is `ReadOnly`.
 `SideEffecting` tasks always count, even for a listed kind. Playback-only tasks can
 resume exactly above `After()` through the existing urgent export, so waiting buys
-nothing. The list is registration configuration, never persisted task or snapshot state;
+nothing; list only `Retry` kinds that resume deterministically. The list is registration configuration, never persisted task or snapshot state;
 new launches remain fenced, and unfinished skipped tasks move when the wait ends.
 
 Use a monotonic output pacer independent of ingress, a 48 kHz RTP clock, and host-validated

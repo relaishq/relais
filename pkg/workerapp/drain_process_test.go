@@ -202,7 +202,10 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 				http.Error(w, err.Error(), 400)
 				return
 			}
-			resumed <- after
+			select {
+			case resumed <- after:
+			default:
+			}
 			w.WriteHeader(204)
 			return
 		}

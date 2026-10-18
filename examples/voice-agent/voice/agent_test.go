@@ -256,4 +256,8 @@ func TestRegistrationSkipsOnlyPlaybackDrainWait(t *testing.T) {
 	reg := Registration(NewOpenAI(""))
 	require.Equal(t, []string{PlayKind}, reg.SkipDrainWait)
 	require.NotNil(t, reg.Tasks[PlayKind])
+	// The opt-out applies only to ReadOnly Retry tasks that resume above After().
+	spec := (&Agent{}).playSpec()
+	require.Equal(t, agent.ReadOnly, spec.Class)
+	require.Equal(t, agent.Retry, spec.Resume)
 }

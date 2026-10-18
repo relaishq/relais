@@ -432,7 +432,9 @@ be nonempty and valid UTF-8; unknown kinds fail registration with
 wait. `SideEffecting` tasks always count, even if their kind is listed. The
 setting is worker-local and is not persisted in tasks or snapshots.
 Demo A lists only `PlayKind`: its accepted prefix moves through urgent export,
-and playback resumes exactly above `After()`, so waiting buys nothing. Skipped
+and playback resumes exactly above `After()`, so waiting buys nothing. List
+only `Retry` kinds that resume deterministically above `After()`: a skipped
+`Abandon` task is abandoned at the move instead of finishing. Skipped
 tasks move when the other handlers finish or the task budget expires. New
 starts still queue as `never_launched`. Leave generation and other useful
 in-flight work unlisted, including streaming generators parked in `Emit`
