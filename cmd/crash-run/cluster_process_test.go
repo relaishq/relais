@@ -31,7 +31,7 @@ func TestClusterProcessTopology(t *testing.T) {
 	manager := &clusterprocess.Manager{}
 	ctx, cancel := manager.Context()
 	defer cancel()
-	dir := t.TempDir()
+	dir := redistestcluster.Directory(t, "process")
 	prefix := fmt.Sprintf("cluster-process:%d:", time.Now().UnixNano())
 	env := processEnv(strings.Repeat("00", 32), strings.Join(addrs, ","), prefix)
 	env = append(env, "RELAIS_REDIS_CLUSTER=1")
@@ -43,7 +43,7 @@ func TestClusterProcessTopology(t *testing.T) {
 		require.NoError(t, os.Mkdir(trialDir, 0700))
 		trialCtx, stop := context.WithTimeout(ctx, 30*time.Second)
 		defer stop()
-		result, err := relayStandbyTrial(trialCtx, manager, bin, trialDir, env, 5*time.Second, 5*time.Second, false, false)
+		result, err := relayStandbyTrial(trialCtx, manager, bin, trialDir, freshTrialEnv(env), 5*time.Second, 5*time.Second, false, false)
 		require.NoError(t, err)
 		require.True(t, result.Pass, "%+v", result)
 		require.Positive(t, result.RoutesRestored)
@@ -53,12 +53,14 @@ func TestClusterProcessTopology(t *testing.T) {
 		require.NoError(t, os.Mkdir(faultDir, 0700))
 		// Independent observer: the process clients must detect the changed primary
 		// themselves. Never force their slot cache to refresh from the test.
-		observer, err := sessionstore.NewRedis(ctx, storage.RedisConfig{Addrs: addrs, Cluster: true, Prefix: prefix}, make([]byte, 32))
-		require.NoError(t, err)
-		defer func() { require.NoError(t, observer.Close()) }()
 		type promotion struct{ started, completed time.Time }
 		var promotions []promotion
-		fault := func(ctx context.Context, id string) error {
+		fault := func(ctx context.Context, id, prefix string) error {
+			observer, err := sessionstore.NewRedis(ctx, storage.RedisConfig{Addrs: addrs, Cluster: true, Prefix: prefix}, make([]byte, 32))
+			if err != nil {
+				return err
+			}
+			defer func() { _ = observer.Close() }()
 			event := promotion{started: time.Now()}
 			defer func() { event.completed = time.Now(); promotions = append(promotions, event) }()
 

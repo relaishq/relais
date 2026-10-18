@@ -143,13 +143,15 @@ before: TLS protects transport; it does not replace encrypted snapshots.
 | `RELAIS_REDIS_PASSWORD` | Password for the ACL user, or for the default user when no username is set. |
 | `RELAIS_REDIS_TLS` | Set to `1` to enable TLS; unset or `0` disables it. Minimum TLS version: 1.2. |
 | `RELAIS_REDIS_TLS_CA_FILE` | Optional PEM CA bundle. Unset uses system roots. |
-| `RELAIS_REDIS_TLS_SERVER_NAME` | Optional certificate verification name and SNI override. Defaults to the connection host. |
+| `RELAIS_REDIS_TLS_SERVER_NAME` | Optional shared certificate verification name and SNI override for every node. Unset verifies each connection against its announced hostname. |
 | `RELAIS_REDIS_TLS_CERT_FILE` | Optional client PEM certificate chain for mutual TLS; requires the key file. |
 | `RELAIS_REDIS_TLS_KEY_FILE` | Optional client private key; requires the certificate file. |
 | `RELAIS_REDIS_ALLOW_LOCAL_6379` | Set to `1` to permit loopback 6379 in production processes; unset or `0` keeps the refusal. |
 
-Cluster nodes often advertise IPs, so set `RELAIS_REDIS_TLS_SERVER_NAME` or use
-certificates with IP SANs.
+Leave `RELAIS_REDIS_TLS_SERVER_NAME` unset to verify each seed and discovered
+node against its own hostname. Setting it forces one SNI and verification name
+for every node; use it only when every node certificate covers that name. A node
+that announces an IP needs an IP SAN, or a corrected announced hostname.
 
 Production processes accept port 6379 on remote hosts. Literal loopback IPs
 (`127.0.0.0/8`, `::1`, including mapped IPv4) and `localhost` refuse 6379 by
@@ -221,7 +223,9 @@ the global epoch allocator and relay leases are independent single-key
 operations. Pipelines route each independent command to its own primary.
 Route restore scans every primary. Worker-index listing reads its index's
 primary and checks each member on that session's primary. Script-cache misses
-reload on the affected node, including after a promotion. See the
+reload on the affected node, including after a promotion. Discovery validates every announced address with
+the seed endpoint policy, tries the last good source first, and caps each
+source connection and I/O attempt at 250 ms. See the
 [key audit](dev/redis-key-layout.md) for exact families and operations.
 
 [Local Cluster tests](dev/redis-cluster.md) exercise calls, planned moves,
@@ -232,7 +236,10 @@ These tests skip under `-short`. They do not establish managed-store durability,
 cloud network behavior, cross-host relay takeover, or a full 60-second consent
 window in the short process probe. Open-source Redis replication is asynchronous;
 coordinated `CLUSTER FAILOVER` tests reconnect and fencing without intentionally
-losing writes. ADR 0011 still requires a managed store that preserves confirmed
+losing writes. ASK redirects are returned to the application and are not followed.
+During live resharding, a key migrating between SCAN pages can be missed without
+an error. Route restoration therefore does not prove a complete inventory
+during resharding. ADR 0011 still requires a managed store that preserves confirmed
 ownership writes across failures.
 
 ## Other hosts and security

@@ -11,7 +11,7 @@ import (
 // dialer verify each connection's host, including individual Cluster nodes.
 // Error strings name settings but never include their values or file contents.
 func TLSFromEnv() (*tls.Config, error) {
-	enabled, err := envSwitch("RELAIS_REDIS_TLS")
+	enabled, err := EnvSwitch("RELAIS_REDIS_TLS")
 	if err != nil {
 		return nil, err
 	}

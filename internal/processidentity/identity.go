@@ -243,3 +243,34 @@ func gone(ctx context.Context, id Identity, read func(int) (string, bool, error)
 	}
 	return check()
 }
+
+// Observe records a process in the caller's host and PID namespace. It grants
+// no authority to signal it; callers must separately establish ownership.
+func Observe(pid int) (Identity, error) {
+	if pid <= 0 {
+		return Identity{}, errors.New("invalid observed process PID")
+	}
+	local, err := Current()
+	if err != nil {
+		return Identity{}, err
+	}
+	start, dead, err := inspect(pid)
+	if err != nil {
+		return Identity{}, err
+	}
+	if dead {
+		return Identity{}, os.ErrNotExist
+	}
+	exe, err := executableIdentity(pid)
+	if err != nil {
+		return Identity{}, err
+	}
+	again, dead, err := inspect(pid)
+	if err != nil {
+		return Identity{}, err
+	}
+	if dead || again != start {
+		return Identity{}, errors.New("process identity changed while observing")
+	}
+	return Identity{PID: pid, Start: start, Host: local.Host, Namespace: local.Namespace, Executable: exe}, nil
+}

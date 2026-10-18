@@ -372,6 +372,7 @@ jobs:
     env:
       RELAIS_TEST_REDIS_CLUSTER: '1'
       RELAIS_TEST_REDIS_TLS_REQUIRE: '1'
+      RELAIS_TEST_ARTIFACT_DIR: ${{ github.workspace }}/bin/cluster-test-artifacts
     steps:
       - uses: actions/checkout@v6
       - name: Set up Go
@@ -384,6 +385,13 @@ jobs:
         run: go build -race -o bin/ ./cmd/relais-relay ./cmd/relais-worker ./cmd/relais-control ./cmd/relais-signal
       - name: Run Redis Cluster protocol and process tests
         run: make test-cluster
+      - name: Upload Cluster failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cluster-test-failure-evidence
+          path: bin/cluster-test-artifacts/
+          if-no-files-found: warn
 
   netns-crash-run:
     timeout-minutes: 35

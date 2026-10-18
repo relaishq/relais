@@ -31,6 +31,7 @@ import (
 type StoreConfig struct {
 	Address, Prefix, Username, Password string
 	Cluster                             bool
+	clusterEnvErr                       error
 	OutageBudget                        time.Duration
 }
 
@@ -48,7 +49,9 @@ func (c *StoreConfig) Flags(fs *flag.FlagSet) {
 // ConnectionFlags registers Redis connection settings without worker retention policy.
 func (c *StoreConfig) ConnectionFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.Address, "redis", Env("RELAIS_REDIS_ADDR", ""), "explicit Redis host:port; comma-separated seeds with -redis-cluster (local 6379 requires RELAIS_REDIS_ALLOW_LOCAL_6379=1)")
-	fs.BoolVar(&c.Cluster, "redis-cluster", Env("RELAIS_REDIS_CLUSTER", "0") == "1", "use Redis Cluster with the -redis seed addresses (primary reads only)")
+	enabled, err := redisendpoint.EnvSwitch("RELAIS_REDIS_CLUSTER")
+	c.clusterEnvErr = err
+	fs.BoolVar(&c.Cluster, "redis-cluster", enabled, "use Redis Cluster with the -redis seed addresses (primary reads only)")
 	fs.StringVar(&c.Prefix, "redis-prefix", Env("RELAIS_REDIS_PREFIX", "relais:process:"), "shared session-store namespace")
 	// Keep credentials out of command-line flags and readiness output.
 	c.Password = os.Getenv("RELAIS_REDIS_PASSWORD")
@@ -196,6 +199,9 @@ func (c StoreConfig) addresses() []string {
 	return addrs
 }
 func (c StoreConfig) validate() error {
+	if c.clusterEnvErr != nil {
+		return c.clusterEnvErr
+	}
 	for _, addr := range c.addresses() {
 		if err := ValidateProductionRedis(addr); err != nil {
 			return err

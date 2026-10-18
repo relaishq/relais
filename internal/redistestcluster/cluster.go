@@ -65,9 +65,12 @@ func StartWithOptions(t *testing.T, options Options) []string {
 			t.Fatal(err)
 		}
 	}
-	dir := t.TempDir()
+	dir := Directory(t, "nodes")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	if err := cleanupStaleServers(ctx); err != nil {
+		t.Fatal(err)
+	}
 	clientOptions := redis.Options{Username: options.Username, Password: options.Password, MaxRetries: -1, DialTimeout: time.Second, ReadTimeout: time.Second}
 	if options.CAFile != "" {
 		roots := x509.NewCertPool()
@@ -86,6 +89,7 @@ func StartWithOptions(t *testing.T, options Options) []string {
 	}
 	var addrs []string
 	var children []*clusterprocess.Child
+	var records []string
 	t.Cleanup(func() {
 		if t.Failed() {
 			for i := range children {
@@ -95,6 +99,9 @@ func StartWithOptions(t *testing.T, options Options) []string {
 		}
 		for i := len(children) - 1; i >= 0; i-- {
 			children[i].Stop()
+			if i < len(records) {
+				_ = os.Remove(records[i])
+			}
 		}
 	})
 	// Reserve all client and bus ports until each child is about to bind them.
@@ -132,15 +139,22 @@ func StartWithOptions(t *testing.T, options Options) []string {
 		if options.Username != "" {
 			config += fmt.Sprintf("user default off\nuser %s on >%s ~* &* +@all\nmasteruser %s\nmasterauth %s\n", options.Username, options.Password, options.Username, options.Password)
 		}
+		pidFile := filepath.Join(nodeDir, "redis.pid")
+		config += "pidfile " + strconv.Quote(pidFile) + "\n"
 		configFile := filepath.Join(nodeDir, "redis.conf")
 		if err := os.WriteFile(configFile, []byte(config), 0600); err != nil {
 			t.Fatal(err)
 		}
-		child, err := clusterprocess.Start(nodeDir, "redis", os.Environ(), "redis-server", configFile)
+		child, err := clusterprocess.StartSupervised(nodeDir, "redis", os.Environ(), "redis-server", configFile)
 		if err != nil {
 			t.Fatal(err)
 		}
 		children = append(children, child)
+		record, err := recordServer(child, pidFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, record)
 		addrs = append(addrs, addr)
 		if err := child.WaitLog(ctx, "Ready to accept connections"); err != nil {
 			data, _ := os.ReadFile(filepath.Join(nodeDir, "redis.log"))

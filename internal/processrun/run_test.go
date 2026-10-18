@@ -194,3 +194,22 @@ func TestRedisClusterConfiguration(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+func TestRedisClusterEnvironmentSwitch(t *testing.T) {
+	t.Setenv("RELAIS_REDIS_ADDR", "cache.example.invalid:16380")
+	for _, value := range []string{"true", "false", "yes", "typo"} {
+		t.Setenv("RELAIS_REDIS_CLUSTER", value)
+		var config StoreConfig
+		config.ConnectionFlags(flag.NewFlagSet("cluster", flag.ContinueOnError))
+		_, err := config.redisConfig()
+		require.ErrorContains(t, err, "RELAIS_REDIS_CLUSTER must be 0 or 1")
+	}
+	for _, value := range []string{"", "0", "1"} {
+		t.Setenv("RELAIS_REDIS_CLUSTER", value)
+		var config StoreConfig
+		config.ConnectionFlags(flag.NewFlagSet("cluster", flag.ContinueOnError))
+		cfg, err := config.redisConfig()
+		require.NoError(t, err)
+		require.Equal(t, value == "1", cfg.Cluster)
+	}
+}
