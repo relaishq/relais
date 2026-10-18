@@ -1,45 +1,59 @@
-# Local Redis Cluster for Tests
+# Local Redis Cluster tests
 
-This guide spins up a 6-node Redis Cluster locally and runs the guarded cluster integration tests.
+Install Go, `redis-server`, `redis-cli`, and `ffmpeg` on PATH. The fixture is
+validated locally with Redis 7.0.11. On Ubuntu the `redis-server`, `redis-tools`,
+and `ffmpeg` apt packages supply these tools. No Docker or virtual machine is used.
 
-## Prereqs
-- Docker + Docker Compose
-- Go toolchain
-
-## Start cluster
-```bash
-docker compose -f dev/redis-cluster/docker-compose.yml up -d
-# Wait ~15-30s for cluster to initialize
+```sh
+# Build the real process binaries; race instrumentation covers children too.
+go build -race -o bin/ ./cmd/relais-relay ./cmd/relais-worker ./cmd/relais-control ./cmd/relais-signal
+RELAIS_TEST_REDIS_CLUSTER=1 make test-cluster
 ```
 
-## Export addresses
-Nodes are bound on localhost ports 7000-7005.
-```bash
-export RELAIS_TEST_REDIS_CLUSTER_ADDRS="localhost:7000,localhost:7001,localhost:7002,localhost:7003,localhost:7004,localhost:7005"
+Each integration test starts six owned `redis-server` processes in a temporary
+directory with `cluster-enabled yes`, three primaries and three replicas. It
+reserves free loopback client and cluster-bus ports outside the OS ephemeral
+range, using the process driver's port allocator (fallback 20000–29999).
+It never uses 6379, 7000–7005, 9101 or 9201. It joins the nodes with
+`redis-cli --cluster create ... --cluster-replicas 1 --cluster-yes`, waits for
+all nodes and replica links, and stops only those children at cleanup. Failed
+tests include their node logs. Local startup is normally about 2–3 seconds.
+Concurrent test packages own separate ports and directories.
+
+Without `RELAIS_TEST_REDIS_CLUSTER=1` or `RELAIS_TEST_REDIS_CLUSTER_ADDRS`,
+integration tests skip. They also skip under `-short`. A configured but broken
+cluster fails tests. Set `RELAIS_TEST_REDIS_TLS_REQUIRE=1` to fail instead of
+skip when the local server lacks TLS; CI requires it. The TLS/ACL fixture
+always owns a separate cluster, generates its own certificates and credentials,
+requires client certificates, and disables the default ACL user.
+
+For an existing **dedicated disposable** plaintext cluster, use
+`RELAIS_TEST_REDIS_CLUSTER_ADDRS=host:port,host:port`. The tests write data,
+flush script caches and promote replicas. Do not point this at a shared store.
+The TLS test still requires `RELAIS_TEST_REDIS_CLUSTER=1` and owns its fixture.
+
+`make test-cluster` covers storage streams, slot arithmetic, fenced session
+state and routes across all primaries, worker indexes, cold-node script reload,
+TLS/ACL clients, and the production process call/move/SIGKILL/relay-standby
+trials. The live-call promotion occurs before the usual move or worker-kill
+event, with media running throughout. It flushes the promoted node's scripts
+and checks that ownership epochs, worker indexes and routes survive.
+
+```sh
+# Repeat the Cluster and slot tests under the race detector.
+RELAIS_TEST_REDIS_CLUSTER=1 go test -race -v -count=10 -timeout 25m \
+  -run '^Test(Cluster|RedisCluster|Redis.*Slot|SlotCRC16)' \
+  ./pkg/storage ./pkg/sessionstore ./pkg/framecache \
+  ./internal/processrun ./internal/redistestcluster ./cmd/crash-run
 ```
 
-## Run tests
-```bash
-# Storage package cluster tests only
-go test ./pkg/storage -run Cluster -count=1 -v
+Promotion uses coordinated `CLUSTER FAILOVER`, after replica catch-up. This
+proves protocol reconnection and fencing, not durability of asynchronous Redis
+replication. The process probe uses its existing five-second warmup and
+observation gates; it does not claim the full 60-second consent proof. Managed
+store durability and provider failover remain separate deployment evidence.
 
-# Or full repo tests (cluster tests will be included)
-go test ./... -count=1
-
-# Makefile shortcuts
-# Run only Redis Cluster tests (requires RELAIS_TEST_REDIS_CLUSTER_ADDRS)
-make test-cluster
-
-# Run Streams Consumer Group tests against single-node (non-cluster)
-make test-stream-groups
-```
-
-## Stop cluster
-```bash
-docker compose -f dev/redis-cluster/docker-compose.yml down -v
-```
-
-## Notes
-- Tests are skipped automatically if `RELAIS_TEST_REDIS_CLUSTER_ADDRS` is not set.
-- Keys use hash tags `{sess:<sessionID>}` to co-locate per-session keys in the same slot.
-- Streams must be enabled in code/config to exercise XREAD paths.
+The `cluster-tests` CI job runs on `ubuntu-latest`, installs local Redis and
+ffmpeg, builds race-instrumented processes, and runs `make test-cluster` within
+a 15-minute job limit. It is separate from the PR `build` aggregate while hosted
+reliability is established. No credentials or self-hosted runners are required.

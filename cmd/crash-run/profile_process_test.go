@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -18,7 +17,7 @@ import (
 // the production profile trial seam with a loopback LAN transport, so it can
 // prove moves/buffering/report integration without claiming netem evidence.
 func TestProfileProcessLoopbackProbe(t *testing.T) {
-	if os.Getenv("RELAIS_TEST_PROFILE_PROCESS") != "1" {
+	if testing.Short() || os.Getenv("RELAIS_TEST_PROFILE_PROCESS") != "1" {
 		t.Skip("set RELAIS_TEST_PROFILE_PROCESS=1 after make build; owns throwaway Redis, needs ffmpeg")
 	}
 	bin, err := filepath.Abs("../../bin")
@@ -41,12 +40,17 @@ func TestProfileProcessLoopbackProbe(t *testing.T) {
 	startup, stop := context.WithTimeout(ctx, 5*time.Second)
 	require.NoError(t, clusterprocess.WaitTCP(startup, addr, redis))
 	stop()
+	runProcessProfileProbe(t, ctx, manager, bin, dir, processEnv(strings.Repeat("00", 32), addr, "relais:profile-probe:"+filepath.Base(dir)+":"), nil)
+}
+
+func runProcessProfileProbe(t *testing.T, ctx context.Context, manager *clusterprocess.Manager, bin, dir string, env []string, storeFault func(context.Context, string) error) {
+	t.Helper()
 	for _, scenario := range []string{"move", "takeover"} {
 		t.Run(scenario, func(t *testing.T) {
-			options := profileTrialOptions{Name: "lan", Scenario: scenario, Links: profileTestLinks(t, "lan")}
+			options := profileTrialOptions{Name: "lan", Scenario: scenario, Links: profileTestLinks(t, "lan"), StoreFault: storeFault}
 			trialDir := filepath.Join(dir, scenario)
 			require.NoError(t, os.Mkdir(trialDir, 0700))
-			env := processEnv(strings.Repeat("00", 32), addr, fmt.Sprintf("relais:profile-probe:%s:%s:", filepath.Base(dir), scenario))
+
 			trialCtx, stop := context.WithTimeout(ctx, 30*time.Second)
 			defer stop()
 			r, err := trial(trialCtx, manager, bin, trialDir, env, 5*time.Second, 5*time.Second, false, false, false, false, nil, &options)

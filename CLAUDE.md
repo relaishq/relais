@@ -98,7 +98,8 @@ All require zero decryption failures. The default store outage budget is 30 s;
 configure matching `-store-outage-budget` on worker and control (ADR 0008).
 Relay TTL stays 600 ms; reachable staleness observation preserves fast frozen
 relay takeover while failed polls prevent outage-driven takeover (ADR 0004).
-The optional Redis Cluster gate is unchanged. To run
+The Redis Cluster job uses disposable local Redis processes on `ubuntu-latest`,
+with TLS/ACL and process-topology coverage. It remains outside the `build` aggregate. To run
 manually, select **Actions → CI → Run workflow** on the desired branch.
 The short targets clear the Redis test address and disable its requirement,
 so all Redis subtests skip even when the invoking shell has Redis configured.

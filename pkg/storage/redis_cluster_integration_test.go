@@ -2,33 +2,19 @@ package storage
 
 import (
 	"context"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestcluster"
 )
 
 func requireRedisCluster(t *testing.T) []string {
 	t.Helper()
-	addrCSV := os.Getenv("RELAIS_TEST_REDIS_CLUSTER_ADDRS")
-	if addrCSV == "" {
-		t.Skip("skipping: RELAIS_TEST_REDIS_CLUSTER_ADDRS not set")
-	}
-	addrs := strings.Split(addrCSV, ",")
-	if len(addrs) == 0 {
-		t.Skip("skipping: no cluster addrs provided")
-	}
-	for _, addr := range addrs {
-		if err := redisendpoint.ValidateDev(addr); err != nil {
-			t.Fatal(err)
-		}
-	}
+	addrs := redistestcluster.Addresses(t)
 	// Try to connect
 	rs, err := NewRedisStorage(RedisConfig{Addrs: addrs, Cluster: true})
 	if err != nil {
-		t.Skipf("skipping: cannot connect to cluster: %v", err)
+		t.Fatalf("cannot connect to configured cluster: %v", err)
 	}
 	_ = rs.Close()
 	return addrs

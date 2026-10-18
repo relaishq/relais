@@ -126,7 +126,7 @@ func (r *Redis) relayOperation(ctx context.Context, op string, l RelayLease, p R
 	}
 	holder, _ := json.Marshal(p)
 	expected, _ := json.Marshal(l.Holder)
-	key := r.prefix + "relay:{relay:" + base64.RawURLEncoding.EncodeToString([]byte(l.Key)) + "}"
+	key := r.relayKey(l.Key)
 	reply, err := relayLeaseScript.Run(ctx, r.client, []string{key}, op, string(holder), strconv.FormatUint(l.Epoch, 10), ttl.Milliseconds(), string(expected), relayProcessEvidence(l.Forwarder), relayProcessEvidence(l.PreviousHolder)).Slice()
 	if err != nil {
 		return RelayLease{}, &TransientError{Op: "relay_" + op, Err: err}
@@ -219,4 +219,8 @@ func (r *RedisOwners) ClaimDeadRelay(ctx context.Context, l RelayLease, p RelayP
 }
 func (r *RedisOwners) ClaimExpiredUnknownRelay(ctx context.Context, l RelayLease, p RelayProcess, ttl time.Duration) (RelayLease, error) {
 	return r.leases.ClaimExpiredUnknownRelay(ctx, l, p, ttl)
+}
+
+func (r *Redis) relayKey(key string) string {
+	return r.prefix + "relay:{relay:" + base64.RawURLEncoding.EncodeToString([]byte(key)) + "}"
 }

@@ -100,8 +100,8 @@ test-stream-groups: ## Run Redis Streams consumer group tests only
 test-streams: ## Run Redis Streams tests (non-cluster) in storage
 	$(GOTEST) -v -count=1 -run '^(TestStreams.*|Test(Stream|Track)Stream(Group)?_.*)$$' ./pkg/storage
 
-test-cluster: ## Run Redis Cluster integration tests (requires RELAIS_TEST_REDIS_CLUSTER_ADDRS)
-	$(GOTEST) -v -count=1 -run '^TestCluster' ./pkg/storage
+test-cluster: ## Run opt-in Redis Cluster tests (RELAIS_TEST_REDIS_CLUSTER=1; build process binaries first)
+	$(GOTEST) -race -v -count=1 -timeout 10m -run '^Test(Cluster|RedisCluster|Redis.*Slot|SlotCRC16)' ./pkg/storage ./pkg/sessionstore ./pkg/framecache ./internal/processrun ./internal/redistestcluster ./cmd/crash-run
 
 # Cover all packages except the call harness, which has a separate CI job.
 # Include the plugin and pipeline suites previously covered by make test.

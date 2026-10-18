@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,10 +25,12 @@ import (
 	"github.com/relaishq/relais/pkg/storage"
 )
 
-// StoreConfig requires an explicit Redis address. Snapshot users also need a key.
+// StoreConfig requires an explicit Redis endpoint or Cluster seed list.
+// Snapshot users also need a key.
 // No Redis constructor infers a default endpoint.
 type StoreConfig struct {
 	Address, Prefix, Username, Password string
+	Cluster                             bool
 	OutageBudget                        time.Duration
 }
 
@@ -44,7 +47,8 @@ func (c *StoreConfig) Flags(fs *flag.FlagSet) {
 
 // ConnectionFlags registers Redis connection settings without worker retention policy.
 func (c *StoreConfig) ConnectionFlags(fs *flag.FlagSet) {
-	fs.StringVar(&c.Address, "redis", Env("RELAIS_REDIS_ADDR", ""), "explicit Redis host:port (local 6379 requires RELAIS_REDIS_ALLOW_LOCAL_6379=1)")
+	fs.StringVar(&c.Address, "redis", Env("RELAIS_REDIS_ADDR", ""), "explicit Redis host:port; comma-separated seeds with -redis-cluster (local 6379 requires RELAIS_REDIS_ALLOW_LOCAL_6379=1)")
+	fs.BoolVar(&c.Cluster, "redis-cluster", Env("RELAIS_REDIS_CLUSTER", "0") == "1", "use Redis Cluster with the -redis seed addresses (primary reads only)")
 	fs.StringVar(&c.Prefix, "redis-prefix", Env("RELAIS_REDIS_PREFIX", "relais:process:"), "shared session-store namespace")
 	// Keep credentials out of command-line flags and readiness output.
 	c.Password = os.Getenv("RELAIS_REDIS_PASSWORD")
@@ -56,7 +60,7 @@ func (c *StoreConfig) ConnectionFlags(fs *flag.FlagSet) {
 func ValidateProductionRedis(addr string) error { return redisendpoint.Validate(addr) }
 
 func (c StoreConfig) Open(ctx context.Context) (*sessionstore.Redis, error) {
-	if err := ValidateProductionRedis(c.Address); err != nil {
+	if err := c.validate(); err != nil {
 		return nil, err
 	}
 	key, err := storeKey()
@@ -72,7 +76,7 @@ func (c StoreConfig) Open(ctx context.Context) (*sessionstore.Redis, error) {
 
 // OpenFrames shares the snapshot master key, using a separate HKDF domain.
 func (c StoreConfig) OpenFrames(ctx context.Context) (*framecache.Redis, error) {
-	if err := ValidateProductionRedis(c.Address); err != nil {
+	if err := c.validate(); err != nil {
 		return nil, err
 	}
 	key, err := storeKey()
@@ -153,7 +157,7 @@ func Serve(ctx context.Context, listener net.Listener, handler http.Handler) err
 
 // OpenOwners grants the relay only address lookup, with no snapshot key.
 func (c StoreConfig) OpenOwners(ctx context.Context) (*sessionstore.RedisOwners, error) {
-	if err := ValidateProductionRedis(c.Address); err != nil {
+	if err := c.validate(); err != nil {
 		return nil, err
 	}
 	cfg, err := c.redisConfig()
@@ -166,9 +170,36 @@ func (c StoreConfig) OpenOwners(ctx context.Context) (*sessionstore.RedisOwners,
 // redisConfig is shared by every production Redis connection, including the
 // keyless relay owner client. Credentials have no command-line representation.
 func (c StoreConfig) redisConfig() (storage.RedisConfig, error) {
+	if err := c.validate(); err != nil {
+		return storage.RedisConfig{}, err
+	}
 	config, err := redisendpoint.TLSFromEnv()
 	if err != nil {
 		return storage.RedisConfig{}, err
 	}
-	return storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix, Username: c.Username, Password: c.Password, TLSConfig: config}, nil
+	cfg := storage.RedisConfig{Addr: c.Address, Prefix: c.Prefix, Username: c.Username, Password: c.Password, TLSConfig: config, Cluster: c.Cluster}
+	if c.Cluster {
+		cfg.Addr = ""
+		cfg.Addrs = c.addresses()
+	}
+	return cfg, nil
+}
+
+func (c StoreConfig) addresses() []string {
+	if !c.Cluster {
+		return []string{c.Address}
+	}
+	addrs := strings.Split(c.Address, ",")
+	for i := range addrs {
+		addrs[i] = strings.TrimSpace(addrs[i])
+	}
+	return addrs
+}
+func (c StoreConfig) validate() error {
+	for _, addr := range c.addresses() {
+		if err := ValidateProductionRedis(addr); err != nil {
+			return err
+		}
+	}
+	return nil
 }

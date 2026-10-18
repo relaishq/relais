@@ -73,8 +73,7 @@ is limited to the same host. Control-plane crash recovery is not established.
 
 Private HTTP coordination is unauthenticated and can carry snapshot key material.
 Restrict it to trusted hosts and users; loopback does not isolate local users.
-DTLS-SRTP protects the caller-to-worker media leg. Redis has no TLS or ACL
-username support yet. See [deployment](deploy.md) for ports and security limits.
+DTLS-SRTP protects the caller-to-worker media leg. Redis supports verified TLS and ACL users in standalone and Cluster modes. See [deployment](deploy.md) for ports and security limits.
 
 ## Test and demo surfaces
 

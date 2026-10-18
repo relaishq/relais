@@ -287,6 +287,11 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 		return result{}, fmt.Errorf("media ended before SIGKILL: %v", err)
 	case <-time.After(warmup):
 	}
+	if profile != nil && profile.StoreFault != nil {
+		if err := profile.StoreFault(ctx, call.SessionID()); err != nil {
+			return result{}, fmt.Errorf("store fault: %w", err)
+		}
+	}
 	status, err := h.Status(ctx)
 	if err != nil {
 		return result{}, err
@@ -363,7 +368,7 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 	systemMetrics.sampleBeforeFault(ctx)
 	var diagnostics *moveDiagnostics
 	var tcpBefore []nettopology.TCPSnapshot
-	if profile != nil && profile.Scenario == "move" {
+	if topology != nil && profile != nil && profile.Scenario == "move" {
 		tcpBefore = topology.SnapshotTCP(ctx)
 	}
 	var stalledAt time.Time
@@ -449,7 +454,11 @@ func trial(ctx context.Context, manager *clusterprocess.Manager, bin, dir string
 			profileActionErr = err
 			fmt.Printf("PROFILE_MOVE_ERROR %v\n", err)
 		}
-		diagnostics = collectMoveDiagnostics(ctx, privateAPIs, tcpBefore, topology.SnapshotTCP(ctx))
+		var tcpAfter []nettopology.TCPSnapshot
+		if topology != nil {
+			tcpAfter = topology.SnapshotTCP(ctx)
+		}
+		diagnostics = collectMoveDiagnostics(ctx, privateAPIs, tcpBefore, tcpAfter)
 	} else {
 		signal := syscall.SIGKILL
 		label := "SIGKILL"

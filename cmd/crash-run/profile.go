@@ -19,6 +19,8 @@ import (
 )
 
 type profileTrialOptions struct {
+	// StoreFault is an optional process-store protocol fault before the media event.
+	StoreFault         func(context.Context, string) error
 	Name, Scenario     string
 	Links              []nettopology.LinkSetting
 	PrivateRouteTuning bool

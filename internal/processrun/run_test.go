@@ -138,6 +138,7 @@ func TestRedisCredentialsAndStartupTLSValidation(t *testing.T) {
 	var config StoreConfig
 	flags := flag.NewFlagSet("credentials", flag.ContinueOnError)
 	config.ConnectionFlags(flags)
+	config.Address = "cache.example.invalid:16379"
 	cfg, err := config.redisConfig()
 	require.NoError(t, err)
 	require.Equal(t, "private-username-sentinel", cfg.Username)
@@ -156,4 +157,40 @@ func TestRedisCredentialsAndStartupTLSValidation(t *testing.T) {
 	_, err = config.OpenOwners(context.Background())
 	require.ErrorContains(t, err, "RELAIS_REDIS_TLS=1")
 	require.NotContains(t, err.Error(), "private-")
+}
+
+func TestRedisClusterConfiguration(t *testing.T) {
+	t.Setenv("RELAIS_REDIS_ADDR", "cache-a.example.invalid:16379, cache-b.example.invalid:16380")
+	t.Setenv("RELAIS_REDIS_CLUSTER", "1")
+	t.Setenv("RELAIS_REDIS_USERNAME", "acl-user")
+	t.Setenv("RELAIS_REDIS_PASSWORD", "secret")
+	t.Setenv("RELAIS_REDIS_TLS", "1")
+	var c StoreConfig
+	fs := flag.NewFlagSet("cluster", flag.ContinueOnError)
+	c.ConnectionFlags(fs)
+	cfg, err := c.redisConfig()
+	require.NoError(t, err)
+	require.True(t, cfg.Cluster)
+	require.Empty(t, cfg.Addr)
+	require.Equal(t, []string{"cache-a.example.invalid:16379", "cache-b.example.invalid:16380"}, cfg.Addrs)
+	require.Equal(t, "acl-user", cfg.Username)
+	require.Equal(t, "secret", cfg.Password)
+	require.NotNil(t, cfg.TLSConfig)
+	options, err := cfg.ConnectionOptions()
+	require.NoError(t, err)
+	cluster := options.Cluster()
+	require.False(t, cluster.ReadOnly)
+	require.False(t, cluster.RouteByLatency)
+	require.False(t, cluster.RouteRandomly)
+	require.NoError(t, fs.Parse([]string{"-redis-cluster=false", "-redis=cache.example.invalid:16379"}))
+	cfg, err = c.redisConfig()
+	require.NoError(t, err)
+	require.False(t, cfg.Cluster)
+	require.Empty(t, cfg.Addrs)
+	require.Equal(t, "cache.example.invalid:16379", cfg.Addr)
+	for _, addr := range []string{"", "127.0.0.1:6379", "cache.example.invalid:16379,", "cache.example.invalid:16379,127.0.0.1:6379"} {
+		c.Cluster, c.Address = true, addr
+		_, err = c.redisConfig()
+		require.Error(t, err)
+	}
 }
