@@ -1,20 +1,20 @@
 # ADR 0011: Deploy into your own cloud and scale by moving calls
 
-Status: **Proposed** 2026-10-17 — awaiting owner approval. Part of #171.
-Baseline: `1b952f65f0866e42a79fb8b1fd091328bff05b7a` (v0.2.0). All cloud behavior below is proposed unless explicitly marked measured.
+Status: **Accepted** 2026-10-17 by the project lead — direction and order only; no cloud spend is approved, and each paid run needs its own approval and cost cap. Part of #171.
+Baseline: `1b952f65f0866e42a79fb8b1fd091328bff05b7a` (v0.2.0). Cloud behavior below is accepted design, not implemented or measured unless explicitly stated.
 
 ## Owner summary
 
 - AWS creates Relais in the customer's own account from a public link.
-- The preview runs six machines and two database nodes even with no calls. Spare workers let calls move instead of drop.
-- A deploy moves calls off a worker. People do not need to hang up first.
-- Keep automatic scaling off until we measure capacity. Set a hard limit on each worker.
-- If the relay machine fails in the preview, calls drop until it is replaced. Keeping its public address does not fix that.
-- Store call ownership in a managed AWS database that keeps every confirmed write when it switches to a replacement. The usual setting can lose recent writes and leave two workers thinking they own a call.
-- Ship the preview with one control process, which places and moves calls. Improve its restart recovery after the preview.
+- The default preview keeps four machines and two database nodes running with no calls. The optional resilience profile uses six machines and two database nodes.
+- Two workers can survive one worker crash at the validated load. After that crash, there is no destination for a further move. A worker rollout has no protection from another worker failure.
+- One machine runs control and the HTTPS front end. They share a failure. Restarted control must manage existing calls before we publish the link.
+- A failed relay machine drops calls in the preview. Test browser recovery early, then choose how relay replacement will work.
+- The database must keep every confirmed call-ownership write. The usual setting can lose recent writes and leave two workers thinking they own a call.
+- Ship alerts, an outside test call, a safe support report, upgrade and rollback checks, and clear setup and cleanup limits with the preview.
+- Add automatic scaling only after the fixed preview works for real users and the relay experiment has a result.
 - The preview trusts its private network. Internal servers must prove their identity to each other before general release.
-- Publish the cost of all running machines, spare room, the database and network traffic.
-- This design approves no spend. Each cloud test needs separate approval and a cost cap.
+- The owner approved the direction and order only. Each cloud test needs separate approval and a cost cap.
 
 ## Scope and evidence boundary
 
@@ -25,6 +25,8 @@ pending transfers. An HTTP success or a stopped process alone does not prove a s
 isolated location within an AWS region [E37]. **Fencing** is a check that stops an old server from acting after a new one
 takes over. **Synchronous durability** means saving each confirmed database write safely before acknowledging it. **Cluster mode**
 requires a client that discovers database nodes and follows key-slot redirects.
+Agent conversation continuity across a worker crash is a parallel track outside this ADR:
+[ADR 0010](0010-pluggable-agents.md) says default crash state can forget earlier conversation. Deploy automation does not fix that; #188 tracks it.
 
 Tracked evidence is authoritative within its stated topology:
 
@@ -60,10 +62,10 @@ demonstrates customer-account installation and stack/parameter updates [E2]; it 
 
 Preview parameters: release/artifact digest, region/AZs, DNS/certificate, instance types, fixed worker count, capacity profile,
 drain budgets, retention and secret references. No vendor access role. Create a dedicated VPC; defer existing-VPC support until
-private API authentication. Public relay UDP and HTTPS signaling are the only ingress surfaces. Three static private worker IPs feed
+private API authentication. Public relay UDP and HTTPS signaling are the only ingress surfaces. Two default static private worker IPs feed
 production `-worker name=http://address` bootstrap; no dynamic registration or autoscaling is needed for preview. Until slice 2 lands,
 control exits if any listed worker's status or relay registration fails (`cmd/relais-control/main.go`); a restart with one worker
-down crash-loops and blocks new placement. Slice 2 adds tolerant fixed bootstrap. Provision and
+down crash-loops and blocks new placement. Slice 2 adds tolerant fixed bootstrap; slice 4 adds restart reconciliation before the public link. Provision and
 price private-subnet egress for artifacts, AWS APIs and providers. Measure private RTT and jitter before applying ADR 0007's Linux
 route tuning; do not extend it to public paths.
 
@@ -73,9 +75,10 @@ default and documents their continuing cost. CloudFormation rollback cannot reve
 supplies a tested compatibility manifest and rollback boundary; reject an unsupported live upgrade before starting. Preview rolls
 compatible workers in place, one at a time: pre-drain, stop, wait for control to declare the old registration dead and recovery settled,
 then use `/private/workers/{name}/replace` and the existing rejoin handshake (`pkg/controlplane/heartbeat_http.go`, deploy guide).
-Admission tightens while N=2; pause rollout if remaining capacity is insufficient. Then update relay/control per
+Default rollout leaves N=1: freeze new admissions, require existing load to fit one worker, and accept no further worker-failure protection.
+The resilience profile tightens admission at N=2. Pause rollout if capacity is insufficient. Then update relay/control per
 [ADR 0009's order](0009-planned-move-export-replay.md#compatibility-and-upgrade-order). An alternative is a pre-listed surge slot:
-a seventh EC2 machine during rollout. Later ASG updates use the drain coordinator. No TURN or TCP/TLS media fallback exists;
+a fifth EC2 machine for the default or a seventh for resilience during rollout. Later ASG updates use the drain coordinator. No TURN or TCP/TLS media fallback exists;
 callers whose networks block UDP fail (deploy guide).
 
 CI on free GitHub-hosted runners: pinned `cfn-lint` schemas [E5], security-policy assertions, parameter branches, bootstrap/digest
@@ -115,7 +118,9 @@ added later.
 Let `C` be the **validated operating call budget per worker for this exact profile**, `R` the validated relay budget, `N` ready
 workers, and `D` calls plus reservations. Neither C nor R is a benchmark maximum. Also require `D + 1 <= S`, the validated store
 budget; the tracked ~200-call planning limit is an initial ceiling to revalidate for the managed node. Store capacity can bind
-before R. Use these proposed rules:
+before R. Default preview fixes N=2 with autoscaling off, explicitly overriding the max(3, …) rule below;
+require validated `T <= C - 1`, also bounded by R and S. The resilience profile and later autoscaling keep at least 3 ready workers.
+For those profiles use these initial policy rules (settings still require measurement):
 
 ```text
 u = 0.60                                      # proposed starting target
@@ -124,8 +129,8 @@ N_required = max(3, 1 + ceil((D + B + 1) / (u * C)))
 admit only while D + 1 <= min(R, (N - 1) * C - 1)
 ```
 
-B sizes future capacity; each admission checks the next call, so B is not reserved again forever. The extra worker covers one worker
-failure; the extra slot covers a subsequent move, following [capacity.md](../dev/capacity.md). Applying the target to survivors
+B sizes future capacity; each admission checks the next call, so B is not reserved again forever. The resilience/autoscaling spare covers one worker
+failure; the extra slot covers a subsequent move when another destination exists, following [capacity.md](../dev/capacity.md). Applying the target to survivors
 deliberately adds idle headroom. `startup_p99` includes signal age, reconcile delay, EC2 allocation/boot, artifact fetch, store
 connect, registration and readiness. Measure it; no generic “VMs boot in X seconds” assumption. Until measured C/R/startup and an
 arrival bound exist, preview uses a fixed pool and autoscaling stays disabled. Before then a public preview may admit only its
@@ -189,7 +194,7 @@ settings meet the same fault gates.
 
 ## 3. Relay availability in explicit phases
 
-**Recommendation:** fixed Elastic IP plus a dedicated, movable secondary network interface (ENI). Keep its private UDP and HTTP
+**Recommendation:** test fixed Elastic IP plus a movable secondary network interface (ENI) as phase B; choose production phase B or multi-relay from slice 6 before ASG work. Keep private UDP and HTTP
 addresses stable too. EIP is regional/border-group scoped [E9]; an ENI moves only within its AZ and carries its IP attributes [E10].
 This is a bounded first-cloud design, not an AZ-availability solution. Keep worker crypto state and caller's advertised candidate
 unchanged.
@@ -197,11 +202,11 @@ unchanged.
 | Option | Evidence and consequence |
 | --- | --- |
 | EIP alone | Preserves public candidate, but workers parse and retain a literal private relay address at startup (`pkg/workerapp/app.go`, `pkg/mediaworker/relayleg.go`). A public-IP move cannot repair that path. |
-| EIP + secondary ENI | Preserves both paths within one AZ. Requires exclusive cloud host fencing, attachment sequencing, network configuration and a new cross-host relay recovery authority. Selected phase-B experiment. |
+| EIP + secondary ENI | Preserves both paths within one AZ. Requires exclusive cloud host fencing, attachment sequencing, network configuration and a new cross-host relay recovery authority. Phase-B candidate; production choice follows the early experiment. |
 | EIP + secondary private IP | Lighter same-subnet/AZ alternative: reassign only the private service IP and reconcile its EIP mapping [E25]. Still needs host fencing, source routing, lease transition and both-leg tests. Compare attachment/mapping latency before choosing. |
 | UDP NLB | UDP flow idle expiry is **120 s** [E11], but default unhealthy-target connection termination allows rerouting after health-check detection [E26]; it does not wait for idle expiry. Client IP is preserved [E12]. The successor can still receive RTP before STUN with no restored route. |
 | Global Accelerator | Phase-C candidate, not live-flow failover: UDP idle timeout is **30 s**; established traffic stays on an unhealthy endpoint until idle/new flow [E27]. Continuous RTP can prevent failover. Custom routing has no health failover [E28]; fixed and transfer-premium charges apply [E29]. |
-| Several relay candidates / ICE restart | Potential AZ recovery and regional choices. Needs multi-relay worker return routing, candidate/consent tests and client signaling changes. Current one-address behavior supplies no such guarantee. Defer. |
+| Several relay candidates / ICE restart | Potential AZ recovery, but candidates alone do not supply failover: RFC 8445 §8.1.1 requires an ICE restart to nominate another pair after nomination [E39]. Multi-relay needs worker return routing and tested client signaling. |
 
 An NLB does not replicate authenticated routes, holds or rings. A relay replacement must restore current-owner routes before serving
 and regain private worker registrations, preserving original consent deadlines (ADR 0003). Missing evidence waits for authenticated
@@ -215,7 +220,7 @@ This replaces a process without waiting for calls to end. Existing single-call l
 Ring/hold loss remains. Host failure is an outage with no recovery bound in this phase; do not auto-reuse another host's same-host
 lease.
 
-**Phase B — automated same-AZ host replacement.** Maintain a warm replacement host. Serialize an operation: confirm the old instance
+**Phase B candidate — automated same-AZ host replacement.** If selected by the early experiment, maintain a warm replacement host. Serialize an operation: confirm the old instance
 stopped/terminated through authoritative cloud state, move the dedicated ENI/EIP, configure source routing, authorize the new host
 scope, restore routes and register workers. Verify both media legs. Never copy `-host-id` across machines, erase fencing
 speculatively, or treat an unreachable predecessor as dead. A new cloud-fenced lease transition must preserve epoch history and
@@ -228,6 +233,10 @@ for missing routes. It may be seconds or longer; there is **no measured cloud bo
 survives. Measure restart, frozen host, lost cloud replies, failback and mixed failures with long-lived browser and driver calls. If
 fencing and attachment cannot finish inside the observed consent tolerance, **stop this path** and return an owner decision between
 an NLB/multi-relay design and an explicit reconnect contract.
+Before ASG work, use free Linux namespace/browser trials to vary relay-move delay and record consent, selected path, decrypted gaps and restart.
+RFC 7675 §5.1 expires consent **30 s** after the last valid response; late responses cannot restore it. New credentials via ICE restart/new
+session are required on that path [E38]. This is a protocol limit, not browser timing evidence. Compare phase B with multi-relay/restart;
+choose production from the results. Local trials cannot measure cloud fencing/ENI tails; needed cloud runs each require approval/cap.
 
 **Phase C — AZ survival, deferred.** ENIs cannot move across AZs. An EIP reassociation plus runtime private-leg rebinding, or
 multiple relays behind tested ingress/candidates, needs a separate decision with phase-B evidence. Include Global Accelerator in
@@ -242,21 +251,20 @@ multi-relay/ingress design before a production claim.
 
 ## 4. One preview control process and a durable managed store
 
-**Recommendation:** preview has one control process under a service manager, plus one signaling process. Fixed worker IPs use
-production bootstrap (`cmd/relais-control/main.go`). ADR 0008 states that restart loses registry/history; `pkg/controlplane` also
-keeps drain marks, reservations and uncertain recovery in memory. Automatic process restart is not reconstructed control state.
-Established media should continue with live workers/relay/store and consent, but new calls, moves, end requests and worker crash
-takeover need control. Measure restart during live calls in the preview; no unattended control replacement claim. Keep media
-processes running during a control update; block new mutations, settle known operations, restart and report unavailable operations
-honestly.
+**Recommendation:** preview has one control process and signaling on the same host. ADR 0008 documents baseline restart loss of
+registry/history; `pkg/controlplane/controlplane.go` also keeps calls, reservations, drain marks and pending recovery in memory.
+Before the public link, add minimal single-instance reconciliation: rebuild registry and call inventory from the store/live workers,
+reconcile reservations and pending recovery, and preserve uncertain exports/resumes. Persist enough operation metadata before effects
+when it cannot be reconstructed; never guess ownership, blindly replay effects, or turn an unresolved reservation into free capacity.
+Prove the old process exited; no overlapping control processes. Keep mutation readiness off until recovery is safe. The restarted
+control must still move, end and take over pre-existing calls in the paid proof, including startup with a worker down.
+Established media should continue with healthy workers/relay/store and consent; control outage delays new calls and recovery.
 
-After preview, implement durable inventory, drain/operation records, safe recovery of uncertain exports/resumes and dynamic
-registration on **one** control instance. Never blindly replay exports, creates or side effects. Prove old-process exit before
-replacement; do not start two independent planes. Proposed later target: mutation readiness within **5 s** after verified
-old-process exit, measured at validated load and during interrupted operations; this is a design target, not evidence. Add a warm
-passive only if measured single-instance recovery misses it. That option needs authority generations checked at store/worker/relay
-mutation boundaries, reconciliation before readiness, and pause/resume split-brain tests. Active-active remains rejected. Shared
-Redis alone does not supply these guarantees.
+The template can be built first, but restart safety blocks link publication. Dynamic registration and cloud lifecycle wiring wait
+until real users validate the fixed pool and the relay experiment completes. Proposed readiness target remains **5 s** after verified
+old-process exit at validated load, including interrupted operations; this is a target, not evidence. Add a warm passive only if
+single-instance recovery misses it. Then require authority generations at store/worker/relay mutation boundaries and pause/resume
+split-brain tests. Active-active stays rejected; shared Redis alone cannot make independent planes safe.
 
 Both durable-store options preserve confirmed writes across primary failover; use one shard with a primary and replica in different
 AZs, TLS, ACLs and primary-only ownership reads [E13, E30]. Usual asynchronous Redis replication can lose confirmed ownership
@@ -285,7 +293,7 @@ latency fails, run the same tests on MemoryDB under a separately approved cap, t
 ownership or weaken safety to accommodate a store. Durable-store client work stays before preview because durability cannot be
 enabled later on a non-durable ElastiCache cluster [E16].
 
-**Main tradeoff:** a smaller preview ships sooner, with explicit controller/security limits and a nontrivial database floor.
+**Main tradeoff:** a lean preview reduces idle cost; restart reconciliation still precedes public use, and the durable database remains a fixed floor.
 **Change this if:** either durable service fails compatibility/latency, measured costs favor MemoryDB, or the later restart target
 justifies a passive control instance.
 
@@ -293,7 +301,7 @@ justifies a passive control instance.
 
 **Recommendation:** start On-Demand `c7i.large` workers and relay, `m7i.large` control/signaling hosts, and the store above;
 parameters allow larger sizes. These are **benchmark candidates**, not proven capacity or cheapest choices [E17–E18]. Keep at least
-**3 ready workers**, subject to section 2. Avoid burstable CPU credits. Compare arm64 C7g/M7g with the same workload/fault tests;
+**2 ready workers** in the lean fixed preview; resilience/autoscaling require at least **3**, per section 2. Avoid burstable CPU credits. Compare arm64 C7g/M7g with the same workload/fault tests;
 the larger arm64 soak does not size a smaller instance. Agent binaries/dependencies must support the architecture.
 
 Use `relais-load -capacity`, `-prices` and soak tooling with external callers/separate service hosts
@@ -311,31 +319,30 @@ steady-state machine component = (W*Pw + L*Pr + K*Pc + S*Ps + Pstore) / T
 public-transfer component = measured_public_B_per_call_second * 3600 / 2^30 * Ppublic_per_GiB
 ```
 
-`W/L/K/S` count every running role, including idle workers; preview has no passive control or warm relay host. Later profiles add
-them only when selected. Preview's proposed zero-call floor is:
+`W/L/K/S` count all running roles. Neither preview profile has passive control or a warm relay host.
+The accepted zero-call floors below are design choices, not measurements:
 
-| Role | Always-running machines/nodes | Preview arrangement |
-| --- | ---: | --- |
-| Workers | 3 | Separate EC2 hosts; fixed private IPs |
-| Relay | 1 | EC2 host; active and same-host standby processes |
-| Control | 1 | EC2 host; one process under a service manager |
-| Signaling | 1 | EC2 host; test front end behind ALB/WAF |
-| Store | 2 | Managed primary and replica in different AZs |
-| Total | 8 | Six EC2 machines plus two managed store nodes |
+| Role | Default lean preview | Opt-in resilience profile |
+| --- | ---: | ---: |
+| Workers | 2 EC2 hosts; static private IPs | 3 EC2 hosts; static private IPs |
+| Relay | 1 dedicated EC2 host; same-host standby | 1 dedicated EC2 host; same-host standby |
+| Control and signaling | 1 shared EC2 host | 2 separate EC2 hosts |
+| Store | 2 managed nodes; primary and replica across AZs | 2 managed nodes; primary and replica across AZs |
+| Total | 4 EC2 machines + 2 store nodes | 6 EC2 machines + 2 store nodes |
 
-Counts are design choices, not measurements. ALB/WAF, NAT or endpoints and other managed services also cost money and are outside
-this machine count. A smaller evaluation profile is sensible: two workers, one relay host, shared control/signaling host and two
-store nodes (**four EC2 + two store nodes**). It explicitly overrides `N_required = max(3, …)` and “Keep at least 3 ready workers.”
-At `T = C - 1`, two workers can survive one worker death ([capacity policy](../dev/capacity.md)); the survivor has no target for a later
-move and no headroom to roll a worker. Shared control/signaling also couples failure and resource pressure. Cap evaluation load separately;
-make no preview N+1-plus-move claim and keep durable store replication. `P*` are dated regional On-Demand inputs, not inferred CPU
-prices; `T` must be a validated offered load with successful N+1 and drain. At low occupancy report actual integral allocation,
-including zero-call idle cost separately. The capacity tool prices only workers/relay/control/store and public egress; retain its
-report and add an explicit ledger for extra hosts, ALB, NAT or endpoints, EBS, IPv4, inter-AZ/region traffic, WAF, CloudWatch and
-lifecycle/API/secret charges. Include the **18%** ElastiCache sync premium [E20], or verified MemoryDB node/write charges [E32], and
-retained workers. No silent zero inputs; retained instances can exceed desired capacity and remain billed [E23]. Use capacity.md's
-payload plus IPv4/UDP overhead for public bytes; avoid duplicate transfer charges. Exclude AI provider fees, tax and discounts
-explicitly; list them separately for a full application estimate.
+The lean default overrides `N_required = max(3, …)` and the resilience/autoscaling three-worker minimum.
+At validated `T <= C - 1`, subject to R/S limits, it still survives one worker crash; afterward the survivor has no destination for
+another move. With one worker withdrawn for rollout, no worker-failure protection remains. Control/signaling share a failure and
+resource pressure. These are availability/headroom tradeoffs; ownership safety and durable-store replication are unchanged.
+A surge slot is temporary extra capacity, not part of either idle floor. ALB/WAF, NAT/endpoints and other services cost extra.
+
+`P*` are dated regional On-Demand inputs; T must match the selected profile's validated fault/drain conditions. Report actual
+integral allocation at low occupancy and idle cost separately. A **measured monthly idle bill and utilisation break-even comparison**
+against matched hosted-vendor service/workload are required before any “cheaper than hosted vendors” claim; projections alone do not qualify.
+The capacity tool prices workers/relay/control/store and public egress; add a ledger for shared/separate hosts, ALB/WAF, NAT/endpoints,
+EBS, IPv4, inter-AZ traffic, CloudWatch, APIs and secrets. Include ElastiCache's **18%** sync premium [E20] or verified MemoryDB writes
+[E32], plus retained instances beyond desired capacity [E23]. Count shared control/signaling once. No silent zero inputs or duplicate
+transfer charges; use capacity.md's payload-plus-header public byte definition. Exclude AI fees, taxes and discounts explicitly.
 
 Inputs come from AWS EC2/transfer, ElastiCache and VPC pricing [E19–E21] plus the selected ingress, storage and monitoring tariffs
 at measurement time. The fixed IPv4 dollar input used here is AWS's published **$0.005 per public IPv4 address-hour** [E21], not a
@@ -376,64 +383,68 @@ identity gate forward, not the boundary.
 
 ## Decisions for the owner
 
-1. **Use AWS and a public launch link first.** Other clouds can follow.
-2. **Keep at least three workers.** Aim for 60% use in normal operation. Set a hard cap. Keep automatic scaling off until we measure capacity.
-3. **Ship a preview with one relay machine in one AWS data center area (Availability Zone).** If it fails, calls drop.
-4. **Keep every confirmed call-ownership write.** Try ElastiCache with a setting that saves writes before confirming them. Test MemoryDB as the alternative. Compare full costs before the final choice.
-5. **Ship the preview before adding a spare control process.** Start with one. Improve restart recovery next. Add a spare only if measured recovery is too slow.
-6. **Count the full idle cost.** The preview keeps six machines and two database nodes running. Offer the smaller profile for evaluation with weaker failure protection.
-7. **Keep only call media and the HTTPS front end on the internet.** Internal servers must prove their identity to each other before general release.
-8. **Approve the direction only.** Each cloud test still needs separate approval and a cost cap.
-
-Do you approve this direction and order, with no spend?
+1. **Start with the lean preview.** Run two workers, one relay machine, and one machine for control and the HTTPS front end. Keep two database nodes. Offer the six-machine resilience profile as an option.
+2. **State the lean profile's limits.** One worker crash leaves no destination for a later move. A worker rollout has no protection against another worker failing. Control and the front end fail together. Keep call ownership safe in both profiles.
+3. **Keep every confirmed ownership write.** Try ElastiCache with a setting that saves writes before confirming them. Test MemoryDB as the alternative.
+4. **Prove control restart safety before publishing the link.** Restarted control must still move, end and recover existing calls. Add a spare only if measured restart is too slow.
+5. **Ship the operator basics with the preview.** Include alerts, an outside test call, a safe support report, tested upgrade and rollback, supported versions and regions, quota checks and clear cleanup charges.
+6. **Test relay replacement before automatic scaling work.** Choose the production approach from browser recovery evidence. Several addresses alone do not promise failover.
+7. **Wait for real users before adding dynamic workers and scaling hooks.** Keep automatic scaling off and enforce hard call limits in the fixed preview.
+8. **Measure costs before claiming a saving.** Require a monthly idle bill and a comparison of the call usage needed to beat a hosted service.
+9. **Keep only media and the HTTPS front end public.** Internal servers must prove their identity before general release. The approved direction and order authorize no spend; each cloud run needs separate approval and a cap.
 
 ## Implementation plan
 
-Use free GitHub-hosted runners for runnable Linux checks. Each paid run needs fresh owner approval, a priced resource/time envelope
-and a USD cap before launch. Enforce cleanup deadlines, track all resources and verify teardown, including retained
-workers/secrets/volumes/addresses/logs. Alerts alone are not a hard spending limit. No standing account is required for ordinary CI.
-The heavier order was rejected because a fixed pool needs neither dynamic registration nor control handover. Network isolation
-bounds the preview; durable-store client work cannot wait until later.
+Use free GitHub-hosted runners for runnable Linux/browser checks. Each paid run needs fresh owner approval, a priced time/resource
+envelope and a USD cap. Enforce cleanup deadlines, inventory all resources and verify teardown, including retained resources and
+charges. Alerts alone do not cap spend. The template precedes full automation; minimum control restart safety still blocks its public link.
 
-1. **Cluster/TLS store client and tests.** Blockers: owner store direction. Expose supported Cluster
-   clients; demo scripts/key slots, TLS/ACLs, scans, redirects, reconnect and stale-epoch rejection on
-   disposable nodes. Prepare equivalent ElastiCache/MemoryDB compatibility gates. **Free.**
-2. **Hard per-worker cap, clean refusal and load telemetry.** Blockers: owner capacity direction.
-   Use fixed production `-worker` bootstrap; no dynamic registration. Demo reservation races, per-worker
-   limits and clean refusal; report load/headroom. Add **tolerant fixed bootstrap: register the workers that answer and retry the rest
-   in the background**; retry relay registration too and gate placement on relay readiness. **Free.**
-3. **Preview template.** Blockers: 1, 2. Three static-IP workers, one service-managed control, one relay
-   host with same-host standby, one signaling host, durable primary/replica, dedicated VPC/security
-   groups, secrets, ALB/WAF, cfn-lint and bootstrap/update checks. Autoscaling off. Demo generated
-   topology and local pre-drain/stop order; no mTLS or existing-VPC option yet. **Free.**
-4. **Preview cloud proof and launch link.** Blocker: 3. **Paid; separate approval/cap per run.** Install,
-   prove store failover retains acknowledged epochs, roll workers by pre-drain, deploy relay processes,
-   restart control during live calls with one worker down, and tear down. Measure gaps, unavailable operations, write tails,
-   cost, a bounded preview load profile and cleanup. If ElastiCache fails, test MemoryDB under another
-   approval/cap and return results.
-   Publish the link only with observed limits; do not label lost controller state recovered.
-5. **Single-instance control recovery, dynamic registration and lifecycle simulator.** Blocker: 3 for free local work; use 4's evidence when available.
-   Durable inventory/operation reconciliation; demo restart during create/move/drain/end, authenticated
-   registration, duplicate/lost events, retained failed drains and SIGTERM only after empty proof.
-   Build the ASG template variant, EventBridge/SQS hook wiring, coordinator deployment and scoped IAM.
-   Measure restart readiness against the proposed 5 s target. **Free; may start after 3 if paid approval for 4 is slow.**
-6. **Scale-out measurement and move-before-delete with retention.** Blockers: 4, 5. **Paid; separate
-   approval/cap per run.** Measure C/R/S, boot tails, arrival bursts, ENA allowances and admission.
-   Demo health replacement/refresh failures retained alive, retry/cleanup, max count, missing telemetry,
-   compatible worker rollout and N+1 death; report decision-to-empty, caller gaps and retained cost.
-7. **Internal identity and customer call API gates.** Blocker: 4. Add mTLS before GA or existing-VPC
-   support; add per-app credentials and safe rotation as a separate API scope. Demo rejected peers
-   and revoked credentials on runners. **Free; any cloud validation needs its own approval/cap.**
-8. **Conditional warm passive control.** Blocker: 5 and measured failure of its 5 s target. Prove authority
-   generations and uncertain-operation recovery locally before adding a spare. **Free first; each
-   cloud handover/fault test is paid with separate approval/cap.** Skip if one-instance recovery suffices.
-9. **Relay host replacement.** Blockers: 4, 5. Compare secondary ENI versus secondary-IP movement;
-   prove cloud-fenced host transitions with fakes, then both legs, consent and failed cloud replies.
-   **Free first; paid cloud runs each need approval/cap.** Stop the path if consent fails; return a
-   measured NLB/multi-relay/Global Accelerator decision instead of promising continuity.
-10. **Evidence, cost and claim gate.** Blockers: 6, 7, 9; 8 only if selected. Join dated prices, gaps,
-    failure domains, alerts, rollback and cleanup. **Free from existing artifacts; extra cloud/soak runs
-    each need approval/cap.** No “forget the infrastructure” claim before the supported domain passes.
+1. **Cluster/TLS store client and tests.** Blockers: none beyond this accepted direction. Expose Cluster
+   clients; test scripts/key slots, TLS/ACLs, scans, redirects, reconnect and stale-epoch rejection on
+   disposable nodes. Prepare equivalent ElastiCache/MemoryDB gates. **Free.**
+2. **Fixed-pool caps, telemetry and tolerant bootstrap.** Blockers: none beyond this direction. Demo
+   reservation races, clean refusal and profile-specific headroom. Register answering fixed workers,
+   retry the rest/relay in background and gate placement on readiness. **Free.**
+3. **Lean preview template and optional resilience profile.** Blockers: 1, 2. Default two static-IP workers,
+   dedicated relay with same-host standby, shared control/signaling, durable primary/replica, dedicated
+   VPC, secrets, ALB/WAF and cfn-lint/bootstrap/rollout checks. Autoscaling off; no existing VPC. **Free.**
+4. **Minimal single-instance restart reconciliation.** Blocker: 2; may run alongside 3. Rebuild calls,
+   registry, reservations and pending recovery from store/live workers; persist otherwise unrecoverable
+   operation metadata and preserve uncertainty. Demo restart during create/move/drain/end, worker-down
+   startup, and subsequent move/end/takeover of original calls. Measure the 5 s readiness target. **Free.**
+5. **Preview cloud acceptance and public link.** Blockers: 3, 4. **Paid; approval/cap per run.** Prove
+   store failover, in-place worker rollout, relay process deploy and a real upgrade-and-rollback. Restart
+   control during live calls, including one worker down; restarted control must still move, end and
+   take over those calls. Measure a bounded profile load, media gaps, write tails, costs and cleanup.
+   Ship default alerts, an external synthetic call probe, redacted support bundle, regional quota preflight,
+   supported region/version matrix, and teardown instructions listing retained resources and continuing charges.
+   If ElastiCache fails, test MemoryDB under another approval/cap. Publish only after these gates pass;
+   retain preview limits and collect real-user fixed-pool evidence.
+6. **Early relay replacement feasibility and production choice.** Blockers: 3, 4. **Free first**: bounded
+   Linux namespace/browser trials move relay addresses, vary outage around consent expiry, and record
+   authenticated consent, selected path, decrypted gaps and ICE restart. Compare phase B with multi-relay;
+   choose and record the production approach before ASG work. Cloud fencing/IP movement is not proven
+   by local trials; each needed cloud feasibility run is **paid with separate approval/cap**.
+7. **Dynamic registration and ASG lifecycle implementation.** Blockers: 5, 6 and fixed-pool preview
+   success with real users. Build authenticated registration, ASG template variant, EventBridge/SQS
+   hooks, coordinator deployment/IAM and retention simulator. Demo duplicate/lost events and failed
+   drains retained alive; SIGTERM only after empty proof. **Free.**
+8. **Measured autoscaling and move-before-delete.** Blocker: 7. **Paid; approval/cap per run.** Measure
+   C/R/S, boot/arrival bounds, ENA allowances, hard admission and three-worker minimum. Demo health
+   replacement/refresh retention, retry/cleanup, missing telemetry, rollout and N+1 death; publish
+   decision-to-empty, caller gaps and retained cost.
+9. **Internal identity and customer API gates.** Blocker: 5. Add mTLS before GA/existing-VPC support and
+   separately implement per-app credentials/rotation. Demo rejected peers and revoked credentials.
+   **Free; cloud validation requires separate approval/cap.**
+10. **Conditional warm passive control.** Blockers: 4, 5 and measured failure of the 5 s restart target.
+    Prove authority generations and uncertain-operation handover locally. **Free first; each cloud
+    fault/handover run is paid with approval/cap.** Skip if single-instance recovery suffices.
+11. **Production relay resilience.** Blockers: 5, 6 and its recorded production choice. Implement the
+    chosen cloud-fenced same-AZ transition or multi-relay/restart path; verify both legs, consent and lost replies.
+    **Free checks first; cloud acceptance paid with approval/cap per run.** Respect the early experiment's result.
+12. **Release evidence and claim gate.** Blockers: 8, 9, 11; 10 only if selected. Join evidence, monthly
+    idle bill, utilisation break-even, dated tariffs and supported failure domains. **Free from artifacts;
+    extra cloud/soak runs each need approval/cap.** No infrastructure-free or cheaper-than-hosted claim before its evidence gate passes.
 
 ## External evidence
 
@@ -478,6 +489,8 @@ availability, pricing and schemas before implementation.
 - **E36** AWS WAF [rate-based rules](https://docs.aws.amazon.com/waf/latest/developerguide/waf-rule-statement-type-rate-based.html) and [associating protection with an ALB](https://docs.aws.amazon.com/waf/latest/developerguide/web-acl-associating-aws-resource.html).
 
 - **E37** [AWS regions and Availability Zones](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html).
+- **E38** [RFC 7675 §5.1: consent expiry and new credentials](https://www.rfc-editor.org/rfc/rfc7675.html#section-5.1).
+- **E39** [RFC 8445 §8.1.1: nominating candidate pairs](https://www.rfc-editor.org/rfc/rfc8445.html#section-8.1.1).
 
 Comparable designs supply no Relais capacity inputs: LiveKit [distributed
 deployments](https://docs.livekit.io/transport/self-hosting/distributed/) wait for participants to leave; its [agent
