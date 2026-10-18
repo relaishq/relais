@@ -78,13 +78,16 @@ type session struct {
 	worker                *Worker
 	log                   logging.LeveledLogger
 
-	mu           sync.Mutex
-	state        sessionState
-	lease        sessionstore.Lease // guarded by mu; never part of the media snapshot
-	dtlsConn     *dtls.Conn
-	srtpIn       *srtp.Context // decrypts caller to worker
-	srtpOut      *srtp.Context // encrypts worker to caller
-	earlyPackets []earlyPacket // guarded by mu; ciphertext awaiting initial SRTP keys
+	mu                      sync.Mutex
+	state                   sessionState
+	lease                   sessionstore.Lease      // guarded by mu; never part of the media snapshot
+	dtlsAcknowledged        *dtlsSequenceCheckpoint // guarded by mu; captured next sequence of the last successful PutState
+	dtlsProvisional         *dtlsSequenceCheckpoint // guarded by mu; first write capture, retained until acknowledgment
+	dtlsCheckpointRequested bool                    // guarded by mu; one guard wakeup per bound value
+	dtlsConn                *dtls.Conn
+	srtpIn                  *srtp.Context // decrypts caller to worker
+	srtpOut                 *srtp.Context // encrypts worker to caller
+	earlyPackets            []earlyPacket // guarded by mu; ciphertext awaiting initial SRTP keys
 
 	// fenced is set under mu when exported, when its lease is lost, or when
 	// a failed resume must close without disturbing the continuing caller.

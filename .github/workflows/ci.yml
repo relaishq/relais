@@ -366,41 +366,32 @@ jobs:
           name: store-stall-logs
           path: bin/crash-run-*
 
-  cluster-tests-gate:
-    runs-on: ubuntu-latest
-    outputs:
-      should_run: ${{ steps.gate.outputs.should_run }}
-    steps:
-      - name: Gate cluster tests
-        id: gate
-        env:
-          RELAIS_TEST_REDIS_CLUSTER_ADDRS: ${{ secrets.RELAIS_TEST_REDIS_CLUSTER_ADDRS }}
-        run: |
-          if [ -n "${RELAIS_TEST_REDIS_CLUSTER_ADDRS}" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-          fi
-
   cluster-tests:
-    needs: cluster-tests-gate
-    if: ${{ needs.cluster-tests-gate.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
-      RELAIS_TEST_REDIS_CLUSTER_ADDRS: ${{ secrets.RELAIS_TEST_REDIS_CLUSTER_ADDRS }}
-    runs-on: self-hosted
+      RELAIS_TEST_REDIS_CLUSTER: '1'
+      RELAIS_TEST_REDIS_TLS_REQUIRE: '1'
+      RELAIS_TEST_ARTIFACT_DIR: ${{ github.workspace }}/bin/cluster-test-artifacts
     steps:
       - uses: actions/checkout@v6
-
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
-
-      - name: Install dependencies
-        run: make deps
-
-      - name: Run Redis Cluster tests
+      - name: Install local test servers and media decoder
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server redis-tools ffmpeg
+      - name: Build process binaries with race instrumentation
+        run: go build -race -o bin/ ./cmd/relais-relay ./cmd/relais-worker ./cmd/relais-control ./cmd/relais-signal
+      - name: Run Redis Cluster protocol and process tests
         run: make test-cluster
+      - name: Upload Cluster failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: cluster-test-failure-evidence
+          path: bin/cluster-test-artifacts/
+          if-no-files-found: warn
 
   netns-crash-run:
     timeout-minutes: 35

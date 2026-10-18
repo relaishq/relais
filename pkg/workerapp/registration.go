@@ -16,7 +16,12 @@ type Registration struct {
 	Name    string
 	Factory agent.Factory
 	Tasks   map[string]agent.TaskHandler
-	Limits  agent.Limits
+	// SkipDrainWait lists task kinds whose ReadOnly handlers do not delay the
+	// SIGTERM quiescence wait. SideEffecting tasks always count toward the wait.
+	// Listed kinds must be nonempty, valid UTF-8 keys in Tasks. This worker-local
+	// setting is not persisted; skipped tasks use the existing urgent export.
+	SkipDrainWait []string
+	Limits        agent.Limits
 }
 
 func registeredAgents(options Options, selected string, limits mediaworker.SnapshotLimits) (mediaworker.AgentConfig, error) {
@@ -26,7 +31,7 @@ func registeredAgents(options Options, selected string, limits mediaworker.Snaps
 			return mediaworker.AgentConfig{}, fmt.Errorf("%w: invalid or duplicate registration %q", agent.ErrIncompatibleAgent, r.Name)
 		}
 		bounds := agenthost.Bounds(r.Limits)
-		f := agenthost.Factory(agenthost.Registration{Name: r.Name, Factory: r.Factory, Tasks: r.Tasks, Bounds: bounds})
+		f := agenthost.Factory(agenthost.Registration{Name: r.Name, Factory: r.Factory, Tasks: r.Tasks, SkipDrainWait: r.SkipDrainWait, Bounds: bounds})
 		resolved := f("").(*agenthost.Adapter).Registration
 		if err := mediaworker.ValidateAgentRegistration(resolved.Name, resolved.TaskKinds, r.Limits, limits); err != nil {
 			return mediaworker.AgentConfig{}, err
@@ -34,6 +39,11 @@ func registeredAgents(options Options, selected string, limits mediaworker.Snaps
 		for kind, handler := range r.Tasks {
 			if kind == "" || !utf8.ValidString(kind) || handler == nil {
 				return mediaworker.AgentConfig{}, fmt.Errorf("%w: invalid task kind %q", agent.ErrIncompatibleAgent, kind)
+			}
+		}
+		for _, kind := range r.SkipDrainWait {
+			if kind == "" || !utf8.ValidString(kind) || r.Tasks[kind] == nil {
+				return mediaworker.AgentConfig{}, fmt.Errorf("%w: invalid skip-drain-wait task kind %q", agent.ErrIncompatibleAgent, kind)
 			}
 		}
 		factories[r.Name] = f

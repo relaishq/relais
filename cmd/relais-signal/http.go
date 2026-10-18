@@ -363,6 +363,7 @@ var controlErrors = map[string]controlErrorPolicy{
 	"unsupported_offer":     {"definite", "call offer unsupported"},
 	"sequence_budget":       {"definite", "call sequence budget exhausted"},
 	"srtcp_exhausted":       {"definite", "call RTCP budget exhausted"},
+	"dtls_exhausted":        {"definite", "call DTLS budget exhausted"},
 	"export_incompatible":   {"definite", "call export incompatible"},
 	"barrier_timeout":       {"retryable", "route barrier unavailable; retry the identical message"},
 	"held":                  {"retryable", "route held; retry the identical message"},

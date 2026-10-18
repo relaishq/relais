@@ -88,6 +88,10 @@ The `build` job aggregates these results. Making that gate required in GitHub
 settings is a separate admin decision. Superseded PR runs are cancelled;
 main pushes and nightly runs are not cancelled by this policy.
 
+The Redis Cluster job also runs on PRs. It uses disposable local Redis processes
+on `ubuntu-latest`, with TLS/ACL and process-topology coverage, and runs packages
+serially to protect the media timing gates. It remains outside the `build` aggregate.
+
 Nightly at 08:00 UTC, pushes to `main`, and manual `workflow_dispatch` runs
 add the full race harness and timing gates on memory and Redis, benchmarks,
 and `make crash-run`. The `store-stall` job adds five trials per case on nightly/manual dispatch,
@@ -98,8 +102,7 @@ All require zero decryption failures. The default store outage budget is 30 s;
 configure matching `-store-outage-budget` on worker and control (ADR 0008).
 Relay TTL stays 600 ms; reachable staleness observation preserves fast frozen
 relay takeover while failed polls prevent outage-driven takeover (ADR 0004).
-The optional Redis Cluster gate is unchanged. To run
-manually, select **Actions → CI → Run workflow** on the desired branch.
+To run manually, select **Actions → CI → Run workflow** on the desired branch.
 The short targets clear the Redis test address and disable its requirement,
 so all Redis subtests skip even when the invoking shell has Redis configured.
 Storage stream and group tests skip before constructing a client when

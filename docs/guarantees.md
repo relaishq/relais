@@ -137,6 +137,15 @@ counter margins if they still fit the safe sequence budget. Otherwise it ends
 the call cleanly and counts the loss. This policy protects decryption; it does
 not promise that a stale call survives.
 
+Once every worker runs this build, crash takeover skips 64 DTLS record sequences
+beyond the committed next sequence; an outgoing guard, armed at the first
+checkpoint attempt and advanced only by acknowledged writes, prevents reuse of a
+sent epoch/sequence pair in encrypted DTLS epochs. Plaintext epoch zero is exempt.
+This guarantee assumes the store never loses an acknowledged write: unlike the
+age-scaled SRTP margins, the fixed DTLS reservation cannot self-correct after an
+asynchronous replica failover. [ADR 0011](adr/0011-deploy-and-autoscale.md) requires
+a durable store for this reason.
+
 A confirmed live export for a planned move uses no crash margin. An uncertain
 export or adoption uses the fenced checkpoint and its measured ages. Relay
 restart alone keeps the live workers and their media state; it does not restore

@@ -817,7 +817,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		if agentFailure {
 			pending.agentFailure = err
 		}
-		if errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) || errors.Is(err, mediaworker.ErrSRTCPIndexExhausted) {
+		if errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) || errors.Is(err, mediaworker.ErrSRTCPIndexExhausted) || errors.Is(err, mediaworker.ErrDTLSSequenceExhausted) {
 			complete(true, err)
 			return
 		}
@@ -1059,7 +1059,7 @@ func (p *Plane) deleteFrames(id string) {
 // Storage disappearance, no target, and unrelated resume errors are losses,
 // but do not imply that the checkpoint envelope caused the loss.
 func checkpointEnvelopeLoss(err error) bool {
-	return errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) || errors.Is(err, mediaworker.ErrSRTCPIndexExhausted) || errors.Is(err, sessionstore.ErrUnsafeCheckpointClock)
+	return errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) || errors.Is(err, mediaworker.ErrSRTCPIndexExhausted) || errors.Is(err, mediaworker.ErrDTLSSequenceExhausted) || errors.Is(err, sessionstore.ErrUnsafeCheckpointClock)
 }
 
 func agentReplayWindows(windows []relay.ReplayWindow, anchors ...map[uint32]uint64) []agent.DuplicateWindow {

@@ -501,7 +501,9 @@ func (r *Redis) repairIndex(lease Lease, ttl time.Duration) {
 
 // Refresh once per worker tick without the droppable maintenance queue.
 // Extending only avoids shortening an index with a longer-lived member.
-var indexRefreshScript = redis.NewScript(`local remaining=redis.call('PTTL',KEYS[1]); if remaining>=0 and remaining<tonumber(ARGV[1]) then return redis.call('PEXPIRE',KEYS[1],ARGV[1]) end; return 0`)
+const indexRefreshLua = `local remaining=redis.call('PTTL',KEYS[1]); if remaining>=0 and remaining<tonumber(ARGV[1]) then return redis.call('PEXPIRE',KEYS[1],ARGV[1]) end; return 0`
+
+var indexRefreshScript = redis.NewScript(indexRefreshLua)
 
 func (r *Redis) RefreshWorkerIndex(ctx context.Context, worker netip.AddrPort, ttl time.Duration) error {
 	if !worker.IsValid() || ttl <= 0 {
@@ -864,8 +866,10 @@ func connectRedis(cfg storage.RedisConfig, label string) (redis.UniversalClient,
 	options.MaxRetries, options.MaxRedirects = -1, -1
 	var client redis.UniversalClient
 	if cfg.Cluster || len(cfg.Addrs) > 0 {
-		cluster := options.Cluster()
-		cluster.NewClient = func(opts *redis.Options) *redis.Client { return metrics.RedisClient(opts, label) }
+		cluster := storage.RedisClusterOptions(options)
+		cluster.NewClient = func(opts *redis.Options) *redis.Client {
+			return storage.RedisClusterNode(metrics.RedisClient(opts, label))
+		}
 		client = redis.NewClusterClient(cluster)
 	} else {
 		client = metrics.RedisClient(options.Simple(), label)
@@ -873,6 +877,8 @@ func connectRedis(cfg storage.RedisConfig, label string) (redis.UniversalClient,
 	client.AddHook(metrics.StoreHook(label))
 	return client, nil
 }
+
+const storeClockLua = `return redis.call('TIME')`
 
 // Clock samples Redis TIME before a media copy, so a delayed PutState cannot
 // make old counters look fresh merely because the write eventually succeeds.
@@ -882,7 +888,7 @@ func (r *Redis) Clock(ctx context.Context, id string) (time.Time, error) {
 	var result []interface{}
 	err := r.retryRead(ctx, "session_clock", func() error {
 		var err error
-		result, err = r.client.Eval(ctx, `return redis.call('TIME')`, r.keys(id)).Slice()
+		result, err = r.client.Eval(ctx, storeClockLua, r.keys(id)).Slice()
 		return err
 	})
 	if err != nil {

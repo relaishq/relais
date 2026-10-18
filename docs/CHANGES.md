@@ -198,7 +198,7 @@ Last updated: 2025-08-20 13:13:49 -0700
 - Tailer now supports clean shutdown via context cancellation when the PeerConnection closes/fails.
 - Stream cursors are persisted in Redis keys `stream_cursor:{sessionID}:{participantID}:{name}` for resume.
 - Current error handling: minimal backoff and loop continuation; structured logging improvements are recommended (see Next Actions).
- - Dev: local Redis Cluster compose at `dev/redis-cluster/docker-compose.yml` and guide `docs/dev/redis-cluster.md`.
+ - Dev: local Redis Cluster guide at `docs/dev/redis-cluster.md` (the initial Docker fixture has since been replaced by native test-owned servers).
 
 ## Known Limitations / Open Items
 

@@ -425,12 +425,20 @@ With a reserve, the worker stops new task launches and queues new starts as
 their terminal mailbox admission, **not buffered playout**. Results continue to
 be consumed; audio, checkpoints, heartbeats and the private API stay live. The
 wait holds no control call lock or control drain slot.
-A handler that paces playback by emitting small chunks still counts as in flight.
-Each task can publish only one emission per 100 ms, including its terminal
-result. Demo A's `Play` emits 100 ms audio chunks, so a SIGTERM during speech
-can use the whole task budget before the urgent move. Its accepted prefix moves
-and `Play` resumes above `After`; the playback queue itself is not the wait
-condition. There is no opt-out in this slice.
+For playback-only tasks, set `workerapp.Registration.SkipDrainWait` to a list
+of task kinds from `Tasks`, for example `[]string{PlayKind}`. Listed kinds must
+be nonempty and valid UTF-8; unknown kinds fail registration with
+`agent.ErrIncompatibleAgent`. Only `ReadOnly` tasks of those kinds skip the
+wait. `SideEffecting` tasks always count, even if their kind is listed. The
+setting is worker-local and is not persisted in tasks or snapshots.
+Demo A lists only `PlayKind`: its accepted prefix moves through urgent export,
+and playback resumes exactly above `After()`, so waiting buys nothing. List
+only `Retry` kinds that resume deterministically above `After()`: a skipped
+`Abandon` task is abandoned at the move instead of finishing. Skipped
+tasks move when the other handlers finish or the task budget expires. New
+starts still queue as `never_launched`. Leave generation and other useful
+in-flight work unlisted, including streaming generators parked in `Emit`
+admission; their remaining computation can benefit from the wait.
 The worker computes its single wait budget after the mark:
 
 ```text
@@ -569,7 +577,7 @@ Control error classes (codes preserve the existing HTTP status):
 | Class | Codes | Client action |
 | --- | --- | --- |
 | retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `at_capacity`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session` | Retry the identical message with bounded backoff and a deadline. |
-| definite | `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
+| definite | `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `dtls_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
 | uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
 
 `control_order` is retryable while an earlier sequence from this controller is
