@@ -339,24 +339,45 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 			p.metrics.calls.Add(1)
 		}
 	}()
-	w, err := p.pick(ctx, name, netip.AddrPort{})
-	if err != nil {
-		return "", "", err
-	}
-	defer p.unreserve(w)
-
+	p.mu.Lock()
+	attempts := len(p.workers)
+	p.mu.Unlock()
+	excluded := make(map[netip.AddrPort]bool, attempts)
+	var w *registration
 	var id, answer string
 	var placed sessionstore.Lease
-	if worker, ok := w.worker.(interface {
-		CreateSessionWithLease(context.Context, string) (string, string, sessionstore.Lease, error)
-	}); ok {
-		id, answer, placed, err = worker.CreateSessionWithLease(ctx, offer)
-	} else {
-		id, answer, err = w.worker.CreateSession(ctx, offer)
+	for range attempts {
+		var err error
+		w, err = p.pickExcluding(ctx, name, excluded)
+		if err != nil {
+			return "", "", err
+		}
+		placed = sessionstore.Lease{}
+		if worker, ok := w.worker.(interface {
+			CreateSessionWithLease(context.Context, string) (string, string, sessionstore.Lease, error)
+		}); ok {
+			id, answer, placed, err = worker.CreateSessionWithLease(ctx, offer)
+		} else {
+			id, answer, err = w.worker.CreateSession(ctx, offer)
+		}
+		if err == nil {
+			break
+		}
+		p.unreserve(w)
+		// Only the worker's definite draining refusal proves nothing was
+		// accepted. Never replay uncertain, canceled, timed-out or unknown
+		// create outcomes, even if they also wrap the draining sentinel.
+		if !errors.Is(err, mediaworker.ErrDraining) || errors.Is(err, privateapi.ErrUncertain) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			return "", "", err
+		}
+		excluded[w.addr] = true
+		name = "" // A raced pinned create may use a different live worker.
+		w = nil
 	}
-	if err != nil {
-		return "", "", err
+	if w == nil {
+		return "", "", ErrNoTarget
 	}
+	defer p.unreserve(w)
 
 	p.mu.Lock()
 	if placed.Epoch == 0 {
@@ -821,6 +842,31 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 	return fmt.Errorf("controlplane: move failed, rolled back: %w", cause)
 }
 
+// Keep Drain's historical HTTP 500 for an unknown worker while retaining a
+// typed not-found cause and a worker-specific diagnostic. The private mark
+// endpoint explicitly returns 404 for this same lookup failure.
+type unknownWorkerError struct{ error }
+
+func (e *unknownWorkerError) Unwrap() error { return e.error }
+
+// MarkDraining is an idempotent placement fence. It does not wait for
+// reservations, acquire call locks or drain slots, or move any sessions.
+func (p *Plane) MarkDraining(name string) error {
+	_, err := p.markDraining(name)
+	return err
+}
+
+func (p *Plane) markDraining(name string) (*registration, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	w := p.workers[name]
+	if w == nil {
+		return nil, &unknownWorkerError{fmt.Errorf("controlplane: unknown worker %q: %w", name, sessionstore.ErrNotFound)}
+	}
+	w.draining = true
+	return w, nil
+}
+
 // Drain blocks new selections immediately. Existing calls move concurrently,
 // at most drainParallelism at a time: a call waiting its turn keeps flowing
 // on the old worker, so running more moves than there are CPUs would only
@@ -836,14 +882,11 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 			p.metrics.drains.Add(1)
 		}
 	}()
-	p.mu.Lock()
-	w := p.workers[name]
-	if w == nil {
-		p.mu.Unlock()
-		return nil, errors.New("controlplane: unknown worker")
+	w, err := p.markDraining(name)
+	if err != nil {
+		return nil, err
 	}
-
-	w.draining = true
+	p.mu.Lock()
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
 

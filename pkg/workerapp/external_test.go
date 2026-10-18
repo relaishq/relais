@@ -69,7 +69,7 @@ func main(){
 		t.Fatalf("unexpected version output: %s", out)
 	}
 	run("go", "build", "-mod=mod", "-o", filepath.Join(dir, "stock-worker"), "github.com/relaishq/relais/cmd/relais-worker")
-	if out := run(binary, "-h"); !strings.Contains(out, "-agent string") || !strings.Contains(out, `(default "echo")`) || !strings.Contains(out, "audio agent: echo, demo or a registered name") || strings.Contains(out, "agent-drain-task-budget") || strings.Contains(out, "agent-drain-move-reserve") {
+	if out := run(binary, "-h"); !strings.Contains(out, "-agent string") || !strings.Contains(out, `(default "echo")`) || !strings.Contains(out, "audio agent: echo, demo or a registered name") || !strings.Contains(out, "agent-drain-task-budget") || !strings.Contains(out, "agent-drain-move-reserve") {
 		t.Fatalf("unexpected help output: %s", out)
 	}
 	t.Run("registered-call-move-takeover", func(t *testing.T) { testExternalRegisteredCall(t, binary) })

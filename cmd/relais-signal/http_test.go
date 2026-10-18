@@ -175,7 +175,7 @@ func TestAuthenticationAndRefusedRoutes(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct{ method, path string }{
-		{"POST", "/calls/id/move"}, {"POST", "/workers/a/drain"}, {"POST", "/demo/kill"}, {"POST", "/demo/register"}, {"POST", "/workers"}, {"GET", "/metrics"}, {"GET", "/"},
+		{"POST", "/calls/id/move"}, {"POST", "/workers/a/drain"}, {"POST", "/private/workers/a/mark-draining"}, {"POST", "/demo/kill"}, {"POST", "/demo/register"}, {"POST", "/workers"}, {"GET", "/metrics"}, {"GET", "/"},
 		{"GET", "/calls"}, {"POST", "/calls/id"}, {"GET", "/calls/id"}, {"POST", "/status"}, {"DELETE", "/clock"}, {"HEAD", "/clock"}, {"OPTIONS", "/calls"},
 		{"DELETE", "/calls/../status"}, {"DELETE", "/calls/%2e%2e%2fstatus"}, {"DELETE", "/calls/%69d"}, {"POST", "/calls/"}, {"GET", "//status"}, {"GET", "/status/"},
 	} {

@@ -19,12 +19,6 @@ func TestAgentNames(t *testing.T) {
 	require.ErrorContains(t, err, "missing")
 	require.ErrorContains(t, err, "alpha/v1, demo, echo, zeta/v1")
 }
-func TestRemovedDrainFlags(t *testing.T) {
-	for _, name := range []string{"agent-drain-task-budget", "agent-drain-move-reserve"} {
-		err := Run(context.Background(), []string{"-" + name, "0s"}, Options{})
-		require.ErrorContains(t, err, "flag provided but not defined: -"+name)
-	}
-}
 func TestFlagBudgetValidation(t *testing.T) {
 	for _, tc := range []struct {
 		flag    string

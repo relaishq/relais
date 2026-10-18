@@ -32,6 +32,39 @@ The current owner, the move log and the owner's count of the caller's packets it
 
 The control plane API (`/api/v1/sessions`, `/api/v1/plugins`) and the WebSocket signaling endpoint (`/ws/signaling`) were served by the retired `relais-core` server and no longer exist.
 
+## Private worker placement fence
+
+```text
+POST /private/workers/{name}/mark-draining
+204 No Content (including repeated marks)
+404 JSON {code:"not_found",message:...} for an unknown registration
+```
+
+This control-process endpoint marks only the named registration draining.
+Placement excludes it and `/status` reports `draining`; heartbeats do not clear
+it. It moves no calls, waits for no incoming reservations, and acquires no call
+lock or drain slot. Authentication is the same as private worker heartbeats:
+**none beyond the existing private listener/network restrictions**. Do not expose
+it through the public signal frontend. It grants no new public control authority.
+`POST /workers/{name}/drain` shares the mark and then runs existing planned moves.
+
+After the worker acknowledges the mark, it refuses raced `POST /sessions`
+creates with HTTP **409** and typed `worker_draining`. This private refusal is
+definite only after any unregistered claim has been released: no session, call
+or lease remains. Failed claim cleanup returns an uncertain outcome and is not
+retried. Control retries a definite refusal on another
+non-draining worker, excluding every worker that refused. Retries are bounded by
+the number of registered workers at the start of placement. An initially pinned
+create can use another worker after this refusal. Control never retries a lost
+reply, timeout, cancellation or unknown create failure.
+
+Public create responses stay unchanged. If no worker is left, control returns
+**409**, `Content-Type: text/plain; charset=utf-8`, with the existing body
+`controlplane: no non-draining target worker` followed by a newline. The signal
+frontend keeps its existing sanitized text response. No placement-specific JSON
+or `Retry-After` mapping is added. `worker_draining` is placement-only and cannot
+be returned by the Control route. See [worker shutdown](deploy.md#worker-shutdown).
+
 ## Routed agent Control
 
 The authenticated `relais-signal` frontend accepts:

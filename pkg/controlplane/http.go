@@ -145,7 +145,10 @@ func writeError(w http.ResponseWriter, err error) {
 
 func errorStatus(err error) int {
 	code := http.StatusInternalServerError
+	var unknown *unknownWorkerError
 	switch {
+	case errors.As(err, &unknown):
+		code = http.StatusInternalServerError
 	case errors.Is(err, ErrUnknownCall), errors.Is(err, sessionstore.ErrNotFound), errors.Is(err, mediaworker.ErrUnknownSession):
 		code = http.StatusNotFound
 	case errors.Is(err, ErrMoveInProgress), errors.Is(err, ErrNoTarget), errors.Is(err, sessionstore.ErrLeaseLost):

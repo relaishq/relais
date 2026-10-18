@@ -60,6 +60,15 @@ func (p *Plane) ProcessHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", metrics.ProcessHandler(p.metricSamples, metrics.CheckpointCollectors()...))
 	mux.Handle("/", p.Handler())
+	mux.HandleFunc("POST /private/workers/{name}/mark-draining", func(w http.ResponseWriter, r *http.Request) {
+		if err := p.MarkDraining(r.PathValue("name")); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			privateapi.Write(w, privateapi.Failure{Code: "not_found", Message: err.Error()})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	// Reset only draining on the settled dead registration. Keeping it dead
 	// preserves the remote rejoin token handshake and fencing of old sessions.
 	mux.HandleFunc("POST /private/workers/{name}/replace", func(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,266 @@
+[
+  {
+    "code": "agent_backpressure",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: task mailbox backpressure\n"
+  },
+  {
+    "code": "agent_capacity",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: task capacity\n"
+  },
+  {
+    "code": "agent_incompatible",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: incompatible registration\n"
+  },
+  {
+    "code": "agent_oversize",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: state exceeds size limit\n"
+  },
+  {
+    "code": "agent_restore",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: state restore failed\n"
+  },
+  {
+    "code": "agent_save",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: state save failed\n"
+  },
+  {
+    "code": "agent_version",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: unknown state version\n"
+  },
+  {
+    "code": "barrier_timeout",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "relay: drain barrier acknowledgement timed out\n"
+  },
+  {
+    "code": "buffer_disabled",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "relay: caller buffer disabled\n"
+  },
+  {
+    "code": "canceled",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "context canceled\n"
+  },
+  {
+    "code": "checkpoint_clock",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "sessionstore: checkpoint store clock moved backwards\n"
+  },
+  {
+    "code": "closed",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "mediaworker: closed\n"
+  },
+  {
+    "code": "control_conflict",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: control ID or sequence conflicts\n"
+  },
+  {
+    "code": "control_invalid",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: invalid control message\n"
+  },
+  {
+    "code": "control_not_ready",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: Started not yet accepted\n"
+  },
+  {
+    "code": "control_order",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: control sequence must be next in order\n"
+  },
+  {
+    "code": "control_rejected",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: control Handle refused after Restore\n"
+  },
+  {
+    "code": "control_stale",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: control sequence outside retained window\n"
+  },
+  {
+    "code": "control_unsupported",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "agent: control unsupported by registration or limits\n"
+  },
+  {
+    "code": "deadline",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "context deadline exceeded\n"
+  },
+  {
+    "code": "ended",
+    "status": 404,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "sessionstore: session ended: sessionstore: session not found\n"
+  },
+  {
+    "code": "export_incompatible",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "mediaworker: export mailbox incompatible\n"
+  },
+  {
+    "code": "export_not_flushed",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "mediaworker: worker move budget unavailable: export has not flushed\n"
+  },
+  {
+    "code": "held",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "relay: session already held\n"
+  },
+  {
+    "code": "hold_expired",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "relay: hold expired\n"
+  },
+  {
+    "code": "hold_limit",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "relay: concurrent hold limit reached\n"
+  },
+  {
+    "code": "lease_lost",
+    "status": 409,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "sessionstore: lease lost\n"
+  },
+  {
+    "code": "move_budget",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "mediaworker: worker move budget unavailable\n"
+  },
+  {
+    "code": "move_in_progress",
+    "status": 409,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "controlplane: move in progress\n"
+  },
+  {
+    "code": "no_target",
+    "status": 409,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "controlplane: no non-draining target worker\n"
+  },
+  {
+    "code": "not_established",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "mediaworker: session not established\n"
+  },
+  {
+    "code": "not_found",
+    "status": 404,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "sessionstore: session not found\n"
+  },
+  {
+    "code": "replay_in_progress",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "relay: replay already running\n"
+  },
+  {
+    "code": "replay_not_ready",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "relay: replay checkpoint not supplied\n"
+  },
+  {
+    "code": "replay_target_changed",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "relay: replay target tenure changed\n"
+  },
+  {
+    "code": "sequence_budget",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "mediaworker: sequence budget exhausted\n"
+  },
+  {
+    "code": "session_exists",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "mediaworker: session already runs on this worker\n"
+  },
+  {
+    "code": "srtcp_exhausted",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "mediaworker: SRTCP key lifetime exhausted\n"
+  },
+  {
+    "code": "transient",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "sessionstore: transient Redis failure\n"
+  },
+  {
+    "code": "uncertain",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "privateapi: operation outcome uncertain\n"
+  },
+  {
+    "code": "unknown",
+    "status": 500,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "worker create failed\n"
+  },
+  {
+    "code": "unknown_call",
+    "status": 404,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "controlplane: unknown call\n"
+  },
+  {
+    "code": "unknown_session",
+    "status": 404,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "mediaworker: unknown session\n"
+  },
+  {
+    "code": "unsupported_offer",
+    "status": 400,
+    "content_type": "text/plain; charset=utf-8",
+    "body": "mediaworker: unsupported offer\n"
+  }
+]

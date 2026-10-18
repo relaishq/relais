@@ -557,6 +557,14 @@ func (s *session) launchTasks() {
 		if !t.prepared && active >= h.registration.Bounds.MaxActiveTasks {
 			continue
 		}
+		// Serialize the entire launch decision with worker-local quiescence,
+		// including side-effect preparation. Never checkpoint a new started
+		// intent after the launch fence.
+		s.worker.taskDrain.mu.Lock()
+		if s.worker.taskDrain.quiescing {
+			s.worker.taskDrain.mu.Unlock()
+			break
+		}
 		if t.intent.Class == agent.SideEffecting {
 			if !t.prepared {
 				active++
@@ -573,6 +581,7 @@ func (s *session) launchTasks() {
 				}
 			}
 			if !granted {
+				s.worker.taskDrain.mu.Unlock()
 				continue
 			}
 		}
@@ -584,10 +593,12 @@ func (s *session) launchTasks() {
 		s.mu.Lock()
 		if s.agent.paused || s.fenced.Load() || s.ctx.Err() != nil {
 			s.mu.Unlock()
+			s.worker.taskDrain.mu.Unlock()
 			break
 		}
 		if !t.intent.Deadline.IsZero() && !s.taskClockLocked().Before(t.intent.Deadline) {
 			s.mu.Unlock()
+			s.worker.taskDrain.mu.Unlock()
 			active--
 			s.terminalTask(t, agent.Timeout, "")
 			changed = true
@@ -624,9 +635,18 @@ func (s *session) launchTasks() {
 		})
 		handler := h.registration.Tasks[t.intent.Kind]
 		s.mu.Unlock()
+		if s.worker.taskDrain.active == 0 {
+			s.worker.taskDrain.idle = make(chan struct{})
+		}
+		s.worker.taskDrain.active += 2
+		s.worker.taskDrain.mu.Unlock()
 		go func(id agent.TaskID) {
+			defer s.worker.taskDrain.finish()
 			done := make(chan error, 1)
-			go func() { done <- handler(ctx, run) }()
+			go func() {
+				defer s.worker.taskDrain.finish()
+				done <- handler(ctx, run)
+			}()
 			var err error
 			select {
 			case err = <-done:

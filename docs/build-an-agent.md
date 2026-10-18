@@ -373,10 +373,73 @@ real SIGKILL at all three cuts with dedicated Redis. Redis verification must use
 a disposable server on a port other than 6379. These tests do not prove provider
 behavior, browser DTX capture, loaded drain time, or capacity approval.
 
-Drain currently uses the existing urgent export path. **Drain does not wait for
-handlers until slice 9.** That slice adds worker-local quiescence and a measured
-operator move reserve. Do not assume a five-second shutdown deadline includes a
-handler wait or that it waits for the whole reply to play.
+### SIGTERM handler quiescence
+
+SIGTERM (or SIGINT) starts one `-drain-timeout` deadline, **5 s** by default.
+The worker first acknowledges a mark-only placement fence in control, then
+refuses raced local creates. Control's `/status` shows `draining`; heartbeats
+keep the mark. A raced create receives a definite private `worker_draining`
+refusal after confirmed claim cleanup: no session, call or lease remains. If
+cleanup cannot be acknowledged, the outcome is uncertain and control does not
+retry. Control retries a definite refusal on another
+non-draining worker, excluding each refused worker and bounding attempts by the
+initial worker count. Lost replies, timeouts and unknown errors are not retried.
+Public create responses remain unchanged; if no worker remains, control returns
+its existing 409 text response.
+
+`-agent-drain-move-reserve` has **no default**. Unset skips the handler wait;
+the placement mark always applies. Every v2 session then uses urgent export. Set the flag only after measuring
+loaded control-drain rounds on the deployment's session count, store, network,
+worker binary, and default or configured control concurrency. Reserve time for
+those rounds plus placement-mark time and headroom. See the bounded procedure
+and one-machine sample in [drain quiescence measurements](dev/drain-quiescence.md).
+This sample makes no capacity claim. At 1 / 8 / 32 sessions, call-to-last-adoption
+p50 / p95 / max was **9.090 / 14.076 / 45.635 ms**, **12.660 / 28.851 / 50.855 ms**,
+and **34.565 / 47.868 / 54.012 ms**. The corresponding playout packet-gap
+p50 / p95 / max was **33.568 / 40.600 / 54.795 ms**, **40.831 / 59.285 / 64.121 ms**,
+and **67.020 / 80.734 / 93.532 ms**. For that machine at up to 32 sessions, the
+documented starting reserve is **500 ms**, covering the largest full HTTP round
+(87.158 ms), 100 ms marking, and headroom. Remeasure for the deployment; this
+is not a default or capacity approval.
+Control Drain can also wait **up to 1 s for in-flight incoming reservations**
+before it starts moving calls. The sample's 500 ms reserve did not exercise
+that wait, so it is not sufficient as a worst-case allowance for this case.
+Include reservation-settlement time plus loaded move rounds and headroom in
+the deployment's reserve; otherwise leave the reserve unset. A larger reserve
+reduces the local handler wait and must still be below `-drain-timeout`.
+
+With a reserve, the worker stops new task launches and queues new starts as
+`never_launched`. It waits concurrently across all v2 sessions for handlers and
+their terminal mailbox admission, **not buffered playout**. Results continue to
+be consumed; audio, checkpoints, heartbeats and the private API stay live. The
+wait holds no control call lock or control drain slot.
+A handler that paces playback by emitting small chunks still counts as in flight.
+Each task can publish only one emission per 100 ms, including its terminal
+result. Demo A's `Play` emits 100 ms audio chunks, so a SIGTERM during speech
+can use the whole task budget before the urgent move. Its accepted prefix moves
+and `Play` resumes above `After`; the playback queue itself is not the wait
+condition. There is no opt-out in this slice.
+The worker computes its single wait budget after the mark:
+
+```text
+max(0, min(agent-drain-task-budget, remaining drain deadline - agent-drain-move-reserve))
+```
+
+`-agent-drain-task-budget` defaults to **2 s** and accepts 0 through 2 s.
+The reserve must be strictly positive and strictly less than `-drain-timeout`;
+invalid values fail startup, without clamping. A zero task budget fences launches
+but skips waiting. If control does not acknowledge the mark within **100 ms**
+(or the remaining deadline), the worker logs the failure, skips quiescence and
+falls through to the existing drain operation, which also marks draining.
+
+When handlers finish or the budget ends, the worker calls control's existing
+`POST /workers/{name}/drain` with the remaining deadline, waits for sessions to
+leave, then closes. Never-launched requests move exactly. Unfinished handlers
+use the existing urgent Retry/Abandon and typed outcome rules; buffered reply
+audio and its cursor move rather than waiting to finish playing. The same
+registration must exist on every destination. Legacy echo/demo behavior stays
+the same. A direct control drain (including the demo's Drain button) uses urgent
+export; only the worker's signal path performs this local wait.
 
 ## Routed Control
 

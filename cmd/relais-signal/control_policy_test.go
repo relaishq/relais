@@ -33,6 +33,8 @@ func TestControlErrorPolicyCompleteness(t *testing.T) {
 			emitted[code] = true
 		}
 	}
+	// Placement refusals come only from createSession, never Control.
+	delete(emitted, "worker_draining")
 	require.Len(t, classes, len(emitted), "classification and emitter inventories differ")
 	docs := map[string]string{}
 	for _, file := range []string{"../../docs/api_reference.md", "../../docs/build-an-agent.md"} {
