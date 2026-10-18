@@ -12,38 +12,38 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type reviewConstAgent struct{ audio atomic.Int64 }
+type constStateAgent struct{ audio atomic.Int64 }
 
-func (a *reviewConstAgent) Handle(_ context.Context, e agent.Event) (agent.Effects, error) {
+func (a *constStateAgent) Handle(_ context.Context, e agent.Event) (agent.Effects, error) {
 	if e.Kind == agent.AudioInput {
 		a.audio.Add(1)
 	}
 	return agent.Effects{}, nil
 }
-func (*reviewConstAgent) Save(context.Context) (agent.State, error) {
+func (*constStateAgent) Save(context.Context) (agent.State, error) {
 	return agent.State{Version: 1, Bytes: []byte("constant")}, nil
 }
-func (*reviewConstAgent) Restore(context.Context, agent.State) error { return nil }
+func (*constStateAgent) Restore(context.Context, agent.State) error { return nil }
 
-type reviewCountStore struct {
+type countStore struct {
 	sessionstore.Store
 	puts atomic.Int64
 }
 
-func (s *reviewCountStore) PutState(ctx context.Context, lease sessionstore.Lease, data []byte) error {
+func (s *countStore) PutState(ctx context.Context, lease sessionstore.Lease, data []byte) error {
 	s.puts.Add(1)
 	return s.Store.PutState(ctx, lease, data)
 }
 
-func TestV2ReviewConstantStateCheckpointRate(t *testing.T) {
+func TestV2ConstantStateCheckpointRate(t *testing.T) {
 	if testing.Short() {
 		t.Skip("extended v2 matrix runs outside the PR short suite")
 	}
 	forAgentStores(t, func(t *testing.T, base sessionstore.Store) {
 		var counts [2]int64
 		for i, mode := range []string{"v2-const", "legacy-echo"} {
-			store := &reviewCountStore{Store: base}
-			a := &reviewConstAgent{}
+			store := &countStore{Store: base}
+			a := &constStateAgent{}
 			settings := agentHarnessSettings{echo: true}
 			if i == 0 {
 				reg := agenthost.Registration{Name: "const/v1", Factory: func(agent.FactoryArgs) agent.Agent { return a }}

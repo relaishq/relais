@@ -1,8 +1,9 @@
 package controlplane
 
 import (
-	"github.com/prometheus/client_golang/prometheus"
 	"sync/atomic"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/relaishq/relais/pkg/metrics"
 )

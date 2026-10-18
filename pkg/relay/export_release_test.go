@@ -395,7 +395,7 @@ func TestMoveSessionAfterExportBounds(t *testing.T) {
 // The ring's lowest observed index is lifetime metadata from an earlier
 // rollover epoch. Aligning to the export must not re-extend it into the
 // anchor's epoch, or eviction of unconsumed input after a wrap would be
-// reported as complete (implementation review P3). The crash path shares
+// reported as complete. The crash path shares
 // the alignment and must still see the eviction above its checkpoint.
 func TestRolloverEvictionIsReported(t *testing.T) {
 	// The stream starts at sequence 10 (lifetime lowest), jumps near the wrap,

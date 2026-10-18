@@ -281,8 +281,7 @@ func TestRetainedPlannedMoveReleasesAfterExport(t *testing.T) {
 
 // A retained planned move whose route call failed retries with no known
 // source. The retry must repair the route through the real relay HTTP API
-// rather than send an empty source to move-after-export (implementation
-// review P2): the old path returned 400 on every attempt and never adopted.
+// rather than send an empty source to move-after-export: the old path returned 400 on every attempt and never adopted.
 func TestRetainedPlannedMoveRetriesAfterRouteFailure(t *testing.T) {
 	m := sessionstore.NewMemory()
 	r, err := relay.New(relay.Config{Owners: m})

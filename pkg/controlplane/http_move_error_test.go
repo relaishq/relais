@@ -39,7 +39,10 @@ func TestHTTPMoveFailurePreservesResult(t *testing.T) {
 	require.Equal(t, "a", reply.Result.From)
 	require.Equal(t, "b", reply.Result.To)
 	require.False(t, reply.Result.Start.IsZero())
-	require.True(t, reply.Result.End.After(reply.Result.Start))
+	// JSON drops the monotonic reading and a fast failure can finish within
+	// one wall-clock tick, so End may equal Start.
+	require.False(t, reply.Result.End.IsZero())
+	require.False(t, reply.Result.End.Before(reply.Result.Start))
 	require.True(t, reply.Result.Result.RolledBack)
 	require.True(t, a.runs(id))
 	server := httptest.NewServer(p.Handler())
@@ -137,7 +140,10 @@ func TestHTTPMoveUncertainPreservesResult(t *testing.T) {
 	require.Equal(t, reply.Error, reply.Result.Error)
 	require.Equal(t, id, reply.Result.ID)
 	require.False(t, reply.Result.Start.IsZero())
-	require.True(t, reply.Result.End.After(reply.Result.Start))
+	// JSON drops the monotonic reading and a fast failure can finish within
+	// one wall-clock tick, so End may equal Start.
+	require.False(t, reply.Result.End.IsZero())
+	require.False(t, reply.Result.End.Before(reply.Result.Start))
 }
 
 type failedHTTPResume struct {

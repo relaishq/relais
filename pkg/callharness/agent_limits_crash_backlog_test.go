@@ -16,12 +16,12 @@ import (
 
 // Make Lost-before-cleanup observable deterministically, as permitted by the
 // control contract. No extra delay is applied to normal worker releases.
-type round2DelayedReleaseStore struct {
+type delayedReleaseStore struct {
 	sessionstore.Store
 	armed atomic.Bool
 }
 
-func (s *round2DelayedReleaseStore) Release(ctx context.Context, l sessionstore.Lease) error {
+func (s *delayedReleaseStore) Release(ctx context.Context, l sessionstore.Lease) error {
 	if s.armed.Load() {
 		select {
 		case <-time.After(150 * time.Millisecond):
@@ -31,7 +31,7 @@ func (s *round2DelayedReleaseStore) Release(ctx context.Context, l sessionstore.
 	}
 	return s.Store.Release(ctx, l)
 }
-func TestRound2CrashLosesOversizedBacklog(t *testing.T) {
+func TestCrashLosesOversizedBacklog(t *testing.T) {
 	if testing.Short() {
 		t.Skip("large queued audio takeover on both stores; unit crash-bound checks cover the fast path")
 	}
@@ -46,7 +46,7 @@ func TestRound2CrashLosesOversizedBacklog(t *testing.T) {
 		for len(packets)*len(fixture) < 240000 {
 			packets = append(packets, fixture)
 		}
-		regs, events, gate, _ := reviewStreamRegs(packets, len(packets), 0)
+		regs, events, gate, _ := streamRegs(packets, len(packets), 0)
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs, snapshotLimits: []mediaworker.SnapshotLimits{{MoveBytesPerSession: 1 << 20}, {MoveBytesPerSession: 128 << 10}}})
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()

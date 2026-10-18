@@ -3,9 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"github.com/relaishq/relais/internal/loadgen"
-	"github.com/relaishq/relais/pkg/callharness"
-	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -14,6 +11,10 @@ import (
 	"runtime"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/stretchr/testify/require"
 )
 
 func TestUnevenCallDistribution(t *testing.T) {

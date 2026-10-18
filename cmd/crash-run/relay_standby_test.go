@@ -1,11 +1,12 @@
 package main
 
 import (
+	"testing"
+	"time"
+
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/relay"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
 func TestRelayStandbyRejectsDuplicateMediaOrUnfencedTenure(t *testing.T) {

@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/relaishq/relais/internal/agenthost"
-	legacy "github.com/relaishq/relais/pkg/agent"
-	"github.com/relaishq/relais/pkg/sessionstore"
 	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/agenthost"
+	legacy "github.com/relaishq/relais/pkg/agent"
+	"github.com/relaishq/relais/pkg/sessionstore"
 
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/stretchr/testify/require"
@@ -20,7 +21,7 @@ import (
 // Probe 1: a takeover-restored ReadOnly task whose request bytes were lost
 // remains in h.tasks until pruned. Can a planned move export it, and can the
 // target (or a rollback to the source) restore that exact export?
-func TestTaskReviewLostRequestExactRestore(t *testing.T) {
+func TestTaskLostRequestExactRestore(t *testing.T) {
 	for _, final := range []bool{false, true} {
 		t.Run(fmt.Sprint("final=", final), func(t *testing.T) {
 			a := &v2UnitAgent{state: agent.State{Version: 1}}
@@ -52,7 +53,7 @@ func TestTaskReviewLostRequestExactRestore(t *testing.T) {
 	}
 }
 
-func TestTaskReviewCrashRestoreDoesNotReserveLostBytes(t *testing.T) {
+func TestTaskCrashRestoreDoesNotReserveLostBytes(t *testing.T) {
 	const length = 900 << 10
 	source := &v2UnitAgent{state: agent.State{Version: 1, HasMoveOnly: true, MoveOnlyLength: length}, payload: make([]byte, length)}
 	_, s := v2UnitSession(t, source)
@@ -72,7 +73,7 @@ func TestTaskReviewCrashRestoreDoesNotReserveLostBytes(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestTaskReviewEmptyRequestCrashRestore(t *testing.T) {
+func TestTaskEmptyRequestCrashRestore(t *testing.T) {
 	for _, class := range []agent.TaskClass{agent.ReadOnly, agent.SideEffecting} {
 		t.Run(fmt.Sprint(class), func(t *testing.T) {
 			a := &v2UnitAgent{state: agent.State{Version: 1}}
@@ -97,7 +98,7 @@ func TestTaskReviewEmptyRequestCrashRestore(t *testing.T) {
 	}
 }
 
-func TestTaskReviewDetailExactRestore(t *testing.T) {
+func TestTaskDetailExactRestore(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
@@ -128,7 +129,7 @@ func TestTaskReviewDetailExactRestore(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestTaskReviewEmitWorkerPressureBackpressures(t *testing.T) {
+func TestTaskEmitWorkerPressureBackpressures(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	w, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
@@ -144,7 +145,7 @@ func TestTaskReviewEmitWorkerPressureBackpressures(t *testing.T) {
 	require.ErrorIs(t, <-e.reply, agent.ErrBackpressure)
 	require.Empty(t, task.results)
 }
-func TestTaskReviewPreparedTasksReserveSlots(t *testing.T) {
+func TestTaskPreparedTasksReserveSlots(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
@@ -183,7 +184,7 @@ func TestTaskReviewPreparedTasksReserveSlots(t *testing.T) {
 		}
 	}
 }
-func TestTaskReviewExportMismatchIsDefinitiveBeforePause(t *testing.T) {
+func TestTaskExportMismatchIsDefinitiveBeforePause(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
@@ -202,7 +203,7 @@ func TestTaskReviewExportMismatchIsDefinitiveBeforePause(t *testing.T) {
 	require.False(t, s.fenced.Load())
 	require.Len(t, s.agent.queue, 1)
 }
-func TestTaskReviewDigestNormalizesEmpty(t *testing.T) {
+func TestTaskDigestNormalizesEmpty(t *testing.T) {
 	spec := agent.TaskSpec{Step: "s", Kind: "test/v1", Class: agent.ReadOnly, Request: nil}
 	before := taskDigest(spec)
 	spec.Request = []byte{}
@@ -211,17 +212,17 @@ func TestTaskReviewDigestNormalizesEmpty(t *testing.T) {
 	require.NotEqual(t, before, taskDigest(spec))
 }
 
-type taskReviewClockStore struct {
+type taskClockStore struct {
 	sessionstore.Store
 	calls atomic.Int32
 }
 
-func (s *taskReviewClockStore) Clock(context.Context, string) (time.Time, error) {
+func (s *taskClockStore) Clock(context.Context, string) (time.Time, error) {
 	s.calls.Add(1)
 	return time.Time{}, sessionstore.ErrTransient
 }
-func TestTaskReviewForcedRetryStopsAndRespectsPause(t *testing.T) {
-	store := &taskReviewClockStore{Store: sessionstore.NewMemory()}
+func TestTaskForcedRetryStopsAndRespectsPause(t *testing.T) {
+	store := &taskClockStore{Store: sessionstore.NewMemory()}
 	reg := agenthost.Registration{Name: "retry/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &v2UnitAgent{state: agent.State{Version: 1}} }}
 	w, err := New(Config{Agent: AgentConfig{Factory: agenthost.Factory(reg)}, Relay: &RelayConfig{Owners: store, Addr: netip.MustParseAddrPort("127.0.0.1:12345"), PublicAddr: netip.MustParseAddrPort("127.0.0.1:12346")}})
 	require.NoError(t, err)

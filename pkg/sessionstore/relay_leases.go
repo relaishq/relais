@@ -3,8 +3,9 @@ package sessionstore
 import (
 	"context"
 	"errors"
-	"github.com/relaishq/relais/internal/processidentity"
 	"time"
+
+	"github.com/relaishq/relais/internal/processidentity"
 )
 
 // RelayProcess identifies a same-host process. Owner is a fresh instance token;

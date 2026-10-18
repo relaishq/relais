@@ -26,8 +26,8 @@ func (s *rollbackClockStore) Clock(ctx context.Context, id string) (time.Time, e
 	return now.Add(time.Duration(s.offset.Load())), err
 }
 
-func TestRound1SnapshotClockRollbackCallSurvives(t *testing.T) {
-	forV2ReviewStores(t, func(t *testing.T, base sessionstore.Store) {
+func TestSnapshotClockRollbackCallSurvives(t *testing.T) {
+	forV2Stores(t, func(t *testing.T, base sessionstore.Store) {
 		store := &rollbackClockStore{Store: base}
 		r, err := relay.New(relay.Config{Owners: store})
 		require.NoError(t, err)
@@ -50,7 +50,7 @@ func TestRound1SnapshotClockRollbackCallSurvives(t *testing.T) {
 		require.Greater(t, writes, uint64(2), "periodic checkpoints must continue after rollback")
 	})
 }
-func TestRound1SnapshotClockRollbackRefillResumes(t *testing.T) {
+func TestSnapshotClockRollbackRefillResumes(t *testing.T) {
 	l := SnapshotLimits{}.defaults()
 	at := time.Now()
 	b := snapshotBucket{tokens: 17, at: at}
@@ -58,7 +58,7 @@ func TestRound1SnapshotClockRollbackRefillResumes(t *testing.T) {
 	require.EqualValues(t, 17+float64(l.BytesPerSecond)/10, b.available(l, at.Add(-900*time.Millisecond)))
 }
 
-func TestRound1SnapshotSettings(t *testing.T) {
+func TestSnapshotSettings(t *testing.T) {
 	for _, tc := range []struct {
 		name, flag string
 		change     func(*SnapshotLimits)
@@ -91,7 +91,7 @@ func TestRound1SnapshotSettings(t *testing.T) {
 	}
 }
 
-func TestRound1ExportCarriesCurrentQuota(t *testing.T) {
+func TestExportCarriesCurrentQuota(t *testing.T) {
 	reg := agenthost.Registration{Name: "quota/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &snapshotBudgetAgent{} }}
 	w, err := New(Config{Agent: AgentConfig{Factory: agenthost.Factory(reg)}})
 	require.NoError(t, err)
@@ -121,7 +121,7 @@ func TestRound1ExportCarriesCurrentQuota(t *testing.T) {
 	require.Less(t, available, float64(w.cfg.SnapshotLimits.BurstBytes/2), "planned move must not grant a fresh burst")
 }
 
-func TestRound1RestoreContentCeilings(t *testing.T) {
+func TestRestoreContentCeilings(t *testing.T) {
 	for _, kind := range []string{"state", "metadata", "mailbox", "active", "audio"} {
 		t.Run(kind, func(t *testing.T) {
 			_, source := v2UnitSession(t, &v2UnitAgent{state: agent.State{Version: 1}})
@@ -154,7 +154,7 @@ func TestRound1RestoreContentCeilings(t *testing.T) {
 	}
 }
 
-func TestRound1MainV8BoundsRemainReadable(t *testing.T) {
+func TestMainV8BoundsRemainReadable(t *testing.T) {
 	_, source := v2UnitSession(t, &snapshotBudgetAgent{})
 	require.NoError(t, source.initAgent(false, ResumeOptions{}))
 	data, err := json.Marshal(source.state)
@@ -181,8 +181,8 @@ func TestRound1MainV8BoundsRemainReadable(t *testing.T) {
 	require.NoError(t, target.initAgent(true, ResumeOptions{}))
 }
 
-func TestRound1ExportQuotaOnStores(t *testing.T) {
-	forV2ReviewStores(t, func(t *testing.T, store sessionstore.Store) {
+func TestExportQuotaOnStores(t *testing.T) {
+	forV2Stores(t, func(t *testing.T, store sessionstore.Store) {
 		r, err := relay.New(relay.Config{Owners: store})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, r.Close()) })
@@ -228,21 +228,21 @@ func TestRound1ExportQuotaOnStores(t *testing.T) {
 	})
 }
 
-type round1EmitAgent struct{}
+type emitAgent struct{}
 
-func (*round1EmitAgent) Handle(_ context.Context, e agent.Event) (agent.Effects, error) {
+func (*emitAgent) Handle(_ context.Context, e agent.Event) (agent.Effects, error) {
 	if e.Kind == agent.Started {
 		return agent.Effects{StartTasks: []agent.TaskSpec{{Step: "stream", Kind: "stream/v1", Class: agent.ReadOnly, Resume: agent.Retry}}}, nil
 	}
 	return agent.Effects{}, nil
 }
-func (*round1EmitAgent) Save(context.Context) (agent.State, error) {
+func (*emitAgent) Save(context.Context) (agent.State, error) {
 	return agent.State{Version: 1}, nil
 }
-func (*round1EmitAgent) Restore(context.Context, agent.State) error { return nil }
-func TestRound1ExportPreservesEmitSpacing(t *testing.T) {
+func (*emitAgent) Restore(context.Context, agent.State) error { return nil }
+func TestExportPreservesEmitSpacing(t *testing.T) {
 	first, next := make(chan struct{}, 1), make(chan time.Time, 1)
-	reg := agenthost.Registration{Name: "spacing/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &round1EmitAgent{} }, Tasks: map[string]agent.TaskHandler{
+	reg := agenthost.Registration{Name: "spacing/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &emitAgent{} }, Tasks: map[string]agent.TaskHandler{
 		"stream/v1": func(ctx context.Context, r *agent.TaskRun) error {
 			if r.After() == 0 {
 				if err := r.Emit(ctx, 1, agent.Chunk{Data: []byte("one")}); err != nil {

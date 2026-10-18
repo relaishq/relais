@@ -1,11 +1,12 @@
 package mediaworker
 
 import (
-	"github.com/relaishq/relais/pkg/sessionstore"
-	"github.com/stretchr/testify/require"
 	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/pkg/sessionstore"
+	"github.com/stretchr/testify/require"
 )
 
 func TestOutageBudgetLeavesRenewalCadenceUnchanged(t *testing.T) {

@@ -17,18 +17,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type capacityReviewState struct {
+type capacityState struct {
 	Audio int
 	Fired bool
 }
-type capacityReviewAgent struct {
-	state        capacityReviewState
+type capacityAgent struct {
+	state        capacityState
 	mode         string
 	starts, wide *atomic.Int32
 	resumed      *atomic.Bool
 }
 
-func (a *capacityReviewAgent) Handle(_ context.Context, e agent.Event) (agent.Effects, error) {
+func (a *capacityAgent) Handle(_ context.Context, e agent.Event) (agent.Effects, error) {
 	width := 0
 	switch e.Kind {
 	case agent.Resumed:
@@ -68,14 +68,14 @@ func (a *capacityReviewAgent) Handle(_ context.Context, e agent.Event) (agent.Ef
 	}
 	return effects, nil
 }
-func (a *capacityReviewAgent) Save(context.Context) (agent.State, error) {
+func (a *capacityAgent) Save(context.Context) (agent.State, error) {
 	b, err := json.Marshal(a.state)
 	return agent.State{Version: 1, Bytes: b}, err
 }
-func (a *capacityReviewAgent) Restore(_ context.Context, s agent.State) error {
+func (a *capacityAgent) Restore(_ context.Context, s agent.State) error {
 	return json.Unmarshal(s.Bytes, &a.state)
 }
-func TestV2TaskCapacityReviewFanOutAndReceipts(t *testing.T) {
+func TestV2TaskCapacityFanOutAndReceipts(t *testing.T) {
 	for _, mode := range []string{"started", "input", "receipts"} {
 		t.Run(mode, func(t *testing.T) {
 			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
@@ -87,8 +87,8 @@ func TestV2TaskCapacityReviewFanOutAndReceipts(t *testing.T) {
 					}
 					return nil
 				}
-				reg := agenthost.Registration{Name: "capacity-review/v1", Tasks: map[string]agent.TaskHandler{"test/v1": handler}, Factory: func(agent.FactoryArgs) agent.Agent {
-					return &capacityReviewAgent{mode: mode, starts: starts, wide: wide}
+				reg := agenthost.Registration{Name: "capacity/v1", Tasks: map[string]agent.TaskHandler{"test/v1": handler}, Factory: func(agent.FactoryArgs) agent.Agent {
+					return &capacityAgent{mode: mode, starts: starts, wide: wide}
 				}}
 				sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}})
 				ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -107,7 +107,7 @@ func TestV2TaskCapacityReviewFanOutAndReceipts(t *testing.T) {
 				require.NoError(t, err)
 				var snap taskSnapshot
 				require.NoError(t, json.Unmarshal(wire, &snap))
-				var saved capacityReviewState
+				var saved capacityState
 				require.NoError(t, json.Unmarshal(snap.State.Agent.State.Bytes, &saved))
 				require.GreaterOrEqual(t, saved.Audio, minimum, "accepted audio must advance despite metadata pressure")
 				require.Equal(t, int32(1), starts.Load(), "Started must not spin")
@@ -121,13 +121,13 @@ func TestV2TaskCapacityReviewFanOutAndReceipts(t *testing.T) {
 	}
 }
 
-type duplicateCapacityReviewStore struct {
+type duplicateCapacityStore struct {
 	sessionstore.Store
 	source   netip.AddrPort
 	injected atomic.Bool
 }
 
-func (s *duplicateCapacityReviewStore) PutState(ctx context.Context, lease sessionstore.Lease, data []byte) error {
+func (s *duplicateCapacityStore) PutState(ctx context.Context, lease sessionstore.Lease, data []byte) error {
 	if lease.Worker == s.source {
 		var root, state, host, v2 map[string]json.RawMessage
 		if json.Unmarshal(data, &root) == nil && json.Unmarshal(root["State"], &state) == nil && json.Unmarshal(state["Agent"], &host) == nil && json.Unmarshal(host["V2"], &v2) == nil {
@@ -149,17 +149,17 @@ func (s *duplicateCapacityReviewStore) PutState(ctx context.Context, lease sessi
 	}
 	return s.Store.PutState(ctx, lease, data)
 }
-func TestV2TaskCapacityReviewDuplicateCheckpointTakeover(t *testing.T) {
+func TestV2TaskCapacityDuplicateCheckpointTakeover(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
-		wrapped := &duplicateCapacityReviewStore{Store: store}
+		wrapped := &duplicateCapacityStore{Store: store}
 		resumed := &atomic.Bool{}
 		starts, wide := &atomic.Int32{}, &atomic.Int32{}
 		reg := agenthost.Registration{Name: "capacity-repair/v1", Tasks: map[string]agent.TaskHandler{"test/v1": func(ctx context.Context, _ *agent.TaskRun) error { <-ctx.Done(); return ctx.Err() }}, Factory: func(agent.FactoryArgs) agent.Agent {
-			return &capacityReviewAgent{mode: "duplicate", starts: starts, wide: wide}
+			return &capacityAgent{mode: "duplicate", starts: starts, wide: wide}
 		}}
 		target := reg
 		target.Factory = func(agent.FactoryArgs) agent.Agent {
-			return &capacityReviewAgent{mode: "duplicate", starts: starts, wide: wide, resumed: resumed}
+			return &capacityAgent{mode: "duplicate", starts: starts, wide: wide, resumed: resumed}
 		}
 		sys := startAgentHarness(t, wrapped, agentHarnessSettings{v2: []agenthost.Registration{reg, target}})
 		wrapped.source = sys.workers[0].LocalAddr()

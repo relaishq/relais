@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRound2EchoFastSnapshotInterval(t *testing.T) {
+func TestEchoFastSnapshotInterval(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		config AgentConfig
@@ -33,7 +33,7 @@ func TestRound2EchoFastSnapshotInterval(t *testing.T) {
 		})
 	}
 }
-func TestRound2V2FastSnapshotIntervalRefuses(t *testing.T) {
+func TestV2FastSnapshotIntervalRefuses(t *testing.T) {
 	factory := agenthost.Factory(agenthost.Registration{Name: "fast/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &snapshotBudgetAgent{} }})
 	w, err := New(Config{Agent: AgentConfig{Factory: factory, Registrations: map[string]legacy.Factory{"fast/v1": factory}}, SnapshotInterval: 50 * time.Millisecond})
 	if w != nil {
@@ -43,7 +43,7 @@ func TestRound2V2FastSnapshotIntervalRefuses(t *testing.T) {
 	require.ErrorContains(t, err, "agent-snapshot-bytes-per-second")
 	require.ErrorContains(t, err, "150528")
 }
-func TestRound2ADRDemoBudget(t *testing.T) {
+func TestADRDemoBudget(t *testing.T) {
 	text, err := os.ReadFile("../../docs/adr/0010-pluggable-agents.md")
 	require.NoError(t, err)
 	// Read the operator example so documentation drift fails the test.
@@ -56,7 +56,7 @@ func TestRound2ADRDemoBudget(t *testing.T) {
 }
 
 // Test both Clock and PutState: export must not inherit either store wait.
-type round2BlockedStore struct {
+type blockedStore struct {
 	sessionstore.Store
 	block   atomic.Bool
 	phase   string
@@ -64,7 +64,7 @@ type round2BlockedStore struct {
 	release chan struct{}
 }
 
-func (b *round2BlockedStore) wait(ctx context.Context) error {
+func (b *blockedStore) wait(ctx context.Context) error {
 	if b.block.CompareAndSwap(true, false) {
 		close(b.entered)
 		select {
@@ -75,7 +75,7 @@ func (b *round2BlockedStore) wait(ctx context.Context) error {
 	}
 	return nil
 }
-func (b *round2BlockedStore) Clock(ctx context.Context, id string) (time.Time, error) {
+func (b *blockedStore) Clock(ctx context.Context, id string) (time.Time, error) {
 	if b.phase == "clock" {
 		if err := b.wait(ctx); err != nil {
 			return time.Time{}, err
@@ -83,7 +83,7 @@ func (b *round2BlockedStore) Clock(ctx context.Context, id string) (time.Time, e
 	}
 	return b.Store.Clock(ctx, id)
 }
-func (b *round2BlockedStore) PutState(ctx context.Context, l sessionstore.Lease, data []byte) error {
+func (b *blockedStore) PutState(ctx context.Context, l sessionstore.Lease, data []byte) error {
 	if b.phase == "put" && b.block.CompareAndSwap(true, false) {
 		close(b.entered)
 		<-b.release // Model a successful write whose acknowledgement arrives late.
@@ -92,11 +92,11 @@ func (b *round2BlockedStore) PutState(ctx context.Context, l sessionstore.Lease,
 	return b.Store.PutState(ctx, l, data)
 }
 
-func TestRound2ExportDoesNotWaitForSnapshot(t *testing.T) {
+func TestExportDoesNotWaitForSnapshot(t *testing.T) {
 	for _, phase := range []string{"clock", "put"} {
 		t.Run(phase, func(t *testing.T) {
-			forV2ReviewStores(t, func(t *testing.T, base sessionstore.Store) {
-				store := &round2BlockedStore{Store: base, phase: phase, entered: make(chan struct{}), release: make(chan struct{})}
+			forV2Stores(t, func(t *testing.T, base sessionstore.Store) {
+				store := &blockedStore{Store: base, phase: phase, entered: make(chan struct{}), release: make(chan struct{})}
 				r, err := relay.New(relay.Config{Owners: store})
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, r.Close()) })
@@ -167,7 +167,7 @@ func TestRound2ExportDoesNotWaitForSnapshot(t *testing.T) {
 	}
 }
 
-func TestRound2FactoryOnlyV2ValidatesWhenResolved(t *testing.T) {
+func TestFactoryOnlyV2ValidatesWhenResolved(t *testing.T) {
 	factory := agenthost.Factory(agenthost.Registration{Name: "fast/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &snapshotBudgetAgent{} }})
 	w, err := New(Config{Agent: AgentConfig{Factory: factory}, SnapshotInterval: 50 * time.Millisecond})
 	require.NoError(t, err)
@@ -178,7 +178,7 @@ func TestRound2FactoryOnlyV2ValidatesWhenResolved(t *testing.T) {
 	require.ErrorIs(t, err, agent.ErrCapacity)
 	require.ErrorContains(t, err, "150528")
 }
-func TestRound2CrashDiscardedMetadata(t *testing.T) {
+func TestCrashDiscardedMetadata(t *testing.T) {
 	for _, kind := range []string{"move-only", "audio", "active"} {
 		t.Run(kind, func(t *testing.T) {
 			a := &v2UnitAgent{state: agent.State{Version: 1}}

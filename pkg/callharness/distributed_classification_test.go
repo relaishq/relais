@@ -2,12 +2,13 @@ package callharness
 
 import (
 	"fmt"
-	"github.com/relaishq/relais/pkg/controlplane"
-	"github.com/stretchr/testify/require"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/pkg/controlplane"
+	"github.com/stretchr/testify/require"
 )
 
 func classificationFixture(t *testing.T, width time.Duration) (*recorder, moveRecord) {

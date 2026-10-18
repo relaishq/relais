@@ -2,9 +2,10 @@ package callharness
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func probeAt(t time.Time, skew, rtt time.Duration) ClockProbe {

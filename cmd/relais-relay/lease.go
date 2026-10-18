@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
+
 	"github.com/relaishq/relais/internal/processidentity"
 	"github.com/relaishq/relais/internal/relaylease"
 	"github.com/relaishq/relais/pkg/sessionstore"
-	"log"
 )
 
 type commandGuard interface {

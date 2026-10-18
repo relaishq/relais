@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Adapted from the reviewer fan-out probe. Static timers cannot release this
+// Fan-out receipt pressure check. Static timers cannot release this
 // pressure; acknowledged receipts must compact in the accepting transaction.
 func TestControlAcknowledgedReceiptsReleaseAdmission(t *testing.T) {
 	for _, width := range []int{18, 19} {

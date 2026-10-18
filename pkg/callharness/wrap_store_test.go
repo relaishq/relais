@@ -4,12 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"github.com/go-redis/redis/v8"
-	"github.com/relaishq/relais/internal/redisendpoint"
 	"net"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/go-redis/redis/v8"
+	"github.com/relaishq/relais/internal/redisendpoint"
 
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/relaishq/relais/pkg/storage"

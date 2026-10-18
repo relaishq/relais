@@ -6,3 +6,8 @@ linters:
     # calls by default; v2 makes that opt-in. Keep the v1 baseline.
     presets:
       - std-error-handling
+
+formatters:
+  # Keep imports in two groups: the standard library, then everything else.
+  enable:
+    - goimports

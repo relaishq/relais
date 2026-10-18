@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/pion/srtp/v3"
 	"net"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pion/srtp/v3"
 
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/stretchr/testify/require"
@@ -17,7 +18,7 @@ import (
 // Probe: a streaming TTS that emits one Opus packet per Emit. Each result is a
 // separate span in the persisted window. Does an ordinary reply overflow the
 // 2 KiB host metadata budget and end the call?
-func reviewStreamingSession(t *testing.T, packet []byte, n int) (*session, *v2UnitAgent, agent.TaskID) {
+func streamingSession(t *testing.T, packet []byte, n int) (*session, *v2UnitAgent, agent.TaskID) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
@@ -38,13 +39,13 @@ func reviewStreamingSession(t *testing.T, packet []byte, n int) (*session, *v2Un
 	return s, a, id
 }
 
-func TestPlaybackReviewWindowSpanBudget(t *testing.T) {
+func TestPlaybackWindowSpanBudget(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		packet []byte
 	}{{"20ms", []byte{0xf8, 0xff, 0xfe}}, {"10ms", []byte{0xf0, 0xff, 0xfe}}, {"2.5ms", []byte{0x80, 0xff}}} {
 		t.Run(tc.name, func(t *testing.T) {
-			s, a, id := reviewStreamingSession(t, tc.packet, 200)
+			s, a, id := streamingSession(t, tc.packet, 200)
 			for seq := 1; seq <= 200; seq++ {
 				r := s.agent.v2.tasks[0].results[0]
 				require.EqualValues(t, seq, r.Sequence)
@@ -64,8 +65,8 @@ func TestPlaybackReviewWindowSpanBudget(t *testing.T) {
 }
 
 // Probe: 20 ms packets, one per Emit, plus two other live tasks (STT, LLM).
-func TestPlaybackReviewWindowSpanBudgetWithOtherTasks(t *testing.T) {
-	s, a, id := reviewStreamingSession(t, []byte{0xf8, 0xff, 0xfe}, 200)
+func TestPlaybackWindowSpanBudgetWithOtherTasks(t *testing.T) {
+	s, a, id := streamingSession(t, []byte{0xf8, 0xff, 0xfe}, 200)
 	for _, step := range []string{"stt", "llm"} {
 		spec := agent.TaskSpec{Step: step, Kind: "tts/v1", Turn: 1, Class: agent.ReadOnly, Resume: agent.Retry}
 		other := taskIntent{ID: deriveTaskID(s.id, "unit/v1", "started/v2-unit", step), Step: step, Kind: spec.Kind, Turn: 1, Class: agent.ReadOnly, Resume: agent.Retry, Phase: taskStarted, Digest: taskDigest(spec)}
@@ -89,7 +90,7 @@ func TestPlaybackReviewWindowSpanBudgetWithOtherTasks(t *testing.T) {
 
 // Probe: an app that arms one per-turn timer ("no-reply/<turn>") and cancels it
 // when the user answers. Fired/cancelled entries are never removed.
-func TestPlaybackReviewTimerEntriesAccumulate(t *testing.T) {
+func TestPlaybackTimerEntriesAccumulate(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
@@ -115,8 +116,8 @@ func TestPlaybackReviewTimerEntriesAccumulate(t *testing.T) {
 }
 
 // Probe: cost of pruneTasks under the media lock with a long buffered reply.
-func TestPlaybackReviewPruneCost(t *testing.T) {
-	s, _, id := reviewStreamingSession(t, []byte{0xf8, 0xff, 0xfe}, 1)
+func TestPlaybackPruneCost(t *testing.T) {
+	s, _, id := streamingSession(t, []byte{0xf8, 0xff, 0xfe}, 1)
 	task := s.agent.v2.tasks[0]
 	task.results = nil
 	for seq := 1; seq <= 760; seq++ {
@@ -143,8 +144,8 @@ func TestPlaybackReviewPruneCost(t *testing.T) {
 
 // Probe: barge-in that clears audio and starts the next turn's STT while the
 // window is full of one-packet-per-Emit spans.
-func TestPlaybackReviewBargeInBlockedByWindow(t *testing.T) {
-	s, a, id := reviewStreamingSession(t, []byte{0xf8, 0xff, 0xfe}, 40)
+func TestPlaybackBargeInBlockedByWindow(t *testing.T) {
+	s, a, id := streamingSession(t, []byte{0xf8, 0xff, 0xfe}, 40)
 	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"stt/v1": func(context.Context, *agent.TaskRun) error { return nil }}
 	for seq := 1; seq <= 15; seq++ {
 		r := s.agent.v2.tasks[0].results[0]
@@ -160,8 +161,8 @@ func TestPlaybackReviewBargeInBlockedByWindow(t *testing.T) {
 	t.Logf("barge-in callback: err=%v; queue after: %d", err, len(s.agent.v2.playback.queue))
 }
 
-func TestPlaybackReviewBargeInBlockedByWindowLiveTasks(t *testing.T) {
-	s, a, id := reviewStreamingSession(t, []byte{0xf8, 0xff, 0xfe}, 40)
+func TestPlaybackBargeInBlockedByWindowLiveTasks(t *testing.T) {
+	s, a, id := streamingSession(t, []byte{0xf8, 0xff, 0xfe}, 40)
 	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"stt/v1": func(context.Context, *agent.TaskRun) error { return nil }}
 	spec := agent.TaskSpec{Step: "llm", Kind: "stt/v1", Turn: 1, Class: agent.ReadOnly, Resume: agent.Retry}
 	other := taskIntent{ID: deriveTaskID(s.id, "unit/v1", "started/v2-unit", "llm"), Step: "llm", Kind: spec.Kind, Turn: 1, Class: agent.ReadOnly, Resume: agent.Retry, Phase: taskStarted, Digest: taskDigest(spec)}
@@ -190,13 +191,13 @@ func TestPlaybackReviewBargeInBlockedByWindowLiveTasks(t *testing.T) {
 	t.Logf("barge-in callback: err=%v; queue after: %d", err, len(s.agent.v2.playback.queue))
 }
 
-func TestPlaybackReviewReferencesBelongToCurrentResult(t *testing.T) {
+func TestPlaybackReferencesBelongToCurrentResult(t *testing.T) {
 	s, a, r := audioUnitSession(t, 2)
 	appendUnitAudio(t, s, a, r)
 	a.effects = agent.Effects{Audio: []agent.Audio{{Turn: 1, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence}}}}
 	require.ErrorIs(t, s.handleV2Event(agent.Event{Kind: agent.Started}), agent.ErrIncompatibleAgent)
 }
-func TestPlaybackReviewIgnoresAudioBelowSameCallbackFloor(t *testing.T) {
+func TestPlaybackIgnoresAudioBelowSameCallbackFloor(t *testing.T) {
 	for _, cancel := range []bool{false, true} {
 		t.Run(fmt.Sprint(cancel), func(t *testing.T) {
 			s, a, r := audioUnitSession(t, 2)
@@ -212,7 +213,7 @@ func TestPlaybackReviewIgnoresAudioBelowSameCallbackFloor(t *testing.T) {
 		})
 	}
 }
-func TestPlaybackReviewCrashKeepsFinishedNotification(t *testing.T) {
+func TestPlaybackCrashKeepsFinishedNotification(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
@@ -223,7 +224,7 @@ func TestPlaybackReviewCrashKeepsFinishedNotification(t *testing.T) {
 	require.Equal(t, agent.PlaybackFinished, a.lastEvent.Kind)
 	require.EqualValues(t, 7, a.lastEvent.Playback.Turn)
 }
-func TestPlaybackReviewIdleSleepsUntilWake(t *testing.T) {
+func TestPlaybackIdleSleepsUntilWake(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
@@ -235,7 +236,7 @@ func TestPlaybackReviewIdleSleepsUntilWake(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, delay, time.Hour)
 }
-func TestPlaybackReviewTimerIDsBoundedAndUniqueAcrossDeletion(t *testing.T) {
+func TestPlaybackTimerIDsBoundedAndUniqueAcrossDeletion(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
@@ -255,7 +256,7 @@ func TestPlaybackReviewTimerIDsBoundedAndUniqueAcrossDeletion(t *testing.T) {
 	require.Greater(t, s.agent.latest.V2.Timers[1].Generation, s.agent.latest.V2.Timers[0].Generation)
 }
 
-func TestPlaybackReviewOutputClockDoesNotAccumulateWakeDelay(t *testing.T) {
+func TestPlaybackOutputClockDoesNotAccumulateWakeDelay(t *testing.T) {
 	s, a, r := audioUnitSession(t, 80)
 	appendUnitAudio(t, s, a, r)
 	profile := srtp.ProtectionProfileAeadAes128Gcm
@@ -274,7 +275,7 @@ func TestPlaybackReviewOutputClockDoesNotAccumulateWakeDelay(t *testing.T) {
 	}
 	require.InDelta(t, float64(1600*time.Millisecond), float64(s.agent.v2.playback.nextAt.Sub(base)), float64(time.Millisecond), "small wake delay must not accumulate into speech drift")
 }
-func TestPlaybackReviewRestoreAdvancesRTPByStoreAge(t *testing.T) {
+func TestPlaybackRestoreAdvancesRTPByStoreAge(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
@@ -286,7 +287,7 @@ func TestPlaybackReviewRestoreAdvancesRTPByStoreAge(t *testing.T) {
 	require.InDelta(t, float64(49234), float64(s.agent.v2.playback.nextTS), 48)
 }
 
-func TestPlaybackReviewReferenceStorageReservedBeforeDelivery(t *testing.T) {
+func TestPlaybackReferenceStorageReservedBeforeDelivery(t *testing.T) {
 	s, a, r := audioUnitSession(t, 5)
 	require.NoError(t, s.taskBudget(s.agent.v2.tasks, 0))
 	reserved := s.moveReserved
@@ -295,7 +296,7 @@ func TestPlaybackReviewReferenceStorageReservedBeforeDelivery(t *testing.T) {
 	require.LessOrEqual(t, s.moveReserved, reserved, "delivery transfers the reference reservation; it cannot require new mailbox space")
 }
 
-func TestPlaybackReviewNonAudioMetadataOverflowIsTerminal(t *testing.T) {
+func TestPlaybackNonAudioMetadataOverflowIsTerminal(t *testing.T) {
 	for _, withAudio := range []bool{false, true} {
 		t.Run(fmt.Sprint("audio=", withAudio), func(t *testing.T) {
 			s, a, r := audioUnitSession(t, 1)

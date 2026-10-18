@@ -5,13 +5,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	"github.com/go-redis/redis/v8"
-	"github.com/relaishq/relais/internal/redisendpoint"
 	"net"
 	"os"
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/go-redis/redis/v8"
+	"github.com/relaishq/relais/internal/redisendpoint"
 
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"

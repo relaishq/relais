@@ -3,12 +3,13 @@ package sessionstore
 import (
 	"context"
 	"fmt"
-	"github.com/relaishq/relais/internal/processidentity"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/processidentity"
 
 	"github.com/stretchr/testify/require"
 )

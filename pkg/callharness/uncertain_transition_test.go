@@ -3,13 +3,14 @@ package callharness_test
 import (
 	"context"
 	"errors"
-	"github.com/relaishq/relais/pkg/callharness"
-	"github.com/relaishq/relais/pkg/sessionstore"
-	"github.com/stretchr/testify/require"
 	"net/netip"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/sessionstore"
+	"github.com/stretchr/testify/require"
 )
 
 // The underlying Redis executes Transfer. Discard its committed reply and

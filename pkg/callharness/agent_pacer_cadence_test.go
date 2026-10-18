@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func reviewStreamRegs(packets [][]byte, chunk, limit int) ([]agenthost.Registration, []chan agent.Event, chan struct{}, chan time.Duration) {
+func streamRegs(packets [][]byte, chunk, limit int) ([]agenthost.Registration, []chan agent.Event, chan struct{}, chan time.Duration) {
 	gate := make(chan struct{})
 	done := make(chan time.Duration, 2)
 	events := []chan agent.Event{make(chan agent.Event, 4096), make(chan agent.Event, 4096)}
@@ -38,7 +38,7 @@ func reviewStreamRegs(packets [][]byte, chunk, limit int) ([]agenthost.Registrat
 	}
 	return regs, events, gate, done
 }
-func collectReviewPackets(t *testing.T, ch <-chan pacedPacket, n int, timeout time.Duration) []pacedPacket {
+func collectPackets(t *testing.T, ch <-chan pacedPacket, n int, timeout time.Duration) []pacedPacket {
 	t.Helper()
 	all := make([]pacedPacket, 0, n)
 	timer := time.NewTimer(timeout)
@@ -54,7 +54,7 @@ func collectReviewPackets(t *testing.T, ch <-chan pacedPacket, n int, timeout ti
 	}
 	return all
 }
-func TestPacerReviewStreamingCadence(t *testing.T) {
+func TestPacerStreamingCadence(t *testing.T) {
 	if testing.Short() {
 		t.Skip("streaming cadence matrix; bounded-window unit proof runs in short mode")
 	}
@@ -72,11 +72,11 @@ func TestPacerReviewStreamingCadence(t *testing.T) {
 				}
 				// Emit publishes at most every 100 ms. Batch packet durations while
 				// retaining the same 10 ms/2.5 ms/20 ms packet-level pacer proof.
-				regs, events, gate, _ := reviewStreamRegs(packets, int(100*time.Millisecond/tc.duration), 0)
+				regs, events, gate, _ := streamRegs(packets, int(100*time.Millisecond/tc.duration), 0)
 				if tc.name == "20ms-live-tasks" {
 					for i := range regs {
 						regs[i].Factory = func(agent.FactoryArgs) agent.Agent {
-							return &reviewMultiTaskAgent{pacerHarnessAgent: pacerHarnessAgent{events: events[i]}}
+							return &multiTaskAgent{pacerHarnessAgent: pacerHarnessAgent{events: events[i]}}
 						}
 						regs[i].Tasks["idle/v1"] = func(ctx context.Context, _ *agent.TaskRun) error { <-ctx.Done(); return ctx.Err() }
 					}
@@ -88,7 +88,7 @@ func TestPacerReviewStreamingCadence(t *testing.T) {
 				require.NoError(t, err)
 				received := receivePacer(call)
 				close(gate)
-				all := collectReviewPackets(t, received, tc.n, 4*time.Second)
+				all := collectPackets(t, received, tc.n, 4*time.Second)
 				nominal := time.Duration(tc.n-1) * tc.duration
 				actual := all[len(all)-1].at.Sub(all[0].at)
 				t.Logf("CADENCE nominal=%s actual=%s error=%.3f%%", nominal, actual, 100*float64(actual-nominal)/float64(nominal))
@@ -104,7 +104,7 @@ func TestPacerReviewStreamingCadence(t *testing.T) {
 		})
 	}
 }
-func TestPacerReviewEightyPacketCadence(t *testing.T) {
+func TestPacerEightyPacketCadence(t *testing.T) {
 	if testing.Short() {
 		t.Skip("80-packet cadence; deterministic clock unit proof remains")
 	}
@@ -117,7 +117,7 @@ func TestPacerReviewEightyPacketCadence(t *testing.T) {
 		require.NoError(t, err)
 		received := receivePacer(call)
 		close(gate)
-		all := collectReviewPackets(t, received, 80, 3*time.Second)
+		all := collectPackets(t, received, 80, 3*time.Second)
 		span := all[79].at.Sub(all[0].at)
 		t.Logf("CADENCE_80 nominal=1.58s actual=%s error=%.3f%%", span, 100*float64(span-1580*time.Millisecond)/float64(1580*time.Millisecond))
 		require.InDelta(t, float64(1580*time.Millisecond), float64(span), float64(1580*time.Millisecond)/50)
@@ -125,7 +125,7 @@ func TestPacerReviewEightyPacketCadence(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
-func TestPacerReviewSaturatedMailbox(t *testing.T) {
+func TestPacerSaturatedMailbox(t *testing.T) {
 	if testing.Short() {
 		t.Skip("12-second speech with mailbox backpressure; admission unit proof remains")
 	}
@@ -135,7 +135,7 @@ func TestPacerReviewSaturatedMailbox(t *testing.T) {
 		for i := range packets {
 			packets[i] = fixture[i%len(fixture)]
 		}
-		regs, _, gate, done := reviewStreamRegs(packets, 50, 128<<10)
+		regs, _, gate, done := streamRegs(packets, 50, 128<<10)
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs})
 		ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
 		defer cancel()
@@ -143,7 +143,7 @@ func TestPacerReviewSaturatedMailbox(t *testing.T) {
 		require.NoError(t, err)
 		received := receivePacer(call)
 		close(gate)
-		all := collectReviewPackets(t, received, 600, 15*time.Second)
+		all := collectPackets(t, received, 600, 15*time.Second)
 		for i, p := range all {
 			require.Equal(t, packets[i], p.packet.Payload, "packet %d", i)
 			if i > 0 {
@@ -166,12 +166,12 @@ func TestPacerReviewSaturatedMailbox(t *testing.T) {
 	})
 }
 
-type reviewMultiTaskAgent struct {
+type multiTaskAgent struct {
 	pacerHarnessAgent
 	barge bool
 }
 
-func (a *reviewMultiTaskAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
+func (a *multiTaskAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
 	effects, err := a.pacerHarnessAgent.Handle(ctx, e)
 	if e.Kind == agent.Started {
 		for _, step := range []string{"stt", "llm"} {
@@ -186,17 +186,17 @@ func (a *reviewMultiTaskAgent) Handle(ctx context.Context, e agent.Event) (agent
 	}
 	return effects, err
 }
-func TestPacerReviewBargeInThreeLiveTasks(t *testing.T) {
+func TestPacerBargeInThreeLiveTasks(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live-task barge-in matrix; cleared-window unit proof remains")
 	}
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		fixture := pacerFixtures(t, 80)
-		regs, events, gate, _ := reviewStreamRegs(fixture, 1, 0)
+		regs, events, gate, _ := streamRegs(fixture, 1, 0)
 		started := make(chan time.Time, 1)
 		for i := range regs {
 			regs[i].Factory = func(agent.FactoryArgs) agent.Agent {
-				return &reviewMultiTaskAgent{pacerHarnessAgent: pacerHarnessAgent{events: events[i]}, barge: true}
+				return &multiTaskAgent{pacerHarnessAgent: pacerHarnessAgent{events: events[i]}, barge: true}
 			}
 			regs[i].Tasks["idle/v1"] = func(ctx context.Context, _ *agent.TaskRun) error { <-ctx.Done(); return ctx.Err() }
 			regs[i].Tasks["next/v1"] = func(context.Context, *agent.TaskRun) error { started <- time.Now(); return nil }
@@ -241,12 +241,12 @@ func TestPacerReviewBargeInThreeLiveTasks(t *testing.T) {
 	})
 }
 
-type reviewRestartAgent struct {
+type restartAgent struct {
 	pacerHarnessAgent
 	resumed, started bool
 }
 
-func (a *reviewRestartAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
+func (a *restartAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
 	if e.Kind == agent.Resumed {
 		a.resumed = true
 	}
@@ -256,7 +256,7 @@ func (a *reviewRestartAgent) Handle(ctx context.Context, e agent.Event) (agent.E
 	}
 	return a.pacerHarnessAgent.Handle(ctx, e)
 }
-func TestPacerReviewResumeTimestamp(t *testing.T) {
+func TestPacerResumeTimestamp(t *testing.T) {
 	if testing.Short() {
 		t.Skip("move/takeover store-clock timestamp matrix; deterministic rebase proof remains")
 	}
@@ -266,7 +266,7 @@ func TestPacerReviewResumeTimestamp(t *testing.T) {
 				regs, events, gate, _ := pacerRegistrations(t, 20, false, false)
 				for i := range regs {
 					regs[i].Factory = func(agent.FactoryArgs) agent.Agent {
-						return &reviewRestartAgent{pacerHarnessAgent: pacerHarnessAgent{events: events[i]}}
+						return &restartAgent{pacerHarnessAgent: pacerHarnessAgent{events: events[i]}}
 					}
 				}
 				sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs, remoteTarget: true})
@@ -276,7 +276,7 @@ func TestPacerReviewResumeTimestamp(t *testing.T) {
 				require.NoError(t, err)
 				received := receivePacer(call)
 				close(gate)
-				before := collectReviewPackets(t, received, 20, 2*time.Second)
+				before := collectPackets(t, received, 20, 2*time.Second)
 				last := before[len(before)-1]
 				if takeover {
 					require.NoError(t, workerprobe.Kill(sys.workers[0].LocalAddr()))

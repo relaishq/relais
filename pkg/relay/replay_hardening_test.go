@@ -2,13 +2,14 @@ package relay
 
 import (
 	"context"
-	"github.com/relaishq/relais/internal/privateapi"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/privateapi"
 
 	"github.com/stretchr/testify/require"
 )

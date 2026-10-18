@@ -4,6 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+	"unicode/utf8"
+
 	"github.com/relaishq/relais/internal/agenthost"
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/internal/workerprobe"
@@ -14,17 +23,9 @@ import (
 	"github.com/relaishq/relais/pkg/relay"
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/stretchr/testify/require"
-	"net/http"
-	"net/http/httptest"
-	"strconv"
-	"strings"
-	"sync/atomic"
-	"testing"
-	"time"
-	"unicode/utf8"
 )
 
-func TestV2TaskReviewCapacityDoesNotEndCall(t *testing.T) {
+func TestV2TaskCapacityDoesNotEndCall(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		handler := func(ctx context.Context, _ *agent.TaskRun) error { <-ctx.Done(); return ctx.Err() }
 		specs := make([]agent.TaskSpec, 12)
@@ -51,7 +52,7 @@ func TestV2TaskReviewCapacityDoesNotEndCall(t *testing.T) {
 	})
 }
 
-func startTaskReviewHarness3(t *testing.T, store sessionstore.Store, regs []agenthost.Registration) *agentHarnessSystem {
+func startTaskHarness3(t *testing.T, store sessionstore.Store, regs []agenthost.Registration) *agentHarnessSystem {
 	t.Helper()
 	disable := workerprobe.Enable()
 	t.Cleanup(disable)
@@ -83,13 +84,13 @@ func startTaskReviewHarness3(t *testing.T, store sessionstore.Store, regs []agen
 	return sys
 }
 
-type taskReviewInputAgent struct {
+type taskInputAgent struct {
 	taskHarnessAgent
 	fired   bool
 	resumed chan agent.Outcome
 }
 
-func (a *taskReviewInputAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
+func (a *taskInputAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
 	if e.Kind == agent.Resumed && a.resumed != nil {
 		a.resumed <- e.Resume.MoveOnly
 	}
@@ -102,30 +103,30 @@ func (a *taskReviewInputAgent) Handle(ctx context.Context, e agent.Event) (agent
 	}
 	return a.taskHarnessAgent.Handle(ctx, e)
 }
-func (a *taskReviewInputAgent) Save(ctx context.Context) (agent.State, error) {
+func (a *taskInputAgent) Save(ctx context.Context) (agent.State, error) {
 	s, err := a.taskHarnessAgent.Save(ctx)
 	if a.fired {
 		s.Version = 2
 	}
 	return s, err
 }
-func (a *taskReviewInputAgent) Restore(ctx context.Context, s agent.State) error {
+func (a *taskInputAgent) Restore(ctx context.Context, s agent.State) error {
 	a.fired = s.Version == 2
 	return a.taskHarnessAgent.Restore(ctx, s)
 }
-func TestV2TaskReviewMoveAfterTakeover(t *testing.T) {
+func TestV2TaskMoveAfterTakeover(t *testing.T) {
 	if testing.Short() {
 		t.Skip("three-worker crash and move matrix")
 	}
 	for _, continuous := range []bool{false, true} {
 		t.Run(fmt.Sprint(continuous), func(t *testing.T) {
 			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
-				runTaskReviewMoveAfterTakeover(t, store, continuous)
+				runTaskMoveAfterTakeover(t, store, continuous)
 			})
 		})
 	}
 }
-func TestV2TaskReviewEmptyRequestTakeover(t *testing.T) {
+func TestV2TaskEmptyRequestTakeover(t *testing.T) {
 	if testing.Short() {
 		t.Skip("crash recovery on both task classes")
 	}
@@ -166,7 +167,7 @@ func TestV2TaskReviewEmptyRequestTakeover(t *testing.T) {
 
 // Keep a long CJK diagnostic pending so the private export, JSON decode and
 // target mailbox validator all see its bounded UTF-8 representation.
-func TestV2TaskReviewDetailMove(t *testing.T) {
+func TestV2TaskDetailMove(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		handler := func(_ context.Context, r *agent.TaskRun) error {
 			return r.Fail(agent.Failed, "provider error:: "+strings.Repeat("超时", 60))
@@ -191,7 +192,7 @@ func TestV2TaskReviewDetailMove(t *testing.T) {
 	})
 }
 
-type taskReviewFailingResultAgent struct {
+type taskFailingResultAgent struct {
 	taskHarnessAgent
 	timeout bool
 	entered chan struct{}
@@ -199,7 +200,7 @@ type taskReviewFailingResultAgent struct {
 	fired   bool
 }
 
-func (a *taskReviewFailingResultAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
+func (a *taskFailingResultAgent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {
 	if a.input {
 		if e.Kind == agent.Started {
 			return agent.Effects{}, nil
@@ -219,14 +220,14 @@ func (a *taskReviewFailingResultAgent) Handle(ctx context.Context, e agent.Event
 	}
 	return a.taskHarnessAgent.Handle(ctx, e)
 }
-func TestV2TaskReviewTaskMessageFailsClosed(t *testing.T) {
+func TestV2TaskMessageFailsClosed(t *testing.T) {
 	for _, tc := range []struct{ timeout, input bool }{{false, false}, {true, false}, {false, true}, {true, true}} {
 		t.Run(fmt.Sprintf("deadline=%v/capacity-from-input=%v", tc.timeout, tc.input), func(t *testing.T) {
 			forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 				entered := make(chan struct{})
 				handler := func(context.Context, *agent.TaskRun) error { return nil }
 				reg := agenthost.Registration{Name: "fail-closed/v1", Tasks: map[string]agent.TaskHandler{"test/v1": handler}, Factory: func(agent.FactoryArgs) agent.Agent {
-					return &taskReviewFailingResultAgent{taskHarnessAgent: taskHarnessAgent{specs: []agent.TaskSpec{{Step: "result", Kind: "test/v1", Class: agent.ReadOnly}}}, timeout: tc.timeout, entered: entered, input: tc.input}
+					return &taskFailingResultAgent{taskHarnessAgent: taskHarnessAgent{specs: []agent.TaskSpec{{Step: "result", Kind: "test/v1", Class: agent.ReadOnly}}}, timeout: tc.timeout, entered: entered, input: tc.input}
 				}}
 				sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}})
 				ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
@@ -252,7 +253,7 @@ func TestV2TaskReviewTaskMessageFailsClosed(t *testing.T) {
 	}
 }
 
-func TestV2TaskReviewMoveAfterUncertainRollback(t *testing.T) {
+func TestV2TaskMoveAfterUncertainRollback(t *testing.T) {
 	if testing.Short() {
 		t.Skip("uncertain resume rollback and subsequent move")
 	}
@@ -265,7 +266,7 @@ func TestV2TaskReviewMoveAfterUncertainRollback(t *testing.T) {
 			return ctx.Err()
 		}
 		reg := agenthost.Registration{Name: "rollback/v1", Tasks: map[string]agent.TaskHandler{"test/v1": handler}, Bounds: agenthost.Bounds{MaxStateBytes: 4096}, Factory: func(agent.FactoryArgs) agent.Agent {
-			return &taskReviewInputAgent{taskHarnessAgent: taskHarnessAgent{specs: []agent.TaskSpec{{Step: "r", Kind: "test/v1", Class: agent.ReadOnly, Request: []byte("recording")}}, results: results}}
+			return &taskInputAgent{taskHarnessAgent: taskHarnessAgent{specs: []agent.TaskSpec{{Step: "r", Kind: "test/v1", Class: agent.ReadOnly, Request: []byte("recording")}}, results: results}}
 		}}
 		var refused atomic.Bool
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}, remoteTarget: true, targetHandler: func(next http.Handler) http.Handler {
@@ -301,7 +302,7 @@ func TestV2TaskReviewMoveAfterUncertainRollback(t *testing.T) {
 		require.NoError(t, err)
 	})
 }
-func TestV2TaskReviewCompletedRequestIsNotLostData(t *testing.T) {
+func TestV2TaskCompletedRequestIsNotLostData(t *testing.T) {
 	if testing.Short() {
 		t.Skip("completed task crash notice")
 	}
@@ -310,7 +311,7 @@ func TestV2TaskReviewCompletedRequestIsNotLostData(t *testing.T) {
 		resumed := make(chan agent.Outcome, 4)
 		handler := func(context.Context, *agent.TaskRun) error { return nil }
 		reg := agenthost.Registration{Name: "completed/v1", Tasks: map[string]agent.TaskHandler{"test/v1": handler}, Factory: func(agent.FactoryArgs) agent.Agent {
-			return &taskReviewInputAgent{taskHarnessAgent: taskHarnessAgent{specs: []agent.TaskSpec{{Step: "done", Kind: "test/v1", Class: agent.ReadOnly, Request: []byte("recording")}}, results: results}, resumed: resumed}
+			return &taskInputAgent{taskHarnessAgent: taskHarnessAgent{specs: []agent.TaskSpec{{Step: "done", Kind: "test/v1", Class: agent.ReadOnly, Request: []byte("recording")}}, results: results}, resumed: resumed}
 		}}
 		sys := startAgentHarness(t, store, agentHarnessSettings{v2: []agenthost.Registration{reg, reg}})
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -334,7 +335,7 @@ func TestV2TaskReviewCompletedRequestIsNotLostData(t *testing.T) {
 	})
 }
 
-func runTaskReviewMoveAfterTakeover(t *testing.T, store sessionstore.Store, continuous bool) {
+func runTaskMoveAfterTakeover(t *testing.T, store sessionstore.Store, continuous bool) {
 	launched := make(chan struct{}, 8)
 	results := make(chan agent.TaskResult, 64)
 	handler := func(ctx context.Context, _ *agent.TaskRun) error {
@@ -345,11 +346,11 @@ func runTaskReviewMoveAfterTakeover(t *testing.T, store sessionstore.Store, cont
 	spec := agent.TaskSpec{Step: "stt", Kind: "test/v1", Class: agent.ReadOnly, Request: []byte("recording")}
 	regs := make([]agenthost.Registration, 3)
 	for i := range regs {
-		regs[i] = agenthost.Registration{Name: "review/v1", Tasks: map[string]agent.TaskHandler{"test/v1": handler}, Factory: func(agent.FactoryArgs) agent.Agent {
-			return &taskReviewInputAgent{taskHarnessAgent: taskHarnessAgent{specs: []agent.TaskSpec{spec}, results: results}}
+		regs[i] = agenthost.Registration{Name: "task-move/v1", Tasks: map[string]agent.TaskHandler{"test/v1": handler}, Factory: func(agent.FactoryArgs) agent.Agent {
+			return &taskInputAgent{taskHarnessAgent: taskHarnessAgent{specs: []agent.TaskSpec{spec}, results: results}}
 		}, Bounds: agenthost.Bounds{MaxStateBytes: 4096}}
 	}
-	sys := startTaskReviewHarness3(t, store, regs)
+	sys := startTaskHarness3(t, store, regs)
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	call, err := sys.h.Dial(ctx, CallOptions{})
@@ -402,6 +403,6 @@ func runTaskReviewMoveAfterTakeover(t *testing.T, store sessionstore.Store, cont
 	require.NoError(t, err)
 }
 
-func TestV2TaskFinalReviewMoveAfterTakeoverShort(t *testing.T) {
-	runTaskReviewMoveAfterTakeover(t, sessionstore.NewMemory(), false)
+func TestV2TaskMoveAfterTakeoverShort(t *testing.T) {
+	runTaskMoveAfterTakeover(t, sessionstore.NewMemory(), false)
 }

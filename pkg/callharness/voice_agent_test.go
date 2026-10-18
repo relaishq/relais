@@ -183,7 +183,7 @@ func TestVoiceAgentMoveCuts(t *testing.T) {
 					source = 1
 				}
 				want := pacerFixtures(t, 80)
-				got := append(prefix, collectReviewPackets(t, received, len(want)-len(prefix), 8*time.Second)...)
+				got := append(prefix, collectPackets(t, received, len(want)-len(prefix), 8*time.Second)...)
 				for i := range want {
 					require.Equal(t, want[i], got[i].packet.Payload, "packet %d", i)
 				}

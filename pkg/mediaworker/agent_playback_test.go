@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/relaishq/relais/internal/privateapi"
-	"github.com/relaishq/relais/pkg/sessionstore"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/pkg/sessionstore"
 
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"

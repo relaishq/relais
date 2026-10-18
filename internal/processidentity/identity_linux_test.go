@@ -3,7 +3,6 @@ package processidentity
 import (
 	"context"
 	"fmt"
-	"golang.org/x/sys/unix"
 	"net"
 	"os"
 	"os/exec"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/stretchr/testify/require"
 )

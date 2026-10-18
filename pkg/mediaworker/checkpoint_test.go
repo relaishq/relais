@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/relaishq/relais/pkg/framecache"
-	"github.com/relaishq/relais/pkg/relay"
-	"github.com/relaishq/relais/pkg/sessionstore"
 	"math"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/pkg/framecache"
+	"github.com/relaishq/relais/pkg/relay"
+	"github.com/relaishq/relais/pkg/sessionstore"
 
 	"github.com/stretchr/testify/require"
 )

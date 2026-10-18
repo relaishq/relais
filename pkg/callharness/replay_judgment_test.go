@@ -2,10 +2,11 @@ package callharness
 
 import (
 	"context"
-	"github.com/pion/rtp/codecs"
 	"image"
 	"testing"
 	"time"
+
+	"github.com/pion/rtp/codecs"
 
 	"github.com/pion/rtp"
 	"github.com/stretchr/testify/require"
