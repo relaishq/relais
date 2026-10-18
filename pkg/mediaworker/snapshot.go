@@ -339,11 +339,22 @@ func (s *session) snapshotLoop() {
 			return
 		}
 		if err := s.persistSnapshot(); err != nil && !errors.Is(err, ErrNotEstablished) && !errors.Is(err, errCheckpointSkipped) && s.ctx.Err() == nil {
-			s.log.Warnf("session %s: snapshot: %v", s.id, err)
+			s.warnSnapshot(err)
 			if errors.Is(err, agent.ErrCapacity) {
 				s.agentFailed(err)
 				return
 			}
 		}
 	}
+}
+
+// warnSnapshot is called outside the packet lock. Repeated invalid captures
+// remain refused, with one visible warning rather than a 100 ms log flood.
+func (s *session) warnSnapshot(err error) {
+	warn := func() { s.log.Warnf("session %s: snapshot: %v", s.id, err) }
+	if errors.Is(err, errDTLSCheckpointEpoch) {
+		s.dtlsEpochWarning.Do(warn)
+		return
+	}
+	warn()
 }

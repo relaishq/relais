@@ -18,7 +18,10 @@ import (
 // UTC; monotonic clock readings and local time zones are not durable state.
 // Only the frozen v10 wire structs below use this grammar. Changing their field
 // order/types requires a new component version and new golden fixtures.
-const componentDecodeLimit = 4 << 20
+// Above the documented 64 KiB configurable working-state ceiling plus wire
+// framing, 8 KiB history, 4 KiB setup and 7 KiB hot proposals. Move-only audio
+// and task payloads are separate export data, never these components.
+const componentDecodeLimit = 128 << 10
 
 func marshalComponent(kind byte, value any) ([]byte, error) {
 	var b bytes.Buffer
@@ -95,6 +98,10 @@ func writeComponentValue(b *bytes.Buffer, v reflect.Value) error {
 			return fmt.Errorf("%w: component slice", errBadState)
 		}
 		_ = binary.Write(b, binary.BigEndian, uint32(v.Len()))
+		if v.Type().Elem().Kind() == reflect.Uint8 {
+			_, err := b.Write(v.Bytes())
+			return err
+		}
 		for i := 0; i < v.Len(); i++ {
 			if err := writeComponentValue(b, v.Index(i)); err != nil {
 				return err
@@ -189,9 +196,25 @@ func readComponentValue(r *bytes.Reader, v reflect.Value) error {
 		if err := binary.Read(r, binary.BigEndian, &n); err != nil {
 			return err
 		}
-		// Every allowed element consumes at least one byte. This also bounds
-		// allocations before decoding attacker-controlled counts.
-		if uint64(n) > uint64(r.Len()) || n > componentDecodeLimit {
+		// Check the minimum encoded bytes per element before allocating any
+		// output collection. Counts bounded only by remaining bytes amplify a
+		// truncated [][]byte or map into much larger allocations.
+		minimum := uint64(1)
+		var err error
+		switch v.Kind() {
+		case reflect.Slice:
+			minimum, err = minimumComponentBytes(v.Type().Elem())
+		case reflect.Map:
+			if v.Type().Key().Kind() != reflect.Uint32 {
+				return fmt.Errorf("invalid map key")
+			}
+			minimum, err = minimumComponentBytes(v.Type().Elem())
+			minimum += 4 // uint32 key
+		}
+		if err != nil {
+			return err
+		}
+		if minimum == 0 || n > componentDecodeLimit || uint64(n) > uint64(r.Len())/minimum {
 			return io.ErrUnexpectedEOF
 		}
 		switch v.Kind() {
@@ -202,6 +225,14 @@ func readComponentValue(r *bytes.Reader, v reflect.Value) error {
 			}
 			v.SetString(string(b))
 		case reflect.Slice:
+			if v.Type().Elem().Kind() == reflect.Uint8 {
+				b := make([]byte, int(n))
+				if _, err := io.ReadFull(r, b); err != nil {
+					return err
+				}
+				v.SetBytes(b)
+				return nil
+			}
 			v.Set(reflect.MakeSlice(v.Type(), int(n), int(n)))
 			for i := 0; i < int(n); i++ {
 				if err := readComponentValue(r, v.Index(i)); err != nil {
@@ -263,4 +294,43 @@ func readComponentValue(r *bytes.Reader, v reflect.Value) error {
 		return fmt.Errorf("unsupported wire type %s", v.Type())
 	}
 	return nil
+}
+
+// Minimum bytes of a value, not its in-memory Go size. Lengths/presence allow
+// empty collections and nil pointers; time's zero marker occupies one byte.
+func minimumComponentBytes(t reflect.Type) (uint64, error) {
+	if t == reflect.TypeFor[time.Time]() {
+		return 1, nil
+	}
+	switch t.Kind() {
+	case reflect.Bool, reflect.Uint8, reflect.Pointer:
+		return 1, nil
+	case reflect.Uint16:
+		return 2, nil
+	case reflect.Uint32, reflect.String, reflect.Slice, reflect.Map:
+		return 4, nil
+	case reflect.Uint64, reflect.Int, reflect.Int64, reflect.Float64:
+		return 8, nil
+	case reflect.Array:
+		size, err := minimumComponentBytes(t.Elem())
+		if err != nil {
+			return 0, err
+		}
+		return uint64(t.Len()) * size, nil
+	case reflect.Struct:
+		var size uint64
+		for i := 0; i < t.NumField(); i++ {
+			if !t.Field(i).IsExported() {
+				return 0, fmt.Errorf("private wire field")
+			}
+			field, err := minimumComponentBytes(t.Field(i).Type)
+			if err != nil {
+				return 0, err
+			}
+			size += field
+		}
+		return size, nil
+	default:
+		return 0, fmt.Errorf("unsupported wire type %s", t)
+	}
 }

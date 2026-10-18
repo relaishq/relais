@@ -84,6 +84,7 @@ type session struct {
 	dtlsAcknowledged        *dtlsSequenceCheckpoint // guarded by mu; captured next sequence of the last successful PutState
 	dtlsProvisional         *dtlsSequenceCheckpoint // guarded by mu; first write capture, retained until acknowledgment
 	dtlsCheckpointRequested bool                    // guarded by mu; one guard wakeup per bound value
+	dtlsEpochWarning        sync.Once               // warn once for an unexpected plaintext checkpoint capture
 	dtlsConn                *dtls.Conn
 	srtpIn                  *srtp.Context // decrypts caller to worker
 	srtpOut                 *srtp.Context // encrypts worker to caller

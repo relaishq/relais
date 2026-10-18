@@ -6,7 +6,10 @@ and assembles an internal restore input. A later slice must implement the v10
 lifecycle and public/self-contained export envelope before enabling admission.
 
 Each component starts with format 10 and kind (setup=1, transport=2, work=3,
-history=4). `component_binary.go` documents the binary grammar. Hex files contain
+history=4). Decoding is capped at 128 KiB, above the 64 KiB configurable working
+ceiling plus framing and all proposed component caps; move-only export payloads
+are separate. Collection counts must fit the minimum encoded bytes per element
+before allocation. Raw byte payloads use a bulk-copy path. `component_binary.go` documents the binary grammar. Hex files contain
 actual canonical wire bytes, not ciphertext or secret production data. Existing
 v7/v9 fixtures are unchanged; `v8-components-source.json` pins the previously
 synthesized v8 source layout. The setup fixture contains only existing test keys.
@@ -26,10 +29,18 @@ Setup and transport have independent canonical encodings. Reassembly uses the
 same `session.resume` as v9: its existing `advanceDTLSSequence` reserves 64 on
 crash restore; confirmed planned moves stay exact. There is no second jump rule.
 The outgoing guard remains below Pion. Setup changes are an explicit refusal.
+Assembly shares legacy snapshot invariants, then re-splits to require identical
+component bytes. Null host aliases, expanded address spellings and IPv4-mapped
+IPv6 aliases are refused; capture canonicalizes mapped addresses to IPv4. The
+consumed-input progress layout is component-local and frozen. Decode/authentication
+refusals share `errBadState`; legacy version errors retain their original class.
 
 `component_auth.go` defines AES-256-GCM (2-byte version/key-ID header, 12-byte
-random nonce, 16-byte tag), with HKDF separation by component and encryption/
-digest purpose. Component and root/checkpoint digests are HMAC-SHA256, stored as
+random nonce, 16-byte tag), with HKDF separation by session, component and encryption/digest purpose.
+HKDF info is the fixed `relais/session/v10/` domain followed by uint32 session
+ID byte length, session ID bytes, one kind byte, uint32 purpose byte length and
+purpose bytes. Both encryption keys and digest keys are per session; Transfer
+retains the session ID and keys. Component and root/checkpoint digests are HMAC-SHA256, stored as
 32 binary bytes. Root input is the length-prefixed version/work/history tuple.
 Whole-checkpoint digest excludes its own digest field before sealing. Reads
 recompute all digests/root after AEAD authentication. Retained setup/app

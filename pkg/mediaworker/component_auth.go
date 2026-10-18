@@ -71,46 +71,46 @@ func decodeComponentMetadata(data []byte) (componentMetadata, error) {
 	}
 	r := bytes.NewReader(data)
 	if err := binary.Read(r, binary.BigEndian, &m.Format); err != nil {
-		return m, err
+		return m, fmt.Errorf("%w: component metadata: %w", errBadState, err)
 	}
 	for i := range m.References {
 		if _, err := io.ReadFull(r, m.References[i].Digest[:]); err != nil {
-			return m, err
+			return m, fmt.Errorf("%w: component metadata: %w", errBadState, err)
 		}
 		if err := binary.Read(r, binary.BigEndian, &m.References[i].KeyID); err != nil {
-			return m, err
+			return m, fmt.Errorf("%w: component metadata: %w", errBadState, err)
 		}
 		if err := binary.Read(r, binary.BigEndian, &m.References[i].Revision); err != nil {
-			return m, err
+			return m, fmt.Errorf("%w: component metadata: %w", errBadState, err)
 		}
 	}
 	if err := binary.Read(r, binary.BigEndian, &m.OwnerEpoch); err != nil {
-		return m, err
+		return m, fmt.Errorf("%w: component metadata: %w", errBadState, err)
 	}
 	if err := binary.Read(r, binary.BigEndian, &m.StateVersion); err != nil {
-		return m, err
+		return m, fmt.Errorf("%w: component metadata: %w", errBadState, err)
 	}
 	if _, err := io.ReadFull(r, m.Banks[:]); err != nil {
-		return m, err
+		return m, fmt.Errorf("%w: component metadata: %w", errBadState, err)
 	}
 	var n uint16
 	if err := binary.Read(r, binary.BigEndian, &n); err != nil {
-		return m, err
+		return m, fmt.Errorf("%w: component metadata: %w", errBadState, err)
 	}
 	if int(n) > r.Len() || n > 64 {
 		return m, fmt.Errorf("%w: metadata owner", errBadState)
 	}
 	owner := make([]byte, n)
 	if _, err := io.ReadFull(r, owner); err != nil {
-		return m, err
+		return m, fmt.Errorf("%w: component metadata: %w", errBadState, err)
 	}
 	m.Owner = string(owner)
 	if err := binary.Read(r, binary.BigEndian, &m.SetupGeneration); err != nil {
-		return m, err
+		return m, fmt.Errorf("%w: component metadata: %w", errBadState, err)
 	}
 	canonical, err := m.marshal()
 	if err != nil {
-		return m, err
+		return m, fmt.Errorf("%w: component metadata: %w", errBadState, err)
 	}
 	if !bytes.Equal(canonical, data) {
 		return m, fmt.Errorf("%w: noncanonical metadata", errBadState)
@@ -118,15 +118,25 @@ func decodeComponentMetadata(data []byte) (componentMetadata, error) {
 	return m, nil
 }
 
-func componentKey(master []byte, kind byte, purpose string) ([]byte, error) {
+func componentKey(master []byte, sessionID string, kind byte, purpose string) ([]byte, error) {
 	if len(master) != 32 {
 		return nil, fmt.Errorf("%w: component key length", errBadState)
 	}
-	return hkdf.Key(sha256.New, master, nil, fmt.Sprintf("relais/session/v10/%d/%s", kind, purpose), 32)
+	if sessionID == "" || len(sessionID) > componentDecodeLimit {
+		return nil, fmt.Errorf("%w: session identity", errBadState)
+	}
+	// Length prefixes keep session IDs unambiguous even when they contain
+	// separators or share prefixes. Both AES and HMAC keys are per session.
+	info := binary.BigEndian.AppendUint32([]byte("relais/session/v10/"), uint32(len(sessionID)))
+	info = append(info, sessionID...)
+	info = append(info, kind)
+	info = binary.BigEndian.AppendUint32(info, uint32(len(purpose)))
+	info = append(info, purpose...)
+	return hkdf.Key(sha256.New, master, nil, string(info), 32)
 }
-func componentDigest(master []byte, kind byte, data []byte) ([32]byte, error) {
+func componentDigest(master []byte, sessionID string, kind byte, data []byte) ([32]byte, error) {
 	var digest [32]byte
-	key, err := componentKey(master, kind, "digest")
+	key, err := componentKey(master, sessionID, kind, "digest")
 	if err != nil {
 		return digest, err
 	}
@@ -135,28 +145,28 @@ func componentDigest(master []byte, kind byte, data []byte) ([32]byte, error) {
 	copy(digest[:], h.Sum(nil))
 	return digest, nil
 }
-func componentRootDigest(master []byte, version uint32, work, history componentReference) ([32]byte, error) {
+func componentRootDigest(master []byte, sessionID string, version uint32, work, history componentReference) ([32]byte, error) {
 	var b bytes.Buffer
 	// Canonical length-prefixed tuple; key IDs accompany retained digests.
 	for _, part := range [][]byte{binary.BigEndian.AppendUint32(nil, version), referenceBytes(work), referenceBytes(history)} {
 		_ = binary.Write(&b, binary.BigEndian, uint32(len(part)))
 		b.Write(part)
 	}
-	return componentDigest(master, componentRoot, b.Bytes())
+	return componentDigest(master, sessionID, componentRoot, b.Bytes())
 }
 func referenceBytes(ref componentReference) []byte {
 	b := []byte{ref.KeyID}
 	b = binary.BigEndian.AppendUint64(b, ref.Revision)
 	return append(b, ref.Digest[:]...)
 }
-func componentWholeDigest(master []byte, metadata componentMetadata, transport []byte) ([32]byte, error) {
+func componentWholeDigest(master []byte, sessionID string, metadata componentMetadata, transport []byte) ([32]byte, error) {
 	// The whole-checkpoint digest excludes only itself to avoid a circular hash.
 	metadata.References[4].Digest = [32]byte{}
 	m, err := metadata.marshal()
 	if err != nil {
 		return [32]byte{}, err
 	}
-	return componentDigest(master, componentCheckpoint, append(m, transport...))
+	return componentDigest(master, sessionID, componentCheckpoint, append(m, transport...))
 }
 
 func componentAAD(sessionID string, kind byte, m componentMetadata, header []byte) ([]byte, error) {
@@ -195,8 +205,8 @@ func componentAAD(sessionID string, kind byte, m componentMetadata, header []byt
 	}
 	return b.Bytes(), nil
 }
-func componentAEAD(master []byte, kind byte) (cipher.AEAD, error) {
-	key, err := componentKey(master, kind, "encryption")
+func componentAEAD(master []byte, sessionID string, kind byte) (cipher.AEAD, error) {
+	key, err := componentKey(master, sessionID, kind, "encryption")
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +217,7 @@ func componentAEAD(master []byte, kind byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 func sealComponent(master []byte, keyID byte, sessionID string, kind byte, m componentMetadata, payload []byte) ([]byte, error) {
-	aead, err := componentAEAD(master, kind)
+	aead, err := componentAEAD(master, sessionID, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +237,7 @@ func openComponent(master []byte, keyID byte, sessionID string, kind byte, m com
 	if len(sealed) < componentCipherOverhead || sealed[0] != 1 || sealed[1] != keyID {
 		return nil, fmt.Errorf("%w: encryption header", errBadState)
 	}
-	aead, err := componentAEAD(master, kind)
+	aead, err := componentAEAD(master, sessionID, kind)
 	if err != nil {
 		return nil, err
 	}
@@ -235,26 +245,30 @@ func openComponent(master []byte, keyID byte, sessionID string, kind byte, m com
 	if err != nil {
 		return nil, err
 	}
-	return aead.Open(nil, sealed[2:14], sealed[14:], aad)
+	plain, err := aead.Open(nil, sealed[2:14], sealed[14:], aad)
+	if err != nil {
+		return nil, fmt.Errorf("%w: component authentication: %w", errBadState, err)
+	}
+	return plain, nil
 }
 
 func sealSessionComponents(master []byte, keyID byte, sessionID string, m componentMetadata, c sessionComponents) (sessionComponents, componentMetadata, error) {
 	var sealed sessionComponents
 	for i, part := range [][]byte{c.Setup, c.Work, c.History} {
 		kind := []byte{componentSetup, componentWork, componentHistory}[i]
-		digest, err := componentDigest(master, kind, part)
+		digest, err := componentDigest(master, sessionID, kind, part)
 		if err != nil {
 			return sealed, m, err
 		}
 		m.References[i].Digest, m.References[i].KeyID = digest, keyID
 	}
-	root, err := componentRootDigest(master, m.StateVersion, m.References[1], m.References[2])
+	root, err := componentRootDigest(master, sessionID, m.StateVersion, m.References[1], m.References[2])
 	if err != nil {
 		return sealed, m, err
 	}
 	m.References[3].Digest, m.References[3].KeyID = root, keyID
 	m.References[4].KeyID = keyID
-	whole, err := componentWholeDigest(master, m, c.Transport)
+	whole, err := componentWholeDigest(master, sessionID, m, c.Transport)
 	if err != nil {
 		return sealed, m, err
 	}
@@ -287,9 +301,9 @@ func openSessionComponents(keys map[uint8][]byte, sessionID string, m componentM
 		}
 		var digest [32]byte
 		if part.kind == componentTransport {
-			digest, err = componentWholeDigest(keys[ref.KeyID], m, plain)
+			digest, err = componentWholeDigest(keys[ref.KeyID], sessionID, m, plain)
 		} else {
-			digest, err = componentDigest(keys[ref.KeyID], part.kind, plain)
+			digest, err = componentDigest(keys[ref.KeyID], sessionID, part.kind, plain)
 		}
 		if err != nil {
 			return sessionComponents{}, err
@@ -299,7 +313,7 @@ func openSessionComponents(keys map[uint8][]byte, sessionID string, m componentM
 		}
 		*part.out = plain
 	}
-	root, err := componentRootDigest(keys[m.References[3].KeyID], m.StateVersion, m.References[1], m.References[2])
+	root, err := componentRootDigest(keys[m.References[3].KeyID], sessionID, m.StateVersion, m.References[1], m.References[2])
 	if err != nil {
 		return sessionComponents{}, err
 	}

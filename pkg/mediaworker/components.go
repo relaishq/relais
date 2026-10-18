@@ -62,7 +62,7 @@ type transportComponent struct {
 	Inbound, Received map[uint32]uint64
 	Audio, Video      componentTrack
 	Checkpoint        componentCheckpointState
-	Progress          agent.Progress
+	Progress          componentProgress
 	AgentRevision     uint64
 	Host              []byte
 }
@@ -117,6 +117,12 @@ func splitSessionComponents(snap snapshot, history, expectedSetup []byte) (sessi
 		return c, fmt.Errorf("%w: DTLS checkpoint epoch zero", errBadState)
 	}
 	s := snap.State
+	// UDP nomination has one IPv4 representation in v10, including captures
+	// supplied as IPv4-mapped IPv6. Legacy snapshot decoding is unchanged.
+	address := s.ICE.RemoteAddr
+	if address.Addr().Is4In6() {
+		address = netip.AddrPortFrom(address.Addr().Unmap(), address.Port())
+	}
 	c.Setup, err = marshalComponent(componentSetup, connectionSetupComponent{
 		ID: s.ID, LocalUfrag: s.ICE.LocalUfrag, LocalPwd: s.ICE.LocalPwd, RemoteUfrag: s.ICE.RemoteUfrag, RemotePwd: s.ICE.RemotePwd,
 		Certificate: s.DTLS.Certificate, PrivateKey: s.DTLS.PrivateKey, CallerFingerprintHash: s.DTLS.CallerFingerprintHash, CallerFingerprint: s.DTLS.CallerFingerprint, DTLS: setup,
@@ -138,8 +144,8 @@ func splitSessionComponents(snap snapshot, history, expectedSetup []byte) (sessi
 		}
 	}
 	c.Transport, err = marshalComponent(componentTransport, transportComponent{
-		LegacyVersion: s.Version, RemoteAddr: s.ICE.RemoteAddr.String(), DTLS: progress, Profile: uint16(s.SRTP.Profile), Inbound: s.SRTP.Inbound, Received: s.SRTP.Received,
-		Audio: componentTrack(s.Audio), Video: componentTrack(s.Video), Checkpoint: componentCheckpointState(s.Checkpoint), Progress: s.Agent.Progress, AgentRevision: s.Agent.Revision, Host: host,
+		LegacyVersion: s.Version, RemoteAddr: address.String(), DTLS: progress, Profile: uint16(s.SRTP.Profile), Inbound: s.SRTP.Inbound, Received: s.SRTP.Received,
+		Audio: componentTrack(s.Audio), Video: componentTrack(s.Video), Checkpoint: componentCheckpointState(s.Checkpoint), Progress: componentProgress(s.Agent.Progress), AgentRevision: s.Agent.Revision, Host: host,
 	})
 	if err != nil {
 		return c, err
@@ -175,7 +181,7 @@ func assembleSessionComponents(c sessionComponents, stateVersion uint32) (snapsh
 			return snapshot{}, nil, fmt.Errorf("%w: host metadata size", errBadState)
 		}
 		if err := json.Unmarshal(transport.Host, &host); err != nil {
-			return snapshot{}, nil, err
+			return snapshot{}, nil, fmt.Errorf("%w: host metadata JSON: %w", errBadState, err)
 		}
 		canonical, err := json.Marshal(host)
 		if err != nil || !bytes.Equal(canonical, transport.Host) {
@@ -184,7 +190,7 @@ func assembleSessionComponents(c sessionComponents, stateVersion uint32) (snapsh
 	}
 	addr, err := netip.ParseAddrPort(transport.RemoteAddr)
 	if err != nil {
-		return snapshot{}, nil, err
+		return snapshot{}, nil, fmt.Errorf("%w: nominated address: %w", errBadState, err)
 	}
 	dtlsBytes, err := joinDTLSComponents(setup.DTLS, transport.DTLS)
 	if err != nil {
@@ -194,11 +200,24 @@ func assembleSessionComponents(c sessionComponents, stateVersion uint32) (snapsh
 		ICE:   iceState{LocalUfrag: setup.LocalUfrag, LocalPwd: setup.LocalPwd, RemoteUfrag: setup.RemoteUfrag, RemotePwd: setup.RemotePwd, RemoteAddr: addr},
 		DTLS:  dtlsState{Certificate: setup.Certificate, PrivateKey: setup.PrivateKey, CallerFingerprintHash: setup.CallerFingerprintHash, CallerFingerprint: setup.CallerFingerprint},
 		Audio: trackState(transport.Audio), Video: trackState(transport.Video), Checkpoint: CheckpointState(transport.Checkpoint),
-		Agent: agentState{V2: host, State: agent.State{Version: stateVersion, Bytes: work}, Progress: transport.Progress, Revision: transport.AgentRevision},
+		Agent: agentState{V2: host, State: agent.State{Version: stateVersion, Bytes: work}, Progress: agent.Progress(transport.Progress), Revision: transport.AgentRevision},
 	}
 	state.SRTP.Profile = srtp.ProtectionProfile(transport.Profile)
 	state.SRTP.Inbound, state.SRTP.Received = transport.Inbound, transport.Received
-	return snapshot{Version: state.Version, State: state, DTLSConnection: dtlsBytes}, history, nil
+	snap := snapshot{Version: state.Version, State: state, DTLSConnection: dtlsBytes}
+	if err := validateSnapshot(&snap); err != nil {
+		return snapshot{}, nil, fmt.Errorf("%w: %w", errBadState, err)
+	}
+	// A binary encoding can be canonical while its decoded host/address has a
+	// different representation. Reject aliases rather than silently normalize.
+	canonical, err := splitSessionComponents(snap, history, nil)
+	if err != nil {
+		return snapshot{}, nil, fmt.Errorf("%w: component re-encoding: %w", errBadState, err)
+	}
+	if !bytes.Equal(c.Setup, canonical.Setup) || !bytes.Equal(c.Transport, canonical.Transport) || !bytes.Equal(c.Work, canonical.Work) || !bytes.Equal(c.History, canonical.History) {
+		return snapshot{}, nil, fmt.Errorf("%w: noncanonical assembled components", errBadState)
+	}
+	return snap, history, nil
 }
 
 // Frozen v10 wire layout. Do not evolve with the legacy state type.
@@ -249,4 +268,13 @@ type componentCheckpointState struct {
 	TakeoverAge         time.Duration `json:"takeover_age"`
 	TakeoverSnapshotAge time.Duration `json:"takeover_snapshot_age"`
 	TakeoverStoredAt    time.Time     `json:"takeover_stored_at"`
+}
+
+// Frozen v10 consumed-input progress. Public agent.Progress may evolve without
+// changing this wire layout. Convert explicitly at the capture/restore edges.
+type componentProgress struct {
+	SSRC      uint32
+	Index     uint64
+	Timestamp uint32
+	Consumed  uint64
 }

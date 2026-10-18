@@ -263,13 +263,13 @@ func TestComponentAuthenticatedReferences(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, part.plain, plain)
 	}
-	work, err := componentDigest(master, componentWork, []byte("same"))
+	work, err := componentDigest(master, snap.State.ID, componentWork, []byte("same"))
 	require.NoError(t, err)
-	history, err := componentDigest(master, componentHistory, []byte("same"))
+	history, err := componentDigest(master, snap.State.ID, componentHistory, []byte("same"))
 	require.NoError(t, err)
 	require.NotEqual(t, work, history)
 	key2 := bytes.Repeat([]byte{0x46}, 32)
-	different, err := componentDigest(key2, componentWork, []byte("same"))
+	different, err := componentDigest(key2, snap.State.ID, componentWork, []byte("same"))
 	require.NoError(t, err)
 	require.NotEqual(t, work, different)
 }
