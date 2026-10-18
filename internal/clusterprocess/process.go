@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -33,6 +34,37 @@ type Child struct {
 }
 
 func Start(dir, name string, env []string, args ...string) (*Child, error) {
+	return start(dir, name, env, false, args...)
+}
+
+// StartSupervised adds a parent-death signal on Linux for disposable test servers.
+// Other platforms rely on the harness's recorded-identity stale-child cleanup.
+func StartSupervised(dir, name string, env []string, args ...string) (*Child, error) {
+	if runtime.GOOS != "linux" {
+		return start(dir, name, env, false, args...)
+	}
+	type result struct {
+		child *Child
+		err   error
+	}
+	ready := make(chan result)
+	go func() {
+		// Linux Pdeathsig belongs to the creating thread, not just its process.
+		// Keep that thread alive until reaping, so Go thread retirement cannot
+		// terminate a healthy server before the parent process exits.
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		child, err := start(dir, name, env, true, args...)
+		ready <- result{child, err}
+		if err == nil {
+			<-child.Done()
+		}
+	}()
+	r := <-ready
+	return r.child, r.err
+}
+
+func start(dir, name string, env []string, parentDeath bool, args ...string) (*Child, error) {
 	path := filepath.Join(dir, name+".log")
 	log, err := os.Create(path)
 	if err != nil {
@@ -44,6 +76,9 @@ func Start(dir, name string, env []string, args ...string) (*Child, error) {
 	if err := configureCommand(cmd); err != nil {
 		_ = log.Close()
 		return nil, err
+	}
+	if parentDeath {
+		configureParentDeath(cmd)
 	}
 	if err := cmd.Start(); err != nil {
 		_ = log.Close()

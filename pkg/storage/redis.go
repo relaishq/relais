@@ -599,7 +599,7 @@ func NewRedisStorage(config interface{}) (*RedisStorage, error) {
 	}
 	var client redis.UniversalClient
 	if cfg.Cluster || len(cfg.Addrs) > 0 {
-		client = redis.NewClusterClient(options.Cluster())
+		client = redis.NewClusterClient(RedisClusterOptions(options))
 	} else {
 		client = redis.NewClient(options.Simple())
 	}

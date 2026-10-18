@@ -100,7 +100,7 @@ The shared key must encode 32 bytes as hex or base64. Relay must not receive it.
 `RELAIS_REDIS_PREFIX` must agree across relay, workers, and control.
 `RELAIS_REDIS_PASSWORD` supplies an optional password. TLS and ACL users are
 configured through the environment; see [Managed Redis](#managed-redis).
-The legacy Redis Cluster setting is not exposed by these process flags.
+Use `-redis-cluster` for Cluster discovery; standalone remains the default.
 
 Stop signal first to prevent new calls. Stop workers while control is still up,
 so SIGTERM can drain them. Then stop control, relay, and this owned Redis:
@@ -136,19 +136,22 @@ before: TLS protects transport; it does not replace encrypted snapshots.
 
 | Variable | Meaning |
 | --- | --- |
-| `RELAIS_REDIS_ADDR` | Explicit Redis `host:port`; `-redis` overrides it. |
+| `RELAIS_REDIS_ADDR` | Explicit Redis `host:port`, or comma-separated Cluster seeds; `-redis` overrides it. |
+| `RELAIS_REDIS_CLUSTER` | Set to `1` for Cluster discovery; `-redis-cluster` overrides it. Unset or `0` selects standalone. |
 | `RELAIS_REDIS_PREFIX` | Shared namespace; `-redis-prefix` overrides it. |
 | `RELAIS_REDIS_USERNAME` | Optional Redis ACL username. |
 | `RELAIS_REDIS_PASSWORD` | Password for the ACL user, or for the default user when no username is set. |
 | `RELAIS_REDIS_TLS` | Set to `1` to enable TLS; unset or `0` disables it. Minimum TLS version: 1.2. |
 | `RELAIS_REDIS_TLS_CA_FILE` | Optional PEM CA bundle. Unset uses system roots. |
-| `RELAIS_REDIS_TLS_SERVER_NAME` | Optional certificate verification name and SNI override. Defaults to the connection host. |
+| `RELAIS_REDIS_TLS_SERVER_NAME` | Optional shared certificate verification name and SNI override for every node. Unset verifies each connection against its announced hostname. |
 | `RELAIS_REDIS_TLS_CERT_FILE` | Optional client PEM certificate chain for mutual TLS; requires the key file. |
 | `RELAIS_REDIS_TLS_KEY_FILE` | Optional client private key; requires the certificate file. |
 | `RELAIS_REDIS_ALLOW_LOCAL_6379` | Set to `1` to permit loopback 6379 in production processes; unset or `0` keeps the refusal. |
 
-Cluster nodes often advertise IPs, so set `RELAIS_REDIS_TLS_SERVER_NAME` or use
-certificates with IP SANs.
+Leave `RELAIS_REDIS_TLS_SERVER_NAME` unset to verify each seed and discovered
+node against its own hostname. Setting it forces one SNI and verification name
+for every node; use it only when every node certificate covers that name. A node
+that announces an IP needs an IP SAN, or a corrected announced hostname.
 
 Production processes accept port 6379 on remote hosts. Literal loopback IPs
 (`127.0.0.0/8`, `::1`, including mapped IPv4) and `localhost` refuse 6379 by
@@ -184,11 +187,60 @@ do not put them in command-line arguments or logs.
 
 The Go store constructors also accept `storage.RedisConfig.Username` and
 `storage.RedisConfig.TLSConfig`, including Redis Cluster connections. The
-process flags do not enable Cluster discovery. Legacy plugin runners also use
+process flags enable Cluster discovery with `-redis-cluster`. Legacy plugin runners also use
 the TLS and ACL environment settings when their storage type is Redis; existing
 storage configuration still selects their Cluster seed addresses. Their addresses
 and passwords remain under `RELAIS_STORAGE_REDIS_URL` and
 `RELAIS_STORAGE_REDIS_PASSWORD`.
+
+### Cluster mode
+
+All store clients in relay, worker and control use the same mode, including the
+relay's keyless ownership client and the encrypted frame cache. Signaling uses
+control's store connection; it has no direct store client or Redis flags.
+
+```sh
+# Standalone (the default), with the TLS/ACL environment settings above:
+./bin/relais-worker -redis=cache.example.invalid:6379 # Add topology flags.
+# Cluster, with one or more seed nodes:
+./bin/relais-worker -redis-cluster -redis=cache-a.example.invalid:6379,cache-b.example.invalid:6379
+# Or set RELAIS_REDIS_CLUSTER=1 and RELAIS_REDIS_ADDR to the same seed list.
+```
+
+Give every discovered node a reachable endpoint and a valid server certificate.
+TLS, CA/SNI, optional client certificates, and environment-only ACL credentials
+apply to seeds and discovered nodes. ACL permissions must allow Cluster
+discovery (`CLUSTER SLOTS`, `COMMAND`), script execution/loading, scans, and
+the store data commands. Ownership and route reads use primaries;
+replica reads and latency/random routing are disabled. Redis 7+ topology and
+command metadata are accepted without changing the application's bounded retry
+or uncertain-write rules.
+
+Every script and atomic multi-key command must stay within one Redis hash slot.
+Lease, snapshot, recovery record, per-session epoch, route and ended marker use
+`{sess:<id>}`; unusual session IDs are encoded before tagging. Worker indexes,
+the global epoch allocator and relay leases are independent single-key
+operations. Pipelines route each independent command to its own primary.
+Route restore scans every primary. Worker-index listing reads its index's
+primary and checks each member on that session's primary. Script-cache misses
+reload on the affected node, including after a promotion. Discovery validates every announced address with
+the seed endpoint policy, tries the last good source first, and caps each
+source connection and I/O attempt at 250 ms. See the
+[key audit](dev/redis-key-layout.md) for exact families and operations.
+
+[Local Cluster tests](dev/redis-cluster.md) exercise calls, planned moves,
+SIGKILL worker takeover, same-host relay standby takeover, all-primary route
+restore, per-node script-cache reload and coordinated replica promotion during
+live media. TLS/ACL tests use an isolated six-node cluster with mutual TLS.
+These tests skip under `-short`. They do not establish managed-store durability,
+cloud network behavior, cross-host relay takeover, or a full 60-second consent
+window in the short process probe. Open-source Redis replication is asynchronous;
+coordinated `CLUSTER FAILOVER` tests reconnect and fencing without intentionally
+losing writes. ASK redirects are returned to the application and are not followed.
+During live resharding, a key migrating between SCAN pages can be missed without
+an error. Route restoration therefore does not prove a complete inventory
+during resharding. ADR 0011 still requires a managed store that preserves confirmed
+ownership writes across failures.
 
 ## Other hosts and security
 

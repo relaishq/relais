@@ -54,7 +54,7 @@ func validate(addr string, dev bool) error {
 		}
 		return nil
 	}
-	allow, err := envSwitch("RELAIS_REDIS_ALLOW_LOCAL_6379")
+	allow, err := EnvSwitch("RELAIS_REDIS_ALLOW_LOCAL_6379")
 	if err != nil {
 		return err
 	}
@@ -64,7 +64,8 @@ func validate(addr string, dev bool) error {
 	return nil
 }
 
-func envSwitch(name string) (bool, error) {
+// EnvSwitch accepts only unset, 0 or 1 for process environment switches.
+func EnvSwitch(name string) (bool, error) {
 	switch os.Getenv(name) {
 	case "", "0":
 		return false, nil

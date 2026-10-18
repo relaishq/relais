@@ -88,8 +88,10 @@ func NewRedis(ctx context.Context, cfg storage.RedisConfig, key []byte, limits L
 	connection.MaxRetries, connection.MaxRedirects = -1, -1
 	var client redis.UniversalClient
 	if cfg.Cluster || len(cfg.Addrs) > 0 {
-		cluster := connection.Cluster()
-		cluster.NewClient = func(opts *redis.Options) *redis.Client { return metrics.RedisClient(opts, "frame") }
+		cluster := storage.RedisClusterOptions(connection)
+		cluster.NewClient = func(opts *redis.Options) *redis.Client {
+			return storage.RedisClusterNode(metrics.RedisClient(opts, "frame"))
+		}
 		client = redis.NewClusterClient(cluster)
 	} else {
 		client = metrics.RedisClient(connection.Simple(), "frame")
