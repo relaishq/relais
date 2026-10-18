@@ -39,9 +39,8 @@ can repeat. Applications must make external side effects safe to repeat.
   [same-host standby](docs/guarantees.md#same-host-standby-relay).
 - Multi-process runs require Redis. Redis TLS and ACL usernames are supported.
   Loopback Redis port 6379 is refused by default; see [Managed Redis](docs/deploy.md#managed-redis).
-- Custom agents are separate Go workers built with the agent SDK; no fork is
-  needed. The SDK is on `main` and is not in a release yet. The built-ins echo
-  media or play a tone script.
+- Custom agents are separate Go workers built with the agent SDK, available
+  since v0.2.0; no fork is needed. The built-ins echo media or play a tone script.
 - Desktop Chrome is tested; Safari is not. Agent continuity over the real
   internet is not measured. See [non-guarantees](docs/guarantees.md#explicit-non-guarantees).
 - After an aborted move, a caller could not decrypt three packets. This occurred
@@ -71,8 +70,8 @@ Download the [latest release](https://github.com/relaishq/relais/releases/latest
 for your platform. On an Apple silicon Mac:
 
 ```sh
-curl -fLO https://github.com/relaishq/relais/releases/download/v0.1.0/relais_0.1.0_darwin_arm64.tar.gz
-tar -xzf relais_0.1.0_darwin_arm64.tar.gz && cd relais_0.1.0_darwin_arm64
+curl -fLO https://github.com/relaishq/relais/releases/download/v0.2.0/relais_0.2.0_darwin_arm64.tar.gz
+tar -xzf relais_0.2.0_darwin_arm64.tar.gz && cd relais_0.2.0_darwin_arm64
 ./relais-demo -bin . -agent=demo
 ```
 
@@ -138,8 +137,13 @@ See [connect an app](docs/connect-an-app.md) for requests and certificate setup.
 
 Build a keyless custom worker with the [Build your agent guide](docs/build-an-agent.md).
 You write a small Go `main` with `pkg/workerapp` and `pkg/agent/v2`; no fork is
-needed. The SDK is on `main` and is not in a release yet. All workers need
+needed. Add the SDK with `go get github.com/relaishq/relais@v0.2.0`. All workers need
 compatible agents. There is no runtime plugin or subprocess interface for live agents.
+
+Try the push-to-talk [voice-agent example](examples/voice-agent): hold to speak,
+release to hear an AI-generated answer, and use Move, Drain or Kill to see how a
+turn recovers. Requires `OPENAI_API_KEY`. See
+[Run Demo A](docs/build-an-agent.md#run-demo-a) in the agent guide.
 
 Agents receive encoded Opus audio, a compressed audio format; video stays on the
 echo path. Speech-provider integration and resumable audio decoding are not

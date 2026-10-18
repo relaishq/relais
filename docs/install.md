@@ -11,7 +11,7 @@ Choose `linux` or `darwin` (macOS), and `amd64` (Intel/AMD) or `arm64` (Apple
 silicon/ARM). For example, on an Apple silicon Mac:
 
 ```bash
-VERSION=0.1.0
+VERSION=0.2.0
 OS=darwin
 ARCH=arm64
 ARCHIVE="relais_${VERSION}_${OS}_${ARCH}.tar.gz"
@@ -236,7 +236,7 @@ Source-built custom workers can use `-worker-bin PATH -agent NAME` with
 The download archive does not contain that example binary.
 
 To build all four download archives, run `make dist`. Override the output or
-version with `make dist DIST_VERSION=0.1.0 DIST_DIR=dist`.
+version with `make dist DIST_VERSION=0.2.0 DIST_DIR=dist`.
 
 ## Flag reference
 

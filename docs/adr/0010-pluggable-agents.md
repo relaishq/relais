@@ -1,6 +1,6 @@
 # ADR 0010: Pluggable agents and a bounded async host
 
-Status: **Accepted** 2026-10-16 by the project lead after three design reviews; partly implemented on `main`. Part of #148.
+Status: **Accepted** 2026-10-16 by the project lead after three design reviews; slices 1–9 implemented and released in v0.2.0, with the deferred items below still open. Part of #148.
 Baseline: `f74798267771395caff9e4e6f2c73fd2918f1387`. “v1” is this proposed SDK slice; `agent/v2` distinguishes the existing interface.
 
 ## Owner summary

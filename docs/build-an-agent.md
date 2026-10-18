@@ -33,6 +33,11 @@ build. Go then enforces the public import boundary. Relais's public SDK has
 internal implementation dependencies; applications must not import those
 packages directly. No dependency or tool is installed by the example.
 
+To build your own worker outside this repository, start a Go module and add the
+SDK with `go get github.com/relaishq/relais@v0.2.0`. Copy
+`examples/delayed-loopback` as a starting point; it builds unchanged with
+`CGO_ENABLED=0` in a separate module.
+
 ## Hear it in your browser
 
 Start an owned three-worker demo on a separate loopback port:
