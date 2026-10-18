@@ -210,7 +210,7 @@ func TestRemoteErrorsAndTimeouts(t *testing.T) {
 }
 
 func TestHTTPResumeExhaustionIsTerminal(t *testing.T) {
-	for _, sentinel := range []error{mediaworker.ErrSequenceBudgetExhausted, mediaworker.ErrSRTCPIndexExhausted} {
+	for _, sentinel := range []error{mediaworker.ErrSequenceBudgetExhausted, mediaworker.ErrSRTCPIndexExhausted, mediaworker.ErrDTLSSequenceExhausted} {
 		t.Run(sentinel.Error(), func(t *testing.T) {
 			ctx := context.Background()
 			p, _, _, _ := setup(t)
@@ -233,6 +233,7 @@ func TestHTTPResumeExhaustionIsTerminal(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, status.Takeovers, 1)
 			require.True(t, status.Takeovers[0].Lost)
+			require.Equal(t, "checkpoint_unsafe", status.Takeovers[0].LossCause)
 			require.Contains(t, status.Takeovers[0].Error, sentinel.Error())
 			require.NotContains(t, status.Takeovers[0].Error, "attempts exhausted")
 			require.EqualValues(t, 1, attempts.Load())

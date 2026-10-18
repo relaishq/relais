@@ -25,6 +25,7 @@ var RemoteErrors = map[string]error{
 	"closed":          ErrClosed, "not_established": ErrNotEstablished,
 	"sequence_budget": ErrSequenceBudgetExhausted, "session_exists": errSessionExists,
 	"srtcp_exhausted":     ErrSRTCPIndexExhausted,
+	"dtls_exhausted":      ErrDTLSSequenceExhausted,
 	"checkpoint_clock":    sessionstore.ErrUnsafeCheckpointClock,
 	"agent_incompatible":  agentv2.ErrIncompatibleAgent,
 	"agent_capacity":      agentv2.ErrCapacity,

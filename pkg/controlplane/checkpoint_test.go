@@ -63,7 +63,7 @@ func TestCheckpointDecisionUsesStoreClockAndCopyAge(t *testing.T) {
 }
 
 func TestEnvelopeFlagDoesNotRelabelUnrelatedLoss(t *testing.T) {
-	for _, cause := range []error{sessionstore.ErrNotFound, ErrNoTarget, mediaworker.ErrSequenceBudgetExhausted} {
+	for _, cause := range []error{sessionstore.ErrNotFound, ErrNoTarget, mediaworker.ErrSequenceBudgetExhausted, mediaworker.ErrDTLSSequenceExhausted} {
 		t.Run(cause.Error(), func(t *testing.T) {
 			p, _, _, _ := setup(t)
 			id, _, err := p.Create(context.Background(), "offer", "a")
@@ -75,7 +75,7 @@ func TestEnvelopeFlagDoesNotRelabelUnrelatedLoss(t *testing.T) {
 			res := MoveResult{Kind: "takeover", ID: id, Start: time.Now()}
 			before := checkpointPolicyFromScrape(t, p, "definitive-loss")
 			p.completeTakeover(source, p.calls[id], lease, &res, true, cause)
-			if cause == mediaworker.ErrSequenceBudgetExhausted {
+			if cause == mediaworker.ErrSequenceBudgetExhausted || cause == mediaworker.ErrDTLSSequenceExhausted {
 				require.Equal(t, "definitive-loss", res.CheckpointPolicy)
 				require.Equal(t, before+1, checkpointPolicyFromScrape(t, p, "definitive-loss"))
 			} else {
