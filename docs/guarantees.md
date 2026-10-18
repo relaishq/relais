@@ -95,6 +95,23 @@ Moves and takeovers under `region`, `far-caller` or `lossy-dc` **at the validate
 LAN load are not measured**. Relay continuity and agent browser trials also
 do not establish loaded N+1 timing.
 
+### Fixed-pool admission
+
+A configured `-worker-call-cap` limits new calls and planned move/drain
+reservations per worker. Concurrent placement and reservation settlement are
+covered by control-plane race tests. A full ready pool returns 503
+`at_capacity` with `Retry-After: 1`; no ready worker returns existing 409
+`no_target`. Default 0 retains unlimited placement. A crash takeover may exceed
+the cap rather than drop a live call; telemetry counts those over-cap calls.
+The cap is not a media performance guarantee or automatic scaling policy.
+
+The process bootstrap tests start control with a listed worker down and with
+the relay down, then register those dependencies when they start. A healthy
+worker can accept new calls while another listed worker remains down. This
+proves tolerant fixed startup, not reconstruction of pre-restart call metadata.
+Pool telemetry retains stale observations and represents unavailable demand
+as null/omitted, rather than zero.
+
 ### Checkpoint-age envelope
 
 A **checkpoint** is a successful session-store write. **Checkpoint age** starts

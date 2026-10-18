@@ -64,6 +64,12 @@ func (s *RelayWorkerRegistry) Sync(ctx context.Context, p *Plane, r interface {
 			}
 			s.registered[address] = true
 		}
+		p.mu.Lock()
+		if w := p.owner(address); w != nil && w.relayPending {
+			w.relayPending = false
+			p.loadVersion++
+		}
+		p.mu.Unlock()
 	}
 	return nil
 }

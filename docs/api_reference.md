@@ -32,6 +32,61 @@ The current owner, the move log and the owner's count of the caller's packets it
 
 The control plane API (`/api/v1/sessions`, `/api/v1/plugins`) and the WebSocket signaling endpoint (`/ws/signaling`) were served by the retired `relais-core` server and no longer exist.
 
+## Fixed-pool admission and telemetry
+
+Control `POST /calls` counts live store leases plus incoming reservations against
+`-worker-call-cap` on each ready worker. Zero (the default) is unlimited.
+Planned moves and drain destinations use the same budget. A move also holds a
+source rollback reservation until its synchronous coordination settles. A lease
+published before its outstanding reservation settles can count alongside that
+reservation, so admission is conservative while operations are in flight.
+A full destination
+leaves the call on its source and returns typed `at_capacity`; a drain that
+cannot reserve its destinations makes no moves. Crash takeover prefers the
+least-loaded survivor and may exceed the cap to preserve live calls.
+
+| Admission outcome | HTTP status | Body | Retry-After |
+| --- | --- | --- | --- |
+| Ready destinations are full | 503 | JSON `{"code":"at_capacity","message":...}` | `1` |
+| No ready destination, including bootstrap waiting for the relay | 409 | Existing text `controlplane: no non-draining target worker` (`no_target`) | None |
+
+Both are definite refusals before call creation and may be retried with bounded
+backoff. Signal preserves the 503 `at_capacity` code and fixed `Retry-After: 1`,
+and classifies it as retryable. Its existing generic response for `no_target`
+is unchanged; the private typed code remains `no_target`.
+
+Private control `GET /status` adds `ready` and one coherent `pool` observation:
+`demand` (calls plus reservations), `worker_call_cap`, `ready_workers`,
+`draining_workers`, `unreachable_workers`, `pending_workers`, `reservations`,
+`refusals` (lifetime create counters by `at_capacity` / `no_target`),
+`over_cap_calls` (live calls above each worker's cap), `sampled_at`,
+`age_seconds`, and `stale`. Worker state counts are disjoint; pending includes
+configured workers not yet registered and workers awaiting relay registration.
+Readiness requires a reachable relay and at least one ready registered worker;
+a full ready pool remains ready and refuses new calls with `at_capacity`.
+
+Control refreshes this observation during status requests and its ownership
+reconciliation loop (at most 1.5 seconds between scheduled reconciliations).
+Store reads run outside the registry lock; a registry/reservation change
+invalidates the reads. All sample fields publish together under one lock.
+Failed refreshes keep the previous timestamp and demand and mark it stale.
+If ownership reads fail too, `/status` retains its error HTTP status and returns
+JSON `ready: false`, the cached `pool`, and `error`; it does not claim empty calls.
+An observation older than five seconds is stale. Before a complete successful
+observation, `demand` is null, including when a configured worker's address is
+still unknown. This is unavailable demand, not zero. Zero is valid only with a
+complete successful observation. Consumers must check validity and freshness.
+
+Private `/metrics` adds `relais_control_pool_demand`,
+`relais_control_worker_call_cap`, `relais_control_pool_workers{state="ready|draining|unreachable|pending"}`,
+`relais_control_pool_reservations`, `relais_control_refusals_total{reason="at_capacity|no_target"}`,
+`relais_control_pool_over_cap_calls`, `relais_control_pool_sample_timestamp_seconds`,
+`relais_control_pool_sample_age_seconds`, `relais_control_pool_sample_valid`, and
+`relais_control_pool_sample_stale`, alongside `relais_control_active_calls`.
+Missing demand omits the demand metric and sets valid=0, stale=1. Cached demand
+retains its value with stale=1 on failure or age expiry; scrapes do not relabel an
+old observation with the current timestamp.
+
 ## Private worker placement fence
 
 ```text
@@ -124,7 +179,7 @@ Control error classes (codes preserve the existing HTTP status):
 
 | Class | Codes | Client action |
 | --- | --- | --- |
-| retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session` | Retry the identical message with bounded backoff and a deadline. |
+| retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `at_capacity`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session` | Retry the identical message with bounded backoff and a deadline. |
 | definite | `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
 | uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
 

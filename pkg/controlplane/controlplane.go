@@ -39,6 +39,8 @@ var (
 	ErrUnknownCall = errors.New("controlplane: unknown call")
 	// ErrNoTarget means no non-draining destination is available.
 	ErrNoTarget = errors.New("controlplane: no non-draining target worker")
+	// ErrAtCapacity is a definite, retryable admission refusal.
+	ErrAtCapacity = errors.New("controlplane: workers at capacity")
 )
 
 // Worker is the media boundary, local or remote. Resume must either adopt the
@@ -120,6 +122,7 @@ type registration struct {
 	name          string
 	addr          netip.AddrPort
 	worker        Worker
+	relayPending  bool // fixed bootstrap waits for the relay allowlist
 	draining      bool
 	reserved      int // incoming creates/moves; counted when balancing
 	lastHeartbeat time.Time
@@ -181,6 +184,13 @@ type Plane struct {
 	lostCount       uint64
 	lossesByCause   map[string]uint64
 	running         bool
+	loadVersion     uint64 // invalidates lease listings when reservations settle
+	pool            *PoolSample
+	poolFailed      bool
+	pendingWorkers  map[string]bool
+	bootstrap       bool
+	relayReady      bool
+	refusals        map[string]uint64
 }
 
 // New returns an empty control plane. Drive Run with the
@@ -198,6 +208,8 @@ func NewWithConfig(r Relay, store sessionstore.Store, config Config) *Plane {
 		workers:         make(map[string]*registration),
 		calls:           make(map[string]*call),
 		lossesByCause:   make(map[string]uint64),
+		pendingWorkers:  make(map[string]bool),
+		refusals:        map[string]uint64{"no_target": 0, "at_capacity": 0},
 		ttl:             config.LeaseTTL,
 		incomingChanged: make(chan struct{}),
 	}
@@ -223,7 +235,9 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 		}
 	}
 
-	p.workers[name] = &registration{name: name, addr: addr, worker: worker, lastHeartbeat: time.Now()}
+	p.workers[name] = &registration{name: name, addr: addr, worker: worker, lastHeartbeat: time.Now(), relayPending: p.bootstrap}
+	delete(p.pendingWorkers, name)
+	p.loadVersion++
 	p.mu.Unlock()
 	if w, ok := worker.(interface{ StartHeartbeats(mediaworker.Heartbeats) }); ok {
 		w.StartHeartbeats(p)
@@ -246,47 +260,79 @@ func (p *Plane) pick(ctx context.Context, name string, exclude netip.AddrPort) (
 }
 
 func (p *Plane) pickExcluding(ctx context.Context, name string, excluded map[netip.AddrPort]bool) (*registration, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	p.mu.Lock()
-	candidates := make([]*registration, 0, len(p.workers))
-	for _, w := range p.workers {
-		if (name == "" || w.name == name) && !w.draining && !w.dead && !excluded[w.addr] {
-			candidates = append(candidates, w)
-		}
-	}
-	p.mu.Unlock()
-	loads := make(map[*registration]int, len(candidates))
-	for _, w := range candidates {
-		leases, err := p.store.ListByWorker(ctx, w.addr)
-		if err != nil {
+	return p.pickCapacity(ctx, name, excluded, false, "")
+}
+
+// A lease may appear and its reservation disappear while ListByWorker is in
+// flight. Re-read after settlement; otherwise an old list can admit too much.
+// No registry lock spans store I/O. Retries have a fixed bound.
+func (p *Plane) pickCapacity(ctx context.Context, name string, excluded map[netip.AddrPort]bool, overflow bool, existingID string) (*registration, error) {
+	for range 32 {
+		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		loads[w] = len(leases)
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	var best *registration
-	load := int(^uint(0) >> 1)
-	for _, w := range candidates {
-		// Registry replacement, death or drain may have raced with the listing.
-		if p.workers[w.name] != w || w.draining || w.dead {
+		p.mu.Lock()
+		version := p.loadVersion
+		candidates := make([]*registration, 0, len(p.workers))
+		for _, w := range p.workers {
+			if (name == "" || w.name == name) && !w.draining && !w.dead && !w.recovering && !w.relayPending && !excluded[w.addr] {
+				candidates = append(candidates, w)
+			}
+		}
+		p.mu.Unlock()
+		loads := make(map[*registration]int, len(candidates))
+		for _, w := range candidates {
+			leases, err := p.store.ListByWorker(ctx, w.addr)
+			if err != nil {
+				return nil, err
+			}
+			loads[w] = len(leases)
+			// Recovery on the already-owned tenure consumes the same slot. The
+			// reservation represents that call until resume finishes.
+			for _, lease := range leases {
+				if p.config.WorkerCallCap > 0 && lease.SessionID == existingID {
+					loads[w]--
+					break
+				}
+			}
+		}
+		p.mu.Lock()
+		if err := ctx.Err(); err != nil {
+			p.mu.Unlock()
+			return nil, err
+		}
+		if p.config.WorkerCallCap > 0 && version != p.loadVersion {
+			p.mu.Unlock()
 			continue
 		}
-		n := loads[w] + w.reserved
-		if n < load || n == load && (best == nil || w.name < best.name) {
-			best, load = w, n
+		var best *registration
+		load, ready := int(^uint(0)>>1), false
+		for _, w := range candidates {
+			if p.workers[w.name] != w || w.draining || w.dead || w.recovering || w.relayPending {
+				continue
+			}
+			ready = true
+			n := loads[w] + w.reserved
+			if !overflow && p.config.WorkerCallCap > 0 && n >= p.config.WorkerCallCap {
+				continue
+			}
+			if n < load || n == load && (best == nil || w.name < best.name) {
+				best, load = w, n
+			}
 		}
+		if best == nil {
+			p.mu.Unlock()
+			if ready {
+				return nil, ErrAtCapacity
+			}
+			return nil, ErrNoTarget
+		}
+		best.reserved++
+		p.loadVersion++
+		p.mu.Unlock()
+		return best, nil
 	}
-	if best == nil {
-		return nil, ErrNoTarget
-	}
-	best.reserved++
-	return best, nil
+	return nil, fmt.Errorf("controlplane: placement changed during sampling: %w", sessionstore.ErrTransient)
 }
 
 func (p *Plane) unreserve(w *registration) {
@@ -294,6 +340,7 @@ func (p *Plane) unreserve(w *registration) {
 	defer p.mu.Unlock()
 
 	w.reserved--
+	p.loadVersion++
 	close(p.incomingChanged)
 	p.incomingChanged = make(chan struct{})
 }
@@ -335,13 +382,24 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 	defer func() {
 		if createErr != nil {
 			p.metrics.callErrors.Add(1)
+			p.mu.Lock()
+			if errors.Is(createErr, ErrAtCapacity) {
+				p.refusals["at_capacity"]++
+			} else if errors.Is(createErr, ErrNoTarget) {
+				p.refusals["no_target"]++
+			}
+			p.mu.Unlock()
 		} else {
 			p.metrics.calls.Add(1)
 		}
 	}()
 	p.mu.Lock()
 	attempts := len(p.workers)
+	ready := p.readyLocked()
 	p.mu.Unlock()
+	if !ready {
+		return "", "", ErrNoTarget
+	}
 	excluded := make(map[netip.AddrPort]bool, attempts)
 	var w *registration
 	var id, answer string
@@ -575,7 +633,17 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 	}()
 	p.mu.Lock()
 	source, r := p.owner(lease.Worker), p.relay
+	// Keep a slot for synchronous rollback after Transfer releases the source
+	// lease. Otherwise a concurrent create could fill it before rollback.
+	rollbackReserved := source != nil && p.config.WorkerCallCap > 0
+	if rollbackReserved {
+		source.reserved++
+		p.loadVersion++
+	}
 	p.mu.Unlock()
+	if rollbackReserved {
+		defer p.unreserve(source)
+	}
 	if source == nil {
 		return res, ErrUnknownCall
 	}
@@ -1006,10 +1074,13 @@ type Status struct {
 	Calls     []CallStatus   `json:"calls"`
 	Takeovers []MoveResult   `json:"takeovers"`
 	LostCount uint64         `json:"lost_count"`
+	Ready     bool           `json:"ready"`
+	Pool      PoolSample     `json:"pool"`
 }
 
 // Status lists live calls and reconciles definitive ownership loss.
 func (p *Plane) Status(ctx context.Context) (Status, error) {
+	_ = p.SamplePool(ctx)
 	p.mu.Lock()
 	workers := make([]*registration, 0, len(p.workers))
 	for _, w := range p.workers {
@@ -1065,6 +1136,7 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 		status.Calls = append(status.Calls, cs)
 	}
 	p.mu.Lock()
+	status.Ready, status.Pool = p.readyLocked(), p.poolLocked(time.Now())
 	status.Takeovers, status.LostCount = p.recentTakeovers(), p.lostCount
 	p.mu.Unlock()
 	sort.Slice(status.Workers, func(i, j int) bool { return status.Workers[i].Name < status.Workers[j].Name })
