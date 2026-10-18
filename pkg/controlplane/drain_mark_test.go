@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -44,14 +43,9 @@ func TestMarkDrainingDoesNotMoveOrWait(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPost, "/calls", nil)
 	req.Header.Set("Content-Type", "application/sdp")
 	p.Handler().ServeHTTP(rw, req)
-	require.Equal(t, 503, rw.Code)
-	var failure struct {
-		Code      string
-		Retryable bool
-	}
-	require.NoError(t, json.Unmarshal(rw.Body.Bytes(), &failure))
-	require.Equal(t, "no_target", failure.Code)
-	require.True(t, failure.Retryable)
+	require.Equal(t, 409, rw.Code)
+	require.Equal(t, "text/plain; charset=utf-8", rw.Header().Get("Content-Type"))
+	require.Equal(t, ErrNoTarget.Error()+"\n", rw.Body.String())
 }
 
 type refusingCreateWorker struct {
@@ -68,7 +62,7 @@ func (w *refusingCreateWorker) CreateSession(ctx context.Context, _ string) (str
 		return "", "", ctx.Err()
 	}
 }
-func TestRacedCreateReturnsRetryablePlacement(t *testing.T) {
+func TestRacedCreateUsesAnotherWorker(t *testing.T) {
 	p, a, _, _ := setup(t)
 	worker := &refusingCreateWorker{fakeWorker: a, entered: make(chan struct{}), release: make(chan struct{})}
 	p.workers["a"].worker = worker
@@ -88,15 +82,9 @@ func TestRacedCreateReturnsRetryablePlacement(t *testing.T) {
 	require.NoError(t, p.MarkDraining("a"))
 	close(worker.release)
 	rw := <-done
-	require.Equal(t, 503, rw.Code)
-	var failure struct {
-		Code      string
-		Retryable bool
-	}
-	require.NoError(t, json.Unmarshal(rw.Body.Bytes(), &failure))
-	require.Equal(t, "worker_draining", failure.Code)
-	require.True(t, failure.Retryable)
-	require.Empty(t, p.calls)
+	require.Equal(t, 201, rw.Code)
+	require.Len(t, p.calls, 1)
 	require.Zero(t, p.workers["a"].reserved)
 	require.Zero(t, a.next)
+	require.Equal(t, 1, p.workers["b"].worker.(*fakeWorker).next)
 }

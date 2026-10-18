@@ -81,14 +81,22 @@ func measureDrainTrial(t *testing.T, bin string, count int) (time.Duration, time
 	defer func() { require.NoError(t, h.Close()) }()
 	calls := make([]*callharness.Call, count)
 	var wg sync.WaitGroup
+	operationErrors := make(chan error, count)
+	checkErrors := func() {
+		for range count {
+			require.NoError(t, <-operationErrors)
+		}
+	}
 	for i := range calls {
-		wg.Go(func() { var err error; calls[i], err = h.Dial(ctx, callharness.CallOptions{}); require.NoError(t, err) })
+		wg.Go(func() { var err error; calls[i], err = h.Dial(ctx, callharness.CallOptions{}); operationErrors <- err })
 	}
 	wg.Wait()
+	checkErrors()
 	for _, call := range calls {
-		wg.Go(func() { require.NoError(t, call.SendMedia(ctx, 2100*time.Millisecond)) })
+		wg.Go(func() { operationErrors <- call.SendMedia(ctx, 2100*time.Millisecond) })
 	}
 	wg.Wait()
+	checkErrors()
 	// Every session has published a prefix and is pacing audio before drain.
 	for _, call := range calls {
 		require.Eventually(t, func() bool {
@@ -129,9 +137,10 @@ func measureDrainTrial(t *testing.T, bin string, count int) (time.Duration, time
 	time.Sleep(350 * time.Millisecond)
 	reports := make([]*callharness.Report, count)
 	for i, call := range calls {
-		wg.Go(func() { var err error; reports[i], err = call.Hangup(ctx); require.NoError(t, err) })
+		wg.Go(func() { var err error; reports[i], err = call.Hangup(ctx); operationErrors <- err })
 	}
 	wg.Wait()
+	checkErrors()
 	var largest time.Duration
 	for _, report := range reports {
 		require.Zero(t, report.DecryptionFailures.Total())

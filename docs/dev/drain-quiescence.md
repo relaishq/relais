@@ -2,8 +2,9 @@
 
 This is **one machine's measurement**, not a capacity claim or a shutdown SLA.
 Use the procedure on the deployment's worker binary, store, network and session
-count before setting `-agent-drain-move-reserve`. The flag has no default. An
-unset reserve skips the handler wait and keeps urgent v2 export behavior.
+count before setting `-agent-drain-move-reserve`. The flag has no default.
+Unset skips the handler wait; the placement mark always applies, followed by
+urgent v2 export.
 
 ## Sample: 2026-10-17
 
@@ -71,10 +72,25 @@ the wait. Remeasure after changing hardware, binary, store, routing, concurrency
 per-worker session count or background load. If that evidence is absent, leave
 the reserve unset.
 
+Control Drain can wait **up to 1 s for in-flight incoming reservations** before
+listing and moving the source calls. These settled-topology measurements did
+not include that wait. A **500 ms** reserve cannot cover a full 1 s reservation
+wait, even before moves. If raced incoming work can remain reserved, budget its
+settlement time plus measured move rounds and headroom, and enlarge the overall
+shutdown deadline if needed. The reserve must stay below `-drain-timeout` and
+reduces the available handler wait. With no such measurement, leave it unset.
+
 ## Reproduce
 
-Prerequisites: Go, Redis on PATH, and a ready wefty process node. No provider
-credentials are needed. Run from the checkout being measured:
+Prerequisites: Go and Redis on PATH. No provider credentials are needed. Run
+from the checkout being measured:
+
+```sh
+RELAIS_DRAIN_MEASURE=1 go test -v -count=1 -timeout=24m \
+  -run '^TestDrainMoveMeasurements$' ./cmd/relais-load/
+```
+
+Optionally use a ready wefty process node to retain the run and its logs:
 
 ```sh
 wefty exec --detach --json --max-runtime 25m -- sh -c \
@@ -90,7 +106,8 @@ ordinary tests and under `-short`. Its own trial contexts bound hangs, and the
 outer run stays below the 30-minute measurement budget. The sample completed in
 **262.926 s** including builds and teardown.
 
-Measured run: `run_8767b5a14e533cee8da0b18adaab581c`, on the slice-9 candidate
-based on `9a489a38c1e0319bbab4a9561a4199456f988109`, with uncommitted changes.
+Measured run: `run_8767b5a14e533cee8da0b18adaab581c`, measured on **`9a489a3` plus
+the then-uncommitted slice-9 changes**, before the
+subsequent rebase and review fixes. It does not measure the later PR head.
 Retain the raw wefty log alongside the exact build/configuration used for an
 operator decision; do not treat a later tree as the measured binary.

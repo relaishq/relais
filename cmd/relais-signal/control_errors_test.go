@@ -23,6 +23,7 @@ func TestControlErrorOutcomes(t *testing.T) {
 		{code: "closed", status: 409, want: "closed"},
 		{code: "internal", status: 409, want: "uncertain"},
 		{code: "future_code", status: 400, want: "uncertain"},
+		{code: "worker_draining", status: 409, want: "uncertain"},
 		{status: 409, body: `{}`, want: "uncertain"},
 		{status: 400, body: `{"message":"unknown failure"}`, want: "uncertain"},
 		{status: 400, body: `invalid JSON request`, want: "control_invalid"},

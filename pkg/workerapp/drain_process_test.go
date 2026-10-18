@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -152,20 +153,28 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 	}))
 	t.Cleanup(control.Close)
 	children := make([]*clusterprocess.Child, 2)
+	childLogs := make([]string, 2)
 	remotes := make([]*controlplane.RemoteWorker, 2)
 	for i := range children {
 		workerRedis := addr
 		if i == 0 && mode == "store-stall" {
 			workerRedis = proxy.listener.Addr().String()
 		}
-		args := []string{"-name", strconv.Itoa(i), "-control", control.URL, "-relay-leg", r.WorkerAddr().String(), "-relay-media", r.PublicAddr().String(), "-redis", workerRedis, "-redis-prefix", prefix, "-frame-cache-off", "-drain-timeout=3s", "-agent-drain-task-budget=1s"}
+		args := []string{"-name", strconv.Itoa(i), "-control", control.URL, "-relay-leg", r.WorkerAddr().String(), "-relay-media", r.PublicAddr().String(), "-redis", workerRedis, "-redis-prefix", prefix, "-frame-cache-off"}
+		if mode == "concurrent" || mode == "kill" {
+			args = append(args, "-drain-timeout=6s", "-agent-drain-task-budget=2s")
+		} else {
+			args = append(args, "-drain-timeout=3s", "-agent-drain-task-budget=1s")
+		}
 		if mode != "unset" {
 			args = append(args, "-agent-drain-move-reserve=1s")
 		}
 		encoded, err := json.Marshal(args)
 		require.NoError(t, err)
 		env := append(os.Environ(), "RELAIS_DRAIN_TEST_CHILD=1", "RELAIS_DRAIN_TEST_ARGS="+string(encoded), "RELAIS_DRAIN_TEST_GATE="+service.URL, "RELAIS_DRAIN_TEST_SOURCE="+strconv.Itoa(1-i), "RELAIS_SESSIONSTORE_KEY="+hex.EncodeToString(make([]byte, 32)), "GORACE=atexit_sleep_ms=0")
-		child, err := clusterprocess.Start(t.TempDir(), "worker", env, os.Args[0], "-test.run=^TestDrainProcessWorker$")
+		childDir := t.TempDir()
+		childLogs[i] = filepath.Join(childDir, "worker.log")
+		child, err := clusterprocess.Start(childDir, "worker", env, os.Args[0], "-test.run=^TestDrainProcessWorker$")
 		require.NoError(t, err)
 		children[i] = child
 		t.Cleanup(child.Stop)
@@ -183,6 +192,19 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 	h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: control.URL + "/calls", RelayAddr: r.PublicAddr()}})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, h.Close()) })
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		for i, path := range childLogs {
+			data, err := os.ReadFile(path)
+			t.Logf("DRAIN_PROCESS worker=%d log_error=%v log=%s", i, err, data)
+		}
+		statusCtx, stopStatus := context.WithTimeout(context.Background(), time.Second)
+		defer stopStatus()
+		status, err := plane.Status(statusCtx)
+		t.Logf("DRAIN_PROCESS final control status=%+v error=%v", status, err)
+	})
 	count := 1
 	if mode == "concurrent" {
 		count = 20
@@ -253,13 +275,18 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 				}
 			}
 			return json.Unmarshal(b, &snapshot) == nil && snapshot.State.Agent.Progress.Consumed > 0
-		}, 300*time.Millisecond, 5*time.Millisecond)
+		}, time.Second, 5*time.Millisecond, "a loaded race build can need several checkpoint ticks; keep this below the 2s handler budget")
 		time.Sleep(140 * time.Millisecond)
 		status, err = plane.Status(ctx)
 		require.NoError(t, err)
 		require.True(t, status.Workers[0].Draining)
 		require.False(t, status.Workers[0].Dead)
 		require.True(t, status.Workers[0].LastHeartbeat.After(heartbeat))
+		// Deliberately spend more than the old 1s budget. This proves the
+		// process case has scheduling headroom while checkpoints remain live.
+		if remaining := time.Until(start.Add(1100 * time.Millisecond)); remaining > 0 {
+			time.Sleep(remaining)
+		}
 		select {
 		case <-drained:
 			t.Fatal("control drain ran before handler wait finished")
@@ -285,8 +312,8 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 				require.Less(t, elapsed, 1800*time.Millisecond)
 			}
 			if mode == "concurrent" {
-				require.Greater(t, elapsed, 200*time.Millisecond)
-				require.Less(t, elapsed, 1800*time.Millisecond)
+				require.Greater(t, elapsed, time.Second)
+				require.Less(t, elapsed, 2500*time.Millisecond)
 			}
 			t.Logf("SIGTERM mode=%s sessions=%d control_drain_after=%s", mode, count, elapsed)
 		case <-ctx.Done():
@@ -304,21 +331,23 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 	}
 	for _, call := range calls {
 		var state drainProcessAgent
+		var lastStatus mediaworker.WorkerStatus
+		var lastReadError error
 		require.Eventually(t, func() bool {
 			response, err := http.Get(remotes[1].URL + "/status?agent-session=" + call.SessionID())
 			if err != nil {
 				return false
 			}
 			defer func() { _ = response.Body.Close() }()
-			var status mediaworker.WorkerStatus
-			if json.NewDecoder(response.Body).Decode(&status) != nil || status.AgentSession == nil {
+			lastReadError = json.NewDecoder(response.Body).Decode(&lastStatus)
+			if lastReadError != nil || lastStatus.AgentSession == nil {
 				return false
 			}
-			if json.Unmarshal(status.AgentSession.App, &state) != nil {
+			if json.Unmarshal(lastStatus.AgentSession.App, &state) != nil {
 				return false
 			}
 			return len(state.Results) >= 3 || mode == "kill" && len(state.Results) > 0
-		}, 8*time.Second, 10*time.Millisecond)
+		}, 8*time.Second, 10*time.Millisecond, "session %s results=%+v status=%+v read_error=%v", call.SessionID(), &state, &lastStatus, &lastReadError)
 		if mode == "concurrent" {
 			require.Len(t, state.Results, 4)
 			for _, r := range state.Results {

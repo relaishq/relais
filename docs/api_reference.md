@@ -49,13 +49,21 @@ it through the public signal frontend. It grants no new public control authority
 `POST /workers/{name}/drain` shares the mark and then runs existing planned moves.
 
 After the worker acknowledges the mark, it refuses raced `POST /sessions`
-creates with HTTP **409** and typed `worker_draining`. A raced offer through control or the
-existing authenticated signal frontend returns **503** JSON
-`{code:"worker_draining",message:"worker unavailable; retry placement",retryable:true}`
-and `Retry-After: 1`. No session was accepted. A fresh unpinned retry can use
-another worker; `no_target` uses the same retryable 503 envelope. Apply bounded
-backoff and a caller deadline. Unknown or lost responses remain uncertain;
-they do not grant permission to create another call. See [worker shutdown](deploy.md#worker-shutdown).
+creates with HTTP **409** and typed `worker_draining`. This private refusal is
+definite only after any unregistered claim has been released: no session, call
+or lease remains. Failed claim cleanup returns an uncertain outcome and is not
+retried. Control retries a definite refusal on another
+non-draining worker, excluding every worker that refused. Retries are bounded by
+the number of registered workers at the start of placement. An initially pinned
+create can use another worker after this refusal. Control never retries a lost
+reply, timeout, cancellation or unknown create failure.
+
+Public create responses stay unchanged. If no worker is left, control returns
+**409**, `Content-Type: text/plain; charset=utf-8`, with the existing body
+`controlplane: no non-draining target worker` followed by a newline. The signal
+frontend keeps its existing sanitized text response. No placement-specific JSON
+or `Retry-After` mapping is added. `worker_draining` is placement-only and cannot
+be returned by the Control route. See [worker shutdown](deploy.md#worker-shutdown).
 
 ## Routed agent Control
 
@@ -116,7 +124,7 @@ Control error classes (codes preserve the existing HTTP status):
 
 | Class | Codes | Client action |
 | --- | --- | --- |
-| retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session`, `worker_draining` | Retry the identical message with bounded backoff and a deadline. |
+| retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session` | Retry the identical message with bounded backoff and a deadline. |
 | definite | `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
 | uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
 

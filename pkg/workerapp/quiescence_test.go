@@ -2,6 +2,7 @@ package workerapp
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,8 +27,13 @@ func (w *observedDrain) QuiesceTasks(ctx context.Context) error {
 func TestQuiescenceBudgetAndMarkFailure(t *testing.T) {
 	for _, mode := range []string{"configured", "unset", "tight", "zero", "mark-fails", "mark-stalls"} {
 		t.Run(mode, func(t *testing.T) {
+			requests := make(chan error, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				require.Equal(t, "/private/workers/source/mark-draining", r.URL.Path)
+				var err error
+				if r.URL.Path != "/private/workers/source/mark-draining" || r.Method != http.MethodPost {
+					err = fmt.Errorf("unexpected mark request: %s %s", r.Method, r.URL.Path)
+				}
+				requests <- err
 				if mode == "mark-stalls" {
 					<-r.Context().Done()
 					return
@@ -54,6 +60,7 @@ func TestQuiescenceBudgetAndMarkFailure(t *testing.T) {
 			worker := new(observedDrain)
 			start := time.Now()
 			quiesceWorker(ctx, server.URL, "source", worker, taskBudget, reserve)
+			require.NoError(t, <-requests)
 			if mode == "mark-fails" || mode == "mark-stalls" {
 				require.False(t, worker.marked)
 				require.False(t, worker.waited)

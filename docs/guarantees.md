@@ -419,11 +419,17 @@ Opus clips without an external service. Profile-by-load or N+1 agent timing is
 **not measured**. The browser evidence is a single call in the local demo.
 
 V2 worker-local SIGTERM drain waits for task handlers only **when the operator
-sets a measured `-agent-drain-move-reserve`**. Unset skips waiting and uses urgent
-export for every v2 session. One shutdown deadline includes marking placement,
+sets a measured `-agent-drain-move-reserve`**. Unset skips the handler wait; the
+placement mark always applies, followed by urgent export for every v2 session.
+One shutdown deadline includes marking placement,
 the concurrent handler wait, moves, and waiting for sessions to leave. The wait
 never includes buffered playout: its backlog/cursor move exactly on a successful
 planned export. Unfinished handlers keep Retry/Abandon and typed outcomes.
+A handler that paces speech by emitting small chunks remains in flight: the
+host admits one emission per task per 100 ms, including the terminal result.
+A SIGTERM during Demo A's chunked `Play` speech can therefore use the whole task
+budget before urgent move, even though the playback queue itself is not awaited.
+The accepted prefix moves and `Play` resumes above `After`.
 Heartbeats/private APIs stay live; direct control drain stays urgent. See
 [the guide](build-an-agent.md#sigterm-handler-quiescence) and
 [one-machine measurements](dev/drain-quiescence.md). These measurements add no
@@ -486,8 +492,8 @@ one maximum-size forced write per second; burst must cover two maximum snapshots
 Wall-clock rollback never subtracts tokens and refill resumes from the new clock.
 Planned export carries the current remaining quota without waiting for store I/O.
 An in-flight snapshot conservatively reserves one maximum snapshot in the exported
-quota, floored at zero; failed writes still never debit the live bucket. Drain task-wait flags are
-reserved for slice 9 and are not exposed yet. The raw move
+quota, floored at zero; failed writes still never debit the live bucket. The
+worker-local drain flags above bound the optional handler wait. The raw move
 memory flag can tighten the supported 1 MiB per-session ceiling; larger payloads
 need a new wire-budget admission design before they can be enabled safely.
 

@@ -260,12 +260,17 @@ func drainAgentStatus(w *mediaworker.Worker, id string) (*mediaworker.AgentSessi
 type drainClaimStore struct {
 	sessionstore.Store
 	entered, release chan struct{}
+	claimed          atomic.Bool
+	releaseFailure   atomic.Bool
 }
 
 func (s *drainClaimStore) Claim(ctx context.Context, id string, worker netip.AddrPort, ttl time.Duration) (sessionstore.Lease, error) {
 	lease, err := s.Store.Claim(ctx, id, worker, ttl)
 	if err != nil {
 		return lease, err
+	}
+	if !s.claimed.CompareAndSwap(false, true) {
+		return lease, nil
 	}
 	close(s.entered)
 	select {
@@ -275,10 +280,25 @@ func (s *drainClaimStore) Claim(ctx context.Context, id string, worker netip.Add
 		return lease, ctx.Err()
 	}
 }
-func TestV2DrainRefusesCreateAfterClaim(t *testing.T) {
+func (s *drainClaimStore) Release(ctx context.Context, lease sessionstore.Lease) error {
+	if s.releaseFailure.Load() {
+		return sessionstore.ErrTransient
+	}
+	return s.Store.Release(ctx, lease)
+}
+func TestV2DrainClaimCleanupFailureDoesNotRetry(t *testing.T) {
 	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
 		gate := &drainClaimStore{Store: store, entered: make(chan struct{}), release: make(chan struct{})}
 		sys := startAgentHarness(t, gate)
+		t.Cleanup(func() {
+			gate.releaseFailure.Store(false)
+			leases, err := store.ListByWorker(context.Background(), sys.workers[0].LocalAddr())
+			if err == nil {
+				for _, lease := range leases {
+					_ = store.Release(context.Background(), lease)
+				}
+			}
+		})
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		done := make(chan error, 1)
@@ -288,16 +308,55 @@ func TestV2DrainRefusesCreateAfterClaim(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("create never claimed")
 		}
+		require.NoError(t, sys.plane.MarkDraining("0"))
 		sys.workers[0].BeginDrain()
+		gate.releaseFailure.Store(true)
 		close(gate.release)
-		require.ErrorContains(t, <-done, "worker_draining")
+		require.ErrorContains(t, <-done, "claim cleanup")
 		require.Zero(t, sys.workers[0].SessionCount())
+		require.Zero(t, sys.workers[1].SessionCount())
 		status, err := sys.plane.Status(ctx)
 		require.NoError(t, err)
 		require.Empty(t, status.Calls)
 		leases, err := store.ListByWorker(ctx, sys.workers[0].LocalAddr())
 		require.NoError(t, err)
+		require.Len(t, leases, 1, "cleanup failure must remain uncertain rather than permission to retry")
+	})
+}
+
+func TestV2DrainRacedCreateReplacedOnce(t *testing.T) {
+	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+		gate := &drainClaimStore{Store: store, entered: make(chan struct{}), release: make(chan struct{})}
+		sys := startAgentHarness(t, gate)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		type dialResult struct {
+			call *Call
+			err  error
+		}
+		done := make(chan dialResult, 1)
+		go func() { call, err := sys.h.Dial(ctx, CallOptions{}); done <- dialResult{call, err} }()
+		select {
+		case <-gate.entered:
+		case <-ctx.Done():
+			t.Fatal("create never claimed")
+		}
+		require.NoError(t, sys.plane.MarkDraining("0"))
+		sys.workers[0].BeginDrain()
+		close(gate.release)
+		result := <-done
+		require.NoError(t, result.err)
+		require.Equal(t, 1, sys.workers[1].SessionCount())
+		require.Zero(t, sys.workers[0].SessionCount())
+		status, err := sys.plane.Status(ctx)
+		require.NoError(t, err)
+		require.Len(t, status.Calls, 1)
+		require.Equal(t, "1", status.Calls[0].Owner)
+		leases, err := store.ListByWorker(ctx, sys.workers[0].LocalAddr())
+		require.NoError(t, err)
 		require.Empty(t, leases)
+		_, err = result.call.Hangup(ctx)
+		require.NoError(t, err)
 	})
 }
 
@@ -326,6 +385,78 @@ func TestV2DrainWaitsForCanceledHandlerReturn(t *testing.T) {
 		stop()
 		once.Do(func() { close(release) })
 		require.NoError(t, sys.workers[0].QuiesceTasks(ctx))
+		_, err = call.Hangup(ctx)
+		require.NoError(t, err)
+	})
+}
+
+// Chunk-paced handlers remain in flight even while their earlier audio plays.
+// Quiescence spends its budget, then urgent export resumes above the accepted
+// prefix rather than generating or playing that prefix twice.
+func TestV2DrainChunkedPlaybackUsesTaskBudget(t *testing.T) {
+	forAgentStores(t, func(t *testing.T, store sessionstore.Store) {
+		regs, _, gate, _ := pacerRegistrations(t, 80, false, false)
+		packets := pacerFixtures(t, 80)
+		after := make(chan uint64, 1)
+		for i := range regs {
+			regs[i].Tasks["tts/v1"] = func(ctx context.Context, run *agent.TaskRun) error {
+				select {
+				case <-gate:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				if i == 1 {
+					after <- run.After()
+				}
+				for start := 0; start < len(packets); start += 5 {
+					sequence := uint64(start/5 + 1)
+					if sequence <= run.After() {
+						continue
+					}
+					if err := run.Emit(ctx, sequence, agent.Chunk{Audio: &agent.EncodedAudio{Format: "audio/opus", Packets: packets[start : start+5]}}); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+		}
+		sys := startAgentHarness(t, store, agentHarnessSettings{v2: regs, remoteTarget: true, callbackBudget: time.Second})
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		call, err := sys.h.Dial(ctx, CallOptions{})
+		require.NoError(t, err)
+		received := receivePacer(call)
+		close(gate)
+		first := nextPaced(t, received)
+		wait, stop := context.WithTimeout(ctx, 250*time.Millisecond)
+		start := time.Now()
+		require.ErrorIs(t, sys.workers[0].QuiesceTasks(wait), context.DeadlineExceeded)
+		stop()
+		waitEnded := time.Now()
+		require.GreaterOrEqual(t, waitEnded.Sub(start), 225*time.Millisecond)
+		before, err := drainAgentStatus(sys.workers[0], call.SessionID())
+		require.NoError(t, err)
+		require.Len(t, before.Tasks, 1)
+		require.GreaterOrEqual(t, before.Tasks[0].Published, uint64(2))
+		_, err = sys.plane.Drain(ctx, "0")
+		require.NoError(t, err)
+		select {
+		case cursor := <-after:
+			require.GreaterOrEqual(t, cursor, before.Tasks[0].Published)
+			require.Less(t, cursor, uint64(16))
+		case <-ctx.Done():
+			t.Fatal("target did not resume chunked task")
+		}
+		playedDuringWait := false
+		for i, want := range packets {
+			sample := first
+			if i > 0 {
+				sample = nextPaced(t, received)
+			}
+			require.Equal(t, want, sample.packet.Payload)
+			playedDuringWait = playedDuringWait || sample.at.After(start) && sample.at.Before(waitEnded)
+		}
+		require.True(t, playedDuringWait, "audio keeps playing while the chunked handler uses its wait budget")
 		_, err = call.Hangup(ctx)
 		require.NoError(t, err)
 	})

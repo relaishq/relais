@@ -378,13 +378,17 @@ behavior, browser DTX capture, loaded drain time, or capacity approval.
 SIGTERM (or SIGINT) starts one `-drain-timeout` deadline, **5 s** by default.
 The worker first acknowledges a mark-only placement fence in control, then
 refuses raced local creates. Control's `/status` shows `draining`; heartbeats
-keep the mark. A raced create returns a definite, retryable `worker_draining`
-error to the caller (HTTP 503 through control and signal). No call is accepted
-by that refusal. An unpinned retry can select another worker; `no_target` is also
-a typed, retryable 503. Use bounded backoff and an overall caller deadline.
+keep the mark. A raced create receives a definite private `worker_draining`
+refusal after confirmed claim cleanup: no session, call or lease remains. If
+cleanup cannot be acknowledged, the outcome is uncertain and control does not
+retry. Control retries a definite refusal on another
+non-draining worker, excluding each refused worker and bounding attempts by the
+initial worker count. Lost replies, timeouts and unknown errors are not retried.
+Public create responses remain unchanged; if no worker remains, control returns
+its existing 409 text response.
 
-`-agent-drain-move-reserve` has **no default**. Unset means no handler wait:
-every v2 session uses today's urgent export. Set the flag only after measuring
+`-agent-drain-move-reserve` has **no default**. Unset skips the handler wait;
+the placement mark always applies. Every v2 session then uses urgent export. Set the flag only after measuring
 loaded control-drain rounds on the deployment's session count, store, network,
 worker binary, and default or configured control concurrency. Reserve time for
 those rounds plus placement-mark time and headroom. See the bounded procedure
@@ -397,13 +401,25 @@ and **67.020 / 80.734 / 93.532 ms**. For that machine at up to 32 sessions, the
 documented starting reserve is **500 ms**, covering the largest full HTTP round
 (87.158 ms), 100 ms marking, and headroom. Remeasure for the deployment; this
 is not a default or capacity approval.
+Control Drain can also wait **up to 1 s for in-flight incoming reservations**
+before it starts moving calls. The sample's 500 ms reserve did not exercise
+that wait, so it is not sufficient as a worst-case allowance for this case.
+Include reservation-settlement time plus loaded move rounds and headroom in
+the deployment's reserve; otherwise leave the reserve unset. A larger reserve
+reduces the local handler wait and must still be below `-drain-timeout`.
 
 With a reserve, the worker stops new task launches and queues new starts as
 `never_launched`. It waits concurrently across all v2 sessions for handlers and
 their terminal mailbox admission, **not buffered playout**. Results continue to
 be consumed; audio, checkpoints, heartbeats and the private API stay live. The
-wait holds no control call lock or control drain slot. The worker computes its
-single wait budget after the mark:
+wait holds no control call lock or control drain slot.
+A handler that paces playback by emitting small chunks still counts as in flight.
+Each task can publish only one emission per 100 ms, including its terminal
+result. Demo A's `Play` emits 100 ms audio chunks, so a SIGTERM during speech
+can use the whole task budget before the urgent move. Its accepted prefix moves
+and `Play` resumes above `After`; the playback queue itself is not the wait
+condition. There is no opt-out in this slice.
+The worker computes its single wait budget after the mark:
 
 ```text
 max(0, min(agent-drain-task-budget, remaining drain deadline - agent-drain-move-reserve))
@@ -540,7 +556,7 @@ Control error classes (codes preserve the existing HTTP status):
 
 | Class | Codes | Client action |
 | --- | --- | --- |
-| retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session`, `worker_draining` | Retry the identical message with bounded backoff and a deadline. |
+| retryable | `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session` | Retry the identical message with bounded backoff and a deadline. |
 | definite | `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
 | uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
 

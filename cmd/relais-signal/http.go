@@ -90,18 +90,6 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 				Message string `json:"message"`
 			}{failure.Code, policy.message})
 			headers.Set("Content-Type", "application/json")
-		} else if r.Request.Method == http.MethodPost && r.Request.URL.Path == "/calls" && r.StatusCode == http.StatusServiceUnavailable && retryablePlacement(data) {
-			var failure struct {
-				Code string `json:"code"`
-			}
-			_ = json.Unmarshal(data, &failure)
-			data, _ = json.Marshal(struct {
-				Code      string `json:"code"`
-				Message   string `json:"message"`
-				Retryable bool   `json:"retryable"`
-			}{failure.Code, "worker unavailable; retry placement", true})
-			headers.Set("Content-Type", "application/json")
-			headers.Set("Retry-After", "1")
 		} else if r.StatusCode >= 400 && r.StatusCode <= 599 {
 			data = []byte("signaling request failed; operation outcome may be uncertain\n")
 			headers.Set("Content-Type", "text/plain; charset=utf-8")
@@ -349,7 +337,6 @@ var controlErrors = map[string]controlErrorPolicy{
 	"unknown_session":       {"retryable", "call route unavailable; retry the identical message"},
 	"lease_lost":            {"retryable", "call ownership changed; retry the identical message"},
 	"move_in_progress":      {"retryable", "call move in progress; retry the identical message"},
-	"worker_draining":       {"retryable", "worker draining; retry the identical message on the live route"},
 	"no_target":             {"retryable", "worker unavailable; retry the identical message"},
 	"transient":             {"retryable", "control temporarily unavailable; retry the identical message"},
 	"deadline":              {"retryable", "control deadline exceeded before acceptance; retry the identical message"},
@@ -379,14 +366,4 @@ var controlErrors = map[string]controlErrorPolicy{
 	"replay_target_changed": {"retryable", "route replay target changed; retry the identical message"},
 	"uncertain":             {"uncertain", "control outcome uncertain; retry the identical message"},
 	"internal":              {"uncertain", "control outcome uncertain; retry the identical message"},
-}
-
-// Only definite placement refusals may be retried with a new offer. Transport
-// failures remain uncertain and must never be turned into retry permission.
-func retryablePlacement(data []byte) bool {
-	var failure struct {
-		Code      string `json:"code"`
-		Retryable bool   `json:"retryable"`
-	}
-	return json.Unmarshal(data, &failure) == nil && failure.Retryable && (failure.Code == "worker_draining" || failure.Code == "no_target")
 }

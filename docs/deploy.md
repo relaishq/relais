@@ -229,9 +229,9 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
 - `relais-worker`: `-name`, `-media` (private UDP), `-http`, `-relay-leg`,
   `-relay-media`, `-control` (control-plane HTTP URL), `-drain-timeout` (5 s).
   `-agent-drain-task-budget` defaults to 2 s; startup rejects values below 0
-  or above 2 s. `-agent-drain-move-reserve` has no default: unset skips v2
-  handler quiescence. When set, it must be greater than 0 and less than
-  `-drain-timeout`, or startup fails. Use a measured loaded move round plus
+  or above 2 s. `-agent-drain-move-reserve` has no default: unset skips the
+  handler wait; the placement mark always applies. When set, it must be greater
+  than 0 and less than `-drain-timeout`, or startup fails. Use a measured loaded move round plus
   mark time and headroom; see [the measurement procedure](dev/drain-quiescence.md).
 - `relais-control`: `-http`, `-relay` (relay control URL), and a repeated
   `-worker name=http://worker-address` for each worker. Start the relay and
@@ -262,7 +262,8 @@ not clear the mark. When `-agent-drain-move-reserve` is set, it stops new v2 tas
 launches and waits concurrently for handlers, never buffered playout. The wait
 is at most `max(0, min(agent-drain-task-budget, remaining deadline - reserve))`,
 computed once after the mark. New task starts stay `never_launched` and move
-exactly. Unset reserve skips waiting and preserves urgent v2 export behavior.
+exactly. Unset skips the handler wait; the placement mark always applies,
+followed by urgent v2 export.
 
 The worker then asks control to drain its calls through the existing planned
 move path, with the remaining deadline. Unfinished handlers use urgent typed
@@ -273,6 +274,17 @@ existing drain path, which marks as well.
 A second SIGINT or SIGTERM during drain uses the default immediate exit.
 It then closes. An unreachable control plane or failed drain is logged; the
 worker closes remaining sessions after the bounded attempt.
+
+The placement mark is sticky, like Drain. It is cleared only by
+`POST /private/workers/{name}/replace` after control has declared the old
+registration dead, recovery has settled, and its old leases are gone. Restarting
+a worker at the same address before control declares it dead keeps that
+registration excluded from placement; ordinary heartbeats do not clear it.
+If an early restart already occurred, stop that restarted process again.
+Keep it stopped, observe `dead` with `recovering=false` and zero old
+calls in private `/status`, then use the existing replacement operation before
+starting/rejoining the worker at that address. Do not clear a live mark or bypass
+the replacement guards. See the [process registration API](#process-flags-and-private-apis).
 
 Separate processes share an encrypted Redis frame cache. A resumed worker can
 replay cached video; on a cache miss it asks the caller for a fresh keyframe

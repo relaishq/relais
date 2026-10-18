@@ -92,6 +92,7 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
+	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/internal/udpbuffer"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/framecache"
@@ -507,7 +508,15 @@ func (w *Worker) createSession(ctx context.Context, offerSDP string, placed func
 		}
 		w.mu.Unlock()
 		sess.close()
-		w.release(sess) // claimed above, never registered
+		if refusal == ErrDraining {
+			// A definite draining refusal is retry permission. A failed release
+			// cannot grant that permission while the unregistered claim may remain.
+			if err := w.releaseLease(sess); err != nil {
+				return "", "", privateapi.Uncertain(fmt.Errorf("mediaworker: unregistered claim cleanup: %w", err))
+			}
+		} else {
+			w.release(sess)
+		}
 
 		return "", "", refusal
 	}
@@ -754,19 +763,21 @@ func (w *Worker) claim(ctx context.Context, sess *session) error {
 }
 
 func (w *Worker) release(sess *session) {
-	if w.cfg.Relay == nil {
-		return
+	if err := w.releaseLease(sess); err != nil {
+		w.log.Warnf("session %s: release lease: %v", sess.id, err)
 	}
+}
 
+func (w *Worker) releaseLease(sess *session) error {
+	if w.cfg.Relay == nil {
+		return nil
+	}
 	sess.mu.Lock()
 	lease := sess.lease
 	sess.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), ownershipTimeout)
 	defer cancel()
-
-	if err := w.cfg.Relay.Owners.Release(ctx, lease); err != nil {
-		w.log.Warnf("session %s: release lease: %v", sess.id, err)
-	}
+	return w.cfg.Relay.Owners.Release(ctx, lease)
 }
 
 // renewLeases keeps live sessions owned. A lost token fences silently, so
