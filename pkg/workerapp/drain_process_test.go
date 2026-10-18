@@ -329,6 +329,12 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 			t.Fatal("worker did not close within deadline")
 		}
 	}
+	// The queued task's final result follows its first chunk by the host's
+	// 100 ms emission spacing, so concurrent mode must wait for all four.
+	wantResults := 3
+	if mode == "concurrent" {
+		wantResults = 4
+	}
 	for _, call := range calls {
 		var state drainProcessAgent
 		var lastStatus mediaworker.WorkerStatus
@@ -346,7 +352,7 @@ func testWorkerDrainProcess(t *testing.T, addr, mode string) {
 			if json.Unmarshal(lastStatus.AgentSession.App, &state) != nil {
 				return false
 			}
-			return len(state.Results) >= 3 || mode == "kill" && len(state.Results) > 0
+			return len(state.Results) >= wantResults || mode == "kill" && len(state.Results) > 0
 		}, 8*time.Second, 10*time.Millisecond, "session %s results=%+v status=%+v read_error=%v", call.SessionID(), &state, &lastStatus, &lastReadError)
 		if mode == "concurrent" {
 			require.Len(t, state.Results, 4)
