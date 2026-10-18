@@ -90,6 +90,13 @@ func newHandlerWithClock(target *url.URL, token string, transport http.RoundTrip
 				Message string `json:"message"`
 			}{failure.Code, policy.message})
 			headers.Set("Content-Type", "application/json")
+		} else if r.Request.Method == http.MethodPost && r.Request.URL.Path == "/calls" && r.StatusCode == http.StatusServiceUnavailable && capacityRefusal(data) {
+			data, _ = json.Marshal(struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			}{"at_capacity", controlErrors["at_capacity"].message})
+			headers.Set("Content-Type", "application/json")
+			headers.Set("Retry-After", "1")
 		} else if r.StatusCode >= 400 && r.StatusCode <= 599 {
 			data = []byte("signaling request failed; operation outcome may be uncertain\n")
 			headers.Set("Content-Type", "text/plain; charset=utf-8")
@@ -337,6 +344,7 @@ var controlErrors = map[string]controlErrorPolicy{
 	"unknown_session":       {"retryable", "call route unavailable; retry the identical message"},
 	"lease_lost":            {"retryable", "call ownership changed; retry the identical message"},
 	"move_in_progress":      {"retryable", "call move in progress; retry the identical message"},
+	"at_capacity":           {"retryable", "worker pool full; retry the identical message with bounded backoff"},
 	"no_target":             {"retryable", "worker unavailable; retry the identical message"},
 	"transient":             {"retryable", "control temporarily unavailable; retry the identical message"},
 	"deadline":              {"retryable", "control deadline exceeded before acceptance; retry the identical message"},
@@ -367,4 +375,11 @@ var controlErrors = map[string]controlErrorPolicy{
 	"replay_target_changed": {"retryable", "route replay target changed; retry the identical message"},
 	"uncertain":             {"uncertain", "control outcome uncertain; retry the identical message"},
 	"internal":              {"uncertain", "control outcome uncertain; retry the identical message"},
+}
+
+func capacityRefusal(data []byte) bool {
+	var failure struct {
+		Code string `json:"code"`
+	}
+	return json.Unmarshal(data, &failure) == nil && failure.Code == "at_capacity"
 }

@@ -31,6 +31,8 @@ func readMetrics(t *testing.T, handler http.Handler) map[string]float64 {
 	values := make(map[string]float64)
 	allowedLabels := map[string][]string{
 		"relais_control_losses_total":            {"cause"},
+		"relais_control_pool_workers":            {"state"},
+		"relais_control_refusals_total":          {"reason"},
 		"relais_store_commands_total":            {"store"},
 		"relais_store_wire_commands_total":       {"client"},
 		"relais_store_wire_parse_failures_total": {"client"},
@@ -45,6 +47,12 @@ func readMetrics(t *testing.T, handler http.Handler) map[string]float64 {
 					allowed = []string{"result", "policy"}
 				}
 				require.Contains(t, allowed, label.GetName(), "%s: no caller or session labels", name)
+				if name == "relais_control_pool_workers" {
+					require.Contains(t, []string{"ready", "draining", "unreachable", "pending"}, label.GetValue())
+				}
+				if name == "relais_control_refusals_total" {
+					require.Contains(t, []string{"at_capacity", "no_target"}, label.GetValue())
+				}
 				key += "{" + label.GetName() + "=" + strconv.Quote(label.GetValue()) + "}"
 			}
 			switch {

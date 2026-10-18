@@ -286,10 +286,50 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   than 0 and less than `-drain-timeout`, or startup fails. Use a measured loaded move round plus
   mark time and headroom; see [the measurement procedure](dev/drain-quiescence.md).
 - `relais-control`: `-http`, `-relay` (relay control URL), and a repeated
-  `-worker name=http://worker-address` for each worker. Start the relay and
-  worker HTTP listeners before the control plane. Workers retry heartbeats
-  while it starts. Each process prints one JSON readiness line with its PID
-  and bound addresses; ephemeral loopback ports are the defaults.
+  `-worker name=http://worker-address` for each worker. `-worker-call-cap` sets
+  one hard budget per worker: live calls plus incoming reservations. Default 0
+  preserves unlimited admission. Negative values and malformed/duplicate worker
+  entries fail startup. Each process prints one JSON listener-readiness line
+  with its PID and bound addresses; ephemeral loopback ports are the defaults.
+  Control starts even if a listed worker or the relay is down. Each fixed worker
+  retries independently, with a one-second request deadline and backoff from
+  100 ms to 5 s. Relay status/registration retries use the same bound (200 ms
+  after the first failure, up to 5 s; 100 ms when healthy). Worker attempts log
+  `worker bootstrap name=... attempt=... result=registered|retry: ...`.
+  Relay logs use `relay bootstrap attempt=... instance=... workers=... result=...`:
+  failures, the first successful registration, recovery after a failure, and
+  changes to the relay instance or registered allowlist. Unchanged healthy
+  polls produce no log lines.
+  Only configured workers are discovered. Workers retry heartbeats while
+  control starts. Check control `/status` `ready`, not just its listener line:
+  creates return existing `no_target` (409) until the relay allowlist is ready
+  and at least one registered worker is ready. After that first success, a
+  failed relay status poll does not revoke readiness. When a different relay
+  instance answers, creates are gated again until its allowlist is restored.
+  Other missing workers do not block placement on healthy workers. This bootstrap does not reconstruct
+  pre-restart call metadata; restart reconciliation is a later slice.
+
+With a positive cap, full ready workers refuse new calls with HTTP 503, JSON
+`code: at_capacity`, and `Retry-After: 1`. No ready worker keeps `no_target`
+(409). Signal preserves the capacity refusal as retryable. Ended calls free
+capacity. Planned moves and drains never force calls onto full destinations;
+those calls stay on the source and the operation returns a typed refusal.
+Crash takeover prefers workers below the cap but can exceed it to preserve
+live calls. Recovery of an already-exported planned move follows this overflow
+rule too: it cannot stay on its original running session. Keep spare headroom for this recovery load; the cap is admission
+policy, not a measured media capacity guarantee. Private status and metrics
+report over-cap calls and a coherent pool sample with its timestamp, age and
+freshness. Missing demand is null/omitted, never zero; failed refreshes retain
+the old value marked stale. In the lean two-worker profile, starting or
+restarting control while one listed worker host is down removes the whole-pool
+demand signal until that host answers. Calls can still use the other worker.
+The sample's `never_answered_workers` count (also
+`relais_control_pool_never_answered_workers`) explains this missing demand;
+it is included in `pending_workers`. Once an address is known, a later worker
+outage is counted as unreachable and does not by itself remove demand.
+Refusal counters remain live even when the sample cannot refresh. Before the
+first sample, sample-derived metrics are omitted, rather than reported as zero.
+See [pool fields and metrics](api_reference.md#fixed-pool-admission-and-telemetry).
 
 WHIP-style means a single WebRTC-HTTP offer/answer exchange, not full WHIP
 compliance. SRTP is encrypted media; SRTCP is its encrypted control traffic.

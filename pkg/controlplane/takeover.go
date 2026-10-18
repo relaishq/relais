@@ -31,6 +31,10 @@ import (
 // fencing/dropping its old sessions. Remote workers need an explicit token
 // for this acknowledgment; the in-process contract uses the next heartbeat.
 type Config struct {
+	// WorkerCallCap limits calls plus incoming reservations; zero is unlimited.
+	WorkerCallCap int
+	// PoolSampleMaxAge marks cached telemetry stale (default five seconds).
+	PoolSampleMaxAge time.Duration
 	// StoreOutageBudget must match the workers (zero selects 30 seconds).
 	StoreOutageBudget time.Duration
 	// LeaseTTL overrides transfer lifetime, including outage headroom.
@@ -48,6 +52,9 @@ type Config struct {
 
 func (c Config) defaults() Config {
 	c.CheckpointEnvelope = c.CheckpointEnvelope.Defaults()
+	if c.PoolSampleMaxAge <= 0 {
+		c.PoolSampleMaxAge = 5 * time.Second
+	}
 	if c.LeaseTTL <= 0 {
 		c.LeaseTTL = sessionstore.WorkerLeaseTTL(c.StoreOutageBudget)
 	}
@@ -124,6 +131,7 @@ func (p *Plane) Run(ctx context.Context) error {
 				nextReconcile = now.Add(min(p.ttl/2, 1500*time.Millisecond))
 				wg.Go(func() {
 					p.reconcileOwnership(ctx)
+					_ = p.SamplePool(ctx)
 					reconcileMu.Lock()
 					reconciling = false
 					reconcileMu.Unlock()
@@ -482,9 +490,11 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 				excluded[addr] = true
 			}
 		}
-		target, pickErr := p.pickExcluding(ctx, name, excluded)
+		// An exported call cannot stay on its original running session. All
+		// retained recovery follows takeover's overflow rule to preserve it.
+		target, pickErr := p.pickCapacity(ctx, name, excluded, true, c.id)
 		if pickErr != nil {
-			if !errors.Is(pickErr, ErrNoTarget) {
+			if !errors.Is(pickErr, ErrNoTarget) && !errors.Is(pickErr, ErrAtCapacity) {
 				return
 			}
 			// Eligibility can change after the pinned registration check.

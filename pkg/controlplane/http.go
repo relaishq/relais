@@ -29,7 +29,7 @@ var RemoteErrors = func() map[string]error {
 	maps.Copy(codes, relay.RemoteErrors)
 	maps.Copy(codes, map[string]error{
 		"unknown_call": ErrUnknownCall, "move_in_progress": ErrMoveInProgress, "no_target": ErrNoTarget,
-		"ended": sessionstore.ErrEnded,
+		"ended": sessionstore.ErrEnded, "at_capacity": ErrAtCapacity,
 	})
 	return codes
 }()
@@ -126,7 +126,13 @@ func (p *Plane) Handler() http.Handler {
 	mux.HandleFunc("GET /status", func(w http.ResponseWriter, r *http.Request) {
 		status, err := p.Status(r.Context())
 		if err != nil {
-			writeError(w, err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(errorStatus(err))
+			writeJSON(w, struct {
+				Ready bool       `json:"ready"`
+				Pool  PoolSample `json:"pool"`
+				Error string     `json:"error"`
+			}{Pool: p.PoolSnapshot(), Error: err.Error()})
 			return
 		}
 		writeJSON(w, status)
@@ -140,6 +146,13 @@ func writeJSON(w http.ResponseWriter, value any) {
 }
 
 func writeError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrAtCapacity) {
+		w.Header().Set("Retry-After", "1")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, privateapi.Failure{Code: "at_capacity", Message: ErrAtCapacity.Error()})
+		return
+	}
 	http.Error(w, err.Error(), errorStatus(err))
 }
 
@@ -147,6 +160,8 @@ func errorStatus(err error) int {
 	code := http.StatusInternalServerError
 	var unknown *unknownWorkerError
 	switch {
+	case errors.Is(err, ErrAtCapacity):
+		code = http.StatusServiceUnavailable
 	case errors.As(err, &unknown):
 		code = http.StatusInternalServerError
 	case errors.Is(err, ErrUnknownCall), errors.Is(err, sessionstore.ErrNotFound), errors.Is(err, mediaworker.ErrUnknownSession):
