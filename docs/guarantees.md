@@ -124,8 +124,8 @@ checkpoint attempt and advanced only by acknowledged writes, prevents reuse of a
 sent epoch/sequence pair in encrypted DTLS epochs. Plaintext epoch zero is exempt.
 This guarantee assumes the store never loses an acknowledged write: unlike the
 age-scaled SRTP margins, the fixed DTLS reservation cannot self-correct after an
-asynchronous replica failover. [ADR 0011](adr/0011-deploy-and-autoscale.md) requires
-a durable store for this reason.
+asynchronous replica failover. [ADR 0011](adr/0011-deploy-and-autoscale.md) already
+requires a durable store for ownership safety.
 
 A confirmed live export for a planned move uses no crash margin. An uncertain
 export or adoption uses the fenced checkpoint and its measured ages. Relay

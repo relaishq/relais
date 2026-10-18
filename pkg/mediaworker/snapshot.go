@@ -73,7 +73,10 @@ func (s *session) captureSnapshotCandidateMode(captured time.Time, candidate *ag
 			return nil, agentState{}, dtlsSequenceCheckpoint{}, err
 		}
 		next = dtlsSequenceCheckpoint{epoch: serialized.LocalEpoch, next: serialized.SequenceNumber}
-		s.dtlsProvisional = &next
+		if err := s.armDTLSBound(next); err != nil {
+			s.mu.Unlock()
+			return nil, agentState{}, dtlsSequenceCheckpoint{}, err
+		}
 	}
 	state := s.state
 	if !captured.IsZero() {
