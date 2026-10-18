@@ -40,6 +40,10 @@ func (s *session) captureSnapshotAt(captured time.Time) ([]byte, agentState, err
 }
 
 func (s *session) captureSnapshotCandidate(captured time.Time, candidate *agentState) ([]byte, agentState, error) {
+	return s.captureSnapshotCandidateMode(captured, candidate, false)
+}
+
+func (s *session) captureSnapshotCandidateMode(captured time.Time, candidate *agentState, writing bool) ([]byte, agentState, error) {
 	s.mu.Lock()
 	if s.fenced.Load() || s.ctx.Err() != nil {
 		s.mu.Unlock()
@@ -50,6 +54,24 @@ func (s *session) captureSnapshotCandidate(captured time.Time, candidate *agentS
 		return nil, agentState{}, ErrNotEstablished
 	}
 	dtlsState, ok := s.dtlsConn.ConnectionState()
+	var binary []byte
+	// Arm at the capture boundary, before releasing the packet lock. Waiting
+	// until encoding or PutState would leave an unbounded tail before the
+	// first write can commit. Read-only snapshots and admission do not arm it.
+	if ok && writing && s.dtlsProvisional == nil && s.dtlsAcknowledged == nil {
+		var err error
+		binary, err = dtlsState.MarshalBinary()
+		if err != nil {
+			s.mu.Unlock()
+			return nil, agentState{}, fmt.Errorf("mediaworker: snapshot DTLS: %w", err)
+		}
+		serialized, err := decodeDTLSSerializedState(binary)
+		if err != nil {
+			s.mu.Unlock()
+			return nil, agentState{}, err
+		}
+		s.dtlsProvisional = &dtlsSequenceCheckpoint{epoch: serialized.LocalEpoch, next: serialized.SequenceNumber}
+	}
 	state := s.state
 	if !captured.IsZero() {
 		state.Checkpoint.CapturedAt = captured
@@ -70,9 +92,12 @@ func (s *session) captureSnapshotCandidate(captured time.Time, candidate *agentS
 	if !ok {
 		return nil, agentState{}, errors.New("mediaworker: DTLS connection state unavailable")
 	}
-	binary, err := dtlsState.MarshalBinary()
-	if err != nil {
-		return nil, agentState{}, fmt.Errorf("mediaworker: snapshot DTLS: %w", err)
+	if binary == nil {
+		var err error
+		binary, err = dtlsState.MarshalBinary()
+		if err != nil {
+			return nil, agentState{}, fmt.Errorf("mediaworker: snapshot DTLS: %w", err)
+		}
 	}
 	now := captured
 	if now.IsZero() {
@@ -172,7 +197,7 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	var state []byte
 	var pair agentState
 	if err == nil {
-		state, pair, err = s.captureSnapshotAt(captured)
+		state, pair, err = s.captureSnapshotCandidateMode(captured, nil, true)
 	}
 	if err != nil {
 		s.mu.Lock()
@@ -216,6 +241,10 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 			return fmt.Errorf("%w: required v2 snapshot byte budget", agent.ErrCapacity)
 		}
 	}
+	dtlsNext, err := checkpointDTLSSequence(state)
+	if err != nil {
+		return err
+	}
 	err = s.worker.cfg.Relay.Owners.PutState(ctx, lease, state)
 	if err == nil {
 		if pair.V2 != nil {
@@ -230,6 +259,8 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 		}
 		s.snapshotStored.Store(true)
 		s.mu.Lock()
+		s.dtlsAcknowledged = &dtlsNext
+		s.dtlsProvisional = nil
 		s.state.Checkpoint.Successes++
 		s.state.Checkpoint.CapturedAt = captured
 		s.checkpointRates(&s.state.Checkpoint)

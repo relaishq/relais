@@ -707,6 +707,13 @@ func (s *session) resume(dtlsBytes []byte, opts ResumeOptions) (*dtls.Conn, erro
 	// The caller nominated its address before the snapshot.
 	s.nominatedOnce.Do(func() { close(s.nominated) })
 
+	if opts.Kind == agent.Takeover || opts.SequenceMargin > 0 || opts.SRTCPIndexMargin > 0 {
+		var err error
+		dtlsBytes, err = advanceDTLSSequence(dtlsBytes)
+		if err != nil {
+			return nil, err
+		}
+	}
 	var dtlsState dtls.State
 	if err := dtlsState.UnmarshalBinary(dtlsBytes); err != nil {
 		return nil, fmt.Errorf("DTLS state: %w", err)

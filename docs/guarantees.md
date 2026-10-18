@@ -118,6 +118,8 @@ counter margins if they still fit the safe sequence budget. Otherwise it ends
 the call cleanly and counts the loss. This policy protects decryption; it does
 not promise that a stale call survives.
 
+Crash takeover skips 64 DTLS record sequences beyond the committed next sequence; an outgoing guard, armed at the first checkpoint attempt and advanced only by acknowledged writes, prevents reuse of a sent epoch/sequence pair.
+
 A confirmed live export for a planned move uses no crash margin. An uncertain
 export or adoption uses the fenced checkpoint and its measured ages. Relay
 restart alone keeps the live workers and their media state; it does not restore

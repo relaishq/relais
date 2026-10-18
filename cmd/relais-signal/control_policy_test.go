@@ -19,7 +19,7 @@ func TestControlErrorPolicyCompleteness(t *testing.T) {
 	classes := map[string]string{}
 	groups := map[string]string{
 		"retryable": "control_not_ready control_rejected agent_backpressure agent_capacity closed not_established unknown_session lease_lost move_in_progress no_target transient deadline canceled session_exists checkpoint_clock export_not_flushed barrier_timeout held hold_limit hold_expired replay_in_progress replay_not_ready replay_target_changed",
-		"definite":  "control_invalid control_conflict control_order control_stale control_unsupported move_budget agent_incompatible agent_save agent_restore agent_version agent_oversize unknown_call not_found ended unsupported_offer sequence_budget srtcp_exhausted export_incompatible buffer_disabled",
+		"definite":  "control_invalid control_conflict control_order control_stale control_unsupported move_budget agent_incompatible agent_save agent_restore agent_version agent_oversize unknown_call not_found ended unsupported_offer sequence_budget srtcp_exhausted dtls_exhausted export_incompatible buffer_disabled",
 		"uncertain": "uncertain internal",
 	}
 	for class, codes := range groups {
