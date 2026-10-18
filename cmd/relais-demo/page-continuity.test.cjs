@@ -268,18 +268,63 @@ test('voice selection shows a voice intro before the call starts; stock intro re
  assert.match(fs.readFileSync('cmd/relais-demo/web/index.html','utf8'),/Publish a test pattern or your camera/);
 });
 
-test('completed voice timing line uses server spans and preserves the last turn while recording',async()=>{
+test('completed voice timing line uses server offsets and clears while recording',async()=>{
  const {api,context,elements}=page('',true);const s=call();s.agentMode='voice-agent/v1';api.setCall(s);
- const timings={transcribe_started_ns:100000000,transcribe_finished_ns:1000000000,reply_started_ns:1100000000,reply_finished_ns:3200000000,speech_started_ns:3200000000,speech_finished_ns:4400000000,first_queued_ns:4500000000};
- let polls=0;context.fetch=async()=>({ok:true,text:async()=>JSON.stringify({phase:++polls===1?'idle':'recording',timings})});
+ const timings={transcribe_finished_ns:900000000,reply_started_ns:1100000000,reply_finished_ns:3200000000,speech_started_ns:3200000000,speech_finished_ns:4400000000,first_queued_ns:4500000000};
+ let polls=0;context.fetch=async()=>{if(polls===1)assert.equal(elements.get('voice-timing').textContent,'Last turn: transcribe 0.9 s · reply 2.1 s · first speech 1.2 s · first audio queued 4.5 s');return {ok:true,text:async()=>JSON.stringify({phase:++polls===1?'idle':'recording',timings})};};
  context.setTimeout=fn=>{if(polls>=2)s.stopped=true;fn();};await api.voiceStatuses(s);
- assert.equal(elements.get('voice-timing').textContent,'Last turn: transcribe 0.9 s · reply 2.1 s · first speech 1.2 s · first audio queued 4.5 s');
+ assert.equal(elements.get('voice-timing').textContent,'');
 });
 
 test('voice timing line floors backward store-clock spans at zero',async()=>{
  const {api,context,elements}=page('',true);const s=call();s.agentMode='voice-agent/v1';api.setCall(s);
- const timings={transcribe_started_ns:1000000000,transcribe_finished_ns:500000000,reply_started_ns:1000000000,reply_finished_ns:500000000,speech_started_ns:1000000000,speech_finished_ns:500000000,first_queued_ns:2000000000};
+ const timings={transcribe_finished_ns:500000000,reply_started_ns:1000000000,reply_finished_ns:500000000,speech_started_ns:1000000000,speech_finished_ns:500000000,first_queued_ns:2000000000};
  context.fetch=async()=>({ok:true,text:async()=>JSON.stringify({phase:'idle',timings})});context.setTimeout=fn=>{s.stopped=true;fn();};
  await api.voiceStatuses(s);
+ assert.equal(elements.get('voice-timing').textContent,'Last turn: transcribe 0.5 s · reply 0.0 s · first speech 0.0 s · first audio queued 2.0 s');
+});
+
+
+test('voice timing line renders the real HTTP whitelist response without NaN',async()=>{
+ const {execFileSync}=require('node:child_process');
+ const output=execFileSync('go',['test','-run','^TestVoiceTimingStatusFixture$','-count=1','-v','.'],{cwd:__dirname,encoding:'utf8',timeout:60000});
+ const match=output.match(/voice-timing-status-json: (\{[^\n]+\})/);
+ assert.ok(match,'Go fixture must return the actual whitelist JSON');
+ const {api,context,elements}=page('',true);const s=call();s.agentMode='voice-agent/v1';api.setCall(s);
+ context.fetch=async()=>({ok:true,text:async()=>match[1]});context.setTimeout=fn=>{s.stopped=true;fn();};
+ await api.voiceStatuses(s);
+ assert.equal(elements.get('voice-timing').textContent,'Last turn: transcribe 0.9 s · reply 2.1 s · first speech 1.2 s · first audio queued 4.4 s');
+ assert.doesNotMatch(elements.get('voice-timing').textContent,/NaN/);
+});
+
+test('voice timing line clears on ptt.start',async()=>{
+ const {api,context,elements}=page('',true);const s=call();s.agentMode='voice-agent/v1';s.ptt={send:async name=>assert.equal(name,'ptt.start')};api.setCall(s);
+ elements.get('voice-timing').textContent='Last turn: old timings';
+ await context.window.relaisDemo.pttStart();
+ assert.equal(elements.get('voice-timing').textContent,'');
+});
+
+test('voice timing line clears on call start',async()=>{
+ const {api,context,elements}=page('',true);
+ elements.get('voice-timing').textContent='Last turn: old timings';
+ context.RTCPeerConnection=function(){return {close(){}};};
+ await assert.rejects(api.start(),/status unavailable/);
+ assert.equal(elements.get('voice-timing').textContent,'');
+});
+
+
+test('voice timing line defaults absent offsets to zero',async()=>{
+ const {api,context,elements}=page('',true);const s=call();s.agentMode='voice-agent/v1';api.setCall(s);
+ context.fetch=async()=>({ok:true,text:async()=>JSON.stringify({phase:'idle',timings:{first_queued_ns:2e9}})});context.setTimeout=fn=>{s.stopped=true;fn();};
+ await api.voiceStatuses(s);
  assert.equal(elements.get('voice-timing').textContent,'Last turn: transcribe 0.0 s · reply 0.0 s · first speech 0.0 s · first audio queued 2.0 s');
+});
+
+test('voice timing line stays clear when an old idle poll arrives after ptt.start',async()=>{
+ const {api,context,elements}=page('',true);const s=call();s.agentMode='voice-agent/v1';s.voice={turn:10};s.ptt={send:async()=>{}};api.setCall(s);
+ elements.get('voice-timing').textContent='Last turn: old timings';
+ await context.window.relaisDemo.pttStart();
+ context.fetch=async()=>({ok:true,text:async()=>JSON.stringify({turn:10,phase:'idle',timings:{transcribe_finished_ns:1e9,first_queued_ns:2e9}})});context.setTimeout=fn=>{s.stopped=true;fn();};
+ await api.voiceStatuses(s);
+ assert.equal(elements.get('voice-timing').textContent,'');
 });

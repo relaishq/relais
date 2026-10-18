@@ -128,11 +128,9 @@ func (a *Agent) finish(at time.Time) agent.Effects {
 	if a.state.ReleaseAt == 0 && !at.IsZero() {
 		a.state.ReleaseAt = at.UnixNano()
 	}
-	a.state.Timings.RecordingClosed = a.offset(at)
 	if a.length <= 1 {
 		return a.reset(agent.Failed, "empty_recording", "No speech was recorded. Hold to talk again.")
 	}
-	a.state.Timings.TranscribeStarted = a.offset(at)
 	return a.task(TranscribeKind, "transcribing", a.buffer)
 }
 func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error) {

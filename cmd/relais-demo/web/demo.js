@@ -144,9 +144,11 @@
         if(!active(s))return;
         s.voice=v;el['voice-phase'].textContent=v.phase;
         const t=v.timings;
-        if(v.phase==='idle' && t?.first_queued_ns>0){
-          const seconds=n=>(Math.max(0,n)/1e9).toFixed(1)+' s';
-          el['voice-timing'].textContent=`Last turn: transcribe ${seconds(t.transcribe_finished_ns-t.transcribe_started_ns)} · reply ${seconds(t.reply_finished_ns-t.reply_started_ns)} · first speech ${seconds(t.speech_finished_ns-t.speech_started_ns)} · first audio queued ${seconds(t.first_queued_ns)}`;
+        if(v.phase!=='idle')el['voice-timing'].textContent='';
+        if(v.phase==='idle' && t?.first_queued_ns>0 && (!s.voiceTimingPending || (!Number.isFinite(s.voiceTimingPreviousTurn) || v.turn>s.voiceTimingPreviousTurn))){
+          s.voiceTimingPending=false;
+          const seconds=n=>(Math.max(0,Number.isFinite(n)?n:0)/1e9).toFixed(1)+' s';
+          el['voice-timing'].textContent=`Last turn: transcribe ${seconds(t.transcribe_finished_ns??0)} · reply ${seconds((t.reply_finished_ns??0)-(t.reply_started_ns??0))} · first speech ${seconds((t.speech_finished_ns??0)-(t.speech_started_ns??0))} · first audio queued ${seconds(t.first_queued_ns??0)}`;
         }
         el['voice-transcript'].textContent=v.transcript || '';el['voice-reply'].textContent=v.reply || '';
         el['voice-notice'].textContent=s.controlNotice || v.notice || v.error || (v.phase==='recording'?'Listening. Release to answer.':'');
@@ -294,7 +296,7 @@
     if(!Number.isFinite(headroomRatio) || headroomRatio<=0 || headroomRatio>1)throw new Error('headroomRatio must be greater than zero and at most one');
     if(source==='test')source='pattern';
     if(!['pattern','camera','microphone'].includes(source)) throw new Error('source must be pattern (or test), camera, or microphone');
-    el.source.value=source;
+    el.source.value=source;el['voice-timing'].textContent='';
     const s={source,baselineCount,headroomRatio,pc:new RTCPeerConnection({bundlePolicy:'max-bundle',rtcpMuxPolicy:'require'}),...stamp(),startedAt:new Date().toISOString(),
       transitions:[],owners:[],sourceFrames:[],frames:[],frameMeta:[],contentFrames:[],counterReadFailures:[],hiddenPeriods:[],longTasks:[],baselines:[],samples:[],events:[],descriptionChanges:[],negotiations:[],restartCalls:[],sampleErrors:[],lastVideo:null,lastAudio:null,lastContent:null,maxCounter:null,armed:false,stopped:false};
     call=s;el.error.textContent='';observePage(s);attach(s);statuses(s);samples(s);
@@ -511,6 +513,7 @@
   }
   function pttPress() {
     const s=call;if(!s || !active(s) || !s.ptt || s.pttHeld)return;
+    s.voiceTimingPending=true;s.voiceTimingPreviousTurn=s.voice?.turn;el['voice-timing'].textContent='';
     s.pttHeld=true;s.controlNotice='';el.ptt.textContent='Release to answer';el['voice-notice'].textContent='Sending start…';
     return s.ptt.send('ptt.start').catch(()=>{});
   }

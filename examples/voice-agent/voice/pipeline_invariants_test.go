@@ -61,12 +61,12 @@ func TestPipelineWorstStateFitsDeclaredBudget(t *testing.T) {
 		a.state.History = append(a.state.History, Exchange{boundedText(text, 512), boundedText(text, 512)})
 	}
 	a.state.ReleaseAt = math.MaxInt64
-	a.state.Timings = Timings{RecordingClosed: math.MaxInt64, TranscribeStarted: math.MaxInt64, TranscribeFinished: math.MaxInt64, ReplyStarted: math.MaxInt64, ReplyFinished: math.MaxInt64, ReplyCharacters: MaxReplyBytes, FirstSentenceCharacters: MaxSegmentRunes, SpeechStarted: math.MaxInt64, SpeechFinished: math.MaxInt64, SpeechAudio: math.MaxInt64, FirstQueued: math.MaxInt64}
+	a.state.Timings = Timings{TranscribeFinished: math.MaxInt64, ReplyStarted: math.MaxInt64, ReplyFinished: math.MaxInt64, ReplyCharacters: MaxReplyBytes, FirstSentenceCharacters: MaxSegmentRunes, SpeechStarted: math.MaxInt64, SpeechFinished: math.MaxInt64, SpeechAudio: math.MaxInt64, FirstQueued: math.MaxInt64}
 	saved, err := a.Save(context.Background())
 	require.NoError(t, err)
 	// 5,632 bounded text bytes + 106 notice bytes + 22 error bytes +
-	// 1,413 bytes of field names, punctuation, IDs, numbers and flags.
-	require.Equal(t, 5632+106+22+1413, len(saved.Bytes))
+	// 1,327 bytes of field names, punctuation, IDs, numbers and flags.
+	require.Equal(t, 5632+106+22+1327, len(saved.Bytes))
 	require.LessOrEqual(t, len(saved.Bytes), MaxStateBytes)
 	var roundTrip State
 	require.NoError(t, json.Unmarshal(saved.Bytes, &roundTrip))

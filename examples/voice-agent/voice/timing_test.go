@@ -28,9 +28,7 @@ func TestTurnTimingUsesHostClockAndSurvivesMove(t *testing.T) {
 	require.Equal(t, a.state.Timings, b.state.Timings)
 	_, err = b.Handle(ctx, agent.Event{At: release.Add(2 * time.Second), Kind: agent.TaskMessage, Result: &agent.TaskResult{Turn: 10, TaskID: "stt", Sequence: 2, Final: true, Outcome: agent.OK}})
 	require.NoError(t, err)
-	require.EqualValues(t, 0, b.state.Timings.TranscribeStarted)
 	require.EqualValues(t, time.Second, b.state.Timings.TranscribeFinished)
-	require.EqualValues(t, 0, b.state.Timings.RecordingClosed)
 	saved.Version = 3
 	require.ErrorIs(t, b.Restore(ctx, saved), agent.ErrVersion)
 }

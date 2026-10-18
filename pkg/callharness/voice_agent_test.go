@@ -195,9 +195,10 @@ func TestVoiceAgentMoveCuts(t *testing.T) {
 				require.Equal(t, "Say hello.", s.Transcript)
 				require.Equal(t, "Hello from Relais.", s.Reply)
 				require.Positive(t, s.ReleaseAt)
-				require.Zero(t, s.Timings.RecordingClosed)
-				require.Zero(t, s.Timings.TranscribeStarted)
-				require.GreaterOrEqual(t, s.Timings.TranscribeFinished, s.Timings.TranscribeStarted)
+				require.Positive(t, s.Timings.TranscribeFinished)
+				require.Positive(t, s.Timings.ReplyFinished)
+				require.Positive(t, s.Timings.SpeechFinished)
+				require.Positive(t, s.Timings.FirstQueued)
 				require.GreaterOrEqual(t, s.Timings.ReplyStarted, s.Timings.TranscribeFinished)
 				require.GreaterOrEqual(t, s.Timings.ReplyFinished, s.Timings.ReplyStarted)
 				require.GreaterOrEqual(t, s.Timings.SpeechStarted, s.Timings.ReplyFinished)
@@ -207,7 +208,6 @@ func TestVoiceAgentMoveCuts(t *testing.T) {
 				require.Equal(t, len("Hello from Relais."), s.Timings.ReplyCharacters)
 				require.Equal(t, len("Hello from Relais."), s.Timings.FirstSentenceCharacters)
 				if beforeMove.TranscribeFinished > 0 {
-					require.Equal(t, beforeMove.TranscribeStarted, s.Timings.TranscribeStarted)
 					require.Equal(t, beforeMove.TranscribeFinished, s.Timings.TranscribeFinished)
 				}
 				if beforeMove.ReplyFinished > 0 {

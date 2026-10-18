@@ -106,6 +106,13 @@ Selecting `echo` for new calls does not replace a restored custom registration.
 Keep them short, honor cancellation, and never mutate app state after return.
 Ignore unknown events. Routed `Control` events carry a stable `EventID` and a copied `ControlMessage`.
 
+`Event.At` is the callback dispatch time and uses the same clock as host timers.
+Each delivery gets a new dispatch time, including redelivery with the same
+`EventID` after a retry, move or takeover. It can step backward. Storeless
+sessions and dispatches before this owner's first store-clock observation use
+the worker clock instead; the first observation can jump by the clock skew.
+Do not use `At` as a stable event identity or creation time.
+
 `Save` returns versioned crash-recoverable `State.Bytes` and O(1) presence/length
 metadata for move-only data. Ordinary Save must never serialize, copy, or hash a
 recording. `Restore` rejects unknown versions with `ErrVersion` and validates its
@@ -649,6 +656,10 @@ nothing to OpenAI. The example reads `OPENAI_API_KEY` and `RELAIS_VOICE_WARM`
 from the worker's process environment. The launcher passes both only to
 voice worker children, including replacements; neither reaches the browser,
 relay, control, Redis, or fault hook.
+
+Demo A's v4 worst-case app state is **7,087 bytes**: 5,632 bounded text bytes +
+106 notice bytes + 22 error bytes + 1,327 bytes of field names, punctuation,
+IDs, numbers and flags. That leaves **1,105 bytes** under its 8 KiB declaration.
 
 Demo A declares **8,192 raw app-state bytes**. Each worker needs these operator
 flags. `relais-demo` supplies them automatically for `voice-agent/v1`; a worker

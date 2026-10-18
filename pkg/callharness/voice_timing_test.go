@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,11 +24,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// Entries use the exact timestamp, positive worker/turn indices and fixed
+// conservative estimate emitted by reserveTimingTurn. All other spend syntax
+// is refused; comments must start with # in column one.
+var timingLedgerEntry = regexp.MustCompile(`^([^ ]+) \| voice timing worker [1-9][0-9]* turn [1-9][0-9]* \| \$0\.0200$`)
+
 // reserveTimingTurn locks the ledger across processes and charges BEFORE warm
 // or any paid task. Unparseable monetary entries fail closed. Each attempted
 // turn consumes its conservative estimate even when it fails or is interrupted.
 func reserveTimingTurn(path string, capUSD float64, worker, turn int) error {
-	if path == "" || capUSD <= 0 || math.IsNaN(capUSD) || math.IsInf(capUSD, 0) {
+	if path == "" || worker < 1 || turn < 1 || capUSD <= 0 || math.IsNaN(capUSD) || math.IsInf(capUSD, 0) {
 		return fmt.Errorf("timing ledger and finite positive cap required")
 	}
 	if err := os.Mkdir(path+".lock", 0700); err != nil {
@@ -40,19 +46,17 @@ func reserveTimingTurn(path string, capUSD float64, worker, turn int) error {
 	}
 	total := 0.0
 	for _, line := range strings.Split(string(b), "\n") {
-		i := strings.LastIndex(line, "$")
-		if i < 0 {
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		fields := strings.Fields(line[i+1:])
-		if len(fields) != 1 {
+		entry := timingLedgerEntry.FindStringSubmatch(line)
+		if entry == nil {
 			return fmt.Errorf("invalid timing ledger entry")
 		}
-		n, e := strconv.ParseFloat(fields[0], 64)
-		if e != nil || n < 0 || math.IsNaN(n) || math.IsInf(n, 0) {
+		if stamp, err := time.Parse(time.RFC3339, entry[1]); err != nil || stamp.UTC().Format(time.RFC3339) != entry[1] {
 			return fmt.Errorf("invalid timing ledger entry")
 		}
-		total += n
+		total += 0.02
 	}
 	const estimate = 0.02
 	if total+estimate > capUSD+1e-9 {
@@ -72,6 +76,8 @@ func reserveTimingTurn(path string, capUSD float64, worker, turn int) error {
 func TestVoiceTimingLedgerRefusesUnbudgetedTurns(t *testing.T) {
 	path := t.TempDir() + "/ledger.md"
 	require.Error(t, reserveTimingTurn("", 1, 1, 1))
+	require.Error(t, reserveTimingTurn(path, 1, 0, 1))
+	require.Error(t, reserveTimingTurn(path, 1, 1, 0))
 	require.Error(t, reserveTimingTurn(path, math.NaN(), 1, 1))
 	require.NoError(t, reserveTimingTurn(path, 0.04, 1, 1))
 	require.NoError(t, reserveTimingTurn(path, 0.04, 1, 2))
@@ -85,6 +91,36 @@ func TestVoiceTimingLedgerRefusesUnbudgetedTurns(t *testing.T) {
 	require.Error(t, reserveTimingTurn(path, 1, 1, 1))
 	require.NoError(t, os.Mkdir(path+".lock", 0700))
 	require.ErrorContains(t, reserveTimingTurn(path, 1, 1, 1), "lock unavailable")
+}
+
+func TestVoiceTimingLedgerRejectsUnrecognizedEntries(t *testing.T) {
+	for name, content := range map[string]string{
+		"usd-word":            "2026-10-17 | earlier run | USD 0.40\n",
+		"multiple-amounts":    "2026-10-17 | earlier run $0.40 refund? $0.00\n",
+		"markdown-row":        "| 2026-10-17 | earlier run | $0.40 |\n",
+		"trailing-words":      "spent $0.40 total\n",
+		"cents":               "2026-10-17 | earlier run | 40¢\n",
+		"unrecognized-header": "prior spend\n",
+		"invalid-time":        "not-a-time | voice timing worker 1 turn 1 | $0.0200\n",
+		"noncanonical-cost":   "2026-10-17T12:00:00Z | voice timing worker 1 turn 1 | $0.0000\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := t.TempDir() + "/ledger.md"
+			require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+			require.Error(t, reserveTimingTurn(path, 0.05, 1, 1))
+			after, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.Equal(t, content, string(after))
+		})
+	}
+}
+
+func TestVoiceTimingLedgerAcceptsCommentsAndOwnEntries(t *testing.T) {
+	path := t.TempDir() + "/ledger.md"
+	require.NoError(t, os.WriteFile(path, []byte("# estimated provider spend $0.02 per turn\n\n# ledger entries below\n"), 0600))
+	require.NoError(t, reserveTimingTurn(path, 0.04, 1, 1))
+	require.NoError(t, reserveTimingTurn(path, 0.04, 1, 2))
+	require.ErrorContains(t, reserveTimingTurn(path, 0.04, 2, 1), "cap reached")
 }
 
 func timingWorkerCount(value string) (int, error) {
@@ -142,7 +178,7 @@ func TestVoiceAgentLiveTiming(t *testing.T) {
 	}
 	require.NotEmpty(t, packets)
 	require.Less(t, len(packets), 250, "fixture must stay under five seconds")
-	var requestHistory voice.RequestHistory
+	var requestHistory voiceRequestHistory
 	for worker := 1; worker <= n; worker++ {
 		t.Run(fmt.Sprintf("worker_%d", worker), func(t *testing.T) {
 			transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -159,7 +195,7 @@ func TestVoiceAgentLiveTiming(t *testing.T) {
 			call, e := sys.h.Dial(ctx, CallOptions{})
 			require.NoError(t, e)
 			received := receiveVoice(t, call)
-			var rows []voice.Measurement
+			var rows []voiceMeasurement
 			for turn := 1; turn <= 2; turn++ {
 				require.NoError(t, reserveTimingTurn(ledger, capUSD, worker, turn))
 				mu.Lock()
@@ -193,10 +229,10 @@ func TestVoiceAgentLiveTiming(t *testing.T) {
 				mu.Lock()
 				copied := append([]voice.RequestTrace(nil), traces...)
 				mu.Unlock()
-				rows = append(rows, voice.Measurement{Worker: worker, Turn: turn, WarmMode: provider.WarmMode(), Timings: state.Timings, FirstAudio: first, Requests: requestHistory.Observe(copied)})
+				rows = append(rows, voiceMeasurement{Worker: worker, Turn: turn, WarmMode: provider.WarmMode(), Timings: state.Timings, FirstAudio: first, Requests: requestHistory.observe(copied)})
 				// Flush each completed turn so a later refusal retains its measurement.
 				var table bytes.Buffer
-				require.NoError(t, voice.WriteMeasurementTable(&table, rows[len(rows)-1:]))
+				require.NoError(t, writeVoiceMeasurementTable(&table, rows[len(rows)-1:]))
 				t.Log("\n" + table.String())
 			}
 			_, e = call.Hangup(ctx)

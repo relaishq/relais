@@ -73,5 +73,7 @@ func TestVoiceControlAuthenticationAndStatusWhitelist(t *testing.T) {
 	require.NotContains(t, w.Body.String(), "unknown")
 	require.Contains(t, w.Body.String(), `"transcribe_finished_ns":900000000`)
 	require.Contains(t, w.Body.String(), `"reply_characters":42`)
-	require.Contains(t, w.Body.String(), `"recording_closed_ns":0`)
+	require.NotContains(t, w.Body.String(), `"recording_closed_ns"`)
+	require.NotContains(t, w.Body.String(), `"transcribe_started_ns"`)
+	require.Contains(t, w.Body.String(), `"speech_audio_ns":0`)
 }

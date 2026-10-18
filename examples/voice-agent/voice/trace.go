@@ -16,24 +16,27 @@ import (
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 )
 
-// RequestTrace is the entire log allow-list. No request or response data is retained.
+// RequestTrace contains numeric request metadata, never request or response data.
+// Its JSON fields are the entire log allow-list; observer timestamps are excluded.
 // Zero spans mean the hook did not run. BodyRead includes consumption until EOF
 // or Close, including an early close. Think is WroteRequest to first response byte.
 type RequestTrace struct {
-	started, finished time.Time
-	idleBefore        string
-	Turn              agent.Turn    `json:"turn"`
-	Stage             string        `json:"stage"`
-	DNS               time.Duration `json:"dns_ns"`
-	Connect           time.Duration `json:"connect_ns"`
-	TLS               time.Duration `json:"tls_ns"`
-	Reused            bool          `json:"reused"`
-	Idle              bool          `json:"idle"`
-	IdleTime          time.Duration `json:"idle_ns"`
-	Think             time.Duration `json:"think_ns"`
-	BodyRead          time.Duration `json:"body_read_ns"`
-	Protocol          string        `json:"protocol"`
-	Status            int           `json:"status"`
+	// StartedAt and FinishedAt are process-local trace boundaries for observers.
+	// They are never logged or persisted and must not be compared across workers.
+	StartedAt  time.Time     `json:"-"`
+	FinishedAt time.Time     `json:"-"`
+	Turn       agent.Turn    `json:"turn"`
+	Stage      string        `json:"stage"`
+	DNS        time.Duration `json:"dns_ns"`
+	Connect    time.Duration `json:"connect_ns"`
+	TLS        time.Duration `json:"tls_ns"`
+	Reused     bool          `json:"reused"`
+	Idle       bool          `json:"idle"`
+	IdleTime   time.Duration `json:"idle_ns"`
+	Think      time.Duration `json:"think_ns"`
+	BodyRead   time.Duration `json:"body_read_ns"`
+	Protocol   string        `json:"protocol"`
+	Status     int           `json:"status"`
 }
 
 func (r RequestTrace) Line() string { b, _ := json.Marshal(r); return "voice_request " + string(b) }
@@ -78,7 +81,7 @@ func (p *OpenAI) traceRequest(req *http.Request) (*http.Request, *requestTrace) 
 	if identity.stage == "" {
 		identity.stage = "unknown"
 	}
-	r := &requestTrace{connects: make(map[string]time.Time), row: RequestTrace{Turn: identity.turn, Stage: identity.stage, started: time.Now()}, report: func(row RequestTrace) {
+	r := &requestTrace{connects: make(map[string]time.Time), row: RequestTrace{Turn: identity.turn, Stage: identity.stage, StartedAt: time.Now()}, report: func(row RequestTrace) {
 		log.Print(row.Line())
 		if p.Trace != nil {
 			p.Trace(row)
@@ -134,9 +137,9 @@ func (p *OpenAI) traceRequest(req *http.Request) (*http.Request, *requestTrace) 
 func (r *requestTrace) finish() {
 	r.once.Do(func() {
 		r.mu.Lock()
-		r.row.finished = time.Now()
+		r.row.FinishedAt = time.Now()
 		if !r.body.IsZero() {
-			r.row.BodyRead = r.row.finished.Sub(r.body)
+			r.row.BodyRead = r.row.FinishedAt.Sub(r.body)
 		}
 		row := r.row
 		r.mu.Unlock()
