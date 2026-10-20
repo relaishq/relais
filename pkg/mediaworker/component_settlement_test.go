@@ -99,7 +99,7 @@ func TestSplitLateCommitRebasesWithoutAcknowledgingDTLS(t *testing.T) {
 	send(10)
 	store.delay = true
 	s.mu.Lock()
-	s.componentHistory = []byte("history P2")
+	setComponentTestHistory(s, []byte("history P2"))
 	s.mu.Unlock()
 	require.ErrorIs(t, s.persistSnapshotMode(ctx, true), sessionstore.ErrTransient)
 	require.Equal(t, bound, *s.dtlsAcknowledged, "unknown reply cannot advance the guard")
@@ -107,7 +107,7 @@ func TestSplitLateCommitRebasesWithoutAcknowledgingDTLS(t *testing.T) {
 	require.Zero(t, s.state.Checkpoint.Failures, "unknown outcome is not yet a failure")
 	store.landOnNext = true
 	s.mu.Lock()
-	s.componentHistory = []byte("history P3")
+	setComponentTestHistory(s, []byte("history P3"))
 	s.mu.Unlock()
 	require.ErrorIs(t, s.persistSnapshotMode(ctx, true), sessionstore.ErrStateSuperseded)
 	published, err := store.ReadComponents(ctx, s.id)
@@ -163,7 +163,7 @@ func TestSplitUnknownWriteCountsOnceAndDebitsExactly(t *testing.T) {
 	require.NoError(t, s.persistSnapshotMode(ctx, true))
 	store.lostAfterCommit = true
 	s.mu.Lock()
-	s.componentHistory = []byte("history requiring a bank write")
+	setComponentTestHistory(s, []byte("history requiring a bank write"))
 	s.mu.Unlock()
 	debitBefore := s.worker.metrics.snapshotDebitBytes.Load()
 	require.ErrorIs(t, s.persistSnapshotMode(ctx, true), sessionstore.ErrTransient)
@@ -297,7 +297,7 @@ func TestSplitSettlementRejectsForeignLeaseAndPublication(t *testing.T) {
 			require.NoError(t, err)
 			bound := *s.dtlsAcknowledged
 			store.unknown.Store(true)
-			s.componentHistory = []byte("pending newer history")
+			setComponentTestHistory(s, []byte("pending newer history"))
 			require.ErrorIs(t, s.persistSnapshotMode(ctx, true), sessionstore.ErrTransient)
 			published, err := store.ReadComponents(ctx, s.id)
 			require.NoError(t, err)

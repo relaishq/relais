@@ -41,3 +41,11 @@ func TestFlagBudgetValidation(t *testing.T) {
 	_, err := registeredAgents(Options{Agents: []Registration{{Name: "custom", Factory: func(agent.FactoryArgs) agent.Agent { return nil }}}}, "custom", l)
 	require.NoError(t, err)
 }
+
+func TestSplitWorkingDeclarationRefusedBeforeStartup(t *testing.T) {
+	calls := 0
+	options := Options{DefaultAgent: "oversize/v1", Agents: []Registration{{Name: "oversize/v1", Limits: agent.Limits{MaxStateBytes: 16384}, Factory: func(agent.FactoryArgs) agent.Agent { calls++; return nil }}}}
+	err := Run(context.Background(), []string{"-agent-split-checkpoints"}, options)
+	require.ErrorIs(t, err, agent.ErrStateTooLarge)
+	require.Zero(t, calls)
+}

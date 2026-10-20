@@ -28,6 +28,9 @@ func TestProcessHandlerIsolatesRegistriesAndAllowsAdditionalCollectors(t *testin
 }
 
 func TestProcessHandlerExportsOnlySelectedCheckpointCollectors(t *testing.T) {
+	// Pin zero-valued pre-registration even if another test used these labels.
+	CheckpointWrites.DeleteLabelValues("skipped-budget")
+	CheckpointWrites.DeleteLabelValues("skipped-interval")
 	handler := ProcessHandler(func() []Sample { return nil }, CheckpointCollectors()...)
 	r := httptest.NewRecorder()
 	handler.ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -35,6 +38,8 @@ func TestProcessHandlerExportsOnlySelectedCheckpointCollectors(t *testing.T) {
 	for _, sample := range []string{
 		`relais_checkpoint_writes_total{result="success"}`,
 		`relais_checkpoint_writes_total{result="failure"}`,
+		`relais_checkpoint_writes_total{result="skipped-budget"} 0`,
+		`relais_checkpoint_writes_total{result="skipped-interval"} 0`,
 		`relais_checkpoint_envelope_events_total{policy="scaled"}`,
 		`relais_checkpoint_envelope_events_total{policy="definitive-loss"}`,
 		"relais_checkpoint_age_seconds_bucket",

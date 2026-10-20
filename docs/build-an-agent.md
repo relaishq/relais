@@ -92,7 +92,8 @@ The [example main](../examples/delayed-loopback/main.go) calls
 
 - A stable, versioned `Name` used in snapshots.
 - A `Factory` that creates independent per-session agents. `FactoryArgs` supplies
-  the session ID, agent name, and effective admitted `MaxStateBytes`.
+  the session ID, agent name, and effective admitted `MaxStateBytes` and
+  `MaxHistoryBytes`.
 - Versioned task kinds mapped to handlers. The loopback registers
   `delayed-loopback/play/v1` as a local `ReadOnly` handler.
 - Optional `agent.Limits`. Zero fields request host defaults. Declared limits
@@ -118,7 +119,14 @@ sessions and dispatches before this owner's first store-clock observation use
 the worker clock instead; the first observation can jump by the clock skew.
 Do not use `At` as a stable event identity or creation time.
 
-`Save` returns versioned crash-recoverable `State.Bytes` and O(1) presence/length
+Put small changing state in `Bytes`. Put bounded conversation text in `History`.
+Save both together. Restore both together. `State.Version` covers their joint app
+schema. Both byte fields are opaque to the host. Save is not a durable
+acknowledgement. A crash can lose the current turn's audio and repeat work.
+Only v10 split sessions support nonempty SDK History; legacy v8/v9 sessions keep
+working-state only. The v1 SDK remains working-state only.
+
+`Save` returns those crash-recoverable fields and O(1) presence/length
 metadata for move-only data. Ordinary Save must never serialize, copy, or hash a
 recording. `Restore` rejects unknown versions with `ErrVersion` and validates its
 schema. It must also support rollback after refused callback effects. The host
@@ -243,7 +251,13 @@ can still lose local data. See [ADR 0008](adr/0008-store-outage-budget.md).
 
 ## Budgets and the capacity approval gate
 
-The default v2 raw app budget is 1,024 bytes. The serialized host metadata allowance
+New split v10 custom sessions resolve zero limits to **3,072 working bytes**
+and **8,192 history bytes**. `Limits.MaxHistoryBytes` configures the independent
+history bound. Legacy v8/v9 calls keep their **1,024-byte** zero-limit working
+profile and have no SDK history. Turning split admission on does not change an
+existing call's profile. Explicit limits retain their meaning; working state can
+be configured up to 64 KiB, subject to actual encoded-size and rate admission.
+No field is silently clamped or truncated. The serialized host metadata allowance
 is 2,048 bytes, including durable side-effect requests, task cursors, and reference
 metadata. The default active task count is four. Move memory has a separate
 budget and includes recording, ReadOnly requests, reply payloads, and backlog.
@@ -251,16 +265,51 @@ Size reservations from real payloads, not fixed estimates.
 
 These worker-only flags set operator ceilings:
 
-| Flag | Default | Meaning |
+| Flag | Legacy default | Meaning |
 | --- | ---: | --- |
-| `-agent-max-snapshot-bytes` | 7168 | Whole encrypted snapshot size |
+| `-agent-max-snapshot-bytes` | 7168 | Whole encrypted legacy snapshot; hot v10 checkpoint cap |
 | `-agent-snapshot-bytes-per-second` | 81920 | Successful snapshot payload bytes per session-second |
 | `-agent-snapshot-burst-bytes` | 28672 | Snapshot byte burst per session |
 | `-agent-move-bytes-per-session` | 1048576 | Move memory per session |
 | `-agent-move-bytes-total` | 67108864 | Worker move memory, including export scratch |
 
-Registrations cannot raise those ceilings. Oversized declarations fail startup;
-actual content is checked again at runtime. Admission reports typed `Capacity`;
+Split sessions use **80,000 B/s** and a **40,960 B burst** when the rate/burst
+flags are zero (the flag defaults). Explicit flag values apply to both profiles.
+The 7,168-byte hot cap includes transport, host metadata, changed working
+ciphertext, and published metadata/fields. Setup and history are cold components;
+their default encoded caps are 4,096 and 8,448 bytes. A full transaction fits
+20,480 bytes; the burst holds two. The 100 ms cadence plus one maximum forced
+hot write per second reserves `11 × 7,168 = 78,848 B/s`, leaving 1,152 B/s for
+cold changes at that maximum pattern. These are admission bounds, not measured
+store traffic or capacity claims.
+
+History updates must fit their raw and actual encoded limits and the available
+byte bucket **before callback acceptance**. Admission conservatively holds the
+candidate's full transaction plus one hot checkpoint, and another maximum
+transaction while a writer's outcome is unresolved. A byte reservation protects
+an admitted pair from older captures and rotation until its acknowledgement.
+A refusal restores both app
+fields and all staged effects. Audio/task events receive a later typed `Capacity`
+notice; Control returns `ErrCapacity` without consuming the message. Raw history
+overflow is classified internally as `ErrHistoryTooLarge`. Local tests cover
+continued transport checkpoints after these refusals; loaded timing acceptance
+remains pending. Cold writes and key rotation share refill/burst. Intent writes
+and active history holds leave one hot checkpoint. Required writes without a
+hold can spend their carried quota, including a store-chosen rotation. The
+default refill restores one hot checkpoint within 100 ms; a separate rotation
+budget needs a store API change outside this slice.
+Only successful writes debit changed ciphertexts plus published metadata/field
+bytes (with the existing framing reserve). Failed store writes are not app
+Capacity. Unknown outcomes keep their reservation until tuple settlement.
+Exact moves carry quota and history, reserving one maximum in-flight transaction.
+
+Registrations cannot raise those ceilings. A working declaration whose encoded
+component alone exceeds the hot cap fails startup. Other declarations still
+need actual transport/host admission at runtime; the declaration is not a
+promise that every combination fits. A legacy-only explicit burst may start
+with new split admission off but refuses v10 adoption if it cannot hold two
+maximum transactions; use compatible split budgets throughout the pool.
+Actual content is checked again at runtime. Admission reports typed `Capacity`;
 an unavoidable transport snapshot overflow can refuse adoption or end the call
 with `ErrCapacity`. A store failure is a different outcome. The exact export and
 resume request must also fit the private HTTP wire bound, including base64.

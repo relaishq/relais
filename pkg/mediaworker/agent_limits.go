@@ -17,7 +17,8 @@ import (
 
 // SnapshotLimits are operator settings; registrations cannot change them.
 // The encoded cap also bounds v1 component captures. Byte-rate and move quotas
-// apply to v2 sessions. Zero fields use the ADR 0010 defaults.
+// apply to v2 sessions. Zero fields resolve by session profile: ADR 0010
+// for legacy sessions and ADR 0012 for v10 sessions.
 type SnapshotLimits struct {
 	MaxBytes            int
 	BytesPerSecond      int
@@ -43,6 +44,26 @@ func (l SnapshotLimits) defaults() SnapshotLimits {
 		l.MoveBytesTotal = v2MoveWorkerBytes
 	}
 	return l
+}
+
+// SplitDefaults resolves the gate-derived v10 profile. Explicit settings keep
+// their meaning in both layouts; defaults are selected per session, not per worker.
+func (l SnapshotLimits) SplitDefaults() SnapshotLimits { return l.splitDefaults() }
+
+func (l SnapshotLimits) splitDefaults() SnapshotLimits {
+	if l.BytesPerSecond == 0 {
+		l.BytesPerSecond = 80000
+	}
+	if l.BurstBytes == 0 {
+		l.BurstBytes = 40960
+	}
+	return l.defaults()
+}
+func (s *session) snapshotLimits() SnapshotLimits {
+	if s.componentMode {
+		return s.worker.splitLimits.splitDefaults()
+	}
+	return s.worker.cfg.SnapshotLimits
 }
 
 // Validate checks limits at the stock worker's 100 ms snapshot interval.
@@ -99,8 +120,19 @@ func (l SnapshotLimits) validateResourceLimits() error {
 
 // effectiveAgentBounds resolves defaults and local ceilings without changing the
 // declaration used as registration identity. State is never silently clamped.
-func effectiveAgentBounds(declared agent.Limits, limits SnapshotLimits) agenthost.Bounds {
+func effectiveAgentBounds(declared agent.Limits, limits SnapshotLimits, split ...bool) agenthost.Bounds {
+	if len(split) > 0 && split[0] {
+		if declared.MaxStateBytes == 0 {
+			declared.MaxStateBytes = 3072
+		}
+		if declared.MaxHistoryBytes == 0 {
+			declared.MaxHistoryBytes = 8192
+		}
+	}
 	b := agenthost.Bounds(declared).Defaults()
+	if len(split) == 0 || !split[0] {
+		b.MaxHistoryBytes = 0
+	}
 	b.MaxPendingBytes = min(b.MaxPendingBytes, v2HostMetadataBytes)
 	b.MaxMailboxBytes = min(b.MaxMailboxBytes, limits.MoveBytesPerSession)
 	b.MaxActiveTasks = min(b.MaxActiveTasks, 4)
@@ -115,16 +147,27 @@ func effectiveAgentBounds(declared agent.Limits, limits SnapshotLimits) agenthos
 // ValidateAgentRegistration checks declared crash-state capacity before startup.
 // The measured transport baseline is an admission allowance only, never a claim
 // about a live snapshot. Live admission and capture encode the actual snapshot.
-func ValidateAgentRegistration(name string, kinds []string, bounds agent.Limits, limits SnapshotLimits) error {
-	limits = limits.defaults()
+func ValidateAgentRegistration(name string, kinds []string, bounds agent.Limits, limits SnapshotLimits, split ...bool) error {
+	isSplit := len(split) > 0 && split[0]
+	if isSplit {
+		limits = limits.splitDefaults()
+	} else {
+		limits = limits.defaults()
+	}
 	declared := bounds
-	bounds = agent.Limits(effectiveAgentBounds(declared, limits))
-	if bounds.MaxStateBytes <= 0 || bounds.MaxStateBytes > 64<<10 || bounds.MaxPendingBytes <= 0 || bounds.MaxPendingBytes > v2HostMetadataBytes || bounds.MaxMailboxBytes <= 0 || bounds.MaxMailboxBytes > limits.MoveBytesPerSession || bounds.MaxActiveTasks <= 0 || bounds.MaxAudioBytes < 0 || bounds.MaxAudioDuration < 0 {
+	bounds = agent.Limits(effectiveAgentBounds(declared, limits, isSplit))
+	if declared.MaxHistoryBytes < 0 || declared.MaxHistoryBytes > componentMaxHistoryBytes || bounds.MaxStateBytes <= 0 || bounds.MaxStateBytes > 64<<10 || bounds.MaxPendingBytes <= 0 || bounds.MaxPendingBytes > v2HostMetadataBytes || bounds.MaxMailboxBytes <= 0 || bounds.MaxMailboxBytes > limits.MoveBytesPerSession || bounds.MaxActiveTasks <= 0 || bounds.MaxAudioBytes < 0 || bounds.MaxAudioDuration < 0 {
 		return fmt.Errorf("%w: invalid limits for %q", agent.ErrIncompatibleAgent, name)
 	}
+	if isSplit && limits.BurstBytes < 2*splitComponentBudgets(limits.MaxBytes, bounds.MaxHistoryBytes).Total {
+		return fmt.Errorf("%w: split burst cannot hold two maximum transactions for %q", agent.ErrCapacity, name)
+	}
 	const measuredTransport = 3474 // ADR 0010 C; rechecked from real payloads at runtime.
-	if measuredTransport+snapshotEnvelopeBytes+base64.StdEncoding.EncodedLen(bounds.MaxStateBytes)+v2HostMetadataBytes > limits.MaxBytes {
+	if !isSplit && measuredTransport+snapshotEnvelopeBytes+base64.StdEncoding.EncodedLen(bounds.MaxStateBytes)+v2HostMetadataBytes > limits.MaxBytes {
 		return fmt.Errorf("%w: declared state for %q cannot fit operator snapshot cap", agent.ErrStateTooLarge, name)
+	}
+	if isSplit && bounds.MaxStateBytes+6+componentCipherOverhead > limits.MaxBytes {
+		return fmt.Errorf("%w: declared working component for %q cannot fit operator hot cap", agent.ErrStateTooLarge, name)
 	}
 	metadata, err := json.Marshal(v2Envelope{Name: name, Contract: v2Contract, TaskKinds: kinds, Limits: &declared, Quota: &snapshotQuota{Version: 1, Balance: quotaBalance(uint64(limits.BurstBytes)), At: time.Now().UTC()}})
 	if err != nil {
@@ -140,6 +183,9 @@ func ValidateAgentRegistration(name string, kinds []string, bounds agent.Limits,
 // independently of identity. Never truncate an adopted state or payload.
 func (s *session) validateRestoredAgentBounds(b agenthost.Bounds, exact bool) error {
 	a := s.state.Agent
+	if len(a.History) > b.MaxHistoryBytes || (!s.componentMode && len(a.History) != 0) {
+		return fmt.Errorf("%w: %w", agent.ErrCapacity, agent.ErrHistoryTooLarge)
+	}
 	if len(a.State.Bytes) > b.MaxStateBytes {
 		return fmt.Errorf("%w: %w", agent.ErrCapacity, agent.ErrStateTooLarge)
 	}
@@ -186,9 +232,9 @@ func (b *snapshotBucket) available(l SnapshotLimits, now time.Time) float64 {
 		return float64(l.BurstBytes)
 	}
 	if now.Before(b.at) {
-		// Store clocks are wall clocks. Rebase after a step back so refill resumes
-		// on the next tick; a negative elapsed time cannot consume byte tokens.
-		b.at = now
+		// A read cannot rebase the bucket or mint refill after a clock step.
+		// Only a successful writer rebases it onto the new store-clock value.
+		return min(float64(l.BurstBytes), b.tokens)
 	}
 	return min(float64(l.BurstBytes), b.tokens+now.Sub(b.at).Seconds()*float64(l.BytesPerSecond))
 }
@@ -202,8 +248,8 @@ func (s *session) checkSnapshotSize(data []byte) error {
 		_, err := s.componentAdmission(data)
 		return err
 	}
-	if len(data)+snapshotEnvelopeBytes > s.worker.cfg.SnapshotLimits.MaxBytes {
-		return fmt.Errorf("%w: whole v2 snapshot is %d bytes (cap %d)", agent.ErrCapacity, len(data)+snapshotEnvelopeBytes, s.worker.cfg.SnapshotLimits.MaxBytes)
+	if len(data)+snapshotEnvelopeBytes > s.snapshotLimits().MaxBytes {
+		return fmt.Errorf("%w: whole v2 snapshot is %d bytes (cap %d)", agent.ErrCapacity, len(data)+snapshotEnvelopeBytes, s.snapshotLimits().MaxBytes)
 	}
 	return nil
 }
@@ -212,18 +258,110 @@ func (s *session) checkSnapshotSize(data []byte) error {
 // Before DTLS exists no ciphertext can be emitted or checkpointed; the first
 // established capture enforces the full cap before starting the v2 actor.
 func (s *session) admissionSnapshot(candidate agentState) (int, error) {
-	data, _, err := s.captureSnapshotCandidate(time.Time{}, &candidate)
+	data, err := s.captureAdmissionSnapshot(candidate)
 	if err != nil {
 		if err == ErrNotEstablished {
+			if s.componentMode {
+				// No negotiated transport exists yet. Reserve the full hot bound until
+				// the first actual capture enforces the encoded component sizes.
+				size := componentSizes{Hot: s.componentBudgets().Hot, Setup: s.componentBudgets().Setup, History: len(candidate.History) + 6 + componentCipherOverhead}
+				size.Total = size.Hot + size.Setup + size.History
+				return size.Hot, s.admitHistoryUpdate(candidate, size)
+			}
 			return 0, nil
 		}
 		return 0, err
 	}
 	if s.componentMode {
 		size, err := s.componentAdmission(data)
+		if err == nil {
+			size.History += len(candidate.History)
+			size.Total += len(candidate.History)
+			err = s.componentBudgets().admitSizes(size)
+		}
+		if err == nil {
+			err = s.admitHistoryUpdate(candidate, size)
+		}
 		return size.Hot, err
 	}
 	return len(data) + snapshotEnvelopeBytes, nil
+}
+
+// captureAdmissionSnapshot is the production Save capture, with history measured
+// separately by its exact length. Its timestamps and quota use the store clock,
+// matching a real writer even when worker and store clocks differ.
+func (s *session) captureAdmissionSnapshot(candidate agentState) ([]byte, error) {
+	captured := time.Time{}
+	if s.componentMode {
+		captured = s.taskNow()
+	} // include the full capture timestamp at admission
+	captureCandidate := candidate
+	if s.componentMode {
+		// History is an opaque length-prefixed byte component: its size changes
+		// exactly by len(History). Do not copy/base64/reparse it just to count it.
+		// The actual capture and writer still encode and authenticate every byte.
+		captureCandidate.History = nil
+	}
+	data, _, err := s.captureSnapshotCandidate(captured, &captureCandidate)
+	return data, err
+}
+
+// historyWriteHold prevents an older capture or rotation from spending the
+// bytes promised to an accepted app pair. The actor installs it before publishing
+// that pair; only a matching acknowledgement clears it. Protected by budgetMu.
+type historyWriteHold struct {
+	version uint32
+	history []byte
+	bytes   int
+}
+
+func (h *historyWriteHold) matches(pair agentState) bool {
+	return h != nil && h.version == pair.State.Version && slices.Equal(h.history, pair.History)
+}
+
+// admitHistoryUpdate reserves the candidate's full transaction plus one hot
+// checkpoint. An older in-flight/uncertain write can still debit one maximum
+// transaction, so reserve that too. Replacing an uncommitted candidate does not
+// accumulate credits: every replacement is checked against the live bucket.
+func (s *session) admitHistoryUpdate(candidate agentState, size componentSizes) error {
+	if !s.componentMode || candidate.V2 == nil {
+		return nil
+	}
+	before := s.agent.latest
+	if candidate.State.Version == before.State.Version && slices.Equal(candidate.History, before.History) {
+		return nil
+	}
+	limits := s.snapshotLimits()
+	now := s.taskNow()
+	s.snapshotBudgetMu.Lock()
+	available := s.snapshotBytesBudget.available(limits, now)
+	// Future host/working changes can use the whole hot cap before this
+	// history is captured. Reserve that cap, not today's smaller hot encoding.
+	transaction := limits.MaxBytes + size.Setup + size.History
+	required := transaction + limits.MaxBytes
+	if s.snapshotWriteInFlight {
+		required += s.componentBudgets().Total
+	}
+	if available >= float64(required) {
+		s.snapshotHistoryHold = &historyWriteHold{version: candidate.State.Version, history: slices.Clone(candidate.History), bytes: transaction}
+	}
+	s.snapshotBudgetMu.Unlock()
+	if available < float64(required) {
+		return fmt.Errorf("%w: history transaction needs %d bytes, available %.0f", agent.ErrCapacity, required, available)
+	}
+	return nil
+}
+
+// A callback can time out after admission but before publication. Restore the
+// reservation together with the app pair. A conservative maximum hold is safe:
+// the next matching capture can spend it, while older captures cannot.
+func (s *session) rollbackHistoryAdmission(before agentState) {
+	if !s.componentMode {
+		return
+	}
+	s.snapshotBudgetMu.Lock()
+	s.snapshotHistoryHold = &historyWriteHold{version: before.State.Version, history: slices.Clone(before.History), bytes: s.componentBudgets().Total}
+	s.snapshotBudgetMu.Unlock()
 }
 
 // A refused callback publishes one typed Capacity notice after rollback. It
@@ -325,9 +463,13 @@ func (s *session) captureSnapshotQuota(now time.Time) *snapshotQuota {
 // might still acknowledge, covering Clock, encoding and PutState under one flag.
 func (s *session) captureSnapshotQuotaMode(now time.Time, exporting bool) *snapshotQuota {
 	s.snapshotBudgetMu.Lock()
-	tokens := s.snapshotBytesBudget.available(s.worker.cfg.SnapshotLimits, now)
+	tokens := s.snapshotBytesBudget.available(s.snapshotLimits(), now)
 	if exporting && s.snapshotWriteInFlight {
-		tokens = max(0, tokens-float64(s.worker.cfg.SnapshotLimits.MaxBytes))
+		maximum := s.snapshotLimits().MaxBytes
+		if s.componentMode {
+			maximum = s.componentBudgets().Total
+		}
+		tokens = max(0, tokens-float64(maximum))
 	}
 	s.snapshotBudgetMu.Unlock()
 	return &snapshotQuota{Version: 1, Balance: quotaBalance(uint64(max(0, tokens))), At: now}
@@ -344,7 +486,7 @@ func (s *session) restoreSnapshotQuota(q *snapshotQuota) error {
 		return sessionstore.ErrUnsafeCheckpointClock
 	}
 	s.snapshotBudgetMu.Lock()
-	s.snapshotBytesBudget = snapshotBucket{tokens: float64(min(tokens, uint64(s.worker.cfg.SnapshotLimits.BurstBytes))), at: q.At}
+	s.snapshotBytesBudget = snapshotBucket{tokens: float64(min(tokens, uint64(s.snapshotLimits().BurstBytes))), at: q.At}
 	s.snapshotBudgetMu.Unlock()
 	return nil
 }

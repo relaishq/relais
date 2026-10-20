@@ -15,31 +15,34 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/agenthost"
 	"github.com/relaishq/relais/internal/privateapi"
-	"github.com/relaishq/relais/pkg/agent"
+	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
 
-type splitProcessAgent struct{ value []byte }
+type splitProcessAgent struct{ value, history []byte }
 
-func (a *splitProcessAgent) Process(_ context.Context, in agent.Input) (agent.Output, error) {
-	return agent.Output{Audio: in.Payload}, nil
+func (a *splitProcessAgent) Handle(_ context.Context, event agent.Event) (agent.Effects, error) {
+	if event.Kind == agent.Control && event.Control.Name == "remember" {
+		a.history = bytes.Repeat(event.Control.Data, 8192)
+	}
+	return agent.Effects{}, nil
 }
 func (a *splitProcessAgent) Save(context.Context) (agent.State, error) {
-	return agent.State{Version: 1, Bytes: bytes.Clone(a.value)}, nil
+	return agent.State{Version: 1, Bytes: bytes.Clone(a.value), History: bytes.Clone(a.history)}, nil
 }
 func (a *splitProcessAgent) Restore(_ context.Context, state agent.State) error {
 	if state.Version != 1 {
 		return agent.ErrVersion
 	}
-	a.value = bytes.Clone(state.Bytes)
-	data, _ := json.Marshal(map[string]any{"restored_working": a.value})
+	a.value, a.history = bytes.Clone(state.Bytes), bytes.Clone(state.History)
+	data, _ := json.Marshal(map[string]any{"restored_working": a.value, "restored_history": a.history})
 	fmt.Println(string(data))
 	return nil
 }
-func (*splitProcessAgent) Resume(context.Context, agent.ResumeNotice) error { return nil }
 
 type splitProcessHeartbeats struct{ url, name, token string }
 
@@ -64,8 +67,8 @@ func (h *splitProcessHeartbeats) Heartbeat(addr netip.AddrPort) error {
 }
 
 // This subprocess uses production Worker, private HTTP, ownership, writer and
-// DTLS code. Only the bounded history fixture is supplied by this test, ahead
-// of the separate SDK History slice. The target has no history fixture source.
+// DTLS code. The agent supplies SDK History through Save. The target has no
+// history source except its SDK Restore callback.
 func TestSplitCheckpointWorkerProcess(t *testing.T) {
 	if os.Getenv("RELAIS_SPLIT_PROCESS_HELPER") != "1" {
 		t.Skip("subprocess fixture")
@@ -84,9 +87,9 @@ func TestSplitCheckpointWorkerProcess(t *testing.T) {
 	require.NoError(t, err)
 	public, err := netip.ParseAddrPort(os.Getenv("RELAIS_SPLIT_PROCESS_PUBLIC"))
 	require.NoError(t, err)
-	w, err := New(Config{SplitCheckpoints: os.Getenv("RELAIS_SPLIT_PROCESS_ADMIT") == "1", DisableFrameCache: true, Agent: AgentConfig{Factory: func(string) agent.Agent {
-		return &splitProcessAgent{value: []byte(os.Getenv("RELAIS_SPLIT_PROCESS_WORKING"))}
-	}}, Relay: &RelayConfig{Owners: store, Addr: leg, PublicAddr: public}})
+	w, err := New(Config{SplitCheckpoints: os.Getenv("RELAIS_SPLIT_PROCESS_ADMIT") == "1", DisableFrameCache: true, Agent: AgentConfig{CallbackTimeout: time.Second, Factory: agenthost.Factory(agenthost.Registration{Name: "history/v1", Factory: func(agent.FactoryArgs) agent.Agent {
+		return &splitProcessAgent{value: []byte(os.Getenv("RELAIS_SPLIT_PROCESS_WORKING")), history: []byte(os.Getenv("RELAIS_SPLIT_PROCESS_HISTORY"))}
+	}})}, Relay: &RelayConfig{Owners: store, Addr: leg, PublicAddr: public}})
 	require.NoError(t, err)
 	defer func() { _ = w.Close() }()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -97,27 +100,6 @@ func TestSplitCheckpointWorkerProcess(t *testing.T) {
 	ready, _ := json.Marshal(map[string]string{"http": "http://" + listener.Addr().String(), "media": w.LocalAddr().String()})
 	fmt.Println(string(ready))
 	w.StartHeartbeats(&splitProcessHeartbeats{url: os.Getenv("RELAIS_SPLIT_PROCESS_CONTROL"), name: os.Getenv("RELAIS_SPLIT_PROCESS_NAME")})
-	if history := os.Getenv("RELAIS_SPLIT_PROCESS_HISTORY"); history != "" {
-		ticker := time.NewTicker(time.Millisecond)
-		defer ticker.Stop()
-		for range ticker.C {
-			w.mu.Lock()
-			var target *session
-			for _, s := range w.sessions {
-				target = s
-				break
-			}
-			w.mu.Unlock()
-			if target == nil {
-				continue
-			}
-			target.mu.Lock()
-			target.componentHistory = []byte(history)
-			target.mu.Unlock()
-			target.wantSnapshot()
-			break
-		}
-	}
 	// Parent owns SIGKILL and reap. Do not turn a subprocess fixture into a
 	// normal test that can accidentally exit before the production takeover.
 	timer := time.NewTimer(time.Hour)

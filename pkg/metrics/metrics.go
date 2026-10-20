@@ -7,7 +7,7 @@ import (
 
 var (
 	CheckpointWrites = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "relais_checkpoint_writes_total", Help: "Checkpoint write attempts by result",
+		Name: "relais_checkpoint_writes_total", Help: "Checkpoint operations by result, including byte budget deferrals and interval coalescing",
 	}, []string{"result"})
 	CheckpointEnvelopeEvents = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "relais_checkpoint_envelope_events_total", Help: "Takeovers outside the checkpoint envelope by policy",
