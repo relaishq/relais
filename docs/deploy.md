@@ -317,7 +317,8 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   entries fail startup. Each process prints one JSON listener-readiness line
   with its PID and bound addresses; ephemeral loopback ports are the defaults.
   Control listens even if a listed worker or the relay is down. Fixed worker
-  status requests have a one-second deadline. Initial discovery runs in parallel;
+  rebuild status requests have a 250 ms deadline and run in parallel, once per
+  worker per attempt. Background status requests have a one-second deadline;
   subsequent discovery checks every 250 ms, with bounded requests. Relay
   status/registration retries back off from 200 ms to 5 s after failure and
   poll every 100 ms when healthy. Acquiring or recovering the control lease
@@ -335,13 +336,17 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
 
 Run one control process per store namespace. Control claims a fenced store
 lease with a one-second TTL and schedules renewal attempts every 250 ms from
-request start. Requests do not overlap. If a successful reply takes longer
-than 250 ms, the next attempt starts immediately. A second process can listen
+request start, with at most four outstanding commands and a 750 ms command
+deadline. Claims remain sequential. Renewals of the same fenced tenure can
+overlap so delayed replies do not postpone subsequent attempts. Older replies
+cannot replace a newer acknowledged deadline. A second process can listen
 and answer status, but cannot become mutation-ready while the first
 holds that lease. After a crash, the successor waits for expiry. On a graceful
 stop, control first pauses crash detection and new mutations. It continues
 renewing while HTTP handlers drain and existing recovery jobs stop, then
-releases the lease. A renewal error removes mutation readiness.
+releases the lease. A transient renewal error retains mutation readiness until
+the last acknowledged local deadline is within 250 ms. A slow successful reply
+does not revoke readiness.
 Crash detection pauses when the local lease deadline passes. Control keeps
 renewing the same tenure through transient failures. A successful renewal
 restores readiness; a definitive lost lease requires a new claim and rebuild.
@@ -379,7 +384,7 @@ and the relay while control is down; new calls and recovery wait.
 
 If a worker also dies while control is down, recovery needs a sufficiently fresh
 checkpoint when takeover runs. With default rates, no retained sequence advance
-and the full 1.5-second adoption budget, the conservative snapshot-age bound is
+and the full 1.5-second adoption budget, the default-rate snapshot-age limit is
 **2.2344 seconds**. It follows from the ADR 0002 RTP margin plus caller reserve
 fitting below the 32,768-index half-space; the 550 ms envelope scales margins
 rather than imposing that cutoff. DTLS has a separate 64-record reservation and
@@ -391,10 +396,13 @@ remaining bound, with time left for takeover.
 On one development Mac, ten no-delay simultaneous control/worker crash runs
 with 16 calls each recovered 160/160 calls without loss. Readiness including
 lease wait was 0.854–1.081 s (median 1.029 s); the oldest snapshot at takeover was
-1.211 s, leaving 1.024 s inside the conservative bound. These are local,
+1.211 s, leaving 1.023 s inside the default-rate limit. These are local,
 one-machine measurements. See the [derivation and limits](guarantees.md#control-restart).
 A race-tested fixture adding 300 ms to each control-lease command kept readiness
-without flapping over ten three-second observation windows.
+without flapping over ten three-second observation windows. Slow-reply fixtures
+also cover a single 600 ms reply and steady 450/520 ms replies. A black-holed
+worker is observed once per parallel rebuild attempt; its timeout does not
+cause a second sequential status request.
 
 Drain marks and operation intents are stored before effects. Control-wide
 records share one Redis slot; each session intent uses that session's slot.

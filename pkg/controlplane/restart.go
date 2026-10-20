@@ -33,6 +33,10 @@ func (*controlReadinessError) Unwrap() error { return agentv2.ErrControlNotReady
 
 const ControlLeaseTTL = time.Second
 
+const controlRenewInterval = 250 * time.Millisecond
+const controlRequestTimeout = 750 * time.Millisecond
+const rebuildStatusTimeout = 250 * time.Millisecond
+
 // FixedWorker names an operator-configured private HTTP endpoint. Saved relay
 // addresses let a restart recover calls even when that worker is unreachable.
 type FixedWorker struct {
@@ -76,6 +80,7 @@ type restartState struct {
 	status         RebuildStatus
 	registrationMu sync.Mutex
 	healthy        atomic.Bool
+	renewalFailed  atomic.Bool
 	stopping       atomic.Bool
 	authority      chan struct{}
 	logs           map[string]time.Time
@@ -108,7 +113,17 @@ func (p *Plane) controlAuthority() bool {
 	return guard != nil && time.Now().Before(guard.deadline)
 }
 func (p *Plane) mutationReady() bool {
-	return p.restart == nil || !p.restart.stopping.Load() && p.restart.ready.Load() && p.restart.healthy.Load() && p.controlAuthority()
+	return p.restart == nil || !p.restart.stopping.Load() && p.restart.ready.Load() && p.controlMutationAuthority() && p.controlAuthority()
+}
+
+// A failed renewal does not revoke an acknowledged lease. Refuse new work
+// near its deadline, while detection remains fenced by the actual deadline.
+func (p *Plane) controlMutationAuthority() bool {
+	if !p.restart.healthy.Load() {
+		return false
+	}
+	guard := p.restart.guard.Load()
+	return guard != nil && (!p.restart.renewalFailed.Load() || time.Now().Before(guard.deadline.Add(-controlRenewInterval)))
 }
 func (p *Plane) requireMutationReady() error {
 	if !p.mutationReady() {
@@ -218,81 +233,148 @@ func (p *Plane) BeginShutdown() {
 	p.rebuildPhase("stopping", nil)
 }
 
+// A tenure owns its pending requests so a definitive loss can cancel them
+// before a fresh claim; shutdown also waits for all callbacks to finish.
+type controlRequestTenure struct {
+	context.Context
+	cancel context.CancelFunc
+}
+
+func newControlRequestTenure(ctx context.Context) controlRequestTenure {
+	next, cancel := context.WithCancel(ctx)
+	return controlRequestTenure{next, cancel}
+}
+
 // maintainControl keeps trying the same tenure through transient store errors.
 // A definitive lost lease requires a fresh claim and a full rebuild.
 func (p *Plane) maintainControl(ctx context.Context, fatal chan<- error) {
+	// Replies can take more than half the TTL. Keep a bounded pipeline of
+	// same-tenure renewals; waiting an interval after each reply would lapse
+	// local authority even when every store command succeeds.
+	type result struct {
+		lease      sessionstore.ControlLease
+		err        error
+		started    time.Time
+		generation uint64
+		claiming   bool
+	}
+	const maxPending = 4
+	replies := make(chan result, maxPending)
+	tenure := newControlRequestTenure(ctx)
+	var wg sync.WaitGroup
+	defer func() { tenure.cancel(); wg.Wait() }()
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 	holder := randomToken()
 	var lease sessionstore.ControlLease
+	var lastSuccess time.Time
+	var generation uint64
+	pending := 0
 	for {
-		started := time.Now()
-		// Avoid accumulating half-second abandoned TCP connections while a
-		// store is paused. Local authority expiry is enforced independently.
-		bounded, stop := context.WithTimeout(ctx, ControlLeaseTTL/2)
-		var next sessionstore.ControlLease
-		var err error
-		claiming := lease.Holder == ""
-		if claiming {
-			next, err = p.restart.store.ClaimControl(bounded, holder, ControlLeaseTTL)
-		} else {
-			next, err = p.restart.store.RenewControl(bounded, lease, ControlLeaseTTL)
-		}
-		stop()
-		if ctx.Err() != nil {
+		select {
+		case <-ctx.Done():
 			return
-		}
-		// Schedule from request start. A slow healthy command must not add
-		// its reply latency to every renewal interval; requests never overlap.
-		delay := max(time.Duration(0), ControlLeaseTTL/4-time.Since(started))
-		if err == nil {
-			lease = next
-			deadline := started.Add(ControlLeaseTTL)
-			if time.Now().Before(deadline) {
+		case <-timer.C:
+			if pending == maxPending || lease.Holder == "" && pending != 0 {
+				timer.Reset(25 * time.Millisecond)
+				continue
+			}
+			started := time.Now()
+			requestLease, requestGeneration := lease, generation
+			claiming := lease.Holder == ""
+			bounded, stop := context.WithTimeout(tenure, controlRequestTimeout)
+			pending++
+			wg.Go(func() {
+				defer stop()
+				var next sessionstore.ControlLease
+				var err error
+				if claiming {
+					next, err = p.restart.store.ClaimControl(bounded, holder, ControlLeaseTTL)
+				} else {
+					next, err = p.restart.store.RenewControl(bounded, requestLease, ControlLeaseTTL)
+				}
+				// The channel holds every pending reply, including canceled generations.
+				replies <- result{next, err, started, requestGeneration, claiming}
+			})
+			if !claiming {
+				timer.Reset(controlRenewInterval)
+			}
+		case reply := <-replies:
+			pending--
+			if ctx.Err() != nil {
+				return
+			}
+			if reply.generation != generation {
+				continue
+			}
+			if reply.err == nil {
+				deadline := reply.started.Add(ControlLeaseTTL)
+				if !time.Now().Before(deadline) {
+					// A callback may outlive cancellation. Claims have no
+					// periodic timer while pending, so explicitly retry.
+					if reply.claiming {
+						timer.Reset(0)
+					}
+					continue
+				}
+				if reply.started.Before(lastSuccess) {
+					continue
+				}
+				lastSuccess = reply.started
+				lease = reply.lease
+				wasAuthoritative := p.controlAuthority()
 				wasHealthy := p.restart.healthy.Swap(true)
+				p.restart.renewalFailed.Store(false)
 				p.restart.guard.Store(&controlGuard{lease: lease, deadline: deadline})
 				p.restart.mu.Lock()
 				if p.restart.status.LeaseWait == 0 {
 					p.restart.status.LeaseWait = time.Since(p.restart.status.Started)
 				}
 				p.restart.mu.Unlock()
-				if claiming || !wasHealthy {
+				if reply.claiming || !wasHealthy || !wasAuthoritative || !p.restart.ready.Load() {
 					select {
 					case p.restart.authority <- struct{}{}:
 					default:
 					}
 				}
-			} else {
+				if reply.claiming {
+					timer.Reset(max(time.Duration(0), controlRenewInterval-time.Since(reply.started)))
+				}
+				continue
+			}
+			switch {
+			case errors.Is(reply.err, sessionstore.ErrLeaseLost):
 				p.restart.healthy.Store(false)
 				p.restart.ready.Store(false)
-				delay = 0
-			}
-		} else {
-			p.restart.healthy.Store(false)
-			p.restart.ready.Store(false)
-			switch {
-			case errors.Is(err, sessionstore.ErrLeaseLost):
 				p.restart.guard.Store(nil)
 				lease = sessionstore.ControlLease{}
-				p.rebuildPhase("lease_lost", err)
-				delay = 0
-			case errors.Is(err, sessionstore.ErrLeaseHeld), errors.Is(err, sessionstore.ErrTransient), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
-				phase := "waiting_lease"
-				if !claiming {
-					phase = "renewing"
+				generation++
+				lastSuccess = time.Time{}
+				tenure.cancel()
+				tenure = newControlRequestTenure(ctx)
+				p.rebuildPhase("lease_lost", reply.err)
+				timer.Reset(0)
+			case errors.Is(reply.err, sessionstore.ErrLeaseHeld), errors.Is(reply.err, sessionstore.ErrTransient), errors.Is(reply.err, context.DeadlineExceeded), errors.Is(reply.err, context.Canceled):
+				if !reply.started.Before(lastSuccess) {
+					p.restart.renewalFailed.Store(true)
 				}
-				p.rebuildPhase(phase, err)
-				delay = 250 * time.Millisecond
-				if claiming {
-					delay = 50 * time.Millisecond
+				if reply.claiming {
+					p.rebuildPhase("waiting_lease", reply.err)
+					timer.Reset(50 * time.Millisecond)
+				} else {
+					p.restartLog("renewal", "control lease renewal failed; acknowledged deadline still applies: %v", reply.err)
+					// Retry inside the readiness reserve so a recovered store
+					// can acknowledge this tenure before the deadline lapses.
+					timer.Reset(controlRenewInterval / 2)
 				}
 			default:
+				p.restart.healthy.Store(false)
+				p.restart.ready.Store(false)
 				p.restart.guard.Store(nil)
-				p.rebuildPhase("failed", err)
-				fatal <- fmt.Errorf("controlplane: control lease: %w", err)
+				p.rebuildPhase("failed", reply.err)
+				fatal <- fmt.Errorf("controlplane: control lease: %w", reply.err)
 				return
 			}
-		}
-		if !restartWait(ctx, delay) {
-			return
 		}
 	}
 }
@@ -349,12 +431,12 @@ func (p *Plane) RunManaged(ctx context.Context, workers []FixedWorker) error {
 			if guard != nil {
 				p.rebuildPhase("renewing", errors.New("local control lease deadline elapsed; detection paused"))
 			}
-		} else if p.restart.healthy.Load() {
+		} else if p.controlMutationAuthority() {
 			if built != guard.lease.Epoch {
 				stop()
 				if err := p.rebuild(ctx, workers); err != nil {
 					p.rebuildPhase("rebuilding", err)
-				} else if current := p.restart.guard.Load(); current != nil && current.lease.Holder == guard.lease.Holder && current.lease.Epoch == guard.lease.Epoch && p.controlAuthority() && p.restart.healthy.Load() {
+				} else if current := p.restart.guard.Load(); current != nil && current.lease.Holder == guard.lease.Holder && current.lease.Epoch == guard.lease.Epoch && p.controlAuthority() && p.controlMutationAuthority() {
 					built = guard.lease.Epoch
 				}
 			}
@@ -374,6 +456,9 @@ func (p *Plane) RunManaged(ctx context.Context, workers []FixedWorker) error {
 				p.restart.mu.Unlock()
 				p.restart.ready.Store(true)
 			}
+		} else {
+			p.restart.ready.Store(false)
+			p.rebuildPhase("renewing", errors.New("renewal unavailable near local lease deadline; mutations paused"))
 		}
 		if !restartWait(ctx, 25*time.Millisecond) {
 			return nil
@@ -443,6 +528,10 @@ func (p *Plane) discoverWorker(ctx context.Context, fixed FixedWorker, saved *Fi
 	if err != nil {
 		p.restartLog("worker:"+fixed.Name, "worker discovery name=%s error=%v", fixed.Name, err)
 	}
+	return p.registerObservedWorker(ctx, fixed, saved, worker, status, err)
+}
+
+func (p *Plane) registerObservedWorker(ctx context.Context, fixed FixedWorker, saved *FixedWorker, worker *RemoteWorker, status mediaworker.WorkerStatus, err error) error {
 	p.restart.registrationMu.Lock()
 	defer p.restart.registrationMu.Unlock()
 	p.mu.Lock()
@@ -522,18 +611,38 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 	}
 	var wg sync.WaitGroup
 	failures := make(chan error, len(fixed))
+	type observation struct {
+		name   string
+		status mediaworker.WorkerStatus
+	}
+	observed := make(chan observation, len(fixed))
 	for _, worker := range fixed {
 		wg.Go(func() {
 			var old *FixedWorker
 			if value, ok := saved[worker.Name]; ok {
 				old = &value
 			}
-			if err := p.discoverWorker(ctx, worker, old); err != nil {
+			remote := &RemoteWorker{URL: worker.URL}
+			bounded, stop := context.WithTimeout(ctx, rebuildStatusTimeout)
+			status, statusErr := remote.Status(bounded)
+			stop()
+			if statusErr != nil {
+				p.restartLog("worker:"+worker.Name, "worker discovery name=%s error=%v", worker.Name, statusErr)
+			}
+			if err := p.registerObservedWorker(ctx, worker, old, remote, status, statusErr); err != nil {
 				failures <- err
+			}
+			if statusErr == nil {
+				observed <- observation{worker.Name, status}
 			}
 		})
 	}
 	wg.Wait()
+	close(observed)
+	workerStatuses := map[string]mediaworker.WorkerStatus{}
+	for item := range observed {
+		workerStatuses[item.name] = item.status
+	}
 	close(failures)
 	for err := range failures {
 		return err
@@ -558,10 +667,8 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 	}
 	observations := map[string]mediaworker.InstalledSession{}
 	for _, worker := range registrations {
-		bounded, stop := context.WithTimeout(ctx, time.Second)
-		status, statusErr := worker.worker.(*RemoteWorker).Status(bounded)
-		stop()
-		if statusErr == nil && status.Address == worker.addr {
+		status, known := workerStatuses[worker.name]
+		if known && status.Address == worker.addr {
 			if !status.InventoryKnown || status.Truncated {
 				return fmt.Errorf("controlplane: worker %s inventory unavailable or truncated", worker.name)
 			}
@@ -938,12 +1045,22 @@ func (p *Plane) reconcileCreate(ctx context.Context, key string, worker *registr
 		if err != nil {
 			return err
 		}
-		bounded, stop := context.WithTimeout(ctx, time.Second)
-		status, statusErr := worker.worker.(*RemoteWorker).Status(bounded)
-		stop()
+
 		p.mu.Lock()
 		dead := worker.dead
 		p.mu.Unlock()
+		var status mediaworker.WorkerStatus
+		var statusErr error
+		if !dead {
+			bounded, stop := context.WithTimeout(ctx, time.Second)
+			status, statusErr = worker.worker.(*RemoteWorker).Status(bounded)
+			stop()
+			// Detection can establish death during the observation. Never
+			// release committed claims if that happened while awaiting status.
+			p.mu.Lock()
+			dead = worker.dead
+			p.mu.Unlock()
+		}
 		if dead {
 			// The detector owns all committed claims, including a create whose
 			// reply was lost. Never release a dead worker's recoverable calls.

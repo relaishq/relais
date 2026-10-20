@@ -172,8 +172,8 @@ indexes/s and safety factor 1.25, a fresh sent track uses margin
 in seconds, `b` is the remaining adoption budget, and `o` is the preserved
 original-outage budget including remaining adoption time. The guard requires
 `AdvanceSinceSend + M + R + 1 < 32768`. With no retained advance, no larger
-original-outage budget and the full 1.5-second adoption budget remaining, this gives a conservative **2.2344-second
-snapshot-age bound**. The 550 ms envelope threshold selects scaled margins;
+original-outage budget and the full 1.5-second adoption budget remaining, this
+gives a **2.2344-second default-rate snapshot-age limit**. The 550 ms envelope threshold selects scaled margins;
 it is not a fixed refusal age. Snapshot age includes copy-to-store delay and
 read-reply latency, rather than only time since the successful store write.
 See [age and reserve](../pkg/controlplane/checkpoint.go),
@@ -194,8 +194,8 @@ starts the successor with no pre-start delay and 16 calls on the dead worker.
 Ten local runs under the race detector on one development Mac recovered
 **160/160 calls with zero losses**. Process-start-to-ready time, including lease
 wait, was **0.854–1.081 s**, median **1.029 s**. The largest snapshot age at a
-takeover decision was **1.211 s**, leaving **1.024 s** against the conservative
-2.2344 s bound; readiness itself left at least **1.153 s**. These are one
+takeover decision was **1.211 s**, leaving **1.023 s** against the default-rate
+2.2344 s limit; readiness itself left at least **1.153 s**. These are one
 machine's measurements, not a CI, cloud or capacity guarantee. The strict test
 requires zero losses and at least 500 ms of readiness headroom. The one-second
 pre-start-delay variant remains a separate test; that delay adds downtime.
@@ -204,7 +204,10 @@ immediately; recovery waits for the relay allowlist before selecting a destinati
 
 Mutation readiness stays false during lease wait and rebuild. The control lease
 has a one-second TTL and renews every 250 ms from request start; the measured
-process-start-to-ready time includes the wait for the crashed predecessor. A truncated worker inventory leaves control not
+process-start-to-ready time includes the wait for the crashed predecessor.
+Rebuild observes workers in parallel with a 250 ms timeout and reuses those
+observations, including failures, rather than issuing a second status request.
+A truncated worker inventory leaves control not
 ready. See [operator behavior](deploy.md#control-restart).
 
 **Limits:** interrupted exports use the latest stored checkpoint with crash
@@ -494,8 +497,12 @@ scheduling delay. [ADR 0008][outage-adr] retains leases and snapshots for
 and recovery headroom. This does not widen [ADR 0002's][checkpoint-adr]
 cryptographic envelope. New calls, moves, takeovers and hang-ups need the store;
 they can wait or fail during an outage. Control now retains its process through
-transient lease-renewal errors. It removes mutation readiness, pauses crash
+transient lease-renewal errors. After a failed renewal it removes mutation
+readiness when the last acknowledged deadline is within 250 ms, pauses crash
 detection at the request-start-derived lease deadline, and continues renewing.
+Renewals run every 250 ms with at most four outstanding commands, each bounded
+by 750 ms. Delayed successful replies do not themselves revoke readiness;
+older replies cannot extend or replace a newer acknowledged deadline.
 A definitive lost tenure requires a fresh claim and rebuild before readiness.
 A successful renewal proves the same store tenure is still held. Graceful
 shutdown pauses detection and new mutations while keeping renewal running
