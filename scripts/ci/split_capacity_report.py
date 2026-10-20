@@ -103,12 +103,15 @@ def summarize(data, cpu_us, wall_us):
         if trace.get("errors"):
             bad("store observer errors: " + "; ".join(trace["errors"]))
         phase_rows = {}
+        phase_failure = False
         wanted = ["setup", "steady"] + (["rotation"] if scenario == "rotation" else [])
+        if scenario == "history-churn":
+            wanted.append("churn")
         wanted += [p for p in phases if p not in wanted and p not in ("cleanup", "hangup")]
         for phase in wanted:
             values = phases.get(phase, {})
             seconds = trace.get("phase_seconds", {}).get(phase)
-            if not finite(seconds) or not seconds or (not values.get("commands") and phase in ("setup", "steady", "rotation")) or any(not finite(values.get(k)) for k in ("commands", "request_bytes", "reply_bytes")):
+            if not finite(seconds) or not seconds or (not values.get("commands") and phase in ("setup", "steady", "rotation", "churn")) or any(not finite(values.get(k)) for k in ("commands", "request_bytes", "reply_bytes")):
                 bad(phase + " traffic window missing")
                 continue
             denom = seconds * calls
@@ -117,7 +120,13 @@ def summarize(data, cpu_us, wall_us):
                                  "request_reply_bytes_per_call_second": (values["request_bytes"] + values["reply_bytes"]) / denom,
                                  "component_writes_per_call_second": {k: v["writes"] / denom for k, v in values.get("components", {}).items()},
                                  "component_bytes_per_call_second": {k: v["bytes"] / denom for k, v in values.get("components", {}).items()}}
-            if arm == "after" and scenario != "echo" and phase in ("setup", "steady", "rotation"):
+            if phase == "churn":
+                if seconds < r.get("duration_ns", 0) / 1e9 - 10:
+                    bad("churn traffic window too short")
+                if phase_rows[phase]["commands_per_call_second"] > 100 or phase_rows[phase]["request_reply_bytes_per_call_second"] > 131072:
+                    bad("churn attempts exceed store ceiling")
+                    phase_failure = True
+            if arm == "after" and scenario != "echo" and phase in ("setup", "steady", "rotation", "churn"):
                 if set(values.get("key_arguments", {})) != {f"{i:02d}" for i in range(1, 12)} or not valid_keys(values.get("key_examples", [])):
                     bad(phase + " exact 11-key argument evidence missing")
                 if not all(k in values.get("hset_field_values", {}) for k in ("checkpoint:b", "checkpoint:m", "checkpoint:t")):
@@ -151,7 +160,7 @@ def summarize(data, cpu_us, wall_us):
             bad("lifecycle traffic denominator missing")
         seconds = trace.get("seconds", {})
         peak = max((v.get("request_bytes", 0) + v.get("reply_bytes", 0) for v in seconds.values()), default=None)
-        rows.append({"arm": arm, "scenario": scenario, "service": step.get("service_outcome"),
+        rows.append({"arm": arm, "scenario": scenario, "service": "fail" if phase_failure else step.get("service_outcome"),
                      "baseline_over_budget": bool(before_budget_only), "causes": causes,
                      "callers": calls, "phases": phase_rows, "observed_media_commands_per_call_second": media_commands,
                      "observed_media_bytes_per_call_second": media_bytes,

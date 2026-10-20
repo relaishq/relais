@@ -30,9 +30,39 @@ func TestSplitCustomKeepsAsyncSemanticsAfterGeneratorNormalization(t *testing.T)
 	r.Processes[0].Calls[0].Call.Moves[0].Measurement.Audio.Verdict.Trusted = false
 	r.Judge()
 	r.Telemetry.Processes[0].RatesPerCallSecond[`relais_store_wire_commands_total{store="session"}`] = 40
-	step := judgeSplitCapacity("relay", r, true)
+	step := judgeSplitCapacity("relay", r, true, nil)
 	require.Equal(t, "pass", step.Verdict, step.Causes)
 	require.Equal(t, "valid", step.GeneratorOutcome)
 	require.Len(t, step.ToleratedSlips, 1)
 	require.Equal(t, r, step.Run, "raw audio and strict saturation evidence must remain intact")
+}
+
+func TestSplitChurnPhaseOverridesPassingWindow(t *testing.T) {
+	r := capacitySlipRun(t, "move", capacitySlipSamples())
+	r.Judge()
+	r.Telemetry.Processes[0].RatesPerCallSecond[`relais_store_wire_commands_total{store="session"}`] = 40
+	for _, field := range []string{"bytes", "commands", "missing", "short"} {
+		t.Run(field, func(t *testing.T) {
+			window := newWireWindow()
+			window.Commands = int64(r.Callers) * 70
+			window.RequestBytes = int64(r.Callers) * 100000
+			o := &splitObservation{Scenario: "history-churn", Store: storeTrace{Phases: map[string]*wireWindow{"churn": window}, PhaseSeconds: map[string]float64{"churn": 1}}}
+			// Keep enough observation time for the fixture's complete media window.
+			r.Duration = 10 * time.Second
+			switch field {
+			case "bytes":
+				window.RequestBytes = int64(r.Callers) * 131073
+			case "commands":
+				window.Commands = int64(r.Callers) * 101
+			case "missing":
+				delete(o.Store.Phases, "churn")
+			case "short":
+				r.Duration = 30 * time.Second
+			}
+			step := judgeSplitCapacity("relay", r, true, o)
+			require.Less(t, step.StoreBytesPerCallSecond, float64(131072))
+			require.Equal(t, "fail", step.Verdict)
+			require.Contains(t, step.Causes[len(step.Causes)-1], "churn")
+		})
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,7 +47,8 @@ func (m *Monitor) sampleAgents(ctx context.Context) {
 	for {
 		func() {
 			m.mu.RLock()
-			defer m.mu.RUnlock()
+			targets := slices.Clone(m.targets)
+			m.mu.RUnlock()
 			for id := range ids {
 				found := false
 				first, known := owners[id]
@@ -54,22 +56,22 @@ func (m *Monitor) sampleAgents(ctx context.Context) {
 				if known {
 					order = append(order, first)
 				}
-				for i, t := range m.targets {
+				for i, t := range targets {
 					if strings.HasPrefix(t.Name, "worker-") && (!known || i != first) {
 						order = append(order, i)
 					}
 				}
 				for _, i := range order {
-					if m.retired[i].Load() {
+					if m.agentTargetRetired(i) {
 						continue
 					}
-					t := m.targets[i]
+					t := targets[i]
 					endpoint := t.URL + "/status?agent-session=" + url.QueryEscape(id)
 					m.data.Agents.Requests++
 					status, code, err := readAgentStatus(ctx, m.client, endpoint)
 					// A deliberate SIGKILL can race an in-flight request. Its result
 					// belongs to the retired owner and cannot invalidate the new owner.
-					if m.retired[i].Load() {
+					if m.agentTargetRetired(i) {
 						continue
 					}
 					if ctx.Err() != nil {
@@ -103,6 +105,15 @@ func (m *Monitor) sampleAgents(ctx context.Context) {
 		}
 	}
 }
+
+// The target list only grows. Read the live retirement bit under the lock;
+// do not copy atomic.Bool values or hold the lock across an HTTP request.
+func (m *Monitor) agentTargetRetired(i int) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.retired[i].Load()
+}
+
 func readAgentStatus(ctx context.Context, client *http.Client, endpoint string) (*mediaworker.AgentSessionStatus, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

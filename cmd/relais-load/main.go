@@ -488,6 +488,14 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 		}
 	}
 	if c.Study != nil {
+		if c.Study.Scenario == "history-churn" {
+			// Input 400 starts churn around eight seconds. Exclude that ramp
+			// and the identical six-second move from its sustained traffic gate.
+			if err := waitUntil(ctx, report.StartedAt.Add(9*time.Second)); err != nil {
+				return report, err
+			}
+			t.Observer.mark("churn")
+		}
 		if err := waitUntil(ctx, report.StartedAt.Add(c.Duration-2*time.Second)); err != nil {
 			return report, err
 		}

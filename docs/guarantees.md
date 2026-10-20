@@ -586,7 +586,9 @@ cost is not isolated by this echo/fixture capacity sample.
 runner, two calls using a keyless four-exchange history fixture consumed
 95,855 B of Redis request+reply per call-second with split defaults, versus
 184,520 B with the legacy 8 KiB operator override. The split sample passed the
-128 KiB store-traffic gate; the legacy sample exceeded it. Split N+1, planned
+128 KiB store-traffic gate; the legacy sample exceeded it. Sustained history
+churn at split defaults exceeded the store gate; the default payload rate is
+under review in [#214](https://github.com/relaishq/relais/issues/214). Split N+1, planned
 drain and rolling master-key rotation ended no calls and reported zero
 decryption failures. At the rotation inventory check, all ten live component
 references used the new key. Both sampled checkpoint and snapshot age p99

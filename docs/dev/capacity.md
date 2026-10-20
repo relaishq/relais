@@ -292,7 +292,7 @@ The selected topology is separate processes over loopback on both platforms.
 `split_callers` selects 1..16 calls (default 2). `duration` selects 20..60 seconds
 (default 30) per sample; rolling rotation has at least 65 seconds. One generator
 per call keeps the hosted caller load fixed. The job has a 40-minute limit and
-a 30-minute measurement-step limit. The orchestrator dispatches it after push:
+a 30-minute measurement-step limit. Manual dispatch selects the ref:
 
 ```sh
 gh workflow run load-calibration.yml --repo relaishq/relais --ref BRANCH \
@@ -322,6 +322,11 @@ hangup and cleanup phases are separate. Each matched traffic sample includes
 one identical planned move probe; its Redis request/reply traffic has its own
 phase and stays in the complete media-window gate. One-second bins
 show rotation bursts; they do not establish a per-second burst allowance.
+History churn has its own observer phase from media StartedAt + 9 s, after the
+input-400 ramp and the planned move. Both the load verdict and report apply the
+100-command/128-KiB gates to that phase independently of the complete media
+window. A missing or truncated churn phase blocks evidence; averaging the ramp
+with churn cannot turn a sustained excess into a pass.
 Per-client session/frame/owners rates still come from the application wire
 counters. Successful component sizes exclude failed writes, while protocol
 traffic includes every observed failed attempt and script body. Warm EVAL body submissions are counted separately
@@ -349,6 +354,6 @@ loss, decryption and cleanup gates. Max ages are reported separately.
 Application Save and host state admission have separate wall/thread CPU counters.
 Timing adds overhead to both arms. Mac thread CPU is unavailable and explicitly
 blocks hosted approval. The workflow uploads raw JSON, every child log, exact
-binary hashes, runner details and the gate report even on failure. Phase-two
-results and ADR projection comparisons belong in `capacity-results.md` only
-after the hosted artifacts are available.
+binary hashes, runner details and the gate report even on failure. Hosted
+results and ADR projection comparisons are recorded in `capacity-results.md`
+from the uploaded artifacts.

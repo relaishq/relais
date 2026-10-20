@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +13,42 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/require"
 )
+
+func TestAddWorkerDoesNotWaitForAgentStatusSweep(t *testing.T) {
+	requested, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case <-requested:
+		default:
+			close(requested)
+		}
+		<-release
+		_, _ = w.Write([]byte(`{"agent_session":{"id":"session","name":"custom/v1","checkpoint_known":true}}`))
+	}))
+	defer server.Close()
+	defer unblock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := &Monitor{targets: []Target{{Name: "worker-0", URL: server.URL, AgentSessions: []string{"session"}}}, retired: make([]atomic.Bool, 1), client: server.Client()}
+	done := make(chan struct{})
+	go func() { defer close(done); m.sampleAgents(ctx) }()
+	defer func() { cancel(); unblock(); <-done }()
+	select {
+	case <-requested:
+	case <-time.After(2 * time.Second):
+		t.Fatal("status request did not start")
+	}
+	added := make(chan error, 1)
+	go func() { added <- m.AddWorker(Target{Name: "worker-1", URL: server.URL}) }()
+	select {
+	case err := <-added:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("AddWorker waited for a blocked status request")
+	}
+}
 
 func TestAgentSamplerRetirementDuringRequest(t *testing.T) {
 	requested, release, observed := make(chan struct{}), make(chan struct{}), make(chan struct{}, 1)

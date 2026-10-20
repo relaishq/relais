@@ -53,36 +53,14 @@ func (e *flagError) Unwrap() error { return e.error }
 // install signal handlers or call os.Exit. Canceling ctx starts the same bounded
 // drain as SIGTERM in Main. Run returns flag.ErrHelp after printing help.
 func Run(ctx context.Context, args []string, options Options) error {
-	flags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
-	var storeConfig processrun.StoreConfig
-	storeConfig.Flags(flags)
-	name := flags.String("name", processrun.Env("RELAIS_WORKER_NAME", ""), "unique worker name")
-	listen := flags.String("media", processrun.Env("RELAIS_WORKER_MEDIA", "127.0.0.1:0"), "private UDP address")
-	leg := flags.String("relay-leg", processrun.Env("RELAIS_RELAY_LEG", ""), "relay private UDP address")
-	public := flags.String("relay-media", processrun.Env("RELAIS_RELAY_MEDIA", ""), "relay advertised public UDP address")
-	control := flags.String("control", processrun.Env("RELAIS_CONTROL_URL", ""), "control-plane HTTP URL for heartbeats")
-	httpAddr := flags.String("http", processrun.Env("RELAIS_WORKER_HTTP", "127.0.0.1:0"), "private worker HTTP address")
-	cacheOff := flags.Bool("frame-cache-off", false, "disable cache writes and takeover replay (PLI remains enabled)")
-	cryptoTrace := flags.Bool("srtp-diagnostics", false, "log sent SRTP/SRTCP ciphertext metadata for fault investigations")
-	defaultAgent := options.DefaultAgent
-	if defaultAgent == "" {
-		defaultAgent = "echo"
-	}
-	agentName := flags.String("agent", defaultAgent, "audio agent: echo, demo or a registered name")
-	split := flags.Bool("agent-split-checkpoints", false, "use v10 component checkpoints for new calls (upgrade every participant first)")
-	limits := mediaworker.SnapshotLimits{}
-	flags.IntVar(&limits.MaxBytes, "agent-max-snapshot-bytes", 7168, "v2 whole encrypted snapshot byte cap")
-	flags.IntVar(&limits.BytesPerSecond, "agent-snapshot-bytes-per-second", 0, "payload bytes/s (0: legacy 81920, split 80000)")
-	flags.IntVar(&limits.BurstBytes, "agent-snapshot-burst-bytes", 0, "payload burst bytes (0: legacy 28672, split 40960)")
-	flags.IntVar(&limits.MoveBytesPerSession, "agent-move-bytes-per-session", 1<<20, "v2 move memory bytes per session")
-	flags.Int64Var(&limits.MoveBytesTotal, "agent-move-bytes-total", 64<<20, "v2 move memory bytes per worker including export scratch")
-	drainTimeout := flags.Duration("drain-timeout", 5*time.Second, "SIGTERM drain deadline before closing")
-	taskBudget := flags.Duration("agent-drain-task-budget", 2*time.Second, "v2 handler quiescence cap (0 through 2s); requires a measured move reserve")
-	moveReserve := flags.Duration("agent-drain-move-reserve", 0, "measured time reserved for control drain; unset skips handler quiescence")
-	version := buildinfo.VersionFlag(flags)
+	flags, f := newWorkerFlags(options)
+	name, listen, leg, public, control, httpAddr, agentName := f.name, f.listen, f.leg, f.public, f.control, f.httpAddr, f.agentName
+	cacheOff, cryptoTrace, split, version := f.cacheOff, f.cryptoTrace, f.split, f.version
+	drainTimeout, taskBudget, moveReserve := f.drainTimeout, f.taskBudget, f.moveReserve
 	if err := flags.Parse(args); err != nil {
 		return &flagError{err}
 	}
+	storeConfig, limits := f.storeConfig, f.limits
 	if *version {
 		return buildinfo.PrintVersion(os.Stdout, "relais-worker")
 	}

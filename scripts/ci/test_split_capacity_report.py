@@ -23,9 +23,16 @@ def fixture():
         measurement = dict(worker_args=["-agent-split-checkpoints"] if arm == "after" else ([] if scenario == "echo" else ["-agent-max-snapshot-bytes=24576", "-agent-snapshot-bytes-per-second=270336", "-agent-snapshot-burst-bytes=98304"]), ages=dict(coverage_complete=True, checkpoint_age_p99_ms=100, snapshot_age_p99_ms=100, checkpoint_age_max_ms=150, snapshot_age_max_ms=150), arm=arm, scenario=scenario, live_calls=2, lost_calls=0,
                            survivors={"1": 1, "2": 1}, fixture_samples=100, history_refusals=10,
                            inventory_live_calls=2, live_key_id_inventory={"2": 10},
-                           store=dict(phases={p: phase() for p in ("setup", "steady", "rotation")},
-                                      phase_seconds={p: 20 for p in ("setup", "steady", "rotation")},
+                           store=dict(phases={p: phase() for p in ("setup", "steady")},
+                                      phase_seconds={p: 20 for p in ("setup", "steady")},
                                       seconds={"0": phase()}))
+        if scenario == "rotation":
+            measurement["store"]["phases"]["rotation"] = phase()
+            measurement["store"]["phase_seconds"]["rotation"] = 11
+        if scenario == "history-churn":
+            measurement["store"]["phase_seconds"]["steady"] = 9
+            measurement["store"]["phases"]["churn"] = phase()
+            measurement["store"]["phase_seconds"]["churn"] = 11
         steps.append(dict(service_outcome="pass", generator_outcome="valid", measurement=measurement,
                           custom_agent=custom, store_commands_per_call_second=70, store_bytes_per_call_second=100000,
                           relay_buffer_enabled=True,
@@ -37,6 +44,32 @@ def fixture():
 
 
 class SplitCapacityReport(unittest.TestCase):
+    def test_later_churn_phase_cannot_hide_behind_passing_window(self):
+        for field, value in (("request_bytes", 132000 * 2 * 11),
+                             ("commands", 101 * 2 * 11)):
+            with self.subTest(field=field):
+                data = fixture()
+                step = data["steps"][4]
+                trace = step["measurement"]["store"]
+                trace["phases"]["churn"].update(reply_bytes=0, **{field: value})
+                summary = summarize(data, 10, 20)
+                row = summary["steps"][4]
+                self.assertLess(row["observed_media_bytes_per_call_second"], 131072)
+                self.assertLess(row["observed_media_commands_per_call_second"], 100)
+                self.assertLess(row["lifecycle_bytes_per_media_call_second"], 131072)
+                self.assertIn("after/history-churn: churn attempts exceed store ceiling", summary["blocking"])
+                self.assertEqual("fail", row["service"])
+
+    def test_missing_churn_phase_blocks_evidence(self):
+        data = fixture()
+        del data["steps"][4]["measurement"]["store"]["phases"]["churn"]
+        self.assertIn("after/history-churn: churn traffic window missing", summarize(data, 10, 20)["blocking"])
+
+    def test_truncated_churn_phase_blocks_evidence(self):
+        data = fixture()
+        data["steps"][4]["measurement"]["store"]["phase_seconds"]["churn"] = .1
+        self.assertIn("after/history-churn: churn traffic window too short", summarize(data, 10, 20)["blocking"])
+
     def test_complete_evidence_and_actual_rates(self):
         summary = summarize(fixture(), 10, 20)
         self.assertEqual([], summary["blocking"])

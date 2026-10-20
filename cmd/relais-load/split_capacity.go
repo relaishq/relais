@@ -133,7 +133,7 @@ func runSplitCapacity(ctx context.Context, m *clusterprocess.Manager, c config, 
 		if scenario == "n-plus-one" || scenario == "drain" {
 			kind = scenario
 		}
-		judged := judgeSplitCapacity(kind, raw, customCapacity(stepConfig))
+		judged := judgeSplitCapacity(kind, raw, customCapacity(stepConfig), stepConfig.Study)
 		if customCapacity(stepConfig) {
 			judged.Custom = customEvidence(raw)
 		}
@@ -297,7 +297,7 @@ func observeStudySurvivors(ctx context.Context, t *topology, c config) error {
 	return nil
 }
 
-func judgeSplitCapacity(kind string, raw loadgen.RunReport, custom bool) capacityStep {
+func judgeSplitCapacity(kind string, raw loadgen.RunReport, custom bool, observation *splitObservation) capacityStep {
 	generator, tolerated := capacityGenerator(raw)
 	view := generator
 	if custom {
@@ -306,5 +306,16 @@ func judgeSplitCapacity(kind string, raw loadgen.RunReport, custom bool) capacit
 	judged := judgeCapacityStep(kind, view, 100, 128<<10, nil, true)
 	judged.Run = raw
 	judged.ToleratedSlips = tolerated
+	if observation != nil && observation.Scenario == "history-churn" {
+		window := observation.Store.Phases["churn"]
+		seconds := observation.Store.PhaseSeconds["churn"]
+		if window == nil || window.Commands <= 0 || raw.Callers <= 0 || seconds <= 0 || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds < raw.Duration.Seconds()-10 {
+			judged.Verdict = "fail"
+			judged.Causes = append(judged.Causes, "churn traffic window missing or too short")
+		} else if denom := seconds * float64(raw.Callers); float64(window.Commands)/denom > 100 || float64(window.RequestBytes+window.ReplyBytes)/denom > 128<<10 {
+			judged.Verdict = "fail"
+			judged.Causes = append(judged.Causes, "churn attempts exceed store ceiling")
+		}
+	}
 	return judged
 }
