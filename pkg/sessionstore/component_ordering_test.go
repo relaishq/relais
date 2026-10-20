@@ -2,6 +2,7 @@ package sessionstore
 
 import (
 	"context"
+	"encoding/binary"
 	"net/netip"
 	"os"
 	"strconv"
@@ -17,24 +18,34 @@ import (
 func checkComponentRevisionOrder(t *testing.T, r *Redis) {
 
 	ctx := context.Background()
-	order, err := r.client.Eval(ctx, "return {'B' > 'a' and 1 or 0, '|' > '}' and 1 or 0}", nil).Int64Slice()
+	order, err := r.client.Eval(ctx, "return 'B' > 'a' and 1 or 0", nil).Int64()
 	require.NoError(t, err)
-	require.Equal(t, []int64{1, 1}, order, "Redis must actually run with non-C UTF-8 collation")
+	require.EqualValues(t, 1, order, "Redis must actually run with non-C UTF-8 collation")
+	// Both glibc and macOS en_US.UTF-8 collate letters by alphabet before
+	// case: B follows a, although its byte value (66) precedes a (97).
+	const workRevision, hostRevision uint64 = 'B', 'a'
 	lease, err := r.Claim(ctx, "locale-order", netip.MustParseAddrPort("127.0.0.1:23456"), time.Minute)
 	require.NoError(t, err)
 	first, err := r.CommitComponents(ctx, lease, ComponentCommit{Components: componentFixture(lease.SessionID), StateVersion: 1})
 	require.NoError(t, err)
-	require.NoError(t, r.client.HSet(ctx, r.keys(lease.SessionID)[0], "next_seq", "89").Err())
+	require.NoError(t, r.client.HSet(ctx, r.keys(lease.SessionID)[0], "next_seq", strconv.FormatUint(workRevision-1, 10)).Err())
 	c := cloneComponents(first.Components)
 	c.Work = appendComponentBytes(t, c.Work, codec.Work, 1)
 	work, err := r.CommitComponents(ctx, lease, ComponentCommit{Components: c, StateVersion: 1, Expected: &first.Metadata})
 	require.NoError(t, err)
-	require.EqualValues(t, 90, work.Metadata.References[1].Revision)
-	require.NoError(t, r.client.HSet(ctx, r.keys(lease.SessionID)[0], "next_seq", "96").Err())
+	require.Equal(t, workRevision, work.Metadata.References[1].Revision)
+	// Exercise the old comparison on the actual fixed-width revision bytes,
+	// including their shared NUL prefix, on this same Redis primary.
+	oldAfter, err := r.client.Eval(ctx, "return ARGV[1] > ARGV[2] and 1 or 0", []string{r.keys(lease.SessionID)[0]},
+		binary.BigEndian.AppendUint64(nil, work.Metadata.References[1].Revision),
+		binary.BigEndian.AppendUint64(nil, hostRevision)).Int64()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, oldAfter, "old Lua comparison must misorder revision %d before %d", workRevision, hostRevision)
+	require.NoError(t, r.client.HSet(ctx, r.keys(lease.SessionID)[0], "next_seq", strconv.FormatUint(hostRevision-1, 10)).Err())
 	c.Transport = advanceComponentTransport(t, c.Transport)
 	hostOnly, err := r.CommitComponents(ctx, lease, ComponentCommit{Components: c, StateVersion: 1, Expected: &work.Metadata})
-	require.NoError(t, err, "host-only commit at revision 97 after a work change at revision 90")
-	require.EqualValues(t, 97, hostOnly.Metadata.References[4].Revision)
+	require.NoError(t, err, "host-only commit at revision %d after a work change at revision %d", hostRevision, workRevision)
+	require.Equal(t, hostRevision, hostOnly.Metadata.References[4].Revision)
 }
 
 func TestClusterComponentRevisionOrderingUnderUTF8(t *testing.T) {
