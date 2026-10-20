@@ -35,7 +35,8 @@ if epoch~=ARGV[1] then return -1 end
 local t=redis.call('TIME'); local now=tonumber(t[1])*1000+math.floor(tonumber(t[2])/1000)
 local incoming=cjson.decode(ARGV[3])
 if incoming.expires<=now then return 0 end
-local function greater(a,b) return #a>#b or (#a==#b and a>b) end
+local function after(a,b) for k=1,#a do local x,y=string.byte(a,k),string.byte(b,k) if x~=y then return x>y end end return false end
+local function greater(a,b) return #a>#b or (#a==#b and after(a,b)) end
 -- Prune old fields even when another address keeps the hash alive.
 local values=redis.call('HGETALL',KEYS[2])
 for i=1,#values,2 do

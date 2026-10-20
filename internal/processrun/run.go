@@ -66,15 +66,11 @@ func (c StoreConfig) Open(ctx context.Context) (*sessionstore.Redis, error) {
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
-	key, err := storeKey()
+	key, opts, err := SessionStoreKeys(os.Getenv)
 	if err != nil {
 		return nil, err
 	}
 	cfg, err := c.redisConfig()
-	if err != nil {
-		return nil, err
-	}
-	opts, err := sessionstore.RedisKeyOptionsFromEnv()
 	if err != nil {
 		return nil, err
 	}
@@ -96,8 +92,19 @@ func (c StoreConfig) OpenFrames(ctx context.Context) (*framecache.Redis, error) 
 	}
 	return framecache.NewRedis(ctx, cfg, key, framecache.Limits{})
 }
-func storeKey() ([]byte, error) {
-	encoded := os.Getenv("RELAIS_SESSIONSTORE_KEY")
+
+// SessionStoreKeys shares active/decrypt key parsing with process observers.
+func SessionStoreKeys(lookup func(string) string) ([]byte, sessionstore.RedisOptions, error) {
+	key, err := sessionStoreKey(lookup)
+	if err != nil {
+		return nil, sessionstore.RedisOptions{}, err
+	}
+	opts, err := sessionstore.RedisKeyOptions(lookup)
+	return key, opts, err
+}
+func storeKey() ([]byte, error) { return sessionStoreKey(os.Getenv) }
+func sessionStoreKey(lookup func(string) string) ([]byte, error) {
+	encoded := lookup("RELAIS_SESSIONSTORE_KEY")
 	key, err := hex.DecodeString(encoded)
 	if err != nil || len(key) != 32 {
 		key, err = base64.StdEncoding.DecodeString(encoded)

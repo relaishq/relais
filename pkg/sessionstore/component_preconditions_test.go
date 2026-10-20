@@ -41,7 +41,8 @@ func TestComponentRevisionsRemainExactAboveLuaIntegerRange(t *testing.T) {
 func TestComponentScriptPreflightRefusesBeforeWriting(t *testing.T) {
 	forComponentRedis(t, func(t *testing.T, r *Redis) {
 		ctx := context.Background()
-		for _, kind := range []string{"wrong-type", "referenced-bank", "wrong-sequence", "setup-generation", "oversized-part"} {
+		cases := []string{"wrong-type", "referenced-bank", "wrong-sequence", "setup-generation", "oversized-part", "wrong-owner", "wrong-epoch", "expired", "transferred", "stale-sequence", "future-sequence", "legacy-layout", "owner-metadata", "epoch-encoding", "sequence-encoding", "unchanged-part", "unchanged-bank", "changed-revision", "unchanged-root", "changed-root", "reinitialize", "reinitialize-missing-checkpoint"}
+		for _, kind := range cases {
 			t.Run(kind, func(t *testing.T) {
 				id := "preflight-" + kind
 				lease, err := r.Claim(ctx, id, netip.MustParseAddrPort("127.0.0.1:23456"), time.Minute)
@@ -55,9 +56,21 @@ func TestComponentScriptPreflightRefusesBeforeWriting(t *testing.T) {
 				seq, err := sequenceNumber(fmt.Sprint(reservation[1]))
 				require.NoError(t, err)
 				c := cloneComponents(first.Components)
-				c.History = appendComponentBytes(t, c.History, 4, 1)
+				if kind != "unchanged-root" {
+					c.History = appendComponentBytes(t, c.History, 4, 1)
+				}
 				p, err := r.prepareComponents(lease, ComponentCommit{Components: c, StateVersion: 1, Expected: &first.Metadata}, &record, seq)
 				require.NoError(t, err)
+				expected, _ := first.Metadata.Marshal()
+				owner, epoch := lease.Worker.String(), fmt.Sprint(lease.Epoch)
+				epochBytes, seqBytes := binary.BigEndian.AppendUint64(nil, lease.Epoch), binary.BigEndian.AppendUint64(nil, seq)
+				parts := componentBytes(p.record.sealed)
+				for i := range parts {
+					if !p.changed[i] {
+						parts[i] = nil
+					}
+				}
+				want := ErrUnsafeCheckpoint
 				switch kind {
 				case "wrong-type":
 					key := r.componentKeys(id)[7]
@@ -70,15 +83,68 @@ func TestComponentScriptPreflightRefusesBeforeWriting(t *testing.T) {
 				case "setup-generation":
 					p.record.metadata.SetupGeneration++
 				case "oversized-part":
-					p.record.sealed.History = make([]byte, 131103)
+					parts[2] = make([]byte, 131103)
+				case "wrong-owner":
+					owner = "127.0.0.1:23457"
+					p.record.metadata.Owner = owner
+					want = ErrLeaseLost
+				case "wrong-epoch":
+					epoch = fmt.Sprint(lease.Epoch + 1)
+					epochBytes = binary.BigEndian.AppendUint64(nil, lease.Epoch+1)
+					p.record.metadata.OwnerEpoch++
+					want = ErrLeaseLost
+				case "expired":
+					require.NoError(t, r.client.HSet(ctx, r.keys(id)[0], "expires", "1").Err())
+					want = ErrLeaseLost
+				case "transferred":
+					_, err = r.Transfer(ctx, lease, netip.MustParseAddrPort("127.0.0.1:23457"), time.Minute)
+					require.NoError(t, err)
+					want = ErrLeaseLost
+				case "stale-sequence":
+					require.NoError(t, r.client.HSet(ctx, r.keys(id)[0], "state_seq", fmt.Sprint(seq)).Err())
+					want = ErrStateSuperseded
+				case "future-sequence":
+					require.NoError(t, r.client.HSet(ctx, r.keys(id)[0], "next_seq", fmt.Sprint(seq-1)).Err())
+					want = ErrStateSuperseded
+				case "legacy-layout":
+					require.NoError(t, r.client.HSet(ctx, r.keys(id)[0], "layout", "legacy").Err())
+					want = ErrCheckpointLayout
+				case "owner-metadata":
+					p.record.metadata.Owner = "127.0.0.1:23457"
+				case "epoch-encoding":
+					epochBytes = binary.BigEndian.AppendUint64(nil, lease.Epoch+1)
+					p.record.metadata.OwnerEpoch++
+				case "sequence-encoding":
+					seqBytes = binary.BigEndian.AppendUint64(nil, seq+1)
+					p.record.metadata.References[2].Revision++
+					p.record.metadata.References[3].Revision++
+					p.record.metadata.References[4].Revision++
+				case "unchanged-part":
+					parts[1] = record.sealed.Work
+				case "unchanged-bank":
+					p.record.metadata.Banks[1] = 1 - first.Metadata.Banks[1]
+				case "changed-revision":
+					p.record.metadata.References[2].Revision = first.Metadata.References[2].Revision
+				case "unchanged-root":
+					p.record.metadata.References[3].Digest[0] ^= 1
+				case "changed-root":
+					p.record.metadata.References[3].Revision = first.Metadata.References[3].Revision
+				case "reinitialize", "reinitialize-missing-checkpoint":
+					p, err = r.prepareComponents(lease, ComponentCommit{Components: c, StateVersion: 1}, nil, seq)
+					require.NoError(t, err)
+					parts = componentBytes(p.record.sealed)
+					expected = nil
+					require.NoError(t, r.client.HSet(ctx, r.componentKeys(id)[6], "m", "").Err())
+					if kind == "reinitialize-missing-checkpoint" {
+						require.NoError(t, r.client.Del(ctx, r.componentKeys(id)[6]).Err())
+					}
 				}
-				packed, _ := p.record.metadata.Marshal()
-				expected, _ := first.Metadata.Marshal()
+				packed, err := p.record.metadata.Marshal()
+				require.NoError(t, err)
 				before := snapshotComponentKeys(t, r, id)
-				_, err = r.runComponent(ctx, componentCommitScript, "component_commit", id, lease.Worker.String(), fmt.Sprint(lease.Epoch), expected, packed, p.record.sealed.Transport, fmt.Sprint(seq), binary.BigEndian.AppendUint64(nil, lease.Epoch), []byte{}, []byte{}, p.record.sealed.History, binary.BigEndian.AppendUint64(nil, seq))
-				require.ErrorIs(t, err, ErrUnsafeCheckpoint)
-				require.Equal(t, before, snapshotComponentKeys(t, r, id), "all preconditions precede component or metadata writes")
-				require.NoError(t, r.Release(ctx, lease))
+				_, err = r.runComponent(ctx, componentCommitScript, "component_commit", id, owner, epoch, expected, packed, p.record.sealed.Transport, fmt.Sprint(seq), epochBytes, parts[0], parts[1], parts[2], seqBytes)
+				require.ErrorIs(t, err, want)
+				require.Equal(t, before, snapshotComponentKeys(t, r, id), "every precondition precedes all writes")
 			})
 		}
 	})

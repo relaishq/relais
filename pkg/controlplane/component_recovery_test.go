@@ -165,3 +165,14 @@ func TestComponentUnsafeTakeoverRecordsLossAndReleasesLease(t *testing.T) {
 	_, err = wrapped.Get(ctx, id)
 	require.ErrorIs(t, err, sessionstore.ErrEnded)
 }
+
+func TestComponentInventoryStatusReportsUnverifiableCount(t *testing.T) {
+	store := &inventorySampleStore{counts: map[byte]uint64{2: 5}, err: &sessionstore.InventoryUnverifiableError{Count: 3}}
+	p := NewWithConfig(nil, store, Config{})
+	value, err := p.Status(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "unverifiable", value.SessionStoreKeys.State)
+	require.EqualValues(t, 3, value.SessionStoreKeys.Unverifiable)
+	require.Equal(t, map[byte]uint64{2: 5}, value.SessionStoreKeys.Counts)
+	require.False(t, value.SessionStoreKeys.ObservedAt.IsZero())
+}

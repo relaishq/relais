@@ -57,18 +57,23 @@ func (m *Memory) ComponentKeyInventory(ctx context.Context) (map[byte]uint64, er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	counts := map[byte]uint64{}
+	var unverifiable uint64
 	now := time.Now()
 	for id, record := range m.componentRecords {
 		lease, ok := m.leases[id]
 		if !ok || !now.Before(lease.ExpiresAt) {
 			continue
 		}
-		if _, err := tupleFromRecord(m.componentCrypto, id, record, lease, now); err != nil {
-			return nil, err
+		if err := m.componentCrypto.authenticateInventoryMetadata(id, record, lease); err != nil {
+			unverifiable++
+			continue
 		}
 		for _, ref := range record.metadata.References {
 			counts[ref.KeyID]++
 		}
+	}
+	if unverifiable > 0 {
+		return counts, &InventoryUnverifiableError{Count: unverifiable}
 	}
 	return counts, nil
 }

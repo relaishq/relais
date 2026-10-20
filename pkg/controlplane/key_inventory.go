@@ -5,16 +5,19 @@ import (
 	"maps"
 	"sync"
 	"time"
+
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 // KeyInventoryStatus is a sampled retirement aid, not a global transaction.
 // Counts are null until a successful scan. Failed/stale samples retain their
 // observation time and counts; they never become an authoritative zero.
 type KeyInventoryStatus struct {
-	State      string          `json:"state"`
-	Counts     map[byte]uint64 `json:"counts"`
-	ObservedAt time.Time       `json:"observed_at"`
-	Error      string          `json:"error,omitempty"`
+	Unverifiable uint64          `json:"unverifiable"`
+	State        string          `json:"state"`
+	Counts       map[byte]uint64 `json:"counts"`
+	ObservedAt   time.Time       `json:"observed_at"`
+	Error        string          `json:"error,omitempty"`
 }
 type keyInventoryCache struct {
 	mu        sync.Mutex
@@ -35,6 +38,11 @@ func (p *Plane) scanKeyInventory(ctx context.Context) {
 	p.inventory.mu.Lock()
 	defer p.inventory.mu.Unlock()
 	p.inventory.loading = false
+	unverifiable, partial := err.(*sessionstore.InventoryUnverifiableError)
+	if partial {
+		p.inventory.value = KeyInventoryStatus{State: "unverifiable", Counts: maps.Clone(counts), ObservedAt: time.Now(), Unverifiable: unverifiable.Count}
+		return
+	}
 	if err != nil {
 		p.inventory.value.State = "failed"
 		p.inventory.value.Error = "key inventory scan failed"
@@ -73,7 +81,7 @@ func (p *Plane) keyInventoryStatus(ctx context.Context) KeyInventoryStatus {
 	defer p.inventory.mu.Unlock()
 	value := p.inventory.value
 	value.Counts = maps.Clone(value.Counts)
-	if value.State == "current" && time.Since(value.ObservedAt) >= keyInventoryInterval {
+	if (value.State == "current" || value.State == "unverifiable") && time.Since(value.ObservedAt) >= keyInventoryInterval {
 		value.State = "stale"
 	}
 	return value

@@ -12,16 +12,19 @@ import (
 // RedisKeyOptionsFromEnv reads the environment-only session-store key ring.
 // OLD_KEYS is a JSON object mapping decimal byte IDs to hex/base64 AES-256
 // keys. No error includes the key material. Key ID zero remains the default.
-func RedisKeyOptionsFromEnv() (RedisOptions, error) {
+func RedisKeyOptionsFromEnv() (RedisOptions, error) { return RedisKeyOptions(os.Getenv) }
+
+// RedisKeyOptions applies the same environment-only grammar to a child process environment.
+func RedisKeyOptions(lookup func(string) string) (RedisOptions, error) {
 	opts := RedisOptions{}
-	if value := os.Getenv("RELAIS_SESSIONSTORE_KEY_ID"); value != "" {
+	if value := lookup("RELAIS_SESSIONSTORE_KEY_ID"); value != "" {
 		id, err := strconv.ParseUint(value, 10, 8)
 		if err != nil {
 			return opts, errors.New("RELAIS_SESSIONSTORE_KEY_ID must be a decimal byte")
 		}
 		opts.KeyID = byte(id)
 	}
-	if value := os.Getenv("RELAIS_SESSIONSTORE_OLD_KEYS"); value != "" {
+	if value := lookup("RELAIS_SESSIONSTORE_OLD_KEYS"); value != "" {
 		var encoded map[string]string
 		if json.Unmarshal([]byte(value), &encoded) != nil || encoded == nil {
 			return opts, errors.New("RELAIS_SESSIONSTORE_OLD_KEYS must be an object of key IDs and encoded keys")

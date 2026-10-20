@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/relaishq/relais/internal/processrun"
 
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/workerdriver"
@@ -165,11 +166,8 @@ func (s *storeStallOptions) prepare(ctx context.Context, env []string, id, contr
 	if s.Redis == nil {
 		return errors.New("store-stall has no owned Redis child")
 	}
-	key, err := hex.DecodeString(envValue(env, "RELAIS_SESSIONSTORE_KEY"))
-	if err != nil {
-		return err
-	}
-	s.store, err = sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: envValue(env, "RELAIS_REDIS_ADDR"), Prefix: envValue(env, "RELAIS_REDIS_PREFIX")}, key)
+	var err error
+	s.store, err = openStoreStallStore(ctx, env)
 	if err != nil {
 		return err
 	}
@@ -601,4 +599,13 @@ func judgeLiveSurvival(report *callharness.Report, status controlplane.Status, e
 		check(until.Sub(report.StartedAt.Add(track.LastArrival)) < 200*time.Millisecond, "no continuing "+track.Kind+" media")
 	}
 	return failures
+}
+
+// Use the exact worker key grammar, including nonzero active IDs and old keys.
+func openStoreStallStore(ctx context.Context, env []string) (*sessionstore.Redis, error) {
+	key, options, err := processrun.SessionStoreKeys(func(name string) string { return envValue(env, name) })
+	if err != nil {
+		return nil, err
+	}
+	return sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: envValue(env, "RELAIS_REDIS_ADDR"), Prefix: envValue(env, "RELAIS_REDIS_PREFIX")}, key, options)
 }

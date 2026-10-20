@@ -292,3 +292,28 @@ func sequenceNumber(s string) (uint64, error) {
 	}
 	return v, nil
 }
+
+// InventoryUnverifiableError preserves authenticated counts while identifying
+// records whose key IDs cannot be trusted. It must block key retirement.
+type InventoryUnverifiableError struct{ Count uint64 }
+
+func (e *InventoryUnverifiableError) Error() string {
+	return fmt.Sprintf("sessionstore: %d inventory records unverifiable", e.Count)
+}
+
+// Checkpoint AEAD authenticates the complete packed reference tuple. Inventory
+// need not decrypt setup/work/history or possess their old decrypt keys.
+func (r *Redis) authenticateInventoryMetadata(id string, record componentRecord, lease Lease) error {
+	if err := validateComponentMetadata(record.metadata); err != nil {
+		return err
+	}
+	m := record.metadata
+	if m.OwnerEpoch > lease.Epoch || (m.OwnerEpoch == lease.Epoch && m.Owner != lease.Worker.String()) {
+		return ErrUnsafeCheckpoint
+	}
+	ref := m.References[4]
+	if _, err := codec.Open(r.keysByID[ref.KeyID], ref.KeyID, id, codec.Transport, m, record.sealed.Transport); err != nil {
+		return fmt.Errorf("%w: %w", ErrUnsafeCheckpoint, err)
+	}
+	return nil
+}

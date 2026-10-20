@@ -16,6 +16,7 @@ import (
 // A single persistent hash retains fencing evidence and the monotone epoch.
 // Redis TIME decides expiry; no client clock can authorize takeover.
 const relayLeaseLua = `
+local function after(a,b) for k=1,#a do local x,y=string.byte(a,k),string.byte(b,k) if x~=y then return x>y end end return false end
 local op,holder,epoch,ttl=ARGV[1],ARGV[2],ARGV[3],tonumber(ARGV[4])
 local t=redis.call('TIME')
 local now=tonumber(t[1])*1000+math.floor(tonumber(t[2])/1000)
@@ -70,7 +71,7 @@ else
  if c[1]~=ARGV[5] then return {2} end
  if op=='renew' then
   -- Compare decimal epoch strings without Lua's floating-point precision loss.
-  if #c[2]>#epoch or (#c[2]==#epoch and c[2]>epoch) then return {2} end
+  if #c[2]>#epoch or (#c[2]==#epoch and after(c[2],epoch)) then return {2} end
   if c[2]~=epoch then c[2]=epoch; redis.call('HSET',KEYS[1],'epoch',epoch) end
  elseif c[2]~=epoch then return {2} end
  if op~='renew' and op~='release' and tonumber(c[3])<=now then return {2} end

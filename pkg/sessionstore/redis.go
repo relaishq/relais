@@ -211,7 +211,8 @@ local function componentsExpire(expires)
 end
 local function reply() return {1, current[1], current[2], current[3]} end
 local function matches() return current[1] == owner and current[2] == epoch end
-local function greater(a,b) return not b or #a>#b or (#a==#b and a>b) end
+local function after(a,b) for k=1,#a do local x,y=string.byte(a,k),string.byte(b,k) if x~=y then return x>y end end return false end
+local function greater(a,b) return not b or #a>#b or (#a==#b and after(a,b)) end
 local function newer(candidate) return greater(candidate,redis.call('GET',KEYS[4])) end
 local function now()
  local t=redis.call('TIME')
@@ -390,6 +391,19 @@ func (r *Redis) observe(op string, fn func() error) error {
 	}
 	return err
 }
+
+// Hot writes need only the lease and legacy ciphertext. Cleanup paths retain
+// the complete lifecycle declaration, including unpublished preparations.
+func (r *Redis) sessionKeys(id, op string) []string {
+	switch op {
+	case "sequence", "clock":
+		return r.keys(id)[:1]
+	case "put":
+		return r.keys(id)[:2]
+	default:
+		return r.lifecycleKeys(id)
+	}
+}
 func (r *Redis) run(ctx context.Context, op, id, owner, epoch string, ttl time.Duration, extras ...interface{}) ([]interface{}, error) {
 	ctx, cancel := context.WithTimeout(ctx, transitionCommandLimit)
 	defer cancel()
@@ -401,12 +415,7 @@ func (r *Redis) run(ctx context.Context, op, id, owner, epoch string, ttl time.D
 	var result []interface{}
 	fn := func() error {
 		var err error
-		keys := r.lifecycleKeys(id)
-		// Reservation accesses only the lease hash. Avoid sending the component
-		// families (or a missing legacy state key) on every hot write.
-		if op == "sequence" {
-			keys = keys[:1]
-		}
+		keys := r.sessionKeys(id, op)
 		result, err = sessionScript.Run(ctx, r.client, keys, args...).Slice()
 		return err
 	}
@@ -910,7 +919,7 @@ func (r *Redis) Clock(ctx context.Context, id string) (time.Time, error) {
 	var result []interface{}
 	err := r.retryRead(ctx, "session_clock", func() error {
 		var err error
-		result, err = r.client.Eval(ctx, storeClockLua, r.keys(id)).Slice()
+		result, err = r.client.Eval(ctx, storeClockLua, r.sessionKeys(id, "clock")).Slice()
 		return err
 	})
 	if err != nil {

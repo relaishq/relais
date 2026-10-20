@@ -116,7 +116,7 @@ func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir stri
 	start := func(name string, args ...string) (*clusterprocess.Child, clusterprocess.Ready, error) {
 		childEnv := env
 		if name == "relay" {
-			childEnv = withoutEnv(env, "RELAIS_SESSIONSTORE_KEY")
+			childEnv = withoutSessionKeys(env)
 		}
 		for i := 1; i < len(args); i++ {
 			if !strings.HasSuffix(args[i], ":0") {
@@ -241,4 +241,14 @@ func (t *topology) close() error {
 		return t.Network.Close()
 	}
 	return nil
+}
+
+func withoutSessionKeys(env []string) []string {
+	var out []string
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "RELAIS_SESSIONSTORE_") {
+			out = append(out, entry)
+		}
+	}
+	return out
 }

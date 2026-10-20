@@ -31,10 +31,20 @@ func (r *Redis) lifecycleKeys(id string) []string {
 const componentCommitLua = `
 local owner,epoch,expected,m,b,seq,epochbytes=ARGV[1],ARGV[2],ARGV[3],ARGV[4],ARGV[5],ARGV[6],ARGV[7]
 local function typ(k) return redis.call('TYPE',k).ok end
-local function greater(a,b) return not b or #a>#b or (#a==#b and a>b) end
+local function after(a,b) for k=1,#a do local x,y=string.byte(a,k),string.byte(b,k) if x~=y then return x>y end end return false end
+local function greater(a,b) return not b or #a>#b or (#a==#b and after(a,b)) end
 local function ref(s,i) return string.sub(s,2+i*41,42+i*41) end
 local function revision(s,i) return string.sub(s,35+i*41,42+i*41) end
 local function bank(s,i) return string.byte(s,219+i) end
+local function decimal(bytes)
+ local digits={0}
+ for i=1,#bytes do
+  local carry=string.byte(bytes,i)
+  for j=1,#digits do local n=digits[j]*256+carry;digits[j]=n%10;carry=math.floor(n/10) end
+  while carry>0 do digits[#digits+1]=carry%10;carry=math.floor(carry/10) end
+ end
+ local out='';for i=#digits,1,-1 do out=out..string.char(48+digits[i]) end;return out
+end
 local function validmeta(s)
  if #s<232 or #s>295 or string.byte(s,1)~=10 then return false end
  local n=string.byte(s,222)*256+string.byte(s,223)
@@ -42,7 +52,7 @@ local function validmeta(s)
  for i=0,2 do if bank(s,i)>1 then return false end end
  local zero=string.rep(string.char(0),8)
  if string.sub(s,-8)==zero or string.sub(s,207,214)==zero or revision(s,4)==zero then return false end
- for i=0,3 do if revision(s,i)==zero or revision(s,i)>revision(s,4) then return false end end
+ for i=0,3 do if revision(s,i)==zero or after(revision(s,i),revision(s,4)) then return false end end
  return true
 end
 -- Preflight all key types and all argument bounds before the first mutation.
@@ -55,11 +65,17 @@ local time=redis.call('TIME'); local now=tonumber(time[1])*1000+math.floor(tonum
 if lease[1]~=owner or lease[2]~=epoch or not lease[3] or tonumber(lease[3])<=now then return {-2} end
 if lease[4] and lease[4]~='10' then return {-5} end
 if #ARGV~=11 or not validmeta(m) or #epochbytes~=8 or #ARGV[11]~=8 or revision(m,4)~=ARGV[11] or string.sub(m,207,214)~=epochbytes or string.sub(m,224,-9)~=owner or #expected>295 or #b<30 or #b>131102 or not string.match(seq,'^[1-9][0-9]*$') or #seq>20 then return {-6} end
+if decimal(epochbytes)~=epoch or decimal(ARGV[11])~=seq then return {-6} end
 if not lease[6] or greater(seq,lease[6]) or not greater(seq,lease[5]) then return {-4} end
 local old=redis.call('HGET',KEYS[7],'m') or ''
 if old~=expected then return {-4} end
 if old~='' and not validmeta(old) then return {-6} end
-if old=='' and lease[4]=='10' then return {-6} end
+if old=='' and redis.call('HEXISTS',KEYS[1],'checkpoint_at')==1 then return {-5} end
+if old=='' and lease[4]=='10' then
+ if redis.call('HGET',KEYS[1],'component_init_epoch')~=epoch or redis.call('HGET',KEYS[7],'m')~='' or redis.call('HGET',KEYS[7],'b')~='' or redis.call('HGET',KEYS[7],'t')~='' then return {-6} end
+ for i=6,11 do if typ(KEYS[i])=='none' then return {-6} end end
+ if redis.call('HEXISTS',KEYS[6],'0')~=1 or redis.call('HEXISTS',KEYS[6],'1')~=1 then return {-6} end
+end
 if old~='' and string.sub(old,-8)~=string.sub(m,-8) then return {-6} end
 if old=='' and string.sub(m,-8)~=epochbytes then return {-6} end
 if old~='' then
@@ -87,7 +103,7 @@ if old=='' then
  redis.call('HSET',KEYS[7],'b','','m','','t','')
  redis.call('PEXPIREAT',KEYS[7],lease[3])
  for i=8,11 do redis.call('SET',KEYS[i],string.char(0),'PX',math.max(tonumber(lease[3])-now,1)) end
- redis.call('HSET',KEYS[1],'layout','10')
+ redis.call('HSET',KEYS[1],'layout','10','component_init_epoch',epoch)
 end
 for i=0,2 do
  local part=ARGV[8+i]
@@ -227,6 +243,14 @@ func (r *Redis) CommitComponents(ctx context.Context, lease Lease, request Compo
 	return r.commitPrepared(ctx, lease, request, record)
 }
 func (r *Redis) commitPrepared(ctx context.Context, lease Lease, request ComponentCommit, record *componentRecord) (ComponentTuple, error) {
+	// Settlement needs only authenticated publication tokens and their charge.
+	// Do not retain additional plaintext/ciphertext captures across retries.
+	type publication struct {
+		metadata ComponentMetadata
+		written  int
+		deferred bool
+	}
+	var uncertain []publication
 	for attempt := 0; attempt < 3; attempt++ {
 		reserved, err := r.run(ctx, "sequence", lease.SessionID, lease.Worker.String(), strconv.FormatUint(lease.Epoch, 10), 0)
 		if err != nil {
@@ -266,9 +290,25 @@ func (r *Redis) commitPrepared(ctx context.Context, lease Lease, request Compone
 			checkpoint, e := checkpointAt(prepared.record.stored, prepared.record.stored)
 			return ComponentTuple{Components: cloneComponents(prepared.plain), Metadata: prepared.record.metadata, Lease: lease, Checkpoint: checkpoint, WrittenBytes: prepared.written, RotationDeferred: prepared.deferred}, e
 		}
+		if errors.Is(err, ErrStateSuperseded) && len(uncertain) > 0 {
+			settleCtx, cancel := context.WithTimeout(context.Background(), transitionCommandLimit)
+			settled, readErr := r.ReadComponents(settleCtx, lease.SessionID)
+			cancel()
+			if readErr != nil {
+				return ComponentTuple{}, &TransientError{Op: "component_settle", Err: readErr}
+			}
+			for _, prior := range uncertain {
+				if metadataEqual(settled.Metadata, prior.metadata) {
+					settled.WrittenBytes = prior.written
+					settled.RotationDeferred = prior.deferred
+					return settled, nil
+				}
+			}
+		}
 		if !errors.Is(err, ErrTransient) {
 			return ComponentTuple{}, err
 		}
+		uncertain = append(uncertain, publication{prepared.record.metadata, prepared.written, prepared.deferred})
 		settleCtx, cancel := context.WithTimeout(context.Background(), transitionCommandLimit)
 		settled, e := r.ReadComponents(settleCtx, lease.SessionID)
 		cancel()
@@ -297,6 +337,7 @@ func (r *Redis) commitPrepared(ctx context.Context, lease Lease, request Compone
 func (r *Redis) ComponentKeyInventory(ctx context.Context) (map[byte]uint64, error) {
 	counts := map[byte]uint64{}
 	seen := map[string]bool{}
+	var unverifiable uint64
 	var mu sync.Mutex
 	scan := func(ctx context.Context, node *redis.Client) error {
 		for _, family := range []string{"checkpoint:", "state:"} {
@@ -313,24 +354,51 @@ func (r *Redis) ComponentKeyInventory(ctx context.Context) (map[byte]uint64, err
 						var e error
 						id, e = decodeTagID(id)
 						if e != nil {
-							return e
+							mu.Lock()
+							if !seen[key] {
+								seen[key] = true
+								unverifiable++
+							}
+							mu.Unlock()
+							continue
 						}
 					}
 					var refs []byte
 					if family == "checkpoint:" {
-						tuple, e := r.ReadComponents(ctx, id)
+						record, lease, _, e := r.readComponentRecord(ctx, id)
 						if errors.Is(e, ErrNotFound) {
 							continue
 						}
-						if e != nil {
-							return e
+						if e == nil {
+							e = r.authenticateInventoryMetadata(id, record, lease)
 						}
-						for _, ref := range tuple.Metadata.References {
+						if e != nil {
+							if !errors.Is(e, ErrUnsafeCheckpoint) && !errors.Is(e, ErrCheckpointLayout) {
+								return e
+							}
+							mu.Lock()
+							if !seen[key] {
+								seen[key] = true
+								unverifiable++
+							}
+							mu.Unlock()
+							continue
+						}
+						for _, ref := range record.metadata.References {
 							refs = append(refs, ref.KeyID)
 						}
 					} else {
 						result, e := r.run(ctx, "state", id, "", "", 0)
-						if errors.Is(e, ErrNotFound) || errors.Is(e, ErrCheckpointLayout) {
+						if errors.Is(e, ErrNotFound) {
+							continue
+						}
+						if errors.Is(e, ErrCheckpointLayout) {
+							mu.Lock()
+							if !seen[key] {
+								seen[key] = true
+								unverifiable++
+							}
+							mu.Unlock()
 							continue
 						}
 						if e != nil {
@@ -338,7 +406,13 @@ func (r *Redis) ComponentKeyInventory(ctx context.Context) (map[byte]uint64, err
 						}
 						blob := []byte(result[1].(string))
 						if _, e = r.openLegacyState(id, blob, result[2].(string)); e != nil {
-							return e
+							mu.Lock()
+							if !seen[key] {
+								seen[key] = true
+								unverifiable++
+							}
+							mu.Unlock()
+							continue
 						}
 						refs = append(refs, blob[1])
 					}
@@ -365,6 +439,13 @@ func (r *Redis) ComponentKeyInventory(ctx context.Context) (map[byte]uint64, err
 		err = cluster.ForEachMaster(ctx, scan)
 	} else {
 		err = scan(ctx, r.client.(*redis.Client))
+	}
+	if unverifiable > 0 {
+		partial := &InventoryUnverifiableError{Count: unverifiable}
+		if err == nil {
+			return counts, partial
+		}
+		err = errors.Join(err, partial)
 	}
 	return counts, err
 }

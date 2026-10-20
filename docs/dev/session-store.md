@@ -121,7 +121,11 @@ environment**, never key flags or command-line values:
   exclude the active ID. Keep this value in the same protected secret source.
 
 Control `GET /status` exposes `session_store_keys` with `state`, `counts` by
-key ID and `observed_at`. Inventory scans all primaries and counts only
+key ID, `unverifiable` record count and `observed_at`. An authenticated partial
+scan has state `unverifiable`; its counts remain usable but cannot establish
+that a key is safe to retire. One corrupt record or retired decrypt key does
+not suppress the other counts. Checkpoint AEAD authenticates the reference IDs
+without opening setup/work/history payloads. Inventory scans all primaries and counts only
 published references (five for a v10 tuple, one for legacy state). A current
 empty count is meaningful only with the retirement conditions above. Stale or
 failed scans are labeled and retain their last counts/time; counts are null
