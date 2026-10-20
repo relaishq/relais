@@ -68,6 +68,9 @@ func run() error {
 		names = append(names, entry.name)
 	}
 	plane.BeginBootstrap(names)
+	if err := plane.EnableRestart(); err != nil {
+		return err
+	}
 	// Serve heartbeats during registration. A slow later worker must not make
 	// an earlier healthy registration age past DeadAfter before Run starts.
 	handler := controlHandler(plane, r, *demoRegister, testWorkers, testWorkerClient())
@@ -75,18 +78,21 @@ func run() error {
 	serveErr := make(chan error, 1)
 	go func() { defer close(served); serveErr <- processrun.Serve(ctx, listener, handler) }()
 	defer func() { cancel(); <-served }()
-	workersDone := make(chan struct{})
-	firstRound := make(chan struct{})
-	go func() { defer close(workersDone); bootstrapWorkers(ctx, plane, fixed, firstRound) }()
-	defer func() { cancel(); <-workersDone }()
-	done := make(chan struct{})
-	go func() { defer close(done); _ = plane.Run(ctx) }()
-	// Preserve immediate usability for the normal all-up startup. A down
-	// dependency delays only this bounded first round, never process startup.
-	select {
-	case <-firstRound:
-	case <-ctx.Done():
+	managed := make([]controlplane.FixedWorker, 0, len(fixed))
+	for _, worker := range fixed {
+		managed = append(managed, controlplane.FixedWorker{Name: worker.name, URL: worker.endpoint})
 	}
+	done := make(chan struct{})
+	managedErr := make(chan error, 1)
+	go func() { defer close(done); managedErr <- plane.RunManaged(ctx, managed) }()
+	defer func() {
+		cancel()
+		<-done
+		<-served
+		releaseCtx, stop := context.WithTimeout(context.Background(), time.Second)
+		defer stop()
+		_ = plane.ReleaseControl(releaseCtx)
+	}()
 	firstRelay := make(chan struct{})
 	registrationDone := make(chan struct{})
 	go func() { defer close(registrationDone); registerRestartedRelay(ctx, plane, r, firstRelay) }()
@@ -95,10 +101,28 @@ func run() error {
 	case <-firstRelay:
 	case <-ctx.Done():
 	}
+	// Listening is available even when another control holds the lease or a
+	// dependency is down. GET /status is authoritative for mutation readiness.
+	startup := time.NewTimer(1200 * time.Millisecond)
+	defer startup.Stop()
+awaitReady:
+	for {
+		if state := plane.RebuildStatus(); state != nil && state.Phase == "ready" {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			break awaitReady
+		case <-startup.C:
+			break awaitReady
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 	processrun.Ready(map[string]any{"http": "http://" + listener.Addr().String()})
 	select {
 	case <-ctx.Done():
 	case err = <-serveErr:
+	case err = <-managedErr:
 	}
 	cancel()
 	<-done

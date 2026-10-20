@@ -41,6 +41,9 @@ func (s *RelayWorkerRegistry) Sync(ctx context.Context, p *Plane, r interface {
 	Status(context.Context) (relay.RelayStatus, error)
 	AddWorker(context.Context, netip.AddrPort) error
 }) error {
+	if !p.controlAuthority() {
+		return ErrNotReady
+	}
 	status, err := r.Status(ctx)
 	if err != nil {
 		return err

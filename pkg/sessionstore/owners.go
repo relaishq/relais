@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -120,6 +121,9 @@ type WorkerIndexRefresher interface {
 
 // Memory is a single-process store. Use NewMemory, not its zero value.
 type Memory struct {
+	controlLease      ControlLease
+	controlRecords    map[string]json.RawMessage
+	controlIntents    map[string]ControlIntent
 	relayLeases       map[string]RelayLease
 	mu                sync.RWMutex
 	leases            map[string]Lease
@@ -222,6 +226,14 @@ func (m *Memory) Transfer(ctx context.Context, from Lease, to netip.AddrPort, tt
 		return Lease{}, ErrLeaseLost
 	}
 
+	if intent, ok := ctx.Value(transitionIntentKey{}).(transitionIntent); ok {
+		record, exists := m.controlIntents[from.SessionID]
+		if !exists || record.Token != intent.Token || intent.ID != from.SessionID {
+			return Lease{}, ErrLeaseLost
+		}
+		record.Candidate = &Lease{SessionID: from.SessionID, Worker: to, Epoch: m.epoch + 1}
+		m.controlIntents[from.SessionID] = record
+	}
 	m.forgetRoutes(from.SessionID)
 	return m.next(from.SessionID, to, ttl), nil
 }

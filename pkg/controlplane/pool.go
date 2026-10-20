@@ -47,6 +47,9 @@ func (p *Plane) SetRelayReady(ready bool) {
 }
 
 func (p *Plane) readyLocked() bool {
+	if !p.mutationReady() {
+		return false
+	}
 	if p.bootstrap && !p.relayReady {
 		return false
 	}

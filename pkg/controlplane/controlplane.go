@@ -119,30 +119,32 @@ type ReplayRelay interface {
 }
 
 type registration struct {
-	name          string
-	addr          netip.AddrPort
-	worker        Worker
-	relayPending  bool // fixed bootstrap waits for the relay allowlist
-	draining      bool
-	reserved      int // incoming creates/moves; counted when balancing
-	rollbackSlots int // source protection, used only by placement load
-	lastHeartbeat time.Time
-	dead          bool
-	recovering    bool
-	recovered     bool
-	rejoinReady   bool
-	rejoinToken   string
-	acceptedToken string
-	retryingMoves bool
-	pending       map[string]*takeoverState // unfinished transfers, retained for retry
+	name              string
+	addr              netip.AddrPort
+	worker            Worker
+	relayPending      bool // fixed bootstrap waits for the relay allowlist
+	draining          bool
+	reserved          int // incoming creates/moves; counted when balancing
+	rollbackSlots     int // source protection, used only by placement load
+	lastHeartbeat     time.Time
+	dead              bool
+	recovering        bool
+	recovered         bool
+	rejoinReady       bool
+	rejoinToken       string
+	acceptedToken     string
+	heartbeatObserved bool
+	retryingMoves     bool
+	pending           map[string]*takeoverState // unfinished transfers, retained for retry
 }
 
 type call struct {
-	terminal       bool                 // guarded by mu; terminal loss is accounted once
-	lease          sessionstore.Lease   // guarded by stateMu; last observed placed tenure
-	lossLease      sessionstore.Lease   // guarded by mu; immutable token for terminal cleanup
-	cleanupPending bool                 // guarded by the plane registry lock
-	cleanupLeases  []sessionstore.Lease // guarded by mu; retained routed tenures
+	intent         *sessionstore.ControlIntent // guarded by mu
+	terminal       bool                        // guarded by mu; terminal loss is accounted once
+	lease          sessionstore.Lease          // guarded by stateMu; last observed placed tenure
+	lossLease      sessionstore.Lease          // guarded by mu; immutable token for terminal cleanup
+	cleanupPending bool                        // guarded by the plane registry lock
+	cleanupLeases  []sessionstore.Lease        // guarded by mu; retained routed tenures
 	cleanupLegacy  bool
 	cleanupPlanned bool
 	cleanupAfter   time.Time
@@ -170,6 +172,7 @@ type call struct {
 // Plane owns the registry and call metadata. The store remains authoritative
 // for ownership. New and Register must be called before accepting calls.
 type Plane struct {
+	restart         *restartState
 	inventory       keyInventoryCache
 	metrics         planeMetrics
 	mu              sync.Mutex
@@ -237,6 +240,24 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 		}
 	}
 
+	p.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	err := p.saveRegistration(ctx, name, addr, worker)
+	cancel()
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	if _, exists := p.workers[name]; exists {
+		p.mu.Unlock()
+		return errors.New("controlplane: duplicate worker name")
+	}
+	for _, w := range p.workers {
+		if w.addr == addr {
+			p.mu.Unlock()
+			return errors.New("controlplane: duplicate worker address")
+		}
+	}
 	p.workers[name] = &registration{name: name, addr: addr, worker: worker, lastHeartbeat: time.Now(), relayPending: p.bootstrap}
 	delete(p.pendingWorkers, name)
 	p.loadVersion++
@@ -381,6 +402,9 @@ func (p *Plane) owner(addr netip.AddrPort) *registration {
 // Create starts a call on the least-loaded non-draining worker. name can
 // pin a worker for a test, but cannot bypass draining.
 func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answerResult string, createErr error) {
+	if err := p.requireMutationReady(); err != nil {
+		return "", "", err
+	}
 	defer func() {
 		if createErr != nil {
 			p.metrics.callErrors.Add(1)
@@ -412,6 +436,11 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 		if err != nil {
 			return "", "", err
 		}
+		createKey, recordErr := p.startCreate(ctx, w)
+		if recordErr != nil {
+			p.unreserve(w)
+			return "", "", recordErr
+		}
 		placed = sessionstore.Lease{}
 		if worker, ok := w.worker.(interface {
 			CreateSessionWithLease(context.Context, string) (string, string, sessionstore.Lease, error)
@@ -419,6 +448,9 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 			id, answer, placed, err = worker.CreateSessionWithLease(ctx, offer)
 		} else {
 			id, answer, err = w.worker.CreateSession(ctx, offer)
+		}
+		if finishErr := p.finishCreate(ctx, createKey, w, id, err); finishErr != nil {
+			return "", "", finishErr
 		}
 		if err == nil {
 			break
@@ -456,6 +488,12 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 
 // End waits for a move already in progress, then hangs up the current owner.
 func (p *Plane) End(ctx context.Context, id string) error {
+	if err := p.requireMutationReady(); err != nil {
+		return err
+	}
+	return p.end(ctx, id)
+}
+func (p *Plane) end(ctx context.Context, id string) (endErr error) {
 	c, err := p.lookup(id)
 	if err != nil {
 		return err
@@ -490,6 +528,14 @@ func (p *Plane) End(ctx context.Context, id string) error {
 		return ErrUnknownCall
 	}
 
+	if err := p.beginIntent(ctx, c, "end", lease); err != nil {
+		return err
+	}
+	defer func() {
+		if endErr == nil {
+			p.finishIntent(c)
+		}
+	}()
 	if err := w.worker.EndSession(id); err != nil {
 		if errors.Is(err, mediaworker.ErrUnknownSession) {
 			// Fencing may remove ownership after End's first read. A worker's
@@ -583,6 +629,9 @@ type MoveResult struct {
 // another move or drain. Empty to picks
 // the least-loaded non-draining worker other than the current owner.
 func (p *Plane) Move(ctx context.Context, id, to string) (res MoveResult, moveErr error) {
+	if err := p.requireMutationReady(); err != nil {
+		return res, err
+	}
 	if !movediag.Enabled() {
 		return p.moveRequest(ctx, id, to)
 	}
@@ -655,6 +704,10 @@ func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, tar
 		return res, ErrUnknownCall
 	}
 
+	if err = p.beginIntent(ctx, c, "move", lease); err != nil {
+		return res, err
+	}
+	defer p.finishIntent(c)
 	res = MoveResult{Kind: "move", ID: c.id, From: source.name, To: target.name, Start: time.Now(), Result: mediaworker.HandoverResult{SessionID: c.id}}
 	defer func() {
 		res.End = time.Now()
@@ -928,11 +981,27 @@ func (e *unknownWorkerError) Unwrap() error { return e.error }
 // MarkDraining is an idempotent placement fence. It does not wait for
 // reservations, acquire call locks or drain slots, or move any sessions.
 func (p *Plane) MarkDraining(name string) error {
+	if err := p.requireMutationReady(); err != nil {
+		return err
+	}
 	_, err := p.markDraining(name)
 	return err
 }
 
 func (p *Plane) markDraining(name string) (*registration, error) {
+	if p.restart != nil {
+		p.mu.Lock()
+		exists := p.workers[name] != nil
+		p.mu.Unlock()
+		if !exists {
+			return nil, &unknownWorkerError{fmt.Errorf("controlplane: unknown worker %q: %w", name, sessionstore.ErrNotFound)}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := p.controlRecord(ctx, "drain:"+name, true); err != nil {
+			return nil, err
+		}
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	w := p.workers[name]
@@ -951,6 +1020,9 @@ func (p *Plane) markDraining(name string) (*registration, error) {
 // moves nothing. It marks draining before waiting up to one second for
 // incoming reservations, then includes those calls in the drain.
 func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, drainErr error) {
+	if err := p.requireMutationReady(); err != nil {
+		return nil, err
+	}
 	defer func() {
 		if drainErr != nil {
 			p.metrics.drainErrors.Add(1)
@@ -1094,6 +1166,7 @@ type CallStatus struct {
 
 // Status is the HTTP view of workers and live calls.
 type Status struct {
+	Rebuild          *RebuildStatus     `json:"rebuild,omitempty"`
 	Workers          []WorkerStatus     `json:"workers"`
 	Calls            []CallStatus       `json:"calls"`
 	Takeovers        []MoveResult       `json:"takeovers"`
@@ -1113,7 +1186,7 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 		workers = append(workers, w)
 	}
 	// Copy registry flags here; metadata uses its own brief lock below.
-	status := Status{SessionStoreKeys: inventory, Workers: []WorkerStatus{}, Calls: []CallStatus{}, Takeovers: p.recentTakeovers(), LostCount: p.lostCount}
+	status := Status{Rebuild: p.RebuildStatus(), SessionStoreKeys: inventory, Workers: []WorkerStatus{}, Calls: []CallStatus{}, Takeovers: p.recentTakeovers(), LostCount: p.lostCount}
 	for _, w := range workers {
 		status.Workers = append(status.Workers, WorkerStatus{Name: w.name, Address: w.addr, Draining: w.draining, Dead: w.dead, Recovering: w.recovering, LastHeartbeat: w.lastHeartbeat})
 	}
@@ -1179,6 +1252,19 @@ func drainParallelism() int {
 // transfer adopts an exact candidate after uncertainty. Only settlement can
 // prove a negative; a failed Get must never trigger rollback of a committed move.
 func (p *Plane) transfer(ctx context.Context, from sessionstore.Lease, to netip.AddrPort) (sessionstore.Lease, error) {
+	if p.restart != nil {
+		if !p.controlAuthority() {
+			return sessionstore.Lease{}, ErrNotReady
+		}
+		c, e := p.lookup(from.SessionID)
+		if e != nil {
+			return sessionstore.Lease{}, e
+		}
+		if c.intent == nil {
+			return sessionstore.Lease{}, errors.New("controlplane: transfer missing durable intent")
+		}
+		ctx = sessionstore.WithTransitionIntent(ctx, c.id, c.intent.Token)
+	}
 	lease, err := p.store.Transfer(ctx, from, to, p.ttl)
 	defer func() {
 		if err == nil {

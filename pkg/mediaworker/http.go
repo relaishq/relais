@@ -68,12 +68,28 @@ type ResumeRequest struct {
 type ResumeReply struct {
 	ID string `json:"id"`
 }
+
+// SessionInventoryLimit bounds one private status response independently of load.
+const SessionInventoryLimit = 4096
+
+// InstalledSession is a local observation, never evidence of store ownership.
+// ExpiresAt is omitted: renewals do not change an installed tenure.
+type InstalledSession struct {
+	ID    string         `json:"id"`
+	Owner netip.AddrPort `json:"owner"`
+	Epoch uint64         `json:"epoch"`
+}
+
 type WorkerStatus struct {
-	Address      netip.AddrPort      `json:"address"`
-	Sessions     int                 `json:"sessions"`
-	Replay       ReplayStats         `json:"replay"`
-	Agents       AgentStats          `json:"agents"`
-	AgentSession *AgentSessionStatus `json:"agent_session,omitempty"`
+	Draining       bool                `json:"draining"`
+	Inventory      []InstalledSession  `json:"inventory"`
+	Truncated      bool                `json:"truncated"`
+	InventoryKnown bool                `json:"inventory_known"`
+	Address        netip.AddrPort      `json:"address"`
+	Sessions       int                 `json:"sessions"`
+	Replay         ReplayStats         `json:"replay"`
+	Agents         AgentStats          `json:"agents"`
+	AgentSession   *AgentSessionStatus `json:"agent_session,omitempty"`
 }
 
 // PrivateHandler exposes the existing worker operations on trusted loopback.
@@ -152,6 +168,8 @@ func (w *Worker) PrivateHandler() http.Handler {
 	})
 	mux.HandleFunc("GET /status", func(rw http.ResponseWriter, r *http.Request) {
 		status := WorkerStatus{Address: w.LocalAddr(), Sessions: w.SessionCount(), Replay: w.ReplayStats(), Agents: w.AgentStats()}
+		status.Draining, status.Inventory, status.Truncated = w.installedSessions()
+		status.InventoryKnown = true
 		if id := r.URL.Query().Get("agent-session"); id != "" {
 			var err error
 			status.AgentSession, err = w.agentSessionStatus(id)
@@ -214,4 +232,32 @@ func (w *exportResponseWriter) Write(p []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(p)
 	w.bytes += n
 	return n, err
+}
+
+// installedSessions copies at most the cap under the registry lock, then reads
+// tenures under individual session locks. No registry lock spans a session lock
+// or I/O. A concurrent close/adoption can race the observation; control must
+// cross-check the store and must not treat absence as ownership authority.
+func (w *Worker) installedSessions() (bool, []InstalledSession, bool) {
+	w.mu.Lock()
+	draining, truncated := w.draining, len(w.sessions) > SessionInventoryLimit
+	sessions := make([]*session, 0, min(len(w.sessions), SessionInventoryLimit))
+	for _, s := range w.sessions {
+		if len(sessions) == SessionInventoryLimit {
+			break
+		}
+		sessions = append(sessions, s)
+	}
+	w.mu.Unlock()
+	inventory := make([]InstalledSession, 0, len(sessions))
+	for _, s := range sessions {
+		s.mu.Lock()
+		lease := s.lease
+		fenced := s.fenced.Load()
+		s.mu.Unlock()
+		if !fenced {
+			inventory = append(inventory, InstalledSession{ID: s.id, Owner: lease.Worker, Epoch: lease.Epoch})
+		}
+	}
+	return draining, inventory, truncated
 }

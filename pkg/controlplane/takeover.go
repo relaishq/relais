@@ -325,6 +325,10 @@ func (p *Plane) takeover(ctx context.Context, source *registration, listed sessi
 // A non-nil outcome has completed terminal accounting, independent of the
 // bounded status history. Nil means recovery is pending or ownership changed.
 func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *call, listed sessionstore.Lease, detected time.Time) (outcome *MoveResult) {
+	if err := p.beginIntent(ctx, c, "takeover", listed); err != nil {
+		return nil
+	}
+	defer p.finishIntent(c)
 	if c.terminal {
 		return nil
 	}
@@ -1004,6 +1008,9 @@ func (p *Plane) Replace(name string, addr netip.AddrPort, worker Worker) error {
 	if err != nil || len(leases) != 0 {
 		return errors.New("controlplane: replacement still has leases")
 	}
+	if err := p.saveRegistration(ctx, name, addr, worker); err != nil {
+		return err
+	}
 	p.mu.Lock()
 	if p.workers[name] != old || !old.dead || !old.recovered || old.recovering || old.reserved != 0 {
 		p.mu.Unlock()
@@ -1130,6 +1137,9 @@ func (p *Plane) resetRecoveredDrain(name string) error {
 	leases, err := p.store.ListByWorker(ctx, old.addr)
 	if err != nil || len(leases) != 0 {
 		return errors.New("controlplane: drain reset still has leases")
+	}
+	if err := p.controlRecord(ctx, "drain:"+name, nil); err != nil {
+		return err
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()

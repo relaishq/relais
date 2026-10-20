@@ -110,9 +110,69 @@ The cap is not a media performance guarantee or automatic scaling policy.
 The process bootstrap tests start control with a listed worker down and with
 the relay down, then register those dependencies when they start. A healthy
 worker can accept new calls while another listed worker remains down. This
-proves tolerant fixed startup, not reconstruction of pre-restart call metadata.
+proves tolerant fixed startup. Restart reconstruction is tested separately below.
 Pool telemetry retains stale observations and represents unavailable demand
 as null/omitted, rather than zero.
+
+### Control restart
+
+With one control process, persistent acknowledged store decisions, the same fixed
+worker endpoints and encryption key, and live workers/relay, restarting control
+rebuilds call management. Local separate-process tests kill control with SIGKILL,
+restart it, then move every original call, SIGKILL its destination worker, take
+over every call, and end every call through the successor. The suite covers 1,
+8 and 32 simultaneous calls on standalone Redis and a six-node local Redis
+Cluster. These are shared-machine measurements, not worker capacity or AWS
+availability claims.
+
+`TestControlRestartProcesses` and `TestClusterControlRestartProcesses` require
+successfully decrypted audio packets during the control-only outage, no ICE
+restart or renegotiation, no caller decryption failures, and one installed tenure
+matching each authoritative lease. A competing control remains not-ready and
+refuses mutations. A further restart succeeds with one worker still down.
+`TestControlRestartSplitProcesses` repeats the move/takeover/end sequence using
+v10 component checkpoints.
+
+`TestControlRestartInterruptedOperationsProcesses` cuts real worker replies after
+export, resume, drain export, call creation and end. Rebuild either adopts a
+confirmed installed tenure, fences and recovers an uninstalled tenure, records
+a typed checkpoint loss, or confirms termination. It does not repeat a confirmed
+resume or create. Drains retain their placement fence and report a typed partial
+outcome. Store tests cover candidate journaling before transfer, settlement,
+lease exclusion/expiry, metadata limits and key-slot safety. Race tests also
+check that a failed journal write starts no operation effect and that an unknown
+create retains capacity until reconciliation.
+
+Local process-start-to-mutation-ready measurements on one development Mac
+(three runs per cell, including the lease wait):
+
+| Calls | Standalone median / max | Cluster median / max |
+| --- | --- | --- |
+| 1 | 1.446 / 1.525 s | 1.454 / 1.468 s |
+| 8 | 1.507 / 1.508 s | 1.508 / 1.514 s |
+| 32 | 1.495 / 1.519 s | 1.500 / 1.593 s |
+
+The driver keeps control down for one second before starting its successor;
+the remaining lease wait is included. These timings do not include that deliberate
+downtime. The inventory regression fails against the exact baseline control binary
+at `3b8c5d4` (zero calls after restart) and passes with this implementation.
+Focused store/worker/readiness regressions ran ten times under the race detector;
+the base heavy process suites ran three times. A final run on each store also
+restarted with the original calls still live and one worker down. The outer
+tests use `-race`; their separate service binaries are ordinary Go builds.
+
+Mutation readiness stays false during lease wait and rebuild. The control lease
+has a two-second TTL; the measured process-start-to-ready time includes the wait
+for the crashed predecessor. A truncated worker inventory leaves control not
+ready. See [operator behavior](deploy.md#control-restart).
+
+**Limits:** interrupted exports use the latest stored checkpoint with crash
+margins; the exact final export is not durable. A checkpoint outside its safe
+envelope can be lost with a typed outcome. Historical move counters and the
+full event history reset. No guarantee covers overlapping active controls,
+a suspended predecessor resuming after expiry, lost acknowledged store data,
+combined store/relay failure, general mixed-version upgrades, or a cloud timing
+bound. Paid AWS restart acceptance remains NOT-RUN.
 
 ### Checkpoint-age envelope
 

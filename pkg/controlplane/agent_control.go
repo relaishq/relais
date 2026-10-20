@@ -19,6 +19,9 @@ type ControlSender interface {
 // AgentControl resolves authoritative ownership under the same per-call lock
 // used by moves, takeovers and hangup. Client input never supplies a target.
 func (p *Plane) AgentControl(ctx context.Context, id string, message agent.ControlMessage) (agent.ControlReceipt, error) {
+	if err := p.requireMutationReady(); err != nil {
+		return agent.ControlReceipt{}, err
+	}
 	if err := message.Validate(); err != nil {
 		return agent.ControlReceipt{}, err
 	}
