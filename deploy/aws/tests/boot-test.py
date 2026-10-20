@@ -184,6 +184,10 @@ class Trial:
         raise Refusal('readiness failed: ' + label)
 
     def cluster(self):
+        version = subprocess.check_output([shutil.which('redis-server'), '--version'], text=True)
+        match = re.search(r'\bv=(\d+)\.(\d+)\.(\d+)\b', version)
+        assert match and tuple(map(int, match.groups())) >= (7, 0, 0), 'Redis 7.0+ is required for ACL selectors'
+        print('PASS: Redis ACL selector runtime: ' + version.strip())
         ports = []
         for i in range(6):
             port, reserved = self.port(cluster=True)

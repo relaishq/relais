@@ -49,6 +49,13 @@ class BootContracts(unittest.TestCase):
             log.write_text('worker started; request completed')
             trial.assert_no_permission_errors()
 
+    def test_acl_selectors_refuse_old_or_unknown_redis_runtime(self):
+        trial = boot.Trial.__new__(boot.Trial)
+        for version in ('Redis server v=6.2.16 sha=00000000', 'unrecognized server version'):
+            with patch.object(boot.subprocess, 'check_output', return_value=version):
+                with self.assertRaisesRegex(AssertionError, r'Redis 7\.0\+ is required'):
+                    trial.cluster()
+
     def test_component_ports_reject_ephemeral_template_or_launcher_values(self):
         template = load()
         launcher = (ROOT / 'boot/run.sh').read_text()

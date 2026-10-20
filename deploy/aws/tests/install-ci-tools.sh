@@ -17,5 +17,6 @@ if [[ $mode == lint ]]; then
 else
   fetch https://download.redis.io/releases/redis-7.0.11.tar.gz redis.tar.gz ce250d1fba042c613de38a15d40889b78f7cb6d5461a27e35017ba39b07221e3
   tar -xf redis.tar.gz
-  make -C redis-7.0.11 -j2 MALLOC=libc BUILD_TLS=no redis-server redis-cli
+  # Serialize recursive dependency builds too; parallel Lua compilation can omit luaopen_bit.
+  make -C redis-7.0.11 -j1 MALLOC=libc BUILD_TLS=no redis-server redis-cli
 fi

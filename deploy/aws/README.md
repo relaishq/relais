@@ -320,7 +320,7 @@ and [CloudFormation reservation properties](https://docs.aws.amazon.com/AWSCloud
 ## Free CI and local evidence
 
 [deploy-template.yml](../../.github/workflows/deploy-template.yml) runs on PRs
-and pushes touching this directory, its workflow, `cmd/**`, `pkg/**`,
+and pushes to `main` touching this directory, its workflow, `cmd/**`, `pkg/**`,
 `internal/**`, `go.mod` or `go.sum`, and by manual dispatch.
 It has no AWS credentials, SDK credential setup, cloud API calls or cloud spend.
 Actions use immutable commit SHAs. Tools are pinned: Python 3.12.12,
