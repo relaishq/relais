@@ -36,7 +36,8 @@ const (
 	RecordTime        = 8 * time.Second
 	SpeechTime        = 20 * time.Second
 	recordTimer       = "voice/record/v1"
-	stateVersion      = 4
+	stateVersion      = 4 // legacy inline history
+	splitStateVersion = 5 // separate SDK History
 	turnStride        = MaxSegments + 2
 )
 
@@ -91,17 +92,25 @@ type Agent struct {
 	rollbackPlay []byte
 	length       int // Save reads this O(1) metadata, never the payload
 	limit        int
+	historyLimit int // fixed by this session
 }
 
-func Registration(provider Provider) workerapp.Registration {
+// Registration keeps the legacy declaration unless the worker admits split
+// checkpoints. Pools must use the same declaration. The factory selects the
+// layout from the session's persisted effective budgets, including on restore.
+func Registration(provider Provider, split ...bool) workerapp.Registration {
+	limits := agent.Limits{MaxStateBytes: MaxStateBytes}
+	if len(split) > 0 && split[0] {
+		limits = agent.Limits{}
+	}
 	return workerapp.Registration{Name: Name, Factory: func(args agent.FactoryArgs) agent.Agent {
 		limit := args.MaxStateBytes
 		if limit == 0 {
 			limit = MaxStateBytes
 		}
 		_, canWarm := provider.(interface{ Warm(context.Context) })
-		return &Agent{canWarm: canWarm, state: State{Phase: "idle"}, available: provider != nil && provider.Available(), limit: limit}
-	}, Tasks: handlers(provider), SkipDrainWait: []string{PlayKind}, Limits: agent.Limits{MaxStateBytes: MaxStateBytes}}
+		return &Agent{canWarm: canWarm, state: State{Phase: "idle"}, available: provider != nil && provider.Available(), limit: limit, historyLimit: args.MaxHistoryBytes}
+	}, Tasks: handlers(provider), SkipDrainWait: []string{PlayKind}, Limits: limits}
 }
 func (a *Agent) reset(outcome agent.Outcome, code, notice string) agent.Effects {
 	a.state.Phase, a.state.Outcome, a.state.Error, a.state.Notice = "idle", outcome, code, notice
@@ -325,15 +334,37 @@ func (a *Agent) Handle(ctx context.Context, e agent.Event) (agent.Effects, error
 	return agent.Effects{}, nil
 }
 func (a *Agent) Save(context.Context) (agent.State, error) {
-	b, err := json.Marshal(a.state)
+	state := a.state
+	version := stateVersion
+	var history []byte
+	if a.historyLimit > 0 {
+		version = splitStateVersion
+		var err error
+		history, err = json.Marshal(state.History)
+		if err != nil {
+			return agent.State{}, err
+		}
+		if len(history) > a.historyLimit {
+			return agent.State{}, agent.ErrHistoryTooLarge
+		}
+		state.History = nil
+	}
+	b, err := json.Marshal(state)
 	if len(b) > a.limit {
 		return agent.State{}, agent.ErrStateTooLarge
 	}
-	return agent.State{Version: stateVersion, Bytes: b, HasMoveOnly: a.moveLength() > 0, MoveOnlyLength: a.moveLength()}, err
+	return agent.State{Version: uint32(version), Bytes: b, History: history, HasMoveOnly: a.moveLength() > 0, MoveOnlyLength: a.moveLength()}, err
 }
 func (a *Agent) Restore(_ context.Context, s agent.State) error {
-	if s.Version != stateVersion {
+	version := uint32(stateVersion)
+	if a.historyLimit > 0 {
+		version = splitStateVersion
+	}
+	if s.Version != version {
 		return agent.ErrVersion
+	}
+	if len(s.History) > a.historyLimit {
+		return agent.ErrHistoryTooLarge
 	}
 	if len(s.Bytes) > a.limit {
 		return agent.ErrStateTooLarge
@@ -344,6 +375,17 @@ func (a *Agent) Restore(_ context.Context, s agent.State) error {
 	var state State
 	if err := json.Unmarshal(s.Bytes, &state); err != nil {
 		return err
+	}
+	if a.historyLimit > 0 {
+		if state.History != nil {
+			return errors.New("voice: inline history in split state")
+		}
+		if !utf8.Valid(s.History) {
+			return invalidStateEncoding{}
+		}
+		if err := json.Unmarshal(s.History, &state.History); err != nil {
+			return err
+		}
 	}
 	switch state.Phase {
 	case "idle", "recording", "transcribing", "replying", "synthesizing", "playing":
