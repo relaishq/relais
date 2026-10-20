@@ -55,6 +55,8 @@ func TestComponentRecoveryCarriesOneTupleIntoDecision(t *testing.T) {
 	state, metadata, err := mediaworker.ReadRecoverySnapshot(context.Background(), store, setup.ID)
 	require.NoError(t, err)
 	p := NewWithConfig(nil, store, Config{})
+	stop := p.startKeyInventory(context.Background())
+	defer stop()
 	decision, err := p.checkpointDecision(context.Background(), setup.ID, state, 0, metadata)
 	require.NoError(t, err)
 	require.Equal(t, store.tuple.Checkpoint.StoredAt, decision.storedAt)
@@ -96,11 +98,15 @@ func TestComponentInventoryStatusPreservesUnknownAndStaleSamples(t *testing.T) {
 	ctx := context.Background()
 	store := &inventorySampleStore{err: errors.New("scan failed")}
 	p := NewWithConfig(nil, store, Config{})
+	stop := p.startKeyInventory(context.Background())
+	defer stop()
 	status := func() KeyInventoryStatus {
 		value, err := p.Status(ctx)
 		require.NoError(t, err)
 		return value.SessionStoreKeys
 	}
+	require.Equal(t, "not_yet_scanned", status().State)
+	require.Eventually(t, func() bool { return status().State == "failed" }, time.Second, time.Millisecond)
 	first := status()
 	require.Equal(t, "failed", first.State)
 	require.Nil(t, first.Counts)
@@ -112,6 +118,7 @@ func TestComponentInventoryStatusPreservesUnknownAndStaleSamples(t *testing.T) {
 	p.inventory.mu.Lock()
 	p.inventory.attempted = time.Time{}
 	p.inventory.mu.Unlock()
+	require.Eventually(t, func() bool { return status().State == "current" }, time.Second, time.Millisecond)
 	fresh := status()
 	require.Equal(t, "current", fresh.State)
 	require.Equal(t, map[byte]uint64{2: 5}, fresh.Counts)
@@ -169,10 +176,59 @@ func TestComponentUnsafeTakeoverRecordsLossAndReleasesLease(t *testing.T) {
 func TestComponentInventoryStatusReportsUnverifiableCount(t *testing.T) {
 	store := &inventorySampleStore{counts: map[byte]uint64{2: 5}, err: &sessionstore.InventoryUnverifiableError{Count: 3}}
 	p := NewWithConfig(nil, store, Config{})
+	stop := p.startKeyInventory(context.Background())
+	defer stop()
+	require.Eventually(t, func() bool {
+		value, err := p.Status(context.Background())
+		return err == nil && value.SessionStoreKeys.State == "unverifiable"
+	}, time.Second, time.Millisecond)
 	value, err := p.Status(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, "unverifiable", value.SessionStoreKeys.State)
 	require.EqualValues(t, 3, value.SessionStoreKeys.Unverifiable)
 	require.Equal(t, map[byte]uint64{2: 5}, value.SessionStoreKeys.Counts)
 	require.False(t, value.SessionStoreKeys.ObservedAt.IsZero())
+}
+
+func TestComponentInventoryStatusNeverWaitsAndStopsWithPlane(t *testing.T) {
+	entered, unblock := make(chan struct{}), make(chan struct{})
+	store := &inventorySampleStore{entered: entered, unblock: unblock}
+	p := NewWithConfig(nil, store, Config{CheckInterval: time.Hour})
+	require.Equal(t, "not_yet_scanned", p.keyInventoryStatus(context.Background()).State)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+	defer cancel()
+	require.Eventually(t, func() bool {
+		p.inventory.mu.Lock()
+		defer p.inventory.mu.Unlock()
+		return p.inventory.lifetime != nil
+	}, time.Second, time.Millisecond)
+	response := make(chan KeyInventoryStatus, 1)
+	go func() { response <- p.keyInventoryStatus(context.Background()) }()
+	select {
+	case value := <-response:
+		require.Equal(t, "not_yet_scanned", value.State)
+		require.Nil(t, value.Counts)
+	case <-time.After(time.Second):
+		t.Fatal("status waited for its inventory scan")
+	}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("scan did not start")
+	}
+	// The store is still blocked. Run must cancel that scan and join it.
+	cancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("scan outlived plane")
+	}
+	require.Equal(t, "failed", p.keyInventoryStatus(context.Background()).State)
+	p.inventory.mu.Lock()
+	require.Nil(t, p.inventory.lifetime)
+	require.False(t, p.inventory.loading)
+	p.inventory.mu.Unlock()
 }

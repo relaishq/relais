@@ -288,8 +288,11 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   checkpoints for new calls. Upgrade every worker and control process before
   enabling it; existing v10 calls continue in v10 even on a worker with this
   flag off. Before rolling back to an older binary, let all v10 calls end.
-  This slice keeps current working-state limits; the SDK history field is a
-  separate follow-up. See [the component store](dev/session-store.md#component-checkpoints-v10).
+  This build is not an ADR 0012 bridge release. Keep the flag off outside
+  development until SDK history support in #196. Split calls retain the raw
+  8,192-byte working-state ceiling and must also fit the encoded 7,168-byte hot
+  cap; a simple v1 call fits about 6,400 bytes. Save refuses larger encodings
+  with `ErrStateTooLarge`. See [the component store](dev/session-store.md#component-checkpoints-v10).
   `-agent-drain-task-budget` defaults to 2 s; startup rejects values below 0
   or above 2 s. `-agent-drain-move-reserve` has no default: unset skips the
   handler wait; the placement mark always applies. When set, it must be greater

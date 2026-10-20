@@ -47,11 +47,22 @@ func TestSplitCheckpointProcessSIGKILL(t *testing.T) {
 			}
 			t.Skip("dedicated Redis required")
 		}
-		testSplitProcessTakeover(t, []string{addr}, false)
+		testSplitProcessTakeover(t, []string{addr}, false, false)
 	})
-	t.Run("cluster", func(t *testing.T) { addrs := redistestcluster.Addresses(t); testSplitProcessTakeover(t, addrs, true) })
+	t.Run("cluster", func(t *testing.T) {
+		addrs := redistestcluster.Addresses(t)
+		testSplitProcessTakeover(t, addrs, true, false)
+	})
 }
-func testSplitProcessTakeover(t *testing.T, addrs []string, cluster bool) {
+func TestSplitCheckpointProcessPlannedMoves(t *testing.T) {
+	if testing.Short() {
+		t.Skip("separate worker processes and planned moves")
+	}
+	t.Run("standalone", func(t *testing.T) { testSplitProcessTakeover(t, []string{redistestcluster.Standalone(t)}, false, true) })
+	t.Run("cluster", func(t *testing.T) { testSplitProcessTakeover(t, redistestcluster.Addresses(t), true, true) })
+}
+
+func testSplitProcessTakeover(t *testing.T, addrs []string, cluster, planned bool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
@@ -147,6 +158,29 @@ func testSplitProcessTakeover(t *testing.T, addrs []string, cluster bool) {
 	}, 6*time.Second, 5*time.Millisecond)
 	require.Equal(t, source.addr, before.Lease.Worker)
 	target := start("1", false, "", "") // no history source; new-call split admission is OFF
+	if planned {
+		for _, to := range []string{"1", "0", "1"} {
+			result, err := plane.Move(ctx, call.SessionID(), to)
+			require.NoError(t, err, "planned move: %+v", result)
+			owner := target.addr
+			if to == "0" {
+				owner = source.addr
+			}
+			require.Eventually(t, func() bool {
+				value, err := store.ReadComponents(ctx, call.SessionID())
+				if err != nil || value.Metadata.Owner != owner.String() {
+					return false
+				}
+				require.Equal(t, before.Components.Work, value.Components.Work)
+				require.Equal(t, before.Components.History, value.Components.History)
+				return true
+			}, 6*time.Second, 5*time.Millisecond)
+			require.NoError(t, call.SendMedia(ctx, 200*time.Millisecond))
+		}
+		_, err = call.Hangup(ctx)
+		require.NoError(t, err)
+		return
+	}
 	require.NoError(t, source.cmd.Process.Kill())
 	// The actual Restore callback reports the bytes it was given. A subsequent
 	// factory default or an observer-only store read cannot satisfy this witness.

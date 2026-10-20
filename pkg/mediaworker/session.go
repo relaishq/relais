@@ -131,7 +131,6 @@ type session struct {
 	componentMode       bool
 	componentHistory    []byte                          // guarded by mu; SDK history is introduced separately
 	componentMetadata   *sessionstore.ComponentMetadata // guarded by snapshotMu
-	componentSetup      []byte                          // guarded by snapshotMu
 	componentPending    *componentPending               // guarded by snapshotMu
 	snapshotMu          sync.Mutex                      // serialize encode/store without blocking packet processing
 	snapshotWanted      chan struct{}

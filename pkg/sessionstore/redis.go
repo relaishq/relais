@@ -235,7 +235,17 @@ local function write(worker, nextEpoch)
  current={worker,nextEpoch,expires}
  return reply()
 end
-if op=='settle' or op=='indexed' then
+-- Inventory is observational: never prune, renew or recreate a value.
+if op=='inventory' then
+ if not current[1] then return {0} end
+ local expiry=tonumber(current[3])
+ if not expiry then return {-5} end
+ if expiry<=now() then return {0} end
+ if redis.call('HGET',KEYS[1],'layout')=='10' then return {-5} end
+ local blob=redis.call('GET',KEYS[2])
+ if not blob then return {0} end
+ return {1,blob,redis.call('HGET',KEYS[1],'state_seq') or ''}
+elseif op=='settle' or op=='indexed' then
  if matches() then return reply() end
  -- A young prepublication may still commit. Never fence or prune it.
  if op=='indexed' and newer(epoch) and now()<tonumber(ARGV[6])+tonumber(ARGV[7]) then return {3} end
@@ -398,7 +408,7 @@ func (r *Redis) sessionKeys(id, op string) []string {
 	switch op {
 	case "sequence", "clock":
 		return r.keys(id)[:1]
-	case "put":
+	case "put", "inventory":
 		return r.keys(id)[:2]
 	default:
 		return r.lifecycleKeys(id)
@@ -420,7 +430,7 @@ func (r *Redis) run(ctx context.Context, op, id, owner, epoch string, ttl time.D
 		return err
 	}
 	var err error
-	if op == "get" || op == "state" || op == "settle" || op == "indexed" || op == "checkpoint" {
+	if op == "get" || op == "state" || op == "inventory" || op == "settle" || op == "indexed" || op == "checkpoint" {
 		err = r.retryRead(ctx, "session_"+op, fn)
 	} else {
 		for attempt := 0; attempt < 3; attempt++ {

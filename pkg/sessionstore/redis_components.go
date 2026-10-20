@@ -388,7 +388,7 @@ func (r *Redis) ComponentKeyInventory(ctx context.Context) (map[byte]uint64, err
 							refs = append(refs, ref.KeyID)
 						}
 					} else {
-						result, e := r.run(ctx, "state", id, "", "", 0)
+						result, e := r.run(ctx, "inventory", id, "", "", 0)
 						if errors.Is(e, ErrNotFound) {
 							continue
 						}

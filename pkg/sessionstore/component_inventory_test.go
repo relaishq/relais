@@ -93,3 +93,38 @@ func TestComponentInventoryAuthenticatesOldReferencesWithoutTheirDecryptKeys(t *
 		require.Equal(t, map[byte]uint64{0: 1, 9: 4}, counts)
 	})
 }
+
+func TestLegacyInventoryReadNeverPrunesExpiredSession(t *testing.T) {
+	forComponentRedis(t, func(t *testing.T, r *Redis) {
+		ctx := context.Background()
+		lease, err := r.Claim(ctx, "inventory-observation", netip.MustParseAddrPort("127.0.0.1:23456"), time.Minute)
+		require.NoError(t, err)
+		require.NoError(t, r.PutState(ctx, lease, []byte("authenticated legacy ciphertext")))
+		counts, err := r.ComponentKeyInventory(ctx)
+		require.NoError(t, err)
+		require.Equal(t, map[byte]uint64{0: 1}, counts)
+		keys := r.lifecycleKeys(lease.SessionID)
+		require.NoError(t, r.client.HDel(ctx, keys[0], "expires").Err())
+		counts, err = r.ComponentKeyInventory(ctx)
+		var partial *InventoryUnverifiableError
+		require.ErrorAs(t, err, &partial)
+		require.EqualValues(t, 1, partial.Count)
+		require.Empty(t, counts)
+		require.NoError(t, r.client.HSet(ctx, keys[0], "expires", lease.ExpiresAt.UnixMilli()).Err())
+		require.NoError(t, r.client.Del(ctx, keys[0]).Err())
+		before := map[string]string{}
+		for _, key := range keys[1:] {
+			value, err := r.client.Dump(ctx, key).Result()
+			if err == nil {
+				before[key] = value
+			}
+		}
+		counts, err = r.ComponentKeyInventory(ctx)
+		require.NoError(t, err)
+		require.Empty(t, counts)
+		require.NotEmpty(t, before)
+		for key, value := range before {
+			require.Equal(t, value, r.client.Dump(ctx, key).Val(), "inventory cannot perform lifecycle cleanup")
+		}
+	})
+}

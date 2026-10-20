@@ -56,6 +56,8 @@ func TestRedisScriptSlotDeclarations(t *testing.T) {
 		lease, err := r.Claim(ctx, "declared", netip.MustParseAddrPort("127.0.0.1:23456"), time.Minute)
 		require.NoError(t, err)
 		require.NoError(t, r.PutState(ctx, lease, []byte("legacy")))
+		_, err = r.ComponentKeyInventory(ctx)
+		require.NoError(t, err)
 		_, err = r.Clock(ctx, lease.SessionID)
 		require.NoError(t, err)
 		lease, err = r.Claim(ctx, "component-declared", lease.Worker, time.Minute)
@@ -99,9 +101,9 @@ func TestRedisScriptSlotDeclarations(t *testing.T) {
 					require.Len(t, call.keys, 1)
 					seen["sequence"] = true
 				}
-				if call.op == "put" {
+				if call.op == "put" || call.op == "inventory" {
 					require.Equal(t, r.keys("declared")[:2], call.keys)
-					seen["put"] = true
+					seen[call.op] = true
 				}
 			case storeClockLua:
 				require.Equal(t, r.keys("declared")[:1], call.keys)
@@ -109,7 +111,7 @@ func TestRedisScriptSlotDeclarations(t *testing.T) {
 			}
 			redistestcluster.SameSlot(t, call.keys...)
 		}
-		require.Equal(t, map[string]bool{"component": true, "sequence": true, "put": true, "clock": true}, seen)
+		require.Equal(t, map[string]bool{"component": true, "sequence": true, "put": true, "inventory": true, "clock": true}, seen)
 	})
 }
 func TestRedisComputedSlotIndexesAreExplicitlyAudited(t *testing.T) {

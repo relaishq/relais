@@ -112,6 +112,8 @@ func (p *Plane) Run(ctx context.Context) error {
 	p.running = true
 	p.mu.Unlock()
 	defer func() { p.mu.Lock(); p.running = false; p.mu.Unlock() }()
+	stopInventory := p.startKeyInventory(ctx)
+	defer stopInventory()
 	ticker := time.NewTicker(p.config.CheckInterval)
 	defer ticker.Stop()
 	var wg sync.WaitGroup

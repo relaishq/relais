@@ -184,7 +184,9 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 		cancel()
 		if err != nil {
 			if errors.Is(err, sessionstore.ErrLeaseLost) {
+				s.mu.Lock()
 				s.fenced.Store(true)
+				s.mu.Unlock()
 				s.close()
 			}
 			return err
@@ -281,14 +283,8 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	}
 	if err == nil {
 		s.ackSnapshot(pair, dtlsNext, captured, wireBytes, intent)
-	} else {
-		s.mu.Lock()
-		s.state.Checkpoint.Failures++
-		if v2 && intent {
-			s.worker.metrics.forcedFailures.Add(1)
-		}
-		s.mu.Unlock()
-		metrics.CheckpointWrites.WithLabelValues("failure").Inc()
+	} else if s.componentPending == nil {
+		s.failSnapshot(v2, intent)
 	}
 
 	if errors.Is(err, sessionstore.ErrLeaseLost) {
@@ -298,6 +294,17 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 		s.close()
 	}
 	return err
+}
+
+// Unknown component outcomes are counted only when settlement resolves them.
+func (s *session) failSnapshot(v2, intent bool) {
+	s.mu.Lock()
+	s.state.Checkpoint.Failures++
+	if v2 && intent {
+		s.worker.metrics.forcedFailures.Add(1)
+	}
+	s.mu.Unlock()
+	metrics.CheckpointWrites.WithLabelValues("failure").Inc()
 }
 
 func (s *session) wantSnapshot() {

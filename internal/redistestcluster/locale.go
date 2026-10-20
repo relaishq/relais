@@ -73,10 +73,12 @@ func Standalone(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(child.Stop)
+	watchServer(t, child)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err = child.WaitLog(ctx, "Ready to accept connections"); err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("owned Redis standalone port: %s", addr)
 	return addr
 }

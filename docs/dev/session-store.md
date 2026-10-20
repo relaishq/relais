@@ -67,14 +67,25 @@ retries uncertain planned exports as well as crash takeovers; an exact candidate
 lease can be adopted, and only settlement proves a transition did not commit.
 Redis unavailability can delay a call until recovery or lease expiry.
 
+`GET /status` never waits for a key-inventory scan. It reports
+`not_yet_scanned` until a sample is available. Scans run only while
+`controlplane.Run` is active and are canceled when that lifetime ends.
+
 ## Component checkpoints (v10)
 
 `relais-worker -agent-split-checkpoints` opts new calls into v10; it is off by
 default. Every worker and control process must support v10 before enabling it.
 An adopted v10 call keeps that format with the flag off. Older binaries cannot
 restore v10; end all v10 calls before rolling back. v8/v9 calls retain their
-legacy state key and encoding. This slice does not add SDK history or change
-existing agent working-state limits.
+legacy state key and encoding. This build is not the bridge release described in ADR 0012. Keep the flag off
+outside development until SDK history support in #196 is complete. Code slices
+B/C are not deployable bridge releases.
+
+The raw working-state ceiling remains 8,192 bytes. Split calls also require the
+complete encoded hot capture to fit `-agent-max-snapshot-bytes` (7,168 bytes by
+default), so their effective working-state limit is smaller and depends on host
+and transport metadata (about 6,400 bytes for a simple v1 call). Oversized Saves
+are refused with `ErrStateTooLarge` before publication; no state is truncated.
 
 The additive `sessionstore.ComponentStore` API saves a complete capture with
 `CommitComponents` and restores it with one primary `ReadComponents` script.

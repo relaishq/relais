@@ -1,3 +1,5 @@
+//go:build !windows
+
 package redistestcluster
 
 import (
@@ -22,6 +24,7 @@ func TestClusterServerParentDeath(t *testing.T) {
 		dir := os.Getenv("RELAIS_PARENT_DEATH_DIR")
 		child, err := clusterprocess.StartSupervised(dir, "server", os.Environ(), "sleep", "60")
 		require.NoError(t, err)
+		watchServer(t, child)
 		id, err := processidentity.Observe(child.PID())
 		require.NoError(t, err)
 		data, err := json.Marshal(id)

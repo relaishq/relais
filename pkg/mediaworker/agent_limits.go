@@ -15,8 +15,9 @@ import (
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
-// SnapshotLimits are operator settings. They apply only to v2 sessions; a
-// registration cannot change them. Zero fields use the ADR 0010 defaults.
+// SnapshotLimits are operator settings; registrations cannot change them.
+// The encoded cap also bounds v1 component captures. Byte-rate and move quotas
+// apply to v2 sessions. Zero fields use the ADR 0010 defaults.
 type SnapshotLimits struct {
 	MaxBytes            int
 	BytesPerSecond      int

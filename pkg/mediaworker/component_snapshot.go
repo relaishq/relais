@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
@@ -103,7 +104,8 @@ func (s *session) componentAdmission(data []byte) (componentSizes, error) {
 
 // A pending write may have committed while settlement was unavailable. Keep
 // its exact owned capture until a tuple read proves that capture or the old
-// publication. Never rebase a stale app pair onto an unrelated newer root.
+// publication. A late publication from this tenure can update the expected
+// root without acknowledging the pending app pair or its DTLS capture.
 type componentPending struct {
 	components sessionstore.Components
 	expected   *sessionstore.ComponentMetadata
@@ -134,7 +136,7 @@ func (s *session) settleComponentWrite(ctx context.Context) error {
 	}
 	tuple, err := store.ReadComponents(ctx, s.id)
 	if errors.Is(err, sessionstore.ErrCheckpointLayout) && pending.expected == nil {
-		s.componentPending = nil
+		s.failComponentPending()
 		return nil
 	}
 	if err != nil {
@@ -142,20 +144,43 @@ func (s *session) settleComponentWrite(ctx context.Context) error {
 	}
 	lease := s.currentComponentLease()
 	if tuple.Lease.Worker != lease.Worker || tuple.Lease.Epoch != lease.Epoch {
+		s.failComponentPending()
 		return sessionstore.ErrLeaseLost
 	}
 	if equalComponentBytes(tuple.Components, pending.components) {
 		s.componentMetadata = &tuple.Metadata
-		s.componentSetup = bytes.Clone(tuple.Components.Setup)
 		s.ackSnapshot(pending.pair, pending.next, pending.captured, pending.bytes, pending.intent)
 		s.componentPending = nil
 		return nil
 	}
 	if sameComponentMetadata(&tuple.Metadata, pending.expected) {
-		s.componentPending = nil
+		s.failComponentPending()
+		return nil
+	}
+	// An earlier command can land after its settlement read. Rebase only onto
+	// our own tenure. This is ordering evidence, not an acknowledgment of the
+	// pending capture or its DTLS bound.
+	if tuple.Metadata.Owner == lease.Worker.String() && tuple.Metadata.OwnerEpoch == lease.Epoch {
+		s.componentMetadata = &tuple.Metadata
+		s.failComponentPending()
 		return nil
 	}
 	return sessionstore.ErrStateSuperseded
+}
+
+func (s *session) failComponentPending() {
+	pending := s.componentPending
+	s.componentPending = nil
+	if pending != nil {
+		s.failSnapshot(pending.pair.V2 != nil, pending.intent)
+	}
+}
+
+func componentBudgetRefusal(intent bool) error {
+	if intent {
+		return errCheckpointSkipped
+	}
+	return fmt.Errorf("%w: required component snapshot byte budget", agent.ErrCapacity)
 }
 
 func (s *session) writeComponents(ctx context.Context, lease sessionstore.Lease, data []byte, pair agentState, next dtlsSequenceCheckpoint, captured time.Time, intent bool) (int, error) {
@@ -180,7 +205,7 @@ func (s *session) writeComponents(ctx context.Context, lease sessionstore.Lease,
 			available -= s.worker.cfg.SnapshotLimits.MaxBytes
 		}
 		if available <= 0 {
-			return 0, errCheckpointSkipped
+			return 0, componentBudgetRefusal(intent)
 		}
 	}
 	final := wire.Components
@@ -220,12 +245,11 @@ func (s *session) writeComponents(ctx context.Context, lease sessionstore.Lease,
 			s.componentPending = &componentPending{components: final, expected: s.componentMetadata, pair: pair, next: next, captured: captured, bytes: charge, intent: intent}
 		}
 		if errors.Is(err, sessionstore.ErrComponentCapacity) {
-			return 0, errCheckpointSkipped
+			return 0, componentBudgetRefusal(intent)
 		}
 		return 0, err
 	}
 	s.componentMetadata = &tuple.Metadata
-	s.componentSetup = bytes.Clone(tuple.Components.Setup)
 	return tuple.WrittenBytes + componentProtocolReserve, nil
 }
 
@@ -270,7 +294,6 @@ func (s *session) prepareComponentAdoption(ctx context.Context) error {
 	}
 	m := tuple.Metadata
 	s.componentMetadata = &m
-	s.componentSetup = bytes.Clone(tuple.Components.Setup)
 	return nil
 }
 

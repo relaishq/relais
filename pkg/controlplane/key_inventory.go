@@ -24,6 +24,8 @@ type keyInventoryCache struct {
 	value     KeyInventoryStatus
 	attempted time.Time
 	loading   bool
+	lifetime  context.Context
+	jobs      sync.WaitGroup
 }
 
 const keyInventoryInterval = 5 * time.Second
@@ -53,32 +55,41 @@ func (p *Plane) scanKeyInventory(ctx context.Context) {
 	}
 	p.inventory.value = KeyInventoryStatus{State: "current", Counts: maps.Clone(counts), ObservedAt: time.Now()}
 }
-func (p *Plane) keyInventoryStatus(ctx context.Context) KeyInventoryStatus {
+
+// startKeyInventory shares Run's lifetime and waits for bounded scans at exit.
+func (p *Plane) startKeyInventory(parent context.Context) func() {
+	ctx, cancel := context.WithCancel(parent)
+	p.inventory.mu.Lock()
+	p.inventory.lifetime = ctx
+	p.inventory.mu.Unlock()
+	return func() {
+		p.inventory.mu.Lock()
+		p.inventory.lifetime = nil
+		cancel()
+		p.inventory.mu.Unlock()
+		p.inventory.jobs.Wait()
+	}
+}
+
+func (p *Plane) keyInventoryStatus(_ context.Context) KeyInventoryStatus {
 	if _, ok := p.store.(interface {
 		ComponentKeyInventory(context.Context) (map[byte]uint64, error)
 	}); !ok {
 		return KeyInventoryStatus{State: "unavailable"}
 	}
 	p.inventory.mu.Lock()
+	defer p.inventory.mu.Unlock()
 	first := p.inventory.attempted.IsZero()
-	refresh := !p.inventory.loading && (first || time.Since(p.inventory.attempted) >= keyInventoryInterval)
-	if refresh {
+	if p.inventory.value.State == "" {
+		p.inventory.value.State = "not_yet_scanned"
+	}
+	ctx := p.inventory.lifetime
+	if ctx != nil && ctx.Err() == nil && !p.inventory.loading && (first || time.Since(p.inventory.attempted) >= keyInventoryInterval) {
 		p.inventory.loading = true
 		p.inventory.attempted = time.Now()
+		p.inventory.jobs.Add(1)
+		go func() { defer p.inventory.jobs.Done(); p.scanKeyInventory(ctx) }()
 	}
-	if p.inventory.value.State == "" {
-		p.inventory.value.State = "loading"
-	}
-	p.inventory.mu.Unlock()
-	if refresh {
-		if first {
-			p.scanKeyInventory(ctx)
-		} else {
-			go p.scanKeyInventory(context.Background())
-		}
-	}
-	p.inventory.mu.Lock()
-	defer p.inventory.mu.Unlock()
 	value := p.inventory.value
 	value.Counts = maps.Clone(value.Counts)
 	if (value.State == "current" || value.State == "unverifiable") && time.Since(value.ObservedAt) >= keyInventoryInterval {
