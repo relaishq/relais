@@ -1,0 +1,107 @@
+name: AWS preview template (no account)
+on:
+  pull_request:
+    paths:
+      - 'deploy/aws/**'
+      - '.github/workflows/deploy-template.yml'
+      - 'cmd/**'
+      - 'pkg/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/aws/**'
+      - '.github/workflows/deploy-template.yml'
+      - 'cmd/**'
+      - 'pkg/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  template:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12.12'
+      - name: Install pinned offline validation tools
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --require-hashes --disable-pip-version-check -r deploy/aws/tests/requirements.txt
+          deploy/aws/tests/install-ci-tools.sh lint "$RUNNER_TEMP/tools"
+      - name: Lint, policy, parameter branches and embedded-file parity
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          "$RUNNER_TEMP/venv/bin/cfn-lint" -r us-east-1 us-west-2 -t deploy/aws/preview.yaml
+          "$RUNNER_TEMP/venv/bin/python" deploy/aws/tests/policy.py
+          "$RUNNER_TEMP/venv/bin/python" deploy/aws/tests/boot-contract-test.py
+          "$RUNNER_TEMP/venv/bin/python" deploy/aws/tests/sync-files.py
+          "$RUNNER_TEMP/tools/shellcheck-v0.11.0/shellcheck" deploy/aws/boot/*.sh deploy/aws/tests/*.sh
+      - name: Verify units with the runner systemd-analyze (record version)
+        run: |
+          sudo mkdir -p /opt/relais/boot
+          sudo cp deploy/aws/boot/* /opt/relais/boot/
+          export SYSTEMD_UNIT_PATH="$PWD/deploy/aws/units:/usr/lib/systemd/system"
+          systemd-analyze --version
+          systemd-analyze verify deploy/aws/units/*.service
+  boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12.12'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.9'
+      - name: Install pinned Redis without starting a system service
+        run: |
+          deploy/aws/tests/install-ci-tools.sh boot "$RUNNER_TEMP/tools"
+          echo "$RUNNER_TEMP/tools/redis-7.0.11/src" >> "$GITHUB_PATH"
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --require-hashes --disable-pip-version-check -r deploy/aws/tests/requirements.txt
+          systemd-analyze --version
+      - name: Build the existing real components and caller
+        run: go build -o "$RUNNER_TEMP/bin/" ./cmd/relais-relay ./cmd/relais-worker ./cmd/relais-control ./cmd/relais-signal ./cmd/relais-load
+      - name: Same units, fake cloud sources, Redis Cluster ACLs and real call
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          sudo env PATH="$PATH" PYTHONDONTWRITEBYTECODE=1 "$RUNNER_TEMP/venv/bin/python" -u deploy/aws/tests/boot-test.py \
+            --systemd --bin "$RUNNER_TEMP/bin" --work "$RUNNER_TEMP/boot-systemd" \
+            --diagnostics-dir "$RUNNER_TEMP/boot-diagnostics"
+      - name: Prove a wrong ACL and a wrong unit cannot pass the boot test
+        run: |
+          for mutation in acl unit; do
+            set +e
+            sudo env PATH="$PATH" PYTHONDONTWRITEBYTECODE=1 "$RUNNER_TEMP/venv/bin/python" -u deploy/aws/tests/boot-test.py \
+              --systemd --mutation "$mutation" --bin "$RUNNER_TEMP/bin" --work "$RUNNER_TEMP/refuse-$mutation" \
+              --diagnostics-dir "$RUNNER_TEMP/boot-diagnostics/$mutation"
+            result=$?
+            set -e
+            if [ "$result" != 42 ]; then
+              echo "negative $mutation test returned unexpected status $result" >&2
+              exit 1
+            fi
+          done
+      - name: Upload redacted Relais boot diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: relais-boot-diagnostics
+          path: ${{ runner.temp }}/boot-diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
