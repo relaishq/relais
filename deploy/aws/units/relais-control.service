@@ -1,0 +1,30 @@
+[Unit]
+Description=Relais preview control
+After=network-online.target relais-prepare.service
+Wants=network-online.target
+Requires=relais-prepare.service
+
+[Service]
+Type=simple
+User=relais-control
+Group=relais-control
+EnvironmentFile=/etc/relais/node.env
+EnvironmentFile=/run/relais/control.env
+ExecStart=/opt/relais/boot/run.sh control
+Restart=no
+TimeoutStopSec=15s
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+IPAddressDeny=169.254.169.254/32
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
