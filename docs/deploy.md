@@ -387,6 +387,12 @@ takeover start after rebuild. Once rebuilt, the ordinary no-destination and
 capacity refusals still apply. Established media continues through live workers
 and the relay while control is down; new calls and recovery wait.
 
+A Redis Cluster primary promotion can also temporarily remove mutation
+readiness while control renews its lease. Operators may retry a definite
+`control_not_ready` refusal after readiness returns. The process call harness
+does this within the original two-second move request budget, only when the
+response says no move started. It never retries a started or uncertain move.
+
 If a worker also dies while control is down, recovery needs a sufficiently fresh
 checkpoint when takeover runs. With default rates, no retained sequence advance
 and the full 1.5-second adoption budget, the default-rate snapshot-age limit is

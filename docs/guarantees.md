@@ -526,6 +526,13 @@ A successful renewal proves the same store tenure is still held. Graceful
 shutdown pauses detection and new mutations while keeping renewal running
 until handlers and recovery jobs stop.
 
+Redis Cluster primary promotion can temporarily return HTTP 503 with
+`control_not_ready` for a planned move before it starts. This is a definite
+refusal, not a completed move. The process harness waits and retries only that
+unstarted refusal within the original two-second request budget; it records
+the accepted controller's real timings. Started and uncertain moves are never
+retried. A longer readiness pause still fails the request with a typed error.
+
 The [PR #103 CI store-stall job][outage-job] ran on `a363b60`, with separate
 processes on one Linux host, one fixture call per trial and the driver's own
 Redis paused by SIGSTOP. The table uses its `STORE_STALL` and

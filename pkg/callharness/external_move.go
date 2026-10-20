@@ -7,11 +7,16 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/relaishq/relais/internal/privateapi"
+	agentv2 "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/controlplane"
 )
 
 // MoveExternal uses the operator HTTP endpoint and records the same caller
 // yardstick as Handover. Worker names in the process driver are integer IDs.
+// A definite control_not_ready refusal before any move starts can wait for
+// readiness within the original two-second API budget. Started or uncertain
+// outcomes are never replayed.
 func (c *Call) MoveExternal(ctx context.Context, to int) error {
 	if c.rec.distributed != nil {
 		return errors.New("callharness: distributed moves require an armed identity and durable server receipt")
@@ -22,8 +27,32 @@ func (c *Call) MoveExternal(ctx context.Context, to int) error {
 	c.harness.statusPollMu.RLock()
 	defer c.harness.statusPollMu.RUnlock()
 	started := time.Now()
+	ctx, cancel := context.WithTimeout(ctx, privateapi.Timeout)
+	defer cancel()
 	var result controlplane.MoveResult
-	err := c.harness.controlRequest(ctx, "POST", fmt.Sprintf("/calls/%s/move?to=%d", c.SessionID(), to), &result)
+	var err, lastRefusal error
+	for {
+		if ctx.Err() != nil {
+			err = errors.Join(lastRefusal, ctx.Err())
+			break
+		}
+		result = controlplane.MoveResult{}
+		err = c.harness.controlRequest(ctx, "POST", fmt.Sprintf("/calls/%s/move?to=%d", c.SessionID(), to), &result)
+		if err == nil || !errors.Is(err, agentv2.ErrControlNotReady) || errors.Is(err, privateapi.ErrUncertain) || !result.Start.IsZero() {
+			break
+		}
+		lastRefusal = err
+		select {
+		case <-ctx.Done():
+			err = errors.Join(err, ctx.Err())
+		case <-time.After(50 * time.Millisecond):
+			continue
+		}
+		break
+	}
+	if err != nil && ctx.Err() != nil {
+		err = errors.Join(lastRefusal, err, ctx.Err())
+	}
 	if result.Start.IsZero() {
 		result.Start, result.End = started, time.Now()
 	}
