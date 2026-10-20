@@ -280,6 +280,12 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   control HTTP), `-hold-timeout` (default 3 s).
 - `relais-worker`: `-name`, `-media` (private UDP), `-http`, `-relay-leg`,
   `-relay-media`, `-control` (control-plane HTTP URL), `-drain-timeout` (5 s).
+  `-agent-split-checkpoints` defaults to false. It selects v10 component
+  checkpoints for new calls. Upgrade every worker and control process before
+  enabling it; existing v10 calls continue in v10 even on a worker with this
+  flag off. Before rolling back to an older binary, let all v10 calls end.
+  This slice keeps current working-state limits; the SDK history field is a
+  separate follow-up. See [the component store](dev/session-store.md#component-checkpoints-v10).
   `-agent-drain-task-budget` defaults to 2 s; startup rejects values below 0
   or above 2 s. `-agent-drain-move-reserve` has no default: unset skips the
   handler wait; the placement mark always applies. When set, it must be greater

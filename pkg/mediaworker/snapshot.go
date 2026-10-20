@@ -1,6 +1,7 @@
 package mediaworker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -93,6 +94,10 @@ func (s *session) captureSnapshotCandidateMode(captured time.Time, candidate *ag
 	if candidate != nil {
 		state.Agent = cloneAgentState(*candidate)
 	}
+	var split *componentSnapshotState
+	if s.componentMode {
+		split = &componentSnapshotState{history: bytes.Clone(s.componentHistory)}
+	}
 	// Certificate/key byte slices are immutable throughout a session.
 	s.mu.Unlock()
 	if !ok {
@@ -119,9 +124,9 @@ func (s *session) captureSnapshotCandidateMode(captured time.Time, candidate *ag
 	if state.Agent.V2 != nil {
 		state.Agent.V2.Quota = s.captureSnapshotQuota(now)
 	}
-	value := snapshot{Version: state.Version, State: state, DTLSConnection: binary}
+	value := snapshot{Version: state.Version, State: state, DTLSConnection: binary, split: split}
 	data, err := json.Marshal(value)
-	if err == nil && state.Agent.V2 != nil && !captured.IsZero() {
+	if err == nil && state.Agent.V2 != nil && !captured.IsZero() && split == nil {
 		// The fixed-width balance has the same encoded size before/after debit.
 		// Commit it only if the enclosing fenced write succeeds.
 		quota := state.Agent.V2.Quota
@@ -137,7 +142,7 @@ func (s *session) captureSnapshotCandidateMode(captured time.Time, candidate *ag
 		}
 		data, err = json.Marshal(value)
 	}
-	if err == nil && state.Agent.V2 != nil {
+	if err == nil && (state.Agent.V2 != nil || split != nil) {
 		err = s.checkSnapshotSize(data)
 	}
 	// Return the counter from this owned connection-state capture, never a live
@@ -173,6 +178,18 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	// packet lock is never held during encoding or the fenced store operation.
 	s.snapshotMu.Lock()
 	defer s.snapshotMu.Unlock()
+	if s.componentPending != nil {
+		ctx, cancel := context.WithTimeout(parent, ownershipTimeout)
+		err := s.settleComponentWrite(ctx)
+		cancel()
+		if err != nil {
+			if errors.Is(err, sessionstore.ErrLeaseLost) {
+				s.fenced.Store(true)
+				s.close()
+			}
+			return err
+		}
+	}
 	s.mu.Lock()
 	v2 := s.state.Agent.V2 != nil
 	if v2 && (s.fenced.Load() || s.ctx.Err() != nil) {
@@ -239,7 +256,7 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 		return errCheckpointSkipped
 	}
 	wireBytes := len(state) + snapshotEnvelopeBytes
-	if pair.V2 != nil {
+	if pair.V2 != nil && !s.componentMode {
 		if err := s.checkSnapshotSize(state); err != nil {
 			return err
 		}
@@ -257,41 +274,13 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 			return fmt.Errorf("%w: required v2 snapshot byte budget", agent.ErrCapacity)
 		}
 	}
-	err = s.worker.cfg.Relay.Owners.PutState(ctx, lease, state)
+	if s.componentMode {
+		wireBytes, err = s.writeComponents(ctx, lease, state, pair, dtlsNext, captured, intent)
+	} else {
+		err = s.worker.cfg.Relay.Owners.PutState(ctx, lease, state)
+	}
 	if err == nil {
-		if pair.V2 != nil {
-			s.snapshotBudgetMu.Lock()
-			s.snapshotBytesBudget.debit(s.worker.cfg.SnapshotLimits, wireBytes, captured)
-			s.worker.metrics.snapshotDebitBytes.Add(uint64(wireBytes))
-			if intent {
-				s.worker.metrics.forcedSuccesses.Add(1)
-			}
-			s.snapshotWriteInFlight = false
-			s.snapshotBudgetMu.Unlock()
-		}
-		s.snapshotStored.Store(true)
-		s.mu.Lock()
-		bound := s.dtlsAcknowledged
-		if bound == nil {
-			bound = s.dtlsProvisional
-		}
-		// Keep the latch on identical acknowledgments: retransmission spam must
-		// not request another write until the acknowledged bound actually moves.
-		if bound == nil || *bound != dtlsNext {
-			s.dtlsCheckpointRequested = false
-		}
-		s.dtlsAcknowledged = &dtlsNext
-		s.dtlsProvisional = nil
-		s.state.Checkpoint.Successes++
-		s.state.Checkpoint.CapturedAt = captured
-		s.checkpointRates(&s.state.Checkpoint)
-		s.durableAgent = pair
-		if pair.V2 != nil {
-			s.controlAck = max(s.controlAck, pair.V2.ControlHigh)
-		}
-		s.lastCheckpoint = time.Now()
-		s.mu.Unlock()
-		metrics.CheckpointWrites.WithLabelValues("success").Inc()
+		s.ackSnapshot(pair, dtlsNext, captured, wireBytes, intent)
 	} else {
 		s.mu.Lock()
 		s.state.Checkpoint.Failures++
@@ -357,4 +346,40 @@ func (s *session) warnSnapshot(err error) {
 		return
 	}
 	warn()
+}
+
+func (s *session) ackSnapshot(pair agentState, dtlsNext dtlsSequenceCheckpoint, captured time.Time, wireBytes int, intent bool) {
+	if pair.V2 != nil {
+		s.snapshotBudgetMu.Lock()
+		s.snapshotBytesBudget.debit(s.worker.cfg.SnapshotLimits, wireBytes, captured)
+		s.worker.metrics.snapshotDebitBytes.Add(uint64(wireBytes))
+		if intent {
+			s.worker.metrics.forcedSuccesses.Add(1)
+		}
+		s.snapshotWriteInFlight = false
+		s.snapshotBudgetMu.Unlock()
+	}
+	s.snapshotStored.Store(true)
+	s.mu.Lock()
+	bound := s.dtlsAcknowledged
+	if bound == nil {
+		bound = s.dtlsProvisional
+	}
+	// Keep the latch on identical acknowledgments: retransmission spam must
+	// not request another write until the acknowledged bound actually moves.
+	if bound == nil || *bound != dtlsNext {
+		s.dtlsCheckpointRequested = false
+	}
+	s.dtlsAcknowledged = &dtlsNext
+	s.dtlsProvisional = nil
+	s.state.Checkpoint.Successes++
+	s.state.Checkpoint.CapturedAt = captured
+	s.checkpointRates(&s.state.Checkpoint)
+	s.durableAgent = pair
+	if pair.V2 != nil {
+		s.controlAck = max(s.controlAck, pair.V2.ControlHigh)
+	}
+	s.lastCheckpoint = time.Now()
+	s.mu.Unlock()
+	metrics.CheckpointWrites.WithLabelValues("success").Inc()
 }

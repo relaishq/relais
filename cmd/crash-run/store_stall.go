@@ -134,7 +134,7 @@ func (s *storeStallOptions) capture(ctx context.Context, status controlplane.Sta
 	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) && !errors.Is(err, sessionstore.ErrEnded) {
 		o.Errors = append(o.Errors, "lease read: "+err.Error())
 	}
-	_, err = s.store.GetState(ctx, s.SessionID)
+	_, _, err = mediaworker.ReadRecoverySnapshot(ctx, s.store, s.SessionID)
 	o.SnapshotExists = err == nil
 	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) {
 		o.Errors = append(o.Errors, "snapshot read: "+err.Error())
@@ -173,7 +173,7 @@ func (s *storeStallOptions) prepare(ctx context.Context, env []string, id, contr
 	if err != nil {
 		return err
 	}
-	state, err := s.store.GetState(ctx, id)
+	state, _, err := mediaworker.ReadRecoverySnapshot(ctx, s.store, id)
 	if err != nil {
 		s.close()
 		return fmt.Errorf("pre-stall checkpoint: %w", err)

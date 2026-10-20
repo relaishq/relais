@@ -170,6 +170,7 @@ type call struct {
 // Plane owns the registry and call metadata. The store remains authoritative
 // for ownership. New and Register must be called before accepting calls.
 type Plane struct {
+	inventory       keyInventoryCache
 	metrics         planeMetrics
 	mu              sync.Mutex
 	relay           Relay
@@ -860,10 +861,11 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 			// B may already have emitted media and persisted adjusted counters.
 			// Its fenced store state, rather than the final export from A, is now
 			// the only valid checkpoint for a rollback that needs crash margins.
-			state, err = p.store.GetState(ctx, c.id)
+			var tupleMetadata *sessionstore.Checkpoint
+			state, tupleMetadata, err = mediaworker.ReadRecoverySnapshot(ctx, p.store, c.id)
 			if err == nil {
 				var decision checkpointDecision
-				decision, err = p.checkpointDecision(resumeCtx, c.id, state, checkpointOutageBudget(resumeCtx, moveStarted))
+				decision, err = p.checkpointDecision(resumeCtx, c.id, state, checkpointOutageBudget(resumeCtx, moveStarted), tupleMetadata)
 				res.CheckpointAge, res.SnapshotAge, res.CheckpointStoredAt = decision.age, decision.snapshotAge, decision.storedAt
 				res.Checkpoint, res.SequenceMargin, res.SRTCPIndexMargin = decision.info, decision.margin, decision.rtcpMargin
 				checkpointOutside = decision.outside
@@ -1092,16 +1094,18 @@ type CallStatus struct {
 
 // Status is the HTTP view of workers and live calls.
 type Status struct {
-	Workers   []WorkerStatus `json:"workers"`
-	Calls     []CallStatus   `json:"calls"`
-	Takeovers []MoveResult   `json:"takeovers"`
-	LostCount uint64         `json:"lost_count"`
-	Ready     bool           `json:"ready"`
-	Pool      PoolSample     `json:"pool"`
+	Workers          []WorkerStatus     `json:"workers"`
+	Calls            []CallStatus       `json:"calls"`
+	Takeovers        []MoveResult       `json:"takeovers"`
+	LostCount        uint64             `json:"lost_count"`
+	Ready            bool               `json:"ready"`
+	Pool             PoolSample         `json:"pool"`
+	SessionStoreKeys KeyInventoryStatus `json:"session_store_keys"`
 }
 
 // Status lists live calls and reconciles definitive ownership loss.
 func (p *Plane) Status(ctx context.Context) (Status, error) {
+	inventory := p.keyInventoryStatus(ctx)
 	_ = p.SamplePool(ctx)
 	p.mu.Lock()
 	workers := make([]*registration, 0, len(p.workers))
@@ -1109,7 +1113,7 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 		workers = append(workers, w)
 	}
 	// Copy registry flags here; metadata uses its own brief lock below.
-	status := Status{Workers: []WorkerStatus{}, Calls: []CallStatus{}, Takeovers: p.recentTakeovers(), LostCount: p.lostCount}
+	status := Status{SessionStoreKeys: inventory, Workers: []WorkerStatus{}, Calls: []CallStatus{}, Takeovers: p.recentTakeovers(), LostCount: p.lostCount}
 	for _, w := range workers {
 		status.Workers = append(status.Workers, WorkerStatus{Name: w.name, Address: w.addr, Draining: w.draining, Dead: w.dead, Recovering: w.recovering, LastHeartbeat: w.lastHeartbeat})
 	}

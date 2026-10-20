@@ -48,7 +48,7 @@ func (m *Memory) CommitComponents(ctx context.Context, lease Lease, request Comp
 	p.record.stored = time.Now()
 	m.componentRecords[lease.SessionID] = p.record
 	checkpoint, err := checkpointAt(p.record.stored, p.record.stored)
-	return ComponentTuple{Components: cloneComponents(request.Components), Metadata: p.record.metadata, Lease: current, Checkpoint: checkpoint, WrittenBytes: p.written, RotationDeferred: p.deferred}, err
+	return ComponentTuple{Components: cloneComponents(p.plain), Metadata: p.record.metadata, Lease: current, Checkpoint: checkpoint, WrittenBytes: p.written, RotationDeferred: p.deferred}, err
 }
 func (m *Memory) ComponentKeyInventory(ctx context.Context) (map[byte]uint64, error) {
 	if err := ctx.Err(); err != nil {

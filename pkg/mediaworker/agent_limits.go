@@ -197,6 +197,10 @@ func (b *snapshotBucket) debit(l SnapshotLimits, n int, now time.Time) {
 }
 
 func (s *session) checkSnapshotSize(data []byte) error {
+	if s.componentMode {
+		_, err := s.componentAdmission(data)
+		return err
+	}
 	if len(data)+snapshotEnvelopeBytes > s.worker.cfg.SnapshotLimits.MaxBytes {
 		return fmt.Errorf("%w: whole v2 snapshot is %d bytes (cap %d)", agent.ErrCapacity, len(data)+snapshotEnvelopeBytes, s.worker.cfg.SnapshotLimits.MaxBytes)
 	}
@@ -213,6 +217,10 @@ func (s *session) admissionSnapshot(candidate agentState) (int, error) {
 			return 0, nil
 		}
 		return 0, err
+	}
+	if s.componentMode {
+		size, err := s.componentAdmission(data)
+		return size.Hot, err
 	}
 	return len(data) + snapshotEnvelopeBytes, nil
 }

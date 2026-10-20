@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -22,10 +23,25 @@ type checkpointDecision struct {
 	reserve          uint32
 }
 
-func (p *Plane) checkpointDecision(ctx context.Context, id string, state []byte, outage time.Duration) (checkpointDecision, error) {
+func (p *Plane) checkpointDecision(ctx context.Context, id string, state []byte, outage time.Duration, tupleMetadata ...*sessionstore.Checkpoint) (checkpointDecision, error) {
 	// A concurrent replacement must never date older bytes with newer metadata.
 	started := time.Now()
-	checkpoint, err := p.store.Checkpoint(ctx, id, state)
+	var checkpoint sessionstore.Checkpoint
+	var err error
+	if len(tupleMetadata) > 0 && tupleMetadata[0] != nil {
+		checkpoint = *tupleMetadata[0]
+	} else if mediaworker.IsComponentSnapshot(state) {
+		current, metadata, readErr := mediaworker.ReadRecoverySnapshot(ctx, p.store, id)
+		if readErr != nil {
+			return checkpointDecision{}, readErr
+		}
+		if metadata == nil || !bytes.Equal(state, current) {
+			return checkpointDecision{}, sessionstore.ErrStateSuperseded
+		}
+		checkpoint = *metadata
+	} else {
+		checkpoint, err = p.store.Checkpoint(ctx, id, state)
+	}
 	if err != nil {
 		return checkpointDecision{outside: errors.Is(err, sessionstore.ErrUnsafeCheckpointClock)}, err
 	}

@@ -264,7 +264,7 @@ func (r *Redis) commitPrepared(ctx context.Context, lease Lease, request Compone
 			}
 			lease.ExpiresAt = time.UnixMilli(expires)
 			checkpoint, e := checkpointAt(prepared.record.stored, prepared.record.stored)
-			return ComponentTuple{Components: cloneComponents(request.Components), Metadata: prepared.record.metadata, Lease: lease, Checkpoint: checkpoint, WrittenBytes: prepared.written, RotationDeferred: prepared.deferred}, e
+			return ComponentTuple{Components: cloneComponents(prepared.plain), Metadata: prepared.record.metadata, Lease: lease, Checkpoint: checkpoint, WrittenBytes: prepared.written, RotationDeferred: prepared.deferred}, e
 		}
 		if !errors.Is(err, ErrTransient) {
 			return ComponentTuple{}, err

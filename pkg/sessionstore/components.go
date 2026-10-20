@@ -35,6 +35,9 @@ type ComponentCommit struct {
 	StateVersion     uint32
 	Expected         *ComponentMetadata
 	WriteBudgetBytes int
+	// FinalizeTransport embeds the exact selected write charge (including rotation)
+	// before sealing. It must be pure and preserve encoded transport length.
+	FinalizeTransport func(writtenBytes int) ([]byte, error)
 }
 
 // ComponentTuple is one authenticated primary read. Checkpoint and Lease are
@@ -68,6 +71,7 @@ type componentPreparation struct {
 	changed  [3]bool
 	written  int
 	deferred bool
+	plain    Components
 }
 
 func componentBytes(c Components) [][]byte { return [][]byte{c.Setup, c.Work, c.History} }
@@ -229,18 +233,43 @@ func (r *Redis) prepareComponents(lease Lease, request ComponentCommit, current 
 	if request.WriteBudgetBytes < 0 || (request.WriteBudgetBytes > 0 && ordinary.written > request.WriteBudgetBytes) {
 		return p, ErrComponentCapacity
 	}
-	if !rotation {
-		return ordinary, nil
+	selected := ordinary
+	if rotation {
+		rotated, err := build(true)
+		if err != nil {
+			return p, err
+		}
+		if request.WriteBudgetBytes > 0 && rotated.written > request.WriteBudgetBytes {
+			selected.deferred = true
+		} else {
+			selected = rotated
+		}
 	}
-	rotated, err := build(true)
-	if err != nil {
-		return p, err
+	if request.FinalizeTransport != nil {
+		transport, err := request.FinalizeTransport(selected.written)
+		if err != nil {
+			return p, err
+		}
+		if len(transport) != len(request.Components.Transport) {
+			return p, fmt.Errorf("%w: finalized transport length changed", ErrUnsafeCheckpoint)
+		}
+		request.Components.Transport = bytes.Clone(transport)
+		if err := validComponents(lease.SessionID, request.Components); err != nil {
+			return p, err
+		}
+		finalized, err := build(rotation && !selected.deferred)
+		if err != nil {
+			return p, err
+		}
+		if finalized.written != selected.written {
+			return p, ErrUnsafeCheckpoint
+		}
+		finalized.deferred = selected.deferred
+		selected = finalized
 	}
-	if request.WriteBudgetBytes > 0 && rotated.written > request.WriteBudgetBytes {
-		ordinary.deferred = true
-		return ordinary, nil
-	}
-	return rotated, nil
+	selected.plain = cloneComponents(request.Components)
+	return selected, nil
+
 }
 func tupleFromRecord(r *Redis, id string, record componentRecord, lease Lease, now time.Time) (ComponentTuple, error) {
 	c, err := r.openRecord(id, record)

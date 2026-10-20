@@ -69,6 +69,7 @@ func Run(ctx context.Context, args []string, options Options) error {
 		defaultAgent = "echo"
 	}
 	agentName := flags.String("agent", defaultAgent, "audio agent: echo, demo or a registered name")
+	split := flags.Bool("agent-split-checkpoints", false, "use v10 component checkpoints for new calls (upgrade every participant first)")
 	limits := mediaworker.SnapshotLimits{}
 	flags.IntVar(&limits.MaxBytes, "agent-max-snapshot-bytes", 7168, "v2 whole encrypted snapshot byte cap")
 	flags.IntVar(&limits.BytesPerSecond, "agent-snapshot-bytes-per-second", 81920, "v2 snapshot payload bytes per second per session")
@@ -137,7 +138,7 @@ func Run(ctx context.Context, args []string, options Options) error {
 		defer func() { _ = client.Close() }()
 		frames = client
 	}
-	cfg := mediaworker.Config{Agent: agentConfig, SnapshotLimits: limits, ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store, StoreOutageBudget: storeConfig.OutageBudget}}
+	cfg := mediaworker.Config{SplitCheckpoints: *split, Agent: agentConfig, SnapshotLimits: limits, ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store, StoreOutageBudget: storeConfig.OutageBudget}}
 	if *cryptoTrace {
 		cfg.PacketTrace = func(packet mediaworker.PacketTrace) {
 			data, err := json.Marshal(packet)

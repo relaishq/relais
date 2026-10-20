@@ -18,8 +18,11 @@ Supply a 32-byte master key, or pass nil to read `RELAIS_SESSIONSTORE_KEY`
 (standard base64). Generate a key with `openssl rand -base64 32` and keep it
 outside source control. Empty addresses are rejected. Every process sharing a
 prefix needs the same key ring. For rotation, distribute both keys to every
-worker first, then select the new KeyID for encryption. Retain old decryption
-keys until their snapshots have expired or been replaced. Never reuse a key ID
+worker and control process first, then select the new KeyID for encryption.
+Retire an old decrypt key only after a complete, current inventory across all
+primaries reports zero published references to that ID **and** no old-key
+writer or uncertain/draining command can still commit. Lease expiry alone is
+not sufficient. Failed or stale inventory is not evidence of zero references. Never reuse a key ID
 while ciphertext under its former key remains. Per-session subkeys reduce
 fleet-wide nonce usage; operators still need to rotate keys before any single
 session approaches the AES-GCM random-nonce usage limit.
@@ -55,12 +58,76 @@ assertions. Session scripts share a hash tag; worker listing uses a pipeline
 that Redis Cluster routes by node. Cluster MOVED/ASK/TRYAGAIN/CLUSTERDOWN
 responses are classified as definite-not-run and retried at most three times;
 they may still surface as transient if routing remains unavailable. SDK network
-retries stay disabled. A live Cluster deployment has not been exercised here.
+retries stay disabled. Local Redis 7 Cluster tests cover NOSCRIPT reload,
+legacy slot migration during a component write (liveness only), and process
+SIGKILL takeover. These are not managed-store durability or latency evidence.
 
 Drive `controlplane.Run` with the application lifetime context. It retains and
 retries uncertain planned exports as well as crash takeovers; an exact candidate
 lease can be adopted, and only settlement proves a transition did not commit.
 Redis unavailability can delay a call until recovery or lease expiry.
+
+## Component checkpoints (v10)
+
+`relais-worker -agent-split-checkpoints` opts new calls into v10; it is off by
+default. Every worker and control process must support v10 before enabling it.
+An adopted v10 call keeps that format with the flag off. Older binaries cannot
+restore v10; end all v10 calls before rolling back. v8/v9 calls retain their
+legacy state key and encoding. This slice does not add SDK history or change
+existing agent working-state limits.
+
+The additive `sessionstore.ComponentStore` API saves a complete capture with
+`CommitComponents` and restores it with one primary `ReadComponents` script.
+The returned tuple includes the lease, authenticated components, publication
+metadata and store-clock sample. Missing, corrupt or mismatched components
+fail closed through recovery loss; history is never replaced with an empty
+value, another bank or legacy state. The private v10 restore/export envelope
+contains component bytes, never Redis pointers.
+
+All session keys use the existing escaped `{sess:ID}` hash tag. V10 has eleven
+keys: the five ownership metadata keys, `setup:T`, `checkpoint:T`,
+`work:T:0/1` and `history:T:0/1`. The legacy `state:T` is outside this set;
+there is no dual-write. `setup` is a hash with two precreated banks. Both app
+banks are also precreated. After the existing fenced sequence reservation,
+one commit script checks ownership, epoch, expiry, ordering, expected checkpoint
+and app root, setup identity, key types and bounds before any component write.
+It overwrites inactive banks, installs expiry, then publishes `b`, `m` and `t`
+in one final checkpoint `HSET`. Progress commits retain unchanged setup,
+working and history ciphertext. Setup changes are refused. Renew and Transfer
+extend every existing key to the same absolute lease expiry; Release, pruning
+and fresh Claim remove preparations as well as published values. Lease length
+remains 34 seconds and metadata retention defaults to five minutes.
+
+Every changing capture passes encoded-size admission; a refusal is typed and
+never truncates bytes. Hot captures use the existing cadence. Unknown commit
+replies are settled against the exact published tuple before another capture
+can be acknowledged, so a lost reply does not double-debit the write quota.
+The durable quota includes the selected commit's actual component write charge.
+
+Components use versioned AES-GCM/HKDF domains and keyed digests. On the first
+commit with a new active master key, setup and every referenced old-key part
+are re-encrypted into inactive banks before publication. If only rotation's
+extra bytes exceed the session write budget, the ordinary commit continues
+using old-key references and rotation is retried later. Unreferenced old banks
+do not need their keys to restore a published tuple.
+
+Worker and control binaries configure their key rings **only through the
+environment**, never key flags or command-line values:
+
+- `RELAIS_SESSIONSTORE_KEY`: active 32-byte key, hex or standard base64.
+- `RELAIS_SESSIONSTORE_KEY_ID`: active decimal ID, 0–255; default 0.
+- `RELAIS_SESSIONSTORE_OLD_KEYS`: JSON object mapping decimal IDs to hex or
+  base64 32-byte decrypt keys, for example `{"1":"<previous-key>"}`. It must
+  exclude the active ID. Keep this value in the same protected secret source.
+
+Control `GET /status` exposes `session_store_keys` with `state`, `counts` by
+key ID and `observed_at`. Inventory scans all primaries and counts only
+published references (five for a v10 tuple, one for legacy state). A current
+empty count is meaningful only with the retirement conditions above. Stale or
+failed scans are labeled and retain their last counts/time; counts are null
+before the first successful scan. The cache refresh interval is five seconds,
+with each scan bounded to one second. This is a sampled retirement aid, not
+a cross-primary transaction. See [ADR 0012 section 1](../adr/0012-agent-state-store-schema.md#1-schema-and-commit-protocol).
 
 ## Harness and tests
 

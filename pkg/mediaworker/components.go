@@ -13,8 +13,8 @@ import (
 	"github.com/relaishq/relais/pkg/agent"
 )
 
-// Slice A is an unwired codec. No live call selects v10, no legacy decoder
-// accepts it, and no checkpoint/store path calls these functions yet.
+// V10 components use the shared codec. New calls select this format only
+// through SplitCheckpoints; legacy v8/v9 encoding remains independent.
 const (
 	componentSetup      byte = 1
 	componentTransport  byte = 2
@@ -126,7 +126,7 @@ func splitSessionComponents(snap snapshot, history, expectedSetup []byte) (sessi
 	return c, err
 }
 
-// The result is an internal restore input, not a v10 wire/private API writer.
+// The result is the internal restore input for the self-contained v10 envelope.
 // Callers must feed it to session.resume with the original ResumeOptions. That
 // single existing path performs advanceDTLSSequence on crash restore and keeps
 // confirmed planned moves exact; the adapter contains no second sequence rule.
@@ -173,6 +173,9 @@ func assembleSessionComponents(c sessionComponents, stateVersion uint32) (snapsh
 	state.SRTP.Profile = srtp.ProtectionProfile(transport.Profile)
 	state.SRTP.Inbound, state.SRTP.Received = transport.Inbound, transport.Received
 	snap := snapshot{Version: state.Version, State: state, DTLSConnection: dtlsBytes}
+	if transport.LegacyVersion < 7 || transport.LegacyVersion > 9 {
+		return snapshot{}, nil, fmt.Errorf("%w: %w: v10 host version", errBadState, errStateVersion)
+	}
 	if err := validateSnapshot(&snap); err != nil {
 		return snapshot{}, nil, fmt.Errorf("%w: %w", errBadState, err)
 	}
