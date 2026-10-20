@@ -33,7 +33,7 @@ func (p *Plane) remoteHeartbeat(name string, req HeartbeatRequest) (HeartbeatRep
 	if w.recovering || w.dead && !w.recovered {
 		return HeartbeatReply{}, errors.New("controlplane: worker takeover in progress")
 	}
-	// Rebuild has observed this live endpoint and the store remains the only
+	// Rebuild restored this endpoint and the store remains the only
 	// ownership authority. Accept its prior completed heartbeat token once; it
 	// belongs to the worker process, while the old controller's cache is gone.
 	if p.restart != nil && !w.dead && !w.heartbeatObserved {
@@ -56,6 +56,10 @@ func (p *Plane) remoteHeartbeat(name string, req HeartbeatRequest) (HeartbeatRep
 		w.rejoinToken = ""
 	} else if req.Token != "" && req.Token != w.acceptedToken {
 		return HeartbeatReply{}, errors.New("controlplane: stale rejoin token")
+	}
+	if w.livenessUnknown {
+		w.livenessUnknown = false
+		p.loadVersion++
 	}
 	w.lastHeartbeat = time.Now()
 	return HeartbeatReply{}, nil

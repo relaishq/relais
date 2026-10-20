@@ -54,7 +54,7 @@ func (p *Plane) readyLocked() bool {
 		return false
 	}
 	for _, w := range p.workers {
-		if !w.dead && !w.draining && !w.recovering && !w.relayPending {
+		if !w.dead && !w.draining && !w.recovering && !w.relayPending && !w.livenessUnknown {
 			return true
 		}
 	}
@@ -111,6 +111,8 @@ func (p *Plane) SamplePool(ctx context.Context) (err error) {
 				sample.Pending++
 			case w.dead || w.recovering:
 				sample.Unreachable++
+			case w.livenessUnknown:
+				sample.Pending++
 			case w.draining:
 				sample.Draining++
 			default:

@@ -318,7 +318,12 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   with its PID and bound addresses; ephemeral loopback ports are the defaults.
   Control listens even if a listed worker or the relay is down. Fixed worker
   rebuild status requests have a 250 ms deadline and run in parallel, once per
-  worker per attempt. Background status requests have a one-second deadline;
+  worker per attempt. A saved worker that misses that deadline has unknown
+  liveness (`liveness_unknown: true` in control status), rather than being
+  declared dead. Placement stays pending until it heartbeats. The normal
+  heartbeat detector declares death after `DeadAfter` (400 ms by default)
+  without a heartbeat, measured from registration; rebuild retries do not
+  restart that window. Background status requests have a one-second deadline;
   subsequent discovery checks every 250 ms, with bounded requests. Relay
   status/registration retries back off from 200 ms to 5 s after failure and
   poll every 100 ms when healthy. Acquiring or recovering the control lease
@@ -393,11 +398,16 @@ age, rebuild, detection and transfer all consume recovery headroom; higher rates
 or retained advances can reduce it. Control must become ready again inside the
 remaining bound, with time left for takeover.
 
-On one development Mac, ten no-delay simultaneous control/worker crash runs
+Earlier, on one development Mac, ten no-delay simultaneous control/worker crash runs
 with 16 calls each recovered 160/160 calls without loss. Readiness including
 lease wait was 0.854–1.081 s (median 1.029 s); the oldest snapshot at takeover was
-1.211 s, leaving 1.023 s inside the default-rate limit. These are local,
-one-machine measurements. See the [derivation and limits](guarantees.md#control-restart).
+1.211 s, leaving 1.023 s inside the default-rate limit. Those runs preceded the
+unknown-liveness registration grace. With that grace, ten black-holed-worker
+restart trials recovered 160/160 calls with zero losses. Process start to the
+last completed takeover, including lease wait, was 1.689 s median and 1.814 s
+maximum. Workers with 300 ms and 900 ms status replies kept their owner tenures
+in ten process trials each. These are local, one-machine measurements.
+See the [derivation and limits](guarantees.md#control-restart).
 A race-tested fixture adding 300 ms to each control-lease command kept readiness
 without flapping over ten three-second observation windows. Slow-reply fixtures
 also cover a single 600 ms reply and steady 450/520 ms replies. A black-holed

@@ -189,7 +189,8 @@ Control must become ready within the remaining snapshot-age headroom, leaving
 time for detection, transfer and adoption. A checkpoint can already be old when
 the worker dies. Readiness alone does not prove recovery will fit.
 
-With the one-second control TTL, the simultaneous worker/control crash test
+Before the unknown-liveness registration grace, the one-second control TTL
+simultaneous worker/control crash test
 starts the successor with no pre-start delay and 16 calls on the dead worker.
 Ten local runs under the race detector on one development Mac recovered
 **160/160 calls with zero losses**. Process-start-to-ready time, including lease
@@ -199,6 +200,15 @@ takeover decision was **1.211 s**, leaving **1.023 s** against the default-rate
 machine's measurements, not a CI, cloud or capacity guarantee. The strict test
 requires zero losses and at least 500 ms of readiness headroom. The one-second
 pre-start-delay variant remains a separate test; that delay adds downtime.
+With unknown liveness, ten local black-holed-worker process trials under the
+race detector recovered **160/160 calls with zero losses**. Time from successor
+process start to the last completed takeover, including lease wait, was
+**1.689 s median / 1.814 s maximum**. The 300 ms and 900 ms status-delay cases
+also ran ten times each without evicting a heartbeating worker or changing its
+call's owner tenure. These are one development Mac's measurements, not cloud
+or loaded-host guarantees. Status-poll latency is logged separately from the
+recorded takeover completion time.
+
 Acquiring the control lease and restoring workers wake relay registration
 immediately; recovery waits for the relay allowlist before selecting a destination.
 
@@ -207,6 +217,14 @@ has a one-second TTL and renews every 250 ms from request start; the measured
 process-start-to-ready time includes the wait for the crashed predecessor.
 Rebuild observes workers in parallel with a 250 ms timeout and reuses those
 observations, including failures, rather than issuing a second status request.
+A status timeout restores a saved worker with unknown liveness and pending
+placement, preserving its store-owned calls. Heartbeats clear that state;
+only the normal heartbeat detector can declare it dead after the 400 ms
+(default) registration grace period without a heartbeat. Rebuild retries do
+not extend that period. Unknown-create reconciliation retains its record and
+reservation until inventory observation or heartbeat detection resolves it.
+Rebuild reuses its failed observation even if a heartbeat arrives meanwhile,
+without another status wait.
 A truncated worker inventory leaves control not
 ready. See [operator behavior](deploy.md#control-restart).
 

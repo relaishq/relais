@@ -124,6 +124,7 @@ type registration struct {
 	addr              netip.AddrPort
 	worker            Worker
 	relayPending      bool // fixed bootstrap waits for the relay allowlist
+	livenessUnknown   bool // failed restart observation; wait for a heartbeat before placement
 	draining          bool
 	reserved          int // incoming creates/moves; counted when balancing
 	rollbackSlots     int // source protection, used only by placement load
@@ -305,7 +306,7 @@ func (p *Plane) pickCapacity(ctx context.Context, name string, excluded map[neti
 		version := p.loadVersion
 		candidates := make([]*registration, 0, len(p.workers))
 		for _, w := range p.workers {
-			if (name == "" || w.name == name) && !w.draining && !w.dead && !w.recovering && !w.relayPending && !excluded[w.addr] {
+			if (name == "" || w.name == name) && !w.draining && !w.dead && !w.recovering && !w.relayPending && !w.livenessUnknown && !excluded[w.addr] {
 				candidates = append(candidates, w)
 			}
 		}
@@ -338,7 +339,7 @@ func (p *Plane) pickCapacity(ctx context.Context, name string, excluded map[neti
 		var best *registration
 		load, ready := int(^uint(0)>>1), false
 		for _, w := range candidates {
-			if p.workers[w.name] != w || w.draining || w.dead || w.recovering || w.relayPending {
+			if p.workers[w.name] != w || w.draining || w.dead || w.recovering || w.relayPending || w.livenessUnknown {
 				continue
 			}
 			ready = true
@@ -1150,13 +1151,14 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 
 // WorkerStatus describes one registered worker and its live lease count.
 type WorkerStatus struct {
-	Name          string         `json:"name"`
-	Address       netip.AddrPort `json:"address"`
-	Draining      bool           `json:"draining"`
-	Recovering    bool           `json:"recovering"`
-	Dead          bool           `json:"dead"`
-	LastHeartbeat time.Time      `json:"last_heartbeat"`
-	Calls         int            `json:"call_count"`
+	Name            string         `json:"name"`
+	Address         netip.AddrPort `json:"address"`
+	Draining        bool           `json:"draining"`
+	Recovering      bool           `json:"recovering"`
+	Dead            bool           `json:"dead"`
+	LivenessUnknown bool           `json:"liveness_unknown,omitempty"`
+	LastHeartbeat   time.Time      `json:"last_heartbeat"`
+	Calls           int            `json:"call_count"`
 }
 
 // CallStatus describes current lease ownership and successful moves.
@@ -1195,7 +1197,7 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 	// Copy registry flags here; metadata uses its own brief lock below.
 	status := Status{Rebuild: p.RebuildStatus(), SessionStoreKeys: inventory, Workers: []WorkerStatus{}, Calls: []CallStatus{}, Takeovers: p.recentTakeovers(), LostCount: p.lostCount}
 	for _, w := range workers {
-		status.Workers = append(status.Workers, WorkerStatus{Name: w.name, Address: w.addr, Draining: w.draining, Dead: w.dead, Recovering: w.recovering, LastHeartbeat: w.lastHeartbeat})
+		status.Workers = append(status.Workers, WorkerStatus{Name: w.name, Address: w.addr, Draining: w.draining, Dead: w.dead, LivenessUnknown: w.livenessUnknown, Recovering: w.recovering, LastHeartbeat: w.lastHeartbeat})
 	}
 
 	calls := make([]*call, 0, len(p.calls))

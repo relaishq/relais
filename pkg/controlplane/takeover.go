@@ -96,6 +96,10 @@ func (p *Plane) Heartbeat(addr netip.AddrPort) error {
 		return mediaworker.ErrRejoinRequired
 	}
 	w.dead = false
+	if w.livenessUnknown {
+		w.livenessUnknown = false
+		p.loadVersion++
+	}
 	w.lastHeartbeat = time.Now()
 	return nil
 }

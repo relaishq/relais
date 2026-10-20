@@ -572,8 +572,10 @@ func (p *Plane) registerObservedWorker(ctx context.Context, fixed FixedWorker, s
 	p.mu.Lock()
 	registration := p.workers[fixed.Name]
 	if down {
-		registration.lastHeartbeat = time.Time{}
-		registration.dead = true
+		// A failed observation is not a death decision. Register supplies a
+		// bounded heartbeat grace period; retries must not reset that anchor.
+		registration.livenessUnknown = !registration.heartbeatObserved
+		p.loadVersion++
 	} else {
 		registration.draining = status.Draining
 	}
@@ -829,7 +831,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 	}
 	// Creation reservations remain durable until candidate settlement and live
 	// worker observations establish adoption or fenced cleanup.
-	if err := p.reconcileCreates(ctx); err != nil {
+	if err := p.reconcileCreatesObserved(ctx, workerStatuses); err != nil {
 		return err
 	}
 	// Drains keep their placement fence. A restart reports a typed partial result
@@ -977,6 +979,12 @@ func (p *Plane) finishCreate(_ context.Context, key string, worker *registration
 }
 
 func (p *Plane) reconcileCreates(ctx context.Context) error {
+	return p.reconcileCreatesObserved(ctx, nil)
+}
+
+// A rebuild reuses failed observations even if a heartbeat arrived meanwhile.
+// Heartbeats establish liveness, not an installed-session inventory.
+func (p *Plane) reconcileCreatesObserved(ctx context.Context, observed map[string]mediaworker.WorkerStatus) error {
 	lease, err := p.controlLease()
 	if err != nil {
 		return err
@@ -1013,7 +1021,9 @@ func (p *Plane) reconcileCreates(ctx context.Context) error {
 		if !worker.createMu.TryLock() {
 			continue
 		}
-		err := p.reconcileCreate(ctx, key, worker)
+		status, known := observed[worker.name]
+		readStatus := observed == nil || known && status.Address == worker.addr
+		err := p.reconcileCreate(ctx, key, worker, readStatus)
 		worker.createMu.Unlock()
 		if errors.Is(err, errCreateStatus) {
 			// Rebuild must finish before heartbeat detection can establish death.
@@ -1028,7 +1038,7 @@ func (p *Plane) reconcileCreates(ctx context.Context) error {
 	return nil
 }
 
-func (p *Plane) reconcileCreate(ctx context.Context, key string, worker *registration) error {
+func (p *Plane) reconcileCreate(ctx context.Context, key string, worker *registration, readStatus bool) error {
 	p.restart.mu.Lock()
 	local := p.restart.creates[key]
 	settled := local != nil && local.settled
@@ -1047,8 +1057,13 @@ func (p *Plane) reconcileCreate(ctx context.Context, key string, worker *registr
 		}
 
 		p.mu.Lock()
-		dead := worker.dead
+		dead, unknown := worker.dead, worker.livenessUnknown
 		p.mu.Unlock()
+		if !dead && (unknown || !readStatus) {
+			// The record and reservation outlive this failed observation.
+			// Normal ticks can observe again once a heartbeat proves liveness.
+			return fmt.Errorf("%w: worker inventory not yet observed", errCreateStatus)
+		}
 		var status mediaworker.WorkerStatus
 		var statusErr error
 		if !dead {
