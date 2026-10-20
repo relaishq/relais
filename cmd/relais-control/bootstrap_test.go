@@ -106,7 +106,7 @@ func TestFixedPoolTolerantBootstrapProcesses(t *testing.T) {
 				req.Header.Set("Content-Type", "application/sdp")
 				resp, err := http.DefaultClient.Do(req)
 				require.NoError(t, err)
-				require.Equal(t, 409, resp.StatusCode)
+				require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 				require.NoError(t, resp.Body.Close())
 				startRelay()
 			}

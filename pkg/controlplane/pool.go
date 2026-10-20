@@ -47,11 +47,14 @@ func (p *Plane) SetRelayReady(ready bool) {
 }
 
 func (p *Plane) readyLocked() bool {
+	if !p.mutationReady() {
+		return false
+	}
 	if p.bootstrap && !p.relayReady {
 		return false
 	}
 	for _, w := range p.workers {
-		if !w.dead && !w.draining && !w.recovering && !w.relayPending {
+		if !w.dead && !w.draining && !w.recovering && !w.relayPending && !w.livenessUnknown {
 			return true
 		}
 	}
@@ -108,6 +111,8 @@ func (p *Plane) SamplePool(ctx context.Context) (err error) {
 				sample.Pending++
 			case w.dead || w.recovering:
 				sample.Unreachable++
+			case w.livenessUnknown:
+				sample.Pending++
 			case w.draining:
 				sample.Draining++
 			default:

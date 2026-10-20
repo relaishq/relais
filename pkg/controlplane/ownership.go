@@ -182,7 +182,14 @@ func (p *Plane) cleanupExpired(ctx context.Context, c *call) {
 	}
 	p.mu.Lock()
 	c.cleanupPending = false
-	if p.calls[c.id] == c {
+	p.mu.Unlock()
+	p.finishIntent(c)
+	p.mu.Lock()
+	if p.restart != nil && c.intent != nil {
+		// Keep the terminal call reachable until its durable intent is cleared.
+		// Conditional lease/route cleanup is safe to retry after an unknown reply.
+		c.cleanupPending = true
+	} else if p.calls[c.id] == c {
 		delete(p.calls, c.id)
 	}
 	p.mu.Unlock()

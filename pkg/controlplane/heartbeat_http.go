@@ -33,6 +33,13 @@ func (p *Plane) remoteHeartbeat(name string, req HeartbeatRequest) (HeartbeatRep
 	if w.recovering || w.dead && !w.recovered {
 		return HeartbeatReply{}, errors.New("controlplane: worker takeover in progress")
 	}
+	// Rebuild restored this endpoint and the store remains the only
+	// ownership authority. Accept its prior completed heartbeat token once; it
+	// belongs to the worker process, while the old controller's cache is gone.
+	if p.restart != nil && !w.dead && !w.heartbeatObserved {
+		w.acceptedToken = req.Token
+		w.heartbeatObserved = true
+	}
 	if w.dead {
 		if w.rejoinToken == "" {
 			var token [16]byte
@@ -50,6 +57,10 @@ func (p *Plane) remoteHeartbeat(name string, req HeartbeatRequest) (HeartbeatRep
 	} else if req.Token != "" && req.Token != w.acceptedToken {
 		return HeartbeatReply{}, errors.New("controlplane: stale rejoin token")
 	}
+	if w.livenessUnknown {
+		w.livenessUnknown = false
+		p.loadVersion++
+	}
 	w.lastHeartbeat = time.Now()
 	return HeartbeatReply{}, nil
 }
@@ -62,6 +73,10 @@ func (p *Plane) ProcessHandler() http.Handler {
 	mux.Handle("/", p.Handler())
 	mux.HandleFunc("POST /private/workers/{name}/mark-draining", func(w http.ResponseWriter, r *http.Request) {
 		if err := p.MarkDraining(r.PathValue("name")); err != nil {
+			if errors.Is(err, ErrNotReady) {
+				writeError(w, err)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			privateapi.Write(w, privateapi.Failure{Code: "not_found", Message: err.Error()})

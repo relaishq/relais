@@ -684,6 +684,9 @@ func (r *Redis) transfer(ctx context.Context, from Lease, to netip.AddrPort, ttl
 		return Lease{}, err
 	}
 	candidate := candidateLease(from.SessionID, epoch, to)
+	if err := r.journalCandidate(ctx, candidate); err != nil {
+		return Lease{}, err
+	}
 	if err := r.indexContext(ctx, candidate, ttl); err != nil {
 		return Lease{}, err
 	}

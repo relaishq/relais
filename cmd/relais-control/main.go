@@ -5,8 +5,10 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/relaishq/relais/internal/processrun"
@@ -68,25 +70,41 @@ func run() error {
 		names = append(names, entry.name)
 	}
 	plane.BeginBootstrap(names)
+	if err := plane.EnableRestart(); err != nil {
+		return err
+	}
 	// Serve heartbeats during registration. A slow later worker must not make
 	// an earlier healthy registration age past DeadAfter before Run starts.
 	handler := controlHandler(plane, r, *demoRegister, testWorkers, testWorkerClient())
+	var handlers sync.WaitGroup
+	tracked := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		handlers.Add(1)
+		defer handlers.Done()
+		handler.ServeHTTP(w, request)
+	})
 	served := make(chan struct{})
 	serveErr := make(chan error, 1)
-	go func() { defer close(served); serveErr <- processrun.Serve(ctx, listener, handler) }()
+	go func() { defer close(served); serveErr <- processrun.Serve(ctx, listener, tracked) }()
 	defer func() { cancel(); <-served }()
-	workersDone := make(chan struct{})
-	firstRound := make(chan struct{})
-	go func() { defer close(workersDone); bootstrapWorkers(ctx, plane, fixed, firstRound) }()
-	defer func() { cancel(); <-workersDone }()
-	done := make(chan struct{})
-	go func() { defer close(done); _ = plane.Run(ctx) }()
-	// Preserve immediate usability for the normal all-up startup. A down
-	// dependency delays only this bounded first round, never process startup.
-	select {
-	case <-firstRound:
-	case <-ctx.Done():
+	managed := make([]controlplane.FixedWorker, 0, len(fixed))
+	for _, worker := range fixed {
+		managed = append(managed, controlplane.FixedWorker{Name: worker.name, URL: worker.endpoint})
 	}
+	done := make(chan struct{})
+	managedErr := make(chan error, 1)
+	managedCtx, stopManaged := context.WithCancel(context.WithoutCancel(ctx))
+	go func() { defer close(done); managedErr <- plane.RunManaged(managedCtx, managed) }()
+	defer func() {
+		plane.BeginShutdown()
+		cancel()
+		<-served
+		handlers.Wait()
+		stopManaged()
+		<-done
+		releaseCtx, stop := context.WithTimeout(context.Background(), time.Second)
+		defer stop()
+		_ = plane.ReleaseControl(releaseCtx)
+	}()
 	firstRelay := make(chan struct{})
 	registrationDone := make(chan struct{})
 	go func() { defer close(registrationDone); registerRestartedRelay(ctx, plane, r, firstRelay) }()
@@ -95,12 +113,34 @@ func run() error {
 	case <-firstRelay:
 	case <-ctx.Done():
 	}
+	// Listening is available even when another control holds the lease or a
+	// dependency is down. GET /status is authoritative for mutation readiness.
+	startup := time.NewTimer(1200 * time.Millisecond)
+	defer startup.Stop()
+awaitReady:
+	for {
+		if state, statusErr := plane.Status(ctx); statusErr == nil && state.Ready {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			break awaitReady
+		case <-startup.C:
+			break awaitReady
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 	processrun.Ready(map[string]any{"http": "http://" + listener.Addr().String()})
 	select {
 	case <-ctx.Done():
 	case err = <-serveErr:
+	case err = <-managedErr:
 	}
+	plane.BeginShutdown()
 	cancel()
+	<-served
+	handlers.Wait()
+	stopManaged()
 	<-done
 	return err
 }
@@ -136,8 +176,15 @@ func registerRestartedRelay(ctx context.Context, plane *controlplane.Plane, r *c
 		} else {
 			delay = 100 * time.Millisecond
 		}
-		if !waitBootstrap(ctx, delay) {
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
 			return
+		case <-plane.AuthorityChanges():
+			timer.Stop()
+			delay = 100 * time.Millisecond
+		case <-timer.C:
 		}
 	}
 }

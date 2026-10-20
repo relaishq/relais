@@ -685,7 +685,7 @@ Resources:
         Fn::Sub: ${AWS::StackName}-control
       UserName: control
       AccessString: on -@all +ping +cluster|slots +command +eval +evalsha +script|load +time +hmget +hget +hgetall +hset +hincrby
-        +hdel +get +set +del +exists +incr +pttl +pexpire +pexpireat +zadd +zrange +zrem +scan ~relais:preview:* +type +hexists
+        +hdel +get +set +del +exists +incr +pttl +pexpire +pexpireat +zadd +zrange +zrem +scan ~relais:preview:* +type +hexists +hlen
       AuthenticationMode:
         Type: password
         Passwords:

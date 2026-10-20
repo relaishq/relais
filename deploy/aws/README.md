@@ -2,8 +2,10 @@
 
 [preview.yaml](preview.yaml) is a public, native CloudFormation template for
 creating Relais in your own account. This change creates no AWS resources.
-**This is a reviewable preview candidate. Control restart safety (#193) still
-blocks public use.** There is no launch link or selected release.
+**This is a reviewable preview candidate. Single-control restart recovery (#193)
+is tested locally for the fixed-pool topology on standalone Redis and Redis
+Cluster. Paid AWS acceptance still blocks public use.** There is no launch link
+or selected release.
 
 Read [ADR 0011](../../docs/adr/0011-deploy-and-autoscale.md) and the
 [deployment guide](../../docs/deploy.md). The template supports only a new,
@@ -274,9 +276,13 @@ record outcomes; there is no ALB access log or WAF sampled-body log in this slic
 Services use `Restart=no`. For relay and standby this follows ADR 0004's bounded
 same-host process model: the waiting standby fences and takes over once; systemd
 does not race it with a restarted plain primary or invent standby replenishment.
-After takeover, redundancy needs deliberate operator recovery. A failed control process must not restart itself
-against live calls before #193. Boot on host restart starts enabled services,
-which also remains unsafe for public use until restart reconciliation lands.
+After takeover, redundancy needs deliberate operator recovery. Control can be
+restarted against live calls after its predecessor exits, with the same fixed
+worker endpoints, store namespace and encryption key. It waits for its store
+lease and rebuilds before accepting mutations; see [control restart](../../docs/deploy.md#control-restart).
+Services still use deliberate operator restart. Boot on host restart starts
+enabled services. This local restart evidence does not validate AWS host boot,
+managed-store failover or paid preview acceptance.
 Choose `Profile` at creation; changing it later is unsupported because host IPs
 are fixed. This template is for **initial creation**: changing release metadata does not
 implement a worker drain, safe replacement, cloud-init replay, or rollback.

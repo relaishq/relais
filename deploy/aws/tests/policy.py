@@ -29,7 +29,7 @@ EXPECTED_ACLS = {
         ~relais:preview:* +type +hexists""".split(),
     'Control': """on -@all +ping +cluster|slots +command +eval +evalsha +script|load +time +hmget +hget +hgetall +hset
         +hincrby +hdel +get +set +del +exists +incr +pttl +pexpire +pexpireat +zadd +zrange +zrem +scan
-        ~relais:preview:* +type +hexists""".split(),
+        ~relais:preview:* +type +hexists +hlen""".split(),
 }
 RETAINED = {'Store', 'StoreUsers', 'RelayPassword', 'SnapshotKey', 'WorkerStoreUser', 'SignalToken', 'PrivateB', 'StoreSubnets', 'RelayStoreUser', 'ControlPassword', 'Vpc', 'RelayAddress', 'ControlStoreUser', 'PrivateA', 'StoreGroup', 'WorkerPassword'}
 

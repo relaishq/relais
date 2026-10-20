@@ -85,7 +85,18 @@ func TestClusterProcessTopology(t *testing.T) {
 			if len(before) == 0 {
 				return fmt.Errorf("live call has no persisted route")
 			}
-			if err := redistestcluster.Failover(ctx, admin, prefix+"lease:{sess:"+id+"}"); err != nil {
+			leaseKey := prefix + "lease:{sess:" + id + "}"
+			controlKey := prefix + "control:{control}"
+			callPrimary, err := admin.MasterForKey(ctx, leaseKey)
+			if err != nil {
+				return err
+			}
+			controlPrimary, err := admin.MasterForKey(ctx, controlKey)
+			if err != nil {
+				return err
+			}
+			t.Logf("CLUSTER_FAILOVER call_slot=%d control_slot=%d call_primary=%s control_primary=%s same_primary=%t", redistestcluster.Slot(leaseKey), redistestcluster.Slot(controlKey), callPrimary.Options().Addr, controlPrimary.Options().Addr, callPrimary.Options().Addr == controlPrimary.Options().Addr)
+			if err := redistestcluster.Failover(ctx, admin, leaseKey); err != nil {
 				return err
 			}
 			deadline := time.Now().Add(3 * time.Second)

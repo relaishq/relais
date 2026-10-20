@@ -129,10 +129,11 @@ func (p *Plane) Handler() http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(errorStatus(err))
 			writeJSON(w, struct {
-				Ready bool       `json:"ready"`
-				Pool  PoolSample `json:"pool"`
-				Error string     `json:"error"`
-			}{Pool: p.PoolSnapshot(), Error: err.Error()})
+				Ready   bool           `json:"ready"`
+				Rebuild *RebuildStatus `json:"rebuild,omitempty"`
+				Pool    PoolSample     `json:"pool"`
+				Error   string         `json:"error"`
+			}{Rebuild: p.RebuildStatus(), Pool: p.PoolSnapshot(), Error: err.Error()})
 			return
 		}
 		writeJSON(w, status)
@@ -146,6 +147,12 @@ func writeJSON(w http.ResponseWriter, value any) {
 }
 
 func writeError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrNotReady) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		writeJSON(w, privateapi.Failure{Code: "control_not_ready", Message: err.Error()})
+		return
+	}
 	if errors.Is(err, ErrAtCapacity) {
 		w.Header().Set("Retry-After", "1")
 		w.Header().Set("Content-Type", "application/json")
@@ -160,7 +167,7 @@ func errorStatus(err error) int {
 	code := http.StatusInternalServerError
 	var unknown *unknownWorkerError
 	switch {
-	case errors.Is(err, ErrAtCapacity):
+	case errors.Is(err, ErrNotReady), errors.Is(err, ErrAtCapacity):
 		code = http.StatusServiceUnavailable
 	case errors.As(err, &unknown):
 		code = http.StatusInternalServerError

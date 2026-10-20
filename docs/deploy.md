@@ -7,7 +7,7 @@ are available, [install](install.md) them first. The live topology needs
 
 A reviewable [AWS preview template](../deploy/aws/README.md) defines the fixed
 lean and resilience profiles in native CloudFormation. It is tested without an
-AWS account. Control restart safety and paid AWS acceptance still block public use.
+AWS account. Single-control restart recovery is tested locally; paid AWS acceptance still blocks public use.
 
 ## One machine
 
@@ -316,23 +316,142 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   preserves unlimited admission. Negative values and malformed/duplicate worker
   entries fail startup. Each process prints one JSON listener-readiness line
   with its PID and bound addresses; ephemeral loopback ports are the defaults.
-  Control starts even if a listed worker or the relay is down. Each fixed worker
-  retries independently, with a one-second request deadline and backoff from
-  100 ms to 5 s. Relay status/registration retries use the same bound (200 ms
-  after the first failure, up to 5 s; 100 ms when healthy). Worker attempts log
-  `worker bootstrap name=... attempt=... result=registered|retry: ...`.
-  Relay logs use `relay bootstrap attempt=... instance=... workers=... result=...`:
-  failures, the first successful registration, recovery after a failure, and
-  changes to the relay instance or registered allowlist. Unchanged healthy
-  polls produce no log lines.
-  Only configured workers are discovered. Workers retry heartbeats while
-  control starts. Check control `/status` `ready`, not just its listener line:
-  creates return existing `no_target` (409) until the relay allowlist is ready
-  and at least one registered worker is ready. After that first success, a
-  failed relay status poll does not revoke readiness. When a different relay
-  instance answers, creates are gated again until its allowlist is restored.
-  Other missing workers do not block placement on healthy workers. This bootstrap does not reconstruct
-  pre-restart call metadata; restart reconciliation is a later slice.
+  Control listens even if a listed worker or the relay is down. Fixed worker
+  rebuild status requests have a 250 ms deadline and run in parallel, once per
+  worker per attempt. A saved worker that misses that deadline has unknown
+  liveness (`liveness_unknown: true` in control status), rather than being
+  declared dead. Placement stays pending until it heartbeats. The normal
+  heartbeat detector declares death after `DeadAfter` (400 ms by default)
+  without a heartbeat, measured from registration; rebuild retries do not
+  restart that window. Background status requests have a one-second deadline;
+  subsequent discovery checks every 250 ms, with bounded requests. Relay
+  status/registration retries back off from 200 ms to 5 s after failure and
+  poll every 100 ms when healthy. Acquiring or recovering the control lease
+  immediately wakes relay registration and resets its backoff. Successful worker registration logs
+  `worker bootstrap name=... attempt=1 result=registered`. Relay logs use
+  `relay bootstrap attempt=... instance=... workers=... result=...`.
+  Only configured workers are discovered. A previously known worker can remain
+  down while its stored address and calls are recovered on healthy workers.
+  A worker that has never answered remains pending and makes whole-pool demand
+  unavailable. A failed relay status poll after successful registration does not
+  revoke established readiness; a changed relay instance gates admission until
+  its allowlist is restored.
+
+### Control restart
+
+Run one control process per store namespace. Control claims a fenced store
+lease with a one-second TTL and schedules renewal attempts every 250 ms from
+request start, with at most four outstanding commands and a 750 ms command
+deadline. Claims remain sequential. Renewals of the same fenced tenure can
+overlap so delayed replies do not postpone subsequent attempts. Older replies
+cannot replace a newer acknowledged deadline. A second process can listen
+and answer status, but cannot become mutation-ready while the first
+holds that lease. After a crash, the successor waits for expiry. On a graceful
+stop, control first pauses crash detection and new mutations. It continues
+renewing while HTTP handlers drain and existing recovery jobs stop, then
+releases the lease. A transient renewal error retains mutation readiness until
+the last acknowledged local deadline is within 250 ms. A slow successful reply
+does not revoke readiness.
+Crash detection pauses when the local lease deadline passes. Control keeps
+renewing the same tenure through transient failures. A successful renewal
+restores readiness; a definitive lost lease requires a new claim and rebuild.
+Only an unrecoverable lease error stops control, with a logged reason and
+nonzero exit status. This is not active/passive failover or protection against
+a suspended predecessor resuming. Do not erase the lease to accelerate a restart.
+
+Keep the store namespace, encryption key, fixed worker names and endpoints
+stable. A saved worker omitted from `-worker` blocks rebuild with its name in
+the error. Restore that fixed entry first, finish its calls and pending operations,
+and verify it owns no leases or reservations. To retire it, stop control and the
+worker, remove only `record:worker:<name>` and `record:drain:<name>` from
+`<prefix>control:{control}` with an operator store connection, then restart
+without that entry. Never remove records while calls or operation intents remain.
+Startup combines saved worker addresses, current worker observations,
+fenced ownership, worker indexes and authenticated routes. It settles saved
+transfer candidates before deciding ownership. Split v10 recovery uses the
+single component-tuple read. Worker observations never grant ownership. Old
+workers without the inventory fields, or a truncated inventory, leave the
+rebuild incomplete. Upgrade workers before control. Each inventory is capped
+at 4,096 installed sessions; no store access occurs while building it.
+
+Check private `GET /status`, not the JSON listener line. `ready` remains false
+until control holds its lease and completes the rebuild. `rebuild.phase` shows
+`waiting_lease`, `rebuilding`, `ready`, `renewing`, `lease_lost`, `stopping`,
+`stopped` or `failed`;
+`rebuild.error` explains an incomplete rebuild. Failed lease/rebuild attempts
+and worker discovery errors also log their causes, at most once per second
+for each source. `duration` and `lease_wait` are
+nanoseconds. Create, move, drain and end refuse with HTTP 503 and
+`control_not_ready` before mutation readiness. Heartbeat detection and crash
+takeover start after rebuild. Once rebuilt, the ordinary no-destination and
+capacity refusals still apply. Established media continues through live workers
+and the relay while control is down; new calls and recovery wait.
+
+A Redis Cluster primary promotion can also temporarily remove mutation
+readiness while control renews its lease. Operators may retry a definite
+`control_not_ready` refusal after readiness returns. The process call harness
+does this within the original two-second move request budget, only when the
+response says no move started. It never retries a started or uncertain move.
+
+If a worker also dies while control is down, recovery needs a sufficiently fresh
+checkpoint when takeover runs. With default rates, no retained sequence advance
+and the full 1.5-second adoption budget, the default-rate snapshot-age limit is
+**2.2344 seconds**. It follows from the ADR 0002 RTP margin plus caller reserve
+fitting below the 32,768-index half-space; the 550 ms envelope scales margins
+rather than imposing that cutoff. DTLS has a separate 64-record reservation and
+48-bit sequence guard, not a time-based checkpoint limit. Existing checkpoint
+age, rebuild, detection and transfer all consume recovery headroom; higher rates
+or retained advances can reduce it. Control must become ready again inside the
+remaining bound, with time left for takeover.
+
+Earlier, on one development Mac, ten no-delay simultaneous control/worker crash runs
+with 16 calls each recovered 160/160 calls without loss. Readiness including
+lease wait was 0.854–1.081 s (median 1.029 s); the oldest snapshot at takeover was
+1.211 s, leaving 1.023 s inside the default-rate limit. Those runs preceded the
+unknown-liveness registration grace. With that grace, ten black-holed-worker
+restart trials recovered 160/160 calls with zero losses. Process start to the
+last completed takeover, including lease wait, was 1.689 s median and 1.814 s
+maximum. Workers with 300 ms and 900 ms status replies kept their owner tenures
+in ten process trials each. These are local, one-machine measurements.
+See the [derivation and limits](guarantees.md#control-restart).
+A race-tested fixture adding 300 ms to each control-lease command kept readiness
+without flapping over ten three-second observation windows. Slow-reply fixtures
+also cover a single 600 ms reply and steady 450/520 ms replies. A black-holed
+worker is observed once per parallel rebuild attempt; its timeout does not
+cause a second sequential status request.
+
+Drain marks and operation intents are stored before effects. Control-wide
+records share one Redis slot; each session intent uses that session's slot.
+Records contain bounded coordination metadata, not snapshots or keys. Unresolved
+creates keep an incoming reservation until reconciled. A failed status read
+retains the record and reservation while heartbeats still establish liveness.
+The failed observation is logged per record and deferred; it does not block
+rebuild or reconciliation of other create records.
+Only the heartbeat detector declares a worker dead. Once declared dead, unknown
+creates do not block takeover: control settles store transitions, hands committed
+claims to crash recovery, and releases their reservations during reconciliation.
+A successor adopts calls confirmed by the fenced lease and worker inventory,
+or fences uninstalled creation claims.
+It never repeats the original create request. An uncertain export/resume uses
+fenced crash recovery from the latest stored checkpoint, not a repeated export
+or an old final-export copy. Earlier interrupted-export trials lost every call.
+After relay registration was ordered before rebuild recovery, the local rerun
+recovered 3/3 move-export and 3/3 drain-export cuts from safe checkpoints.
+The exact final export is still not durable; unsafe checkpoints still produce
+a counted loss, so this does not promise no-loss recovery at that cut.
+An interrupted drain keeps its placement fence and reports `partial` in
+`rebuild.outcomes`; call drain again to continue it. A completed drain also
+keeps its persisted placement fence across control restarts. It clears only
+after the old worker has died, all its leases have recovered or ended, and
+a replacement is registered (or the recovered dead worker uses
+`POST /private/workers/<name>/replace`, then completes rejoin). Restarting
+control or calling drain again does not
+clear the mark. Completed interrupted operations report typed outcomes there. Historical move counters and the full
+event history remain process-local.
+
+See [control restart evidence](guarantees.md#control-restart) for the tested
+local topology and limits. Paid AWS provisioning and restart acceptance remain
+pending.
 
 With a positive cap, full ready workers refuse new calls with HTTP 503, JSON
 `code: at_capacity`, and `Retry-After: 1`. No ready worker keeps `no_target`
@@ -345,9 +464,10 @@ rule too: it cannot stay on its original running session. Keep spare headroom fo
 policy, not a measured media capacity guarantee. Private status and metrics
 report over-cap calls and a coherent pool sample with its timestamp, age and
 freshness. Missing demand is null/omitted, never zero; failed refreshes retain
-the old value marked stale. In the lean two-worker profile, starting or
-restarting control while one listed worker host is down removes the whole-pool
-demand signal until that host answers. Calls can still use the other worker.
+the old value marked stale. In the lean two-worker profile, a listed worker whose address has never been
+observed removes the whole-pool demand signal until that host answers. A restart
+retains previously saved addresses, so a known down worker is unreachable rather
+than never answered. Calls can still use the other worker.
 The sample's `never_answered_workers` count (also
 `relais_control_pool_never_answered_workers`) explains this missing demand;
 it is included in `pending_workers`. Once an address is known, a later worker
@@ -601,4 +721,3 @@ Redis startup log, and verify each with `lsof -p <pid>` (command and `cwd` must
 match that run). Terminate only those groups with `kill -TERM -- -<child-pid>`;
 use `kill -KILL -- -<child-pid>` only for a group that does not stop. Redis uses
 no persistence. Do not target another run or the reserved Redis on port 6379.
-

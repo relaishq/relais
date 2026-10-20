@@ -15,7 +15,7 @@ import (
 // operation. Keys come from the same builders and slices as the production call.
 // Pipelines batch independent commands and do not require a common slot.
 func TestRedisScriptSlotSafety(t *testing.T) {
-	redistestcluster.AuditScripts(t, "sessionLua", "indexLua", "indexRefreshLua", "relayLeaseLua", "putRouteLua", "deleteRouteLua", "storeClockLua", "sessionScript.Hash()", "componentCommitLua", "componentReadLua")
+	redistestcluster.AuditScripts(t, "sessionLua", "indexLua", "indexRefreshLua", "relayLeaseLua", "putRouteLua", "deleteRouteLua", "storeClockLua", "sessionScript.Hash()", "componentCommitLua", "componentReadLua", "controlLeaseLua", "controlIntentLua")
 	r := &Redis{prefix: "slot-test:"}
 	for _, id := range []string{"call", "{untrusted}", "~encoded", "", "a}b{c"} {
 		keys := r.lifecycleKeys(id)
@@ -24,6 +24,8 @@ func TestRedisScriptSlotSafety(t *testing.T) {
 			keys      []string
 		}{
 			{"session transitions and recovery", sessionLua, keys},
+			{"control authority and records", controlLeaseLua, []string{r.controlKey()}},
+			{"control session intent", controlIntentLua, []string{r.intentKey(id)}},
 			{"worker-index fenced EVALSHA check", sessionLua, keys},
 			{"route-restore owner read", sessionLua, keys},
 			{"sequence reservation (lease-only branch)", "", r.sessionKeys(id, "sequence")},
