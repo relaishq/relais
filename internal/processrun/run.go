@@ -74,7 +74,11 @@ func (c StoreConfig) Open(ctx context.Context) (*sessionstore.Redis, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sessionstore.NewRedis(ctx, cfg, key)
+	opts, err := sessionstore.RedisKeyOptionsFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	return sessionstore.NewRedis(ctx, cfg, key, opts)
 }
 
 // OpenFrames shares the snapshot master key, using a separate HKDF domain.

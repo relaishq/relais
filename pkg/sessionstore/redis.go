@@ -203,6 +203,12 @@ const sessionLua = `
 local op, owner, epoch, ttl = ARGV[1], ARGV[2], ARGV[3], tonumber(ARGV[4])
 local retention = tonumber(ARGV[5])
 local current = redis.call('HMGET', KEYS[1], 'worker', 'epoch', 'expires')
+local function componentsDelete()
+ for i=7,#KEYS do redis.call('DEL',KEYS[i]) end
+end
+local function componentsExpire(expires)
+ for i=7,#KEYS do redis.call('PEXPIREAT',KEYS[i],expires) end
+end
 local function reply() return {1, current[1], current[2], current[3]} end
 local function matches() return current[1] == owner and current[2] == epoch end
 local function greater(a,b) return not b or #a>#b or (#a==#b and a>b) end
@@ -221,6 +227,7 @@ local function write(worker, nextEpoch)
  redis.call('HSET',KEYS[1],'worker',worker,'epoch',nextEpoch,'expires',expires)
  redis.call('PEXPIREAT',KEYS[1],expires)
  redis.call('PEXPIREAT',KEYS[2],expires)
+ componentsExpire(expires)
  redis.call('SET',KEYS[3],worker .. '/' .. nextEpoch)
  redis.call('PEXPIREAT',KEYS[3],tonumber(expires)+retention)
  redis.call('PEXPIREAT',KEYS[4],tonumber(expires)+retention)
@@ -233,6 +240,7 @@ if op=='settle' or op=='indexed' then
  if op=='indexed' and newer(epoch) and now()<tonumber(ARGV[6])+tonumber(ARGV[7]) then return {3} end
  if op=='indexed' and not current[1] and redis.call('GET',KEYS[3])==owner .. '/' .. epoch then
   redis.call('DEL',KEYS[2],KEYS[3],KEYS[5])
+  componentsDelete()
  end
  -- This also settles an indexed prepublication racing its transition. Once
  -- pruned, that candidate is fenced, never a live lease missing its index.
@@ -243,10 +251,12 @@ elseif op=='claim' then
  if not newer(epoch) then return {-3} end
  retain(epoch)
  redis.call('DEL',KEYS[2],KEYS[5])
+ componentsDelete()
  return write(owner,epoch)
 elseif op=='get' or op=='state' or op=='checkpoint' then
  if not current[1] then
   redis.call('DEL',KEYS[2],KEYS[3],KEYS[5])
+  componentsDelete()
   if op=='get' then
    local ended=redis.call('HMGET',KEYS[6],'worker','epoch','expires')
    if ended[1] then return {4,ended[1],ended[2],ended[3]} end
@@ -254,6 +264,7 @@ elseif op=='get' or op=='state' or op=='checkpoint' then
   return {0}
  end
  if op=='get' then return reply() end
+ if redis.call('HGET',KEYS[1],'layout')=='10' then return {-5} end
  if op=='checkpoint' then
   local stored=redis.call('HGET',KEYS[1],'checkpoint_at')
   if not stored then return {0} end
@@ -276,6 +287,7 @@ elseif op=='release' then
  end
  if matches() or (not current[1] and redis.call('GET',KEYS[3])==owner .. '/' .. epoch) then
   redis.call('DEL',KEYS[1],KEYS[2],KEYS[3],KEYS[5])
+  componentsDelete()
  end
  return {1}
 end
@@ -290,10 +302,11 @@ elseif op=='sequence' then
  redis.call('HINCRBY',KEYS[1],'next_seq',1)
  return {1,redis.call('HGET',KEYS[1],'next_seq')}
 elseif op=='put' then
+ if redis.call('HGET',KEYS[1],'layout')=='10' then return {-5} end
  local previous=redis.call('HGET',KEYS[1],'state_seq')
  if not greater(ARGV[7],previous) then return {-4} end
  redis.call('SET',KEYS[2],ARGV[6])
- redis.call('HSET',KEYS[1],'state_seq',ARGV[7],'checkpoint_at',string.format('%.0f',now()),'state_digest',ARGV[8])
+ redis.call('HSET',KEYS[1],'state_seq',ARGV[7],'checkpoint_at',string.format('%.0f',now()),'state_digest',ARGV[8],'layout','legacy')
  redis.call('PEXPIREAT',KEYS[2],current[3])
  return {1}
 end
@@ -388,7 +401,13 @@ func (r *Redis) run(ctx context.Context, op, id, owner, epoch string, ttl time.D
 	var result []interface{}
 	fn := func() error {
 		var err error
-		result, err = sessionScript.Run(ctx, r.client, r.keys(id), args...).Slice()
+		keys := r.lifecycleKeys(id)
+		// Reservation accesses only the lease hash. Avoid sending the component
+		// families (or a missing legacy state key) on every hot write.
+		if op == "sequence" {
+			keys = keys[:1]
+		}
+		result, err = sessionScript.Run(ctx, r.client, keys, args...).Slice()
 		return err
 	}
 	var err error
@@ -421,6 +440,8 @@ func (r *Redis) run(ctx context.Context, op, id, owner, epoch string, ttl time.D
 		return nil, ErrLeaseHeld
 	case -2:
 		return nil, ErrLeaseLost
+	case -5:
+		return nil, ErrCheckpointLayout
 	case -4:
 		return nil, ErrStateSuperseded
 	case -3:
@@ -730,8 +751,9 @@ func (r *Redis) GetState(ctx context.Context, id string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	blob := []byte(result[1].(string))
-	seq := result[2].(string)
+	return r.openLegacyState(id, []byte(result[1].(string)), result[2].(string))
+}
+func (r *Redis) openLegacyState(id string, blob []byte, seq string) ([]byte, error) {
 	if len(blob) < 2 || blob[0] != 1 {
 		return nil, errors.New("sessionstore: invalid snapshot format")
 	}
@@ -792,7 +814,7 @@ func (r *Redis) ListByWorker(ctx context.Context, worker netip.AddrPort) ([]Leas
 		defer func() { _ = pipe.Close() }()
 		for i := range checks {
 			c := &checks[i]
-			c.cmd = pipe.EvalSha(ctx, sessionScript.Hash(), r.keys(c.id), "indexed", worker.String(), strconv.FormatUint(c.epoch, 10), 1, r.retention.Milliseconds(), c.published, r.indexGrace.Milliseconds())
+			c.cmd = pipe.EvalSha(ctx, sessionScript.Hash(), r.lifecycleKeys(c.id), "indexed", worker.String(), strconv.FormatUint(c.epoch, 10), 1, r.retention.Milliseconds(), c.published, r.indexGrace.Milliseconds())
 		}
 		_, execErr := pipe.Exec(ctx)
 		if execErr != nil && redisKind(execErr) != "other" {

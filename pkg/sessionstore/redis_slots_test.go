@@ -14,10 +14,10 @@ import (
 // operation. Keys come from the same builders and slices as the production call.
 // Pipelines batch independent commands and do not require a common slot.
 func TestRedisScriptSlotSafety(t *testing.T) {
-	redistestcluster.AuditScripts(t, "sessionLua", "indexLua", "indexRefreshLua", "relayLeaseLua", "putRouteLua", "deleteRouteLua", "storeClockLua", "sessionScript.Hash()")
+	redistestcluster.AuditScripts(t, "sessionLua", "indexLua", "indexRefreshLua", "relayLeaseLua", "putRouteLua", "deleteRouteLua", "storeClockLua", "sessionScript.Hash()", "componentCommitLua", "componentReadLua")
 	r := &Redis{prefix: "slot-test:"}
 	for _, id := range []string{"call", "{untrusted}", "~encoded", "", "a}b{c"} {
-		keys := r.keys(id)
+		keys := r.lifecycleKeys(id)
 		operations := []struct {
 			name, lua string
 			keys      []string
@@ -25,6 +25,9 @@ func TestRedisScriptSlotSafety(t *testing.T) {
 			{"session transitions and recovery", sessionLua, keys},
 			{"worker-index fenced EVALSHA check", sessionLua, keys},
 			{"route-restore owner read", sessionLua, keys},
+			{"sequence reservation (lease-only branch)", "", keys[:1]},
+			{"component commit", componentCommitLua, r.componentKeys(id)},
+			{"component tuple read", componentReadLua, r.componentKeys(id)},
 			{"store clock", storeClockLua, keys},
 			{"route publish", putRouteLua, []string{keys[0], keys[4]}},
 			{"route compare-delete and scan cleanup", deleteRouteLua, []string{keys[4]}},

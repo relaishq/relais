@@ -189,7 +189,7 @@ func (r *Redis) LoadRouteOwners(ctx context.Context, limit int) ([]Route, map[st
 			leases := make(map[string]*redis.Cmd)
 			pipe = client.Pipeline()
 			for id := range candidates {
-				leases[id] = pipe.Eval(ctx, sessionLua, r.keys(id), "get", "", "", 1, r.retention.Milliseconds())
+				leases[id] = pipe.Eval(ctx, sessionLua, r.lifecycleKeys(id), "get", "", "", 1, r.retention.Milliseconds())
 			}
 			_, leaseErr := pipe.Exec(ctx)
 			failures = errors.Join(failures, leaseErr)
