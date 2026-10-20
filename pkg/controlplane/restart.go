@@ -340,7 +340,8 @@ func (p *Plane) RunManaged(ctx context.Context, workers []FixedWorker) error {
 		guard := p.restart.guard.Load()
 		if guard == nil || !time.Now().Before(guard.deadline) {
 			stop()
-			built = 0
+			// Retain the completed rebuild's epoch. A successful renewal of
+			// that tenure proves no successor acted; its live intents are ours.
 			if guard != nil {
 				p.rebuildPhase("renewing", errors.New("local control lease deadline elapsed; detection paused"))
 			}
@@ -351,13 +352,15 @@ func (p *Plane) RunManaged(ctx context.Context, workers []FixedWorker) error {
 					p.rebuildPhase("rebuilding", err)
 				} else if current := p.restart.guard.Load(); current != nil && current.lease.Holder == guard.lease.Holder && current.lease.Epoch == guard.lease.Epoch && p.controlAuthority() && p.restart.healthy.Load() {
 					built = guard.lease.Epoch
+				}
+			}
+			if built == guard.lease.Epoch {
+				if stopWork == nil {
 					workCtx, cancel := context.WithCancel(ctx)
 					stopWork = cancel
 					workDone = make(chan error, 1)
 					go func() { workDone <- p.runManagedWork(workCtx, workers) }()
 				}
-			}
-			if built != 0 {
 				p.restart.mu.Lock()
 				p.restart.status.Phase, p.restart.status.Error = "ready", ""
 				if p.restart.status.ReadyAt.IsZero() {
@@ -625,88 +628,93 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 			return err
 		}
 		c := p.rebuildCall(current)
-		c.intent = &intent
-		if intent.Kind == "end" {
-			// Commit the termination in the fenced store. The worker may have
-			// already ended; never resend an unknown worker-side effect.
-			if err := p.store.Release(ctx, current); err != nil {
-				return err
-			}
-			ended, readErr := p.store.Get(ctx, intent.ID)
-			if !errors.Is(readErr, sessionstore.ErrEnded) {
-				if readErr != nil {
-					return readErr
-				}
-				return sessionstore.ErrTransient
-			}
-			if cleaner, ok := p.relay.(TenureCleanupRelay); ok {
-				if err := cleaner.ForgetSessionTenure(ctx, ended); err != nil {
+		if err := func() error {
+			c.mu.Lock()
+			defer c.mu.Unlock()
+			c.intent = &intent
+			if intent.Kind == "end" {
+				// Commit the termination in the fenced store. The worker may have
+				// already ended; never resend an unknown worker-side effect.
+				if err := p.store.Release(ctx, current); err != nil {
 					return err
 				}
+				ended, readErr := p.store.Get(ctx, intent.ID)
+				if !errors.Is(readErr, sessionstore.ErrEnded) {
+					if readErr != nil {
+						return readErr
+					}
+					return sessionstore.ErrTransient
+				}
+				if cleaner, ok := p.relay.(TenureCleanupRelay); ok {
+					if err := cleaner.ForgetSessionTenure(ctx, ended); err != nil {
+						return err
+					}
+				}
+				c.hungUp.Store(true)
+				p.forget(c)
+				p.deleteFrames(c.id)
+				if err := p.restart.store.DeleteControlIntent(ctx, intent.ID, intent.Token); err != nil {
+					return err
+				}
+				c.intent = nil
+				p.restartOutcome(intent.Kind, intent.ID, "ended", "interrupted")
+				return nil
 			}
-			c.hungUp.Store(true)
-			p.forget(c)
-			p.deleteFrames(c.id)
-			if err := p.restart.store.DeleteControlIntent(ctx, intent.ID, intent.Token); err != nil {
-				return err
-			}
-			c.intent = nil
-			p.restartOutcome(intent.Kind, intent.ID, "ended", "interrupted")
-			continue
-		}
 
-		installed, ok := observations[current.SessionID+"/"+fmt.Sprint(current.Epoch)+"/"+current.Worker.String()]
-		if ok && installed.Owner == current.Worker {
-			// Route repair/release is idempotent coordination. Never re-export or
-			// re-resume a tenure that the store and live worker both confirm.
-			if err := p.relay.MoveSession(intent.ID, netip.AddrPort{}, current.Worker); err != nil {
-				return err
-			}
-			if _, err := p.relay.ReleaseSession(intent.ID, current.Worker); err != nil && !errors.Is(err, privateapi.ErrUncertain) {
-				// No hold is normal when the operation stopped before its barrier.
-				// The relay backstop also expires holds while control is absent.
-				if !errors.Is(err, relay.ErrHoldExpired) {
+			installed, ok := observations[current.SessionID+"/"+fmt.Sprint(current.Epoch)+"/"+current.Worker.String()]
+			if ok && installed.Owner == current.Worker {
+				// Route repair/release is idempotent coordination. Never re-export or
+				// re-resume a tenure that the store and live worker both confirm.
+				if err := p.relay.MoveSession(intent.ID, netip.AddrPort{}, current.Worker); err != nil {
 					return err
 				}
+				if _, err := p.relay.ReleaseSession(intent.ID, current.Worker); err != nil && !errors.Is(err, privateapi.ErrUncertain) {
+					// No hold is normal when the operation stopped before its barrier.
+					// The relay backstop also expires holds while control is absent.
+					if !errors.Is(err, relay.ErrHoldExpired) {
+						return err
+					}
+				}
+				if err := p.restart.store.DeleteControlIntent(ctx, intent.ID, intent.Token); err != nil {
+					return err
+				}
+				c.intent = nil
+				p.restartOutcome(intent.Kind, intent.ID, "live", "interrupted")
+				return nil
 			}
-			if err := p.restart.store.DeleteControlIntent(ctx, intent.ID, intent.Token); err != nil {
-				return err
+			// Missing installation is not a failed resume proof. Transfer away from the
+			// current tenure before any new resume, using the existing tuple read and
+			// bounded crash-margin recovery. A delayed old adoption cannot own that epoch.
+			p.mu.Lock()
+			source := p.owner(current.Worker)
+			p.mu.Unlock()
+			if source == nil {
+				return fmt.Errorf("controlplane: unknown persisted owner %s", current.Worker)
 			}
-			c.intent = nil
-			p.restartOutcome(intent.Kind, intent.ID, "live", "interrupted")
-			continue
+			p.mu.Lock()
+			for _, worker := range p.workers {
+				delete(worker.pending, c.id)
+			}
+			if source.pending == nil {
+				source.pending = map[string]*takeoverState{}
+			}
+			source.pending[c.id] = &takeoverState{call: c, lease: current, routed: current.Worker, routedLease: current, excluded: map[netip.AddrPort]bool{current.Worker: true}, attemptLimit: maxResumeAttempts, held: true, outageStarted: intent.Started}
+			p.mu.Unlock()
+			bounded, stop := context.WithTimeout(ctx, takeoverBudget)
+			result := p.takeoverLocked(bounded, source, c, current, time.Now())
+			stop()
+			if result == nil {
+				return ErrNotReady
+			}
+			outcome, code := "live", "interrupted"
+			if result.Lost {
+				outcome, code = "lost", result.LossCause
+			}
+			p.restartOutcome(intent.Kind, intent.ID, outcome, code)
+			return nil
+		}(); err != nil {
+			return err
 		}
-		// Missing installation is not a failed resume proof. Transfer away from the
-		// current tenure before any new resume, using the existing tuple read and
-		// bounded crash-margin recovery. A delayed old adoption cannot own that epoch.
-		p.mu.Lock()
-		source := p.owner(current.Worker)
-		p.mu.Unlock()
-		if source == nil {
-			return fmt.Errorf("controlplane: unknown persisted owner %s", current.Worker)
-		}
-		c.mu.Lock()
-		p.mu.Lock()
-		for _, worker := range p.workers {
-			delete(worker.pending, c.id)
-		}
-		if source.pending == nil {
-			source.pending = map[string]*takeoverState{}
-		}
-		source.pending[c.id] = &takeoverState{call: c, lease: current, routed: current.Worker, routedLease: current, excluded: map[netip.AddrPort]bool{current.Worker: true}, attemptLimit: maxResumeAttempts, held: true, outageStarted: intent.Started}
-		p.mu.Unlock()
-		bounded, stop := context.WithTimeout(ctx, takeoverBudget)
-		result := p.takeoverLocked(bounded, source, c, current, time.Now())
-		stop()
-		c.mu.Unlock()
-		if result == nil {
-			return ErrNotReady
-		}
-		outcome, code := "live", "interrupted"
-		if result.Lost {
-			outcome, code = "lost", result.LossCause
-		}
-		p.restartOutcome(intent.Kind, intent.ID, outcome, code)
 	}
 	// Creation reservations remain durable until candidate settlement and live
 	// worker observations establish adoption or fenced cleanup.
@@ -926,19 +934,18 @@ func (p *Plane) reconcileCreate(ctx context.Context, key string, worker *registr
 		p.mu.Lock()
 		dead := worker.dead
 		p.mu.Unlock()
-		if statusErr != nil || dead {
+		if dead {
 			// The detector owns all committed claims, including a create whose
 			// reply was lost. Never release a dead worker's recoverable calls.
 			for _, lease := range leases {
 				p.rebuildCall(lease)
 			}
-			if statusErr != nil {
-				p.mu.Lock()
-				worker.dead = true
-				worker.recovered = false
-				p.mu.Unlock()
-			}
 		} else {
+			if statusErr != nil {
+				// Only heartbeat expiry establishes death. Keep uncertain
+				// admission reserved until observation succeeds or detection fires.
+				return statusErr
+			}
 			if !status.InventoryKnown || status.Truncated || status.Address != worker.addr {
 				return ErrNotReady
 			}

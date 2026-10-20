@@ -377,11 +377,13 @@ and the relay while control is down; new calls and recovery wait.
 Drain marks and operation intents are stored before effects. Control-wide
 records share one Redis slot; each session intent uses that session's slot.
 Records contain bounded coordination metadata, not snapshots or keys. Unresolved
-creates keep an incoming reservation until reconciled. An unreachable worker
-does not block takeover: control settles its store transitions, hands committed
-claims to crash recovery, and releases the reservation. A successor adopts calls
-confirmed by
-the fenced lease and worker inventory, or fences uninstalled creation claims.
+creates keep an incoming reservation until reconciled. A failed status read
+retains the record and reservation while heartbeats still establish liveness.
+Only the heartbeat detector declares a worker dead. Once declared dead, unknown
+creates do not block takeover: control settles store transitions, hands committed
+claims to crash recovery, and releases their reservations during reconciliation.
+A successor adopts calls confirmed by the fenced lease and worker inventory,
+or fences uninstalled creation claims.
 It never repeats the original create request. An uncertain export/resume uses
 fenced crash recovery from the latest stored checkpoint, not a repeated export
 or an old final-export copy. Earlier interrupted-export trials lost every call.

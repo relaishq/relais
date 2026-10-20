@@ -94,7 +94,12 @@ func TestWorkerDeathDuringCreateStillTakesOverProcesses(t *testing.T) {
 	t.Logf("existing call owner=%s takeovers=%d workers=%+v pool=%+v", lastOwner, lastTakeovers, status.Workers, status.Pool)
 	require.True(t, ok, "existing call on the dead worker was never taken over")
 	require.Equal(t, 2, len(status.Calls)+int(status.LostCount), "every committed create is managed or a counted loss")
-	require.Zero(t, status.Pool.Reservations)
+	// Takeover deliberately ignores unknown-create reservations. Their durable
+	// records and capacity settle independently on the next reconciliation tick.
+	require.Eventually(t, func() bool {
+		status, err := sys.status()
+		return err == nil && status.Pool.Reservations == 0
+	}, 3*time.Second, 20*time.Millisecond)
 	sys.assertOwners(t)
 }
 
