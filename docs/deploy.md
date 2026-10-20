@@ -333,8 +333,10 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
 ### Control restart
 
 Run one control process per store namespace. Control claims a fenced store
-lease with a two-second TTL and renews it every 500 ms. A second process can
-listen and answer status, but cannot become mutation-ready while the first
+lease with a one-second TTL and schedules renewal attempts every 250 ms from
+request start. Requests do not overlap. If a successful reply takes longer
+than 250 ms, the next attempt starts immediately. A second process can listen
+and answer status, but cannot become mutation-ready while the first
 holds that lease. After a crash, the successor waits for expiry. On a graceful
 stop, control first pauses crash detection and new mutations. It continues
 renewing while HTTP handlers drain and existing recovery jobs stop, then
@@ -373,6 +375,25 @@ nanoseconds. Create, move, drain and end refuse with HTTP 503 and
 takeover start after rebuild. Once rebuilt, the ordinary no-destination and
 capacity refusals still apply. Established media continues through live workers
 and the relay while control is down; new calls and recovery wait.
+
+If a worker also dies while control is down, recovery needs a sufficiently fresh
+checkpoint when takeover runs. With default rates, no retained sequence advance
+and the full 1.5-second adoption budget, the conservative snapshot-age bound is
+**2.2344 seconds**. It follows from the ADR 0002 RTP margin plus caller reserve
+fitting below the 32,768-index half-space; the 550 ms envelope scales margins
+rather than imposing that cutoff. DTLS has a separate 64-record reservation and
+48-bit sequence guard, not a time-based checkpoint limit. Existing checkpoint
+age, rebuild, detection and transfer all consume recovery headroom; higher rates
+or retained advances can reduce it. Control must become ready again inside the
+remaining bound, with time left for takeover.
+
+On one development Mac, ten no-delay simultaneous control/worker crash runs
+with 16 calls each recovered 160/160 calls without loss. Readiness including
+lease wait was 0.854–1.081 s (median 1.029 s); the oldest snapshot at takeover was
+1.211 s, leaving 1.024 s inside the conservative bound. These are local,
+one-machine measurements. See the [derivation and limits](guarantees.md#control-restart).
+A race-tested fixture adding 300 ms to each control-lease command kept readiness
+without flapping over ten three-second observation windows.
 
 Drain marks and operation intents are stored before effects. Control-wide
 records share one Redis slot; each session intent uses that session's slot.

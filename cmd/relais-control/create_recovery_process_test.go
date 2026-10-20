@@ -114,8 +114,11 @@ func restartEventually(limit time.Duration, check func() bool) bool {
 	return false
 }
 
-// Regression: a worker with live calls dies while control is down. The successor
-// starts with that worker down and must take over or count every call.
+// Default rates, fresh tracks and a full 1.5 s adoption budget give the
+// conservative 2.2344 s snapshot-age bound pinned by TestDefaultTakeoverSnapshotAgeBound.
+const defaultFreshSnapshotAgeBound = 2234400 * time.Microsecond
+
+// A simultaneous worker/control crash must recover every original call.
 func TestWorkerDiesWhileControlDownProcesses(t *testing.T) {
 	for _, delay := range []time.Duration{0, time.Second} {
 		t.Run(delay.String(), func(t *testing.T) { testWorkerDiesWhileControlDown(t, delay) })
@@ -149,7 +152,8 @@ func testWorkerDiesWhileControlDown(t *testing.T, preStart time.Duration) {
 	sys.kill(sys.workerChildren[1])
 	require.True(t, restartProcessWait(ctx, preStart))
 	elapsed := sys.startControl()
-	t.Logf("REBUILD_DOWN delay=%s process_to_ready=%s calls=%d", preStart, elapsed, len(calls))
+	t.Logf("REBUILD_DOWN delay=%s process_to_ready=%s calls=%d snapshot_age_bound=%s ready_headroom=%s", preStart, elapsed, len(calls), defaultFreshSnapshotAgeBound, defaultFreshSnapshotAgeBound-preStart-elapsed)
+	require.Less(t, preStart+elapsed, defaultFreshSnapshotAgeBound-500*time.Millisecond, "restart must leave at least 500 ms for checkpoint age and takeover work")
 	settled := restartEventually(15*time.Second, func() bool {
 		status, err := sys.status()
 		if err != nil {
@@ -164,10 +168,12 @@ func testWorkerDiesWhileControlDown(t *testing.T, preStart time.Duration) {
 	})
 	status, err := sys.status()
 	require.NoError(t, err)
+	var oldestSnapshot time.Duration
 	for _, takeover := range status.Takeovers {
-		t.Logf("takeover id=%s to=%s lost=%t cause=%s checkpoint_age=%s", takeover.ID, takeover.To, takeover.Lost, takeover.LossCause, takeover.CheckpointAge)
+		oldestSnapshot = max(oldestSnapshot, takeover.SnapshotAge)
+		t.Logf("takeover id=%s to=%s lost=%t cause=%s checkpoint_age=%s snapshot_age=%s", takeover.ID, takeover.To, takeover.Lost, takeover.LossCause, takeover.CheckpointAge, takeover.SnapshotAge)
 	}
-	t.Logf("calls=%d lost=%d outcomes=%+v", len(status.Calls), status.LostCount, status.Rebuild.Outcomes)
+	t.Logf("calls=%d lost=%d oldest_snapshot=%s snapshot_headroom=%s outcomes=%+v", len(status.Calls), status.LostCount, oldestSnapshot, defaultFreshSnapshotAgeBound-oldestSnapshot, status.Rebuild.Outcomes)
 	require.True(t, settled, "every remaining call must be owned by worker 0 after takeover")
 	require.Len(t, status.Calls, len(calls))
 	require.Zero(t, status.LostCount)

@@ -31,7 +31,7 @@ type controlReadinessError struct{}
 func (*controlReadinessError) Error() string { return "controlplane: not ready for mutations" }
 func (*controlReadinessError) Unwrap() error { return agentv2.ErrControlNotReady }
 
-const ControlLeaseTTL = 2 * time.Second
+const ControlLeaseTTL = time.Second
 
 // FixedWorker names an operator-configured private HTTP endpoint. Saved relay
 // addresses let a restart recover calls even when that worker is unreachable.
@@ -240,7 +240,9 @@ func (p *Plane) maintainControl(ctx context.Context, fatal chan<- error) {
 		if ctx.Err() != nil {
 			return
 		}
-		delay := ControlLeaseTTL / 4
+		// Schedule from request start. A slow healthy command must not add
+		// its reply latency to every renewal interval; requests never overlap.
+		delay := max(time.Duration(0), ControlLeaseTTL/4-time.Since(started))
 		if err == nil {
 			lease = next
 			deadline := started.Add(ControlLeaseTTL)

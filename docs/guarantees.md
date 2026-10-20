@@ -146,8 +146,8 @@ lease exclusion/expiry, metadata limits and key-slot safety. Race tests also
 check that a failed journal write starts no operation effect and that an unknown
 create retains capacity until reconciliation.
 
-Local process-start-to-mutation-ready measurements on one development Mac
-(three runs per cell, including the lease wait):
+Earlier process-start-to-mutation-ready measurements on one development Mac
+with the former two-second control TTL (three runs per cell, including the lease wait):
 
 | Calls | Standalone median / max | Cluster median / max |
 | --- | --- | --- |
@@ -164,25 +164,54 @@ the base heavy process suites ran three times. A final run on each store also
 restarted with the original calls still live and one worker down. The outer
 tests use `-race`; their separate service binaries are ordinary Go builds.
 
-A separate simultaneous worker/control crash test now starts the successor
-with no pre-start delay and 16 calls on the dead worker. Across three runs,
-readiness median / max was 1.921 / 1.978 seconds, with 48/48 calls recovered
-and zero losses. With a one-second pre-start delay, readiness median / max
-was 0.929 / 1.002 seconds, again with 48/48 recovered and zero losses. The
-deliberate delay is additional downtime. Acquiring the control lease and
-restoring workers wake relay registration immediately; recovery waits
-for the relay allowlist before selecting a destination.
+A worker that dies while control is down can recover only while its stored
+snapshot still fits the takeover sequence budget. At the default 5,000 RTP
+indexes/s and safety factor 1.25, a fresh sent track uses margin
+`M = max(8192, ceil(6250*a) + 65)` and caller reserve
+`R = max(10000, ceil(5000*max(2, a+b, o)) + 64)`, where `a` is snapshot age
+in seconds, `b` is the remaining adoption budget, and `o` is the preserved
+original-outage budget including remaining adoption time. The guard requires
+`AdvanceSinceSend + M + R + 1 < 32768`. With no retained advance, no larger
+original-outage budget and the full 1.5-second adoption budget remaining, this gives a conservative **2.2344-second
+snapshot-age bound**. The 550 ms envelope threshold selects scaled margins;
+it is not a fixed refusal age. Snapshot age includes copy-to-store delay and
+read-reply latency, rather than only time since the successful store write.
+See [age and reserve](../pkg/controlplane/checkpoint.go),
+[scaled margins](../pkg/mediaworker/checkpoint.go),
+[the sequence guard](../pkg/mediaworker/handover.go), and
+[ADR 0002](adr/0002-checkpoint-age-envelope.md).
+
+This bound varies with remaining budget, observed source rates, prior retained
+advances and the original outage. DTLS separately reserves 64 records and checks
+its 48-bit sequence space; its [guard](../pkg/mediaworker/dtls_sequence.go)
+adds no fixed checkpoint-age deadline. SRTCP also retains its key-lifetime guard.
+Control must become ready within the remaining snapshot-age headroom, leaving
+time for detection, transfer and adoption. A checkpoint can already be old when
+the worker dies. Readiness alone does not prove recovery will fit.
+
+With the one-second control TTL, the simultaneous worker/control crash test
+starts the successor with no pre-start delay and 16 calls on the dead worker.
+Ten local runs under the race detector on one development Mac recovered
+**160/160 calls with zero losses**. Process-start-to-ready time, including lease
+wait, was **0.854–1.081 s**, median **1.029 s**. The largest snapshot age at a
+takeover decision was **1.211 s**, leaving **1.024 s** against the conservative
+2.2344 s bound; readiness itself left at least **1.153 s**. These are one
+machine's measurements, not a CI, cloud or capacity guarantee. The strict test
+requires zero losses and at least 500 ms of readiness headroom. The one-second
+pre-start-delay variant remains a separate test; that delay adds downtime.
+Acquiring the control lease and restoring workers wake relay registration
+immediately; recovery waits for the relay allowlist before selecting a destination.
 
 Mutation readiness stays false during lease wait and rebuild. The control lease
-has a two-second TTL; the measured process-start-to-ready time includes the wait
-for the crashed predecessor. A truncated worker inventory leaves control not
+has a one-second TTL and renews every 250 ms from request start; the measured
+process-start-to-ready time includes the wait for the crashed predecessor. A truncated worker inventory leaves control not
 ready. See [operator behavior](deploy.md#control-restart).
 
 **Limits:** interrupted exports use the latest stored checkpoint with crash
 margins; the exact final export is not durable. The earlier implementation lost every interrupted-export cut; the corrected
 ordering restored live ownership in the local 3/3 export cuts described above. A checkpoint
-outside its envelope still produces a typed loss; no-loss recovery at that cut
-is not guaranteed. Historical move counters and the
+that cannot fit the sequence budget or another restore guard produces a typed
+loss; no-loss recovery at that cut is not guaranteed. Historical move counters and the
 full event history reset. No guarantee covers overlapping active controls,
 a suspended predecessor resuming after expiry, lost acknowledged store data,
 combined store/relay failure, general mixed-version upgrades, or a cloud timing
