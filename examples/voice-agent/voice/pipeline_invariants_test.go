@@ -54,14 +54,7 @@ func TestPipelineAcceptanceCursorsAndMoveRollback(t *testing.T) {
 	require.Equal(t, move, again)
 }
 func TestPipelineWorstStateFitsDeclaredBudget(t *testing.T) {
-	a := Registration(NewOpenAI("")).Factory(agent.FactoryArgs{}).(*Agent)
-	text := strings.Repeat("x", 4096)
-	a.state = State{Turn: math.MaxUint64 - 30, Phase: "synthesizing", Transcript: boundedText(text, 1024), Reply: boundedText(text, MaxReplyBytes), Outcome: agent.OutcomeUnknown, Error: "provider_configuration", Notice: strings.Repeat("N", 106), RestartNotice: true, Cursor: math.MaxUint64, RenderCursor: math.MaxUint64, PlayCursor: math.MaxUint64, Task: agent.TaskID(strings.Repeat("A", 43)), RenderTask: agent.TaskID(strings.Repeat("B", 43)), PlayTask: agent.TaskID(strings.Repeat("C", 43)), Segment: 7, Render: 7, RenderReady: true, PlayLength: MaxSegmentBytes, RetryPlay: true, RetryRender: true, PlayRetryInFlight: true, RenderRetryInFlight: true, CapacityWindow: true, CapacityExpired: true, StopAfterPlayback: true, SpeechBytes: MaxSpeechBytes, SpeechNanos: SpeechTime, Seen: Window{SSRC: math.MaxUint32, High: math.MaxUint64, Mask: [2]uint64{math.MaxUint64, math.MaxUint64}, Set: true}}
-	for range 4 {
-		a.state.History = append(a.state.History, Exchange{boundedText(text, 512), boundedText(text, 512)})
-	}
-	a.state.ReleaseAt = math.MaxInt64
-	a.state.Timings = Timings{TranscribeFinished: math.MaxInt64, ReplyStarted: math.MaxInt64, ReplyFinished: math.MaxInt64, ReplyCharacters: MaxReplyBytes, FirstSentenceCharacters: MaxSegmentRunes, SpeechStarted: math.MaxInt64, SpeechFinished: math.MaxInt64, SpeechAudio: math.MaxInt64, FirstQueued: math.MaxInt64}
+	a := worstStateAgent("x")
 	saved, err := a.Save(context.Background())
 	require.NoError(t, err)
 	// 5,632 bounded text bytes + 106 notice bytes + 22 error bytes +
@@ -72,4 +65,16 @@ func TestPipelineWorstStateFitsDeclaredBudget(t *testing.T) {
 	require.NoError(t, json.Unmarshal(saved.Bytes, &roundTrip))
 	require.Equal(t, a.state, roundTrip)
 	t.Logf("worst pipeline app state %d / %d bytes", len(saved.Bytes), MaxStateBytes)
+}
+
+func worstStateAgent(alphabet string) *Agent {
+	a := Registration(NewOpenAI("")).Factory(agent.FactoryArgs{}).(*Agent)
+	text := strings.Repeat(alphabet, 4096)
+	a.state = State{Turn: math.MaxUint64 - 30, Phase: "synthesizing", Transcript: boundedText(text, 1024), Reply: boundedText(text, MaxReplyBytes), Outcome: agent.OutcomeUnknown, Error: "provider_configuration", Notice: strings.Repeat("N", 106), RestartNotice: true, Cursor: math.MaxUint64, RenderCursor: math.MaxUint64, PlayCursor: math.MaxUint64, Task: agent.TaskID(strings.Repeat("A", 43)), RenderTask: agent.TaskID(strings.Repeat("B", 43)), PlayTask: agent.TaskID(strings.Repeat("C", 43)), Segment: 7, Render: 7, RenderReady: true, PlayLength: MaxSegmentBytes, RetryPlay: true, RetryRender: true, PlayRetryInFlight: true, RenderRetryInFlight: true, CapacityWindow: true, CapacityExpired: true, StopAfterPlayback: true, SpeechBytes: MaxSpeechBytes, SpeechNanos: SpeechTime, Seen: Window{SSRC: math.MaxUint32, High: math.MaxUint64, Mask: [2]uint64{math.MaxUint64, math.MaxUint64}, Set: true}}
+	for range 4 {
+		a.state.History = append(a.state.History, Exchange{boundedText(text, 512), boundedText(text, 512)})
+	}
+	a.state.ReleaseAt = math.MaxInt64
+	a.state.Timings = Timings{TranscribeFinished: math.MaxInt64, ReplyStarted: math.MaxInt64, ReplyFinished: math.MaxInt64, ReplyCharacters: MaxReplyBytes, FirstSentenceCharacters: MaxSegmentRunes, SpeechStarted: math.MaxInt64, SpeechFinished: math.MaxInt64, SpeechAudio: math.MaxInt64, FirstQueued: math.MaxInt64}
+	return a
 }

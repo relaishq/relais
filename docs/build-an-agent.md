@@ -237,7 +237,7 @@ keeps claiming a lost length in its Resumed save, a smaller target's
 `-agent-move-bytes-per-session` causes `ErrCapacity`. A crash restore must reserve
 nothing for content it discarded.
 
-The default **1 KiB app state does not preserve normal conversation history
+The legacy default **1 KiB app state does not preserve normal conversation history
 across a crash**. Earlier conversation can be lost as well as the current turn.
 New turns and retried provider work can incur new charges. There is no general
 single-render or exactly-once provider execution promise.
@@ -719,13 +719,40 @@ from the worker's process environment. The launcher passes both only to
 voice worker children, including replacements; neither reaches the browser,
 relay, control, Redis, or fault hook.
 
-Demo A's v4 worst-case app state is **7,087 bytes**: 5,632 bounded text bytes +
-106 notice bytes + 22 error bytes + 1,327 bytes of field names, punctuation,
-IDs, numbers and flags. That leaves **1,105 bytes** under its 8 KiB declaration.
+Demo A selects one layout for the whole session from `FactoryArgs.MaxHistoryBytes`:
 
-Demo A declares **8,192 raw app-state bytes**. Each worker needs these operator
-flags. `relais-demo` supplies them automatically for `voice-agent/v1`; a worker
-started in another topology needs all three explicitly:
+| Session profile | App schema | `State.Bytes` | `State.History` |
+| --- | --- | --- | --- |
+| Legacy v8/v9, split flag off | v4 | Existing JSON including four exchanges | Empty |
+| Split v10, `-agent-split-checkpoints` | v5 | Changing turn, task and playback metadata, transcript and reply | JSON array of four exchanges |
+
+Each exchange side is bounded to **512 encoded JSON text bytes**, including
+escaping. A fifth exchange evicts the oldest. This is bounded conversation
+memory, not a full-call transcript. Save copies the schema value before removing
+inline history; Restore reads both fields together. The factory uses the
+session's effective budgets on restore, so a call never changes layout mid-call.
+The split registration requests zero/default limits; the legacy declaration
+remains **8,192 working bytes**. Use a new compatible pool when changing the
+registration. Keep the same declaration and compatible schemas on all workers.
+Rolling back Demo A means draining the split pool before returning it to the
+legacy registration. Switching the flag off changes its declared limits from
+`Limits{}` to `{MaxStateBytes: 8192}`, so flag-off workers reject existing v10
+Demo A calls with `ErrIncompatibleAgent`.
+
+`TestHistoryLayoutsAndDefaultBudgets` measures the real Save path with maximum
+numeric fields and text at its bounds, including quotes, control/HTML escapes,
+and non-ASCII text. The conservative size fixture is **2,871 working bytes**
+against the **3,072 B** default, plus **4,205 history bytes** against **8,192 B**.
+Legacy v4 remains byte-for-byte the inline JSON layout, **7,087 B** in that
+fixture, leaving **1,105 B** under its declaration.
+
+A standalone voice worker in a split-compatible pool needs
+`-agent-split-checkpoints` and its normal connection flags. It needs **no
+state/store budget override**. Turning split checkpoints on for a deployment
+still waits for [#198](https://github.com/relaishq/relais/issues/198) and the
+separately approved paid managed-store acceptance under the
+[activation rule](deploy.md#process-flags-and-private-apis).
+Legacy deployments still need these three flags:
 
 ```sh
 -agent-max-snapshot-bytes=24576
@@ -733,12 +760,35 @@ started in another topology needs all three explicitly:
 -agent-snapshot-burst-bytes=98304
 ```
 
-Keep the same ceilings and registration on all workers. The default 1 MiB
-move budget per call and 64 MiB per worker suffice for this bounded example.
-These are demo settings, **not a capacity claim**. They do not change the
-keyless example's manual capacity gate or the default worker ceilings.
-`relais-demo -worker-arg=-flag=value` passes an additional non-secret worker
-flag to every initial and replacement worker.
+`relais-demo` supplies these legacy overrides automatically for `voice-agent/v1`;
+it does not provide a default-budget split proof. Its
+`-worker-arg=-agent-split-checkpoints` passes the split switch to every initial
+and replacement worker, but does not remove those launcher overrides.
+The default 1 MiB move budget per call and 64 MiB per worker suffice for this
+bounded example. These are demo settings, **not a capacity claim**.
+
+The keyless `TestDemoAHistoryProcessSIGKILL` test in the example package starts
+its own standalone non-default-port Redis and real worker subprocesses. It runs
+with `-agent-split-checkpoints` and no enlarged state/store flags. Four exchanges
+reach a confirmed checkpoint; the owner receives SIGKILL. The replacement's
+actual Restore callback receives the exact history bytes, and its next reply
+provider request contains those four exchanges. The deterministic reply is
+computed from their text. The matrix also kills during recording, provider wait
+and playback. A separate cut holds source store writes, observes newer local
+acceptance, and proves that only the earlier committed history is restored.
+
+Run the matrix without a provider key or any paid service:
+
+```sh
+RELAIS_TEST_REDIS_REQUIRE=1 go test -race -count=3 -run '^TestDemoAHistoryProcessSIGKILL$' ./examples/voice-agent
+```
+
+Heavy process tests skip under `-short`; owned Redis starts only with
+`RELAIS_TEST_REDIS_REQUIRE=1` or `RELAIS_TEST_REDIS_CLUSTER=1`.
+This mock-provider proof is not a live paid-provider proof. Save and local
+acceptance are not durable acknowledgements. A crash can lose current-turn
+audio and repeat provider work. Committed text does not prove that the caller
+heard its speech.
 
 ### Push-to-talk Control
 
