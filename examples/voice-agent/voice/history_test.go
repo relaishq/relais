@@ -66,8 +66,8 @@ func TestHistoryLayoutsAndDefaultBudgets(t *testing.T) {
 			legacy.state.Phase = "playing"
 			legacySaved, err := legacy.Save(ctx)
 			require.NoError(t, err)
-			// Recovery selects the persisted session profile even when the worker's
-			// new-call registration requests split defaults.
+			// Call the factory directly to check its legacy layout handling. The
+			// host rejects a pool registration mismatch before this callback.
 			legacyTarget := Registration(nil, true).Factory(agent.FactoryArgs{MaxStateBytes: 8192}).(*Agent)
 			require.NoError(t, legacyTarget.Restore(ctx, legacySaved))
 			require.Equal(t, legacy.state, legacyTarget.state)
@@ -98,6 +98,28 @@ func TestHistoryRestoreBoundsAndRollback(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, saved, after)
 	}
+	t.Run("inline_history", func(t *testing.T) {
+		bad := saved
+		inline := a.state
+		inline.History = []Exchange{{"inline", "must not override SDK History"}}
+		var err error
+		bad.Bytes, err = json.Marshal(inline)
+		require.NoError(t, err)
+		require.EqualError(t, a.Restore(ctx, bad), "voice: inline history in split state")
+		after, err := a.Save(ctx)
+		require.NoError(t, err)
+		require.Equal(t, saved, after, "rejected inline history must preserve accepted state")
+	})
+	t.Run("oversized_history", func(t *testing.T) {
+		bad := saved
+		bad.History = append(bytes.Clone(saved.History), bytes.Repeat([]byte(" "), 8193-len(saved.History))...)
+		require.True(t, json.Valid(bad.History), "valid four-or-fewer exchange JSON must exercise the raw byte limit")
+		require.Len(t, bad.History, 8193)
+		require.ErrorIs(t, a.Restore(ctx, bad), agent.ErrHistoryTooLarge)
+		after, err := a.Save(ctx)
+		require.NoError(t, err)
+		require.Equal(t, saved, after, "rejected oversized history must preserve accepted state")
+	})
 	a.historyLimit = 2
 	_, err = a.Save(ctx)
 	require.ErrorIs(t, err, agent.ErrHistoryTooLarge)

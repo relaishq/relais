@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/examples/voice-agent/voice"
+	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -38,6 +39,7 @@ import (
 
 type historyWitness struct {
 	Kind   string              `json:"kind"`
+	At     time.Time           `json:"at,omitzero"`
 	State  agent.State         `json:"state"`
 	Resume *agent.ResumeNotice `json:"resume,omitempty"`
 	Audio  int                 `json:"audio"`
@@ -60,7 +62,7 @@ type observedVoice struct {
 func (a *observedVoice) Save(ctx context.Context) (agent.State, error) {
 	s, err := a.Agent.Save(ctx)
 	if err == nil && bytes.Contains(s.History, []byte(`"user":"turn-5"`)) && bytes.Contains(s.Bytes, []byte(`"phase":"synthesizing"`)) {
-		writeHistoryWitness(historyWitness{Kind: "candidate", State: s})
+		writeHistoryWitness(historyWitness{Kind: "candidate", At: time.Now(), State: s})
 	}
 	return s, err
 }
@@ -415,12 +417,15 @@ func testDemoAHistoryCut(t *testing.T, cut string) {
 				s, _, ok := status(source)
 				return ok && s.Phase == "synthesizing" && strings.Contains(s.Reply, "turn-5")
 			}, 3*time.Second, 2*time.Millisecond)
+			acceptedAt := time.Now()
 			var local agent.State
+			var candidateAt time.Time
 			require.Eventually(t, func() bool {
 				select {
 				case event := <-source.events:
 					if event.Kind == "candidate" {
 						local = event.State
+						candidateAt = event.At
 						return true
 					}
 				default:
@@ -437,6 +442,21 @@ func testDemoAHistoryCut(t *testing.T, cut string) {
 			require.NoError(t, json.Unmarshal(local.History, &newer))
 			require.Len(t, newer, 4)
 			require.Equal(t, "turn-5", newer[3].User)
+			require.False(t, candidateAt.IsZero(), "candidate Save must carry its actual observation time")
+			heldCtx, stopHeld := context.WithTimeout(ctx, 2*time.Second)
+			heldAt, err := proxy.heldAfter(heldCtx, candidateAt)
+			stopHeld()
+			require.NoError(t, err, "gate must report a source write that arrived after the candidate Save")
+			// Wait ten default checkpoint intervals after observing local acceptance.
+			// Otherwise an immediate SIGKILL could pass without the gate doing work.
+			wait := time.NewTimer(time.Until(acceptedAt.Add(time.Second)))
+			defer wait.Stop()
+			select {
+			case <-wait.C:
+			case <-ctx.Done():
+				t.Fatal("checkpoint observation window cancelled")
+			}
+			t.Logf("gate held a source write %s after candidate Save; store observed after %s of local acceptance", heldAt.Sub(candidateAt), time.Since(acceptedAt))
 			tuple, err := store.ReadComponents(ctx, call.SessionID())
 			require.NoError(t, err)
 			require.Equal(t, before.Components.History, tuple.Components.History, "newer local acceptance has not committed")
@@ -447,31 +467,37 @@ func testDemoAHistoryCut(t *testing.T, cut string) {
 	require.Equal(t, syscall.SIGKILL, source.cmd.ProcessState.Sys().(syscall.WaitStatus).Signal())
 	proxy.close()
 	var resumed historyWitness
-	restored := false
+	var factories, restores []historyWitness
 	require.Eventually(t, func() bool {
 		select {
-		case e, ok := <-target.events:
+		case event, ok := <-target.events:
 			if !ok {
 				return false
 			}
-			if e.Kind == "factory" {
-				require.Equal(t, []byte("3072/8192"), e.State.Bytes)
-			}
-			if e.Kind == "restore" {
-				restored = true
-				require.Equal(t, expectedHistory, e.State.History)
-			}
-			if e.Kind == "resumed" {
-				resumed = e
+			switch event.Kind {
+			case "factory":
+				factories = append(factories, event)
+			case "restore":
+				restores = append(restores, event)
+			case "resumed":
+				resumed = event
 				return true
 			}
 		default:
 		}
 		return false
 	}, 8*time.Second, 5*time.Millisecond)
-	require.True(t, restored, "actual Demo A Restore callback witnessed")
+	require.NotEmpty(t, factories, "replacement factory witnessed")
+	for _, event := range factories {
+		require.Equal(t, []byte("3072/8192"), event.State.Bytes)
+	}
+	require.NotEmpty(t, restores, "actual Demo A Restore callback witnessed")
+	for _, event := range restores {
+		require.Equal(t, expectedHistory, event.State.History)
+	}
 	require.Equal(t, expectedHistory, resumed.State.History)
 	require.NotNil(t, resumed.Resume)
+	require.Equal(t, legacy.Takeover, resumed.Resume.Kind)
 	require.Equal(t, 0, resumed.Audio)
 	var recovered voice.State
 	require.NoError(t, json.Unmarshal(resumed.State.Bytes, &recovered))
@@ -583,6 +609,7 @@ type historyStoreGate struct {
 	listener    net.Listener
 	mu          sync.Mutex
 	paused      bool
+	held        chan time.Time
 	connections []net.Conn
 	done        chan struct{}
 	once        sync.Once
@@ -593,7 +620,7 @@ func newHistoryStoreGate(t *testing.T, upstream string) *historyStoreGate {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	g := &historyStoreGate{addr: l.Addr().String(), listener: l, done: make(chan struct{})}
+	g := &historyStoreGate{addr: l.Addr().String(), listener: l, done: make(chan struct{}), held: make(chan time.Time, 16)}
 	g.wg.Add(1)
 	go func() {
 		defer g.wg.Done()
@@ -631,6 +658,23 @@ func newHistoryStoreGate(t *testing.T, upstream string) *historyStoreGate {
 	return g
 }
 func (g *historyStoreGate) pause() { g.mu.Lock(); g.paused = true; g.mu.Unlock() }
+
+// heldAfter ignores writes already held before the candidate was saved. Each
+// timestamp is captured only when Write receives nonempty bytes while paused.
+func (g *historyStoreGate) heldAfter(ctx context.Context, after time.Time) (time.Time, error) {
+	for {
+		select {
+		case at := <-g.held:
+			if at.After(after) {
+				return at, nil
+			}
+		case <-ctx.Done():
+			return time.Time{}, fmt.Errorf("no post-candidate write held: %w", ctx.Err())
+		case <-g.done:
+			return time.Time{}, net.ErrClosed
+		}
+	}
+}
 func (g *historyStoreGate) close() {
 	g.once.Do(func() {
 		_ = g.listener.Close()
@@ -650,8 +694,15 @@ type historyGateWriter struct {
 }
 
 func (w *historyGateWriter) Write(b []byte) (int, error) {
+	arrivedAt := time.Now()
 	w.gate.mu.Lock()
 	if w.gate.paused {
+		if len(b) > 0 {
+			select {
+			case w.gate.held <- arrivedAt:
+			default:
+			}
+		}
 		w.gate.mu.Unlock()
 		<-w.gate.done
 		return 0, net.ErrClosed

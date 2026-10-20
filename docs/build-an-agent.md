@@ -734,6 +734,10 @@ session's effective budgets on restore, so a call never changes layout mid-call.
 The split registration requests zero/default limits; the legacy declaration
 remains **8,192 working bytes**. Use a new compatible pool when changing the
 registration. Keep the same declaration and compatible schemas on all workers.
+Rolling back Demo A means draining the split pool before returning it to the
+legacy registration. Switching the flag off changes its declared limits from
+`Limits{}` to `{MaxStateBytes: 8192}`, so flag-off workers reject existing v10
+Demo A calls with `ErrIncompatibleAgent`.
 
 `TestHistoryLayoutsAndDefaultBudgets` measures the real Save path with maximum
 numeric fields and text at its bounds, including quotes, control/HTML escapes,
@@ -744,7 +748,11 @@ fixture, leaving **1,105 B** under its declaration.
 
 A standalone voice worker in a split-compatible pool needs
 `-agent-split-checkpoints` and its normal connection flags. It needs **no
-state/store budget override**. Legacy deployments still need these three flags:
+state/store budget override**. Turning split checkpoints on for a deployment
+still waits for [#198](https://github.com/relaishq/relais/issues/198) and the
+separately approved paid managed-store acceptance under the
+[activation rule](deploy.md#process-flags-and-private-apis).
+Legacy deployments still need these three flags:
 
 ```sh
 -agent-max-snapshot-bytes=24576
