@@ -90,8 +90,12 @@ func ReadRecoverySnapshot(ctx context.Context, store sessionstore.Store, id stri
 }
 
 func (s *session) componentBudgets() componentBudgets {
-	hot := s.worker.cfg.SnapshotLimits.MaxBytes
-	return componentBudgets{Hot: hot, Setup: 4096, History: 8448, Total: max(20480, hot+4096+8448)}
+	hot := s.snapshotLimits().MaxBytes
+	history := 8192
+	if s.agent != nil && s.agent.v2 != nil {
+		history = s.agent.v2.registration.Bounds.MaxHistoryBytes
+	}
+	return splitComponentBudgets(hot, history)
 }
 func (s *session) componentAdmission(data []byte) (componentSizes, error) {
 	var wire componentSnapshot
@@ -171,6 +175,9 @@ func (s *session) settleComponentWrite(ctx context.Context) error {
 func (s *session) failComponentPending() {
 	pending := s.componentPending
 	s.componentPending = nil
+	s.snapshotBudgetMu.Lock()
+	s.snapshotWriteInFlight = false
+	s.snapshotBudgetMu.Unlock()
 	if pending != nil {
 		s.failSnapshot(pending.pair.V2 != nil, pending.intent)
 	}
@@ -196,15 +203,25 @@ func (s *session) writeComponents(ctx context.Context, lease sessionstore.Lease,
 		return 0, err
 	}
 	available := 0
+	historyHeld := false
 	if pair.V2 != nil {
 		s.snapshotBudgetMu.Lock()
-		available = int(s.snapshotBytesBudget.available(s.worker.cfg.SnapshotLimits, captured))
+		available = int(s.snapshotBytesBudget.available(s.snapshotLimits(), captured))
+		if hold := s.snapshotHistoryHold; hold != nil {
+			historyHeld = true
+			if !hold.matches(pair) {
+				available -= hold.bytes
+			}
+		}
 		s.snapshotBudgetMu.Unlock()
 		available -= componentProtocolReserve
-		if intent {
-			available -= s.worker.cfg.SnapshotLimits.MaxBytes
-		}
+		// Cold changes and rotation spend only spare tokens. Keep one required
+		// hot checkpoint independent of their size and of intent barriers.
+		available -= s.snapshotLimits().MaxBytes
 		if available <= 0 {
+			if historyHeld {
+				return 0, errCheckpointSkipped
+			}
 			return 0, componentBudgetRefusal(intent)
 		}
 	}
@@ -245,6 +262,9 @@ func (s *session) writeComponents(ctx context.Context, lease sessionstore.Lease,
 			s.componentPending = &componentPending{components: final, expected: s.componentMetadata, pair: pair, next: next, captured: captured, bytes: charge, intent: intent}
 		}
 		if errors.Is(err, sessionstore.ErrComponentCapacity) {
+			if historyHeld {
+				return 0, errCheckpointSkipped
+			}
 			return 0, componentBudgetRefusal(intent)
 		}
 		return 0, err
@@ -257,7 +277,11 @@ func (s *session) componentExportState() *componentSnapshotState {
 	if !s.componentMode {
 		return nil
 	}
-	return &componentSnapshotState{history: bytes.Clone(s.componentHistory)}
+	history := s.componentHistory
+	if s.state.Agent.V2 != nil {
+		history = s.state.Agent.History
+	}
+	return &componentSnapshotState{history: bytes.Clone(history)}
 }
 func (s *session) restoreComponentMode(snap *snapshot) {
 	if snap.split == nil {

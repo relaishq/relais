@@ -3,12 +3,19 @@ package mediaworker
 import (
 	"fmt"
 
+	"github.com/relaishq/relais/internal/componentcodec"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 )
 
-// No defaults are selected here. Slice A callers supply proposed budgets for
-// measurement; slice #195 must admit actual encodings before enabling v10.
+// The v10 profile reserves hot independently of setup and history.
 // Count b/m/t and framing once, and each component's encryption overhead once.
+const componentMaxHistoryBytes = componentcodec.DecodeLimit - 6
+
+func splitComponentBudgets(hot, history int) componentBudgets {
+	history = max(8448, history+6+componentCipherOverhead)
+	return componentBudgets{Hot: hot, Setup: 4096, History: history, Total: max(20480, hot+4096+history)}
+}
+
 type componentBudgets struct{ Hot, Setup, History, Total int }
 type componentSizes struct{ Hot, Setup, History, Total, References int }
 

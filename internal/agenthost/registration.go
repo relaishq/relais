@@ -15,6 +15,7 @@ import (
 // Bounds are the resolved effective registration limits.
 type Bounds struct {
 	MaxStateBytes    int
+	MaxHistoryBytes  int `json:",omitempty"`
 	MaxPendingBytes  int
 	MaxMailboxBytes  int
 	MaxActiveTasks   int

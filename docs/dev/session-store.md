@@ -77,16 +77,37 @@ Redis unavailability can delay a call until recovery or lease expiry.
 default. Every worker and control process must support v10 before enabling it.
 An adopted v10 call keeps that format with the flag off. Older binaries cannot
 restore v10; end all v10 calls before rolling back. v8/v9 calls retain their
-legacy state key and encoding. This build is not the bridge release described in ADR 0012. Keep the flag off
-outside development until SDK history support in #196 is complete. Code slices
-B/C are not deployable bridge releases.
+legacy state key and encoding. This is the ADR 0012 **bridge release**: it can
+read, write, renew, transfer, and release live v10 calls with new-call split
+admission off. First roll **all** state-reading/mutating participants (workers,
+control, cleanup and listing paths) to the bridge, with common keys and compatible
+registrations. Verify that no old participants remain. Then enable admission per
+pool. For rollback, turn admission off first and retain a full v10 writer and
+lifecycle implementation until every v10 call ends or drains. Only then return to
+v0.2. A reader-only build is never a safe rollback target. There is no
+history truncation, downconversion, or legacy shadow write.
 
-The raw working-state ceiling remains 8,192 bytes. Split calls also require the
-complete encoded hot capture to fit `-agent-max-snapshot-bytes` (7,168 bytes by
-default), so their effective working-state limit is smaller and depends on host
-and transport metadata (about 6,400 bytes for a simple v1 call). Oversized Saves
-are refused before publication with `agent.ErrStateTooLarge` for v1 agents or
-`agentv2.ErrCapacity` for v2 agents; no state is truncated.
+New v10 custom sessions use 3,072 raw working bytes and 8,192 raw SDK History bytes
+when limits are zero. Save/Restore cover both fields as one accepted pair. Legacy
+v8/v9 zero limits keep the 1,024-byte working-only profile; v1 keeps its 8,192-byte
+working ceiling. Explicit settings keep their meaning. The working ceiling is
+configurable up to 64 KiB; larger components require actual encoded-size and rate
+admission. Split captures retain the 7,168-byte hot cap, a separate 2,048-byte
+host allowance and separate move memory. No state is truncated.
+
+Split rate/burst defaults are 80,000 B/s and 40,960 B, independently of legacy
+81,920 B/s and 28,672 B. The hot reservation is `10*7,168+7,168 = 78,848 B/s`,
+not the whole transaction times cadence. Cold history and key rotation share
+spare tokens, leaving one hot checkpoint. History admission checks the candidate
+transaction plus that hot reserve before acceptance, with a maximum transaction
+also reserved for an unresolved writer. An admitted pair holds a byte reservation
+until a matching acknowledgement; older captures and rotation cannot spend it.
+Refusals restore the pair and report typed
+Capacity without ending an ordinary call. Successful debits include changed
+ciphertexts and published metadata/field bytes. Exact moves preserve quota and
+reserve one maximum in-flight transaction. Transport stays on its 100 ms clock
+and side effects retain forced checkpoint barriers. Store failure is not app
+Capacity.
 
 The additive `sessionstore.ComponentStore` API saves a complete capture with
 `CommitComponents` and restores it with one primary `ReadComponents` script.

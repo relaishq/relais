@@ -96,7 +96,11 @@ func (s *session) captureSnapshotCandidateMode(captured time.Time, candidate *ag
 	}
 	var split *componentSnapshotState
 	if s.componentMode {
-		split = &componentSnapshotState{history: bytes.Clone(s.componentHistory)}
+		history := s.componentHistory
+		if state.Agent.V2 != nil {
+			history = state.Agent.History
+		}
+		split = &componentSnapshotState{history: bytes.Clone(history)}
 	}
 	// Certificate/key byte slices are immutable throughout a session.
 	s.mu.Unlock()
@@ -211,7 +215,13 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	}
 	s.mu.Unlock()
 	if v2 {
-		defer func() { s.snapshotBudgetMu.Lock(); s.snapshotWriteInFlight = false; s.snapshotBudgetMu.Unlock() }()
+		defer func() {
+			s.snapshotBudgetMu.Lock()
+			// An unresolved write may still publish. Its maximum reservation survives
+			// the local timeout until tuple settlement proves its outcome.
+			s.snapshotWriteInFlight = s.componentPending != nil
+			s.snapshotBudgetMu.Unlock()
+		}()
 	}
 	ctx, cancel := context.WithTimeout(parent, ownershipTimeout)
 	defer cancel()
@@ -263,11 +273,11 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 			return err
 		}
 		s.snapshotBudgetMu.Lock()
-		available := s.snapshotBytesBudget.available(s.worker.cfg.SnapshotLimits, captured)
+		available := s.snapshotBytesBudget.available(s.snapshotLimits(), captured)
 		s.snapshotBudgetMu.Unlock()
 		required := wireBytes
 		if intent {
-			required += s.worker.cfg.SnapshotLimits.MaxBytes
+			required += s.snapshotLimits().MaxBytes
 		}
 		if available < float64(required) {
 			if intent {
@@ -358,7 +368,10 @@ func (s *session) warnSnapshot(err error) {
 func (s *session) ackSnapshot(pair agentState, dtlsNext dtlsSequenceCheckpoint, captured time.Time, wireBytes int, intent bool) {
 	if pair.V2 != nil {
 		s.snapshotBudgetMu.Lock()
-		s.snapshotBytesBudget.debit(s.worker.cfg.SnapshotLimits, wireBytes, captured)
+		s.snapshotBytesBudget.debit(s.snapshotLimits(), wireBytes, captured)
+		if s.snapshotHistoryHold.matches(pair) {
+			s.snapshotHistoryHold = nil
+		}
 		s.worker.metrics.snapshotDebitBytes.Add(uint64(wireBytes))
 		if intent {
 			s.worker.metrics.forcedSuccesses.Add(1)

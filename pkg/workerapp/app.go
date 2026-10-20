@@ -72,8 +72,8 @@ func Run(ctx context.Context, args []string, options Options) error {
 	split := flags.Bool("agent-split-checkpoints", false, "use v10 component checkpoints for new calls (upgrade every participant first)")
 	limits := mediaworker.SnapshotLimits{}
 	flags.IntVar(&limits.MaxBytes, "agent-max-snapshot-bytes", 7168, "v2 whole encrypted snapshot byte cap")
-	flags.IntVar(&limits.BytesPerSecond, "agent-snapshot-bytes-per-second", 81920, "v2 snapshot payload bytes per second per session")
-	flags.IntVar(&limits.BurstBytes, "agent-snapshot-burst-bytes", 28672, "v2 snapshot payload burst bytes per session")
+	flags.IntVar(&limits.BytesPerSecond, "agent-snapshot-bytes-per-second", 0, "payload bytes/s (0: legacy 81920, split 80000)")
+	flags.IntVar(&limits.BurstBytes, "agent-snapshot-burst-bytes", 0, "payload burst bytes (0: legacy 28672, split 40960)")
 	flags.IntVar(&limits.MoveBytesPerSession, "agent-move-bytes-per-session", 1<<20, "v2 move memory bytes per session")
 	flags.Int64Var(&limits.MoveBytesTotal, "agent-move-bytes-total", 64<<20, "v2 move memory bytes per worker including export scratch")
 	drainTimeout := flags.Duration("drain-timeout", 5*time.Second, "SIGTERM drain deadline before closing")
@@ -101,10 +101,21 @@ func Run(ctx context.Context, args []string, options Options) error {
 	if reserveSet && (*moveReserve <= 0 || *moveReserve >= *drainTimeout) {
 		return fmt.Errorf("-agent-drain-move-reserve must be greater than 0 and less than -drain-timeout (%s)", *drainTimeout)
 	}
-	if err := limits.Validate(); err != nil {
+	validationLimits := limits
+	if *split {
+		validationLimits = limits.SplitDefaults()
+	} else {
+		if validationLimits.BytesPerSecond == 0 {
+			validationLimits.BytesPerSecond = 81920
+		}
+		if validationLimits.BurstBytes == 0 {
+			validationLimits.BurstBytes = 28672
+		}
+	}
+	if err := validationLimits.Validate(); err != nil {
 		return err
 	}
-	agentConfig, err := registeredAgents(options, *agentName, limits)
+	agentConfig, err := registeredAgents(options, *agentName, limits, *split)
 	if err != nil {
 		return err
 	}

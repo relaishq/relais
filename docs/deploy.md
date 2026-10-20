@@ -287,12 +287,18 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   `-agent-split-checkpoints` defaults to false. It selects v10 component
   checkpoints for new calls. Upgrade every worker and control process before
   enabling it; existing v10 calls continue in v10 even on a worker with this
-  flag off. Before rolling back to an older binary, let all v10 calls end.
-  This build is not an ADR 0012 bridge release. Keep the flag off outside
-  development until SDK history support in #196. Split calls retain the raw
-  8,192-byte working-state ceiling and must also fit the encoded 7,168-byte hot
-  cap; a simple v1 call fits about 6,400 bytes. Save refuses larger encodings
-  with `agent.ErrStateTooLarge` for v1 agents or `agentv2.ErrCapacity` for v2 agents.
+  flag off. This is the ADR 0012 bridge: roll all state-reading/mutating
+  participants to this full v10 reader/writer/lifecycle build first, with common
+  keys and compatible registrations. Verify no old participants remain, then
+  enable new-call admission per pool. To roll back, disable new admission and
+  keep the full v10 writer/lifecycle until every v10 call ends or drains; only
+  then return to v0.2. Reader-only builds cannot serve live v10 calls.
+  New v10 custom calls resolve zero app limits to 3,072 working bytes and 8,192
+  history bytes. Legacy call profiles and explicit operator values stay intact.
+  Split payload defaults are 80,000 B/s and 40,960 B burst; the 7,168-byte hot
+  cap and 100 ms cadence are independent of cold history. History overflow or
+  churn is refused before acceptance with typed Capacity; it does not end an
+  ordinary call or slow its transport checkpoints.
   See [the component store](dev/session-store.md#component-checkpoints-v10).
   `-agent-drain-task-budget` defaults to 2 s; startup rejects values below 0
   or above 2 s. `-agent-drain-move-reserve` has no default: unset skips the

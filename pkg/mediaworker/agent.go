@@ -57,6 +57,7 @@ func (c AgentConfig) defaults() AgentConfig {
 // agentState is copied with media counters inside the encrypted session blob.
 // Revision is local ordering evidence, not a schema version.
 type agentState struct {
+	History  []byte      `json:",omitempty"`
 	V2       *v2Envelope `json:",omitempty"`
 	State    agent.State
 	Progress agent.Progress
@@ -119,6 +120,7 @@ func (w *Worker) AgentStats() AgentStats {
 
 func cloneAgentState(state agentState) agentState {
 	state.State.Bytes = slices.Clone(state.State.Bytes)
+	state.History = slices.Clone(state.History)
 	if state.V2 != nil {
 		e := *state.V2
 		e.TaskKinds = slices.Clone(e.TaskKinds)
@@ -695,5 +697,5 @@ func (w *Worker) SessionAgent(id string) (agent.State, agent.Progress, error) {
 }
 
 func agentStateEqual(a, b agentState) bool {
-	return a.State.Version == b.State.Version && bytes.Equal(a.State.Bytes, b.State.Bytes) && v2EnvelopeEqual(a.V2, b.V2)
+	return a.State.Version == b.State.Version && bytes.Equal(a.State.Bytes, b.State.Bytes) && bytes.Equal(a.History, b.History) && v2EnvelopeEqual(a.V2, b.V2)
 }

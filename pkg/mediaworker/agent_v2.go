@@ -78,17 +78,17 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 	reg := r.Registration
 	// The legacy Factory field is opaque until it returns an adapter. Public
 	// registrations are checked in New; factory-only v2 hosts are checked here.
-	if err := s.worker.cfg.SnapshotLimits.ValidateForInterval(s.worker.cfg.SnapshotInterval); err != nil {
+	if err := s.snapshotLimits().ValidateForInterval(s.worker.cfg.SnapshotInterval); err != nil {
 		return err
 	}
 	if opts.Kind == legacy.Takeover || opts.SequenceMargin > 0 {
 		move = nil
 	}
 	legacyBounds := reg.Bounds
-	reg.Bounds = effectiveAgentBounds(reg.Declared, s.worker.cfg.SnapshotLimits)
+	reg.Bounds = effectiveAgentBounds(reg.Declared, s.snapshotLimits(), s.componentMode)
 	if reg.Name == "" || reg.Name == "echo" || reg.Name == "demo" || reg.Factory == nil ||
-		reg.Bounds.MaxStateBytes <= 0 || reg.Bounds.MaxStateBytes > 64<<10 || reg.Bounds.MaxPendingBytes <= 0 ||
-		reg.Bounds.MaxMailboxBytes <= 0 || reg.Bounds.MaxMailboxBytes > s.worker.cfg.SnapshotLimits.MoveBytesPerSession || reg.Bounds.MaxActiveTasks <= 0 ||
+		reg.Bounds.MaxHistoryBytes < 0 || reg.Bounds.MaxHistoryBytes > componentMaxHistoryBytes || reg.Bounds.MaxStateBytes <= 0 || reg.Bounds.MaxStateBytes > 64<<10 || reg.Bounds.MaxPendingBytes <= 0 ||
+		reg.Bounds.MaxMailboxBytes <= 0 || reg.Bounds.MaxMailboxBytes > s.snapshotLimits().MoveBytesPerSession || reg.Bounds.MaxActiveTasks <= 0 ||
 		reg.Bounds.MaxAudioBytes < 0 || reg.Bounds.MaxAudioDuration < 0 {
 		return s.agentError(fmt.Errorf("%w: invalid internal registration", agent.ErrIncompatibleAgent))
 	}
@@ -140,6 +140,9 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 
 	h := &v2Host{controls: make(chan controlRequest), registration: reg, ready: make(chan struct{}), emissions: make(chan taskEmission), force: make(chan struct{}, 1), wakePlayback: make(chan struct{}, 1)}
 	s.agent.v2 = h
+	if s.componentMode && s.snapshotLimits().BurstBytes < 2*s.componentBudgets().Total {
+		return fmt.Errorf("%w: split burst must hold two %d-byte transactions", agent.ErrCapacity, s.componentBudgets().Total)
+	}
 	if restoring && s.worker.cfg.Relay != nil {
 		ctx, cancel := context.WithTimeout(s.ctx, ownershipTimeout)
 		now, err := s.worker.cfg.Relay.Owners.Clock(ctx, s.id)
@@ -158,7 +161,7 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 		}
 	}
 	// Factory follows the legacy factory rule: quick, nonblocking construction.
-	h.instance = reg.Factory(agent.FactoryArgs{SessionID: s.id, AgentName: reg.Name, MaxStateBytes: reg.Bounds.MaxStateBytes})
+	h.instance = reg.Factory(agent.FactoryArgs{SessionID: s.id, AgentName: reg.Name, MaxStateBytes: reg.Bounds.MaxStateBytes, MaxHistoryBytes: reg.Bounds.MaxHistoryBytes})
 	if h.instance == nil {
 		return s.agentError(errors.New("agent: nil v2 factory result"))
 	}
@@ -261,10 +264,11 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 
 func cloneV2State(state agent.State) agent.State {
 	state.Bytes = slices.Clone(state.Bytes)
+	state.History = slices.Clone(state.History)
 	return state
 }
 func v2State(pair agentState) agent.State {
-	return agent.State{Version: pair.State.Version, Bytes: pair.State.Bytes, HasMoveOnly: pair.V2.HasMoveOnly, MoveOnlyLength: pair.V2.MoveOnlyLength}
+	return agent.State{Version: pair.State.Version, Bytes: pair.State.Bytes, History: pair.History, HasMoveOnly: pair.V2.HasMoveOnly, MoveOnlyLength: pair.V2.MoveOnlyLength}
 }
 func (s *session) v2RestoreError(err error) error {
 	if errors.Is(err, ErrMoveBudget) {
@@ -289,10 +293,13 @@ func (s *session) validateV2StateMetadata(state agent.State, lostMoveData ...boo
 	if len(state.Bytes) > s.agent.v2.registration.Bounds.MaxStateBytes {
 		return agent.ErrStateTooLarge
 	}
+	if len(state.History) > s.agent.v2.registration.Bounds.MaxHistoryBytes || (!s.componentMode && len(state.History) != 0) {
+		return fmt.Errorf("%w: %w", agent.ErrCapacity, agent.ErrHistoryTooLarge)
+	}
 	if state.MoveOnlyLength < 0 || (!state.HasMoveOnly && state.MoveOnlyLength != 0) {
 		return errors.New("agent: invalid move-only metadata")
 	}
-	if (len(lostMoveData) == 0 || !lostMoveData[0]) && (state.MoveOnlyLength > s.agent.v2.registration.Bounds.MaxMailboxBytes || state.MoveOnlyLength > s.worker.cfg.SnapshotLimits.MoveBytesPerSession) {
+	if (len(lostMoveData) == 0 || !lostMoveData[0]) && (state.MoveOnlyLength > s.agent.v2.registration.Bounds.MaxMailboxBytes || state.MoveOnlyLength > s.snapshotLimits().MoveBytesPerSession) {
 		return fmt.Errorf("%w: move-only data exceeds session budget", agent.ErrCapacity)
 	}
 	if state.HasMoveOnly {
@@ -321,7 +328,7 @@ func (s *session) reserveMoveBytes(n int64) error {
 			return ErrMoveBudget
 		}
 	}
-	if delta > 0 && !s.worker.reserveMoveBytesWithin(delta, s.worker.cfg.SnapshotLimits.MoveBytesTotal-int64(8*s.worker.cfg.SnapshotLimits.MoveBytesPerSession)) {
+	if delta > 0 && !s.worker.reserveMoveBytesWithin(delta, s.snapshotLimits().MoveBytesTotal-int64(8*s.snapshotLimits().MoveBytesPerSession)) {
 		s.worker.moveBytes.Add(-scratchDelta)
 		return ErrMoveBudget
 	}
@@ -361,6 +368,7 @@ func (s *session) releaseMoveBytes() {
 }
 func (s *session) acceptV2State(saved agent.State) {
 	s.state.Agent.State = legacy.State{Version: saved.Version, Bytes: saved.Bytes}
+	s.state.Agent.History = saved.History
 	s.state.Agent.V2.HasMoveOnly = saved.HasMoveOnly
 	s.state.Agent.V2.MoveOnlyLength = saved.MoveOnlyLength
 	s.state.Agent.Revision++
@@ -499,7 +507,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 			return fmt.Errorf("%w: %w", legacy.ErrSave, err)
 		}
 		if err := s.validateV2StateMetadata(saved); err != nil {
-			if errors.Is(err, agent.ErrStateTooLarge) {
+			if errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrHistoryTooLarge) {
 				return fmt.Errorf("%w: %w", errSnapshotAdmissionCapacity, err)
 			}
 			return err
@@ -509,6 +517,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		}
 		candidate := cloneAgentState(before)
 		candidate.State = legacy.State{Version: saved.Version, Bytes: saved.Bytes}
+		candidate.History = saved.History
 		candidate.V2.HasMoveOnly, candidate.V2.MoveOnlyLength = saved.HasMoveOnly, saved.MoveOnlyLength
 		candidate.V2.Timers, candidate.V2.TimerGeneration = timers, timerGeneration
 		candidate.V2.Playback = projection
@@ -545,7 +554,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 			return err
 		}
 		if size > 0 && slices.ContainsFunc(effects.StartTasks, func(t agent.TaskSpec) bool { return t.Class == agent.SideEffecting }) {
-			limits := s.worker.cfg.SnapshotLimits
+			limits := s.snapshotLimits()
 			required := size + limits.MaxBytes
 			if required > limits.BurstBytes {
 				return errSnapshotAdmissionCapacity
@@ -571,6 +580,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if restoreErr := s.agentCall(func(ctx context.Context) error { return h.v2.instance.Restore(ctx, cloneV2State(v2State(before))) }); restoreErr != nil {
 			return fmt.Errorf("%w: %w", legacy.ErrRestore, restoreErr)
 		}
+		s.rollbackHistoryAdmission(before)
 		if reserveErr := s.taskBudget(h.v2.tasks, before.V2.MoveOnlyLength); reserveErr != nil {
 			return reserveErr
 		}
@@ -606,6 +616,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	// actor owns latest; publish only after Handle, effects and Save all succeed.
 	next := cloneAgentState(before)
 	next.State = legacy.State{Version: saved.Version, Bytes: saved.Bytes}
+	next.History = saved.History
 	next.V2.HasMoveOnly, next.V2.MoveOnlyLength = saved.HasMoveOnly, saved.MoveOnlyLength
 	next.V2.Capacity = refusals
 	stageControl(next.V2, event)

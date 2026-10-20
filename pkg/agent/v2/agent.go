@@ -68,6 +68,7 @@ import (
 var (
 	ErrVersion           = legacy.ErrVersion
 	ErrStateTooLarge     = legacy.ErrStateTooLarge
+	ErrHistoryTooLarge   = errors.New("agent: history exceeds limit")
 	ErrIncompatibleAgent = errors.New("agent: incompatible registration")
 	// ErrBackpressure is retried internally. Emit waits with cancellation and
 	// never returns this sentinel to a handler.
@@ -75,11 +76,15 @@ var (
 	ErrCapacity     = errors.New("agent: task capacity")
 )
 
-// State holds crash-recoverable bytes and O(1) metadata about move-only data.
+// State holds opaque crash-recoverable working bytes and conversation history.
+// Save and Restore cover both fields together. Save is not a durable acknowledgement.
+// A crash can lose the current turn's audio and repeat work.
+// State also holds O(1) metadata about move-only data.
 // Save must not serialize, copy or hash move-only bytes. Version zero is reserved.
 type State struct {
 	Version        uint32
 	Bytes          []byte
+	History        []byte
 	HasMoveOnly    bool
 	MoveOnlyLength int
 }
@@ -100,9 +105,10 @@ type ResumeNotice struct {
 	MoveOnly Outcome
 }
 type FactoryArgs struct {
-	SessionID     string
-	AgentName     string
-	MaxStateBytes int
+	SessionID       string
+	AgentName       string
+	MaxStateBytes   int
+	MaxHistoryBytes int
 }
 type Factory func(FactoryArgs) Agent
 
@@ -234,6 +240,7 @@ func (m ControlMessage) Validate() error {
 // limits respect local operator ceilings; registrations cannot increase budgets.
 type Limits struct {
 	MaxStateBytes    int
+	MaxHistoryBytes  int `json:",omitempty"`
 	MaxPendingBytes  int
 	MaxMailboxBytes  int
 	MaxActiveTasks   int

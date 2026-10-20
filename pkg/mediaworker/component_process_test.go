@@ -159,7 +159,7 @@ func testSplitProcessTakeover(t *testing.T, addrs []string, cluster, planned boo
 	require.Equal(t, source.addr, before.Lease.Worker)
 	target := start("1", false, "", "") // no history source; new-call split admission is OFF
 	if planned {
-		for _, to := range []string{"1", "0", "1"} {
+		for _, to := range []string{"1", "0"} {
 			result, err := plane.Move(ctx, call.SessionID(), to)
 			require.NoError(t, err, "planned move: %+v", result)
 			owner := target.addr
@@ -177,6 +177,18 @@ func testSplitProcessTakeover(t *testing.T, addrs []string, cluster, planned boo
 			}, 6*time.Second, 5*time.Millisecond)
 			require.NoError(t, call.SendMedia(ctx, 200*time.Millisecond))
 		}
+		moves, err := plane.Drain(ctx, "0")
+		require.NoError(t, err)
+		require.Len(t, moves, 1)
+		require.Eventually(t, func() bool {
+			value, e := store.ReadComponents(ctx, call.SessionID())
+			if e != nil || value.Metadata.Owner != target.addr.String() {
+				return false
+			}
+			require.Equal(t, before.Components.Work, value.Components.Work)
+			require.Equal(t, before.Components.History, value.Components.History)
+			return true
+		}, 6*time.Second, 5*time.Millisecond)
 		_, err = call.Hangup(ctx)
 		require.NoError(t, err)
 		return
@@ -195,6 +207,8 @@ func testSplitProcessTakeover(t *testing.T, addrs []string, cluster, planned boo
 				var value []byte
 				require.NoError(t, json.Unmarshal(raw, &value))
 				require.Equal(t, []byte(working), value)
+				require.NoError(t, json.Unmarshal(msg["restored_history"], &value))
+				require.Equal(t, []byte(history), value)
 				restored = true
 			}
 		case <-deadline.C:
