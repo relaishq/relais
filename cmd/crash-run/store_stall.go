@@ -13,9 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/relaishq/relais/internal/processrun"
-
 	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/processrun"
 	"github.com/relaishq/relais/internal/workerdriver"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"

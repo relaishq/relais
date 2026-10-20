@@ -232,3 +232,66 @@ func TestComponentInventoryStatusNeverWaitsAndStopsWithPlane(t *testing.T) {
 	require.False(t, p.inventory.loading)
 	p.inventory.mu.Unlock()
 }
+
+type finishingInventoryStore struct {
+	sessionstore.Store
+	entered, canceled, finish chan struct{}
+}
+
+func (s *finishingInventoryStore) ComponentKeyInventory(ctx context.Context) (map[byte]uint64, error) {
+	close(s.entered)
+	<-ctx.Done()
+	close(s.canceled)
+	// Model a bounded scan's cleanup after it observes cancellation.
+	<-s.finish
+	return nil, ctx.Err()
+}
+
+func TestComponentInventoryPlaneWaitsForCanceledScanCleanup(t *testing.T) {
+	store := &finishingInventoryStore{entered: make(chan struct{}), canceled: make(chan struct{}), finish: make(chan struct{})}
+	p := NewWithConfig(nil, store, Config{CheckInterval: time.Hour})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { defer close(done); done <- p.Run(ctx) }()
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(store.finish) }) }
+	t.Cleanup(func() {
+		cancel()
+		release()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("plane did not exit after scan cleanup")
+		}
+	})
+	require.Eventually(t, func() bool {
+		p.inventory.mu.Lock()
+		defer p.inventory.mu.Unlock()
+		return p.inventory.lifetime != nil
+	}, time.Second, time.Millisecond)
+	p.keyInventoryStatus(context.Background())
+	select {
+	case <-store.entered:
+	case <-time.After(time.Second):
+		t.Fatal("inventory scan did not start")
+	}
+	cancel()
+	select {
+	case <-store.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("scan did not observe plane cancellation")
+	}
+	select {
+	case <-done:
+		t.Fatal("plane returned while its canceled scan was still cleaning up")
+	case <-time.After(time.Second):
+	}
+	release()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("plane did not join its completed scan")
+	}
+	require.Equal(t, "failed", p.keyInventoryStatus(context.Background()).State)
+}

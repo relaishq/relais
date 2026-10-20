@@ -85,7 +85,8 @@ The raw working-state ceiling remains 8,192 bytes. Split calls also require the
 complete encoded hot capture to fit `-agent-max-snapshot-bytes` (7,168 bytes by
 default), so their effective working-state limit is smaller and depends on host
 and transport metadata (about 6,400 bytes for a simple v1 call). Oversized Saves
-are refused with `ErrStateTooLarge` before publication; no state is truncated.
+are refused before publication with `agent.ErrStateTooLarge` for v1 agents or
+`agentv2.ErrCapacity` for v2 agents; no state is truncated.
 
 The additive `sessionstore.ComponentStore` API saves a complete capture with
 `CommitComponents` and restores it with one primary `ReadComponents` script.

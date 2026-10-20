@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/relaishq/relais/internal/redistestcluster"
@@ -26,7 +27,7 @@ func TestRedisScriptSlotSafety(t *testing.T) {
 			{"worker-index fenced EVALSHA check", sessionLua, keys},
 			{"route-restore owner read", sessionLua, keys},
 			{"sequence reservation (lease-only branch)", "", r.sessionKeys(id, "sequence")},
-			{"legacy hot put", "", r.sessionKeys(id, "put")},
+			{"legacy hot put", sessionLua, r.sessionKeys(id, "put")},
 			{"component commit", componentCommitLua, r.componentKeys(id)},
 			{"component tuple read", componentReadLua, r.componentKeys(id)},
 			{"store clock", storeClockLua, r.sessionKeys(id, "clock")},
@@ -40,7 +41,15 @@ func TestRedisScriptSlotSafety(t *testing.T) {
 		for _, operation := range operations {
 			t.Run(id+"/"+operation.name, func(t *testing.T) {
 				redistestcluster.SameSlot(t, operation.keys...)
-				for _, match := range regexp.MustCompile(`KEYS\[\s*(\d+)\s*\]`).FindAllStringSubmatch(operation.lua, -1) {
+				script := operation.lua
+				if operation.name == "legacy hot put" {
+					// The real script dispatches many operations. Only put's branch
+					// executes on its two-key hot path; its common lease read uses KEYS[1].
+					var found bool
+					_, script, found = strings.Cut(script, "elseif op=='put' then")
+					require.True(t, found, "audit must include the production put branch")
+				}
+				for _, match := range regexp.MustCompile(`KEYS\[\s*(\d+)\s*\]`).FindAllStringSubmatch(script, -1) {
 					index, err := strconv.Atoi(match[1])
 					require.NoError(t, err)
 					require.LessOrEqual(t, index, len(operation.keys), "unaccounted script key")

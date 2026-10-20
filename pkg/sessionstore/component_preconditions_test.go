@@ -147,5 +147,40 @@ func TestComponentScriptPreflightRefusesBeforeWriting(t *testing.T) {
 				require.Equal(t, before, snapshotComponentKeys(t, r, id), "every precondition precedes all writes")
 			})
 		}
+		for _, kind := range []string{"init-other-tenure", "init-missing-bank", "init-generation"} {
+			t.Run(kind, func(t *testing.T) {
+				id := "preflight-" + kind
+				lease, err := r.Claim(ctx, id, netip.MustParseAddrPort("127.0.0.1:23456"), time.Minute)
+				require.NoError(t, err)
+				components := componentFixture(id)
+				if kind != "init-generation" {
+					components = interruptComponentInitialization(t, r, lease)
+				}
+				if kind == "init-other-tenure" {
+					lease, err = r.Transfer(ctx, lease, netip.MustParseAddrPort("127.0.0.1:23457"), time.Minute)
+					require.NoError(t, err)
+				}
+				if kind == "init-missing-bank" {
+					require.NoError(t, r.client.Del(ctx, r.componentKeys(id)[10]).Err())
+				}
+				reservation, err := r.run(ctx, "sequence", id, lease.Worker.String(), fmt.Sprint(lease.Epoch), 0)
+				require.NoError(t, err)
+				seq, err := sequenceNumber(fmt.Sprint(reservation[1]))
+				require.NoError(t, err)
+				prepared, err := r.prepareComponents(lease, ComponentCommit{Components: components, StateVersion: 1}, nil, seq)
+				require.NoError(t, err)
+				if kind == "init-generation" {
+					// Raw EVAL bypasses the client's initial-generation assignment.
+					prepared.record.metadata.SetupGeneration++
+				}
+				packed, err := prepared.record.metadata.Marshal()
+				require.NoError(t, err)
+				parts := componentBytes(prepared.record.sealed)
+				before := snapshotComponentKeys(t, r, id)
+				_, err = r.runComponent(ctx, componentCommitScript, "component_commit", id, lease.Worker.String(), fmt.Sprint(lease.Epoch), "", packed, prepared.record.sealed.Transport, fmt.Sprint(seq), binary.BigEndian.AppendUint64(nil, lease.Epoch), parts[0], parts[1], parts[2], binary.BigEndian.AppendUint64(nil, seq))
+				require.ErrorIs(t, err, ErrUnsafeCheckpoint)
+				require.Equal(t, before, snapshotComponentKeys(t, r, id), "initialization refusal must not recreate or overwrite any bank")
+			})
+		}
 	})
 }

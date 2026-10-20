@@ -228,7 +228,10 @@ func (s *session) validateAgentState(state agent.State) error {
 		s.mu.Unlock()
 		candidate.State = state
 		candidate.Revision++
-		_, _, err := s.captureSnapshotCandidate(time.Time{}, &candidate)
+		// A zero timestamp has a shorter v10 encoding than a real capture.
+		// Admission must include the timestamp even before the first checkpoint.
+		captured := time.Now()
+		_, _, err := s.captureSnapshotCandidate(captured, &candidate)
 		if errors.Is(err, agentv2.ErrCapacity) {
 			return agent.ErrStateTooLarge
 		}
@@ -239,6 +242,7 @@ func (s *session) validateAgentState(state agent.State) error {
 			s.mu.Lock()
 			value := snapshot{Version: s.state.Version, State: s.state, split: &componentSnapshotState{history: bytes.Clone(s.componentHistory)}}
 			value.State.Agent = candidate
+			value.State.Checkpoint.CapturedAt = captured
 			value.State.SRTP.Inbound = maps.Clone(s.state.SRTP.Inbound)
 			value.State.SRTP.Received = maps.Clone(s.state.SRTP.Received)
 			s.mu.Unlock()

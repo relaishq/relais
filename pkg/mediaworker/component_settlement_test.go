@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/netip"
 	"sync"
 	"testing"
@@ -216,6 +217,115 @@ func TestSplitSaveAdmissionRejectsOversizeBeforePublication(t *testing.T) {
 			s.componentMode = false
 			state.Bytes = bytes.Repeat([]byte{'a'}, 8192)
 			require.NoError(t, s.validateAgentState(state), "flag off retains the legacy limit")
+		})
+	}
+}
+
+func TestSplitSaveAdmissionMatchesFirstCaptureBoundary(t *testing.T) {
+	for _, phase := range []string{"before-first-ack", "after-first-ack", "before-handshake"} {
+		t.Run(phase, func(t *testing.T) {
+			s := componentWriterSession(t, sessionstore.NewMemory(), false)
+			if phase == "after-first-ack" {
+				require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+			} else {
+				require.True(t, s.state.Checkpoint.CapturedAt.IsZero())
+			}
+			// Find the real non-zero-time capture boundary without publishing or
+			// arming a DTLS bound. Binary search keeps this a short-mode test.
+			capture := func(size int) error {
+				candidate := cloneAgentState(s.state.Agent)
+				candidate.State = agent.State{Version: 1, Bytes: bytes.Repeat([]byte{'a'}, size)}
+				candidate.Revision++
+				_, _, err := s.captureSnapshotCandidate(time.Now(), &candidate)
+				return err
+			}
+			low, high := 0, s.worker.cfg.Agent.MaxStateBytes+1
+			for low+1 < high {
+				mid := (low + high) / 2
+				err := capture(mid)
+				if errors.Is(err, agentv2.ErrCapacity) {
+					high = mid
+				} else {
+					require.NoError(t, err)
+					low = mid
+				}
+			}
+			require.Positive(t, low)
+			require.NoError(t, capture(low))
+			require.ErrorIs(t, capture(low+1), agentv2.ErrCapacity)
+			connection := s.dtlsConn
+			if phase == "before-handshake" {
+				s.dtlsConn = nil
+				t.Cleanup(func() { s.dtlsConn = connection })
+			}
+			state := agent.State{Version: 1, Bytes: bytes.Repeat([]byte{'a'}, low)}
+			require.NoError(t, s.validateAgentState(state))
+			state.Bytes = append(state.Bytes, 'a')
+			require.ErrorIs(t, s.validateAgentState(state), agent.ErrStateTooLarge, "Save must refuse the first byte the capture cannot encode")
+			s.dtlsConn = connection
+			state.Bytes = state.Bytes[:low]
+			s.mu.Lock()
+			s.state.Agent.State = state
+			s.state.Agent.Revision++
+			s.mu.Unlock()
+			require.NoError(t, s.persistSnapshotMode(context.Background(), true), "the largest admitted Save must checkpoint")
+			t.Logf("largest admitted/captured v1 state: %d bytes", low)
+		})
+	}
+}
+
+type componentTupleOverrideStore struct {
+	*componentReplyStore
+	tuple *sessionstore.ComponentTuple
+}
+
+func (s *componentTupleOverrideStore) ReadComponents(ctx context.Context, id string) (sessionstore.ComponentTuple, error) {
+	if s.tuple != nil {
+		return *s.tuple, nil
+	}
+	return s.componentReplyStore.ReadComponents(ctx, id)
+}
+
+func TestSplitSettlementRejectsForeignLeaseAndPublication(t *testing.T) {
+	for _, kind := range []string{"lease-owner", "lease-epoch", "publication-owner", "publication-epoch"} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := context.Background()
+			store := &componentTupleOverrideStore{componentReplyStore: &componentReplyStore{Memory: sessionstore.NewMemory()}}
+			s := componentWriterSession(t, store, false)
+			require.NoError(t, s.persistSnapshotMode(ctx, true))
+			first, err := store.ReadComponents(ctx, s.id)
+			require.NoError(t, err)
+			bound := *s.dtlsAcknowledged
+			store.unknown.Store(true)
+			s.componentHistory = []byte("pending newer history")
+			require.ErrorIs(t, s.persistSnapshotMode(ctx, true), sessionstore.ErrTransient)
+			published, err := store.ReadComponents(ctx, s.id)
+			require.NoError(t, err)
+			want := sessionstore.ErrStateSuperseded
+			switch kind {
+			case "lease-owner":
+				published.Lease.Worker = netip.MustParseAddrPort("127.0.0.1:10001")
+				want = sessionstore.ErrLeaseLost
+			case "lease-epoch":
+				published.Lease.Epoch++
+				want = sessionstore.ErrLeaseLost
+			case "publication-owner":
+				published.Components = first.Components
+				published.Metadata.Owner = "127.0.0.1:10001"
+			case "publication-epoch":
+				published.Components = first.Components
+				published.Metadata.OwnerEpoch++
+			}
+			store.tuple = &published // Deliberately inconsistent fake-store tuple.
+			require.ErrorIs(t, s.settleComponentWrite(ctx), want)
+			require.Equal(t, first.Metadata, *s.componentMetadata)
+			require.Equal(t, bound, *s.dtlsAcknowledged)
+			require.EqualValues(t, 1, s.state.Checkpoint.Successes, "foreign evidence cannot acknowledge a pending write")
+			if want == sessionstore.ErrLeaseLost {
+				require.Nil(t, s.componentPending)
+			} else {
+				require.NotNil(t, s.componentPending, "another tenure cannot clear or rebase the pending write")
+			}
 		})
 	}
 }

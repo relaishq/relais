@@ -318,10 +318,12 @@ func (r *Redis) commitPrepared(ctx context.Context, lease Lease, request Compone
 			}
 			return ComponentTuple{}, &TransientError{Op: "component_settle", Err: errors.Join(err, e)}
 		}
-		if metadataEqual(settled.Metadata, prepared.record.metadata) {
-			settled.WrittenBytes = prepared.written
-			settled.RotationDeferred = prepared.deferred
-			return settled, nil
+		for _, prior := range uncertain {
+			if metadataEqual(settled.Metadata, prior.metadata) {
+				settled.WrittenBytes = prior.written
+				settled.RotationDeferred = prior.deferred
+				return settled, nil
+			}
 		}
 		if request.Expected == nil || !metadataEqual(settled.Metadata, *request.Expected) {
 			return ComponentTuple{}, ErrStateSuperseded
