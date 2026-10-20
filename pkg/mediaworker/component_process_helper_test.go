@@ -25,7 +25,10 @@ import (
 
 type splitProcessAgent struct{ value, history []byte }
 
-func (a *splitProcessAgent) Handle(context.Context, agent.Event) (agent.Effects, error) {
+func (a *splitProcessAgent) Handle(_ context.Context, event agent.Event) (agent.Effects, error) {
+	if event.Kind == agent.Control && event.Control.Name == "remember" {
+		a.history = bytes.Repeat(event.Control.Data, 8192)
+	}
 	return agent.Effects{}, nil
 }
 func (a *splitProcessAgent) Save(context.Context) (agent.State, error) {
@@ -84,7 +87,7 @@ func TestSplitCheckpointWorkerProcess(t *testing.T) {
 	require.NoError(t, err)
 	public, err := netip.ParseAddrPort(os.Getenv("RELAIS_SPLIT_PROCESS_PUBLIC"))
 	require.NoError(t, err)
-	w, err := New(Config{SplitCheckpoints: os.Getenv("RELAIS_SPLIT_PROCESS_ADMIT") == "1", DisableFrameCache: true, Agent: AgentConfig{Factory: agenthost.Factory(agenthost.Registration{Name: "history/v1", Factory: func(agent.FactoryArgs) agent.Agent {
+	w, err := New(Config{SplitCheckpoints: os.Getenv("RELAIS_SPLIT_PROCESS_ADMIT") == "1", DisableFrameCache: true, Agent: AgentConfig{CallbackTimeout: time.Second, Factory: agenthost.Factory(agenthost.Registration{Name: "history/v1", Factory: func(agent.FactoryArgs) agent.Agent {
 		return &splitProcessAgent{value: []byte(os.Getenv("RELAIS_SPLIT_PROCESS_WORKING")), history: []byte(os.Getenv("RELAIS_SPLIT_PROCESS_HISTORY"))}
 	}})}, Relay: &RelayConfig{Owners: store, Addr: leg, PublicAddr: public}})
 	require.NoError(t, err)

@@ -291,15 +291,25 @@ an admitted pair from older captures and rotation until its acknowledgement.
 A refusal restores both app
 fields and all staged effects. Audio/task events receive a later typed `Capacity`
 notice; Control returns `ErrCapacity` without consuming the message. Raw history
-overflow is classified internally as `ErrHistoryTooLarge`. The call continues. Cold writes and
-key rotation share spare refill/burst and always leave one hot checkpoint.
+overflow is classified internally as `ErrHistoryTooLarge`. Local tests cover
+continued transport checkpoints after these refusals; loaded timing acceptance
+remains pending. Cold writes and key rotation share refill/burst. Intent writes
+and active history holds leave one hot checkpoint. Required writes without a
+hold can spend their carried quota, including a store-chosen rotation. The
+default refill restores one hot checkpoint within 100 ms; a separate rotation
+budget needs a store API change outside this slice.
 Only successful writes debit changed ciphertexts plus published metadata/field
 bytes (with the existing framing reserve). Failed store writes are not app
 Capacity. Unknown outcomes keep their reservation until tuple settlement.
 Exact moves carry quota and history, reserving one maximum in-flight transaction.
 
-Registrations cannot raise those ceilings. Oversized declarations fail startup;
-actual content is checked again at runtime. Admission reports typed `Capacity`;
+Registrations cannot raise those ceilings. A working declaration whose encoded
+component alone exceeds the hot cap fails startup. Other declarations still
+need actual transport/host admission at runtime; the declaration is not a
+promise that every combination fits. A legacy-only explicit burst may start
+with new split admission off but refuses v10 adoption if it cannot hold two
+maximum transactions; use compatible split budgets throughout the pool.
+Actual content is checked again at runtime. Admission reports typed `Capacity`;
 an unavoidable transport snapshot overflow can refuse adoption or end the call
 with `ErrCapacity`. A store failure is a different outcome. The exact export and
 resume request must also fit the private HTTP wire bound, including base64.

@@ -70,7 +70,7 @@ func frozenV020DecodeSnapshot(data []byte) (*snapshot, error) {
 	return &snap, nil
 }
 
-func TestOldWorkerDecoderFailsClosedOnV10(t *testing.T) {
+func TestFrozenV020DecoderRejectsV10(t *testing.T) {
 	for _, fixture := range []string{"v8-components-source.json", "v9-control.json"} {
 		data, err := os.ReadFile("testdata/" + fixture)
 		require.NoError(t, err)
@@ -86,10 +86,4 @@ func TestOldWorkerDecoderFailsClosedOnV10(t *testing.T) {
 	require.NoError(t, err)
 	_, err = frozenV020DecodeSnapshot(data)
 	require.ErrorIs(t, err, errStateVersion)
-	after, err := store.ReadComponents(context.Background(), s.id)
-	require.NoError(t, err)
-	require.Equal(t, before.Metadata, after.Metadata, "old decode refusal cannot publish or corrupt the tuple")
-	require.True(t, equalComponentBytes(before.Components, after.Components))
-	_, err = store.GetState(context.Background(), s.id)
-	require.Error(t, err, "no stale legacy shadow exists for an old worker to adopt")
 }

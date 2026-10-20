@@ -289,16 +289,20 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   enabling it; existing v10 calls continue in v10 even on a worker with this
   flag off. This is the ADR 0012 bridge: roll all state-reading/mutating
   participants to this full v10 reader/writer/lifecycle build first, with common
-  keys and compatible registrations. Verify no old participants remain, then
-  enable new-call admission per pool. To roll back, disable new admission and
+  keys and compatible registrations. Verify no old participants remain.
+  Activation per pool must also wait for
+  #197 (default crash proof), #198 (traffic and capacity), and ADR 0012 slice G
+  (separately approved paid managed-store acceptance). This bridge alone does
+  not authorize activation. To roll back, disable new admission and
   keep the full v10 writer/lifecycle until every v10 call ends or drains; only
   then return to v0.2. Reader-only builds cannot serve live v10 calls.
   New v10 custom calls resolve zero app limits to 3,072 working bytes and 8,192
   history bytes. Legacy call profiles and explicit operator values stay intact.
   Split payload defaults are 80,000 B/s and 40,960 B burst; the 7,168-byte hot
   cap and 100 ms cadence are independent of cold history. History overflow or
-  churn is refused before acceptance with typed Capacity; it does not end an
-  ordinary call or slow its transport checkpoints.
+  churn is refused before acceptance with typed Capacity. Local tests cover
+  continued transport checkpoints after these refusals and required writes
+  after cold updates; loaded timing and capacity acceptance remain pending.
   See [the component store](dev/session-store.md#component-checkpoints-v10).
   `-agent-drain-task-budget` defaults to 2 s; startup rejects values below 0
   or above 2 s. `-agent-drain-move-reserve` has no default: unset skips the

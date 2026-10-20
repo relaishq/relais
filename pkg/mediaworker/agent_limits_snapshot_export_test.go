@@ -50,12 +50,14 @@ func TestSnapshotClockRollbackCallSurvives(t *testing.T) {
 		require.Greater(t, writes, uint64(2), "periodic checkpoints must continue after rollback")
 	})
 }
-func TestSnapshotClockRollbackRefillResumes(t *testing.T) {
+func TestSnapshotClockRollbackWaitsForLastDebit(t *testing.T) {
 	l := SnapshotLimits{}.defaults()
 	at := time.Now()
 	b := snapshotBucket{tokens: 17, at: at}
 	require.EqualValues(t, 17, b.available(l, at.Add(-time.Second)))
-	require.EqualValues(t, 17+float64(l.BytesPerSecond)/10, b.available(l, at.Add(-900*time.Millisecond)))
+	require.EqualValues(t, 17, b.available(l, at.Add(-900*time.Millisecond)))
+	require.Equal(t, at, b.at)
+	require.EqualValues(t, 17+float64(l.BytesPerSecond)/10, b.available(l, at.Add(100*time.Millisecond)))
 }
 
 func TestSnapshotSettings(t *testing.T) {

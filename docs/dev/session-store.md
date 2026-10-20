@@ -81,8 +81,10 @@ legacy state key and encoding. This is the ADR 0012 **bridge release**: it can
 read, write, renew, transfer, and release live v10 calls with new-call split
 admission off. First roll **all** state-reading/mutating participants (workers,
 control, cleanup and listing paths) to the bridge, with common keys and compatible
-registrations. Verify that no old participants remain. Then enable admission per
-pool. For rollback, turn admission off first and retain a full v10 writer and
+registrations. Verify that no old participants remain. Enable admission per
+pool only after #197 (default crash proof), #198 (traffic and capacity), and ADR
+0012 slice G (separately approved paid managed-store acceptance) pass. For
+rollback, turn admission off first and retain a full v10 writer and
 lifecycle implementation until every v10 call ends or drains. Only then return to
 v0.2. A reader-only build is never a safe rollback target. There is no
 history truncation, downconversion, or legacy shadow write.
@@ -98,16 +100,30 @@ host allowance and separate move memory. No state is truncated.
 Split rate/burst defaults are 80,000 B/s and 40,960 B, independently of legacy
 81,920 B/s and 28,672 B. The hot reservation is `10*7,168+7,168 = 78,848 B/s`,
 not the whole transaction times cadence. Cold history and key rotation share
-spare tokens, leaving one hot checkpoint. History admission checks the candidate
+spare tokens. Intent writes and active history holds preserve one hot checkpoint.
+Required adoption and transport writes without a hold can spend their full
+carried quota. A store-chosen rotation during such a write can consume that
+reserve; 80,000 B/s refills one maximum hot checkpoint within 100 ms. A separate
+rotation budget needs a store API change and is outside this slice.
+History admission checks the candidate
 transaction plus that hot reserve before acceptance, with a maximum transaction
 also reserved for an unresolved writer. An admitted pair holds a byte reservation
 until a matching acknowledgement; older captures and rotation cannot spend it.
 Refusals restore the pair and report typed
-Capacity without ending an ordinary call. Successful debits include changed
+Capacity before acceptance. Local tests cover continued transport checkpoints
+after refusals and near-limit move/drain adoption; loaded timing acceptance
+remains with #198. Successful debits include changed
 ciphertexts and published metadata/field bytes. Exact moves preserve quota and
 reserve one maximum in-flight transaction. Transport stays on its 100 ms clock
 and side effects retain forced checkpoint barriers. Store failure is not app
 Capacity.
+
+A bridge using explicit legacy-only budgets can start for legacy calls but
+refuses v10 adoption with typed Capacity when its burst cannot hold two maximum
+v10 transactions. For example, an explicit 28,672-byte burst cannot adopt v10
+at the default transaction bound. Keep compatible split budgets across every
+pool participant, even when its new-call admission flag is off. No state is
+truncated or converted to fit a smaller target.
 
 The additive `sessionstore.ComponentStore` API saves a complete capture with
 `CommitComponents` and restores it with one primary `ReadComponents` script.

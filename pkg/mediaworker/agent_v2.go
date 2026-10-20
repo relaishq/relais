@@ -87,10 +87,13 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 	legacyBounds := reg.Bounds
 	reg.Bounds = effectiveAgentBounds(reg.Declared, s.snapshotLimits(), s.componentMode)
 	if reg.Name == "" || reg.Name == "echo" || reg.Name == "demo" || reg.Factory == nil ||
-		reg.Bounds.MaxHistoryBytes < 0 || reg.Bounds.MaxHistoryBytes > componentMaxHistoryBytes || reg.Bounds.MaxStateBytes <= 0 || reg.Bounds.MaxStateBytes > 64<<10 || reg.Bounds.MaxPendingBytes <= 0 ||
+		reg.Declared.MaxHistoryBytes < 0 || reg.Declared.MaxHistoryBytes > componentMaxHistoryBytes || reg.Bounds.MaxStateBytes <= 0 || reg.Bounds.MaxStateBytes > 64<<10 || reg.Bounds.MaxPendingBytes <= 0 ||
 		reg.Bounds.MaxMailboxBytes <= 0 || reg.Bounds.MaxMailboxBytes > s.snapshotLimits().MoveBytesPerSession || reg.Bounds.MaxActiveTasks <= 0 ||
 		reg.Bounds.MaxAudioBytes < 0 || reg.Bounds.MaxAudioDuration < 0 {
 		return s.agentError(fmt.Errorf("%w: invalid internal registration", agent.ErrIncompatibleAgent))
+	}
+	if s.componentMode && reg.Bounds.MaxStateBytes+6+componentCipherOverhead > s.snapshotLimits().MaxBytes {
+		return s.agentError(fmt.Errorf("%w: declared working component cannot fit operator hot cap", agent.ErrStateTooLarge))
 	}
 	for _, kind := range reg.TaskKinds {
 		if kind == "" {

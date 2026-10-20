@@ -39,13 +39,17 @@ func (b componentBudgets) admit(c sessionComponents, m componentMetadata) (compo
 	if err != nil {
 		return size, err
 	}
+	return size, b.admitSizes(size)
+}
+
+func (b componentBudgets) admitSizes(size componentSizes) error {
 	for _, part := range []struct {
 		name      string
 		size, cap int
 	}{{"hot", size.Hot, b.Hot}, {"setup", size.Setup, b.Setup}, {"history", size.History, b.History}, {"transaction", size.Total, b.Total}} {
 		if part.cap <= 0 || part.size > part.cap {
-			return size, fmt.Errorf("%w: v10 %s encoding %d bytes exceeds %d", agent.ErrCapacity, part.name, part.size, part.cap)
+			return fmt.Errorf("%w: v10 %s encoding %d bytes exceeds %d", agent.ErrCapacity, part.name, part.size, part.cap)
 		}
 	}
-	return size, nil
+	return nil
 }

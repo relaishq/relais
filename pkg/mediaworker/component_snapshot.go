@@ -215,9 +215,13 @@ func (s *session) writeComponents(ctx context.Context, lease sessionstore.Lease,
 		}
 		s.snapshotBudgetMu.Unlock()
 		available -= componentProtocolReserve
-		// Cold changes and rotation spend only spare tokens. Keep one required
-		// hot checkpoint independent of their size and of intent barriers.
-		available -= s.snapshotLimits().MaxBytes
+		// Intent writes and held app pairs preserve a following hot checkpoint.
+		// Required adoption/transport writes can spend the carried transaction.
+		// Without a hold, store-chosen rotation shares this same budget; a
+		// separate rotation reserve would require a store API change.
+		if intent || historyHeld {
+			available -= s.snapshotLimits().MaxBytes
+		}
 		if available <= 0 {
 			if historyHeld {
 				return 0, errCheckpointSkipped

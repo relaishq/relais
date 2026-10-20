@@ -90,9 +90,10 @@ func (s *session) captureSnapshotCandidateMode(captured time.Time, candidate *ag
 	s.checkpointRates(&state.Checkpoint)
 	state.SRTP.Inbound = maps.Clone(state.SRTP.Inbound)
 	state.SRTP.Received = maps.Clone(state.SRTP.Received)
-	state.Agent = cloneAgentState(state.Agent)
 	if candidate != nil {
 		state.Agent = cloneAgentState(*candidate)
+	} else {
+		state.Agent = cloneAgentState(state.Agent)
 	}
 	var split *componentSnapshotState
 	if s.componentMode {
@@ -206,7 +207,7 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	tooSoon := s.snapshotStored.Load() && time.Since(s.lastCheckpoint) < s.worker.cfg.Agent.SaveInterval
 	if !force && changed && tooSoon {
 		s.mu.Unlock()
-		return errCheckpointSkipped
+		return s.noteSnapshotSkip()
 	}
 	if v2 {
 		s.snapshotBudgetMu.Lock()
@@ -265,7 +266,7 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 		s.mu.Lock()
 		s.state.Checkpoint.Attempts-- // discarded capture is not a write attempt
 		s.mu.Unlock()
-		return errCheckpointSkipped
+		return s.noteSnapshotSkip()
 	}
 	wireBytes := len(state) + snapshotEnvelopeBytes
 	if pair.V2 != nil && !s.componentMode {
@@ -281,7 +282,7 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 		}
 		if available < float64(required) {
 			if intent {
-				return errCheckpointSkipped
+				return s.noteSnapshotSkip()
 			}
 			return fmt.Errorf("%w: required v2 snapshot byte budget", agent.ErrCapacity)
 		}
@@ -293,6 +294,8 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	}
 	if err == nil {
 		s.ackSnapshot(pair, dtlsNext, captured, wireBytes, intent)
+	} else if errors.Is(err, errCheckpointSkipped) {
+		err = s.noteSnapshotSkip()
 	} else if s.componentPending == nil {
 		s.failSnapshot(v2, intent)
 	}
@@ -304,6 +307,12 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 		s.close()
 	}
 	return err
+}
+
+func (s *session) noteSnapshotSkip() error {
+	s.worker.metrics.snapshotSkips.Add(1)
+	metrics.CheckpointWrites.WithLabelValues("skipped").Inc()
+	return errCheckpointSkipped
 }
 
 // Unknown component outcomes are counted only when settlement resolves them.

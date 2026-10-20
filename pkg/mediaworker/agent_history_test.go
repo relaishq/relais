@@ -77,7 +77,10 @@ func TestSDKHistoryDefaultProfiles(t *testing.T) {
 					working, history = 3072, 8192
 				}
 				if explicit {
-					working, history = 2048, 1024
+					working = 2048
+					if split {
+						history = 1024
+					}
 				}
 				require.Equal(t, working, args.MaxStateBytes)
 				require.Equal(t, history, args.MaxHistoryBytes)

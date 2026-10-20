@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"net/netip"
@@ -19,6 +20,7 @@ import (
 
 	codec "github.com/relaishq/relais/internal/componentcodec"
 	"github.com/relaishq/relais/internal/redistestcluster"
+	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/relay"
@@ -62,7 +64,17 @@ func TestSplitCheckpointProcessPlannedMoves(t *testing.T) {
 	t.Run("cluster", func(t *testing.T) { testSplitProcessTakeover(t, redistestcluster.Addresses(t), true, true) })
 }
 
-func testSplitProcessTakeover(t *testing.T, addrs []string, cluster, planned bool) {
+func TestSplitCheckpointProcessUpdatedHistorySIGKILL(t *testing.T) {
+	if testing.Short() {
+		t.Skip("mid-call SDK history update and real process takeover")
+	}
+	t.Run("standalone", func(t *testing.T) {
+		testSplitProcessTakeover(t, []string{redistestcluster.Standalone(t)}, false, false, true)
+	})
+	t.Run("cluster", func(t *testing.T) { testSplitProcessTakeover(t, redistestcluster.Addresses(t), true, false, true) })
+}
+
+func testSplitProcessTakeover(t *testing.T, addrs []string, cluster, planned bool, updateHistory ...bool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
@@ -130,6 +142,10 @@ func testSplitProcessTakeover(t *testing.T, addrs []string, cluster, planned boo
 		}
 	}
 	working, history := "working-state-byte-exact", "non-empty bounded test history: previous turn"
+	updated := len(updateHistory) > 0 && updateHistory[0]
+	if updated {
+		working = strings.Repeat("w", 3072)
+	}
 	source := start("0", true, working, history)
 	runCtx, stop := context.WithCancel(ctx)
 	runDone := make(chan struct{})
@@ -156,6 +172,32 @@ func testSplitProcessTakeover(t *testing.T, addrs []string, cluster, planned boo
 		before = value
 		return true
 	}, 6*time.Second, 5*time.Millisecond)
+	if updated {
+		old := before
+		require.Eventually(t, func() bool {
+			_, e := source.remote.AgentControl(ctx, call.SessionID(), agent.ControlMessage{ID: "mid-call-history", Sequence: 1, Name: "remember", Data: []byte{'h'}})
+			if errors.Is(e, agent.ErrControlNotReady) || errors.Is(e, agent.ErrCapacity) {
+				return false
+			}
+			require.NoError(t, e)
+			return e == nil
+		}, 3*time.Second, 10*time.Millisecond)
+		history = strings.Repeat("h", 8192)
+		require.Eventually(t, func() bool {
+			tuple, e := store.ReadComponents(ctx, call.SessionID())
+			if e != nil {
+				return false
+			}
+			var saved []byte
+			if codec.Unmarshal(tuple.Components.History, codec.History, &saved) != nil || !bytes.Equal(saved, []byte(history)) {
+				return false
+			}
+			before = tuple
+			return true
+		}, 3*time.Second, 5*time.Millisecond)
+		require.Equal(t, old.Metadata.References[1], before.Metadata.References[1], "history-only Save retains the working ciphertext")
+		require.NotEqual(t, old.Metadata.References[2], before.Metadata.References[2])
+	}
 	require.Equal(t, source.addr, before.Lease.Worker)
 	target := start("1", false, "", "") // no history source; new-call split admission is OFF
 	if planned {
