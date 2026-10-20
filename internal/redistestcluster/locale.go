@@ -53,10 +53,17 @@ func UTF8Environment(t *testing.T) []string {
 }
 
 // Standalone starts an owned, persistence-free UTF-8 Redis on a free port.
+// Like owned Cluster tests, it requires explicit integration-test opt-in.
 func Standalone(t *testing.T) string {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("owned Redis process excluded from short mode")
+	}
+	if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") != "1" && os.Getenv("RELAIS_TEST_REDIS_CLUSTER") != "1" {
+		t.Skip("set RELAIS_TEST_REDIS_REQUIRE=1 or RELAIS_TEST_REDIS_CLUSTER=1 to start owned UTF-8 Redis")
+	}
+	if _, err := exec.LookPath("redis-server"); err != nil {
+		t.Fatal(err)
 	}
 	dir := Directory(t, "standalone")
 	addr, err := clusterprocess.FreeTCP()

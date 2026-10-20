@@ -151,9 +151,13 @@ caller owns its lifetime. `RELAIS_TEST_REDIS_ADDR` enables Redis tests under a
 fresh random prefix, removed by SCAN/DEL at cleanup. An absent or unavailable
 explicit endpoint skips local Redis tests. Set `RELAIS_TEST_REDIS_REQUIRE=1` to
 fail when the endpoint is missing or unreachable. PR race unit tests require
-Redis. The PR call-harness job supplies `redis:7`
-and checks service health. Its short step clears the Redis address and disables
-required mode; a separate race step runs `TestRelayUncertainTransferSurvives`
+Redis. Tests that start their own standalone Redis require
+`RELAIS_TEST_REDIS_REQUIRE=1` or `RELAIS_TEST_REDIS_CLUSTER=1`; an endpoint alone
+is not permission to launch a local server. With either switch they strictly
+require `redis-server` and a generated `en_US.UTF-8` locale. Without either
+switch they skip before checking tools or locales. The PR call-harness job
+supplies `redis:7` and checks service health. Its short step clears the Redis
+address and disables required mode; a separate race step runs `TestRelayUncertainTransferSurvives`
 with Redis required. Full-matrix race and timing steps require Redis for all
 Redis harness scenarios.
 
