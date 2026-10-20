@@ -41,6 +41,7 @@ func authorizeTestControl(t *testing.T, p *Plane) {
 	lease, err := p.restart.store.ClaimControl(context.Background(), randomToken(), ControlLeaseTTL)
 	require.NoError(t, err)
 	p.restart.guard.Store(&controlGuard{lease: lease, deadline: started.Add(ControlLeaseTTL)})
+	p.restart.healthy.Store(true)
 	p.restart.ready.Store(true)
 }
 func TestControlRestartReadinessGatesEveryMutation(t *testing.T) {
@@ -178,9 +179,9 @@ func TestControlUncertainCreateRetainsReservationUntilObserved(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, records, key)
 	unreachable.Store(true)
-	require.Error(t, p.reconcileCreates(ctx))
+	require.NoError(t, p.reconcileCreates(ctx))
 	p.mu.Lock()
-	require.Equal(t, 1, worker.reserved)
+	require.Zero(t, worker.reserved)
 	p.mu.Unlock()
 	unreachable.Store(false)
 	require.NoError(t, p.reconcileCreates(ctx))
@@ -253,32 +254,18 @@ func (s *lostCreateClear) PutControlRecord(ctx context.Context, lease sessionsto
 	}
 	return nil
 }
-func TestControlCreateLostClearReplyStillAdoptsAndUnreserves(t *testing.T) {
+func TestControlCreateLostClearReplyKeepsSuccess(t *testing.T) {
 	ctx := context.Background()
-	store := &lostCreateClear{Memory: sessionstore.NewMemory()}
-	address := netip.MustParseAddrPort("127.0.0.1:23456")
-	lease, err := store.Claim(ctx, "created-before-lost-clear", address, time.Minute)
-	require.NoError(t, err)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		privateapi.Write(w, mediaworker.WorkerStatus{Address: address, InventoryKnown: true, Inventory: []mediaworker.InstalledSession{{ID: lease.SessionID, Owner: address, Epoch: lease.Epoch}}})
-	}))
-	defer server.Close()
-	p := New(&fakeRelay{}, store)
+	p, a, _, _ := setup(t)
+	store := &lostCreateClear{Memory: p.store.(*sessionstore.Memory)}
+	p.store = store
 	authorizeTestControl(t, p)
-	require.NoError(t, p.Register("a", address, &RemoteWorker{URL: server.URL}))
-	worker := p.workers["a"]
-	worker.reserved = 1
-	key, err := p.startCreate(ctx, worker)
-	require.NoError(t, err)
 	store.drop.Store(true)
-	require.ErrorIs(t, p.finishCreate(ctx, key, worker, lease.SessionID, nil), privateapi.ErrUncertain)
-	records, err := store.ControlRecords(ctx, p.restart.guard.Load().lease)
+	id, _, err := p.Create(ctx, "offer", "a")
 	require.NoError(t, err)
-	require.NotContains(t, records, key)
-	require.Equal(t, 1, worker.reserved)
+	require.True(t, a.runs(id))
+	require.Zero(t, p.workers["a"].reserved)
 	require.NoError(t, p.reconcileCreates(ctx))
-	p.mu.Lock()
-	require.Zero(t, worker.reserved)
-	require.NotNil(t, p.calls[lease.SessionID])
-	p.mu.Unlock()
+	require.NotNil(t, p.calls[id])
+	require.Empty(t, p.restart.creates)
 }

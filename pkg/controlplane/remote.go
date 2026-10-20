@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -25,6 +26,9 @@ type RemoteWorker struct {
 	diagnosticContext context.Context
 }
 
+// ErrCreateNotSent proves the worker could not have accepted this request.
+var ErrCreateNotSent = errors.New("controlplane: create request not sent")
+
 // RemoteRelay implements Relay and exposes registry operations to bootstrap.
 type RemoteRelay struct {
 	URL               string
@@ -44,8 +48,15 @@ func (w *RemoteWorker) CreateSession(ctx context.Context, offer string) (string,
 	return id, answer, err
 }
 func (w *RemoteWorker) CreateSessionWithLease(ctx context.Context, offer string) (string, string, sessionstore.Lease, error) {
+	if err := ctx.Err(); err != nil {
+		return "", "", sessionstore.Lease{}, errors.Join(ErrCreateNotSent, err)
+	}
 	var reply mediaworker.CreateReply
 	err := privateapi.Do(ctx, remoteClient(w.Client), w.URL, http.MethodPost, "/sessions", mediaworker.CreateRequest{Offer: offer}, &reply, mediaworker.RemoteErrors)
+	var dial *net.OpError
+	if errors.As(err, &dial) && dial.Op == "dial" {
+		err = errors.Join(ErrCreateNotSent, dial)
+	}
 	return reply.ID, reply.Answer, reply.Lease, err
 }
 func (w *RemoteWorker) EndSession(id string) error {

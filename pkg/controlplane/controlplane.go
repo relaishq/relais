@@ -119,6 +119,7 @@ type ReplayRelay interface {
 }
 
 type registration struct {
+	createMu          sync.RWMutex // isolate create observation cuts to this worker
 	name              string
 	addr              netip.AddrPort
 	worker            Worker
@@ -262,6 +263,12 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 	delete(p.pendingWorkers, name)
 	p.loadVersion++
 	p.mu.Unlock()
+	if p.restart != nil {
+		select {
+		case p.restart.authority <- struct{}{}:
+		default:
+		}
+	}
 	if w, ok := worker.(interface{ StartHeartbeats(mediaworker.Heartbeats) }); ok {
 		w.StartHeartbeats(p)
 	}
@@ -1211,7 +1218,7 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 		c.stateMu.Lock()
 		cs := CallStatus{ID: c.id, LastMove: c.lastMove, MoveCount: c.moveCount, TakeoverCount: c.takeoverCount, LastMoveKind: c.lastMoveKind}
 		c.stateMu.Unlock()
-		lease, err := p.store.Get(ctx, c.id)
+		lease, err := p.statusLease(ctx, c.id)
 		if errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrEnded) {
 			if c.mu.TryLock() {
 				p.expiredLocked(ctx, c)
@@ -1241,6 +1248,26 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 	sort.Slice(status.Workers, func(i, j int) bool { return status.Workers[i].Name < status.Workers[j].Name })
 	sort.Slice(status.Calls, func(i, j int) bool { return status.Calls[i].ID < status.Calls[j].ID })
 	return status, nil
+}
+
+// Redis can refuse fresh sockets briefly while draining connections queued
+// during an outage. Status retries only authoritative reads, never effects or
+// cached ownership, within a bounded part of the private HTTP request budget.
+func (p *Plane) statusLease(ctx context.Context, id string) (sessionstore.Lease, error) {
+	if p.restart == nil {
+		return p.store.Get(ctx, id)
+	}
+	bounded, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	for {
+		lease, err := p.store.Get(bounded, id)
+		if !errors.Is(err, sessionstore.ErrTransient) || bounded.Err() != nil {
+			return lease, err
+		}
+		if !restartWait(bounded, 100*time.Millisecond) {
+			return lease, err
+		}
+	}
 }
 
 // drainParallelism bounds the moves a drain runs at once: one per CPU the

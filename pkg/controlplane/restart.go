@@ -24,7 +24,12 @@ import (
 // ErrNotReady distinguishes process readiness from a worker agent's startup
 // refusal. The wire retains the existing control_not_ready code and decodes as
 // agentv2.ErrControlNotReady for compatibility with current clients.
-var ErrNotReady = fmt.Errorf("controlplane: restart not ready: %w", agentv2.ErrControlNotReady)
+var ErrNotReady error = &controlReadinessError{}
+
+type controlReadinessError struct{}
+
+func (*controlReadinessError) Error() string { return "controlplane: not ready for mutations" }
+func (*controlReadinessError) Unwrap() error { return agentv2.ErrControlNotReady }
 
 const ControlLeaseTTL = 2 * time.Second
 
@@ -68,7 +73,10 @@ type restartState struct {
 	mu             sync.Mutex
 	status         RebuildStatus
 	registrationMu sync.Mutex
-	createMu       sync.RWMutex
+	healthy        atomic.Bool
+	stopping       atomic.Bool
+	authority      chan struct{}
+	logs           map[string]time.Time
 	creates        map[string]*pendingCreate
 }
 
@@ -87,7 +95,7 @@ func (p *Plane) EnableRestart() error {
 	if !ok {
 		return errors.New("controlplane: restart requires a durable control store")
 	}
-	p.restart = &restartState{store: store, status: RebuildStatus{Phase: "waiting_lease", Started: time.Now(), Outcomes: []RestartOutcome{}}}
+	p.restart = &restartState{store: store, authority: make(chan struct{}, 1), status: RebuildStatus{Phase: "waiting_lease", Started: time.Now(), Outcomes: []RestartOutcome{}}}
 	return nil
 }
 func (p *Plane) controlAuthority() bool {
@@ -98,7 +106,7 @@ func (p *Plane) controlAuthority() bool {
 	return guard != nil && time.Now().Before(guard.deadline)
 }
 func (p *Plane) mutationReady() bool {
-	return p.restart == nil || p.restart.ready.Load() && p.controlAuthority()
+	return p.restart == nil || !p.restart.stopping.Load() && p.restart.ready.Load() && p.restart.healthy.Load() && p.controlAuthority()
 }
 func (p *Plane) requireMutationReady() error {
 	if !p.mutationReady() {
@@ -133,7 +141,24 @@ func (p *Plane) rebuildPhase(phase string, err error) {
 	p.restart.status.Error = ""
 	if err != nil {
 		p.restart.status.Error = err.Error()
+		p.restartLogLocked("phase:"+phase, "control not ready phase=%s cause=%v", phase, err)
 	}
+}
+
+func (p *Plane) restartLog(key, format string, args ...any) {
+	p.restart.mu.Lock()
+	defer p.restart.mu.Unlock()
+	p.restartLogLocked(key, format, args...)
+}
+func (p *Plane) restartLogLocked(key, format string, args ...any) {
+	if p.restart.logs == nil {
+		p.restart.logs = map[string]time.Time{}
+	}
+	if time.Since(p.restart.logs[key]) < time.Second {
+		return
+	}
+	p.restart.logs[key] = time.Now()
+	log.Printf(format, args...)
 }
 func (p *Plane) restartOutcome(kind, id, outcome, code string) {
 	p.restart.mu.Lock()
@@ -172,105 +197,184 @@ func (p *Plane) saveRegistration(ctx context.Context, name string, addr netip.Ad
 	return p.controlRecord(ctx, "worker:"+name, FixedWorker{Name: name, URL: remote.URL, Address: addr})
 }
 
-// RunManaged acquires authority, rebuilds, then enables detection. Any failed
-// renewal removes readiness immediately and stops the detector. This is one
-// active process, not a passive/active authority-generation protocol.
-func (p *Plane) RunManaged(ctx context.Context, workers []FixedWorker) error {
+// AuthorityChanges wakes relay registration when a lease becomes usable.
+func (p *Plane) AuthorityChanges() <-chan struct{} {
 	if p.restart == nil {
-		return errors.New("controlplane: EnableRestart required")
+		return nil
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	return p.restart.authority
+}
+
+// BeginShutdown pauses work while the lease keeper protects handlers that are
+// still draining. The caller cancels RunManaged only after handlers stop.
+func (p *Plane) BeginShutdown() {
+	if p.restart == nil {
+		return
+	}
+	p.restart.stopping.Store(true)
+	p.restart.ready.Store(false)
+	p.rebuildPhase("stopping", nil)
+}
+
+// maintainControl keeps trying the same tenure through transient store errors.
+// A definitive lost lease requires a fresh claim and a full rebuild.
+func (p *Plane) maintainControl(ctx context.Context, fatal chan<- error) {
 	holder := randomToken()
 	var lease sessionstore.ControlLease
 	for {
 		started := time.Now()
+		// Avoid accumulating half-second abandoned TCP connections while a
+		// store is paused. Local authority expiry is enforced independently.
+		bounded, stop := context.WithTimeout(ctx, ControlLeaseTTL/2)
+		var next sessionstore.ControlLease
 		var err error
-		lease, err = p.restart.store.ClaimControl(ctx, holder, ControlLeaseTTL)
+		claiming := lease.Holder == ""
+		if claiming {
+			next, err = p.restart.store.ClaimControl(bounded, holder, ControlLeaseTTL)
+		} else {
+			next, err = p.restart.store.RenewControl(bounded, lease, ControlLeaseTTL)
+		}
+		stop()
+		if ctx.Err() != nil {
+			return
+		}
+		delay := ControlLeaseTTL / 4
 		if err == nil {
-			// A delayed reply never extends the locally safe authority interval.
+			lease = next
 			deadline := started.Add(ControlLeaseTTL)
-			if !time.Now().Before(deadline) {
-				continue
-			}
-			p.restart.guard.Store(&controlGuard{lease: lease, deadline: deadline})
-			break
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if !errors.Is(err, sessionstore.ErrLeaseHeld) && !errors.Is(err, sessionstore.ErrTransient) {
-			p.rebuildPhase("failed", err)
-			return err
-		}
-		p.rebuildPhase("waiting_lease", err)
-		if !restartWait(ctx, 50*time.Millisecond) {
-			return ctx.Err()
-		}
-	}
-	p.restart.mu.Lock()
-	p.restart.status.LeaseWait = time.Since(p.restart.status.Started)
-	p.restart.mu.Unlock()
-	p.rebuildPhase("rebuilding", nil)
-	renewDone := make(chan struct{})
-	go func() {
-		defer close(renewDone)
-		ticker := time.NewTicker(ControlLeaseTTL / 4)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				started := time.Now()
-				guard := p.restart.guard.Load()
-				if guard == nil {
-					return
+			if time.Now().Before(deadline) {
+				wasHealthy := p.restart.healthy.Swap(true)
+				p.restart.guard.Store(&controlGuard{lease: lease, deadline: deadline})
+				p.restart.mu.Lock()
+				if p.restart.status.LeaseWait == 0 {
+					p.restart.status.LeaseWait = time.Since(p.restart.status.Started)
 				}
-				bounded, stop := context.WithTimeout(ctx, ControlLeaseTTL/4)
-				next, err := p.restart.store.RenewControl(bounded, guard.lease, ControlLeaseTTL)
-				stop()
-				if err != nil || !started.Before(guard.deadline) || !time.Now().Before(guard.deadline) {
-					p.restart.ready.Store(false)
-					p.restart.guard.Store(nil)
-					if err == nil {
-						err = sessionstore.ErrLeaseLost
+				p.restart.mu.Unlock()
+				if claiming || !wasHealthy {
+					select {
+					case p.restart.authority <- struct{}{}:
+					default:
 					}
-					p.rebuildPhase("lease_lost", err)
-					cancel()
-					return
 				}
-				p.restart.guard.Store(&controlGuard{lease: next, deadline: started.Add(ControlLeaseTTL)})
+			} else {
+				p.restart.healthy.Store(false)
+				p.restart.ready.Store(false)
+				delay = 0
+			}
+		} else {
+			p.restart.healthy.Store(false)
+			p.restart.ready.Store(false)
+			switch {
+			case errors.Is(err, sessionstore.ErrLeaseLost):
+				p.restart.guard.Store(nil)
+				lease = sessionstore.ControlLease{}
+				p.rebuildPhase("lease_lost", err)
+				delay = 0
+			case errors.Is(err, sessionstore.ErrLeaseHeld), errors.Is(err, sessionstore.ErrTransient), errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+				phase := "waiting_lease"
+				if !claiming {
+					phase = "renewing"
+				}
+				p.rebuildPhase(phase, err)
+				delay = 250 * time.Millisecond
+				if claiming {
+					delay = 50 * time.Millisecond
+				}
+			default:
+				p.restart.guard.Store(nil)
+				p.rebuildPhase("failed", err)
+				fatal <- fmt.Errorf("controlplane: control lease: %w", err)
+				return
 			}
 		}
-	}()
-	defer func() {
-		p.restart.ready.Store(false)
-		cancel()
-		<-renewDone
-		// Caller shuts down HTTP before relinquishing this process's authority.
-		// Expiry remains the fallback if the store is unavailable during shutdown.
-	}()
-	for {
-		err := p.rebuild(ctx, workers)
-		if err == nil {
-			break
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		p.rebuildPhase("rebuilding", err)
-		if !restartWait(ctx, 100*time.Millisecond) {
-			return ctx.Err()
+		if !restartWait(ctx, delay) {
+			return
 		}
 	}
-	p.restart.mu.Lock()
-	p.restart.status.Phase = "ready"
-	p.restart.status.Error = ""
-	p.restart.status.ReadyAt = time.Now()
-	p.restart.status.Duration = time.Since(p.restart.status.Started)
-	p.restart.mu.Unlock()
-	p.restart.ready.Store(true)
+}
+
+// RunManaged pauses detection at the local lease deadline, retains the process
+// through store outages, and rebuilds after reacquisition. Renewal outlives
+// cancellation until all recovery jobs have stopped.
+func (p *Plane) RunManaged(ctx context.Context, workers []FixedWorker) error {
+	if p.restart == nil {
+		return errors.New("controlplane: EnableRestart required")
+	}
+	renewCtx, stopRenew := context.WithCancel(context.WithoutCancel(ctx))
+	renewDone := make(chan struct{})
+	fatal := make(chan error, 1)
+	go func() { defer close(renewDone); p.maintainControl(renewCtx, fatal) }()
+	var stopWork context.CancelFunc
+	var workDone chan error
+	stop := func() {
+		p.restart.ready.Store(false)
+		if stopWork != nil {
+			stopWork()
+			<-workDone
+			stopWork = nil
+		}
+	}
+	defer func() { stop(); stopRenew(); <-renewDone }()
+	var built uint64
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-fatal:
+			return err
+		case err := <-workDone:
+			stopWork, workDone = nil, nil
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("controlplane: detector stopped unexpectedly: %v", err)
+		default:
+		}
+		if p.restart.stopping.Load() {
+			stop()
+			if !restartWait(ctx, 25*time.Millisecond) {
+				return nil
+			}
+			continue
+		}
+		guard := p.restart.guard.Load()
+		if guard == nil || !time.Now().Before(guard.deadline) {
+			stop()
+			built = 0
+			if guard != nil {
+				p.rebuildPhase("renewing", errors.New("local control lease deadline elapsed; detection paused"))
+			}
+		} else if p.restart.healthy.Load() {
+			if built != guard.lease.Epoch {
+				stop()
+				if err := p.rebuild(ctx, workers); err != nil {
+					p.rebuildPhase("rebuilding", err)
+				} else if current := p.restart.guard.Load(); current != nil && current.lease.Holder == guard.lease.Holder && current.lease.Epoch == guard.lease.Epoch && p.controlAuthority() && p.restart.healthy.Load() {
+					built = guard.lease.Epoch
+					workCtx, cancel := context.WithCancel(ctx)
+					stopWork = cancel
+					workDone = make(chan error, 1)
+					go func() { workDone <- p.runManagedWork(workCtx, workers) }()
+				}
+			}
+			if built != 0 {
+				p.restart.mu.Lock()
+				p.restart.status.Phase, p.restart.status.Error = "ready", ""
+				if p.restart.status.ReadyAt.IsZero() {
+					p.restart.status.ReadyAt = time.Now()
+					p.restart.status.Duration = time.Since(p.restart.status.Started)
+				}
+				p.restart.mu.Unlock()
+				p.restart.ready.Store(true)
+			}
+		}
+		if !restartWait(ctx, 25*time.Millisecond) {
+			return nil
+		}
+	}
+}
+
+func (p *Plane) runManagedWork(ctx context.Context, workers []FixedWorker) error {
 	discoverDone := make(chan struct{})
 	go func() {
 		defer close(discoverDone)
@@ -281,15 +385,21 @@ func (p *Plane) RunManaged(ctx context.Context, workers []FixedWorker) error {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				for _, worker := range workers {
-					_ = p.discoverWorker(ctx, worker, nil)
+				if !p.controlAuthority() || p.restart.stopping.Load() {
+					continue
 				}
-				_ = p.reconcileCreates(ctx)
+				for _, worker := range workers {
+					if err := p.discoverWorker(ctx, worker, nil); err != nil {
+						p.restartLog("worker:"+worker.Name, "worker discovery name=%s error=%v", worker.Name, err)
+					}
+				}
+				if err := p.reconcileCreates(ctx); err != nil {
+					p.restartLog("creates", "create reconciliation error=%v", err)
+				}
 			}
 		}
 	}()
 	err := p.Run(ctx)
-	cancel()
 	<-discoverDone
 	return err
 }
@@ -323,6 +433,9 @@ func (p *Plane) discoverWorker(ctx context.Context, fixed FixedWorker, saved *Fi
 	bounded, cancel := context.WithTimeout(ctx, time.Second)
 	status, err := worker.Status(bounded)
 	cancel()
+	if err != nil {
+		p.restartLog("worker:"+fixed.Name, "worker discovery name=%s error=%v", fixed.Name, err)
+	}
 	p.restart.registrationMu.Lock()
 	defer p.restart.registrationMu.Unlock()
 	p.mu.Lock()
@@ -397,7 +510,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 	}
 	for name := range saved {
 		if !configured[name] {
-			return fmt.Errorf("controlplane: saved worker %s missing from fixed configuration", name)
+			return fmt.Errorf("controlplane: saved worker %s missing from -worker; restore its fixed entry to recover its calls before removing it", name)
 		}
 	}
 	var wg sync.WaitGroup
@@ -427,9 +540,14 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 		}
 	}
 	relayReady := p.relayReady
+	for _, worker := range registrations {
+		if !worker.dead && worker.relayPending {
+			relayReady = false
+		}
+	}
 	p.mu.Unlock()
 	if !relayReady {
-		return ErrNotReady
+		return fmt.Errorf("controlplane: relay workers not registered: %w", ErrNotReady)
 	}
 	observations := map[string]mediaworker.InstalledSession{}
 	for _, worker := range registrations {
@@ -449,6 +567,9 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 				}
 			}
 			for _, installed := range status.Inventory {
+				if installed.Owner != worker.addr {
+					continue
+				}
 				lease, err := p.store.Get(ctx, installed.ID)
 				if err == nil {
 					p.rebuildCall(lease)
@@ -456,7 +577,9 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 					return err
 				}
 				// The inventory cannot grant authority. Validate each observation below.
-				observations[installed.ID+"/"+fmt.Sprint(installed.Epoch)+"/"+installed.Owner.String()] = installed
+				if installed.Owner == worker.addr {
+					observations[installed.ID+"/"+fmt.Sprint(installed.Epoch)+"/"+installed.Owner.String()] = installed
+				}
 			}
 		}
 		leases, err := p.store.ListByWorker(ctx, worker.addr)
@@ -468,7 +591,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 		}
 	}
 	if routes, ok := p.store.(sessionstore.RouteLoader); ok {
-		_, owners, err := routes.LoadRouteOwners(ctx, sessionstore.MaxControlIntents)
+		_, owners, err := routes.LoadRouteOwners(ctx, relay.DefaultMaxFlows)
 		if err != nil {
 			return err
 		}
@@ -621,12 +744,9 @@ func (p *Plane) beginIntent(ctx context.Context, c *call, kind string, lease ses
 		return ErrNotReady
 	}
 	if c.intent != nil {
-		if c.intent.Kind == "end" && kind != "end" {
-			return ErrMoveInProgress
-		}
-		if kind == "end" && c.intent.Kind != "end" {
+		if c.intent.Kind != kind && (kind == "end" || c.intent.Kind == "end") {
 			updated := *c.intent
-			updated.Kind = "end"
+			updated.Kind = kind
 			updated.Lease = lease
 			if err := p.restart.store.PutControlIntent(ctx, updated); err != nil {
 				return err
@@ -666,62 +786,78 @@ func (p *Plane) startCreate(ctx context.Context, worker *registration) (string, 
 	if p.restart == nil {
 		return "", nil
 	}
-	p.restart.createMu.RLock()
+	worker.createMu.RLock()
 	key := "create:" + randomToken()
 	p.restart.mu.Lock()
 	if p.restart.creates == nil {
 		p.restart.creates = map[string]*pendingCreate{}
 	}
-	p.restart.creates[key] = &pendingCreate{worker: worker, active: true}
+	p.restart.creates[key] = &pendingCreate{worker: worker, active: true, reserved: true}
 	p.restart.mu.Unlock()
 	if err := p.controlRecord(ctx, key, createIntent{Worker: worker.name, Started: time.Now()}); err != nil {
 		p.restart.mu.Lock()
 		delete(p.restart.creates, key)
 		p.restart.mu.Unlock()
-		p.restart.createMu.RUnlock()
+		worker.createMu.RUnlock()
 		return "", err
 	}
 	return key, nil
 }
 
 type pendingCreate struct {
-	worker *registration
-	active bool
+	worker   *registration
+	active   bool
+	reserved bool
+	settled  bool // a definite reply only needs a background journal clear
 }
 
-func (p *Plane) finishCreate(_ context.Context, key string, worker *registration, id string, cause error) error {
+func (p *Plane) unknownCreateReservations(worker *registration) int {
+	if p.restart == nil {
+		return 0
+	}
+	p.restart.mu.Lock()
+	defer p.restart.mu.Unlock()
+	count := 0
+	for _, pending := range p.restart.creates {
+		if pending.worker == worker && !pending.active && pending.reserved {
+			count++
+		}
+	}
+	return count
+}
+
+func (p *Plane) finishCreate(_ context.Context, key string, worker *registration, _ string, cause error) error {
 	if p.restart == nil {
 		return nil
 	}
-	defer p.restart.createMu.RUnlock()
-	definite := cause == nil || errors.Is(cause, mediaworker.ErrUnsupportedOffer) || errors.Is(cause, mediaworker.ErrDraining) && !errors.Is(cause, privateapi.ErrUncertain)
+	defer worker.createMu.RUnlock()
+	definite := cause == nil || errors.Is(cause, ErrCreateNotSent) || !errors.Is(cause, privateapi.ErrUncertain) && (errors.Is(cause, mediaworker.ErrUnsupportedOffer) || errors.Is(cause, mediaworker.ErrDraining))
 	if definite {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		if err := p.controlRecord(ctx, key, nil); err == nil {
+		err := p.controlRecord(ctx, key, nil)
+		cancel()
+		if err == nil {
 			p.restart.mu.Lock()
 			delete(p.restart.creates, key)
 			p.restart.mu.Unlock()
 			return nil
 		}
+		p.restartLog("create-clear", "create journal clear pending: %v", err)
 	}
 	p.restart.mu.Lock()
 	if pending := p.restart.creates[key]; pending != nil {
 		pending.active = false
+		pending.settled = definite
+		pending.reserved = !definite
 	}
 	p.restart.mu.Unlock()
-	// Keep the incoming reservation. The detector owns its reconciliation now.
-	if cause == nil {
-		cause = fmt.Errorf("controlplane: create %s accepted on %s; journal settlement pending", id, worker.name)
-	}
+	if definite {
+		return nil
+	} // the caller releases its reservation and keeps success
 	return privateapi.Uncertain(cause)
 }
 
 func (p *Plane) reconcileCreates(ctx context.Context) error {
-	// Prevent a new create from publishing between the observation cut and
-	// cleanup of an older unknown request. Parallel ordinary creates share RLock.
-	p.restart.createMu.Lock()
-	defer p.restart.createMu.Unlock()
 	lease, err := p.controlLease()
 	if err != nil {
 		return err
@@ -730,8 +866,6 @@ func (p *Plane) reconcileCreates(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// A delete may commit while its reply is lost. The local reservation still
-	// needs the same authoritative observation cut even if its record is absent.
 	p.restart.mu.Lock()
 	for key, local := range p.restart.creates {
 		if !local.active {
@@ -749,24 +883,32 @@ func (p *Plane) reconcileCreates(ctx context.Context) error {
 		if err := json.Unmarshal(data, &create); err != nil {
 			return err
 		}
-		p.restart.mu.Lock()
-		active := false
-		for _, local := range p.restart.creates {
-			if local.worker.name == create.Worker && local.active {
-				active = true
-				break
-			}
-		}
-		p.restart.mu.Unlock()
-		if active {
-			continue
-		}
 		p.mu.Lock()
 		worker := p.workers[create.Worker]
 		p.mu.Unlock()
 		if worker == nil {
-			return ErrNotReady
+			return fmt.Errorf("controlplane: create record references unconfigured worker %s", create.Worker)
 		}
+		// Never queue a writer behind an active create. Each worker has its own
+		// observation cut, so a slow worker cannot block admission elsewhere.
+		if !worker.createMu.TryLock() {
+			continue
+		}
+		err := p.reconcileCreate(ctx, key, worker)
+		worker.createMu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Plane) reconcileCreate(ctx context.Context, key string, worker *registration) error {
+	p.restart.mu.Lock()
+	local := p.restart.creates[key]
+	settled := local != nil && local.settled
+	p.restart.mu.Unlock()
+	if !settled {
 		if settler, ok := p.store.(interface {
 			SettleWorkerTransitions(context.Context, netip.AddrPort) error
 		}); ok {
@@ -781,50 +923,61 @@ func (p *Plane) reconcileCreates(ctx context.Context) error {
 		bounded, stop := context.WithTimeout(ctx, time.Second)
 		status, statusErr := worker.worker.(*RemoteWorker).Status(bounded)
 		stop()
-		if statusErr != nil && len(leases) != 0 {
-			return statusErr
-		}
-		if statusErr == nil && (!status.InventoryKnown || status.Truncated || status.Address != worker.addr) {
-			return ErrNotReady
-		}
-		installed := map[string]mediaworker.InstalledSession{}
-		for _, entry := range status.Inventory {
-			installed[entry.ID] = entry
-		}
-		intents, err := p.restart.store.ControlIntents(ctx)
-		if err != nil {
-			return err
-		}
-		moving := map[string]bool{}
-		for _, intent := range intents {
-			moving[intent.ID] = true
-		}
-		for _, lease := range leases {
-			p.rebuildCall(lease)
-			entry, ok := installed[lease.SessionID]
-			if ok && entry.Owner == lease.Worker && entry.Epoch == lease.Epoch {
-				continue
+		p.mu.Lock()
+		dead := worker.dead
+		p.mu.Unlock()
+		if statusErr != nil || dead {
+			// The detector owns all committed claims, including a create whose
+			// reply was lost. Never release a dead worker's recoverable calls.
+			for _, lease := range leases {
+				p.rebuildCall(lease)
 			}
-			if moving[lease.SessionID] {
-				continue
+			if statusErr != nil {
+				p.mu.Lock()
+				worker.dead = true
+				worker.recovered = false
+				p.mu.Unlock()
 			}
-			// No effect is retried. A fenced release disposes of an uninstalled claim;
-			// any late installation then fails ownership checks/renewal.
-			if err := p.store.Release(ctx, lease); err != nil {
+		} else {
+			if !status.InventoryKnown || status.Truncated || status.Address != worker.addr {
+				return ErrNotReady
+			}
+			installed := map[string]mediaworker.InstalledSession{}
+			for _, entry := range status.Inventory {
+				if entry.Owner == worker.addr {
+					installed[entry.ID] = entry
+				}
+			}
+			intents, err := p.restart.store.ControlIntents(ctx)
+			if err != nil {
 				return err
 			}
+			moving := map[string]bool{}
+			for _, intent := range intents {
+				moving[intent.ID] = true
+			}
+			for _, lease := range leases {
+				p.rebuildCall(lease)
+				entry, ok := installed[lease.SessionID]
+				if ok && entry.Owner == lease.Worker && entry.Epoch == lease.Epoch || moving[lease.SessionID] {
+					continue
+				}
+				if err := p.store.Release(ctx, lease); err != nil {
+					return err
+				}
+			}
 		}
-		if err := p.controlRecord(ctx, key, nil); err != nil {
-			return err
-		}
-		p.restart.mu.Lock()
-		local := p.restart.creates[key]
-		delete(p.restart.creates, key)
-		p.restart.mu.Unlock()
-		if local != nil {
-			p.unreserve(local.worker)
-		}
-		p.restartOutcome("create", strings.TrimPrefix(key, "create:"), "reconciled", "interrupted")
 	}
+	if err := p.controlRecord(ctx, key, nil); err != nil {
+		return err
+	}
+	p.restart.mu.Lock()
+	local = p.restart.creates[key]
+	delete(p.restart.creates, key)
+	p.restart.mu.Unlock()
+	if local != nil && local.reserved {
+		p.unreserve(local.worker)
+	}
+	p.restartOutcome("create", strings.TrimPrefix(key, "create:"), "reconciled", "interrupted")
 	return nil
 }

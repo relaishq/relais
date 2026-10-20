@@ -129,14 +129,17 @@ availability claims.
 successfully decrypted audio packets during the control-only outage, no ICE
 restart or renegotiation, no caller decryption failures, and one installed tenure
 matching each authoritative lease. A competing control remains not-ready and
-refuses mutations. A further restart succeeds with one worker still down.
+refuses mutations across more than one full control TTL. A further restart succeeds with one worker still down.
 `TestControlRestartSplitProcesses` repeats the move/takeover/end sequence using
 v10 component checkpoints.
 
 `TestControlRestartInterruptedOperationsProcesses` cuts real worker replies after
 export, resume, drain export, call creation and end. Rebuild either adopts a
 confirmed installed tenure, fences and recovers an uninstalled tenure, records
-a typed checkpoint loss, or confirms termination. It does not repeat a confirmed
+a typed checkpoint loss, or confirms termination. The earlier implementation lost every interrupted export. After ordering
+relay worker registration before rebuild recovery, the rerun recovered 3/3
+move-export and 3/3 drain-export cuts from safe stored checkpoints. The exact
+final export remains non-durable. It does not repeat a confirmed
 resume or create. Drains retain their placement fence and report a typed partial
 outcome. Store tests cover candidate journaling before transfer, settlement,
 lease exclusion/expiry, metadata limits and key-slot safety. Race tests also
@@ -148,9 +151,9 @@ Local process-start-to-mutation-ready measurements on one development Mac
 
 | Calls | Standalone median / max | Cluster median / max |
 | --- | --- | --- |
-| 1 | 1.446 / 1.525 s | 1.454 / 1.468 s |
-| 8 | 1.507 / 1.508 s | 1.508 / 1.514 s |
-| 32 | 1.495 / 1.519 s | 1.500 / 1.593 s |
+| 1 | 1.058 / 1.078 s | 1.048 / 1.084 s |
+| 8 | 0.969 / 0.996 s | 0.755 / 1.033 s |
+| 32 | 0.752 / 1.097 s | 0.802 / 1.059 s |
 
 The driver keeps control down for one second before starting its successor;
 the remaining lease wait is included. These timings do not include that deliberate
@@ -161,14 +164,25 @@ the base heavy process suites ran three times. A final run on each store also
 restarted with the original calls still live and one worker down. The outer
 tests use `-race`; their separate service binaries are ordinary Go builds.
 
+A separate simultaneous worker/control crash test now starts the successor
+with no pre-start delay and 16 calls on the dead worker. Across three runs,
+readiness median / max was 1.921 / 1.978 seconds, with 48/48 calls recovered
+and zero losses. With a one-second pre-start delay, readiness median / max
+was 0.929 / 1.002 seconds, again with 48/48 recovered and zero losses. The
+deliberate delay is additional downtime. Acquiring the control lease and
+restoring workers wake relay registration immediately; recovery waits
+for the relay allowlist before selecting a destination.
+
 Mutation readiness stays false during lease wait and rebuild. The control lease
 has a two-second TTL; the measured process-start-to-ready time includes the wait
 for the crashed predecessor. A truncated worker inventory leaves control not
 ready. See [operator behavior](deploy.md#control-restart).
 
 **Limits:** interrupted exports use the latest stored checkpoint with crash
-margins; the exact final export is not durable. A checkpoint outside its safe
-envelope can be lost with a typed outcome. Historical move counters and the
+margins; the exact final export is not durable. The earlier implementation lost every interrupted-export cut; the corrected
+ordering restored live ownership in the local 3/3 export cuts described above. A checkpoint
+outside its envelope still produces a typed loss; no-loss recovery at that cut
+is not guaranteed. Historical move counters and the
 full event history reset. No guarantee covers overlapping active controls,
 a suspended predecessor resuming after expiry, lost acknowledged store data,
 combined store/relay failure, general mixed-version upgrades, or a cloud timing
@@ -450,7 +464,13 @@ scheduling delay. [ADR 0008][outage-adr] retains leases and snapshots for
 **34 seconds** by default: the budget plus **four seconds** of renewal, command
 and recovery headroom. This does not widen [ADR 0002's][checkpoint-adr]
 cryptographic envelope. New calls, moves, takeovers and hang-ups need the store;
-they can wait or fail during an outage.
+they can wait or fail during an outage. Control now retains its process through
+transient lease-renewal errors. It removes mutation readiness, pauses crash
+detection at the request-start-derived lease deadline, and continues renewing.
+A definitive lost tenure requires a fresh claim and rebuild before readiness.
+A successful renewal proves the same store tenure is still held. Graceful
+shutdown pauses detection and new mutations while keeping renewal running
+until handlers and recovery jobs stop.
 
 The [PR #103 CI store-stall job][outage-job] ran on `a363b60`, with separate
 processes on one Linux host, one fixture call per trial and the driver's own
@@ -465,6 +485,17 @@ separately; these samples do not establish loaded or shaped-profile timing.
 | Worker crash; 5 s store pause | 5/5 counted definitive losses, each `checkpoint_unsafe` and one envelope event. Snapshot age 5.485–5.488 s; required RTP margin 34,344–34,362 exceeds the 22,702 cap. No resume margins spent; zero decryption failures or reconnects. | **Pass of safe-loss policy**; [store-stall job][outage-job] |
 | Live worker; 35 s pause and actual ownership expiry | 5/5 count one `ownership_expired` loss each, with zero decryption failures and no resume. Checkpoint age is **not measured** because ownership and snapshot are gone; no checkpoint-envelope event is invented. Local cleanup was confirmed 0.6–0.75 s after recovery, with no later media. | **Pass of expiry policy**; [CI accounting][outage-job]; [PR #103 local cleanup][outage-pr] |
 | Worker partitioned from its store adapter while ownership transfers | Memory and Redis regression tests move epoch 1→2 before expiry. None of 40 deliberately stale ciphertext packets from the old worker reach the caller; successor media continues. The old worker fences when access returns. Full-budget transport-partition survival is **not measured**. | **Pass of exclusivity test**; [PR #103][outage-pr]; [ADR 0008][outage-adr] |
+
+The local #193 control-lease regression used owned Redis processes on one
+Mac, with the production process binaries. Moderate crash (1.5 s), long crash
+(5 s), and live 5/15/29 s each passed one trial; expired ownership at 35 s
+passed three trials. Moderate resumed with zero losses; long counted one
+`checkpoint_unsafe` loss; each expired trial counted one `ownership_expired`
+loss. All reported zero decryption failures and reconnects. These local runs
+retain the cited CI samples above; they do not establish failover or loaded
+host timing. Bounded authoritative status reads tolerate transient socket
+resets while Redis drains connections queued during a pause; they never return
+cached ownership as current.
 
 The budget is not an exact termination timer. Headroom can allow longer pauses.
 Forwarding can continue while Redis is unavailable even after ownership expires;

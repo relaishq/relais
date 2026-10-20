@@ -42,7 +42,7 @@ elseif op=='records' then return {1,redis.call('HGETALL',KEYS[1])}
 elseif op=='put' then
  local field='record:'..ARGV[5]
  if ARGV[6]=='' then redis.call('HDEL',KEYS[1],field); return {1} end
- if not redis.call('HEXISTS',KEYS[1],field) or redis.call('HEXISTS',KEYS[1],field)==0 then
+ if redis.call('HEXISTS',KEYS[1],field)==0 then
   if redis.call('HLEN',KEYS[1])>=tonumber(ARGV[7])+3 then return {3} end
  end
  redis.call('HSET',KEYS[1],field,ARGV[6]); return {1}
@@ -188,6 +188,9 @@ func (r *Redis) writeControlIntent(ctx context.Context, op, id, token string, da
 		return classify("control_intent_"+op, err)
 	}
 	if result != 1 {
+		if op == "put" {
+			return ErrLeaseHeld
+		}
 		return ErrLeaseLost
 	}
 	return nil

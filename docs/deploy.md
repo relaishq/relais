@@ -309,7 +309,8 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   status requests have a one-second deadline. Initial discovery runs in parallel;
   subsequent discovery checks every 250 ms, with bounded requests. Relay
   status/registration retries back off from 200 ms to 5 s after failure and
-  poll every 100 ms when healthy. Successful worker registration logs
+  poll every 100 ms when healthy. Acquiring or recovering the control lease
+  immediately wakes relay registration and resets its backoff. Successful worker registration logs
   `worker bootstrap name=... attempt=1 result=registered`. Relay logs use
   `relay bootstrap attempt=... instance=... workers=... result=...`.
   Only configured workers are discovered. A previously known worker can remain
@@ -325,13 +326,24 @@ Run one control process per store namespace. Control claims a fenced store
 lease with a two-second TTL and renews it every 500 ms. A second process can
 listen and answer status, but cannot become mutation-ready while the first
 holds that lease. After a crash, the successor waits for expiry. On a graceful
-stop, control stops HTTP handlers and recovery jobs before releasing the lease.
-A failed renewal removes readiness and stops the controller. Keep the old
-process stopped; this is not active/passive failover or protection against a
-suspended predecessor resuming. Do not erase the lease to accelerate a restart.
+stop, control first pauses crash detection and new mutations. It continues
+renewing while HTTP handlers drain and existing recovery jobs stop, then
+releases the lease. A renewal error removes mutation readiness.
+Crash detection pauses when the local lease deadline passes. Control keeps
+renewing the same tenure through transient failures. A successful renewal
+restores readiness; a definitive lost lease requires a new claim and rebuild.
+Only an unrecoverable lease error stops control, with a logged reason and
+nonzero exit status. This is not active/passive failover or protection against
+a suspended predecessor resuming. Do not erase the lease to accelerate a restart.
 
 Keep the store namespace, encryption key, fixed worker names and endpoints
-stable. Startup combines saved worker addresses, current worker observations,
+stable. A saved worker omitted from `-worker` blocks rebuild with its name in
+the error. Restore that fixed entry first, finish its calls and pending operations,
+and verify it owns no leases or reservations. To retire it, stop control and the
+worker, remove only `record:worker:<name>` and `record:drain:<name>` from
+`<prefix>control:{control}` with an operator store connection, then restart
+without that entry. Never remove records while calls or operation intents remain.
+Startup combines saved worker addresses, current worker observations,
 fenced ownership, worker indexes and authenticated routes. It settles saved
 transfer candidates before deciding ownership. Split v10 recovery uses the
 single component-tuple read. Worker observations never grant ownership. Old
@@ -341,8 +353,11 @@ at 4,096 installed sessions; no store access occurs while building it.
 
 Check private `GET /status`, not the JSON listener line. `ready` remains false
 until control holds its lease and completes the rebuild. `rebuild.phase` shows
-`waiting_lease`, `rebuilding`, `ready`, `lease_lost` or `failed`;
-`rebuild.error` explains an incomplete rebuild. `duration` and `lease_wait` are
+`waiting_lease`, `rebuilding`, `ready`, `renewing`, `lease_lost`, `stopping`,
+`stopped` or `failed`;
+`rebuild.error` explains an incomplete rebuild. Failed lease/rebuild attempts
+and worker discovery errors also log their causes, at most once per second
+for each source. `duration` and `lease_wait` are
 nanoseconds. Create, move, drain and end refuse with HTTP 503 and
 `control_not_ready` before mutation readiness. Heartbeat detection and crash
 takeover start after rebuild. Once rebuilt, the ordinary no-destination and
@@ -352,14 +367,26 @@ and the relay while control is down; new calls and recovery wait.
 Drain marks and operation intents are stored before effects. Control-wide
 records share one Redis slot; each session intent uses that session's slot.
 Records contain bounded coordination metadata, not snapshots or keys. Unresolved
-creates keep an incoming reservation. A successor adopts calls confirmed by
+creates keep an incoming reservation until reconciled. An unreachable worker
+does not block takeover: control settles its store transitions, hands committed
+claims to crash recovery, and releases the reservation. A successor adopts calls
+confirmed by
 the fenced lease and worker inventory, or fences uninstalled creation claims.
 It never repeats the original create request. An uncertain export/resume uses
 fenced crash recovery from the latest stored checkpoint, not a repeated export
-or an old final-export copy. Checkpoint limits can produce a typed loss.
+or an old final-export copy. Earlier interrupted-export trials lost every call.
+After relay registration was ordered before rebuild recovery, the local rerun
+recovered 3/3 move-export and 3/3 drain-export cuts from safe checkpoints.
+The exact final export is still not durable; unsafe checkpoints still produce
+a counted loss, so this does not promise no-loss recovery at that cut.
 An interrupted drain keeps its placement fence and reports `partial` in
-`rebuild.outcomes`; call drain again to continue it. Completed interrupted
-operations report typed outcomes there. Historical move counters and the full
+`rebuild.outcomes`; call drain again to continue it. A completed drain also
+keeps its persisted placement fence across control restarts. It clears only
+after the old worker has died, all its leases have recovered or ended, and
+a replacement is registered (or the recovered dead worker uses
+`POST /private/workers/<name>/replace`, then completes rejoin). Restarting
+control or calling drain again does not
+clear the mark. Completed interrupted operations report typed outcomes there. Historical move counters and the full
 event history remain process-local.
 
 See [control restart evidence](guarantees.md#control-restart) for the tested
@@ -634,4 +661,3 @@ Redis startup log, and verify each with `lsof -p <pid>` (command and `cwd` must
 match that run). Terminate only those groups with `kill -TERM -- -<child-pid>`;
 use `kill -KILL -- -<child-pid>` only for a group that does not stop. Redis uses
 no persistence. Do not target another run or the reserved Redis on port 6379.
-

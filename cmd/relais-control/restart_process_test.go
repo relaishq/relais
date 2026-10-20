@@ -234,7 +234,11 @@ func testControlRestartProcesses(t *testing.T, addr string, cluster bool, counts
 			second := sys.start("control-contender", filepath.Join(bin, "relais-control"), "-http", secondHTTP, "-relay", "http://"+sys.relay, "-worker", "0="+sys.workerURLs[0], "-worker", "1="+sys.workerURLs[1])
 			var competing controlplane.Status
 			require.NoError(t, privateapi.Do(ctx, http.DefaultClient, "http://"+secondHTTP, http.MethodGet, "/status", nil, &competing, controlplane.RemoteErrors))
-			require.False(t, competing.Ready)
+			require.Never(t, func() bool {
+				var status controlplane.Status
+				err := privateapi.Do(ctx, http.DefaultClient, "http://"+secondHTTP, http.MethodGet, "/status", nil, &status, controlplane.RemoteErrors)
+				return err != nil || status.Ready
+			}, controlplane.ControlLeaseTTL+500*time.Millisecond, 50*time.Millisecond)
 			require.Equal(t, "waiting_lease", competing.Rebuild.Phase)
 			for _, path := range []string{"/calls/" + calls[0].SessionID() + "/move", "/workers/0/drain"} {
 				err := privateapi.Do(ctx, http.DefaultClient, "http://"+secondHTTP, http.MethodPost, path, nil, nil, controlplane.RemoteErrors)

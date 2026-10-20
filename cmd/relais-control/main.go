@@ -5,8 +5,10 @@ import (
 	"errors"
 	"flag"
 	"log"
+	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/relaishq/relais/internal/processrun"
@@ -74,9 +76,15 @@ func run() error {
 	// Serve heartbeats during registration. A slow later worker must not make
 	// an earlier healthy registration age past DeadAfter before Run starts.
 	handler := controlHandler(plane, r, *demoRegister, testWorkers, testWorkerClient())
+	var handlers sync.WaitGroup
+	tracked := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		handlers.Add(1)
+		defer handlers.Done()
+		handler.ServeHTTP(w, request)
+	})
 	served := make(chan struct{})
 	serveErr := make(chan error, 1)
-	go func() { defer close(served); serveErr <- processrun.Serve(ctx, listener, handler) }()
+	go func() { defer close(served); serveErr <- processrun.Serve(ctx, listener, tracked) }()
 	defer func() { cancel(); <-served }()
 	managed := make([]controlplane.FixedWorker, 0, len(fixed))
 	for _, worker := range fixed {
@@ -84,11 +92,15 @@ func run() error {
 	}
 	done := make(chan struct{})
 	managedErr := make(chan error, 1)
-	go func() { defer close(done); managedErr <- plane.RunManaged(ctx, managed) }()
+	managedCtx, stopManaged := context.WithCancel(context.WithoutCancel(ctx))
+	go func() { defer close(done); managedErr <- plane.RunManaged(managedCtx, managed) }()
 	defer func() {
+		plane.BeginShutdown()
 		cancel()
-		<-done
 		<-served
+		handlers.Wait()
+		stopManaged()
+		<-done
 		releaseCtx, stop := context.WithTimeout(context.Background(), time.Second)
 		defer stop()
 		_ = plane.ReleaseControl(releaseCtx)
@@ -107,7 +119,7 @@ func run() error {
 	defer startup.Stop()
 awaitReady:
 	for {
-		if state := plane.RebuildStatus(); state != nil && state.Phase == "ready" {
+		if state, statusErr := plane.Status(ctx); statusErr == nil && state.Ready {
 			break
 		}
 		select {
@@ -124,7 +136,11 @@ awaitReady:
 	case err = <-serveErr:
 	case err = <-managedErr:
 	}
+	plane.BeginShutdown()
 	cancel()
+	<-served
+	handlers.Wait()
+	stopManaged()
 	<-done
 	return err
 }
@@ -160,8 +176,15 @@ func registerRestartedRelay(ctx context.Context, plane *controlplane.Plane, r *c
 		} else {
 			delay = 100 * time.Millisecond
 		}
-		if !waitBootstrap(ctx, delay) {
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
 			return
+		case <-plane.AuthorityChanges():
+			timer.Stop()
+			delay = 100 * time.Millisecond
+		case <-timer.C:
 		}
 	}
 }

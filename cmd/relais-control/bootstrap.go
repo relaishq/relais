@@ -1,12 +1,10 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/url"
 	"strings"
-	"time"
 )
 
 type fixedWorker struct{ name, endpoint string }
@@ -38,15 +36,4 @@ func bootstrapResult(err error) string {
 		return "registered"
 	}
 	return fmt.Sprintf("retry: %v", err)
-}
-
-func waitBootstrap(ctx context.Context, delay time.Duration) bool {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
 }

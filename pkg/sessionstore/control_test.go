@@ -16,6 +16,11 @@ func TestControlLeaseFencesMetadataAndRetainsEpoch(t *testing.T) {
 		control := store.(ControlStore)
 		first, err := control.ClaimControl(ctx, "first", time.Second)
 		require.NoError(t, err)
+		forged := first
+		forged.Epoch++
+		_, err = control.RenewControl(ctx, forged, time.Second)
+		require.ErrorIs(t, err, ErrLeaseLost)
+		require.ErrorIs(t, control.PutControlRecord(ctx, forged, "drain:forged", json.RawMessage(`true`)), ErrLeaseLost)
 		_, err = control.ClaimControl(ctx, "second", time.Second)
 		require.ErrorIs(t, err, ErrLeaseHeld)
 		require.NoError(t, control.PutControlRecord(ctx, first, "drain:a", json.RawMessage(`true`)))
@@ -56,6 +61,9 @@ func TestControlIntentPersistsCandidateBeforeTransfer(t *testing.T) {
 		require.NoError(t, err)
 		intent := ControlIntent{ID: lease.SessionID, Token: "first", Kind: "move", Started: time.Now(), Lease: lease}
 		require.NoError(t, control.PutControlIntent(ctx, intent))
+		other := intent
+		other.Token = "other"
+		require.ErrorIs(t, control.PutControlIntent(ctx, other), ErrLeaseHeld)
 		moved, err := store.Transfer(WithTransitionIntent(ctx, intent.ID, intent.Token), lease, b, time.Minute)
 		require.NoError(t, err)
 		intents, err := control.ControlIntents(ctx)

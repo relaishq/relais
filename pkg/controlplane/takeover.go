@@ -126,6 +126,9 @@ func (p *Plane) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
+			if !p.controlAuthority() || p.restart != nil && p.restart.stopping.Load() {
+				continue
+			}
 			now := time.Now()
 			reconcileMu.Lock()
 			if !reconciling && !now.Before(nextReconcile) {
@@ -182,8 +185,9 @@ func (p *Plane) Run(ctx context.Context) error {
 }
 
 func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected time.Time) bool {
+	unknown := p.unknownCreateReservations(w)
 	p.mu.Lock()
-	incoming := w.reserved != 0
+	incoming := w.reserved > unknown
 	p.mu.Unlock()
 	// An already selected create/resume may still publish a lease or call.
 	// Keep the registration dead and retry after its reservation settles.
@@ -221,8 +225,9 @@ func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected tim
 	close(jobs)
 	wg.Wait()
 	remaining, err := p.store.ListByWorker(ctx, w.addr)
+	unknown = p.unknownCreateReservations(w)
 	p.mu.Lock()
-	noIncoming := w.reserved == 0 && len(w.pending) == 0
+	noIncoming := w.reserved <= unknown && len(w.pending) == 0
 	p.mu.Unlock()
 	return err == nil && len(remaining) == 0 && noIncoming
 }
@@ -1009,6 +1014,9 @@ func (p *Plane) Replace(name string, addr netip.AddrPort, worker Worker) error {
 		return errors.New("controlplane: replacement still has leases")
 	}
 	if err := p.saveRegistration(ctx, name, addr, worker); err != nil {
+		return err
+	}
+	if err := p.controlRecord(ctx, "drain:"+name, nil); err != nil {
 		return err
 	}
 	p.mu.Lock()
