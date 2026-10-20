@@ -29,11 +29,25 @@ class BootContracts(unittest.TestCase):
             for relative in ('opt/relais/boot/run.sh', *(f'opt/relais/bin/relais-{name}' for name in ('relay', 'worker', 'control', 'signal', 'load'))):
                 (root / relative).touch(mode=0o755)
             boot.check_program_access(root)
-            for relative in ('opt/relais', 'opt/relais/boot', 'opt/relais/bin'):
+            for relative in ('opt', 'opt/relais', 'opt/relais/boot', 'opt/relais/bin'):
                 (root / relative).chmod(0o700)
                 with self.assertRaisesRegex(AssertionError, 'service users cannot'):
                     boot.check_program_access(root)
                 (root / relative).chmod(0o755)
+
+    def test_permission_errors_in_any_service_log_refuse_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            trial = boot.Trial.__new__(boot.Trial)
+            trial.args = SimpleNamespace(systemd=False)
+            log = Path(temporary) / 'worker.log'
+            trial.logs = {'worker': log}
+            for message in ('NOPERM command denied', 'WRONGPASS invalid password', 'NOAUTH Authentication required',
+                            'no permissions to access a key', "can't run this command", "ERR The user executing the script can't access at least one of the keys"):
+                log.write_text(message)
+                with self.assertRaisesRegex(AssertionError, 'Redis permission error in worker'):
+                    trial.assert_no_permission_errors()
+            log.write_text('worker started; request completed')
+            trial.assert_no_permission_errors()
 
     def test_component_ports_reject_ephemeral_template_or_launcher_values(self):
         template = load()

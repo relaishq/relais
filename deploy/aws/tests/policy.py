@@ -13,6 +13,26 @@ EXPECTED_PATHS = {
     ('AlbGroup', 'SignalGroup', 'tcp', 24743),
     *((role + 'Group', 'StoreGroup', 'tcp', 6379) for role in ('Worker', 'Control', 'Relay')),
 }
+EXPECTED_ACLS = {
+    'Relay': """on -@all +ping +cluster|slots +command +time +scan (+eval +evalsha ~relais:preview:lease:*
+        ~relais:preview:state:* ~relais:preview:record:* ~relais:preview:epoch:* ~relais:preview:routes:*
+        ~relais:preview:ended:* ~relais:preview:setup:* ~relais:preview:checkpoint:*
+        ~relais:preview:work:* ~relais:preview:history:* ~relais:preview:relay:*) (+hmget
+        ~relais:preview:lease:* ~relais:preview:ended:* ~relais:preview:relay:*) (+hget
+        ~relais:preview:lease:* ~relais:preview:routes:* ~relais:preview:relay:*) (+hgetall +pttl +hdel
+        +pexpireat ~relais:preview:routes:*) (+hset ~relais:preview:routes:* ~relais:preview:relay:*)
+        (+hincrby ~relais:preview:relay:*) (+del ~relais:preview:state:* ~relais:preview:record:*
+        ~relais:preview:routes:* ~relais:preview:setup:* ~relais:preview:checkpoint:*
+        ~relais:preview:work:* ~relais:preview:history:*)""".split(),
+    'Worker': """on -@all +ping +cluster|slots +command +eval +evalsha +script|load +time +hmget +hget +hgetall +hset
+        +hincrby +hdel +get +set +del +exists +incr +pttl +pexpire +pexpireat +zadd +zrange +zrem +scan
+        ~relais:preview:* +type +hexists""".split(),
+    'Control': """on -@all +ping +cluster|slots +command +eval +evalsha +script|load +time +hmget +hget +hgetall +hset
+        +hincrby +hdel +get +set +del +exists +incr +pttl +pexpire +pexpireat +zadd +zrange +zrem +scan
+        ~relais:preview:* +type +hexists""".split(),
+}
+RETAINED = {'Store', 'StoreUsers', 'RelayPassword', 'SnapshotKey', 'WorkerStoreUser', 'SignalToken', 'PrivateB', 'StoreSubnets', 'RelayStoreUser', 'ControlPassword', 'Vpc', 'RelayAddress', 'ControlStoreUser', 'PrivateA', 'StoreGroup', 'WorkerPassword'}
+
 SSM_ACTIONS = {'ssmmessages:CreateControlChannel', 'ssmmessages:CreateDataChannel',
                'ssmmessages:OpenControlChannel', 'ssmmessages:OpenDataChannel'}
 SECRET_SCOPE = {'Relay': {'RelayPassword'}, 'Worker': {'WorkerPassword', 'SnapshotKey'},
@@ -24,7 +44,7 @@ def check_component_ports(template, launcher):
     ports = {int(port) for port in re.findall(r'\$\{[A-Z_]+:-([0-9]+)\}', launcher)}
     assert ports, 'component defaults must declare explicit ports'
     for resource in template['Resources'].values():
-        properties = resource['Properties']
+        properties = resource.get('Properties', {})
         if properties.get('IpProtocol') in ('tcp', 'udp'):
             ports.update(properties[key] for key in ('FromPort', 'ToPort') if key in properties)
         if resource['Type'].startswith('AWS::ElasticLoadBalancingV2::') and 'Port' in properties:
@@ -68,17 +88,30 @@ def check(template):
     encoded = json.dumps(template)
     assert not re.search(r'(?<![0-9])[0-9]{12}(?![0-9])|AKIA[A-Z0-9]{16}|-----BEGIN .*PRIVATE KEY', encoded)
     assert not re.search(r'(?i)(password|token|secret_access_key)\s*[:=]\s*["\']?[A-Za-z0-9+/]{24,}', encoded)
+    assert not re.search(r'RELAIS_(?:SESSIONSTORE_KEY|REDIS_PASSWORD)\s*=', encoded), 'literal credential assignment'
     resources = template['Resources']
     assert 'Transform' not in template, 'native CloudFormation only'
     assert len((ROOT / 'preview.yaml').read_bytes()) < 1024 * 1024
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('embedded_files', ROOT / 'tests/sync-files.py')
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    module.check(template)
     expected_roles = {name + 'Role' for name in SECRET_SCOPE}
     assert {n for n, r in resources.items() if r['Type'] == 'AWS::IAM::Role'} == expected_roles
     for name, resource in resources.items():
         kind = resource['Type']
-        properties = resource['Properties']
+        properties = resource.get('Properties', {})
+        if kind in ('AWS::EC2::Instance', 'AWS::EC2::NetworkInterface', 'AWS::EC2::NatGateway',
+                    'AWS::ElasticLoadBalancingV2::LoadBalancer', 'AWS::ElastiCache::ReplicationGroup'):
+            assert set(resource['DependsOn']) >= {'RelayAddressReservation', 'WorkerOneReservation',
+                'WorkerTwoReservation', 'WorkerThreeReservation', 'ControlAddressReservation', 'SignalAddressReservation'}
+        if kind == 'AWS::EC2::Instance':
+            assert 'BootFiles' in resource['DependsOn']
         if kind.startswith('AWS::IAM::'):
+
             assert kind in ('AWS::IAM::Role', 'AWS::IAM::InstanceProfile')
         if kind == 'AWS::IAM::Role':
+            assert set(properties) == {'AssumeRolePolicyDocument', 'Policies', 'RoleName'}, 'role properties not allowed'
             assert len(properties['Policies']) == 1
             assert properties['AssumeRolePolicyDocument'] == {'Version': '2012-10-17', 'Statement': [
                 {'Effect': 'Allow', 'Principal': {'Service': 'ec2.amazonaws.com'}, 'Action': 'sts:AssumeRole'}]}
@@ -93,9 +126,11 @@ def check(template):
     assert template['Outputs']['StoreConfigurationEndpoint']['Value'] == {'Fn::GetAtt': ['Store', 'ConfigurationEndPoint.Address']}
     assert not any('AutoScaling' in r['Type'] or 'LifecycleHook' in r['Type'] for r in resources.values())
     for name, resource in resources.items():
-        if resource['Type'] in ('AWS::SecretsManager::Secret', 'AWS::ElastiCache::ReplicationGroup',
-                                'AWS::ElastiCache::User', 'AWS::ElastiCache::UserGroup', 'AWS::ElastiCache::SubnetGroup') or name in {'RelayAddress', 'Vpc', 'PrivateA', 'PrivateB', 'RelayGroup', 'WorkerGroup', 'ControlGroup', 'SignalGroup', 'StoreGroup'}:
-            assert resource.get('DeletionPolicy') == resource.get('UpdateReplacePolicy') == 'Retain', name
+        if name in RETAINED:
+            assert resource.get('DeletionPolicy') == 'RetainExceptOnCreate', name
+            assert resource.get('UpdateReplacePolicy') == 'Retain', name
+        else:
+            assert 'DeletionPolicy' not in resource and 'UpdateReplacePolicy' not in resource, name + ' needlessly retained'
         if resource['Type'] == 'AWS::SecretsManager::Secret':
             assert 'GenerateSecretString' in resource['Properties'] and 'SecretString' not in resource['Properties']
         if resource['Type'] == 'AWS::ElastiCache::User':
@@ -140,11 +175,13 @@ def check(template):
                     assert name == 'RelayHost' or v['SubnetId'] in ('PrivateA', 'PrivateB')
                     assert all(not x.get('AssociatePublicIpAddress', False) for x in v.get('NetworkInterfaces', []))
                     assert all(b['Ebs']['Encrypted'] is True for b in v['BlockDeviceMappings'])
-                    assert v['ImageId'] == template['Parameters']['ArmImage' if architecture == 'arm64' else 'X86Image']['Default']
+                    assert v['ImageId'] == 'TEST_VALUE'
+                    assert instance['CreationPolicy'] == {'ResourceSignal': {'Count': 1, 'Timeout': 'PT15M'}}
+                    assert set(instance['DependsOn']) >= {n for n,x in r.items() if x['Type'] == 'AWS::EC2::SubnetCidrReservation'}
                     assert len(v['UserData'].encode()) < 16384
                     assert '{{resolve:' not in v['UserData'] and 'SecretString' not in v['UserData']
-                    assert not re.search(r'(?i)secret|password|token|RELAIS_', v['UserData'])
-                    assert set(re.findall(r'\$\{([^}]+)\}', template['Resources'][name]['Properties']['UserData']['Fn::Base64']['Fn::Sub'])) == {'AWS::Region', 'AWS::StackName'}
+                    assert v['UserData'] == (ROOT / 'boot/user-data.sh').read_text().replace('NODE_RESOURCE', name).replace('${AWS::Region}', 'us-east-1').replace('${AWS::StackName}', 'relais-offline')
+                    assert set(instance['Metadata']['RelaisFiles']) == {'/etc/relais/node.json', '/etc/relais/node.env'}
                     node = json.loads(instance['Metadata']['RelaisFiles']['/etc/relais/node.json']['content'])
                     role = dict((t['Key'], t['Value']) for t in v['Tags'])['RelaisRole']
                     assert set(node['secrets'].values()) == SECRET_SCOPE[role.title()]
@@ -174,6 +211,12 @@ def check(template):
                 assert store['TransitEncryptionMode'] == 'required'
                 for role, expected_secrets in SECRET_SCOPE.items():
                     statements = p[role + 'Role']['Policies'][0]['PolicyDocument']['Statement']
+                    action_sets = {frozenset(st['Action']) for st in statements if st}
+                    expected_actions = {frozenset([action]) for action in (
+                        'secretsmanager:GetSecretValue', 'cloudformation:DescribeStackResource', 'cloudformation:SignalResource')}
+                    if ssm == 'true':
+                        expected_actions |= {frozenset(SSM_ACTIONS), frozenset(['ssm:UpdateInstanceInformation'])}
+                    assert action_sets == expected_actions
                     for statement in filter(None, statements):
                         actions = statement['Action']
                         assert not any('*' in a or a.lower() == 'iam:passrole' for a in actions)
@@ -183,8 +226,8 @@ def check(template):
                             assert ssm == 'true'
                             assert statement['Resource'] == 'arn:aws:ec2:us-east-1:ACCOUNT:instance/*'
                             assert statement['Condition'] == {'StringEquals': {'aws:ResourceTag/RelaisRole': role.lower(), 'aws:ResourceTag/RelaisStack': 'relais-offline'}}
-                        elif 'cloudformation:DescribeStackResource' in actions:
-                            assert actions == ['cloudformation:DescribeStackResource']
+                        elif any(a.startswith('cloudformation:') for a in actions):
+                            assert actions in (['cloudformation:DescribeStackResource'], ['cloudformation:SignalResource'])
                             assert statement['Resource'] == 'arn:aws:cloudformation:us-east-1:ACCOUNT:stack/relais-offline/*'
                         else:
                             assert actions == ['secretsmanager:GetSecretValue']
@@ -194,12 +237,19 @@ def check(template):
                 assert p['SignalTargets']['Targets'][0]['Id'] == ('SharedHost' if profile == 'lean' else 'SignalHost')
                 assert p['SignalWafAssociation']['ResourceArn'] == 'SignalAlb'
                 assert p['SignalWaf']['Rules'][0]['Statement']['RateBasedStatement']['AggregateKeyType'] == 'IP'
-                assert p['DisabledDefaultUser']['AccessString'] == 'off -@all'
-                for role in ('Relay', 'Worker', 'Control'):
-                    acl = p[role + 'StoreUser']['AccessString'].split()
-                    assert '-@all' in acl and '+@all' not in acl and '~*' not in acl
-                relay = p['RelayStoreUser']['AccessString'].split()
-                assert '+get' not in relay and '+set' not in relay and '~relais:preview:*' not in relay
+                assert store['UserGroupIds'] == ['StoreUsers']
+                assert {n for n,x in r.items() if x['Type'] == 'AWS::ElastiCache::User'} == {role + 'StoreUser' for role in EXPECTED_ACLS}
+                assert p['StoreUsers']['UserIds'] == [role + 'StoreUser' for role in EXPECTED_ACLS]
+                assert p['SignalWaf']['Rules'][0]['Action'] == {'Block': {}}
+                for role, tokens in EXPECTED_ACLS.items():
+                    user = p[role + 'StoreUser']
+                    assert user['UserName'] == role.lower() and user['AuthenticationMode']['Type'] == 'password'
+                    assert user['AccessString'].split() == tokens, role + ' ACL drift'
+                reservations = {n:x['Properties'] for n,x in r.items() if x['Type'] == 'AWS::EC2::SubnetCidrReservation'}
+                assert {(x['SubnetId'],x['Cidr'],x['ReservationType']) for x in reservations.values()} == {
+                    ('PublicA','10.42.0.10/32','explicit'),('PrivateA','10.42.10.11/32','explicit'),
+                    ('PrivateB','10.42.11.12/32','explicit'),('PrivateA','10.42.10.13/32','explicit'),
+                    ('PrivateA','10.42.10.20/32','explicit'),('PrivateB','10.42.11.21/32','explicit')}
     assert not any(re.search(r'Secret|Password|SnapshotKey|SignalToken', json.dumps(v)) for v in template['Outputs'].values())
 
 
@@ -227,14 +277,36 @@ def regression_tests(template):
         lambda t: t['Outputs'].update(LeakedToken={'Value': 'literal credential'}),
         lambda t: t['Resources']['WorkerOne']['Properties'].update(IamInstanceProfile={'Ref': 'SharedInstanceProfile'}),
     ]
-    for mutate in mutations:
+    names = ['public_https_only','no_ssh','imds_v2_required','encrypted_root_volume','synchronous_store',
+             'cluster_store','store_survives_deletion','role_secret_resource_scope','no_wildcard_action',
+             'generated_secret_only','profile_worker_count','component_ingress_paths','no_inline_ingress',
+             'store_tls','store_at_rest','store_multi_az','relay_address_survives_replacement',
+             'single_inline_role_policy','no_secret_output','host_uses_own_role']
+    mutations = list(zip(names, mutations))
+    mutations += [
+        ('no_managed_role_policy', lambda t: t['Resources']['WorkerRole']['Properties'].update(ManagedPolicyArns=['AdministratorAccess'])),
+        ('store_role_group_attached', lambda t: t['Resources']['Store']['Properties'].pop('UserGroupIds')),
+        ('no_extra_embedded_secret_file', lambda t: t['Resources']['BootFiles']['Metadata']['RelaisFiles'].update({'/etc/extra': {'content': 'RELAIS_SESSIONSTORE_KEY=literal', 'mode':'000600'}})),
+        ('waf_blocks_excess', lambda t: t['Resources']['SignalWaf']['Properties']['Rules'][0].update(Action={'Count':{}})),
+        ('no_default_valkey_user', lambda t: t['Resources'].update(DisabledDefaultUser={'Type':'AWS::ElastiCache::User','Properties':{'UserName':'default','AuthenticationMode':{'Type':'no-password-required'}}})),
+        ('failed_create_cleans_store', lambda t: t['Resources']['Store'].update(DeletionPolicy='Retain')),
+        ('fixed_addresses_reserved', lambda t: t['Resources'].pop('WorkerOneReservation')),
+        ('interfaces_wait_for_reservations', lambda t: t['Resources']['Store'].pop('DependsOn')),
+        ('hosts_wait_for_shared_metadata', lambda t: t['Resources']['RelayHost']['DependsOn'].remove('BootFiles')),
+        ('boot_success_signal_required', lambda t: t['Resources']['RelayHost'].pop('CreationPolicy')),
+    ]
+    for token in ('allcommands','allkeys','%RW~*','~relais:*','+flushall'):
+        mutations.append(('relay_rejects_' + token, lambda t, token=token: t['Resources']['RelayStoreUser']['Properties'].update(AccessString=t['Resources']['RelayStoreUser']['Properties']['AccessString']+' '+token)))
+    for token in ('+@admin','+flushall +config'):
+        mutations.append(('worker_rejects_' + token, lambda t, token=token: t['Resources']['WorkerStoreUser']['Properties'].update(AccessString=t['Resources']['WorkerStoreUser']['Properties']['AccessString']+' '+token)))
+    for name, mutate in mutations:
         changed = copy.deepcopy(template)
         mutate(changed)
         try:
             check(changed)
-        except AssertionError:
+        except (AssertionError, KeyError):
             continue
-        raise AssertionError('policy mutation escaped detection')
+        raise AssertionError('policy mutation escaped detection: ' + name)
     print(f'PASS: {len(mutations)} unsafe template mutations refused')
 
 

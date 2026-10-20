@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Fetch exact secret references; never print a secret or an SDK exception."""
+"""Fetch exact secret references; never print a secret or a CLI exception."""
 import json
 import os
 from pathlib import Path
 import re
 import sys
+import subprocess
 
 
 def prepare(config_path, runtime):
@@ -16,10 +17,11 @@ def prepare(config_path, runtime):
         values = json.loads(Path(os.environ['RELAIS_TEST_SECRET_FILE']).read_text())
         fetch = values.__getitem__
     else:
-        import boto3
-        client = boto3.client('secretsmanager', region_name=config['region'])
         def fetch(arn):
-            return client.get_secret_value(SecretId=arn)['SecretString']
+            result = subprocess.run(['aws', 'secretsmanager', 'get-secret-value', '--secret-id', arn,
+                                     '--region', config['region'], '--query', 'SecretString', '--output', 'text'],
+                                    capture_output=True, text=True, check=True)
+            return result.stdout.rstrip('\n')
 
     def write(name, value):
         path = root / name

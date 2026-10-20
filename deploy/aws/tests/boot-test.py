@@ -5,10 +5,12 @@ No AWS SDK/network calls occur. --systemd needs a disposable Linux CI runner.
 The plain-process mode uses the same unit ExecStart and EnvironmentFile entries.
 """
 import argparse
+import binascii
 import datetime
 import functools
 import hashlib
 import http.server
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -29,6 +31,9 @@ import traceback
 import urllib.request
 
 from template import ROOT, load, resolve
+
+
+PERMISSION_ERROR = re.compile(r"NOPERM|WRONGPASS|NOAUTH|no permissions|can't run this command|can't access at least one of the keys|ACL failure", re.I)
 
 
 class Refusal(Exception):
@@ -70,12 +75,15 @@ class Redis:
 
 def check_program_access(image):
     """Check the other-user access bits needed after systemd drops root."""
-    paths = ['opt/relais', 'opt/relais/boot', 'opt/relais/bin', 'opt/relais/boot/run.sh']
-    paths += ['opt/relais/bin/' + name for name in
-              ('relais-relay', 'relais-worker', 'relais-control', 'relais-signal', 'relais-load')]
+    paths = ['opt/relais/boot/run.sh']
+    paths += [str(p.relative_to(image)) for p in (Path(image) / 'opt/relais/bin').glob('relais-*')]
     for relative in paths:
-        mode = (Path(image) / relative).stat().st_mode
-        assert mode & 0o005 == 0o005, 'service users cannot read/traverse/execute /' + relative
+        path = Path(image) / relative
+        assert path.stat().st_mode & 0o005 == 0o005, 'service users cannot execute /' + relative
+        for parent in Path(relative).parents:
+            if parent == Path('.'):
+                continue
+            assert (Path(image) / parent).stat().st_mode & 0o001, 'service users cannot traverse /' + str(parent)
 
 
 def redact(text, secrets):
@@ -115,7 +123,7 @@ class Trial:
     def minimal_path(self):
         path = self.work / 'path'
         path.mkdir()
-        for tool in ('bash', 'curl', 'mktemp', 'rm', 'shasum', 'sha256sum', 'python3', 'mkdir', 'install', 'id', 'useradd', 'systemctl'):
+        for tool in ('bash', 'curl', 'mktemp', 'rm', 'shasum', 'sha256sum', 'python3', 'mkdir', 'install', 'id', 'useradd', 'systemctl', 'sysctl'):
             executable = str(Path(sys.executable).resolve()) if tool == 'python3' else shutil.which(tool)
             if executable:
                 (path / tool).symlink_to(executable)
@@ -210,20 +218,39 @@ masterauth {self.passwords['admin']}
             admin = Redis(port, 'test-admin', self.passwords['admin'])
             self.wait(lambda: 'cluster_state:ok' in admin.command('CLUSTER', 'INFO'), 'Cluster convergence')
             for role in ('relay', 'worker', 'control'):
-                access = self.template['Resources'][role.title() + 'StoreUser']['Properties']['AccessString'].split()
+                access = self.template['Resources'][role.title() + 'StoreUser']['Properties']['AccessString']
+                access = re.findall(r'\([^)]*\)|\S+', access)
                 if self.args.mutation == 'acl' and role == 'relay':
-                    access.append('-hmget')
+                    access = [token.replace('+hmget', '-hmget') for token in access]
                 assert admin.command('ACL', 'SETUSER', role, 'reset', '>' + self.passwords[role], *access) == 'OK'
-        # Verify the real ACL boundary independently of successful startup.
+        # ACL DRYRUN checks command/key authorization independently of Cluster routing.
         for port in ports:
-            relay = Redis(port, 'relay', self.passwords['relay'])
-            for command in [('GET', 'relais:preview:state:{sess:acl}'), ('HGET', 'relais:preview:frames:{sess:acl}', 'x'), ('CONFIG', 'GET', '*')]:
-                try:
-                    relay.command(*command)
-                except Refusal as exc:
-                    assert 'NOPERM' in str(exc)
-                else:
-                    raise Refusal('relay escaped role ACL')
+            admin = Redis(port, 'test-admin', self.passwords['admin'])
+            for command in [('GET', 'relais:preview:state:{sess:acl}'),
+                            ('HGET', 'relais:preview:frames:{sess:acl}', 'x'), ('CONFIG', 'GET', '*'),
+                            ('HSET', 'relais:preview:lease:{sess:acl}', 'worker', 'attacker'),
+                            ('SCRIPT', 'LOAD', 'return 1')]:
+                result = admin.command('ACL', 'DRYRUN', 'relay', *command)
+                assert result != 'OK', 'relay escaped role ACL: ' + command[0]
+            for role in ('worker', 'control'):
+                for command in [('TYPE', 'relais:preview:setup:{sess:acl}'),
+                                ('HEXISTS', 'relais:preview:checkpoint:{sess:acl}', 'm')]:
+                    assert admin.command('ACL', 'DRYRUN', role, *command) == 'OK'
+        slot = binascii.crc_hqx(b'sess:acl', 0) % 16384
+        slots = Redis(ports[0], 'test-admin', self.passwords['admin']).command('CLUSTER', 'SLOTS')
+        owner = next(row[2][1] for row in slots if row[0] <= slot <= row[1])
+        relay = Redis(owner, 'relay', self.passwords['relay'])
+        for command in [('HSET', 'relais:preview:lease:{sess:acl}', 'worker', 'attacker'),
+                        ('DEL', 'relais:preview:lease:{sess:acl}'),
+                        ('GET', 'relais:preview:state:{sess:acl}'),
+                        ('EVAL', 'return redis.call("HSET", KEYS[1], "worker", "attacker")', 1, 'relais:preview:lease:{sess:acl}')]:
+            try:
+                relay.command(*command)
+            except Refusal as exc:
+                assert PERMISSION_ERROR.search(str(exc)), str(exc)
+            else:
+                raise Refusal('relay escaped role ACL with ' + command[0])
+        print('PASS: relay cannot write a lease, read snapshots/frames, load scripts or run CONFIG; component TYPE/HEXISTS allowed')
         self.seed = ','.join('127.0.0.1:' + str(p) for p in ports)
 
     def archive(self):
@@ -247,50 +274,101 @@ masterauth {self.passwords['admin']}
 
     def boot(self):
         image = self.work / 'image'
-        for folder in ('opt/relais/boot', 'etc/systemd/system', 'etc/relais', 'run/relais'):
-            (image / folder).mkdir(parents=True)
-        for source in (ROOT / 'boot').iterdir():
-            if source.is_file():
-                shutil.copy2(source, image / 'opt/relais/boot' / source.name)
-        for source in (ROOT / 'units').glob('*.service'):
-            shutil.copy2(source, image / 'etc/systemd/system' / source.name)
-        for relative in ('opt/relais', 'opt/relais/boot'):
-            (image / relative).chmod(0o700)
+        image.mkdir()
         config = {'version': '0.3.0', 'architecture': 'arm64', 'sha256': self.archive(), 'ssm': 'false',
                   'region': 'offline', 'components': ['relay', 'worker', 'control', 'signal'],
                   'secrets': {r: r for r in ('relay', 'worker', 'control', 'token', 'snapshot')}}
-        node = image / 'etc/relais/node.json'
-        node.write_text(json.dumps(config))
         source = self.work / 'fake-secrets.json'
-        source.write_text(json.dumps(self.passwords))
-        source.chmod(0o600)
-        self.env['RELAIS_TEST_SECRET_FILE'] = str(source)
+        source.write_text(json.dumps(self.passwords)); source.chmod(0o600)
+        # Real UserData invokes a fake AWS CLI for both metadata and Secrets Manager.
+        fixtures = self.work / 'cloud.json'
+        common = resolve(self.template)['BootFiles']['Metadata']
+        host = {'RelaisFiles': {'/etc/relais/node.json': {'content': json.dumps(config), 'mode':'000600'},
+                               '/etc/relais/node.env': {'content':'# Public settings supplied per service in this test.\n', 'mode':'000600'}}}
+        def save_fixture():
+            host['RelaisFiles']['/etc/relais/node.json']['content'] = json.dumps(config)
+            fixtures.write_text(json.dumps({'BootFiles':common, 'RelayHost':host, 'secrets':self.passwords}))
+            fixtures.chmod(0o600)
+        aws = self.work / 'path/aws'
+        aws.write_text('#!' + sys.executable + '\n' +
+            'import json,os,sys\nd=json.load(open(os.environ["RELAIS_TEST_CLOUD_FILE"]))\na=sys.argv\n' +
+            'if a[1:3]==["cloudformation","describe-stack-resource"]: print(json.dumps(d[a[a.index("--logical-resource-id")+1]]))\n' +
+            'elif a[1:3]==["secretsmanager","get-secret-value"]: print(d["secrets"][a[a.index("--secret-id")+1]])\n' +
+            'else: sys.exit(2)\n')
+        aws.chmod(0o755)
+        signaler = image / 'opt/aws/bin/cfn-signal'
+        signaler.parent.mkdir(parents=True)
+        signaler.write_text('#!/usr/bin/env bash\nset -eu\nprintf "%s\\n" "$*" >> "$RELAIS_TEST_SIGNAL_LOG"\n')
+        signaler.chmod(0o755)
         manager = self.work / 'service-manager'
         manager.write_text('#!/usr/bin/env bash\nset -eu\nprintf "%s\\n" "$*" >> "$RELAIS_TEST_MANAGER_LOG"\n')
         manager.chmod(0o755)
-        self.env.update(RELAIS_TEST_SYSTEMCTL=str(manager), RELAIS_TEST_MANAGER_LOG=str(self.work / 'manager.log'),
-                        RELAIS_INSTALL_ROOT=str(image), RELAIS_BOOT_PYTHON=sys.executable)
-        # Check refusal before any service-manager invocation, not just downloader's return code.
-        config['sha256'] = '0' * 64
-        node.write_text(json.dumps(config))
-        bad = self.run([str(ROOT / 'boot/install.sh')], self.env, 30)
+        sysctl = self.work / 'sysctl'
+        sysctl.write_text('#!/usr/bin/env bash\nset -eu\nprintf "sysctl %s\\n" "$*" >> "$RELAIS_TEST_MANAGER_LOG"\n')
+        sysctl.chmod(0o755)
+        self.env.update(RELAIS_TEST_CLOUD_FILE=str(fixtures), RELAIS_TEST_SYSTEMCTL=str(manager),
+                        RELAIS_TEST_SYSCTL=str(sysctl), RELAIS_TEST_READY=str(manager), RELAIS_TEST_MANAGER_LOG=str(self.work / 'manager.log'),
+                        RELAIS_TEST_SIGNAL_LOG=str(self.work / 'signals.log'), RELAIS_INSTALL_ROOT=str(image))
+        userdata = self.work / 'user-data.sh'
+        userdata.write_text(resolve(self.template)['RelayHost']['Properties']['UserData'])
+        userdata.chmod(0o755)
+        config['sha256'] = '0' * 64; save_fixture()
+        bad = self.run([str(userdata)], self.env, 30)
         assert bad.returncode != 0 and b'digest mismatch' in bad.stderr
         assert not (self.work / 'manager.log').exists() and not (image / 'opt/relais/bin/relais-relay').exists()
-        print('PASS: bad digest refuses boot before any service starts')
-        config['sha256'] = self.archive_digest = hashlib.sha256(self.archive_path.read_bytes()).hexdigest()
-        node.write_text(json.dumps(config))
-        result = self.run([str(ROOT / 'boot/install.sh')], self.env, 30)
-        assert result.returncode == 0, 'valid boot script failed: ' + result.stderr.decode()
+        assert '-e 1 ' in (self.work / 'signals.log').read_text()
+        print('PASS: real UserData bad digest signals failure before any service starts')
+        config['sha256'] = self.archive_digest = hashlib.sha256(self.archive_path.read_bytes()).hexdigest(); save_fixture()
+        result = self.run([str(userdata)], self.env, 30)
+        assert result.returncode == 0, 'valid UserData failed: ' + result.stderr.decode()
+        assert '-e 0 ' in (self.work / 'signals.log').read_text()
+        assert (image / 'etc/relais').stat().st_mode & 0o777 == 0o700
+        assert not (image / 'opt/relais/bin/relais-load').exists(), 'caller must not be installed on hosts'
+        buffers = (image / 'etc/sysctl.d/60-relais-udp.conf').read_text()
+        assert 'net.core.rmem_max = 16777216' in buffers and 'net.core.wmem_max = 16777216' in buffers
         runtime = image / 'run/relais'
         for p in runtime.iterdir():
             assert p.stat().st_mode & 0o777 == 0o600
+            assert p.stat().st_uid == os.geteuid(), 'credential file has wrong owner'
         assert (runtime / 'relay.env').read_text().find('SESSIONSTORE_KEY') == -1
         assert set(p.name for p in runtime.iterdir()) == {'relay.env', 'worker.env', 'control.env', 'signal.token'}
         commands = (self.work / 'manager.log').read_text()
+        assert commands.index('sysctl -p ') < commands.index('enable --now relais-relay.service')
         assert 'mask amazon-ssm-agent.service' in commands and 'enable --now relais-relay-standby.service' in commands
         check_program_access(image)
         self.image, self.runtime = image, runtime
         print('PASS: valid archive, fake-secret boot, role files mode 0600, SSM off, minimal PATH')
+
+    def role_images(self):
+        template = resolve(self.template, profile='resilience')
+        template['SharedHost'] = resolve(self.template)['SharedHost']
+        source = self.work / 'cloud.json'
+        original = source.read_text()
+        env = dict(self.env)
+        signaler = self.image / 'opt/aws/bin/cfn-signal'
+        for name in ('RelayHost', 'WorkerOne', 'ControlHost', 'SignalHost', 'SharedHost'):
+            image = self.work / ('host-' + name)
+            target = image / 'opt/aws/bin/cfn-signal'
+            target.parent.mkdir(parents=True); shutil.copy2(signaler, target)
+            fixture = json.loads(original)
+            host = template[name]['Metadata']
+            config = json.loads(host['RelaisFiles']['/etc/relais/node.json']['content'])
+            config.update(version='0.3.0', architecture='arm64', sha256=self.archive_digest, ssm='false')
+            config['secrets'] = {k:k for k in config['secrets']}
+            host['RelaisFiles']['/etc/relais/node.json']['content'] = json.dumps(config)
+            fixture[name] = host; source.write_text(json.dumps(fixture))
+            script = self.work / ('user-data-' + name + '.sh')
+            script.write_text(template[name]['Properties']['UserData']); script.chmod(0o755)
+            env['RELAIS_INSTALL_ROOT'] = str(image)
+            result = self.run([str(script)], env, 30)
+            assert result.returncode == 0, name + ' UserData failed: ' + result.stderr.decode()
+            check_program_access(image)
+            assert {p.name for p in (image / 'opt/relais/bin').iterdir()} == {'relais-' + c for c in config['components']}
+            expected = {'relais-prepare.service', *('relais-' + c + '.service' for c in config['components'])}
+            if 'relay' in config['components']: expected.add('relais-relay-standby.service')
+            assert {p.name for p in (image / 'etc/systemd/system').iterdir()} == expected
+        source.write_text(original)
+        print('PASS: real UserData installs only each host role binaries/units; all executable ancestors searchable')
 
     def node_environment(self, role):
         instance = resolve(self.template)['RelayHost' if role.startswith('relay') else 'WorkerOne' if role.startswith('worker') else 'SharedHost']
@@ -311,7 +389,7 @@ masterauth {self.passwords['admin']}
         role = 'worker' if name.startswith('worker') else name
         unit = (ROOT / 'units' / ('relais-' + role + '.service')).read_text()
         if self.args.mutation == 'unit' and name == 'relay':
-            unit = unit.replace('ExecStart=/opt/relais/boot/run.sh relay', 'ExecStart=/usr/bin/false')
+            unit += '\n[Service]\nInaccessiblePaths=/opt/relais/bin\n'
         environment = self.node_environment(name)
         envfile = self.work / (name + '.env')
         envfile.write_text(''.join(f'{k}={v}\n' for k, v in environment.items()))
@@ -322,7 +400,7 @@ masterauth {self.passwords['admin']}
             destination.write_text(unit)
             self.units.append(unit_name)
             dropins = Path(str(destination) + '.d')
-            dropins.mkdir()
+            dropins.mkdir(exist_ok=True)
             # Preserve the original unit and its hardening; override only test fixture paths/settings.
             dropin = '[Service]\nEnvironmentFile=' + str(envfile) + '\n'
             (dropins / 'fixture.conf').write_text(dropin)
@@ -360,19 +438,31 @@ masterauth {self.passwords['admin']}
             assert sys.platform == 'linux' and os.geteuid() == 0
             # CI runner is disposable. Local Mac never enters this branch.
             for role in ('relay', 'worker', 'control', 'signal'):
+                if subprocess.run(['id', 'relais-' + role], capture_output=True).returncode == 0:
+                    continue
                 subprocess.run(['useradd', '--system', '--user-group', '--no-create-home', '--shell', '/usr/sbin/nologin', 'relais-' + role], check=True)
             shutil.copytree(self.image / 'opt/relais', '/opt/relais', dirs_exist_ok=True)
-            Path('/opt/relais/sdk/bin').mkdir(parents=True, exist_ok=True)
-            Path('/opt/relais/sdk/bin/python').symlink_to(sys.executable)
             check_program_access(Path('/'))
-            Path('/etc/relais').mkdir(exist_ok=True)
-            Path('/etc/relais/node.env').write_text('# Fixture public settings are appended by each unit drop-in.\n')
+            Path('/etc/relais').mkdir(mode=0o700, exist_ok=True)
+            Path('/etc/relais').chmod(0o700)
+            Path('/etc/relais/node.env').write_text('# Public settings supplied per service.\n')
+            Path('/etc/relais/node.env').chmod(0o600)
+            for role in ('relay', 'worker', 'control', 'signal'):
+                for executable in ('/opt/relais/boot/run.sh', '/opt/relais/bin/relais-' + role):
+                    subprocess.run(['runuser', '-u', 'relais-' + role, '--', 'test', '-x', executable], check=True)
+                assert subprocess.run(['runuser', '-u', 'relais-' + role, '--', 'test', '-r', '/etc/relais/node.env'], capture_output=True).returncode != 0
+
             shutil.copy2(self.image / 'etc/relais/node.json', '/etc/relais/node.json')
+            shutil.copy2(self.image / 'etc/sysctl.d/60-relais-udp.conf', '/etc/sysctl.d/60-relais-udp.conf')
             shutil.copy2(ROOT / 'units/relais-prepare.service', '/etc/systemd/system/relais-prepare.service')
             self.units.append('relais-prepare.service')
             dropins = Path('/etc/systemd/system/relais-prepare.service.d')
-            dropins.mkdir()
-            (dropins / 'fixture.conf').write_text('[Service]\nEnvironment=RELAIS_TEST_SECRET_FILE=' + self.env['RELAIS_TEST_SECRET_FILE'] + '\n')
+            dropins.mkdir(exist_ok=True)
+            source = self.work / 'fake-secrets.json'
+            (dropins / 'fixture.conf').write_text('[Service]\nEnvironment=RELAIS_TEST_SECRET_FILE=' + str(source) + '\n')
+            subprocess.run(['sysctl', '-p', '/etc/sysctl.d/60-relais-udp.conf'], check=True)
+            for key in ('net.core.rmem_max', 'net.core.wmem_max'):
+                assert subprocess.check_output(['sysctl', '-n', key], text=True).strip() == '16777216'
             # No binaries in /tmp: ProtectHome/PrivateTmp otherwise correctly hide fixtures.
             self.image = Path('/')
         self.service('relay')
@@ -388,6 +478,19 @@ masterauth {self.passwords['admin']}
             return data.get('ready') is True
         self.wait(ready, 'production fixed bootstrap', seconds=20)
         self.wait(lambda: self.get_certificate() is not None, 'signaling TLS')
+        ready_spec = importlib.util.spec_from_file_location('boot_readiness', ROOT / 'boot/ready.py')
+        readiness = importlib.util.module_from_spec(ready_spec)
+        ready_spec.loader.exec_module(readiness)
+        settings = self.work / 'ready.env'
+        settings.write_text(''.join(k + '=' + v + '\n' for k,v in self.node_environment('relay').items()))
+        readiness.ready(self.image / 'etc/relais/node.json', settings, timeout=5)
+        if self.args.systemd:
+            for path in Path('/run/relais').iterdir():
+                assert path.stat().st_uid == 0 and stat.S_IMODE(path.stat().st_mode) == 0o600
+            for role in ('relay', 'worker', 'control'):
+                assert subprocess.run(['runuser', '-u', 'relais-' + role, '--', 'test', '-r', '/run/relais/' + role + '.env'], capture_output=True).returncode != 0
+
+
         print('PASS: same unit ExecStart commands boot relay + standby, two workers, control, signaling')
 
     def get_certificate(self):
@@ -400,11 +503,11 @@ masterauth {self.passwords['admin']}
         cert = self.work / 'signal.pem'
         cert.write_text(self.get_certificate())
         out = self.work / 'caller.jsonl'
-        child = self.start('caller', [str(self.image / 'opt/relais/bin/relais-load'), '-external-caller',
+        child = self.start('caller', [str(Path(self.args.bin) / 'relais-load'), '-external-caller',
                     f'-signaling=https://127.0.0.1:{self.ports["SIGNAL_PORT"]}/calls',
                     '-signaling-cert=' + str(cert), '-bearer-token-file=' + str(self.runtime / 'signal.token'),
                     f'-relay=127.0.0.1:{self.ports["RELAY_MEDIA_PORT"]}', '-caller-bind=127.0.0.1:0',
-                    '-callers=1', '-duration=4s', '-sample-every=1s', '-video=false', '-output=' + str(out)])
+                    '-callers=1', '-duration=10s', '-sample-every=1s', '-video=false', '-output=' + str(out)])
         endpoint = []
         def caller_ready():
             for line in self.logs['caller'].read_text().splitlines():
@@ -420,6 +523,21 @@ masterauth {self.passwords['admin']}
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         request = urllib.request.Request(endpoint[0] + '/start', json.dumps({'at': now}).encode(), {'Content-Type': 'application/json'})
         assert urllib.request.urlopen(request, timeout=2).status == 200
+        def status():
+            return json.load(urllib.request.urlopen(f'http://127.0.0.1:{self.ports["RELAY_HTTP_PORT"]}/status', timeout=1))
+        self.wait(lambda: status()['stats']['Flows'] > 0 and status()['stats']['RouteWrites'] > 0 and status()['stats']['WorkerPackets'] > 30,
+                  'live persisted routes before takeover')
+        primary = status()['instance']
+        if self.args.systemd:
+            subprocess.run(['systemctl', 'kill', '--signal=SIGKILL', 'relais-test-relay.service'], check=True)
+        else:
+            self.named_children['relay'].kill(); self.named_children['relay'].wait(timeout=5)
+        self.wait(lambda: status()['instance'] != primary and status()['stats']['RoutesRestored'] > 0,
+                  'standby restores live routes')
+        before = status()['stats']['WorkerPackets']
+        self.wait(lambda: status()['stats']['WorkerPackets'] > before + 50, 'media continues after standby restore')
+        assert status()['stats']['RoutesRestoreFailed'] == 0
+        print('PASS: primary killed with live routes; standby restored routes and forwarded >=50 more audio packets')
         assert child.wait(timeout=25) == 0, 'real caller exited with failure'
         messages = [json.loads(line) for line in out.read_text().splitlines()]
         calls = [m for m in messages if m.get('type') == 'call']
@@ -433,7 +551,20 @@ masterauth {self.passwords['admin']}
         assert sum(report['DecryptionFailures'].values()) == 0
         assert report['OfferAnswerExchanges'] == 1 and report['ICERestarts'] == 0
         print('PASS: connected caller decrypted >=50 audio packets with zero decryption failures')
+        self.assert_no_permission_errors()
         print('PASS: real external caller completed an authenticated audio call through all four components')
+
+    def collect_journals(self):
+        for unit in self.units:
+            result = subprocess.run(['journalctl', '--unit', unit, '--no-pager', '--output=cat'], capture_output=True)
+            path = self.work / (unit + '.log'); path.write_bytes(result.stdout + result.stderr)
+            self.logs[unit] = path
+
+    def assert_no_permission_errors(self):
+        if self.args.systemd:
+            self.collect_journals()
+        for name, path in self.logs.items():
+            assert not PERMISSION_ERROR.search(path.read_text(errors='replace')), 'Redis permission error in ' + name
 
     def diagnostics(self, stage, error):
         """Capture before cleanup destroys failed-unit state. Only this report is public."""
@@ -459,6 +590,8 @@ masterauth {self.passwords['admin']}
                 capture(['journalctl', '--no-pager', '-u', unit, '--output=cat'])
                 capture(['systemctl', 'cat', '--no-pager', unit])
             lines.extend(installed_unit_text(Path('/etc/systemd/system')))
+            if hasattr(self, 'image') and self.image != Path('/'):
+                lines.extend(installed_unit_text(self.image / 'etc/systemd/system'))
             capture(['ss', '-lntup'])
             for role in ('relay', 'worker', 'control', 'signal'):
                 capture(['id', 'relais-' + role])
@@ -510,6 +643,15 @@ masterauth {self.passwords['admin']}
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.wait(timeout=5)
+        if self.args.systemd:
+            for unit in self.units:
+                destination = Path('/etc/systemd/system') / unit
+                destination.unlink(missing_ok=True)
+                shutil.rmtree(str(destination) + '.d', ignore_errors=True)
+            subprocess.run(['systemctl', 'daemon-reload'], check=True)
+            subprocess.run(['systemctl', 'reset-failed'], check=True)
+        if not self.args.mutation:
+            self.assert_no_permission_errors()
         if hasattr(self, 'server'):
             self.server.shutdown()
             self.server.server_close()
@@ -529,6 +671,8 @@ def main():
     parser.add_argument('--diagnostics-dir', help='Only redacted reports are written here; safe to upload')
     args = parser.parse_args()
     Path(args.work).mkdir(mode=0o700, parents=True, exist_ok=False)
+    if args.mutation == 'unit' and not args.systemd:
+        parser.error('unit hardening enforcement requires --systemd on disposable Linux')
     trial = Trial(args, args.work)
     outcome = 0
     stage = 'cluster'
@@ -536,6 +680,7 @@ def main():
         trial.cluster()
         stage = 'bootstrap'
         trial.boot()
+        trial.role_images()
         stage = 'services'
         trial.services()
         stage = 'call'
@@ -545,11 +690,13 @@ def main():
         trial.diagnostics(stage, traceback.format_exc())
         outcome = 1
         if args.mutation:
+            if args.systemd:
+                trial.collect_journals()
             if args.mutation == 'acl':
-                logs = '\n'.join(p.read_text() for n, p in trial.logs.items() if n.startswith('relay'))
-                matched = any(word in logs.lower() for word in ('noperm', 'no permissions', "can't run this command"))
+                logs = '\n'.join(p.read_text() for p in trial.logs.values())
+                matched = bool(PERMISSION_ERROR.search(logs))
             else:
-                matched = any(p.args == ['/usr/bin/false'] and p.poll() == 1 for p in trial.children)
+                matched = args.systemd and any('Permission denied' in p.read_text() or 'inaccessible' in p.read_text().lower() for n,p in trial.logs.items() if n.startswith('relais-test-relay'))
             if matched:
                 print('EXPECTED REFUSAL: ' + args.mutation)
                 outcome = 42

@@ -4,10 +4,20 @@ on:
     paths:
       - 'deploy/aws/**'
       - '.github/workflows/deploy-template.yml'
+      - 'cmd/**'
+      - 'pkg/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
   push:
     paths:
       - 'deploy/aws/**'
       - '.github/workflows/deploy-template.yml'
+      - 'cmd/**'
+      - 'pkg/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
   workflow_dispatch:
 permissions:
   contents: read
@@ -25,7 +35,7 @@ jobs:
       - name: Install pinned offline validation tools
         run: |
           python -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install --disable-pip-version-check -r deploy/aws/tests/requirements.txt
+          "$RUNNER_TEMP/venv/bin/pip" install --require-hashes --disable-pip-version-check -r deploy/aws/tests/requirements.txt
           deploy/aws/tests/install-ci-tools.sh lint "$RUNNER_TEMP/tools"
       - name: Lint, policy, parameter branches and embedded-file parity
         env:
@@ -36,15 +46,13 @@ jobs:
           "$RUNNER_TEMP/venv/bin/python" deploy/aws/tests/boot-contract-test.py
           "$RUNNER_TEMP/venv/bin/python" deploy/aws/tests/sync-files.py
           "$RUNNER_TEMP/tools/shellcheck-v0.11.0/shellcheck" deploy/aws/boot/*.sh deploy/aws/tests/*.sh
-      - name: Verify the installed units with pinned systemd-analyze 255.4
+      - name: Verify units with the runner systemd-analyze (record version)
         run: |
-          sudo mkdir -p /opt/relais/boot /opt/relais/sdk/bin
+          sudo mkdir -p /opt/relais/boot
           sudo cp deploy/aws/boot/* /opt/relais/boot/
-          sudo ln -s "$(command -v python)" /opt/relais/sdk/bin/python
-          export LD_LIBRARY_PATH="$RUNNER_TEMP/tools/systemd/usr/lib/x86_64-linux-gnu/systemd"
           export SYSTEMD_UNIT_PATH="$PWD/deploy/aws/units:/usr/lib/systemd/system"
-          "$RUNNER_TEMP/tools/systemd/usr/bin/systemd-analyze" --version
-          "$RUNNER_TEMP/tools/systemd/usr/bin/systemd-analyze" verify deploy/aws/units/*.service
+          systemd-analyze --version
+          systemd-analyze verify deploy/aws/units/*.service
   boot:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -63,9 +71,8 @@ jobs:
           deploy/aws/tests/install-ci-tools.sh boot "$RUNNER_TEMP/tools"
           echo "$RUNNER_TEMP/tools/redis-7.0.11/src" >> "$GITHUB_PATH"
           python -m venv "$RUNNER_TEMP/venv"
-          "$RUNNER_TEMP/venv/bin/pip" install --disable-pip-version-check -r deploy/aws/tests/requirements.txt
-          # Fail visibly if ubuntu-latest changes the systemd runtime contract.
-          test "$(systemctl --version | head -1 | cut -d' ' -f2)" = 255
+          "$RUNNER_TEMP/venv/bin/pip" install --require-hashes --disable-pip-version-check -r deploy/aws/tests/requirements.txt
+          systemd-analyze --version
       - name: Build the existing real components and caller
         run: go build -o "$RUNNER_TEMP/bin/" ./cmd/relais-relay ./cmd/relais-worker ./cmd/relais-control ./cmd/relais-signal ./cmd/relais-load
       - name: Same units, fake cloud sources, Redis Cluster ACLs and real call
@@ -79,8 +86,8 @@ jobs:
         run: |
           for mutation in acl unit; do
             set +e
-            "$RUNNER_TEMP/venv/bin/python" -u deploy/aws/tests/boot-test.py \
-              --mutation "$mutation" --bin "$RUNNER_TEMP/bin" --work "$RUNNER_TEMP/refuse-$mutation" \
+            sudo env PATH="$PATH" PYTHONDONTWRITEBYTECODE=1 "$RUNNER_TEMP/venv/bin/python" -u deploy/aws/tests/boot-test.py \
+              --systemd --mutation "$mutation" --bin "$RUNNER_TEMP/bin" --work "$RUNNER_TEMP/refuse-$mutation" \
               --diagnostics-dir "$RUNNER_TEMP/boot-diagnostics/$mutation"
             result=$?
             set -e

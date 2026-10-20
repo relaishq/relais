@@ -2,8 +2,8 @@
 # Install only a caller-pinned archive. Never execute unverified bytes.
 set -euo pipefail
 umask 077
-[[ $# == 4 ]] || { echo 'usage: download.sh VERSION arm64|x86_64 SHA256 DEST' >&2; exit 2; }
-version=$1 arch=$2 digest=$3 dest=$4
+[[ $# == 5 ]] || { echo 'usage: download.sh VERSION arm64|x86_64 SHA256 DEST COMPONENTS' >&2; exit 2; }
+version=$1 arch=$2 digest=$3 dest=$4 components=$5
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.+-]+)?$ ]] || exit 2
 [[ $digest =~ ^[a-f0-9]{64}$ ]] || exit 2
 case $arch in arm64) ;; x86_64) arch=amd64 ;; *) exit 2 ;; esac
@@ -36,7 +36,8 @@ with tarfile.open(archive, 'r:gz') as tar:
     tar.extractall(work)
 PY
 install -d -m 0755 "$dest"
-for name in relais-relay relais-worker relais-control relais-signal relais-load; do
-  install -m 0755 "$work/$base/$name" "$dest/$name"
+for component in $components; do
+  case $component in relay|worker|control|signal) ;; *) exit 2 ;; esac
+  install -m 0755 "$work/$base/relais-$component" "$dest/relais-$component"
 done
 echo 'artifact verified and installed'

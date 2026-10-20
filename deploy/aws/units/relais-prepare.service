@@ -6,7 +6,7 @@ Before=relais-relay.service relais-relay-standby.service relais-worker.service r
 
 [Service]
 Type=oneshot
-ExecStart=/opt/relais/sdk/bin/python /opt/relais/boot/prepare.py /etc/relais/node.json /run/relais
+ExecStart=/usr/bin/python3 /opt/relais/boot/prepare.py /etc/relais/node.json /run/relais
 RemainAfterExit=yes
 UMask=0077
 StandardOutput=journal
