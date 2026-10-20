@@ -5,6 +5,8 @@ umask 077
 root=${RELAIS_INSTALL_ROOT:-/}
 boot="$root/opt/relais/boot"
 config="$root/etc/relais/node.json"
+# Public executable directories must remain traversable after systemd drops root.
+install -d -m 0755 "$root/opt/relais" "$boot" "$root/opt/relais/bin"
 # A single failure prevents any component from starting.
 settings=()
 while IFS= read -r value; do settings+=("$value"); done < <(python3 - "$config" <<'PY'
@@ -25,7 +27,7 @@ else
 fi
 for component in ${settings[3]}; do
   if [[ -z ${RELAIS_INSTALL_ROOT:-} ]]; then
-    id "relais-$component" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "relais-$component"
+    id "relais-$component" >/dev/null 2>&1 || useradd --system --user-group --no-create-home --shell /usr/sbin/nologin "relais-$component"
   fi
 done
 "$manager" daemon-reload

@@ -33,6 +33,7 @@ jobs:
         run: |
           "$RUNNER_TEMP/venv/bin/cfn-lint" -r us-east-1 us-west-2 -t deploy/aws/preview.yaml
           "$RUNNER_TEMP/venv/bin/python" deploy/aws/tests/policy.py
+          "$RUNNER_TEMP/venv/bin/python" deploy/aws/tests/boot-contract-test.py
           "$RUNNER_TEMP/venv/bin/python" deploy/aws/tests/sync-files.py
           "$RUNNER_TEMP/tools/shellcheck-v0.11.0/shellcheck" deploy/aws/boot/*.sh deploy/aws/tests/*.sh
       - name: Verify the installed units with pinned systemd-analyze 255.4
@@ -72,14 +73,27 @@ jobs:
           PYTHONDONTWRITEBYTECODE: '1'
         run: |
           sudo env PATH="$PATH" PYTHONDONTWRITEBYTECODE=1 "$RUNNER_TEMP/venv/bin/python" -u deploy/aws/tests/boot-test.py \
-            --systemd --bin "$RUNNER_TEMP/bin" --work "$RUNNER_TEMP/boot-systemd"
+            --systemd --bin "$RUNNER_TEMP/bin" --work "$RUNNER_TEMP/boot-systemd" \
+            --diagnostics-dir "$RUNNER_TEMP/boot-diagnostics"
       - name: Prove a wrong ACL and a wrong unit cannot pass the boot test
         run: |
           for mutation in acl unit; do
             set +e
             "$RUNNER_TEMP/venv/bin/python" -u deploy/aws/tests/boot-test.py \
-              --mutation "$mutation" --bin "$RUNNER_TEMP/bin" --work "$RUNNER_TEMP/refuse-$mutation"
+              --mutation "$mutation" --bin "$RUNNER_TEMP/bin" --work "$RUNNER_TEMP/refuse-$mutation" \
+              --diagnostics-dir "$RUNNER_TEMP/boot-diagnostics/$mutation"
             result=$?
             set -e
-            test "$result" = 42
+            if [ "$result" != 42 ]; then
+              echo "negative $mutation test returned unexpected status $result" >&2
+              exit 1
+            fi
           done
+      - name: Upload redacted Relais boot diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: relais-boot-diagnostics
+          path: ${{ runner.temp }}/boot-diagnostics/
+          if-no-files-found: warn
+          retention-days: 7

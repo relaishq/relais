@@ -7,10 +7,10 @@ from template import ROOT, load, resolve
 from cfnlint.schema import PROVIDER_SCHEMA_MANAGER
 
 EXPECTED_PATHS = {
-    ('WorkerGroup', 'RelayGroup', 'udp', 34781), ('RelayGroup', 'WorkerGroup', 'udp', 34711),
-    ('ControlGroup', 'WorkerGroup', 'tcp', 34701), ('WorkerGroup', 'ControlGroup', 'tcp', 34710),
-    ('ControlGroup', 'RelayGroup', 'tcp', 34700), ('SignalGroup', 'ControlGroup', 'tcp', 34710),
-    ('AlbGroup', 'SignalGroup', 'tcp', 34743),
+    ('WorkerGroup', 'RelayGroup', 'udp', 24781), ('RelayGroup', 'WorkerGroup', 'udp', 24711),
+    ('ControlGroup', 'WorkerGroup', 'tcp', 24701), ('WorkerGroup', 'ControlGroup', 'tcp', 24710),
+    ('ControlGroup', 'RelayGroup', 'tcp', 24700), ('SignalGroup', 'ControlGroup', 'tcp', 24710),
+    ('AlbGroup', 'SignalGroup', 'tcp', 24743),
     *((role + 'Group', 'StoreGroup', 'tcp', 6379) for role in ('Worker', 'Control', 'Relay')),
 }
 SSM_ACTIONS = {'ssmmessages:CreateControlChannel', 'ssmmessages:CreateDataChannel',
@@ -18,6 +18,20 @@ SSM_ACTIONS = {'ssmmessages:CreateControlChannel', 'ssmmessages:CreateDataChanne
 SECRET_SCOPE = {'Relay': {'RelayPassword'}, 'Worker': {'WorkerPassword', 'SnapshotKey'},
                 'Control': {'ControlPassword', 'SnapshotKey'}, 'Signal': {'SignalToken'},
                 'Shared': {'ControlPassword', 'SnapshotKey', 'SignalToken'}}
+
+
+def check_component_ports(template, launcher):
+    ports = {int(port) for port in re.findall(r'\$\{[A-Z_]+:-([0-9]+)\}', launcher)}
+    assert ports, 'component defaults must declare explicit ports'
+    for resource in template['Resources'].values():
+        properties = resource['Properties']
+        if properties.get('IpProtocol') in ('tcp', 'udp'):
+            ports.update(properties[key] for key in ('FromPort', 'ToPort') if key in properties)
+        if resource['Type'].startswith('AWS::ElasticLoadBalancingV2::') and 'Port' in properties:
+            ports.add(properties['Port'])
+    for port in ports:
+        assert isinstance(port, int) and not 32768 <= port <= 60999, (
+            'component port lies in unreserved Linux ephemeral range: ' + str(port))
 
 
 def check(template):
@@ -46,6 +60,7 @@ def check(template):
             assert 'EnvironmentFile=/run/relais/' + identity + '.env' in fields
         assert 'PrivateUsers=yes' not in fields and 'ProtectProc=invisible' not in fields
     launcher = (ROOT / 'boot/run.sh').read_text()
+    check_component_ports(template, launcher)
     assert not any(flag in launcher for flag in ('-demo-register', '-test-register-worker', 'SRTP_DIAGNOSTICS'))
     # Read only bundled, pinned schemas: no schema update/network request is made.
     properties = PROVIDER_SCHEMA_MANAGER.get_resource_schema('us-east-1', 'AWS::ElastiCache::ReplicationGroup').schema['properties']
@@ -111,7 +126,7 @@ def check(template):
                             paths.add((rule['SourceSecurityGroupId'], rule['GroupId'], rule['IpProtocol'], rule['FromPort']))
                         else:
                             assert (n, rule['GroupId'], rule['IpProtocol'], rule['FromPort'], rule.get('CidrIp'), rule.get('CidrIpv6')) in {
-                                ('PublicRelay', 'RelayGroup', 'udp', 34780, '0.0.0.0/0', None),
+                                ('PublicRelay', 'RelayGroup', 'udp', 24780, '0.0.0.0/0', None),
                                 ('PublicHttps', 'AlbGroup', 'tcp', 443, '0.0.0.0/0', None)}, n
                     elif 'DestinationSecurityGroupId' in rule:
                         egress_paths.add((rule['GroupId'], rule['DestinationSecurityGroupId'], rule['IpProtocol'], rule['FromPort']))

@@ -18,7 +18,7 @@ Both profiles use two AZs. These resources exist with **zero calls**:
 | Resource | `lean` (default) | `resilience` | Reachability |
 | --- | ---: | ---: | --- |
 | Worker EC2 instances / encrypted 16-GiB gp3 root volumes | 2 / 2 | 3 / 3 | Private subnets |
-| Relay EC2 instance / encrypted root volume | 1 / 1 | 1 / 1 | Public subnet; only UDP 34780 inbound |
+| Relay EC2 instance / encrypted root volume | 1 / 1 | 1 / 1 | Public subnet; only UDP 24780 inbound |
 | Shared control-and-signaling instance / encrypted root volume | 1 / 1 | 0 | Private subnet |
 | Separate control and signaling instances / encrypted root volumes | 0 | 2 / 2 | Private subnets |
 | Total EC2 instances / root volumes | 4 / 4 | 6 / 6 | As above |
@@ -92,13 +92,13 @@ before accepting a later deployment. Require actual `EffectiveDurability=sync`.
 Do not expose a public preview until #193 and the paid acceptance gates pass.
 
 After a separately approved creation, configure your certificate's DNS name to
-the `SignalLoadBalancer` output. Caller media uses `RelayIPv4:34780`. Outputs
+the `SignalLoadBalancer` output. Caller media uses `RelayIPv4:24780`. Outputs
 contain no token, password, snapshot key or credential-bearing URL.
 
 ## Boundaries and secrets
 
-The only public ingress is relay **UDP 34780** and ALB **TCP 443**. HTTPS on
-the ALB reaches signaling over private HTTPS 34743. The target's certificate is
+The only public ingress is relay **UDP 24780** and ALB **TCP 443**. HTTPS on
+the ALB reaches signaling over private HTTPS 24743. The target's certificate is
 self-signed; ALB does not verify backend certificates. Health checks expect
 unauthenticated `/status` to return 401, which checks the HTTPS listener, not
 control readiness. ALB forwards only `/calls`, `/calls/*`, `/status` and `/clock`;
@@ -111,13 +111,13 @@ describe these limits (read 2026-10-19).
 
 | Source group | Destination group | Allowed private path |
 | --- | --- | --- |
-| Worker | Relay | UDP 34781, worker leg |
-| Relay | Worker | UDP 34711, private media |
-| Control | Worker | TCP 34701, worker API |
-| Worker | Control | TCP 34710, heartbeats and coordination |
-| Control | Relay | TCP 34700, relay API |
-| Signaling | Control | TCP 34710, bounded frontend |
-| ALB | Signaling | TCP 34743, HTTPS and health checks |
+| Worker | Relay | UDP 24781, worker leg |
+| Relay | Worker | UDP 24711, private media |
+| Control | Worker | TCP 24701, worker API |
+| Worker | Control | TCP 24710, heartbeats and coordination |
+| Control | Relay | TCP 24700, relay API |
+| Signaling | Control | TCP 24710, bounded frontend |
+| ALB | Signaling | TCP 24743, HTTPS and health checks |
 | Relay, worker, control | Store | TCP 6379, TLS and Cluster discovery |
 
 Each path has matching ingress and egress rules. There is no VPC-wide private
@@ -127,6 +127,11 @@ resolver is handled by AWS and is not filtered by security groups. Security
 groups are stateful, so responses do not need reverse ingress rules. See
 [AWS security-group rules](https://docs.aws.amazon.com/vpc/latest/userguide/security-group-rules.html)
 (read 2026-10-19).
+
+Component ports use 24700–24781, below Linux’s default ephemeral range
+32768–60999. The policy check rejects any unreserved component port within
+that range. This avoids outgoing boot connections taking a service port before
+its listener binds. No sysctl change is required.
 
 Every instance requires IMDSv2 with a one-hop response limit and encrypted EBS.
 Application services deny access to the IPv4 metadata address through systemd,
@@ -142,7 +147,10 @@ Secrets Manager generates five independent secrets: a 32-byte hex snapshot key,
 a signaling token, and relay, worker and control store passwords. CloudFormation
 passes password dynamic references only to ElastiCache user resources. At boot,
 root fetches exact permitted ARNs and writes root-owned 0600 files under
-`/run/relais` (directory 0700). systemd reads each component's `EnvironmentFile`;
+`/run/relais` (directory 0700). The public `/opt/relais`, `boot/` and `bin/`
+directories have mode 0755 so service users can traverse them. Credential
+directories and files keep their restricted modes. systemd reads each
+component's `EnvironmentFile`;
 signaling uses `LoadCredential` and `-token-file`. Values never enter UserData,
 outputs, process arguments or boot logs. SDK errors are replaced with a fixed
 failure message. The fake-source switches exist only for the local test; the
@@ -293,7 +301,14 @@ with test-only path/address drop-ins and the real hardening settings. A real
 audio call; at least 50 decrypted audio packets and zero decryption failures
 are required. Separate wrong-ACL and wrong-unit runs must return the specific
 expected-refusal code. No failure is accepted merely because a test exited
-nonzero. No fake secret files or full caller reports are uploaded.
+nonzero. Fast boot-contract checks reject owner-only executable directories and
+unsafe component ports. On systemd failure, the test prints each Relais unit's
+status, journal and installed unit text, listening sockets, service identities,
+and file ownership/modes. Exact generated secret values, credential assignments
+and bearer tokens are redacted before printing or writing reports. Credential
+environment-file contents are never dumped. The workflow uploads only the
+redacted `relais-boot-diagnostics` artifact on failure; fake secret files and full
+caller reports are never uploaded.
 
 On macOS, run the same unit commands as plain processes:
 

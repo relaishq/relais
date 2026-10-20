@@ -13,16 +13,19 @@ import json
 import os
 from pathlib import Path
 import random
+import re
 import shlex
 import shutil
 import signal
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import tarfile
 import threading
 import time
+import traceback
 import urllib.request
 
 from template import ROOT, load, resolve
@@ -63,6 +66,39 @@ class Redis:
                 raise Refusal('invalid Redis response')
             send(('AUTH', self.user, self.password))
             return send(args)
+
+
+def check_program_access(image):
+    """Check the other-user access bits needed after systemd drops root."""
+    paths = ['opt/relais', 'opt/relais/boot', 'opt/relais/bin', 'opt/relais/boot/run.sh']
+    paths += ['opt/relais/bin/' + name for name in
+              ('relais-relay', 'relais-worker', 'relais-control', 'relais-signal', 'relais-load')]
+    for relative in paths:
+        mode = (Path(image) / relative).stat().st_mode
+        assert mode & 0o005 == 0o005, 'service users cannot read/traverse/execute /' + relative
+
+
+def redact(text, secrets):
+    """Redact exact fake values plus common credential forms; never dump env files."""
+    for secret in secrets:
+        text = text.replace(secret, '<REDACTED>')
+    text = re.sub(r'(?im)(RELAIS_(?:REDIS_PASSWORD|SESSIONSTORE_KEY|SIGNAL_TOKEN)\s*=)[^\r\n]*',
+                  r'\1<REDACTED>', text)
+    return re.sub(r'(?i)(Bearer\s+)[A-Za-z0-9._~+/-]+=*', r'\1<REDACTED>', text)
+
+
+def installed_unit_text(directory):
+    """Read only unit definitions and drop-ins, never referenced credential files."""
+    result = []
+    for unit in sorted(Path(directory).glob('relais-*.service')):
+        paths = [unit, *sorted(Path(str(unit) + '.d').glob('*.conf'))]
+        for path in paths:
+            result.append('\nInstalled unit file: ' + str(path))
+            try:
+                result.append(path.read_text(errors='replace'))
+            except OSError as exc:
+                result.append(str(exc))
+    return result
 
 
 class Trial:
@@ -218,6 +254,8 @@ masterauth {self.passwords['admin']}
                 shutil.copy2(source, image / 'opt/relais/boot' / source.name)
         for source in (ROOT / 'units').glob('*.service'):
             shutil.copy2(source, image / 'etc/systemd/system' / source.name)
+        for relative in ('opt/relais', 'opt/relais/boot'):
+            (image / relative).chmod(0o700)
         config = {'version': '0.3.0', 'architecture': 'arm64', 'sha256': self.archive(), 'ssm': 'false',
                   'region': 'offline', 'components': ['relay', 'worker', 'control', 'signal'],
                   'secrets': {r: r for r in ('relay', 'worker', 'control', 'token', 'snapshot')}}
@@ -250,6 +288,7 @@ masterauth {self.passwords['admin']}
         assert set(p.name for p in runtime.iterdir()) == {'relay.env', 'worker.env', 'control.env', 'signal.token'}
         commands = (self.work / 'manager.log').read_text()
         assert 'mask amazon-ssm-agent.service' in commands and 'enable --now relais-relay-standby.service' in commands
+        check_program_access(image)
         self.image, self.runtime = image, runtime
         print('PASS: valid archive, fake-secret boot, role files mode 0600, SSM off, minimal PATH')
 
@@ -321,10 +360,11 @@ masterauth {self.passwords['admin']}
             assert sys.platform == 'linux' and os.geteuid() == 0
             # CI runner is disposable. Local Mac never enters this branch.
             for role in ('relay', 'worker', 'control', 'signal'):
-                subprocess.run(['useradd', '--system', '--no-create-home', '--shell', '/usr/sbin/nologin', 'relais-' + role], check=True)
+                subprocess.run(['useradd', '--system', '--user-group', '--no-create-home', '--shell', '/usr/sbin/nologin', 'relais-' + role], check=True)
             shutil.copytree(self.image / 'opt/relais', '/opt/relais', dirs_exist_ok=True)
             Path('/opt/relais/sdk/bin').mkdir(parents=True, exist_ok=True)
             Path('/opt/relais/sdk/bin/python').symlink_to(sys.executable)
+            check_program_access(Path('/'))
             Path('/etc/relais').mkdir(exist_ok=True)
             Path('/etc/relais/node.env').write_text('# Fixture public settings are appended by each unit drop-in.\n')
             shutil.copy2(self.image / 'etc/relais/node.json', '/etc/relais/node.json')
@@ -395,6 +435,60 @@ masterauth {self.passwords['admin']}
         print('PASS: connected caller decrypted >=50 audio packets with zero decryption failures')
         print('PASS: real external caller completed an authenticated audio call through all four components')
 
+    def diagnostics(self, stage, error):
+        """Capture before cleanup destroys failed-unit state. Only this report is public."""
+        lines = ['Relais boot failure: ' + stage, str(error)]
+
+        def capture(argv):
+            lines.append('\n$ ' + shlex.join(argv))
+            try:
+                result = subprocess.run(argv, capture_output=True, text=True, errors='replace', timeout=10,
+                                        env={**os.environ, 'SYSTEMD_PAGER': 'cat', 'SYSTEMD_COLORS': '0'})
+                lines.extend((result.stdout, result.stderr, 'exit=' + str(result.returncode)))
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                lines.append('diagnostic command unavailable: ' + str(exc))
+
+        if self.args.systemd:
+            # Include all shipped units and fixture copies, even if setup failed before start.
+            units = {p.name for p in (ROOT / 'units').glob('*.service')} | set(self.units)
+            units |= {p.name for p in Path('/etc/systemd/system').glob('relais-*.service')}
+            units |= {'relais-test-' + name + '.service' for name in
+                      ('relay', 'relay-standby', 'worker', 'worker-two', 'control', 'signal')}
+            for unit in sorted(units):
+                capture(['systemctl', 'status', '--no-pager', '--full', unit])
+                capture(['journalctl', '--no-pager', '-u', unit, '--output=cat'])
+                capture(['systemctl', 'cat', '--no-pager', unit])
+            lines.extend(installed_unit_text(Path('/etc/systemd/system')))
+            capture(['ss', '-lntup'])
+            for role in ('relay', 'worker', 'control', 'signal'):
+                capture(['id', 'relais-' + role])
+            paths = [Path('/opt/relais'), Path('/opt/relais/boot'), Path('/opt/relais/boot/run.sh'),
+                     Path('/opt/relais/bin'), Path('/opt/relais/bin/relais-relay'),
+                     Path('/etc/relais'), Path('/etc/relais/node.env'), Path('/run/relais')]
+            paths += list(Path('/run/relais').glob('*'))
+            lines.append('\nFile metadata only (credential contents are never read):')
+            for path in paths:
+                try:
+                    info = path.stat()
+                    lines.append(f'{path}: mode={stat.S_IMODE(info.st_mode):04o} uid={info.st_uid} gid={info.st_gid}')
+                except OSError as exc:
+                    lines.append(str(path) + ': ' + str(exc))
+        for name, path in sorted(self.logs.items()):
+            lines.append('\nOwned process log: ' + name)
+            try:
+                lines.append(path.read_text(errors='replace'))
+            except OSError as exc:
+                lines.append(str(exc))
+        report = redact('\n'.join(lines), self.passwords.values())
+        print(report, flush=True)
+        destination = Path(self.args.diagnostics_dir) if self.args.diagnostics_dir else self.work / 'diagnostics'
+        destination.mkdir(mode=0o755, parents=True, exist_ok=True)
+        destination.chmod(0o755)
+        path = destination / ('boot-' + stage + '.log')
+        path.write_text(report)
+        path.chmod(0o644)
+        print('Redacted failure report: ' + str(path), flush=True)
+
     def close(self):
         unit_order = ['relais-test-' + n + '.service' for n in
                       ('signal', 'worker-two', 'worker', 'control', 'relay-standby', 'relay')]
@@ -432,32 +526,41 @@ def main():
     parser.add_argument('--systemd', action='store_true')
     parser.add_argument('--mutation', choices=('acl', 'unit'))
     parser.add_argument('--work', required=True)
+    parser.add_argument('--diagnostics-dir', help='Only redacted reports are written here; safe to upload')
     args = parser.parse_args()
     Path(args.work).mkdir(mode=0o700, parents=True, exist_ok=False)
     trial = Trial(args, args.work)
+    outcome = 0
+    stage = 'cluster'
     try:
         trial.cluster()
+        stage = 'bootstrap'
         trial.boot()
+        stage = 'services'
         trial.services()
+        stage = 'call'
         trial.call()
     except Exception as exc:
-        message = str(exc)
-        for password in trial.passwords.values():
-            message = message.replace(password, '[REDACTED]')
-        print('FAIL:', message, file=sys.stderr)
+        print('FAIL:', redact(str(exc), trial.passwords.values()), file=sys.stderr)
+        trial.diagnostics(stage, traceback.format_exc())
+        outcome = 1
         if args.mutation:
             if args.mutation == 'acl':
                 logs = '\n'.join(p.read_text() for n, p in trial.logs.items() if n.startswith('relay'))
-                matched = any(word in logs.lower() for word in ('noperm', 'no permissions', 'can\'t run this command'))
+                matched = any(word in logs.lower() for word in ('noperm', 'no permissions', "can't run this command"))
             else:
                 matched = any(p.args == ['/usr/bin/false'] and p.poll() == 1 for p in trial.children)
             if matched:
                 print('EXPECTED REFUSAL: ' + args.mutation)
-                return 42
-        return 1
+                outcome = 42
     finally:
-        trial.close()
-    return 0
+        try:
+            trial.close()
+        except Exception as exc:
+            print('FAIL: cleanup:', redact(str(exc), trial.passwords.values()), file=sys.stderr)
+            trial.diagnostics('cleanup', traceback.format_exc())
+            outcome = 1
+    return outcome
 
 
 if __name__ == '__main__':

@@ -35,7 +35,7 @@ with tarfile.open(archive, 'r:gz') as tar:
             raise SystemExit('unsafe archive; installation refused')
     tar.extractall(work)
 PY
-mkdir -p "$dest"
+install -d -m 0755 "$dest"
 for name in relais-relay relais-worker relais-control relais-signal relais-load; do
   install -m 0755 "$work/$base/$name" "$dest/$name"
 done
