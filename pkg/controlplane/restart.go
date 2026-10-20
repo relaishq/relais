@@ -45,6 +45,8 @@ type createIntent struct {
 	Started time.Time `json:"started"`
 }
 
+var errCreateStatus = errors.New("controlplane: create worker status unavailable")
+
 // RestartOutcome is a typed result for an operation whose HTTP caller was lost.
 // A live result does not claim uninterrupted media or replay a worker effect.
 type RestartOutcome struct {
@@ -904,6 +906,12 @@ func (p *Plane) reconcileCreates(ctx context.Context) error {
 		}
 		err := p.reconcileCreate(ctx, key, worker)
 		worker.createMu.Unlock()
+		if errors.Is(err, errCreateStatus) {
+			// Rebuild must finish before heartbeat detection can establish death.
+			// Keep this record reserved while observing the remaining records.
+			p.restartLog("create-status:"+key, "create reconciliation record=%s worker=%s deferred: %v", key, worker.name, err)
+			continue
+		}
 		if err != nil {
 			return err
 		}
@@ -944,7 +952,7 @@ func (p *Plane) reconcileCreate(ctx context.Context, key string, worker *registr
 			if statusErr != nil {
 				// Only heartbeat expiry establishes death. Keep uncertain
 				// admission reserved until observation succeeds or detection fires.
-				return statusErr
+				return fmt.Errorf("%w: %w", errCreateStatus, statusErr)
 			}
 			if !status.InventoryKnown || status.Truncated || status.Address != worker.addr {
 				return ErrNotReady
@@ -981,6 +989,7 @@ func (p *Plane) reconcileCreate(ctx context.Context, key string, worker *registr
 	p.restart.mu.Lock()
 	local = p.restart.creates[key]
 	delete(p.restart.creates, key)
+	delete(p.restart.logs, "create-status:"+key)
 	p.restart.mu.Unlock()
 	if local != nil && local.reserved {
 		p.unreserve(local.worker)

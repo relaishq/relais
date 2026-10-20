@@ -63,7 +63,7 @@ func TestCreateReconciliationStatusFailureKeepsWorkerLive(t *testing.T) {
 	_, hbErr := p.remoteHeartbeat("a", HeartbeatRequest{Address: addrA})
 	t.Logf("next heartbeat from the live worker: %v", hbErr)
 	require.False(t, dead, "a live, heartbeating worker was marked dead by one failed status read")
-	require.Error(t, reconcileErr)
+	require.NoError(t, reconcileErr)
 	require.NoError(t, hbErr)
 	p.mu.Lock()
 	require.Equal(t, 1, a.reserved)

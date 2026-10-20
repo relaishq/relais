@@ -179,7 +179,7 @@ func TestControlUncertainCreateRetainsReservationUntilObserved(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, records, key)
 	unreachable.Store(true)
-	require.Error(t, p.reconcileCreates(ctx))
+	require.NoError(t, p.reconcileCreates(ctx))
 	p.mu.Lock()
 	require.Equal(t, 1, worker.reserved)
 	require.False(t, worker.dead)

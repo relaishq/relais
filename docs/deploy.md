@@ -379,6 +379,8 @@ records share one Redis slot; each session intent uses that session's slot.
 Records contain bounded coordination metadata, not snapshots or keys. Unresolved
 creates keep an incoming reservation until reconciled. A failed status read
 retains the record and reservation while heartbeats still establish liveness.
+The failed observation is logged per record and deferred; it does not block
+rebuild or reconciliation of other create records.
 Only the heartbeat detector declares a worker dead. Once declared dead, unknown
 creates do not block takeover: control settles store transitions, hands committed
 claims to crash recovery, and releases their reservations during reconciliation.
