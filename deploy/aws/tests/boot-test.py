@@ -240,6 +240,9 @@ masterauth {self.passwords['admin']}
                 for command in [('TYPE', 'relais:preview:setup:{sess:acl}'),
                                 ('HEXISTS', 'relais:preview:checkpoint:{sess:acl}', 'm')]:
                     assert admin.command('ACL', 'DRYRUN', role, *command) == 'OK'
+            # Registration persists a bounded control record before installing
+            # the worker. Missing HLEN leaves mutation readiness false.
+            assert admin.command('ACL', 'DRYRUN', 'control', 'HLEN', 'relais:preview:control:{control}') == 'OK'
         slot = binascii.crc_hqx(b'sess:acl', 0) % 16384
         slots = Redis(ports[0], 'test-admin', self.passwords['admin']).command('CLUSTER', 'SLOTS')
         owner = next(row[2][1] for row in slots if row[0] <= slot <= row[1])
