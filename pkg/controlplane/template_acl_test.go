@@ -17,6 +17,7 @@ import (
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/relaishq/relais/pkg/storage"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
@@ -107,9 +108,29 @@ func TestControlTemplateACLMutationReadiness(t *testing.T) {
 				return body.Ready, body.Rebuild
 			}
 			if missingBoundCheck {
-				require.Eventually(t, func() bool {
+				require.EventuallyWithT(t, func(c *assert.CollectT) {
 					ready, rebuild := status()
-					return !ready && strings.Contains(rebuild.Error, "can't run this command")
+					require.False(c, ready)
+					require.NotNil(c, rebuild)
+					require.NotEmpty(c, rebuild.Error)
+					// Redis versions use different error codes and prose for Lua ACL
+					// failures. Check the structured denial from the actual script.
+					entries, err := admin.Do(ctx, "ACL", "LOG", 128).Slice()
+					require.NoError(c, err)
+					denied := false
+					for _, entry := range entries {
+						fields, ok := entry.([]interface{})
+						require.True(c, ok)
+						require.Zero(c, len(fields)%2)
+						record := make(map[interface{}]interface{}, len(fields)/2)
+						for i := 0; i < len(fields); i += 2 {
+							record[fields[i]] = fields[i+1]
+						}
+						if record["username"] == user && record["reason"] == "command" && record["object"] == "hlen" && record["context"] == "lua" {
+							denied = true
+						}
+					}
+					require.True(c, denied, "no Lua HLEN denial for this control user; rebuild error: %s", rebuild.Error)
 				}, 3*time.Second, 10*time.Millisecond)
 				require.ErrorIs(t, plane.End(ctx, "missing"), ErrNotReady)
 				return
