@@ -1,0 +1,4542 @@
+# Native CloudFormation; boot copies are maintained by tests/sync-files.py --write.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Relais fixed preview. No public-use readiness claim; control restart safety and AWS acceptance remain pending.
+Parameters:
+  Profile:
+    Type: String
+    Default: lean
+    AllowedValues:
+    - lean
+    - resilience
+  ReleaseVersion:
+    Type: String
+    AllowedPattern: 0\.2\.[1-9][0-9]*|0\.([3-9]|[1-9][0-9]+)\.[0-9]+|[1-9][0-9]*\.[0-9]+\.[0-9]+
+    Description: Required post-v0.2.0 release version without v; no release is selected for you.
+  ArchiveSHA256:
+    Type: String
+    AllowedPattern: '[a-f0-9]{64}'
+    Description: Independently verified SHA-256 for the selected Linux architecture archive.
+  Architecture:
+    Type: String
+    Default: arm64
+    AllowedValues:
+    - arm64
+    - x86_64
+  ArmInstanceType:
+    Type: String
+    Default: m7g.large
+    AllowedPattern: '[a-z0-9]+[.][a-z0-9]+'
+  X86InstanceType:
+    Type: String
+    Default: m7i.large
+    AllowedPattern: '[a-z0-9]+[.][a-z0-9]+'
+  ArmImage:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+  X86Image:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+  CertificateArn:
+    Type: String
+    AllowedPattern: arn:[a-z-]+:acm:[a-z0-9-]+:[0-9]{12}:certificate/[a-f0-9-]+
+    Description: Your ACM certificate ARN in this region. Configure your DNS name after creation.
+  EnableSessionManager:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+    - 'false'
+    - 'true'
+  WorkerCallCap:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 8
+    Description: Admission limit, not an EC2 capacity claim; validate your workload before increasing.
+  SignalRateLimit:
+    Type: Number
+    Default: 100
+    MinValue: 10
+    Description: WAF requests per client IP per five-minute window; shared-NAT clients share a limit.
+Conditions:
+  Lean:
+    Fn::Equals:
+    - Ref: Profile
+    - lean
+  Resilience:
+    Fn::Equals:
+    - Ref: Profile
+    - resilience
+  Arm:
+    Fn::Equals:
+    - Ref: Architecture
+    - arm64
+  SessionManager:
+    Fn::Equals:
+    - Ref: EnableSessionManager
+    - 'true'
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties: {}
+  InternetAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: Vpc
+      InternetGatewayId:
+        Ref: InternetGateway
+  PublicA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: Vpc
+      AvailabilityZone:
+        Fn::Select:
+        - 0
+        - Fn::GetAZs: ''
+      CidrBlock: 10.42.0.0/24
+      MapPublicIpOnLaunch: false
+  PrivateA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: Vpc
+      AvailabilityZone:
+        Fn::Select:
+        - 0
+        - Fn::GetAZs: ''
+      CidrBlock: 10.42.10.0/24
+      MapPublicIpOnLaunch: false
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  PrivateRouteA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: Vpc
+  PrivateAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: PrivateA
+      RouteTableId:
+        Ref: PrivateRouteA
+  PublicB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: Vpc
+      AvailabilityZone:
+        Fn::Select:
+        - 1
+        - Fn::GetAZs: ''
+      CidrBlock: 10.42.1.0/24
+      MapPublicIpOnLaunch: false
+  PrivateB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: Vpc
+      AvailabilityZone:
+        Fn::Select:
+        - 1
+        - Fn::GetAZs: ''
+      CidrBlock: 10.42.11.0/24
+      MapPublicIpOnLaunch: false
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  PrivateRouteB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: Vpc
+  PrivateAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: PrivateB
+      RouteTableId:
+        Ref: PrivateRouteB
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: Vpc
+  InternetRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: InternetGateway
+    DependsOn: InternetAttachment
+  PublicAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: PublicA
+      RouteTableId:
+        Ref: PublicRouteTable
+  PublicAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: PublicB
+      RouteTableId:
+        Ref: PublicRouteTable
+  NatAddressA:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  NatA:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+        - NatAddressA
+        - AllocationId
+      SubnetId:
+        Ref: PublicA
+    DependsOn: InternetAttachment
+  PrivateDefaultA:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PrivateRouteA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId:
+        Ref: NatA
+  NatAddressB:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+    Condition: Resilience
+  NatB:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+        - NatAddressB
+        - AllocationId
+      SubnetId:
+        Ref: PublicB
+    DependsOn: InternetAttachment
+    Condition: Resilience
+  PrivateDefaultB:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PrivateRouteB
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId:
+        Fn::If:
+        - Resilience
+        - Ref: NatB
+        - Ref: NatA
+  RelayGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Relais Relay component
+      VpcId:
+        Ref: Vpc
+      SecurityGroupEgress:
+      - IpProtocol: icmp
+        FromPort: 252
+        ToPort: 86
+        CidrIp: 127.0.0.1/32
+        Description: Unusable rule suppresses the default allow-all egress
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  WorkerGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Relais Worker component
+      VpcId:
+        Ref: Vpc
+      SecurityGroupEgress:
+      - IpProtocol: icmp
+        FromPort: 252
+        ToPort: 86
+        CidrIp: 127.0.0.1/32
+        Description: Unusable rule suppresses the default allow-all egress
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  ControlGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Relais Control component
+      VpcId:
+        Ref: Vpc
+      SecurityGroupEgress:
+      - IpProtocol: icmp
+        FromPort: 252
+        ToPort: 86
+        CidrIp: 127.0.0.1/32
+        Description: Unusable rule suppresses the default allow-all egress
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  SignalGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Relais Signal component
+      VpcId:
+        Ref: Vpc
+      SecurityGroupEgress:
+      - IpProtocol: icmp
+        FromPort: 252
+        ToPort: 86
+        CidrIp: 127.0.0.1/32
+        Description: Unusable rule suppresses the default allow-all egress
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  AlbGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Relais Alb component
+      VpcId:
+        Ref: Vpc
+      SecurityGroupEgress:
+      - IpProtocol: icmp
+        FromPort: 252
+        ToPort: 86
+        CidrIp: 127.0.0.1/32
+        Description: Unusable rule suppresses the default allow-all egress
+  StoreGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Relais Store component
+      VpcId:
+        Ref: Vpc
+      SecurityGroupEgress:
+      - IpProtocol: icmp
+        FromPort: 252
+        ToPort: 86
+        CidrIp: 127.0.0.1/32
+        Description: Unusable rule suppresses the default allow-all egress
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  WorkerRelayLegIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: RelayGroup
+      SourceSecurityGroupId:
+        Ref: WorkerGroup
+      IpProtocol: udp
+      FromPort: 34781
+      ToPort: 34781
+  WorkerRelayLegEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: WorkerGroup
+      DestinationSecurityGroupId:
+        Ref: RelayGroup
+      IpProtocol: udp
+      FromPort: 34781
+      ToPort: 34781
+  RelayWorkerMediaIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: WorkerGroup
+      SourceSecurityGroupId:
+        Ref: RelayGroup
+      IpProtocol: udp
+      FromPort: 34711
+      ToPort: 34711
+  RelayWorkerMediaEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: RelayGroup
+      DestinationSecurityGroupId:
+        Ref: WorkerGroup
+      IpProtocol: udp
+      FromPort: 34711
+      ToPort: 34711
+  ControlWorkerApiIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: WorkerGroup
+      SourceSecurityGroupId:
+        Ref: ControlGroup
+      IpProtocol: tcp
+      FromPort: 34701
+      ToPort: 34701
+  ControlWorkerApiEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: ControlGroup
+      DestinationSecurityGroupId:
+        Ref: WorkerGroup
+      IpProtocol: tcp
+      FromPort: 34701
+      ToPort: 34701
+  WorkerControlApiIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: ControlGroup
+      SourceSecurityGroupId:
+        Ref: WorkerGroup
+      IpProtocol: tcp
+      FromPort: 34710
+      ToPort: 34710
+  WorkerControlApiEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: WorkerGroup
+      DestinationSecurityGroupId:
+        Ref: ControlGroup
+      IpProtocol: tcp
+      FromPort: 34710
+      ToPort: 34710
+  ControlRelayApiIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: RelayGroup
+      SourceSecurityGroupId:
+        Ref: ControlGroup
+      IpProtocol: tcp
+      FromPort: 34700
+      ToPort: 34700
+  ControlRelayApiEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: ControlGroup
+      DestinationSecurityGroupId:
+        Ref: RelayGroup
+      IpProtocol: tcp
+      FromPort: 34700
+      ToPort: 34700
+  SignalControlApiIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: ControlGroup
+      SourceSecurityGroupId:
+        Ref: SignalGroup
+      IpProtocol: tcp
+      FromPort: 34710
+      ToPort: 34710
+  SignalControlApiEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: SignalGroup
+      DestinationSecurityGroupId:
+        Ref: ControlGroup
+      IpProtocol: tcp
+      FromPort: 34710
+      ToPort: 34710
+  AlbSignalHttpsIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: SignalGroup
+      SourceSecurityGroupId:
+        Ref: AlbGroup
+      IpProtocol: tcp
+      FromPort: 34743
+      ToPort: 34743
+  AlbSignalHttpsEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: AlbGroup
+      DestinationSecurityGroupId:
+        Ref: SignalGroup
+      IpProtocol: tcp
+      FromPort: 34743
+      ToPort: 34743
+  WorkerStoreIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: StoreGroup
+      SourceSecurityGroupId:
+        Ref: WorkerGroup
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+  WorkerStoreEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: WorkerGroup
+      DestinationSecurityGroupId:
+        Ref: StoreGroup
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+  ControlStoreIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: StoreGroup
+      SourceSecurityGroupId:
+        Ref: ControlGroup
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+  ControlStoreEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: ControlGroup
+      DestinationSecurityGroupId:
+        Ref: StoreGroup
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+  RelayStoreIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: StoreGroup
+      SourceSecurityGroupId:
+        Ref: RelayGroup
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+  RelayStoreEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: RelayGroup
+      DestinationSecurityGroupId:
+        Ref: StoreGroup
+      IpProtocol: tcp
+      FromPort: 6379
+      ToPort: 6379
+  RelayInternetEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: RelayGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+      Description: Artifacts, Secrets Manager, optional SSM, OS packages and provider HTTPS APIs
+  WorkerInternetEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: WorkerGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+      Description: Artifacts, Secrets Manager, optional SSM, OS packages and provider HTTPS APIs
+  ControlInternetEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: ControlGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+      Description: Artifacts, Secrets Manager, optional SSM, OS packages and provider HTTPS APIs
+  SignalInternetEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId:
+        Ref: SignalGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+      Description: Artifacts, Secrets Manager, optional SSM, OS packages and provider HTTPS APIs
+  PublicRelay:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: RelayGroup
+      IpProtocol: udp
+      FromPort: 34780
+      ToPort: 34780
+      CidrIp: 0.0.0.0/0
+  PublicHttps:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Ref: AlbGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+  SnapshotKey:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Relais preview generated SnapshotKey
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+        IncludeSpace: false
+        RequireEachIncludedType: false
+        ExcludeUppercase: true
+        ExcludeCharacters: ghijklmnopqrstuvwxyz
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  SignalToken:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Relais preview generated SignalToken
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+        IncludeSpace: false
+        RequireEachIncludedType: false
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  RelayPassword:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Relais preview generated RelayPassword
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+        IncludeSpace: false
+        RequireEachIncludedType: false
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  WorkerPassword:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Relais preview generated WorkerPassword
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+        IncludeSpace: false
+        RequireEachIncludedType: false
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  ControlPassword:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: Relais preview generated ControlPassword
+      GenerateSecretString:
+        PasswordLength: 64
+        ExcludePunctuation: true
+        IncludeSpace: false
+        RequireEachIncludedType: false
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  RelayStoreUser:
+    Type: AWS::ElastiCache::User
+    Properties:
+      Engine: valkey
+      UserId:
+        Fn::Sub: ${AWS::StackName}-relay
+      UserName: relay
+      AccessString: on -@all +ping +cluster|slots +command +eval +evalsha +script|load +time +hmget +hget +hgetall +hset +hincrby
+        +hdel +del +pttl +pexpireat ~relais:preview:lease:* ~relais:preview:state:* ~relais:preview:record:* ~relais:preview:epoch:*
+        ~relais:preview:routes:* ~relais:preview:ended:* ~relais:preview:relay:* +scan
+      AuthenticationMode:
+        Type: password
+        Passwords:
+        - Fn::Sub: '{{resolve:secretsmanager:${RelayPassword}:SecretString}}'
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  WorkerStoreUser:
+    Type: AWS::ElastiCache::User
+    Properties:
+      Engine: valkey
+      UserId:
+        Fn::Sub: ${AWS::StackName}-worker
+      UserName: worker
+      AccessString: on -@all +ping +cluster|slots +command +eval +evalsha +script|load +time +hmget +hget +hgetall +hset +hincrby
+        +hdel +get +set +del +exists +incr +pttl +pexpire +pexpireat +zadd +zrange +zrem +scan ~relais:preview:*
+      AuthenticationMode:
+        Type: password
+        Passwords:
+        - Fn::Sub: '{{resolve:secretsmanager:${WorkerPassword}:SecretString}}'
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  ControlStoreUser:
+    Type: AWS::ElastiCache::User
+    Properties:
+      Engine: valkey
+      UserId:
+        Fn::Sub: ${AWS::StackName}-control
+      UserName: control
+      AccessString: on -@all +ping +cluster|slots +command +eval +evalsha +script|load +time +hmget +hget +hgetall +hset +hincrby
+        +hdel +get +set +del +exists +incr +pttl +pexpire +pexpireat +zadd +zrange +zrem +scan ~relais:preview:*
+      AuthenticationMode:
+        Type: password
+        Passwords:
+        - Fn::Sub: '{{resolve:secretsmanager:${ControlPassword}:SecretString}}'
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  DisabledDefaultUser:
+    Type: AWS::ElastiCache::User
+    Properties:
+      Engine: valkey
+      UserId:
+        Fn::Sub: ${AWS::StackName}-default
+      UserName: default
+      AccessString: off -@all
+      AuthenticationMode:
+        Type: no-password-required
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  StoreUsers:
+    Type: AWS::ElastiCache::UserGroup
+    Properties:
+      Engine: valkey
+      UserGroupId:
+        Fn::Sub: ${AWS::StackName}-users
+      UserIds:
+      - Ref: RelayStoreUser
+      - Ref: WorkerStoreUser
+      - Ref: ControlStoreUser
+      - Ref: DisabledDefaultUser
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  StoreSubnets:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: Relais durable store in two AZs
+      SubnetIds:
+      - Ref: PrivateA
+      - Ref: PrivateB
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  Store:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupDescription: Relais preview synchronous ownership store
+      Engine: valkey
+      EngineVersion: '9.0'
+      CacheNodeType: cache.m7g.large
+      ClusterMode: enabled
+      NumNodeGroups: 1
+      ReplicasPerNodeGroup: 1
+      AutomaticFailoverEnabled: true
+      MultiAZEnabled: true
+      Durability: sync
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: true
+      TransitEncryptionMode: required
+      CacheSubnetGroupName:
+        Ref: StoreSubnets
+      SecurityGroupIds:
+      - Ref: StoreGroup
+      UserGroupIds:
+      - Ref: StoreUsers
+      NodeGroupConfiguration:
+      - NodeGroupId: '0001'
+        PrimaryAvailabilityZone:
+          Fn::Select:
+          - 0
+          - Fn::GetAZs: ''
+        ReplicaAvailabilityZones:
+        - Fn::Select:
+          - 1
+          - Fn::GetAZs: ''
+        ReplicaCount: 1
+      SnapshotRetentionLimit: 1
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  RelayAddress:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+    DependsOn: InternetAttachment
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  RelayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ec2.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: BootOnly
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - secretsmanager:GetSecretValue
+            Resource:
+            - Ref: RelayPassword
+          - Effect: Allow
+            Action:
+            - cloudformation:DescribeStackResource
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*
+          - Fn::If:
+            - SessionManager
+            - Effect: Allow
+              Action:
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+              Resource: '*'
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - SessionManager
+            - Effect: Allow
+              Action:
+              - ssm:UpdateInstanceInformation
+              Resource:
+                Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+              Condition:
+                StringEquals:
+                  aws:ResourceTag/RelaisRole: relay
+                  aws:ResourceTag/RelaisStack:
+                    Ref: AWS::StackName
+            - Ref: AWS::NoValue
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-relay
+  RelayInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+      - Ref: RelayRole
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ec2.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: BootOnly
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - secretsmanager:GetSecretValue
+            Resource:
+            - Ref: WorkerPassword
+            - Ref: SnapshotKey
+          - Effect: Allow
+            Action:
+            - cloudformation:DescribeStackResource
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*
+          - Fn::If:
+            - SessionManager
+            - Effect: Allow
+              Action:
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+              Resource: '*'
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - SessionManager
+            - Effect: Allow
+              Action:
+              - ssm:UpdateInstanceInformation
+              Resource:
+                Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+              Condition:
+                StringEquals:
+                  aws:ResourceTag/RelaisRole: worker
+                  aws:ResourceTag/RelaisStack:
+                    Ref: AWS::StackName
+            - Ref: AWS::NoValue
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-worker
+  WorkerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+      - Ref: WorkerRole
+  ControlRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ec2.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: BootOnly
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - secretsmanager:GetSecretValue
+            Resource:
+            - Ref: ControlPassword
+            - Ref: SnapshotKey
+          - Effect: Allow
+            Action:
+            - cloudformation:DescribeStackResource
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*
+          - Fn::If:
+            - SessionManager
+            - Effect: Allow
+              Action:
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+              Resource: '*'
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - SessionManager
+            - Effect: Allow
+              Action:
+              - ssm:UpdateInstanceInformation
+              Resource:
+                Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+              Condition:
+                StringEquals:
+                  aws:ResourceTag/RelaisRole: control
+                  aws:ResourceTag/RelaisStack:
+                    Ref: AWS::StackName
+            - Ref: AWS::NoValue
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-control
+  ControlInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+      - Ref: ControlRole
+  SignalRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ec2.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: BootOnly
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - secretsmanager:GetSecretValue
+            Resource:
+            - Ref: SignalToken
+          - Effect: Allow
+            Action:
+            - cloudformation:DescribeStackResource
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*
+          - Fn::If:
+            - SessionManager
+            - Effect: Allow
+              Action:
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+              Resource: '*'
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - SessionManager
+            - Effect: Allow
+              Action:
+              - ssm:UpdateInstanceInformation
+              Resource:
+                Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+              Condition:
+                StringEquals:
+                  aws:ResourceTag/RelaisRole: signal
+                  aws:ResourceTag/RelaisStack:
+                    Ref: AWS::StackName
+            - Ref: AWS::NoValue
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-signal
+  SignalInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+      - Ref: SignalRole
+  SharedRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: ec2.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: BootOnly
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - secretsmanager:GetSecretValue
+            Resource:
+            - Ref: ControlPassword
+            - Ref: SnapshotKey
+            - Ref: SignalToken
+          - Effect: Allow
+            Action:
+            - cloudformation:DescribeStackResource
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*
+          - Fn::If:
+            - SessionManager
+            - Effect: Allow
+              Action:
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+              Resource: '*'
+            - Ref: AWS::NoValue
+          - Fn::If:
+            - SessionManager
+            - Effect: Allow
+              Action:
+              - ssm:UpdateInstanceInformation
+              Resource:
+                Fn::Sub: arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+              Condition:
+                StringEquals:
+                  aws:ResourceTag/RelaisRole: shared
+                  aws:ResourceTag/RelaisStack:
+                    Ref: AWS::StackName
+            - Ref: AWS::NoValue
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-shared
+  SharedInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+      - Ref: SharedRole
+  RelayHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId:
+        Fn::If:
+        - Arm
+        - Ref: ArmImage
+        - Ref: X86Image
+      InstanceType:
+        Fn::If:
+        - Arm
+        - Ref: ArmInstanceType
+        - Ref: X86InstanceType
+      IamInstanceProfile:
+        Ref: RelayInstanceProfile
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+      - DeviceName: /dev/xvda
+        Ebs:
+          Encrypted: true
+          VolumeSize: 16
+          VolumeType: gp3
+          DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            set -euo pipefail
+            umask 077
+            dnf install -y python3.11 python3.11-pip tar shadow-utils
+            mkdir -p /opt/relais /etc/relais
+            python3.11 -m venv /opt/relais/sdk
+            /opt/relais/sdk/bin/pip install --disable-pip-version-check boto3==1.43.115
+            /opt/relais/sdk/bin/python - <<'BOOT'
+            import boto3, json, os
+            from pathlib import Path
+            client = boto3.client('cloudformation', region_name='${AWS::Region}')
+            r = client.describe_stack_resource(StackName='${AWS::StackName}', LogicalResourceId='RelayHost')
+            metadata = json.loads(r['StackResourceDetail']['Metadata'])
+            for name, entry in metadata['RelaisFiles'].items():
+                path = Path(name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(entry['content'])
+                path.chmod(int(entry['mode'], 8))
+            BOOT
+            /opt/relais/boot/install.sh
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${AWS::StackName}-RelayHost
+      - Key: RelaisRole
+        Value: relay
+      - Key: RelaisStack
+        Value:
+          Ref: AWS::StackName
+      NetworkInterfaces:
+      - DeviceIndex: '0'
+        NetworkInterfaceId:
+          Ref: RelayInterface
+    Metadata:
+      RelaisFiles:
+        /opt/relais/boot/download.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Install only a caller-pinned archive. Never execute unverified bytes.
+            set -euo pipefail
+            umask 077
+            [[ $# == 4 ]] || { echo 'usage: download.sh VERSION arm64|x86_64 SHA256 DEST' >&2; exit 2; }
+            version=$1 arch=$2 digest=$3 dest=$4
+            [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.+-]+)?$ ]] || exit 2
+            [[ $digest =~ ^[a-f0-9]{64}$ ]] || exit 2
+            case $arch in arm64) ;; x86_64) arch=amd64 ;; *) exit 2 ;; esac
+            base="relais_${version}_linux_${arch}"
+            url="https://github.com/relaishq/relais/releases/download/v${version}/${base}.tar.gz"
+            # Local test seam; the stack never sets this variable.
+            url=${RELAIS_TEST_ARCHIVE_URL:-$url}
+            work=$(mktemp -d)
+            trap 'rm -rf "$work"' EXIT
+            curl --fail --silent --show-error --location --retry 3 --output "$work/archive" "$url"
+            if command -v sha256sum >/dev/null 2>&1; then
+              actual=$(sha256sum "$work/archive")
+            else
+              actual=$(shasum -a 256 "$work/archive")
+            fi
+            [[ ${actual%% *} == "$digest" ]] || { echo 'artifact digest mismatch; installation refused' >&2; exit 1; }
+            # Reject traversal, links, devices and unexpected members before extraction.
+            python3 - "$work/archive" "$base" "$work" <<'PY'
+            import sys, tarfile
+            archive, base, work = sys.argv[1:]
+            allowed = {'relais-relay', 'relais-worker', 'relais-control', 'relais-signal',
+                       'relais-demo', 'relais-load', 'start.sh', 'stop.sh', 'LICENSE', 'NOTICE', 'README.md'}
+            with tarfile.open(archive, 'r:gz') as tar:
+                for member in tar.getmembers():
+                    name = member.name.rstrip('/')
+                    if name == base and member.isdir():
+                        continue
+                    if not member.isfile() or name not in {base + '/' + n for n in allowed}:
+                        raise SystemExit('unsafe archive; installation refused')
+                tar.extractall(work)
+            PY
+            mkdir -p "$dest"
+            for name in relais-relay relais-worker relais-control relais-signal relais-load; do
+              install -m 0755 "$work/$base/$name" "$dest/$name"
+            done
+            echo 'artifact verified and installed'
+          mode: '000755'
+        /opt/relais/boot/install.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Root-only, fail-closed initial boot. Services do not refresh credentials themselves.
+            set -euo pipefail
+            umask 077
+            root=${RELAIS_INSTALL_ROOT:-/}
+            boot="$root/opt/relais/boot"
+            config="$root/etc/relais/node.json"
+            # A single failure prevents any component from starting.
+            settings=()
+            while IFS= read -r value; do settings+=("$value"); done < <(python3 - "$config" <<'PY'
+            import json, sys
+            c = json.load(open(sys.argv[1]))
+            print(c['version']); print(c['architecture']); print(c['sha256'])
+            print(' '.join(c['components'])); print(c['ssm'])
+            PY
+            )
+            "$boot/download.sh" "${settings[0]}" "${settings[1]}" "${settings[2]}" "$root/opt/relais/bin"
+            "${RELAIS_BOOT_PYTHON:-/opt/relais/sdk/bin/python}" "$boot/prepare.py" "$config" "$root/run/relais"
+            manager=${RELAIS_TEST_SYSTEMCTL:-systemctl}
+            if [[ ${settings[4]} == false ]]; then
+              "$manager" disable --now amazon-ssm-agent.service
+              "$manager" mask amazon-ssm-agent.service
+            else
+              "$manager" enable --now amazon-ssm-agent.service
+            fi
+            for component in ${settings[3]}; do
+              if [[ -z ${RELAIS_INSTALL_ROOT:-} ]]; then
+                id "relais-$component" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "relais-$component"
+              fi
+            done
+            "$manager" daemon-reload
+            for component in ${settings[3]}; do
+              "$manager" enable --now "relais-$component.service"
+              if [[ $component == relay ]]; then "$manager" enable --now relais-relay-standby.service; fi
+            done
+            echo 'boot services started'
+          mode: '000755'
+        /opt/relais/boot/prepare.py:
+          content: |
+            #!/usr/bin/env python3
+            """Fetch exact secret references; never print a secret or an SDK exception."""
+            import json
+            import os
+            from pathlib import Path
+            import re
+            import sys
+
+
+            def prepare(config_path, runtime):
+                config = json.loads(Path(config_path).read_text())
+                root = Path(runtime)
+                root.mkdir(mode=0o700, parents=True, exist_ok=True)
+                os.chmod(root, 0o700)
+                if os.environ.get('RELAIS_TEST_SECRET_FILE'):
+                    values = json.loads(Path(os.environ['RELAIS_TEST_SECRET_FILE']).read_text())
+                    fetch = values.__getitem__
+                else:
+                    import boto3
+                    client = boto3.client('secretsmanager', region_name=config['region'])
+                    def fetch(arn):
+                        return client.get_secret_value(SecretId=arn)['SecretString']
+
+                def write(name, value):
+                    path = root / name
+                    # Refuse symlinks. Runtime directory is root-only in the real boot path.
+                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                    try:
+                        os.fchmod(fd, 0o600)
+                        with os.fdopen(fd, 'w') as stream:
+                            stream.write(value)
+                    except BaseException:
+                        path.unlink(missing_ok=True)
+                        raise
+
+                def secret(arn, pattern):
+                    value = fetch(arn)
+                    if not re.fullmatch(pattern, value):
+                        raise ValueError('invalid generated secret')
+                    return value
+
+                # Remove old values before a failed refresh can leave stale credentials usable.
+                for role in config['components']:
+                    (root / (role + '.env')).unlink(missing_ok=True)
+                (root / 'signal.token').unlink(missing_ok=True)
+                for role in config['components']:
+                    if role == 'signal':
+                        write('signal.token', secret(config['secrets']['token'], r'[A-Za-z0-9]{64}'))
+                        continue
+                    entries = {
+                        'RELAIS_REDIS_USERNAME': role,
+                        'RELAIS_REDIS_PASSWORD': secret(config['secrets'][role], r'[A-Za-z0-9]{64}'),
+                    }
+                    if role in ('worker', 'control'):
+                        entries['RELAIS_SESSIONSTORE_KEY'] = secret(config['secrets']['snapshot'], r'[0-9a-f]{64}')
+                    write(role + '.env', ''.join(f'{key}={value}\n' for key, value in entries.items()))
+
+
+            if __name__ == '__main__':
+                try:
+                    prepare(sys.argv[1], sys.argv[2])
+                except Exception:
+                    print('secret preparation failed; start refused', file=sys.stderr)
+                    sys.exit(1)
+                print('role secrets prepared')
+          mode: '000755'
+        /opt/relais/boot/run.sh:
+          content: |
+            #!/usr/bin/env bash
+            # systemd supplies non-secret node settings and a separate role EnvironmentFile.
+            set -euo pipefail
+            bin=${RELAIS_BIN_DIR:-/opt/relais/bin}
+            case ${1:-} in
+              relay|relay-standby)
+                unset RELAIS_SESSIONSTORE_KEY
+                standby=()
+                [[ $1 == relay ]] || standby=(-standby)
+                exec "$bin/relais-relay" -media "$RELAY_PRIVATE:${RELAY_MEDIA_PORT:-34780}" -leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -http "$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" -relay-lease preview "${standby[@]}"
+                ;;
+              worker)
+                exec "$bin/relais-worker" -name "$WORKER_NAME" -media "$NODE_PRIVATE:${WORKER_MEDIA_PORT:-34711}" \
+                  -http "$NODE_PRIVATE:${WORKER_HTTP_PORT:-34701}" -relay-leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -relay-media "$RELAY_PUBLIC:${RELAY_MEDIA_PORT:-34780}" -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -agent echo
+                ;;
+              control)
+                workers=(-worker "w1=http://$WORKER_ONE:${WORKER_ONE_PORT:-34701}" -worker "w2=http://$WORKER_TWO:${WORKER_TWO_PORT:-34701}")
+                [[ -z ${WORKER_THREE:-} ]] || workers+=(-worker "w3=http://$WORKER_THREE:${WORKER_THREE_PORT:-34701}")
+                exec "$bin/relais-control" -http "$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -relay "http://$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" \
+                  -worker-call-cap "$WORKER_CALL_CAP" "${workers[@]}"
+                ;;
+              signal)
+                exec "$bin/relais-signal" -listen "$NODE_PRIVATE:${SIGNAL_PORT:-34743}" \
+                  -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -advertise-ips "$NODE_PRIVATE" \
+                  -token-file "${CREDENTIALS_DIRECTORY:?}/signal.token"
+                ;;
+              *) echo 'unknown component; start refused' >&2; exit 2 ;;
+            esac
+          mode: '000755'
+        /etc/systemd/system/relais-control.service:
+          content: |
+            [Unit]
+            Description=Relais preview control
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-control
+            Group=relais-control
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/control.env
+            ExecStart=/opt/relais/boot/run.sh control
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-prepare.service:
+          content: |
+            [Unit]
+            Description=Relais boot credentials
+            After=network-online.target
+            Wants=network-online.target
+            Before=relais-relay.service relais-relay-standby.service relais-worker.service relais-control.service relais-signal.service
+
+            [Service]
+            Type=oneshot
+            ExecStart=/opt/relais/sdk/bin/python /opt/relais/boot/prepare.py /etc/relais/node.json /run/relais
+            RemainAfterExit=yes
+            UMask=0077
+            StandardOutput=journal
+            StandardError=journal
+          mode: '000644'
+        /etc/systemd/system/relais-relay-standby.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay-standby
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay-standby
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-relay.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-signal.service:
+          content: |
+            [Unit]
+            Description=Relais preview signal
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-signal
+            Group=relais-signal
+            EnvironmentFile=/etc/relais/node.env
+            LoadCredential=signal.token:/run/relais/signal.token
+            ExecStart=/opt/relais/boot/run.sh signal
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-worker.service:
+          content: |
+            [Unit]
+            Description=Relais preview worker
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-worker
+            Group=relais-worker
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/worker.env
+            ExecStart=/opt/relais/boot/run.sh worker
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/relais/node.json:
+          content:
+            Fn::Sub:
+            - '{"region": "${v0}", "version": "${v1}", "architecture": "${v2}", "sha256": "${v3}", "ssm": "${v4}", "components":
+              ["relay"], "secrets": {"relay": "${v5}"}}'
+            - v0:
+                Ref: AWS::Region
+              v1:
+                Ref: ReleaseVersion
+              v2:
+                Ref: Architecture
+              v3:
+                Ref: ArchiveSHA256
+              v4:
+                Fn::If:
+                - SessionManager
+                - 'true'
+                - 'false'
+              v5:
+                Ref: RelayPassword
+          mode: '000600'
+        /etc/relais/node.env:
+          content:
+            Fn::Sub:
+            - |
+              RELAIS_REDIS_ADDR=${Store.ConfigurationEndPoint.Address}:${Store.ConfigurationEndPoint.Port}
+              RELAIS_REDIS_CLUSTER=1
+              RELAIS_REDIS_TLS=1
+              RELAIS_REDIS_PREFIX=relais:preview:
+              RELAIS_PRIVATE_NETS=10.42.0.0/16
+              RELAY_PRIVATE=10.42.0.10
+              RELAY_PUBLIC=${RelayAddress}
+              CONTROL_PRIVATE=10.42.10.20
+              WORKER_ONE=10.42.10.11
+              WORKER_TWO=10.42.11.12
+              WORKER_THREE=${ThirdWorker}
+              WORKER_CALL_CAP=${WorkerCallCap}
+              NODE_PRIVATE=10.42.0.10
+              WORKER_NAME=
+            - ThirdWorker:
+                Fn::If:
+                - Resilience
+                - 10.42.10.13
+                - ''
+          mode: '000644'
+    DependsOn:
+    - InternetRoute
+    - RelayAssociation
+  WorkerOne:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId:
+        Fn::If:
+        - Arm
+        - Ref: ArmImage
+        - Ref: X86Image
+      InstanceType:
+        Fn::If:
+        - Arm
+        - Ref: ArmInstanceType
+        - Ref: X86InstanceType
+      IamInstanceProfile:
+        Ref: WorkerInstanceProfile
+      SubnetId:
+        Ref: PrivateA
+      PrivateIpAddress: 10.42.10.11
+      SecurityGroupIds:
+      - Ref: WorkerGroup
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+      - DeviceName: /dev/xvda
+        Ebs:
+          Encrypted: true
+          VolumeSize: 16
+          VolumeType: gp3
+          DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            set -euo pipefail
+            umask 077
+            dnf install -y python3.11 python3.11-pip tar shadow-utils
+            mkdir -p /opt/relais /etc/relais
+            python3.11 -m venv /opt/relais/sdk
+            /opt/relais/sdk/bin/pip install --disable-pip-version-check boto3==1.43.115
+            /opt/relais/sdk/bin/python - <<'BOOT'
+            import boto3, json, os
+            from pathlib import Path
+            client = boto3.client('cloudformation', region_name='${AWS::Region}')
+            r = client.describe_stack_resource(StackName='${AWS::StackName}', LogicalResourceId='WorkerOne')
+            metadata = json.loads(r['StackResourceDetail']['Metadata'])
+            for name, entry in metadata['RelaisFiles'].items():
+                path = Path(name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(entry['content'])
+                path.chmod(int(entry['mode'], 8))
+            BOOT
+            /opt/relais/boot/install.sh
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${AWS::StackName}-WorkerOne
+      - Key: RelaisRole
+        Value: worker
+      - Key: RelaisStack
+        Value:
+          Ref: AWS::StackName
+    Metadata:
+      RelaisFiles:
+        /opt/relais/boot/download.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Install only a caller-pinned archive. Never execute unverified bytes.
+            set -euo pipefail
+            umask 077
+            [[ $# == 4 ]] || { echo 'usage: download.sh VERSION arm64|x86_64 SHA256 DEST' >&2; exit 2; }
+            version=$1 arch=$2 digest=$3 dest=$4
+            [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.+-]+)?$ ]] || exit 2
+            [[ $digest =~ ^[a-f0-9]{64}$ ]] || exit 2
+            case $arch in arm64) ;; x86_64) arch=amd64 ;; *) exit 2 ;; esac
+            base="relais_${version}_linux_${arch}"
+            url="https://github.com/relaishq/relais/releases/download/v${version}/${base}.tar.gz"
+            # Local test seam; the stack never sets this variable.
+            url=${RELAIS_TEST_ARCHIVE_URL:-$url}
+            work=$(mktemp -d)
+            trap 'rm -rf "$work"' EXIT
+            curl --fail --silent --show-error --location --retry 3 --output "$work/archive" "$url"
+            if command -v sha256sum >/dev/null 2>&1; then
+              actual=$(sha256sum "$work/archive")
+            else
+              actual=$(shasum -a 256 "$work/archive")
+            fi
+            [[ ${actual%% *} == "$digest" ]] || { echo 'artifact digest mismatch; installation refused' >&2; exit 1; }
+            # Reject traversal, links, devices and unexpected members before extraction.
+            python3 - "$work/archive" "$base" "$work" <<'PY'
+            import sys, tarfile
+            archive, base, work = sys.argv[1:]
+            allowed = {'relais-relay', 'relais-worker', 'relais-control', 'relais-signal',
+                       'relais-demo', 'relais-load', 'start.sh', 'stop.sh', 'LICENSE', 'NOTICE', 'README.md'}
+            with tarfile.open(archive, 'r:gz') as tar:
+                for member in tar.getmembers():
+                    name = member.name.rstrip('/')
+                    if name == base and member.isdir():
+                        continue
+                    if not member.isfile() or name not in {base + '/' + n for n in allowed}:
+                        raise SystemExit('unsafe archive; installation refused')
+                tar.extractall(work)
+            PY
+            mkdir -p "$dest"
+            for name in relais-relay relais-worker relais-control relais-signal relais-load; do
+              install -m 0755 "$work/$base/$name" "$dest/$name"
+            done
+            echo 'artifact verified and installed'
+          mode: '000755'
+        /opt/relais/boot/install.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Root-only, fail-closed initial boot. Services do not refresh credentials themselves.
+            set -euo pipefail
+            umask 077
+            root=${RELAIS_INSTALL_ROOT:-/}
+            boot="$root/opt/relais/boot"
+            config="$root/etc/relais/node.json"
+            # A single failure prevents any component from starting.
+            settings=()
+            while IFS= read -r value; do settings+=("$value"); done < <(python3 - "$config" <<'PY'
+            import json, sys
+            c = json.load(open(sys.argv[1]))
+            print(c['version']); print(c['architecture']); print(c['sha256'])
+            print(' '.join(c['components'])); print(c['ssm'])
+            PY
+            )
+            "$boot/download.sh" "${settings[0]}" "${settings[1]}" "${settings[2]}" "$root/opt/relais/bin"
+            "${RELAIS_BOOT_PYTHON:-/opt/relais/sdk/bin/python}" "$boot/prepare.py" "$config" "$root/run/relais"
+            manager=${RELAIS_TEST_SYSTEMCTL:-systemctl}
+            if [[ ${settings[4]} == false ]]; then
+              "$manager" disable --now amazon-ssm-agent.service
+              "$manager" mask amazon-ssm-agent.service
+            else
+              "$manager" enable --now amazon-ssm-agent.service
+            fi
+            for component in ${settings[3]}; do
+              if [[ -z ${RELAIS_INSTALL_ROOT:-} ]]; then
+                id "relais-$component" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "relais-$component"
+              fi
+            done
+            "$manager" daemon-reload
+            for component in ${settings[3]}; do
+              "$manager" enable --now "relais-$component.service"
+              if [[ $component == relay ]]; then "$manager" enable --now relais-relay-standby.service; fi
+            done
+            echo 'boot services started'
+          mode: '000755'
+        /opt/relais/boot/prepare.py:
+          content: |
+            #!/usr/bin/env python3
+            """Fetch exact secret references; never print a secret or an SDK exception."""
+            import json
+            import os
+            from pathlib import Path
+            import re
+            import sys
+
+
+            def prepare(config_path, runtime):
+                config = json.loads(Path(config_path).read_text())
+                root = Path(runtime)
+                root.mkdir(mode=0o700, parents=True, exist_ok=True)
+                os.chmod(root, 0o700)
+                if os.environ.get('RELAIS_TEST_SECRET_FILE'):
+                    values = json.loads(Path(os.environ['RELAIS_TEST_SECRET_FILE']).read_text())
+                    fetch = values.__getitem__
+                else:
+                    import boto3
+                    client = boto3.client('secretsmanager', region_name=config['region'])
+                    def fetch(arn):
+                        return client.get_secret_value(SecretId=arn)['SecretString']
+
+                def write(name, value):
+                    path = root / name
+                    # Refuse symlinks. Runtime directory is root-only in the real boot path.
+                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                    try:
+                        os.fchmod(fd, 0o600)
+                        with os.fdopen(fd, 'w') as stream:
+                            stream.write(value)
+                    except BaseException:
+                        path.unlink(missing_ok=True)
+                        raise
+
+                def secret(arn, pattern):
+                    value = fetch(arn)
+                    if not re.fullmatch(pattern, value):
+                        raise ValueError('invalid generated secret')
+                    return value
+
+                # Remove old values before a failed refresh can leave stale credentials usable.
+                for role in config['components']:
+                    (root / (role + '.env')).unlink(missing_ok=True)
+                (root / 'signal.token').unlink(missing_ok=True)
+                for role in config['components']:
+                    if role == 'signal':
+                        write('signal.token', secret(config['secrets']['token'], r'[A-Za-z0-9]{64}'))
+                        continue
+                    entries = {
+                        'RELAIS_REDIS_USERNAME': role,
+                        'RELAIS_REDIS_PASSWORD': secret(config['secrets'][role], r'[A-Za-z0-9]{64}'),
+                    }
+                    if role in ('worker', 'control'):
+                        entries['RELAIS_SESSIONSTORE_KEY'] = secret(config['secrets']['snapshot'], r'[0-9a-f]{64}')
+                    write(role + '.env', ''.join(f'{key}={value}\n' for key, value in entries.items()))
+
+
+            if __name__ == '__main__':
+                try:
+                    prepare(sys.argv[1], sys.argv[2])
+                except Exception:
+                    print('secret preparation failed; start refused', file=sys.stderr)
+                    sys.exit(1)
+                print('role secrets prepared')
+          mode: '000755'
+        /opt/relais/boot/run.sh:
+          content: |
+            #!/usr/bin/env bash
+            # systemd supplies non-secret node settings and a separate role EnvironmentFile.
+            set -euo pipefail
+            bin=${RELAIS_BIN_DIR:-/opt/relais/bin}
+            case ${1:-} in
+              relay|relay-standby)
+                unset RELAIS_SESSIONSTORE_KEY
+                standby=()
+                [[ $1 == relay ]] || standby=(-standby)
+                exec "$bin/relais-relay" -media "$RELAY_PRIVATE:${RELAY_MEDIA_PORT:-34780}" -leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -http "$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" -relay-lease preview "${standby[@]}"
+                ;;
+              worker)
+                exec "$bin/relais-worker" -name "$WORKER_NAME" -media "$NODE_PRIVATE:${WORKER_MEDIA_PORT:-34711}" \
+                  -http "$NODE_PRIVATE:${WORKER_HTTP_PORT:-34701}" -relay-leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -relay-media "$RELAY_PUBLIC:${RELAY_MEDIA_PORT:-34780}" -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -agent echo
+                ;;
+              control)
+                workers=(-worker "w1=http://$WORKER_ONE:${WORKER_ONE_PORT:-34701}" -worker "w2=http://$WORKER_TWO:${WORKER_TWO_PORT:-34701}")
+                [[ -z ${WORKER_THREE:-} ]] || workers+=(-worker "w3=http://$WORKER_THREE:${WORKER_THREE_PORT:-34701}")
+                exec "$bin/relais-control" -http "$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -relay "http://$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" \
+                  -worker-call-cap "$WORKER_CALL_CAP" "${workers[@]}"
+                ;;
+              signal)
+                exec "$bin/relais-signal" -listen "$NODE_PRIVATE:${SIGNAL_PORT:-34743}" \
+                  -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -advertise-ips "$NODE_PRIVATE" \
+                  -token-file "${CREDENTIALS_DIRECTORY:?}/signal.token"
+                ;;
+              *) echo 'unknown component; start refused' >&2; exit 2 ;;
+            esac
+          mode: '000755'
+        /etc/systemd/system/relais-control.service:
+          content: |
+            [Unit]
+            Description=Relais preview control
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-control
+            Group=relais-control
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/control.env
+            ExecStart=/opt/relais/boot/run.sh control
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-prepare.service:
+          content: |
+            [Unit]
+            Description=Relais boot credentials
+            After=network-online.target
+            Wants=network-online.target
+            Before=relais-relay.service relais-relay-standby.service relais-worker.service relais-control.service relais-signal.service
+
+            [Service]
+            Type=oneshot
+            ExecStart=/opt/relais/sdk/bin/python /opt/relais/boot/prepare.py /etc/relais/node.json /run/relais
+            RemainAfterExit=yes
+            UMask=0077
+            StandardOutput=journal
+            StandardError=journal
+          mode: '000644'
+        /etc/systemd/system/relais-relay-standby.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay-standby
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay-standby
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-relay.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-signal.service:
+          content: |
+            [Unit]
+            Description=Relais preview signal
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-signal
+            Group=relais-signal
+            EnvironmentFile=/etc/relais/node.env
+            LoadCredential=signal.token:/run/relais/signal.token
+            ExecStart=/opt/relais/boot/run.sh signal
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-worker.service:
+          content: |
+            [Unit]
+            Description=Relais preview worker
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-worker
+            Group=relais-worker
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/worker.env
+            ExecStart=/opt/relais/boot/run.sh worker
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/relais/node.json:
+          content:
+            Fn::Sub:
+            - '{"region": "${v0}", "version": "${v1}", "architecture": "${v2}", "sha256": "${v3}", "ssm": "${v4}", "components":
+              ["worker"], "secrets": {"worker": "${v5}", "snapshot": "${v6}"}}'
+            - v0:
+                Ref: AWS::Region
+              v1:
+                Ref: ReleaseVersion
+              v2:
+                Ref: Architecture
+              v3:
+                Ref: ArchiveSHA256
+              v4:
+                Fn::If:
+                - SessionManager
+                - 'true'
+                - 'false'
+              v5:
+                Ref: WorkerPassword
+              v6:
+                Ref: SnapshotKey
+          mode: '000600'
+        /etc/relais/node.env:
+          content:
+            Fn::Sub:
+            - |
+              RELAIS_REDIS_ADDR=${Store.ConfigurationEndPoint.Address}:${Store.ConfigurationEndPoint.Port}
+              RELAIS_REDIS_CLUSTER=1
+              RELAIS_REDIS_TLS=1
+              RELAIS_REDIS_PREFIX=relais:preview:
+              RELAIS_PRIVATE_NETS=10.42.0.0/16
+              RELAY_PRIVATE=10.42.0.10
+              RELAY_PUBLIC=${RelayAddress}
+              CONTROL_PRIVATE=10.42.10.20
+              WORKER_ONE=10.42.10.11
+              WORKER_TWO=10.42.11.12
+              WORKER_THREE=${ThirdWorker}
+              WORKER_CALL_CAP=${WorkerCallCap}
+              NODE_PRIVATE=10.42.10.11
+              WORKER_NAME=w1
+            - ThirdWorker:
+                Fn::If:
+                - Resilience
+                - 10.42.10.13
+                - ''
+          mode: '000644'
+    DependsOn:
+    - PrivateDefaultA
+  WorkerTwo:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId:
+        Fn::If:
+        - Arm
+        - Ref: ArmImage
+        - Ref: X86Image
+      InstanceType:
+        Fn::If:
+        - Arm
+        - Ref: ArmInstanceType
+        - Ref: X86InstanceType
+      IamInstanceProfile:
+        Ref: WorkerInstanceProfile
+      SubnetId:
+        Ref: PrivateB
+      PrivateIpAddress: 10.42.11.12
+      SecurityGroupIds:
+      - Ref: WorkerGroup
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+      - DeviceName: /dev/xvda
+        Ebs:
+          Encrypted: true
+          VolumeSize: 16
+          VolumeType: gp3
+          DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            set -euo pipefail
+            umask 077
+            dnf install -y python3.11 python3.11-pip tar shadow-utils
+            mkdir -p /opt/relais /etc/relais
+            python3.11 -m venv /opt/relais/sdk
+            /opt/relais/sdk/bin/pip install --disable-pip-version-check boto3==1.43.115
+            /opt/relais/sdk/bin/python - <<'BOOT'
+            import boto3, json, os
+            from pathlib import Path
+            client = boto3.client('cloudformation', region_name='${AWS::Region}')
+            r = client.describe_stack_resource(StackName='${AWS::StackName}', LogicalResourceId='WorkerTwo')
+            metadata = json.loads(r['StackResourceDetail']['Metadata'])
+            for name, entry in metadata['RelaisFiles'].items():
+                path = Path(name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(entry['content'])
+                path.chmod(int(entry['mode'], 8))
+            BOOT
+            /opt/relais/boot/install.sh
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${AWS::StackName}-WorkerTwo
+      - Key: RelaisRole
+        Value: worker
+      - Key: RelaisStack
+        Value:
+          Ref: AWS::StackName
+    Metadata:
+      RelaisFiles:
+        /opt/relais/boot/download.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Install only a caller-pinned archive. Never execute unverified bytes.
+            set -euo pipefail
+            umask 077
+            [[ $# == 4 ]] || { echo 'usage: download.sh VERSION arm64|x86_64 SHA256 DEST' >&2; exit 2; }
+            version=$1 arch=$2 digest=$3 dest=$4
+            [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.+-]+)?$ ]] || exit 2
+            [[ $digest =~ ^[a-f0-9]{64}$ ]] || exit 2
+            case $arch in arm64) ;; x86_64) arch=amd64 ;; *) exit 2 ;; esac
+            base="relais_${version}_linux_${arch}"
+            url="https://github.com/relaishq/relais/releases/download/v${version}/${base}.tar.gz"
+            # Local test seam; the stack never sets this variable.
+            url=${RELAIS_TEST_ARCHIVE_URL:-$url}
+            work=$(mktemp -d)
+            trap 'rm -rf "$work"' EXIT
+            curl --fail --silent --show-error --location --retry 3 --output "$work/archive" "$url"
+            if command -v sha256sum >/dev/null 2>&1; then
+              actual=$(sha256sum "$work/archive")
+            else
+              actual=$(shasum -a 256 "$work/archive")
+            fi
+            [[ ${actual%% *} == "$digest" ]] || { echo 'artifact digest mismatch; installation refused' >&2; exit 1; }
+            # Reject traversal, links, devices and unexpected members before extraction.
+            python3 - "$work/archive" "$base" "$work" <<'PY'
+            import sys, tarfile
+            archive, base, work = sys.argv[1:]
+            allowed = {'relais-relay', 'relais-worker', 'relais-control', 'relais-signal',
+                       'relais-demo', 'relais-load', 'start.sh', 'stop.sh', 'LICENSE', 'NOTICE', 'README.md'}
+            with tarfile.open(archive, 'r:gz') as tar:
+                for member in tar.getmembers():
+                    name = member.name.rstrip('/')
+                    if name == base and member.isdir():
+                        continue
+                    if not member.isfile() or name not in {base + '/' + n for n in allowed}:
+                        raise SystemExit('unsafe archive; installation refused')
+                tar.extractall(work)
+            PY
+            mkdir -p "$dest"
+            for name in relais-relay relais-worker relais-control relais-signal relais-load; do
+              install -m 0755 "$work/$base/$name" "$dest/$name"
+            done
+            echo 'artifact verified and installed'
+          mode: '000755'
+        /opt/relais/boot/install.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Root-only, fail-closed initial boot. Services do not refresh credentials themselves.
+            set -euo pipefail
+            umask 077
+            root=${RELAIS_INSTALL_ROOT:-/}
+            boot="$root/opt/relais/boot"
+            config="$root/etc/relais/node.json"
+            # A single failure prevents any component from starting.
+            settings=()
+            while IFS= read -r value; do settings+=("$value"); done < <(python3 - "$config" <<'PY'
+            import json, sys
+            c = json.load(open(sys.argv[1]))
+            print(c['version']); print(c['architecture']); print(c['sha256'])
+            print(' '.join(c['components'])); print(c['ssm'])
+            PY
+            )
+            "$boot/download.sh" "${settings[0]}" "${settings[1]}" "${settings[2]}" "$root/opt/relais/bin"
+            "${RELAIS_BOOT_PYTHON:-/opt/relais/sdk/bin/python}" "$boot/prepare.py" "$config" "$root/run/relais"
+            manager=${RELAIS_TEST_SYSTEMCTL:-systemctl}
+            if [[ ${settings[4]} == false ]]; then
+              "$manager" disable --now amazon-ssm-agent.service
+              "$manager" mask amazon-ssm-agent.service
+            else
+              "$manager" enable --now amazon-ssm-agent.service
+            fi
+            for component in ${settings[3]}; do
+              if [[ -z ${RELAIS_INSTALL_ROOT:-} ]]; then
+                id "relais-$component" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "relais-$component"
+              fi
+            done
+            "$manager" daemon-reload
+            for component in ${settings[3]}; do
+              "$manager" enable --now "relais-$component.service"
+              if [[ $component == relay ]]; then "$manager" enable --now relais-relay-standby.service; fi
+            done
+            echo 'boot services started'
+          mode: '000755'
+        /opt/relais/boot/prepare.py:
+          content: |
+            #!/usr/bin/env python3
+            """Fetch exact secret references; never print a secret or an SDK exception."""
+            import json
+            import os
+            from pathlib import Path
+            import re
+            import sys
+
+
+            def prepare(config_path, runtime):
+                config = json.loads(Path(config_path).read_text())
+                root = Path(runtime)
+                root.mkdir(mode=0o700, parents=True, exist_ok=True)
+                os.chmod(root, 0o700)
+                if os.environ.get('RELAIS_TEST_SECRET_FILE'):
+                    values = json.loads(Path(os.environ['RELAIS_TEST_SECRET_FILE']).read_text())
+                    fetch = values.__getitem__
+                else:
+                    import boto3
+                    client = boto3.client('secretsmanager', region_name=config['region'])
+                    def fetch(arn):
+                        return client.get_secret_value(SecretId=arn)['SecretString']
+
+                def write(name, value):
+                    path = root / name
+                    # Refuse symlinks. Runtime directory is root-only in the real boot path.
+                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                    try:
+                        os.fchmod(fd, 0o600)
+                        with os.fdopen(fd, 'w') as stream:
+                            stream.write(value)
+                    except BaseException:
+                        path.unlink(missing_ok=True)
+                        raise
+
+                def secret(arn, pattern):
+                    value = fetch(arn)
+                    if not re.fullmatch(pattern, value):
+                        raise ValueError('invalid generated secret')
+                    return value
+
+                # Remove old values before a failed refresh can leave stale credentials usable.
+                for role in config['components']:
+                    (root / (role + '.env')).unlink(missing_ok=True)
+                (root / 'signal.token').unlink(missing_ok=True)
+                for role in config['components']:
+                    if role == 'signal':
+                        write('signal.token', secret(config['secrets']['token'], r'[A-Za-z0-9]{64}'))
+                        continue
+                    entries = {
+                        'RELAIS_REDIS_USERNAME': role,
+                        'RELAIS_REDIS_PASSWORD': secret(config['secrets'][role], r'[A-Za-z0-9]{64}'),
+                    }
+                    if role in ('worker', 'control'):
+                        entries['RELAIS_SESSIONSTORE_KEY'] = secret(config['secrets']['snapshot'], r'[0-9a-f]{64}')
+                    write(role + '.env', ''.join(f'{key}={value}\n' for key, value in entries.items()))
+
+
+            if __name__ == '__main__':
+                try:
+                    prepare(sys.argv[1], sys.argv[2])
+                except Exception:
+                    print('secret preparation failed; start refused', file=sys.stderr)
+                    sys.exit(1)
+                print('role secrets prepared')
+          mode: '000755'
+        /opt/relais/boot/run.sh:
+          content: |
+            #!/usr/bin/env bash
+            # systemd supplies non-secret node settings and a separate role EnvironmentFile.
+            set -euo pipefail
+            bin=${RELAIS_BIN_DIR:-/opt/relais/bin}
+            case ${1:-} in
+              relay|relay-standby)
+                unset RELAIS_SESSIONSTORE_KEY
+                standby=()
+                [[ $1 == relay ]] || standby=(-standby)
+                exec "$bin/relais-relay" -media "$RELAY_PRIVATE:${RELAY_MEDIA_PORT:-34780}" -leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -http "$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" -relay-lease preview "${standby[@]}"
+                ;;
+              worker)
+                exec "$bin/relais-worker" -name "$WORKER_NAME" -media "$NODE_PRIVATE:${WORKER_MEDIA_PORT:-34711}" \
+                  -http "$NODE_PRIVATE:${WORKER_HTTP_PORT:-34701}" -relay-leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -relay-media "$RELAY_PUBLIC:${RELAY_MEDIA_PORT:-34780}" -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -agent echo
+                ;;
+              control)
+                workers=(-worker "w1=http://$WORKER_ONE:${WORKER_ONE_PORT:-34701}" -worker "w2=http://$WORKER_TWO:${WORKER_TWO_PORT:-34701}")
+                [[ -z ${WORKER_THREE:-} ]] || workers+=(-worker "w3=http://$WORKER_THREE:${WORKER_THREE_PORT:-34701}")
+                exec "$bin/relais-control" -http "$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -relay "http://$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" \
+                  -worker-call-cap "$WORKER_CALL_CAP" "${workers[@]}"
+                ;;
+              signal)
+                exec "$bin/relais-signal" -listen "$NODE_PRIVATE:${SIGNAL_PORT:-34743}" \
+                  -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -advertise-ips "$NODE_PRIVATE" \
+                  -token-file "${CREDENTIALS_DIRECTORY:?}/signal.token"
+                ;;
+              *) echo 'unknown component; start refused' >&2; exit 2 ;;
+            esac
+          mode: '000755'
+        /etc/systemd/system/relais-control.service:
+          content: |
+            [Unit]
+            Description=Relais preview control
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-control
+            Group=relais-control
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/control.env
+            ExecStart=/opt/relais/boot/run.sh control
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-prepare.service:
+          content: |
+            [Unit]
+            Description=Relais boot credentials
+            After=network-online.target
+            Wants=network-online.target
+            Before=relais-relay.service relais-relay-standby.service relais-worker.service relais-control.service relais-signal.service
+
+            [Service]
+            Type=oneshot
+            ExecStart=/opt/relais/sdk/bin/python /opt/relais/boot/prepare.py /etc/relais/node.json /run/relais
+            RemainAfterExit=yes
+            UMask=0077
+            StandardOutput=journal
+            StandardError=journal
+          mode: '000644'
+        /etc/systemd/system/relais-relay-standby.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay-standby
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay-standby
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-relay.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-signal.service:
+          content: |
+            [Unit]
+            Description=Relais preview signal
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-signal
+            Group=relais-signal
+            EnvironmentFile=/etc/relais/node.env
+            LoadCredential=signal.token:/run/relais/signal.token
+            ExecStart=/opt/relais/boot/run.sh signal
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-worker.service:
+          content: |
+            [Unit]
+            Description=Relais preview worker
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-worker
+            Group=relais-worker
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/worker.env
+            ExecStart=/opt/relais/boot/run.sh worker
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/relais/node.json:
+          content:
+            Fn::Sub:
+            - '{"region": "${v0}", "version": "${v1}", "architecture": "${v2}", "sha256": "${v3}", "ssm": "${v4}", "components":
+              ["worker"], "secrets": {"worker": "${v5}", "snapshot": "${v6}"}}'
+            - v0:
+                Ref: AWS::Region
+              v1:
+                Ref: ReleaseVersion
+              v2:
+                Ref: Architecture
+              v3:
+                Ref: ArchiveSHA256
+              v4:
+                Fn::If:
+                - SessionManager
+                - 'true'
+                - 'false'
+              v5:
+                Ref: WorkerPassword
+              v6:
+                Ref: SnapshotKey
+          mode: '000600'
+        /etc/relais/node.env:
+          content:
+            Fn::Sub:
+            - |
+              RELAIS_REDIS_ADDR=${Store.ConfigurationEndPoint.Address}:${Store.ConfigurationEndPoint.Port}
+              RELAIS_REDIS_CLUSTER=1
+              RELAIS_REDIS_TLS=1
+              RELAIS_REDIS_PREFIX=relais:preview:
+              RELAIS_PRIVATE_NETS=10.42.0.0/16
+              RELAY_PRIVATE=10.42.0.10
+              RELAY_PUBLIC=${RelayAddress}
+              CONTROL_PRIVATE=10.42.10.20
+              WORKER_ONE=10.42.10.11
+              WORKER_TWO=10.42.11.12
+              WORKER_THREE=${ThirdWorker}
+              WORKER_CALL_CAP=${WorkerCallCap}
+              NODE_PRIVATE=10.42.11.12
+              WORKER_NAME=w2
+            - ThirdWorker:
+                Fn::If:
+                - Resilience
+                - 10.42.10.13
+                - ''
+          mode: '000644'
+    DependsOn:
+    - PrivateDefaultB
+  WorkerThree:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId:
+        Fn::If:
+        - Arm
+        - Ref: ArmImage
+        - Ref: X86Image
+      InstanceType:
+        Fn::If:
+        - Arm
+        - Ref: ArmInstanceType
+        - Ref: X86InstanceType
+      IamInstanceProfile:
+        Ref: WorkerInstanceProfile
+      SubnetId:
+        Ref: PrivateA
+      PrivateIpAddress: 10.42.10.13
+      SecurityGroupIds:
+      - Ref: WorkerGroup
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+      - DeviceName: /dev/xvda
+        Ebs:
+          Encrypted: true
+          VolumeSize: 16
+          VolumeType: gp3
+          DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            set -euo pipefail
+            umask 077
+            dnf install -y python3.11 python3.11-pip tar shadow-utils
+            mkdir -p /opt/relais /etc/relais
+            python3.11 -m venv /opt/relais/sdk
+            /opt/relais/sdk/bin/pip install --disable-pip-version-check boto3==1.43.115
+            /opt/relais/sdk/bin/python - <<'BOOT'
+            import boto3, json, os
+            from pathlib import Path
+            client = boto3.client('cloudformation', region_name='${AWS::Region}')
+            r = client.describe_stack_resource(StackName='${AWS::StackName}', LogicalResourceId='WorkerThree')
+            metadata = json.loads(r['StackResourceDetail']['Metadata'])
+            for name, entry in metadata['RelaisFiles'].items():
+                path = Path(name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(entry['content'])
+                path.chmod(int(entry['mode'], 8))
+            BOOT
+            /opt/relais/boot/install.sh
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${AWS::StackName}-WorkerThree
+      - Key: RelaisRole
+        Value: worker
+      - Key: RelaisStack
+        Value:
+          Ref: AWS::StackName
+    Metadata:
+      RelaisFiles:
+        /opt/relais/boot/download.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Install only a caller-pinned archive. Never execute unverified bytes.
+            set -euo pipefail
+            umask 077
+            [[ $# == 4 ]] || { echo 'usage: download.sh VERSION arm64|x86_64 SHA256 DEST' >&2; exit 2; }
+            version=$1 arch=$2 digest=$3 dest=$4
+            [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.+-]+)?$ ]] || exit 2
+            [[ $digest =~ ^[a-f0-9]{64}$ ]] || exit 2
+            case $arch in arm64) ;; x86_64) arch=amd64 ;; *) exit 2 ;; esac
+            base="relais_${version}_linux_${arch}"
+            url="https://github.com/relaishq/relais/releases/download/v${version}/${base}.tar.gz"
+            # Local test seam; the stack never sets this variable.
+            url=${RELAIS_TEST_ARCHIVE_URL:-$url}
+            work=$(mktemp -d)
+            trap 'rm -rf "$work"' EXIT
+            curl --fail --silent --show-error --location --retry 3 --output "$work/archive" "$url"
+            if command -v sha256sum >/dev/null 2>&1; then
+              actual=$(sha256sum "$work/archive")
+            else
+              actual=$(shasum -a 256 "$work/archive")
+            fi
+            [[ ${actual%% *} == "$digest" ]] || { echo 'artifact digest mismatch; installation refused' >&2; exit 1; }
+            # Reject traversal, links, devices and unexpected members before extraction.
+            python3 - "$work/archive" "$base" "$work" <<'PY'
+            import sys, tarfile
+            archive, base, work = sys.argv[1:]
+            allowed = {'relais-relay', 'relais-worker', 'relais-control', 'relais-signal',
+                       'relais-demo', 'relais-load', 'start.sh', 'stop.sh', 'LICENSE', 'NOTICE', 'README.md'}
+            with tarfile.open(archive, 'r:gz') as tar:
+                for member in tar.getmembers():
+                    name = member.name.rstrip('/')
+                    if name == base and member.isdir():
+                        continue
+                    if not member.isfile() or name not in {base + '/' + n for n in allowed}:
+                        raise SystemExit('unsafe archive; installation refused')
+                tar.extractall(work)
+            PY
+            mkdir -p "$dest"
+            for name in relais-relay relais-worker relais-control relais-signal relais-load; do
+              install -m 0755 "$work/$base/$name" "$dest/$name"
+            done
+            echo 'artifact verified and installed'
+          mode: '000755'
+        /opt/relais/boot/install.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Root-only, fail-closed initial boot. Services do not refresh credentials themselves.
+            set -euo pipefail
+            umask 077
+            root=${RELAIS_INSTALL_ROOT:-/}
+            boot="$root/opt/relais/boot"
+            config="$root/etc/relais/node.json"
+            # A single failure prevents any component from starting.
+            settings=()
+            while IFS= read -r value; do settings+=("$value"); done < <(python3 - "$config" <<'PY'
+            import json, sys
+            c = json.load(open(sys.argv[1]))
+            print(c['version']); print(c['architecture']); print(c['sha256'])
+            print(' '.join(c['components'])); print(c['ssm'])
+            PY
+            )
+            "$boot/download.sh" "${settings[0]}" "${settings[1]}" "${settings[2]}" "$root/opt/relais/bin"
+            "${RELAIS_BOOT_PYTHON:-/opt/relais/sdk/bin/python}" "$boot/prepare.py" "$config" "$root/run/relais"
+            manager=${RELAIS_TEST_SYSTEMCTL:-systemctl}
+            if [[ ${settings[4]} == false ]]; then
+              "$manager" disable --now amazon-ssm-agent.service
+              "$manager" mask amazon-ssm-agent.service
+            else
+              "$manager" enable --now amazon-ssm-agent.service
+            fi
+            for component in ${settings[3]}; do
+              if [[ -z ${RELAIS_INSTALL_ROOT:-} ]]; then
+                id "relais-$component" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "relais-$component"
+              fi
+            done
+            "$manager" daemon-reload
+            for component in ${settings[3]}; do
+              "$manager" enable --now "relais-$component.service"
+              if [[ $component == relay ]]; then "$manager" enable --now relais-relay-standby.service; fi
+            done
+            echo 'boot services started'
+          mode: '000755'
+        /opt/relais/boot/prepare.py:
+          content: |
+            #!/usr/bin/env python3
+            """Fetch exact secret references; never print a secret or an SDK exception."""
+            import json
+            import os
+            from pathlib import Path
+            import re
+            import sys
+
+
+            def prepare(config_path, runtime):
+                config = json.loads(Path(config_path).read_text())
+                root = Path(runtime)
+                root.mkdir(mode=0o700, parents=True, exist_ok=True)
+                os.chmod(root, 0o700)
+                if os.environ.get('RELAIS_TEST_SECRET_FILE'):
+                    values = json.loads(Path(os.environ['RELAIS_TEST_SECRET_FILE']).read_text())
+                    fetch = values.__getitem__
+                else:
+                    import boto3
+                    client = boto3.client('secretsmanager', region_name=config['region'])
+                    def fetch(arn):
+                        return client.get_secret_value(SecretId=arn)['SecretString']
+
+                def write(name, value):
+                    path = root / name
+                    # Refuse symlinks. Runtime directory is root-only in the real boot path.
+                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                    try:
+                        os.fchmod(fd, 0o600)
+                        with os.fdopen(fd, 'w') as stream:
+                            stream.write(value)
+                    except BaseException:
+                        path.unlink(missing_ok=True)
+                        raise
+
+                def secret(arn, pattern):
+                    value = fetch(arn)
+                    if not re.fullmatch(pattern, value):
+                        raise ValueError('invalid generated secret')
+                    return value
+
+                # Remove old values before a failed refresh can leave stale credentials usable.
+                for role in config['components']:
+                    (root / (role + '.env')).unlink(missing_ok=True)
+                (root / 'signal.token').unlink(missing_ok=True)
+                for role in config['components']:
+                    if role == 'signal':
+                        write('signal.token', secret(config['secrets']['token'], r'[A-Za-z0-9]{64}'))
+                        continue
+                    entries = {
+                        'RELAIS_REDIS_USERNAME': role,
+                        'RELAIS_REDIS_PASSWORD': secret(config['secrets'][role], r'[A-Za-z0-9]{64}'),
+                    }
+                    if role in ('worker', 'control'):
+                        entries['RELAIS_SESSIONSTORE_KEY'] = secret(config['secrets']['snapshot'], r'[0-9a-f]{64}')
+                    write(role + '.env', ''.join(f'{key}={value}\n' for key, value in entries.items()))
+
+
+            if __name__ == '__main__':
+                try:
+                    prepare(sys.argv[1], sys.argv[2])
+                except Exception:
+                    print('secret preparation failed; start refused', file=sys.stderr)
+                    sys.exit(1)
+                print('role secrets prepared')
+          mode: '000755'
+        /opt/relais/boot/run.sh:
+          content: |
+            #!/usr/bin/env bash
+            # systemd supplies non-secret node settings and a separate role EnvironmentFile.
+            set -euo pipefail
+            bin=${RELAIS_BIN_DIR:-/opt/relais/bin}
+            case ${1:-} in
+              relay|relay-standby)
+                unset RELAIS_SESSIONSTORE_KEY
+                standby=()
+                [[ $1 == relay ]] || standby=(-standby)
+                exec "$bin/relais-relay" -media "$RELAY_PRIVATE:${RELAY_MEDIA_PORT:-34780}" -leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -http "$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" -relay-lease preview "${standby[@]}"
+                ;;
+              worker)
+                exec "$bin/relais-worker" -name "$WORKER_NAME" -media "$NODE_PRIVATE:${WORKER_MEDIA_PORT:-34711}" \
+                  -http "$NODE_PRIVATE:${WORKER_HTTP_PORT:-34701}" -relay-leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -relay-media "$RELAY_PUBLIC:${RELAY_MEDIA_PORT:-34780}" -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -agent echo
+                ;;
+              control)
+                workers=(-worker "w1=http://$WORKER_ONE:${WORKER_ONE_PORT:-34701}" -worker "w2=http://$WORKER_TWO:${WORKER_TWO_PORT:-34701}")
+                [[ -z ${WORKER_THREE:-} ]] || workers+=(-worker "w3=http://$WORKER_THREE:${WORKER_THREE_PORT:-34701}")
+                exec "$bin/relais-control" -http "$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -relay "http://$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" \
+                  -worker-call-cap "$WORKER_CALL_CAP" "${workers[@]}"
+                ;;
+              signal)
+                exec "$bin/relais-signal" -listen "$NODE_PRIVATE:${SIGNAL_PORT:-34743}" \
+                  -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -advertise-ips "$NODE_PRIVATE" \
+                  -token-file "${CREDENTIALS_DIRECTORY:?}/signal.token"
+                ;;
+              *) echo 'unknown component; start refused' >&2; exit 2 ;;
+            esac
+          mode: '000755'
+        /etc/systemd/system/relais-control.service:
+          content: |
+            [Unit]
+            Description=Relais preview control
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-control
+            Group=relais-control
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/control.env
+            ExecStart=/opt/relais/boot/run.sh control
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-prepare.service:
+          content: |
+            [Unit]
+            Description=Relais boot credentials
+            After=network-online.target
+            Wants=network-online.target
+            Before=relais-relay.service relais-relay-standby.service relais-worker.service relais-control.service relais-signal.service
+
+            [Service]
+            Type=oneshot
+            ExecStart=/opt/relais/sdk/bin/python /opt/relais/boot/prepare.py /etc/relais/node.json /run/relais
+            RemainAfterExit=yes
+            UMask=0077
+            StandardOutput=journal
+            StandardError=journal
+          mode: '000644'
+        /etc/systemd/system/relais-relay-standby.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay-standby
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay-standby
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-relay.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-signal.service:
+          content: |
+            [Unit]
+            Description=Relais preview signal
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-signal
+            Group=relais-signal
+            EnvironmentFile=/etc/relais/node.env
+            LoadCredential=signal.token:/run/relais/signal.token
+            ExecStart=/opt/relais/boot/run.sh signal
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-worker.service:
+          content: |
+            [Unit]
+            Description=Relais preview worker
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-worker
+            Group=relais-worker
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/worker.env
+            ExecStart=/opt/relais/boot/run.sh worker
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/relais/node.json:
+          content:
+            Fn::Sub:
+            - '{"region": "${v0}", "version": "${v1}", "architecture": "${v2}", "sha256": "${v3}", "ssm": "${v4}", "components":
+              ["worker"], "secrets": {"worker": "${v5}", "snapshot": "${v6}"}}'
+            - v0:
+                Ref: AWS::Region
+              v1:
+                Ref: ReleaseVersion
+              v2:
+                Ref: Architecture
+              v3:
+                Ref: ArchiveSHA256
+              v4:
+                Fn::If:
+                - SessionManager
+                - 'true'
+                - 'false'
+              v5:
+                Ref: WorkerPassword
+              v6:
+                Ref: SnapshotKey
+          mode: '000600'
+        /etc/relais/node.env:
+          content:
+            Fn::Sub:
+            - |
+              RELAIS_REDIS_ADDR=${Store.ConfigurationEndPoint.Address}:${Store.ConfigurationEndPoint.Port}
+              RELAIS_REDIS_CLUSTER=1
+              RELAIS_REDIS_TLS=1
+              RELAIS_REDIS_PREFIX=relais:preview:
+              RELAIS_PRIVATE_NETS=10.42.0.0/16
+              RELAY_PRIVATE=10.42.0.10
+              RELAY_PUBLIC=${RelayAddress}
+              CONTROL_PRIVATE=10.42.10.20
+              WORKER_ONE=10.42.10.11
+              WORKER_TWO=10.42.11.12
+              WORKER_THREE=${ThirdWorker}
+              WORKER_CALL_CAP=${WorkerCallCap}
+              NODE_PRIVATE=10.42.10.13
+              WORKER_NAME=w3
+            - ThirdWorker:
+                Fn::If:
+                - Resilience
+                - 10.42.10.13
+                - ''
+          mode: '000644'
+    DependsOn:
+    - PrivateDefaultA
+    Condition: Resilience
+  SharedHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId:
+        Fn::If:
+        - Arm
+        - Ref: ArmImage
+        - Ref: X86Image
+      InstanceType:
+        Fn::If:
+        - Arm
+        - Ref: ArmInstanceType
+        - Ref: X86InstanceType
+      IamInstanceProfile:
+        Ref: SharedInstanceProfile
+      SubnetId:
+        Ref: PrivateA
+      PrivateIpAddress: 10.42.10.20
+      SecurityGroupIds:
+      - Ref: ControlGroup
+      - Ref: SignalGroup
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+      - DeviceName: /dev/xvda
+        Ebs:
+          Encrypted: true
+          VolumeSize: 16
+          VolumeType: gp3
+          DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            set -euo pipefail
+            umask 077
+            dnf install -y python3.11 python3.11-pip tar shadow-utils
+            mkdir -p /opt/relais /etc/relais
+            python3.11 -m venv /opt/relais/sdk
+            /opt/relais/sdk/bin/pip install --disable-pip-version-check boto3==1.43.115
+            /opt/relais/sdk/bin/python - <<'BOOT'
+            import boto3, json, os
+            from pathlib import Path
+            client = boto3.client('cloudformation', region_name='${AWS::Region}')
+            r = client.describe_stack_resource(StackName='${AWS::StackName}', LogicalResourceId='SharedHost')
+            metadata = json.loads(r['StackResourceDetail']['Metadata'])
+            for name, entry in metadata['RelaisFiles'].items():
+                path = Path(name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(entry['content'])
+                path.chmod(int(entry['mode'], 8))
+            BOOT
+            /opt/relais/boot/install.sh
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${AWS::StackName}-SharedHost
+      - Key: RelaisRole
+        Value: shared
+      - Key: RelaisStack
+        Value:
+          Ref: AWS::StackName
+    Metadata:
+      RelaisFiles:
+        /opt/relais/boot/download.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Install only a caller-pinned archive. Never execute unverified bytes.
+            set -euo pipefail
+            umask 077
+            [[ $# == 4 ]] || { echo 'usage: download.sh VERSION arm64|x86_64 SHA256 DEST' >&2; exit 2; }
+            version=$1 arch=$2 digest=$3 dest=$4
+            [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.+-]+)?$ ]] || exit 2
+            [[ $digest =~ ^[a-f0-9]{64}$ ]] || exit 2
+            case $arch in arm64) ;; x86_64) arch=amd64 ;; *) exit 2 ;; esac
+            base="relais_${version}_linux_${arch}"
+            url="https://github.com/relaishq/relais/releases/download/v${version}/${base}.tar.gz"
+            # Local test seam; the stack never sets this variable.
+            url=${RELAIS_TEST_ARCHIVE_URL:-$url}
+            work=$(mktemp -d)
+            trap 'rm -rf "$work"' EXIT
+            curl --fail --silent --show-error --location --retry 3 --output "$work/archive" "$url"
+            if command -v sha256sum >/dev/null 2>&1; then
+              actual=$(sha256sum "$work/archive")
+            else
+              actual=$(shasum -a 256 "$work/archive")
+            fi
+            [[ ${actual%% *} == "$digest" ]] || { echo 'artifact digest mismatch; installation refused' >&2; exit 1; }
+            # Reject traversal, links, devices and unexpected members before extraction.
+            python3 - "$work/archive" "$base" "$work" <<'PY'
+            import sys, tarfile
+            archive, base, work = sys.argv[1:]
+            allowed = {'relais-relay', 'relais-worker', 'relais-control', 'relais-signal',
+                       'relais-demo', 'relais-load', 'start.sh', 'stop.sh', 'LICENSE', 'NOTICE', 'README.md'}
+            with tarfile.open(archive, 'r:gz') as tar:
+                for member in tar.getmembers():
+                    name = member.name.rstrip('/')
+                    if name == base and member.isdir():
+                        continue
+                    if not member.isfile() or name not in {base + '/' + n for n in allowed}:
+                        raise SystemExit('unsafe archive; installation refused')
+                tar.extractall(work)
+            PY
+            mkdir -p "$dest"
+            for name in relais-relay relais-worker relais-control relais-signal relais-load; do
+              install -m 0755 "$work/$base/$name" "$dest/$name"
+            done
+            echo 'artifact verified and installed'
+          mode: '000755'
+        /opt/relais/boot/install.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Root-only, fail-closed initial boot. Services do not refresh credentials themselves.
+            set -euo pipefail
+            umask 077
+            root=${RELAIS_INSTALL_ROOT:-/}
+            boot="$root/opt/relais/boot"
+            config="$root/etc/relais/node.json"
+            # A single failure prevents any component from starting.
+            settings=()
+            while IFS= read -r value; do settings+=("$value"); done < <(python3 - "$config" <<'PY'
+            import json, sys
+            c = json.load(open(sys.argv[1]))
+            print(c['version']); print(c['architecture']); print(c['sha256'])
+            print(' '.join(c['components'])); print(c['ssm'])
+            PY
+            )
+            "$boot/download.sh" "${settings[0]}" "${settings[1]}" "${settings[2]}" "$root/opt/relais/bin"
+            "${RELAIS_BOOT_PYTHON:-/opt/relais/sdk/bin/python}" "$boot/prepare.py" "$config" "$root/run/relais"
+            manager=${RELAIS_TEST_SYSTEMCTL:-systemctl}
+            if [[ ${settings[4]} == false ]]; then
+              "$manager" disable --now amazon-ssm-agent.service
+              "$manager" mask amazon-ssm-agent.service
+            else
+              "$manager" enable --now amazon-ssm-agent.service
+            fi
+            for component in ${settings[3]}; do
+              if [[ -z ${RELAIS_INSTALL_ROOT:-} ]]; then
+                id "relais-$component" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "relais-$component"
+              fi
+            done
+            "$manager" daemon-reload
+            for component in ${settings[3]}; do
+              "$manager" enable --now "relais-$component.service"
+              if [[ $component == relay ]]; then "$manager" enable --now relais-relay-standby.service; fi
+            done
+            echo 'boot services started'
+          mode: '000755'
+        /opt/relais/boot/prepare.py:
+          content: |
+            #!/usr/bin/env python3
+            """Fetch exact secret references; never print a secret or an SDK exception."""
+            import json
+            import os
+            from pathlib import Path
+            import re
+            import sys
+
+
+            def prepare(config_path, runtime):
+                config = json.loads(Path(config_path).read_text())
+                root = Path(runtime)
+                root.mkdir(mode=0o700, parents=True, exist_ok=True)
+                os.chmod(root, 0o700)
+                if os.environ.get('RELAIS_TEST_SECRET_FILE'):
+                    values = json.loads(Path(os.environ['RELAIS_TEST_SECRET_FILE']).read_text())
+                    fetch = values.__getitem__
+                else:
+                    import boto3
+                    client = boto3.client('secretsmanager', region_name=config['region'])
+                    def fetch(arn):
+                        return client.get_secret_value(SecretId=arn)['SecretString']
+
+                def write(name, value):
+                    path = root / name
+                    # Refuse symlinks. Runtime directory is root-only in the real boot path.
+                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                    try:
+                        os.fchmod(fd, 0o600)
+                        with os.fdopen(fd, 'w') as stream:
+                            stream.write(value)
+                    except BaseException:
+                        path.unlink(missing_ok=True)
+                        raise
+
+                def secret(arn, pattern):
+                    value = fetch(arn)
+                    if not re.fullmatch(pattern, value):
+                        raise ValueError('invalid generated secret')
+                    return value
+
+                # Remove old values before a failed refresh can leave stale credentials usable.
+                for role in config['components']:
+                    (root / (role + '.env')).unlink(missing_ok=True)
+                (root / 'signal.token').unlink(missing_ok=True)
+                for role in config['components']:
+                    if role == 'signal':
+                        write('signal.token', secret(config['secrets']['token'], r'[A-Za-z0-9]{64}'))
+                        continue
+                    entries = {
+                        'RELAIS_REDIS_USERNAME': role,
+                        'RELAIS_REDIS_PASSWORD': secret(config['secrets'][role], r'[A-Za-z0-9]{64}'),
+                    }
+                    if role in ('worker', 'control'):
+                        entries['RELAIS_SESSIONSTORE_KEY'] = secret(config['secrets']['snapshot'], r'[0-9a-f]{64}')
+                    write(role + '.env', ''.join(f'{key}={value}\n' for key, value in entries.items()))
+
+
+            if __name__ == '__main__':
+                try:
+                    prepare(sys.argv[1], sys.argv[2])
+                except Exception:
+                    print('secret preparation failed; start refused', file=sys.stderr)
+                    sys.exit(1)
+                print('role secrets prepared')
+          mode: '000755'
+        /opt/relais/boot/run.sh:
+          content: |
+            #!/usr/bin/env bash
+            # systemd supplies non-secret node settings and a separate role EnvironmentFile.
+            set -euo pipefail
+            bin=${RELAIS_BIN_DIR:-/opt/relais/bin}
+            case ${1:-} in
+              relay|relay-standby)
+                unset RELAIS_SESSIONSTORE_KEY
+                standby=()
+                [[ $1 == relay ]] || standby=(-standby)
+                exec "$bin/relais-relay" -media "$RELAY_PRIVATE:${RELAY_MEDIA_PORT:-34780}" -leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -http "$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" -relay-lease preview "${standby[@]}"
+                ;;
+              worker)
+                exec "$bin/relais-worker" -name "$WORKER_NAME" -media "$NODE_PRIVATE:${WORKER_MEDIA_PORT:-34711}" \
+                  -http "$NODE_PRIVATE:${WORKER_HTTP_PORT:-34701}" -relay-leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -relay-media "$RELAY_PUBLIC:${RELAY_MEDIA_PORT:-34780}" -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -agent echo
+                ;;
+              control)
+                workers=(-worker "w1=http://$WORKER_ONE:${WORKER_ONE_PORT:-34701}" -worker "w2=http://$WORKER_TWO:${WORKER_TWO_PORT:-34701}")
+                [[ -z ${WORKER_THREE:-} ]] || workers+=(-worker "w3=http://$WORKER_THREE:${WORKER_THREE_PORT:-34701}")
+                exec "$bin/relais-control" -http "$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -relay "http://$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" \
+                  -worker-call-cap "$WORKER_CALL_CAP" "${workers[@]}"
+                ;;
+              signal)
+                exec "$bin/relais-signal" -listen "$NODE_PRIVATE:${SIGNAL_PORT:-34743}" \
+                  -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -advertise-ips "$NODE_PRIVATE" \
+                  -token-file "${CREDENTIALS_DIRECTORY:?}/signal.token"
+                ;;
+              *) echo 'unknown component; start refused' >&2; exit 2 ;;
+            esac
+          mode: '000755'
+        /etc/systemd/system/relais-control.service:
+          content: |
+            [Unit]
+            Description=Relais preview control
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-control
+            Group=relais-control
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/control.env
+            ExecStart=/opt/relais/boot/run.sh control
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-prepare.service:
+          content: |
+            [Unit]
+            Description=Relais boot credentials
+            After=network-online.target
+            Wants=network-online.target
+            Before=relais-relay.service relais-relay-standby.service relais-worker.service relais-control.service relais-signal.service
+
+            [Service]
+            Type=oneshot
+            ExecStart=/opt/relais/sdk/bin/python /opt/relais/boot/prepare.py /etc/relais/node.json /run/relais
+            RemainAfterExit=yes
+            UMask=0077
+            StandardOutput=journal
+            StandardError=journal
+          mode: '000644'
+        /etc/systemd/system/relais-relay-standby.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay-standby
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay-standby
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-relay.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-signal.service:
+          content: |
+            [Unit]
+            Description=Relais preview signal
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-signal
+            Group=relais-signal
+            EnvironmentFile=/etc/relais/node.env
+            LoadCredential=signal.token:/run/relais/signal.token
+            ExecStart=/opt/relais/boot/run.sh signal
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-worker.service:
+          content: |
+            [Unit]
+            Description=Relais preview worker
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-worker
+            Group=relais-worker
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/worker.env
+            ExecStart=/opt/relais/boot/run.sh worker
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/relais/node.json:
+          content:
+            Fn::Sub:
+            - '{"region": "${v0}", "version": "${v1}", "architecture": "${v2}", "sha256": "${v3}", "ssm": "${v4}", "components":
+              ["control", "signal"], "secrets": {"control": "${v5}", "snapshot": "${v6}", "token": "${v7}"}}'
+            - v0:
+                Ref: AWS::Region
+              v1:
+                Ref: ReleaseVersion
+              v2:
+                Ref: Architecture
+              v3:
+                Ref: ArchiveSHA256
+              v4:
+                Fn::If:
+                - SessionManager
+                - 'true'
+                - 'false'
+              v5:
+                Ref: ControlPassword
+              v6:
+                Ref: SnapshotKey
+              v7:
+                Ref: SignalToken
+          mode: '000600'
+        /etc/relais/node.env:
+          content:
+            Fn::Sub:
+            - |
+              RELAIS_REDIS_ADDR=${Store.ConfigurationEndPoint.Address}:${Store.ConfigurationEndPoint.Port}
+              RELAIS_REDIS_CLUSTER=1
+              RELAIS_REDIS_TLS=1
+              RELAIS_REDIS_PREFIX=relais:preview:
+              RELAIS_PRIVATE_NETS=10.42.0.0/16
+              RELAY_PRIVATE=10.42.0.10
+              RELAY_PUBLIC=${RelayAddress}
+              CONTROL_PRIVATE=10.42.10.20
+              WORKER_ONE=10.42.10.11
+              WORKER_TWO=10.42.11.12
+              WORKER_THREE=${ThirdWorker}
+              WORKER_CALL_CAP=${WorkerCallCap}
+              NODE_PRIVATE=10.42.10.20
+              WORKER_NAME=
+            - ThirdWorker:
+                Fn::If:
+                - Resilience
+                - 10.42.10.13
+                - ''
+          mode: '000644'
+    DependsOn:
+    - PrivateDefaultA
+    Condition: Lean
+  ControlHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId:
+        Fn::If:
+        - Arm
+        - Ref: ArmImage
+        - Ref: X86Image
+      InstanceType:
+        Fn::If:
+        - Arm
+        - Ref: ArmInstanceType
+        - Ref: X86InstanceType
+      IamInstanceProfile:
+        Ref: ControlInstanceProfile
+      SubnetId:
+        Ref: PrivateA
+      PrivateIpAddress: 10.42.10.20
+      SecurityGroupIds:
+      - Ref: ControlGroup
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+      - DeviceName: /dev/xvda
+        Ebs:
+          Encrypted: true
+          VolumeSize: 16
+          VolumeType: gp3
+          DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            set -euo pipefail
+            umask 077
+            dnf install -y python3.11 python3.11-pip tar shadow-utils
+            mkdir -p /opt/relais /etc/relais
+            python3.11 -m venv /opt/relais/sdk
+            /opt/relais/sdk/bin/pip install --disable-pip-version-check boto3==1.43.115
+            /opt/relais/sdk/bin/python - <<'BOOT'
+            import boto3, json, os
+            from pathlib import Path
+            client = boto3.client('cloudformation', region_name='${AWS::Region}')
+            r = client.describe_stack_resource(StackName='${AWS::StackName}', LogicalResourceId='ControlHost')
+            metadata = json.loads(r['StackResourceDetail']['Metadata'])
+            for name, entry in metadata['RelaisFiles'].items():
+                path = Path(name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(entry['content'])
+                path.chmod(int(entry['mode'], 8))
+            BOOT
+            /opt/relais/boot/install.sh
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${AWS::StackName}-ControlHost
+      - Key: RelaisRole
+        Value: control
+      - Key: RelaisStack
+        Value:
+          Ref: AWS::StackName
+    Metadata:
+      RelaisFiles:
+        /opt/relais/boot/download.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Install only a caller-pinned archive. Never execute unverified bytes.
+            set -euo pipefail
+            umask 077
+            [[ $# == 4 ]] || { echo 'usage: download.sh VERSION arm64|x86_64 SHA256 DEST' >&2; exit 2; }
+            version=$1 arch=$2 digest=$3 dest=$4
+            [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.+-]+)?$ ]] || exit 2
+            [[ $digest =~ ^[a-f0-9]{64}$ ]] || exit 2
+            case $arch in arm64) ;; x86_64) arch=amd64 ;; *) exit 2 ;; esac
+            base="relais_${version}_linux_${arch}"
+            url="https://github.com/relaishq/relais/releases/download/v${version}/${base}.tar.gz"
+            # Local test seam; the stack never sets this variable.
+            url=${RELAIS_TEST_ARCHIVE_URL:-$url}
+            work=$(mktemp -d)
+            trap 'rm -rf "$work"' EXIT
+            curl --fail --silent --show-error --location --retry 3 --output "$work/archive" "$url"
+            if command -v sha256sum >/dev/null 2>&1; then
+              actual=$(sha256sum "$work/archive")
+            else
+              actual=$(shasum -a 256 "$work/archive")
+            fi
+            [[ ${actual%% *} == "$digest" ]] || { echo 'artifact digest mismatch; installation refused' >&2; exit 1; }
+            # Reject traversal, links, devices and unexpected members before extraction.
+            python3 - "$work/archive" "$base" "$work" <<'PY'
+            import sys, tarfile
+            archive, base, work = sys.argv[1:]
+            allowed = {'relais-relay', 'relais-worker', 'relais-control', 'relais-signal',
+                       'relais-demo', 'relais-load', 'start.sh', 'stop.sh', 'LICENSE', 'NOTICE', 'README.md'}
+            with tarfile.open(archive, 'r:gz') as tar:
+                for member in tar.getmembers():
+                    name = member.name.rstrip('/')
+                    if name == base and member.isdir():
+                        continue
+                    if not member.isfile() or name not in {base + '/' + n for n in allowed}:
+                        raise SystemExit('unsafe archive; installation refused')
+                tar.extractall(work)
+            PY
+            mkdir -p "$dest"
+            for name in relais-relay relais-worker relais-control relais-signal relais-load; do
+              install -m 0755 "$work/$base/$name" "$dest/$name"
+            done
+            echo 'artifact verified and installed'
+          mode: '000755'
+        /opt/relais/boot/install.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Root-only, fail-closed initial boot. Services do not refresh credentials themselves.
+            set -euo pipefail
+            umask 077
+            root=${RELAIS_INSTALL_ROOT:-/}
+            boot="$root/opt/relais/boot"
+            config="$root/etc/relais/node.json"
+            # A single failure prevents any component from starting.
+            settings=()
+            while IFS= read -r value; do settings+=("$value"); done < <(python3 - "$config" <<'PY'
+            import json, sys
+            c = json.load(open(sys.argv[1]))
+            print(c['version']); print(c['architecture']); print(c['sha256'])
+            print(' '.join(c['components'])); print(c['ssm'])
+            PY
+            )
+            "$boot/download.sh" "${settings[0]}" "${settings[1]}" "${settings[2]}" "$root/opt/relais/bin"
+            "${RELAIS_BOOT_PYTHON:-/opt/relais/sdk/bin/python}" "$boot/prepare.py" "$config" "$root/run/relais"
+            manager=${RELAIS_TEST_SYSTEMCTL:-systemctl}
+            if [[ ${settings[4]} == false ]]; then
+              "$manager" disable --now amazon-ssm-agent.service
+              "$manager" mask amazon-ssm-agent.service
+            else
+              "$manager" enable --now amazon-ssm-agent.service
+            fi
+            for component in ${settings[3]}; do
+              if [[ -z ${RELAIS_INSTALL_ROOT:-} ]]; then
+                id "relais-$component" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "relais-$component"
+              fi
+            done
+            "$manager" daemon-reload
+            for component in ${settings[3]}; do
+              "$manager" enable --now "relais-$component.service"
+              if [[ $component == relay ]]; then "$manager" enable --now relais-relay-standby.service; fi
+            done
+            echo 'boot services started'
+          mode: '000755'
+        /opt/relais/boot/prepare.py:
+          content: |
+            #!/usr/bin/env python3
+            """Fetch exact secret references; never print a secret or an SDK exception."""
+            import json
+            import os
+            from pathlib import Path
+            import re
+            import sys
+
+
+            def prepare(config_path, runtime):
+                config = json.loads(Path(config_path).read_text())
+                root = Path(runtime)
+                root.mkdir(mode=0o700, parents=True, exist_ok=True)
+                os.chmod(root, 0o700)
+                if os.environ.get('RELAIS_TEST_SECRET_FILE'):
+                    values = json.loads(Path(os.environ['RELAIS_TEST_SECRET_FILE']).read_text())
+                    fetch = values.__getitem__
+                else:
+                    import boto3
+                    client = boto3.client('secretsmanager', region_name=config['region'])
+                    def fetch(arn):
+                        return client.get_secret_value(SecretId=arn)['SecretString']
+
+                def write(name, value):
+                    path = root / name
+                    # Refuse symlinks. Runtime directory is root-only in the real boot path.
+                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                    try:
+                        os.fchmod(fd, 0o600)
+                        with os.fdopen(fd, 'w') as stream:
+                            stream.write(value)
+                    except BaseException:
+                        path.unlink(missing_ok=True)
+                        raise
+
+                def secret(arn, pattern):
+                    value = fetch(arn)
+                    if not re.fullmatch(pattern, value):
+                        raise ValueError('invalid generated secret')
+                    return value
+
+                # Remove old values before a failed refresh can leave stale credentials usable.
+                for role in config['components']:
+                    (root / (role + '.env')).unlink(missing_ok=True)
+                (root / 'signal.token').unlink(missing_ok=True)
+                for role in config['components']:
+                    if role == 'signal':
+                        write('signal.token', secret(config['secrets']['token'], r'[A-Za-z0-9]{64}'))
+                        continue
+                    entries = {
+                        'RELAIS_REDIS_USERNAME': role,
+                        'RELAIS_REDIS_PASSWORD': secret(config['secrets'][role], r'[A-Za-z0-9]{64}'),
+                    }
+                    if role in ('worker', 'control'):
+                        entries['RELAIS_SESSIONSTORE_KEY'] = secret(config['secrets']['snapshot'], r'[0-9a-f]{64}')
+                    write(role + '.env', ''.join(f'{key}={value}\n' for key, value in entries.items()))
+
+
+            if __name__ == '__main__':
+                try:
+                    prepare(sys.argv[1], sys.argv[2])
+                except Exception:
+                    print('secret preparation failed; start refused', file=sys.stderr)
+                    sys.exit(1)
+                print('role secrets prepared')
+          mode: '000755'
+        /opt/relais/boot/run.sh:
+          content: |
+            #!/usr/bin/env bash
+            # systemd supplies non-secret node settings and a separate role EnvironmentFile.
+            set -euo pipefail
+            bin=${RELAIS_BIN_DIR:-/opt/relais/bin}
+            case ${1:-} in
+              relay|relay-standby)
+                unset RELAIS_SESSIONSTORE_KEY
+                standby=()
+                [[ $1 == relay ]] || standby=(-standby)
+                exec "$bin/relais-relay" -media "$RELAY_PRIVATE:${RELAY_MEDIA_PORT:-34780}" -leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -http "$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" -relay-lease preview "${standby[@]}"
+                ;;
+              worker)
+                exec "$bin/relais-worker" -name "$WORKER_NAME" -media "$NODE_PRIVATE:${WORKER_MEDIA_PORT:-34711}" \
+                  -http "$NODE_PRIVATE:${WORKER_HTTP_PORT:-34701}" -relay-leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -relay-media "$RELAY_PUBLIC:${RELAY_MEDIA_PORT:-34780}" -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -agent echo
+                ;;
+              control)
+                workers=(-worker "w1=http://$WORKER_ONE:${WORKER_ONE_PORT:-34701}" -worker "w2=http://$WORKER_TWO:${WORKER_TWO_PORT:-34701}")
+                [[ -z ${WORKER_THREE:-} ]] || workers+=(-worker "w3=http://$WORKER_THREE:${WORKER_THREE_PORT:-34701}")
+                exec "$bin/relais-control" -http "$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -relay "http://$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" \
+                  -worker-call-cap "$WORKER_CALL_CAP" "${workers[@]}"
+                ;;
+              signal)
+                exec "$bin/relais-signal" -listen "$NODE_PRIVATE:${SIGNAL_PORT:-34743}" \
+                  -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -advertise-ips "$NODE_PRIVATE" \
+                  -token-file "${CREDENTIALS_DIRECTORY:?}/signal.token"
+                ;;
+              *) echo 'unknown component; start refused' >&2; exit 2 ;;
+            esac
+          mode: '000755'
+        /etc/systemd/system/relais-control.service:
+          content: |
+            [Unit]
+            Description=Relais preview control
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-control
+            Group=relais-control
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/control.env
+            ExecStart=/opt/relais/boot/run.sh control
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-prepare.service:
+          content: |
+            [Unit]
+            Description=Relais boot credentials
+            After=network-online.target
+            Wants=network-online.target
+            Before=relais-relay.service relais-relay-standby.service relais-worker.service relais-control.service relais-signal.service
+
+            [Service]
+            Type=oneshot
+            ExecStart=/opt/relais/sdk/bin/python /opt/relais/boot/prepare.py /etc/relais/node.json /run/relais
+            RemainAfterExit=yes
+            UMask=0077
+            StandardOutput=journal
+            StandardError=journal
+          mode: '000644'
+        /etc/systemd/system/relais-relay-standby.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay-standby
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay-standby
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-relay.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-signal.service:
+          content: |
+            [Unit]
+            Description=Relais preview signal
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-signal
+            Group=relais-signal
+            EnvironmentFile=/etc/relais/node.env
+            LoadCredential=signal.token:/run/relais/signal.token
+            ExecStart=/opt/relais/boot/run.sh signal
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-worker.service:
+          content: |
+            [Unit]
+            Description=Relais preview worker
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-worker
+            Group=relais-worker
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/worker.env
+            ExecStart=/opt/relais/boot/run.sh worker
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/relais/node.json:
+          content:
+            Fn::Sub:
+            - '{"region": "${v0}", "version": "${v1}", "architecture": "${v2}", "sha256": "${v3}", "ssm": "${v4}", "components":
+              ["control"], "secrets": {"control": "${v5}", "snapshot": "${v6}"}}'
+            - v0:
+                Ref: AWS::Region
+              v1:
+                Ref: ReleaseVersion
+              v2:
+                Ref: Architecture
+              v3:
+                Ref: ArchiveSHA256
+              v4:
+                Fn::If:
+                - SessionManager
+                - 'true'
+                - 'false'
+              v5:
+                Ref: ControlPassword
+              v6:
+                Ref: SnapshotKey
+          mode: '000600'
+        /etc/relais/node.env:
+          content:
+            Fn::Sub:
+            - |
+              RELAIS_REDIS_ADDR=${Store.ConfigurationEndPoint.Address}:${Store.ConfigurationEndPoint.Port}
+              RELAIS_REDIS_CLUSTER=1
+              RELAIS_REDIS_TLS=1
+              RELAIS_REDIS_PREFIX=relais:preview:
+              RELAIS_PRIVATE_NETS=10.42.0.0/16
+              RELAY_PRIVATE=10.42.0.10
+              RELAY_PUBLIC=${RelayAddress}
+              CONTROL_PRIVATE=10.42.10.20
+              WORKER_ONE=10.42.10.11
+              WORKER_TWO=10.42.11.12
+              WORKER_THREE=${ThirdWorker}
+              WORKER_CALL_CAP=${WorkerCallCap}
+              NODE_PRIVATE=10.42.10.20
+              WORKER_NAME=
+            - ThirdWorker:
+                Fn::If:
+                - Resilience
+                - 10.42.10.13
+                - ''
+          mode: '000644'
+    DependsOn:
+    - PrivateDefaultA
+    Condition: Resilience
+  SignalHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId:
+        Fn::If:
+        - Arm
+        - Ref: ArmImage
+        - Ref: X86Image
+      InstanceType:
+        Fn::If:
+        - Arm
+        - Ref: ArmInstanceType
+        - Ref: X86InstanceType
+      IamInstanceProfile:
+        Ref: SignalInstanceProfile
+      SubnetId:
+        Ref: PrivateB
+      PrivateIpAddress: 10.42.11.21
+      SecurityGroupIds:
+      - Ref: SignalGroup
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+      - DeviceName: /dev/xvda
+        Ebs:
+          Encrypted: true
+          VolumeSize: 16
+          VolumeType: gp3
+          DeleteOnTermination: true
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            set -euo pipefail
+            umask 077
+            dnf install -y python3.11 python3.11-pip tar shadow-utils
+            mkdir -p /opt/relais /etc/relais
+            python3.11 -m venv /opt/relais/sdk
+            /opt/relais/sdk/bin/pip install --disable-pip-version-check boto3==1.43.115
+            /opt/relais/sdk/bin/python - <<'BOOT'
+            import boto3, json, os
+            from pathlib import Path
+            client = boto3.client('cloudformation', region_name='${AWS::Region}')
+            r = client.describe_stack_resource(StackName='${AWS::StackName}', LogicalResourceId='SignalHost')
+            metadata = json.loads(r['StackResourceDetail']['Metadata'])
+            for name, entry in metadata['RelaisFiles'].items():
+                path = Path(name)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(entry['content'])
+                path.chmod(int(entry['mode'], 8))
+            BOOT
+            /opt/relais/boot/install.sh
+      Tags:
+      - Key: Name
+        Value:
+          Fn::Sub: ${AWS::StackName}-SignalHost
+      - Key: RelaisRole
+        Value: signal
+      - Key: RelaisStack
+        Value:
+          Ref: AWS::StackName
+    Metadata:
+      RelaisFiles:
+        /opt/relais/boot/download.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Install only a caller-pinned archive. Never execute unverified bytes.
+            set -euo pipefail
+            umask 077
+            [[ $# == 4 ]] || { echo 'usage: download.sh VERSION arm64|x86_64 SHA256 DEST' >&2; exit 2; }
+            version=$1 arch=$2 digest=$3 dest=$4
+            [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.+-]+)?$ ]] || exit 2
+            [[ $digest =~ ^[a-f0-9]{64}$ ]] || exit 2
+            case $arch in arm64) ;; x86_64) arch=amd64 ;; *) exit 2 ;; esac
+            base="relais_${version}_linux_${arch}"
+            url="https://github.com/relaishq/relais/releases/download/v${version}/${base}.tar.gz"
+            # Local test seam; the stack never sets this variable.
+            url=${RELAIS_TEST_ARCHIVE_URL:-$url}
+            work=$(mktemp -d)
+            trap 'rm -rf "$work"' EXIT
+            curl --fail --silent --show-error --location --retry 3 --output "$work/archive" "$url"
+            if command -v sha256sum >/dev/null 2>&1; then
+              actual=$(sha256sum "$work/archive")
+            else
+              actual=$(shasum -a 256 "$work/archive")
+            fi
+            [[ ${actual%% *} == "$digest" ]] || { echo 'artifact digest mismatch; installation refused' >&2; exit 1; }
+            # Reject traversal, links, devices and unexpected members before extraction.
+            python3 - "$work/archive" "$base" "$work" <<'PY'
+            import sys, tarfile
+            archive, base, work = sys.argv[1:]
+            allowed = {'relais-relay', 'relais-worker', 'relais-control', 'relais-signal',
+                       'relais-demo', 'relais-load', 'start.sh', 'stop.sh', 'LICENSE', 'NOTICE', 'README.md'}
+            with tarfile.open(archive, 'r:gz') as tar:
+                for member in tar.getmembers():
+                    name = member.name.rstrip('/')
+                    if name == base and member.isdir():
+                        continue
+                    if not member.isfile() or name not in {base + '/' + n for n in allowed}:
+                        raise SystemExit('unsafe archive; installation refused')
+                tar.extractall(work)
+            PY
+            mkdir -p "$dest"
+            for name in relais-relay relais-worker relais-control relais-signal relais-load; do
+              install -m 0755 "$work/$base/$name" "$dest/$name"
+            done
+            echo 'artifact verified and installed'
+          mode: '000755'
+        /opt/relais/boot/install.sh:
+          content: |
+            #!/usr/bin/env bash
+            # Root-only, fail-closed initial boot. Services do not refresh credentials themselves.
+            set -euo pipefail
+            umask 077
+            root=${RELAIS_INSTALL_ROOT:-/}
+            boot="$root/opt/relais/boot"
+            config="$root/etc/relais/node.json"
+            # A single failure prevents any component from starting.
+            settings=()
+            while IFS= read -r value; do settings+=("$value"); done < <(python3 - "$config" <<'PY'
+            import json, sys
+            c = json.load(open(sys.argv[1]))
+            print(c['version']); print(c['architecture']); print(c['sha256'])
+            print(' '.join(c['components'])); print(c['ssm'])
+            PY
+            )
+            "$boot/download.sh" "${settings[0]}" "${settings[1]}" "${settings[2]}" "$root/opt/relais/bin"
+            "${RELAIS_BOOT_PYTHON:-/opt/relais/sdk/bin/python}" "$boot/prepare.py" "$config" "$root/run/relais"
+            manager=${RELAIS_TEST_SYSTEMCTL:-systemctl}
+            if [[ ${settings[4]} == false ]]; then
+              "$manager" disable --now amazon-ssm-agent.service
+              "$manager" mask amazon-ssm-agent.service
+            else
+              "$manager" enable --now amazon-ssm-agent.service
+            fi
+            for component in ${settings[3]}; do
+              if [[ -z ${RELAIS_INSTALL_ROOT:-} ]]; then
+                id "relais-$component" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "relais-$component"
+              fi
+            done
+            "$manager" daemon-reload
+            for component in ${settings[3]}; do
+              "$manager" enable --now "relais-$component.service"
+              if [[ $component == relay ]]; then "$manager" enable --now relais-relay-standby.service; fi
+            done
+            echo 'boot services started'
+          mode: '000755'
+        /opt/relais/boot/prepare.py:
+          content: |
+            #!/usr/bin/env python3
+            """Fetch exact secret references; never print a secret or an SDK exception."""
+            import json
+            import os
+            from pathlib import Path
+            import re
+            import sys
+
+
+            def prepare(config_path, runtime):
+                config = json.loads(Path(config_path).read_text())
+                root = Path(runtime)
+                root.mkdir(mode=0o700, parents=True, exist_ok=True)
+                os.chmod(root, 0o700)
+                if os.environ.get('RELAIS_TEST_SECRET_FILE'):
+                    values = json.loads(Path(os.environ['RELAIS_TEST_SECRET_FILE']).read_text())
+                    fetch = values.__getitem__
+                else:
+                    import boto3
+                    client = boto3.client('secretsmanager', region_name=config['region'])
+                    def fetch(arn):
+                        return client.get_secret_value(SecretId=arn)['SecretString']
+
+                def write(name, value):
+                    path = root / name
+                    # Refuse symlinks. Runtime directory is root-only in the real boot path.
+                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+                    try:
+                        os.fchmod(fd, 0o600)
+                        with os.fdopen(fd, 'w') as stream:
+                            stream.write(value)
+                    except BaseException:
+                        path.unlink(missing_ok=True)
+                        raise
+
+                def secret(arn, pattern):
+                    value = fetch(arn)
+                    if not re.fullmatch(pattern, value):
+                        raise ValueError('invalid generated secret')
+                    return value
+
+                # Remove old values before a failed refresh can leave stale credentials usable.
+                for role in config['components']:
+                    (root / (role + '.env')).unlink(missing_ok=True)
+                (root / 'signal.token').unlink(missing_ok=True)
+                for role in config['components']:
+                    if role == 'signal':
+                        write('signal.token', secret(config['secrets']['token'], r'[A-Za-z0-9]{64}'))
+                        continue
+                    entries = {
+                        'RELAIS_REDIS_USERNAME': role,
+                        'RELAIS_REDIS_PASSWORD': secret(config['secrets'][role], r'[A-Za-z0-9]{64}'),
+                    }
+                    if role in ('worker', 'control'):
+                        entries['RELAIS_SESSIONSTORE_KEY'] = secret(config['secrets']['snapshot'], r'[0-9a-f]{64}')
+                    write(role + '.env', ''.join(f'{key}={value}\n' for key, value in entries.items()))
+
+
+            if __name__ == '__main__':
+                try:
+                    prepare(sys.argv[1], sys.argv[2])
+                except Exception:
+                    print('secret preparation failed; start refused', file=sys.stderr)
+                    sys.exit(1)
+                print('role secrets prepared')
+          mode: '000755'
+        /opt/relais/boot/run.sh:
+          content: |
+            #!/usr/bin/env bash
+            # systemd supplies non-secret node settings and a separate role EnvironmentFile.
+            set -euo pipefail
+            bin=${RELAIS_BIN_DIR:-/opt/relais/bin}
+            case ${1:-} in
+              relay|relay-standby)
+                unset RELAIS_SESSIONSTORE_KEY
+                standby=()
+                [[ $1 == relay ]] || standby=(-standby)
+                exec "$bin/relais-relay" -media "$RELAY_PRIVATE:${RELAY_MEDIA_PORT:-34780}" -leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -http "$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" -relay-lease preview "${standby[@]}"
+                ;;
+              worker)
+                exec "$bin/relais-worker" -name "$WORKER_NAME" -media "$NODE_PRIVATE:${WORKER_MEDIA_PORT:-34711}" \
+                  -http "$NODE_PRIVATE:${WORKER_HTTP_PORT:-34701}" -relay-leg "$RELAY_PRIVATE:${RELAY_LEG_PORT:-34781}" \
+                  -relay-media "$RELAY_PUBLIC:${RELAY_MEDIA_PORT:-34780}" -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -agent echo
+                ;;
+              control)
+                workers=(-worker "w1=http://$WORKER_ONE:${WORKER_ONE_PORT:-34701}" -worker "w2=http://$WORKER_TWO:${WORKER_TWO_PORT:-34701}")
+                [[ -z ${WORKER_THREE:-} ]] || workers+=(-worker "w3=http://$WORKER_THREE:${WORKER_THREE_PORT:-34701}")
+                exec "$bin/relais-control" -http "$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -relay "http://$RELAY_PRIVATE:${RELAY_HTTP_PORT:-34700}" \
+                  -worker-call-cap "$WORKER_CALL_CAP" "${workers[@]}"
+                ;;
+              signal)
+                exec "$bin/relais-signal" -listen "$NODE_PRIVATE:${SIGNAL_PORT:-34743}" \
+                  -control "http://$CONTROL_PRIVATE:${CONTROL_HTTP_PORT:-34710}" -advertise-ips "$NODE_PRIVATE" \
+                  -token-file "${CREDENTIALS_DIRECTORY:?}/signal.token"
+                ;;
+              *) echo 'unknown component; start refused' >&2; exit 2 ;;
+            esac
+          mode: '000755'
+        /etc/systemd/system/relais-control.service:
+          content: |
+            [Unit]
+            Description=Relais preview control
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-control
+            Group=relais-control
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/control.env
+            ExecStart=/opt/relais/boot/run.sh control
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-prepare.service:
+          content: |
+            [Unit]
+            Description=Relais boot credentials
+            After=network-online.target
+            Wants=network-online.target
+            Before=relais-relay.service relais-relay-standby.service relais-worker.service relais-control.service relais-signal.service
+
+            [Service]
+            Type=oneshot
+            ExecStart=/opt/relais/sdk/bin/python /opt/relais/boot/prepare.py /etc/relais/node.json /run/relais
+            RemainAfterExit=yes
+            UMask=0077
+            StandardOutput=journal
+            StandardError=journal
+          mode: '000644'
+        /etc/systemd/system/relais-relay-standby.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay-standby
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay-standby
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-relay.service:
+          content: |
+            [Unit]
+            Description=Relais preview relay
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-relay
+            Group=relais-relay
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/relay.env
+            ExecStart=/opt/relais/boot/run.sh relay
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-signal.service:
+          content: |
+            [Unit]
+            Description=Relais preview signal
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-signal
+            Group=relais-signal
+            EnvironmentFile=/etc/relais/node.env
+            LoadCredential=signal.token:/run/relais/signal.token
+            ExecStart=/opt/relais/boot/run.sh signal
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/systemd/system/relais-worker.service:
+          content: |
+            [Unit]
+            Description=Relais preview worker
+            After=network-online.target relais-prepare.service
+            Wants=network-online.target
+            Requires=relais-prepare.service
+
+            [Service]
+            Type=simple
+            User=relais-worker
+            Group=relais-worker
+            EnvironmentFile=/etc/relais/node.env
+            EnvironmentFile=/run/relais/worker.env
+            ExecStart=/opt/relais/boot/run.sh worker
+            Restart=no
+            TimeoutStopSec=15s
+            UMask=0077
+            NoNewPrivileges=yes
+            ProtectSystem=strict
+            ProtectHome=yes
+            PrivateTmp=yes
+            RestrictSUIDSGID=yes
+            LockPersonality=yes
+            RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+            CapabilityBoundingSet=
+            IPAddressDeny=169.254.169.254/32
+            StandardOutput=journal
+            StandardError=journal
+
+            [Install]
+            WantedBy=multi-user.target
+          mode: '000644'
+        /etc/relais/node.json:
+          content:
+            Fn::Sub:
+            - '{"region": "${v0}", "version": "${v1}", "architecture": "${v2}", "sha256": "${v3}", "ssm": "${v4}", "components":
+              ["signal"], "secrets": {"token": "${v5}"}}'
+            - v0:
+                Ref: AWS::Region
+              v1:
+                Ref: ReleaseVersion
+              v2:
+                Ref: Architecture
+              v3:
+                Ref: ArchiveSHA256
+              v4:
+                Fn::If:
+                - SessionManager
+                - 'true'
+                - 'false'
+              v5:
+                Ref: SignalToken
+          mode: '000600'
+        /etc/relais/node.env:
+          content:
+            Fn::Sub:
+            - |
+              RELAIS_REDIS_ADDR=${Store.ConfigurationEndPoint.Address}:${Store.ConfigurationEndPoint.Port}
+              RELAIS_REDIS_CLUSTER=1
+              RELAIS_REDIS_TLS=1
+              RELAIS_REDIS_PREFIX=relais:preview:
+              RELAIS_PRIVATE_NETS=10.42.0.0/16
+              RELAY_PRIVATE=10.42.0.10
+              RELAY_PUBLIC=${RelayAddress}
+              CONTROL_PRIVATE=10.42.10.20
+              WORKER_ONE=10.42.10.11
+              WORKER_TWO=10.42.11.12
+              WORKER_THREE=${ThirdWorker}
+              WORKER_CALL_CAP=${WorkerCallCap}
+              NODE_PRIVATE=10.42.11.21
+              WORKER_NAME=
+            - ThirdWorker:
+                Fn::If:
+                - Resilience
+                - 10.42.10.13
+                - ''
+          mode: '000644'
+    DependsOn:
+    - PrivateDefaultB
+    Condition: Resilience
+  RelayAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+        - RelayAddress
+        - AllocationId
+      NetworkInterfaceId:
+        Ref: RelayInterface
+  RelayInterface:
+    Type: AWS::EC2::NetworkInterface
+    Properties:
+      SubnetId:
+        Ref: PublicA
+      PrivateIpAddress: 10.42.0.10
+      GroupSet:
+      - Ref: RelayGroup
+  SignalAlb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Type: application
+      IpAddressType: ipv4
+      Subnets:
+      - Ref: PublicA
+      - Ref: PublicB
+      SecurityGroups:
+      - Ref: AlbGroup
+      LoadBalancerAttributes:
+      - Key: routing.http.drop_invalid_header_fields.enabled
+        Value: 'true'
+    DependsOn: InternetAttachment
+  SignalTargets:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId:
+        Ref: Vpc
+      Protocol: HTTPS
+      Port: 34743
+      TargetType: instance
+      Targets:
+      - Id:
+          Fn::If:
+          - Lean
+          - Ref: SharedHost
+          - Ref: SignalHost
+      HealthCheckProtocol: HTTPS
+      HealthCheckPath: /status
+      Matcher:
+        HttpCode: '401'
+      TargetGroupAttributes:
+      - Key: deregistration_delay.timeout_seconds
+        Value: '15'
+  SignalListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn:
+        Ref: SignalAlb
+      Protocol: HTTPS
+      Port: 443
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+      Certificates:
+      - CertificateArn:
+          Ref: CertificateArn
+      DefaultActions:
+      - Type: fixed-response
+        FixedResponseConfig:
+          StatusCode: '404'
+          ContentType: text/plain
+          MessageBody: Not found
+  SignalRoutes:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn:
+        Ref: SignalListener
+      Priority: 1
+      Conditions:
+      - Field: path-pattern
+        Values:
+        - /calls
+        - /calls/*
+        - /status
+        - /clock
+      Actions:
+      - Type: forward
+        TargetGroupArn:
+          Ref: SignalTargets
+  SignalWaf:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: true
+        MetricName: RelaisSignal
+        SampledRequestsEnabled: false
+      Rules:
+      - Name: ClientRate
+        Priority: 0
+        Action:
+          Block: {}
+        Statement:
+          RateBasedStatement:
+            Limit:
+              Ref: SignalRateLimit
+            AggregateKeyType: IP
+            EvaluationWindowSec: 300
+        VisibilityConfig:
+          CloudWatchMetricsEnabled: true
+          MetricName: RelaisSignalRate
+          SampledRequestsEnabled: false
+  SignalWafAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn:
+        Ref: SignalAlb
+      WebACLArn:
+        Fn::GetAtt:
+        - SignalWaf
+        - Arn
+Outputs:
+  RelayIPv4:
+    Value:
+      Ref: RelayAddress
+  SignalLoadBalancer:
+    Value:
+      Fn::GetAtt:
+      - SignalAlb
+      - DNSName
+  StoreConfigurationEndpoint:
+    Value:
+      Fn::GetAtt:
+      - Store
+      - ConfigurationEndPoint.Address
+    Description: Public configuration only; this endpoint is private and uses TLS/Cluster discovery.

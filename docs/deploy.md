@@ -5,6 +5,10 @@ are available, [install](install.md) them first. The live topology needs
 `relais-relay`, `relais-worker`, `relais-control`, `relais-signal`, and Redis.
 `relais-demo`, `relais-load`, and `crash-run` are test tools.
 
+A reviewable [AWS preview template](../deploy/aws/README.md) defines the fixed
+lean and resilience profiles in native CloudFormation. It is tested without an
+AWS account. Control restart safety and paid AWS acceptance still block public use.
+
 ## One machine
 
 The [install guide](install.md) provides `start.sh` and `stop.sh` for this full

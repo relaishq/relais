@@ -1,0 +1,85 @@
+name: AWS preview template (no account)
+on:
+  pull_request:
+    paths:
+      - 'deploy/aws/**'
+      - '.github/workflows/deploy-template.yml'
+  push:
+    paths:
+      - 'deploy/aws/**'
+      - '.github/workflows/deploy-template.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  template:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12.12'
+      - name: Install pinned offline validation tools
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --disable-pip-version-check -r deploy/aws/tests/requirements.txt
+          deploy/aws/tests/install-ci-tools.sh lint "$RUNNER_TEMP/tools"
+      - name: Lint, policy, parameter branches and embedded-file parity
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          "$RUNNER_TEMP/venv/bin/cfn-lint" -r us-east-1 us-west-2 -t deploy/aws/preview.yaml
+          "$RUNNER_TEMP/venv/bin/python" deploy/aws/tests/policy.py
+          "$RUNNER_TEMP/venv/bin/python" deploy/aws/tests/sync-files.py
+          "$RUNNER_TEMP/tools/shellcheck-v0.11.0/shellcheck" deploy/aws/boot/*.sh deploy/aws/tests/*.sh
+      - name: Verify the installed units with pinned systemd-analyze 255.4
+        run: |
+          sudo mkdir -p /opt/relais/boot /opt/relais/sdk/bin
+          sudo cp deploy/aws/boot/* /opt/relais/boot/
+          sudo ln -s "$(command -v python)" /opt/relais/sdk/bin/python
+          export LD_LIBRARY_PATH="$RUNNER_TEMP/tools/systemd/usr/lib/x86_64-linux-gnu/systemd"
+          export SYSTEMD_UNIT_PATH="$PWD/deploy/aws/units:/usr/lib/systemd/system"
+          "$RUNNER_TEMP/tools/systemd/usr/bin/systemd-analyze" --version
+          "$RUNNER_TEMP/tools/systemd/usr/bin/systemd-analyze" verify deploy/aws/units/*.service
+  boot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12.12'
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.9'
+      - name: Install pinned Redis without starting a system service
+        run: |
+          deploy/aws/tests/install-ci-tools.sh boot "$RUNNER_TEMP/tools"
+          echo "$RUNNER_TEMP/tools/redis-7.0.11/src" >> "$GITHUB_PATH"
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --disable-pip-version-check -r deploy/aws/tests/requirements.txt
+          # Fail visibly if ubuntu-latest changes the systemd runtime contract.
+          test "$(systemctl --version | head -1 | cut -d' ' -f2)" = 255
+      - name: Build the existing real components and caller
+        run: go build -o "$RUNNER_TEMP/bin/" ./cmd/relais-relay ./cmd/relais-worker ./cmd/relais-control ./cmd/relais-signal ./cmd/relais-load
+      - name: Same units, fake cloud sources, Redis Cluster ACLs and real call
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          sudo env PATH="$PATH" PYTHONDONTWRITEBYTECODE=1 "$RUNNER_TEMP/venv/bin/python" -u deploy/aws/tests/boot-test.py \
+            --systemd --bin "$RUNNER_TEMP/bin" --work "$RUNNER_TEMP/boot-systemd"
+      - name: Prove a wrong ACL and a wrong unit cannot pass the boot test
+        run: |
+          for mutation in acl unit; do
+            set +e
+            "$RUNNER_TEMP/venv/bin/python" -u deploy/aws/tests/boot-test.py \
+              --mutation "$mutation" --bin "$RUNNER_TEMP/bin" --work "$RUNNER_TEMP/refuse-$mutation"
+            result=$?
+            set -e
+            test "$result" = 42
+          done
