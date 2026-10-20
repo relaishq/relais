@@ -290,9 +290,10 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   flag off. This is the ADR 0012 bridge: roll all state-reading/mutating
   participants to this full v10 reader/writer/lifecycle build first, with common
   keys and compatible registrations. Verify no old participants remain.
-  Activation per pool must also wait for
-  #197 (default crash proof), #198 (traffic and capacity), and ADR 0012 slice G
-  (separately approved paid managed-store acceptance). This bridge alone does
+  Demo A's [default-budget crash proof](../examples/voice-agent/history_process_test.go)
+  (#197) is complete. Activation per pool must still wait for #198 (traffic and
+  capacity) and ADR 0012 slice G (separately approved paid managed-store acceptance).
+  This bridge alone does
   not authorize activation. To roll back, disable new admission and
   keep the full v10 writer/lifecycle until every v10 call ends or drains; only
   then return to v0.2. Reader-only builds cannot serve live v10 calls.

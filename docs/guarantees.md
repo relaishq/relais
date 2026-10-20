@@ -625,8 +625,31 @@ truncation. Crash-lost app data and audio do not consume target payload limits;
 takeover reports the existing typed loss instead. Older experimental v8 envelopes retain their original bounds check.
 Public registration does not
 establish provider integration or custom-worker capacity approval. The manual
-capacity, Save-CPU and store-stall gates remain pending. A default 1 KiB app state
+capacity, Save-CPU and store-stall gates remain pending. The legacy default 1 KiB app state
 cannot preserve normal conversation history across a crash.
+
+Demo A also has a default-budget split-checkpoint process proof:
+[`TestDemoAHistoryProcessSIGKILL`](../examples/voice-agent/history_process_test.go)
+starts an owned standalone local Redis and real Demo A worker subprocesses with
+`-agent-split-checkpoints`, default working/history limits and no enlarged
+state/store flags. Four exchanges reach a confirmed checkpoint. SIGKILL of only
+the owner is followed by takeover: the replacement's actual Restore callback
+receives byte-identical history, its next provider request contains the four
+exchanges, and the deterministic reply uses their text. Recording, provider-wait
+and playback cuts preserve the committed text, report `OutcomeUnknown` and a
+Resumed warning, and clear lost audio without producing replacement audio.
+A source-only store gate separately proves that a newer locally accepted
+history update does not survive when it never reaches the checkpoint store.
+
+The real Save size test measures **2,871 B working / 4,205 B history**, below
+**3,072 B / 8,192 B** defaults, including escaped and non-ASCII bounded text.
+This is a mock-provider proof on standalone local Redis, not a live paid-provider,
+managed-store, loaded-capacity or seamless-audio proof. A crash can lose current
+recording, buffered speech and unfinished provider work; provider work can
+repeat. Only committed text is claimed. Demo A retains four exchanges and
+deliberately evicts the oldest on the next completed reply. Legacy sessions keep
+the original v4 inline layout and their existing operator overrides. See
+[the worked example](build-an-agent.md#run-demo-a).
 
 V2 snapshots have operator byte and rate limits. Ordinary callback state overflow
 restores prior app state and produces a typed `Capacity` notice. Required transport
