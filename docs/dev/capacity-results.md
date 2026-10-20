@@ -16,8 +16,9 @@ Evidence: artifact `split-capacity-linux-39441746025`, containing
 and process logs in `load-run-2704053099/`. The original reporter at that commit
 returned `blocking=[]` with 1,000 µs Save CPU/wall budgets. That reporter gated
 whole-window traffic and missed the sustained-churn failure below. Its successful
-workflow conclusion is not a passing churn result. A rerun with a separate
-`churn` phase is required; the original raw evidence and verdicts remain intact.
+workflow conclusion is not a passing churn result. Subsequent run 39451358848
+gated a separate `churn` phase and failed as expected (comparison below);
+the original raw evidence and verdicts remain intact.
 Strict audio exceptions are also retained below.
 
 Runner `runnervmxehtw`: `ubuntu-latest`, Linux/amd64, four vCPUs (AMD EPYC 7763),
@@ -432,11 +433,51 @@ nor the about-200-calls-per-primary planning limit increases with byte savings.
 
 This correction adds a separate sustained-churn observer phase and applies the
 same 100-command/128-KiB gates to it in both the load verdict and report. Missing
-or truncated phase evidence blocks the report. The hosted job must be rerun;
-with current defaults the churn step is expected to fail. No default changed.
+or truncated phase evidence blocks the report. Hosted run 39451358848 exercised
+the corrected gate and failed the churn step at current defaults. No default changed.
 A suitable workload-specific audio check is still needed before strict audio
 continuity claims; this run does not close the other crash/managed-store gates.
 
+### Confirmed churn-phase gate, run 39451358848
+
+[Run 39451358848](https://github.com/relaishq/relais/actions/runs/39451358848),
+commit `4b90d6ac4b0ad92c76266a75467974b47bc53f6a` (`4b90d6a`), completed all eight
+samples and the workflow failed as expected on the dedicated churn-phase gate.
+It used two calls, 30 s samples (65 s rotation), the same loopback-process
+topology and unchanged defaults on one GitHub-hosted runner, reported hostname
+`runnervmxehtw`. Each run is one runner's measurement, not capacity evidence or
+proof that the two jobs used the same physical host. The original write-up and
+tables above remain measurements from run 39441746025 on `5360c61`.
+
+| Run / commit | Sustained window | Request+reply B/call-s | Commands/call-s | Published payload B/call-s | History writes/call-s | Admission refusals | Budget skips |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 39441746025 / `5360c61` | Proxy bins 10–30; 21 s | 132,347.7 | 73.52 | 74,849.1 | 8.5714 | 1 | 0 |
+| 39451358848 / `4b90d6a` | Dedicated `churn`; 21.006108 s | 131,187.9 | 72.57 | 74,230.7 | 8.5451 | 7 | 0 |
+
+The new phase contains 3,049 commands, 5,338,195 request B and 173,300 reply B,
+3,118,595 published payload B, and 359 history writes. Rates divide these totals
+by `2 × 21.006107508` call-seconds. All seven refusals were observed after the
+phase began, at 10.502–28.202 s after media start; no budget skips occurred in
+the step. Both calls remained live and cleanup passed. The whole-window churn
+average was only 121,181.73 B/call-second (72.85 commands/call-second), so the
+dedicated phase now prevents the ramp from masking the failure.
+
+Both runs agree: sustained wire traffic exceeds 131,072 B/call-second while
+published payload stays below the 80,000 B/s default. The excess decreased
+from 1,275.7 to 115.9 B/call-second (wire rate about 0.88% lower), with slightly
+lower payload/history rates and seven rather than one admission refusal. The
+original bin reconstruction and the new explicitly marked phase have different
+boundaries; they are not identical sampling windows. Neither result supports a
+passing sustained-churn claim or a default-rate approval.
+
+Artifact `split-capacity-linux-39451358848` contains raw JSON, approval JSON,
+the run log, build/runner metadata and `load-run-2638401115/`: all eight step
+JSON files, sixteen caller JSONL files and 67 child-process logs, including
+rotation replacements. Thus the expected artifacts were uploaded despite the
+job failure. Regenerating approval JSON with the 1,000 µs Save CPU/wall budgets
+matches the uploaded report exactly. Its only blockers are
+`after/history-churn: churn attempts exceed store ceiling` and the corresponding
+`after/history-churn: service gate did not pass: churn attempts exceed store ceiling`.
 
 ## Final hosted Linux run 38147888686
 
