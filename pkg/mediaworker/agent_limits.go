@@ -232,17 +232,15 @@ func (b *snapshotBucket) available(l SnapshotLimits, now time.Time) float64 {
 		return float64(l.BurstBytes)
 	}
 	if now.Before(b.at) {
-		// Refills and reads cannot rewind the last debit's store-clock time.
-		// After a clock step back, wait until that time is reached again.
+		// A read cannot rebase the bucket or mint refill after a clock step.
+		// Only a successful writer rebases it onto the new store-clock value.
 		return min(float64(l.BurstBytes), b.tokens)
 	}
 	return min(float64(l.BurstBytes), b.tokens+now.Sub(b.at).Seconds()*float64(l.BytesPerSecond))
 }
 func (b *snapshotBucket) debit(l SnapshotLimits, n int, now time.Time) {
 	b.tokens = b.available(l, now) - float64(n)
-	if now.After(b.at) {
-		b.at = now
-	}
+	b.at = now
 }
 
 func (s *session) checkSnapshotSize(data []byte) error {
@@ -260,18 +258,7 @@ func (s *session) checkSnapshotSize(data []byte) error {
 // Before DTLS exists no ciphertext can be emitted or checkpointed; the first
 // established capture enforces the full cap before starting the v2 actor.
 func (s *session) admissionSnapshot(candidate agentState) (int, error) {
-	captured := time.Time{}
-	if s.componentMode {
-		captured = s.taskNow()
-	} // include the full capture timestamp at admission
-	captureCandidate := candidate
-	if s.componentMode {
-		// History is an opaque length-prefixed byte component: its size changes
-		// exactly by len(History). Do not copy/base64/reparse it just to count it.
-		// The actual capture and writer still encode and authenticate every byte.
-		captureCandidate.History = nil
-	}
-	data, _, err := s.captureSnapshotCandidate(captured, &captureCandidate)
+	data, err := s.captureAdmissionSnapshot(candidate)
 	if err != nil {
 		if err == ErrNotEstablished {
 			if s.componentMode {
@@ -298,6 +285,25 @@ func (s *session) admissionSnapshot(candidate agentState) (int, error) {
 		return size.Hot, err
 	}
 	return len(data) + snapshotEnvelopeBytes, nil
+}
+
+// captureAdmissionSnapshot is the production Save capture, with history measured
+// separately by its exact length. Its timestamps and quota use the store clock,
+// matching a real writer even when worker and store clocks differ.
+func (s *session) captureAdmissionSnapshot(candidate agentState) ([]byte, error) {
+	captured := time.Time{}
+	if s.componentMode {
+		captured = s.taskNow()
+	} // include the full capture timestamp at admission
+	captureCandidate := candidate
+	if s.componentMode {
+		// History is an opaque length-prefixed byte component: its size changes
+		// exactly by len(History). Do not copy/base64/reparse it just to count it.
+		// The actual capture and writer still encode and authenticate every byte.
+		captureCandidate.History = nil
+	}
+	data, _, err := s.captureSnapshotCandidate(captured, &captureCandidate)
+	return data, err
 }
 
 // historyWriteHold prevents an older capture or rotation from spending the

@@ -3,6 +3,7 @@ package mediaworker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -18,6 +19,7 @@ import (
 
 type rollbackClockStore struct {
 	sessionstore.Store
+	sessionstore.ComponentStore
 	offset atomic.Int64
 }
 
@@ -26,31 +28,46 @@ func (s *rollbackClockStore) Clock(ctx context.Context, id string) (time.Time, e
 	return now.Add(time.Duration(s.offset.Load())), err
 }
 
-func TestSnapshotClockRollbackCallSurvives(t *testing.T) {
+func TestSnapshotClockStepBackKeepsCheckpointing(t *testing.T) {
 	forV2Stores(t, func(t *testing.T, base sessionstore.Store) {
-		store := &rollbackClockStore{Store: base}
-		r, err := relay.New(relay.Config{Owners: store})
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, r.Close()) })
-		reg := agenthost.Registration{Name: "clock/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &snapshotBudgetAgent{} }}
-		w, err := New(Config{Agent: AgentConfig{Factory: agenthost.Factory(reg)}, Relay: &RelayConfig{Owners: store, Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr()}})
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, w.Close()) })
-		r.AddWorker(w.LocalAddr())
-		call, client := dialDTLSCaller(t, w)
-		defer client.Close()
-		s := w.session(call.id)
-		require.Eventually(t, s.snapshotStored.Load, time.Second, time.Millisecond)
-		store.offset.Store(-int64(time.Second))
-		time.Sleep(400 * time.Millisecond)
-		require.NoError(t, s.ctx.Err(), "a wall-clock step must not debit tokens or end a call")
-		s.mu.Lock()
-		writes := s.state.Checkpoint.Successes
-		s.mu.Unlock()
-		require.Greater(t, writes, uint64(2), "periodic checkpoints must continue after rollback")
+		for _, split := range []bool{false, true} {
+			for _, step := range []time.Duration{2 * time.Second, 5 * time.Second} {
+				t.Run(fmt.Sprintf("split-%t-step-%s", split, step), func(t *testing.T) {
+					t.Parallel()
+					store := &rollbackClockStore{Store: base, ComponentStore: base.(sessionstore.ComponentStore)}
+					r, err := relay.New(relay.Config{Owners: store})
+					require.NoError(t, err)
+					t.Cleanup(func() { require.NoError(t, r.Close()) })
+					reg := agenthost.Registration{Name: "clock/v1", Factory: func(agent.FactoryArgs) agent.Agent { return &snapshotBudgetAgent{} }}
+					w, err := New(Config{SplitCheckpoints: split, Agent: AgentConfig{Factory: agenthost.Factory(reg), CallbackTimeout: time.Second}, Relay: &RelayConfig{Owners: store, Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr()}})
+					require.NoError(t, err)
+					t.Cleanup(func() { require.NoError(t, w.Close()) })
+					r.AddWorker(w.LocalAddr())
+					call, client := dialDTLSCaller(t, w)
+					defer client.Close()
+					sess := w.session(call.id)
+					require.Eventually(t, sess.snapshotStored.Load, 3*time.Second, time.Millisecond)
+					sess.mu.Lock()
+					before := sess.state.Checkpoint.Successes
+					sess.mu.Unlock()
+					store.offset.Store(-int64(step))
+					start := time.Now()
+					// Watch past burst exhaustion as well as the old store-clock horizon.
+					for time.Since(start) < step+500*time.Millisecond && sess.ctx.Err() == nil {
+						time.Sleep(50 * time.Millisecond)
+					}
+					require.NoError(t, sess.ctx.Err(), "a backward store-clock step must not end the call")
+					sess.mu.Lock()
+					writes := sess.state.Checkpoint.Successes
+					sess.mu.Unlock()
+					require.Greater(t, writes, before+10, "checkpoints must continue beyond the burst drain time")
+					t.Logf("%s backward step: call alive after %s with %d additional checkpoints", step, time.Since(start).Round(time.Millisecond), writes-before)
+				})
+			}
+		}
 	})
 }
-func TestSnapshotClockRollbackWaitsForLastDebit(t *testing.T) {
+func TestSnapshotClockRollbackReadsDoNotRebase(t *testing.T) {
 	l := SnapshotLimits{}.defaults()
 	at := time.Now()
 	b := snapshotBucket{tokens: 17, at: at}

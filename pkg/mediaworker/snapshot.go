@@ -207,7 +207,7 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	tooSoon := s.snapshotStored.Load() && time.Since(s.lastCheckpoint) < s.worker.cfg.Agent.SaveInterval
 	if !force && changed && tooSoon {
 		s.mu.Unlock()
-		return s.noteSnapshotSkip()
+		return s.noteSnapshotSkip(checkpointSkipInterval)
 	}
 	if v2 {
 		s.snapshotBudgetMu.Lock()
@@ -266,7 +266,7 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 		s.mu.Lock()
 		s.state.Checkpoint.Attempts-- // discarded capture is not a write attempt
 		s.mu.Unlock()
-		return s.noteSnapshotSkip()
+		return s.noteSnapshotSkip(checkpointSkipInterval)
 	}
 	wireBytes := len(state) + snapshotEnvelopeBytes
 	if pair.V2 != nil && !s.componentMode {
@@ -282,7 +282,7 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 		}
 		if available < float64(required) {
 			if intent {
-				return s.noteSnapshotSkip()
+				return s.noteSnapshotSkip(checkpointSkipBudget)
 			}
 			return fmt.Errorf("%w: required v2 snapshot byte budget", agent.ErrCapacity)
 		}
@@ -295,7 +295,7 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	if err == nil {
 		s.ackSnapshot(pair, dtlsNext, captured, wireBytes, intent)
 	} else if errors.Is(err, errCheckpointSkipped) {
-		err = s.noteSnapshotSkip()
+		err = s.noteSnapshotSkip(checkpointSkipBudget)
 	} else if s.componentPending == nil {
 		s.failSnapshot(v2, intent)
 	}
@@ -309,9 +309,18 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	return err
 }
 
-func (s *session) noteSnapshotSkip() error {
-	s.worker.metrics.snapshotSkips.Add(1)
-	metrics.CheckpointWrites.WithLabelValues("skipped").Inc()
+const (
+	checkpointSkipBudget   = "budget"
+	checkpointSkipInterval = "interval"
+)
+
+func (s *session) noteSnapshotSkip(reason string) error {
+	if reason == checkpointSkipInterval {
+		s.worker.metrics.snapshotIntervalSkips.Add(1)
+	} else {
+		s.worker.metrics.snapshotBudgetSkips.Add(1)
+	}
+	metrics.CheckpointWrites.WithLabelValues("skipped-" + reason).Inc()
 	return errCheckpointSkipped
 }
 

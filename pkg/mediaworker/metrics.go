@@ -12,7 +12,7 @@ type workerMetrics struct {
 	agentEvents                                                         atomic.Uint64
 	saveCalls, saveWallNS, saveCPUNS, saveCPUUnknown                    atomic.Uint64
 	forcedAttempts, forcedSuccesses, forcedFailures, snapshotDebitBytes atomic.Uint64
-	snapshotSkips                                                       atomic.Uint64
+	snapshotBudgetSkips, snapshotIntervalSkips                          atomic.Uint64
 	exportHTTPPeakBytes                                                 atomic.Uint64
 	packetsIn, packetsOut, decryptFailures                              atomic.Uint64
 	replayRejections                                                    atomic.Uint64
@@ -26,7 +26,9 @@ type workerMetrics struct {
 func (w *Worker) metricSamples() []metrics.Sample {
 	a := w.AgentStats()
 	return []metrics.Sample{
-		metrics.Counter("relais_worker_agent_checkpoint_skips_total", "Deliberately skipped checkpoints; not failed store writes.", w.metrics.snapshotSkips.Load()),
+		metrics.Counter("relais_worker_agent_checkpoint_skips_total", "Checkpoint skips, including byte budget deferrals and SaveInterval coalescing; excludes store failures.", w.metrics.snapshotBudgetSkips.Load()+w.metrics.snapshotIntervalSkips.Load()),
+		metrics.Counter("relais_worker_agent_checkpoint_budget_skips_total", "Checkpoint skips due to byte budget or held history; excludes interval coalescing and store failures.", w.metrics.snapshotBudgetSkips.Load()),
+		metrics.Counter("relais_worker_agent_checkpoint_interval_skips_total", "Checkpoint skips due to SaveInterval coalescing; excludes budget deferrals and store failures.", w.metrics.snapshotIntervalSkips.Load()),
 		metrics.Counter("relais_worker_agent_events_total", "V2 Handle invocations including refused callbacks.", w.metrics.agentEvents.Load()),
 		metrics.Counter("relais_worker_agent_save_calls_total", "V2 Save invocations, including initial and rejected saves.", w.metrics.saveCalls.Load()),
 		metrics.Counter("relais_worker_agent_save_wall_nanoseconds_total", "Wall time inside V2 Save, excluding host serialization.", w.metrics.saveWallNS.Load()),

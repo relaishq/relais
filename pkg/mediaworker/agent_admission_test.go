@@ -56,16 +56,16 @@ func TestAdmissionUsesStoreClockWithoutMintingTokens(t *testing.T) {
 	}
 }
 
-func TestSnapshotBucketReadsAndDebitsNeverRewind(t *testing.T) {
+func TestSnapshotBucketReadsArePureAndWritesRebase(t *testing.T) {
 	l := SnapshotLimits{}.splitDefaults()
 	at := time.Now()
 	b := snapshotBucket{tokens: 1000, at: at}
 	require.EqualValues(t, 1000, b.available(l, at.Add(-2*time.Second)))
 	require.Equal(t, at, b.at)
 	b.debit(l, 100, at.Add(-time.Second))
-	require.Equal(t, at, b.at)
-	require.EqualValues(t, 900, b.available(l, at))
-	require.EqualValues(t, 8900, b.available(l, at.Add(100*time.Millisecond)))
+	require.Equal(t, at.Add(-time.Second), b.at)
+	require.EqualValues(t, 900, b.available(l, at.Add(-time.Second)))
+	require.EqualValues(t, 8900, b.available(l, at.Add(-900*time.Millisecond)))
 }
 
 func TestSplitRegistrationRejectsImpossibleWorkingBound(t *testing.T) {
@@ -319,4 +319,106 @@ func TestHistoryLengthAdmissionMatchesActualCapture(t *testing.T) {
 			require.NoError(t, admissionErr)
 		}
 	}
+}
+
+func TestAdmissionCaptureUsesStoreClockAtSizeBoundary(t *testing.T) {
+	s := componentWriterSession(t, sessionstore.NewMemory(), true)
+	s.agent = &agentHost{latest: cloneAgentState(s.state.Agent), v2: &v2Host{registration: agenthost.Registration{Bounds: effectiveAgentBounds(agent.Limits{}, s.snapshotLimits(), true)}}}
+	storeNow := time.Now().Add(-time.Hour)
+	s.storeClock, s.storeClockAt = storeNow, time.Now()
+	candidate := cloneAgentState(s.state.Agent)
+	candidate.History = bytes.Repeat([]byte{'h'}, 8192)
+	s.agent.latest = cloneAgentState(candidate)
+	// The fixed-width wire format makes the size alone insensitive to the clock
+	// domain. Inspect the actual production Save capture as well as its boundary.
+	data, err := s.captureAdmissionSnapshot(candidate)
+	require.NoError(t, err)
+	snap, err := decodeSnapshot(data)
+	require.NoError(t, err)
+	require.WithinDuration(t, storeNow, snap.State.Checkpoint.CapturedAt, time.Second)
+	require.Equal(t, snap.State.Checkpoint.CapturedAt, snap.State.Agent.V2.Quota.At)
+	low, high := 0, 8193
+	for low+1 < high {
+		mid := (low + high) / 2
+		candidate.State.Bytes = make([]byte, mid)
+		_, _, err = s.captureSnapshotCandidate(s.taskNow(), &candidate)
+		if err == nil {
+			low = mid
+		} else {
+			require.ErrorIs(t, err, agent.ErrCapacity)
+			high = mid
+		}
+	}
+	candidate.State.Bytes = make([]byte, low)
+	_, err = s.admissionSnapshot(candidate)
+	require.NoError(t, err)
+	candidate.State.Bytes = make([]byte, low+1)
+	_, err = s.admissionSnapshot(candidate)
+	require.ErrorIs(t, err, agent.ErrCapacity)
+}
+
+func TestBridgeRejectsOversizedWorkingDeclarationBeforeFactory(t *testing.T) {
+	store := sessionstore.NewMemory()
+	r, err := relay.New(relay.Config{Owners: store})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, r.Close()) }()
+	reg := agenthost.Registration{Name: "large-declaration/v1", Bounds: agenthost.Bounds{MaxStateBytes: 16384}, Factory: func(agent.FactoryArgs) agent.Agent {
+		return &historyStateAgent{state: agent.State{Version: 1, Bytes: []byte("small actual state"), History: []byte("history")}}
+	}}
+	cfg := Config{SplitCheckpoints: true, Agent: AgentConfig{Factory: agenthost.Factory(reg), CallbackTimeout: time.Second}, SnapshotInterval: time.Hour, SnapshotLimits: SnapshotLimits{MaxBytes: 20000, BytesPerSecond: 250000, BurstBytes: 80000}, Relay: &RelayConfig{Owners: store, Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr()}}
+	source, err := New(cfg)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, source.Close()) }()
+	calls := 0
+	reg.Factory = func(agent.FactoryArgs) agent.Agent { calls++; return &historyStateAgent{} }
+	cfg.SplitCheckpoints = false
+	cfg.SnapshotLimits = SnapshotLimits{}
+	cfg.Agent.Factory = agenthost.Factory(reg)
+	target, err := New(cfg)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, target.Close()) }()
+	r.AddWorker(source.LocalAddr())
+	call, client := dialDTLSCaller(t, source)
+	defer client.Close()
+	require.Eventually(t, source.session(call.id).snapshotStored.Load, 2*time.Second, time.Millisecond)
+	data, err := source.ExportSession(call.id)
+	require.NoError(t, err)
+	lease, err := store.Get(context.Background(), call.id)
+	require.NoError(t, err)
+	lease, err = store.Transfer(context.Background(), lease, target.LocalAddr(), time.Minute)
+	require.NoError(t, err)
+	before, err := store.ReadComponents(context.Background(), call.id)
+	require.NoError(t, err)
+	_, err = target.ResumeSession(data, ResumeOptions{Lease: lease})
+	require.ErrorIs(t, err, agent.ErrStateTooLarge)
+	require.Zero(t, calls, "a small actual state does not bypass the adoption declaration check")
+	require.Zero(t, target.SessionCount())
+	after, err := store.ReadComponents(context.Background(), call.id)
+	require.NoError(t, err)
+	require.Equal(t, before.Metadata, after.Metadata)
+	require.True(t, equalComponentBytes(before.Components, after.Components))
+}
+
+func TestCheckpointSkipsDistinguishIntervalFromBudget(t *testing.T) {
+	s := componentWriterSession(t, sessionstore.NewMemory(), true)
+	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	s.worker.cfg.Agent.SaveInterval = time.Hour
+	s.mu.Lock()
+	s.state.Agent.State.Bytes = []byte("coalesced state")
+	s.mu.Unlock()
+	// Read the process-wide counters as deltas: other tests can share them.
+	intervalBefore := checkpointWritesFromScrape(t, s.worker, "skipped-interval")
+	budgetBefore := checkpointWritesFromScrape(t, s.worker, "skipped-budget")
+	failures := s.state.Checkpoint.Failures
+	require.ErrorIs(t, s.persistSnapshotBudget(context.Background(), false, false), errCheckpointSkipped)
+	require.Equal(t, intervalBefore+1, checkpointWritesFromScrape(t, s.worker, "skipped-interval"))
+	require.Equal(t, budgetBefore, checkpointWritesFromScrape(t, s.worker, "skipped-budget"))
+	s.snapshotHistoryHold = &historyWriteHold{version: s.state.Agent.State.Version, history: []byte("newer"), bytes: s.componentBudgets().Total}
+	s.snapshotBytesBudget = snapshotBucket{tokens: 1000, at: s.taskNow()}
+	require.ErrorIs(t, s.persistSnapshotBudget(context.Background(), true, true), errCheckpointSkipped)
+	require.Equal(t, failures, s.state.Checkpoint.Failures)
+	require.Equal(t, budgetBefore+1, checkpointWritesFromScrape(t, s.worker, "skipped-budget"))
+	require.Contains(t, metricsBody(s.worker), "relais_worker_agent_checkpoint_budget_skips_total 1\n")
+	require.Contains(t, metricsBody(s.worker), "relais_worker_agent_checkpoint_interval_skips_total 1\n")
+	require.Contains(t, metricsBody(s.worker), "relais_worker_agent_checkpoint_skips_total 2\n")
 }

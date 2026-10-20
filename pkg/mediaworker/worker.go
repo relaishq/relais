@@ -413,6 +413,13 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 		byAddr:        make(map[netip.AddrPort]*session),
 		byAddrConsent: make(map[netip.AddrPort]time.Time),
 	}
+	if !cfg.SplitCheckpoints {
+		if err := cfg.splitLimits.ValidateForInterval(cfg.SnapshotInterval); err != nil {
+			worker.log.Warnf("bridge worker cannot adopt v10 with these split budgets: %v; change the named agent snapshot flag before receiving v10 calls", err)
+		} else if minimum := 2 * splitComponentBudgets(cfg.splitLimits.MaxBytes, 8192).Total; cfg.splitLimits.BurstBytes < minimum {
+			worker.log.Warnf("bridge worker cannot adopt v10: -agent-snapshot-burst-bytes=%d must be at least %d; increase -agent-snapshot-burst-bytes before receiving v10 calls", cfg.splitLimits.BurstBytes, minimum)
+		}
+	}
 	if cfg.Relay != nil {
 		workerprobe.Register(localAddr, worker.captureZombie)
 		workerprobe.RegisterLifecycle(localAddr, workerprobe.Lifecycle{
