@@ -168,7 +168,7 @@ func assembleSessionComponents(c sessionComponents, stateVersion uint32) (snapsh
 		ICE:   iceState{LocalUfrag: setup.LocalUfrag, LocalPwd: setup.LocalPwd, RemoteUfrag: setup.RemoteUfrag, RemotePwd: setup.RemotePwd, RemoteAddr: addr},
 		DTLS:  dtlsState{Certificate: setup.Certificate, PrivateKey: setup.PrivateKey, CallerFingerprintHash: setup.CallerFingerprintHash, CallerFingerprint: setup.CallerFingerprint},
 		Audio: trackState(transport.Audio), Video: trackState(transport.Video), Checkpoint: CheckpointState(transport.Checkpoint),
-		Agent: agentState{V2: host, State: agent.State{Version: stateVersion, Bytes: work}, Progress: agent.Progress(transport.Progress), Revision: transport.AgentRevision},
+		Agent: agentState{History: history, V2: host, State: agent.State{Version: stateVersion, Bytes: work}, Progress: agent.Progress(transport.Progress), Revision: transport.AgentRevision},
 	}
 	state.SRTP.Profile = srtp.ProtectionProfile(transport.Profile)
 	state.SRTP.Inbound, state.SRTP.Received = transport.Inbound, transport.Received

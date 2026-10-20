@@ -57,6 +57,8 @@ func CheckpointCollectors() []prometheus.Collector {
 	// Expose all bounded outcomes, including zeroes before the first event.
 	CheckpointWrites.WithLabelValues("success")
 	CheckpointWrites.WithLabelValues("failure")
+	CheckpointWrites.WithLabelValues("skipped-budget")
+	CheckpointWrites.WithLabelValues("skipped-interval")
 	CheckpointEnvelopeEvents.WithLabelValues("scaled")
 	CheckpointEnvelopeEvents.WithLabelValues("definitive-loss")
 	return []prometheus.Collector{CheckpointWrites, CheckpointEnvelopeEvents, CheckpointAge}

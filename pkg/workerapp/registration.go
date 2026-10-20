@@ -24,7 +24,7 @@ type Registration struct {
 	Limits        agent.Limits
 }
 
-func registeredAgents(options Options, selected string, limits mediaworker.SnapshotLimits) (mediaworker.AgentConfig, error) {
+func registeredAgents(options Options, selected string, limits mediaworker.SnapshotLimits, split ...bool) (mediaworker.AgentConfig, error) {
 	factories := make(map[string]legacy.Factory, len(options.Agents))
 	for _, r := range options.Agents {
 		if r.Name == "" || !utf8.ValidString(r.Name) || r.Name == "echo" || r.Name == "demo" || factories[r.Name] != nil || r.Factory == nil {
@@ -33,7 +33,7 @@ func registeredAgents(options Options, selected string, limits mediaworker.Snaps
 		bounds := agenthost.Bounds(r.Limits)
 		f := agenthost.Factory(agenthost.Registration{Name: r.Name, Factory: r.Factory, Tasks: r.Tasks, SkipDrainWait: r.SkipDrainWait, Bounds: bounds})
 		resolved := f("").(*agenthost.Adapter).Registration
-		if err := mediaworker.ValidateAgentRegistration(resolved.Name, resolved.TaskKinds, r.Limits, limits); err != nil {
+		if err := mediaworker.ValidateAgentRegistration(resolved.Name, resolved.TaskKinds, r.Limits, limits, split...); err != nil {
 			return mediaworker.AgentConfig{}, err
 		}
 		for kind, handler := range r.Tasks {

@@ -68,13 +68,14 @@ type session struct {
 	storeClock            time.Time // guarded by mu; last successful store-clock observation
 	storeClockAt          time.Time
 	snapshotBudgetMu      sync.Mutex
-	snapshotBytesBudget   snapshotBucket   // guarded by snapshotBudgetMu
-	snapshotWriteInFlight bool             // guarded by snapshotBudgetMu; one serialized writer
-	sideEffectLaunches    uint64           // guarded by mu; process-local diagnostic, never checkpointed
-	lastTaskLaunch        *AgentTaskLaunch // guarded by mu; bounded last-launch witness
-	controlAck            uint64           // guarded by mu; checkpointed control prefix, carried by exact export
-	durableAgent          agentState       // guarded by mu; last acknowledged durable agent pair
-	id                    string           // state.ID; never changes
+	snapshotHistoryHold   *historyWriteHold // guarded by snapshotBudgetMu
+	snapshotBytesBudget   snapshotBucket    // guarded by snapshotBudgetMu
+	snapshotWriteInFlight bool              // guarded by snapshotBudgetMu; one serialized writer
+	sideEffectLaunches    uint64            // guarded by mu; process-local diagnostic, never checkpointed
+	lastTaskLaunch        *AgentTaskLaunch  // guarded by mu; bounded last-launch witness
+	controlAck            uint64            // guarded by mu; checkpointed control prefix, carried by exact export
+	durableAgent          agentState        // guarded by mu; last acknowledged durable agent pair
+	id                    string            // state.ID; never changes
 	worker                *Worker
 	log                   logging.LeveledLogger
 
@@ -129,7 +130,7 @@ type session struct {
 	cancel              context.CancelFunc
 	closeOnce           sync.Once
 	componentMode       bool
-	componentHistory    []byte                          // guarded by mu; SDK history is introduced separately
+	componentHistory    []byte                          // guarded by mu; legacy v1 component fixture only
 	componentMetadata   *sessionstore.ComponentMetadata // guarded by snapshotMu
 	componentPending    *componentPending               // guarded by snapshotMu
 	snapshotMu          sync.Mutex                      // serialize encode/store without blocking packet processing

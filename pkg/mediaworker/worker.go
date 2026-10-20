@@ -151,6 +151,7 @@ type Config struct {
 	Agent AgentConfig
 	// SnapshotLimits belongs to the operator, independently of registrations.
 	SnapshotLimits SnapshotLimits
+	splitLimits    SnapshotLimits
 	// SplitCheckpoints admits new calls to the v10 store. Existing v10 calls
 	// continue using it when admission is disabled.
 	SplitCheckpoints bool
@@ -260,13 +261,14 @@ type RelayConfig struct {
 // Worker is a media worker. It owns one UDP socket, or shares one with other
 // workers (see Socket), and the sessions that run over it.
 type Worker struct {
-	taskDrain taskDrain
-	moveBytes atomic.Int64
-	agents    agentCounters
-	metrics   workerMetrics
-	cfg       Config
-	log       logging.LeveledLogger
-	conn      packetConn // its own UDP socket, a port on a shared Socket, or the relay leg (relayConn)
+	splitLimits SnapshotLimits
+	taskDrain   taskDrain
+	moveBytes   atomic.Int64
+	agents      agentCounters
+	metrics     workerMetrics
+	cfg         Config
+	log         logging.LeveledLogger
+	conn        packetConn // its own UDP socket, a port on a shared Socket, or the relay leg (relayConn)
 	// localAddr is the UDP socket the worker reads: its own or the shared
 	// Socket's. mediaAddr is where callers send: localAddr, or behind a
 	// relay the relay's public address.
@@ -296,6 +298,8 @@ type Worker struct {
 
 // New starts a media worker listening on cfg.ListenAddr.
 func New(cfg Config) (*Worker, error) {
+	splitLimits := cfg.SnapshotLimits.splitDefaults()
+	cfg.splitLimits = splitLimits
 	cfg.Agent = cfg.Agent.defaults()
 	cfg.SnapshotLimits = cfg.SnapshotLimits.defaults()
 	cfg.CheckpointEnvelope = cfg.CheckpointEnvelope.Defaults()
@@ -308,8 +312,12 @@ func New(cfg Config) (*Worker, error) {
 	if err := cfg.SnapshotLimits.validateResourceLimits(); err != nil {
 		return nil, err
 	}
-	if len(cfg.Agent.Registrations) > 0 {
-		if err := cfg.SnapshotLimits.ValidateForInterval(cfg.SnapshotInterval); err != nil {
+	if len(cfg.Agent.Registrations) > 0 || cfg.SplitCheckpoints {
+		limits := cfg.SnapshotLimits
+		if cfg.SplitCheckpoints {
+			limits = splitLimits
+		}
+		if err := limits.ValidateForInterval(cfg.SnapshotInterval); err != nil {
 			return nil, err
 		}
 	}
@@ -394,6 +402,7 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 	}
 	worker := &Worker{
 		cfg:           cfg,
+		splitLimits:   cfg.splitLimits,
 		log:           cfg.LoggerFactory.NewLogger("mediaworker"),
 		conn:          conn,
 		localAddr:     localAddr,
@@ -403,6 +412,13 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 		sessions:      make(map[string]*session),
 		byAddr:        make(map[netip.AddrPort]*session),
 		byAddrConsent: make(map[netip.AddrPort]time.Time),
+	}
+	if !cfg.SplitCheckpoints {
+		if err := cfg.splitLimits.ValidateForInterval(cfg.SnapshotInterval); err != nil {
+			worker.log.Warnf("bridge worker cannot adopt v10 with these split budgets: %v; change the named agent snapshot flag before receiving v10 calls", err)
+		} else if minimum := 2 * splitComponentBudgets(cfg.splitLimits.MaxBytes, 8192).Total; cfg.splitLimits.BurstBytes < minimum {
+			worker.log.Warnf("bridge worker cannot adopt v10: -agent-snapshot-burst-bytes=%d must be at least %d; increase -agent-snapshot-burst-bytes before receiving v10 calls", cfg.splitLimits.BurstBytes, minimum)
+		}
 	}
 	if cfg.Relay != nil {
 		workerprobe.Register(localAddr, worker.captureZombie)

@@ -52,7 +52,7 @@ func componentWriterSession(t *testing.T, store sessionstore.Store, v2 bool) *se
 	require.NoError(t, err)
 	s, _ := dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{})
 	s.componentMode = true
-	s.componentHistory = []byte("bounded history fixture")
+	setComponentTestHistory(s, []byte("bounded history fixture"))
 	return s
 }
 func TestSplitWriterCaptureAndUnknownReplySettlement(t *testing.T) {
@@ -66,10 +66,13 @@ func TestSplitWriterCaptureAndUnknownReplySettlement(t *testing.T) {
 			require.Zero(t, store.puts.Load())
 			store.unknown.Store(true)
 			s.mu.Lock()
-			s.componentHistory = []byte("new exact history")
+			setComponentTestHistory(s, []byte("new exact history"))
 			s.mu.Unlock()
 			require.ErrorIs(t, s.persistSnapshotMode(context.Background(), true), sessionstore.ErrTransient)
 			require.NotNil(t, s.componentPending)
+			if v2 {
+				require.True(t, s.snapshotWriteInFlight, "unknown write retains admission/export reservation")
+			}
 			pending := s.componentPending
 			published, err := store.Memory.ReadComponents(context.Background(), s.id)
 			require.NoError(t, err)
@@ -106,14 +109,14 @@ func TestSplitCaptureAdmissionRefusesEveryChangingEncoding(t *testing.T) {
 	first, err := store.ReadComponents(context.Background(), s.id)
 	require.NoError(t, err)
 	s.mu.Lock()
-	s.componentHistory = bytes.Repeat([]byte{1}, 8448)
+	setComponentTestHistory(s, bytes.Repeat([]byte{1}, 8448))
 	s.mu.Unlock()
 	require.ErrorIs(t, s.persistSnapshotMode(context.Background(), true), agentv2.ErrCapacity)
 	current, err := store.ReadComponents(context.Background(), s.id)
 	require.NoError(t, err)
 	require.Equal(t, first.Metadata, current.Metadata)
 	s.mu.Lock()
-	s.componentHistory = []byte("small")
+	setComponentTestHistory(s, []byte("small"))
 	s.state.Audio.ID = string(bytes.Repeat([]byte{'x'}, 8192))
 	s.mu.Unlock()
 	require.ErrorIs(t, s.persistSnapshotMode(context.Background(), true), agentv2.ErrCapacity)
@@ -211,7 +214,7 @@ func TestSplitDTLSGuardUsesCommittedTuple(t *testing.T) {
 		return dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{})
 	}()
 	s.componentMode = true
-	s.componentHistory = []byte("history survives the guarded cut")
+	setComponentTestHistory(s, []byte("history survives the guarded cut"))
 	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
 	seen := map[[8]byte]bool{}
 	for range 64 {
@@ -297,4 +300,11 @@ func TestAdoptionCheckpointEpochRefusalReturnsNotEstablished(t *testing.T) {
 	_, err = w.ResumeSession(state, ResumeOptions{Lease: lease})
 	require.ErrorIs(t, err, ErrNotEstablished)
 	require.Zero(t, w.SessionCount())
+}
+
+func setComponentTestHistory(s *session, history []byte) {
+	s.componentHistory = history
+	if s.state.Agent.V2 != nil {
+		s.state.Agent.History = history
+	}
 }
