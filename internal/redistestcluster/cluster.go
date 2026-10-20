@@ -145,11 +145,12 @@ func StartWithOptions(t *testing.T, options Options) []string {
 		if err := os.WriteFile(configFile, []byte(config), 0600); err != nil {
 			t.Fatal(err)
 		}
-		child, err := clusterprocess.StartSupervised(nodeDir, "redis", os.Environ(), "redis-server", configFile)
+		child, err := clusterprocess.StartSupervised(nodeDir, "redis", UTF8Environment(t), "redis-server", configFile)
 		if err != nil {
 			t.Fatal(err)
 		}
 		children = append(children, child)
+		watchServer(t, child)
 		record, err := recordServer(child, pidFile)
 		if err != nil {
 			t.Fatal(err)
@@ -216,5 +217,10 @@ func StartWithOptions(t *testing.T, options Options) []string {
 		_ = client.Close()
 	}
 	t.Logf("disposable 3-primary/3-replica cluster ready in %s", time.Since(started))
+	var ports []string
+	for _, listener := range listeners {
+		ports = append(ports, listener.Addr().String())
+	}
+	t.Logf("owned Redis client/bus ports: %v", ports)
 	return addrs
 }

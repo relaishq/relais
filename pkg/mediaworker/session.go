@@ -128,7 +128,11 @@ type session struct {
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	closeOnce           sync.Once
-	snapshotMu          sync.Mutex // serialize encode/store without blocking packet processing
+	componentMode       bool
+	componentHistory    []byte                          // guarded by mu; SDK history is introduced separately
+	componentMetadata   *sessionstore.ComponentMetadata // guarded by snapshotMu
+	componentPending    *componentPending               // guarded by snapshotMu
+	snapshotMu          sync.Mutex                      // serialize encode/store without blocking packet processing
 	snapshotWanted      chan struct{}
 	needsKeyframe       bool // resumed video may not yet have a known inbound SSRC
 	cacheMu             sync.Mutex
@@ -195,6 +199,7 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 		Audio: audio,
 		Video: video,
 	})
+	sess.componentMode = w.cfg.SplitCheckpoints
 	if err := sess.initAgent(false, ResumeOptions{}); err != nil {
 		sess.close()
 		return nil, err

@@ -16,6 +16,7 @@ package sessionstore
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -119,24 +120,31 @@ type WorkerIndexRefresher interface {
 
 // Memory is a single-process store. Use NewMemory, not its zero value.
 type Memory struct {
-	relayLeases      map[string]RelayLease
-	mu               sync.RWMutex
-	leases           map[string]Lease
-	ended            map[string]Lease // ExpiresAt is the tombstone retention deadline
-	endedPruneAt     time.Time
-	states           map[string][]byte
-	checkpoints      map[string]Checkpoint
-	routes           map[netip.AddrPort]Route
-	routeNominations map[string]Route
-	routeSessions    map[string]map[netip.AddrPort]struct{}
-	epoch            uint64 // global; no per-session history survives release
+	relayLeases       map[string]RelayLease
+	mu                sync.RWMutex
+	leases            map[string]Lease
+	ended             map[string]Lease // ExpiresAt is the tombstone retention deadline
+	endedPruneAt      time.Time
+	componentRecords  map[string]componentRecord
+	componentCrypto   *Redis
+	componentSequence uint64
+	states            map[string][]byte
+	checkpoints       map[string]Checkpoint
+	routes            map[netip.AddrPort]Route
+	routeNominations  map[string]Route
+	routeSessions     map[string]map[netip.AddrPort]struct{}
+	epoch             uint64 // global; no per-session history survives release
 }
 
 var _ Store = (*Memory)(nil)
 
 // NewMemory returns an empty in-memory fenced store.
 func NewMemory() *Memory {
-	return &Memory{leases: make(map[string]Lease), ended: make(map[string]Lease), states: make(map[string][]byte), checkpoints: make(map[string]Checkpoint), routes: make(map[netip.AddrPort]Route), routeNominations: make(map[string]Route), routeSessions: make(map[string]map[netip.AddrPort]struct{})}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		panic(err)
+	}
+	return &Memory{componentRecords: make(map[string]componentRecord), componentCrypto: &Redis{keysByID: map[byte][]byte{0: key}}, leases: make(map[string]Lease), ended: make(map[string]Lease), states: make(map[string][]byte), checkpoints: make(map[string]Checkpoint), routes: make(map[netip.AddrPort]Route), routeNominations: make(map[string]Route), routeSessions: make(map[string]map[netip.AddrPort]struct{})}
 }
 
 func valid(id string, worker netip.AddrPort, ttl time.Duration) bool {
@@ -171,6 +179,7 @@ func (m *Memory) Claim(ctx context.Context, id string, worker netip.AddrPort, tt
 		return Lease{}, ErrLeaseHeld
 	}
 
+	delete(m.componentRecords, id)
 	return m.next(id, worker, ttl), nil
 }
 
@@ -231,6 +240,7 @@ func (m *Memory) Get(ctx context.Context, id string) (Lease, error) {
 		delete(m.leases, id)
 		delete(m.states, id)
 		delete(m.checkpoints, id)
+		delete(m.componentRecords, id)
 		m.forgetRoutes(id)
 		if ended, ok := m.ended[id]; ok {
 			if time.Now().Before(ended.ExpiresAt) {
@@ -276,6 +286,7 @@ func (m *Memory) Release(ctx context.Context, lease Lease) error {
 		delete(m.leases, lease.SessionID)
 		delete(m.states, lease.SessionID)
 		delete(m.checkpoints, lease.SessionID)
+		delete(m.componentRecords, lease.SessionID)
 		m.forgetRoutes(lease.SessionID)
 	}
 
@@ -301,6 +312,7 @@ func (m *Memory) ListByWorker(ctx context.Context, worker netip.AddrPort) ([]Lea
 			delete(m.leases, lease.SessionID)
 			delete(m.states, lease.SessionID)
 			delete(m.checkpoints, lease.SessionID)
+			delete(m.componentRecords, lease.SessionID)
 			m.forgetRoutes(lease.SessionID)
 			continue
 		}
@@ -324,6 +336,9 @@ func (m *Memory) PutState(ctx context.Context, lease Lease, state []byte) error 
 	if !ok || !same(current, lease) || !time.Now().Before(current.ExpiresAt) {
 		return ErrLeaseLost
 	}
+	if _, ok := m.componentRecords[lease.SessionID]; ok {
+		return ErrCheckpointLayout
+	}
 	m.states[lease.SessionID] = bytes.Clone(state)
 	m.checkpoints[lease.SessionID] = Checkpoint{StoredAt: time.Now(), digest: sha256.Sum256(state)}
 	return nil
@@ -341,8 +356,12 @@ func (m *Memory) GetState(ctx context.Context, id string) ([]byte, error) {
 		delete(m.leases, id)
 		delete(m.states, id)
 		delete(m.checkpoints, id)
+		delete(m.componentRecords, id)
 		m.forgetRoutes(id)
 		return nil, ErrNotFound
+	}
+	if _, ok := m.componentRecords[id]; ok {
+		return nil, ErrCheckpointLayout
 	}
 	state, ok := m.states[id]
 	if !ok {

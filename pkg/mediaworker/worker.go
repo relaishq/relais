@@ -151,6 +151,9 @@ type Config struct {
 	Agent AgentConfig
 	// SnapshotLimits belongs to the operator, independently of registrations.
 	SnapshotLimits SnapshotLimits
+	// SplitCheckpoints admits new calls to the v10 store. Existing v10 calls
+	// continue using it when admission is disabled.
+	SplitCheckpoints bool
 
 	// CheckpointEnvelope configures source index rates for safe crash recovery.
 	CheckpointEnvelope CheckpointEnvelope

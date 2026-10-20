@@ -18,9 +18,11 @@ import (
 func waitTakeovers(t *testing.T, ctx context.Context, h *callharness.Harness, count int) controlplane.Status {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
+	var last controlplane.Status
 	for time.Now().Before(deadline) {
 		status, err := h.Status(ctx)
 		require.NoError(t, err)
+		last = status
 		if len(status.Takeovers) == count && len(status.Calls) == 1 && status.Calls[0].TakeoverCount == uint64(count) { //nolint:gosec // positive test count
 			ready := true
 			for _, worker := range status.Workers {
@@ -34,7 +36,7 @@ func waitTakeovers(t *testing.T, ctx context.Context, h *callharness.Harness, co
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("automatic takeover did not complete within 2 s")
+	t.Fatalf("automatic takeover did not complete within 2 s; last control status: %+v", last)
 	return controlplane.Status{}
 }
 

@@ -15,8 +15,9 @@ import (
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
-// SnapshotLimits are operator settings. They apply only to v2 sessions; a
-// registration cannot change them. Zero fields use the ADR 0010 defaults.
+// SnapshotLimits are operator settings; registrations cannot change them.
+// The encoded cap also bounds v1 component captures. Byte-rate and move quotas
+// apply to v2 sessions. Zero fields use the ADR 0010 defaults.
 type SnapshotLimits struct {
 	MaxBytes            int
 	BytesPerSecond      int
@@ -197,6 +198,10 @@ func (b *snapshotBucket) debit(l SnapshotLimits, n int, now time.Time) {
 }
 
 func (s *session) checkSnapshotSize(data []byte) error {
+	if s.componentMode {
+		_, err := s.componentAdmission(data)
+		return err
+	}
 	if len(data)+snapshotEnvelopeBytes > s.worker.cfg.SnapshotLimits.MaxBytes {
 		return fmt.Errorf("%w: whole v2 snapshot is %d bytes (cap %d)", agent.ErrCapacity, len(data)+snapshotEnvelopeBytes, s.worker.cfg.SnapshotLimits.MaxBytes)
 	}
@@ -213,6 +218,10 @@ func (s *session) admissionSnapshot(candidate agentState) (int, error) {
 			return 0, nil
 		}
 		return 0, err
+	}
+	if s.componentMode {
+		size, err := s.componentAdmission(data)
+		return size.Hot, err
 	}
 	return len(data) + snapshotEnvelopeBytes, nil
 }

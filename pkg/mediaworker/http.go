@@ -175,6 +175,10 @@ func (w *Worker) SessionCount() int {
 // Agent errors can wrap more than one sentinel. Choose one code explicitly;
 // map iteration must not turn an unknown version into a generic restore error.
 func workerAPIError(rw http.ResponseWriter, err error) {
+	if errors.Is(err, errDTLSCheckpointEpoch) {
+		privateapi.Error(rw, ErrNotEstablished, map[string]error{"not_established": ErrNotEstablished})
+		return
+	}
 	if errors.Is(err, privateapi.ErrUncertain) {
 		privateapi.Error(rw, err, map[string]error{"uncertain": privateapi.ErrUncertain})
 		return

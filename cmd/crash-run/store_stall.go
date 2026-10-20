@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/processrun"
 	"github.com/relaishq/relais/internal/workerdriver"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -134,7 +134,7 @@ func (s *storeStallOptions) capture(ctx context.Context, status controlplane.Sta
 	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) && !errors.Is(err, sessionstore.ErrEnded) {
 		o.Errors = append(o.Errors, "lease read: "+err.Error())
 	}
-	_, err = s.store.GetState(ctx, s.SessionID)
+	_, _, err = mediaworker.ReadRecoverySnapshot(ctx, s.store, s.SessionID)
 	o.SnapshotExists = err == nil
 	if err != nil && !errors.Is(err, sessionstore.ErrNotFound) {
 		o.Errors = append(o.Errors, "snapshot read: "+err.Error())
@@ -165,15 +165,12 @@ func (s *storeStallOptions) prepare(ctx context.Context, env []string, id, contr
 	if s.Redis == nil {
 		return errors.New("store-stall has no owned Redis child")
 	}
-	key, err := hex.DecodeString(envValue(env, "RELAIS_SESSIONSTORE_KEY"))
+	var err error
+	s.store, err = openStoreStallStore(ctx, env)
 	if err != nil {
 		return err
 	}
-	s.store, err = sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: envValue(env, "RELAIS_REDIS_ADDR"), Prefix: envValue(env, "RELAIS_REDIS_PREFIX")}, key)
-	if err != nil {
-		return err
-	}
-	state, err := s.store.GetState(ctx, id)
+	state, _, err := mediaworker.ReadRecoverySnapshot(ctx, s.store, id)
 	if err != nil {
 		s.close()
 		return fmt.Errorf("pre-stall checkpoint: %w", err)
@@ -601,4 +598,13 @@ func judgeLiveSurvival(report *callharness.Report, status controlplane.Status, e
 		check(until.Sub(report.StartedAt.Add(track.LastArrival)) < 200*time.Millisecond, "no continuing "+track.Kind+" media")
 	}
 	return failures
+}
+
+// Use the exact worker key grammar, including nonzero active IDs and old keys.
+func openStoreStallStore(ctx context.Context, env []string) (*sessionstore.Redis, error) {
+	key, options, err := processrun.SessionStoreKeys(func(name string) string { return envValue(env, name) })
+	if err != nil {
+		return nil, err
+	}
+	return sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: envValue(env, "RELAIS_REDIS_ADDR"), Prefix: envValue(env, "RELAIS_REDIS_PREFIX")}, key, options)
 }

@@ -94,7 +94,7 @@ func TestCheckpointRedisClockRoutesToSessionSlot(t *testing.T) {
 	store := &Redis{client: client, prefix: "clock:"}
 	_, err := store.Clock(context.Background(), "clock-session")
 	require.NoError(t, err)
-	require.Equal(t, store.keys("clock-session"), client.keys, "TIME must route to the node storing this session")
+	require.Equal(t, store.keys("clock-session")[:1], client.keys, "TIME must route to the node storing this session")
 }
 
 func TestCheckpointClockRegressionIsUnsafe(t *testing.T) {

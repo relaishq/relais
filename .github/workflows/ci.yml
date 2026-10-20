@@ -128,6 +128,10 @@ jobs:
       RELAIS_TEST_REDIS_TLS_REQUIRE: "1"
     steps:
       - uses: actions/checkout@v6
+      - name: Generate UTF-8 locale for Redis tests
+        run: |
+          sudo locale-gen en_US.UTF-8
+          locale -a | grep -i '^en_US\.utf8$'
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
@@ -375,6 +379,10 @@ jobs:
       RELAIS_TEST_ARTIFACT_DIR: ${{ github.workspace }}/bin/cluster-test-artifacts
     steps:
       - uses: actions/checkout@v6
+      - name: Generate UTF-8 locale for Redis tests
+        run: |
+          sudo locale-gen en_US.UTF-8
+          locale -a | grep -i '^en_US\.utf8$'
       - name: Set up Go
         uses: actions/setup-go@v7
         with:

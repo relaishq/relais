@@ -213,3 +213,15 @@ func TestRedisClusterEnvironmentSwitch(t *testing.T) {
 		require.Equal(t, value == "1", cfg.Cluster)
 	}
 }
+
+func TestSessionStoreKeyRingEnvironmentValidation(t *testing.T) {
+	t.Setenv("RELAIS_SESSIONSTORE_KEY", hex.EncodeToString(make([]byte, 32)))
+	t.Setenv("RELAIS_SESSIONSTORE_KEY_ID", "256")
+	_, err := (StoreConfig{Address: "127.0.0.1:16379"}).Open(context.Background())
+	require.ErrorContains(t, err, "RELAIS_SESSIONSTORE_KEY_ID")
+	t.Setenv("RELAIS_SESSIONSTORE_KEY_ID", "1")
+	t.Setenv("RELAIS_SESSIONSTORE_OLD_KEYS", `{"0":"secret-do-not-echo"}`)
+	_, err = (StoreConfig{Address: "127.0.0.1:16379"}).Open(context.Background())
+	require.ErrorContains(t, err, "RELAIS_SESSIONSTORE_OLD_KEYS")
+	require.NotContains(t, err.Error(), "secret-do-not-echo")
+}

@@ -190,6 +190,7 @@ type ResumeOptions struct {
 // established DTLS connection state, taken together under the session lock.
 // It is encoded as JSON.
 type snapshot struct {
+	split   *componentSnapshotState
 	Version int // sessionStateVersion
 	State   sessionState
 
@@ -209,6 +210,9 @@ func (s snapshot) MarshalJSON() ([]byte, error) {
 			s.Version = controlSessionStateVersion
 		}
 		s.State.Version = s.Version
+	}
+	if s.split != nil {
+		return encodeComponentSnapshot(s)
 	}
 	return json.Marshal(plain(s))
 }
@@ -314,6 +318,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 		}
 		sess = sessionFromState(w, snap.State)
 		sess.lease = opts.Lease
+		sess.restoreComponentMode(snap)
 		if err := sess.initAgent(true, opts, snap.AgentMoveOnly); err != nil {
 			sess.fenced.Store(true)
 			sess.close()
@@ -342,6 +347,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 	}
 	if sess == nil {
 		sess = sessionFromState(w, snap.State)
+		sess.restoreComponentMode(snap)
 	}
 	sess.lease = opts.Lease
 	sess.callerSequenceReserve = opts.CallerSequenceReserve
@@ -356,6 +362,11 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 			return "", err
 		}
 	}
+	if err := sess.prepareComponentAdoption(parent); err != nil {
+		sess.fenced.Store(true)
+		sess.close()
+		return "", err
+	}
 	dtlsConn, err := sess.resume(snap.DTLSConnection, opts)
 	if err != nil {
 		sess.fenced.Store(true)
@@ -364,6 +375,9 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 		return "", fmt.Errorf("mediaworker: resume session %s: %w", sess.id, err)
 	}
 	if err := sess.persistSnapshotMode(parent, true); err != nil {
+		if errors.Is(err, errDTLSCheckpointEpoch) {
+			err = ErrNotEstablished
+		}
 		sess.fenced.Store(true)
 		sess.close()
 		return "", err
@@ -630,6 +644,7 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		AgentMoveOnly:  payload,
 		State:          exported,
 		DTLSConnection: dtlsState,
+		split:          s.componentExportState(),
 	})
 	if err != nil {
 		s.fenced.Store(false)
@@ -688,6 +703,9 @@ func decodeSnapshot(data []byte) (*snapshot, error) {
 	var version struct{ Version int }
 	if err := json.Unmarshal(data, &version); err != nil {
 		return nil, fmt.Errorf("%w: %w", errBadState, err)
+	}
+	if version.Version == 10 {
+		return decodeComponentSnapshot(data)
 	}
 	if err := validateSnapshotVersion(version.Version); err != nil {
 		return nil, err

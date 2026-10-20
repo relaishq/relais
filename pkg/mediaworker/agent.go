@@ -3,8 +3,10 @@ package mediaworker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -219,6 +221,46 @@ func (s *session) validateAgentState(state agent.State) error {
 	}
 	if len(state.Bytes) > s.worker.cfg.Agent.MaxStateBytes {
 		return agent.ErrStateTooLarge
+	}
+	if s.componentMode {
+		s.mu.Lock()
+		candidate := cloneAgentState(s.state.Agent)
+		s.mu.Unlock()
+		candidate.State = state
+		candidate.Revision++
+		// A zero timestamp has a shorter v10 encoding than a real capture.
+		// Admission must include the timestamp even before the first checkpoint.
+		captured := time.Now()
+		_, _, err := s.captureSnapshotCandidate(captured, &candidate)
+		if errors.Is(err, agentv2.ErrCapacity) {
+			return agent.ErrStateTooLarge
+		}
+		if errors.Is(err, ErrNotEstablished) {
+			// Before handshake, transport progress has the same fixed-width wire
+			// representation. Admit the candidate against the known host/track state
+			// without requiring negotiated setup secrets or arming a DTLS bound.
+			s.mu.Lock()
+			value := snapshot{Version: s.state.Version, State: s.state, split: &componentSnapshotState{history: bytes.Clone(s.componentHistory)}}
+			value.State.Agent = candidate
+			value.State.Checkpoint.CapturedAt = captured
+			value.State.SRTP.Inbound = maps.Clone(s.state.SRTP.Inbound)
+			value.State.SRTP.Received = maps.Clone(s.state.SRTP.Received)
+			s.mu.Unlock()
+			value.DTLSConnection, err = joinDTLSComponents(componentDTLSSetup{}, componentDTLSProgress{LocalEpoch: 1})
+			if err == nil {
+				var data []byte
+				data, err = json.Marshal(value)
+				if err == nil {
+					_, err = s.componentAdmission(data)
+				}
+			}
+			if errors.Is(err, agentv2.ErrCapacity) {
+				return agent.ErrStateTooLarge
+			}
+		}
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

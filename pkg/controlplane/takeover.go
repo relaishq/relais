@@ -112,6 +112,8 @@ func (p *Plane) Run(ctx context.Context) error {
 	p.running = true
 	p.mu.Unlock()
 	defer func() { p.mu.Lock(); p.running = false; p.mu.Unlock() }()
+	stopInventory := p.startKeyInventory(ctx)
+	defer stopInventory()
 	ticker := time.NewTicker(p.config.CheckInterval)
 	defer ticker.Stop()
 	var wg sync.WaitGroup
@@ -592,12 +594,13 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			state = pending.resumeState
 		}
 		var stateErr error
+		var tupleMetadata *sessionstore.Checkpoint
 		if state == nil {
-			state, stateErr = p.store.GetState(ctx, c.id)
+			state, tupleMetadata, stateErr = mediaworker.ReadRecoverySnapshot(ctx, p.store, c.id)
 		}
 		if stateErr != nil {
 			p.unreserve(target)
-			if errors.Is(stateErr, sessionstore.ErrNotFound) {
+			if errors.Is(stateErr, sessionstore.ErrNotFound) || errors.Is(stateErr, sessionstore.ErrUnsafeCheckpoint) || errors.Is(stateErr, sessionstore.ErrUnsafeCheckpointClock) {
 				complete(true, fmt.Errorf("controlplane: no takeover snapshot: %w", stateErr))
 			}
 			return
@@ -611,8 +614,8 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 			// An adopted tenure acknowledges idempotently before budget checks.
 			// A still-unadopted tenure must recheck the caller's growing outage gap.
 		} else if !pending.planned || pending.crashMargins {
-			decision, checkpointErr := p.checkpointDecision(ctx, c.id, state, checkpointOutageBudget(ctx, pending.outageStarted))
-			if checkpointErr != nil && !errors.Is(checkpointErr, mediaworker.ErrSequenceBudgetExhausted) && !errors.Is(checkpointErr, sessionstore.ErrUnsafeCheckpointClock) && !errors.Is(checkpointErr, errUnsafeCheckpointState) {
+			decision, checkpointErr := p.checkpointDecision(ctx, c.id, state, checkpointOutageBudget(ctx, pending.outageStarted), tupleMetadata)
+			if checkpointErr != nil && !errors.Is(checkpointErr, mediaworker.ErrSequenceBudgetExhausted) && !errors.Is(checkpointErr, sessionstore.ErrUnsafeCheckpointClock) && !errors.Is(checkpointErr, errUnsafeCheckpointState) && !errors.Is(checkpointErr, sessionstore.ErrUnsafeCheckpoint) {
 				p.unreserve(target)
 				if errors.Is(checkpointErr, sessionstore.ErrNotFound) {
 					complete(true, checkpointErr)
@@ -856,7 +859,7 @@ func (p *Plane) completeTakeover(source *registration, c *call, lease sessionsto
 			}
 			if errors.Is(cause, sessionstore.ErrNotFound) {
 				res.LossCause = "checkpoint_missing"
-			} else if checkpointEnvelopeLoss(cause) {
+			} else if errors.Is(cause, sessionstore.ErrUnsafeCheckpoint) || checkpointEnvelopeLoss(cause) {
 				res.LossCause = "checkpoint_unsafe"
 			}
 		}

@@ -37,8 +37,12 @@ func (m *Memory) Checkpoint(ctx context.Context, id string, state []byte) (Check
 		delete(m.leases, id)
 		delete(m.states, id)
 		delete(m.checkpoints, id)
+		delete(m.componentRecords, id)
 		m.forgetRoutes(id)
 		return Checkpoint{}, ErrNotFound
+	}
+	if _, ok := m.componentRecords[id]; ok {
+		return Checkpoint{}, ErrCheckpointLayout
 	}
 	checkpoint, ok := m.checkpoints[id]
 	if !ok {
