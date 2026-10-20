@@ -582,6 +582,21 @@ less CPU. The cost is an estimate, not a bill; the capacity tool's own cost
 field stays `NOT-RUN` because the run supplied no prices. Agent-state workload
 cost is not isolated by this echo/fixture capacity sample.
 
+**Split checkpoint observation (2026-10-20):** On one four-vCPU GitHub-hosted
+runner, two calls using a keyless four-exchange history fixture consumed
+95,855 B of Redis request+reply per call-second with split defaults, versus
+184,520 B with the legacy 8 KiB operator override. The split sample passed the
+128 KiB store-traffic gate; the legacy sample exceeded it. Split N+1, planned
+drain and rolling master-key rotation ended no calls and reported zero
+decryption failures. At the rotation inventory check, all ten live component
+references used the new key. Both sampled checkpoint and snapshot age p99
+values stayed below 550 ms. These are short, standalone-Redis loopback
+observations at two calls, not capacity or managed-store evidence. The
+asynchronous fixture does not establish strict audio continuity: its raw audio
+loss/freshness exceptions remain in the
+[dated results](dev/capacity-results.md#2026-10-20--matched-split-checkpoint-traffic-run-39441746025).
+The planning limit of about 200 calls per Redis primary above is unchanged.
+
 **Soak guarantee sought:** Continuous calls remain within the move and takeover
 rules through repeated moves, drains and kills, with no unintended lost calls,
 decryption failures or leaked resources and no sustained memory growth.

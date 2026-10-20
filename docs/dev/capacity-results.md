@@ -1,5 +1,381 @@
 # Capacity evidence for #40
 
+## 2026-10-20 — matched split checkpoint traffic, run 39441746025
+
+[Run 39441746025](https://github.com/relaishq/relais/actions/runs/39441746025),
+commit `5360c616cfadf99992b4c6b81187959ed263852a` (`5360c61`, draft PR #213),
+completed the manual `split-capacity` job successfully. This is **one runner's
+fixed-load measurement, not a capacity result**. The legacy history workload
+exceeded the store byte gate; the split workload stayed below it. This does not
+increase the planning limit of about 200 calls per Redis primary.
+
+Evidence: artifact `split-capacity-linux-39441746025`, containing
+`split-capacity-linux.json`, `.approval.json`, `.log`, `split-capacity-build.txt`
+and process logs in `load-run-2704053099/`. Regenerating the approval JSON from
+the raw report with the 1,000 µs Save CPU/wall budgets produced an identical
+report with `blocking=[]`. The successful workflow means the expected legacy
+budget failure was retained and all gates in the matched-report policy passed;
+it does not mean every raw audio yardstick passed (see below).
+
+Runner `runnervmxehtw`: `ubuntu-latest`, Linux/amd64, four vCPUs (AMD EPYC 7763),
+Go 1.26.9. Three worker processes, one relay, one control, two caller processes
+with `GOMAXPROCS=1`, standalone owned Redis and a counting RESP proxy shared the
+runner. Topology was `loopback-processes`, without network namespaces or TLS.
+Every step used fresh Redis; each matched pair used the same five binary hashes,
+load, default relay buffer, 50 audio inputs/s/call and 30 VP8 frames/s/call.
+Samples lasted 30 s except rotation (65 s). No load ramp was attempted.
+
+Before history used an 8,192 B app limit and the documented Demo A overrides
+`-agent-max-snapshot-bytes=24576`,
+`-agent-snapshot-bytes-per-second=270336`,
+`-agent-snapshot-burst-bytes=98304`. After used only
+`-agent-split-checkpoints` and default limits. Echo used stock limits in both
+arms, with that split switch off/on. The keyless history fixture has four
+exchanges of 512 B per side: 2,871 B working JSON plus 4,205 B raw history in
+split mode, or 7,087 B inline JSON before. Inputs change working state at about
+50/s; every 250 accepted inputs changes history (nominally once/5 s). Churn
+tries a history change on every input after input 400. Side-effecting no-op
+intents once per turn exercise forced checkpoints; no provider was called.
+
+### Per-step gates and recovery
+
+All values below are measured on this runner. Traffic includes session, frame
+and owners clients, requests plus replies; rates are per call-second over the
+media window, including fault/move intervals. Gates remain 100 commands and
+131,072 B/call-second. Ages are `p99 / maximum`, in ms, sampled every 100 ms.
+The policy gates p99 at 550 ms; every sampled maximum was also below 550 ms.
+
+| Arm/scenario | Seconds | Generator | Service | Commands/call-s | B/call-s | Checkpoint age | Snapshot age | Live/lost calls | Cleanup |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| before/steady | 30 | valid | fail | 72.67 | 184,520 | 108.14 / 121.92 | 110.93 / 125.13 | 2 / 0 | pass |
+| after/steady | 30 | valid | pass | 72.74 | 95,855 | 108.57 / 109.29 | 110.48 / 111.01 | 2 / 0 | pass |
+| before/echo | 30 | valid | pass | 73.32 | 84,536 | 85.36 / 86.90 | 86.59 / 89.31 | 2 / 0 | pass |
+| after/echo | 30 | valid | pass | 73.35 | 62,718 | 85.37 / 87.20 | 86.54 / 88.53 | 2 / 0 | pass |
+| after/history-churn | 30 | valid | pass | 73.11 | 121,690 | 110.08 / 110.87 | 111.82 / 112.40 | 2 / 0 | pass |
+| after/rotation | 65 | valid | pass | 74.75 | 97,367 | 114.58 / 115.47 | 116.83 / 118.53 | 2 / 0 | pass |
+| after/n-plus-one | 30 | valid | pass | 70.67 | 92,781 | 111.43 / 112.22 | 113.72 / 114.26 | 2 / 0 | pass |
+| after/drain | 30 | valid | pass | 72.60 | 95,613 | 119.72 / 120.23 | 122.07 / 122.89 | 2 / 0 | pass |
+
+Only before/steady failed the store gate: 184,519.52 > 131,072 B/call-second;
+its command, generator, age, call-survival, decryption and cleanup checks passed.
+After/steady saved 88,665.00 B/call-second (48.05%); echo saved 21,817.63 B
+(25.81%). These are matched workload observations, not Redis CPU or capacity
+multipliers. Generators had zero skipped frames, no saturation, peak interval
+send-lateness p99 of 2.36–4.43 ms (<20 ms), and peak CPU/GOMAXPROCS of
+2.50–3.15% (<85%). Both callers completed every step.
+
+**Audio qualification:** the asynchronous recording/playback fixture is judged
+by the existing custom-agent policy, which excludes echo-style audio freshness,
+audio loss and audio track-gap checks. It still requires returned audio,
+connection survival, video delivery/recovery and decryption checks. The raw
+strict audio yardsticks below remain failures or inconclusive; no loss-free or
+continuous-audio guarantee follows from custom `service=pass`.
+
+| Arm/scenario | Raw audio units lost | Raw video frames lost | Decryption failures | Event yardsticks outside pass |
+| --- | --- | --- | --- | --- |
+| before/steady | 1620 | 0 | 0 | audio_freshness: 0 fail / 1 inconclusive |
+| after/steady | 1622 | 0 | 0 | audio_freshness: 0 fail / 1 inconclusive |
+| before/echo | 0 | 0 | 0 | all pass |
+| after/echo | 0 | 0 | 0 | all pass |
+| after/history-churn | 1620 | 0 | 0 | audio_freshness: 0 fail / 1 inconclusive |
+| after/rotation | 3546 | 0 | 0 | audio_freshness: 2 fail / 1 inconclusive, audio_loss: 1 fail / 0 inconclusive |
+| after/n-plus-one | 1746 | 0 | 0 | audio_freshness: 0 fail / 2 inconclusive, audio_loss: 1 fail / 0 inconclusive |
+| after/drain | 1619 | 0 | 0 | audio_freshness: 0 fail / 1 inconclusive |
+
+All event video-loss, video-freshness, resume, first-content, first-new-content
+and first-live checks passed. After N+1's strict audio-loss rows failed for both
+takeovers; rotation's third drain had one strict audio-loss failure and its
+second/third drains had audio-freshness failures. These are not hidden by the
+workflow success. Echo's strict audio and video checks passed with zero loss.
+All callers reported AuthTag/Replay/Other decryption counts of 0/0/0, and every
+move/takeover reported zero decryption failures after resume.
+
+- Churn: one `Capacity` refusal was observed, with 3,273 admission calls
+  and 3,272 Handle/Save events. On that call, the next diagnostic
+  sample had `inputs=1071`, consumed input count 1072 and `refused=1`, consistent
+  with the refused candidate being rolled back before acceptance. Input progress
+  subsequently reached 1486; the other caller reached 1458. Both stayed live.
+  This observes admission refusal and continued processing; it is not the
+  separate exact-history crash proof in ADR 0012 §6(2).
+- Rotation: three occupied workers drained one call each in 19.52, 13.45 and
+  14.79 ms, then restarted with active key 2 plus decrypt key 1. All three had
+  new PIDs and fresh post-start membership heartbeats. At
+  `2026-10-20T14:49:50.089085631Z`, the authenticated inventory covered both live
+  calls and all ten referenced tuples (five/call): `{"2":10}`, none on key 1.
+  Both calls remained live through the end. The old decrypt key was not removed;
+  unreferenced banks and continuous inventory after that instant were not tested.
+- N+1: worker 0 held both calls when killed. Both takeovers were recorded;
+  detection was 409.85 ms, with takeover operations of 21.39 and 23.12 ms.
+  A later planned move took 13.29 ms. Final placement was two calls on worker 1;
+  survivor peaks were worker 1 = 2 and worker 2 = 1. No call remained on the
+  dead worker. This is a two-call recovery observation, not a capacity floor.
+- Drain: both calls left worker 0 in a 26.04 ms API interval; their individual
+  moves took 23.83 and 20.99 ms. Final placement was one call each on workers
+  1 and 2. Ordinary planned moves in the matched steps took 11.40–18.10 ms.
+- Cleanup: all eight scans passed after the standard 35 s relay wait. Control,
+  live workers and relay route/hold/buffer/pending counts were zero. No owned
+  process or listener remained. Only bounded ended/epoch retention, the released
+  relay fencing hash and session counter remained; no v10 component keys remained.
+  Absence after this wait does not distinguish explicit deletion from lease TTL.
+
+Age coverage was complete under the sampler policy: 600 samples/30 s in ordinary
+steps, 1299/65 s in rotation (one missing session sample), and 592/30 s in N+1
+(eight missing session samples during recovery). There were no sampler errors.
+These are sampled ages of observable owned calls, not continuous maxima across
+an unowned takeover interval.
+
+### Setup, steady state and complete lifecycle traffic
+
+Setup is the pre-media interval. Steady excludes explicitly marked move, kill,
+drain and rotation intervals. Commands and B below are **whole-topology totals**;
+normalizing the short setup/fault intervals as sustained rates would mislead.
+The last columns divide all observed setup/media/hangup/cleanup traffic by the
+configured media call-seconds (60, or 130 for rotation), retaining cold attempts.
+
+| Arm/scenario | Setup s | Setup commands / B | Steady s | Steady commands / B | Lifecycle commands/call-s | Lifecycle B/call-s |
+| --- | --- | --- | --- | --- | --- | --- |
+| before/steady | 1.333 | 124 / 325,029 | 29.981 | 4331 / 11,015,037 | 81.05 | 198,687.83 |
+| after/steady | 1.330 | 125 / 137,825 | 29.983 | 4334 / 5,699,220 | 81.03 | 104,277.82 |
+| before/echo | 1.328 | 130 / 137,484 | 29.990 | 4373 / 5,047,227 | 81.90 | 92,442.50 |
+| after/echo | 1.329 | 132 / 112,369 | 29.991 | 4374 / 3,739,241 | 81.97 | 69,484.85 |
+| after/history-churn | 1.329 | 125 / 128,280 | 29.981 | 4356 / 7,249,041 | 81.35 | 130,318.20 |
+| after/rotation | 1.328 | 126 / 143,787 | 53.593 | 7755 / 10,254,987 | 78.67 | 101,294.75 |
+| after/n-plus-one | 1.329 | 121 / 143,276 | 29.981 | 4335 / 5,684,405 | 81.43 | 104,503.68 |
+| after/drain | 1.331 | 119 / 121,861 | 29.974 | 4299 / 5,648,486 | 80.80 | 103,787.52 |
+
+The churn lifecycle total is only 753.80 B/call-second below the traffic cap;
+its media window has 9,381.50 B/call-second spare. Both are window averages,
+not proven per-second burst limits. The ordinary after/steady phase alone was
+72.27 commands and 95,040.51 B/call-second; adding its marked move gives the
+95,854.52 headline (small observer/counter timing differences remain).
+
+| Arm/scenario | Session B/call-s | Frame B/call-s | Owners B/call-s |
+| --- | --- | --- | --- |
+| before/steady | 148,356.93 | 31,122.57 | 5,040.02 |
+| after/steady | 59,624.71 | 31,179.71 | 5,050.11 |
+| before/echo | 48,305.94 | 31,179.77 | 5,050.05 |
+| after/echo | 26,519.18 | 31,149.25 | 5,049.70 |
+| after/history-churn | 85,502.00 | 31,138.01 | 5,050.49 |
+| after/rotation | 61,040.98 | 31,307.20 | 5,018.60 |
+| after/n-plus-one | 57,692.42 | 30,028.28 | 5,060.18 |
+| after/drain | 59,339.50 | 31,149.67 | 5,124.25 |
+
+### Component writes, keys and fields
+
+A length-only RESP proxy counts attempted commands and exact request/reply
+frames. Redis `MONITOR` observes actual internal Lua HSET field/value lengths;
+initial empty placeholders are retained in those counts. Driver inventory,
+cleanup scans and INFO reads bypass the proxy. The observer adds overhead in
+both arms. Counts are Redis protocol bytes, not TLS record, NIC, replication,
+managed durable-log or billing bytes; those are **NOT-RUN**.
+
+Steady-phase successful writes below show `count @ writes/call-second` and
+ciphertext B/write. A reused work/history component is not counted as a write.
+The fixture's accepted input progress was 48.6–49.7/s/call in ordinary samples;
+transport commits remained about 10/s despite the much faster input changes.
+
+| Arm/scenario | Legacy | Checkpoint b | Working | History |
+| --- | --- | --- | --- | --- |
+| before/steady | 588 @ 9.8062; 13,108–14,136 B | — | — | — |
+| after/steady | — | 589 @ 9.8222; 665–1,520 B | 507 @ 8.4548; 2,907–2,907 B | 10 @ 0.1668; 4,241–4,241 B |
+| before/echo | 603 @ 10.0533; 3,328–3,570 B | — | — | — |
+| after/echo | — | 603 @ 10.0532; 339–387 B | — | — |
+| after/history-churn | — | 597 @ 9.9563; 662–1,517 B | 506 @ 8.4386; 2,907–2,907 B | 372 @ 6.2039; 4,241–4,241 B |
+| after/rotation | — | 1049 @ 9.7867; 665–1,526 B | 912 @ 8.5086; 2,907–2,907 B | 20 @ 0.1866; 4,241–4,241 B |
+| after/n-plus-one | — | 587 @ 9.7894; 665–1,532 B | 500 @ 8.3385; 2,907–2,907 B | 10 @ 0.1668; 4,241–4,241 B |
+| after/drain | — | 577 @ 9.6249; 665–1,521 B | 502 @ 8.3739; 2,907–2,907 B | 10 @ 0.1668; 4,241–4,241 B |
+
+In after/steady setup, successful writes were checkpoint 20 × 665–666 B,
+setup 2 × 1,298–1,300 B, work 2 × 2,907 B and history 2 × 4,241 B.
+No setup write occurred in its steady phase. Raw working/history lengths
+2,871/4,205 become 2,907/4,241: 6 B component encoding plus 30 B AEAD overhead.
+Across all custom split steps, checkpoint ciphertext was 662–1,532 B, setup
+1,296–1,300 B, work 2,907 B and history 4,241 B. Echo used 36 B explicit empty
+work/history at initialization and no app-component rewrites in steady state.
+
+For after/steady's 589 commits, all 11 key arguments below were present each
+time. Prefix `relais:load:matched:` is 20 B; IDs are 16 B. Each raw name gets
+7 B RESP bulk framing. Numkeys adds 8 B once: **556 + 77 + 8 = 641 B/commit**,
+377,549 B across those attempts. This is included in wire totals.
+
+| Argument | Key (T = {sess:16-byte-ID}) | Raw B | RESP B |
+| --- | --- | --- | --- |
+| 01 | lease:T | 49 | 56 |
+| 02 | record:T | 50 | 57 |
+| 03 | epoch:T | 49 | 56 |
+| 04 | routes:T | 50 | 57 |
+| 05 | ended:T | 49 | 56 |
+| 06 | setup:T | 49 | 56 |
+| 07 | checkpoint:T | 54 | 61 |
+| 08 | work:T:0 | 50 | 57 |
+| 09 | work:T:1 | 50 | 57 |
+| 10 | history:T:0 | 53 | 60 |
+| 11 | history:T:1 | 53 | 60 |
+
+The publication HSET has three one-byte field names. After/steady's actual
+field bytes and other session HSET fields are below; lease renew fields are
+reported separately from publication. Other frame/owner HSET fields remain in
+the raw report and wire totals, not in the checkpoint payload cap.
+
+| HSET key/field | Field-name B/write | Value B/write | Observed writes (after/steady phase) |
+| --- | --- | --- | --- |
+| checkpoint / b | 1 | 665–1,520 | 589 |
+| checkpoint / m | 1 | 246 | 589 |
+| checkpoint / t | 1 | 8 | 589 |
+| lease / state_seq | 9 | 2–3 | 589 |
+| lease / worker | 6 | 15 | 60 |
+| lease / epoch | 5 | 1 | 60 |
+| lease / expires | 7 | 13 | 60 |
+| setup / 0 (setup phase) | 1 | 0 or 1,298–1,300 | 4 |
+| setup / 1 (setup phase) | 1 | 0 | 2 |
+| lease / component_init_epoch (setup) | 20 | 1 | 2 |
+| lease / layout (setup) | 6 | 2 | 2 |
+
+Setup also wrote the lease fields above (sequence 1–2 B) and two empty `b/m/t`
+placeholders before publication. Actual metadata plus timestamp and names is
+`246+8+3 = 257 B`, below the ADR's 384 B allocation including its framing reserve.
+Steady after payload publication was 2,303,047 B (38,405.74 B/call-second),
+including 635,415 B checkpoint, 144,894 B metadata, 4,712 B timestamps,
+1,767 B field names, 1,473,849 B work and 42,410 B history.
+Hot publication max was 4,684 B; total publication max 8,900 B in that phase.
+Across all custom split phases maxima were hot 4,696 B and total 9,906 B.
+These publication sizes omit command RESP and other lease HSETs, which remain
+in wire totals; admission additionally reserves 78 B protocol framing.
+
+Rotation's marked 11.412219 s interval contained 1,969 commands and
+2,403,779 request+reply B (105,316.02 B/call-second). It published checkpoint
+219 times, work 195 times, history 6 times and setup twice; the two setup values
+totalled 2,594 B. The largest observed whole-topology second during that step
+was 294,801 B (147,400.5 B/call if simply divided by two), above 128 KiB;
+the policy is a window-average gate and has no proven per-second burst capacity.
+No larger burst allocation is justified by this observation.
+
+### Attempts, script submissions and Save cost
+
+Write attempts below count legacy or v10 commit submissions. Failed commit
+attempts occurred only during setup, which also recorded cold `NOSCRIPT`
+fallbacks; there were no failed media-window commit attempts. The observer
+does not separately classify each failed commit. `NOSCRIPT` totals include
+other scripts.
+`SCRIPT LOAD` command counts were zero in every step: fallback used EVAL.
+Script-body submissions count EVAL/SCRIPT LOAD requests, including repeated
+warm EVAL bodies; they are not counts of distinct server-side compilations.
+
+| Arm/scenario | Commit attempts | Failed attempts | Script-body submissions | NOSCRIPT replies | SCRIPT LOAD |
+| --- | --- | --- | --- | --- | --- |
+| before/steady | 626 | 0 | 744 | 5 | 0 |
+| after/steady | 627 | 2 | 744 | 7 | 0 |
+| before/echo | 645 | 0 | 758 | 5 | 0 |
+| after/echo | 647 | 2 | 761 | 8 | 0 |
+| after/history-churn | 633 | 1 | 749 | 7 | 0 |
+| after/rotation | 1307 | 2 | 1542 | 8 | 0 |
+| after/n-plus-one | 630 | 2 | 760 | 8 | 0 |
+| after/drain | 617 | 1 | 745 | 6 | 0 |
+
+Application Save time includes the app's own work and excludes host admission
+and host envelope serialization. CPU is Linux thread CPU; values below are
+means, not tail latency. Save CPU/wall budget was
+1,000 µs/event; all passed with no unavailable CPU samples. Admission is measured
+separately on the production path, including refused callbacks. Checkpoint skip
+reasons were `interval` and `budget`; no budget skips occurred. Refused app
+transactions are counted separately from skipped checkpoints.
+Echo has no custom-agent Save/admission timing block and is omitted here.
+
+| Arm/scenario | Events / Saves | Save CPU / wall µs/event | Save CPU / wall ms/call-s | Admission calls; CPU / wall total s | Skips interval / budget | Forced success / fail; max ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| before/steady | 3271 / 3271 | 58.02 / 58.14 | 3.162 / 3.169 | 3271; 0.744172 / 0.763429 | 3600 / 0 | 10 / 0; 4.602 |
+| after/steady | 3270 / 3270 | 25.67 / 25.09 | 1.399 / 1.367 | 3270; 1.258097 / 1.295511 | 3610 / 0 | 10 / 0; 5.897 |
+| after/history-churn | 3272 / 3272 | 21.77 / 20.63 | 1.187 / 1.125 | 3273; 1.154890 / 1.195016 | 3605 / 0 | 10 / 0; 5.738 |
+| after/rotation | 7163 / 7163 | 22.51 / 21.09 | 1.240 / 1.162 | 7163; 2.519958 / 2.606429 | 7935 / 0 | 24 / 0; 7.987 |
+| after/n-plus-one | 3161 / 3161 | 21.99 / 21.09 | 1.158 / 1.111 | 3160; 1.084014 / 1.144390 | 3465 / 0 | 8 / 0; 4.191 |
+| after/drain | 3272 / 3272 | 22.44 / 21.66 | 1.224 / 1.181 | 3272; 1.141144 / 1.181573 | 3626 / 0 | 10 / 0; 5.226 |
+
+### ADR 0012 §2 and §6 comparison
+
+[ADR 0012](../adr/0012-agent-state-store-schema.md#2-defaults-sdk-shape-and-traffic)
+calls its traffic arithmetic projections, not measured traffic. It states no
+universal percentage error margin. The margins below are its explicit byte
+headrooms or the difference to an explicit cap; “not isolated” and “not run” do
+not validate a projection. Full-limit arithmetic (3,072/8,192 B) must not be
+presented as measured by this 2,871/4,205 B fixture.
+
+| Projection / cap | ADR value and margin | Measured value / comparison | Holds for this run? |
+| --- | --- | --- | --- |
+| Working / history / total app limits | 3,072 / 8,192 / 11,264 B | 2,871 / 4,205 / 7,076 raw B; spare 201 / 3,987 / 4,188 B | Yes for fixture; full limits not exercised |
+| Seven / eight example exchanges | 7,358 / 8,409 B; seven fits 8,192 | Four exchanges 4,205 B; seven/eight not sent | NOT-RUN at seven/eight |
+| Encoded host allowance / configurable working ceiling | 2,048 / 65,536 B | Host-only bytes not isolated; 65,536 B opt-in not exercised | NOT-RUN at bounds |
+| Hot checkpoint cap / worst-case estimate | 7,168 B / 6,966 B; 202 B headroom | Max published hot 4,696 B; +78 B admission reserve = 4,774 B | Fits; not a worst-case proof |
+| Setup cap | 4,096 B | Max ciphertext 1,300 B; spare 2,796 B | Yes for fixture |
+| History cap / framing reserve | 8,448 B / 256 B over raw max | 4,241 B = 4,205+6+30; actual overhead 36 B | Yes; full 8,192 B not sent |
+| Total transaction cap | 20,480 B | Max publication 9,906 B; +78 B reserve = 9,984 B | Yes for fixture |
+| Payload rate / periodic plus forced reservation | 80,000 B/s; 11×7,168 = 78,848, spare 1,152 | Steady published values 38,405.74; churn 64,093.30 B/call-s | Observed workload fits; full reserved pattern not sent |
+| Payload burst | 40,960 B = two 20,480 B transactions | Max publication 9,906 B; largest rotation second 294,801 wire B/topology | Transactions fit; no per-second capacity proof |
+| Cadence / component change frequency | 100 ms; 10 commits/s; history once/5 s | Steady 9.8222 commits/s, work 8.4548/s, history 0.1668/s; input ≈49/s | Consistent with cadence; actual rates used |
+| Legacy baseline / optimistic setup removal | 3,474 / 2,072 B; 2,048 B host allowance | Legacy echo cipher 3,328–3,570 B; setup cipher 1,296–1,300 B | Different encoding/workload; removal not isolated |
+| AEAD / old admission reserve | 30 / 42 B | 30 B AEAD; app component adds 6 B encoding, total 36 B | AEAD holds; 42 B was a reserve |
+| Full history base64 expansion | 8,192 → 10,924 B | 4,205 B raw history sent; legacy inline 7,087 B JSON | Full-size expansion NOT-RUN |
+| Reference packing and framing | 303 B packed allowance +3 names +78 framing =384 | m 246 +t 8 +names 3 +78 reserve =335 B; spare 49 B | Yes for observed 15 B owner |
+| Five digests / IDs / revisions and other packed widths | 160 / 5 / 40 B; epoch8, version4, banks3, format1, length2, owner64, setup-generation8, time8 | Observer records packed m=246 and t=8; individual m subfields not decoded | Packed bound fits; individual widths not independently measured |
+| Old 1 KiB app payload projection | 69,200 B/s | No 1 KiB app case; echo cipher 35,756.74 B/call-s | Unmatched workload, not a validation |
+| Old 8 KiB app payload projection | 164,760 B/s | 7,087 B inline fixture: steady legacy cipher 134,182.57 B/call-s | Smaller fixture below projection; full 8 KiB NOT-RUN |
+| New transport/host excluding work | 38,640 B/s | Steady b/m/t/names 13,120.52 B/call-s | Below estimate; host allowance not filled |
+| New full work at 10/s, full history once/5 s | 71,304.4 B/s | Fixture published payload 38,405.74 B/call-s | Below estimate; full-limit projection NOT-RUN |
+| Both app components change once/5 s | 40,904.8 B/s | Working changes frequently; no matched low-churn case | NOT-RUN |
+| Both full app fields change every checkpoint | 151,880 B/s >80,000; must refuse | Churn published payload 64,093.30 B/call-s; one pre-acceptance refusal | Refusal observed; full-size sustained rate NOT-RUN |
+| Old base64 history at once/5 s versus 10/s | 2,184.8 versus 109,240 B/s | Legacy inline full blobs, no isolated history wire counter | Not isolated |
+| Setup saving and older-run ratios | 20,720 B/s; 41.2% of 50,277 session or 24.4% of 84,904 total | Matched history total saving 48.05%; echo 25.81% | Historical ratios are not matched predictions |
+| 11-key commit list (16 B prefix) | 512 raw +77 framing +8 numkeys =597 B | 20 B prefix: 556+77+8=641; subtract 11×4 →597 | Exact after prefix normalization |
+| Old six-key list | 321 B | Same-build legacy commit has two keys, 119 B (111 B at 16 B prefix) | Baseline assumption does not hold |
+| Clock and reservation lease-only list | 59 B each at 16 B prefix | 63 B with 20 B prefix; lease-only source path in both arms | Shape/length holds; not a separately aggregated runtime counter |
+| Net key-list change at 10/s | −2,480 B/s, assumes old six-key lists | At 20 B prefix +5,220 B/s; normalized to 16 B prefix, (597−111)×10 =+4,860; clock/reserve already lease-only | Normalized projection delta 7,340 B/s exceeds 2,888 spare |
+| Old / new protocol estimate | 15,237 / 12,757 B/s; further args reserve 800 | Media session residual ≈21,175.51 B/call-s after subtracting published values | About 7,618.51 above 12,757+800; exceeds 2,888 spare |
+| Expected-root/checkpoint args | 80 B/commit =800 B/s | Included in wire totals, not separately length-bucketed | Not isolated |
+| Frame / owners clients | 31,371 / 3,256 B/call-s | After/steady 31,179.71 / 5,050.11 | Frame below; owners +1,794.11, consumes 62.1% of 2,888 spare |
+| Derived payload ceiling / selected rate spare | 82,888 / 80,000 B/s; spare 2,888 | Measured non-publication wire 57,404.82 implies ceiling 73,667.18 | Projection misses beyond stated spare; candidate revision below |
+| Mixed high-working-churn traffic | 119,488.4 B/call-s; spare 11,583.6 to 131,072 | History fixture 95,854.52; actual history-churn 121,690.50 | Ordinary fixture below; churn differs in history rate, still fits cap |
+| Command / wire gates (§6(4)) | 100 / 131,072 per call-s | After max media 74.75 /121,690.50; max lifecycle 81.97 /130,318.20 | Yes; legacy history byte gate fails as reported |
+| Checkpoint AND snapshot p99 (§6(4)) | 550 ms each; report maxima | After max p99 119.72 /122.07 ms; max samples 120.23 /122.89 ms | Yes for sampled ages |
+| Matched traffic and fields (§6(3)) | Same runner/build/load; report setup, steady, bytes, attempts, scripts, Save | Eight steps; five hashes; fields and limits above | Measured with observer; no TLS/NIC/log measurement |
+| Recovery, forced barriers, churn (§6(4)) | No call loss/decryption/cleanup failure; N+1/drain; report forced latency | Two N+1 survivors; 26.04 ms drain; forced max 7.987 ms; one refusal; 0 call/decryption losses | Yes for async policy; strict audio exceptions above |
+| Contract failures / exact-history crash proof (§6(1–2)) | Fault injection and exact committed history across recording/wait/playback | This traffic run checks surviving calls and fixture restore, not exact history equality | NOT-RUN by this run; separate evidence required |
+| Managed durable Cluster (§6(5)) | Separate approval; failover, redirects, TLS, loaded gates | Standalone loopback Redis only | NOT-RUN |
+
+The ADR's protocol saving assumed old six-key lists. The current same-build
+before arm already uses two commit keys and lease-only clock/reservation keys;
+there is no further clock/reservation key-list saving to realize. This is an
+inapplicable historical projection, not a measured default-cap violation.
+Using exactly the observer's ordinary after media window (steady plus move),
+wire is 95,854.01 B/call-second and published values are 38,449.19, leaving
+**57,404.82 B/call-second** for all other protocol/clients. This conservative
+residual includes RESP, commands, metadata outside publication and framing
+that admission may already reserve; it is not an isolated script-overhead
+measurement. It exceeds the ADR's `31,371+3,256+12,757+800 = 48,184`
+non-payload estimate by **9,220.82 B/s**, beyond its **2,888 B/s** spare.
+An 80,000 B/s payload at that residual would total **137,404.82 B/s**, exceeding
+the unchanged 131,072 B/s gate by **6,332.82 B/s**. This arithmetic extrapolates
+from this fixture; it does not show that the measured workload failed.
+
+**Candidate allocation for a separate review/run, not a default change:**
+70,000 payload B/s and 6,144 hot B/checkpoint, retaining 40,960 B burst and the
+existing app/setup/history/transaction limits. The measured residual leaves
+`131,072−57,404.82−2,888 = 70,779.18 B/s`; rounding down to 70,000 leaves
+3,667.18 B/s gate headroom. The paired hot cap is necessary because
+`11×7,168 =78,848 >70,000`; `11×6,144 =67,584` leaves 2,416 B/s for cold writes.
+A full framed history once/5 s costs at most `8,448/5 =1,689.6 B/s`, leaving
+726.4 B/s under that reserved pattern. The observed largest hot publication
+plus framing reserve was `4,696+78 =4,774 B`, below 6,144. However, the ADR's
+unmeasured 6,966 B worst-case estimate would exceed this smaller hot cap. This
+candidate narrows the admitted encoded envelope and needs a full-size/worst-case
+codec and hosted traffic run before adoption. Keep activation conditional on
+that proof or a separately demonstrated overhead reduction; do not raise the
+100-command/128-KiB ceilings or infer capacity from byte savings.
+
+No runtime code or defaults changed for this write-up. No tooling defect requiring
+a repeat of run 39441746025 was identified. A new run is needed to approve any
+revised allocation or full-limit projection, and a suitable workload-specific
+audio check is needed before making strict audio-continuity claims. The current
+run alone does not close the ADR's other crash/managed-store/activation gates.
+
 ## Final hosted Linux run 38147888686
 
 [Run 38147888686](https://github.com/relaishq/relais/actions/runs/38147888686),
