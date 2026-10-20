@@ -23,3 +23,22 @@ func (s *session) measuredSave(ctx context.Context, app agent.Agent) (agent.Stat
 	}
 	return state, err
 }
+
+// Application Save and host admission are distinct costs. Timers and thread
+// clock reads add measurement overhead to both matched arms.
+func (s *session) measureAdmission() func() {
+	finishCPU := beginSaveCPU()
+	started := time.Now()
+	return func() {
+		wall := time.Since(started)
+		cpu, known := finishCPU()
+		m := &s.worker.metrics
+		m.admissionCalls.Add(1)
+		m.admissionWallNS.Add(uint64(wall))
+		if known {
+			m.admissionCPUNS.Add(cpu)
+		} else {
+			m.admissionCPUUnknown.Add(1)
+		}
+	}
+}

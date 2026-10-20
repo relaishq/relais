@@ -7,7 +7,11 @@ on:
         description: Calibration, capacity, soak, or both ramps (separate jobs)
         default: 'calibration'
         type: choice
-        options: [calibration, capacity, custom-capacity, both, soak]
+        options: [calibration, capacity, custom-capacity, split-capacity, both, soak]
+      split_callers:
+        description: Fixed concurrent calls in every matched split-capacity sample (1..16)
+        default: '2'
+        type: string
       save_cpu_us:
         description: Custom gate operator Save CPU budget in microseconds per Handle event
         default: '1000'
@@ -309,6 +313,58 @@ jobs:
           name: custom-capacity-linux-${{ github.run_id }}
           path: |
             bin/custom-capacity-*
+            bin/load-run-*
+          if-no-files-found: warn
+          retention-days: 14
+
+
+  split-capacity:
+    name: Matched split checkpoint traffic on one runner
+    # Manual only. No schedules, required CI, release or paid runner dependencies.
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'split-capacity'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install disposable process topology dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg procps
+      - name: Build once and record exact runner and binaries
+        run: |
+          make build
+          { uname -a; lscpu; go version; git rev-parse HEAD; sha256sum bin/relais-load bin/relais-worker bin/delayed-loopback bin/relais-relay bin/relais-control; } > bin/split-capacity-build.txt
+      - name: Run all matched arms and split recovery scenarios on this runner
+        timeout-minutes: 30
+        env:
+          SAMPLE_DURATION: ${{ inputs.duration || '30s' }}
+          SAMPLE_CALLS: ${{ inputs.split_callers || '2' }}
+        run: |
+          ./bin/relais-load -split-capacity -topology=loopback -workers=3 \
+            -callers="$SAMPLE_CALLS" -processes="$SAMPLE_CALLS" -gomaxprocs=1 \
+            -duration="$SAMPLE_DURATION" -output=bin/split-capacity-linux.json \
+            > bin/split-capacity-linux.log 2>&1
+      - name: Report all gates and verify cleanup
+        if: always()
+        env:
+          SAVE_CPU_US: ${{ inputs.save_cpu_us || '1000' }}
+          SAVE_WALL_US: ${{ inputs.save_wall_us || '1000' }}
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          if [ -f bin/split-capacity-linux.log ]; then cat bin/split-capacity-linux.log; fi
+          python3 -m unittest discover -s scripts/ci -p 'test_*capacity_report.py'
+          python3 scripts/ci/custom-capacity-report.py bin/split-capacity-linux.json \
+            --save-cpu-us="$SAVE_CPU_US" --save-wall-us="$SAVE_WALL_US"
+      - name: Upload raw JSON, process logs, runner and gate report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: split-capacity-linux-${{ github.run_id }}
+          path: |
+            bin/split-capacity-*
             bin/load-run-*
           if-no-files-found: warn
           retention-days: 14

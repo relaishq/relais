@@ -21,6 +21,7 @@ import (
 )
 
 type Target struct {
+	CheckpointOnly           bool
 	AgentSessions            []string
 	Name, URL                string
 	RedisAddr, RedisPassword string
@@ -69,6 +70,8 @@ type Telemetry struct {
 	Errors        []string     `json:"errors,omitempty"`
 }
 type Monitor struct {
+	mu        sync.RWMutex
+	sampleMu  sync.Mutex
 	agentDone chan struct{}
 	memory    bool
 	targets   []Target
@@ -135,6 +138,10 @@ func start(ctx context.Context, targets []Target, every time.Duration, memory bo
 	return m
 }
 func (m *Monitor) sample(ctx context.Context) {
+	m.sampleMu.Lock()
+	defer m.sampleMu.Unlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	var wg sync.WaitGroup
 	for i, t := range m.targets {
 		wg.Add(1)
@@ -348,6 +355,8 @@ func redisResources(ctx context.Context, client *redis.Client) (map[string]float
 // discarded. The last complete pre-fault window remains visible, up to one
 // sampling interval before the actual fault; it never estimates later CPU.
 func (m *Monitor) Retire(name string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	for i, t := range m.targets {
 		if t.Name == name {
 			select {
@@ -389,3 +398,22 @@ func normalizeProcess(p *Process, callers int, windowSeconds float64) []string {
 
 	return problems
 }
+
+// AddWorker samples a new worker incarnation without dropping the preceding
+// incarnation's counters or restarting the shared media-window denominator.
+func (m *Monitor) AddWorker(target Target) error {
+	if !strings.HasPrefix(target.Name, "worker-") || target.URL == "" || target.RedisAddr != "" {
+		return errors.New("monitor addition requires an HTTP worker")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.targets = append(m.targets, target)
+	m.stores = append(m.stores, nil)
+	m.retired = append(m.retired, atomic.Bool{})
+	m.data.Processes = append(m.data.Processes, Process{RSSKind: "lifetime_peak", Name: target.Name, PID: target.PID, Peaks: map[string]float64{}})
+	return nil
+}
+
+// SampleNow retains final counters after a planned drain, before retiring the
+// still-live worker. It serializes with periodic resource scrapes.
+func (m *Monitor) SampleNow(ctx context.Context) { m.sample(ctx) }

@@ -276,3 +276,79 @@ gh workflow run load-calibration.yml --repo relaishq/relais --ref main \
 
 See [capacity-results.md](capacity-results.md) for the hosted observations and
 their limits. Re-run after a change to the product default or acceptance gates.
+
+## Matched split-checkpoint measurement
+
+Manual `mode=split-capacity` runs eight samples in one `ubuntu-latest` job.
+It builds once, then runs history before/after and echo before/after back to
+back at the same fixed call count, bitrate, relay buffers and duration.
+The history baseline uses the documented Demo A legacy operator overrides
+(24,576 B snapshot, 270,336 B/s, 98,304 B burst) and an 8 KiB app declaration.
+The split arm uses the product defaults and `-agent-split-checkpoints`.
+This measures a fixed load on one runner. It does not establish a capacity
+limit, independent-host topology, managed-store durability or NIC/log traffic.
+The selected topology is separate processes over loopback on both platforms.
+
+`split_callers` selects 1..16 calls (default 2). `duration` selects 20..60 seconds
+(default 30) per sample; rolling rotation has at least 65 seconds. One generator
+per call keeps the hosted caller load fixed. The job has a 40-minute limit and
+a 30-minute measurement-step limit. The orchestrator dispatches it after push:
+
+```sh
+gh workflow run load-calibration.yml --repo relaishq/relais --ref BRANCH \
+  -f mode=split-capacity -f split_callers=2 -f duration=30s
+```
+
+The keyless `delayed-loopback history` fixture changes 2,871 B of working JSON
+on each audio input (nominally 50/s). Its four exchanges contain 512 B per side:
+4,205 B history, updated once per 250 inputs (nominally five seconds). Legacy
+Save holds 7,087 B inline. Split Save holds 2,871 B in Bytes and 4,205 B in
+History. The fixture retains the original delayed audio loopback behavior.
+A keyless no-op SideEffecting task once per turn exercises the forced checkpoint
+barrier; it performs no external effect. The churn variant attempts history
+changes on each input after input 400; a Capacity callback acknowledges refusal
+without retrying the rejected history or ending the call. Actual accepted
+component write rates, refusal counts and sampled input progress are recorded.
+
+Every sample owns a fresh Redis on a free non-6379 port. An opt-in plaintext
+RESP proxy counts exact client request/reply frames, attempts, failures, script
+loads, all declared commit key arguments and per-component ciphertext lengths.
+A separate Redis MONITOR stream counts actual HSET field names and value lengths,
+including Lua's setup, checkpoint and lease metadata. It retains lengths only.
+Both arms pay the same observation overhead; MONITOR traffic and direct driver
+INFO, inventory and cleanup reads are excluded from application byte budgets.
+The setup (connection plus pre-window warmup), steady, planned move, rotation,
+hangup and cleanup phases are separate. Each matched traffic sample includes
+one identical planned move probe; its Redis request/reply traffic has its own
+phase and stays in the complete media-window gate. One-second bins
+show rotation bursts; they do not establish a per-second burst allowance.
+Per-client session/frame/owners rates still come from the application wire
+counters. Successful component sizes exclude failed writes, while protocol
+traffic includes every observed failed attempt and script body. Warm EVAL body submissions are counted separately
+from actual SCRIPT LOAD commands and NOSCRIPT replies. Internal Redis script
+compilation/cache-hit counts are not inferred from a warm EVAL submission. A second traffic gate
+amortizes **all** observed lifecycle requests/replies (including setup, cold
+loads, hangup and the standard cleanup wait) over the sample's media call-seconds.
+This keeps out-of-window script traffic in the gate without hiding the separate
+setup and steady measurements.
+
+The split-only samples add history-churn refusal, rolling master-key rotation
+through planned drain/replacement, N+1 SIGKILL recovery followed by a planned move on the survivors, and a separate drain.
+All workers and control initially read both keys; replacement workers make key 2
+active and retain key 1 for decryption. The authenticated live-tuple inventory
+must count exactly five new-key references per call and zero old-key references.
+The harness records every drain, takeover, replacement rejoin and final live
+owner count. Cleanup checks session/component absence after the standard relay wait, bounded retained metadata,
+owned process exit and released listeners before the owned Redis stops.
+
+`scripts/ci/custom-capacity-report.py` also accepts the resulting split report.
+It retains an over-budget legacy baseline as an observation and blocks every
+other service failure. Split measurements retain the 100 commands, 128 KiB
+request+reply/call-second, 550 ms p99 checkpoint **and** snapshot age, generator,
+loss, decryption and cleanup gates. Max ages are reported separately.
+Application Save and host state admission have separate wall/thread CPU counters.
+Timing adds overhead to both arms. Mac thread CPU is unavailable and explicitly
+blocks hosted approval. The workflow uploads raw JSON, every child log, exact
+binary hashes, runner details and the gate report even on failure. Phase-two
+results and ADR projection comparisons belong in `capacity-results.md` only
+after the hosted artifacts are available.

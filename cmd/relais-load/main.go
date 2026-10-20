@@ -31,6 +31,8 @@ import (
 )
 
 type config struct {
+	Study                                         *splitObservation
+	SplitCapacity                                 bool
 	Worker                                        workerdriver.Options
 	Soak                                          bool
 	ChaosInterval                                 time.Duration
@@ -351,7 +353,7 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 			report.Causes = append(report.Causes, runErr.Error())
 		}
 	}()
-	t, err := startTopology(ctx, m, c.Bin, dir, c.Workers, c.Topology, c.Worker)
+	t, err := startConfiguredTopology(ctx, m, c.Bin, dir, c.Workers, c.Topology, c.Worker, c.Study != nil)
 	if err != nil {
 		return report, err
 	}
@@ -421,6 +423,9 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 			return report, err
 		}
 	}
+	if c.Study != nil {
+		c.Study.SetupFinishedAt = time.Now()
+	}
 	report.StartedAt = time.Now().Add(time.Second)
 	for _, g := range generators {
 		if err := request(ctx, http.MethodPost, g.url+"/start", loadgen.StartRequest{At: report.StartedAt}, nil); err != nil {
@@ -429,6 +434,9 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 	}
 	if err := waitUntil(ctx, report.StartedAt); err != nil {
 		return report, err
+	}
+	if c.Study != nil {
+		t.Observer.mark("steady")
 	}
 	if c.Soak {
 		t.Soak = startSoakExecution(ctx, t, c.SampleEvery)
@@ -444,6 +452,11 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 				report.Telemetry = monitor.Finish(c.Callers)
 			}
 		}()
+	}
+	if c.Study != nil && c.Study.Scenario == "rotation" {
+		if err := runStudyRotation(ctx, t, generators, c, &report); err != nil {
+			return report, err
+		}
 	}
 	for _, e := range c.Events {
 		if err := waitUntil(ctx, report.StartedAt.Add(e.After)); err != nil {
@@ -465,21 +478,40 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 				}
 			}
 		} else {
+			if c.Study != nil {
+				t.Observer.mark(e.Kind)
+			}
 			report.Events = append(report.Events, runEvent(ctx, t, generators, e))
+			if c.Study != nil {
+				t.Observer.mark("steady")
+			}
+		}
+	}
+	if c.Study != nil {
+		if err := waitUntil(ctx, report.StartedAt.Add(c.Duration-2*time.Second)); err != nil {
+			return report, err
+		}
+		if err := observeStudySurvivors(ctx, t, c); err != nil {
+			return report, err
 		}
 	}
 	if c.Capacity {
 		if err := waitUntil(ctx, report.StartedAt.Add(c.Duration)); err != nil {
 			return report, err
 		}
-		report.Telemetry = monitor.Finish(c.Callers)
-		monitor = nil
+		if monitor != nil {
+			report.Telemetry = monitor.Finish(c.Callers)
+			monitor = nil
+		}
 		report.WorkerPeaks = map[string]int{}
 		for _, p := range report.Telemetry.Processes {
 			if strings.HasPrefix(p.Name, "worker-") {
-				report.WorkerPeaks[p.Name] = int(p.Peaks["relais_worker_active_sessions"])
+				report.WorkerPeaks[p.Name] = max(report.WorkerPeaks[p.Name], int(p.Peaks["relais_worker_active_sessions"]))
 			}
 		}
+	}
+	if c.Study != nil {
+		t.Observer.mark("hangup")
 	}
 	for _, g := range generators {
 		select {
@@ -491,6 +523,11 @@ func execute(ctx context.Context, m *clusterprocess.Manager, c config, dir strin
 	if c.Soak {
 		report.Telemetry = t.Soak.finish(c.Callers, c.Duration)
 		report.Leaks = t.checkSoakLeaks(generators)
+	}
+	if c.Study != nil {
+		t.Observer.mark("cleanup")
+		report.Leaks = t.checkSoakLeaks(generators)
+		c.Study.Store = t.Trace
 	}
 	return report, nil
 }
@@ -569,6 +606,7 @@ func runArgs(args []string) error {
 	fs.Int64Var(&c.Seed, "seed", 41, "reproducible soak schedule and caller start-offset seed")
 	fs.IntVar(&c.WorkerFloor, "worker-floor", 8, "measured per-worker call floor; supply matching capacity evidence")
 	fs.IntVar(&c.RelayFloor, "relay-floor", 8, "measured relay call floor; supply matching capacity evidence")
+	fs.BoolVar(&c.SplitCapacity, "split-capacity", false, "matched legacy/split traffic and recovery on one runner")
 	fs.BoolVar(&c.Capacity, "capacity", false, "bounded service ramps followed by derived N+1 kill/move and drain")
 	fs.StringVar(&c.Topology, "topology", "loopback", "loopback or Linux netns (unshaped LAN)")
 	fs.IntVar(&c.CapacityStart, "capacity-start", 2, "first concurrent-call step")
@@ -661,6 +699,13 @@ func runArgs(args []string) error {
 		}
 	}
 	c.Events = []loadgen.Event(events)
+	if c.SplitCapacity && !flagWasSet(fs, "callers") {
+		c.Callers = 2
+	}
+	if c.SplitCapacity && (c.Capacity || c.Soak || c.Calibrate || len(events) > 0 || c.Topology == "netns" || c.Worker.Binary != "" || c.Worker.Agent != "" || len(c.Worker.Args) > 0 || c.Worker.Subcommand != "" || c.Callers < 1 || c.Callers > 16 || c.Callers > 4*c.Processes || c.StoreOpsBudget != 100 || c.StoreBytesBudget != 128<<10 || !c.Video || c.Workers != 3 || c.Duration < 20*time.Second || c.Duration > 60*time.Second || c.SampleEvery != time.Second || c.Limits != loadgen.DefaultLimits()) {
+		return errors.New("split-capacity needs 1..16 callers, three workers, loopback topology, 20s..60s duration, 1s samples, unchanged limits and no other mode/events/worker overrides")
+	}
+
 	if c.Soak {
 		if len(c.Events) > 0 {
 			return errors.New("soak generates its own seeded schedule; custom events are forbidden")
@@ -708,6 +753,9 @@ func runArgs(args []string) error {
 	m := &clusterprocess.Manager{}
 	ctx, stop := m.Context()
 	defer stop()
+	if c.SplitCapacity {
+		return runSplitCapacity(ctx, m, c, root)
+	}
 	if c.Soak {
 		return runSoak(ctx, m, c, root)
 	}

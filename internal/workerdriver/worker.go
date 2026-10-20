@@ -9,9 +9,14 @@ import (
 	"strings"
 )
 
-type Options struct{ Binary, Agent string }
+type Options struct {
+	Binary, Agent, Subcommand string
+	Args                      []string
+}
 
 func (o *Options) Flags(fs *flag.FlagSet) {
+	fs.StringVar(&o.Subcommand, "worker-subcommand", "", "optional worker subcommand")
+	fs.Func("worker-arg", "repeatable worker argument", func(value string) error { o.Args = append(o.Args, value); return nil })
 	fs.StringVar(&o.Binary, "worker-bin", "", "worker executable path (requires -agent; default relais-worker in -bin)")
 	fs.StringVar(&o.Agent, "agent", "", "worker agent name (required with -worker-bin; default stock worker's default)")
 }
@@ -28,11 +33,15 @@ func (o Options) Path(bin string) string {
 
 // Command preserves the stock command exactly when both overrides are unset.
 func (o Options) Command(bin string, args ...string) []string {
-	result := append([]string{o.Path(bin)}, args...)
+	result := []string{o.Path(bin)}
+	if o.Subcommand != "" {
+		result = append(result, o.Subcommand)
+	}
+	result = append(result, args...)
 	if o.Agent != "" {
 		result = append(result, "-agent", o.Agent)
 	}
-	return result
+	return append(result, o.Args...)
 }
 
 // IsCustom classifies application semantics by agent identity, never by binary path.

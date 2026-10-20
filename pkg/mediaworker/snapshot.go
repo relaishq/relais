@@ -176,6 +176,21 @@ func (s *session) persistSnapshotMode(parent context.Context, force bool) error 
 }
 
 func (s *session) persistSnapshotBudget(parent context.Context, force, intent bool) error {
+	forcedStarted := time.Now()
+	measuredForced := false
+	defer func() {
+		if measuredForced {
+			ns := uint64(time.Since(forcedStarted))
+			s.worker.metrics.forcedWallNS.Add(ns)
+			for {
+				old := s.worker.metrics.forcedMaxNS.Load()
+				if ns <= old || s.worker.metrics.forcedMaxNS.CompareAndSwap(old, ns) {
+					break
+				}
+			}
+		}
+	}()
+
 	if s.worker.cfg.Relay == nil {
 		return nil
 	}
@@ -230,6 +245,7 @@ func (s *session) persistSnapshotBudget(parent context.Context, force, intent bo
 	s.state.Checkpoint.Attempts++
 	if v2 && intent {
 		s.worker.metrics.forcedAttempts.Add(1)
+		measuredForced = true
 	}
 	s.mu.Unlock()
 	captured, err := s.worker.cfg.Relay.Owners.Clock(ctx, s.id)

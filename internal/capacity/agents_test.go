@@ -2,12 +2,14 @@ package capacity
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,4 +49,52 @@ func TestAgentSamplerRetirementDuringRequest(t *testing.T) {
 	cancel()
 	<-done
 	require.Empty(t, m.data.Agents.Errors)
+}
+
+func TestWorkerIncarnationKeepsCountersAndAgeSampling(t *testing.T) {
+	var count atomic.Uint64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/status" {
+			_, _ = w.Write([]byte(`{"agent_session":{"id":"session","name":"custom/v1","checkpoint_known":true}}`))
+			return
+		}
+		value := count.Add(1)
+		_, _ = fmt.Fprintf(w, "# TYPE relais_process_cpu_seconds_total counter\nrelais_process_cpu_seconds_total %d\n# TYPE relais_process_rss_peak_bytes gauge\nrelais_process_rss_peak_bytes 100\n# TYPE relais_events_total counter\nrelais_events_total %d\n", value, value)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	target := Target{Name: "worker-0", URL: server.URL, AgentSessions: []string{"session"}, PID: 1}
+	m := Start(ctx, []Target{target}, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return count.Load() >= 2 }, 2*time.Second, 10*time.Millisecond)
+	m.Retire("worker-0")
+	target.PID = 2
+	require.NoError(t, m.AddWorker(target))
+	before := count.Load()
+	require.Eventually(t, func() bool { return count.Load() >= before+2 }, 2*time.Second, 10*time.Millisecond)
+	result := m.Finish(1)
+	require.Len(t, result.Processes, 2)
+	require.Equal(t, 1, result.Processes[0].PID)
+	require.Equal(t, 2, result.Processes[1].PID)
+	require.False(t, result.Processes[0].UnexpectedExit)
+	require.Empty(t, result.Errors)
+	require.Empty(t, result.Agents.Errors)
+	require.NotEmpty(t, result.Agents.Samples)
+	require.Error(t, m.AddWorker(Target{Name: "store"}))
+}
+
+func TestPlannedDrainCapturesFinalExportBeforeRetirement(t *testing.T) {
+	var peak atomic.Uint64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, "# TYPE relais_process_cpu_seconds_total counter\nrelais_process_cpu_seconds_total 1\n# TYPE relais_process_rss_peak_bytes gauge\nrelais_process_rss_peak_bytes 100\n# TYPE relais_worker_export_http_peak_bytes gauge\nrelais_worker_export_http_peak_bytes %d\n", peak.Load())
+	}))
+	defer server.Close()
+	m := &Monitor{targets: []Target{{Name: "worker-0", URL: server.URL}}, stores: []*redis.Client{nil}, retired: make([]atomic.Bool, 1), client: server.Client(), data: Telemetry{Processes: []Process{{Name: "worker-0", Peaks: map[string]float64{}}}}}
+	m.SampleNow(context.Background())
+	peak.Store(4096) // Drain completed since the last periodic observation.
+	m.SampleNow(context.Background())
+	m.Retire("worker-0")
+	require.EqualValues(t, 4096, m.data.Processes[0].Peaks["relais_worker_export_http_peak_bytes"])
+	require.Equal(t, 2, m.data.Processes[0].Samples)
+	require.True(t, m.retired[0].Load())
 }
