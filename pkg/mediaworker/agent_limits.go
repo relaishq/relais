@@ -258,6 +258,7 @@ func (s *session) checkSnapshotSize(data []byte) error {
 // Before DTLS exists no ciphertext can be emitted or checkpointed; the first
 // established capture enforces the full cap before starting the v2 actor.
 func (s *session) admissionSnapshot(candidate agentState) (int, error) {
+	defer s.measureAdmission()()
 	data, err := s.captureAdmissionSnapshot(candidate)
 	if err != nil {
 		if err == ErrNotEstablished {

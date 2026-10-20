@@ -412,12 +412,6 @@ func testDemoAHistoryCut(t *testing.T, cut string) {
 		if cut == "uncommitted" {
 			proxy.pause()
 			close(fixture.release)
-			// The private status is the host's accepted state, not a Save witness.
-			require.Eventually(t, func() bool {
-				s, _, ok := status(source)
-				return ok && s.Phase == "synthesizing" && strings.Contains(s.Reply, "turn-5")
-			}, 3*time.Second, 2*time.Millisecond)
-			acceptedAt := time.Now()
 			var local agent.State
 			var candidateAt time.Time
 			require.Eventually(t, func() bool {
@@ -431,18 +425,30 @@ func testDemoAHistoryCut(t *testing.T, cut string) {
 				default:
 				}
 				return false
-			}, time.Second, 2*time.Millisecond)
-			state, _, ok := status(source)
-			require.True(t, ok)
-			accepted, err := json.Marshal(state)
-			require.NoError(t, err)
-			require.JSONEq(t, string(local.Bytes), string(accepted), "candidate Save is now the host's locally accepted state")
+			}, 3*time.Second, 2*time.Millisecond)
+			var candidate voice.State
+			require.NoError(t, json.Unmarshal(local.Bytes, &candidate))
+			require.Equal(t, "turn-5", candidate.Transcript)
+			require.Equal(t, "synthesizing", candidate.Phase)
+			// A later accepted phase proves the history-appending callback was accepted.
+			// Render/playback cursors can already have advanced beyond its first Save.
+			require.Eventually(t, func() bool {
+				state, _, ok := status(source)
+				if !ok || state.Turn != candidate.Turn || state.Transcript != candidate.Transcript || state.Reply != candidate.Reply {
+					return false
+				}
+				return state.Phase == "synthesizing" || state.Phase == "playing" || (state.Phase == "idle" && state.Outcome == agent.OK)
+			}, 3*time.Second, 2*time.Millisecond)
+			acceptedAt := time.Now()
 			require.NotEqual(t, expectedHistory, local.History)
 			var newer []voice.Exchange
 			require.NoError(t, json.Unmarshal(local.History, &newer))
 			require.Len(t, newer, 4)
 			require.Equal(t, "turn-5", newer[3].User)
 			require.False(t, candidateAt.IsZero(), "candidate Save must carry its actual observation time")
+			// Requests received before this Save cannot contain the candidate. Let
+			// them finish so an older blocked checkpoint cannot stall its successor.
+			proxy.allowBefore(candidateAt)
 			heldCtx, stopHeld := context.WithTimeout(ctx, 2*time.Second)
 			heldAt, err := proxy.heldAfter(heldCtx, candidateAt)
 			stopHeld()
@@ -457,9 +463,17 @@ func testDemoAHistoryCut(t *testing.T, cut string) {
 				t.Fatal("checkpoint observation window cancelled")
 			}
 			t.Logf("gate held a source write %s after candidate Save; store observed after %s of local acceptance", heldAt.Sub(candidateAt), time.Since(acceptedAt))
+			// Observe again after the checkpoint window. Only the turn and its text
+			// identify this history update; working progress may keep changing.
+			state, _, ok := status(source)
+			require.True(t, ok)
+			require.Equal(t, candidate.Turn, state.Turn)
+			require.Equal(t, candidate.Transcript, state.Transcript)
+			require.Equal(t, candidate.Reply, state.Reply)
+			t.Logf("accepted candidate turn=%d; later working phase=%s render_cursor=%d", state.Turn, state.Phase, state.RenderCursor)
 			tuple, err := store.ReadComponents(ctx, call.SessionID())
 			require.NoError(t, err)
-			require.Equal(t, before.Components.History, tuple.Components.History, "newer local acceptance has not committed")
+			require.Equal(t, before.Components.History, tuple.Components.History, "newer local history acceptance has not committed")
 		}
 	}
 	require.NoError(t, source.cmd.Process.Kill())
@@ -609,6 +623,8 @@ type historyStoreGate struct {
 	listener    net.Listener
 	mu          sync.Mutex
 	paused      bool
+	passBefore  time.Time
+	changed     chan struct{}
 	held        chan time.Time
 	connections []net.Conn
 	done        chan struct{}
@@ -620,7 +636,7 @@ func newHistoryStoreGate(t *testing.T, upstream string) *historyStoreGate {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	g := &historyStoreGate{addr: l.Addr().String(), listener: l, done: make(chan struct{}), held: make(chan time.Time, 16)}
+	g := &historyStoreGate{addr: l.Addr().String(), listener: l, done: make(chan struct{}), held: make(chan time.Time, 16), changed: make(chan struct{})}
 	g.wg.Add(1)
 	go func() {
 		defer g.wg.Done()
@@ -659,6 +675,16 @@ func newHistoryStoreGate(t *testing.T, upstream string) *historyStoreGate {
 }
 func (g *historyStoreGate) pause() { g.mu.Lock(); g.paused = true; g.mu.Unlock() }
 
+// allowBefore releases only requests received before the candidate Save. They
+// cannot contain that newer app state. Requests at/after the boundary stay held.
+func (g *historyStoreGate) allowBefore(before time.Time) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.passBefore = before
+	close(g.changed)
+	g.changed = make(chan struct{})
+}
+
 // heldAfter ignores writes already held before the candidate was saved. Each
 // timestamp is captured only when Write receives nonempty bytes while paused.
 func (g *historyStoreGate) heldAfter(ctx context.Context, after time.Time) (time.Time, error) {
@@ -696,16 +722,23 @@ type historyGateWriter struct {
 func (w *historyGateWriter) Write(b []byte) (int, error) {
 	arrivedAt := time.Now()
 	w.gate.mu.Lock()
-	if w.gate.paused {
-		if len(b) > 0 {
+	reported := false
+	for w.gate.paused && !arrivedAt.Before(w.gate.passBefore) {
+		if len(b) > 0 && !reported {
 			select {
 			case w.gate.held <- arrivedAt:
 			default:
 			}
+			reported = true
 		}
+		changed := w.gate.changed
 		w.gate.mu.Unlock()
-		<-w.gate.done
-		return 0, net.ErrClosed
+		select {
+		case <-w.gate.done:
+			return 0, net.ErrClosed
+		case <-changed:
+		}
+		w.gate.mu.Lock()
 	}
 	defer w.gate.mu.Unlock()
 	if err := w.dest.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
@@ -716,3 +749,39 @@ func (w *historyGateWriter) Write(b []byte) (int, error) {
 
 var _ voice.Provider = (*localHistoryProvider)(nil)
 var _ agent.MoveOnlyState = (*observedVoice)(nil)
+
+func TestHistoryStoreGateReleasesOnlyPreCandidateWrites(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+	proxy := newHistoryStoreGate(t, listener.Addr().String())
+	client, err := net.Dial("tcp", proxy.addr)
+	require.NoError(t, err)
+	defer func() { _ = client.Close() }()
+	server, err := listener.Accept()
+	require.NoError(t, err)
+	defer func() { _ = server.Close() }()
+	proxy.pause()
+	_, err = client.Write([]byte("prior"))
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	priorAt, err := proxy.heldAfter(ctx, time.Time{})
+	require.NoError(t, err)
+	candidateAt := time.Now()
+	require.True(t, priorAt.Before(candidateAt))
+	proxy.allowBefore(candidateAt)
+	require.NoError(t, server.SetReadDeadline(time.Now().Add(3*time.Second)))
+	prior := make([]byte, 5)
+	_, err = io.ReadFull(server, prior)
+	require.NoError(t, err)
+	require.Equal(t, "prior", string(prior))
+	_, err = client.Write([]byte("candidate"))
+	require.NoError(t, err)
+	_, err = proxy.heldAfter(ctx, candidateAt)
+	require.NoError(t, err)
+	proxy.close()
+	remaining, err := io.ReadAll(server)
+	require.NoError(t, err)
+	require.Empty(t, remaining, "candidate bytes must be discarded without reaching the store")
+}

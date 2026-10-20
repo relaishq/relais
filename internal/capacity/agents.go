@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,63 +34,70 @@ func (m *Monitor) sampleAgents(ctx context.Context) {
 	// search only then. No Redis reads or application callbacks are performed.
 	owners := map[string]int{}
 	ids := map[string]bool{}
+	m.mu.RLock()
 	for _, target := range m.targets {
 		for _, id := range target.AgentSessions {
 			ids[id] = true
 		}
 	}
+	m.mu.RUnlock()
 	m.data.Agents.IntervalMS = 100
 	tick := time.NewTicker(100 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		for id := range ids {
-			found := false
-			first, known := owners[id]
-			order := []int{}
-			if known {
-				order = append(order, first)
-			}
-			for i, t := range m.targets {
-				if strings.HasPrefix(t.Name, "worker-") && (!known || i != first) {
-					order = append(order, i)
+		func() {
+			m.mu.RLock()
+			targets := slices.Clone(m.targets)
+			m.mu.RUnlock()
+			for id := range ids {
+				found := false
+				first, known := owners[id]
+				order := []int{}
+				if known {
+					order = append(order, first)
+				}
+				for i, t := range targets {
+					if strings.HasPrefix(t.Name, "worker-") && (!known || i != first) {
+						order = append(order, i)
+					}
+				}
+				for _, i := range order {
+					if m.agentTargetRetired(i) {
+						continue
+					}
+					t := targets[i]
+					endpoint := t.URL + "/status?agent-session=" + url.QueryEscape(id)
+					m.data.Agents.Requests++
+					status, code, err := readAgentStatus(ctx, m.client, endpoint)
+					// A deliberate SIGKILL can race an in-flight request. Its result
+					// belongs to the retired owner and cannot invalidate the new owner.
+					if m.agentTargetRetired(i) {
+						continue
+					}
+					if ctx.Err() != nil {
+						return
+					}
+					if code == http.StatusConflict {
+						continue
+					}
+					if err != nil {
+						m.data.Agents.Errors = append(m.data.Agents.Errors, t.Name+": "+err.Error())
+						continue
+					}
+					if status == nil || status.ID != id || (status.Name == "" && !t.CheckpointOnly) || !status.CheckpointKnown {
+						m.data.Agents.Errors = append(m.data.Agents.Errors, t.Name+": missing custom-agent checkpoint diagnostic")
+						continue
+					}
+					owners[id] = i
+					m.data.Agents.Samples = append(m.data.Agents.Samples, AgentSample{At: time.Now(), Worker: t.Name, Status: *status})
+					found = true
+					break
+				}
+				if !found {
+					m.data.Agents.Missing++
 				}
 			}
-			for _, i := range order {
-				if m.retired[i].Load() {
-					continue
-				}
-				t := m.targets[i]
-				endpoint := t.URL + "/status?agent-session=" + url.QueryEscape(id)
-				m.data.Agents.Requests++
-				status, code, err := readAgentStatus(ctx, m.client, endpoint)
-				// A deliberate SIGKILL can race an in-flight request. Its result
-				// belongs to the retired owner and cannot invalidate the new owner.
-				if m.retired[i].Load() {
-					continue
-				}
-				if ctx.Err() != nil {
-					return
-				}
-				if code == http.StatusConflict {
-					continue
-				}
-				if err != nil {
-					m.data.Agents.Errors = append(m.data.Agents.Errors, t.Name+": "+err.Error())
-					continue
-				}
-				if status == nil || status.ID != id || status.Name == "" || !status.CheckpointKnown {
-					m.data.Agents.Errors = append(m.data.Agents.Errors, t.Name+": missing custom-agent checkpoint diagnostic")
-					continue
-				}
-				owners[id] = i
-				m.data.Agents.Samples = append(m.data.Agents.Samples, AgentSample{At: time.Now(), Worker: t.Name, Status: *status})
-				found = true
-				break
-			}
-			if !found {
-				m.data.Agents.Missing++
-			}
-		}
+		}()
 		select {
 		case <-ctx.Done():
 			return
@@ -97,6 +105,15 @@ func (m *Monitor) sampleAgents(ctx context.Context) {
 		}
 	}
 }
+
+// The target list only grows. Read the live retirement bit under the lock;
+// do not copy atomic.Bool values or hold the lock across an HTTP request.
+func (m *Monitor) agentTargetRetired(i int) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.retired[i].Load()
+}
+
 func readAgentStatus(ctx context.Context, client *http.Client, endpoint string) (*mediaworker.AgentSessionStatus, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

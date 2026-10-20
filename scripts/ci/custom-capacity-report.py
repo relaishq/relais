@@ -15,6 +15,17 @@ for budget in (args.save_cpu_us, args.save_wall_us):
     if not math.isfinite(budget) or budget <= 0:
         parser.error("operator Save budgets must be finite positive microseconds/event")
 data = json.loads(args.report.read_text())
+if data.get("kind") == "split-capacity":
+    from split_capacity_report import summarize
+    summary = summarize(data, args.save_cpu_us, args.save_wall_us)
+    text = json.dumps(summary, indent=2, allow_nan=False) + "\n"
+    args.report.with_suffix(".approval.json").write_text(text)
+    print(text, end="")
+    if os.getenv("GITHUB_STEP_SUMMARY"):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as output:
+            output.write("Matched split-capacity: " + summary["approval"] + "\n\n" + "\n".join("- " + reason for reason in summary["blocking"]) + "\n")
+    raise SystemExit(1 if summary["blocking"] else 0)
+
 blocking = []
 if data.get("outcome") != "pass" or not data.get("planned_load_validated"):
     blocking.append("capacity ramp / N+1 operating load is not validated")

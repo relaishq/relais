@@ -24,11 +24,20 @@ type customCapacityBuild struct {
 	OperatorBudgets map[string]int `json:"operator_budgets"`
 }
 type customCapacityEvidence struct {
-	Verdict                                         string   `json:"evidence_verdict"`
-	Blocking                                        []string `json:"blocking_approval,omitempty"`
-	AgeSamples                                      int      `json:"age_samples"`
-	CheckpointP99MS                                 float64  `json:"checkpoint_age_p99_ms"`
-	SnapshotP99MS                                   float64  `json:"snapshot_age_p99_ms"`
+	CheckpointMaxMS                                 float64            `json:"checkpoint_age_max_ms"`
+	SnapshotMaxMS                                   float64            `json:"snapshot_age_max_ms"`
+	AdmissionCalls                                  float64            `json:"admission_calls"`
+	AdmissionWallSeconds                            float64            `json:"admission_wall_seconds"`
+	AdmissionCPUSeconds                             float64            `json:"admission_cpu_seconds"`
+	AdmissionCPUUnavailable                         float64            `json:"admission_cpu_unavailable"`
+	ForcedWallSeconds                               float64            `json:"forced_wall_seconds"`
+	ForcedMaxMS                                     float64            `json:"forced_max_ms"`
+	Skips                                           map[string]float64 `json:"checkpoint_skips"`
+	Verdict                                         string             `json:"evidence_verdict"`
+	Blocking                                        []string           `json:"blocking_approval,omitempty"`
+	AgeSamples                                      int                `json:"age_samples"`
+	CheckpointP99MS                                 float64            `json:"checkpoint_age_p99_ms"`
+	SnapshotP99MS                                   float64            `json:"snapshot_age_p99_ms"`
 	Events, Saves                                   float64
 	SaveWallSecondsPerEvent                         float64 `json:"save_wall_seconds_per_event"`
 	SaveCPUSecondsPerEvent                          float64 `json:"save_cpu_seconds_per_event"`
@@ -102,6 +111,8 @@ func customEvidence(r loadgen.RunReport) *customCapacityEvidence {
 	coverage := map[string]int{}
 	for _, s := range ages.Samples {
 		coverage[s.Status.ID]++
+		e.CheckpointMaxMS = max(e.CheckpointMaxMS, s.Status.CheckpointAgeMS)
+		e.SnapshotMaxMS = max(e.SnapshotMaxMS, s.Status.SnapshotAgeMS)
 		checkpoints = append(checkpoints, s.Status.CheckpointAgeMS)
 		snapshots = append(snapshots, s.Status.SnapshotAgeMS)
 		e.MoveReservationPeakBytes = max(e.MoveReservationPeakBytes, s.Status.PendingBytes)
@@ -152,6 +163,8 @@ func customEvidence(r loadgen.RunReport) *customCapacityEvidence {
 		return last - first
 	}
 	var wall, cpu float64
+	e.Skips = map[string]float64{}
+	optionalDelta := func(p capacity.Process, name string) float64 { return max(0, p.Last[name]-p.First[name]) }
 	for _, p := range r.Telemetry.Processes {
 		for _, counters := range []map[string]float64{p.First, p.Last} {
 			for name, count := range counters {
@@ -164,6 +177,15 @@ func customEvidence(r loadgen.RunReport) *customCapacityEvidence {
 	for i, p := range r.Telemetry.Processes {
 		if !strings.HasPrefix(p.Name, "worker-") {
 			continue
+		}
+		e.AdmissionCalls += optionalDelta(p, "relais_worker_agent_admission_calls_total")
+		e.AdmissionWallSeconds += optionalDelta(p, "relais_worker_agent_admission_wall_nanoseconds_total") / 1e9
+		e.AdmissionCPUSeconds += optionalDelta(p, "relais_worker_agent_admission_cpu_nanoseconds_total") / 1e9
+		e.AdmissionCPUUnavailable += optionalDelta(p, "relais_worker_agent_admission_cpu_unavailable_total")
+		e.ForcedWallSeconds += optionalDelta(p, "relais_worker_agent_forced_checkpoint_wall_nanoseconds_total") / 1e9
+		e.ForcedMaxMS = max(e.ForcedMaxMS, p.Peaks["relais_worker_agent_forced_checkpoint_max_nanoseconds"]/1e6)
+		for _, reason := range []string{"budget", "interval"} {
+			e.Skips[reason] += optionalDelta(p, "relais_worker_agent_checkpoint_"+reason+"_skips_total")
 		}
 		e.Events += delta(i, "relais_worker_agent_events_total")
 		e.Saves += delta(i, "relais_worker_agent_save_calls_total")
@@ -209,11 +231,12 @@ func customEvidence(r loadgen.RunReport) *customCapacityEvidence {
 
 // Stock agents have no v2 diagnostics and must incur no private agent sampling.
 func configureAgentSamples(c config, targets []capacity.Target, generators []generator) {
-	if !workerdriver.IsCustom(c.Worker.Agent) {
+	if !workerdriver.IsCustom(c.Worker.Agent) && c.Study == nil {
 		return
 	}
 	for i := range targets {
 		if strings.HasPrefix(targets[i].Name, "worker-") {
+			targets[i].CheckpointOnly = !workerdriver.IsCustom(c.Worker.Agent)
 			for _, g := range generators {
 				targets[i].AgentSessions = append(targets[i].AgentSessions, g.sessions...)
 			}

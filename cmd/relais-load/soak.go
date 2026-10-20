@@ -835,7 +835,20 @@ func (t *topology) recycle(ctx context.Context, id int) error {
 	delete(t.Killed, id)
 	target := capacity.Target{Name: name, PID: child.PID(), URL: ready.HTTP, Done: child.Done(), Err: child.Err}
 	t.Targets = append(t.Targets, target)
-	t.Soak.add(target)
+	if t.Soak != nil {
+		t.Soak.add(target)
+	}
+	if t.Monitor != nil {
+		for _, old := range t.Targets {
+			if old.Name == name && len(old.AgentSessions) > 0 {
+				target.AgentSessions = old.AgentSessions
+				break
+			}
+		}
+		if err := t.Monitor.AddWorker(target); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -871,7 +884,7 @@ func (t *topology) checkSoakLeaks(generators []generator) loadgen.LeakReport {
 			// Only current incarnations still expose status; retired PIDs remain in
 			// the process inventory checked after all shutdowns.
 			id, _ := strconv.Atoi(strings.TrimPrefix(target.Name, "worker-"))
-			if t.Workers[id].PID() != target.PID {
+			if t.Killed[id] || t.Workers[id].PID() != target.PID {
 				continue
 			}
 			var worker mediaworker.WorkerStatus
@@ -892,6 +905,9 @@ func (t *topology) checkSoakLeaks(generators []generator) loadgen.LeakReport {
 		}
 	}
 	endpoints[t.RedisAddr] = "tcp"
+	if t.Observer != nil {
+		endpoints[t.Observer.listener.Addr().String()] = "tcp"
+	}
 	endpoints[t.External.RelayAddr.String()] = "udp"
 	for _, launch := range t.Launch {
 		for i, arg := range launch.Args {

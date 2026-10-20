@@ -9,23 +9,31 @@ import (
 // Lifetime observations survive local session removal and are never restored
 // from snapshots. This prevents counting a moved session's packets twice.
 type workerMetrics struct {
-	agentEvents                                                         atomic.Uint64
-	saveCalls, saveWallNS, saveCPUNS, saveCPUUnknown                    atomic.Uint64
-	forcedAttempts, forcedSuccesses, forcedFailures, snapshotDebitBytes atomic.Uint64
-	snapshotBudgetSkips, snapshotIntervalSkips                          atomic.Uint64
-	exportHTTPPeakBytes                                                 atomic.Uint64
-	packetsIn, packetsOut, decryptFailures                              atomic.Uint64
-	replayRejections                                                    atomic.Uint64
-	dtlsSequenceDrops                                                   atomic.Uint64
-	earlyPacketDrops                                                    atomic.Uint64
-	bytesIn, bytesOut                                                   atomic.Uint64
-	handovers, takeovers                                                atomic.Uint64
-	handoverErrors, takeoverErrors                                      atomic.Uint64
+	admissionCalls, admissionWallNS, admissionCPUNS, admissionCPUUnknown atomic.Uint64
+	forcedWallNS, forcedMaxNS                                            atomic.Uint64
+	agentEvents                                                          atomic.Uint64
+	saveCalls, saveWallNS, saveCPUNS, saveCPUUnknown                     atomic.Uint64
+	forcedAttempts, forcedSuccesses, forcedFailures, snapshotDebitBytes  atomic.Uint64
+	snapshotBudgetSkips, snapshotIntervalSkips                           atomic.Uint64
+	exportHTTPPeakBytes                                                  atomic.Uint64
+	packetsIn, packetsOut, decryptFailures                               atomic.Uint64
+	replayRejections                                                     atomic.Uint64
+	dtlsSequenceDrops                                                    atomic.Uint64
+	earlyPacketDrops                                                     atomic.Uint64
+	bytesIn, bytesOut                                                    atomic.Uint64
+	handovers, takeovers                                                 atomic.Uint64
+	handoverErrors, takeoverErrors                                       atomic.Uint64
 }
 
 func (w *Worker) metricSamples() []metrics.Sample {
 	a := w.AgentStats()
 	return []metrics.Sample{
+		metrics.Counter("relais_worker_agent_admission_calls_total", "State size/admission validations, including refused candidates.", w.metrics.admissionCalls.Load()),
+		metrics.Counter("relais_worker_agent_admission_wall_nanoseconds_total", "Wall time in state admission, separate from application Save.", w.metrics.admissionWallNS.Load()),
+		metrics.Counter("relais_worker_agent_admission_cpu_nanoseconds_total", "Linux thread CPU in state admission, separate from application Save.", w.metrics.admissionCPUNS.Load()),
+		metrics.Counter("relais_worker_agent_admission_cpu_unavailable_total", "Admission validations without thread CPU evidence.", w.metrics.admissionCPUUnknown.Load()),
+		metrics.Counter("relais_worker_agent_forced_checkpoint_wall_nanoseconds_total", "Forced intent checkpoint wall time from serialization lock wait through acknowledgement/failure.", w.metrics.forcedWallNS.Load()),
+		metrics.Gauge("relais_worker_agent_forced_checkpoint_max_nanoseconds", "Largest forced intent checkpoint wall duration in this worker lifetime.", int(w.metrics.forcedMaxNS.Load())),
 		metrics.Counter("relais_worker_agent_checkpoint_skips_total", "Checkpoint skips, including byte budget deferrals and SaveInterval coalescing; excludes store failures.", w.metrics.snapshotBudgetSkips.Load()+w.metrics.snapshotIntervalSkips.Load()),
 		metrics.Counter("relais_worker_agent_checkpoint_budget_skips_total", "Checkpoint skips due to byte budget or held history; excludes interval coalescing and store failures.", w.metrics.snapshotBudgetSkips.Load()),
 		metrics.Counter("relais_worker_agent_checkpoint_interval_skips_total", "Checkpoint skips due to SaveInterval coalescing; excludes budget deferrals and store failures.", w.metrics.snapshotIntervalSkips.Load()),
