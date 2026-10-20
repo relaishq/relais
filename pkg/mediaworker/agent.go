@@ -218,6 +218,8 @@ func restoreAgent(ctx context.Context, a agent.Agent, state agent.State) error {
 }
 
 func (s *session) validateAgentState(state agent.State) error {
+	defer s.measureAdmission()()
+
 	if state.Version == 0 {
 		return agent.ErrVersion
 	}

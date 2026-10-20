@@ -31,6 +31,9 @@ type workerLaunch struct {
 }
 
 type topology struct {
+	Trace                                 storeTrace
+	Observer                              *storeObserver
+	OldKey, NewKey                        [32]byte
 	Sentinel                              int
 	Rejoins                               []loadgen.WorkerRejoin
 	Launch                                map[int]*workerLaunch
@@ -49,11 +52,14 @@ type topology struct {
 
 // Owned loopback or Linux namespace topology. Caller attachment is separate
 // so only the media socket enters the caller namespace.
-func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir string, workers int, mode string, selections ...workerdriver.Options) (_ *topology, runErr error) {
+func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir string, workers int, mode string, selections ...workerdriver.Options) (*topology, error) {
 	var worker workerdriver.Options
 	if len(selections) > 0 {
 		worker = selections[0]
 	}
+	return startConfiguredTopology(ctx, m, bin, dir, workers, mode, worker, false)
+}
+func startConfiguredTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir string, workers int, mode string, worker workerdriver.Options, observe bool) (_ *topology, runErr error) {
 	t := &topology{Workers: map[int]*clusterprocess.Child{}, Launch: map[int]*workerLaunch{}, Manager: m, Dir: dir}
 	defer func() {
 		if runErr != nil {
@@ -108,7 +114,26 @@ func startTopology(ctx context.Context, m *clusterprocess.Manager, bin, dir stri
 		return nil, err
 	}
 	t.RedisAddr, t.RedisPassword, t.Prefix = addr, password, "relais:load:"+filepath.Base(dir)+":"
-	env := serviceEnv(hex.EncodeToString(key[:]), addr, t.Prefix)
+	if observe {
+		t.Prefix = "relais:load:matched:"
+	}
+	t.OldKey = key
+	serviceAddr := addr
+	if observe {
+		t.Sentinel = -1
+		if _, err := rand.Read(t.NewKey[:]); err != nil {
+			return nil, err
+		}
+		t.Observer, err = startStoreObserver(addr)
+		if err != nil {
+			return nil, err
+		}
+		serviceAddr = t.Observer.listener.Addr().String()
+	}
+	env := serviceEnv(hex.EncodeToString(key[:]), serviceAddr, t.Prefix)
+	if observe {
+		env = append(env, "RELAIS_SESSIONSTORE_KEY_ID=1", `RELAIS_SESSIONSTORE_OLD_KEYS={"2":"`+hex.EncodeToString(t.NewKey[:])+`"}`)
+	}
 	env = append(env, "RELAIS_REDIS_PASSWORD="+password)
 	if t.Network != nil {
 		env = append(env, "RELAIS_PRIVATE_NETS="+t.Network.Plan.PrivateNets())
@@ -234,8 +259,15 @@ func (t *topology) kill(worker int) error {
 }
 
 func (t *topology) close() error {
-	for i := len(t.processes) - 1; i >= 0; i-- {
+	for i := len(t.processes) - 1; i >= 1; i-- {
 		t.processes[i].Stop()
+	}
+	if t.Observer != nil {
+		t.Trace = t.Observer.close()
+		t.Observer = nil
+	}
+	if len(t.processes) > 0 {
+		t.processes[0].Stop()
 	}
 	if t.Network != nil {
 		return t.Network.Close()
