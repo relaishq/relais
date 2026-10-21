@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/redistestenv"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -32,7 +33,7 @@ type externalWorker struct {
 }
 
 func testExternalRegisteredCall(t *testing.T, binary string) {
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	if addr == "" {
 		t.Skip("external worker Run requires dedicated Redis; build and flags still checked")
 	}

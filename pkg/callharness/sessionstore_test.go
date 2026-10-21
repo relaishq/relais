@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis/v8"
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/relaishq/relais/pkg/storage"
@@ -23,14 +23,13 @@ func forSessionStores(t *testing.T, scenario func(*testing.T, sessionstore.Store
 	t.Helper()
 	t.Run("memory", func(t *testing.T) { scenario(t, nil) })
 	t.Run("redis", func(t *testing.T) {
-		addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+		addr := redistestenv.Address(t)
 		if addr == "" {
 			if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 				t.Fatal("required Redis endpoint is not configured")
 			}
 			t.Skip("Redis harness requires RELAIS_TEST_REDIS_ADDR")
 		}
-		require.NoError(t, redisendpoint.ValidateDev(addr), "tests must use a dedicated Redis")
 		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 		if err != nil {
 			if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {

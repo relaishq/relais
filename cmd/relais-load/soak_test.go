@@ -14,7 +14,7 @@ import (
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/processrss"
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/stretchr/testify/require"
 )
@@ -196,14 +196,13 @@ func TestSoakRetainsEveryGeneratorInterval(t *testing.T) {
 	require.Empty(t, p.Causes)
 }
 func TestSoakRedisScanFindsSeededLeftover(t *testing.T) {
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	if addr == "" {
 		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 			t.Fatal("dedicated Redis required")
 		}
 		t.Skip("dedicated Redis not supplied")
 	}
-	require.NoError(t, redisendpoint.ValidateDev(addr))
 	client := redis.NewClient(&redis.Options{Addr: addr, MaxRetries: -1})
 	defer func() { require.NoError(t, client.Close()) }()
 	prefix := "relais:soak-test:" + strings.ReplaceAll(t.Name(), "/", "-") + ":" + strconvID() + ":"

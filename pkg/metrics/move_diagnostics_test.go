@@ -8,19 +8,18 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/relaishq/relais/internal/movediag"
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/stretchr/testify/require"
 )
 
 func TestMoveDiagnosticsThroughRealRedisClient(t *testing.T) {
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	if addr == "" {
 		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 			t.Fatal("dedicated Redis required")
 		}
 		t.Skip("dedicated Redis not configured")
 	}
-	require.NoError(t, redisendpoint.ValidateDev(addr))
 	t.Setenv("RELAIS_MOVE_DIAGNOSTICS", "1")
 	client := RedisClient(&redis.Options{Addr: addr, MaxRetries: -1}, "move-test")
 	defer client.Close()

@@ -21,7 +21,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/pion/stun/v4"
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/relay"
 
 	"github.com/relaishq/relais/internal/clusterprocess"
@@ -233,14 +233,13 @@ func failedCommand(t *testing.T, c *clusterprocess.Child) error {
 }
 func commandStore(t *testing.T) (*sessionstore.RedisOwners, string, string) {
 	t.Helper()
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	if addr == "" {
 		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 			t.Fatal("Redis required")
 		}
 		t.Skip("dedicated Redis not configured")
 	}
-	require.NoError(t, redisendpoint.ValidateDev(addr))
 	prefix := "relay-command-test:" + rand.Text() + ":"
 	s, err := sessionstore.NewRedisOwners(context.Background(), storage.RedisConfig{Addr: addr, Prefix: prefix})
 	require.NoError(t, err)

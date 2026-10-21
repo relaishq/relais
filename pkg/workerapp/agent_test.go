@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/privateapi"
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/agent"
 	agentdemo "github.com/relaishq/relais/pkg/agent/demo"
@@ -38,14 +38,13 @@ func demoStores(t *testing.T, scenario func(*testing.T, sessionstore.Store)) {
 	t.Helper()
 	t.Run("memory", func(t *testing.T) { scenario(t, sessionstore.NewMemory()) })
 	t.Run("redis", func(t *testing.T) {
-		addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+		addr := redistestenv.Address(t)
 		if addr == "" {
 			if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 				t.Fatal("dedicated Redis required")
 			}
 			t.Skip("dedicated Redis not configured")
 		}
-		require.NoError(t, redisendpoint.ValidateDev(addr))
 		token := make([]byte, 16)
 		_, err := rand.Read(token)
 		require.NoError(t, err)

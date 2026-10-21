@@ -13,6 +13,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/framecache"
 	"github.com/relaishq/relais/pkg/sessionstore"
@@ -378,7 +379,7 @@ func selectedFrameCache(t *testing.T, store sessionstore.Store) framecache.Store
 	var token [16]byte
 	_, err := rand.Read(token[:])
 	require.NoError(t, err)
-	frames, err := framecache.NewRedis(context.Background(), storage.RedisConfig{Addr: os.Getenv("RELAIS_TEST_REDIS_ADDR"), Prefix: "harness:frames:" + hex.EncodeToString(token[:]) + ":"}, make([]byte, 32), framecache.Limits{})
+	frames, err := framecache.NewRedis(context.Background(), storage.RedisConfig{Addr: redistestenv.Address(t), Prefix: "harness:frames:" + hex.EncodeToString(token[:]) + ":"}, make([]byte, 32), framecache.Limits{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, frames.Close()) })
 	return frames

@@ -14,6 +14,7 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/relaishq/relais/pkg/storage"
@@ -28,7 +29,7 @@ func TestControlTemplateACLMutationReadiness(t *testing.T) {
 	if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") != "1" {
 		t.Skip("requires an explicitly owned Redis")
 	}
-	address := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	address := redistestenv.Address(t)
 	require.NoError(t, redisendpoint.ValidateDev(address))
 	data, err := os.ReadFile("../../deploy/aws/preview.yaml")
 	require.NoError(t, err)

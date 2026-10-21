@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-redis/redis/v8"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -145,7 +145,7 @@ func TestPersistedRouteLimitsAndLeaseExpiry(t *testing.T) {
 func TestKeylessRelayCanPersistRoutesWithoutSnapshotAccess(t *testing.T) {
 	redis := testRedis(t)
 	ctx := context.Background()
-	owner, err := NewRedisOwners(ctx, storage.RedisConfig{Addr: os.Getenv("RELAIS_TEST_REDIS_ADDR"), Prefix: redis.prefix})
+	owner, err := NewRedisOwners(ctx, storage.RedisConfig{Addr: redistestenv.Address(t), Prefix: redis.prefix})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, owner.Close()) }()
 	lease, err := redis.Claim(ctx, "keyless", netip.MustParseAddrPort("127.0.0.1:4501"), time.Minute)

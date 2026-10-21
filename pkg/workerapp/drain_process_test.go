@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/clusterprocess"
+	"github.com/relaishq/relais/internal/redistestenv"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -150,7 +151,7 @@ func TestWorkerSIGTERMQuiescence(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real process drain matrix")
 	}
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	if addr == "" {
 		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 			t.Fatal("dedicated Redis required")
@@ -165,7 +166,7 @@ func TestWorkerSIGTERMPlaybackDrainWait(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real process playback drain matrix")
 	}
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	if addr == "" {
 		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 			t.Fatal("dedicated Redis required")

@@ -14,7 +14,7 @@ import (
 
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/privateapi"
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/stretchr/testify/require"
@@ -40,14 +40,13 @@ func TestFixedPoolTolerantBootstrapProcesses(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real fixed-pool bootstrap processes")
 	}
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	if addr == "" {
 		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 			t.Fatal("dedicated Redis required")
 		}
 		t.Skip("dedicated Redis not configured")
 	}
-	require.NoError(t, redisendpoint.ValidateDev(addr))
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	bin := t.TempDir()

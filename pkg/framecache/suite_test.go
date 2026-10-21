@@ -11,21 +11,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
 
 func testRedis(t *testing.T, limits Limits, options ...RedisOptions) *Redis {
 	t.Helper()
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	if addr == "" {
 		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 			t.Fatal("required Redis endpoint is not configured")
 		}
 		t.Skip("Redis requires RELAIS_TEST_REDIS_ADDR")
 	}
-	require.NoError(t, redisendpoint.ValidateDev(addr), "tests must use a dedicated Redis")
 	var token [16]byte
 	_, err := rand.Read(token[:])
 	require.NoError(t, err)

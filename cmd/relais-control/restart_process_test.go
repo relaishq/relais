@@ -21,8 +21,8 @@ import (
 
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/privateapi"
-	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/internal/redistestcluster"
+	"github.com/relaishq/relais/internal/redistestenv"
 	agentv2 "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -170,14 +170,13 @@ func (s *restartProcesses) assertOwners(t *testing.T) {
 }
 func standaloneRestartRedis(t *testing.T) string {
 	t.Helper()
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	if addr == "" {
 		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 			t.Fatal("dedicated Redis required")
 		}
 		t.Skip("dedicated Redis not configured")
 	}
-	require.NoError(t, redisendpoint.ValidateDev(addr))
 	return addr
 }
 

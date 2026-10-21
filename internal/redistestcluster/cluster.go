@@ -17,7 +17,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	"github.com/relaishq/relais/internal/clusterprocess"
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 )
 
 // Addresses starts three primaries and three replicas when RELAIS_TEST_REDIS_CLUSTER=1.
@@ -27,13 +27,10 @@ func Addresses(t *testing.T) []string {
 	if testing.Short() {
 		t.Skip("Redis Cluster integration is excluded from short mode")
 	}
-	if csv := os.Getenv("RELAIS_TEST_REDIS_CLUSTER_ADDRS"); csv != "" {
+	if csv := redistestenv.ClusterAddresses(t); csv != "" {
 		addrs := strings.Split(csv, ",")
 		for i := range addrs {
 			addrs[i] = strings.TrimSpace(addrs[i])
-			if err := redisendpoint.ValidateDev(addrs[i]); err != nil {
-				t.Fatal(err)
-			}
 		}
 		return addrs
 	}

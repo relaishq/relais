@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/movediag"
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/mediaworker"
@@ -38,14 +38,13 @@ func TestHTTPTopologyUsesExistingMediaPaths(t *testing.T) {
 				defer cancel()
 				var store sessionstore.Store = sessionstore.NewMemory()
 				if kind == "redis" {
-					addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+					addr := redistestenv.Address(t)
 					if addr == "" {
 						if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 							t.Fatal("dedicated Redis required")
 						}
 						t.Skip("dedicated Redis not configured")
 					}
-					require.NoError(t, redisendpoint.ValidateDev(addr))
 					redisStore, err := sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: addr, Prefix: fmt.Sprintf("move-diag:%d:", time.Now().UnixNano())}, make([]byte, 32))
 					require.NoError(t, err)
 					defer redisStore.Close()

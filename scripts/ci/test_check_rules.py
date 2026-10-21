@@ -1,0 +1,131 @@
+"""Known-bad inputs must fail each mechanical repository rule."""
+import unittest
+
+from check_rules import bad_name, lint_version_errors, source_errors, release_binary_errors
+
+
+class BehaviourNames(unittest.TestCase):
+    def test_process_names_fail(self):
+        for name in ('TestFooRound2', 'foo_fix3_test.go', 'ReviewState',
+                     'test_review', 'Reviews', 'Reviewer', 'Reviewers', 'Reviewed', 'Reviewing', 'rereview', 'TestReview2', 'TestRound_2', 'fix_3.go', 'docs/review/notes.md', 'round2.go', 'fooReviewHTTP'):
+            with self.subTest(name=name):
+                self.assertTrue(bad_name(name))
+
+    def test_behaviour_names_pass(self):
+        for name in ('TestPreview', 'preview.go', 'Previewer', 'RoundTrip', 'Prefix32', 'Fixation'):
+            self.assertFalse(bad_name(name), name)
+
+    def test_go_declarations_ignore_comments_and_strings(self):
+        self.assertFalse(source_errors('pkg/state_test.go', '''package state
+// func TestFooRound2() {}
+/* type ReviewState struct{} */
+var text = `func Review() {}`
+func TestPreview() {}
+'''))
+        for declaration in ('func TestFooRound2() {}',
+                            'func (s *State[T]) Review() {}',
+                            'type ReviewState[T any] struct{}',
+                            'type (ReviewState int; Safe int)',
+                            'type (\n Safe int\n Fix3 struct{}\n)'):
+            self.assertTrue(source_errors('pkg/state_test.go', 'package state\n' + declaration), declaration)
+
+
+    def test_all_identifier_kinds(self):
+        for declaration in ('var reviewState int', 'const reviewed = 1',
+                            'type State struct { Reviews int }',
+                            'type State interface { Reviewer() }',
+                            'func safe(reviewers int) { reviewing := reviewers; _ = reviewing }',
+                            'func (reviewState *State) Safe() {}'):
+            self.assertTrue(source_errors('pkg/state.go', 'package state\n' + declaration), declaration)
+
+
+class RedisEndpoints(unittest.TestCase):
+    def test_direct_reads_fail(self):
+        for call in ('os.Getenv("RELAIS_TEST_REDIS_ADDR")',
+                     'os.LookupEnv(\n"RELAIS_TEST_REDIS_CLUSTER_ADDRS"\n)',
+                     'operating.Getenv(`RELAIS_TEST_REDIS_ADDR`)'):
+            source = 'package state\nimport operating "os"\nfunc TestState() { _ = ' + call + ' }'
+            self.assertTrue(source_errors('pkg/state_test.go', source), call)
+        self.assertTrue(source_errors('pkg/state_test.go', 'package state\nimport . "os"\nfunc TestState() { Getenv("RELAIS_TEST_REDIS_ADDR") }'))
+
+    def test_literal_indirection_fails(self):
+        for literal in ('"RELAIS_TEST_REDIS_ADDR"', '`RELAIS_TEST_REDIS_CLUSTER_ADDRS`',
+                        r'"\x52ELAIS_TEST_REDIS_ADDR"'):
+            self.assertTrue(source_errors('pkg/state.go', 'package state\nconst key = ' + literal))
+        self.assertFalse(source_errors('internal/redistestenv/env_test.go', 'package redistestenv\nconst key = "RELAIS_TEST_REDIS_ADDR"'))
+        self.assertFalse(source_errors('internal/redistestcluster/standalone_gate_test.go', 'package state\nconst key = "RELAIS_TEST_REDIS_ADDR"'))
+
+    def test_literal_exception_does_not_allow_direct_reads(self):
+        self.assertTrue(source_errors('internal/redistestcluster/standalone_gate_test.go',
+                                      'package state\nimport "os"\nvar value = os.Getenv("RELAIS_TEST_REDIS_ADDR")'))
+
+    def test_other_env_and_helper_pass(self):
+        self.assertFalse(source_errors('pkg/state_test.go', 'package state\nfunc TestState() { os.Getenv("OTHER") }'))
+        self.assertFalse(source_errors('internal/redistestenv/env.go', 'package redistestenv\nfunc Address() { os.Getenv("RELAIS_TEST_REDIS_ADDR") }'))
+        self.assertFalse(source_errors('pkg/state_test.go', '// os.Getenv("RELAIS_TEST_REDIS_ADDR")'))
+
+    def test_workflow_port_policy(self):
+        path = '.github/workflows/ci.yml'
+        for bad in ('ports:\n - 6379:6379', 'ports: ["6379:6379"]', 'ports:\n - target: 6379\n   published: 6379',
+                    'ports:\n - "127.0.0.1:6379:6379"',
+                    'RELAIS_TEST_REDIS_ADDR: "localhost:6379"',
+                    'RELAIS_TEST_REDIS_CLUSTER_ADDRS: "cache:16379,cache:6379"',
+                    'RELAIS_TEST_REDIS_ADDR: >-\n  localhost:6379',
+                    'RELAIS_TEST_REDIS_ADDR: "cache#tag:6379"',
+                    "RELAIS_TEST_REDIS_ADDR: 'cache#tag:6379'",
+                    'run: export RELAIS_TEST_REDIS_ADDR=127.0.0.1:06379'):
+            self.assertTrue(source_errors(path, bad), bad)
+        for good in ('ports:\n - 16379:6379', 'ports: ["16379:6379"]',
+                     'RELAIS_TEST_REDIS_ADDR: "127.0.0.1:16379"',
+                     '# RELAIS_TEST_REDIS_ADDR: cache:6379',
+                     'RELAIS_TEST_REDIS_ADDR: cache:16379 # bad example cache:6379'):
+            self.assertFalse(source_errors(path, good), good)
+
+
+class PortableDocs(unittest.TestCase):
+    def test_local_paths_fail(self):
+        for path in ('/Users/someone/work/', '/home/someone/work/',
+                     '/Users/alice', '/home/alice', '/Users/you/', '/private/tmp/build', '/var/folders/ab/build'):
+            self.assertTrue(source_errors('docs/testing.md', 'Use ' + path))
+        self.assertFalse(source_errors('docs/testing.md', 'Use $HOME/project/ or ./project/ or /tmp/build'))
+
+    def test_placeholders_and_urls_are_portable(self):
+        for path in ('/home/$USER/x', '/home/${USER}/x', '/Users/$USER',
+                     '/Users/<name>/', '/home/<name>',
+                     'https://example.com/home/index',
+                     'https://example.com/Users/alice',
+                     '<https://example.com/private/tmp/build>'):
+            with self.subTest(path=path):
+                self.assertFalse(source_errors('docs/testing.md', 'Use ' + path))
+        self.assertTrue(source_errors('docs/testing.md',
+                                     'https://example.com/home/index /Users/you/'))
+
+
+class LintVersion(unittest.TestCase):
+    def test_pin_matches_action(self):
+        makefile = 'GOLANGCI_LINT_VERSION := v2.14.0\n'
+        workflow = 'uses: golangci/golangci-lint-action@v9\nwith:\n  version: v2.14.0\n'
+        self.assertFalse(lint_version_errors(makefile, workflow))
+        self.assertTrue(lint_version_errors(makefile, workflow.replace('v2.14.0', 'v2.13.0')))
+        self.assertTrue(lint_version_errors(makefile, ''))
+        self.assertTrue(lint_version_errors('', workflow))
+        reordered = workflow.replace('  version:', '  args: --verbose\n  version:')
+        self.assertFalse(lint_version_errors(makefile, reordered))
+        self.assertTrue(lint_version_errors(makefile, reordered.replace('v2.14.0', 'v2.13.0')))
+        self.assertTrue(lint_version_errors(makefile, workflow + '\n' + reordered.replace('v2.14.0', 'v2.13.0')))
+        self.assertTrue(lint_version_errors(makefile, workflow.replace('  version: v2.14.0', '  args: |\n    version: v2.14.0')))
+        self.assertTrue(lint_version_errors(makefile, workflow + '\n- uses: golangci/golangci-lint-action@v9\n  with:\n    args: --verbose'))
+
+
+class ReleaseBinaries(unittest.TestCase):
+    def test_archive_and_depguard_sets_match(self):
+        config = 'files:\n - "${base-path}/cmd/relais-{relay,worker}/**.go"'
+        script = 'binaries=(relais-worker relais-relay)'
+        self.assertFalse(release_binary_errors(config, script))
+        self.assertTrue(release_binary_errors(config, script.replace('relais-worker', 'relais-demo')))
+        self.assertTrue(release_binary_errors('', script))
+        self.assertTrue(release_binary_errors(config, ''))
+
+
+if __name__ == '__main__':
+    unittest.main()

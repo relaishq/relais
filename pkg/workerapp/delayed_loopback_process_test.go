@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/examples/delayed-loopback/loopback"
+	"github.com/relaishq/relais/internal/redistestenv"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -33,7 +34,7 @@ func TestDelayedLoopbackProcessCuts(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-process SIGKILL matrix")
 	}
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	if addr == "" {
 		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 			t.Fatal("dedicated Redis required")

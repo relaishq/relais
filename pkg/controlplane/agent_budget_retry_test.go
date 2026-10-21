@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/relaishq/relais/pkg/storage"
@@ -33,14 +33,13 @@ func forBudgetRetryStores(t *testing.T, run func(*testing.T, sessionstore.Store)
 	t.Helper()
 	t.Run("memory", func(t *testing.T) { run(t, sessionstore.NewMemory()) })
 	t.Run("redis", func(t *testing.T) {
-		addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+		addr := redistestenv.Address(t)
 		if addr == "" {
 			if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 				t.Fatal("dedicated Redis required")
 			}
 			t.Skip("dedicated Redis not configured")
 		}
-		require.NoError(t, redisendpoint.ValidateDev(addr))
 		store, err := sessionstore.NewRedis(context.Background(), storage.RedisConfig{Addr: addr, Prefix: "budget-retry:" + rand.Text() + ":"}, make([]byte, 32))
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, store.Close()) })

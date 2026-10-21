@@ -1,6 +1,20 @@
 version: "2"
 
 linters:
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        shipped-code:
+          files:
+            - "${base-path}/pkg/**.go"
+            - "${base-path}/internal/**.go"
+            - "${base-path}/cmd/relais-{relay,worker,control,signal,demo,load}/**.go"
+            - "!$test"
+          deny:
+            - pkg: github.com/relaishq/relais/examples
+              desc: Move shared code into a supported package; shipped code must not import examples.
   exclusions:
     # golangci-lint v1 skipped unchecked errors from Close, Flush and print
     # calls by default; v2 makes that opt-in. Keep the v1 baseline.

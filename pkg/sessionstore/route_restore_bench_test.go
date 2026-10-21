@@ -5,22 +5,18 @@ import (
 	"crypto/rand"
 	"fmt"
 	"net/netip"
-	"os"
 	"testing"
 	"time"
 
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/storage"
 )
 
 // Setup uses the real epoch-fenced writer; only the eager restore is timed.
 func BenchmarkRedisRouteRestore(b *testing.B) {
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(b)
 	if addr == "" {
 		b.Skip("dedicated Redis not configured")
-	}
-	if err := redisendpoint.ValidateDev(addr); err != nil {
-		b.Fatal(err)
 	}
 	for _, count := range []int{1000, 10000} {
 		b.Run(fmt.Sprint(count), func(b *testing.B) {
