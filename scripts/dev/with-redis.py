@@ -109,77 +109,109 @@ def main(argv, *, locale_check=check_locale, stop_timeout=5):
     command = None
     server = None
     port = None
-    starting_command = False
-    pending_signal = None
+    directory = None
+    first_signal = None
+    repeated_signal = False
+    cleaning_up = False
+    command_status = None
 
     def interrupted(signum, _frame):
-        nonlocal pending_signal
-        # Popen can create the child before its result is assigned. Defer the
-        # interrupt until we own the returned process and can reap its group.
-        if starting_command:
-            pending_signal = signum
+        nonlocal first_signal, repeated_signal
+        if first_signal is None:
+            first_signal = signum
+        else:
+            repeated_signal = True
+        # Never unwind a Popen assignment or cleanup from a signal handler.
+        # Forward only to the group we own, without waiting or raising if its
+        # leader has just exited. Cleanup will stop and reap the entire group.
+        if command is not None and not cleaning_up:
+            try:
+                os.killpg(command.pid, signum)
+            except OSError:
+                pass
+
+    def run():
+        nonlocal command, server, port
+        log_path = Path(directory.name) / 'redis.log'
+        # Another process can claim a released ephemeral port. Retry only
+        # our own failed startup; never shut down an existing listener.
+        for _ in range(10):
+            if first_signal is not None:
+                return None
+            port = free_port()
+            with log_path.open('w') as log:
+                server = subprocess.Popen(
+                    [binary, '--bind', '127.0.0.1', '--port', str(port),
+                     '--save', '', '--appendonly', 'no', '--dir', directory.name],
+                    stdout=log, stderr=subprocess.STDOUT, env=env,
+                    start_new_session=True)
+            if first_signal is not None:
+                return None
+            deadline = time.monotonic() + 10
+            while (first_signal is None and server.poll() is None
+                   and time.monotonic() < deadline):
+                if "Ready to accept connections" in log_path.read_text() and ready(port):
+                    break
+                time.sleep(0.05)
+            if first_signal is not None:
+                return None
+            if server.poll() is None and "Ready to accept connections" in log_path.read_text() and ready(port):
+                break
+            stop(server)
+        else:
+            print('Could not start a disposable Redis:\n' + log_path.read_text(),
+                  file=sys.stderr)
+            return None
+        if first_signal is not None:
+            return None
+        env['RELAIS_TEST_REDIS_ADDR'] = f'127.0.0.1:{port}'
+        print(f'Throwaway Redis started on 127.0.0.1:{port} (pid {server.pid})',
+              flush=True)
+        command = subprocess.Popen(argv, env=env, start_new_session=True)
+        while first_signal is None:
+            try:
+                status = command.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                continue
+            # A forwarded signal may have ended wait(); retain the conventional
+            # 128 + signal result for an interrupted, previously running command.
+            if first_signal is None:
+                return status
+        return None
+
+    def cleanup():
+        nonlocal cleaning_up
+        if cleaning_up:
             return
-        # Forward to only the command group created here, never an existing job.
-        if command is not None:
-            signal_group(command, signum)
-        raise InterruptedError(signum)
+        cleaning_up = True
+        try:
+            stop(command, process_group=True, timeout=stop_timeout)
+        finally:
+            try:
+                stop(server)
+                if server is not None:
+                    print(f'Throwaway Redis stopped on 127.0.0.1:{port} '
+                          f'(pid {server.pid} reaped)', flush=True)
+            finally:
+                if directory is not None:
+                    directory.cleanup()
 
     previous = {sig: signal.signal(sig, interrupted)
                 for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
     try:
-        with tempfile.TemporaryDirectory(prefix='relais-test-redis-') as directory:
-            try:
-                log_path = Path(directory) / 'redis.log'
-                # Another process can claim a released ephemeral port. Retry only
-                # our own failed startup; never shut down an existing listener.
-                for _ in range(10):
-                    port = free_port()
-                    with log_path.open('w') as log:
-                        server = subprocess.Popen(
-                            [binary, '--bind', '127.0.0.1', '--port', str(port),
-                             '--save', '', '--appendonly', 'no', '--dir', directory],
-                            stdout=log, stderr=subprocess.STDOUT, env=env,
-                            start_new_session=True)
-                    deadline = time.monotonic() + 10
-                    while server.poll() is None and time.monotonic() < deadline:
-                        if "Ready to accept connections" in log_path.read_text() and ready(port):
-                            break
-                        time.sleep(0.05)
-                    if server.poll() is None and "Ready to accept connections" in log_path.read_text() and ready(port):
-                        break
-                    stop(server)
-                else:
-                    print('Could not start a disposable Redis:\n' + log_path.read_text(),
-                          file=sys.stderr)
-                    return 1
-                env['RELAIS_TEST_REDIS_ADDR'] = f'127.0.0.1:{port}'
-                starting_command = True
-                print(f'Throwaway Redis started on 127.0.0.1:{port} (pid {server.pid})',
-                      flush=True)
-                command = subprocess.Popen(argv, env=env, start_new_session=True)
-                starting_command = False
-                if pending_signal is not None:
-                    interrupted(pending_signal, None)
-                return command.wait()
-            finally:
-                # Suppress further interrupts while reaping only our processes.
-                for sig in previous:
-                    signal.signal(sig, signal.SIG_IGN)
-                try:
-                    stop(command, process_group=True, timeout=stop_timeout)
-                finally:
-                    stop(server)
-                if server is not None:
-                    print(f'Throwaway Redis stopped on 127.0.0.1:{port} '
-                          f'(pid {server.pid} reaped)', flush=True)
-    except InterruptedError as exc:
-        return 128 + exc.args[0]
+        directory = tempfile.TemporaryDirectory(prefix='relais-test-redis-')
+        command_status = run()
     except OSError as exc:
         print(f'Could not run Redis test command: {exc}', file=sys.stderr)
-        return 1
     finally:
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+        try:
+            cleanup()
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
+    if command_status is not None:
+        return command_status
+    return 128 + first_signal if first_signal is not None else 1
 
 
 if __name__ == '__main__':
