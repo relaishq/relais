@@ -5,6 +5,10 @@ GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
 GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
+GOLANGCI_LINT_VERSION := v2.14.0
+# Explicit-version go run ignores the main module toolchain directive. Reuse
+# the module-selected toolchain instead of downloading a newer one for lint.
+GOLANGCI_LINT = GOTOOLCHAIN=$(shell $(GOCMD) env GOVERSION) $(GOCMD) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 BINARY_NAME=relais
 BINARY_UNIX=$(BINARY_NAME)_unix
 BIN_DIR=bin
@@ -17,7 +21,7 @@ BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 # Linker flags (populate pkg/buildinfo)
 LDFLAGS=-ldflags "-X github.com/relaishq/relais/pkg/buildinfo.Version=$(VERSION) -X github.com/relaishq/relais/pkg/buildinfo.Commit=$(COMMIT) -X github.com/relaishq/relais/pkg/buildinfo.Date=$(BUILD_TIME)"
 
-.PHONY: all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo demo-cluster demo-agent crash-run help
+.PHONY: check check-quality check-rules test-external-module test-ci-scripts test-demo-page test-unit-local all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo demo-cluster demo-agent crash-run help
 
 all: test build
 
@@ -65,28 +69,47 @@ coverage: ## Run tests with coverage
 deps: ## Download dependencies
 	$(GOMOD) download
 
-lint-install: ## Install golangci-lint (the version CI uses)
-	@echo "Installing golangci-lint..."
-	$(GOCMD) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
-	@echo "golangci-lint installed!"
+# Keep these targets in the same order as the PR quality job.
+check: ## Run PR quality and race unit gates with a disposable Redis
+	$(MAKE) check-quality
+	$(MAKE) test-unit-local
 
-lint: ## Run comprehensive linter
-	@echo "Running golangci-lint..."
-	@if command -v ~/go/bin/golangci-lint >/dev/null 2>&1; then \
-		~/go/bin/golangci-lint run ./...; \
-	elif command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run ./...; \
-	else \
-		echo "golangci-lint not found. Install with: make lint-install"; \
-		exit 1; \
-	fi
-	@echo "All linting checks passed!"
+check-quality: ## Run every PR quality gate in CI order
+	$(MAKE) deps
+	$(MAKE) vet
+	$(MAKE) lint
+	$(MAKE) test-external-module
+	$(MAKE) build
+	$(MAKE) test-ci-scripts
+	$(MAKE) test-demo-page
+	$(MAKE) check-rules
+
+check-rules: ## Enforce behaviour names, Redis safety, doc paths and lint version
+	python3 scripts/ci/check_rules.py
+
+test-external-module: ## Build the supported external-module API without CGO
+	$(GOTEST) -count=1 -run '^TestExternalModuleBuild$$' ./pkg/workerapp
+
+test-ci-scripts: ## Test CI evidence and rule scripts
+	python3 -m unittest discover -s scripts/ci
+
+test-demo-page: ## Test demo page verdict logic
+	node --test cmd/relais-demo/*.test.cjs
+
+test-unit-local: ## Run race units with an owned Redis and CI test requirements
+	python3 scripts/dev/with-redis.py $(MAKE) test-unit
+
+lint-install: ## Install golangci-lint (the version CI uses)
+	$(GOCMD) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
+
+lint: ## Run the pinned linter without installing a binary
+	$(GOLANGCI_LINT) run ./...
 
 vet: ## Run go vet
 	$(GOCMD) vet ./...
 
-fmt: ## Run go fmt
-	$(GOCMD) fmt ./...
+fmt: ## Apply configured formatters, including import grouping
+	$(GOLANGCI_LINT) fmt ./...
 
 bench: ## Run benchmarks
 	$(GOTEST) -bench=. ./test/benchmark/...

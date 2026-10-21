@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,7 +43,7 @@ func TestStoreConfigAuthenticatedConnections(t *testing.T) {
 	if password == "" {
 		t.Skip("set RELAIS_TEST_REDIS_PASSWORD with a dedicated password-protected Redis")
 	}
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	require.NoError(t, redisendpoint.ValidateDev(addr))
 	t.Setenv("RELAIS_REDIS_ADDR", addr)
 	t.Setenv("RELAIS_REDIS_PASSWORD", password)

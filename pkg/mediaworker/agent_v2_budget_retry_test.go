@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/agenthost"
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/sessionstore"
@@ -23,14 +23,13 @@ func forV2Stores(t *testing.T, run func(*testing.T, sessionstore.Store)) {
 	t.Helper()
 	t.Run("memory", func(t *testing.T) { run(t, sessionstore.NewMemory()) })
 	t.Run("redis", func(t *testing.T) {
-		addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+		addr := redistestenv.Address(t)
 		if addr == "" {
 			if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 				t.Fatal("dedicated Redis required")
 			}
 			t.Skip("dedicated Redis not configured")
 		}
-		require.NoError(t, redisendpoint.ValidateDev(addr))
 		store, err := sessionstore.NewRedis(context.Background(), storage.RedisConfig{Addr: addr, Prefix: "v2-budget:" + rand.Text() + ":"}, make([]byte, 32))
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, store.Close()) })

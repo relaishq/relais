@@ -5,10 +5,10 @@ import (
 	"context"
 	"io"
 	"net"
-	"os"
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -62,7 +62,7 @@ func TestRedisCiphertextAuthenticationBindingAndRotation(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, frames)
 	key := bytes.Repeat([]byte{7}, 32)
-	rotated, err := NewRedis(ctx, storage.RedisConfig{Addr: os.Getenv("RELAIS_TEST_REDIS_ADDR"), Prefix: r.prefix}, key, Limits{}, RedisOptions{KeyID: 1, OldKeys: map[byte][]byte{0: make([]byte, 32)}})
+	rotated, err := NewRedis(ctx, storage.RedisConfig{Addr: redistestenv.Address(t), Prefix: r.prefix}, key, Limits{}, RedisOptions{KeyID: 1, OldKeys: map[byte][]byte{0: make([]byte, 32)}})
 	require.NoError(t, err)
 	defer rotated.Close()
 	require.NoError(t, r.Append(ctx, "a", f))
@@ -76,7 +76,7 @@ func TestRedisCiphertextAuthenticationBindingAndRotation(t *testing.T) {
 func TestRedisCrossClientAndSessionKeys(t *testing.T) {
 	r := testRedis(t, Limits{})
 	ctx := context.Background()
-	other, err := NewRedis(ctx, storage.RedisConfig{Addr: os.Getenv("RELAIS_TEST_REDIS_ADDR"), Prefix: r.prefix}, make([]byte, 32), Limits{})
+	other, err := NewRedis(ctx, storage.RedisConfig{Addr: redistestenv.Address(t), Prefix: r.prefix}, make([]byte, 32), Limits{})
 	require.NoError(t, err)
 	defer other.Close()
 	for _, id := range []string{"a", "a}", "a{", "~61", "\x00\xff"} {

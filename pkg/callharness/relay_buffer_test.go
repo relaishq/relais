@@ -15,7 +15,7 @@ import (
 	"github.com/go-redis/redis/v8"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4/pkg/media"
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/framecache"
@@ -103,14 +103,13 @@ func relayBufferStores(t *testing.T, scenario func(*testing.T, sessionstore.Stor
 	t.Helper()
 	t.Run("memory", func(t *testing.T) { scenario(t, sessionstore.NewMemory()) })
 	t.Run("redis", func(t *testing.T) {
-		addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+		addr := redistestenv.Address(t)
 		if addr == "" {
 			if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 				t.Fatal("required Redis endpoint is not configured")
 			}
 			t.Skip("set RELAIS_TEST_REDIS_ADDR to dedicated Redis")
 		}
-		require.NoError(t, redisendpoint.ValidateDev(addr))
 		prefix := "buffer-harness:" + rand.Text() + ":"
 		store, err := sessionstore.NewRedis(context.Background(), storage.RedisConfig{Addr: addr, Prefix: prefix}, make([]byte, 32))
 		require.NoError(t, err)

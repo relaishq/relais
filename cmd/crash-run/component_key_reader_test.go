@@ -10,21 +10,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/sessionstore"
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
 
 func TestStoreStallReaderUsesWorkerKeyRing(t *testing.T) {
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	if addr == "" {
 		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 			t.Fatal("dedicated Redis required")
 		}
 		t.Skip("dedicated Redis required")
 	}
-	require.NoError(t, redisendpoint.ValidateDev(addr))
 	ctx := context.Background()
 	key, old := make([]byte, 32), make([]byte, 32)
 	key[0] = 1

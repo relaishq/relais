@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +19,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/framecache"
@@ -66,7 +66,7 @@ func startBufferFailureSystem(t *testing.T, store sessionstore.Store, cfg buffer
 	var frames framecache.Store = framecache.NewMemory(framecache.Limits{})
 	if cfg.cache {
 		if _, ok := store.(*sessionstore.Redis); ok {
-			redisFrames, err := framecache.NewRedis(context.Background(), storage.RedisConfig{Addr: os.Getenv("RELAIS_TEST_REDIS_ADDR"), Prefix: "buffer-failure-frames:" + rand.Text() + ":"}, make([]byte, 32), framecache.Limits{})
+			redisFrames, err := framecache.NewRedis(context.Background(), storage.RedisConfig{Addr: redistestenv.Address(t), Prefix: "buffer-failure-frames:" + rand.Text() + ":"}, make([]byte, 32), framecache.Limits{})
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, redisFrames.Close()) })
 			frames = redisFrames

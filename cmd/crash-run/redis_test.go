@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/relaishq/relais/internal/nettopology"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,7 +64,7 @@ func TestRedisAuthenticatedPing(t *testing.T) {
 	if password == "" {
 		t.Skip("set RELAIS_TEST_REDIS_PASSWORD with a dedicated password-protected Redis")
 	}
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	require.NotEmpty(t, addr)
 	require.NoError(t, pingRedis(context.Background(), addr, password))
 	require.ErrorContains(t, pingRedis(context.Background(), addr, ""), "NOAUTH")

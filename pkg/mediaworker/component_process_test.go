@@ -20,6 +20,7 @@ import (
 
 	codec "github.com/relaishq/relais/internal/componentcodec"
 	"github.com/relaishq/relais/internal/redistestcluster"
+	"github.com/relaishq/relais/internal/redistestenv"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -42,7 +43,7 @@ func TestSplitCheckpointProcessSIGKILL(t *testing.T) {
 		t.Skip("real SIGKILL and store takeover")
 	}
 	t.Run("standalone", func(t *testing.T) {
-		addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+		addr := redistestenv.Address(t)
 		if addr == "" {
 			if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 				t.Fatal("dedicated Redis required")

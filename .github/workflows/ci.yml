@@ -60,18 +60,21 @@ jobs:
           version: v2.14.0
 
       - name: Build worker from an external module without CGO
-        run: go test -count=1 -run '^TestExternalModuleBuild$' ./pkg/workerapp
+        run: make test-external-module
 
       - name: Build
         run: make build
 
       # The manual capacity gate and driver-override checks are judged by these scripts.
       - name: Test CI evidence scripts
-        run: python3 -m unittest discover -s scripts/ci
+        run: make test-ci-scripts
 
       # The demo page's verdict logic decides the browser go/no-go.
       - name: Run demo page tests
-        run: node --test cmd/relais-demo/*.test.cjs
+        run: make test-demo-page
+
+      - name: Check repository rules
+        run: make check-rules
 
   # The build job is the aggregate gate while all work runs in parallel.
   # Making it required in GitHub settings is a separate admin decision.

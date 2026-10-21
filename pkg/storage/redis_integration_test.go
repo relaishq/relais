@@ -6,20 +6,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 )
 
 func requireRedis(t *testing.T) string {
 	t.Helper()
-	addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+	addr := redistestenv.Address(t)
 	if addr == "" {
 		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 			t.Fatal("required Redis endpoint is not configured")
 		}
 		t.Skip("skipping: RELAIS_TEST_REDIS_ADDR not set")
-	}
-	if err := redisendpoint.ValidateDev(addr); err != nil {
-		t.Fatal(err)
 	}
 	// Try to connect
 	rs, err := NewRedisStorage(RedisConfig{Addr: addr})

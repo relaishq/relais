@@ -20,7 +20,7 @@ import (
 
 	"github.com/pion/webrtc/v4"
 	"github.com/relaishq/relais/internal/agenthost"
-	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/agent"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -201,14 +201,13 @@ func forAgentStores(t *testing.T, scenario func(*testing.T, sessionstore.Store))
 	t.Helper()
 	t.Run("memory", func(t *testing.T) { scenario(t, sessionstore.NewMemory()) })
 	t.Run("redis", func(t *testing.T) {
-		addr := os.Getenv("RELAIS_TEST_REDIS_ADDR")
+		addr := redistestenv.Address(t)
 		if addr == "" {
 			if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
 				t.Fatal("Redis required")
 			}
 			t.Skip("dedicated Redis not configured")
 		}
-		require.NoError(t, redisendpoint.ValidateDev(addr))
 		token := make([]byte, 16)
 		_, err := rand.Read(token)
 		require.NoError(t, err)
