@@ -30,19 +30,65 @@ def ready(port):
         return False
 
 
-def stop(process):
+def signal_group(process, signum):
+    try:
+        os.killpg(process.pid, signum)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # A just-exited, unreaped leader can produce EPERM on macOS. Reap
+        # that leader before retrying; never ignore an error for a live one.
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            raise
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:
+            pass
+
+
+def stop(process, *, process_group=False, timeout=5):
     if process is None:
         return
-    if process.poll() is None:
-        process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
+    if process_group:
+        # The leader may have exited while a background descendant remains.
+        # Every group here was created with start_new_session=True.
+        process.poll()
+        signal_group(process, signal.SIGTERM)
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            pass
+        # Kill the entire group even after its leader exits. A background
+        # descendant can ignore TERM or outlive a successful command.
+        signal_group(process, signal.SIGKILL)
         process.wait()
+    else:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
 
 
-def main(argv):
+def check_locale():
+    locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+
+
+def ci_environment(environ):
+    # Strip opt-ins before starting either Redis or the test command. In
+    # particular, inherited update flags must never rewrite golden fixtures.
+    env = {key: value for key, value in environ.items()
+           if not key.startswith(('RELAIS_TEST_', 'RELAIS_REDIS_', 'RELAIS_UPDATE_'))}
+    env.update(RELAIS_TEST_REDIS_REQUIRE='1', RELAIS_TEST_REDIS_TLS_REQUIRE='1',
+               LC_ALL='en_US.UTF-8')
+    return env
+
+
+def main(argv, *, locale_check=check_locale, stop_timeout=5):
     if not argv:
         print('Usage: scripts/dev/with-redis.py <command> [args...]', file=sys.stderr)
         return 2
@@ -54,24 +100,20 @@ def main(argv):
     # Redis locale tests select en_US.UTF-8 themselves. Check it is available,
     # rather than silently skipping the CI condition or installing system data.
     try:
-        locale.setlocale(locale.LC_ALL, 'en_US.UTF-8')
+        locale_check()
     except locale.Error:
         print('en_US.UTF-8 is required for the Redis tests; generate that locale '
               'before running make check.', file=sys.stderr)
         return 1
-    env = dict(os.environ, RELAIS_TEST_REDIS_REQUIRE='1',
-               RELAIS_TEST_REDIS_TLS_REQUIRE='1', LC_ALL='en_US.UTF-8')
+    env = ci_environment(os.environ)
     command = None
     server = None
     port = None
 
     def interrupted(signum, _frame):
         # Forward to only the command group created here, never an existing job.
-        if command is not None and command.poll() is None:
-            try:
-                os.killpg(command.pid, signum)
-            except ProcessLookupError:
-                pass
+        if command is not None:
+            signal_group(command, signum)
         raise InterruptedError(signum)
 
     previous = {sig: signal.signal(sig, interrupted)
@@ -88,7 +130,7 @@ def main(argv):
                         server = subprocess.Popen(
                             [binary, '--bind', '127.0.0.1', '--port', str(port),
                              '--save', '', '--appendonly', 'no', '--dir', directory],
-                            stdout=log, stderr=subprocess.STDOUT,
+                            stdout=log, stderr=subprocess.STDOUT, env=env,
                             start_new_session=True)
                     deadline = time.monotonic() + 10
                     while server.poll() is None and time.monotonic() < deadline:
@@ -111,8 +153,10 @@ def main(argv):
                 # Suppress further interrupts while reaping only our processes.
                 for sig in previous:
                     signal.signal(sig, signal.SIG_IGN)
-                stop(command)
-                stop(server)
+                try:
+                    stop(command, process_group=True, timeout=stop_timeout)
+                finally:
+                    stop(server)
                 if server is not None:
                     print(f'Throwaway Redis stopped on 127.0.0.1:{port} '
                           f'(pid {server.pid} reaped)', flush=True)

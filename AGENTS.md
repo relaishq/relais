@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 This file provides guidance to coding agents when working with code in this repository.
 
@@ -163,7 +163,7 @@ New plugins must implement one of the interfaces in `pkg/plugins/interface.go` a
 - Go 1.26+ required
 - Uses Pion v4 libraries for real-time communication
 - Redis optional for in-process tests, required for the separate-process topology
-- golangci-lint required for linting
+- `make lint` runs the pinned golangci-lint version without installing it
 
 ## Agent skills
 

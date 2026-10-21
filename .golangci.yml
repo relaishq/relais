@@ -8,9 +8,9 @@ linters:
       rules:
         shipped-code:
           files:
-            - "**/pkg/**/*.go"
-            - "**/internal/**/*.go"
-            - "**/cmd/relais-{relay,worker,control,signal,demo,load}/**/*.go"
+            - "${base-path}/pkg/**.go"
+            - "${base-path}/internal/**.go"
+            - "${base-path}/cmd/relais-{relay,worker,control,signal,demo,load}/**.go"
             - "!$test"
           deny:
             - pkg: github.com/relaishq/relais/examples
