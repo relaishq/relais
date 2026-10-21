@@ -109,8 +109,16 @@ def main(argv, *, locale_check=check_locale, stop_timeout=5):
     command = None
     server = None
     port = None
+    starting_command = False
+    pending_signal = None
 
     def interrupted(signum, _frame):
+        nonlocal pending_signal
+        # Popen can create the child before its result is assigned. Defer the
+        # interrupt until we own the returned process and can reap its group.
+        if starting_command:
+            pending_signal = signum
+            return
         # Forward to only the command group created here, never an existing job.
         if command is not None:
             signal_group(command, signum)
@@ -145,9 +153,13 @@ def main(argv, *, locale_check=check_locale, stop_timeout=5):
                           file=sys.stderr)
                     return 1
                 env['RELAIS_TEST_REDIS_ADDR'] = f'127.0.0.1:{port}'
+                starting_command = True
                 print(f'Throwaway Redis started on 127.0.0.1:{port} (pid {server.pid})',
                       flush=True)
                 command = subprocess.Popen(argv, env=env, start_new_session=True)
+                starting_command = False
+                if pending_signal is not None:
+                    interrupted(pending_signal, None)
                 return command.wait()
             finally:
                 # Suppress further interrupts while reaping only our processes.

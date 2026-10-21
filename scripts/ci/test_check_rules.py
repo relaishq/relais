@@ -85,9 +85,20 @@ class RedisEndpoints(unittest.TestCase):
 class PortableDocs(unittest.TestCase):
     def test_local_paths_fail(self):
         for path in ('/Users/someone/work/', '/home/someone/work/',
-                     '/Users/alice', '/home/alice', '/private/tmp/build', '/var/folders/ab/build'):
+                     '/Users/alice', '/home/alice', '/Users/you/', '/private/tmp/build', '/var/folders/ab/build'):
             self.assertTrue(source_errors('docs/testing.md', 'Use ' + path))
         self.assertFalse(source_errors('docs/testing.md', 'Use $HOME/project/ or ./project/ or /tmp/build'))
+
+    def test_placeholders_and_urls_are_portable(self):
+        for path in ('/home/$USER/x', '/home/${USER}/x', '/Users/$USER',
+                     '/Users/<name>/', '/home/<name>',
+                     'https://example.com/home/index',
+                     'https://example.com/Users/alice',
+                     '<https://example.com/private/tmp/build>'):
+            with self.subTest(path=path):
+                self.assertFalse(source_errors('docs/testing.md', 'Use ' + path))
+        self.assertTrue(source_errors('docs/testing.md',
+                                     'https://example.com/home/index /Users/you/'))
 
 
 class LintVersion(unittest.TestCase):

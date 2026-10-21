@@ -14,7 +14,8 @@ REDIS_LITERAL_ALLOWLIST = {'internal/redistestcluster/standalone_gate_test.go'}
 PROCESS_WORDS = {'review', 'reviews', 'reviewer', 'reviewers', 'reviewed', 'reviewing', 'rereview'}
 REDIS_VARS = {'RELAIS_TEST_REDIS_ADDR', 'RELAIS_TEST_REDIS_CLUSTER_ADDRS'}
 GO_TOKEN = re.compile(r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|`[^`]*`|\'(?:\\.|[^\'\\])*\'|[^\W\d]\w*|[^\s]')
-HOME_PATH = re.compile(r'/(?:Users|home)/[^/\s`\"\'<>]+(?:/|(?=$|[\s`\"\'<>]))|/private/tmp/|/var/folders/')
+HOME_PATH = re.compile(r'/(?:Users|home)/(?!\$)[^/\s`\"\'<>]+(?:/|(?=$|[\s`\"\'<>]))|/private/tmp/|/var/folders/')
+URL = re.compile(r'\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s<>`\"\']+')
 
 
 def words(name):
@@ -58,7 +59,7 @@ def source_errors(path, source):
         errors.append(f'{path}: name describes a process counter; rename it after behaviour')
     if path.endswith('.md'):
         for line, text in enumerate(source.splitlines(), 1):
-            if HOME_PATH.search(text):
+            if HOME_PATH.search(URL.sub('', text)):
                 errors.append(f'{path}:{line}: local machine path; use a portable placeholder or relative path')
     if path.endswith('.go'):
         tokens = go_tokens(source)
