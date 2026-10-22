@@ -17,7 +17,8 @@ func TestAgentEventUsesStoreClockAtDispatch(t *testing.T) {
 		s.mu.Lock()
 		s.storeClock, s.storeClockAt = clock, time.Now()
 		s.mu.Unlock()
-		require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started, ID: "same-event"}))
+		_, eventErr0 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "same-event"}, eventLive)
+		require.NoError(t, eventErr0)
 		require.WithinDuration(t, clock, a.lastEvent.At, time.Second)
 	}
 }
@@ -30,7 +31,8 @@ func TestAgentEventClockFallsBackUntilStoreObservation(t *testing.T) {
 	s.storeClockAt = time.Time{}
 	s.mu.Unlock()
 	before := time.Now()
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started, ID: "same-event"}))
+	_, eventErr1 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "same-event"}, eventLive)
+	require.NoError(t, eventErr1)
 	require.False(t, a.lastEvent.At.Before(before))
 	require.False(t, a.lastEvent.At.After(time.Now()))
 	fallback := a.lastEvent.At
@@ -38,7 +40,8 @@ func TestAgentEventClockFallsBackUntilStoreObservation(t *testing.T) {
 	s.mu.Lock()
 	s.storeClock, s.storeClockAt = store, time.Now()
 	s.mu.Unlock()
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started, ID: "same-event"}))
+	_, eventErr2 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "same-event"}, eventLive)
+	require.NoError(t, eventErr2)
 	require.WithinDuration(t, store, a.lastEvent.At, time.Second)
 	require.True(t, a.lastEvent.At.Before(fallback))
 }

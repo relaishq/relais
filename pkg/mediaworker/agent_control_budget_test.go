@@ -36,7 +36,7 @@ func TestControlFanOutHeadroom(t *testing.T) {
 				s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}
 				if held != "zero" {
 					for i := uint64(1); i <= 40; i++ {
-						_, err := s.processControl(agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"})
+						_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"}}, eventLive)
 						if err != nil {
 							require.ErrorIs(t, err, agent.ErrCapacity)
 							break
@@ -63,7 +63,7 @@ func TestControlFanOutHeadroom(t *testing.T) {
 				for i := range width {
 					a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprintf("s%02d", i), Kind: "wait/v1", Class: agent.ReadOnly})
 				}
-				err := s.handleV2Event(agent.Event{Kind: agent.Started, ID: "fan"})
+				_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "fan"}, eventLive)
 				require.NoError(t, err, "Control must not make a refusal-only callback terminal")
 				require.Equal(t, width, len(s.agent.v2.tasks)+len(s.agent.latest.V2.Capacity))
 				t.Logf("admitted=%d refused=%d", len(s.agent.v2.tasks), len(s.agent.latest.V2.Capacity))
@@ -101,7 +101,7 @@ func TestControlSmallPendingUnsupported(t *testing.T) {
 			require.NoError(t, initControlUnit(s))
 			s.agent.v2.registration.Bounds.MaxPendingBytes = limit
 			before := cloneAgentState(s.state.Agent)
-			_, err := s.processControl(agent.ControlMessage{ID: "1", Sequence: 1, Name: "stop"})
+			_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: "1", Sequence: 1, Name: "stop"}}, eventLive)
 			require.ErrorIs(t, err, agent.ErrControlUnsupported)
 			require.Zero(t, a.handles)
 			require.Equal(t, before, s.state.Agent)
@@ -115,7 +115,7 @@ func TestControlFanOutBackpressureKeepsAcceptedState(t *testing.T) {
 	require.NoError(t, initControlUnit(s))
 	s.agent.v2.registration.Bounds.MaxPendingBytes = 900
 	for i := uint64(1); i <= 2; i++ {
-		_, err := s.processControl(agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"})
+		_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"}}, eventLive)
 		require.NoError(t, err)
 	}
 	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}
@@ -123,7 +123,7 @@ func TestControlFanOutBackpressureKeepsAcceptedState(t *testing.T) {
 		a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "wait/v1", Class: agent.ReadOnly})
 	}
 	before := cloneAgentState(s.state.Agent)
-	err := s.handleV2Event(agent.Event{Kind: agent.Started, ID: "fan"})
+	_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "fan"}, eventLive)
 	require.ErrorIs(t, err, errTaskAdmissionBackpressure)
 	require.Equal(t, before, s.state.Agent)
 	require.Empty(t, s.agent.v2.tasks)
@@ -161,7 +161,7 @@ func TestControlQuarantine(t *testing.T) {
 			a := &controlSlowAgent{v2UnitAgent: v2UnitAgent{state: agent.State{Version: 1}}, mode: mode}
 			_, s := v2UnitSession(t, a, func(c *AgentConfig) { c.CallbackTimeout = 250 * time.Millisecond })
 			require.NoError(t, initControlUnit(s))
-			_, err := s.processControl(agent.ControlMessage{ID: "1", Sequence: 1, Name: "x"})
+			_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: "1", Sequence: 1, Name: "x"}}, eventLive)
 			require.Error(t, err)
 			require.Zero(t, s.agent.latest.V2.ControlHigh)
 			require.False(t, s.agent.overdue.Load())
@@ -185,7 +185,7 @@ func TestControlBudgetMath(t *testing.T) {
 	require.NoError(t, initControlUnit(s))
 	count := 0
 	for i := uint64(1); i <= 10; i++ {
-		_, err := s.processControl(agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"})
+		_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"}}, eventLive)
 		if err != nil {
 			require.ErrorIs(t, err, agent.ErrCapacity)
 			break
@@ -213,7 +213,7 @@ func TestControlMoveBudgetRemainsTerminal(t *testing.T) {
 	defer w.moveBytes.Add(-otherSessions)
 	a.state.HasMoveOnly = true
 	a.state.MoveOnlyLength = 1
-	_, err := s.processControl(agent.ControlMessage{ID: "1", Sequence: 1, Name: "x"})
+	_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: "1", Sequence: 1, Name: "x"}}, eventLive)
 	require.ErrorIs(t, err, ErrMoveBudget)
 	require.False(t, controlRefusal(err), "existing terminal contract determines the public definite class")
 	require.Zero(t, s.state.Agent.V2.ControlHigh)

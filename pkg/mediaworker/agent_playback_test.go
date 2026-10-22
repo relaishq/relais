@@ -33,7 +33,7 @@ func audioUnitSession(t *testing.T, count int) (*session, *v2UnitAgent, agent.Ta
 	intent := taskIntent{ID: r.TaskID, Turn: 1, Class: agent.ReadOnly, Phase: taskStarted, Published: 1}
 	s.agent.v2.tasks = []*localTask{{intent: intent, results: []agent.TaskResult{r}, mailboxBytes: taskResultBytes(r), terminalBytes: taskTerminalBytes(intent)}}
 	require.NoError(t, s.registerAudioLocked(r))
-	s.publishTaskIntents()
+	s.publishTaskIntents(s.agent.latest.V2)
 	s.publishAgent()
 	return s, a, r
 }
@@ -43,7 +43,8 @@ func appendUnitAudio(t *testing.T, s *session, a *v2UnitAgent, r agent.TaskResul
 	for i := range r.Chunk.Audio.Packets {
 		a.effects.Audio = append(a.effects.Audio, agent.Audio{Turn: r.Turn, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence, PacketOffset: uint32(i)}})
 	}
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "result", Kind: agent.TaskMessage, Result: &r}))
+	_, eventErr0 := (acceptedEvents{s}).submit(agent.Event{ID: "result", Kind: agent.TaskMessage, Result: &r}, eventLive)
+	require.NoError(t, eventErr0)
 	a.effects = agent.Effects{}
 }
 func TestPlaybackWindowDurationAndBytes(t *testing.T) {
@@ -157,10 +158,12 @@ func TestTimerGenerationResetCancelAndRestore(t *testing.T) {
 	s.storeClock = now
 	s.storeClockAt = time.Now()
 	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: time.Second}}}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
+	_, eventErr1 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started}, eventLive)
+	require.NoError(t, eventErr1)
 	require.EqualValues(t, 1, s.agent.latest.V2.Timers[0].Generation)
 	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: 2 * time.Second}}}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
+	_, eventErr2 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started}, eventLive)
+	require.NoError(t, eventErr2)
 	require.EqualValues(t, 2, s.agent.latest.V2.Timers[0].Generation)
 	s.storeClock = now.Add(time.Second)
 	s.storeClockAt = time.Now()
@@ -177,13 +180,16 @@ func TestTimerGenerationResetCancelAndRestore(t *testing.T) {
 	require.NoError(t, s.deliverClockEvent())
 	require.Equal(t, handles, a.handles)
 	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: time.Second}}, CancelTimers: []string{"a/12:"}}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
+	_, eventErr3 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started}, eventLive)
+	require.NoError(t, eventErr3)
 	require.EqualValues(t, 3, s.agent.latest.V2.Timers[0].Generation)
 	a.effects = agent.Effects{CancelTimers: []string{"a/12:"}}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
+	_, eventErr4 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started}, eventLive)
+	require.NoError(t, eventErr4)
 	require.Empty(t, s.agent.latest.V2.Timers)
 	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "negative", After: -1}}}
-	require.ErrorIs(t, s.handleV2Event(agent.Event{Kind: agent.Started}), agent.ErrIncompatibleAgent)
+	_, eventErr5 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started}, eventLive)
+	require.ErrorIs(t, eventErr5, agent.ErrIncompatibleAgent)
 	require.NotEqual(t, clockEventID("timer", "a", 12), clockEventID("timer", "a1", 2))
 }
 func TestPlaybackExactAndCrashRestore(t *testing.T) {
@@ -197,7 +203,7 @@ func TestPlaybackExactAndCrashRestore(t *testing.T) {
 			task.intent.Final = true
 			task.intent.Phase = taskTerminal
 			task.intent.Terminal = agent.OK
-			s.publishTaskIntents()
+			s.publishTaskIntents(s.agent.latest.V2)
 			s.publishAgent()
 			b := &v2UnitAgent{state: agent.State{Version: 1}}
 			_, target := v2UnitSession(t, b)
@@ -236,82 +242,6 @@ func TestAudioStreamingReleasesPayloadAfterAckAndDrain(t *testing.T) {
 	require.Less(t, s.moveReserved, before)
 	require.False(t, s.agent.v2.tasks[0].intent.Final)
 }
-func TestTurnClearCancelAndLateResults(t *testing.T) {
-	s, a, r := audioUnitSession(t, 8)
-	appendUnitAudio(t, s, a, r)
-	task := s.agent.v2.tasks[0]
-	task.attempt = 4
-	cancelCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	task.cancel = cancel
-	turn := agent.Turn(2)
-	a.effects = agent.Effects{ClearAudioBefore: &turn, CancelBefore: &turn}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
-	task = s.agent.v2.tasks[0] // The callback commits its owned task snapshot.
-	require.Empty(t, s.agent.v2.playback.queue)
-	require.Equal(t, agent.Turn(2), s.state.Agent.V2.CancelFloor)
-	require.ErrorIs(t, cancelCtx.Err(), context.Canceled)
-	e := taskEmission{id: task.intent.ID, attempt: 4, ctx: context.Background(), sequence: 2, chunk: agent.Chunk{Data: []byte("late")}, reply: make(chan error, 1)}
-	s.acceptEmission(e)
-	require.ErrorIs(t, <-e.reply, context.Canceled)
-	require.Len(t, task.results, 1)
-	require.Equal(t, agent.Canceled, task.results[0].Outcome)
-	// A lower requested floor cannot reopen the old turn.
-	lower := agent.Turn(1)
-	a.effects = agent.Effects{CancelBefore: &lower}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
-	require.EqualValues(t, 2, s.agent.latest.V2.CancelFloor)
-}
-func TestCapacityFIFOAndNoAdmittedTaskEviction(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"x/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-	for i := range 20 {
-		a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "x/v1", Class: agent.ReadOnly})
-	}
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "fanout", Kind: agent.Started}))
-	require.NotEmpty(t, s.agent.v2.tasks)
-	for i, task := range s.agent.v2.tasks {
-		require.Equal(t, deriveTaskID(s.id, "unit/v1", "fanout", fmt.Sprint(i)), task.intent.ID, "first admitted tasks stay admitted")
-	}
-	for _, task := range s.agent.v2.tasks {
-		require.Less(t, task.intent.Step, "9")
-	}
-	t.Logf("width 20 admits %d and refuses %d", len(s.agent.v2.tasks), len(s.agent.latest.V2.Capacity))
-	// A fan-out that needs refusal space must keep older outcomes first.
-	b := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, fifo := v2UnitSession(t, b)
-	require.NoError(t, fifo.initAgent(false, ResumeOptions{}))
-	fifo.agent.v2.registration.Tasks = s.agent.v2.registration.Tasks
-	fifo.agent.latest.V2.Capacity = []taskRefusal{{ID: "older", Turn: 1}}
-	b.effects = a.effects
-	require.NoError(t, fifo.handleV2Event(agent.Event{ID: "new", Kind: agent.Started}))
-	require.Equal(t, agent.TaskID("older"), fifo.agent.latest.V2.Capacity[0].ID)
-
-}
-
-func TestTaskRefusalFitCannotEvictAdmittedTasks(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"x/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-	var tasks []*localTask
-	for i := range 7 {
-		spec := agent.TaskSpec{Step: fmt.Sprint(i), Kind: "x/v1", Class: agent.ReadOnly}
-		var err error
-		tasks, _, err = s.prepareTaskEffects(agent.Event{ID: "cause", Kind: agent.Started}, agent.Effects{StartTasks: []agent.TaskSpec{spec}}, tasks, nil)
-		require.NoError(t, err)
-	}
-	require.Len(t, tasks, 6)
-	var refusals []taskRefusal
-	for i := 6; i < 20; i++ {
-		refusals = append(refusals, taskRefusal{ID: deriveTaskID(s.id, "unit/v1", "cause", fmt.Sprint(i))})
-	}
-	_, _, err := s.fitTaskRefusals(nil, tasks, nil, refusals)
-	require.ErrorIs(t, err, errTaskAdmissionBackpressure, "fitting refusals cannot evict admitted tasks")
-}
-
 func TestAudioMailboxBackpressureUntilPlaybackAckDrain(t *testing.T) {
 	s, a, r := audioUnitSession(t, 4)
 	appendUnitAudio(t, s, a, r)

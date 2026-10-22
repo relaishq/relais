@@ -63,7 +63,7 @@ func TestV2TaskShutdownFencesInFlightCallback(t *testing.T) {
 			s.agent.v2.tasks = []*localTask{{intent: intent, results: []agent.TaskResult{result}, launched: true, attempt: 1,
 				cancel: cancel, mailboxBytes: taskResultBytes(result), terminalBytes: taskTerminalBytes(intent)}}
 			s.agent.latest.V2.Started = true
-			s.publishTaskIntents()
+			s.publishTaskIntents(s.agent.latest.V2)
 			s.publishAgent()
 			before := cloneAgentState(s.state.Agent)
 			close(s.agent.v2.ready)

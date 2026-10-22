@@ -176,6 +176,8 @@ func TestCanceledSaveRestoresHistoryReservation(t *testing.T) {
 	s.worker.cfg.Agent.Factory = agenthost.Factory(agenthost.Registration{Name: "cancel-history/v1", Factory: func(agent.FactoryArgs) agent.Agent { return a }})
 	s.state.Agent = agentState{}
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
+	_, startedErr := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "started/history"}, eventLive)
+	require.NoError(t, startedErr)
 	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	prior := cloneAgentState(s.state.Agent)
 	s.worker.cfg.Agent.CallbackTimeout = time.Second
@@ -189,7 +191,8 @@ func TestCanceledSaveRestoresHistoryReservation(t *testing.T) {
 	}()
 	done := make(chan error, 1)
 	go func() {
-		done <- s.handleV2Event(agent.Event{Kind: agent.Control, ID: "late-history", Control: &agent.ControlMessage{ID: "late", Sequence: 1, Name: "remember", Data: []byte{'b'}}})
+		_, eventErr0 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, ID: "late-history", Control: &agent.ControlMessage{ID: "late", Sequence: 1, Name: "remember", Data: []byte{'b'}}}, eventLive)
+		done <- eventErr0
 	}()
 	var callback context.Context
 	select {

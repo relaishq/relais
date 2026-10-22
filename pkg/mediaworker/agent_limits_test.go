@@ -21,7 +21,8 @@ func TestV2OversizedStateRefusesWithoutEndingCall(t *testing.T) {
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
 	a.callback = func(context.Context) { a.state.Bytes = make([]byte, 1025) }
 	input := legacy.Input{Progress: legacy.Progress{SSRC: 42, Index: 7}}
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "audio/42/7", Kind: agent.AudioInput, Input: &input}))
+	_, eventErr0 := (acceptedEvents{s}).submit(agent.Event{ID: "audio/42/7", Kind: agent.AudioInput, Input: &input}, eventLive)
+	require.NoError(t, eventErr0)
 	require.Equal(t, "accepted", string(s.state.Agent.State.Bytes))
 	require.EqualValues(t, 1, s.state.Agent.Progress.Consumed)
 	require.Len(t, s.state.Agent.V2.Capacity, 1)
@@ -32,7 +33,8 @@ func TestV2OversizedStateRefusesWithoutEndingCall(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, delivered)
 	require.Empty(t, s.state.Agent.V2.Capacity)
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "audio/42/8", Kind: agent.AudioInput, Input: &input}))
+	_, eventErr1 := (acceptedEvents{s}).submit(agent.Event{ID: "audio/42/8", Kind: agent.AudioInput, Input: &input}, eventLive)
+	require.NoError(t, eventErr1)
 	require.EqualValues(t, 2, s.state.Agent.Progress.Consumed)
 }
 
@@ -142,7 +144,8 @@ func TestV2EmitRestoreDoesNotGrantImmediatePublication(t *testing.T) {
 	handler := func(context.Context, *agent.TaskRun) error { return nil }
 	source.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"stream/v1": handler}
 	a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "stream", Kind: "stream/v1", Class: agent.ReadOnly, Resume: agent.Retry}}}
-	require.NoError(t, source.handleV2Event(agent.Event{ID: "started", Kind: agent.Started}))
+	_, eventErr2 := (acceptedEvents{source}).submit(agent.Event{ID: "started", Kind: agent.Started}, eventLive)
+	require.NoError(t, eventErr2)
 	task := source.agent.v2.tasks[0]
 	task.launched, task.intent.Phase = true, taskStarted
 	first := taskEmission{id: task.intent.ID, ctx: context.Background(), sequence: 1, chunk: agent.Chunk{Data: []byte("one")}, reply: make(chan error, 1)}

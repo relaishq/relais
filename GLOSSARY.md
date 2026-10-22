@@ -10,3 +10,9 @@ _Avoid_: Snapshot writer (covers only part of the concept)
 
 **Worker observation**: The control plane's knowledge of one registered worker's liveness, rejoin progress, drain state and placement eligibility. A failed status read leaves liveness unproven; heartbeat expiry establishes death.
 _Avoid_: Worker health check, ownership authority
+
+## Accepted-event module
+
+**Accepted-event module**:
+The per-call authority for accepting one agent event with its application state, consumed input position and host effects as one complete local change. Local acceptance is distinct from a successful checkpoint.
+_Avoid_: Effect publisher (covers only part of the concept)

@@ -22,7 +22,7 @@ func TestTaskCapacityWideCallback(t *testing.T) {
 			for i := range width {
 				a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "x/v1", Class: agent.ReadOnly})
 			}
-			err := s.handleV2Event(agent.Event{ID: "started/x", Kind: agent.Started})
+			_, err := (acceptedEvents{s}).submit(agent.Event{ID: "started/x", Kind: agent.Started}, eventLive)
 			if width == 100 {
 				require.ErrorIs(t, err, agent.ErrCapacity)
 				require.NotErrorIs(t, err, errTaskAdmissionBackpressure)
@@ -58,13 +58,16 @@ func TestTaskCapacityDuplicateCause(t *testing.T) {
 	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"x/v1": func(context.Context, *agent.TaskRun) error { return nil }}
 	for i := range 7 {
 		a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "s", Kind: "x/v1", Class: agent.ReadOnly}}}
-		require.NoError(t, s.handleV2Event(agent.Event{ID: agent.EventID(fmt.Sprint("fill/", i)), Kind: agent.Started}))
+		_, eventErr1 := (acceptedEvents{s}).submit(agent.Event{ID: agent.EventID(fmt.Sprint("fill/", i)), Kind: agent.Started}, eventLive)
+		require.NoError(t, eventErr1)
 	}
 	a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "s", Kind: "x/v1", Class: agent.ReadOnly}, {Step: "t", Kind: "x/v1", Class: agent.ReadOnly}}}
 	cause := agent.Event{ID: "audio/1/99", Kind: agent.Started}
-	require.NoError(t, s.handleV2Event(cause))
+	_, eventErr2 := (acceptedEvents{s}).submit(cause, eventLive)
+	require.NoError(t, eventErr2)
 	before := len(s.agent.latest.V2.Capacity)
-	require.NoError(t, s.handleV2Event(cause))
+	_, eventErr3 := (acceptedEvents{s}).submit(cause, eventLive)
+	require.NoError(t, eventErr3)
 	require.Equal(t, before, len(s.agent.latest.V2.Capacity))
 	require.NoError(t, s.validateTaskMoves(s.agent.latest.V2.Tasks, nil))
 }
@@ -89,7 +92,7 @@ func TestTaskCapacityPruneUsesReceiveHorizon(t *testing.T) {
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
 	intent := taskIntent{ID: "receipt", Class: agent.ReadOnly, Phase: taskTerminal, Final: true, Terminal: agent.OK, Published: 1, Cursor: 1, InputCause: &taskCause{SSRC: 42, Index: 10}}
 	s.agent.v2.tasks = []*localTask{{intent: intent}}
-	s.publishTaskIntents()
+	s.publishTaskIntents(s.agent.latest.V2)
 	s.publishAgent()
 	s.mu.Lock()
 	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))

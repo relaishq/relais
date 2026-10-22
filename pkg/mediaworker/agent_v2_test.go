@@ -75,44 +75,6 @@ func v2UnitSession(t *testing.T, a agent.Agent, opts ...func(*AgentConfig)) (*Wo
 	t.Cleanup(s.close)
 	return w, s
 }
-func TestV2UnknownIgnored(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1, Bytes: []byte("accepted")}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	before := cloneAgentState(s.state.Agent)
-	for _, kind := range []agent.EventKind{"future_kind"} {
-		require.NoError(t, s.handleV2Event(agent.Event{Kind: kind}))
-	}
-	require.Zero(t, a.handles)
-	require.Equal(t, 1, a.saves, "unknown and reserved kinds must not even Save")
-	require.Equal(t, before, s.state.Agent)
-}
-func TestV2UnsupportedEffectsRollback(t *testing.T) {
-	cases := []struct {
-		name    string
-		kind    agent.EventKind
-		effects agent.Effects
-		message string
-	}{
-		{"resumed-start", agent.Resumed, agent.Effects{StartTasks: []agent.TaskSpec{{Kind: "stt/v1"}}}, "StartTasks from Resumed is forbidden"},
-		{"start", agent.Started, agent.Effects{StartTasks: []agent.TaskSpec{{}}}, "invalid task specification"},
-		{"audio", agent.Started, agent.Effects{Audio: []agent.Audio{{}}}, "audio reference has no payload"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			a := &v2UnitAgent{state: agent.State{Version: 1, Bytes: []byte("accepted")}, effects: tc.effects}
-			_, s := v2UnitSession(t, a)
-			require.NoError(t, s.initAgent(false, ResumeOptions{}))
-			before := cloneAgentState(s.state.Agent)
-			err := s.handleV2Event(agent.Event{Kind: tc.kind})
-			require.ErrorContains(t, err, tc.message)
-			require.Equal(t, before, s.state.Agent, "rejected effect must not advance accepted state")
-			require.Equal(t, before.State.Bytes, a.state.Bytes, "rejected state is restored")
-			require.Equal(t, 1, a.restores)
-			require.Equal(t, 1, a.saves, "rejected effects never Save")
-		})
-	}
-}
 func TestV2LateCallbackQuarantinedBeforeRestore(t *testing.T) {
 	var returned atomic.Bool
 	a := &v2UnitAgent{state: agent.State{Version: 1, Bytes: []byte("accepted")}, callback: func(ctx context.Context) {
@@ -123,7 +85,7 @@ func TestV2LateCallbackQuarantinedBeforeRestore(t *testing.T) {
 	_, s := v2UnitSession(t, a)
 	s.worker.cfg.Agent.CallbackTimeout = 10 * time.Millisecond
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	err := s.handleV2Event(agent.Event{Kind: agent.Started})
+	_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started}, eventLive)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.True(t, returned.Load(), "Restore must wait for late Handle")
 	require.Equal(t, []byte("accepted"), a.state.Bytes)

@@ -24,7 +24,8 @@ func TestTaskSideEffectRetryAfterUnconsumedFinal(t *testing.T) {
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
 	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"pay/v1": func(context.Context, *agent.TaskRun) error { return nil }}
 	a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "pay", Kind: "pay/v1", Class: agent.SideEffecting, Resume: agent.Retry, Request: []byte("args")}}}
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "started/x", Kind: agent.Started}))
+	_, eventErr0 := (acceptedEvents{s}).submit(agent.Event{ID: "started/x", Kind: agent.Started}, eventLive)
+	require.NoError(t, eventErr0)
 	task := s.agent.v2.tasks[0]
 	task.attempt, task.launched, task.intent.Phase = 1, true, taskStarted
 	for _, e := range []taskEmission{
@@ -92,7 +93,8 @@ func TestTaskCapacityYields(t *testing.T) {
 	s.agent.v2.instance = a
 	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"test/v1": func(context.Context, *agent.TaskRun) error { return nil }}
 	a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "first", Kind: "test/v1", Class: agent.ReadOnly, Request: make([]byte, 2<<20)}}}
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "started", Kind: agent.Started}))
+	_, eventErr1 := (acceptedEvents{s}).submit(agent.Event{ID: "started", Kind: agent.Started}, eventLive)
+	require.NoError(t, eventErr1)
 	require.LessOrEqual(t, a.capacity, 1)
 	for range 12 {
 		before := a.capacity
@@ -120,7 +122,8 @@ func TestTaskCapacityAbandonMove(t *testing.T) {
 	for i := range 12 {
 		a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "test/v1", Class: agent.SideEffecting, Resume: agent.Abandon, Request: []byte("args")})
 	}
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "started", Kind: agent.Started}))
+	_, eventErr2 := (acceptedEvents{s}).submit(agent.Event{ID: "started", Kind: agent.Started}, eventLive)
+	require.NoError(t, eventErr2)
 	s.launchTasks()
 	s.mu.Lock()
 	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))

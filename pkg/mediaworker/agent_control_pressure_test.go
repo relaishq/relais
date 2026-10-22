@@ -28,10 +28,11 @@ func TestControlAcknowledgedReceiptsReleaseAdmission(t *testing.T) {
 				for i := 0; i < 8; i++ {
 					a.effects.SetTimers = append(a.effects.SetTimers, agent.TimerSpec{ID: fmt.Sprint(i) + strings.Repeat("t", 40), After: time.Hour})
 				}
-				require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started, ID: "timers"}))
+				_, eventErr0 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "timers"}, eventLive)
+				require.NoError(t, eventErr0)
 				a.effects = agent.Effects{}
 				for i := 1; i <= held; i++ {
-					_, err := s.processControl(agent.ControlMessage{ID: fmt.Sprint(i), Sequence: uint64(i), Name: "x"})
+					_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: fmt.Sprint(i), Sequence: uint64(i), Name: "x"}}, eventLive)
 					require.NoError(t, err)
 					require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(uint64(i))}))
 				}
@@ -39,14 +40,15 @@ func TestControlAcknowledgedReceiptsReleaseAdmission(t *testing.T) {
 					a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprintf("s%02d", i), Kind: "wait/v1", Class: agent.ReadOnly})
 				}
 				before := a.handles
-				require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started, ID: "fan"}))
+				_, eventErr2 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "fan"}, eventLive)
+				require.NoError(t, eventErr2)
 				require.Equal(t, before+1, a.handles, "no recursive Handle retry")
 				require.Equal(t, width, len(s.agent.v2.tasks)+len(s.agent.latest.V2.Capacity))
 				if held > 0 {
 					require.Empty(t, s.agent.latest.V2.Controls)
 					require.EqualValues(t, held, s.agent.latest.V2.ControlFloor)
 					require.EqualValues(t, held, s.agent.latest.V2.ControlHigh)
-					_, err := s.processControl(agent.ControlMessage{ID: "1", Sequence: 1, Name: "x"})
+					_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: "1", Sequence: 1, Name: "x"}}, eventLive)
 					require.ErrorIs(t, err, agent.ErrControlStale)
 				}
 			})
@@ -105,7 +107,7 @@ func TestControlUnacknowledgedAdmissionRetryCadence(t *testing.T) {
 	require.NoError(t, initControlUnit(s))
 	s.agent.v2.registration.Bounds.MaxPendingBytes = 900
 	for i := uint64(1); i <= 2; i++ {
-		_, err := s.processControl(agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"})
+		_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"}}, eventLive)
 		require.NoError(t, err)
 	}
 	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}
@@ -124,7 +126,8 @@ func TestControlUnacknowledgedAdmissionRetryCadence(t *testing.T) {
 	handles, restores := a.handles, a.restores
 	start := time.Now()
 	for time.Since(start) < duration {
-		require.ErrorIs(t, s.handleV2Event(agent.Event{Kind: agent.Started, ID: "fan"}), errTaskAdmissionBackpressure)
+		_, eventErr5 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "fan"}, eventLive)
+		require.ErrorIs(t, eventErr5, errTaskAdmissionBackpressure)
 		time.Sleep(10 * time.Millisecond)
 	}
 	attempts := a.handles - handles
@@ -132,7 +135,8 @@ func TestControlUnacknowledgedAdmissionRetryCadence(t *testing.T) {
 	require.LessOrEqual(t, attempts, int(duration/(250*time.Millisecond))+1)
 	require.Equal(t, before, s.state.Agent)
 	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(2)}))
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started, ID: "fan"}), "acknowledgement bypasses retry delay")
+	_, eventErr6 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "fan"}, eventLive)
+	require.NoError(t, eventErr6, "acknowledgement bypasses retry delay")
 }
 
 func TestControlAcknowledgedReceiptsReleaseEffects(t *testing.T) {
@@ -142,7 +146,7 @@ func TestControlAcknowledgedReceiptsReleaseEffects(t *testing.T) {
 			_, s := v2UnitSession(t, a, func(c *AgentConfig) { c.CallbackTimeout = 5 * time.Second })
 			require.NoError(t, initControlUnit(s))
 			for i := uint64(1); i <= 2; i++ {
-				_, err := s.processControl(agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"})
+				_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"}}, eventLive)
 				require.NoError(t, err)
 				require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(i)}))
 			}
@@ -150,14 +154,15 @@ func TestControlAcknowledgedReceiptsReleaseEffects(t *testing.T) {
 			s.agent.v2.registration.Bounds.MaxPendingBytes = 550
 			a.effects.SetTimers = []agent.TimerSpec{{ID: "timer", After: time.Hour}}
 			if kind == agent.Control {
-				_, err := s.processControl(agent.ControlMessage{ID: "3", Sequence: 3, Name: "x"})
+				_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: "3", Sequence: 3, Name: "x"}}, eventLive)
 				require.NoError(t, err)
 			} else {
 				event := agent.Event{Kind: kind, ID: "effect"}
 				if kind == agent.AudioInput {
 					event.Input = &legacy.Input{}
 				}
-				require.NoError(t, s.handleV2Event(event))
+				_, eventErr9 := (acceptedEvents{s}).submit(event, eventLive)
+				require.NoError(t, eventErr9)
 			}
 			require.Len(t, s.agent.latest.V2.Timers, 1)
 			require.Greater(t, s.agent.latest.V2.ControlFloor, uint64(0))
@@ -170,7 +175,7 @@ func TestControlAcknowledgedReceiptsReleaseEmission(t *testing.T) {
 	_, s := v2UnitSession(t, a, func(c *AgentConfig) { c.CallbackTimeout = 5 * time.Second })
 	require.NoError(t, initControlUnit(s))
 	for i := uint64(1); i <= 2; i++ {
-		_, err := s.processControl(agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"})
+		_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"}}, eventLive)
 		require.NoError(t, err)
 		require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(i)}))
 	}
