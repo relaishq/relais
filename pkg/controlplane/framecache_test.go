@@ -35,7 +35,7 @@ func TestTerminalCallDeletesFrames(t *testing.T) {
 					require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 				}
 				expireObservedWorker(t, p.workers["a"])
-				p.takeover(ctx, p.workers["a"], lease, time.Now())
+				p.recovery.recover(ctx, p.workers["a"], lease, time.Now())
 				require.Len(t, p.recentTakeovers(), 1)
 				require.Equal(t, outcome == "lost-takeover", p.recentTakeovers()[0].Lost)
 			}
@@ -51,7 +51,8 @@ func TestTerminalCallDeletesFrames(t *testing.T) {
 }
 
 func TestUncertainRollbackCheckpointLossUsesTerminalCleanup(t *testing.T) {
-	p, _, _, r := setup(t)
+	p, a, b, r := setup(t)
+	p.workers["a"].worker = &exportingWorker{fakeWorker: a}
 	cache := framecache.NewMemory(framecache.Limits{})
 	p.config.FrameCache = cache
 	ctx := context.Background()
@@ -63,12 +64,10 @@ func TestUncertainRollbackCheckpointLossUsesTerminalCleanup(t *testing.T) {
 	require.NoError(t, err)
 	state := takeoverSnapshot(t, id, 0)
 	require.NoError(t, p.store.PutState(ctx, lease, state))
-	lease, err = p.store.Transfer(ctx, lease, p.workers["b"].addr, time.Minute)
-	require.NoError(t, err)
+	p.workers["b"].worker = &exportingWorker{fakeWorker: b, uncertainResume: true}
 	now := time.Now()
 	p.store = &checkpointClockStore{Store: p.store, checkpoint: sessionstore.Checkpoint{Now: now, StoredAt: now.Add(-4 * time.Second), Age: 4 * time.Second}}
-	var result mediaworker.HandoverResult
-	err = p.rollback(p.calls[id], p.workers["a"], p.workers["b"], r, state, lease, true, true, true, &result, mediaworker.ErrClosed, now)
+	_, err = p.Move(ctx, id, "b")
 	require.ErrorIs(t, err, mediaworker.ErrSequenceBudgetExhausted)
 	require.Empty(t, p.calls)
 	require.Equal(t, []string{id}, r.forgotten)

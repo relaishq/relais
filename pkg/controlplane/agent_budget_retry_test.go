@@ -68,13 +68,11 @@ func TestMoveBudgetRetryBounded(t *testing.T) {
 		source := p.workers["a"]
 		start := time.Now()
 		for time.Since(start) < 3*time.Second {
-			p.mu.Lock()
-			pending := source.pending[id]
-			p.mu.Unlock()
+			pending := pendingRecovery(p, source, id)
 			if pending == nil {
 				break
 			}
-			p.takeover(ctx, source, pending.lease, time.Now())
+			p.recovery.recover(ctx, source, *pending, time.Now())
 			time.Sleep(10 * time.Millisecond)
 		}
 		require.Less(t, time.Since(start), 2500*time.Millisecond)
@@ -118,19 +116,17 @@ func TestMoveBudgetRetryAlternateAndRollback(t *testing.T) {
 				require.Error(t, err)
 				source := p.workers["a"]
 				if retained {
-					p.takeover(ctx, source, source.pending[id].lease, time.Now())
+					p.recovery.recover(ctx, source, *pendingRecovery(p, source, id), time.Now())
 					p.store = store
 				}
 				c := &fakeWorker{store: store, addr: netip.MustParseAddrPort("127.0.0.1:3"), running: map[string]bool{}}
 				require.NoError(t, p.Register("c", c.addr, c))
 				require.Eventually(t, func() bool {
-					p.mu.Lock()
-					pending := source.pending[id]
-					p.mu.Unlock()
+					pending := pendingRecovery(p, source, id)
 					if pending == nil {
 						return true
 					}
-					p.takeover(ctx, source, pending.lease, time.Now())
+					p.recovery.recover(ctx, source, *pending, time.Now())
 					return c.runs(id)
 				}, time.Second, 10*time.Millisecond)
 				require.True(t, c.runs(id), "a budget refusal must not pin the unavailable target")
@@ -172,15 +168,15 @@ func TestMoveBudgetRetryPreservesCommittedHangup(t *testing.T) {
 		_, err = p.Move(ctx, id, "b")
 		require.Error(t, err)
 		source := p.workers["a"]
-		pending := source.pending[id]
+		pending := pendingRecovery(p, source, id)
 		require.NotNil(t, pending)
-		require.NoError(t, store.Release(ctx, pending.lease))
-		pending.budgetStarted = time.Now().Add(-takeoverBudget - time.Millisecond)
-		p.takeover(ctx, source, pending.lease, time.Now())
+		require.NoError(t, store.Release(ctx, *pending))
+		time.Sleep(takeoverBudget + time.Millisecond) // Reach the real deadline; ended evidence still wins.
+		p.recovery.recover(ctx, source, *pending, time.Now())
 		status, err := p.Status(ctx)
 		require.NoError(t, err)
 		require.Zero(t, status.LostCount, "a committed hangup is not a capacity loss")
-		require.Empty(t, source.pending)
+		require.Empty(t, recoveryWork(p, source))
 	})
 }
 
@@ -202,17 +198,17 @@ func TestMoveBudgetRetryRollbackReturnsToSource(t *testing.T) {
 		_, err = p.Move(ctx, id, "b")
 		require.ErrorIs(t, err, mediaworker.ErrMoveBudget)
 		source := p.workers["a"]
-		require.NotNil(t, source.pending[id])
+		require.NotNil(t, pendingRecovery(p, source, id))
 		aw.refuse.Store(false)
 		require.Eventually(t, func() bool {
-			pending := source.pending[id]
+			pending := pendingRecovery(p, source, id)
 			if pending == nil {
 				return a.runs(id)
 			}
-			p.takeover(ctx, source, pending.lease, time.Now())
+			p.recovery.recover(ctx, source, *pending, time.Now())
 			return a.runs(id)
 		}, time.Second, 10*time.Millisecond)
-		require.Empty(t, source.pending)
+		require.Empty(t, recoveryWork(p, source))
 		require.False(t, b.runs(id))
 		status, err := p.Status(ctx)
 		require.NoError(t, err)

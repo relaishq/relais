@@ -7,15 +7,14 @@ import (
 	"github.com/relaishq/relais/internal/privateapi"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/mediaworker"
-	"github.com/stretchr/testify/require"
 )
 
 func TestTaskCapacityExportIsDefinitive(t *testing.T) {
-	require.False(t, uncertainExport(agent.ErrCapacity))
-	require.True(t, uncertainExport(errors.Join(agent.ErrCapacity, privateapi.ErrUncertain)))
+	requireExportOutcome(t, agent.ErrCapacity, false)
+	requireExportOutcome(t, errors.Join(agent.ErrCapacity, privateapi.ErrUncertain), true)
 }
 
 func TestTaskIncompatibleExportIsDefinitive(t *testing.T) {
-	require.False(t, uncertainExport(mediaworker.ErrExportIncompatible))
-	require.True(t, uncertainExport(errors.Join(mediaworker.ErrExportIncompatible, privateapi.ErrUncertain)))
+	requireExportOutcome(t, mediaworker.ErrExportIncompatible, false)
+	requireExportOutcome(t, errors.Join(mediaworker.ErrExportIncompatible, privateapi.ErrUncertain), true)
 }

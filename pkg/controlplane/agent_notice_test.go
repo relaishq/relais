@@ -181,7 +181,7 @@ func TestAgentTakeoverRestoreFailurePreservesCause(t *testing.T) {
 					require.NoError(t, err)
 					require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 					expireObservedWorker(t, p.workers["a"])
-					p.takeover(ctx, p.workers["a"], lease, time.Now())
+					p.recovery.recover(ctx, p.workers["a"], lease, time.Now())
 					status, err := p.Status(ctx)
 					require.NoError(t, err)
 					require.Len(t, status.Takeovers, 1, "typed agent failure must finish this attempt rather than retry the same target")

@@ -83,10 +83,11 @@ func TestTakeoverLossRetainsCleanupForRetry(t *testing.T) {
 	require.NoError(t, err)
 	source := p.workers["a"]
 	c := p.calls[id]
-	c.mu.Lock()
-	result := MoveResult{Kind: "takeover", ID: id, Start: time.Now()}
-	p.completeTakeover(source, c, lease, &result, true, sessionstore.ErrNotFound)
-	c.mu.Unlock()
+	expireObservedWorker(t, source)
+	outcome := p.recovery.recover(ctx, source, lease, time.Now())
+	require.NotNil(t, outcome)
+	require.True(t, outcome.Lost)
+
 	require.Equal(t, 1, retry.attempts)
 	require.Contains(t, p.calls, id)
 	require.EqualValues(t, 1, p.lostCount)

@@ -24,10 +24,7 @@ import (
 
 	"github.com/relaishq/relais/internal/movediag"
 	"github.com/relaishq/relais/internal/privateapi"
-	"github.com/relaishq/relais/pkg/agent"
-	agentv2 "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/mediaworker"
-	"github.com/relaishq/relais/pkg/metrics"
 	"github.com/relaishq/relais/pkg/relay"
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
@@ -85,32 +82,6 @@ type ExportMoveRelay interface {
 	MoveSessionAfterExport(string, netip.AddrPort, netip.AddrPort, uint64) error
 }
 
-// moveAfterExport keeps the existing route call when the capability is absent.
-// A retry whose previous route call failed no longer knows the routed source,
-// so it cannot drain that source's output: it uses the existing route repair.
-func moveAfterExport(r Relay, id string, from, to netip.AddrPort, epoch uint64) error {
-	if mover, ok := r.(ExportMoveRelay); ok && from.IsValid() {
-		return mover.MoveSessionAfterExport(id, from, to, epoch)
-	}
-	if tenure, ok := r.(TenureRelay); ok && epoch != 0 {
-		return tenure.MoveSessionAtEpoch(id, from, to, epoch)
-	}
-	return r.MoveSession(id, from, to)
-}
-
-// releaseHold releases with the export's consumed input when both it and the
-// relay capability are available, and otherwise exactly as before.
-func releaseHold(r Relay, id string, to netip.AddrPort, input map[uint32]relay.ConsumedInput, result *mediaworker.HandoverResult) error {
-	if exporter, ok := r.(ExportReleaseRelay); ok && input != nil {
-		reply, err := exporter.ReleaseAfterExport(id, to, input)
-		result.HeldPackets, result.RecoveredPackets, result.ReleaseLockHeld = reply.Packets, reply.Recovered, reply.LockHeld
-		return err
-	}
-	held, err := r.ReleaseSession(id, to)
-	result.HeldPackets = held
-	return err
-}
-
 // ReplayRelay is the optional phase-2 caller-media cache capability. Both
 // *relay.Relay and RemoteRelay implement it; phase-1/fake relays remain valid.
 type ReplayRelay interface {
@@ -127,7 +98,6 @@ type registration struct {
 	reserved      int // incoming creates/moves; counted when balancing
 	rollbackSlots int // source protection, used only by placement load
 	retryingMoves bool
-	pending       map[string]*takeoverState // unfinished transfers, retained for retry
 }
 
 type call struct {
@@ -164,6 +134,7 @@ type call struct {
 // Plane owns the registry and call metadata. The store remains authoritative
 // for ownership. New and Register must be called before accepting calls.
 type Plane struct {
+	recovery        *moveRecovery
 	restart         *restartState
 	inventory       keyInventoryCache
 	metrics         planeMetrics
@@ -198,7 +169,7 @@ func New(r Relay, store sessionstore.Store) *Plane { return NewWithConfig(r, sto
 // Run must be driven with an application-owned lifetime context.
 func NewWithConfig(r Relay, store sessionstore.Store, config Config) *Plane {
 	config = config.defaults()
-	return &Plane{
+	p := &Plane{
 		relay:           r,
 		config:          config,
 		store:           store,
@@ -210,6 +181,8 @@ func NewWithConfig(r Relay, store sessionstore.Store, config Config) *Plane {
 		ttl:             config.LeaseTTL,
 		incomingChanged: make(chan struct{}),
 	}
+	p.recovery = &moveRecovery{plane: p, pending: make(map[*registration]map[string]*moveTransfer)}
+	return p
 }
 
 // Register names a worker by its unique private relay-leg address.
@@ -664,309 +637,7 @@ func (p *Plane) moveRequest(ctx context.Context, id, to string) (MoveResult, err
 	}
 	defer p.unreserve(target)
 
-	return p.move(ctx, c, lease, target)
-}
-
-// move holds the call lock and an incoming reservation on target.
-func (p *Plane) move(ctx context.Context, c *call, lease sessionstore.Lease, target *registration) (res MoveResult, err error) {
-	moved, recoveryMetrics := false, false
-	defer func() {
-		if recoveryMetrics {
-			return // Pending recovery owns the eventual metric outcome.
-		}
-		if err != nil {
-			p.metrics.moveErrors.Add(1)
-		} else if moved {
-			p.metrics.moves.Add(1)
-		}
-	}()
-	p.mu.Lock()
-	source, r := p.owner(lease.Worker), p.relay
-	// Keep a slot for synchronous rollback after Transfer releases the source
-	// lease. Otherwise a concurrent create could fill it before rollback.
-	rollbackReserved := source != nil && p.config.WorkerCallCap > 0
-	if rollbackReserved {
-		source.rollbackSlots++
-		p.loadVersion++
-	}
-	p.mu.Unlock()
-	if rollbackReserved {
-		defer func() {
-			p.mu.Lock()
-			source.rollbackSlots--
-			p.loadVersion++
-			p.mu.Unlock()
-		}()
-	}
-	if source == nil {
-		return res, ErrUnknownCall
-	}
-
-	if err = p.beginIntent(ctx, c, "move", lease); err != nil {
-		return res, err
-	}
-	defer p.finishIntent(c)
-	res = MoveResult{Kind: "move", ID: c.id, From: source.name, To: target.name, Start: time.Now(), Result: mediaworker.HandoverResult{SessionID: c.id}}
-	defer func() {
-		res.End = time.Now()
-		res.Result.Duration = res.End.Sub(res.Start)
-		if err != nil {
-			res.Error = err.Error()
-		}
-	}()
-	started := time.Now()
-	// Missing acknowledgement aborts before export; the relay replays to A.
-	if err = diagnosticRelay(r, movediag.Phase(ctx, "barrier")).HoldSession(movediag.Phase(ctx, "barrier"), c.id, source.addr); err != nil {
-		if errors.Is(err, privateapi.ErrUncertain) {
-			_, _ = r.ReleaseSession(c.id, source.addr)
-		}
-		return res, err
-	}
-
-	res.Result.Drain = time.Since(started)
-	// Successful/rolled-back resume releases to its owner. An uncertain final
-	// export retains the hold until adoption, bounded by the relay backstop.
-	// exported is set only while the releasing owner resumed from the exact,
-	// margin-zero export: the hold then also replays input it never consumed.
-	releaseTo := source.addr
-	released := false
-	var exported map[uint32]relay.ConsumedInput
-	defer func() {
-		if released {
-			return
-		}
-		p.mu.Lock()
-		pending := source.pending[c.id]
-		retained := pending != nil
-		lost := p.calls[c.id] != c
-		p.mu.Unlock()
-		if lost {
-			// Terminal cleanup already released the hold and forgot the call.
-			res.Lost = true
-			return
-		}
-		if retained {
-			return
-		}
-		releaseErr := releaseHold(diagnosticRelay(r, movediag.Phase(ctx, "release")), c.id, releaseTo, exported, &res.Result)
-		if errors.Is(releaseErr, relay.ErrHoldExpired) {
-			res.Result.HoldExpired = true
-			if err == nil {
-				// Resume completed; expiry affected packet holding, not ownership.
-				// The relay already counted it in HoldTimeouts. Do not invite a retry.
-				return
-			}
-		}
-		if releaseErr != nil {
-			err = errors.Join(err, fmt.Errorf("controlplane: release caller hold: %w", releaseErr))
-		}
-	}()
-	started = time.Now()
-	state, err := diagnosticWorker(source.worker, movediag.Phase(ctx, "export")).ExportSession(c.id)
-	res.Result.Export = time.Since(started)
-	if err != nil {
-		// A generic/transport error cannot prove export did not flush A.
-		// Bump its epoch either way and recover the latest store snapshot.
-		if uncertainExport(err) {
-			recoveryMetrics = true
-			p.mu.Lock()
-			if source.pending == nil {
-				source.pending = make(map[string]*takeoverState)
-			}
-			source.pending[c.id] = &takeoverState{call: c, lease: lease, routed: source.addr, routedLease: lease,
-				excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts, held: true, outageStarted: res.Start}
-			p.mu.Unlock()
-			recovery, cancel := context.WithTimeout(context.Background(), takeoverBudget)
-			defer cancel()
-			outcome := p.takeoverLocked(recovery, source, c, lease, res.Start)
-			p.mu.Lock()
-			pending := source.pending[c.id]
-			p.mu.Unlock()
-			if outcome != nil {
-				res = *outcome
-				if !res.Lost {
-					releaseTo = target.addr
-					err = nil
-				} else {
-					err = errors.New(res.Error)
-				}
-			}
-			if pending != nil {
-				return res, fmt.Errorf("controlplane: export uncertain; recovery pending: %w", err)
-			}
-			if outcome == nil {
-				// A concurrent transfer ended recovery without a terminal outcome.
-				// Let move's defer count the failed coordination attempt.
-				recoveryMetrics = false
-			}
-			released = true
-			return res, err
-		}
-		if errors.Is(err, mediaworker.ErrUnknownSession) {
-			// A hard-killed source has no memory but can still own a live
-			// lease and snapshot. Preserve that record for crash recovery.
-			current, getErr := p.store.Get(ctx, c.id)
-			if errors.Is(getErr, sessionstore.ErrEnded) {
-				p.forget(c)
-			} else if errors.Is(getErr, sessionstore.ErrNotFound) {
-				c.rememberLease(lease)
-				p.expiredLocked(ctx, c)
-				res.Lost, res.LossCause = true, "ownership_expired"
-			} else if getErr == nil &&
-				(current.Worker != lease.Worker || current.Epoch != lease.Epoch) {
-				p.forget(c)
-			}
-		}
-
-		return res, err
-	}
-
-	res.Result.StateBytes = len(state)
-	// A malformed copy keeps the plain release; resume would reject it anyway.
-	exported, _ = mediaworker.SnapshotConsumedInput(state)
-	transferred, err := p.transfer(movediag.Phase(ctx, "transfer"), lease, target.addr)
-	if err != nil {
-		if p.retainUncertainMove(source, c, lease, source.addr, state, err, res.Start) {
-			return res, err
-		}
-		err = p.rollback(c, source, target, r, state, lease, false, false, false, &res.Result, err, res.Start)
-		return res, err
-	}
-
-	if err = moveAfterExport(diagnosticRelay(r, movediag.Phase(ctx, "transfer")), c.id, source.addr, target.addr, 0); err != nil {
-		err = p.rollback(c, source, target, r, state, transferred, true, true, false, &res.Result, err, res.Start)
-		return res, err
-	}
-
-	started = time.Now()
-	opts := mediaworker.ResumeOptions{Kind: agent.PlannedMove, Lease: transferred}
-	if movediag.ID(ctx) != "" {
-		opts.Context = movediag.Copy(context.Background(), movediag.Phase(ctx, "resume"))
-	}
-	_, err = target.worker.ResumeSession(state, opts)
-	res.Result.Resume = time.Since(started)
-	if err != nil {
-		// Explicit transport uncertainty can hide a committed adoption, even
-		// with an agent cause. Otherwise typed callback failures are definitive.
-		agentFailure := errors.Is(err, agentv2.ErrIncompatibleAgent) || errors.Is(err, agent.ErrRestore) || errors.Is(err, agent.ErrVersion) || errors.Is(err, agent.ErrStateTooLarge) || errors.Is(err, agent.ErrSave)
-		uncertainResume := errors.Is(err, privateapi.ErrUncertain) || (!agentFailure && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)))
-		if uncertainResume {
-			p.metrics.uncertainMoveResumes.Add(1)
-			// The source resumes from a store checkpoint with crash margins.
-			// That copy may predate the export, so keep the plain release.
-			exported = nil
-		}
-		err = p.rollback(c, source, target, r, state, transferred, true, true, uncertainResume, &res.Result, err, res.Start)
-		return res, err
-	}
-
-	releaseTo = target.addr
-	now := time.Now()
-	c.stateMu.Lock()
-	c.lastMove = &now
-	c.moveCount++
-	c.lastMoveKind = "move"
-	c.stateMu.Unlock()
-	moved = true
-	return res, nil
-}
-
-func (p *Plane) rollback(c *call, source, target *registration, r Relay, state []byte, lease sessionstore.Lease, transferred, rerouted, uncertainResume bool, result *mediaworker.HandoverResult, cause error, moveStarted time.Time) error {
-	// Recovery uses a fresh context after the request has flushed its source.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	res := MoveResult{Kind: "move", ID: c.id, From: source.name, To: target.name, Start: moveStarted}
-	var err error
-	checkpointOutside := false
-	if transferred {
-		from := lease
-		lease, err = p.transfer(ctx, lease, source.addr)
-		routed := source.addr
-		if rerouted {
-			routed = netip.AddrPort{}
-		}
-		if p.retainUncertainMove(source, c, from, routed, state, err, moveStarted) {
-			p.mu.Lock()
-			source.pending[c.id].crashMargins = uncertainResume
-			p.mu.Unlock()
-			return err
-		}
-	}
-	var routeErr error
-	if err == nil && rerouted {
-		routeErr = r.MoveSession(c.id, target.addr, source.addr)
-	}
-	// A failed reverse notification must not prevent A from running again.
-	// B never resumed, and the next authenticated consent check follows A's
-	// restored store ownership even if the relay itself needs to recover.
-	if err == nil {
-		resumeCtx := ctx
-		if uncertainResume {
-			var resumeCancel context.CancelFunc
-			resumeCtx, resumeCancel = context.WithTimeout(ctx, takeoverBudget)
-			defer resumeCancel()
-		}
-		opts := mediaworker.ResumeOptions{Kind: agent.PlannedMove, Lease: lease, Context: resumeCtx}
-		if uncertainResume {
-			// B may already have emitted media and persisted adjusted counters.
-			// Its fenced store state, rather than the final export from A, is now
-			// the only valid checkpoint for a rollback that needs crash margins.
-			var tupleMetadata *sessionstore.Checkpoint
-			state, tupleMetadata, err = mediaworker.ReadRecoverySnapshot(ctx, p.store, c.id)
-			if err == nil {
-				var decision checkpointDecision
-				decision, err = p.checkpointDecision(resumeCtx, c.id, state, checkpointOutageBudget(resumeCtx, moveStarted), tupleMetadata)
-				res.CheckpointAge, res.SnapshotAge, res.CheckpointStoredAt = decision.age, decision.snapshotAge, decision.storedAt
-				res.Checkpoint, res.SequenceMargin, res.SRTCPIndexMargin = decision.info, decision.margin, decision.rtcpMargin
-				checkpointOutside = decision.outside
-				opts.Kind = agent.Takeover
-				opts.SequenceMargin, opts.SRTCPIndexMargin = decision.margin, decision.rtcpMargin
-				opts.CallerSequenceReserve = decision.reserve
-				opts.CheckpointAge, opts.SnapshotAge, opts.CheckpointStoredAt = decision.age, decision.snapshotAge, decision.storedAt
-			}
-		}
-		if err == nil {
-			_, err = source.worker.ResumeSession(state, opts)
-		}
-	}
-	if errors.Is(err, mediaworker.ErrMoveBudget) && !errors.Is(err, privateapi.ErrUncertain) {
-		// Both targets refused before adoption. Keep the exact export and hold;
-		// the bounded recovery loop can retry either live worker or an alternate.
-		p.mu.Lock()
-		if source.pending == nil {
-			source.pending = make(map[string]*takeoverState)
-		}
-		excluded := make(map[netip.AddrPort]bool)
-		if source.observation.knowledge().dead {
-			excluded[source.addr] = true
-		}
-		source.pending[c.id] = &takeoverState{call: c, lease: lease, routed: source.addr, routedLease: lease,
-			planned: true, plannedState: state, crashMargins: uncertainResume, held: true, excluded: excluded,
-			attemptLimit: maxResumeAttempts, outageStarted: moveStarted, budgetRollback: true, budgetStarted: time.Now(),
-			budgetExcluded: map[netip.AddrPort]bool{source.addr: true, target.addr: true}}
-		p.mu.Unlock()
-		return fmt.Errorf("controlplane: rollback awaiting move budget: %w", err)
-	}
-	if checkpointOutside && (err == nil || checkpointEnvelopeLoss(err)) {
-		res.CheckpointPolicy = "scaled"
-		if err != nil {
-			res.CheckpointPolicy = "definitive-loss"
-		}
-		metrics.CheckpointEnvelopeEvents.WithLabelValues(res.CheckpointPolicy).Inc()
-	}
-	if err != nil {
-		loss := fmt.Errorf("controlplane: call lost: move failed (%v), rollback failed: %w", cause, err)
-		p.completeTakeover(source, c, lease, &res, true, loss)
-		return loss
-	}
-
-	result.RolledBack = true
-	if routeErr != nil {
-		return fmt.Errorf("controlplane: rolled back on source; relay restore failed (%v): %w", routeErr, cause)
-	}
-
-	return fmt.Errorf("controlplane: move failed, rolled back: %w", cause)
+	return p.recovery.moveLocked(ctx, c, lease, target)
 }
 
 // Keep Drain's historical HTTP 500 for an unknown worker while retaining a
@@ -1132,7 +803,7 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 				return
 			}
 
-			results[i], errs[i] = p.move(ctx, j.c, current, j.target)
+			results[i], errs[i] = p.recovery.moveLocked(ctx, j.c, current, j.target)
 		})
 	}
 	wg.Wait()
@@ -1267,92 +938,4 @@ func (p *Plane) statusLease(ctx context.Context, id string) (sessionstore.Lease,
 // process may use, at most 16.
 func drainParallelism() int {
 	return min(max(runtime.GOMAXPROCS(0), 1), 16)
-}
-
-// transfer adopts an exact candidate after uncertainty. Only settlement can
-// prove a negative; a failed Get must never trigger rollback of a committed move.
-func (p *Plane) transfer(ctx context.Context, from sessionstore.Lease, to netip.AddrPort) (sessionstore.Lease, error) {
-	if p.restart != nil {
-		if !p.controlAuthority() {
-			return sessionstore.Lease{}, ErrNotReady
-		}
-		c, e := p.lookup(from.SessionID)
-		if e != nil {
-			return sessionstore.Lease{}, e
-		}
-		if c.intent == nil {
-			return sessionstore.Lease{}, errors.New("controlplane: transfer missing durable intent")
-		}
-		ctx = sessionstore.WithTransitionIntent(ctx, c.id, c.intent.Token)
-	}
-	lease, err := p.store.Transfer(ctx, from, to, p.ttl)
-	defer func() {
-		if err == nil {
-			if c, e := p.lookup(from.SessionID); e == nil {
-				c.rememberLease(lease)
-			}
-		}
-	}()
-	var transient *sessionstore.TransientError
-	if !errors.As(err, &transient) || transient.Candidate == nil {
-		return lease, err
-	}
-	lease, err = p.resolveCandidate(ctx, *transient.Candidate, err)
-	return lease, err
-}
-func (p *Plane) resolveCandidate(ctx context.Context, candidate sessionstore.Lease, cause error) (sessionstore.Lease, error) {
-	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-	current, err := p.store.Get(ctx, candidate.SessionID)
-	if err == nil && current.Worker == candidate.Worker && current.Epoch == candidate.Epoch {
-		return current, nil
-	}
-	if resolver, ok := p.store.(sessionstore.TransitionResolver); ok {
-		settled, committed, settleErr := resolver.Settle(ctx, candidate)
-		if settleErr == nil {
-			if committed {
-				return settled, nil
-			}
-			return sessionstore.Lease{}, &sessionstore.TransientError{Op: "settled transfer", Err: cause}
-		}
-	}
-	return sessionstore.Lease{}, &sessionstore.TransientError{Op: "uncertain transfer", Err: cause, Candidate: &candidate}
-}
-
-// Retain the final export and candidate if the store is still unavailable.
-// Run retries these calls without declaring a healthy source worker dead or
-// exporting it again. The relay hold waits for adoption or its bounded
-// backstop; adopted retries explicitly release to the confirmed owner.
-func (p *Plane) retainUncertainMove(source *registration, c *call, from sessionstore.Lease, routed netip.AddrPort, state []byte, cause error, moveStarted time.Time) bool {
-	var transient *sessionstore.TransientError
-	if !errors.As(cause, &transient) || transient.Candidate == nil {
-		return false
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if source.pending == nil {
-		source.pending = make(map[string]*takeoverState)
-	}
-	excluded := map[netip.AddrPort]bool{source.addr: true}
-	if transient.Candidate.Worker == source.addr {
-		excluded = map[netip.AddrPort]bool{from.Worker: true}
-	}
-	source.pending[c.id] = &takeoverState{call: c, lease: from, candidate: transient.Candidate, routed: routed, routedLease: from, excluded: excluded, attemptLimit: maxResumeAttempts, plannedState: state, planned: true, outageStarted: moveStarted}
-	return true
-}
-
-// Only typed errors proving no flush and no discarded input are definitive.
-// A successful scratch admission may already have consumed or dropped input;
-// subsequent callback, encoding and transport errors require crash recovery.
-func uncertainExport(err error) bool {
-	if errors.Is(err, privateapi.ErrUncertain) {
-		return true
-	}
-	for _, known := range []error{mediaworker.ErrUnknownSession, mediaworker.ErrClosed, mediaworker.ErrNotEstablished, mediaworker.ErrExportNotFlushed, mediaworker.ErrExportIncompatible,
-		sessionstore.ErrNotFound, sessionstore.ErrLeaseLost, sessionstore.ErrTransient, agentv2.ErrCapacity} {
-		if errors.Is(err, known) {
-			return false
-		}
-	}
-	return true
 }

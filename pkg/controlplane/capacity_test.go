@@ -176,7 +176,7 @@ func TestWorkerCapTakeoverExceedsBudget(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 	expireObservedWorker(t, p.workers["a"])
-	p.takeover(ctx, p.workers["a"], lease, time.Now())
+	p.recovery.recover(ctx, p.workers["a"], lease, time.Now())
 	require.True(t, b.runs(id))
 	status, err := p.Status(ctx)
 	require.NoError(t, err)
@@ -353,11 +353,11 @@ func TestWorkerCapRetainedMoveAtBudget(t *testing.T) {
 	require.Error(t, err)
 	require.False(t, a.runs(id))
 	source := p.workers["a"]
-	pending := source.pending[id]
+	pending := pendingRecovery(p, source, id)
 	require.NotNil(t, pending)
-	p.takeover(ctx, source, pending.lease, time.Now())
+	p.recovery.recover(ctx, source, *pending, time.Now())
 	require.True(t, b.runs(id), "the retained lease already consumes the destination slot")
-	require.Empty(t, source.pending)
+	require.Empty(t, recoveryWork(p, source))
 	leases, err := p.store.ListByWorker(ctx, b.addr)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
