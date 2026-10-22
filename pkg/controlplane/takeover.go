@@ -88,20 +88,11 @@ func (p *Plane) Heartbeat(addr netip.AddrPort) error {
 	if w == nil {
 		return errors.New("controlplane: unknown worker heartbeat")
 	}
-	if w.recovering || w.dead && !w.recovered {
-		return errors.New("controlplane: worker takeover in progress")
-	}
-	if w.dead && !w.rejoinReady {
-		w.rejoinReady = true
-		return mediaworker.ErrRejoinRequired
-	}
-	w.dead = false
-	if w.livenessUnknown {
-		w.livenessUnknown = false
+	_, changed, err := w.observation.heartbeat(workerHeartbeat{}, time.Time{})
+	if changed {
 		p.loadVersion++
 	}
-	w.lastHeartbeat = time.Now()
-	return nil
+	return err
 }
 
 // Run detects failed workers until ctx ends, and waits for its bounded
@@ -151,17 +142,13 @@ func (p *Plane) Run(ctx context.Context) error {
 			dead := []*registration{}
 			planned := []*registration{}
 			for _, w := range p.workers {
-				if w.recovering {
-					continue
-				}
-				if (!w.dead && now.Sub(w.lastHeartbeat) >= p.config.DeadAfter) || (w.dead && !w.recovered) {
-					if !w.dead {
+				detection := w.observation.detect(now, p.config.DeadAfter)
+				if detection.recover {
+					if detection.newDeath {
 						p.metrics.detections.Add(1)
-						w.rejoinToken, w.acceptedToken = "", ""
 					}
-					w.dead, w.recovering, w.recovered, w.rejoinReady = true, true, false, false
 					dead = append(dead, w)
-				} else if !w.dead && !w.retryingMoves && len(w.pending) > 0 {
+				} else if w.observation.knowledge().retryPlanned && !w.retryingMoves && len(w.pending) > 0 {
 					w.retryingMoves = true
 					planned = append(planned, w)
 				}
@@ -179,8 +166,7 @@ func (p *Plane) Run(ctx context.Context) error {
 				wg.Go(func() {
 					recovered := p.recoverWorker(ctx, w, now)
 					p.mu.Lock()
-					w.recovered = recovered
-					w.recovering = false
+					w.observation.recoveryFinished(recovered)
 					p.mu.Unlock()
 				})
 			}
@@ -389,7 +375,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		if errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrEnded) {
 			p.mu.Lock()
 			pending := source.pending[c.id]
-			lastHeartbeat := source.lastHeartbeat
+			lastHeartbeat := source.observation.knowledge().lastHeartbeat
 			to := ""
 			if pending != nil {
 				if target := p.owner(pending.lease.Worker); target != nil {
@@ -450,13 +436,13 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		source.pending[c.id] = pending
 	}
 	if pending.outageStarted.IsZero() {
-		pending.outageStarted = source.lastHeartbeat
+		pending.outageStarted = source.observation.knowledge().lastHeartbeat
 		if pending.outageStarted.IsZero() {
 			pending.outageStarted = detected
 		}
 	}
 	r := p.relay
-	lastHeartbeat := source.lastHeartbeat
+	lastHeartbeat := source.observation.knowledge().lastHeartbeat
 	p.mu.Unlock()
 	res := MoveResult{Kind: "takeover", ID: c.id, From: source.name, Start: detected,
 		DetectedAt: detected, LastHeartbeat: lastHeartbeat, Result: mediaworker.HandoverResult{SessionID: c.id}}
@@ -482,7 +468,7 @@ func (p *Plane) takeoverLocked(ctx context.Context, source *registration, c *cal
 		if pending.transientResume {
 			p.mu.Lock()
 			previous := p.owner(pending.lease.Worker)
-			if previous != nil && previous == pending.resumeTarget && !previous.dead && !previous.draining {
+			if previous != nil && previous == pending.resumeTarget && previous.observation.knowledge().resumeRetry {
 				name = previous.name
 			} else {
 				// Confirmation only reuses bytes for the same eligible registration.
@@ -1000,7 +986,7 @@ func (p *Plane) Replace(name string, addr netip.AddrPort, worker Worker) error {
 	}
 	p.mu.Lock()
 	old := p.workers[name]
-	if old == nil || !old.dead || !old.recovered || old.recovering || old.reserved != 0 {
+	if old == nil || !old.observation.canReplace(old.reserved) {
 		p.mu.Unlock()
 		return errors.New("controlplane: replacement requires a recovered dead worker")
 	}
@@ -1024,7 +1010,7 @@ func (p *Plane) Replace(name string, addr netip.AddrPort, worker Worker) error {
 		return err
 	}
 	p.mu.Lock()
-	if p.workers[name] != old || !old.dead || !old.recovered || old.recovering || old.reserved != 0 {
+	if p.workers[name] != old || !old.observation.canReplace(old.reserved) {
 		p.mu.Unlock()
 		return errors.New("controlplane: replacement raced with rejoin or recovery")
 	}
@@ -1034,7 +1020,7 @@ func (p *Plane) Replace(name string, addr netip.AddrPort, worker Worker) error {
 			return errors.New("controlplane: duplicate worker address")
 		}
 	}
-	p.workers[name] = &registration{name: name, addr: addr, worker: worker, lastHeartbeat: time.Now()}
+	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: newWorkerObservation(time.Now(), false)}
 	p.mu.Unlock()
 	if w, ok := worker.(interface{ StartHeartbeats(mediaworker.Heartbeats) }); ok {
 		w.StartHeartbeats(p)
@@ -1139,7 +1125,7 @@ func alignReplayIndex(high uint64, seq uint16) uint64 {
 func (p *Plane) resetRecoveredDrain(name string) error {
 	p.mu.Lock()
 	old := p.workers[name]
-	if old == nil || !old.dead || !old.recovered || old.recovering || old.reserved != 0 {
+	if old == nil || !old.observation.canReplace(old.reserved) {
 		p.mu.Unlock()
 		return errors.New("controlplane: drain reset requires a recovered dead worker")
 	}
@@ -1155,9 +1141,9 @@ func (p *Plane) resetRecoveredDrain(name string) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.workers[name] != old || !old.dead || !old.recovered || old.recovering || old.reserved != 0 {
+	if p.workers[name] != old || !old.observation.canReplace(old.reserved) {
 		return errors.New("controlplane: drain reset raced with rejoin or recovery")
 	}
-	old.draining = false
+	old.observation.resetDrain()
 	return nil
 }

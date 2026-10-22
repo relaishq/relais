@@ -158,7 +158,7 @@ func TestComponentUnsafeTakeoverRecordsLossAndReleasesLease(t *testing.T) {
 	wrapped := &tupleReadStore{Store: p.store, err: sessionstore.ErrUnsafeCheckpoint}
 	p.store = wrapped
 	source := p.workers["a"]
-	source.dead = true
+	expireObservedWorker(t, source)
 	p.takeover(ctx, source, lease, time.Now())
 	status, err := p.Status(ctx)
 	require.NoError(t, err)

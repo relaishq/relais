@@ -110,7 +110,7 @@ func TestFailedEndAllowsLaterMoveAndTakeover(t *testing.T) {
 				require.NoError(t, m.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 				p.mu.Lock()
 				source := p.workers["a"]
-				source.dead = true
+				expireObservedWorker(t, source)
 				p.workers["b"].worker = &takeoverWorker{fakeWorker: b}
 				p.mu.Unlock()
 				p.takeover(ctx, source, lease, time.Now())

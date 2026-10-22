@@ -16,7 +16,7 @@ func (p *Plane) RegisterRelayWorkers(ctx context.Context, relay interface {
 	p.mu.Lock()
 	addresses := make([]netip.AddrPort, 0, len(p.workers))
 	for _, worker := range p.workers {
-		if !worker.dead && !worker.recovering {
+		if worker.observation.knowledge().relayEligible {
 			addresses = append(addresses, worker.addr)
 		}
 	}
@@ -58,7 +58,7 @@ func (s *RelayWorkerRegistry) Sync(ctx context.Context, p *Plane, r interface {
 	p.mu.Lock()
 	addresses := make([]netip.AddrPort, 0, len(p.workers))
 	for _, w := range p.workers {
-		if !w.dead && !w.recovering {
+		if w.observation.knowledge().relayEligible {
 			addresses = append(addresses, w.addr)
 		}
 	}
@@ -71,8 +71,7 @@ func (s *RelayWorkerRegistry) Sync(ctx context.Context, p *Plane, r interface {
 			s.registered[address] = true
 		}
 		p.mu.Lock()
-		if w := p.owner(address); w != nil && w.relayPending {
-			w.relayPending = false
+		if w := p.owner(address); w != nil && w.observation.relayRegistered() {
 			p.loadVersion++
 		}
 		p.mu.Unlock()

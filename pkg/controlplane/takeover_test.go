@@ -56,9 +56,9 @@ func TestTakeoverFailuresReleaseLeaseAndRecordLoss(t *testing.T) {
 				require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 			}
 			if failure == "no-target" {
-				p.workers["b"].draining = true
+				p.workers["b"].observation.markDraining()
 			}
-			p.workers["a"].dead = true
+			expireObservedWorker(t, p.workers["a"])
 			p.takeover(ctx, p.workers["a"], lease, time.Now())
 			status, err := p.Status(ctx)
 			require.NoError(t, err)
@@ -115,7 +115,7 @@ func TestHeartbeatRecoveryRetriesFailedEnumeration(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- p.Run(ctx) }()
 	t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
-	require.Eventually(t, func() bool { p.mu.Lock(); defer p.mu.Unlock(); return p.workers["a"].dead }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { p.mu.Lock(); defer p.mu.Unlock(); return p.workers["a"].observation.knowledge().dead }, time.Second, time.Millisecond)
 	require.Error(t, p.Heartbeat(a.addr), "cannot rejoin until leases enumerated")
 	backing.fail.Store(false)
 	require.Eventually(t, func() bool { return p.Heartbeat(a.addr) == nil }, time.Second, time.Millisecond)
@@ -129,7 +129,8 @@ func TestTakeoverRecoversMissingCallAndWaitsForIncoming(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, "orphan", 0)))
 	source := p.workers["a"]
-	source.dead, source.reserved = true, 1
+	expireObservedWorker(t, source)
+	source.reserved = 1
 	require.False(t, p.recoverWorker(ctx, source, time.Now()), "in-flight create must settle before enumeration")
 	_, err = p.store.Get(ctx, "orphan")
 	require.NoError(t, err)

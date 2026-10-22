@@ -250,7 +250,7 @@ func TestSelectionAndDrainWithoutTarget(t *testing.T) {
 	require.Equal(t, 1, status.Workers[0].Calls)
 	require.Equal(t, 1, status.Workers[1].Calls)
 	p.mu.Lock()
-	p.workers["b"].draining = true
+	p.workers["b"].observation.markDraining()
 	p.mu.Unlock()
 	_, err = p.Drain(ctx, "a")
 	require.ErrorIs(t, err, ErrNoTarget)
@@ -306,7 +306,7 @@ func TestDrainWaitsForIncomingCreate(t *testing.T) {
 	require.Eventually(t, func() bool {
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		return p.workers["a"].draining
+		return p.workers["a"].observation.knowledge().draining
 	}, time.Second, time.Millisecond)
 	_, _, err := p.Create(ctx, "offer", "a")
 	require.ErrorIs(t, err, ErrNoTarget)

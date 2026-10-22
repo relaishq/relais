@@ -58,7 +58,7 @@ func TestTakeoverCancellationDuringPickPreservesLease(t *testing.T) {
 	backing := &recoveryErrorStore{Store: p.store, step: "pick", fail: true, cancel: cancel, target: baseB.addr}
 	p.store = backing
 	source := p.workers["a"]
-	source.dead = true
+	expireObservedWorker(t, source)
 	require.False(t, p.recoverWorker(ctx, source, time.Now()))
 	current, err := p.store.Get(context.Background(), id)
 	require.NoError(t, err)
@@ -91,7 +91,7 @@ func TestTakeoverTransientErrorsRetainTransferredLeaseForRetry(t *testing.T) {
 			p.store = backing
 			r.fail = step == "route"
 			source := p.workers["a"]
-			source.dead = true
+			expireObservedWorker(t, source)
 			require.False(t, p.recoverWorker(ctx, source, time.Now()))
 			current, err := p.store.Get(ctx, id)
 			require.NoError(t, err, "transient failure must not release either tenure")
@@ -132,7 +132,7 @@ func TestMoveAfterHardKillKeepsSnapshotRecoverable(t *testing.T) {
 	require.ErrorIs(t, err, mediaworker.ErrUnknownSession)
 	_, err = p.lookup(id)
 	require.NoError(t, err)
-	p.workers["a"].dead = true
+	expireObservedWorker(t, p.workers["a"])
 	require.True(t, p.recoverWorker(ctx, p.workers["a"], time.Now()))
 	status, err := p.Status(ctx)
 	require.NoError(t, err)
@@ -235,7 +235,7 @@ func TestTakeoverRetriesAlternateTargetsWithinMarginBudget(t *testing.T) {
 			lease, err := p.store.Get(ctx, id)
 			require.NoError(t, err)
 			require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, tc.advance)))
-			p.workers["a"].dead = true
+			expireObservedWorker(t, p.workers["a"])
 			started := time.Now()
 			require.True(t, p.recoverWorker(ctx, p.workers["a"], started))
 			require.Less(t, time.Since(started), 1500*time.Millisecond)
@@ -280,9 +280,9 @@ func TestTakeoverRecentEventsBoundedAndCountsRetained(t *testing.T) {
 		lease, err = p.store.Get(ctx, id)
 		require.NoError(t, err)
 		source := p.owner(lease.Worker)
-		source.dead = true
+		expireObservedWorker(t, source)
 		p.takeover(ctx, source, lease, time.Unix(int64(i), 0))
-		source.dead = false
+		rejoinObservedWorker(t, source)
 	}
 	status, err := p.Status(ctx)
 	require.NoError(t, err)
@@ -329,7 +329,7 @@ func TestPendingTakeoverVanishedLeaseRecordsLossAndForgetsRoute(t *testing.T) {
 				p.store = &recoveryErrorStore{Store: p.store, step: "snapshot", fail: true}
 			}
 			source := p.workers["a"]
-			source.dead = true
+			expireObservedWorker(t, source)
 			require.False(t, p.recoverWorker(ctx, source, time.Now()))
 			if step == "cancelled-expiry" {
 				// Confirmation retries use the same tenure and payload, without consuming
@@ -389,16 +389,16 @@ func TestUncertainResumeIneligibleTargetUsesThirdWorker(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 			source := p.workers["a"]
-			source.dead = true
+			expireObservedWorker(t, source)
 			require.False(t, p.recoverWorker(ctx, source, time.Now()))
 			require.True(t, b.runs(id), "adoption commits before its reply is lost")
 			switch reason {
 			case "dead":
-				p.workers["b"].dead = true
+				expireObservedWorker(t, p.workers["b"])
 			case "draining":
-				p.workers["b"].draining = true
+				p.workers["b"].observation.markDraining()
 			case "replaced":
-				p.workers["b"] = &registration{name: "b", addr: baseB.addr, worker: b, lastHeartbeat: time.Now()}
+				p.workers["b"] = &registration{name: "b", addr: baseB.addr, worker: b, observation: newWorkerObservation(time.Now(), false)}
 			}
 			require.True(t, p.recoverWorker(ctx, source, time.Now()))
 			status, err := p.Status(ctx)
@@ -567,7 +567,7 @@ func TestFailedEndDoesNotHideMissingTakeoverSnapshot(t *testing.T) {
 			require.Error(t, p.End(endCtx, id))
 			p.workers["a"] = source
 			source.worker = a
-			source.dead = true
+			expireObservedWorker(t, source)
 			require.True(t, p.recoverWorker(ctx, source, time.Now()))
 			status, err := p.Status(ctx)
 			require.NoError(t, err)
@@ -601,7 +601,7 @@ func TestEndWaitingForTakeoverDoesNotHideSnapshotLoss(t *testing.T) {
 	require.NoError(t, err)
 	c := p.calls[id]
 	source := p.workers["a"]
-	source.dead = true
+	expireObservedWorker(t, source)
 	gate := &gatedTakeoverSnapshot{Store: p.store, entered: make(chan struct{}), release: make(chan struct{})}
 	p.store = gate
 	recovered := make(chan bool, 1)
@@ -676,7 +676,7 @@ func TestHangupDuringPendingTakeoverRecordsEnded(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 			source := p.workers["a"]
-			source.dead = true
+			expireObservedWorker(t, source)
 			switch step {
 			case "transfer":
 				p.store = &recoveryErrorStore{Store: p.store, step: "transfer", fail: true}

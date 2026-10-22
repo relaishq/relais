@@ -131,7 +131,7 @@ func TestControlTakeoverCancelsInFlightRoute(t *testing.T) {
 	<-w.entered
 	p.mu.Lock()
 	source := p.workers["a"]
-	source.dead = true
+	expireObservedWorker(t, source)
 	p.mu.Unlock()
 	start := time.Now()
 	p.takeover(ctx, source, lease, start)

@@ -54,7 +54,7 @@ func (p *Plane) readyLocked() bool {
 		return false
 	}
 	for _, w := range p.workers {
-		if !w.dead && !w.draining && !w.recovering && !w.relayPending && !w.livenessUnknown {
+		if w.observation.knowledge().eligible {
 			return true
 		}
 	}
@@ -106,14 +106,12 @@ func (p *Plane) SamplePool(ctx context.Context) (err error) {
 			if sample.Cap > 0 {
 				sample.OverCapCalls += max(0, loads[w]-sample.Cap)
 			}
-			switch {
-			case w.relayPending:
+			switch w.observation.knowledge().poolClass {
+			case workerPoolPending:
 				sample.Pending++
-			case w.dead || w.recovering:
+			case workerPoolUnreachable:
 				sample.Unreachable++
-			case w.livenessUnknown:
-				sample.Pending++
-			case w.draining:
+			case workerPoolDraining:
 				sample.Draining++
 			default:
 				sample.Ready++

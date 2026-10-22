@@ -234,7 +234,7 @@ func TestControlShutdownPausesDetectionWhileLeaseRenews(t *testing.T) {
 	require.Never(t, func() bool {
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		return p.workers["a"].dead
+		return p.workers["a"].observation.knowledge().dead
 	}, ControlLeaseTTL+200*time.Millisecond, 50*time.Millisecond)
 	_, err := store.ClaimControl(context.Background(), "successor", ControlLeaseTTL)
 	require.ErrorIs(t, err, sessionstore.ErrLeaseHeld)

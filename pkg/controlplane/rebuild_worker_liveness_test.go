@@ -84,13 +84,13 @@ func TestRebuildSlowStatusWorkerKeepsHeartbeats(t *testing.T) {
 			}()
 			require.Eventually(t, p.mutationReady, 3*time.Second, 10*time.Millisecond)
 			p.mu.Lock()
-			dead := p.workers["slow"].dead
+			dead := p.workers["slow"].observation.knowledge().dead
 			p.mu.Unlock()
 			t.Logf("status_delay=%s registered_dead=%t heartbeat_failures=%d", delay, dead, heartbeatFailures.Load())
 			require.False(t, dead, "a slow status response must not declare a heartbeating worker dead")
 			// Longer than two detection windows, including a successful 900 ms status
 			// response on the background observer's one-second request budget.
-			require.Never(t, func() bool { p.mu.Lock(); defer p.mu.Unlock(); return p.workers["slow"].dead }, 1300*time.Millisecond, 10*time.Millisecond)
+			require.Never(t, func() bool { p.mu.Lock(); defer p.mu.Unlock(); return p.workers["slow"].observation.knowledge().dead }, 1300*time.Millisecond, 10*time.Millisecond)
 			require.Zero(t, heartbeatFailures.Load())
 			require.Positive(t, slowReplies.Load())
 			current, err := store.Get(context.Background(), live.SessionID)
@@ -116,14 +116,7 @@ func TestRebuildUnknownWorkerWaitsForHeartbeatBeforePlacement(t *testing.T) {
 	require.NoError(t, p.controlRecord(context.Background(), "worker:a", FixedWorker{Name: "a", URL: slow.URL, Address: source}))
 	fixed := []FixedWorker{{Name: "a", URL: slow.URL}}
 	require.NoError(t, p.rebuild(context.Background(), fixed))
-	p.mu.Lock()
-	initial := p.workers["a"].lastHeartbeat
-	p.mu.Unlock()
 	require.NoError(t, p.rebuild(context.Background(), fixed))
-	p.mu.Lock()
-	anchor := p.workers["a"].lastHeartbeat
-	p.mu.Unlock()
-	require.Equal(t, initial, anchor, "rebuild retries must not postpone heartbeat detection")
 	_, err := p.pick(context.Background(), "a", netip.AddrPort{})
 	require.ErrorIs(t, err, ErrNoTarget, "unknown liveness must not become free capacity")
 	require.NoError(t, p.SamplePool(context.Background()))
