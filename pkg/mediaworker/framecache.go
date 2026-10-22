@@ -393,7 +393,7 @@ func (s *session) continueAfterReplay(in *rtp.Packet, header *rtp.Header) {
 	track.TSOffset = track.LastTimestamp + max(elapsed, uint32(1)) - in.Timestamp
 	header.Timestamp = in.Timestamp + track.TSOffset
 	s.afterReplay = false
-	s.wantSnapshot()
+	s.checkpoint.request()
 }
 
 // ReplayStats counts admission skips and interrupted bursts for this worker.

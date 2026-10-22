@@ -1,15 +1,21 @@
 package mediaworker
 
 import (
+	"context"
 	"net"
+	"net/netip"
 	"testing"
+	"time"
+
+	agent "github.com/relaishq/relais/pkg/agent/v2"
+	"github.com/relaishq/relais/pkg/sessionstore"
 
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
 	"github.com/stretchr/testify/require"
 )
 
-// This file also compiles unchanged on main. Both runs create a normal default
+// This packet benchmark also compiles unchanged on main. Both runs create a normal default
 // session, authenticate new caller indexes and exercise the production UDP path.
 // Caller encryption happens outside the timed section, in bounded batches.
 func BenchmarkEchoAudioPacket(b *testing.B) {
@@ -64,4 +70,34 @@ func BenchmarkEchoAudioPacket(b *testing.B) {
 	}
 	require.EqualValues(b, b.N, s.state.Audio.Packets)
 	require.Zero(b, s.decryptFailures.Load()+s.replayRejections.Load())
+}
+
+// Populated durable requests must not be copied by a scalar status observation.
+// A successful fenced write establishes readiness and acknowledgement before timing.
+func BenchmarkAgentSessionStatusDurableTasks(b *testing.B) {
+	store := sessionstore.NewMemory()
+	snap := componentFixture(b)
+	snap.State.Agent.State.Bytes = []byte(`{"phase":"ready"}`)
+	snap.State.Agent.V2.Name = "status/v2"
+	snap.State.Agent.V2.Tasks = nil
+	for i := range 8 {
+		snap.State.Agent.V2.Tasks = append(snap.State.Agent.V2.Tasks, taskIntent{ID: agent.TaskID(string(rune('a' + i))), Step: "fetch", Phase: taskStarted, Request: make([]byte, 1024), RequestLength: 1024})
+	}
+	lease, err := store.Claim(context.Background(), snap.State.ID, netip.MustParseAddrPort("127.0.0.1:10000"), time.Hour)
+	require.NoError(b, err)
+	s, _ := dtlsCheckpointSession(b, store, snap, lease, ResumeOptions{})
+	w := s.worker
+	// Use the legacy envelope with room for all eight durable request payloads.
+	// The status read is identical for legacy and split checkpoint layouts.
+	w.cfg.SnapshotLimits = SnapshotLimits{MaxBytes: 64 << 10, BurstBytes: 256 << 10, BytesPerSecond: 80000}
+	require.NoError(b, s.checkpoint.persist(context.Background(), checkpointRequired))
+	w.sessions = map[string]*session{s.id: s}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		status, err := w.agentSessionStatus(s.id)
+		if err != nil || len(status.Tasks) != 8 || !status.CheckpointKnown {
+			b.Fatal("invalid populated status", err)
+		}
+	}
 }

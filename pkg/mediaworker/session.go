@@ -60,36 +60,28 @@ var supportedSRTPProfiles = []dtls.SRTPProtectionProfile{
 // sends or receives is processed under it, so a snapshot taken under mu is
 // atomic with the counters (see export).
 type session struct {
-	moveMu                sync.Mutex
-	moveReserved          int64
-	exportScratch         *moveScratch
-	moveClosed            bool
-	agent                 *agentHost
-	storeClock            time.Time // guarded by mu; last successful store-clock observation
-	storeClockAt          time.Time
-	snapshotBudgetMu      sync.Mutex
-	snapshotHistoryHold   *historyWriteHold // guarded by snapshotBudgetMu
-	snapshotBytesBudget   snapshotBucket    // guarded by snapshotBudgetMu
-	snapshotWriteInFlight bool              // guarded by snapshotBudgetMu; one serialized writer
-	sideEffectLaunches    uint64            // guarded by mu; process-local diagnostic, never checkpointed
-	lastTaskLaunch        *AgentTaskLaunch  // guarded by mu; bounded last-launch witness
-	controlAck            uint64            // guarded by mu; checkpointed control prefix, carried by exact export
-	durableAgent          agentState        // guarded by mu; last acknowledged durable agent pair
-	id                    string            // state.ID; never changes
-	worker                *Worker
-	log                   logging.LeveledLogger
+	checkpoint sessionCheckpoint
 
-	mu                      sync.Mutex
-	state                   sessionState
-	lease                   sessionstore.Lease      // guarded by mu; never part of the media snapshot
-	dtlsAcknowledged        *dtlsSequenceCheckpoint // guarded by mu; captured next sequence of the last successful PutState
-	dtlsProvisional         *dtlsSequenceCheckpoint // guarded by mu; first write capture, retained until acknowledgment
-	dtlsCheckpointRequested bool                    // guarded by mu; one guard wakeup per bound value
-	dtlsEpochWarning        sync.Once               // warn once for an unexpected plaintext checkpoint capture
-	dtlsConn                *dtls.Conn
-	srtpIn                  *srtp.Context // decrypts caller to worker
-	srtpOut                 *srtp.Context // encrypts worker to caller
-	earlyPackets            []earlyPacket // guarded by mu; ciphertext awaiting initial SRTP keys
+	moveMu             sync.Mutex
+	moveReserved       int64
+	exportScratch      *moveScratch
+	moveClosed         bool
+	agent              *agentHost
+	storeClock         time.Time // guarded by mu; last successful store-clock observation
+	storeClockAt       time.Time
+	sideEffectLaunches uint64           // guarded by mu; process-local diagnostic, never checkpointed
+	lastTaskLaunch     *AgentTaskLaunch // guarded by mu; bounded last-launch witness
+	id                 string           // state.ID; never changes
+	worker             *Worker
+	log                logging.LeveledLogger
+
+	mu           sync.Mutex
+	state        sessionState
+	lease        sessionstore.Lease // guarded by mu; never part of the media snapshot
+	dtlsConn     *dtls.Conn
+	srtpIn       *srtp.Context // decrypts caller to worker
+	srtpOut      *srtp.Context // encrypts worker to caller
+	earlyPackets []earlyPacket // guarded by mu; ciphertext awaiting initial SRTP keys
 
 	// fenced is set under mu when exported, when its lease is lost, or when
 	// a failed resume must close without disturbing the continuing caller.
@@ -106,10 +98,8 @@ type session struct {
 	// restoredWindows names caller SSRCs whose exact replay window this
 	// resume restored; it is set before adoption and never persisted.
 	restoredWindows      map[uint32]bool
-	lastCheckpoint       time.Time   // guarded by mu; local acknowledgment time of last successful write
 	audioRate, videoRate sourceRate  // guarded by mu
 	rtcpRate             packetMeter // guarded by mu
-	snapshotStored       atomic.Bool // internal harness readiness observation, no state bytes exposed
 
 	callerSequenceReserve uint32 // active recovery reserve, guarded by mu
 
@@ -130,12 +120,8 @@ type session struct {
 	cancel              context.CancelFunc
 	closeOnce           sync.Once
 	componentMode       bool
-	componentHistory    []byte                          // guarded by mu; legacy v1 component fixture only
-	componentMetadata   *sessionstore.ComponentMetadata // guarded by snapshotMu
-	componentPending    *componentPending               // guarded by snapshotMu
-	snapshotMu          sync.Mutex                      // serialize encode/store without blocking packet processing
-	snapshotWanted      chan struct{}
-	needsKeyframe       bool // resumed video may not yet have a known inbound SSRC
+	componentHistory    []byte // guarded by mu; legacy v1 component fixture only
+	needsKeyframe       bool   // resumed video may not yet have a known inbound SSRC
 	cacheMu             sync.Mutex
 	collector           frameCollector     // guarded by mu
 	replay              []framecache.Frame // loaded and encoded before adoption
@@ -214,19 +200,19 @@ func newSession(w *Worker, offer *remoteOffer) (*session, error) {
 func sessionFromState(w *Worker, state sessionState) *session {
 	ctx, cancel := context.WithCancel(context.Background())
 	sess := &session{
-		id:             state.ID,
-		snapshotWanted: make(chan struct{}, 1),
-		worker:         w,
-		log:            w.cfg.LoggerFactory.NewLogger("session"),
-		state:          state,
-		nominated:      make(chan struct{}),
-		rtcpBuf:        make([]byte, receiveMTU),
-		decryptBuf:     make([]byte, receiveMTU),
-		plainBuf:       make([]byte, receiveMTU),
-		encryptBuf:     make([]byte, receiveMTU),
-		ctx:            ctx,
-		cancel:         cancel,
+		id:         state.ID,
+		worker:     w,
+		log:        w.cfg.LoggerFactory.NewLogger("session"),
+		state:      state,
+		nominated:  make(chan struct{}),
+		rtcpBuf:    make([]byte, receiveMTU),
+		decryptBuf: make([]byte, receiveMTU),
+		plainBuf:   make([]byte, receiveMTU),
+		encryptBuf: make([]byte, receiveMTU),
+		ctx:        ctx,
+		cancel:     cancel,
 	}
+	sess.checkpoint = newSessionCheckpoint(sess)
 	now := time.Now()
 	sess.audioRate.peak, sess.audioRate.peakAt = state.Checkpoint.RTPPacketRate, now
 	sess.videoRate.peak, sess.videoRate.peakAt = state.Checkpoint.RTPPacketRate, now
@@ -318,7 +304,7 @@ func (s *session) connect() (*dtls.Conn, error) {
 	// The background loop can store the handshake and then accept changed
 	// agent state before this attempt. A skip means a checkpoint is already
 	// durable; the loop will persist the newer pair after the save interval.
-	if err := s.persistSnapshot(); err != nil && !errors.Is(err, errCheckpointSkipped) {
+	if err := s.checkpoint.persist(s.ctx, checkpointOptional); err != nil && !errors.Is(err, errCheckpointSkipped) {
 		return dtlsConn, err
 	}
 	if s.agent != nil && s.agent.v2 != nil {
@@ -501,7 +487,7 @@ func (s *session) handleRTPLocked(pkt []byte) (complete *framecache.Frame, failu
 		workerprobe.AfterDecrypt(s.worker.localAddr, s.id, authenticated.SSRC, extendIndex(oldInbound, authenticated.SequenceNumber))
 	}
 	if oldInbound>>16 != s.state.SRTP.Inbound[authenticated.SSRC]>>16 {
-		s.wantSnapshot()
+		s.checkpoint.request()
 	}
 
 	var in rtp.Packet
@@ -579,7 +565,7 @@ func (s *session) handleRTPLocked(pkt []byte) (complete *framecache.Frame, failu
 		}
 	}
 	if track.Packets == 1 || oldOutbound>>16 != track.HighestSentIndex>>16 {
-		s.wantSnapshot()
+		s.checkpoint.request()
 	}
 
 	if _, err := s.worker.send(encrypted, s.state.ICE.RemoteAddr); err != nil {

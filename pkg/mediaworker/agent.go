@@ -3,10 +3,8 @@ package mediaworker
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -171,7 +169,7 @@ func (s *session) initAgent(restoring bool, opts ResumeOptions, move ...*movePay
 		if err := s.validateAgentState(s.state.Agent.State); err != nil {
 			return s.agentError(err)
 		}
-		s.durableAgent = cloneAgentState(s.state.Agent)
+		_ = s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent})
 		if err := s.agentCall(func(ctx context.Context) error { return restoreAgent(ctx, h.instance, s.state.Agent.State) }); err != nil {
 			return s.agentError(fmt.Errorf("%w: %w", agent.ErrRestore, err))
 		}
@@ -218,55 +216,8 @@ func restoreAgent(ctx context.Context, a agent.Agent, state agent.State) error {
 }
 
 func (s *session) validateAgentState(state agent.State) error {
-	defer s.measureAdmission()()
-
-	if state.Version == 0 {
-		return agent.ErrVersion
-	}
-	if len(state.Bytes) > s.worker.cfg.Agent.MaxStateBytes {
-		return agent.ErrStateTooLarge
-	}
-	if s.componentMode {
-		s.mu.Lock()
-		candidate := cloneAgentState(s.state.Agent)
-		s.mu.Unlock()
-		candidate.State = state
-		candidate.Revision++
-		// A zero timestamp has a shorter v10 encoding than a real capture.
-		// Admission must include the timestamp even before the first checkpoint.
-		captured := time.Now()
-		_, _, err := s.captureSnapshotCandidate(captured, &candidate)
-		if errors.Is(err, agentv2.ErrCapacity) {
-			return agent.ErrStateTooLarge
-		}
-		if errors.Is(err, ErrNotEstablished) {
-			// Before handshake, transport progress has the same fixed-width wire
-			// representation. Admit the candidate against the known host/track state
-			// without requiring negotiated setup secrets or arming a DTLS bound.
-			s.mu.Lock()
-			value := snapshot{Version: s.state.Version, State: s.state, split: &componentSnapshotState{history: bytes.Clone(s.componentHistory)}}
-			value.State.Agent = candidate
-			value.State.Checkpoint.CapturedAt = captured
-			value.State.SRTP.Inbound = maps.Clone(s.state.SRTP.Inbound)
-			value.State.SRTP.Received = maps.Clone(s.state.SRTP.Received)
-			s.mu.Unlock()
-			value.DTLSConnection, err = joinDTLSComponents(componentDTLSSetup{}, componentDTLSProgress{LocalEpoch: 1})
-			if err == nil {
-				var data []byte
-				data, err = json.Marshal(value)
-				if err == nil {
-					_, err = s.componentAdmission(data)
-				}
-			}
-			if errors.Is(err, agentv2.ErrCapacity) {
-				return agent.ErrStateTooLarge
-			}
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := s.checkpoint.admit(checkpointAdmission{legacy: &state})
+	return err
 }
 
 // agentCall never holds the media lock. One invocation is in flight at a time.
@@ -645,7 +596,7 @@ func (s *session) sendAgentAudioLocked(header rtp.Header, payload []byte, state 
 	changed := !agentStateEqual(s.state.Agent, state)
 	s.state.Agent = cloneAgentState(state)
 	if changed {
-		s.wantSnapshot()
+		s.checkpoint.request()
 	}
 	if payload == nil {
 		return nil
@@ -675,7 +626,7 @@ func (s *session) sendAgentAudioLocked(header rtp.Header, payload []byte, state 
 		}
 	}
 	if track.Packets == 1 || oldOutbound>>16 != track.HighestSentIndex>>16 {
-		s.wantSnapshot()
+		s.checkpoint.request()
 	}
 	if _, err := s.worker.send(encrypted, s.state.ICE.RemoteAddr); err != nil {
 		s.log.Debugf("session %s: send agent audio: %v", s.id, err)

@@ -13,19 +13,20 @@ import (
 
 func TestAdmissionTimingUsesProductionPaths(t *testing.T) {
 	legacySession := &session{worker: &Worker{}}
+	legacySession.checkpoint = newSessionCheckpoint(legacySession)
 	require.ErrorIs(t, legacySession.validateAgentState(legacy.State{}), legacy.ErrVersion)
 	require.EqualValues(t, 1, legacySession.worker.metrics.admissionCalls.Load())
 	require.Positive(t, legacySession.worker.metrics.admissionWallNS.Load())
 	s := componentWriterSession(t, sessionstore.NewMemory(), true)
 	s.worker.splitLimits = SnapshotLimits{}.splitDefaults()
 	s.agent = &agentHost{latest: cloneAgentState(s.state.Agent), v2: &v2Host{registration: agenthost.Registration{Bounds: effectiveAgentBounds(agent.Limits{}, s.snapshotLimits(), true)}}}
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	before := s.worker.metrics.admissionCalls.Load()
-	_, err := s.admissionSnapshot(cloneAgentState(s.state.Agent))
+	_, err := s.checkpoint.admit(checkpointAdmission{candidate: cloneAgentState(s.state.Agent), prior: s.agent.latest})
 	require.NoError(t, err)
 	require.Equal(t, before+1, s.worker.metrics.admissionCalls.Load())
 	require.Positive(t, s.worker.metrics.admissionWallNS.Load())
-	require.NoError(t, s.persistSnapshotBudget(context.Background(), true, true))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointIntent))
 	require.EqualValues(t, 1, s.worker.metrics.forcedAttempts.Load())
 	require.Positive(t, s.worker.metrics.forcedWallNS.Load())
 	require.Positive(t, s.worker.metrics.forcedMaxNS.Load())

@@ -39,7 +39,7 @@ func (c *dtlsWireConn) WriteToUDPAddrPort(p []byte, _ netip.AddrPort) (int, erro
 	return len(p), nil
 }
 
-func dtlsFixture(t *testing.T) snapshot {
+func dtlsFixture(t testing.TB) snapshot {
 	t.Helper()
 	data, err := os.ReadFile("testdata/v7-787127e.json")
 	require.NoError(t, err)
@@ -48,7 +48,7 @@ func dtlsFixture(t *testing.T) snapshot {
 	return *snap
 }
 
-func dtlsCheckpointSession(t *testing.T, store sessionstore.Store, snap snapshot, lease sessionstore.Lease, opts ResumeOptions) (*session, *dtlsWireConn) {
+func dtlsCheckpointSession(t testing.TB, store sessionstore.Store, snap snapshot, lease sessionstore.Lease, opts ResumeOptions) (*session, *dtlsWireConn) {
 	t.Helper()
 	wire := &dtlsWireConn{packets: make(chan []byte, 256)}
 	w := &Worker{conn: wire, localAddr: lease.Worker, cfg: Config{
@@ -89,7 +89,7 @@ func TestCrashRestoreNeverRepeatsDTLSSequence(t *testing.T) {
 	lease, err := store.Claim(context.Background(), snap.State.ID, netip.MustParseAddrPort("127.0.0.1:10000"), time.Hour)
 	require.NoError(t, err)
 	old, oldWire := dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{})
-	require.NoError(t, old.persistSnapshot())
+	require.NoError(t, old.checkpoint.persist(old.ctx, checkpointOptional))
 	stale, err := store.GetState(context.Background(), old.id)
 	require.NoError(t, err)
 	var saved snapshot
@@ -115,7 +115,7 @@ func TestCrashRestoreNeverRepeatsDTLSSequence(t *testing.T) {
 	lease, err = store.Transfer(context.Background(), lease, netip.MustParseAddrPort("127.0.0.1:10001"), time.Hour)
 	require.NoError(t, err)
 	restored, wire := dtlsCheckpointSession(t, store, saved, lease, ResumeOptions{Kind: agent.Takeover, SequenceMargin: 8192})
-	require.NoError(t, restored.persistSnapshot()) // production adoption barrier
+	require.NoError(t, restored.checkpoint.persist(restored.ctx, checkpointOptional)) // production adoption barrier
 	_, err = restored.dtlsConn.Write([]byte("replacement"))
 	require.NoError(t, err)
 	record(wire)
@@ -223,7 +223,7 @@ func TestCrashRestoreAfterLostFirstCheckpointReplyNeverRepeatsDTLSSequence(t *te
 	require.NoError(t, err)
 	old, wire := dtlsHandshakenSession(t, store, lease)
 	result := make(chan error, 1)
-	go func() { result <- old.persistSnapshot() }()
+	go func() { result <- old.checkpoint.persist(old.ctx, checkpointOptional) }()
 	select {
 	case <-store.committed:
 	case <-time.After(2 * time.Second):
@@ -272,7 +272,7 @@ func TestCrashRestoreAfterLostFirstCheckpointReplyNeverRepeatsDTLSSequence(t *te
 	lease, err = base.Transfer(context.Background(), lease, netip.MustParseAddrPort("127.0.0.1:10001"), time.Hour)
 	require.NoError(t, err)
 	restored, restoredWire := dtlsCheckpointSession(t, base, *saved, lease, ResumeOptions{Kind: agent.Takeover, SequenceMargin: 8192})
-	require.NoError(t, restored.persistSnapshot())
+	require.NoError(t, restored.checkpoint.persist(restored.ctx, checkpointOptional))
 	require.NoError(t, restored.dtlsConn.Close())
 	pair := dtlsNonceInput(t, dtlsPacket(t, restoredWire))
 	require.False(t, seen[pair], "DTLS epoch/sequence reused after lost FIRST checkpoint reply: %x", pair)
@@ -290,7 +290,7 @@ func TestRepeatedTakeoversNeverRepeatDTLSSequence(t *testing.T) {
 			opts = ResumeOptions{Kind: agent.Takeover, SequenceMargin: 1}
 		}
 		s, wire := dtlsCheckpointSession(t, store, saved, lease, opts)
-		require.NoError(t, s.persistSnapshot())
+		require.NoError(t, s.checkpoint.persist(s.ctx, checkpointOptional))
 		data, err := store.GetState(context.Background(), s.id)
 		require.NoError(t, err)
 		require.NoError(t, json.Unmarshal(data, &saved))
@@ -338,7 +338,7 @@ func TestDTLSUnknownCheckpointDoesNotAdvanceBound(t *testing.T) {
 			lease, err := base.Claim(context.Background(), saved.State.ID, netip.MustParseAddrPort("127.0.0.1:10000"), time.Hour)
 			require.NoError(t, err)
 			s, wire := dtlsCheckpointSession(t, store, saved, lease, ResumeOptions{})
-			require.NoError(t, s.persistSnapshot())
+			require.NoError(t, s.checkpoint.persist(s.ctx, checkpointOptional))
 			seen := make(map[[8]byte]bool)
 			for range 3 {
 				_, err := s.dtlsConn.Write([]byte("before-unknown"))
@@ -347,7 +347,7 @@ func TestDTLSUnknownCheckpointDoesNotAdvanceBound(t *testing.T) {
 			}
 			store.commit = committed
 			store.result = &sessionstore.TransientError{Op: "put_state", Err: context.DeadlineExceeded}
-			require.ErrorIs(t, s.persistSnapshot(), sessionstore.ErrTransient)
+			require.ErrorIs(t, s.checkpoint.persist(s.ctx, checkpointOptional), sessionstore.ErrTransient)
 			// The current copy captured next=4, but no reply acknowledged it. All
 			// records >=65 must still be refused, even if that copy committed.
 			for range 61 {
@@ -359,11 +359,6 @@ func TestDTLSUnknownCheckpointDoesNotAdvanceBound(t *testing.T) {
 			require.NoError(t, err)
 			require.Empty(t, wire.packets)
 			require.EqualValues(t, 1, s.worker.metrics.dtlsSequenceDrops.Load())
-			select {
-			case <-s.snapshotWanted:
-			default:
-				t.Fatal("guard did not request a checkpoint")
-			}
 			data, err := base.GetState(context.Background(), s.id)
 			require.NoError(t, err)
 			require.NoError(t, json.Unmarshal(data, &saved))
@@ -372,7 +367,7 @@ func TestDTLSUnknownCheckpointDoesNotAdvanceBound(t *testing.T) {
 			lease, err = base.Transfer(context.Background(), lease, netip.MustParseAddrPort("127.0.0.1:10001"), time.Hour)
 			require.NoError(t, err)
 			restored, restoredWire := dtlsCheckpointSession(t, base, saved, lease, ResumeOptions{Kind: agent.Takeover, SequenceMargin: 8192})
-			require.NoError(t, restored.persistSnapshot())
+			require.NoError(t, restored.checkpoint.persist(restored.ctx, checkpointOptional))
 			require.NoError(t, restored.dtlsConn.Close())
 			pair := dtlsNonceInput(t, dtlsPacket(t, restoredWire))
 			require.False(t, seen[pair], "uncertain checkpoint led to repeated nonce input %x", pair)
@@ -392,13 +387,13 @@ func TestDTLSGuardRequestsCheckpointAndResumesAfterAcknowledgment(t *testing.T) 
 	require.NoError(t, err)
 	s, wire := dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{})
 	// An observation alone is not a checkpoint write attempt.
-	_, err = s.snapshotBytes()
+	_, err = s.checkpoint.capture(checkpointLive, nil)
 	require.NoError(t, err)
 	s.mu.Lock()
-	require.Nil(t, s.dtlsProvisional)
-	require.Nil(t, s.dtlsAcknowledged)
+	require.True(t, s.checkpoint.allowDTLSLocked(dtlsHeaderRecord(22, 1, 1000)), "read-only capture cannot arm a DTLS bound")
 	s.mu.Unlock()
-	require.NoError(t, s.persistSnapshot())
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointOptional))
+	events := observeCheckpointRequests(t, s)
 	for range 64 {
 		_, err := s.dtlsConn.Write([]byte("within-reservation"))
 		require.NoError(t, err)
@@ -409,12 +404,8 @@ func TestDTLSGuardRequestsCheckpointAndResumesAfterAcknowledgment(t *testing.T) 
 	require.Empty(t, wire.packets)
 	require.EqualValues(t, 1, s.worker.metrics.dtlsSequenceDrops.Load())
 	require.Contains(t, metricsBody(s.worker), "relais_worker_dtls_sequence_guard_drops_total 1\n")
-	select {
-	case <-s.snapshotWanted:
-	default:
-		t.Fatal("guard did not request a checkpoint")
-	}
-	require.NoError(t, s.persistSnapshot())
+	requireCheckpointRequest(t, events, true)
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointOptional))
 	_, err = s.dtlsConn.Write([]byte("acknowledged-new-bound"))
 	require.NoError(t, err)
 	pair := dtlsNonceInput(t, dtlsPacket(t, wire))
@@ -429,27 +420,25 @@ func TestDTLSGuardRequestsOneCheckpointPerBound(t *testing.T) {
 	lease, err := base.Claim(context.Background(), snap.State.ID, netip.MustParseAddrPort("127.0.0.1:10000"), time.Hour)
 	require.NoError(t, err)
 	s, _ := dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{})
-	require.NoError(t, s.persistSnapshot())
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointOptional))
+	events := observeCheckpointRequests(t, s)
 	drop := func(want bool) {
 		t.Helper()
 		_, err := s.dtlsEndpoint.WriteTo(dtlsHeaderRecord(22, 1, 1000), nil)
 		require.NoError(t, err)
-		require.Equal(t, want, len(s.snapshotWanted) == 1)
-		if want {
-			<-s.snapshotWanted
-		}
+		requireCheckpointRequest(t, events, want)
 	}
 	drop(true)
 	drop(false) // draining the wakeup must not permit caller-driven writes
-	require.NoError(t, s.persistSnapshot())
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointOptional))
 	drop(false) // an acknowledgment of the same bound does not rearm it
 	store.result = &sessionstore.TransientError{Op: "put_state", Err: context.DeadlineExceeded}
 	_, err = s.dtlsConn.Write([]byte("advance-capture"))
 	require.NoError(t, err)
-	require.ErrorIs(t, s.persistSnapshot(), sessionstore.ErrTransient)
+	require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointOptional), sessionstore.ErrTransient)
 	drop(false) // uncertain commits never advance the bound or reset its latch
 	store.result = nil
-	require.NoError(t, s.persistSnapshot())
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointOptional))
 	drop(true) // an acknowledged new bound permits one new request
 	drop(false)
 	require.EqualValues(t, 6, s.worker.metrics.dtlsSequenceDrops.Load())
@@ -463,7 +452,7 @@ func TestDTLSAutomaticCloseAlertUsesSequenceGuard(t *testing.T) {
 			lease, err := store.Claim(context.Background(), snap.State.ID, netip.MustParseAddrPort("127.0.0.1:10000"), time.Hour)
 			require.NoError(t, err)
 			s, wire := dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{})
-			require.NoError(t, s.persistSnapshot())
+			require.NoError(t, s.checkpoint.persist(s.ctx, checkpointOptional))
 			for range tail {
 				_, err := s.dtlsConn.Write([]byte("tail"))
 				require.NoError(t, err)
@@ -476,11 +465,6 @@ func TestDTLSAutomaticCloseAlertUsesSequenceGuard(t *testing.T) {
 			} else {
 				require.Empty(t, wire.packets, "out-of-reservation close alert escaped")
 				require.EqualValues(t, 1, s.worker.metrics.dtlsSequenceDrops.Load())
-				select {
-				case <-s.snapshotWanted:
-				default:
-					t.Fatal("close alert did not request a checkpoint")
-				}
 			}
 		})
 	}
@@ -492,7 +476,7 @@ func TestDTLSAutomaticHandshakeRetransmissionUsesSequenceGuard(t *testing.T) {
 	lease, err := store.Claim(context.Background(), snap.State.ID, netip.MustParseAddrPort("127.0.0.1:10000"), time.Hour)
 	require.NoError(t, err)
 	s, wire := dtlsHandshakenSession(t, store, lease)
-	require.NoError(t, s.persistSnapshot())
+	require.NoError(t, s.checkpoint.persist(s.ctx, checkpointOptional))
 	for i := range 65 {
 		s.dtlsEndpoint.deliver(dtlsRetransmitRequest(uint64(1000 + i)))
 	}
@@ -512,11 +496,6 @@ func TestDTLSAutomaticHandshakeRetransmissionUsesSequenceGuard(t *testing.T) {
 		require.Equal(t, uint64(1)<<48|sequence, binary.BigEndian.Uint64(pair[:]))
 	}
 	require.EqualValues(t, 1, s.worker.metrics.dtlsSequenceDrops.Load(), "encrypted Finished 65 must be dropped")
-	select {
-	case <-s.snapshotWanted:
-	default:
-		t.Fatal("retransmission did not request a checkpoint")
-	}
 }
 
 func dtlsHeaderRecord(contentType byte, epoch uint16, sequence uint64) []byte {
@@ -533,7 +512,7 @@ func TestDTLSGuardChecksWholeDatagram(t *testing.T) {
 	lease, err := store.Claim(context.Background(), snap.State.ID, netip.MustParseAddrPort("127.0.0.1:10000"), time.Hour)
 	require.NoError(t, err)
 	s, wire := dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{})
-	require.NoError(t, s.persistSnapshot())
+	require.NoError(t, s.checkpoint.persist(s.ctx, checkpointOptional))
 	plaintext := dtlsHeaderRecord(22, 0, recordlayer.MaxSequenceNumber)
 	_, err = s.dtlsEndpoint.WriteTo(plaintext, nil)
 	require.NoError(t, err)
@@ -628,20 +607,20 @@ func TestDTLSFirstWriteBoundSurvivesRetries(t *testing.T) {
 	lease, err := base.Claim(context.Background(), snap.State.ID, netip.MustParseAddrPort("127.0.0.1:10000"), time.Hour)
 	require.NoError(t, err)
 	s, wire := dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{})
-	require.ErrorIs(t, s.persistSnapshot(), sessionstore.ErrTransient)
+	require.ErrorIs(t, s.checkpoint.persist(s.ctx, checkpointOptional), sessionstore.ErrTransient)
 	for range 64 {
 		_, err := s.dtlsConn.Write([]byte("provisional-tail"))
 		require.NoError(t, err)
 		dtlsPacket(t, wire)
 	}
 	// A failed retry captures a larger N but must retain the FIRST bound.
-	require.ErrorIs(t, s.persistSnapshot(), sessionstore.ErrTransient)
+	require.ErrorIs(t, s.checkpoint.persist(s.ctx, checkpointOptional), sessionstore.ErrTransient)
 	_, err = s.dtlsConn.Write([]byte("past-provisional-bound"))
 	require.NoError(t, err)
 	require.Empty(t, wire.packets)
 	require.EqualValues(t, 1, s.worker.metrics.dtlsSequenceDrops.Load())
 	store.commit, store.result = true, nil
-	require.NoError(t, s.persistSnapshot())
+	require.NoError(t, s.checkpoint.persist(s.ctx, checkpointOptional))
 	_, err = s.dtlsConn.Write([]byte("after-first-acknowledgment"))
 	require.NoError(t, err)
 	pair := dtlsNonceInput(t, dtlsPacket(t, wire))
@@ -656,7 +635,7 @@ func TestDTLSAcknowledgmentUsesCapturedSequence(t *testing.T) {
 	require.NoError(t, err)
 	s, wire := dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{})
 	result := make(chan error, 1)
-	go func() { result <- s.persistSnapshot() }()
+	go func() { result <- s.checkpoint.persist(s.ctx, checkpointOptional) }()
 	select {
 	case <-store.committed:
 	case <-time.After(2 * time.Second):
@@ -687,7 +666,7 @@ func TestPlannedRestoreKeepsExactDTLSSequence(t *testing.T) {
 	lease, err := store.Claim(context.Background(), snap.State.ID, netip.MustParseAddrPort("127.0.0.1:10000"), time.Hour)
 	require.NoError(t, err)
 	s, wire := dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{Kind: agent.PlannedMove})
-	require.NoError(t, s.persistSnapshot())
+	require.NoError(t, s.checkpoint.persist(s.ctx, checkpointOptional))
 	require.NoError(t, s.dtlsConn.Close())
 	pair := dtlsNonceInput(t, dtlsPacket(t, wire))
 	require.EqualValues(t, 1, binary.BigEndian.Uint64(pair[:])&0xffffffffffff)

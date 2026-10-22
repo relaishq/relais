@@ -50,7 +50,7 @@ func TestLeaseLostSnapshotSilentlyDiscardsSession(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.Transfer(context.Background(), lease, netip.MustParseAddrPort("127.0.0.1:12345"), time.Minute)
 	require.NoError(t, err)
-	require.ErrorIs(t, sess.persistSnapshot(), sessionstore.ErrLeaseLost)
+	require.ErrorIs(t, sess.checkpoint.persist(sess.ctx, checkpointOptional), sessionstore.ErrLeaseLost)
 	require.Nil(t, w.session(call.id))
 	require.NoError(t, client.SetReadDeadline(time.Now().Add(silence)))
 	_, err = client.Read(make([]byte, receiveMTU))
@@ -163,20 +163,13 @@ func TestFirstEchoRequestsImmediateSnapshotWithoutRollover(t *testing.T) {
 	sess.srtpIn = testContext(t, keys.RemoteMasterKey, keys.RemoteMasterSalt, profile)
 	sess.srtpOut = testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
 	caller := testContext(t, keys.RemoteMasterKey, keys.RemoteMasterSalt, profile)
+	events := observeCheckpointRequests(t, sess)
 	sess.handleRTP(testEncrypt(t, caller, 456, 1))
 	require.EqualValues(t, 1, sess.state.Audio.Packets)
 	require.Zero(t, sess.state.Audio.HighestSentIndex>>16)
-	select {
-	case <-sess.snapshotWanted:
-	default:
-		t.Fatal("first echo did not wake the snapshot writer")
-	}
+	requireCheckpointRequest(t, events, true)
 	sess.handleRTP(testEncrypt(t, caller, 456, 2))
-	select {
-	case <-sess.snapshotWanted:
-		t.Fatal("ordinary second packet must not wake snapshot writer")
-	default:
-	}
+	requireCheckpointRequest(t, events, false)
 }
 
 func TestFencedSessionDoesNotRequestKeyframe(t *testing.T) {

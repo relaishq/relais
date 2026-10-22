@@ -143,9 +143,10 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 
 	h := &v2Host{controls: make(chan controlRequest), registration: reg, ready: make(chan struct{}), emissions: make(chan taskEmission), force: make(chan struct{}, 1), wakePlayback: make(chan struct{}, 1)}
 	s.agent.v2 = h
-	if s.componentMode && s.snapshotLimits().BurstBytes < 2*s.componentBudgets().Total {
-		return fmt.Errorf("%w: split burst must hold two %d-byte transactions", agent.ErrCapacity, s.componentBudgets().Total)
+	if err := s.checkpoint.restore(checkpointRestore{profile: true}); err != nil {
+		return err
 	}
+
 	if restoring && s.worker.cfg.Relay != nil {
 		ctx, cancel := context.WithTimeout(s.ctx, ownershipTimeout)
 		now, err := s.worker.cfg.Relay.Owners.Clock(ctx, s.id)
@@ -153,13 +154,15 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 		if err != nil {
 			return err
 		}
-		if now.Before(s.state.Checkpoint.CapturedAt) {
+		// Restoration is exclusive here, before callbacks and packet adoption.
+		capturedAt := s.checkpoint.progress(checkpointProgressRequest{}).observations.CapturedAt
+		if now.Before(capturedAt) {
 			return sessionstore.ErrUnsafeCheckpointClock
 		}
 		s.storeClock, s.storeClockAt = now, time.Now()
 	}
 	if restoring {
-		if err := s.restoreSnapshotQuota(s.state.Agent.V2.Quota); err != nil {
+		if err := s.checkpoint.restore(checkpointRestore{quota: s.state.Agent.V2.Quota}); err != nil {
 			return s.v2RestoreError(err)
 		}
 	}
@@ -178,12 +181,11 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 				return err
 			}
 		}
-		s.durableAgent = cloneAgentState(s.state.Agent)
-		s.controlAck = s.state.Agent.V2.ControlHigh
+		var ack *uint64
 		if move != nil {
-			s.controlAck = move.ControlAck
+			ack = &move.ControlAck
 		}
-		if err := validateControlWindow(s.state.Agent.V2, s.controlAck); err != nil {
+		if err := s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ack}); err != nil {
 			return s.v2RestoreError(err)
 		}
 		if err := s.agentCall(func(ctx context.Context) error { return h.instance.Restore(ctx, cloneV2State(state)) }); err != nil {
@@ -549,26 +551,9 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		}
 		admittedControls, admittedFloor = candidate.V2.Controls, candidate.V2.ControlFloor
 		candidate.Revision++
-		size, err := s.admissionSnapshot(candidate)
+		_, err = s.checkpoint.admit(checkpointAdmission{candidate: candidate, prior: before, event: true, sideEffect: slices.ContainsFunc(effects.StartTasks, func(t agent.TaskSpec) bool { return t.Class == agent.SideEffecting })})
 		if err != nil {
-			if errors.Is(err, agent.ErrCapacity) {
-				return fmt.Errorf("%w: %w", errSnapshotAdmissionCapacity, err)
-			}
 			return err
-		}
-		if size > 0 && slices.ContainsFunc(effects.StartTasks, func(t agent.TaskSpec) bool { return t.Class == agent.SideEffecting }) {
-			limits := s.snapshotLimits()
-			required := size + limits.MaxBytes
-			if required > limits.BurstBytes {
-				return errSnapshotAdmissionCapacity
-			}
-			now := s.taskNow()
-			s.snapshotBudgetMu.Lock()
-			available := s.snapshotBytesBudget.available(limits, now)
-			s.snapshotBudgetMu.Unlock()
-			if available < float64(required) {
-				return errTaskAdmissionBackpressure
-			}
 		}
 		saved = cloneV2State(saved)
 		return nil
@@ -583,7 +568,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 		if restoreErr := s.agentCall(func(ctx context.Context) error { return h.v2.instance.Restore(ctx, cloneV2State(v2State(before))) }); restoreErr != nil {
 			return fmt.Errorf("%w: %w", legacy.ErrRestore, restoreErr)
 		}
-		s.rollbackHistoryAdmission(before)
+		s.checkpoint.rollback(before)
 		if reserveErr := s.taskBudget(h.v2.tasks, before.V2.MoveOnlyLength); reserveErr != nil {
 			return reserveErr
 		}
@@ -651,7 +636,7 @@ func (s *session) handleV2EventMode(event agent.Event, adoption bool) error {
 	s.mu.Unlock()
 	s.wakePacer()
 	if !agentStateEqual(before, next) {
-		s.wantSnapshot()
+		s.checkpoint.request()
 	}
 	return nil
 }

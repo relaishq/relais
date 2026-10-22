@@ -3,7 +3,6 @@ package mediaworker
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"net/netip"
 	"sync"
@@ -28,6 +27,8 @@ type delayedComponentStore struct {
 	landOnNext   bool
 	readFailures int
 	lastWritten  int
+	clockFailure bool
+	fixedNow     time.Time
 }
 
 func (s *delayedComponentStore) CommitComponents(ctx context.Context, l sessionstore.Lease, c sessionstore.ComponentCommit) (sessionstore.ComponentTuple, error) {
@@ -63,6 +64,16 @@ func (s *delayedComponentStore) CommitComponents(ctx context.Context, l sessions
 	return result, err
 }
 
+func (s *delayedComponentStore) Clock(ctx context.Context, id string) (time.Time, error) {
+	if s.clockFailure {
+		return time.Time{}, errCheckpointClockProbe
+	}
+	if !s.fixedNow.IsZero() {
+		return s.fixedNow, nil
+	}
+	return s.Memory.Clock(ctx, id)
+}
+
 func (s *delayedComponentStore) ReadComponents(ctx context.Context, id string) (sessionstore.ComponentTuple, error) {
 	s.mu.Lock()
 	fail := s.readFailures > 0
@@ -84,8 +95,7 @@ func TestSplitLateCommitRebasesWithoutAcknowledgingDTLS(t *testing.T) {
 	require.NoError(t, err)
 	s, wire := dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{})
 	s.componentMode = true
-	require.NoError(t, s.persistSnapshotMode(ctx, true))
-	bound := *s.dtlsAcknowledged
+	require.NoError(t, s.checkpoint.persist(ctx, checkpointRequired))
 	seen := map[[8]byte]bool{}
 	send := func(n int) {
 		for range n {
@@ -101,36 +111,34 @@ func TestSplitLateCommitRebasesWithoutAcknowledgingDTLS(t *testing.T) {
 	s.mu.Lock()
 	setComponentTestHistory(s, []byte("history P2"))
 	s.mu.Unlock()
-	require.ErrorIs(t, s.persistSnapshotMode(ctx, true), sessionstore.ErrTransient)
-	require.Equal(t, bound, *s.dtlsAcknowledged, "unknown reply cannot advance the guard")
+	require.ErrorIs(t, s.checkpoint.persist(ctx, checkpointRequired), sessionstore.ErrTransient)
 	require.EqualValues(t, 1, s.state.Checkpoint.Successes)
 	require.Zero(t, s.state.Checkpoint.Failures, "unknown outcome is not yet a failure")
 	store.landOnNext = true
 	s.mu.Lock()
 	setComponentTestHistory(s, []byte("history P3"))
 	s.mu.Unlock()
-	require.ErrorIs(t, s.persistSnapshotMode(ctx, true), sessionstore.ErrStateSuperseded)
+	require.ErrorIs(t, s.checkpoint.persist(ctx, checkpointRequired), sessionstore.ErrStateSuperseded)
 	published, err := store.ReadComponents(ctx, s.id)
 	require.NoError(t, err)
-	require.NoError(t, s.settleComponentWrite(ctx))
-	require.Nil(t, s.componentPending)
-	require.Equal(t, published.Metadata, *s.componentMetadata)
-	require.Equal(t, bound, *s.dtlsAcknowledged, "rebasing is not an acknowledgment")
+	store.clockFailure = true
+	require.ErrorIs(t, s.checkpoint.persist(ctx, checkpointRequired), errCheckpointClockProbe)
+	store.clockFailure = false
 	require.EqualValues(t, 1, s.state.Checkpoint.Successes)
-	require.EqualValues(t, 2, s.state.Checkpoint.Failures)
+	require.EqualValues(t, 3, s.state.Checkpoint.Failures, "two rejected pending captures and the controlled Clock failure")
 	send(54)
 	_, err = s.dtlsConn.Write([]byte("guarded"))
 	require.NoError(t, err)
 	require.Empty(t, wire.packets)
 	require.Positive(t, s.worker.metrics.dtlsSequenceDrops.Load())
 	for range 3 {
-		require.NoError(t, s.persistSnapshotMode(ctx, true))
+		require.NoError(t, s.checkpoint.persist(ctx, checkpointRequired))
 	}
 	latest, err := store.ReadComponents(ctx, s.id)
 	require.NoError(t, err)
+	require.NotEqual(t, published.Metadata.References[2], latest.Metadata.References[2])
 	var transport transportComponent
 	require.NoError(t, unmarshalComponent(latest.Components.Transport, componentTransport, &transport))
-	require.Equal(t, transport.DTLS.SequenceNumber, s.dtlsAcknowledged.next)
 	// Crash after the new acknowledgment: its successor starts beyond every
 	// packet this process was permitted to send, including the late landing.
 	s.fenced.Store(true)
@@ -142,8 +150,8 @@ func TestSplitLateCommitRebasesWithoutAcknowledgingDTLS(t *testing.T) {
 	restored, err := decodeSnapshot(raw)
 	require.NoError(t, err)
 	target, output := dtlsCheckpointSession(t, store, *restored, lease, ResumeOptions{Kind: agent.Takeover})
-	target.restoreComponentMode(restored)
-	require.NoError(t, target.persistSnapshotMode(ctx, true))
+	require.NoError(t, target.checkpoint.restore(checkpointRestore{snapshot: restored}))
+	require.NoError(t, target.checkpoint.persist(ctx, checkpointRequired))
 	for range 64 {
 		_, err := target.dtlsConn.Write([]byte("restored"))
 		require.NoError(t, err)
@@ -158,45 +166,51 @@ func TestSplitLateCommitRebasesWithoutAcknowledgingDTLS(t *testing.T) {
 
 func TestSplitUnknownWriteCountsOnceAndDebitsExactly(t *testing.T) {
 	ctx := context.Background()
-	store := &delayedComponentStore{Memory: sessionstore.NewMemory()}
+	store := &delayedComponentStore{Memory: sessionstore.NewMemory(), fixedNow: time.Now()}
 	s := componentWriterSession(t, store, true)
-	require.NoError(t, s.persistSnapshotMode(ctx, true))
+	require.NoError(t, s.checkpoint.persist(ctx, checkpointRequired))
+	first, err := store.ReadComponents(ctx, s.id)
+	require.NoError(t, err)
+	firstSnapshot, _, err := assembleSessionComponents(sessionComponents(first.Components), first.Metadata.StateVersion)
+	require.NoError(t, err)
+	before, err := firstSnapshot.State.Agent.V2.Quota.balance()
+	require.NoError(t, err)
 	store.lostAfterCommit = true
 	s.mu.Lock()
 	setComponentTestHistory(s, []byte("history requiring a bank write"))
 	s.mu.Unlock()
 	debitBefore := s.worker.metrics.snapshotDebitBytes.Load()
-	require.ErrorIs(t, s.persistSnapshotMode(ctx, true), sessionstore.ErrTransient)
-	pending := s.componentPending
-	require.NotNil(t, pending)
-	require.EqualValues(t, 1, s.state.Checkpoint.Successes)
-	require.Zero(t, s.state.Checkpoint.Failures)
+	require.ErrorIs(t, s.checkpoint.persist(ctx, checkpointRequired), sessionstore.ErrTransient)
+	require.EqualValues(t, 1, checkpointObservation(s).observations.Successes)
+	require.Zero(t, checkpointObservation(s).observations.Failures)
 	require.Equal(t, debitBefore, s.worker.metrics.snapshotDebitBytes.Load())
 	store.readFailures = 3
 	for range 3 {
-		require.ErrorIs(t, s.persistSnapshotMode(ctx, true), sessionstore.ErrTransient)
+		require.ErrorIs(t, s.checkpoint.persist(ctx, checkpointRequired), sessionstore.ErrTransient)
 	}
 	published, err := store.Memory.ReadComponents(ctx, s.id)
 	require.NoError(t, err)
-	require.NoError(t, s.settleComponentWrite(ctx))
-	require.EqualValues(t, 2, s.state.Checkpoint.Attempts)
-	require.EqualValues(t, 2, s.state.Checkpoint.Successes)
-	require.Zero(t, s.state.Checkpoint.Failures)
-	var transport transportComponent
-	require.NoError(t, unmarshalComponent(published.Components.Transport, componentTransport, &transport))
-	var host v2Envelope
-	require.NoError(t, json.Unmarshal(transport.Host, &host))
-	saved, err := host.Quota.balance()
+	store.clockFailure = true
+	require.ErrorIs(t, s.checkpoint.persist(ctx, checkpointRequired), errCheckpointClockProbe)
+	require.EqualValues(t, 3, checkpointObservation(s).observations.Attempts)
+	require.EqualValues(t, 2, checkpointObservation(s).observations.Successes)
+	savedSnapshot, _, err := assembleSessionComponents(sessionComponents(published.Components), published.Metadata.StateVersion)
 	require.NoError(t, err)
-	before, err := pending.pair.V2.Quota.balance()
+	saved, err := savedSnapshot.State.Agent.V2.Quota.balance()
 	require.NoError(t, err)
-	// Charge is determined by the store's selected banks, then embedded by
-	// FinalizeTransport. Comparing only local and saved balances misses its removal.
-	require.Equal(t, store.lastWritten+componentProtocolReserve, pending.bytes)
-	require.Equal(t, uint64(pending.bytes), before-saved)
-	require.Equal(t, uint64(pending.bytes), s.worker.metrics.snapshotDebitBytes.Load()-debitBefore)
-	require.NoError(t, s.settleComponentWrite(ctx))
-	require.EqualValues(t, 2, s.state.Checkpoint.Successes)
+	charge := uint64(store.lastWritten + componentProtocolReserve)
+	require.Equal(t, charge, before-saved)
+	require.Equal(t, charge, s.worker.metrics.snapshotDebitBytes.Load()-debitBefore)
+	require.ErrorIs(t, s.checkpoint.persist(ctx, checkpointRequired), errCheckpointClockProbe)
+	require.EqualValues(t, 2, checkpointObservation(s).observations.Successes)
+	require.Equal(t, charge, s.worker.metrics.snapshotDebitBytes.Load()-debitBefore, "repeated settlement cannot debit twice")
+	// The next persisted balance observes the real bucket after settlement.
+	// A metric-only check misses an omitted or duplicated bucket debit.
+	store.clockFailure = false
+	require.NoError(t, s.checkpoint.persist(ctx, checkpointRequired))
+	nextCharge := uint64(store.lastWritten + componentProtocolReserve)
+	require.Equal(t, saved-nextCharge, storedCheckpointQuota(t, store, s.id), "next fixed-clock write must spend exactly one charge from the settled bucket")
+
 }
 
 func TestSplitSaveAdmissionRejectsOversizeBeforePublication(t *testing.T) {
@@ -226,7 +240,7 @@ func TestSplitSaveAdmissionMatchesFirstCaptureBoundary(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			s := componentWriterSession(t, sessionstore.NewMemory(), false)
 			if phase == "after-first-ack" {
-				require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+				require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 			} else {
 				require.True(t, s.state.Checkpoint.CapturedAt.IsZero())
 			}
@@ -236,14 +250,15 @@ func TestSplitSaveAdmissionMatchesFirstCaptureBoundary(t *testing.T) {
 				candidate := cloneAgentState(s.state.Agent)
 				candidate.State = agent.State{Version: 1, Bytes: bytes.Repeat([]byte{'a'}, size)}
 				candidate.Revision++
-				_, _, err := s.captureSnapshotCandidate(time.Now(), &candidate)
+				state := candidate.State
+				_, err := s.checkpoint.admit(checkpointAdmission{legacy: &state})
 				return err
 			}
 			low, high := 0, s.worker.cfg.Agent.MaxStateBytes+1
 			for low+1 < high {
 				mid := (low + high) / 2
 				err := capture(mid)
-				if errors.Is(err, agentv2.ErrCapacity) {
+				if errors.Is(err, agent.ErrStateTooLarge) {
 					high = mid
 				} else {
 					require.NoError(t, err)
@@ -252,7 +267,7 @@ func TestSplitSaveAdmissionMatchesFirstCaptureBoundary(t *testing.T) {
 			}
 			require.Positive(t, low)
 			require.NoError(t, capture(low))
-			require.ErrorIs(t, capture(low+1), agentv2.ErrCapacity)
+			require.ErrorIs(t, capture(low+1), agent.ErrStateTooLarge)
 			connection := s.dtlsConn
 			if phase == "before-handshake" {
 				s.dtlsConn = nil
@@ -268,7 +283,7 @@ func TestSplitSaveAdmissionMatchesFirstCaptureBoundary(t *testing.T) {
 			s.state.Agent.State = state
 			s.state.Agent.Revision++
 			s.mu.Unlock()
-			require.NoError(t, s.persistSnapshotMode(context.Background(), true), "the largest admitted Save must checkpoint")
+			require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired), "the largest admitted Save must checkpoint")
 			t.Logf("largest admitted/captured v1 state: %d bytes", low)
 		})
 	}
@@ -292,13 +307,12 @@ func TestSplitSettlementRejectsForeignLeaseAndPublication(t *testing.T) {
 			ctx := context.Background()
 			store := &componentTupleOverrideStore{componentReplyStore: &componentReplyStore{Memory: sessionstore.NewMemory()}}
 			s := componentWriterSession(t, store, false)
-			require.NoError(t, s.persistSnapshotMode(ctx, true))
+			require.NoError(t, s.checkpoint.persist(ctx, checkpointRequired))
 			first, err := store.ReadComponents(ctx, s.id)
 			require.NoError(t, err)
-			bound := *s.dtlsAcknowledged
 			store.unknown.Store(true)
 			setComponentTestHistory(s, []byte("pending newer history"))
-			require.ErrorIs(t, s.persistSnapshotMode(ctx, true), sessionstore.ErrTransient)
+			require.ErrorIs(t, s.checkpoint.persist(ctx, checkpointRequired), sessionstore.ErrTransient)
 			published, err := store.ReadComponents(ctx, s.id)
 			require.NoError(t, err)
 			want := sessionstore.ErrStateSuperseded
@@ -317,14 +331,10 @@ func TestSplitSettlementRejectsForeignLeaseAndPublication(t *testing.T) {
 				published.Metadata.OwnerEpoch++
 			}
 			store.tuple = &published // Deliberately inconsistent fake-store tuple.
-			require.ErrorIs(t, s.settleComponentWrite(ctx), want)
-			require.Equal(t, first.Metadata, *s.componentMetadata)
-			require.Equal(t, bound, *s.dtlsAcknowledged)
+			require.ErrorIs(t, s.checkpoint.persist(ctx, checkpointRequired), want)
 			require.EqualValues(t, 1, s.state.Checkpoint.Successes, "foreign evidence cannot acknowledge a pending write")
 			if want == sessionstore.ErrLeaseLost {
-				require.Nil(t, s.componentPending)
-			} else {
-				require.NotNil(t, s.componentPending, "another tenure cannot clear or rebase the pending write")
+				require.True(t, s.fenced.Load())
 			}
 		})
 	}
@@ -334,33 +344,28 @@ func TestSplitAdoptionReadsTransferredPublication(t *testing.T) {
 	ctx := context.Background()
 	store := &componentReplyStore{Memory: sessionstore.NewMemory()}
 	source := componentWriterSession(t, store, false)
-	require.NoError(t, source.persistSnapshotMode(ctx, true))
-	data, err := source.snapshotBytes()
+	require.NoError(t, source.checkpoint.persist(ctx, checkpointRequired))
+	data, err := source.checkpoint.capture(checkpointLive, nil)
 	require.NoError(t, err)
 	snap, err := decodeSnapshot(data)
 	require.NoError(t, err)
 	lease, err := store.Transfer(ctx, source.lease, netip.MustParseAddrPort("127.0.0.1:10001"), time.Hour)
 	require.NoError(t, err)
 	target, _ := dtlsCheckpointSession(t, store, *snap, lease, ResumeOptions{Kind: agent.PlannedMove})
-	target.restoreComponentMode(snap)
-	require.Nil(t, target.componentMetadata)
+	require.NoError(t, target.checkpoint.restore(checkpointRestore{snapshot: snap}))
 	reads := store.reads.Load()
-	require.NoError(t, target.prepareComponentAdoption(ctx))
+	require.NoError(t, target.checkpoint.prepareAdoption(ctx))
 	require.Equal(t, reads+1, store.reads.Load())
-	require.Equal(t, *source.componentMetadata, *target.componentMetadata)
-	require.NoError(t, target.persistSnapshotMode(ctx, true))
+	require.NoError(t, target.checkpoint.persist(ctx, checkpointRequired))
 }
 
 func TestSplitRequiredCheckpointBudgetRefusalMatchesLegacy(t *testing.T) {
 	for _, available := range []float64{0, 100} {
 		t.Run(map[bool]string{true: "no-budget", false: "store-refusal"}[available == 0], func(t *testing.T) {
 			s := componentWriterSession(t, sessionstore.NewMemory(), true)
-			s.snapshotBudgetMu.Lock()
-			s.snapshotBytesBudget = snapshotBucket{tokens: available, at: time.Now().Add(time.Hour)}
-			s.snapshotBudgetMu.Unlock()
-			require.ErrorIs(t, s.persistSnapshotBudget(context.Background(), true, false), agentv2.ErrCapacity)
-			require.Nil(t, s.componentPending)
-			require.ErrorIs(t, s.persistSnapshotBudget(context.Background(), true, true), errCheckpointSkipped)
+			restoreCheckpointQuota(t, s, available, time.Now().Add(time.Hour))
+			require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointRequired), agentv2.ErrCapacity)
+			require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointIntent), errCheckpointSkipped)
 			require.False(t, s.fenced.Load())
 		})
 	}

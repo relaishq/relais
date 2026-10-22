@@ -79,7 +79,7 @@ func TestFrozenV020DecoderRejectsV10(t *testing.T) {
 	}
 	store := sessionstore.NewMemory()
 	s := componentWriterSession(t, store, true)
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	before, err := store.ReadComponents(context.Background(), s.id)
 	require.NoError(t, err)
 	data, err := ComponentSnapshot(before)

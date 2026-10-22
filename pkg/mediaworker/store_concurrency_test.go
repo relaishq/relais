@@ -133,7 +133,7 @@ func TestSnapshotsConcurrentAcrossSessionsAndOrderedWithinSession(t *testing.T) 
 	first, _ := dialDTLSCaller(t, w)
 	second, _ := dialDTLSCaller(t, w)
 	require.Eventually(t, func() bool {
-		return w.session(first.id).snapshotStored.Load() && w.session(second.id).snapshotStored.Load()
+		return checkpointKnown(w.session(first.id)) && checkpointKnown(w.session(second.id))
 	}, time.Second, time.Millisecond)
 	store.mu.Lock()
 	store.id = first.id
@@ -142,14 +142,16 @@ func TestSnapshotsConcurrentAcrossSessionsAndOrderedWithinSession(t *testing.T) 
 	release := func() { releaseOnce.Do(func() { close(store.release) }) }
 	t.Cleanup(release)
 	initial := make(chan error, 1)
-	go func() { initial <- w.session(first.id).persistSnapshot() }()
+	go func() { initial <- w.session(first.id).checkpoint.persist(w.session(first.id).ctx, checkpointOptional) }()
 	select {
 	case <-store.entered:
 	case <-time.After(time.Second):
 		t.Fatal("blocked snapshot did not enter")
 	}
 	concurrent := make(chan error, 1)
-	go func() { concurrent <- w.session(second.id).persistSnapshot() }()
+	go func() {
+		concurrent <- w.session(second.id).checkpoint.persist(w.session(second.id).ctx, checkpointOptional)
+	}()
 	select {
 	case err := <-concurrent:
 		require.NoError(t, err)
@@ -157,7 +159,7 @@ func TestSnapshotsConcurrentAcrossSessionsAndOrderedWithinSession(t *testing.T) 
 		t.Fatal("one snapshot blocked a different session")
 	}
 	ordered := make(chan error, 1)
-	go func() { ordered <- w.session(first.id).persistSnapshot() }()
+	go func() { ordered <- w.session(first.id).checkpoint.persist(w.session(first.id).ctx, checkpointOptional) }()
 	select {
 	case <-ordered:
 		t.Fatal("second snapshot bypassed per-session ordering")

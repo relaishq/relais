@@ -56,7 +56,7 @@ func TestControlFanOutHeadroom(t *testing.T) {
 							e.Controls[i].Digest = controlDigest(m)
 						}
 					}
-					s.controlAck = math.MaxUint64 - 2
+					require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(math.MaxUint64 - 2)}))
 				}
 				raw, _ := json.Marshal(s.agent.latest.V2)
 				t.Logf("held=%d metadata=%d", len(s.agent.latest.V2.Controls), len(raw))
@@ -74,7 +74,7 @@ func TestControlFanOutHeadroom(t *testing.T) {
 					require.NoError(t, json.Unmarshal(wire, &restored))
 					_, target := v2UnitSession(t, &v2UnitAgent{state: agent.State{Version: 1}})
 					target.state = restored
-					require.NoError(t, target.initAgent(true, ResumeOptions{}, &movePayload{ControlAck: s.controlAck}))
+					require.NoError(t, target.initAgent(true, ResumeOptions{}, &movePayload{ControlAck: checkpointObservation(s).controlAck}))
 					require.Equal(t, s.agent.latest.V2.Capacity, target.agent.latest.V2.Capacity)
 					require.Equal(t, s.agent.latest.V2.Controls, target.agent.latest.V2.Controls)
 				}

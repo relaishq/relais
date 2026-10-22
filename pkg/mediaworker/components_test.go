@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func componentFixture(t *testing.T) snapshot {
+func componentFixture(t testing.TB) snapshot {
 	t.Helper()
 	data, err := os.ReadFile("testdata/v9-control.json")
 	require.NoError(t, err)
@@ -111,7 +111,7 @@ func TestComponentCrashRestoreNeverRepeatsDTLSSequence(t *testing.T) {
 			lease, err := store.Claim(context.Background(), snap.State.ID, netip.MustParseAddrPort("127.0.0.1:10000"), time.Hour)
 			require.NoError(t, err)
 			old, wire := dtlsCheckpointSession(t, store, snap, lease, ResumeOptions{})
-			require.NoError(t, old.persistSnapshot())
+			require.NoError(t, old.checkpoint.persist(old.ctx, checkpointOptional))
 			captured, err := store.GetState(context.Background(), old.id)
 			require.NoError(t, err)
 			saved, err := decodeSnapshot(captured)
@@ -138,7 +138,7 @@ func TestComponentCrashRestoreNeverRepeatsDTLSSequence(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "durable conversation", string(history))
 			restored, restoredWire := dtlsCheckpointSession(t, store, assembled, lease, ResumeOptions{Kind: kind})
-			require.NoError(t, restored.persistSnapshot())
+			require.NoError(t, restored.checkpoint.persist(restored.ctx, checkpointOptional))
 			_, err = restored.dtlsConn.Write([]byte("replacement"))
 			require.NoError(t, err)
 			pair := dtlsNonceInput(t, dtlsPacket(t, restoredWire))
