@@ -180,7 +180,7 @@ func TestAgentTakeoverRestoreFailurePreservesCause(t *testing.T) {
 					lease, err := p.store.Get(ctx, id)
 					require.NoError(t, err)
 					require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
-					p.workers["a"].dead = true
+					expireObservedWorker(t, p.workers["a"])
 					p.takeover(ctx, p.workers["a"], lease, time.Now())
 					status, err := p.Status(ctx)
 					require.NoError(t, err)

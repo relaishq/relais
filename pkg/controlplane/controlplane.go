@@ -119,25 +119,15 @@ type ReplayRelay interface {
 }
 
 type registration struct {
-	createMu          sync.RWMutex // isolate create observation cuts to this worker
-	name              string
-	addr              netip.AddrPort
-	worker            Worker
-	relayPending      bool // fixed bootstrap waits for the relay allowlist
-	livenessUnknown   bool // failed restart observation; wait for a heartbeat before placement
-	draining          bool
-	reserved          int // incoming creates/moves; counted when balancing
-	rollbackSlots     int // source protection, used only by placement load
-	lastHeartbeat     time.Time
-	dead              bool
-	recovering        bool
-	recovered         bool
-	rejoinReady       bool
-	rejoinToken       string
-	acceptedToken     string
-	heartbeatObserved bool
-	retryingMoves     bool
-	pending           map[string]*takeoverState // unfinished transfers, retained for retry
+	createMu      sync.RWMutex // isolate create observation cuts to this worker
+	name          string
+	addr          netip.AddrPort
+	worker        Worker
+	observation   workerObservation
+	reserved      int // incoming creates/moves; counted when balancing
+	rollbackSlots int // source protection, used only by placement load
+	retryingMoves bool
+	pending       map[string]*takeoverState // unfinished transfers, retained for retry
 }
 
 type call struct {
@@ -260,7 +250,7 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 			return errors.New("controlplane: duplicate worker address")
 		}
 	}
-	p.workers[name] = &registration{name: name, addr: addr, worker: worker, lastHeartbeat: time.Now(), relayPending: p.bootstrap}
+	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: newWorkerObservation(time.Now(), p.bootstrap)}
 	delete(p.pendingWorkers, name)
 	p.loadVersion++
 	p.mu.Unlock()
@@ -306,7 +296,7 @@ func (p *Plane) pickCapacity(ctx context.Context, name string, excluded map[neti
 		version := p.loadVersion
 		candidates := make([]*registration, 0, len(p.workers))
 		for _, w := range p.workers {
-			if (name == "" || w.name == name) && !w.draining && !w.dead && !w.recovering && !w.relayPending && !w.livenessUnknown && !excluded[w.addr] {
+			if (name == "" || w.name == name) && w.observation.knowledge().eligible && !excluded[w.addr] {
 				candidates = append(candidates, w)
 			}
 		}
@@ -339,7 +329,7 @@ func (p *Plane) pickCapacity(ctx context.Context, name string, excluded map[neti
 		var best *registration
 		load, ready := int(^uint(0)>>1), false
 		for _, w := range candidates {
-			if p.workers[w.name] != w || w.draining || w.dead || w.recovering || w.relayPending || w.livenessUnknown {
+			if p.workers[w.name] != w || !w.observation.knowledge().eligible {
 				continue
 			}
 			ready = true
@@ -948,7 +938,7 @@ func (p *Plane) rollback(c *call, source, target *registration, r Relay, state [
 			source.pending = make(map[string]*takeoverState)
 		}
 		excluded := make(map[netip.AddrPort]bool)
-		if source.dead {
+		if source.observation.knowledge().dead {
 			excluded[source.addr] = true
 		}
 		source.pending[c.id] = &takeoverState{call: c, lease: lease, routed: source.addr, routedLease: lease,
@@ -1016,7 +1006,7 @@ func (p *Plane) markDraining(name string) (*registration, error) {
 	if w == nil {
 		return nil, &unknownWorkerError{fmt.Errorf("controlplane: unknown worker %q: %w", name, sessionstore.ErrNotFound)}
 	}
-	w.draining = true
+	w.observation.markDraining()
 	return w, nil
 }
 
@@ -1197,7 +1187,8 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 	// Copy registry flags here; metadata uses its own brief lock below.
 	status := Status{Rebuild: p.RebuildStatus(), SessionStoreKeys: inventory, Workers: []WorkerStatus{}, Calls: []CallStatus{}, Takeovers: p.recentTakeovers(), LostCount: p.lostCount}
 	for _, w := range workers {
-		status.Workers = append(status.Workers, WorkerStatus{Name: w.name, Address: w.addr, Draining: w.draining, Dead: w.dead, LivenessUnknown: w.livenessUnknown, Recovering: w.recovering, LastHeartbeat: w.lastHeartbeat})
+		knowledge := w.observation.knowledge()
+		status.Workers = append(status.Workers, WorkerStatus{Name: w.name, Address: w.addr, Draining: knowledge.draining, Dead: knowledge.dead, LivenessUnknown: knowledge.livenessUnknown, Recovering: knowledge.recovering, LastHeartbeat: knowledge.lastHeartbeat})
 	}
 
 	calls := make([]*call, 0, len(p.calls))

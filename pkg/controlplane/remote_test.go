@@ -227,7 +227,7 @@ func TestHTTPResumeExhaustionIsTerminal(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 			source := p.workers["a"]
-			source.dead = true
+			expireObservedWorker(t, source)
 			require.True(t, p.recoverWorker(ctx, source, time.Now()))
 			status, err := p.Status(ctx)
 			require.NoError(t, err)

@@ -90,7 +90,7 @@ func TestCrashRecoveryContinuesDuringOutgoingMove(t *testing.T) {
 	finish := holdOutgoingMove(t, p, r, first)
 	p.mu.Lock()
 	source := p.workers["a"]
-	source.dead = true
+	expireObservedWorker(t, source)
 	p.mu.Unlock()
 	done := make(chan bool, 1)
 	go func() { done <- p.recoverWorker(ctx, source, time.Now()) }()

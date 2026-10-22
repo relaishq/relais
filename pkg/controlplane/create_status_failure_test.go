@@ -57,9 +57,9 @@ func TestCreateReconciliationStatusFailureKeepsWorkerLive(t *testing.T) {
 	statusFails.Store(true)
 	reconcileErr := p.reconcileCreates(ctx)
 	p.mu.Lock()
-	dead, last := a.dead, a.lastHeartbeat
+	dead := a.observation.knowledge().dead
 	p.mu.Unlock()
-	t.Logf("reconcile=%v dead=%t heartbeat_age=%s", reconcileErr, dead, time.Since(last))
+	t.Logf("reconcile=%v dead=%t", reconcileErr, dead)
 	_, hbErr := p.remoteHeartbeat("a", HeartbeatRequest{Address: addrA})
 	t.Logf("next heartbeat from the live worker: %v", hbErr)
 	require.False(t, dead, "a live, heartbeating worker was marked dead by one failed status read")
@@ -94,7 +94,8 @@ func TestTakeoverIgnoresOnlyUnknownCreateReservations(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 	source := p.workers["a"]
-	source.dead, source.reserved = true, 1
+	expireObservedWorker(t, source)
+	source.reserved = 1
 	key, err := p.startCreate(ctx, source)
 	require.NoError(t, err)
 	require.False(t, p.recoverWorker(ctx, source, time.Now()), "active admission still fences recovery")

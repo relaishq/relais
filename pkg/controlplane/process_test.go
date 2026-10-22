@@ -16,7 +16,8 @@ import (
 
 func TestExplicitRemoteRejoin(t *testing.T) {
 	p, a, _, _ := setup(t)
-	p.workers["a"].dead, p.workers["a"].recovered = true, true
+	expireObservedWorker(t, p.workers["a"])
+	p.workers["a"].observation.recoveryFinished(true)
 	server := httptest.NewServer(p.ProcessHandler())
 	defer server.Close()
 	beat := func(token string) (HeartbeatReply, error) {
@@ -34,7 +35,7 @@ func TestExplicitRemoteRejoin(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, challenge, wrong)
 	p.mu.Lock()
-	dead := p.workers["a"].dead
+	dead := p.workers["a"].observation.knowledge().dead
 	p.mu.Unlock()
 	require.True(t, dead)
 	ack, err := beat(challenge.Token)
@@ -48,8 +49,9 @@ func TestExplicitRemoteRejoin(t *testing.T) {
 	require.Error(t, err)
 	p.mu.Lock()
 	w := p.workers["a"]
-	require.False(t, w.dead)
-	w.dead, w.recovered, w.rejoinToken, w.acceptedToken = true, true, "", ""
+	require.False(t, w.observation.knowledge().dead)
+	expireObservedWorker(t, w)
+	w.observation.recoveryFinished(true)
 	p.mu.Unlock()
 	next, err := beat(challenge.Token)
 	require.NoError(t, err)
@@ -61,7 +63,7 @@ func TestExplicitRemoteRejoin(t *testing.T) {
 	require.NoError(t, remote.Heartbeat(a.addr))
 	require.Error(t, remote.Heartbeat(netip.MustParseAddrPort("127.0.0.1:99")))
 	p.mu.Lock()
-	w.dead, w.recovering, w.recovered = true, true, false
+	w.observation.detect(time.Now().Add(time.Hour), time.Minute)
 	p.mu.Unlock()
 	_, err = beat("")
 	require.Error(t, err, "incomplete recovery cannot issue a challenge")
@@ -98,7 +100,8 @@ func TestSlowListingDoesNotBlockHeartbeatAndRechecksPlacement(t *testing.T) {
 			case "drain":
 				go func() { _, err := p.Drain(context.Background(), "b"); done <- err }()
 			case "replace":
-				p.workers["b"].dead, p.workers["b"].recovered = true, true
+				expireObservedWorker(t, p.workers["b"])
+				p.workers["b"].observation.recoveryFinished(true)
 				go func() { done <- p.Replace("b", netip.MustParseAddrPort("127.0.0.1:99"), b) }()
 			}
 			select {
@@ -118,10 +121,10 @@ func TestSlowListingDoesNotBlockHeartbeatAndRechecksPlacement(t *testing.T) {
 			}
 			p.mu.Lock()
 			if operation == "pick" {
-				p.workers["b"].draining = true
+				p.workers["b"].observation.markDraining()
 			}
 			if operation == "replace" {
-				p.workers["b"].dead = false
+				rejoinObservedWorker(t, p.workers["b"])
 			}
 			p.mu.Unlock()
 			close(store.release)
@@ -149,14 +152,13 @@ func TestProcessReplacementAfterDrainRequiresSettledDeadWorker(t *testing.T) {
 	}
 	require.Error(t, replace(), "a live registration cannot be reset")
 	p.mu.Lock()
-	p.workers["a"].draining = true
-	p.workers["a"].dead = true
-	p.workers["a"].recovering = true
+	p.workers["a"].observation.markDraining()
+	expireObservedWorker(t, p.workers["a"])
+	p.workers["a"].observation.detect(time.Now().Add(time.Hour), time.Minute)
 	p.mu.Unlock()
 	require.Error(t, replace(), "recovery must settle before clearing drain")
 	p.mu.Lock()
-	p.workers["a"].recovering = false
-	p.workers["a"].recovered = true
+	p.workers["a"].observation.recoveryFinished(true)
 	p.mu.Unlock()
 	lease, err := p.store.Claim(context.Background(), "replacement-guard", a.addr, time.Second)
 	require.NoError(t, err)
@@ -164,15 +166,15 @@ func TestProcessReplacementAfterDrainRequiresSettledDeadWorker(t *testing.T) {
 	require.NoError(t, p.store.Release(context.Background(), lease))
 	require.NoError(t, replace())
 	p.mu.Lock()
-	require.False(t, p.workers["a"].draining)
-	require.True(t, p.workers["a"].dead, "reset must not bypass the rejoin fence")
+	require.False(t, p.workers["a"].observation.knowledge().draining)
+	require.True(t, p.workers["a"].observation.knowledge().dead, "reset must not bypass the rejoin fence")
 	require.Equal(t, a.addr, p.workers["a"].addr)
 	p.mu.Unlock()
 	var challenge HeartbeatReply
 	require.NoError(t, privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/private/workers/a/heartbeat", HeartbeatRequest{Address: a.addr}, &challenge, nil))
 	require.NotEmpty(t, challenge.Token, "a paused old process needs the rejoin token")
 	p.mu.Lock()
-	require.True(t, p.workers["a"].dead)
+	require.True(t, p.workers["a"].observation.knowledge().dead)
 	p.mu.Unlock()
 	require.NoError(t, privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/private/workers/a/heartbeat", HeartbeatRequest{Address: a.addr, Token: challenge.Token}, nil, nil))
 	require.Error(t, replace(), "rejoined live registration cannot be reset")
