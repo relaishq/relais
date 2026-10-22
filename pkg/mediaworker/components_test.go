@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func componentFixture(t *testing.T) snapshot {
+func componentFixture(t testing.TB) snapshot {
 	t.Helper()
 	data, err := os.ReadFile("testdata/v9-control.json")
 	require.NoError(t, err)

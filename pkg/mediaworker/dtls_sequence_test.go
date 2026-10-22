@@ -39,7 +39,7 @@ func (c *dtlsWireConn) WriteToUDPAddrPort(p []byte, _ netip.AddrPort) (int, erro
 	return len(p), nil
 }
 
-func dtlsFixture(t *testing.T) snapshot {
+func dtlsFixture(t testing.TB) snapshot {
 	t.Helper()
 	data, err := os.ReadFile("testdata/v7-787127e.json")
 	require.NoError(t, err)
@@ -48,7 +48,7 @@ func dtlsFixture(t *testing.T) snapshot {
 	return *snap
 }
 
-func dtlsCheckpointSession(t *testing.T, store sessionstore.Store, snap snapshot, lease sessionstore.Lease, opts ResumeOptions) (*session, *dtlsWireConn) {
+func dtlsCheckpointSession(t testing.TB, store sessionstore.Store, snap snapshot, lease sessionstore.Lease, opts ResumeOptions) (*session, *dtlsWireConn) {
 	t.Helper()
 	wire := &dtlsWireConn{packets: make(chan []byte, 256)}
 	w := &Worker{conn: wire, localAddr: lease.Worker, cfg: Config{

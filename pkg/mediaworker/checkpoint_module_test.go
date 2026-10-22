@@ -467,8 +467,15 @@ func TestCheckpointReadinessDoesNotWaitForPacketLock(t *testing.T) {
 	w, err := New(Config{Relay: &RelayConfig{Owners: store, Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr()}})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, w.Close()) }()
-	s := sessionFromState(w, sessionState{ID: "readiness-unit"})
-	s.checkpoint.snapshotStored.Store(true)
+	snap := dtlsFixture(t)
+	lease, err := store.Claim(context.Background(), snap.State.ID, w.LocalAddr(), time.Hour)
+	require.NoError(t, err)
+	s := sessionFromState(w, snap.State)
+	t.Cleanup(s.close)
+	s.lease = lease
+	_, err = s.resume(snap.DTLSConnection, ResumeOptions{})
+	require.NoError(t, err)
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	w.mu.Lock()
 	w.sessions[s.id] = s
 	w.mu.Unlock()

@@ -92,6 +92,7 @@ func (c *sessionCheckpoint) admissionSnapshot(candidate, before agentState) (int
 // captureAdmissionSnapshot is the production Save capture, with history measured
 // separately by its exact length. Its timestamps and quota use the store clock,
 // matching a real writer even when worker and store clocks differ.
+// The timestamp only sizes fixed-width fields and is never published.
 func (c *sessionCheckpoint) captureAdmissionSnapshot(candidate agentState) ([]byte, error) {
 	s := c.session
 	captured := time.Time{}

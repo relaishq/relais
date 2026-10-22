@@ -1,12 +1,14 @@
 package mediaworker
 
 import (
+	"context"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
-	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
+	"github.com/relaishq/relais/pkg/sessionstore"
 
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
@@ -71,26 +73,25 @@ func BenchmarkEchoAudioPacket(b *testing.B) {
 }
 
 // Populated durable requests must not be copied by a scalar status observation.
-// On the pre-module baseline, only the checkpoint fixture initialization differs.
+// A successful fenced write establishes readiness and acknowledgement before timing.
 func BenchmarkAgentSessionStatusDurableTasks(b *testing.B) {
-	w, err := New(Config{})
-	require.NoError(b, err)
-	defer func() { require.NoError(b, w.Close()) }()
-	s := sessionFromState(w, sessionState{ID: "status-benchmark", Agent: agentState{State: legacy.State{Version: 1, Bytes: []byte(`{"phase":"ready"}`)}, V2: &v2Envelope{Name: "status/v2"}}, Checkpoint: CheckpointState{CapturedAt: time.Now()}})
-	defer s.close()
+	store := sessionstore.NewMemory()
+	snap := componentFixture(b)
+	snap.State.Agent.State.Bytes = []byte(`{"phase":"ready"}`)
+	snap.State.Agent.V2.Name = "status/v2"
+	snap.State.Agent.V2.Tasks = nil
 	for i := range 8 {
-		s.state.Agent.V2.Tasks = append(s.state.Agent.V2.Tasks, taskIntent{ID: agent.TaskID(string(rune('a' + i))), Step: "fetch", Phase: taskStarted, Request: make([]byte, 1024), RequestLength: 1024})
+		snap.State.Agent.V2.Tasks = append(snap.State.Agent.V2.Tasks, taskIntent{ID: agent.TaskID(string(rune('a' + i))), Step: "fetch", Phase: taskStarted, Request: make([]byte, 1024), RequestLength: 1024})
 	}
-	pair := cloneAgentState(s.state.Agent)
-	if err := s.checkpoint.restore(checkpointRestore{pair: &pair}); err != nil {
-		b.Fatal(err)
-	}
-	s.checkpoint.snapshotStored.Store(true)
-	s.checkpoint.lastCheckpoint = time.Now()
-	s.storeClock, s.storeClockAt = time.Now(), time.Now()
-	w.mu.Lock()
-	w.sessions[s.id] = s
-	w.mu.Unlock()
+	lease, err := store.Claim(context.Background(), snap.State.ID, netip.MustParseAddrPort("127.0.0.1:10000"), time.Hour)
+	require.NoError(b, err)
+	s, _ := dtlsCheckpointSession(b, store, snap, lease, ResumeOptions{})
+	w := s.worker
+	// Use the legacy envelope with room for all eight durable request payloads.
+	// The status read is identical for legacy and split checkpoint layouts.
+	w.cfg.SnapshotLimits = SnapshotLimits{MaxBytes: 64 << 10, BurstBytes: 256 << 10, BytesPerSecond: 80000}
+	require.NoError(b, s.checkpoint.persist(context.Background(), checkpointRequired))
+	w.sessions = map[string]*session{s.id: s}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {

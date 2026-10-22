@@ -441,3 +441,25 @@ func TestCheckpointAdmissionUsesStoreClockForHistoryCredit(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckpointAdmissionSizeIgnoresStoreClockOffset(t *testing.T) {
+	workerNow := time.Now()
+	store := &fixedCheckpointClockStore{Memory: sessionstore.NewMemory(), now: workerNow}
+	s := checkpointModuleSession(t, store)
+	prior := cloneAgentState(s.state.Agent)
+	candidate := cloneAgentState(prior)
+	candidate.State.Bytes = []byte("candidate working state")
+	var sizes []int
+	for _, offset := range []time.Duration{-time.Hour, time.Hour} {
+		store.now = workerNow.Add(offset)
+		// Observe each store-clock domain through an acknowledged write. Keep
+		// history unchanged so the separate credit-admission rule is irrelevant.
+		require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
+		size, err := s.checkpoint.admit(checkpointAdmission{candidate: candidate, prior: prior})
+		require.NoError(t, err)
+		require.Positive(t, size)
+		sizes = append(sizes, size)
+		require.Equal(t, prior, s.state.Agent, "admission cannot publish the candidate")
+	}
+	require.Equal(t, sizes[0], sizes[1], "fixed-width capture timestamps and quota must not change admission size across store-clock offsets")
+}
