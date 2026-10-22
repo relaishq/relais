@@ -64,6 +64,10 @@ func (a *v2UnitAgent) RestoreMoveOnly(_ context.Context, data []byte) error {
 }
 func v2UnitSession(t *testing.T, a agent.Agent, opts ...func(*AgentConfig)) (*Worker, *session) {
 	t.Helper()
+	return v2UnitSessionFromState(t, a, sessionState{Version: 7, ID: "v2-unit"}, opts...)
+}
+func v2UnitSessionFromState(t *testing.T, a agent.Agent, state sessionState, opts ...func(*AgentConfig)) (*Worker, *session) {
+	t.Helper()
 	cfg := AgentConfig{Factory: agenthost.Factory(agenthost.Registration{Name: "unit/v1", Factory: func(agent.FactoryArgs) agent.Agent { return a }})}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -71,7 +75,7 @@ func v2UnitSession(t *testing.T, a agent.Agent, opts ...func(*AgentConfig)) (*Wo
 	w, err := New(Config{Agent: cfg})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, w.Close()) })
-	s := sessionFromState(w, sessionState{Version: 7, ID: "v2-unit"})
+	s := sessionFromState(w, state)
 	t.Cleanup(s.close)
 	return w, s
 }
@@ -281,4 +285,11 @@ func TestV2HTTPHeldExportCountsAgainstWorkerBudget(t *testing.T) {
 	require.Zero(t, w.SessionCount())
 	require.EqualValues(t, 8, w.moveBytes.Load(), "export serialization remains reserved until HTTP write returns")
 	require.Equal(t, 1, a.moveSaves)
+}
+
+// Configure real registration inputs before the host exists.
+func v2UnitRegistration(a agent.Agent, limits agent.Limits, tasks map[string]agent.TaskHandler) func(*AgentConfig) {
+	return func(c *AgentConfig) {
+		c.Factory = agenthost.Factory(agenthost.Registration{Name: "unit/v1", Factory: func(agent.FactoryArgs) agent.Agent { return a }, Bounds: agenthost.Bounds(limits), Tasks: tasks})
+	}
 }

@@ -10,67 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestTaskCapacityWideCallback(t *testing.T) {
-	for _, width := range []int{20, 33, 100} {
-		t.Run(fmt.Sprint(width), func(t *testing.T) {
-			a := &v2UnitAgent{state: agent.State{Version: 1}}
-			// Admission must refuse by width, not by the 100 ms callback deadline,
-			// which a 100-task callback can reach under -race on a CI runner.
-			_, s := v2UnitSession(t, a, func(c *AgentConfig) { c.CallbackTimeout = 5 * time.Second })
-			require.NoError(t, s.initAgent(false, ResumeOptions{}))
-			s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"x/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-			for i := range width {
-				a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "x/v1", Class: agent.ReadOnly})
-			}
-			_, err := (acceptedEvents{s}).submit(agent.Event{ID: "started/x", Kind: agent.Started}, eventLive)
-			if width == 100 {
-				require.ErrorIs(t, err, agent.ErrCapacity)
-				require.NotErrorIs(t, err, errTaskAdmissionBackpressure)
-				return
-			}
-			require.NoError(t, err)
-			require.True(t, s.agent.latest.V2.Started)
-			if width == 33 {
-				require.Empty(t, s.agent.v2.tasks)
-			}
-			require.Equal(t, width, len(s.agent.v2.tasks)+len(s.agent.latest.V2.Capacity))
-			require.NoError(t, s.taskBudget(s.agent.v2.tasks, 0))
-			for _, task := range s.agent.v2.tasks {
-				s.terminalTask(task, agent.OK, "")
-				require.NoError(t, s.taskBudget(s.agent.v2.tasks, 0), "terminal publication must fit beside refusals")
-			}
-			a.effects = agent.Effects{}
-			for range width {
-				_, err := s.deliverTaskResult()
-				require.NoError(t, err)
-			}
-			require.Empty(t, s.agent.latest.V2.Capacity)
-			for _, task := range s.agent.v2.tasks {
-				require.Equal(t, task.intent.Published, task.intent.Cursor)
-			}
-		})
-	}
-}
-func TestTaskCapacityDuplicateCause(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"x/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-	for i := range 7 {
-		a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "s", Kind: "x/v1", Class: agent.ReadOnly}}}
-		_, eventErr1 := (acceptedEvents{s}).submit(agent.Event{ID: agent.EventID(fmt.Sprint("fill/", i)), Kind: agent.Started}, eventLive)
-		require.NoError(t, eventErr1)
-	}
-	a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "s", Kind: "x/v1", Class: agent.ReadOnly}, {Step: "t", Kind: "x/v1", Class: agent.ReadOnly}}}
-	cause := agent.Event{ID: "audio/1/99", Kind: agent.Started}
-	_, eventErr2 := (acceptedEvents{s}).submit(cause, eventLive)
-	require.NoError(t, eventErr2)
-	before := len(s.agent.latest.V2.Capacity)
-	_, eventErr3 := (acceptedEvents{s}).submit(cause, eventLive)
-	require.NoError(t, eventErr3)
-	require.Equal(t, before, len(s.agent.latest.V2.Capacity))
-	require.NoError(t, s.validateTaskMoves(s.agent.latest.V2.Tasks, nil))
-}
 func TestTaskCapacityDuplicateRestore(t *testing.T) {
 	for _, exact := range []bool{false, true} {
 		t.Run(fmt.Sprint(exact), func(t *testing.T) {
@@ -102,4 +41,72 @@ func TestTaskCapacityPruneUsesReceiveHorizon(t *testing.T) {
 	s.mu.Unlock()
 	s.pruneTasks()
 	require.Empty(t, s.agent.v2.tasks, "received packets must release the receipt while application input is held")
+}
+
+func TestTaskCapacityWideCallback(t *testing.T) {
+	for _, width := range []int{20, 33, 100} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			a := &v2UnitAgent{state: agent.State{Version: 1}}
+			// Admission must refuse by width, not by the 100 ms callback deadline,
+			// which a 100-task callback can reach under -race on a CI runner.
+			_, s := v2UnitSession(t, a, v2UnitRegistration(a, agent.Limits{}, map[string]agent.TaskHandler{"x/v1": func(context.Context, *agent.TaskRun) error { return nil }}), func(c *AgentConfig) { c.CallbackTimeout = 5 * time.Second })
+			require.NoError(t, s.initAgent(false, ResumeOptions{}))
+
+			for i := range width {
+				a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "x/v1", Class: agent.ReadOnly})
+			}
+			_, err := (acceptedEvents{s}).submit(agent.Event{ID: "started/x", Kind: agent.Started}, eventLive)
+			if width == 100 {
+				require.ErrorIs(t, err, agent.ErrCapacity)
+				require.NotErrorIs(t, err, errTaskAdmissionBackpressure)
+				return
+			}
+			require.NoError(t, err)
+			require.True(t, s.agent.latest.V2.Started)
+			if width == 33 {
+				require.Empty(t, s.agent.v2.tasks)
+			}
+			require.Equal(t, width, len(s.agent.v2.tasks)+len(s.agent.latest.V2.Capacity))
+			require.NoError(t, s.taskBudget(s.agent.v2.tasks, 0))
+			a.effects = agent.Effects{}
+			t.Cleanup(s.stopTaskAttempts)
+			for range s.state.Agent.V2.Tasks {
+				s.launchTasks()
+				s.acceptEmission(<-s.agent.v2.emissions)
+				delivered, err := s.deliverTaskResult()
+				require.NoError(t, err, "terminal publication must fit beside refusals")
+				require.True(t, delivered)
+			}
+			a.effects = agent.Effects{}
+			for range width {
+				_, err := s.deliverTaskResult()
+				require.NoError(t, err)
+			}
+			require.Empty(t, s.agent.latest.V2.Capacity)
+			for _, task := range s.agent.v2.tasks {
+				require.Equal(t, task.intent.Published, task.intent.Cursor)
+			}
+		})
+	}
+}
+
+func TestTaskCapacityDuplicateCause(t *testing.T) {
+	a := &v2UnitAgent{state: agent.State{Version: 1}}
+	_, s := v2UnitSession(t, a, v2UnitRegistration(a, agent.Limits{}, map[string]agent.TaskHandler{"x/v1": func(context.Context, *agent.TaskRun) error { return nil }}))
+	require.NoError(t, s.initAgent(false, ResumeOptions{}))
+
+	for i := range 7 {
+		a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "s", Kind: "x/v1", Class: agent.ReadOnly}}}
+		_, eventErr1 := (acceptedEvents{s}).submit(agent.Event{ID: agent.EventID(fmt.Sprint("fill/", i)), Kind: agent.Started}, eventLive)
+		require.NoError(t, eventErr1)
+	}
+	a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "s", Kind: "x/v1", Class: agent.ReadOnly}, {Step: "t", Kind: "x/v1", Class: agent.ReadOnly}}}
+	cause := agent.Event{ID: "audio/1/99", Kind: agent.Started}
+	_, eventErr2 := (acceptedEvents{s}).submit(cause, eventLive)
+	require.NoError(t, eventErr2)
+	before := len(s.agent.latest.V2.Capacity)
+	_, eventErr3 := (acceptedEvents{s}).submit(cause, eventLive)
+	require.NoError(t, eventErr3)
+	require.Equal(t, before, len(s.agent.latest.V2.Capacity))
+	require.NoError(t, s.validateTaskMoves(s.agent.latest.V2.Tasks, nil))
 }

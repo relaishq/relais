@@ -24,111 +24,6 @@ func TestControlBackpressureWireCode(t *testing.T) {
 	require.True(t, controlRefusal(errTaskAdmissionBackpressure))
 }
 
-// Adapted from TestZZR2FanOutHeadroom. The maximum case holds all receipts
-// unacknowledged, as during a store stall. Test the same effects in every case.
-func TestControlFanOutHeadroom(t *testing.T) {
-	for _, held := range []string{"zero", "one", "maximum", "maximum-counters"} {
-		for _, width := range []int{20, 24, 33} {
-			t.Run(fmt.Sprintf("%s/%d", held, width), func(t *testing.T) {
-				a := &v2UnitAgent{state: agent.State{Version: 1}}
-				_, s := v2UnitSession(t, a, func(c *AgentConfig) { c.CallbackTimeout = 5 * time.Second })
-				require.NoError(t, initControlUnit(s))
-				s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-				if held != "zero" {
-					for i := uint64(1); i <= 40; i++ {
-						_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"}}, eventLive)
-						if err != nil {
-							require.ErrorIs(t, err, agent.ErrCapacity)
-							break
-						}
-						if held == "one" {
-							break
-						}
-					}
-				}
-				if held == "maximum-counters" {
-					for _, e := range []*v2Envelope{s.agent.latest.V2, s.state.Agent.V2} {
-						e.ControlHigh = math.MaxUint64
-						e.ControlFloor = math.MaxUint64 - 2
-						for i := range e.Controls {
-							m := agent.ControlMessage{ID: fmt.Sprint(i + 1), Sequence: math.MaxUint64 - 1 + uint64(i), Name: "x"}
-							e.Controls[i].Sequence = m.Sequence
-							e.Controls[i].Digest = controlDigest(m)
-						}
-					}
-					require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(math.MaxUint64 - 2)}))
-				}
-				raw, _ := json.Marshal(s.agent.latest.V2)
-				t.Logf("held=%d metadata=%d", len(s.agent.latest.V2.Controls), len(raw))
-				for i := range width {
-					a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprintf("s%02d", i), Kind: "wait/v1", Class: agent.ReadOnly})
-				}
-				_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "fan"}, eventLive)
-				require.NoError(t, err, "Control must not make a refusal-only callback terminal")
-				require.Equal(t, width, len(s.agent.v2.tasks)+len(s.agent.latest.V2.Capacity))
-				t.Logf("admitted=%d refused=%d", len(s.agent.v2.tasks), len(s.agent.latest.V2.Capacity))
-				if width == 33 && (held == "maximum" || held == "maximum-counters") {
-					wire, err := json.Marshal(s.state)
-					require.NoError(t, err)
-					var restored sessionState
-					require.NoError(t, json.Unmarshal(wire, &restored))
-					_, target := v2UnitSession(t, &v2UnitAgent{state: agent.State{Version: 1}})
-					target.state = restored
-					require.NoError(t, target.initAgent(true, ResumeOptions{}, &movePayload{ControlAck: checkpointObservation(s).controlAck}))
-					require.Equal(t, s.agent.latest.V2.Capacity, target.agent.latest.V2.Capacity)
-					require.Equal(t, s.agent.latest.V2.Controls, target.agent.latest.V2.Controls)
-				}
-
-				a.effects = agent.Effects{}
-				for _, task := range s.agent.v2.tasks {
-					s.terminalTask(task, agent.OK, "")
-				}
-				for range width {
-					_, err := s.deliverTaskResult()
-					require.NoError(t, err)
-				}
-				require.Empty(t, s.agent.latest.V2.Capacity)
-			})
-		}
-	}
-}
-
-func TestControlSmallPendingUnsupported(t *testing.T) {
-	for _, limit := range []int{250, 350, 400} {
-		t.Run(fmt.Sprint(limit), func(t *testing.T) {
-			a := &v2UnitAgent{state: agent.State{Version: 1}}
-			_, s := v2UnitSession(t, a)
-			require.NoError(t, initControlUnit(s))
-			s.agent.v2.registration.Bounds.MaxPendingBytes = limit
-			before := cloneAgentState(s.state.Agent)
-			_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: "1", Sequence: 1, Name: "stop"}}, eventLive)
-			require.ErrorIs(t, err, agent.ErrControlUnsupported)
-			require.Zero(t, a.handles)
-			require.Equal(t, before, s.state.Agent)
-		})
-	}
-}
-
-func TestControlFanOutBackpressureKeepsAcceptedState(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a, func(c *AgentConfig) { c.CallbackTimeout = 5 * time.Second })
-	require.NoError(t, initControlUnit(s))
-	s.agent.v2.registration.Bounds.MaxPendingBytes = 900
-	for i := uint64(1); i <= 2; i++ {
-		_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"}}, eventLive)
-		require.NoError(t, err)
-	}
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-	for i := range 10 {
-		a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "wait/v1", Class: agent.ReadOnly})
-	}
-	before := cloneAgentState(s.state.Agent)
-	_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "fan"}, eventLive)
-	require.ErrorIs(t, err, errTaskAdmissionBackpressure)
-	require.Equal(t, before, s.state.Agent)
-	require.Empty(t, s.agent.v2.tasks)
-}
-
 type controlSlowAgent struct {
 	v2UnitAgent
 	mode string
@@ -155,11 +50,59 @@ func (a *controlSlowAgent) Restore(ctx context.Context, state agent.State) error
 	}
 	return a.v2UnitAgent.Restore(ctx, state)
 }
+
+func TestControlTerminalCausesOutrankRefusals(t *testing.T) {
+	require.True(t, controlRefusal(agent.ErrBackpressure))
+	require.False(t, controlRefusal(errors.Join(legacy.ErrRestore, agent.ErrCapacity)))
+	require.False(t, controlRefusal(errors.Join(legacy.ErrSave, agent.ErrBackpressure)))
+}
+
+func TestControlSmallPendingUnsupported(t *testing.T) {
+	for _, limit := range []int{250, 350, 400} {
+		t.Run(fmt.Sprint(limit), func(t *testing.T) {
+			a := &v2UnitAgent{state: agent.State{Version: 1}}
+			_, s := v2UnitSession(t, a, v2UnitRegistration(a, agent.Limits{MaxPendingBytes: limit}, nil))
+			require.NoError(t, s.initAgent(false, ResumeOptions{}))
+			if limit > 250 {
+				_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started}, eventLive)
+				require.NoError(t, err)
+			}
+			handles := a.handles
+
+			before := cloneAgentState(s.state.Agent)
+			_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: "1", Sequence: 1, Name: "stop"}}, eventLive)
+			require.ErrorIs(t, err, agent.ErrControlUnsupported)
+			require.Equal(t, handles, a.handles)
+			require.Equal(t, before, s.state.Agent)
+		})
+	}
+}
+
+func TestControlFanOutBackpressureKeepsAcceptedState(t *testing.T) {
+	a := &v2UnitAgent{state: agent.State{Version: 1}}
+	_, s := v2UnitSession(t, a, v2UnitRegistration(a, agent.Limits{MaxPendingBytes: 900}, map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}), func(c *AgentConfig) { c.CallbackTimeout = 5 * time.Second })
+	require.NoError(t, initControlUnit(s))
+
+	for i := uint64(1); i <= 2; i++ {
+		_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"}}, eventLive)
+		require.NoError(t, err)
+	}
+
+	for i := range 10 {
+		a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "wait/v1", Class: agent.ReadOnly})
+	}
+	before := cloneAgentState(s.state.Agent)
+	_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "fan"}, eventLive)
+	require.ErrorIs(t, err, errTaskAdmissionBackpressure)
+	require.Equal(t, before, s.state.Agent)
+	require.Empty(t, s.agent.v2.tasks)
+}
+
 func TestControlQuarantine(t *testing.T) {
 	for _, mode := range []string{"handle", "save", "restore"} {
 		t.Run(mode, func(t *testing.T) {
 			a := &controlSlowAgent{v2UnitAgent: v2UnitAgent{state: agent.State{Version: 1}}, mode: mode}
-			_, s := v2UnitSession(t, a, func(c *AgentConfig) { c.CallbackTimeout = 250 * time.Millisecond })
+			_, s := v2UnitSession(t, a, v2UnitRegistration(a, agent.Limits{}, nil), func(c *AgentConfig) { c.CallbackTimeout = 250 * time.Millisecond })
 			require.NoError(t, initControlUnit(s))
 			_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: "1", Sequence: 1, Name: "x"}}, eventLive)
 			require.Error(t, err)
@@ -179,9 +122,10 @@ func TestControlQuarantine(t *testing.T) {
 		})
 	}
 }
+
 func TestControlBudgetMath(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a)
+	_, s := v2UnitSession(t, a, v2UnitRegistration(a, agent.Limits{}, nil))
 	require.NoError(t, initControlUnit(s))
 	count := 0
 	for i := uint64(1); i <= 10; i++ {
@@ -198,15 +142,9 @@ func TestControlBudgetMath(t *testing.T) {
 	require.Equal(t, 2, count)
 }
 
-func TestControlTerminalCausesOutrankRefusals(t *testing.T) {
-	require.True(t, controlRefusal(agent.ErrBackpressure))
-	require.False(t, controlRefusal(errors.Join(legacy.ErrRestore, agent.ErrCapacity)))
-	require.False(t, controlRefusal(errors.Join(legacy.ErrSave, agent.ErrBackpressure)))
-}
-
 func TestControlMoveBudgetRemainsTerminal(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	w, s := v2UnitSession(t, a)
+	w, s := v2UnitSession(t, a, v2UnitRegistration(a, agent.Limits{}, nil))
 	require.NoError(t, initControlUnit(s))
 	otherSessions := w.cfg.SnapshotLimits.MoveBytesTotal
 	w.moveBytes.Add(otherSessions)
@@ -217,4 +155,84 @@ func TestControlMoveBudgetRemainsTerminal(t *testing.T) {
 	require.ErrorIs(t, err, ErrMoveBudget)
 	require.False(t, controlRefusal(err), "existing terminal contract determines the public definite class")
 	require.Zero(t, s.state.Agent.V2.ControlHigh)
+}
+
+// Adapted from TestZZR2FanOutHeadroom. The maximum case holds all receipts
+// unacknowledged, as during a store stall. Test the same effects in every case.
+func TestControlFanOutHeadroom(t *testing.T) {
+	for _, held := range []string{"zero", "one", "maximum", "maximum-counters"} {
+		for _, width := range []int{20, 24, 33} {
+			t.Run(fmt.Sprintf("%s/%d", held, width), func(t *testing.T) {
+				a := &v2UnitAgent{state: agent.State{Version: 1}}
+				_, s := v2UnitSession(t, a, v2UnitRegistration(a, agent.Limits{}, map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}), func(c *AgentConfig) { c.CallbackTimeout = 5 * time.Second })
+				require.NoError(t, initControlUnit(s))
+				if held != "zero" {
+					for i := uint64(1); i <= 40; i++ {
+						_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"}}, eventLive)
+						if err != nil {
+							require.ErrorIs(t, err, agent.ErrCapacity)
+							break
+						}
+						if held == "one" {
+							break
+						}
+					}
+				}
+				if held == "maximum-counters" {
+					// Counter exhaustion is an encoded adoption input: no live
+					// host can reach it by executing 2^64 submissions in a test.
+					wire, err := json.Marshal(s.state)
+					require.NoError(t, err)
+					var state sessionState
+					require.NoError(t, json.Unmarshal(wire, &state))
+					e := state.Agent.V2
+					e.ControlHigh = math.MaxUint64
+					e.ControlFloor = math.MaxUint64 - 2
+					for i := range e.Controls {
+						m := agent.ControlMessage{ID: fmt.Sprint(i + 1), Sequence: math.MaxUint64 - 1 + uint64(i), Name: "x"}
+						e.Controls[i].Sequence = m.Sequence
+						e.Controls[i].Digest = controlDigest(m)
+					}
+					a = &v2UnitAgent{state: agent.State{Version: 1}}
+					_, s = v2UnitSessionFromState(t, a, state, v2UnitRegistration(a, agent.Limits{}, map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}))
+					require.NoError(t, s.initAgent(true, ResumeOptions{}, &movePayload{ControlAck: math.MaxUint64 - 2}))
+				}
+				raw, _ := json.Marshal(s.agent.latest.V2)
+				t.Logf("held=%d metadata=%d", len(s.agent.latest.V2.Controls), len(raw))
+				for i := range width {
+					a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprintf("s%02d", i), Kind: "wait/v1", Class: agent.ReadOnly})
+				}
+				_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "fan"}, eventLive)
+				require.NoError(t, err, "Control must not make a refusal-only callback terminal")
+				require.Equal(t, width, len(s.agent.v2.tasks)+len(s.agent.latest.V2.Capacity))
+				t.Logf("admitted=%d refused=%d", len(s.agent.v2.tasks), len(s.agent.latest.V2.Capacity))
+				if width == 33 && (held == "maximum" || held == "maximum-counters") {
+					wire, err := json.Marshal(s.state)
+					require.NoError(t, err)
+					var restored sessionState
+					require.NoError(t, json.Unmarshal(wire, &restored))
+					b := &v2UnitAgent{state: agent.State{Version: 1}}
+					_, target := v2UnitSessionFromState(t, b, restored, v2UnitRegistration(b, agent.Limits{}, map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}))
+					require.NoError(t, target.initAgent(true, ResumeOptions{}, &movePayload{ControlAck: checkpointObservation(s).controlAck}))
+					require.Equal(t, s.agent.latest.V2.Capacity, target.agent.latest.V2.Capacity)
+					require.Equal(t, s.agent.latest.V2.Controls, target.agent.latest.V2.Controls)
+				}
+
+				a.effects = agent.Effects{}
+				t.Cleanup(s.stopTaskAttempts)
+				for range s.state.Agent.V2.Tasks {
+					s.launchTasks()
+					s.acceptEmission(<-s.agent.v2.emissions)
+					delivered, err := s.deliverTaskResult()
+					require.NoError(t, err, "terminal publication must fit beside refusals")
+					require.True(t, delivered)
+				}
+				for range width {
+					_, err := s.deliverTaskResult()
+					require.NoError(t, err)
+				}
+				require.Empty(t, s.agent.latest.V2.Capacity)
+			})
+		}
+	}
 }

@@ -8,70 +8,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/relaishq/relais/internal/privateapi"
 
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/stretchr/testify/require"
 )
-
-// Probe 7: SideEffecting Retry task finished (chunk + OK terminal) but nothing
-// consumed; crash restore from the checkpoint holding the Final intent.
-func TestTaskSideEffectRetryAfterUnconsumedFinal(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"pay/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-	a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "pay", Kind: "pay/v1", Class: agent.SideEffecting, Resume: agent.Retry, Request: []byte("args")}}}
-	_, eventErr0 := (acceptedEvents{s}).submit(agent.Event{ID: "started/x", Kind: agent.Started}, eventLive)
-	require.NoError(t, eventErr0)
-	task := s.agent.v2.tasks[0]
-	task.attempt, task.launched, task.intent.Phase = 1, true, taskStarted
-	for _, e := range []taskEmission{
-		{id: task.intent.ID, attempt: 1, ctx: context.Background(), sequence: 1, chunk: agent.Chunk{Data: []byte("receipt")}, reply: make(chan error, 1)},
-		{id: task.intent.ID, attempt: 1, ctx: context.Background(), final: true, outcome: agent.OK, reply: make(chan error, 1)},
-	} {
-		// Handler terminals share the 100 ms Emit publication interval.
-		require.Eventually(t, func() bool {
-			s.acceptEmission(e)
-			err := <-e.reply
-			if errors.Is(err, agent.ErrBackpressure) {
-				return false
-			}
-			require.NoError(t, err)
-			return true
-		}, time.Second, time.Millisecond)
-	}
-	data, err := json.Marshal(s.state.Agent)
-	require.NoError(t, err)
-	var decoded agentState
-	require.NoError(t, json.Unmarshal(data, &decoded))
-	t.Logf("checkpointed intent: final=%v published=%d cursor=%d requestLen=%d request=%q", decoded.V2.Tasks[0].Final, decoded.V2.Tasks[0].Published, decoded.V2.Tasks[0].Cursor, decoded.V2.Tasks[0].RequestLength, decoded.V2.Tasks[0].Request)
-	b := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, target := v2UnitSession(t, b)
-	require.NoError(t, target.initAgent(false, ResumeOptions{}))
-	target.agent.v2.registration.Tasks = s.agent.v2.registration.Tasks
-	target.agent.latest = decoded
-	require.NoError(t, target.restoreTasks(nil))
-	rt := target.agent.v2.tasks[0]
-	outcome := agent.Outcome("")
-	if len(rt.results) > 0 {
-		outcome = rt.results[len(rt.results)-1].Outcome
-	}
-	t.Logf("after crash restore: phase=%s final=%v results=%d last=%s", rt.intent.Phase, rt.intent.Final, len(rt.results), outcome)
-	require.Equal(t, taskNever, rt.intent.Phase)
-	require.False(t, rt.intent.Final)
-	require.Equal(t, task.intent.ID, rt.intent.ID)
-	require.Equal(t, []byte("args"), rt.request)
-	target.terminalTask(rt, agent.OK, "")
-	require.Equal(t, []byte("args"), rt.intent.Request)
-	_, err = target.deliverTaskResult()
-	require.NoError(t, err)
-	rt = target.agent.v2.tasks[0] // result consumption commits an owned task node
-	require.Empty(t, rt.request)
-	require.Empty(t, rt.intent.Request)
-}
 
 // A Capacity result that starts another refused task must yield to the actor.
 type retryCapacityAgent struct {
@@ -85,23 +27,6 @@ func (a *retryCapacityAgent) Handle(ctx context.Context, e agent.Event) (agent.E
 		return agent.Effects{StartTasks: []agent.TaskSpec{{Step: "retry", Kind: "test/v1", Class: agent.ReadOnly, Request: make([]byte, 2<<20)}}}, nil
 	}
 	return a.v2UnitAgent.Handle(ctx, e)
-}
-func TestTaskCapacityYields(t *testing.T) {
-	a := &retryCapacityAgent{v2UnitAgent: v2UnitAgent{state: agent.State{Version: 1}}}
-	_, s := v2UnitSession(t, &a.v2UnitAgent)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	s.agent.v2.instance = a
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"test/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-	a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "first", Kind: "test/v1", Class: agent.ReadOnly, Request: make([]byte, 2<<20)}}}
-	_, eventErr1 := (acceptedEvents{s}).submit(agent.Event{ID: "started", Kind: agent.Started}, eventLive)
-	require.NoError(t, eventErr1)
-	require.LessOrEqual(t, a.capacity, 1)
-	for range 12 {
-		before := a.capacity
-		_, err := s.deliverTaskResult()
-		require.NoError(t, err)
-		require.Equal(t, before+1, a.capacity)
-	}
 }
 
 func TestTaskExportIncompatibleHTTP(t *testing.T) {
@@ -138,4 +63,92 @@ func TestTaskCapacityAbandonMove(t *testing.T) {
 	if sourceErr == nil {
 		require.NoError(t, target.restoreTasks(move), "source accepted an export the target cannot restore")
 	}
+}
+
+func TestTaskCapacityYields(t *testing.T) {
+	a := &retryCapacityAgent{v2UnitAgent: v2UnitAgent{state: agent.State{Version: 1}}}
+	_, s := v2UnitSession(t, a, v2UnitRegistration(a, agent.Limits{}, map[string]agent.TaskHandler{"test/v1": func(context.Context, *agent.TaskRun) error { return nil }}))
+	require.NoError(t, s.initAgent(false, ResumeOptions{}))
+
+	a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "first", Kind: "test/v1", Class: agent.ReadOnly, Request: make([]byte, 2<<20)}}}
+	_, eventErr1 := (acceptedEvents{s}).submit(agent.Event{ID: "started", Kind: agent.Started}, eventLive)
+	require.NoError(t, eventErr1)
+	require.LessOrEqual(t, a.capacity, 1)
+	for range 12 {
+		before := a.capacity
+		_, err := s.deliverTaskResult()
+		require.NoError(t, err)
+		require.Equal(t, before+1, a.capacity)
+	}
+}
+
+// Probe 7: SideEffecting Retry task finished (chunk + OK terminal) but nothing
+// consumed; crash restore from the checkpoint holding the Final intent.
+func TestTaskSideEffectRetryAfterUnconsumedFinal(t *testing.T) {
+	started := make(chan *agent.TaskRun, 1)
+	finish := make(chan struct{})
+	a := &v2UnitAgent{state: agent.State{Version: 1}}
+	handlers := map[string]agent.TaskHandler{"pay/v1": func(ctx context.Context, run *agent.TaskRun) error {
+		started <- run
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-finish:
+			return nil
+		}
+	}}
+	_, source := v2UnitSession(t, a, v2UnitRegistration(a, agent.Limits{}, handlers))
+	require.NoError(t, source.initAgent(false, ResumeOptions{}))
+	a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "pay", Kind: "pay/v1", Class: agent.SideEffecting, Resume: agent.Retry, Request: []byte("args")}}}
+	_, err := (acceptedEvents{source}).submit(agent.Event{Kind: agent.Started, ID: "started/x"}, eventLive)
+	require.NoError(t, err)
+	a.effects = agent.Effects{}
+	source.launchTasks()
+	require.NoError(t, source.checkpoint.restore(checkpointRestore{pair: &source.state.Agent}))
+	source.launchTasks()
+	t.Cleanup(source.stopTaskAttempts)
+	run := <-started
+	done := make(chan error, 1)
+	go func() { done <- run.Emit(context.Background(), 1, agent.Chunk{Data: []byte("receipt")}) }()
+	source.acceptEmission(<-source.agent.v2.emissions)
+	require.NoError(t, <-done)
+	close(finish)
+	for !source.state.Agent.V2.Tasks[0].Final {
+		source.acceptEmission(<-source.agent.v2.emissions)
+	}
+	require.Equal(t, []byte("args"), source.state.Agent.V2.Tasks[0].Request, "unconsumed terminal intent must retain retry arguments")
+	raw, err := json.Marshal(source.state)
+	require.NoError(t, err)
+	var state sessionState
+	require.NoError(t, json.Unmarshal(raw, &state))
+	b := &v2UnitAgent{state: agent.State{Version: 1}}
+	retryStarted := make(chan *agent.TaskRun, 1)
+	retryHandlers := map[string]agent.TaskHandler{"pay/v1": func(_ context.Context, run *agent.TaskRun) error { retryStarted <- run; return nil }}
+	_, target := v2UnitSessionFromState(t, b, state, v2UnitRegistration(b, agent.Limits{}, retryHandlers))
+	require.NoError(t, target.initAgent(true, ResumeOptions{}))
+	restored := target.state.Agent.V2.Tasks[0]
+	require.Equal(t, taskNever, restored.Phase)
+	require.False(t, restored.Final)
+	require.Equal(t, run.ID(), restored.ID)
+	move, err := target.saveV2MoveOnly(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []byte("args"), move.tasks[0].Request)
+	target.launchTasks()
+	require.NoError(t, target.checkpoint.restore(checkpointRestore{pair: &target.state.Agent}))
+	target.launchTasks()
+	t.Cleanup(target.stopTaskAttempts)
+	retried := <-retryStarted
+	require.Equal(t, run.ID(), retried.ID())
+	require.Equal(t, []byte("args"), retried.Spec().Request)
+	for !target.state.Agent.V2.Tasks[0].Final {
+		target.acceptEmission(<-target.agent.v2.emissions)
+	}
+	require.Equal(t, []byte("args"), target.state.Agent.V2.Tasks[0].Request)
+	delivered, err := target.deliverTaskResult()
+	require.NoError(t, err)
+	require.True(t, delivered)
+	move, err = target.saveV2MoveOnly(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, move.tasks[0].Request)
+	require.Empty(t, target.state.Agent.V2.Tasks[0].Request)
 }

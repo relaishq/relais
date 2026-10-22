@@ -1,6 +1,7 @@
 package mediaworker
 
 import (
+	"encoding/json"
 	"net"
 	"testing"
 	"time"
@@ -62,17 +63,6 @@ func TestPlaybackPruneCost(t *testing.T) {
 	require.Less(t, elapsed, 8*time.Millisecond, "prune must not scan every reference for every retained result")
 }
 
-func TestPlaybackCrashKeepsFinishedNotification(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	s.agent.latest.V2.Playback.Notify = []agent.Turn{7}
-	require.NoError(t, s.restorePlayback(nil))
-	require.Equal(t, []agent.Turn{7}, s.agent.v2.playback.notify)
-	require.NoError(t, s.deliverClockEvent())
-	require.Equal(t, agent.PlaybackFinished, a.lastEvent.Kind)
-	require.EqualValues(t, 7, a.lastEvent.Playback.Turn)
-}
 func TestPlaybackIdleSleepsUntilWake(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
@@ -114,4 +104,26 @@ func TestPlaybackRestoreAdvancesRTPByStoreAge(t *testing.T) {
 	s.storeClockAt = time.Now()
 	require.NoError(t, s.restorePlayback(nil))
 	require.InDelta(t, float64(49234), float64(s.agent.v2.playback.nextTS), 48)
+}
+
+func TestPlaybackCrashKeepsFinishedNotification(t *testing.T) {
+	a := &v2UnitAgent{state: agent.State{Version: 1}}
+	_, source := v2UnitSession(t, a)
+	require.NoError(t, source.initAgent(false, ResumeOptions{}))
+	turn := agent.Turn(7)
+	a.effects = agent.Effects{NotifyPlaybackFinished: &turn}
+	_, err := (acceptedEvents{source}).submit(agent.Event{Kind: agent.Started}, eventLive)
+	require.NoError(t, err)
+	raw, err := json.Marshal(source.state)
+	require.NoError(t, err)
+	var state sessionState
+	require.NoError(t, json.Unmarshal(raw, &state))
+	b := &v2UnitAgent{state: agent.State{Version: 1}}
+	_, target := v2UnitSessionFromState(t, b, state)
+	require.NoError(t, target.initAgent(true, ResumeOptions{}))
+	require.Equal(t, []agent.Turn{7}, target.state.Agent.V2.Playback.Notify)
+	require.NoError(t, target.deliverClockEvent())
+	require.Equal(t, agent.PlaybackFinished, b.lastEvent.Kind)
+	require.EqualValues(t, 7, b.lastEvent.Playback.Turn)
+	require.Empty(t, target.state.Agent.V2.Playback.Notify)
 }

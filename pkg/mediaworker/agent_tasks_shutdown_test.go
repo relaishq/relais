@@ -19,7 +19,9 @@ type shutdownTaskAgent struct {
 }
 
 func (a *shutdownTaskAgent) Handle(ctx context.Context, event agent.Event) (agent.Effects, error) {
-	close(a.entered)
+	if a.entered != nil {
+		close(a.entered)
+	}
 	if a.blockHandle {
 		<-a.release // Deliberately ignore cancellation until the test releases us.
 		defer close(a.returned)
@@ -45,9 +47,32 @@ func TestV2TaskShutdownFencesInFlightCallback(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			a := &shutdownTaskAgent{v2UnitAgent: v2UnitAgent{state: agent.State{Version: 1}}}
-			w, s := v2UnitSession(t, a)
+			started := make(chan struct {
+				run *agent.TaskRun
+				ctx context.Context
+			}, 1)
+			handlers := map[string]agent.TaskHandler{"shutdown/v1": func(ctx context.Context, run *agent.TaskRun) error {
+				started <- struct {
+					run *agent.TaskRun
+					ctx context.Context
+				}{run, ctx}
+				<-ctx.Done()
+				return ctx.Err()
+			}}
+			w, s := v2UnitSession(t, a, v2UnitRegistration(a, agent.Limits{}, handlers))
 			w.cfg.Agent.CallbackTimeout = time.Second
 			require.NoError(t, s.initAgent(false, ResumeOptions{}))
+			a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "shutdown", Kind: "shutdown/v1", Class: agent.ReadOnly}}}
+			_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started, ID: "start"}, eventLive)
+			require.NoError(t, err)
+			a.effects = agent.Effects{}
+			s.launchTasks()
+			task := <-started
+			done := make(chan error, 1)
+			go func() { done <- task.run.Emit(context.Background(), 1, agent.Chunk{}) }()
+			s.acceptEmission(<-s.agent.v2.emissions)
+			require.NoError(t, <-done)
+
 			a.entered, a.saving, a.release, a.returned = make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
 			a.blockHandle = blockHandle
 			t.Cleanup(func() {
@@ -57,14 +82,7 @@ func TestV2TaskShutdownFencesInFlightCallback(t *testing.T) {
 					close(a.release)
 				}
 			})
-			taskCtx, cancel := context.WithCancel(s.ctx)
-			result := agent.TaskResult{TaskID: "shutdown", Sequence: 1, Outcome: agent.OK}
-			intent := taskIntent{ID: result.TaskID, Phase: taskStarted, Published: 1, Class: agent.ReadOnly}
-			s.agent.v2.tasks = []*localTask{{intent: intent, results: []agent.TaskResult{result}, launched: true, attempt: 1,
-				cancel: cancel, mailboxBytes: taskResultBytes(result), terminalBytes: taskTerminalBytes(intent)}}
-			s.agent.latest.V2.Started = true
-			s.publishTaskIntents(s.agent.latest.V2)
-			s.publishAgent()
+			taskCtx := task.ctx
 			before := cloneAgentState(s.state.Agent)
 			close(s.agent.v2.ready)
 			loopDone := make(chan struct{})

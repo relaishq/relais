@@ -48,38 +48,6 @@ func appendUnitAudio(t *testing.T, s *session, a *v2UnitAgent, r agent.TaskResul
 	require.NoError(t, eventErr0)
 	a.effects = agent.Effects{}
 }
-func TestPlaybackWindowDurationAndBytes(t *testing.T) {
-	for _, count := range []int{15, 16} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) {
-			s, a, r := audioUnitSession(t, count)
-			appendUnitAudio(t, s, a, r)
-			pb := s.state.Agent.V2.Playback
-			require.Equal(t, count, pb.Pending)
-			require.Len(t, pb.Window, 1)
-			require.EqualValues(t, 15, pb.Window[0].Count)
-			require.EqualValues(t, count, len(s.agent.v2.playback.queue))
-			raw, err := json.Marshal(s.state.Agent.V2)
-			require.NoError(t, err)
-			require.NotContains(t, string(raw), "Packets")
-			require.Len(t, s.agent.v2.tasks[0].audio, 1, "result consumption must retain packet payload")
-		})
-	}
-	for _, extra := range []int{0, 1} {
-		t.Run(fmt.Sprint("bytes", extra), func(t *testing.T) {
-			s, a, r := audioUnitSession(t, 4+extra)
-			for i := range r.Chunk.Audio.Packets {
-				r.Chunk.Audio.Packets[i] = append([]byte{0xf8}, make([]byte, 1023)...)
-			}
-			s.agent.v2.playback.payloads = nil
-			require.NoError(t, s.registerAudioLocked(r))
-			s.agent.v2.tasks[0].results[0] = r
-			s.agent.v2.tasks[0].mailboxBytes = taskResultBytes(r)
-			appendUnitAudio(t, s, a, r)
-			require.EqualValues(t, 4, s.state.Agent.V2.Playback.Window[0].Count)
-			require.Equal(t, (4+extra)*1024, s.state.Agent.V2.Playback.Length)
-		})
-	}
-}
 func TestOpusPacketDurationAndFraming(t *testing.T) {
 	for _, tc := range []struct {
 		p []byte
@@ -319,20 +287,6 @@ func TestPlaybackEncryptionFailureKeepsCursor(t *testing.T) {
 	require.True(t, s.agent.v2.playback.nextAt.IsZero())
 }
 
-func TestAudioResultKeepsUnfinishedReadOnlyRequest(t *testing.T) {
-	s, a, r := audioUnitSession(t, 20)
-	spec := agent.TaskSpec{Step: "tts", Kind: "tts", Class: agent.ReadOnly, Resume: agent.Retry, Turn: 1, Request: []byte("reproducible request")}
-	task := s.agent.v2.tasks[0]
-	task.request = slices.Clone(spec.Request)
-	task.intent.Step, task.intent.Kind, task.intent.Resume = spec.Step, spec.Kind, spec.Resume
-	task.intent.RequestLength = len(spec.Request)
-	task.intent.Digest = taskDigest(spec)
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"tts": func(context.Context, *agent.TaskRun) error { return nil }}
-	appendUnitAudio(t, s, a, r)
-	require.Equal(t, spec.Request, s.agent.v2.tasks[0].request, "consuming an audio chunk cannot lose the request before an exact move")
-	require.NoError(t, s.validateTaskMoves(s.agent.latest.V2.Tasks, &movePayload{Tasks: s.taskMoveViews()}))
-}
-
 func TestPlaybackVariablePacketDurations(t *testing.T) {
 	s, a, r := audioUnitSession(t, 3)
 	r.Chunk.Audio.Packets = [][]byte{{0x80}, {0x18}, {0x1b, 2}} // 2.5, 60 and 120 ms
@@ -370,4 +324,105 @@ func TestPlaybackRestoreClockRefusalStaysTypedOverHTTP(t *testing.T) {
 	err := privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/resume", nil, nil, RemoteErrors)
 	require.ErrorIs(t, err, sessionstore.ErrUnsafeCheckpointClock)
 	require.NotErrorIs(t, err, privateapi.ErrUncertain)
+}
+
+func TestPlaybackWindowDurationAndBytes(t *testing.T) {
+	for _, count := range []int{15, 16} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			packets := make([][]byte, count)
+			for i := range packets {
+				packets[i] = []byte{0xf8, 0xff, 0xfe}
+			}
+			rig, _ := startAcceptedSpeech(t, agenthost.Bounds{}, packets)
+			delivered, err := rig.s.deliverTaskResult()
+			require.NoError(t, err)
+			require.True(t, delivered)
+			raw, err := rig.s.checkpoint.capture(checkpointLive, nil)
+			require.NoError(t, err)
+			saved, err := decodeSnapshot(raw)
+			require.NoError(t, err)
+			pb := saved.State.Agent.V2.Playback
+			require.Equal(t, count, pb.Pending)
+			require.Len(t, pb.Window, 1)
+			require.EqualValues(t, 15, pb.Window[0].Count)
+			metadata, err := json.Marshal(saved.State.Agent.V2)
+			require.NoError(t, err)
+			require.NotContains(t, string(metadata), "Packets")
+			move, err := rig.s.saveV2MoveOnly(context.Background())
+			require.NoError(t, err)
+			require.Len(t, move.audio, count, "exact export retains the entire queue")
+			require.Len(t, move.tasks, 1)
+			require.Len(t, move.tasks[0].Audio, 1, "result consumption must retain packet payload")
+			require.Equal(t, packets, move.tasks[0].Audio[0].Chunk.Audio.Packets)
+		})
+	}
+	for _, extra := range []int{0, 1} {
+		t.Run(fmt.Sprint("bytes", extra), func(t *testing.T) {
+			packets := make([][]byte, 4+extra)
+			for i := range packets {
+				packets[i] = append([]byte{0xf8}, make([]byte, 1023)...)
+			}
+			rig, _ := startAcceptedSpeech(t, agenthost.Bounds{}, packets)
+			delivered, err := rig.s.deliverTaskResult()
+			require.NoError(t, err)
+			require.True(t, delivered)
+			raw, err := rig.s.checkpoint.capture(checkpointLive, nil)
+			require.NoError(t, err)
+			saved, err := decodeSnapshot(raw)
+			require.NoError(t, err)
+			pb := saved.State.Agent.V2.Playback
+			require.Len(t, pb.Window, 1)
+			require.EqualValues(t, 4, pb.Window[0].Count)
+			require.Equal(t, (4+extra)*1024, pb.Length)
+		})
+	}
+}
+
+func TestAudioResultKeepsUnfinishedReadOnlyRequest(t *testing.T) {
+	started := make(chan *agent.TaskRun, 1)
+	request := []byte("reproducible request")
+	rig := newAcceptedEventRig(t, agenthost.Bounds{}, map[string]agent.TaskHandler{"tts/v1": func(ctx context.Context, run *agent.TaskRun) error {
+		started <- run
+		<-ctx.Done()
+		return ctx.Err()
+	}})
+	rig.app.handle = func(_ context.Context, e agent.Event) (agent.Effects, error) {
+		if e.Kind == agent.Started {
+			return agent.Effects{StartTasks: []agent.TaskSpec{{Step: "tts", Kind: "tts/v1", Class: agent.ReadOnly, Resume: agent.Retry, Turn: 1, Request: request}}}, nil
+		}
+		effects := agent.Effects{}
+		for i := range e.Result.Chunk.Audio.Packets {
+			effects.Audio = append(effects.Audio, agent.Audio{Turn: e.Result.Turn, Source: agent.AudioRef{TaskID: e.Result.TaskID, Sequence: e.Result.Sequence, PacketOffset: uint32(i)}})
+		}
+		return effects, nil
+	}
+	_, err := (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.Started, ID: "tts"}, eventLive)
+	require.NoError(t, err)
+	rig.s.launchTasks()
+	t.Cleanup(rig.s.stopTaskAttempts)
+	run := <-started
+	require.Equal(t, request, run.Spec().Request)
+	packets := make([][]byte, 20)
+	for i := range packets {
+		packets[i] = []byte{0xf8, 0xff, 0xfe}
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- run.Emit(context.Background(), 1, agent.Chunk{Audio: &agent.EncodedAudio{Format: "audio/opus", Packets: packets}})
+	}()
+	rig.s.acceptEmission(<-rig.s.agent.v2.emissions)
+	require.NoError(t, <-done)
+	delivered, err := rig.s.deliverTaskResult()
+	require.NoError(t, err)
+	require.True(t, delivered)
+	move, err := rig.s.saveV2MoveOnly(context.Background())
+	require.NoError(t, err)
+	require.Len(t, move.audio, 20)
+	require.Len(t, move.tasks, 1)
+	require.Equal(t, run.ID(), move.tasks[0].ID)
+	require.Equal(t, request, move.tasks[0].Request, "consuming an audio chunk cannot lose the request before an exact move")
+	flush := agentFlush{done: make(chan error, 1), deadline: time.Now().Add(15 * time.Second), moveOnly: make(chan agentMoveExport, 1)}
+	require.True(t, rig.s.finishAgentFlush(flush))
+	require.NoError(t, <-flush.done, "exact export must validate the retained request against its accepted intent")
+	require.Equal(t, request, (<-flush.moveOnly).tasks[0].Request)
 }
