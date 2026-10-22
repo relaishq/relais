@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/agenthost"
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/pkg/sessionstore"
 
@@ -153,45 +154,91 @@ func TestPlaybackPacerRebasesAndKeepsCounters(t *testing.T) {
 	require.NoError(t, err)
 }
 func TestTimerGenerationResetCancelAndRestore(t *testing.T) {
-	s, a, _ := audioUnitSession(t, 0)
+	rig := newAcceptedEventRig(t, agenthost.Bounds{}, nil)
+	effects := agent.Effects{}
+	rig.app.handle = func(context.Context, agent.Event) (agent.Effects, error) { return effects, nil }
+	capture := func() *v2Envelope {
+		raw, err := rig.s.checkpoint.capture(checkpointLive, nil)
+		require.NoError(t, err)
+		saved, err := decodeSnapshot(raw)
+		require.NoError(t, err)
+		return saved.State.Agent.V2
+	}
+	submit := func() {
+		_, err := (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.Started}, eventLive)
+		require.NoError(t, err)
+	}
 	now := time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC)
-	s.storeClock = now
-	s.storeClockAt = time.Now()
-	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: time.Second}}}
-	_, eventErr1 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started}, eventLive)
-	require.NoError(t, eventErr1)
-	require.EqualValues(t, 1, s.agent.latest.V2.Timers[0].Generation)
-	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: 2 * time.Second}}}
-	_, eventErr2 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started}, eventLive)
-	require.NoError(t, eventErr2)
-	require.EqualValues(t, 2, s.agent.latest.V2.Timers[0].Generation)
-	s.storeClock = now.Add(time.Second)
-	s.storeClockAt = time.Now()
-	a.effects = agent.Effects{}
-	handles := a.handles
-	require.NoError(t, s.deliverClockEvent())
-	require.Equal(t, handles, a.handles)
-	s.storeClock = now.Add(3 * time.Second)
-	s.storeClockAt = time.Now()
-	require.NoError(t, s.deliverClockEvent())
-	require.Equal(t, agent.TimerFired, a.lastEvent.Kind)
-	require.EqualValues(t, 2, a.lastEvent.Timer.Generation)
-	handles = a.handles
-	require.NoError(t, s.deliverClockEvent())
-	require.Equal(t, handles, a.handles)
-	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: time.Second}}, CancelTimers: []string{"a/12:"}}
-	_, eventErr3 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started}, eventLive)
-	require.NoError(t, eventErr3)
-	require.EqualValues(t, 3, s.agent.latest.V2.Timers[0].Generation)
-	a.effects = agent.Effects{CancelTimers: []string{"a/12:"}}
-	_, eventErr4 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started}, eventLive)
-	require.NoError(t, eventErr4)
-	require.Empty(t, s.agent.latest.V2.Timers)
-	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "negative", After: -1}}}
-	_, eventErr5 := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started}, eventLive)
-	require.ErrorIs(t, eventErr5, agent.ErrIncompatibleAgent)
-	require.NotEqual(t, clockEventID("timer", "a", 12), clockEventID("timer", "a1", 2))
+	advance := func(at time.Time) {
+		rig.s.mu.Lock()
+		rig.s.storeClock, rig.s.storeClockAt = at, time.Now()
+		rig.s.mu.Unlock()
+	}
+	advance(now)
+	effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: time.Second}}}
+	submit()
+	first := capture()
+	require.Len(t, first.Timers, 1)
+	require.EqualValues(t, 1, first.Timers[0].Generation)
+	effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: 2 * time.Second}}}
+	submit()
+	reset := capture()
+	require.Len(t, reset.Timers, 1)
+	require.EqualValues(t, 2, reset.Timers[0].Generation)
+	require.True(t, reset.Timers[0].At.After(first.Timers[0].At), "reset must replace the original deadline")
+	advance(first.Timers[0].At.Add(time.Second / 2))
+	effects = agent.Effects{}
+	count := len(rig.app.events)
+	require.NoError(t, rig.s.deliverClockEvent())
+	require.Len(t, rig.app.events, count, "reset timer must not fire at its original deadline")
+	advance(now.Add(3 * time.Second))
+	require.NoError(t, rig.s.deliverClockEvent())
+	require.Len(t, rig.app.events, count+1)
+	fired := rig.app.events[count]
+	require.Equal(t, agent.TimerFired, fired.Kind)
+	require.Equal(t, "a/12:", fired.Timer.ID)
+	require.EqualValues(t, 2, fired.Timer.Generation)
+	require.Empty(t, capture().Timers)
+	require.NoError(t, rig.s.deliverClockEvent())
+	require.Len(t, rig.app.events, count+1, "a timer generation must fire exactly once")
+	effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: time.Second}}, CancelTimers: []string{"a/12:"}}
+	submit()
+	armed := capture()
+	require.Len(t, armed.Timers, 1, "cancel and set in one event must re-arm")
+	require.EqualValues(t, 3, armed.Timers[0].Generation)
+	effects = agent.Effects{CancelTimers: []string{"a/12:"}}
+	submit()
+	require.Empty(t, capture().Timers)
+	effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "negative", After: -1}}}
+	_, err := (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.Started}, eventLive)
+	require.ErrorIs(t, err, agent.ErrIncompatibleAgent)
+	t.Run("event-identity", func(t *testing.T) {
+		rig := newAcceptedEventRig(t, agenthost.Bounds{}, nil)
+		effects := agent.Effects{}
+		rig.app.handle = func(context.Context, agent.Event) (agent.Effects, error) { return effects, nil }
+		var ids []agent.EventID
+		for generation := 1; generation <= 12; generation++ {
+			id := "a"
+			if generation == 2 {
+				id = "a1"
+			}
+			effects = agent.Effects{CancelTimers: []string{"a", "a1"}, SetTimers: []agent.TimerSpec{{ID: id}}}
+			_, err := (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.Started}, eventLive)
+			require.NoError(t, err)
+			if generation == 2 || generation == 12 {
+				effects = agent.Effects{}
+				require.NoError(t, rig.s.deliverClockEvent())
+				event := rig.app.events[len(rig.app.events)-1]
+				require.Equal(t, agent.TimerFired, event.Kind)
+				require.Equal(t, id, event.Timer.ID)
+				require.EqualValues(t, generation, event.Timer.Generation)
+				ids = append(ids, event.ID)
+			}
+		}
+		require.NotEqual(t, ids[0], ids[1], "timer ID and generation must have distinct event identities")
+	})
 }
+
 func TestPlaybackExactAndCrashRestore(t *testing.T) {
 	for _, exact := range []bool{true, false} {
 		t.Run(fmt.Sprint(exact), func(t *testing.T) {

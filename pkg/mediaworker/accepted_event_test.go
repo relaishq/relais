@@ -221,6 +221,14 @@ func TestAcceptedEventPlaybackKeepsConcurrentPacerPrefix(t *testing.T) {
 			config := srtp.Config{Profile: rig.s.state.SRTP.Profile}
 			require.NoError(t, config.ExtractSessionKeysFromDTLS(&connection, false))
 			receiver := testContext(t, config.Keys.LocalMasterKey, config.Keys.LocalMasterSalt, config.Profile)
+			captureClock := func() playbackState {
+				raw, err := rig.s.checkpoint.capture(checkpointLive, nil)
+				require.NoError(t, err)
+				saved, err := decodeSnapshot(raw)
+				require.NoError(t, err)
+				return saved.State.Agent.V2.Playback
+			}
+			var clocks []playbackState
 			receive := func() rtp.Packet {
 				_, err := rig.s.paceOne()
 				require.NoError(t, err)
@@ -229,6 +237,7 @@ func TestAcceptedEventPlaybackKeepsConcurrentPacerPrefix(t *testing.T) {
 				require.NoError(t, err)
 				var packet rtp.Packet
 				require.NoError(t, packet.Unmarshal(plain))
+				clocks = append(clocks, captureClock())
 				rig.s.mu.Lock()
 				rig.s.storeClock = rig.s.storeClock.Add(time.Second)
 				rig.s.storeClockAt = time.Now()
@@ -236,9 +245,16 @@ func TestAcceptedEventPlaybackKeepsConcurrentPacerPrefix(t *testing.T) {
 				return packet
 			}
 			packets := []rtp.Packet{receive(), receive()}
+			beforeCommit := captureClock()
 			close(release)
 			require.NoError(t, <-done)
 			rig.app.save = nil
+			afterCommit := captureClock()
+			require.Equal(t, 1, beforeCommit.Pending)
+			require.Equal(t, 3, afterCommit.Pending, "commit must retain the remaining queue")
+			require.Equal(t, beforeCommit.NextAt, afterCommit.NextAt, "commit restored a stale playback deadline")
+			require.Equal(t, beforeCommit.NextTS, afterCommit.NextTS, "commit restored a stale RTP timestamp")
+			require.Equal(t, beforeCommit.Initialized, afterCommit.Initialized, "commit restored stale clock initialization")
 			status, err := rig.s.worker.agentSessionStatus(rig.s.id)
 			require.NoError(t, err)
 			require.Equal(t, 3, status.PlaybackPackets, "commit must retain the remaining queue")
@@ -247,8 +263,16 @@ func TestAcceptedEventPlaybackKeepsConcurrentPacerPrefix(t *testing.T) {
 			}
 			for i, packet := range packets {
 				require.Equal(t, []byte{0xf8, byte(i + 1)}, packet.Payload, "playback lost, repeated or reordered a packet")
-				if i > 0 {
+				require.True(t, clocks[i].Initialized)
+				require.Equal(t, packet.Timestamp+960, clocks[i].NextTS, "exported clock must follow the sent 20 ms packet")
+				if i == 0 {
+					require.Equal(t, rig.s.state.Audio.InitialTS, packet.Timestamp)
+				} else {
 					require.Equal(t, packets[i-1].SequenceNumber+1, packet.SequenceNumber)
+					// A one-second clock advance rebases the pacer. RTP media time
+					// must advance with the exported absolute playback schedule.
+					elapsed := clocks[i].NextAt.Sub(clocks[i-1].NextAt)
+					require.InDelta(t, rtpClockTicks(elapsed), packet.Timestamp-packets[i-1].Timestamp, 1)
 				}
 			}
 			status, err = rig.s.worker.agentSessionStatus(rig.s.id)
@@ -669,31 +693,52 @@ func TestAcceptedEventStreamingWindowAndBargeIn(t *testing.T) {
 }
 
 func TestAcceptedEventRefusalsRemainFIFO(t *testing.T) {
-	rig := newAcceptedEventRig(t, agenthost.Bounds{}, map[string]agent.TaskHandler{"work/v1": func(context.Context, *agent.TaskRun) error { return nil }})
+	rig := newAcceptedEventRig(t, agenthost.Bounds{MaxMailboxBytes: 4096}, map[string]agent.TaskHandler{"work/v1": func(context.Context, *agent.TaskRun) error { return nil }})
+	batches := []agent.Event{{Kind: agent.Started, ID: "first"}, {Kind: agent.Started, ID: "second"}}
 	rig.app.handle = func(_ context.Context, e agent.Event) (agent.Effects, error) {
 		effects := agent.Effects{}
 		if e.Kind == agent.Started {
-			for i := range 20 {
-				effects.StartTasks = append(effects.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "work/v1", Turn: agent.Turn(i + 1), Class: agent.ReadOnly})
+			if e.ID == batches[0].ID {
+				effects.StartTasks = append(effects.StartTasks, agent.TaskSpec{Step: "admitted", Kind: "work/v1", Class: agent.ReadOnly})
+			}
+			for i := range 4 {
+				effects.StartTasks = append(effects.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "work/v1", Turn: agent.Turn(i + 1), Class: agent.ReadOnly, Request: make([]byte, 4097)})
 			}
 		}
 		return effects, nil
 	}
-	_, err := (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.Started, ID: "wide"}, eventLive)
-	require.NoError(t, err)
-	status, err := rig.s.worker.agentSessionStatus(rig.s.id)
-	require.NoError(t, err)
-	admitted := len(status.Tasks)
-	require.Less(t, admitted, 20)
-	for i := range 20 - admitted {
+	var expected []agent.TaskResult
+	for _, batch := range batches {
+		_, err := (acceptedEvents{rig.s}).submit(batch, eventLive)
+		require.NoError(t, err)
+		status, err := rig.s.worker.agentSessionStatus(rig.s.id)
+		require.NoError(t, err)
+		require.Len(t, status.Tasks, 1, "later fan-out must not evict the admitted task")
+		require.Equal(t, deriveTaskID(rig.s.id, "accepted/v1", batches[0].ID, "admitted"), status.Tasks[0].ID)
+		for i := range 4 {
+			id := deriveTaskID(rig.s.id, "accepted/v1", batch.ID, fmt.Sprint(i))
+			if id != status.Tasks[0].ID {
+				expected = append(expected, agent.TaskResult{TaskID: id, Sequence: 1, Turn: agent.Turn(i + 1), Outcome: agent.Capacity, Final: true, Detail: "task admission capacity"})
+			}
+		}
+	}
+	require.Len(t, expected, 8)
+	// Both submissions finish before any refusal drains. Exact identities catch
+	// moving a fresh batch ahead of older refusals even if each batch stays FIFO.
+	for _, want := range expected {
+		count := len(rig.app.events)
 		_, err := rig.s.deliverTaskResult()
 		require.NoError(t, err)
-		result := rig.app.events[len(rig.app.events)-1].Result
-		require.NotNil(t, result)
-		require.EqualValues(t, admitted+i+1, result.Turn, "Capacity results must remain FIFO")
-		require.Equal(t, agent.Capacity, result.Outcome)
-		require.True(t, result.Final)
+		require.Len(t, rig.app.events, count+1)
+		got := rig.app.events[len(rig.app.events)-1]
+		require.Equal(t, agent.TaskMessage, got.Kind)
+		require.Equal(t, &want, got.Result, "Capacity identities, order and completeness must survive both batches")
 	}
+	count := len(rig.app.events)
+	delivered, err := rig.s.deliverTaskResult()
+	require.NoError(t, err)
+	require.False(t, delivered, "all refusals must drain exactly once")
+	require.Len(t, rig.app.events, count)
 }
 
 func TestAcceptedEventParkedResultCannotCrossAttempt(t *testing.T) {
