@@ -31,7 +31,7 @@ func TestControlAtomicReceiptAndConflict(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, receipt, same)
 	require.Equal(t, 1, a.handles)
-	s.controlAck = 1
+	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(1)}))
 	same, err = s.processControl(m)
 	require.NoError(t, err)
 	require.True(t, same.Checkpointed)
@@ -61,7 +61,7 @@ func TestControlLimitsFloorAndCopy(t *testing.T) {
 	for i := uint64(2); i < 20; i++ {
 		m.ID = string(rune('a' + i))
 		m.Sequence = i
-		s.controlAck = i - 1
+		require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(i - 1)}))
 		_, err = s.processControl(m)
 		require.NoError(t, err)
 	}
@@ -71,7 +71,7 @@ func TestControlLimitsFloorAndCopy(t *testing.T) {
 	m.Sequence = 1
 	_, err = s.processControl(m)
 	require.ErrorIs(t, err, agent.ErrControlStale)
-	require.NoError(t, validateControlWindow(s.agent.latest.V2, s.controlAck))
+	require.NoError(t, validateControlWindow(s.agent.latest.V2, checkpointObservation(s).controlAck))
 }
 func TestControlCapacityDoesNotSucceedOrConsume(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}

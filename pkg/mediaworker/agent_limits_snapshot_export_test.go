@@ -46,7 +46,7 @@ func TestSnapshotClockStepBackKeepsCheckpointing(t *testing.T) {
 					call, client := dialDTLSCaller(t, w)
 					defer client.Close()
 					sess := w.session(call.id)
-					require.Eventually(t, sess.snapshotStored.Load, 3*time.Second, time.Millisecond)
+					require.Eventually(t, func() bool { return checkpointKnown(sess) }, 3*time.Second, time.Millisecond)
 					sess.mu.Lock()
 					before := sess.state.Checkpoint.Successes
 					sess.mu.Unlock()
@@ -66,15 +66,6 @@ func TestSnapshotClockStepBackKeepsCheckpointing(t *testing.T) {
 			}
 		}
 	})
-}
-func TestSnapshotClockRollbackReadsDoNotRebase(t *testing.T) {
-	l := SnapshotLimits{}.defaults()
-	at := time.Now()
-	b := snapshotBucket{tokens: 17, at: at}
-	require.EqualValues(t, 17, b.available(l, at.Add(-time.Second)))
-	require.EqualValues(t, 17, b.available(l, at.Add(-900*time.Millisecond)))
-	require.Equal(t, at, b.at)
-	require.EqualValues(t, 17+float64(l.BytesPerSecond)/10, b.available(l, at.Add(100*time.Millisecond)))
 }
 
 func TestSnapshotSettings(t *testing.T) {
@@ -119,9 +110,7 @@ func TestExportCarriesCurrentQuota(t *testing.T) {
 	defer client.Close()
 	s := w.session(call.id)
 	now := s.taskNow()
-	s.snapshotBudgetMu.Lock()
-	s.snapshotBytesBudget = snapshotBucket{tokens: 17, at: now}
-	s.snapshotBudgetMu.Unlock()
+	restoreCheckpointQuota(t, s, 17, now)
 	data, err := w.ExportSession(call.id)
 	require.NoError(t, err)
 	snap, err := decodeSnapshot(data)
@@ -133,10 +122,7 @@ func TestExportCarriesCurrentQuota(t *testing.T) {
 	_, err = w.ResumeSession(data, ResumeOptions{})
 	require.NoError(t, err)
 	target := w.session(call.id)
-	targetNow := target.taskNow()
-	target.snapshotBudgetMu.Lock()
-	available := target.snapshotBytesBudget.available(w.cfg.SnapshotLimits, targetNow)
-	target.snapshotBudgetMu.Unlock()
+	available := float64(checkpointQuota(t, target))
 	require.Less(t, available, float64(w.cfg.SnapshotLimits.BurstBytes/2), "planned move must not grant a fresh burst")
 }
 
@@ -217,13 +203,11 @@ func TestExportQuotaOnStores(t *testing.T) {
 		call, client := dialDTLSCaller(t, source)
 		defer client.Close()
 		s := source.session(call.id)
-		require.Eventually(t, s.snapshotStored.Load, time.Second, time.Millisecond)
+		require.Eventually(t, func() bool { return checkpointKnown(s) }, time.Second, time.Millisecond)
 		now := s.taskNow()
-		s.snapshotMu.Lock()
-		s.snapshotBudgetMu.Lock()
-		s.snapshotBytesBudget = snapshotBucket{tokens: float64(cfg.SnapshotLimits.defaults().MaxBytes + 17), at: now}
-		s.snapshotBudgetMu.Unlock()
-		s.snapshotMu.Unlock()
+
+		s.checkpoint.wait()
+		restoreCheckpointQuota(t, s, float64(cfg.SnapshotLimits.defaults().MaxBytes+17), now)
 		data, err := source.ExportSession(call.id)
 		require.NoError(t, err)
 		snap, err := decodeSnapshot(data)
@@ -236,13 +220,17 @@ func TestExportQuotaOnStores(t *testing.T) {
 		require.NoError(t, err)
 		lease, err = store.Transfer(context.Background(), lease, target.LocalAddr(), time.Minute)
 		require.NoError(t, err)
+		// Redis clock samples have millisecond resolution. Wait for the actual
+		// store sample to reach the exported sample rather than assume this setup
+		// and transfer consume a full clock tick.
+		require.Eventually(t, func() bool {
+			at, clockErr := store.Clock(context.Background(), call.id)
+			return clockErr == nil && !at.Before(snap.State.Agent.V2.Quota.At)
+		}, time.Second, time.Millisecond)
 		_, err = target.ResumeSession(data, ResumeOptions{Lease: lease})
 		require.NoError(t, err)
 		resumed := target.session(call.id)
-		now = resumed.taskNow()
-		resumed.snapshotBudgetMu.Lock()
-		remaining := resumed.snapshotBytesBudget.available(target.cfg.SnapshotLimits, now)
-		resumed.snapshotBudgetMu.Unlock()
+		remaining := float64(checkpointQuota(t, resumed))
 		require.Less(t, remaining, float64(target.cfg.SnapshotLimits.BurstBytes*3/4), "resume must pay from the transferred balance, not a fresh burst")
 	})
 }

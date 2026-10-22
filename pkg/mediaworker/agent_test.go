@@ -404,11 +404,8 @@ func TestAgentEchoDoesNotPauseOrDropAtExport(t *testing.T) {
 
 func TestAgentIdleDoesNotRequestSnapshots(t *testing.T) {
 	_, s, _ := agentPacketSession(t, &countingAgent{}, time.Second)
-	select {
-	case <-s.snapshotWanted:
-		t.Fatal("idle agent requested a checkpoint")
-	case <-time.After(250 * time.Millisecond):
-	}
+	events := observeCheckpointRequests(t, s)
+	require.Never(t, func() bool { return len(events) > 0 }, 250*time.Millisecond, time.Millisecond, "idle agent requested a checkpoint")
 }
 
 func TestAgentEchoRejectsStatelessCustomState(t *testing.T) {

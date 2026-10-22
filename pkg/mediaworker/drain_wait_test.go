@@ -35,8 +35,9 @@ func TestDrainWaitReadOnlyKindPolicy(t *testing.T) {
 			if tc.class == agent.SideEffecting {
 				// Provide the durable launch grant through the normal host seam.
 				intent.Phase = taskStarted
-				s.durableAgent = cloneAgentState(s.agent.latest)
-				s.durableAgent.V2.Tasks = []taskIntent{intent}
+				acknowledged := cloneAgentState(s.agent.latest)
+				acknowledged.V2.Tasks = []taskIntent{intent}
+				require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &acknowledged}))
 			}
 			h.tasks = []*localTask{{intent: intent, terminalBytes: taskTerminalBytes(intent)}}
 			s.launchTasks()

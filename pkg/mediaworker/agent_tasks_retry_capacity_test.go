@@ -123,7 +123,7 @@ func TestTaskCapacityAbandonMove(t *testing.T) {
 	require.NoError(t, s.handleV2Event(agent.Event{ID: "started", Kind: agent.Started}))
 	s.launchTasks()
 	s.mu.Lock()
-	s.durableAgent = cloneAgentState(s.state.Agent)
+	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))
 	s.mu.Unlock()
 	s.launchTasks()
 	move := &movePayload{Tasks: s.exportTasks()}

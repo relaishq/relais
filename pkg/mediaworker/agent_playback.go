@@ -277,7 +277,6 @@ func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers [
 	queueBytes := audioRefsBytes(p.queue)
 	s.mu.Unlock()
 	stageControl(&envelope, event)
-	envelope.Quota = s.captureSnapshotQuota(s.taskNow())
 	envelope.Timers = timers
 	if len(timerGeneration) > 0 {
 		envelope.TimerGeneration = timerGeneration[0]
@@ -294,25 +293,8 @@ func (s *session) hostEffectsBudget(e agent.Effects, event agent.Event, timers [
 	for i, t := range tasks {
 		envelope.Tasks[i] = t.intent
 	}
-	metadataLimit := min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes)
-	if s.compactControlMetadata(&envelope, metadataLimit) > metadataLimit {
-		if len(e.Audio) > 0 {
-			// Only retry growth that removing this callback's audio can resolve.
-			// Timers and other effects cannot make progress by draining playback.
-			e.Audio = nil
-			s.mu.Lock()
-			envelope.Playback = s.projectedPlaybackLocked(e, event).snapshot()
-			s.mu.Unlock()
-			if s.compactControlMetadata(&envelope, metadataLimit) <= metadataLimit {
-				return errTaskAdmissionBackpressure
-			}
-		}
-		without := envelope
-		without.Controls = nil
-		if envelope.ControlHigh > 0 && v2MetadataCharge(without, metadataLimit) <= metadataLimit {
-			return errControlReceiptBackpressure
-		}
-		return fmt.Errorf("%w: playback/timer metadata", agent.ErrCapacity)
+	if _, err := s.checkpoint.admit(checkpointAdmission{host: &checkpointHostPreflight{envelope: envelope, effects: &e, event: event}}); err != nil {
+		return err
 	}
 	n := int64(appBytes + queueBytes)
 	for _, t := range tasks {

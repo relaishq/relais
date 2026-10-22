@@ -132,7 +132,7 @@ func TestPlaybackPruneCost(t *testing.T) {
 	task.intent.Published = 760
 	s.publishTaskIntents()
 	s.publishAgent()
-	s.durableAgent = cloneAgentState(s.state.Agent)
+	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))
 	start := time.Now()
 	for range 10 {
 		s.pruneTasks()

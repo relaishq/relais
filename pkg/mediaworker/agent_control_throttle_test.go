@@ -47,7 +47,7 @@ func TestControlReceiptThrottleAllowsOtherEvents(t *testing.T) {
 	a.effects = fan
 	require.ErrorIs(t, s.handleV2Event(blocked), errTaskAdmissionBackpressure)
 	require.Equal(t, handles+1, a.handles, "unrelated success keeps the blocked event throttled")
-	s.controlAck = 2
+	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(2)}))
 	require.NoError(t, s.handleV2Event(blocked), "acknowledgement permits immediate retry")
 	require.Equal(t, handles+2, a.handles)
 }

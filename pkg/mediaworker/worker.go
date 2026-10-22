@@ -435,7 +435,13 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 					worker.mu.Unlock()
 				}
 			},
-			SnapshotReady: func(id string) bool { s := worker.session(id); return s != nil && s.snapshotStored.Load() },
+			SnapshotReady: func(id string) bool {
+				s := worker.session(id)
+				if s == nil {
+					return false
+				}
+				return s.checkpoint.progress(checkpointProgressRequest{readiness: true}).known
+			},
 		})
 	}
 	for i := range worker.cacheQueues {
@@ -546,7 +552,7 @@ func (w *Worker) createSession(ctx context.Context, offerSDP string, placed func
 	w.running.Add(3)
 	w.mu.Unlock()
 	go func() { defer w.running.Done(); sess.agentLoop() }()
-	go func() { defer w.running.Done(); sess.snapshotLoop() }()
+	go func() { defer w.running.Done(); sess.checkpoint.run(sess.ctx) }()
 
 	go func() {
 		defer w.running.Done()
@@ -948,8 +954,7 @@ func (w *Worker) kill() error {
 	}
 	// Synchronize with each writer so no put can slip past socket shutdown.
 	for _, s := range sessions {
-		s.snapshotMu.Lock()
-		s.snapshotMu.Unlock() //nolint:staticcheck // Synchronize with a cancelled writer; no mutation is needed.
+		s.checkpoint.wait()
 	}
 	err := w.conn.Close()
 	for _, s := range sessions {

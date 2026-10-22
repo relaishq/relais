@@ -21,13 +21,29 @@ import (
 
 type componentReplyStore struct {
 	*sessionstore.Memory
-	unknown atomic.Bool
-	reads   atomic.Int64
-	puts    atomic.Int64
+	unknown        atomic.Bool
+	reads          atomic.Int64
+	puts           atomic.Int64
+	committedBytes atomic.Uint64
+	fixedNow       time.Time
+	clockFailure   bool
+}
+
+func (s *componentReplyStore) Clock(ctx context.Context, id string) (time.Time, error) {
+	if s.clockFailure {
+		return time.Time{}, errCheckpointClockProbe
+	}
+	if !s.fixedNow.IsZero() {
+		return s.fixedNow, nil
+	}
+	return s.Memory.Clock(ctx, id)
 }
 
 func (s *componentReplyStore) CommitComponents(ctx context.Context, l sessionstore.Lease, c sessionstore.ComponentCommit) (sessionstore.ComponentTuple, error) {
 	result, err := s.Memory.CommitComponents(ctx, l, c)
+	if err == nil {
+		s.committedBytes.Add(uint64(result.WrittenBytes + componentProtocolReserve))
+	}
 	if err == nil && s.unknown.CompareAndSwap(true, false) {
 		return sessionstore.ComponentTuple{}, &sessionstore.TransientError{Op: "test lost reply", Err: context.DeadlineExceeded}
 	}
@@ -58,9 +74,9 @@ func componentWriterSession(t *testing.T, store sessionstore.Store, v2 bool) *se
 func TestSplitWriterCaptureAndUnknownReplySettlement(t *testing.T) {
 	for _, v2 := range []bool{false, true} {
 		t.Run(map[bool]string{false: "legacy-agent", true: "v2-agent"}[v2], func(t *testing.T) {
-			store := &componentReplyStore{Memory: sessionstore.NewMemory()}
+			store := &componentReplyStore{Memory: sessionstore.NewMemory(), fixedNow: time.Now()}
 			s := componentWriterSession(t, store, v2)
-			require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+			require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 			first, err := store.ReadComponents(context.Background(), s.id)
 			require.NoError(t, err)
 			require.Zero(t, store.puts.Load())
@@ -68,50 +84,52 @@ func TestSplitWriterCaptureAndUnknownReplySettlement(t *testing.T) {
 			s.mu.Lock()
 			setComponentTestHistory(s, []byte("new exact history"))
 			s.mu.Unlock()
-			require.ErrorIs(t, s.persistSnapshotMode(context.Background(), true), sessionstore.ErrTransient)
-			require.NotNil(t, s.componentPending)
-			if v2 {
-				require.True(t, s.snapshotWriteInFlight, "unknown write retains admission/export reservation")
-			}
-			pending := s.componentPending
+			before := s.worker.metrics.snapshotDebitBytes.Load()
+			require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointRequired), sessionstore.ErrTransient)
+			require.Equal(t, before, s.worker.metrics.snapshotDebitBytes.Load(), "an unknown reply cannot debit")
 			published, err := store.Memory.ReadComponents(context.Background(), s.id)
 			require.NoError(t, err)
-			require.True(t, equalComponentBytes(pending.components, published.Components))
-			require.NoError(t, s.settleComponentWrite(context.Background()))
-			require.Nil(t, s.componentPending)
-			require.Equal(t, published.Metadata, *s.componentMetadata)
 			require.NotEqual(t, first.Metadata.References[2], published.Metadata.References[2])
-			if v2 {
-				var transport transportComponent
-				require.NoError(t, unmarshalComponent(published.Components.Transport, componentTransport, &transport))
-				var host v2Envelope
-				require.NoError(t, json.Unmarshal(transport.Host, &host))
-				saved, err := host.Quota.balance()
-				require.NoError(t, err)
-				s.snapshotBudgetMu.Lock()
-				local := s.snapshotBytesBudget.tokens
-				s.snapshotBudgetMu.Unlock()
-				require.InDelta(t, float64(saved), local, 1, "the same exact charge is persisted and debited once")
+			// Settle the pending write, then stop recapture at the store clock.
+			// Repeating this must leave both the real bucket and acknowledgement alone.
+			store.clockFailure = true
+			for range 2 {
+				require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointRequired), errCheckpointClockProbe)
+				require.EqualValues(t, 2, checkpointObservation(s).observations.Successes)
 			}
-			history := append([]byte(nil), published.Components.History...)
-			require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+			var settledBalance uint64
+			if v2 {
+				settledBalance = storedCheckpointQuota(t, store, s.id)
+			}
+			debit := store.committedBytes.Load()
+			store.clockFailure = false
+			require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
+			if v2 {
+				charge := store.committedBytes.Load() - debit
+				require.Equal(t, settledBalance-charge, storedCheckpointQuota(t, store, s.id), "next fixed-clock write must spend exactly one charge from the settled bucket")
+			}
+			require.EqualValues(t, 3, checkpointObservation(s).observations.Successes)
+			if v2 {
+				require.Equal(t, store.committedBytes.Load(), s.worker.metrics.snapshotDebitBytes.Load(), "each actual commit is acknowledged and charged once")
+			}
 			progress, err := store.Memory.ReadComponents(context.Background(), s.id)
 			require.NoError(t, err)
 			require.Equal(t, published.Metadata.References[2], progress.Metadata.References[2])
-			require.Equal(t, history, progress.Components.History)
+			require.Equal(t, published.Components.History, progress.Components.History)
 		})
 	}
 }
+
 func TestSplitCaptureAdmissionRefusesEveryChangingEncoding(t *testing.T) {
 	store := sessionstore.NewMemory()
 	s := componentWriterSession(t, store, false)
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	first, err := store.ReadComponents(context.Background(), s.id)
 	require.NoError(t, err)
 	s.mu.Lock()
 	setComponentTestHistory(s, bytes.Repeat([]byte{1}, 8448))
 	s.mu.Unlock()
-	require.ErrorIs(t, s.persistSnapshotMode(context.Background(), true), agentv2.ErrCapacity)
+	require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointRequired), agentv2.ErrCapacity)
 	current, err := store.ReadComponents(context.Background(), s.id)
 	require.NoError(t, err)
 	require.Equal(t, first.Metadata, current.Metadata)
@@ -119,7 +137,7 @@ func TestSplitCaptureAdmissionRefusesEveryChangingEncoding(t *testing.T) {
 	setComponentTestHistory(s, []byte("small"))
 	s.state.Audio.ID = string(bytes.Repeat([]byte{'x'}, 8192))
 	s.mu.Unlock()
-	require.ErrorIs(t, s.persistSnapshotMode(context.Background(), true), agentv2.ErrCapacity)
+	require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointRequired), agentv2.ErrCapacity)
 	current, err = store.ReadComponents(context.Background(), s.id)
 	require.NoError(t, err)
 	require.Equal(t, first.Metadata, current.Metadata)
@@ -127,7 +145,7 @@ func TestSplitCaptureAdmissionRefusesEveryChangingEncoding(t *testing.T) {
 func TestSplitRecoveryEnvelopePreservesHistoryAndFormatWithAdmissionOff(t *testing.T) {
 	store := sessionstore.NewMemory()
 	s := componentWriterSession(t, store, false)
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	tuple, err := store.ReadComponents(context.Background(), s.id)
 	require.NoError(t, err)
 	raw, metadata, err := ReadRecoverySnapshot(context.Background(), store, s.id)
@@ -139,15 +157,14 @@ func TestSplitRecoveryEnvelopePreservesHistoryAndFormatWithAdmissionOff(t *testi
 	require.Equal(t, s.componentHistory, snap.split.history)
 	target, _ := dtlsCheckpointSession(t, store, *snap, s.lease, ResumeOptions{Kind: agent.Takeover})
 	require.False(t, target.worker.cfg.SplitCheckpoints)
-	target.restoreComponentMode(snap)
-	require.NoError(t, target.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, target.checkpoint.restore(checkpointRestore{snapshot: snap}))
+	require.NoError(t, target.checkpoint.persist(context.Background(), checkpointRequired))
 	restored, err := store.ReadComponents(context.Background(), s.id)
 	require.NoError(t, err)
 	require.Equal(t, tuple.Components.Work, restored.Components.Work)
 	require.Equal(t, tuple.Components.History, restored.Components.History)
 	require.Zero(t, target.worker.cfg.Agent.MaxStateBytes-agent.DefaultMaxStateBytes)
-	exported := snapshot{Version: target.state.Version, State: target.state, DTLSConnection: snap.DTLSConnection, split: target.componentExportState()}
-	wire, err := json.Marshal(exported)
+	wire, err := target.checkpoint.capture(checkpointExact, nil)
 	require.NoError(t, err)
 	require.True(t, IsComponentSnapshot(wire))
 	decoded, err := decodeSnapshot(wire)
@@ -215,7 +232,7 @@ func TestSplitDTLSGuardUsesCommittedTuple(t *testing.T) {
 	}()
 	s.componentMode = true
 	setComponentTestHistory(s, []byte("history survives the guarded cut"))
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	seen := map[[8]byte]bool{}
 	for range 64 {
 		_, err := s.dtlsConn.Write([]byte("tail"))
@@ -235,8 +252,8 @@ func TestSplitDTLSGuardUsesCommittedTuple(t *testing.T) {
 	snap, err := decodeSnapshot(raw)
 	require.NoError(t, err)
 	target, output := dtlsCheckpointSession(t, store, *snap, lease, ResumeOptions{Kind: agent.Takeover})
-	target.restoreComponentMode(snap)
-	require.NoError(t, target.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, target.checkpoint.restore(checkpointRestore{snapshot: snap}))
+	require.NoError(t, target.checkpoint.persist(context.Background(), checkpointRequired))
 	for range 64 {
 		_, err := target.dtlsConn.Write([]byte("after takeover"))
 		require.NoError(t, err)
@@ -252,9 +269,8 @@ func TestSplitDTLSGuardUsesCommittedTuple(t *testing.T) {
 func TestSplitExactAdoptionBeforeFirstPublication(t *testing.T) {
 	store := sessionstore.NewMemory()
 	s := componentWriterSession(t, store, false)
-	require.Nil(t, s.componentMetadata)
-	require.NoError(t, s.prepareComponentAdoption(context.Background()))
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, s.checkpoint.prepareAdoption(context.Background()))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	tuple, err := store.ReadComponents(context.Background(), s.id)
 	require.NoError(t, err)
 	_, history, err := assembleSessionComponents(sessionComponents(tuple.Components), tuple.Metadata.StateVersion)
@@ -265,13 +281,12 @@ func TestSplitExactAdoptionBeforeFirstPublication(t *testing.T) {
 func TestSplitUnknownWriteSettlementFencesOldOwner(t *testing.T) {
 	store := &componentReplyStore{Memory: sessionstore.NewMemory()}
 	s := componentWriterSession(t, store, false)
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	store.unknown.Store(true)
-	require.ErrorIs(t, s.persistSnapshotMode(context.Background(), true), sessionstore.ErrTransient)
-	require.NotNil(t, s.componentPending)
+	require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointRequired), sessionstore.ErrTransient)
 	_, err := store.Transfer(context.Background(), s.lease, netip.MustParseAddrPort("127.0.0.1:10001"), time.Hour)
 	require.NoError(t, err)
-	require.ErrorIs(t, s.persistSnapshotMode(context.Background(), true), sessionstore.ErrLeaseLost)
+	require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointRequired), sessionstore.ErrLeaseLost)
 	require.True(t, s.fenced.Load())
 	require.ErrorIs(t, s.ctx.Err(), context.Canceled)
 }

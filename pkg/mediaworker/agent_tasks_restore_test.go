@@ -172,7 +172,7 @@ func TestTaskPreparedTasksReserveSlots(t *testing.T) {
 		}
 	}
 	s.mu.Lock()
-	s.durableAgent = cloneAgentState(s.state.Agent)
+	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))
 	s.mu.Unlock()
 	s.launchTasks()
 	for i, task := range s.agent.v2.tasks {
