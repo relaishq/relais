@@ -63,12 +63,12 @@ func TestRetainedPlannedMoveKeepsHoldAndExactExport(t *testing.T) {
 	require.False(t, a.runs(id))
 	require.Empty(t, hold.releases, "exported source must not receive released packets")
 	source := p.workers["a"]
-	pending := source.pending[id]
+	pending := pendingRecovery(p, source, id)
 	require.NotNil(t, pending)
-	p.takeover(ctx, source, pending.lease, time.Now())
+	p.recovery.recover(ctx, source, *pending, time.Now())
 	require.True(t, b.runs(id), "final export needs no crash counter margin")
 	require.Equal(t, []netip.AddrPort{b.addr}, hold.releases)
-	require.Empty(t, source.pending)
+	require.Empty(t, recoveryWork(p, source))
 	status, err := p.Status(ctx)
 	require.NoError(t, err)
 	require.Len(t, status.Calls, 1)
@@ -105,16 +105,16 @@ func TestDeathDetectionContinuesDuringPlannedRetry(t *testing.T) {
 	require.NoError(t, err)
 	remaining, _, err := p.Create(ctx, "offer", "a")
 	require.NoError(t, err)
-	original, err := p.store.Get(ctx, planned)
-	require.NoError(t, err)
-	candidate, err := p.store.Transfer(ctx, original, baseB.addr, time.Minute)
-	require.NoError(t, err)
-	// Both are valid exported snapshots; only the remaining session is stale.
 	remainingLease, err := p.store.Get(ctx, remaining)
 	require.NoError(t, err)
 	require.NoError(t, p.store.PutState(ctx, remainingLease, takeoverSnapshot(t, remaining, 0)))
 	source := p.workers["a"]
-	source.pending = map[string]*takeoverState{planned: {lease: original, candidate: &candidate, planned: true, plannedState: takeoverSnapshot(t, planned, 0), routed: a.addr, excluded: map[netip.AddrPort]bool{a.addr: true}, attemptLimit: 3}}
+	p.workers["a"].worker = &exportingWorker{fakeWorker: a}
+	base := p.store
+	p.store = &retainedMoveStore{Store: base}
+	_, err = p.Move(ctx, planned, "b")
+	require.Error(t, err)
+	p.store = base
 	gate := &gatedPlannedRead{Store: p.store, id: planned, entered: make(chan struct{}), release: make(chan struct{})}
 	p.store = gate
 	p.config.DeadAfter = 80 * time.Millisecond
@@ -199,13 +199,13 @@ func TestLostRetainedMoveReleasesRelayHold(t *testing.T) {
 	require.NoError(t, <-acked)
 	require.Equal(t, 1, r.Stats().Holds)
 	source := p.workers["a"]
-	pending := source.pending[id]
+	pending := pendingRecovery(p, source, id)
 	require.NotNil(t, pending)
 	p.workers["b"].observation.markDraining()
-	p.takeover(ctx, source, pending.lease, time.Now())
+	p.recovery.recover(ctx, source, *pending, time.Now())
 	require.Zero(t, r.Stats().Holds, "loss frees MaxHeldSessions without waiting 30 seconds")
 	require.Zero(t, r.Stats().HoldTimeouts)
-	require.Empty(t, source.pending)
+	require.Empty(t, recoveryWork(p, source))
 	_, err = store.Get(ctx, id)
 	require.ErrorIs(t, err, sessionstore.ErrEnded)
 }
@@ -253,12 +253,12 @@ func TestUncertainRollbackAfterFailedRouteRetriesActualSource(t *testing.T) {
 	require.False(t, a.runs(id))
 	require.Equal(t, a.addr, routes.route)
 	source := p.workers["a"]
-	pending := source.pending[id]
+	pending := pendingRecovery(p, source, id)
 	require.NotNil(t, pending)
-	p.retryPlannedMoves(ctx, source, time.Now())
+	settleRecovery(t, p, source, id)
 	require.True(t, a.runs(id), "retry resumes the source after its reverse tenure is adopted")
 	require.Equal(t, a.addr, routes.route)
-	require.Empty(t, source.pending)
+	require.Empty(t, recoveryWork(p, source))
 	status, err := p.Status(ctx)
 	require.NoError(t, err)
 	require.Len(t, status.Calls, 1)

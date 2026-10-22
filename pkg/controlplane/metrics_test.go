@@ -62,7 +62,7 @@ func TestControlMetricsCountTerminalTakeoverLoss(t *testing.T) {
 	require.NoError(t, err)
 	lease, err := p.store.Get(context.Background(), id)
 	require.NoError(t, err)
-	p.takeover(context.Background(), p.workers["a"], lease, time.Now()) // missing snapshot
+	p.recovery.recover(context.Background(), p.workers["a"], lease, time.Now()) // missing snapshot
 	body := planeMetricsBody(p)
 	require.Contains(t, body, "relais_control_takeovers_total 0\n")
 	require.Contains(t, body, "relais_control_takeover_errors_total 1\n")
@@ -91,9 +91,9 @@ func TestControlMetricsCountRetainedMoveCompletion(t *testing.T) {
 	_, err = p.Move(ctx, id, "b")
 	require.Error(t, err)
 	source := p.workers["a"]
-	pending := source.pending[id]
+	pending := pendingRecovery(p, source, id)
 	require.NotNil(t, pending)
-	p.takeover(ctx, source, pending.lease, time.Now())
+	p.recovery.recover(ctx, source, *pending, time.Now())
 	body := planeMetricsBody(p)
 	require.Contains(t, body, "relais_control_moves_total 1\n")
 	require.Contains(t, body, "relais_control_move_errors_total 1\n")
@@ -227,11 +227,11 @@ func TestControlMetricsRetainedUncertainExportCountsOnlyTerminalMove(t *testing.
 			require.Error(t, err)
 			require.Contains(t, planeMetricsBody(p), "relais_control_move_errors_total 0\n", "pending recovery has no terminal outcome")
 			source := p.workers["a"]
-			pending := source.pending[id]
+			pending := pendingRecovery(p, source, id)
 			require.NotNil(t, pending)
 			store.fail = false
-			p.takeover(ctx, source, pending.lease, time.Now())
-			require.Empty(t, source.pending)
+			p.recovery.recover(ctx, source, *pending, time.Now())
+			require.Empty(t, recoveryWork(p, source))
 			moves, failures := 0, 1
 			if outcome == "success" {
 				moves, failures = 1, 0
@@ -272,10 +272,7 @@ func TestControlMetricsRecoveryOutcomeSurvivesHistoryEviction(t *testing.T) {
 				time.Sleep(5 * time.Millisecond)
 			}
 			source := p.workers["a"]
-			c := p.calls[id]
-			c.mu.Lock()
-			outcome := p.takeoverLocked(ctx, source, c, lease, time.Now())
-			c.mu.Unlock()
+			outcome := p.recovery.recover(ctx, source, lease, time.Now())
 			// Simulate other calls completing before the caller consumes the
 			// returned outcome. Its accounting must survive status eviction.
 			p.mu.Lock()
@@ -387,7 +384,7 @@ func TestControlMetricsRetainedSourceResumeKeepsLegacyAccounting(t *testing.T) {
 	p.store = &reverseReplyLostStore{retainedMoveStore: &retainedMoveStore{Store: p.store}, source: a.addr}
 	_, err = p.Move(ctx, id, "b")
 	require.Error(t, err)
-	p.retryPlannedMoves(ctx, p.workers["a"], time.Now())
+	settleRecovery(t, p, p.workers["a"], id)
 	status, err := p.Status(ctx)
 	require.NoError(t, err)
 	require.Len(t, status.Calls, 1)

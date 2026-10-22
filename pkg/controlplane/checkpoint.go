@@ -23,7 +23,8 @@ type checkpointDecision struct {
 	reserve          uint32
 }
 
-func (p *Plane) checkpointDecision(ctx context.Context, id string, state []byte, outage time.Duration, tupleMetadata ...*sessionstore.Checkpoint) (checkpointDecision, error) {
+func (m *moveRecovery) checkpointDecision(ctx context.Context, id string, state []byte, outage time.Duration, tupleMetadata ...*sessionstore.Checkpoint) (checkpointDecision, error) {
+	p := m.plane
 	// A concurrent replacement must never date older bytes with newer metadata.
 	started := time.Now()
 	var checkpoint sessionstore.Checkpoint

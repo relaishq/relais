@@ -136,12 +136,12 @@ func TestCheckpointReplayValidatesOneReadBeforeFiltering(t *testing.T) {
 	p.store = store
 	source := p.workers["a"]
 	expireObservedWorker(t, source)
-	p.takeover(ctx, source, lease, time.Now())
+	p.recovery.recover(ctx, source, lease, time.Now())
 	require.Empty(t, r.prepared, "a superseded checkpoint must not fix the replay filter")
 	require.Empty(t, p.recentTakeovers(), "metadata mismatch is retried")
 	lease, err = store.Get(ctx, id)
 	require.NoError(t, err)
-	p.takeover(ctx, source, lease, time.Now())
+	p.recovery.recover(ctx, source, lease, time.Now())
 	require.Equal(t, 2, store.reads, "one blob read per attempt")
 	require.Equal(t, []map[uint32]uint64{{42: 20}}, r.prepared)
 	inbound, err := mediaworker.SnapshotInboundIndexes(store.validated)
@@ -187,27 +187,27 @@ func TestCheckpointReplayTerminalFailuresDiscardBeforeRelease(t *testing.T) {
 				now := time.Now()
 				p.store = &checkpointClockStore{Store: p.store, checkpoint: sessionstore.Checkpoint{Now: now, StoredAt: now.Add(-4 * time.Second), Age: 4 * time.Second}}
 			}
-			if failure == "no-target" {
-				p.workers["b"].observation.markDraining()
-			}
+
 			source := p.workers["a"]
 			expireObservedWorker(t, source)
 			// A terminal retry finds an allocated gate. Forget must discard it
 			// before a legacy release can send queued input to the failed leg.
 			r.gated = true
-			source.pending = map[string]*takeoverState{id: {call: p.calls[id], lease: lease, routed: lease.Worker, held: true,
-				replayPlan: &relay.ReplayPlan{}, excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts}}
+			queueUncertainExport(t, p, id)
+			if failure == "no-target" {
+				p.workers["b"].observation.markDraining()
+			}
 			if failure == "vanished-lease" {
 				_, err = p.store.Renew(ctx, lease, time.Millisecond)
 				require.NoError(t, err)
 				time.Sleep(5 * time.Millisecond)
 			}
-			p.takeover(ctx, source, lease, time.Now())
+			p.recovery.recover(ctx, source, lease, time.Now())
 			require.True(t, r.forgotten)
 			require.False(t, r.gated)
 			require.Zero(t, r.sentOnLoss, "terminal cleanup must not flush input to the failed target")
 			require.Empty(t, p.calls)
-			require.Empty(t, source.pending)
+			require.Empty(t, recoveryWork(p, source))
 			require.Len(t, p.recentTakeovers(), 1)
 			require.True(t, p.recentTakeovers()[0].Lost)
 			if failure == "envelope" {
@@ -265,7 +265,7 @@ func TestCheckpointReplayRetryCannotShrinkDuplicationWindow(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, p.store.PutState(ctx, lease, state))
 	expireObservedWorker(t, p.workers["a"])
-	p.takeover(ctx, p.workers["a"], lease, time.Now())
+	p.recovery.recover(ctx, p.workers["a"], lease, time.Now())
 	events := p.recentTakeovers()
 	require.Len(t, events, 1)
 	require.False(t, events[0].Lost)
@@ -306,7 +306,7 @@ func TestCheckpointReplayLossRequestsWorkerKeyframe(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 			expireObservedWorker(t, p.workers["a"])
-			p.takeover(ctx, p.workers["a"], lease, time.Now())
+			p.recovery.recover(ctx, p.workers["a"], lease, time.Now())
 			require.True(t, target.opts.RelayReplay, "loss happens after adopting a complete plan")
 			require.Equal(t, 1, target.keyframes, "video recovery must not wait for receiver feedback")
 			require.Len(t, p.recentTakeovers(), 1)
@@ -329,13 +329,13 @@ func TestCheckpointReplayRecoveryFailureRemainsRetryable(t *testing.T) {
 	require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 	source := p.workers["a"]
 	expireObservedWorker(t, source)
-	p.takeover(ctx, source, lease, time.Now())
+	p.recovery.recover(ctx, source, lease, time.Now())
 	require.Empty(t, p.recentTakeovers(), "a failed recovery request cannot complete the takeover")
-	require.Len(t, source.pending, 1)
+	require.Len(t, recoveryWork(p, source), 1)
 	target.keyframeErr = nil
 	lease, err = p.store.Get(ctx, id)
 	require.NoError(t, err)
-	p.takeover(ctx, source, lease, time.Now())
+	p.recovery.recover(ctx, source, lease, time.Now())
 	require.Equal(t, 2, target.keyframes)
 	require.Len(t, p.recentTakeovers(), 1)
 	require.False(t, p.recentTakeovers()[0].Lost)
@@ -357,7 +357,7 @@ func TestCheckpointIncompleteReplayPlanRecovery(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, p.store.PutState(ctx, lease, replayCheckpointSnapshot(t, id, 10)))
 			expireObservedWorker(t, p.workers["a"])
-			p.takeover(ctx, p.workers["a"], lease, time.Now())
+			p.recovery.recover(ctx, p.workers["a"], lease, time.Now())
 			require.False(t, target.opts.RelayReplay, "incomplete input must not promise codec continuity")
 			require.Equal(t, !empty, target.opts.RelayInputReplay, "only retained media defers frame-cache/PLI recovery")
 			if empty {

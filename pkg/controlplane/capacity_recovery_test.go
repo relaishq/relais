@@ -22,14 +22,14 @@ func TestExportedMoveRecoveryUsesFullAlternate(t *testing.T) {
 			p.config.WorkerCallCap = 1
 			source, id, _, _, c := prepareFullPoolRecovery(t, p, retained)
 			require.Eventually(t, func() bool {
-				pending := source.pending[id]
+				pending := pendingRecovery(p, source, id)
 				if pending == nil {
 					return c.runs(id)
 				}
-				p.takeover(context.Background(), source, pending.lease, time.Now())
+				p.recovery.recover(context.Background(), source, *pending, time.Now())
 				return c.runs(id)
 			}, time.Second, 5*time.Millisecond)
-			require.Empty(t, source.pending)
+			require.Empty(t, recoveryWork(p, source))
 			status, err := p.Status(context.Background())
 			require.NoError(t, err)
 			require.Zero(t, status.LostCount)
@@ -50,10 +50,9 @@ func TestMoveBudgetRecoveryReconsidersRefusingWorkers(t *testing.T) {
 			p.config.WorkerCallCap = 1
 			source, id, a, b, c := prepareFullPoolRecovery(t, p, retained)
 			c.refuse.Store(true)
-			p.takeover(context.Background(), source, source.pending[id].lease, time.Now())
-			pending := source.pending[id]
+			p.recovery.recover(context.Background(), source, *pendingRecovery(p, source, id), time.Now())
+			pending := pendingRecovery(p, source, id)
 			require.NotNil(t, pending)
-			require.Empty(t, pending.budgetExcluded, "full alternates must not preserve old budget exclusions")
 			require.Greater(t, c.attempts.Load(), int64(0), "exported recovery may try an over-cap worker")
 			ready := a
 			if retained {
@@ -61,17 +60,17 @@ func TestMoveBudgetRecoveryReconsidersRefusingWorkers(t *testing.T) {
 			}
 			ready.refuse.Store(false)
 			require.Eventually(t, func() bool {
-				pending := source.pending[id]
+				pending := pendingRecovery(p, source, id)
 				if pending == nil {
 					return ready.runs(id)
 				}
-				p.takeover(context.Background(), source, pending.lease, time.Now())
+				p.recovery.recover(context.Background(), source, *pending, time.Now())
 				return ready.runs(id)
 			}, time.Second, 5*time.Millisecond)
 			status, err := p.Status(context.Background())
 			require.NoError(t, err)
 			require.Zero(t, status.LostCount)
-			require.Empty(t, source.pending)
+			require.Empty(t, recoveryWork(p, source))
 		})
 	}
 }
@@ -104,7 +103,7 @@ func prepareFullPoolRecovery(t *testing.T, p *Plane, retained bool) (*registrati
 		require.ErrorIs(t, err, mediaworker.ErrMoveBudget)
 	}
 	source := p.workers["a"]
-	require.NotNil(t, source.pending[id])
+	require.NotNil(t, pendingRecovery(p, source, id))
 	p.store = base
 	return source, id, aw, bw, cw
 }
@@ -113,10 +112,12 @@ func prepareFullPoolRecovery(t *testing.T, p *Plane, retained bool) (*registrati
 // the same bounded exclusion reset regardless of where the sentinel originated.
 type capacityListingStore struct {
 	sessionstore.Store
-	blocked bool
+	blocked  bool
+	listings int
 }
 
 func (s *capacityListingStore) ListByWorker(ctx context.Context, addr netip.AddrPort) ([]sessionstore.Lease, error) {
+	s.listings++
 	if s.blocked {
 		return nil, ErrAtCapacity
 	}
@@ -128,19 +129,20 @@ func TestMoveBudgetRecoveryBacksOffOnCapacityRefusal(t *testing.T) {
 	source, id, a, _, _ := prepareFullPoolRecovery(t, p, false)
 	store := &capacityListingStore{Store: p.store, blocked: true}
 	p.store = store
-	p.takeover(context.Background(), source, source.pending[id].lease, time.Now())
-	pending := source.pending[id]
+	p.recovery.recover(context.Background(), source, *pendingRecovery(p, source, id), time.Now())
+	pending := pendingRecovery(p, source, id)
 	require.NotNil(t, pending)
-	require.Empty(t, pending.budgetExcluded)
-	require.False(t, pending.budgetNext.IsZero())
+	before := store.listings
+	p.recovery.recover(context.Background(), source, *pending, time.Now())
+	require.Equal(t, before, store.listings, "backoff must prevent another capacity listing on the same tick")
 	store.blocked = false
 	a.refuse.Store(false)
 	require.Eventually(t, func() bool {
-		pending := source.pending[id]
+		pending := pendingRecovery(p, source, id)
 		if pending == nil {
 			return a.runs(id)
 		}
-		p.takeover(context.Background(), source, pending.lease, time.Now())
+		p.recovery.recover(context.Background(), source, *pending, time.Now())
 		return a.runs(id)
 	}, time.Second, 5*time.Millisecond)
 }

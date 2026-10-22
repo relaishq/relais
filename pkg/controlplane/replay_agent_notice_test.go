@@ -55,7 +55,7 @@ func TestAgentReplayNoticeMatchesDirectAndHTTP(t *testing.T) {
 				require.NoError(t, err)
 				require.NoError(t, p.store.PutState(ctx, lease, replayCheckpointSnapshot(t, id, 10)))
 				expireObservedWorker(t, p.workers["a"])
-				p.takeover(ctx, p.workers["a"], lease, time.Now())
+				p.recovery.recover(ctx, p.workers["a"], lease, time.Now())
 				require.Len(t, p.recentTakeovers(), 1)
 				var opts mediaworker.ResumeOptions
 				if remote {
