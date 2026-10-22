@@ -117,6 +117,8 @@ func (m acceptedEvents) accept(event agent.Event, mode eventMode, control *v2Env
 		if err != nil {
 			return err
 		}
+		// Validate the pre-callback task copy before preparing task effects.
+		// Submissions are serialized, so staged and live tasks agree at this point.
 		if err = s.validateAudioEffects(effects, event, base); err != nil {
 			return err
 		}

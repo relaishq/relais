@@ -123,7 +123,7 @@ func (*snapshotBudgetAgent) Save(context.Context) (agent.State, error) {
 }
 func (*snapshotBudgetAgent) Restore(context.Context, agent.State) error { return nil }
 
-func TestV2AudioEffectsValidateCopiedTasks(t *testing.T) {
+func TestV2LateCallbackMutationCannotChangeAcceptedState(t *testing.T) {
 	packets := [][]byte{{0xf8, 0xff, 0xfe}}
 	rig, runs := startAcceptedSpeech(t, agenthost.Bounds{}, packets)
 	original := rig.app.handle
