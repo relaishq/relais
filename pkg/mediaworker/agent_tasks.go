@@ -180,9 +180,9 @@ func (s *session) taskNow() time.Time {
 	return time.Now()
 }
 func (s *session) taskBudget(tasks []*localTask, appBytes int) error {
-	return s.taskBudgetWithRefusals(tasks, appBytes, s.agent.latest.V2.Capacity)
+	return s.taskBudgetWithRefusals(*s.agent.latest.V2, tasks, appBytes, s.agent.latest.V2.Capacity)
 }
-func (s *session) taskBudgetWithRefusals(tasks []*localTask, appBytes int, refusals []taskRefusal, projection ...playbackState) error {
+func (s *session) taskBudgetWithRefusals(basis v2Envelope, tasks []*localTask, appBytes int, refusals []taskRefusal, projection ...playbackState) error {
 	s.mu.Lock()
 	queueBytes := audioRefsBytes(s.agent.v2.playback.queue)
 	if len(projection) > 0 {
@@ -200,7 +200,7 @@ func (s *session) taskBudgetWithRefusals(tasks []*localTask, appBytes int, refus
 			n += int64(t.terminalBytes)
 		}
 	}
-	if err := s.taskMetadataBudget(intents, refusals, false, projection...); err != nil {
+	if err := s.taskMetadataBudget(basis, intents, refusals, false, projection...); err != nil {
 		return err
 	}
 	if n > int64(s.agent.v2.registration.Bounds.MaxMailboxBytes) {
@@ -208,11 +208,11 @@ func (s *session) taskBudgetWithRefusals(tasks []*localTask, appBytes int, refus
 	}
 	return s.reserveMoveBytes(n)
 }
-func (s *session) taskMetadataBudget(intents []taskIntent, refusals []taskRefusal, admission bool, projection ...playbackState) error {
-	return s.taskMetadataBudgetMode(intents, refusals, admission, false, projection...)
+func (s *session) taskMetadataBudget(basis v2Envelope, intents []taskIntent, refusals []taskRefusal, admission bool, projection ...playbackState) error {
+	return s.taskMetadataBudgetMode(basis, intents, refusals, admission, false, projection...)
 }
-func (s *session) taskMetadataBudgetMode(intents []taskIntent, refusals []taskRefusal, admission, withoutControl bool, projection ...playbackState) error {
-	envelope := *s.agent.latest.V2
+func (s *session) taskMetadataBudgetMode(basis v2Envelope, intents []taskIntent, refusals []taskRefusal, admission, withoutControl bool, projection ...playbackState) error {
+	envelope := basis
 	if withoutControl {
 		envelope.Controls = nil
 		envelope.ControlHigh = 0
@@ -252,164 +252,28 @@ func taskMetadataGuard(envelope v2Envelope) v2Envelope {
 	}
 	return envelope
 }
-func (s *session) taskAdmissionBudget(tasks []*localTask, appBytes int, refusals []taskRefusal, projection ...playbackState) error {
+func (s *session) taskAdmissionBudget(basis v2Envelope, tasks []*localTask, appBytes int, refusals []taskRefusal, projection ...playbackState) error {
 	intents := make([]taskIntent, len(tasks))
 	for i, t := range tasks {
 		intents[i] = t.intent
 	}
-	if err := s.taskMetadataBudget(intents, refusals, true, projection...); err != nil {
+	if err := s.taskMetadataBudget(basis, intents, refusals, true, projection...); err != nil {
 		return err
 	}
-	return s.taskBudgetWithRefusals(tasks, appBytes, refusals, projection...)
-}
-func (s *session) prepareTaskEffects(cause agent.Event, effects agent.Effects, base []*localTask, refusals []taskRefusal, projection ...playbackState) ([]*localTask, []agent.TaskResult, error) {
-	h := s.agent.v2
-	next := slices.Clone(base)
-	var refused []agent.TaskResult
-	steps := map[string]bool{}
-	pending := map[agent.TaskID]bool{}
-	for _, r := range refusals {
-		pending[r.ID] = true
-	}
-	now := s.taskNow()
-	// Reserve the complete callback's compact outcomes before admitting a
-	// task. Admission never evicts an already admitted task to fit refusals.
-	var anticipated []taskRefusal
-	for _, spec := range effects.StartTasks {
-		id := deriveTaskID(s.id, h.registration.Name, cause.ID, spec.Step)
-		if !pending[id] && !slices.ContainsFunc(base, func(t *localTask) bool { return t.intent.ID == id }) {
-			anticipated = append(anticipated, taskRefusal{ID: id, Turn: spec.Turn})
-		}
-	}
-	for _, spec := range effects.StartTasks {
-		if spec.Step == "" || spec.Kind == "" || spec.Timeout < 0 || steps[spec.Step] ||
-			(spec.Class != agent.ReadOnly && spec.Class != agent.SideEffecting) ||
-			(spec.Class == agent.SideEffecting && spec.Resume != agent.Retry && spec.Resume != agent.Abandon) ||
-			(spec.Resume != "" && spec.Resume != agent.Retry && spec.Resume != agent.Abandon) {
-			return nil, nil, fmt.Errorf("%w: invalid task specification or duplicate Step", agent.ErrIncompatibleAgent)
-		}
-		if h.registration.Tasks[spec.Kind] == nil {
-			return nil, nil, fmt.Errorf("%w: missing task handler %q", agent.ErrIncompatibleAgent, spec.Kind)
-		}
-		steps[spec.Step] = true
-		id := deriveTaskID(s.id, h.registration.Name, cause.ID, spec.Step)
-		anticipated = slices.DeleteFunc(anticipated, func(r taskRefusal) bool { return r.ID == id })
-		if pending[id] {
-			continue
-		}
-		capacity := agent.TaskResult{TaskID: id, Sequence: 1, Turn: spec.Turn, Outcome: agent.Capacity, Final: true, Detail: "task admission capacity"}
-		floor := s.agent.latest.V2.CancelFloor
-		if effects.CancelBefore != nil {
-			floor = max(floor, *effects.CancelBefore)
-		}
-		if spec.Turn < floor {
-			return nil, nil, fmt.Errorf("%w: task below cancellation turn floor", agent.ErrIncompatibleAgent)
-		}
-		if len(spec.Request) > h.registration.Bounds.MaxMailboxBytes || len(spec.Step)+len(spec.Kind) > h.registration.Bounds.MaxPendingBytes || (spec.Class == agent.SideEffecting && len(spec.Request) > h.registration.Bounds.MaxPendingBytes) {
-			refused = append(refused, capacity)
-			continue
-		}
-		digest := taskDigest(spec)
-		duplicate := false
-		for _, t := range next {
-			if t.intent.ID == id {
-				if !taskDigestMatches(spec, t.intent.Digest) {
-					return nil, nil, fmt.Errorf("%w: conflicting task arguments", agent.ErrIncompatibleAgent)
-				}
-				duplicate = true
-				break
-			}
-		}
-		if duplicate {
-			continue
-		}
-		intent := taskIntent{ID: id, Step: spec.Step, Kind: spec.Kind, Turn: spec.Turn, Class: spec.Class, Resume: spec.Resume, RequestLength: len(spec.Request), Digest: digest, Timeout: spec.Timeout, Phase: taskNever}
-		if cause.Kind == agent.AudioInput {
-			intent.InputCause = &taskCause{SSRC: cause.Input.Progress.SSRC, Index: cause.Input.Progress.Index}
-		}
-		if spec.Timeout > 0 {
-			intent.Deadline = now.Add(spec.Timeout)
-		}
-		if spec.Class == agent.SideEffecting {
-			intent.Request = spec.Request
-		}
-		t := &localTask{intent: intent, request: spec.Request}
-		t.terminalBytes = taskTerminalBytes(intent)
-		next = append(next, t)
-		guard := slices.Concat(refusals, anticipated)
-		for _, r := range refused {
-			guard = append(guard, taskRefusal{ID: r.TaskID, Turn: r.Turn})
-		}
-		if err := s.taskAdmissionBudget(next, s.agent.latest.V2.MoveOnlyLength, guard, projection...); err != nil {
-			if errors.Is(err, agent.ErrCapacity) || errors.Is(err, ErrMoveBudget) {
-				next = next[:len(next)-1]
-				refused = append(refused, capacity)
-				continue
-			}
-			return nil, nil, err
-		}
-		t.request = slices.Clone(t.request)
-		t.intent.Request = slices.Clone(t.intent.Request)
-	}
-	return next, refused, nil
+	return s.taskBudgetWithRefusals(basis, tasks, appBytes, refusals, projection...)
 }
 
-// uniqueTaskRefusals repairs old checkpoints without changing the first result.
-func uniqueTaskRefusals(in []taskRefusal) []taskRefusal {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]taskRefusal, 0, len(in))
-	seen := map[agent.TaskID]bool{}
-	for _, r := range in {
-		if !seen[r.ID] {
-			seen[r.ID] = true
-			out = append(out, r)
-		}
-	}
-	return out
-}
-func (s *session) fitTaskRefusals(_, tasks []*localTask, prior, refusals []taskRefusal, projection ...playbackState) ([]*localTask, []taskRefusal, error) {
-	intents := make([]taskIntent, len(tasks))
-	for i, t := range tasks {
-		intents[i] = t.intent
-	}
-	if err := s.taskMetadataBudget(intents, refusals, true, projection...); err == nil {
-		return tasks, refusals, nil
-	}
-	old := map[agent.TaskID]bool{}
-	for _, r := range prior {
-		old[r.ID] = true
-	}
-	var fresh []taskRefusal
-	for _, r := range refusals {
-		if !old[r.ID] {
-			fresh = append(fresh, r)
-		}
-	}
-	if err := s.taskMetadataBudget(nil, fresh, false, projection...); err != nil {
-		// Retained Control may delay this transaction, but must never turn a
-		// representable refusal-only callback into a terminal capacity failure.
-		// Preserve prior state and cursors; the actor retries after backpressure.
-		if s.agent.latest.V2.ControlHigh > 0 && s.taskMetadataBudgetMode(nil, fresh, false, true, projection...) == nil {
-			return nil, nil, errControlReceiptBackpressure
-		}
-		return nil, nil, fmt.Errorf("%w: callback task refusals exceed host metadata", agent.ErrCapacity)
-	}
-	return nil, nil, errTaskAdmissionBackpressure
-}
-
-func (s *session) publishTaskIntents() {
+func (s *session) publishTaskIntents(envelope *v2Envelope) {
 	h := s.agent.v2
-	s.agent.latest.V2.Tasks = nil
+	envelope.Tasks = nil
 	if len(h.tasks) > 0 {
-		s.agent.latest.V2.Tasks = make([]taskIntent, len(h.tasks))
+		envelope.Tasks = make([]taskIntent, len(h.tasks))
 	}
 	for i, t := range h.tasks {
-		s.agent.latest.V2.Tasks[i] = cloneTaskIntent(t.intent)
+		envelope.Tasks[i] = cloneTaskIntent(t.intent)
 	}
-	if len(s.agent.latest.V2.Controls) > 0 {
-		s.compactControlMetadata(s.agent.latest.V2, min(h.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes))
+	if len(envelope.Controls) > 0 {
+		s.compactControlMetadata(envelope, min(h.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes))
 	}
 }
 func cloneTaskIntent(t taskIntent) taskIntent { t.Request = slices.Clone(t.Request); return t }
@@ -422,48 +286,6 @@ func cloneTaskIntents(ts []taskIntent) []taskIntent {
 		out[i] = cloneTaskIntent(t)
 	}
 	return out
-}
-func (s *session) acceptTaskEffects(tasks []*localTask, effects agent.Effects) {
-	h := s.agent.v2
-	h.tasks = tasks
-	floor := s.agent.latest.V2.CancelFloor
-	if effects.CancelBefore != nil {
-		floor = max(floor, *effects.CancelBefore)
-	}
-	for _, t := range h.tasks {
-		if t.intent.Turn < floor && (!t.intent.Final || len(t.results) > 0) && t.intent.Phase != taskCanceled {
-			s.cancelTask(t)
-		}
-	}
-	for _, id := range effects.CancelTasks {
-		for _, t := range h.tasks {
-			if t.intent.ID == id && !t.intent.Final {
-				s.cancelTask(t)
-			}
-		}
-	}
-	s.publishTaskIntents()
-}
-func (s *session) cancelTask(t *localTask) {
-	if t.cancel != nil {
-		t.cancel()
-	}
-	t.attempt++ // fence all parked and late results from this attempt
-	t.launched = false
-	t.prepared = false
-	s.mu.Lock()
-	for _, r := range t.results {
-		delete(s.agent.v2.playback.payloads, audioKey{r.TaskID, r.Sequence})
-	}
-	s.mu.Unlock()
-	t.results = nil
-	t.mailboxBytes = 0
-	for _, r := range t.audio {
-		t.mailboxBytes += taskRetainedAudioBytes(r)
-	}
-	t.intent.Published = t.intent.Cursor
-	t.intent.Phase = taskCanceled
-	s.terminalTask(t, agent.Canceled, "")
 }
 func (s *session) terminalTask(t *localTask, outcome agent.Outcome, detail string) {
 	detail = taskDetail(detail)
@@ -487,7 +309,7 @@ func (s *session) retireTaskRequest(t *localTask) {
 }
 func (s *session) taskStateChanged() {
 	before := s.agent.latest.V2.Tasks
-	s.publishTaskIntents()
+	s.publishTaskIntents(s.agent.latest.V2)
 	if taskIntentsEqual(before, s.agent.latest.V2.Tasks) {
 		return
 	}
@@ -835,19 +657,19 @@ func (s *session) deliverTaskResult() (bool, error) {
 		// be mutated by an agent. Admission already bounded the payload.
 		result.Chunk = cloneChunk(result.Chunk)
 		id := agent.EventID("task/" + string(result.TaskID) + "/" + strconv.FormatUint(result.Sequence, 10))
-		if err := s.handleV2Event(agent.Event{ID: id, Kind: agent.TaskMessage, Result: &result}); err != nil {
+		if _, err := (acceptedEvents{s}).submit(agent.Event{ID: id, Kind: agent.TaskMessage, Result: &result}, eventLive); err != nil {
 			if errors.Is(err, errTaskAdmissionBackpressure) {
 				continue
 			}
 			return false, err
 		}
-		// handleV2Event commits the cursor and removes this exact mailbox entry
+		// submit commits the cursor and removes this exact mailbox entry
 		// atomically with application state, before publishing the pair.
 		return true, nil
 	}
 	if pending := s.agent.latest.V2.Capacity; len(pending) > 0 {
 		result := pending[0].result()
-		err := s.handleV2Event(agent.Event{ID: agent.EventID("task/" + string(result.TaskID) + "/1"), Kind: agent.TaskMessage, Result: &result})
+		_, err := (acceptedEvents{s}).submit(agent.Event{ID: agent.EventID("task/" + string(result.TaskID) + "/1"), Kind: agent.TaskMessage, Result: &result}, eventLive)
 		if errors.Is(err, errTaskAdmissionBackpressure) {
 			return false, nil
 		}
@@ -1126,7 +948,7 @@ func (s *session) v2AgentLoop() {
 		s.mu.Unlock()
 		if !paused {
 			if !s.agent.latest.V2.Started {
-				if err := s.handleV2Event(agent.Event{ID: agent.EventID("started/" + s.id), Kind: agent.Started}); err != nil && !errors.Is(err, errTaskAdmissionBackpressure) {
+				if _, err := (acceptedEvents{s}).submit(agent.Event{ID: agent.EventID("started/" + s.id), Kind: agent.Started}, eventLive); err != nil && !errors.Is(err, errTaskAdmissionBackpressure) {
 					s.agentFailed(err)
 					return
 				}
@@ -1171,7 +993,7 @@ func (s *session) v2AgentLoop() {
 				return
 			}
 		case request := <-h.controls:
-			receipt, err := s.processControl(request.message)
+			receipt, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &request.message}, eventLive)
 			request.done <- controlReply{receipt, err}
 			if err != nil && !controlRefusal(err) {
 				s.agentFailed(err)

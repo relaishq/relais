@@ -15,3 +15,9 @@ _Avoid_: Worker health check, ownership authority
 
 **Planned-move recovery**: The control plane's continuation of one call's transfer through rollback, confirmation or interruption, keeping ownership, media state and the relay hold together until the recipient runs or a terminal outcome is known. A confirmed live export remains distinct from checkpoint-based takeover.
 _Avoid_: Move retry helper, crash-only recovery
+
+## Accepted-event module
+
+**Accepted-event module**:
+The per-call authority for accepting one agent event with its application state, consumed input position and host effects as one complete local change. Local acceptance is distinct from a successful checkpoint.
+_Avoid_: Effect publisher (covers only part of the concept)

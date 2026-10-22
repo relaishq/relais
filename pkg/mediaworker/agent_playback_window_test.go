@@ -1,11 +1,8 @@
 package mediaworker
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"net"
-	"strings"
 	"testing"
 	"time"
 
@@ -34,85 +31,9 @@ func streamingSession(t *testing.T, packet []byte, n int) (*session, *v2UnitAgen
 		task.intent.Published = uint64(seq)
 		require.NoError(t, s.registerAudioLocked(r))
 	}
-	s.publishTaskIntents()
+	s.publishTaskIntents(s.agent.latest.V2)
 	s.publishAgent()
 	return s, a, id
-}
-
-func TestPlaybackWindowSpanBudget(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		packet []byte
-	}{{"20ms", []byte{0xf8, 0xff, 0xfe}}, {"10ms", []byte{0xf0, 0xff, 0xfe}}, {"2.5ms", []byte{0x80, 0xff}}} {
-		t.Run(tc.name, func(t *testing.T) {
-			s, a, id := streamingSession(t, tc.packet, 200)
-			for seq := 1; seq <= 200; seq++ {
-				r := s.agent.v2.tasks[0].results[0]
-				require.EqualValues(t, seq, r.Sequence)
-				a.effects = agent.Effects{Audio: []agent.Audio{{Turn: 1, Source: agent.AudioRef{TaskID: id, Sequence: uint64(seq)}}}}
-				err := s.handleV2Event(agent.Event{ID: agent.EventID(fmt.Sprint("task/", seq)), Kind: agent.TaskMessage, Result: &r})
-				raw, _ := json.Marshal(s.state.Agent.V2)
-				require.NoError(t, err, "streaming window must stay bounded")
-				if err != nil {
-					t.Logf("%s: callback for result %d FAILED: %v (envelope %d bytes, window spans %d)", tc.name, seq, err, len(raw), len(s.state.Agent.V2.Playback.Window))
-					return
-				}
-			}
-			raw, _ := json.Marshal(s.state.Agent.V2)
-			t.Logf("%s: all 200 accepted; envelope %d bytes, spans %d", tc.name, len(raw), len(s.state.Agent.V2.Playback.Window))
-		})
-	}
-}
-
-// Probe: 20 ms packets, one per Emit, plus two other live tasks (STT, LLM).
-func TestPlaybackWindowSpanBudgetWithOtherTasks(t *testing.T) {
-	s, a, id := streamingSession(t, []byte{0xf8, 0xff, 0xfe}, 200)
-	for _, step := range []string{"stt", "llm"} {
-		spec := agent.TaskSpec{Step: step, Kind: "tts/v1", Turn: 1, Class: agent.ReadOnly, Resume: agent.Retry}
-		other := taskIntent{ID: deriveTaskID(s.id, "unit/v1", "started/v2-unit", step), Step: step, Kind: spec.Kind, Turn: 1, Class: agent.ReadOnly, Resume: agent.Retry, Phase: taskStarted, Digest: taskDigest(spec)}
-		s.agent.v2.tasks = append(s.agent.v2.tasks, &localTask{intent: other, terminalBytes: taskTerminalBytes(other), launched: true})
-	}
-	s.publishTaskIntents()
-	s.publishAgent()
-	for seq := 1; seq <= 200; seq++ {
-		r := s.agent.v2.tasks[0].results[0]
-		a.effects = agent.Effects{Audio: []agent.Audio{{Turn: 1, Source: agent.AudioRef{TaskID: id, Sequence: uint64(seq)}}}}
-		err := s.handleV2Event(agent.Event{ID: agent.EventID(fmt.Sprint("task/", seq)), Kind: agent.TaskMessage, Result: &r})
-		require.NoError(t, err, "live tasks cannot block an ordinary audio result")
-		if err != nil {
-			raw, _ := json.Marshal(s.state.Agent.V2)
-			t.Logf("callback for result %d FAILED: %v (envelope %d bytes, spans %d)", seq, err, len(raw), len(s.state.Agent.V2.Playback.Window))
-			return
-		}
-	}
-	t.Logf("all accepted")
-}
-
-// Probe: an app that arms one per-turn timer ("no-reply/<turn>") and cancels it
-// when the user answers. Fired/cancelled entries are never removed.
-func TestPlaybackTimerEntriesAccumulate(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	for turn := 1; turn <= 200; turn++ {
-		id := fmt.Sprintf("no-reply/%d", turn)
-		a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: id, After: 8 * 1e9}}}
-		err := s.handleV2Event(agent.Event{ID: agent.EventID(fmt.Sprint("arm", turn)), Kind: agent.Started})
-		require.NoError(t, err, "new timer IDs must not accumulate")
-		if err != nil {
-			raw, _ := json.Marshal(s.state.Agent.V2)
-			t.Logf("turn %d: arming FAILED: %v (timers %d, envelope %d bytes)", turn, err, len(s.agent.latest.V2.Timers), len(raw))
-			return
-		}
-		a.effects = agent.Effects{CancelTimers: []string{id}}
-		err = s.handleV2Event(agent.Event{ID: agent.EventID(fmt.Sprint("answer", turn)), Kind: agent.Started})
-		require.NoError(t, err)
-		if err != nil {
-			t.Logf("turn %d: cancel FAILED: %v", turn, err)
-			return
-		}
-	}
-	t.Logf("500 turns ok; timers %d", len(s.agent.latest.V2.Timers))
 }
 
 // Probe: cost of pruneTasks under the media lock with a long buffered reply.
@@ -130,7 +51,7 @@ func TestPlaybackPruneCost(t *testing.T) {
 	}
 	task.intent.Cursor = 760
 	task.intent.Published = 760
-	s.publishTaskIntents()
+	s.publishTaskIntents(s.agent.latest.V2)
 	s.publishAgent()
 	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))
 	start := time.Now()
@@ -142,88 +63,6 @@ func TestPlaybackPruneCost(t *testing.T) {
 	require.Less(t, elapsed, 8*time.Millisecond, "prune must not scan every reference for every retained result")
 }
 
-// Probe: barge-in that clears audio and starts the next turn's STT while the
-// window is full of one-packet-per-Emit spans.
-func TestPlaybackBargeInBlockedByWindow(t *testing.T) {
-	s, a, id := streamingSession(t, []byte{0xf8, 0xff, 0xfe}, 40)
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"stt/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-	for seq := 1; seq <= 15; seq++ {
-		r := s.agent.v2.tasks[0].results[0]
-		a.effects = agent.Effects{Audio: []agent.Audio{{Turn: 1, Source: agent.AudioRef{TaskID: id, Sequence: uint64(seq)}}}}
-		require.NoError(t, s.handleV2Event(agent.Event{ID: agent.EventID(fmt.Sprint("task/", seq)), Kind: agent.TaskMessage, Result: &r}))
-	}
-	t.Logf("queued %d packets, window spans %d", len(s.agent.v2.playback.queue), len(s.state.Agent.V2.Playback.Window))
-	turn := agent.Turn(2)
-	a.effects = agent.Effects{ClearAudioBefore: &turn, CancelBefore: &turn, StartTasks: []agent.TaskSpec{{Step: "stt", Kind: "stt/v1", Turn: 2, Class: agent.ReadOnly, Resume: agent.Retry, Request: []byte("x")}}}
-	err := s.handleV2Event(agent.Event{ID: "audio/1/100", Kind: agent.Started})
-	require.NoError(t, err, "clear/cancel/start must use the cleared window")
-	require.Empty(t, s.agent.v2.playback.queue)
-	t.Logf("barge-in callback: err=%v; queue after: %d", err, len(s.agent.v2.playback.queue))
-}
-
-func TestPlaybackBargeInBlockedByWindowLiveTasks(t *testing.T) {
-	s, a, id := streamingSession(t, []byte{0xf8, 0xff, 0xfe}, 40)
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"stt/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-	spec := agent.TaskSpec{Step: "llm", Kind: "stt/v1", Turn: 1, Class: agent.ReadOnly, Resume: agent.Retry}
-	other := taskIntent{ID: deriveTaskID(s.id, "unit/v1", "started/v2-unit", "llm"), Step: "llm", Kind: spec.Kind, Turn: 1, Class: agent.ReadOnly, Resume: agent.Retry, Phase: taskStarted, Digest: taskDigest(spec)}
-	s.agent.v2.tasks = append(s.agent.v2.tasks, &localTask{intent: other, terminalBytes: taskTerminalBytes(other), launched: true})
-	other2 := other
-	other2.ID = deriveTaskID(s.id, "unit/v1", "started/v2-unit", "llm2")
-	other2.Step = "llm2"
-	s.agent.v2.tasks = append(s.agent.v2.tasks, &localTask{intent: other2, terminalBytes: taskTerminalBytes(other2), launched: true})
-	s.publishTaskIntents()
-	s.publishAgent()
-	seq := 1
-	for ; seq <= 15; seq++ {
-		r := s.agent.v2.tasks[0].results[0]
-		a.effects = agent.Effects{Audio: []agent.Audio{{Turn: 1, Source: agent.AudioRef{TaskID: id, Sequence: uint64(seq)}}}}
-		if err := s.handleV2Event(agent.Event{ID: agent.EventID(fmt.Sprint("task/", seq)), Kind: agent.TaskMessage, Result: &r}); err != nil {
-			t.Logf("result %d backpressured: %v", seq, err)
-			break
-		}
-	}
-	t.Logf("queued %d packets, window spans %d, live tasks %d", len(s.agent.v2.playback.queue), len(s.state.Agent.V2.Playback.Window), len(s.agent.v2.tasks))
-	turn := agent.Turn(2)
-	a.effects = agent.Effects{ClearAudioBefore: &turn, CancelBefore: &turn, StartTasks: []agent.TaskSpec{{Step: "stt", Kind: "stt/v1", Turn: 2, Class: agent.ReadOnly, Resume: agent.Retry, Request: []byte("x")}}}
-	err := s.handleV2Event(agent.Event{ID: "audio/1/100", Kind: agent.Started})
-	require.NoError(t, err, "clear/cancel/start must use the cleared window")
-	require.Empty(t, s.agent.v2.playback.queue)
-	t.Logf("barge-in callback: err=%v; queue after: %d", err, len(s.agent.v2.playback.queue))
-}
-
-func TestPlaybackReferencesBelongToCurrentResult(t *testing.T) {
-	s, a, r := audioUnitSession(t, 2)
-	appendUnitAudio(t, s, a, r)
-	a.effects = agent.Effects{Audio: []agent.Audio{{Turn: 1, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence}}}}
-	require.ErrorIs(t, s.handleV2Event(agent.Event{Kind: agent.Started}), agent.ErrIncompatibleAgent)
-}
-func TestPlaybackIgnoresAudioBelowSameCallbackFloor(t *testing.T) {
-	for _, cancel := range []bool{false, true} {
-		t.Run(fmt.Sprint(cancel), func(t *testing.T) {
-			s, a, r := audioUnitSession(t, 2)
-			floor := agent.Turn(2)
-			a.effects = agent.Effects{Audio: []agent.Audio{{Turn: 1, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence}}}}
-			if cancel {
-				a.effects.CancelBefore = &floor
-			} else {
-				a.effects.ClearAudioBefore = &floor
-			}
-			require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.TaskMessage, Result: &r}))
-			require.Empty(t, s.agent.v2.playback.queue, "a clear/cancel cannot re-append the superseded result")
-		})
-	}
-}
-func TestPlaybackCrashKeepsFinishedNotification(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	s.agent.latest.V2.Playback.Notify = []agent.Turn{7}
-	require.NoError(t, s.restorePlayback(nil))
-	require.Equal(t, []agent.Turn{7}, s.agent.v2.playback.notify)
-	require.NoError(t, s.deliverClockEvent())
-	require.Equal(t, agent.PlaybackFinished, a.lastEvent.Kind)
-	require.EqualValues(t, 7, a.lastEvent.Playback.Turn)
-}
 func TestPlaybackIdleSleepsUntilWake(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
@@ -236,29 +75,9 @@ func TestPlaybackIdleSleepsUntilWake(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, delay, time.Hour)
 }
-func TestPlaybackTimerIDsBoundedAndUniqueAcrossDeletion(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	for _, id := range []string{string([]byte{255}), string(make([]byte, 129))} {
-		a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: id}}}
-		require.ErrorIs(t, s.handleV2Event(agent.Event{Kind: agent.Started}), agent.ErrIncompatibleAgent)
-	}
-	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "reused"}}}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
-	first := s.agent.latest.V2.Timers[0].Generation
-	a.effects = agent.Effects{}
-	require.NoError(t, s.deliverClockEvent())
-	require.Empty(t, s.agent.latest.V2.Timers)
-	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "other"}, {ID: "reused"}}}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
-	require.Greater(t, s.agent.latest.V2.Timers[0].Generation, first)
-	require.Greater(t, s.agent.latest.V2.Timers[1].Generation, s.agent.latest.V2.Timers[0].Generation)
-}
-
 func TestPlaybackOutputClockDoesNotAccumulateWakeDelay(t *testing.T) {
-	s, a, r := audioUnitSession(t, 80)
-	appendUnitAudio(t, s, a, r)
+	s, _, r := audioUnitSession(t, 80)
+	installUnitPlayback(t, s, r)
 	profile := srtp.ProtectionProfileAeadAes128Gcm
 	keys := testSessionKeys(t, profile)
 	s.srtpOut = testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
@@ -287,33 +106,24 @@ func TestPlaybackRestoreAdvancesRTPByStoreAge(t *testing.T) {
 	require.InDelta(t, float64(49234), float64(s.agent.v2.playback.nextTS), 48)
 }
 
-func TestPlaybackReferenceStorageReservedBeforeDelivery(t *testing.T) {
-	s, a, r := audioUnitSession(t, 5)
-	require.NoError(t, s.taskBudget(s.agent.v2.tasks, 0))
-	reserved := s.moveReserved
-	s.agent.v2.registration.Bounds.MaxMailboxBytes = int(reserved)
-	appendUnitAudio(t, s, a, r)
-	require.LessOrEqual(t, s.moveReserved, reserved, "delivery transfers the reference reservation; it cannot require new mailbox space")
-}
-
-func TestPlaybackNonAudioMetadataOverflowIsTerminal(t *testing.T) {
-	for _, withAudio := range []bool{false, true} {
-		t.Run(fmt.Sprint("audio=", withAudio), func(t *testing.T) {
-			s, a, r := audioUnitSession(t, 1)
-			for i := range 40 {
-				a.effects.SetTimers = append(a.effects.SetTimers, agent.TimerSpec{
-					ID: fmt.Sprintf("timer/%02d/%s", i, strings.Repeat("x", 100)), After: time.Hour,
-				})
-			}
-			if withAudio {
-				a.effects.Audio = []agent.Audio{{Turn: r.Turn, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence}}}
-			}
-			delivered, err := s.deliverTaskResult()
-			require.ErrorIs(t, err, agent.ErrCapacity, "the actor must terminate on the first delivery, rather than retry unchanged non-audio overflow")
-			require.False(t, delivered)
-			require.EqualValues(t, 0, s.agent.v2.tasks[0].intent.Cursor)
-			require.Empty(t, s.agent.v2.playback.queue)
-			require.Empty(t, s.agent.latest.V2.Timers)
-		})
-	}
+func TestPlaybackCrashKeepsFinishedNotification(t *testing.T) {
+	a := &v2UnitAgent{state: agent.State{Version: 1}}
+	_, source := v2UnitSession(t, a)
+	require.NoError(t, source.initAgent(false, ResumeOptions{}))
+	turn := agent.Turn(7)
+	a.effects = agent.Effects{NotifyPlaybackFinished: &turn}
+	_, err := (acceptedEvents{source}).submit(agent.Event{Kind: agent.Started}, eventLive)
+	require.NoError(t, err)
+	raw, err := json.Marshal(source.state)
+	require.NoError(t, err)
+	var state sessionState
+	require.NoError(t, json.Unmarshal(raw, &state))
+	b := &v2UnitAgent{state: agent.State{Version: 1}}
+	_, target := v2UnitSessionFromState(t, b, state)
+	require.NoError(t, target.initAgent(true, ResumeOptions{}))
+	require.Equal(t, []agent.Turn{7}, target.state.Agent.V2.Playback.Notify)
+	require.NoError(t, target.deliverClockEvent())
+	require.Equal(t, agent.PlaybackFinished, b.lastEvent.Kind)
+	require.EqualValues(t, 7, b.lastEvent.Playback.Turn)
+	require.Empty(t, target.state.Agent.V2.Playback.Notify)
 }

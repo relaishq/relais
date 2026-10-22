@@ -144,9 +144,8 @@ func TestCheckpointHostPreflightClassifiesAudioGrowthAndPermanentOversize(t *tes
 	baseline, err := s.checkpoint.admit(checkpointAdmission{host: &checkpointHostPreflight{envelope: envelope}})
 	require.NoError(t, err)
 	effects := agent.Effects{Audio: []agent.Audio{{Turn: result.Turn, Source: agent.AudioRef{TaskID: result.TaskID, Sequence: result.Sequence}}}}
-	s.mu.Lock()
-	envelope.Playback = s.projectedPlaybackLocked(effects, agent.Event{}).snapshot()
-	s.mu.Unlock()
+	envelope.Playback = playbackState{Pending: 1, Length: len(result.Chunk.Audio.Packets[0]), Duration: 20 * time.Millisecond,
+		Window: []audioSpan{{Task: result.TaskID, Sequence: result.Sequence, Turn: result.Turn, Count: 1}}}
 	s.agent.v2.registration.Bounds.MaxPendingBytes = baseline + 1
 	_, err = s.checkpoint.admit(checkpointAdmission{host: &checkpointHostPreflight{envelope: envelope, effects: &effects}})
 	require.ErrorIs(t, err, errTaskAdmissionBackpressure)

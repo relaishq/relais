@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/agenthost"
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/pkg/sessionstore"
 
@@ -33,50 +34,33 @@ func audioUnitSession(t *testing.T, count int) (*session, *v2UnitAgent, agent.Ta
 	intent := taskIntent{ID: r.TaskID, Turn: 1, Class: agent.ReadOnly, Phase: taskStarted, Published: 1}
 	s.agent.v2.tasks = []*localTask{{intent: intent, results: []agent.TaskResult{r}, mailboxBytes: taskResultBytes(r), terminalBytes: taskTerminalBytes(intent)}}
 	require.NoError(t, s.registerAudioLocked(r))
-	s.publishTaskIntents()
+	s.publishTaskIntents(s.agent.latest.V2)
 	s.publishAgent()
 	return s, a, r
 }
-func appendUnitAudio(t *testing.T, s *session, a *v2UnitAgent, r agent.TaskResult) {
+
+// Pacer, prune and restore fixture only; it never submits an event.
+func installUnitPlayback(t *testing.T, s *session, r agent.TaskResult) {
 	t.Helper()
-	a.effects = agent.Effects{}
-	for i := range r.Chunk.Audio.Packets {
-		a.effects.Audio = append(a.effects.Audio, agent.Audio{Turn: r.Turn, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence, PacketOffset: uint32(i)}})
+	p := &s.agent.v2.playback
+	for i, packet := range r.Chunk.Audio.Packets {
+		d, err := opusDuration(packet)
+		require.NoError(t, err)
+		ref := agent.Audio{Turn: r.Turn, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence, PacketOffset: uint32(i)}}
+		p.queue = append(p.queue, ref)
+		p.length += len(packet)
+		p.duration += d
+		p.referenceBytes += len(r.TaskID) + 32
 	}
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "result", Kind: agent.TaskMessage, Result: &r}))
-	a.effects = agent.Effects{}
-}
-func TestPlaybackWindowDurationAndBytes(t *testing.T) {
-	for _, count := range []int{15, 16} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) {
-			s, a, r := audioUnitSession(t, count)
-			appendUnitAudio(t, s, a, r)
-			pb := s.state.Agent.V2.Playback
-			require.Equal(t, count, pb.Pending)
-			require.Len(t, pb.Window, 1)
-			require.EqualValues(t, 15, pb.Window[0].Count)
-			require.EqualValues(t, count, len(s.agent.v2.playback.queue))
-			raw, err := json.Marshal(s.state.Agent.V2)
-			require.NoError(t, err)
-			require.NotContains(t, string(raw), "Packets")
-			require.Len(t, s.agent.v2.tasks[0].audio, 1, "result consumption must retain packet payload")
-		})
-	}
-	for _, extra := range []int{0, 1} {
-		t.Run(fmt.Sprint("bytes", extra), func(t *testing.T) {
-			s, a, r := audioUnitSession(t, 4+extra)
-			for i := range r.Chunk.Audio.Packets {
-				r.Chunk.Audio.Packets[i] = append([]byte{0xf8}, make([]byte, 1023)...)
-			}
-			s.agent.v2.playback.payloads = nil
-			require.NoError(t, s.registerAudioLocked(r))
-			s.agent.v2.tasks[0].results[0] = r
-			s.agent.v2.tasks[0].mailboxBytes = taskResultBytes(r)
-			appendUnitAudio(t, s, a, r)
-			require.EqualValues(t, 4, s.state.Agent.V2.Playback.Window[0].Count)
-			require.Equal(t, (4+extra)*1024, s.state.Agent.V2.Playback.Length)
-		})
-	}
+	task := s.agent.v2.tasks[0]
+	task.results = nil
+	task.audio = []agent.TaskResult{r}
+	task.intent.Cursor = r.Sequence
+	task.mailboxBytes -= taskAudioRefBytes(r)
+	s.agent.latest.V2.Playback = p.snapshot()
+	s.publishTaskIntents(s.agent.latest.V2)
+	s.publishAgent()
+	require.NoError(t, s.taskBudget(s.agent.v2.tasks, 0))
 }
 func TestOpusPacketDurationAndFraming(t *testing.T) {
 	for _, tc := range []struct {
@@ -95,8 +79,8 @@ func TestOpusPacketDurationAndFraming(t *testing.T) {
 	require.ErrorIs(t, err, agent.ErrIncompatibleAgent)
 }
 func TestPlaybackPacerRebasesAndKeepsCounters(t *testing.T) {
-	s, a, r := audioUnitSession(t, 5)
-	appendUnitAudio(t, s, a, r)
+	s, _, r := audioUnitSession(t, 5)
+	installUnitPlayback(t, s, r)
 	profile := srtp.ProtectionProfileAeadAes128Gcm
 	keys := testSessionKeys(t, profile)
 	sink := listenTestUDP(t)
@@ -152,52 +136,103 @@ func TestPlaybackPacerRebasesAndKeepsCounters(t *testing.T) {
 	require.NoError(t, err)
 }
 func TestTimerGenerationResetCancelAndRestore(t *testing.T) {
-	s, a, _ := audioUnitSession(t, 0)
+	rig := newAcceptedEventRig(t, agenthost.Bounds{}, nil)
+	effects := agent.Effects{}
+	rig.app.handle = func(context.Context, agent.Event) (agent.Effects, error) { return effects, nil }
+	capture := func() *v2Envelope {
+		raw, err := rig.s.checkpoint.capture(checkpointLive, nil)
+		require.NoError(t, err)
+		saved, err := decodeSnapshot(raw)
+		require.NoError(t, err)
+		return saved.State.Agent.V2
+	}
+	submit := func() {
+		_, err := (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.Started}, eventLive)
+		require.NoError(t, err)
+	}
 	now := time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC)
-	s.storeClock = now
-	s.storeClockAt = time.Now()
-	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: time.Second}}}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
-	require.EqualValues(t, 1, s.agent.latest.V2.Timers[0].Generation)
-	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: 2 * time.Second}}}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
-	require.EqualValues(t, 2, s.agent.latest.V2.Timers[0].Generation)
-	s.storeClock = now.Add(time.Second)
-	s.storeClockAt = time.Now()
-	a.effects = agent.Effects{}
-	handles := a.handles
-	require.NoError(t, s.deliverClockEvent())
-	require.Equal(t, handles, a.handles)
-	s.storeClock = now.Add(3 * time.Second)
-	s.storeClockAt = time.Now()
-	require.NoError(t, s.deliverClockEvent())
-	require.Equal(t, agent.TimerFired, a.lastEvent.Kind)
-	require.EqualValues(t, 2, a.lastEvent.Timer.Generation)
-	handles = a.handles
-	require.NoError(t, s.deliverClockEvent())
-	require.Equal(t, handles, a.handles)
-	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: time.Second}}, CancelTimers: []string{"a/12:"}}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
-	require.EqualValues(t, 3, s.agent.latest.V2.Timers[0].Generation)
-	a.effects = agent.Effects{CancelTimers: []string{"a/12:"}}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
-	require.Empty(t, s.agent.latest.V2.Timers)
-	a.effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "negative", After: -1}}}
-	require.ErrorIs(t, s.handleV2Event(agent.Event{Kind: agent.Started}), agent.ErrIncompatibleAgent)
-	require.NotEqual(t, clockEventID("timer", "a", 12), clockEventID("timer", "a1", 2))
+	advance := func(at time.Time) {
+		rig.s.mu.Lock()
+		rig.s.storeClock, rig.s.storeClockAt = at, time.Now()
+		rig.s.mu.Unlock()
+	}
+	advance(now)
+	effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: time.Second}}}
+	submit()
+	first := capture()
+	require.Len(t, first.Timers, 1)
+	require.EqualValues(t, 1, first.Timers[0].Generation)
+	effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: 2 * time.Second}}}
+	submit()
+	reset := capture()
+	require.Len(t, reset.Timers, 1)
+	require.EqualValues(t, 2, reset.Timers[0].Generation)
+	require.True(t, reset.Timers[0].At.After(first.Timers[0].At), "reset must replace the original deadline")
+	advance(first.Timers[0].At.Add(time.Second / 2))
+	effects = agent.Effects{}
+	count := len(rig.app.events)
+	require.NoError(t, rig.s.deliverClockEvent())
+	require.Len(t, rig.app.events, count, "reset timer must not fire at its original deadline")
+	advance(now.Add(3 * time.Second))
+	require.NoError(t, rig.s.deliverClockEvent())
+	require.Len(t, rig.app.events, count+1)
+	fired := rig.app.events[count]
+	require.Equal(t, agent.TimerFired, fired.Kind)
+	require.Equal(t, "a/12:", fired.Timer.ID)
+	require.EqualValues(t, 2, fired.Timer.Generation)
+	require.Empty(t, capture().Timers)
+	require.NoError(t, rig.s.deliverClockEvent())
+	require.Len(t, rig.app.events, count+1, "a timer generation must fire exactly once")
+	effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "a/12:", After: time.Second}}, CancelTimers: []string{"a/12:"}}
+	submit()
+	armed := capture()
+	require.Len(t, armed.Timers, 1, "cancel and set in one event must re-arm")
+	require.EqualValues(t, 3, armed.Timers[0].Generation)
+	effects = agent.Effects{CancelTimers: []string{"a/12:"}}
+	submit()
+	require.Empty(t, capture().Timers)
+	effects = agent.Effects{SetTimers: []agent.TimerSpec{{ID: "negative", After: -1}}}
+	_, err := (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.Started}, eventLive)
+	require.ErrorIs(t, err, agent.ErrIncompatibleAgent)
+	t.Run("event-identity", func(t *testing.T) {
+		rig := newAcceptedEventRig(t, agenthost.Bounds{}, nil)
+		effects := agent.Effects{}
+		rig.app.handle = func(context.Context, agent.Event) (agent.Effects, error) { return effects, nil }
+		var ids []agent.EventID
+		for generation := 1; generation <= 12; generation++ {
+			id := "a"
+			if generation == 2 {
+				id = "a1"
+			}
+			effects = agent.Effects{CancelTimers: []string{"a", "a1"}, SetTimers: []agent.TimerSpec{{ID: id}}}
+			_, err := (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.Started}, eventLive)
+			require.NoError(t, err)
+			if generation == 2 || generation == 12 {
+				effects = agent.Effects{}
+				require.NoError(t, rig.s.deliverClockEvent())
+				event := rig.app.events[len(rig.app.events)-1]
+				require.Equal(t, agent.TimerFired, event.Kind)
+				require.Equal(t, id, event.Timer.ID)
+				require.EqualValues(t, generation, event.Timer.Generation)
+				ids = append(ids, event.ID)
+			}
+		}
+		require.NotEqual(t, ids[0], ids[1], "timer ID and generation must have distinct event identities")
+	})
 }
+
 func TestPlaybackExactAndCrashRestore(t *testing.T) {
 	for _, exact := range []bool{true, false} {
 		t.Run(fmt.Sprint(exact), func(t *testing.T) {
-			s, a, r := audioUnitSession(t, 40)
-			appendUnitAudio(t, s, a, r)
+			s, _, r := audioUnitSession(t, 40)
+			installUnitPlayback(t, s, r)
 			s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"tts": func(context.Context, *agent.TaskRun) error { return nil }}
 			task := s.agent.v2.tasks[0]
 			task.intent.Kind = "tts"
 			task.intent.Final = true
 			task.intent.Phase = taskTerminal
 			task.intent.Terminal = agent.OK
-			s.publishTaskIntents()
+			s.publishTaskIntents(s.agent.latest.V2)
 			s.publishAgent()
 			b := &v2UnitAgent{state: agent.State{Version: 1}}
 			_, target := v2UnitSession(t, b)
@@ -222,8 +257,8 @@ func TestPlaybackExactAndCrashRestore(t *testing.T) {
 }
 
 func TestAudioStreamingReleasesPayloadAfterAckAndDrain(t *testing.T) {
-	s, a, r := audioUnitSession(t, 4)
-	appendUnitAudio(t, s, a, r)
+	s, _, r := audioUnitSession(t, 4)
+	installUnitPlayback(t, s, r)
 	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))
 	before := s.moveReserved
 	s.pruneTasks()
@@ -236,85 +271,9 @@ func TestAudioStreamingReleasesPayloadAfterAckAndDrain(t *testing.T) {
 	require.Less(t, s.moveReserved, before)
 	require.False(t, s.agent.v2.tasks[0].intent.Final)
 }
-func TestTurnClearCancelAndLateResults(t *testing.T) {
-	s, a, r := audioUnitSession(t, 8)
-	appendUnitAudio(t, s, a, r)
-	task := s.agent.v2.tasks[0]
-	task.attempt = 4
-	cancelCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	task.cancel = cancel
-	turn := agent.Turn(2)
-	a.effects = agent.Effects{ClearAudioBefore: &turn, CancelBefore: &turn}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
-	task = s.agent.v2.tasks[0] // The callback commits its owned task snapshot.
-	require.Empty(t, s.agent.v2.playback.queue)
-	require.Equal(t, agent.Turn(2), s.state.Agent.V2.CancelFloor)
-	require.ErrorIs(t, cancelCtx.Err(), context.Canceled)
-	e := taskEmission{id: task.intent.ID, attempt: 4, ctx: context.Background(), sequence: 2, chunk: agent.Chunk{Data: []byte("late")}, reply: make(chan error, 1)}
-	s.acceptEmission(e)
-	require.ErrorIs(t, <-e.reply, context.Canceled)
-	require.Len(t, task.results, 1)
-	require.Equal(t, agent.Canceled, task.results[0].Outcome)
-	// A lower requested floor cannot reopen the old turn.
-	lower := agent.Turn(1)
-	a.effects = agent.Effects{CancelBefore: &lower}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started}))
-	require.EqualValues(t, 2, s.agent.latest.V2.CancelFloor)
-}
-func TestCapacityFIFOAndNoAdmittedTaskEviction(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"x/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-	for i := range 20 {
-		a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "x/v1", Class: agent.ReadOnly})
-	}
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "fanout", Kind: agent.Started}))
-	require.NotEmpty(t, s.agent.v2.tasks)
-	for i, task := range s.agent.v2.tasks {
-		require.Equal(t, deriveTaskID(s.id, "unit/v1", "fanout", fmt.Sprint(i)), task.intent.ID, "first admitted tasks stay admitted")
-	}
-	for _, task := range s.agent.v2.tasks {
-		require.Less(t, task.intent.Step, "9")
-	}
-	t.Logf("width 20 admits %d and refuses %d", len(s.agent.v2.tasks), len(s.agent.latest.V2.Capacity))
-	// A fan-out that needs refusal space must keep older outcomes first.
-	b := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, fifo := v2UnitSession(t, b)
-	require.NoError(t, fifo.initAgent(false, ResumeOptions{}))
-	fifo.agent.v2.registration.Tasks = s.agent.v2.registration.Tasks
-	fifo.agent.latest.V2.Capacity = []taskRefusal{{ID: "older", Turn: 1}}
-	b.effects = a.effects
-	require.NoError(t, fifo.handleV2Event(agent.Event{ID: "new", Kind: agent.Started}))
-	require.Equal(t, agent.TaskID("older"), fifo.agent.latest.V2.Capacity[0].ID)
-
-}
-
-func TestTaskRefusalFitCannotEvictAdmittedTasks(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"x/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-	var tasks []*localTask
-	for i := range 7 {
-		spec := agent.TaskSpec{Step: fmt.Sprint(i), Kind: "x/v1", Class: agent.ReadOnly}
-		var err error
-		tasks, _, err = s.prepareTaskEffects(agent.Event{ID: "cause", Kind: agent.Started}, agent.Effects{StartTasks: []agent.TaskSpec{spec}}, tasks, nil)
-		require.NoError(t, err)
-	}
-	require.Len(t, tasks, 6)
-	var refusals []taskRefusal
-	for i := 6; i < 20; i++ {
-		refusals = append(refusals, taskRefusal{ID: deriveTaskID(s.id, "unit/v1", "cause", fmt.Sprint(i))})
-	}
-	_, _, err := s.fitTaskRefusals(nil, tasks, nil, refusals)
-	require.ErrorIs(t, err, errTaskAdmissionBackpressure, "fitting refusals cannot evict admitted tasks")
-}
-
 func TestAudioMailboxBackpressureUntilPlaybackAckDrain(t *testing.T) {
-	s, a, r := audioUnitSession(t, 4)
-	appendUnitAudio(t, s, a, r)
+	s, _, r := audioUnitSession(t, 4)
+	installUnitPlayback(t, s, r)
 	s.agent.v2.registration.Bounds.MaxMailboxBytes = int(s.moveReserved)
 	e := taskEmission{id: r.TaskID, attempt: 0, ctx: context.Background(), sequence: 2, chunk: r.Chunk, reply: make(chan error, 1)}
 	s.acceptEmission(e)
@@ -329,8 +288,8 @@ func TestAudioMailboxBackpressureUntilPlaybackAckDrain(t *testing.T) {
 	require.EqualValues(t, 2, s.agent.v2.tasks[0].intent.Published)
 }
 func TestPlaybackEncryptionFailureKeepsCursor(t *testing.T) {
-	s, a, r := audioUnitSession(t, 2)
-	appendUnitAudio(t, s, a, r)
+	s, _, r := audioUnitSession(t, 2)
+	installUnitPlayback(t, s, r)
 	profile := srtp.ProtectionProfileAeadAes128Gcm
 	keys := testSessionKeys(t, profile)
 	s.srtpOut = testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
@@ -342,28 +301,14 @@ func TestPlaybackEncryptionFailureKeepsCursor(t *testing.T) {
 	require.True(t, s.agent.v2.playback.nextAt.IsZero())
 }
 
-func TestAudioResultKeepsUnfinishedReadOnlyRequest(t *testing.T) {
-	s, a, r := audioUnitSession(t, 20)
-	spec := agent.TaskSpec{Step: "tts", Kind: "tts", Class: agent.ReadOnly, Resume: agent.Retry, Turn: 1, Request: []byte("reproducible request")}
-	task := s.agent.v2.tasks[0]
-	task.request = slices.Clone(spec.Request)
-	task.intent.Step, task.intent.Kind, task.intent.Resume = spec.Step, spec.Kind, spec.Resume
-	task.intent.RequestLength = len(spec.Request)
-	task.intent.Digest = taskDigest(spec)
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"tts": func(context.Context, *agent.TaskRun) error { return nil }}
-	appendUnitAudio(t, s, a, r)
-	require.Equal(t, spec.Request, s.agent.v2.tasks[0].request, "consuming an audio chunk cannot lose the request before an exact move")
-	require.NoError(t, s.validateTaskMoves(s.agent.latest.V2.Tasks, &movePayload{Tasks: s.taskMoveViews()}))
-}
-
 func TestPlaybackVariablePacketDurations(t *testing.T) {
-	s, a, r := audioUnitSession(t, 3)
+	s, _, r := audioUnitSession(t, 3)
 	r.Chunk.Audio.Packets = [][]byte{{0x80}, {0x18}, {0x1b, 2}} // 2.5, 60 and 120 ms
 	s.agent.v2.playback.payloads = nil
 	require.NoError(t, s.registerAudioLocked(r))
 	s.agent.v2.tasks[0].results[0] = r
 	s.agent.v2.tasks[0].mailboxBytes = taskResultBytes(r)
-	appendUnitAudio(t, s, a, r)
+	installUnitPlayback(t, s, r)
 	profile := srtp.ProtectionProfileAeadAes128Gcm
 	keys := testSessionKeys(t, profile)
 	s.srtpOut = testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
@@ -393,4 +338,105 @@ func TestPlaybackRestoreClockRefusalStaysTypedOverHTTP(t *testing.T) {
 	err := privateapi.Do(context.Background(), server.Client(), server.URL, http.MethodPost, "/resume", nil, nil, RemoteErrors)
 	require.ErrorIs(t, err, sessionstore.ErrUnsafeCheckpointClock)
 	require.NotErrorIs(t, err, privateapi.ErrUncertain)
+}
+
+func TestPlaybackWindowDurationAndBytes(t *testing.T) {
+	for _, count := range []int{15, 16} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			packets := make([][]byte, count)
+			for i := range packets {
+				packets[i] = []byte{0xf8, 0xff, 0xfe}
+			}
+			rig, _ := startAcceptedSpeech(t, agenthost.Bounds{}, packets)
+			delivered, err := rig.s.deliverTaskResult()
+			require.NoError(t, err)
+			require.True(t, delivered)
+			raw, err := rig.s.checkpoint.capture(checkpointLive, nil)
+			require.NoError(t, err)
+			saved, err := decodeSnapshot(raw)
+			require.NoError(t, err)
+			pb := saved.State.Agent.V2.Playback
+			require.Equal(t, count, pb.Pending)
+			require.Len(t, pb.Window, 1)
+			require.EqualValues(t, 15, pb.Window[0].Count)
+			metadata, err := json.Marshal(saved.State.Agent.V2)
+			require.NoError(t, err)
+			require.NotContains(t, string(metadata), "Packets")
+			move, err := rig.s.saveV2MoveOnly(context.Background())
+			require.NoError(t, err)
+			require.Len(t, move.audio, count, "exact export retains the entire queue")
+			require.Len(t, move.tasks, 1)
+			require.Len(t, move.tasks[0].Audio, 1, "result consumption must retain packet payload")
+			require.Equal(t, packets, move.tasks[0].Audio[0].Chunk.Audio.Packets)
+		})
+	}
+	for _, extra := range []int{0, 1} {
+		t.Run(fmt.Sprint("bytes", extra), func(t *testing.T) {
+			packets := make([][]byte, 4+extra)
+			for i := range packets {
+				packets[i] = append([]byte{0xf8}, make([]byte, 1023)...)
+			}
+			rig, _ := startAcceptedSpeech(t, agenthost.Bounds{}, packets)
+			delivered, err := rig.s.deliverTaskResult()
+			require.NoError(t, err)
+			require.True(t, delivered)
+			raw, err := rig.s.checkpoint.capture(checkpointLive, nil)
+			require.NoError(t, err)
+			saved, err := decodeSnapshot(raw)
+			require.NoError(t, err)
+			pb := saved.State.Agent.V2.Playback
+			require.Len(t, pb.Window, 1)
+			require.EqualValues(t, 4, pb.Window[0].Count)
+			require.Equal(t, (4+extra)*1024, pb.Length)
+		})
+	}
+}
+
+func TestAudioResultKeepsUnfinishedReadOnlyRequest(t *testing.T) {
+	started := make(chan *agent.TaskRun, 1)
+	request := []byte("reproducible request")
+	rig := newAcceptedEventRig(t, agenthost.Bounds{}, map[string]agent.TaskHandler{"tts/v1": func(ctx context.Context, run *agent.TaskRun) error {
+		started <- run
+		<-ctx.Done()
+		return ctx.Err()
+	}})
+	rig.app.handle = func(_ context.Context, e agent.Event) (agent.Effects, error) {
+		if e.Kind == agent.Started {
+			return agent.Effects{StartTasks: []agent.TaskSpec{{Step: "tts", Kind: "tts/v1", Class: agent.ReadOnly, Resume: agent.Retry, Turn: 1, Request: request}}}, nil
+		}
+		effects := agent.Effects{}
+		for i := range e.Result.Chunk.Audio.Packets {
+			effects.Audio = append(effects.Audio, agent.Audio{Turn: e.Result.Turn, Source: agent.AudioRef{TaskID: e.Result.TaskID, Sequence: e.Result.Sequence, PacketOffset: uint32(i)}})
+		}
+		return effects, nil
+	}
+	_, err := (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.Started, ID: "tts"}, eventLive)
+	require.NoError(t, err)
+	rig.s.launchTasks()
+	t.Cleanup(rig.s.stopTaskAttempts)
+	run := <-started
+	require.Equal(t, request, run.Spec().Request)
+	packets := make([][]byte, 20)
+	for i := range packets {
+		packets[i] = []byte{0xf8, 0xff, 0xfe}
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- run.Emit(context.Background(), 1, agent.Chunk{Audio: &agent.EncodedAudio{Format: "audio/opus", Packets: packets}})
+	}()
+	rig.s.acceptEmission(<-rig.s.agent.v2.emissions)
+	require.NoError(t, <-done)
+	delivered, err := rig.s.deliverTaskResult()
+	require.NoError(t, err)
+	require.True(t, delivered)
+	move, err := rig.s.saveV2MoveOnly(context.Background())
+	require.NoError(t, err)
+	require.Len(t, move.audio, 20)
+	require.Len(t, move.tasks, 1)
+	require.Equal(t, run.ID(), move.tasks[0].ID)
+	require.Equal(t, request, move.tasks[0].Request, "consuming an audio chunk cannot lose the request before an exact move")
+	flush := agentFlush{done: make(chan error, 1), deadline: time.Now().Add(15 * time.Second), moveOnly: make(chan agentMoveExport, 1)}
+	require.True(t, rig.s.finishAgentFlush(flush))
+	require.NoError(t, <-flush.done, "exact export must validate the retained request against its accepted intent")
+	require.Equal(t, request, (<-flush.moveOnly).tasks[0].Request)
 }

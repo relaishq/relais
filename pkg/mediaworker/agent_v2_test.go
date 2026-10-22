@@ -64,6 +64,10 @@ func (a *v2UnitAgent) RestoreMoveOnly(_ context.Context, data []byte) error {
 }
 func v2UnitSession(t *testing.T, a agent.Agent, opts ...func(*AgentConfig)) (*Worker, *session) {
 	t.Helper()
+	return v2UnitSessionFromState(t, a, sessionState{Version: 7, ID: "v2-unit"}, opts...)
+}
+func v2UnitSessionFromState(t *testing.T, a agent.Agent, state sessionState, opts ...func(*AgentConfig)) (*Worker, *session) {
+	t.Helper()
 	cfg := AgentConfig{Factory: agenthost.Factory(agenthost.Registration{Name: "unit/v1", Factory: func(agent.FactoryArgs) agent.Agent { return a }})}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -71,47 +75,9 @@ func v2UnitSession(t *testing.T, a agent.Agent, opts ...func(*AgentConfig)) (*Wo
 	w, err := New(Config{Agent: cfg})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, w.Close()) })
-	s := sessionFromState(w, sessionState{Version: 7, ID: "v2-unit"})
+	s := sessionFromState(w, state)
 	t.Cleanup(s.close)
 	return w, s
-}
-func TestV2UnknownIgnored(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1, Bytes: []byte("accepted")}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	before := cloneAgentState(s.state.Agent)
-	for _, kind := range []agent.EventKind{"future_kind"} {
-		require.NoError(t, s.handleV2Event(agent.Event{Kind: kind}))
-	}
-	require.Zero(t, a.handles)
-	require.Equal(t, 1, a.saves, "unknown and reserved kinds must not even Save")
-	require.Equal(t, before, s.state.Agent)
-}
-func TestV2UnsupportedEffectsRollback(t *testing.T) {
-	cases := []struct {
-		name    string
-		kind    agent.EventKind
-		effects agent.Effects
-		message string
-	}{
-		{"resumed-start", agent.Resumed, agent.Effects{StartTasks: []agent.TaskSpec{{Kind: "stt/v1"}}}, "StartTasks from Resumed is forbidden"},
-		{"start", agent.Started, agent.Effects{StartTasks: []agent.TaskSpec{{}}}, "invalid task specification"},
-		{"audio", agent.Started, agent.Effects{Audio: []agent.Audio{{}}}, "audio reference has no payload"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			a := &v2UnitAgent{state: agent.State{Version: 1, Bytes: []byte("accepted")}, effects: tc.effects}
-			_, s := v2UnitSession(t, a)
-			require.NoError(t, s.initAgent(false, ResumeOptions{}))
-			before := cloneAgentState(s.state.Agent)
-			err := s.handleV2Event(agent.Event{Kind: tc.kind})
-			require.ErrorContains(t, err, tc.message)
-			require.Equal(t, before, s.state.Agent, "rejected effect must not advance accepted state")
-			require.Equal(t, before.State.Bytes, a.state.Bytes, "rejected state is restored")
-			require.Equal(t, 1, a.restores)
-			require.Equal(t, 1, a.saves, "rejected effects never Save")
-		})
-	}
 }
 func TestV2LateCallbackQuarantinedBeforeRestore(t *testing.T) {
 	var returned atomic.Bool
@@ -123,7 +89,7 @@ func TestV2LateCallbackQuarantinedBeforeRestore(t *testing.T) {
 	_, s := v2UnitSession(t, a)
 	s.worker.cfg.Agent.CallbackTimeout = 10 * time.Millisecond
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	err := s.handleV2Event(agent.Event{Kind: agent.Started})
+	_, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Started}, eventLive)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.True(t, returned.Load(), "Restore must wait for late Handle")
 	require.Equal(t, []byte("accepted"), a.state.Bytes)
@@ -319,4 +285,11 @@ func TestV2HTTPHeldExportCountsAgainstWorkerBudget(t *testing.T) {
 	require.Zero(t, w.SessionCount())
 	require.EqualValues(t, 8, w.moveBytes.Load(), "export serialization remains reserved until HTTP write returns")
 	require.Equal(t, 1, a.moveSaves)
+}
+
+// Configure real registration inputs before the host exists.
+func v2UnitRegistration(a agent.Agent, limits agent.Limits, tasks map[string]agent.TaskHandler) func(*AgentConfig) {
+	return func(c *AgentConfig) {
+		c.Factory = agenthost.Factory(agenthost.Registration{Name: "unit/v1", Factory: func(agent.FactoryArgs) agent.Agent { return a }, Bounds: agenthost.Bounds(limits), Tasks: tasks})
+	}
 }

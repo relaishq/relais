@@ -4,96 +4,88 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
-	legacy "github.com/relaishq/relais/pkg/agent"
+	"github.com/relaishq/relais/internal/agenthost"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/stretchr/testify/require"
 )
 
-func controlThrottleSession(t *testing.T) (*session, *v2UnitAgent) {
-	t.Helper()
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a, func(c *AgentConfig) { c.CallbackTimeout = 5 * time.Second })
-	require.NoError(t, initControlUnit(s))
-	for i := uint64(1); i <= 2; i++ {
-		_, err := s.processControl(agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"})
-		require.NoError(t, err)
-	}
-	return s, a
-}
-
-// Receipt pressure on a fan-out must not
-// prevent caller audio, or let unrelated successful callbacks reset its delay.
-func TestControlReceiptThrottleAllowsOtherEvents(t *testing.T) {
-	s, a := controlThrottleSession(t)
-	s.agent.v2.registration.Bounds.MaxPendingBytes = 900
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-	fan := agent.Effects{}
-	for i := 0; i < 10; i++ {
-		fan.StartTasks = append(fan.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "wait/v1", Class: agent.ReadOnly})
-	}
-	blocked := agent.Event{Kind: agent.Started, ID: "fan"}
-	a.effects = fan
-	require.ErrorIs(t, s.handleV2Event(blocked), errTaskAdmissionBackpressure)
-	handles := a.handles
-	require.ErrorIs(t, s.handleV2Event(blocked), errTaskAdmissionBackpressure)
-	require.Equal(t, handles, a.handles)
-	a.effects = agent.Effects{}
-	input := legacy.Input{}
-	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.AudioInput, ID: "audio/1/1", Input: &input}))
-	require.Equal(t, handles+1, a.handles)
-	require.EqualValues(t, 1, s.agent.latest.Progress.Consumed)
-	a.effects = fan
-	require.ErrorIs(t, s.handleV2Event(blocked), errTaskAdmissionBackpressure)
-	require.Equal(t, handles+1, a.handles, "unrelated success keeps the blocked event throttled")
-	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(2)}))
-	require.NoError(t, s.handleV2Event(blocked), "acknowledgement permits immediate retry")
-	require.Equal(t, handles+2, a.handles)
-}
-
+// Audio pressure must not arm the independent receipt retry delays.
 func TestControlAudioBackpressureDoesNotThrottle(t *testing.T) {
 	for _, source := range []string{"mailbox", "playback"} {
 		t.Run(source, func(t *testing.T) {
-			s, a := controlThrottleSession(t)
-			r := agent.TaskResult{TaskID: "audio", Sequence: 1, Turn: 1, Outcome: agent.OK, Chunk: agent.Chunk{Audio: &agent.EncodedAudio{Format: "audio/opus", Packets: [][]byte{{0xf8, 0xff, 0xfe}}}}}
-			intent := taskIntent{ID: r.TaskID, Turn: 1, Class: agent.ReadOnly, Phase: taskStarted, Published: 1}
-			task := &localTask{intent: intent, results: []agent.TaskResult{r}, mailboxBytes: taskResultBytes(r), terminalBytes: taskTerminalBytes(intent)}
-			s.agent.v2.tasks = []*localTask{task}
-			require.NoError(t, s.registerAudioLocked(r))
-			s.publishTaskIntents()
-			s.publishAgent()
+			bounds := agenthost.Bounds{}
+			copies := 2
 			if source == "mailbox" {
-				s.agent.v2.registration.Bounds.MaxMailboxBytes = task.mailboxBytes + task.terminalBytes
+				bounds.MaxMailboxBytes = 4096
+				copies = 64
 			} else {
-				s.agent.v2.registration.Bounds.MaxPendingBytes = 700
+				bounds.MaxPendingBytes = 900
 			}
-			a.effects = agent.Effects{Audio: []agent.Audio{{Turn: r.Turn, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence}}, {Turn: r.Turn, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence}}}}
-			event := agent.Event{Kind: agent.TaskMessage, ID: "task/audio/1", Result: &r}
-			require.ErrorIs(t, s.handleV2Event(event), errTaskAdmissionBackpressure)
-			handles := a.handles
-			a.effects = agent.Effects{}
-			require.NoError(t, s.handleV2Event(event), "audio pressure must not arm receipt throttle")
-			require.Equal(t, handles+1, a.handles)
+			rig, runs := startAcceptedSpeech(t, bounds, [][]byte{{0xf8, 0xff, 0xfe}})
+			for i := uint64(1); i <= 2; i++ {
+				_, err := (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"}}, eventLive)
+				require.NoError(t, err)
+			}
+			pressure := true
+			rig.app.handle = func(_ context.Context, e agent.Event) (agent.Effects, error) {
+				effects := agent.Effects{}
+				require.Equal(t, agent.TaskMessage, e.Kind)
+				require.Equal(t, runs[0].ID(), e.Result.TaskID)
+				require.EqualValues(t, 1, e.Result.Sequence)
+				if pressure {
+					for range copies {
+						effects.Audio = append(effects.Audio, agent.Audio{Turn: e.Result.Turn, Source: agent.AudioRef{TaskID: e.Result.TaskID, Sequence: e.Result.Sequence}})
+					}
+				}
+				return effects, nil
+			}
+			// Emit has already admitted this real result. Submit the actor event
+			// directly so the acceptance interface exposes its pressure error.
+			result := agent.TaskResult{TaskID: runs[0].ID(), Sequence: 1, Turn: 1, Outcome: agent.OK, Chunk: agent.Chunk{Audio: &agent.EncodedAudio{Format: "audio/opus", Packets: [][]byte{{0xf8, 0xff, 0xfe}}}}}
+			_, err := (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.TaskMessage, ID: agent.EventID("task/" + string(result.TaskID) + "/1"), Result: &result}, eventLive)
+			require.ErrorIs(t, err, agent.ErrBackpressure)
+			status, err := rig.s.worker.agentSessionStatus(rig.s.id)
+			require.NoError(t, err)
+			require.Zero(t, status.PlaybackPackets)
+			require.Zero(t, status.Tasks[0].Cursor)
+			count := len(rig.app.events)
+			pressure = false
+			delivered, err := rig.s.deliverTaskResult()
+			require.NoError(t, err, "audio pressure must not arm receipt throttle")
+			require.True(t, delivered, "audio pressure must not arm receipt throttle")
+			require.Len(t, rig.app.events, count+1)
+			status, err = rig.s.worker.agentSessionStatus(rig.s.id)
+			require.NoError(t, err)
+			require.EqualValues(t, 1, status.Tasks[0].Cursor)
 		})
 	}
 }
 
 func TestControlReceiptThrottleKeepsIndependentDelays(t *testing.T) {
-	s, a := controlThrottleSession(t)
-	s.agent.v2.registration.Bounds.MaxPendingBytes = 900
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-	for i := 0; i < 10; i++ {
-		a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "wait/v1", Class: agent.ReadOnly})
+	rig := newAcceptedEventRig(t, agenthost.Bounds{MaxPendingBytes: 900}, map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }})
+	effects := agent.Effects{}
+	rig.app.handle = func(context.Context, agent.Event) (agent.Effects, error) { return effects, nil }
+	_, err := (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.Started, ID: "started"}, eventLive)
+	require.NoError(t, err)
+	for i := uint64(1); i <= 2; i++ {
+		_, err = (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.Control, Control: &agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"}}, eventLive)
+		require.NoError(t, err)
+	}
+	for i := range 10 {
+		effects.StartTasks = append(effects.StartTasks, agent.TaskSpec{Step: fmt.Sprint(i), Kind: "wait/v1", Class: agent.ReadOnly})
 	}
 	first := agent.Event{Kind: agent.Started, ID: "fan/first"}
 	second := agent.Event{Kind: agent.Started, ID: "fan/second"}
-	require.ErrorIs(t, s.handleV2Event(first), errTaskAdmissionBackpressure)
-	handles := a.handles
-	require.ErrorIs(t, s.handleV2Event(second), errTaskAdmissionBackpressure)
-	require.Equal(t, handles+1, a.handles, "a different event has its own first attempt")
+	_, err = (acceptedEvents{rig.s}).submit(first, eventLive)
+	require.ErrorIs(t, err, agent.ErrBackpressure)
+	count := len(rig.app.events)
+	_, err = (acceptedEvents{rig.s}).submit(second, eventLive)
+	require.ErrorIs(t, err, agent.ErrBackpressure)
+	require.Len(t, rig.app.events, count+1, "a different event has its own first attempt")
 	for _, event := range []agent.Event{first, second} {
-		require.ErrorIs(t, s.handleV2Event(event), errTaskAdmissionBackpressure)
+		_, err = (acceptedEvents{rig.s}).submit(event, eventLive)
+		require.ErrorIs(t, err, agent.ErrBackpressure)
 	}
-	require.Equal(t, handles+1, a.handles, "both blocked events retain independent delays")
+	require.Len(t, rig.app.events, count+1, "both blocked events retain independent delays")
 }

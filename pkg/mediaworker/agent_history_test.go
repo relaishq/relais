@@ -104,7 +104,8 @@ func TestSDKHistoryLimitRefusesPair(t *testing.T) {
 	require.ErrorIs(t, s.validateV2StateMetadata(agent.State{Version: 1, History: make([]byte, 9)}), agent.ErrHistoryTooLarge)
 	a.callback = func(context.Context) { a.state.History = []byte("too large") }
 	input := legacy.Input{Progress: legacy.Progress{SSRC: 42, Index: 7}}
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "input", Kind: agent.AudioInput, Input: &input}))
+	_, eventErr0 := (acceptedEvents{s}).submit(agent.Event{ID: "input", Kind: agent.AudioInput, Input: &input}, eventLive)
+	require.NoError(t, eventErr0)
 	require.Equal(t, []byte("prior"), s.state.Agent.History)
 	require.Equal(t, []byte("accepted"), s.state.Agent.State.Bytes)
 	require.Equal(t, []byte("prior"), a.state.History, "Restore rolls back both fields")
@@ -121,7 +122,8 @@ func TestSDKHistoryChurnRefusesBeforeAcceptance(t *testing.T) {
 	restoreCheckpointQuota(t, s, float64(limits.MaxBytes+17), now)
 	a.callback = func(context.Context) { a.state.History = bytes.Repeat([]byte{'b'}, 8192) }
 	input := legacy.Input{Progress: legacy.Progress{SSRC: 42, Index: 7}}
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "input", Kind: agent.AudioInput, Input: &input}))
+	_, eventErr1 := (acceptedEvents{s}).submit(agent.Event{ID: "input", Kind: agent.AudioInput, Input: &input}, eventLive)
+	require.NoError(t, eventErr1)
 	require.Equal(t, bytes.Repeat([]byte{'a'}, 8192), s.state.Agent.History)
 	require.Len(t, s.state.Agent.V2.Capacity, 1)
 	require.NoError(t, s.ctx.Err())
@@ -131,11 +133,13 @@ func TestSDKHistoryChurnRefusesBeforeAcceptance(t *testing.T) {
 	_, err := s.deliverTaskResult()
 	require.NoError(t, err)
 	require.Empty(t, s.state.Agent.V2.Capacity)
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "next-input", Kind: agent.AudioInput, Input: &input}))
+	_, eventErr2 := (acceptedEvents{s}).submit(agent.Event{ID: "next-input", Kind: agent.AudioInput, Input: &input}, eventLive)
+	require.NoError(t, eventErr2)
 	require.EqualValues(t, 2, s.state.Agent.Progress.Consumed)
 	restoreCheckpointQuota(t, s, float64(s.snapshotLimits().BurstBytes), s.taskNow())
 	a.callback = func(context.Context) { a.state.History = bytes.Repeat([]byte{'c'}, 8192) }
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "refilled-input", Kind: agent.AudioInput, Input: &input}))
+	_, eventErr3 := (acceptedEvents{s}).submit(agent.Event{ID: "refilled-input", Kind: agent.AudioInput, Input: &input}, eventLive)
+	require.NoError(t, eventErr3)
 	require.Equal(t, bytes.Repeat([]byte{'c'}, 8192), s.state.Agent.History)
 }
 

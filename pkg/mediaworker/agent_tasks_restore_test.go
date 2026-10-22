@@ -36,7 +36,7 @@ func TestTaskLostRequestExactRestore(t *testing.T) {
 			s.agent.latest.V2.Tasks = []taskIntent{intent}
 			// Crash restore (move == nil).
 			require.NoError(t, s.restoreTasks(nil))
-			s.publishTaskIntents()
+			s.publishTaskIntents(s.agent.latest.V2)
 			// Planned move export from this restored session.
 			move := &movePayload{Tasks: s.exportTasks()}
 			t.Logf("exported task: request=%d intent.RequestLength=%d", len(move.Tasks[0].Request), s.agent.latest.V2.Tasks[0].RequestLength)
@@ -81,7 +81,8 @@ func TestTaskEmptyRequestCrashRestore(t *testing.T) {
 			require.NoError(t, s.initAgent(false, ResumeOptions{}))
 			s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"test/v1": func(context.Context, *agent.TaskRun) error { return nil }}
 			a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "s", Kind: "test/v1", Class: class, Resume: agent.Retry, Request: []byte{}}}}
-			require.NoError(t, s.handleV2Event(agent.Event{ID: "started/x", Kind: agent.Started}))
+			_, eventErr0 := (acceptedEvents{s}).submit(agent.Event{ID: "started/x", Kind: agent.Started}, eventLive)
+			require.NoError(t, eventErr0)
 			data, err := json.Marshal(s.state.Agent)
 			require.NoError(t, err)
 			var decoded agentState
@@ -105,7 +106,8 @@ func TestTaskDetailExactRestore(t *testing.T) {
 	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"test/v1": func(context.Context, *agent.TaskRun) error { return nil }}
 	spec := agent.TaskSpec{Step: "llm", Kind: "test/v1", Class: agent.ReadOnly}
 	a.effects = agent.Effects{StartTasks: []agent.TaskSpec{spec}}
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "started/x", Kind: agent.Started}))
+	_, eventErr1 := (acceptedEvents{s}).submit(agent.Event{ID: "started/x", Kind: agent.Started}, eventLive)
+	require.NoError(t, eventErr1)
 	a.effects = agent.Effects{}
 	task := s.agent.v2.tasks[0]
 	task.attempt, task.launched = 1, true
@@ -190,7 +192,8 @@ func TestTaskExportMismatchIsDefinitiveBeforePause(t *testing.T) {
 	require.NoError(t, s.initAgent(false, ResumeOptions{}))
 	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"test/v1": func(context.Context, *agent.TaskRun) error { return nil }}
 	a.effects = agent.Effects{StartTasks: []agent.TaskSpec{{Step: "s", Kind: "test/v1", Class: agent.ReadOnly, Request: []byte("r")}}}
-	require.NoError(t, s.handleV2Event(agent.Event{ID: "cause", Kind: agent.Started}))
+	_, eventErr2 := (acceptedEvents{s}).submit(agent.Event{ID: "cause", Kind: agent.Started}, eventLive)
+	require.NoError(t, eventErr2)
 	s.agent.latest.V2.Tasks[0].RequestLength++
 	s.agent.queue <- agentInput{}
 	request := agentFlush{done: make(chan error, 1), deadline: time.Now().Add(time.Second), moveOnly: make(chan agentMoveExport, 1)}

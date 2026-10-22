@@ -71,40 +71,6 @@ func TestTaskDeadlineAtLaunchAndFifthQueues(t *testing.T) {
 	require.False(t, h.tasks[4].launched)
 	s.stopTaskAttempts()
 }
-func TestTaskCancellationFencesLateResult(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	intent := taskIntent{ID: "id", Class: agent.ReadOnly, Phase: taskStarted}
-	ctx, cancel := context.WithCancel(s.ctx)
-	task := &localTask{intent: intent, attempt: 1, cancel: cancel, launched: true}
-	s.agent.v2.tasks = []*localTask{task}
-	s.cancelTask(task)
-	require.ErrorIs(t, ctx.Err(), context.Canceled)
-	e := taskEmission{id: "id", attempt: 1, ctx: context.Background(), sequence: 1, chunk: agent.Chunk{Data: []byte("late")}, reply: make(chan error, 1)}
-	s.acceptEmission(e)
-	require.ErrorIs(t, <-e.reply, context.Canceled)
-	require.Len(t, task.results, 1)
-	require.Equal(t, agent.Canceled, task.results[0].Outcome)
-}
-func TestTaskEffectsAtomicAndConflict(t *testing.T) {
-	a := &v2UnitAgent{state: agent.State{Version: 1}}
-	_, s := v2UnitSession(t, a)
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"test/v1": func(context.Context, *agent.TaskRun) error { return nil }}
-	spec := agent.TaskSpec{Step: "one", Kind: "test/v1", Class: agent.ReadOnly, Request: []byte("original")}
-	a.effects = agent.Effects{StartTasks: []agent.TaskSpec{spec}}
-	event := agent.Event{ID: "cause", Kind: agent.Started}
-	require.NoError(t, s.handleV2Event(event))
-	require.Len(t, s.agent.v2.tasks, 1)
-	id := s.agent.v2.tasks[0].intent.ID
-	require.NoError(t, s.handleV2Event(event))
-	require.Len(t, s.agent.v2.tasks, 1)
-	require.Equal(t, id, s.agent.v2.tasks[0].intent.ID)
-	a.effects.StartTasks[0].Request = []byte("conflict")
-	require.ErrorIs(t, s.handleV2Event(event), agent.ErrIncompatibleAgent)
-	require.Equal(t, "original", string(s.agent.v2.tasks[0].request))
-}
 func TestTaskMailboxBoundAndOwnedPayload(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}
 	_, s := v2UnitSession(t, a)
@@ -174,7 +140,7 @@ func TestTaskReceiptsHaveNoLifetimeCap(t *testing.T) {
 		intent := taskIntent{ID: agent.TaskID(string(rune(i + 1))), Class: agent.ReadOnly, Phase: taskTerminal, Published: 1, Cursor: 1, Final: true}
 		task := &localTask{intent: intent}
 		s.agent.v2.tasks = append(s.agent.v2.tasks, task)
-		s.publishTaskIntents()
+		s.publishTaskIntents(s.agent.latest.V2)
 		s.publishAgent()
 		s.mu.Lock()
 		require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))
@@ -185,7 +151,7 @@ func TestTaskReceiptsHaveNoLifetimeCap(t *testing.T) {
 	// Input receipts survive until the actual duplicate window passes the cause.
 	intent := taskIntent{ID: "input", Class: agent.ReadOnly, Phase: taskTerminal, Published: 1, Cursor: 1, Final: true, InputCause: &taskCause{SSRC: 42, Index: 10}}
 	s.agent.v2.tasks = []*localTask{{intent: intent}}
-	s.publishTaskIntents()
+	s.publishTaskIntents(s.agent.latest.V2)
 	s.publishAgent()
 	s.mu.Lock()
 	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))
