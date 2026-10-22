@@ -204,6 +204,13 @@ func TestSplitUnknownWriteCountsOnceAndDebitsExactly(t *testing.T) {
 	require.ErrorIs(t, s.checkpoint.persist(ctx, checkpointRequired), errCheckpointClockProbe)
 	require.EqualValues(t, 2, checkpointObservation(s).observations.Successes)
 	require.Equal(t, charge, s.worker.metrics.snapshotDebitBytes.Load()-debitBefore, "repeated settlement cannot debit twice")
+	// The next persisted balance observes the real bucket after settlement.
+	// A metric-only check misses an omitted or duplicated bucket debit.
+	store.clockFailure = false
+	require.NoError(t, s.checkpoint.persist(ctx, checkpointRequired))
+	nextCharge := uint64(store.lastWritten + componentProtocolReserve)
+	require.Equal(t, saved-nextCharge, storedCheckpointQuota(t, store, s.id), "next fixed-clock write must spend exactly one charge from the settled bucket")
+
 }
 
 func TestSplitSaveAdmissionRejectsOversizeBeforePublication(t *testing.T) {

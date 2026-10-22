@@ -499,10 +499,7 @@ func (s *session) launchTasks() {
 	h := s.agent.v2
 	s.mu.Lock()
 	paused := s.agent.paused || s.worker.paused.Load() || s.fenced.Load() || s.ctx.Err() != nil
-	var durable []taskIntent
-	if s.checkpoint.progressLocked().hasAgent {
-		durable = s.checkpoint.progressLocked().tasks
-	}
+	durable := s.checkpoint.progress(checkpointProgressRequest{tasks: true}).tasks
 	s.mu.Unlock()
 	if paused {
 		return
@@ -600,15 +597,8 @@ func (s *session) launchTasks() {
 		t.attempt++
 		t.launched = true
 		if t.intent.Class == agent.SideEffecting {
-			witness := &AgentTaskLaunch{ID: t.intent.ID, Step: t.intent.Step, At: time.Now(), StoreAt: s.taskClockLocked(), Deadline: t.intent.Deadline, CheckpointAt: s.checkpoint.progressLocked().at}
-			if s.checkpoint.progressLocked().hasAgent {
-				for _, d := range s.checkpoint.progressLocked().tasks {
-					if d.ID == t.intent.ID && d.Digest == t.intent.Digest && d.Phase == taskStarted && !d.Final {
-						witness.Checkpointed = true
-						break
-					}
-				}
-			}
+			progress := s.checkpoint.progress(checkpointProgressRequest{grant: &t.intent})
+			witness := &AgentTaskLaunch{ID: t.intent.ID, Step: t.intent.Step, At: time.Now(), StoreAt: s.taskClockLocked(), Deadline: t.intent.Deadline, CheckpointAt: progress.at, Checkpointed: progress.taskGranted}
 			s.sideEffectLaunches++
 			s.lastTaskLaunch = witness
 		}
@@ -879,16 +869,7 @@ func (s *session) taskCheckpointPending() bool {
 		if t.Class != agent.SideEffecting || t.Phase != taskStarted || t.Final {
 			continue
 		}
-		granted := false
-		if s.checkpoint.progressLocked().hasAgent {
-			for _, d := range s.checkpoint.progressLocked().tasks {
-				if d.ID == t.ID && d.Digest == t.Digest && d.Phase == taskStarted && !d.Final {
-					granted = true
-					break
-				}
-			}
-		}
-		if !granted {
+		if !s.checkpoint.progress(checkpointProgressRequest{grant: &t}).taskGranted {
 			return true
 		}
 	}
@@ -1246,10 +1227,7 @@ func taskResultBytes(r agent.TaskResult) int {
 func (s *session) pruneTasks() {
 	h := s.agent.v2
 	s.mu.Lock()
-	var durable []taskIntent
-	if s.checkpoint.progressLocked().hasAgent {
-		durable = s.checkpoint.progressLocked().tasks
-	}
+	durable := s.checkpoint.progress(checkpointProgressRequest{tasks: true}).tasks
 	progress := s.state.Agent.Progress
 	received := maps.Clone(s.state.SRTP.Inbound)
 	liveAudio := make(map[audioKey]struct{}, len(h.playback.queue))

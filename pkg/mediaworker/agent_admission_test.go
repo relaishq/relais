@@ -170,7 +170,14 @@ func (a *canceledHistorySaveAgent) Save(ctx context.Context) (agent.State, error
 }
 func TestCanceledSaveRestoresHistoryReservation(t *testing.T) {
 	a := &canceledHistorySaveAgent{historyStateAgent: historyStateAgent{state: agent.State{Version: 1, History: []byte("aaaa")}}}
-	_, s := historyUnitSession(t, a, agent.Limits{})
+	store := &fixedCheckpointClockStore{Memory: sessionstore.NewMemory(), now: time.Now()}
+	s := componentWriterSession(t, store, true)
+	s.worker.cfg.SnapshotInterval = 100 * time.Millisecond
+	s.worker.cfg.Agent.Factory = agenthost.Factory(agenthost.Registration{Name: "cancel-history/v1", Factory: func(agent.FactoryArgs) agent.Agent { return a }})
+	s.state.Agent = agentState{}
+	require.NoError(t, s.initAgent(false, ResumeOptions{}))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
+	prior := cloneAgentState(s.state.Agent)
 	s.worker.cfg.Agent.CallbackTimeout = time.Second
 	a.contexts = make(chan context.Context, 1)
 	a.hold = s.mu.Lock
@@ -206,6 +213,26 @@ func TestCanceledSaveRestoresHistoryReservation(t *testing.T) {
 	require.Equal(t, []byte("aaaa"), a.state.History)
 	require.Equal(t, []byte("aaaa"), s.state.Agent.History)
 	require.NoError(t, s.ctx.Err())
+	// Bound the real writer after cancellation. A smaller hold would leave room
+	// for this tentative write; a hold for the tentative pair could spend it.
+	maximum := splitComponentBudgets(s.snapshotLimits().MaxBytes, 8192).Total
+	restoreCheckpointQuota(t, s, float64(maximum+s.snapshotLimits().MaxBytes), store.now.Add(time.Hour))
+	tentative := cloneAgentState(prior)
+	tentative.History = []byte("bbbb")
+	s.mu.Lock()
+	s.state.Agent = tentative
+	s.mu.Unlock()
+	require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointRequired), errCheckpointSkipped, "tentative pair cannot spend the prior pair's maximum rollback reservation")
+	s.mu.Lock()
+	s.state.Agent = cloneAgentState(prior)
+	s.mu.Unlock()
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired), "prior pair can spend its restored maximum reservation")
+	raw, _, err := ReadRecoverySnapshot(context.Background(), store, s.id)
+	require.NoError(t, err)
+	saved, err := decodeSnapshot(raw)
+	require.NoError(t, err)
+	require.Equal(t, prior.History, saved.State.Agent.History)
+
 }
 
 func TestBridgeLegacyBudgetRefusesV10AdoptionBeforeFactory(t *testing.T) {
@@ -386,4 +413,31 @@ func TestCheckpointSkipsDistinguishIntervalFromBudget(t *testing.T) {
 	require.Contains(t, metricsBody(s.worker), "relais_worker_agent_checkpoint_budget_skips_total 1\n")
 	require.Contains(t, metricsBody(s.worker), "relais_worker_agent_checkpoint_interval_skips_total 1\n")
 	require.Contains(t, metricsBody(s.worker), "relais_worker_agent_checkpoint_skips_total 2\n")
+}
+
+// Exercise the admission decision itself: a later writer cannot prove which
+// clock admission used. Opposite offsets catch both minted and withheld credit.
+func TestCheckpointAdmissionUsesStoreClockForHistoryCredit(t *testing.T) {
+	for _, offset := range []time.Duration{-time.Hour, time.Hour} {
+		t.Run(offset.String(), func(t *testing.T) {
+			store := &fixedCheckpointClockStore{Memory: sessionstore.NewMemory(), now: time.Now().Add(offset)}
+			s := checkpointModuleSession(t, store)
+			require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
+			prior := cloneAgentState(s.state.Agent)
+			candidate := cloneAgentState(prior)
+			candidate.History = []byte("new history")
+			anchor := store.now
+			if offset > 0 {
+				anchor = anchor.Add(-time.Second)
+			}
+			restoreCheckpointQuota(t, s, 1000, anchor)
+			_, err := s.checkpoint.admit(checkpointAdmission{candidate: candidate, prior: prior})
+			if offset < 0 {
+				require.ErrorIs(t, err, agent.ErrCapacity, "worker time must not mint an hour of history-admission credit")
+			} else {
+				require.NoError(t, err, "worker time must not withhold store-clock refill credit")
+			}
+			require.Equal(t, prior, s.state.Agent, "admission never publishes the candidate")
+		})
+	}
 }

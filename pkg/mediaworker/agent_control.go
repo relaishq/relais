@@ -239,7 +239,7 @@ func controlRefusal(err error) bool {
 func (s *session) processControl(m agent.ControlMessage) (agent.ControlReceipt, error) {
 	s.mu.Lock()
 	paused := s.agent.paused || s.fenced.Load() || s.ctx.Err() != nil
-	ack := s.checkpoint.progressLocked().controlAck
+	ack := s.checkpoint.progress(checkpointProgressRequest{}).controlAck
 	s.mu.Unlock()
 	if paused {
 		return agent.ControlReceipt{}, sessionstore.ErrLeaseLost
@@ -317,7 +317,7 @@ func (s *session) compactControlMetadata(e *v2Envelope, limit int) int {
 		return n
 	}
 	s.mu.Lock()
-	ack := s.checkpoint.progressLocked().controlAck
+	ack := s.checkpoint.progress(checkpointProgressRequest{}).controlAck
 	s.mu.Unlock()
 	count := 0
 	for count < len(e.Controls) && e.Controls[count].Sequence <= ack {
@@ -354,7 +354,7 @@ func controlReceiptRetryKey(event agent.Event) receiptRetryKey {
 }
 func (s *session) receiptEventThrottled(event agent.Event) bool {
 	s.mu.Lock()
-	ack := s.checkpoint.progressLocked().controlAck
+	ack := s.checkpoint.progress(checkpointProgressRequest{}).controlAck
 	s.mu.Unlock()
 	now := time.Now()
 	h := s.agent.v2
@@ -364,7 +364,7 @@ func (s *session) receiptEventThrottled(event agent.Event) bool {
 }
 func (s *session) throttleReceiptEvent(event agent.Event) {
 	s.mu.Lock()
-	ack := s.checkpoint.progressLocked().controlAck
+	ack := s.checkpoint.progress(checkpointProgressRequest{}).controlAck
 	s.mu.Unlock()
 	e, h := s.agent.latest.V2, s.agent.v2
 	if ack >= e.ControlHigh {

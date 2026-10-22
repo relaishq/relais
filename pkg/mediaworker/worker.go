@@ -440,9 +440,7 @@ func start(cfg Config, conn packetConn, localAddr netip.AddrPort) *Worker {
 				if s == nil {
 					return false
 				}
-				s.mu.Lock()
-				defer s.mu.Unlock()
-				return s.checkpoint.progressLocked().known
+				return s.checkpoint.progress(checkpointProgressRequest{readiness: true}).known
 			},
 		})
 	}

@@ -30,8 +30,9 @@ import (
 //
 // restore runs at the existing staged adoption points, before callbacks. Quota
 // restoration validates its store-clock domain and takes its own budget lock.
-// progressLocked and allowDTLSLocked require session.mu. Progress is an owned
-// projection; the outgoing DTLS decision adds no allocation or lock. request
+// progress requires session.mu except for a readiness-only read. Scalar reads
+// allocate nothing; tasks are copied only on request. allowDTLSLocked requires
+// session.mu and adds no allocation or lock. request
 // coalesces wakeups, run uses the session lifetime, and wait joins a writer only
 // after the caller cancels that lifetime. Encoding and store adapters stay behind
 // internal seams; no mutable checkpoint bookkeeping escapes this module.
@@ -59,21 +60,46 @@ func newSessionCheckpoint(s *session) sessionCheckpoint {
 	return sessionCheckpoint{session: s, snapshotWanted: make(chan struct{}, 1)}
 }
 
-// checkpointProgress is an owned projection. Callers hold session.mu and cannot
-// change acknowledged progress by changing the returned tasks or observations.
+// checkpointProgressRequest selects a projection without exposing checkpoint
+// bookkeeping. readiness reads only the atomic flag, without session.mu. All
+// other reads require session.mu (or exclusive pre-callback restoration).
+// tasks requests an owned copy for use outside that lock. grant checks the latest
+// acknowledgement under the caller's existing launch lock, without copying tasks.
+type checkpointProgressRequest struct {
+	readiness bool
+	tasks     bool
+	grant     *taskIntent
+}
+
+// checkpointProgress contains scalar observations and, only when requested, an
+// owned task projection. Mutating it cannot change acknowledged progress.
 type checkpointProgress struct {
 	tasks        []taskIntent
 	controlAck   uint64
 	at           time.Time
 	known        bool
 	hasAgent     bool
+	taskGranted  bool
 	observations CheckpointState
 }
 
-func (c *sessionCheckpoint) progressLocked() checkpointProgress {
+func (c *sessionCheckpoint) progress(r checkpointProgressRequest) checkpointProgress {
+	if r.readiness {
+		return checkpointProgress{known: c.snapshotStored.Load()}
+	}
 	p := checkpointProgress{controlAck: c.controlAck, at: c.lastCheckpoint, known: c.snapshotStored.Load(), hasAgent: c.durableAgent.V2 != nil, observations: c.session.state.Checkpoint}
 	if p.hasAgent {
-		p.tasks = cloneTaskIntents(c.durableAgent.V2.Tasks)
+		if r.tasks {
+			p.tasks = cloneTaskIntents(c.durableAgent.V2.Tasks)
+		}
+		if r.grant != nil {
+			for _, d := range c.durableAgent.V2.Tasks {
+				if d.ID == r.grant.ID && d.Digest == r.grant.Digest && d.Phase == taskStarted && !d.Final {
+					p.taskGranted = true
+					break
+				}
+			}
+		}
 	}
 	return p
 }

@@ -154,9 +154,8 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 		if err != nil {
 			return err
 		}
-		s.mu.Lock()
-		capturedAt := s.checkpoint.progressLocked().observations.CapturedAt
-		s.mu.Unlock()
+		// Restoration is exclusive here, before callbacks and packet adoption.
+		capturedAt := s.checkpoint.progress(checkpointProgressRequest{}).observations.CapturedAt
 		if now.Before(capturedAt) {
 			return sessionstore.ErrUnsafeCheckpointClock
 		}

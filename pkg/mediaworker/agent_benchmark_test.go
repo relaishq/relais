@@ -3,13 +3,17 @@ package mediaworker
 import (
 	"net"
 	"testing"
+	"time"
+
+	legacy "github.com/relaishq/relais/pkg/agent"
+	agent "github.com/relaishq/relais/pkg/agent/v2"
 
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
 	"github.com/stretchr/testify/require"
 )
 
-// This file also compiles unchanged on main. Both runs create a normal default
+// This packet benchmark also compiles unchanged on main. Both runs create a normal default
 // session, authenticate new caller indexes and exercise the production UDP path.
 // Caller encryption happens outside the timed section, in bounded batches.
 func BenchmarkEchoAudioPacket(b *testing.B) {
@@ -64,4 +68,35 @@ func BenchmarkEchoAudioPacket(b *testing.B) {
 	}
 	require.EqualValues(b, b.N, s.state.Audio.Packets)
 	require.Zero(b, s.decryptFailures.Load()+s.replayRejections.Load())
+}
+
+// Populated durable requests must not be copied by a scalar status observation.
+// On the pre-module baseline, only the checkpoint fixture initialization differs.
+func BenchmarkAgentSessionStatusDurableTasks(b *testing.B) {
+	w, err := New(Config{})
+	require.NoError(b, err)
+	defer func() { require.NoError(b, w.Close()) }()
+	s := sessionFromState(w, sessionState{ID: "status-benchmark", Agent: agentState{State: legacy.State{Version: 1, Bytes: []byte(`{"phase":"ready"}`)}, V2: &v2Envelope{Name: "status/v2"}}, Checkpoint: CheckpointState{CapturedAt: time.Now()}})
+	defer s.close()
+	for i := range 8 {
+		s.state.Agent.V2.Tasks = append(s.state.Agent.V2.Tasks, taskIntent{ID: agent.TaskID(string(rune('a' + i))), Step: "fetch", Phase: taskStarted, Request: make([]byte, 1024), RequestLength: 1024})
+	}
+	pair := cloneAgentState(s.state.Agent)
+	if err := s.checkpoint.restore(checkpointRestore{pair: &pair}); err != nil {
+		b.Fatal(err)
+	}
+	s.checkpoint.snapshotStored.Store(true)
+	s.checkpoint.lastCheckpoint = time.Now()
+	s.storeClock, s.storeClockAt = time.Now(), time.Now()
+	w.mu.Lock()
+	w.sessions[s.id] = s
+	w.mu.Unlock()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		status, err := w.agentSessionStatus(s.id)
+		if err != nil || len(status.Tasks) != 8 || !status.CheckpointKnown {
+			b.Fatal("invalid populated status", err)
+		}
+	}
 }

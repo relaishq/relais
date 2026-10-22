@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/agenthost"
+	"github.com/relaishq/relais/internal/workerprobe"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
+	"github.com/relaishq/relais/pkg/relay"
 	"github.com/relaishq/relais/pkg/sessionstore"
 
 	"github.com/stretchr/testify/require"
@@ -21,9 +23,11 @@ import (
 func checkpointObservation(s *session) checkpointProgress {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.checkpoint.progressLocked()
+	return s.checkpoint.progress(checkpointProgressRequest{})
 }
-func checkpointKnown(s *session) bool { return checkpointObservation(s).known }
+func checkpointKnown(s *session) bool {
+	return s.checkpoint.progress(checkpointProgressRequest{readiness: true}).known
+}
 func checkpointQuota(t *testing.T, s *session) uint64 {
 	t.Helper()
 	data, err := s.checkpoint.capture(checkpointLive, nil)
@@ -428,4 +432,71 @@ func TestV2SnapshotQuotaSurvivesRestore(t *testing.T) {
 	require.EqualValues(t, 17, checkpointQuota(t, target), "a malformed restore cannot alter the balance")
 	target.storeClock, target.storeClockAt = snap.State.Agent.V2.Quota.At.Add(time.Second), time.Now()
 	require.EqualValues(t, target.snapshotLimits().BurstBytes, checkpointQuota(t, target))
+}
+
+func TestCheckpointScalarProgressDoesNotCopyTasks(t *testing.T) {
+	s := checkpointModuleSession(t, sessionstore.NewMemory())
+	pair := cloneAgentState(s.state.Agent)
+	pair.V2.Tasks = []taskIntent{{ID: "task", Digest: "digest", Class: agent.SideEffecting, Phase: taskStarted, Request: make([]byte, 1024)}}
+	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &pair}))
+	s.mu.Lock()
+	s.state.Agent = cloneAgentState(pair)
+	allocs := testing.AllocsPerRun(100, func() {
+		p := s.checkpoint.progress(checkpointProgressRequest{})
+		grant := s.checkpoint.progress(checkpointProgressRequest{grant: &pair.V2.Tasks[0]})
+		if !p.hasAgent || !grant.taskGranted {
+			panic("missing durable pair or grant")
+		}
+	})
+	s.mu.Unlock()
+	require.Zero(t, allocs, "scalar progress and grant observations must not allocate for durable tasks")
+	allocs = testing.AllocsPerRun(100, func() {
+		if s.taskCheckpointPending() {
+			panic("acknowledged task must not be pending")
+		}
+	})
+	require.Zero(t, allocs, "pending-task observation must not allocate")
+}
+
+func TestCheckpointReadinessDoesNotWaitForPacketLock(t *testing.T) {
+	t.Cleanup(workerprobe.Enable())
+	store := sessionstore.NewMemory()
+	r, err := relay.New(relay.Config{Owners: store})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, r.Close()) }()
+	w, err := New(Config{Relay: &RelayConfig{Owners: store, Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr()}})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, w.Close()) }()
+	s := sessionFromState(w, sessionState{ID: "readiness-unit"})
+	s.checkpoint.snapshotStored.Store(true)
+	w.mu.Lock()
+	w.sessions[s.id] = s
+	w.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	done := make(chan bool, 1)
+	go func() { done <- workerprobe.SnapshotReady(w.LocalAddr(), s.id) }()
+	select {
+	case known := <-done:
+		require.True(t, known)
+	case <-time.After(time.Second):
+		t.Fatal("production readiness waited for the packet lock")
+	}
+}
+
+func TestCheckpointTaskProjectionOwnsRequestBytes(t *testing.T) {
+	s := checkpointModuleSession(t, sessionstore.NewMemory())
+	pair := cloneAgentState(s.state.Agent)
+	pair.V2.Tasks = []taskIntent{{ID: "task", Request: []byte("request")}}
+	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &pair}))
+	s.mu.Lock()
+	projection := s.checkpoint.progress(checkpointProgressRequest{tasks: true})
+	s.mu.Unlock()
+	projection.tasks[0].Request[0] = 'x'
+	projection.tasks[0].ID = "changed"
+	s.mu.Lock()
+	next := s.checkpoint.progress(checkpointProgressRequest{tasks: true})
+	s.mu.Unlock()
+	require.Equal(t, agent.TaskID("task"), next.tasks[0].ID)
+	require.Equal(t, []byte("request"), next.tasks[0].Request)
 }

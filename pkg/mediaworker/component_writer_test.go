@@ -25,6 +25,18 @@ type componentReplyStore struct {
 	reads          atomic.Int64
 	puts           atomic.Int64
 	committedBytes atomic.Uint64
+	fixedNow       time.Time
+	clockFailure   bool
+}
+
+func (s *componentReplyStore) Clock(ctx context.Context, id string) (time.Time, error) {
+	if s.clockFailure {
+		return time.Time{}, errCheckpointClockProbe
+	}
+	if !s.fixedNow.IsZero() {
+		return s.fixedNow, nil
+	}
+	return s.Memory.Clock(ctx, id)
 }
 
 func (s *componentReplyStore) CommitComponents(ctx context.Context, l sessionstore.Lease, c sessionstore.ComponentCommit) (sessionstore.ComponentTuple, error) {
@@ -62,7 +74,7 @@ func componentWriterSession(t *testing.T, store sessionstore.Store, v2 bool) *se
 func TestSplitWriterCaptureAndUnknownReplySettlement(t *testing.T) {
 	for _, v2 := range []bool{false, true} {
 		t.Run(map[bool]string{false: "legacy-agent", true: "v2-agent"}[v2], func(t *testing.T) {
-			store := &componentReplyStore{Memory: sessionstore.NewMemory()}
+			store := &componentReplyStore{Memory: sessionstore.NewMemory(), fixedNow: time.Now()}
 			s := componentWriterSession(t, store, v2)
 			require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 			first, err := store.ReadComponents(context.Background(), s.id)
@@ -78,8 +90,24 @@ func TestSplitWriterCaptureAndUnknownReplySettlement(t *testing.T) {
 			published, err := store.Memory.ReadComponents(context.Background(), s.id)
 			require.NoError(t, err)
 			require.NotEqual(t, first.Metadata.References[2], published.Metadata.References[2])
-			// Persist must settle the exact pending pair before publishing a later copy.
+			// Settle the pending write, then stop recapture at the store clock.
+			// Repeating this must leave both the real bucket and acknowledgement alone.
+			store.clockFailure = true
+			for range 2 {
+				require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointRequired), errCheckpointClockProbe)
+				require.EqualValues(t, 2, checkpointObservation(s).observations.Successes)
+			}
+			var settledBalance uint64
+			if v2 {
+				settledBalance = storedCheckpointQuota(t, store, s.id)
+			}
+			debit := store.committedBytes.Load()
+			store.clockFailure = false
 			require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
+			if v2 {
+				charge := store.committedBytes.Load() - debit
+				require.Equal(t, settledBalance-charge, storedCheckpointQuota(t, store, s.id), "next fixed-clock write must spend exactly one charge from the settled bucket")
+			}
 			require.EqualValues(t, 3, checkpointObservation(s).observations.Successes)
 			if v2 {
 				require.Equal(t, store.committedBytes.Load(), s.worker.metrics.snapshotDebitBytes.Load(), "each actual commit is acknowledged and charged once")

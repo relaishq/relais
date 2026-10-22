@@ -76,9 +76,10 @@ func (w *Worker) SessionCheckpoint(id string) (CheckpointState, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	info := s.checkpoint.progressLocked().observations
-	if !s.checkpoint.progressLocked().at.IsZero() {
-		info.AgeAtCapture = time.Since(s.checkpoint.progressLocked().at)
+	progress := s.checkpoint.progress(checkpointProgressRequest{})
+	info := progress.observations
+	if !progress.at.IsZero() {
+		info.AgeAtCapture = time.Since(progress.at)
 	}
 	return info, nil
 }
