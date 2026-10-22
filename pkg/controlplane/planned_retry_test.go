@@ -144,7 +144,11 @@ func TestDeathDetectionContinuesDuringPlannedRetry(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("planned retry did not enter")
 	}
-	require.Eventually(t, func() bool { p.mu.Lock(); defer p.mu.Unlock(); return source.dead && source.retryingMoves }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return source.observation.knowledge().dead && source.retryingMoves
+	}, time.Second, time.Millisecond)
 	require.Eventually(t, func() bool { return baseB.runs(remaining) }, time.Second, time.Millisecond, "remaining session recovers while planned retry is blocked")
 	once.Do(func() { close(gate.release) })
 	require.Eventually(t, func() bool { return baseB.runs(planned) }, time.Second, time.Millisecond)
@@ -197,7 +201,7 @@ func TestLostRetainedMoveReleasesRelayHold(t *testing.T) {
 	source := p.workers["a"]
 	pending := source.pending[id]
 	require.NotNil(t, pending)
-	p.workers["b"].draining = true
+	p.workers["b"].observation.markDraining()
 	p.takeover(ctx, source, pending.lease, time.Now())
 	require.Zero(t, r.Stats().Holds, "loss frees MaxHeldSessions without waiting 30 seconds")
 	require.Zero(t, r.Stats().HoldTimeouts)

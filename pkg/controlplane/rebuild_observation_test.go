@@ -117,8 +117,8 @@ func TestControlReplacementClearsPersistedDrain(t *testing.T) {
 	require.NoError(t, p.MarkDraining("a"))
 	p.mu.Lock()
 	old := p.workers["a"]
-	old.dead = true
-	old.recovered = true
+	expireObservedWorker(t, old)
+	old.observation.recoveryFinished(true)
 	p.mu.Unlock()
 	require.NoError(t, p.Replace("a", netip.MustParseAddrPort("127.0.0.1:23469"), &RemoteWorker{URL: "http://127.0.0.1:23470"}))
 	records, err := p.restart.store.ControlRecords(context.Background(), p.restart.guard.Load().lease)

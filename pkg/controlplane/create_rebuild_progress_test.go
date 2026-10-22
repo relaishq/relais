@@ -58,7 +58,7 @@ func TestCreateRecordForWorkerDyingDuringRebuild(t *testing.T) {
 		last = p.rebuild(ctx, fixed)
 	}
 	p.mu.Lock()
-	dead := p.workers["a"].dead
+	dead := p.workers["a"].observation.knowledge().dead
 	p.mu.Unlock()
 	t.Logf("later attempts: %v; worker a dead=%t", last, dead)
 	require.NoError(t, last, "rebuild never completes, so detection never starts")
@@ -102,7 +102,7 @@ func TestCreateReconciliationContinuesAfterStatusFailure(t *testing.T) {
 	require.Len(t, p.restart.creates, 1)
 	reserved := 0
 	for _, worker := range p.workers {
-		require.False(t, worker.dead)
+		require.False(t, worker.observation.knowledge().dead)
 		reserved += worker.reserved
 	}
 	require.Equal(t, 1, reserved)

@@ -23,7 +23,7 @@ func (r *registryRecorder) AddWorker(_ context.Context, addr netip.AddrPort) err
 func TestRelayRestartReRegistersOnlyLiveWorkers(t *testing.T) {
 	plane, a, b, _ := setup(t)
 	plane.mu.Lock()
-	plane.workers["a"].dead = true
+	expireObservedWorker(t, plane.workers["a"])
 	plane.mu.Unlock()
 	registry := &registryRecorder{}
 	require.NoError(t, plane.RegisterRelayWorkers(context.Background(), registry))
@@ -39,8 +39,8 @@ func (r *registryRecorder) Status(context.Context) (relay.RelayStatus, error) {
 func TestRelayRegistryFindsRejoinsAndLateRegistrationsOnSameInstance(t *testing.T) {
 	plane, a, b, _ := setup(t)
 	plane.mu.Lock()
-	plane.workers["a"].dead = true
-	plane.workers["a"].recovered = true
+	expireObservedWorker(t, plane.workers["a"])
+	plane.workers["a"].observation.recoveryFinished(true)
 	plane.mu.Unlock()
 	remote := &registryRecorder{instance: "before"}
 	var registry RelayWorkerRegistry

@@ -49,8 +49,8 @@ func (p *Plane) AgentControl(ctx context.Context, id string, message agent.Contr
 	p.mu.Lock()
 	owner := p.owner(lease.Worker)
 	var sender ControlSender
-	unavailable := owner != nil && (owner.dead || owner.recovering)
-	if owner != nil && !owner.dead && !owner.recovering {
+	unavailable := owner != nil && !owner.observation.knowledge().relayEligible
+	if owner != nil && owner.observation.knowledge().relayEligible {
 		sender, _ = owner.worker.(ControlSender)
 	}
 	p.mu.Unlock()

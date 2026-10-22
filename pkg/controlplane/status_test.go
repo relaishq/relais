@@ -178,7 +178,7 @@ func TestStatusDuringTakeoverDoesNotPutMetadataAheadOfLease(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 	source := p.workers["a"]
-	source.dead = true
+	expireObservedWorker(t, source)
 	s := &statusReadStore{Store: p.store, reads: make(chan chan struct{})}
 	p.store = s
 	polled := make(chan Status, 1)

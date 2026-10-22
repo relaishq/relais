@@ -34,7 +34,7 @@ func TestTerminalCallDeletesFrames(t *testing.T) {
 				if outcome == "successful-takeover" {
 					require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 				}
-				p.workers["a"].dead = true
+				expireObservedWorker(t, p.workers["a"])
 				p.takeover(ctx, p.workers["a"], lease, time.Now())
 				require.Len(t, p.recentTakeovers(), 1)
 				require.Equal(t, outcome == "lost-takeover", p.recentTakeovers()[0].Lost)

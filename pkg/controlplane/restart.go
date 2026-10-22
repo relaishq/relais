@@ -541,7 +541,7 @@ func (p *Plane) registerObservedWorker(ctx context.Context, fixed FixedWorker, s
 		if err == nil && status.Address != old.addr {
 			// A changed private leg is a replacement, never proof its old calls ended.
 			p.mu.Lock()
-			canReplace := old.dead && old.recovered && !old.recovering
+			canReplace := old.observation.knowledge().replacementReady
 			p.mu.Unlock()
 			if canReplace {
 				return p.Replace(fixed.Name, status.Address, worker)
@@ -571,13 +571,8 @@ func (p *Plane) registerObservedWorker(ctx context.Context, fixed FixedWorker, s
 	log.Printf("worker bootstrap name=%s attempt=1 result=registered", fixed.Name)
 	p.mu.Lock()
 	registration := p.workers[fixed.Name]
-	if down {
-		// A failed observation is not a death decision. Register supplies a
-		// bounded heartbeat grace period; retries must not reset that anchor.
-		registration.livenessUnknown = !registration.heartbeatObserved
+	if registration.observation.observeStatus(status, down, true) {
 		p.loadVersion++
-	} else {
-		registration.draining = status.Draining
 	}
 	p.mu.Unlock()
 	return nil
@@ -654,12 +649,12 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 	for _, worker := range p.workers {
 		registrations = append(registrations, worker)
 		if _, ok := records["drain:"+worker.name]; ok {
-			worker.draining = true
+			worker.observation.markDraining()
 		}
 	}
 	relayReady := p.relayReady
 	for _, worker := range registrations {
-		if !worker.dead && worker.relayPending {
+		if worker.observation.knowledge().relayRequired {
 			relayReady = false
 		}
 	}
@@ -675,7 +670,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 				return fmt.Errorf("controlplane: worker %s inventory unavailable or truncated", worker.name)
 			}
 			p.mu.Lock()
-			worker.draining = worker.draining || status.Draining
+			worker.observation.observeStatus(status, false, false)
 			p.mu.Unlock()
 			if status.Draining {
 				if err := p.controlRecord(ctx, "drain:"+worker.name, true); err != nil {
@@ -838,7 +833,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 	// instead of replaying the operator's sequence; a later Drain resumes it.
 	for _, worker := range registrations {
 		p.mu.Lock()
-		draining := worker.draining
+		draining := worker.observation.knowledge().draining
 		p.mu.Unlock()
 		if draining {
 			p.restartOutcome("drain", worker.name, "partial", "interrupted")
@@ -1057,9 +1052,10 @@ func (p *Plane) reconcileCreate(ctx context.Context, key string, worker *registr
 		}
 
 		p.mu.Lock()
-		dead, unknown := worker.dead, worker.livenessUnknown
+		disposition := worker.observation.knowledge().createDisposition
+		dead := disposition == workerCreateRecover
 		p.mu.Unlock()
-		if !dead && (unknown || !readStatus) {
+		if !dead && (disposition == workerCreateWait || !readStatus) {
 			// The record and reservation outlive this failed observation.
 			// Normal ticks can observe again once a heartbeat proves liveness.
 			return fmt.Errorf("%w: worker inventory not yet observed", errCreateStatus)
@@ -1073,7 +1069,7 @@ func (p *Plane) reconcileCreate(ctx context.Context, key string, worker *registr
 			// Detection can establish death during the observation. Never
 			// release committed claims if that happened while awaiting status.
 			p.mu.Lock()
-			dead = worker.dead
+			dead = worker.observation.knowledge().createDisposition == workerCreateRecover
 			p.mu.Unlock()
 		}
 		if dead {

@@ -100,7 +100,7 @@ func TestControlIntentWriteFailurePreventsEffects(t *testing.T) {
 			default:
 			}
 			p.mu.Lock()
-			require.False(t, p.workers["a"].draining)
+			require.False(t, p.workers["a"].observation.knowledge().draining)
 			p.mu.Unlock()
 		})
 	}
@@ -182,7 +182,7 @@ func TestControlUncertainCreateRetainsReservationUntilObserved(t *testing.T) {
 	require.NoError(t, p.reconcileCreates(ctx))
 	p.mu.Lock()
 	require.Equal(t, 1, worker.reserved)
-	require.False(t, worker.dead)
+	require.False(t, worker.observation.knowledge().dead)
 	p.mu.Unlock()
 	unreachable.Store(false)
 	require.NoError(t, p.reconcileCreates(ctx))
@@ -199,25 +199,6 @@ func TestControlUncertainCreateRetainsReservationUntilObserved(t *testing.T) {
 	require.NotContains(t, records, key)
 }
 
-func TestControlRebuildAcceptsPriorCompletedHeartbeatToken(t *testing.T) {
-	p, a, _, _ := setup(t)
-	authorizeTestControl(t, p)
-	_, err := p.remoteHeartbeat("a", HeartbeatRequest{Address: a.addr, Token: "prior-completed-handshake"})
-	require.NoError(t, err)
-	_, err = p.remoteHeartbeat("a", HeartbeatRequest{Address: a.addr, Token: "different-token"})
-	require.Error(t, err)
-	p.mu.Lock()
-	p.workers["a"].dead = true
-	p.workers["a"].recovered = true
-	p.mu.Unlock()
-	reply, err := p.remoteHeartbeat("a", HeartbeatRequest{Address: a.addr, Token: "prior-completed-handshake"})
-	require.NoError(t, err)
-	require.NotEmpty(t, reply.Token)
-	require.NotEqual(t, "prior-completed-handshake", reply.Token)
-	p.mu.Lock()
-	require.True(t, p.workers["a"].dead)
-	p.mu.Unlock()
-}
 func TestControlTerminalCleanupClearsDurableIntent(t *testing.T) {
 	ctx := context.Background()
 	p, _, _, _ := setup(t)

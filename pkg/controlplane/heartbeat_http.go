@@ -1,8 +1,6 @@
 package controlplane
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"net/http"
 	"net/netip"
@@ -30,39 +28,11 @@ func (p *Plane) remoteHeartbeat(name string, req HeartbeatRequest) (HeartbeatRep
 	if w == nil || w.addr != req.Address {
 		return HeartbeatReply{}, errors.New("controlplane: unknown worker heartbeat")
 	}
-	if w.recovering || w.dead && !w.recovered {
-		return HeartbeatReply{}, errors.New("controlplane: worker takeover in progress")
-	}
-	// Rebuild restored this endpoint and the store remains the only
-	// ownership authority. Accept its prior completed heartbeat token once; it
-	// belongs to the worker process, while the old controller's cache is gone.
-	if p.restart != nil && !w.dead && !w.heartbeatObserved {
-		w.acceptedToken = req.Token
-		w.heartbeatObserved = true
-	}
-	if w.dead {
-		if w.rejoinToken == "" {
-			var token [16]byte
-			if _, err := rand.Read(token[:]); err != nil {
-				return HeartbeatReply{}, err
-			}
-			w.rejoinToken = hex.EncodeToString(token[:])
-		}
-		if req.Token != w.rejoinToken {
-			return HeartbeatReply{Token: w.rejoinToken}, nil
-		}
-		w.dead = false
-		w.acceptedToken = w.rejoinToken
-		w.rejoinToken = ""
-	} else if req.Token != "" && req.Token != w.acceptedToken {
-		return HeartbeatReply{}, errors.New("controlplane: stale rejoin token")
-	}
-	if w.livenessUnknown {
-		w.livenessUnknown = false
+	reply, changed, err := w.observation.heartbeat(workerHeartbeat{remote: true, restart: p.restart != nil, token: req.Token}, time.Time{})
+	if changed {
 		p.loadVersion++
 	}
-	w.lastHeartbeat = time.Now()
-	return HeartbeatReply{}, nil
+	return reply, err
 }
 
 // ProcessHandler serves WHIP and the private heartbeat API. Bind it only on

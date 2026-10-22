@@ -65,7 +65,7 @@ func testBlackHoledRebuild(t *testing.T, n int) {
 	require.EqualValues(t, n, reads.Load(), "discovery observation must be reused")
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	require.False(t, p.workers["down"].dead, "only heartbeat detection may declare death")
-	require.True(t, p.workers["down"].livenessUnknown)
-	require.False(t, p.workers["live"].dead)
+	require.False(t, p.workers["down"].observation.knowledge().dead, "only heartbeat detection may declare death")
+	require.True(t, p.workers["down"].observation.knowledge().livenessUnknown)
+	require.False(t, p.workers["live"].observation.knowledge().dead)
 }
