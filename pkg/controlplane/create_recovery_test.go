@@ -113,7 +113,7 @@ func TestFailedEndAllowsLaterMoveAndTakeover(t *testing.T) {
 				expireObservedWorker(t, source)
 				p.workers["b"].worker = &takeoverWorker{fakeWorker: b}
 				p.mu.Unlock()
-				p.takeover(ctx, source, lease, time.Now())
+				p.recovery.recover(ctx, source, lease, time.Now())
 				current, err := m.Get(ctx, id)
 				require.NoError(t, err)
 				require.Equal(t, b.addr, current.Worker)

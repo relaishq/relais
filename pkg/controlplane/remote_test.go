@@ -237,7 +237,7 @@ func TestHTTPResumeExhaustionIsTerminal(t *testing.T) {
 			require.Contains(t, status.Takeovers[0].Error, sentinel.Error())
 			require.NotContains(t, status.Takeovers[0].Error, "attempts exhausted")
 			require.EqualValues(t, 1, attempts.Load())
-			require.Empty(t, source.pending)
+			require.Empty(t, recoveryWork(p, source))
 		})
 	}
 }

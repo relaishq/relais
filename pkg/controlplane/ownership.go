@@ -28,11 +28,10 @@ func (c *call) rememberLease(lease sessionstore.Lease) {
 // errors retain the registry; only authoritative ErrNotFound proves a loss.
 func (p *Plane) reconcileOwnership(ctx context.Context) {
 	p.mu.Lock()
-	// Build the pending set once, instead of scanning workers for each call.
 	pending := make(map[string]bool)
 	for _, w := range p.workers {
-		for id := range w.pending {
-			pending[id] = true
+		for _, lease := range p.recovery.workLocked(w, recoveryAll) {
+			pending[lease.SessionID] = true
 		}
 	}
 	calls := make([]*call, 0, len(p.calls))
@@ -89,12 +88,7 @@ func (p *Plane) expiredLocked(ctx context.Context, c *call) {
 	c.stateMu.Unlock()
 	p.mu.Lock()
 	tracked := p.calls[c.id] == c
-	for _, w := range p.workers {
-		if w.pending[c.id] != nil {
-			tracked = false
-			break
-		}
-	}
+	tracked = tracked && !p.recovery.pendingLocked(c.id)
 	if !tracked {
 		p.mu.Unlock()
 		return

@@ -199,7 +199,7 @@ func TestStatusDuringTakeoverDoesNotPutMetadataAheadOfLease(t *testing.T) {
 	finished := make(chan struct{})
 	go func() {
 		defer close(finished)
-		p.takeover(ctx, source, lease, time.Now())
+		p.recovery.recover(ctx, source, lease, time.Now())
 	}()
 	t.Cleanup(func() { cancel(); <-finished })
 	select {

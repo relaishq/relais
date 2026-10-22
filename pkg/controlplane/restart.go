@@ -715,6 +715,13 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 		return err
 	}
 	for _, intent := range intents {
+		if intent.Kind != "end" {
+			if err := p.recovery.rebuild(ctx, intent, observations); err != nil {
+				return err
+			}
+			continue
+		}
+
 		if intent.Candidate != nil {
 			resolver, ok := p.store.(sessionstore.TransitionResolver)
 			if !ok {
@@ -768,57 +775,6 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 				p.restartOutcome(intent.Kind, intent.ID, "ended", "interrupted")
 				return nil
 			}
-
-			installed, ok := observations[current.SessionID+"/"+fmt.Sprint(current.Epoch)+"/"+current.Worker.String()]
-			if ok && installed.Owner == current.Worker {
-				// Route repair/release is idempotent coordination. Never re-export or
-				// re-resume a tenure that the store and live worker both confirm.
-				if err := p.relay.MoveSession(intent.ID, netip.AddrPort{}, current.Worker); err != nil {
-					return err
-				}
-				if _, err := p.relay.ReleaseSession(intent.ID, current.Worker); err != nil && !errors.Is(err, privateapi.ErrUncertain) {
-					// No hold is normal when the operation stopped before its barrier.
-					// The relay backstop also expires holds while control is absent.
-					if !errors.Is(err, relay.ErrHoldExpired) {
-						return err
-					}
-				}
-				if err := p.restart.store.DeleteControlIntent(ctx, intent.ID, intent.Token); err != nil {
-					return err
-				}
-				c.intent = nil
-				p.restartOutcome(intent.Kind, intent.ID, "live", "interrupted")
-				return nil
-			}
-			// Missing installation is not a failed resume proof. Transfer away from the
-			// current tenure before any new resume, using the existing tuple read and
-			// bounded crash-margin recovery. A delayed old adoption cannot own that epoch.
-			p.mu.Lock()
-			source := p.owner(current.Worker)
-			p.mu.Unlock()
-			if source == nil {
-				return fmt.Errorf("controlplane: unknown persisted owner %s", current.Worker)
-			}
-			p.mu.Lock()
-			for _, worker := range p.workers {
-				delete(worker.pending, c.id)
-			}
-			if source.pending == nil {
-				source.pending = map[string]*takeoverState{}
-			}
-			source.pending[c.id] = &takeoverState{call: c, lease: current, routed: current.Worker, routedLease: current, excluded: map[netip.AddrPort]bool{current.Worker: true}, attemptLimit: maxResumeAttempts, held: true, outageStarted: intent.Started}
-			p.mu.Unlock()
-			bounded, stop := context.WithTimeout(ctx, takeoverBudget)
-			result := p.takeoverLocked(bounded, source, c, current, time.Now())
-			stop()
-			if result == nil {
-				return ErrNotReady
-			}
-			outcome, code := "live", "interrupted"
-			if result.Lost {
-				outcome, code = "lost", result.LossCause
-			}
-			p.restartOutcome(intent.Kind, intent.ID, outcome, code)
 			return nil
 		}(); err != nil {
 			return err
@@ -884,9 +840,7 @@ func (p *Plane) finishIntent(c *call) {
 	}
 	p.mu.Lock()
 	pending := c.cleanupPending
-	for _, worker := range p.workers {
-		pending = pending || worker.pending[c.id] != nil
-	}
+	pending = pending || p.recovery.pendingLocked(c.id)
 	p.mu.Unlock()
 	if pending {
 		return

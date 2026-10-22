@@ -59,7 +59,7 @@ func TestTakeoverFailuresReleaseLeaseAndRecordLoss(t *testing.T) {
 				p.workers["b"].observation.markDraining()
 			}
 			expireObservedWorker(t, p.workers["a"])
-			p.takeover(ctx, p.workers["a"], lease, time.Now())
+			p.recovery.recover(ctx, p.workers["a"], lease, time.Now())
 			status, err := p.Status(ctx)
 			require.NoError(t, err)
 			require.Len(t, status.Takeovers, 1)

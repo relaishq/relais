@@ -266,9 +266,9 @@ func TestRetainedPlannedMoveReleasesAfterExport(t *testing.T) {
 	require.Empty(t, r.releases, "the hold waits for the retained transfer")
 	r.mu.Unlock()
 	source := p.workers["a"]
-	pending := source.pending[id]
+	pending := pendingRecovery(p, source, id)
 	require.NotNil(t, pending)
-	p.takeover(ctx, source, pending.lease, time.Now())
+	p.recovery.recover(ctx, source, *pending, time.Now())
 	require.True(t, b.runs(id))
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -323,13 +323,9 @@ func TestRetainedPlannedMoveRetriesAfterRouteFailure(t *testing.T) {
 	_, err = p.Move(ctx, id, "b")
 	require.Error(t, err)
 	source := p.workers["a"]
-	for attempt := 0; attempt < 3 && !b.runs(id); attempt++ {
-		pending := source.pending[id]
-		require.NotNil(t, pending)
-		p.takeover(ctx, source, pending.lease, time.Now())
-	}
+	settleRecovery(t, p, source, id)
 	require.True(t, b.runs(id), "a retry repairs the route and adopts the target")
-	require.Empty(t, source.pending)
+	require.Empty(t, recoveryWork(p, source))
 	mu.Lock()
 	defer mu.Unlock()
 	require.Equal(t, []string{"/move-after-export", "/move"}, routes, "the failed drain is retried as a route repair")

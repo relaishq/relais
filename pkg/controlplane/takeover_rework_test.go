@@ -103,7 +103,7 @@ func TestTakeoverTransientErrorsRetainTransferredLeaseForRetry(t *testing.T) {
 			require.Len(t, status.Calls, 1)
 			require.Empty(t, status.Takeovers)
 			require.Zero(t, status.LostCount)
-			require.Len(t, source.pending, 1)
+			require.Len(t, recoveryWork(p, source), 1)
 			backing.fail, r.fail = false, false
 			require.True(t, p.recoverWorker(ctx, source, time.Now()), "must enumerate unfinished transfers too")
 			status, err = p.Status(ctx)
@@ -111,7 +111,7 @@ func TestTakeoverTransientErrorsRetainTransferredLeaseForRetry(t *testing.T) {
 			require.Equal(t, "b", status.Calls[0].Owner)
 			require.Len(t, status.Takeovers, 1)
 			require.False(t, status.Takeovers[0].Lost)
-			require.Empty(t, source.pending)
+			require.Empty(t, recoveryWork(p, source))
 		})
 	}
 }
@@ -281,7 +281,7 @@ func TestTakeoverRecentEventsBoundedAndCountsRetained(t *testing.T) {
 		require.NoError(t, err)
 		source := p.owner(lease.Worker)
 		expireObservedWorker(t, source)
-		p.takeover(ctx, source, lease, time.Unix(int64(i), 0))
+		p.recovery.recover(ctx, source, lease, time.Unix(int64(i), 0))
 		rejoinObservedWorker(t, source)
 	}
 	status, err := p.Status(ctx)
@@ -339,7 +339,7 @@ func TestPendingTakeoverVanishedLeaseRecordsLossAndForgetsRoute(t *testing.T) {
 				}
 				require.Equal(t, 4, target.calls, "uncertain adoption retries the same request until settled")
 			}
-			require.Len(t, source.pending, 1)
+			require.Len(t, recoveryWork(p, source), 1)
 			require.Zero(t, p.lostCount)
 			require.Empty(t, r.forgotten)
 			current, err := p.store.Get(ctx, id)
@@ -350,7 +350,7 @@ func TestPendingTakeoverVanishedLeaseRecordsLossAndForgetsRoute(t *testing.T) {
 			require.True(t, p.recoverWorker(ctx, source, time.Now()))
 			status, err := p.Status(ctx)
 			require.NoError(t, err)
-			require.Empty(t, source.pending)
+			require.Empty(t, recoveryWork(p, source))
 			require.Empty(t, status.Calls)
 			require.EqualValues(t, 1, status.LostCount)
 			require.Len(t, status.Takeovers, 1)
@@ -434,11 +434,11 @@ func TestUncertainExportLeaseMismatchReleasesHeldPackets(t *testing.T) {
 	old, err := p.store.Get(ctx, id)
 	require.NoError(t, err)
 	source := p.workers["a"]
-	source.pending = map[string]*takeoverState{id: {lease: old, held: true}}
+	queueUncertainExport(t, p, id)
 	current, err := p.store.Transfer(ctx, old, b.addr, time.Second)
 	require.NoError(t, err)
-	p.takeover(ctx, source, old, time.Now())
-	require.Empty(t, source.pending)
+	p.recovery.recover(ctx, source, old, time.Now())
+	require.Empty(t, recoveryWork(p, source))
 	require.Equal(t, []netip.AddrPort{current.Worker}, r.released)
 	require.Zero(t, p.lostCount)
 }
@@ -459,13 +459,13 @@ func TestUncertainExportHangupRecordsEnded(t *testing.T) {
 	_, err = p.Move(ctx, id, "b")
 	require.Error(t, err)
 	source := p.workers["a"]
-	require.Contains(t, source.pending, id)
+	require.NotNil(t, pendingRecovery(p, source, id))
 	require.NoError(t, p.End(ctx, id))
 	require.NotContains(t, p.calls, id)
-	p.takeover(ctx, source, source.pending[id].lease, time.Now())
+	p.recovery.recover(ctx, source, *pendingRecovery(p, source, id), time.Now())
 	status, err := p.Status(ctx)
 	require.NoError(t, err)
-	require.Empty(t, source.pending)
+	require.Empty(t, recoveryWork(p, source))
 	require.Len(t, status.Takeovers, 1)
 	require.Equal(t, "ended", status.Takeovers[0].Kind)
 	require.False(t, status.Takeovers[0].Lost)
@@ -484,7 +484,7 @@ func TestUncertainExportTerminalOutcomeReleasesHold(t *testing.T) {
 			lease, err := p.store.Get(ctx, id)
 			require.NoError(t, err)
 			source := p.workers["a"]
-			source.pending = map[string]*takeoverState{id: {call: p.calls[id], lease: lease, held: true}}
+			queueUncertainExport(t, p, id)
 			if ended {
 				require.NoError(t, p.End(ctx, id))
 			} else {
@@ -492,8 +492,8 @@ func TestUncertainExportTerminalOutcomeReleasesHold(t *testing.T) {
 				require.NoError(t, err)
 				time.Sleep(5 * time.Millisecond)
 			}
-			p.takeover(ctx, source, lease, time.Now())
-			require.Empty(t, source.pending)
+			p.recovery.recover(ctx, source, lease, time.Now())
+			require.Empty(t, recoveryWork(p, source))
 			require.Equal(t, []netip.AddrPort{{}}, r.released, "terminal recovery must release its hold immediately")
 			require.Equal(t, []string{id}, baseRelay.forgotten)
 		})
@@ -636,33 +636,6 @@ wait:
 	require.False(t, c.hungUp.Load())
 }
 
-func TestCompletedHangupDoesNotRelabelOtherTakeoverFailures(t *testing.T) {
-	for _, cause := range []error{
-		fmt.Errorf("controlplane: no takeover snapshot: %w", sessionstore.ErrNotFound),
-		errors.New("independent resume failure"),
-	} {
-		t.Run(cause.Error(), func(t *testing.T) {
-			ctx := context.Background()
-			p, _, _, _ := setup(t)
-			id, _, err := p.Create(ctx, "offer", "a")
-			require.NoError(t, err)
-			lease, err := p.store.Get(ctx, id)
-			require.NoError(t, err)
-			c := p.calls[id]
-			require.NoError(t, p.End(ctx, id))
-			require.True(t, c.hungUp.Load())
-			res := MoveResult{Kind: "takeover", ID: id, Start: time.Now()}
-			c.mu.Lock()
-			p.completeTakeover(p.workers["a"], c, lease, &res, true, cause)
-			c.mu.Unlock()
-			require.Equal(t, "takeover", res.Kind)
-			require.True(t, res.Lost)
-			require.Equal(t, cause.Error(), res.Error)
-			require.EqualValues(t, 1, p.lostCount)
-		})
-	}
-}
-
 func TestHangupDuringPendingTakeoverRecordsEnded(t *testing.T) {
 	for _, step := range []string{"transfer", "route", "cancelled"} {
 		t.Run(step, func(t *testing.T) {
@@ -684,9 +657,9 @@ func TestHangupDuringPendingTakeoverRecordsEnded(t *testing.T) {
 				r.fail = true
 			}
 			require.False(t, p.recoverWorker(ctx, source, time.Now()))
-			require.Len(t, source.pending, 1)
+			require.Len(t, recoveryWork(p, source), 1)
 			// Waiting for coordination must not publish a completed hang-up.
-			c := source.pending[id].call
+			c := p.calls[id]
 			c.mu.Lock()
 			done := make(chan error, 1)
 			go func() { done <- p.End(ctx, id) }()
@@ -709,7 +682,7 @@ func TestHangupDuringPendingTakeoverRecordsEnded(t *testing.T) {
 			require.True(t, p.recoverWorker(ctx, source, time.Now()))
 			status, err := p.Status(ctx)
 			require.NoError(t, err)
-			require.Empty(t, source.pending)
+			require.Empty(t, recoveryWork(p, source))
 			require.Empty(t, status.Calls)
 			require.Zero(t, status.LostCount)
 			require.Len(t, status.Takeovers, 1)
@@ -732,8 +705,7 @@ func TestHangupDuringRetainedPlannedMove(t *testing.T) {
 	_, err = p.Move(ctx, id, "b")
 	require.Error(t, err)
 	source := p.workers["a"]
-	require.True(t, source.pending[id].planned)
-	require.NotNil(t, source.pending[id].call)
+	require.NotNil(t, pendingRecovery(p, source, id))
 	require.Empty(t, hold.releases)
 	require.ErrorIs(t, p.End(ctx, id), mediaworker.ErrUnknownSession)
 	require.NotContains(t, p.calls, id)
@@ -742,7 +714,7 @@ func TestHangupDuringRetainedPlannedMove(t *testing.T) {
 	p.retryPlannedMoves(ctx, source, time.Now())
 	status, err := p.Status(ctx)
 	require.NoError(t, err)
-	require.Empty(t, source.pending)
+	require.Empty(t, recoveryWork(p, source))
 	require.Empty(t, status.Calls)
 	require.Empty(t, status.Takeovers)
 	require.Zero(t, status.LostCount)

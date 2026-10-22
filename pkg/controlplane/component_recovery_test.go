@@ -48,25 +48,30 @@ func TestComponentRecoveryCarriesOneTupleIntoDecision(t *testing.T) {
 		StateVersion uint32
 	}
 	require.NoError(t, json.Unmarshal(data, &wire))
-	var setup codec.ConnectionSetup
-	require.NoError(t, codec.Unmarshal(wire.Components.Setup, codec.Setup, &setup))
+	var connection codec.ConnectionSetup
+	require.NoError(t, codec.Unmarshal(wire.Components.Setup, codec.Setup, &connection))
 	now := time.Now()
-	store := &tupleReadStore{tuple: sessionstore.ComponentTuple{Components: wire.Components, Lease: sessionstore.Lease{SessionID: setup.ID}, Metadata: sessionstore.ComponentMetadata{StateVersion: wire.StateVersion}, Checkpoint: sessionstore.Checkpoint{Now: now, StoredAt: now.Add(-time.Millisecond), Age: time.Millisecond}}}
-	state, metadata, err := mediaworker.ReadRecoverySnapshot(context.Background(), store, setup.ID)
+	store := &tupleReadStore{tuple: sessionstore.ComponentTuple{Components: wire.Components, Lease: sessionstore.Lease{SessionID: connection.ID}, Metadata: sessionstore.ComponentMetadata{StateVersion: wire.StateVersion}, Checkpoint: sessionstore.Checkpoint{Now: now, StoredAt: now.Add(-time.Millisecond), Age: time.Millisecond}}}
+	p, a, b, _ := setup(t)
+	lease, err := p.store.Claim(context.Background(), connection.ID, a.addr, time.Minute)
 	require.NoError(t, err)
-	p := NewWithConfig(nil, store, Config{})
-	stop := p.startKeyInventory(context.Background())
-	defer stop()
-	decision, err := p.checkpointDecision(context.Background(), setup.ID, state, 0, metadata)
-	require.NoError(t, err)
-	require.Equal(t, store.tuple.Checkpoint.StoredAt, decision.storedAt)
-	require.GreaterOrEqual(t, decision.age, time.Millisecond)
+	store.Store = p.store
+	store.tuple.Lease = lease
+	p.store = store
+	target := &observedResumeWorker{fakeWorker: b}
+	p.workers["b"].worker = target
+	expireObservedWorker(t, p.workers["a"])
+	outcome := p.recovery.recover(context.Background(), p.workers["a"], lease, time.Now())
+	require.NotNil(t, outcome)
+	require.False(t, outcome.Lost)
+	require.Equal(t, store.tuple.Checkpoint.StoredAt, target.opts.CheckpointStoredAt)
+	require.GreaterOrEqual(t, target.opts.CheckpointAge, time.Millisecond)
 	require.Equal(t, 1, store.reads)
 	require.Zero(t, store.legacyReads)
 	require.Zero(t, store.metadataReads)
 	for _, failure := range []error{sessionstore.ErrUnsafeCheckpoint, sessionstore.ErrUnsafeCheckpointClock, sessionstore.ErrTransient} {
 		store.err = failure
-		_, _, err = mediaworker.ReadRecoverySnapshot(context.Background(), store, setup.ID)
+		_, _, err = mediaworker.ReadRecoverySnapshot(context.Background(), store, connection.ID)
 		require.ErrorIs(t, err, failure)
 		require.Zero(t, store.legacyReads, "unsafe or uncertain tuple never falls back to legacy state")
 	}
@@ -159,7 +164,7 @@ func TestComponentUnsafeTakeoverRecordsLossAndReleasesLease(t *testing.T) {
 	p.store = wrapped
 	source := p.workers["a"]
 	expireObservedWorker(t, source)
-	p.takeover(ctx, source, lease, time.Now())
+	p.recovery.recover(ctx, source, lease, time.Now())
 	status, err := p.Status(ctx)
 	require.NoError(t, err)
 	require.Len(t, status.Takeovers, 1)

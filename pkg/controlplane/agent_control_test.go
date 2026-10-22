@@ -134,7 +134,7 @@ func TestControlTakeoverCancelsInFlightRoute(t *testing.T) {
 	expireObservedWorker(t, source)
 	p.mu.Unlock()
 	start := time.Now()
-	p.takeover(ctx, source, lease, start)
+	p.recovery.recover(ctx, source, lease, start)
 	require.Less(t, time.Since(start), takeoverBudget)
 	require.Error(t, <-sent)
 	current, err := p.store.Get(ctx, id)
