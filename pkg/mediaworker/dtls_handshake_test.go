@@ -69,7 +69,7 @@ func TestLostServerFinalFlightCompletesAfterCheckpoint(t *testing.T) {
 	require.True(t, dropped.Load(), "flight 6 was not dropped")
 	_, err = s.startSRTP(server)
 	require.NoError(t, err)
-	require.NoError(t, s.persistSnapshot()) // connect(): first checkpoint right after the handshake
+	require.NoError(t, s.checkpoint.persist(s.ctx, checkpointOptional)) // connect(): first checkpoint right after the handshake
 	err = <-clientDone
 	t.Logf("guard drops=%d client handshake err=%v", s.worker.metrics.dtlsSequenceDrops.Load(), err)
 	require.NoError(t, err, "caller never completes DTLS after one lost final flight")

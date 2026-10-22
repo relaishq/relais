@@ -177,7 +177,7 @@ func TestTaskReceiptsHaveNoLifetimeCap(t *testing.T) {
 		s.publishTaskIntents()
 		s.publishAgent()
 		s.mu.Lock()
-		s.durableAgent = cloneAgentState(s.state.Agent)
+		require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))
 		s.mu.Unlock()
 		s.pruneTasks()
 		require.Empty(t, s.agent.v2.tasks)
@@ -188,7 +188,7 @@ func TestTaskReceiptsHaveNoLifetimeCap(t *testing.T) {
 	s.publishTaskIntents()
 	s.publishAgent()
 	s.mu.Lock()
-	s.durableAgent = cloneAgentState(s.state.Agent)
+	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))
 	s.state.Agent.Progress.SSRC = 42
 	s.state.Agent.Progress.Index = 10
 	s.state.SRTP.Inbound = map[uint32]uint64{42: 73}

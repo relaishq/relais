@@ -22,30 +22,22 @@ func TestAdmissionUsesStoreClockWithoutMintingTokens(t *testing.T) {
 				s := componentWriterSession(t, store, true)
 				s.worker.splitLimits = SnapshotLimits{}.splitDefaults()
 				s.agent = &agentHost{latest: cloneAgentState(s.state.Agent), v2: &v2Host{registration: agenthost.Registration{Bounds: effectiveAgentBounds(agent.Limits{}, s.snapshotLimits(), true)}}}
-				require.NoError(t, s.persistSnapshotMode(context.Background(), true))
-				limits := s.snapshotLimits()
+				require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 				s.mu.Lock()
 				s.storeClock = time.Now().Add(offset) // store clock offset from the worker
 				s.storeClockAt = time.Now()
 				s.mu.Unlock()
 				now := s.taskNow()
-				s.snapshotBudgetMu.Lock()
-				s.snapshotBytesBudget = snapshotBucket{tokens: 1000, at: now}
-				s.snapshotBudgetMu.Unlock()
+				restoreCheckpointQuota(t, s, 1000, now.Add(time.Hour))
 				candidate := cloneAgentState(s.state.Agent)
 				candidate.State.Bytes = []byte("changed working")
 				if history {
 					candidate.History = []byte("changed history")
 				}
-				_, err := s.admissionSnapshot(candidate)
+				_, err := s.checkpoint.admit(checkpointAdmission{candidate: candidate, prior: s.agent.latest})
 				t.Logf("admission err=%v", err)
-				s.snapshotBudgetMu.Lock()
-				after := s.snapshotBytesBudget.available(limits, now)
-				at := s.snapshotBytesBudget.at
-				s.snapshotBudgetMu.Unlock()
-				t.Logf("tokens before=1000 after=%.0f; bucket.at moved %v", after, at.Sub(now))
-				require.EqualValues(t, 1000, after, "admission cannot publish refill credit")
-				require.Equal(t, now, at, "admission cannot move the bucket clock")
+				after := float64(checkpointQuota(t, s))
+				require.EqualValues(t, 1000, after, "reads and admission cannot rebase a rolled-back clock or publish refill")
 				if history {
 					require.ErrorIs(t, err, agent.ErrCapacity)
 				} else {
@@ -54,18 +46,6 @@ func TestAdmissionUsesStoreClockWithoutMintingTokens(t *testing.T) {
 			})
 		}
 	}
-}
-
-func TestSnapshotBucketReadsArePureAndWritesRebase(t *testing.T) {
-	l := SnapshotLimits{}.splitDefaults()
-	at := time.Now()
-	b := snapshotBucket{tokens: 1000, at: at}
-	require.EqualValues(t, 1000, b.available(l, at.Add(-2*time.Second)))
-	require.Equal(t, at, b.at)
-	b.debit(l, 100, at.Add(-time.Second))
-	require.Equal(t, at.Add(-time.Second), b.at)
-	require.EqualValues(t, 900, b.available(l, at.Add(-time.Second)))
-	require.EqualValues(t, 8900, b.available(l, at.Add(-900*time.Millisecond)))
 }
 
 func TestSplitRegistrationRejectsImpossibleWorkingBound(t *testing.T) {
@@ -86,23 +66,6 @@ func TestSplitProfileDefaultsWithoutWorkerConstructor(t *testing.T) {
 	require.Equal(t, 20000, s.snapshotLimits().MaxBytes)
 	require.Equal(t, 80000, s.snapshotLimits().BurstBytes)
 	require.Equal(t, 80000, s.snapshotLimits().BytesPerSecond)
-}
-
-func TestHistoryAdmissionReservesFutureHotGrowth(t *testing.T) {
-	_, s := historyUnitSession(t, &historyStateAgent{state: agent.State{Version: 1}}, agent.Limits{})
-	candidate := cloneAgentState(s.agent.latest)
-	candidate.History = []byte("new")
-	sizes := componentSizes{Hot: 1, Setup: 100, History: 100}
-	required := 2*s.snapshotLimits().MaxBytes + 200
-	now := s.taskNow()
-	// Pin taskNow's sample far behind the debit time so no incidental refill
-	// can cover the one-byte boundary during this arithmetic test.
-	s.snapshotBytesBudget = snapshotBucket{tokens: float64(required - 1), at: now.Add(time.Hour)}
-	require.ErrorIs(t, s.admitHistoryUpdate(candidate, sizes), agent.ErrCapacity)
-	s.snapshotBytesBudget.tokens++
-	require.NoError(t, s.admitHistoryUpdate(candidate, sizes))
-	require.Equal(t, s.snapshotLimits().MaxBytes+200, s.snapshotHistoryHold.bytes)
-	require.Equal(t, now.Add(time.Hour), s.snapshotBytesBudget.at)
 }
 
 func TestLegacyHistoryRefusedEvenWithStalePositiveBounds(t *testing.T) {
@@ -150,7 +113,7 @@ func TestRequiredCheckpointAfterColdWriteUsesRemainingQuota(t *testing.T) {
 	store := &fixedCheckpointClockStore{Memory: sessionstore.NewMemory(), now: time.Now()}
 	s := componentWriterSession(t, store, true)
 	s.worker.splitLimits = SnapshotLimits{}.splitDefaults()
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	tuple, err := store.ReadComponents(context.Background(), s.id)
 	require.NoError(t, err)
 	packed, err := componentMetadata(tuple.Metadata).marshal()
@@ -158,25 +121,25 @@ func TestRequiredCheckpointAfterColdWriteUsesRemainingQuota(t *testing.T) {
 	charge := len(tuple.Components.Transport) + componentCipherOverhead + len(packed) + componentCommitTimeBytes + componentFieldNameBytes + componentProtocolReserve + 8192 + 6 + componentCipherOverhead
 	// Both versions can perform this cold write. Its acknowledgement leaves
 	// exactly one maximum hot checkpoint plus one byte, with no timed refill.
-	s.snapshotBytesBudget = snapshotBucket{tokens: float64(charge + s.snapshotLimits().MaxBytes + 1), at: store.now}
+	restoreCheckpointQuota(t, s, float64(charge+s.snapshotLimits().MaxBytes+1), store.now)
 	s.mu.Lock()
 	setComponentTestHistory(s, bytes.Repeat([]byte{'h'}, 8192))
 	s.mu.Unlock()
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
-	require.EqualValues(t, s.snapshotLimits().MaxBytes+1, s.snapshotBytesBudget.tokens)
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
+	require.EqualValues(t, s.snapshotLimits().MaxBytes+1, storedCheckpointQuota(t, store, s.id))
 	// A required ROC/replay/transport checkpoint can spend those bytes now.
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	require.NoError(t, s.ctx.Err())
 }
 
 func TestHeldCheckpointSkipsAreSeparateFromFailures(t *testing.T) {
 	s := componentWriterSession(t, sessionstore.NewMemory(), true)
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	before := s.state.Checkpoint.Failures
 	forced := s.worker.metrics.forcedFailures.Load()
-	s.snapshotHistoryHold = &historyWriteHold{version: s.state.Agent.State.Version, history: []byte("newer"), bytes: s.componentBudgets().Total}
-	s.snapshotBytesBudget = snapshotBucket{tokens: 1000, at: s.taskNow()}
-	require.ErrorIs(t, s.persistSnapshotBudget(context.Background(), true, true), errCheckpointSkipped)
+	s.checkpoint.rollback(cloneAgentState(s.state.Agent))
+	restoreCheckpointQuota(t, s, 1000, s.taskNow())
+	require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointIntent), errCheckpointSkipped)
 	require.Equal(t, before, s.state.Checkpoint.Failures)
 	require.Equal(t, forced, s.worker.metrics.forcedFailures.Load())
 	samples := map[string]float64{}
@@ -210,11 +173,11 @@ func TestCanceledSaveRestoresHistoryReservation(t *testing.T) {
 	_, s := historyUnitSession(t, a, agent.Limits{})
 	s.worker.cfg.Agent.CallbackTimeout = time.Second
 	a.contexts = make(chan context.Context, 1)
-	a.hold = s.snapshotBudgetMu.Lock
+	a.hold = s.mu.Lock
 	locked := false
 	defer func() {
 		if locked {
-			s.snapshotBudgetMu.Unlock()
+			s.mu.Unlock()
 		}
 	}()
 	done := make(chan error, 1)
@@ -232,7 +195,7 @@ func TestCanceledSaveRestoresHistoryReservation(t *testing.T) {
 	// lets the late callback install a tentative hold before agentCall rejects
 	// its result. The production rollback must restore the old pair and hold.
 	<-callback.Done()
-	s.snapshotBudgetMu.Unlock()
+	s.mu.Unlock()
 	locked = false
 	select {
 	case err := <-done:
@@ -241,9 +204,8 @@ func TestCanceledSaveRestoresHistoryReservation(t *testing.T) {
 		t.Fatal("canceled Save did not settle")
 	}
 	require.Equal(t, []byte("aaaa"), a.state.History)
-	require.NotNil(t, s.snapshotHistoryHold)
-	require.True(t, s.snapshotHistoryHold.matches(s.agent.latest))
-	require.Equal(t, s.componentBudgets().Total, s.snapshotHistoryHold.bytes, "rollback protects a maximum transaction, not zero bytes")
+	require.Equal(t, []byte("aaaa"), s.state.Agent.History)
+	require.NoError(t, s.ctx.Err())
 }
 
 func TestBridgeLegacyBudgetRefusesV10AdoptionBeforeFactory(t *testing.T) {
@@ -269,7 +231,7 @@ func TestBridgeLegacyBudgetRefusesV10AdoptionBeforeFactory(t *testing.T) {
 	r.AddWorker(source.LocalAddr())
 	call, client := dialDTLSCaller(t, source)
 	defer client.Close()
-	require.Eventually(t, source.session(call.id).snapshotStored.Load, 2*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return checkpointKnown(source.session(call.id)) }, 2*time.Second, time.Millisecond)
 	data, err := source.ExportSession(call.id)
 	require.NoError(t, err)
 	lease, err := store.Get(context.Background(), call.id)
@@ -296,9 +258,8 @@ func TestHistoryLengthAdmissionMatchesActualCapture(t *testing.T) {
 		candidate.History = bytes.Repeat([]byte{0xff}, length)
 		// Unchanged history isolates encoded admission from rate admission.
 		s.agent.latest = cloneAgentState(candidate)
-		now := s.taskNow()
-		_, _, captureErr := s.captureSnapshotCandidate(now, &candidate)
-		_, admissionErr := s.admissionSnapshot(candidate)
+		captureErr := persistCheckpointCandidate(t, s, candidate)
+		_, admissionErr := s.checkpoint.admit(checkpointAdmission{candidate: candidate, prior: s.agent.latest})
 		if captureErr != nil {
 			require.ErrorIs(t, admissionErr, agent.ErrCapacity)
 		} else {
@@ -311,8 +272,8 @@ func TestHistoryLengthAdmissionMatchesActualCapture(t *testing.T) {
 	s.agent.latest = cloneAgentState(candidate)
 	for _, work := range []int{6000, 7000} {
 		candidate.State.Bytes = bytes.Repeat([]byte{'w'}, work)
-		_, _, captureErr := s.captureSnapshotCandidate(s.taskNow(), &candidate)
-		_, admissionErr := s.admissionSnapshot(candidate)
+		captureErr := persistCheckpointCandidate(t, s, candidate)
+		_, admissionErr := s.checkpoint.admit(checkpointAdmission{candidate: candidate, prior: s.agent.latest})
 		if captureErr != nil {
 			require.ErrorIs(t, admissionErr, agent.ErrCapacity)
 		} else {
@@ -322,16 +283,20 @@ func TestHistoryLengthAdmissionMatchesActualCapture(t *testing.T) {
 }
 
 func TestAdmissionCaptureUsesStoreClockAtSizeBoundary(t *testing.T) {
-	s := componentWriterSession(t, sessionstore.NewMemory(), true)
-	s.agent = &agentHost{latest: cloneAgentState(s.state.Agent), v2: &v2Host{registration: agenthost.Registration{Bounds: effectiveAgentBounds(agent.Limits{}, s.snapshotLimits(), true)}}}
 	storeNow := time.Now().Add(-time.Hour)
+	store := &fixedCheckpointClockStore{Memory: sessionstore.NewMemory(), now: storeNow}
+	s := componentWriterSession(t, store, true)
+	s.agent = &agentHost{latest: cloneAgentState(s.state.Agent), v2: &v2Host{registration: agenthost.Registration{Bounds: effectiveAgentBounds(agent.Limits{}, s.snapshotLimits(), true)}}}
 	s.storeClock, s.storeClockAt = storeNow, time.Now()
 	candidate := cloneAgentState(s.state.Agent)
 	candidate.History = bytes.Repeat([]byte{'h'}, 8192)
 	s.agent.latest = cloneAgentState(candidate)
 	// The fixed-width wire format makes the size alone insensitive to the clock
 	// domain. Inspect the actual production Save capture as well as its boundary.
-	data, err := s.captureAdmissionSnapshot(candidate)
+	_, err := s.checkpoint.admit(checkpointAdmission{candidate: candidate, prior: s.agent.latest})
+	require.NoError(t, err)
+	require.NoError(t, persistCheckpointCandidate(t, s, candidate))
+	data, _, err := ReadRecoverySnapshot(context.Background(), store, s.id)
 	require.NoError(t, err)
 	snap, err := decodeSnapshot(data)
 	require.NoError(t, err)
@@ -341,7 +306,7 @@ func TestAdmissionCaptureUsesStoreClockAtSizeBoundary(t *testing.T) {
 	for low+1 < high {
 		mid := (low + high) / 2
 		candidate.State.Bytes = make([]byte, mid)
-		_, _, err = s.captureSnapshotCandidate(s.taskNow(), &candidate)
+		err = persistCheckpointCandidate(t, s, candidate)
 		if err == nil {
 			low = mid
 		} else {
@@ -350,10 +315,10 @@ func TestAdmissionCaptureUsesStoreClockAtSizeBoundary(t *testing.T) {
 		}
 	}
 	candidate.State.Bytes = make([]byte, low)
-	_, err = s.admissionSnapshot(candidate)
+	_, err = s.checkpoint.admit(checkpointAdmission{candidate: candidate, prior: s.agent.latest})
 	require.NoError(t, err)
 	candidate.State.Bytes = make([]byte, low+1)
-	_, err = s.admissionSnapshot(candidate)
+	_, err = s.checkpoint.admit(checkpointAdmission{candidate: candidate, prior: s.agent.latest})
 	require.ErrorIs(t, err, agent.ErrCapacity)
 }
 
@@ -380,7 +345,7 @@ func TestBridgeRejectsOversizedWorkingDeclarationBeforeFactory(t *testing.T) {
 	r.AddWorker(source.LocalAddr())
 	call, client := dialDTLSCaller(t, source)
 	defer client.Close()
-	require.Eventually(t, source.session(call.id).snapshotStored.Load, 2*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return checkpointKnown(source.session(call.id)) }, 2*time.Second, time.Millisecond)
 	data, err := source.ExportSession(call.id)
 	require.NoError(t, err)
 	lease, err := store.Get(context.Background(), call.id)
@@ -401,7 +366,7 @@ func TestBridgeRejectsOversizedWorkingDeclarationBeforeFactory(t *testing.T) {
 
 func TestCheckpointSkipsDistinguishIntervalFromBudget(t *testing.T) {
 	s := componentWriterSession(t, sessionstore.NewMemory(), true)
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	s.worker.cfg.Agent.SaveInterval = time.Hour
 	s.mu.Lock()
 	s.state.Agent.State.Bytes = []byte("coalesced state")
@@ -410,12 +375,12 @@ func TestCheckpointSkipsDistinguishIntervalFromBudget(t *testing.T) {
 	intervalBefore := checkpointWritesFromScrape(t, s.worker, "skipped-interval")
 	budgetBefore := checkpointWritesFromScrape(t, s.worker, "skipped-budget")
 	failures := s.state.Checkpoint.Failures
-	require.ErrorIs(t, s.persistSnapshotBudget(context.Background(), false, false), errCheckpointSkipped)
+	require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointOptional), errCheckpointSkipped)
 	require.Equal(t, intervalBefore+1, checkpointWritesFromScrape(t, s.worker, "skipped-interval"))
 	require.Equal(t, budgetBefore, checkpointWritesFromScrape(t, s.worker, "skipped-budget"))
-	s.snapshotHistoryHold = &historyWriteHold{version: s.state.Agent.State.Version, history: []byte("newer"), bytes: s.componentBudgets().Total}
-	s.snapshotBytesBudget = snapshotBucket{tokens: 1000, at: s.taskNow()}
-	require.ErrorIs(t, s.persistSnapshotBudget(context.Background(), true, true), errCheckpointSkipped)
+	s.checkpoint.rollback(cloneAgentState(s.state.Agent))
+	restoreCheckpointQuota(t, s, 1000, s.taskNow())
+	require.ErrorIs(t, s.checkpoint.persist(context.Background(), checkpointIntent), errCheckpointSkipped)
 	require.Equal(t, failures, s.state.Checkpoint.Failures)
 	require.Equal(t, budgetBefore+1, checkpointWritesFromScrape(t, s.worker, "skipped-budget"))
 	require.Contains(t, metricsBody(s.worker), "relais_worker_agent_checkpoint_budget_skips_total 1\n")

@@ -108,21 +108,20 @@ func TestExportDoesNotWaitForSnapshot(t *testing.T) {
 				call, client := dialDTLSCaller(t, w)
 				defer client.Close()
 				s := w.session(call.id)
-				require.Eventually(t, s.snapshotStored.Load, time.Second, time.Millisecond)
+				require.Eventually(t, func() bool { return checkpointKnown(s) }, time.Second, time.Millisecond)
 				// Drain and rebase at a fixed clock, removing refill timing from comparison.
-				s.snapshotMu.Lock()
+
+				s.checkpoint.wait()
 				now := time.Now()
-				s.snapshotBudgetMu.Lock()
 				balance := float64(w.cfg.SnapshotLimits.BurstBytes)
 				if phase == "clock" {
 					balance = 17
 				}
-				s.snapshotBytesBudget = snapshotBucket{tokens: balance, at: now}
-				s.snapshotBudgetMu.Unlock()
+				restoreCheckpointQuota(t, s, balance, now)
 				store.block.Store(true)
-				s.snapshotMu.Unlock()
+				debitBefore := s.worker.metrics.snapshotDebitBytes.Load()
 				writeDone := make(chan error, 1)
-				go func() { writeDone <- s.persistSnapshotBudget(context.Background(), true, false) }()
+				go func() { writeDone <- s.checkpoint.persist(context.Background(), checkpointRequired) }()
 				select {
 				case <-store.entered:
 				case <-time.After(time.Second):
@@ -154,9 +153,7 @@ func TestExportDoesNotWaitForSnapshot(t *testing.T) {
 				require.NotNil(t, snap.State.Agent.V2.Quota)
 				quota, err := snap.State.Agent.V2.Quota.balance()
 				require.NoError(t, err)
-				s.snapshotBudgetMu.Lock()
-				after := s.snapshotBytesBudget.available(w.cfg.SnapshotLimits, now)
-				s.snapshotBudgetMu.Unlock()
+				after := balance - float64(s.worker.metrics.snapshotDebitBytes.Load()-debitBefore)
 				require.LessOrEqual(t, float64(quota), after)
 				if phase == "clock" {
 					require.Zero(t, quota, "conservative debit floors at zero")

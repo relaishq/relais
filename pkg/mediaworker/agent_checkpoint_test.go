@@ -111,19 +111,18 @@ func TestAgentCheckpointSkipAndRequiredWrite(t *testing.T) {
 	store, source, _ := checkpointAgentWorkers(t, func(string) agent.Agent { return &countingAgent{} })
 	call, _ := dialDTLSCaller(t, source)
 	s := source.session(call.id)
-	require.Eventually(t, func() bool { return s.snapshotStored.Load() }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return checkpointKnown(s) }, time.Second, time.Millisecond)
 	// Synchronize the initial write before changing the published state.
-	s.snapshotMu.Lock()
+
+	s.checkpoint.wait()
 	s.mu.Lock()
 	s.worker.cfg.Agent.SaveInterval = time.Hour
-	s.lastCheckpoint = time.Now()
 	s.state.Agent.State.Bytes = make([]byte, 8)
 	binary.BigEndian.PutUint64(s.state.Agent.State.Bytes, 2)
 	s.state.Agent.Progress.Consumed = 2
 	attempts := s.state.Checkpoint.Attempts
 	s.mu.Unlock()
-	s.snapshotMu.Unlock()
-	require.ErrorIs(t, s.persistSnapshot(), errCheckpointSkipped)
+	require.ErrorIs(t, s.checkpoint.persist(s.ctx, checkpointOptional), errCheckpointSkipped)
 	s.mu.Lock()
 	require.Equal(t, attempts, s.state.Checkpoint.Attempts)
 	s.mu.Unlock()
@@ -136,17 +135,14 @@ func TestAgentCheckpointSkipAndRequiredWrite(t *testing.T) {
 		s.state.Agent.Progress.Consumed = 3
 	}
 	store.mu.Unlock()
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
-	s.mu.Lock()
-	durable := cloneAgentState(s.durableAgent)
-	s.mu.Unlock()
-	require.EqualValues(t, 2, binary.BigEndian.Uint64(durable.State.Bytes))
-	require.EqualValues(t, 2, durable.Progress.Consumed)
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	data, err := store.GetState(context.Background(), call.id)
 	require.NoError(t, err)
 	saved, err := decodeSnapshot(data)
 	require.NoError(t, err)
-	require.Equal(t, durable, saved.State.Agent)
+	require.EqualValues(t, 2, binary.BigEndian.Uint64(saved.State.Agent.State.Bytes))
+	require.EqualValues(t, 2, saved.State.Agent.Progress.Consumed)
+	require.ErrorIs(t, s.checkpoint.persist(s.ctx, checkpointOptional), errCheckpointSkipped, "the acknowledged pair is the capture, not the later live pair")
 	store.mu.Lock()
 	store.beforePut = nil
 	store.mu.Unlock()
@@ -171,14 +167,13 @@ func TestAgentCheckpointRateLimitUsesCapturedPair(t *testing.T) {
 	store, source, _ := checkpointAgentWorkers(t, func(string) agent.Agent { return &countingAgent{} })
 	call, _ := dialDTLSCaller(t, source)
 	s := source.session(call.id)
-	require.Eventually(t, func() bool { return s.snapshotStored.Load() }, time.Second, time.Millisecond)
-	s.snapshotMu.Lock()
+	require.Eventually(t, func() bool { return checkpointKnown(s) }, time.Second, time.Millisecond)
+
+	s.checkpoint.wait()
 	s.mu.Lock()
 	s.worker.cfg.Agent.SaveInterval = time.Hour
-	s.lastCheckpoint = time.Now()
 	before := s.state.Checkpoint
 	s.mu.Unlock()
-	s.snapshotMu.Unlock()
 	store.mu.Lock()
 	store.beforeClock = func() {
 		s.mu.Lock()
@@ -188,7 +183,7 @@ func TestAgentCheckpointRateLimitUsesCapturedPair(t *testing.T) {
 		s.state.Agent.Progress.Consumed = 2
 	}
 	store.mu.Unlock()
-	require.ErrorIs(t, s.persistSnapshot(), errCheckpointSkipped, "a callback accepted during Clock must not bypass the write cap")
+	require.ErrorIs(t, s.checkpoint.persist(s.ctx, checkpointOptional), errCheckpointSkipped, "a callback accepted during Clock must not bypass the write cap")
 	store.mu.Lock()
 	store.beforeClock = nil
 	store.mu.Unlock()
@@ -196,7 +191,7 @@ func TestAgentCheckpointRateLimitUsesCapturedPair(t *testing.T) {
 	after := s.state.Checkpoint
 	s.mu.Unlock()
 	require.Equal(t, before, after, "a skipped captured pair records no attempt, success, or failure")
-	require.NoError(t, s.persistSnapshotMode(context.Background(), true))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
 	data, err := store.GetState(context.Background(), call.id)
 	require.NoError(t, err)
 	saved, err := decodeSnapshot(data)

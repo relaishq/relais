@@ -15,22 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSnapshotBucketSuccessOnly(t *testing.T) {
-	l := SnapshotLimits{}.defaults()
-	var b snapshotBucket
-	now := time.Now()
-	require.EqualValues(t, l.BurstBytes, b.available(l, now))
-	b.debit(l, 7168, now)
-	require.EqualValues(t, l.BurstBytes-7168, b.available(l, now))
-	require.EqualValues(t, l.BurstBytes, b.available(l, now.Add(time.Second)))
-}
-
-func TestV2SnapshotSizeExactBoundary(t *testing.T) {
-	w, s := v2UnitSession(t, &v2UnitAgent{state: agent.State{Version: 1}})
-	require.NoError(t, s.checkSnapshotSize(make([]byte, w.cfg.SnapshotLimits.MaxBytes-snapshotEnvelopeBytes)))
-	require.ErrorIs(t, s.checkSnapshotSize(make([]byte, w.cfg.SnapshotLimits.MaxBytes-snapshotEnvelopeBytes+1)), agent.ErrCapacity)
-}
-
 func TestV2OversizedStateRefusesWithoutEndingCall(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1, Bytes: []byte("accepted")}}
 	_, s := v2UnitSession(t, a)
@@ -103,23 +87,19 @@ func TestV2FailedForcedWriteDoesNotDebit(t *testing.T) {
 	call, _ := dialDTLSCaller(t, w)
 	w.paused.Store(true)
 	s := w.session(call.id)
-	require.Eventually(t, s.snapshotStored.Load, time.Second, time.Millisecond, "initial handshake checkpoint must finish before injecting the forced-write failure")
-	s.snapshotMu.Lock()
-	s.snapshotBudgetMu.Lock()
-	s.snapshotBytesBudget = snapshotBucket{}
-	s.snapshotBudgetMu.Unlock()
+	require.Eventually(t, func() bool { return checkpointKnown(s) }, time.Second, time.Millisecond, "initial handshake checkpoint must finish before injecting the forced-write failure")
+
+	s.checkpoint.wait()
+	restoreCheckpointQuota(t, s, float64(s.snapshotLimits().BurstBytes), s.taskNow())
 	failing.fail.Store(true)
-	s.snapshotMu.Unlock()
-	err = s.persistSnapshotMode(context.Background(), true)
+	err = s.checkpoint.persist(context.Background(), checkpointRequired)
 	require.ErrorContains(t, err, "forced store outage")
 	require.NotErrorIs(t, err, agent.ErrCapacity)
-	s.snapshotBudgetMu.Lock()
-	require.True(t, s.snapshotBytesBudget.at.IsZero())
-	s.snapshotBudgetMu.Unlock()
+	require.InDelta(t, float64(s.snapshotLimits().BurstBytes), float64(checkpointQuota(t, s)), 1)
 	// The same forced intent fits immediately after the failure; an outage has
 	// neither consumed capacity nor granted durable launch permission.
 	failing.fail.Store(false)
-	require.NoError(t, s.persistSnapshotBudget(context.Background(), true, true))
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointIntent))
 	data, err := failing.GetState(context.Background(), call.id)
 	require.NoError(t, err)
 	snap, err := decodeSnapshot(data)
@@ -127,9 +107,7 @@ func TestV2FailedForcedWriteDoesNotDebit(t *testing.T) {
 	balance, err := snap.State.Agent.V2.Quota.balance()
 	require.NoError(t, err)
 	require.EqualValues(t, w.cfg.SnapshotLimits.BurstBytes-len(data)-snapshotEnvelopeBytes, balance)
-	s.snapshotBudgetMu.Lock()
-	require.Less(t, s.snapshotBytesBudget.available(w.cfg.SnapshotLimits, time.Now()), float64(w.cfg.SnapshotLimits.BurstBytes))
-	s.snapshotBudgetMu.Unlock()
+	require.Less(t, float64(checkpointQuota(t, s)), float64(w.cfg.SnapshotLimits.BurstBytes))
 }
 
 type snapshotBudgetAgent struct{}
@@ -155,22 +133,6 @@ func TestV2AudioEffectsValidateCopiedTasks(t *testing.T) {
 	s.agent.v2.tasks = []*localTask{{intent: taskIntent{ID: "audio", Turn: 2}}}
 	effects := agent.Effects{Audio: []agent.Audio{{Turn: 1, Source: agent.AudioRef{TaskID: "audio", Sequence: 1}}}}
 	require.NoError(t, s.validateAudioEffects(effects, agent.Event{Kind: agent.TaskMessage, Result: &result}, copied))
-}
-
-func TestV2SnapshotQuotaSurvivesRestore(t *testing.T) {
-	w, s := v2UnitSession(t, &v2UnitAgent{state: agent.State{Version: 1}})
-	now := time.Now()
-	s.snapshotBytesBudget.debit(w.cfg.SnapshotLimits, w.cfg.SnapshotLimits.BurstBytes-17, now)
-	q := s.captureSnapshotQuota(now)
-	balance, err := q.balance()
-	require.NoError(t, err)
-	require.EqualValues(t, 17, balance)
-	_, target := v2UnitSession(t, &v2UnitAgent{state: agent.State{Version: 1}})
-	require.NoError(t, target.restoreSnapshotQuota(q))
-	require.EqualValues(t, 17, target.snapshotBytesBudget.available(w.cfg.SnapshotLimits, now))
-	require.EqualValues(t, w.cfg.SnapshotLimits.BurstBytes, target.snapshotBytesBudget.available(w.cfg.SnapshotLimits, now.Add(time.Second)))
-	q.Version++
-	require.ErrorIs(t, target.restoreSnapshotQuota(q), agent.ErrIncompatibleAgent)
 }
 
 func TestV2EmitRestoreDoesNotGrantImmediatePublication(t *testing.T) {

@@ -452,7 +452,7 @@ func testReplayResume(t *testing.T, mode string) {
 		require.LessOrEqual(t, uint64(h.SequenceNumber), floor)
 	}
 	require.EqualValues(t, floor, h.SequenceNumber)
-	b.session(call.id).wantSnapshot()
+	b.session(call.id).checkpoint.request()
 	require.Eventually(t, func() bool { store.mu.Lock(); defer store.mu.Unlock(); return store.puts > 2 }, time.Second, time.Millisecond)
 	require.NoError(t, b.kill())
 	lease, err = store.Transfer(context.Background(), lease, c.LocalAddr(), time.Minute)

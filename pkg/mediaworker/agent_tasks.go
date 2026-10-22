@@ -218,7 +218,6 @@ func (s *session) taskMetadataBudgetMode(intents []taskIntent, refusals []taskRe
 		envelope.ControlHigh = 0
 		envelope.ControlFloor = 0
 	}
-	envelope.Quota = s.captureSnapshotQuota(s.taskNow())
 	s.mu.Lock()
 	envelope.Playback = s.playbackSnapshotLocked()
 	if len(projection) > 0 {
@@ -227,21 +226,8 @@ func (s *session) taskMetadataBudgetMode(intents []taskIntent, refusals []taskRe
 	s.mu.Unlock()
 	envelope.Tasks = intents
 	envelope.Capacity = refusals
-	limit := min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes)
-	metadata := s.compactControlMetadata(&envelope, limit)
-	if admission {
-		// Reserve encoded metadata headroom from each real admitted intent. This
-		// changes new admission only: prior checkpoints retain their full capacity.
-		envelope = taskMetadataGuard(envelope)
-		guarded := s.compactControlMetadata(&envelope, limit)
-		if guarded > metadata {
-			metadata = guarded
-		}
-	}
-	if metadata > limit {
-		return agent.ErrCapacity
-	}
-	return nil
+	_, err := s.checkpoint.admit(checkpointAdmission{host: &checkpointHostPreflight{envelope: envelope, taskHeadroom: admission}})
+	return err
 }
 func taskMetadataGuard(envelope v2Envelope) v2Envelope {
 	intents, refusals := envelope.Tasks, envelope.Capacity
@@ -507,15 +493,15 @@ func (s *session) taskStateChanged() {
 	}
 	s.agent.latest.Revision++
 	s.publishAgent()
-	s.wantSnapshot()
+	s.checkpoint.request()
 }
 func (s *session) launchTasks() {
 	h := s.agent.v2
 	s.mu.Lock()
 	paused := s.agent.paused || s.worker.paused.Load() || s.fenced.Load() || s.ctx.Err() != nil
 	var durable []taskIntent
-	if s.durableAgent.V2 != nil {
-		durable = cloneTaskIntents(s.durableAgent.V2.Tasks)
+	if s.checkpoint.progressLocked().hasAgent {
+		durable = s.checkpoint.progressLocked().tasks
 	}
 	s.mu.Unlock()
 	if paused {
@@ -614,9 +600,9 @@ func (s *session) launchTasks() {
 		t.attempt++
 		t.launched = true
 		if t.intent.Class == agent.SideEffecting {
-			witness := &AgentTaskLaunch{ID: t.intent.ID, Step: t.intent.Step, At: time.Now(), StoreAt: s.taskClockLocked(), Deadline: t.intent.Deadline, CheckpointAt: s.lastCheckpoint}
-			if s.durableAgent.V2 != nil {
-				for _, d := range s.durableAgent.V2.Tasks {
+			witness := &AgentTaskLaunch{ID: t.intent.ID, Step: t.intent.Step, At: time.Now(), StoreAt: s.taskClockLocked(), Deadline: t.intent.Deadline, CheckpointAt: s.checkpoint.progressLocked().at}
+			if s.checkpoint.progressLocked().hasAgent {
+				for _, d := range s.checkpoint.progressLocked().tasks {
 					if d.ID == t.intent.ID && d.Digest == t.intent.Digest && d.Phase == taskStarted && !d.Final {
 						witness.Checkpointed = true
 						break
@@ -894,8 +880,8 @@ func (s *session) taskCheckpointPending() bool {
 			continue
 		}
 		granted := false
-		if s.durableAgent.V2 != nil {
-			for _, d := range s.durableAgent.V2.Tasks {
+		if s.checkpoint.progressLocked().hasAgent {
+			for _, d := range s.checkpoint.progressLocked().tasks {
 				if d.ID == t.ID && d.Digest == t.Digest && d.Phase == taskStarted && !d.Final {
 					granted = true
 					break
@@ -921,7 +907,7 @@ func (s *session) taskCheckpointLoop() {
 			paused := s.agent.paused
 			s.mu.Unlock()
 			if !paused && !s.worker.paused.Load() {
-				_ = s.persistSnapshotBudget(s.ctx, true, true)
+				_ = s.checkpoint.persist(s.ctx, checkpointIntent)
 				if !s.taskCheckpointPending() {
 					break
 				}
@@ -1261,8 +1247,8 @@ func (s *session) pruneTasks() {
 	h := s.agent.v2
 	s.mu.Lock()
 	var durable []taskIntent
-	if s.durableAgent.V2 != nil {
-		durable = cloneTaskIntents(s.durableAgent.V2.Tasks)
+	if s.checkpoint.progressLocked().hasAgent {
+		durable = s.checkpoint.progressLocked().tasks
 	}
 	progress := s.state.Agent.Progress
 	received := maps.Clone(s.state.SRTP.Inbound)

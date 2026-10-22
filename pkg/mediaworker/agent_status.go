@@ -64,7 +64,7 @@ func (w *Worker) agentSessionStatus(id string) (*AgentSessionStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	pair := s.state.Agent
-	status := &AgentSessionStatus{PendingBytes: pendingBytes, ID: id, State: legacy.State{Version: pair.State.Version, Bytes: append([]byte(nil), pair.State.Bytes...)}, Progress: pair.Progress, CheckpointKnown: s.snapshotStored.Load()}
+	status := &AgentSessionStatus{PendingBytes: pendingBytes, ID: id, State: legacy.State{Version: pair.State.Version, Bytes: append([]byte(nil), pair.State.Bytes...)}, Progress: pair.Progress, CheckpointKnown: s.checkpoint.progressLocked().known}
 	status.SideEffectLaunches = s.sideEffectLaunches
 	if s.lastTaskLaunch != nil {
 		copy := *s.lastTaskLaunch
@@ -73,14 +73,14 @@ func (w *Worker) agentSessionStatus(id string) (*AgentSessionStatus, error) {
 	if json.Valid(pair.State.Bytes) {
 		status.App = append(json.RawMessage(nil), pair.State.Bytes...)
 	}
-	if !s.lastCheckpoint.IsZero() {
-		status.CheckpointAgeMS = float64(max(0, time.Since(s.lastCheckpoint))) / float64(time.Millisecond)
+	if !s.checkpoint.progressLocked().at.IsZero() {
+		status.CheckpointAgeMS = float64(max(0, time.Since(s.checkpoint.progressLocked().at))) / float64(time.Millisecond)
 	}
 	// CapturedAt and storeClock share the store's wall clock. Extrapolate with
 	// local elapsed time and clamp if the store clock stepped backwards.
-	if !s.state.Checkpoint.CapturedAt.IsZero() && !s.storeClockAt.IsZero() {
+	if !s.checkpoint.progressLocked().observations.CapturedAt.IsZero() && !s.storeClockAt.IsZero() {
 		now := s.storeClock.Add(time.Since(s.storeClockAt))
-		status.SnapshotAgeMS = float64(max(0, now.Sub(s.state.Checkpoint.CapturedAt))) / float64(time.Millisecond)
+		status.SnapshotAgeMS = float64(max(0, now.Sub(s.checkpoint.progressLocked().observations.CapturedAt))) / float64(time.Millisecond)
 	}
 	if v2 := pair.V2; v2 != nil {
 		status.Name = v2.Name

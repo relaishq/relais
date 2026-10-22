@@ -224,7 +224,7 @@ func TestPlaybackExactAndCrashRestore(t *testing.T) {
 func TestAudioStreamingReleasesPayloadAfterAckAndDrain(t *testing.T) {
 	s, a, r := audioUnitSession(t, 4)
 	appendUnitAudio(t, s, a, r)
-	s.durableAgent = cloneAgentState(s.state.Agent)
+	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))
 	before := s.moveReserved
 	s.pruneTasks()
 	require.Len(t, s.agent.v2.tasks[0].audio, 1, "live references retain audio")
@@ -322,7 +322,7 @@ func TestAudioMailboxBackpressureUntilPlaybackAckDrain(t *testing.T) {
 	require.EqualValues(t, 1, s.agent.v2.tasks[0].intent.Published)
 	s.agent.v2.playback.queue = nil
 	s.agent.v2.playback.length = 0
-	s.durableAgent = cloneAgentState(s.state.Agent)
+	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))
 	s.pruneTasks()
 	s.acceptEmission(e)
 	require.NoError(t, <-e.reply)

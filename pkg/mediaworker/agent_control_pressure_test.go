@@ -33,7 +33,7 @@ func TestControlAcknowledgedReceiptsReleaseAdmission(t *testing.T) {
 				for i := 1; i <= held; i++ {
 					_, err := s.processControl(agent.ControlMessage{ID: fmt.Sprint(i), Sequence: uint64(i), Name: "x"})
 					require.NoError(t, err)
-					s.controlAck = uint64(i)
+					require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(uint64(i))}))
 				}
 				for i := 0; i < width; i++ {
 					a.effects.StartTasks = append(a.effects.StartTasks, agent.TaskSpec{Step: fmt.Sprintf("s%02d", i), Kind: "wait/v1", Class: agent.ReadOnly})
@@ -131,7 +131,7 @@ func TestControlUnacknowledgedAdmissionRetryCadence(t *testing.T) {
 	t.Logf("stall=%s Handle=%d Restore=%d", time.Since(start), attempts, a.restores-restores)
 	require.LessOrEqual(t, attempts, int(duration/(250*time.Millisecond))+1)
 	require.Equal(t, before, s.state.Agent)
-	s.controlAck = 2
+	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(2)}))
 	require.NoError(t, s.handleV2Event(agent.Event{Kind: agent.Started, ID: "fan"}), "acknowledgement bypasses retry delay")
 }
 
@@ -144,7 +144,7 @@ func TestControlAcknowledgedReceiptsReleaseEffects(t *testing.T) {
 			for i := uint64(1); i <= 2; i++ {
 				_, err := s.processControl(agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"})
 				require.NoError(t, err)
-				s.controlAck = i
+				require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(i)}))
 			}
 			// Model adoption onto a worker with a lower effective operator ceiling.
 			s.agent.v2.registration.Bounds.MaxPendingBytes = 550
@@ -172,7 +172,7 @@ func TestControlAcknowledgedReceiptsReleaseEmission(t *testing.T) {
 	for i := uint64(1); i <= 2; i++ {
 		_, err := s.processControl(agent.ControlMessage{ID: fmt.Sprint(i), Sequence: i, Name: "x"})
 		require.NoError(t, err)
-		s.controlAck = i
+		require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent, controlAck: ptrControlAck(i)}))
 	}
 	s.agent.v2.registration.Bounds.MaxPendingBytes = 550
 	intent := taskIntent{ID: "emit", Class: agent.ReadOnly, Phase: taskStarted}

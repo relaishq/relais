@@ -10,7 +10,6 @@ import (
 	"github.com/pion/dtls/v3"
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
-	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/agent"
 	"github.com/relaishq/relais/pkg/framecache"
@@ -318,7 +317,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 		}
 		sess = sessionFromState(w, snap.State)
 		sess.lease = opts.Lease
-		sess.restoreComponentMode(snap)
+		_ = sess.checkpoint.restore(checkpointRestore{snapshot: snap})
 		if err := sess.initAgent(true, opts, snap.AgentMoveOnly); err != nil {
 			sess.fenced.Store(true)
 			sess.close()
@@ -347,13 +346,11 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 	}
 	if sess == nil {
 		sess = sessionFromState(w, snap.State)
-		sess.restoreComponentMode(snap)
+		_ = sess.checkpoint.restore(checkpointRestore{snapshot: snap})
 	}
 	sess.lease = opts.Lease
 	sess.callerSequenceReserve = opts.CallerSequenceReserve
-	sess.state.Checkpoint.TakeoverAge = opts.CheckpointAge
-	sess.state.Checkpoint.TakeoverSnapshotAge = opts.SnapshotAge
-	sess.state.Checkpoint.TakeoverStoredAt = opts.CheckpointStoredAt
+	_ = sess.checkpoint.restore(checkpointRestore{takeover: &opts})
 	if sess.agent == nil {
 		if err := sess.initAgent(true, opts, snap.AgentMoveOnly); err != nil {
 			sess.fenced.Store(true)
@@ -362,7 +359,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 			return "", err
 		}
 	}
-	if err := sess.prepareComponentAdoption(parent); err != nil {
+	if err := sess.checkpoint.prepareAdoption(parent); err != nil {
 		sess.fenced.Store(true)
 		sess.close()
 		return "", err
@@ -374,7 +371,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 
 		return "", fmt.Errorf("mediaworker: resume session %s: %w", sess.id, err)
 	}
-	if err := sess.persistSnapshotMode(parent, true); err != nil {
+	if err := sess.checkpoint.persist(parent, checkpointRequired); err != nil {
 		if errors.Is(err, errDTLSCheckpointEpoch) {
 			err = ErrNotEstablished
 		}
@@ -406,7 +403,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 		} else {
 			before := sess.state.Video
 			if sess.reserveReplay(frames, opts.SequenceMargin) {
-				if err := sess.persistSnapshotMode(parent, true); err != nil {
+				if err := sess.checkpoint.persist(parent, checkpointRequired); err != nil {
 					// No replay ciphertext has been made or sent. Keep PLI recovery when
 					// storage is unavailable, but a lost lease must still abort adoption.
 					sess.state.Video = before
@@ -532,7 +529,7 @@ func (w *Worker) adopt(sess *session, dtlsConn *dtls.Conn, replayPackets [][]byt
 		go func() { defer w.running.Done(); sess.sendReplay(replayPackets) }()
 	}
 	go func() { defer w.running.Done(); sess.agentLoop() }()
-	go func() { defer w.running.Done(); sess.snapshotLoop() }()
+	go func() { defer w.running.Done(); sess.checkpoint.run(sess.ctx) }()
 
 	go func() {
 		defer w.running.Done()
@@ -595,70 +592,8 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		}
 		payload = &movePayload{Bytes: export.payload, Tasks: export.tasks, Audio: export.audio}
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	defer func() {
-		if !s.fenced.Load() && s.ctx.Err() == nil && s.agent != nil {
-			s.agent.paused = false
-			if s.agent.v2 != nil {
-				s.wakePacer()
-			}
-		}
-	}()
-
-	if s.fenced.Load() {
-		return nil, release, errHandedOver
-	}
-	if s.dtlsConn == nil || s.srtpIn == nil {
-		return nil, release, ErrNotEstablished
-	}
-
-	// Fence first, so the DTLS connection cannot send a record the snapshot
-	// does not account for.
-	s.fenced.Store(true)
-	connState, ok := s.dtlsConn.ConnectionState()
-	if !ok {
-		s.fenced.Store(false)
-
-		return nil, release, errors.New("mediaworker: DTLS connection state unavailable")
-	}
-	dtlsState, err := connState.MarshalBinary()
-	if err != nil {
-		s.fenced.Store(false)
-
-		return nil, release, fmt.Errorf("mediaworker: export DTLS state: %w", err)
-	}
-	s.checkpointRates(&s.state.Checkpoint)
-	exported := s.state
-	if exported.Agent.V2 != nil {
-		exported.Agent = cloneAgentState(s.state.Agent)
-		now := time.Now()
-		if !s.storeClockAt.IsZero() {
-			now = s.storeClock.Add(time.Since(s.storeClockAt))
-		}
-		exported.Agent.V2.Quota = s.captureSnapshotQuotaMode(now, true)
-		payload.ControlAck = s.controlAck
-	}
-	state, err := json.Marshal(snapshot{
-		Version:        s.state.Version,
-		AgentMoveOnly:  payload,
-		State:          exported,
-		DTLSConnection: dtlsState,
-		split:          s.componentExportState(),
-	})
-	if err != nil {
-		s.fenced.Store(false)
-
-		return nil, release, fmt.Errorf("mediaworker: encode session state: %w", err)
-	}
-
-	if payload != nil {
-		if err := validateV2Wire(state); err != nil {
-			s.fenced.Store(false)
-			return nil, release, privateapi.Uncertain(err)
-		}
-	}
-	return state, release, nil
+	data, err := s.checkpoint.capture(checkpointExact, payload)
+	return data, release, err
 }
 
 // validateSnapshot is shared by legacy decoding and component assembly. It
