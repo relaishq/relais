@@ -142,7 +142,7 @@ func (p *Plane) Run(ctx context.Context) error {
 						p.metrics.detections.Add(1)
 					}
 					dead = append(dead, w)
-				} else if w.observation.knowledge().retryPlanned && !w.retryingMoves && len(p.recovery.workLocked(w, recoveryAll)) > 0 {
+				} else if w.observation.knowledge().retryPlanned && !w.retryingMoves && p.recovery.hasWorkLocked(w, recoveryAll) {
 					w.retryingMoves = true
 					planned = append(planned, w)
 				}
@@ -211,7 +211,7 @@ func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected tim
 	remaining, err := p.store.ListByWorker(ctx, w.addr)
 	unknown = p.unknownCreateReservations(w)
 	p.mu.Lock()
-	noIncoming := w.reserved <= unknown && len(p.recovery.workLocked(w, recoveryAll)) == 0
+	noIncoming := w.reserved <= unknown && !p.recovery.hasWorkLocked(w, recoveryAll)
 	p.mu.Unlock()
 	return err == nil && len(remaining) == 0 && noIncoming
 }

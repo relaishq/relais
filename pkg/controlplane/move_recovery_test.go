@@ -95,11 +95,14 @@ type sequenceWorker struct {
 	Worker
 	sequence *moveSequence
 	role     string
+	exported []byte
 }
 
 func (w *sequenceWorker) ExportSession(id string) ([]byte, error) {
 	w.sequence.note(w.role + "-export")
-	return w.Worker.ExportSession(id)
+	state, err := w.Worker.ExportSession(id)
+	w.exported = append([]byte(nil), state...)
+	return state, err
 }
 func (w *sequenceWorker) ResumeSession(state []byte, opts mediaworker.ResumeOptions) (string, error) {
 	w.sequence.note(w.role + "-resume")
@@ -145,7 +148,8 @@ func TestMoveRecoveryExactExportAndSequence(t *testing.T) {
 			p, a, b, r := setup(t)
 			sequence := &moveSequence{}
 			target := &observedResumeWorker{fakeWorker: b}
-			p.workers["a"].worker = &sequenceWorker{Worker: &exportingWorker{fakeWorker: a}, sequence: sequence, role: "source"}
+			source := &sequenceWorker{Worker: &exportingWorker{fakeWorker: a}, sequence: sequence, role: "source"}
+			p.workers["a"].worker = source
 			p.workers["b"].worker = &sequenceWorker{Worker: target, sequence: sequence, role: "target"}
 			p.relay = &sequenceRelay{fakeRelay: r, sequence: sequence, recipient: b}
 			id, _, err := p.Create(context.Background(), "offer", "a")
@@ -161,6 +165,8 @@ func TestMoveRecoveryExactExportAndSequence(t *testing.T) {
 				require.NoError(t, err)
 			}
 			require.True(t, b.runs(id))
+			require.NotEmpty(t, source.exported)
+			require.Equal(t, source.exported, target.state, "resume must receive the exact exported bytes")
 			require.Zero(t, target.opts.SequenceMargin, "exact export must use zero RTP margin")
 			require.Zero(t, target.opts.SRTCPIndexMargin, "exact export must use zero SRTCP margin")
 			sequence.mu.Lock()

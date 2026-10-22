@@ -198,15 +198,15 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 		return
 	}
 	p.mu.Lock()
-	if m.pending[source] == nil {
-		m.pending[source] = make(map[string]*moveTransfer)
-	}
 	pending := m.pending[source][c.id]
 	if pending == nil && lease.Worker != source.addr {
 		p.mu.Unlock()
 		return
 	}
 	if pending == nil {
+		if m.pending[source] == nil {
+			m.pending[source] = make(map[string]*moveTransfer)
+		}
 		pending = &moveTransfer{call: c, lease: lease, routed: lease.Worker, routedLease: lease,
 			excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts}
 		m.pending[source][c.id] = pending

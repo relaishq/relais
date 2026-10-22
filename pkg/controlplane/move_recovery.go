@@ -47,7 +47,7 @@ const (
 	recoveryPlanned
 )
 
-// pendingLocked and workLocked require Plane.mu and never perform I/O.
+// Scheduling queries require Plane.mu and never perform I/O.
 func (m *moveRecovery) pendingLocked(id string) bool {
 	for _, entries := range m.pending {
 		if entries[id] != nil {
@@ -56,6 +56,22 @@ func (m *moveRecovery) pendingLocked(id string) bool {
 	}
 	return false
 }
+
+// hasWorkLocked checks membership without allocating scheduling tokens. The
+// all-work check is constant-time; planned work stops at the first match.
+func (m *moveRecovery) hasWorkLocked(source *registration, scope recoveryScope) bool {
+	entries := m.pending[source]
+	if scope == recoveryAll {
+		return len(entries) > 0
+	}
+	for _, pending := range entries {
+		if pending.planned || pending.held {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *moveRecovery) workLocked(source *registration, scope recoveryScope) []sessionstore.Lease {
 	entries := m.pending[source]
 	leases := make([]sessionstore.Lease, 0, len(entries))
