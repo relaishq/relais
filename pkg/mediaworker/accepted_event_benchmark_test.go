@@ -30,7 +30,7 @@ func BenchmarkAcceptedEventAdmission(b *testing.B) {
 	}
 }
 
-func BenchmarkPlaybackProjectionLocked(b *testing.B) {
+func BenchmarkPlaybackSnapshotLocked(b *testing.B) {
 	s := &session{agent: &agentHost{v2: &v2Host{}}}
 	p := &s.agent.v2.playback
 	p.payloads = make(map[audioKey]playbackPayload)
@@ -43,7 +43,7 @@ func BenchmarkPlaybackProjectionLocked(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		s.mu.Lock()
-		projection := s.projectedPlaybackLocked(agent.Effects{}, agent.Event{}).snapshot()
+		projection := s.playbackSnapshotLocked()
 		s.mu.Unlock()
 		if projection.Pending != 200 {
 			b.Fatal("lost playback")

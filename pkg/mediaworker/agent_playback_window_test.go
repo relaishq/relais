@@ -76,8 +76,8 @@ func TestPlaybackIdleSleepsUntilWake(t *testing.T) {
 	require.GreaterOrEqual(t, delay, time.Hour)
 }
 func TestPlaybackOutputClockDoesNotAccumulateWakeDelay(t *testing.T) {
-	s, a, r := audioUnitSession(t, 80)
-	appendUnitAudio(t, s, a, r)
+	s, _, r := audioUnitSession(t, 80)
+	installUnitPlayback(t, s, r)
 	profile := srtp.ProtectionProfileAeadAes128Gcm
 	keys := testSessionKeys(t, profile)
 	s.srtpOut = testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)

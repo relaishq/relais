@@ -194,7 +194,7 @@ func TestControlFanOutHeadroom(t *testing.T) {
 						e.Controls[i].Digest = controlDigest(m)
 					}
 					a = &v2UnitAgent{state: agent.State{Version: 1}}
-					_, s = v2UnitSessionFromState(t, a, state, v2UnitRegistration(a, agent.Limits{}, map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}))
+					_, s = v2UnitSessionFromState(t, a, state, v2UnitRegistration(a, agent.Limits{}, map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}), func(c *AgentConfig) { c.CallbackTimeout = 5 * time.Second })
 					require.NoError(t, s.initAgent(true, ResumeOptions{}, &movePayload{ControlAck: math.MaxUint64 - 2}))
 				}
 				raw, _ := json.Marshal(s.agent.latest.V2)
@@ -212,7 +212,7 @@ func TestControlFanOutHeadroom(t *testing.T) {
 					var restored sessionState
 					require.NoError(t, json.Unmarshal(wire, &restored))
 					b := &v2UnitAgent{state: agent.State{Version: 1}}
-					_, target := v2UnitSessionFromState(t, b, restored, v2UnitRegistration(b, agent.Limits{}, map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}))
+					_, target := v2UnitSessionFromState(t, b, restored, v2UnitRegistration(b, agent.Limits{}, map[string]agent.TaskHandler{"wait/v1": func(context.Context, *agent.TaskRun) error { return nil }}), func(c *AgentConfig) { c.CallbackTimeout = 5 * time.Second })
 					require.NoError(t, target.initAgent(true, ResumeOptions{}, &movePayload{ControlAck: checkpointObservation(s).controlAck}))
 					require.Equal(t, s.agent.latest.V2.Capacity, target.agent.latest.V2.Capacity)
 					require.Equal(t, s.agent.latest.V2.Controls, target.agent.latest.V2.Controls)

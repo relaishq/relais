@@ -38,15 +38,29 @@ func audioUnitSession(t *testing.T, count int) (*session, *v2UnitAgent, agent.Ta
 	s.publishAgent()
 	return s, a, r
 }
-func appendUnitAudio(t *testing.T, s *session, a *v2UnitAgent, r agent.TaskResult) {
+
+// Pacer, prune and restore fixture only; it never submits an event.
+func installUnitPlayback(t *testing.T, s *session, r agent.TaskResult) {
 	t.Helper()
-	a.effects = agent.Effects{}
-	for i := range r.Chunk.Audio.Packets {
-		a.effects.Audio = append(a.effects.Audio, agent.Audio{Turn: r.Turn, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence, PacketOffset: uint32(i)}})
+	p := &s.agent.v2.playback
+	for i, packet := range r.Chunk.Audio.Packets {
+		d, err := opusDuration(packet)
+		require.NoError(t, err)
+		ref := agent.Audio{Turn: r.Turn, Source: agent.AudioRef{TaskID: r.TaskID, Sequence: r.Sequence, PacketOffset: uint32(i)}}
+		p.queue = append(p.queue, ref)
+		p.length += len(packet)
+		p.duration += d
+		p.referenceBytes += len(r.TaskID) + 32
 	}
-	_, eventErr0 := (acceptedEvents{s}).submit(agent.Event{ID: "result", Kind: agent.TaskMessage, Result: &r}, eventLive)
-	require.NoError(t, eventErr0)
-	a.effects = agent.Effects{}
+	task := s.agent.v2.tasks[0]
+	task.results = nil
+	task.audio = []agent.TaskResult{r}
+	task.intent.Cursor = r.Sequence
+	task.mailboxBytes -= taskAudioRefBytes(r)
+	s.agent.latest.V2.Playback = p.snapshot()
+	s.publishTaskIntents(s.agent.latest.V2)
+	s.publishAgent()
+	require.NoError(t, s.taskBudget(s.agent.v2.tasks, 0))
 }
 func TestOpusPacketDurationAndFraming(t *testing.T) {
 	for _, tc := range []struct {
@@ -65,8 +79,8 @@ func TestOpusPacketDurationAndFraming(t *testing.T) {
 	require.ErrorIs(t, err, agent.ErrIncompatibleAgent)
 }
 func TestPlaybackPacerRebasesAndKeepsCounters(t *testing.T) {
-	s, a, r := audioUnitSession(t, 5)
-	appendUnitAudio(t, s, a, r)
+	s, _, r := audioUnitSession(t, 5)
+	installUnitPlayback(t, s, r)
 	profile := srtp.ProtectionProfileAeadAes128Gcm
 	keys := testSessionKeys(t, profile)
 	sink := listenTestUDP(t)
@@ -210,8 +224,8 @@ func TestTimerGenerationResetCancelAndRestore(t *testing.T) {
 func TestPlaybackExactAndCrashRestore(t *testing.T) {
 	for _, exact := range []bool{true, false} {
 		t.Run(fmt.Sprint(exact), func(t *testing.T) {
-			s, a, r := audioUnitSession(t, 40)
-			appendUnitAudio(t, s, a, r)
+			s, _, r := audioUnitSession(t, 40)
+			installUnitPlayback(t, s, r)
 			s.agent.v2.registration.Tasks = map[string]agent.TaskHandler{"tts": func(context.Context, *agent.TaskRun) error { return nil }}
 			task := s.agent.v2.tasks[0]
 			task.intent.Kind = "tts"
@@ -243,8 +257,8 @@ func TestPlaybackExactAndCrashRestore(t *testing.T) {
 }
 
 func TestAudioStreamingReleasesPayloadAfterAckAndDrain(t *testing.T) {
-	s, a, r := audioUnitSession(t, 4)
-	appendUnitAudio(t, s, a, r)
+	s, _, r := audioUnitSession(t, 4)
+	installUnitPlayback(t, s, r)
 	require.NoError(t, s.checkpoint.restore(checkpointRestore{pair: &s.state.Agent}))
 	before := s.moveReserved
 	s.pruneTasks()
@@ -258,8 +272,8 @@ func TestAudioStreamingReleasesPayloadAfterAckAndDrain(t *testing.T) {
 	require.False(t, s.agent.v2.tasks[0].intent.Final)
 }
 func TestAudioMailboxBackpressureUntilPlaybackAckDrain(t *testing.T) {
-	s, a, r := audioUnitSession(t, 4)
-	appendUnitAudio(t, s, a, r)
+	s, _, r := audioUnitSession(t, 4)
+	installUnitPlayback(t, s, r)
 	s.agent.v2.registration.Bounds.MaxMailboxBytes = int(s.moveReserved)
 	e := taskEmission{id: r.TaskID, attempt: 0, ctx: context.Background(), sequence: 2, chunk: r.Chunk, reply: make(chan error, 1)}
 	s.acceptEmission(e)
@@ -274,8 +288,8 @@ func TestAudioMailboxBackpressureUntilPlaybackAckDrain(t *testing.T) {
 	require.EqualValues(t, 2, s.agent.v2.tasks[0].intent.Published)
 }
 func TestPlaybackEncryptionFailureKeepsCursor(t *testing.T) {
-	s, a, r := audioUnitSession(t, 2)
-	appendUnitAudio(t, s, a, r)
+	s, _, r := audioUnitSession(t, 2)
+	installUnitPlayback(t, s, r)
 	profile := srtp.ProtectionProfileAeadAes128Gcm
 	keys := testSessionKeys(t, profile)
 	s.srtpOut = testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
@@ -288,13 +302,13 @@ func TestPlaybackEncryptionFailureKeepsCursor(t *testing.T) {
 }
 
 func TestPlaybackVariablePacketDurations(t *testing.T) {
-	s, a, r := audioUnitSession(t, 3)
+	s, _, r := audioUnitSession(t, 3)
 	r.Chunk.Audio.Packets = [][]byte{{0x80}, {0x18}, {0x1b, 2}} // 2.5, 60 and 120 ms
 	s.agent.v2.playback.payloads = nil
 	require.NoError(t, s.registerAudioLocked(r))
 	s.agent.v2.tasks[0].results[0] = r
 	s.agent.v2.tasks[0].mailboxBytes = taskResultBytes(r)
-	appendUnitAudio(t, s, a, r)
+	installUnitPlayback(t, s, r)
 	profile := srtp.ProtectionProfileAeadAes128Gcm
 	keys := testSessionKeys(t, profile)
 	s.srtpOut = testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)

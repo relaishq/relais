@@ -3,6 +3,7 @@ package mediaworker
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -123,18 +124,52 @@ func (*snapshotBudgetAgent) Save(context.Context) (agent.State, error) {
 func (*snapshotBudgetAgent) Restore(context.Context, agent.State) error { return nil }
 
 func TestV2AudioEffectsValidateCopiedTasks(t *testing.T) {
-	_, s := v2UnitSession(t, &v2UnitAgent{state: agent.State{Version: 1}})
-	require.NoError(t, s.initAgent(false, ResumeOptions{}))
-	result := agent.TaskResult{TaskID: "audio", Sequence: 1, Turn: 1, Chunk: agent.Chunk{Audio: &agent.EncodedAudio{Format: "audio/opus", Packets: [][]byte{{0xf8, 0xff, 0xfe}}}}}
-	s.mu.Lock()
-	require.NoError(t, s.registerAudioLocked(result))
-	s.mu.Unlock()
-	copied := []*localTask{{intent: taskIntent{ID: "audio", Turn: 1}}}
-	// A callback validates its accepted copy even after the actor's live task
-	// view changes. Callback goroutines can outlive cancellation.
-	s.agent.v2.tasks = []*localTask{{intent: taskIntent{ID: "audio", Turn: 2}}}
-	effects := agent.Effects{Audio: []agent.Audio{{Turn: 1, Source: agent.AudioRef{TaskID: "audio", Sequence: 1}}}}
-	require.NoError(t, s.validateAudioEffects(effects, agent.Event{Kind: agent.TaskMessage, Result: &result}, copied))
+	packets := [][]byte{{0xf8, 0xff, 0xfe}}
+	rig, runs := startAcceptedSpeech(t, agenthost.Bounds{}, packets)
+	original := rig.app.handle
+	mutate := make(chan struct{})
+	mutated := make(chan struct{})
+	release := sync.OnceFunc(func() { close(mutate) })
+	t.Cleanup(release)
+	rig.app.handle = func(ctx context.Context, event agent.Event) (agent.Effects, error) {
+		effects, err := original(ctx, event)
+		if event.Kind == agent.TaskMessage {
+			go func() {
+				<-mutate
+				// An agent may retain its callback values after the transaction returns.
+				event.Result.TaskID = "changed"
+				event.Result.Turn = 2
+				event.Result.Chunk.Audio.Packets[0][1] = 0
+				effects.Audio[0].Turn = 2
+				effects.Audio[0].Source.TaskID = "changed"
+				close(mutated)
+			}()
+		}
+		return effects, err
+	}
+	delivered, err := rig.s.deliverTaskResult()
+	require.NoError(t, err)
+	require.True(t, delivered)
+	before, err := rig.s.checkpoint.capture(checkpointLive, nil)
+	require.NoError(t, err)
+	release()
+	<-mutated
+	after, err := rig.s.checkpoint.capture(checkpointLive, nil)
+	require.NoError(t, err)
+	saved, err := decodeSnapshot(after)
+	require.NoError(t, err)
+	prior, err := decodeSnapshot(before)
+	require.NoError(t, err)
+	require.Equal(t, prior.State.Agent.V2.Tasks, saved.State.Agent.V2.Tasks, "late callback mutation cannot change accepted tasks")
+	require.Equal(t, prior.State.Agent.V2.Playback, saved.State.Agent.V2.Playback, "late callback mutation cannot change accepted playback")
+	require.Len(t, saved.State.Agent.V2.Tasks, 1)
+	require.Equal(t, runs[0].ID(), saved.State.Agent.V2.Tasks[0].ID)
+	require.EqualValues(t, 1, saved.State.Agent.V2.Tasks[0].Turn)
+	move, err := rig.s.saveV2MoveOnly(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []agent.Audio{{Turn: 1, Source: agent.AudioRef{TaskID: runs[0].ID(), Sequence: 1}}}, move.audio)
+	require.Len(t, move.tasks, 1)
+	require.Equal(t, [][]byte{{0xf8, 0xff, 0xfe}}, move.tasks[0].Audio[0].Chunk.Audio.Packets, "late callback mutation cannot change retained task payload")
 }
 
 func TestV2EmitRestoreDoesNotGrantImmediatePublication(t *testing.T) {
