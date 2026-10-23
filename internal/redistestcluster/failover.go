@@ -7,7 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
+	"github.com/relaishq/relais/internal/redisendpoint"
 )
 
 // Failover coordinates a no-write-loss promotion of the replica for key's slot.
@@ -23,7 +24,7 @@ func Failover(ctx context.Context, client *redis.ClusterClient, key string) erro
 	if err != nil {
 		return err
 	}
-	rows, err := primary.ClusterSlaves(ctx, id).Result()
+	rows, err := primary.Do(ctx, "CLUSTER", "REPLICAS", id).StringSlice()
 	if err != nil {
 		return err
 	}
@@ -37,6 +38,9 @@ func Failover(ctx context.Context, client *redis.ClusterClient, key string) erro
 	addr, _, _ := strings.Cut(fields[1], "@")
 	addr, _, _ = strings.Cut(addr, ",")
 	if _, _, err := net.SplitHostPort(addr); err != nil {
+		return err
+	}
+	if err := redisendpoint.ValidateDev(addr); err != nil {
 		return err
 	}
 	opts := *primary.Options()

@@ -6,13 +6,15 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 	"github.com/relaishq/relais/internal/movediag"
+	"github.com/relaishq/relais/internal/rediscommand"
 )
 
-var storeCommands = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relais_store_commands_total", Help: "Redis client command attempts, including pipelines and retries; excludes commands inside Lua."}, []string{"store"})
+var storeCommands = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relais_store_commands_total", Help: "Redis client command attempts, including pipelines and retries; excludes connection setup and commands inside Lua."}, []string{"store"})
 var transportBytes = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relais_transport_bytes_total", Help: "TCP bytes successfully read or written, including protocol overhead and monitoring; excludes IP headers."}, []string{"transport", "client", "direction"})
 
 // TrafficConn measures actual transport bytes, including encrypted snapshots.
@@ -73,7 +75,7 @@ func (l trafficListener) Accept() (net.Conn, error) {
 }
 func TrafficListener(l net.Listener) net.Listener { return trafficListener{l} }
 
-type redisDialFunc func(context.Context, string, string) (net.Conn, error)
+type redisDialFunc = redis.DialHook
 
 // RedisDialer wraps the configured go-redis dialer, including its timeout,
 // custom transport and TLS handshake behavior.
@@ -87,26 +89,32 @@ func RedisDialer(dial redisDialFunc, client string) redisDialFunc {
 	}
 }
 
-// RedisClient uses go-redis v8's own option initialization to obtain its
-// private default dialer. The unconnected prototype is immediately closed.
-// Build the real client from fresh input options: re-initializing normalized
-// options would turn MaxRetries=-1 back into automatic retries.
+// RedisClient initializes options once, then instruments the initialized dialer.
 func RedisClient(options *redis.Options, client string) *redis.Client {
 	original := *options
-	dial := original.Dialer
-	if dial == nil {
-		prototypeOptions := original
-		prototypeOptions.MinIdleConns = 0 // The prototype must never connect.
-		prototype := redis.NewClient(&prototypeOptions)
-		dial = prototype.Options().Dialer
-		_ = prototype.Close()
-	}
-	original.Dialer = RedisDialer(dial, client)
-	clientInstance := redis.NewClient(&original)
+	original.Protocol, original.DisableIdentity = 2, true
+	original.MaintNotificationsConfig = &maintnotifications.Config{Mode: maintnotifications.ModeDisabled}
+	return InstrumentRedisClient(redis.NewClient(&original), client)
+}
+
+// InstrumentRedisClient preserves the client's initialized TLS, retry and dial
+// settings. Cluster callers first construct the node through the policy guard.
+func InstrumentRedisClient(instance *redis.Client, client string) *redis.Client {
+	instance.AddHook(redisTrafficHook{client: client})
 	if movediag.Enabled() {
-		clientInstance.AddHook(movediag.RedisHook{})
+		instance.AddHook(movediag.RedisHook{})
 	}
-	return clientInstance
+	return instance
+}
+
+type redisTrafficHook struct{ client string }
+
+func (h redisTrafficHook) DialHook(next redis.DialHook) redis.DialHook {
+	return RedisDialer(next, h.client)
+}
+func (redisTrafficHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook { return next }
+func (redisTrafficHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return next
 }
 
 func StoreHook(store string) redis.Hook {
@@ -115,16 +123,25 @@ func StoreHook(store string) redis.Hook {
 
 type storeHook struct{ commands prometheus.Counter }
 
-func (h *storeHook) BeforeProcess(ctx context.Context, _ redis.Cmder) (context.Context, error) {
-	h.commands.Inc()
-	return ctx, nil
+func (*storeHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+func (h *storeHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if !rediscommand.IsHandshake(cmd) {
+			h.commands.Inc()
+		}
+		return next(ctx, cmd)
+	}
 }
-func (*storeHook) AfterProcess(context.Context, redis.Cmder) error { return nil }
-func (h *storeHook) BeforeProcessPipeline(ctx context.Context, cmds []redis.Cmder) (context.Context, error) {
-	h.commands.Add(float64(len(cmds)))
-	return ctx, nil
+func (h *storeHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		for _, cmd := range cmds {
+			if !rediscommand.IsHandshake(cmd) {
+				h.commands.Inc()
+			}
+		}
+		return next(ctx, cmds)
+	}
 }
-func (*storeHook) AfterProcessPipeline(context.Context, []redis.Cmder) error { return nil }
 
 func TrafficCollectors() []prometheus.Collector {
 	for _, store := range []string{"session", "owners", "frame"} {

@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/pion/stun/v4"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/relay"
 
@@ -691,7 +691,7 @@ func TestCommandMissingLeaseKeepsForwarding(t *testing.T) {
 	require.Equal(t, success.Raw, receive(caller))
 	before, err := s.GetRelay(context.Background(), "default")
 	require.NoError(t, err)
-	client := redis.NewClient(&redis.Options{Addr: addr})
+	client := redis.NewClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: addr})
 	defer func() { _ = client.Close() }()
 	key := prefix + "relay:{relay:" + base64.RawURLEncoding.EncodeToString([]byte("default")) + "}"
 	require.NoError(t, client.Del(context.Background(), key).Err())

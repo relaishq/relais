@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/prometheus/common/expfmt"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/pkg/metrics"
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"

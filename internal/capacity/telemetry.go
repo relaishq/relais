@@ -15,8 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/prometheus/common/expfmt"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/processrss"
 )
 
@@ -99,7 +99,7 @@ func start(ctx context.Context, targets []Target, every time.Duration, memory bo
 	for _, t := range targets {
 		var client *redis.Client
 		if t.RedisAddr != "" {
-			client = redis.NewClient(&redis.Options{Addr: t.RedisAddr, Password: t.RedisPassword, MaxRetries: -1, ReadTimeout: 500 * time.Millisecond, WriteTimeout: 500 * time.Millisecond, PoolSize: 1})
+			client = redis.NewClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: t.RedisAddr, Password: t.RedisPassword, MaxRetries: -1, ReadTimeout: 500 * time.Millisecond, WriteTimeout: 500 * time.Millisecond, PoolSize: 1})
 		}
 		m.stores = append(m.stores, client)
 		kind := "lifetime_peak"

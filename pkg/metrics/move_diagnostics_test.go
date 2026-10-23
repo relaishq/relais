@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/movediag"
 	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/stretchr/testify/require"
@@ -21,14 +21,14 @@ func TestMoveDiagnosticsThroughRealRedisClient(t *testing.T) {
 		t.Skip("dedicated Redis not configured")
 	}
 	t.Setenv("RELAIS_MOVE_DIAGNOSTICS", "1")
-	client := RedisClient(&redis.Options{Addr: addr, MaxRetries: -1}, "move-test")
+	client := RedisClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: addr, MaxRetries: -1}, "move-test")
 	defer client.Close()
 	require.NoError(t, client.Ping(context.Background()).Err())
 	ctx := movediag.Phase(movediag.Begin(context.Background()), "resume")
 	// A client constructed with diagnostics off must have no trace hook,
 	// even if a traced coordination context later reaches a snapshot command.
 	t.Setenv("RELAIS_MOVE_DIAGNOSTICS", "")
-	plain := RedisClient(&redis.Options{Addr: addr, MaxRetries: -1}, "move-default-test")
+	plain := RedisClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: addr, MaxRetries: -1}, "move-default-test")
 	defer plain.Close()
 	t.Setenv("RELAIS_MOVE_DIAGNOSTICS", "1")
 	require.NoError(t, plain.Ping(ctx).Err())

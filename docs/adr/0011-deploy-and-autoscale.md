@@ -285,8 +285,12 @@ tariff before a cost-based choice. Compare `1.18 * sum(ElastiCache node-hours * 
 billable_write_GB - applicable_allowance_GB) * verified_write_rate`, with all other charges. This supports ElastiCache as the first
 experiment by cost predictability, not as a cost winner.
 
-Add Cluster discovery/TLS before creating the template: the process flags currently open standalone clients
-(`internal/processrun/run.go`), though lower-level Cluster support exists. Test scripts, key slots, ACLs, scans, redirects and
+The process clients support Cluster discovery/TLS (#190). The #202 migration
+pins go-redis v9.23.0 with RESP2, primary-only reads, native discovery and effective
+endpoint validation. Identity reporting is disabled instead of widening the role
+ACLs. Redis and pinned Valkey 9.1.2 have separate free-runner Cluster jobs; their
+existence is not a claim of hosted execution or managed-store durability.
+Test scripts, key slots, ACLs, scans, redirects and
 reconnect against local disposable nodes, then managed failover. Require actual `EffectiveDurability=sync` for ElastiCache and
 preserved acknowledged epochs/routes; measure checkpoint age and move/drain write tails on either store. If ElastiCache support or
 latency fails, run the same tests on MemoryDB under a separately approved cap, then bring the owner the result. Do not recreate

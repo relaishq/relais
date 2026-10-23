@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
@@ -342,7 +342,7 @@ func TestRedisRouteLoaderRetainsAddressWithFailedNewestLease(t *testing.T) {
 		require.NoError(t, r.PutRoute(ctx, route, false))
 	}
 	fault := errors.New("newest lease read failed")
-	r.client.AddHook(&failedRouteLeaseHook{leaseKey: r.keys(newer.SessionID)[0], err: fault, scanPattern: escapeRoutePattern(r.prefix) + "routes:*", scanKeys: []string{r.keys(older.SessionID)[4], r.keys(newer.SessionID)[4]}})
+	r.client.AddHook(redisFaultHook{&failedRouteLeaseHook{leaseKey: r.keys(newer.SessionID)[0], err: fault, scanPattern: escapeRoutePattern(r.prefix) + "routes:*", scanKeys: []string{r.keys(older.SessionID)[4], r.keys(newer.SessionID)[4]}}})
 	loaded, owners, err := r.LoadRouteOwners(ctx, 10)
 	require.ErrorIs(t, err, fault)
 	require.ElementsMatch(t, []Route{older, newer}, loaded, "failed lease evidence must still reserve its caller address")

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/redistestcluster"
 	"github.com/relaishq/relais/pkg/callharness"
@@ -66,7 +66,7 @@ func TestClusterProcessTopology(t *testing.T) {
 
 			// Each promotion starts from current topology. A prior trial may already
 			// have promoted this slot; test administration must not reuse stale state.
-			admin := redis.NewClusterClient(storage.RedisClusterOptions(&redis.UniversalOptions{Addrs: addrs, MaxRetries: -1}))
+			admin := redis.NewClusterClient(storage.RedisClusterOptions(&redis.UniversalOptions{Addrs: addrs, Protocol: 2, DisableIdentity: true, MaxRetries: -1}))
 			defer func() { _ = admin.Close() }()
 			lease, err := observer.Get(ctx, id)
 			if err != nil {

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/redistestenv"
 
 	"github.com/relaishq/relais/pkg/sessionstore"
@@ -46,7 +46,7 @@ func forSessionStores(t *testing.T, scenario func(*testing.T, sessionstore.Store
 		require.NoError(t, err)
 		t.Cleanup(func() {
 			require.NoError(t, store.Close())
-			client := redis.NewClient(&redis.Options{Addr: addr, MaxRetries: -1})
+			client := redis.NewClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: addr, MaxRetries: -1})
 			defer func() { require.NoError(t, client.Close()) }()
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()

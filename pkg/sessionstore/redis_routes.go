@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 )
 
 // Route metadata is deliberately separate from encrypted media snapshots.
@@ -145,7 +145,7 @@ func (r *Redis) LoadRouteOwners(ctx context.Context, limit int) ([]Route, map[st
 			if err != nil {
 				return errors.Join(failures, err)
 			}
-			reads := make(map[string]*redis.StringStringMapCmd)
+			reads := make(map[string]*redis.MapStringStringCmd)
 			pipe := client.Pipeline()
 			for _, key := range keys {
 				mu.Lock()

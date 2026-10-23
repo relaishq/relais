@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/redistestcluster"
 	"github.com/stretchr/testify/require"
 )
@@ -52,7 +52,7 @@ func TestRedisScriptSlotDeclarations(t *testing.T) {
 	forComponentRedis(t, func(t *testing.T, r *Redis) {
 		ctx := context.Background()
 		h := &keyDeclarationHook{}
-		r.client.AddHook(h)
+		r.client.AddHook(redisFaultHook{h})
 		lease, err := r.Claim(ctx, "declared", netip.MustParseAddrPort("127.0.0.1:23456"), time.Minute)
 		require.NoError(t, err)
 		require.NoError(t, r.PutState(ctx, lease, []byte("legacy")))

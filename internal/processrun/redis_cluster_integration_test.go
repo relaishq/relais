@@ -12,6 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/redis/go-redis/v9"
+	"github.com/relaishq/relais/internal/redisendpoint"
+	"github.com/relaishq/relais/pkg/storage"
+	"gopkg.in/yaml.v3"
+
 	"github.com/relaishq/relais/internal/redistestcluster"
 	"github.com/relaishq/relais/pkg/framecache"
 	"github.com/stretchr/testify/require"
@@ -70,5 +75,84 @@ func TestClusterTLSACLIntegration(t *testing.T) {
 		_, err := bad.OpenOwners(ctx)
 		require.Error(t, err)
 		require.NotContains(t, err.Error(), password)
+	}
+}
+
+// Apply the shipped role ACLs unchanged on every TLS node. HELLO may be refused;
+// v9 must fall back to AUTH without requiring CLIENT SETINFO permission.
+func TestClusterRestrictedACLHandshake(t *testing.T) {
+	if testing.Short() || os.Getenv("RELAIS_TEST_REDIS_CLUSTER") != "1" {
+		t.Skip("owns TLS Cluster processes")
+	}
+	ca, cert, key, _ := redisTLSCertificates(t, t.TempDir())
+	addrs := redistestcluster.StartWithOptions(t, redistestcluster.Options{CAFile: ca, CertFile: cert, KeyFile: key, Username: "fixture-admin", Password: "fixture-password"})
+	for name, value := range map[string]string{
+		"RELAIS_REDIS_TLS": "1", "RELAIS_REDIS_TLS_CA_FILE": ca, "RELAIS_REDIS_TLS_CERT_FILE": cert,
+		"RELAIS_REDIS_TLS_KEY_FILE": key, "RELAIS_REDIS_TLS_SERVER_NAME": "redis.test",
+	} {
+		t.Setenv(name, value)
+	}
+	transport, err := redisendpoint.TLSFromEnv()
+	require.NoError(t, err)
+	config := storage.RedisConfig{Cluster: true, Addrs: addrs, Username: "fixture-admin", Password: "fixture-password", TLSConfig: transport, Prefix: "relais:preview:handshake:"}
+	options, err := config.ConnectionOptions()
+	require.NoError(t, err)
+	admin := redis.NewClusterClient(storage.RedisClusterOptions(options))
+	defer admin.Close()
+	data, err := os.ReadFile("../../deploy/aws/preview.yaml")
+	require.NoError(t, err)
+	var template struct {
+		Resources map[string]struct {
+			Properties struct {
+				AccessString string `yaml:"AccessString"`
+			} `yaml:"Properties"`
+		} `yaml:"Resources"`
+	}
+	require.NoError(t, yaml.Unmarshal(data, &template))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for _, role := range []string{"Worker", "Control", "Relay"} {
+		t.Run(role, func(t *testing.T) {
+			user := strings.ToLower(role) + "-handshake"
+			password := "owned-test-password"
+			access := template.Resources[role+"StoreUser"].Properties.AccessString
+			require.NotEmpty(t, access)
+			require.NoError(t, admin.ForEachShard(ctx, func(ctx context.Context, node *redis.Client) error {
+				args := []interface{}{"ACL", "SETUSER", user, "reset", ">" + password}
+				for _, token := range strings.Fields(access) {
+					args = append(args, token)
+				}
+				if err := node.Do(ctx, args...).Err(); err != nil {
+					return err
+				}
+				return node.Do(ctx, "ACL", "LOG", "RESET").Err()
+			}))
+			scoped := config
+			scoped.Username = user
+			scoped.Password = password
+			opts, err := scoped.ConnectionOptions()
+			require.NoError(t, err)
+			client := redis.NewClusterClient(storage.RedisClusterOptions(opts))
+			defer client.Close()
+			require.NoError(t, client.ForEachMaster(ctx, func(ctx context.Context, node *redis.Client) error {
+				require.Equal(t, 2, node.Options().Protocol)
+				require.True(t, node.Options().DisableIdentity)
+				// Exercise a reconnect too; both handshakes use the same restricted ACL.
+				if err := node.Ping(ctx).Err(); err != nil {
+					return err
+				}
+				connection := node.Conn()
+				defer connection.Close()
+				return connection.Ping(ctx).Err()
+			}))
+			require.NoError(t, admin.ForEachShard(ctx, func(ctx context.Context, node *redis.Client) error {
+				entries, err := node.Do(ctx, "ACL", "LOG", 128).Result()
+				if err != nil {
+					return err
+				}
+				require.NotContains(t, fmt.Sprint(entries), "client|setinfo")
+				return nil
+			}))
+		})
 	}
 }
