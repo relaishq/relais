@@ -145,6 +145,7 @@ type Plane struct {
 	calls           map[string]*call
 	ttl             time.Duration
 	incomingChanged chan struct{}
+	workerChanged   chan struct{}
 	config          Config
 	events          [recentTakeoverLimit]MoveResult
 	eventNext       int
@@ -180,6 +181,7 @@ func NewWithConfig(r Relay, store sessionstore.Store, config Config) *Plane {
 		refusals:        map[string]uint64{"no_target": 0, "at_capacity": 0},
 		ttl:             config.LeaseTTL,
 		incomingChanged: make(chan struct{}),
+		workerChanged:   make(chan struct{}),
 	}
 	p.recovery = &moveRecovery{plane: p, pending: make(map[*registration]map[string]*moveTransfer)}
 	return p

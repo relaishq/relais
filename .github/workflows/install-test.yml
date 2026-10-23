@@ -148,6 +148,8 @@ jobs:
             ${{ runner.temp }}/install-logs/*.stdout
             ${{ runner.temp }}/install-logs/*.stderr
             ${{ runner.temp }}/install-logs/*.json
+            ${{ runner.temp }}/install-logs/control-private-*.json
+            ${{ runner.temp }}/install-logs/takeovers-private-*.json
             ${{ runner.temp }}/install-logs/*.jsonl
             ${{ runner.temp }}/install-logs/*.version
             ${{ runner.temp }}/install-logs/topology/logs/

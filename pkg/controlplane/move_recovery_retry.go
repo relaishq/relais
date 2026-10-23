@@ -41,6 +41,11 @@ type moveTransfer struct {
 	excluded                map[netip.AddrPort]bool
 	attempts                int
 	attemptLimit            int
+	firstDetection          time.Time
+	targetDeadline          time.Time
+	waitedForTarget         bool
+	transferIssued          bool
+	sourceChecked           time.Time
 	transientResume         bool
 	budgetRollback          bool // Retained after rollback itself refused move memory.
 	budgetStarted           time.Time
@@ -151,7 +156,7 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 		if errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrEnded) {
 			p.mu.Lock()
 			pending := m.pending[source][c.id]
-			lastHeartbeat := source.observation.knowledge().lastHeartbeat
+			lastHeartbeat := source.observation.recoveryHeartbeat()
 			to := ""
 			if pending != nil {
 				if target := p.owner(pending.lease.Worker); target != nil {
@@ -212,13 +217,31 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 		m.pending[source][c.id] = pending
 	}
 	if pending.outageStarted.IsZero() {
-		pending.outageStarted = source.observation.knowledge().lastHeartbeat
+		pending.outageStarted = source.observation.recoveryHeartbeat()
 		if pending.outageStarted.IsZero() {
 			pending.outageStarted = detected
 		}
 	}
+	if pending.firstDetection.IsZero() {
+		pending.firstDetection = detected
+		if first := source.observation.deathDetected; source.observation.dead && !first.IsZero() && first.Before(detected) {
+			pending.firstDetection = first
+		}
+		pending.targetDeadline = pending.firstDetection.Add(takeoverBudget)
+		anchor := source.observation.recoveryHeartbeat()
+		if anchor.IsZero() {
+			anchor = detected
+		}
+		if limit := anchor.Add(targetOutageBudget); limit.Before(pending.targetDeadline) {
+			pending.targetDeadline = limit
+		}
+		if limit, ok := ctx.Deadline(); ok && limit.Before(pending.targetDeadline) {
+			pending.targetDeadline = limit
+		}
+	}
+	detected = pending.firstDetection
 	r := p.relay
-	lastHeartbeat := source.observation.knowledge().lastHeartbeat
+	lastHeartbeat := source.observation.recoveryHeartbeat()
 	p.mu.Unlock()
 	res := MoveResult{Kind: "takeover", ID: c.id, From: source.name, Start: detected,
 		DetectedAt: detected, LastHeartbeat: lastHeartbeat, Result: mediaworker.HandoverResult{SessionID: c.id}}
@@ -230,11 +253,32 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 	// Publish only terminal outcomes. A transient error preserves the lease,
 	// call and retry state without falsely reporting a lost takeover.
 	complete := func(lost bool, cause error) {
+		if errors.Is(cause, ErrTargetWaitExpired) && pending.agentFailure != nil {
+			cause = fmt.Errorf("controlplane: no compatible agent target: %w", errors.Join(cause, pending.agentFailure))
+		}
 		m.complete(source, c, pending.lease, &res, lost, cause)
 		outcome = &res
 	}
 
-	for noTargetAttempts := 0; pending.transientResume || !pending.budgetStarted.IsZero() || pending.attempts < pending.attemptLimit; {
+	var targetStop context.CancelFunc
+	defer func() {
+		if targetStop != nil {
+			targetStop()
+		}
+	}()
+	for pending.transientResume || !pending.budgetStarted.IsZero() || pending.attempts < pending.attemptLimit {
+		if m.preserveSource(ctx, source, pending) {
+			return
+		}
+		if pending.waitedForTarget && !pending.transientResume {
+			if !m.observationTime().Before(pending.targetDeadline) {
+				complete(true, ErrTargetWaitExpired)
+				return
+			}
+			if targetStop == nil {
+				ctx, targetStop = context.WithDeadline(ctx, pending.targetDeadline)
+			}
+		}
 		if !pending.budgetStarted.IsZero() && time.Since(pending.budgetStarted) >= takeoverBudget {
 			res.LossCause = "move_budget_exhausted"
 			complete(true, ErrMoveBudgetExhausted)
@@ -287,19 +331,15 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 				pending.budgetNext = time.Now().Add(pending.budgetBackoff)
 				return
 			}
-			noTargetAttempts++
-			if noTargetAttempts == maxResumeAttempts {
-				cause := pickErr
-				if pending.agentFailure != nil {
-					cause = fmt.Errorf("controlplane: no compatible agent target: %w", pending.agentFailure)
+			pending.waitedForTarget = true
+			if waitErr := m.waitForTarget(ctx, pending); waitErr != nil {
+				if errors.Is(waitErr, ErrTargetWaitExpired) {
+					if m.preserveSource(ctx, source, pending) {
+						return
+					}
+					complete(true, errors.Join(waitErr, pickErr))
 				}
-				complete(true, cause)
 				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(25 * time.Millisecond):
 			}
 			continue
 		}
@@ -309,6 +349,21 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			p.unreserve(target)
 			continue
 		}
+		// A returning source wins even when a target returned in the same tick.
+		if m.preserveSource(ctx, source, pending) {
+			p.unreserve(target)
+			return
+		}
+		p.mu.Lock()
+		// Serialize the last liveness decision with issuing Transfer. A heartbeat
+		// racing selection sends us back through exact source confirmation.
+		if !pending.transferIssued && source.observation.lastHeartbeat.After(pending.sourceChecked) {
+			p.mu.Unlock()
+			p.unreserve(target)
+			continue
+		}
+		pending.transferIssued = true
+		p.mu.Unlock()
 		res.To = target.name
 		transferred := pending.lease
 		if transferred.Worker != target.addr {

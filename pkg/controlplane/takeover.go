@@ -21,9 +21,9 @@ import (
 // Transient errors preserve retry state, including already transferred leases.
 // Terminal missing-state/exhausted-target outcomes release with a fresh bounded
 // context. Status retains 256 recent events plus lifetime per-call counts.
-// A returning worker stays dead until recovery settles and it acknowledges
-// fencing/dropping its old sessions. Remote workers need an explicit token
-// for this acknowledgment; the in-process contract uses the next heartbeat.
+// Returning liveness does not grant eligibility. Recovery either confirms an
+// unfenced live source or settles and requires the existing drop/rejoin ACK.
+// Mixed-call sources wait for superseded sessions to self-fence (ADR 0013).
 type Config struct {
 	// WorkerCallCap limits calls plus incoming reservations; zero is unlimited.
 	WorkerCallCap int
@@ -71,8 +71,8 @@ func (c Config) defaults() Config {
 }
 
 // Heartbeat records liveness. A declared-dead worker cannot rejoin until its
-// old leases have been handled. The first returning heartbeat asks the
-// worker to fence/drop its old sessions; its acknowledgment makes it healthy.
+// old leases have been handled or an unfenced live source has been confirmed.
+// Ordinary rejoin still asks the worker to fence/drop its old sessions first.
 // A remote heartbeat implementation must honor ErrRejoinRequired too.
 // A heartbeat does not clear an operator's draining flag.
 func (p *Plane) Heartbeat(addr netip.AddrPort) error {
@@ -86,6 +86,7 @@ func (p *Plane) Heartbeat(addr netip.AddrPort) error {
 	if changed {
 		p.loadVersion++
 	}
+	p.observationChangedLocked()
 	return err
 }
 
@@ -161,6 +162,7 @@ func (p *Plane) Run(ctx context.Context) error {
 					recovered := p.recoverWorker(ctx, w, now)
 					p.mu.Lock()
 					w.observation.recoveryFinished(recovered)
+					p.observationChangedLocked()
 					p.mu.Unlock()
 				})
 			}
@@ -213,6 +215,9 @@ func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected tim
 	p.mu.Lock()
 	noIncoming := w.reserved <= unknown && !p.recovery.hasWorkLocked(w, recoveryAll)
 	p.mu.Unlock()
+	if err == nil && noIncoming && p.recovery.restoreSource(ctx, w, remaining) {
+		return true
+	}
 	return err == nil && len(remaining) == 0 && noIncoming
 }
 

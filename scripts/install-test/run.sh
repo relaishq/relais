@@ -3,6 +3,7 @@
 set -euo pipefail
 [[ $# == 1 ]] || { echo "usage: $0 <extracted-dir>" >&2; exit 2; }
 archive=$(cd "$1" && pwd)
+helpers=$(cd "$(dirname "$0")" && pwd)
 logs=${INSTALL_TEST_LOGS:-$(mktemp -d "${TMPDIR:-/tmp}/relais-install-test.XXXXXX")}
 mkdir -p "$logs/tools"
 logs=$(cd "$logs" && pwd)
@@ -16,7 +17,7 @@ done
 export PATH="$logs/tools"
 if command -v go >/dev/null 2>&1; then echo 'Go must be absent from PATH' >&2; exit 1; fi
 printf 'Go-free PATH verified; logs: %s\n' "$logs"
-export INSTALL_ARCHIVE="$archive" INSTALL_LOGS="$logs"
+export INSTALL_ARCHIVE="$archive" INSTALL_LOGS="$logs" INSTALL_TEST_HELPERS="$helpers"
 python3 - <<'PY'
 import datetime
 import json
@@ -26,9 +27,13 @@ from pathlib import Path
 import signal
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
+
+sys.path.insert(0, os.environ['INSTALL_TEST_HELPERS'])
+from private_evidence import capture_private_status, wait_for_caller
 
 archive = Path(os.environ['INSTALL_ARCHIVE'])
 logs = Path(os.environ['INSTALL_LOGS'])
@@ -253,7 +258,9 @@ try:
     assert status['lost_count'] == 0
     print('(g) PASS: same worker restarted; dead=false, recovering=false, fresh heartbeat', flush=True)
 
-    caller_exit = caller.wait(timeout=70)
+    caller_exit = wait_for_caller(caller, request, logs, ctrl, 70, time.monotonic,
+                                  subprocess.TimeoutExpired)
+    capture_private_status(request, logs, ctrl, 'finished')
     save('caller-exit.json', {'exit_code': caller_exit})
     assert caller_exit == 0, f'caller exited {caller_exit}'
     messages = [json.loads(line) for line in (logs / 'caller.jsonl').read_text().splitlines()]
@@ -273,6 +280,8 @@ try:
     print('(h) PASS: caller exit=0, one completed call, media after move+takeover, no failed/disconnected states or reconnect/decrypt failures', flush=True)
     success = True
 finally:
+    # Preserve the private error and final observation before any service stops.
+    capture_private_status(request, logs, ctrl, 'final')
     stop_owned(caller)
     try:
         if demo is not None and demo.poll() is None:

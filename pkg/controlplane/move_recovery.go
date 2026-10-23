@@ -23,6 +23,9 @@ import (
 type moveRecovery struct {
 	plane   *Plane
 	pending map[*registration]map[string]*moveTransfer // membership under Plane.mu
+	// Tests control observation time/wakeup without scheduler-sized sleeps.
+	targetNow  func() time.Time
+	targetWait func(context.Context, <-chan struct{}, time.Duration) error
 }
 
 // Snapshot provenance controls counter margins; route knowledge controls repair.

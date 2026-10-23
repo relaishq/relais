@@ -32,6 +32,7 @@ func (p *Plane) remoteHeartbeat(name string, req HeartbeatRequest) (HeartbeatRep
 	if changed {
 		p.loadVersion++
 	}
+	p.observationChangedLocked()
 	return reply, err
 }
 
