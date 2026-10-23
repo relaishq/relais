@@ -1,6 +1,6 @@
 """Authenticate a cached Ubuntu APT snapshot before privileged APT reads it."""
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import hashlib
 from pathlib import Path
@@ -77,6 +77,7 @@ def verify_cache(cache, codename, arch, keyring=KEYRING):
     prefix = origin.split('://', 1)[1].replace('/', '_') + '_dists_'
     authenticated = {}
     releases = set()
+    now = datetime.now(timezone.utc)
     with tempfile.TemporaryDirectory(prefix='relais-gpgv-') as homedir:
         for suffix in ('', '-updates', '-security'):
             suite = codename + suffix
@@ -92,8 +93,16 @@ def verify_cache(cache, codename, arch, keyring=KEYRING):
             fields, = records(verified.stdout.decode('utf-8').splitlines())
             if fields.get('Suite') != suite or fields.get('Codename') != codename:
                 raise ValueError('signed release does not match the Ubuntu suite')
+            signed_date = parsedate_to_datetime(fields.get('Date', ''))
+            if signed_date.tzinfo is None:
+                raise ValueError('signed release Date lacks a timezone')
+            if signed_date > now + timedelta(minutes=5):
+                raise ValueError(f'cached {suite} release Date is in the future')
+            # The base suite keeps its original release date; only moving suites age out.
+            if suffix and now - signed_date > timedelta(days=9):
+                raise ValueError(f'cached {suite} release is older than 9 days')
             if 'Valid-Until' in fields:
-                if parsedate_to_datetime(fields['Valid-Until']) < datetime.now(timezone.utc):
+                if parsedate_to_datetime(fields['Valid-Until']) < now:
                     raise ValueError('cached release has expired')
             for row in fields['SHA256'].splitlines():
                 if not row.strip():

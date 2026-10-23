@@ -62,12 +62,14 @@ def download(packages, codename, arch, cache):
     options = apt_options(cache)
     if (cache / 'sources.list').exists():
         try:
+            verification_started = time.monotonic()
             verify_cached_inputs(cache, codename, arch)
+            verification_seconds = time.monotonic() - verification_started
             # Check completeness without network before touching dpkg. A partial
             # or missing cache falls through to the two bounded mirror attempts.
             run(['apt-get', *options, 'install', '-y', '--no-install-recommends',
                  '--no-upgrade', '--download-only', '--no-download', *packages], 30)
-            return 'cache'
+            return f'cache (verification {verification_seconds:.2f}s)'
         except (ValueError, OSError, subprocess.SubprocessError) as error:
             print(f'Cached packages incomplete or unauthenticated: {error}; trying Ubuntu mirrors', flush=True)
     # APT can reuse an existing archive based only on size, even after update.

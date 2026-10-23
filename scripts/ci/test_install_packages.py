@@ -70,7 +70,7 @@ class PackageSetup(unittest.TestCase):
 
     def test_cache_is_reused_without_any_network_operation(self):
         (self.cache / 'sources.list').write_text('cached authenticated Ubuntu sources')
-        self.assertEqual('cache', self.download())
+        self.assertRegex(self.download(), r'^cache \(verification \d+\.\d{2}s\)$')
         self.assertEqual(1, len(self.commands))
         self.assertIn('--no-download', self.commands[0][0])
 
@@ -167,6 +167,18 @@ class PackageSetup(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Ubuntu package cleanup failed'):
             self.install()
         self.assertEqual('chown', self.commands[-1][0][0])
+
+
+    def test_cache_hit_step_summary_includes_verification_duration(self):
+        (self.cache / 'sources.list').write_text('cached authenticated Ubuntu sources')
+        summary = Path(self.temp.name) / 'summary'
+        with mock.patch.object(packages.sys, 'argv', [str(SCRIPT), 'install', 'ffmpeg']), \
+             mock.patch.object(packages, 'install', side_effect=lambda _: self.download()), \
+             mock.patch.object(packages.time, 'monotonic', side_effect=[100.0, 101.0, 102.25, 103.0]), \
+             mock.patch.dict(packages.os.environ, {'GITHUB_STEP_SUMMARY': str(summary)}):
+            packages.main()
+        self.assertIn('Ubuntu package setup: cache (verification 1.25s); 3.0s; ffmpeg',
+                      summary.read_text())
 
 
 class SetupIsolation(unittest.TestCase):

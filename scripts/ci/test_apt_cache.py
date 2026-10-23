@@ -1,5 +1,8 @@
 """Real signed fixtures exercise the cache-authentication chain without root/APT."""
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 import hashlib
+import re
 import importlib.util
 from pathlib import Path
 import shutil
@@ -47,12 +50,16 @@ class AuthenticatedCache(unittest.TestCase):
                  'Filename: pool/main/f/fixture/fixture_1.0_amd64.deb\n'
                  f'Size: {len(payload)}\nSHA256: {hashlib.sha256(payload).hexdigest()}\n\n').encode()
         cls.prefix = 'azure.archive.ubuntu.com_ubuntu_dists_'
+        cls.release_bodies = {}
         for suffix in ('', '-updates', '-security'):
             suite = 'noble' + suffix
             (cls.fixture / 'lists' / (cls.prefix + suite + '_main_binary-amd64_Packages')).write_bytes(index)
             release = cls.root / 'Release'
-            release.write_text(f'Suite: {suite}\nCodename: noble\nSHA256:\n '
-                               f'{hashlib.sha256(index).hexdigest()} {len(index)} main/binary-amd64/Packages\n')
+            body = (f'Suite: {suite}\nCodename: noble\n'
+                    f'Date: {format_datetime(datetime.now(timezone.utc), usegmt=True)}\nSHA256:\n '
+                    f'{hashlib.sha256(index).hexdigest()} {len(index)} main/binary-amd64/Packages\n')
+            cls.release_bodies[suite] = body
+            release.write_text(body)
             gpg('--armor', '--output', str(cls.fixture / 'lists' / (cls.prefix + suite + '_InRelease')),
                 '--clearsign', str(release))
         (cls.fixture / 'sources.list').write_text(apt_cache.sources(
@@ -87,7 +94,7 @@ class AuthenticatedCache(unittest.TestCase):
         self.assertFalse((self.cache / 'archives' / self.archive_name).exists())
 
     def test_valid_signature_index_and_archive_reuse_cache_without_network(self):
-        self.assertEqual('cache', self.download())
+        self.assertRegex(self.download(), r'^cache \(verification \d+\.\d{2}s\)$')
         self.assertEqual(1, len(self.commands))
         self.assertIn('--no-download', self.commands[0])
 
@@ -132,3 +139,34 @@ class AuthenticatedCache(unittest.TestCase):
         path.symlink_to(target)
         with self.assertRaisesRegex(ValueError, 'not a regular cache file'):
             self.verify()
+
+
+    def sign_date(self, suite, date):
+        release = Path(self.case.name) / 'Release'
+        release.write_text(re.sub(r'(?m)^Date: .*$',
+                                  'Date: ' + format_datetime(date, usegmt=True),
+                                  self.release_bodies[suite]))
+        self.gpg('--yes', '--armor', '--output',
+                 str(self.cache / 'lists' / (self.prefix + suite + '_InRelease')),
+                 '--clearsign', str(release))
+
+    def test_stale_security_snapshot_falls_back_to_mirrors(self):
+        self.sign_date('noble-security', datetime.now(timezone.utc) - timedelta(days=10))
+        self.assert_mirror_fallback()
+
+    def test_stale_updates_snapshot_falls_back_to_mirrors(self):
+        self.sign_date('noble-updates', datetime.now(timezone.utc) - timedelta(days=10))
+        self.assert_mirror_fallback()
+
+    def test_future_signed_date_falls_back_to_mirrors(self):
+        self.sign_date('noble', datetime.now(timezone.utc) + timedelta(minutes=10))
+        self.assert_mirror_fallback()
+
+    def test_old_base_release_date_is_accepted(self):
+        self.sign_date('noble', datetime(2024, 4, 25, tzinfo=timezone.utc))
+        self.assertRegex(self.download(), r'^cache \(verification \d+\.\d{2}s\)$')
+        self.assertFalse(any('update' in command for command in self.commands))
+
+    def test_small_future_clock_skew_is_accepted(self):
+        self.sign_date('noble-security', datetime.now(timezone.utc) + timedelta(minutes=3))
+        self.assertRegex(self.download(), r'^cache \(verification \d+\.\d{2}s\)$')
