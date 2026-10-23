@@ -209,13 +209,18 @@ An explicit rate of 70,000 B/s with the default legacy cap still fails cadence: 
 format and warns of a 788 B shortfall. An explicit 3,072/8,192 B declaration starts at split defaults and warns that
 its 9,660 B legacy requirement exceeds 7,168 B by 2,492 B; zero declarations retain the smaller legacy default.
 
-Legacy-mode restore/adoption checks the declared registration fit in `initV2Agent`, including factory-only adapters.
-It returns typed IncompatibleAgent/Restore before constructing the application, invoking callbacks, renewing the
-lease, resuming transport or writing a checkpoint. The control plane has already transferred ownership before it
+Only split workers check legacy-mode restore/adoption size, in `ResumeSession`, including factory-only adapters.
+They measure the actual encoded durable snapshot plus the existing 42 B envelope reserve against their legacy-resolved
+cap; separately bounded move-only payloads are excluded. The declared registration estimate is only a conservative
+startup warning. An oversized snapshot returns typed IncompatibleAgent/Restore before constructing the application,
+invoking callbacks, renewing the lease, resuming transport or writing a checkpoint. Legacy workers retain their
+existing restore behavior. A rollback source already admitted the exact durable snapshot under its own cap, so this
+check permits its restore. The control plane has already transferred ownership before it
 calls target resume. A definitive refusal triggers source rollback for a planned move, or target exclusion/retry
 for takeover, within the existing sequence/attempt budget. There is no pre-Transfer compatibility probe.
 Compatibility refusals currently consume that budget (at most three attempts, possibly fewer): recovery can declare
-loss before reaching another compatible worker. This slice reports that control-plane limitation without changing it.
+loss before reaching another compatible worker. Follow-up [#241](https://github.com/relaishq/relais/issues/241) tracks
+that control-plane limitation; this slice does not change it.
 During a mixed rollout, keep each split worker's legacy profile able to fit your registrations (zero/default
 declarations fit the default profile) so legacy calls can move there. Default flags keep both cadence profiles feasible:
 

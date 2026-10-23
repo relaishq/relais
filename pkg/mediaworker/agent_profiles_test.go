@@ -1,6 +1,7 @@
 package mediaworker
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -92,9 +93,9 @@ func TestSplitStartupWarnsOncePerIncompatibleLegacyRegistration(t *testing.T) {
 	}
 }
 
-func TestLegacyRestoreRefusesRegistrationFitBeforeAgentRuns(t *testing.T) {
+func TestLegacyRestoreMeasuresActualSizeOnlyOnSplitWorkers(t *testing.T) {
 	original := &v2UnitAgent{state: agent.State{Version: 1, Bytes: []byte("accepted")}}
-	reg := agenthost.Registration{Name: "restore-fit/v1", Factory: func(agent.FactoryArgs) agent.Agent { return original }}
+	reg := agenthost.Registration{Name: "restore-fit/v1", Bounds: agenthost.Bounds{MaxStateBytes: 2048}, Factory: func(agent.FactoryArgs) agent.Agent { return original }}
 	source, err := New(Config{Agent: AgentConfig{Factory: agenthost.Factory(reg)}})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, source.Close()) })
@@ -104,20 +105,39 @@ func TestLegacyRestoreRefusesRegistrationFitBeforeAgentRuns(t *testing.T) {
 	require.NoError(t, err)
 	snap, err := decodeSnapshot(data)
 	require.NoError(t, err)
-	require.Nil(t, snap.split, "exercise a real legacy export, not a v10 capture")
-	for _, registered := range []bool{true, false} {
+	require.Nil(t, snap.split)
+	durable := *snap
+	durable.AgentMoveOnly = nil
+	encoded, err := json.Marshal(durable)
+	require.NoError(t, err)
+	actual := len(encoded) + snapshotEnvelopeBytes
+	require.Less(t, actual, source.cfg.SnapshotLimits.MaxBytes)
+	// The declared estimate does not fit even though these admitted bytes do.
+	require.Error(t, validateLegacyRegistrationFit(agenthost.Factory(reg)("").(*agenthost.Adapter).Registration, source.cfg.SnapshotLimits))
+	for _, tc := range []struct {
+		name       string
+		split      bool
+		registered bool
+		cap        int
+		refuses    bool
+	}{
+		{"split-registered-oversize", true, true, actual - 1, true},
+		{"split-factory-only-oversize", true, false, actual - 1, true},
+		{"legacy-same-small-cap", false, false, actual - 1, false},
+		{"split-exact-cap", true, true, actual, false},
+	} {
 		for _, kind := range []legacy.ResumeKind{legacy.PlannedMove, legacy.Takeover} {
-			t.Run(fmt.Sprintf("registered=%t/%s", registered, kind), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/%s", tc.name, kind), func(t *testing.T) {
 				created := 0
 				application := &v2UnitAgent{}
 				targetReg := reg
 				targetReg.Factory = func(agent.FactoryArgs) agent.Agent { created++; return application }
 				factory := agenthost.Factory(targetReg)
 				agents := AgentConfig{Factory: factory}
-				if registered {
+				if tc.registered {
 					agents.Registrations = map[string]legacy.Factory{reg.Name: factory}
 				}
-				target, err := New(Config{SplitCheckpoints: true, SnapshotLimits: SnapshotLimits{MaxBytes: 6144, BytesPerSecond: 70000}, Agent: agents})
+				target, err := New(Config{SplitCheckpoints: tc.split, SnapshotLimits: SnapshotLimits{MaxBytes: tc.cap}, Agent: agents})
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, target.Close()) })
 				opts := ResumeOptions{Kind: kind}
@@ -125,12 +145,17 @@ func TestLegacyRestoreRefusesRegistrationFitBeforeAgentRuns(t *testing.T) {
 					opts.SequenceMargin = 8192
 				}
 				_, err = target.ResumeSession(data, opts)
+				if !tc.refuses {
+					require.NoError(t, err)
+					require.Equal(t, 1, created)
+					require.Equal(t, 1, application.restores)
+					require.NotNil(t, target.session(call.id))
+					return
+				}
 				require.ErrorIs(t, err, agent.ErrIncompatibleAgent)
 				require.ErrorIs(t, err, legacy.ErrRestore)
 				require.ErrorIs(t, err, agent.ErrStateTooLarge)
-				for _, text := range []string{"legacy session profile", reg.Name, "needs 6932 encoded bytes", "cap 6144 is short by 788 bytes"} {
-					require.ErrorContains(t, err, text)
-				}
+				require.ErrorContains(t, err, fmt.Sprintf("legacy snapshot for registration %q is %d encoded bytes (cap %d, short by 1 bytes)", reg.Name, actual, tc.cap))
 				require.Zero(t, created)
 				require.Zero(t, application.restores)
 				require.Zero(t, application.handles)

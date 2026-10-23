@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/agenthost"
+	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 )
 
@@ -95,8 +96,8 @@ func (l SnapshotLimits) ValidateForInterval(interval time.Duration) error {
 
 // ValidateSnapshotProfiles checks cadence and every declared v2 registration
 // before startup. Both profiles must support cadence on split workers, but only
-// split registration fit blocks their startup. Legacy fit warns at startup and
-// is enforced before restore. Factory alone stays opaque until session setup.
+// split registration fit blocks their startup. Legacy fit warns at startup;
+// split workers measure actual legacy snapshot bytes before restore. Factory alone stays opaque until session setup.
 // Application agents are never constructed by this preflight.
 func ValidateSnapshotProfiles(cfg Config) error {
 	interval := cfg.SnapshotInterval
@@ -126,7 +127,7 @@ func ValidateSnapshotProfiles(cfg Config) error {
 		}
 		if cfg.SplitCheckpoints && !profile.split {
 			// A split-sized declaration need not fit legacy snapshots. New logs
-			// this adoption restriction; initV2Agent refuses a legacy restore.
+			// this conservative adoption warning; ResumeSession checks actual bytes.
 			continue
 		}
 		for _, name := range names {
@@ -162,11 +163,31 @@ func (w *Worker) warnLegacyRegistrationFits() {
 	}
 }
 
-// validateLegacyRegistrationFit also covers factory-only embedders once the
-// adapter resolves. Preserve incompatibility across the private HTTP boundary.
+// validateLegacyRegistrationFit is a conservative startup warning only.
+// Restore admission measures the actual snapshot, not this declared estimate.
 func validateLegacyRegistrationFit(reg agenthost.Registration, limits SnapshotLimits) error {
 	if err := ValidateAgentRegistration(reg.Name, reg.TaskKinds, reg.Declared, limits, false); err != nil {
 		return fmt.Errorf("%w: legacy session profile registration %q: %w", agent.ErrIncompatibleAgent, reg.Name, err)
+	}
+	return nil
+}
+
+// validateLegacySnapshotFit protects split workers adopting v8/v9 sessions.
+// Measure the durable form, excluding the separately bounded move-only payload.
+// Legacy pools keep their existing restore behavior, including source rollback.
+func (w *Worker) validateLegacySnapshotFit(snap snapshot) error {
+	if !w.cfg.SplitCheckpoints || snap.split != nil {
+		return nil
+	}
+	snap.AgentMoveOnly = nil
+	encoded, err := json.Marshal(snap)
+	if err != nil {
+		return err
+	}
+	actual := len(encoded) + snapshotEnvelopeBytes
+	cap := w.cfg.SnapshotLimits.LegacyDefaults().MaxBytes
+	if actual > cap {
+		return fmt.Errorf("%w: %w: %w: legacy snapshot for registration %q is %d encoded bytes (cap %d, short by %d bytes)", legacy.ErrRestore, agent.ErrIncompatibleAgent, agent.ErrStateTooLarge, snap.State.Agent.V2.Name, actual, cap, actual-cap)
 	}
 	return nil
 }

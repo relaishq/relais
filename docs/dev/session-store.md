@@ -114,14 +114,20 @@ adoption. For example, a 6,144 B explicit cap at 70,000 B/s starts with a warnin
 that a default v2 registration needs 6,932 B in legacy format (788 B short).
 An explicit 3,072 B working / 8,192 B history declaration starts at split
 defaults, but its legacy encoding needs 9,660 B (2,492 B above 7,168 B).
-Legacy-mode restore/adoption checks declared fit before application construction,
-callbacks, lease renewal, transport resume or checkpoint writes, returning typed
-IncompatibleAgent/Restore if it cannot fit. Factory-only embedders get the same
-restore check; provide named Registrations for startup warnings. Ownership
+Only split workers check legacy-mode restore/adoption size in `ResumeSession`.
+They compare the actual encoded durable snapshot plus the existing 42 B envelope
+reserve with their legacy-resolved cap, excluding separately bounded move-only
+payloads. The declared-fit startup warning is conservative. An oversized snapshot
+returns typed IncompatibleAgent/Restore before application construction, callbacks,
+lease renewal, transport resume or checkpoint writes. Factory-only embedders get
+the same check; provide named Registrations for startup warnings. Legacy workers
+retain their existing restore behavior. A rollback source already admitted that
+exact durable snapshot under its own cap, so this check permits its restore. Ownership
 Transfer precedes target resume: planned moves roll back to the source on a
 definitive refusal; takeover excludes that target and retries within the existing
 sequence/attempt budget. Incompatibility refusals consume that budget: several
-incompatible targets can cause loss before a compatible target is tried.
+incompatible targets can cause loss before a compatible target is tried
+([#241](https://github.com/relaishq/relais/issues/241)); this slice does not change that behavior.
 During a mixed rollout, keep each split worker's legacy
 profile able to fit your registrations (zero/default declarations fit the default
 profile) so legacy calls can move there. No state is truncated to fit.
