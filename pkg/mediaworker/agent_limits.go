@@ -158,7 +158,7 @@ func (w *Worker) warnLegacyRegistrationFits() {
 		}
 		reg := adapter.Registration
 		if err := validateLegacyRegistrationFit(reg, w.cfg.SnapshotLimits); err != nil {
-			w.log.Warnf("legacy calls with registration %q cannot be adopted by this worker: %v", reg.Name, err)
+			w.log.Warnf("legacy calls with registration %q may not be adoptable by this worker: %v", reg.Name, err)
 		}
 	}
 }

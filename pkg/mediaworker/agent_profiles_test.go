@@ -80,7 +80,7 @@ func TestSplitStartupWarnsOncePerIncompatibleLegacyRegistration(t *testing.T) {
 			for name := range registrations {
 				matches := 0
 				for _, warning := range logger.warnings {
-					if !strings.Contains(warning, `legacy calls with registration "`+name+`" cannot be adopted by this worker`) {
+					if !strings.Contains(warning, `legacy calls with registration "`+name+`" may not be adoptable by this worker`) {
 						continue
 					}
 					matches++

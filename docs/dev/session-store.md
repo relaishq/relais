@@ -121,8 +121,9 @@ payloads. The declared-fit startup warning is conservative. An oversized snapsho
 returns typed IncompatibleAgent/Restore before application construction, callbacks,
 lease renewal, transport resume or checkpoint writes. Factory-only embedders get
 the same check; provide named Registrations for startup warnings. Legacy workers
-retain their existing restore behavior. A rollback source already admitted that
-exact durable snapshot under its own cap, so this check permits its restore. Ownership
+retain their existing restore behavior. A rollback source admitted that session
+under its own cap, so this check normally permits its restore; it refuses only if
+the session's state grew past that cap since its last admitted capture. Ownership
 Transfer precedes target resume: planned moves roll back to the source on a
 definitive refusal; takeover excludes that target and retries within the existing
 sequence/attempt budget. Incompatibility refusals consume that budget: several

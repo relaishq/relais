@@ -214,8 +214,8 @@ They measure the actual encoded durable snapshot plus the existing 42 B envelope
 cap; separately bounded move-only payloads are excluded. The declared registration estimate is only a conservative
 startup warning. An oversized snapshot returns typed IncompatibleAgent/Restore before constructing the application,
 invoking callbacks, renewing the lease, resuming transport or writing a checkpoint. Legacy workers retain their
-existing restore behavior. A rollback source already admitted the exact durable snapshot under its own cap, so this
-check permits its restore. The control plane has already transferred ownership before it
+existing restore behavior. A rollback source admitted that session under its own cap, so this check normally
+permits its restore; it refuses only if the session's state grew past that cap since its last admitted capture. The control plane has already transferred ownership before it
 calls target resume. A definitive refusal triggers source rollback for a planned move, or target exclusion/retry
 for takeover, within the existing sequence/attempt budget. There is no pre-Transfer compatibility probe.
 Compatibility refusals currently consume that budget (at most three attempts, possibly fewer): recovery can declare
