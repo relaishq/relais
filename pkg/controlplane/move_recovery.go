@@ -24,8 +24,9 @@ type moveRecovery struct {
 	plane   *Plane
 	pending map[*registration]map[string]*moveTransfer // membership under Plane.mu
 	// Tests control observation time/wakeup without scheduler-sized sleeps.
-	targetNow  func() time.Time
-	targetWait func(context.Context, <-chan struct{}, time.Duration) error
+	targetNow      func() time.Time
+	targetWait     func(context.Context, <-chan struct{}, time.Duration) error
+	beforeTransfer func() // deterministic observation boundary before the atomic decision
 }
 
 // Snapshot provenance controls counter margins; route knowledge controls repair.
@@ -443,6 +444,22 @@ func (m *moveRecovery) transfer(ctx context.Context, from sessionstore.Lease, to
 		}
 		ctx = sessionstore.WithTransitionIntent(ctx, c.id, c.intent.Token)
 	}
+	p.mu.Lock()
+	source := p.owner(from.Worker)
+	if source != nil {
+		source.transfers++
+		if source.observation.dead {
+			source.observation.deathTransferIssued = true
+		}
+	}
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		if source != nil {
+			source.transfers--
+		}
+		p.mu.Unlock()
+	}()
 	lease, err := p.store.Transfer(ctx, from, to, p.ttl)
 	defer func() {
 		if err == nil {

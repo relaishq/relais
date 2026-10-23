@@ -46,6 +46,10 @@ type moveTransfer struct {
 	waitedForTarget         bool
 	transferIssued          bool
 	sourceChecked           time.Time
+	sourceNeedsHeartbeat    bool
+	sourceConfirmation      bool
+	unrequested             bool
+	deathCycle              uint64
 	transientResume         bool
 	budgetRollback          bool // Retained after rollback itself refused move memory.
 	budgetStarted           time.Time
@@ -65,11 +69,19 @@ type moveTransfer struct {
 	replayAnchors           map[uint32]uint64
 }
 
-func (m *moveRecovery) recover(ctx context.Context, source *registration, listed sessionstore.Lease, detected time.Time) *MoveResult {
+func (m *moveRecovery) recover(ctx context.Context, source *registration, listed sessionstore.Lease, detected time.Time, cycles ...uint64) *MoveResult {
 	p := m.plane
 	ctx, cancel := context.WithTimeout(ctx, takeoverBudget)
 	defer cancel()
 	p.mu.Lock()
+	if len(cycles) > 0 && source.observation.deathCycle != cycles[0] {
+		p.mu.Unlock()
+		return nil
+	}
+	if source.observation.deathPreserved && m.pending[source][listed.SessionID] == nil {
+		p.mu.Unlock()
+		return nil
+	}
 	c := p.calls[listed.SessionID]
 	if pending := m.pending[source][listed.SessionID]; pending != nil && pending.call != nil {
 		c = pending.call
@@ -93,6 +105,12 @@ func (m *moveRecovery) recover(ctx context.Context, source *registration, listed
 		return nil
 	}
 	defer c.mu.Unlock()
+	p.mu.Lock()
+	stale := len(cycles) > 0 && source.observation.deathCycle != cycles[0]
+	p.mu.Unlock()
+	if stale {
+		return nil
+	}
 	return m.continueLocked(ctx, source, c, listed, detected)
 }
 
@@ -110,6 +128,10 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 	}
 	p.mu.Lock()
 	existing := m.pending[source][c.id]
+	if source.observation.deathPreserved && (existing == nil || existing.unrequested) {
+		p.mu.Unlock()
+		return nil
+	}
 	if existing != nil && existing.routedLease.Epoch == 0 && existing.routed == listed.Worker {
 		existing.routedLease = listed
 	}
@@ -213,7 +235,8 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			m.pending[source] = make(map[string]*moveTransfer)
 		}
 		pending = &moveTransfer{call: c, lease: lease, routed: lease.Worker, routedLease: lease,
-			excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts}
+			excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts,
+			unrequested: source.observation.dead, deathCycle: source.observation.deathCycle}
 		m.pending[source][c.id] = pending
 	}
 	if pending.outageStarted.IsZero() {
@@ -222,7 +245,7 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			pending.outageStarted = detected
 		}
 	}
-	if pending.firstDetection.IsZero() {
+	if pending.unrequested && pending.firstDetection.IsZero() {
 		pending.firstDetection = detected
 		if first := source.observation.deathDetected; source.observation.dead && !first.IsZero() && first.Before(detected) {
 			pending.firstDetection = first
@@ -239,7 +262,9 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			pending.targetDeadline = limit
 		}
 	}
-	detected = pending.firstDetection
+	if pending.unrequested {
+		detected = pending.firstDetection
+	}
 	r := p.relay
 	lastHeartbeat := source.observation.recoveryHeartbeat()
 	p.mu.Unlock()
@@ -260,23 +285,27 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 		outcome = &res
 	}
 
-	var targetStop context.CancelFunc
-	defer func() {
-		if targetStop != nil {
-			targetStop()
+	targetBounded := false
+	for noTargetAttempts := 0; pending.transientResume || !pending.budgetStarted.IsZero() || pending.attempts < pending.attemptLimit; {
+		p.mu.Lock()
+		stale := pending.unrequested && pending.deathCycle != source.observation.deathCycle
+		p.mu.Unlock()
+		if stale {
+			return
 		}
-	}()
-	for pending.transientResume || !pending.budgetStarted.IsZero() || pending.attempts < pending.attemptLimit {
 		if m.preserveSource(ctx, source, pending) {
 			return
 		}
-		if pending.waitedForTarget && !pending.transientResume {
+		if pending.unrequested && (pending.waitedForTarget || pending.sourceConfirmation) && !pending.transientResume {
 			if !m.observationTime().Before(pending.targetDeadline) {
 				complete(true, ErrTargetWaitExpired)
 				return
 			}
-			if targetStop == nil {
+			if !targetBounded {
+				var targetStop context.CancelFunc
 				ctx, targetStop = context.WithDeadline(ctx, pending.targetDeadline)
+				defer targetStop()
+				targetBounded = true
 			}
 		}
 		if !pending.budgetStarted.IsZero() && time.Since(pending.budgetStarted) >= takeoverBudget {
@@ -331,6 +360,23 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 				pending.budgetNext = time.Now().Add(pending.budgetBackoff)
 				return
 			}
+			if !pending.unrequested {
+				noTargetAttempts++
+				if noTargetAttempts == maxResumeAttempts {
+					cause := pickErr
+					if pending.agentFailure != nil {
+						cause = fmt.Errorf("controlplane: no compatible agent target: %w", pending.agentFailure)
+					}
+					complete(true, cause)
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(25 * time.Millisecond):
+				}
+				continue
+			}
 			pending.waitedForTarget = true
 			if waitErr := m.waitForTarget(ctx, pending); waitErr != nil {
 				if errors.Is(waitErr, ErrTargetWaitExpired) {
@@ -354,15 +400,26 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			p.unreserve(target)
 			return
 		}
+		if m.beforeTransfer != nil {
+			m.beforeTransfer()
+		}
 		p.mu.Lock()
+		if pending.unrequested && source.observation.deathPreserved {
+			p.mu.Unlock()
+			p.unreserve(target)
+			return
+		}
 		// Serialize the last liveness decision with issuing Transfer. A heartbeat
 		// racing selection sends us back through exact source confirmation.
-		if !pending.transferIssued && source.observation.lastHeartbeat.After(pending.sourceChecked) {
+		if pending.unrequested && !source.observation.deathTransferIssued && pending.sourceNeedsHeartbeat && source.observation.lastHeartbeat.After(pending.sourceChecked) {
 			p.mu.Unlock()
 			p.unreserve(target)
 			continue
 		}
 		pending.transferIssued = true
+		if pending.unrequested {
+			source.observation.deathTransferIssued = true
+		}
 		p.mu.Unlock()
 		res.To = target.name
 		transferred := pending.lease

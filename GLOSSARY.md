@@ -24,5 +24,5 @@ _Avoid_: Effect publisher (covers only part of the concept)
 
 ## Target wait
 
-**Target wait**: The bounded period in which an unrequested takeover observes worker liveness and destination eligibility before declaring that no destination can recover the call. A live source keeps its call when its ownership is unchanged and no transfer has been issued.
+**Target wait**: The bounded period in which an unrequested takeover observes worker liveness and destination eligibility before declaring that no destination can recover the call. A live source keeps all its calls when every remaining ownership is confirmed and no transfer has been issued for that worker in its death cycle.
 _Avoid_: Target retry count, worker-death grace period

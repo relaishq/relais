@@ -14,21 +14,24 @@ import (
 // store work. Only detect establishes death, and only heartbeat completes rejoin.
 // Replacement constructs fresh knowledge instead of reusing a death cycle.
 type workerObservation struct {
-	relayPending      bool
-	livenessUnknown   bool
-	draining          bool
-	lastHeartbeat     time.Time
-	deathHeartbeat    time.Time
-	deathDetected     time.Time
-	deathToken        string
-	preserving        bool
-	dead              bool
-	recovering        bool
-	recovered         bool
-	rejoinReady       bool
-	rejoinToken       string
-	acceptedToken     string
-	heartbeatObserved bool
+	relayPending        bool
+	livenessUnknown     bool
+	draining            bool
+	lastHeartbeat       time.Time
+	deathHeartbeat      time.Time
+	deathDetected       time.Time
+	deathToken          string
+	deathTransferIssued bool
+	deathPreserved      bool
+	deathReturned       bool
+	deathCycle          uint64
+	dead                bool
+	recovering          bool
+	recovered           bool
+	rejoinReady         bool
+	rejoinToken         string
+	acceptedToken       string
+	heartbeatObserved   bool
 }
 
 type workerPoolClass uint8
@@ -103,11 +106,12 @@ func (o *workerObservation) observeStatus(status mediaworker.WorkerStatus, faile
 func (o *workerObservation) heartbeat(input workerHeartbeat, now time.Time) (HeartbeatReply, bool, error) {
 	// Liveness during recovery is evidence only, never a rejoin ACK. Preserve
 	// the original gap separately for deadlines, checkpoint reserves and events.
-	if o.recovering || o.dead && (!o.recovered || o.preserving) {
+	if o.recovering || o.dead && !o.recovered {
 		if input.remote && input.token != "" && input.token != o.deathToken {
 			return HeartbeatReply{}, false, errors.New("controlplane: stale rejoin token")
 		}
 		o.recordHeartbeat(now)
+		o.deathReturned = true
 		return HeartbeatReply{}, false, errors.New("controlplane: worker takeover in progress")
 	}
 	if input.remote {
@@ -178,6 +182,8 @@ func (o *workerObservation) detect(now time.Time, deadAfter time.Duration) worke
 		if !o.dead {
 			o.deathHeartbeat, o.deathToken = o.lastHeartbeat, o.acceptedToken
 			o.deathDetected = now
+			o.deathCycle++
+			o.deathTransferIssued, o.deathPreserved, o.deathReturned = false, false, false
 			o.rejoinToken, o.acceptedToken = "", ""
 		}
 		o.dead, o.recovering, o.recovered, o.rejoinReady = true, true, false, false
@@ -203,7 +209,7 @@ func (o *workerObservation) relayRegistered() bool {
 }
 
 func (o *workerObservation) canReplace(reserved int) bool {
-	return o.dead && o.recovered && !o.recovering && !o.preserving && reserved == 0
+	return o.dead && o.recovered && !o.recovering && reserved == 0
 }
 
 // resetDrain follows the caller's durable deletion and identity/lease recheck.
@@ -215,7 +221,7 @@ func (o *workerObservation) knowledge() workerKnowledge {
 		eligible:         !o.dead && !o.draining && !o.recovering && !o.relayPending && !o.livenessUnknown,
 		relayEligible:    !o.dead && !o.recovering,
 		relayRequired:    !o.dead && o.relayPending,
-		replacementReady: o.dead && o.recovered && !o.recovering && !o.preserving,
+		replacementReady: o.dead && o.recovered && !o.recovering,
 		retryPlanned:     !o.recovering && !o.dead,
 		dead:             o.dead, draining: o.draining, livenessUnknown: o.livenessUnknown,
 		recovering: o.recovering, lastHeartbeat: o.lastHeartbeat,

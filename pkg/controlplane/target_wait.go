@@ -61,69 +61,44 @@ func waitTargetObservation(ctx context.Context, changed <-chan struct{}, wait ti
 	return nil
 }
 
-// preserveSource runs under the call lock. A heartbeat alone is insufficient:
-// the private inventory must identify the exact still-authoritative live tenure.
+// preserveSource makes one worker-level decision. The registry lock serializes
+// its final publication with every Transfer-issued marker; no I/O holds it.
 func (m *moveRecovery) preserveSource(ctx context.Context, source *registration, pending *moveTransfer) bool {
+	if !pending.unrequested {
+		return false
+	}
 	p := m.plane
 	p.mu.Lock()
-	pending.sourceChecked = source.observation.lastHeartbeat
-	alive := m.sourceAliveLocked(source, pending.firstDetection)
-	p.mu.Unlock()
-	if !alive || pending.planned || pending.held || pending.transferIssued || pending.candidate != nil ||
-		pending.lease.Worker != source.addr || pending.routed != source.addr || pending.attempts != 0 {
-		return false
-	}
-	bounded, stop := context.WithTimeout(ctx, 250*time.Millisecond)
-	defer stop()
-	status, err := readRecoveryInventory(bounded, source.worker)
-	if err != nil || !completeRecoveryInventory(status, source) {
-		return false
-	}
-	found := false
-	for _, entry := range status.Inventory {
-		if entry.ID == pending.lease.SessionID && entry.Owner == source.addr && entry.Epoch == pending.lease.Epoch {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return false
-	}
-	lease, err := p.store.Get(bounded, pending.lease.SessionID)
-	if err != nil || lease.Worker != pending.lease.Worker || lease.Epoch != pending.lease.Epoch {
-		return false
-	}
-	p.mu.Lock()
-	if !m.sourceAliveLocked(source, pending.firstDetection) {
+	if source.observation.deathPreserved && source.observation.deathCycle == pending.deathCycle {
 		p.mu.Unlock()
+		return true
+	}
+	alive := m.sourceAliveLocked(source, pending.firstDetection)
+	pending.sourceNeedsHeartbeat = !alive
+	pending.sourceChecked = source.observation.lastHeartbeat
+	allowed := !source.observation.deathTransferIssued && source.observation.deathCycle == pending.deathCycle
+	for _, other := range m.pending[source] {
+		allowed = allowed && other.unrequested && other.candidate == nil && !other.transferIssued
+	}
+	p.mu.Unlock()
+	if !alive || !allowed {
 		return false
 	}
-	// Suppress the drop-all rejoin handshake while any source calls survive.
-	source.observation.preserving = true
-	p.mu.Unlock()
-	m.finishPending(source, lease.SessionID)
-	return true
-}
-
-func (m *moveRecovery) sourceAliveLocked(source *registration, detected time.Time) bool {
-	o := &source.observation
-	return m.plane.workers[source.name] == source && o.lastHeartbeat.After(detected) &&
-		m.observationTime().Sub(o.lastHeartbeat) < m.plane.config.DeadAfter
-}
-
-// restoreSource completes a cancelled death cycle only after all superseded
-// sessions have self-fenced. It must never challenge a surviving call to drop.
-func (m *moveRecovery) restoreSource(ctx context.Context, source *registration, remaining []sessionstore.Lease) bool {
-	p := m.plane
-	p.mu.Lock()
-	preserving := source.observation.preserving
-	p.mu.Unlock()
-	if !preserving {
-		return false
+	// A failed/slow inventory check must not make ordinary heartbeats restart
+	// selection forever. Only a prior rejection for liveness needs that retry.
+	pending.sourceNeedsHeartbeat = false
+	pending.sourceConfirmation = true
+	deadline := time.Now().Add(250 * time.Millisecond)
+	if !pending.targetDeadline.IsZero() && pending.targetDeadline.Before(deadline) {
+		deadline = pending.targetDeadline
 	}
-	bounded, stop := context.WithTimeout(ctx, 250*time.Millisecond)
+	bounded, stop := context.WithDeadline(ctx, deadline)
 	defer stop()
-	status, err := readRecoveryInventory(bounded, source.worker)
+	remaining, err := p.store.ListByWorker(bounded, source.addr)
+	if err != nil {
+		return false
+	}
+	status, err := source.recoveryInventory(bounded)
 	if err != nil || !completeRecoveryInventory(status, source) || len(status.Inventory) != len(remaining) {
 		return false
 	}
@@ -144,47 +119,93 @@ func (m *moveRecovery) restoreSource(ctx context.Context, source *registration, 
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.workers[source.name] != source || source.reserved != 0 || p.recovery.hasWorkLocked(source, recoveryAll) ||
-		m.observationTime().Sub(source.observation.lastHeartbeat) >= p.config.DeadAfter {
+	if source.observation.deathPreserved && source.observation.deathCycle == pending.deathCycle {
+		return true
+	}
+	if !m.sourceAliveLocked(source, pending.firstDetection) || source.observation.deathTransferIssued ||
+		source.observation.deathCycle != pending.deathCycle || source.reserved != 0 || bounded.Err() != nil {
 		return false
 	}
+	for _, other := range m.pending[source] {
+		if !other.unrequested || other.candidate != nil || other.transferIssued {
+			return false
+		}
+	}
+	for _, other := range m.pending[source] {
+		if other.call != nil {
+			source.preservedIntents = append(source.preservedIntents, other.call)
+		}
+	}
+	delete(m.pending, source)
 	o := &source.observation
 	o.observeStatus(status, false, false)
-	o.dead, o.recovering, o.preserving, o.livenessUnknown = false, false, false, false
+	o.dead, o.recovering, o.livenessUnknown, o.deathPreserved = false, false, false, true
+	o.recovered = true
 	o.rejoinReady, o.rejoinToken, o.acceptedToken = false, "", o.deathToken
 	p.loadVersion++
 	p.observationChangedLocked()
 	return true
 }
 
+func (m *moveRecovery) sourceAliveLocked(source *registration, detected time.Time) bool {
+	o := &source.observation
+	return m.plane.workers[source.name] == source && o.deathReturned && o.lastHeartbeat.After(detected) &&
+		m.observationTime().Sub(o.lastHeartbeat) < m.plane.config.DeadAfter
+}
+
+// Other call locks must be acquired only after this worker's recovery jobs end.
+func (m *moveRecovery) finishPreservedIntents(ctx context.Context, source *registration) {
+	p := m.plane
+	p.mu.Lock()
+	calls := source.preservedIntents
+	source.preservedIntents = nil
+	p.mu.Unlock()
+	for _, c := range calls {
+		if err := c.lockOperator(ctx, false); err == nil {
+			p.finishIntent(c)
+			c.mu.Unlock()
+		}
+	}
+}
+
 func completeRecoveryInventory(status mediaworker.WorkerStatus, source *registration) bool {
 	return status.InventoryKnown && !status.Truncated && status.Address == source.addr
 }
 
-func readRecoveryInventory(ctx context.Context, worker Worker) (mediaworker.WorkerStatus, error) {
+func (source *registration) recoveryInventory(ctx context.Context) (mediaworker.WorkerStatus, error) {
+	source.inventoryOnce.Do(func() { source.inventoryReader = recoveryInventoryReader(source.worker) })
+	return source.inventoryReader(ctx)
+}
+
+func recoveryInventoryReader(worker Worker) func(context.Context) (mediaworker.WorkerStatus, error) {
 	if remote, ok := worker.(interface {
 		Status(context.Context) (mediaworker.WorkerStatus, error)
 	}); ok {
-		return remote.Status(ctx)
+		return remote.Status
 	}
 	// In-process workers expose the same existing private inventory handler.
 	// No listening socket or worker-side API change is needed.
 	local, ok := worker.(interface{ PrivateHandler() http.Handler })
 	if !ok {
-		return mediaworker.WorkerStatus{}, ErrNotReady
+		return func(context.Context) (mediaworker.WorkerStatus, error) {
+			return mediaworker.WorkerStatus{}, ErrNotReady
+		}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://worker/status", nil)
-	if err != nil {
-		return mediaworker.WorkerStatus{}, err
+	handler := local.PrivateHandler()
+	return func(ctx context.Context) (mediaworker.WorkerStatus, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://worker/status", nil)
+		if err != nil {
+			return mediaworker.WorkerStatus{}, err
+		}
+		reply := &inventoryResponse{header: make(http.Header)}
+		handler.ServeHTTP(reply, req)
+		if reply.status != http.StatusOK {
+			return mediaworker.WorkerStatus{}, ErrNotReady
+		}
+		var status mediaworker.WorkerStatus
+		err = json.Unmarshal(reply.body.Bytes(), &status)
+		return status, err
 	}
-	reply := &inventoryResponse{header: make(http.Header)}
-	local.PrivateHandler().ServeHTTP(reply, req)
-	if reply.status != http.StatusOK {
-		return mediaworker.WorkerStatus{}, ErrNotReady
-	}
-	var status mediaworker.WorkerStatus
-	err = json.Unmarshal(reply.body.Bytes(), &status)
-	return status, err
 }
 
 type inventoryResponse struct {

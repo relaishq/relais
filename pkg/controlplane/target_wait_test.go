@@ -15,11 +15,15 @@ import (
 
 type inventoryWorker struct {
 	*fakeWorker
-	inventory []mediaworker.InstalledSession
-	truncated bool
+	inventory  []mediaworker.InstalledSession
+	truncated  bool
+	statusHook func(context.Context)
 }
 
-func (w *inventoryWorker) Status(context.Context) (mediaworker.WorkerStatus, error) {
+func (w *inventoryWorker) Status(ctx context.Context) (mediaworker.WorkerStatus, error) {
+	if w.statusHook != nil {
+		w.statusHook(ctx)
+	}
 	return mediaworker.WorkerStatus{Address: w.addr, InventoryKnown: true, Truncated: w.truncated,
 		Inventory: append([]mediaworker.InstalledSession(nil), w.inventory...)}, nil
 }
@@ -75,13 +79,17 @@ func TestTargetWaitHostStall(t *testing.T) {
 			waits := 0
 			s.p.recovery.targetWait = func(_ context.Context, _ <-chan struct{}, _ time.Duration) error {
 				waits++
-				require.Equal(t, 1, waits)
+				require.LessOrEqual(t, waits, 5, "late target must finish after four no-target wakeups")
 				require.Zero(t, s.p.lostCount)
 				require.True(t, s.a.runs(s.id))
 				current, err := s.p.store.Get(context.Background(), s.id)
 				require.NoError(t, err)
 				require.Equal(t, s.lease.Epoch, current.Epoch)
-				s.now = s.now.Add(200 * time.Millisecond) // exceeds the old three-selection window
+				if returning == "target" && waits <= 4 {
+					s.now = s.now.Add(40 * time.Millisecond)
+					return nil
+				}
+				s.now = s.now.Add(200 * time.Millisecond)
 				s.p.mu.Lock()
 				defer s.p.mu.Unlock()
 				if returning != "target" {
@@ -94,7 +102,11 @@ func TestTargetWaitHostStall(t *testing.T) {
 			}
 			require.True(t, s.p.recoverWorker(context.Background(), s.p.workers["a"], s.now))
 			require.Zero(t, s.p.lostCount, "the host stall must not lose the call")
-			require.Equal(t, 1, waits)
+			expectedWaits := 1
+			if returning == "target" {
+				expectedWaits = 5
+			}
+			require.Equal(t, expectedWaits, waits, "late target must survive four no-target wakeups")
 			current, err := s.p.store.Get(context.Background(), s.id)
 			require.NoError(t, err)
 			status, err := s.p.Status(context.Background())
@@ -229,46 +241,10 @@ func TestTargetWaitIssuedTransferNeverAbandons(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, s.b.addr, lease.Worker)
 			require.Greater(t, lease.Epoch, s.lease.Epoch)
-			require.False(t, s.p.workers["a"].observation.preserving)
+			require.False(t, s.p.workers["a"].observation.deathPreserved)
 			require.True(t, s.b.runs(s.id))
 		})
 	}
-}
-
-func TestTargetWaitMixedCallsWaitForSelfFence(t *testing.T) {
-	s := newStalledPool(t)
-	second, _, err := s.p.Create(context.Background(), "offer", "a")
-	// Create is deliberately unavailable during recovery. Seed a second exact
-	// tenure as an already-admitted call, using the same fake protocol boundary.
-	require.Error(t, err)
-	require.Empty(t, second)
-	second = "survivor"
-	lease, err := s.p.store.Claim(context.Background(), second, s.a.addr, time.Minute)
-	require.NoError(t, err)
-	s.p.calls[second] = &call{id: second, lease: lease}
-	s.a.running[second] = true
-	s.a.inventory = append(s.a.inventory, mediaworker.InstalledSession{ID: second, Owner: s.a.addr, Epoch: lease.Epoch})
-	s.targetReturns(t)
-	require.NotNil(t, s.p.recovery.recover(context.Background(), s.p.workers["a"], s.lease, s.now))
-	s.now = s.now.Add(100 * time.Millisecond)
-	s.sourceReturns(t)
-	require.False(t, s.p.recoverWorker(context.Background(), s.p.workers["a"], s.now))
-	require.True(t, s.p.workers["a"].observation.preserving)
-	require.False(t, s.p.workers["a"].observation.knowledge().eligible)
-	_, _, err = s.p.workers["a"].observation.heartbeat(workerHeartbeat{}, s.now)
-	require.ErrorContains(t, err, "takeover in progress")
-	require.True(t, s.a.runs(second))
-	// The real worker does this on checkpoint ErrLeaseLost; retain only the
-	// still-authoritative inventory, without ever delivering a rejoin challenge.
-	delete(s.a.running, s.id)
-	s.a.inventory = s.a.inventory[1:]
-	require.True(t, s.p.recoverWorker(context.Background(), s.p.workers["a"], s.now))
-	require.True(t, s.a.runs(second))
-	require.True(t, s.p.workers["a"].observation.knowledge().eligible)
-	current, err := s.p.store.Get(context.Background(), second)
-	require.NoError(t, err)
-	require.Equal(t, lease.Epoch, current.Epoch)
-	require.Zero(t, s.p.lostCount)
 }
 
 func TestTargetWaitDeadlineBounds(t *testing.T) {
@@ -320,7 +296,7 @@ func TestTargetWaitIncompleteInventoryCannotAbandon(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, s.b.addr, current.Worker)
 			require.True(t, s.b.runs(s.id))
-			require.False(t, s.p.workers["a"].observation.preserving)
+			require.False(t, s.p.workers["a"].observation.deathPreserved)
 		})
 	}
 }
@@ -336,9 +312,10 @@ func TestTargetWaitObservationWakesWithoutPolling(t *testing.T) {
 type privateInventoryWorker struct {
 	*fakeWorker
 	handler http.Handler
+	builds  int
 }
 
-func (w *privateInventoryWorker) PrivateHandler() http.Handler { return w.handler }
+func (w *privateInventoryWorker) PrivateHandler() http.Handler { w.builds++; return w.handler }
 
 func TestRecoveryInventoryUsesExistingPrivateHandler(t *testing.T) {
 	_, a, _, _ := setup(t)
@@ -348,8 +325,12 @@ func TestRecoveryInventoryUsesExistingPrivateHandler(t *testing.T) {
 		_, err := rw.Write([]byte(`{"inventory_known":true,"inventory":[],"address":"127.0.0.1:1"}`))
 		require.NoError(t, err)
 	})}
-	status, err := readRecoveryInventory(context.Background(), w)
+	source := &registration{worker: w}
+	status, err := source.recoveryInventory(context.Background())
 	require.NoError(t, err)
 	require.True(t, status.InventoryKnown)
 	require.Equal(t, a.addr, status.Address)
+	_, err = source.recoveryInventory(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, w.builds, "the in-process inventory handler must be built once per registration")
 }

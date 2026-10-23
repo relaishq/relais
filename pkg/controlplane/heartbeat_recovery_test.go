@@ -25,10 +25,6 @@ func TestRecoveryHeartbeatRecordsLivenessWithoutRejoin(t *testing.T) {
 			require.False(t, o.knowledge().relayEligible)
 			require.False(t, o.knowledge().resumeRetry)
 			o.recoveryFinished(true)
-			o.preserving = true
-			require.False(t, o.knowledge().replacementReady)
-			require.False(t, o.canReplace(0))
-			o.preserving = false
 			reply, _, err = o.heartbeat(workerHeartbeat{remote: remote}, at)
 			if remote {
 				require.NoError(t, err)
