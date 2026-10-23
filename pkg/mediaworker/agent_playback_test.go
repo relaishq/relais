@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/relaishq/relais/internal/agenthost"
@@ -89,8 +90,18 @@ func TestPlaybackPacerRebasesAndKeepsCounters(t *testing.T) {
 	s.srtpOut = testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
 	receiver := testContext(t, keys.LocalMasterKey, keys.LocalMasterSalt, profile)
 	now := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
-	s.storeClock = now
-	s.storeClockAt = time.Now()
+	// Freeze only paceOne's clock. UDP receive deadlines stay on real time
+	// outside the bubble, and scheduler stalls cannot change the paced delay.
+	paceAt := func(at time.Time) time.Duration {
+		var delay time.Duration
+		synctest.Test(t, func(t *testing.T) {
+			s.storeClock, s.storeClockAt = at, time.Now()
+			var err error
+			delay, err = s.paceOne()
+			require.NoError(t, err)
+		})
+		return delay
+	}
 	receive := func() rtp.Packet {
 		buf := make([]byte, receiveMTU)
 		require.NoError(t, sink.SetReadDeadline(time.Now().Add(time.Second)))
@@ -102,37 +113,27 @@ func TestPlaybackPacerRebasesAndKeepsCounters(t *testing.T) {
 		require.NoError(t, p.Unmarshal(plain))
 		return p
 	}
-	delay, err := s.paceOne()
-	require.NoError(t, err)
-	require.InDelta(t, float64(20*time.Millisecond), float64(delay), float64(2*time.Millisecond))
+	require.Equal(t, 20*time.Millisecond, paceAt(now))
 	first := receive()
 	require.EqualValues(t, 65534, first.SequenceNumber)
-	s.storeClock = now.Add(time.Second)
-	s.storeClockAt = time.Now() // long output stall
-	delay, err = s.paceOne()
-	require.NoError(t, err)
-	require.InDelta(t, float64(20*time.Millisecond), float64(delay), float64(2*time.Millisecond))
+	require.Equal(t, 20*time.Millisecond, paceAt(now.Add(time.Second))) // long output stall
 	second := receive()
 	require.EqualValues(t, 65535, second.SequenceNumber)
-	require.InDelta(t, float64(first.Timestamp+48000), float64(second.Timestamp), 48, "RTP clock includes the one-second stall")
-	delay, err = s.paceOne()
-	require.NoError(t, err)
-	require.Greater(t, delay, 15*time.Millisecond, "no catch-up after a stall")
+	require.Equal(t, first.Timestamp+48000, second.Timestamp, "RTP clock includes the one-second stall")
+	require.Equal(t, 20*time.Millisecond, paceAt(now.Add(time.Second)), "no catch-up after a stall")
 	require.EqualValues(t, 2, s.state.Audio.Packets)
-	s.storeClock = now.Add(2 * time.Second)
-	s.storeClockAt = time.Now()
-	_, _ = s.paceOne()
+	require.Equal(t, 20*time.Millisecond, paceAt(now.Add(2*time.Second)))
 	third := receive()
 	require.Zero(t, third.SequenceNumber)
 	require.EqualValues(t, 65536, s.state.Audio.HighestSentIndex)
 	// Empty playback allocates no further SRTP indexes.
 	s.agent.v2.playback.queue = nil
-	_, _ = s.paceOne()
+	require.Equal(t, time.Hour, paceAt(now.Add(2*time.Second)))
 	require.EqualValues(t, 3, s.state.Audio.Packets)
 	var rates CheckpointState
 	s.checkpointRates(&rates)
 	require.GreaterOrEqual(t, rates.RTPPacketRate, float64(400))
-	_, _, _, err = (CheckpointEnvelope{}).CheckpointMargins(550*time.Millisecond, rates, 8192, 128)
+	_, _, _, err := (CheckpointEnvelope{}).CheckpointMargins(550*time.Millisecond, rates, 8192, 128)
 	require.NoError(t, err)
 }
 func TestTimerGenerationResetCancelAndRestore(t *testing.T) {
