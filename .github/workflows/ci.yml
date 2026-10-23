@@ -407,7 +407,7 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: Install Valkey build dependencies and media decoder
-        id: package-cache-key
+        id: ubuntu-packages
         uses: ./.github/actions/ubuntu-packages
         timeout-minutes: 10
         with:
@@ -420,7 +420,7 @@ jobs:
           SEGMENT_DOWNLOAD_TIMEOUT_MINS: '1'
         with:
           path: ${{ runner.temp }}/valkey-bin
-          key: ${{ steps.package-cache-key.outputs.key }}-valkey-${{ env.VALKEY_VERSION }}-${{ env.VALKEY_SHA256 }}-${{ hashFiles('scripts/ci/build-valkey.sh') }}
+          key: ${{ steps.ubuntu-packages.outputs.key }}-valkey-${{ env.VALKEY_VERSION }}-${{ env.VALKEY_SHA256 }}-${{ hashFiles('scripts/ci/build-valkey.sh') }}
       - name: Build or restore pinned Valkey with TLS
         timeout-minutes: 6
         run: bash scripts/ci/build-valkey.sh

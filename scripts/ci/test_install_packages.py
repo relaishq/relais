@@ -43,7 +43,8 @@ class PackageSetup(unittest.TestCase):
             raise subprocess.CalledProcessError(100, command)
 
     def download(self, arch='amd64'):
-        with mock.patch.object(packages, 'run', self.fake_run):
+        with mock.patch.object(packages, 'run', self.fake_run), \
+             mock.patch.object(packages, 'verify_cached_inputs', create=True):
             return packages.download(['ffmpeg'], 'noble', arch, self.cache)
 
     def test_stalled_download_retries_another_mirror_with_a_short_bound(self):
@@ -131,6 +132,41 @@ class PackageSetup(unittest.TestCase):
                 self.assertNotEqual(initial, packages.cache_key(['ffmpeg', 'redis-server']))
             with mock.patch.object(packages.subprocess, 'check_output', return_value='arm64\n'):
                 self.assertNotEqual(initial, packages.cache_key(['ffmpeg', 'redis-server']))
+
+
+    def test_cleanup_failures_do_not_skip_later_steps_or_mask_install_error(self):
+        policy = Path(self.temp.name) / 'policy-rc.d'
+        policy.symlink_to('missing-target')
+        self.fail_install = True
+        original_run = self.fake_run
+        def fail_cleanup(command, seconds):
+            original_run(command, seconds)
+            if command[0] == 'env':
+                return
+            if any(prior[0][0] == 'env' for prior in self.commands):
+                if command[0] in ('rm', 'cp'):
+                    raise subprocess.CalledProcessError(23, command)
+        self.fake_run = fail_cleanup
+        with self.assertRaises(subprocess.CalledProcessError) as caught:
+            self.install()
+        self.assertEqual(100, caught.exception.returncode)
+        self.assertEqual('env', caught.exception.cmd[0])
+        cleanup = [command[0] for command, _ in self.commands[self.commands.index(
+            next(item for item in self.commands if item[0][0] == 'env')) + 1:]]
+        self.assertEqual(['rm', 'cp', 'chown'], cleanup)
+
+
+    def test_cleanup_failure_after_success_is_reported_and_later_steps_still_run(self):
+        original_run = self.fake_run
+        def fail_cleanup(command, seconds):
+            original_run(command, seconds)
+            if command[0] == 'rm' and command[1] == '-f':
+                if any(prior[0][0] == 'env' for prior in self.commands):
+                    raise subprocess.CalledProcessError(23, command)
+        self.fake_run = fail_cleanup
+        with self.assertRaisesRegex(RuntimeError, 'Ubuntu package cleanup failed'):
+            self.install()
+        self.assertEqual('chown', self.commands[-1][0][0])
 
 
 class SetupIsolation(unittest.TestCase):

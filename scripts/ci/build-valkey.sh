@@ -27,6 +27,8 @@ if [[ ! -x "$bin/redis-server" || ! -x "$bin/redis-cli" ]]; then
 else
   echo 'Using cached pinned Valkey binaries'
 fi
+# SHA256SUMS is cached alongside the binaries. It detects accidental corruption,
+# not tampering by someone who can replace both the binaries and their checksums.
 (cd "$bin" && sha256sum --check --strict SHA256SUMS)
 "$bin/redis-server" --version
 "$bin/redis-cli" --version

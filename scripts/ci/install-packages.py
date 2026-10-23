@@ -7,6 +7,8 @@ import subprocess
 import sys
 import time
 
+from apt_cache import mirrors, sources
+
 CACHE = Path(os.environ.get('RUNNER_TEMP', '/tmp')) / 'relais-apt'
 POLICY = Path('/usr/sbin/policy-rc.d')
 
@@ -31,7 +33,8 @@ def cache_key(packages):
     identity = [ubuntu(), os.environ.get('ImageVersion', 'unknown'),
                 subprocess.check_output(['dpkg', '--print-architecture'], text=True).strip(),
                 time.strftime('%G-%V', time.gmtime()), *sorted(packages)]
-    digest = hashlib.sha256(Path(__file__).read_bytes() + '\n'.join(identity).encode()).hexdigest()
+    recipe = Path(__file__).read_bytes() + Path(__file__).with_name('apt_cache.py').read_bytes()
+    digest = hashlib.sha256(recipe + '\n'.join(identity).encode()).hexdigest()
     return 'ubuntu-packages-' + digest
 
 
@@ -43,33 +46,39 @@ def apt_options(cache):
             '-o', 'Acquire::Retries=0', '-o', 'Acquire::http::Timeout=10',
             '-o', 'Acquire::https::Timeout=10', '-o', 'Acquire::Languages=none',
             '-o', 'APT::Update::Error-Mode=any',
+            '-o', 'Acquire::IndexTargets::deb::Packages::KeepCompressed=false',
             '-o', 'APT::Keep-Downloaded-Packages=true',
             '-o', 'Binary::apt-get::APT::Keep-Downloaded-Packages=true',
             '-o', 'DPkg::Lock::Timeout=10']
+
+
+def verify_cached_inputs(cache, codename, arch):
+    # Bound signature/hash/parsing work separately; the verifier is unprivileged.
+    subprocess.run([sys.executable, str(Path(__file__).with_name('apt_cache.py')),
+                    str(cache), codename, arch], check=True, timeout=60)
 
 
 def download(packages, codename, arch, cache):
     options = apt_options(cache)
     if (cache / 'sources.list').exists():
         try:
+            verify_cached_inputs(cache, codename, arch)
             # Check completeness without network before touching dpkg. A partial
             # or missing cache falls through to the two bounded mirror attempts.
             run(['apt-get', *options, 'install', '-y', '--no-install-recommends',
                  '--no-upgrade', '--download-only', '--no-download', *packages], 30)
             return 'cache'
-        except subprocess.CalledProcessError:
-            print('Cached packages incomplete; trying authenticated Ubuntu mirrors', flush=True)
-    mirrors = (['https://azure.archive.ubuntu.com/ubuntu', 'https://archive.ubuntu.com/ubuntu']
-               if arch == 'amd64' else
-               ['https://ports.ubuntu.com/ubuntu-ports', 'http://ports.ubuntu.com/ubuntu-ports'])
-    for mirror in mirrors:
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+            print(f'Cached packages incomplete or unauthenticated: {error}; trying Ubuntu mirrors', flush=True)
+    # APT can reuse an existing archive based only on size, even after update.
+    # Discard all cached inputs before the fresh authenticated download path.
+    run(['rm', '-rf', str(cache)], 10)
+    (cache / 'archives' / 'partial').mkdir(parents=True)
+    for mirror in mirrors(arch):
         # Do not mix a previous mirror's lists with the next attempt.
         run(['rm', '-rf', str(cache / 'lists')], 10)
         (cache / 'lists' / 'partial').mkdir(parents=True)
-        (cache / 'sources.list').write_text('\n'.join(
-            f'deb [signed-by=/usr/share/keyrings/ubuntu-archive-keyring.gpg] {mirror} '
-            f'{codename}{suite} main restricted universe multiverse'
-            for suite in ('', '-updates', '-security')) + '\n')
+        (cache / 'sources.list').write_text(sources(mirror, codename, arch))
         try:
             print(f'Package download attempt: {mirror} (update <=45s, download <=75s)', flush=True)
             run(['apt-get', *options, 'update'], 45)
@@ -89,7 +98,6 @@ def install(packages, cache=CACHE):
     if installed.returncode == 0 and installed.stdout.splitlines() == ['installed'] * len(packages):
         return 'already installed on runner image'
     cache.mkdir(parents=True, exist_ok=True)
-    (cache / 'archives' / 'partial').mkdir(parents=True, exist_ok=True)
     source = download(packages, codename, arch, cache)
     # Never start the distribution's Redis (or any other service). Tests own
     # their processes and dedicated ports. Preserve even a symlink policy.
@@ -107,11 +115,21 @@ def install(packages, cache=CACHE):
              'apt-get', *apt_options(cache), 'install', '-y', '--no-install-recommends',
              '--no-upgrade', '--no-download', *packages], 90)
     finally:
-        run(['rm', '-f', str(POLICY)], 10)
+        original_error = sys.exc_info()[1]
+        cleanup = [['rm', '-f', str(POLICY)]]
         if existed:
-            run(['cp', '-a', str(backup), str(POLICY)], 10)
+            cleanup.append(['cp', '-a', str(backup), str(POLICY)])
         # actions/cache saves as the runner user, not root.
-        run(['chown', '-R', f'{os.getuid()}:{os.getgid()}', str(cache)], 10)
+        cleanup.append(['chown', '-R', f'{os.getuid()}:{os.getgid()}', str(cache)])
+        failures = []
+        for command in cleanup:
+            try:
+                run(command, 10)
+            except Exception as error:
+                failures.append(error)
+                print(f'::warning title=Ubuntu package cleanup failed::{error}', file=sys.stderr)
+        if failures and original_error is None:
+            raise RuntimeError(f'Ubuntu package cleanup failed: {failures[0]}')
     return source
 
 
