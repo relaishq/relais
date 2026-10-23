@@ -56,7 +56,8 @@ func TestClusterProcessTopology(t *testing.T) {
 		type promotion struct{ started, completed time.Time }
 		var promotions []promotion
 		fault := func(ctx context.Context, id, prefix string) error {
-			observer, err := sessionstore.NewRedis(ctx, storage.RedisConfig{Addrs: addrs, Cluster: true, Prefix: prefix}, make([]byte, 32))
+			cfg := storage.RedisConfig{Addrs: addrs, Cluster: true, Prefix: prefix}
+			observer, err := sessionstore.NewRedis(ctx, cfg, make([]byte, 32))
 			if err != nil {
 				return err
 			}
@@ -99,23 +100,27 @@ func TestClusterProcessTopology(t *testing.T) {
 			if err := redistestcluster.Failover(ctx, admin, leaseKey); err != nil {
 				return err
 			}
-			deadline := time.Now().Add(3 * time.Second)
-			for {
-				got, err := observer.Get(ctx, id)
-				if err == nil {
-					if got.Epoch != lease.Epoch || got.Worker != lease.Worker {
-						return fmt.Errorf("failover changed live ownership")
-					}
-					break
-				}
-				if time.Now().After(deadline) {
-					return err
-				}
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(20 * time.Millisecond):
-				}
+			// Only the test observer is reset. The live process clients still
+			// discover promotion themselves while media continues. Build its
+			// fresh cache only after every node agrees on all slots; warming a
+			// session key alone leaves route/index slots potentially stale.
+			if err := redistestcluster.WaitForStable(ctx, admin); err != nil {
+				return err
+			}
+			if err := observer.Close(); err != nil {
+				return err
+			}
+			nextObserver, err := sessionstore.NewRedis(ctx, cfg, make([]byte, 32))
+			if err != nil {
+				return err
+			}
+			observer = nextObserver
+			got, err := observer.Get(ctx, id)
+			if err != nil {
+				return err
+			}
+			if got.Epoch != lease.Epoch || got.Worker != lease.Worker {
+				return fmt.Errorf("failover changed live ownership")
 			}
 			restored, err := observer.LoadRoutes(ctx, 100)
 			if err != nil {

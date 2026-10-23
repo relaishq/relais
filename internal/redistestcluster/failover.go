@@ -62,7 +62,7 @@ func Failover(ctx context.Context, client *redis.ClusterClient, key string) erro
 	for {
 		info, err := replica.Info(ctx, "replication").Result()
 		if err == nil && strings.Contains(info, "role:master") {
-			return nil
+			return WaitForStable(ctx, client)
 		}
 		select {
 		case <-ctx.Done():
