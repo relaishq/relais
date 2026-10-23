@@ -31,6 +31,11 @@ if data.get("outcome") != "pass" or not data.get("planned_load_validated"):
     blocking.append("capacity ramp / N+1 operating load is not validated")
 if not data.get("custom_agent", {}).get("worker_sha256"):
     blocking.append("exact custom-worker build evidence is missing")
+budgets = data.get("custom_agent", {}).get("operator_budgets")
+if data.get("custom_agent", {}).get("operator_budget_error") or not isinstance(budgets, dict) or any(
+        not isinstance(budgets.get(k), int) or isinstance(budgets.get(k), bool) or budgets[k] <= 0
+        for k in ("max_snapshot_bytes", "snapshot_bytes_per_second", "snapshot_burst_bytes", "move_bytes_per_session", "move_bytes_total")):
+    blocking.append("operator budgets unknown or invalid; provide workerapp-compatible budget evidence before approval")
 steps = []
 if not data.get("steps"):
     blocking.append("no capacity steps")

@@ -4,9 +4,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/relaishq/relais/internal/agenthost"
+	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 )
 
@@ -21,6 +23,9 @@ type SnapshotLimits struct {
 	MoveBytesPerSession int
 	MoveBytesTotal      int64
 }
+
+// LegacyDefaults resolves the ADR 0010 profile and preserves explicit limits.
+func (l SnapshotLimits) LegacyDefaults() SnapshotLimits { return l.defaults() }
 
 func (l SnapshotLimits) defaults() SnapshotLimits {
 	if l.MaxBytes == 0 {
@@ -46,8 +51,11 @@ func (l SnapshotLimits) defaults() SnapshotLimits {
 func (l SnapshotLimits) SplitDefaults() SnapshotLimits { return l.splitDefaults() }
 
 func (l SnapshotLimits) splitDefaults() SnapshotLimits {
+	if l.MaxBytes == 0 {
+		l.MaxBytes = 6144
+	}
 	if l.BytesPerSecond == 0 {
-		l.BytesPerSecond = 80000
+		l.BytesPerSecond = 70000
 	}
 	if l.BurstBytes == 0 {
 		l.BurstBytes = 40960
@@ -82,6 +90,104 @@ func (l SnapshotLimits) ValidateForInterval(interval time.Duration) error {
 	minimum := periodic + int64(l.MaxBytes)
 	if int64(l.BytesPerSecond) < minimum {
 		return fmt.Errorf("%w: -agent-snapshot-bytes-per-second must be at least %d for snapshot interval %s", agent.ErrCapacity, minimum, interval)
+	}
+	return nil
+}
+
+// ValidateSnapshotProfiles checks cadence and every declared v2 registration
+// before startup. Both profiles must support cadence on split workers, but only
+// split registration fit blocks their startup. Legacy fit warns at startup;
+// split workers measure actual legacy snapshot bytes before restore. Factory alone stays opaque until session setup.
+// Application agents are never constructed by this preflight.
+func ValidateSnapshotProfiles(cfg Config) error {
+	interval := cfg.SnapshotInterval
+	if interval <= 0 {
+		interval = 100 * time.Millisecond
+	}
+	profiles := []struct {
+		name   string
+		limits SnapshotLimits
+		split  bool
+	}{{"legacy", cfg.SnapshotLimits.LegacyDefaults(), false}}
+	if cfg.SplitCheckpoints {
+		profiles = append(profiles, struct {
+			name   string
+			limits SnapshotLimits
+			split  bool
+		}{"split", cfg.SnapshotLimits.SplitDefaults(), true})
+	}
+	names := make([]string, 0, len(cfg.Agent.Registrations))
+	for name := range cfg.Agent.Registrations {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, profile := range profiles {
+		if err := profile.limits.ValidateForInterval(interval); err != nil {
+			return fmt.Errorf("%s session profile: %w; raise -agent-snapshot-bytes-per-second to cover periodic and forced writes; an explicit -agent-max-snapshot-bytes must also fit registrations in the new-call profile", profile.name, err)
+		}
+		if cfg.SplitCheckpoints && !profile.split {
+			// A split-sized declaration need not fit legacy snapshots. New logs
+			// this conservative adoption warning; ResumeSession checks actual bytes.
+			continue
+		}
+		for _, name := range names {
+			factory := cfg.Agent.Registrations[name]
+			if factory == nil {
+				return fmt.Errorf("%s session profile registration %q: %w: missing metadata adapter", profile.name, name, agent.ErrIncompatibleAgent)
+			}
+			adapter, ok := factory("").(*agenthost.Adapter)
+			if !ok || adapter == nil {
+				return fmt.Errorf("%s session profile registration %q: %w: expected v2 metadata adapter", profile.name, name, agent.ErrIncompatibleAgent)
+			}
+			r := adapter.Registration
+			if err := ValidateAgentRegistration(r.Name, r.TaskKinds, r.Declared, profile.limits, profile.split); err != nil {
+				return fmt.Errorf("%s session profile registration %q: %w", profile.name, name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// warnLegacyRegistrationFits runs once at startup, after hard preflight and
+// logger setup. Warnings describe legacy adoption, not new split admission.
+func (w *Worker) warnLegacyRegistrationFits() {
+	for _, factory := range w.cfg.Agent.Registrations {
+		adapter, ok := factory("").(*agenthost.Adapter)
+		if !ok || adapter == nil {
+			continue // New already validates metadata adapters before start.
+		}
+		reg := adapter.Registration
+		if err := validateLegacyRegistrationFit(reg, w.cfg.SnapshotLimits); err != nil {
+			w.log.Warnf("legacy calls with registration %q may not be adoptable by this worker: %v", reg.Name, err)
+		}
+	}
+}
+
+// validateLegacyRegistrationFit is a conservative startup warning only.
+// Restore admission measures the actual snapshot, not this declared estimate.
+func validateLegacyRegistrationFit(reg agenthost.Registration, limits SnapshotLimits) error {
+	if err := ValidateAgentRegistration(reg.Name, reg.TaskKinds, reg.Declared, limits, false); err != nil {
+		return fmt.Errorf("%w: legacy session profile registration %q: %w", agent.ErrIncompatibleAgent, reg.Name, err)
+	}
+	return nil
+}
+
+// validateLegacySnapshotFit protects split workers adopting v8/v9 sessions.
+// Measure the durable form, excluding the separately bounded move-only payload.
+// Legacy pools keep their existing restore behavior, including source rollback.
+func (w *Worker) validateLegacySnapshotFit(snap snapshot) error {
+	if !w.cfg.SplitCheckpoints || snap.split != nil {
+		return nil
+	}
+	snap.AgentMoveOnly = nil
+	encoded, err := json.Marshal(snap)
+	if err != nil {
+		return err
+	}
+	actual := len(encoded) + snapshotEnvelopeBytes
+	cap := w.cfg.SnapshotLimits.LegacyDefaults().MaxBytes
+	if actual > cap {
+		return fmt.Errorf("%w: %w: %w: legacy snapshot for registration %q is %d encoded bytes (cap %d, short by %d bytes)", legacy.ErrRestore, agent.ErrIncompatibleAgent, agent.ErrStateTooLarge, snap.State.Agent.V2.Name, actual, cap, actual-cap)
 	}
 	return nil
 }
@@ -158,11 +264,13 @@ func ValidateAgentRegistration(name string, kinds []string, bounds agent.Limits,
 		return fmt.Errorf("%w: split burst cannot hold two maximum transactions for %q", agent.ErrCapacity, name)
 	}
 	const measuredTransport = 3474 // ADR 0010 C; rechecked from real payloads at runtime.
-	if !isSplit && measuredTransport+snapshotEnvelopeBytes+base64.StdEncoding.EncodedLen(bounds.MaxStateBytes)+v2HostMetadataBytes > limits.MaxBytes {
-		return fmt.Errorf("%w: declared state for %q cannot fit operator snapshot cap", agent.ErrStateTooLarge, name)
+	legacyBytes := measuredTransport + snapshotEnvelopeBytes + base64.StdEncoding.EncodedLen(bounds.MaxStateBytes) + v2HostMetadataBytes
+	if !isSplit && legacyBytes > limits.MaxBytes {
+		return fmt.Errorf("%w: declared state for %q needs %d encoded bytes; operator snapshot cap %d is short by %d bytes", agent.ErrStateTooLarge, name, legacyBytes, limits.MaxBytes, legacyBytes-limits.MaxBytes)
 	}
-	if isSplit && bounds.MaxStateBytes+6+componentCipherOverhead > limits.MaxBytes {
-		return fmt.Errorf("%w: declared working component for %q cannot fit operator hot cap", agent.ErrStateTooLarge, name)
+	splitBytes := bounds.MaxStateBytes + 6 + componentCipherOverhead
+	if isSplit && splitBytes > limits.MaxBytes {
+		return fmt.Errorf("%w: declared working component for %q needs %d encoded bytes; operator hot cap %d is short by %d bytes", agent.ErrStateTooLarge, name, splitBytes, limits.MaxBytes, splitBytes-limits.MaxBytes)
 	}
 	metadata, err := json.Marshal(v2Envelope{Name: name, Contract: v2Contract, TaskKinds: kinds, Limits: &declared, Quota: &snapshotQuota{Version: 1, Balance: quotaBalance(uint64(limits.BurstBytes)), At: time.Now().UTC()}})
 	if err != nil {

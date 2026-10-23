@@ -20,7 +20,7 @@ def fixture():
                     store_bytes_by_client_per_call_second={})
     return dict(outcome='pass', planned_load_validated=True, worker_capacity_lower_bound=8,
                 relay_capacity_lower_bound=8, candidate_n_plus_one_callers=8,
-                custom_agent=dict(worker_sha256='exact-build', agent='delayed-loopback/v1'),
+                custom_agent=dict(worker_sha256='exact-build', agent='delayed-loopback/v1', operator_budgets=dict(max_snapshot_bytes=7168, snapshot_bytes_per_second=81920, snapshot_burst_bytes=28672, move_bytes_per_session=1048576, move_bytes_total=67108864)),
                 store_commands_budget_per_call_second=100, store_bytes_budget_per_call_second=131072,
                 steps=[step('worker', 8), step('worker', 16, 'inconclusive'), step('relay', 8),
                        step('relay', 16, 'inconclusive'), step('n-plus-one', 8), step('drain', 8)])
@@ -63,6 +63,15 @@ class ApprovalScope(unittest.TestCase):
                         data['steps'][index]['custom_agent']['evidence_verdict'] = 'blocking-approval'
                     result, _ = self.run_report(data)
                     self.assertEqual(1, result.returncode)
+
+    def test_unknown_worker_budgets_block_approval_without_discarding_run(self):
+        data = fixture()
+        data["custom_agent"]["operator_budgets"] = None
+        data["custom_agent"]["operator_budget_error"] = "flag provided but not defined: -custom-delay"
+        result, report = self.run_report(data)
+        self.assertEqual(1, result.returncode)
+        self.assertIn("operator budgets unknown or invalid; provide workerapp-compatible budget evidence before approval", report["blocking"])
+        self.assertEqual(len(data["steps"]), len(report["steps"]))
 
     def test_missing_required_proof_blocks(self):
         for kind in ('worker', 'relay', 'n-plus-one', 'drain'):

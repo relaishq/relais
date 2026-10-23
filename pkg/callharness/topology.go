@@ -253,5 +253,5 @@ func harnessSnapshotLimits(interval time.Duration) mediaworker.SnapshotLimits {
 	if interval <= 0 || interval >= 100*time.Millisecond {
 		return mediaworker.SnapshotLimits{}
 	}
-	return mediaworker.SnapshotLimits{BytesPerSecond: int((7168*int64(time.Second)-1)/int64(interval) + 1 + 7168)}
+	return mediaworker.SnapshotLimits{MaxBytes: 7168, BytesPerSecond: int((7168*int64(time.Second)-1)/int64(interval) + 1 + 7168)}
 }

@@ -13,7 +13,8 @@ import (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "history" {
 		os.Args = append(os.Args[:1], os.Args[2:]...)
-		workerapp.Main(workerapp.Options{DefaultAgent: history.Name, Agents: []workerapp.Registration{history.Registration(splitCheckpoints(os.Args[1:]), false), history.Registration(splitCheckpoints(os.Args[1:]), true)}})
+		full := os.Getenv("RELAIS_HISTORY_FULL_SIZE") == "1"
+		workerapp.Main(workerapp.Options{DefaultAgent: history.Name, Agents: []workerapp.Registration{history.Registration(splitCheckpoints(os.Args[1:]), false, full), history.Registration(splitCheckpoints(os.Args[1:]), true, full)}})
 		return
 	}
 

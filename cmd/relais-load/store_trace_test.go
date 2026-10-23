@@ -131,3 +131,16 @@ func TestScriptProtocolCountersDistinguishBodySubmissions(t *testing.T) {
 	w.observe(wireCommand("evalsha", "sha", "0"), missing, nil, time.Millisecond)
 	require.EqualValues(t, 1, w.NoScriptReplies)
 }
+
+func TestStorePhaseIntervalsKeepSeparateSteadySegments(t *testing.T) {
+	start := time.Now()
+	o := &storeObserver{started: start, phaseAt: start, phase: "steady", trace: storeTrace{PhaseSeconds: map[string]float64{}, PhaseIntervals: map[string][]storePhaseInterval{}}}
+	o.finishPhase(start.Add(6 * time.Second))
+	o.phase = "move"
+	o.finishPhase(start.Add(6500 * time.Millisecond))
+	o.phase = "steady"
+	o.finishPhase(start.Add(30 * time.Second))
+	require.Equal(t, []storePhaseInterval{{Start: 0, End: 6}, {Start: 6.5, End: 30}}, o.trace.PhaseIntervals["steady"])
+	require.Equal(t, 29.5, o.trace.PhaseSeconds["steady"])
+	require.Equal(t, []storePhaseInterval{{Start: 6, End: 6.5}}, o.trace.PhaseIntervals["move"])
+}

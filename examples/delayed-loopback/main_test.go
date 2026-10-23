@@ -24,7 +24,7 @@ func TestSplitCheckpointsSelectsHistoryLimits(t *testing.T) {
 		enabled := splitCheckpoints(tc.args)
 		require.Equal(t, tc.enabled, enabled, "%v", tc.args)
 		for _, churn := range []bool{false, true} {
-			reg := history.Registration(enabled, churn)
+			reg := history.Registration(enabled, churn, false)
 			if enabled {
 				require.Zero(t, reg.Limits.MaxStateBytes)
 				require.Zero(t, reg.Limits.MaxHistoryBytes)

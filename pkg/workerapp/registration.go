@@ -32,10 +32,6 @@ func registeredAgents(options Options, selected string, limits mediaworker.Snaps
 		}
 		bounds := agenthost.Bounds(r.Limits)
 		f := agenthost.Factory(agenthost.Registration{Name: r.Name, Factory: r.Factory, Tasks: r.Tasks, SkipDrainWait: r.SkipDrainWait, Bounds: bounds})
-		resolved := f("").(*agenthost.Adapter).Registration
-		if err := mediaworker.ValidateAgentRegistration(resolved.Name, resolved.TaskKinds, r.Limits, limits, split...); err != nil {
-			return mediaworker.AgentConfig{}, err
-		}
 		for kind, handler := range r.Tasks {
 			if kind == "" || !utf8.ValidString(kind) || handler == nil {
 				return mediaworker.AgentConfig{}, fmt.Errorf("%w: invalid task kind %q", agent.ErrIncompatibleAgent, kind)
@@ -47,6 +43,9 @@ func registeredAgents(options Options, selected string, limits mediaworker.Snaps
 			}
 		}
 		factories[r.Name] = f
+	}
+	if err := mediaworker.ValidateSnapshotProfiles(mediaworker.Config{Agent: mediaworker.AgentConfig{Registrations: factories}, SnapshotLimits: limits, SplitCheckpoints: len(split) > 0 && split[0]}); err != nil {
+		return mediaworker.AgentConfig{}, err
 	}
 	cfg, err := selectAgent(selected)
 	if f, ok := factories[selected]; ok {

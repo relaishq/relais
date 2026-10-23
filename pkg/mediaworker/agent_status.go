@@ -19,6 +19,7 @@ type AgentSessionStatus struct {
 	Name            string            `json:"name"`
 	State           legacy.State      `json:"state"`
 	App             json.RawMessage   `json:"app,omitempty"`
+	HistoryBytes    int               `json:"history_bytes"`
 	Progress        legacy.Progress   `json:"progress"`
 	RecordingBytes  int               `json:"recording_bytes"`
 	RequestBytes    int               `json:"request_bytes"`
@@ -66,6 +67,7 @@ func (w *Worker) agentSessionStatus(id string) (*AgentSessionStatus, error) {
 	pair := s.state.Agent
 	progress := s.checkpoint.progress(checkpointProgressRequest{})
 	status := &AgentSessionStatus{PendingBytes: pendingBytes, ID: id, State: legacy.State{Version: pair.State.Version, Bytes: append([]byte(nil), pair.State.Bytes...)}, Progress: pair.Progress, CheckpointKnown: progress.known}
+	status.HistoryBytes = len(pair.History)
 	status.SideEffectLaunches = s.sideEffectLaunches
 	if s.lastTaskLaunch != nil {
 		copy := *s.lastTaskLaunch
