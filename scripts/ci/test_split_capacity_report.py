@@ -296,6 +296,20 @@ class SplitCapacityReport(unittest.TestCase):
         self.assertEqual(275, summary["steps"][1]["phases"]["steady"]["request_reply_bytes_per_call_second"])
         self.assertEqual(.25, summary["steps"][1]["phases"]["steady"]["component_writes_per_call_second"]["work"])
 
+    def test_split_commit_evidence_requires_eleven_keys_independent_of_argv(self):
+        # These are the key lengths recorded for a six-ARGV commit. The old
+        # eleven-ARGV form has identical KEYS and needs no separate gate rule.
+        data = fixture()
+        phase = data["steps"][1]["measurement"]["store"]["phases"]["steady"]
+        phase["key_arguments"] = {
+            f"{i:02d}": dict(writes=1, bytes=len(key), min_bytes=len(key), max_bytes=len(key))
+            for i, key in enumerate(phase["key_examples"], 1)
+        }
+        self.assertEqual([], summarize(data, 10, 20)["blocking"])
+        phase["key_arguments"] = {k: v for k, v in phase["key_arguments"].items() if int(k) <= 6}
+        self.assertIn("after/steady: steady exact 11-key argument evidence missing",
+                      summarize(data, 10, 20)["blocking"])
+
     def test_expected_legacy_byte_failure_is_preserved(self):
         data = fixture()
         data["steps"][0].update(service_outcome="fail", store_bytes_per_call_second=187000,

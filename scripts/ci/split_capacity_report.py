@@ -278,6 +278,7 @@ def summarize(data, cpu_us, wall_us):
                     bad("churn attempts exceed store ceiling")
                     phase_failure = True
             if arm == "after" and scenario != "echo" and phase in ("setup", "steady", "rotation", "churn"):
+                # Both six- and eleven-ARGV split commits still send eleven KEYS.
                 if set(values.get("key_arguments", {})) != {f"{i:02d}" for i in range(1, 12)} or not valid_keys(values.get("key_examples", [])):
                     bad(phase + " exact 11-key argument evidence missing")
                 if not all(k in values.get("hset_field_values", {}) for k in ("checkpoint:b", "checkpoint:m", "checkpoint:t")):

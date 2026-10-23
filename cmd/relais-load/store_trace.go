@@ -150,7 +150,7 @@ func startStoreObserver(backend string) (*storeObserver, error) {
 	if err != nil {
 		return nil, err
 	}
-	o := &storeObserver{listener: listener, backend: backend, phase: "setup", started: time.Now(), conns: map[net.Conn]bool{}, phaseAt: time.Now(), trace: storeTrace{PhaseSeconds: map[string]float64{}, Phases: map[string]*wireWindow{}, Seconds: map[int64]*wireWindow{}, Note: "Exact plaintext RESP request/reply sizes at an observing proxy on one runner. A separate MONITOR stream counts actual Lua HSET field/value lengths, including initialization and lease metadata. MONITOR overhead is outside application traffic but consumes this same runner. Both arms use the same observer; forwarding adds overhead. Client metrics remain authoritative by session/frame/owners. Script body submissions count every EVAL/SCRIPT LOAD, including warm repeated EVAL bodies. Script loads count actual SCRIPT LOAD commands; NOSCRIPT replies are separate. No Redis internal compilation/cache-hit count is inferred from a warm EVAL submission. Successful v10 commit arguments supply ciphertext and packed metadata lengths; HSET b/m/t field names are one byte each and t is the frozen eight-byte store-clock field. No plaintext or ciphertext values are retained. Failed/unknown replies count attempts but no successful component write. No TLS/NIC/log bytes measured."}}
+	o := &storeObserver{listener: listener, backend: backend, phase: "setup", started: time.Now(), conns: map[net.Conn]bool{}, phaseAt: time.Now(), trace: storeTrace{PhaseSeconds: map[string]float64{}, Phases: map[string]*wireWindow{}, Seconds: map[int64]*wireWindow{}, Note: "Exact plaintext RESP request/reply sizes at an observing proxy on one runner. A separate MONITOR stream counts actual Lua HSET field/value lengths, including initialization and lease metadata. MONITOR overhead is outside application traffic but consumes this same runner. Both arms use the same observer; forwarding adds overhead. Client metrics remain authoritative by session/frame/owners. Script body submissions count every EVAL/SCRIPT LOAD, including warm repeated EVAL bodies. Script loads count actual SCRIPT LOAD commands; NOSCRIPT replies are separate. No Redis internal compilation/cache-hit count is inferred from a warm EVAL submission. Successful v10 commits supply ciphertext lengths and the full published metadata length (decoded from raw/delta arguments for six-argument commits). Transaction payloads sum ciphertext and full metadata; server-generated t and field names are counted separately in HSET evidence. HSET b/m/t field names are one byte each and t is the frozen eight-byte store-clock field. No plaintext or ciphertext values are retained. Failed/unknown replies count attempts but no successful component write. No TLS/NIC/log bytes measured."}}
 	o.phaseAt = o.started
 	o.trace.PhaseIntervals = map[string][]storePhaseInterval{}
 	o.wg.Add(1)
@@ -304,14 +304,27 @@ func (w *wireWindow) observe(req, reply wireValue, err error, elapsed time.Durat
 		return
 	}
 	args := a[3+n:]
-	split := n == 11 && len(args) == 11 && strings.Contains(string(a[9].text), "checkpoint:")
+	split := n == 11 && (len(args) == 6 || len(args) == 11) && strings.Contains(string(a[9].text), "checkpoint:")
 	legacy := len(args) == 8 && string(args[0].text) == "put"
 	if !split && !legacy {
 		return
 	}
 	w.WriteAttempts++
+	var transport []byte
+	var parts []wireValue
+	var metadataBytes int
 	if split {
-		payload := len(args[4].text) + len(args[3].text) + 8 + 3 + len(args[7].text) + len(args[8].text) + len(args[9].text)
+		if len(args) == 6 {
+			metadataBytes = publishedMetadataBytes(args[0].text, args[1].text)
+			transport, parts = args[2].text, args[3:6]
+		} else {
+			metadataBytes = len(args[3].text)
+			transport, parts = args[4].text, args[7:10]
+		}
+		payload := len(transport) + metadataBytes
+		for _, part := range parts {
+			payload += len(part.text)
+		}
 		addSize(w.Transactions, "attempted_total", payload)
 	}
 	w.KeyRESPBytes += int64(len(a[2].raw))
@@ -334,19 +347,36 @@ func (w *wireWindow) observe(req, reply wireValue, err error, elapsed time.Durat
 		addSize(w.Components, "legacy", len(args[5].text))
 		return
 	}
-	hot := len(args[4].text) + len(args[3].text) + 8 + 3 + len(args[8].text)
+	hot := len(transport) + metadataBytes + len(parts[1].text)
 	addSize(w.Transactions, "published_hot", hot)
-	addSize(w.Transactions, "published_total", hot+len(args[7].text)+len(args[9].text))
-	addSize(w.Components, "checkpoint", len(args[4].text))
+	addSize(w.Transactions, "published_total", hot+len(parts[0].text)+len(parts[2].text))
+	addSize(w.Components, "checkpoint", len(transport))
 	for i, name := range []string{"setup", "work", "history"} {
-		if len(args[7+i].text) > 0 {
-			addSize(w.Components, name, len(args[7+i].text))
+		if len(parts[i].text) > 0 {
+			addSize(w.Components, name, len(parts[i].text))
 		}
 	}
-	for name, size := range map[string]int{"b": len(args[4].text), "m": len(args[3].text), "t": 8} {
+	for name, size := range map[string]int{"b": len(transport), "m": metadataBytes, "t": 8} {
 		addSize(w.CheckpointHSETFields, name, size)
 		addSize(w.CheckpointHSETFields, "field_names", 1)
 	}
+}
+
+// The six-argument contract prefixes raw metadata or a delta with a 20-byte
+// reconstruction checksum. A delta preserves the CAS-expected metadata length;
+// raw mode carries the complete new metadata. The successful Lua reply confirms
+// the encoding and checksum before these lengths count as published bytes.
+func publishedMetadataBytes(expected, encoded []byte) int {
+	if len(encoded) <= 20 {
+		return 0
+	}
+	if encoded[20] == 10 {
+		return len(encoded) - 20
+	}
+	if encoded[20]&0xe0 == 0x80 {
+		return len(expected)
+	}
+	return 0
 }
 
 // MONITOR observes actual Lua HSET calls, including initialization and lease
