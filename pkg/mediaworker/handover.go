@@ -301,6 +301,9 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 	// ownership. These local callbacks cannot emit output or launch effects.
 	// Legacy retains its existing Renew-before-Restore ordering.
 	if snap.State.Agent.V2 != nil {
+		if err := w.validateLegacySnapshotFit(*snap); err != nil {
+			return "", err
+		}
 		if w.cfg.Relay != nil {
 			if opts.Lease.SessionID != snap.State.ID || opts.Lease.Worker != w.localAddr {
 				return "", sessionstore.ErrLeaseLost

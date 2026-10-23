@@ -209,7 +209,7 @@ type slowRepairHook struct {
 }
 
 func (h *slowRepairHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
-	if cmd.Name() == "eval" && cmd.Args()[1] == indexLua && h.adds.Add(1) == 2 {
+	if cmd.Name() == "evalsha" && cmd.Args()[1] == indexScript.Hash() && h.adds.Add(1) == 2 {
 		close(h.entered)
 		select {
 		case <-h.release:

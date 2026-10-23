@@ -80,6 +80,11 @@ func TestPlannedMoveAndDrainCarryNearLimitHistoryWithInflightWriter(t *testing.T
 					return &movingHistoryAgent{state: agent.State{Version: 1, Bytes: bytes.Repeat([]byte{'w'}, work), History: bytes.Repeat([]byte{'a'}, 8192)}}
 				}})
 				cfg := mediaworker.Config{SplitCheckpoints: true, DisableFrameCache: true, Agent: mediaworker.AgentConfig{Factory: factory, CallbackTimeout: time.Second}, Relay: &mediaworker.RelayConfig{Owners: store, Addr: router.WorkerAddr(), PublicAddr: router.PublicAddr()}}
+				if work == 6000 {
+					// Larger opt-in app state needs an explicitly larger encoded hot cap
+					// and its matching periodic/forced rate on both workers.
+					cfg.SnapshotLimits = mediaworker.SnapshotLimits{MaxBytes: 7168, BytesPerSecond: 81920}
+				}
 				source, err := mediaworker.New(cfg)
 				require.NoError(t, err)
 				defer func() { require.NoError(t, source.Close()) }()

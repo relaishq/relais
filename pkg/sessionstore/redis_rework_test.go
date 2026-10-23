@@ -380,7 +380,7 @@ type indexFaultHook struct {
 func (h *indexFaultHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if cmd.Name() == "sadd" || (cmd.Name() == "eval" && cmd.Args()[1] == indexLua) {
+	if cmd.Name() == "sadd" || (cmd.Name() == "evalsha" && cmd.Args()[1] == indexScript.Hash()) {
 		h.adds++
 		if h.failures > 0 || h.committed {
 			if h.failures > 0 {

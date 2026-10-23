@@ -199,21 +199,44 @@ B`, while eight use **8,409 B**. Keep Demo A at four; these are byte examples, n
 minutes or an unbounded call. Recheck its actual worst case through Save after the app schema change, including escaping
 and non-ASCII text.
 
-Proposed operator allocations for split mode (legacy mode keeps existing flag meanings):
+Revised operator allocations for split mode (#214; full-size hosted validation pending). Legacy defaults remain
+7,168 B, 81,920 B/s and 28,672 B. Zero cap/rate/burst flags select the session profile; explicit values apply to both.
+Split worker startup refuses infeasible cadence under either resolved profile and registrations that do not fit the
+split profile. Workerapp uses the same mediaworker preflight. Legacy registration fit is a **warning**, once per
+registration: name the registration and shortfall, and state that this worker cannot adopt its legacy calls.
+An explicit rate of 70,000 B/s with the default legacy cap still fails cadence: raise the shared rate to at least
+78,848 B/s. A 6,144 B explicit cap with that rate can start, but a default v2 registration needs 6,932 B in legacy
+format and warns of a 788 B shortfall. An explicit 3,072/8,192 B declaration starts at split defaults and warns that
+its 9,660 B legacy requirement exceeds 7,168 B by 2,492 B; zero declarations retain the smaller legacy default.
 
-| Allocation | Proposed default | Purpose |
+Only split workers check legacy-mode restore/adoption size, in `ResumeSession`, including factory-only adapters.
+They measure the actual encoded durable snapshot plus the existing 42 B envelope reserve against their legacy-resolved
+cap; separately bounded move-only payloads are excluded. The declared registration estimate is only a conservative
+startup warning. An oversized snapshot returns typed IncompatibleAgent/Restore before constructing the application,
+invoking callbacks, renewing the lease, resuming transport or writing a checkpoint. Legacy workers retain their
+existing restore behavior. A rollback source admitted that session under its own cap, so this check normally
+permits its restore; it refuses only if the session's state grew past that cap since its last admitted capture. The control plane has already transferred ownership before it
+calls target resume. A definitive refusal triggers source rollback for a planned move, or target exclusion/retry
+for takeover, within the existing sequence/attempt budget. There is no pre-Transfer compatibility probe.
+Compatibility refusals currently consume that budget (at most three attempts, possibly fewer): recovery can declare
+loss before reaching another compatible worker. Follow-up [#241](https://github.com/relaishq/relais/issues/241) tracks
+that control-plane limitation; this slice does not change it.
+During a mixed rollout, keep each split worker's legacy profile able to fit your registrations (zero/default
+declarations fit the default profile) so legacy calls can move there. Default flags keep both cadence profiles feasible:
+
+| Allocation | Revised default (hosted validation pending) | Purpose |
 | --- | ---: | --- |
-| Hot bytes/checkpoint | 7,168 B | Combined ciphertext/framing for transport/host plus changed working component |
+| Hot bytes/checkpoint | 6,144 B | Combined ciphertext/framing for transport/host plus changed working component |
 | Setup bytes | 4,096 B | Initial encrypted setup, separately admitted |
 | History bytes/write | 8,448 B | Raw history plus a proposed 256 B framing reserve |
 | Total checkpoint transaction | 20,480 B | Bounds initialization/forced writes containing all components |
-| Successful payload rate | **80,000 B/s** | Gate-derived below; `10*7,168+7,168 = 78,848 B/s` reserves periodic plus one hot forced write/s |
+| Successful payload rate | **70,000 B/s** | `10*6,144+6,144 = 67,584 B/s` reserves periodic plus one hot forced write/s |
 | Payload burst | **40,960 B** | Two maximum transactions: initialization/rotation plus one required write; same two-write minimum as ADR 0010 |
 
 Keep the **100 ms** checkpoint cadence, forced intent barriers and actual byte accounting (`agent_limits.go`, ADRs
 0002/0010). Rework validation to reserve the hot checkpoint independently of cold components, rather than `wholeMax *
-cadence`. Cold writes share spare refill and burst; the maximum hot/forced pattern leaves only `80,000-78,848 = 1,152
-B/s` for them, so a full history cannot change every five seconds under that maximum pattern. Admit against actual
+cadence`. Cold writes share spare refill and burst; the maximum hot/forced pattern leaves only `70,000-67,584 = 2,416
+B/s` for them. Cold changes and rotation share that refill and the burst. Admit against actual
 sizes/tokens; the traffic projection below is less than the caps. Debit changed ciphertexts **and published
 metadata/field bytes**, carry quota across moves, and reserve a maximum in-flight transaction on exact export. Count
 every attempted protocol byte, retries and script loads in traffic gates. History churn does not earn a slower transport
@@ -263,7 +286,7 @@ expected-root/checkpoint arguments beyond the packed fields. These RESP counts a
 `sum(len(k)+len(str(len(k)))+5 for k in keys)`; they assume the stated name lengths, warm scripts and no retries.
 Measure actual escaped IDs/prefixes/commands.
 
-Thus the provisional ceiling is `131,072-31,371-3,256-12,757-800 = 82,888 B/s`; choose **80,000 B/s**, leaving **2,888
+The original, superseded projection derived a provisional ceiling of `131,072-31,371-3,256-12,757-800 = 82,888 B/s`; it chose **80,000 B/s**, leaving **2,888
 B/s** for remaining session overhead, forced-command attempts and retries. Without operation-specific key lists this
 allowance does not hold: block activation pending measurements. The high-churn projection plus those clients/overheads
 is **119,488.4 B/s**. Burst is **40,960 B**, not a rate increase: two 20,480 B writes cover initialization/rotation and
@@ -276,6 +299,56 @@ history log has no supporting budget evidence. Splitting working/history asks ap
 working state more than an undivided 8 KiB budget would. **Change this if:** actual v10 encoding fails admission,
 representative history churn exceeds the rate, or measured Save/restore costs fail the capacity gate. Stop default
 activation and return the measurements for a revised allocation; do not raise policy ceilings to make the test pass.
+
+### Revised measurement and activation gate (#214, 2026-10-22)
+
+`TestSplitFullSizeCallFitsHotCap` measures **5,982 B hot**, with **162 B (2.64%)** headroom to 6,144 B:
+2,490 B transport ciphertext + 3,108 B working ciphertext + 384 B references/framing. It covers a **1:1 call with two
+tracks**, the fixture's track IDs, IPv6 with a zone, maximal counters/timestamps, full **2,048 B host metadata**,
+full **3,072 B working state**, and maximum packed owner/reference metadata. It also encodes full 8,192 B history.
+This replaces the earlier hot-size estimate for that fixture. Negotiated text and SSRC count are not globally bounded
+by that test. Actual encoded admission still refuses larger Saves; `TestSplitTransportGrowthRefusesSaveWithoutLosingCall`
+checks typed Capacity delivery, rollback and continued input/checkpoints after transport growth makes a Save exceed the cap.
+
+Recomputing [hosted run 39441746025](https://github.com/relaishq/relais/actions/runs/39441746025), proxy bins 10–30,
+reproduces **132,347.74 B request+reply/call-second** and **74,849.14 B published payload/call-second** during churn.
+Its worst contiguous 10-second mean is **133,427.20 B/call-second**, bins 18–27, above 131,072 B by **2,355.20 B**.
+The lifecycle average, 130,318.20 B/call-second, hides that failure. Legacy/steady's same 21 bins average 186,070.81 B,
+with a worst ten-bin mean of 189,100.05 B; split/steady averages 96,417.24 B, worst 97,021.55 B. That run has no legacy
+churn arm and no explicit churn boundary. These are retrospective bin selections, not new full-size evidence.
+
+The largest previously observed split non-payload residual, **57,916.63 B/s**, plus the revised **70,000 B/s** gives
+**3,155.37 B/s (2.41%) projected headroom**. This is a projection from one runner, not proof of the new default.
+The burst, transaction/component allocations and move quotas remain unchanged.
+
+The full-size candidate in [hosted run 39890055104](https://github.com/relaishq/relais/actions/runs/39890055104)
+(two calls, 60 s, commit `a706529`) failed validation: churn averaged **130,101.89 B/call-second**, but bins 33–42
+averaged **131,332.75 B/call-second** and lifecycle traffic reached **131,096.23 B/media-call-second**.
+The fixed report reproduces both blocks. All eight steps exactly conserve command/request/reply totals and their
+phase intervals tile with zero boundary error; required full-size working/history Restore witnesses pass.
+**Activation remains blocked.** Do not raise ceilings or choose a replacement default; return the measured
+trade-off (working size, cadence, calls per primary, or session protocol overhead) to the owner.
+
+The existing `custom-capacity-report.py` path checks whole media/phase/lifecycle traffic and every measured split phase's
+worst contiguous **10 full one-second request+reply bins**, normalized by calls. Phase intervals use the observer's
+monotonic bin clock. Their intervals must tile the complete step, with at most **one microsecond** of clock tolerance
+at a boundary and at the step end. Bin totals must equal phase totals exactly for commands, request bytes and reply
+bytes. Exclude partial edge bins and never join bins across an event. Missing/invalid bins block evidence;
+each step’s main phase (churn for history-churn; steady otherwise) must contain at least ten contiguous full bins.
+Independently, the churn phase must last at least the requested duration minus ten seconds; the report checks this even
+when the supplied service verdict passes.
+Shorter secondary phases do not block and explicitly report
+“sustained window not measured (N full bins)”. A sustained mean above **131,072 B/call-second** fails even when
+the whole-window gate passes. Ten seconds covers 100 periodic checkpoints and smooths short scheduling/burst effects;
+it is not a per-second burst-capacity claim.
+
+The matched driver opts into `RELAIS_HISTORY_FULL_SIZE=1` for the history worker process. Existing default fixtures stay
+2,871 B working / 4,205 B history. The opt-in fixture uses exactly 3,072 / 8,192 B in split mode and an explicit larger
+legacy registration/whole-blob budget for the matched legacy comparison. Per-call diagnostics must show the full split sizes on every call. The existing planned move restores one call; its
+Restore witness must show the full sizes. Kill, drain and rotation must show full-size Restore witnesses for every
+survivor. No shipped command/package imports the example.
+Hosted plan: **mode=split-capacity, split_callers=2, duration=60s**, default Save budgets; expected 15–18 minutes.
+**NOT-RUN — revised-default full-size hosted traffic, age and recovery gates; managed-store validation.**
 
 ## 3. Crash contract and developer meaning
 
@@ -426,9 +499,8 @@ authorized by this ADR.
    repeat acknowledged-write failover, slot redirects, TLS, age/latency and loaded move/drain tests.
    Free local Cluster proves protocol behavior, not managed log durability or per-primary capacity.
 
-Publish commit/build, flags, fixture, runner, topology, call count, change rate and raw reports with each result. No
-runs of the new schema exist yet: **NOT-RUN — crash survival, traffic savings, checkpoint ages, default admission and
-managed capacity.** If the byte adapter/allocation fails, stop activation; cheapest next data is the local
+Publish commit/build, flags, fixture, runner, topology, call count, change rate and raw reports with each result. The dated observations above establish only their stated fixture/run scope. **NOT-RUN — revised-default full-size
+hosted admission and managed capacity.** If the byte adapter/allocation fails, stop activation; cheapest next data is the local
 codec/worst-case fixture test, then the free custom capacity job. Update guarantees and agent guide only with scoped
 observed results.
 
@@ -477,3 +549,60 @@ editors of `pkg/sessionstore/redis.go` at once. B/C replaces the split reads in 
 `cmd/crash-run/store_stall.go` (GetState, lines 137/176) with one tuple read, carrying the returned checkpoint metadata
 through decisions. Audit every other recovery GetState/Checkpoint caller, including #193; no state-then-metadata pair
 remains for v10.
+
+## Commit wire amendment — #238
+
+The commit request sends six arguments, in order: complete CAS-expected metadata,
+encoded new metadata, transport ciphertext, changed setup ciphertext, changed work
+ciphertext, and changed history ciphertext. Unchanged component arguments remain
+empty. The eleven same-slot keys and all stored bytes remain unchanged. Production
+Lua rejects other argument counts; the former eleven-argument notation survives
+only in test fixtures, through a test-only adapter.
+
+The encoded metadata begins with a 20-byte binary SHA-1 checksum of the **full new
+metadata**, followed by either its original format-10 bytes or a delta. SHA-1 is
+Redis's built-in reconstruction checksum, not an authenticator or a replacement
+for HMAC-SHA256/AEAD. Verify it against reconstructed bytes before any mutation.
+CAS alone authenticates no new bytes: a structurally valid corrupt reference can
+pass length and CAS checks, so reader authentication alone would detect it too
+late to preserve the previous published tuple. The checksum rejects that corruption
+before preparation or publication (`TestRedisMetadataDeltaRejectsBeforePublication`).
+
+A delta starts with `0x80 | mask`. Bits 0–4 select the five 41-byte references in
+setup/work/history/root/checkpoint order. Bits 5–6 must be zero. Selected references
+follow in that order; all three bank bytes follow if any of bits 0–2 are set.
+Rebuild all other bytes from the complete CAS expectation. Reject invalid bases,
+tags and non-exact lengths. Use raw metadata at initialization or when format,
+owner/length, epoch, app version or setup generation changes. The delta is at most
+209 bytes, or 229 with its checksum; raw mode is at most 315 with its checksum.
+The client still authenticates and charges the complete published metadata.
+
+Derive owner, epoch and put sequence from the reconstructed metadata. Convert the
+fixed eight-byte integers to decimal byte by byte; preserve nonzero/20-digit
+checks, reservation bounds and bytewise ordering. Never round them through a Lua
+number. The live lease owner/epoch/expiry fence, complete expected-m comparison,
+component/root preconditions, sequence reservation and nonce policy, inactive-bank
+preparation, expiry ordering, final atomic HSET, uncertain-outcome settlement and
+forced-write behavior remain identical.
+
+Old and new v10 workers use different script SHAs but identical persisted tuples.
+Each can read and continue the other's tuples. Competing stale captures fail CAS;
+a prior owner fails fencing after Transfer. This amendment adds no deployment
+ordering within an already v10-compatible pool. The pre-v10 deployment restrictions
+in section 4 remain in force. Script caches are node-local and disposable:
+route/index writes use EVALSHA with NOSCRIPT fallback; the 25-byte clock stays EVAL.
+
+`TestRedisComponentCommitWireBytes` captures the real production client's RESP
+requests and replies and compares each request with the former encoding of the
+same tuple and ciphertext. At a 15-byte owner, 246-byte metadata and three-digit
+sequence, measured savings equal the model: initialization 46 B, host-only 251 B,
+work-only/history-only 165 B, both-app 124 B, and rotation 83 B. Replies stay 48 B.
+`TestRedisRouteAndIndexScriptCache` measures 2,401 B per warm route write and 210 B
+per warm index write, and checks cold-cache fallback.
+
+Applied to run 39890055104's schedule (1,078 commits / 102.010911484 call-seconds),
+these are **3,113.61–3,208.01 B/call-second modeled savings**, including the checksum.
+The range reflects missing joint work/history counts, not a measured aggregate.
+It exceeds the 2,882.19 B/s target by 231.42–325.82 B/s. Hosted traffic, cold-cache
+loads, CPU/latency and worst-window gate confirmation remain **NOT-RUN**. No default,
+admission, payload-rate or capacity claim changes with this amendment.

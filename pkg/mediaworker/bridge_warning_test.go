@@ -42,7 +42,8 @@ func TestBridgeStartupWarnsOnceForIncompatibleSplitBudgets(t *testing.T) {
 	}{
 		{name: "defaults"},
 		{name: "legacy-burst", limits: SnapshotLimits{BurstBytes: 28672}, flag: "-agent-snapshot-burst-bytes"},
-		{name: "legacy-rate", limits: SnapshotLimits{BytesPerSecond: 78000}, flag: "-agent-snapshot-bytes-per-second"},
+		{name: "below-split-cadence", limits: SnapshotLimits{BytesPerSecond: 67583}, flag: "-agent-snapshot-bytes-per-second"},
+		{name: "compatible-explicit-rate", limits: SnapshotLimits{BytesPerSecond: 78000}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logger := &bridgeWarningLogger{}

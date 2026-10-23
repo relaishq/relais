@@ -31,6 +31,13 @@ func TestSDKHistorySaveRestorePair(t *testing.T) {
 	a := &v2UnitAgent{state: cloneV2State(original)}
 	_, source := historyUnitSession(t, a, agent.Limits{})
 	require.Equal(t, original.History, source.state.Agent.History)
+	w := source.worker
+	w.mu.Lock()
+	w.sessions[source.id] = source
+	w.mu.Unlock()
+	status, err := w.agentSessionStatus(source.id)
+	require.NoError(t, err)
+	require.Equal(t, len(original.History), status.HistoryBytes)
 	// App-owned Save buffers cannot mutate the accepted pair.
 	a.state.Bytes[0], a.state.History[0] = 'X', 'X'
 	require.Equal(t, original.Bytes, source.state.Agent.State.Bytes)
@@ -152,12 +159,14 @@ func TestSDKHistoryLegacyRefusesNonempty(t *testing.T) {
 
 func TestSplitPayloadBudgetAndHotReservation(t *testing.T) {
 	l := SnapshotLimits{}.splitDefaults()
-	require.Equal(t, 80000, l.BytesPerSecond)
+	require.Equal(t, 70000, l.BytesPerSecond)
+	require.Equal(t, 6144, l.MaxBytes)
 	require.Equal(t, 40960, l.BurstBytes)
 	require.NoError(t, l.Validate())
-	require.Equal(t, 81920, SnapshotLimits{}.defaults().BytesPerSecond)
+	require.Equal(t, SnapshotLimits{MaxBytes: 7168, BytesPerSecond: 81920, BurstBytes: 28672, MoveBytesPerSession: 1 << 20, MoveBytesTotal: 64 << 20}, SnapshotLimits{}.defaults())
 	require.Equal(t, 28672, SnapshotLimits{}.defaults().BurstBytes)
 	explicit := SnapshotLimits{MaxBytes: 10000, BytesPerSecond: 120000, BurstBytes: 60000}.splitDefaults()
+	require.Equal(t, 10000, explicit.MaxBytes)
 	require.Equal(t, 120000, explicit.BytesPerSecond)
 	require.Equal(t, 60000, explicit.BurstBytes)
 	require.NoError(t, explicit.Validate())

@@ -54,8 +54,8 @@ func (e *flagError) Unwrap() error { return e.error }
 // drain as SIGTERM in Main. Run returns flag.ErrHelp after printing help.
 func Run(ctx context.Context, args []string, options Options) error {
 	flags, f := newWorkerFlags(options)
-	name, listen, leg, public, control, httpAddr, agentName := f.name, f.listen, f.leg, f.public, f.control, f.httpAddr, f.agentName
-	cacheOff, cryptoTrace, split, version := f.cacheOff, f.cryptoTrace, f.split, f.version
+	name, leg, public, control, httpAddr, agentName := f.name, f.leg, f.public, f.control, f.httpAddr, f.agentName
+	cacheOff, split, version := f.cacheOff, f.split, f.version
 	drainTimeout, taskBudget, moveReserve := f.drainTimeout, f.taskBudget, f.moveReserve
 	if err := flags.Parse(args); err != nil {
 		return &flagError{err}
@@ -78,20 +78,6 @@ func Run(ctx context.Context, args []string, options Options) error {
 	}
 	if reserveSet && (*moveReserve <= 0 || *moveReserve >= *drainTimeout) {
 		return fmt.Errorf("-agent-drain-move-reserve must be greater than 0 and less than -drain-timeout (%s)", *drainTimeout)
-	}
-	validationLimits := limits
-	if *split {
-		validationLimits = limits.SplitDefaults()
-	} else {
-		if validationLimits.BytesPerSecond == 0 {
-			validationLimits.BytesPerSecond = 81920
-		}
-		if validationLimits.BurstBytes == 0 {
-			validationLimits.BurstBytes = 28672
-		}
-	}
-	if err := validationLimits.Validate(); err != nil {
-		return err
 	}
 	agentConfig, err := registeredAgents(options, *agentName, limits, *split)
 	if err != nil {
@@ -127,15 +113,7 @@ func Run(ctx context.Context, args []string, options Options) error {
 		defer func() { _ = client.Close() }()
 		frames = client
 	}
-	cfg := mediaworker.Config{SplitCheckpoints: *split, Agent: agentConfig, SnapshotLimits: limits, ListenAddr: *listen, FrameCache: frames, DisableFrameCache: *cacheOff, Relay: &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store, StoreOutageBudget: storeConfig.OutageBudget}}
-	if *cryptoTrace {
-		cfg.PacketTrace = func(packet mediaworker.PacketTrace) {
-			data, err := json.Marshal(packet)
-			if err == nil {
-				log.Printf("SRTP_EGRESS %s", data)
-			}
-		}
-	}
+	cfg := f.mediaConfig(agentConfig, frames, &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store, StoreOutageBudget: storeConfig.OutageBudget})
 	worker, err := mediaworker.New(cfg)
 	if err != nil {
 		return err
@@ -168,3 +146,17 @@ func Run(ctx context.Context, args []string, options Options) error {
 type configError struct{}
 
 func (*configError) Error() string { return "worker requires -name and -control" }
+
+// mediaConfig carries raw limits so each restored session selects its own profile.
+func (f *workerFlags) mediaConfig(agentConfig mediaworker.AgentConfig, frames framecache.Store, relayConfig *mediaworker.RelayConfig) mediaworker.Config {
+	cfg := mediaworker.Config{SplitCheckpoints: *f.split, Agent: agentConfig, SnapshotLimits: f.limits, ListenAddr: *f.listen, FrameCache: frames, DisableFrameCache: *f.cacheOff, Relay: relayConfig}
+	if *f.cryptoTrace {
+		cfg.PacketTrace = func(packet mediaworker.PacketTrace) {
+			data, err := json.Marshal(packet)
+			if err == nil {
+				log.Printf("SRTP_EGRESS %s", data)
+			}
+		}
+	}
+	return cfg
+}

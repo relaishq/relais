@@ -50,3 +50,25 @@ arithmetic, including adversarial session IDs. `TestClusterRoutesIndexesAndScrip
 checks the live server across every primary, flushes every primary's scripts,
 reloads relay-tenure scripts on every primary, and promotes a cold-cache replica
 with ownership/state/route/relay fencing intact.
+
+## Split checkpoint commit wire protocol (#238)
+
+The component commit declares eleven keys, in order: lease, record, epoch,
+routes, ended, setup, checkpoint, work banks 0/1, and history banks 0/1. All
+use the existing escaped session tag T. The legacy state key stays outside
+this commit; worker indexes and the global epoch allocator remain separate.
+
+Its six arguments are complete expected `m`, encoded new `m`, transport `b`,
+setup, work, history. Unchanged component arguments are empty. Encoded `m`
+contains a 20-byte checksum of the full new metadata, then raw format-10
+metadata or a reference-mask delta. Lua reconstructs and checks the full bytes
+before mutation, derives owner/epoch/sequence exactly, compares the complete
+expected `m`, and publishes the original `b/m/t` layout. No persisted key,
+field, hash tag, expiry or bank rule changes. See the
+[ADR 0012 commit wire amendment](../adr/0012-agent-state-store-schema.md#commit-wire-amendment--238)
+for the byte layout, rolling compatibility and verification limits.
+
+Route and index writes now use EVALSHA with NOSCRIPT fallback on the routed
+primary. The short store-clock script remains EVAL. This adds no cross-slot
+operation and no blind network retry; a possibly executed commit still uses
+its existing tuple-read settlement.

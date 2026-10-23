@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/sha1"
 	"errors"
 	"fmt"
 	"net"
@@ -26,20 +27,72 @@ func wireCommand(args ...string) wireValue {
 	return v
 }
 func TestStoreTraceCountsAllAttemptedBytes(t *testing.T) {
+	// Packed v10 metadata is 231 bytes plus owner length. Its contents are
+	// opaque to the observer; only the raw/delta envelope affects its size.
+	metadata := append([]byte{10}, bytes.Repeat([]byte{'m'}, 235)...)
+	checksum := sha1.Sum(metadata)
+	for _, mode := range []string{"raw", "delta"} {
+		t.Run(mode, func(t *testing.T) {
+			expected := ""
+			encoded := append(bytes.Clone(checksum[:]), metadata...)
+			if mode == "delta" {
+				expected = string(metadata)
+				// Root and checkpoint references change; the full m length stays fixed.
+				encoded = append(bytes.Clone(checksum[:]), 0x98)
+				encoded = append(encoded, metadata[124:206]...)
+			}
+			assertSplitCommitTrace(t, []string{expected, string(encoded), "encrypted-checkpoint", "encrypted-setup", "encrypted-work", "encrypted-history"}, len(metadata))
+		})
+	}
+}
+
+func TestStoreTraceCountsElevenArgumentCommits(t *testing.T) {
+	metadata := string(append([]byte{10}, bytes.Repeat([]byte{'m'}, 235)...))
+	assertSplitCommitTrace(t, []string{"owner", "1", "expected", metadata, "encrypted-checkpoint", "1", "epoch", "encrypted-setup", "encrypted-work", "encrypted-history", "seqbytes"}, len(metadata))
+}
+
+func assertSplitCommitTrace(t *testing.T, commitArgs []string, metadataBytes int) {
+	t.Helper()
 	keys := []string{"p:lease:{sess:x}", "p:record:{sess:x}", "p:epoch:{sess:x}", "p:routes:{sess:x}", "p:ended:{sess:x}", "p:setup:{sess:x}", "p:checkpoint:{sess:x}", "p:work:{sess:x}:0", "p:work:{sess:x}:1", "p:history:{sess:x}:0", "p:history:{sess:x}:1"}
 	args := append([]string{"evalsha", "sha", "11"}, keys...)
-	args = append(args, "owner", "1", "expected", "metadata", "encrypted-checkpoint", "1", "epoch", "encrypted-setup", "encrypted-work", "encrypted-history", "seqbytes")
+	args = append(args, commitArgs...)
 	req := wireCommand(args...)
 	reply, err := readWire(bufio.NewReader(strings.NewReader("*1\r\n:1\r\n")), 0)
 	require.NoError(t, err)
 	w := newWireWindow()
 	w.observe(req, reply, nil, time.Millisecond)
-	require.Len(t, w.KeyArguments, 11)
-	require.EqualValues(t, 1, w.Components["history"].Writes)
+	require.EqualValues(t, 1, w.WriteAttempts)
+	require.Zero(t, w.WriteFailures)
 	require.EqualValues(t, len(req.raw), w.RequestBytes)
 	require.EqualValues(t, len(reply.raw), w.ReplyBytes)
-	require.EqualValues(t, 8, w.CheckpointHSETFields["t"].Bytes)
-	require.Equal(t, len("encrypted-checkpoint")+len("metadata")+8+3+len("encrypted-work"), w.Transactions["published_hot"].Max)
+	require.Equal(t, keys, w.KeyExamples)
+	require.Len(t, w.KeyArguments, 11)
+	keyRESPBytes := len(req.array[2].raw)
+	for i, key := range keys {
+		require.Equal(t, &byteSizes{Writes: 1, Bytes: int64(len(key)), Min: len(key), Max: len(key)}, w.KeyArguments[fmt.Sprintf("%02d", i+1)])
+		keyRESPBytes += len(req.array[3+i].raw)
+	}
+	require.EqualValues(t, keyRESPBytes, w.KeyRESPBytes)
+	require.EqualValues(t, len(req.array[2].raw), w.NumkeysRESPBytes)
+	require.Len(t, w.Components, 4)
+	for _, name := range []string{"checkpoint", "setup", "work", "history"} {
+		n := len("encrypted-" + name)
+		require.Equal(t, &byteSizes{Writes: 1, Bytes: int64(n), Min: n, Max: n}, w.Components[name])
+	}
+	hot := len("encrypted-checkpoint") + metadataBytes + len("encrypted-work")
+	total := hot + len("encrypted-setup") + len("encrypted-history")
+	require.Equal(t, map[string]*byteSizes{
+		"attempted_total": {Writes: 1, Bytes: int64(total), Min: total, Max: total},
+		"published_hot":   {Writes: 1, Bytes: int64(hot), Min: hot, Max: hot},
+		"published_total": {Writes: 1, Bytes: int64(total), Min: total, Max: total},
+	}, w.Transactions)
+	require.Equal(t, map[string]*byteSizes{
+		"b":           {Writes: 1, Bytes: int64(len("encrypted-checkpoint")), Min: len("encrypted-checkpoint"), Max: len("encrypted-checkpoint")},
+		"m":           {Writes: 1, Bytes: int64(metadataBytes), Min: metadataBytes, Max: metadataBytes},
+		"t":           {Writes: 1, Bytes: 8, Min: 8, Max: 8},
+		"field_names": {Writes: 3, Bytes: 3, Min: 1, Max: 1},
+	}, w.CheckpointHSETFields)
+	require.Equal(t, []float64{1}, w.CommitLatencyMS)
 	failure, _ := readWire(bufio.NewReader(strings.NewReader("-NOSCRIPT missing\r\n")), 0)
 	w.observe(req, failure, nil, 2*time.Millisecond)
 	w.observe(req, wireValue{}, errors.New("lost reply"), time.Second)
@@ -47,9 +100,14 @@ func TestStoreTraceCountsAllAttemptedBytes(t *testing.T) {
 	require.EqualValues(t, 2, w.WriteFailures)
 	require.Equal(t, 1, w.Components["work"].Writes)
 	require.EqualValues(t, 3*len(req.raw), w.RequestBytes)
+	require.Equal(t, &byteSizes{Writes: 3, Bytes: int64(3 * total), Min: total, Max: total}, w.Transactions["attempted_total"])
+	require.Equal(t, 1, w.Transactions["published_total"].Writes)
+	require.Equal(t, []float64{1}, w.CommitLatencyMS)
 	args[0] = "eval"
-	w.observe(wireCommand(args...), reply, nil, time.Millisecond)
+	w.observe(wireCommand(args...), reply, nil, 3*time.Millisecond)
 	require.EqualValues(t, 1, w.ScriptBodies)
+	require.EqualValues(t, 4, w.WriteAttempts)
+	require.Equal(t, []float64{1, 3}, w.CommitLatencyMS)
 }
 func TestRESPAndMonitorBinaryFrames(t *testing.T) {
 	binary := string([]byte{0, '\r', '\n', 255, '"', '\\'})
@@ -130,4 +188,17 @@ func TestScriptProtocolCountersDistinguishBodySubmissions(t *testing.T) {
 	missing, _ := readWire(bufio.NewReader(strings.NewReader("-NOSCRIPT missing\r\n")), 0)
 	w.observe(wireCommand("evalsha", "sha", "0"), missing, nil, time.Millisecond)
 	require.EqualValues(t, 1, w.NoScriptReplies)
+}
+
+func TestStorePhaseIntervalsKeepSeparateSteadySegments(t *testing.T) {
+	start := time.Now()
+	o := &storeObserver{started: start, phaseAt: start, phase: "steady", trace: storeTrace{PhaseSeconds: map[string]float64{}, PhaseIntervals: map[string][]storePhaseInterval{}}}
+	o.finishPhase(start.Add(6 * time.Second))
+	o.phase = "move"
+	o.finishPhase(start.Add(6500 * time.Millisecond))
+	o.phase = "steady"
+	o.finishPhase(start.Add(30 * time.Second))
+	require.Equal(t, []storePhaseInterval{{Start: 0, End: 6}, {Start: 6.5, End: 30}}, o.trace.PhaseIntervals["steady"])
+	require.Equal(t, 29.5, o.trace.PhaseSeconds["steady"])
+	require.Equal(t, []storePhaseInterval{{Start: 6, End: 6.5}}, o.trace.PhaseIntervals["move"])
 }

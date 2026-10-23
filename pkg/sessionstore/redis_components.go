@@ -29,7 +29,8 @@ func (r *Redis) lifecycleKeys(id string) []string {
 // Metadata offsets are frozen by componentcodec: five 41-byte references,
 // epoch, app version, three bank bytes, owner length/string, setup generation.
 const componentCommitLua = `
-local owner,epoch,expected,m,b,seq,epochbytes=ARGV[1],ARGV[2],ARGV[3],ARGV[4],ARGV[5],ARGV[6],ARGV[7]
+if #ARGV~=6 then return {-6} end
+local expected,encoded,b=ARGV[1],ARGV[2],ARGV[3]
 local function typ(k) return redis.call('TYPE',k).ok end
 local function after(a,b) for k=1,#a do local x,y=string.byte(a,k),string.byte(b,k) if x~=y then return x>y end end return false end
 local function greater(a,b) return not b or #a>#b or (#a==#b and after(a,b)) end
@@ -55,6 +56,35 @@ local function validmeta(s)
  for i=0,3 do if revision(s,i)==zero or after(revision(s,i),revision(s,4)) then return false end end
  return true
 end
+-- Decode only against the complete CAS expectation, never a different stored tuple.
+if #expected>295 or #encoded<21 or #encoded>315 then return {-6} end
+local checksum=string.sub(encoded,1,20)
+local delta=string.sub(encoded,21)
+local m
+if string.byte(delta,1)==10 then m=delta
+else
+ if not validmeta(expected) then return {-6} end
+ local tag=string.byte(delta,1)
+ if tag<128 or tag>159 then return {-6} end
+ local mask=tag-128; local at=2; local pieces={string.sub(expected,1,1)}
+ for i=0,4 do
+  if bit.band(mask,bit.lshift(1,i))~=0 then
+   pieces[#pieces+1]=string.sub(delta,at,at+40);at=at+41
+  else pieces[#pieces+1]=ref(expected,i) end
+ end
+ pieces[#pieces+1]=string.sub(expected,207,218)
+ if bit.band(mask,7)~=0 then pieces[#pieces+1]=string.sub(delta,at,at+2);at=at+3
+ else pieces[#pieces+1]=string.sub(expected,219,221) end
+ pieces[#pieces+1]=string.sub(expected,222)
+ if at~=#delta+1 then return {-6} end
+ m=table.concat(pieces)
+end
+if not validmeta(m) then return {-6} end
+local digest=string.gsub(redis.sha1hex(m),'%x%x',function(x) return string.char(tonumber(x,16)) end)
+if digest~=checksum then return {-6} end
+local epochbytes=string.sub(m,207,214)
+local owner=string.sub(m,224,-9)
+local epoch,seq=decimal(epochbytes),decimal(revision(m,4))
 -- Preflight all key types and all argument bounds before the first mutation.
 for i=1,11 do
  local expectedtype=({'hash','string','string','hash','hash','hash','hash','string','string','string','string'})[i]
@@ -64,8 +94,7 @@ local lease=redis.call('HMGET',KEYS[1],'worker','epoch','expires','layout','stat
 local time=redis.call('TIME'); local now=tonumber(time[1])*1000+math.floor(tonumber(time[2])/1000)
 if lease[1]~=owner or lease[2]~=epoch or not lease[3] or tonumber(lease[3])<=now then return {-2} end
 if lease[4] and lease[4]~='10' then return {-5} end
-if #ARGV~=11 or not validmeta(m) or #epochbytes~=8 or #ARGV[11]~=8 or revision(m,4)~=ARGV[11] or string.sub(m,207,214)~=epochbytes or string.sub(m,224,-9)~=owner or #expected>295 or #b<30 or #b>131102 or not string.match(seq,'^[1-9][0-9]*$') or #seq>20 then return {-6} end
-if decimal(epochbytes)~=epoch or decimal(ARGV[11])~=seq then return {-6} end
+if #b<30 or #b>131102 or not string.match(seq,'^[1-9][0-9]*$') or #seq>20 then return {-6} end
 if not lease[6] or greater(seq,lease[6]) or not greater(seq,lease[5]) then return {-4} end
 local old=redis.call('HGET',KEYS[7],'m') or ''
 if old~=expected then return {-4} end
@@ -83,7 +112,7 @@ if old~='' then
  if redis.call('HEXISTS',KEYS[6],'0')~=1 or redis.call('HEXISTS',KEYS[6],'1')~=1 then return {-6} end
 end
 for i=0,2 do
- local part=ARGV[8+i]
+ local part=ARGV[4+i]
  local changed=old=='' or ref(old,i)~=ref(m,i) or (i>0 and string.sub(old,215,218)~=string.sub(m,215,218))
  if changed then
   if #part<30 or #part>131102 or revision(m,i)~=revision(m,4) or (old~='' and bank(m,i)==bank(old,i)) then return {-6} end
@@ -106,7 +135,7 @@ if old=='' then
  redis.call('HSET',KEYS[1],'layout','10','component_init_epoch',epoch)
 end
 for i=0,2 do
- local part=ARGV[8+i]
+ local part=ARGV[4+i]
  if #part>0 then
   if i==0 then redis.call('HSET',KEYS[6],tostring(bank(m,i)),part)
   else redis.call('SET',KEYS[6+i*2+bank(m,i)],part,'PX',math.max(tonumber(lease[3])-now,1)) end
@@ -275,7 +304,7 @@ func (r *Redis) commitPrepared(ctx context.Context, lease Lease, request Compone
 				parts[i] = nil
 			}
 		}
-		result, err := r.runComponent(ctx, componentCommitScript, "component_commit", lease.SessionID, lease.Worker.String(), strconv.FormatUint(lease.Epoch, 10), expected, m, prepared.record.sealed.Transport, strconv.FormatUint(seq, 10), binary.BigEndian.AppendUint64(nil, lease.Epoch), parts[0], parts[1], parts[2], binary.BigEndian.AppendUint64(nil, seq))
+		result, err := r.runComponent(ctx, componentCommitScript, "component_commit", lease.SessionID, expected, encodeMetadataDelta(expected, m), prepared.record.sealed.Transport, parts[0], parts[1], parts[2])
 		if err == nil {
 			stored, e := strconv.ParseInt(fmt.Sprint(result[1]), 10, 64)
 			if e != nil {
