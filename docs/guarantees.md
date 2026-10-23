@@ -739,8 +739,12 @@ runner, two calls using a keyless four-exchange history fixture consumed
 95,855 B of Redis request+reply per call-second with split defaults, versus
 184,520 B with the legacy 8 KiB operator override. The split sample passed the
 128 KiB store-traffic gate; the legacy sample exceeded it. Sustained history
-churn at split defaults exceeded the store gate; the default payload rate is
-under review in [#214](https://github.com/relaishq/relais/issues/214). Split N+1, planned
+churn at the then-current 80,000 B/s split defaults exceeded the store gate: proxy bins
+10–30 average **132,347.74 B/call-second**; the worst contiguous ten bins (18–27)
+average **133,427.20 B/call-second**. The revised 6,144 B hot cap / 70,000 B/s
+profile has **NOT-RUN** full-size hosted validation in
+[#214](https://github.com/relaishq/relais/issues/214). Keep split admission off
+until both whole-window and sustained phase gates pass at full working/history size. Split N+1, planned
 drain and rolling master-key rotation ended no calls and reported zero
 decryption failures. At the rotation inventory check, all ten live component
 references used the new key. Both sampled checkpoint and snapshot age p99

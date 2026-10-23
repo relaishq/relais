@@ -15,8 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These are ADR proposals for measurement, not live admission/default changes.
-var proposedComponentBudgets = componentBudgets{Hot: 7168, Setup: 4096, History: 8448, Total: 20480}
+// Measure the actual default profile through the production admission bounds.
+var defaultComponentBudgets = splitComponentBudgets(SnapshotLimits{}.splitDefaults().MaxBytes, 8192)
 
 func maximalComponentSnapshot(t *testing.T) snapshot {
 	t.Helper()
@@ -77,21 +77,21 @@ func TestComponentSizeBudgets(t *testing.T) {
 	for _, row := range []struct {
 		name         string
 		size, budget int
-	}{{"transport+host ciphertext", len(sealed.Transport), 7168 - len(sealed.Work) - reserve}, {"working raw", 3072, 3072}, {"working ciphertext", len(sealed.Work), 3072 + 6 + 30}, {"hot checkpoint", hot, 7168}, {"setup ciphertext (real ECDSA fixture)", len(sealed.Setup), 4096}, {"history raw", 8192, 8192}, {"history ciphertext", len(sealed.History), 8448}, {"reference reserve", reserve, 384}, {"transaction", total, 20480}} {
+	}{{"transport+host ciphertext", len(sealed.Transport), 6144 - len(sealed.Work) - reserve}, {"working raw", 3072, 3072}, {"working ciphertext", len(sealed.Work), 3072 + 6 + 30}, {"hot checkpoint", hot, 6144}, {"setup ciphertext (real ECDSA fixture)", len(sealed.Setup), 4096}, {"history raw", 8192, 8192}, {"history ciphertext", len(sealed.History), 8448}, {"reference reserve", reserve, 384}, {"transaction", total, 20480}} {
 		t.Logf("%-40s %5d / %5d B", row.name, row.size, row.budget)
 		require.LessOrEqual(t, row.size, row.budget, row.name)
 	}
-	_, err = proposedComponentBudgets.admit(c, componentMaxMetadata())
+	_, err = defaultComponentBudgets.admit(c, componentMaxMetadata())
 	require.NoError(t, err)
 	// Arbitrarily many authenticated SSRCs and unbounded negotiated text do
 	// exist today. No finite global worst-case can honestly be inferred. Prove
 	// real encoded-size admission is required instead of claiming two streams
-	// are a new enforced maximum. Nothing in this slice changes live admission.
+	// are a new enforced maximum. Growth still requires actual encoded admission.
 	oversized := snap
-	oversized.State.Audio.ID = strings.Repeat("i", 7168)
+	oversized.State.Audio.ID = strings.Repeat("i", 6144)
 	tooLarge, err := splitSessionComponents(oversized, nil, nil)
 	require.NoError(t, err)
-	_, err = proposedComponentBudgets.admit(tooLarge, componentMaxMetadata())
+	_, err = defaultComponentBudgets.admit(tooLarge, componentMaxMetadata())
 	require.ErrorIs(t, err, agentv2.ErrCapacity)
 }
 
@@ -116,9 +116,9 @@ func TestComponentDemoWorstStateFitsWorkingAndHistory(t *testing.T) {
 	snap.State.Agent.State.Bytes = working
 	c, err := splitSessionComponents(snap, history, nil)
 	require.NoError(t, err)
-	_, err = proposedComponentBudgets.admit(c, componentMaxMetadata())
+	_, err = defaultComponentBudgets.admit(c, componentMaxMetadata())
 	require.NoError(t, err)
-	t.Logf("Demo A: raw working %d / 3072 B; raw history %d / 8192 B; encoded hot %d / 7168 B", len(working), len(history), len(c.Transport)+len(c.Work)+60+384)
+	t.Logf("Demo A: raw working %d / 3072 B; raw history %d / 8192 B; encoded hot %d / 6144 B", len(working), len(history), len(c.Transport)+len(c.Work)+60+384)
 }
 
 func TestComponentEncodedAdmissionBoundary(t *testing.T) {
@@ -128,16 +128,38 @@ func TestComponentEncodedAdmissionBoundary(t *testing.T) {
 	require.NoError(t, err)
 	measured, err := measureComponents(c, componentMaxMetadata())
 	require.NoError(t, err)
-	snap.State.Audio.ID += strings.Repeat("x", 7168-measured.Hot)
+	snap.State.Audio.ID += strings.Repeat("x", 6144-measured.Hot)
 	c, err = splitSessionComponents(snap, history, nil)
 	require.NoError(t, err)
-	measured, err = proposedComponentBudgets.admit(c, componentMaxMetadata())
+	measured, err = defaultComponentBudgets.admit(c, componentMaxMetadata())
 	require.NoError(t, err)
-	require.Equal(t, 7168, measured.Hot)
+	require.Equal(t, 6144, measured.Hot)
 	snap.State.Audio.ID += "x"
 	c, err = splitSessionComponents(snap, history, nil)
 	require.NoError(t, err)
-	measured, err = proposedComponentBudgets.admit(c, componentMaxMetadata())
+	measured, err = defaultComponentBudgets.admit(c, componentMaxMetadata())
 	require.ErrorIs(t, err, agentv2.ErrCapacity)
-	require.Equal(t, 7169, measured.Hot)
+	require.Equal(t, 6145, measured.Hot)
+}
+
+// Bound for a 1:1 call with two tracks, IPv6, maximal counters and full host metadata.
+func TestSplitFullSizeCallFitsHotCap(t *testing.T) {
+	snap := maximalComponentSnapshot(t)
+	host, err := json.Marshal(snap.State.Agent.V2)
+	require.NoError(t, err)
+	require.Len(t, host, 2048)
+	require.Len(t, snap.State.Agent.State.Bytes, 3072)
+	c, err := splitSessionComponents(snap, bytes.Repeat([]byte{0xff}, 8192), nil)
+	require.NoError(t, err)
+	sealed, m, err := sealSessionComponents(bytes.Repeat([]byte{0x31}, 32), 255, snap.State.ID, componentMaxMetadata(), c)
+	require.NoError(t, err)
+	packed, err := m.marshal()
+	require.NoError(t, err)
+	reserve := len(packed) + componentCommitTimeBytes + componentFieldNameBytes + componentProtocolReserve
+	hot := len(sealed.Transport) + len(sealed.Work) + reserve
+	measured, err := measureComponents(c, componentMaxMetadata())
+	require.NoError(t, err)
+	require.Equal(t, measured.Hot, hot)
+	t.Logf("working_raw=%d host_raw=%d transport_plain=%d transport_cipher=%d work_cipher=%d reference_reserve=%d hot=%d cap=6144 margin=%d setup_cipher=%d history_cipher=%d total=%d", len(snap.State.Agent.State.Bytes), len(host), len(c.Transport), len(sealed.Transport), len(sealed.Work), reserve, hot, 6144-hot, len(sealed.Setup), len(sealed.History), measured.Total)
+	require.LessOrEqual(t, hot, 6144, "full-size encoded hot checkpoint must fit default cap")
 }

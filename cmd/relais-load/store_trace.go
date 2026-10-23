@@ -114,11 +114,19 @@ type wireWindow struct {
 	CommitLatencyMS      []float64             `json:"commit_request_reply_ms,omitempty"`
 }
 type storeTrace struct {
-	PhaseSeconds map[string]float64     `json:"phase_seconds"`
-	Phases       map[string]*wireWindow `json:"phases"`
-	Seconds      map[int64]*wireWindow  `json:"seconds"`
-	Errors       []string               `json:"errors,omitempty"`
-	Note         string                 `json:"note"`
+	PhaseIntervals map[string][]storePhaseInterval `json:"phase_intervals"`
+	PhaseSeconds   map[string]float64              `json:"phase_seconds"`
+	Phases         map[string]*wireWindow          `json:"phases"`
+	Seconds        map[int64]*wireWindow           `json:"seconds"`
+	Errors         []string                        `json:"errors,omitempty"`
+	Note           string                          `json:"note"`
+}
+
+// Intervals use the same observer-relative monotonic seconds as Seconds bins.
+// Repeated phases remain separate so a rolling window cannot span an event.
+type storePhaseInterval struct {
+	Start float64 `json:"start"`
+	End   float64 `json:"end"`
 }
 type storeObserver struct {
 	phaseAt  time.Time
@@ -143,6 +151,8 @@ func startStoreObserver(backend string) (*storeObserver, error) {
 		return nil, err
 	}
 	o := &storeObserver{listener: listener, backend: backend, phase: "setup", started: time.Now(), conns: map[net.Conn]bool{}, phaseAt: time.Now(), trace: storeTrace{PhaseSeconds: map[string]float64{}, Phases: map[string]*wireWindow{}, Seconds: map[int64]*wireWindow{}, Note: "Exact plaintext RESP request/reply sizes at an observing proxy on one runner. A separate MONITOR stream counts actual Lua HSET field/value lengths, including initialization and lease metadata. MONITOR overhead is outside application traffic but consumes this same runner. Both arms use the same observer; forwarding adds overhead. Client metrics remain authoritative by session/frame/owners. Script body submissions count every EVAL/SCRIPT LOAD, including warm repeated EVAL bodies. Script loads count actual SCRIPT LOAD commands; NOSCRIPT replies are separate. No Redis internal compilation/cache-hit count is inferred from a warm EVAL submission. Successful v10 commit arguments supply ciphertext and packed metadata lengths; HSET b/m/t field names are one byte each and t is the frozen eight-byte store-clock field. No plaintext or ciphertext values are retained. Failed/unknown replies count attempts but no successful component write. No TLS/NIC/log bytes measured."}}
+	o.phaseAt = o.started
+	o.trace.PhaseIntervals = map[string][]storePhaseInterval{}
 	o.wg.Add(1)
 	go func() {
 		defer o.wg.Done()
@@ -171,10 +181,14 @@ func startStoreObserver(backend string) (*storeObserver, error) {
 }
 func (o *storeObserver) mark(phase string) {
 	o.mu.Lock()
-	o.trace.PhaseSeconds[o.phase] += time.Since(o.phaseAt).Seconds()
-	o.phaseAt = time.Now()
+	o.finishPhase(time.Now())
 	o.phase = phase
 	o.mu.Unlock()
+}
+func (o *storeObserver) finishPhase(now time.Time) {
+	o.trace.PhaseSeconds[o.phase] += now.Sub(o.phaseAt).Seconds()
+	o.trace.PhaseIntervals[o.phase] = append(o.trace.PhaseIntervals[o.phase], storePhaseInterval{Start: o.phaseAt.Sub(o.started).Seconds(), End: now.Sub(o.started).Seconds()})
+	o.phaseAt = now
 }
 func (o *storeObserver) serve(c net.Conn) {
 	defer o.wg.Done()
@@ -240,7 +254,7 @@ func (o *storeObserver) problem(err error) {
 func (o *storeObserver) close() storeTrace {
 	o.mu.Lock()
 	if !o.closed {
-		o.trace.PhaseSeconds[o.phase] += time.Since(o.phaseAt).Seconds()
+		o.finishPhase(time.Now())
 	}
 	o.closed = true
 	_ = o.listener.Close()
