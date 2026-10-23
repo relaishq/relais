@@ -726,7 +726,9 @@ func (m *moveRecovery) complete(source *registration, c *call, lease sessionstor
 		return
 	}
 	if lost {
+		p.mu.Lock()
 		c.terminal = true
+		p.mu.Unlock()
 		if res.LossCause == "" {
 			res.LossCause = "recovery_failed"
 			if errors.Is(cause, ErrMoveBudgetExhausted) {

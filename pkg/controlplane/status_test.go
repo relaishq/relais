@@ -11,9 +11,14 @@ import (
 
 type statusReadKey struct{}
 
+type statusRead struct {
+	lease   sessionstore.Lease
+	release chan struct{}
+}
+
 type statusReadStore struct {
 	sessionstore.Store
-	reads chan chan struct{}
+	reads chan statusRead
 }
 
 func (s *statusReadStore) Get(ctx context.Context, id string) (sessionstore.Lease, error) {
@@ -21,7 +26,7 @@ func (s *statusReadStore) Get(ctx context.Context, id string) (sessionstore.Leas
 	if ctx.Value(statusReadKey{}) != nil {
 		release := make(chan struct{})
 		select {
-		case s.reads <- release:
+		case s.reads <- statusRead{lease: lease, release: release}:
 		case <-ctx.Done():
 			return sessionstore.Lease{}, ctx.Err()
 		}
@@ -42,7 +47,7 @@ func TestStatusPollingDoesNotBlockMovesAndDrain(t *testing.T) {
 	defer cancel()
 	id, _, err := p.Create(ctx, "offer", "a")
 	require.NoError(t, err)
-	s := &statusReadStore{Store: p.store, reads: make(chan chan struct{})}
+	s := &statusReadStore{Store: p.store, reads: make(chan statusRead)}
 	p.store = s
 	pollCtx, stopPoll := context.WithCancel(context.WithValue(ctx, statusReadKey{}, true))
 	done := make(chan struct{})
@@ -72,7 +77,8 @@ func TestStatusPollingDoesNotBlockMovesAndDrain(t *testing.T) {
 	for i := 0; i <= moves; i++ {
 		var release chan struct{}
 		select {
-		case release = <-s.reads:
+		case read := <-s.reads:
+			release = read.release
 		case err := <-pollErrors:
 			t.Fatalf("status poll: %v", err)
 		case <-ctx.Done():
@@ -179,7 +185,7 @@ func TestStatusDuringTakeoverDoesNotPutMetadataAheadOfLease(t *testing.T) {
 	require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
 	source := p.workers["a"]
 	expireObservedWorker(t, source)
-	s := &statusReadStore{Store: p.store, reads: make(chan chan struct{})}
+	s := &statusReadStore{Store: p.store, reads: make(chan statusRead)}
 	p.store = s
 	polled := make(chan Status, 1)
 	pollErrors := make(chan error, 1)
@@ -190,7 +196,8 @@ func TestStatusDuringTakeoverDoesNotPutMetadataAheadOfLease(t *testing.T) {
 	}()
 	var release chan struct{}
 	select {
-	case release = <-s.reads:
+	case read := <-s.reads:
+		release = read.release
 	case <-ctx.Done():
 		t.Fatal("status poll did not reach store read")
 	}
@@ -228,4 +235,138 @@ func TestStatusDuringTakeoverDoesNotPutMetadataAheadOfLease(t *testing.T) {
 	require.Equal(t, "takeover", status.Calls[0].LastMoveKind)
 	require.Len(t, status.Takeovers, 1)
 	require.False(t, status.Takeovers[0].Lost)
+}
+
+type statusIntentCleanupStore struct {
+	sessionstore.ControlStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *statusIntentCleanupStore) DeleteControlIntent(ctx context.Context, id, token string) error {
+	close(s.entered)
+	select {
+	case <-s.release:
+		return s.ControlStore.DeleteControlIntent(ctx, id, token)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// A lease reply can outlive terminal cleanup. Revalidate all sampled calls
+// together with the final takeover events, including calls read before a
+// later store request blocked.
+func TestStatusOmitsCallsLostDuringLeaseReads(t *testing.T) {
+	for _, laterRead := range []bool{false, true} {
+		for _, cleanup := range []string{"completed", "pending", "intent"} {
+			name := "own-read"
+			if laterRead {
+				name = "later-read"
+			}
+			name += "/" + cleanup + "-cleanup"
+			t.Run(name, func(t *testing.T) {
+				p, _, _, r := setup(t)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if cleanup == "pending" {
+					p.SetRelay(&retryTenureRelay{fakeRelay: r, failures: 1})
+				}
+				for range 2 {
+					id, _, err := p.Create(ctx, "offer", "a")
+					require.NoError(t, err)
+					lease, err := p.store.Get(ctx, id)
+					require.NoError(t, err)
+					require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
+				}
+				var intentStore *statusIntentCleanupStore
+				if cleanup == "intent" {
+					authorizeTestControl(t, p)
+					intentStore = &statusIntentCleanupStore{ControlStore: p.restart.store, entered: make(chan struct{}), release: make(chan struct{})}
+					p.restart.store = intentStore
+				}
+				source := p.workers["a"]
+				expireObservedWorker(t, source)
+				clock := &checkpointClockStore{Store: p.store, err: sessionstore.ErrUnsafeCheckpointClock}
+				s := &statusReadStore{Store: clock, reads: make(chan statusRead)}
+				p.store = s
+				polled := make(chan Status, 1)
+				pollErrors := make(chan error, 1)
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					status, err := p.Status(context.WithValue(ctx, statusReadKey{}, true))
+					polled <- status
+					pollErrors <- err
+				}()
+				t.Cleanup(func() { cancel(); <-done })
+				nextRead := func() statusRead {
+					t.Helper()
+					select {
+					case read := <-s.reads:
+						return read
+					case <-ctx.Done():
+						t.Fatal("status poll did not reach lease read")
+						return statusRead{}
+					}
+				}
+				first := nextRead()
+				blocked := first
+				if laterRead {
+					close(first.release)
+					blocked = nextRead()
+				}
+				// A real takeover declares the first sampled call definitively
+				// lost and attempts cleanup while Status has no registry lock.
+				finished := make(chan struct{})
+				var outcome *MoveResult
+				go func() {
+					defer close(finished)
+					outcome = p.recovery.recover(ctx, source, first.lease, time.Now())
+				}()
+				t.Cleanup(func() { cancel(); <-finished })
+				if intentStore != nil {
+					select {
+					case <-intentStore.entered:
+					case <-ctx.Done():
+						t.Fatal("terminal cleanup did not reach intent deletion")
+					}
+				} else {
+					<-finished
+				}
+				p.mu.Lock()
+				retained := p.calls[first.lease.SessionID] != nil
+				p.mu.Unlock()
+				require.Equal(t, cleanup != "completed", retained)
+				close(blocked.release)
+				if !laterRead {
+					close(nextRead().release)
+				}
+				<-done
+				status := <-polled
+				require.NoError(t, <-pollErrors)
+				if intentStore != nil {
+					close(intentStore.release)
+				}
+				<-finished
+				require.NotNil(t, outcome)
+				require.True(t, outcome.Lost)
+				require.Equal(t, "definitive-loss", outcome.CheckpointPolicy)
+				require.EqualValues(t, 1, status.LostCount)
+				require.Len(t, status.Takeovers, 1)
+				require.True(t, status.Takeovers[0].Lost)
+				require.Equal(t, first.lease.SessionID, status.Takeovers[0].ID)
+				for _, call := range status.Calls {
+					require.NotEqual(t, first.lease.SessionID, call.ID, "lost call returned by stale lease read")
+				}
+				require.Len(t, status.Calls, 1, "the other live call must survive the slow lease reads")
+				for _, worker := range status.Workers {
+					if worker.Name == "a" {
+						require.Equal(t, 1, worker.Calls, "worker count must omit the lost call")
+					} else {
+						require.Zero(t, worker.Calls)
+					}
+				}
+			})
+		}
+	}
 }
