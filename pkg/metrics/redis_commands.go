@@ -5,7 +5,7 @@ import (
 )
 
 // redisCommandCounter parses only RESP array and bulk lengths. It never retains
-// command arguments, audio, or keys. go-redis v8 writes commands as bulk arrays.
+// command arguments, audio, or keys. go-redis v9 writes RESP2 commands as bulk arrays.
 // Counts begin when a full top-level array header reaches the socket, including
 // retries and commands whose later arguments or reply are lost.
 type redisCommandCounter struct {

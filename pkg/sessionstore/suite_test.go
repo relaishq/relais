@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/redistestenv"
 
 	"github.com/relaishq/relais/pkg/storage"

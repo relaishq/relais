@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,9 +40,10 @@ func TestTrafficConnCountsActualPartialWritesAndReads(t *testing.T) {
 func TestStoreHookIncludesPipelineCommands(t *testing.T) {
 	before := counterValue(storeCommands.WithLabelValues("test"))
 	hook := StoreHook("test")
-	ctx, err := hook.BeforeProcess(context.Background(), redis.NewCmd(context.Background(), "get", "key"))
+	ctx := context.Background()
+	err := hook.ProcessHook(func(context.Context, redis.Cmder) error { return nil })(ctx, redis.NewCmd(ctx, "get", "key"))
 	require.NoError(t, err)
-	_, err = hook.BeforeProcessPipeline(ctx, []redis.Cmder{redis.NewCmd(ctx, "set", "a", "b"), redis.NewCmd(ctx, "get", "a")})
+	err = hook.ProcessPipelineHook(func(context.Context, []redis.Cmder) error { return nil })(ctx, []redis.Cmder{redis.NewCmd(ctx, "set", "a", "b"), redis.NewCmd(ctx, "get", "a")})
 	require.NoError(t, err)
 	require.Equal(t, before+3, counterValue(storeCommands.WithLabelValues("test")))
 	recorder := httptest.NewRecorder()
@@ -54,4 +55,21 @@ func counterValue(c prometheus.Counter) float64 {
 	var m dto.Metric
 	_ = c.Write(&m)
 	return m.GetCounter().GetValue()
+}
+
+func TestStoreHookExcludesConnectionHandshake(t *testing.T) {
+	ctx := context.Background()
+	commands := []redis.Cmder{redis.NewCmd(ctx, "hello", 2), redis.NewCmd(ctx, "auth", "owned-password"), redis.NewCmd(ctx, "select", 1), redis.NewCmd(ctx, "client", "setinfo", "LIB-NAME", "go-redis"), redis.NewCmd(ctx, "client", "id"), redis.NewCmd(ctx, "ping")}
+	counter := storeCommands.WithLabelValues("handshake-test")
+	before := counterValue(counter)
+	hook := StoreHook("handshake-test")
+	var singles, pipelines int
+	for _, command := range commands {
+		require.NoError(t, hook.ProcessHook(func(context.Context, redis.Cmder) error { singles++; return nil })(ctx, command))
+	}
+	require.Equal(t, 2.0, counterValue(counter)-before)
+	require.NoError(t, hook.ProcessPipelineHook(func(context.Context, []redis.Cmder) error { pipelines++; return nil })(ctx, commands))
+	require.Equal(t, 4.0, counterValue(counter)-before)
+	require.Equal(t, len(commands), singles)
+	require.Equal(t, 1, pipelines)
 }

@@ -12,7 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,13 +22,13 @@ func TestRedisClientPreservesDefaultTLSAndRetryOptions(t *testing.T) {
 	defer server.Close()
 	address := strings.TrimPrefix(server.URL, "https://")
 	tlsConfig := server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
-	options := &redis.Options{Addr: address, TLSConfig: tlsConfig, DialTimeout: 200 * time.Millisecond, MaxRetries: -1}
+	options := &redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: address, TLSConfig: tlsConfig, DialTimeout: 200 * time.Millisecond, MaxRetries: -1}
 	client := RedisClient(options, "tls-test")
 	defer client.Close()
 	require.Nil(t, options.Dialer, "caller options must stay unchanged")
 	require.Equal(t, 0, client.Options().MaxRetries, "disabled retries must remain disabled")
 	require.Equal(t, 200*time.Millisecond, client.Options().DialTimeout)
-	conn, err := client.Options().Dialer(context.Background(), "tcp", address)
+	conn, err := RedisDialer(client.Options().Dialer, "tls-test")(context.Background(), "tcp", address)
 	require.NoError(t, err)
 	defer conn.Close()
 	require.NoError(t, conn.SetDeadline(time.Now().Add(2*time.Second)))
@@ -53,7 +54,7 @@ func TestRedisClientPreservesDialTimeoutDuringTLSHandshake(t *testing.T) {
 		}
 	}()
 	// This owned TCP peer accepts but never answers the TLS handshake.
-	client := RedisClient(&redis.Options{Addr: listener.Addr().String(), DialTimeout: 40 * time.Millisecond, TLSConfig: &tls.Config{ServerName: "local.test"}, MaxRetries: -1}, "timeout-test")
+	client := RedisClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: listener.Addr().String(), DialTimeout: 40 * time.Millisecond, TLSConfig: &tls.Config{ServerName: "local.test"}, MaxRetries: -1}, "timeout-test")
 	defer client.Close()
 	at := time.Now()
 	conn, err := client.Options().Dialer(context.Background(), "tcp", listener.Addr().String())
@@ -69,4 +70,16 @@ func TestRedisClientPreservesDialTimeoutDuringTLSHandshake(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("missing accepted connection")
 	}
+}
+
+func TestRedisClientForcesConnectionProtocol(t *testing.T) {
+	options := &redis.Options{Addr: "127.0.0.1:16381", Protocol: 3, MaintNotificationsConfig: &maintnotifications.Config{Mode: maintnotifications.ModeEnabled}}
+	client := RedisClient(options, "protocol-test")
+	defer client.Close()
+	require.Equal(t, 2, client.Options().Protocol)
+	require.True(t, client.Options().DisableIdentity)
+	require.Equal(t, maintnotifications.ModeDisabled, client.Options().MaintNotificationsConfig.Mode)
+	require.Equal(t, 3, options.Protocol)
+	require.False(t, options.DisableIdentity)
+	require.Equal(t, maintnotifications.ModeEnabled, options.MaintNotificationsConfig.Mode)
 }

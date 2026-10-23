@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
@@ -89,7 +89,7 @@ func benchmarkStore(b *testing.B, name string) storage.Storage {
 	}
 	b.Cleanup(func() {
 		require.NoError(b, store.Close())
-		client := redis.NewClient(&redis.Options{Addr: addr, MaxRetries: -1})
+		client := redis.NewClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: addr, MaxRetries: -1})
 		defer func() { require.NoError(b, client.Close()) }()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

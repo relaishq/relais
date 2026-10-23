@@ -4,39 +4,42 @@ import (
 	"context"
 	"strings"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
+	"github.com/relaishq/relais/internal/rediscommand"
 )
 
 type RedisHook struct{}
-type redisKey struct{}
 
-func (RedisHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (context.Context, error) {
-	if ID(ctx) == "" {
-		return ctx, nil
+func (RedisHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+func (RedisHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if ID(ctx) == "" || rediscommand.IsHandshake(cmd) {
+			return next(ctx, cmd)
+		}
+		event := NewEvent(ctx, "redis", strings.ToUpper(cmd.Name()))
+		err := next(ctx, cmd)
+		Default.Finish(event, err != nil && err != redis.Nil)
+		return err
 	}
-	return context.WithValue(ctx, redisKey{}, []Event{NewEvent(ctx, "redis", strings.ToUpper(cmd.Name()))}), nil
 }
-func (RedisHook) AfterProcess(ctx context.Context, cmd redis.Cmder) error {
-	events, _ := ctx.Value(redisKey{}).([]Event)
-	if len(events) == 1 {
-		Default.Finish(events[0], cmd.Err() != nil && cmd.Err() != redis.Nil)
+func (RedisHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		if ID(ctx) == "" {
+			return next(ctx, cmds)
+		}
+		events := make([]Event, len(cmds))
+		for i, cmd := range cmds {
+			if !rediscommand.IsHandshake(cmd) {
+				events[i] = NewEvent(ctx, "redis", strings.ToUpper(cmd.Name()))
+			}
+		}
+		err := next(ctx, cmds)
+		for i, event := range events {
+			if event.TraceID == "" {
+				continue
+			}
+			Default.Finish(event, cmds[i].Err() != nil && cmds[i].Err() != redis.Nil)
+		}
+		return err
 	}
-	return nil
-}
-func (RedisHook) BeforeProcessPipeline(ctx context.Context, cmds []redis.Cmder) (context.Context, error) {
-	if ID(ctx) == "" {
-		return ctx, nil
-	}
-	events := make([]Event, len(cmds))
-	for i, cmd := range cmds {
-		events[i] = NewEvent(ctx, "redis", strings.ToUpper(cmd.Name()))
-	}
-	return context.WithValue(ctx, redisKey{}, events), nil
-}
-func (RedisHook) AfterProcessPipeline(ctx context.Context, cmds []redis.Cmder) error {
-	events, _ := ctx.Value(redisKey{}).([]Event)
-	for i, e := range events {
-		Default.Finish(e, cmds[i].Err() != nil && cmds[i].Err() != redis.Nil)
-	}
-	return nil
 }

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/callharness"
@@ -23,7 +23,7 @@ func TestSoakEndedKeyRetention(t *testing.T) {
 		}
 		t.Skip("dedicated Redis not supplied")
 	}
-	client := redis.NewClient(&redis.Options{Addr: addr, MaxRetries: -1})
+	client := redis.NewClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: addr, MaxRetries: -1})
 	defer func() { require.NoError(t, client.Close()) }()
 	prefix := "relais:soak-ended-test:" + strconvID() + ":"
 	for _, tc := range []struct {
