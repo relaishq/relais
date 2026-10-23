@@ -67,7 +67,10 @@ It exposes job-local `redis-server` and `redis-cli` aliases for the existing
 fixture; it installs nothing outside the runner job.
 
 The clients use go-redis v9.23.0 native discovery, RESP2 and disabled identity
-reporting. Random source order replaces last-good-first. Command/decode errors
+reporting and maintenance notifications. The map becomes eligible for background
+refresh after 10 seconds; the next routing operation triggers the refresh.
+An empty SLOTS reply is a failed source; an all-source failure retains the last
+good map. Random source order replaces last-good-first. Command/decode errors
 continue to another source, with configured dial and I/O timeouts instead of
 the former 250 ms cap. Every effective dial address passes the seed policy;
 remote loopback announcements use the source host, and TLS-only zero ports use

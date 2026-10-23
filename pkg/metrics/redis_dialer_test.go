@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,4 +70,16 @@ func TestRedisClientPreservesDialTimeoutDuringTLSHandshake(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("missing accepted connection")
 	}
+}
+
+func TestRedisClientForcesConnectionProtocol(t *testing.T) {
+	options := &redis.Options{Addr: "127.0.0.1:16381", Protocol: 3, MaintNotificationsConfig: &maintnotifications.Config{Mode: maintnotifications.ModeEnabled}}
+	client := RedisClient(options, "protocol-test")
+	defer client.Close()
+	require.Equal(t, 2, client.Options().Protocol)
+	require.True(t, client.Options().DisableIdentity)
+	require.Equal(t, maintnotifications.ModeDisabled, client.Options().MaintNotificationsConfig.Mode)
+	require.Equal(t, 3, options.Protocol)
+	require.False(t, options.DisableIdentity)
+	require.Equal(t, maintnotifications.ModeEnabled, options.MaintNotificationsConfig.Mode)
 }

@@ -9,10 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/stretchr/testify/require"
 )
@@ -24,6 +26,7 @@ type clusterWire struct {
 	dials   map[string]int
 	sources []string
 	slots   func(string, int) string
+	reply   func(string, []string) string
 }
 
 func (w *clusterWire) dial(_ context.Context, _, addr string) (net.Conn, error) {
@@ -54,6 +57,13 @@ func (w *clusterWire) dial(_ context.Context, _, addr string) (net.Conn, error) 
 				response = w.slots(addr, len(w.sources))
 				w.mu.Unlock()
 			}
+			w.mu.Lock()
+			if w.reply != nil && strings.ToLower(args[0]) != "cluster" {
+				if override := w.reply(addr, args); override != "" {
+					response = override
+				}
+			}
+			w.mu.Unlock()
 			if _, err := io.WriteString(server, response); err != nil {
 				return
 			}
@@ -99,13 +109,16 @@ func slotWire(start, end int, host *string, port int) string {
 }
 func wireHost(s string) *string { return &s }
 
-func wireCluster(t *testing.T, seeds []string, slots func(string, int) string, validate func(string) error) (*redis.ClusterClient, *clusterWire) {
+func wireCluster(t *testing.T, seeds []string, slots func(string, int) string, validate func(string) error, configure ...func(*redis.ClusterOptions)) (*redis.ClusterClient, *clusterWire) {
 	t.Helper()
 	wire := &clusterWire{dials: make(map[string]int), slots: slots}
 	options := redisClusterOptions(&redis.UniversalOptions{Addrs: seeds, Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, MaxRetries: -1, MaxRedirects: -1, Dialer: wire.dial}, validate)
 	require.False(t, options.ReadOnly)
 	require.False(t, options.RouteByLatency)
 	require.False(t, options.RouteRandomly)
+	for _, apply := range configure {
+		apply(options)
+	}
 	client := redis.NewClusterClient(options)
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
 	return client, wire
@@ -213,6 +226,7 @@ func TestRedisClusterNativeLoaderOptions(t *testing.T) {
 	options := RedisClusterOptions(&redis.UniversalOptions{})
 	require.Nil(t, options.ClusterSlots, "native discovery must retain its real origin")
 	require.True(t, options.DisableRoutingPolicies)
+	require.Equal(t, 10*time.Second, options.ClusterStateReloadInterval)
 }
 
 func TestRedisClusterRefusedNodeKeepsOtherSlots(t *testing.T) {
@@ -230,4 +244,109 @@ func TestRedisClusterRefusedNodeKeepsOtherSlots(t *testing.T) {
 	wire.mu.Lock()
 	defer wire.mu.Unlock()
 	require.Zero(t, wire.dials["127.0.0.1:6379"])
+}
+
+func TestRedisClusterDiscoveryContinuesAfterEmptySource(t *testing.T) {
+	client, wire := wireCluster(t, []string{"127.0.0.1:16381", "127.0.0.2:16381"}, func(_ string, attempt int) string {
+		if attempt == 1 {
+			return "*0\r\n"
+		}
+		return "*1\r\n" + slotWire(0, 16383, wireHost("127.0.0.3"), 16380)
+	}, redisendpoint.Validate)
+	node, err := client.MasterForKey(context.Background(), "key")
+	require.NoError(t, err)
+	require.Equal(t, "127.0.0.3:16380", node.Options().Addr)
+	require.NoError(t, node.Ping(context.Background()).Err())
+	wire.mu.Lock()
+	defer wire.mu.Unlock()
+	require.Len(t, wire.sources, 2)
+	require.NotEqual(t, wire.sources[0], wire.sources[1])
+}
+
+func TestRedisClusterEmptyReloadKeepsGoodMap(t *testing.T) {
+	var empty atomic.Bool
+	slots := "*2\r\n" + slotWire(0, 8191, wireHost("127.0.0.1"), 16380) + slotWire(8192, 16383, wireHost("127.0.0.2"), 16380)
+	client, wire := wireCluster(t, []string{"127.0.0.1:16381"}, func(string, int) string {
+		if empty.Load() {
+			return "*0\r\n"
+		}
+		return slots
+	}, redisendpoint.Validate)
+	checkMap := func() {
+		var mu sync.Mutex
+		var addresses []string
+		require.NoError(t, client.ForEachMaster(context.Background(), func(_ context.Context, node *redis.Client) error {
+			mu.Lock()
+			addresses = append(addresses, node.Options().Addr)
+			mu.Unlock()
+			return nil
+		}))
+		require.ElementsMatch(t, []string{"127.0.0.1:16380", "127.0.0.2:16380"}, addresses)
+	}
+	checkMap()
+	empty.Store(true)
+	client.ReloadState(context.Background())
+	require.Eventually(t, func() bool {
+		wire.mu.Lock()
+		defer wire.mu.Unlock()
+		return len(wire.sources) >= 3 // initial map plus every source in the two-node map
+	}, 3*time.Second, 10*time.Millisecond)
+	checkMap()
+}
+
+func TestRedisClusterNodeDialPolicyChecksActualAddress(t *testing.T) {
+	t.Setenv("RELAIS_REDIS_ALLOW_LOCAL_6379", "")
+	var dials atomic.Int32
+	options := RedisClusterOptions(&redis.UniversalOptions{})
+	node := options.NewClient(&redis.Options{Addr: "127.0.0.1:16381", Dialer: func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		return nil, fmt.Errorf("unexpected transport dial")
+	}})
+	defer node.Close()
+	for _, address := range []string{"127.0.0.1:6379", ":16380", "0.0.0.0:16380", "?:16380"} {
+		_, err := node.Options().Dialer(context.Background(), "tcp", address)
+		var policy *RedisEndpointPolicyError
+		require.ErrorAs(t, err, &policy)
+	}
+	require.Zero(t, dials.Load())
+}
+
+func TestRedisClusterForcesConnectionProtocol(t *testing.T) {
+	input := &redis.UniversalOptions{Protocol: 3, MaintNotificationsConfig: &maintnotifications.Config{Mode: maintnotifications.ModeEnabled}}
+	options := RedisClusterOptions(input)
+	require.Equal(t, 2, options.Protocol)
+	require.True(t, options.DisableIdentity)
+	require.Equal(t, maintnotifications.ModeDisabled, options.MaintNotificationsConfig.Mode)
+	require.Equal(t, 3, input.Protocol)
+	require.False(t, input.DisableIdentity)
+	require.Equal(t, maintnotifications.ModeEnabled, input.MaintNotificationsConfig.Mode)
+	node := options.NewClient(&redis.Options{Addr: "127.0.0.1:16381", Protocol: options.Protocol, DisableIdentity: options.DisableIdentity, MaintNotificationsConfig: options.MaintNotificationsConfig})
+	defer node.Close()
+	require.Equal(t, 2, node.Options().Protocol)
+	require.True(t, node.Options().DisableIdentity)
+	require.Equal(t, maintnotifications.ModeDisabled, node.Options().MaintNotificationsConfig.Mode)
+}
+
+func TestRedisClusterMovedTargetFailsClosed(t *testing.T) {
+	t.Setenv("RELAIS_REDIS_ALLOW_LOCAL_6379", "")
+	client, wire := wireCluster(t, []string{"127.0.0.1:16381"}, func(string, int) string {
+		return "*1\r\n" + slotWire(0, 16383, wireHost("127.0.0.1"), 16380)
+	}, redisendpoint.Validate, func(options *redis.ClusterOptions) { options.MaxRedirects = 1 })
+	// This read-only probe enables redirect following, unlike fenced store clients,
+	// so the refusal must come from the redirect target's node dialer.
+	wire.mu.Lock()
+	wire.reply = func(_ string, args []string) string {
+		if strings.EqualFold(args[0], "get") {
+			return "-MOVED 0 127.0.0.1:6379\r\n"
+		}
+		return ""
+	}
+	wire.mu.Unlock()
+	err := client.Get(context.Background(), "key").Err()
+	wire.mu.Lock()
+	defer wire.mu.Unlock()
+	require.Zero(t, wire.dials["127.0.0.1:6379"])
+	var policy *RedisEndpointPolicyError
+	require.ErrorAs(t, err, &policy)
+	require.Positive(t, wire.dials["127.0.0.1:16380"])
 }

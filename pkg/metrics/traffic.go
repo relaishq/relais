@@ -4,15 +4,17 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 	"github.com/relaishq/relais/internal/movediag"
 )
 
-var storeCommands = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relais_store_commands_total", Help: "Redis client command attempts, including pipelines and retries; excludes commands inside Lua."}, []string{"store"})
+var storeCommands = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relais_store_commands_total", Help: "Redis client command attempts, including pipelines and retries; excludes connection setup and commands inside Lua."}, []string{"store"})
 var transportBytes = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relais_transport_bytes_total", Help: "TCP bytes successfully read or written, including protocol overhead and monitoring; excludes IP headers."}, []string{"transport", "client", "direction"})
 
 // TrafficConn measures actual transport bytes, including encrypted snapshots.
@@ -90,6 +92,8 @@ func RedisDialer(dial redisDialFunc, client string) redisDialFunc {
 // RedisClient initializes options once, then instruments the initialized dialer.
 func RedisClient(options *redis.Options, client string) *redis.Client {
 	original := *options
+	original.Protocol, original.DisableIdentity = 2, true
+	original.MaintNotificationsConfig = &maintnotifications.Config{Mode: maintnotifications.ModeDisabled}
 	return InstrumentRedisClient(redis.NewClient(&original), client)
 }
 
@@ -121,12 +125,38 @@ type storeHook struct{ commands prometheus.Counter }
 
 func (*storeHook) DialHook(next redis.DialHook) redis.DialHook { return next }
 func (h *storeHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
-	return func(ctx context.Context, cmd redis.Cmder) error { h.commands.Inc(); return next(ctx, cmd) }
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		if !redisHandshake(cmd) {
+			h.commands.Inc()
+		}
+		return next(ctx, cmd)
+	}
 }
 func (h *storeHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
 	return func(ctx context.Context, cmds []redis.Cmder) error {
-		h.commands.Add(float64(len(cmds)))
+		for _, cmd := range cmds {
+			if !redisHandshake(cmd) {
+				h.commands.Inc()
+			}
+		}
 		return next(ctx, cmds)
+	}
+}
+
+// Logical store work excludes connection setup; the wire counter retains it.
+func redisHandshake(cmd redis.Cmder) bool {
+	switch cmd.Name() {
+	case "hello", "auth":
+		return true
+	case "client":
+		args := cmd.Args()
+		if len(args) > 1 {
+			subcommand, ok := args[1].(string)
+			return ok && strings.EqualFold(subcommand, "setinfo")
+		}
+		return false
+	default:
+		return false
 	}
 }
 

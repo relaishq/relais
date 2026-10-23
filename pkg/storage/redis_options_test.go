@@ -3,6 +3,7 @@ package storage
 import (
 	"crypto/tls"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -29,6 +30,10 @@ func TestConnectionOptionsPropagateSecurity(t *testing.T) {
 	require.Equal(t, 2, cluster.Protocol)
 	require.True(t, single.DisableIdentity)
 	require.True(t, cluster.DisableIdentity)
+	require.Equal(t, 3*time.Second, single.ReadTimeout)
+	require.Equal(t, 3*time.Second, single.WriteTimeout)
+	require.Equal(t, 3*time.Second, cluster.ReadTimeout)
+	require.Equal(t, 3*time.Second, cluster.WriteTimeout)
 	require.True(t, single.ContextTimeoutEnabled)
 	require.True(t, cluster.ContextTimeoutEnabled)
 	require.Equal(t, 1, single.DialerRetries)

@@ -104,7 +104,7 @@ func TestClusterRoutesIndexesAndScriptReload(t *testing.T) {
 		require.Equal(t, lease.Epoch, renewed.Epoch)
 	}
 	check()
-	admin := redis.NewClusterClient(storage.RedisClusterOptions(&redis.UniversalOptions{Addrs: addrs, MaxRetries: -1}))
+	admin := redis.NewClusterClient(storage.RedisClusterOptions(&redis.UniversalOptions{Addrs: addrs, Protocol: 2, DisableIdentity: true, MaxRetries: -1}))
 	defer func() { _ = admin.Close() }()
 	require.NoError(t, redistestcluster.Failover(ctx, admin, store.keys(leases[0].SessionID)[0]))
 	require.Eventually(t, func() bool {
