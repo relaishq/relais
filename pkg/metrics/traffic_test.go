@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,9 +40,10 @@ func TestTrafficConnCountsActualPartialWritesAndReads(t *testing.T) {
 func TestStoreHookIncludesPipelineCommands(t *testing.T) {
 	before := counterValue(storeCommands.WithLabelValues("test"))
 	hook := StoreHook("test")
-	ctx, err := hook.BeforeProcess(context.Background(), redis.NewCmd(context.Background(), "get", "key"))
+	ctx := context.Background()
+	err := hook.ProcessHook(func(context.Context, redis.Cmder) error { return nil })(ctx, redis.NewCmd(ctx, "get", "key"))
 	require.NoError(t, err)
-	_, err = hook.BeforeProcessPipeline(ctx, []redis.Cmder{redis.NewCmd(ctx, "set", "a", "b"), redis.NewCmd(ctx, "get", "a")})
+	err = hook.ProcessPipelineHook(func(context.Context, []redis.Cmder) error { return nil })(ctx, []redis.Cmder{redis.NewCmd(ctx, "set", "a", "b"), redis.NewCmd(ctx, "get", "a")})
 	require.NoError(t, err)
 	require.Equal(t, before+3, counterValue(storeCommands.WithLabelValues("test")))
 	recorder := httptest.NewRecorder()

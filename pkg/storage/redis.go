@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/metrics"
 )
@@ -572,7 +572,11 @@ func (c RedisConfig) ConnectionOptions() (*redis.UniversalOptions, error) {
 			return nil, errors.New("redis TLS maximum version must allow TLS 1.2 or newer and the configured minimum")
 		}
 	}
-	return &redis.UniversalOptions{Addrs: addrs, Username: c.Username, Password: c.Password, DB: c.DB, TLSConfig: transport}, nil
+	return &redis.UniversalOptions{
+		Addrs: addrs, Username: c.Username, Password: c.Password, DB: c.DB, TLSConfig: transport,
+		Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1,
+		ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
+	}, nil
 }
 
 // NewRedisStorage creates a new RedisStorage instance.

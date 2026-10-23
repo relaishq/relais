@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/stretchr/testify/require"
 )
@@ -113,7 +113,7 @@ func TestRedisRetriesOvertakenEpochWithFreshCandidates(t *testing.T) {
 			}
 			r.maintenance.Wait()
 			h := &overtakeHook{store: r, op: op}
-			r.client.AddHook(h)
+			r.client.AddHook(redisFaultHook{h})
 			if op == "claim" {
 				lease, err = r.Claim(ctx, "retry-claim", a, time.Minute)
 			} else {
@@ -185,7 +185,7 @@ func TestRedisListingWireSizeAndColdScriptRecovery(t *testing.T) {
 	}
 	r.maintenance.Wait()
 	h := &listingWireHook{}
-	r.client.AddHook(h)
+	r.client.AddHook(redisFaultHook{h})
 	leases, err := r.ListByWorker(ctx, a)
 	require.NoError(t, err)
 	require.Len(t, leases, 1000)
@@ -222,7 +222,7 @@ func (h *slowRepairHook) BeforeProcess(ctx context.Context, cmd redis.Cmder) (co
 func TestRedisPostCommitRepairDoesNotDelayCaller(t *testing.T) {
 	r := testRedis(t)
 	h := &slowRepairHook{entered: make(chan struct{}), release: make(chan struct{})}
-	r.client.AddHook(h)
+	r.client.AddHook(redisFaultHook{h})
 	var once sync.Once
 	t.Cleanup(func() { once.Do(func() { close(h.release) }) })
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)

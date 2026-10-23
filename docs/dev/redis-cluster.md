@@ -55,10 +55,29 @@ replication. The process probe uses its existing five-second warmup and
 observation gates; it does not claim the full 60-second consent proof. Managed
 store durability and provider failover remain separate deployment evidence.
 
-The `cluster-tests` CI job runs on `ubuntu-latest`, installs local Redis and
+The `cluster-tests` Redis CI job runs on `ubuntu-latest`, installs local Redis and
 ffmpeg, builds race-instrumented processes, and runs `make test-cluster` within
 a 15-minute job limit. It is separate from the PR `build` aggregate while hosted
 reliability is established. No credentials or self-hosted runners are required.
+A second `valkey-cluster-tests` job runs the same suite on Valkey **9.1.2**
+(released 2026-09-01), outside the `build` aggregate. It builds TLS support from
+versioned source after SHA-256 verification. The source checksum is
+`19c23908e7d57e8d91ef85b41f5646307582f10f4f0fb999bbf89ed24ec9c983`.
+It exposes job-local `redis-server` and `redis-cli` aliases for the existing
+fixture; it installs nothing outside the runner job.
+
+The clients use go-redis v9.23.0 native discovery, RESP2 and disabled identity
+reporting. Random source order replaces last-good-first. Command/decode errors
+continue to another source, with configured dial and I/O timeouts instead of
+the former 250 ms cap. Every effective dial address passes the seed policy;
+remote loopback announcements use the source host, and TLS-only zero ports use
+the source port. Refused nodes fail closed for their slots; the entire map is
+not rejected. Dev tools still refuse port 6379 on every host. For N slow
+sources, dial-only blackholes can cost **5N seconds** with default dial timeout.
+Fresh connections also have handshake and SLOTS I/O budgets: the conservative
+DB-0/no-client-name socket bound is **23N seconds**, excluding pool waits and
+scheduling. Foreground context deadlines can end discovery earlier; background
+reloads can spend the full sweep. See [deployment](../deploy.md) for the formula.
 
 Failure evidence is kept under `RELAIS_TEST_ARTIFACT_DIR`, or under
 `relais-cluster-artifacts` in the OS temporary directory when unset. Successful

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	codec "github.com/relaishq/relais/internal/componentcodec"
 	"github.com/relaishq/relais/internal/redistestcluster"
 	"github.com/stretchr/testify/require"
@@ -70,7 +70,7 @@ func TestComponentPublicationFailuresAndSettlement(t *testing.T) {
 		require.NoError(t, err)
 		hook := &componentFaultHook{r: r}
 		r.maintenance.Wait()
-		r.client.AddHook(hook)
+		r.client.AddHook(redisFaultHook{hook})
 		hook.mode = "after-bank"
 		hook.armed.Store(true)
 		changed := cloneComponents(first.Components)
@@ -169,7 +169,7 @@ func TestComponentRotationFailureRetainsPublishedTuple(t *testing.T) {
 		hook := &componentFaultHook{r: r, mode: "after-bank"}
 		hook.armed.Store(true)
 		r.maintenance.Wait()
-		r.client.AddHook(hook)
+		r.client.AddHook(redisFaultHook{hook})
 		_, err = r.CommitComponents(ctx, lease, ComponentCommit{Components: first.Components, StateVersion: 1, Expected: &first.Metadata})
 		require.ErrorContains(t, err, "injected-before-publish")
 		restored, err := r.ReadComponents(ctx, "fault")
@@ -226,7 +226,7 @@ func TestComponentHotCommitUsesReservationAndOneWrite(t *testing.T) {
 		require.NoError(t, err)
 		r.maintenance.Wait()
 		counter := &componentCommandCounter{}
-		r.client.AddHook(counter)
+		r.client.AddHook(redisFaultHook{counter})
 		_, err = r.CommitComponents(ctx, lease, ComponentCommit{Components: first.Components, StateVersion: 1, Expected: &first.Metadata})
 		require.NoError(t, err)
 		require.Zero(t, counter.reads.Load(), "ordinary hot commits must not download unchanged setup/history")
@@ -244,7 +244,7 @@ func TestComponentInitialPreparationExpiresAndFailsClosed(t *testing.T) {
 		hook := &componentFaultHook{r: r, mode: "after-bank"}
 		hook.armed.Store(true)
 		r.maintenance.Wait()
-		r.client.AddHook(hook)
+		r.client.AddHook(redisFaultHook{hook})
 		_, err = r.CommitComponents(ctx, lease, ComponentCommit{Components: componentFixture(lease.SessionID), StateVersion: 1})
 		require.ErrorContains(t, err, "injected-before-publish")
 		for _, key := range r.componentKeys(lease.SessionID)[5:] {

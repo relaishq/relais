@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/internal/redistestenv"
@@ -43,7 +43,7 @@ func TestControlTemplateACLMutationReadiness(t *testing.T) {
 	require.NoError(t, yaml.Unmarshal(data, &template))
 	access := template.Resources["ControlStoreUser"].Properties.AccessString
 	require.NotEmpty(t, access)
-	admin := redis.NewClient(&redis.Options{Addr: address})
+	admin := redis.NewClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: address})
 	t.Cleanup(func() { require.NoError(t, admin.Close()) })
 	for _, missingBoundCheck := range []bool{false, true} {
 		name := "template"

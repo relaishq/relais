@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/pkg/metrics"
 	"github.com/relaishq/relais/pkg/storage"
 )
@@ -89,8 +89,9 @@ func NewRedis(ctx context.Context, cfg storage.RedisConfig, key []byte, limits L
 	var client redis.UniversalClient
 	if cfg.Cluster || len(cfg.Addrs) > 0 {
 		cluster := storage.RedisClusterOptions(connection)
+		newNode := cluster.NewClient
 		cluster.NewClient = func(opts *redis.Options) *redis.Client {
-			return storage.RedisClusterNode(metrics.RedisClient(opts, "frame"))
+			return metrics.InstrumentRedisClient(newNode(opts), "frame")
 		}
 		client = redis.NewClusterClient(cluster)
 	} else {
