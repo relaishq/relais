@@ -28,6 +28,7 @@ func TestClusterRoutesIndexesAndScriptReload(t *testing.T) {
 	require.False(t, cluster.Options().ReadOnly)
 	require.False(t, cluster.Options().RouteByLatency)
 	require.False(t, cluster.Options().RouteRandomly)
+	require.NoError(t, redistestcluster.WaitForStable(ctx, cluster, owners.leases.client.(*redis.ClusterClient)))
 	worker := netip.MustParseAddrPort("127.0.0.1:23456")
 	primaries := map[string]bool{}
 	var leases []Lease
@@ -107,10 +108,7 @@ func TestClusterRoutesIndexesAndScriptReload(t *testing.T) {
 	admin := redis.NewClusterClient(storage.RedisClusterOptions(&redis.UniversalOptions{Addrs: addrs, Protocol: 2, DisableIdentity: true, MaxRetries: -1}))
 	defer func() { _ = admin.Close() }()
 	require.NoError(t, redistestcluster.Failover(ctx, admin, store.keys(leases[0].SessionID)[0]))
-	require.Eventually(t, func() bool {
-		got, e := owners.Get(ctx, leases[0].SessionID)
-		return e == nil && got.Epoch == leases[0].Epoch
-	}, 3*time.Second, 20*time.Millisecond)
+	require.NoError(t, redistestcluster.WaitForStable(ctx, cluster, owners.leases.client.(*redis.ClusterClient)))
 	check()
 	next, err := store.Transfer(ctx, leases[0], netip.MustParseAddrPort("127.0.0.1:23457"), time.Minute)
 	require.NoError(t, err)

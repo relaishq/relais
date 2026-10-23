@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/netip"
@@ -66,8 +67,10 @@ func TestFixedPoolTolerantBootstrapProcesses(t *testing.T) {
 			dir := t.TempDir()
 			manager := &clusterprocess.Manager{}
 			defer manager.Stop(false)
-			env := append(os.Environ(), "RELAIS_REDIS_ADDR="+addr, "RELAIS_REDIS_PREFIX=bootstrap:"+filepath.Base(dir)+":"+name+":", "RELAIS_SESSIONSTORE_KEY="+strings.Repeat("00", 32))
+			env := append(os.Environ(), "RELAIS_REDIS_ADDR="+addr, "RELAIS_REDIS_PREFIX=bootstrap:"+rand.Text()+":", "RELAIS_SESSIONSTORE_KEY="+strings.Repeat("00", 32))
+			ports := newProcessPorts(t)
 			start := func(name string, args ...string) *clusterprocess.Child {
+				ports.handover(t, args)
 				child, err := manager.Start(dir, name, env, args...)
 				require.NoError(t, err)
 				bounded, stop := context.WithTimeout(ctx, 8*time.Second)
@@ -76,8 +79,8 @@ func TestFixedPoolTolerantBootstrapProcesses(t *testing.T) {
 				require.NoError(t, err)
 				return child
 			}
-			freeTCP := func() string { a, err := clusterprocess.FreeTCP(); require.NoError(t, err); return a }
-			freeUDP := func() string { a, err := clusterprocess.FreeUDP(); require.NoError(t, err); return a }
+			freeTCP := func() string { return ports.reserve(t, "tcp") }
+			freeUDP := func() string { return ports.reserve(t, "udp") }
 			relayHTTP, controlHTTP, workerHTTP, lateHTTP := freeTCP(), freeTCP(), freeTCP(), freeTCP()
 			leg, media := freeUDP(), freeUDP()
 			startRelay := func() {

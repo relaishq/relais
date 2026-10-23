@@ -89,9 +89,10 @@ func TestAgentSamplerRetirementDuringRequest(t *testing.T) {
 }
 
 func TestWorkerIncarnationKeepsCountersAndAgeSampling(t *testing.T) {
-	var count atomic.Uint64
+	var count, statuses atomic.Uint64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/status" {
+			statuses.Add(1)
 			_, _ = w.Write([]byte(`{"agent_session":{"id":"session","name":"custom/v1","checkpoint_known":true}}`))
 			return
 		}
@@ -103,17 +104,30 @@ func TestWorkerIncarnationKeepsCountersAndAgeSampling(t *testing.T) {
 	defer cancel()
 	target := Target{Name: "worker-0", URL: server.URL, AgentSessions: []string{"session"}, PID: 1}
 	m := Start(ctx, []Target{target}, 10*time.Millisecond)
-	require.Eventually(t, func() bool { return count.Load() >= 2 }, 2*time.Second, 10*time.Millisecond)
+	// Start accepts the first sample synchronously. Wait for another complete
+	// sample before retiring; a handler hit alone can still be in flight.
+	m.SampleNow(ctx)
+	// Agent sweeps are serial: a second request proves the preceding status
+	// was accepted, without racing an unsynchronised read of monitor data.
+	require.Eventually(t, func() bool { return statuses.Load() >= 2 }, 3*time.Second, 10*time.Millisecond)
 	m.Retire("worker-0")
 	target.PID = 2
 	require.NoError(t, m.AddWorker(target))
-	before := count.Load()
-	require.Eventually(t, func() bool { return count.Load() >= before+2 }, 2*time.Second, 10*time.Millisecond)
+	m.SampleNow(ctx)
+	m.SampleNow(ctx)
+	before := statuses.Load()
+	require.Eventually(t, func() bool { return statuses.Load() >= before+2 }, 3*time.Second, 10*time.Millisecond)
 	result := m.Finish(1)
 	require.Len(t, result.Processes, 2)
 	require.Equal(t, 1, result.Processes[0].PID)
 	require.Equal(t, 2, result.Processes[1].PID)
 	require.False(t, result.Processes[0].UnexpectedExit)
+	for _, process := range result.Processes {
+		require.GreaterOrEqual(t, process.Samples, 2)
+		require.Positive(t, process.ObservedSeconds)
+		require.Positive(t, process.CPUSeconds)
+		require.Positive(t, process.RatesPerCallSecond["relais_events_total"])
+	}
 	require.Empty(t, result.Errors)
 	require.Empty(t, result.Agents.Errors)
 	require.NotEmpty(t, result.Agents.Samples)

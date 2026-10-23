@@ -213,6 +213,15 @@ func StartWithOptions(t *testing.T, options Options) []string {
 		}
 		_ = client.Close()
 	}
+	admin := redis.NewClusterClient(&redis.ClusterOptions{
+		Addrs: addrs, Username: options.Username, Password: options.Password,
+		TLSConfig: clientOptions.TLSConfig, Protocol: 2, DisableIdentity: true,
+		MaxRedirects: -1, MaxRetries: -1, ContextTimeoutEnabled: true,
+	})
+	defer func() { _ = admin.Close() }()
+	if err := WaitForStable(ctx, admin); err != nil {
+		t.Fatal(err)
+	}
 	t.Logf("disposable 3-primary/3-replica cluster ready in %s", time.Since(started))
 	var ports []string
 	for _, listener := range listeners {
