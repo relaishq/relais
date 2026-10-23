@@ -11,6 +11,9 @@ on:
       - 'Makefile'
       - 'scripts/release/**'
       - 'scripts/install-test/**'
+      - '.github/actions/ubuntu-packages/**'
+      - 'scripts/ci/install-packages.py'
+      - 'scripts/ci/test_install_packages.py'
       - 'deploy/local/**'
       - '.github/workflows/install-test.yml'
   push:
@@ -24,6 +27,9 @@ on:
       - 'Makefile'
       - 'scripts/release/**'
       - 'scripts/install-test/**'
+      - '.github/actions/ubuntu-packages/**'
+      - 'scripts/ci/install-packages.py'
+      - 'scripts/ci/test_install_packages.py'
       - 'deploy/local/**'
       - '.github/workflows/install-test.yml'
   workflow_dispatch:
@@ -66,7 +72,8 @@ jobs:
     needs: archives
     # A supplied release artifact skips archives; explicitly allow that case.
     if: ${{ !cancelled() && (needs.archives.result == 'success' || (needs.archives.result == 'skipped' && inputs.artifact_name != '')) }}
-    timeout-minutes: 15
+    # Keep the original 15m test budget plus a 10m Ubuntu cache/setup reserve.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -112,22 +119,15 @@ jobs:
           tar xzf "$archive" -C "$RUNNER_TEMP/extracted"
           echo "EXTRACTED_DIR=$RUNNER_TEMP/extracted/${archive%.tar.gz}" >> "$GITHUB_ENV"
       - name: Install dedicated Redis executable (no service)
-        run: |
-          if [ "$RUNNER_OS" = macOS ]; then
-            brew install redis
-          else
-            # Prevent package installation from starting a system service.
-            printf '#!/bin/sh\nexit 101\n' > "$RUNNER_TEMP/policy-rc.d"
-            if [ -e /usr/sbin/policy-rc.d ]; then
-              sudo cp -p /usr/sbin/policy-rc.d "$RUNNER_TEMP/original-policy-rc.d"
-              trap 'sudo cp -p "$RUNNER_TEMP/original-policy-rc.d" /usr/sbin/policy-rc.d' EXIT
-            else
-              trap 'sudo rm -f /usr/sbin/policy-rc.d' EXIT
-            fi
-            sudo install -m 755 "$RUNNER_TEMP/policy-rc.d" /usr/sbin/policy-rc.d
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends redis-server
-          fi
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server
+      - name: Install macOS Redis executable
+        if: runner.os == 'macOS'
+        timeout-minutes: 5
+        run: brew install redis
       # Ubuntu images ship go in /usr/bin, so the job PATH cannot exclude it.
       # run.sh runs every Relais program with a PATH of linked system tools
       # only and fails if go is reachable there.
