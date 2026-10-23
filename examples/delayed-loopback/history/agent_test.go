@@ -18,7 +18,7 @@ func TestHistoryLayoutsAndRollback(t *testing.T) {
 			args.MaxStateBytes = 3072
 			args.MaxHistoryBytes = 8192
 		}
-		a := Registration(split, false).Factory(args).(*Agent)
+		a := Registration(split, false, false).Factory(args).(*Agent)
 		before, err := a.Save(ctx)
 		require.NoError(t, err)
 		if split {
@@ -56,7 +56,7 @@ func TestHistoryLayoutsAndRollback(t *testing.T) {
 
 func TestChurnRefusalRetainsAcceptedHistory(t *testing.T) {
 	ctx := context.Background()
-	a := Registration(true, true).Factory(agent.FactoryArgs{MaxHistoryBytes: 8192}).(*Agent)
+	a := Registration(true, true, false).Factory(agent.FactoryArgs{MaxHistoryBytes: 8192}).(*Agent)
 	a.state.Inputs = 399
 	before, err := a.Save(ctx)
 	require.NoError(t, err)

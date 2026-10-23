@@ -2,7 +2,9 @@ package workerapp
 
 import (
 	"context"
+	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	agent "github.com/relaishq/relais/pkg/agent/v2"
@@ -51,6 +53,7 @@ func TestSplitWorkingDeclarationRefusedBeforeStartup(t *testing.T) {
 }
 
 func TestSnapshotFlagsResolveSessionProfilesAndExplicitOverrides(t *testing.T) {
+	clearWorkerTopologyEnvironment(t)
 	for _, split := range []bool{false, true} {
 		for _, zero := range []bool{false, true} {
 			var args []string
@@ -82,7 +85,51 @@ func TestSnapshotFlagsResolveSessionProfilesAndExplicitOverrides(t *testing.T) {
 	}
 	_, err := SnapshotLimitsForArgs([]string{"-agent-max-snapshot-bytes=invalid"})
 	require.Error(t, err)
-	// Preflight must resolve zero without changing the actual per-session input.
-	err = Run(context.Background(), nil, Options{})
-	require.NotErrorIs(t, err, agent.ErrCapacity)
+}
+
+func clearWorkerTopologyEnvironment(t *testing.T) {
+	t.Helper()
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(name, "RELAIS_RELAY_") || strings.HasPrefix(name, "RELAIS_WORKER_") || name == "RELAIS_CONTROL_URL" {
+			t.Setenv(name, "")
+		}
+	}
+}
+
+func TestSplitWorkerRejectsInfeasibleLegacyProfileBeforeStartup(t *testing.T) {
+	clearWorkerTopologyEnvironment(t)
+	args := []string{"-agent-split-checkpoints", "-agent-snapshot-bytes-per-second=70000"}
+	err := Run(context.Background(), args, Options{})
+	require.ErrorIs(t, err, agent.ErrCapacity)
+	for _, text := range []string{"legacy session profile", "78848", "explicit -agent-max-snapshot-bytes", "raise -agent-snapshot-bytes-per-second"} {
+		require.ErrorContains(t, err, text)
+	}
+	for _, fix := range [][]string{{"-agent-max-snapshot-bytes=6144"}, {"-agent-snapshot-bytes-per-second=78848"}} {
+		flags, f := newWorkerFlags(Options{})
+		require.NoError(t, flags.Parse(append(append([]string(nil), args...), fix...)))
+		require.NoError(t, f.validateSnapshotProfiles())
+	}
+}
+
+func TestSplitWorkerDefaultProfilesStartWithRawSessionLimits(t *testing.T) {
+	clearWorkerTopologyEnvironment(t)
+	flags, f := newWorkerFlags(Options{})
+	require.NoError(t, flags.Parse([]string{"-agent-split-checkpoints"}))
+	require.NoError(t, f.validateSnapshotProfiles())
+	cfg := f.mediaConfig(mediaworker.AgentConfig{}, nil, nil)
+	require.Equal(t, f.limits, cfg.SnapshotLimits)
+	require.Zero(t, cfg.SnapshotLimits.MaxBytes)
+	require.Zero(t, cfg.SnapshotLimits.BytesPerSecond)
+	require.Zero(t, cfg.SnapshotLimits.BurstBytes)
+	require.Equal(t, mediaworker.SnapshotLimits{MaxBytes: 7168, BytesPerSecond: 81920, BurstBytes: 28672, MoveBytesPerSession: 1 << 20, MoveBytesTotal: 64 << 20}, cfg.SnapshotLimits.LegacyDefaults())
+	worker, err := mediaworker.New(cfg)
+	require.NoError(t, err, "default split worker must start with both feasible profiles")
+	require.NoError(t, worker.Close())
+	// An explicit shared rate must remain explicit in the production config too.
+	f.limits.BytesPerSecond = 90000
+	cfg = f.mediaConfig(mediaworker.AgentConfig{}, nil, nil)
+	require.Equal(t, f.limits, cfg.SnapshotLimits)
+	require.Equal(t, 90000, cfg.SnapshotLimits.LegacyDefaults().BytesPerSecond)
+	require.Equal(t, 90000, cfg.SnapshotLimits.SplitDefaults().BytesPerSecond)
 }

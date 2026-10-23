@@ -22,6 +22,9 @@ type SnapshotLimits struct {
 	MoveBytesTotal      int64
 }
 
+// LegacyDefaults resolves the ADR 0010 profile and preserves explicit limits.
+func (l SnapshotLimits) LegacyDefaults() SnapshotLimits { return l.defaults() }
+
 func (l SnapshotLimits) defaults() SnapshotLimits {
 	if l.MaxBytes == 0 {
 		l.MaxBytes = 7168

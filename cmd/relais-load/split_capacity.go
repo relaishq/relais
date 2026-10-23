@@ -34,24 +34,25 @@ type studyAges struct {
 	Samples       int     `json:"samples"`
 }
 type splitObservation struct {
-	OperatorBudgets    map[string]int              `json:"operator_budgets"`
-	FixtureEnvironment map[string]string           `json:"fixture_environment,omitempty"`
-	FixtureSizes       map[string]studyFixtureSize `json:"fixture_sizes,omitempty"`
-	Ages               studyAges                   `json:"ages"`
-	Inputs             map[string][2]uint64        `json:"accepted_input_progress"`
-	LiveCalls          int                         `json:"live_calls"`
-	LostCalls          uint64                      `json:"lost_calls"`
-	Arm                string                      `json:"arm"`
-	Scenario           string                      `json:"scenario"`
-	WorkerArgs         []string                    `json:"worker_args"`
-	SetupFinishedAt    time.Time                   `json:"setup_finished_at"`
-	Store              storeTrace                  `json:"store"`
-	Inventory          map[byte]uint64             `json:"live_key_id_inventory,omitempty"`
-	InventoryCalls     int                         `json:"inventory_live_calls,omitempty"`
-	InventoryAt        time.Time                   `json:"inventory_at,omitzero"`
-	Survivors          map[string]int              `json:"survivors,omitempty"`
-	Refused            uint64                      `json:"history_refusals"`
-	InputSamples       int                         `json:"fixture_samples"`
+	OperatorBudgetError string                      `json:"operator_budget_error,omitempty"`
+	OperatorBudgets     map[string]int              `json:"operator_budgets"`
+	FixtureEnvironment  map[string]string           `json:"fixture_environment,omitempty"`
+	FixtureSizes        map[string]studyFixtureSize `json:"fixture_sizes,omitempty"`
+	Ages                studyAges                   `json:"ages"`
+	Inputs              map[string][2]uint64        `json:"accepted_input_progress"`
+	LiveCalls           int                         `json:"live_calls"`
+	LostCalls           uint64                      `json:"lost_calls"`
+	Arm                 string                      `json:"arm"`
+	Scenario            string                      `json:"scenario"`
+	WorkerArgs          []string                    `json:"worker_args"`
+	SetupFinishedAt     time.Time                   `json:"setup_finished_at"`
+	Store               storeTrace                  `json:"store"`
+	Inventory           map[byte]uint64             `json:"live_key_id_inventory,omitempty"`
+	InventoryCalls      int                         `json:"inventory_live_calls,omitempty"`
+	InventoryAt         time.Time                   `json:"inventory_at,omitzero"`
+	Survivors           map[string]int              `json:"survivors,omitempty"`
+	Refused             uint64                      `json:"history_refusals"`
+	InputSamples        int                         `json:"fixture_samples"`
 }
 type studyFixtureSize struct {
 	Working         int `json:"working_bytes"`
@@ -128,11 +129,11 @@ func runSplitCapacity(ctx context.Context, m *clusterprocess.Manager, c config, 
 		stepConfig.Capacity = true
 		stepConfig.SplitCapacity = false
 		stepConfig.Worker = studyWorker(c.Bin, arm, scenario)
-		budgets, err := workerOperatorBudgets(stepConfig.Worker.Args)
-		if err != nil {
-			return err
-		}
+		budgets, budgetErr := workerOperatorBudgets(stepConfig.Worker.Args)
 		stepConfig.Study = &splitObservation{Arm: arm, Scenario: scenario, WorkerArgs: stepConfig.Worker.Args, OperatorBudgets: budgets}
+		if budgetErr != nil {
+			stepConfig.Study.OperatorBudgetError = budgetErr.Error()
+		}
 		if len(studyWorkerEnvironment(stepConfig.Worker, true)) > 0 {
 			stepConfig.Study.FixtureEnvironment = map[string]string{"RELAIS_HISTORY_FULL_SIZE": "1"}
 		}

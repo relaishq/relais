@@ -200,9 +200,11 @@ minutes or an unbounded call. Recheck its actual worst case through Save after t
 and non-ASCII text.
 
 Revised operator allocations for split mode (#214; full-size hosted validation pending). Legacy defaults remain
-7,168 B, 81,920 B/s and 28,672 B. Zero cap/rate/burst flags select the session profile; explicit values apply to both:
+7,168 B, 81,920 B/s and 28,672 B. Zero cap/rate/burst flags select the session profile; explicit values apply to both.
+Split worker startup validates both profiles because it can also restore legacy sessions. An explicit rate of 70,000 B/s
+with the default legacy cap is refused: select a compatible explicit cap or raise the shared rate to at least 78,848 B/s:
 
-| Allocation | Proposed default | Purpose |
+| Allocation | Revised default (hosted validation pending) | Purpose |
 | --- | ---: | --- |
 | Hot bytes/checkpoint | 6,144 B | Combined ciphertext/framing for transport/host plus changed working component |
 | Setup bytes | 4,096 B | Initial encrypted setup, separately admitted |
@@ -297,14 +299,24 @@ churn arm and no explicit churn boundary. These are retrospective bin selections
 
 The largest previously observed split non-payload residual, **57,916.63 B/s**, plus the revised **70,000 B/s** gives
 **3,155.37 B/s (2.41%) projected headroom**. This is a projection from one runner, not proof of the new default.
-The burst, transaction/component allocations and move quotas remain unchanged. **Activation stays blocked pending the
-full-size hosted rerun.** Do not raise ceilings or choose a replacement default if that run fails; return the measured
+The burst, transaction/component allocations and move quotas remain unchanged.
+
+The full-size candidate in [hosted run 39890055104](https://github.com/relaishq/relais/actions/runs/39890055104)
+(two calls, 60 s, commit `a706529`) failed validation: churn averaged **130,101.89 B/call-second**, but bins 33–42
+averaged **131,332.75 B/call-second** and lifecycle traffic reached **131,096.23 B/media-call-second**.
+The fixed report reproduces both blocks. All eight steps exactly conserve command/request/reply totals and their
+phase intervals tile with zero boundary error; required full-size working/history Restore witnesses pass.
+**Activation remains blocked.** Do not raise ceilings or choose a replacement default; return the measured
 trade-off (working size, cadence, calls per primary, or session protocol overhead) to the owner.
 
 The existing `custom-capacity-report.py` path checks whole media/phase/lifecycle traffic and every measured split phase's
 worst contiguous **10 full one-second request+reply bins**, normalized by calls. Phase intervals use the observer's
-monotonic bin clock. Exclude partial edge bins and never join bins across an event. Missing/invalid bins block evidence;
-churn must contain at least ten contiguous full bins. A sustained mean above **131,072 B/call-second** fails even when
+monotonic bin clock. Their intervals must tile the complete step, with at most **one microsecond** of clock tolerance
+at a boundary and at the step end. Bin totals must equal phase totals exactly for commands, request bytes and reply
+bytes. Exclude partial edge bins and never join bins across an event. Missing/invalid bins block evidence;
+each step’s main phase (churn for history-churn; steady otherwise) must contain at least ten contiguous full bins.
+Shorter secondary phases do not block and explicitly report
+“sustained window not measured (N full bins)”. A sustained mean above **131,072 B/call-second** fails even when
 the whole-window gate passes. Ten seconds covers 100 periodic checkpoints and smooths short scheduling/burst effects;
 it is not a per-second burst-capacity claim.
 

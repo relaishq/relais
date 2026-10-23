@@ -2,6 +2,7 @@ package workerapp
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -78,15 +79,26 @@ func (f *workerFlags) snapshotLimits() mediaworker.SnapshotLimits {
 	if *f.split {
 		return f.limits.SplitDefaults()
 	}
-	limits := f.limits
-	if limits.MaxBytes == 0 {
-		limits.MaxBytes = 7168
+	return f.limits.LegacyDefaults()
+}
+
+// Split workers can also adopt legacy sessions, so explicit shared limits must
+// be feasible for both layouts before any sockets or stores are opened.
+func (f *workerFlags) validateSnapshotProfiles() error {
+	profiles := []struct {
+		name   string
+		limits mediaworker.SnapshotLimits
+	}{{"legacy", f.limits.LegacyDefaults()}}
+	if *f.split {
+		profiles = append(profiles, struct {
+			name   string
+			limits mediaworker.SnapshotLimits
+		}{"split", f.limits.SplitDefaults()})
 	}
-	if limits.BytesPerSecond == 0 {
-		limits.BytesPerSecond = 81920
+	for _, profile := range profiles {
+		if err := profile.limits.Validate(); err != nil {
+			return fmt.Errorf("%s session profile: %w; set an explicit -agent-max-snapshot-bytes that fits the rate, or raise -agent-snapshot-bytes-per-second to cover this profile's periodic and forced writes", profile.name, err)
+		}
 	}
-	if limits.BurstBytes == 0 {
-		limits.BurstBytes = 28672
-	}
-	return limits
+	return nil
 }

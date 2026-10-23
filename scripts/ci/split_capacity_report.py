@@ -12,6 +12,65 @@ def finite(value):
     return isinstance(value, (float, int)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
 
 
+# Observer-relative monotonic boundaries may differ by at most one microsecond.
+CLOCK_TOLERANCE_SECONDS = 1e-6
+WIRE_COUNTERS = ("commands", "request_bytes", "reply_bytes")
+
+
+def trace_totals(trace):
+    totals = {}
+    for group in ("seconds", "phases"):
+        rows = trace.get(group)
+        if not isinstance(rows, dict) or not rows:
+            raise ValueError(group + " traffic evidence missing")
+        total = dict.fromkeys(WIRE_COUNTERS, 0)
+        for key, row in rows.items():
+            if group == "seconds" and (not isinstance(key, str) or not key.isdigit() or str(int(key)) != key):
+                raise ValueError("seconds bin index invalid")
+            for field in WIRE_COUNTERS:
+                value = row.get(field) if isinstance(row, dict) else None
+                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                    raise ValueError(group + " " + field + " must be nonnegative integers")
+                total[field] += value
+        totals[group] = total
+    return totals
+
+
+def validate_phase_tiling(trace):
+    phases, durations, intervals = trace.get("phases", {}), trace.get("phase_seconds", {}), trace.get("phase_intervals", {})
+    if not isinstance(durations, dict) or not isinstance(intervals, dict) or not set(phases).issubset(durations) or set(durations) != set(intervals):
+        raise ValueError("phase interval coverage missing or inconsistent")
+    timeline, elapsed = [], 0
+    # A marked phase with no requests has intervals/duration but no traffic row.
+    # Counter conservation still checks every recorded request and reply.
+    for phase in durations:
+        duration, parts = durations[phase], intervals[phase]
+        if not finite(duration) or duration <= 0 or not isinstance(parts, list) or not parts:
+            raise ValueError("phase duration or intervals invalid")
+        measured = 0
+        for part in parts:
+            if not isinstance(part, dict):
+                raise ValueError("phase interval bounds invalid")
+            start, end = part.get("start"), part.get("end")
+            if not finite(start) or not finite(end) or end <= start:
+                raise ValueError("phase interval bounds invalid")
+            timeline.append((start, end))
+            measured += end - start
+        if abs(measured - duration) > CLOCK_TOLERANCE_SECONDS:
+            raise ValueError("phase intervals disagree with measured duration")
+        elapsed += duration
+    cursor = 0
+    for start, end in sorted(timeline):
+        if start < cursor - CLOCK_TOLERANCE_SECONDS:
+            raise ValueError("phase intervals overlap")
+        if start > cursor + CLOCK_TOLERANCE_SECONDS:
+            raise ValueError("phase intervals have a gap")
+        cursor = end
+    if abs(cursor - elapsed) > CLOCK_TOLERANCE_SECONDS:
+        raise ValueError("phase intervals do not cover the complete step")
+    return elapsed
+
+
 def rolling_phase(trace, phase, calls):
     """Use only complete one-second bins wholly inside one phase interval."""
     intervals = trace.get("phase_intervals", {}).get(phase)
@@ -41,9 +100,10 @@ def rolling_phase(trace, phase, calls):
             windows.append(dict(first_bin=first + offset, last_bin=first + offset + 9,
                                 request_reply_bytes_per_call_second=sum(values[offset:offset+10]) / (10 * calls)))
     measured_duration = trace.get("phase_seconds", {}).get(phase)
-    if not finite(measured_duration) or not math.isclose(duration, measured_duration, rel_tol=1e-6, abs_tol=1e-6):
+    if not finite(measured_duration) or not math.isclose(duration, measured_duration, rel_tol=0, abs_tol=CLOCK_TOLERANCE_SECONDS):
         raise ValueError("phase boundaries disagree with measured duration")
     return dict(full_bins=full_bins, window_count=len(windows), window_seconds=10,
+                status="measured" if windows else f"sustained window not measured ({full_bins} full bins)",
                 worst=max(windows, key=lambda w: w["request_reply_bytes_per_call_second"]) if windows else None)
 
 
@@ -85,7 +145,9 @@ def summarize(data, cpu_us, wall_us):
         budgets = dict(max_snapshot_bytes=cap, snapshot_bytes_per_second=rate, snapshot_burst_bytes=burst,
                        move_bytes_per_session=1048576, move_bytes_total=67108864,
                        checkpoint_age_p99_ms=550, snapshot_age_p99_ms=550)
-        if m.get("operator_budgets") != budgets:
+        if m.get("operator_budget_error"):
+            bad("operator budgets unknown: " + str(m["operator_budget_error"]))
+        elif m.get("operator_budgets") != budgets:
             bad("resolved worker budgets missing or incorrect")
         calls = r.get("callers")
         if calls != data.get("callers") or not finite(calls) or calls < 1:
@@ -159,6 +221,24 @@ def summarize(data, cpu_us, wall_us):
         phases = trace.get("phases", {})
         if trace.get("errors"):
             bad("store observer errors: " + "; ".join(trace["errors"]))
+        try:
+            totals = trace_totals(trace)
+        except ValueError as error:
+            bad("store trace invalid: " + str(error))
+            rows.append(dict(arm=arm, scenario=scenario, service="fail" if step.get("service_outcome") == "fail" else "inconclusive", phases={}, trace_valid=False))
+            continue
+        for field in WIRE_COUNTERS:
+            if totals["seconds"][field] != totals["phases"][field]:
+                bad("seconds/phases " + field + " totals differ")
+        try:
+            validate_phase_tiling(trace)
+        except (ValueError, TypeError, AttributeError) as error:
+            bad("store trace invalid: " + str(error))
+            rows.append(dict(arm=arm, scenario=scenario, service="fail" if step.get("service_outcome") == "fail" else "inconclusive", phases={}, trace_valid=False))
+            continue
+        phases = dict(phases)
+        for phase in trace.get("phase_seconds", {}):
+            phases.setdefault(phase, dict.fromkeys(WIRE_COUNTERS, 0))
         phase_rows = {}
         phase_failure = False
         wanted = ["setup", "steady"] + (["rotation"] if scenario == "rotation" else [])
@@ -181,16 +261,15 @@ def summarize(data, cpu_us, wall_us):
                 try:
                     rolling = rolling_phase(trace, phase, calls)
                     phase_rows[phase]["rolling_10_seconds"] = rolling
-                    if phase == "churn" and rolling["worst"] is None:
-                        bad("churn has fewer than 10 contiguous full bins")
+                    main_phase = "churn" if scenario == "history-churn" else "steady"
+                    if phase == main_phase and rolling["worst"] is None:
+                        bad(phase + " has fewer than 10 contiguous full bins")
                     if rolling["worst"] and rolling["worst"]["request_reply_bytes_per_call_second"] > 131072:
                         bad(phase + " sustained 10-second attempts exceed store ceiling")
                         phase_failure = True
                 except (ValueError, TypeError, AttributeError) as error:
                     bad(phase + " sustained traffic evidence invalid: " + str(error))
             if phase == "churn":
-                if seconds < r.get("duration_ns", 0) / 1e9 - 10:
-                    bad("churn traffic window too short")
                 if phase_rows[phase]["commands_per_call_second"] > 100 or phase_rows[phase]["request_reply_bytes_per_call_second"] > 131072:
                     bad("churn attempts exceed store ceiling")
                     phase_failure = True
@@ -244,6 +323,7 @@ def summarize(data, cpu_us, wall_us):
             blocking.append(scenario + ": call load, duration or relay buffers do not match")
     return {"approval": "BLOCKING APPROVAL" if blocking else "EVIDENCE READY FOR OWNER REVIEW; approval is manual",
             "scope": "One runner's measurements; no independent-host, managed-store, billing, NIC or durable-log claim.",
+            "trace_contract": {"counter_totals": "exact", "phase_clock_tolerance_seconds": CLOCK_TOLERANCE_SECONDS},
             "runner": data.get("runner"), "build": data.get("binary_sha256"),
             "blocking": sorted(set(blocking)), "steps": rows}
 

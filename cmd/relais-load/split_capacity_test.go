@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -120,4 +122,17 @@ func TestFixtureSizeEvidenceUsesAcceptedAndRestoredBytes(t *testing.T) {
 	r.Telemetry.Agents.Samples[0].Status.HistoryBytes = 4205
 	collectFixtureEvidence(r, observation)
 	require.Equal(t, studyFixtureSize{Working: 2871, History: 4205}, observation.FixtureSizes["call"])
+}
+
+func TestUnknownWorkerFlagsKeepRunAndMarkBudgetEvidenceUnknown(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "custom-worker")
+	require.NoError(t, os.WriteFile(binary, []byte("custom worker build"), 0600))
+	c := config{}
+	c.Worker.Binary = binary
+	c.Worker.Args = []string{"-custom-delay=300ms"}
+	build, err := customBuild(c)
+	require.NoError(t, err, "unknown custom-worker flags must not refuse the run")
+	require.NotEmpty(t, build.SHA256)
+	require.Nil(t, build.OperatorBudgets)
+	require.Contains(t, build.OperatorBudgetError, "custom-delay")
 }

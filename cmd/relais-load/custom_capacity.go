@@ -17,12 +17,13 @@ import (
 )
 
 type customCapacityBuild struct {
-	Worker          string         `json:"worker_binary"`
-	SHA256          string         `json:"worker_sha256"`
-	Agent           string         `json:"agent"`
-	Approval        string         `json:"approval"`
-	Workload        string         `json:"workload_interpretation"`
-	OperatorBudgets map[string]int `json:"operator_budgets"`
+	Worker              string         `json:"worker_binary"`
+	SHA256              string         `json:"worker_sha256"`
+	Agent               string         `json:"agent"`
+	Approval            string         `json:"approval"`
+	Workload            string         `json:"workload_interpretation"`
+	OperatorBudgets     map[string]int `json:"operator_budgets"`
+	OperatorBudgetError string         `json:"operator_budget_error,omitempty"`
 }
 type customCapacityEvidence struct {
 	CheckpointMaxMS                                 float64            `json:"checkpoint_age_max_ms"`
@@ -61,12 +62,13 @@ func customBuild(c config) (*customCapacityBuild, error) {
 	if err != nil {
 		return nil, err
 	}
-	budgets, err := workerOperatorBudgets(c.Worker.Args)
-	if err != nil {
-		return nil, fmt.Errorf("worker budget flags: %w", err)
+	budgets, budgetErr := workerOperatorBudgets(c.Worker.Args)
+	budgetError := ""
+	if budgetErr != nil {
+		budgetError = budgetErr.Error()
 	}
 	hash := sha256.Sum256(data)
-	return &customCapacityBuild{Worker: binary, SHA256: hex.EncodeToString(hash[:]), Agent: c.Worker.Agent, Approval: "Evidence for owner approval only; approval binds to this exact build and operator budgets. Over-budget or incomplete evidence blocks approval.", Workload: "Continuous harness Opus input plus VP8 video; delayed-loopback records up to 2s / 64KiB and replies in bounded chunks after 300ms. 100 commands and 128KiB Redis request+reply per call-second are upper budgets, not artificial traffic to generate. No provider load is simulated. Echo audio loss/freshness/gap checks do not apply to delayed playback; raw results remain attached. Video, connection, move, drain and takeover checks remain enforced.", OperatorBudgets: budgets}, nil
+	return &customCapacityBuild{Worker: binary, SHA256: hex.EncodeToString(hash[:]), Agent: c.Worker.Agent, Approval: "Evidence for owner approval only; approval binds to this exact build and operator budgets. Over-budget or incomplete evidence blocks approval.", Workload: "Continuous harness Opus input plus VP8 video; delayed-loopback records up to 2s / 64KiB and replies in bounded chunks after 300ms. 100 commands and 128KiB Redis request+reply per call-second are upper budgets, not artificial traffic to generate. No provider load is simulated. Echo audio loss/freshness/gap checks do not apply to delayed playback; raw results remain attached. Video, connection, move, drain and takeover checks remain enforced.", OperatorBudgets: budgets, OperatorBudgetError: budgetError}, nil
 }
 
 // The async app intentionally pauses audio. Keep the complete raw report, but

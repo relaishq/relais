@@ -1,7 +1,21 @@
 import copy
+import math
 import unittest
 
-from split_capacity_report import CASES, summarize, valid_rejoin, rolling_phase
+from split_capacity_report import CASES, summarize, valid_rejoin, rolling_phase, trace_totals, validate_phase_tiling, CLOCK_TOLERANCE_SECONDS
+
+
+def reconcile_bins(trace):
+    """Build exact integer bins for the synthetic phase totals."""
+    seconds = {}
+    for phase, parts in trace["phase_intervals"].items():
+        indices = sorted({i for part in parts for i in range(math.floor(part["start"]), math.ceil(part["end"]))})
+        for field in ("commands", "request_bytes", "reply_bytes"):
+            quotient, remainder = divmod(trace["phases"].get(phase, dict(commands=0, request_bytes=0, reply_bytes=0))[field], len(indices))
+            for offset, index in enumerate(indices):
+                row = seconds.setdefault(str(index), dict(commands=0, request_bytes=0, reply_bytes=0))
+                row[field] += quotient + (offset < remainder)
+    trace["seconds"] = seconds
 
 
 def fixture():
@@ -40,11 +54,12 @@ def fixture():
             measurement["store"]["phase_seconds"]["rotation"] = 11
             measurement["store"]["phase_intervals"]["rotation"] = [dict(start=40, end=51)]
         if scenario == "history-churn":
-            measurement["store"]["phase_seconds"]["steady"] = 9
+            measurement["store"]["phase_seconds"]["steady"] = 20
             measurement["store"]["phases"]["churn"] = phase()
             measurement["store"]["phase_seconds"]["churn"] = 11
-            measurement["store"]["phase_intervals"]["steady"] = [dict(start=20, end=29)]
-            measurement["store"]["phase_intervals"]["churn"] = [dict(start=29, end=40)]
+            measurement["store"]["phase_intervals"]["steady"] = [dict(start=20, end=40)]
+            measurement["store"]["phase_intervals"]["churn"] = [dict(start=40, end=51)]
+        reconcile_bins(measurement["store"])
         steps.append(dict(service_outcome="pass", generator_outcome="valid", measurement=measurement,
                           custom_agent=custom, store_commands_per_call_second=70, store_bytes_per_call_second=100000,
                           relay_buffer_enabled=True,
@@ -64,6 +79,7 @@ class SplitCapacityReport(unittest.TestCase):
                 step = data["steps"][4]
                 trace = step["measurement"]["store"]
                 trace["phases"]["churn"].update(reply_bytes=0, **{field: value})
+                reconcile_bins(trace)
                 summary = summarize(data, 10, 20)
                 row = summary["steps"][4]
                 self.assertLess(row["observed_media_bytes_per_call_second"], 131072)
@@ -80,22 +96,25 @@ class SplitCapacityReport(unittest.TestCase):
                 start = int(trace["phase_intervals"][phase_name][0]["start"])
                 for i in range(start, start+10):
                     trace["seconds"][str(i)].update(request_bytes=2*131073, reply_bytes=0)
+                for phase, parts in trace["phase_intervals"].items():
+                    for field in ("commands", "request_bytes", "reply_bytes"):
+                        trace["phases"][phase][field] = sum(trace["seconds"][str(i)][field] for part in parts for i in range(int(part["start"]), int(part["end"])))
                 summary = summarize(data, 10, 20)
-                self.assertIn(f"after/{CASES[index][1]}: {phase_name} sustained 10-second attempts exceed store ceiling", summary["blocking"])
+                self.assertEqual([f"after/{CASES[index][1]}: {phase_name} sustained 10-second attempts exceed store ceiling"], summary["blocking"])
                 self.assertEqual("fail", summary["steps"][index]["service"])
                 self.assertLess(summary["steps"][index]["observed_media_bytes_per_call_second"], 131072)
 
     def test_missing_full_size_or_budget_evidence_blocks(self):
-        for change in (
-            lambda m: m.pop("fixture_environment"),
-            lambda m: m["fixture_sizes"].pop("0"),
-            lambda m: m["fixture_sizes"]["0"].update(restored_history_bytes=4205),
-            lambda m: m["fixture_sizes"]["0"].update(working_bytes=2871),
-            lambda m: m["operator_budgets"].update(max_snapshot_bytes=7168),
+        for change, reason in (
+            (lambda m: m.pop("fixture_environment"), "full-size fixture selection missing"),
+            (lambda m: m["fixture_sizes"].pop("0"), "full working/history or required Restore witnesses missing"),
+            (lambda m: m["fixture_sizes"]["0"].update(restored_history_bytes=4205), "full working/history or Restore sizes incorrect"),
+            (lambda m: m["fixture_sizes"]["0"].update(working_bytes=2871), "full working/history or Restore sizes incorrect"),
+            (lambda m: m["operator_budgets"].update(max_snapshot_bytes=7168), "resolved worker budgets missing or incorrect"),
         ):
             data = fixture()
             change(data["steps"][1]["measurement"])
-            self.assertTrue(summarize(data, 10, 20)["blocking"])
+            self.assertIn("after/steady: " + reason, summarize(data, 10, 20)["blocking"])
 
     def test_restore_coverage_matches_the_actual_event(self):
         data = fixture()
@@ -103,18 +122,145 @@ class SplitCapacityReport(unittest.TestCase):
             data["steps"][index]["measurement"]["fixture_sizes"]["0"].update(restored_working_bytes=0, restored_history_bytes=0)
         self.assertEqual([], summarize(data, 10, 20)["blocking"])
         data["steps"][1]["measurement"]["fixture_sizes"]["1"].update(restored_working_bytes=0, restored_history_bytes=0)
-        self.assertTrue(summarize(data, 10, 20)["blocking"])
+        self.assertIn("after/steady: full working/history or required Restore witnesses missing", summarize(data, 10, 20)["blocking"])
         for index in (5, 6, 7):
             data = fixture()
             data["steps"][index]["measurement"]["fixture_sizes"]["0"].update(restored_working_bytes=0, restored_history_bytes=0)
-            self.assertTrue(summarize(data, 10, 20)["blocking"])
+            self.assertIn(f"after/{CASES[index][1]}: full working/history or required Restore witnesses missing", summarize(data, 10, 20)["blocking"])
 
     def test_churn_requires_ten_contiguous_full_bins(self):
         data = fixture()
         trace = data["steps"][4]["measurement"]["store"]
-        trace["phase_intervals"]["churn"] = [dict(start=29.1, end=39.9)]
+        trace["phase_intervals"]["steady"] = [dict(start=20, end=40.1)]
+        trace["phase_seconds"]["steady"] = 20.1
+        trace["phase_intervals"]["churn"] = [dict(start=40.1, end=50.9)]
         trace["phase_seconds"]["churn"] = 10.8
+        reconcile_bins(trace)
         self.assertIn("after/history-churn: churn has fewer than 10 contiguous full bins", summarize(data, 10, 20)["blocking"])
+
+    def test_each_counter_total_must_match_exactly(self):
+        for index in (0, 1):
+            for field in ("commands", "request_bytes", "reply_bytes"):
+                with self.subTest(index=index, field=field):
+                    data = fixture()
+                    data["steps"][index]["measurement"]["store"]["seconds"]["20"][field] += 1
+                    label = "/".join(CASES[index])
+                    self.assertIn(label + ": seconds/phases " + field + " totals differ", summarize(data, 10, 20)["blocking"])
+
+    def test_invalid_bin_counts_block_with_reason(self):
+        for value in (-1, True, 1.5, float("nan")):
+            data = fixture()
+            data["steps"][1]["measurement"]["store"]["seconds"]["20"]["request_bytes"] = value
+            summary = summarize(data, 10, 20)
+            self.assertIn("after/steady: store trace invalid: seconds request_bytes must be nonnegative integers", summary["blocking"])
+            self.assertEqual("inconclusive", summary["steps"][1]["service"])
+
+    def test_phase_intervals_must_tile_the_step(self):
+        for start, end, reason in ((19, 39, "phase intervals overlap"), (21, 41, "phase intervals have a gap")):
+            data = fixture()
+            data["steps"][1]["measurement"]["store"]["phase_intervals"]["steady"] = [dict(start=start, end=end)]
+            self.assertIn("after/steady: store trace invalid: " + reason, summarize(data, 10, 20)["blocking"])
+        data = fixture()
+        del data["steps"][1]["measurement"]["store"]["phase_intervals"]["setup"]
+        self.assertIn("after/steady: store trace invalid: phase interval coverage missing or inconsistent", summarize(data, 10, 20)["blocking"])
+
+    def test_malformed_trace_shapes_block_with_the_exact_reason(self):
+        cases = (
+            (lambda t: t.update(seconds={}), "seconds traffic evidence missing"),
+            (lambda t: t.update(phases={}), "phases traffic evidence missing"),
+            (lambda t: t["seconds"].update({"01": t["seconds"].pop("1")}), "seconds bin index invalid"),
+            (lambda t: t["phase_seconds"].update(setup=0), "phase duration or intervals invalid"),
+            (lambda t: t.update(phase_seconds=None), "phase interval coverage missing or inconsistent"),
+            (lambda t: t["phase_seconds"].update(setup=float("nan")), "phase duration or intervals invalid"),
+            (lambda t: t["phase_intervals"]["steady"].__setitem__(0, None), "phase interval bounds invalid"),
+            (lambda t: t["phase_intervals"]["steady"][0].update(end=19), "phase interval bounds invalid"),
+            (lambda t: t["phase_intervals"]["steady"][0].update(end=39), "phase intervals disagree with measured duration"),
+        )
+        for change, reason in cases:
+            data = fixture()
+            change(data["steps"][1]["measurement"]["store"])
+            self.assertIn("after/steady: store trace invalid: " + reason, summarize(data, 10, 20)["blocking"])
+
+    def test_zero_traffic_marked_phase_still_tiles_and_is_reported(self):
+        data = fixture()
+        trace = data["steps"][1]["measurement"]["store"]
+        trace["phase_intervals"]["steady"] = [dict(start=20, end=30), dict(start=30.1, end=40.1)]
+        trace["phase_intervals"]["move"] = [dict(start=30, end=30.1)]
+        trace["phase_seconds"]["move"] = .1
+        reconcile_bins(trace)
+        summary = summarize(data, 10, 20)
+        self.assertEqual([], summary["blocking"])
+        self.assertEqual(0, summary["steps"][1]["phases"]["move"]["commands"])
+        self.assertEqual("sustained window not measured (0 full bins)", summary["steps"][1]["phases"]["move"]["rolling_10_seconds"]["status"])
+
+    def test_tolerated_boundary_errors_cannot_accumulate_past_step_end(self):
+        data = fixture()
+        trace = data["steps"][1]["measurement"]["store"]
+        delta = .75 * CLOCK_TOLERANCE_SECONDS
+        trace["phase_intervals"]["steady"] = [dict(start=20+delta, end=40+delta)]
+        trace["phase_intervals"]["hangup"] = [dict(start=40+2*delta, end=60+2*delta)]
+        trace["phase_seconds"]["hangup"] = 20
+        trace["phases"]["hangup"] = dict(commands=0, request_bytes=0, reply_bytes=0)
+        self.assertIn("after/steady: store trace invalid: phase intervals do not cover the complete step", summarize(data, 10, 20)["blocking"])
+
+    def test_clock_tolerance_is_explicit_and_bounded(self):
+        for multiplier in (.5, 2):
+            data = fixture()
+            delta = multiplier * CLOCK_TOLERANCE_SECONDS
+            data["steps"][1]["measurement"]["store"]["phase_intervals"]["steady"] = [dict(start=20+delta, end=40+delta)]
+            summary = summarize(data, 10, 20)
+            if multiplier < 1:
+                self.assertEqual([], summary["blocking"])
+            else:
+                self.assertIn("after/steady: store trace invalid: phase intervals have a gap", summary["blocking"])
+
+    def test_each_main_steady_phase_requires_ten_full_bins(self):
+        for index in (1, 3, 5, 6, 7):
+            data = fixture()
+            trace = data["steps"][index]["measurement"]["store"]
+            trace["phase_intervals"]["steady"] = [dict(start=20.1, end=29.9)]
+            trace["phase_seconds"]["steady"] = 9.8
+            trace["phase_intervals"]["setup"] = [dict(start=0, end=20.1)]
+            trace["phase_seconds"]["setup"] = 20.1
+            for phase in trace["phase_intervals"]:
+                if phase not in ("setup", "steady"):
+                    trace["phase_intervals"][phase] = [dict(start=29.9, end=51)]
+                    trace["phase_seconds"][phase] = 21.1
+            reconcile_bins(trace)
+            summary = summarize(data, 10, 20)
+            self.assertIn(f"after/{CASES[index][1]}: steady has fewer than 10 contiguous full bins", summary["blocking"])
+
+    def test_short_churn_lead_in_is_labelled_without_blocking(self):
+        data = fixture()
+        trace = data["steps"][4]["measurement"]["store"]
+        trace["phase_intervals"]["steady"] = [dict(start=20.1, end=29.9)]
+        trace["phase_seconds"]["steady"] = 9.8
+        trace["phase_intervals"]["setup"] = [dict(start=0, end=20.1)]
+        trace["phase_seconds"]["setup"] = 20.1
+        trace["phase_intervals"]["churn"] = [dict(start=29.9, end=51)]
+        trace["phase_seconds"]["churn"] = 21.1
+        reconcile_bins(trace)
+        summary = summarize(data, 10, 20)
+        self.assertEqual([], summary["blocking"])
+        self.assertEqual("sustained window not measured (8 full bins)", summary["steps"][4]["phases"]["steady"]["rolling_10_seconds"]["status"])
+
+    def test_short_rotation_is_labelled_without_blocking(self):
+        data = fixture()
+        trace = data["steps"][5]["measurement"]["store"]
+        trace["phase_intervals"]["rotation"] = [dict(start=40.1, end=50.9)]
+        trace["phase_seconds"]["rotation"] = 10.8
+        # Fill both fractional boundaries without gaps in the step.
+        trace["phase_intervals"]["steady"] = [dict(start=20, end=40.1), dict(start=50.9, end=51)]
+        trace["phase_seconds"]["steady"] = 20.2
+        reconcile_bins(trace)
+        summary = summarize(data, 10, 20)
+        self.assertEqual([], summary["blocking"])
+        self.assertEqual("sustained window not measured (9 full bins)", summary["steps"][5]["phases"]["rotation"]["rolling_10_seconds"]["status"])
+
+    def test_unknown_worker_flags_block_budget_approval(self):
+        data = fixture()
+        data["steps"][1]["measurement"].update(operator_budgets=None, operator_budget_error="flag provided but not defined: -delay")
+        self.assertIn("after/steady: operator budgets unknown: flag provided but not defined: -delay", summarize(data, 10, 20)["blocking"])
 
     def test_missing_churn_phase_blocks_evidence(self):
         data = fixture()
@@ -123,11 +269,16 @@ class SplitCapacityReport(unittest.TestCase):
 
     def test_truncated_churn_phase_blocks_evidence(self):
         data = fixture()
-        data["steps"][4]["measurement"]["store"]["phase_seconds"]["churn"] = .1
-        self.assertIn("after/history-churn: churn traffic window too short", summarize(data, 10, 20)["blocking"])
+        trace = data["steps"][4]["measurement"]["store"]
+        trace["phase_seconds"]["churn"] = .1
+        trace["phase_intervals"]["churn"] = [dict(start=40, end=40.1)]
+        reconcile_bins(trace)
+        self.assertIn("after/history-churn: churn has fewer than 10 contiguous full bins", summarize(data, 10, 20)["blocking"])
 
     def test_complete_evidence_and_actual_rates(self):
         summary = summarize(fixture(), 10, 20)
+        self.assertEqual(1e-6, summary["trace_contract"]["phase_clock_tolerance_seconds"])
+        self.assertEqual("exact", summary["trace_contract"]["counter_totals"])
         self.assertEqual([], summary["blocking"])
         self.assertEqual(275, summary["steps"][1]["phases"]["steady"]["request_reply_bytes_per_call_second"])
         self.assertEqual(.25, summary["steps"][1]["phases"]["steady"]["component_writes_per_call_second"]["work"])
@@ -196,8 +347,15 @@ class RollingPhase(unittest.TestCase):
         self.assertEqual(131072, result["worst"]["request_reply_bytes_per_call_second"])
         data = fixture()
         for step in data["steps"]:
-            for value in step["measurement"]["store"]["seconds"].values():
+            trace = step["measurement"]["store"]
+            for value in trace["seconds"].values():
                 value.update(request_bytes=2*131072, reply_bytes=0)
+            for phase, parts in trace["phase_intervals"].items():
+                trace["phases"][phase].update(request_bytes=sum((p["end"]-p["start"])*2*131072 for p in parts), reply_bytes=0)
+                trace["phases"][phase]["request_bytes"] = int(trace["phases"][phase]["request_bytes"])
+            # Lifecycle includes setup too, so use the full synthetic duration.
+            step["run"]["duration_ns"] = sum(trace["phase_seconds"].values()) * 1e9
+        data["duration_seconds"] = 40
         self.assertEqual([], summarize(data, 10, 20)["blocking"])
 
     def test_separate_short_intervals_do_not_form_one_window(self):

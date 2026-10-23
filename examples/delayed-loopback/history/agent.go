@@ -42,13 +42,13 @@ type Agent struct {
 }
 
 // Full-size measurement is opt-in; ordinary Demo A-sized fixtures stay exact.
-func Registration(split, churn bool, fullSize ...bool) workerapp.Registration {
+func Registration(split, churn, fullSize bool) workerapp.Registration {
 	name := Name
 	if churn {
 		name = ChurnName
 	}
 	limits := agent.Limits{MaxStateBytes: 8192}
-	full := len(fullSize) > 0 && fullSize[0]
+	full := fullSize
 	workingBytes, historyBytes := WorkingBytes, 4205
 	if full {
 		workingBytes, historyBytes = 3072, 8192
