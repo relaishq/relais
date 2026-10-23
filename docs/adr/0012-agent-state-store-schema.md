@@ -477,3 +477,60 @@ editors of `pkg/sessionstore/redis.go` at once. B/C replaces the split reads in 
 `cmd/crash-run/store_stall.go` (GetState, lines 137/176) with one tuple read, carrying the returned checkpoint metadata
 through decisions. Audit every other recovery GetState/Checkpoint caller, including #193; no state-then-metadata pair
 remains for v10.
+
+## Commit wire amendment — #238
+
+The commit request sends six arguments, in order: complete CAS-expected metadata,
+encoded new metadata, transport ciphertext, changed setup ciphertext, changed work
+ciphertext, and changed history ciphertext. Unchanged component arguments remain
+empty. The eleven same-slot keys and all stored bytes remain unchanged. Production
+Lua rejects other argument counts; the former eleven-argument notation survives
+only in test fixtures, through a test-only adapter.
+
+The encoded metadata begins with a 20-byte binary SHA-1 checksum of the **full new
+metadata**, followed by either its original format-10 bytes or a delta. SHA-1 is
+Redis's built-in reconstruction checksum, not an authenticator or a replacement
+for HMAC-SHA256/AEAD. Verify it against reconstructed bytes before any mutation.
+CAS alone authenticates no new bytes: a structurally valid corrupt reference can
+pass length and CAS checks, so reader authentication alone would detect it too
+late to preserve the previous published tuple. The checksum rejects that corruption
+before preparation or publication (`TestRedisMetadataDeltaRejectsBeforePublication`).
+
+A delta starts with `0x80 | mask`. Bits 0–4 select the five 41-byte references in
+setup/work/history/root/checkpoint order. Bits 5–6 must be zero. Selected references
+follow in that order; all three bank bytes follow if any of bits 0–2 are set.
+Rebuild all other bytes from the complete CAS expectation. Reject invalid bases,
+tags and non-exact lengths. Use raw metadata at initialization or when format,
+owner/length, epoch, app version or setup generation changes. The delta is at most
+209 bytes, or 229 with its checksum; raw mode is at most 315 with its checksum.
+The client still authenticates and charges the complete published metadata.
+
+Derive owner, epoch and put sequence from the reconstructed metadata. Convert the
+fixed eight-byte integers to decimal byte by byte; preserve nonzero/20-digit
+checks, reservation bounds and bytewise ordering. Never round them through a Lua
+number. The live lease owner/epoch/expiry fence, complete expected-m comparison,
+component/root preconditions, sequence reservation and nonce policy, inactive-bank
+preparation, expiry ordering, final atomic HSET, uncertain-outcome settlement and
+forced-write behavior remain identical.
+
+Old and new v10 workers use different script SHAs but identical persisted tuples.
+Each can read and continue the other's tuples. Competing stale captures fail CAS;
+a prior owner fails fencing after Transfer. This amendment adds no deployment
+ordering within an already v10-compatible pool. The pre-v10 deployment restrictions
+in section 4 remain in force. Script caches are node-local and disposable:
+route/index writes use EVALSHA with NOSCRIPT fallback; the 25-byte clock stays EVAL.
+
+`TestRedisComponentCommitWireBytes` captures the real production client's RESP
+requests and replies and compares each request with the former encoding of the
+same tuple and ciphertext. At a 15-byte owner, 246-byte metadata and three-digit
+sequence, measured savings equal the model: initialization 46 B, host-only 251 B,
+work-only/history-only 165 B, both-app 124 B, and rotation 83 B. Replies stay 48 B.
+`TestRedisRouteAndIndexScriptCache` measures 2,401 B per warm route write and 210 B
+per warm index write, and checks cold-cache fallback.
+
+Applied to run 39890055104's schedule (1,078 commits / 102.010911484 call-seconds),
+these are **3,113.61–3,208.01 B/call-second modeled savings**, including the checksum.
+The range reflects missing joint work/history counts, not a measured aggregate.
+It exceeds the 2,882.19 B/s target by 231.42–325.82 B/s. Hosted traffic, cold-cache
+loads, CPU/latency and worst-window gate confirmation remain **NOT-RUN**. No default,
+admission, payload-rate or capacity claim changes with this amendment.

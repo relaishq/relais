@@ -1,8 +1,10 @@
 package sessionstore
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -12,8 +14,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	codec "github.com/relaishq/relais/internal/componentcodec"
 	"github.com/relaishq/relais/internal/redistestenv"
-
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -78,4 +80,27 @@ func sessionCommandArgs(cmd redis.Cmder) []interface{} {
 		return nil
 	}
 	return args[3+n:]
+}
+
+// componentCommitFixtureArgs keeps the former eleven-field fixture notation in
+// tests only. The production wire contract always has six arguments. Former
+// duplicate-field inconsistencies become invalid bindings of the intended full
+// metadata; Lua must still reject them before any write.
+func componentCommitFixtureArgs(t *testing.T, old ...interface{}) []interface{} {
+	t.Helper()
+	require.Len(t, old, 11)
+	asBytes := func(v interface{}) []byte {
+		if b, ok := v.([]byte); ok {
+			return b
+		}
+		return []byte(fmt.Sprint(v))
+	}
+	expected, m := asBytes(old[2]), asBytes(old[3])
+	encoded := encodeMetadataDelta(expected, m)
+	metadata, err := codec.DecodeMetadata(m)
+	require.NoError(t, err)
+	if fmt.Sprint(old[0]) != metadata.Owner || fmt.Sprint(old[1]) != strconv.FormatUint(metadata.OwnerEpoch, 10) || fmt.Sprint(old[5]) != strconv.FormatUint(metadata.References[4].Revision, 10) || !bytes.Equal(asBytes(old[6]), binary.BigEndian.AppendUint64(nil, metadata.OwnerEpoch)) || !bytes.Equal(asBytes(old[10]), binary.BigEndian.AppendUint64(nil, metadata.References[4].Revision)) {
+		encoded[0] ^= 1
+	}
+	return []interface{}{expected, encoded, old[4], old[7], old[8], old[9]}
 }
