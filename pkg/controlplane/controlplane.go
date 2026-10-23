@@ -90,14 +90,18 @@ type ReplayRelay interface {
 }
 
 type registration struct {
-	createMu      sync.RWMutex // isolate create observation cuts to this worker
-	name          string
-	addr          netip.AddrPort
-	worker        Worker
-	observation   workerObservation
-	reserved      int // incoming creates/moves; counted when balancing
-	rollbackSlots int // source protection, used only by placement load
-	retryingMoves bool
+	inventoryOnce    sync.Once
+	inventoryReader  func(context.Context) (mediaworker.WorkerStatus, error)
+	preservedIntents []*call      // abandoned intents; cleaned after recovery jobs release call locks
+	transfers        int          // store Transfer requests in flight; guarded by Plane.mu
+	createMu         sync.RWMutex // isolate create observation cuts to this worker
+	name             string
+	addr             netip.AddrPort
+	worker           Worker
+	observation      workerObservation
+	reserved         int // incoming creates/moves; counted when balancing
+	rollbackSlots    int // source protection, used only by placement load
+	retryingMoves    bool
 }
 
 type call struct {
@@ -145,6 +149,7 @@ type Plane struct {
 	calls           map[string]*call
 	ttl             time.Duration
 	incomingChanged chan struct{}
+	workerChanged   chan struct{}
 	config          Config
 	events          [recentTakeoverLimit]MoveResult
 	eventNext       int
@@ -180,6 +185,7 @@ func NewWithConfig(r Relay, store sessionstore.Store, config Config) *Plane {
 		refusals:        map[string]uint64{"no_target": 0, "at_capacity": 0},
 		ttl:             config.LeaseTTL,
 		incomingChanged: make(chan struct{}),
+		workerChanged:   make(chan struct{}),
 	}
 	p.recovery = &moveRecovery{plane: p, pending: make(map[*registration]map[string]*moveTransfer)}
 	return p
@@ -226,6 +232,7 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: newWorkerObservation(time.Now(), p.bootstrap)}
 	delete(p.pendingWorkers, name)
 	p.loadVersion++
+	p.observationChangedLocked()
 	p.mu.Unlock()
 	if p.restart != nil {
 		select {
@@ -335,6 +342,7 @@ func (p *Plane) unreserve(w *registration) {
 
 	w.reserved--
 	p.loadVersion++
+	p.observationChangedLocked()
 	close(p.incomingChanged)
 	p.incomingChanged = make(chan struct{})
 }
@@ -677,7 +685,10 @@ func (p *Plane) markDraining(name string) (*registration, error) {
 	if w == nil {
 		return nil, &unknownWorkerError{fmt.Errorf("controlplane: unknown worker %q: %w", name, sessionstore.ErrNotFound)}
 	}
-	w.observation.markDraining()
+	if !w.observation.knowledge().draining {
+		w.observation.markDraining()
+		p.observationChangedLocked()
+	}
 	return w, nil
 }
 

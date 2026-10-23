@@ -28,9 +28,14 @@ func (p *Plane) remoteHeartbeat(name string, req HeartbeatRequest) (HeartbeatRep
 	if w == nil || w.addr != req.Address {
 		return HeartbeatReply{}, errors.New("controlplane: unknown worker heartbeat")
 	}
+	before := w.observation.knowledge()
+	returned := w.observation.deathReturned
 	reply, changed, err := w.observation.heartbeat(workerHeartbeat{remote: true, restart: p.restart != nil, token: req.Token}, time.Time{})
 	if changed {
 		p.loadVersion++
+	}
+	if before.eligible != w.observation.knowledge().eligible || !returned && w.observation.deathReturned {
+		p.observationChangedLocked()
 	}
 	return reply, err
 }

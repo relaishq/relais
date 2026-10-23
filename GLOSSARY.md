@@ -21,3 +21,8 @@ _Avoid_: Move retry helper, crash-only recovery
 **Accepted-event module**:
 The per-call authority for accepting one agent event with its application state, consumed input position and host effects as one complete local change. Local acceptance is distinct from a successful checkpoint.
 _Avoid_: Effect publisher (covers only part of the concept)
+
+## Target wait
+
+**Target wait**: The bounded period in which an unrequested takeover observes worker liveness and destination eligibility before declaring that no destination can recover the call. A live source keeps all its calls when every remaining ownership is confirmed and no transfer has been issued for that worker in its death cycle.
+_Avoid_: Target retry count, worker-death grace period

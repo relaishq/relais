@@ -21,9 +21,9 @@ import (
 // Transient errors preserve retry state, including already transferred leases.
 // Terminal missing-state/exhausted-target outcomes release with a fresh bounded
 // context. Status retains 256 recent events plus lifetime per-call counts.
-// A returning worker stays dead until recovery settles and it acknowledges
-// fencing/dropping its old sessions. Remote workers need an explicit token
-// for this acknowledgment; the in-process contract uses the next heartbeat.
+// Returning liveness does not grant eligibility. Recovery either confirms an
+// unfenced live source or settles and requires the existing drop/rejoin ACK.
+// Preservation is one decision for the whole worker death cycle (ADR 0013).
 type Config struct {
 	// WorkerCallCap limits calls plus incoming reservations; zero is unlimited.
 	WorkerCallCap int
@@ -71,8 +71,8 @@ func (c Config) defaults() Config {
 }
 
 // Heartbeat records liveness. A declared-dead worker cannot rejoin until its
-// old leases have been handled. The first returning heartbeat asks the
-// worker to fence/drop its old sessions; its acknowledgment makes it healthy.
+// old leases have been handled or an unfenced live source has been confirmed.
+// Ordinary rejoin still asks the worker to fence/drop its old sessions first.
 // A remote heartbeat implementation must honor ErrRejoinRequired too.
 // A heartbeat does not clear an operator's draining flag.
 func (p *Plane) Heartbeat(addr netip.AddrPort) error {
@@ -82,9 +82,14 @@ func (p *Plane) Heartbeat(addr netip.AddrPort) error {
 	if w == nil {
 		return errors.New("controlplane: unknown worker heartbeat")
 	}
+	before := w.observation.knowledge()
+	returned := w.observation.deathReturned
 	_, changed, err := w.observation.heartbeat(workerHeartbeat{}, time.Time{})
 	if changed {
 		p.loadVersion++
+	}
+	if before.eligible != w.observation.knowledge().eligible || !returned && w.observation.deathReturned {
+		p.observationChangedLocked()
 	}
 	return err
 }
@@ -140,6 +145,8 @@ func (p *Plane) Run(ctx context.Context) error {
 				if detection.recover {
 					if detection.newDeath {
 						p.metrics.detections.Add(1)
+						w.observation.deathTransferIssued = w.transfers > 0
+						p.observationChangedLocked()
 					}
 					dead = append(dead, w)
 				} else if w.observation.knowledge().retryPlanned && !w.retryingMoves && p.recovery.hasWorkLocked(w, recoveryAll) {
@@ -157,10 +164,15 @@ func (p *Plane) Run(ctx context.Context) error {
 				})
 			}
 			for _, w := range dead {
+				p.mu.Lock()
+				cycle := w.observation.deathCycle
+				p.mu.Unlock()
 				wg.Go(func() {
-					recovered := p.recoverWorker(ctx, w, now)
+					recovered := p.recoverWorker(ctx, w, now, cycle)
 					p.mu.Lock()
-					w.observation.recoveryFinished(recovered)
+					if w.observation.deathCycle == cycle {
+						w.observation.recoveryFinished(recovered)
+					}
 					p.mu.Unlock()
 				})
 			}
@@ -168,7 +180,14 @@ func (p *Plane) Run(ctx context.Context) error {
 	}
 }
 
-func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected time.Time) bool {
+func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected time.Time, cycles ...uint64) bool {
+	p.mu.Lock()
+	cycle := w.observation.deathCycle
+	if len(cycles) > 0 && cycles[0] != cycle {
+		p.mu.Unlock()
+		return false
+	}
+	p.mu.Unlock()
 	unknown := p.unknownCreateReservations(w)
 	p.mu.Lock()
 	incoming := w.reserved > unknown
@@ -199,7 +218,7 @@ func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected tim
 	for range min(len(leases), p.config.TakeoverParallelism) {
 		wg.Go(func() {
 			for lease := range jobs {
-				p.recovery.recover(ctx, w, lease, detected)
+				p.recovery.recover(ctx, w, lease, detected, cycle)
 			}
 		})
 	}
@@ -208,6 +227,13 @@ func (p *Plane) recoverWorker(ctx context.Context, w *registration, detected tim
 	}
 	close(jobs)
 	wg.Wait()
+	p.mu.Lock()
+	preserved := w.observation.deathPreserved
+	p.mu.Unlock()
+	if preserved {
+		p.recovery.finishPreservedIntents(ctx, w)
+		return true
+	}
 	remaining, err := p.store.ListByWorker(ctx, w.addr)
 	unknown = p.unknownCreateReservations(w)
 	p.mu.Lock()

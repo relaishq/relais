@@ -41,6 +41,13 @@ type moveTransfer struct {
 	excluded                map[netip.AddrPort]bool
 	attempts                int
 	attemptLimit            int
+	firstDetection          time.Time
+	targetDeadline          time.Time
+	transferIssued          bool
+	sourceChecked           time.Time
+	sourceNeedsHeartbeat    bool
+	unrequested             bool
+	deathCycle              uint64
 	transientResume         bool
 	budgetRollback          bool // Retained after rollback itself refused move memory.
 	budgetStarted           time.Time
@@ -60,11 +67,19 @@ type moveTransfer struct {
 	replayAnchors           map[uint32]uint64
 }
 
-func (m *moveRecovery) recover(ctx context.Context, source *registration, listed sessionstore.Lease, detected time.Time) *MoveResult {
+func (m *moveRecovery) recover(ctx context.Context, source *registration, listed sessionstore.Lease, detected time.Time, cycles ...uint64) *MoveResult {
 	p := m.plane
 	ctx, cancel := context.WithTimeout(ctx, takeoverBudget)
 	defer cancel()
 	p.mu.Lock()
+	if len(cycles) > 0 && source.observation.deathCycle != cycles[0] {
+		p.mu.Unlock()
+		return nil
+	}
+	if source.observation.deathPreserved && m.pending[source][listed.SessionID] == nil {
+		p.mu.Unlock()
+		return nil
+	}
 	c := p.calls[listed.SessionID]
 	if pending := m.pending[source][listed.SessionID]; pending != nil && pending.call != nil {
 		c = pending.call
@@ -88,6 +103,12 @@ func (m *moveRecovery) recover(ctx context.Context, source *registration, listed
 		return nil
 	}
 	defer c.mu.Unlock()
+	p.mu.Lock()
+	stale := len(cycles) > 0 && source.observation.deathCycle != cycles[0]
+	p.mu.Unlock()
+	if stale {
+		return nil
+	}
 	return m.continueLocked(ctx, source, c, listed, detected)
 }
 
@@ -105,6 +126,10 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 	}
 	p.mu.Lock()
 	existing := m.pending[source][c.id]
+	if source.observation.deathPreserved && (existing == nil || existing.unrequested) {
+		p.mu.Unlock()
+		return nil
+	}
 	if existing != nil && existing.routedLease.Epoch == 0 && existing.routed == listed.Worker {
 		existing.routedLease = listed
 	}
@@ -151,7 +176,7 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 		if errors.Is(err, sessionstore.ErrNotFound) || errors.Is(err, sessionstore.ErrEnded) {
 			p.mu.Lock()
 			pending := m.pending[source][c.id]
-			lastHeartbeat := source.observation.knowledge().lastHeartbeat
+			lastHeartbeat := source.observation.recoveryHeartbeat()
 			to := ""
 			if pending != nil {
 				if target := p.owner(pending.lease.Worker); target != nil {
@@ -208,17 +233,38 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			m.pending[source] = make(map[string]*moveTransfer)
 		}
 		pending = &moveTransfer{call: c, lease: lease, routed: lease.Worker, routedLease: lease,
-			excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts}
+			excluded: map[netip.AddrPort]bool{source.addr: true}, attemptLimit: maxResumeAttempts,
+			unrequested: source.observation.dead, deathCycle: source.observation.deathCycle}
 		m.pending[source][c.id] = pending
 	}
 	if pending.outageStarted.IsZero() {
-		pending.outageStarted = source.observation.knowledge().lastHeartbeat
+		pending.outageStarted = source.observation.recoveryHeartbeat()
 		if pending.outageStarted.IsZero() {
 			pending.outageStarted = detected
 		}
 	}
+	if pending.unrequested && pending.firstDetection.IsZero() {
+		pending.firstDetection = detected
+		if first := source.observation.deathDetected; source.observation.dead && !first.IsZero() && first.Before(detected) {
+			pending.firstDetection = first
+		}
+		pending.targetDeadline = pending.firstDetection.Add(takeoverBudget)
+		anchor := source.observation.recoveryHeartbeat()
+		if anchor.IsZero() {
+			anchor = detected
+		}
+		if limit := anchor.Add(targetOutageBudget); limit.Before(pending.targetDeadline) {
+			pending.targetDeadline = limit
+		}
+		if limit, ok := ctx.Deadline(); ok && limit.Before(pending.targetDeadline) {
+			pending.targetDeadline = limit
+		}
+	}
+	if pending.unrequested {
+		detected = pending.firstDetection
+	}
 	r := p.relay
-	lastHeartbeat := source.observation.knowledge().lastHeartbeat
+	lastHeartbeat := source.observation.recoveryHeartbeat()
 	p.mu.Unlock()
 	res := MoveResult{Kind: "takeover", ID: c.id, From: source.name, Start: detected,
 		DetectedAt: detected, LastHeartbeat: lastHeartbeat, Result: mediaworker.HandoverResult{SessionID: c.id}}
@@ -230,11 +276,23 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 	// Publish only terminal outcomes. A transient error preserves the lease,
 	// call and retry state without falsely reporting a lost takeover.
 	complete := func(lost bool, cause error) {
+		if errors.Is(cause, ErrTargetWaitExpired) && pending.agentFailure != nil {
+			cause = fmt.Errorf("controlplane: no compatible agent target: %w", errors.Join(cause, pending.agentFailure))
+		}
 		m.complete(source, c, pending.lease, &res, lost, cause)
 		outcome = &res
 	}
 
 	for noTargetAttempts := 0; pending.transientResume || !pending.budgetStarted.IsZero() || pending.attempts < pending.attemptLimit; {
+		p.mu.Lock()
+		stale := pending.unrequested && pending.deathCycle != source.observation.deathCycle
+		p.mu.Unlock()
+		if stale {
+			return
+		}
+		if m.preserveSource(ctx, source, pending) {
+			return
+		}
 		if !pending.budgetStarted.IsZero() && time.Since(pending.budgetStarted) >= takeoverBudget {
 			res.LossCause = "move_budget_exhausted"
 			complete(true, ErrMoveBudgetExhausted)
@@ -287,19 +345,31 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 				pending.budgetNext = time.Now().Add(pending.budgetBackoff)
 				return
 			}
-			noTargetAttempts++
-			if noTargetAttempts == maxResumeAttempts {
-				cause := pickErr
-				if pending.agentFailure != nil {
-					cause = fmt.Errorf("controlplane: no compatible agent target: %w", pending.agentFailure)
+			if !pending.unrequested {
+				noTargetAttempts++
+				if noTargetAttempts == maxResumeAttempts {
+					cause := pickErr
+					if pending.agentFailure != nil {
+						cause = fmt.Errorf("controlplane: no compatible agent target: %w", pending.agentFailure)
+					}
+					complete(true, cause)
+					return
 				}
-				complete(true, cause)
-				return
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(25 * time.Millisecond):
+				}
+				continue
 			}
-			select {
-			case <-ctx.Done():
+			if waitErr := m.waitForTarget(ctx, pending); waitErr != nil {
+				if errors.Is(waitErr, ErrTargetWaitExpired) {
+					if m.preserveSource(ctx, source, pending) {
+						return
+					}
+					complete(true, errors.Join(waitErr, pickErr))
+				}
 				return
-			case <-time.After(25 * time.Millisecond):
 			}
 			continue
 		}
@@ -309,6 +379,35 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			p.unreserve(target)
 			continue
 		}
+		// A returning source wins even when a target returned in the same tick.
+		if m.preserveSource(ctx, source, pending) {
+			p.unreserve(target)
+			return
+		}
+		if m.beforeTransfer != nil {
+			m.beforeTransfer()
+		}
+		p.mu.Lock()
+		// Confirmation I/O can outlive preservation and even the next death.
+		// Only a still-registered job for this cycle may issue Transfer.
+		if pending.unrequested && (source.observation.deathPreserved ||
+			pending.deathCycle != source.observation.deathCycle || m.pending[source][c.id] != pending) {
+			p.mu.Unlock()
+			p.unreserve(target)
+			return
+		}
+		// Serialize the last liveness decision with issuing Transfer. A heartbeat
+		// racing selection sends us back through exact source confirmation.
+		if pending.unrequested && !source.observation.deathTransferIssued && pending.sourceNeedsHeartbeat && source.observation.lastHeartbeat.After(pending.sourceChecked) {
+			p.mu.Unlock()
+			p.unreserve(target)
+			continue
+		}
+		pending.transferIssued = true
+		if pending.unrequested {
+			source.observation.deathTransferIssued = true
+		}
+		p.mu.Unlock()
 		res.To = target.name
 		transferred := pending.lease
 		if transferred.Worker != target.addr {

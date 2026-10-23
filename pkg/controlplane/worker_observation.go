@@ -14,17 +14,24 @@ import (
 // store work. Only detect establishes death, and only heartbeat completes rejoin.
 // Replacement constructs fresh knowledge instead of reusing a death cycle.
 type workerObservation struct {
-	relayPending      bool
-	livenessUnknown   bool
-	draining          bool
-	lastHeartbeat     time.Time
-	dead              bool
-	recovering        bool
-	recovered         bool
-	rejoinReady       bool
-	rejoinToken       string
-	acceptedToken     string
-	heartbeatObserved bool
+	relayPending        bool
+	livenessUnknown     bool
+	draining            bool
+	lastHeartbeat       time.Time
+	deathHeartbeat      time.Time
+	deathDetected       time.Time
+	deathToken          string
+	deathTransferIssued bool
+	deathPreserved      bool
+	deathReturned       bool
+	deathCycle          uint64
+	dead                bool
+	recovering          bool
+	recovered           bool
+	rejoinReady         bool
+	rejoinToken         string
+	acceptedToken       string
+	heartbeatObserved   bool
 }
 
 type workerPoolClass uint8
@@ -97,10 +104,17 @@ func (o *workerObservation) observeStatus(status mediaworker.WorkerStatus, faile
 // time samples the live clock at the original heartbeat-recording step; explicit
 // times let callers describe an observation sequence without a clock adapter.
 func (o *workerObservation) heartbeat(input workerHeartbeat, now time.Time) (HeartbeatReply, bool, error) {
-	if input.remote {
-		if o.recovering || o.dead && !o.recovered {
-			return HeartbeatReply{}, false, errors.New("controlplane: worker takeover in progress")
+	// Liveness during recovery is evidence only, never a rejoin ACK. Preserve
+	// the original gap separately for deadlines, checkpoint reserves and events.
+	if o.recovering || o.dead && !o.recovered {
+		if input.remote && input.token != "" && input.token != o.deathToken {
+			return HeartbeatReply{}, false, errors.New("controlplane: stale rejoin token")
 		}
+		o.recordHeartbeat(now)
+		o.deathReturned = true
+		return HeartbeatReply{}, false, errors.New("controlplane: worker takeover in progress")
+	}
+	if input.remote {
 		if input.restart && !o.dead && !o.heartbeatObserved {
 			o.acceptedToken = input.token
 			o.heartbeatObserved = true
@@ -127,15 +141,8 @@ func (o *workerObservation) heartbeat(input workerHeartbeat, now time.Time) (Hea
 			o.livenessUnknown = false
 			changed = true
 		}
-		if now.IsZero() {
-			o.lastHeartbeat = time.Now()
-		} else {
-			o.lastHeartbeat = now
-		}
+		o.recordHeartbeat(now)
 		return HeartbeatReply{}, changed, nil
-	}
-	if o.recovering || o.dead && !o.recovered {
-		return HeartbeatReply{}, false, errors.New("controlplane: worker takeover in progress")
 	}
 	if o.dead && !o.rejoinReady {
 		o.rejoinReady = true
@@ -147,12 +154,23 @@ func (o *workerObservation) heartbeat(input workerHeartbeat, now time.Time) (Hea
 		o.livenessUnknown = false
 		changed = true
 	}
-	if now.IsZero() {
-		o.lastHeartbeat = time.Now()
-	} else {
-		o.lastHeartbeat = now
-	}
+	o.recordHeartbeat(now)
 	return HeartbeatReply{}, changed, nil
+}
+
+func (o *workerObservation) recordHeartbeat(now time.Time) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	o.lastHeartbeat = now
+}
+
+// recoveryHeartbeat never lets returning liveness shorten the original outage.
+func (o *workerObservation) recoveryHeartbeat() time.Time {
+	if o.dead && !o.deathHeartbeat.IsZero() {
+		return o.deathHeartbeat
+	}
+	return o.lastHeartbeat
 }
 
 func (o *workerObservation) detect(now time.Time, deadAfter time.Duration) workerDetection {
@@ -162,6 +180,10 @@ func (o *workerObservation) detect(now time.Time, deadAfter time.Duration) worke
 	if (!o.dead && now.Sub(o.lastHeartbeat) >= deadAfter) || (o.dead && !o.recovered) {
 		newDeath := !o.dead
 		if !o.dead {
+			o.deathHeartbeat, o.deathToken = o.lastHeartbeat, o.acceptedToken
+			o.deathDetected = now
+			o.deathCycle++
+			o.deathTransferIssued, o.deathPreserved, o.deathReturned = false, false, false
 			o.rejoinToken, o.acceptedToken = "", ""
 		}
 		o.dead, o.recovering, o.recovered, o.rejoinReady = true, true, false, false
