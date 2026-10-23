@@ -1,12 +1,15 @@
 package framecache
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"io"
 	"net"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/rediswiretest"
 
 	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/storage"
@@ -112,8 +115,14 @@ func TestRedisCurrentHonorsReadDeadline(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		buf := make([]byte, 4096)
-		if _, err = conn.Read(buf); err != nil {
+		reader := bufio.NewReader(conn)
+		if _, err = rediswiretest.Read(reader); err != nil {
+			return
+		}
+		if _, err = io.WriteString(conn, "-ERR unknown command HELLO\r\n"); err != nil {
+			return
+		}
+		if _, err = rediswiretest.Read(reader); err != nil {
 			return
 		}
 		if _, err = conn.Write([]byte("+PONG\r\n")); err != nil {

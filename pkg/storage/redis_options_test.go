@@ -3,6 +3,7 @@ package storage
 import (
 	"crypto/tls"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -25,6 +26,20 @@ func TestConnectionOptionsPropagateSecurity(t *testing.T) {
 	require.NotSame(t, transport, single.TLSConfig)
 	require.Same(t, single.TLSConfig, cluster.TLSConfig)
 	require.Equal(t, 2, single.DB)
+	require.Equal(t, 2, single.Protocol)
+	require.Equal(t, 2, cluster.Protocol)
+	require.True(t, single.DisableIdentity)
+	require.True(t, cluster.DisableIdentity)
+	require.Equal(t, 3*time.Second, single.ReadTimeout)
+	require.Equal(t, 3*time.Second, single.WriteTimeout)
+	require.Equal(t, 3*time.Second, cluster.ReadTimeout)
+	require.Equal(t, 3*time.Second, cluster.WriteTimeout)
+	require.True(t, single.ContextTimeoutEnabled)
+	require.True(t, cluster.ContextTimeoutEnabled)
+	require.Equal(t, 1, single.DialerRetries)
+	require.Equal(t, 1, cluster.DialerRetries)
+	require.Equal(t, -1, single.PipelinePoolSize)
+	require.Equal(t, -1, cluster.PipelinePoolSize)
 	cfg.Addrs = []string{"node-a.example.invalid:6379", "node-b.example.invalid:6379"}
 	options, err = cfg.ConnectionOptions()
 	require.NoError(t, err)

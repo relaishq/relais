@@ -373,6 +373,52 @@ jobs:
           name: store-stall-logs
           path: bin/crash-run-*
 
+  valkey-cluster-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RELAIS_TEST_REDIS_CLUSTER: '1'
+      RELAIS_TEST_REDIS_TLS_REQUIRE: '1'
+      RELAIS_TEST_ARTIFACT_DIR: ${{ github.workspace }}/bin/cluster-test-artifacts
+    steps:
+      - uses: actions/checkout@v6
+      - name: Generate UTF-8 locale for Redis tests
+        run: |
+          sudo locale-gen en_US.UTF-8
+          locale -a | grep -i '^en_US\.utf8$'
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+      - name: Build pinned Valkey with TLS
+        # Valkey 9.1.2 was released 2026-09-01, over two weeks before this pin.
+        env:
+          VALKEY_VERSION: '9.1.2'
+          VALKEY_SHA256: '19c23908e7d57e8d91ef85b41f5646307582f10f4f0fb999bbf89ed24ec9c983'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential libssl-dev ffmpeg
+          curl --fail --location --retry 3 "https://codeload.github.com/valkey-io/valkey/tar.gz/refs/tags/${VALKEY_VERSION}" -o "$RUNNER_TEMP/valkey.tar.gz"
+          echo "${VALKEY_SHA256}  $RUNNER_TEMP/valkey.tar.gz" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/valkey.tar.gz" -C "$RUNNER_TEMP"
+          make -C "$RUNNER_TEMP/valkey-${VALKEY_VERSION}" -j2 BUILD_TLS=yes MALLOC=libc
+          mkdir -p "$RUNNER_TEMP/valkey-bin"
+          ln -s "$RUNNER_TEMP/valkey-${VALKEY_VERSION}/src/valkey-server" "$RUNNER_TEMP/valkey-bin/redis-server"
+          ln -s "$RUNNER_TEMP/valkey-${VALKEY_VERSION}/src/valkey-cli" "$RUNNER_TEMP/valkey-bin/redis-cli"
+          echo "$RUNNER_TEMP/valkey-bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/valkey-bin/redis-server" --version
+      - name: Build process binaries with race instrumentation
+        run: go build -race -o bin/ ./cmd/relais-relay ./cmd/relais-worker ./cmd/relais-control ./cmd/relais-signal
+      - name: Run Valkey Cluster protocol and process tests
+        run: make test-cluster
+      - name: Upload Cluster failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: valkey-cluster-test-failure-evidence
+          path: bin/cluster-test-artifacts/
+          if-no-files-found: warn
+
   cluster-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 15

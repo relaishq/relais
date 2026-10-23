@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -47,7 +47,7 @@ func TestRedisFailedSettlementCarriesCandidate(t *testing.T) {
 			}
 			hook := &failedSettleHook{lostResponseHook: lostResponseHook{op: op}}
 			r.maintenance.Wait()
-			r.client.AddHook(hook)
+			r.client.AddHook(redisFaultHook{hook})
 			if op == "claim" {
 				_, err = r.Claim(ctx, "settlement", a, time.Minute)
 			} else {
@@ -114,7 +114,7 @@ func TestRedisSettlementFencesDelayedTransition(t *testing.T) {
 	epoch, err = r.allocate(ctx)
 	require.NoError(t, err)
 	candidate = candidateLease("old-pending-index", epoch, b)
-	require.NoError(t, r.client.ZAdd(ctx, r.indexKey(b), &redis.Z{Score: score - float64(r.indexGrace.Milliseconds()) - 1000, Member: indexMember(candidate)}).Err())
+	require.NoError(t, r.client.ZAdd(ctx, r.indexKey(b), redis.Z{Score: score - float64(r.indexGrace.Milliseconds()) - 1000, Member: indexMember(candidate)}).Err())
 	_, err = r.ListByWorker(ctx, b)
 	require.NoError(t, err)
 	_, err = r.run(ctx, "claim", candidate.SessionID, b.String(), epoch, time.Minute)
@@ -265,7 +265,7 @@ func TestRedisDelayedPutCannotRollBackState(t *testing.T) {
 	require.NoError(t, err)
 	hook := &delayedPutHook{blocked: make(chan struct{}), release: make(chan struct{})}
 	r.maintenance.Wait()
-	r.client.AddHook(hook)
+	r.client.AddHook(redisFaultHook{hook})
 	late := make(chan error, 1)
 	go func() { late <- r.PutState(ctx, lease, []byte("delayed")) }()
 	<-hook.blocked
@@ -300,11 +300,11 @@ func TestRedisListingPipelinesAndIsolatesBadMembers(t *testing.T) {
 		_, err := r.Claim(ctx, fmt.Sprint(i), a, time.Minute)
 		require.NoError(t, err)
 	}
-	require.NoError(t, r.client.ZAdd(ctx, r.indexKey(a), &redis.Z{Score: 0, Member: "invalid JSON"}, &redis.Z{Score: 0, Member: indexMember(Lease{SessionID: "bad-type", Epoch: 99})}).Err())
+	require.NoError(t, r.client.ZAdd(ctx, r.indexKey(a), redis.Z{Score: 0, Member: "invalid JSON"}, redis.Z{Score: 0, Member: indexMember(Lease{SessionID: "bad-type", Epoch: 99})}).Err())
 	require.NoError(t, r.client.Set(ctx, r.keys("bad-type")[0], "corrupt", time.Minute).Err())
 	hook := &pipelineCountHook{}
 	r.maintenance.Wait()
-	r.client.AddHook(hook)
+	r.client.AddHook(redisFaultHook{hook})
 	leases, err := r.ListByWorker(ctx, a)
 	require.NoError(t, err)
 	require.Len(t, leases, 10)
@@ -343,7 +343,7 @@ func TestRedisErrorClassification(t *testing.T) {
 			require.NoError(t, err)
 			hook := &errorBeforeHook{op: "renew", errorText: kind, remaining: 1}
 			r.maintenance.Wait()
-			r.client.AddHook(hook)
+			r.client.AddHook(redisFaultHook{hook})
 			_, err = r.Renew(ctx, lease, time.Minute)
 			if definiteNotRun(redisKind(errors.New(kind))) {
 				require.NoError(t, err)
@@ -418,7 +418,7 @@ func TestRedisPrepublishedIndexSurvivesCancelledRepair(t *testing.T) {
 			defer cancel()
 			hook := &indexFaultHook{failures: 2, cancel: cancel}
 			r.maintenance.Wait()
-			r.client.AddHook(hook)
+			r.client.AddHook(redisFaultHook{hook})
 			if op == "claim" {
 				lease, err = r.Claim(caller, "pre-index", a, time.Minute)
 			} else {
@@ -457,7 +457,7 @@ func TestRedisListingRetriesUntrustedPipeline(t *testing.T) {
 	require.NoError(t, err)
 	hook := &transientPipelineHook{failures: 1}
 	r.maintenance.Wait()
-	r.client.AddHook(hook)
+	r.client.AddHook(redisFaultHook{hook})
 	listed, err := r.ListByWorker(ctx, a)
 	require.NoError(t, err)
 	require.Len(t, listed, 1)
@@ -492,7 +492,7 @@ func TestRedisTruncatedTransitionReply(t *testing.T) {
 			}
 			hook := &unexpectedEOFHook{lostResponseHook: lostResponseHook{op: op}}
 			r.maintenance.Wait()
-			r.client.AddHook(hook)
+			r.client.AddHook(redisFaultHook{hook})
 			if op == "claim" {
 				lease, err = r.Claim(ctx, "truncated", a, time.Minute)
 			} else {
@@ -528,7 +528,7 @@ func TestRedisStaleIndexCannotPruneAnotherWorkersRecord(t *testing.T) {
 	require.NoError(t, err)
 	hook := &staleWorkerIndexHook{key: r.indexKey(b)}
 	r.maintenance.Wait()
-	r.client.AddHook(hook)
+	r.client.AddHook(redisFaultHook{hook})
 	_, err = r.Transfer(ctx, old, a, 150*time.Millisecond)
 	require.NoError(t, err)
 	r.maintenance.Wait()

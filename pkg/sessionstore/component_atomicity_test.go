@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	codec "github.com/relaishq/relais/internal/componentcodec"
 	"github.com/stretchr/testify/require"
 )
@@ -122,7 +122,7 @@ func TestComponentLateOwnPublicationSettlesSupersededRetry(t *testing.T) {
 		require.NoError(t, err)
 		r.maintenance.Wait()
 		h := &lateComponentCommit{r: r, id: lease.SessionID}
-		r.client.AddHook(h)
+		r.client.AddHook(redisFaultHook{h})
 		changed := cloneComponents(first.Components)
 		changed.History = appendComponentBytes(t, changed.History, codec.History, 1)
 		result, err := r.CommitComponents(ctx, lease, ComponentCommit{Components: changed, StateVersion: 1, Expected: &first.Metadata})
@@ -146,7 +146,7 @@ func TestComponentEarlierPublicationSettlesAfterTwoUnknownAttempts(t *testing.T)
 		require.NoError(t, err)
 		r.maintenance.Wait()
 		hook := &lateComponentCommit{r: r, id: lease.SessionID, loseRetry: true}
-		r.client.AddHook(hook)
+		r.client.AddHook(redisFaultHook{hook})
 		changed := cloneComponents(first.Components)
 		changed.History = appendComponentBytes(t, changed.History, codec.History, 1)
 		result, err := r.CommitComponents(ctx, lease, ComponentCommit{Components: changed, StateVersion: 1, Expected: &first.Metadata})

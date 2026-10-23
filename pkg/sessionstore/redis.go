@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/pkg/metrics"
 	"github.com/relaishq/relais/pkg/storage"
 )
@@ -833,7 +833,6 @@ func (r *Redis) ListByWorker(ctx context.Context, worker netip.AddrPort) ([]Leas
 	// once on that member's master and retry the idempotent pipeline.
 	err = r.retryRead(ctx, "session_index_check", func() error {
 		pipe := r.client.Pipeline()
-		defer func() { _ = pipe.Close() }()
 		for i := range checks {
 			c := &checks[i]
 			c.cmd = pipe.EvalSha(ctx, sessionScript.Hash(), r.lifecycleKeys(c.id), "indexed", worker.String(), strconv.FormatUint(c.epoch, 10), 1, r.retention.Milliseconds(), c.published, r.indexGrace.Milliseconds())
@@ -911,8 +910,9 @@ func connectRedis(cfg storage.RedisConfig, label string) (redis.UniversalClient,
 	var client redis.UniversalClient
 	if cfg.Cluster || len(cfg.Addrs) > 0 {
 		cluster := storage.RedisClusterOptions(options)
+		newNode := cluster.NewClient
 		cluster.NewClient = func(opts *redis.Options) *redis.Client {
-			return storage.RedisClusterNode(metrics.RedisClient(opts, label))
+			return metrics.InstrumentRedisClient(newNode(opts), label)
 		}
 		client = redis.NewClusterClient(cluster)
 	} else {

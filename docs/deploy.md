@@ -227,10 +227,51 @@ the global epoch allocator and relay leases are independent single-key
 operations. Pipelines route each independent command to its own primary.
 Route restore scans every primary. Worker-index listing reads its index's
 primary and checks each member on that session's primary. Script-cache misses
-reload on the affected node, including after a promotion. Discovery validates every announced address with
-the seed endpoint policy, tries the last good source first, and caps each
-source connection and I/O attempt at 250 ms. See the
-[key audit](dev/redis-key-layout.md) for exact families and operations.
+reload on the affected node, including after a promotion.
+
+The clients pin go-redis v9.23.0 and RESP2 (`Protocol: 2`). The Cluster builder
+sets RESP2 and disables identity reporting and maintenance notifications in its
+returned options. Its node-client constructor reapplies these settings to a
+private copy, including when callers change those flags on the returned options
+before constructing the Cluster client. The standalone builder applies the same
+settings to a private copy when constructing its client. Restricted ACLs need no `CLIENT SETINFO`
+permission. The driver sends `HELLO 2` and falls back to `AUTH` when HELLO is refused.
+Context deadlines remain enabled; fenced/session/frame clients disable both
+network mutation retries and redirect retries. NOSCRIPT remains a definite
+not-run result and can reload the script on its primary.
+
+Native discovery tries sources in random order and continues after a source's
+command or decode error, including an empty `CLUSTER SLOTS` reply. A failed
+reload retains the last good map. It uses configured dial and I/O timeouts; the old
+last-good preference and 250 ms per-source cap are removed. Every address the
+client dials passes the seed endpoint policy both when its node client is
+constructed and at dial time. A remote source's loopback
+announcement is replaced by that source's host before use, so it never reaches
+local Redis. TLS-only port-zero announcements use the source port. A node whose
+effective address is refused fails closed for its slots; other slots remain
+available. Raw announcements are not checked separately, so policy does not
+depend on whether a node client was already cached. Development tools retain
+`ValidateDev`, which refuses port 6379 on every host.
+
+The slot map becomes eligible for background refresh after **10 seconds**,
+preserving v8's cadence instead of v9's 60-second default. The next routing
+operation triggers that refresh; it is not an independent polling timer.
+Discovery is serial over N candidate sources. Dial-only blackholes can cost
+`N * DialTimeout` (default **5N seconds**). Stalled connections can also spend
+read/write budgets in connection setup and `CLUSTER SLOTS`. With DB 0, no client
+name and identity reporting disabled, a conservative socket-budget bound for
+fresh connections is `N * (DialTimeout + 3 * (ReadTimeout + WriteTimeout))`:
+HELLO, optional AUTH fallback, then SLOTS. Store defaults give **23N seconds**;
+pool waits and host scheduling can add time. A foreground operation's earlier
+context deadline cuts this short. Background topology reloads use their own
+background context and can consume the full source sweep after the 10-second
+refresh interval. This is a liveness
+tradeoff, not a wider ownership or consent deadline.
+
+`relais_store_commands_total` counts logical store commands and pipeline
+commands, excluding connection `HELLO`, `AUTH`, `SELECT` and `CLIENT SETINFO`. Library
+wire retries and connection setup remain in `relais_store_wire_commands_total`
+and transport-byte metrics. Move diagnostics likewise exclude handshake commands.
 
 [Local Cluster tests](dev/redis-cluster.md) exercise calls, planned moves,
 SIGKILL worker takeover, same-host relay standby takeover, all-primary route

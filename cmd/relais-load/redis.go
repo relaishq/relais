@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/nettopology"
 	"github.com/relaishq/relais/internal/redisendpoint"
 )
@@ -54,7 +54,7 @@ func pingRedis(ctx context.Context, addr, password string) error {
 	if err := redisendpoint.ValidateDev(addr); err != nil {
 		return err
 	}
-	client := redis.NewClient(&redis.Options{Addr: addr, Password: password, MaxRetries: -1})
+	client := redis.NewClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: addr, Password: password, MaxRetries: -1})
 	defer func() { _ = client.Close() }()
 	return client.Ping(ctx).Err()
 }

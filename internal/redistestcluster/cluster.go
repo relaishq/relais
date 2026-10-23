@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/redistestenv"
 )
@@ -68,7 +68,7 @@ func StartWithOptions(t *testing.T, options Options) []string {
 	if err := cleanupStaleServers(ctx); err != nil {
 		t.Fatal(err)
 	}
-	clientOptions := redis.Options{Username: options.Username, Password: options.Password, MaxRetries: -1, DialTimeout: time.Second, ReadTimeout: time.Second}
+	clientOptions := redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Username: options.Username, Password: options.Password, MaxRetries: -1, DialTimeout: time.Second, ReadTimeout: time.Second}
 	if options.CAFile != "" {
 		roots := x509.NewCertPool()
 		data, err := os.ReadFile(options.CAFile)
@@ -196,7 +196,7 @@ func StartWithOptions(t *testing.T, options Options) []string {
 			replicaReady := strings.Contains(replication, "role:slave") && strings.Contains(replication, "master_link_status:up")
 			if strings.Contains(replication, "role:master") && strings.Contains(replication, "connected_slaves:1") {
 				id, idErr := client.Do(ctx, "CLUSTER", "MYID").Text()
-				replicas, replicasErr := client.ClusterSlaves(ctx, id).Result()
+				replicas, replicasErr := client.Do(ctx, "CLUSTER", "REPLICAS", id).StringSlice()
 				// A replica can finish its link before the primary's cluster gossip knows
 				// its role. Failover tests need both views settled, not just TCP readiness.
 				replicaReady = idErr == nil && replicasErr == nil && len(replicas) == 1

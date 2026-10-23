@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/redisendpoint"
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/relaishq/relais/pkg/util/bootstrap"
@@ -98,7 +98,7 @@ func TestRedisTLSACLIntegration(t *testing.T) {
 	})
 	pair, err := tls.LoadX509KeyPair(cert, key)
 	require.NoError(t, err)
-	admin := redis.NewClient(&redis.Options{Addr: addr, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, Certificates: []tls.Certificate{pair}}, DialTimeout: 200 * time.Millisecond, ReadTimeout: 200 * time.Millisecond, WriteTimeout: 200 * time.Millisecond, MaxRetries: -1})
+	admin := redis.NewClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: addr, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, Certificates: []tls.Certificate{pair}}, DialTimeout: 200 * time.Millisecond, ReadTimeout: 200 * time.Millisecond, WriteTimeout: 200 * time.Millisecond, MaxRetries: -1})
 	t.Cleanup(func() { _ = admin.Close() })
 	startup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -125,7 +125,7 @@ func TestRedisTLSACLIntegration(t *testing.T) {
 	require.NoError(t, admin.Do(startup, "ACL", "SETUSER", username, "on", ">"+password, "~*", "+@all").Err())
 	require.NoError(t, admin.Do(startup, "ACL", "SETUSER", "default", "off").Err())
 	require.NoError(t, admin.Close())
-	control := redis.NewClient(&redis.Options{Addr: addr, Username: username, Password: password, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, Certificates: []tls.Certificate{pair}}, MaxRetries: -1})
+	control := redis.NewClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: addr, Username: username, Password: password, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, Certificates: []tls.Certificate{pair}}, MaxRetries: -1})
 	t.Cleanup(func() { _ = control.Close() })
 	wrongCA, _, _, _ := redisTLSCertificates(t, t.TempDir())
 	cases := []struct {

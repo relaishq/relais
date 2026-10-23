@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
@@ -244,7 +244,7 @@ func TestRedisUnknownClaimAndTransferReconcileWithoutReplay(t *testing.T) {
 			r := testRedis(t)
 			hook := &lostResponseHook{op: op}
 			r.maintenance.Wait()
-			r.client.AddHook(hook)
+			r.client.AddHook(redisFaultHook{hook})
 			ctx := context.Background()
 			a, b := netip.MustParseAddrPort("127.0.0.1:1"), netip.MustParseAddrPort("127.0.0.1:2")
 			lease, err := r.Claim(ctx, "uncertain", a, time.Minute)
@@ -302,7 +302,7 @@ func TestRedisUnknownMutationReturnsTransientWithoutReplay(t *testing.T) {
 			require.NoError(t, err)
 			hook := &lostResponseHook{op: op}
 			r.maintenance.Wait()
-			r.client.AddHook(hook)
+			r.client.AddHook(redisFaultHook{hook})
 			switch op {
 			case "renew":
 				_, err = r.Renew(ctx, lease, time.Minute)
@@ -355,7 +355,7 @@ func TestRedisDroppedReplyAndFailedReconcile(t *testing.T) {
 			}
 			hook := &failedReconcileHook{lostResponseHook: lostResponseHook{op: op}}
 			r.maintenance.Wait()
-			r.client.AddHook(hook)
+			r.client.AddHook(redisFaultHook{hook})
 			if op == "claim" {
 				lease, err = r.Claim(ctx, "fault", a, time.Minute)
 			} else {

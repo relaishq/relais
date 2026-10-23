@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	"github.com/relaishq/relais/internal/capacity"
 	"github.com/relaishq/relais/internal/clusterprocess"
 	"github.com/relaishq/relais/internal/loadgen"
@@ -928,7 +928,7 @@ func (t *topology) checkSoakLeaks(generators []generator) loadgen.LeakReport {
 	for i := len(t.processes) - 1; i >= 1; i-- {
 		t.processes[i].Stop()
 	}
-	client := redis.NewClient(&redis.Options{Addr: t.RedisAddr, Password: t.RedisPassword, MaxRetries: -1, ReadTimeout: time.Second, WriteTimeout: time.Second})
+	client := redis.NewClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: t.RedisAddr, Password: t.RedisPassword, MaxRetries: -1, ReadTimeout: time.Second, WriteTimeout: time.Second})
 	keys, err := scanSoakKeys(ctx, client, t.Prefix)
 	l.StoreKeys = keys
 	l.ScanControls = soakScanControls(keys, t.Prefix)
