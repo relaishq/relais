@@ -40,10 +40,18 @@ func (m *moveRecovery) waitForTarget(ctx context.Context, pending *moveTransfer)
 	changed := p.workerChanged
 	p.mu.Unlock()
 	wait := min(remaining, p.config.CheckInterval)
+	var err error
 	if m.targetWait != nil {
-		return m.targetWait(ctx, changed, wait)
+		err = m.targetWait(ctx, changed, wait)
+	} else {
+		err = waitTargetObservation(ctx, changed, wait, pending.targetDeadline)
 	}
-	return waitTargetObservation(ctx, changed, wait, pending.targetDeadline)
+	// A timer or observation can win the select at D before ctx.Done. Finish
+	// the known no-target outcome instead of entering selection with expiry.
+	if err == nil && !m.observationTime().Before(pending.targetDeadline) {
+		return ErrTargetWaitExpired
+	}
+	return err
 }
 
 func waitTargetObservation(ctx context.Context, changed <-chan struct{}, wait time.Duration, deadline time.Time) error {
@@ -73,6 +81,13 @@ func (m *moveRecovery) preserveSource(ctx context.Context, source *registration,
 		p.mu.Unlock()
 		return true
 	}
+	// D bounds waiting and preservation, not adoption of an eligible target.
+	// A queued call must still use the existing adoption budgets after D.
+	if !pending.targetDeadline.IsZero() && !m.observationTime().Before(pending.targetDeadline) {
+		pending.sourceNeedsHeartbeat = false
+		p.mu.Unlock()
+		return false
+	}
 	alive := m.sourceAliveLocked(source, pending.firstDetection)
 	pending.sourceNeedsHeartbeat = !alive
 	pending.sourceChecked = source.observation.lastHeartbeat
@@ -87,7 +102,6 @@ func (m *moveRecovery) preserveSource(ctx context.Context, source *registration,
 	// A failed/slow inventory check must not make ordinary heartbeats restart
 	// selection forever. Only a prior rejection for liveness needs that retry.
 	pending.sourceNeedsHeartbeat = false
-	pending.sourceConfirmation = true
 	deadline := time.Now().Add(250 * time.Millisecond)
 	if !pending.targetDeadline.IsZero() && pending.targetDeadline.Before(deadline) {
 		deadline = pending.targetDeadline

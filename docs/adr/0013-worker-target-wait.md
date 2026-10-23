@@ -20,7 +20,12 @@ budget is 1.5 s. Default detection is 400 ms plus one 50 ms tick, totaling 1.95 
 against the existing 2 s hard-kill gate. Charging a longer observed host pause
 against the same outage limit prevents another full recovery window. These are
 work bounds, not guarantees under arbitrary scheduling delay. Retries and
-returning heartbeats never renew D; transfer/resume share its remaining time.
+returning heartbeats never renew D. D bounds the no-target wait and source
+preservation, not ordinary adoption. After D, skip source confirmation and
+preservation: an eligible target still transfers and resumes under the existing
+adoption, checkpoint-age and counter limits; no target reaches typed loss.
+Calls queued behind the recovery parallelism limit, or retried in later cycles,
+must not lose an eligible first selection merely because D has passed.
 An eligible first selection adds no wait. A failed source confirmation does not
 let continuing heartbeats restart selection indefinitely. Only a prior rejection
 for liveness needs another heartbeat check before issuing Transfer.
@@ -51,6 +56,9 @@ before issuing Transfer. A heartbeat between the last liveness rejection and
 that atomic decision triggers a new confirmation.
 
 Preservation abandons all pending unrequested recoveries for that worker together.
+Before issuing Transfer, each job checks the preservation decision, its death
+cycle and its pending registration under the same lock. An abandoned job cannot
+issue Transfer after a later cycle begins, even if confirmation I/O outlives it.
 The worker returns to service without a rejoin challenge, epoch/route changes,
 or takeover/loss accounting. Drain and relay-registration gates remain intact.
 Once any Transfer is issued, preservation is forbidden for the rest of the death
@@ -69,6 +77,9 @@ four no-target wakeups before a late target, preservation of two calls together,
 a second call recovering after the first Transfer, heartbeat arrival at the
 selection/Transfer boundary, ownership and inventory re-checks, bounded slow
 confirmation, selective wakeups through Heartbeat, and planned/rebuild isolation.
+They also cover abandoned jobs crossing death cycles, preservation/Transfer
+publication races, requested Transfer marking a dead source, and queued adoption
+after the target-wait deadline.
 These protocol-boundary tests do not establish real media or process timing.
 The existing hard-kill completion/media-gap, consent and decryption assertions
 remain unchanged.

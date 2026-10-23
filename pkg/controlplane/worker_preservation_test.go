@@ -13,7 +13,7 @@ import (
 
 func (s *stalledPool) addCall(t *testing.T) sessionstore.Lease {
 	t.Helper()
-	id, _, err := s.a.fakeWorker.CreateSession(context.Background(), "offer")
+	id, _, err := s.a.CreateSession(context.Background(), "offer")
 	require.NoError(t, err)
 	lease, err := s.p.store.Get(context.Background(), id)
 	require.NoError(t, err)

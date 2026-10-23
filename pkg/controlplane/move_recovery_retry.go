@@ -43,11 +43,9 @@ type moveTransfer struct {
 	attemptLimit            int
 	firstDetection          time.Time
 	targetDeadline          time.Time
-	waitedForTarget         bool
 	transferIssued          bool
 	sourceChecked           time.Time
 	sourceNeedsHeartbeat    bool
-	sourceConfirmation      bool
 	unrequested             bool
 	deathCycle              uint64
 	transientResume         bool
@@ -285,7 +283,6 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 		outcome = &res
 	}
 
-	targetBounded := false
 	for noTargetAttempts := 0; pending.transientResume || !pending.budgetStarted.IsZero() || pending.attempts < pending.attemptLimit; {
 		p.mu.Lock()
 		stale := pending.unrequested && pending.deathCycle != source.observation.deathCycle
@@ -295,18 +292,6 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 		}
 		if m.preserveSource(ctx, source, pending) {
 			return
-		}
-		if pending.unrequested && (pending.waitedForTarget || pending.sourceConfirmation) && !pending.transientResume {
-			if !m.observationTime().Before(pending.targetDeadline) {
-				complete(true, ErrTargetWaitExpired)
-				return
-			}
-			if !targetBounded {
-				var targetStop context.CancelFunc
-				ctx, targetStop = context.WithDeadline(ctx, pending.targetDeadline)
-				defer targetStop()
-				targetBounded = true
-			}
 		}
 		if !pending.budgetStarted.IsZero() && time.Since(pending.budgetStarted) >= takeoverBudget {
 			res.LossCause = "move_budget_exhausted"
@@ -377,7 +362,6 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 				}
 				continue
 			}
-			pending.waitedForTarget = true
 			if waitErr := m.waitForTarget(ctx, pending); waitErr != nil {
 				if errors.Is(waitErr, ErrTargetWaitExpired) {
 					if m.preserveSource(ctx, source, pending) {
@@ -404,7 +388,10 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			m.beforeTransfer()
 		}
 		p.mu.Lock()
-		if pending.unrequested && source.observation.deathPreserved {
+		// Confirmation I/O can outlive preservation and even the next death.
+		// Only a still-registered job for this cycle may issue Transfer.
+		if pending.unrequested && (source.observation.deathPreserved ||
+			pending.deathCycle != source.observation.deathCycle || m.pending[source][c.id] != pending) {
 			p.mu.Unlock()
 			p.unreserve(target)
 			return
