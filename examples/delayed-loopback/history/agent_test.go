@@ -71,3 +71,37 @@ func TestChurnRefusalRetainsAcceptedHistory(t *testing.T) {
 	require.Equal(t, before.History, after.History)
 	require.EqualValues(t, 1, a.state.Refused)
 }
+
+func TestFullSizeFixtureSaveRestoreAndChurn(t *testing.T) {
+	for _, split := range []bool{false, true} {
+		for _, churn := range []bool{false, true} {
+			reg := Registration(split, churn, true)
+			args := agent.FactoryArgs{MaxStateBytes: reg.Limits.MaxStateBytes}
+			if split {
+				args.MaxStateBytes, args.MaxHistoryBytes = 3072, 8192
+			}
+			a := reg.Factory(args).(*Agent)
+			before, err := a.Save(context.Background())
+			require.NoError(t, err)
+			if split {
+				require.Len(t, before.Bytes, 3072)
+				require.Len(t, before.History, 8192)
+			} else {
+				require.Len(t, before.Bytes, 11275)
+				require.Empty(t, before.History)
+			}
+			b := reg.Factory(args).(*Agent)
+			require.NoError(t, b.Restore(context.Background(), before))
+			require.Equal(t, 3072, b.state.RestoredWorkingBytes)
+			require.Equal(t, 8192, b.state.RestoredHistoryBytes)
+			b.state.Inputs = 399
+			_, err = b.Handle(context.Background(), agent.Event{Kind: agent.AudioInput, Input: &legacy.Input{Progress: legacy.Progress{SSRC: 7, Index: 400}, Payload: []byte{0xf8, 0xff, 0xfe}}})
+			require.NoError(t, err)
+			after, err := b.Save(context.Background())
+			require.NoError(t, err)
+			require.Len(t, after.Bytes, len(before.Bytes))
+			require.Len(t, b.history, 8192)
+			require.NoError(t, a.Restore(context.Background(), after))
+		}
+	}
+}

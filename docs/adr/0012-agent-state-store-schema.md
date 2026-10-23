@@ -199,21 +199,22 @@ B`, while eight use **8,409 B**. Keep Demo A at four; these are byte examples, n
 minutes or an unbounded call. Recheck its actual worst case through Save after the app schema change, including escaping
 and non-ASCII text.
 
-Proposed operator allocations for split mode (legacy mode keeps existing flag meanings):
+Revised operator allocations for split mode (#214; full-size hosted validation pending). Legacy defaults remain
+7,168 B, 81,920 B/s and 28,672 B. Zero cap/rate/burst flags select the session profile; explicit values apply to both:
 
 | Allocation | Proposed default | Purpose |
 | --- | ---: | --- |
-| Hot bytes/checkpoint | 7,168 B | Combined ciphertext/framing for transport/host plus changed working component |
+| Hot bytes/checkpoint | 6,144 B | Combined ciphertext/framing for transport/host plus changed working component |
 | Setup bytes | 4,096 B | Initial encrypted setup, separately admitted |
 | History bytes/write | 8,448 B | Raw history plus a proposed 256 B framing reserve |
 | Total checkpoint transaction | 20,480 B | Bounds initialization/forced writes containing all components |
-| Successful payload rate | **80,000 B/s** | Gate-derived below; `10*7,168+7,168 = 78,848 B/s` reserves periodic plus one hot forced write/s |
+| Successful payload rate | **70,000 B/s** | `10*6,144+6,144 = 67,584 B/s` reserves periodic plus one hot forced write/s |
 | Payload burst | **40,960 B** | Two maximum transactions: initialization/rotation plus one required write; same two-write minimum as ADR 0010 |
 
 Keep the **100 ms** checkpoint cadence, forced intent barriers and actual byte accounting (`agent_limits.go`, ADRs
 0002/0010). Rework validation to reserve the hot checkpoint independently of cold components, rather than `wholeMax *
-cadence`. Cold writes share spare refill and burst; the maximum hot/forced pattern leaves only `80,000-78,848 = 1,152
-B/s` for them, so a full history cannot change every five seconds under that maximum pattern. Admit against actual
+cadence`. Cold writes share spare refill and burst; the maximum hot/forced pattern leaves only `70,000-67,584 = 2,416
+B/s` for them. Cold changes and rotation share that refill and the burst. Admit against actual
 sizes/tokens; the traffic projection below is less than the caps. Debit changed ciphertexts **and published
 metadata/field bytes**, carry quota across moves, and reserve a maximum in-flight transaction on exact export. Count
 every attempted protocol byte, retries and script loads in traffic gates. History churn does not earn a slower transport
@@ -263,7 +264,7 @@ expected-root/checkpoint arguments beyond the packed fields. These RESP counts a
 `sum(len(k)+len(str(len(k)))+5 for k in keys)`; they assume the stated name lengths, warm scripts and no retries.
 Measure actual escaped IDs/prefixes/commands.
 
-Thus the provisional ceiling is `131,072-31,371-3,256-12,757-800 = 82,888 B/s`; choose **80,000 B/s**, leaving **2,888
+The original, superseded projection derived a provisional ceiling of `131,072-31,371-3,256-12,757-800 = 82,888 B/s`; it chose **80,000 B/s**, leaving **2,888
 B/s** for remaining session overhead, forced-command attempts and retries. Without operation-specific key lists this
 allowance does not hold: block activation pending measurements. The high-churn projection plus those clients/overheads
 is **119,488.4 B/s**. Burst is **40,960 B**, not a rate increase: two 20,480 B writes cover initialization/rotation and
@@ -276,6 +277,44 @@ history log has no supporting budget evidence. Splitting working/history asks ap
 working state more than an undivided 8 KiB budget would. **Change this if:** actual v10 encoding fails admission,
 representative history churn exceeds the rate, or measured Save/restore costs fail the capacity gate. Stop default
 activation and return the measurements for a revised allocation; do not raise policy ceilings to make the test pass.
+
+### Revised measurement and activation gate (#214, 2026-10-22)
+
+`TestSplitFullSizeCallFitsHotCap` measures **5,982 B hot**, with **162 B (2.64%)** headroom to 6,144 B:
+2,490 B transport ciphertext + 3,108 B working ciphertext + 384 B references/framing. It covers a **1:1 call with two
+tracks**, the fixture's track IDs, IPv6 with a zone, maximal counters/timestamps, full **2,048 B host metadata**,
+full **3,072 B working state**, and maximum packed owner/reference metadata. It also encodes full 8,192 B history.
+This replaces the earlier hot-size estimate for that fixture. Negotiated text and SSRC count are not globally bounded
+by that test. Actual encoded admission still refuses larger Saves; `TestSplitTransportGrowthRefusesSaveWithoutLosingCall`
+checks typed Capacity delivery, rollback and continued input/checkpoints after transport growth makes a Save exceed the cap.
+
+Recomputing [hosted run 39441746025](https://github.com/relaishq/relais/actions/runs/39441746025), proxy bins 10–30,
+reproduces **132,347.74 B request+reply/call-second** and **74,849.14 B published payload/call-second** during churn.
+Its worst contiguous 10-second mean is **133,427.20 B/call-second**, bins 18–27, above 131,072 B by **2,355.20 B**.
+The lifecycle average, 130,318.20 B/call-second, hides that failure. Legacy/steady's same 21 bins average 186,070.81 B,
+with a worst ten-bin mean of 189,100.05 B; split/steady averages 96,417.24 B, worst 97,021.55 B. That run has no legacy
+churn arm and no explicit churn boundary. These are retrospective bin selections, not new full-size evidence.
+
+The largest previously observed split non-payload residual, **57,916.63 B/s**, plus the revised **70,000 B/s** gives
+**3,155.37 B/s (2.41%) projected headroom**. This is a projection from one runner, not proof of the new default.
+The burst, transaction/component allocations and move quotas remain unchanged. **Activation stays blocked pending the
+full-size hosted rerun.** Do not raise ceilings or choose a replacement default if that run fails; return the measured
+trade-off (working size, cadence, calls per primary, or session protocol overhead) to the owner.
+
+The existing `custom-capacity-report.py` path checks whole media/phase/lifecycle traffic and every measured split phase's
+worst contiguous **10 full one-second request+reply bins**, normalized by calls. Phase intervals use the observer's
+monotonic bin clock. Exclude partial edge bins and never join bins across an event. Missing/invalid bins block evidence;
+churn must contain at least ten contiguous full bins. A sustained mean above **131,072 B/call-second** fails even when
+the whole-window gate passes. Ten seconds covers 100 periodic checkpoints and smooths short scheduling/burst effects;
+it is not a per-second burst-capacity claim.
+
+The matched driver opts into `RELAIS_HISTORY_FULL_SIZE=1` for the history worker process. Existing default fixtures stay
+2,871 B working / 4,205 B history. The opt-in fixture uses exactly 3,072 / 8,192 B in split mode and an explicit larger
+legacy registration/whole-blob budget for the matched legacy comparison. Per-call diagnostics must show the full split sizes on every call. The existing planned move restores one call; its
+Restore witness must show the full sizes. Kill, drain and rotation must show full-size Restore witnesses for every
+survivor. No shipped command/package imports the example.
+Hosted plan: **mode=split-capacity, split_callers=2, duration=60s**, default Save budgets; expected 15–18 minutes.
+**NOT-RUN — revised-default full-size hosted traffic, age and recovery gates; managed-store validation.**
 
 ## 3. Crash contract and developer meaning
 
@@ -426,9 +465,8 @@ authorized by this ADR.
    repeat acknowledged-write failover, slot redirects, TLS, age/latency and loaded move/drain tests.
    Free local Cluster proves protocol behavior, not managed log durability or per-primary capacity.
 
-Publish commit/build, flags, fixture, runner, topology, call count, change rate and raw reports with each result. No
-runs of the new schema exist yet: **NOT-RUN — crash survival, traffic savings, checkpoint ages, default admission and
-managed capacity.** If the byte adapter/allocation fails, stop activation; cheapest next data is the local
+Publish commit/build, flags, fixture, runner, topology, call count, change rate and raw reports with each result. The dated observations above establish only their stated fixture/run scope. **NOT-RUN — revised-default full-size
+hosted admission and managed capacity.** If the byte adapter/allocation fails, stop activation; cheapest next data is the local
 codec/worst-case fixture test, then the free custom capacity job. Update guarantees and agent guide only with scoped
 observed results.
 

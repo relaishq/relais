@@ -94,17 +94,29 @@ when limits are zero. Save/Restore cover both fields as one accepted pair. Legac
 v8/v9 zero limits keep the 1,024-byte working-only profile; v1 keeps its 8,192-byte
 working ceiling. Explicit settings keep their meaning. The working ceiling is
 configurable up to 64 KiB; larger components require actual encoded-size and rate
-admission. Split captures retain the 7,168-byte hot cap, a separate 2,048-byte
+admission. Split captures use a 6,144-byte hot cap, a separate 2,048-byte
 host allowance and separate move memory. No state is truncated.
 
-Split rate/burst defaults are 80,000 B/s and 40,960 B, independently of legacy
-81,920 B/s and 28,672 B. The hot reservation is `10*7,168+7,168 = 78,848 B/s`,
+Split rate/burst defaults are 70,000 B/s and 40,960 B, independently of legacy
+81,920 B/s and 28,672 B. The hot reservation is `10*6,144+6,144 = 67,584 B/s`,
 not the whole transaction times cadence. Cold history and key rotation share
 spare tokens. Intent writes and active history holds preserve one hot checkpoint.
 Required adoption and transport writes without a hold can spend their full
 carried quota. A store-chosen rotation during such a write can consume that
-reserve; 80,000 B/s refills one maximum hot checkpoint within 100 ms. A separate
+reserve; 70,000 B/s refills one maximum hot checkpoint within 100 ms. A separate
 rotation budget needs a store API change and is outside this slice.
+Zero cap/rate/burst flags select the session profile; explicit values keep their
+meaning in either layout. Legacy cap/rate/burst stay 7,168 B / 81,920 B/s / 28,672 B.
+The real codec test `TestSplitFullSizeCallFitsHotCap` encodes 5,982 B hot (162 B
+headroom): a 1:1 two-track call with fixture IDs, IPv6, maximal counters,
+3,072 B working state and the full 2,048 B host allowance. It does not bound
+arbitrary negotiated text or SSRC growth. Actual encoded admission refuses
+larger Saves. `TestSplitTransportGrowthRefusesSaveWithoutLosingCall` verifies
+typed Capacity delivery, rollback and continued input/checkpoints.
+**Pending:** the revised-default full-size hosted run. Keep split admission off
+until whole-window and worst contiguous 10-full-second phase means both fit
+131,072 B request+reply per call-second; churn needs at least ten full bins.
+
 History admission checks the candidate
 transaction plus that hot reserve before acceptance, with a maximum transaction
 also reserved for an unresolved writer. An admitted pair holds a byte reservation

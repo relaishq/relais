@@ -267,21 +267,30 @@ These worker-only flags set operator ceilings:
 
 | Flag | Legacy default | Meaning |
 | --- | ---: | --- |
-| `-agent-max-snapshot-bytes` | 7168 | Whole encrypted legacy snapshot; hot v10 checkpoint cap |
-| `-agent-snapshot-bytes-per-second` | 81920 | Successful snapshot payload bytes per session-second |
-| `-agent-snapshot-burst-bytes` | 28672 | Snapshot byte burst per session |
+| `-agent-max-snapshot-bytes` | 0 → 7168 | Whole encrypted legacy snapshot; hot v10 checkpoint cap |
+| `-agent-snapshot-bytes-per-second` | 0 → 81920 | Successful snapshot payload bytes per session-second |
+| `-agent-snapshot-burst-bytes` | 0 → 28672 | Snapshot byte burst per session |
 | `-agent-move-bytes-per-session` | 1048576 | Move memory per session |
 | `-agent-move-bytes-total` | 67108864 | Worker move memory, including export scratch |
 
-Split sessions use **80,000 B/s** and a **40,960 B burst** when the rate/burst
+Split sessions use a **6,144 B hot cap**, **70,000 B/s** and a **40,960 B burst** when the cap/rate/burst
 flags are zero (the flag defaults). Explicit flag values apply to both profiles.
-The 7,168-byte hot cap includes transport, host metadata, changed working
+The 6,144-byte hot cap includes transport, host metadata, changed working
 ciphertext, and published metadata/fields. Setup and history are cold components;
 their default encoded caps are 4,096 and 8,448 bytes. A full transaction fits
 20,480 bytes; the burst holds two. The 100 ms cadence plus one maximum forced
-hot write per second reserves `11 × 7,168 = 78,848 B/s`, leaving 1,152 B/s for
+hot write per second reserves `11 × 6,144 = 67,584 B/s`, leaving 2,416 B/s for
 cold changes at that maximum pattern. These are admission bounds, not measured
 store traffic or capacity claims.
+
+`TestSplitFullSizeCallFitsHotCap` measures **5,982 B**, leaving **162 B** of hot headroom,
+for a 1:1 call with two tracks, fixture track IDs, IPv6, maximal counters and full
+2,048 B host metadata plus 3,072 B working state. Larger negotiated transport
+state still faces actual encoded admission. `TestSplitTransportGrowthRefusesSaveWithoutLosingCall`
+proves that an oversized Save receives typed Capacity, restores the accepted
+state and permits continued input/checkpoints. The revised defaults' full-size
+hosted validation is **pending**; keep split admission off until it passes the
+whole-window and worst contiguous 10-full-second phase gates ([ADR 0012](adr/0012-agent-state-store-schema.md)).
 
 History updates must fit their raw and actual encoded limits and the available
 byte bucket **before callback acceptance**. Admission conservatively holds the

@@ -49,3 +49,40 @@ func TestSplitWorkingDeclarationRefusedBeforeStartup(t *testing.T) {
 	require.ErrorIs(t, err, agent.ErrStateTooLarge)
 	require.Zero(t, calls)
 }
+
+func TestSnapshotFlagsResolveSessionProfilesAndExplicitOverrides(t *testing.T) {
+	for _, split := range []bool{false, true} {
+		for _, zero := range []bool{false, true} {
+			var args []string
+			if split {
+				args = append(args, "-agent-split-checkpoints")
+			}
+			if zero {
+				args = append(args, "-agent-max-snapshot-bytes=0", "-agent-snapshot-bytes-per-second=0", "-agent-snapshot-burst-bytes=0")
+			}
+			limits, err := SnapshotLimitsForArgs(args)
+			require.NoError(t, err)
+			expected := mediaworker.SnapshotLimits{MaxBytes: 7168, BytesPerSecond: 81920, BurstBytes: 28672, MoveBytesPerSession: 1 << 20, MoveBytesTotal: 64 << 20}
+			if split {
+				expected = expected.SplitDefaults()
+				expected.MaxBytes, expected.BytesPerSecond, expected.BurstBytes = 6144, 70000, 40960
+			}
+			require.Equal(t, expected, limits)
+			flags, raw := newWorkerFlags(Options{})
+			require.NoError(t, flags.Parse(args))
+			require.Zero(t, raw.limits.MaxBytes, "raw zero must survive for legacy adoption and split selection")
+			require.NoError(t, limits.Validate())
+			args = append(args, "-agent-max-snapshot-bytes=9000", "-agent-snapshot-bytes-per-second=120000", "-agent-snapshot-burst-bytes=60000")
+			limits, err = SnapshotLimitsForArgs(args)
+			require.NoError(t, err)
+			require.Equal(t, 9000, limits.MaxBytes)
+			require.Equal(t, 120000, limits.BytesPerSecond)
+			require.Equal(t, 60000, limits.BurstBytes)
+		}
+	}
+	_, err := SnapshotLimitsForArgs([]string{"-agent-max-snapshot-bytes=invalid"})
+	require.Error(t, err)
+	// Preflight must resolve zero without changing the actual per-session input.
+	err = Run(context.Background(), nil, Options{})
+	require.NotErrorIs(t, err, agent.ErrCapacity)
+}

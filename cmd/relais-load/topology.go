@@ -140,6 +140,9 @@ func startConfiguredTopology(ctx context.Context, m *clusterprocess.Manager, bin
 	}
 	start := func(name string, args ...string) (*clusterprocess.Child, clusterprocess.Ready, error) {
 		childEnv := env
+		if strings.HasPrefix(name, "worker-") {
+			childEnv = append(append([]string(nil), env...), studyWorkerEnvironment(worker, observe)...)
+		}
 		if name == "relay" {
 			childEnv = withoutSessionKeys(env)
 		}

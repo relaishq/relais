@@ -46,8 +46,11 @@ func (l SnapshotLimits) defaults() SnapshotLimits {
 func (l SnapshotLimits) SplitDefaults() SnapshotLimits { return l.splitDefaults() }
 
 func (l SnapshotLimits) splitDefaults() SnapshotLimits {
+	if l.MaxBytes == 0 {
+		l.MaxBytes = 6144
+	}
 	if l.BytesPerSecond == 0 {
-		l.BytesPerSecond = 80000
+		l.BytesPerSecond = 70000
 	}
 	if l.BurstBytes == 0 {
 		l.BurstBytes = 40960

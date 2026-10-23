@@ -34,22 +34,39 @@ type studyAges struct {
 	Samples       int     `json:"samples"`
 }
 type splitObservation struct {
-	Ages            studyAges            `json:"ages"`
-	Inputs          map[string][2]uint64 `json:"accepted_input_progress"`
-	LiveCalls       int                  `json:"live_calls"`
-	LostCalls       uint64               `json:"lost_calls"`
-	Arm             string               `json:"arm"`
-	Scenario        string               `json:"scenario"`
-	WorkerArgs      []string             `json:"worker_args"`
-	SetupFinishedAt time.Time            `json:"setup_finished_at"`
-	Store           storeTrace           `json:"store"`
-	Inventory       map[byte]uint64      `json:"live_key_id_inventory,omitempty"`
-	InventoryCalls  int                  `json:"inventory_live_calls,omitempty"`
-	InventoryAt     time.Time            `json:"inventory_at,omitzero"`
-	Survivors       map[string]int       `json:"survivors,omitempty"`
-	Refused         uint64               `json:"history_refusals"`
-	InputSamples    int                  `json:"fixture_samples"`
+	OperatorBudgets    map[string]int              `json:"operator_budgets"`
+	FixtureEnvironment map[string]string           `json:"fixture_environment,omitempty"`
+	FixtureSizes       map[string]studyFixtureSize `json:"fixture_sizes,omitempty"`
+	Ages               studyAges                   `json:"ages"`
+	Inputs             map[string][2]uint64        `json:"accepted_input_progress"`
+	LiveCalls          int                         `json:"live_calls"`
+	LostCalls          uint64                      `json:"lost_calls"`
+	Arm                string                      `json:"arm"`
+	Scenario           string                      `json:"scenario"`
+	WorkerArgs         []string                    `json:"worker_args"`
+	SetupFinishedAt    time.Time                   `json:"setup_finished_at"`
+	Store              storeTrace                  `json:"store"`
+	Inventory          map[byte]uint64             `json:"live_key_id_inventory,omitempty"`
+	InventoryCalls     int                         `json:"inventory_live_calls,omitempty"`
+	InventoryAt        time.Time                   `json:"inventory_at,omitzero"`
+	Survivors          map[string]int              `json:"survivors,omitempty"`
+	Refused            uint64                      `json:"history_refusals"`
+	InputSamples       int                         `json:"fixture_samples"`
 }
+type studyFixtureSize struct {
+	Working         int `json:"working_bytes"`
+	History         int `json:"history_bytes"`
+	RestoredWorking int `json:"restored_working_bytes"`
+	RestoredHistory int `json:"restored_history_bytes"`
+}
+
+func studyWorkerEnvironment(worker workerdriver.Options, observe bool) []string {
+	if observe && worker.Subcommand == "history" {
+		return []string{"RELAIS_HISTORY_FULL_SIZE=1"}
+	}
+	return nil
+}
+
 type splitCapacityStep struct {
 	capacityStep
 	Measurement *splitObservation `json:"measurement"`
@@ -111,7 +128,14 @@ func runSplitCapacity(ctx context.Context, m *clusterprocess.Manager, c config, 
 		stepConfig.Capacity = true
 		stepConfig.SplitCapacity = false
 		stepConfig.Worker = studyWorker(c.Bin, arm, scenario)
-		stepConfig.Study = &splitObservation{Arm: arm, Scenario: scenario, WorkerArgs: stepConfig.Worker.Args}
+		budgets, err := workerOperatorBudgets(stepConfig.Worker.Args)
+		if err != nil {
+			return err
+		}
+		stepConfig.Study = &splitObservation{Arm: arm, Scenario: scenario, WorkerArgs: stepConfig.Worker.Args, OperatorBudgets: budgets}
+		if len(studyWorkerEnvironment(stepConfig.Worker, true)) > 0 {
+			stepConfig.Study.FixtureEnvironment = map[string]string{"RELAIS_HISTORY_FULL_SIZE": "1"}
+		}
 		stepConfig.Events = []loadgen.Event{{After: 6 * time.Second, Kind: "move", Count: 1, Worker: 2}}
 		if scenario == "rotation" {
 			stepConfig.Duration = max(c.Duration, 65*time.Second)
@@ -190,10 +214,13 @@ func collectFixtureEvidence(r loadgen.RunReport, o *splitObservation) {
 
 	latest := map[string]uint64{}
 	o.Inputs = map[string][2]uint64{}
+	o.FixtureSizes = map[string]studyFixtureSize{}
 	for _, sample := range r.Telemetry.Agents.Samples {
 		var state struct {
-			Refused uint64 `json:"refused"`
-			Inputs  uint64 `json:"inputs"`
+			Refused         uint64 `json:"refused"`
+			Inputs          uint64 `json:"inputs"`
+			RestoredWorking int    `json:"restored_working_bytes"`
+			RestoredHistory int    `json:"restored_history_bytes"`
 		}
 		if json.Unmarshal(sample.Status.App, &state) == nil {
 			o.InputSamples++
@@ -204,6 +231,12 @@ func collectFixtureEvidence(r loadgen.RunReport, o *splitObservation) {
 			progress[1] = state.Inputs
 			o.Inputs[sample.Status.ID] = progress
 			latest[sample.Status.ID] = max(latest[sample.Status.ID], state.Refused)
+			size := o.FixtureSizes[sample.Status.ID]
+			size.Working = max(size.Working, len(sample.Status.State.Bytes))
+			size.History = max(size.History, sample.Status.HistoryBytes)
+			size.RestoredWorking = max(size.RestoredWorking, state.RestoredWorking)
+			size.RestoredHistory = max(size.RestoredHistory, state.RestoredHistory)
+			o.FixtureSizes[sample.Status.ID] = size
 		}
 	}
 	for _, n := range latest {

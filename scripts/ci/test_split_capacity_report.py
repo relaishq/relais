@@ -1,7 +1,7 @@
 import copy
 import unittest
 
-from split_capacity_report import CASES, summarize, valid_rejoin
+from split_capacity_report import CASES, summarize, valid_rejoin, rolling_phase
 
 
 def fixture():
@@ -25,14 +25,26 @@ def fixture():
                            inventory_live_calls=2, live_key_id_inventory={"2": 10},
                            store=dict(phases={p: phase() for p in ("setup", "steady")},
                                       phase_seconds={p: 20 for p in ("setup", "steady")},
-                                      seconds={"0": phase()}))
+                                      seconds={str(i): phase() for i in range(61)},
+                                      phase_intervals={"setup": [dict(start=0, end=20)], "steady": [dict(start=20, end=40)]}))
+        cap, rate, burst = (6144, 70000, 40960) if arm == "after" else ((7168, 81920, 28672) if scenario == "echo" else (24576, 270336, 98304))
+        measurement["operator_budgets"] = dict(max_snapshot_bytes=cap, snapshot_bytes_per_second=rate,
+            snapshot_burst_bytes=burst, move_bytes_per_session=1048576, move_bytes_total=67108864,
+            checkpoint_age_p99_ms=550, snapshot_age_p99_ms=550)
+        if scenario != "echo":
+            measurement["fixture_environment"] = {"RELAIS_HISTORY_FULL_SIZE": "1"}
+            measurement["fixture_sizes"] = {str(i): dict(working_bytes=3072, history_bytes=8192,
+                restored_working_bytes=3072, restored_history_bytes=8192) for i in range(2)}
         if scenario == "rotation":
             measurement["store"]["phases"]["rotation"] = phase()
             measurement["store"]["phase_seconds"]["rotation"] = 11
+            measurement["store"]["phase_intervals"]["rotation"] = [dict(start=40, end=51)]
         if scenario == "history-churn":
             measurement["store"]["phase_seconds"]["steady"] = 9
             measurement["store"]["phases"]["churn"] = phase()
             measurement["store"]["phase_seconds"]["churn"] = 11
+            measurement["store"]["phase_intervals"]["steady"] = [dict(start=20, end=29)]
+            measurement["store"]["phase_intervals"]["churn"] = [dict(start=29, end=40)]
         steps.append(dict(service_outcome="pass", generator_outcome="valid", measurement=measurement,
                           custom_agent=custom, store_commands_per_call_second=70, store_bytes_per_call_second=100000,
                           relay_buffer_enabled=True,
@@ -59,6 +71,50 @@ class SplitCapacityReport(unittest.TestCase):
                 self.assertLess(row["lifecycle_bytes_per_media_call_second"], 131072)
                 self.assertIn("after/history-churn: churn attempts exceed store ceiling", summary["blocking"])
                 self.assertEqual("fail", row["service"])
+
+    def test_sustained_failure_in_every_split_phase_blocks_passing_average(self):
+        for index, phase_name in ((1, "steady"), (3, "steady"), (4, "churn"), (5, "rotation")):
+            with self.subTest(index=index, phase=phase_name):
+                data = fixture()
+                trace = data["steps"][index]["measurement"]["store"]
+                start = int(trace["phase_intervals"][phase_name][0]["start"])
+                for i in range(start, start+10):
+                    trace["seconds"][str(i)].update(request_bytes=2*131073, reply_bytes=0)
+                summary = summarize(data, 10, 20)
+                self.assertIn(f"after/{CASES[index][1]}: {phase_name} sustained 10-second attempts exceed store ceiling", summary["blocking"])
+                self.assertEqual("fail", summary["steps"][index]["service"])
+                self.assertLess(summary["steps"][index]["observed_media_bytes_per_call_second"], 131072)
+
+    def test_missing_full_size_or_budget_evidence_blocks(self):
+        for change in (
+            lambda m: m.pop("fixture_environment"),
+            lambda m: m["fixture_sizes"].pop("0"),
+            lambda m: m["fixture_sizes"]["0"].update(restored_history_bytes=4205),
+            lambda m: m["fixture_sizes"]["0"].update(working_bytes=2871),
+            lambda m: m["operator_budgets"].update(max_snapshot_bytes=7168),
+        ):
+            data = fixture()
+            change(data["steps"][1]["measurement"])
+            self.assertTrue(summarize(data, 10, 20)["blocking"])
+
+    def test_restore_coverage_matches_the_actual_event(self):
+        data = fixture()
+        for index in (1, 4):
+            data["steps"][index]["measurement"]["fixture_sizes"]["0"].update(restored_working_bytes=0, restored_history_bytes=0)
+        self.assertEqual([], summarize(data, 10, 20)["blocking"])
+        data["steps"][1]["measurement"]["fixture_sizes"]["1"].update(restored_working_bytes=0, restored_history_bytes=0)
+        self.assertTrue(summarize(data, 10, 20)["blocking"])
+        for index in (5, 6, 7):
+            data = fixture()
+            data["steps"][index]["measurement"]["fixture_sizes"]["0"].update(restored_working_bytes=0, restored_history_bytes=0)
+            self.assertTrue(summarize(data, 10, 20)["blocking"])
+
+    def test_churn_requires_ten_contiguous_full_bins(self):
+        data = fixture()
+        trace = data["steps"][4]["measurement"]["store"]
+        trace["phase_intervals"]["churn"] = [dict(start=29.1, end=39.9)]
+        trace["phase_seconds"]["churn"] = 10.8
+        self.assertIn("after/history-churn: churn has fewer than 10 contiguous full bins", summarize(data, 10, 20)["blocking"])
 
     def test_missing_churn_phase_blocks_evidence(self):
         data = fixture()
@@ -115,6 +171,58 @@ class SplitCapacityReport(unittest.TestCase):
                 data = copy.deepcopy(fixture())
                 change(data)
                 self.assertTrue(summarize(data, 10, 20)["blocking"])
+
+
+class RollingPhase(unittest.TestCase):
+    def trace(self, values, intervals=None):
+        intervals = intervals or [dict(start=10, end=31)]
+        return dict(seconds={str(i+10): dict(request_bytes=v, reply_bytes=0) for i, v in enumerate(values)},
+                    phase_intervals={"churn": intervals}, phase_seconds={"churn": sum(i["end"]-i["start"] for i in intervals)})
+
+    def test_historical_churn_and_call_denominator(self):
+        values = [275895,258169,266208,262642,278461,259803,273118,241214,271747,258710,276339,262307,280478,244848,266156,239893,306885,261181,249893,251886,272772]
+        self.assertAlmostEqual(132347.7380952381, sum(values)/42)
+        result = rolling_phase(self.trace(values), "churn", 2)
+        self.assertEqual(21, result["full_bins"])
+        self.assertEqual(12, result["window_count"])
+        self.assertEqual(dict(first_bin=18, last_bin=27, request_reply_bytes_per_call_second=133427.2), result["worst"])
+
+    def test_exact_ceiling_and_fractional_edges(self):
+        trace = self.trace([2*131072]*21, [dict(start=10.1, end=30.9)])
+        trace["seconds"]["10"]["request_bytes"] = 1e9
+        trace["seconds"]["30"]["request_bytes"] = 1e9
+        result = rolling_phase(trace, "churn", 2)
+        self.assertEqual(19, result["full_bins"])
+        self.assertEqual(131072, result["worst"]["request_reply_bytes_per_call_second"])
+        data = fixture()
+        for step in data["steps"]:
+            for value in step["measurement"]["store"]["seconds"].values():
+                value.update(request_bytes=2*131072, reply_bytes=0)
+        self.assertEqual([], summarize(data, 10, 20)["blocking"])
+
+    def test_separate_short_intervals_do_not_form_one_window(self):
+        result = rolling_phase(self.trace([1]*21, [dict(start=10, end=16), dict(start=20, end=26)]), "churn", 2)
+        self.assertEqual(12, result["full_bins"])
+        self.assertIsNone(result["worst"])
+
+    def test_invalid_evidence_is_not_zero_traffic(self):
+        changes = [lambda t: t["seconds"].pop("15"),
+                   lambda t: t["seconds"]["15"].update(request_bytes=float("nan")),
+                   lambda t: t["seconds"]["15"].update(reply_bytes=-1),
+                   lambda t: t["seconds"]["15"].update(reply_bytes=True),
+                   lambda t: t.pop("phase_intervals"),
+                   lambda t: t["phase_intervals"]["churn"][0].update(end=float("inf")),
+                   lambda t: t["phase_seconds"].update(churn=22),
+                   lambda t: t["phase_intervals"]["churn"].append(dict(start=20, end=31))]
+        for change in changes:
+            with self.subTest(change=change):
+                trace = self.trace([1]*21)
+                change(trace)
+                with self.assertRaises(ValueError):
+                    rolling_phase(trace, "churn", 2)
+        for calls in (0, True, float("inf")):
+            with self.assertRaises(ValueError):
+                rolling_phase(self.trace([1]*21), "churn", calls)
 
 
 class RejoinTimestamp(unittest.TestCase):

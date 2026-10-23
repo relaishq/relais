@@ -12,6 +12,41 @@ def finite(value):
     return isinstance(value, (float, int)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
 
 
+def rolling_phase(trace, phase, calls):
+    """Use only complete one-second bins wholly inside one phase interval."""
+    intervals = trace.get("phase_intervals", {}).get(phase)
+    if not isinstance(intervals, list) or not intervals or not finite(calls) or calls <= 0:
+        raise ValueError("phase boundaries or call denominator missing")
+    seconds = trace.get("seconds", {})
+    windows, full_bins = [], 0
+    previous_end, duration = -1, 0
+    for interval in intervals:
+        start, end = interval.get("start"), interval.get("end")
+        if not finite(start) or not finite(end) or end <= start or start < previous_end:
+            raise ValueError("phase boundaries invalid or overlapping")
+        previous_end = end
+        duration += end - start
+        first, stop = math.ceil(start), math.floor(end)
+        # Bound malformed input before iterating; supported studies last <=65s.
+        if stop - first > 3600:
+            raise ValueError("phase interval exceeds bounded study")
+        values = []
+        for index in range(first, stop):
+            value = seconds.get(str(index))
+            if not isinstance(value, dict) or any(not finite(value.get(k)) for k in ("request_bytes", "reply_bytes")):
+                raise ValueError("full phase bins missing or invalid")
+            values.append(value["request_bytes"] + value["reply_bytes"])
+        full_bins += len(values)
+        for offset in range(len(values) - 9):
+            windows.append(dict(first_bin=first + offset, last_bin=first + offset + 9,
+                                request_reply_bytes_per_call_second=sum(values[offset:offset+10]) / (10 * calls)))
+    measured_duration = trace.get("phase_seconds", {}).get(phase)
+    if not finite(measured_duration) or not math.isclose(duration, measured_duration, rel_tol=1e-6, abs_tol=1e-6):
+        raise ValueError("phase boundaries disagree with measured duration")
+    return dict(full_bins=full_bins, window_count=len(windows), window_seconds=10,
+                worst=max(windows, key=lambda w: w["request_reply_bytes_per_call_second"]) if windows else None)
+
+
 def summarize(data, cpu_us, wall_us):
     blocking, rows = [], []
     if data.get("kind") != "split-capacity" or data.get("outcome") != "complete":
@@ -34,7 +69,7 @@ def summarize(data, cpu_us, wall_us):
         arm, scenario = m.get("arm"), m.get("scenario")
         label = f"{arm}/{scenario}"
         bad = lambda reason: blocking.append(f"{label}: {reason}")
-        # The old 8 KiB override is expected to exceed the store byte ceiling.
+        # The explicit legacy whole-blob override is expected to exceed the store byte ceiling.
         # Preserve that failure, while refusing every other failure in either arm.
         causes = step.get("causes", [])
         before_budget_only = arm == "before" and step.get("service_outcome") == "fail" and causes and all(
@@ -46,6 +81,12 @@ def summarize(data, cpu_us, wall_us):
         expected_args = ["-agent-split-checkpoints"] if arm == "after" else ([] if scenario == "echo" else ["-agent-max-snapshot-bytes=24576", "-agent-snapshot-bytes-per-second=270336", "-agent-snapshot-burst-bytes=98304"])
         if (m.get("worker_args") or []) != expected_args:
             bad("worker overrides do not match the accepted arms")
+        cap, rate, burst = (6144, 70000, 40960) if arm == "after" else ((7168, 81920, 28672) if scenario == "echo" else (24576, 270336, 98304))
+        budgets = dict(max_snapshot_bytes=cap, snapshot_bytes_per_second=rate, snapshot_burst_bytes=burst,
+                       move_bytes_per_session=1048576, move_bytes_total=67108864,
+                       checkpoint_age_p99_ms=550, snapshot_age_p99_ms=550)
+        if m.get("operator_budgets") != budgets:
+            bad("resolved worker budgets missing or incorrect")
         calls = r.get("callers")
         if calls != data.get("callers") or not finite(calls) or calls < 1:
             bad("unmatched call load")
@@ -91,6 +132,22 @@ def summarize(data, cpu_us, wall_us):
                 bad("admission timing or skip reasons missing")
             if scenario == "steady" and (custom.get("ForcedSuccesses", 0) <= 0 or custom.get("ForcedFailures") != 0 or custom.get("forced_max_ms", 0) <= 0):
                 bad("forced intent checkpoint count/latency proof missing")
+        if scenario != "echo":
+            if m.get("fixture_environment") != {"RELAIS_HISTORY_FULL_SIZE": "1"}:
+                bad("full-size fixture selection missing")
+            if arm == "after":
+                sizes = m.get("fixture_sizes", {})
+                restored = 0
+                for size in sizes.values():
+                    pair = (size.get("restored_working_bytes"), size.get("restored_history_bytes"))
+                    if size.get("working_bytes") != 3072 or size.get("history_bytes") != 8192 or pair not in ((0, 0), (3072, 8192)):
+                        bad("full working/history or Restore sizes incorrect")
+                    restored += pair == (3072, 8192)
+                # The matched planned move covers one call. Kill/drain place all
+                # calls on the affected worker; rotation replaces every worker.
+                required_restores = calls if scenario in ("n-plus-one", "drain", "rotation") else 1
+                if len(sizes) != calls or restored < required_restores:
+                    bad("full working/history or required Restore witnesses missing")
         if scenario == "history-churn" and (m.get("history_refusals", 0) <= 0 or m.get("fixture_samples", 0) <= 0):
             bad("history churn not refused before acceptance")
         if scenario == "rotation":
@@ -120,6 +177,17 @@ def summarize(data, cpu_us, wall_us):
                                  "request_reply_bytes_per_call_second": (values["request_bytes"] + values["reply_bytes"]) / denom,
                                  "component_writes_per_call_second": {k: v["writes"] / denom for k, v in values.get("components", {}).items()},
                                  "component_bytes_per_call_second": {k: v["bytes"] / denom for k, v in values.get("components", {}).items()}}
+            if arm == "after":
+                try:
+                    rolling = rolling_phase(trace, phase, calls)
+                    phase_rows[phase]["rolling_10_seconds"] = rolling
+                    if phase == "churn" and rolling["worst"] is None:
+                        bad("churn has fewer than 10 contiguous full bins")
+                    if rolling["worst"] and rolling["worst"]["request_reply_bytes_per_call_second"] > 131072:
+                        bad(phase + " sustained 10-second attempts exceed store ceiling")
+                        phase_failure = True
+                except (ValueError, TypeError, AttributeError) as error:
+                    bad(phase + " sustained traffic evidence invalid: " + str(error))
             if phase == "churn":
                 if seconds < r.get("duration_ns", 0) / 1e9 - 10:
                     bad("churn traffic window too short")

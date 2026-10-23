@@ -3,10 +3,12 @@ package mediaworker
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/relaishq/relais/internal/agenthost"
+	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/relay"
 	"github.com/relaishq/relais/pkg/sessionstore"
@@ -60,12 +62,12 @@ func TestSplitRegistrationRejectsImpossibleWorkingBound(t *testing.T) {
 func TestSplitProfileDefaultsWithoutWorkerConstructor(t *testing.T) {
 	s := componentWriterSession(t, sessionstore.NewMemory(), true)
 	require.Zero(t, s.worker.splitLimits.MaxBytes)
-	require.Equal(t, 80000, s.snapshotLimits().BytesPerSecond)
+	require.Equal(t, 70000, s.snapshotLimits().BytesPerSecond)
 	require.Equal(t, 40960, s.snapshotLimits().BurstBytes)
 	s.worker.splitLimits = SnapshotLimits{MaxBytes: 20000, BurstBytes: 80000}
 	require.Equal(t, 20000, s.snapshotLimits().MaxBytes)
 	require.Equal(t, 80000, s.snapshotLimits().BurstBytes)
-	require.Equal(t, 80000, s.snapshotLimits().BytesPerSecond)
+	require.Equal(t, 70000, s.snapshotLimits().BytesPerSecond)
 }
 
 func TestLegacyHistoryRefusedEvenWithStalePositiveBounds(t *testing.T) {
@@ -465,4 +467,40 @@ func TestCheckpointAdmissionSizeIgnoresStoreClockOffset(t *testing.T) {
 		require.Equal(t, prior, s.state.Agent, "admission cannot publish the candidate")
 	}
 	require.Equal(t, sizes[0], sizes[1], "fixed-width capture timestamps and quota must not change admission size across store-clock offsets")
+}
+
+func TestSplitTransportGrowthRefusesSaveWithoutLosingCall(t *testing.T) {
+	s := componentWriterSession(t, sessionstore.NewMemory(), true)
+	s.worker.cfg.SnapshotInterval = 100 * time.Millisecond
+	s.worker.splitLimits = SnapshotLimits{}.splitDefaults()
+	a := &v2UnitAgent{state: agent.State{Version: 1, Bytes: bytes.Repeat([]byte{'a'}, 64)}}
+	s.worker.cfg.Agent.Factory = agenthost.Factory(agenthost.Registration{Name: "transport-growth/v1", Factory: func(agent.FactoryArgs) agent.Agent { return a }})
+	s.state.Agent = agentState{}
+	require.NoError(t, s.initAgent(false, ResumeOptions{}))
+	// Transport growth still leaves the prior accepted pair checkpointable, but
+	// a full-size next Save no longer fits the actual encoded hot envelope.
+	s.state.Audio.ID = strings.Repeat("i", 3000)
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
+	prior := bytes.Clone(s.state.Agent.State.Bytes)
+	a.callback = func(context.Context) {
+		a.state.Bytes = bytes.Clone(prior)
+		if a.lastEvent.Kind == agent.AudioInput {
+			a.state.Bytes = bytes.Repeat([]byte{'b'}, 3072)
+		}
+	}
+	input := legacy.Input{Progress: legacy.Progress{SSRC: 42, Index: 7}}
+	_, err := (acceptedEvents{s}).submit(agent.Event{ID: "large-save", Kind: agent.AudioInput, Input: &input}, eventLive)
+	require.NoError(t, err)
+	require.Equal(t, prior, s.state.Agent.State.Bytes)
+	require.Len(t, s.state.Agent.V2.Capacity, 1)
+	require.Equal(t, agent.Capacity, s.state.Agent.V2.Capacity[0].result().Outcome)
+	_, err = s.deliverTaskResult()
+	require.NoError(t, err)
+	require.Equal(t, agent.Capacity, a.lastEvent.Result.Outcome, "typed refusal reaches the agent")
+	require.NoError(t, s.ctx.Err(), "encoded Save refusal cannot lose the call")
+	a.callback = func(context.Context) { a.state.Bytes = bytes.Clone(prior) }
+	_, err = (acceptedEvents{s}).submit(agent.Event{ID: "small-save", Kind: agent.AudioInput, Input: &input}, eventLive)
+	require.NoError(t, err)
+	require.NoError(t, s.checkpoint.persist(context.Background(), checkpointRequired))
+	require.NoError(t, s.ctx.Err())
 }

@@ -39,8 +39,8 @@ func newWorkerFlags(options Options) (*flag.FlagSet, *workerFlags) {
 	}
 	f.agentName = flags.String("agent", defaultAgent, "audio agent: echo, demo or a registered name")
 	f.split = flags.Bool("agent-split-checkpoints", false, "use v10 component checkpoints for new calls (upgrade every participant first)")
-	flags.IntVar(&f.limits.MaxBytes, "agent-max-snapshot-bytes", 7168, "v2 whole encrypted snapshot byte cap")
-	flags.IntVar(&f.limits.BytesPerSecond, "agent-snapshot-bytes-per-second", 0, "payload bytes/s (0: legacy 81920, split 80000)")
+	flags.IntVar(&f.limits.MaxBytes, "agent-max-snapshot-bytes", 0, "encoded snapshot byte cap (0: legacy 7168, split hot 6144)")
+	flags.IntVar(&f.limits.BytesPerSecond, "agent-snapshot-bytes-per-second", 0, "payload bytes/s (0: legacy 81920, split 70000)")
 	flags.IntVar(&f.limits.BurstBytes, "agent-snapshot-burst-bytes", 0, "payload burst bytes (0: legacy 28672, split 40960)")
 	flags.IntVar(&f.limits.MoveBytesPerSession, "agent-move-bytes-per-session", 1<<20, "v2 move memory bytes per session")
 	flags.Int64Var(&f.limits.MoveBytesTotal, "agent-move-bytes-total", 64<<20, "v2 move memory bytes per worker including export scratch")
@@ -61,4 +61,32 @@ func SplitCheckpoints(args []string) bool {
 		return false
 	}
 	return *f.split
+}
+
+// SnapshotLimitsForArgs resolves the operator budgets through the worker's own
+// parser. Reports use this to name the same profile and overrides as Run.
+func SnapshotLimitsForArgs(args []string) (mediaworker.SnapshotLimits, error) {
+	flags, f := newWorkerFlags(Options{})
+	flags.SetOutput(io.Discard)
+	if err := flags.Parse(args); err != nil {
+		return mediaworker.SnapshotLimits{}, err
+	}
+	return f.snapshotLimits(), nil
+}
+
+func (f *workerFlags) snapshotLimits() mediaworker.SnapshotLimits {
+	if *f.split {
+		return f.limits.SplitDefaults()
+	}
+	limits := f.limits
+	if limits.MaxBytes == 0 {
+		limits.MaxBytes = 7168
+	}
+	if limits.BytesPerSecond == 0 {
+		limits.BytesPerSecond = 81920
+	}
+	if limits.BurstBytes == 0 {
+		limits.BurstBytes = 28672
+	}
+	return limits
 }

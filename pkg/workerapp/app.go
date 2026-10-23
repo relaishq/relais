@@ -79,17 +79,7 @@ func Run(ctx context.Context, args []string, options Options) error {
 	if reserveSet && (*moveReserve <= 0 || *moveReserve >= *drainTimeout) {
 		return fmt.Errorf("-agent-drain-move-reserve must be greater than 0 and less than -drain-timeout (%s)", *drainTimeout)
 	}
-	validationLimits := limits
-	if *split {
-		validationLimits = limits.SplitDefaults()
-	} else {
-		if validationLimits.BytesPerSecond == 0 {
-			validationLimits.BytesPerSecond = 81920
-		}
-		if validationLimits.BurstBytes == 0 {
-			validationLimits.BurstBytes = 28672
-		}
-	}
+	validationLimits := f.snapshotLimits()
 	if err := validationLimits.Validate(); err != nil {
 		return err
 	}
