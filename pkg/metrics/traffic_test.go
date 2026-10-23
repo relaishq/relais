@@ -59,7 +59,7 @@ func counterValue(c prometheus.Counter) float64 {
 
 func TestStoreHookExcludesConnectionHandshake(t *testing.T) {
 	ctx := context.Background()
-	commands := []redis.Cmder{redis.NewCmd(ctx, "hello", 2), redis.NewCmd(ctx, "auth", "owned-password"), redis.NewCmd(ctx, "client", "setinfo", "LIB-NAME", "go-redis"), redis.NewCmd(ctx, "client", "id"), redis.NewCmd(ctx, "ping")}
+	commands := []redis.Cmder{redis.NewCmd(ctx, "hello", 2), redis.NewCmd(ctx, "auth", "owned-password"), redis.NewCmd(ctx, "select", 1), redis.NewCmd(ctx, "client", "setinfo", "LIB-NAME", "go-redis"), redis.NewCmd(ctx, "client", "id"), redis.NewCmd(ctx, "ping")}
 	counter := storeCommands.WithLabelValues("handshake-test")
 	before := counterValue(counter)
 	hook := StoreHook("handshake-test")

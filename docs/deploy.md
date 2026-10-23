@@ -229,11 +229,13 @@ Route restore scans every primary. Worker-index listing reads its index's
 primary and checks each member on that session's primary. Script-cache misses
 reload on the affected node, including after a promotion.
 
-The clients pin go-redis v9.23.0 and RESP2 (`Protocol: 2`). Connection identity
-reporting and maintenance notifications are disabled; caller options cannot
-enable RESP3 or identity reporting. Restricted ACLs need no `CLIENT SETINFO`
-permission.
-The driver sends `HELLO 2` and falls back to `AUTH` when HELLO is refused.
+The clients pin go-redis v9.23.0 and RESP2 (`Protocol: 2`). The Cluster builder
+sets RESP2 and disables identity reporting and maintenance notifications in its
+returned options. Its node-client constructor reapplies these settings to a
+private copy, including when callers change those flags on the returned options
+before constructing the Cluster client. The standalone builder applies the same
+settings to a private copy when constructing its client. Restricted ACLs need no `CLIENT SETINFO`
+permission. The driver sends `HELLO 2` and falls back to `AUTH` when HELLO is refused.
 Context deadlines remain enabled; fenced/session/frame clients disable both
 network mutation retries and redirect retries. NOSCRIPT remains a definite
 not-run result and can reload the script on its primary.
@@ -267,7 +269,7 @@ refresh interval. This is a liveness
 tradeoff, not a wider ownership or consent deadline.
 
 `relais_store_commands_total` counts logical store commands and pipeline
-commands, excluding connection `HELLO`, `AUTH` and `CLIENT SETINFO`. Library
+commands, excluding connection `HELLO`, `AUTH`, `SELECT` and `CLIENT SETINFO`. Library
 wire retries and connection setup remain in `relais_store_wire_commands_total`
 and transport-byte metrics. Move diagnostics likewise exclude handshake commands.
 

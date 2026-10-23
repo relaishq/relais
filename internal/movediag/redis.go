@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/relaishq/relais/internal/rediscommand"
 )
 
 type RedisHook struct{}
@@ -12,7 +13,7 @@ type RedisHook struct{}
 func (RedisHook) DialHook(next redis.DialHook) redis.DialHook { return next }
 func (RedisHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
-		if ID(ctx) == "" || redisHandshake(cmd) {
+		if ID(ctx) == "" || rediscommand.IsHandshake(cmd) {
 			return next(ctx, cmd)
 		}
 		event := NewEvent(ctx, "redis", strings.ToUpper(cmd.Name()))
@@ -28,7 +29,7 @@ func (RedisHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.Proce
 		}
 		events := make([]Event, len(cmds))
 		for i, cmd := range cmds {
-			if !redisHandshake(cmd) {
+			if !rediscommand.IsHandshake(cmd) {
 				events[i] = NewEvent(ctx, "redis", strings.ToUpper(cmd.Name()))
 			}
 		}
@@ -40,21 +41,5 @@ func (RedisHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.Proce
 			Default.Finish(event, cmds[i].Err() != nil && cmds[i].Err() != redis.Nil)
 		}
 		return err
-	}
-}
-
-func redisHandshake(cmd redis.Cmder) bool {
-	switch cmd.Name() {
-	case "hello", "auth":
-		return true
-	case "client":
-		args := cmd.Args()
-		if len(args) > 1 {
-			subcommand, ok := args[1].(string)
-			return ok && strings.EqualFold(subcommand, "setinfo")
-		}
-		return false
-	default:
-		return false
 	}
 }

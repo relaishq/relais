@@ -350,3 +350,20 @@ func TestRedisClusterMovedTargetFailsClosed(t *testing.T) {
 	require.ErrorAs(t, err, &policy)
 	require.Positive(t, wire.dials["127.0.0.1:16380"])
 }
+
+func TestRedisClusterNodesIgnoreChangedConnectionOptions(t *testing.T) {
+	client, _ := wireCluster(t, []string{"127.0.0.1:16381"}, func(string, int) string {
+		return "*1\r\n" + slotWire(0, 16383, wireHost("127.0.0.1"), 16380)
+	}, redisendpoint.Validate, func(options *redis.ClusterOptions) {
+		// Mutate the returned builder options before constructing the ClusterClient.
+		options.Protocol = 3
+		options.DisableIdentity = false
+		options.MaintNotificationsConfig.Mode = maintnotifications.ModeEnabled
+	})
+	node, err := client.MasterForKey(context.Background(), "key")
+	require.NoError(t, err)
+	require.Equal(t, 2, node.Options().Protocol)
+	require.True(t, node.Options().DisableIdentity)
+	require.Equal(t, maintnotifications.ModeDisabled, node.Options().MaintNotificationsConfig.Mode)
+	require.NoError(t, node.Ping(context.Background()).Err())
+}

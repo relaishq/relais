@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -12,6 +11,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/redis/go-redis/v9/maintnotifications"
 	"github.com/relaishq/relais/internal/movediag"
+	"github.com/relaishq/relais/internal/rediscommand"
 )
 
 var storeCommands = promauto.NewCounterVec(prometheus.CounterOpts{Name: "relais_store_commands_total", Help: "Redis client command attempts, including pipelines and retries; excludes connection setup and commands inside Lua."}, []string{"store"})
@@ -126,7 +126,7 @@ type storeHook struct{ commands prometheus.Counter }
 func (*storeHook) DialHook(next redis.DialHook) redis.DialHook { return next }
 func (h *storeHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
-		if !redisHandshake(cmd) {
+		if !rediscommand.IsHandshake(cmd) {
 			h.commands.Inc()
 		}
 		return next(ctx, cmd)
@@ -135,28 +135,11 @@ func (h *storeHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 func (h *storeHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
 	return func(ctx context.Context, cmds []redis.Cmder) error {
 		for _, cmd := range cmds {
-			if !redisHandshake(cmd) {
+			if !rediscommand.IsHandshake(cmd) {
 				h.commands.Inc()
 			}
 		}
 		return next(ctx, cmds)
-	}
-}
-
-// Logical store work excludes connection setup; the wire counter retains it.
-func redisHandshake(cmd redis.Cmder) bool {
-	switch cmd.Name() {
-	case "hello", "auth":
-		return true
-	case "client":
-		args := cmd.Args()
-		if len(args) > 1 {
-			subcommand, ok := args[1].(string)
-			return ok && strings.EqualFold(subcommand, "setinfo")
-		}
-		return false
-	default:
-		return false
 	}
 }
 

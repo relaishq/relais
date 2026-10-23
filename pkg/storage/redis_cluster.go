@@ -37,6 +37,9 @@ func redisClusterOptions(options *redis.UniversalOptions, validate func(string) 
 	cluster.DisableRoutingPolicies = true
 	cluster.NewClient = func(opts *redis.Options) *redis.Client {
 		original := *opts
+		original.Protocol = 2
+		original.DisableIdentity = true
+		original.MaintNotificationsConfig = &maintnotifications.Config{Mode: maintnotifications.ModeDisabled}
 		constructionErr := validate(original.Addr)
 		dial := original.Dialer
 		if dial == nil {
