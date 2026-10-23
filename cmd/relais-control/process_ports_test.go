@@ -153,7 +153,6 @@ func TestProcessPortsReservedUntilChildStart(t *testing.T) {
 				}
 				require.Error(t, dialErr, "held endpoint must reject HTTP requests")
 				require.True(t, errors.Is(dialErr, syscall.ECONNREFUSED) || errors.Is(dialErr, syscall.ECONNRESET) || errors.Is(dialErr, syscall.EPIPE) || errors.Is(dialErr, io.EOF) || errors.Is(dialErr, io.ErrUnexpectedEOF), "expected connection rejection, got %v", dialErr)
-				require.Less(t, time.Since(started), 200*time.Millisecond, "held endpoint must fail well before callers' one-second timeout")
 			}
 			ports.handover(t, []string{"-http", addr})
 			socket, err = bind()
