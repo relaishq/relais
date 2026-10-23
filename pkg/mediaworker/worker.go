@@ -298,28 +298,21 @@ type Worker struct {
 
 // New starts a media worker listening on cfg.ListenAddr.
 func New(cfg Config) (*Worker, error) {
-	splitLimits := cfg.SnapshotLimits.splitDefaults()
-	cfg.splitLimits = splitLimits
+	// Only declared v2 registrations or split admission impose a cadence rule.
+	// Opaque factory-only adapters still validate when a real session resolves.
+	if len(cfg.Agent.Registrations) > 0 || cfg.SplitCheckpoints {
+		if err := ValidateSnapshotProfiles(cfg); err != nil {
+			return nil, err
+		}
+	} else if err := cfg.SnapshotLimits.defaults().validateResourceLimits(); err != nil {
+		return nil, err
+	}
+	cfg.splitLimits = cfg.SnapshotLimits.splitDefaults()
 	cfg.Agent = cfg.Agent.defaults()
 	cfg.SnapshotLimits = cfg.SnapshotLimits.defaults()
 	cfg.CheckpointEnvelope = cfg.CheckpointEnvelope.Defaults()
 	if cfg.SnapshotInterval <= 0 {
 		cfg.SnapshotInterval = 100 * time.Millisecond
-	}
-	// Resource limits remain validated for every worker. The cadence rule is
-	// v2-only; never instantiate a legacy factory without a real session just
-	// to classify it. Factory-only adapters also check cadence in initV2Agent.
-	if err := cfg.SnapshotLimits.validateResourceLimits(); err != nil {
-		return nil, err
-	}
-	if len(cfg.Agent.Registrations) > 0 || cfg.SplitCheckpoints {
-		limits := cfg.SnapshotLimits
-		if cfg.SplitCheckpoints {
-			limits = splitLimits
-		}
-		if err := limits.ValidateForInterval(cfg.SnapshotInterval); err != nil {
-			return nil, err
-		}
 	}
 	if cfg.HeartbeatInterval <= 0 {
 		cfg.HeartbeatInterval = 100 * time.Millisecond

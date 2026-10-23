@@ -270,6 +270,10 @@ def summarize(data, cpu_us, wall_us):
                 except (ValueError, TypeError, AttributeError) as error:
                     bad(phase + " sustained traffic evidence invalid: " + str(error))
             if phase == "churn":
+                duration = data.get("duration_seconds")
+                if not finite(duration) or duration <= 0 or seconds < duration - 10:
+                    bad("churn traffic window too short")
+                    phase_failure = True
                 if phase_rows[phase]["commands_per_call_second"] > 100 or phase_rows[phase]["request_reply_bytes_per_call_second"] > 131072:
                     bad("churn attempts exceed store ceiling")
                     phase_failure = True

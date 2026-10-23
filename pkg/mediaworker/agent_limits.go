@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/relaishq/relais/internal/agenthost"
@@ -92,6 +93,54 @@ func (l SnapshotLimits) ValidateForInterval(interval time.Duration) error {
 	return nil
 }
 
+// ValidateSnapshotProfiles checks cadence and every declared v2 registration
+// before startup. Split workers can also adopt legacy sessions, so both profiles
+// must fit. Registrations carries metadata adapters; Factory alone stays opaque.
+// Application agents are never constructed by this preflight.
+func ValidateSnapshotProfiles(cfg Config) error {
+	interval := cfg.SnapshotInterval
+	if interval <= 0 {
+		interval = 100 * time.Millisecond
+	}
+	profiles := []struct {
+		name   string
+		limits SnapshotLimits
+		split  bool
+	}{{"legacy", cfg.SnapshotLimits.LegacyDefaults(), false}}
+	if cfg.SplitCheckpoints {
+		profiles = append(profiles, struct {
+			name   string
+			limits SnapshotLimits
+			split  bool
+		}{"split", cfg.SnapshotLimits.SplitDefaults(), true})
+	}
+	names := make([]string, 0, len(cfg.Agent.Registrations))
+	for name := range cfg.Agent.Registrations {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, profile := range profiles {
+		if err := profile.limits.ValidateForInterval(interval); err != nil {
+			return fmt.Errorf("%s session profile: %w; raise -agent-snapshot-bytes-per-second to cover periodic and forced writes; an explicit -agent-max-snapshot-bytes must also fit every registration in each enabled profile", profile.name, err)
+		}
+		for _, name := range names {
+			factory := cfg.Agent.Registrations[name]
+			if factory == nil {
+				return fmt.Errorf("%s session profile registration %q: %w: missing metadata adapter", profile.name, name, agent.ErrIncompatibleAgent)
+			}
+			adapter, ok := factory("").(*agenthost.Adapter)
+			if !ok || adapter == nil {
+				return fmt.Errorf("%s session profile registration %q: %w: expected v2 metadata adapter", profile.name, name, agent.ErrIncompatibleAgent)
+			}
+			r := adapter.Registration
+			if err := ValidateAgentRegistration(r.Name, r.TaskKinds, r.Declared, profile.limits, profile.split); err != nil {
+				return fmt.Errorf("%s session profile registration %q: %w", profile.name, name, err)
+			}
+		}
+	}
+	return nil
+}
+
 // validateResourceLimits is independent of checkpoint cadence and agent kind.
 func (l SnapshotLimits) validateResourceLimits() error {
 	const maxByteFlag = 1<<30 - 1 // sums of two byte caps fit even a 32-bit int
@@ -164,11 +213,13 @@ func ValidateAgentRegistration(name string, kinds []string, bounds agent.Limits,
 		return fmt.Errorf("%w: split burst cannot hold two maximum transactions for %q", agent.ErrCapacity, name)
 	}
 	const measuredTransport = 3474 // ADR 0010 C; rechecked from real payloads at runtime.
-	if !isSplit && measuredTransport+snapshotEnvelopeBytes+base64.StdEncoding.EncodedLen(bounds.MaxStateBytes)+v2HostMetadataBytes > limits.MaxBytes {
-		return fmt.Errorf("%w: declared state for %q cannot fit operator snapshot cap", agent.ErrStateTooLarge, name)
+	legacyBytes := measuredTransport + snapshotEnvelopeBytes + base64.StdEncoding.EncodedLen(bounds.MaxStateBytes) + v2HostMetadataBytes
+	if !isSplit && legacyBytes > limits.MaxBytes {
+		return fmt.Errorf("%w: declared state for %q needs %d encoded bytes; operator snapshot cap %d is short by %d bytes", agent.ErrStateTooLarge, name, legacyBytes, limits.MaxBytes, legacyBytes-limits.MaxBytes)
 	}
-	if isSplit && bounds.MaxStateBytes+6+componentCipherOverhead > limits.MaxBytes {
-		return fmt.Errorf("%w: declared working component for %q cannot fit operator hot cap", agent.ErrStateTooLarge, name)
+	splitBytes := bounds.MaxStateBytes + 6 + componentCipherOverhead
+	if isSplit && splitBytes > limits.MaxBytes {
+		return fmt.Errorf("%w: declared working component for %q needs %d encoded bytes; operator hot cap %d is short by %d bytes", agent.ErrStateTooLarge, name, splitBytes, limits.MaxBytes, splitBytes-limits.MaxBytes)
 	}
 	metadata, err := json.Marshal(v2Envelope{Name: name, Contract: v2Contract, TaskKinds: kinds, Limits: &declared, Quota: &snapshotQuota{Version: 1, Balance: quotaBalance(uint64(limits.BurstBytes)), At: time.Now().UTC()}})
 	if err != nil {

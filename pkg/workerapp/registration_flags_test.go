@@ -102,22 +102,51 @@ func TestSplitWorkerRejectsInfeasibleLegacyProfileBeforeStartup(t *testing.T) {
 	args := []string{"-agent-split-checkpoints", "-agent-snapshot-bytes-per-second=70000"}
 	err := Run(context.Background(), args, Options{})
 	require.ErrorIs(t, err, agent.ErrCapacity)
-	for _, text := range []string{"legacy session profile", "78848", "explicit -agent-max-snapshot-bytes", "raise -agent-snapshot-bytes-per-second"} {
+	for _, text := range []string{"legacy session profile", "78848", "raise -agent-snapshot-bytes-per-second", "explicit -agent-max-snapshot-bytes must also fit every registration"} {
 		require.ErrorContains(t, err, text)
 	}
-	for _, fix := range [][]string{{"-agent-max-snapshot-bytes=6144"}, {"-agent-snapshot-bytes-per-second=78848"}} {
-		flags, f := newWorkerFlags(Options{})
-		require.NoError(t, flags.Parse(append(append([]string(nil), args...), fix...)))
-		require.NoError(t, f.validateSnapshotProfiles())
+	flags, f := newWorkerFlags(Options{})
+	require.NoError(t, flags.Parse(append(args, "-agent-snapshot-bytes-per-second=78848")))
+	options := Options{Agents: []Registration{{Name: "default/v1", Factory: func(agent.FactoryArgs) agent.Agent {
+		t.Fatal("preflight constructed an application agent")
+		return nil
+	}}}}
+	_, err = registeredAgents(options, "echo", f.limits, true)
+	require.NoError(t, err, "raising the rate preserves the registration-fit allowance")
+}
+
+func TestSplitWorkerRefusesCapThatCannotAdoptLegacyRegistration(t *testing.T) {
+	clearWorkerTopologyEnvironment(t)
+	options := Options{Agents: []Registration{{Name: "restored/v1", Factory: func(agent.FactoryArgs) agent.Agent {
+		t.Fatal("preflight constructed an application agent")
+		return nil
+	}}}}
+	err := Run(context.Background(), []string{"-agent-split-checkpoints", "-agent-snapshot-bytes-per-second=70000", "-agent-max-snapshot-bytes=6144"}, options)
+	require.ErrorIs(t, err, agent.ErrStateTooLarge)
+	for _, text := range []string{`legacy session profile registration "restored/v1"`, "needs 6932 encoded bytes", "cap 6144", "short by 788 bytes"} {
+		require.ErrorContains(t, err, text)
 	}
+	// An explicit cap remains valid when every registration actually fits it.
+	options.Agents[0].Limits.MaxStateBytes = 400
+	limits := mediaworker.SnapshotLimits{MaxBytes: 6144, BytesPerSecond: 70000}
+	agents, err := registeredAgents(options, "echo", limits, true)
+	require.NoError(t, err)
+	worker, err := mediaworker.New(mediaworker.Config{SplitCheckpoints: true, SnapshotLimits: limits, Agent: agents})
+	require.NoError(t, err)
+	require.NoError(t, worker.Close())
 }
 
 func TestSplitWorkerDefaultProfilesStartWithRawSessionLimits(t *testing.T) {
 	clearWorkerTopologyEnvironment(t)
 	flags, f := newWorkerFlags(Options{})
 	require.NoError(t, flags.Parse([]string{"-agent-split-checkpoints"}))
-	require.NoError(t, f.validateSnapshotProfiles())
-	cfg := f.mediaConfig(mediaworker.AgentConfig{}, nil, nil)
+	options := Options{Agents: []Registration{{Name: "default/v1", Factory: func(agent.FactoryArgs) agent.Agent {
+		t.Fatal("startup constructed an application agent")
+		return nil
+	}}}}
+	agents, err := registeredAgents(options, "echo", f.limits, true)
+	require.NoError(t, err)
+	cfg := f.mediaConfig(agents, nil, nil)
 	require.Equal(t, f.limits, cfg.SnapshotLimits)
 	require.Zero(t, cfg.SnapshotLimits.MaxBytes)
 	require.Zero(t, cfg.SnapshotLimits.BytesPerSecond)

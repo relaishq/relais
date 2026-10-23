@@ -267,6 +267,19 @@ class SplitCapacityReport(unittest.TestCase):
         del data["steps"][4]["measurement"]["store"]["phases"]["churn"]
         self.assertIn("after/history-churn: churn traffic window missing", summarize(data, 10, 20)["blocking"])
 
+    def test_churn_length_is_independent_of_service_and_full_bin_verdicts(self):
+        for duration, expected in ((21, []), (60, ["after/history-churn: churn traffic window too short"])):
+            with self.subTest(duration=duration):
+                data = fixture()
+                data["duration_seconds"] = duration
+                for step in data["steps"]:
+                    step["run"]["duration_ns"] = duration * 1e9
+                self.assertEqual("pass", data["steps"][4]["service_outcome"])
+                summary = summarize(data, 10, 20)
+                self.assertEqual(expected, summary["blocking"])
+                self.assertEqual("fail" if expected else "pass", summary["steps"][4]["service"])
+                self.assertIsNotNone(summary["steps"][4]["phases"]["churn"]["rolling_10_seconds"]["worst"])
+
     def test_truncated_churn_phase_blocks_evidence(self):
         data = fixture()
         trace = data["steps"][4]["measurement"]["store"]
@@ -348,6 +361,10 @@ class RollingPhase(unittest.TestCase):
         data = fixture()
         for step in data["steps"]:
             trace = step["measurement"]["store"]
+            if "churn" in trace["phases"]:
+                trace["phase_seconds"]["churn"] = 31
+                trace["phase_intervals"]["churn"] = [dict(start=40, end=71)]
+                reconcile_bins(trace)
             for value in trace["seconds"].values():
                 value.update(request_bytes=2*131072, reply_bytes=0)
             for phase, parts in trace["phase_intervals"].items():

@@ -79,9 +79,6 @@ func Run(ctx context.Context, args []string, options Options) error {
 	if reserveSet && (*moveReserve <= 0 || *moveReserve >= *drainTimeout) {
 		return fmt.Errorf("-agent-drain-move-reserve must be greater than 0 and less than -drain-timeout (%s)", *drainTimeout)
 	}
-	if err := f.validateSnapshotProfiles(); err != nil {
-		return err
-	}
 	agentConfig, err := registeredAgents(options, *agentName, limits, *split)
 	if err != nil {
 		return err

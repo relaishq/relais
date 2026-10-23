@@ -201,8 +201,11 @@ and non-ASCII text.
 
 Revised operator allocations for split mode (#214; full-size hosted validation pending). Legacy defaults remain
 7,168 B, 81,920 B/s and 28,672 B. Zero cap/rate/burst flags select the session profile; explicit values apply to both.
-Split worker startup validates both profiles because it can also restore legacy sessions. An explicit rate of 70,000 B/s
-with the default legacy cap is refused: select a compatible explicit cap or raise the shared rate to at least 78,848 B/s:
+Media worker startup validates cadence and every registration's fit under both profiles because split workers can also
+restore legacy sessions. Workerapp uses the same preflight. An explicit rate of 70,000 B/s with the default legacy cap is
+refused: raise the shared rate to at least 78,848 B/s. An explicit cap must satisfy cadence **and** fit every registration
+under both profiles. A default v2 registration needs 6,932 B in legacy format, so a 6,144 B explicit cap is refused with
+a typed size error reporting the registration and its 788 B shortfall. Default flags keep both profiles feasible:
 
 | Allocation | Revised default (hosted validation pending) | Purpose |
 | --- | ---: | --- |
@@ -315,6 +318,8 @@ monotonic bin clock. Their intervals must tile the complete step, with at most *
 at a boundary and at the step end. Bin totals must equal phase totals exactly for commands, request bytes and reply
 bytes. Exclude partial edge bins and never join bins across an event. Missing/invalid bins block evidence;
 each step’s main phase (churn for history-churn; steady otherwise) must contain at least ten contiguous full bins.
+Independently, the churn phase must last at least the requested duration minus ten seconds; the report checks this even
+when the supplied service verdict passes.
 Shorter secondary phases do not block and explicitly report
 “sustained window not measured (N full bins)”. A sustained mean above **131,072 B/call-second** fails even when
 the whole-window gate passes. Ten seconds covers 100 periodic checkpoints and smooths short scheduling/burst effects;
