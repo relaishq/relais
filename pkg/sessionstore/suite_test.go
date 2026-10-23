@@ -84,8 +84,9 @@ func sessionCommandArgs(cmd redis.Cmder) []interface{} {
 
 // componentCommitFixtureArgs keeps the former eleven-field fixture notation in
 // tests only. The production wire contract always has six arguments. Former
-// duplicate-field inconsistencies become invalid bindings of the intended full
-// metadata; Lua must still reject them before any write.
+// duplicate-field inconsistencies deliberately corrupt only the checksum and
+// test checksum rejection, not the lease identity fence. Fence tests must send
+// six direct arguments with a valid checksum.
 func componentCommitFixtureArgs(t *testing.T, old ...interface{}) []interface{} {
 	t.Helper()
 	require.Len(t, old, 11)
