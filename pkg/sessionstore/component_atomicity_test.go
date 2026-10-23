@@ -55,8 +55,8 @@ func interruptComponentInitialization(t *testing.T, r *Redis, lease Lease) Compo
 	require.NoError(t, err)
 	packed, err := p.record.metadata.Marshal()
 	require.NoError(t, err)
-	script := strings.Replace(componentCommitLua, "for i=0,2 do\n local part=ARGV[8+i]\n if #part>0 then", "error('initialization interrupted')\nfor i=0,2 do\n local part=ARGV[8+i]\n if #part>0 then", 1)
-	_, err = r.client.Eval(ctx, script, r.componentKeys(lease.SessionID), lease.Worker.String(), fmt.Sprint(lease.Epoch), "", packed, p.record.sealed.Transport, fmt.Sprint(seq), binary.BigEndian.AppendUint64(nil, lease.Epoch), p.record.sealed.Setup, p.record.sealed.Work, p.record.sealed.History, binary.BigEndian.AppendUint64(nil, seq)).Result()
+	script := strings.Replace(componentCommitLua, "for i=0,2 do\n local part=ARGV[4+i]\n if #part>0 then", "error('initialization interrupted')\nfor i=0,2 do\n local part=ARGV[4+i]\n if #part>0 then", 1)
+	_, err = r.client.Eval(ctx, script, r.componentKeys(lease.SessionID), componentCommitFixtureArgs(t, lease.Worker.String(), fmt.Sprint(lease.Epoch), "", packed, p.record.sealed.Transport, fmt.Sprint(seq), binary.BigEndian.AppendUint64(nil, lease.Epoch), p.record.sealed.Setup, p.record.sealed.Work, p.record.sealed.History, binary.BigEndian.AppendUint64(nil, seq))...).Result()
 	require.ErrorContains(t, err, "initialization interrupted")
 	require.Equal(t, "10", r.client.HGet(ctx, r.keys(lease.SessionID)[0], "layout").Val())
 	return c

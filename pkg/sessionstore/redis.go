@@ -518,11 +518,13 @@ func indexMember(lease Lease) string {
 // preserves the original Redis-clock publication time during later repairs.
 const indexLua = `local t=redis.call('TIME'); redis.call('ZADD',KEYS[1],'NX',tonumber(t[1])*1000+math.floor(tonumber(t[2])/1000),ARGV[1]); local remaining=redis.call('PTTL',KEYS[1]); if remaining<tonumber(ARGV[2]) then redis.call('PEXPIRE',KEYS[1],ARGV[2]) end; return 1`
 
+var indexScript = redis.NewScript(indexLua)
+
 func (r *Redis) indexContext(ctx context.Context, lease Lease, ttl time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, transitionCommandLimit)
 	defer cancel()
 	return r.retryRead(ctx, "session_index_add", func() error {
-		return r.client.Eval(ctx, indexLua, []string{r.indexKey(lease.Worker)}, indexMember(lease), max(ttl+r.retention, r.indexGrace+r.retention).Milliseconds()).Err()
+		return indexScript.Run(ctx, r.client, []string{r.indexKey(lease.Worker)}, indexMember(lease), max(ttl+r.retention, r.indexGrace+r.retention).Milliseconds()).Err()
 	})
 }
 func (r *Redis) index(lease Lease, ttl time.Duration) error {

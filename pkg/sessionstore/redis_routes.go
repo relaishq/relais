@@ -81,6 +81,8 @@ if remaining<deadline-now then redis.call('PEXPIREAT',KEYS[2],deadline) end
 return 1
 `
 
+var putRouteScript = redis.NewScript(putRouteLua)
+
 func (r *Redis) PutRoute(ctx context.Context, route Route, nominated bool) error {
 	if !validRoute(route) {
 		return errors.New("sessionstore: invalid route")
@@ -94,7 +96,7 @@ func (r *Redis) PutRoute(ctx context.Context, route Route, nominated bool) error
 	if nominated {
 		replace = "1"
 	}
-	n, err := r.client.Eval(ctx, putRouteLua, []string{keys[0], keys[4]}, strconv.FormatUint(route.Generation, 10), route.Caller.String(), raw, replace, RouteRetention.Milliseconds(), MaxRoutesPerSession).Int()
+	n, err := putRouteScript.Run(ctx, r.client, []string{keys[0], keys[4]}, strconv.FormatUint(route.Generation, 10), route.Caller.String(), raw, replace, RouteRetention.Milliseconds(), MaxRoutesPerSession).Int()
 	if err != nil {
 		return &TransientError{Op: "put_route", Err: err}
 	}

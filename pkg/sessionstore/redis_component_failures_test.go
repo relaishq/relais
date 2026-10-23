@@ -127,7 +127,7 @@ func TestComponentPublicationFailuresAndSettlement(t *testing.T) {
 		before := snapshotComponentKeys(t, r, "fault")
 		packed, _ := p.record.metadata.Marshal()
 		expected, _ := retry.Metadata.Marshal()
-		_, err = r.runComponent(ctx, componentCommitScript, "component_commit", "fault", lease.Worker.String(), fmt.Sprint(lease.Epoch), expected, packed, p.record.sealed.Transport, fmt.Sprint(seq), binary.BigEndian.AppendUint64(nil, lease.Epoch), []byte{}, []byte{}, []byte{}, binary.BigEndian.AppendUint64(nil, seq))
+		_, err = r.runComponent(ctx, componentCommitScript, "component_commit", "fault", componentCommitFixtureArgs(t, lease.Worker.String(), fmt.Sprint(lease.Epoch), expected, packed, p.record.sealed.Transport, fmt.Sprint(seq), binary.BigEndian.AppendUint64(nil, lease.Epoch), []byte{}, []byte{}, []byte{}, binary.BigEndian.AppendUint64(nil, seq))...)
 		require.ErrorIs(t, err, ErrStateSuperseded)
 		require.Equal(t, before, snapshotComponentKeys(t, r, "fault"), "stale root refusal precedes all writes")
 		restored, err = r.ReadComponents(ctx, "fault")
