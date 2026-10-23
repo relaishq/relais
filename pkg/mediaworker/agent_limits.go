@@ -94,8 +94,9 @@ func (l SnapshotLimits) ValidateForInterval(interval time.Duration) error {
 }
 
 // ValidateSnapshotProfiles checks cadence and every declared v2 registration
-// before startup. Split workers can also adopt legacy sessions, so both profiles
-// must fit. Registrations carries metadata adapters; Factory alone stays opaque.
+// before startup. Both profiles must support cadence on split workers, but only
+// split registration fit blocks their startup. Legacy fit warns at startup and
+// is enforced before restore. Factory alone stays opaque until session setup.
 // Application agents are never constructed by this preflight.
 func ValidateSnapshotProfiles(cfg Config) error {
 	interval := cfg.SnapshotInterval
@@ -121,7 +122,12 @@ func ValidateSnapshotProfiles(cfg Config) error {
 	slices.Sort(names)
 	for _, profile := range profiles {
 		if err := profile.limits.ValidateForInterval(interval); err != nil {
-			return fmt.Errorf("%s session profile: %w; raise -agent-snapshot-bytes-per-second to cover periodic and forced writes; an explicit -agent-max-snapshot-bytes must also fit every registration in each enabled profile", profile.name, err)
+			return fmt.Errorf("%s session profile: %w; raise -agent-snapshot-bytes-per-second to cover periodic and forced writes; an explicit -agent-max-snapshot-bytes must also fit registrations in the new-call profile", profile.name, err)
+		}
+		if cfg.SplitCheckpoints && !profile.split {
+			// A split-sized declaration need not fit legacy snapshots. New logs
+			// this adoption restriction; initV2Agent refuses a legacy restore.
+			continue
 		}
 		for _, name := range names {
 			factory := cfg.Agent.Registrations[name]
@@ -137,6 +143,30 @@ func ValidateSnapshotProfiles(cfg Config) error {
 				return fmt.Errorf("%s session profile registration %q: %w", profile.name, name, err)
 			}
 		}
+	}
+	return nil
+}
+
+// warnLegacyRegistrationFits runs once at startup, after hard preflight and
+// logger setup. Warnings describe legacy adoption, not new split admission.
+func (w *Worker) warnLegacyRegistrationFits() {
+	for _, factory := range w.cfg.Agent.Registrations {
+		adapter, ok := factory("").(*agenthost.Adapter)
+		if !ok || adapter == nil {
+			continue // New already validates metadata adapters before start.
+		}
+		reg := adapter.Registration
+		if err := validateLegacyRegistrationFit(reg, w.cfg.SnapshotLimits); err != nil {
+			w.log.Warnf("legacy calls with registration %q cannot be adopted by this worker: %v", reg.Name, err)
+		}
+	}
+}
+
+// validateLegacyRegistrationFit also covers factory-only embedders once the
+// adapter resolves. Preserve incompatibility across the private HTTP boundary.
+func validateLegacyRegistrationFit(reg agenthost.Registration, limits SnapshotLimits) error {
+	if err := ValidateAgentRegistration(reg.Name, reg.TaskKinds, reg.Declared, limits, false); err != nil {
+		return fmt.Errorf("%w: legacy session profile registration %q: %w", agent.ErrIncompatibleAgent, reg.Name, err)
 	}
 	return nil
 }

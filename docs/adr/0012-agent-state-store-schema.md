@@ -201,11 +201,23 @@ and non-ASCII text.
 
 Revised operator allocations for split mode (#214; full-size hosted validation pending). Legacy defaults remain
 7,168 B, 81,920 B/s and 28,672 B. Zero cap/rate/burst flags select the session profile; explicit values apply to both.
-Media worker startup validates cadence and every registration's fit under both profiles because split workers can also
-restore legacy sessions. Workerapp uses the same preflight. An explicit rate of 70,000 B/s with the default legacy cap is
-refused: raise the shared rate to at least 78,848 B/s. An explicit cap must satisfy cadence **and** fit every registration
-under both profiles. A default v2 registration needs 6,932 B in legacy format, so a 6,144 B explicit cap is refused with
-a typed size error reporting the registration and its 788 B shortfall. Default flags keep both profiles feasible:
+Split worker startup refuses infeasible cadence under either resolved profile and registrations that do not fit the
+split profile. Workerapp uses the same mediaworker preflight. Legacy registration fit is a **warning**, once per
+registration: name the registration and shortfall, and state that this worker cannot adopt its legacy calls.
+An explicit rate of 70,000 B/s with the default legacy cap still fails cadence: raise the shared rate to at least
+78,848 B/s. A 6,144 B explicit cap with that rate can start, but a default v2 registration needs 6,932 B in legacy
+format and warns of a 788 B shortfall. An explicit 3,072/8,192 B declaration starts at split defaults and warns that
+its 9,660 B legacy requirement exceeds 7,168 B by 2,492 B; zero declarations retain the smaller legacy default.
+
+Legacy-mode restore/adoption checks the declared registration fit in `initV2Agent`, including factory-only adapters.
+It returns typed IncompatibleAgent/Restore before constructing the application, invoking callbacks, renewing the
+lease, resuming transport or writing a checkpoint. The control plane has already transferred ownership before it
+calls target resume. A definitive refusal triggers source rollback for a planned move, or target exclusion/retry
+for takeover, within the existing sequence/attempt budget. There is no pre-Transfer compatibility probe.
+Compatibility refusals currently consume that budget (at most three attempts, possibly fewer): recovery can declare
+loss before reaching another compatible worker. This slice reports that control-plane limitation without changing it.
+During a mixed rollout, keep each split worker's legacy profile able to fit your registrations (zero/default
+declarations fit the default profile) so legacy calls can move there. Default flags keep both cadence profiles feasible:
 
 | Allocation | Revised default (hosted validation pending) | Purpose |
 | --- | ---: | --- |

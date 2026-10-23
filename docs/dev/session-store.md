@@ -107,6 +107,24 @@ reserve; 70,000 B/s refills one maximum hot checkpoint within 100 ms. A separate
 rotation budget needs a store API change and is outside this slice.
 Zero cap/rate/burst flags select the session profile; explicit values keep their
 meaning in either layout. Legacy cap/rate/burst stay 7,168 B / 81,920 B/s / 28,672 B.
+Split startup refuses infeasible cadence in either profile and registration fit
+failures in the split profile. A legacy registration-fit failure only logs one
+warning per registration, naming its shortfall and the restriction on legacy
+adoption. For example, a 6,144 B explicit cap at 70,000 B/s starts with a warning
+that a default v2 registration needs 6,932 B in legacy format (788 B short).
+An explicit 3,072 B working / 8,192 B history declaration starts at split
+defaults, but its legacy encoding needs 9,660 B (2,492 B above 7,168 B).
+Legacy-mode restore/adoption checks declared fit before application construction,
+callbacks, lease renewal, transport resume or checkpoint writes, returning typed
+IncompatibleAgent/Restore if it cannot fit. Factory-only embedders get the same
+restore check; provide named Registrations for startup warnings. Ownership
+Transfer precedes target resume: planned moves roll back to the source on a
+definitive refusal; takeover excludes that target and retries within the existing
+sequence/attempt budget. Incompatibility refusals consume that budget: several
+incompatible targets can cause loss before a compatible target is tried.
+During a mixed rollout, keep each split worker's legacy
+profile able to fit your registrations (zero/default declarations fit the default
+profile) so legacy calls can move there. No state is truncated to fit.
 The real codec test `TestSplitFullSizeCallFitsHotCap` encodes 5,982 B hot (162 B
 headroom): a 1:1 two-track call with fixture IDs, IPv6, maximal counters,
 3,072 B working state and the full 2,048 B host allowance. It does not bound

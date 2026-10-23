@@ -81,6 +81,11 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 	if err := s.snapshotLimits().ValidateForInterval(s.worker.cfg.SnapshotInterval); err != nil {
 		return err
 	}
+	if restoring && !s.componentMode {
+		if err := validateLegacyRegistrationFit(reg, s.snapshotLimits()); err != nil {
+			return s.v2RestoreError(err)
+		}
+	}
 	if opts.Kind == legacy.Takeover || opts.SequenceMargin > 0 {
 		move = nil
 	}
