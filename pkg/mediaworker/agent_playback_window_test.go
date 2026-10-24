@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/pion/srtp/v3"
@@ -88,11 +89,15 @@ func TestPlaybackOutputClockDoesNotAccumulateWakeDelay(t *testing.T) {
 	s.agent.v2.playback.initialized = true
 	for range 80 {
 		s.storeClock = s.agent.v2.playback.nextAt.Add(2 * time.Millisecond)
-		s.storeClockAt = time.Now()
-		_, err := s.paceOne()
-		require.NoError(t, err)
+		// Freeze only paceOne's clock, so the injected 2 ms wake delay is the
+		// only lateness and scheduler stalls under -race cannot add more.
+		synctest.Test(t, func(t *testing.T) {
+			s.storeClockAt = time.Now()
+			_, err := s.paceOne()
+			require.NoError(t, err)
+		})
 	}
-	require.InDelta(t, float64(1600*time.Millisecond), float64(s.agent.v2.playback.nextAt.Sub(base)), float64(time.Millisecond), "small wake delay must not accumulate into speech drift")
+	require.Equal(t, 1600*time.Millisecond, s.agent.v2.playback.nextAt.Sub(base), "small wake delay must not accumulate into speech drift")
 }
 func TestPlaybackRestoreAdvancesRTPByStoreAge(t *testing.T) {
 	a := &v2UnitAgent{state: agent.State{Version: 1}}

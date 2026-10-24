@@ -323,10 +323,16 @@ func TestPlaybackVariablePacketDurations(t *testing.T) {
 		} else {
 			s.storeClock = s.agent.v2.playback.nextAt
 		}
-		s.storeClockAt = time.Now()
-		delay, err := s.paceOne()
-		require.NoError(t, err)
-		require.InDelta(t, float64(d), float64(delay), float64(2*time.Millisecond))
+		// Freeze only paceOne's clock, as in TestPlaybackPacerRebasesAndKeepsCounters:
+		// scheduler stalls under -race cannot change the computed delay.
+		var delay time.Duration
+		synctest.Test(t, func(t *testing.T) {
+			s.storeClockAt = time.Now()
+			var err error
+			delay, err = s.paceOne()
+			require.NoError(t, err)
+		})
+		require.Equal(t, d, delay)
 		require.Equal(t, expectedTS, s.state.Audio.LastTimestamp)
 		expectedTS += uint32(int64(d) * 48000 / int64(time.Second))
 		require.Equal(t, expectedTS, s.agent.v2.playback.nextTS)
