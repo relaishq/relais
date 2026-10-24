@@ -52,7 +52,7 @@ func (m acceptedEvents) accept(event agent.Event, mode eventMode, control *v2Env
 	// Future kinds have no delivery route. Do not call
 	// the agent or Save, so an unknown event cannot alter accepted state.
 	switch event.Kind {
-	case agent.Started, agent.AudioInput, agent.Resumed, agent.TaskMessage, agent.TimerFired, agent.PlaybackFinished, agent.Control:
+	case agent.Started, agent.AudioInput, agent.Resumed, agent.TaskMessage, agent.TimerFired, agent.PlaybackFinished, agent.Control, prototypeEncodedOutput:
 	default:
 		return nil
 	}
@@ -65,6 +65,7 @@ func (m acceptedEvents) accept(event agent.Event, mode eventMode, control *v2Env
 		event.Control = &owned
 	}
 	h := s.agent
+	prototype := event.Kind == prototypeEncodedOutput
 	if !adoption && len(h.v2.receiptRetries) > 0 && s.receiptEventThrottled(event) {
 		return errControlReceiptBackpressure
 	}
@@ -101,7 +102,16 @@ func (m acceptedEvents) accept(event agent.Event, mode eventMode, control *v2Env
 			message.Data = slices.Clone(message.Data)
 			callbackEvent.Control = &message
 		}
-		effects, err = h.v2.instance.Handle(ctx, callbackEvent)
+		if prototype {
+			owned := *callbackEvent.Result
+			owned.Chunk = cloneChunk(owned.Chunk)
+			effects, err = h.v2.instance.(prototypeOutputAgent).prototypeOutput(ctx, owned)
+			// Internal staging and move receipts use the existing consumption path;
+			// the application never receives a TaskMessage for this encoded effect.
+			event.Kind = agent.TaskMessage
+		} else {
+			effects, err = h.v2.instance.Handle(ctx, callbackEvent)
+		}
 		if err != nil {
 			handleFailed.Store(true)
 			return err
@@ -234,6 +244,12 @@ func (m acceptedEvents) accept(event agent.Event, mode eventMode, control *v2Env
 			return reserveErr
 		}
 		if event.Kind == agent.Control && errors.Is(err, errSnapshotAdmissionCapacity) {
+			return agent.ErrCapacity
+		}
+		if prototype && handleFailed.Load() {
+			return fmt.Errorf("%w: %w", errPrototypeOutputCallback, err)
+		}
+		if prototype && errors.Is(err, errSnapshotAdmissionCapacity) {
 			return agent.ErrCapacity
 		}
 		if errors.Is(err, errSnapshotAdmissionCapacity) && !adoption {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/relaishq/relais/internal/taskrun"
 	"github.com/relaishq/relais/internal/workerprobe"
+	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 )
 
@@ -996,6 +997,14 @@ func (s *session) v2AgentLoop() {
 			receipt, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &request.message}, eventLive)
 			request.done <- controlReply{receipt, err}
 			if err != nil && !controlRefusal(err) {
+				s.agentFailed(err)
+				return
+			}
+		case request := <-h.prototypeOutput:
+			err := s.acceptPrototypeOutput(request)
+			request.done <- err
+			// Prototype effects retain fail-closed Save/Restore and callback deadlines.
+			if errors.Is(err, errPrototypeOutputCallback) || errors.Is(err, agent.ErrIncompatibleAgent) || errors.Is(err, legacy.ErrSave) || errors.Is(err, legacy.ErrRestore) || errors.Is(err, context.DeadlineExceeded) {
 				s.agentFailed(err)
 				return
 			}

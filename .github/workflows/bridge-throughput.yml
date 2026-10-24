@@ -1,0 +1,82 @@
+name: Prototype bridge output comparison
+
+on:
+  # A spike branch cannot use workflow_dispatch until the file is on main;
+  # a push to it runs the rapid-rotation catch-up-20 recheck instead.
+  push:
+    branches: [spike/254-bridge-throughput]
+  workflow_dispatch:
+    inputs:
+      loaded:
+        description: GOMAXPROCS=1, background CPU, 150 ms jitter and slow renewals
+        type: boolean
+        default: false
+      stress:
+        description: Rapid interruptions, turn rotation and four occupied task slots
+        type: boolean
+        default: false
+      repetitions:
+        description: Sustained 60-second trials per candidate and store variant
+        type: choice
+        options: ['1', '5', '10']
+        default: '1'
+      factor:
+        description: Isolated factor; auto preserves the loaded switch
+        type: choice
+        options: [auto, baseline, cpu1, cpu2, stalls, renewal, combined]
+        default: auto
+      batch:
+        description: Catch-up packet bound (streaming remains one packet per effect)
+        type: choice
+        options: ['10', '20']
+        default: '10'
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        output: [catchup, stream]
+        variant: [memory, race-redis]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install disposable store dependency
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server
+      - name: Measure prototype output with full split state
+        shell: bash
+        env:
+          PION_LOG_WARN: session,bridge-throughput
+          OUTPUT: ${{ matrix.output }}
+          VARIANT: ${{ matrix.variant }}
+          LOADED: ${{ github.event_name == 'push' && 'false' || inputs.loaded }}
+          STRESS: ${{ github.event_name == 'push' && 'true' || inputs.stress }}
+          REPETITIONS: ${{ github.event_name == 'push' && '5' || inputs.repetitions }}
+          FACTOR: ${{ github.event_name == 'push' && 'baseline' || inputs.factor }}
+          BATCH: ${{ github.event_name == 'push' && '20' || inputs.batch }}
+        run: |
+          flags=(--candidate "$OUTPUT" --repeat "$REPETITIONS" --batch "$BATCH")
+          if [ "$FACTOR" != auto ]; then flags+=(--factor "$FACTOR"); fi
+          if [ "$VARIANT" = race-redis ]; then flags+=(--race --redis); fi
+          if [ "$LOADED" = true ]; then flags+=(--loaded); fi
+          if [ "$STRESS" = true ]; then flags+=(--stress); fi
+          python3 scripts/dev/measure-bridge-output.py "${flags[@]}" 2>&1 | tee bridge-throughput.log
+      - name: Preserve measurements, including threshold failures
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bridge-throughput-${{ matrix.output }}-${{ matrix.variant }}
+          path: bridge-throughput.log
+          if-no-files-found: warn

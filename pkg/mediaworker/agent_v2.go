@@ -52,17 +52,18 @@ type v2Envelope struct {
 }
 
 type v2Host struct {
-	instance       agent.Agent
-	registration   agenthost.Registration
-	ready          chan struct{}
-	tasks          []*localTask   // actor-owned
-	receiptRetries []receiptRetry // actor-owned; only receipt-blocked events wait
-	pendingInput   *agentInput    // one backpressured, unconsumed input; actor-owned
-	emissions      chan taskEmission
-	playback       playbackRuntime // guarded by session.mu
-	wakePlayback   chan struct{}
-	controls       chan controlRequest
-	force          chan struct{}
+	prototypeOutput chan prototypeOutputRequest // PROTOTYPE, NOT FOR MERGE; nil disables it.
+	instance        agent.Agent
+	registration    agenthost.Registration
+	ready           chan struct{}
+	tasks           []*localTask   // actor-owned
+	receiptRetries  []receiptRetry // actor-owned; only receipt-blocked events wait
+	pendingInput    *agentInput    // one backpressured, unconsumed input; actor-owned
+	emissions       chan taskEmission
+	playback        playbackRuntime // guarded by session.mu
+	wakePlayback    chan struct{}
+	controls        chan controlRequest
+	force           chan struct{}
 }
 
 // movePayload exists only in exact exports, including an empty exact export.
