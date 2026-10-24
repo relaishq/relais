@@ -33,6 +33,7 @@ import (
 type restartProcesses struct {
 	t                          *testing.T
 	ctx                        context.Context
+	ports                      processPorts
 	manager                    clusterprocess.Manager
 	bin, dir                   string
 	env                        []string
@@ -67,7 +68,7 @@ func restartBinaries(t *testing.T) string {
 func newRestartProcesses(t *testing.T, ctx context.Context, bin, redisAddr string, cluster bool) *restartProcesses {
 	t.Helper()
 	dir := t.TempDir()
-	sys := &restartProcesses{t: t, ctx: ctx, bin: bin, dir: dir}
+	sys := &restartProcesses{t: t, ctx: ctx, bin: bin, dir: dir, ports: newProcessPorts(t)}
 	t.Cleanup(func() {
 		if t.Failed() {
 			entries, _ := os.ReadDir(sys.dir)
@@ -83,8 +84,8 @@ func newRestartProcesses(t *testing.T, ctx context.Context, bin, redisAddr strin
 		}
 		sys.manager.Stop(false)
 	})
-	tcp := func() string { addr, err := clusterprocess.FreeTCP(); require.NoError(t, err); return addr }
-	udp := func() string { addr, err := clusterprocess.FreeUDP(); require.NoError(t, err); return addr }
+	tcp := func() string { return sys.ports.reserve(t, "tcp") }
+	udp := func() string { return sys.ports.reserve(t, "udp") }
 	sys.control, sys.relay, sys.workers[0], sys.workers[1] = tcp(), tcp(), tcp(), tcp()
 	sys.leg, sys.media = udp(), udp()
 	sys.env = append(os.Environ(), "RELAIS_REDIS_ADDR="+redisAddr, "RELAIS_REDIS_CLUSTER="+map[bool]string{true: "1", false: "0"}[cluster], fmt.Sprintf("RELAIS_REDIS_PREFIX=restart:%d:", time.Now().UnixNano()), "RELAIS_SESSIONSTORE_KEY="+strings.Repeat("00", 32))
@@ -101,6 +102,7 @@ func newRestartProcesses(t *testing.T, ctx context.Context, bin, redisAddr strin
 }
 func (s *restartProcesses) start(name string, args ...string) *clusterprocess.Child {
 	s.t.Helper()
+	s.ports.handover(s.t, args)
 	child, err := s.manager.Start(s.dir, name, s.env, args...)
 	require.NoError(s.t, err)
 	bounded, cancel := context.WithTimeout(s.ctx, 10*time.Second)
@@ -228,8 +230,7 @@ func testControlRestartProcesses(t *testing.T, addr string, cluster bool, counts
 			}
 			defer func() { stopFlow(); flow.Wait() }()
 			// A separate control cannot acquire authority or mutate while first lives.
-			secondHTTP, err := clusterprocess.FreeTCP()
-			require.NoError(t, err)
+			secondHTTP := sys.ports.reserve(t, "tcp")
 			second := sys.start("control-contender", filepath.Join(bin, "relais-control"), "-http", secondHTTP, "-relay", "http://"+sys.relay, "-worker", "0="+sys.workerURLs[0], "-worker", "1="+sys.workerURLs[1])
 			var competing controlplane.Status
 			require.NoError(t, privateapi.Do(ctx, http.DefaultClient, "http://"+secondHTTP, http.MethodGet, "/status", nil, &competing, controlplane.RemoteErrors))
@@ -243,7 +244,7 @@ func testControlRestartProcesses(t *testing.T, addr string, cluster bool, counts
 				err := privateapi.Do(ctx, http.DefaultClient, "http://"+secondHTTP, http.MethodPost, path, nil, nil, controlplane.RemoteErrors)
 				require.ErrorIs(t, err, agentv2.ErrControlNotReady)
 			}
-			err = privateapi.Do(ctx, http.DefaultClient, "http://"+secondHTTP, http.MethodDelete, "/calls/"+calls[0].SessionID(), nil, nil, controlplane.RemoteErrors)
+			err := privateapi.Do(ctx, http.DefaultClient, "http://"+secondHTTP, http.MethodDelete, "/calls/"+calls[0].SessionID(), nil, nil, controlplane.RemoteErrors)
 			require.ErrorIs(t, err, agentv2.ErrControlNotReady)
 			sys.kill(second)
 			downStart := time.Now()

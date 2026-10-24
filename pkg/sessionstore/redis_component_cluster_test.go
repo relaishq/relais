@@ -123,7 +123,7 @@ func TestComponentClusterLegacySlotMigration(t *testing.T) {
 	require.NoError(t, cluster.ForEachMaster(ctx, func(ctx context.Context, node *redis.Client) error {
 		return node.Do(ctx, "CLUSTER", "SETSLOT", slot, "NODE", targetID).Err()
 	}))
-	cluster.ReloadState(ctx)
+	require.NoError(t, redistestcluster.WaitForStable(ctx, cluster))
 	restored, err := r.ReadComponents(ctx, lease.SessionID)
 	require.NoError(t, err)
 	require.Equal(t, first.Metadata, restored.Metadata)

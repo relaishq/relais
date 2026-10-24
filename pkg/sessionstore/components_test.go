@@ -43,6 +43,9 @@ func componentCluster(t *testing.T, addrs []string) *Redis {
 	t.Helper()
 	r, err := NewRedis(context.Background(), storage.RedisConfig{Addrs: addrs, Cluster: true, Prefix: fmt.Sprintf("component:%d:", time.Now().UnixNano())}, make([]byte, 32))
 	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.NoError(t, redistestcluster.WaitForStable(ctx, r.client.(*redis.ClusterClient)))
 	t.Cleanup(func() {
 		r.maintenance.Wait()
 		ctx := context.Background()

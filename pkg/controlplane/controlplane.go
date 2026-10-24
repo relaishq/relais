@@ -106,7 +106,7 @@ type registration struct {
 
 type call struct {
 	intent         *sessionstore.ControlIntent // guarded by mu
-	terminal       bool                        // guarded by mu; terminal loss is accounted once
+	terminal       bool                        // reads hold mu or the plane registry lock; writes hold both
 	lease          sessionstore.Lease          // guarded by stateMu; last observed placed tenure
 	lossLease      sessionstore.Lease          // guarded by mu; immutable token for terminal cleanup
 	cleanupPending bool                        // guarded by the plane registry lock
@@ -873,16 +873,16 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 		status.Workers = append(status.Workers, WorkerStatus{Name: w.name, Address: w.addr, Draining: knowledge.draining, Dead: knowledge.dead, LivenessUnknown: knowledge.livenessUnknown, Recovering: knowledge.recovering, LastHeartbeat: knowledge.lastHeartbeat})
 	}
 
-	calls := make([]*call, 0, len(p.calls))
-	for _, c := range p.calls {
-		calls = append(calls, c)
+	calls := make(map[string]*call, len(p.calls))
+	for id, c := range p.calls {
+		calls[id] = c
 	}
 	p.mu.Unlock()
 	for _, c := range calls {
 		p.mu.Lock()
-		pendingCleanup := c.cleanupPending
+		terminal := c.terminal
 		p.mu.Unlock()
-		if pendingCleanup {
+		if terminal {
 			continue
 		}
 		// Sample completed-move metadata before reading authoritative ownership.
@@ -910,16 +910,33 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 		for i := range status.Workers {
 			if status.Workers[i].Address == lease.Worker {
 				cs.Owner = status.Workers[i].Name
-				status.Workers[i].Calls++
 			}
 		}
 
 		status.Calls = append(status.Calls, cs)
 	}
 	p.mu.Lock()
+	// Revalidate every sampled call at the same cut as terminal accounting.
+	// A later lease read can block after an earlier call was assembled, and
+	// terminal remains true even when cleanup clears cleanupPending.
+	live := status.Calls[:0]
+	for _, cs := range status.Calls {
+		c := calls[cs.ID]
+		if p.calls[cs.ID] == c && !c.terminal {
+			live = append(live, cs)
+		}
+	}
+	status.Calls = live
 	status.Ready, status.Pool = p.readyLocked(), p.poolLocked(time.Now())
 	status.Takeovers, status.LostCount = p.recentTakeovers(), p.lostCount
 	p.mu.Unlock()
+	counts := make(map[string]int, len(status.Workers))
+	for _, cs := range status.Calls {
+		counts[cs.Owner]++
+	}
+	for i := range status.Workers {
+		status.Workers[i].Calls = counts[status.Workers[i].Name]
+	}
 	sort.Slice(status.Workers, func(i, j int) bool { return status.Workers[i].Name < status.Workers[j].Name })
 	sort.Slice(status.Calls, func(i, j int) bool { return status.Calls[i].ID < status.Calls[j].ID })
 	return status, nil
