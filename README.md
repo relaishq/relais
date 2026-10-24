@@ -28,7 +28,7 @@ hosts and real agent workloads at this load are not measured.
 
 ## Status and limits
 
-**Pre-1.0.** The [guarantee matrix](docs/guarantees.md)
+**Alpha.** The [guarantee matrix](docs/guarantees.md)
 is the evidence and the boundary of each claim. A surviving connection can
 still have a media pause. Agent takeover restores a checkpoint; recent work
 can repeat. Applications must make external side effects safe to repeat.
@@ -170,6 +170,19 @@ in [the fact-checked comparison](docs/comparison.md); it is not a benchmark.
 | Compare tools | [Comparison](docs/comparison.md) |
 | Develop and test | [Contributing](CONTRIBUTING.md) · [Developer guides](docs/dev/) |
 | Inspect the old plugin system | [Legacy pipeline](docs/legacy/plugin-pipeline.md) |
+
+## What stays open
+
+Relais is alpha, and this section describes our intent. It may be refined as the project matures.
+
+These stay open source under Apache-2.0:
+
+- The engine: relay, workers and control plane, including call state and worker failover.
+- The agent SDKs and the open interfaces that tools and agents build on.
+- Failover benchmarks and the tooling used to produce them.
+- Telemetry and license traffic: if we add any, everything sent from your deployment will be documented, with an open client.
+
+A separate, paid operations layer may be offered later for teams that want less production operations work. It will not replace or restrict the open parts above. Any hosted service we run, such as license checks, will never be in the call path.
 
 ## Contributing
 
