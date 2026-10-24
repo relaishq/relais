@@ -7,6 +7,7 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"go/types"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -21,12 +22,14 @@ import (
 )
 
 type handlerWire struct {
-	Service     string   `json:"service"`
-	Route       string   `json:"route"`
-	RequestType string   `json:"decoded_request_type,omitempty"`
-	Queries     []string `json:"query_parameters"`
-	Statuses    []string `json:"explicit_statuses"`
-	Anonymous   []string `json:"anonymous_response_types"`
+	ResponseTypes []string `json:"-"`
+	RawDecode     bool     `json:"-"`
+	Service       string   `json:"service"`
+	Route         string   `json:"route"`
+	RequestType   string   `json:"decoded_request_type,omitempty"`
+	Queries       []string `json:"query_parameters"`
+	Statuses      []string `json:"explicit_statuses"`
+	Anonymous     []string `json:"anonymous_response_types"`
 }
 type httpWire struct {
 	Handlers    []handlerWire       `json:"registered_handlers"`
@@ -54,7 +57,7 @@ func compact(s []string) []string { slices.Sort(s); return slices.Compact(s) }
 
 // Read the actual registration and decoder arguments. These are semantic wire
 // facts, not source fingerprints: unrelated handler edits do not change them.
-func readHandler(service, pkg string, f *ast.File, route string, body ast.Node) (handlerWire, error) {
+func readHandler(service, pkg string, f *ast.File, route string, body ast.Node, typed ...*types.Info) (handlerWire, error) {
 	h := handlerWire{Service: service, Route: route}
 	declarations := map[string]ast.Expr{}
 	imports := map[string]string{}
@@ -66,6 +69,21 @@ func readHandler(service, pkg string, f *ast.File, route string, body ast.Node) 
 		}
 		imports[name] = path
 	}
+	var info *types.Info
+	if len(typed) > 0 {
+		info = typed[0]
+	}
+	recordResponse := func(expr ast.Expr) error {
+		if info == nil {
+			return nil
+		}
+		typ := info.TypeOf(expr)
+		if typ == nil {
+			return fmt.Errorf("cannot resolve written response type at %s", route)
+		}
+		h.ResponseTypes = append(h.ResponseTypes, wireType(typ))
+		return nil
+	}
 	var problem error
 	ast.Inspect(body, func(n ast.Node) bool {
 		switch x := n.(type) {
@@ -74,9 +92,40 @@ func readHandler(service, pkg string, f *ast.File, route string, body ast.Node) 
 				declarations[id.Name] = x.Type
 			}
 		case *ast.CallExpr:
+			if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "writeJSON" {
+				if len(x.Args) != 2 {
+					problem = fmt.Errorf("unrecognized response writer at %s", route)
+					return false
+				}
+				problem = recordResponse(x.Args[1])
+				return problem == nil
+			}
 			sel, ok := x.Fun.(*ast.SelectorExpr)
 			if !ok {
 				return true
+			}
+			if syntax(sel.X) == "privateapi" && sel.Sel.Name == "Write" {
+				if len(x.Args) != 2 {
+					problem = fmt.Errorf("unrecognized response writer at %s", route)
+					return false
+				}
+				problem = recordResponse(x.Args[1])
+				if problem != nil {
+					return false
+				}
+			}
+			if sel.Sel.Name == "Encode" {
+				if len(x.Args) != 1 {
+					problem = fmt.Errorf("unrecognized encoder at %s", route)
+					return false
+				}
+				problem = recordResponse(x.Args[0])
+				if problem != nil {
+					return false
+				}
+			}
+			if sel.Sel.Name == "Decode" || (syntax(sel.X) == "json" && sel.Sel.Name == "Unmarshal") {
+				h.RawDecode = true
 			}
 			if syntax(sel.X) == "privateapi" && sel.Sel.Name == "Read" {
 				if len(x.Args) != 3 {
@@ -128,11 +177,13 @@ func readHandler(service, pkg string, f *ast.File, route string, body ast.Node) 
 	h.Queries = compact(h.Queries)
 	h.Statuses = compact(h.Statuses)
 	h.Anonymous = compact(h.Anonymous)
+	h.ResponseTypes = compact(h.ResponseTypes)
 	return h, problem
 }
 
 func actualHTTPWire(t *testing.T) httpWire {
 	t.Helper()
+	checked := checkedHTTPPackages(t)
 	result := httpWire{Statuses: map[string][]string{}, Unavailable: controlUnavailableResponse(t)}
 	for service, dir := range map[string]string{"worker": "pkg/mediaworker", "relay": "pkg/relay", "control": "pkg/controlplane", "transport": "internal/privateapi"} {
 		paths, err := filepath.Glob(filepath.Join("../..", dir, "*.go"))
@@ -147,7 +198,11 @@ func actualHTTPWire(t *testing.T) httpWire {
 			if strings.HasSuffix(path, "_test.go") {
 				continue
 			}
-			f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+			f := checked[dir].files[filepath.Base(path)]
+			var err error
+			if f == nil {
+				f, err = parser.ParseFile(token.NewFileSet(), path, nil, 0)
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -212,7 +267,7 @@ func actualHTTPWire(t *testing.T) httpWire {
 					if fn, ok := body.(*ast.FuncLit); ok {
 						body = fn.Body
 					}
-					h, e := readHandler(service, "github.com/relaishq/relais/"+dir, f, route, body)
+					h, e := readHandler(service, "github.com/relaishq/relais/"+dir, f, route, body, checked[dir].info)
 					if e != nil {
 						t.Fatal(e)
 					}
@@ -248,6 +303,12 @@ func verifyDecodedRequests(fixtures []endpoint, handlers []handlerWire) error {
 			expected := ""
 			if ty := reflect.TypeOf(e.Request); ty != nil && ty.Kind() == reflect.Struct {
 				expected = ty.PkgPath() + "." + ty.Name()
+			}
+			if h.RawDecode && e.Request == nil {
+				return fmt.Errorf("%s %s decodes a body absent from its request fixture", h.Service, h.Route)
+			}
+			if err := verifyResponseTypes(e, h); err != nil {
+				return err
 			}
 			if h.RequestType != expected {
 				return fmt.Errorf("%s %s decodes %s, fixture describes %s", h.Service, h.Route, h.RequestType, expected)

@@ -139,9 +139,23 @@ func CheckStoreGolden(root string) (ScriptGolden, error) {
 	if err != nil {
 		return g, err
 	}
-	if len(actual) != len(g.Scripts) {
-		return g, fmt.Errorf("lua script inventory changed; bump the contract version, or record a reviewed note that persisted state and wire behaviour are unchanged")
+	var added, removed []string
+	for name := range actual {
+		if _, ok := g.Scripts[name]; !ok {
+			added = append(added, name)
+		}
 	}
+	for name := range g.Scripts {
+		if _, ok := actual[name]; !ok {
+			removed = append(removed, name)
+		}
+	}
+	slices.Sort(added)
+	slices.Sort(removed)
+	if len(added) > 0 || len(removed) > 0 {
+		return g, fmt.Errorf("lua script inventory changed: added %v; removed %v; review pkg/sessionstore/testdata/script-contract.json; bump the contract version, or record a reviewed note that persisted state and wire behaviour are unchanged", added, removed)
+	}
+
 	for name, sha := range actual {
 		if g.Scripts[name].SHA != sha {
 			return g, fmt.Errorf("lua SHA drift for %s; bump the contract version, or record a reviewed note that persisted state and wire behaviour are unchanged", name)

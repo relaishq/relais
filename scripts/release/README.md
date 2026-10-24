@@ -9,13 +9,18 @@ runs `check --base` against the PR base (or `HEAD^` on main) and is required by
 - HTTP: bump `internal/privateapi.ContractVersion`, then run
   `RELAIS_UPDATE_HTTP_GOLDEN=1 go test ./internal/privateapi -run TestPrivateHTTPContractGolden`.
   Keep older versioned fixtures. The test reads actual handler registrations and
-  decoder types, query names, status and failure codes, and anonymous bodies.
+  decoder and written response types, query names, status and failure codes, and anonymous bodies.
 - Lua: run `RELAIS_UPDATE_STORE_GOLDEN=1 go test ./pkg/sessionstore -run TestStoreScriptContractGolden`.
   Review every changed SHA. Bump `sessionstore.ScriptContractVersion`, or add a
   new reviewed `unchanged_tuples` note stating that persisted state **and wire
   behaviour** are unchanged. The field name is retained for manifest compatibility.
-  Discovery follows all non-test `NewScript`, `Eval` and `EvalSha` calls, including
-  frame-cache and driver scripts. Unresolvable dynamic scripts are refused.
+  Discovery covers the transitive local-package imports of `relais-worker`,
+  `relais-control`, `relais-relay` and `relais-signal`. It includes every non-test
+  Go file in those packages, across build tags. Diagnostic binaries such as
+  `relais-load` are excluded unless a component imports their package.
+  `NewScript`, `Eval`/`EvalSha` and `EvalRO`/`EvalShaRO` bodies must resolve
+  statically. Raw Redis `Do`/`Process` commands must resolve to constants and
+  cannot use `EVAL`, `EVALSHA`, `EVAL_RO`, `EVALSHA_RO`, `FCALL` or `FCALL_RO`.
 - Keys: bump `sessionstore.KeyContractVersion`, then run
   `RELAIS_UPDATE_KEY_GOLDEN=1 go test ./pkg/sessionstore ./pkg/framecache -run TestRedisKeyContractGolden`.
 - UDP: bump `relayleg.ContractVersion`, then run

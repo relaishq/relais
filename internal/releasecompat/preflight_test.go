@@ -266,6 +266,13 @@ func TestStoreGoldenRejectsChangedLua(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
+	component := filepath.Join(root, "cmd/relais-worker")
+	if err = os.MkdirAll(component, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(component, "main.go"), []byte(`package main;import(_ "github.com/relaishq/relais/pkg/sessionstore";_ "github.com/relaishq/relais/pkg/framecache")`), 0644); err != nil {
+		t.Fatal(err)
+	}
 	golden, err := os.ReadFile("../../pkg/sessionstore/testdata/script-contract.json")
 	if err != nil {
 		t.Fatal(err)

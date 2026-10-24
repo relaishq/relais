@@ -383,8 +383,12 @@ Contributor contract updates: private HTTP fixtures include real registered
 routes, decoder types, query names (`worker`, `to`, `agent-session`), status codes,
 failure codes, and anonymous error bodies. Bump `privateapi.ContractVersion`, then
 run `RELAIS_UPDATE_HTTP_GOLDEN=1 go test ./internal/privateapi -run TestPrivateHTTPContractGolden`.
-Keep previous versioned fixtures. Redis scripts are discovered at every
-`redis.NewScript`, `Eval` and `EvalSha` call site in non-test Go files; unresolved
+Keep previous versioned fixtures. Redis script discovery follows the transitive
+imports of `relais-worker`, `relais-control`, `relais-relay` and `relais-signal`,
+including all non-test Go files across build tags. Diagnostic binaries such as
+`relais-load` are excluded unless imported by a component. `redis.NewScript`,
+`Eval`/`EvalSha` and `EvalRO`/`EvalShaRO` calls are inventoried; raw `Do`/`Process`
+script/function commands refuse. Unresolved
 dynamic scripts fail generation. Run `RELAIS_UPDATE_STORE_GOLDEN=1 go test ./pkg/sessionstore -run TestStoreScriptContractGolden`
 to refresh SHA entries. Bump the store contract version, or record a reviewed note
 in each changed entry that persisted state **and wire behaviour** are unchanged.

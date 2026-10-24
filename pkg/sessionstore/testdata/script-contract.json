@@ -1,10 +1,6 @@
 {
   "contract_version": 1,
   "scripts": {
-    "cmd/relais-load/soak.go:Eval:1": {
-      "sha": "1e32aaba1c22ebe89100aab86e0288e6951a0f95",
-      "unchanged_tuples": "Coverage added for the existing script; reviewed persisted state and wire behaviour are unchanged."
-    },
     "componentCommitLua": {
       "sha": "d7f190cb2413e6478ecdae5a2347bee198a9ea87"
     },
