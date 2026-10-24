@@ -2176,17 +2176,25 @@ Resources:
             import sys, tarfile
             archive, base, work = sys.argv[1:]
             allowed = {'relais-relay', 'relais-worker', 'relais-control', 'relais-signal',
-                       'relais-demo', 'relais-load', 'start.sh', 'stop.sh', 'LICENSE', 'NOTICE', 'README.md'}
+                       'relais-demo', 'relais-load', 'relais-compat', 'compatibility.json', 'start.sh', 'stop.sh', 'LICENSE', 'NOTICE', 'README.md'}
             with tarfile.open(archive, 'r:gz') as tar:
+                found = set()
                 for member in tar.getmembers():
                     name = member.name.rstrip('/')
                     if name == base and member.isdir():
                         continue
-                    if not member.isfile() or name not in {base + '/' + n for n in allowed}:
+                    if not member.isfile() or name not in {base + '/' + n for n in allowed} or name in found:
                         raise SystemExit('unsafe archive; installation refused')
+                    found.add(name)
+                if found != {base + '/' + n for n in allowed}:
+                    raise SystemExit('incomplete archive; compatibility manifest required')
                 tar.extractall(work)
             PY
+            "$work/$base/relais-compat" artifact --manifest "$work/$base/compatibility.json" \
+              --version "$version" --os linux --arch "$arch" --binary-dir "$work/$base"
             install -d -m 0755 "$dest"
+            install -m 0644 "$work/$base/compatibility.json" "$dest/compatibility.json"
+            install -m 0755 "$work/$base/relais-compat" "$dest/relais-compat"
             for component in $components; do
               case $component in relay|worker|control|signal) ;; *) exit 2 ;; esac
               install -m 0755 "$work/$base/relais-$component" "$dest/relais-$component"

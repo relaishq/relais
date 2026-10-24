@@ -78,22 +78,45 @@ jobs:
       - name: Check repository rules
         run: make check-rules
 
+  compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Check generated manifest and reviewed contract evolution
+        env:
+          CONTRACT_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          base="$CONTRACT_BASE"
+          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          go run ./scripts/release/compat check --base "$base"
+          go test ./internal/privateapi ./internal/relayleg ./scripts/release/compat
+          go test ./pkg/sessionstore ./pkg/framecache -run 'ContractGolden$'
+
   # The build job is the aggregate gate while all work runs in parallel.
   # Making it required in GitHub settings is a separate admin decision.
   # always() turns a failed dependency into a failed check, rather than a skip.
   build:
-    needs: [quality, unit-tests, timing-smoke, call-harness]
+    needs: [quality, unit-tests, timing-smoke, call-harness, compatibility]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
       - name: Require all essential checks
         env:
+          COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           UNIT_RESULT: ${{ needs.unit-tests.result }}
           SMOKE_RESULT: ${{ needs.timing-smoke.result }}
           HARNESS_RESULT: ${{ needs.call-harness.result }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
+          test "$COMPATIBILITY_RESULT" = success
           test "$QUALITY_RESULT" = success
           test "$UNIT_RESULT" = success
           test "$HARNESS_RESULT" = success

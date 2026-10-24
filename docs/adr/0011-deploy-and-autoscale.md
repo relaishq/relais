@@ -72,7 +72,14 @@ route tuning; do not extend it to public paths.
 Updates replace the pinned template through a reviewed change set [E4]. Keep secrets, store namespace, encryption key and relay
 address resources stable. Protect store/address resources from accidental replacement; deletion retains the store and secrets by
 default and documents their continuing cost. CloudFormation rollback cannot reverse a newly written agent state format. A release
-supplies a tested compatibility manifest and rollback boundary; reject an unsupported live upgrade before starting. Preview rolls
+supplies a tested compatibility manifest and rollback boundary; reject an unsupported live upgrade before starting.
+The operator runs the [offline preflight](../../deploy/aws/README.md#compatibility-gate-before-upgrade-or-rollback)
+against every running participant and the target manifest before draining, stopping or launching any replacement.
+Upgrade uses workers, relay, control, then signaling. Rollback reverses that role order: signaling, control,
+relay, then workers, retaining newer workers until coordination has reverted. Both directions must pass
+every intermediate compatibility state; disabling admission does not remove
+v10 checkpoints, and a rollback target must retain their complete reader/writer/lifecycle support (ADR 0012 §4).
+Unknown or pre-manifest builds refuse. A CloudFormation rollback is not a state migration. Preview rolls
 compatible workers in place, one at a time: pre-drain, stop, wait for control to declare the old registration dead and recovery settled,
 then use `/private/workers/{name}/replace` and the existing rejoin handshake (`pkg/controlplane/heartbeat_http.go`, deploy guide).
 Default rollout leaves N=1: freeze new admissions, require existing load to fit one worker, and accept no further worker-failure protection.

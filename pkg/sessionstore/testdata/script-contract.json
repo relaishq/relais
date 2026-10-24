@@ -1,0 +1,46 @@
+{
+  "contract_version": 1,
+  "scripts": {
+    "componentCommitLua": {
+      "sha": "d7f190cb2413e6478ecdae5a2347bee198a9ea87"
+    },
+    "componentReadLua": {
+      "sha": "72198f93e1298a750cb0d185a98f5f8a7823d813"
+    },
+    "controlIntentLua": {
+      "sha": "fcc8459b250c1f3e9db82f7c62bd42360feec707"
+    },
+    "controlLeaseLua": {
+      "sha": "d17072be87680c6f5b1da9eac3cfd033e68d8933"
+    },
+    "deleteRouteLua": {
+      "sha": "fc9eb1fef7c80cccc8b7da1c177d1ccfb99ba28d"
+    },
+    "indexLua": {
+      "sha": "db47f2c2bf586790c42ad5b4e4b0d52a3491a33a"
+    },
+    "indexRefreshLua": {
+      "sha": "9d4e4e30bb12d59cc1a087278afe654ce5b6c93e"
+    },
+    "pkg/framecache/appendLua": {
+      "sha": "1e78b51745fe6fa905f4f157c3a065fbcc15b135",
+      "unchanged_tuples": "Coverage added for the existing script; reviewed persisted state and wire behaviour are unchanged."
+    },
+    "pkg/framecache/currentLua": {
+      "sha": "f8089343dc00145c1957f96ee6807a35a9930408",
+      "unchanged_tuples": "Coverage added for the existing script; reviewed persisted state and wire behaviour are unchanged."
+    },
+    "putRouteLua": {
+      "sha": "c4086ffbaf70d582a550704e7e65143e1d755d3b"
+    },
+    "relayLeaseLua": {
+      "sha": "729fabf7a7b59137a645cda3ec06b0a07b5fc7e2"
+    },
+    "sessionLua": {
+      "sha": "7d0ccfd07287ccd4902324f0224e85195f0e6da9"
+    },
+    "storeClockLua": {
+      "sha": "104ae65debf45156ded1e8e613705534c8e62c17"
+    }
+  }
+}
