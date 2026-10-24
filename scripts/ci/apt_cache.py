@@ -15,7 +15,9 @@ COMPONENTS = 'main restricted universe multiverse'
 
 
 def mirrors(arch):
-    return (['https://azure.archive.ubuntu.com/ubuntu', 'https://archive.ubuntu.com/ubuntu']
+    # Azure's runner-local mirror serves only HTTP (as the runner image uses it);
+    # signed InRelease files, not the transport, authenticate what apt fetches.
+    return (['http://azure.archive.ubuntu.com/ubuntu', 'https://archive.ubuntu.com/ubuntu']
             if arch == 'amd64' else
             ['https://ports.ubuntu.com/ubuntu-ports', 'http://ports.ubuntu.com/ubuntu-ports'])
 

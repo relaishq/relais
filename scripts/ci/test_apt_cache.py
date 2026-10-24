@@ -63,7 +63,7 @@ class AuthenticatedCache(unittest.TestCase):
             gpg('--armor', '--output', str(cls.fixture / 'lists' / (cls.prefix + suite + '_InRelease')),
                 '--clearsign', str(release))
         (cls.fixture / 'sources.list').write_text(apt_cache.sources(
-            'https://azure.archive.ubuntu.com/ubuntu', 'noble', 'amd64'))
+            'http://azure.archive.ubuntu.com/ubuntu', 'noble', 'amd64'))
 
     def setUp(self):
         self.case = tempfile.TemporaryDirectory(dir=self.root)
@@ -86,7 +86,7 @@ class AuthenticatedCache(unittest.TestCase):
             return installer.download(['fixture'], 'noble', 'amd64', self.cache)
 
     def assert_mirror_fallback(self):
-        self.assertEqual('https://azure.archive.ubuntu.com/ubuntu', self.download())
+        self.assertEqual('http://azure.archive.ubuntu.com/ubuntu', self.download())
         self.assertTrue(any('update' in command for command in self.commands))
         self.assertFalse(any('--download-only' in command and '--no-download' in command
                              for command in self.commands))

@@ -77,7 +77,7 @@ class PackageSetup(unittest.TestCase):
     def test_incomplete_cache_falls_back_to_a_bounded_download(self):
         (self.cache / 'sources.list').write_text('cached')
         self.fail_cache = True
-        self.assertEqual('https://azure.archive.ubuntu.com/ubuntu', self.download())
+        self.assertEqual('http://azure.archive.ubuntu.com/ubuntu', self.download())
         self.assertEqual(1, sum('update' in command for command, _ in self.commands))
 
     def test_arm_uses_ports_and_retains_signature_verification_on_fallback(self):
