@@ -52,6 +52,7 @@ func TestLeanCloudAllowanceDefault(t *testing.T) {
 			p.Allowances = append(p.Allowances, row)
 		}
 	}
+	m.Topology = "cloud"
 	r = judgeLean(m)
 	require.Equal(t, "pass", r.Outcome, leanCauses(r))
 	require.Equal(t, "pass", r.CloudQualification.Outcome)
@@ -225,4 +226,60 @@ func TestLeanPlanFalseRefused(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest.json")
 	require.NoError(t, os.WriteFile(path, b, 0600))
 	require.ErrorContains(t, runArgs([]string{"-lean-plan=false", "-lean-capacity=" + path, "-output=" + filepath.Join(t.TempDir(), "report.json")}), "lean-plan requires true")
+}
+
+func TestLeanEventLossSettleWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		lostAt     time.Duration
+		clockError string
+		want       string
+	}{
+		{"honest settled event loss", 6400 * time.Millisecond, "", "pass"},
+		{"outside settle window", 6700*time.Millisecond + time.Nanosecond, "", "fail"},
+		{"honest loss with uncertain clocks", 6400 * time.Millisecond, "clock step", "inconclusive"},
+		{"inclusive settle boundary with uncertain clocks", 6700 * time.Millisecond, "clock step", "inconclusive"},
+		{"outside with uncertain clocks", 6700*time.Millisecond + time.Nanosecond, "clock step", "fail"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := leanFixture(t)
+			p := &m.Phases[0]
+			c := p.Run.Processes[0].Calls[0].Call
+			require.Equal(t, p.Run.StartedAt.Add(6100*time.Millisecond), c.Moves[0].Receipt.End)
+			p.Timings[0].ReceiptSentAt = p.Run.StartedAt.Add(6200 * time.Millisecond)
+			c.Distributed.ClockError = tc.clockError
+			delivery := &c.Recording.Delivery.Audio
+			delivery.Returned--
+			delivery.Lost = 1
+			delivery.LostAt = []time.Duration{tc.lostAt}
+			r := judgeLean(m)
+			require.Equal(t, tc.want, r.Outcome, leanCauses(r))
+			if tc.want == "fail" {
+				require.Contains(t, leanCauses(r), "loss outside caller-local")
+			}
+		})
+	}
+}
+
+func TestLeanSummaryIncludesCloudQualification(t *testing.T) {
+	m := leanFixture(t)
+	dir := t.TempDir()
+	input := filepath.Join(dir, "manifest.json")
+	b, err := json.Marshal(m)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(input, b, 0600))
+	stdout, err := os.Create(filepath.Join(dir, "stdout.txt"))
+	require.NoError(t, err)
+	original := os.Stdout
+	func() {
+		os.Stdout = stdout
+		defer func() { os.Stdout = original }()
+		err = runArgs([]string{"-lean-capacity=" + input, "-output=" + filepath.Join(dir, "report.json")})
+	}()
+	require.NoError(t, stdout.Close())
+	require.NoError(t, err)
+	summary, err := os.ReadFile(stdout.Name())
+	require.NoError(t, err)
+	require.Contains(t, string(summary), "lean outcome=pass")
+	require.Contains(t, string(summary), "cloud=NOT-RUN")
 }

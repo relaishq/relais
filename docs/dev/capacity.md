@@ -527,8 +527,10 @@ receipts, incomplete coverage and unknown telemetry remain inconclusive.
 Known call loss, corruption or independently confirmed service failure still
 fails when timing or generators are uncertain. Caller-local checks run before
 clock validation: a gap over two seconds or content loss outside the matched
-caller-local arm/receipt bracket fails even with invalid clock probes. Loss
-inside that bracket still needs valid interval evidence; the bracket alone
+caller-local arm/receipt bracket plus the 500 ms delivery settle window fails
+even with invalid clock probes. The inclusive bracket runs from arm acknowledgment
+through receipt send plus `soakDeliverySettle`. Loss inside that bracket still
+needs valid interval evidence; the bracket alone
 cannot approve it. Missing per-track whole-call gap inventory is inconclusive;
 inventory overflow fails, including when the recording flag is absent.
 

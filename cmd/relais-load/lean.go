@@ -357,7 +357,7 @@ func runLean(fs *flag.FlagSet, manifest, output, prices string, plan bool) error
 	if err := writeJSON(output, r); err != nil {
 		return err
 	}
-	fmt.Printf("lean outcome=%s T=1 expected-wall=%ds cost=%s report=%s\n", r.Outcome, r.Schedule.ExpectedSeconds, r.Cost.Status, output)
+	fmt.Printf("lean outcome=%s cloud=%s T=1 expected-wall=%ds cost=%s report=%s\n", r.Outcome, r.CloudQualification.Outcome, r.Schedule.ExpectedSeconds, r.Cost.Status, output)
 	if r.Outcome != "pass" {
 		return fmt.Errorf("lean capacity %s; see report", r.Outcome)
 	}

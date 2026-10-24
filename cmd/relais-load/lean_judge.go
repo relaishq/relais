@@ -643,7 +643,7 @@ func judgeLeanLocalContinuity(p leanPhase, c *callharness.Report, v *leanVerdict
 					}
 					bracket = true
 					instant := c.StartedAt.Add(at)
-					inside = inside || (!instant.Before(timing.ArmAcknowledgedAt) && !instant.After(timing.ReceiptSentAt))
+					inside = inside || (!instant.Before(timing.ArmAcknowledgedAt) && !instant.After(timing.ReceiptSentAt.Add(soakDeliverySettle)))
 				}
 			}
 			if !inside && (bracket || p.Kind == "boundary") {
