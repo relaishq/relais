@@ -171,6 +171,19 @@ in [the fact-checked comparison](docs/comparison.md); it is not a benchmark.
 | Develop and test | [Contributing](CONTRIBUTING.md) · [Developer guides](docs/dev/) |
 | Inspect the old plugin system | [Legacy pipeline](docs/legacy/plugin-pipeline.md) |
 
+## What stays open
+
+Relais is alpha, and this section describes our intent. It may be refined as the project matures.
+
+These stay open source under Apache-2.0:
+
+- The engine: relay, workers and control plane, including call state and failover.
+- The agent SDKs and the open interfaces that tools and agents build on.
+- Failover benchmarks and the tooling used to produce them.
+- Telemetry and license traffic: everything sent from your deployment is documented, with an open client.
+
+A separate, paid operations layer may be offered later for teams that want less production operations work. It will not replace or restrict the open parts above. Any hosted service we run, such as license checks, will never be in the call path.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for build, test, lint, and PR checks.
