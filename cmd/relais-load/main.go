@@ -577,6 +577,8 @@ func run() error {
 func runArgs(args []string) error {
 	fs := flag.NewFlagSet("relais-load", flag.ContinueOnError)
 	version := buildinfo.VersionFlag(fs)
+	lean := fs.String("lean-capacity", "", "judge a lean external-pool evidence manifest; starts no processes")
+	leanScheduleOnly := fs.Bool("lean-plan", false, "print the serial lean schedule and wall-time budget")
 	c := config{Limits: loadgen.DefaultLimits()}
 	c.Worker.Flags(fs)
 	var events eventFlags
@@ -638,6 +640,12 @@ func runArgs(args []string) error {
 	}
 	if fs.NArg() != 0 {
 		return errors.New("unexpected positional arguments")
+	}
+	if *lean != "" || *leanScheduleOnly {
+		return runLean(fs, *lean, c.Output, c.Prices, *leanScheduleOnly)
+	}
+	if flagWasSet(fs, "lean-capacity") {
+		return errors.New("lean-capacity requires an evidence manifest")
 	}
 	if *externalCaller && *child {
 		return errors.New("external-caller and child are separate modes")

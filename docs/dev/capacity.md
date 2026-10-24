@@ -357,3 +357,230 @@ blocks hosted approval. The workflow uploads raw JSON, every child log, exact
 binary hashes, runner details and the gate report even on failure. Hosted
 results and ADR projection comparisons are recorded in `capacity-results.md`
 from the uploaded artifacts.
+
+## Lean preview: external callers and two deployed workers
+
+`relais-load -lean-capacity=manifest.json -output=lean-report.json` judges
+artifacts from an **already deployed** fixed pool. It starts no services,
+connects to no store/provider, and does not control a remote machine. Existing
+`-capacity` and `-soak` policies, their three-worker requirements and their
+refusal of distributed point estimates remain unchanged. Other mode/config
+flags are rejected by the lean entry. `-prices=ledger.json` can supply the
+ledger instead of the manifest's `prices` object.
+
+The approved workload is **T=1 survivor-safe call**, with two ready workers
+and observed `WorkerCallCap=2`. The cap is an admission limit, not a measured
+worker capacity. A separate fault-free boundary phase fills both workers to
+two calls each, then attempts a fifth. It must return `503`, JSON code
+`at_capacity`, and `Retry-After: 1`. Authoritative before/after ownership and
+reservations must be identical, the refusal counter must increase once, and
+the four existing calls must retain valid media. This phase demonstrates a
+bounded two-call/worker floor; it does not authorize four survivor-safe calls.
+
+Preview limits remain: one worker crash leaves no destination for another
+move. Restore/rejoin the second worker before each subsequent trial. A drain
+needs independent zero local sessions, ownership, reservations and transfers.
+The template's fixed worker names (`w1`, `w2`) remain unchanged across
+replacement. The lean manifest pairs each name with an explicit process
+generation and requires a fresh session ID for every phase. A kill must
+produce a different restored generation, and its successor must match the
+next phase's starting generation. Keep each incarnation's counters separate;
+local PIDs are not unique across caller runners. Receipts preserve actual
+server worker names and ownership epochs. This bounded fresh-session policy
+does not relax the general distributed protocol's guidance for a long-lived
+call across replacements; reusing a call between lean phases is refused.
+
+### Schedule and private-runner contract
+
+Print a machine-readable preflight budget without starting anything:
+
+```sh
+./bin/relais-load -lean-plan -output=lean-plan.json
+```
+
+The minimum serial schedule budgets **40 minutes (2,400 seconds)** against
+the private stage's **120-minute** gate window:
+
+| Work | Budget |
+| --- | ---: |
+| 20 planned moves | 20 × 30 s = 10 min |
+| 10 kills/takeovers and 2 drains, with callers live through restore | 12 × 120 s = 24 min |
+| Four-call admission boundary and fifth-call refusal | 2 min |
+| Caller setup and final cleanup observation | 4 min |
+
+Each recovery trial runs one call, with at least 3 s warmup and more than 7 s
+recovery tail. A move uses 30 s. A kill/drain uses 120 s, including the
+90 s restore allowance; the caller must remain live until restore is proven.
+Restore must complete within the explicit 90 s budget. This is
+an unmeasured planning timeout, not a cloud boot guarantee. Expiry is
+inconclusive; do not reduce the 20 move/10 takeover counts. The report scales
+`expected_wall_seconds` to submitted phase durations/counts, retaining at
+least these per-phase budgets, and warns when that schedule exceeds an hour.
+It never grants full-soak acceptance: the existing 50-concurrent-call,
+one-hour and memory qualification requirements still apply to that claim.
+
+The private acceptance runner owns deployment/fault/teardown operations. It
+launches the existing external caller on each selected free hosted runner:
+
+```sh
+./bin/relais-load -external-caller -distributed -run-id=RUN_ID \
+  -signaling=https://SIGNAL_HOST/calls -relay=RELAY_IPV4:PORT \
+  -bearer-token-file=TOKEN_FILE -caller-bind=CALLER_IPV4:0 \
+  -frontend-control-bound=MEASURED_BOUND \
+  -frontend-worker-bound=MEASURED_BOUND -clock-drift-ppm=MEASURED_PPM \
+  -duration=30s -sample-every=1s -event-retention=180s \
+  -callers=1 -output=caller.jsonl
+```
+
+Use `-duration=120s` for kill/drain phases and the boundary. A producer may
+submit shorter completed fault trials only when restore was already proven
+within the caller lifetime; the preflight budget still reserves 120 s each.
+Use the existing pinned-certificate option when required. Never put the token
+in the manifest or command arguments. Runner-local operator endpoints remain
+loopback; drive `/start`, `/arm-event` and `/record-events` through the
+runner's own trusted execution channel. Never expose private service APIs or
+caller operator endpoints publicly. Use the identity, arming margins, actual
+worker-host SIGKILL origin and durable control receipt contract in
+[distributed evidence](distributed-evidence.md). Missing or uncertain
+operations stay in the artifact. After every trial, close its callers before
+creating the next trial's callers. Observe final session/relay/store cleanup;
+leave deployed services running for their owner to tear down.
+
+### Manifest v1
+
+The input is one strict JSON object, at most 64 MiB. Unknown fields and trailing
+objects are errors. Paths/credentials for the private runner are not inputs.
+Durations use integer nanoseconds; timestamps use RFC3339. The Go definitions
+in `cmd/relais-load/lean.go`, `internal/loadgen/report.go`, and the existing
+caller/telemetry report types are the wire schema. `TestLeanEntryIsSeparate`
+round-trips a complete synthetic manifest through the actual CLI entry.
+
+| Field | Required evidence |
+| --- | --- |
+| `version`, `run_id`, `region`, `build`, `agent`, `payload` | Version 1 and exact workload/build identity |
+| `signaling`, `relay` | Credential-free HTTPS URL and specific IPv4 UDP endpoint |
+| `store_durability`, `store_tls`, `relay_buffer_enabled` | `sync`, true, and observed buffer setting |
+| `clock` | `frontend_control_bound_ns`, `frontend_worker_bound_ns`, `drift_ppm`, and an `independent_measurements` reference; zero is an explicit measured assumption |
+| `callers` | 1–4 unique `id` values, each with external `runner`, `region`, and specific IPv4 `bind` ending in `:0` |
+| `phases` | Ordered unique IDs, kind `move`, `kill`, `drain`, or `boundary`; at least 20/10/2/1 respectively; exactly one boundary |
+| `cleanup` | Existing `loadgen.LeakReport`: independent checked inventories, relay inactivity wait, retention/scan positive controls; no leaked callers, sessions, keys or owned listeners |
+| `ena_required` | Require allowance evidence for relay, shared control host and every worker generation when true |
+| `prices` | Optional complete dated ledger described below |
+
+Each phase uses exactly one external generator: one call for recovery, four
+calls for the boundary, within the existing calibrated four-call/process cap.
+Different phases may use different caller runners/regions. This keeps raw
+generator times on one caller clock per phase; the policy refuses a joined
+multi-runner phase rather than treating different clocks as equal.
+
+Each phase contains `caller_ids` aligned with its `run.processes`, fresh
+`before`, `after`, and `restored` pool observations, and the unmodified
+`loadgen.RunReport` in `run`. A pool has `at`, `age_seconds`, `stale`,
+`worker_call_cap`, and exactly two `workers`. Each worker has its registration
+`name`, unique process incarnation `generation`, `ready`, accepted `sessions`, and
+incoming `reservations`. Pool `at` timestamps use the control host clock.
+`completed_at` is a control-clock observation after the phase callers close.
+The judge maps before/completion times onto the caller clock with its probes
+and requires the entire media lifetime inside the conservative bracket. The
+next phase cannot start before the previous completion. Pools must be fresh
+within one second. Registration
+and generation continuity must hold between restored and next-before pools.
+Recovery phases have one matched event and one timing bracket. `timings`
+contains its complete operation `identity`, `caller_arm_acknowledged_at` and
+`caller_receipt_sent_at`, captured on that caller runner's clock. Use the arm
+acknowledgment completion and receipt-request send times as conservative
+brackets; mapped events must fit entirely inside them. Drain phases also
+supply `drain_empty`; the boundary supplies `admission` with HTTP result,
+pool snapshots and refusal-counter observations.
+
+Service telemetry needs an independent bound on alignment to the phase's media window. Supply
+`telemetry_window_error_ns` and the independent
+`telemetry_window_evidence` reference. This is a producer requirement;
+frontend clock probes alone do not establish service-window alignment. The error bound must be less than half the phase duration. Store
+budgets use the conservative call-second denominator `calls × (duration -
+2 × alignment_error)`; the corresponding lower rate uses `duration +
+2 × alignment_error`. A threshold straddle is inconclusive; only a breach
+across the whole interval fails. Both bounds are reported. Missing/reset
+counters block approval. Supply
+raw first/last counters, resources and 100 ms per-session age samples.
+Service process names are `relay`, `control`, `store`, and
+`worker-NAME@GENERATION`; replacements have separate process observations.
+Normalize against total concurrent calls × the shared media-window duration;
+the judge recomputes rates from raw counter deltas, retaining measured egress
+separately from the conservative store-budget denominator.
+
+The judge pools identity-matched distributed trials across **serial** phases
+only for trial counts, interval verdicts and move-gap p95. It never treats the
+number of serial report records as concurrent occupancy. It reconstructs clock
+maps from probes, checks receipt/identity/bracket agreement, and retains all
+original distributed fields. Scalar event start/end, per-event track gaps and
+resume point estimates cannot establish acceptance. Clock straddles, missing
+receipts, incomplete coverage and unknown telemetry remain inconclusive.
+Known call loss, corruption or independently confirmed service failure still
+fails when timing or generators are uncertain.
+
+The existing store ceilings (100 commands and 128 KiB/call-second), 550 ms
+checkpoint **and** snapshot p99 with 100 ms coverage, generator isolation/stall
+rules, whole-call delivery, event loss/freshness/decoded-content rows,
+per-track interval move p95, 150 ms unscheduled gaps, <2 s takeover and actual
+kill-to-live, survivor occupancy, takeover counters and cleanup all apply.
+Every required lean phase must be conclusive. Memory observations retain the
+existing trend diagnostic, including `insufficient-data` for short trials.
+No phase average can hide another phase's failure.
+
+Each optional `allowances` row has `host`, `generation`, `first`, `last`, and
+`conntrack_remaining`. Include all four ENA counters:
+`pps_allowance_exceeded`, `conntrack_allowance_exceeded`,
+`bw_in_allowance_exceeded`, `bw_out_allowance_exceeded`.
+Any positive delta fails; missing/reset supplied counters are inconclusive.
+When `ena_required=true`, missing required hosts also blocks approval. Without
+these observations, a generic service verdict is not ENA/cloud qualification.
+
+### Dated full-stack ledger
+
+Lean prices use a separate schema from the legacy local capacity price file.
+Provide `currency`, matching `region`, `date` (`YYYY-MM-DD`), `source`, and
+`lines`. Every line has `category`, `resource`, `meter`, `quantity`, `rate`,
+and `steady_quantity_per_hour`. Quantities cover the actual allocation window;
+rates and units come from the dated tariff. A duplicate resource/meter is
+rejected so shared hosts and transfer are not counted twice. Any explicit zero
+also needs `zero_reason`. Missing quantities, rates, categories or dates are
+listed in `cost.unknown`; none silently become free.
+
+Required categories are `workers`, `relay`, `control_signaling`, `store_nodes`,
+`store_sync`, `public_egress`, `inter_az`, `ingress`, `nat_endpoints`, `disk`,
+`ipv4`, `observability_api`, `secrets`, and `retained_surge`. Count both workers,
+the relay host including its same-host standby once, shared control/signaling
+once, both store nodes, and the applicable synchronous durability premium.
+Account for retained/surge resources, ALB/WAF, NAT/endpoints and other billed
+items through the corresponding categories. Explicit inapplicable categories
+have zero quantity/rate and a reason. No AWS rates are embedded or fetched.
+
+`public_egress.quantity` is GiB from measured forwarded UDP payload plus 28
+IPv4/UDP bytes per public packet. The judge cross-checks it. Do not infer
+managed-store billable writes from Redis request/reply traffic. The ledger
+keeps other transfer categories separate to avoid duplicate charges.
+
+```text
+call_hours = sum(caller HungUpAt - caller ConnectedAt) / 3600
+allocated cost/call-hour = sum(quantity × rate) / call_hours
+steady T=1 cost/call-hour = sum(steady_quantity_per_hour × rate)
+```
+
+Call durations stay on each caller's clock and include connected setup waits
+before a common media start. Required worker/relay/shared-control/store
+quantities must cover observed node-hours, and steady quantities must include
+the full two-worker, one-relay, one-control, two-store-node floor.
+
+The report separates actual test allocation (including the four-call boundary)
+from the steady survivor-safe T=1 estimate and lists every unknown input.
+A service pass can coexist with `cost.status=NOT-RUN`; the private paid stage
+must require validated costs separately. No total is emitted for an incomplete
+ledger or unvalidated service run. AI fees, taxes and discounts are explicitly
+excluded. Idle allocation belongs in supplied resource quantities; this test
+is not a measured monthly idle bill or a cheaper-than-hosted comparison.
+
+Synthetic tests prove the policy and artifact protocol only. Real AWS
+provisioning/IAM, managed-store durability/failover, ENA behavior, WAN timing,
+consent survival, sustained capacity, bills and teardown remain **NOT-RUN**
+until the separate approved private cloud stage supplies actual evidence.
