@@ -4,7 +4,7 @@ Status: **Proposed**. **Amends ADR 0010**. Part of [#254](https://github.com/rel
 
 ## Approve now vs decide later
 
-**Approved now:** the decided rows and starting the **50 packets/s measurement**. No production output design is selected. **Still open for Derek:** wire transport, dispatch, history size, tool safety/rollout and lost-speech handling. Other Proposed rows remain recommendations; the table and first step define approval scope.
+**Approved now:** the decided rows, including wire transport, dispatch, history size, tool safety/rollout and lost-speech handling (decided 2026-10-23), and starting the **50 packets/s measurement**. No production output design is selected. Other Proposed rows remain recommendations to confirm with measurements.
 
 ## What you are approving
 
@@ -17,9 +17,9 @@ Status: **Proposed**. **Amends ADR 0010**. Part of [#254](https://github.com/rel
 | Package home/version line | Decided | `python/relais-agent` and `python/pipecat-relais` stay here. One tag versions Go binaries and both Python packages; coordinated releases need Python CI. |
 | PyPI names | Decided | Publish `relais-agent` and `pipecat-relais`; `relais` is taken. |
 | Token authority/pool | Decided | The owning worker issues/verifies session/epoch/bot-instance tokens. Pool per worker or relay; recommend per-worker pools. |
-| Wire transport (#254 Q1) | Proposed | Private WebSocket with Opus and JSON. Simple setup requires explicit bounds/version rules. |
-| Dispatch (#254 Q2) | Proposed | Warm runners register with every eligible worker. More sockets buy a defined reassignment/revocation path. |
-| History (#254 Q3) | Proposed | Enable split checkpoints: 3,072 B total working, 8,192 B history. Keep four exchanges plus bounded summary; disclose truncation. |
+| Wire transport (#254 Q1) | Decided | Private WebSocket with Opus and JSON. Simple setup requires explicit bounds/version rules. |
+| Dispatch (#254 Q2) | Decided | Warm runners register with every eligible worker. More sockets buy a defined reassignment/revocation path. |
+| History (#254 Q3) | Decided | Enable split checkpoints: 3,072 B total working, 8,192 B history. Keep four exchanges plus bounded summary; disclose truncation. |
 | Destination (#254 Q4) | Proposed | Connect directly to the owner. Operators maintain private endpoints and a bootstrap directory. |
 | Issuer (#254 Q5) | Decided | Current owning worker, including after transfer. Signal/control never mint or verify attach tokens. |
 | Pipecat versions (#254 Q6) | Proposed | Start with one tested Pipecat/PyAV pair. Widen only through a tested matrix; no range is supported yet. |
@@ -27,8 +27,8 @@ Status: **Proposed**. **Amends ADR 0010**. Part of [#254](https://github.com/rel
 | Hang target | Proposed | A hang means the bot's **pipeline** stops answering, even if its connection still answers pings. With a 2 s detector, last-pipeline-pong-to-attached p95 ≤3 s needs same-runner revocation confirmation. Without confirmation, worst-case permission wait is permit expiry, about 5 s; attachment follows. |
 | Bot-permit lifetime | Proposed | Pool-wide 5 s cap, refreshed only by successful existing lease renewals. Partitions cause shorter pauses, but store outages stop bot work sooner than media. |
 | Output experiment | Start approved | Start 50 packets/s measurement; choose batching or streaming output from its result. Added output latency must meet p95 ≤150 ms; neither design is selected. |
-| Lost speech | Proposed | Save completed user text before generation. If no recoverable transcript exists, ask the caller to repeat; recordings need another design. |
-| Tool safety/rollout | Proposed | Accept uncertain in-flight effects; require app idempotency/query support. One extra warm slot per simultaneous handoff permits rolling redeploys. |
+| Lost speech | Decided | Save completed user text before generation. If no recoverable transcript exists, ask the caller to repeat; recordings need another design. |
+| Tool safety/rollout | Decided | Accept uncertain in-flight effects; require app idempotency/query support. One extra warm slot per simultaneous handoff permits rolling redeploys. |
 | Host changes | Proposed | Add local publication/acknowledgement hooks, generation checks, stable exports and bridge-only playback completion. Keep public v2 signatures and other agents unchanged. |
 
 ## Owner summary
@@ -67,7 +67,7 @@ Separate latest-wins working/history candidates wait outside the accepted bot pa
 
 ADR 0012's maximum hot/forced pattern leaves 2,416 B/s for cold writes; `8,228/2,416 ≈3.4 s` is conditional arithmetic. [#214](https://github.com/relaishq/relais/issues/214) measured only 1.3–3.4% headroom against **131,072 B request+reply per call-second**. Full-size churn measured 126,652–129,424 B/call-second before bridge overhead. Its ~3,155 B/s projection is not guaranteed spare capacity: any extra store I/O must be measured. Permit WebSocket bytes are separate bridge traffic. **Full-size bridge calls/primary: NOT-RUN**. Slices 1/6 measure per-call traffic, renewal tails, CPU and safe calls/primary; the roughly 200-call echo ceiling is not bridge capacity.
 
-Build/publish Go binaries and both Apache-2.0 Python packages from the same tag. Include bridge protocol and supported pairs in [#252's compatibility manifest](https://github.com/relaishq/relais/issues/252); CI/preflight refuse unsupported upgrade/rollback pairs. Matching release numbers alone prove no compatibility. **Before merge:** reserve the PyPI names `relais-agent` and `pipecat-relais` (**owner action**).
+Build/publish Go binaries and both Apache-2.0 Python packages from the same tag. Include bridge protocol and supported pairs in [#252's compatibility manifest](https://github.com/relaishq/relais/issues/252); CI/preflight refuse unsupported upgrade/rollback pairs. Matching release numbers alone prove no compatibility. Reserve the PyPI names `relais-agent` and `pipecat-relais` when the packages are first published (**owner action**); this is not a precondition for accepting this ADR.
 
 **Approve the experiment first.** Measure sustained speech, jitter, partial final batches and loaded renewal gaps before selecting output design. Five 20 ms packets exactly fill a 100 ms emission interval, leaving no catch-up margin. Streaming output is another candidate. The 150 ms threshold spans encoded packet ready in Python to host pacer admission, including batching/task waits. Provider and caller playout time are separate.
 
