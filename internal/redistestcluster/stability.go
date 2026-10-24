@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/relaishq/relais/internal/redisendpoint"
 )
 
 // WaitForStable waits for every node to agree on all slot owners, then waits
@@ -55,29 +56,52 @@ func WaitForStable(ctx context.Context, clients ...*redis.ClusterClient) error {
 
 func agreedSlotOwners(ctx context.Context, client *redis.ClusterClient) ([16384]string, error) {
 	var agreed [16384]string
+	// SLOTS can omit replicas whose replication offset has not yet reached
+	// the discovery source. In particular, a newly promoted replica can be
+	// missing while every sampled node still agrees on the previous epoch.
+	// Expand membership from SHARDS before declaring agreement.
+	var nodes []*redis.Client
+	known := map[string]bool{}
 	var mu sync.Mutex
+	err := client.ForEachShard(ctx, func(_ context.Context, node *redis.Client) error {
+		mu.Lock()
+		defer mu.Unlock()
+		known[node.Options().Addr] = true
+		nodes = append(nodes, node)
+		return nil
+	})
+	if err != nil {
+		return agreed, err
+	}
+	var opened []*redis.Client
+	defer func() {
+		for _, node := range opened {
+			_ = node.Close()
+		}
+	}()
 	seen := false
-	err := client.ForEachShard(ctx, func(ctx context.Context, node *redis.Client) error {
+	for i := 0; i < len(nodes); i++ {
+		node := nodes[i]
 		info, err := node.ClusterInfo(ctx).Result()
 		if err != nil {
-			return err
+			return agreed, err
 		}
 		if !strings.Contains(info, "cluster_state:ok\r\n") {
-			return fmt.Errorf("node %s has not reached cluster_state:ok", node.Options().Addr)
+			return agreed, fmt.Errorf("node %s has not reached cluster_state:ok", node.Options().Addr)
 		}
 		shards, err := node.ClusterShards(ctx).Result()
 		if err != nil {
-			return err
+			return agreed, err
 		}
 		var owners [16384]string
 		for _, shard := range shards {
 			primary, err := shardPrimaryAddress(shard, node.Options().TLSConfig != nil)
 			if err != nil {
-				return err
+				return agreed, err
 			}
 			for _, slot := range shard.Slots {
 				if slot.Start < 0 || slot.End >= int64(len(owners)) || slot.Start > slot.End {
-					return fmt.Errorf("node %s returned invalid slots", node.Options().Addr)
+					return agreed, fmt.Errorf("node %s returned invalid slots", node.Options().Addr)
 				}
 				for i := slot.Start; i <= slot.End; i++ {
 					owners[i] = primary
@@ -86,21 +110,38 @@ func agreedSlotOwners(ctx context.Context, client *redis.ClusterClient) ([16384]
 		}
 		for _, owner := range owners {
 			if owner == "" {
-				return fmt.Errorf("node %s has incomplete slots", node.Options().Addr)
+				return agreed, fmt.Errorf("node %s has incomplete slots", node.Options().Addr)
 			}
 		}
-		mu.Lock()
-		defer mu.Unlock()
 		if seen && owners != agreed {
-			return fmt.Errorf("node %s disagrees on slot owners", node.Options().Addr)
+			return agreed, fmt.Errorf("node %s disagrees on slot owners", node.Options().Addr)
 		}
 		agreed, seen = owners, true
-		return nil
-	})
-	if err == nil && !seen {
-		err = fmt.Errorf("cluster has no nodes")
+		for _, shard := range shards {
+			for _, member := range shard.Nodes {
+				addr, err := shardNodeAddress(member, node.Options().TLSConfig != nil)
+				if err != nil {
+					return agreed, err
+				}
+				if known[addr] {
+					continue
+				}
+				if err := redisendpoint.ValidateDev(addr); err != nil {
+					return agreed, err
+				}
+				opts := *node.Options()
+				opts.Addr, opts.MaxRetries = addr, -1
+				discovered := client.Options().NewClient(&opts)
+				known[addr] = true
+				nodes = append(nodes, discovered)
+				opened = append(opened, discovered)
+			}
+		}
 	}
-	return agreed, err
+	if !seen {
+		return agreed, fmt.Errorf("cluster has no nodes")
+	}
+	return agreed, nil
 }
 
 func shardPrimaryAddress(shard redis.ClusterShard, tls bool) (string, error) {
@@ -108,20 +149,24 @@ func shardPrimaryAddress(shard redis.ClusterShard, tls bool) (string, error) {
 		if node.Role != "master" || node.Health != "online" {
 			continue
 		}
-		host := node.Endpoint
-		if host == "" || host == "?" {
-			host = node.IP
-		}
-		port := node.Port
-		if tls && node.TLSPort > 0 {
-			port = node.TLSPort
-		}
-		if host == "" || port <= 0 {
-			return "", fmt.Errorf("shard primary has no reachable endpoint")
-		}
-		return net.JoinHostPort(host, strconv.FormatInt(port, 10)), nil
+		return shardNodeAddress(node, tls)
 	}
 	return "", fmt.Errorf("shard has no online primary")
+}
+
+func shardNodeAddress(node redis.Node, tls bool) (string, error) {
+	host := node.Endpoint
+	if host == "" || host == "?" {
+		host = node.IP
+	}
+	port := node.Port
+	if tls && node.TLSPort > 0 {
+		port = node.TLSPort
+	}
+	if host == "" || port <= 0 {
+		return "", fmt.Errorf("shard node has no reachable endpoint")
+	}
+	return net.JoinHostPort(host, strconv.FormatInt(port, 10)), nil
 }
 
 // One harmless routing key per slot lets metadata checks cover indexes and
