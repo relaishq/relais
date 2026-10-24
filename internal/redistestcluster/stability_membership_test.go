@@ -34,29 +34,38 @@ func TestClusterWaitsForReplicaMissingFromSlotDiscovery(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, missing)
-	var corrected, observed atomic.Bool
-	// Valkey omits zero-offset replicas from SLOTS, while SHARDS still lists
-	// them. Model that discovery gap and a node that has not applied the epoch.
-	opts := &redis.ClusterOptions{Addrs: addrs, MaxRedirects: -1, MaxRetries: -1}
-	opts.NewClient = func(opts *redis.Options) *redis.Client {
-		node := redis.NewClient(opts)
-		node.AddHook(incompleteMembershipHook{address: opts.Addr, missing: missing, corrected: &corrected, observed: &observed})
-		return node
+	for _, health := range []string{"loading", "fail"} {
+		t.Run(health, func(t *testing.T) {
+			var corrected, observed atomic.Bool
+			// Valkey omits zero-offset replicas from SLOTS, while SHARDS still lists
+			// them. A loading member must agree; a failed member cannot block readiness.
+			opts := &redis.ClusterOptions{Addrs: addrs, MaxRedirects: -1, MaxRetries: -1}
+			opts.NewClient = func(opts *redis.Options) *redis.Client {
+				node := redis.NewClient(opts)
+				node.AddHook(incompleteMembershipHook{address: opts.Addr, missing: missing, health: health, corrected: &corrected, observed: &observed})
+				return node
+			}
+			client := redis.NewClusterClient(opts)
+			defer func() { _ = client.Close() }()
+			blocked, stop := context.WithTimeout(ctx, time.Second)
+			err = WaitForStable(blocked, client)
+			stop()
+			if health == "fail" {
+				require.NoError(t, err, "a failed replica absent from SLOTS must not block readiness")
+				require.False(t, observed.Load(), "readiness must not sample the failed member")
+				return
+			}
+			require.ErrorIs(t, err, context.DeadlineExceeded, "a loading replica absent from SLOTS must still participate in slot agreement")
+			require.True(t, observed.Load(), "readiness must sample the loading node hidden from SLOTS")
+			corrected.Store(true)
+			require.NoError(t, WaitForStable(ctx, client))
+		})
 	}
-	client := redis.NewClusterClient(opts)
-	defer func() { _ = client.Close() }()
-	blocked, stop := context.WithTimeout(ctx, time.Second)
-	err = WaitForStable(blocked, client)
-	stop()
-	require.ErrorIs(t, err, context.DeadlineExceeded, "a replica absent from SLOTS must still participate in slot agreement")
-	require.True(t, observed.Load(), "readiness must sample the node hidden from SLOTS")
-	corrected.Store(true)
-	require.NoError(t, WaitForStable(ctx, client))
 }
 
 type incompleteMembershipHook struct {
-	address, missing    string
-	corrected, observed *atomic.Bool
+	address, missing, health string
+	corrected, observed      *atomic.Bool
 }
 
 func (h incompleteMembershipHook) DialHook(next redis.DialHook) redis.DialHook { return next }
@@ -82,6 +91,16 @@ func (h incompleteMembershipHook) ProcessHook(next redis.ProcessHook) redis.Proc
 			}
 			cmd.SetVal(slots)
 		case *redis.ClusterShardsCmd:
+			shards := cmd.Val()
+			for i := range shards {
+				for j := range shards[i].Nodes {
+					member := &shards[i].Nodes[j]
+					if net.JoinHostPort(member.IP, strconv.FormatInt(member.Port, 10)) == h.missing {
+						member.Health = h.health
+					}
+				}
+			}
+			cmd.SetVal(shards)
 			if h.address == h.missing && !h.corrected.Load() {
 				h.observed.Store(true)
 				shards := cmd.Val()

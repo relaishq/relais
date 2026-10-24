@@ -56,9 +56,9 @@ func WaitForStable(ctx context.Context, clients ...*redis.ClusterClient) error {
 
 func agreedSlotOwners(ctx context.Context, client *redis.ClusterClient) ([16384]string, error) {
 	var agreed [16384]string
-	// SLOTS can omit replicas whose replication offset has not yet reached
-	// the discovery source. In particular, a newly promoted replica can be
-	// missing while every sampled node still agrees on the previous epoch.
+	// Valkey's SLOTS omits replicas with replication offset 0.
+	// In particular, a newly promoted replica can be missing while every
+	// sampled node still agrees on the previous epoch.
 	// Expand membership from SHARDS before declaring agreement.
 	var nodes []*redis.Client
 	known := map[string]bool{}
@@ -119,6 +119,9 @@ func agreedSlotOwners(ctx context.Context, client *redis.ClusterClient) ([16384]
 		agreed, seen = owners, true
 		for _, shard := range shards {
 			for _, member := range shard.Nodes {
+				if member.Health == "fail" {
+					continue
+				}
 				addr, err := shardNodeAddress(member, node.Options().TLSConfig != nil)
 				if err != nil {
 					return agreed, err
