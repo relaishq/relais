@@ -1,18 +1,18 @@
 # ADR 0014: Python bots behind a fenced agent bridge
 
-Status: **Proposed**. Part of [#254](https://github.com/relaishq/relais/issues/254); aligned with [#255](https://github.com/relaishq/relais/issues/255). Code baseline: `7cc1e2f`; preceding proposal: `fd5c88f`.
+Status: **Proposed**. Part of [#254](https://github.com/relaishq/relais/issues/254); aligned with [#255](https://github.com/relaishq/relais/issues/255). Baseline: `7cc1e2f`; preceding proposal: `a5d7a5e`.
 
 ## Owner summary
 
 Keep WebRTC in Relais. A Python bot changes its transport and a few setup lines. Killing or replacing that bot keeps the caller connected. A replacement restores bounded conversation text from the last checkpoint, meaning a successful fenced store write. A fence rejects work from a replaced owner. An epoch identifies one period of session ownership.
 
-**Who this is for:** indie and startup teams self-hosting Pipecat first; LiveKit/Daily teams later. Established media and bot replacement on a live owner do not need control. Worker moves and crash takeovers still need control today. No new control-independent worker-recovery claim is made.
+**Who this is for:** indie and startup teams self-hosting Pipecat first; LiveKit/Daily teams later. Established media and bot replacement on a live owner do not need control. Worker moves and crash takeovers still need control today. No control-independent worker recovery is claimed.
 
 These are proposed behaviors, not measured results. Conversation recovery covers saved text, not arbitrary Python objects, unfinished speech or exactly-once tool execution.
 
 ## Owner decisions and recommendations
 
-“Decided” records Derek's answers via the coordinator on **2026-10-23**. Other rows need owner approval. Recommendations retain each settled value.
+“Decided” records Derek's answers via coordinator on **2026-10-23**. Other rows need approval.
 
 | Decision | Status | Recommended value and main tradeoff |
 | --- | --- | --- |
@@ -26,7 +26,8 @@ These are proposed behaviors, not measured results. Conversation recovery covers
 | Destination (#254 Q4) | Proposed | Direct owner connection, static bootstrap directory and store-backed owner lookup. Operators maintain private endpoints. |
 | Issuer (#254 Q5) | Decided | Owning worker, including after transfer; never signal/control. |
 | Pipecat versions (#254 Q6) | Proposed | One exact conformance-tested Pipecat/PyAV pair initially; widen a tested matrix. No supported range yet. |
-| Recovery targets (#254 Q7) | Proposed | Local socket-close kill-to-attached p95 <1 s; hung bot last-application-pong-to-attached p95 ≤3 s with 2 s timeout; SIGTERM handoff ≤2 s. Require warm capacity/reachable dependencies; report first audio separately. |
+| Recovery targets (#254 Q7) | Proposed | Local socket-close kill-to-attached p95 <1 s; hung bot last-application-pong-to-attached p95 ≤3 s with 2 s timeout **only when the same runner confirms revocation**; otherwise the permit-expiry bound applies; SIGTERM handoff ≤2 s. Require warm capacity/reachable dependencies; report first audio separately. |
+| Bot-permit lifetime | Proposed | Pool-wide **5 s** cap, refreshed by existing 1 s lease renewals. Shortens the pause after runner partition, but stops new bot provider/tool work sooner during store outages; media keeps ADR 0008's budget. |
 | Batching latency | Proposed | Added bridge output latency p95 ≤150 ms, measured from encoded packet ready in Python to host pacer admission. Includes batching/task waits; excludes providers/network playout. A host streaming-output effect needs separate approval if batches fail. |
 | Lost speech | Proposed | Save completed user text before generation. If speech is lost before a recoverable transcript, ask the caller to repeat. Durable recordings require another design. |
 | Tool safety/rollout | Proposed | Runner revocation and bounded permissions below; accept uncertain in-flight effects. Roll bots in batches with one spare session slot per simultaneous handoff; a full-fleet redeploy needs replacement capacity for every active session. |
@@ -65,14 +66,18 @@ Persist runner identity and bot lineage (the permitted instance and generation) 
 
 **Higher-epoch takeover:** after store-authorized adoption, B sends `revoke(session, old_epoch, new_epoch)` to the persisted runner. The runner records a monotonic epoch floor, blocks older assignments/reconnects, stops the old bot's new provider/tool starts, cancels its requests best effort, and acknowledges revocation before B enables bot work. If that bot is alive, reuse its process and reattach to B. A cannot keep it active merely by keeping its socket open. Fence old epochs across every runner listed in committed active lineage before enabling a different runner.
 
-A runner requests provider/tool permission with a nonce and records local request-start time. The owner reads the lease and computes remaining lifetime with the store clock, subtracting I/O time; clock inversion refuses permission. The runner expires permission at request-start plus that lifetime, capped at one TTL; delayed replies cannot extend it. It renews only after another successful ownership observation. On revocation, owner-socket loss or expiry, bots stop new provider/tool calls until reattached and permitted. If revocation cannot be confirmed, B keeps media alive and bot work paused; do not start a second bot blindly. A different runner can proceed only after confirmed revocation or a proven upper bound on old permission expiry. Without either, return typed unavailable and retry; no guessed cross-host deadline. Socket-close timing targets assume this path is reachable.
+Bot permits have a separate **5 s pool-wide cap**, not the 34 s worker TTL. The existing successful `Renew` for this owner/epoch is the observation that refreshes permits. Anchor its local deadline at renewal-request start plus `min(5 s, lease TTL)`, never reply receipt. Failures/uncertain replies grant no refresh. A nonce request reads this cached deadline; the runner adds its remaining duration to runner-local request-start time. Repeated requests and delayed replies cannot extend it. On revocation, owner-socket loss or expiry, stop new provider/tool calls until reattached and permitted.
+
+Permit refresh adds **zero store commands/bytes**: no extra Get/Clock, script fields or reply changes. Registry WebSocket bytes remain separately counted bridge traffic. New-instance admission's Get/checkpoint is separate. Slice 1 verifies unchanged store requests/replies under permit traffic; any required extra I/O must be measured against #214's **~3,155 B/s projected headroom**, not assumed free.
+
+Without revocation confirmation, B pauses bot work until old permits expire. Latest expiry is `transfer store-time + 5 s`; derive transfer time from the returned Transfer lease's `ExpiresAt − applied TTL`. Use existing recovery clock observations, or wait 5 s from local Transfer confirmation; no extra query. A late old renewal reply cannot move its request-start deadline beyond that bound. Clock uncertainty or unknown permit caps keep typed unavailable; use the maximum cap in a mixed pool. This bounds permit expiry; attachment and in-flight requests can take longer.
 
 ADR 0008 deliberately lets partitioned A keep its media session. The relay fence protects caller audio, **not external tools**. A request already sent can finish after revocation; cancellation can fail. Duplicate generation/charges or an uncertain tool effect remain possible around transfer/partition. Every provider/tool start must use the permission guard; bypassing code is outside this guarantee. Apps must use provider idempotency/query semantics. No exactly-once external-effect claim is made. These bot safety waits do not fence live media on a transient store error.
 
 | Event | Continuation |
 | --- | --- |
 | Bot closes/killed | Revoke generation; keep consent/call. Warm replacement restores last checkpoint, reports `OutcomeUnknown` and restarts recoverable text work under a new turn. Measure kill-to-close and close-to-attached separately. |
-| Bot hangs | Application ping every 500 ms; 2 s without a matching pipeline pong revokes permission/attachment. Library pong alone proves insufficient. Report detection and attach times separately. |
+| Bot hangs | Application ping every 500 ms; 2 s without a matching pipeline pong revokes permission/attachment. Library pong alone proves insufficient. The ≤3 s target needs same-runner revocation confirmation; otherwise use the permit-expiry bound. Report detection and attach separately. |
 | Bot SIGTERM | Confirm a replacement reservation **before release**. Old bot continues until its own deadline while seeking capacity. Within the whole 2 s handoff budget, finish/truncate speech and commit final state; on expiry, stop and expose silence/no-capacity or prior-checkpoint/`OutcomeUnknown` fallback. No fresh-state or successful-handoff claim without evidence. |
 | Worker move/drain | Exact export; same bot holds bounded output, receives new owner assignment and token. Failed move can return to source with a fresh generation. |
 | Worker crash | Control-driven takeover still passes ADR 0002 age/margin guards. Runner revokes old epoch; same live bot reattaches without restart. Control down delays this takeover. |
@@ -91,7 +96,7 @@ Admission checks size and reserved write budget before accepting state. This doe
 
 Use existing `sessionstore.Store`/`ComponentStore` through the checkpoint module, with no Redis types or keys in bridge APIs. Preserve **6,144 B hot**, **70,000 B/s**, **40,960 B burst**, cold/transaction caps, carried quota and forced side-effect barriers. ADR 0012's maximum hot/forced pattern leaves **2,416 B/s** for cold writes; `8,228/2,416 ≈3.4 s` is a full-history estimate before competing costs, not a fixed interval. Burst/actual load change availability; the bridge cannot promise a durable history update each turn. Last-four-plus-summary truncation is explicit, local and byte-bounded; no automatic summarizer call. Keep tool/result pairs together; refuse an indivisible oversized exchange.
 
-[#214](https://github.com/relaishq/relais/issues/214) accepted only 1.3–3.4% full-size headroom. ADR 0011's roughly 200 calls/primary planning ceiling derives from echo evidence (ADR 0012 §5). **Bridged full-size capacity: NOT-RUN.** Slice 1 measures per-call overhead; slice 6 measures full-size churn, simultaneous handoffs, store traffic/CPU and safe calls/primary. Do not publish 200 as bridge capacity or raise ceilings.
+[#214](https://github.com/relaishq/relais/issues/214) accepted only 1.3–3.4% full-size headroom. ADR 0011's roughly 200 calls/primary planning ceiling derives from echo evidence (ADR 0012 §5). **Bridged full-size capacity: NOT-RUN.** Slices 1/6 measure per-call overhead, full-size churn, handoffs, store traffic/CPU and safe calls/primary. Do not publish 200 as bridge capacity or raise ceilings.
 
 ## Connections, protocol and local events
 
@@ -99,7 +104,7 @@ Nothing phones home. Runtime connections are allowlisted below. Disable model do
 
 | Connection | Application fields |
 | --- | --- |
-| Runner ↔ every eligible worker, registry WebSocket | TLS identity/Authorization; `hello(protocol, runner_id, bot_instance, agent_name, config_revision, capacity)`; `reserve(session_id, epoch, reservation_id, expires_ms)`; `reserved(reservation_id, accepted)`; `assign(session_id, epoch, attach_token, expires_ms)`; `revoke(session_id, old_epoch, new_epoch)`; `revoked(session_id, new_epoch)`; `permit_request(session_id,epoch,generation,nonce)`; `permit(session_id,epoch,generation,nonce,remaining_ms)`; `ping/pong(nonce)`. |
+| Runner ↔ every eligible worker, registry WebSocket | TLS identity/Authorization; `hello(protocol, runner_id, bot_instance, agent_name, config_revision, capacity)`; `reserve(session_id, epoch, reservation_id, expires_ms)`; `reserved(reservation_id, accepted)`; `assign(session_id, epoch, bot_instance, generation, attach_token, expires_ms)`; `revoke(session_id, old_epoch, new_epoch)`; `revoked(session_id, new_epoch)`; `permit_request(session_id,epoch,generation,nonce)`; `permit(session_id,epoch,generation,nonce,remaining_ms)`; `ping/pong(nonce)`. |
 | Bot → bootstrap worker, HTTPS lookup | Authentication; request `session_id`; reply `owner, epoch, worker_url` from the static operator directory. |
 | Bot ↔ owner, session WebSocket | Authentication; `attach(protocol, session_id, epoch, bot_instance, attach_token, last_checkpoint_seq)`; `attached(epoch, generation, resume, checkpoint_seq, checkpoint_age_ms, snapshot_age_ms, working, history, outcome_unknown, duplicate_windows, limits)`. Socket scopes all later messages to epoch/generation. |
 | Binary frames | Input `type=1, input_ssrc:u32, input_seq:u64, rtp_ts:u32, duplicate:u8, opus`; output `type=2, turn:u64, seq:u64, opus`. Big-endian integers; remainder is payload. Validate duration/length/sequence. |
