@@ -632,6 +632,9 @@ func runArgs(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if flagWasSet(fs, "lean-plan") && !*leanScheduleOnly {
+		return errors.New("lean-plan requires true")
+	}
 	if err := c.Worker.Validate(); err != nil {
 		return err
 	}

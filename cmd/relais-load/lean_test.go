@@ -26,7 +26,7 @@ func leanPtr[T any](v T) *T { return &v }
 // brackets, generation-tagged observations and complete per-second samples.
 func leanFixture(t *testing.T) leanManifest {
 	t.Helper()
-	m := leanManifest{Version: 1, RunID: "synthetic-run", Signaling: "https://signal.example/calls", Relay: "192.0.2.1:9999", Region: "test-region", Build: "synthetic-build", Agent: "echo", Payload: "audio/opus synthetic", StoreDurability: "sync", StoreTLS: true, RelayBufferEnabled: leanPtr(true), Clock: &leanClock{ControlBound: time.Millisecond, WorkerBound: time.Millisecond, DriftPPM: 0, Evidence: "synthetic independent host offsets +/-1ms"}}
+	m := leanManifest{Topology: "local", Version: 1, RunID: "synthetic-run", Signaling: "https://signal.example/calls", Relay: "192.0.2.1:9999", Region: "test-region", Build: "synthetic-build", Agent: "echo", Payload: "audio/opus synthetic", StoreDurability: "sync", StoreTLS: true, RelayBufferEnabled: leanPtr(true), Clock: &leanClock{ControlBound: time.Millisecond, WorkerBound: time.Millisecond, DriftPPM: 0, Evidence: "synthetic independent host offsets +/-1ms"}}
 	for i := 0; i < 4; i++ {
 		m.Callers = append(m.Callers, leanCaller{ID: fmt.Sprint(i), Runner: fmt.Sprint("outside-runner-", i), Region: "caller-region", Bind: "192.0.2.2:0"})
 	}
@@ -127,10 +127,12 @@ func leanFixture(t *testing.T) leanManifest {
 			}
 		}
 		if kind == "drain" {
-			p.DrainEmpty = &leanEmpty{Worker: p.Before.Workers[0].Name, At: at.Add(10 * time.Second)}
+			p.DrainEmpty = &leanEmpty{Worker: p.Before.Workers[0].Name, Generation: p.Before.Workers[0].Generation, At: at.Add(10 * time.Second)}
 		}
 		if kind == "boundary" {
 			p.Admission = &leanAdmission{Status: 503, Code: "at_capacity", RetryAfter: "1", Before: copyLeanPool(p.Before), After: copyLeanPool(p.Before), RefusalsAfter: 1}
+			p.Admission.Before.At = at.Add(10 * time.Second)
+			p.Admission.After.At = at.Add(11 * time.Second)
 		}
 		p.Run.Telemetry.WindowSeconds = 30
 		p.Run.Telemetry.Agents.IntervalMS = 100

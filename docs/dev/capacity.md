@@ -448,8 +448,9 @@ leave deployed services running for their owner to tear down.
 
 ### Manifest v1
 
-The input is one strict JSON object, at most 64 MiB. Unknown fields and trailing
-objects are errors. Paths/credentials for the private runner are not inputs.
+The input is one strict JSON object, at most 64 MiB. Duplicate keys at any
+depth (including escaped spellings), unknown fields and trailing objects are
+errors. Paths/credentials for the private runner are not inputs.
 Durations use integer nanoseconds; timestamps use RFC3339. The Go definitions
 in `cmd/relais-load/lean.go`, `internal/loadgen/report.go`, and the existing
 caller/telemetry report types are the wire schema. `TestLeanEntryIsSeparate`
@@ -464,7 +465,8 @@ round-trips a complete synthetic manifest through the actual CLI entry.
 | `callers` | 1–4 unique `id` values, each with external `runner`, `region`, and specific IPv4 `bind` ending in `:0` |
 | `phases` | Ordered unique IDs, kind `move`, `kill`, `drain`, or `boundary`; at least 20/10/2/1 respectively; exactly one boundary |
 | `cleanup` | Existing `loadgen.LeakReport`: independent checked inventories, relay inactivity wait, retention/scan positive controls; no leaked callers, sessions, keys or owned listeners |
-| `ena_required` | Require allowance evidence for relay, shared control host and every worker generation when true |
+| `topology` | `cloud` by default, including when omitted; only explicit `local` waives required cloud ENA evidence |
+| `ena_required` | Legacy opt-in: true also requires ENA for local topology; false never waives cloud evidence |
 | `prices` | Optional complete dated ledger described below |
 
 Each phase uses exactly one external generator: one call for recovery, four
@@ -490,8 +492,14 @@ contains its complete operation `identity`, `caller_arm_acknowledged_at` and
 `caller_receipt_sent_at`, captured on that caller runner's clock. Use the arm
 acknowledgment completion and receipt-request send times as conservative
 brackets; mapped events must fit entirely inside them. Drain phases also
-supply `drain_empty`; the boundary supplies `admission` with HTTP result,
-pool snapshots and refusal-counter observations.
+supply `drain_empty` naming the drained `worker` and its `generation`, with
+`receipt.End <= drain_empty.at <= restored.at` on the control clock. The
+generation must match both the source and restored pool. The boundary supplies
+`admission` with HTTP result, pool snapshots and refusal-counter observations.
+Its `before.at <= after.at`, and both observations must fall wholly inside
+every accepted caller's connected media window after clock mapping. Earlier
+or later snapshots cannot establish that the refusal left four live calls
+undisturbed.
 
 Service telemetry needs an independent bound on alignment to the phase's media window. Supply
 `telemetry_window_error_ns` and the independent
@@ -517,7 +525,12 @@ original distributed fields. Scalar event start/end, per-event track gaps and
 resume point estimates cannot establish acceptance. Clock straddles, missing
 receipts, incomplete coverage and unknown telemetry remain inconclusive.
 Known call loss, corruption or independently confirmed service failure still
-fails when timing or generators are uncertain.
+fails when timing or generators are uncertain. Caller-local checks run before
+clock validation: a gap over two seconds or content loss outside the matched
+caller-local arm/receipt bracket fails even with invalid clock probes. Loss
+inside that bracket still needs valid interval evidence; the bracket alone
+cannot approve it. Missing per-track whole-call gap inventory is inconclusive;
+inventory overflow fails, including when the recording flag is absent.
 
 The existing store ceilings (100 commands and 128 KiB/call-second), 550 ms
 checkpoint **and** snapshot p99 with 100 ms coverage, generator isolation/stall
@@ -526,15 +539,24 @@ per-track interval move p95, 150 ms unscheduled gaps, <2 s takeover and actual
 kill-to-live, survivor occupancy, takeover counters and cleanup all apply.
 Every required lean phase must be conclusive. Memory observations retain the
 existing trend diagnostic, including `insufficient-data` for short trials.
-No phase average can hide another phase's failure.
+The report explicitly sets `memory_gate.outcome=not-applicable`: phases are
+capped at three minutes, below the trend judge's five post-warm-up minutes
+and ten-minute worker-incarnation minimum. This gate is excluded from the
+lean verdict; it is not a memory pass or soak memory qualification. Independently
+observed memory growth failures still fail. `TestLeanShortPhaseMemoryExcluded`
+checks this distinction. No phase average can hide another phase's failure.
 
-Each optional `allowances` row has `host`, `generation`, `first`, `last`, and
+Each `allowances` row has `host`, `generation`, `first`, `last`, and
 `conntrack_remaining`. Include all four ENA counters:
 `pps_allowance_exceeded`, `conntrack_allowance_exceeded`,
 `bw_in_allowance_exceeded`, `bw_out_allowance_exceeded`.
 Any positive delta fails; missing/reset supplied counters are inconclusive.
-When `ena_required=true`, missing required hosts also blocks approval. Without
-these observations, a generic service verdict is not ENA/cloud qualification.
+Cloud topology requires relay, shared control, and every worker generation;
+missing rows make the phase and `cloud_qualification` inconclusive. Only an
+explicit local topology may omit these rows; its report carries
+`cloud_qualification.outcome=NOT-RUN` with the local-topology reason, even when
+the service verdict passes. `TestLeanCloudAllowanceDefault` and
+`TestLeanLocalCloudQualification` cover both cases.
 
 ### Dated full-stack ledger
 
@@ -542,8 +564,10 @@ Lean prices use a separate schema from the legacy local capacity price file.
 Provide `currency`, matching `region`, `date` (`YYYY-MM-DD`), `source`, and
 `lines`. Every line has `category`, `resource`, `meter`, `quantity`, `rate`,
 and `steady_quantity_per_hour`. Quantities cover the actual allocation window;
-rates and units come from the dated tariff. A duplicate resource/meter is
-rejected so shared hosts and transfer are not counted twice. Any explicit zero
+rates and units come from the dated tariff. A resource charged under multiple
+categories or a duplicate resource/meter is rejected so shared hosts and
+transfer are not counted twice. Use distinct charge-component resource IDs
+for separate billed items such as nodes and their sync premium. Any explicit zero
 also needs `zero_reason`. Missing quantities, rates, categories or dates are
 listed in `cost.unknown`; none silently become free.
 
@@ -557,7 +581,11 @@ items through the corresponding categories. Explicit inapplicable categories
 have zero quantity/rate and a reason. No AWS rates are embedded or fetched.
 
 `public_egress.quantity` is GiB from measured forwarded UDP payload plus 28
-IPv4/UDP bytes per public packet. The judge cross-checks it. Do not infer
+IPv4/UDP bytes per public packet. The judge cross-checks it and the steady
+GiB/hour quantity against measured bytes divided by telemetry call-seconds,
+scaled to T=1 and one hour. A steady zero requires zero measured egress;
+`zero_reason` cannot override positive observations. The report includes
+`measured_steady_T1_public_gib_per_hour`. Do not infer
 managed-store billable writes from Redis request/reply traffic. The ledger
 keeps other transfer categories separate to avoid duplicate charges.
 
@@ -568,7 +596,11 @@ steady T=1 cost/call-hour = sum(steady_quantity_per_hour × rate)
 ```
 
 Call durations stay on each caller's clock and include connected setup waits
-before a common media start. Required worker/relay/shared-control/store
+before a common media start. The report's `call_hours_window` explicitly names
+ConnectedAt through HungUpAt, including time outside telemetry;
+`egress_window` names each phase's service `WindowSeconds`. Egress remains
+measured only over those telemetry windows, so these are distinct allocation
+and transfer observation windows. Required worker/relay/shared-control/store
 quantities must cover observed node-hours, and steady quantities must include
 the full two-worker, one-relay, one-control, two-store-node floor.
 

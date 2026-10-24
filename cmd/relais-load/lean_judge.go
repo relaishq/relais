@@ -15,8 +15,13 @@ import (
 
 func judgeLean(m leanManifest) leanReport {
 	out := leanReport{Policy: "lean-distributed-v1", RunID: m.RunID, leanVerdict: leanVerdict{Outcome: "pass"}, SurvivorSafeCalls: 1, Schedule: leanPlan(), Evidence: m}
+	out.CloudQualification = leanVerdict{Outcome: "pass"}
+	if m.Topology == "local" {
+		out.CloudQualification = leanVerdict{Outcome: "NOT-RUN", Causes: []string{"local topology declares no cloud qualification; cloud ENA behavior was not exercised"}}
+	}
 	if err := validateLeanManifest(m); err != nil {
 		out.unknown(err.Error())
+		out.CloudQualification = leanVerdict{Outcome: "NOT-RUN", Causes: []string{"invalid manifest"}}
 		out.Cost = leanCost{Status: "NOT-RUN(invalid manifest)"}
 		return out
 	}
@@ -118,6 +123,9 @@ func judgeLean(m leanManifest) leanReport {
 	if out.ObservedWallSeconds > float64(out.Schedule.GateWindowSeconds) {
 		out.unknown("observed schedule exceeded private 120-minute gate window")
 	}
+	if m.Topology != "local" {
+		out.CloudQualification = out.leanVerdict
+	}
 	out.Cost = calculateLeanCost(m, out)
 	return out
 }
@@ -182,6 +190,9 @@ func leanWorkerFor(p leanPool, session string) *leanWorker {
 }
 func judgeLeanPhase(m leanManifest, p leanPhase) leanPhaseResult {
 	v := leanPhaseResult{ID: p.ID, leanVerdict: leanVerdict{Outcome: "pass"}}
+	// Lean phases are capped at three minutes. The shared slope judge needs
+	// five minutes after warm-up (ten minutes for worker incarnations).
+	v.MemoryGate = leanVerdict{Outcome: "not-applicable", Causes: []string{"lean phases are at most three minutes; memory growth needs five minutes after warm-up and ten minutes per worker incarnation; insufficient-data is excluded from the lean verdict, not a memory pass"}}
 	expected := 1
 	if p.Kind == "boundary" {
 		expected = 4
@@ -263,6 +274,27 @@ func judgeLeanPhase(m leanManifest, p leanPhase) leanPhaseResult {
 			if len(p.Run.Events) == 1 && len(p.Run.Events[0].Identities) == 1 && e.Worker != p.Run.Events[0].Identities[0].Worker {
 				v.unknown("empty proof names wrong worker")
 			}
+			matched := false
+			for _, proc := range p.Run.Processes {
+				for _, msg := range proc.Calls {
+					if msg.Call == nil {
+						continue
+					}
+					for _, move := range msg.Call.Moves {
+						receipt := move.Receipt
+						owner := leanWorkerFor(p.Before, msg.Session)
+						if receipt == nil || owner == nil || receipt.Identity.Worker != e.Worker || owner.Name != e.Worker || owner.Generation != e.Generation || e.Generation == "" || receipt.End.IsZero() || e.At.Before(receipt.End) || e.At.After(p.Restored.At) {
+							continue
+						}
+						for _, restored := range p.Restored.Workers {
+							matched = matched || (restored.Name == e.Worker && restored.Generation == e.Generation)
+						}
+					}
+				}
+			}
+			if !matched {
+				v.unknown("drain empty proof lacks matching generation or receipt-to-restore time bound")
+			}
 		}
 	}
 	judgeLeanTelemetry(m, p, &v)
@@ -278,6 +310,9 @@ func judgeLeanAdmission(p leanPhase, v *leanVerdict) {
 	}
 	v.merge("admission before: ", leanPoolCheck(a.Before, 4, 2))
 	v.merge("admission after: ", leanPoolCheck(a.After, 4, 2))
+	if a.Before.At.After(a.After.At) {
+		v.unknown("admission observations run backward")
+	}
 	if a.Status != 503 || a.Code != "at_capacity" || a.RetryAfter != "1" {
 		v.fail("fifth call was not cleanly refused with 503 at_capacity and Retry-After=1")
 	}
@@ -356,6 +391,7 @@ func judgeLeanCall(m leanManifest, p leanPhase, proc loadgen.ProcessReport, msg 
 			v.fail("recorded operation lost call or failed")
 		}
 	}
+	judgeLeanLocalContinuity(p, c, v)
 	recording := c.Distributed
 	if recording == nil || recording.RunID != m.RunID || len(recording.Probes) == 0 || recording.ClockError != "" || len(recording.Missing) > 0 || c.Recording.History < 180*time.Second {
 		v.unknown("missing or invalid distributed clock/receipt history")
@@ -383,6 +419,15 @@ func judgeLeanCall(m leanManifest, p leanPhase, proc loadgen.ProcessReport, msg 
 	if restoreErr != nil || restored.Latest.After(c.StartedAt.Add(c.HungUpAt)) {
 		v.unknown("pool restore not proven before caller ended")
 	}
+	if p.Kind == "boundary" && p.Admission != nil {
+		before, err1 := tracker.Map(p.Admission.Before.At, recording.ControlOffset)
+		after, err2 := tracker.Map(p.Admission.After.At, recording.ControlOffset)
+		start := maxTime(p.Run.StartedAt, c.StartedAt.Add(c.ConnectedAt))
+		end := minTime(p.Run.StartedAt.Add(p.Run.Duration), c.StartedAt.Add(c.HungUpAt))
+		if err1 != nil || err2 != nil || before.Earliest.Before(start) || before.Latest.After(end) || after.Earliest.Before(start) || after.Latest.After(end) {
+			v.unknown("admission observations not proven inside live media window across clock bounds")
+		}
+	}
 	expectedMoves := 0
 	if p.Kind != "boundary" {
 		expectedMoves = 1
@@ -403,9 +448,6 @@ func judgeLeanCall(m leanManifest, p leanPhase, proc loadgen.ProcessReport, msg 
 		}
 		if t.Video != nil && (t.Video.UnmatchedFrames > 0 || t.Video.KeyframeDecodeErrors > 0 || t.Video.NonMonotonicTimestamps > 0) {
 			v.fail("invalid video content")
-		}
-		if reason := gapInventoryFullCause(t); reason != "" {
-			v.unknown(reason)
 		}
 		judgeLeanGaps(p, proc, c, t, v)
 	}
@@ -545,12 +587,76 @@ func leanGapExemption(c *callharness.Report, start, end time.Duration) (bool, bo
 	}
 	return false, possible
 }
-func judgeLeanGaps(p leanPhase, proc loadgen.ProcessReport, c *callharness.Report, t callharness.TrackReport, v *leanVerdict) {
+func leanTrackGaps(t callharness.TrackReport) []callharness.MediaGap {
 	gaps := append([]callharness.MediaGap{{EndedAt: t.MediaGapEndedAt, Duration: t.MediaGap}}, t.MediaGaps...)
 	for i := 1; i < len(t.Arrivals); i++ {
 		gaps = append(gaps, callharness.MediaGap{EndedAt: t.Arrivals[i], Duration: t.Arrivals[i] - t.Arrivals[i-1]})
 	}
-	for _, g := range gaps {
+	return gaps
+}
+
+// These observations use only the caller's monotonic timeline. Bad host
+// clocks cannot turn a definite continuity failure into inconclusive evidence.
+func judgeLeanLocalContinuity(p leanPhase, c *callharness.Report, v *leanVerdict) {
+	for _, track := range c.Tracks {
+		if !track.MediaGapsRecorded {
+			v.unknown(track.Kind + " whole-call gap inventory unavailable")
+		}
+		if track.MediaGapOverflow > 0 {
+			v.fail(track.Kind + " whole-call gap inventory overflow")
+		}
+		if reason := gapInventoryFullCause(track); reason != "" {
+			v.unknown(reason)
+		}
+		for _, gap := range leanTrackGaps(track) {
+			if gap.Duration > 2*time.Second {
+				v.fail(track.Kind + " caller-local gap exceeds 2s")
+			}
+		}
+	}
+	d := c.Recording.Delivery
+	if d == nil {
+		v.unknown("whole-call delivery unavailable")
+		return
+	}
+	for _, k := range []struct {
+		kind    string
+		units   callharness.ContentDelivery
+		written int
+	}{{"audio", d.Audio, c.SentAudio.Frames}, {"video", d.Video, c.SentVideo.Frames}} {
+		u := k.units
+		if u.Sent < 0 || u.Returned < 0 || u.Lost < 0 || u.Unsettled < 0 || u.Sent+u.Unsettled != k.written || u.Returned+u.Lost != u.Sent || len(u.LostAt)+u.LostOverflow != u.Lost {
+			v.unknown(k.kind + " delivery accounting incomplete")
+		}
+		if u.LostOverflow > 0 {
+			v.fail("lost-unit inventory overflow")
+		}
+		for _, at := range u.LostAt {
+			inside, bracket := false, false
+			for _, timing := range p.Timings {
+				if timing.ArmAcknowledgedAt.IsZero() || timing.ReceiptSentAt.IsZero() || timing.ReceiptSentAt.Before(timing.ArmAcknowledgedAt) {
+					continue
+				}
+				for _, move := range c.Moves {
+					if move.Receipt == nil || move.Identity == nil || !timing.Identity.Valid() || *move.Identity != timing.Identity || move.Receipt.Identity != timing.Identity || c.Distributed == nil || !slices.Contains(c.Distributed.Armed, timing.Identity) {
+						continue
+					}
+					bracket = true
+					instant := c.StartedAt.Add(at)
+					inside = inside || (!instant.Before(timing.ArmAcknowledgedAt) && !instant.After(timing.ReceiptSentAt))
+				}
+			}
+			if !inside && (bracket || p.Kind == "boundary") {
+				v.fail(k.kind + " loss outside caller-local scheduled event arm/receipt bracket")
+			} else if !bracket {
+				v.unknown(k.kind + " loss lacks caller-local arm/receipt bracket")
+			}
+		}
+	}
+}
+
+func judgeLeanGaps(p leanPhase, proc loadgen.ProcessReport, c *callharness.Report, t callharness.TrackReport, v *leanVerdict) {
+	for _, g := range leanTrackGaps(t) {
 		if g.Duration < 0 || g.EndedAt < g.Duration {
 			v.unknown("invalid caller-local media gap")
 			continue
@@ -574,21 +680,13 @@ func judgeLeanGaps(p leanPhase, proc loadgen.ProcessReport, c *callharness.Repor
 func judgeLeanDelivery(p leanPhase, proc loadgen.ProcessReport, c *callharness.Report, v *leanVerdict) {
 	d := c.Recording.Delivery
 	if d == nil {
-		v.unknown("whole-call delivery unavailable")
 		return
 	}
 	for _, k := range []struct {
-		kind    string
-		units   callharness.ContentDelivery
-		written int
-	}{{"audio", d.Audio, c.SentAudio.Frames}, {"video", d.Video, c.SentVideo.Frames}} {
+		kind  string
+		units callharness.ContentDelivery
+	}{{"audio", d.Audio}, {"video", d.Video}} {
 		u := k.units
-		if u.Sent < 0 || u.Returned < 0 || u.Lost < 0 || u.Unsettled < 0 || u.Sent+u.Unsettled != k.written || u.Returned+u.Lost != u.Sent || len(u.LostAt)+u.LostOverflow != u.Lost {
-			v.unknown(k.kind + " delivery accounting incomplete")
-		}
-		if u.LostOverflow > 0 {
-			v.fail("lost-unit inventory overflow")
-		}
 		for _, at := range u.LostAt {
 			certain, possible := false, false
 			for _, move := range c.Moves {
@@ -877,7 +975,7 @@ func judgeLeanAllowances(m leanManifest, p leanPhase, v *leanVerdict) {
 			v.unknown("missing conntrack headroom")
 		}
 	}
-	if m.ENARequired {
+	if m.Topology != "local" || m.ENARequired {
 		for _, name := range []string{"relay", "control"} {
 			found := false
 			for _, a := range p.Allowances {

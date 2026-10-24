@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// Each category is explicit, even when inapplicable. Resource + meter prevents
-// shared control/signaling or the same transfer from being charged twice.
+// Each category is explicit, even when inapplicable. A resource belongs to one
+// category; each resource/meter is charged once, including shared hosts.
 var leanCostCategories = []string{"workers", "relay", "control_signaling", "store_nodes", "store_sync", "public_egress", "inter_az", "ingress", "nat_endpoints", "disk", "ipv4", "observability_api", "secrets", "retained_surge"}
 
 type leanPriceLine struct {
@@ -28,19 +28,25 @@ type leanPrices struct {
 	Lines    []leanPriceLine `json:"lines"`
 }
 type leanCost struct {
-	Status            string   `json:"status"`
-	Unknown           []string `json:"unknown,omitempty"`
-	Currency          string   `json:"currency,omitempty"`
-	CallHours         float64  `json:"call_hours"`
-	Total             *float64 `json:"allocated_total,omitempty"`
-	PerCallHour       *float64 `json:"allocated_per_call_hour,omitempty"`
-	SteadyPerCallHour *float64 `json:"steady_T1_per_call_hour,omitempty"`
-	PublicGiB         float64  `json:"measured_public_gib"`
-	Note              string   `json:"note"`
+	Status                 string   `json:"status"`
+	Unknown                []string `json:"unknown,omitempty"`
+	Currency               string   `json:"currency,omitempty"`
+	CallHours              float64  `json:"call_hours"`
+	CallHoursWindow        string   `json:"call_hours_window"`
+	EgressWindow           string   `json:"egress_window"`
+	SteadyPublicGiBPerHour float64  `json:"measured_steady_T1_public_gib_per_hour"`
+	Total                  *float64 `json:"allocated_total,omitempty"`
+	PerCallHour            *float64 `json:"allocated_per_call_hour,omitempty"`
+	SteadyPerCallHour      *float64 `json:"steady_T1_per_call_hour,omitempty"`
+	PublicGiB              float64  `json:"measured_public_gib"`
+	Note                   string   `json:"note"`
 }
 
 func calculateLeanCost(m leanManifest, r leanReport) leanCost {
 	c := leanCost{Status: "NOT-RUN", Note: "Integral connected-call allocation, including setup waits and boundary occupancy; separate steady estimate at survivor-safe T=1. Whole hosts, both store nodes and supplied tariffs. Excludes AI fees, taxes and discounts. No monthly bill, price-minimum or cheaper-than-hosted claim. Prices and quantities are supplied observations, not provider lookups."}
+	c.CallHoursWindow = "caller ConnectedAt through HungUpAt; includes time outside service telemetry windows"
+	c.EgressWindow = "per-phase service telemetry WindowSeconds"
+	telemetryCallSeconds := 0.0
 	for i, p := range m.Phases {
 		for _, process := range p.Run.Processes {
 			for _, message := range process.Calls {
@@ -51,7 +57,11 @@ func calculateLeanCost(m leanManifest, r leanReport) leanCost {
 		}
 		if i < len(r.Phases) {
 			c.PublicGiB += r.Phases[i].PublicBytesPerCallSecond / (1 << 30) * p.Run.Telemetry.WindowSeconds * float64(p.Run.Callers)
+			telemetryCallSeconds += p.Run.Telemetry.WindowSeconds * float64(p.Run.Callers)
 		}
+	}
+	if telemetryCallSeconds > 0 {
+		c.SteadyPublicGiBPerHour = c.PublicGiB * 3600 / telemetryCallSeconds
 	}
 	unknown := func(s string) { c.Unknown = append(c.Unknown, s) }
 	if r.Outcome != "pass" {
@@ -72,6 +82,7 @@ func calculateLeanCost(m leanManifest, r leanReport) leanCost {
 		unknown("price date must be YYYY-MM-DD")
 	}
 	categories, meters := map[string]bool{}, map[string]bool{}
+	resources := map[string]string{}
 	quantities, hourly := map[string]float64{}, map[string]float64{}
 	publicLines := 0
 	total, steady := 0.0, 0.0
@@ -86,6 +97,10 @@ func calculateLeanCost(m leanManifest, r leanReport) leanCost {
 			unknown("missing or duplicate resource/meter " + key)
 		}
 		meters[key] = true
+		if category, exists := resources[line.Resource]; exists && category != line.Category {
+			unknown("resource charged under multiple categories: " + line.Resource)
+		}
+		resources[line.Resource] = line.Category
 		if line.Quantity == nil || line.Rate == nil || line.SteadyQuantityPerHour == nil {
 			unknown(line.Category + ": missing rate/quantity/steady quantity")
 			continue
@@ -100,6 +115,9 @@ func calculateLeanCost(m leanManifest, r leanReport) leanCost {
 		}
 		if line.Category == "public_egress" && math.Abs(q-c.PublicGiB) > max(1e-9, c.PublicGiB*1e-6) {
 			unknown("public egress quantity differs from measured payload plus IPv4/UDP headers")
+		}
+		if line.Category == "public_egress" && ((h == 0 && c.SteadyPublicGiBPerHour > 0) || math.Abs(h-c.SteadyPublicGiBPerHour) > max(1e-9, c.SteadyPublicGiBPerHour*1e-6)) {
+			unknown("steady public egress quantity differs from measured telemetry rate at T=1")
 		}
 		quantities[line.Category] += q
 		hourly[line.Category] += h

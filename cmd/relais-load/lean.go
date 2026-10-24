@@ -36,6 +36,7 @@ type leanManifest struct {
 	Phases             []leanPhase        `json:"phases"`
 	Cleanup            loadgen.LeakReport `json:"cleanup"`
 	ENARequired        bool               `json:"ena_required"`
+	Topology           string             `json:"topology,omitempty"` // Empty defaults to cloud; only local waives ENA.
 	Prices             *leanPrices        `json:"prices,omitempty"`
 }
 type leanClock struct {
@@ -71,6 +72,7 @@ type leanTiming struct {
 }
 type leanEmpty struct {
 	Worker        string    `json:"worker"`
+	Generation    string    `json:"generation"`
 	At            time.Time `json:"at"`
 	LocalSessions int       `json:"local_sessions"`
 	Owners        int       `json:"owners"`
@@ -173,6 +175,7 @@ type leanPhaseResult struct {
 	BytesPerCallSecond       float64         `json:"store_bytes_per_call_second"`
 	PublicBytesPerCallSecond float64         `json:"public_bytes_per_call_second"`
 	Memory                   []memoryVerdict `json:"memory"`
+	MemoryGate               leanVerdict     `json:"memory_gate"`
 }
 type leanReport struct {
 	ObservedWallSeconds float64 `json:"observed_wall_seconds"`
@@ -185,6 +188,7 @@ type leanReport struct {
 	Phases             []leanPhaseResult               `json:"phases"`
 	Trials             *loadgen.DistributedTrialResult `json:"distributed_trials"`
 	Cost               leanCost                        `json:"cost"`
+	CloudQualification leanVerdict                     `json:"cloud_qualification"`
 	Evidence           leanManifest                    `json:"evidence"`
 }
 
@@ -202,6 +206,9 @@ func readLeanJSON(path string, out any) error {
 	if len(b) > 64<<20 {
 		return errors.New("lean artifact exceeds 64 MiB")
 	}
+	if err := rejectLeanDuplicateKeys(json.NewDecoder(bytes.NewReader(b))); err != nil {
+		return err
+	}
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	if err = d.Decode(out); err != nil {
@@ -212,7 +219,50 @@ func readLeanJSON(path string, out any) error {
 	}
 	return nil
 }
+
+// Token inspection precedes typed decoding so duplicate fields cannot silently
+// replace earlier evidence, including inside reports and escaped key names.
+func rejectLeanDuplicateKeys(d *json.Decoder) error {
+	token, err := d.Token()
+	if err != nil {
+		return err
+	}
+	switch token {
+	case json.Delim('{'):
+		keys := map[string]bool{}
+		for d.More() {
+			key, err := d.Token()
+			if err != nil {
+				return err
+			}
+			name, ok := key.(string)
+			if !ok {
+				return errors.New("invalid JSON object key")
+			}
+			if keys[name] {
+				return fmt.Errorf("duplicate JSON key %q", name)
+			}
+			keys[name] = true
+			if err := rejectLeanDuplicateKeys(d); err != nil {
+				return err
+			}
+		}
+		_, err = d.Token()
+	case json.Delim('['):
+		for d.More() {
+			if err := rejectLeanDuplicateKeys(d); err != nil {
+				return err
+			}
+		}
+		_, err = d.Token()
+	}
+	return err
+}
+
 func validateLeanManifest(m leanManifest) error {
+	if m.Topology != "" && m.Topology != "cloud" && m.Topology != "local" {
+		return errors.New("lean topology must be cloud or local (omitted means cloud)")
+	}
 	if m.Version != 1 || m.RunID == "" || m.Region == "" || m.Build == "" || m.Agent == "" || m.Payload == "" || m.StoreDurability != "sync" || !m.StoreTLS || m.RelayBufferEnabled == nil {
 		return errors.New("lean requires v1 identity, region/build/agent/payload, sync TLS store and observed relay buffer setting")
 	}
@@ -261,6 +311,9 @@ func validateLeanManifest(m leanManifest) error {
 	return nil
 }
 func runLean(fs *flag.FlagSet, manifest, output, prices string, plan bool) error {
+	if flagWasSet(fs, "lean-plan") && !plan {
+		return errors.New("lean-plan requires true")
+	}
 	var unsupported string
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
