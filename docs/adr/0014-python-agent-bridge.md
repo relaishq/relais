@@ -1,10 +1,14 @@
 # ADR 0014: Python bots behind a fenced agent bridge
 
-Status: **Proposed**. Part of [#254](https://github.com/relaishq/relais/issues/254), aligned with [#255](https://github.com/relaishq/relais/issues/255). Code baseline: `7cc1e2f`; preceding proposal: `0898cb6`.
+Status: **Proposed**. **Amends ADR 0010**. Part of [#254](https://github.com/relaishq/relais/issues/254), aligned with [#255](https://github.com/relaishq/relais/issues/255). Code baseline: `7cc1e2f`; preceding proposal: `db148f3`.
+
+## Approve now vs decide later
+
+**Approved now:** the decided rows and starting the **50 packets/s measurement**. No production output design is selected. **Still open for Derek:** wire transport, dispatch, history size, tool safety/rollout and lost-speech handling. Other Proposed rows remain recommendations; the table and first step define approval scope.
 
 ## What you are approving
 
-“Decided” records Derek's answers through the coordinator on **2026-10-23**. Other rows are recommendations for approval. None authorizes implementation yet.
+“Decided” records Derek's answers through the coordinator on **2026-10-23**. This ADR stays Proposed.
 
 | Choice | Status | Recommended value and consequence |
 | --- | --- | --- |
@@ -19,10 +23,10 @@ Status: **Proposed**. Part of [#254](https://github.com/relaishq/relais/issues/2
 | Destination (#254 Q4) | Proposed | Connect directly to the owner. Operators maintain private endpoints and a bootstrap directory. |
 | Issuer (#254 Q5) | Decided | Current owning worker, including after transfer. Signal/control never mint or verify attach tokens. |
 | Pipecat versions (#254 Q6) | Proposed | Start with one tested Pipecat/PyAV pair. Widen only through a tested matrix; no range is supported yet. |
-| Recovery targets (#254 Q7) | Proposed | Local socket-close kill-to-attached p95 <1 s; SIGTERM handoff ≤2 s. Warm capacity and reachable dependencies are required. |
-| Hang target | Proposed | A hang means the bot's **pipeline** stops answering, even if its connection still answers pings. With a 2 s detector, last-pipeline-pong-to-attached p95 ≤3 s needs same-runner revocation confirmation. Otherwise wait for permit expiry, then attachment. |
+| Recovery targets (#254 Q7) | Proposed | Socket closed → kill-to-attached p95 <1 s; SIGTERM handoff ≤2 s. Warm capacity and reachable dependencies are required. |
+| Hang target | Proposed | A hang means the bot's **pipeline** stops answering, even if its connection still answers pings. With a 2 s detector, last-pipeline-pong-to-attached p95 ≤3 s needs same-runner revocation confirmation. Without confirmation, worst-case permission wait is permit expiry, about 5 s; attachment follows. |
 | Bot-permit lifetime | Proposed | Pool-wide 5 s cap, refreshed only by successful existing lease renewals. Partitions cause shorter pauses, but store outages stop bot work sooner than media. |
-| Output experiment | Proposed | Approve measurement first; choose batching or a streaming-output effect from its result. Require added output latency p95 ≤150 ms; no winner is selected. |
+| Output experiment | Start approved | Start 50 packets/s measurement; choose batching or streaming output from its result. Added output latency must meet p95 ≤150 ms; neither design is selected. |
 | Lost speech | Proposed | Save completed user text before generation. If no recoverable transcript exists, ask the caller to repeat; recordings need another design. |
 | Tool safety/rollout | Proposed | Accept uncertain in-flight effects; require app idempotency/query support. One extra warm slot per simultaneous handoff permits rolling redeploys. |
 | Host changes | Proposed | Add local publication/acknowledgement hooks, generation checks, stable exports and bridge-only playback completion. Keep public v2 signatures and other agents unchanged. |
@@ -31,9 +35,13 @@ Status: **Proposed**. Part of [#254](https://github.com/relaishq/relais/issues/2
 
 Keep WebRTC in Relais. A Python bot changes its transport and a few setup lines. Scope limits: audio only (no video), no DataChannel or Pipecat RTVI client protocol, and a context that is not Pipecat's standard message list needs its own serializer. Killing/replacing the bot keeps the caller connected. A replacement restores bounded text from a checkpoint: a successful fenced store write. A fence rejects replaced owners; an epoch identifies one ownership period. A generation identifies one bot attachment within that epoch.
 
-Live media and bot replacement on a surviving owner do not need control. Worker moves/crash takeovers still do. Saved text can survive; unfinished speech, provider streams and arbitrary Python objects cannot. Tools are not exactly-once. These are proposed behaviors, not measured results.
+Live media and bot replacement on a surviving owner do not need control. Worker moves/crash takeovers still do. Saved text can survive; unfinished speech, provider streams and arbitrary Python objects cannot. Tools are not exactly-once. These behaviors remain unmeasured.
 
 ## Recovery and state rules
+
+**Fail open covers optional dependencies only.** ADR 0008's **30 s store-outage rule is the deliberate exception**: the store remains required for ownership/fencing, with bounded outage retention rather than unlimited continuation.
+
+Open core ships a simple reference bootstrap/operator directory with fixed, manually sized warm-bot capacity. Autoscaling is optional, never a prerequisite.
 
 The owner alone issues short-lived, single-use tokens. Warm runners supervise bots and reserve capacity. They register with every eligible worker, so a destination can issue a fresh assignment after a move/crash. Lost registry access can delay attachment; it never blocks media, Save or checkpoints. Worker-local tokens/reservations die with a crash, including halfway through attach.
 
@@ -43,13 +51,7 @@ Persist bot/runner identity and generation before enabling a new bot's provider/
 
 Without confirmation, same-owner replacement waits until the last possible old-generation permit deadline. Include queued replies and in-flight renewals; a reply cannot reset its request-start deadline. Higher-epoch takeover instead bounds expiry by transfer store-time plus the pool's maximum permit cap. Unknown bounds mean paused bot work and a typed unavailable outcome, not a second active bot. A live bot can reattach to the successor without restarting its process.
 
-Socket closure alone is insufficient. Tag all queued bot work, pending candidates and callbacks with bot instance/epoch/generation. Validate those tags again when applying work. During replacement, atomically advance the floor, cancel obsolete tasks and invalidate old checkpoints, interruptions, audio, controls and notices. Exact moves must not revive them.
-
-Serialize replacement with checkpoint capture/write settlement. Resolve uncertain writes before choosing the replacement's durable conversation and sequence baseline. A timeout is not proof of non-commit. Commit the new lineage against the settled tuple before `attached`; a superseded tuple requires reconciliation again. Preserve current media counters. New checkpoint numbering starts at the restored sequence + 1; old-scope acknowledgements cannot advance it.
-
 **Permits add no store commands/bytes.** Refresh only from the existing successful lease `Renew` for that owner/epoch. Anchor the owner deadline at renewal-request start plus `min(5 s, lease TTL)`, never reply receipt. A runner's nonce request uses cached remaining time, anchored at runner-local request start. Late replies and repeated requests cannot extend it; failed/uncertain renewals grant nothing. Stop new provider/tool calls on revocation, owner-socket loss or expiry. Media retains ADR 0008's outage policy.
-
-For takeover, derive transfer store-time from returned Transfer `ExpiresAt − applied TTL`. Use existing recovery clock observations, or conservatively wait 5 s after local Transfer confirmation. For same-epoch replacement, freeze grants and use the known maximum outstanding deadline, or wait the cap after grant issuance is disabled. Do not use the transfer formula without a transfer. Mixed pools use the maximum known cap; clock/identity uncertainty delays activation.
 
 The relay fences caller audio, not external tools. Requests already sent can finish; cancellation can fail. Every provider/tool start must obey the permit guard. Apps that bypass it are outside the guarantee. Local timing targets assume confirmed revocation and warm capacity; permit expiry bounds permission, not total first-audio time.
 
@@ -59,19 +61,46 @@ On SIGTERM, reserve a replacement before release. Old bot continues until its ow
 
 Public `Agent.Handle/Save/Restore` stays serial and deadline-bounded. All Save/Restore and move-only callbacks use owned local state; none waits for Python, socket flush or remote acknowledgement. Exact export uses a stable local snapshot whose payload length matches the last accepted Save. Appendix A defines the cut and playback rule.
 
-Use existing `Store`/`ComponentStore` interfaces. No Redis types or keys enter the bot protocol. Keep 6,144 B hot, 70,000 B/s, 40,960 B burst, existing transaction caps and reservations. Working text gets 3,072 B minus reserved bridge metadata. Oversized user text refuses before generation and requests shorter/repeated input.
+The bridge **requires split checkpoints**, off by default today; explicitly enable them in its pool. Use existing `Store`/`ComponentStore` interfaces. No Redis types or keys enter the bot protocol. Keep 6,144 B hot, 70,000 B/s, 40,960 B burst, existing transaction caps and reservations. Working text gets 3,072 B minus reserved bridge metadata. Oversized user text refuses before generation and requests shorter/repeated input.
 
 Separate latest-wins working/history candidates wait outside the accepted bot pair. Keep each candidate coherent; dependent working updates wait with its history. Budget shortage reports deferred age, not permanent size refusal. Admission still reserves the full write, hot checkpoint and unresolved-write allowance. Pending data is bounded and can be lost on crash without durable acknowledgement. History cannot be promised durable every turn.
 
-ADR 0012's maximum hot/forced pattern leaves 2,416 B/s for cold writes; `8,228/2,416 ≈3.4 s` is conditional arithmetic. [#214](https://github.com/relaishq/relais/issues/214) accepted 1.3–3.4% full-size headroom. Its ~3,155 B/s projection is not guaranteed spare capacity: any extra store I/O must be measured. Permit WebSocket bytes are separate bridge traffic. **Full-size bridge calls/primary: NOT-RUN**; the roughly 200-call echo planning ceiling is not bridge capacity.
+ADR 0012's maximum hot/forced pattern leaves 2,416 B/s for cold writes; `8,228/2,416 ≈3.4 s` is conditional arithmetic. [#214](https://github.com/relaishq/relais/issues/214) measured only 1.3–3.4% headroom against **131,072 B request+reply per call-second**. Full-size churn measured 126,652–129,424 B/call-second before bridge overhead. Its ~3,155 B/s projection is not guaranteed spare capacity: any extra store I/O must be measured. Permit WebSocket bytes are separate bridge traffic. **Full-size bridge calls/primary: NOT-RUN**. Slices 1/6 measure per-call traffic, renewal tails, CPU and safe calls/primary; the roughly 200-call echo ceiling is not bridge capacity.
 
-Build/publish Go binaries and both Apache-2.0 Python packages from the same tag. Include bridge protocol and supported pairs in [#252's compatibility manifest](https://github.com/relaishq/relais/issues/252); CI/preflight refuse unsupported upgrade/rollback pairs. Matching release numbers alone prove no compatibility.
+Build/publish Go binaries and both Apache-2.0 Python packages from the same tag. Include bridge protocol and supported pairs in [#252's compatibility manifest](https://github.com/relaishq/relais/issues/252); CI/preflight refuse unsupported upgrade/rollback pairs. Matching release numbers alone prove no compatibility. **Before merge:** reserve the PyPI names `relais-agent` and `pipecat-relais` (**owner action**).
 
 **Approve the experiment first.** Measure sustained speech, jitter, partial final batches and loaded renewal gaps before selecting output design. Five 20 ms packets exactly fill a 100 ms emission interval, leaving no catch-up margin. Streaming output is another candidate. The 150 ms threshold spans encoded packet ready in Python to host pacer admission, including batching/task waits. Provider and caller playout time are separate.
+
+## Operability
+
+Change parameters and redeploy; no hard-coded operational values. The control plane is nearly invisible; moves/takeovers still require it. Proposed defaults below are not existing flags. Validate profiles/fencing/format bounds; changing targets proves nothing.
+
+| Tunable parameter | Default |
+| --- | --- |
+| Permit cap; lease renewal; outage/TTL | 5 s; 1 s nominal; 30/34 s |
+| Pipeline ping; pong timeout | 500 ms; 2 s, even if socket pongs continue |
+| Attach-token TTL; reservation expiry | 5 s each |
+| Output batch; packet duration | 5 × 20 ms, experiment candidate |
+| Snapshot/Save cadence; callback; task emission | 100 ms each |
+| Input queue; JSON; binary bounds | 32 packets; 32 KiB; 1,200 B |
+| Move-memory session/worker | 1 MiB / 64 MiB, including retained copies |
+| Bridge/host active tasks; renewal concurrency | 2/4; 32 |
+| Working/history; retained exchanges | 3,072/8,192 B; four plus summary |
+| Hot cap; rate; burst; store traffic gate | 6,144 B; 70,000 B/s; 40,960 B; 131,072 B/call-second |
+| Setup/history/transaction caps | 4,096/8,448/20,480 B |
+| Kill/hang/redeploy targets; output threshold | <1/≤3/≤2 s; p95 ≤150 ms |
+| Warm capacity; spare capacity | Operator-set fixed slots; one spare per concurrent handoff |
+| Directory; logs; inventory path | `relais-bridge.yaml`; stdout/service journal; `deployment-inventory.json` |
+
+Inventory lists account-local resource IDs, endpoints and logs. Default names: `relais-<deployment>-<role>-<instance>`; tags: deployment, role, instance, release. Resolved parameters and private status/log commands let the customer's agent inspect its account. Never include credentials or conversation data.
 
 **NOT-RUN — implementation, safety/timing targets, Pipecat compatibility and bridge capacity/comparisons.**
 
 ## Appendix A: Host, task and export details
+
+Socket closure alone is insufficient. Tag all queued bot work, pending candidates and callbacks with bot instance/epoch/generation. Validate those tags again when applying work. During replacement, atomically advance the floor, cancel obsolete tasks and invalidate old checkpoints, interruptions, audio, controls and notices. Exact moves must not revive them.
+
+Serialize replacement with checkpoint capture/write settlement. Resolve uncertain writes before choosing the replacement's durable conversation and sequence baseline. A timeout is not proof of non-commit. Commit the new lineage against the settled tuple before `attached`; a superseded tuple requires reconciliation again. Preserve current media counters. New checkpoint numbering starts at the restored sequence + 1; old-scope acknowledgements cannot advance it.
 
 Register built-in `bridge` through `workerapp`. Amend ADR 0010 A/E's deployment/bridge boundary and Deferred streaming-input/PCM exclusion only for this bridge. Also amend playback completion only as specified below. No runtime Go plugins or subprocess supervision. Update README's limit when shipping.
 
@@ -96,7 +125,7 @@ Checkpoint capture/write settlement keeps its existing serialization and fences.
 
 ## Appendix B: Connections and protocol
 
-Nothing phones home. Disable model downloads, proxy autodiscovery, tracing/exporters and update checks; supply VAD assets locally. DNS uses configured names (A/AAAA); TLS uses configured SNI/certificates. Reject browser Origins/untrusted redirects. Credentials never enter URLs/logs.
+The bridge and Python packages never phone home. License checks and usage reporting belong only to a separate paid operations layer, outside the call path. Disable model downloads, proxy autodiscovery, tracing/exporters and update checks; supply VAD assets locally. DNS uses configured names (A/AAAA); TLS uses configured SNI/certificates. Reject browser Origins/untrusted redirects. Credentials never enter URLs/logs.
 
 | Connection | Application fields |
 | --- | --- |
@@ -109,6 +138,8 @@ Nothing phones home. Disable model downloads, proxy autodiscovery, tracing/expor
 | App providers | None in bridge packages. Existing STT/LLM/TTS/tools remain app-owned. Each demo adapter documents endpoints, auth/headers, model/settings and audio/text/context/tool fields before release. No provider calls here. |
 
 Runner floors reject lower generations in the same epoch and lower epochs regardless of generation. Revocation retries reuse request ID and exact arguments. Acknowledgement echoes the full transition. Advancing a floor disables old permits, assignments and reconnects before acknowledgement. Keep the highest floor through retries; ordinary bot checkpoints cannot reduce it. A restarted runner requires authoritative reauthorization before work.
+
+For takeover, derive transfer store-time from returned Transfer `ExpiresAt − applied TTL`. Use existing recovery clock observations, or conservatively wait 5 s after local Transfer confirmation. For same-epoch replacement, freeze grants and use the known maximum outstanding deadline, or wait the cap after grant issuance is disabled. Do not use the transfer formula without a transfer. Mixed pools use the maximum known cap; clock/identity uncertainty delays activation.
 
 The owner records a grant-stop boundary before same-epoch replacement. Invalidate in-flight old-generation permit callbacks; retain the maximum possible deadline. If it cannot be established, wait the pool cap from that boundary with grants disabled. New generations cannot borrow an old generation's renewal callback. This is distinct from the transfer expiry proof.
 
