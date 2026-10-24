@@ -10,11 +10,12 @@ out=$(cd "$2" && pwd)
 work=$(mktemp -d "${TMPDIR:-/tmp}/relais-dist.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 cd "$root"
-commit=$(git rev-parse --short HEAD)
+commit=$(git rev-parse HEAD)
 built=$(date -u '+%Y-%m-%d_%H:%M:%S')
 module=$(awk '$1 == "module" {print $2; exit}' go.mod)
 # -s -w drop the symbol table and DWARF; panics still print function names.
 ldflags="-s -w -X $module/pkg/buildinfo.Version=$version -X $module/pkg/buildinfo.Commit=$commit -X $module/pkg/buildinfo.Date=$built"
+go run ./scripts/release/compat check
 binaries=(relais-relay relais-worker relais-control relais-signal relais-demo relais-load)
 archives=()
 for os in linux darwin; do
@@ -25,6 +26,8 @@ for os in linux darwin; do
     for binary in "${binaries[@]}"; do
       CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$ldflags" -o "$stage/$binary" "./cmd/$binary"
     done
+    CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags "$ldflags" -o "$stage/relais-compat" ./scripts/release/compat
+    go run ./scripts/release/compat generate --version "$version" --commit "$commit" --os "$os" --arch "$arch" --output "$stage/compatibility.json"
     cp LICENSE NOTICE README.md "$stage/"
     cp deploy/local/start.sh deploy/local/stop.sh "$stage/"
     chmod 755 "$stage/start.sh" "$stage/stop.sh"
@@ -39,4 +42,6 @@ if command -v sha256sum >/dev/null 2>&1; then
 else
   shasum -a 256 "${archives[@]}" > checksums.txt
 fi
+cd "$root"
+python3 scripts/release/check-archives.py "$out" "$version" "$commit"
 printf '%s\n' "${archives[@]}" checksums.txt

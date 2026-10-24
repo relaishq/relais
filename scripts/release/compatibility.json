@@ -1,0 +1,374 @@
+{
+  "manifest_version": 1,
+  "version": "0.0.0-dev",
+  "commit": "",
+  "os": "any",
+  "arch": "any",
+  "archive_layout": 1,
+  "store_contract": 1,
+  "scripts": {
+    "componentCommitLua": {
+      "sha": "d7f190cb2413e6478ecdae5a2347bee198a9ea87"
+    },
+    "componentReadLua": {
+      "sha": "72198f93e1298a750cb0d185a98f5f8a7823d813"
+    },
+    "controlIntentLua": {
+      "sha": "fcc8459b250c1f3e9db82f7c62bd42360feec707"
+    },
+    "controlLeaseLua": {
+      "sha": "d17072be87680c6f5b1da9eac3cfd033e68d8933"
+    },
+    "deleteRouteLua": {
+      "sha": "fc9eb1fef7c80cccc8b7da1c177d1ccfb99ba28d"
+    },
+    "indexLua": {
+      "sha": "db47f2c2bf586790c42ad5b4e4b0d52a3491a33a"
+    },
+    "indexRefreshLua": {
+      "sha": "9d4e4e30bb12d59cc1a087278afe654ce5b6c93e"
+    },
+    "putRouteLua": {
+      "sha": "c4086ffbaf70d582a550704e7e65143e1d755d3b"
+    },
+    "relayLeaseLua": {
+      "sha": "729fabf7a7b59137a645cda3ec06b0a07b5fc7e2"
+    },
+    "sessionLua": {
+      "sha": "7d0ccfd07287ccd4902324f0224e85195f0e6da9"
+    },
+    "storeClockLua": {
+      "sha": "104ae65debf45156ded1e8e613705534c8e62c17"
+    }
+  },
+  "private_http_contract": 1,
+  "private_http_golden_sha256": "aa370ccd164bdf62f87f436b1db57515fc4383b55c1148d1b180f800b400da7d",
+  "roles": {
+    "control": {
+      "default": {
+        "formats": {
+          "component": {
+            "reads": [
+              10
+            ],
+            "writes": null,
+            "continues": [
+              10
+            ]
+          },
+          "encryption_header": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "legacy_encryption_header": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "metadata": {
+            "reads": [
+              10
+            ],
+            "writes": null,
+            "continues": [
+              10
+            ]
+          },
+          "private_http": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "snapshot": {
+            "reads": [
+              6,
+              7,
+              8,
+              9,
+              10
+            ],
+            "writes": null,
+            "continues": [
+              7,
+              8,
+              9,
+              10
+            ]
+          },
+          "store_contract": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          }
+        }
+      }
+    },
+    "relay": {
+      "default": {
+        "formats": {
+          "private_http": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "store_contract": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          }
+        }
+      }
+    },
+    "signal": {
+      "default": {
+        "formats": {
+          "private_http": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          }
+        }
+      }
+    },
+    "worker": {
+      "legacy": {
+        "formats": {
+          "component": {
+            "reads": [
+              10
+            ],
+            "writes": null,
+            "continues": [
+              10
+            ]
+          },
+          "encryption_header": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "legacy_encryption_header": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "metadata": {
+            "reads": [
+              10
+            ],
+            "writes": null,
+            "continues": [
+              10
+            ]
+          },
+          "private_http": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "snapshot": {
+            "reads": [
+              6,
+              7,
+              8,
+              9,
+              10
+            ],
+            "writes": [
+              7,
+              8,
+              9
+            ],
+            "continues": [
+              7,
+              8,
+              9,
+              10
+            ]
+          },
+          "store_contract": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          }
+        }
+      },
+      "split": {
+        "formats": {
+          "component": {
+            "reads": [
+              10
+            ],
+            "writes": [
+              10
+            ],
+            "continues": [
+              10
+            ]
+          },
+          "encryption_header": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "legacy_encryption_header": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "metadata": {
+            "reads": [
+              10
+            ],
+            "writes": [
+              10
+            ],
+            "continues": [
+              10
+            ]
+          },
+          "private_http": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "snapshot": {
+            "reads": [
+              6,
+              7,
+              8,
+              9,
+              10
+            ],
+            "writes": [
+              7,
+              8,
+              9,
+              10
+            ],
+            "continues": [
+              7,
+              8,
+              9,
+              10
+            ]
+          },
+          "store_contract": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          }
+        }
+      }
+    }
+  },
+  "agents": [
+    {
+      "name": "echo",
+      "identity": "builtin-echo",
+      "limits": "builtin-echo",
+      "reads": [
+        1162037327
+      ],
+      "writes": [
+        1162037327
+      ]
+    }
+  ],
+  "oldest_live_peer": "0.0.0-dev",
+  "oldest_rollback": "0.0.0-dev",
+  "tested_peers": [
+    "0.0.0-dev"
+  ]
+}

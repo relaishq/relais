@@ -1,0 +1,5 @@
+{
+  "oldest_live_peer": "self",
+  "oldest_rollback": "self",
+  "tested_peers": ["self"]
+}

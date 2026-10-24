@@ -289,7 +289,114 @@ implement a worker drain, safe replacement, cloud-init replay, or rollback.
 Do not treat a stack update as a live rollout. Keep the store namespace, secrets
 and relay address stable. Snapshot-key rotation requires compatible migration;
 signaling-token rotation requires a coordinated signaling restart. There is no
-rotation or live-upgrade procedure claimed by this slice.
+rotation implemented by stack updates. Use the offline release gate below for an
+operator-controlled live rollout; it does not automate the CloudFormation change.
+
+### Compatibility gate before upgrade or rollback
+
+Every new release archive includes `compatibility.json` and `relais-compat`.
+The archive SHA-256 authenticates this manifest together with its binaries when
+compared with an independently reviewed release checksum. Boot checks required
+members, manifest version/platform and every binary's linked version/full commit
+before installation or service start. Pre-manifest releases are refused; there
+is no inferred support for v0.2.0. For #251, use two builds from main that both
+carry manifests.
+
+Before **any** drain, process stop, replacement or new standby launch, collect
+`pool.json` offline. A live inventory collector remains a follow-up. Required fields:
+
+| Field | Operator source |
+| --- | --- |
+| `inventory_version: 1`, `complete: true` | Attest that the inventory covers every process in this pool, including active **and** standby relay, all workers, control and signaling. Unknown/unreachable inventory is a refusal. |
+| `target_worker_profile` | Reviewed target service arguments: `legacy` with new split admission off, or `split` with it on. This is not proof that old v10 calls disappeared. |
+| Each participant's unique `name` and `role` | Fixed stack host/service inventory and installed unit definitions. Role is `worker`, `relay`, `control` or `signal`; name each relay process separately. |
+| `profile` | Installed arguments/configuration: worker `legacy` or `split` from `-agent-split-checkpoints`; other roles `default`. Read configuration without exposing credentials. |
+| `default_budgets` | For workers, attest `true` only when snapshot size/rate/burst and move-memory settings retain the defaults for that profile. Overrides or unknown settings refuse; their compatibility needs separate evidence. Other roles use `false`. |
+| `version`, `commit` | Run that installed binary with `-version`. Commit must be the full SHA and must match its manifest. Do this on each host; cached control status does not report build identity. |
+| `archive_sha256` | Original independently verified release checksum/install record for that host's archive. |
+| `manifest` | Embed that installed `/opt/relais/bin/compatibility.json` JSON object. |
+| `agents` | Each worker's configured registration names, including `echo` for the standard preview; other roles use `[]`. A custom build needs a reviewed manifest with registration identity, declared limits and readable/writable app schemas. Unknown custom agents refuse. |
+
+The envelope is `{"inventory_version":1,"complete":true,"target_worker_profile":"legacy","participants":[...]}`.
+Each participant has `name`, `role`, `profile`, `version`, `commit`,
+`archive_sha256`, `agents`, `default_budgets` and the embedded `manifest` fields listed above.
+All participants must use the target archive's OS/architecture; heterogeneous
+platform rollout is outside this first checker.
+
+Verify/extract the target archive into a staging directory. Using its CLI:
+
+```sh
+./staged/relais-compat preflight --running pool.json \
+  --target staged/compatibility.json --operation upgrade > upgrade-verdict.json
+# For rollback, collect a fresh inventory and name the older target:
+./staged/relais-compat preflight --running pool.json \
+  --target older/compatibility.json --operation rollback > rollback-verdict.json
+```
+
+Exit zero and `allowed:true` authorize only the compatibility portion of the
+reviewed plan. A refusal exits nonzero with a typed code/reason and emits no
+steps. The CLI makes no network or process changes. Do not continue after a
+refusal. Serialize the operation and re-collect/recheck after any inventory,
+release, agent or configuration change; this gate is not runtime peer enforcement.
+
+The checker evaluates every intermediate state, with workers first, then relay
+(including standby), control and signaling (ADR 0009 also permits control before
+relay). Every reader must decode and continue the existing state/lifecycle and
+new writes; disabling split admission does not make v10 safe for a v9-only target.
+All state-reading/mutating participants must have full v10 reader, writer and
+lifecycle support **before** activating new split calls (ADR 0012 §4). Do not
+activate split admission while rolling the bridge for the first time.
+
+After the gate, freeze admissions and confirm survivor capacity. Lean rollout
+requires existing load to fit one worker and has no protection from a further
+worker failure; pause when capacity is insufficient. Pre-drain one worker while
+it stays running; verify local sessions, authoritative ownership, reservations
+and pending transfers are empty. Then stop it, wait until control reports `dead`,
+`recovering=false` and zero old calls, call `/private/workers/{name}/replace`,
+and start/rejoin that address. Repeat one worker at a time. Stage a compatible
+relay standby, stop the active process, verify the successor epoch/routes, then
+replenish standby. Replace control only after its predecessor exits and wait
+for reconciliation readiness. Keep namespace, keys and relay addresses stable.
+These steps retain the existing drain/rejoin/relay safety rules; the compatibility
+CLI does not execute or prove them.
+
+Supported versions come from `scripts/release/compatibility-policy.json`: the
+newer release explicitly lists its tested peer versions and the oldest live peer
+and rollback target. `self` is stamped to the archive version. The initial policy
+permits only the same immutable build. Before shipping a second supported release,
+record the tested older version and floors in that policy, run both upgrade and
+rollback tests, and regenerate `scripts/release/compatibility.json`. A floor alone
+never authorizes an unlisted version; semver proximity supplies no evidence.
+`0.0.0-dev` templates/manual CI artifacts can carry that policy but cannot
+authorize a live rollout. Stamp each #251 build with its own real release version.
+
+Rollback applies the same check to a fresh running inventory. It conservatively
+retains formats that running builds can continue, even with new admission off.
+It refuses a rollback across an unreadable state format or incomplete lifecycle;
+CloudFormation rollback cannot undo agent working/history writes. There is no
+downconversion, truncation, stale legacy checkpoint fallback or force flag. Going
+farther back requires a separately verified empty incompatible pool and its own
+procedure; this initial live checker cannot certify that exception.
+
+For contract maintenance, bump `sessionstore.ScriptContractVersion` for an
+incompatible script/store change. A script-only optimization may instead update
+its SHA golden with a new note explaining why persisted tuples are unchanged
+(ADR 0012 #238). Bump `privateapi.ContractVersion` and add a new versioned
+request/response fixture when the private HTTP fixture changes. Generate and check:
+
+```sh
+go run ./scripts/release/compat generate --output scripts/release/compatibility.json
+go run ./scripts/release/compat check
+```
+
+CI compares the manifest with production version values and goldens, checks
+contract evolution against the PR base, and checks all four packaged archives.
+Golden payload tests cover production request/reply types and endpoint inventory;
+there are no whole-source fingerprints. The existing v10/header literals are
+read at their specific encoding sites without changing runtime behavior.
+Free tests establish offline decisions and boot refusal; loaded AWS upgrade,
+rollback, capacity and managed-store durability remain **NOT-RUN** until separately
+approved acceptance evidence is recorded.
 
 `DeletionPolicy: RetainExceptOnCreate` and `UpdateReplacePolicy: Retain` protect
 the store, its subnet/security groups, all five secrets and the relay Elastic IP.

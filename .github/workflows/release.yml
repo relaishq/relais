@@ -4,11 +4,41 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/release/**'
+      - 'internal/releasecompat/**'
+      - 'internal/privateapi/**'
+      - 'internal/componentcodec/**'
+      - 'pkg/sessionstore/**'
+      - 'pkg/mediaworker/**'
+      - 'pkg/relay/**'
+      - 'pkg/controlplane/**'
+      - '.github/workflows/release.yml'
 
 permissions:
   contents: read
 
 jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Constants, goldens, typed refusals and manifest parity
+        run: |
+          go test ./internal/releasecompat ./internal/privateapi ./scripts/release/compat
+          go test ./pkg/sessionstore -run '^TestStoreScriptContractGolden$'
+          go run ./scripts/release/compat check
+      - name: Require a version bump for changed HTTP fixtures
+        if: github.event_name == 'pull_request'
+        env:
+          CONTRACT_BASE: ${{ github.event.pull_request.base.sha }}
+        run: go run ./scripts/release/compat check --base "$CONTRACT_BASE"
   main-ci:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -30,6 +60,8 @@ jobs:
         run: ./scripts/release/check-main-ci.sh "$RELEASE_SHA"
 
   build:
+    if: github.event_name != 'pull_request'
+    needs: compatibility
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
