@@ -93,19 +93,23 @@ func agreedSlotOwners(ctx context.Context, client *redis.ClusterClient) ([16384]
 		if err != nil {
 			return agreed, err
 		}
+		// SHARDS identifies members, but its node roles are not slot ownership:
+		// Valkey can list both old and promoted nodes as online masters in one
+		// shard during failover. SLOTS identifies the owner explicitly and is
+		// also the metadata go-redis uses to load each client's routing cache.
+		slotCommand := redis.NewClusterSlotsCmd(ctx, "cluster", "slots")
+		err = node.Process(ctx, slotCommand)
+		slots := slotCommand.Val()
+		if err != nil {
+			return agreed, err
+		}
 		var owners [16384]string
-		for _, shard := range shards {
-			primary, err := shardPrimaryAddress(shard, node.Options().TLSConfig != nil)
-			if err != nil {
-				return agreed, err
+		for _, slot := range slots {
+			if slot.Start < 0 || slot.End >= len(owners) || slot.Start > slot.End || len(slot.Nodes) == 0 {
+				return agreed, fmt.Errorf("node %s returned invalid slots", node.Options().Addr)
 			}
-			for _, slot := range shard.Slots {
-				if slot.Start < 0 || slot.End >= int64(len(owners)) || slot.Start > slot.End {
-					return agreed, fmt.Errorf("node %s returned invalid slots", node.Options().Addr)
-				}
-				for i := slot.Start; i <= slot.End; i++ {
-					owners[i] = primary
-				}
+			for i := slot.Start; i <= slot.End; i++ {
+				owners[i] = slot.Nodes[0].Addr
 			}
 		}
 		for _, owner := range owners {
@@ -145,16 +149,6 @@ func agreedSlotOwners(ctx context.Context, client *redis.ClusterClient) ([16384]
 		return agreed, fmt.Errorf("cluster has no nodes")
 	}
 	return agreed, nil
-}
-
-func shardPrimaryAddress(shard redis.ClusterShard, tls bool) (string, error) {
-	for _, node := range shard.Nodes {
-		if node.Role != "master" || node.Health != "online" {
-			continue
-		}
-		return shardNodeAddress(node, tls)
-	}
-	return "", fmt.Errorf("shard has no online primary")
 }
 
 func shardNodeAddress(node redis.Node, tls bool) (string, error) {

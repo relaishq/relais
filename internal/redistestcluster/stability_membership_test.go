@@ -89,6 +89,12 @@ func (h incompleteMembershipHook) ProcessHook(next redis.ProcessHook) redis.Proc
 				}
 				slots[i].Nodes = nodes
 			}
+			if h.health != "fail" && h.address == h.missing && !h.corrected.Load() {
+				for i := range slots {
+					// Keep coverage intact, but disagree on this owner.
+					slots[i].Nodes[0].Addr = "127.0.0.1:1"
+				}
+			}
 			cmd.SetVal(slots)
 		case *redis.ClusterShardsCmd:
 			shards := cmd.Val()
@@ -103,17 +109,6 @@ func (h incompleteMembershipHook) ProcessHook(next redis.ProcessHook) redis.Proc
 			cmd.SetVal(shards)
 			if h.address == h.missing && !h.corrected.Load() {
 				h.observed.Store(true)
-				shards := cmd.Val()
-				for i := range shards {
-					for j := range shards[i].Nodes {
-						if shards[i].Nodes[j].Role == "master" {
-							// Keep membership and coverage intact, but disagree on this owner.
-							shards[i].Nodes[j].Port++
-							shards[i].Nodes[j].TLSPort++
-						}
-					}
-				}
-				cmd.SetVal(shards)
 			}
 		}
 		return nil
