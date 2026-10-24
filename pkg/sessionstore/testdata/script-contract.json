@@ -1,6 +1,10 @@
 {
   "contract_version": 1,
   "scripts": {
+    "cmd/relais-load/soak.go:Eval:1": {
+      "sha": "1e32aaba1c22ebe89100aab86e0288e6951a0f95",
+      "unchanged_tuples": "Coverage added for the existing script; reviewed persisted state and wire behaviour are unchanged."
+    },
     "componentCommitLua": {
       "sha": "d7f190cb2413e6478ecdae5a2347bee198a9ea87"
     },
@@ -21,6 +25,14 @@
     },
     "indexRefreshLua": {
       "sha": "9d4e4e30bb12d59cc1a087278afe654ce5b6c93e"
+    },
+    "pkg/framecache/appendLua": {
+      "sha": "1e78b51745fe6fa905f4f157c3a065fbcc15b135",
+      "unchanged_tuples": "Coverage added for the existing script; reviewed persisted state and wire behaviour are unchanged."
+    },
+    "pkg/framecache/currentLua": {
+      "sha": "f8089343dc00145c1957f96ee6807a35a9930408",
+      "unchanged_tuples": "Coverage added for the existing script; reviewed persisted state and wire behaviour are unchanged."
     },
     "putRouteLua": {
       "sha": "c4086ffbaf70d582a550704e7e65143e1d755d3b"

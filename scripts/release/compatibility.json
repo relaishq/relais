@@ -1,5 +1,5 @@
 {
-  "manifest_version": 1,
+  "manifest_version": 2,
   "version": "0.0.0-dev",
   "commit": "",
   "os": "any",
@@ -7,6 +7,10 @@
   "archive_layout": 1,
   "store_contract": 1,
   "scripts": {
+    "cmd/relais-load/soak.go:Eval:1": {
+      "sha": "1e32aaba1c22ebe89100aab86e0288e6951a0f95",
+      "unchanged_tuples": "Coverage added for the existing script; reviewed persisted state and wire behaviour are unchanged."
+    },
     "componentCommitLua": {
       "sha": "d7f190cb2413e6478ecdae5a2347bee198a9ea87"
     },
@@ -28,6 +32,14 @@
     "indexRefreshLua": {
       "sha": "9d4e4e30bb12d59cc1a087278afe654ce5b6c93e"
     },
+    "pkg/framecache/appendLua": {
+      "sha": "1e78b51745fe6fa905f4f157c3a065fbcc15b135",
+      "unchanged_tuples": "Coverage added for the existing script; reviewed persisted state and wire behaviour are unchanged."
+    },
+    "pkg/framecache/currentLua": {
+      "sha": "f8089343dc00145c1957f96ee6807a35a9930408",
+      "unchanged_tuples": "Coverage added for the existing script; reviewed persisted state and wire behaviour are unchanged."
+    },
     "putRouteLua": {
       "sha": "c4086ffbaf70d582a550704e7e65143e1d755d3b"
     },
@@ -41,8 +53,15 @@
       "sha": "104ae65debf45156ded1e8e613705534c8e62c17"
     }
   },
-  "private_http_contract": 1,
-  "private_http_golden_sha256": "aa370ccd164bdf62f87f436b1db57515fc4383b55c1148d1b180f800b400da7d",
+  "private_http_contract": 2,
+  "redis_key_contract": 1,
+  "redis_key_golden_sha256": {
+    "framecache": "7df2f4606485a52e42840e7aa63f6f731db1f8dfeab858f41829b4119ad0dc35",
+    "sessionstore": "03a1309d63699a67f9f442ca0e585f60f25126da66000dcb0f040787131da426"
+  },
+  "relay_udp_contract": 1,
+  "relay_udp_golden_sha256": "09bf255cece18e41d155a375746e97490669cf1248a02e9f7eb8470489cfd00c",
+  "private_http_golden_sha256": "842584559493d8919df6dc46c97b89a57b62ea6111d17be2565366660331cf23",
   "roles": {
     "control": {
       "default": {
@@ -89,6 +108,17 @@
           },
           "private_http": {
             "reads": [
+              2
+            ],
+            "writes": [
+              2
+            ],
+            "continues": [
+              2
+            ]
+          },
+          "redis_keys": {
+            "reads": [
               1
             ],
             "writes": [
@@ -133,6 +163,28 @@
         "formats": {
           "private_http": {
             "reads": [
+              2
+            ],
+            "writes": [
+              2
+            ],
+            "continues": [
+              2
+            ]
+          },
+          "redis_keys": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "relay_udp": {
+            "reads": [
               1
             ],
             "writes": [
@@ -161,13 +213,13 @@
         "formats": {
           "private_http": {
             "reads": [
-              1
+              2
             ],
             "writes": [
-              1
+              2
             ],
             "continues": [
-              1
+              2
             ]
           }
         }
@@ -217,6 +269,28 @@
             ]
           },
           "private_http": {
+            "reads": [
+              2
+            ],
+            "writes": [
+              2
+            ],
+            "continues": [
+              2
+            ]
+          },
+          "redis_keys": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "relay_udp": {
             "reads": [
               1
             ],
@@ -307,6 +381,28 @@
             ]
           },
           "private_http": {
+            "reads": [
+              2
+            ],
+            "writes": [
+              2
+            ],
+            "continues": [
+              2
+            ]
+          },
+          "redis_keys": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "relay_udp": {
             "reads": [
               1
             ],

@@ -135,7 +135,12 @@ func Preflight(pool Pool, target Manifest, operation string) Verdict {
 		return fail(err)
 	}
 	rank := map[string]int{"worker": 0, "relay": 1, "control": 2, "signal": 3}
-	sort.SliceStable(current, func(i, j int) bool { return rank[current[i].Role] < rank[current[j].Role] })
+	sort.SliceStable(current, func(i, j int) bool {
+		if operation == "rollback" {
+			return rank[current[i].Role] > rank[current[j].Role]
+		}
+		return rank[current[i].Role] < rank[current[j].Role]
+	})
 	var steps []Step
 	for i, p := range current {
 		profileName := "default"
@@ -178,7 +183,7 @@ func Preflight(pool Pool, target Manifest, operation string) Verdict {
 	return Verdict{Allowed: true, Steps: steps}
 }
 func stateDomain(s string) bool {
-	return s == "snapshot" || s == "component" || s == "metadata" || s == "encryption_header" || s == "legacy_encryption_header"
+	return s == "redis_keys" || s == "snapshot" || s == "component" || s == "metadata" || s == "encryption_header" || s == "legacy_encryption_header"
 }
 func union(a, b []int) []int {
 	r := slices.Clone(a)

@@ -1,0 +1,9 @@
+{
+  "": "fixture:frames:{sess:}",
+  "call": "fixture:frames:{sess:call}",
+  "call{tag}": "fixture:frames:{sess:~63616c6c7b7461677d}",
+  "track/audio": "617564696f:42:",
+  "track/video": "766964656f:4294967295:",
+  "~call": "fixture:frames:{sess:~7e63616c6c}",
+  "雪": "fixture:frames:{sess:雪}"
+}

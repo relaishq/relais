@@ -3,15 +3,11 @@ package privateapi_test
 import (
 	"encoding/json"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -195,48 +191,17 @@ func encodePayload(t *testing.T, value any) payload {
 
 func TestPrivateHTTPContractGolden(t *testing.T) {
 	var fixtures []fixture
-	var coverage, registered []string
-	for _, e := range endpoints() {
-		fixtures = append(fixtures, fixture{Service: e.Service, Route: e.Route, Request: encodePayload(t, e.Request), Response: encodePayload(t, e.Response), Statuses: e.Statuses})
-		if e.Service == "worker" || e.Service == "relay" || e.Service == "control" {
-			coverage = append(coverage, e.Service+" "+e.Route)
-		}
-	}
-	for service, paths := range map[string][]string{"worker": {"../../pkg/mediaworker/http.go"}, "relay": {"../../pkg/relay/http.go"}, "control": {"../../pkg/controlplane/http.go", "../../pkg/controlplane/heartbeat_http.go"}} {
-		for _, path := range paths {
-			f, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-			if err != nil {
-				t.Fatal(err)
-			}
-			ast.Inspect(f, func(n ast.Node) bool {
-				call, ok := n.(*ast.CallExpr)
-				if !ok || len(call.Args) < 1 {
-					return true
-				}
-				sel, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok || (sel.Sel.Name != "HandleFunc" && sel.Sel.Name != "Handle") {
-					return true
-				}
-				lit, ok := call.Args[0].(*ast.BasicLit)
-				if !ok {
-					return true
-				}
-				route, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if route == "/" {
-					return true
-				}
-				registered = append(registered, service+" "+route)
-				return true
-			})
-		}
-	}
-	if err := endpointCoverage(coverage, registered); err != nil {
+	wire := actualHTTPWire(t)
+	if err := verifyDecodedRequests(endpoints(), wire.Handlers); err != nil {
 		t.Fatal(err)
 	}
-	data, err := json.MarshalIndent(fixtures, "", "  ")
+	for _, e := range endpoints() {
+		fixtures = append(fixtures, fixture{Service: e.Service, Route: e.Route, Request: encodePayload(t, e.Request), Response: encodePayload(t, e.Response), Statuses: e.Statuses})
+	}
+	data, err := json.MarshalIndent(struct {
+		Payloads []fixture `json:"payloads"`
+		Wire     httpWire  `json:"wire"`
+	}{fixtures, wire}, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +217,7 @@ func TestPrivateHTTPContractGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	if string(data) != string(expected) {
-		t.Fatal("private HTTP request/response golden drift; bump ContractVersion and add a new versioned fixture")
+		t.Fatal("private HTTP request/response golden drift; bump ContractVersion and generate the new versioned fixture with RELAIS_UPDATE_HTTP_GOLDEN=1 go test ./internal/privateapi -run TestPrivateHTTPContractGolden")
 	}
 }
 

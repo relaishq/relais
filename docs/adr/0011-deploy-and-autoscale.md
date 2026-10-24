@@ -75,7 +75,9 @@ default and documents their continuing cost. CloudFormation rollback cannot reve
 supplies a tested compatibility manifest and rollback boundary; reject an unsupported live upgrade before starting.
 The operator runs the [offline preflight](../../deploy/aws/README.md#compatibility-gate-before-upgrade-or-rollback)
 against every running participant and the target manifest before draining, stopping or launching any replacement.
-Both upgrade and rollback must pass every intermediate compatibility state; disabling admission does not remove
+Upgrade uses workers, relay, control, then signaling. Rollback reverses that role order: signaling, control,
+relay, then workers, retaining newer workers until coordination has reverted. Both directions must pass
+every intermediate compatibility state; disabling admission does not remove
 v10 checkpoints, and a rollback target must retain their complete reader/writer/lifecycle support (ADR 0012 §4).
 Unknown or pre-manifest builds refuse. A CloudFormation rollback is not a state migration. Preview rolls
 compatible workers in place, one at a time: pre-drain, stop, wait for control to declare the old registration dead and recovery settled,

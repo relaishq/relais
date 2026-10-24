@@ -53,6 +53,9 @@ func TestUpgradeAndRollbackPlanEveryParticipant(t *testing.T) {
 				t.Fatalf("%+v", v)
 			}
 			roles := []string{"worker", "worker", "relay", "relay", "control", "signal"}
+			if tc.operation == "rollback" {
+				roles = []string{"signal", "control", "relay", "relay", "worker", "worker"}
+			}
 			for i, s := range v.Steps {
 				if s.Role != roles[i] {
 					t.Fatalf("unsafe rollout order: %+v", v.Steps)
@@ -97,10 +100,10 @@ func TestRefusesReaderOnlyBridge(t *testing.T) {
 }
 func TestEveryIntermediateStateMustReadTargetWireProtocol(t *testing.T) {
 	old, next := testManifest(t, "0.3.0"), testManifest(t, "0.3.1")
-	next.HTTPContract = 2
+	next.HTTPContract++
 	for role, profiles := range next.Roles {
 		for name, p := range profiles {
-			p.Formats["private_http"] = Format{Reads: []int{2}, Writes: []int{2}, Continues: []int{2}}
+			p.Formats["private_http"] = Format{Reads: []int{next.HTTPContract}, Writes: []int{next.HTTPContract}, Continues: []int{next.HTTPContract}}
 			next.Roles[role][name] = p
 		}
 	}
@@ -247,6 +250,20 @@ func TestStoreGoldenRejectsChangedLua(t *testing.T) {
 		}
 		if err = os.WriteFile(filepath.Join(root, "pkg/sessionstore", filepath.Base(path)), source, 0644); err != nil {
 			t.Fatal(err)
+		}
+	}
+
+	for _, rel := range []string{"pkg/framecache/redis.go", "cmd/relais-load/soak.go"} {
+		data, e := os.ReadFile(filepath.Join("../..", rel))
+		if e != nil {
+			t.Fatal(e)
+		}
+		dest := filepath.Join(root, rel)
+		if e = os.MkdirAll(filepath.Dir(dest), 0755); e != nil {
+			t.Fatal(e)
+		}
+		if e = os.WriteFile(dest, data, 0644); e != nil {
+			t.Fatal(e)
 		}
 	}
 	golden, err := os.ReadFile("../../pkg/sessionstore/testdata/script-contract.json")

@@ -3,6 +3,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/relaishq/relais/internal/releasecompat"
 	"github.com/relaishq/relais/pkg/buildinfo"
@@ -137,7 +139,7 @@ func run(args []string, out io.Writer) int {
 			return fail(errors.New("binary-dir is required"))
 		}
 		for _, name := range []string{"relais-relay", "relais-worker", "relais-control", "relais-signal", "relais-load", "relais-demo", "relais-compat"} {
-			identity, err := exec.Command(filepath.Join(*binaries, name), "-version").Output()
+			identity, err := binaryIdentity(filepath.Join(*binaries, name), 10*time.Second)
 			if err != nil {
 				return fail(fmt.Errorf("read artifact binary identity %s: %w", name, err))
 			}
@@ -168,4 +170,17 @@ func run(args []string, out io.Writer) int {
 	default:
 		return fail(errors.New("unknown command"))
 	}
+}
+
+// Bound identity reads before boot has installed binaries or fetched runtime secrets.
+func binaryIdentity(path string, timeout time.Duration) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, "-version")
+	cmd.WaitDelay = time.Second
+	data, err := cmd.Output()
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("binary identity timed out: %w", ctx.Err())
+	}
+	return data, err
 }

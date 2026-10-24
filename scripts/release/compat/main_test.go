@@ -2,11 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/relaishq/relais/internal/releasecompat"
 )
@@ -14,7 +17,7 @@ import (
 func copyContractRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	paths := []string{"scripts/release/compatibility-policy.json", "scripts/release/compatibility.json", "pkg/sessionstore/testdata/script-contract.json", "internal/privateapi/testdata/contract-v1.json", "pkg/mediaworker/state.go", "pkg/mediaworker/agent_v2.go", "pkg/mediaworker/component_snapshot.go", "pkg/mediaworker/handover.go", "internal/componentcodec/binary.go", "internal/componentcodec/auth.go", "pkg/sessionstore/components.go", "pkg/agent/agent.go"}
+	paths := []string{"scripts/release/compatibility-policy.json", "scripts/release/compatibility.json", "pkg/sessionstore/testdata/script-contract.json", "internal/privateapi/testdata/contract-v2.json", "pkg/mediaworker/state.go", "pkg/mediaworker/agent_v2.go", "pkg/mediaworker/component_snapshot.go", "pkg/mediaworker/handover.go", "internal/componentcodec/binary.go", "internal/componentcodec/auth.go", "pkg/sessionstore/components.go", "pkg/agent/agent.go", "pkg/framecache/redis.go", "cmd/relais-load/soak.go", "pkg/sessionstore/testdata/key-contract-v1.json", "pkg/framecache/testdata/key-contract-v1.json", "internal/relayleg/testdata/contract-v1.json"}
 	scripts, err := filepath.Glob("../../../pkg/sessionstore/redis*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -174,6 +177,48 @@ func TestRealPeerPolicyKeepsDevelopmentManifestGeneratable(t *testing.T) {
 		var out bytes.Buffer
 		if code := run([]string{"generate", "--root", root, "--version", version}, &out); code != 0 {
 			t.Fatalf("%s: %s", version, out.String())
+		}
+	}
+}
+
+func TestBinaryIdentityTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "blocked-binary")
+	// exec leaves no child holding the inherited stdout pipe.
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nwhile :; do :; done\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	_, err := binaryIdentity(path, 50*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected bounded identity refusal, got %v", err)
+	}
+	if time.Since(started) > 3*time.Second {
+		t.Fatal("identity timeout was not bounded")
+	}
+}
+
+func TestCompatibilityEvolutionIsRequiredCIGate(t *testing.T) {
+	data, err := os.ReadFile("../../../.github/workflows/ci.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(data)
+	check := func(source string) bool {
+		required := []string{"needs: [quality, unit-tests, timing-smoke, call-harness, compatibility]", `test "$COMPATIBILITY_RESULT" = success`, "COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}", "CONTRACT_BASE: ${{ github.event.pull_request.base.sha }}", "git rev-parse HEAD^", `go run ./scripts/release/compat check --base "$base"`}
+		for _, s := range required {
+			if !strings.Contains(source, s) {
+				return false
+			}
+		}
+		job := strings.SplitN(strings.SplitN(source, "  compatibility:\n", 2)[1], "  # The build job", 2)[0]
+		return !strings.Contains(job, "    if:") && !strings.Contains(strings.SplitN(source, "jobs:", 2)[0], "paths:")
+	}
+	if !check(source) {
+		t.Fatal("contract evolution is not an unfiltered required CI gate")
+	}
+	for _, from := range []string{", compatibility]", `test "$COMPATIBILITY_RESULT" = success`, `check --base "$base"`} {
+		if check(strings.Replace(source, from, "", 1)) {
+			t.Fatalf("known-bad CI bypass was accepted: %s", from)
 		}
 	}
 }

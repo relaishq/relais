@@ -1,7 +1,6 @@
 package releasecompat
 
 import (
-	"crypto/sha1" // Redis script identifiers, never authentication.
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/relayleg"
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
@@ -123,54 +123,6 @@ func literalVersion(root, path, fnName, kind string) (int, error) {
 	return values[0], nil
 }
 
-func LuaScripts(root string) (map[string]string, error) {
-	paths, err := filepath.Glob(filepath.Join(root, "pkg/sessionstore/redis*.go"))
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]string{}
-	for _, path := range paths {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		f, e := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-		if e != nil {
-			return nil, e
-		}
-		for _, d := range f.Decls {
-			g, ok := d.(*ast.GenDecl)
-			if !ok || g.Tok != token.CONST {
-				continue
-			}
-			for _, s := range g.Specs {
-				v, ok := s.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				for i, n := range v.Names {
-					if !strings.HasSuffix(n.Name, "Lua") {
-						continue
-					}
-					if i >= len(v.Values) {
-						return nil, fmt.Errorf("missing script expression")
-					}
-					lit, ok := v.Values[i].(*ast.BasicLit)
-					if !ok || lit.Kind != token.STRING {
-						return nil, fmt.Errorf("unrecognized Lua expression: %s", n.Name)
-					}
-					body, e := strconv.Unquote(lit.Value)
-					if e != nil {
-						return nil, e
-					}
-					sum := sha1.Sum([]byte(body))
-					out[n.Name] = hex.EncodeToString(sum[:])
-				}
-			}
-		}
-	}
-	return out, nil
-}
-
 func CheckStoreGolden(root string) (ScriptGolden, error) {
 	var g ScriptGolden
 	data, err := os.ReadFile(filepath.Join(root, "pkg/sessionstore/testdata/script-contract.json"))
@@ -188,11 +140,11 @@ func CheckStoreGolden(root string) (ScriptGolden, error) {
 		return g, err
 	}
 	if len(actual) != len(g.Scripts) {
-		return g, fmt.Errorf("lua script inventory changed; review the store contract golden")
+		return g, fmt.Errorf("lua script inventory changed; bump the contract version, or record a reviewed note that persisted state and wire behaviour are unchanged")
 	}
 	for name, sha := range actual {
 		if g.Scripts[name].SHA != sha {
-			return g, fmt.Errorf("lua SHA drift for %s; bump store contract or update golden with unchanged-tuples note", name)
+			return g, fmt.Errorf("lua SHA drift for %s; bump the contract version, or record a reviewed note that persisted state and wire behaviour are unchanged", name)
 		}
 	}
 	return g, nil
@@ -207,6 +159,27 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 		return m, err
 	}
 	m.Scripts = g.Scripts
+	m.KeyContract = sessionstore.KeyContractVersion
+	m.UDPContract = relayleg.ContractVersion
+	m.KeyGoldens = map[string]string{}
+	for name, path := range map[string]string{
+		"sessionstore": fmt.Sprintf("pkg/sessionstore/testdata/key-contract-v%d.json", m.KeyContract),
+		"framecache":   fmt.Sprintf("pkg/framecache/testdata/key-contract-v%d.json", m.KeyContract),
+	} {
+		data, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			return m, err
+		}
+		sum := sha256.Sum256(data)
+		m.KeyGoldens[name] = hex.EncodeToString(sum[:])
+	}
+	udpData, err := os.ReadFile(filepath.Join(root, fmt.Sprintf("internal/relayleg/testdata/contract-v%d.json", m.UDPContract)))
+	if err != nil {
+		return m, err
+	}
+	udpSum := sha256.Sum256(udpData)
+	m.UDPGolden = hex.EncodeToString(udpSum[:])
+
 	httpData, err := os.ReadFile(filepath.Join(root, fmt.Sprintf("internal/privateapi/testdata/contract-v%d.json", privateapi.ContractVersion)))
 	if err != nil {
 		return m, err
@@ -314,11 +287,13 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 	}
 	platform := func() map[string]Format {
 		fs := common()
+		fs["redis_keys"] = Format{Reads: []int{m.KeyContract}, Writes: []int{m.KeyContract}, Continues: []int{m.KeyContract}}
 		fs["store_contract"] = Format{Reads: []int{m.StoreContract}, Writes: []int{m.StoreContract}, Continues: []int{m.StoreContract}}
 		return fs
 	}
 	worker := func(enabled bool) Profile {
 		fs := platform()
+		fs["relay_udp"] = Format{Reads: []int{m.UDPContract}, Writes: []int{m.UDPContract}, Continues: []int{m.UDPContract}}
 		writes := []int{legacy, v2, control}
 		if enabled {
 			writes = append(writes, split)
@@ -337,7 +312,10 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 	}
 	cp := worker(false)
 	cp.Formats["snapshot"] = state(nil)
-	m.Roles = map[string]map[string]Profile{"worker": {"legacy": worker(false), "split": worker(true)}, "control": {"default": cp}, "relay": {"default": {Formats: platform()}}, "signal": {"default": {Formats: common()}}}
+	relayProfile := Profile{Formats: platform()}
+	relayProfile.Formats["relay_udp"] = Format{Reads: []int{m.UDPContract}, Writes: []int{m.UDPContract}, Continues: []int{m.UDPContract}}
+	delete(cp.Formats, "relay_udp")
+	m.Roles = map[string]map[string]Profile{"worker": {"legacy": worker(false), "split": worker(true)}, "control": {"default": cp}, "relay": {"default": relayProfile}, "signal": {"default": {Formats: common()}}}
 	// Echo's app marker is separate from the host snapshot version.
 	echo, err := constant(root, "pkg/agent/agent.go", "echoStateVersion")
 	if err != nil {

@@ -339,15 +339,18 @@ steps. The CLI makes no network or process changes. Do not continue after a
 refusal. Serialize the operation and re-collect/recheck after any inventory,
 release, agent or configuration change; this gate is not runtime peer enforcement.
 
-The checker evaluates every intermediate state, with workers first, then relay
-(including standby), control and signaling (ADR 0009 also permits control before
-relay). Every reader must decode and continue the existing state/lifecycle and
+The checker evaluates every intermediate state. Upgrade replaces workers first,
+then relay (including standby), control and signaling (ADR 0009 also permits
+control before relay). Rollback reverses the role order: signaling, control,
+relay (including standby), then workers. Keep the newer workers until the
+coordination processes have reverted, and follow the emitted order. Every reader must decode and continue the existing state/lifecycle and
 new writes; disabling split admission does not make v10 safe for a v9-only target.
 All state-reading/mutating participants must have full v10 reader, writer and
 lifecycle support **before** activating new split calls (ADR 0012 §4). Do not
 activate split admission while rolling the bridge for the first time.
 
-After the gate, freeze admissions and confirm survivor capacity. Lean rollout
+After the gate, freeze admissions and confirm survivor capacity. Apply the
+per-role procedures below in the emitted upgrade or rollback order. Lean rollout
 requires existing load to fit one worker and has no protection from a further
 worker failure; pause when capacity is insufficient. Pre-drain one worker while
 it stays running; verify local sessions, authoritative ownership, reservations
@@ -369,6 +372,31 @@ rollback tests, and regenerate `scripts/release/compatibility.json`. A floor alo
 never authorizes an unlisted version; semver proximity supplies no evidence.
 `0.0.0-dev` templates/manual CI artifacts can carry that policy but cannot
 authorize a live rollout. Stamp each #251 build with its own real release version.
+For example, build the first main revision as `0.3.0`; before building the second
+as `0.3.1`, nominate `0.3.0` in `tested_peers: ["self", "0.3.0"]` and set
+both floors to `0.3.0`. Regenerate the template, then build and test that candidate
+pair in both directions before publishing or using its allowed verdict. Without
+this policy change, two different main builds refuse with `unsupported_pair`.
+Nominating a peer records a compatibility claim; it is not test evidence.
+
+Contributor contract updates: private HTTP fixtures include real registered
+routes, decoder types, query names (`worker`, `to`, `agent-session`), status codes,
+failure codes, and anonymous error bodies. Bump `privateapi.ContractVersion`, then
+run `RELAIS_UPDATE_HTTP_GOLDEN=1 go test ./internal/privateapi -run TestPrivateHTTPContractGolden`.
+Keep previous versioned fixtures. Redis scripts are discovered at every
+`redis.NewScript`, `Eval` and `EvalSha` call site in non-test Go files; unresolved
+dynamic scripts fail generation. Run `RELAIS_UPDATE_STORE_GOLDEN=1 go test ./pkg/sessionstore -run TestStoreScriptContractGolden`
+to refresh SHA entries. Bump the store contract version, or record a reviewed note
+in each changed entry that persisted state **and wire behaviour** are unchanged.
+Redis key and UDP frame changes require their own version bumps and versioned
+fixtures (`RELAIS_UPDATE_KEY_GOLDEN=1` and `RELAIS_UPDATE_UDP_GOLDEN=1` on the
+corresponding contract tests). Regenerate with
+`go run ./scripts/release/compat generate --output scripts/release/compatibility.json`,
+then run `go run ./scripts/release/compat check --base BASE_COMMIT`.
+The unfiltered CI compatibility job is part of the required `build` aggregate.
+Manifest schema 2 adds key-layout and UDP contracts; unknown newer manifests
+refuse as `unsupported_manifest`. Use the target archive's CLI. Binary identity
+reads have a 10-second deadline per binary before installation can proceed.
 
 Rollback applies the same check to a fresh running inventory. It conservatively
 retains formats that running builds can continue, even with new admission off.
