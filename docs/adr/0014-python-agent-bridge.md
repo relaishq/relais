@@ -4,7 +4,7 @@ Status: **Proposed**. **Amends ADR 0010**. Part of [#254](https://github.com/rel
 
 ## Approve now vs decide later
 
-**Approved now:** the decided rows, including wire transport, dispatch, history size, tool safety/rollout and lost-speech handling (decided 2026-10-23), and starting the **50 packets/s measurement**. No production output design is selected. Other Proposed rows remain recommendations to confirm with measurements.
+**Approved now:** the decided rows, including wire transport, dispatch, history size, tool safety/rollout and lost-speech handling (decided 2026-10-23), injected-stall grading (decided 2026-10-24), and starting the **50 packets/s measurement**. No production output design is selected. Other Proposed rows remain recommendations to confirm with measurements.
 
 ## What you are approving
 
@@ -27,6 +27,7 @@ Status: **Proposed**. **Amends ADR 0010**. Part of [#254](https://github.com/rel
 | Hang target | Proposed | A hang means the bot's **pipeline** stops answering, even if its connection still answers pings. With a 2 s detector, last-pipeline-pong-to-attached p95 ≤3 s needs same-runner revocation confirmation. Without confirmation, worst-case permission wait is permit expiry, about 5 s; attachment follows. |
 | Bot-permit lifetime | Proposed | Pool-wide 5 s cap, refreshed only by successful existing lease renewals. Partitions cause shorter pauses, but store outages stop bot work sooner than media. |
 | Output experiment | Start approved | Start 50 packets/s measurement; choose batching or streaming output from its result. Added output latency must meet p95 ≤150 ms; neither design is selected. |
+| Injected stall grading | Decided | Decided 2026-10-24. The p95 ≤150 ms gate stays on every packet, including packets held by a deliberate stall. Fault-injection runs also need bridge-queue recovery ≤500 ms after each stall ends, explicit pacer-debt accounting and a full drain. The stall cohort's direct wait is reported separately. |
 | Lost speech | Decided | Save completed user text before generation. If no recoverable transcript exists, ask the caller to repeat; recordings need another design. |
 | Tool safety/rollout | Decided | Accept uncertain in-flight effects; require app idempotency/query support. One extra warm slot per simultaneous handoff permits rolling redeploys. |
 | Host changes | Proposed | Add local publication/acknowledgement hooks, generation checks, stable exports and bridge-only playback completion. Keep public v2 signatures and other agents unchanged. |
@@ -69,7 +70,7 @@ ADR 0012's maximum hot/forced pattern leaves 2,416 B/s for cold writes; `8,228/2
 
 Build/publish Go binaries and both Apache-2.0 Python packages from the same tag. Include bridge protocol and supported pairs in [#252's compatibility manifest](https://github.com/relaishq/relais/issues/252); CI/preflight refuse unsupported upgrade/rollback pairs. Matching release numbers alone prove no compatibility. Reserve the PyPI names `relais-agent` and `pipecat-relais` when the packages are first published (**owner action**); this is not a precondition for accepting this ADR.
 
-**Approve the experiment first.** Measure sustained speech, jitter, partial final batches and loaded renewal gaps before selecting output design. Five 20 ms packets exactly fill a 100 ms emission interval, leaving no catch-up margin. Streaming output is another candidate. The 150 ms threshold spans encoded packet ready in Python to host pacer admission, including batching/task waits. Provider and caller playout time are separate.
+**Approve the experiment first.** Measure sustained speech, jitter, partial final batches and loaded renewal gaps before selecting output design. Five 20 ms packets exactly fill a 100 ms emission interval, leaving no catch-up margin. Streaming output is another candidate. The 150 ms threshold spans encoded packet ready in Python to host pacer admission, including batching/task waits. Provider and caller playout time are separate. A deliberately injected stall holds its packets for the full stall, so the 150 ms gate alone cannot judge recovery; the separate 500 ms recovery gate does.
 
 ## Operability
 
@@ -88,7 +89,7 @@ Change parameters and redeploy; no hard-coded operational values. The control pl
 | Working/history; retained exchanges | 3,072/8,192 B; four plus summary |
 | Hot cap; rate; burst; store traffic gate | 6,144 B; 70,000 B/s; 40,960 B; 131,072 B/call-second |
 | Setup/history/transaction caps | 4,096/8,448/20,480 B |
-| Kill/hang/redeploy targets; output threshold | <1/≤3/≤2 s; p95 ≤150 ms |
+| Kill/hang/redeploy targets; output threshold; stall recovery | <1/≤3/≤2 s; p95 ≤150 ms; ≤500 ms |
 | Warm capacity; spare capacity | Operator-set fixed slots; one spare per concurrent handoff |
 | Directory; logs; inventory path | `relais-bridge.yaml`; stdout/service journal; `deployment-inventory.json` |
 
