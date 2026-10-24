@@ -1,0 +1,331 @@
+{
+  "clock/": [
+    "fixture:lease:{sess:}"
+  ],
+  "clock/call": [
+    "fixture:lease:{sess:call}"
+  ],
+  "clock/call{tag}": [
+    "fixture:lease:{sess:~Y2FsbHt0YWd9}"
+  ],
+  "clock/~call": [
+    "fixture:lease:{sess:~fmNhbGw}"
+  ],
+  "clock/雪": [
+    "fixture:lease:{sess:雪}"
+  ],
+  "components/": [
+    "fixture:lease:{sess:}",
+    "fixture:record:{sess:}",
+    "fixture:epoch:{sess:}",
+    "fixture:routes:{sess:}",
+    "fixture:ended:{sess:}",
+    "fixture:setup:{sess:}",
+    "fixture:checkpoint:{sess:}",
+    "fixture:work:{sess:}:0",
+    "fixture:work:{sess:}:1",
+    "fixture:history:{sess:}:0",
+    "fixture:history:{sess:}:1"
+  ],
+  "components/call": [
+    "fixture:lease:{sess:call}",
+    "fixture:record:{sess:call}",
+    "fixture:epoch:{sess:call}",
+    "fixture:routes:{sess:call}",
+    "fixture:ended:{sess:call}",
+    "fixture:setup:{sess:call}",
+    "fixture:checkpoint:{sess:call}",
+    "fixture:work:{sess:call}:0",
+    "fixture:work:{sess:call}:1",
+    "fixture:history:{sess:call}:0",
+    "fixture:history:{sess:call}:1"
+  ],
+  "components/call{tag}": [
+    "fixture:lease:{sess:~Y2FsbHt0YWd9}",
+    "fixture:record:{sess:~Y2FsbHt0YWd9}",
+    "fixture:epoch:{sess:~Y2FsbHt0YWd9}",
+    "fixture:routes:{sess:~Y2FsbHt0YWd9}",
+    "fixture:ended:{sess:~Y2FsbHt0YWd9}",
+    "fixture:setup:{sess:~Y2FsbHt0YWd9}",
+    "fixture:checkpoint:{sess:~Y2FsbHt0YWd9}",
+    "fixture:work:{sess:~Y2FsbHt0YWd9}:0",
+    "fixture:work:{sess:~Y2FsbHt0YWd9}:1",
+    "fixture:history:{sess:~Y2FsbHt0YWd9}:0",
+    "fixture:history:{sess:~Y2FsbHt0YWd9}:1"
+  ],
+  "components/~call": [
+    "fixture:lease:{sess:~fmNhbGw}",
+    "fixture:record:{sess:~fmNhbGw}",
+    "fixture:epoch:{sess:~fmNhbGw}",
+    "fixture:routes:{sess:~fmNhbGw}",
+    "fixture:ended:{sess:~fmNhbGw}",
+    "fixture:setup:{sess:~fmNhbGw}",
+    "fixture:checkpoint:{sess:~fmNhbGw}",
+    "fixture:work:{sess:~fmNhbGw}:0",
+    "fixture:work:{sess:~fmNhbGw}:1",
+    "fixture:history:{sess:~fmNhbGw}:0",
+    "fixture:history:{sess:~fmNhbGw}:1"
+  ],
+  "components/雪": [
+    "fixture:lease:{sess:雪}",
+    "fixture:record:{sess:雪}",
+    "fixture:epoch:{sess:雪}",
+    "fixture:routes:{sess:雪}",
+    "fixture:ended:{sess:雪}",
+    "fixture:setup:{sess:雪}",
+    "fixture:checkpoint:{sess:雪}",
+    "fixture:work:{sess:雪}:0",
+    "fixture:work:{sess:雪}:1",
+    "fixture:history:{sess:雪}:0",
+    "fixture:history:{sess:雪}:1"
+  ],
+  "control": "fixture:control:{control}",
+  "epoch_allocator": "fixture:session_epoch",
+  "get/": [
+    "fixture:lease:{sess:}",
+    "fixture:state:{sess:}",
+    "fixture:record:{sess:}",
+    "fixture:epoch:{sess:}",
+    "fixture:routes:{sess:}",
+    "fixture:ended:{sess:}",
+    "fixture:setup:{sess:}",
+    "fixture:checkpoint:{sess:}",
+    "fixture:work:{sess:}:0",
+    "fixture:work:{sess:}:1",
+    "fixture:history:{sess:}:0",
+    "fixture:history:{sess:}:1"
+  ],
+  "get/call": [
+    "fixture:lease:{sess:call}",
+    "fixture:state:{sess:call}",
+    "fixture:record:{sess:call}",
+    "fixture:epoch:{sess:call}",
+    "fixture:routes:{sess:call}",
+    "fixture:ended:{sess:call}",
+    "fixture:setup:{sess:call}",
+    "fixture:checkpoint:{sess:call}",
+    "fixture:work:{sess:call}:0",
+    "fixture:work:{sess:call}:1",
+    "fixture:history:{sess:call}:0",
+    "fixture:history:{sess:call}:1"
+  ],
+  "get/call{tag}": [
+    "fixture:lease:{sess:~Y2FsbHt0YWd9}",
+    "fixture:state:{sess:~Y2FsbHt0YWd9}",
+    "fixture:record:{sess:~Y2FsbHt0YWd9}",
+    "fixture:epoch:{sess:~Y2FsbHt0YWd9}",
+    "fixture:routes:{sess:~Y2FsbHt0YWd9}",
+    "fixture:ended:{sess:~Y2FsbHt0YWd9}",
+    "fixture:setup:{sess:~Y2FsbHt0YWd9}",
+    "fixture:checkpoint:{sess:~Y2FsbHt0YWd9}",
+    "fixture:work:{sess:~Y2FsbHt0YWd9}:0",
+    "fixture:work:{sess:~Y2FsbHt0YWd9}:1",
+    "fixture:history:{sess:~Y2FsbHt0YWd9}:0",
+    "fixture:history:{sess:~Y2FsbHt0YWd9}:1"
+  ],
+  "get/~call": [
+    "fixture:lease:{sess:~fmNhbGw}",
+    "fixture:state:{sess:~fmNhbGw}",
+    "fixture:record:{sess:~fmNhbGw}",
+    "fixture:epoch:{sess:~fmNhbGw}",
+    "fixture:routes:{sess:~fmNhbGw}",
+    "fixture:ended:{sess:~fmNhbGw}",
+    "fixture:setup:{sess:~fmNhbGw}",
+    "fixture:checkpoint:{sess:~fmNhbGw}",
+    "fixture:work:{sess:~fmNhbGw}:0",
+    "fixture:work:{sess:~fmNhbGw}:1",
+    "fixture:history:{sess:~fmNhbGw}:0",
+    "fixture:history:{sess:~fmNhbGw}:1"
+  ],
+  "get/雪": [
+    "fixture:lease:{sess:雪}",
+    "fixture:state:{sess:雪}",
+    "fixture:record:{sess:雪}",
+    "fixture:epoch:{sess:雪}",
+    "fixture:routes:{sess:雪}",
+    "fixture:ended:{sess:雪}",
+    "fixture:setup:{sess:雪}",
+    "fixture:checkpoint:{sess:雪}",
+    "fixture:work:{sess:雪}:0",
+    "fixture:work:{sess:雪}:1",
+    "fixture:history:{sess:雪}:0",
+    "fixture:history:{sess:雪}:1"
+  ],
+  "intent/": "fixture:control-intent:{sess:}",
+  "intent/call": "fixture:control-intent:{sess:call}",
+  "intent/call{tag}": "fixture:control-intent:{sess:~Y2FsbHt0YWd9}",
+  "intent/~call": "fixture:control-intent:{sess:~fmNhbGw}",
+  "intent/雪": "fixture:control-intent:{sess:雪}",
+  "inventory/": [
+    "fixture:lease:{sess:}",
+    "fixture:state:{sess:}"
+  ],
+  "inventory/call": [
+    "fixture:lease:{sess:call}",
+    "fixture:state:{sess:call}"
+  ],
+  "inventory/call{tag}": [
+    "fixture:lease:{sess:~Y2FsbHt0YWd9}",
+    "fixture:state:{sess:~Y2FsbHt0YWd9}"
+  ],
+  "inventory/~call": [
+    "fixture:lease:{sess:~fmNhbGw}",
+    "fixture:state:{sess:~fmNhbGw}"
+  ],
+  "inventory/雪": [
+    "fixture:lease:{sess:雪}",
+    "fixture:state:{sess:雪}"
+  ],
+  "lifecycle/": [
+    "fixture:lease:{sess:}",
+    "fixture:state:{sess:}",
+    "fixture:record:{sess:}",
+    "fixture:epoch:{sess:}",
+    "fixture:routes:{sess:}",
+    "fixture:ended:{sess:}",
+    "fixture:setup:{sess:}",
+    "fixture:checkpoint:{sess:}",
+    "fixture:work:{sess:}:0",
+    "fixture:work:{sess:}:1",
+    "fixture:history:{sess:}:0",
+    "fixture:history:{sess:}:1"
+  ],
+  "lifecycle/call": [
+    "fixture:lease:{sess:call}",
+    "fixture:state:{sess:call}",
+    "fixture:record:{sess:call}",
+    "fixture:epoch:{sess:call}",
+    "fixture:routes:{sess:call}",
+    "fixture:ended:{sess:call}",
+    "fixture:setup:{sess:call}",
+    "fixture:checkpoint:{sess:call}",
+    "fixture:work:{sess:call}:0",
+    "fixture:work:{sess:call}:1",
+    "fixture:history:{sess:call}:0",
+    "fixture:history:{sess:call}:1"
+  ],
+  "lifecycle/call{tag}": [
+    "fixture:lease:{sess:~Y2FsbHt0YWd9}",
+    "fixture:state:{sess:~Y2FsbHt0YWd9}",
+    "fixture:record:{sess:~Y2FsbHt0YWd9}",
+    "fixture:epoch:{sess:~Y2FsbHt0YWd9}",
+    "fixture:routes:{sess:~Y2FsbHt0YWd9}",
+    "fixture:ended:{sess:~Y2FsbHt0YWd9}",
+    "fixture:setup:{sess:~Y2FsbHt0YWd9}",
+    "fixture:checkpoint:{sess:~Y2FsbHt0YWd9}",
+    "fixture:work:{sess:~Y2FsbHt0YWd9}:0",
+    "fixture:work:{sess:~Y2FsbHt0YWd9}:1",
+    "fixture:history:{sess:~Y2FsbHt0YWd9}:0",
+    "fixture:history:{sess:~Y2FsbHt0YWd9}:1"
+  ],
+  "lifecycle/~call": [
+    "fixture:lease:{sess:~fmNhbGw}",
+    "fixture:state:{sess:~fmNhbGw}",
+    "fixture:record:{sess:~fmNhbGw}",
+    "fixture:epoch:{sess:~fmNhbGw}",
+    "fixture:routes:{sess:~fmNhbGw}",
+    "fixture:ended:{sess:~fmNhbGw}",
+    "fixture:setup:{sess:~fmNhbGw}",
+    "fixture:checkpoint:{sess:~fmNhbGw}",
+    "fixture:work:{sess:~fmNhbGw}:0",
+    "fixture:work:{sess:~fmNhbGw}:1",
+    "fixture:history:{sess:~fmNhbGw}:0",
+    "fixture:history:{sess:~fmNhbGw}:1"
+  ],
+  "lifecycle/雪": [
+    "fixture:lease:{sess:雪}",
+    "fixture:state:{sess:雪}",
+    "fixture:record:{sess:雪}",
+    "fixture:epoch:{sess:雪}",
+    "fixture:routes:{sess:雪}",
+    "fixture:ended:{sess:雪}",
+    "fixture:setup:{sess:雪}",
+    "fixture:checkpoint:{sess:雪}",
+    "fixture:work:{sess:雪}:0",
+    "fixture:work:{sess:雪}:1",
+    "fixture:history:{sess:雪}:0",
+    "fixture:history:{sess:雪}:1"
+  ],
+  "put/": [
+    "fixture:lease:{sess:}",
+    "fixture:state:{sess:}"
+  ],
+  "put/call": [
+    "fixture:lease:{sess:call}",
+    "fixture:state:{sess:call}"
+  ],
+  "put/call{tag}": [
+    "fixture:lease:{sess:~Y2FsbHt0YWd9}",
+    "fixture:state:{sess:~Y2FsbHt0YWd9}"
+  ],
+  "put/~call": [
+    "fixture:lease:{sess:~fmNhbGw}",
+    "fixture:state:{sess:~fmNhbGw}"
+  ],
+  "put/雪": [
+    "fixture:lease:{sess:雪}",
+    "fixture:state:{sess:雪}"
+  ],
+  "relay/": "fixture:relay:{relay:}",
+  "relay/call": "fixture:relay:{relay:Y2FsbA}",
+  "relay/call{tag}": "fixture:relay:{relay:Y2FsbHt0YWd9}",
+  "relay/~call": "fixture:relay:{relay:fmNhbGw}",
+  "relay/雪": "fixture:relay:{relay:6Zuq}",
+  "sequence/": [
+    "fixture:lease:{sess:}"
+  ],
+  "sequence/call": [
+    "fixture:lease:{sess:call}"
+  ],
+  "sequence/call{tag}": [
+    "fixture:lease:{sess:~Y2FsbHt0YWd9}"
+  ],
+  "sequence/~call": [
+    "fixture:lease:{sess:~fmNhbGw}"
+  ],
+  "sequence/雪": [
+    "fixture:lease:{sess:雪}"
+  ],
+  "session/": [
+    "fixture:lease:{sess:}",
+    "fixture:state:{sess:}",
+    "fixture:record:{sess:}",
+    "fixture:epoch:{sess:}",
+    "fixture:routes:{sess:}",
+    "fixture:ended:{sess:}"
+  ],
+  "session/call": [
+    "fixture:lease:{sess:call}",
+    "fixture:state:{sess:call}",
+    "fixture:record:{sess:call}",
+    "fixture:epoch:{sess:call}",
+    "fixture:routes:{sess:call}",
+    "fixture:ended:{sess:call}"
+  ],
+  "session/call{tag}": [
+    "fixture:lease:{sess:~Y2FsbHt0YWd9}",
+    "fixture:state:{sess:~Y2FsbHt0YWd9}",
+    "fixture:record:{sess:~Y2FsbHt0YWd9}",
+    "fixture:epoch:{sess:~Y2FsbHt0YWd9}",
+    "fixture:routes:{sess:~Y2FsbHt0YWd9}",
+    "fixture:ended:{sess:~Y2FsbHt0YWd9}"
+  ],
+  "session/~call": [
+    "fixture:lease:{sess:~fmNhbGw}",
+    "fixture:state:{sess:~fmNhbGw}",
+    "fixture:record:{sess:~fmNhbGw}",
+    "fixture:epoch:{sess:~fmNhbGw}",
+    "fixture:routes:{sess:~fmNhbGw}",
+    "fixture:ended:{sess:~fmNhbGw}"
+  ],
+  "session/雪": [
+    "fixture:lease:{sess:雪}",
+    "fixture:state:{sess:雪}",
+    "fixture:record:{sess:雪}",
+    "fixture:epoch:{sess:雪}",
+    "fixture:routes:{sess:雪}",
+    "fixture:ended:{sess:雪}"
+  ],
+  "worker/192.0.2.1:1234": "fixture:worker:192.0.2.1:1234",
+  "worker/[2001:db8::1]:1234": "fixture:worker:[2001:db8::1]:1234"
+}

@@ -82,11 +82,12 @@ on:
 permissions:
   contents: read
 
+# Package jobs reserve 10m for the Ubuntu cache/install composite; driver limits stay fixed.
 jobs:
   calibrate:
     if: github.event_name == 'schedule' || inputs.mode == 'calibration' || inputs.mode == 'both'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
         with:
@@ -95,7 +96,10 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install throwaway Redis and media decoder
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server ffmpeg
       - name: Build real-process binaries
         run: make build
       - name: Record runner
@@ -129,7 +133,7 @@ jobs:
     name: Capacity sample
     if: github.event_name == 'schedule' || inputs.mode == 'capacity' || inputs.mode == 'both'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -138,7 +142,10 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install disposable topology dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg iproute2 iptables procps
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server ffmpeg iproute2 iptables procps
       - name: Build real-process binaries
         run: make build
       - name: Record runner and price inputs
@@ -190,7 +197,7 @@ jobs:
     name: Soak with seeded chaos
     if: github.event_name == 'schedule' || inputs.mode == 'soak'
     runs-on: ${{ inputs.runner_label || 'ubuntu-latest' }}
-    timeout-minutes: 90
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v6
         with:
@@ -199,7 +206,10 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install disposable topology dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg iproute2 iptables procps
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server ffmpeg iproute2 iptables procps
       - name: Build real-process binaries
         run: make build
       - name: Record runner
@@ -258,7 +268,7 @@ jobs:
     # Deliberately absent from schedules, required CI, and release dependencies.
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'custom-capacity'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
         with:
@@ -267,7 +277,10 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install disposable topology dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg iproute2 iptables procps
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server ffmpeg iproute2 iptables procps
       - name: Build exact custom worker
         run: |
           make build
@@ -323,7 +336,7 @@ jobs:
     # Manual only. No schedules, required CI, release or paid runner dependencies.
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'split-capacity'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v6
         with:
@@ -332,7 +345,10 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install disposable process topology dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg procps
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server ffmpeg procps
       - name: Build once and record exact runner and binaries
         run: |
           make build

@@ -37,6 +37,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Package jobs reserve 10m for the bounded Ubuntu cache/install composite.
+# Valkey reserves another 8m for its cache/build. Test step limits stay fixed.
 jobs:
   quality:
     runs-on: ubuntu-latest
@@ -76,22 +78,45 @@ jobs:
       - name: Check repository rules
         run: make check-rules
 
+  compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Check generated manifest and reviewed contract evolution
+        env:
+          CONTRACT_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          base="$CONTRACT_BASE"
+          if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ]; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          go run ./scripts/release/compat check --base "$base"
+          go test ./internal/privateapi ./internal/relayleg ./scripts/release/compat
+          go test ./pkg/sessionstore ./pkg/framecache -run 'ContractGolden$'
+
   # The build job is the aggregate gate while all work runs in parallel.
   # Making it required in GitHub settings is a separate admin decision.
   # always() turns a failed dependency into a failed check, rather than a skip.
   build:
-    needs: [quality, unit-tests, timing-smoke, call-harness]
+    needs: [quality, unit-tests, timing-smoke, call-harness, compatibility]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
       - name: Require all essential checks
         env:
+          COMPATIBILITY_RESULT: ${{ needs.compatibility.result }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           UNIT_RESULT: ${{ needs.unit-tests.result }}
           SMOKE_RESULT: ${{ needs.timing-smoke.result }}
           HARNESS_RESULT: ${{ needs.call-harness.result }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
+          test "$COMPATIBILITY_RESULT" = success
           test "$QUALITY_RESULT" = success
           test "$UNIT_RESULT" = success
           test "$HARNESS_RESULT" = success
@@ -140,25 +165,18 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: Install Redis executable without starting a service
-        run: |
-          printf '#!/bin/sh\nexit 101\n' > "$RUNNER_TEMP/policy-rc.d"
-          if [ -e /usr/sbin/policy-rc.d ]; then
-            sudo cp -p /usr/sbin/policy-rc.d "$RUNNER_TEMP/original-policy-rc.d"
-            trap 'sudo cp -p "$RUNNER_TEMP/original-policy-rc.d" /usr/sbin/policy-rc.d' EXIT
-          else
-            trap 'sudo rm -f /usr/sbin/policy-rc.d' EXIT
-          fi
-          sudo install -m 755 "$RUNNER_TEMP/policy-rc.d" /usr/sbin/policy-rc.d
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends redis-server
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server
       - name: Run non-harness tests (race detector, Redis required)
         run: make test-unit
 
   # PRs run the short memory matrix plus a Redis uncertainty regression.
   # Main, nightly and manual runs exercise both stores in full.
   call-harness:
-    # Includes the 15-minute PR suite and the longer main/nightly matrix.
-    timeout-minutes: 90
+    # Includes the 15-minute PR suite, longer main/nightly matrix and setup reserve.
+    timeout-minutes: 100
     runs-on: ubuntu-latest
     services:
       redis:
@@ -181,7 +199,10 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: ffmpeg
       - name: Run short call harness (race detector, memory only)
         if: github.event_name == 'pull_request'
         run: make test-harness-short
@@ -212,12 +233,15 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: ffmpeg
       - name: Run timing smoke (no race detector, memory only)
         run: make test-harness-smoke
 
   crash-run:
-    timeout-minutes: 35
+    timeout-minutes: 45
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -227,7 +251,11 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: Install Redis and ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
+        id: install-packages
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server ffmpeg
       # Ubuntu's redis-server package is built with TLS. Require the fixture
       # here so a missing executable or TLS support cannot silently skip CI.
       - name: Verify Redis TLS and ACL connections (race detector)
@@ -243,7 +271,7 @@ jobs:
         run: go test -race -v -count=1 -timeout 5m -run '^TestDemoAttachExternalSmoke$' ./cmd/relais-demo/
       # The driver starts and stops its own Redis on a free loopback port.
       - name: Run twenty interleaved SIGKILL trials (ten per mode)
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install-packages.outcome == 'success' }}
         run: make crash-run
       - name: Upload crash-run failure logs
         if: failure()
@@ -259,7 +287,7 @@ jobs:
   relay-continuity:
     permissions:
       contents: read
-    timeout-minutes: 35
+    timeout-minutes: 45
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     strategy:
@@ -275,7 +303,10 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: Install Redis and ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server ffmpeg
       - name: Verify native process identity and stopped-child fencing
         shell: bash
         run: |
@@ -302,7 +333,7 @@ jobs:
   # Ten consecutive buffered SIGKILL trials, each observing 60 seconds,
   # separate from the phase-1 cache and relay-continuity comparisons.
   crash-run-buffer:
-    timeout-minutes: 35
+    timeout-minutes: 45
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -312,7 +343,10 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: Install Redis and ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server ffmpeg
       - name: Accept ten consecutive buffered SIGKILL trials (lan)
         run: make crash-run CRASH_FLAGS="-buffer -runs=10 -after=60s"
       - name: Upload buffered crash-run failure logs
@@ -325,7 +359,7 @@ jobs:
   store-stall:
     # Legacy 30 trials plus six custom process cuts and v2 semantic assertions.
     # The added ledger cut takes about 25s; it fits the existing 35m limit.
-    timeout-minutes: 35
+    timeout-minutes: 45
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -335,7 +369,10 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: Install Redis and ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server ffmpeg
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server ffmpeg
       - name: Build process driver
         run: make build
       # Only driver-owned Redis is paused; five calls per duration and variant.
@@ -375,8 +412,10 @@ jobs:
 
   valkey-cluster-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 38
     env:
+      VALKEY_VERSION: '9.1.2'
+      VALKEY_SHA256: '19c23908e7d57e8d91ef85b41f5646307582f10f4f0fb999bbf89ed24ec9c983'
       RELAIS_TEST_REDIS_CLUSTER: '1'
       RELAIS_TEST_REDIS_TLS_REQUIRE: '1'
       RELAIS_TEST_ARTIFACT_DIR: ${{ github.workspace }}/bin/cluster-test-artifacts
@@ -390,23 +429,24 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
-      - name: Build pinned Valkey with TLS
-        # Valkey 9.1.2 was released 2026-09-01, over two weeks before this pin.
+      - name: Install Valkey build dependencies and media decoder
+        id: ubuntu-packages
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: build-essential libssl-dev ffmpeg
+      # Key includes runner image, architecture, source pin and build recipe.
+      - name: Cache pinned Valkey TLS binaries
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        timeout-minutes: 2
         env:
-          VALKEY_VERSION: '9.1.2'
-          VALKEY_SHA256: '19c23908e7d57e8d91ef85b41f5646307582f10f4f0fb999bbf89ed24ec9c983'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential libssl-dev ffmpeg
-          curl --fail --location --retry 3 "https://codeload.github.com/valkey-io/valkey/tar.gz/refs/tags/${VALKEY_VERSION}" -o "$RUNNER_TEMP/valkey.tar.gz"
-          echo "${VALKEY_SHA256}  $RUNNER_TEMP/valkey.tar.gz" | sha256sum --check --strict
-          tar -xzf "$RUNNER_TEMP/valkey.tar.gz" -C "$RUNNER_TEMP"
-          make -C "$RUNNER_TEMP/valkey-${VALKEY_VERSION}" -j2 BUILD_TLS=yes MALLOC=libc
-          mkdir -p "$RUNNER_TEMP/valkey-bin"
-          ln -s "$RUNNER_TEMP/valkey-${VALKEY_VERSION}/src/valkey-server" "$RUNNER_TEMP/valkey-bin/redis-server"
-          ln -s "$RUNNER_TEMP/valkey-${VALKEY_VERSION}/src/valkey-cli" "$RUNNER_TEMP/valkey-bin/redis-cli"
-          echo "$RUNNER_TEMP/valkey-bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/valkey-bin/redis-server" --version
+          SEGMENT_DOWNLOAD_TIMEOUT_MINS: '1'
+        with:
+          path: ${{ runner.temp }}/valkey-bin
+          key: ${{ steps.ubuntu-packages.outputs.key }}-valkey-${{ env.VALKEY_VERSION }}-${{ env.VALKEY_SHA256 }}-${{ hashFiles('scripts/ci/build-valkey.sh') }}
+      - name: Build or restore pinned Valkey with TLS
+        timeout-minutes: 6
+        run: bash scripts/ci/build-valkey.sh
       - name: Build process binaries with race instrumentation
         run: go build -race -o bin/ ./cmd/relais-relay ./cmd/relais-worker ./cmd/relais-control ./cmd/relais-signal
       - name: Run Valkey Cluster protocol and process tests
@@ -421,7 +461,7 @@ jobs:
 
   cluster-tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       RELAIS_TEST_REDIS_CLUSTER: '1'
       RELAIS_TEST_REDIS_TLS_REQUIRE: '1'
@@ -437,7 +477,10 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: Install local test servers and media decoder
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends redis-server redis-tools ffmpeg
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server redis-tools ffmpeg
       - name: Build process binaries with race instrumentation
         run: go build -race -o bin/ ./cmd/relais-relay ./cmd/relais-worker ./cmd/relais-control ./cmd/relais-signal
       - name: Run Redis Cluster protocol and process tests
@@ -451,7 +494,7 @@ jobs:
           if-no-files-found: warn
 
   netns-crash-run:
-    timeout-minutes: 35
+    timeout-minutes: 45
     permissions:
       contents: read
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
@@ -465,7 +508,10 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: Install namespace tools, Redis and ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2 iptables procps redis-server ffmpeg
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: iproute2 iptables procps redis-server ffmpeg
       - name: Build as the normal user
         run: |
           make build
@@ -534,7 +580,7 @@ jobs:
       matrix:
         profile: ${{ fromJSON(inputs.network_profile_lane == 'lossy-dc-move' && '["lossy-dc"]' || '["lan","region","far-caller","lossy-dc"]') }}
         scenario: ${{ fromJSON(inputs.network_profile_lane == 'lossy-dc-move' && '["move"]' || '["move","takeover"]') }}
-        include: ${{ fromJSON(inputs.network_profile_lane == 'lossy-dc-move' && '[{"scenario":"move","trials":20,"driver_minutes":35,"job_minutes":45}]' || '[{"scenario":"move","trials":20,"driver_minutes":35,"job_minutes":45},{"scenario":"takeover","trials":10,"driver_minutes":20,"job_minutes":30}]') }}
+        include: ${{ fromJSON(inputs.network_profile_lane == 'lossy-dc-move' && '[{"scenario":"move","trials":20,"driver_minutes":35,"job_minutes":55}]' || '[{"scenario":"move","trials":20,"driver_minutes":35,"job_minutes":55},{"scenario":"takeover","trials":10,"driver_minutes":20,"job_minutes":40}]') }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -544,7 +590,10 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: Install namespace tools, Redis and ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends iproute2 iptables procps redis-server ffmpeg
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: iproute2 iptables procps redis-server ffmpeg
       - name: Build as the normal user
         run: |
           make build

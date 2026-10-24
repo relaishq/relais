@@ -263,8 +263,19 @@ masterauth {self.passwords['admin']}
     def archive(self):
         directory = self.work / 'relais_0.3.0_linux_arm64'
         directory.mkdir()
-        for name in ('relais-relay', 'relais-worker', 'relais-control', 'relais-signal', 'relais-load'):
+        for name in ('relais-relay', 'relais-worker', 'relais-control', 'relais-signal', 'relais-load', 'relais-demo', 'relais-compat'):
             shutil.copy2(Path(self.args.bin) / name, directory / name)
+        repo = ROOT.parent.parent
+        for name in ('LICENSE', 'NOTICE', 'README.md'):
+            shutil.copy2(repo / name, directory / name)
+        for name in ('start.sh', 'stop.sh'):
+            shutil.copy2(repo / 'deploy/local' / name, directory / name)
+        identity = subprocess.check_output([str(directory / 'relais-worker'), '-version'], text=True)
+        commit = re.search(r'commit=([0-9a-f]{40})', identity)
+        assert commit, 'boot fixture binaries need -ldflags version=0.3.0 and a full commit SHA'
+        subprocess.run([str(directory / 'relais-compat'), 'generate', '--root', str(repo),
+                        '--version', '0.3.0', '--commit', commit[1], '--os', 'linux', '--arch', 'arm64',
+                        '--output', str(directory / 'compatibility.json')], check=True)
         artifact_dir = self.work / 'artifacts'
         artifact_dir.mkdir(mode=0o700)
         archive = self.archive_path = artifact_dir / (directory.name + '.tar.gz')
@@ -325,6 +336,31 @@ masterauth {self.passwords['admin']}
         assert not (self.work / 'manager.log').exists() and not (image / 'opt/relais/bin/relais-relay').exists()
         assert '-e 1 ' in (self.work / 'signals.log').read_text()
         print('PASS: real UserData bad digest signals failure before any service starts')
+        # Valid checksum, incompatible or missing manifest: no installed binary,
+        # sysctl, service stop/start, secret preparation or readiness command.
+        original_archive = self.work / 'original.tar.gz'
+        shutil.copy2(self.archive_path, original_archive)
+        archive_root = self.work / 'relais_0.3.0_linux_arm64'
+        manifest_file = archive_root / 'compatibility.json'
+        original_manifest = manifest_file.read_bytes()
+        for mutation in ('identity', 'missing-manifest'):
+            if mutation == 'identity':
+                manifest = json.loads(original_manifest)
+                manifest['version'] = '0.2.0'
+                manifest_file.write_text(json.dumps(manifest))
+            else:
+                manifest_file.unlink()
+            with tarfile.open(self.archive_path, 'w:gz') as tar:
+                tar.add(archive_root, arcname=archive_root.name)
+            config['sha256'] = hashlib.sha256(self.archive_path.read_bytes()).hexdigest(); save_fixture()
+            refused = self.run([str(userdata)], self.env, 30)
+            assert refused.returncode != 0, 'compatibility refusal was reported as success'
+            assert not (self.work / 'manager.log').exists(), 'refusal changed service state'
+            assert not (image / 'opt/relais/bin/relais-relay').exists(), 'refusal installed a binary'
+            assert not (image / 'run/relais').exists(), 'refusal prepared runtime credentials'
+            manifest_file.write_bytes(original_manifest)
+        shutil.copy2(original_archive, self.archive_path)
+        print('PASS: missing/incompatible manifests refuse with zero process or binary changes')
         config['sha256'] = self.archive_digest = hashlib.sha256(self.archive_path.read_bytes()).hexdigest(); save_fixture()
         result = self.run([str(userdata)], self.env, 30)
         assert result.returncode == 0, 'valid UserData failed: ' + result.stderr.decode()
@@ -370,7 +406,7 @@ masterauth {self.passwords['admin']}
             result = self.run([str(script)], env, 30)
             assert result.returncode == 0, name + ' UserData failed: ' + result.stderr.decode()
             check_program_access(image)
-            assert {p.name for p in (image / 'opt/relais/bin').iterdir()} == {'relais-' + c for c in config['components']}
+            assert {p.name for p in (image / 'opt/relais/bin').iterdir()} == ({'relais-' + c for c in config['components']} | {'relais-compat', 'compatibility.json'})
             expected = {'relais-prepare.service', *('relais-' + c + '.service' for c in config['components'])}
             if 'relay' in config['components']: expected.add('relais-relay-standby.service')
             assert {p.name for p in (image / 'etc/systemd/system').iterdir()} == expected

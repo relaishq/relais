@@ -1,0 +1,8 @@
+{
+  "_comment": "self permits one immutable build only. To nominate a tested peer, add its exact release version to tested_peers and set oldest_live_peer/oldest_rollback after both pair directions pass; regenerate compatibility.json. See deploy/aws/README.md compatibility gate.",
+  "oldest_live_peer": "self",
+  "oldest_rollback": "self",
+  "tested_peers": [
+    "self"
+  ]
+}

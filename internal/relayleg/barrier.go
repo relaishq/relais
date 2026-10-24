@@ -5,6 +5,10 @@ package relayleg
 
 import "encoding/binary"
 
+// ContractVersion covers caller-address headers and drain request/ACK frames.
+// Bump it when the versioned UDP layout fixtures change.
+const ContractVersion = 1
+
 const barrierSize = 13
 
 // Barrier makes a request or acknowledgement for one bounded relay hold.
