@@ -593,7 +593,7 @@ func (s *session) export() (data []byte, release func(), exportErr error) {
 		if err != nil {
 			return nil, release, err
 		}
-		payload = &movePayload{Bytes: export.payload, Tasks: export.tasks, Audio: export.audio}
+		payload = &movePayload{Bytes: export.payload, Tasks: export.tasks, Audio: export.audio, Bridge: export.bridge}
 	}
 	data, err := s.checkpoint.capture(checkpointExact, payload)
 	return data, release, err

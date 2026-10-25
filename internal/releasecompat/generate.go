@@ -305,7 +305,18 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 		fs["store_contract"] = Format{Reads: []int{m.StoreContract}, Writes: []int{m.StoreContract}, Continues: []int{m.StoreContract}}
 		return fs
 	}
-	worker := func(enabled bool) Profile {
+	// Echo's app marker is separate from the host snapshot version.
+	echo, err := constant(root, "pkg/agent/agent.go", "echoStateVersion")
+	if err != nil {
+		return m, err
+	}
+	m.Agents = []Agent{{Name: "echo", Identity: "builtin-echo", Limits: "builtin-echo", Reads: []uint32{uint32(echo)}, Writes: []uint32{uint32(echo)}}}
+	bridgeRegistered := slices.ContainsFunc(m.Agents, func(a Agent) bool { return a.Name == "bridge" })
+	bridgeVersion, err := constant(root, "pkg/mediaworker/bridge_output.go", "bridgeOutputVersion")
+	if err != nil {
+		return m, err
+	}
+	worker := func(enabled, bridge bool) Profile {
 		fs := platform()
 		fs["relay_udp"] = Format{Reads: []int{m.UDPContract}, Writes: []int{m.UDPContract}, Continues: []int{m.UDPContract}}
 		writes := []int{legacy, v2, control}
@@ -313,6 +324,16 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 			writes = append(writes, split)
 		}
 		fs["snapshot"] = state(writes)
+		// Older target tools require an exact domain set. Advertise the new
+		// format only when this release actually registers its writer.
+		if bridgeRegistered {
+			fs["bridge_output"] = Format{Reads: []int{bridgeVersion}, Continues: []int{bridgeVersion}}
+		}
+		if bridge && bridgeRegistered {
+			f := fs["bridge_output"]
+			f.Writes = []int{bridgeVersion}
+			fs["bridge_output"] = f
+		}
 		fs["encryption_header"] = Format{Reads: []int{header}, Writes: []int{header}, Continues: []int{header}}
 		fs["legacy_encryption_header"] = Format{Reads: []int{legacyHeader}, Writes: []int{legacyHeader}, Continues: []int{legacyHeader}}
 		for name, v := range map[string]int{"component": component, "metadata": metadata} {
@@ -324,18 +345,16 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 		}
 		return Profile{Formats: fs}
 	}
-	cp := worker(false)
+	cp := worker(false, false)
 	cp.Formats["snapshot"] = state(nil)
 	relayProfile := Profile{Formats: platform()}
 	relayProfile.Formats["relay_udp"] = Format{Reads: []int{m.UDPContract}, Writes: []int{m.UDPContract}, Continues: []int{m.UDPContract}}
 	delete(cp.Formats, "relay_udp")
-	m.Roles = map[string]map[string]Profile{"worker": {"legacy": worker(false), "split": worker(true)}, "control": {"default": cp}, "relay": {"default": relayProfile}, "signal": {"default": {Formats: common()}}}
-	// Echo's app marker is separate from the host snapshot version.
-	echo, err := constant(root, "pkg/agent/agent.go", "echoStateVersion")
-	if err != nil {
-		return m, err
+	m.Roles = map[string]map[string]Profile{"worker": {"legacy": worker(false, false), "split": worker(true, false)}, "control": {"default": cp}, "relay": {"default": relayProfile}, "signal": {"default": {Formats: common()}}}
+
+	if bridgeRegistered {
+		m.Roles["worker"]["bridge"] = worker(true, true)
 	}
-	m.Agents = []Agent{{Name: "echo", Identity: "builtin-echo", Limits: "builtin-echo", Reads: []uint32{uint32(echo)}, Writes: []uint32{uint32(echo)}}}
 	return m, m.Validate()
 }
 

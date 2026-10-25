@@ -324,7 +324,13 @@ func (m Manifest) Validate() error {
 			if role == "worker" || role == "control" {
 				required = append(required, "snapshot", "component", "metadata", "encryption_header", "legacy_encryption_header")
 			}
-			if len(p.Formats) != len(required) {
+			allowedCount := len(required)
+			if role == "worker" || role == "control" {
+				if _, ok := p.Formats["bridge_output"]; ok {
+					allowedCount++
+				}
+			}
+			if len(p.Formats) != allowedCount {
 				return refuse("unsupported_manifest", "unsupported newer manifest format domains")
 			}
 			for _, domain := range required {
@@ -336,7 +342,7 @@ func (m Manifest) Validate() error {
 				return refuse("invalid_manifest", "empty profile")
 			}
 			for domain, f := range p.Formats {
-				if domain == "" || len(f.Reads) == 0 {
+				if domain == "" || (len(f.Reads) == 0 && (domain != "bridge_output" || len(f.Writes) > 0 || len(f.Continues) > 0)) {
 					return refuse("invalid_manifest", "empty format capability")
 				}
 				for _, v := range append(slices.Clone(f.Reads), append(slices.Clone(f.Writes), f.Continues...)...) {

@@ -64,6 +64,9 @@ func Run(ctx context.Context, args []string, options Options) error {
 	if *version {
 		return buildinfo.PrintVersion(os.Stdout, "relais-worker")
 	}
+	if err := f.bridgeOutput.Validate(); err != nil {
+		return err
+	}
 	if *drainTimeout <= 0 {
 		return fmt.Errorf("-drain-timeout must be greater than 0")
 	}
@@ -149,6 +152,7 @@ func (*configError) Error() string { return "worker requires -name and -control"
 
 // mediaConfig carries raw limits so each restored session selects its own profile.
 func (f *workerFlags) mediaConfig(agentConfig mediaworker.AgentConfig, frames framecache.Store, relayConfig *mediaworker.RelayConfig) mediaworker.Config {
+	agentConfig.BridgeOutput = f.bridgeOutput
 	cfg := mediaworker.Config{SplitCheckpoints: *f.split, Agent: agentConfig, SnapshotLimits: f.limits, ListenAddr: *f.listen, FrameCache: frames, DisableFrameCache: *f.cacheOff, Relay: relayConfig}
 	if *f.cryptoTrace {
 		cfg.PacketTrace = func(packet mediaworker.PacketTrace) {

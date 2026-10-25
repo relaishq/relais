@@ -31,10 +31,11 @@ const (
 
 // Versions 8 and 9 contain this subtree. The legacy state/progress encoding is unchanged.
 type v2Envelope struct {
-	Controls        []controlRecord `json:"ct,omitempty"`
-	ControlFloor    uint64          `json:"cl,omitempty"`
-	ControlHigh     uint64          `json:"ch,omitempty"`
-	Quota           *snapshotQuota  `json:"sq,omitempty"`
+	Bridge          *bridgeOutputState `json:"bridge_output/v1,omitempty"`
+	Controls        []controlRecord    `json:"ct,omitempty"`
+	ControlFloor    uint64             `json:"cl,omitempty"`
+	ControlHigh     uint64             `json:"ch,omitempty"`
+	Quota           *snapshotQuota     `json:"sq,omitempty"`
 	Name            string
 	Contract        string
 	TaskKinds       []string
@@ -52,6 +53,7 @@ type v2Envelope struct {
 }
 
 type v2Host struct {
+	bridge         *bridgeOutputHost
 	instance       agent.Agent
 	registration   agenthost.Registration
 	ready          chan struct{}
@@ -68,7 +70,8 @@ type v2Host struct {
 // movePayload exists only in exact exports, including an empty exact export.
 // A checkpoint never includes this field or calls SaveMoveOnly.
 type movePayload struct {
-	ControlAck uint64 `json:",omitempty"`
+	Bridge     *bridgeOutputMove `json:"bridge_output/v1,omitempty"`
+	ControlAck uint64            `json:",omitempty"`
 	Bytes      []byte
 	Tasks      []taskMove    `json:",omitempty"`
 	Audio      []agent.Audio `json:",omitempty"`
@@ -86,6 +89,28 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 	}
 	legacyBounds := reg.Bounds
 	reg.Bounds = effectiveAgentBounds(reg.Declared, s.snapshotLimits(), s.componentMode)
+	if reg.Name == "bridge" {
+		if reg.Bounds.MaxPendingBytes < v2HostMetadataBytes {
+			return fmt.Errorf("%w: bridge requires the full host metadata profile", agent.ErrIncompatibleAgent)
+		}
+		if !s.componentMode {
+			return fmt.Errorf("%w: bridge requires split checkpoints", agent.ErrIncompatibleAgent)
+		}
+		profile := s.worker.cfg.Agent.BridgeOutput.Defaults()
+		if profile.ActorReserveBytes+profile.ExportHeadroomBytes >= min(reg.Bounds.MaxMailboxBytes, s.snapshotLimits().MoveBytesPerSession) {
+			return fmt.Errorf("%w: bridge actor reserve and export headroom must fit move/mailbox budget", agent.ErrCapacity)
+		}
+		if err := s.worker.cfg.Agent.BridgeOutput.Validate(); err != nil {
+			return err
+		}
+		reg.Bounds.MaxStateBytes = min(reg.Bounds.MaxStateBytes, 3072-v2HostMetadataBytes)
+		if reg.Declared.MaxAudioBytes == 0 {
+			reg.Bounds.MaxAudioBytes = min(s.worker.cfg.Agent.BridgeOutput.AudioBytes, reg.Bounds.MaxMailboxBytes)
+		}
+		if reg.Declared.MaxAudioDuration == 0 {
+			reg.Bounds.MaxAudioDuration = s.worker.cfg.Agent.BridgeOutput.AudioDuration
+		}
+	}
 	if reg.Name == "" || reg.Name == "echo" || reg.Name == "demo" || reg.Factory == nil ||
 		reg.Declared.MaxHistoryBytes < 0 || reg.Declared.MaxHistoryBytes > componentMaxHistoryBytes || reg.Bounds.MaxStateBytes <= 0 || reg.Bounds.MaxStateBytes > 64<<10 || reg.Bounds.MaxPendingBytes <= 0 ||
 		reg.Bounds.MaxMailboxBytes <= 0 || reg.Bounds.MaxMailboxBytes > s.snapshotLimits().MoveBytesPerSession || reg.Bounds.MaxActiveTasks <= 0 ||
@@ -121,8 +146,13 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 	}
 	// Crash metadata has no payload to copy or reserve. Exact restores only
 	// reserve the one move-payload copy they make, for its actual byte length.
-	if restoring && move != nil && (len(move.Bytes) > 0 || len(move.Tasks) > 0 || len(move.Audio) > 0) {
+	if restoring && move != nil && (len(move.Bytes) > 0 || len(move.Tasks) > 0 || (len(move.Audio) > 0 || move.Bridge != nil)) {
 		scratch := int64(len(move.Bytes) + audioRefsBytes(move.Audio))
+		if move.Bridge != nil {
+			for _, r := range move.Bridge.Records {
+				scratch += int64(bridgeRecordCharge + len(r.Payload))
+			}
+		}
 		for _, t := range move.Tasks {
 			scratch += int64(len(t.Request))
 			for _, r := range t.Results {
@@ -143,6 +173,19 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 
 	h := &v2Host{controls: make(chan controlRequest), registration: reg, ready: make(chan struct{}), emissions: make(chan taskEmission), force: make(chan struct{}, 1), wakePlayback: make(chan struct{}, 1)}
 	s.agent.v2 = h
+	if reg.Name == "bridge" {
+		profile := s.worker.cfg.Agent.BridgeOutput
+		profile.AudioBytes = min(profile.AudioBytes, reg.Bounds.MaxAudioBytes)
+		profile.AudioDuration = min(profile.AudioDuration, reg.Bounds.MaxAudioDuration)
+		h.bridge = newBridgeOutputHost(profile)
+		h.playback.bridge = h.bridge
+		if total, _ := s.bridgeMoveCost(0, 0); total+bridgeCreditRecordCost(BridgeOutputScope{}, 1)+5*bridgeBinaryBytes > s.bridgeLookaheadBudget() {
+			return fmt.Errorf("%w: bridge actor envelope leaves no output credit", agent.ErrCapacity)
+		}
+	}
+	if restoring && s.state.Agent.V2.Bridge != nil && h.bridge == nil {
+		return s.v2RestoreError(agent.ErrIncompatibleAgent)
+	}
 	if err := s.checkpoint.restore(checkpointRestore{profile: true}); err != nil {
 		return err
 	}
@@ -232,6 +275,9 @@ func (s *session) initV2Agent(r *agenthost.Adapter, restoring bool, opts ResumeO
 		if err := s.restoreTasks(move); err != nil {
 			return s.v2RestoreError(err)
 		}
+		if err := s.restoreBridgeOutput(move); err != nil {
+			return s.v2RestoreError(err)
+		}
 		if err := s.restorePlayback(move); err != nil {
 			return s.v2RestoreError(err)
 		}
@@ -307,6 +353,9 @@ func (s *session) validateV2StateMetadata(state agent.State, lostMoveData ...boo
 	if (len(lostMoveData) == 0 || !lostMoveData[0]) && (state.MoveOnlyLength > s.agent.v2.registration.Bounds.MaxMailboxBytes || state.MoveOnlyLength > s.snapshotLimits().MoveBytesPerSession) {
 		return fmt.Errorf("%w: move-only data exceeds session budget", agent.ErrCapacity)
 	}
+	if s.agent.v2.bridge != nil && state.MoveOnlyLength > s.agent.v2.bridge.limits.AdapterMoveOnlyBytes {
+		return fmt.Errorf("%w: %w: bridge move-only adapter bound", errTaskAdmissionBackpressure, agent.ErrCapacity)
+	}
 	if state.HasMoveOnly {
 		if _, ok := s.agent.v2.instance.(agent.MoveOnlyState); !ok {
 			return errors.New("agent: HasMoveOnly requires MoveOnlyState")
@@ -317,25 +366,43 @@ func (s *session) validateV2StateMetadata(state agent.State, lostMoveData ...boo
 
 // Reservation tracks admitted move data without reading it during Save. Close
 // and callback acceptance synchronize so a late callback cannot leak a reserve.
-func (s *session) reserveMoveBytes(n int64) error {
+func (s *session) reserveMoveBytes(n int64, requestBytes ...int64) error {
 	s.moveMu.Lock()
 	defer s.moveMu.Unlock()
 	if s.moveClosed {
 		return context.Canceled
 	}
+	if s.agent != nil && s.agent.v2 != nil && s.agent.v2.bridge != nil && n+s.agent.v2.bridge.memory.Load() > int64(s.agent.v2.registration.Bounds.MaxMailboxBytes) {
+		return errTaskAdmissionBackpressure
+	}
+	requests := int64(0)
+	if len(requestBytes) > 0 {
+		requests = requestBytes[0]
+	}
 	delta := n - s.moveReserved
 	var scratchDelta int64
 	if s.exportScratch != nil {
-		scratchDelta = max(0, 8*n-s.exportScratch.bytes.Load())
+		var desired int64
+		if s.agent != nil && s.agent.v2 != nil && s.agent.v2.bridge != nil {
+			total, scratch := s.bridgeMoveCost(n, requests)
+			desired = scratch
+			if total > s.bridgeLookaheadBudget() {
+				return s.actorMovePressure(ErrMoveBudget)
+			}
+		} else {
+			desired = s.exportScratchBytes(n)
+		}
+
+		scratchDelta = max(0, desired-s.exportScratch.bytes.Load())
 	}
 	if scratchDelta > 0 {
 		if !s.worker.reserveMoveBytes(scratchDelta) {
-			return ErrMoveBudget
+			return s.actorMovePressure(ErrMoveBudget)
 		}
 	}
 	if delta > 0 && !s.worker.reserveMoveBytesWithin(delta, s.snapshotLimits().MoveBytesTotal-int64(8*s.snapshotLimits().MoveBytesPerSession)) {
 		s.worker.moveBytes.Add(-scratchDelta)
-		return ErrMoveBudget
+		return s.actorMovePressure(ErrMoveBudget)
 	}
 	if delta < 0 {
 		s.worker.moveBytes.Add(delta)
@@ -344,6 +411,7 @@ func (s *session) reserveMoveBytes(n int64) error {
 		s.exportScratch.bytes.Add(scratchDelta)
 	}
 	s.moveReserved = n
+	s.moveRequestBytes.Store(requests)
 	return nil
 }
 func (w *Worker) reserveMoveBytes(n int64) bool {
@@ -365,7 +433,11 @@ func (s *session) releaseMoveBytes() {
 	defer s.moveMu.Unlock()
 	s.moveClosed = true
 	s.worker.moveBytes.Add(-s.moveReserved)
+	if s.agent != nil && s.agent.v2 != nil && s.agent.v2.bridge != nil {
+		s.worker.moveBytes.Add(-s.agent.v2.bridge.memory.Swap(0))
+	}
 	s.moveReserved = 0
+	s.moveRequestBytes.Store(0)
 	if s.exportScratch != nil {
 		s.exportScratch.release()
 		s.exportScratch = nil
@@ -404,14 +476,21 @@ func (s *session) reserveV2ExportScratch() error {
 	if s.exportScratch != nil {
 		return nil
 	}
-	n := s.agent.latest.V2.MoveOnlyLength + audioRefsBytes(s.agent.v2.playback.queue)
-	for _, t := range s.agent.v2.tasks {
-		n += len(t.request)
-		n += t.mailboxBytes
-		n += len(t.intent.ID) + 64
+	var scratch int64
+	if s.agent.v2.bridge != nil {
+		total, required := s.bridgeMoveCost(s.moveReserved, s.moveRequestBytes.Load())
+		if total > s.bridgeLookaheadBudget() {
+			return ErrExportNotFlushed
+		}
+		scratch = required
+	} else {
+		n := s.agent.latest.V2.MoveOnlyLength + audioRefsBytes(s.agent.v2.playback.queue)
+		for _, t := range s.agent.v2.tasks {
+			n += len(t.request) + t.mailboxBytes + len(t.intent.ID) + 64
+		}
+		scratch = s.exportScratchBytes(int64(n))
 	}
 
-	scratch := int64(8 * n)
 	if !s.worker.reserveMoveBytes(scratch) {
 		return ErrExportNotFlushed
 	}
@@ -439,6 +518,11 @@ func (s *session) saveV2MoveOnly(deadline context.Context) (agentMoveExport, err
 	audio := slices.Clone(s.agent.v2.playback.queue)
 	s.mu.Unlock()
 	export := agentMoveExport{tasks: s.exportTasks(), audio: audio}
+	if s.agent.v2.bridge != nil {
+		s.mu.Lock()
+		export.bridge = s.exportBridgeLocked()
+		s.mu.Unlock()
+	}
 	state := v2State(s.agent.latest)
 	if !state.HasMoveOnly {
 		return export, nil
@@ -475,7 +559,7 @@ func v2EnvelopeEqual(a, b *v2Envelope) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.Name == b.Name && a.Contract == b.Contract && slices.Equal(a.TaskKinds, b.TaskKinds) && a.Bounds == b.Bounds && limitsEqual(a.Limits, b.Limits) &&
+	return bridgeStateEqual(a.Bridge, b.Bridge) && a.Name == b.Name && a.Contract == b.Contract && slices.Equal(a.TaskKinds, b.TaskKinds) && a.Bounds == b.Bounds && limitsEqual(a.Limits, b.Limits) &&
 		a.HasMoveOnly == b.HasMoveOnly && a.MoveOnlyLength == b.MoveOnlyLength && a.Started == b.Started && taskIntentsEqual(a.Tasks, b.Tasks) && slices.Equal(a.Capacity, b.Capacity) &&
 		a.ControlHigh == b.ControlHigh && a.ControlFloor == b.ControlFloor && slices.Equal(a.Controls, b.Controls) &&
 		a.CancelFloor == b.CancelFloor && a.TimerGeneration == b.TimerGeneration && slices.Equal(a.Timers, b.Timers) && playbackEqual(a.Playback, b.Playback)
@@ -501,4 +585,23 @@ func validateV2Wire(data []byte) error {
 		}
 	}
 	return nil
+}
+
+// The bridge shares its session allowance with frozen images and encoding
+// scratch, as well as the worker-wide reservation. Other v2 profiles retain
+// their existing export policy. Fixed checkpoint/history copies are bounded
+// separately from the retained audio/receipt image.
+func (s *session) exportScratchBytes(live int64) int64 {
+	if s.agent == nil || s.agent.v2 == nil || s.agent.v2.bridge == nil {
+		return 8 * live
+	}
+	_, scratch := s.bridgeMoveCost(max(0, live-s.agent.v2.bridge.memory.Load()), s.moveRequestBytes.Load())
+	return scratch
+}
+
+func (s *session) actorMovePressure(err error) error {
+	if s.agent != nil && s.agent.v2 != nil && s.agent.v2.bridge != nil {
+		return fmt.Errorf("%w: %w", errTaskAdmissionBackpressure, err)
+	}
+	return err
 }

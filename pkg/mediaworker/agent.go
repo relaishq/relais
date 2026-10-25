@@ -26,6 +26,7 @@ type AgentConfig struct {
 	Factory agent.Factory
 	// Registrations resolves v2 restores by their persisted name, independently
 	// of the factory selected for new calls. Nil preserves the single-factory seam.
+	BridgeOutput    BridgeOutputLimits
 	Registrations   map[string]agent.Factory
 	QueueCapacity   int           // default 32 packets
 	CallbackTimeout time.Duration // default 100 ms, including state encoding
@@ -34,6 +35,7 @@ type AgentConfig struct {
 }
 
 func (c AgentConfig) defaults() AgentConfig {
+	c.BridgeOutput = c.BridgeOutput.Defaults()
 	if c.Factory == nil {
 		c.Factory = func(string) agent.Agent { return &agent.Echo{} }
 	}
@@ -71,6 +73,7 @@ type agentMoveExport struct {
 	payload []byte
 	tasks   []taskMove
 	audio   []agentv2.Audio
+	bridge  *bridgeOutputMove
 }
 
 type agentFlush struct {
@@ -128,6 +131,7 @@ func cloneAgentState(state agentState) agentState {
 		e.Controls = slices.Clone(e.Controls)
 		e.Playback.Window = slices.Clone(e.Playback.Window)
 		e.Playback.Notify = slices.Clone(e.Playback.Notify)
+		e.Bridge = cloneBridgeState(e.Bridge)
 		state.V2 = &e
 	}
 	return state
@@ -300,6 +304,7 @@ func (s *session) publishAgent() {
 		s.state.Agent = cloneAgentState(s.agent.latest)
 		if s.agent.v2 != nil {
 			s.state.Agent.V2.Playback = s.playbackSnapshotLocked()
+			s.projectBridgeLocked(s.state.Agent.V2)
 		}
 	}
 	s.mu.Unlock()
@@ -426,6 +431,14 @@ func (s *session) agentLoop() {
 // already consumed. Enqueue is paused; the caller may also discard this queue.
 func (s *session) finishAgentFlush(request agentFlush) bool {
 	if request.moveOnly != nil {
+		if s.agent.v2.bridge != nil {
+			release := s.holdBridgeCredit()
+			defer release()
+			if err := s.drainBridgeToFit(request.deadline.Add(-2 * s.worker.cfg.Agent.CallbackTimeout)); err != nil {
+				request.done <- err
+				return true
+			}
+		}
 		if err := s.validateTaskMoves(s.agent.latest.V2.Tasks, &movePayload{Tasks: s.taskMoveViews()}); err != nil {
 			s.log.Warnf("session %s: export preflight incompatible: %v", s.id, err)
 			request.done <- errors.Join(ErrExportIncompatible, err)
@@ -530,6 +543,10 @@ func (s *session) flushAgent(moveOnly ...chan agentMoveExport) error {
 	}
 	if _, echo := s.agent.instance.(*agent.Echo); echo {
 		return nil // Echo has no pending callbacks; fence atomically under mu.
+	}
+	if len(moveOnly) > 0 && s.agent.v2 != nil && s.agent.v2.bridge != nil {
+		release := s.holdBridgeCredit()
+		defer release()
 	}
 	if len(moveOnly) == 0 {
 		s.mu.Lock()

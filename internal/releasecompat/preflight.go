@@ -57,8 +57,8 @@ func Preflight(pool Pool, target Manifest, operation string) Verdict {
 	if pool.Schema != 1 || !pool.Complete || len(pool.Participants) == 0 || len(pool.Participants) > 256 {
 		return fail(refuse("unknown_inventory", "complete bounded inventory is required"))
 	}
-	if pool.TargetWorkerProfile != "legacy" && pool.TargetWorkerProfile != "split" {
-		return fail(refuse("unknown_profile", "target_worker_profile must be legacy or split"))
+	if pool.TargetWorkerProfile != "legacy" && pool.TargetWorkerProfile != "split" && pool.TargetWorkerProfile != "bridge" {
+		return fail(refuse("unknown_profile", "target_worker_profile must be legacy, split or bridge"))
 	}
 	current := slices.Clone(pool.Participants)
 	names, roles := map[string]bool{}, map[string]int{}
@@ -90,8 +90,11 @@ func Preflight(pool Pool, target Manifest, operation string) Verdict {
 		if !ok {
 			return fail(refuse("unknown_profile", p.Name))
 		}
-		if p.Role == "worker" && (p.Profile != "legacy" && p.Profile != "split" || len(p.Agents) == 0) {
+		if p.Role == "worker" && (p.Profile != "legacy" && p.Profile != "split" && p.Profile != "bridge" || len(p.Agents) == 0) {
 			return fail(refuse("unknown_agent", "worker requires an explicit profile and agent inventory"))
+		}
+		if p.Role == "worker" && slices.Contains(p.Agents, "bridge") && (p.Profile != "bridge" || pool.TargetWorkerProfile != "bridge") {
+			return fail(refuse("unknown_profile", "bridge agents require the bridge-enabled split profile"))
 		}
 		if p.Role == "worker" && !p.DefaultBudgets {
 			return fail(refuse("unknown_configuration", "worker profile requires default state budgets; custom overrides need separate compatibility evidence: "+p.Name))
@@ -121,7 +124,7 @@ func Preflight(pool Pool, target Manifest, operation string) Verdict {
 			}
 		}
 		for domain, f := range profile.Formats {
-			if stateDomain(domain) {
+			if stateDomain(domain) && (domain != "bridge_output" || (p.Role == "worker" && slices.Contains(p.Agents, "bridge"))) {
 				retained[domain] = union(retained[domain], f.Continues)
 			}
 		}
@@ -183,7 +186,7 @@ func Preflight(pool Pool, target Manifest, operation string) Verdict {
 	return Verdict{Allowed: true, Steps: steps}
 }
 func stateDomain(s string) bool {
-	return s == "redis_keys" || s == "snapshot" || s == "component" || s == "metadata" || s == "encryption_header" || s == "legacy_encryption_header"
+	return s == "bridge_output" || s == "redis_keys" || s == "snapshot" || s == "component" || s == "metadata" || s == "encryption_header" || s == "legacy_encryption_header"
 }
 func union(a, b []int) []int {
 	r := slices.Clone(a)
@@ -251,7 +254,7 @@ func checkState(participants []Participant, retained map[string][]int) error {
 		formats := p.Manifest.Roles[p.Role][p.Profile].Formats
 		for domain, versions := range needed {
 			f, ok := formats[domain]
-			if !ok {
+			if !ok && (domain != "bridge_output" || (p.Role != "worker" && p.Role != "control")) {
 				continue
 			}
 			for _, v := range versions {
