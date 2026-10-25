@@ -742,9 +742,21 @@ runner, two calls using a keyless four-exchange history fixture consumed
 churn at the then-current 80,000 B/s split defaults exceeded the store gate: proxy bins
 10–30 average **132,347.74 B/call-second**; the worst contiguous ten bins (18–27)
 average **133,427.20 B/call-second**. The revised 6,144 B hot cap / 70,000 B/s
-profile has **NOT-RUN** full-size hosted validation in
-[#214](https://github.com/relaishq/relais/issues/214). Keep split admission off
-until both whole-window and sustained phase gates pass at full working/history size. Split N+1, planned
+profile is now the default. It passed three hosted full-size runs (full working
+and history size, two calls, 60 s each; [#214](https://github.com/relaishq/relais/issues/214)):
+[39911948893](https://github.com/relaishq/relais/actions/runs/39911948893),
+[39913766444](https://github.com/relaishq/relais/actions/runs/39913766444) and
+[39913773593](https://github.com/relaishq/relais/actions/runs/39913773593).
+None had a blocking result. The worst ten-second history-churn windows were
+129,104.15, 129,424.20 and 126,651.70 B/call-second against the 131,072 B gate.
+Headroom was 1.26% to 3.37%. The run-to-run spread is about 2.8 KB/call-second.
+An earlier candidate run, 39890055104, failed by 261 B. The protocol-byte cuts
+in #238 fixed it. The owner accepted the defaults on 2026-10-23. These runs
+used one hosted runner with standalone Redis loopback and two calls. They are
+**NOT-RUN** for real hardware, a managed store, more calls per primary, or
+negotiated text and track counts beyond the fixture. Keep split admission off.
+The first paid cloud preview must re-measure it. Both the whole-window and
+the sustained phase gates must pass there before any pool turns it on. Split N+1, planned
 drain and rolling master-key rotation ended no calls and reported zero
 decryption failures. At the rotation inventory check, all ten live component
 references used the new key. Both sampled checkpoint and snapshot age p99

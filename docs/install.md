@@ -1,6 +1,6 @@
 # Install Relais
 
-Relais downloads contain six programs for Linux and macOS on amd64 and arm64.
+Relais downloads contain seven programs for Linux and macOS on amd64 and arm64.
 You do not need Go. You need Redis to run the browser demo or local topology.
 Download the [latest release](https://github.com/relaishq/relais/releases/latest);
 set `VERSION` to its tag number without the leading `v`.
@@ -11,7 +11,7 @@ Choose `linux` or `darwin` (macOS), and `amd64` (Intel/AMD) or `arm64` (Apple
 silicon/ARM). For example, on an Apple silicon Mac:
 
 ```bash
-VERSION=0.2.0
+VERSION=0.3.0
 OS=darwin
 ARCH=arm64
 ARCHIVE="relais_${VERSION}_${OS}_${ARCH}.tar.gz"
@@ -21,8 +21,10 @@ curl -fLO "https://github.com/relaishq/relais/releases/download/v${VERSION}/chec
 
 Each archive has one directory named after the archive, without `.tar.gz`.
 It contains `relais-relay`, `relais-worker`, `relais-control`, `relais-signal`,
-`relais-demo`, `relais-load`, `start.sh`, `stop.sh`, `LICENSE`, `NOTICE`, and
-`README.md`. Legacy plugin runners are not included.
+`relais-demo`, `relais-load`, `relais-compat`, `compatibility.json`, `start.sh`,
+`stop.sh`, `LICENSE`, `NOTICE`, and `README.md`. `relais-compat` checks a rolling
+upgrade (see [Upgrading](#upgrading)). `compatibility.json` is the release
+manifest it reads. Legacy plugin runners are not included.
 
 ## Checksum
 
@@ -54,7 +56,7 @@ checksum, remove the attribute from the extracted programs and scripts if needed
 
 ```bash
 xattr -d com.apple.quarantine relais-relay relais-worker relais-control \
-  relais-signal relais-demo relais-load start.sh stop.sh
+  relais-signal relais-demo relais-load relais-compat start.sh stop.sh
 ```
 
 A message that the attribute does not exist means that file needs no change.
@@ -196,7 +198,7 @@ CI jobs, then re-run the failed release workflow jobs. The gate reads the latest
 CI attempt, including partial reruns. Manual `workflow_dispatch` runs remain
 artifacts-only and skip this gate.
 
-All six programs accept `-version` without starting services:
+All seven programs accept `-version` without starting services:
 
 ```bash
 ./relais-worker -version
@@ -208,9 +210,21 @@ not published releases.
 
 ## Upgrading
 
-Upgrade workers first, then the relay and control plane. Follow
-[ADR 0009](adr/0009-planned-move-export-replay.md#compatibility-and-upgrade-order)
-for compatibility and upgrade order.
+A live rollout that mixes two release versions needs a supported pair. The pair
+must be listed in `scripts/release/compatibility-policy.json`. Run
+`relais-compat preflight` from the new archive before each upgrade or rollback
+step. It refuses an unsupported pair. The release pair test proves a listed pair
+with live calls (`make release-pair`; see
+[release compatibility](../scripts/release/README.md)). The
+[operator procedure](../deploy/aws/README.md#compatibility-gate-before-upgrade-or-rollback)
+gives the inventory and the role order. See also
+[ADR 0009](adr/0009-planned-move-export-replay.md#compatibility-and-upgrade-order).
+
+v0.3.0 supports only itself (`tested_peers: ["self"]`). Releases before v0.3.0
+carry no manifest, so there is no supported pair with v0.2.0. To upgrade from
+v0.2.0, stop all programs, replace them and start them again. Or start a new
+pool or stack with v0.3.0.
+
 Stop this local topology before replacing its programs. Keep the state directory
 to reuse its secrets, then start with the new archive's `start.sh -state DIR`.
 For a multi-host deployment, see the [deployment guide](deploy.md).
@@ -236,7 +250,7 @@ Source-built custom workers can use `-worker-bin PATH -agent NAME` with
 The download archive does not contain that example binary.
 
 To build all four download archives, run `make dist`. Override the output or
-version with `make dist DIST_VERSION=0.2.0 DIST_DIR=dist`.
+version with `make dist DIST_VERSION=0.3.0 DIST_DIR=dist`.
 
 ## Flag reference
 
