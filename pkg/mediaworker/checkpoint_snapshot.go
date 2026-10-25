@@ -85,6 +85,9 @@ func (c *sessionCheckpoint) captureSnapshotCandidateMode(captured time.Time, can
 	} else {
 		state.Agent = cloneAgentState(state.Agent)
 	}
+	if s.agent != nil && s.agent.v2 != nil && s.agent.v2.bridge != nil {
+		s.projectBridgeLocked(state.Agent.V2)
+	}
 	var split *componentSnapshotState
 	if s.componentMode {
 		history := s.componentHistory
@@ -415,6 +418,9 @@ func (c *sessionCheckpoint) ackSnapshot(pair agentState, dtlsNext dtlsSequenceCh
 	s.state.Checkpoint.CapturedAt = captured
 	s.checkpointRates(&s.state.Checkpoint)
 	c.durableAgent = pair
+	if s.agent != nil && s.agent.v2 != nil {
+		s.bridgeCheckpointedLocked(pair, s.state.Checkpoint.Successes)
+	}
 	if pair.V2 != nil {
 		c.controlAck = max(c.controlAck, pair.V2.ControlHigh)
 	}

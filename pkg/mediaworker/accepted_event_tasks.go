@@ -45,11 +45,29 @@ func (s *session) prepareTaskEffects(before v2Envelope, cause agent.Event, effec
 		}
 		capacity := agent.TaskResult{TaskID: id, Sequence: 1, Turn: spec.Turn, Outcome: agent.Capacity, Final: true, Detail: "task admission capacity"}
 		floor := before.CancelFloor
+		if h.bridge != nil {
+			s.mu.Lock()
+			if h.bridge.state != nil {
+				floor = max(floor, h.bridge.state.CancelFloor)
+			}
+			s.mu.Unlock()
+		}
 		if effects.CancelBefore != nil {
 			floor = max(floor, *effects.CancelBefore)
 		}
 		if spec.Turn < floor {
+			if h.bridge != nil {
+				continue
+			}
 			return nil, nil, fmt.Errorf("%w: task below cancellation turn floor", agent.ErrIncompatibleAgent)
+		}
+		observerBytes := len(spec.Request)
+		for _, task := range next {
+			observerBytes += len(task.request)
+		}
+		if h.bridge != nil && observerBytes > h.bridge.limits.ObserverRequestBytes {
+			refused = append(refused, capacity)
+			continue
 		}
 		if len(spec.Request) > h.registration.Bounds.MaxMailboxBytes || len(spec.Step)+len(spec.Kind) > h.registration.Bounds.MaxPendingBytes || (spec.Class == agent.SideEffecting && len(spec.Request) > h.registration.Bounds.MaxPendingBytes) {
 			refused = append(refused, capacity)
@@ -88,6 +106,9 @@ func (s *session) prepareTaskEffects(before v2Envelope, cause agent.Event, effec
 		}
 		if err := s.taskAdmissionBudget(before, next, before.MoveOnlyLength, guard, projection...); err != nil {
 			if errors.Is(err, agent.ErrCapacity) || errors.Is(err, ErrMoveBudget) {
+				if h.bridge != nil && spec.Class == agent.ReadOnly && (spec.Kind == "bridge.state/v1" || spec.Kind == "bridge.audio/v1") {
+					return nil, nil, errTaskAdmissionBackpressure
+				}
 				next = next[:len(next)-1]
 				refused = append(refused, capacity)
 				continue
@@ -150,6 +171,13 @@ func (s *session) acceptTaskEffects(tasks []*localTask, effects agent.Effects, b
 	h := s.agent.v2
 	h.tasks = tasks
 	floor := before.CancelFloor
+	if h.bridge != nil {
+		s.mu.Lock()
+		if h.bridge.state != nil {
+			floor = max(floor, h.bridge.state.CancelFloor)
+		}
+		s.mu.Unlock()
+	}
 	if effects.CancelBefore != nil {
 		floor = max(floor, *effects.CancelBefore)
 	}
@@ -170,6 +198,11 @@ func (s *session) acceptTaskEffects(tasks []*localTask, effects agent.Effects, b
 }
 
 func (s *session) cancelTask(t *localTask) {
+	if s.agent.v2.bridge != nil {
+		s.mu.Lock()
+		delete(s.agent.v2.bridge.attempts, t.intent.ID)
+		s.mu.Unlock()
+	}
 	if t.cancel != nil {
 		t.cancel()
 	}

@@ -309,3 +309,134 @@ func TestDevelopmentArtifactsCannotAuthorizeLiveRollout(t *testing.T) {
 	requireRefused(t, Preflight(testPool(old), dev, "upgrade"), "unknown_build")
 	requireRefused(t, Preflight(testPool(dev), old, "upgrade"), "unknown_build")
 }
+
+func TestOptionalBridgeDomainSupportsPriorManifests(t *testing.T) {
+	old, next := testManifest(t, "0.3.0"), testManifest(t, "0.3.1")
+	for _, profiles := range old.Roles {
+		for _, p := range profiles {
+			delete(p.Formats, "bridge_output")
+		}
+	}
+	delete(old.Roles["worker"], "bridge")
+	if err := old.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		op       string
+		from, to Manifest
+	}{{"upgrade", old, next}, {"rollback", next, old}} {
+		pool := testPool(tc.from)
+		pool.TargetWorkerProfile = "split"
+		for i := range pool.Participants {
+			if pool.Participants[i].Role == "worker" {
+				pool.Participants[i].Profile = "split"
+			}
+		}
+		if v := Preflight(pool, tc.to, tc.op); !v.Allowed {
+			t.Fatalf("%s: %+v", tc.op, v.Refusal)
+		}
+	}
+}
+
+// Bridge capabilities can be decoded before a bridge agent is shipped. Tests
+// construct such a release explicitly; Generate must describe real writers.
+func enableBridgeManifest(m *Manifest) {
+	m.Agents = append(m.Agents, Agent{Name: "bridge", Identity: "bridge", Limits: "bridge", Reads: []uint32{1}, Writes: []uint32{1}})
+	for _, role := range []string{"worker", "control"} {
+		for _, p := range m.Roles[role] {
+			p.Formats["bridge_output"] = Format{Reads: []int{1}, Continues: []int{1}}
+		}
+	}
+	split := m.Roles["worker"]["split"]
+	formats := make(map[string]Format)
+	for name, f := range split.Formats {
+		formats[name] = f
+	}
+	formats["bridge_output"] = Format{Reads: []int{1}, Writes: []int{1}, Continues: []int{1}}
+	m.Roles["worker"]["bridge"] = Profile{Formats: formats}
+}
+func TestBridgeManifestDecoderAcceptsRegisteredCapability(t *testing.T) {
+	m := testManifest(t, "0.3.2")
+	enableBridgeManifest(&m)
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := JSON(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Manifest
+	if err := Decode(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+}
+func TestMissingBridgeReaderRefusesBridgePool(t *testing.T) {
+	old, next := testManifest(t, "0.3.0"), testManifest(t, "0.3.1")
+	for _, profiles := range old.Roles {
+		for _, p := range profiles {
+			delete(p.Formats, "bridge_output")
+		}
+	}
+	// A bridge-enabled worker's retained format must never be silently ignored
+	// just because an older control or worker manifest omits the domain.
+	enableBridgeManifest(&next)
+	pool := testPool(next)
+	for i := range pool.Participants {
+		if pool.Participants[i].Role == "worker" {
+			pool.Participants[i].Profile = "bridge"
+			pool.Participants[i].Agents = []string{"bridge"}
+		}
+	}
+	pool.TargetWorkerProfile = "bridge"
+	requireRefused(t, Preflight(pool, old, "rollback"), "format_incompatible")
+	// Exercise the format gate without an app-contract mismatch.
+	old.Agents = next.Agents
+	p := old.Roles["worker"]["split"]
+	old.Roles["worker"]["bridge"] = p
+	requireRefused(t, Preflight(pool, old, "rollback"), "format_incompatible")
+}
+
+func TestBridgeAgentRequiresEnabledProfile(t *testing.T) {
+	m := testManifest(t, "0.3.1")
+	m.Agents = append(m.Agents, Agent{Name: "bridge", Identity: "bridge", Limits: "bridge", Reads: []uint32{1}, Writes: []uint32{1}})
+	pool := testPool(m)
+	pool.TargetWorkerProfile = "split"
+	for i := range pool.Participants {
+		if pool.Participants[i].Role == "worker" {
+			pool.Participants[i].Agents = []string{"bridge"}
+		}
+	}
+	requireRefused(t, Preflight(pool, m, "upgrade"), "unknown_profile")
+}
+
+// v0.3.0 validates an exact format-domain count in every profile. Until an
+// actual bridge registration ships, preserve that archive's emitted domains.
+func TestUnregisteredBridgePreservesPublishedManifestDomains(t *testing.T) {
+	m := testManifest(t, "0.3.2")
+	for _, a := range m.Agents {
+		if a.Name == "bridge" {
+			t.Fatal("fixture assumes no registered bridge agent")
+		}
+	}
+	if _, ok := m.Roles["worker"]["bridge"]; ok {
+		t.Error("unregistered bridge profile emitted")
+	}
+	expected := map[string][]string{
+		"signal":  {"private_http"},
+		"relay":   {"private_http", "redis_keys", "store_contract", "relay_udp"},
+		"control": {"private_http", "redis_keys", "store_contract", "snapshot", "component", "metadata", "encryption_header", "legacy_encryption_header"},
+		"worker":  {"private_http", "redis_keys", "store_contract", "relay_udp", "snapshot", "component", "metadata", "encryption_header", "legacy_encryption_header"},
+	}
+	for role, profiles := range m.Roles {
+		for name, p := range profiles {
+			if len(p.Formats) != len(expected[role]) {
+				t.Errorf("%s/%s: v0.3.0 rejects %d domains, wants %d", role, name, len(p.Formats), len(expected[role]))
+			}
+			for _, domain := range expected[role] {
+				if _, ok := p.Formats[domain]; !ok {
+					t.Errorf("%s/%s: missing %s", role, name, domain)
+				}
+			}
+		}
+	}
+}

@@ -75,6 +75,9 @@ func (s *session) validateAudioEffects(e agent.Effects, event agent.Event, tasks
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := &s.agent.v2.playback
+	if s.agent.v2.bridge != nil && len(e.Audio) > 0 {
+		return fmt.Errorf("%w: bridge audio requires host ingress", agent.ErrIncompatibleAgent)
+	}
 	for _, ref := range e.Audio {
 		if _, _, ok := p.packet(ref); !ok {
 			return fmt.Errorf("%w: audio reference has no payload", agent.ErrIncompatibleAgent)
@@ -92,6 +95,16 @@ func (s *session) validateAudioEffects(e agent.Effects, event agent.Event, tasks
 
 func (s *session) projectedPlaybackLocked(e agent.Effects, event agent.Event) playbackRuntime {
 	p := s.agent.v2.playback
+	if s.agent.v2.bridge != nil {
+		p.notify = slices.Clone(p.notify)
+		if event.Kind == agent.PlaybackFinished {
+			p.notify = slices.DeleteFunc(p.notify, func(t agent.Turn) bool { return t == event.Playback.Turn })
+		}
+		if e.NotifyPlaybackFinished != nil && !slices.Contains(p.notify, *e.NotifyPlaybackFinished) {
+			p.notify = append(p.notify, *e.NotifyPlaybackFinished)
+		}
+		return p
+	}
 	if e.ClearAudioBefore != nil {
 		p.queue = make([]agent.Audio, 0, len(p.queue))
 		for _, ref := range s.agent.v2.playback.queue {
@@ -149,8 +162,13 @@ func (s *session) hostEffectsBudget(before v2Envelope, e agent.Effects, event ag
 	if _, err := s.checkpoint.admit(checkpointAdmission{host: &checkpointHostPreflight{envelope: envelope, effects: &e, event: event}}); err != nil {
 		return err
 	}
+	if err := s.bridgeActorBudget(tasks, appBytes); err != nil {
+		return err
+	}
 	n := int64(appBytes + queueBytes)
+	var requestBytes int64
 	for _, t := range tasks {
+		requestBytes += int64(len(t.request))
 		n += int64(2*len(t.request) + t.mailboxBytes)
 		if !t.intent.Final {
 			n += int64(t.terminalBytes)
@@ -162,7 +180,7 @@ func (s *session) hostEffectsBudget(before v2Envelope, e agent.Effects, event ag
 		}
 		return agent.ErrCapacity
 	}
-	if err := s.reserveMoveBytes(n); err != nil {
+	if err := s.reserveMoveBytes(n, requestBytes); err != nil {
 		if len(e.Audio) > 0 {
 			return errTaskAdmissionBackpressure
 		}

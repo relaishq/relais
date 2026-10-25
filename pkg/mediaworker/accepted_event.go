@@ -231,7 +231,10 @@ func (m acceptedEvents) accept(event agent.Event, mode eventMode, control *v2Env
 		}
 		s.checkpoint.rollback(before)
 		if reserveErr := s.taskBudgetWithRefusals(*before.V2, h.v2.tasks, before.V2.MoveOnlyLength, before.V2.Capacity); reserveErr != nil {
-			return reserveErr
+			if h.v2.bridge == nil {
+				return reserveErr
+			}
+			return fmt.Errorf("%w: rollback reservation: %v", legacy.ErrRestore, reserveErr)
 		}
 		if event.Kind == agent.Control && errors.Is(err, errSnapshotAdmissionCapacity) {
 			return agent.ErrCapacity
@@ -269,6 +272,18 @@ func (m acceptedEvents) accept(event agent.Event, mode eventMode, control *v2Env
 	intents := s.acceptTaskEffects(tasks, effects, *before.V2)
 	s.mu.Lock()
 	h.v2.playback = s.projectedPlaybackLocked(effects, event)
+	if h.v2.bridge != nil && h.v2.bridge.state != nil {
+		if effects.CancelBefore != nil {
+			s.interruptBridgeLocked(*effects.CancelBefore, true, false)
+		}
+		if effects.ClearAudioBefore != nil {
+			s.interruptBridgeLocked(*effects.ClearAudioBefore, false, true)
+		}
+		if event.Kind == agent.PlaybackFinished {
+			s.bridgeFinishedLocked(event.Playback.Turn)
+		}
+		s.projectBridgeLocked(candidate.V2)
+	}
 	candidate.V2.Playback = s.playbackSnapshotLocked()
 	candidate.V2.Tasks = cloneTaskIntents(intents)
 	h.latest = candidate

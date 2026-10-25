@@ -14,6 +14,7 @@ import (
 type workerFlags struct {
 	storeConfig                                             processrun.StoreConfig
 	limits                                                  mediaworker.SnapshotLimits
+	bridgeOutput                                            mediaworker.BridgeOutputLimits
 	name, listen, leg, public, control, httpAddr, agentName *string
 	cacheOff, cryptoTrace, split, version                   *bool
 	drainTimeout, taskBudget, moveReserve                   *time.Duration
@@ -44,6 +45,18 @@ func newWorkerFlags(options Options) (*flag.FlagSet, *workerFlags) {
 	flags.IntVar(&f.limits.BurstBytes, "agent-snapshot-burst-bytes", 0, "payload burst bytes (0: legacy 28672, split 40960)")
 	flags.IntVar(&f.limits.MoveBytesPerSession, "agent-move-bytes-per-session", 1<<20, "v2 move memory bytes per session")
 	flags.Int64Var(&f.limits.MoveBytesTotal, "agent-move-bytes-total", 64<<20, "v2 move memory bytes per worker including export scratch")
+	flags.IntVar(&f.bridgeOutput.ActorReserveBytes, "bridge-actor-reserve-bytes", 0, "bridge mailbox headroom for actor requests/results (0: 163840)")
+	flags.IntVar(&f.bridgeOutput.ObserverMailboxBytes, "bridge-observer-mailbox-bytes", 0, "bridge aggregate pending results and terminal reserve bytes (0: 20480)")
+	flags.IntVar(&f.bridgeOutput.AdapterMoveOnlyBytes, "bridge-adapter-move-only-bytes", 0, "bridge adapter move-only state bytes (0: 11264)")
+	flags.IntVar(&f.bridgeOutput.ObserverRequestBytes, "bridge-observer-request-bytes", 0, "bridge aggregate task request bytes (0: 16384)")
+	flags.IntVar(&f.bridgeOutput.ExportHeadroomBytes, "bridge-export-headroom-bytes", 0, "bridge export safety headroom (0: 209715)")
+	flags.DurationVar(&f.bridgeOutput.AdmissionTimeout, "bridge-output-admission", 0, "bridge admission deadline from ingress (0: 50ms)")
+	flags.IntVar(&f.bridgeOutput.PendingPackets, "bridge-output-packets", 0, "bridge pending packet slots (0: 32)")
+	flags.IntVar(&f.bridgeOutput.PendingPayloadBytes, "bridge-output-payload-bytes", 0, "bridge pending payload bytes (0: 38400)")
+	flags.IntVar(&f.bridgeOutput.AudioBytes, "bridge-audio-bytes", 0, "bridge retained audio bytes inside mailbox (0: 262144)")
+	flags.DurationVar(&f.bridgeOutput.AudioDuration, "bridge-audio-duration", 0, "bridge retained audio duration (0: 4s)")
+	flags.IntVar(&f.bridgeOutput.ReceiptRanges, "bridge-receipt-ranges", 0, "bridge receipt exception ranges (0: 8)")
+	flags.IntVar(&f.bridgeOutput.ReceiptBytes, "bridge-receipt-bytes", 0, "bridge encoded exception bytes (0: 512)")
 	f.drainTimeout = flags.Duration("drain-timeout", 5*time.Second, "SIGTERM drain deadline before closing")
 	f.taskBudget = flags.Duration("agent-drain-task-budget", 2*time.Second, "v2 handler quiescence cap (0 through 2s); requires a measured move reserve")
 	f.moveReserve = flags.Duration("agent-drain-move-reserve", 0, "measured time reserved for control drain; unset skips handler quiescence")

@@ -64,6 +64,7 @@ type session struct {
 
 	moveMu             sync.Mutex
 	moveReserved       int64
+	moveRequestBytes   atomic.Int64 // request bytes already included twice in moveReserved
 	exportScratch      *moveScratch
 	moveClosed         bool
 	agent              *agentHost

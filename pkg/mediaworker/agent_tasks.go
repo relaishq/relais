@@ -179,6 +179,28 @@ func (s *session) taskNow() time.Time {
 	// Direct, storeless sessions have a single process clock domain.
 	return time.Now()
 }
+
+// The bridge reserves this entire envelope before output credit is granted.
+// Include terminal space even when no result is waiting yet.
+func (s *session) bridgeActorBudget(tasks []*localTask, appBytes int) error {
+	b := s.agent.v2.bridge
+	if b == nil {
+		return nil
+	}
+	requests, mailbox := 0, 0
+	for _, t := range tasks {
+		requests += len(t.request)
+		mailbox += t.mailboxBytes
+		if !t.intent.Final {
+			mailbox += t.terminalBytes
+		}
+	}
+	if requests > b.limits.ObserverRequestBytes || mailbox > b.limits.ObserverMailboxBytes || appBytes > b.limits.AdapterMoveOnlyBytes {
+		return agent.ErrCapacity
+	}
+	return nil
+}
+
 func (s *session) taskBudget(tasks []*localTask, appBytes int) error {
 	return s.taskBudgetWithRefusals(*s.agent.latest.V2, tasks, appBytes, s.agent.latest.V2.Capacity)
 }
@@ -190,8 +212,10 @@ func (s *session) taskBudgetWithRefusals(basis v2Envelope, tasks []*localTask, a
 	}
 	s.mu.Unlock()
 	n := int64(appBytes + queueBytes)
+	var requestBytes int64
 	intents := make([]taskIntent, 0, len(tasks))
 	for _, t := range tasks {
+		requestBytes += int64(len(t.request))
 		intents = append(intents, t.intent)
 		// Reserve both the host request and the owned handler copy from real bytes.
 		n += int64(2 * len(t.request))
@@ -200,13 +224,16 @@ func (s *session) taskBudgetWithRefusals(basis v2Envelope, tasks []*localTask, a
 			n += int64(t.terminalBytes)
 		}
 	}
+	if err := s.bridgeActorBudget(tasks, appBytes); err != nil {
+		return err
+	}
 	if err := s.taskMetadataBudget(basis, intents, refusals, false, projection...); err != nil {
 		return err
 	}
 	if n > int64(s.agent.v2.registration.Bounds.MaxMailboxBytes) {
 		return agent.ErrCapacity
 	}
-	return s.reserveMoveBytes(n)
+	return s.reserveMoveBytes(n, requestBytes)
 }
 func (s *session) taskMetadataBudget(basis v2Envelope, intents []taskIntent, refusals []taskRefusal, admission bool, projection ...playbackState) error {
 	return s.taskMetadataBudgetMode(basis, intents, refusals, admission, false, projection...)
@@ -288,6 +315,11 @@ func cloneTaskIntents(ts []taskIntent) []taskIntent {
 	return out
 }
 func (s *session) terminalTask(t *localTask, outcome agent.Outcome, detail string) {
+	if s.agent.v2.bridge != nil {
+		s.mu.Lock()
+		delete(s.agent.v2.bridge.attempts, t.intent.ID)
+		s.mu.Unlock()
+	}
 	detail = taskDetail(detail)
 	t.intent.Published++
 	t.results = append(t.results, agent.TaskResult{TaskID: t.intent.ID, Sequence: t.intent.Published, Turn: t.intent.Turn, Outcome: outcome, Final: true, Detail: detail})
@@ -328,6 +360,20 @@ func (s *session) launchTasks() {
 	}
 	active := 0
 	changed := false
+	if h.bridge != nil {
+		s.mu.Lock()
+		floor := agent.Turn(0)
+		if h.bridge.state != nil {
+			floor = h.bridge.state.CancelFloor
+		}
+		s.mu.Unlock()
+		for _, t := range h.tasks {
+			if t.intent.Turn < floor && !t.intent.Final {
+				s.cancelTask(t)
+				changed = true
+			}
+		}
+	}
 	for _, t := range h.tasks {
 		if t.interrupted && !t.intent.Final {
 			t.interrupted = false
@@ -409,6 +455,14 @@ func (s *session) launchTasks() {
 			changed = true
 			continue
 		}
+		if h.bridge != nil && h.bridge.state != nil && t.intent.Turn < h.bridge.state.CancelFloor {
+			s.mu.Unlock()
+			s.worker.taskDrain.mu.Unlock()
+			s.cancelTask(t)
+			active--
+			changed = true
+			continue
+		}
 		ctx, cancel := context.WithCancel(s.ctx)
 		if !t.intent.Deadline.IsZero() {
 			left := t.intent.Deadline.Sub(s.taskClockLocked())
@@ -416,6 +470,9 @@ func (s *session) launchTasks() {
 			ctx, cancel = context.WithTimeout(s.ctx, left)
 		}
 		t.cancel = cancel
+		if h.bridge != nil {
+			h.bridge.attempts[t.intent.ID] = bridgeAttempt{turn: t.intent.Turn, cancel: cancel}
+		}
 		t.attempt++
 		t.launched = true
 		if t.intent.Class == agent.SideEffecting {
@@ -580,6 +637,9 @@ func (s *session) acceptEmission(e taskEmission) {
 	}
 	s.mu.Lock()
 	paused := s.agent.paused || s.fenced.Load()
+	if h.bridge != nil && h.bridge.state != nil && t != nil && t.intent.Turn < h.bridge.state.CancelFloor {
+		paused = true
+	}
 	s.mu.Unlock()
 	if paused || t == nil || t.attempt != e.attempt || t.intent.Final || t.intent.Turn < s.agent.latest.V2.CancelFloor || e.ctx.Err() != nil {
 		e.reply <- context.Canceled
@@ -928,6 +988,16 @@ func (s *session) v2AgentLoop() {
 	defer s.stopTaskAttempts()
 	s.worker.running.Add(1)
 	go func() { defer s.worker.running.Done(); s.playbackLoop() }()
+	if h.bridge != nil {
+		s.worker.running.Add(1)
+		go func() { defer s.worker.running.Done(); s.bridgeOutputLoop() }()
+	}
+	s.v2AgentEvents()
+}
+
+// The actor event loop is independent of ingress and playback workers.
+func (s *session) v2AgentEvents() {
+	h := s.agent.v2
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	ready := make(chan struct{})

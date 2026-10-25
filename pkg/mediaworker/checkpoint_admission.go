@@ -362,9 +362,24 @@ type checkpointHostPreflight struct {
 func (c *sessionCheckpoint) preflightHost(r checkpointHostPreflight) (int, error) {
 	s := c.session
 	envelope := r.envelope
+	if s.agent.v2.bridge != nil {
+		s.mu.Lock()
+		s.projectBridgeLocked(&envelope)
+		s.mu.Unlock()
+	}
 	envelope.Quota = c.captureSnapshotQuota(s.taskNow())
 	limit := min(s.agent.v2.registration.Bounds.MaxPendingBytes, v2HostMetadataBytes)
 	metadata := s.compactControlMetadata(&envelope, limit)
+	if s.agent.v2.bridge != nil && envelope.Bridge != nil {
+		base := envelope
+		base.Bridge = nil
+		base.Playback = playbackState{}
+		baseCharge := s.compactControlMetadata(&base, limit-bridgeMetadataPartition)
+		if baseCharge+bridgeMetadataPartition > limit {
+			return baseCharge + bridgeMetadataPartition, errTaskAdmissionBackpressure
+		}
+	}
+
 	if r.taskHeadroom {
 		envelope = taskMetadataGuard(envelope)
 		guarded := s.compactControlMetadata(&envelope, limit)

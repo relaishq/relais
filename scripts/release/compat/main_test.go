@@ -17,7 +17,7 @@ import (
 func copyContractRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	paths := []string{"scripts/release/compatibility-policy.json", "scripts/release/compatibility.json", "pkg/sessionstore/testdata/script-contract.json", "internal/privateapi/testdata/contract-v2.json", "pkg/mediaworker/state.go", "pkg/mediaworker/agent_v2.go", "pkg/mediaworker/component_snapshot.go", "pkg/mediaworker/handover.go", "internal/componentcodec/binary.go", "internal/componentcodec/auth.go", "pkg/sessionstore/components.go", "pkg/agent/agent.go", "pkg/framecache/redis.go", "cmd/relais-load/soak.go", "pkg/sessionstore/testdata/key-contract-v1.json", "pkg/framecache/testdata/key-contract-v1.json", "internal/relayleg/testdata/contract-v1.json"}
+	paths := []string{"scripts/release/compatibility-policy.json", "scripts/release/compatibility.json", "pkg/sessionstore/testdata/script-contract.json", "internal/privateapi/testdata/contract-v2.json", "pkg/mediaworker/state.go", "pkg/mediaworker/agent_v2.go", "pkg/mediaworker/bridge_output.go", "pkg/mediaworker/component_snapshot.go", "pkg/mediaworker/handover.go", "internal/componentcodec/binary.go", "internal/componentcodec/auth.go", "pkg/sessionstore/components.go", "pkg/agent/agent.go", "pkg/framecache/redis.go", "cmd/relais-load/soak.go", "pkg/sessionstore/testdata/key-contract-v1.json", "pkg/framecache/testdata/key-contract-v1.json", "internal/relayleg/testdata/contract-v1.json"}
 	scripts, err := filepath.Glob("../../../pkg/sessionstore/redis*.go")
 	if err != nil {
 		t.Fatal(err)
@@ -227,5 +227,25 @@ func TestCompatibilityEvolutionIsRequiredCIGate(t *testing.T) {
 		if check(strings.Replace(source, from, "", 1)) {
 			t.Fatalf("known-bad CI bypass was accepted: %s", from)
 		}
+	}
+}
+
+func TestCheckOmitsUnregisteredBridgeFormat(t *testing.T) {
+	root := copyContractRoot(t)
+	path := filepath.Join(root, "pkg/mediaworker/bridge_output.go")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := strings.Replace(string(data), "const bridgeOutputVersion = 1", "const bridgeOutputVersion = 2", 1)
+	if changed == string(data) {
+		t.Fatal("mutation did not hit bridge version")
+	}
+	if err := os.WriteFile(path, []byte(changed), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if code := run([]string{"check", "--root", root}, &out); code != 0 {
+		t.Fatal(out.String())
 	}
 }

@@ -43,7 +43,13 @@ func (s *session) deliverClockEvent() error {
 	var finished *agent.Turn
 	for _, turn := range notify {
 		busy := slices.ContainsFunc(queue, func(a agent.Audio) bool { return a.Turn == turn })
+		if s.agent.v2.bridge != nil && s.agent.v2.bridge.state != nil {
+			busy = s.bridgeTurnBusyLocked(turn) || slices.ContainsFunc(s.agent.v2.playback.bridgeQueue, func(q bridgeQueued) bool { return q.Turn == turn })
+		}
 		for _, task := range s.agent.v2.tasks {
+			if s.agent.v2.bridge != nil && (task.intent.Kind == "bridge.state/v1" || task.intent.Kind == "bridge.audio/v1") {
+				continue
+			}
 			if task.intent.Turn == turn && (!task.intent.Final || len(task.results) > 0) {
 				busy = true
 			}
@@ -83,11 +89,14 @@ type playbackPayload struct {
 
 // Consecutive offsets in the same chunk share one compact crash reference.
 type audioSpan struct {
-	Task     agent.TaskID `json:"t"`
-	Sequence uint64       `json:"s"`
-	Turn     agent.Turn   `json:"u,omitempty"`
-	Offset   uint32       `json:"o,omitempty"`
-	Count    uint32       `json:"n"`
+	Kind        string        `json:"k,omitempty"`
+	Stream      uint64        `json:"b,omitempty"`
+	GapDuration time.Duration `json:"d,omitempty"`
+	Task        agent.TaskID  `json:"t,omitempty"`
+	Sequence    uint64        `json:"s"`
+	Turn        agent.Turn    `json:"u,omitempty"`
+	Offset      uint32        `json:"o,omitempty"`
+	Count       uint32        `json:"n"`
 }
 type playbackState struct {
 	NextAt         time.Time     `json:"a,omitzero"`
@@ -101,6 +110,8 @@ type playbackState struct {
 	Notify         []agent.Turn `json:"f,omitempty"`
 }
 type playbackRuntime struct {
+	bridge         *bridgeOutputHost
+	bridgeQueue    []bridgeQueued
 	queue          []agent.Audio
 	payloads       map[audioKey]playbackPayload
 	nextAt         time.Time
@@ -131,6 +142,9 @@ func (p *playbackRuntime) packet(a agent.Audio) ([]byte, time.Duration, bool) {
 	return payload.audio.Packets[offset], payload.durations[offset], true
 }
 func (p playbackRuntime) snapshot() playbackState {
+	if p.bridge != nil {
+		return p.bridgeSnapshot()
+	}
 	state := playbackState{NextAt: p.nextAt, NextTS: p.nextTS, Initialized: p.initialized, Pending: len(p.queue), Length: p.length, Duration: p.duration, referenceBytes: p.referenceBytes, Notify: slices.Clone(p.notify)}
 	var duration time.Duration
 	bytes := 0
@@ -211,6 +225,23 @@ func (s *session) restorePlayback(move *movePayload) error {
 	}
 	if retainedBytes > bounds.MaxAudioBytes || (bounds.MaxAudioDuration > 0 && retainedDuration > bounds.MaxAudioDuration) {
 		return fmt.Errorf("%w: restored audio payload exceeds local limit", agent.ErrCapacity)
+	}
+	if p.bridge != nil {
+		actual := p.snapshot()
+		if move != nil && !playbackEqual(actual, saved) {
+			return fmt.Errorf("%w: exact bridge playback mismatch", agent.ErrIncompatibleAgent)
+		}
+		if p.initialized {
+			now := s.taskNow()
+			if now.After(p.nextAt) {
+				v := cloneBridgeState(p.bridge.state)
+				v.RebaseThrough = v.Through
+				v.RebaseTicks += uint64(rtpClockTicks(now.Sub(p.nextAt)))
+				p.bridge.state = v
+				p.rebase(now)
+			}
+		}
+		return nil
 	}
 	if move != nil {
 		p.queue = slices.Clone(move.Audio)
@@ -295,8 +326,11 @@ func (s *session) paceOne() (time.Duration, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := &s.agent.v2.playback
-	if s.agent.paused || s.worker.paused.Load() || s.fenced.Load() || s.ctx.Err() != nil || s.srtpOut == nil || len(p.queue) == 0 {
+	if s.agent.paused || s.worker.paused.Load() || s.fenced.Load() || s.ctx.Err() != nil || s.srtpOut == nil || (len(p.queue) == 0 && len(p.bridgeQueue) == 0) {
 		return time.Hour, nil
+	}
+	if s.agent.v2.bridge != nil {
+		return s.paceBridgeLocked()
 	}
 	now := s.taskClockLocked()
 	if now.Before(p.nextAt) {

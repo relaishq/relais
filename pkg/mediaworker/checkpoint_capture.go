@@ -79,7 +79,7 @@ func (c *sessionCheckpoint) capture(kind checkpointCaptureKind, payload *movePay
 	}
 
 	if payload != nil {
-		if err := validateV2Wire(state); err != nil {
+		if err := validateExactWire(state, payload.Bridge != nil); err != nil {
 			s.fenced.Store(false)
 			return nil, privateapi.Uncertain(err)
 		}

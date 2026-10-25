@@ -298,6 +298,9 @@ type Worker struct {
 
 // New starts a media worker listening on cfg.ListenAddr.
 func New(cfg Config) (*Worker, error) {
+	if err := cfg.Agent.BridgeOutput.Validate(); err != nil {
+		return nil, err
+	}
 	// Only declared v2 registrations or split admission impose a cadence rule.
 	// Opaque factory-only adapters still validate when a real session resolves.
 	if len(cfg.Agent.Registrations) > 0 || cfg.SplitCheckpoints {
