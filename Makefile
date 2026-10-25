@@ -21,7 +21,7 @@ BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 # Linker flags (populate pkg/buildinfo)
 LDFLAGS=-ldflags "-X github.com/relaishq/relais/pkg/buildinfo.Version=$(VERSION) -X github.com/relaishq/relais/pkg/buildinfo.Commit=$(COMMIT) -X github.com/relaishq/relais/pkg/buildinfo.Date=$(BUILD_TIME)"
 
-.PHONY: check check-quality check-rules test-external-module test-ci-scripts test-demo-page test-unit-local all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo demo-cluster demo-agent crash-run help
+.PHONY: check check-quality check-rules test-external-module test-ci-scripts test-demo-page test-unit-local all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo demo-cluster demo-agent crash-run release-pair release-pair-source help
 
 all: test build
 
@@ -51,6 +51,24 @@ demo-agent: build ## Run the scripted tone agent through moves and crashes; owns
 CRASH_FLAGS ?=
 crash-run: build ## Compare ten real-process SIGKILL calls per cache/PLI mode on throwaway Redis; requires ffmpeg
 	./$(BIN_DIR)/crash-run $(CRASH_FLAGS)
+
+PAIR_A ?=
+PAIR_B ?=
+PAIR_FLAGS ?=
+release-pair: ensure_bin_dir ## Upgrade release archive PAIR_A to PAIR_B and roll back with live calls, gated by each target's relais-compat; owns throwaway Redis
+	$(GOBUILD) -o $(BIN_DIR)/crash-run $(LDFLAGS) ./cmd/crash-run
+	./$(BIN_DIR)/crash-run -release-pair -pair-a "$(PAIR_A)" -pair-b "$(PAIR_B)" $(PAIR_FLAGS)
+
+PAIR_A_VERSION ?=
+PAIR_A_SOURCE ?=
+PAIR_B_VERSION ?=
+PAIR_B_SOURCE ?=
+PAIR_ARCHIVES = $(BIN_DIR)/release-pair-archives
+release-pair-source: ensure_bin_dir ## Build A and B with build-archives.sh from refs or clean checkouts (PAIR_*_SOURCE, stamped PAIR_*_VERSION), then run release-pair
+	rm -rf $(PAIR_ARCHIVES)
+	./scripts/release/pair-archives.sh build "$(PAIR_A_VERSION)" "$(PAIR_A_SOURCE)" $(PAIR_ARCHIVES)/a
+	./scripts/release/pair-archives.sh build "$(PAIR_B_VERSION)" "$(PAIR_B_SOURCE)" $(PAIR_ARCHIVES)/b
+	$(MAKE) release-pair PAIR_A=$(PAIR_ARCHIVES)/a PAIR_B=$(PAIR_ARCHIVES)/b
 
 ensure_bin_dir: ## Create bin directory if it doesn't exist
 	mkdir -p $(BIN_DIR)

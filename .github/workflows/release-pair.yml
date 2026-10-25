@@ -1,0 +1,107 @@
+name: Release pair
+
+# Required evidence before publishing a release that nominates an older peer
+# (scripts/release/README.md). Run it by hand from Actions; it never publishes.
+on:
+  workflow_dispatch:
+    inputs:
+      version_a:
+        description: Older release A, without v (for example 0.3.0)
+        required: true
+        type: string
+      version_b:
+        description: Newer release B, without v (for example 0.3.1)
+        required: true
+        type: string
+      ref_a:
+        description: Optional commit, tag or origin/<branch> to build A from instead of downloading release vA
+        required: false
+        type: string
+        default: ''
+      ref_b:
+        description: Optional commit, tag or origin/<branch> to build B from instead of downloading release vB
+        required: false
+        type: string
+        default: ''
+      sha256_a:
+        description: Optional expected SHA-256 of A's linux_amd64 archive
+        required: false
+        type: string
+        default: ''
+      sha256_b:
+        description: Optional expected SHA-256 of B's linux_amd64 archive
+        required: false
+        type: string
+        default: ''
+      expect_refusal:
+        description: Optional negative control, for example unsupported_pair; requires that refusal before any change
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  pair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install Redis and ffmpeg
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server ffmpeg
+      - name: Download or build A and B
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION_A: ${{ inputs.version_a }}
+          VERSION_B: ${{ inputs.version_b }}
+          REF_A: ${{ inputs.ref_a }}
+          REF_B: ${{ inputs.ref_b }}
+        run: |
+          collect() {
+            if [ -n "$2" ]; then
+              ./scripts/release/pair-archives.sh build "$1" "$2" "$3"
+            else
+              ./scripts/release/pair-archives.sh fetch "$1" "$3"
+            fi
+          }
+          collect "$VERSION_A" "$REF_A" pair-archives/a
+          collect "$VERSION_B" "$REF_B" pair-archives/b
+      - name: Upgrade A to B and roll back with live calls
+        env:
+          SHA256_A: ${{ inputs.sha256_a }}
+          SHA256_B: ${{ inputs.sha256_b }}
+          EXPECT_REFUSAL: ${{ inputs.expect_refusal }}
+        run: |
+          flags=''
+          for digest in "$SHA256_A" "$SHA256_B"; do
+            [[ -z $digest || $digest =~ ^[0-9a-fA-F]{64}$ ]] || { echo 'invalid SHA-256 input' >&2; exit 2; }
+          done
+          [[ -z $EXPECT_REFUSAL || $EXPECT_REFUSAL =~ ^[a-z_]+$ ]] || { echo 'invalid refusal code' >&2; exit 2; }
+          [ -z "$SHA256_A" ] || flags="$flags -pair-a-sha256 $SHA256_A"
+          [ -z "$SHA256_B" ] || flags="$flags -pair-b-sha256 $SHA256_B"
+          [ -z "$EXPECT_REFUSAL" ] || flags="$flags -pair-expect-refusal $EXPECT_REFUSAL"
+          make release-pair PAIR_A=pair-archives/a PAIR_B=pair-archives/b PAIR_FLAGS="$flags"
+      - name: Upload pair evidence and logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-pair-${{ inputs.version_a }}-${{ inputs.version_b }}
+          # Keep logs, preflight inventories/verdicts and release-pair-verdict.json;
+          # drop only the extracted archive binaries (archive-<side>-<version>).
+          path: |
+            bin/release-pair-*
+            bin/release-pair-*/release-pair-verdict.json
+            !bin/release-pair-*/archive-*
+            !bin/release-pair-*/archive-*/**
+          if-no-files-found: ignore
