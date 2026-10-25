@@ -96,7 +96,15 @@ func TestMoveUnknownExportClassifiesExpiredAndEnded(t *testing.T) {
 							return errors.Is(err, sessionstore.ErrNotFound) && !errors.Is(err, sessionstore.ErrEnded)
 						}, time.Second, time.Millisecond)
 					}
-					require.NoError(t, s.workers[0].EndSession(id))
+					err := s.workers[0].EndSession(id)
+					if outcome != "ended" && errors.Is(err, mediaworker.ErrUnknownSession) {
+						// The worker watches its own lease. Once the lease is gone it
+						// can forget the session before this hook ends it, which is
+						// the state the hook wants. In the ended case the session
+						// must still exist, so that case keeps the strict check.
+						err = nil
+					}
+					require.NoError(t, err)
 				}}, Timeout: 2 * time.Second}
 				moved, err := s.plane.Move(ctx, call.SessionID(), "1")
 				require.ErrorIs(t, err, mediaworker.ErrUnknownSession)
