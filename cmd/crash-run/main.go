@@ -707,8 +707,21 @@ func run() (err error) {
 	flag.DurationVar(&metricsInterval, "metrics-interval", time.Second, "private metrics scrape interval; 0 disables periodic scraping (pre-fault and final samples remain)")
 	storeStall := flag.String("store-stall", "", "store-stall variant: moderate (1.5s), long (5s), live (5s, survival), expired (35s, no worker kill), or ledger (8s, SideEffecting proof); owns throwaway Redis, loopback only")
 	stallDuration := flag.Duration("store-stall-duration", 0, "override selected store-stall duration")
+	releasePair := flag.Bool("release-pair", false, "upgrade A to B and roll back with live calls, gated by each target archive's relais-compat preflight")
+	var pair releasePairOptions
+	flag.StringVar(&pair.A, "pair-a", "", "older release archive, or a directory with its host-platform archive and checksums.txt")
+	flag.StringVar(&pair.B, "pair-b", "", "newer release archive, or a directory with its host-platform archive and checksums.txt")
+	flag.StringVar(&pair.ASHA256, "pair-a-sha256", "", "optional independent SHA-256 of A's host-platform archive")
+	flag.StringVar(&pair.BSHA256, "pair-b-sha256", "", "optional independent SHA-256 of B's host-platform archive")
+	flag.StringVar(&pair.ExpectRefusal, "pair-expect-refusal", "", "negative control: require this refusal code at B's first preflight and no process change")
+	flag.IntVar(&pair.Calls, "pair-calls", 2, "live callers kept through the whole rollout")
+	flag.DurationVar(&pair.Warmup, "pair-warmup", 3*time.Second, "media before the first preflight")
+	flag.DurationVar(&pair.Settle, "pair-settle", 5*time.Second, "media observation after each replacement step")
 	selectedWorker.Flags(flag.CommandLine)
 	flag.Parse()
+	if *releasePair {
+		return runReleasePairCommand(pair, *binArg, *redisAddr, *redisBinary, flag.NFlag())
+	}
 	if err := selectedWorker.Validate(); err != nil {
 		return err
 	}

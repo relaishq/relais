@@ -375,7 +375,8 @@ authorize a live rollout. Stamp each #251 build with its own real release versio
 For example, build the first main revision as `0.3.0`; before building the second
 as `0.3.1`, nominate `0.3.0` in `tested_peers: ["self", "0.3.0"]` and set
 both floors to `0.3.0`. Regenerate the template, then build and test that candidate
-pair in both directions before publishing or using its allowed verdict. Without
+pair in both directions before publishing or using its allowed verdict, with the
+[release pair test](../../scripts/release/README.md) as the required evidence. Without
 this policy change, two different main builds refuse with `unsupported_pair`.
 Nominating a peer records a compatibility claim; it is not test evidence.
 
