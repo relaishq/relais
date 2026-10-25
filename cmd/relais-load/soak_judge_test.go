@@ -11,7 +11,9 @@ import (
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/redistestenv"
 	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/sessionstore"
+	"github.com/relaishq/relais/pkg/storage"
 	"github.com/stretchr/testify/require"
 )
 
@@ -336,4 +338,101 @@ func TestSoakExclusionNamesItsCauses(t *testing.T) {
 			require.Equal(t, tc.lateness, strings.Contains(causes, "send-lateness"), causes)
 		})
 	}
+}
+
+// The control lease is one persistent hash, so its key TTL is -1 by design and
+// its expiry is a hash field. These tests write it through the real store.
+func TestSoakControlLeaseRetention(t *testing.T) {
+	addr := redistestenv.Address(t)
+	if addr == "" {
+		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
+			t.Fatal("dedicated Redis required")
+		}
+		t.Skip("dedicated Redis not supplied")
+	}
+	ctx := context.Background()
+	client := redis.NewClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: addr, MaxRetries: -1})
+	defer func() { require.NoError(t, client.Close()) }()
+	prefix := "relais:soak-control-test:" + strconvID() + ":"
+	store, err := sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: addr, Prefix: prefix}, make([]byte, 32))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Close()) }()
+	key := prefix + "control:{control}"
+	defer func() { require.NoError(t, client.Del(ctx, key).Err()) }()
+	observe := func() loadgen.RetainedKey {
+		k, err := observeSoakKey(ctx, client, prefix, key)
+		require.NoError(t, err)
+		require.Equal(t, "control-lease", k.Class)
+		require.EqualValues(t, -1, k.TTLMS)
+		return k
+	}
+
+	lease, err := store.ClaimControl(ctx, "control-a", controlplane.ControlLeaseTTL)
+	require.NoError(t, err)
+	k := observe()
+	require.False(t, k.Released)
+	require.True(t, boundedSoakKey(k), "a live lease expires within the control lease TTL")
+
+	lease, err = store.RenewControl(ctx, lease, 30*time.Second)
+	require.NoError(t, err)
+	require.False(t, boundedSoakKey(observe()), "an expiry beyond the control lease TTL is unbounded")
+
+	require.NoError(t, store.ReleaseControl(ctx, lease))
+	k = observe()
+	require.True(t, k.Released)
+	require.True(t, boundedSoakKey(k), "a released lease keeps its epoch history without TTL")
+
+	// The judge fails closed on a hash without readable expiry evidence.
+	// A negative or fractional expiry is not a server-time millisecond
+	// timestamp and must not read as an already-expired lease.
+	for _, expires := range []string{"not-a-number", "-1", "1.5"} {
+		require.NoError(t, client.HSet(ctx, key, "expires", expires).Err())
+		_, err = observeSoakKey(ctx, client, prefix, key)
+		require.Error(t, err, "expires=%q", expires)
+	}
+}
+
+func TestSoakControlIntentIsNotBounded(t *testing.T) {
+	addr := redistestenv.Address(t)
+	if addr == "" {
+		if os.Getenv("RELAIS_TEST_REDIS_REQUIRE") == "1" {
+			t.Fatal("dedicated Redis required")
+		}
+		t.Skip("dedicated Redis not supplied")
+	}
+	ctx := context.Background()
+	client := redis.NewClient(&redis.Options{Protocol: 2, DisableIdentity: true, ContextTimeoutEnabled: true, DialerRetries: 1, PipelinePoolSize: -1, Addr: addr, MaxRetries: -1})
+	defer func() { require.NoError(t, client.Close()) }()
+	prefix := "relais:soak-intent-test:" + strconvID() + ":"
+	store, err := sessionstore.NewRedis(ctx, storage.RedisConfig{Addr: addr, Prefix: prefix}, make([]byte, 32))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, store.Close()) }()
+	intent := sessionstore.ControlIntent{ID: "call-a", Token: "token-a", Kind: "move", Started: time.Now()}
+	require.NoError(t, store.PutControlIntent(ctx, intent))
+	keys, err := scanSoakKeys(ctx, client, prefix)
+	require.NoError(t, err)
+	require.Len(t, keys, 1)
+	k, err := observeSoakKey(ctx, client, prefix, keys[0])
+	require.NoError(t, err)
+	require.Equal(t, "control-intent", k.Class)
+	require.EqualValues(t, -1, k.TTLMS)
+	require.False(t, boundedSoakKey(k), "an unsettled transition has no retention bound")
+	causes := leakCauses(loadgen.LeakReport{Checked: true, Keys: []loadgen.RetainedKey{k}})
+	require.Len(t, causes, 1)
+	require.Contains(t, causes[0], "class=control-intent")
+
+	// A settled transition deletes its intent, which the judge sees as gone.
+	require.NoError(t, store.DeleteControlIntent(ctx, intent.ID, intent.Token))
+	keys, err = scanSoakKeys(ctx, client, prefix)
+	require.NoError(t, err)
+	require.Empty(t, keys)
+}
+
+func TestSoakControlLeaseBoundIsTheControlTTL(t *testing.T) {
+	limit := controlplane.ControlLeaseTTL.Milliseconds()
+	for _, remaining := range []int64{-5000, 0, limit - 1, limit, limit + 1} {
+		k := loadgen.RetainedKey{Class: "control-lease", TTLMS: -1, LeaseRemainingMS: &remaining}
+		require.Equal(t, remaining <= limit, boundedSoakKey(k), "remaining=%d", remaining)
+	}
+	require.False(t, boundedSoakKey(loadgen.RetainedKey{Class: "control-lease", TTLMS: -1}), "missing expiry evidence fails")
 }

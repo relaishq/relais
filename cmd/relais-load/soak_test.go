@@ -368,10 +368,11 @@ func TestSoakBoundedRetention(t *testing.T) {
 		routes int
 		want   string
 	}{
-		{"bounded", []loadgen.RetainedKey{{Key: "epoch:{sess:a}", Class: "session", TTLMS: 299000}, {Key: "session_epoch", Class: "session-counter", TTLMS: -1}, {Key: "relay", Class: "relay-lease", TTLMS: -1, LeaseRemainingMS: &remaining}}, 0, "pass"},
+		{"bounded", []loadgen.RetainedKey{{Key: "epoch:{sess:a}", Class: "session", TTLMS: 299000}, {Key: "session_epoch", Class: "session-counter", TTLMS: -1}, {Key: "relay", Class: "relay-lease", TTLMS: -1, LeaseRemainingMS: &remaining}, {Key: "control:{control}", Class: "control-lease", TTLMS: -1, LeaseRemainingMS: &remaining}}, 0, "pass"},
 		{"no TTL", []loadgen.RetainedKey{{Key: "epoch:{sess:a}", Class: "session", TTLMS: -1}}, 0, "fail"},
 		{"overlong TTL", []loadgen.RetainedKey{{Key: "epoch:{sess:a}", Class: "session", TTLMS: soakSessionLimit.Milliseconds() + 1}}, 0, "fail"},
 		{"route after wait", nil, 1, "fail"},
+		{"missing control expiry", []loadgen.RetainedKey{{Key: "control:{control}", Class: "control-lease", TTLMS: -1}}, 0, "fail"},
 		{"missing relay expiry", []loadgen.RetainedKey{{Key: "relay", Class: "relay-lease", TTLMS: -1}}, 0, "fail"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
