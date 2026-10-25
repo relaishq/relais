@@ -458,9 +458,10 @@
       ]
     }
   ],
-  "oldest_live_peer": "0.0.0-dev",
-  "oldest_rollback": "0.0.0-dev",
+  "oldest_live_peer": "0.3.0",
+  "oldest_rollback": "0.3.0",
   "tested_peers": [
-    "0.0.0-dev"
+    "0.0.0-dev",
+    "0.3.0"
   ]
 }
