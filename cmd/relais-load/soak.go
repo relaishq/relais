@@ -1172,6 +1172,11 @@ func boundedSoakKey(k loadgen.RetainedKey) bool {
 		// The hash persists for its monotone epoch. Release clears the identities;
 		// expiry is a field, not PTTL. Missing expiry evidence must fail.
 		return k.LeaseRemainingMS != nil && (*k.LeaseRemainingMS <= relaylease.DefaultTTL.Milliseconds())
+	case "control-lease":
+		// The hash persists for its monotone epoch and journal records (at most
+		// sessionstore.MaxControlRecords). Expiry is a field, not PTTL; release
+		// stores 0. A missing or malformed expiry must fail.
+		return k.LeaseRemainingMS != nil && *k.LeaseRemainingMS <= controlplane.ControlLeaseTTL.Milliseconds()
 	case "frame-cache":
 		return k.TTLMS > 0 && k.TTLMS <= (30*time.Second).Milliseconds()
 	case "session-ended":
@@ -1233,6 +1238,27 @@ func observeSoakKey(ctx context.Context, client *redis.Client, prefix, key strin
 			return k, errors.New("invalid relay expiry types")
 		}
 		k.LeaseRemainingMS, k.Released = &remaining, released == 1
+	case suffix == "control:{control}":
+		k.Class, k.LimitMS = "control-lease", controlplane.ControlLeaseTTL.Milliseconds()
+		// Compare the lease expiry to Redis server time in one script. A missing
+		// or malformed field is an observation error, never an expired lease.
+		values, err := client.Eval(ctx, `local c=redis.call('HMGET',KEYS[1],'holder','expires'); local expires=tonumber(c[2]); if not expires or not c[1] or expires<0 or expires%1~=0 then return redis.error_reply('invalid control lease hash') end; local t=redis.call('TIME'); return {expires-tonumber(t[1])*1000-math.floor(tonumber(t[2])/1000), c[1]=='' and expires==0 and 1 or 0}`, []string{key}).Slice()
+		if err != nil {
+			return k, err
+		}
+		if len(values) != 2 {
+			return k, errors.New("invalid control lease reply")
+		}
+		remaining, ok := values[0].(int64)
+		released, valid := values[1].(int64)
+		if !ok || !valid {
+			return k, errors.New("invalid control lease types")
+		}
+		k.LeaseRemainingMS, k.Released = &remaining, released == 1
+	case strings.HasPrefix(suffix, "control-intent:{sess:") && strings.HasSuffix(suffix, "}"):
+		// An intent is deleted when its transition settles and has no TTL. A
+		// retained one is an unsettled transition, so it never counts as bounded.
+		k.Class = "control-intent"
 	default:
 		for _, kind := range []string{"lease", "state", "record", "epoch", "routes"} {
 			if strings.HasPrefix(suffix, kind+":{sess:") && strings.HasSuffix(suffix, "}") {
