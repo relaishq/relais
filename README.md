@@ -70,8 +70,8 @@ Download the [latest release](https://github.com/relaishq/relais/releases/latest
 for your platform. On an Apple silicon Mac:
 
 ```sh
-curl -fLO https://github.com/relaishq/relais/releases/download/v0.2.0/relais_0.2.0_darwin_arm64.tar.gz
-tar -xzf relais_0.2.0_darwin_arm64.tar.gz && cd relais_0.2.0_darwin_arm64
+curl -fLO https://github.com/relaishq/relais/releases/download/v0.3.0/relais_0.3.0_darwin_arm64.tar.gz
+tar -xzf relais_0.3.0_darwin_arm64.tar.gz && cd relais_0.3.0_darwin_arm64
 ./relais-demo -bin . -agent=demo
 ```
 
@@ -137,7 +137,7 @@ See [connect an app](docs/connect-an-app.md) for requests and certificate setup.
 
 Build a keyless custom worker with the [Build your agent guide](docs/build-an-agent.md).
 You write a small Go `main` with `pkg/workerapp` and `pkg/agent/v2`; no fork is
-needed. Add the SDK with `go get github.com/relaishq/relais@v0.2.0`. All workers need
+needed. Add the SDK with `go get github.com/relaishq/relais@v0.3.0`. All workers need
 compatible agents. There is no runtime plugin or subprocess interface for live agents.
 
 Try the push-to-talk [voice-agent example](examples/voice-agent): hold to speak,

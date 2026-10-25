@@ -1,7 +1,7 @@
 # Run Relais yourself
 
-[Build from source](../README.md#five-minute-quick-start) today. When archives
-are available, [install](install.md) them first. The live topology needs
+[Install](install.md) a release archive, or [build from source](../README.md#five-minute-quick-start).
+The live topology needs
 `relais-relay`, `relais-worker`, `relais-control`, `relais-signal`, and Redis.
 `relais-demo`, `relais-load`, and `crash-run` are test tools.
 
@@ -340,7 +340,7 @@ driver strips the key from the relay environment. Run each with `-h` for flags:
   then return to v0.2. Reader-only builds cannot serve live v10 calls.
   New v10 custom calls resolve zero app limits to 3,072 working bytes and 8,192
   history bytes. Legacy call profiles and explicit operator values stay intact.
-  Split payload defaults are 80,000 B/s and 40,960 B burst; the 7,168-byte hot
+  Split payload defaults are 70,000 B/s and 40,960 B burst; the 6,144-byte hot
   cap and 100 ms cadence are independent of cold history. History overflow or
   churn is refused before acceptance with typed Capacity. Local tests cover
   continued transport checkpoints after these refusals and required writes
