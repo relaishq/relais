@@ -51,8 +51,9 @@ can repeat. Applications must make external side effects safe to repeat.
   is not guaranteed. See [limits](docs/guarantees.md#explicit-non-guarantees) and
   [ADR 0006](docs/adr/0006-agent-interface.md#resume-and-replay).
 - One caller per call: no rooms, fan-out, simulcast, or SVC (layered video). Media
-  uses UDP only, with no TURN relay or TCP/TLS fallback. Control-plane crash
-  recovery is not established. See [non-guarantees](docs/guarantees.md#explicit-non-guarantees).
+  uses UDP only, with no TURN relay or TCP/TLS fallback. Control restart is
+  tested locally; paid-cloud and cross-host control failover are not
+  established. See [non-guarantees](docs/guarantees.md#explicit-non-guarantees).
 - Private control APIs are unauthenticated. The signaling frontend is for
   controlled tests; a proven public service is outside the current evidence.
 - The [legacy stored-frame pipeline](docs/legacy/plugin-pipeline.md) is
