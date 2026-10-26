@@ -3,6 +3,7 @@ package releasecompat
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -438,5 +439,70 @@ func TestUnregisteredBridgePreservesPublishedManifestDomains(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+func TestBridgeMoveWriterRefusesOlderReaderBeforeTransfer(t *testing.T) {
+	old, next := testManifest(t, "0.3.0"), testManifest(t, "0.3.2")
+	enableBridgeManifest(&old)
+	enableBridgeManifest(&next)
+	for _, m := range []*Manifest{&old, &next} {
+		for _, role := range []string{"worker", "control"} {
+			for _, p := range m.Roles[role] {
+				p.Formats["bridge_output_move"] = Format{Reads: []int{1}, Continues: []int{1}}
+			}
+		}
+	}
+	for _, role := range []string{"worker", "control"} {
+		for _, p := range next.Roles[role] {
+			p.Formats["bridge_output_move"] = Format{Reads: []int{1, 2}, Continues: []int{1, 2}}
+		}
+	}
+	next.Roles["worker"]["bridge"].Formats["bridge_output_move"] = Format{Reads: []int{1, 2}, Writes: []int{2}, Continues: []int{1, 2}}
+	pool := testPool(next)
+	pool.TargetWorkerProfile = "bridge"
+	for i := range pool.Participants {
+		if pool.Participants[i].Role == "worker" {
+			pool.Participants[i].Profile = "bridge"
+			pool.Participants[i].Agents = []string{"bridge"}
+		}
+	}
+	verdict := Preflight(pool, old, "rollback")
+	requireRefused(t, verdict, "format_incompatible")
+	if len(verdict.Steps) != 0 {
+		t.Fatal("incompatible move reader must be refused before any transfer step")
+	}
+}
+
+func TestRegisteredBridgeMoveFormatVersions(t *testing.T) {
+	checkpoint, err := constant("../..", "pkg/mediaworker/bridge_output.go", "bridgeOutputVersion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	move, err := constant("../..", "pkg/mediaworker/bridge_output.go", "bridgeOutputMoveVersion")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, writer := range []bool{false, true} {
+		formats := map[string]Format{}
+		addBridgeFormats(formats, true, writer, checkpoint, move)
+		f := formats["bridge_output_move"]
+		if !slices.Equal(f.Reads, []int{1, 2}) || !slices.Equal(f.Continues, []int{1, 2}) {
+			t.Fatalf("move readers: %+v", f)
+		}
+		if writer && !slices.Equal(f.Writes, []int{2}) {
+			t.Fatalf("move writer: %+v", f)
+		}
+		if !writer && len(f.Writes) != 0 {
+			t.Fatalf("read-only role writes move: %+v", f)
+		}
+		if formats["bridge_output"].Reads[0] != 1 {
+			t.Fatal("checkpoint format changed")
+		}
+	}
+	absent := map[string]Format{}
+	addBridgeFormats(absent, false, true, checkpoint, move)
+	if len(absent) != 0 {
+		t.Fatal("unregistered bridge must not change published domains")
 	}
 }

@@ -316,6 +316,10 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 	if err != nil {
 		return m, err
 	}
+	bridgeMoveVersion, err := constant(root, "pkg/mediaworker/bridge_output.go", "bridgeOutputMoveVersion")
+	if err != nil {
+		return m, err
+	}
 	worker := func(enabled, bridge bool) Profile {
 		fs := platform()
 		fs["relay_udp"] = Format{Reads: []int{m.UDPContract}, Writes: []int{m.UDPContract}, Continues: []int{m.UDPContract}}
@@ -326,14 +330,7 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 		fs["snapshot"] = state(writes)
 		// Older target tools require an exact domain set. Advertise the new
 		// format only when this release actually registers its writer.
-		if bridgeRegistered {
-			fs["bridge_output"] = Format{Reads: []int{bridgeVersion}, Continues: []int{bridgeVersion}}
-		}
-		if bridge && bridgeRegistered {
-			f := fs["bridge_output"]
-			f.Writes = []int{bridgeVersion}
-			fs["bridge_output"] = f
-		}
+		addBridgeFormats(fs, bridgeRegistered, bridge, bridgeVersion, bridgeMoveVersion)
 		fs["encryption_header"] = Format{Reads: []int{header}, Writes: []int{header}, Continues: []int{header}}
 		fs["legacy_encryption_header"] = Format{Reads: []int{legacyHeader}, Writes: []int{legacyHeader}, Continues: []int{legacyHeader}}
 		for name, v := range map[string]int{"component": component, "metadata": metadata} {
@@ -361,4 +358,21 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 func JSON(v any) ([]byte, error) {
 	data, err := json.MarshalIndent(v, "", "  ")
 	return append(data, '\n'), err
+}
+
+// Optional domains exist only when a bridge agent is actually registered.
+func addBridgeFormats(formats map[string]Format, registered, writer bool, checkpointVersion, moveVersion int) {
+	if !registered {
+		return
+	}
+	formats["bridge_output"] = Format{Reads: []int{checkpointVersion}, Continues: []int{checkpointVersion}}
+	formats["bridge_output_move"] = Format{Reads: []int{1, moveVersion}, Continues: []int{1, moveVersion}}
+	if writer {
+		checkpoint := formats["bridge_output"]
+		checkpoint.Writes = []int{checkpointVersion}
+		formats["bridge_output"] = checkpoint
+		move := formats["bridge_output_move"]
+		move.Writes = []int{moveVersion}
+		formats["bridge_output_move"] = move
+	}
 }

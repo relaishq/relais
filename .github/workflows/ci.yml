@@ -403,12 +403,19 @@ jobs:
             -store-stall=ledger -runs=1 -after=10s
       - name: Assert forced intent, tokens, timeout, and local results during outage
         run: ./scripts/ci/store-stall-v2.sh
+      - name: Accept bridge output through a 29 second Redis pause
+        run: |
+          set -o pipefail
+          python3 scripts/dev/with-redis.py go test -race -tags bridge_measurement ./pkg/mediaworker \
+            -run '^TestBridgeOutputStoreStallRetention$' -count=1 -timeout=3m -v | tee bin/bridge-output-store-stall.log
       - name: Upload store-stall evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: store-stall-logs
-          path: bin/crash-run-*
+          path: |
+            bin/crash-run-*
+            bin/bridge-output-store-stall.log
 
   valkey-cluster-tests:
     runs-on: ubuntu-latest

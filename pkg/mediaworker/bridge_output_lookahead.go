@@ -49,7 +49,7 @@ func (s *session) bridgeActorMoveCost(owned, requests int64) int64 {
 func (s *session) bridgeEncodingTemporaryBytes() int64 {
 	b := s.agent.v2.bridge
 	budgets := s.checkpoint.componentBudgets()
-	fragment := max(bridgeBase64Bytes(int64(b.limits.ObserverRequestBytes))+4,
+	fragment := max(bridgeBase64Bytes(bridgeSettledEntries*(32+10))+2, bridgeBase64Bytes(int64(b.limits.ObserverRequestBytes))+4,
 		int64(b.limits.ObserverMailboxBytes), bridgeBase64Bytes(int64(b.limits.AdapterMoveOnlyBytes))+2,
 		bridgeBase64Bytes(int64(max(budgets.Hot, budgets.Setup, budgets.History)))+2,
 		int64(v2HostMetadataBytes))
@@ -77,7 +77,8 @@ func (s *session) bridgeMoveCost(owned, requests int64) (total, scratch int64) {
 	fixedOwned, fixedJSON := s.bridgeFixedMoveCost()
 	actor := s.bridgeActorMoveCost(owned, requests)
 	scratch = actor - owned + fixedOwned + b.recordCount.Load()*bridgeFrozenRecordBytes + bridgeJSONBuffers(b.encodingBytes.Load()+fixedJSON)
-	return owned + b.recordMemory.Load() + scratch, scratch
+	scratch += b.settledCost.Load() - b.settledMemory()
+	return owned + b.recordMemory.Load() + b.settledMemory() + scratch, scratch
 }
 func (s *session) bridgeExportCostLocked() int64 {
 	s.moveMu.Lock()

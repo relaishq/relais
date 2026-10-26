@@ -124,7 +124,7 @@ func Preflight(pool Pool, target Manifest, operation string) Verdict {
 			}
 		}
 		for domain, f := range profile.Formats {
-			if stateDomain(domain) && (domain != "bridge_output" || (p.Role == "worker" && slices.Contains(p.Agents, "bridge"))) {
+			if stateDomain(domain) && (!bridgeDomain(domain) || (p.Role == "worker" && slices.Contains(p.Agents, "bridge"))) {
 				retained[domain] = union(retained[domain], f.Continues)
 			}
 		}
@@ -186,7 +186,7 @@ func Preflight(pool Pool, target Manifest, operation string) Verdict {
 	return Verdict{Allowed: true, Steps: steps}
 }
 func stateDomain(s string) bool {
-	return s == "bridge_output" || s == "redis_keys" || s == "snapshot" || s == "component" || s == "metadata" || s == "encryption_header" || s == "legacy_encryption_header"
+	return bridgeDomain(s) || s == "redis_keys" || s == "snapshot" || s == "component" || s == "metadata" || s == "encryption_header" || s == "legacy_encryption_header"
 }
 func union(a, b []int) []int {
 	r := slices.Clone(a)
@@ -254,7 +254,7 @@ func checkState(participants []Participant, retained map[string][]int) error {
 		formats := p.Manifest.Roles[p.Role][p.Profile].Formats
 		for domain, versions := range needed {
 			f, ok := formats[domain]
-			if !ok && (domain != "bridge_output" || (p.Role != "worker" && p.Role != "control")) {
+			if !ok && (!bridgeDomain(domain) || (p.Role != "worker" && p.Role != "control")) {
 				continue
 			}
 			for _, v := range versions {
@@ -292,3 +292,5 @@ func checkState(participants []Participant, retained map[string][]int) error {
 	}
 	return nil
 }
+
+func bridgeDomain(s string) bool { return s == "bridge_output" || s == "bridge_output_move" }

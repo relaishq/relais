@@ -32,6 +32,7 @@ func bridgeFrozenImageBytes(image agentMoveExport) int64 {
 		}
 	}
 	b := image.bridge
+	n += int64(cap(b.Settled)) * int64(unsafe.Sizeof(bridgeSettledRange{}))
 	n += int64(cap(b.Records))*int64(unsafe.Sizeof(bridgePacketRecord{})) + int64(cap(b.Queue))*int64(unsafe.Sizeof(bridgeQueued{}))
 	for _, state := range []*bridgeOutputState{b.State, b.Durable} {
 		if state != nil {

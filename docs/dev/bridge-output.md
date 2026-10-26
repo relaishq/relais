@@ -129,22 +129,95 @@ retained records stop output credit at the bounded cap and leave the actor
 reserve available. The measurement producer explicitly declares its consumed
 receipt horizon; the store callback never invents one.
 
-**Phase B prerequisite: receipt retention. Dated correction (2026-10-25).**
-A retained sent receipt no longer reserves a playback reference: it cannot
-reenter the queue. Its model term is `512 + 384 + 3 × (record JSON + 2)` bytes
-on the measured host. The measured fixture costs about 2.3 KB per receipt,
-down from about 2.75 KB. Without pruning, capacity rises from 47 receipts
-(0.94 s) to **151 receipts (3.02 s at 50 packets/s)**, measured by
-`TestBridgeOutputReceiptPressurePreservesActor`. The 29 s store-stall run needs
-about 1,450 receipts, roughly 9.6 times this capacity. Phase A has no registered production
-bridge agent and no production caller advancing `AdvanceBridgeReplayHorizon`.
-Do not claim that it can sustain that stall yet. Candidate designs are compact
-settled ranges plus a digest chain, or advancing the horizon on every bot
-acknowledgement. A horizon still requires durable checkpoint acknowledgement
-before pruning, so the acknowledgement design alone does not remove the
-29 s no-checkpoint retention requirement. The no-pruning regression verifies
-that the actor stays live and output resumes after acknowledgement plus horizon
-advance. No retention redesign is included in phase A.
+**Phase B receipt retention. Dated correction (2026-10-25).**
+The calibrated uncompressed sent record costs about 2.3 KB and previously
+stopped the no-pruning fixture at 151 receipts (3.02 s at 50 packets/s).
+Advancing a producer horizon on each acknowledgement cannot release that record
+without a durable checkpoint acknowledgement. It cannot solve a paused store.
+
+The host now compacts old sent records into contiguous same-turn/stream ranges.
+A bounded one-record recent tail keeps the existing full receipt representation.
+Each packed entry retains SHA-256 plus a positive original-revision delta as a
+uvarint. The range stores its base revision and original session, bot instance,
+epoch, generation and lineage. Sent outcome is implicit. The SHA-256 chain
+binds that scope and every sequence, turn, stream and revision. Status and
+admission ignore ranges from another scope. Chain hashes use base64 JSON.
+Blocks hold at most 256 identities, so their base64 temporary stays below the
+explicit encoder-fragment reservation. Individual digests remain necessary: a chain alone cannot reject conflicting
+bytes on an arbitrary identity retry. Only the repeated receipt/header cost
+scales with ranges; conflict evidence still scales with packets. This is bounded
+retention, not unlimited speech without checkpoints. Unsent packets and other
+terminal outcomes retain their existing exact records.
+
+Compaction needs no store or producer acknowledgement and claims no durability.
+The packed prefix is immutable: frozen images share it; append only writes beyond
+the captured length. Pruning still requires the minimum of durable sent floor and
+producer replay horizon, with no live reference. Partial pruning retains the
+chain seed at its new first identity. Restore checks chain integrity, complete
+coverage, disjoint identities and checkpoint exception consistency. Exact retries
+return the retained revision/outcome; conflicting bytes cannot replay.
+
+The calibrated model charges actual packed buffer capacity, 512 B per live
+range header, a rounded struct-size frozen header (256 B on 64-bit targets), and
+three times its exact encoded JSON/base64 bound. Append updates only the changed
+range's cached costs; it neither marshals headers nor rescans all ranges. Existing
+actor/fixed terms (284,732 / 204,524 B), the 838,861 B allowance, 1 MiB mailbox,
+64 MiB worker cap and 209,715 B safety headroom are unchanged. Unsent queue caps
+remain 100 × 160 B / 40 × 1,200 B with maximum actor work.
+
+`TestBridgeOutputStoreStallCapacityCorners` fills working/history and reserves the
+maximum future actor envelope. With no pruning, the measured sent capacity at
+50 packets/s is below. Queued packets are additional retained identities; five
+queued packets represent 100 ms. Long tokens mean 64-character bot and lineage.
+
+| Packet bytes | Tokens | Queued | Retained | Sent capacity | Seconds |
+| --- | --- | --- | --- | --- | --- |
+| 160 | fixture | 1 | 1,987 | 1,986 | 39.72 |
+| 160 | fixture | 5 | 1,906 | 1,901 | 38.02 |
+| 160 | long | 1 | 1,955 | 1,954 | 39.08 |
+| 160 | long | 5 | 1,863 | 1,858 | 37.16 |
+| 1,200 | fixture | 1 | 1,923 | 1,922 | 38.44 |
+| 1,200 | fixture | 5 | 1,730 | 1,725 | 34.50 |
+| 1,200 | long | 1 | 1,891 | 1,890 | 37.80 |
+| 1,200 | long | 5 | 1,681 | 1,676 | 33.52 |
+
+With all three scope tokens at 64 characters, the 1,200 B / five-queued corner
+holds 1,666 retained / 1,661 sent (33.22 s). These are logical reservation
+figures, not measured Go heap peaks. `TestBridgeOutputRetainsStoreStallCapacity`
+also checks actual exact exports and actor growth. Scope/revision widths and
+outcome changes affect capacity; credit uses their actual bounds.
+
+This store-stall guarantee is single-turn. Without pruning, turn-marker metadata
+fills after five retained turns; a sixth turn cannot begin. Exception ranges
+also have the existing cap of eight. ADR 0014 does not promise new turns through
+an outage. The limit is covered by `TestBridgeOutputStoreStallRetainedTurnLimit`.
+
+`TestBridgeOutputStoreStallRetention` uses a real dedicated Redis
+`CLIENT PAUSE 29000 ALL`, after an output stream is already running. It sends
+1,550 packets per size with all scope tokens at 64 characters, a 100 ms queued
+backlog, and the production actor, ingress, pacer and checkpoint writer. It checks
+bounded credit waits, wire identities/gaps, memory/model caps,
+unchanged `output_checkpointed` during the pause and complete pruning after
+recovery. Credit polls calculate metadata and remaining capacity from one locked cut.
+The credit-only end projection is bounded by issued plus pending identities;
+`audio_end` cannot exceed the issued ceiling. New-turn and admission projections
+keep their existing conservative bound and all metadata reserves stay unchanged.
+For a single retained turn, the credit projection also bounds both valid clear
+cases: the queue remains only when the clear floor is at/below the turn, or a
+higher clear floor removes it. It does not combine maximum floors with a full
+queue that such a clear would remove.
+An early pacer wake retains its cut when no logical state or playback changed. The stall
+and real-time measurement phases count zero-credit responses below the modeled
+allowance without a move/pause/fence hold and require zero such responses.
+The stall also grades backlogged wire gaps beyond RTP time and pacer debt against
+`playbackRebaseAfter` (20 ms), using the burst measurement's accounting.
+`TestBridgeOutputCreditSurvivesPacerWakes` reproduces concurrent credit polling;
+`TestBridgeOutputCreditCriticalSectionCost` reports the uncontended whole-call
+cost, which bounds the added metadata critical section on the test machine.
+
+The fixture keeps a one-hour test lease; it isolates receipt retention,
+not ADR 0008's process-level ownership-expiry campaign. The test skips in
+`-short` and runs only in the existing nightly/manual `store-stall` job.
 
 Every receipt includes `consumed`. Terminal admission/refusal/cancellation and
 retained duplicates consume the identity. Ordering, scope, moving and capacity
@@ -182,6 +255,14 @@ ranges, cancel/clear floors, outcomes and rebase coverage. The normal playback
 window uses compact tagged bridge/gap spans. An absent kind keeps the established
 task-reference encoding.
 
+The normal checkpoint stays at version 1 with identical fields. Private exact
+moves now write version 2 and accept versions 1 and 2; v1 cannot contain packed
+ranges. The private version is independent of the checkpoint subtree's retained
+`bridge_output/v1` JSON key. No release registers a bridge agent or advertises
+this optional domain yet, so no registered v1 continuation is displaced. The optional `bridge_output_move` manifest domain advertises reads/continuations
+1 and 2 and writes 2 only when a bridge agent is registered. Preflight refuses
+a v1-only reader before transfer. Older private readers also reject version 2; legacy non-bridge export bytes are unchanged.
+
 The private exact-move section contains one owned cut of that state, the last
 acknowledged state, credit advertisement counter, replay horizon, retained packet digests/receipts, unsent
 payloads, and the full tagged queue. Bridge references contain kind, stream_id,
@@ -214,8 +295,8 @@ the frozen lineage; a replacement must invalidate the old queue/receipts instead
 The current binding API deliberately cannot authorize either transition.
 A restored output queue stays gated when its saved scope has not been bound to
 the destination owner epoch. Phase B must authorize that remap before release. The
-29-second store stall and move/rollback campaign remain separate acceptance
-work. The Python transport must use the ready timestamp from before any credit
+29-second retention stall is covered above; cross-epoch move/replacement acceptance
+remains for the next part. The Python transport must use the ready timestamp from before any credit
 or IPC wait, then query uncertain identities before retrying identical bytes.
 
 ## Measurement

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -35,6 +36,7 @@ const (
 type bridgeMeasuredStore struct {
 	sessionstore.Store
 	component   sessionstore.ComponentStore
+	stalling    atomic.Bool // controlled Redis pause; transient errors must retry
 	writes      atomic.Uint64
 	bytes       atomic.Uint64
 	renewMu     sync.Mutex
@@ -104,7 +106,41 @@ type bridgeMeasuredPhase struct {
 	rate, size                                                                      int
 	rapid, jitter, tails, upstream, overload, burst, controlledMove, sustainedBurst bool
 }
+
+// Observe the actual public response. Real-time producers and the stall fixture
+// have spare packet/audio/metadata lanes; zero credit below the export allowance
+// is only allowed during an explicit move/pause/fence hold. Burst/overload phases
+// still exercise their intentional capacity backpressure separately.
+type bridgeCreditSamples struct {
+	Polls, SpuriousZero int
+	ZeroCostMax         int64
+	Diagnostics         []string
+}
+
+func (c *bridgeCreditSamples) read(s *session, scope BridgeOutputScope) (BridgeOutputCredit, error) {
+	credit, err := s.worker.BridgeOutputCredit(scope)
+	c.Polls++
+	if err == nil && (credit.PacketSlots == 0 || credit.PayloadBytes == 0) {
+		s.mu.Lock()
+		b := s.agent.v2.bridge
+		held := b.draining > 0 || s.agent.paused || s.worker.paused.Load() || s.fenced.Load()
+		cost := s.bridgeExportCostLocked()
+		if !held && cost < s.bridgeLookaheadBudget() {
+			c.SpuriousZero++
+			c.ZeroCostMax = max(c.ZeroCostMax, cost)
+			if len(c.Diagnostics) < 8 {
+				metadata, encodeErr := bridgeInterruptionCharge(b.state, s.playbackSnapshotLocked())
+				c.Diagnostics = append(c.Diagnostics, fmt.Sprintf("through=%d sent=%d pruned=%d queue=%d cost=%d metadata=%d+%d/%d encode=%v memory_guard=%v audio=%d/%d duration=%s/%s reserved=%d/%d exceptions=%d proven=%v", b.state.Through, b.state.Sent, b.state.Pruned, len(s.agent.v2.playback.bridgeQueue), cost, metadata, bridgeTerminalReserve, bridgeMetadataPartition, encodeErr, s.bridgeCreditExhaustedLocked(), b.audioBytes, b.limits.AudioBytes, b.audioDuration, b.limits.AudioDuration, b.reservedPackets.Load(), b.reservedBytes.Load(), len(b.state.Exceptions), b.provenUnadmitted))
+			}
+		}
+		s.mu.Unlock()
+	}
+	return credit, err
+}
+
 type bridgeMeasuredResult struct {
+	CreditPolls         int       `json:"credit_polls"`
+	SpuriousZeroCredit  int       `json:"spurious_zero_credit"`
 	SustainedBurst      bool      `json:"sustained_burst"`
 	FirstWireSamples    int       `json:"first_ready_to_wire_samples"`
 	RealMove            bool      `json:"production_resume_move_verified"`
@@ -179,7 +215,7 @@ func bridgeLatencyQualifies(r bridgeMeasuredResult) bool {
 			latency = r.FirstWireP95MS <= float64(bridgeLatencyTarget)/float64(time.Millisecond) && r.GapBeyondDebtMS <= float64(playbackRebaseAfter)/float64(time.Millisecond) && r.ControlledMove && r.RealMove && r.MoveOverage > 0 && r.MoveProduced > 0 && r.FirstWireSamples >= 10 && r.CapViolations == 0 && r.DuplicateWireIDs == 0 && r.MissingWireIDs == 0
 		}
 	}
-	return latency && r.Produced > 0 && r.Admitted+r.Refused == r.Produced && r.Refused == 0 && r.TaskRefusals == 0 && r.Late == 0 && r.Closures == 0 && r.RecoveryMS <= float64(bridgeRecoveryTarget)/float64(time.Millisecond) && r.Sent+r.Canceled == r.Admitted
+	return latency && r.SpuriousZeroCredit == 0 && r.Produced > 0 && r.Admitted+r.Refused == r.Produced && r.Refused == 0 && r.TaskRefusals == 0 && r.Late == 0 && r.Closures == 0 && r.RecoveryMS <= float64(bridgeRecoveryTarget)/float64(time.Millisecond) && r.Sent+r.Canceled == r.Admitted
 }
 func bridgeProcessCPU() float64 {
 	var v syscall.Rusage
@@ -189,10 +225,25 @@ func bridgeProcessCPU() float64 {
 	return float64(v.Utime.Sec+v.Stime.Sec) + float64(v.Utime.Usec+v.Stime.Usec)/1e6
 }
 
-func newMeasuredBridge(t *testing.T) (acceptedEventRig, BridgeOutputScope, *bridgeMeasuredStore, *atomic.Uint64) {
+func newMeasuredBridge(t *testing.T, longScope ...bool) (acceptedEventRig, BridgeOutputScope, *bridgeMeasuredStore, *atomic.Uint64) {
 	t.Helper()
 	rig, scope := newBridgeRig(t, false)
 	s := rig.s
+	if len(longScope) > 0 && longScope[0] {
+		oldID := s.id
+		s.id = strings.Repeat("s", 64)
+		s.state.ID = s.id
+		s.state.ICE.LocalUfrag = s.id
+		delete(s.worker.sessions, oldID)
+		s.worker.sessions[s.id] = s
+		scope.SessionID = s.id
+		scope.BotInstance = strings.Repeat("b", 64)
+		scope.LineageID = strings.Repeat("l", 64)
+		s.agent.v2.bridge.state = nil
+		require.NoError(t, s.worker.BindBridgeOutput(scope))
+		_, err := s.worker.BeginBridgeOutput(scope, 1)
+		require.NoError(t, err)
+	}
 	addr := redistestenv.Address(t)
 	if addr == "" {
 		t.Fatal("sustained bridge measurement requires throwaway Redis")
@@ -306,6 +357,9 @@ func newMeasuredBridge(t *testing.T) (acceptedEventRig, BridgeOutputScope, *brid
 				return
 			case <-tick.C:
 				if err := s.checkpoint.persist(s.ctx, checkpointOptional); err != nil && !errors.Is(err, errCheckpointSkipped) && !errors.Is(err, context.Canceled) {
+					if counted.stalling.Load() {
+						continue
+					}
 					t.Errorf("checkpoint: %v", err)
 					return
 				}
@@ -327,6 +381,9 @@ func newMeasuredBridge(t *testing.T) (acceptedEventRig, BridgeOutputScope, *brid
 				counted.renewAt = now
 				counted.renewMu.Unlock()
 				if _, err := counted.Renew(s.ctx, lease, time.Hour); err != nil && !errors.Is(err, context.Canceled) {
+					if counted.stalling.Load() {
+						continue
+					}
 					t.Errorf("renew: %v", err)
 					return
 				}
@@ -532,6 +589,7 @@ func measureBridgePhase(t *testing.T, rig acceptedEventRig, scope BridgeOutputSc
 			t.Fatal("bounded control queue exhausted")
 		}
 	}
+	var credits bridgeCreditSamples
 	current := turn
 	for packet := range source {
 		if d, e := opusDuration(packet.payload); e == nil && d < bridgePacketDuration {
@@ -576,7 +634,13 @@ func measureBridgePhase(t *testing.T, rig acceptedEventRig, scope BridgeOutputSc
 		}
 		var creditWait time.Time
 		for {
-			credit, e := s.worker.BridgeOutputCredit(scope)
+			var credit BridgeOutputCredit
+			var e error
+			if !p.burst && !p.overload {
+				credit, e = credits.read(s, scope)
+			} else {
+				credit, e = s.worker.BridgeOutputCredit(scope)
+			}
 			require.NoError(t, e)
 			if credit.PacketSlots > 0 && credit.PayloadBytes >= len(packet.payload) {
 				break
@@ -703,6 +767,7 @@ func measureBridgePhase(t *testing.T, rig acceptedEventRig, scope BridgeOutputSc
 		result.MissingWireIDs = result.Produced - len(seen)
 	}
 	measured.wireMu.Unlock()
+	result.CreditPolls, result.SpuriousZeroCredit = credits.Polls, credits.SpuriousZero
 	result.Qualified = bridgeLatencyQualifies(result)
 	encoded, e := json.Marshal(result)
 	require.NoError(t, e)
@@ -835,7 +900,7 @@ func TestBridgeOutputHostStallFailsLatencyQualification(t *testing.T) {
 func TestBridgeLatencyQualificationRejectsControls(t *testing.T) {
 	good := bridgeMeasuredResult{Produced: 100, Admitted: 100, Sent: 100, RawP95MS: 100}
 	require.True(t, bridgeLatencyQualifies(good))
-	for _, bad := range []bridgeMeasuredResult{{Produced: 100, Admitted: 99, Refused: 1, Sent: 99}, {Produced: 100, Admitted: 100, Sent: 100, RawP95MS: 151}, {Produced: 100, Admitted: 100, Sent: 99}, {Produced: 100, Admitted: 100, Sent: 100, RecoveryMS: 501}, {Produced: 100, Admitted: 100, Sent: 100, Late: 1}, {Produced: 100, Admitted: 100, Sent: 100, TaskRefusals: 1}, {Produced: 100, Admitted: 100, Sent: 100, Closures: 1}} {
+	for _, bad := range []bridgeMeasuredResult{{Produced: 100, Admitted: 100, Sent: 100, RawP95MS: 100, SpuriousZeroCredit: 1}, {Produced: 100, Admitted: 99, Refused: 1, Sent: 99}, {Produced: 100, Admitted: 100, Sent: 100, RawP95MS: 151}, {Produced: 100, Admitted: 100, Sent: 99}, {Produced: 100, Admitted: 100, Sent: 100, RecoveryMS: 501}, {Produced: 100, Admitted: 100, Sent: 100, Late: 1}, {Produced: 100, Admitted: 100, Sent: 100, TaskRefusals: 1}, {Produced: 100, Admitted: 100, Sent: 100, Closures: 1}} {
 		require.False(t, bridgeLatencyQualifies(bad))
 	}
 }

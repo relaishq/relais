@@ -17,7 +17,7 @@ func (s *session) exportBridgeLocked() *bridgeOutputMove {
 	if b == nil || b.state == nil {
 		return nil
 	}
-	out := &bridgeOutputMove{CreditRevision: b.creditRevision.Load(), Uncertain: !b.provenUnadmitted, Version: bridgeOutputVersion, State: cloneBridgeState(b.state), Records: make([]bridgePacketRecord, 0, len(b.records)), Queue: slices.Clone(s.agent.v2.playback.bridgeQueue), ReplayHorizon: b.replayHorizon, Durable: cloneBridgeState(b.durable), CheckpointSequence: b.checkpointSeq}
+	out := &bridgeOutputMove{CreditRevision: b.creditRevision.Load(), Uncertain: !b.provenUnadmitted, Version: bridgeOutputMoveVersion, Settled: slices.Clone(b.settled), State: cloneBridgeState(b.state), Records: make([]bridgePacketRecord, 0, len(b.records)), Queue: slices.Clone(s.agent.v2.playback.bridgeQueue), ReplayHorizon: b.replayHorizon, Durable: cloneBridgeState(b.durable), CheckpointSequence: b.checkpointSeq}
 	for _, r := range b.records {
 		// Payload bytes are immutable. The frozen image owns a reference;
 		// live retirement removes only its own reference.
@@ -90,10 +90,14 @@ func (s *session) restoreBridgeOutput(move *movePayload) error {
 		return nil
 	}
 	image := move.Bridge
-	if image == nil || image.Version != bridgeOutputVersion || !bridgeStateEqual(image.State, saved) || image.ReplayHorizon > saved.Through {
+	if image == nil || (image.Version != bridgeOutputVersion && image.Version != bridgeOutputMoveVersion) || !bridgeStateEqual(image.State, saved) || image.ReplayHorizon > saved.Through {
 		return fmt.Errorf("%w: bridge exact cut", agent.ErrIncompatibleAgent)
 	}
-	if saved.Through-saved.Pruned != uint64(len(image.Records)) {
+	settledCount, err := validateBridgeSettled(image, saved)
+	if err != nil {
+		return err
+	}
+	if saved.Through-saved.Pruned != uint64(len(image.Records))+settledCount {
 		return fmt.Errorf("%w: incomplete exact bridge ledger", agent.ErrIncompatibleAgent)
 	}
 	if int64(len(image.Records))*bridgeRecordCharge > int64(s.agent.v2.registration.Bounds.MaxMailboxBytes) {
@@ -112,6 +116,9 @@ func (s *session) restoreBridgeOutput(move *movePayload) error {
 	var duration time.Duration
 	for _, r := range image.Records {
 		seq := r.Receipt.Sequence
+		if bridgeSettledContains(image.Settled, seq) {
+			return agent.ErrIncompatibleAgent
+		}
 		zeroReceipt := r.Receipt.Outcome == "canceled" || (r.Receipt.Outcome == "refused" && (r.Receipt.Reason == "invalid_audio" || r.Receipt.Reason == "closed_turn"))
 		if !r.Receipt.Consumed || r.Receipt.Status != "" || r.Receipt.BridgeOutputScope != r.Scope || !bridgeReceiptReason(r.Receipt.Reason) || r.Duration < 0 || r.Duration > 120*time.Millisecond || r.Duration%(2500*time.Microsecond) != 0 || r.Scope != BridgeOutputScope(saved.Scope) || seq <= saved.Pruned || seq > saved.Through || r.Receipt.Revision > saved.Revision || r.Length < 0 || r.Length > bridgeBinaryBytes || ((r.Length == 0 || r.Duration == 0) && !zeroReceipt) || (r.Length == 0 && r.Duration > 0) {
 			return agent.ErrIncompatibleAgent
@@ -172,6 +179,12 @@ func (s *session) restoreBridgeOutput(move *movePayload) error {
 	if audioBytes > b.limits.AudioBytes || audioBytes > s.agent.v2.registration.Bounds.MaxAudioBytes || duration > b.limits.AudioDuration {
 		return agent.ErrCapacity
 	}
+	settled := slices.Clone(image.Settled)
+	for i := range settled {
+		settled[i].Data = slices.Clone(settled[i].Data)
+		settled[i].lastRevision = bridgeSettledLastRevision(settled[i])
+		memory += bridgeSettledMemory(settled[i])
+	}
 	if err := s.reserveBridgeMemory(memory); err != nil {
 		return err
 	}
@@ -179,6 +192,8 @@ func (s *session) restoreBridgeOutput(move *movePayload) error {
 		b.replaceRecordEncoding(nil, &r)
 	}
 	b.records = records
+	b.settled = settled
+	b.updateSettledCost()
 	b.audioBytes = audioBytes
 	b.audioDuration = duration
 	b.replayHorizon = image.ReplayHorizon
