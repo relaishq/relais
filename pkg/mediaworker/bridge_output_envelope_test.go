@@ -220,6 +220,7 @@ func TestBridgeOutputActorEnvelopeProfileValidation(t *testing.T) {
 	}
 	rig, _ := newBridgeRig(t, false)
 	rig.s.worker.cfg.Agent.BridgeOutput.ObserverRequestBytes = 32 << 10
+	rig.s.worker.cfg.Agent.BridgeOutput.ExportHeadroomBytes = 512 << 10
 	rig.s.state.Agent = agentState{}
 	require.ErrorIs(t, rig.s.initAgent(false, ResumeOptions{}), agent.ErrCapacity, "reject a combination leaving no full-size output credit")
 }

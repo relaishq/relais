@@ -65,13 +65,21 @@ func (c *sessionCheckpoint) capture(kind checkpointCaptureKind, payload *movePay
 		exported.Agent.V2.Quota = c.captureSnapshotQuotaMode(now, true)
 		payload.ControlAck = c.controlAck
 	}
-	state, err := json.Marshal(snapshot{
+	value := snapshot{
 		Version:        s.state.Version,
 		AgentMoveOnly:  payload,
 		State:          exported,
 		DTLSConnection: dtlsState,
 		split:          c.componentExportState(),
-	})
+	}
+	var state []byte
+	if payload != nil && payload.Bridge != nil && value.split != nil {
+		// Avoid an outer MarshalJSON buffer around the already encoded component
+		// envelope. Keep the exact v10 wire bytes and the legacy capture path.
+		state, err = encodeComponentSnapshot(value)
+	} else {
+		state, err = json.Marshal(value)
+	}
 	if err != nil {
 		s.fenced.Store(false)
 

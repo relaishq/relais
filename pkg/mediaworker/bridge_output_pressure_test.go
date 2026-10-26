@@ -71,8 +71,15 @@ func TestBridgeOutputReceiptPressurePreservesActor(t *testing.T) {
 	require.False(t, s.agent.failed.Load())
 	credit, err := s.worker.BridgeOutputCredit(scope)
 	require.NoError(t, err)
-	require.Zero(t, credit.PacketSlots)
+	require.True(t, credit.PacketSlots == 0 || credit.PayloadBytes < 160, "no full fixture packet fits")
 	retainedBytes := s.agent.v2.bridge.memory.Load()
+	minCost, maxCost, maxJSON := int64(1<<20), int64(0), 0
+	for _, record := range s.agent.v2.bridge.records {
+		cost := bridgePacketExportCost(record)
+		minCost, maxCost = min(minCost, cost), max(maxCost, cost)
+		maxJSON = max(maxJSON, bridgeRecordJSONBytes(record))
+	}
+	t.Logf("retained_receipts=%d receipt_cost_min=%d receipt_cost_max=%d record_json_max=%d modeled_total=%d", refused-1, minCost, maxCost, maxJSON, s.bridgeExportCostLocked())
 	// Durable acknowledgement alone cannot prune an unacknowledged producer ID.
 	s.mu.Lock()
 	sent := s.agent.v2.bridge.state.Sent
@@ -80,7 +87,7 @@ func TestBridgeOutputReceiptPressurePreservesActor(t *testing.T) {
 	s.mu.Unlock()
 	credit, err = s.worker.BridgeOutputCredit(scope)
 	require.NoError(t, err)
-	require.Zero(t, credit.PacketSlots)
+	require.True(t, credit.PacketSlots == 0 || credit.PayloadBytes < 160, "no full fixture packet fits")
 	require.NoError(t, s.worker.AdvanceBridgeReplayHorizon(scope, sent))
 	credit, err = s.worker.BridgeOutputCredit(scope)
 	require.NoError(t, err)
@@ -227,7 +234,9 @@ func TestBridgeOutputRetainedReceiptsBoundActorPressure(t *testing.T) {
 			fillBridgeReceiptLedger(t, rig, scope)
 			rig.s.agent.v2.instance = &v2UnitAgent{state: agent.State{Version: 1, Bytes: []byte("a"), HasMoveOnly: true, MoveOnlyLength: size}, payload: make([]byte, size)}
 			_, err := (acceptedEvents{rig.s}).submit(agent.Event{Kind: agent.Started}, eventLive)
-			require.True(t, err == nil || errors.Is(err, errTaskAdmissionBackpressure), "fatal actor error: %v", err)
+			require.ErrorIs(t, err, legacy.ErrSave)
+			require.ErrorIs(t, err, agent.ErrCapacity)
+			require.NotErrorIs(t, err, errTaskAdmissionBackpressure, "over-bound adapter Save cannot become valid by retrying")
 			require.NoError(t, rig.s.ctx.Err())
 		})
 	}

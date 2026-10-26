@@ -117,6 +117,8 @@ func (w *Worker) PrivateHandler() http.Handler {
 		rw.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /sessions/{id}/export", func(rw http.ResponseWriter, r *http.Request) {
+		source := w.session(r.PathValue("id"))
+		bridge := source != nil && source.agent != nil && source.agent.v2 != nil && source.agent.v2.bridge != nil
 		state, release, err := w.exportSession(r.PathValue("id"))
 		defer release()
 		if err != nil {
@@ -124,7 +126,11 @@ func (w *Worker) PrivateHandler() http.Handler {
 			return
 		}
 		counted := &exportResponseWriter{ResponseWriter: rw}
-		privateapi.Write(counted, ExportReply{State: state})
+		if bridge {
+			_ = writeBridgeExportReply(counted, state)
+		} else {
+			privateapi.Write(counted, ExportReply{State: state})
+		}
 		for old := w.metrics.exportHTTPPeakBytes.Load(); uint64(counted.bytes) > old; old = w.metrics.exportHTTPPeakBytes.Load() {
 			if w.metrics.exportHTTPPeakBytes.CompareAndSwap(old, uint64(counted.bytes)) {
 				break

@@ -171,7 +171,7 @@ func measureBridgeBurst(t *testing.T, controlled bool) bridgeMeasuredResult {
 		}
 		auxiliary.Wait()
 	})
-	result := bridgeMeasuredResult{ControlledMove: controlled, Burst: true, Name: "160-byte-burst", Produced: 400, ExportCostLimit: int64((1 << 20) - profile.ActorReserveBytes - profile.ExportHeadroomBytes)}
+	result := bridgeMeasuredResult{ControlledMove: controlled, Burst: true, Name: "160-byte-burst", Produced: 400, ExportCostLimit: int64((1 << 20) - profile.ExportHeadroomBytes)}
 	start := time.Now()
 	sourceQueue := make(chan bridgeMeasuredPacket, 32)
 	var produced atomic.Int64
@@ -305,7 +305,7 @@ func measureBridgeBurst(t *testing.T, controlled bool) bridgeMeasuredResult {
 			// Tighten the test cut, not the operational credit cap. There must be
 			// actual retirement before the planned move can pause.
 			cut := cost - 2400
-			s.agent.v2.bridge.limits.ExportHeadroomBytes = (1 << 20) - profile.ActorReserveBytes - int(cut)
+			s.agent.v2.bridge.limits.ExportHeadroomBytes = (1 << 20) - int(cut)
 			require.NoError(t, s.agent.v2.bridge.limits.Validate())
 			result.MoveOverage = cost - s.bridgeLookaheadBudget()
 			targetCfg := s.worker.cfg
