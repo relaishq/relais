@@ -326,8 +326,10 @@ func (m Manifest) Validate() error {
 			}
 			allowedCount := len(required)
 			if role == "worker" || role == "control" {
-				if _, ok := p.Formats["bridge_output"]; ok {
-					allowedCount++
+				for _, domain := range []string{"bridge_output", "bridge_output_move"} {
+					if _, ok := p.Formats[domain]; ok {
+						allowedCount++
+					}
 				}
 			}
 			if len(p.Formats) != allowedCount {
@@ -342,7 +344,7 @@ func (m Manifest) Validate() error {
 				return refuse("invalid_manifest", "empty profile")
 			}
 			for domain, f := range p.Formats {
-				if domain == "" || (len(f.Reads) == 0 && (domain != "bridge_output" || len(f.Writes) > 0 || len(f.Continues) > 0)) {
+				if domain == "" || (len(f.Reads) == 0 && (!bridgeDomain(domain) || len(f.Writes) > 0 || len(f.Continues) > 0)) {
 					return refuse("invalid_manifest", "empty format capability")
 				}
 				for _, v := range append(slices.Clone(f.Reads), append(slices.Clone(f.Writes), f.Continues...)...) {

@@ -67,12 +67,15 @@ func (s *session) paceBridgeLocked() (time.Duration, error) {
 	if b.state == nil || len(p.bridgeQueue) == 0 || (s.lease.Epoch > 0 && b.state.Scope.Epoch != s.lease.Epoch) {
 		return time.Hour, nil
 	}
-	v := cloneBridgeState(b.state)
+	base := b.state
+	v := cloneBridgeState(base)
+	playbackChanged := false
 	now := s.taskClockLocked()
 	if !p.initialized {
 		p.nextTS = s.state.Audio.InitialTS
 		p.initialized = true
 		p.nextAt = now
+		playbackChanged = true
 	}
 	if v.RebaseTicks > 0 && p.bridgeQueue[0].Sequence > v.RebaseThrough {
 		v.RebaseTicks = 0
@@ -84,6 +87,7 @@ func (s *session) paceBridgeLocked() (time.Duration, error) {
 		v.RebaseThrough = v.Through
 		v.RebaseTicks += uint64(rtpClockTicks(now.Sub(p.nextAt)))
 		p.rebase(now)
+		playbackChanged = true
 	}
 	for len(p.bridgeQueue) > 0 {
 		q := p.bridgeQueue[0]
@@ -97,7 +101,7 @@ func (s *session) paceBridgeLocked() (time.Duration, error) {
 			p.nextTS += uint32(ticks - covered)
 			p.bridgeQueue = p.bridgeQueue[1:]
 			advanceBridgeSent(b, v)
-			b.state = v
+			playbackChanged = true
 			continue
 		}
 		r, ok := b.records[q.Sequence]
@@ -107,11 +111,18 @@ func (s *session) paceBridgeLocked() (time.Duration, error) {
 		if r.Scope != BridgeOutputScope(v.Scope) || q.Turn < max(v.CancelFloor, v.ClearFloor) {
 			s.retireBridgePacketLocked(q.Sequence, "canceled", v)
 			p.bridgeQueue = p.bridgeQueue[1:]
+			playbackChanged = true
 			continue
 		}
 		if now.Before(p.nextAt) {
-			b.state = v
-			s.projectBridgeLocked(s.state.Agent.V2)
+			// Early wakes do not invalidate an immutable cut unless rebase or
+			// terminal progress actually changed its contents.
+			if playbackChanged || !bridgeStateEqual(base, v) {
+				b.state = v
+			}
+			if b.state != base || playbackChanged {
+				s.projectBridgeLocked(s.state.Agent.V2)
+			}
 			return p.nextAt.Sub(now), nil
 		}
 		// Scope, turn and receipt identity are checked at the wire boundary. The
@@ -137,8 +148,10 @@ func (s *session) paceBridgeLocked() (time.Duration, error) {
 		s.projectBridgeLocked(s.state.Agent.V2)
 		return max(0, p.nextAt.Sub(s.taskClockLocked())), nil
 	}
-	v.Revision++
-	b.state = v
+	if playbackChanged || !bridgeStateEqual(base, v) {
+		v.Revision++
+		b.state = v
+	}
 	s.projectBridgeLocked(s.state.Agent.V2)
 	return time.Hour, nil
 }
@@ -158,6 +171,7 @@ func (s *session) retireBridgePacketLocked(seq uint64, outcome string, v *bridge
 	b.replaceRecordEncoding(&old, &r)
 	b.records[seq] = r
 	advanceBridgeSent(b, v)
+	s.compactBridgeSentLocked(seq)
 }
 func advanceBridgeSent(b *bridgeOutputHost, v *bridgeOutputState) {
 	// Sent is the contiguous locally terminal prefix, including refused gaps.

@@ -14,6 +14,7 @@ import (
 )
 
 const bridgeOutputVersion = 1
+const bridgeOutputMoveVersion = 2
 const bridgeBinaryBytes = 1200
 const bridgeRecordCharge = 512
 const bridgeMetadataPartition = v2HostMetadataBytes / 2
@@ -176,6 +177,7 @@ type bridgeOutputMove struct {
 	Version            int                  `json:"version"`
 	State              *bridgeOutputState   `json:"state"`
 	Records            []bridgePacketRecord `json:"records,omitempty"`
+	Settled            []bridgeSettledRange `json:"settled,omitempty"`
 	Queue              []bridgeQueued       `json:"queue,omitempty"`
 	Durable            *bridgeOutputState   `json:"durable,omitempty"`
 	CheckpointSequence uint64               `json:"checkpoint_seq,omitempty"`
@@ -214,6 +216,9 @@ type bridgeOutputHost struct {
 	changed          chan struct{}
 	provenUnadmitted bool
 	state            *bridgeOutputState // immutable accepted revision; guarded by session.mu
+	settled          []bridgeSettledRange
+	settledCost      atomic.Int64
+	settledLive      atomic.Int64
 	records          map[uint64]bridgePacketRecord
 	ingress          chan bridgeOutputRequest
 	priority         chan bridgePriorityRequest
@@ -500,6 +505,13 @@ func (s *session) admitBridgeAttempt(r bridgeOutputRequest, terminal bool) (Brid
 		}
 		return prior.Receipt, false
 	}
+	if prior, digest, ok := b.settledReceipt(r.seq); ok {
+		if digest != r.digest || prior.Turn != r.turn {
+			receipt.Consumed, receipt.Reason = true, "conflict"
+			return receipt, false
+		}
+		return prior, false
+	}
 	if r.seq <= b.state.Pruned {
 		receipt.Outcome = ""
 		receipt.Status = "settled"
@@ -712,6 +724,10 @@ func (w *Worker) BridgeOutputStatus(scope BridgeOutputScope, seq uint64) (Bridge
 		receipt := r.Receipt
 		status.Status = "settled"
 		status.Receipt = &receipt
+	} else if receipt, _, ok := b.settledReceipt(seq); ok {
+		status.Status, status.Receipt = "settled", &receipt
+	} else if bridgeSettledContains(b.settled, seq) {
+		return status, nil // An old scope cannot lend its sent floor to this identity.
 	} else if seq <= b.state.Pruned {
 		status.Status = "settled"
 	} else if seq <= b.state.Sent {
@@ -742,18 +758,14 @@ func (w *Worker) BridgeOutputCredit(scope BridgeOutputScope) (BridgeOutputCredit
 		s.mu.Unlock()
 		return BridgeOutputCredit{}, err
 	}
-	base := b.state
-	view := s.playbackSnapshotLocked()
-	s.mu.Unlock()
-	metadata, encodeErr := bridgeInterruptionCharge(base, view)
-	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err = s.bridgeScopeLocked(scope); err != nil {
-		return BridgeOutputCredit{}, err
-	}
+	// Charge the same cut that supplies credit. A pacer wake or checkpoint may
+	// otherwise replace the immutable state while encoding, without using any
+	// capacity; that race must not withdraw available producer credit.
+	metadata, encodeErr := bridgeCreditMetadataCharge(b.state, s.playbackSnapshotLocked(), b.limits.PendingPackets)
 	slots := b.limits.PendingPackets - int(b.reservedPackets.Load())
 	bytes := min(b.limits.PendingPayloadBytes-int(b.reservedBytes.Load()), b.limits.AudioBytes-b.audioBytes-int(b.reservedBytes.Load()))
-	if !b.provenUnadmitted || encodeErr != nil || b.state != base || metadata+bridgeTerminalReserve > bridgeMetadataPartition || b.audioBytes >= b.limits.AudioBytes || b.audioDuration >= b.limits.AudioDuration || s.bridgeCreditExhaustedLocked() || len(b.state.Exceptions) >= b.limits.ReceiptRanges-1 {
+	if !b.provenUnadmitted || encodeErr != nil || metadata+bridgeTerminalReserve > bridgeMetadataPartition || b.audioBytes >= b.limits.AudioBytes || b.audioDuration >= b.limits.AudioDuration || s.bridgeCreditExhaustedLocked() || len(b.state.Exceptions) >= b.limits.ReceiptRanges-1 {
 		slots = 0
 		bytes = 0
 	}
@@ -954,6 +966,7 @@ func (s *session) pruneBridgeLocked() {
 			_ = s.reserveBridgeMemory(-bridgeRecordCharge)
 		}
 	}
+	s.pruneBridgeSettledLocked(through)
 	v.Pruned = max(v.Pruned, through)
 	v.Exceptions = slices.DeleteFunc(v.Exceptions, func(r bridgeReceiptRange) bool { return r.Last <= through })
 	for i := range v.Exceptions {
@@ -1102,15 +1115,42 @@ func (w *Worker) BridgeOutputResume(scope BridgeOutputScope) (BridgeOutputResume
 // Admission reserves the actual worst encoded floor/end projection, including
 // all retained turn markers. A full packet lane cannot consume control space.
 func bridgeInterruptionCharge(state *bridgeOutputState, playback playbackState) (int, error) {
+	return bridgeInterruptionChargeAt(state, playback, ^uint64(0), ^agent.Turn(0))
+}
+
+// Credit bounds valid audio_end by issued plus the whole pending lane. With
+// one retained turn, clearing above that turn removes every queued reference;
+// clearing at/below it can retain the queue but cannot set a larger clear floor.
+// Bound both cases instead of combining maximum floors with an impossible full
+// queue. Admission/new-turn checks and the terminal reserve remain unchanged.
+func bridgeCreditMetadataCharge(state *bridgeOutputState, playback playbackState, pending int) (int, error) {
+	endCeiling := ^uint64(0)
+	if n := uint64(pending); state.Through <= endCeiling-n {
+		endCeiling = state.Through + n
+	}
+	if len(state.Turns) != 1 || state.Turns[0].Turn == ^agent.Turn(0) {
+		return bridgeInterruptionChargeAt(state, playback, endCeiling, ^agent.Turn(0))
+	}
+	keep, err := bridgeInterruptionChargeAt(state, playback, endCeiling, max(state.ClearFloor, state.Turns[0].Turn))
+	if err != nil {
+		return 0, err
+	}
+	playback.Window = nil
+	playback.Pending, playback.Length, playback.Duration = 0, 0, 0
+	cleared, err := bridgeInterruptionChargeAt(state, playback, endCeiling, ^agent.Turn(0))
+	return max(keep, cleared), err
+}
+
+func bridgeInterruptionChargeAt(state *bridgeOutputState, playback playbackState, endCeiling uint64, clearCeiling agent.Turn) (int, error) {
 	worst := cloneBridgeState(state)
 	worst.CancelFloor = ^agent.Turn(0)
-	worst.ClearFloor = ^agent.Turn(0)
+	worst.ClearFloor = clearCeiling
 	worst.Revision = ^uint64(0)
 	for i := range worst.Turns {
 		if !worst.Turns[i].Finished {
 			worst.Turns[i].Ended = true
 			worst.Turns[i].Outcome = "canceled"
-			worst.Turns[i].Last = ^uint64(0)
+			worst.Turns[i].Last = endCeiling
 		}
 	}
 	return bridgeMetadataCharge(worst, playback)
