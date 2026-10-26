@@ -28,42 +28,60 @@ identities and obey both dimensions. Credit waits occur before host ingress;
 real-time encoded-ready latency measurements still include them. Burst grading uses each turn's first ready-to-wire sample and reports later credit wait separately. All in-flight copies,
 retained digests, references, queued audio and export scratch count against the
 existing session/worker move budgets. Pending ingress has its own bounded cap.
-Actor data retains its existing eight-times export allowance. Bridge export
-shares immutable payload references, reserves frozen records/references, and
-charges the JSON encoder buffer (up to twice its used size while growing) plus
-the returned exact bytes, including base64, and bounded
-snapshot/history fields. Bridge-only wire validation checks the same encoded
-length without allocating nested copies. Pressure refuses export before pause;
-the source remains usable.
+**Dated sizing correction (2026-10-25):** bridge actor data uses derived copy
+and encoding bounds. Other v2 agents keep their existing eight-times allowance.
+Bridge exact capture encodes the component envelope directly. It avoids a second
+whole-snapshot JSON buffer and preserves the same wire bytes. The private bridge
+HTTP reply streams its base64 wrapper through a fixed 1 KiB buffer. The reservation
+stays held through that reply. `TestBridgeOutputDirectComponentEncodingPreservesBytes`
+and `TestBridgeOutputHTTPExportUsesBoundedEncoding` check both paths.
 
-**Proposed actor reserve: 160 KiB**, configurable with
-`ActorReserveBytes` / `bridge-actor-reserve-bytes`. Maximum live actor work is
-63 KiB: 16 KiB aggregate observer requests with two owned copies, 20 KiB of
-pending results plus outstanding terminal reservations, and 11 KiB of adapter
-move-only state. The reserve also protects in-flight ingress headroom. The
-validated `ObserverRequestBytes`, `ObserverMailboxBytes` and
-`AdapterMoveOnlyBytes` profiles bound those terms at admission and restore.
-The 20 KiB result allowance can carry a full 11 KiB state candidate after
-JSON/base64 expansion, plus both observer terminal reservations. Larger chunks
-backpressure before copying; oversize adapter state is typed retryable capacity.
-Other v2 agents keep their existing limits.
+The JSON reservation is three times the encoded bound for the growing main
+buffer and returned copy, plus a separate temporary for the largest escaped or
+base64 fragment. Raw byte fields expand to `4 × ceil(bytes / 3)`; mailbox charges
+already include JSON escaping (up to six bytes per string byte) and base64.
+The largest fragment gets a two-capacity allowance. A fixed 16 KiB margin covers
+small buffers and allocator page rounding. This bounds logical move reservations,
+not process RSS, reusable Go encoder pools or garbage awaiting collection.
 
-`bridgeMoveCost` reserves the larger of current actor cost and the entire
-allowed future actor envelope, including results that cannot drain while the
-actor waits. Two live request copies receive only one request-copy export
-expansion. Credit, packet admission, drain-to-fit and export all use this model.
-Output cannot use space that a later in-bounds observer turn or candidate needs.
-Profiles leaving no full-size output credit are refused during bridge init.
+**Proposed actor reserve: 160 KiB**, still configurable with
+`ActorReserveBytes` / `bridge-actor-reserve-bytes`. It is a floor on the derived
+actor cost, not another deduction from the export allowance. The live mailbox
+still preserves the larger of that floor and current actor ownership for actor
+and pending-ingress work. Maximum live actor work remains 63 KiB: 16 KiB aggregate
+observer requests with two owned copies, 20 KiB of pending results plus terminal
+reservations, and 11 KiB of adapter move-only state. The validated
+`ObserverRequestBytes`, `ObserverMailboxBytes` and `AdapterMoveOnlyBytes` profiles
+bound these terms at admission and restore. The result allowance can carry a full
+11 KiB state candidate after JSON/base64 expansion plus both observer terminals.
+Larger chunks backpressure before copying. An over-bound adapter Save is a typed
+terminal `ErrSave`/`ErrCapacity`, not retryable pressure.
 
-The unchanged 1 MiB move/mailbox budget preserves the 160 KiB reserve and
-Proposed 209,715 B export headroom (20%). Absolute audio ceilings remain
-256 KiB and 4 s. `TestBridgeOutputFullActorEnvelopeAfterCredit` fills the queue
-before observers exist, grows every actor term to its bound and performs an
-actual exact export. Local caps are 36 × 160 B (5,760 B / 0.72 s) and
-14 × 1,200 B (16,800 B / 0.28 s), with full working/history state. The original
-two-16-KiB observer growth scenario is also covered using an explicit 32 KiB
-request / 8 KiB mailbox profile; its caps are 21 / 8 packets. These are measured
-fixture counts, not hard-coded limits.
+`bridgeMoveCost` charges both live request copies, one frozen request copy and
+its base64 encoding. It charges live and frozen mailbox ownership plus its
+already bounded JSON; adapter state receives its live/frozen copies and base64.
+The default future actor envelope costs 284,732 B, including request-fragment
+padding, even before observers start. Fixed copies and encoding cost 204,524 B,
+including a 43,704 B fragment temporary. Frozen record/reference headers reserve
+384 B per record on the measured 64-bit host; live record accounting stays 512 B.
+Immutable audio payloads share frozen ownership. Credit, packet admission,
+drain-to-fit and export reservation use this same model. Profiles leaving no
+full-size output credit are refused during bridge init.
+
+The unchanged 1 MiB move/mailbox budget preserves Proposed 209,715 B export
+headroom (20%). Its modeled-cost allowance is 838,861 B. Absolute audio ceilings
+remain 256 KiB and 4 s. Local fixture caps are **100 × 160 B (16,000 B / 2.00 s)**
+and **40 × 1,200 B (48,000 B / 0.80 s)**. With maximum actor work and full
+working/history state, the actual exact encodings are 150,778 B and 157,865 B;
+modeled totals are 836,272 B and 835,794 B.
+`TestBridgeOutputFullActorEnvelopeAfterCredit` fills before observers exist,
+then grows all actor terms and exports. `TestBridgeOutputCostBoundsEncodedAndFrozenState`
+checks 32 deterministic randomized cuts against independently counted frozen
+copies, actual JSON length and fragment scratch, including maximum scope tokens
+and escaped detail. These are local fixture counts, not fixed packet limits or
+a four-second promise. The explicit 32 KiB request / 8 KiB mailbox growth profile
+now holds 72 / 29 packets. Redis measurement, harness and release-pair validation
+remain separate gates.
 
 Planned export/drain holds only the session being moved. The actor waits for
 its queue and in-flight admission to fit before pausing input or stopping tasks.
@@ -111,12 +129,14 @@ retained records stop output credit at the bounded cap and leave the actor
 reserve available. The measurement producer explicitly declares its consumed
 receipt horizon; the store callback never invents one.
 
-**Phase B prerequisite: receipt retention.** Without pruning, the current export
-model costs about 2.75 KB per retained receipt. The former current-actor model
-held 211 receipts (4.22 s); reserving the entire future actor envelope now holds
-47 receipts (0.94 s at 50 packets/s), measured by
+**Phase B prerequisite: receipt retention. Dated correction (2026-10-25).**
+A retained sent receipt no longer reserves a playback reference: it cannot
+reenter the queue. Its model term is `512 + 384 + 3 × (record JSON + 2)` bytes
+on the measured host. The measured fixture costs about 2.3 KB per receipt,
+down from about 2.75 KB. Without pruning, capacity rises from 47 receipts
+(0.94 s) to **151 receipts (3.02 s at 50 packets/s)**, measured by
 `TestBridgeOutputReceiptPressurePreservesActor`. The 29 s store-stall run needs
-about 1,450 receipts, roughly 31 times this capacity. Phase A has no registered production
+about 1,450 receipts, roughly 9.6 times this capacity. Phase A has no registered production
 bridge agent and no production caller advancing `AdvanceBridgeReplayHorizon`.
 Do not claim that it can sustain that stall yet. Candidate designs are compact
 settled ranges plus a digest chain, or advancing the horizon on every bot

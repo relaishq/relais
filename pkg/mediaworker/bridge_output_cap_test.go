@@ -61,7 +61,7 @@ func TestBridgeOutputCapWithObserverWork(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, validateV2Wire(encoded))
 			require.GreaterOrEqual(t, held, 3*int64(len(encoded)))
-			require.LessOrEqual(t, cost+int64(s.agent.v2.bridge.limits.ActorReserveBytes+s.agent.v2.bridge.limits.ExportHeadroomBytes), int64(1<<20))
+			require.LessOrEqual(t, cost+int64(s.agent.v2.bridge.limits.ExportHeadroomBytes), int64(1<<20))
 			t.Logf("packet_bytes=%d requests=%d owned_actor=%d packets=%d media=%s cost=%d scratch=%d encoded=%d", size, s.moveRequestBytes.Load(), s.moveReserved, count, time.Duration(count)*20*time.Millisecond, cost, held, len(encoded))
 		})
 	}

@@ -74,7 +74,7 @@ func TestBridgeOutputExportCapacity(t *testing.T) {
 			encoded, err := ss.checkpoint.capture(checkpointExact, &movePayload{Bridge: image.bridge, Tasks: image.tasks, Audio: image.audio})
 			require.NoError(t, err)
 			require.NoError(t, validateV2Wire(encoded))
-			require.LessOrEqual(t, live+held+int64(ss.agent.v2.bridge.limits.ActorReserveBytes+ss.agent.v2.bridge.limits.ExportHeadroomBytes), int64(1<<20))
+			require.LessOrEqual(t, live+held+int64(ss.agent.v2.bridge.limits.ExportHeadroomBytes), int64(1<<20))
 			require.GreaterOrEqual(t, held, 3*int64(len(encoded)), "reserve growing JSON encoder buffer and returned bytes")
 			t.Logf("encoded=%d live=%d scratch=%d total=%d", len(encoded), live, held, live+held)
 		})

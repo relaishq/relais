@@ -39,7 +39,7 @@ func TestBridgeOutputCreditPreservesExportReserve(t *testing.T) {
 				live := s.agent.v2.bridge.memory.Load() + s.moveReserved
 				cost := live + s.exportScratchBytes(live)
 				s.mu.Unlock()
-				require.LessOrEqual(t, cost, int64((1<<20)-(160<<10)-(1<<20)/5), "credit must preserve actor and export headroom")
+				require.LessOrEqual(t, cost, s.bridgeLookaheadBudget(), "credit must include actor cost and preserve export headroom")
 			}
 			require.Greater(t, count, 0)
 			t.Logf("packet_bytes=%d packets=%d media=%s", size, count, time.Duration(count)*20*time.Millisecond)
@@ -66,6 +66,8 @@ func seedBridgeOverCut(t *testing.T) (acceptedEventRig, BridgeOutputScope) {
 		require.Equal(t, "admitted", s.admitBridgePacket(r).Outcome)
 	}
 	b.limits = BridgeOutputLimits{}.Defaults()
+	// Simulate a tighter destination profile, independent of the current model.
+	b.limits.ExportHeadroomBytes = (1 << 20) - int(s.bridgeExportCostLocked()) + 10000
 	require.Greater(t, s.bridgeExportCostLocked(), s.bridgeLookaheadBudget())
 	return rig, scope
 }

@@ -354,7 +354,7 @@ func (s *session) validateV2StateMetadata(state agent.State, lostMoveData ...boo
 		return fmt.Errorf("%w: move-only data exceeds session budget", agent.ErrCapacity)
 	}
 	if s.agent.v2.bridge != nil && state.MoveOnlyLength > s.agent.v2.bridge.limits.AdapterMoveOnlyBytes {
-		return fmt.Errorf("%w: %w: bridge move-only adapter bound", errTaskAdmissionBackpressure, agent.ErrCapacity)
+		return fmt.Errorf("%w: %w: bridge move-only adapter bound", legacy.ErrSave, agent.ErrCapacity)
 	}
 	if state.HasMoveOnly {
 		if _, ok := s.agent.v2.instance.(agent.MoveOnlyState); !ok {

@@ -33,7 +33,12 @@ func bridgeRecordJSONBytes(r bridgePacketRecord) int {
 	return n
 }
 func bridgeRecordQueueJSONBytes(r bridgePacketRecord) int {
-	// Every record reserves a full reference, even after it leaves the live queue.
+	// Sent records can never reenter playback. Their retained receipt needs no
+	// queue reference in the frozen image or in its JSON. Other outcomes retain
+	// the full reference bound, including gap references awaiting playback.
+	if r.Receipt.Outcome == "sent" {
+		return 0
+	}
 	return len(`{"packet_seq":,"last":,"turn":,"stream_id":,"duration":,"kind":"bridge","offset":0,"count":1}`) + 2*len(strconv.FormatUint(r.Receipt.Sequence, 10)) + len(strconv.FormatUint(uint64(r.Receipt.Turn), 10)) + len(strconv.FormatUint(r.Stream, 10)) + len(strconv.FormatInt(int64(r.Duration), 10))
 }
 func (b *bridgeOutputHost) replaceRecordEncoding(old, next *bridgePacketRecord) {
