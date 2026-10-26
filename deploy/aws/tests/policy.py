@@ -205,8 +205,11 @@ def check(template):
                     assert store[field] is True, field
                 assert store['Durability'] == 'sync' and store['ClusterMode'] == 'enabled'
                 assert store['Engine'] == 'valkey' and store['EngineVersion'] == '9.0'
-                assert store['NumNodeGroups'] == store['ReplicasPerNodeGroup'] == 1
+                # ElastiCache refuses ReplicasPerNodeGroup together with NodeGroupConfiguration ReplicaCount.
+                assert 'ReplicasPerNodeGroup' not in store
+                assert store['NumNodeGroups'] == len(store['NodeGroupConfiguration']) == 1
                 group = store['NodeGroupConfiguration'][0]
+                assert group['ReplicaCount'] == len(group['ReplicaAvailabilityZones']) == 1
                 assert group['PrimaryAvailabilityZone'] != group['ReplicaAvailabilityZones'][0]
                 assert store['TransitEncryptionMode'] == 'required'
                 for role, expected_secrets in SECRET_SCOPE.items():
