@@ -69,7 +69,8 @@ The [guarantee matrix](guarantees.md) gives measured conditions, known failures,
 and explicit non-guarantees. These include uncertain-reply rollback failures,
 buffer overflow or expiry, and untested cross-host relay failover. A relay
 restart can restore persisted routes at the same addresses; an optional standby
-is limited to the same host. Control-plane crash recovery is not established.
+is limited to the same host. Control restart is tested locally; paid-cloud and
+cross-host control failover are not established.
 
 Private HTTP coordination is unauthenticated and can carry snapshot key material.
 Restrict it to trusted hosts and users; loopback does not isolate local users.

@@ -1071,6 +1071,7 @@ This closes #94's residual; it does not fix #51.
 | Safari or data channels | [#31 out of scope and guarantee-matrix section][spec] |
 | Mobile browsers (Android Chrome, iOS Safari) | [#45 scope change][device-ticket]; deferred to [#98][mobile] |
 | Multi-region operation, Kubernetes or production orchestration | [#31 out of scope][spec] |
+| Paid-cloud or cross-host control failover, or control high availability; only single-control restart on the same endpoints is tested locally ([control restart](#control-restart)) | [Control restart](#control-restart) |
 | Multi-party rooms, fan-out, simulcast or SVC | [#31 out of scope][spec] |
 | TURN, TCP or TLS **media fallback** | [#31 out of scope][spec]. Private HTTP/Redis TCP tuning is a separate matter. |
 | Production store durability, Redis failover/backup operations, or automatic relaunch of failed standbys | [#31][spec]; [session-store limits][session-store]; [ADR 0004][standby-adr] |
