@@ -722,7 +722,6 @@ Resources:
       CacheNodeType: cache.m7g.large
       ClusterMode: enabled
       NumNodeGroups: 1
-      ReplicasPerNodeGroup: 1
       AutomaticFailoverEnabled: true
       MultiAZEnabled: true
       Durability: sync
