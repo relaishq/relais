@@ -7,7 +7,8 @@
     "Old": "if outcome == operator.Unknown {",
     "New": "if false {",
     "Test": "TestUnknownLatches",
-    "Marker": "MUTATION: unknown-latch"
+    "Marker": "MUTATION: unknown-latch",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "halted-still-sends",
@@ -17,7 +18,8 @@
     "Old": "if s.latched {",
     "New": "if false {",
     "Test": "TestLatchFencesEffects",
-    "Marker": "MUTATION: latch-fence"
+    "Marker": "MUTATION: latch-fence",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "queued-send-past-deadline",
@@ -27,7 +29,8 @@
     "Old": "if end <= s.clock.Elapsed() {",
     "New": "if false {",
     "Test": "TestDeadlineBeforeSubmission",
-    "Marker": "MUTATION: submission-deadline"
+    "Marker": "MUTATION: submission-deadline",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "send-after-late-wake",
@@ -37,7 +40,8 @@
     "Old": "if end <= s.clock.Elapsed() {",
     "New": "if false {",
     "Test": "TestDeadlineBeforeSubmission",
-    "Marker": "MUTATION: submission-deadline"
+    "Marker": "MUTATION: submission-deadline",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "dispatch-id-not-recorded",
@@ -47,7 +51,8 @@
     "Old": "s.requests[r.ID] = &pending{end: end, effect: effect}",
     "New": "",
     "Test": "TestPendingIdentity",
-    "Marker": "MUTATION: pending-identity"
+    "Marker": "MUTATION: pending-identity",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "gate-start-after-105",
@@ -57,7 +62,8 @@
     "Old": "if b.Remaining() <= 0 {",
     "New": "if false {",
     "Test": "TestDeadlineBudgets",
-    "Marker": "MUTATION: gate-cutoff"
+    "Marker": "MUTATION: gate-cutoff",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "gates-after-lifetime-clamp",
@@ -67,7 +73,8 @@
     "Old": "return min(b.end, b.clock.Elapsed()+GateMaximum), true",
     "New": "return b.clock.Elapsed()+GateMaximum, true",
     "Test": "TestDeadlineBudgets",
-    "Marker": "MUTATION: lifetime-clamp"
+    "Marker": "MUTATION: lifetime-clamp",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "pool-extends-105-deadline",
@@ -77,7 +84,8 @@
     "Old": "min(b.end, b.clock.Elapsed()+PoolReserve)",
     "New": "b.clock.Elapsed()+PoolReserve",
     "Test": "TestPoolBudget",
-    "Marker": "MUTATION: pool-clamp"
+    "Marker": "MUTATION: pool-clamp",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "driver-late-result-passes",
@@ -87,7 +95,8 @@
     "Old": "s.clock.Elapsed() >= end && r.Status != operator.Failure",
     "New": "false",
     "Test": "TestGateLateResult",
-    "Marker": "MUTATION: gate-late-result"
+    "Marker": "MUTATION: gate-late-result",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "trace-keeps-free-text",
@@ -97,7 +106,8 @@
     "Old": "return \"unclassified\"",
     "New": "return message",
     "Test": "TestTraceSanitization",
-    "Marker": "MUTATION: trace-sanitization"
+    "Marker": "MUTATION: trace-sanitization",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "lean-command-after-unknown",
@@ -107,7 +117,8 @@
     "Old": "r.Reason == \"command-result-unknown\" || ",
     "New": "",
     "Test": "TestGateUnknownStops",
-    "Marker": "MUTATION: gate-unknown-stop"
+    "Marker": "MUTATION: gate-unknown-stop",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "write-unknown-latched-late",
@@ -117,7 +128,8 @@
     "Old": "if outcome == operator.Unknown {",
     "New": "if false {",
     "Test": "TestMailboxUnknownImmediately",
-    "Marker": "MUTATION: mailbox-latch"
+    "Marker": "MUTATION: mailbox-latch",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "late-unknown-unsettled",
@@ -127,7 +139,8 @@
     "Old": "s.latched || len(r.Pending) > 0 || len(gates) != len(s.gates)",
     "New": "s.latched || len(gates) != len(s.gates)",
     "Test": "TestOracleLateUnknown",
-    "Marker": "MUTATION: oracle-pending-final"
+    "Marker": "MUTATION: oracle-pending-final",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "interrupt-starts-next-gate",
@@ -137,7 +150,8 @@
     "Old": "if ctx.Err() != nil {",
     "New": "if false {",
     "Test": "TestInterruptBeforeRequest",
-    "Marker": "MUTATION: interrupted-request"
+    "Marker": "MUTATION: interrupted-request",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "protocol-publication-fence",
@@ -146,7 +160,8 @@
     "Old": "if p.fatal != nil {",
     "New": "if false {",
     "Test": "TestFaultPublicationFencesSubmission/duplicate",
-    "Marker": "MUTATION: publication-fence"
+    "Marker": "MUTATION: publication-fence",
+    "Package": "./internal/operatortransport"
   },
   {
     "ID": "protocol-write-deadline",
@@ -155,7 +170,8 @@
     "Old": "if expired(*f.Request, p.now()) {",
     "New": "if false {",
     "Test": "TestDeadlineAfterEncodingBeforeWrite",
-    "Marker": "MUTATION: writer-deadline"
+    "Marker": "MUTATION: writer-deadline",
+    "Package": "./internal/operatortransport"
   },
   {
     "ID": "protocol-adapter-expiry",
@@ -164,7 +180,8 @@
     "Old": "if err != nil {",
     "New": "if false {",
     "Test": "TestAdapterRefusesExpiredQueuedRequest",
-    "Marker": "MUTATION: adapter-expiry"
+    "Marker": "MUTATION: adapter-expiry",
+    "Package": "./internal/operatortransport"
   },
   {
     "ID": "protocol-active-gate-cutoff",
@@ -173,7 +190,8 @@
     "Old": "if s.activeEnd != nil {",
     "New": "if false {",
     "Test": "TestActiveGateDeadlineBeforeEffect",
-    "Marker": "MUTATION: active-gate-cutoff"
+    "Marker": "MUTATION: active-gate-cutoff",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "protocol-clamped-wait",
@@ -182,7 +200,8 @@
     "Old": "s.requests[req.ID].end-s.clock.Elapsed()",
     "New": "end-s.clock.Elapsed()",
     "Test": "TestExchangeWaitUsesClampedEnd",
-    "Marker": "MUTATION: clamped-wait"
+    "Marker": "MUTATION: clamped-wait",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "protocol-blob-classifier-boundary",
@@ -191,7 +210,8 @@
     "Old": "operatortransport.ResolveReply(s.spool, *f.Result)",
     "New": "operatortransport.ResolveReply(nil, operator.Reply{ID:f.Result.ID,Transport:f.Result.Transport,ExitCode:f.Result.ExitCode,Payload:f.Result.Payload})",
     "Test": "TestExchangeResolvesBlobsBeforeClassification/both",
-    "Marker": "MUTATION: blob-before-classification"
+    "Marker": "MUTATION: blob-before-classification",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "protocol-public-category",
@@ -200,7 +220,8 @@
     "Old": "return \"unclassified\"",
     "New": "return message",
     "Test": "TestPublicCategoryAllowlist",
-    "Marker": "MUTATION: public-code"
+    "Marker": "MUTATION: public-code",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "protocol-scenario-digest",
@@ -209,7 +230,8 @@
     "Old": "!digestPattern.MatchString(init.Scenario.Digest) || ",
     "New": "",
     "Test": "TestScenarioDigestBoundary",
-    "Marker": "MUTATION: scenario-digest"
+    "Marker": "MUTATION: scenario-digest",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "protocol-duplicate-request-publication",
@@ -218,7 +240,8 @@
     "Old": "if p.inbound[key] {",
     "New": "if false {",
     "Test": "TestDuplicateInboundRequestNeverDelivered/already-executed",
-    "Marker": "MUTATION: duplicate-inbound-delivery"
+    "Marker": "MUTATION: duplicate-inbound-delivery",
+    "Package": "./internal/operatortransport"
   },
   {
     "ID": "protocol-inbound-fatal-admission",
@@ -227,7 +250,8 @@
     "Old": "if fatal != nil {",
     "New": "if false {",
     "Test": "TestDuplicateInboundRequestNeverDelivered/queued-before-fault",
-    "Marker": "MUTATION: duplicate-inbound-delivery"
+    "Marker": "MUTATION: duplicate-inbound-delivery",
+    "Package": "./internal/operatortransport"
   },
   {
     "ID": "protocol-final-session-latch",
@@ -236,7 +260,8 @@
     "Old": "if fault != nil {",
     "New": "if false {",
     "Test": "TestServePublishedFaultFencesFinal/duplicate/classifier",
-    "Marker": "MUTATION: final-fault-latch"
+    "Marker": "MUTATION: final-fault-latch",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "protocol-final-publication-fence",
@@ -245,7 +270,8 @@
     "Old": "if f.Type == \"final\" && p.fatal != nil && (f.Final.Status == operator.Passed || !f.Final.Latched || f.Final.Complete) {",
     "New": "if false {",
     "Test": "TestPublishedFaultRejectsPassingFinal",
-    "Marker": "MUTATION: passing-final-fence"
+    "Marker": "MUTATION: passing-final-fence",
+    "Package": "./internal/operatortransport"
   },
   {
     "ID": "protocol-runner-context-cutoff",
@@ -254,6 +280,544 @@
     "Old": "context.WithTimeout(ctx, end-s.clock.Elapsed())",
     "New": "context.WithCancel(ctx)",
     "Test": "TestServeRunnerContextUsesActiveCutoff",
-    "Marker": "MUTATION: runner-context-cutoff"
+    "Marker": "MUTATION: runner-context-cutoff",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "ignore-signal-bracket-width",
+    "File": "internal/operatorgates/clocks/clocks.go",
+    "Function": "SignalMidpoint",
+    "Old": "(a-b+1)/2 > uint64(assumedBound) || workerBound > assumedBound-int64((a-b+1)/2)",
+    "New": "false",
+    "Test": "TestSignalBracketOracle/1",
+    "Marker": "ignore-signal-bracket-width",
+    "Package": "./internal/operatorgates/clocks",
+    "GuardFingerprint": "fbf4cd9eda75081792f06814024683bfa3935d55ad68fd35334c24a17468c9e1"
+  },
+  {
+    "ID": "skip-runtime-release-pins",
+    "File": "internal/operatorgates/observations.go",
+    "Function": "FreshInventory",
+    "Old": "if err := inventory.ValidatePins(pins, s.scenario); err != nil {",
+    "New": "if err := inventory.ValidatePins(pins, s.scenario); false && err != nil {",
+    "Test": "TestFreshInventoryReadsAllHostsAndChecksDeployment",
+    "Marker": "skip-runtime-release-pins",
+    "Package": "./internal/operatorgates",
+    "GuardFingerprint": "734f022ebaaf0873ca70cd43809cf7d396d6d5933e8ae17cfa1db47ae8763f80"
+  },
+  {
+    "ID": "skip-deployed-release-check",
+    "File": "internal/operatorgates/observations.go",
+    "Function": "FreshInventory",
+    "Old": "if deployedSHA != \"\" && slices.ContainsFunc",
+    "New": "if false && deployedSHA != \"\" && slices.ContainsFunc",
+    "Test": "TestFreshInventoryReadsAllHostsAndChecksDeployment",
+    "Marker": "skip-deployed-release-check",
+    "Package": "./internal/operatorgates",
+    "GuardFingerprint": "c7d6e5ba836c1878aba10572c9963b56d34050716832f018a64b1e2d9117441e"
+  },
+  {
+    "ID": "inventory-category-not-forwarded",
+    "File": "internal/operatorgates/inventory/inventory.go",
+    "Function": "Unavailable",
+    "Old": "code = match[1]",
+    "New": "code = \"unavailable\"",
+    "Test": "TestInventoryFailureCode",
+    "Marker": "inventory-category-not-forwarded",
+    "Package": "./internal/operatorgates/inventory",
+    "GuardFingerprint": "e8c90449f6d59d046a893f69230cc706a7601c50abb0722be582666d04e9322c"
+  },
+  {
+    "ID": "streamed-release-without-byte-cap",
+    "File": "internal/operatorgates/artifacts/reader.go",
+    "Function": "get",
+    "Old": "if int64(len(data)) > limit {",
+    "New": "if false && int64(len(data)) > limit {",
+    "Test": "TestReleaseReaderBodyLimits",
+    "Marker": "streamed-release-without-byte-cap",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "69e50c08ffc91131141816fa7f4585ddfbd1ca2e07266226ae83314524e7b43e"
+  },
+  {
+    "ID": "plan-from-draft-release",
+    "File": "internal/operatorgates/artifacts/plan.go",
+    "Function": "releaseView",
+    "Old": "if v.Draft {",
+    "New": "if false && v.Draft {",
+    "Test": "TestReleaseRefusals/draft",
+    "Marker": "release guard draft",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "afd95ca83a091e81a03ae80a64cf756e42d706e3b949ca31117702a6061bb91b"
+  },
+  {
+    "ID": "ignore-planned-digest",
+    "File": "internal/operatorgates/artifacts/plan.go",
+    "Function": "resolve",
+    "Old": "if entries[archive] != request.ArchiveSHA256 {",
+    "New": "if false && entries[archive] != request.ArchiveSHA256 {",
+    "Test": "TestReleaseRefusals/planned-digest",
+    "Marker": "release guard planned-digest",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "26cbc2817378fe2ca459fa9986f67c1e54480b3b4e641bed15e8af49c06ef735"
+  },
+  {
+    "ID": "ignore-archive-bytes",
+    "File": "internal/operatorgates/artifacts/plan.go",
+    "Function": "resolve",
+    "Old": "if digest(archiveBytes) != entries[archive] {",
+    "New": "if false && digest(archiveBytes) != entries[archive] {",
+    "Test": "TestReleaseRefusals/archive-bytes",
+    "Marker": "release guard archive-bytes",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "056318c76360d0b30fd98a3f04366bb2197eefe504c7a646593b7944ac289545"
+  },
+  {
+    "ID": "ignore-tag-policy",
+    "File": "internal/operatorgates/artifacts/plan.go",
+    "Function": "resolve",
+    "Old": "if string(a) != string(b) {",
+    "New": "if false && string(a) != string(b) {",
+    "Test": "TestReleaseTagPolicy",
+    "Marker": "tag-policy guard",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "434aae5057e6151f0ba4fe5d9a75b916b524c1e8a0e5340d08230192084467bb"
+  },
+  {
+    "ID": "truncated-listing-as-complete",
+    "File": "internal/operatorgates/artifacts/plan.go",
+    "Function": "assetList",
+    "Old": "if p.Complete {",
+    "New": "if true {",
+    "Test": "TestAssetPagination",
+    "Marker": "pagination guard",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "a4efb3d74476d8a4cfaee76338ac933c7acced1cd034dbd46b819bd928c00be3"
+  },
+  {
+    "ID": "ignore-release-edit",
+    "File": "internal/operatorgates/artifacts/plan.go",
+    "Function": "PlanArtifacts",
+    "Old": "if v != s.release || !reflect.DeepEqual(assets, s.assets) {",
+    "New": "if false && (v != s.release || !reflect.DeepEqual(assets, s.assets)) {",
+    "Test": "TestReleaseRefusals/release-edit",
+    "Marker": "release guard release-edit",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "6730fd8be51342fc017f011c1827d95ccd8741cdce3e5f22bbdadfe838b68a5c"
+  },
+  {
+    "ID": "recheck-only-b",
+    "File": "internal/operatorgates/artifacts/plan.go",
+    "Function": "PlanArtifacts",
+    "Old": "for _, s := range []snapshot{as, bs} {",
+    "New": "_ = as\nfor _, s := range []snapshot{bs} {",
+    "Test": "TestReleaseRefusals/a-edit-during-b",
+    "Marker": "release guard a-edit-during-b",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "cb4c1c8e4c5d4bf781650fb6d056efcf03992b9537d9b4f9177a1af1ec417527"
+  },
+  {
+    "ID": "check-only-selected-asset",
+    "File": "internal/operatorgates/artifacts/plan.go",
+    "Function": "resolve",
+    "Old": "a, e := required(assets, name, MaxArchiveBytes)",
+    "New": "a, e := required(assets, archive, MaxArchiveBytes)",
+    "Test": "TestReleaseRefusals/all-archives",
+    "Marker": "release guard all-archives",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "e31f5bfc1df66012205430d087b2cedaa67c25800cc585ef4cfd6cae92341fb6"
+  },
+  {
+    "ID": "accept-unsafe-member-type",
+    "File": "internal/operatorgates/artifacts/archive.go",
+    "Function": "ArchiveManifest",
+    "Old": "h[156] != '0' || ",
+    "New": "",
+    "Test": "TestStrictArchiveGrammar/symlink",
+    "Marker": "archive guard symlink",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "66eecfe3c59010ed6de17ecdc45d7dc01920bb8a0a7506e4fd861553900992ef"
+  },
+  {
+    "ID": "accept-nul-type",
+    "File": "internal/operatorgates/artifacts/archive.go",
+    "Function": "ArchiveManifest",
+    "Old": "h[156] != '0' || ",
+    "New": "",
+    "Test": "TestStrictArchiveGrammar/nul-type",
+    "Marker": "archive guard nul-type",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "82b79883469ba639bc21bbd2ba2daf997649bb3f76960834d0b8398010bb0f2b"
+  },
+  {
+    "ID": "skip-global-pax",
+    "File": "internal/operatorgates/artifacts/archive.go",
+    "Function": "ArchiveManifest",
+    "Old": "h[156] != '5' || ",
+    "New": "",
+    "Test": "TestStrictArchiveGrammar/global-pax",
+    "Marker": "archive guard global-pax",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "fee96cc550d5dbc78bad2ada79750afa3e2a0a535426294514c121766d17d5c2"
+  },
+  {
+    "ID": "accept-posix-magic",
+    "File": "internal/operatorgates/artifacts/archive.go",
+    "Function": "ArchiveManifest",
+    "Old": "!bytes.Equal(h[257:265], []byte{'u', 's', 't', 'a', 'r', ' ', ' ', 0}) || ",
+    "New": "",
+    "Test": "TestStrictArchiveGrammar/posix-magic",
+    "Marker": "archive guard posix-magic",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "1dc177fc56a89a4c8e2981c44da651d610b9415de16d9d59296dc181ffe23a48"
+  },
+  {
+    "ID": "ignore-gnu-prefix",
+    "File": "internal/operatorgates/artifacts/archive.go",
+    "Function": "ArchiveManifest",
+    "Old": "!zeros(h[329:]) || ",
+    "New": "",
+    "Test": "TestStrictArchiveGrammar/gnu-prefix",
+    "Marker": "archive guard gnu-prefix",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "fcf1a9cfb21f65622bba308e5b80380b9176025f9b99d254540bfb300e17763a"
+  },
+  {
+    "ID": "ignore-device-numbers",
+    "File": "internal/operatorgates/artifacts/archive.go",
+    "Function": "ArchiveManifest",
+    "Old": "!zeros(h[329:]) || ",
+    "New": "",
+    "Test": "TestStrictArchiveGrammar/device",
+    "Marker": "archive guard device",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "331885b612d15f9470f3fdb1213a97ff6de6a619e4c8b8b6ffb3e9b9a0629aae"
+  },
+  {
+    "ID": "decode-link-name",
+    "File": "internal/operatorgates/artifacts/archive.go",
+    "Function": "ArchiveManifest",
+    "Old": "!zeros(h[157:257]) || ",
+    "New": "",
+    "Test": "TestStrictArchiveGrammar/link-name",
+    "Marker": "archive guard link-name",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "3636d668619c6644328f1a22c2e22537744bfcee170d70fed68d56777934d04a"
+  },
+  {
+    "ID": "ignore-header-modes",
+    "File": "internal/operatorgates/artifacts/archive.go",
+    "Function": "ArchiveManifest",
+    "Old": " || mode != \"0000755\\x00\"",
+    "New": "",
+    "Test": "TestStrictArchiveGrammar/directory-mode",
+    "Marker": "archive guard directory-mode",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "0640ee092904faf6127b987ffd75637f8e6bae369b65f76a788dcd74989351f7"
+  },
+  {
+    "ID": "ignore-member-modes",
+    "File": "internal/operatorgates/artifacts/archive.go",
+    "Function": "ArchiveManifest",
+    "Old": " || mode != expectedMode",
+    "New": " || false && mode != expectedMode",
+    "Test": "TestStrictArchiveGrammar/member-mode",
+    "Marker": "archive guard member-mode",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "4645d0468a607b11d3d70e4e386cf1a4a9cef4c272e131ca0b9772ce86b02eae"
+  },
+  {
+    "ID": "decode-member-names",
+    "File": "internal/operatorgates/artifacts/archive.go",
+    "Function": "ArchiveManifest",
+    "Old": "name := strings.TrimRight(string(h[:100]), \"\\x00\")",
+    "New": "name := strings.TrimPrefix(strings.TrimRight(string(h[:100]), \"\\x00\"), \"\\ufeff\")",
+    "Test": "TestStrictArchiveGrammar/bom-name",
+    "Marker": "archive guard bom-name",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "72b406a637061b3928d1e68a12ef3773cf1fb0d460871f76f70901b3c42100c6"
+  },
+  {
+    "ID": "ignore-owner-numbers",
+    "File": "internal/operatorgates/artifacts/archive.go",
+    "Function": "ArchiveManifest",
+    "Old": "[][2]int{{108, 116}, {116, 124}, {124, 136}, {136, 148}}",
+    "New": "[][2]int{{124, 136}, {136, 148}}",
+    "Test": "TestStrictArchiveGrammar/uid",
+    "Marker": "archive guard uid",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "d75e6ed47687ad78c1da2f82b6f01c15bccbc286b8004bdd76131df45f19da44"
+  },
+  {
+    "ID": "drop-notice-member",
+    "File": "internal/operatorgates/artifacts/archive.go",
+    "Function": "var:members",
+    "Old": "\"NOTICE\": false, ",
+    "New": "",
+    "Test": "TestReleaseArchiveMembers",
+    "Marker": "NOTICE required",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "f3340e5cee2f82aa7077d2c3697d811ee6572848d23eee6d4467011eb2191e1c"
+  },
+  {
+    "ID": "allow-lone-surrogate",
+    "File": "internal/operatorgates/artifacts/plan.go",
+    "Function": "decodeManifest",
+    "Old": "if !validText(data) {",
+    "New": "if false && !validText(data) {",
+    "Test": "TestNativeManifestContracts",
+    "Marker": "allow-lone-surrogate",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "9442311b03dfe00d060ba451cf23b6e46b5f290b0758ff88edd2844aa480e9da"
+  },
+  {
+    "ID": "observation-requires-lost",
+    "File": "internal/operatorgates/observe/decode.go",
+    "Function": "Move",
+    "Old": "data, moveContract",
+    "New": "data, append(Contract{\"lost\"}, moveContract...)",
+    "Test": "TestMoveLostOmission",
+    "Marker": "lost omission contract",
+    "Package": "./internal/operatorgates/observe",
+    "GuardFingerprint": ""
+  },
+  {
+    "ID": "pair-without-tested-peer",
+    "File": "internal/releasecompat/preflight.go",
+    "Function": "checkState",
+    "Old": " || !slices.Contains(higher.TestedPeers, lower.Version)",
+    "New": "",
+    "Test": "TestNativeCompatibilityPolicy/tested-peer",
+    "Marker": "native compatibility policy tested-peer",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "3785b214f0948638935462223b5cacf296a1b5cbd3df65e234182e769a2156e9"
+  },
+  {
+    "ID": "rollback-past-boundary",
+    "File": "internal/releasecompat/preflight.go",
+    "Function": "Preflight",
+    "Old": "if c < 0 {\n\t\t\t\treturn fail(refuse(\"rollback_boundary\"",
+    "New": "if false && c < 0 {\n\t\t\t\treturn fail(refuse(\"rollback_boundary\"",
+    "Test": "TestNativeCompatibilityPolicy/rollback-boundary",
+    "Marker": "native compatibility policy rollback-boundary",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "d6fb28669edbeac1abee9f5d9d8b080af55b362d83016ea231b29810518d789c"
+  },
+  {
+    "ID": "keep-last-duplicate-key",
+    "File": "internal/releasecompat/manifest.go",
+    "Function": "uniqueJSON",
+    "Old": "if keys[key] {",
+    "New": "if false && keys[key] {",
+    "Test": "TestNativeManifestContracts",
+    "Marker": "native manifest contract accepted",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "e1e033155b4f3a424ecd2dfbf1f8af2075067946a8131d449d68d94a32f417b5"
+  },
+  {
+    "ID": "fraction-fills-int",
+    "File": "internal/releasecompat/manifest.go",
+    "Function": "type:Manifest",
+    "Old": "Schema         int",
+    "New": "Schema         float64",
+    "Test": "TestNativeManifestContracts",
+    "Marker": "native manifest contract accepted",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "466b5f9884e14b80d52b26509b54d87e82b7aa7fd787e78c38679d0c2a648deb"
+  },
+  {
+    "ID": "untyped-policy-comment",
+    "File": "internal/releasecompat/manifest.go",
+    "Function": "type:Policy",
+    "Old": "Comment        string",
+    "New": "Comment        any",
+    "Test": "TestNativeManifestContracts",
+    "Marker": "native policy comment type ignored",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "c231a1f35f8e68a584d60ee645c2085cb766e6969402ee2f4989e250bac2ef88"
+  },
+  {
+    "ID": "strip-json-bom",
+    "File": "internal/releasecompat/manifest.go",
+    "Function": "Decode",
+    "Old": "func Decode(data []byte, value any) error {",
+    "New": "func Decode(data []byte, value any) error {\n data = bytes.TrimPrefix(data, []byte{0xef,0xbb,0xbf})",
+    "Test": "TestNativeManifestContracts",
+    "Marker": "native manifest contract accepted",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "0239526065222f56a1429991f0a1fb4eaf027de565d43e5bd0196a919beef8ce"
+  },
+  {
+    "ID": "omitted-slice-refuses",
+    "File": "internal/releasecompat/manifest.go",
+    "Function": "Decode",
+    "Old": "\treturn nil\n}",
+    "New": "\tif m,ok := value.(*Manifest); ok && m.Roles[\"worker\"][\"legacy\"].Formats[\"snapshot\"].Writes == nil { return refuse(\"invalid_input\",\"missing writes\") }; return nil\n}",
+    "Test": "TestNativeManifestContracts",
+    "Marker": "omitted nullable writes",
+    "Package": "./internal/operatorgates/artifacts",
+    "GuardFingerprint": "3a97fa04621cb70023c34a560c06d53998514e8343e65f19134cf06e9c970f02"
+  },
+  {
+    "ID": "agent-schema-as-int",
+    "File": "internal/releasecompat/manifest.go",
+    "Function": "type:Agent",
+    "Old": "[]uint32",
+    "New": "[]int64",
+    "Test": "TestNativeManifestContracts",
+    "Marker": "native manifest contract accepted",
+    "Package": "./internal/operatorgates/artifacts",
+    "Edits": [
+      {
+        "File": "internal/releasecompat/manifest.go",
+        "Function": "type:Agent",
+        "Old": "Reads    []uint32 `json:\"reads\"`\n\tWrites   []uint32 `json:\"writes\"`",
+        "New": "Reads    []int64 `json:\"reads\"`\n\tWrites   []int64 `json:\"writes\"`"
+      },
+      {
+        "File": "internal/releasecompat/generate.go",
+        "Function": "Generate",
+        "Old": "Reads: []uint32{uint32(echo)}, Writes: []uint32{uint32(echo)}",
+        "New": "Reads: []int64{int64(echo)}, Writes: []int64{int64(echo)}"
+      },
+      {
+        "File": "internal/releasecompat/preflight.go",
+        "Function": "union32",
+        "Old": "func union32(a, b []uint32) []uint32 {",
+        "New": "func union32(a, b []int64) []int64 {"
+      }
+    ],
+    "GuardFingerprint": "1bc20b0093654c0a5ae55438a020470f48120b1347378d7e19af7d6bfa996dde"
+  },
+  {
+    "ID": "boundary-fabricates-store-empty",
+    "GuardFingerprint": "903f2b3cca0e883f6c24e7b4a525719eeabd9a5b2291c2306d353ebfc2d994ef",
+    "File": "internal/operatorgates/host/preview_process.py",
+    "Old": "        return ownership(p)",
+    "New": "        return {\"owners\": {\"w1\": 0, \"w2\": 0}, \"transfers\": 0}",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/boundary-fabricates-store-empty",
+    "Marker": "MUTATION: python-guard boundary-fabricates-store-empty",
+    "PythonTest": "preview_process_test.ProcessTests.test_store_status_reuses_authoritative_reader_without_mutations"
+  },
+  {
+    "ID": "sigterm-as-takeover",
+    "GuardFingerprint": "698d23acf879362fc26bd1fdca444a828e02f5241074e2fe644792d6893762f7",
+    "File": "internal/operatorgates/host/preview_process.py",
+    "Old": "signal.pidfd_send_signal(fd, signal.SIGKILL)",
+    "New": "signal.pidfd_send_signal(fd, signal.SIGTERM)",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/sigterm-as-takeover",
+    "Marker": "MUTATION: python-guard sigterm-as-takeover",
+    "PythonTest": "preview_process_test.ProcessTests.test_takeover_is_sigkill_on_exact_worker_unit"
+  },
+  {
+    "ID": "stopped-target-passes-inventory",
+    "GuardFingerprint": "d2fd6055a9df2efaa22d68dce2f05b124a25a752e9d23022bf3bc4d21677a61d",
+    "File": "internal/operatorgates/host/preview_inventory.py",
+    "Old": "        if require_running and pid <= 0:\n            raise ValueError(\"stable target process not running\")\n",
+    "New": "",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/stopped-target-passes-inventory",
+    "Marker": "MUTATION: python-guard stopped-target-passes-inventory",
+    "PythonTest": "preview_process_test.InventoryTests.test_live_identity_and_manifest_are_required"
+  },
+  {
+    "ID": "host-ignores-authoritative-ownership",
+    "GuardFingerprint": "5c0c4565db1facb640eeadd93e7762e995900c36579467fb9f2bf8d6e8ba2267",
+    "File": "internal/operatorgates/host/preview_process.py",
+    "Old": "    if store[\"owners\"][worker] != 0:\n        raise ValueError(\"store still owns calls on worker\")\n",
+    "New": "",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/host-ignores-authoritative-ownership",
+    "Marker": "MUTATION: python-guard host-ignores-authoritative-ownership",
+    "PythonTest": "preview_process_test.ProcessTests.test_each_independent_empty_dimension_blocks_stop"
+  },
+  {
+    "ID": "host-ignores-pending-transfers",
+    "GuardFingerprint": "ecf3f8399c128da5b49f701b0667865e4ba315c83bbb91bfcc6457189f2501e5",
+    "File": "internal/operatorgates/host/preview_process.py",
+    "Old": "    if store[\"transfers\"] != 0:\n        raise ValueError(\"store transfer pending\")\n",
+    "New": "",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/host-ignores-pending-transfers",
+    "Marker": "MUTATION: python-guard host-ignores-pending-transfers",
+    "PythonTest": "preview_process_test.ProcessTests.test_each_independent_empty_dimension_blocks_stop"
+  },
+  {
+    "ID": "stop-ignores-control-drain-mark",
+    "GuardFingerprint": "f04d2683e15ce1ffcddde4714140a0319a43ca6862c867193c47f6362debbd7b",
+    "File": "internal/operatorgates/host/preview_process.py",
+    "Old": " or not control_draining(http(p[\"control\"] + \"/status\"), worker):",
+    "New": ":",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/stop-ignores-control-drain-mark",
+    "Marker": "MUTATION: python-guard stop-ignores-control-drain-mark",
+    "PythonTest": "preview_process_test.ProcessTests.test_control_drain_mark_is_the_placement_fence"
+  },
+  {
+    "ID": "host-ignores-local-inventory",
+    "GuardFingerprint": "bbfd6d6f0bdc1f7415ac58b4edf8df17434bd5b036417ed2c16f46120b06a8d7",
+    "File": "internal/operatorgates/host/preview_process.py",
+    "Old": "local[\"inventory_known\"] is not True or ",
+    "New": "",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/host-ignores-local-inventory",
+    "Marker": "MUTATION: python-guard host-ignores-local-inventory",
+    "PythonTest": "preview_process_test.ProcessTests.test_each_independent_empty_dimension_blocks_stop"
+  },
+  {
+    "ID": "bracket-around-subprocess",
+    "GuardFingerprint": "0b74dfe5220376aae0766ad92ec9e7c1adc739ca39a90cb10c06b0585c161c13",
+    "File": "internal/operatorgates/host/preview_process.py",
+    "Old": "        if int(command([\"systemctl\", \"show\", \"--value\", \"-p\", \"MainPID\", unit])) != pid:\n            raise ValueError(\"predecessor changed before signal\")\n        before = time.time_ns()\n",
+    "New": "        before = time.time_ns()\n        if int(command([\"systemctl\", \"show\", \"--value\", \"-p\", \"MainPID\", unit])) != pid:\n            raise ValueError(\"predecessor changed before signal\")\n",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/bracket-around-subprocess",
+    "Marker": "MUTATION: python-guard bracket-around-subprocess",
+    "PythonTest": "preview_process_test.ProcessTests.test_signal_bracket_times_only_the_kill"
+  },
+  {
+    "ID": "kill-without-main-pid-recheck",
+    "GuardFingerprint": "c262fd55ad52536901d032ad0a683594466a4e5f3d78e74fbe7a173ff182ed32",
+    "File": "internal/operatorgates/host/preview_process.py",
+    "Old": "        if int(command([\"systemctl\", \"show\", \"--value\", \"-p\", \"MainPID\", unit])) != pid:\n            raise ValueError(\"predecessor changed before signal\")\n",
+    "New": "",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/kill-without-main-pid-recheck",
+    "Marker": "MUTATION: python-guard kill-without-main-pid-recheck",
+    "PythonTest": "preview_process_test.ProcessTests.test_signal_bracket_times_only_the_kill"
+  },
+  {
+    "ID": "inventory-category-dropped",
+    "GuardFingerprint": "1ef54899be8aa80488f8a330f47015722d535e49459f5728f90c0b3d4c4a9385",
+    "File": "internal/operatorgates/host/preview_inventory.py",
+    "Old": "    if isinstance(error, ValueError) and str(error) in CATEGORIES:\n        return CATEGORIES[str(error)]\n",
+    "New": "",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/inventory-category-dropped",
+    "Marker": "MUTATION: python-guard inventory-category-dropped",
+    "PythonTest": "preview_process_test.InventoryTests.test_live_identity_and_manifest_are_required"
+  },
+  {
+    "ID": "worker-own-draining-required",
+    "GuardFingerprint": "9e3ff0302834ff48e6607f6d2f2b005f2f6682458ce7a4c696cd057f6d7991e9",
+    "File": "internal/operatorgates/host/preview_process.py",
+    "Old": "    if local[\"inventory_known\"] is not True or local[\"truncated\"] is not False or local[\"sessions\"] != 0 or local[\"inventory\"] != []:\n",
+    "New": "    if local[\"inventory_known\"] is not True or local[\"truncated\"] is not False or local[\"sessions\"] != 0 or local[\"inventory\"] != [] or local[\"draining\"] is not True:\n",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/worker-own-draining-required",
+    "Marker": "MUTATION: python-guard worker-own-draining-required",
+    "PythonTest": "preview_process_test.ProcessTests.test_control_drain_mark_is_the_placement_fence"
+  },
+  {
+    "ID": "read-failure-free-text",
+    "GuardFingerprint": "301a8d5829b62469168e4e9ecefe926873eeaefaf220735917ea62bc52fbcc32",
+    "File": "internal/operatorgates/host/preview_process.py",
+    "Old": "        return READ_FAILURES[str(error)]\n",
+    "New": "        return str(error)\n",
+    "Package": "./internal/operatorgates/host",
+    "Test": "TestPythonGuards/read-failure-free-text",
+    "Marker": "MUTATION: python-guard read-failure-free-text",
+    "PythonTest": "preview_process_test.ProcessTests.test_read_failures_leave_only_fixed_codes_or_class_names"
   }
 ]

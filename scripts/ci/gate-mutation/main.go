@@ -10,6 +10,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"go/ast"
 	"go/format"
@@ -19,6 +20,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 )
@@ -26,7 +29,11 @@ import (
 //go:embed cases.json
 var specifications []byte
 
-type mutation struct{ ID, GuardFingerprint, File, Function, Old, New, Test, Marker string }
+type change struct{ File, Function, Old, New string }
+type mutation struct {
+	ID, GuardFingerprint, File, Function, Old, New, Test, Marker, Package, PythonTest string
+	Edits                                                                             []change
+}
 type event struct{ Action, Test, Output string }
 
 func main() {
@@ -36,6 +43,8 @@ func main() {
 	}
 }
 func run() error {
+	only := flag.String("only", "", "one mutation ID")
+	flag.Parse()
 	var cases []mutation
 	if err := json.Unmarshal(specifications, &cases); err != nil {
 		return err
@@ -53,106 +62,151 @@ func run() error {
 	if err := os.Mkdir(tree, 0700); err != nil {
 		return err
 	}
-	for _, name := range []string{"go.mod", "go.sum", "pkg/operator", "pkg/buildinfo", "internal/operatortransport", "internal/operatorgates", "cmd/relais-gates"} {
-		err := filepath.WalkDir(filepath.Join(root, name), func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return err
-			}
-			if d.Type()&os.ModeSymlink != 0 {
-				return errors.New("mutation-source-symlink")
-			}
-			target := filepath.Join(tree, rel)
-			if d.IsDir() {
-				return os.MkdirAll(target, 0700)
-			}
-			b, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			return os.WriteFile(target, b, 0600)
-		})
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
+		name := d.Name()
+		if strings.HasPrefix(name, ".env") || name == ".git" || name == ".agents" || name == ".codex" || name == "bin" || name == "dist" || name == "node_modules" || name == "__pycache__" {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return errors.New("mutation-source-symlink")
+		}
+		target := filepath.Join(tree, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0700)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, b, info.Mode().Perm())
+	})
+	if err != nil {
+		return err
 	}
 	cache := filepath.Join(temp, "cache")
-	baseline, err := test(tree, cache, "", true)
+	packages := []string{}
+	for _, m := range cases {
+		packages = append(packages, m.Package)
+	}
+	sort.Strings(packages)
+	packages = slices.Compact(packages)
+	baseline, err := test(tree, cache, "", packages)
 	if err != nil {
 		return fmt.Errorf("INVALID baseline: %w", err)
 	}
 	seen := map[string]bool{}
+	ledger, additional, selected := 0, 0, 0
 	for _, m := range cases {
 		if seen[m.ID] || !has(baseline, m.Test, "pass") {
 			return fmt.Errorf("INVALID %s: missing baseline test or duplicate ID", m.ID)
 		}
 		seen[m.ID] = true
-		path := filepath.Join(tree, m.File)
-		original, err := os.ReadFile(path)
-		if err != nil {
-			return err
+		if *only != "" && m.ID != *only {
+			continue
 		}
-		changed, err := edit(original, m)
-		if err != nil {
-			return fmt.Errorf("INVALID %s: %w", m.ID, err)
+		selected++
+		edits := m.Edits
+		if len(edits) == 0 {
+			edits = []change{{m.File, m.Function, m.Old, m.New}}
 		}
-		if err = os.WriteFile(path, changed, 0600); err != nil {
-			return err
+		originals := map[string][]byte{}
+		for _, editSpec := range edits {
+			path := filepath.Join(tree, editSpec.File)
+			original, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if _, ok := originals[path]; !ok {
+				originals[path] = original
+			}
+			changed, err := edit(original, editSpec)
+			if err != nil {
+				return fmt.Errorf("INVALID %s: %w", m.ID, err)
+			}
+			if err = os.WriteFile(path, changed, 0600); err != nil {
+				return err
+			}
 		}
-		events, testErr := test(tree, cache, m.Test, false)
-		if err = os.WriteFile(path, original, 0600); err != nil {
-			return err
+		events, testErr := test(tree, cache, m.Test, []string{m.Package})
+		for path, original := range originals {
+			if err = os.WriteFile(path, original, 0600); err != nil {
+				return err
+			}
 		}
 		output := ""
 		for _, e := range events {
 			output += e.Output
 		}
-		invalid := strings.Contains(output, "panic:") || strings.Contains(output, "fatal error:") || strings.Contains(output, "build failed") || strings.Contains(output, "test timed out")
-		assertion := false
-		for _, e := range events {
-			if e.Test == m.Test && strings.Contains(e.Output, m.Marker) {
-				assertion = true
-			}
-		}
 		if testErr == nil {
 			return fmt.Errorf("SURVIVED %s", m.ID)
 		}
-		if invalid || !has(events, m.Test, "run") || !has(events, m.Test, "fail") || !assertion {
+		var exit *exec.ExitError
+		if !errors.As(testErr, &exit) || exit.ExitCode() != 1 || !assertionFailure(events, m.Test, m.Marker) {
 			return fmt.Errorf("INVALID %s: %v\n%s", m.ID, testErr, output)
 		}
 		fmt.Printf("KILLED %s (%s)\n", m.ID, m.Test)
-	}
-	ledger, protocol := 0, 0
-	for _, m := range cases {
 		if m.GuardFingerprint != "" {
 			ledger++
 		} else {
-			protocol++
+			additional++
 		}
 	}
-	fmt.Printf("VERIFIED: %d owned ledger mutants and %d new protocol mutants killed; other ledger cases pending\n", ledger, protocol)
+	if selected == 0 {
+		return errors.New("no mutation selected")
+	}
+	fmt.Printf("VERIFIED: %d owned ledger mutants and %d additional mutants killed; other ledger cases pending\n", ledger, additional)
 	return nil
 }
-func edit(source []byte, m mutation) ([]byte, error) {
+func edit(source []byte, m change) ([]byte, error) {
+	if strings.HasSuffix(m.File, ".py") {
+		if strings.Count(string(source), m.Old) != 1 {
+			return nil, errors.New("python edit must match exactly once")
+		}
+		return []byte(strings.Replace(string(source), m.Old, m.New, 1)), nil
+	}
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, m.File, source, 0)
 	if err != nil {
 		return nil, err
 	}
-	var body *ast.FuncDecl
-	for _, decl := range file.Decls {
-		if f, ok := decl.(*ast.FuncDecl); ok && f.Name.Name == m.Function {
-			if body != nil {
-				return nil, errors.New("ambiguous function")
+	var body ast.Node
+	count := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		match := false
+		switch decl := n.(type) {
+		case *ast.FuncDecl:
+			match = decl.Name.Name == m.Function
+		case *ast.TypeSpec:
+			match = "type:"+decl.Name.Name == m.Function
+		case *ast.ValueSpec:
+			for _, name := range decl.Names {
+				if "var:"+name.Name == m.Function {
+					match = true
+				}
 			}
-			body = f
 		}
-	}
-	if body == nil {
-		return nil, errors.New("function missing")
+		if match {
+			body = n
+			count++
+		}
+		return true
+	})
+	if count != 1 {
+		return nil, errors.New("declaration missing or ambiguous")
 	}
 	start, end := fset.Position(body.Pos()).Offset, fset.Position(body.End()).Offset
 	fragment := string(source[start:end])
@@ -172,14 +226,14 @@ func has(events []event, test, action string) bool {
 	}
 	return false
 }
-func test(tree, cache, name string, baseline bool) ([]event, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+func test(tree, cache, name string, packages []string) ([]event, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	args := []string{"test", "-json", "-count=1", "-timeout=60s"}
-	if !baseline {
+	if name != "" {
 		args = append(args, "-run", "^"+name+"$")
 	}
-	args = append(args, "./pkg/operator", "./internal/operatortransport", "./internal/operatorgates", "./cmd/relais-gates")
+	args = append(args, packages...)
 	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = tree
 	for _, e := range os.Environ() {
@@ -208,4 +262,17 @@ func test(tree, cache, name string, baseline bool) ([]event, error) {
 		return events, ctx.Err()
 	}
 	return events, err
+}
+
+func assertionFailure(events []event, name, marker string) bool {
+	assertion := false
+	for _, e := range events {
+		if strings.Contains(e.Output, "panic:") || strings.Contains(e.Output, "fatal error:") || strings.Contains(e.Output, "build failed") || strings.Contains(e.Output, "test timed out") {
+			return false
+		}
+		if e.Test == name && strings.Contains(e.Output, marker) {
+			assertion = true
+		}
+	}
+	return has(events, name, "run") && has(events, name, "fail") && assertion
 }

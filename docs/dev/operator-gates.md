@@ -35,8 +35,12 @@ fault into the session latch and rejects an unlatched or passing final artifact.
 caller start/stop and mailbox writes. Resource teardown belongs to its separate
 owner. Transport completion and operation evidence remain separate: exit zero
 does not prove a valid receipt, and a nonzero mutating exit can still be unknown.
-Control status is effectful. Only the fixed store/worker/relay read allowlist is
-pure. A confirmed pure-read failure can end a gate without implying mutation.
+Control status is effectful. The fixed store/worker/relay, inventory and clock
+read allowlist is pure. A confirmed pure-read failure can end a gate without
+implying mutation. Inventory and clock host replies put `operator.HostOutput`
+(`{"stdout":"..."}`) in `Reply.Payload`; certainty and exit status stay on the
+reply. Session observation methods validate and decode stdout before accepting
+the result. Unknown or malformed replies fence later effects through the same latch.
 
 Control frames are limited to 256 KiB, scripts to 64 KiB, and host output to
 23,999 bytes at the host decoder. Larger payloads use a bounded blob reference
@@ -61,28 +65,32 @@ archive and checksum manifest. Loading verifies compressed, decompressed and
 logical member hashes and resolves nested content-addressed blobs. Expected
 results are never generated from Go.
 
-`testdata/coverage.json` inventories all 163 scenarios. P1 checks deadline and
-sanitized-category projections (428 assertions in 33 scenarios), plus classified
+`testdata/coverage.json` inventories all 165 scenarios. P1 checks deadline and
+sanitized-category projections (430 assertions in 34 scenarios), plus classified
 certainty/fencing seams from three scenarios. Object key ordering is canonical;
 request/effect order is preserved. Original nested invocation IDs are joined
 before allocating the session's own monotonic request IDs. These are projections,
-not complete gate, caller, host-script or media replay. Every full scenario
-remains explicitly pending for P2–P6. Live pipe protocol cases have independent
+not complete gate, caller, host-script or media replay. P2 adds 179 inventory/clock
+function replays and 13 typed observation projections across 20 scenarios. Only
+the standalone signal-bracket scenario is fully replayed; other full scenarios
+remain pending. Live pipe protocol cases have independent
 expectations because the original oracle predates this protocol.
 
 `testdata/mutation-coverage.json` accounts for all 414 original mutation IDs:
-14 are owned by this core, and 400 remain pending with their ledger owners.
+60 are killed by the core and observation packages; 354 remain pending with their ledger owners.
 The late-start projection retains pending/readiness/outcome order while replacing
-the removed multi-launch policy with one pending start. The 14 ledger edits and thirteen additional protocol/privacy mutants are in
+the removed multi-launch policy with one pending start. The 60 ledger edits
+(including 12 Python-source edits) and 14 additional mutants are in
 `scripts/ci/gate-mutation/cases.json`. Several old dispatch/mailbox guards converge
 on one session guard; each original ledger ID is still applied and killed
-separately. `go run ./scripts/ci/gate-mutation` copies the buildable dependency
-slice into a temporary tree and uses an isolated cache with offline, read-only
+separately. `go run ./scripts/ci/gate-mutation` copies source, excluding Git,
+secret environment files and build outputs, into a temporary tree and uses an isolated cache with offline, read-only
 modules. A kill requires the named baseline test to pass and its mutant to fail
 at the named assertion. Build errors, missing tests, panics and timeouts are
 invalid. New protocol mutants are counted separately from the 414 original IDs.
 Other ledger cases are never included in the killed count.
 
-`make test-operator` runs the fast core tests and owned mutants. It is included
-in `make check`. Full process algorithms, caller lifecycle, typed product
-observations, judges and container rehearsal land in their owning stages.
+`make test-operator` runs the core and observation tests and owned mutants. It is
+included in `make check`. Full process algorithms, caller lifecycle, judges and
+container rehearsal remain with their owning stages. See
+[operator observations](operator-observations.md) for the typed boundaries and relocation proof.

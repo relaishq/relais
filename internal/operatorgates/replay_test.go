@@ -127,7 +127,7 @@ func TestOracleInventoryAndPublicContent(t *testing.T) {
 	}
 	pending := map[string]bool{}
 	for _, f := range coverage.Fixtures {
-		if pending[f.Fixture] || f.FullReplay != "pending" {
+		if pending[f.Fixture] || f.FullReplay != "pending" && f.FullReplay != "replayed" {
 			t.Fatal("invalid pending fixture")
 		}
 		pending[f.Fixture] = true
@@ -228,19 +228,23 @@ func TestMutationCoverageInventory(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ledger struct {
-		OriginalCaseCount int                                    `json:"originalCaseCount"`
-		OwnedCases        []string                               `json:"ownedCases"`
-		Pending           []struct{ ID, Owner, Evidence string } `json:"pending"`
+		OriginalCaseCount int                                                              `json:"originalCaseCount"`
+		OwnedCases        []string                                                         `json:"ownedCases"`
+		Pending           []struct{ ID, Owner, Evidence string }                           `json:"pending"`
+		Additional        []string                                                         `json:"additionalProtocolCases"`
+		Killed            []struct{ ID, Test, Package, Evidence, GuardFingerprint string } `json:"killed"`
 	}
 	if json.Unmarshal(raw, &ledger) != nil || ledger.OriginalCaseCount != 414 {
 		t.Fatal("invalid mutation inventory")
 	}
 	ids := map[string]bool{}
+	owned := map[string]bool{}
 	for _, id := range ledger.OwnedCases {
 		if ids[id] {
 			t.Fatal("duplicate owned case")
 		}
 		ids[id] = true
+		owned[id] = true
 	}
 	for _, row := range ledger.Pending {
 		if ids[row.ID] || row.Owner == "" || row.Evidence != "pending" {
@@ -248,7 +252,42 @@ func TestMutationCoverageInventory(t *testing.T) {
 		}
 		ids[row.ID] = true
 	}
-	if len(ids) != ledger.OriginalCaseCount || len(ledger.OwnedCases) != 14 {
+	if len(ids) != ledger.OriginalCaseCount || len(ledger.OwnedCases) == 0 {
 		t.Fatal("mutation accounting does not balance")
+	}
+	data, err := os.ReadFile("../../scripts/ci/gate-mutation/cases.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct{ ID, Test, Package, GuardFingerprint string }
+	if err := json.Unmarshal(data, &cases); err != nil {
+		t.Fatal(err)
+	}
+	specs := map[string]struct{ Test, Package, Fingerprint string }{}
+	for _, c := range cases {
+		if _, ok := specs[c.ID]; ok {
+			t.Fatal("duplicate shared mutation")
+		}
+		specs[c.ID] = struct{ Test, Package, Fingerprint string }{c.Test, c.Package, c.GuardFingerprint}
+	}
+	if len(ledger.Killed) != len(specs) || len(ledger.Killed) != len(ledger.OwnedCases)+len(ledger.Additional) {
+		t.Fatal("shared mutation inventory differs")
+	}
+	additional := map[string]bool{}
+	for _, id := range ledger.Additional {
+		if ids[id] || additional[id] {
+			t.Fatal("additional mutation overlaps original ledger", id)
+		}
+		additional[id] = true
+	}
+	for _, c := range ledger.Killed {
+		s, ok := specs[c.ID]
+		if !ok || c.Evidence != "killed" || s.Test != c.Test || s.Package != c.Package || s.Fingerprint != c.GuardFingerprint {
+			t.Fatal("invalid killed mutation evidence", c.ID)
+		}
+		if c.GuardFingerprint != "" && !owned[c.ID] || c.GuardFingerprint == "" && !additional[c.ID] {
+			t.Fatal("killed mutation ownership differs", c.ID)
+		}
+		delete(specs, c.ID)
 	}
 }
