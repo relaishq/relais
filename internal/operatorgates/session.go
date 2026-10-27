@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"time"
@@ -36,6 +37,7 @@ type Session struct {
 	gates        []operator.Gate
 	activeEnd    *time.Duration
 	digest       string
+	scenario     operator.Scenario
 	spool        *os.Root
 }
 
@@ -55,6 +57,8 @@ func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {
 		return nil, err
 	}
 	s := &Session{digest: init.Scenario.Digest, ID: id, Budget: budget, clock: clock, capabilities: map[operator.Operation]bool{}, requests: map[string]*pending{}, gates: append([]operator.Gate{}, init.Scenario.Gates...)}
+	s.scenario = init.Scenario
+	s.scenario.Gates = slices.Clone(init.Scenario.Gates)
 	for _, op := range init.Capabilities {
 		s.capabilities[op] = true
 	}
@@ -66,7 +70,7 @@ func effectful(op operator.Operation, action string) bool {
 		return false
 	case operator.HostExecute:
 		switch action {
-		case "store-status", "worker-status", "relay-status", "relay-inspect", "worker-empty":
+		case "store-status", "worker-status", "relay-status", "relay-inspect", "worker-empty", "inventory", "clock":
 			return false
 		}
 	}

@@ -1,0 +1,25 @@
+{
+  "preview_telemetry.py": {
+    "sha256": "769668d2f845b6ef39fc3567eadaedf4edd00eaa711206e97d60d0ab3844f18e"
+  },
+  "preview_telemetry_test.py": {
+    "sha256": "29c75cfec32bf5f24873c87b7bc7686e17848701595ec78a40ea78cb937425f4"
+  },
+  "preview_process_test.py": {
+    "sha256": "b36d2bf57e27047efe25104a392394a0ffcff28ca46f0273ebabe53aa7ebac04",
+    "comment_only_ast_sha256": "a675d5bf9ee9a79d2bbe0cc8f52233c7aa6aaf43688f49412b3f7f46260b8f89",
+    "comment_edit": "Remove private execution provenance from comments only; Python AST unchanged.",
+    "ast_serialization": "canonical-json-nonempty-fields-v1"
+  },
+  "preview_process.py": {
+    "sha256": "0126921f30f3a68b6f8ee4ec3c766d751eb4607825567b345602ca5cff22d217",
+    "normalized_ast_sha256": "127b8e479c9e65362523d05097ebe09b1eb830d3f6e23bb439bc524e3460a9e8",
+    "ast_serialization": "canonical-json-nonempty-fields-v1"
+  },
+  "preview_inventory.py": {
+    "sha256": "21e32637253696f91c8f049dac75ac988b87c83212018cf9d18092228070858e"
+  },
+  "clock.py": {
+    "function_sha256": "06e0e0b0c2ae9f4965f5d43238c03ed199ef6d8b264918703045eb8a353cf9ca"
+  }
+}

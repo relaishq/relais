@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "corpusDigest": "ee0298084d139ca7aa305972b2bd070974a5e11afde70ffcfe1ae13199bf1afe",
+  "corpusDigest": "af86fe02e6a4ce95ba62a6c5eca8153c0c770a10f1a93f678dbce885d58b42ee",
   "fullSuite": "pending",
   "fixtures": [
     {
@@ -22,7 +22,16 @@
       "scenario": "gate preparation repairs a dead worker or control with existing steps, else refuses as unhealthy",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 51,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "01c2c004466c85ca.json",
@@ -92,9 +101,7 @@
     {
       "fixture": "0a95c6d05c17f8d8.json",
       "scenario": "a loser's unknown outcome that arrives late still stops later gates, and no candidate dials before it settles",
-      "coreProjections": [
-        "pending-readiness-late-unknown-and-fence"
-      ],
+      "coreProjections": [],
       "fullReplay": "pending",
       "pendingOwner": "P2-P6"
     },
@@ -146,9 +153,7 @@
     {
       "fixture": "0f0eb2dc3f770eb9.json",
       "scenario": "unknown mailbox write is submitted once and never starts a caller",
-      "coreProjections": [
-        "classified-effect-certainty-and-fence"
-      ],
+      "coreProjections": [],
       "fullReplay": "pending",
       "pendingOwner": "P2-P6"
     },
@@ -171,7 +176,16 @@
       "scenario": "release relay-window uncertainty survives evidence sanitization",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 8,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "12a25f3817cc3a62.json",
@@ -197,14 +211,21 @@
       "scenario": "every process mutation reads all four hosts anew and never resends an unknown mutation",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 12,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "1561a3d71d17ec42.json",
       "scenario": "trial unknown command is submitted once and no later trial starts",
-      "coreProjections": [
-        "classified-effect-certainty-and-fence"
-      ],
+      "coreProjections": [],
       "fullReplay": "pending",
       "pendingOwner": "P2-P6"
     },
@@ -234,7 +255,16 @@
       "scenario": "clock observations reuse the conductor helper on all four captured hosts",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "clocks.previewClocks",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestClockOracle"
+        }
+      ]
     },
     {
       "fixture": "1b5e7064dbfe9fa1.json",
@@ -319,6 +349,13 @@
       "pendingOwner": "P2-P6"
     },
     {
+      "fixture": "25d8a761e9a32dec.json",
+      "scenario": "late false cancellation after readiness blocks begin and every replacement",
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6",
+      "coreProjections": []
+    },
+    {
       "fixture": "26b5fb0694a332d7.json",
       "scenario": "hosted transport is bounded by twenty minutes and minute 105",
       "coreProjections": [],
@@ -339,7 +376,16 @@
       "scenario": "an unconfirmed caller hangup at gate end is an unknown outcome that stops later gates",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "29262219ea35dfe2.json",
@@ -360,7 +406,16 @@
       "scenario": "a read failure is a precondition failure with its host code and a mutating failure stays unknown",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "2e78d37f3a4f59f3.json",
@@ -428,7 +483,16 @@
       "scenario": "release known loss fails missing media stays inconclusive and unknown is never retried",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 16,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "3eb1d7e8ebfaab22.json",
@@ -491,7 +555,16 @@
       "scenario": "control restart accepts omitted or false lost and never accepts a true lost takeover",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "observe.typedLost",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 13,
+          "test": "observe.TestTypedLostOracle"
+        }
+      ]
     },
     {
       "fixture": "563e3891ec7cc388.json",
@@ -532,7 +605,16 @@
       "scenario": "both measurement campaigns submit an unknown caller mailbox mutation once",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 16,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "5b377fd4c64b9357.json",
@@ -600,7 +682,16 @@
       "scenario": "runtime release pins and deployed inventory must equal the selected judge",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "66cd877a8f1d076e.json",
@@ -622,6 +713,16 @@
       "coreProjections": [],
       "fullReplay": "pending",
       "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "692b236b2571a208.json",
+      "scenario": "late gate success during unconfirmed caller stop cannot confirm deletion or resume gates",
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6",
+      "coreProjections": [
+        "run.errorCategory",
+        "run.previewGateDeadline"
+      ]
     },
     {
       "fixture": "6c5550a3070423b4.json",
@@ -674,7 +775,16 @@
       "scenario": "release transcript uses ADR role order fresh target inventory and stable-phase trials",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 8,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "86588a9f211ce6ad.json",
@@ -723,7 +833,16 @@
       "scenario": "gate preparation rolls a live worker a stopped gate left draining, only when it is proven empty",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 24,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "8f3705c63b25260b.json",
@@ -737,14 +856,32 @@
       "scenario": "a gate that gives up after registration tells its caller to exit instead of waiting out its deadline",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "8f7a7f3b554bb45a.json",
       "scenario": "a failed read-only precondition is its own reason, keeps its sanitized code and tells the caller to stop",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "90df0f59b9fcdecc.json",
@@ -788,7 +925,16 @@
       "scenario": "production clock verification precedes mutation and missing clocks never submit it",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "a20095066c1b93f6.json",
@@ -941,7 +1087,16 @@
       "scenario": "real fault hook runs after fresh inventory and before the mutation submission",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "c54aca099a25289f.json",
@@ -1086,7 +1241,16 @@
       "scenario": "runtime clock observations refresh after sixty seconds and refuse missing assumptions",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "clocks.previewClocks",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestClockOracle"
+        }
+      ]
     },
     {
       "fixture": "e9cfe602e3b3382b.json",
@@ -1108,15 +1272,32 @@
       "fixture": "ecf0f59e34c8e380.json",
       "scenario": "signal bracket includes half its width in the approved worker mapping",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "observationProjections": [
+        {
+          "operation": "clocks.verifySignalBracket",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "clocks.TestSignalBracketOracle"
+        }
+      ]
     },
     {
       "fixture": "ed5049d4d4e0cb78.json",
       "scenario": "missing and excessive independent clock evidence cannot validate runtime bounds",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "clocks.previewClocks",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "operatorgates.TestClockOracle"
+        }
+      ]
     },
     {
       "fixture": "edd5c10b65ad547c.json",
@@ -1213,7 +1394,16 @@
       "scenario": "live inventory refuses missing participants and profiles rather than filling defaults",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "observationProjections": [
+        {
+          "operation": "inventory.parseInventory",
+          "owner": "P2",
+          "evidence": "replayed",
+          "invocations": 7,
+          "test": "inventory.TestInventoryOracle"
+        }
+      ]
     },
     {
       "fixture": "ffc96e0a8c7c06fb.json",
@@ -1224,5 +1414,13 @@
       "fullReplay": "pending",
       "pendingOwner": "P2-P6"
     }
-  ]
+  ],
+  "observationReplay": {
+    "owner": "P2",
+    "evidence": "replayed",
+    "functionInvocations": 179,
+    "typedObservations": 13,
+    "scenarios": 20,
+    "scope": "Function and typed-observation projections; outer procedures stay pending unless fullReplay is replayed."
+  }
 }

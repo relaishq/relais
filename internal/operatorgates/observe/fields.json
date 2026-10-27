@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "sourceFieldLedgerSHA256": "ef34b1c8a5ef3f9f6a465eb2fc6d25ac737391fa4099fe676f76cb09a64dba89",
+  "scope": "Product JSON fields consumed or forwarded by process, release, trial, admission and host observations. Config and library reads remain with their owning modules.",
+  "productTypes": {
+    "controlplane.Status": {
+      "ready": "Ready",
+      "lost_count": "LostCount",
+      "workers": "Workers",
+      "calls": "Calls",
+      "takeovers": "Takeovers",
+      "pool": "Pool"
+    },
+    "controlplane.WorkerStatus": {
+      "name": "Name",
+      "address": "Address",
+      "dead": "Dead",
+      "recovering": "Recovering",
+      "draining": "Draining",
+      "call_count": "Calls"
+    },
+    "controlplane.CallStatus": {
+      "id": "ID",
+      "owner": "Owner",
+      "lease_epoch": "Epoch",
+      "owner_address": "Address",
+      "last_move": "LastMove",
+      "move_count": "MoveCount",
+      "takeover_count": "TakeoverCount",
+      "last_move_kind": "LastMoveKind"
+    },
+    "controlplane.PoolSample": {
+      "worker_call_cap": "Cap",
+      "reservations": "Reservations",
+      "demand": "Demand",
+      "sampled_at": "SampledAt",
+      "age_seconds": "AgeSeconds",
+      "stale": "Stale"
+    },
+    "controlplane.MoveResult": {
+      "id": "ID",
+      "from": "From",
+      "to": "To",
+      "kind": "Kind",
+      "lost": "Lost",
+      "error": "Error",
+      "start": "Start",
+      "end": "End",
+      "result": "Result",
+      "checkpoint": "Checkpoint",
+      "checkpoint_age": "CheckpointAge",
+      "snapshot_age": "SnapshotAge",
+      "detected_at": "DetectedAt",
+      "last_heartbeat": "LastHeartbeat",
+      "loss_cause": "LossCause"
+    },
+    "controlplane.DrainResult": {
+      "moves": "Moves",
+      "error": "Error"
+    },
+    "controlplane.MoveFailure": {
+      "error": "Error",
+      "codes": "Codes",
+      "result": "Result"
+    },
+    "mediaworker.WorkerStatus": {
+      "sessions": "Sessions",
+      "inventory_known": "InventoryKnown",
+      "truncated": "Truncated",
+      "inventory": "Inventory",
+      "draining": "Draining",
+      "address": "Address",
+      "agent_session": "AgentSession"
+    },
+    "mediaworker.InstalledSession": {
+      "id": "ID",
+      "owner": "Owner",
+      "epoch": "Epoch"
+    },
+    "mediaworker.AgentSessionStatus": {
+      "checkpoint_known": "CheckpointKnown",
+      "checkpoint_age_ms": "CheckpointAgeMS",
+      "snapshot_age_ms": "SnapshotAgeMS"
+    },
+    "relay.RelayStatus": {
+      "instance": "Instance",
+      "public": "Public",
+      "private": "Private",
+      "continuity": "Continuity",
+      "stats": "Stats"
+    },
+    "relay.ContinuityStatus": {
+      "epoch": "Epoch"
+    },
+    "relay.Stats": {
+      "Workers": "Workers",
+      "WorkerPackets": "WorkerPackets",
+      "RoutesRestored": "RoutesRestored",
+      "SelfFences": "SelfFences"
+    }
+  },
+  "adapterOwned": {
+    "relay-inspect": "observe.Inspection",
+    "store-status": "observe.Ownership",
+    "inventory": "releasecompat.Participant and host observedAt",
+    "clock": "clocks.Sample",
+    "process-envelope": "host kind/started/ended/data; session integration owned by procedure engine",
+    "telemetry": "host metrics/ena/network/local/ages"
+  },
+  "presencePolicy": {
+    "lost": "optional bool; omission is false; null refuses",
+    "calls/takeovers": "required keys; product nil and empty slices preserved",
+    "pool.demand": "nullable product pointer; no zero invented",
+    "continuity/agent_session": "optional pointers; nil is unavailable",
+    "worker-draining": "controlplane.WorkerStatus.Draining owns the placement fence",
+    "forwarded-fields": "kept in native product type; no new presence requirements for unrelated old-release fields"
+  }
+}

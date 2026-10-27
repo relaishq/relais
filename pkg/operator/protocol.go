@@ -56,6 +56,12 @@ type Reply struct {
 	Blob         *Blob           `json:"blob,omitempty"`
 }
 
+// HostOutput is the bounded stdout of one host.execute completion. Exit status
+// and transport certainty stay on Reply; this envelope never supplies a verdict.
+type HostOutput struct {
+	Stdout string `json:"stdout"`
+}
+
 type Blob struct {
 	Name   string `json:"name"`
 	Size   int64  `json:"size"`
