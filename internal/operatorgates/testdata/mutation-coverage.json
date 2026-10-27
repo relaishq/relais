@@ -1,0 +1,2437 @@
+{
+  "schemaVersion": 1,
+  "originalCaseCount": 414,
+  "ownedCases": [
+    "unknown-not-latched",
+    "halted-still-sends",
+    "queued-send-past-deadline",
+    "send-after-late-wake",
+    "dispatch-id-not-recorded",
+    "gate-start-after-105",
+    "gates-after-lifetime-clamp",
+    "pool-extends-105-deadline",
+    "driver-late-result-passes",
+    "trace-keeps-free-text",
+    "lean-command-after-unknown",
+    "write-unknown-latched-late",
+    "late-unknown-unsettled",
+    "interrupt-starts-next-gate"
+  ],
+  "pending": [
+    {
+      "id": "workload-named-iam-capability-dropped",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "80e89a689002095aab8207af2e92e3dfe76f67cfd698120df684aaba7dc38a3a"
+    },
+    {
+      "id": "workload-capability-check-skipped",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "a9ed03eb233a8cbae3453ac382e550b39c2cad0f64300f449939a44f6af5cba0"
+    },
+    {
+      "id": "workload-parameter-check-skipped",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "9eec50dc1403e3aa8434f1d7395ff52628c18eacce6232937197cd41c5031ce2"
+    },
+    {
+      "id": "companion-capability-check-skipped",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "cbeff0d97203c2e5f743b4df1078c579e41d660e18156ccb462ab9c4703cc91c"
+    },
+    {
+      "id": "workload-refusal-listing-ignored",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "9cb61c78bfcc07753f680ec212ee272a52c81783ac973cb4892124cca5537071"
+    },
+    {
+      "id": "workload-refusal-not-definite",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "c3dece3984601f0a45dc65bd9815c556130b55825573e949e7d35beba054c849"
+    },
+    {
+      "id": "workload-refusal-keeps-backstop",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "40f14058af00afd6df6a482feac58596aafcb4c081a60e6d82337ed6ff2ca300"
+    },
+    {
+      "id": "smoke-unknown-create-as-clean",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "8a347615c00cdca05001cbd69f54dc471643369eacf3c406001fb368a3f8c588"
+    },
+    {
+      "id": "actions-prior-month-counted",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "e18c03f334f063d9e6149d7387f458c0bedb6d0e6c492b3a690d893c99e45cf5"
+    },
+    {
+      "id": "actions-forged-effective-rate",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "c6f6ef5dfbc527bab314c39c22eb398a7097ef0e504dae829e59ef4e3c5a89bb"
+    },
+    {
+      "id": "actions-private-usage-ignored",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "93973d694efbf2355602b5c825953da2e77e2a1dd4af54f804ccd4137cc6d83d"
+    },
+    {
+      "id": "actions-public-usage-counted",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "24faf04d6e5b0f2abda59f0597ccced6418c8616154b3403430602a7543cb6b3"
+    },
+    {
+      "id": "actions-unknown-plan-admitted",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "e9d42826271f54746ea74efb9ea52ea243cdae8442b30336e48a2643954e95b3"
+    },
+    {
+      "id": "actions-excess-free",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "093e362f54500ca9c0567279c22a111e19bf5da4afbe489c5bc1296ec2bf4a56"
+    },
+    {
+      "id": "actions-read-failure-ignored",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "0df160ffe35875945032c5b3d7c5057c9268bd6d2f59fab13c8fb3cedd3b4a02"
+    },
+    {
+      "id": "smoke-purge-failed-passes",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "13b2d3ae6c91bad266d9dd087d6c5828ea820056acaf88f9107a078f989bc205"
+    },
+    {
+      "id": "actions-deleted-repo-excluded",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "940d1d4df71f19160a2b06996a757ea0391949f4eaf01ceeecddcd53bbc4ee98"
+    },
+    {
+      "id": "actions-pagination-ignored",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "5ba2e23f145a33138c9fb0b8287ba3c11932f1043190a185ba976f6d1f9ec10c"
+    },
+    {
+      "id": "actions-product-case-sensitive",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "e93bbf581d3fb37cd5340a51d1419a186701d037c8015ca795b98efe7c3d290e"
+    },
+    {
+      "id": "actions-cli-trusts-saved-rate",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "82c6a3a319d12f14cb446b3248d8868d2ee85094b8b22211d10e94d2107d6da8"
+    },
+    {
+      "id": "actions-paid-preflight-skipped",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "db14285c6bd9a1d91229a77cf4de215c5b4751451d35ef43626bd5806b334e45"
+    },
+    {
+      "id": "dns-alias-case-sensitive",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "440a5dfab7e8e68d6a224893b01dedae55caa03ef5d3eb959f4c8f161de2d58b"
+    },
+    {
+      "id": "dns-provider-alias-case-sensitive",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "d4d3b73538c141c8f6c3e94f7d00a1cf19fe62f4aadc05ff0a4e108daa002fe0"
+    },
+    {
+      "id": "dns-foreign-alb-deleted",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "a0a25197c2472018ff072d06949ba817428649cf239b25b109fcb03957282e93"
+    },
+    {
+      "id": "purge-secrets-api-casing",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "b1e1e4b0b01960537b08717973e07754534e157b39e8f310752350548e3db637"
+    },
+    {
+      "id": "purge-alias-api-casing",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "3126d81d2bacdb9fdf2fa2b6a69ac237a0a25e89378d80913b24cff99bedbfaf"
+    },
+    {
+      "id": "purge-txt-ttl-api-casing",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "173bb30e346f02d3c2da0d9a17c91cdf54df858e703ff139eda5edf5844e64dc"
+    },
+    {
+      "id": "probe-alias-api-casing",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "f082c08f7ca3917b274afae74cb2884524aef2f6790c02dc7723a32b77a81b92"
+    },
+    {
+      "id": "schema-secrets-api-casing",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "5d81d2d3451ec1866c90780bc5ef358de86a01f5701cfd7d19a429cbd9a7c861"
+    },
+    {
+      "id": "dispatch-queued-title-fatal",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "b1af877374e86ffae64e99f1e08b2c569acb86b1c1c1241d090d8fe11ef45d10"
+    },
+    {
+      "id": "teardown-exception-skips-report",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "f9e228cd82fa78cb7e54443c1555c3c89752c9262b4fccedd2fd6a6f190088ea"
+    },
+    {
+      "id": "second-interrupt-ignored",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "e1b78cabcca2332394d39df597e3a4363f00e1f1fb0f63bc93d5c242f8aac942"
+    },
+    {
+      "id": "route53-maxitems-number-in-purge",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "5469f529d1b470d2460e9c059ac012e928b85cde26b8af7a0f70204aacd9bca4"
+    },
+    {
+      "id": "route53-maxitems-number-in-probe",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "4c6099767cc7b8c2c95f7b8752dfbd8c81827dc876f4b1b2badc4ef703b09f04"
+    },
+    {
+      "id": "describe-addresses-next-page-state",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "2a9e43d0f84f1967e87cb08f90d49ef7aa9de079b2c7ed1de31bcbfaba6b3757"
+    },
+    {
+      "id": "schema-integer-check-removed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "ccec4051159cea741cc2aa2d511a49e4b59ccbc5eb244106bbd74693054b0652"
+    },
+    {
+      "id": "schema-required-check-removed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "4f497da4e6fcb0eee947309d3ac7a58008e5f8ac360b3e74f5d156e00d2e2631"
+    },
+    {
+      "id": "schema-unlisted-action-allowed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "afdbeb4d5f64752da566fb7e1cfb7ca538dec33b332ad62b05dfa347432857f4"
+    },
+    {
+      "id": "smoke-state-machine-preflight-skipped",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "3f8b5d785e1c6a4a5a169623b1992326bc954fe1f74f8d851f140d79c5e1b69c"
+    },
+    {
+      "id": "provider-state-machine-preflight-skipped",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "b045f9657bc2eb0acd7156083e13b4a0369625df358487bb07c51064831101e3"
+    },
+    {
+      "id": "state-machine-error-diagnostic-ignored",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "a85cf127e21ab796137081e79ba457ed098b18ac00872de7d105c54bad329af4"
+    },
+    {
+      "id": "state-machine-result-ignored",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "4b8b983a23d0e3332a52c4751e49b17b62638bd29a50d7d46021be5a4fa75c2c"
+    },
+    {
+      "id": "state-machine-severity-warning",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "64440ed29f9eae920a9315572f31ddd157f9449226bfd2d1dc9ab831b591fd17"
+    },
+    {
+      "id": "state-machine-schema-gate-skipped",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "61e5109396fea6ed951568466e99bbd397a82a28fc6d26a0017994b36991c6e7"
+    },
+    {
+      "id": "asl-duplicate-state-names-allowed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "847857de751ef0a4140c75ae43f16a3e0a577509285472348dacba2bc064e8a5"
+    },
+    {
+      "id": "purge-restores-duplicate-state-names",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "cf1c32c44f56db4708fa423a7bc30a10d434a3fcb42efbe0e0eb2537b75b48c2"
+    },
+    {
+      "id": "asl-duplicate-detector-skips-nested-states",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "feddaa409b50af01f485947acc39535036081f91f83630e348c5b57a34b3fec8"
+    },
+    {
+      "id": "preflight-refusal-reported-as-schedule-unconfirmed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "6e4a5c9b61624b50bbeab9c2c8fe81655df0543fea90930befad66ba48c91317"
+    },
+    {
+      "id": "provider-preflight-refusal-not-definite",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "03e9c939a56e2df42894fc4f85027fa75befe14a59a163f2be191c4a322e21bd"
+    },
+    {
+      "id": "plan-hash-binds-month-usage",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "76bc735cf34a1d36166353b284b5e92216d649d0517958313de0564d1d5166c5"
+    },
+    {
+      "id": "plan-hash-ignores-actions-plan",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "c319cdff9274d11780bec4edf73fc39f33068eb72bdd7acaba0efb8fe9a8c5f7"
+    },
+    {
+      "id": "stack-removal-skips-rollback-wait",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "60213f2ffde22906e4d4b08b84d543ada921054f2f7d8ab98927a0db9ce1dc2c"
+    },
+    {
+      "id": "stack-delete-failed-ignored",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "959a436454221eb8d5c9396a838cf33a5399c6b5c8c32c2169d952fad6fea895"
+    },
+    {
+      "id": "create-rollback-waits-forever",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "00604bcc06c394bc822eb9a96d616b62e67361a70cc54a100d0823901ec9de50"
+    },
+    {
+      "id": "smoke-bucket-touched-during-rollback",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "23e8de51c2ff2505aa89a32611cf267546e5681e3621750bc6f2ac331471d176"
+    },
+    {
+      "id": "smoke-rollback-resource-rejected",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "a88c52471ecaddb9e19f9aef0c853e2337408e8a432e24681a47877998fabd6e"
+    },
+    {
+      "id": "smoke-create-rollback-not-fast-failed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "1ea82f4b73cc1540b27fadae5907a82f7808123da0e6398582686ef60dd0a902"
+    },
+    {
+      "id": "provider-create-rollback-not-fast-failed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "fa4304ffdace16135c45e3f0a8a89a7d3539f295796bc2bccc9a05f3794c2e19"
+    },
+    {
+      "id": "provider-workload-rollback-not-fast-failed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "bb4191c7df1ce5943d94195b7df8f20594563fbd4c5b8df094dc3eee7f3a70e6"
+    },
+    {
+      "id": "smoke-busy-stack-id-required",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "21418eea0ad7c41af07f875ac6484934a14c8f88bbcb239eb82088287a9f964d"
+    },
+    {
+      "id": "smoke-teardown-busy-stack-id-required",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "974dfc4b141dc720124bc077ffd93eaa6a4c4f58166904c69d7fc15fc1f22204"
+    },
+    {
+      "id": "provider-busy-capture-throws-on-missing-id",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "0648db4c15fe7cd61784d1222fc8efcb5c06fa2587b63b2893f5807c946c0ed0"
+    },
+    {
+      "id": "provider-capture-ignores-busy-status",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "ae84de094f2a8cb68ba4d74ca13fb6d2aa70242d4a5cda9a8237a588931be6c6"
+    },
+    {
+      "id": "provider-cleanup-keeps-busy-inventory",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "c86b716f23dfcb76705223824841241c5e3db62eca57e4bc2252c9fa67bc2f57"
+    },
+    {
+      "id": "smoke-workload-create-allowed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "50cea479cfe1c8c3a506dbb268ca6b45481ee17ac704d07105a92e8c740cd6ed"
+    },
+    {
+      "id": "smoke-workload-resource-allowed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "5b316d0d21884bcb6e6d4e37d5f12a97ad21f78b99f6645e073e7b3ddf3dec11"
+    },
+    {
+      "id": "smoke-teardown-omitted",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "7145cc47ef958aebd553fee0d97876b14f8622db99a3d0b21ee324e06a834e88"
+    },
+    {
+      "id": "smoke-dollar-stop-removed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "7150eaaa8954464f0df08990af1d364efbe6db36392e7ffc5c5c6d76aa0da6a8"
+    },
+    {
+      "id": "smoke-missing-rates-admitted",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "d35379f180c809a585ea16e87fad371a1b79565be3683d60addb339b80d44e08"
+    },
+    {
+      "id": "smoke-deadline-removed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "68a6495e326522716e177514e88d472ee12da3a2a2d363af0210f040afa30442"
+    },
+    {
+      "id": "smoke-confirmation-removed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "88d57a5a8f9795571312e0a9b3f449e618e65dd3e504fbdcd9bcfffe176b39b1"
+    },
+    {
+      "id": "smoke-found-stack-admitted",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "cbe0f19d5256415b5c1aadbe0e6cbffb6751a22e110d052b86fe935f4724bd5e"
+    },
+    {
+      "id": "main-forgets-smoke-envelope",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "1cfc6a734804fdb82e743de8c707af81b952c7671742d619e38585f5f7142131"
+    },
+    {
+      "id": "dns-cleanup-before-alb-proof-removed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "45e87de519b7a6ffe5fde3657d7d68a194c5322965fd107dbf5d67e9924bfdfa"
+    },
+    {
+      "id": "dns-record-omitted-from-cleanup",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "986bb9e4f8d786f7e54d29809c9a067a28e8e2b73dbe97b1e99becdcbb7e3eed"
+    },
+    {
+      "id": "dns-delete-without-fresh-read",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "1d12e6a83c599cf23f364c8064956121803a6a3e3f8b6bda3535f01162be59a8"
+    },
+    {
+      "id": "dns-final-absence-skipped",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "529953a3350813e5283dfe3caf3959ed4a5d8eff891057ff6cb44713694664b9"
+    },
+    {
+      "id": "dns-create-overwrites",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "833ff2ac5d24bbe512d92c2f55d50dcffe0b7d6e48ed8b84b1a174bc039a33a5"
+    },
+    {
+      "id": "dns-late-create-submitted",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "0300df1088b084abad26a8c49afdfc2888498472c3c068410344ac3679510334"
+    },
+    {
+      "id": "dispatch-post-retried",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "c4aa18f58a2911cac650cb2c398647391582b7df883116770f2b1787588467c3"
+    },
+    {
+      "id": "dispatch-unknown-forgotten",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "5093af1cbd7395e3feda277f0b79da7b612a4335e0641b58beb6d9b4ff5703b0"
+    },
+    {
+      "id": "dispatch-not-main",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "a79d3176b1442eea691e97f513c3b07815da4183102eb153400cf1b4cfabcb76"
+    },
+    {
+      "id": "dispatch-trusts-foreign-branch",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "67b32075725a8b77c3d629944313937882b5ae5bd2945f80c9f166c4c4024b13"
+    },
+    {
+      "id": "dispatch-after-deadline",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "888edf5e066a8ea3f6c18a9d5c999bea0f9000132bdc9a985a59d97b91b89cb7"
+    },
+    {
+      "id": "caller-tls-fingerprint-ignored",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "caf055f976a03cf9c335b7013045e77586999e65ff8be03e0c28dc83f82908ed"
+    },
+    {
+      "id": "cost-bound-excess-as-failure",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "7a1456bb4e6d1a6baed41808791ced8783bece9ad392b9ceec058d6a80eda25c"
+    },
+    {
+      "id": "cost-bound-excess-as-pass",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "7fca1dd9f72376433a1ebde141da0a21e3f39c15cc49ad0249cd16e62e7d6e3f"
+    },
+    {
+      "id": "cost-omits-pass-assumption",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "14737802e4db88412368c21b2cdb23f0f01e4e23bdcc1b7c68f2a01fbc48d77d"
+    },
+    {
+      "id": "s3-omits-mailbox-polling",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "b993ae6c68aa2d22bd27915eafd624c4dfe2fc530a132943c0f80ee281b0369d"
+    },
+    {
+      "id": "s3-omits-candidate-polling",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "28f5565ba4e298fb2a12ea49ffa1034ef9af0367430a904efdfe7055ea4e7121"
+    },
+    {
+      "id": "github-minutes-omit-candidates",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "96bd719dfae1b4cc8f779522ba86712a95063b6df30aa741ebb8213668bf65c9"
+    },
+    {
+      "id": "bill-dedicated-uses-tag-primary",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "3a7064df26b2ed12eaf47ebd6335289c014956d6b982a4b9654f7e85df83921b"
+    },
+    {
+      "id": "bill-ignores-dedicated-flag",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "8ba2e22c77c911b03a4e8ee33eba0b4aa338429672201b52cba0911d54e0595c"
+    },
+    {
+      "id": "bill-account-accepts-estimated",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "41b24dc89dcf4effaa2f0bd2bc078e04d57a60f974568375de9c1c4f2c846ac7"
+    },
+    {
+      "id": "bill-account-accepts-missing-day",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "194071f42279d8987a9d8021dbf9a16fad25eba6183a1cfd45c749de7064101d"
+    },
+    {
+      "id": "bill-account-uses-tag-query",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "d16aabb1098f82ed14820a25186ab8f80a9da2bebc848889a86b19778e41a77e"
+    },
+    {
+      "id": "failover-caller-too-short",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "1170e33eb647aec0815b6acd4575bc2c6702a95078a3cdd5eda7f31b2b09d058"
+    },
+    {
+      "id": "boundary-ignores-store-w1",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "b65a442650f5becc61e7ca7068568c0bfffba92aaf98eb28871710a0505a48a2"
+    },
+    {
+      "id": "boundary-ignores-store-w2",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "0bc64e39e6630ac42c8d0d8a4468f26a0d4ff7533455daf4541cca5290e400d4"
+    },
+    {
+      "id": "boundary-ignores-store-transfers",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "3b6e1e1d617ccbeaed516bcb57977b2254df2674488dbcf2753aa4dfa1f55f21"
+    },
+    {
+      "id": "boundary-fabricates-store-empty",
+      "owner": "public-python",
+      "evidence": "pending",
+      "guardFingerprint": "903f2b3cca0e883f6c24e7b4a525719eeabd9a5b2291c2306d353ebfc2d994ef"
+    },
+    {
+      "id": "companion-restores-inline-definition",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "63bf393d65a8178e6a2ad5546ca590961654f36afa4ef75f5df408f6e17178e8"
+    },
+    {
+      "id": "provider-skips-template-validation",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "39810d8002ee27863b91d273a7d2ef1706093a00dc7306674090d8c66106a6ac"
+    },
+    {
+      "id": "provider-refusal-not-definite",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "28fea9eb46cefb694d7b345214e475fab33701f259555d580ba029f7fd487d0f"
+    },
+    {
+      "id": "provider-any-failure-is-refusal",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "8d399b00101ee0a4720890d1e2be8d0ccda4e5b3d876b6e72326c7491c715bd4"
+    },
+    {
+      "id": "smoke-skips-template-validation",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "fc9300c80f25d9dd4089f09416476873eae035d28c59021d934ab3ce8c9882af"
+    },
+    {
+      "id": "smoke-refusal-not-definite",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "dc60768ec02e119a014617af74fb3b08508ef7d2fd1593ef10faf780fd1e5e48"
+    },
+    {
+      "id": "smoke-any-validation-error-is-refusal",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "4e794d56a833ea5637ffb10d1acd37d5458daefa6b1ae81162c40fe5730151fe"
+    },
+    {
+      "id": "store-status-classified-as-mutation",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "fa49b6ed9d80754e3e808b4287847e433565e2c2578dfb68d4c14ea1d39131f7"
+    },
+    {
+      "id": "preview-token-mask-removed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "6e1a94977ef01e5c8ef60ccc5972e23e02e5746c9e294d73ea700d5f304f50d2"
+    },
+    {
+      "id": "missing-drain-clean-receipt",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "51b033b1a4e5e5a0d67033c2db400e75af981b50ecf3d70a4a2eafd5b67a4d53"
+    },
+    {
+      "id": "sigterm-as-takeover",
+      "owner": "public-python",
+      "evidence": "pending",
+      "guardFingerprint": "698d23acf879362fc26bd1fdca444a828e02f5241074e2fe644792d6893762f7"
+    },
+    {
+      "id": "public-artifact-leaks-raw",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "2e7928c64d38ba1ce21dd696a7a570bb20f22f737adc7ac628a819ea01953531"
+    },
+    {
+      "id": "measure-after-105",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "9a84a31b379903be932fb1cff63bc3e8c7e63eef225295648043c4c9bf937d0b"
+    },
+    {
+      "id": "failover-unknown-retried",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "bf6c2aa4bed6302b62af51919d999871423b07adc9fad22d3f1804b538fa2d22"
+    },
+    {
+      "id": "boundary-missing-inventory-admitted",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "f12096a54e861ffeb934af824669960cb898efb26c6b58f7cdf417ab04645716"
+    },
+    {
+      "id": "failover-unknown-durability",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "dd15e3ca13740d1fa328ca067e9ff34860001819ef9aa32ff35218cca0a15056"
+    },
+    {
+      "id": "measure-forgets-known-ena",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "e60f84d4bd36272eac4da2f46b1fb79850e01e11858cdd5547084e7bc913e1f4"
+    },
+    {
+      "id": "load-continues-after-unknown",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "b7d8c5cd64033d6a00f7b9379ec6ea0e9640d0444b6f8f2cc3828e320b9f13bc"
+    },
+    {
+      "id": "cost-invents-call-hours",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "a57830f6444bab3d40c35d98ede3e7d074a353a7e87d0e019f4198439409913a"
+    },
+    {
+      "id": "measure-publishes-arbitrary-fields",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "caa4aba088a4022e117b505aeab329b407f4c4138321ffed84fcb7285029dc1b"
+    },
+    {
+      "id": "measure-start-retries-unknown",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "84d338ab7b6c67d81d448104db9922d1a0d6bb8f00dfa535735891b1c81cc2e5"
+    },
+    {
+      "id": "measure-malformed-drops-failure",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "d453206d2b1254a0821982e053404c7656b0ec23694655fcba5d5fb38c63c75b"
+    },
+    {
+      "id": "failover-submit-after-deadline",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "d11a14a33612a08fda3658c3810f5eb7bcbb97b82b4867aa3c50de2b64dabcb4"
+    },
+    {
+      "id": "boundary-skips-idle-check",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "2c4dd40a56a270d37380f63ee9e55b23f4a025cdb42b2d3e2e7541456d029439"
+    },
+    {
+      "id": "boundary-ignores-live-control-calls",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "28c6c24d8823b29fd05f4f34bbeb43440a5f7cd09eae28578f9c1215c2c22b27"
+    },
+    {
+      "id": "malformed-measure-clears-unknown",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "be81dc51b44d7499212183168a7af48ef4c733a88c27d515dbf9d4b45e0faf80"
+    },
+    {
+      "id": "cost-review-dead-workers",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "accd73f318ffb43b555d03d625f077030398f6af9f6440f1cef23466b57ef40d"
+    },
+    {
+      "id": "pool-mixes-public-sha",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "6703e62129c813e7222e7ac96b8c54735abeeb379622d2db371ed80fc9becb05"
+    },
+    {
+      "id": "release-hides-relay-window",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "12b55ac12239ecd1491564351bdf59778eadc823f43140b33cb9642a5a6dbad5"
+    },
+    {
+      "id": "release-drops-relay-window-projection",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "a4a5ed675066cf26e4550fa445ea2a6653478b012bbe0b9289129955f838b1ea"
+    },
+    {
+      "id": "cost-invents-incomplete-total",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "23137f30a312adcca612658de62b36a219e6f6ff7afc8906530dd2edaee5651e"
+    },
+    {
+      "id": "cost-unmeasured-is-zero",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "f46f87ad8f411d9b871d77bb5e7ee760583a24ebd4a1460a5f4ff51fa4289932"
+    },
+    {
+      "id": "cost-stop-exclusive",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "f4aad3cc264bbaf2cf957438a2b046c5809859d9a9e9bad302cdcc39d367ee51"
+    },
+    {
+      "id": "cost-overrun-passes",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "1910d16fc6e456e53ce86b52a62bec6b353891669842f69e30feb3c4db7d4928"
+    },
+    {
+      "id": "cost-unknown-scope-passes",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "14002ca8077d7800b191d652719fc160c2cff136a2f2642cdbc7ac8daa2be66c"
+    },
+    {
+      "id": "cost-ignores-cleanup",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "ae5c689b44e10e66b4c2f51c7c61524ea3b3ccc69b60c837595eb423ed3c4624"
+    },
+    {
+      "id": "cost-ignores-partial-bound-breach",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "17bda840cfe7141dd10d79ce96680a4a0922ae19c0db50f182be18a995d51f7d"
+    },
+    {
+      "id": "cost-ignores-105",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "152aad949bd92c02a364cd42a5d9ef5b24495c0a0a8c8fce6420f0e3aebba09e"
+    },
+    {
+      "id": "cost-ignores-20",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "6dc3a9c893a147f1874d529877fccb9ae2c60bb30adcf953384cd30fe7297acf"
+    },
+    {
+      "id": "cost-ignores-lifetime",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "02005a95cb225855eb375313df8d5958615d47b06aad1ec1910a889a5034ede3"
+    },
+    {
+      "id": "cost-reuses-call-hours",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "3d1f26d84eb347baf81eaf2812dee10ae6cc5ed04e334ff2334294c6cf642643"
+    },
+    {
+      "id": "cost-counts-disconnected-time",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "2dce3002f9c7c2a79b85a9ac13347782676216d22d7bad58db2252bdc88be32c"
+    },
+    {
+      "id": "cost-uses-unpriced-rate",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "554ae04cae04f445fcbbf14bd85a3b164b1c3fde28cb837ca55eeec2ce15c4ac"
+    },
+    {
+      "id": "cost-retained-skipped-is-deleted",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "cf9216d745b08e2728c302039bac6141e73245fc6f86e676d8d6db977968d123"
+    },
+    {
+      "id": "cost-ebs-closes-with-instance",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "7652403bed60a6f13d3c2f7d420244c7ce17c8405329895e306e89e7d3189492"
+    },
+    {
+      "id": "cost-raw-properties-leak",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "545934b42428c1201b6b17738627bb0ad6817ad086152b6053d8183adc3299e0"
+    },
+    {
+      "id": "cost-late-meter-complete",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "d91020565ab7c00a0c53dfb867c3da4be2a1259ecc68c2859c5d1123d5af11f2"
+    },
+    {
+      "id": "cost-driver-ignores-failure",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "6ef368dfc3137bcc8d8a5a2498e08ce040f8f2d132f49883f93eda6bc1bc23ed"
+    },
+    {
+      "id": "cost-reports-private-fields",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "5d98c4a30884d71fc0d5e635cdccfa455a7fb2068ec1784e8854521148d3df52"
+    },
+    {
+      "id": "cost-caller-phase-not-expected",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "aaee9e822d6dd984f8c388bdefd14e737835ff7d083a7b921b644f38c80b5a7d"
+    },
+    {
+      "id": "cost-caller-phase-not-completed",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "cb0b4bae2d9072030cda6935356136855a7419e796ee5a8a222251d2d14c8cef"
+    },
+    {
+      "id": "cost-ignores-meter-windows",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "0a5347ef64a40f246047b50711c46e9f7f77684812e52dfb2e116489e2cb84e6"
+    },
+    {
+      "id": "cost-process-hook-not-forwarded",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "342edc18ab3edf1647bf33a093203578191fbb6fb70c26cfcb1654226224e2cd"
+    },
+    {
+      "id": "bill-accepts-estimated",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "9e61ecefcfd7743ab01f454a463c2466d13e4238a90ef0cfe4ba19dc2a8919b3"
+    },
+    {
+      "id": "bill-attributes-untagged",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "c95d41a188c21019ca2e8fbfe35752f40f5d53709f3666d1be9475d8b4a40c13"
+    },
+    {
+      "id": "bill-tag-pagination-skipped",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "072c54e180813991cdc18925377c416f6a4ebfb317f27b6ad03ed73eeedaddad"
+    },
+    {
+      "id": "bill-runs-same-day",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "516174e772b9ebec5a98d348c27a0fc95ca7d59af3765ffb097e3e89d1ccbc94"
+    },
+    {
+      "id": "bill-ignores-discrepancy",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "c92814434dc22dd61dd338e39fcd0b40bd957bf94e8176ba067d6b0ca2125fd8"
+    },
+    {
+      "id": "stopped-target-passes-inventory",
+      "owner": "public-python",
+      "evidence": "pending",
+      "guardFingerprint": "d2fd6055a9df2efaa22d68dce2f05b124a25a752e9d23022bf3bc4d21677a61d"
+    },
+    {
+      "id": "pool-ignores-missing-clock-or-inventory",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "9f20f8ee767f08ecfb9c06a08a2455560f23faebd502b57480047369dd37c0af"
+    },
+    {
+      "id": "broker-retries-unknown-arm",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "52c237516ad6d241855c344ea78c941334d02cfa6c7dd1fba498bc43991cb433"
+    },
+    {
+      "id": "skip-independent-clock-proof",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "3b2fd031a7a9d349df86f862945293bbda1787a374efa6da32b755e30040d81c"
+    },
+    {
+      "id": "ignore-signal-bracket-width",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "fbf4cd9eda75081792f06814024683bfa3935d55ad68fd35334c24a17468c9e1"
+    },
+    {
+      "id": "pending-without-final-pool-passes",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "b1a06c3af92c153ce2fb8a9a73f584677d7699bad371b4d54fd3472162ebfa22"
+    },
+    {
+      "id": "trial-observation-removed",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "e80799b1e6c0f8acee54c76cb258d6edf0654a7d60cf84c85f7a353452a90383"
+    },
+    {
+      "id": "trial-start-after-deadline",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "f5cb6725e66aac7d3a2d6026258acb933e8ae721345d5e989fd9bf29bb62b9f1"
+    },
+    {
+      "id": "trial-unknown-retried",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "8fbdbd668c8c9bf4a36988ce03baf36c63bdaeb0e7de44a2060bceecc5f631df"
+    },
+    {
+      "id": "release-skips-target-inventory",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "e4790ab22114b70ef031956519b08168fb11bf15d3925f387dbe92c462a858c8"
+    },
+    {
+      "id": "skip-real-fault-hook",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "8ae25ca81b888d7682484d488bb8ace669bf7b73c69c8b6a04d68c2151006b1d"
+    },
+    {
+      "id": "pass-without-media",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "cd9bc838db3eed9e7d123dcfe72ea853b8b4e1eefb9dd9e517795e734c9fa040"
+    },
+    {
+      "id": "judge-invents-fault-time",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "4e947106b07cf9cf8a87c793e800e79811f28e555a2ce105655eac71dc818f2c"
+    },
+    {
+      "id": "ssm-no-read-retries",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "80021145f4dfdb958026e13d9894a192e3eac50412c55ed4ccd05222e0d90f65"
+    },
+    {
+      "id": "skip-runtime-release-pins",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "734f022ebaaf0873ca70cd43809cf7d396d6d5933e8ae17cfa1db47ae8763f80"
+    },
+    {
+      "id": "skip-deployed-release-check",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "c7d6e5ba836c1878aba10572c9963b56d34050716832f018a64b1e2d9117441e"
+    },
+    {
+      "id": "relay-trusts-foreign-pid",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "71c3613a6cf8c77c17444e57a940ffd60fd85fbfd8c1d66f33a86b58108c2c04"
+    },
+    {
+      "id": "process-late-media-passes",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "78ccf27d78f1e3bafdf8403b89c08ebee739be99fe35c7ca50ed72daf1e9340e"
+    },
+    {
+      "id": "process-drops-known-drain-loss",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "00a25ac5eec2e72194c54a63deb7a873141b926c9936fdcadb9612f2aab9d808"
+    },
+    {
+      "id": "host-ignores-authoritative-ownership",
+      "owner": "public-python",
+      "evidence": "pending",
+      "guardFingerprint": "5c0c4565db1facb640eeadd93e7762e995900c36579467fb9f2bf8d6e8ba2267"
+    },
+    {
+      "id": "host-ignores-pending-transfers",
+      "owner": "public-python",
+      "evidence": "pending",
+      "guardFingerprint": "ecf3f8399c128da5b49f701b0667865e4ba315c83bbb91bfcc6457189f2501e5"
+    },
+    {
+      "id": "stop-ignores-control-drain-mark",
+      "owner": "public-python",
+      "evidence": "pending",
+      "guardFingerprint": "f04d2683e15ce1ffcddde4714140a0319a43ca6862c867193c47f6362debbd7b"
+    },
+    {
+      "id": "host-ignores-local-inventory",
+      "owner": "public-python",
+      "evidence": "pending",
+      "guardFingerprint": "bbfd6d6f0bdc1f7415ac58b4edf8df17434bd5b036417ed2c16f46120b06a8d7"
+    },
+    {
+      "id": "process-drops-known-media-failure",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "58e58bc2f2e50472a3161abfdc15ac574cb9f0d1a1c2b8efe09b0fe04afcb6d5"
+    },
+    {
+      "id": "relay-promotes-unsupported-criteria",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "be34210a1f06a1ea31c80e5ec4e1072321b603d1c33840eb68707d5b3d40613b"
+    },
+    {
+      "id": "process-skips-fresh-inventory",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "6fd2bbb623836b58f13d6b0ad71b48ca0b544249d32e451c1d984131e483f90f"
+    },
+    {
+      "id": "process-skips-independent-empty",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "7767969cffae87b27562c95cc24254db684d40145141de0e9e8988d64279c505"
+    },
+    {
+      "id": "process-moves-before-worker-restored",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "8011b755e666c8aefe54cfed59fc31e4ea1f2f736018c8645322dea4ddac46c8"
+    },
+    {
+      "id": "process-allows-far",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "5f3863502634d3c7acbf46c8fa944121a1cdf2899ed1ad2351a526d2aa4ff320"
+    },
+    {
+      "id": "process-missing-media-passes",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "8aa2c7df77b1957811622818a67e6c39f4fd43f197e26eb7d96b6129b5a478da"
+    },
+    {
+      "id": "process-after-105",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "75746072941fa33312ed13df7b51dc710ae4b246beb7693243db89e6a07f6c80"
+    },
+    {
+      "id": "broker-retries-unknown-put",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "9edc06a735e3ab4ca24831210f278350a22eb2b27f53355a932f1424470d1dce"
+    },
+    {
+      "id": "ssm-resends-unknown",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "efbe363c41275b90a815866f317b30822ebb7cc3c8cad54a2f06d67be51f597e"
+    },
+    {
+      "id": "media-summary-missing-as-zero",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "b450980da115d6d68c94dba1ce04370351c4a9e02409ab4562d7365d1cdd2a86"
+    },
+    {
+      "id": "cleanup-drops-shape-evidence",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "e8060ccdbc3ab3b059033b3faab35aef8e6194da4c43eb22103352d5d15a5b32"
+    },
+    {
+      "id": "caller-trust-plain-subject",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "cd026c81ffe75f1f103881a30709a022ff8bad7ed00092b3fd8d0af7c4428ddc"
+    },
+    {
+      "id": "caller-subject-drops-immutable-prefix",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "b5fa2facd0a2d7151401d7634bf4af758f06d50753b9cfc9f92ac88f4e2222d2"
+    },
+    {
+      "id": "caller-subject-accepts-custom-template",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "f629c674d6fb60f10f03996c4cb804ce716b769b7198e865883f34d1c2840cc7"
+    },
+    {
+      "id": "caller-subject-skips-repository-check",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "3ce823e84112fb7c76d76b1332210242b594c538729ef0b495a1cd4e10862df2"
+    },
+    {
+      "id": "caller-hash-ignores-subject",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "836d434553f267200bc2bf0c49262e511ed6572523e5fc4a9f9a19df4ee63998"
+    },
+    {
+      "id": "shape-refusal-exits-zero",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "5861398c9303e2acb1a3b6b44253a4344ecbb6388a4d5adb7c8513f6ce6ef374"
+    },
+    {
+      "id": "evidence-leaks-resource-id",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "fc369477add0b276d1d2c2f12223c3d05e987373d3ffd519862d9a925f2eb60d"
+    },
+    {
+      "id": "evidence-leaks-az-id",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "745e9365f451529b9fcdc47a0a8fb8142799597fc0f3c06bb93c82e34a88c91c"
+    },
+    {
+      "id": "serialize-independent-families",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "5694c769a03748a3ffe893c37e9b2a4e0487b3f7f18683562fb8204027d65420"
+    },
+    {
+      "id": "skip-raw-parallel-size",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "9a697ee4c34fc352cab27fe42e66e6f1ea32986c2c75ddcbd9425aa0f94c3ce6"
+    },
+    {
+      "id": "skip-shape-preflight",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "36b30145110eb8728a68a3954b13a31ed5e5612feee68ceab4f75760690575a2"
+    },
+    {
+      "id": "only-first-shape-preflight",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "c306b9df0b9fcca99b2b036d021da7e269d6d94a70ee2661a312b1e684c772ce"
+    },
+    {
+      "id": "skip-shape-refusal",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "270b158e06c1f0b2e543d2d2ad5795e3cb05f16c1d9e1393af58062c782ff618"
+    },
+    {
+      "id": "cache-defaults-refused",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "0192cddb75fbe1f14fd79a306a12b1b183c0560e0e8cbc5d21305385c35673b9"
+    },
+    {
+      "id": "filtered-shape-nonempty-accepted",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "bff616ebcd5d0161276b0bf58eb3cde63a7fbadf4f937bc2c6fe78bfb4a24c02"
+    },
+    {
+      "id": "missing-shape-accepted",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "76f23682d1960486ca9b60dcf60ce690ba5337809609503f9352b4b8f1f2299f"
+    },
+    {
+      "id": "parallel-sibling-keeps-running",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "a28480c3cbded492f8ef0b938468776a3d9c0340ec12440194599ee1fb0aaea1"
+    },
+    {
+      "id": "parallel-waits-for-failed-siblings",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "2652726d9338be12448ba38193b2ce71ad08297b23b2c4a5ac512564d54e1fba"
+    },
+    {
+      "id": "root-task-uncaught",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "ab4a7c21904825fd0a635c6090462725fb74b853e66ca6782abff7582b97659b"
+    },
+    {
+      "id": "skip-actual-shape-evidence",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "08ffbcc8b84d412d15c9dde879cb2c3dd873f2ea6c643999589f721360a7904d"
+    },
+    {
+      "id": "purge-keeps-unused-bucket-delete",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "a1684a3348accf30886e666c8aa077389bbaa791a1d26da4be7a47c5a51b90d8"
+    },
+    {
+      "id": "missing-stack-delays-drain",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "f68b1525443409cbc40be3dad509cb0d78f29a6a44a4beedfc908bfdf6257ff9"
+    },
+    {
+      "id": "missing-stack-stops-after-drain",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "e5e8987efbc781f1f857f9d065dd1e6ce52dda3e02f501b0a8bdecc4b9097e0e"
+    },
+    {
+      "id": "nonempty-ec2-is-absent",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "2ca35f8452f1693720a872f6ccdfab31b1b7f219b910b4bfe3d0da6f04bdbe70"
+    },
+    {
+      "id": "late-template-readback",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "337a558020adf5866ab83db5c4249f8d26d85918ac4fee7b08f6d143f7648578"
+    },
+    {
+      "id": "empty-bucket-is-absent-companion",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "3490aab873178039df05f16325f0d448d4ca7e0b935792bf7adaf0d068fc9e20"
+    },
+    {
+      "id": "purge-skip-template-drain",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "c0d851b533009f527dffd2b3ac80f44dd36b91442b818e80e0adacf65f9a4375"
+    },
+    {
+      "id": "readback-abort-after-headers",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "456993dc981d92f1774292dd4d441d0bef4f8c078275b27cea00cc25265b4d27"
+    },
+    {
+      "id": "purge-ignore-planned-secrets",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "54d353da4fe701ca3d2cd090b6d717ca089f20422e9d029ee4afcc201aeb32b1"
+    },
+    {
+      "id": "purge-present-as-absent",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "d1f0874a922a6cb2bbda68c6a66efdb0358ae1f1ab3280f5f42a7bcd240c5a18"
+    },
+    {
+      "id": "purge-lookup-error-as-absent",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "0b1e5c08af9e25abf5fd9116a1851c47a9ee3958af078f2cba68ca7ec42f2d7d"
+    },
+    {
+      "id": "purge-ignore-more-pages",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "460aaef1d4332434ee4026c6e46cbd6ef6c74a72ec02f2f86c210e45aea3dd5a"
+    },
+    {
+      "id": "purge-retain-item-payload",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "82506cd3516b32d93e1089935619c61a130a58f686e4ad6ed808133e2a89b257"
+    },
+    {
+      "id": "purge-retain-family-payload",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "a73ec339032777511cf7905167b7660e0a449b1daba532b1aede286816f9908e"
+    },
+    {
+      "id": "asl-skip-raw-map-size",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "980db6c63192e4e3e29d236af51e3b65b39bb012939e894450e773ae89f81c71"
+    },
+    {
+      "id": "template-skip-local-pin",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "51250a8463399a91dd20c6efcb25b526db2d1adf8669bc2c22461f405b3a5e94"
+    },
+    {
+      "id": "template-skip-readback-pin",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "63f87daaebefee2f1bdf13c604eacd9d521a30cc18009e983fa40a4d64867a26"
+    },
+    {
+      "id": "provider-skip-readback",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "c8c69013a7ef845fb10f904de234280afb735ca5bc7c247d3c83fd4ff83d9f7f"
+    },
+    {
+      "id": "s3-hardcoded-absent",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "3363d459216865b8dcaa73899cfe0e8d6ca2197ff9a3646308af5c3495c58a04"
+    },
+    {
+      "id": "skip-stop-deadline",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "2e8bf96d055ddc38ef357e424e8b6ddce4d69a1090bd41a2a8a8474fcd7c4f45"
+    },
+    {
+      "id": "skip-empty-template-bucket",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "16b655e8be013c5186739d5a412a980ed32a3273e73c897d2a13a2ff7bf5e188"
+    },
+    {
+      "id": "skip-sdk-failure-evidence",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "d520d7df2936cfc4dab8d27267472490ceea514b4e2d193371e0503be6b96c28"
+    },
+    {
+      "id": "skip-purge-failure-evidence",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "a46eb68e175e4f0ba67b55ee13dcb3c7884fe118b9c9f398c77653526b542428"
+    },
+    {
+      "id": "purge-collect-family-output",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "6cb27336b897b40ab16801fc8e7ac95dfc9bb84c842c1f8cbcc5412f165fc3b4"
+    },
+    {
+      "id": "purge-collect-resource-output",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "b26d2e6e6824b9d1c3e233185932953431a285b631c5fd6e696dffc586716752"
+    },
+    {
+      "id": "purge-never-delete-after-update",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "5561b274b9077227ac13c5623916615f8412f52b22b1ef42a3de0d1635cccfc5"
+    },
+    {
+      "id": "provider-waits-on-closed-purge",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "986b26fb997f6bab8f34305568b5dd7ffefc0fdda8cd2b09fcf7a5f2382b633c"
+    },
+    {
+      "id": "deadline-reuses-teardown-name",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "288d184716c742e4e2a59af712db9cc404b078b062fdbf83ee30eccfdf6b1e81"
+    },
+    {
+      "id": "purge-trusts-execution-scope",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "9f15ff5425267ab92bbbca411042bb218eea807de7019873d6c24f5a49936c08"
+    },
+    {
+      "id": "provider-read-never-retries",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "06c9887034ea2133fe177c7e67cfa966fef9257100ed7c2817dd28745fa0a74c"
+    },
+    {
+      "id": "cli-hash-with-incomplete-scope",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "fb7293fb83446a7b51cafc312348a0f7652d0d25cb1d0a050dffaeed2cfd74da"
+    },
+    {
+      "id": "cli-print-regional-sku",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "55db923b562a37866474619e1f326fb3f854db0dd940ced6b58165f576f35753"
+    },
+    {
+      "id": "repeat-verified-release-plan",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "a97397cd85b187cb81bcc16aed591f388e9598054ea573efd8af2924613b489c"
+    },
+    {
+      "id": "skip-stage-byte-verification",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "4ca0d3d020e79ebda4201c88d95c044d3e688847ca976ac315ba6f35e5d2e5d8"
+    },
+    {
+      "id": "eni-allow-unattached-interface",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "61767282d5faf23d3fcccfd9365e06a29c6bcd2c06025517a7b2eb5ad2e4f9ff"
+    },
+    {
+      "id": "eni-ignore-template-guard",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "cc4bf64aebdce3544254e3a9f9bad3158740046200c97ad554b44ee8e54822ad"
+    },
+    {
+      "id": "eni-ignore-bulk-interface-sku",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "b983952d2a2138d71fd3d17d948c59f35687247de5fc2df9c86889e8967d3822"
+    },
+    {
+      "id": "policy-never-needs-review",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "a9bb81b912dbebbaf5e5caf39416d853cbbe461cb3ce1a42c8db97982f16e8a2"
+    },
+    {
+      "id": "cli-entry-missing",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "c78849e8ddb44a9776f038822543f1a497e4f6ece8e1d38a678c758305e490b7"
+    },
+    {
+      "id": "cli-refusal-exits-zero",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "b36c34b1c62e502d5c9f03f2e6ead4df7e16b0d71ebc3da8cf010aa7469d6455"
+    },
+    {
+      "id": "cli-understates-bounded-usage",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "2faedb2a04dbb3db3da964d0cdf53e926e1f2337fc34d8234432e58fe01f86ea"
+    },
+    {
+      "id": "omit-cache-sync-surcharge",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "801766a27c5e9c25add7035ab1e301a928dd8f85a7fadc4342926b68ba3c97ae"
+    },
+    {
+      "id": "purge-vpc-before-cache",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "bf74e1fa7e0e306221d926c2e4de8b626c2f155f57a7598e96c7209734743d7f"
+    },
+    {
+      "id": "purge-discovery-by-name",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "efa3d52b917e93c774fb89f8cd527b671100109d025ec2d08cf832bb098a9d73"
+    },
+    {
+      "id": "adapter-discovery-by-name",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "ddcc024f620c52f044ef55594059c93d870250a979ea362344ea2dc4658fec7c"
+    },
+    {
+      "id": "live-without-flag",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "063f4638e4d1f722d58ed95c908f23bd72c109b5d7146ffe3a9e8f4d64fb59d7"
+    },
+    {
+      "id": "live-without-admission",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "e04c570f818ac284024925e0bad3c8134c50331c724d8d598d7862c4be56d7f3"
+    },
+    {
+      "id": "live-without-confirm",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "8760a2bcfcea5180364db5a1eaae382641cd3adaf2ab6512233c245a260780fd"
+    },
+    {
+      "id": "streamed-release-without-byte-cap",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "69e50c08ffc91131141816fa7f4585ddfbd1ca2e07266226ae83314524e7b43e"
+    },
+    {
+      "id": "create-after-provision-deadline",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "9e6ee09fd6091779db77f9028d9da3be8ad194f9e8a140e8d30532fbc00a186c"
+    },
+    {
+      "id": "lean-create-without-backstop",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "4158fa18e92006b590831d79166b7f12ed5009a4b73780492d2305603bdde35b"
+    },
+    {
+      "id": "lean-leftover-as-clean",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "93d3c00c878b7dff9c220fd7cacb1935e1c07c0f6bba10bdd538e997d1e16252"
+    },
+    {
+      "id": "stale-heartbeat-renews-liveness",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "1c7d635a3ae282b4c16faceefa08a5355cab6558d840d839a0da4c607e03e072"
+    },
+    {
+      "id": "create-after-arm-expiry",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "4a815e6381a9acb8fa9d30acf496e6385b663e5361721d17ab87083dc5062f63"
+    },
+    {
+      "id": "create-with-existing-inventory",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "5f0ccdf33f61e9b891b4ac8759c48855a75069cb9af57710d50b1dd6d87c7b78"
+    },
+    {
+      "id": "delete-container-before-contents",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "b4433cd2a79f506e6788cdef4b12f6ee74596e5b3a36c469fba3eda43922111f"
+    },
+    {
+      "id": "delete-child-before-parent",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "9526236dcbdcba5683701c3d9e4373481c9cf38422a47523b5e1a9c918a59eda"
+    },
+    {
+      "id": "rearm-existing-run",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "81ffc677303ea9883538eb819414d07012bf0f421e34071ab668850f94f707b4"
+    },
+    {
+      "id": "never-retry-accepted-stack-delete",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "598ba886e7d23aa739e80f17968194636edec30df0e1b3b7e1b8f28bfd3020a0"
+    },
+    {
+      "id": "never-retry-accepted-resource-delete",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "b7e0784a704fa5c18042948e6b125508a941cc31e79240930f070f303cbd75a5"
+    },
+    {
+      "id": "delete-before-intent-saved",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "1cf06f233da619bee5d46e411d6c187f0a3a481663c83c3bf79c91b742ed9624"
+    },
+    {
+      "id": "purge-before-create-settled",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "b0ec1b9cdeeffca5ac9ce519a435a70fda8d290e92d12534b580bbca1aadd667"
+    },
+    {
+      "id": "admit-below-unit-floors",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "c78ff07e7fa6e759652c0e8db4096e7bedd37f9b5c90bf1b8083d7629e3827e0"
+    },
+    {
+      "id": "delete-with-missing-dependency",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "a93fdb399101d7ec46d2dd2a334bc33c839aeb2389a6a4c0abfef350706d6ee5"
+    },
+    {
+      "id": "ignore-clock-regression",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "7db3862aefbb991d93288ac272cadd3fab5dd90fca9c8dc0c156251b240445fe"
+    },
+    {
+      "id": "ignore-future-heartbeat",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "c33f33528913b5af2ad33d9ed6ac8dc70bfc08d18a4051ed0e1359371508d3dc"
+    },
+    {
+      "id": "stack-resource-as-cleanup-controller",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "d5651fa56c6079440eeb2dcf2d4f1e1b224539706338dcf6ebfd0802e031ca16"
+    },
+    {
+      "id": "captured-stack-as-never-created",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "1425cb135028d8940b521e4b1d827080d0088d443b6ac969761362a800cad155"
+    },
+    {
+      "id": "plan-from-draft-release",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "afd95ca83a091e81a03ae80a64cf756e42d706e3b949ca31117702a6061bb91b"
+    },
+    {
+      "id": "ignore-planned-digest",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "26cbc2817378fe2ca459fa9986f67c1e54480b3b4e641bed15e8af49c06ef735"
+    },
+    {
+      "id": "ignore-archive-bytes",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "056318c76360d0b30fd98a3f04366bb2197eefe504c7a646593b7944ac289545"
+    },
+    {
+      "id": "accept-unsafe-member-type",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "66eecfe3c59010ed6de17ecdc45d7dc01920bb8a0a7506e4fd861553900992ef"
+    },
+    {
+      "id": "ignore-tag-policy",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "434aae5057e6151f0ba4fe5d9a75b916b524c1e8a0e5340d08230192084467bb"
+    },
+    {
+      "id": "pair-without-tested-peer",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "3785b214f0948638935462223b5cacf296a1b5cbd3df65e234182e769a2156e9"
+    },
+    {
+      "id": "rollback-past-boundary",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "d6fb28669edbeac1abee9f5d9d8b080af55b362d83016ea231b29810518d789c"
+    },
+    {
+      "id": "truncated-listing-as-complete",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "a4efb3d74476d8a4cfaee76338ac933c7acced1cd034dbd46b819bd928c00be3"
+    },
+    {
+      "id": "ignore-release-edit",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "6730fd8be51342fc017f011c1827d95ccd8741cdce3e5f22bbdadfe838b68a5c"
+    },
+    {
+      "id": "skip-global-pax",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "fee96cc550d5dbc78bad2ada79750afa3e2a0a535426294514c121766d17d5c2"
+    },
+    {
+      "id": "accept-posix-magic",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "1dc177fc56a89a4c8e2981c44da651d610b9415de16d9d59296dc181ffe23a48"
+    },
+    {
+      "id": "ignore-gnu-prefix",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "fcf1a9cfb21f65622bba308e5b80380b9176025f9b99d254540bfb300e17763a"
+    },
+    {
+      "id": "accept-nul-type",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "82b79883469ba639bc21bbd2ba2daf997649bb3f76960834d0b8398010bb0f2b"
+    },
+    {
+      "id": "strip-json-bom",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "0239526065222f56a1429991f0a1fb4eaf027de565d43e5bd0196a919beef8ce"
+    },
+    {
+      "id": "allow-lone-surrogate",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "9442311b03dfe00d060ba451cf23b6e46b5f290b0758ff88edd2844aa480e9da"
+    },
+    {
+      "id": "decode-member-names",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "72b406a637061b3928d1e68a12ef3773cf1fb0d460871f76f70901b3c42100c6"
+    },
+    {
+      "id": "ignore-header-modes",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "0640ee092904faf6127b987ffd75637f8e6bae369b65f76a788dcd74989351f7"
+    },
+    {
+      "id": "ignore-member-modes",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "4645d0468a607b11d3d70e4e386cf1a4a9cef4c272e131ca0b9772ce86b02eae"
+    },
+    {
+      "id": "ignore-owner-numbers",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "d75e6ed47687ad78c1da2f82b6f01c15bccbc286b8004bdd76131df45f19da44"
+    },
+    {
+      "id": "ignore-device-numbers",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "331885b612d15f9470f3fdb1213a97ff6de6a619e4c8b8b6ffb3e9b9a0629aae"
+    },
+    {
+      "id": "decode-link-name",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "3636d668619c6644328f1a22c2e22537744bfcee170d70fed68d56777934d04a"
+    },
+    {
+      "id": "untyped-policy-comment",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "c231a1f35f8e68a584d60ee645c2085cb766e6969402ee2f4989e250bac2ef88"
+    },
+    {
+      "id": "keep-last-duplicate-key",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "e1e033155b4f3a424ecd2dfbf1f8af2075067946a8131d449d68d94a32f417b5"
+    },
+    {
+      "id": "fraction-fills-int",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "466b5f9884e14b80d52b26509b54d87e82b7aa7fd787e78c38679d0c2a648deb"
+    },
+    {
+      "id": "agent-schema-as-int",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "1bc20b0093654c0a5ae55438a020470f48120b1347378d7e19af7d6bfa996dde"
+    },
+    {
+      "id": "recheck-only-b",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "cb4c1c8e4c5d4bf781650fb6d056efcf03992b9537d9b4f9177a1af1ec417527"
+    },
+    {
+      "id": "check-only-selected-asset",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "e31f5bfc1df66012205430d087b2cedaa67c25800cc585ef4cfd6cae92341fb6"
+    },
+    {
+      "id": "omitted-slice-refuses",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "3a97fa04621cb70023c34a560c06d53998514e8343e65f19134cf06e9c970f02"
+    },
+    {
+      "id": "drop-notice-member",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "f3340e5cee2f82aa7077d2c3697d811ee6572848d23eee6d4467011eb2191e1c"
+    },
+    {
+      "id": "bracket-around-subprocess",
+      "owner": "public-python",
+      "evidence": "pending",
+      "guardFingerprint": "0b74dfe5220376aae0766ad92ec9e7c1adc739ca39a90cb10c06b0585c161c13"
+    },
+    {
+      "id": "kill-without-main-pid-recheck",
+      "owner": "public-python",
+      "evidence": "pending",
+      "guardFingerprint": "c262fd55ad52536901d032ad0a683594466a4e5f3d78e74fbe7a173ff182ed32"
+    },
+    {
+      "id": "inventory-category-dropped",
+      "owner": "public-python",
+      "evidence": "pending",
+      "guardFingerprint": "1ef54899be8aa80488f8a330f47015722d535e49459f5728f90c0b3d4c4a9385"
+    },
+    {
+      "id": "inventory-category-not-forwarded",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "e8c90449f6d59d046a893f69230cc706a7601c50abb0722be582666d04e9322c"
+    },
+    {
+      "id": "precondition-failed-as-unknown",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "6f479c4ebc2096a5e80bd22964e301461e1a2dd427084412c22d5904bf6db0ce"
+    },
+    {
+      "id": "precondition-failure-keeps-caller",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "0b38e88576c857b0fd636fa48319301f4e265a55745e848d4b2fbd3ffbc076b9"
+    },
+    {
+      "id": "gate-end-keeps-caller",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "5abe95e5ff99b89be2f2aa2090247c10dd04bfabcee1917d20b692587b82700d"
+    },
+    {
+      "id": "restore-skipped-after-throw",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "f2ec87b111ae51be2d8be7fb8618a8d3a093b6f2d80289e007402f8e71aa9b7c"
+    },
+    {
+      "id": "restore-after-unknown-mutation",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "3580fdcea605a1de056cbf206c9cd3e23dde16812926d862f289a668a288f5d4"
+    },
+    {
+      "id": "read-failure-restore-after-unknown",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "8c87edcda43c05b12ea4061203ef2729270ba7f2897721f1f91af59abd93ec69"
+    },
+    {
+      "id": "release-restore-after-unknown",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "b11e024291afcd7539ee9c20b91cfef9bc80a723325a130202b5098964d2bf6f"
+    },
+    {
+      "id": "admissions-not-restored",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "8bcbd57e678cde54f406048b6de717bb43c7239f34bacdd8368ad1b604532100"
+    },
+    {
+      "id": "release-admissions-not-restored",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "df11171fe9ce5fb5a4e2575402f92a910d2ec26d55dd68ac125881f23a13ca68"
+    },
+    {
+      "id": "read-failure-without-reason",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "5c67ed2131361209d308fd1c7a02c2630bbae77c255695e59df3cbd6597d02e5"
+    },
+    {
+      "id": "worker-own-draining-required",
+      "owner": "public-python",
+      "evidence": "pending",
+      "guardFingerprint": "9e3ff0302834ff48e6607f6d2f2b005f2f6682458ce7a4c696cd057f6d7991e9"
+    },
+    {
+      "id": "read-failure-free-text",
+      "owner": "public-python",
+      "evidence": "pending",
+      "guardFingerprint": "301a8d5829b62469168e4e9ecefe926873eeaefaf220735917ea62bc52fbcc32"
+    },
+    {
+      "id": "down-marked-after-submission",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "f75501574b49a13f5278b10c3f92953aef63b58a17c58230f4fd0f15f7f471d2"
+    },
+    {
+      "id": "precondition-control-repair-skipped",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "dda149401fb6589a933ca4a463b7c9c27bb2332fc567dda58b9f70c80fc2e623"
+    },
+    {
+      "id": "precondition-unhealthy-passes",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "1aeb85a9f7a25185df9a6e44546dc5662c7f25cb745531e1f4c9aa6c6b766bdd"
+    },
+    {
+      "id": "caller-rounds-unbounded",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "f53db38a41c319f9715c7d431cfe043a68f8e95acb7d5721667fa11bede8d091"
+    },
+    {
+      "id": "candidates-dispatched-serially",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "b83d86c6b7289ee49ebb13b2f22e4714b1084db2c9047e3a4ab9013f03be9b58"
+    },
+    {
+      "id": "candidate-shared-concurrency",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "496df0ba93607673dfb22629c210629fc0e0e9c5379d41660dad2c664cc62c34"
+    },
+    {
+      "id": "caller-dispatched-before-health",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "7f28d1b6e12438f4161002773c49ec077de13ce6b7ecab3cdc47d2ae4b01a91d"
+    },
+    {
+      "id": "dispatch-attempt-reuses-post",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "e3ac7a7ca344f0c237e4ded3afc76eca03f76ae4062869390c43085945fbcc55"
+    },
+    {
+      "id": "prep-reason-stops-later-gates",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "71139cf9da48260892f051261c4a9a36e228106857f8fe2a1ee593b1ba223110"
+    },
+    {
+      "id": "precondition-category-free-text",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "340772ce1924c4b93a7fc81371a6822a62d38b6b9bed01fb6dd8b0b992abc8a4"
+    },
+    {
+      "id": "skipped-gate-keeps-caller",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "064ea6bed125e5fccc06f9007220bb5eba8069f03b2494aa4a762dfa88c1fb06"
+    },
+    {
+      "id": "teardown-keeps-callers",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "e9dcbfaf45f42db7c381e2cbb755a9a71045404880a7de55e756db96d147a5f4"
+    },
+    {
+      "id": "teardown-waits-past-deadline",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "e4ac31fedf43f2b384e17444dfc6d373dd907e5854afc8024fb8f12e73af42b4"
+    },
+    {
+      "id": "deleted-stack-reported-unknown",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "9c3f709202a80fd2cb73f1105be0179b9c0fa1d4e4e89b57830c83e237457459"
+    },
+    {
+      "id": "purge-single-object-drain",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "44aed8564c4aeee5a05dca93818ff6a9516143918a133d41bc9cfae1a5f57a8e"
+    },
+    {
+      "id": "purge-waits-after-every-batch",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "f729fbe84aad1c60ce804c7ed46d6ecb5912f705474f323ae23a5cb04e983be6"
+    },
+    {
+      "id": "purge-ignores-partial-batch",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "fdfdb19ead8d9e0d4caceda132ae01d4b8b496f8bcc4802eab54e382e87ea769"
+    },
+    {
+      "id": "purge-redeletes-deleting-cache",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "537d5b19f42bc933052515a836bcd0b674266809bf44e6e155a193ad4f4453ec"
+    },
+    {
+      "id": "transport-wait-ignores-hangup",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "667302fa8c476430e0150c99ba1fad350a76276e44b94387623c648482021b28"
+    },
+    {
+      "id": "hangup-in-feed-order",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "af2fbda77e210a4f72a5b8ab820c9726a3df1d492d16079d32d02b1492aa194b"
+    },
+    {
+      "id": "barrier-ignores-hangup",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "545d1a60ec01a10e3c5a018c5ba3256c996746d15deebfbff63710b6f890baf4"
+    },
+    {
+      "id": "named-run-not-tracked",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "43c9e3d9871225f0c77ea6d3e75b4c5c44a63b4535793cfd515dbf3e818d4a57"
+    },
+    {
+      "id": "dispatcher-names-run-late",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "190e6afe388b0ebf0a8e47a053a480566a41caadea425833d3356851beabc9c8"
+    },
+    {
+      "id": "teardown-deadline-per-phase",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "7438c8bb69b37d5fa4d4a24b4552b019a0e2aa1991552df89eb8b2984727c3f9"
+    },
+    {
+      "id": "broker-hangup-always-confirmed",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "8c7d0a00c33ff7a6ce67bad2c476159a74efe1fb20f1189e9301c255f2a6fece"
+    },
+    {
+      "id": "unconfirmed-stop-confirmed",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "327ac745d7813aabe4fefda2a829f26c07af6727a7040f62601b8fdae3b8081c"
+    },
+    {
+      "id": "measure-starts-beside-candidate-call",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "0cc70c6e3181b4467cbf45aadc7e7522da11e1ce1e66ae94ef4402b6fcfac567"
+    },
+    {
+      "id": "skip-unconfirmed-stop-continues",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "a99a5c2384e2414ca43d39d4e4388c9e6a11c84afce8a3419b6a9b9f4bc79fa4"
+    },
+    {
+      "id": "teardown-unconfirmed-unrecorded",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "8c83a26d7b804b093d3abe5e8a20abc613be3b041e7764408878d548ebb93a7e"
+    },
+    {
+      "id": "cost-past-teardown-end",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "5bb35958af9fe4afd16f0bf3ad6025dea6e358c81013b365e7fee8b76aedbb39"
+    },
+    {
+      "id": "caller-stop-not-cached",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "2e523a18ee27352977a568f48cfd89bd18a7ef2c84d1ff3a8f8dcc2315e47a12"
+    },
+    {
+      "id": "own-hangup-412-unconfirmed",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "86840935c25727ce2bd8b6cbc9a16b3bafe1cba481bd3ecb3df10f9fb98d8a75"
+    },
+    {
+      "id": "deletion-leaves-no-verify-time",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "0acfe11f6bc60a49b812867641924371c93143d3f9b66e5dbf4d7f7ec5ede31b"
+    },
+    {
+      "id": "read-failure-as-unknown",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "e14c8dae914680ead5fe20d30c8efaec0ffb587027af22a5852ef3244d8314ed"
+    },
+    {
+      "id": "mutating-failure-reported",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "27227b430cd12a824aa15cfdd7c2a03a6a2740d40fcc209837b9446f455aaa44"
+    },
+    {
+      "id": "impure-status-classed-pure",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "c79042366427826d092694c07d95b8c937a929cecf97095804d40c5e639113a5"
+    },
+    {
+      "id": "worker-empty-not-reread",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "aab0d98f80d9bc7d65f62ceeb5d1479ff9f66f71e2e4548408067c5a8f0c8736"
+    },
+    {
+      "id": "worker-empty-gate-deadline",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "8967e2ffa812f966bc2af20733eb7ad3519e0328d92ac94c675904c89043d8ee"
+    },
+    {
+      "id": "process-wrapper-ignores-window",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "03122474dca8d4592786b86aadb22149429e869369f7dcae34b20fcc321d7b7f"
+    },
+    {
+      "id": "release-wrapper-ignores-window",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "04c737c2f1350c0e6ae0e93cad4bc285671000ca4ac3e5841f62011f4b5f3b4e"
+    },
+    {
+      "id": "control-reservations-ignored",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "2d00a305ca65942809796fcc8b4943cc22cf5ce2c12f53e0bf8f3c2b6443bab0"
+    },
+    {
+      "id": "control-drain-mark-ignored",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "d4e6b9b3009419e4dfb56f3c223b7b6014423f7b06261758ca6d76bd8c5edeed"
+    },
+    {
+      "id": "precondition-accepts-draining-worker",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "453fa1603319efbc08257a39c941ae33718be5305634f7ea5ef2b95b379930cf"
+    },
+    {
+      "id": "precondition-stops-unproven-worker",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "501e558982c6f8f41117c3811cb72fc94c9e4237d8984088913f3886d4ec9f82"
+    },
+    {
+      "id": "losers-not-cancelled",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "301e9106f111a0326f948f524c0b4a0e166c6676a1062abce3e723100dfbbe13"
+    },
+    {
+      "id": "github-requests-unpaced",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "8580cc4b726d2bde0911e5518e5531ee8117987343053b674ccb0f33b58755df"
+    },
+    {
+      "id": "github-rate-limit-ignored",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "88daa0a7899081a3b6dbac7140e70a37b99fcb1f9f4fec9b45f0de763cc797ed"
+    },
+    {
+      "id": "github-retry-after-ignored",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "e2df8256cbd2306f3d9377d3ca787ec122344899ed1f7c977df70f61957769cb"
+    },
+    {
+      "id": "cancelled-candidate-keeps-polling",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "1a694c7ad3a4e9c8a0e7ba8cb433756dc9841dee15093b419f7c85d9342c516e"
+    },
+    {
+      "id": "hung-up-caller-awaited",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "f96044fcc868bfe6a10f4a0063d9133126b76547e62e3b14c683ac91ad95998f"
+    },
+    {
+      "id": "cancel-without-identity",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "941c79bd65b9af558bafa80ce7cc0624464ecdf58187815c0cb43487317c3963"
+    },
+    {
+      "id": "cancel-unnamed-run",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "7a923559befcb9824b03dfbb9ddbd4d24b0fe80bf6939fc076c83c754d7632b0"
+    },
+    {
+      "id": "recovery-unknown-renamed",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "484bb59b91724abf07a6dc349b322195b50095a5f6fece7d75363d6cab7e393a"
+    },
+    {
+      "id": "far-caller-not-replaced",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "60422539e7e52daad1b7a4739fac516ff35d2a9b1a76a9e1f435e5297ce68515"
+    },
+    {
+      "id": "attempt-gets-whole-window",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "80ea4a76965fa0d6445f08c1ef0bd4615e67ed729c6b3dcb5214a7cda039d0f1"
+    },
+    {
+      "id": "cancel-not-reserved",
+      "owner": "removed",
+      "evidence": "pending",
+      "guardFingerprint": "ca1125394e755b24095c4d29351e89feb9a2199c4689e63d18df38d12c211696"
+    },
+    {
+      "id": "unconfirmed-prep-hangup-ignored",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "3689cb168d9f91703bd37fb68c07d71067e48b25f0bc228bf5e1b5ba36b768bf"
+    },
+    {
+      "id": "boundary-dispatched-per-candidate",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "5919ae66ffc47c861d9e0f1d4aded51335b97b60c569753617cbc46bec703b26"
+    },
+    {
+      "id": "survivor-registers-before-boundary",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "845dc897f6fb9c1615789db379d18b93ae008e0e3a58ecb7c31190e7406b295b"
+    },
+    {
+      "id": "omitted-lost-read-as-unknown",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "ce189420dc2b5912b339e4178d4e674c7bfe78bae540fa3870a62fd9bc67ea36"
+    },
+    {
+      "id": "rehearsal-pass-accepts-inconclusive",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "7cb15e758a29edefff5ec6e80388f11dcaf34214b5170040f4daa2a348c05ade"
+    },
+    {
+      "id": "rehearsal-exemption-widened",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "5471df24b50b95d1f1d99772eb92c971f993e8055777f598a1aaead7ed44be47"
+    },
+    {
+      "id": "rehearsal-live-refusal-skipped",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "32b627b8eaca905f7ae06733030cea6eb833cef178c3a23409e73b061ef3d8e5"
+    },
+    {
+      "id": "rehearsal-failed-run-accepted",
+      "owner": "private",
+      "evidence": "pending",
+      "guardFingerprint": "84c5b69e1509133b82839904b4caf92db37f01874174f3888da4c06bdcc1ff50"
+    },
+    {
+      "id": "rehearsal-aws-shim-scope-ignored",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "f3d21aae3550eefc1da085a4b8555a372d42ddf76dec3152c5d9c6f8b73e076a"
+    },
+    {
+      "id": "rehearsal-ssm-host-scope-ignored",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "afb86eab0c84a1e7b678dac14df1680e23948b7f22cb6d57aad668a631d80a60"
+    },
+    {
+      "id": "far-precheck-dials",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "4897d42f8f0c6f1276f693b4ce3b5ea41d6bc576a04d7c7545e871663b43c9dc"
+    },
+    {
+      "id": "caller-write-unfenced",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "5245ffaa52caa9b3d47a591b7e8313ae1970cf2a19c28dda4106bca93c5d16c4"
+    },
+    {
+      "id": "second-candidate-dials",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "8ba6f49f41427e59d90d1cf6d49faa15c669f43c1cae3584c609a4db45bf9779"
+    },
+    {
+      "id": "losers-left-running",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "496119476154dea4274b84458f923409b3421b1340d1375bd6912bc3b3211d03"
+    },
+    {
+      "id": "losers-cancelled-after-dial",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "53d5993275651b57a753db19364945331d33c633485774969ea9b769cbc43b03"
+    },
+    {
+      "id": "unconfirmed-cancel-ignored",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "dcc4fbebc28bc1e7c7b76ca5b0131c3286fb3b9b82bb19efb378e2a1b88dd8c7"
+    },
+    {
+      "id": "hangup-lost-latched-late",
+      "owner": "public-go",
+      "evidence": "pending",
+      "guardFingerprint": "358afaa9b8d796a259e7675a716855a86ff1868d6159c2834b37f7ce2b663bb2"
+    }
+  ],
+  "additionalProtocolCases": [
+    "protocol-publication-fence",
+    "protocol-write-deadline",
+    "protocol-adapter-expiry",
+    "protocol-active-gate-cutoff",
+    "protocol-clamped-wait",
+    "protocol-blob-classifier-boundary",
+    "protocol-public-category",
+    "protocol-scenario-digest",
+    "protocol-duplicate-request-publication",
+    "protocol-inbound-fatal-admission",
+    "protocol-final-session-latch",
+    "protocol-final-publication-fence",
+    "protocol-runner-context-cutoff"
+  ]
+}

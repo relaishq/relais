@@ -34,6 +34,7 @@ build: ensure_bin_dir ## Build plugin runners, relay, worker, control, signal, c
 	$(GOBUILD) -o $(BIN_DIR)/relais-worker $(LDFLAGS) ./cmd/relais-worker
 	$(GOBUILD) -o $(BIN_DIR)/relais-control $(LDFLAGS) ./cmd/relais-control
 	$(GOBUILD) -o $(BIN_DIR)/relais-signal $(LDFLAGS) ./cmd/relais-signal
+	$(GOBUILD) -o $(BIN_DIR)/relais-gates $(LDFLAGS) ./cmd/relais-gates
 	$(GOBUILD) -o $(BIN_DIR)/crash-run $(LDFLAGS) ./cmd/crash-run
 	$(GOBUILD) -o $(BIN_DIR)/relais-load $(LDFLAGS) ./cmd/relais-load
 	$(GOBUILD) -o $(BIN_DIR)/relais-demo $(LDFLAGS) ./cmd/relais-demo
@@ -100,6 +101,7 @@ check-quality: ## Run every PR quality gate in CI order
 	$(MAKE) build
 	$(MAKE) test-ci-scripts
 	$(MAKE) test-demo-page
+	$(MAKE) test-operator
 	$(MAKE) check-rules
 
 check-rules: ## Enforce behaviour names, Redis safety, doc paths and lint version
@@ -188,3 +190,8 @@ DIST_DIR ?= dist
 .PHONY: dist
 dist: ## Build release archives for Linux and macOS on amd64 and arm64
 	./scripts/release/build-archives.sh "$(DIST_VERSION)" "$(DIST_DIR)"
+
+.PHONY: test-operator
+test-operator: ## Replay operator core projections and kill its owned Go mutants
+	$(GOTEST) -count=1 ./pkg/operator ./internal/operatortransport ./internal/operatorgates ./cmd/relais-gates
+	$(GOCMD) run ./scripts/ci/gate-mutation

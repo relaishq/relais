@@ -1,0 +1,259 @@
+[
+  {
+    "ID": "unknown-not-latched",
+    "GuardFingerprint": "4cc039e91c54c7a20b26fe2ae639ad9509a3325cc08074e94db83b82ecc27797",
+    "File": "internal/operatorgates/session.go",
+    "Function": "Accept",
+    "Old": "if outcome == operator.Unknown {",
+    "New": "if false {",
+    "Test": "TestUnknownLatches",
+    "Marker": "MUTATION: unknown-latch"
+  },
+  {
+    "ID": "halted-still-sends",
+    "GuardFingerprint": "f4fc7b6de36d05c10db5aa09b350dac9ba983b011337ee6c7b349939ae508f8a",
+    "File": "internal/operatorgates/session.go",
+    "Function": "Issue",
+    "Old": "if s.latched {",
+    "New": "if false {",
+    "Test": "TestLatchFencesEffects",
+    "Marker": "MUTATION: latch-fence"
+  },
+  {
+    "ID": "queued-send-past-deadline",
+    "GuardFingerprint": "db6a44a43a360d5efc64f1c23996a2411db4522bc984f10dfa9c29963b25f7f1",
+    "File": "internal/operatorgates/session.go",
+    "Function": "Issue",
+    "Old": "if end <= s.clock.Elapsed() {",
+    "New": "if false {",
+    "Test": "TestDeadlineBeforeSubmission",
+    "Marker": "MUTATION: submission-deadline"
+  },
+  {
+    "ID": "send-after-late-wake",
+    "GuardFingerprint": "833ac33267333623f12f5c1967d13e9e5440feed8a5de94620d3f1b446e0e113",
+    "File": "internal/operatorgates/session.go",
+    "Function": "Issue",
+    "Old": "if end <= s.clock.Elapsed() {",
+    "New": "if false {",
+    "Test": "TestDeadlineBeforeSubmission",
+    "Marker": "MUTATION: submission-deadline"
+  },
+  {
+    "ID": "dispatch-id-not-recorded",
+    "GuardFingerprint": "8aef3102e2448b9436bbdae74abad730058fa1a2485eec6388b434663b057a8c",
+    "File": "internal/operatorgates/session.go",
+    "Function": "Issue",
+    "Old": "s.requests[r.ID] = &pending{end: end, effect: effect}",
+    "New": "",
+    "Test": "TestPendingIdentity",
+    "Marker": "MUTATION: pending-identity"
+  },
+  {
+    "ID": "gate-start-after-105",
+    "GuardFingerprint": "e11c408ea8775757bc21922914731712c7ba20cec8e718cddec01c99c5c9b8f0",
+    "File": "internal/operatorgates/deadline.go",
+    "Function": "GateEnd",
+    "Old": "if b.Remaining() <= 0 {",
+    "New": "if false {",
+    "Test": "TestDeadlineBudgets",
+    "Marker": "MUTATION: gate-cutoff"
+  },
+  {
+    "ID": "gates-after-lifetime-clamp",
+    "GuardFingerprint": "1f91ec66d0ffc21a773bfd746ef7eb03fb6a1855416b60c90e2937d1b3709f38",
+    "File": "internal/operatorgates/deadline.go",
+    "Function": "GateEnd",
+    "Old": "return min(b.end, b.clock.Elapsed()+GateMaximum), true",
+    "New": "return b.clock.Elapsed()+GateMaximum, true",
+    "Test": "TestDeadlineBudgets",
+    "Marker": "MUTATION: lifetime-clamp"
+  },
+  {
+    "ID": "pool-extends-105-deadline",
+    "GuardFingerprint": "861d1bdda1b83b120e8114aa8fa0216bb7a2d831631ed324cd3797173559f3e1",
+    "File": "internal/operatorgates/deadline.go",
+    "Function": "PoolEnd",
+    "Old": "min(b.end, b.clock.Elapsed()+PoolReserve)",
+    "New": "b.clock.Elapsed()+PoolReserve",
+    "Test": "TestPoolBudget",
+    "Marker": "MUTATION: pool-clamp"
+  },
+  {
+    "ID": "driver-late-result-passes",
+    "GuardFingerprint": "35aea3ca36cc9b04164de0acc8c50d03f1d468f114d668b2fc6d4b38ae0ccf0c",
+    "File": "internal/operatorgates/session.go",
+    "Function": "CompleteGate",
+    "Old": "s.clock.Elapsed() >= end && r.Status != operator.Failure",
+    "New": "false",
+    "Test": "TestGateLateResult",
+    "Marker": "MUTATION: gate-late-result"
+  },
+  {
+    "ID": "trace-keeps-free-text",
+    "GuardFingerprint": "3ab469bca2719f98c7e1567c0fb31674812c3031660c7dbb832fe5052673b278",
+    "File": "internal/operatorgates/replay.go",
+    "Function": "ErrorCategory",
+    "Old": "return \"unclassified\"",
+    "New": "return message",
+    "Test": "TestTraceSanitization",
+    "Marker": "MUTATION: trace-sanitization"
+  },
+  {
+    "ID": "lean-command-after-unknown",
+    "GuardFingerprint": "8011d2dfe81c5daa88941a487f12a7b27dba67bda0705a3a019f7dd6b59400b1",
+    "File": "internal/operatorgates/session.go",
+    "Function": "CompleteGate",
+    "Old": "r.Reason == \"command-result-unknown\" || ",
+    "New": "",
+    "Test": "TestGateUnknownStops",
+    "Marker": "MUTATION: gate-unknown-stop"
+  },
+  {
+    "ID": "write-unknown-latched-late",
+    "GuardFingerprint": "c1a17c9721d5288b07312ad18cb8b5022950338ded8be3457689f914440ac93c",
+    "File": "internal/operatorgates/session.go",
+    "Function": "Accept",
+    "Old": "if outcome == operator.Unknown {",
+    "New": "if false {",
+    "Test": "TestMailboxUnknownImmediately",
+    "Marker": "MUTATION: mailbox-latch"
+  },
+  {
+    "ID": "late-unknown-unsettled",
+    "GuardFingerprint": "96a10e82da5c3038aad821e7820b3fdda94902a244f9004eeb1f0b2cffc58c26",
+    "File": "internal/operatorgates/session.go",
+    "Function": "Final",
+    "Old": "s.latched || len(r.Pending) > 0 || len(gates) != len(s.gates)",
+    "New": "s.latched || len(gates) != len(s.gates)",
+    "Test": "TestOracleLateUnknown",
+    "Marker": "MUTATION: oracle-pending-final"
+  },
+  {
+    "ID": "interrupt-starts-next-gate",
+    "GuardFingerprint": "1844c953bc69f762efd82e5875e7e106c80da41f341cf2311e58260686f74f8d",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "if ctx.Err() != nil {",
+    "New": "if false {",
+    "Test": "TestInterruptBeforeRequest",
+    "Marker": "MUTATION: interrupted-request"
+  },
+  {
+    "ID": "protocol-publication-fence",
+    "File": "internal/operatortransport/stdio.go",
+    "Function": "writeAdmitted",
+    "Old": "if p.fatal != nil {",
+    "New": "if false {",
+    "Test": "TestFaultPublicationFencesSubmission/duplicate",
+    "Marker": "MUTATION: publication-fence"
+  },
+  {
+    "ID": "protocol-write-deadline",
+    "File": "internal/operatortransport/stdio.go",
+    "Function": "writeAdmitted",
+    "Old": "if expired(*f.Request, p.now()) {",
+    "New": "if false {",
+    "Test": "TestDeadlineAfterEncodingBeforeWrite",
+    "Marker": "MUTATION: writer-deadline"
+  },
+  {
+    "ID": "protocol-adapter-expiry",
+    "File": "internal/operatortransport/stdio.go",
+    "Function": "Receive",
+    "Old": "if err != nil {",
+    "New": "if false {",
+    "Test": "TestAdapterRefusesExpiredQueuedRequest",
+    "Marker": "MUTATION: adapter-expiry"
+  },
+  {
+    "ID": "protocol-active-gate-cutoff",
+    "File": "internal/operatorgates/session.go",
+    "Function": "Issue",
+    "Old": "if s.activeEnd != nil {",
+    "New": "if false {",
+    "Test": "TestActiveGateDeadlineBeforeEffect",
+    "Marker": "MUTATION: active-gate-cutoff"
+  },
+  {
+    "ID": "protocol-clamped-wait",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "s.requests[req.ID].end-s.clock.Elapsed()",
+    "New": "end-s.clock.Elapsed()",
+    "Test": "TestExchangeWaitUsesClampedEnd",
+    "Marker": "MUTATION: clamped-wait"
+  },
+  {
+    "ID": "protocol-blob-classifier-boundary",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "operatortransport.ResolveReply(s.spool, *f.Result)",
+    "New": "operatortransport.ResolveReply(nil, operator.Reply{ID:f.Result.ID,Transport:f.Result.Transport,ExitCode:f.Result.ExitCode,Payload:f.Result.Payload})",
+    "Test": "TestExchangeResolvesBlobsBeforeClassification/both",
+    "Marker": "MUTATION: blob-before-classification"
+  },
+  {
+    "ID": "protocol-public-category",
+    "File": "internal/operatorgates/replay.go",
+    "Function": "ErrorCategory",
+    "Old": "return \"unclassified\"",
+    "New": "return message",
+    "Test": "TestPublicCategoryAllowlist",
+    "Marker": "MUTATION: public-code"
+  },
+  {
+    "ID": "protocol-scenario-digest",
+    "File": "internal/operatorgates/session.go",
+    "Function": "NewSession",
+    "Old": "!digestPattern.MatchString(init.Scenario.Digest) || ",
+    "New": "",
+    "Test": "TestScenarioDigestBoundary",
+    "Marker": "MUTATION: scenario-digest"
+  },
+  {
+    "ID": "protocol-duplicate-request-publication",
+    "File": "internal/operatortransport/stdio.go",
+    "Function": "publish",
+    "Old": "if p.inbound[key] {",
+    "New": "if false {",
+    "Test": "TestDuplicateInboundRequestNeverDelivered/already-executed",
+    "Marker": "MUTATION: duplicate-inbound-delivery"
+  },
+  {
+    "ID": "protocol-inbound-fatal-admission",
+    "File": "internal/operatortransport/stdio.go",
+    "Function": "Receive",
+    "Old": "if fatal != nil {",
+    "New": "if false {",
+    "Test": "TestDuplicateInboundRequestNeverDelivered/queued-before-fault",
+    "Marker": "MUTATION: duplicate-inbound-delivery"
+  },
+  {
+    "ID": "protocol-final-session-latch",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Serve",
+    "Old": "if fault != nil {",
+    "New": "if false {",
+    "Test": "TestServePublishedFaultFencesFinal/duplicate/classifier",
+    "Marker": "MUTATION: final-fault-latch"
+  },
+  {
+    "ID": "protocol-final-publication-fence",
+    "File": "internal/operatortransport/stdio.go",
+    "Function": "writeAdmitted",
+    "Old": "if f.Type == \"final\" && p.fatal != nil && (f.Final.Status == operator.Passed || !f.Final.Latched || f.Final.Complete) {",
+    "New": "if false {",
+    "Test": "TestPublishedFaultRejectsPassingFinal",
+    "Marker": "MUTATION: passing-final-fence"
+  },
+  {
+    "ID": "protocol-runner-context-cutoff",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Serve",
+    "Old": "context.WithTimeout(ctx, end-s.clock.Elapsed())",
+    "New": "context.WithCancel(ctx)",
+    "Test": "TestServeRunnerContextUsesActiveCutoff",
+    "Marker": "MUTATION: runner-context-cutoff"
+  }
+]
