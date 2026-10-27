@@ -1,0 +1,1228 @@
+{
+  "schemaVersion": 1,
+  "corpusDigest": "ee0298084d139ca7aa305972b2bd070974a5e11afde70ffcfe1ae13199bf1afe",
+  "fullSuite": "pending",
+  "fixtures": [
+    {
+      "fixture": "00045cd16dc31a8b.json",
+      "scenario": "warmup reuses local ready receipt and media start without trusting a remote timestamp",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "004099a958ffdf5e.json",
+      "scenario": "refused plan or stale/unpriced budget constructs no AWS client",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "0151dac9ba93d068.json",
+      "scenario": "gate preparation repairs a dead worker or control with existing steps, else refuses as unhealthy",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "01c2c004466c85ca.json",
+      "scenario": "process report allows only complete nonnegative numeric evidence",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "03678e9f307bc0d5.json",
+      "scenario": "pending create after its forty-five-minute limit cannot disarm the backstop",
+      "coreProjections": [
+        "run.errorCategory"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "047f7c5bcd393cf9.json",
+      "scenario": "control restores the second worker before moving original calls",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "0643b1d4f8ad59bd.json",
+      "scenario": "relay duplicate counters require exact caller process sessions and complete tracks",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "085afe8ee43370a0.json",
+      "scenario": "pending procedures use the final pooled verdict exactly once and skipped sample stays inconclusive",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "08b51fe1ded09107.json",
+      "scenario": "release download time does not consume the fresh schedule admission window",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "098567902df2479c.json",
+      "scenario": "release requires both live fixed-endpoint workers outside deliberate stop windows",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "09df80537aa241c1.json",
+      "scenario": "the report names the first failing phase and category without free text",
+      "coreProjections": [
+        "run.errorCategory",
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "0a95c6d05c17f8d8.json",
+      "scenario": "a loser's unknown outcome that arrives late still stops later gates, and no candidate dials before it settles",
+      "coreProjections": [
+        "pending-readiness-late-unknown-and-fence"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "0ad44702da6d6aa6.json",
+      "scenario": "malformed caller rows cannot discard known media failure",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "0b86e7522241c704.json",
+      "scenario": "far and mismatched callers cannot authorize hosted faults",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "0c2168e767963841.json",
+      "scenario": "boundary waits for independent empty control and worker inventories",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "0d87eb9e6bbba815.json",
+      "scenario": "an exception during teardown still writes the report",
+      "coreProjections": [
+        "run.errorCategory",
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "0d898d5eb5647856.json",
+      "scenario": "serial trials warm up use distinct real receipts and observe sixty seconds after each ACK",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "0dc26434dd8e7e00.json",
+      "scenario": "rollout missing evidence is inconclusive",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "0f0eb2dc3f770eb9.json",
+      "scenario": "unknown mailbox write is submitted once and never starts a caller",
+      "coreProjections": [
+        "classified-effect-certainty-and-fence"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "0fb1e024075ce33e.json",
+      "scenario": "load successful transcript remains measure-only with raw measurements",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "10e550386ddb932a.json",
+      "scenario": "trial cannot reuse an old takeover and must restore both workers before moving",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "124967a5e204fb0b.json",
+      "scenario": "release relay-window uncertainty survives evidence sanitization",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "12a25f3817cc3a62.json",
+      "scenario": "a definite precondition or far-caller reason ends one gate without stopping later gates",
+      "coreProjections": [
+        "run.errorCategory",
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "13c69b742a3ec48b.json",
+      "scenario": "gates stop at the absolute 105-minute deadline and still tear down",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "13eeecaa6ae52ac8.json",
+      "scenario": "every process mutation reads all four hosts anew and never resends an unknown mutation",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "1561a3d71d17ec42.json",
+      "scenario": "trial unknown command is submitted once and no later trial starts",
+      "coreProjections": [
+        "classified-effect-certainty-and-fence"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "18615569387fc587.json",
+      "scenario": "a worker the gate took down is restored even when a later check throws",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "1879a3d7b103cb3c.json",
+      "scenario": "telemetry keeps missing reset and unbounded tails unknown and reports ENA deltas",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "194fd186588addbe.json",
+      "scenario": "rollout host transcript completes with qualifying distributed media",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "1a46546772a6609b.json",
+      "scenario": "clock observations reuse the conductor helper on all four captured hosts",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "1b5e7064dbfe9fa1.json",
+      "scenario": "each round has its own window, so candidates that never become ready leave time for another round",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "1b789eba8077ce7e.json",
+      "scenario": "process gates require near registration and never start at minute 105",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "1be88515f556f3f6.json",
+      "scenario": "loser cancellation finishes before the load survivor dials, even when slow",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "1c42beea532b6b7a.json",
+      "scenario": "missing independent worker inventory cannot report admitted calls",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "1d20f71ddc4557f4.json",
+      "scenario": "each selected release uses its own tool and correct preflight direction",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "1f967dec2cf81a1b.json",
+      "scenario": "an unconfirmed caller stop stops later gates when a gate is skipped and is only recorded at teardown",
+      "coreProjections": [
+        "run.errorCategory",
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "21920a751006f1e7.json",
+      "scenario": "failover successful transcript remains measure-only with raw measurements",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "21a180fe51dc4708.json",
+      "scenario": "rollout independently empties each worker before its exact stop and serial replacement",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "23ebd80c52c39191.json",
+      "scenario": "schedule creation failure prevents stack creation and still verifies companions",
+      "coreProjections": [
+        "run.errorCategory"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "23f866761ee9639b.json",
+      "scenario": "relay-deploy known media failure survives missing evidence",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "2530439e03d90c3d.json",
+      "scenario": "rollout known media failure survives missing evidence",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "26b5fb0694a332d7.json",
+      "scenario": "hosted transport is bounded by twenty minutes and minute 105",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "26fb2a5e55af5af3.json",
+      "scenario": "an armed schedule is kept when no stack was sent but absence is unconfirmed",
+      "coreProjections": [
+        "run.errorCategory"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "272d0f0debb5d73c.json",
+      "scenario": "an unconfirmed caller hangup at gate end is an unknown outcome that stops later gates",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "29262219ea35dfe2.json",
+      "scenario": "relay known self-fence fails even with missing packet measurements",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "2c66cbdf08ee6414.json",
+      "scenario": "the load boundary is dispatched once, after a usable survivor, with a valid deadline",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "2cbd2a20bcd4302e.json",
+      "scenario": "a read failure is a precondition failure with its host code and a mutating failure stays unknown",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "2e78d37f3a4f59f3.json",
+      "scenario": "a confirmed dispatch whose job never becomes ready is tracked at once and told to stop",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "2e97247d9d6ac097.json",
+      "scenario": "unconfirmed deletion preserves deadline and failed verification still writes evidence",
+      "coreProjections": [
+        "run.errorCategory",
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "2ecf82cd9266c992.json",
+      "scenario": "unimplemented gate bodies are inconclusive stubs",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "2ecfd65c26faacd8.json",
+      "scenario": "worker-empty is read again until it passes inside the gate",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "302791a0ad0a9763.json",
+      "scenario": "boundary refuses independent store leases transfers missing and unknown evidence",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "322aa74f29f0a814.json",
+      "scenario": "a quote expiring during release planning never constructs AWS",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "33f555d1bf7e8653.json",
+      "scenario": "hosted broker refuses missing evidence and foreign event acknowledgments",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "395e1e97f51b1b8f.json",
+      "scenario": "measurement assembly stops after unknown mutation and refuses a boundary after cutoff",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "3be1e754eeb84bcb.json",
+      "scenario": "release known loss fails missing media stays inconclusive and unknown is never retried",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "3eb1d7e8ebfaab22.json",
+      "scenario": "through the real queue, a lost boundary dispatch reply stops every survivor before it registers",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "3ee7f94eb9e17e17.json",
+      "scenario": "real rollout emits uncertain drain receipts when control omits move history",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "4136f17b5414b14d.json",
+      "scenario": "an unknown registration write or a lost candidate POST is never retried and stays unknown",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "45a0e91b8791d6a9.json",
+      "scenario": "measured cost uses observed units and fresh verified rates and discloses unmeasured tariffs",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "4923c758261e6b96.json",
+      "scenario": "no near candidate after every round ends the gate as caller-not-near and every caller is told to stop",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "4d28738c82f50343.json",
+      "scenario": "an unknown arm write stops the campaign without retrying its mailbox mutation",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "4f5960e46254e25f.json",
+      "scenario": "failover caller minimum fits warmup recovery and observed worker trials",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "5011e4546afe86f1.json",
+      "scenario": "known decryption and ICE failures remain failed without pooled sample",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "52c749d6046baac5.json",
+      "scenario": "control restart accepts omitted or false lost and never accepts a true lost takeover",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "563e3891ec7cc388.json",
+      "scenario": "lean run arms deadline before create and completes gates, teardown, verification and evidence",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "5860d4f79c402a4f.json",
+      "scenario": "driver retains sanitized process evidence and preserves failure with malformed evidence",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "5868b4422f351ddc.json",
+      "scenario": "load missing evidence stays inconclusive",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "58b6cbb9a951d468.json",
+      "scenario": "known gate failures remain failed even when cleanup is incomplete",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "5920f93dc11c4e2e.json",
+      "scenario": "both measurement campaigns submit an unknown caller mailbox mutation once",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "5b377fd4c64b9357.json",
+      "scenario": "a hangup after a lost feed write still reaches the caller, which polls it outside the feed order",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "5b728930ffa05ed0.json",
+      "scenario": "worker-empty re-reads end inside one 90 s window, invocations included",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "5d49cd67f7a88b17.json",
+      "scenario": "the driver waits on its own teardown only until minute 118, leaving the minute-120 purge as backstop",
+      "coreProjections": [
+        "run.errorCategory",
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "5f54a242c3c0a98b.json",
+      "scenario": "broker records the real first mutation attempt after registration",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "5fd9474e2a3f03cf.json",
+      "scenario": "hosted process assembly carries the run-level caller cost hook",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "6080367b30554540.json",
+      "scenario": "release cannot mutate at minute 105 and media failures dominate unknown results",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "617321ad9d53b5f7.json",
+      "scenario": "failover missing evidence stays inconclusive",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "64f02812971b1ab4.json",
+      "scenario": "stack creation failure still deletes, verifies and writes evidence",
+      "coreProjections": [
+        "run.errorCategory"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "658ab118244705fb.json",
+      "scenario": "runtime release pins and deployed inventory must equal the selected judge",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "66cd877a8f1d076e.json",
+      "scenario": "deadline retries finish inside both the four-hour lifetime and five-hour ledger",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "68dbb7b793aa2307.json",
+      "scenario": "a candidate is prepared without dialing and a hung-up candidate is awaited no longer",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "6922b8a2b5390382.json",
+      "scenario": "boundary measures two original admissions separately with cap two",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "6c5550a3070423b4.json",
+      "scenario": "known drain call loss survives a later lack of media evidence",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "763010d54eb552a0.json",
+      "scenario": "a worker-empty read failure after the move restores admissions and lets later gates run",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "77673bc806840d93.json",
+      "scenario": "unverified rates are named as the dry-run refusal cause",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "795ccb9547219d4f.json",
+      "scenario": "control-restart missing evidence is inconclusive",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "7a43d8917f173751.json",
+      "scenario": "a late completed command cannot pass a gate even with serialized media",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "7bc424c4b1935432.json",
+      "scenario": "one verified release plan is reused while archive bytes are checked again before stage",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "82399182328a195d.json",
+      "scenario": "release transcript uses ADR role order fresh target inventory and stable-phase trials",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "86588a9f211ce6ad.json",
+      "scenario": "dry run constructs no AWS SDK client and writes no run evidence",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "86b7ace3cbd9a8d7.json",
+      "scenario": "a conductor hangup stops a caller still waiting for transport and each dispatch owns its mailbox",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "8993b9d3ba5b4019.json",
+      "scenario": "rollout unknown command is never retried",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "8b3344538fc20ef5.json",
+      "scenario": "fixed telemetry uses only read-only SSM host steps and preserves absent fields",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "8bfc8eae756e88e9.json",
+      "scenario": "campaign assembly refuses missing and extra live hosts before execution",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "8c9c76c0cf1b208a.json",
+      "scenario": "decode errors remain raw measure-only evidence without a new acceptance rule",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "8d39470b4fb4974c.json",
+      "scenario": "gate preparation rolls a live worker a stopped gate left draining, only when it is proven empty",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "8f3705c63b25260b.json",
+      "scenario": "relay-deploy host transcript completes with qualifying distributed media",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "8f6ee020e1204cd2.json",
+      "scenario": "a gate that gives up after registration tells its caller to exit instead of waiting out its deadline",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "8f7a7f3b554bb45a.json",
+      "scenario": "a failed read-only precondition is its own reason, keeps its sanitized code and tells the caller to stop",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "90df0f59b9fcdecc.json",
+      "scenario": "a measurement gate waits a bounded time for a hung-up candidate's call to end",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "9b3641867128bd38.json",
+      "scenario": "candidates preparing together send no caller write after another candidate's write is lost",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "9bb2343437b92066.json",
+      "scenario": "the driver generates different time-and-random run names for repeated requests",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "9df1f6468012b315.json",
+      "scenario": "measurement gates never start at minute 105 and clamp twenty minute deadlines",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "9e4ceef43397b71f.json",
+      "scenario": "control-restart unknown command is never retried",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "9fe049224d222854.json",
+      "scenario": "production clock verification precedes mutation and missing clocks never submit it",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "a20095066c1b93f6.json",
+      "scenario": "an unknown status during recovery stays unknown and nothing is mutated after it",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "a32c5219b69df740.json",
+      "scenario": "hosted production assembly binds captured hosts runtime endpoints archive and caller identity",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "a497f644af81b6c8.json",
+      "scenario": "a lost caller write latches the run before another candidate's next write",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "a4eb07d89b509b33.json",
+      "scenario": "late readiness continues in fixed priority and reports all skipped gates as not-run",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "a65afb24cdac98c9.json",
+      "scenario": "through the real queue, an unconfirmed hangup latches the run before any queued dispatch or cancel",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "a6cff16abde78813.json",
+      "scenario": "control-restart known media failure survives missing evidence",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "a84173891e090ebc.json",
+      "scenario": "one candidate dials per round: a near pre-dial candidate that registers far ends its round",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "aad2e15df5f8a2a6.json",
+      "scenario": "failover unknown command is never retried or followed by another mutation",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "ae05714cbfb25ed6.json",
+      "scenario": "trial warmup and observations must fit before the gate deadline",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "af6f28c64bb709d5.json",
+      "scenario": "a stopped unready caller is stopped once: release after a successful replacement neither re-sends nor turns unknown",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "af9e05d743da8cef.json",
+      "scenario": "an unconfirmed hangup of a far caller stops all replacements as an unknown outcome",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "b00256084d7d0c6d.json",
+      "scenario": "control's side of an empty worker is read in its own status step",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "b24a4d687c78e557.json",
+      "scenario": "a preserved backstop forces incomplete cleanup even when verification says clean",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "b45053b6cf3845e0.json",
+      "scenario": "rates expiring during release planning are repriced before AWS construction",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "b4c3b090489d1074.json",
+      "scenario": "dry run prints pricing refusals without converting missing rates into spending permission",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "b5bbf25206fffe30.json",
+      "scenario": "an unhealthy deployment dispatches no caller and an unknown repair stays unknown",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "b7d594cd9e6d9dfc.json",
+      "scenario": "failover known failure survives absent telemetry",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "b8381a019b92fe37.json",
+      "scenario": "partial ENA evidence retains known allowance violations",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "b86d00b13369ed0a.json",
+      "scenario": "captured failover cannot submit at its deadline",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "b8765e5ef8bcda04.json",
+      "scenario": "a leftover or unknown explicit check means not clean",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "c2c87bc19643d833.json",
+      "scenario": "real fault hook runs after fresh inventory and before the mutation submission",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "c54aca099a25289f.json",
+      "scenario": "separate admission boundary uses exactly two registered calls on one hosted job",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "c7cc88e93dbdcc2c.json",
+      "scenario": "captured failover selects exact shard and submits unknown mutation once",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "c84ac2a6e5929c83.json",
+      "scenario": "relay applicable host criteria pass but unsupported local criteria stay inconclusive",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "c85d493e11d66f8d.json",
+      "scenario": "load known failure survives absent telemetry",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "ccee825ab73a16c6.json",
+      "scenario": "an interrupt starts no new gate, tears down normally and writes the report with its step trace",
+      "coreProjections": [
+        "run.errorCategory",
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "cd6036a87ac7dd3f.json",
+      "scenario": "process step deadlines stop at minute 105 and never exceed twenty minutes",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "cd93f2f5921b2e18.json",
+      "scenario": "release worker-empty invocations receive the retry window's deadline",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "d17df4b9dd26c99a.json",
+      "scenario": "unknown or asynchronous durability cannot authorize failover",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "d283d923d43412bc.json",
+      "scenario": "relay-deploy unknown command is never retried",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "d6cbacdc767bb209.json",
+      "scenario": "relay-deploy missing evidence is inconclusive",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "d8df75035beb0735.json",
+      "scenario": "release missing relay counters stay inconclusive while known self-fences fail",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "dad788f4ed5b0458.json",
+      "scenario": "a slow schedule reply never authorizes stack creation after admission expires",
+      "coreProjections": [
+        "run.errorCategory"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "dbf2faf2380d863f.json",
+      "scenario": "a lost hangup latches the run before another candidate's next write, and a landed 412 does not",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "dbf3599b51072261.json",
+      "scenario": "candidates are dispatched together, the first near one is kept and every other is told to stop",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "ddb6e07cfe62aaa0.json",
+      "scenario": "measured call hours require joined loaded completed near caller not configured duration",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "e00e9a3faf33a166.json",
+      "scenario": "through the real queue, a lost caller write latches the run: no later dispatch, cancel or caller write",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "e1df50e6d93cadbd.json",
+      "scenario": "every other candidate's run is cancelled and confirmed inside its round, so its runner minutes are bounded",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "e463de78f959513b.json",
+      "scenario": "a failed read-only check after a gate's mutations restores admissions and workers, never after an unknown outcome",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "e7138cd86a2f0fa7.json",
+      "scenario": "load unknown command is never retried or followed by another mutation",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "e91020ea28c0bc03.json",
+      "scenario": "runtime clock observations refresh after sixty seconds and refuse missing assumptions",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "e9cfe602e3b3382b.json",
+      "scenario": "an owned schedule is removed only after a never-created stack is explicitly confirmed",
+      "coreProjections": [
+        "run.errorCategory"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "ebf77fbea4ec9c7c.json",
+      "scenario": "every typed mutating script uses its target archive preflight before execute",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "ecf0f59e34c8e380.json",
+      "scenario": "signal bracket includes half its width in the approved worker mapping",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "ed5049d4d4e0cb78.json",
+      "scenario": "missing and excessive independent clock evidence cannot validate runtime bounds",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "edd5c10b65ad547c.json",
+      "scenario": "late process media cannot pass after minute 105 but known failures still fail",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "ee31ae167952d60b.json",
+      "scenario": "malformed measurement cannot clear an unknown mutation stop reason",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "eefe95181c64fe7d.json",
+      "scenario": "driver publishes only numeric measurement fields and preserves known failure",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "f21ae67734c5ee03.json",
+      "scenario": "unknown command result is inconclusive without retry and still tears down",
+      "coreProjections": [
+        "run.errorCategory",
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "f45d2aaf8872ceb1.json",
+      "scenario": "hosted broker joins setup ready probes and near registration before fault arming",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "f53440add6ea2ca9.json",
+      "scenario": "control-restart host transcript completes with qualifying distributed media",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "f56bbfcfeea2cfcb.json",
+      "scenario": "final pooled judgment reserves time inside minute 105 without extending it",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "f58302506a15cf73.json",
+      "scenario": "unknown result skips every later gate without retry but still finalizes retained evidence",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "f669a2c29653fdbe.json",
+      "scenario": "late readiness skips a gate that cannot fit but still tries later priorities",
+      "coreProjections": [
+        "run.previewGateDeadline"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "f75b1fa3b86c34bc.json",
+      "scenario": "load assembly runs survivor then separate boundary and excludes boundary from pool",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "f899cbac511af4a6.json",
+      "scenario": "trial missing inventory and known loss do not become receipts",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "fb26c9a9da071a7b.json",
+      "scenario": "live inventory refuses missing participants and profiles rather than filling defaults",
+      "coreProjections": [],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    },
+    {
+      "fixture": "ffc96e0a8c7c06fb.json",
+      "scenario": "a conflicting schedule is never removed and prevents any stack call",
+      "coreProjections": [
+        "run.errorCategory"
+      ],
+      "fullReplay": "pending",
+      "pendingOwner": "P2-P6"
+    }
+  ]
+}
