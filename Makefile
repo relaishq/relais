@@ -195,3 +195,8 @@ dist: ## Build release archives for Linux and macOS on amd64 and arm64
 test-operator: ## Replay operator core projections and kill its owned Go mutants
 	$(GOTEST) -count=1 ./pkg/operator ./internal/operatortransport ./internal/operatorgates/... ./cmd/relais-gates ./scripts/ci/gate-mutation
 	$(GOCMD) run ./scripts/ci/gate-mutation
+
+.PHONY: test-operator-rehearsal-container
+test-operator-rehearsal-container: ## Runner only: boot actual template units and negative controls; requires pinned RELAIS_REHEARSAL_{ARCHIVE,VERSION,ARCH,SHA256}
+	test -n "$(RELAIS_REHEARSAL_ARCHIVE)" && test -n "$(RELAIS_REHEARSAL_VERSION)" && test -n "$(RELAIS_REHEARSAL_ARCH)" && test -n "$(RELAIS_REHEARSAL_SHA256)"
+	RELAIS_REHEARSAL_CONTAINERS=1 $(GOTEST) -v -count=1 -timeout 30m -run '^TestContainerTemplateBoot$$' ./internal/operatorrehearsal
