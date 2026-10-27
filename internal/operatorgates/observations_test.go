@@ -51,8 +51,9 @@ func TestObservationCoverageInventory(t *testing.T) {
 			Evidence                                          string
 		} `json:"observationReplay"`
 		Fixtures []struct {
-			Fixture, FullReplay string
-			Projections         []struct {
+			Fixture, FullReplay  string
+			ProcedureProjections []json.RawMessage `json:"procedureProjections"`
+			Projections          []struct {
 				Operation, Evidence, Owner, Test string
 				Invocations                      int
 			} `json:"observationProjections"`
@@ -65,7 +66,7 @@ func TestObservationCoverageInventory(t *testing.T) {
 		t.Fatal("observation replay counts differ")
 	}
 	for _, f := range inventory.Fixtures {
-		if f.FullReplay == "replayed" && (len(f.Projections) != 1 || f.Projections[0].Operation != "clocks.verifySignalBracket") {
+		if f.FullReplay == "replayed" && len(f.ProcedureProjections) == 0 && (len(f.Projections) != 1 || f.Projections[0].Operation != "clocks.verifySignalBracket") {
 			t.Fatal("outer fixture incorrectly marked replayed", f.Fixture)
 		}
 		for _, projection := range f.Projections {

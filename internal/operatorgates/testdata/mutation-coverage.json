@@ -61,7 +61,61 @@
     "kill-without-main-pid-recheck",
     "inventory-category-dropped",
     "worker-own-draining-required",
-    "read-failure-free-text"
+    "read-failure-free-text",
+    "process-after-105",
+    "measure-after-105",
+    "process-late-media-passes",
+    "process-drops-known-drain-loss",
+    "process-drops-known-media-failure",
+    "relay-promotes-unsupported-criteria",
+    "process-skips-independent-empty",
+    "process-moves-before-worker-restored",
+    "process-allows-far",
+    "process-missing-media-passes",
+    "restore-skipped-after-throw",
+    "restore-after-unknown-mutation",
+    "read-failure-restore-after-unknown",
+    "release-restore-after-unknown",
+    "admissions-not-restored",
+    "release-admissions-not-restored",
+    "read-failure-without-reason",
+    "down-marked-after-submission",
+    "worker-empty-not-reread",
+    "worker-empty-gate-deadline",
+    "process-wrapper-ignores-window",
+    "release-wrapper-ignores-window",
+    "control-reservations-ignored",
+    "control-drain-mark-ignored",
+    "recovery-unknown-renamed",
+    "omitted-lost-read-as-unknown",
+    "trial-observation-removed",
+    "trial-start-after-deadline",
+    "trial-unknown-retried",
+    "release-skips-target-inventory",
+    "release-hides-relay-window",
+    "cost-review-dead-workers",
+    "failover-unknown-durability",
+    "boundary-missing-inventory-admitted",
+    "measure-starts-beside-candidate-call",
+    "boundary-ignores-store-w1",
+    "boundary-ignores-store-w2",
+    "boundary-ignores-store-transfers",
+    "boundary-ignores-live-control-calls",
+    "skip-independent-clock-proof",
+    "skip-real-fault-hook",
+    "precondition-control-repair-skipped",
+    "precondition-unhealthy-passes",
+    "precondition-accepts-draining-worker",
+    "precondition-stops-unproven-worker",
+    "unconfirmed-stop-confirmed",
+    "read-failure-as-unknown",
+    "impure-status-classed-pure",
+    "missing-drain-clean-receipt",
+    "store-status-classified-as-mutation",
+    "process-skips-fresh-inventory",
+    "release-drops-relay-window-projection",
+    "mutating-failure-reported",
+    "measure-forgets-known-ena"
   ],
   "pending": [
     {
@@ -647,24 +701,6 @@
       "guardFingerprint": "1170e33eb647aec0815b6acd4575bc2c6702a95078a3cdd5eda7f31b2b09d058"
     },
     {
-      "id": "boundary-ignores-store-w1",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "b65a442650f5becc61e7ca7068568c0bfffba92aaf98eb28871710a0505a48a2"
-    },
-    {
-      "id": "boundary-ignores-store-w2",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "0bc64e39e6630ac42c8d0d8a4468f26a0d4ff7533455daf4541cca5290e400d4"
-    },
-    {
-      "id": "boundary-ignores-store-transfers",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "3b6e1e1d617ccbeaed516bcb57977b2254df2674488dbcf2753aa4dfa1f55f21"
-    },
-    {
       "id": "companion-restores-inline-definition",
       "owner": "private",
       "evidence": "pending",
@@ -707,22 +743,10 @@
       "guardFingerprint": "4e794d56a833ea5637ffb10d1acd37d5458daefa6b1ae81162c40fe5730151fe"
     },
     {
-      "id": "store-status-classified-as-mutation",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "fa49b6ed9d80754e3e808b4287847e433565e2c2578dfb68d4c14ea1d39131f7"
-    },
-    {
       "id": "preview-token-mask-removed",
       "owner": "private",
       "evidence": "pending",
       "guardFingerprint": "6e1a94977ef01e5c8ef60ccc5972e23e02e5746c9e294d73ea700d5f304f50d2"
-    },
-    {
-      "id": "missing-drain-clean-receipt",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "51b033b1a4e5e5a0d67033c2db400e75af981b50ecf3d70a4a2eafd5b67a4d53"
     },
     {
       "id": "public-artifact-leaks-raw",
@@ -731,34 +755,10 @@
       "guardFingerprint": "2e7928c64d38ba1ce21dd696a7a570bb20f22f737adc7ac628a819ea01953531"
     },
     {
-      "id": "measure-after-105",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "9a84a31b379903be932fb1cff63bc3e8c7e63eef225295648043c4c9bf937d0b"
-    },
-    {
       "id": "failover-unknown-retried",
       "owner": "private",
       "evidence": "pending",
       "guardFingerprint": "bf6c2aa4bed6302b62af51919d999871423b07adc9fad22d3f1804b538fa2d22"
-    },
-    {
-      "id": "boundary-missing-inventory-admitted",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "f12096a54e861ffeb934af824669960cb898efb26c6b58f7cdf417ab04645716"
-    },
-    {
-      "id": "failover-unknown-durability",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "dd15e3ca13740d1fa328ca067e9ff34860001819ef9aa32ff35218cca0a15056"
-    },
-    {
-      "id": "measure-forgets-known-ena",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "e60f84d4bd36272eac4da2f46b1fb79850e01e11858cdd5547084e7bc913e1f4"
     },
     {
       "id": "load-continues-after-unknown",
@@ -803,40 +803,16 @@
       "guardFingerprint": "2c4dd40a56a270d37380f63ee9e55b23f4a025cdb42b2d3e2e7541456d029439"
     },
     {
-      "id": "boundary-ignores-live-control-calls",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "28c6c24d8823b29fd05f4f34bbeb43440a5f7cd09eae28578f9c1215c2c22b27"
-    },
-    {
       "id": "malformed-measure-clears-unknown",
       "owner": "public-go",
       "evidence": "pending",
       "guardFingerprint": "be81dc51b44d7499212183168a7af48ef4c733a88c27d515dbf9d4b45e0faf80"
     },
     {
-      "id": "cost-review-dead-workers",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "accd73f318ffb43b555d03d625f077030398f6af9f6440f1cef23466b57ef40d"
-    },
-    {
       "id": "pool-mixes-public-sha",
       "owner": "public-go",
       "evidence": "pending",
       "guardFingerprint": "6703e62129c813e7222e7ac96b8c54735abeeb379622d2db371ed80fc9becb05"
-    },
-    {
-      "id": "release-hides-relay-window",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "12b55ac12239ecd1491564351bdf59778eadc823f43140b33cb9642a5a6dbad5"
-    },
-    {
-      "id": "release-drops-relay-window-projection",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "a4a5ed675066cf26e4550fa445ea2a6653478b012bbe0b9289129955f838b1ea"
     },
     {
       "id": "cost-invents-incomplete-total",
@@ -1019,46 +995,10 @@
       "guardFingerprint": "52c237516ad6d241855c344ea78c941334d02cfa6c7dd1fba498bc43991cb433"
     },
     {
-      "id": "skip-independent-clock-proof",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "3b2fd031a7a9d349df86f862945293bbda1787a374efa6da32b755e30040d81c"
-    },
-    {
       "id": "pending-without-final-pool-passes",
       "owner": "public-go",
       "evidence": "pending",
       "guardFingerprint": "b1a06c3af92c153ce2fb8a9a73f584677d7699bad371b4d54fd3472162ebfa22"
-    },
-    {
-      "id": "trial-observation-removed",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "e80799b1e6c0f8acee54c76cb258d6edf0654a7d60cf84c85f7a353452a90383"
-    },
-    {
-      "id": "trial-start-after-deadline",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "f5cb6725e66aac7d3a2d6026258acb933e8ae721345d5e989fd9bf29bb62b9f1"
-    },
-    {
-      "id": "trial-unknown-retried",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "8fbdbd668c8c9bf4a36988ce03baf36c63bdaeb0e7de44a2060bceecc5f631df"
-    },
-    {
-      "id": "release-skips-target-inventory",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "e4790ab22114b70ef031956519b08168fb11bf15d3925f387dbe92c462a858c8"
-    },
-    {
-      "id": "skip-real-fault-hook",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "8ae25ca81b888d7682484d488bb8ace669bf7b73c69c8b6a04d68c2151006b1d"
     },
     {
       "id": "pass-without-media",
@@ -1083,66 +1023,6 @@
       "owner": "public-go",
       "evidence": "pending",
       "guardFingerprint": "71c3613a6cf8c77c17444e57a940ffd60fd85fbfd8c1d66f33a86b58108c2c04"
-    },
-    {
-      "id": "process-late-media-passes",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "78ccf27d78f1e3bafdf8403b89c08ebee739be99fe35c7ca50ed72daf1e9340e"
-    },
-    {
-      "id": "process-drops-known-drain-loss",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "00a25ac5eec2e72194c54a63deb7a873141b926c9936fdcadb9612f2aab9d808"
-    },
-    {
-      "id": "process-drops-known-media-failure",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "58e58bc2f2e50472a3161abfdc15ac574cb9f0d1a1c2b8efe09b0fe04afcb6d5"
-    },
-    {
-      "id": "relay-promotes-unsupported-criteria",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "be34210a1f06a1ea31c80e5ec4e1072321b603d1c33840eb68707d5b3d40613b"
-    },
-    {
-      "id": "process-skips-fresh-inventory",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "6fd2bbb623836b58f13d6b0ad71b48ca0b544249d32e451c1d984131e483f90f"
-    },
-    {
-      "id": "process-skips-independent-empty",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "7767969cffae87b27562c95cc24254db684d40145141de0e9e8988d64279c505"
-    },
-    {
-      "id": "process-moves-before-worker-restored",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "8011b755e666c8aefe54cfed59fc31e4ea1f2f736018c8645322dea4ddac46c8"
-    },
-    {
-      "id": "process-allows-far",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "5f3863502634d3c7acbf46c8fa944121a1cdf2899ed1ad2351a526d2aa4ff320"
-    },
-    {
-      "id": "process-missing-media-passes",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "8aa2c7df77b1957811622818a67e6c39f4fd43f197e26eb7d96b6129b5a478da"
-    },
-    {
-      "id": "process-after-105",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "75746072941fa33312ed13df7b51dc710ae4b246beb7693243db89e6a07f6c80"
     },
     {
       "id": "broker-retries-unknown-put",
@@ -1709,66 +1589,6 @@
       "guardFingerprint": "5abe95e5ff99b89be2f2aa2090247c10dd04bfabcee1917d20b692587b82700d"
     },
     {
-      "id": "restore-skipped-after-throw",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "f2ec87b111ae51be2d8be7fb8618a8d3a093b6f2d80289e007402f8e71aa9b7c"
-    },
-    {
-      "id": "restore-after-unknown-mutation",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "3580fdcea605a1de056cbf206c9cd3e23dde16812926d862f289a668a288f5d4"
-    },
-    {
-      "id": "read-failure-restore-after-unknown",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "8c87edcda43c05b12ea4061203ef2729270ba7f2897721f1f91af59abd93ec69"
-    },
-    {
-      "id": "release-restore-after-unknown",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "b11e024291afcd7539ee9c20b91cfef9bc80a723325a130202b5098964d2bf6f"
-    },
-    {
-      "id": "admissions-not-restored",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "8bcbd57e678cde54f406048b6de717bb43c7239f34bacdd8368ad1b604532100"
-    },
-    {
-      "id": "release-admissions-not-restored",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "df11171fe9ce5fb5a4e2575402f92a910d2ec26d55dd68ac125881f23a13ca68"
-    },
-    {
-      "id": "read-failure-without-reason",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "5c67ed2131361209d308fd1c7a02c2630bbae77c255695e59df3cbd6597d02e5"
-    },
-    {
-      "id": "down-marked-after-submission",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "f75501574b49a13f5278b10c3f92953aef63b58a17c58230f4fd0f15f7f471d2"
-    },
-    {
-      "id": "precondition-control-repair-skipped",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "dda149401fb6589a933ca4a463b7c9c27bb2332fc567dda58b9f70c80fc2e623"
-    },
-    {
-      "id": "precondition-unhealthy-passes",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "1aeb85a9f7a25185df9a6e44546dc5662c7f25cb745531e1f4c9aa6c6b766bdd"
-    },
-    {
       "id": "caller-rounds-unbounded",
       "owner": "removed",
       "evidence": "pending",
@@ -1901,18 +1721,6 @@
       "guardFingerprint": "8c7d0a00c33ff7a6ce67bad2c476159a74efe1fb20f1189e9301c255f2a6fece"
     },
     {
-      "id": "unconfirmed-stop-confirmed",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "327ac745d7813aabe4fefda2a829f26c07af6727a7040f62601b8fdae3b8081c"
-    },
-    {
-      "id": "measure-starts-beside-candidate-call",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "0cc70c6e3181b4467cbf45aadc7e7522da11e1ce1e66ae94ef4402b6fcfac567"
-    },
-    {
       "id": "skip-unconfirmed-stop-continues",
       "owner": "public-go",
       "evidence": "pending",
@@ -1947,72 +1755,6 @@
       "owner": "private",
       "evidence": "pending",
       "guardFingerprint": "0acfe11f6bc60a49b812867641924371c93143d3f9b66e5dbf4d7f7ec5ede31b"
-    },
-    {
-      "id": "read-failure-as-unknown",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "e14c8dae914680ead5fe20d30c8efaec0ffb587027af22a5852ef3244d8314ed"
-    },
-    {
-      "id": "mutating-failure-reported",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "27227b430cd12a824aa15cfdd7c2a03a6a2740d40fcc209837b9446f455aaa44"
-    },
-    {
-      "id": "impure-status-classed-pure",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "c79042366427826d092694c07d95b8c937a929cecf97095804d40c5e639113a5"
-    },
-    {
-      "id": "worker-empty-not-reread",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "aab0d98f80d9bc7d65f62ceeb5d1479ff9f66f71e2e4548408067c5a8f0c8736"
-    },
-    {
-      "id": "worker-empty-gate-deadline",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "8967e2ffa812f966bc2af20733eb7ad3519e0328d92ac94c675904c89043d8ee"
-    },
-    {
-      "id": "process-wrapper-ignores-window",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "03122474dca8d4592786b86aadb22149429e869369f7dcae34b20fcc321d7b7f"
-    },
-    {
-      "id": "release-wrapper-ignores-window",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "04c737c2f1350c0e6ae0e93cad4bc285671000ca4ac3e5841f62011f4b5f3b4e"
-    },
-    {
-      "id": "control-reservations-ignored",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "2d00a305ca65942809796fcc8b4943cc22cf5ce2c12f53e0bf8f3c2b6443bab0"
-    },
-    {
-      "id": "control-drain-mark-ignored",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "d4e6b9b3009419e4dfb56f3c223b7b6014423f7b06261758ca6d76bd8c5edeed"
-    },
-    {
-      "id": "precondition-accepts-draining-worker",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "453fa1603319efbc08257a39c941ae33718be5305634f7ea5ef2b95b379930cf"
-    },
-    {
-      "id": "precondition-stops-unproven-worker",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "501e558982c6f8f41117c3811cb72fc94c9e4237d8984088913f3886d4ec9f82"
     },
     {
       "id": "losers-not-cancelled",
@@ -2063,12 +1805,6 @@
       "guardFingerprint": "7a923559befcb9824b03dfbb9ddbd4d24b0fe80bf6939fc076c83c754d7632b0"
     },
     {
-      "id": "recovery-unknown-renamed",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "484bb59b91724abf07a6dc349b322195b50095a5f6fece7d75363d6cab7e393a"
-    },
-    {
       "id": "far-caller-not-replaced",
       "owner": "removed",
       "evidence": "pending",
@@ -2103,12 +1839,6 @@
       "owner": "public-go",
       "evidence": "pending",
       "guardFingerprint": "845dc897f6fb9c1615789db379d18b93ae008e0e3a58ecb7c31190e7406b295b"
-    },
-    {
-      "id": "omitted-lost-read-as-unknown",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "ce189420dc2b5912b339e4178d4e674c7bfe78bae540fa3870a62fd9bc67ea36"
     },
     {
       "id": "rehearsal-pass-accepts-inconclusive",
@@ -2203,7 +1933,16 @@
     "protocol-final-session-latch",
     "protocol-final-publication-fence",
     "protocol-runner-context-cutoff",
-    "observation-requires-lost"
+    "observation-requires-lost",
+    "p3-stale-takeover-reused",
+    "p3-final-pool-late-pass",
+    "p3-admission-idle-skipped",
+    "p3-takeover-deadline-fallthrough",
+    "p3-final-status-hides-loss",
+    "p3-collection-reobserves-unknown",
+    "p3-preparation-latches-definite-read",
+    "p3-inconclusive-media-passes",
+    "p3-oracle-waives-unrelated-unknown"
   ],
   "killed": [
     {
@@ -2797,6 +2536,510 @@
       "test": "TestPythonGuards/read-failure-free-text",
       "package": "./internal/operatorgates/host",
       "guardFingerprint": "301a8d5829b62469168e4e9ecefe926873eeaefaf220735917ea62bc52fbcc32"
+    },
+    {
+      "id": "process-after-105",
+      "owner": "P3",
+      "test": "TestProcedureOracle/cd6036a87ac7dd3f.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "75746072941fa33312ed13df7b51dc710ae4b246beb7693243db89e6a07f6c80"
+    },
+    {
+      "id": "measure-after-105",
+      "owner": "P3",
+      "test": "TestMeasurementDefinitionOracle/9df1f6468012b315.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "9a84a31b379903be932fb1cff63bc3e8c7e63eef225295648043c4c9bf937d0b"
+    },
+    {
+      "id": "process-late-media-passes",
+      "owner": "P3",
+      "test": "TestProcedureOracle/edd5c10b65ad547c.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "78ccf27d78f1e3bafdf8403b89c08ebee739be99fe35c7ca50ed72daf1e9340e"
+    },
+    {
+      "id": "process-drops-known-drain-loss",
+      "owner": "P3",
+      "test": "TestProcedureOracle/6c5550a3070423b4.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "00a25ac5eec2e72194c54a63deb7a873141b926c9936fdcadb9612f2aab9d808"
+    },
+    {
+      "id": "process-drops-known-media-failure",
+      "owner": "P3",
+      "test": "TestProcedureOracle/2530439e03d90c3d.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "58e58bc2f2e50472a3161abfdc15ac574cb9f0d1a1c2b8efe09b0fe04afcb6d5"
+    },
+    {
+      "id": "relay-promotes-unsupported-criteria",
+      "owner": "P3",
+      "test": "TestProcedureOracle/c84ac2a6e5929c83.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "be34210a1f06a1ea31c80e5ec4e1072321b603d1c33840eb68707d5b3d40613b"
+    },
+    {
+      "id": "process-skips-independent-empty",
+      "owner": "P3",
+      "test": "TestProcedureOracle/21a180fe51dc4708.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "7767969cffae87b27562c95cc24254db684d40145141de0e9e8988d64279c505"
+    },
+    {
+      "id": "process-moves-before-worker-restored",
+      "owner": "P3",
+      "test": "TestProcedureOracle/047f7c5bcd393cf9.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "8011b755e666c8aefe54cfed59fc31e4ea1f2f736018c8645322dea4ddac46c8"
+    },
+    {
+      "id": "process-allows-far",
+      "owner": "P3",
+      "test": "TestProcedureOracle/1b789eba8077ce7e.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "5f3863502634d3c7acbf46c8fa944121a1cdf2899ed1ad2351a526d2aa4ff320"
+    },
+    {
+      "id": "process-missing-media-passes",
+      "owner": "P3",
+      "test": "TestProcedureOracle/0dc26434dd8e7e00.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "8aa2c7df77b1957811622818a67e6c39f4fd43f197e26eb7d96b6129b5a478da"
+    },
+    {
+      "id": "restore-skipped-after-throw",
+      "owner": "P3",
+      "test": "TestProcedureOracle/18615569387fc587.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "f2ec87b111ae51be2d8be7fb8618a8d3a093b6f2d80289e007402f8e71aa9b7c"
+    },
+    {
+      "id": "restore-after-unknown-mutation",
+      "owner": "P3",
+      "test": "TestProcedureOracle/18615569387fc587.json/1",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "3580fdcea605a1de056cbf206c9cd3e23dde16812926d862f289a668a288f5d4"
+    },
+    {
+      "id": "read-failure-restore-after-unknown",
+      "owner": "P3",
+      "test": "TestProcedureOracle/e463de78f959513b.json/1",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "8c87edcda43c05b12ea4061203ef2729270ba7f2897721f1f91af59abd93ec69"
+    },
+    {
+      "id": "release-restore-after-unknown",
+      "owner": "P3",
+      "test": "TestReleaseOracle/763010d54eb552a0.json/1",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "b11e024291afcd7539ee9c20b91cfef9bc80a723325a130202b5098964d2bf6f"
+    },
+    {
+      "id": "admissions-not-restored",
+      "owner": "P3",
+      "test": "TestProcedureOracle/e463de78f959513b.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "8bcbd57e678cde54f406048b6de717bb43c7239f34bacdd8368ad1b604532100"
+    },
+    {
+      "id": "release-admissions-not-restored",
+      "owner": "P3",
+      "test": "TestReleaseOracle/763010d54eb552a0.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "df11171fe9ce5fb5a4e2575402f92a910d2ec26d55dd68ac125881f23a13ca68"
+    },
+    {
+      "id": "read-failure-without-reason",
+      "owner": "P3",
+      "test": "TestProcedureOracle/e463de78f959513b.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "5c67ed2131361209d308fd1c7a02c2630bbae77c255695e59df3cbd6597d02e5"
+    },
+    {
+      "id": "down-marked-after-submission",
+      "owner": "P3",
+      "test": "TestTrackBeforeSubmission",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "f75501574b49a13f5278b10c3f92953aef63b58a17c58230f4fd0f15f7f471d2"
+    },
+    {
+      "id": "worker-empty-not-reread",
+      "owner": "P3",
+      "test": "TestWorkerEmptyOracle/2ecfd65c26faacd8.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "aab0d98f80d9bc7d65f62ceeb5d1479ff9f66f71e2e4548408067c5a8f0c8736"
+    },
+    {
+      "id": "worker-empty-gate-deadline",
+      "owner": "P3",
+      "test": "TestWorkerEmptyOracle/5b728930ffa05ed0.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "8967e2ffa812f966bc2af20733eb7ad3519e0328d92ac94c675904c89043d8ee"
+    },
+    {
+      "id": "process-wrapper-ignores-window",
+      "owner": "P3",
+      "test": "TestProcedureOracle/5b728930ffa05ed0.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "03122474dca8d4592786b86aadb22149429e869369f7dcae34b20fcc321d7b7f"
+    },
+    {
+      "id": "release-wrapper-ignores-window",
+      "owner": "P3",
+      "test": "TestReleaseOracle/cd93f2f5921b2e18.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "04c737c2f1350c0e6ae0e93cad4bc285671000ca4ac3e5841f62011f4b5f3b4e"
+    },
+    {
+      "id": "control-reservations-ignored",
+      "owner": "P3",
+      "test": "TestWorkerEmptyOracle/b00256084d7d0c6d.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "2d00a305ca65942809796fcc8b4943cc22cf5ce2c12f53e0bf8f3c2b6443bab0"
+    },
+    {
+      "id": "control-drain-mark-ignored",
+      "owner": "P3",
+      "test": "TestWorkerEmptyOracle/b00256084d7d0c6d.json/2",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "d4e6b9b3009419e4dfb56f3c223b7b6014423f7b06261758ca6d76bd8c5edeed"
+    },
+    {
+      "id": "recovery-unknown-renamed",
+      "owner": "P3",
+      "test": "TestProcedureOracle/a20095066c1b93f6.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "484bb59b91724abf07a6dc349b322195b50095a5f6fece7d75363d6cab7e393a"
+    },
+    {
+      "id": "omitted-lost-read-as-unknown",
+      "owner": "P3",
+      "test": "TestProcedureOracle/f53440add6ea2ca9.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "ce189420dc2b5912b339e4178d4e674c7bfe78bae540fa3870a62fd9bc67ea36"
+    },
+    {
+      "id": "trial-observation-removed",
+      "owner": "P3",
+      "test": "TestTrialOracle/0d898d5eb5647856.json/trials.workerTrials/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "e80799b1e6c0f8acee54c76cb258d6edf0654a7d60cf84c85f7a353452a90383"
+    },
+    {
+      "id": "trial-start-after-deadline",
+      "owner": "P3",
+      "test": "TestTrialStartsBeforeDeadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "f5cb6725e66aac7d3a2d6026258acb933e8ae721345d5e989fd9bf29bb62b9f1"
+    },
+    {
+      "id": "trial-unknown-retried",
+      "owner": "P3",
+      "test": "TestTrialOracle/1561a3d71d17ec42.json/trials.workerTrials/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "8fbdbd668c8c9bf4a36988ce03baf36c63bdaeb0e7de44a2060bceecc5f631df"
+    },
+    {
+      "id": "release-skips-target-inventory",
+      "owner": "P3",
+      "test": "TestReleaseOracle/82399182328a195d.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "e4790ab22114b70ef031956519b08168fb11bf15d3925f387dbe92c462a858c8"
+    },
+    {
+      "id": "release-hides-relay-window",
+      "owner": "P3",
+      "test": "TestReleaseOracle/82399182328a195d.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "12b55ac12239ecd1491564351bdf59778eadc823f43140b33cb9642a5a6dbad5"
+    },
+    {
+      "id": "cost-review-dead-workers",
+      "owner": "P3",
+      "test": "TestReleaseOracle/098567902df2479c.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "accd73f318ffb43b555d03d625f077030398f6af9f6440f1cef23466b57ef40d"
+    },
+    {
+      "id": "failover-unknown-durability",
+      "owner": "P3",
+      "test": "TestMeasurementDefinitionOracle/d17df4b9dd26c99a.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "dd15e3ca13740d1fa328ca067e9ff34860001819ef9aa32ff35218cca0a15056"
+    },
+    {
+      "id": "boundary-missing-inventory-admitted",
+      "owner": "P3",
+      "test": "TestMeasurementDefinitionOracle/1c42beea532b6b7a.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "f12096a54e861ffeb934af824669960cb898efb26c6b58f7cdf417ab04645716"
+    },
+    {
+      "id": "measure-starts-beside-candidate-call",
+      "owner": "P3",
+      "test": "TestMeasurementDefinitionOracle/90df0f59b9fcdecc.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "0cc70c6e3181b4467cbf45aadc7e7522da11e1ce1e66ae94ef4402b6fcfac567"
+    },
+    {
+      "id": "boundary-ignores-store-w1",
+      "owner": "P3",
+      "test": "TestBoundaryOracle/302791a0ad0a9763.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "b65a442650f5becc61e7ca7068568c0bfffba92aaf98eb28871710a0505a48a2"
+    },
+    {
+      "id": "boundary-ignores-store-w2",
+      "owner": "P3",
+      "test": "TestBoundaryOracle/302791a0ad0a9763.json/1",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "0bc64e39e6630ac42c8d0d8a4468f26a0d4ff7533455daf4541cca5290e400d4"
+    },
+    {
+      "id": "boundary-ignores-store-transfers",
+      "owner": "P3",
+      "test": "TestBoundaryOracle/302791a0ad0a9763.json/2",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "3b6e1e1d617ccbeaed516bcb57977b2254df2674488dbcf2753aa4dfa1f55f21"
+    },
+    {
+      "id": "boundary-ignores-live-control-calls",
+      "owner": "P3",
+      "test": "TestBoundaryOracle/0c2168e767963841.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "28c6c24d8823b29fd05f4f34bbeb43440a5f7cd09eae28578f9c1215c2c22b27"
+    },
+    {
+      "id": "skip-independent-clock-proof",
+      "owner": "P3",
+      "test": "TestRuntimeMissingClockStopsMutation",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "3b2fd031a7a9d349df86f862945293bbda1787a374efa6da32b755e30040d81c"
+    },
+    {
+      "id": "skip-real-fault-hook",
+      "owner": "P3",
+      "test": "TestRuntimeFreshProofAndFaultOrder",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "8ae25ca81b888d7682484d488bb8ace669bf7b73c69c8b6a04d68c2151006b1d"
+    },
+    {
+      "id": "precondition-control-repair-skipped",
+      "owner": "P3",
+      "test": "TestPreconditionRepairsOnlyDefiniteFailure",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "dda149401fb6589a933ca4a463b7c9c27bb2332fc567dda58b9f70c80fc2e623"
+    },
+    {
+      "id": "precondition-unhealthy-passes",
+      "owner": "P3",
+      "test": "TestPreconditionUnhealthyRejected",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "1aeb85a9f7a25185df9a6e44546dc5662c7f25cb745531e1f4c9aa6c6b766bdd"
+    },
+    {
+      "id": "precondition-accepts-draining-worker",
+      "owner": "P3",
+      "test": "TestPreconditionDrainingWorkerMustBeEmpty",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "453fa1603319efbc08257a39c941ae33718be5305634f7ea5ef2b95b379930cf"
+    },
+    {
+      "id": "precondition-stops-unproven-worker",
+      "owner": "P3",
+      "test": "TestPreconditionDrainingWorkerMustBeEmpty",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "501e558982c6f8f41117c3811cb72fc94c9e4237d8984088913f3886d4ec9f82"
+    },
+    {
+      "id": "unconfirmed-stop-confirmed",
+      "owner": "P3",
+      "test": "TestProcedureProjectionOracle/272d0f0debb5d73c.json/processes.stopped/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "327ac745d7813aabe4fefda2a829f26c07af6727a7040f62601b8fdae3b8081c"
+    },
+    {
+      "id": "read-failure-as-unknown",
+      "owner": "P3",
+      "test": "TestRuntimeReadCertainty",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "e14c8dae914680ead5fe20d30c8efaec0ffb587027af22a5852ef3244d8314ed"
+    },
+    {
+      "id": "impure-status-classed-pure",
+      "owner": "P3",
+      "test": "TestRuntimeReadCertainty",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "c79042366427826d092694c07d95b8c937a929cecf97095804d40c5e639113a5"
+    },
+    {
+      "id": "p3-stale-takeover-reused",
+      "owner": "P3",
+      "test": "TestFreshTakeoverIdentity",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "p3-final-pool-late-pass",
+      "owner": "P3",
+      "test": "TestSequencePoolStaysInsideOriginalBudget",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "p3-admission-idle-skipped",
+      "owner": "P3",
+      "test": "TestAdmissionWaitsForIndependentIdle",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "missing-drain-clean-receipt",
+      "owner": "P3",
+      "test": "TestProcedureOracle/3ee7f94eb9e17e17.json/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "51b033b1a4e5e5a0d67033c2db400e75af981b50ecf3d70a4a2eafd5b67a4d53"
+    },
+    {
+      "id": "store-status-classified-as-mutation",
+      "owner": "P3",
+      "test": "TestRuntimeReadCertainty",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "fa49b6ed9d80754e3e808b4287847e433565e2c2578dfb68d4c14ea1d39131f7"
+    },
+    {
+      "id": "process-skips-fresh-inventory",
+      "owner": "P3",
+      "test": "TestRuntimeFreshProofAndFaultOrder",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "6fd2bbb623836b58f13d6b0ad71b48ca0b544249d32e451c1d984131e483f90f"
+    },
+    {
+      "id": "release-drops-relay-window-projection",
+      "owner": "P3",
+      "test": "TestProcedureProjectionOracle/124967a5e204fb0b.json/processes.sanitizeProcessEvidence/0",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "a4a5ed675066cf26e4550fa445ea2a6653478b012bbe0b9289129955f838b1ea"
+    },
+    {
+      "id": "mutating-failure-reported",
+      "owner": "P3",
+      "test": "TestMutatingWrapperKeepsUnknownFailure",
+      "package": "./internal/operatorgates/host",
+      "evidence": "killed",
+      "guardFingerprint": "27227b430cd12a824aa15cfdd7c2a03a6a2740d40fcc209837b9446f455aaa44"
+    },
+    {
+      "id": "measure-forgets-known-ena",
+      "owner": "P3",
+      "test": "TestMeasurementKnownAllowanceFailureDominates",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": "e60f84d4bd36272eac4da2f46b1fb79850e01e11858cdd5547084e7bc913e1f4"
+    },
+    {
+      "id": "p3-takeover-deadline-fallthrough",
+      "owner": "P3",
+      "test": "TestControlTakeoverRequiresOwnershipBeforeDeadline",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "p3-final-status-hides-loss",
+      "owner": "P3",
+      "test": "TestFinalControlStatusPreservesKnownLoss/complete",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "p3-collection-reobserves-unknown",
+      "owner": "P3",
+      "test": "TestCollectionUnknownStopsObservationsAndPreservesFailure/none",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "p3-preparation-latches-definite-read",
+      "owner": "P3",
+      "test": "TestSequenceDefiniteStopsAndPreconditionsContinue/categorized-precondition",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "p3-inconclusive-media-passes",
+      "owner": "P3",
+      "test": "TestSequenceInconclusiveMediaCannotPass",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "p3-oracle-waives-unrelated-unknown",
+      "owner": "P3",
+      "test": "TestPreconditionDeltaRejectsUnrelatedUnknown",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
     }
   ]
 }

@@ -8,7 +8,17 @@
       "scenario": "warmup reuses local ready receipt and media start without trusting a remote timestamp",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "004099a958ffdf5e.json",
@@ -22,7 +32,7 @@
       "scenario": "gate preparation repairs a dead worker or control with existing steps, else refuses as unhealthy",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "pendingOwner": "P6 composed runtime replay and declared equivalence-delta review",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -31,14 +41,33 @@
           "invocations": 51,
           "test": "inventory.TestInventoryOracle"
         }
+      ],
+      "procedureProjections": [
+        {
+          "operation": "processes.gatePrecondition",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 5,
+          "test": "operatorgates.TestPreconditionOracle",
+          "scope": "repair procedure; exactly one declared unknown-control-status delta at invocation 2, with consumed result and remaining callbacks pinned"
+        }
       ]
     },
     {
       "fixture": "01c2c004466c85ca.json",
       "scenario": "process report allows only complete nonnegative numeric evidence",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.sanitizeProcessEvidence",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "03678e9f307bc0d5.json",
@@ -53,8 +82,33 @@
       "fixture": "047f7c5bcd393cf9.json",
       "scenario": "control restores the second worker before moving original calls",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "0643b1d4f8ad59bd.json",
@@ -85,8 +139,33 @@
       "fixture": "098567902df2479c.json",
       "scenario": "release requires both live fixed-endpoint workers outside deliberate stop windows",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "release.runReleaseGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "operatorgates.TestReleaseOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "09df80537aa241c1.json",
@@ -110,7 +189,17 @@
       "scenario": "malformed caller rows cannot discard known media failure",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "0b86e7522241c704.json",
@@ -123,8 +212,17 @@
       "fixture": "0c2168e767963841.json",
       "scenario": "boundary waits for independent empty control and worker inventories",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "measure.waitBoundaryIdle",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestBoundaryOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "0d87eb9e6bbba815.json",
@@ -141,14 +239,57 @@
       "scenario": "serial trials warm up use distinct real receipts and observe sixty seconds after each ACK",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.workerTrials",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "0dc26434dd8e7e00.json",
       "scenario": "rollout missing evidence is inconclusive",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "0f0eb2dc3f770eb9.json",
@@ -162,21 +303,40 @@
       "scenario": "load successful transcript remains measure-only with raw measurements",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ],
+      "pendingReason": "Raw caller collection contains an exporter-produced unquoted account alias in numeric HungUpAt; the recorded reducer result reflects the original valid numeric input. Frozen bytes remain unchanged; collection/reducer replay remains pending."
     },
     {
       "fixture": "10e550386ddb932a.json",
       "scenario": "trial cannot reuse an old takeover and must restore both workers before moving",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "trials.workerTrials",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "124967a5e204fb0b.json",
       "scenario": "release relay-window uncertainty survives evidence sanitization",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "replayed",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -184,6 +344,56 @@
           "evidence": "replayed",
           "invocations": 8,
           "test": "inventory.TestInventoryOracle"
+        }
+      ],
+      "procedureProjections": [
+        {
+          "operation": "release.runReleaseGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestReleaseOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.workerTrials",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.sanitizeProcessEvidence",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
         }
       ]
     },
@@ -226,15 +436,41 @@
       "fixture": "1561a3d71d17ec42.json",
       "scenario": "trial unknown command is submitted once and no later trial starts",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "trials.workerTrials",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "18615569387fc587.json",
       "scenario": "a worker the gate took down is restored even when a later check throws",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "1879a3d7b103cb3c.json",
@@ -247,8 +483,33 @@
       "fixture": "194fd186588addbe.json",
       "scenario": "rollout host transcript completes with qualifying distributed media",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "1a46546772a6609b.json",
@@ -277,8 +538,25 @@
       "fixture": "1b789eba8077ce7e.json",
       "scenario": "process gates require near registration and never start at minute 105",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 6,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 6,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "1be88515f556f3f6.json",
@@ -292,7 +570,17 @@
       "scenario": "missing independent worker inventory cannot report admitted calls",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "1d20f71ddc4557f4.json",
@@ -316,14 +604,65 @@
       "scenario": "failover successful transcript remains measure-only with raw measurements",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.workerTrials",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "21a180fe51dc4708.json",
       "scenario": "rollout independently empties each worker before its exact stop and serial replacement",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "23ebd80c52c39191.json",
@@ -338,15 +677,49 @@
       "fixture": "23f866761ee9639b.json",
       "scenario": "relay-deploy known media failure survives missing evidence",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "2530439e03d90c3d.json",
       "scenario": "rollout known media failure survives missing evidence",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "25d8a761e9a32dec.json",
@@ -376,7 +749,7 @@
       "scenario": "an unconfirmed caller hangup at gate end is an unknown outcome that stops later gates",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -385,14 +758,41 @@
           "invocations": 3,
           "test": "inventory.TestInventoryOracle"
         }
+      ],
+      "procedureProjections": [
+        {
+          "operation": "processes.stopped",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
       ]
     },
     {
       "fixture": "29262219ea35dfe2.json",
       "scenario": "relay known self-fence fails even with missing packet measurements",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "2c66cbdf08ee6414.json",
@@ -447,15 +847,49 @@
       "fixture": "2ecfd65c26faacd8.json",
       "scenario": "worker-empty is read again until it passes inside the gate",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "302791a0ad0a9763.json",
       "scenario": "boundary refuses independent store leases transfers missing and unknown evidence",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "measure.waitBoundaryIdle",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 7,
+          "test": "operatorgates.TestBoundaryOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "322aa74f29f0a814.json",
@@ -482,8 +916,7 @@
       "fixture": "3be1e754eeb84bcb.json",
       "scenario": "release known loss fails missing media stays inconclusive and unknown is never retried",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "replayed",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -491,6 +924,56 @@
           "evidence": "replayed",
           "invocations": 16,
           "test": "inventory.TestInventoryOracle"
+        }
+      ],
+      "procedureProjections": [
+        {
+          "operation": "release.runReleaseGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 8,
+          "test": "operatorgates.TestReleaseOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 8,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.workerTrials",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 15,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 14,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
         }
       ]
     },
@@ -505,8 +988,33 @@
       "fixture": "3ee7f94eb9e17e17.json",
       "scenario": "real rollout emits uncertain drain receipts when control omits move history",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "4136f17b5414b14d.json",
@@ -548,14 +1056,23 @@
       "scenario": "known decryption and ICE failures remain failed without pooled sample",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "52c749d6046baac5.json",
       "scenario": "control restart accepts omitted or false lost and never accepts a true lost takeover",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "replayed",
       "observationProjections": [
         {
           "operation": "observe.typedLost",
@@ -563,6 +1080,40 @@
           "evidence": "replayed",
           "invocations": 13,
           "test": "observe.TestTypedLostOracle"
+        }
+      ],
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
         }
       ]
     },
@@ -582,14 +1133,34 @@
         "run.previewGateDeadline"
       ],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "processes.sanitizeProcessEvidence",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 14,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "5868b4422f351ddc.json",
       "scenario": "load missing evidence stays inconclusive",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "58b6cbb9a951d468.json",
@@ -605,7 +1176,7 @@
       "scenario": "both measurement campaigns submit an unknown caller mailbox mutation once",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -613,6 +1184,24 @@
           "evidence": "replayed",
           "invocations": 16,
           "test": "inventory.TestInventoryOracle"
+        }
+      ],
+      "procedureProjections": [
+        {
+          "operation": "processes.stopped",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "measure.waitBoundaryIdle",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestBoundaryOracle",
+          "scope": "complete function at recorded callback seam"
         }
       ]
     },
@@ -627,8 +1216,41 @@
       "fixture": "5b728930ffa05ed0.json",
       "scenario": "worker-empty re-reads end inside one 90 s window, invocations included",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "5d49cd67f7a88b17.json",
@@ -658,15 +1280,58 @@
       "fixture": "6080367b30554540.json",
       "scenario": "release cannot mutate at minute 105 and media failures dominate unknown results",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "release.runReleaseGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestReleaseOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "617321ad9d53b5f7.json",
       "scenario": "failover missing evidence stays inconclusive",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "64f02812971b1ab4.json",
@@ -712,7 +1377,17 @@
       "scenario": "boundary measures two original admissions separately with cap two",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "692b236b2571a208.json",
@@ -728,15 +1403,73 @@
       "fixture": "6c5550a3070423b4.json",
       "scenario": "known drain call loss survives a later lack of media evidence",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "763010d54eb552a0.json",
       "scenario": "a worker-empty read failure after the move restores admissions and lets later gates run",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "release.runReleaseGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestReleaseOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "77673bc806840d93.json",
@@ -749,8 +1482,33 @@
       "fixture": "795ccb9547219d4f.json",
       "scenario": "control-restart missing evidence is inconclusive",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "7a43d8917f173751.json",
@@ -775,7 +1533,7 @@
       "scenario": "release transcript uses ADR role order fresh target inventory and stable-phase trials",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -783,6 +1541,48 @@
           "evidence": "replayed",
           "invocations": 8,
           "test": "inventory.TestInventoryOracle"
+        }
+      ],
+      "procedureProjections": [
+        {
+          "operation": "release.runReleaseGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestReleaseOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.workerTrials",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
         }
       ]
     },
@@ -804,8 +1604,41 @@
       "fixture": "8993b9d3ba5b4019.json",
       "scenario": "rollout unknown command is never retried",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "8b3344538fc20ef5.json",
@@ -826,14 +1659,24 @@
       "scenario": "decode errors remain raw measure-only evidence without a new acceptance rule",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "8d39470b4fb4974c.json",
       "scenario": "gate preparation rolls a live worker a stopped gate left draining, only when it is proven empty",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "pendingOwner": "P6 composed runtime replay and declared equivalence-delta review",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -842,21 +1685,48 @@
           "invocations": 24,
           "test": "inventory.TestInventoryOracle"
         }
+      ],
+      "procedureProjections": [
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.gatePrecondition",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestPreconditionOracle",
+          "scope": "repair procedure; one declared unknown-control-status delta"
+        }
       ]
     },
     {
       "fixture": "8f3705c63b25260b.json",
       "scenario": "relay-deploy host transcript completes with qualifying distributed media",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "8f6ee020e1204cd2.json",
       "scenario": "a gate that gives up after registration tells its caller to exit instead of waiting out its deadline",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -865,6 +1735,32 @@
           "invocations": 4,
           "test": "inventory.TestInventoryOracle"
         }
+      ],
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.stopped",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
       ]
     },
     {
@@ -872,7 +1768,7 @@
       "scenario": "a failed read-only precondition is its own reason, keeps its sanitized code and tells the caller to stop",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -881,6 +1777,16 @@
           "invocations": 3,
           "test": "inventory.TestInventoryOracle"
         }
+      ],
+      "procedureProjections": [
+        {
+          "operation": "processes.stopped",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
       ]
     },
     {
@@ -888,7 +1794,17 @@
       "scenario": "a measurement gate waits a bounded time for a hung-up candidate's call to end",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "9b3641867128bd38.json",
@@ -911,14 +1827,57 @@
       "scenario": "measurement gates never start at minute 105 and clamp twenty minute deadlines",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.workerTrials",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "9e4ceef43397b71f.json",
       "scenario": "control-restart unknown command is never retried",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "9fe049224d222854.json",
@@ -940,8 +1899,41 @@
       "fixture": "a20095066c1b93f6.json",
       "scenario": "an unknown status during recovery stays unknown and nothing is mutated after it",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "a32c5219b69df740.json",
@@ -977,8 +1969,25 @@
       "fixture": "a6cff16abde78813.json",
       "scenario": "control-restart known media failure survives missing evidence",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "a84173891e090ebc.json",
@@ -992,14 +2001,49 @@
       "scenario": "failover unknown command is never retried or followed by another mutation",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "ae05714cbfb25ed6.json",
       "scenario": "trial warmup and observations must fit before the gate deadline",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.workerTrials",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "af6f28c64bb709d5.json",
@@ -1019,8 +2063,17 @@
       "fixture": "b00256084d7d0c6d.json",
       "scenario": "control's side of an empty worker is read in its own status step",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "b24a4d687c78e557.json",
@@ -1057,14 +2110,34 @@
       "scenario": "failover known failure survives absent telemetry",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "b8381a019b92fe37.json",
       "scenario": "partial ENA evidence retains known allowance violations",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "b86d00b13369ed0a.json",
@@ -1116,15 +2189,34 @@
       "fixture": "c84ac2a6e5929c83.json",
       "scenario": "relay applicable host criteria pass but unsupported local criteria stay inconclusive",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "c85d493e11d66f8d.json",
       "scenario": "load known failure survives absent telemetry",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "ccee825ab73a16c6.json",
@@ -1140,43 +2232,194 @@
       "fixture": "cd6036a87ac7dd3f.json",
       "scenario": "process step deadlines stop at minute 105 and never exceed twenty minutes",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "cd93f2f5921b2e18.json",
       "scenario": "release worker-empty invocations receive the retry window's deadline",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "release.runReleaseGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestReleaseOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "d17df4b9dd26c99a.json",
       "scenario": "unknown or asynchronous durability cannot authorize failover",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "d283d923d43412bc.json",
       "scenario": "relay-deploy unknown command is never retried",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "d6cbacdc767bb209.json",
       "scenario": "relay-deploy missing evidence is inconclusive",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "d8df75035beb0735.json",
       "scenario": "release missing relay counters stay inconclusive while known self-fences fail",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "release.runReleaseGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "operatorgates.TestReleaseOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "trials.trialWarmup",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 6,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 6,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 3,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "dad788f4ed5b0458.json",
@@ -1226,15 +2469,58 @@
       "fixture": "e463de78f959513b.json",
       "scenario": "a failed read-only check after a gate's mutations restores admissions and workers, never after an unknown outcome",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.readFailure",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "e7138cd86a2f0fa7.json",
       "scenario": "load unknown command is never retried or followed by another mutation",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "measure.runMeasureGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestMeasurementDefinitionOracle",
+          "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
+        }
+      ]
     },
     {
       "fixture": "e91020ea28c0bc03.json",
@@ -1303,8 +2589,33 @@
       "fixture": "edd5c10b65ad547c.json",
       "scenario": "late process media cannot pass after minute 105 but known failures still fail",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 4,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "ee31ae167952d60b.json",
@@ -1313,7 +2624,17 @@
         "run.previewGateDeadline"
       ],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "procedureProjections": [
+        {
+          "operation": "processes.sanitizeProcessEvidence",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "eefe95181c64fe7d.json",
@@ -1345,8 +2666,33 @@
       "fixture": "f53440add6ea2ca9.json",
       "scenario": "control-restart host transcript completes with qualifying distributed media",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "processes.runProcessGate",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.workerEmpty",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestWorkerEmptyOracle",
+          "scope": "complete function at recorded callback seam"
+        },
+        {
+          "operation": "processes.drainReceipt",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 1,
+          "test": "operatorgates.TestProcedureProjectionOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "f56bbfcfeea2cfcb.json",
@@ -1386,8 +2732,17 @@
       "fixture": "f899cbac511af4a6.json",
       "scenario": "trial missing inventory and known loss do not become receipts",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "procedureProjections": [
+        {
+          "operation": "trials.workerTrials",
+          "owner": "P3",
+          "evidence": "replayed",
+          "invocations": 2,
+          "test": "operatorgates.TestTrialOracle",
+          "scope": "complete function at recorded callback seam"
+        }
+      ]
     },
     {
       "fixture": "fb26c9a9da071a7b.json",
@@ -1422,5 +2777,33 @@
     "typedObservations": 13,
     "scenarios": 20,
     "scope": "Function and typed-observation projections; outer procedures stay pending unless fullReplay is replayed."
+  },
+  "procedureReplay": {
+    "owner": "P3",
+    "evidence": "replayed",
+    "scenarios": 70,
+    "fullFixtures": 42,
+    "functionInvocations": 328,
+    "operations": {
+      "trials.trialWarmup": 29,
+      "processes.gatePrecondition": 7,
+      "processes.sanitizeProcessEvidence": 20,
+      "processes.runProcessGate": 38,
+      "processes.workerEmpty": 67,
+      "processes.drainReceipt": 57,
+      "release.runReleaseGate": 21,
+      "processes.readFailure": 31,
+      "measure.runMeasureGate": 22,
+      "measure.waitBoundaryIdle": 11,
+      "trials.workerTrials": 18,
+      "processes.stopped": 7
+    },
+    "scope": "Procedure callback order, deadlines, receipts, restoration, counters and verdicts. Typed runtime and protocol proof is separately tested. Full suite remains pending.",
+    "deltas": "equivalence-deltas.json",
+    "pendingScopes": [
+      "Composed host/runtime transcript replay; native runtime, typed ingress and session safety are tested separately.",
+      "Caller collection, telemetry reductions and pinned-judge assembly.",
+      "Container and cross-process integration, private lifecycle projections and retired hosted-caller behavior."
+    ]
   }
 }

@@ -46,3 +46,14 @@ func TestPythonGuards(t *testing.T) {
 		})
 	}
 }
+
+func TestMutatingWrapperKeepsUnknownFailure(t *testing.T) {
+	stage := &Stage{Version: "0.3.0", Arch: "arm64", ArchiveSHA256: strings.Repeat("a", 64), ManifestSHA256: strings.Repeat("b", 64), Pool: "e30=", Operation: "upgrade"}
+	script, err := Process("freeze", struct{}{}, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(script, "except Exception:\n    emit({'kind':'unknown'})") || strings.Contains(script, "except Exception as error:\n    emit({'kind':'failed'") {
+		t.Fatal("MUTATION: mutating-wrapper-unknown")
+	}
+}

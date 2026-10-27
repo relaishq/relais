@@ -33,7 +33,15 @@ func Control(data []byte) (controlplane.Status, error) {
 	// Validate history presence against the original bytes, rather than marshaling
 	// a zero-filled struct and turning missing evidence into present fields.
 	if err == nil {
-		err = paths(data, prefix("takeovers[]", moveContract))
+		// Historical takeovers can omit start. Trials use the independently
+		// observed signal start and compare the exact pre-fault history.
+		history := append(Contract{}, moveContract...)
+		for i, field := range history {
+			if field == "start" {
+				history[i] = "~start"
+			}
+		}
+		err = paths(data, prefix("takeovers[]", history))
 	}
 	return v, err
 }
