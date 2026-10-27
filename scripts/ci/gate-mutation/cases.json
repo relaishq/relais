@@ -819,5 +819,804 @@
     "Test": "TestPythonGuards/read-failure-free-text",
     "Marker": "MUTATION: python-guard read-failure-free-text",
     "PythonTest": "preview_process_test.ProcessTests.test_read_failures_leave_only_fixed_codes_or_class_names"
+  },
+  {
+    "ID": "process-after-105",
+    "GuardFingerprint": "75746072941fa33312ed13df7b51dc710ae4b246beb7693243db89e6a07f6c80",
+    "File": "internal/operatorgates/procedure.go",
+    "Function": "newProcedure",
+    "Old": ", p.Clock.Elapsed()+c.ArmedAt.Add(SessionMaximum).Sub(p.Clock.Wall())",
+    "New": "",
+    "Test": "TestProcedureOracle/cd6036a87ac7dd3f.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "measure-after-105",
+    "GuardFingerprint": "9a84a31b379903be932fb1cff63bc3e8c7e63eef225295648043c4c9bf937d0b",
+    "File": "internal/operatorgates/procedure.go",
+    "Function": "newProcedure",
+    "Old": ", p.Clock.Elapsed()+c.ArmedAt.Add(SessionMaximum).Sub(p.Clock.Wall())",
+    "New": "",
+    "Test": "TestMeasurementDefinitionOracle/9df1f6468012b315.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "process-late-media-passes",
+    "GuardFingerprint": "78ccf27d78f1e3bafdf8403b89c08ebee739be99fe35c7ca50ed72daf1e9340e",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "finish",
+    "Old": "if g.p.Clock.Elapsed() >= g.end && r.Status != operator.Failure {",
+    "New": "if false {",
+    "Test": "TestProcedureOracle/edd5c10b65ad547c.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "process-drops-known-drain-loss",
+    "GuardFingerprint": "00a25ac5eec2e72194c54a63deb7a873141b926c9936fdcadb9612f2aab9d808",
+    "File": "internal/operatorgates/procedure.go",
+    "Function": "drain",
+    "Old": "if m.Lost {",
+    "New": "if false && m.Lost {",
+    "Test": "TestProcedureOracle/6c5550a3070423b4.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "process-drops-known-media-failure",
+    "GuardFingerprint": "58e58bc2f2e50472a3161abfdc15ac574cb9f0d1a1c2b8efe09b0fe04afcb6d5",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "finish",
+    "Old": "if media != nil && media.Status == operator.Failure {",
+    "New": "if false {",
+    "Test": "TestProcedureOracle/2530439e03d90c3d.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "relay-promotes-unsupported-criteria",
+    "GuardFingerprint": "be34210a1f06a1ea31c80e5ec4e1072321b603d1c33840eb68707d5b3d40613b",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "RunProcessGate",
+    "Old": "if result.Status != operator.Failure {",
+    "New": "if false {",
+    "Test": "TestProcedureOracle/c84ac2a6e5929c83.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "process-skips-independent-empty",
+    "GuardFingerprint": "7767969cffae87b27562c95cc24254db684d40145141de0e9e8988d64279c505",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "process",
+    "Old": "if err = WorkerEmpty(ctx, g.ports(), w, g.end); err != nil {\n\t\t\t\treturn err\n\t\t\t}",
+    "New": "",
+    "Test": "TestProcedureOracle/21a180fe51dc4708.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "process-moves-before-worker-restored",
+    "GuardFingerprint": "8011b755e666c8aefe54cfed59fc31e4ea1f2f736018c8645322dea4ddac46c8",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "controlRestart",
+    "Old": "if err = g.replace(ctx, to); err != nil {\n\t\treturn err\n\t}\n\tcurrent, err := g.status(ctx)",
+    "New": "current, err := g.status(ctx)",
+    "Test": "TestProcedureOracle/047f7c5bcd393cf9.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "process-allows-far",
+    "GuardFingerprint": "5f3863502634d3c7acbf46c8fa944121a1cdf2899ed1ad2351a526d2aa4ff320",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "process",
+    "Old": " || !reg.Near",
+    "New": "",
+    "Test": "TestProcedureOracle/1b789eba8077ce7e.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "process-missing-media-passes",
+    "GuardFingerprint": "8aa2c7df77b1957811622818a67e6c39f4fd43f197e26eb7d96b6129b5a478da",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "finish",
+    "Old": "",
+    "New": "",
+    "Test": "TestProcedureOracle/0dc26434dd8e7e00.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/processes.go",
+        "Function": "finish",
+        "Old": "err != nil || media == nil || media.Status != operator.Passed",
+        "New": "false && (err != nil || media == nil || media.Status != operator.Passed)"
+      },
+      {
+        "File": "internal/operatorgates/processes.go",
+        "Function": "finish",
+        "Old": "if r.Media == nil && r.Status != operator.Failure {",
+        "New": "if false {"
+      }
+    ]
+  },
+  {
+    "ID": "restore-skipped-after-throw",
+    "GuardFingerprint": "f2ec87b111ae51be2d8be7fb8618a8d3a093b6f2d80289e007402f8e71aa9b7c",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "finish",
+    "Old": "if !g.unknown && r.Reason != \"command-result-unknown\" {",
+    "New": "if false {",
+    "Test": "TestProcedureOracle/18615569387fc587.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "restore-after-unknown-mutation",
+    "GuardFingerprint": "3580fdcea605a1de056cbf206c9cd3e23dde16812926d862f289a668a288f5d4",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "finish",
+    "Old": "",
+    "New": "",
+    "Test": "TestProcedureOracle/18615569387fc587.json/1",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/processes.go",
+        "Function": "finish",
+        "Old": "if !g.unknown && r.Reason != \"command-result-unknown\" {",
+        "New": "if true {"
+      },
+      {
+        "File": "internal/operatorgates/restore.go",
+        "Function": "restoreGate",
+        "Old": "if g.unknown {",
+        "New": "if false {"
+      },
+      {
+        "File": "internal/operatorgates/restore.go",
+        "Function": "restoreWorkers",
+        "Old": "if g.unknown {",
+        "New": "if false {"
+      },
+      {
+        "File": "internal/operatorgates/procedure.go",
+        "Function": "step",
+        "Old": "if g.unknown {",
+        "New": "if false {"
+      }
+    ]
+  },
+  {
+    "ID": "read-failure-restore-after-unknown",
+    "GuardFingerprint": "8c87edcda43c05b12ea4061203ef2729270ba7f2897721f1f91af59abd93ec69",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "finish",
+    "Old": "",
+    "New": "",
+    "Test": "TestProcedureOracle/e463de78f959513b.json/1",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/processes.go",
+        "Function": "finish",
+        "Old": "if !g.unknown && r.Reason != \"command-result-unknown\" {",
+        "New": "if true {"
+      },
+      {
+        "File": "internal/operatorgates/restore.go",
+        "Function": "restoreGate",
+        "Old": "if g.unknown {",
+        "New": "if false {"
+      },
+      {
+        "File": "internal/operatorgates/restore.go",
+        "Function": "restoreWorkers",
+        "Old": "if g.unknown {",
+        "New": "if false {"
+      },
+      {
+        "File": "internal/operatorgates/procedure.go",
+        "Function": "step",
+        "Old": "if g.unknown {",
+        "New": "if false {"
+      }
+    ]
+  },
+  {
+    "ID": "release-restore-after-unknown",
+    "GuardFingerprint": "b11e024291afcd7539ee9c20b91cfef9bc80a723325a130202b5098964d2bf6f",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "finish",
+    "Old": "",
+    "New": "",
+    "Test": "TestReleaseOracle/763010d54eb552a0.json/1",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/processes.go",
+        "Function": "finish",
+        "Old": "if !g.unknown && r.Reason != \"command-result-unknown\" {",
+        "New": "if true {"
+      },
+      {
+        "File": "internal/operatorgates/restore.go",
+        "Function": "restoreGate",
+        "Old": "if g.unknown {",
+        "New": "if false {"
+      },
+      {
+        "File": "internal/operatorgates/restore.go",
+        "Function": "restoreWorkers",
+        "Old": "if g.unknown {",
+        "New": "if false {"
+      },
+      {
+        "File": "internal/operatorgates/procedure.go",
+        "Function": "step",
+        "Old": "if g.unknown {",
+        "New": "if false {"
+      }
+    ]
+  },
+  {
+    "ID": "admissions-not-restored",
+    "GuardFingerprint": "8bcbd57e678cde54f406048b6de717bb43c7239f34bacdd8368ad1b604532100",
+    "File": "internal/operatorgates/restore.go",
+    "Function": "restoreGate",
+    "Old": "if g.frozen {",
+    "New": "if false {",
+    "Test": "TestProcedureOracle/e463de78f959513b.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "release-admissions-not-restored",
+    "GuardFingerprint": "df11171fe9ce5fb5a4e2575402f92a910d2ec26d55dd68ac125881f23a13ca68",
+    "File": "internal/operatorgates/restore.go",
+    "Function": "restoreGate",
+    "Old": "if g.frozen {",
+    "New": "if false {",
+    "Test": "TestReleaseOracle/763010d54eb552a0.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "read-failure-without-reason",
+    "GuardFingerprint": "5c67ed2131361209d308fd1c7a02c2630bbae77c255695e59df3cbd6597d02e5",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "finish",
+    "Old": "if reason, category := readFailure(err); reason != \"\" {",
+    "New": "if reason, category := readFailure(err); false {",
+    "Test": "TestProcedureOracle/e463de78f959513b.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "down-marked-after-submission",
+    "GuardFingerprint": "f75501574b49a13f5278b10c3f92953aef63b58a17c58230f4fd0f15f7f471d2",
+    "File": "internal/operatorgates/procedure.go",
+    "Function": "step",
+    "Old": "if (op == \"worker-down\" || op == \"worker-stop\") && extra.Worker != \"\" && !slices.Contains(g.down, extra.Worker) {\n\t\tg.down = append(g.down, extra.Worker)\n\t}",
+    "New": "",
+    "Test": "TestTrackBeforeSubmission",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "worker-empty-not-reread",
+    "GuardFingerprint": "aab0d98f80d9bc7d65f62ceeb5d1479ff9f66f71e2e4548408067c5a8f0c8736",
+    "File": "internal/operatorgates/restore.go",
+    "Function": "WorkerEmpty",
+    "Old": "if !strings.HasPrefix(code(err), \"precondition-failed:\") {",
+    "New": "if strings.HasPrefix(code(err), \"\") {",
+    "Test": "TestWorkerEmptyOracle/2ecfd65c26faacd8.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "worker-empty-gate-deadline",
+    "GuardFingerprint": "8967e2ffa812f966bc2af20733eb7ad3519e0328d92ac94c675904c89043d8ee",
+    "File": "internal/operatorgates/restore.go",
+    "Function": "WorkerEmpty",
+    "Old": "p.Step(ctx, \"status\", \"shared\", until, ProcessExtra{})",
+    "New": "p.Step(ctx, \"status\", \"shared\", end, ProcessExtra{})",
+    "Test": "TestWorkerEmptyOracle/5b728930ffa05ed0.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "process-wrapper-ignores-window",
+    "GuardFingerprint": "03122474dca8d4592786b86aadb22149429e869369f7dcae34b20fcc321d7b7f",
+    "File": "internal/operatorgates/procedure.go",
+    "Function": "step",
+    "Old": "min(end, g.end)",
+    "New": "g.end",
+    "Test": "TestProcedureOracle/5b728930ffa05ed0.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "release-wrapper-ignores-window",
+    "GuardFingerprint": "04c737c2f1350c0e6ae0e93cad4bc285671000ca4ac3e5841f62011f4b5f3b4e",
+    "File": "internal/operatorgates/procedure.go",
+    "Function": "step",
+    "Old": "min(end, g.end)",
+    "New": "g.end",
+    "Test": "TestReleaseOracle/cd93f2f5921b2e18.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "control-reservations-ignored",
+    "GuardFingerprint": "2d00a305ca65942809796fcc8b4943cc22cf5ce2c12f53e0bf8f3c2b6443bab0",
+    "File": "internal/operatorgates/restore.go",
+    "Function": "WorkerEmpty",
+    "Old": " || s.Pool.Reservations != 0",
+    "New": "",
+    "Test": "TestWorkerEmptyOracle/b00256084d7d0c6d.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "control-drain-mark-ignored",
+    "GuardFingerprint": "d4e6b9b3009419e4dfb56f3c223b7b6014423f7b06261758ca6d76bd8c5edeed",
+    "File": "internal/operatorgates/restore.go",
+    "Function": "WorkerEmpty",
+    "Old": "case !observe.Draining(s, w):",
+    "New": "case false && !observe.Draining(s, w):",
+    "Test": "TestWorkerEmptyOracle/b00256084d7d0c6d.json/2",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "recovery-unknown-renamed",
+    "GuardFingerprint": "484bb59b91724abf07a6dc349b322195b50095a5f6fece7d75363d6cab7e393a",
+    "File": "internal/operatorgates/restore.go",
+    "Function": "restoreWorkers",
+    "Old": "if err != nil {\n\t\t\treturn err\n\t\t}",
+    "New": "if err != nil {\n if code(err)==\"command-result-unknown\"{g.unknown=false;return fault(\"restore-unobserved\")};return err\n }",
+    "Test": "TestProcedureOracle/a20095066c1b93f6.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "omitted-lost-read-as-unknown",
+    "GuardFingerprint": "ce189420dc2b5912b339e4178d4e674c7bfe78bae540fa3870a62fd9bc67ea36",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "controlRestart",
+    "Old": "if m.Lost {",
+    "New": "if fields:=map[string]json.RawMessage{};json.Unmarshal(recovered.History[i],&fields)!=nil || string(fields[\"lost\"])!=\"false\" || m.Lost {",
+    "Test": "TestProcedureOracle/f53440add6ea2ca9.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "trial-observation-removed",
+    "GuardFingerprint": "e80799b1e6c0f8acee54c76cb258d6edf0654a7d60cf84c85f7a353452a90383",
+    "File": "internal/operatorgates/trials.go",
+    "Function": "trials",
+    "Old": "if err = g.consent(ctx); err != nil {\n\t\t\t\treturn err\n\t\t\t}",
+    "New": "",
+    "Test": "TestTrialOracle/0d898d5eb5647856.json/trials.workerTrials/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "trial-start-after-deadline",
+    "GuardFingerprint": "f5cb6725e66aac7d3a2d6026258acb933e8ae721345d5e989fd9bf29bb62b9f1",
+    "File": "internal/operatorgates/procedure.go",
+    "Function": "step",
+    "Old": "if g.p.Clock.Elapsed() >= g.end {",
+    "New": "if false {",
+    "Test": "TestTrialStartsBeforeDeadline",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "trial-unknown-retried",
+    "GuardFingerprint": "8fbdbd668c8c9bf4a36988ce03baf36c63bdaeb0e7de44a2060bceecc5f631df",
+    "File": "internal/operatorgates/procedure.go",
+    "Function": "step",
+    "Old": "r, err := g.p.Step(ctx, op, slot, min(end, g.end), extra)",
+    "New": "r, err := g.p.Step(ctx, op, slot, min(end, g.end), extra)\n if err!=nil{r,err=g.p.Step(ctx,op,slot,min(end,g.end),extra)}",
+    "Test": "TestTrialOracle/1561a3d71d17ec42.json/trials.workerTrials/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "release-skips-target-inventory",
+    "GuardFingerprint": "e4790ab22114b70ef031956519b08168fb11bf15d3925f387dbe92c462a858c8",
+    "File": "internal/operatorgates/release.go",
+    "Function": "release",
+    "Old": "if err = g.p.Inventory(ctx, target, g.end); err != nil {\n\t\t\treturn err\n\t\t}",
+    "New": "",
+    "Test": "TestReleaseOracle/82399182328a195d.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "release-hides-relay-window",
+    "GuardFingerprint": "12b55ac12239ecd1491564351bdf59778eadc823f43140b33cb9642a5a6dbad5",
+    "File": "internal/operatorgates/release.go",
+    "Function": "RunReleaseGate",
+    "Old": "g.evidence.RelayWindows = \"inconclusive\"",
+    "New": "g.evidence.RelayWindows = \"\"",
+    "Test": "TestReleaseOracle/82399182328a195d.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "cost-review-dead-workers",
+    "GuardFingerprint": "accd73f318ffb43b555d03d625f077030398f6af9f6440f1cef23466b57ef40d",
+    "File": "internal/operatorgates/release.go",
+    "Function": "releaseStatus",
+    "Old": "if !slices.ContainsFunc(s.Workers,",
+    "New": "if false && !slices.ContainsFunc(s.Workers,",
+    "Test": "TestReleaseOracle/098567902df2479c.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-unknown-durability",
+    "GuardFingerprint": "dd15e3ca13740d1fa328ca067e9ff34860001819ef9aa32ff35218cca0a15056",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Old": "before.Durability != \"sync\" || ",
+    "New": "",
+    "Test": "TestMeasurementDefinitionOracle/d17df4b9dd26c99a.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "boundary-missing-inventory-admitted",
+    "GuardFingerprint": "f12096a54e861ffeb934af824669960cb898efb26c6b58f7cdf417ab04645716",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Old": "if !ok || !local.InventoryKnown || local.Truncated || local.Sessions != len(owned) || local.Inventory == nil || len(local.Inventory) != len(owned) {",
+    "New": "if false && (!ok || !local.InventoryKnown || local.Truncated || local.Sessions != len(owned) || local.Inventory == nil || len(local.Inventory) != len(owned)) {",
+    "Test": "TestMeasurementDefinitionOracle/1c42beea532b6b7a.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/measurement.go",
+        "Function": "measureDefinition",
+        "Old": "if !ok || !local.InventoryKnown || local.Truncated || local.Sessions != len(owned) || local.Inventory == nil || len(local.Inventory) != len(owned) {",
+        "New": "if false && (!ok || !local.InventoryKnown || local.Truncated || local.Sessions != len(owned) || local.Inventory == nil || len(local.Inventory) != len(owned)) {"
+      },
+      {
+        "File": "internal/operatorgates/measurement.go",
+        "Function": "measureDefinition",
+        "Old": "if !slices.ContainsFunc(local.Inventory, func(i mediaworker.InstalledSession) bool {",
+        "New": "if false && !slices.ContainsFunc(local.Inventory, func(i mediaworker.InstalledSession) bool {"
+      }
+    ]
+  },
+  {
+    "ID": "measure-starts-beside-candidate-call",
+    "GuardFingerprint": "0cc70c6e3181b4467cbf45aadc7e7522da11e1ce1e66ae94ef4402b6fcfac567",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "measureDefinition",
+    "Old": "initial.Status != nil && len(initial.Status.Calls) > p.Calls && p.Clock.Elapsed() < settle",
+    "New": "false && initial.Status != nil && len(initial.Status.Calls) > p.Calls && p.Clock.Elapsed() < settle",
+    "Test": "TestMeasurementDefinitionOracle/90df0f59b9fcdecc.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "boundary-ignores-store-w1",
+    "GuardFingerprint": "b65a442650f5becc61e7ca7068568c0bfffba92aaf98eb28871710a0505a48a2",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "WaitBoundaryIdle",
+    "Old": " && r.Ownership.Owners[\"w1\"] == 0",
+    "New": "",
+    "Test": "TestBoundaryOracle/302791a0ad0a9763.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "boundary-ignores-store-w2",
+    "GuardFingerprint": "0bc64e39e6630ac42c8d0d8a4468f26a0d4ff7533455daf4541cca5290e400d4",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "WaitBoundaryIdle",
+    "Old": " && r.Ownership.Owners[\"w2\"] == 0",
+    "New": "",
+    "Test": "TestBoundaryOracle/302791a0ad0a9763.json/1",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "boundary-ignores-store-transfers",
+    "GuardFingerprint": "3b6e1e1d617ccbeaed516bcb57977b2254df2674488dbcf2753aa4dfa1f55f21",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "WaitBoundaryIdle",
+    "Old": " && r.Ownership.Transfers == 0",
+    "New": "",
+    "Test": "TestBoundaryOracle/302791a0ad0a9763.json/2",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "boundary-ignores-live-control-calls",
+    "GuardFingerprint": "28c6c24d8823b29fd05f4f34bbeb43440a5f7cd09eae28578f9c1215c2c22b27",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "WaitBoundaryIdle",
+    "Old": " && len(s.Calls) == 0",
+    "New": "",
+    "Test": "TestBoundaryOracle/0c2168e767963841.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "skip-independent-clock-proof",
+    "GuardFingerprint": "3b2fd031a7a9d349df86f862945293bbda1787a374efa6da32b755e30040d81c",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "Step",
+    "Old": "if err = r.VerifyClocks(ctx, end); err != nil {",
+    "New": "if err = nil; err != nil {",
+    "Test": "TestRuntimeMissingClockStopsMutation",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "skip-real-fault-hook",
+    "GuardFingerprint": "8ae25ca81b888d7682484d488bb8ace669bf7b73c69c8b6a04d68c2151006b1d",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "Step",
+    "Old": "!host.IsRead(op) && r.BeforeMutation != nil",
+    "New": "false && !host.IsRead(op) && r.BeforeMutation != nil",
+    "Test": "TestRuntimeFreshProofAndFaultOrder",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "precondition-control-repair-skipped",
+    "GuardFingerprint": "dda149401fb6589a933ca4a463b7c9c27bb2332fc567dda58b9f70c80fc2e623",
+    "File": "internal/operatorgates/precondition.go",
+    "Function": "GatePrecondition",
+    "Old": "if _, err = g.do(ctx, \"control-start\", \"shared\", ProcessExtra{}); err != nil {\n\t\t\treturn err\n\t\t}",
+    "New": "",
+    "Test": "TestPreconditionRepairsOnlyDefiniteFailure",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "precondition-unhealthy-passes",
+    "GuardFingerprint": "1aeb85a9f7a25185df9a6e44546dc5662c7f25cb745531e1f4c9aa6c6b766bdd",
+    "File": "internal/operatorgates/precondition.go",
+    "Function": "GatePrecondition",
+    "Old": "if !healthy {",
+    "New": "if false {",
+    "Test": "TestPreconditionUnhealthyRejected",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "precondition-accepts-draining-worker",
+    "GuardFingerprint": "453fa1603319efbc08257a39c941ae33718be5305634f7ea5ef2b95b379930cf",
+    "File": "internal/operatorgates/precondition.go",
+    "Function": "GatePrecondition",
+    "Old": " && !observe.Draining(s, w)",
+    "New": "",
+    "Test": "TestPreconditionDrainingWorkerMustBeEmpty",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "precondition-stops-unproven-worker",
+    "GuardFingerprint": "501e558982c6f8f41117c3811cb72fc94c9e4237d8984088913f3886d4ec9f82",
+    "File": "internal/operatorgates/precondition.go",
+    "Function": "GatePrecondition",
+    "Old": "if err = WorkerEmpty(ctx, g.ports(), w, g.end); err != nil {",
+    "New": "if err = WorkerEmpty(ctx, g.ports(), w, g.end); false {",
+    "Test": "TestPreconditionDrainingWorkerMustBeEmpty",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "unconfirmed-stop-confirmed",
+    "GuardFingerprint": "327ac745d7813aabe4fefda2a829f26c07af6727a7040f62601b8fdae3b8081c",
+    "File": "internal/operatorgates/projections.go",
+    "Function": "Stopped",
+    "Old": "if confirmed {",
+    "New": "if true {",
+    "Test": "TestProcedureProjectionOracle/272d0f0debb5d73c.json/processes.stopped/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "read-failure-as-unknown",
+    "GuardFingerprint": "e14c8dae914680ead5fe20d30c8efaec0ffb587027af22a5852ef3244d8314ed",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "Step",
+    "Old": "envelope.Kind == \"failed\" && host.IsPureRead(op)",
+    "New": "false && envelope.Kind == \"failed\" && host.IsPureRead(op)",
+    "Test": "TestRuntimeReadCertainty",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "impure-status-classed-pure",
+    "GuardFingerprint": "c79042366427826d092694c07d95b8c937a929cecf97095804d40c5e639113a5",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "Step",
+    "Old": "envelope.Kind == \"failed\" && host.IsPureRead(op)",
+    "New": "envelope.Kind == \"failed\" && (host.IsPureRead(op) || op==\"status\")",
+    "Test": "TestRuntimeReadCertainty",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "p3-stale-takeover-reused",
+    "GuardFingerprint": "",
+    "File": "internal/operatorgates/trials.go",
+    "Function": "freshTakeovers",
+    "Old": " && !old[historyKey(after.History[i])]",
+    "New": "",
+    "Test": "TestFreshTakeoverIdentity",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "p3-final-pool-late-pass",
+    "GuardFingerprint": "",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "err == nil && s.clock.Elapsed() < end",
+    "New": "err == nil",
+    "Test": "TestSequencePoolStaysInsideOriginalBudget",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "p3-admission-idle-skipped",
+    "GuardFingerprint": "",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunAdmission",
+    "Old": "if err := p.Idle(ctx, end); err != nil {",
+    "New": "if err := p.Idle(ctx, end); false {",
+    "Test": "TestAdmissionWaitsForIndependentIdle",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "missing-drain-clean-receipt",
+    "GuardFingerprint": "51b033b1a4e5e5a0d67033c2db400e75af981b50ecf3d70a4a2eafd5b67a4d53",
+    "File": "internal/operatorgates/procedure.go",
+    "Function": "DrainReceipt",
+    "Old": "Uncertain: true",
+    "New": "Uncertain: false",
+    "Test": "TestProcedureOracle/3ee7f94eb9e17e17.json/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "store-status-classified-as-mutation",
+    "GuardFingerprint": "fa49b6ed9d80754e3e808b4287847e433565e2c2578dfb68d4c14ea1d39131f7",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "Step",
+    "Old": "if !host.IsRead(op) {",
+    "New": "if !host.IsRead(op) || op==\"store-status\" {",
+    "Test": "TestRuntimeReadCertainty",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "process-skips-fresh-inventory",
+    "GuardFingerprint": "6fd2bbb623836b58f13d6b0ad71b48ca0b544249d32e451c1d984131e483f90f",
+    "File": "internal/operatorgates/observations.go",
+    "Function": "FreshInventory",
+    "Old": "range inventory.Slots",
+    "New": "range inventory.Slots[:0]",
+    "Test": "TestRuntimeFreshProofAndFaultOrder",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "release-drops-relay-window-projection",
+    "GuardFingerprint": "a4a5ed675066cf26e4550fa445ea2a6653478b012bbe0b9289129955f838b1ea",
+    "File": "internal/operatorgates/projections.go",
+    "Function": "DecodeProcessEvidence",
+    "Old": "return e, nil",
+    "New": "e.RelayWindows=\"\";return e, nil",
+    "Test": "TestProcedureProjectionOracle/124967a5e204fb0b.json/processes.sanitizeProcessEvidence/0",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "mutating-failure-reported",
+    "GuardFingerprint": "27227b430cd12a824aa15cfdd7c2a03a6a2740d40fcc209837b9446f455aaa44",
+    "File": "internal/operatorgates/host/assets.go",
+    "Function": "Process",
+    "Old": "if IsPureRead(operation) {",
+    "New": "if true {",
+    "Test": "TestMutatingWrapperKeepsUnknownFailure",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates/host"
+  },
+  {
+    "ID": "measure-forgets-known-ena",
+    "GuardFingerprint": "e60f84d4bd36272eac4da2f46b1fb79850e01e11858cdd5547084e7bc913e1f4",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "if collection.Evidence.KnownAllowanceViolation {",
+    "New": "if false {",
+    "Test": "TestMeasurementKnownAllowanceFailureDominates",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "p3-takeover-deadline-fallthrough",
+    "GuardFingerprint": "",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "controlRestart",
+    "Old": "\trecovered, err := g.waitStep(ctx, func(r StepResult) bool {\n\t\tc, ok := findCall(r.Status, call.ID)\n\t\treturn ok && c.Owner == owner && c.Epoch > takeover.Epoch && len(freshTakeovers(after, r, call.ID, to)) > 0\n\t})\n\tif err != nil {\n\t\treturn err\n\t}\n",
+    "New": "\tvar recovered StepResult\n\tfor g.p.Clock.Elapsed() < g.end {\n\t\trecovered, err = g.do(ctx, \"status\", \"shared\", ProcessExtra{})\n\t\tif err != nil { return err }\n\t\tc, ok = findCall(recovered.Status, call.ID)\n\t\tif ok && c.Owner == owner && c.Epoch > takeover.Epoch && len(freshTakeovers(after, recovered, call.ID, to)) > 0 { break }\n\t\tif err = g.p.Sleep(ctx, 500*time.Millisecond); err != nil { return err }\n\t}\n",
+    "Test": "TestControlTakeoverRequiresOwnershipBeforeDeadline",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "p3-final-status-hides-loss",
+    "GuardFingerprint": "",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "RunProcessGate",
+    "Old": "if code(err) == \"known-call-loss\" || s.LostCount > 0 {",
+    "New": "if false {",
+    "Test": "TestFinalControlStatusPreservesKnownLoss/complete",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "p3-collection-reobserves-unknown",
+    "GuardFingerprint": "",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "if !g.unknown {",
+    "New": "if true {",
+    "Test": "TestCollectionUnknownStopsObservationsAndPreservesFailure/none",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "p3-preparation-latches-definite-read",
+    "GuardFingerprint": "",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "reason == \"precondition-failed\", strings.HasPrefix(reason, \"precondition-failed:\")",
+    "New": "strings.HasPrefix(reason, \"unrecognized:\"), false",
+    "Test": "TestSequenceDefiniteStopsAndPreconditionsContinue/categorized-precondition",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "p3-inconclusive-media-passes",
+    "GuardFingerprint": "",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "result.Media.Status == operator.Inconclusive && result.Status == operator.Passed",
+    "New": "false",
+    "Test": "TestSequenceInconclusiveMediaCannotPass",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "p3-oracle-waives-unrelated-unknown",
+    "GuardFingerprint": "",
+    "File": "internal/operatorgates/procedure_oracle_test.go",
+    "Function": "preconditionUnknownDelta",
+    "Old": "if name != \"0151dac9ba93d068.json\" || index != 2 {",
+    "New": "if false {",
+    "Test": "TestPreconditionDeltaRejectsUnrelatedUnknown",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
   }
 ]

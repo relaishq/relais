@@ -52,14 +52,14 @@ func Process(operation string, parameters any, stage *Stage) (string, error) {
 	op, _ := json.Marshal(operation)
 	preflight := ""
 	if stage != nil {
-		if !versionPattern.MatchString(stage.Version) || stage.Arch != "arm64" || !digestPattern.MatchString(stage.ArchiveSHA256) || !digestPattern.MatchString(stage.ManifestSHA256) || !poolPattern.MatchString(stage.Pool) || stage.Operation != "upgrade" && stage.Operation != "rollback" {
+		if !versionPattern.MatchString(stage.Version) || stage.Arch != "arm64" && stage.Arch != "amd64" || !digestPattern.MatchString(stage.ArchiveSHA256) || !digestPattern.MatchString(stage.ManifestSHA256) || !poolPattern.MatchString(stage.Pool) || stage.Operation != "upgrade" && stage.Operation != "rollback" {
 			return "", fmt.Errorf("invalid stage proof")
 		}
 		preflight = fmt.Sprintf(`
     target=pathlib.Path('/opt/relais/preview/%s')
     receipt=target/'archive.sha256'
     if not receipt.exists():
-        command(['env','-u','RELAIS_TEST_ARCHIVE_URL','/opt/relais/boot/download.sh','%s','arm64','%s',str(target),'worker relay control signal'])
+        command(['env','-u','RELAIS_TEST_ARCHIVE_URL','/opt/relais/boot/download.sh','%s','%s','%s',str(target),'worker relay control signal'])
         receipt.write_text('%s')
     if receipt.read_text().strip()!='%s': raise ValueError('staged archive differs')
     import hashlib
@@ -72,7 +72,7 @@ func Process(operation string, parameters any, stage *Stage) (string, error) {
         if verdict.get('allowed') is False:
             emit({'kind':'refused'});sys.exit(0)
         if checked.returncode!=0 or verdict.get('allowed') is not True: raise ValueError('unknown compatibility result')
-`, stage.Version, stage.Version, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ManifestSHA256, stage.Pool, stage.Operation)
+`, stage.Version, stage.Version, stage.Arch, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ManifestSHA256, stage.Pool, stage.Operation)
 	}
 	failure := "except Exception:\n    emit({'kind':'unknown'})"
 	if IsPureRead(operation) {

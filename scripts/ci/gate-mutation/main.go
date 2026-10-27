@@ -43,7 +43,7 @@ func main() {
 	}
 }
 func run() error {
-	only := flag.String("only", "", "one mutation ID")
+	only := flag.String("only", "", "one mutation ID or comma-separated IDs")
 	flag.Parse()
 	var cases []mutation
 	if err := json.Unmarshal(specifications, &cases); err != nil {
@@ -115,7 +115,7 @@ func run() error {
 			return fmt.Errorf("INVALID %s: missing baseline test or duplicate ID", m.ID)
 		}
 		seen[m.ID] = true
-		if *only != "" && m.ID != *only {
+		if *only != "" && !slices.Contains(strings.Split(*only, ","), m.ID) {
 			continue
 		}
 		selected++

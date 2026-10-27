@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "owner": "P3",
+  "deltas": [
+    {
+      "id": "unknown-control-precondition",
+      "fixture": "0151dac9ba93d068.json",
+      "invocation": 2,
+      "before": "An unknown control-status result is swallowed and control-start is attempted.",
+      "after": "Stop with command-result-unknown before repair.",
+      "requirement": "One fatal session latch; an effectful control-status result cannot authorize another effect after uncertainty.",
+      "tests": [
+        "TestPreconditionOracle",
+        "TestPreconditionRepairsOnlyDefiniteFailure",
+        "TestPreconditionDeltaRejectsUnrelatedUnknown"
+      ]
+    },
+    {
+      "id": "fresh-restart-takeover",
+      "before": "The control-restart procedure can select a matching receipt retained from an earlier fault.",
+      "after": "Require increased ownership epoch and a receipt absent from the exact pre-fault history, as serial trials already do. Expiry returns gate-deadline without publishing a receipt.",
+      "requirement": "A stale takeover cannot qualify a new fault.",
+      "tests": [
+        "TestFreshTakeoverIdentity",
+        "TestTrialOracle",
+        "TestProcedureOracle",
+        "TestControlTakeoverRequiresOwnershipBeforeDeadline"
+      ]
+    },
+    {
+      "id": "unknown-relay-inspection",
+      "before": "Relay polling catches every inspection error and continues.",
+      "after": "Only definite pure-read failures can be observed again; an unknown result stops immediately.",
+      "requirement": "No replay or further host effects after unknown completion.",
+      "tests": [
+        "TestRelayUnknownStopsPolling",
+        "TestRuntimeUnknownNeverResubmits"
+      ]
+    },
+    {
+      "id": "unknown-store-observation",
+      "before": "Failover polling counts every store read error as missing and continues.",
+      "after": "An explicitly unknown store observation stops the procedure; only definite read failures can be observed again.",
+      "requirement": "The session latch and no-replay rule also cover optional resource capabilities.",
+      "tests": [
+        "TestFailoverDoesNotReplayUnknownStoreRead",
+        "TestOptionalStoreUnknownIsNeverReplayed"
+      ]
+    },
+    {
+      "id": "unknown-measurement-collection",
+      "before": "Collection telemetry catches unknown observations as missing samples and invokes the observer again.",
+      "after": "Stop observation calls after command-result-unknown, retain the reason through expiry, and preserve terminal collection failure evidence.",
+      "requirement": "Unknown observation completion cannot authorize another effect or hide known failure.",
+      "tests": [
+        "TestCollectionUnknownStopsObservationsAndPreservesFailure"
+      ]
+    }
+  ],
+  "representations": [
+    "Go RFC3339 omits zero fractional seconds; receipt comparisons preserve the exact instant and compare other fields without normalization.",
+    "Object key order is canonicalized for history comparison; omitted fields, explicit false, time spelling and unknown metadata remain distinct.",
+    "The host archive architecture is an explicit arm64 or amd64 input. The default remains arm64; this permits the approved amd64 container rehearsal without changing paid inputs.",
+    "Historical takeover start may be absent. A new takeover uses the independently observed signal start; missing end remains invalid evidence.",
+    "Endpoint validation accepts environment-owned HTTP hostnames or IPs and integer ports. Fixed media identity is still checked against the selected worker endpoints; no provider-specific host or service port is assumed.",
+    "Fixed completion procedures require completed=true in the confirmed host envelope. Known positive loss or self-fence counters survive unrelated malformed evidence without clearing uncertainty.",
+    "Signal nanoseconds remain unsigned decimal values through conversion to Go seconds and nanoseconds, without floating-point or signed overflow."
+  ]
+}
