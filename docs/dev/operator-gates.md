@@ -174,12 +174,19 @@ release pins, clock samples, CPU masks and phase evidence. Raw mailboxes,
 credentials, generated keys and unit environments are not artifacts. Cleanup
 runs after partial boot, cancellation and gate failure using deployment-owned
 container IDs and caller units. Images remain reusable build cache.
-Caller diagnostics include fixed unit state and allowlisted failure codes only.
+Caller failures capture unit state and the last 60 journal lines before cleanup,
+with scoped secrets redacted. Unit state includes user, filesystem protection,
+working directory, affinity and runtime limit. Loader stderr and file failure
+paths remain visible without credential contents.
 The launcher waits for executable startup with `Type=exec`; the existing mailbox
 handshake still proves caller readiness. Signaling probe failures retain TLS or
 HTTP failure codes, and missing completion evidence retains the underlying error.
 The preliminary signaling burst remains optional; the required registration
 burst still supplies the final caller clock and proximity proof.
+Calibration and gate callers share the same start function and P4 launcher.
+Their UDP bind uses the runner's route source for the relay, with port zero;
+the loader rejects wildcard bind addresses. The bridge checks the staged loader
+hash, executable bit, certificate readability and ffmpeg inside the caller unit.
 
 PR checks and one complete execution are not initial profile qualification.
 Keep three declared complete executions at the same code/profile/bounds; all

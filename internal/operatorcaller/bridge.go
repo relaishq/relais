@@ -154,6 +154,18 @@ func RunBridge(ctx context.Context, c BridgeConfig, box Store, load string) erro
 	if hex.EncodeToString(sum[:]) != c.LoadSHA256 {
 		return errors.New("load-hash-differs")
 	}
+	info, err := os.Stat(load)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&0111 == 0 {
+		return errors.New("caller-load-not-executable")
+	}
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return errors.New("caller-ffmpeg-unavailable")
+	}
+	fmt.Fprintf(os.Stderr, "caller-input uid=%d load=%q sha256_verified=true executable=true ffmpeg=%q\n", os.Geteuid(), load, ffmpeg)
 	m, err := waitManifest(ctx, c.Identity, box, time.Now().Add(20*time.Minute))
 	if err != nil {
 		return err
@@ -164,6 +176,7 @@ func RunBridge(ctx context.Context, c BridgeConfig, box Store, load string) erro
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(os.Stderr, "caller-input certificate=%q readable=true\n", c.CertificateFile)
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(ca) {
 		return errors.New("invalid-caller-ca")
@@ -215,7 +228,9 @@ func RunBridge(ctx context.Context, c BridgeConfig, box Store, load string) erro
 	child.Env = PublicEnvironment(os.Environ())
 	reader, writer := io.Pipe()
 	child.Stdout = writer
-	child.Stderr = io.Discard
+	// Preserve early argument, file and ffmpeg failures in the caller unit's
+	// journal. The rehearsal redacts that journal before public collection.
+	child.Stderr = os.Stderr
 	if err = child.Start(); err != nil {
 		_ = reader.Close()
 		_ = writer.Close()

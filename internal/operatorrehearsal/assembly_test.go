@@ -66,7 +66,39 @@ func TestCallerFailurePrintsBothRedactedStreams(t *testing.T) {
 		t.Fatal(result, out.String())
 	}
 }
-func TestCallerCleanupCollectsOnlyFixedFailureDiagnostics(t *testing.T) {
+func TestCallerFailureIncludesFullJournalBeforeStop(t *testing.T) {
+	var log bytes.Buffer
+	diagnosed := false
+	runner := commandRunner(func(_ context.Context, c Command) CommandResult {
+		switch c.Label {
+		case "caller-diagnostics":
+			script := string(c.Input)
+			for _, required := range []string{"-p Result", "-p ExecMainStatus", "-p ExecMainCode", "-p ActiveState", "-p SubState", "journalctl -u ", "-n 60"} {
+				if !strings.Contains(script, required) {
+					t.Fatalf("caller failure omitted diagnostic %q: %s", required, script)
+				}
+			}
+			if strings.Contains(script, "--grep") {
+				t.Fatal("caller failure discarded non-CLI journal errors")
+			}
+			diagnosed = true
+			return CommandResult{Code: code(0), Stdout: []byte("bridge could not read fixture-token path\n")}
+		case "cleanup-caller":
+			if !diagnosed {
+				t.Fatal("caller was stopped before failure diagnostics")
+			}
+		case "caller-service":
+			return CommandResult{Code: code(0), Stdout: []byte("LoadState=loaded\nActiveState=inactive\n")}
+		}
+		return CommandResult{Code: code(0)}
+	})
+	id := operatorcaller.Identity{RunID: "run-failure", Gate: operator.Rollout, Phase: operatorcaller.Survivor, CallerID: "1", Attempt: "1", PublicSHA: ReleaseACommit}
+	r := &rehearsal{runner: runner, diagnostics: &log, topology: &Topology{Secrets: map[string]string{"signal": "fixture-token"}}, units: []operatorcaller.Identity{id}}
+	if !r.close(context.Background()) || !diagnosed || !strings.Contains(log.String(), "bridge could not read [secret] path") || strings.Contains(log.String(), "fixture-token") {
+		t.Fatal("caller failure journal was lost or not redacted", log.String())
+	}
+}
+func TestCallerCleanupCollectsScopedRedactedDiagnostics(t *testing.T) {
 	run := &assemblyRunner{}
 	var out bytes.Buffer
 	id := operatorcaller.Identity{RunID: "run-diagnostics", Gate: operator.Rollout, Phase: operatorcaller.Survivor, CallerID: "1", Attempt: "1", PublicSHA: ReleaseACommit}
@@ -82,7 +114,7 @@ func TestCallerCleanupCollectsOnlyFixedFailureDiagnostics(t *testing.T) {
 		t.Fatal("caller cleanup did not complete", run.commands)
 	}
 	c := run.commands[0]
-	if c.Label != "caller-diagnostics" || !strings.Contains(string(c.Input), quote(id.Unit())) || !strings.Contains(string(c.Input), "--grep='^caller-(incomplete|diagnostic): [a-z0-9-]+$'") || !strings.Contains(string(c.Input), "-p ExecMainStatus") {
+	if c.Label != "caller-diagnostics" || !strings.Contains(string(c.Input), quote(id.Unit())) || !strings.Contains(string(c.Input), "-n 60") || strings.Contains(string(c.Input), "--grep") || !strings.Contains(string(c.Input), "-p ExecMainStatus") {
 		t.Fatal("missing scoped caller failure evidence", c)
 	}
 	for _, forbidden := range []string{"Environment", "ExecStart", "cat /", "caller.jsonl"} {

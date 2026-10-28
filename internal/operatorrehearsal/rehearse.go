@@ -45,6 +45,7 @@ type rehearsal struct {
 	box                     *operatorcaller.Mailbox
 	store                   *operatorcaller.Directory
 	load, bridge, work, run string
+	callerBind              string
 	active                  *operatorcaller.Broker
 	caller                  *operatorgates.CallerRuntime
 	launcher                *operatorcaller.FixedLauncher
@@ -361,7 +362,25 @@ func (r *rehearsal) ports() operatorgates.ProcedurePorts {
 	return operatorgates.ProcedurePorts{Clock: r.clock, Sleep: pause, Step: r.runtime.Step, Inventory: r.runtime.Inventory, Broker: r.caller}
 }
 
-func (r *rehearsal) newCaller(g operator.Gate, seconds int, id string, end time.Duration) error {
+func (r *rehearsal) newCaller(ctx context.Context, g operator.Gate, seconds int, id string, end time.Duration) error {
+	if r.callerBind == "" {
+		route, err := r.command(ctx, "caller-route", "ip", "-j", "route", "get", r.topology.Hosts["relay"].IP)
+		if err != nil {
+			return err
+		}
+		var routes []struct {
+			Source string `json:"prefsrc"`
+		}
+		if json.Unmarshal([]byte(route), &routes) != nil || len(routes) != 1 {
+			return errors.New("caller-route-invalid")
+		}
+		ip, err := netip.ParseAddr(routes[0].Source)
+		if err != nil || !ip.Is4() || ip.IsUnspecified() {
+			return errors.New("caller-route-invalid")
+		}
+		r.callerBind = netip.AddrPortFrom(ip, 0).String()
+		_, _ = fmt.Fprintln(r.diagnostics, "caller-bind="+r.callerBind)
+	}
 	now := r.clock.Wall()
 	deadline := r.wall(end)
 	if maximum := now.Add(20 * time.Minute); maximum.Before(deadline) {
@@ -373,7 +392,7 @@ func (r *rehearsal) newCaller(g operator.Gate, seconds int, id string, end time.
 	if e != nil {
 		return e
 	}
-	config := operatorcaller.BridgeConfig{Identity: identity, Bind: "0.0.0.0:0", CertificateFile: filepath.Join(r.deployment.Work, "tls/signal/server.crt"), LoadSHA256: r.report.CallerSHA256}
+	config := operatorcaller.BridgeConfig{Identity: identity, Bind: r.callerBind, CertificateFile: filepath.Join(r.deployment.Work, "tls/signal/server.crt"), LoadSHA256: r.report.CallerSHA256}
 	raw, e := json.Marshal(config)
 	if e != nil {
 		return e
@@ -391,6 +410,19 @@ func (r *rehearsal) newCaller(g operator.Gate, seconds int, id string, end time.
 	r.units = append(r.units, identity)
 	return nil
 }
+func (r *rehearsal) startCaller(ctx context.Context, g operator.Gate, seconds int, id string, end, gateEnd time.Duration) error {
+	if err := r.newCaller(ctx, g, seconds, id, gateEnd); err != nil {
+		return err
+	}
+	err := operatorcaller.PrepareCallers(ctx, r.launcher, r.active, nil, r.topology.Secrets["SignalToken"], r.wall(end), func(context.Context) error { return nil })
+	if err == nil {
+		err = r.affinity(ctx)
+	}
+	if err != nil {
+		r.callerDiagnostics(ctx, r.active.Manifest.Identity)
+	}
+	return err
+}
 func (r *rehearsal) prepare(ctx context.Context, g operator.Gate, end, gateEnd time.Duration) error {
 	// Previous gate must have confirmed stop before a successor can dial.
 	if r.active != nil && !r.stop(ctx, end) {
@@ -403,14 +435,8 @@ func (r *rehearsal) prepare(ctx context.Context, g operator.Gate, end, gateEnd t
 	if e := operatorgates.GatePrecondition(ctx, r.process, r.ports(), end); e != nil {
 		return e
 	}
-	if e := r.newCaller(g, duration(g), strconv.Itoa(len(r.units)+1), gateEnd); e != nil {
-		return e
-	}
-	if e := operatorcaller.PrepareCallers(ctx, r.launcher, r.active, nil, r.topology.Secrets["SignalToken"], r.wall(end), func(context.Context) error { return nil }); e != nil {
+	if e := r.startCaller(ctx, g, duration(g), strconv.Itoa(len(r.units)+1), end, gateEnd); e != nil {
 		_ = r.stop(ctx, end)
-		return e
-	}
-	if e := r.affinity(ctx); e != nil {
 		return e
 	}
 	inventory, e := r.session.FreshInventory(ctx, r.peer, r.pins, end, ReleaseACommit, true)
@@ -442,20 +468,18 @@ func (r *rehearsal) affinity(ctx context.Context) error {
 	return nil
 }
 func (r *rehearsal) calibrate(ctx context.Context) error {
-	if e := r.newCaller(operator.Rollout, 60, "1", r.clock.Elapsed()+4*time.Minute); e != nil {
-		return e
-	}
-	if e := operatorcaller.PrepareCallers(ctx, r.launcher, r.active, nil, r.topology.Secrets["SignalToken"], time.Now().Add(time.Minute), func(context.Context) error { return nil }); e != nil {
-		return e
-	}
-	if e := r.affinity(ctx); e != nil {
+	if e := r.startCaller(ctx, operator.Rollout, 60, "1", r.clock.Elapsed()+time.Minute, r.clock.Elapsed()+4*time.Minute); e != nil {
 		return e
 	}
 	raw, e := r.active.Collect(ctx, r.wall(r.clock.Elapsed()+3*time.Minute))
 	if e != nil {
+		r.callerDiagnostics(ctx, r.active.Manifest.Identity)
 		return e
 	}
 	r.report.CPU.Calibration, e = Calibrate(raw)
+	if e != nil || !r.report.CPU.Calibration.Passed {
+		r.callerDiagnostics(ctx, r.active.Manifest.Identity)
+	}
 	if !r.stop(ctx, r.clock.Elapsed()+time.Minute) {
 		return errors.New("caller-stop-unconfirmed")
 	}
@@ -470,6 +494,7 @@ func (r *rehearsal) stop(ctx context.Context, end time.Duration) bool {
 		r.active = nil
 		return true
 	}
+	r.callerDiagnostics(ctx, r.active.Manifest.Identity)
 	return false
 }
 func (r *rehearsal) gate(ctx context.Context, g operator.Gate, end time.Duration) operatorgates.ProcedureResult {
@@ -483,20 +508,26 @@ func (r *rehearsal) gate(ctx context.Context, g operator.Gate, end time.Duration
 	} else {
 		result = operatorgates.RunProcessGate(ctx, g, r.process, p, end)
 	}
+	if result.Status == operator.Failure {
+		r.callerDiagnostics(ctx, r.active.Manifest.Identity)
+	}
 	stopped := r.stop(ctx, min(r.clock.Elapsed()+time.Minute, end))
 	result = operatorgates.Stopped(stopped, result)
 	r.report.Gates = append(r.report.Gates, GateReport{Gate: g, ProcedureResult: result, CallerStopped: stopped})
 	return result
 }
+func (r *rehearsal) callerDiagnostics(ctx context.Context, id operatorcaller.Identity) {
+	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	script := "systemctl show " + quote(id.Unit()) + " -p Id -p ActiveState -p SubState -p MainPID -p Result -p ExecMainCode -p ExecMainStatus -p User -p Group -p ProtectHome -p PrivateTmp -p RootDirectory -p WorkingDirectory -p CPUAffinity -p RuntimeMaxUSec\njournalctl -u " + quote(id.Unit()) + " --no-pager -o cat -n 60\n"
+	out := r.runner.Run(bounded, Command{Label: "caller-diagnostics", Args: []string{"sh", "-s"}, Input: []byte(script)})
+	_, _ = fmt.Fprintf(r.diagnostics, "caller %s\n%s", id.Unit(), r.topology.diagnosticStreamsLimit(out, commandOutputLimit("caller-diagnostics")))
+}
 func (r *rehearsal) close(ctx context.Context) bool {
 	ok := true
 	if r.topology != nil {
 		for _, i := range r.units {
-			// Collect only fixed state fields and the CLI's allowlisted failure code.
-			// Never upload raw caller output, command lines or unit environments.
-			script := "systemctl show " + quote(i.Unit()) + " -p Id -p ActiveState -p SubState -p MainPID -p Result -p ExecMainCode -p ExecMainStatus\njournalctl -u " + quote(i.Unit()) + " --no-pager -o cat -n 40 --grep='^caller-(incomplete|diagnostic): [a-z0-9-]+$'\n"
-			out := r.runner.Run(ctx, Command{Label: "caller-diagnostics", Args: []string{"sh", "-s"}, Input: []byte(script)})
-			_, _ = fmt.Fprintf(r.diagnostics, "caller %s\n%s", i.Unit(), r.topology.diagnosticStreams(out))
+			r.callerDiagnostics(ctx, i)
 			_, _ = r.command(ctx, "cleanup-caller", "systemctl", "stop", i.Unit())
 			// systemd can collect a completed transient unit before this stop.
 			// Cleanup is a separate resource owner: confirm inactivity without

@@ -37,6 +37,9 @@ func commandOutputLimit(label string) int {
 	if label == "image" {
 		return imageBuildOutputBytes
 	}
+	if label == "caller-diagnostics" {
+		return 256 << 10
+	}
 	return operator.MaxHostOutputBytes
 }
 

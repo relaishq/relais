@@ -64,15 +64,18 @@ func run() int {
 		}
 		raw, err := os.ReadFile(*config)
 		if err != nil {
+			operatorcaller.WriteFailure(os.Stderr, err)
 			return 1
 		}
 		var c operatorcaller.BridgeConfig
 		if observe.Decode(raw, &c, observe.Contract{"identity", "bind", "certificateFile", "loadSHA256"}) != nil {
+			fmt.Fprintln(os.Stderr, "caller-incomplete: caller-config-invalid")
 			return 1
 		}
 		if *expected != "" {
 			var i operatorcaller.Identity
 			if observe.Decode([]byte(*expected), &i, nil) != nil || i != c.Identity {
+				fmt.Fprintln(os.Stderr, "caller-incomplete: caller-identity-differs")
 				return 1
 			}
 		}
@@ -100,13 +103,14 @@ func run() int {
 		} else {
 			directory, e := operatorcaller.OpenDirectory(*mailbox)
 			if e != nil {
+				operatorcaller.WriteFailure(os.Stderr, e)
 				return 1
 			}
 			defer directory.Close()
 			box = directory
 		}
 		if err := operatorcaller.RunBridge(ctx, c, box, *load); err != nil {
-			fmt.Fprintln(os.Stderr, "caller-incomplete:", operatorcaller.FailureCode(err))
+			operatorcaller.WriteFailure(os.Stderr, err)
 			return 1
 		}
 		return 0
