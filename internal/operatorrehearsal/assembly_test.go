@@ -51,7 +51,7 @@ func TestStageUsesVerifiedFilesAndTemplateDownloader(t *testing.T) {
 			}
 		} else {
 			script := string(c.Input)
-			if !strings.Contains(script, "/opt/relais/boot/download.sh") || !strings.Contains(script, "RELAIS_TEST_ARCHIVE_URL=file://") || !strings.Contains(script, "x86_64") || !strings.Contains(script, "archive.sha256") || strings.Contains(script, "https://") {
+			if !strings.Contains(script, "/opt/relais/boot/download.sh") || !strings.Contains(script, "RELAIS_TEST_ARCHIVE_URL='file://") || !strings.Contains(script, "x86_64") || !strings.Contains(script, "archive.sha256") || strings.Contains(script, "https://") {
 				t.Fatal(script)
 			}
 		}
@@ -64,6 +64,67 @@ func TestCallerFailurePrintsBothRedactedStreams(t *testing.T) {
 	result := (callerExecutor{r}).Execute(context.Background(), []byte("exit 1"), time.Now().Add(time.Minute))
 	if result.Certainty != operator.Failed || !strings.Contains(out.String(), "stdout:") || !strings.Contains(out.String(), "stderr:") || strings.Contains(out.String(), "secret-value") {
 		t.Fatal(result, out.String())
+	}
+}
+func TestCallerCleanupCollectsOnlyFixedFailureDiagnostics(t *testing.T) {
+	run := &assemblyRunner{}
+	var out bytes.Buffer
+	id := operatorcaller.Identity{RunID: "run-diagnostics", Gate: operator.Rollout, Phase: operatorcaller.Survivor, CallerID: "1", Attempt: "1", PublicSHA: ReleaseACommit}
+	runner := commandRunner(func(ctx context.Context, c Command) CommandResult {
+		result := run.Run(ctx, c)
+		if c.Label == "caller-service" {
+			result.Stdout = []byte("LoadState=loaded\nActiveState=inactive\n")
+		}
+		return result
+	})
+	r := &rehearsal{runner: runner, diagnostics: &out, topology: &Topology{Secrets: map[string]string{"token": "secret-value"}}, units: []operatorcaller.Identity{id}}
+	if !r.close(context.Background()) || len(run.commands) != 3 {
+		t.Fatal("caller cleanup did not complete", run.commands)
+	}
+	c := run.commands[0]
+	if c.Label != "caller-diagnostics" || !strings.Contains(string(c.Input), quote(id.Unit())) || !strings.Contains(string(c.Input), "--grep='^caller-(incomplete|diagnostic): [a-z0-9-]+$'") || !strings.Contains(string(c.Input), "-p ExecMainStatus") {
+		t.Fatal("missing scoped caller failure evidence", c)
+	}
+	for _, forbidden := range []string{"Environment", "ExecStart", "cat /", "caller.jsonl"} {
+		if strings.Contains(string(c.Input), forbidden) {
+			t.Fatal("caller diagnostics include private evidence", c)
+		}
+	}
+	if strings.Contains(out.String(), "secret-value") {
+		t.Fatal("caller diagnostic disclosed a secret")
+	}
+}
+func TestCallerCleanupConfirmsCollectedUnits(t *testing.T) {
+	for _, row := range []struct {
+		name        string
+		observation CommandResult
+		want        bool
+	}{
+		{"collected", CommandResult{Code: code(1), Stdout: []byte("LoadState=not-found\nActiveState=inactive\n")}, true},
+		{"inactive", CommandResult{Code: code(0), Stdout: []byte("LoadState=loaded\nActiveState=inactive\n")}, true},
+		{"active", CommandResult{Code: code(0), Stdout: []byte("LoadState=loaded\nActiveState=active\n")}, false},
+		{"missing-proof", CommandResult{Code: code(1), Stdout: []byte("not found\n")}, false},
+		{"unconfirmed", CommandResult{Stdout: []byte("LoadState=not-found\nActiveState=inactive\n")}, false},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			stops := 0
+			runner := commandRunner(func(_ context.Context, c Command) CommandResult {
+				switch c.Label {
+				case "cleanup-caller":
+					stops++
+					return CommandResult{Code: code(5), Stderr: []byte("unit is not loaded")}
+				case "caller-service":
+					return row.observation
+				default:
+					return CommandResult{Code: code(0)}
+				}
+			})
+			id := operatorcaller.Identity{RunID: "run-cleanup", Gate: operator.Rollout, Phase: operatorcaller.Survivor, CallerID: "1", Attempt: "1", PublicSHA: ReleaseACommit}
+			r := &rehearsal{runner: runner, diagnostics: &bytes.Buffer{}, topology: &Topology{}, units: []operatorcaller.Identity{id}}
+			if got := r.close(context.Background()); got != row.want || stops != 1 {
+				t.Fatal("caller cleanup did not require exact inactive proof", got, stops)
+			}
+		})
 	}
 }
 func TestAMD64AssemblyUsesDownloadArchitectureAndIsolatedCaller(t *testing.T) {

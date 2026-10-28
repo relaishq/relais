@@ -105,8 +105,8 @@ func run() int {
 			defer directory.Close()
 			box = directory
 		}
-		if operatorcaller.RunBridge(ctx, c, box, *load) != nil {
-			fmt.Fprintln(os.Stderr, "caller-incomplete")
+		if err := operatorcaller.RunBridge(ctx, c, box, *load); err != nil {
+			fmt.Fprintln(os.Stderr, "caller-incomplete:", operatorcaller.FailureCode(err))
 			return 1
 		}
 		return 0

@@ -110,6 +110,14 @@ current checkout's template, stages both releases before media, builds both
 release-specific judges offline, and uses the unchanged v0.3.0 caller binary
 from its verified archive. Cache the release commits' Go modules before running.
 
+Release staging copies each archive to `/opt/relais/relais-stage-<version>.tar.gz`
+and passes that exact `file://` path to the template downloader. It verifies
+SHA-256 before extraction, then writes the receipt under
+`/opt/relais/preview/<version>`. Both upgrade and rollback consume these staged
+directories. Container `/tmp` mounts can differ between archive-copy and running
+process views. Staging failures name the runner source, copy destination and
+downloader source paths.
+
 The workflow separates release reads from execution. Only its release-read step
 receives `RELAIS_RELEASE_TOKEN`; it invokes `relais-gates rehearse -prepare-only`.
 The execution target uses `OPERATOR_REHEARSAL_FLAGS=-prepared`. The token stays
@@ -166,6 +174,12 @@ release pins, clock samples, CPU masks and phase evidence. Raw mailboxes,
 credentials, generated keys and unit environments are not artifacts. Cleanup
 runs after partial boot, cancellation and gate failure using deployment-owned
 container IDs and caller units. Images remain reusable build cache.
+Caller diagnostics include fixed unit state and allowlisted failure codes only.
+The launcher waits for executable startup with `Type=exec`; the existing mailbox
+handshake still proves caller readiness. Signaling probe failures retain TLS or
+HTTP failure codes, and missing completion evidence retains the underlying error.
+The preliminary signaling burst remains optional; the required registration
+burst still supplies the final caller clock and proximity proof.
 
 PR checks and one complete execution are not initial profile qualification.
 Keep three declared complete executions at the same code/profile/bounds; all

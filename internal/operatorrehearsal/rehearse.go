@@ -492,7 +492,21 @@ func (r *rehearsal) close(ctx context.Context) bool {
 	ok := true
 	if r.topology != nil {
 		for _, i := range r.units {
-			if _, e := r.command(ctx, "cleanup-caller", "systemctl", "stop", i.Unit()); e != nil {
+			// Collect only fixed state fields and the CLI's allowlisted failure code.
+			// Never upload raw caller output, command lines or unit environments.
+			script := "systemctl show " + quote(i.Unit()) + " -p Id -p ActiveState -p SubState -p MainPID -p Result -p ExecMainCode -p ExecMainStatus\njournalctl -u " + quote(i.Unit()) + " --no-pager -o cat -n 40 --grep='^caller-(incomplete|diagnostic): [a-z0-9-]+$'\n"
+			out := r.runner.Run(ctx, Command{Label: "caller-diagnostics", Args: []string{"sh", "-s"}, Input: []byte(script)})
+			_, _ = fmt.Fprintf(r.diagnostics, "caller %s\n%s", i.Unit(), r.topology.diagnosticStreams(out))
+			_, _ = r.command(ctx, "cleanup-caller", "systemctl", "stop", i.Unit())
+			// systemd can collect a completed transient unit before this stop.
+			// Cleanup is a separate resource owner: confirm inactivity without
+			// changing the gate session's earlier stop certainty or fatal latch.
+			read, _ := operatorcaller.InactiveScript(i)
+			end, _ := ctx.Deadline()
+			if end.IsZero() {
+				end = time.Now().Add(time.Minute)
+			}
+			if !operatorcaller.ObservedInactive((callerExecutor{r}).Execute(ctx, read, end)) {
 				ok = false
 			}
 		}

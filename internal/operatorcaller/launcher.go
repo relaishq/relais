@@ -113,14 +113,23 @@ func ReadyScript(c LaunchConfig) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(fmt.Sprintf(`set -eu
+step=architecture
+trap 'status=$?; if [ "$status" -ne 0 ]; then printf "caller-ready-%%s-failed\n" "$step" >&2; fi' EXIT
 [ "$(uname -m)" = %s ]
+step=ffmpeg
 command -v ffmpeg >/dev/null
+step=systemd
 command -v systemd-run >/dev/null
 systemctl show --property=Version --value >/dev/null
+step=bridge-hash
 [ "$(sha256sum %s | cut -d ' ' -f 1)" = %s ]
+step=load-hash
 [ "$(sha256sum %s | cut -d ' ' -f 1)" = %s ]
+step=config-hash
 [ "$(sha256sum %s | cut -d ' ' -f 1)" = %s ]
+step=host
 %s caller-host >/dev/null
+step=clock
 chronyc tracking | grep -Eq '^Leap status[[:space:]]*:[[:space:]]*Normal$'
 printf 'caller-ready\n'
 `, quote(c.Architecture), quote(c.BridgePath), quote(c.BridgeSHA256), quote(c.LoadPath), quote(c.LoadSHA256), quote(c.ConfigPath), quote(c.ConfigSHA256), quote(c.BridgePath))), nil
@@ -154,7 +163,7 @@ cp %s "$work/config.json"
 [ "$(sha256sum "$work/relais-load" | cut -d ' ' -f 1)" = %s ]
 [ "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" = %s ]
 chmod 700 "$work/bridge" "$work/relais-load"
-systemd-run --quiet --unit="$unit" --property="RuntimeMaxSec=$remaining" --property=TimeoutStopSec=180 --property=KillMode=control-group --property=UMask=0077 --property="WorkingDirectory=$work" --setenv=GOMAXPROCS=2%s "$work/bridge" caller -config "$work/config.json" -mailbox %s -load "$work/relais-load" -identity %s
+systemd-run --quiet --service-type=exec --unit="$unit" --property="RuntimeMaxSec=$remaining" --property=TimeoutStopSec=180 --property=KillMode=control-group --property=UMask=0077 --property="WorkingDirectory=$work" --setenv=GOMAXPROCS=2%s "$work/bridge" caller -config "$work/config.json" -mailbox %s -load "$work/relais-load" -identity %s
 printf 'caller-started:%%s\n' "$unit"
 `, quote(i.Unit()), quote(c.WorkRoot), c.RuntimeDeadline.Unix(), quote(c.BridgePath), quote(c.LoadPath), quote(c.ConfigPath), quote(c.BridgeSHA256), quote(c.LoadSHA256), quote(c.ConfigSHA256), affinity, quote(c.MailboxPath), quote(string(identity)))), nil
 }
@@ -190,6 +199,10 @@ func inactive(x Execution) bool {
 	}
 	return x.Certainty == operator.Succeeded && x.ExitCode == 0 && fields["LoadState"] == "loaded" && (fields["ActiveState"] == "inactive" || fields["ActiveState"] == "failed")
 }
+
+// ObservedInactive shares the stop proof with independent resource cleanup.
+// A collected transient unit is inactive only with its exact systemd observation.
+func ObservedInactive(x Execution) bool { return inactive(x) }
 
 // Fence binds the launcher and broker to the engine's single fatal latch.
 type Fence interface {

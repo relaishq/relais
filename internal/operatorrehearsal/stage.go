@@ -2,6 +2,7 @@ package operatorrehearsal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 )
@@ -14,13 +15,20 @@ func (r *rehearsal) stage(ctx context.Context) error {
 		id := r.deployment.ContainerIDs()[slot]
 		for _, pin := range r.pins {
 			archive := filepath.Join(r.c.Assets, "relais_"+pin.Version+"_linux_amd64.tar.gz")
-			target := "/tmp/relais-stage-" + pin.Version + ".tar.gz"
+			// Docker archive-copy and the running systemd host can see different
+			// /tmp mounts. Keep the input beside the template's persistent paths.
+			target := "/opt/relais/relais-stage-" + pin.Version + ".tar.gz"
+			destination := "/opt/relais/preview/" + pin.Version
+			paths := fmt.Sprintf("host=%s host_source=%q copy_destination=%s:%s download_source=file://%s stage_destination=%s expected_sha256=%s", slot, archive, id, target, target, destination, pin.ArchiveSHA256)
+			_, _ = fmt.Fprintln(r.diagnostics, r.topology.Redact("release-stage "+paths))
 			if _, e := r.command(ctx, "stage-copy", "docker", "cp", archive, id+":"+target); e != nil {
-				return e
+				_, _ = fmt.Fprintln(r.diagnostics, r.topology.Redact("release-stage-copy-failed "+paths))
+				return errors.New("release-stage-copy-failed")
 			}
-			script := fmt.Sprintf("set -eu\nRELAIS_TEST_ARCHIVE_URL=file://%s /opt/relais/boot/download.sh %s x86_64 %s /opt/relais/preview/%s 'worker relay control signal'\nprintf '%%s' %s > /opt/relais/preview/%s/archive.sha256\nrm %s\n", target, pin.Version, pin.ArchiveSHA256, pin.Version, pin.ArchiveSHA256, pin.Version, target)
+			script := fmt.Sprintf("set -eu\nRELAIS_TEST_ARCHIVE_URL=%s /opt/relais/boot/download.sh %s x86_64 %s %s 'worker relay control signal'\nprintf '%%s' %s > %s\nrm -- %s\n", quote("file://"+target), quote(pin.Version), quote(pin.ArchiveSHA256), quote(destination), quote(pin.ArchiveSHA256), quote(destination+"/archive.sha256"), quote(target))
 			if e := r.deployment.shell(ctx, slot, "stage-release", script); e != nil {
-				return e
+				_, _ = fmt.Fprintln(r.diagnostics, r.topology.Redact("release-stage-failed "+paths))
+				return errors.New("release-stage-failed")
 			}
 		}
 	}
