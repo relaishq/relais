@@ -3,61 +3,74 @@ package operatorrehearsal
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
 )
 
+type negativeControl struct {
+	slot, name, unit, path, credential, expected string
+}
+
+func negativeScript(c negativeControl) (string, error) {
+	script, err := assets.ReadFile("assets/negative-control.py")
+	if err != nil {
+		return "", err
+	}
+	return "python3 - <<'PY'\ncontrol = " + strconv.Quote(c.name) + "\nunit = " + strconv.Quote(c.unit) + "\ncontrol_path = " + strconv.Quote(c.path) + "\ncredential = " + strconv.Quote(c.credential) + "\nexpected = " + strconv.Quote(c.expected) + "\nclock_check = " + strconv.Quote(ClockCheck()) + "\n" + string(script) + "PY\n", nil
+}
+
 // NegativeControls must run on a disposable booted deployment before any gate.
-// Each control demands a specific observed failure, then checks the original
-// template state again. Failure stops setup; no fallback can qualify a gate.
+// Each control demands a specific observed failure and verifies its restoration.
+// Failure stops setup; no fallback can qualify a gate.
 func (d *Deployment) NegativeControls(ctx context.Context) error {
 	if !d.aclNegative {
 		return errors.New("wrong-acl-control-not-run")
 	}
-	// The real signal unit must refuse a missing LoadCredential source.
-	missingCredential := `systemctl stop relais-signal.service
-mv /run/relais/signal.token /run/relais/signal.token.saved
-trap 'mv /run/relais/signal.token.saved /run/relais/signal.token; systemctl reset-failed relais-signal.service; systemctl start relais-signal.service' EXIT
-if systemctl start relais-signal.service; then exit 1; fi
-systemctl is-failed --quiet relais-signal.service
-`
-	if err := d.shell(ctx, "shared", "negative-missing-credential", missingCredential); err != nil {
-		return err
-	}
-	// The real unit name must fail to load, rather than treating absence as idle.
-	missingUnit := `systemctl stop relais-worker.service
-mv /etc/systemd/system/relais-worker.service /etc/relais/relais-worker.service.saved
-trap 'mv /etc/relais/relais-worker.service.saved /etc/systemd/system/relais-worker.service; systemctl daemon-reload; systemctl reset-failed relais-worker.service; systemctl start relais-worker.service' EXIT
-systemctl daemon-reload
-if systemctl start relais-worker.service; then exit 1; fi
-test "$(systemctl show -p LoadState --value relais-worker.service)" = not-found
-`
-	if err := d.shell(ctx, "w1", "negative-missing-unit", missingUnit); err != nil {
-		return err
-	}
-	// Swap the configured source, restart the running daemon, and prove the same
-	// fast source check used by setup rejects it before the long sync wait.
-	wrongSource := `cp /etc/chrony.conf /etc/chrony.conf.saved
-trap 'mv /etc/chrony.conf.saved /etc/chrony.conf; systemctl restart chronyd; chronyc -n waitsync 240 0 20 1' EXIT
-printf 'server 192.0.2.123 iburst\ndriftfile /var/lib/chrony/drift\n' > /etc/chrony.conf
-systemctl restart chronyd
-chronyc -n tracking >/dev/null
-set +e
-(
-` + ClockCheck() + `)
-status=$?
-set -e
-test "$status" -eq 42
-`
-	if err := d.shell(ctx, "shared", "negative-wrong-time-source", wrongSource); err != nil {
-		return err
+	for _, row := range []negativeControl{
+		{"shared", "missing-credential", "relais-signal.service", "/run/relais/signal.token", "/run/relais/signal.token", "failed-with-EXIT_CREDENTIALS-243-and-no-process"},
+		{"w1", "missing-unit", "relais-worker.service", "/etc/systemd/system/relais-worker.service", "none", "nonzero-start-and-LoadState-not-found"},
+		{"shared", "wrong-time-source", "chronyd", "/etc/chrony.conf", "none", "clock-check-exit-42-wrong-time-source"},
+	} {
+		d.controlNote(fmt.Sprintf("control=%s host=%s unit=%s credential=%s path=%s expected=%s stage=dispatch", row.name, row.slot, row.unit, row.credential, row.path, row.expected))
+		script, err := negativeScript(row)
+		if err != nil {
+			return err
+		}
+		args, err := d.execArgs(row.slot, []string{"-i"}, "sh", "-eu")
+		if err != nil {
+			return err
+		}
+		result, err := d.command(ctx, "negative-"+row.name, args, []byte(script))
+		if err != nil {
+			if result.Code != nil && result.Err == nil && !result.Truncated {
+				switch *result.Code {
+				case 70:
+					return errors.New("negative-control-setup-failed")
+				case 71:
+					return errors.New("negative-control-refusal-failed")
+				case 72:
+					return errors.New("negative-control-restore-failed")
+				}
+			}
+			return errors.New("negative-control-command-unconfirmed")
+		}
 	}
 	for _, slot := range Slots {
-		script, x := d.Topology.VerifyScript(slot)
-		if x != nil {
-			return x
+		script, err := d.Topology.VerifyScript(slot)
+		if err != nil {
+			return err
 		}
-		if x = d.shell(ctx, slot, "verify-after-controls-"+slot, script); x != nil {
-			return x
+		if err = d.shell(ctx, slot, "verify-after-controls-"+slot, script); err != nil {
+			return errors.New("negative-control-verification-failed")
 		}
 	}
 	return nil
+}
+
+func (d *Deployment) controlNote(message string) {
+	d.diagnosticMu.Lock()
+	defer d.diagnosticMu.Unlock()
+	if d.Diagnostics != nil {
+		_, _ = fmt.Fprintln(d.Diagnostics, d.Topology.Redact(message))
+	}
 }

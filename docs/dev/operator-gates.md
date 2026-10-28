@@ -149,6 +149,16 @@ release pins have identical Go sources, module locks and embedded media; only
 release compatibility JSON differs. Their deterministic judge binaries therefore
 share a hash. Source commit checks still distinguish the pins.
 
+Negative controls log their input paths, expected refusal, unit state and exit
+statuses, without file contents. A `Type=simple` start job can succeed before
+credential setup fails; qualification requires `ExecMainStatus=243`, a failed
+unit and no process. `TestCredentialControlObservesAsynchronousRefusal` and
+`TestCredentialControlRejectsOtherOutcomesAndRestores` pin this distinction.
+Every changed file is restored byte-for-byte, affected units must run again,
+and the restored clock must pass the same source check. The ACL control restores
+exact template rules and repeats its positive authenticated probe even after a
+failed negative observation. All hosts are verified again before gates start.
+
 The workflow uploads only `runtime/operator-report/report.json` and
 `runtime/operator-report/host-diagnostics.log`. It records the tested commit
 (the merge commit for a PR), the separate PR head, template and binary hashes,

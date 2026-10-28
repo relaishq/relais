@@ -57,16 +57,26 @@ func (d *Deployment) command(ctx context.Context, label string, args []string, i
 	// Independent boot steps can run concurrently; keep each diagnostic intact.
 	r := d.Runner.Run(ctx, Command{Label: label, Args: args, Input: input})
 	if r.Err == nil && r.Code != nil && *r.Code == 0 && !r.Truncated {
+		if strings.HasPrefix(label, "negative-") || label == "acl-positive" {
+			d.printCommand(label, "completed", r)
+		}
 		return r, nil
 	}
 	d.printFailure(label, r)
 	return r, errors.New("container-step-failed:" + label)
 }
 func (d *Deployment) printFailure(label string, r CommandResult) {
+	d.printCommand(label, "failed", r)
+}
+func (d *Deployment) printCommand(label, outcome string, r CommandResult) {
 	d.diagnosticMu.Lock()
 	defer d.diagnosticMu.Unlock()
 	if d.Diagnostics != nil {
-		_, _ = fmt.Fprintf(d.Diagnostics, "container step %s failed\n%s", label, d.Topology.diagnosticStreamsLimit(r, commandOutputLimit(label)))
+		status := "unknown"
+		if r.Code != nil && r.Err == nil && *r.Code >= 0 {
+			status = strconv.Itoa(*r.Code)
+		}
+		_, _ = fmt.Fprintf(d.Diagnostics, "container step %s %s exit_status=%s truncated=%t\n%s", label, outcome, status, r.Truncated, d.Topology.diagnosticStreamsLimit(r, commandOutputLimit(label)))
 	}
 }
 func (d *Deployment) runArgs(slot, ip, image string, media bool) []string {
@@ -300,7 +310,8 @@ func (d *Deployment) Boot(ctx context.Context) error {
 // actually wrong worker ACL, prove that the same authenticated EVAL fails with
 // NOPERM, then restore the exact template rules and prove it succeeds again.
 // Only after this does Boot disable the default user and start any host unit.
-func (d *Deployment) checkWrongACL(ctx context.Context) error {
+func (d *Deployment) checkWrongACL(ctx context.Context) (err error) {
+	d.aclNegative = false
 	var worker StoreUser
 	for _, u := range d.Topology.Users {
 		if u.Name == "worker" {
@@ -310,7 +321,8 @@ func (d *Deployment) checkWrongACL(ctx context.Context) error {
 	if worker.Secret == "" {
 		return errors.New("missing-worker-acl")
 	}
-	probe := func(label, expected string) error {
+	probe := func(ctx context.Context, label, expected string) error {
+		d.controlNote("control=wrong-acl unit=none credential=stdin path=none action=" + label + " expected=" + expected)
 		r, err := d.storeCommand(ctx, label, &worker, "EVAL", "return 1", "0")
 		if err != nil {
 			return err
@@ -320,23 +332,32 @@ func (d *Deployment) checkWrongACL(ctx context.Context) error {
 		}
 		return errors.New("acl-control-unexpected-result")
 	}
-	if err := probe("acl-positive", "1"); err != nil {
+	if err := probe(ctx, "acl-positive", "1"); err != nil {
 		return err
 	}
+	// Restore even when the mutation or its observation fails. An interrupted
+	// caller cannot cancel the bounded restore of the exact template rules.
+	defer func() {
+		restore, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		d.controlNote("control=wrong-acl unit=none credential=stdin path=none action=restore expected=exact-template-rules-and-EVAL-1")
+		args := append([]string{"ACL", "SETUSER", worker.Name, "reset"}, worker.Rules...)
+		restoreErr := d.storeOK(restore, append(args, ">"+d.Topology.Secrets[worker.Secret])...)
+		if restoreErr == nil {
+			restoreErr = probe(restore, "acl-positive", "1")
+		}
+		err = errors.Join(err, restoreErr)
+		d.aclNegative = err == nil
+		d.controlNote(fmt.Sprintf("control=wrong-acl restore_verified=%t", restoreErr == nil))
+	}()
+	d.controlNote("control=wrong-acl action=install expected=authenticated-worker-with-ping-only")
 	if err := d.storeOK(ctx, "ACL", "SETUSER", worker.Name, "reset", "on", "-@all", "+ping", ">"+d.Topology.Secrets[worker.Secret]); err != nil {
 		return err
 	}
-	if err := probe("negative-wrong-acl", "NOPERM"); err != nil {
+	if err := probe(ctx, "negative-wrong-acl", "NOPERM"); err != nil {
 		return err
 	}
-	args := append([]string{"ACL", "SETUSER", worker.Name, "reset"}, worker.Rules...)
-	if err := d.storeOK(ctx, append(args, ">"+d.Topology.Secrets[worker.Secret])...); err != nil {
-		return err
-	}
-	if err := probe("acl-positive", "1"); err != nil {
-		return err
-	}
-	d.aclNegative = true
+
 	return nil
 }
 func (d *Deployment) valkey(args ...string) ([]string, error) {

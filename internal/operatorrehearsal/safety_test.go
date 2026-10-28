@@ -174,6 +174,7 @@ func (r *clockControlRunner) Run(_ context.Context, c Command) CommandResult {
 	}
 	script := strings.ReplaceAll(string(c.Input), "/etc/chrony.conf", filepath.Join(r.dir, "chrony.conf"))
 	script = strings.ReplaceAll(script, "'/proc/'", quote(r.dir+"/"))
+	script = strings.ReplaceAll(script, "time.sleep(0.1)", "pass")
 	if r.removeComparison {
 		script = strings.ReplaceAll(script, "rows[0][1] != '"+TimeIP+"'", "False")
 	}
@@ -186,16 +187,21 @@ func (r *clockControlRunner) Run(_ context.Context, c Command) CommandResult {
 	err := command.Run()
 	status := 0
 	if err != nil {
-		status = 1
+		exit, ok := err.(*exec.ExitError)
+		if !ok {
+			return CommandResult{Err: err}
+		}
+		status = exit.ExitCode()
 	}
 	return CommandResult{Code: code(status), Stdout: out.Bytes(), Stderr: stderr.Bytes()}
 }
 func TestWrongTimeSourceRequiresAddressRejection(t *testing.T) {
 	for _, row := range []struct {
-		name, sources                                                      string
-		missingPID, missingSocket, trackingFailure, removeComparison, pass bool
+		name, sources                                                                  string
+		missingPID, missingSocket, trackingFailure, removeComparison, badRestore, pass bool
 	}{
 		{name: "wrong-address", sources: "^? 192.0.2.123 1", pass: true},
+		{name: "restore-source-still-wrong", sources: "^? 192.0.2.123 1", badRestore: true},
 		{name: "wrong-address-table", sources: "MS Name/IP address Stratum Poll Reach LastRx Last sample\n===============================================================================\n^? 192.0.2.123 1", pass: true},
 		{name: "missing-process", sources: "^? 192.0.2.123 1", missingPID: true},
 		{name: "missing-socket", sources: "^? 192.0.2.123 1", missingSocket: true},
@@ -214,7 +220,19 @@ func TestWrongTimeSourceRequiresAddressRejection(t *testing.T) {
 			if row.trackingFailure {
 				trackingCommand = "exit 1"
 			}
-			files := map[string][]byte{"chrony.conf": []byte("original\n"), "systemctl": []byte("#!/bin/sh\nif [ \"$1\" = show ]; then printf 42; fi\n"), "chronyc": []byte("#!/bin/sh\ncase $2 in sources) " + sourceCommand + ";; tracking) " + trackingCommand + ";; waitsync) exit 0;; *) exit 1;; esac\n")}
+			// The fake daemon follows its restored configuration, rather than
+			// reporting the intentionally wrong source forever after restoration.
+			systemctl := `#!/bin/sh
+if [ "$1" = show ]; then
+ if [ "$3" = MainPID ] && [ "$4" = --value ]; then printf 42; exit; fi
+ printf 'LoadState=loaded\nActiveState=active\nSubState=running\nMainPID=42\nResult=success\nExecMainCode=0\nExecMainStatus=0\n'
+fi
+`
+			chronyc := "#!/bin/sh\nif ! grep -q 192.0.2.123 " + quote(filepath.Join(dir, "chrony.conf")) + "; then\ncase $2 in sources) printf '%s\\n' " + quote("^* "+TimeIP+" 1") + ";; tracking) printf 'Leap status     : Normal\\n';; waitsync) exit 0;; esac\nexit 0\nfi\ncase $2 in sources) " + sourceCommand + ";; tracking) " + trackingCommand + ";; waitsync) exit 0;; *) exit 1;; esac\n"
+			if row.badRestore {
+				chronyc = strings.Replace(chronyc, "if ! grep -q 192.0.2.123 "+quote(filepath.Join(dir, "chrony.conf"))+"; then", "if false; then", 1)
+			}
+			files := map[string][]byte{"chrony.conf": []byte("original\n"), "systemctl": []byte(systemctl), "chronyc": []byte(chronyc)}
 			if !row.missingPID {
 				files["42/cmdline"] = []byte("chronyd\x00-x\x00")
 			}
@@ -231,6 +249,16 @@ func TestWrongTimeSourceRequiresAddressRejection(t *testing.T) {
 			err := d.NegativeControls(context.Background())
 			if (err == nil) != row.pass {
 				t.Fatalf("wrong-source control accepted unrelated failure: success=%v expected=%v", err == nil, row.pass)
+			}
+			if row.badRestore && (err == nil || err.Error() != "negative-control-restore-failed") {
+				t.Fatal("clock restore was assumed", err)
+			}
+			raw, e := os.ReadFile(filepath.Join(dir, "chrony.conf"))
+			if e != nil || string(raw) != "original\n" {
+				t.Fatal("time configuration was not restored", e)
+			}
+			if _, e := os.Stat(filepath.Join(dir, "chrony.conf.saved")); !os.IsNotExist(e) {
+				t.Fatal("time configuration backup remains", e)
 			}
 		})
 	}

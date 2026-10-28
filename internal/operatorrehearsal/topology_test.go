@@ -145,7 +145,7 @@ func TestBootPlanUsesTLSActualTemplateAndServiceAffinity(t *testing.T) {
 			controls[c.Label] = string(c.Input)
 		}
 	}
-	if len(controls) != 4 || !strings.Contains(controls["negative-missing-credential"], "if systemctl start relais-signal.service; then exit 1") || !strings.Contains(controls["negative-missing-unit"], "= not-found") || !strings.Contains(controls["negative-wrong-time-source"], "192.0.2.123") {
+	if len(controls) != 4 || !strings.Contains(controls["negative-missing-credential"], "failed-with-EXIT_CREDENTIALS-243-and-no-process") || !strings.Contains(controls["negative-missing-unit"], "nonzero-start-and-LoadState-not-found") || !strings.Contains(controls["negative-wrong-time-source"], "192.0.2.123") {
 		t.Fatal("negative controls did not demand refusal")
 	}
 	if err = d.Close(context.Background()); err != nil {
