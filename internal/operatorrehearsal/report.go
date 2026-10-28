@@ -18,7 +18,8 @@ var CoveredGates = []operator.Gate{operator.Rollout, operator.ControlRestart, op
 type GateReport struct {
 	Gate operator.Gate `json:"gate"`
 	operatorgates.ProcedureResult
-	CallerStopped bool `json:"callerStopped"`
+	ProcedureCompleted bool `json:"procedureCompleted"`
+	CallerStopped      bool `json:"callerStopped"`
 }
 type CPUReport struct {
 	Layout           CPULayout     `json:"layout"`
@@ -29,40 +30,57 @@ type CPUReport struct {
 	Phases           []Calibration `json:"phases"`
 }
 type Report struct {
-	Uncertainties  []operator.Uncertainty    `json:"uncertainties"`
-	SchemaVersion  int                       `json:"schemaVersion"`
-	Commit         string                    `json:"commit"`
-	HeadCommit     string                    `json:"headCommit,omitempty"`
-	Event          string                    `json:"event"`
-	ScenarioSHA256 string                    `json:"scenarioSha256"`
-	TemplateSHA256 string                    `json:"templateSha256"`
-	BinarySHA256   string                    `json:"binarySha256"`
-	CallerSHA256   string                    `json:"callerSha256"`
-	JudgeSHA256    []string                  `json:"judgeSha256"`
-	ReleaseCommits []string                  `json:"releaseCommits"`
-	ArchiveSHA256  []string                  `json:"archiveSha256"`
-	Bounds         clocks.Bounds             `json:"bounds"`
-	CPU            CPUReport                 `json:"cpu"`
-	Gates          []GateReport              `json:"gates"`
-	Pool           *operatorevidence.Summary `json:"pooledMedia"`
-	Clocks         []clocks.Evidence         `json:"clocks"`
-	Errors         []string                  `json:"errors"`
-	Latched        bool                      `json:"latched"`
-	Cleanup        bool                      `json:"cleanup"`
-	Verdict        operator.Verdict          `json:"verdict"`
-	Failures       []string                  `json:"failures"`
-	Exemptions     []string                  `json:"exemptions"`
-	Limitations    []string                  `json:"limitations"`
+	TimingUndecided []TimingUndecided         `json:"timingUndecided"`
+	Uncertainties   []operator.Uncertainty    `json:"uncertainties"`
+	SchemaVersion   int                       `json:"schemaVersion"`
+	Commit          string                    `json:"commit"`
+	HeadCommit      string                    `json:"headCommit,omitempty"`
+	Event           string                    `json:"event"`
+	ScenarioSHA256  string                    `json:"scenarioSha256"`
+	TemplateSHA256  string                    `json:"templateSha256"`
+	BinarySHA256    string                    `json:"binarySha256"`
+	CallerSHA256    string                    `json:"callerSha256"`
+	JudgeSHA256     []string                  `json:"judgeSha256"`
+	ReleaseCommits  []string                  `json:"releaseCommits"`
+	ArchiveSHA256   []string                  `json:"archiveSha256"`
+	Bounds          clocks.Bounds             `json:"bounds"`
+	CPU             CPUReport                 `json:"cpu"`
+	Gates           []GateReport              `json:"gates"`
+	Pool            *operatorevidence.Summary `json:"pooledMedia"`
+	Clocks          []clocks.Evidence         `json:"clocks"`
+	Errors          []string                  `json:"errors"`
+	Latched         bool                      `json:"latched"`
+	Cleanup         bool                      `json:"cleanup"`
+	Verdict         operator.Verdict          `json:"verdict"`
+	Failures        []string                  `json:"failures"`
+	Exemptions      []string                  `json:"exemptions"`
+	Limitations     []string                  `json:"limitations"`
 }
 
-// Evaluate accepts only the two existing relay criteria. A missing duplicate
-// counter, unfinished procedure, excluded phase or unknown never qualifies.
+// Evaluate applies the free-rehearsal rule. The pinned media status remains
+// strict; only the three fully reported timing metrics may remain undecided.
 func (r *Report) Evaluate() {
 	r.Failures = append([]string{}, r.Errors...)
 	r.Exemptions = []string{}
+	r.TimingUndecided = []TimingUndecided{}
+	if r.Pool != nil {
+		for _, row := range r.Pool.UndecidedMetrics {
+			if !operatorevidence.TimingMetric(row.Metric) {
+				continue
+			}
+			gate := operator.Gate("unavailable")
+			if row.Phase >= 0 && row.Phase < len(CoveredGates) {
+				gate = CoveredGates[row.Phase]
+			}
+			r.TimingUndecided = append(r.TimingUndecided, TimingUndecided{Gate: gate, UndecidedMetric: row})
+		}
+	}
 	fail := func(s string) { r.Failures = append(r.Failures, s) }
 	if !fullDigest.MatchString(r.ScenarioSHA256) {
 		fail("invalid-scenario-identity")
+	}
+	if len(r.Uncertainties) > 0 {
+		fail("command-result-unknown")
 	}
 	if r.Latched {
 		fail("session-latched")
@@ -80,24 +98,27 @@ func (r *Report) Evaluate() {
 		if i >= len(CoveredGates) || g.Gate != CoveredGates[i] {
 			fail("gate-order-differs")
 		}
+		if !g.ProcedureCompleted || g.Process.CompletedSteps <= 0 {
+			fail(string(g.Gate) + ":procedure-incomplete")
+		}
 		if !g.CallerStopped {
 			fail(string(g.Gate) + ":caller-stop-unconfirmed")
 		}
-		if g.Media == nil || g.Media.Status == operator.Failure {
+		if g.Media == nil || (g.Media.Status != operator.Passed && g.Media.Status != operator.Inconclusive) || g.Media.FailedMetrics != 0 || g.Media.DecryptionFailures != 0 || g.Media.ICERestarts != 0 {
 			fail(string(g.Gate) + ":media-missing-or-failed")
 		}
 		if g.Reason != "" || g.Category != "" {
 			fail(string(g.Gate) + ":procedure-error")
 		}
+		timingOnly := g.Status == operator.Inconclusive && g.ProcedureCompleted && g.Gate != operator.RelayDeploy && g.Media != nil && g.Media.Status == operator.Inconclusive
 		exempt := g.Gate == operator.RelayDeploy && g.Status == operator.Inconclusive && g.Reason == "" && g.Category == "" && g.Process.CompletedSteps > 0 && g.Process.Restarts == 1 && g.Process.DuplicatePackets != nil && *g.Process.DuplicatePackets == 0 && g.Process.RelayEpochDelta != nil && *g.Process.RelayEpochDelta > 0 && g.Process.RoutesRestored != nil && *g.Process.RoutesRestored > 0 && g.Process.RelayLocalTiming == "inconclusive" && g.Process.RelayConnectionInvariants == "inconclusive" && g.Media != nil && g.Media.Status != operator.Failure
 		if exempt {
 			r.Exemptions = append(r.Exemptions, "relayLocalTiming", "relayConnectionInvariants")
-		} else if g.Status != operator.Passed {
+		} else if g.Status != operator.Passed && !timingOnly {
 			fail(string(g.Gate) + ":not-passed")
 		}
 	}
-	p := r.Pool
-	if p == nil || p.Status != operator.Passed || p.QualifiedMoves < 20 || p.QualifiedTakeovers < 10 || p.ExpectedCalls != 4 || p.CompletedCalls != p.ExpectedCalls || p.RelayCalls != 1 || p.EventCount < 1 || p.MetricCount < 1 || p.ExcludedEvents != 0 || p.FailedMetrics != 0 || p.InconclusiveMetrics != 0 || p.DecryptionFailures != 0 || p.ICERestarts != 0 || p.DroppedPhases != 0 || p.IncludedPhases != 4 || p.DuplicatePackets != 0 {
+	if !rehearsalMedia(r.Pool) {
 		fail("pooled-media-not-passed")
 	}
 	r.Verdict = operator.Passed
@@ -133,7 +154,7 @@ func (r Report) Write(w io.Writer) error {
 		r.Event = "unavailable"
 	}
 	r.Evaluate()
-	r.Limitations = []string{"local TLS proxy and time reference; shared runner clock", "linux_amd64 only", "store failover and load admission not covered", "one execution; three fixed complete executions are required for initial calibration", "CPU affinity does not prove physical-core or VM scheduling isolation"}
+	r.Limitations = []string{"local TLS proxy and time reference; shared runner clock", "linux_amd64 only", "store failover and load admission not covered", "one execution; three fixed complete executions are required for initial calibration", "CPU affinity does not prove physical-core or VM scheduling isolation", "on a shared runner, media timing is judged strictly only in the paid run"}
 	e := json.NewEncoder(w)
 	e.SetIndent("", "  ")
 	return e.Encode(r)

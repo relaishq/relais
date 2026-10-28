@@ -278,6 +278,7 @@ func (r *rehearsal) recordSequence(sequence operatorgates.SequenceResult, stops 
 		row := completed[g.Gate]
 		row.Gate = g.Gate
 		row.ProcedureResult = sequence.Procedures[i]
+		row.ProcedureCompleted = sequence.Procedures[i].Completed
 		row.Status = g.Status
 		row.Reason = g.Reason
 		// Preparation can fail before gate() creates a row or a caller. Retain

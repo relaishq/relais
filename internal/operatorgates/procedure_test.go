@@ -1027,3 +1027,14 @@ func TestSequenceFullLengthCampaignAfterPreparation(t *testing.T) {
 		})
 	}
 }
+
+func TestProcedureCompletionIsIndependentOfMediaTiming(t *testing.T) {
+	for _, procedureErr := range []error{nil, fault("precondition-failed:inventory"), fault("gate-deadline"), fault("command-result-unknown")} {
+		g, _ := testProcedure(t)
+		g.p.Media = func(context.Context) (*MediaSummary, error) { return &MediaSummary{Status: operator.Inconclusive}, nil }
+		result := g.finish(context.Background(), procedureErr, false)
+		if result.Completed != (procedureErr == nil) || result.Status != operator.Inconclusive {
+			t.Fatal("procedure completion confused with strict timing", result, procedureErr)
+		}
+	}
+}

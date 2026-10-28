@@ -139,6 +139,8 @@ type ProcessEvidence struct {
 	RelayConnectionInvariants string  `json:"relayConnectionInvariants,omitempty"`
 }
 type ProcedureResult struct {
+	// Completed records procedure completion independently of strict media qualification.
+	Completed    bool             `json:"-"`
 	Status       operator.Verdict `json:"status"`
 	Reason       string           `json:"reason,omitempty"`
 	Category     string           `json:"category,omitempty"`

@@ -161,7 +161,6 @@
     "rehearsal-ssm-host-scope-ignored",
     "rehearsal-aws-shim-scope-ignored",
     "precondition-category-free-text",
-    "rehearsal-pass-accepts-inconclusive",
     "rehearsal-exemption-widened"
   ],
   "pending": [],
@@ -287,7 +286,11 @@
     "scenario-report-identity",
     "evidence-worker-index-sentinel-exact",
     "evidence-event-horizon-start",
-    "evidence-event-horizon-end"
+    "evidence-event-horizon-end",
+    "rehearsal-failed-metric-pass",
+    "rehearsal-dropped-phase-pass",
+    "rehearsal-undecided-timing-blocks",
+    "paid-undecided-timing-pass"
   ],
   "killed": [
     {
@@ -2496,14 +2499,6 @@
       "guardFingerprint": ""
     },
     {
-      "id": "rehearsal-pass-accepts-inconclusive",
-      "owner": "P6a",
-      "evidence": "killed",
-      "test": "TestRehearsalRejectsInconclusive",
-      "package": "./internal/operatorrehearsal",
-      "guardFingerprint": "7cb15e758a29edefff5ec6e80388f11dcaf34214b5170040f4daa2a348c05ade"
-    },
-    {
       "id": "rehearsal-exemption-widened",
       "owner": "P6a",
       "evidence": "killed",
@@ -2564,6 +2559,38 @@
       "evidence": "killed",
       "test": "TestGeneratorCoverageUsesEventHorizon",
       "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rehearsal-failed-metric-pass",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestRehearsalTimingDoesNotHideFailures/failed-metric",
+      "package": "./internal/operatorrehearsal",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rehearsal-dropped-phase-pass",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestRehearsalTimingDoesNotHideFailures/dropped-phase",
+      "package": "./internal/operatorrehearsal",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rehearsal-undecided-timing-blocks",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestRehearsalAllowsUndecidedTiming",
+      "package": "./internal/operatorrehearsal",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "paid-undecided-timing-pass",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestPaidSummaryRejectsUndecidedTiming",
+      "package": "./internal/operatorevidence",
       "guardFingerprint": ""
     }
   ],
@@ -3087,6 +3114,17 @@
       "successorTest": "TestSingleLaunchAndUnknownStop",
       "package": "./internal/operatorcaller",
       "deletionEvidence": "The public production path is the fixed launcher, typed result and session; it has no hosted candidate dispatch, search, cancellation, OIDC or Actions-billing implementation. TestRemovedHostedLauncherEffects pins the removed effect surface."
+    },
+    {
+      "id": "rehearsal-pass-accepts-inconclusive",
+      "owner": "removed",
+      "evidence": "retired",
+      "test": "TestRehearsalTimingDoesNotHideFailures/failed-metric",
+      "package": "./internal/operatorrehearsal",
+      "guardFingerprint": "7cb15e758a29edefff5ec6e80388f11dcaf34214b5170040f4daa2a348c05ade",
+      "reason": "Owner decision 2026-10-28 permits fully reported undecided timing in the free rehearsal; the former blanket inconclusive rejection is superseded.",
+      "successorContract": "Free rehearsal requires completed procedures and zero known media failures or exclusions; paid media remains strict.",
+      "successorMutation": "rehearsal-failed-metric-pass"
     }
   ],
   "private": [

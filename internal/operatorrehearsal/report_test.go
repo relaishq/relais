@@ -14,9 +14,16 @@ import (
 )
 
 func passingReport() Report {
-	r := Report{ScenarioSHA256: strings.Repeat("a", 64), Cleanup: true, CPU: CPUReport{Calibration: Calibration{Passed: true}}, Pool: &operatorevidence.Summary{Status: operator.Passed, QualifiedMoves: 20, QualifiedTakeovers: 10, ExpectedCalls: 4, CompletedCalls: 4, RelayCalls: 1, MetricCount: 1, EventCount: 30, IncludedPhases: 4}}
+	r := Report{ScenarioSHA256: strings.Repeat("a", 64), Cleanup: true, CPU: CPUReport{Calibration: Calibration{Passed: true}}, Pool: &operatorevidence.Summary{CompleteMedia: true, Status: operator.Passed, QualifiedMoves: 20, QualifiedTakeovers: 10, ExpectedCalls: 4, CompletedCalls: 4, RelayCalls: 1, MetricCount: 1, EventCount: 30, IncludedPhases: 4}}
 	for _, g := range CoveredGates {
-		r.Gates = append(r.Gates, GateReport{Gate: g, ProcedureResult: operatorgates.ProcedureResult{Status: operator.Passed, Media: &operatorgates.MediaSummary{Status: operator.Passed}}, CallerStopped: true})
+		r.Gates = append(r.Gates, GateReport{Gate: g, ProcedureCompleted: true, ProcedureResult: operatorgates.ProcedureResult{Status: operator.Passed, Process: operatorgates.ProcessEvidence{CompletedSteps: 1}, Media: &operatorgates.MediaSummary{Status: operator.Passed}}, CallerStopped: true})
+	}
+	for i, g := range CoveredGates {
+		n := 10
+		if i == 3 {
+			n = 0
+		}
+		r.Pool.PhaseDiagnostics = append(r.Pool.PhaseDiagnostics, operatorevidence.PhaseDiagnostic{Phase: i, Gate: string(g), EventCount: n, Included: true})
 	}
 	zero, one := uint64(0), uint64(1)
 	r.Gates[3].Status = operator.Inconclusive
@@ -47,7 +54,7 @@ func TestRehearsalPassRule(t *testing.T) {
 		"relay call missing":     func(r *Report) { r.Pool.RelayCalls = 0 },
 		"relay counted twice":    func(r *Report) { r.Pool.RelayCalls = 2 },
 		"phase count":            func(r *Report) { r.Pool.IncludedPhases = 3 },
-		"submitted only":         func(r *Report) { r.Pool.QualifiedTakeovers = 9 },
+		"missing trial phase":    func(r *Report) { r.Pool.PhaseDiagnostics[2].EventCount = 0 },
 		"duplicates":             func(r *Report) { r.Pool.DuplicatePackets = 1 },
 		"decryption":             func(r *Report) { r.Pool.DecryptionFailures = 1 },
 		"relay unknown":          func(r *Report) { r.Gates[3].Reason = "command-result-unknown" },

@@ -3089,32 +3089,6 @@
     "Marker": "MUTATION: telemetry-age-presence"
   },
   {
-    "ID": "rehearsal-pass-accepts-inconclusive",
-    "File": "internal/operatorrehearsal/report.go",
-    "Function": "Evaluate",
-    "Receiver": "Report",
-    "Edits": [
-      {
-        "File": "internal/operatorrehearsal/report.go",
-        "Function": "Evaluate",
-        "Receiver": "Report",
-        "Old": "g.Status != operator.Passed",
-        "New": "g.Status == operator.Failure"
-      },
-      {
-        "File": "internal/operatorrehearsal/report.go",
-        "Function": "Evaluate",
-        "Receiver": "Report",
-        "Old": "p.Status != operator.Passed",
-        "New": "p.Status == operator.Failure"
-      }
-    ],
-    "Test": "TestRehearsalRejectsInconclusive",
-    "Package": "./internal/operatorrehearsal",
-    "Marker": "MUTATION: rehearsal-pass-accepts-inconclusive",
-    "GuardFingerprint": "7cb15e758a29edefff5ec6e80388f11dcaf34214b5170040f4daa2a348c05ade"
-  },
-  {
     "ID": "rehearsal-exemption-widened",
     "File": "internal/operatorrehearsal/report.go",
     "Function": "Evaluate",
@@ -3210,5 +3184,45 @@
     "Test": "TestGeneratorCoverageUsesEventHorizon",
     "Marker": "MUTATION: event-measurement-horizon",
     "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "rehearsal-failed-metric-pass",
+    "File": "internal/operatorrehearsal/timing.go",
+    "Function": "rehearsalMedia",
+    "Old": "p.FailedMetrics != 0",
+    "New": "false && p.FailedMetrics != 0",
+    "Test": "TestRehearsalTimingDoesNotHideFailures/failed-metric",
+    "Package": "./internal/operatorrehearsal",
+    "Marker": "MUTATION: rehearsal-timing-safety"
+  },
+  {
+    "ID": "rehearsal-dropped-phase-pass",
+    "File": "internal/operatorrehearsal/timing.go",
+    "Function": "rehearsalMedia",
+    "Old": "p.DroppedPhases != 0",
+    "New": "false && p.DroppedPhases != 0",
+    "Test": "TestRehearsalTimingDoesNotHideFailures/dropped-phase",
+    "Package": "./internal/operatorrehearsal",
+    "Marker": "MUTATION: rehearsal-timing-safety"
+  },
+  {
+    "ID": "rehearsal-undecided-timing-blocks",
+    "File": "internal/operatorrehearsal/timing.go",
+    "Function": "rehearsalMedia",
+    "Old": "p.CompleteMedia",
+    "New": "(p.CompleteMedia && p.InconclusiveMetrics == 0)",
+    "Test": "TestRehearsalAllowsUndecidedTiming",
+    "Package": "./internal/operatorrehearsal",
+    "Marker": "MUTATION: rehearsal-timing-blocks"
+  },
+  {
+    "ID": "paid-undecided-timing-pass",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "DecodeSummary",
+    "Old": "s.InconclusiveMetrics > 0",
+    "New": "false && s.InconclusiveMetrics > 0",
+    "Test": "TestPaidSummaryRejectsUndecidedTiming",
+    "Package": "./internal/operatorevidence",
+    "Marker": "MUTATION: paid-timing-strict"
   }
 ]

@@ -183,3 +183,11 @@ func TestRelaySummaryDoesNotClaimTrials(t *testing.T) {
 		})
 	}
 }
+
+func TestPaidSummaryRejectsUndecidedTiming(t *testing.T) {
+	raw, _ := json.Marshal(Summary{Status: operator.Passed, CompleteMedia: true, ExpectedCalls: 1, CompletedCalls: 1, EventCount: 30, MetricCount: 270, InconclusiveMetrics: 1, UndecidedMetrics: []UndecidedMetric{{Phase: 0, Event: 0, Metric: "first_content", Causes: []string{"metric-undecided"}}}})
+	got, err := DecodeSummary(raw)
+	if err != nil || got.Status != operator.Inconclusive {
+		t.Fatal("MUTATION: paid-timing-strict", got, err)
+	}
+}

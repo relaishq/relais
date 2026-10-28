@@ -15,6 +15,9 @@ import (
 )
 
 type previewMediaSummary struct {
+	CompleteMedia      bool              `json:"completeMedia"`
+	LostCalls          int               `json:"lostCalls"`
+	UndecidedMetrics   []undecidedMetric `json:"undecidedMetrics"`
 	IncludedPhases     int               `json:"includedPhases"`
 	DroppedPhases      int               `json:"droppedPhases"`
 	ExcludedEvents     int               `json:"excludedEvents"`
@@ -40,6 +43,8 @@ type previewMediaSummary struct {
 }
 
 type phaseDiagnostic struct {
+	Gate               string                `json:"gate"`
+	EventCount         int                   `json:"eventCount"`
 	Phase              int                   `json:"phase"`
 	Included           bool                  `json:"included"`
 	Cause              string                `json:"cause"`
@@ -139,6 +144,11 @@ func previewMediaFor(r *loadgen.RunReport, relay bool) previewMediaSummary {
 			add(&out.InconclusiveMetrics, 1)
 		}
 	}
+	out.CompleteMedia = completeMedia
+	for _, p := range r.Processes {
+		out.CompleteMedia = out.CompleteMedia && p.Complete && len(p.Causes) == 0
+	}
+	out.UndecidedMetrics = undecidedRows(r)
 	if relay {
 		out.RelayCalls = out.CompletedCalls
 	}
@@ -334,6 +344,7 @@ func parsePreviewMediaFor(input *previewMediaInput) (*loadgen.RunReport, preview
 	if collectionsErr != nil {
 		reject(collectionsErr, collectionPath(collectionsErr))
 	}
+	lost := lostCallCount(input, r)
 	rawVerdict := previewMediaSummary{Status: "inconclusive"}
 	out := rawVerdict
 	guards := false
@@ -378,6 +389,7 @@ func parsePreviewMediaFor(input *previewMediaInput) (*loadgen.RunReport, preview
 			out.Status = "failed"
 		}
 	}
+	out.LostCalls = lost
 	out.issue = publicPhaseIssue(issue)
 	if !qualified && out.exclusionCause == "invalid-phase-evidence" && out.issue.Path == "" {
 		out.issue = observe.EvidenceIssue{Path: "$", Reason: "qualification-incomplete"}
@@ -403,6 +415,9 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	diagnostics := []phaseDiagnostic{}
 	included, dropped, excluded, overlaps := 0, 0, 0, 0
 	var duplicates uint64
+	completeMedia, lost := true, 0
+	type eventPosition struct{ phase, event int }
+	var positions []eventPosition
 	var relayCalls int
 	var relayGap int64
 	sessions, operations := map[string]bool{}, map[string]bool{}
@@ -417,10 +432,12 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 			}
 			sessions[session] = true
 		}
+		lost += verdict.LostCalls
+		completeMedia = completeMedia && verdict.CompleteMedia
 		duplicates += verdict.DuplicatePackets
 		excluded += verdict.ExcludedEvents
 		overlaps += verdict.SaturationOverlaps
-		diag := phaseDiagnostic{Phase: i, ExcludedEvents: verdict.ExcludedEvents, SaturationOverlaps: verdict.SaturationOverlaps, Cause: verdict.exclusionCause, Issue: verdict.issue}
+		diag := phaseDiagnostic{Gate: phase.Gate, EventCount: len(part.Events), Phase: i, ExcludedEvents: verdict.ExcludedEvents, SaturationOverlaps: verdict.SaturationOverlaps, Cause: verdict.exclusionCause, Issue: verdict.issue}
 		// Replayed identities never increase the acceptance sample. Reject the whole
 		// ambiguous phase as evidence, retaining its known failures independently.
 		duplicate := false
@@ -467,6 +484,9 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 		}
 		r.Callers = int(count)
 		r.Processes = append(r.Processes, part.Processes...)
+		for j := range part.Events {
+			positions = append(positions, eventPosition{i, j})
+		}
 		r.Events = append(r.Events, part.Events...)
 	}
 	out := previewMediaSummary{Status: "inconclusive"}
@@ -491,6 +511,21 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	out.SaturationOverlaps = overlaps
 	out.DuplicatePackets = duplicates
 	out.PhaseDiagnostics = diagnostics
+	out.CompleteMedia = out.CompleteMedia && completeMedia && valid
+	if r.Callers == 0 {
+		out.CompleteMedia = completeMedia && valid
+	}
+	out.LostCalls = lost
+	if out.UndecidedMetrics == nil {
+		out.UndecidedMetrics = []undecidedMetric{}
+	}
+	for j := range out.UndecidedMetrics {
+		row := &out.UndecidedMetrics[j]
+		if row.Event < len(positions) {
+			pos := positions[row.Event]
+			row.Phase, row.Event = pos.phase, pos.event
+		}
+	}
 	return out
 }
 func decodePool(data []byte) (input previewPoolInput, err error) {

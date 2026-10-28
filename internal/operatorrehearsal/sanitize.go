@@ -40,7 +40,7 @@ func publicVerdict(v operator.Verdict) operator.Verdict {
 	case operator.Passed, operator.Failure, operator.Inconclusive, operator.NotRun:
 		return v
 	}
-	return operator.Inconclusive
+	return operator.NotRun
 }
 func publicCPUList(s string) string {
 	cpus, e := ParseCPUList(s)
@@ -72,8 +72,20 @@ func sanitizePool(p *operatorevidence.Summary) *operatorevidence.Summary {
 	}
 	copy := *p
 	copy.Status = publicVerdict(p.Status)
+	copy.UndecidedMetrics = append([]operatorevidence.UndecidedMetric{}, p.UndecidedMetrics...)
+	for i := range copy.UndecidedMetrics {
+		row := &copy.UndecidedMetrics[i]
+		row.Metric = operatorevidence.PublicMetric(row.Metric)
+		row.Causes = append([]string{}, row.Causes...)
+		for j, cause := range row.Causes {
+			row.Causes[j] = operatorevidence.PublicTimingCause(cause)
+		}
+	}
 	copy.PhaseDiagnostics = append([]operatorevidence.PhaseDiagnostic{}, p.PhaseDiagnostics...)
 	for i := range copy.PhaseDiagnostics {
+		if !operator.Gate(copy.PhaseDiagnostics[i].Gate).Valid() {
+			copy.PhaseDiagnostics[i].Gate = "unavailable"
+		}
 		copy.PhaseDiagnostics[i].Cause = publicExclusion(copy.PhaseDiagnostics[i].Cause)
 		copy.PhaseDiagnostics[i].Issue = copy.PhaseDiagnostics[i].Issue.Public(reflect.TypeFor[operatorevidence.MediaInput](), reflect.TypeFor[loadgen.Message]())
 	}

@@ -11,7 +11,7 @@
     {
       "file": "main.go",
       "sourceSHA256": "c6aef1d42288b9a8df52a4acf0e085e37982501f45e9da35e08e84853ea233bb",
-      "relocatedSHA256": "5db0daace08cd6c70cf13671f49605bc0118b69f153eaa961bd687b0b0a10c11",
+      "relocatedSHA256": "b3a2929879b25416b2f2874f5c9ed70f61eb7e1e95fe708ef7bcbc4500dbc800",
       "baselineRelocatedSHA256": "580e08dd655e517a6a2a0b392320e7e7f2dd17fd0a0a2f2eff3cad3f197abb86"
     },
     {
@@ -55,7 +55,8 @@
     "Existing clock, cadence and span rejection conditions retain their error text and expose fixed numeric diagnostics; verdict behavior is unchanged.",
     "Qualify every phase independently, quarantine incomplete phase envelopes separately, retain known failures and report fixed contract paths/reasons without changing media or generator thresholds.",
     "Accept exactly -1 for the product MoveReport.From/To unknown-index sentinel, with release-source provenance in the numeric exception ledger; other numeric guards and judge thresholds are unchanged.",
-    "Restore original per-event generator coverage: complete measurements use their event and baseline horizons plus one sampler period, not dial through hangup; media-span validation and incomplete-measurement fallback remain unchanged."
+    "Restore original per-event generator coverage: complete measurements use their event and baseline horizons plus one sampler period, not dial through hangup; media-span validation and incomplete-measurement fallback remain unchanged.",
+    "Diagnostic-only projection of complete media, distinct lost callers and every undecided yardstick row with phase/event indexes and fixed reason codes; strict product verdicts and thresholds are unchanged. Free rehearsal eligibility alone follows the owner decision of 2026-10-28."
   ],
   "guardFiles": [
     {
@@ -77,6 +78,10 @@
     {
       "file": "validation.go",
       "sha256": "1572df8eb7173ba426e3fc74c41cd594e4f9e68ef392d7b2eafcaeeb12e64f9d"
+    },
+    {
+      "file": "timing.go",
+      "sha256": "989a2a3e95573c084e328df9145481c37dbd0450983899935ceb7c402d4a1f25"
     }
   ],
   "fixtureHardening": "Synthetic controls carry complete armed inventories, both audio/video gap populations on every event, and mapped duration/classification records. Product judge policy and expected passing summary counts are unchanged. Video tracks include the product-emitted Video object; the expected passing summary remains unchanged.",

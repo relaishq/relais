@@ -3275,8 +3275,15 @@
       "tests": [
         "TestRehearsalPassRule",
         "TestRehearsalRejectsInconclusive",
-        "TestRehearsalExemptionOnlyRelay"
-      ]
+        "TestRehearsalExemptionOnlyRelay",
+        "TestRehearsalAllowsUndecidedTiming",
+        "TestRehearsalTimingDoesNotHideFailures",
+        "TestRehearsalReportsEveryUndecidedTiming",
+        "TestPaidMediaTimingRemainsStrict",
+        "TestPaidSummaryRejectsUndecidedTiming",
+        "TestProcedureCompletionIsIndependentOfMediaTiming"
+      ],
+      "scope": "Owner decision 2026-10-28: free rehearsal accepts only the three completely reported timing uncertainties while procedure completion, media safety, calibration and cleanup remain required; the paid judge and its thresholds remain strict."
     }
   ],
   "integrationInvocations": [

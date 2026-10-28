@@ -37,6 +37,7 @@ func RunProcessGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 				result.Status = operator.Failure
 			}
 			result.AwaitingPool = false
+			result.Completed = false
 		}
 		if g.unknown {
 			result.Reason = "command-result-unknown"
@@ -66,8 +67,10 @@ func (g *procedure) finish(ctx context.Context, err error, release bool) Procedu
 	}
 	// Definite errors and the normal completed procedure can restore owned state.
 	// An unknown effect cannot authorize even the first restoration request.
+	restored := true
 	if !g.unknown && r.Reason != "command-result-unknown" {
 		if restore := g.restoreGate(ctx); restore != nil {
+			restored = false
 			switch code(restore) {
 			case "command-result-unknown":
 				r.Reason = code(restore)
@@ -112,6 +115,7 @@ func (g *procedure) finish(ctx context.Context, err error, release bool) Procedu
 		r.Reason = "command-result-unknown"
 		r.AwaitingPool = false
 	}
+	r.Completed = procedurePassed && restored && !g.unknown && r.Reason == "" && r.Category == ""
 	r.Process = g.evidence
 	return r
 }

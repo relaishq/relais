@@ -157,13 +157,39 @@ media-span check requires stats through hangup, including the final partial row.
 partial interval, uncovered event edges and incomplete-measurement fallback.
 
 The shared session runs rollout, control restart, A→B→A, then relay deploy.
-Rehearsal eligibility requires every covered procedure and the pooled media to
-pass, at least 20 qualified moves and 10 qualified takeovers, confirmed caller
-stops, and scoped cleanup. Only `relayLocalTiming` and
-`relayConnectionInvariants` remain explicitly inconclusive. Unknown outcomes,
-precondition errors, driver errors and dropped phases fail eligibility. Phase
-indices, exclusion codes and saturation overlap counts remain visible even
-when the judge cannot produce qualifying media totals.
+Owner decision, 2026-10-28: the free rehearsal proves that the operator procedures
+complete and that the media evidence contains no known failure. A shared runner
+cannot provide the scheduling isolation needed to settle every media timing
+measurement. Media timing is judged strictly only in the paid run. The pinned
+judge, its thresholds and the paid-run pass rule remain unchanged.
+
+A free rehearsal passes only when every covered procedure completed, every
+caller stopped, calibration passed and cleanup was verified. Any unknown command
+result, session latch, precondition failure, driver error or interrupt blocks it.
+The judge must report zero failed metrics, lost calls, decryption failures, ICE
+restarts, excluded events and dropped or invalid phases. All four phases must be
+included, with complete caller and generator evidence. Duplicate packets still
+block, and the two existing relay exemptions, `relayLocalTiming` and
+`relayConnectionInvariants`, apply exactly as before.
+
+The strict `pooledMedia.status`, qualified move/takeover counts and timing
+verdicts remain in the report. They are not rewritten to a media pass. Only
+inconclusive `first_content`, `first_new_content` and `distributed_window` metrics
+are non-blocking for the free rehearsal. Every row appears in `timingUndecided`
+with its gate, zero-based phase and event indexes, metric and sanitized cause
+codes. The list must account for every inconclusive metric; a missing row,
+unknown metric or missing cause blocks eligibility. `procedureCompleted` records
+procedure completion separately from the strict media result. The judge's
+`completeMedia`, `lostCalls`, phase diagnostics and `undecidedMetrics` retain the
+evidence used by this decision. Timing uncertainty may reduce the strict
+qualified counts below 20 moves or 10 takeovers without blocking the free run;
+the paid judge still enforces those counts.
+
+`TestRehearsalAllowsUndecidedTiming`, `TestRehearsalTimingDoesNotHideFailures` and
+`TestRehearsalReportsEveryUndecidedTiming` pin this distinction. Mutants that
+accept failed metrics or dropped phases, or reject allowed timing uncertainty,
+must be killed. `TestPaidMediaTimingRemainsStrict` and
+`TestPaidSummaryRejectsUndecidedTiming` retain the strict paid rule.
 
 Relay deploy contributes one completed caller and zero events or trial metrics.
 Its call must complete with valid caller and generator evidence and no known

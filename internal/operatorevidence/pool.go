@@ -16,6 +16,8 @@ import (
 )
 
 type PhaseDiagnostic struct {
+	Gate               string                `json:"gate"`
+	EventCount         int                   `json:"eventCount"`
 	Phase              int                   `json:"phase"`
 	Included           bool                  `json:"included"`
 	Cause              string                `json:"cause"`
@@ -24,6 +26,9 @@ type PhaseDiagnostic struct {
 	Issue              observe.EvidenceIssue `json:"issue"`
 }
 type Summary struct {
+	CompleteMedia      bool              `json:"completeMedia"`
+	LostCalls          int               `json:"lostCalls"`
+	UndecidedMetrics   []UndecidedMetric `json:"undecidedMetrics"`
 	IncludedPhases     int               `json:"includedPhases"`
 	DroppedPhases      int               `json:"droppedPhases"`
 	ExcludedEvents     int               `json:"excludedEvents"`
@@ -50,6 +55,9 @@ type Summary struct {
 // inventories still fail the recursive evidence decoder at the read boundary.
 func (s Summary) MarshalJSON() ([]byte, error) {
 	type wire Summary
+	if s.UndecidedMetrics == nil {
+		s.UndecidedMetrics = []UndecidedMetric{}
+	}
 	if s.PhaseDiagnostics == nil {
 		s.PhaseDiagnostics = []PhaseDiagnostic{}
 	}
