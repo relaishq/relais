@@ -109,6 +109,9 @@ func (r *Report) Evaluate() {
 // Reports are typed projections: no raw mailbox, script, environment, product
 // response or error string is serializable here. Restrict all remaining labels.
 func publicCode(s string) string {
+	if calibrationCause(s) {
+		return s
+	}
 	switch s {
 	case "release-stage-copy-failed", "release-stage-failed", "negative-control-setup-failed", "negative-control-refusal-failed", "negative-control-restore-failed", "negative-control-command-unconfirmed", "negative-control-verification-failed", "media-judge-failed", "source-not-clean", "tested-commit-differs", "linux-affinity-unavailable", "rehearsal-needs-four-allowed-cpus", "judge-compiler-version", "release-digest-differs", "release-manifest-differs", "local-file-unavailable", "read-rate-limited", "read-failed", "release-missing", "release-draft", "release-prerelease", "planned-digest-mismatch", "archive-digest-mismatch", "manifest-policy-drift", "reply-invalid", "asset-missing", "asset-size", "asset-digest-mismatch", "release-changed", "", "release-read-failed", "release-profile-differs", "setup-failed", "boot-failed", "negative-controls-failed", "calibration-failed", "sequence-failed", "cleanup-failed", "caller-stop-unconfirmed", "interrupted", "command-result-unknown", "gate-deadline", "precondition-failed", "precondition-unhealthy", "caller-not-near", "prior-gate-stopped", "not-implemented":
 		return s

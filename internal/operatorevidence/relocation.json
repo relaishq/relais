@@ -11,7 +11,7 @@
     {
       "file": "main.go",
       "sourceSHA256": "c6aef1d42288b9a8df52a4acf0e085e37982501f45e9da35e08e84853ea233bb",
-      "relocatedSHA256": "7f582907b3e2333b62eefea460e32cc3c14410bccf6a58d9d4237f0d7983ca9b",
+      "relocatedSHA256": "ce4b7caf38dc764df112c023d17aab9252b7833311fcfd0c9b297cdb9544cb16",
       "baselineRelocatedSHA256": "580e08dd655e517a6a2a0b392320e7e7f2dd17fd0a0a2f2eff3cad3f197abb86"
     },
     {
@@ -29,7 +29,7 @@
     {
       "file": "exclusions.go",
       "sourceSHA256": "c2e4793b1645efca56ca4bf3c0764d84e1917471bf795d9158d7107e31288826",
-      "relocatedSHA256": "a6c99216e1cde4769bfd1450a41b6ad60114a3e379a6c4b13be074b9945a7736",
+      "relocatedSHA256": "31e9f1bb8bd874bc7d18ff3a51bec641978e1d34fd5e8ecbf437e09fe7347f83",
       "baselineRelocatedSHA256": "7f12316a594667ce3107dadb9628cf86efcfcbe0839ae43cdfb52de7ade1849f"
     },
     {
@@ -50,7 +50,9 @@
     "custom-decoder checks include map keys and named containers; optional contexts have passing controls and required contexts explicitly assert IncompleteEvidence",
     "historical takeover start is optional only via the shared ledger; independent signal receipt bounds remain required",
     "reuse already validated product generator messages rather than decoding the same sample twice; validation and thresholds are unchanged",
-    "relay-deploy alone qualifies one completed zero-event call with full caller and generator checks; relay calls never enter the unchanged trial judge; only explicit null empty Moves/armed collections are normalized for relay, while omitted fields remain invalid"
+    "relay-deploy alone qualifies one completed zero-event call with full caller and generator checks; relay calls never enter the unchanged trial judge; only explicit null empty Moves/armed collections are normalized for relay, while omitted fields remain invalid",
+    "Generator calibration delegates to the same pinned applySaturation path; interval predicates expose numeric diagnostics without threshold or comparison changes.",
+    "Existing clock, cadence and span rejection conditions retain their error text and expose fixed numeric diagnostics; verdict behavior is unchanged."
   ],
   "guardFiles": [
     {
@@ -64,6 +66,10 @@
     {
       "file": "relay.go",
       "sha256": "c8032b9b06713a07fdac58bf82f31ac52e82735d86837efdf8ecf67dc1e4ecdc"
+    },
+    {
+      "file": "calibration.go",
+      "sha256": "68990a15558e3d759e637f45d6a4cd249d151623d1d9c2c5ce9d8c618268f526"
     }
   ],
   "fixtureHardening": "Synthetic controls carry complete armed inventories, both audio/video gap populations on every event, and mapped duration/classification records. Product judge policy and expected passing summary counts are unchanged. Video tracks include the product-emitted Video object; the expected passing summary remains unchanged.",

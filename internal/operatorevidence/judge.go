@@ -204,41 +204,63 @@ func (p PinnedJudge) Judge(ctx context.Context, pool Pool) (Summary, error) {
 	if p.Commit == "" || pool.SourceCommit != p.Commit {
 		return out, errors.New("judge-source-differs")
 	}
-	data, err := os.ReadFile(p.Binary)
+	input, err := json.Marshal(pool)
+	if err != nil {
+		return out, errors.New("judge-input-size")
+	}
+	result, stderr, err := p.invoke(ctx, input, "")
 	if err != nil {
 		return out, err
+	}
+	summary, err := DecodeSummary(result)
+	if err != nil {
+		printDiagnostics([]io.Writer{p.Diagnostics}, "media-judge-output", result, stderr)
+	}
+	return summary, err
+}
+
+// Calibrate invokes the same hash-verified release judge's generator entry.
+// Its operator projection is decoded by the rehearsal, not as product JSON.
+func (p PinnedJudge) Calibrate(ctx context.Context, raw string) (json.RawMessage, error) {
+	result, _, err := p.invoke(ctx, []byte(raw), "--calibration")
+	return result, err
+}
+
+func (p PinnedJudge) invoke(ctx context.Context, input []byte, mode string) ([]byte, []byte, error) {
+	data, err := os.ReadFile(p.Binary)
+	if err != nil {
+		return nil, nil, err
 	}
 	sum := sha256.Sum256(data)
 	if hex.EncodeToString(sum[:]) != p.SHA256 {
-		return out, errors.New("judge-binary-differs")
+		return nil, nil, errors.New("judge-binary-differs")
 	}
-	input, err := json.Marshal(pool)
-	if err != nil || len(input) > operator.MaxBlobBytes {
-		return out, errors.New("judge-input-size")
+	if len(input) > operator.MaxBlobBytes {
+		return nil, nil, errors.New("judge-input-size")
 	}
 	dir, err := os.MkdirTemp("", "relais-media-")
 	if err != nil {
-		return out, err
+		return nil, nil, err
 	}
 	defer os.RemoveAll(dir)
 	name := filepath.Join(dir, "input.json")
 	if err = os.WriteFile(name, input, 0600); err != nil {
-		return out, err
+		return nil, nil, err
 	}
-	cmd := exec.CommandContext(ctx, p.Binary, name)
+	args := []string{name}
+	if mode != "" {
+		args = []string{mode, name}
+	}
+	cmd := exec.CommandContext(ctx, p.Binary, args...)
 	cmd.Env = operatorcaller.PublicEnvironment(os.Environ())
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	result, err := cmd.Output()
 	if err != nil {
 		printDiagnostics([]io.Writer{p.Diagnostics}, "media-judge", result, stderr.Bytes())
-		return out, errors.New("judge-incomplete")
+		return nil, nil, errors.New("judge-incomplete")
 	}
-	summary, err := DecodeSummary(result)
-	if err != nil {
-		printDiagnostics([]io.Writer{p.Diagnostics}, "media-judge-output", result, stderr.Bytes())
-	}
-	return summary, err
+	return result, stderr.Bytes(), nil
 }
 
 // Outputs come only from credential-stripped public source builds and the

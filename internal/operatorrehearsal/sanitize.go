@@ -92,17 +92,6 @@ func (r *Report) sanitize() {
 	for i, s := range r.CPU.CallerAffinities {
 		r.CPU.CallerAffinities[i] = publicCPUList(s)
 	}
-	cleanCalibration := func(c Calibration) Calibration {
-		c.Causes = append([]string{}, c.Causes...)
-		for i, s := range c.Causes {
-			switch s {
-			case "caller-error", "known-media-failure", "insufficient-calibration-samples", "incomplete-calibration-call", "generator-saturation-budget":
-			default:
-				c.Causes[i] = "unclassified"
-			}
-		}
-		return c
-	}
 	r.CPU.Calibration = cleanCalibration(r.CPU.Calibration)
 	r.CPU.Phases = append([]Calibration{}, r.CPU.Phases...)
 	for i, c := range r.CPU.Phases {

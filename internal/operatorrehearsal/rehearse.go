@@ -80,7 +80,7 @@ func (j *recordingJudge) Judge(ctx context.Context, p operatorevidence.Pool) (op
 		j.last = &s
 		j.cpu = nil
 		for _, phase := range p.Phases {
-			c, _ := Calibrate(phase.CallerJSONL)
+			c, _ := Calibrate(ctx, j.pinned, phase.CallerJSONL)
 			j.cpu = append(j.cpu, c)
 		}
 	}
@@ -267,6 +267,9 @@ func (r *rehearsal) recordError(stage string, err error) {
 		cause = "gate-deadline"
 	default:
 		cause = publicCode(err.Error())
+	}
+	if stage == "calibration-failed" && len(r.report.CPU.Calibration.Causes) > 0 {
+		cause = publicCode(r.report.CPU.Calibration.Causes[0])
 	}
 	if cause != stage {
 		r.report.Errors = append(r.report.Errors, cause)
@@ -511,20 +514,25 @@ func (r *rehearsal) affinity(ctx context.Context) error {
 
 const calibrationPreparation = 2 * time.Minute
 
-func (r *rehearsal) calibrate(ctx context.Context) error {
+func (r *rehearsal) calibrate(ctx context.Context) (err error) {
+	stage := "calibration-caller-preparation-failed"
+	defer func() { r.recordCalibration(stage, err) }()
 	if e := r.startCaller(ctx, operator.Rollout, 60, "1", r.clock.Elapsed()+calibrationPreparation, r.clock.Elapsed()+4*time.Minute); e != nil {
 		return e
 	}
+	stage = "calibration-caller-evidence-failed"
 	raw, e := r.active.Collect(ctx, r.wall(r.clock.Elapsed()+3*time.Minute))
 	if e != nil {
 		r.callerDiagnostics(ctx, r.active.Manifest.Identity)
 		return e
 	}
-	r.report.CPU.Calibration, e = Calibrate(raw)
+	stage = "calibration-evidence-rejected"
+	r.report.CPU.Calibration, e = Calibrate(ctx, r.judge.pinned, raw)
 	if e != nil || !r.report.CPU.Calibration.Passed {
 		r.callerDiagnostics(ctx, r.active.Manifest.Identity)
 	}
 	if !r.stop(ctx, r.clock.Elapsed()+time.Minute) {
+		stage = "caller-stop-unconfirmed"
 		return errors.New("caller-stop-unconfirmed")
 	}
 	return e

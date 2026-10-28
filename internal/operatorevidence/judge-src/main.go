@@ -168,28 +168,11 @@ func previewGeneratorGuards(r *loadgen.RunReport, receipts []receipt, samples []
 }
 
 func previewGeneratorDetails(r *loadgen.RunReport, receipts []receipt, samples []json.RawMessage, details *previewMediaSummary) bool {
-	dir, err := os.MkdirTemp("", "preview-generator-")
+	dir, err := collectGeneratorSamples(samples)
 	if err != nil {
 		return false
 	}
 	defer os.RemoveAll(dir)
-	job := filepath.Join(dir, "caller-1")
-	if os.MkdirAll(filepath.Join(job, "stats"), 0700) != nil {
-		return false
-	}
-	var manifest []map[string]any
-	for i, raw := range samples {
-		name := fmt.Sprintf("%05d.json", i)
-		sum := sha256.Sum256(raw)
-		if os.WriteFile(filepath.Join(job, "stats", name), raw, 0600) != nil {
-			return false
-		}
-		manifest = append(manifest, map[string]any{"name": name, "sha256": fmt.Sprintf("%x", sum), "bytes": len(raw)})
-	}
-	data, _ := json.Marshal(manifest)
-	if os.WriteFile(filepath.Join(job, "stats-manifest.json"), data, 0600) != nil {
-		return false
-	}
 	if len(r.Processes) != 1 {
 		return false
 	}
@@ -207,6 +190,39 @@ func previewGeneratorDetails(r *loadgen.RunReport, receipts []receipt, samples [
 		}
 	}
 	return len(budgets) == 1 && budgets[0].Outcome == "pass" && len(excluded) == 0
+}
+
+// Both entry points use the same collected sample boundary, including hashes.
+func collectGeneratorSamples(samples []json.RawMessage) (string, error) {
+	dir, err := os.MkdirTemp("", "preview-generator-")
+	if err != nil {
+		return "", err
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.RemoveAll(dir)
+		}
+	}()
+	job := filepath.Join(dir, "caller-1")
+	if os.MkdirAll(filepath.Join(job, "stats"), 0700) != nil {
+		return "", fmt.Errorf("generator stats directory unavailable")
+	}
+	var manifest []map[string]any
+	for i, raw := range samples {
+		name := fmt.Sprintf("%05d.json", i)
+		sum := sha256.Sum256(raw)
+		if os.WriteFile(filepath.Join(job, "stats", name), raw, 0600) != nil {
+			return "", fmt.Errorf("generator sample publication failed")
+		}
+		manifest = append(manifest, map[string]any{"name": name, "sha256": fmt.Sprintf("%x", sum), "bytes": len(raw)})
+	}
+	data, _ := json.Marshal(manifest)
+	if os.WriteFile(filepath.Join(job, "stats-manifest.json"), data, 0600) != nil {
+		return "", fmt.Errorf("generator manifest publication failed")
+	}
+	ok = true
+	return dir, nil
 }
 
 func parsePreviewMedia(input *previewMediaInput) (*loadgen.RunReport, previewMediaSummary, bool) {
@@ -481,6 +497,16 @@ func decodePool(data []byte) (input previewPoolInput, err error) {
 	return
 }
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "--calibration" {
+		data, err := os.ReadFile(os.Args[2])
+		if err != nil || len(data) > 64<<20 {
+			os.Exit(1)
+		}
+		if json.NewEncoder(os.Stdout).Encode(calibrateGenerator(string(data))) != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "preview media input required")
 		os.Exit(1)

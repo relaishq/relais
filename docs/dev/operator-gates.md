@@ -129,6 +129,24 @@ the driver and containers. Before gate faults, a separate 60-second caller
 measures send lateness, CPU pressure and decoder counters with the topology
 idle. The report keeps the peak p99, maximum lateness and time-weighted flagged
 intervals. This check does not replace the pinned judges' event-window guards.
+Rejections retain named `causes` and numeric `checks` (rule, observed value and
+limit) in the report and `calibration-rejected` log, including partial evidence.
+The percentage is computed on every exit from the accepted sample prefix.
+Calibration invokes the same hash-verified judge binary as the gates, built
+against the pinned release's product types. Its generator entry calls the same
+`applySaturation` path: collected sample checks, cadence and cumulative clock
+validation, `callerWindow`, `sampleSpan`, interval flags and saturation budget.
+There is no separate minimum packet/sample count, media duration or GOMAXPROCS
+rule in calibration. The launcher still enforces the declared two-CPU profile.
+The first and final intervals may be partial for cadence validation. All
+intervals, including the first, are flagged above 1.025 s. A final zero-packet
+row is allowed and still participates in timestamp and span validation. Flagged
+intervals are clipped to first-video-send through hangup and merged before the
+1% budget is computed; time before media and after hangup contributes nothing.
+Intervals above 85% CPU per GOMAXPROCS are flagged. The TypeScript runner retains every
+stats row; its early-abort window does not replace the final judge's policy.
+The A/B pinned-build tests compare calibration with the ordinary generator path
+for phased-first/empty-final evidence and rejected CPU/budget controls.
 
 The shared session runs rollout, control restart, A→B→A, then relay deploy.
 Rehearsal eligibility requires every covered procedure and the pooled media to
