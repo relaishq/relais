@@ -25,7 +25,7 @@ func canonicalFields(data json.RawMessage, typ reflect.Type) error {
 	case reflect.Struct:
 		var object map[string]json.RawMessage
 		if err := json.Unmarshal(data, &object); err != nil {
-			return err
+			return nil // Product decoding owns shape errors; keep checking aliases in siblings.
 		}
 		for _, field := range reflect.VisibleFields(typ) {
 			name := strings.Split(field.Tag.Get("json"), ",")[0]
@@ -58,7 +58,7 @@ func canonicalFields(data json.RawMessage, typ reflect.Type) error {
 		}
 		var values []json.RawMessage
 		if err := json.Unmarshal(data, &values); err != nil {
-			return err
+			return nil // Product decoding reports the shape error.
 		}
 		for _, value := range values {
 			if err := canonicalFields(value, typ.Elem()); err != nil {
@@ -68,7 +68,7 @@ func canonicalFields(data json.RawMessage, typ reflect.Type) error {
 	case reflect.Map:
 		var values map[string]json.RawMessage
 		if err := json.Unmarshal(data, &values); err != nil {
-			return err
+			return nil // Product decoding reports the shape error.
 		}
 		for _, value := range values {
 			if err := canonicalFields(value, typ.Elem()); err != nil {

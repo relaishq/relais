@@ -2,21 +2,13 @@
 package observe
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
 	"reflect"
 
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/relay"
 )
-
-// Contract describes presence only. Product structs own values and JSON types.
-// A trailing [] checks each element; ? permits null (product nullable slices).
-// A leading ~ permits omission but still rejects an explicit null.
-type Contract []string
 
 var controlContract = Contract{
 	"ready", "lost_count", "workers", "calls?", "takeovers?", "pool",
@@ -33,15 +25,16 @@ func Control(data []byte) (controlplane.Status, error) {
 	// Validate history presence against the original bytes, rather than marshaling
 	// a zero-filled struct and turning missing evidence into present fields.
 	if err == nil {
-		// Historical takeovers can omit start. Trials use the independently
-		// observed signal start and compare the exact pre-fault history.
-		history := append(Contract{}, moveContract...)
-		for i, field := range history {
-			if field == "start" {
-				history[i] = "~start"
+		var history struct {
+			Takeovers []json.RawMessage `json:"takeovers"`
+		}
+		if err = json.Unmarshal(data, &history); err == nil {
+			for _, raw := range history.Takeovers {
+				if err = requireEvidenceContract(raw, reflect.TypeFor[controlplane.MoveResult](), moveContract); err != nil {
+					break
+				}
 			}
 		}
-		err = paths(data, prefix("takeovers[]", history))
 	}
 	return v, err
 }
@@ -61,7 +54,7 @@ func MoveFailure(data []byte) (controlplane.MoveFailure, error) {
 func Worker(data []byte) (mediaworker.WorkerStatus, error) {
 	v, err := decode[mediaworker.WorkerStatus](data, workerContract)
 	if err == nil && v.AgentSession != nil {
-		err = paths(data, Contract{"agent_session.checkpoint_known", "agent_session.checkpoint_age_ms", "agent_session.snapshot_age_ms"})
+		err = Require(data, Contract{"agent_session.checkpoint_known", "agent_session.checkpoint_age_ms", "agent_session.snapshot_age_ms"})
 	}
 	return v, err
 }
@@ -80,32 +73,9 @@ func Draining(control controlplane.Status, name string) bool {
 func Relay(data []byte) (relay.RelayStatus, error) {
 	v, err := decode[relay.RelayStatus](data, relayContract)
 	if err == nil && v.Continuity != nil {
-		err = paths(data, Contract{"continuity.epoch"})
+		err = Require(data, Contract{"continuity.epoch"})
 	}
 	return v, err
-}
-
-// Decode bounds host JSON and rejects duplicates, including unknown nested
-// fields, and noncanonical aliases of typed fields. Unknown members are
-// otherwise allowed for forward product evolution.
-func Decode(data []byte, value any, contract Contract) error {
-	if len(data) > 256000 {
-		return fmt.Errorf("observation exceeds 256000 bytes")
-	}
-	d := json.NewDecoder(bytes.NewReader(data))
-	if err := unique(d); err != nil {
-		return err
-	}
-	if _, err := d.Token(); err != io.EOF {
-		return fmt.Errorf("expected one JSON value")
-	}
-	if err := paths(data, contract); err != nil {
-		return err
-	}
-	if err := canonicalFields(data, reflect.TypeOf(value)); err != nil {
-		return err
-	}
-	return json.Unmarshal(data, value)
 }
 
 func decode[T any](data []byte, contract Contract) (v T, err error) {
@@ -119,4 +89,35 @@ func prefix(parent string, fields Contract) Contract {
 		out[i] = parent + "." + field
 	}
 	return out
+}
+
+// HistoricalMove shares the typed exception ledger with complete evidence.
+// Its outer receipt still needs independently observed signal start/end bounds.
+func HistoricalMove(data []byte) (controlplane.MoveResult, error) {
+	v, err := decode[controlplane.MoveResult](data, nil)
+	if err == nil {
+		err = requireEvidenceContract(data, reflect.TypeFor[controlplane.MoveResult](), moveContract)
+	}
+	return v, err
+}
+
+// Partial observations retain P2's presence contract, with optionality derived
+// from the same typed ledger used by complete raw evidence.
+func requireEvidenceContract(data []byte, typ reflect.Type, contract Contract) error {
+	var object map[string]any
+	if err := json.Unmarshal(data, &object); err != nil {
+		return err
+	}
+	fields := append(Contract{}, contract...)
+	for _, member := range evidenceMembers(typ) {
+		if EvidenceOptional(typ, member.field, object) == "" {
+			continue
+		}
+		for i, name := range fields {
+			if name == member.name {
+				fields[i] = "~" + name
+			}
+		}
+	}
+	return Require(data, fields)
 }

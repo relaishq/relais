@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "corpusDigest": "af86fe02e6a4ce95ba62a6c5eca8153c0c770a10f1a93f678dbce885d58b42ee",
+  "corpusDigest": "4f3f783deb4700e7f860db0422c907f4f4d1e2cea87ed84e3a035b15126b6f8d",
   "fullSuite": "pending",
   "fixtures": [
     {
@@ -182,7 +182,13 @@
       "scenario": "a loser's unknown outcome that arrives late still stops later gates, and no candidate dials before it settles",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "0ad44702da6d6aa6.json",
@@ -206,7 +212,13 @@
       "scenario": "far and mismatched callers cannot authorize hosted faults",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "0c2168e767963841.json",
@@ -257,6 +269,24 @@
           "test": "operatorgates.TestTrialOracle",
           "scope": "complete function at recorded callback seam"
         }
+      ],
+      "composedProjections": [
+        {
+          "owner": "P3-P4",
+          "evidence": "replayed",
+          "test": "operatorgates.TestComposedTrialOracle",
+          "operation": "trials.trialWarmup",
+          "invocations": 1,
+          "scope": "procedure ordering and typed delivery; partial historical receipt results are quarantined as uncertain by the recursive contract"
+        },
+        {
+          "owner": "P3-P4",
+          "evidence": "replayed",
+          "test": "operatorgates.TestComposedTrialOracle",
+          "operation": "trials.workerTrials",
+          "invocations": 1,
+          "scope": "procedure ordering and typed delivery; partial historical receipt results are quarantined as uncertain by the recursive contract"
+        }
       ]
     },
     {
@@ -296,7 +326,17 @@
       "scenario": "unknown mailbox write is submitted once and never starts a caller",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        },
+        {
+          "test": "TestOracleBrokerCallbacks",
+          "scope": "broker prepare begin arm and effect ordering above frozen write wait callbacks; raw collect callback pending"
+        }
+      ]
     },
     {
       "fixture": "0fb1e024075ce33e.json",
@@ -314,7 +354,12 @@
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
       ],
-      "pendingReason": "Raw caller collection contains an exporter-produced unquoted account alias in numeric HungUpAt; the recorded reducer result reflects the original valid numeric input. Frozen bytes remain unchanged; collection/reducer replay remains pending."
+      "callerProjections": [
+        {
+          "test": "TestCorrectedFrozenCallerRows",
+          "scope": "Product-owned JSONL ingestion of corrected collection; no fixture-specific tolerance. Full collection/telemetry/judge verdict equivalence remains pending."
+        }
+      ]
     },
     {
       "fixture": "10e550386ddb932a.json",
@@ -532,7 +577,13 @@
       "scenario": "each round has its own window, so candidates that never become ready leave time for another round",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "1b789eba8077ce7e.json",
@@ -563,7 +614,13 @@
       "scenario": "loser cancellation finishes before the load survivor dials, even when slow",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "1c42beea532b6b7a.json",
@@ -733,7 +790,13 @@
       "scenario": "hosted transport is bounded by twenty minutes and minute 105",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "26fb2a5e55af5af3.json",
@@ -768,6 +831,12 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
+      ],
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
       ]
     },
     {
@@ -799,7 +868,13 @@
       "scenario": "the load boundary is dispatched once, after a usable survivor, with a valid deadline",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "2cbd2a20bcd4302e.json",
@@ -822,7 +897,13 @@
       "scenario": "a confirmed dispatch whose job never becomes ready is tracked at once and told to stop",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "2e97247d9d6ac097.json",
@@ -903,14 +984,30 @@
       "scenario": "hosted broker refuses missing evidence and foreign event acknowledgments",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        },
+        {
+          "test": "TestOracleBrokerCallbacks",
+          "scope": "broker prepare begin arm and effect ordering above frozen write wait callbacks; raw collect callback pending"
+        }
+      ]
     },
     {
       "fixture": "395e1e97f51b1b8f.json",
       "scenario": "measurement assembly stops after unknown mutation and refuses a boundary after cutoff",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "3be1e754eeb84bcb.json",
@@ -1021,7 +1118,13 @@
       "scenario": "an unknown registration write or a lost candidate POST is never retried and stays unknown",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "45a0e91b8791d6a9.json",
@@ -1035,14 +1138,26 @@
       "scenario": "no near candidate after every round ends the gate as caller-not-near and every caller is told to stop",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "4d28738c82f50343.json",
       "scenario": "an unknown arm write stops the campaign without retrying its mailbox mutation",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "4f5960e46254e25f.json",
@@ -1203,6 +1318,12 @@
           "test": "operatorgates.TestBoundaryOracle",
           "scope": "complete function at recorded callback seam"
         }
+      ],
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
       ]
     },
     {
@@ -1210,7 +1331,13 @@
       "scenario": "a hangup after a lost feed write still reaches the caller, which polls it outside the feed order",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "5b728930ffa05ed0.json",
@@ -1267,14 +1394,26 @@
       "scenario": "broker records the real first mutation attempt after registration",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "5fd9474e2a3f03cf.json",
       "scenario": "hosted process assembly carries the run-level caller cost hook",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "6080367b30554540.json",
@@ -1370,7 +1509,13 @@
       "scenario": "a candidate is prepared without dialing and a hung-up candidate is awaited no longer",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "6922b8a2b5390382.json",
@@ -1598,7 +1743,13 @@
       "scenario": "a conductor hangup stops a caller still waiting for transport and each dispatch owns its mailbox",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "8993b9d3ba5b4019.json",
@@ -1761,6 +1912,12 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
+      ],
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
       ]
     },
     {
@@ -1787,6 +1944,12 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
+      ],
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
       ]
     },
     {
@@ -1811,7 +1974,13 @@
       "scenario": "candidates preparing together send no caller write after another candidate's write is lost",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "9bb2343437b92066.json",
@@ -1940,14 +2109,26 @@
       "scenario": "hosted production assembly binds captured hosts runtime endpoints archive and caller identity",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "a497f644af81b6c8.json",
       "scenario": "a lost caller write latches the run before another candidate's next write",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "a4eb07d89b509b33.json",
@@ -1963,7 +2144,13 @@
       "scenario": "through the real queue, an unconfirmed hangup latches the run before any queued dispatch or cancel",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "a6cff16abde78813.json",
@@ -1994,7 +2181,13 @@
       "scenario": "one candidate dials per round: a near pre-dial candidate that registers far ends its round",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "aad2e15df5f8a2a6.json",
@@ -2050,14 +2243,26 @@
       "scenario": "a stopped unready caller is stopped once: release after a successful replacement neither re-sends nor turns unknown",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "af9e05d743da8cef.json",
       "scenario": "an unconfirmed hangup of a far caller stops all replacements as an unknown outcome",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "b00256084d7d0c6d.json",
@@ -2176,7 +2381,13 @@
       "scenario": "separate admission boundary uses exactly two registered calls on one hosted job",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "c7cc88e93dbdcc2c.json",
@@ -2442,7 +2653,13 @@
       "scenario": "candidates are dispatched together, the first near one is kept and every other is told to stop",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "ddb6e07cfe62aaa0.json",
@@ -2456,14 +2673,26 @@
       "scenario": "through the real queue, a lost caller write latches the run: no later dispatch, cancel or caller write",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "e1df50e6d93cadbd.json",
       "scenario": "every other candidate's run is cancelled and confirmed inside its round, so its runner minutes are bounded",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "e463de78f959513b.json",
@@ -2660,7 +2889,17 @@
       "scenario": "hosted broker joins setup ready probes and near registration before fault arming",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        },
+        {
+          "test": "TestOracleBrokerCallbacks",
+          "scope": "broker prepare begin arm and effect ordering above frozen write wait callbacks; raw collect callback pending"
+        }
+      ]
     },
     {
       "fixture": "f53440add6ea2ca9.json",
@@ -2726,7 +2965,13 @@
       "scenario": "load assembly runs survivor then separate boundary and excludes boundary from pool",
       "coreProjections": [],
       "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "pendingOwner": "P2-P6",
+      "callerProjections": [
+        {
+          "test": "TestOracleCallerManifests",
+          "scope": "manifest validation only"
+        }
+      ]
     },
     {
       "fixture": "f899cbac511af4a6.json",
@@ -2805,5 +3050,67 @@
       "Caller collection, telemetry reductions and pinned-judge assembly.",
       "Container and cross-process integration, private lifecycle projections and retired hosted-caller behavior."
     ]
+  },
+  "callerRuntime": {
+    "systemdLifecycle": "pending-linux",
+    "bridgeRawMailboxReplay": "pending-export-callbacks",
+    "hostedCandidateSearch": "removed; single-launch successor guards tested; full retirement accounting pending",
+    "requiredEvidenceContract": {
+      "owner": "P4",
+      "evidence": "tested",
+      "requiredInputFields": 411,
+      "inputStructTypes": 55,
+      "mutationsPerField": [
+        "delete",
+        "null"
+      ],
+      "additionalBoundaries": [
+        "stats manifest (3 fields)",
+        "summary (12 fields)"
+      ],
+      "tests": [
+        "TestEveryRequiredEvidenceMember",
+        "TestDurationBoundRequiredMembers",
+        "TestEveryRequiredManifestMember",
+        "TestEveryRequiredSummaryMember",
+        "TestEveryOptionalEvidenceMember",
+        "TestPooledVideoEvidenceCannotDisappear",
+        "TestCustomEvidenceDecoderInventory",
+        "TestTimeEvidenceScalarContract",
+        "TestUnreviewedCustomDecoderCannotBypassContract",
+        "TestCustomEvidenceKeysAndContainers",
+        "TestCustomEvidenceDecoderInventoryTraversal",
+        "TestOptionalMirroredDiagnostics",
+        "TestHistoricalTakeoverStartLedger"
+      ],
+      "scope": "Local product-type contract regressions; full oracle procedures and pinned rebuilds remain pending.",
+      "optionalLedgerFields": 81,
+      "optionalContexts": 132,
+      "optionalWitness": "Delete/null on decoder-error and passing controls; union contexts inspect type, Kind and kind. Historical takeover start uses independent signal timing.",
+      "customDecoderTypes": [
+        "time.Time"
+      ],
+      "customDecoderCoverage": "Map keys, pointer targets and named containers inspected before descent; synthetic key/container traversal and rejection regressions; time.Time has dedicated scalar tests and is excluded from the 55 struct-member types."
+    },
+    "composition": {
+      "evidence": "tested",
+      "tests": [
+        "operatorgates.TestComposedTrialOracle",
+        "operatorevidence/judge-src.TestComposedProcedureCallerPool"
+      ],
+      "scope": "Frozen trials cross the real broker, mailbox and bridge delivery at injected host/child API seams. Synthetic measurement collection crosses ReadPool and the unchanged judge; passing qualification and failures with missing clocks/reports are checked.",
+      "remaining": "Whole-session/native child, telemetry cost reductions, pinned rebuilds and provider/container boundaries remain pending."
+    }
+  },
+  "corpusRefresh": {
+    "archiveSHA256": "6e5d5919cd43aff2b89c44f9a2d43aa5608f9bbb25dc40639fae3862274b8c48",
+    "changedScenarios": 14,
+    "unchangedScenarios": 151,
+    "reason": "Exporter numeric HungUpAt repair only; existing expected verdicts unchanged.",
+    "collectionStreams": 22,
+    "collectionRows": 38,
+    "collectionRowsWithRestoredDuration": 20,
+    "intentionalMalformedCollectionRows": 1,
+    "test": "operatorevidence/judge-src.TestCorrectedFrozenCallerRows"
   }
 }

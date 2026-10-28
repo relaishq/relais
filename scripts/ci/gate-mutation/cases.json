@@ -1618,5 +1618,1125 @@
     "Test": "TestPreconditionDeltaRejectsUnrelatedUnknown",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "caller-write-unfenced",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "write",
+    "Old": "if b.Fence.Latched() {",
+    "New": "if false {",
+    "Test": "TestBrokerUnknownFencesAndStopCached",
+    "Marker": "MUTATION: caller-write-fence",
+    "GuardFingerprint": "5245ffaa52caa9b3d47a591b7e8313ae1970cf2a19c28dda4106bca93c5d16c4",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-write-latch",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "write",
+    "Old": "b.Fence.Halt(\"command-result-unknown\")",
+    "New": "// latch removed",
+    "Test": "TestBrokerUnknownFencesAndStopCached",
+    "Marker": "MUTATION: write-latch",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "hangup-lost-latched-late",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Hangup",
+    "Old": "f.Halt(\"command-result-unknown\")",
+    "New": "// latch removed",
+    "Test": "TestBrokerUnknownFencesAndStopCached",
+    "Marker": "MUTATION: hangup-latch",
+    "GuardFingerprint": "358afaa9b8d796a259e7675a716855a86ff1868d6159c2834b37f7ce2b663bb2",
+    "Receiver": "",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "own-hangup-412-unconfirmed",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Hangup",
+    "Old": "if state == Committed || state == Conflict {",
+    "New": "if state == Committed {",
+    "Test": "TestBrokerUnknownFencesAndStopCached",
+    "Marker": "MUTATION: own-hangup-conflict",
+    "GuardFingerprint": "86840935c25727ce2bd8b6cbc9a16b3bafe1cba481bd3ecb3df10f9fb98d8a75",
+    "Receiver": "",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "hangup-in-feed-order",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Hangup",
+    "Old": "root+\"/hangup.json\"",
+    "New": "root+\"/feed/00000.json\"",
+    "Test": "TestBrokerUnknownFencesAndStopCached",
+    "Marker": "MUTATION: stop-cache-or-key",
+    "GuardFingerprint": "af2fbda77e210a4f72a5b8ab820c9726a3df1d492d16079d32d02b1492aa194b",
+    "Receiver": "",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-stop-not-cached",
+    "File": "internal/operatorcaller/mailbox.go",
+    "Function": "hangup",
+    "Old": "if state, exists := m.hangups[key]; exists {",
+    "New": "if state, exists := m.hangups[key]; false && exists {",
+    "Test": "TestBrokerUnknownFencesAndStopCached",
+    "Marker": "MUTATION: stop-cache-or-key",
+    "GuardFingerprint": "2e523a18ee27352977a568f48cfd89bd18a7ef2c84d1ff3a8f8dcc2315e47a12",
+    "Receiver": "Mailbox",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "hung-up-caller-awaited",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "wait",
+    "Old": "if b.closed {",
+    "New": "if false {",
+    "Test": "TestBrokerRefusesWaitAfterHangup",
+    "Marker": "MUTATION: stopped-wait",
+    "GuardFingerprint": "f96044fcc868bfe6a10f4a0063d9133126b76547e62e3b14c683ac91ad95998f",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "barrier-ignores-hangup",
+    "File": "internal/operatorcaller/feed.go",
+    "Function": "AwaitBegin",
+    "Old": "if stopped {",
+    "New": "if false && stopped {",
+    "Test": "TestBeginAndHangupOrdering/stopped",
+    "Marker": "MUTATION: begin-hangup-barrier",
+    "GuardFingerprint": "545d1a60ec01a10e3c5a018c5ba3256c996746d15deebfbff63710b6f890baf4",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "transport-wait-ignores-hangup",
+    "File": "internal/operatorcaller/bridge.go",
+    "Function": "waitManifest",
+    "Old": "if stopped {",
+    "New": "if false && stopped {",
+    "Test": "TestBeginAndHangupOrdering",
+    "Marker": "MUTATION: transport-hangup",
+    "GuardFingerprint": "667302fa8c476430e0150c99ba1fad350a76276e44b94387623c648482021b28",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "media-summary-missing-as-zero",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "evidenceFields",
+    "Old": "if EvidenceOptional(typ, entry.field, object) != \"\" && raw == nil {",
+    "New": "if EvidenceOptional(typ, entry.field, object) != \"\" && raw == nil || typ.String() == \"operatorevidence.Summary\" && entry.field.Name == \"DecryptionFailures\" {",
+    "Test": "TestSummaryPresenceAndFailureDominance",
+    "Marker": "MUTATION: media-summary-presence",
+    "GuardFingerprint": "b450980da115d6d68c94dba1ce04370351c4a9e02409ab4562d7365d1cdd2a86",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "judge-invents-fault-time",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "time.UnixMilli(r.RegisteredAt), &p.FirstFaultAt)",
+    "New": "time.UnixMilli(r.RegisteredAt), nil)",
+    "Test": "TestPoolRegistrationAndBoundary",
+    "Marker": "MUTATION: pool-fault-time",
+    "GuardFingerprint": "4e947106b07cf9cf8a87c793e800e79811f28e555a2ce105655eac71dc818f2c",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "survivor-registers-before-boundary",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "PrepareCallers",
+    "Old": "for _, b := range []*Broker{survivor, boundary} {\n\t\tif b == nil {\n\t\t\tcontinue\n\t\t}\n\t\tr := l.Start",
+    "New": "for _, b := range []*Broker{survivor} {\n\t\tif b == nil {\n\t\t\tcontinue\n\t\t}\n\t\tr := l.Start",
+    "Test": "TestLoadBoundaryBeforeBeginAndAfterInactive",
+    "Marker": "MUTATION: boundary-before-begin",
+    "GuardFingerprint": "845dc897f6fb9c1615789db379d18b93ae008e0e3a58ecb7c31190e7406b295b",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-single-launch",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "Start",
+    "Old": "if cached, exists := l.starts[key]; exists {",
+    "New": "if cached, exists := l.starts[key]; false && exists {",
+    "Test": "TestSingleLaunchAndUnknownStop",
+    "Marker": "MUTATION: single-launch",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-inactive-proof",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "inactive",
+    "Old": "return x.Certainty == operator.Succeeded && x.ExitCode == 0 && fields[\"LoadState\"] == \"loaded\"",
+    "New": "return fields[\"LoadState\"] == \"loaded\"",
+    "Test": "TestInactiveRequiresExactObservation",
+    "Marker": "MUTATION: inactive-proof",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-unknown-stop-cleared",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "Stop",
+    "Old": "if result.Inactive && !uncertain {",
+    "New": "if result.Inactive && (uncertain || !uncertain) {",
+    "Test": "TestSingleLaunchAndUnknownStop",
+    "Marker": "MUTATION: stop-certainty-cache",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-generator-abort-order",
+    "File": "internal/operatorcaller/feed.go",
+    "Function": "RecordGeneratorSample",
+    "Old": "if stopping || err != nil {\n\t\tabort()\n\t}",
+    "New": "if false {\n\t\tabort()\n\t}",
+    "Test": "TestShutdownAndGeneratorAbortBeforeSave",
+    "Marker": "MUTATION: generator-abort-order",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-boundary-inactive-order",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "BeginBoundary",
+    "Old": "stop := l.Stop(ctx, survivor.Manifest.Identity, end)",
+    "New": "stop := StopResult{Inactive:true,Certainty:\"succeeded\"}",
+    "Test": "TestLoadBoundaryBeforeBeginAndAfterInactive",
+    "Marker": "MUTATION: boundary-after-inactive",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-boundary-unknown-stop",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "BeginBoundary",
+    "Old": "if !stop.Inactive || stop.Certainty != \"succeeded\" {",
+    "New": "if !stop.Inactive {",
+    "Test": "TestLoadBoundaryBeforeBeginAndAfterInactive",
+    "Marker": "MUTATION: boundary-unknown-stop",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-boundary-excluded",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": " || p.Plan.Phase != operatorcaller.Survivor",
+    "New": "",
+    "Test": "TestPoolRegistrationAndBoundary",
+    "Marker": "MUTATION: boundary-pooled",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "pool-mixes-public-sha",
+    "GuardFingerprint": "6703e62129c813e7222e7ac96b8c54735abeeb379622d2db371ed80fc9becb05",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "if sha != \"\" && sha != p.Plan.PublicSHA {",
+    "New": "if false && sha != \"\" && sha != p.Plan.PublicSHA {",
+    "Test": "TestPoolRequiresClocksInventoryAndOnePin",
+    "Marker": "MUTATION: pool-mixed-pin",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "pool-ignores-missing-clock-or-inventory",
+    "GuardFingerprint": "9f20f8ee767f08ecfb9c06a08a2455560f23faebd502b57480047369dd37c0af",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "if p.Clocks.At.IsZero() || !p.Inventory.Complete {",
+    "New": "if false {",
+    "Test": "TestPoolRequiresClocksInventoryAndOnePin",
+    "Marker": "MUTATION: pool-proof-missing",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "broker-hangup-always-confirmed",
+    "GuardFingerprint": "8c7d0a00c33ff7a6ce67bad2c476159a74efe1fb20f1189e9301c255f2a6fece",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Hangup",
+    "Old": "return Hangup(ctx, b.Mailbox, b.Manifest.Root(), b.Manifest.RunID, reason, b.Fence)",
+    "New": "Hangup(ctx, b.Mailbox, b.Manifest.Root(), b.Manifest.RunID, reason, b.Fence)\n return true",
+    "Test": "TestBrokerUnknownFencesAndStopCached",
+    "Marker": "MUTATION: stop-cache-or-key",
+    "Receiver": "Broker",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "named-run-not-tracked",
+    "GuardFingerprint": "43c9e3d9871225f0c77ea6d3e75b4c5c44a63b4535793cfd515dbf3e818d4a57",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "Start",
+    "Old": "l.starts[key] = StartResult{StartUnknown, operator.Unknown, i.Unit()}",
+    "New": "// identity reservation removed",
+    "Test": "TestPreallocatedLaunchAndSingleBoundary",
+    "Marker": "MUTATION: identity-before-submission",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-dispatched-before-health",
+    "GuardFingerprint": "7f28d1b6e12438f4161002773c49ec077de13ce6b7ecab3cdc47d2ae4b01a91d",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "PrepareCallers",
+    "Old": "if err := precondition(ctx); err != nil {\n\t\treturn err\n\t}",
+    "New": "// health check removed",
+    "Test": "TestLoadBoundaryBeforeBeginAndAfterInactive",
+    "Marker": "MUTATION: health-before-launch",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "far-precheck-dials",
+    "GuardFingerprint": "4897d42f8f0c6f1276f693b4ce3b5ea41d6bc576a04d7c7545e871663b43c9dc",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "PrepareCallers",
+    "Old": "if !near {",
+    "New": "if false && !near {",
+    "Test": "TestFarPrecheckNeverDials",
+    "Marker": "MUTATION: far-precheck-dial",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "second-candidate-dials",
+    "GuardFingerprint": "8ba6f49f41427e59d90d1cf6d49faa15c669f43c1cae3584c609a4db45bf9779",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "Start",
+    "Old": "if cached, exists := l.starts[key]; exists {",
+    "New": "if cached, exists := l.starts[key]; false && exists {",
+    "Test": "TestSingleLaunchAndUnknownStop",
+    "Marker": "MUTATION: single-launch",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "boundary-dispatched-per-candidate",
+    "GuardFingerprint": "5919ae66ffc47c861d9e0f1d4aded51335b97b60c569753617cbc46bec703b26",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "Start",
+    "Old": "if cached, exists := l.starts[key]; exists {",
+    "New": "if cached, exists := l.starts[key]; false && exists {",
+    "Test": "TestPreallocatedLaunchAndSingleBoundary",
+    "Marker": "MUTATION: single-boundary-launch",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "broker-retries-unknown-arm",
+    "GuardFingerprint": "52c237516ad6d241855c344ea78c941334d02cfa6c7dd1fba498bc43991cb433",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "write",
+    "Old": "b.Fence.Halt(\"command-result-unknown\")",
+    "New": "_ = createJSON(ctx,b.Mailbox,key,v)\n b.Fence.Halt(\"command-result-unknown\")",
+    "Test": "TestBrokerUnknownFencesAndStopCached",
+    "Marker": "MUTATION: broker-create-once",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "broker-retries-unknown-put",
+    "GuardFingerprint": "9edc06a735e3ab4ca24831210f278350a22eb2b27f53355a932f1424470d1dce",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "write",
+    "Old": "b.Fence.Halt(\"command-result-unknown\")",
+    "New": "_ = createJSON(ctx,b.Mailbox,key,v)\n b.Fence.Halt(\"command-result-unknown\")",
+    "Test": "TestBrokerUnknownFencesAndStopCached",
+    "Marker": "MUTATION: broker-create-once",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-judge-source-binding",
+    "File": "internal/operatorevidence/judge.go",
+    "Function": "Judge",
+    "Old": "if p.Commit == \"\" || pool.SourceCommit != p.Commit {",
+    "New": "if false {",
+    "Test": "TestPinnedJudgeSourceBinding",
+    "Marker": "MUTATION: pinned-judge-source",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "caller-shared-hangup-broker",
+    "File": "internal/operatorcaller/mailbox.go",
+    "Function": "hangup",
+    "Old": "if state, exists := m.hangups[key]; exists {",
+    "New": "if state, exists := m.hangups[key]; false && exists {",
+    "Test": "TestSharedHangupReservationAcrossAPIs/broker",
+    "Marker": "MUTATION: shared-hangup-once",
+    "Package": "./internal/operatorcaller",
+    "Receiver": "Mailbox"
+  },
+  {
+    "ID": "caller-shared-hangup-launcher",
+    "File": "internal/operatorcaller/mailbox.go",
+    "Function": "hangup",
+    "Old": "if state, exists := m.hangups[key]; exists {",
+    "New": "if state, exists := m.hangups[key]; false && exists {",
+    "Test": "TestSharedHangupReservationAcrossAPIs/launcher",
+    "Marker": "MUTATION: shared-hangup-once",
+    "Package": "./internal/operatorcaller",
+    "Receiver": "Mailbox"
+  },
+  {
+    "ID": "caller-hangup-reservation-before-send",
+    "File": "internal/operatorcaller/mailbox.go",
+    "Function": "hangup",
+    "Old": "m.hangups[key] = CreateUnknown",
+    "New": "// reservation removed",
+    "Test": "TestSharedHangupReservationAcrossAPIs/broker",
+    "Marker": "MUTATION: hangup-reserved-before-send",
+    "Package": "./internal/operatorcaller",
+    "Receiver": "Mailbox"
+  },
+  {
+    "ID": "caller-collection-missing-report",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "BeginBoundary",
+    "Old": "!survivor.collected",
+    "New": "!survivor.closed",
+    "Test": "TestBoundaryRequiresSuccessfulCollection/missing-report",
+    "Marker": "MUTATION: boundary-needs-collection",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-collection-mismatched-session",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "BeginBoundary",
+    "Old": "!survivor.collected",
+    "New": "!survivor.closed",
+    "Test": "TestBoundaryRequiresSuccessfulCollection/mismatched-session",
+    "Marker": "MUTATION: boundary-needs-collection",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-collection-hangup-only",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "BeginBoundary",
+    "Old": "!survivor.collected",
+    "New": "!survivor.closed",
+    "Test": "TestBoundaryRequiresSuccessfulCollection/hangup-only",
+    "Marker": "MUTATION: boundary-needs-collection",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-environment-allowlist",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "PublicEnvironment",
+    "Old": "case \"PATH\",",
+    "New": "case \"AZURE_CLIENT_SECRET\", \"GOOGLE_APPLICATION_CREDENTIALS\", \"OPENAI_API_KEY\", \"PATH\",",
+    "Test": "TestCredentialFreeEnvironment",
+    "Marker": "MUTATION: child-environment-allowlist",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-boundary-setup-before-dial",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "PrepareCallers",
+    "Old": "for _, b := range []*Broker{survivor, boundary} {\n\t\tif b == nil {\n\t\t\tcontinue\n\t\t}\n\t\trtts, err := b.Prepare",
+    "New": "for _, b := range []*Broker{survivor} {\n\t\tif b == nil {\n\t\t\tcontinue\n\t\t}\n\t\trtts, err := b.Prepare",
+    "Test": "TestBoundarySetupRequiredBeforeSurvivorBegin/missing",
+    "Marker": "MUTATION: boundary-setup-before-dial",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-boundary-setup-identity",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Prepare",
+    "Old": "if setup.RunID != b.Manifest.RunID || setup.PublicSHA != b.Manifest.PublicSHA || setup.CallerID != b.Manifest.CallerID || setup.Attempt != b.Manifest.Attempt || setup.Job != \"caller-1\" || len(setup.SignalRTTsNS) > 32 {",
+    "New": "if false {",
+    "Test": "TestBoundarySetupRequiredBeforeSurvivorBegin/mismatched",
+    "Marker": "MUTATION: boundary-setup-before-dial",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-phase-configuration",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "Start",
+    "Old": "config, exists := l.configs[i]",
+    "New": "config, exists := l.configs[i]\n config.ConfigPath = \"/opt/caller/survivor.json\"",
+    "Test": "TestLauncherBindsBothPhaseConfigurations",
+    "Marker": "MUTATION: phase-config-binding",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-configuration-copy",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "NewFixedLauncher",
+    "Old": "configs: map[Identity]LaunchConfig{}",
+    "New": "configs: configs",
+    "Test": "TestLauncherBindsBothPhaseConfigurations",
+    "Marker": "MUTATION: phase-config-binding",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "evidence-retains-failure-missing-events",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "pool.Missing, phaseMissing = true, true",
+    "New": "pool.Missing, phaseMissing = true, true\n continue",
+    "Test": "TestReadPoolRetainsIndependentFailure/events",
+    "Marker": "MUTATION: missing-preserves-failure",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-retains-failure-missing-receipts",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "pool.Missing, phaseMissing = true, true",
+    "New": "pool.Missing, phaseMissing = true, true\n continue",
+    "Test": "TestReadPoolRetainsIndependentFailure/receipts",
+    "Marker": "MUTATION: missing-preserves-failure",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-raw-json-ambiguity",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "DecodeEvidenceLimit",
+    "Old": "if err := validateJSON(data, value, nil, limit); err != nil {",
+    "New": "if err := validateJSON(data, value, nil, limit); err != nil && reflect.TypeOf(value).String() != \"*operatorevidence.RawMedia\" {",
+    "Test": "TestRawEvidenceRejectsAmbiguousJSON",
+    "Marker": "MUTATION: raw-json-ambiguity",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-jsonl-ambiguity",
+    "File": "internal/operatorevidence/judge-src/main.go",
+    "Function": "parsePreviewMediaFor",
+    "Old": "observe.DecodeEvidenceLimit(raw, &m, 64<<20)",
+    "New": "json.Unmarshal(raw, &m)",
+    "Test": "TestRawEvidenceRejectsAmbiguousJSON",
+    "Marker": "MUTATION: jsonl-ambiguity",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-json-canonical-members",
+    "File": "internal/operatorgates/observe/strict.go",
+    "Function": "validateJSON",
+    "Old": "if err := canonicalFields(data, reflect.TypeOf(value)); err != nil {",
+    "New": "if err := canonicalFields(data, reflect.TypeOf(value)); false && err != nil {",
+    "Test": "TestRawEvidenceRejectsAmbiguousJSON",
+    "Marker": "MUTATION: raw-json-ambiguity",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-pool-json-ambiguity",
+    "File": "internal/operatorevidence/judge-src/main.go",
+    "Function": "decodePool",
+    "Old": "observe.DecodeEvidenceLimit(data, &input, 64<<20)",
+    "New": "json.Unmarshal(data, &input)",
+    "Test": "TestRawEvidenceRejectsAmbiguousJSON",
+    "Marker": "MUTATION: pool-json-ambiguity",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-build-workspace-isolation",
+    "File": "internal/operatorevidence/judge.go",
+    "Function": "buildEnvironment",
+    "Old": "\"GOWORK=off\"",
+    "New": "\"GOWORK=hostile\"",
+    "Test": "TestPinnedBuildRejectsAmbientConfiguration",
+    "Marker": "MUTATION: isolated-build-environment",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "evidence-build-environment-allowlist",
+    "File": "internal/operatorevidence/judge.go",
+    "Function": "buildEnvironment",
+    "Old": "case \"PATH\",",
+    "New": "case \"OPENAI_API_KEY\", \"PATH\",",
+    "Test": "TestPinnedBuildRejectsAmbientConfiguration",
+    "Marker": "MUTATION: isolated-build-environment",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "evidence-build-compiler-version",
+    "File": "internal/operatorevidence/judge.go",
+    "Function": "verifyCompiler",
+    "Old": "strings.TrimSpace(string(out)) != pinnedGoVersion",
+    "New": "false && strings.TrimSpace(string(out)) != pinnedGoVersion",
+    "Test": "TestPinnedBuildChecksCompilerBeforeArchive",
+    "Marker": "MUTATION: pinned-compiler-version",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "caller-collection-session-identity",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Collect",
+    "Old": "b.Registration == nil || !reflect.DeepEqual(finished.Sessions, b.Registration.Sessions)",
+    "New": "b.Registration == nil || false && !reflect.DeepEqual(finished.Sessions, b.Registration.Sessions)",
+    "Test": "TestBoundaryRequiresSuccessfulCollection/mismatched-session",
+    "Marker": "MUTATION: collection-requires-final-evidence",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-collection-raw-report",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Collect",
+    "Old": "if !raw.Found || len(raw.Data) == 0 {",
+    "New": "if false {",
+    "Test": "TestBoundaryRequiresSuccessfulCollection/missing-report",
+    "Marker": "MUTATION: collection-requires-final-evidence",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "evidence-jsonl-retains-valid-failure",
+    "File": "internal/operatorevidence/judge-src/main.go",
+    "Function": "parsePreviewMediaFor",
+    "Old": "if err != nil {\n\t\t\tparseErr = err\n\t\t\tcontinue\n\t\t}\n\t\tif err = observe.Numbers(m); err == nil {",
+    "New": "if err != nil {\n\t\t\tparseErr = err\n\t\t\tbreak\n\t\t}\n\t\tif err = observe.Numbers(m); err == nil {",
+    "Test": "TestRawEvidenceRejectsAmbiguousJSON",
+    "Marker": "MUTATION: jsonl-valid-failure-after-invalid",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "caller-json-evidence-ambiguity",
+    "File": "internal/operatorcaller/protocol.go",
+    "Function": "decode",
+    "Old": "return observe.DecodeLimit(raw, value, nil, operator.MaxBlobBytes)",
+    "New": "if false { return observe.DecodeLimit(raw, value, nil, operator.MaxBlobBytes) }\n return json.Unmarshal(raw, value)",
+    "Test": "TestCallerEvidenceRejectsAmbiguousMembers",
+    "Marker": "MUTATION: caller-json-ambiguity",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "evidence-positive-counter-independent",
+    "File": "internal/operatorevidence/judge-src/numbers.go",
+    "Function": "callFailure",
+    "Old": "if d.AuthTag > 0 || d.Replay > 0 || d.Other > 0 || c.ICERestarts > 0 {",
+    "New": "if false && (d.AuthTag > 0 || d.Replay > 0 || d.Other > 0 || c.ICERestarts > 0) {",
+    "Test": "TestPassingPoolRejectsCounterCancellation",
+    "Marker": "MUTATION: positive-counter-independent",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-decryption-total-overflow",
+    "File": "internal/operatorevidence/judge-src/numbers.go",
+    "Function": "callNumbers",
+    "Old": "if !ok {",
+    "New": "if false && !ok {",
+    "Test": "TestPassingPoolRejectsCounterCancellation",
+    "Marker": "MUTATION: numeric-overflow-qualification",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-negative-measurement",
+    "File": "internal/operatorgates/observe/numbers.go",
+    "Function": "Numbers",
+    "Old": "n > MaxInteger || n < -MaxInteger || !signed && n < 0",
+    "New": "n > MaxInteger || n < -MaxInteger",
+    "Test": "TestPassingPoolRejectsInvalidMeasurements",
+    "Marker": "MUTATION: invalid-media-number",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-count-addition-overflow",
+    "File": "internal/operatorgates/observe/numbers.go",
+    "Function": "AddCount",
+    "Old": "a > MaxInteger || b > MaxInteger-a",
+    "New": "a > MaxInteger",
+    "Test": "TestEvidenceNumberBounds",
+    "Marker": "MUTATION: count-overflow-guard",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "evidence-signed-addition-overflow",
+    "File": "internal/operatorgates/observe/numbers.go",
+    "Function": "AddSigned",
+    "Old": "if b > 0 && a > math.MaxInt64-b || b < 0 && a < math.MinInt64-b {",
+    "New": "if false && (b > 0 && a > math.MaxInt64-b || b < 0 && a < math.MinInt64-b) {",
+    "Test": "TestEvidenceNumberBounds",
+    "Marker": "MUTATION: signed-overflow-guard",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "evidence-pacing-denominator-overflow",
+    "File": "internal/operatorevidence/judge-src/sample.go",
+    "Function": "readSample",
+    "Old": "if _, ok := observe.AddCount(int64(s.IntervalPacing.SentFrames), int64(s.IntervalPacing.SkippedFrames)); !ok {",
+    "New": "if _, ok := observe.AddCount(int64(s.IntervalPacing.SentFrames), int64(s.IntervalPacing.SkippedFrames)); false && !ok {",
+    "Test": "TestGeneratorNumbersAndWindowArithmetic",
+    "Marker": "MUTATION: generator-numeric-guard",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-exclusion-window-overflow",
+    "File": "internal/operatorevidence/judge-src/exclusions.go",
+    "Function": "callerEventWindow",
+    "Old": "if !fok || !aok || !vok {",
+    "New": "if false && (!fok || !aok || !vok) {",
+    "Test": "TestGeneratorNumbersAndWindowArithmetic",
+    "Marker": "MUTATION: exclusion-window-overflow",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "caller-generator-numeric-validation",
+    "File": "internal/operatorcaller/feed.go",
+    "Function": "Add",
+    "Old": "if invalid {",
+    "New": "if false && invalid {",
+    "Test": "TestCallerNumericBoundaries",
+    "Marker": "MUTATION: caller-invalid-numbers-abort",
+    "Package": "./internal/operatorcaller",
+    "Receiver": "SaturationWindow"
+  },
+  {
+    "ID": "evidence-summary-positive-failure",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "DecodeSummary",
+    "Old": "if knownFailure {",
+    "New": "if false && knownFailure {",
+    "Test": "TestSummaryFailureSurvivesInvalidCounters",
+    "Marker": "MUTATION: summary-positive-failure",
+    "Package": "./internal/operatorevidence"
+  },
+  {
+    "ID": "evidence-gap-failure-independent",
+    "File": "internal/operatorevidence/judge-src/numbers.go",
+    "Function": "trialsFailed",
+    "Old": "return outcome == \"fail\"",
+    "New": "return false && outcome == \"fail\"",
+    "Test": "TestGapFailureSurvivesInvalidDiagnostics",
+    "Marker": "MUTATION: gap-failure-independent",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-generator-request-overflow",
+    "File": "internal/operatorevidence/judge-src/main.go",
+    "Function": "parsePreviewMediaFor",
+    "Old": "if !dok || !rok {",
+    "New": "if false && (!dok || !rok) {",
+    "Test": "TestGeneratorRequestTotalOverflow",
+    "Marker": "MUTATION: generator-total-overflow",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-numeric-decode-keeps-loss",
+    "File": "internal/operatorevidence/pool.go",
+    "Function": "ReadPool",
+    "Old": "if !observe.IsIncompleteEvidence(err) {",
+    "New": "if true {",
+    "Test": "TestPoolNumericDecodeKeepsLoss",
+    "Marker": "MUTATION: numeric-decode-keeps-loss",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-baseline-multiset",
+    "File": "internal/operatorevidence/judge-src/collections.go",
+    "Function": "baselinePopulation",
+    "Old": "if counts[n] == 0 {",
+    "New": "if false && counts[n] == 0 {",
+    "Test": "TestBaselinePopulationCompleteness/non-containing",
+    "Marker": "MUTATION: baseline-population-complete",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-gap-track-inventory",
+    "File": "internal/operatorevidence/judge-src/collections.go",
+    "Function": "trialCollections",
+    "Old": "len(d.Gaps) != len(tracks)",
+    "New": "false",
+    "Test": "TestCallerCollectionCompleteness/gap-kind",
+    "Marker": "MUTATION: caller-collections-complete",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-armed-event-inventory",
+    "File": "internal/operatorevidence/judge-src/collections.go",
+    "Function": "trialCollections",
+    "Old": "if len(moves) != len(armed) {",
+    "New": "if false && len(moves) != len(armed) {",
+    "Test": "TestCallerCollectionCompleteness/armed-extra",
+    "Marker": "MUTATION: caller-collections-complete",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-receipt-full-identity",
+    "File": "internal/operatorevidence/judge-src/collections.go",
+    "Function": "phaseCollections",
+    "Old": "v, ok := receipts[*m.Identity]",
+    "New": "var v receipt; ok:=false; for id,value:=range receipts { if id.RunID==m.Identity.RunID && id.OperationID==m.Identity.OperationID && id.SessionID==m.Identity.SessionID {v,ok=value,true} }",
+    "Test": "TestPhaseCollectionJoins/receipt-epoch",
+    "Marker": "MUTATION: phase-collection-join",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-event-member-count",
+    "File": "internal/operatorevidence/judge-src/collections.go",
+    "Function": "reportCollections",
+    "Old": "if e.Affected <= 0 || e.Affected != len(e.Sessions) || len(e.Sessions) != len(e.Identities) {",
+    "New": "if false && (e.Affected <= 0 || e.Affected != len(e.Sessions) || len(e.Sessions) != len(e.Identities)) {",
+    "Test": "TestEventMembershipCounts",
+    "Marker": "MUTATION: event-membership-count",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-verdict-member-presence",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "evidenceFields",
+    "Old": "if value == nil {",
+    "New": "if typ.String() == \"callharness.MetricVerdict\" { return nil }; if value == nil {",
+    "Test": "TestCollectionPresenceBeforeJudgment",
+    "Marker": "MUTATION: verdict-presence",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-generator-source-membership",
+    "File": "internal/operatorevidence/judge-src/exclusions.go",
+    "Function": "applySaturation",
+    "Old": "if !sameTime || !reflect.DeepEqual(collected, original) {",
+    "New": "if false && (!sameTime || !reflect.DeepEqual(collected, original)) {",
+    "Test": "TestGeneratorCollectionsMatchSource",
+    "Marker": "MUTATION: generator-source-collections",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-optional-baseline-window",
+    "File": "internal/operatorevidence/judge-src/exclusions.go",
+    "Function": "callerEventWindow",
+    "Old": "if c.StartedAt.Before(first) {",
+    "New": "if false && c.StartedAt.Before(first) {",
+    "Test": "TestOptionalBaselinesCannotShrinkWindow",
+    "Marker": "MUTATION: missing-baseline-window",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-incomplete-failure-population",
+    "File": "internal/operatorevidence/judge-src/collections.go",
+    "Function": "gapCollections",
+    "Old": "|| !baselinePopulation(g)",
+    "New": "",
+    "Test": "TestIncompletePopulationCannotInventFailure",
+    "Marker": "MUTATION: incomplete-population-not-failure",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-classification-population-count",
+    "File": "internal/operatorevidence/judge-src/collections.go",
+    "Function": "callCollections",
+    "Old": "d.Evaluations < len(d.FirstBaselines)",
+    "New": "false",
+    "Test": "TestCallerCollectionCompleteness/classification-count",
+    "Marker": "MUTATION: caller-collections-complete",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-receipt-required-members",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "evidenceFields",
+    "Old": "if EvidenceOptional(typ, entry.field, object) != \"\" && raw == nil {",
+    "New": "if EvidenceOptional(typ, entry.field, object) != \"\" && raw == nil || (typ.String() == \"operatorcaller.Receipt\" || typ.String() == \"main.receipt\") && entry.field.Name == \"Uncertain\" {",
+    "Test": "TestRequiredReceiptMembers",
+    "Marker": "MUTATION: receipt-member-presence",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-receipt-result-membership",
+    "File": "internal/operatorevidence/judge-src/collections.go",
+    "Function": "phaseCollections",
+    "Old": "|| v.Result.ID != v.Identity.SessionID",
+    "New": "",
+    "Test": "TestPhaseCollectionJoins/receipt-session-result",
+    "Marker": "MUTATION: phase-collection-join",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-takeover-recovery-bound",
+    "File": "internal/operatorevidence/judge-src/collections.go",
+    "Function": "callCollections",
+    "Old": "m.Kind == \"takeover\" && d.KillToLive == nil",
+    "New": "false",
+    "Test": "TestTakeoverBoundCollection",
+    "Marker": "MUTATION: takeover-bound-presence",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-recursive-duration-contract",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "evidenceFields",
+    "Old": "if value == nil {",
+    "New": "if typ.String() == \"callharness.DurationInterval\" || typ.String() == \"*callharness.DurationInterval\" { return nil }; if value == nil {",
+    "Test": "TestDurationBoundRequiredMembers/resume{}",
+    "Marker": "MUTATION: required-duration-members",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-recursive-required-fields",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "evidenceFields",
+    "Old": "if value == nil {",
+    "New": "return nil\n if value == nil {",
+    "Test": "TestEveryRequiredEvidenceMember/callharness.Report.Offer/delete",
+    "Marker": "MUTATION: recursive-required-field",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-required-valid-siblings",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "DecodeEvidenceLimit",
+    "Old": "if decodeErr != nil {",
+    "New": "if false && decodeErr != nil {",
+    "Test": "TestRequiredContractRetainsValidSiblings",
+    "Marker": "MUTATION: required-valid-sibling",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "evidence-video-object-required",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/observe/evidence_optional.go",
+        "Function": "var:evidenceConditionalOptional",
+        "Old": "return object[\"Kind\"] == \"audio\"",
+        "New": "return true"
+      },
+      {
+        "File": "internal/operatorevidence/judge-src/collections.go",
+        "Function": "callCollections",
+        "Old": "if t.Kind == \"video\" && t.Video == nil {",
+        "New": "if false && t.Kind == \"video\" && t.Video == nil {"
+      }
+    ],
+    "Test": "TestPooledVideoEvidenceCannotDisappear/delete",
+    "Marker": "MUTATION: video-evidence-required",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-optional-parent-failure",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/observe/evidence_optional.go",
+        "Function": "var:evidenceConditionalOptional",
+        "Old": "return object[\"Kind\"] == \"audio\"",
+        "New": "return true"
+      },
+      {
+        "File": "internal/operatorevidence/judge-src/collections.go",
+        "Function": "callCollections",
+        "Old": "if t.Kind == \"video\" && t.Video == nil {",
+        "New": "if false && t.Kind == \"video\" && t.Video == nil {"
+      }
+    ],
+    "Test": "TestEveryOptionalEvidenceMember/callharness.TrackReport.Video/video/delete",
+    "Marker": "MUTATION: optional-evidence-cannot-restore-pass",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-custom-decoder-contract",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "evidenceDecoderType",
+    "Old": "return true, fmt.Errorf(\"unreviewed evidence decoder %s\", typ)",
+    "New": "return false, nil",
+    "Test": "TestUnreviewedCustomDecoderCannotBypassContract",
+    "Marker": "MUTATION: unreviewed-custom-decoder",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "evidence-custom-map-key-contract",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "evidenceFields",
+    "Old": "if err := evidenceFields(key, typ.Key(), path+\"[key]\"); err != nil {",
+    "New": "if err := func() error { _ = key; return nil }(); err != nil {",
+    "Test": "TestCustomEvidenceKeysAndContainers/key",
+    "Marker": "MUTATION: custom-evidence-key-container",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "evidence-custom-failure-map-key-contract",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "EvidenceTypeFields",
+    "Old": "if err := evidenceFields(key, typ.Key(), \"[key]\"); err != nil {",
+    "New": "if err := func() error { _ = key; return nil }(); err != nil {",
+    "Test": "TestCustomEvidenceKeysAndContainers/key",
+    "Marker": "MUTATION: custom-evidence-failure-key-container",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "evidence-custom-container-contract",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "evidenceDecoderType",
+    "Old": "if custom && typ != reflect.TypeFor[time.Time]() {",
+    "New": "if typ.Kind() == reflect.Slice { return false, nil }; if custom && typ != reflect.TypeFor[time.Time]() {",
+    "Test": "TestCustomEvidenceKeysAndContainers/slice",
+    "Marker": "MUTATION: custom-evidence-key-container",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "evidence-custom-decoder-inventory-key",
+    "File": "internal/operatorevidence/judge-src/optional_test.go",
+    "Function": "customEvidenceDecoders",
+    "Old": "walk(typ.Key())",
+    "New": "// map keys skipped",
+    "Test": "TestCustomEvidenceDecoderInventoryTraversal",
+    "Marker": "MUTATION: custom-decoder-inventory-traversal",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-custom-decoder-inventory-container",
+    "File": "internal/operatorevidence/judge-src/optional_test.go",
+    "Function": "customEvidenceDecoders",
+    "Old": "custom[typ] = true",
+    "New": "if typ.Kind() != reflect.Slice { custom[typ] = true }",
+    "Test": "TestCustomEvidenceDecoderInventoryTraversal",
+    "Marker": "MUTATION: custom-decoder-inventory-traversal",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-required-context-incomplete",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "evidenceFields",
+    "Old": "if EvidenceOptional(typ, entry.field, object) != \"\" && raw == nil {",
+    "New": "if (EvidenceOptional(typ, entry.field, object) != \"\" || typ.String() == \"callharness.TrackReport\" && entry.field.Name == \"Video\") && raw == nil {",
+    "Test": "TestEveryOptionalEvidenceMember/callharness.TrackReport.Video/video/delete",
+    "Marker": "MUTATION: optional-evidence-cannot-restore-pass",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-historical-start-ledger",
+    "File": "internal/operatorgates/observe/evidence_optional.go",
+    "Function": "var:evidenceConditionalOptional",
+    "Old": "return object[\"kind\"] == \"takeover\"",
+    "New": "return false && object[\"kind\"] == \"takeover\"",
+    "Test": "TestHistoricalTakeoverStartLedger",
+    "Marker": "MUTATION: historical-start-ledger",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "caller-composed-receipt-delivery",
+    "File": "internal/operatorgates/caller.go",
+    "Function": "Feed",
+    "Receiver": "CallerRuntime",
+    "Old": "Receipts: typed",
+    "New": "Receipts: nil",
+    "Test": "TestComposedTrialOracle/trials.workerTrials",
+    "Marker": "MUTATION: composed-caller-receipts",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "evidence-composed-collection-failure",
+    "File": "internal/operatorgates/caller.go",
+    "Function": "startCollection",
+    "Receiver": "CallerRuntime",
+    "Old": "r.Pool.Add(phase, err != nil || r.incomplete)",
+    "New": "if err == nil { r.Pool.Add(phase, false) }",
+    "Test": "TestComposedProcedureCallerPool/missing-report",
+    "Marker": "MUTATION: composed-procedure-pool",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-composed-collection-once",
+    "File": "internal/operatorgates/caller.go",
+    "Function": "startCollection",
+    "Receiver": "CallerRuntime",
+    "Old": "r.once.Do(func() {",
+    "New": "r.once = sync.Once{}; r.done = make(chan struct{}); r.once.Do(func() {",
+    "Test": "TestComposedProcedureCallerPool/complete",
+    "Marker": "MUTATION: composed-collection-error",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-composed-uncertain-receipt",
+    "File": "internal/operatorgates/caller.go",
+    "Function": "Feed",
+    "Receiver": "CallerRuntime",
+    "Old": "if observe.IsIncompleteEvidence(err) {",
+    "New": "if false && observe.IsIncompleteEvidence(err) {",
+    "Test": "TestComposedProcedureCallerPool/uncertain-receipt",
+    "Marker": "MUTATION: composed-caller-uncertain",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "caller-procedure-publication-deadline",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Feed",
+    "Receiver": "Broker",
+    "Old": "if ctx.Err() != nil || !b.Clock.Now().Before(minTime(end, time.UnixMilli(b.Manifest.Deadline))) {",
+    "New": "if false {",
+    "Test": "TestFeedHonorsProcedureDeadline",
+    "Marker": "MUTATION: caller-procedure-deadline",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "evidence-composed-original-receipt-contract",
+    "File": "internal/operatorgates/caller.go",
+    "Function": "Feed",
+    "Receiver": "CallerRuntime",
+    "Old": "r.incomplete = true\n\t\t\treceipt.Uncertain = true",
+    "New": "r.incomplete = false\n\t\t\treceipt.Uncertain = false",
+    "Test": "TestComposedProcedureCallerPool/receipt-checkpoint-delete",
+    "Marker": "MUTATION: composed-receipt-incomplete",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-composed-unsuccessful-report",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Collect",
+    "Receiver": "Broker",
+    "Old": "raw, err := b.Mailbox.Read(retained, b.Manifest.Job()+\"/caller.jsonl\")",
+    "New": "if completionErr != nil { return \"\", completionErr }; raw, err := b.Mailbox.Read(retained, b.Manifest.Job()+\"/caller.jsonl\")",
+    "Test": "TestComposedProcedureCallerPool/stopped",
+    "Marker": "MUTATION: composed-procedure-pool",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-composed-collection-join",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "if !received {\n\t\t\tvar ok bool\n\t\t\tcollection, ok = <-collecting\n\t\t\tif !ok {\n\t\t\t\tcollection.Err = context.Canceled\n\t\t\t}\n\t\t}",
+    "New": "if !received {\n\t\t\tcollection = MeasurementCollection{}\n\t\t}",
+    "Test": "TestComposedProcedureCallerPool/deadline",
+    "Marker": "MUTATION: composed-procedure-pool",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "caller-retention-report-context",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Collect",
+    "Receiver": "Broker",
+    "Old": "retained, cancel := EvidenceRetentionContext(ctx)",
+    "New": "retained, cancel := context.WithCancel(ctx)",
+    "Test": "TestCancelledCollectionRetainsPublishedDirectoryReport",
+    "Marker": "MUTATION: cancelled-directory-retention",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "evidence-retention-judge-context",
+    "File": "internal/operatorgates/caller.go",
+    "Function": "startCollection",
+    "Receiver": "CallerRuntime",
+    "Old": "retained, cancel := operatorcaller.EvidenceRetentionContext(ctx)",
+    "New": "retained, cancel := context.WithCancel(ctx)",
+    "Test": "TestComposedProcedureCallerPool/cancel",
+    "Marker": "MUTATION: composed-procedure-pool",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-retention-unbounded",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "EvidenceRetentionContext",
+    "Old": "return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)",
+    "New": "return context.WithCancel(context.WithoutCancel(ctx))",
+    "Test": "TestComposedProcedureCallerPool/cancel",
+    "Marker": "MUTATION: composed-procedure-pool",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-required-root-ancestor",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "evidenceFields",
+    "Old": "for _, entry := range evidenceMembers(typ) {",
+    "New": "for _, entry := range evidenceMembers(typ) { if typ.String() == \"loadgen.Message\" && entry.field.Name == \"Call\" { continue }",
+    "Test": "TestEveryRequiredEvidenceMember/callharness.Report.Offer/delete",
+    "Marker": "MUTATION: recursive-required-field",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-optional-required-root-ancestor",
+    "File": "internal/operatorgates/observe/required.go",
+    "Function": "evidenceFields",
+    "Old": "for _, entry := range evidenceMembers(typ) {",
+    "New": "for _, entry := range evidenceMembers(typ) { if typ.String() == \"callharness.Report\" && entry.field.Name == \"Tracks\" { continue }",
+    "Test": "TestEveryOptionalEvidenceMember/callharness.TrackReport.Video/video/delete",
+    "Marker": "MUTATION: optional-evidence-cannot-restore-pass",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "caller-retention-original-deadline",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "Collect",
+    "Receiver": "Broker",
+    "Old": "if !b.Clock.Now().Before(minTime(end, time.UnixMilli(b.Manifest.Deadline))) {",
+    "New": "if false {",
+    "Test": "TestRetentionCannotExtendCollectionDeadline",
+    "Marker": "MUTATION: retention-collection-deadline",
+    "Package": "./internal/operatorcaller"
   }
 ]

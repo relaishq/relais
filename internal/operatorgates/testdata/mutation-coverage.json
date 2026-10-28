@@ -115,7 +115,28 @@
     "process-skips-fresh-inventory",
     "release-drops-relay-window-projection",
     "mutating-failure-reported",
-    "measure-forgets-known-ena"
+    "measure-forgets-known-ena",
+    "caller-write-unfenced",
+    "hangup-lost-latched-late",
+    "own-hangup-412-unconfirmed",
+    "hangup-in-feed-order",
+    "caller-stop-not-cached",
+    "hung-up-caller-awaited",
+    "barrier-ignores-hangup",
+    "transport-wait-ignores-hangup",
+    "media-summary-missing-as-zero",
+    "judge-invents-fault-time",
+    "survivor-registers-before-boundary",
+    "pool-mixes-public-sha",
+    "pool-ignores-missing-clock-or-inventory",
+    "broker-hangup-always-confirmed",
+    "named-run-not-tracked",
+    "caller-dispatched-before-health",
+    "far-precheck-dials",
+    "second-candidate-dials",
+    "boundary-dispatched-per-candidate",
+    "broker-retries-unknown-arm",
+    "broker-retries-unknown-put"
   ],
   "pending": [
     {
@@ -809,12 +830,6 @@
       "guardFingerprint": "be81dc51b44d7499212183168a7af48ef4c733a88c27d515dbf9d4b45e0faf80"
     },
     {
-      "id": "pool-mixes-public-sha",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "6703e62129c813e7222e7ac96b8c54735abeeb379622d2db371ed80fc9becb05"
-    },
-    {
       "id": "cost-invents-incomplete-total",
       "owner": "private",
       "evidence": "pending",
@@ -983,18 +998,6 @@
       "guardFingerprint": "c92814434dc22dd61dd338e39fcd0b40bd957bf94e8176ba067d6b0ca2125fd8"
     },
     {
-      "id": "pool-ignores-missing-clock-or-inventory",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "9f20f8ee767f08ecfb9c06a08a2455560f23faebd502b57480047369dd37c0af"
-    },
-    {
-      "id": "broker-retries-unknown-arm",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "52c237516ad6d241855c344ea78c941334d02cfa6c7dd1fba498bc43991cb433"
-    },
-    {
       "id": "pending-without-final-pool-passes",
       "owner": "public-go",
       "evidence": "pending",
@@ -1005,12 +1008,6 @@
       "owner": "public-go",
       "evidence": "pending",
       "guardFingerprint": "cd9bc838db3eed9e7d123dcfe72ea853b8b4e1eefb9dd9e517795e734c9fa040"
-    },
-    {
-      "id": "judge-invents-fault-time",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "4e947106b07cf9cf8a87c793e800e79811f28e555a2ce105655eac71dc818f2c"
     },
     {
       "id": "ssm-no-read-retries",
@@ -1025,22 +1022,10 @@
       "guardFingerprint": "71c3613a6cf8c77c17444e57a940ffd60fd85fbfd8c1d66f33a86b58108c2c04"
     },
     {
-      "id": "broker-retries-unknown-put",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "9edc06a735e3ab4ca24831210f278350a22eb2b27f53355a932f1424470d1dce"
-    },
-    {
       "id": "ssm-resends-unknown",
       "owner": "private",
       "evidence": "pending",
       "guardFingerprint": "efbe363c41275b90a815866f317b30822ebb7cc3c8cad54a2f06d67be51f597e"
-    },
-    {
-      "id": "media-summary-missing-as-zero",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "b450980da115d6d68c94dba1ce04370351c4a9e02409ab4562d7365d1cdd2a86"
     },
     {
       "id": "cleanup-drops-shape-evidence",
@@ -1607,12 +1592,6 @@
       "guardFingerprint": "496df0ba93607673dfb22629c210629fc0e0e9c5379d41660dad2c664cc62c34"
     },
     {
-      "id": "caller-dispatched-before-health",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "7f28d1b6e12438f4161002773c49ec077de13ce6b7ecab3cdc47d2ae4b01a91d"
-    },
-    {
       "id": "dispatch-attempt-reuses-post",
       "owner": "removed",
       "evidence": "pending",
@@ -1679,30 +1658,6 @@
       "guardFingerprint": "537d5b19f42bc933052515a836bcd0b674266809bf44e6e155a193ad4f4453ec"
     },
     {
-      "id": "transport-wait-ignores-hangup",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "667302fa8c476430e0150c99ba1fad350a76276e44b94387623c648482021b28"
-    },
-    {
-      "id": "hangup-in-feed-order",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "af2fbda77e210a4f72a5b8ab820c9726a3df1d492d16079d32d02b1492aa194b"
-    },
-    {
-      "id": "barrier-ignores-hangup",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "545d1a60ec01a10e3c5a018c5ba3256c996746d15deebfbff63710b6f890baf4"
-    },
-    {
-      "id": "named-run-not-tracked",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "43c9e3d9871225f0c77ea6d3e75b4c5c44a63b4535793cfd515dbf3e818d4a57"
-    },
-    {
       "id": "dispatcher-names-run-late",
       "owner": "public-go",
       "evidence": "pending",
@@ -1713,12 +1668,6 @@
       "owner": "private",
       "evidence": "pending",
       "guardFingerprint": "7438c8bb69b37d5fa4d4a24b4552b019a0e2aa1991552df89eb8b2984727c3f9"
-    },
-    {
-      "id": "broker-hangup-always-confirmed",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "8c7d0a00c33ff7a6ce67bad2c476159a74efe1fb20f1189e9301c255f2a6fece"
     },
     {
       "id": "skip-unconfirmed-stop-continues",
@@ -1737,18 +1686,6 @@
       "owner": "private",
       "evidence": "pending",
       "guardFingerprint": "5bb35958af9fe4afd16f0bf3ad6025dea6e358c81013b365e7fee8b76aedbb39"
-    },
-    {
-      "id": "caller-stop-not-cached",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "2e523a18ee27352977a568f48cfd89bd18a7ef2c84d1ff3a8f8dcc2315e47a12"
-    },
-    {
-      "id": "own-hangup-412-unconfirmed",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "86840935c25727ce2bd8b6cbc9a16b3bafe1cba481bd3ecb3df10f9fb98d8a75"
     },
     {
       "id": "deletion-leaves-no-verify-time",
@@ -1787,12 +1724,6 @@
       "guardFingerprint": "1a694c7ad3a4e9c8a0e7ba8cb433756dc9841dee15093b419f7c85d9342c516e"
     },
     {
-      "id": "hung-up-caller-awaited",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "f96044fcc868bfe6a10f4a0063d9133126b76547e62e3b14c683ac91ad95998f"
-    },
-    {
       "id": "cancel-without-identity",
       "owner": "public-go",
       "evidence": "pending",
@@ -1827,18 +1758,6 @@
       "owner": "public-go",
       "evidence": "pending",
       "guardFingerprint": "3689cb168d9f91703bd37fb68c07d71067e48b25f0bc228bf5e1b5ba36b768bf"
-    },
-    {
-      "id": "boundary-dispatched-per-candidate",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "5919ae66ffc47c861d9e0f1d4aded51335b97b60c569753617cbc46bec703b26"
-    },
-    {
-      "id": "survivor-registers-before-boundary",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "845dc897f6fb9c1615789db379d18b93ae008e0e3a58ecb7c31190e7406b295b"
     },
     {
       "id": "rehearsal-pass-accepts-inconclusive",
@@ -1877,24 +1796,6 @@
       "guardFingerprint": "afb86eab0c84a1e7b678dac14df1680e23948b7f22cb6d57aad668a631d80a60"
     },
     {
-      "id": "far-precheck-dials",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "4897d42f8f0c6f1276f693b4ce3b5ea41d6bc576a04d7c7545e871663b43c9dc"
-    },
-    {
-      "id": "caller-write-unfenced",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "5245ffaa52caa9b3d47a591b7e8313ae1970cf2a19c28dda4106bca93c5d16c4"
-    },
-    {
-      "id": "second-candidate-dials",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "8ba6f49f41427e59d90d1cf6d49faa15c669f43c1cae3584c609a4db45bf9779"
-    },
-    {
       "id": "losers-left-running",
       "owner": "public-go",
       "evidence": "pending",
@@ -1911,12 +1812,6 @@
       "owner": "public-go",
       "evidence": "pending",
       "guardFingerprint": "dcc4fbebc28bc1e7c7b76ca5b0131c3286fb3b9b82bb19efb378e2a1b88dd8c7"
-    },
-    {
-      "id": "hangup-lost-latched-late",
-      "owner": "public-go",
-      "evidence": "pending",
-      "guardFingerprint": "358afaa9b8d796a259e7675a716855a86ff1868d6159c2834b37f7ce2b663bb2"
     }
   ],
   "additionalProtocolCases": [
@@ -1942,7 +1837,92 @@
     "p3-collection-reobserves-unknown",
     "p3-preparation-latches-definite-read",
     "p3-inconclusive-media-passes",
-    "p3-oracle-waives-unrelated-unknown"
+    "p3-oracle-waives-unrelated-unknown",
+    "caller-write-latch",
+    "caller-single-launch",
+    "caller-inactive-proof",
+    "caller-unknown-stop-cleared",
+    "caller-generator-abort-order",
+    "caller-boundary-inactive-order",
+    "caller-boundary-unknown-stop",
+    "caller-boundary-excluded",
+    "caller-judge-source-binding",
+    "caller-shared-hangup-broker",
+    "caller-shared-hangup-launcher",
+    "caller-hangup-reservation-before-send",
+    "caller-collection-missing-report",
+    "caller-collection-mismatched-session",
+    "caller-collection-hangup-only",
+    "caller-environment-allowlist",
+    "caller-boundary-setup-before-dial",
+    "caller-boundary-setup-identity",
+    "caller-phase-configuration",
+    "caller-configuration-copy",
+    "evidence-retains-failure-missing-events",
+    "evidence-retains-failure-missing-receipts",
+    "evidence-raw-json-ambiguity",
+    "evidence-jsonl-ambiguity",
+    "evidence-json-canonical-members",
+    "evidence-pool-json-ambiguity",
+    "evidence-build-workspace-isolation",
+    "evidence-build-environment-allowlist",
+    "evidence-build-compiler-version",
+    "caller-collection-session-identity",
+    "caller-collection-raw-report",
+    "evidence-jsonl-retains-valid-failure",
+    "caller-json-evidence-ambiguity",
+    "evidence-positive-counter-independent",
+    "evidence-decryption-total-overflow",
+    "evidence-negative-measurement",
+    "evidence-count-addition-overflow",
+    "evidence-signed-addition-overflow",
+    "evidence-pacing-denominator-overflow",
+    "evidence-exclusion-window-overflow",
+    "caller-generator-numeric-validation",
+    "evidence-summary-positive-failure",
+    "evidence-gap-failure-independent",
+    "evidence-generator-request-overflow",
+    "evidence-numeric-decode-keeps-loss",
+    "evidence-baseline-multiset",
+    "evidence-gap-track-inventory",
+    "evidence-armed-event-inventory",
+    "evidence-receipt-full-identity",
+    "evidence-event-member-count",
+    "evidence-verdict-member-presence",
+    "evidence-generator-source-membership",
+    "evidence-optional-baseline-window",
+    "evidence-incomplete-failure-population",
+    "evidence-classification-population-count",
+    "evidence-receipt-required-members",
+    "evidence-receipt-result-membership",
+    "evidence-takeover-recovery-bound",
+    "evidence-recursive-duration-contract",
+    "evidence-recursive-required-fields",
+    "evidence-required-valid-siblings",
+    "evidence-video-object-required",
+    "evidence-optional-parent-failure",
+    "evidence-custom-decoder-contract",
+    "evidence-custom-map-key-contract",
+    "evidence-custom-failure-map-key-contract",
+    "evidence-custom-container-contract",
+    "evidence-custom-decoder-inventory-key",
+    "evidence-custom-decoder-inventory-container",
+    "evidence-required-context-incomplete",
+    "evidence-historical-start-ledger",
+    "caller-composed-receipt-delivery",
+    "evidence-composed-collection-failure",
+    "evidence-composed-collection-once",
+    "evidence-composed-uncertain-receipt",
+    "caller-procedure-publication-deadline",
+    "evidence-composed-original-receipt-contract",
+    "evidence-composed-unsuccessful-report",
+    "evidence-composed-collection-join",
+    "caller-retention-report-context",
+    "evidence-retention-judge-context",
+    "evidence-retention-unbounded",
+    "evidence-required-root-ancestor",
+    "evidence-optional-required-root-ancestor",
+    "caller-retention-original-deadline"
   ],
   "killed": [
     {
@@ -3039,6 +3019,854 @@
       "test": "TestPreconditionDeltaRejectsUnrelatedUnknown",
       "package": "./internal/operatorgates",
       "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-write-unfenced",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBrokerUnknownFencesAndStopCached",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "5245ffaa52caa9b3d47a591b7e8313ae1970cf2a19c28dda4106bca93c5d16c4"
+    },
+    {
+      "id": "caller-write-latch",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBrokerUnknownFencesAndStopCached",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "hangup-lost-latched-late",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBrokerUnknownFencesAndStopCached",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "358afaa9b8d796a259e7675a716855a86ff1868d6159c2834b37f7ce2b663bb2"
+    },
+    {
+      "id": "own-hangup-412-unconfirmed",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBrokerUnknownFencesAndStopCached",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "86840935c25727ce2bd8b6cbc9a16b3bafe1cba481bd3ecb3df10f9fb98d8a75"
+    },
+    {
+      "id": "hangup-in-feed-order",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBrokerUnknownFencesAndStopCached",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "af2fbda77e210a4f72a5b8ab820c9726a3df1d492d16079d32d02b1492aa194b"
+    },
+    {
+      "id": "caller-stop-not-cached",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBrokerUnknownFencesAndStopCached",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "2e523a18ee27352977a568f48cfd89bd18a7ef2c84d1ff3a8f8dcc2315e47a12"
+    },
+    {
+      "id": "hung-up-caller-awaited",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBrokerRefusesWaitAfterHangup",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "f96044fcc868bfe6a10f4a0063d9133126b76547e62e3b14c683ac91ad95998f"
+    },
+    {
+      "id": "barrier-ignores-hangup",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBeginAndHangupOrdering/stopped",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "545d1a60ec01a10e3c5a018c5ba3256c996746d15deebfbff63710b6f890baf4"
+    },
+    {
+      "id": "transport-wait-ignores-hangup",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBeginAndHangupOrdering",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "667302fa8c476430e0150c99ba1fad350a76276e44b94387623c648482021b28"
+    },
+    {
+      "id": "media-summary-missing-as-zero",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestSummaryPresenceAndFailureDominance",
+      "package": "./internal/operatorevidence",
+      "guardFingerprint": "b450980da115d6d68c94dba1ce04370351c4a9e02409ab4562d7365d1cdd2a86"
+    },
+    {
+      "id": "judge-invents-fault-time",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPoolRegistrationAndBoundary",
+      "package": "./internal/operatorevidence",
+      "guardFingerprint": "4e947106b07cf9cf8a87c793e800e79811f28e555a2ce105655eac71dc818f2c"
+    },
+    {
+      "id": "survivor-registers-before-boundary",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestLoadBoundaryBeforeBeginAndAfterInactive",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "845dc897f6fb9c1615789db379d18b93ae008e0e3a58ecb7c31190e7406b295b"
+    },
+    {
+      "id": "caller-single-launch",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestSingleLaunchAndUnknownStop",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-inactive-proof",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestInactiveRequiresExactObservation",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-unknown-stop-cleared",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestSingleLaunchAndUnknownStop",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-generator-abort-order",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestShutdownAndGeneratorAbortBeforeSave",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-boundary-inactive-order",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestLoadBoundaryBeforeBeginAndAfterInactive",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-boundary-unknown-stop",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestLoadBoundaryBeforeBeginAndAfterInactive",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-boundary-excluded",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPoolRegistrationAndBoundary",
+      "package": "./internal/operatorevidence",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "pool-mixes-public-sha",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPoolRequiresClocksInventoryAndOnePin",
+      "package": "./internal/operatorevidence",
+      "guardFingerprint": "6703e62129c813e7222e7ac96b8c54735abeeb379622d2db371ed80fc9becb05"
+    },
+    {
+      "id": "pool-ignores-missing-clock-or-inventory",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPoolRequiresClocksInventoryAndOnePin",
+      "package": "./internal/operatorevidence",
+      "guardFingerprint": "9f20f8ee767f08ecfb9c06a08a2455560f23faebd502b57480047369dd37c0af"
+    },
+    {
+      "id": "broker-hangup-always-confirmed",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBrokerUnknownFencesAndStopCached",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "8c7d0a00c33ff7a6ce67bad2c476159a74efe1fb20f1189e9301c255f2a6fece"
+    },
+    {
+      "id": "named-run-not-tracked",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPreallocatedLaunchAndSingleBoundary",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "43c9e3d9871225f0c77ea6d3e75b4c5c44a63b4535793cfd515dbf3e818d4a57"
+    },
+    {
+      "id": "caller-dispatched-before-health",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestLoadBoundaryBeforeBeginAndAfterInactive",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "7f28d1b6e12438f4161002773c49ec077de13ce6b7ecab3cdc47d2ae4b01a91d"
+    },
+    {
+      "id": "far-precheck-dials",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestFarPrecheckNeverDials",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "4897d42f8f0c6f1276f693b4ce3b5ea41d6bc576a04d7c7545e871663b43c9dc"
+    },
+    {
+      "id": "second-candidate-dials",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestSingleLaunchAndUnknownStop",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "8ba6f49f41427e59d90d1cf6d49faa15c669f43c1cae3584c609a4db45bf9779"
+    },
+    {
+      "id": "boundary-dispatched-per-candidate",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPreallocatedLaunchAndSingleBoundary",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "5919ae66ffc47c861d9e0f1d4aded51335b97b60c569753617cbc46bec703b26"
+    },
+    {
+      "id": "broker-retries-unknown-arm",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBrokerUnknownFencesAndStopCached",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "52c237516ad6d241855c344ea78c941334d02cfa6c7dd1fba498bc43991cb433"
+    },
+    {
+      "id": "broker-retries-unknown-put",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBrokerUnknownFencesAndStopCached",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": "9edc06a735e3ab4ca24831210f278350a22eb2b27f53355a932f1424470d1dce"
+    },
+    {
+      "id": "caller-judge-source-binding",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPinnedJudgeSourceBinding",
+      "package": "./internal/operatorevidence",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-shared-hangup-broker",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestSharedHangupReservationAcrossAPIs/broker",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-shared-hangup-launcher",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestSharedHangupReservationAcrossAPIs/launcher",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-hangup-reservation-before-send",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestSharedHangupReservationAcrossAPIs/broker",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-collection-missing-report",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBoundaryRequiresSuccessfulCollection/missing-report",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-collection-mismatched-session",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBoundaryRequiresSuccessfulCollection/mismatched-session",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-collection-hangup-only",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBoundaryRequiresSuccessfulCollection/hangup-only",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-environment-allowlist",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestCredentialFreeEnvironment",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-boundary-setup-before-dial",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBoundarySetupRequiredBeforeSurvivorBegin/missing",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-boundary-setup-identity",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBoundarySetupRequiredBeforeSurvivorBegin/mismatched",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-phase-configuration",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestLauncherBindsBothPhaseConfigurations",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-configuration-copy",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestLauncherBindsBothPhaseConfigurations",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-retains-failure-missing-events",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestReadPoolRetainsIndependentFailure/events",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-retains-failure-missing-receipts",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestReadPoolRetainsIndependentFailure/receipts",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-raw-json-ambiguity",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestRawEvidenceRejectsAmbiguousJSON",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-jsonl-ambiguity",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestRawEvidenceRejectsAmbiguousJSON",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-json-canonical-members",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestRawEvidenceRejectsAmbiguousJSON",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-pool-json-ambiguity",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestRawEvidenceRejectsAmbiguousJSON",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-build-workspace-isolation",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPinnedBuildRejectsAmbientConfiguration",
+      "package": "./internal/operatorevidence",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-build-environment-allowlist",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPinnedBuildRejectsAmbientConfiguration",
+      "package": "./internal/operatorevidence",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-build-compiler-version",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPinnedBuildChecksCompilerBeforeArchive",
+      "package": "./internal/operatorevidence",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-collection-session-identity",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBoundaryRequiresSuccessfulCollection/mismatched-session",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-collection-raw-report",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBoundaryRequiresSuccessfulCollection/missing-report",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-jsonl-retains-valid-failure",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestRawEvidenceRejectsAmbiguousJSON",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-json-evidence-ambiguity",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestCallerEvidenceRejectsAmbiguousMembers",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-positive-counter-independent",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPassingPoolRejectsCounterCancellation",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-decryption-total-overflow",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPassingPoolRejectsCounterCancellation",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-negative-measurement",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPassingPoolRejectsInvalidMeasurements",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-count-addition-overflow",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestEvidenceNumberBounds",
+      "package": "./internal/operatorgates/observe",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-signed-addition-overflow",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestEvidenceNumberBounds",
+      "package": "./internal/operatorgates/observe",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-pacing-denominator-overflow",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestGeneratorNumbersAndWindowArithmetic",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-exclusion-window-overflow",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestGeneratorNumbersAndWindowArithmetic",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-generator-numeric-validation",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestCallerNumericBoundaries",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-summary-positive-failure",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestSummaryFailureSurvivesInvalidCounters",
+      "package": "./internal/operatorevidence",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-gap-failure-independent",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestGapFailureSurvivesInvalidDiagnostics",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-generator-request-overflow",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestGeneratorRequestTotalOverflow",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-numeric-decode-keeps-loss",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPoolNumericDecodeKeepsLoss",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-baseline-multiset",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestBaselinePopulationCompleteness/non-containing",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-gap-track-inventory",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestCallerCollectionCompleteness/gap-kind",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-armed-event-inventory",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestCallerCollectionCompleteness/armed-extra",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-receipt-full-identity",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPhaseCollectionJoins/receipt-epoch",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-event-member-count",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestEventMembershipCounts",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-verdict-member-presence",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestCollectionPresenceBeforeJudgment",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-generator-source-membership",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestGeneratorCollectionsMatchSource",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-optional-baseline-window",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestOptionalBaselinesCannotShrinkWindow",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-incomplete-failure-population",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestIncompletePopulationCannotInventFailure",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-classification-population-count",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestCallerCollectionCompleteness/classification-count",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-receipt-required-members",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestRequiredReceiptMembers",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-receipt-result-membership",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPhaseCollectionJoins/receipt-session-result",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-takeover-recovery-bound",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestTakeoverBoundCollection",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-recursive-duration-contract",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestDurationBoundRequiredMembers/resume{}",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-recursive-required-fields",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestEveryRequiredEvidenceMember/callharness.Report.Offer/delete",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-required-valid-siblings",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestRequiredContractRetainsValidSiblings",
+      "package": "./internal/operatorgates/observe",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-video-object-required",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestPooledVideoEvidenceCannotDisappear/delete",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-optional-parent-failure",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestEveryOptionalEvidenceMember/callharness.TrackReport.Video/video/delete",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-custom-decoder-contract",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestUnreviewedCustomDecoderCannotBypassContract",
+      "package": "./internal/operatorgates/observe",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-custom-map-key-contract",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestCustomEvidenceKeysAndContainers/key",
+      "package": "./internal/operatorgates/observe",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-custom-failure-map-key-contract",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestCustomEvidenceKeysAndContainers/key",
+      "package": "./internal/operatorgates/observe",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-custom-container-contract",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestCustomEvidenceKeysAndContainers/slice",
+      "package": "./internal/operatorgates/observe",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-custom-decoder-inventory-key",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestCustomEvidenceDecoderInventoryTraversal",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-custom-decoder-inventory-container",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestCustomEvidenceDecoderInventoryTraversal",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-required-context-incomplete",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestEveryOptionalEvidenceMember/callharness.TrackReport.Video/video/delete",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-historical-start-ledger",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestHistoricalTakeoverStartLedger",
+      "package": "./internal/operatorgates/observe",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-composed-receipt-delivery",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestComposedTrialOracle/trials.workerTrials",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-composed-collection-failure",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestComposedProcedureCallerPool/missing-report",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-composed-collection-once",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestComposedProcedureCallerPool/complete",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-composed-uncertain-receipt",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestComposedProcedureCallerPool/uncertain-receipt",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-procedure-publication-deadline",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestFeedHonorsProcedureDeadline",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-composed-original-receipt-contract",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestComposedProcedureCallerPool/receipt-checkpoint-delete",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-composed-unsuccessful-report",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestComposedProcedureCallerPool/stopped",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-composed-collection-join",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestComposedProcedureCallerPool/deadline",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-retention-report-context",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestCancelledCollectionRetainsPublishedDirectoryReport",
+      "package": "./internal/operatorcaller",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-retention-judge-context",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestComposedProcedureCallerPool/cancel",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-retention-unbounded",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestComposedProcedureCallerPool/cancel",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-required-root-ancestor",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestEveryRequiredEvidenceMember/callharness.Report.Offer/delete",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-optional-required-root-ancestor",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestEveryOptionalEvidenceMember/callharness.TrackReport.Video/video/delete",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "caller-retention-original-deadline",
+      "owner": "P4",
+      "evidence": "killed",
+      "test": "TestRetentionCannotExtendCollectionDeadline",
+      "package": "./internal/operatorcaller",
       "guardFingerprint": ""
     }
   ]

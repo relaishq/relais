@@ -33,7 +33,7 @@ func TestMutationEditsMatchSource(t *testing.T) {
 	for _, m := range cases {
 		edits := m.Edits
 		if len(edits) == 0 {
-			edits = []change{{m.File, m.Function, m.Old, m.New}}
+			edits = []change{{File: m.File, Function: m.Function, Old: m.Old, New: m.New, Receiver: m.Receiver}}
 		}
 		for _, e := range edits {
 			b, err := os.ReadFile(filepath.Join("../../..", e.File))

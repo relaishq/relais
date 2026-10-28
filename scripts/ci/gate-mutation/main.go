@@ -29,10 +29,14 @@ import (
 //go:embed cases.json
 var specifications []byte
 
-type change struct{ File, Function, Old, New string }
+type change struct {
+	File, Function, Old, New string
+	Receiver                 *string
+}
 type mutation struct {
 	ID, GuardFingerprint, File, Function, Old, New, Test, Marker, Package, PythonTest string
 	Edits                                                                             []change
+	Receiver                                                                          *string
 }
 type event struct{ Action, Test, Output string }
 
@@ -106,7 +110,23 @@ func run() error {
 	packages = slices.Compact(packages)
 	baseline, err := test(tree, cache, "", packages)
 	if err != nil {
-		return fmt.Errorf("INVALID baseline: %w", err)
+		failed := map[string]bool{}
+		for _, e := range baseline {
+			if e.Action == "fail" && e.Test != "" {
+				failed[e.Test] = true
+			}
+		}
+		var output strings.Builder
+		for _, e := range baseline {
+			if len(failed) == 0 || failed[e.Test] {
+				output.WriteString(e.Output)
+			}
+		}
+		detail := output.String()
+		if len(detail) > 4000 {
+			detail = detail[len(detail)-4000:]
+		}
+		return fmt.Errorf("INVALID baseline: %w\n%s", err, detail)
 	}
 	seen := map[string]bool{}
 	ledger, additional, selected := 0, 0, 0
@@ -121,7 +141,7 @@ func run() error {
 		selected++
 		edits := m.Edits
 		if len(edits) == 0 {
-			edits = []change{{m.File, m.Function, m.Old, m.New}}
+			edits = []change{{File: m.File, Function: m.Function, Old: m.Old, New: m.New, Receiver: m.Receiver}}
 		}
 		originals := map[string][]byte{}
 		for _, editSpec := range edits {
@@ -190,6 +210,21 @@ func edit(source []byte, m change) ([]byte, error) {
 		switch decl := n.(type) {
 		case *ast.FuncDecl:
 			match = decl.Name.Name == m.Function
+			if match && m.Receiver != nil {
+				receiver := ""
+				if decl.Recv != nil {
+					node := decl.Recv.List[0].Type
+					if star, ok := node.(*ast.StarExpr); ok {
+						node = star.X
+					}
+					ident, ok := node.(*ast.Ident)
+					if !ok {
+						return true
+					}
+					receiver = ident.Name
+				}
+				match = receiver == *m.Receiver
+			}
 		case *ast.TypeSpec:
 			match = "type:"+decl.Name.Name == m.Function
 		case *ast.ValueSpec:
@@ -227,9 +262,13 @@ func has(events []event, test, action string) bool {
 	return false
 }
 func test(tree, cache, name string, packages []string) ([]event, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	args := []string{"test", "-json", "-count=1", "-timeout=60s"}
+	timeout := "60s"
+	if name == "" {
+		timeout = "4m"
+	} // The complete baseline suite includes every regression.
+	args := []string{"test", "-json", "-count=1", "-timeout=" + timeout}
 	if name != "" {
 		args = append(args, "-run", "^"+name+"$")
 	}
@@ -243,7 +282,7 @@ func test(tree, cache, name string, packages []string) ([]event, error) {
 			cmd.Env = append(cmd.Env, e)
 		}
 	}
-	cmd.Env = append(cmd.Env, "GOCACHE="+cache, "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly")
+	cmd.Env = append(cmd.Env, "GOCACHE="+cache, "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly -buildvcs=false")
 	out, err := cmd.CombinedOutput()
 	events := []event{}
 	scan := bufio.NewScanner(bytes.NewReader(out))

@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "transformations": [
+    "import module path",
+    "comments describing collected evidence",
+    "exclusion helper prefix before main and unused import removal",
+    "receipt result uses controlplane.MoveResult with the same consumed fields"
+  ],
+  "files": [
+    {
+      "file": "main.go",
+      "sourceSHA256": "c6aef1d42288b9a8df52a4acf0e085e37982501f45e9da35e08e84853ea233bb",
+      "relocatedSHA256": "41aa2cad62f670144fb8407be3b4497b7d075b9835518f8b8d13af3b5928469a",
+      "baselineRelocatedSHA256": "580e08dd655e517a6a2a0b392320e7e7f2dd17fd0a0a2f2eff3cad3f197abb86"
+    },
+    {
+      "file": "sample.go",
+      "sourceSHA256": "5e851b1b69af294d0273c69e47a5f7d9b10cf6aad7252fb9e3a1dee016b015aa",
+      "relocatedSHA256": "51d78a02982a60c722a79c1715fe66dc43cb7ae98cd9caeccbb2b0a2707023ac",
+      "baselineRelocatedSHA256": "d98b52a5b92a878a144360bfb039f7a20a8db5a616ad56cf1179e45a5dc27836"
+    },
+    {
+      "file": "probes.go",
+      "sourceSHA256": "0d1f665a2829cb1644cdef41a62b38f3bca6ccbb2f39cead7d6b427596ca2584",
+      "relocatedSHA256": "326630ab3af77220fd30ccea4370b704ca22a77a765bd3adcb9676d6f0cecc74",
+      "baselineRelocatedSHA256": "1d6fb9e1f5e8f75a9d1aa4eec134cfbfdbe5773af74bd039bc68e4235cce1aad"
+    },
+    {
+      "file": "exclusions.go",
+      "sourceSHA256": "c2e4793b1645efca56ca4bf3c0764d84e1917471bf795d9158d7107e31288826",
+      "relocatedSHA256": "a6c99216e1cde4769bfd1450a41b6ad60114a3e379a6c4b13be074b9945a7736",
+      "baselineRelocatedSHA256": "7f12316a594667ce3107dadb9628cf86efcfcbe0839ae43cdfb52de7ade1849f"
+    },
+    {
+      "file": "main_test.go",
+      "sourceSHA256": "6d1f6019faca95670d7816c5ef9e1a198e82c0ddef57fc0fd3dc432101766f49",
+      "relocatedSHA256": "35f13021e995e7475fa96738e67961316dc183efd663bf2fe78a57b0a24553d6",
+      "baselineRelocatedSHA256": "6d1f6019faca95670d7816c5ef9e1a198e82c0ddef57fc0fd3dc432101766f49"
+    }
+  ],
+  "hardening": [
+    "strict shared P2 decoder for envelope, JSONL, stats and manifest evidence",
+    "validate JSONL before the unchanged product reader; retain independently valid failures",
+    "required product fields checked without surrogate JSON types",
+    "numeric range validation and checked arithmetic before unchanged product judges; positive failure facts retained independently",
+    "collection presence, multiset containment and complete operation/receipt joins before qualification and quantile judgment",
+    "one recursive required-field contract from product Go types, centralized reasoned optional exceptions, and failure-only sibling decoding",
+    "audio-only Video exception, all optional-ledger contexts covered by deletion/null regressions, and explicit time.Time scalar decoder accounting",
+    "custom-decoder checks include map keys and named containers; optional contexts have passing controls and required contexts explicitly assert IncompleteEvidence",
+    "historical takeover start is optional only via the shared ledger; independent signal receipt bounds remain required"
+  ],
+  "guardFiles": [
+    {
+      "file": "numbers.go",
+      "sha256": "1196b549b4b01061468b25ed8a26c5c8ad7523230c182b9a5ae91dd25c2ad658"
+    },
+    {
+      "file": "collections.go",
+      "sha256": "d806b21072a8f854233cbdea4b88ce85811bf010481321cd9f2693c82c0bb783"
+    }
+  ],
+  "fixtureHardening": "Synthetic controls carry complete armed inventories, both audio/video gap populations on every event, and mapped duration/classification records. Product judge policy and expected passing summary counts are unchanged. Video tracks include the product-emitted Video object; the expected passing summary remains unchanged.",
+  "sharedDecoderContract": {
+    "required.go": "7d91f285d5587491f4e707aabe24c40b7067a0c8fe512f0babb84c1d900295d1",
+    "evidence_optional.go": "2e301fec2a29b4d9777271de22bd05949ec65604026883a34986440823073c43",
+    "canonical.go": "22cb1835297d4bf5c2afa264a22370f855897a9390dedfc30e305188a6f6e30e",
+    "strict.go": "efdd1034a43eefff1b878cb53227ec77215e6bb6ae5b8badf3e67090fb8cd0d6"
+  }
+}

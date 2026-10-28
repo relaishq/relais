@@ -1,0 +1,378 @@
+package operatorcaller
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/relaishq/relais/pkg/operator"
+)
+
+// Launcher is the container/private delivery seam. Identities and unit names
+// must be allocated before Start. Calls never resubmit a start or stop.
+type Launcher interface {
+	Ready(context.Context, time.Time) operator.Certainty
+	Start(context.Context, Identity, Phase, time.Time) StartResult
+	Stop(context.Context, Identity, time.Time) StopResult
+}
+type StartState string
+
+const (
+	Started      StartState = "started"
+	NotStarted   StartState = "proved-not-started"
+	StartUnknown StartState = "unknown"
+)
+
+type StartResult struct {
+	State     StartState
+	Certainty operator.Certainty
+	Unit      string
+}
+type StopResult struct {
+	Inactive  bool
+	Certainty operator.Certainty
+	Unit      string
+}
+
+// Execute delivers one fixed script. A positive exit from an effect is unknown:
+// it does not prove that the command made no change.
+type Execution struct {
+	Certainty    operator.Certainty
+	ExitCode     int
+	Output       string
+	NotSubmitted bool
+	RefusalCode  string
+}
+type Executor interface {
+	Execute(context.Context, []byte, time.Time) Execution
+}
+type LocalExecutor struct{}
+
+func (LocalExecutor) Execute(ctx context.Context, script []byte, end time.Time) Execution {
+	ctx, cancel := context.WithDeadline(ctx, end)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/sh", "-s")
+	cmd.Stdin = strings.NewReader(string(script))
+	cmd.Env = PublicEnvironment(nil)
+	out, err := cmd.Output()
+	if ctx.Err() != nil {
+		return Execution{Certainty: operator.Unknown}
+	}
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return Execution{Certainty: operator.Failed, ExitCode: exit.ExitCode(), Output: string(out)}
+	}
+	if err != nil {
+		return Execution{Certainty: operator.Failed, NotSubmitted: true, RefusalCode: "executor-unavailable"}
+	}
+	return Execution{Certainty: operator.Succeeded, Output: string(out)}
+}
+
+type LaunchConfig struct {
+	BridgePath, BridgeSHA256, LoadPath, LoadSHA256, ConfigPath, ConfigSHA256, MailboxPath, WorkRoot, Architecture string
+	RuntimeDeadline                                                                                               time.Time
+}
+
+func (c LaunchConfig) validate() error {
+	for _, s := range []string{c.BridgePath, c.LoadPath, c.ConfigPath, c.MailboxPath, c.WorkRoot} {
+		if !strings.HasPrefix(s, "/") || strings.ContainsAny(s, "\r\n\x00") {
+			return errors.New("invalid-launch-path")
+		}
+	}
+	for _, s := range []string{c.BridgeSHA256, c.LoadSHA256, c.ConfigSHA256} {
+		if !digestPattern.MatchString(s) {
+			return errors.New("invalid-launch-hash")
+		}
+	}
+	if c.RuntimeDeadline.IsZero() {
+		return errors.New("missing-runtime-deadline")
+	}
+	if c.Architecture != "x86_64" && c.Architecture != "aarch64" {
+		return errors.New("invalid-launch-architecture")
+	}
+	return nil
+}
+
+var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+func ReadyScript(c LaunchConfig) ([]byte, error) {
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+	return []byte(fmt.Sprintf(`set -eu
+[ "$(uname -m)" = %s ]
+command -v ffmpeg >/dev/null
+command -v systemd-run >/dev/null
+systemctl show --property=Version --value >/dev/null
+[ "$(sha256sum %s | cut -d ' ' -f 1)" = %s ]
+[ "$(sha256sum %s | cut -d ' ' -f 1)" = %s ]
+[ "$(sha256sum %s | cut -d ' ' -f 1)" = %s ]
+%s caller-host >/dev/null
+chronyc tracking | grep -Eq '^Leap status[[:space:]]*:[[:space:]]*Normal$'
+printf 'caller-ready\n'
+`, quote(c.Architecture), quote(c.BridgePath), quote(c.BridgeSHA256), quote(c.LoadPath), quote(c.LoadSHA256), quote(c.ConfigPath), quote(c.ConfigSHA256), quote(c.BridgePath))), nil
+}
+func StartScript(c LaunchConfig, i Identity, end time.Time) ([]byte, error) {
+	if err := c.validate(); err != nil {
+		return nil, err
+	}
+	if err := i.Validate(); err != nil {
+		return nil, err
+	}
+	if c.RuntimeDeadline.Before(end) || time.Until(c.RuntimeDeadline) > 20*time.Minute {
+		return nil, errors.New("invalid-runtime-deadline")
+	}
+	identity, _ := json.Marshal(i)
+	return []byte(fmt.Sprintf(`set -eu
+umask 077
+unit=%s
+work=%s/"$unit"
+remaining=$((%d - $(date +%%s)))
+[ "$remaining" -gt 0 ]
+mkdir "$work"
+cp %s "$work/bridge"
+cp %s "$work/relais-load"
+cp %s "$work/config.json"
+[ "$(sha256sum "$work/bridge" | cut -d ' ' -f 1)" = %s ]
+[ "$(sha256sum "$work/relais-load" | cut -d ' ' -f 1)" = %s ]
+[ "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" = %s ]
+chmod 700 "$work/bridge" "$work/relais-load"
+systemd-run --quiet --unit="$unit" --property="RuntimeMaxSec=$remaining" --property=TimeoutStopSec=180 --property=KillMode=control-group --property=UMask=0077 --property="WorkingDirectory=$work" --setenv=GOMAXPROCS=2 "$work/bridge" caller -config "$work/config.json" -mailbox %s -load "$work/relais-load" -identity %s
+printf 'caller-started:%%s\n' "$unit"
+`, quote(i.Unit()), quote(c.WorkRoot), c.RuntimeDeadline.Unix(), quote(c.BridgePath), quote(c.LoadPath), quote(c.ConfigPath), quote(c.BridgeSHA256), quote(c.LoadSHA256), quote(c.ConfigSHA256), quote(c.MailboxPath), quote(string(identity)))), nil
+}
+func StopScript(i Identity) ([]byte, error) {
+	if err := i.Validate(); err != nil {
+		return nil, err
+	}
+	return []byte("systemctl stop --no-block " + quote(i.Unit()) + "\n"), nil
+}
+func InactiveScript(i Identity) ([]byte, error) {
+	if err := i.Validate(); err != nil {
+		return nil, err
+	}
+	return []byte("systemctl show --property=LoadState --property=ActiveState " + quote(i.Unit()) + "\n"), nil
+}
+func inactive(x Execution) bool {
+	if x.Certainty == operator.Unknown || x.Certainty != operator.Succeeded && x.Certainty != operator.Failed {
+		return false
+	}
+	fields := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(x.Output), "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if !ok || (k != "LoadState" && k != "ActiveState") || fields[k] != "" {
+			return false
+		}
+		fields[k] = v
+	}
+	if len(fields) != 2 {
+		return false
+	}
+	if fields["LoadState"] == "not-found" && fields["ActiveState"] == "inactive" {
+		return x.Certainty == operator.Succeeded && x.ExitCode == 0 || x.Certainty == operator.Failed && x.ExitCode == 1
+	}
+	return x.Certainty == operator.Succeeded && x.ExitCode == 0 && fields["LoadState"] == "loaded" && (fields["ActiveState"] == "inactive" || fields["ActiveState"] == "failed")
+}
+
+// Fence binds the launcher and broker to the engine's single fatal latch.
+type Fence interface {
+	Latched() bool
+	Halt(string)
+}
+type FixedLauncher struct {
+	configs map[Identity]LaunchConfig
+	Exec    Executor
+	Mailbox *Mailbox
+	Fence   Fence
+	mu      sync.Mutex
+	starts  map[string]StartResult
+	owners  map[string]Identity
+	stops   map[string]StopResult
+	ready   bool
+}
+
+// NewFixedLauncher copies the identity-bound configuration set before effects.
+func NewFixedLauncher(configs map[Identity]LaunchConfig, executor Executor, box *Mailbox, fence Fence) (*FixedLauncher, error) {
+	if len(configs) == 0 || executor == nil || box == nil || box.Store == nil || fence == nil {
+		return nil, errors.New("missing-launcher-input")
+	}
+	l := &FixedLauncher{configs: map[Identity]LaunchConfig{}, Exec: executor, Mailbox: box, Fence: fence}
+	for identity, config := range configs {
+		if err := identity.Validate(); err != nil {
+			return nil, err
+		}
+		if err := config.validate(); err != nil {
+			return nil, err
+		}
+		l.configs[identity] = config
+	}
+	return l, nil
+}
+func (l *FixedLauncher) Ready(ctx context.Context, end time.Time) operator.Certainty {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ready = false
+	identities := make([]Identity, 0, len(l.configs))
+	for identity := range l.configs {
+		identities = append(identities, identity)
+	}
+	sort.Slice(identities, func(a, b int) bool { return identities[a].Unit() < identities[b].Unit() })
+	if len(identities) == 0 {
+		return operator.Failed
+	}
+	for _, identity := range identities {
+		script, err := ReadyScript(l.configs[identity])
+		if err != nil {
+			return operator.Failed
+		}
+		r := l.Exec.Execute(ctx, script, end)
+		if r.Certainty == operator.Unknown {
+			return operator.Unknown
+		}
+		if r.Certainty != operator.Succeeded || r.ExitCode != 0 || r.Output != "caller-ready\n" || ctx.Err() != nil || !time.Now().Before(end) {
+			return operator.Failed
+		}
+	}
+	l.ready = true
+	return operator.Succeeded
+}
+func (l *FixedLauncher) Start(ctx context.Context, i Identity, phase Phase, end time.Time) StartResult {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	result := StartResult{NotStarted, operator.Failed, i.Unit()}
+	if i.Validate() != nil || phase != i.Phase {
+		return result
+	}
+	key := i.RunID + "/" + string(i.Gate) + "/" + string(phase)
+	if l.starts == nil {
+		l.starts = map[string]StartResult{}
+	}
+	if cached, exists := l.starts[key]; exists {
+		if l.owners[key] == i {
+			return cached
+		}
+		if cached.Unit == i.Unit() {
+			l.Fence.Halt("protocol-error")
+			return StartResult{StartUnknown, operator.Unknown, i.Unit()}
+		}
+		return result
+	}
+	if !l.ready || l.Fence.Latched() || !time.Now().Before(end) {
+		return result
+	}
+	config, exists := l.configs[i]
+	if !exists {
+		return result
+	}
+	script, err := StartScript(config, i, end)
+	if err != nil {
+		return result
+	}
+	// Reserve the identity before delivery. A lost result stays cached.
+	l.starts[key] = StartResult{StartUnknown, operator.Unknown, i.Unit()}
+	if l.owners == nil {
+		l.owners = map[string]Identity{}
+	}
+	l.owners[key] = i
+	r := l.Exec.Execute(ctx, script, end)
+	if !r.NotSubmitted && r.Certainty == operator.Succeeded && r.ExitCode == 0 && r.Output == "caller-started:"+i.Unit()+"\n" && time.Now().Before(end) {
+		result = StartResult{Started, operator.Succeeded, i.Unit()}
+	} else if r.NotSubmitted && r.Certainty == operator.Failed && (r.RefusalCode == "executor-unavailable" || r.RefusalCode == "deadline-before-submission") {
+		result = StartResult{NotStarted, operator.Failed, i.Unit()}
+	} else {
+		result = StartResult{StartUnknown, operator.Unknown, i.Unit()}
+		l.Fence.Halt("command-result-unknown")
+	}
+	l.starts[key] = result
+	return result
+}
+func (l *FixedLauncher) Stop(ctx context.Context, i Identity, end time.Time) StopResult {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	result := StopResult{Certainty: operator.Unknown, Unit: i.Unit()}
+	if i.Validate() != nil {
+		return result
+	}
+	key := i.RunID + "/" + string(i.Gate) + "/" + string(i.Phase)
+	if owner, ok := l.owners[key]; !ok || owner != i {
+		return StopResult{Certainty: operator.Failed, Unit: i.Unit()}
+	}
+
+	if l.stops == nil {
+		l.stops = map[string]StopResult{}
+	}
+	if cached, ok := l.stops[i.Unit()]; ok {
+		return cached
+	}
+	l.stops[i.Unit()] = result
+	// Hangup is outside numbered feed and remains allowed after the fence.
+	uncertain := !Hangup(ctx, l.Mailbox, i.Root(), i.RunID, "caller-stop", l.Fence)
+	script, _ := StopScript(i)
+	if !l.Fence.Latched() {
+		r := l.Exec.Execute(ctx, script, end)
+		if r.Certainty != operator.Succeeded || r.ExitCode != 0 {
+			uncertain = true
+			l.Fence.Halt("command-result-unknown")
+		}
+	} else {
+		uncertain = true
+	}
+	read, _ := InactiveScript(i)
+	for time.Now().Before(end) && ctx.Err() == nil {
+		observed := l.Exec.Execute(ctx, read, end)
+		if inactive(observed) {
+			result.Inactive = true
+			break
+		}
+		if sleep(ctx, min(100*time.Millisecond, time.Until(end))) != nil {
+			break
+		}
+	}
+	if result.Inactive && !uncertain {
+		result.Certainty = operator.Succeeded
+	} else {
+		l.Fence.Halt("command-result-unknown")
+	}
+	l.stops[i.Unit()] = result
+	return result
+}
+func sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(max(0, d))
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+func sequenceKey(root string, n int) string {
+	if n == -1 {
+		return root + "/feed/begin.json"
+	}
+	return root + "/feed/" + fmt.Sprintf("%05d", n) + ".json"
+}
+func ackKey(job string, n int) string { return job + "/acks/" + fmt.Sprintf("%05d", n) + ".json" }
+func PublicEnvironment(env []string) []string {
+	if env == nil {
+		env = os.Environ()
+	}
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		key, _, _ := strings.Cut(e, "=")
+		switch key {
+		case "PATH", "HOME", "TMPDIR", "TMP", "TEMP", "LANG", "LC_ALL", "LC_CTYPE", "TZ":
+			out = append(out, e)
+		}
+	}
+	return append(out, "GOMAXPROCS=2")
+}

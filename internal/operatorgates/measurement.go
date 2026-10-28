@@ -40,6 +40,8 @@ type MeasurePorts struct {
 	MarkFault   func(context.Context) error
 	// Collect starts one evidence collection. It returns a terminal channel,
 	// allowing this gate to retain telemetry while the caller is still running.
+	// Cancellation must terminate collection and publish/close the channel only
+	// after its evidence has been added; the gate joins it before returning.
 	Collect func(context.Context, time.Duration) <-chan MeasurementCollection
 	Persist func(context.Context, []MeasurementObservation) error
 }
@@ -164,17 +166,17 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 		}
 	}
 	if p.Collect != nil {
-		collecting := p.Collect(ctx, g.end)
+		collectionCtx, cancelCollection := context.WithCancel(ctx)
+		collecting := p.Collect(collectionCtx, g.end)
+		var collection MeasurementCollection
+		received := false
 	collect:
 		for {
 			select {
-			case collection, ok := <-collecting:
-				if !ok || collection.Err != nil {
-					r.Measurement.MissingSamples++
-				}
-				r.Media = collection.Evidence.Media
-				if collection.Evidence.KnownAllowanceViolation {
-					failed = true
+			case result, ok := <-collecting:
+				collection, received = result, true
+				if !ok {
+					collection.Err = context.Canceled
 				}
 				break collect
 			default:
@@ -193,6 +195,23 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 			if err = p.Sleep(ctx, min(15*time.Second, max(time.Duration(0), g.end-p.Clock.Elapsed()))); err != nil {
 				break
 			}
+		}
+		// Return collection ownership only after its worker has stopped and added
+		// readable evidence to the pool. Cancellation never discards its result.
+		cancelCollection()
+		if !received {
+			var ok bool
+			collection, ok = <-collecting
+			if !ok {
+				collection.Err = context.Canceled
+			}
+		}
+		if collection.Err != nil {
+			r.Measurement.MissingSamples++
+		}
+		r.Media = collection.Evidence.Media
+		if collection.Evidence.KnownAllowanceViolation {
+			failed = true
 		}
 	}
 	if p.Persist != nil {
