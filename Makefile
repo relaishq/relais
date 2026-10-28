@@ -149,9 +149,16 @@ test-cluster: ## Run opt-in Redis Cluster tests (RELAIS_TEST_REDIS_CLUSTER=1; bu
 # Cover all packages except the call harness, which has a separate CI job.
 # Include the plugin and pipeline suites previously covered by make test.
 UNIT_PKGS=$(shell $(GOCMD) list ./pkg/... ./internal/... ./cmd/... ./examples/... ./plugins/... ./test/... | awk '$$0 != "github.com/relaishq/relais/pkg/callharness"')
+JUDGE_FLAGS ?=
 
 test-unit: ## Run all non-harness tests with the race detector; set RELAIS_TEST_REDIS_ADDR for Redis suites
-	$(GOTEST) -race -v -count=1 -timeout 10m $(UNIT_PKGS)
+	$(GOTEST) -race -v -count=1 -timeout 10m $(filter-out github.com/relaishq/relais/internal/operatorevidence/judge-src,$(UNIT_PKGS))
+	$(MAKE) test-unit-judge
+
+.PHONY: test-unit-judge
+test-unit-judge: ## Run evidence judge race tests alone; JUDGE_FLAGS=-short samples exhaustive sweeps for PRs
+	# Keep cached-verdict waiters and file reads from occupying every test slot on small runners.
+	$(GOTEST) -race -parallel=8 -v -count=1 -timeout 10m $(JUDGE_FLAGS) ./internal/operatorevidence/judge-src
 
 # test-unit already covers every package outside the call harness under -race.
 HARNESS_PKGS=./pkg/callharness/...

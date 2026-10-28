@@ -108,6 +108,7 @@ func run() error {
 	}
 	sort.Strings(packages)
 	packages = slices.Compact(packages)
+	fmt.Println("BASELINE: short safety suite; pinned-release comparisons run in the real-checkout unit job")
 	baseline, err := test(tree, cache, "", packages)
 	if err != nil {
 		failed := map[string]bool{}
@@ -267,8 +268,10 @@ func test(tree, cache, name string, packages []string) ([]event, error) {
 	timeout := "60s"
 	if name == "" {
 		timeout = "4m"
-	} // The complete baseline suite includes every regression.
-	args := []string{"test", "-json", "-count=1", "-timeout=" + timeout}
+	} // The short baseline includes every named safety regression.
+	// The isolated source has no Git history. Real-checkout unit tests always
+	// run the pinned release comparison, including PR short mode.
+	args := []string{"test", "-short", "-parallel=8", "-json", "-count=1", "-timeout=" + timeout, "-skip=^TestPinnedReleaseJudgesMatchFrozenEvidence$"}
 	if name != "" {
 		args = append(args, "-run", "^"+name+"$")
 	}

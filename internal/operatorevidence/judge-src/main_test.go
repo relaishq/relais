@@ -332,7 +332,7 @@ func TestPreviewRawPoolQualifiesOnce(t *testing.T) {
 			t.Fatal("partial phase passed")
 		}
 	}
-	if got := pooledPreviewMedia(&input); got.Status != "passed" || got.ExpectedCalls != 2 || got.EventCount != 30 || got.QualifiedMoves != 20 || got.QualifiedTakeovers != 10 {
+	if got := fixturePoolVerdict(&input); got.Status != "passed" || got.ExpectedCalls != 2 || got.EventCount != 30 || got.QualifiedMoves != 20 || got.QualifiedTakeovers != 10 {
 		t.Fatal(got)
 	}
 }
@@ -340,12 +340,12 @@ func TestPreviewSkippedSampleInconclusive(t *testing.T) {
 	t.Parallel()
 	input := rawPoolSample()
 	input.Phases = input.Phases[:1]
-	if got := pooledPreviewMedia(&input); got.Status != "inconclusive" {
+	if got := fixturePoolVerdict(&input); got.Status != "inconclusive" {
 		t.Fatal(got)
 	}
 	input = rawPoolSample()
 	input.Missing = true
-	if got := pooledPreviewMedia(&input); got.Status != "inconclusive" {
+	if got := fixturePoolVerdict(&input); got.Status != "inconclusive" {
 		t.Fatal(got)
 	}
 }
@@ -362,7 +362,7 @@ func TestPreviewRawPoolRejectsReplayAndForeignRun(t *testing.T) {
 	} {
 		input := rawPoolSample()
 		change(&input)
-		if got := pooledPreviewMedia(&input); got.Status != "inconclusive" {
+		if got := fixturePoolVerdict(&input); got.Status != "inconclusive" {
 			t.Fatal(got)
 		}
 	}
@@ -372,13 +372,13 @@ func TestPreviewRawPoolRetainsFailure(t *testing.T) {
 	input := rawPoolSample()
 	input.Missing = true
 	input.Phases[0].Receipts[0].Result.Lost = true
-	if got := pooledPreviewMedia(&input); got.Status != "failed" {
+	if got := fixturePoolVerdict(&input); got.Status != "failed" {
 		t.Fatal(got)
 	}
 	input = rawPoolSample()
 	input.Phases[0].CallerJSONL = ""
 	input.Phases[1].Receipts[0].Result.Lost = true
-	if got := pooledPreviewMedia(&input); got.Status != "failed" {
+	if got := fixturePoolVerdict(&input); got.Status != "failed" {
 		t.Fatal(got)
 	}
 }
@@ -390,7 +390,7 @@ func TestPreviewRawPoolRejectsDuplicateMoves(t *testing.T) {
 	// Keep ONE real receipt and event for that operation. Only the caller replays it.
 	phase.Receipts = phase.Receipts[:30]
 	input := previewPoolInput{RunID: "run-fixture", Phases: []previewMediaInput{phase}}
-	if got := pooledPreviewMedia(&input); got.Status != "inconclusive" {
+	if got := fixturePoolVerdict(&input); got.Status != "inconclusive" {
 		t.Fatal(got)
 	}
 }

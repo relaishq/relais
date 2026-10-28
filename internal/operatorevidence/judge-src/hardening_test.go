@@ -60,7 +60,7 @@ func joinedPool(t *testing.T, phases []operatorevidence.Phase) (operatorevidence
 func TestReadPoolRetainsIndependentFailure(t *testing.T) {
 	t.Parallel()
 	_, complete := joinedPool(t, evidencePhases(t, rawPoolSample()))
-	if got := pooledPreviewMedia(&complete); got.Status != "passed" {
+	if got := fixturePoolVerdict(&complete); got.Status != "passed" {
 		t.Fatal("complete evidence control", got)
 	}
 	for _, missing := range []string{"events", "callerJsonl", "receipts"} {
@@ -79,8 +79,8 @@ func TestReadPoolRetainsIndependentFailure(t *testing.T) {
 			delete(fields, missing)
 			phases[0].Raw, _ = json.Marshal(fields)
 			pool, input := joinedPool(t, phases)
-			if !pool.Missing || len(pool.Phases) != 2 || pooledPreviewMedia(&input).Status != "failed" {
-				t.Fatal("MUTATION: missing-preserves-failure", pool.Missing, pooledPreviewMedia(&input))
+			if !pool.Missing || len(pool.Phases) != 2 || fixturePoolVerdict(&input).Status != "failed" {
+				t.Fatal("MUTATION: missing-preserves-failure", pool.Missing, fixturePoolVerdict(&input))
 			}
 		})
 	}
@@ -90,7 +90,7 @@ func TestReadPoolRetainsIndependentFailure(t *testing.T) {
 	delete(fields, "events")
 	phases[0].Raw, _ = json.Marshal(fields)
 	_, input := joinedPool(t, phases)
-	if got := pooledPreviewMedia(&input); got.Status != "inconclusive" {
+	if got := fixturePoolVerdict(&input); got.Status != "inconclusive" {
 		t.Fatal(got)
 	}
 }
@@ -109,18 +109,18 @@ func TestRawEvidenceRejectsAmbiguousJSON(t *testing.T) {
 	for _, member := range []string{`"AuthTag":1,"AuthTag":0`, `"AuthTag":1,"authtag":0`} {
 		input := rawPoolSample()
 		input.Phases[0].CallerJSONL = strings.Replace(input.Phases[0].CallerJSONL, `"AuthTag":0`, member, 1)
-		if got := pooledPreviewMedia(&input); got.Status == "passed" {
+		if got := fixturePoolVerdict(&input); got.Status == "passed" {
 			t.Fatal("MUTATION: jsonl-ambiguity", member, got)
 		}
 		input.Phases[1].Receipts[0].Result.Lost = true
-		if got := pooledPreviewMedia(&input); got.Status != "failed" {
+		if got := fixturePoolVerdict(&input); got.Status != "failed" {
 			t.Fatal("independent failure erased", got)
 		}
 	}
 	known := rawPoolSample()
 	known.Phases[0].CallerJSONL = strings.Replace(known.Phases[0].CallerJSONL, `"Kind":"move"`, `"Kind":"move","lost":true`, 1)
 	known.Phases[0].CallerJSONL = strings.Replace(known.Phases[0].CallerJSONL, `"cpu_percent_per_gomaxprocs":0`, `"cpu_percent_per_gomaxprocs":1,"cpu_percent_per_gomaxprocs":0`, 1)
-	if got := pooledPreviewMedia(&known); got.Status != "failed" {
+	if got := fixturePoolVerdict(&known); got.Status != "failed" {
 		t.Fatal("MUTATION: jsonl-valid-failure-after-invalid", got)
 	}
 

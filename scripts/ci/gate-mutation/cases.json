@@ -2241,7 +2241,7 @@
   {
     "ID": "evidence-pacing-denominator-overflow",
     "File": "internal/operatorevidence/judge-src/sample.go",
-    "Function": "readSample",
+    "Function": "sampleFromMessage",
     "Old": "if _, ok := observe.AddCount(int64(s.IntervalPacing.SentFrames), int64(s.IntervalPacing.SkippedFrames)); !ok {",
     "New": "if _, ok := observe.AddCount(int64(s.IntervalPacing.SentFrames), int64(s.IntervalPacing.SkippedFrames)); false && !ok {",
     "Test": "TestGeneratorNumbersAndWindowArithmetic",

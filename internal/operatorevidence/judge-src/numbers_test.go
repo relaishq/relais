@@ -35,13 +35,13 @@ func replaceCall(t *testing.T, input *previewPoolInput, change func(*callharness
 func TestPassingPoolRejectsCounterCancellation(t *testing.T) {
 	t.Parallel()
 	passing := rawPoolSample()
-	if got := pooledPreviewMedia(&passing); got.Status != "passed" {
+	if got := fixturePoolVerdict(&passing); got.Status != "passed" {
 		t.Fatal("passing control", got)
 	}
 	for _, counters := range []callharness.DecryptionFailures{{AuthTag: 1, Replay: -1}, {AuthTag: math.MaxInt64, Replay: 1}, {AuthTag: math.MaxInt64, Replay: math.MaxInt64}} {
 		input := rawPoolSample()
 		replaceCall(t, &input, func(c *callharness.Report) { c.DecryptionFailures = counters })
-		if got := pooledPreviewMedia(&input); got.Status != "failed" {
+		if got := fixturePoolVerdict(&input); got.Status != "failed" {
 			t.Fatal("MUTATION: positive-counter-independent", counters, got)
 		}
 		_, _, qualified := parsePreviewMedia(&input.Phases[0])
@@ -54,7 +54,7 @@ func TestPassingPoolRejectsCounterCancellation(t *testing.T) {
 		c.DecryptionFailures = callharness.DecryptionFailures{AuthTag: 1, Replay: -1}
 		c.Distributed = nil
 	})
-	if got := pooledPreviewMedia(&missing); got.Status != "failed" {
+	if got := fixturePoolVerdict(&missing); got.Status != "failed" {
 		t.Fatal("missing mapping erased counter failure", got)
 	}
 	input := rawPoolSample()
@@ -86,11 +86,11 @@ func TestPassingPoolRejectsInvalidMeasurements(t *testing.T) {
 	for _, change := range changes {
 		input := rawPoolSample()
 		replaceCall(t, &input, change)
-		if got := pooledPreviewMedia(&input); got.Status == "passed" {
+		if got := fixturePoolVerdict(&input); got.Status == "passed" {
 			t.Fatal("MUTATION: invalid-media-number", got)
 		}
 		input.Phases[0].Receipts[0].Result.Lost = true
-		if got := pooledPreviewMedia(&input); got.Status != "failed" {
+		if got := fixturePoolVerdict(&input); got.Status != "failed" {
 			t.Fatal("independent receipt erased", got)
 		}
 	}
@@ -99,12 +99,12 @@ func TestPassingPoolRejectsInvalidMeasurements(t *testing.T) {
 		c.Tracks[0].Packets = -1
 		c.Moves[0].Distributed.Gaps[0].EventGap = callharness.DurationInterval{Lower: 2 * time.Second, Upper: 2 * time.Second}
 	})
-	if got := pooledPreviewMedia(&input); got.Status != "failed" {
+	if got := fixturePoolVerdict(&input); got.Status != "failed" {
 		t.Fatal("validated gap failure erased", got)
 	}
 	input = rawPoolSample()
 	replaceCall(t, &input, func(c *callharness.Report) { c.ICERestarts = 1; c.Tracks[0].Packets = -1 })
-	if got := pooledPreviewMedia(&input); got.Status != "failed" {
+	if got := fixturePoolVerdict(&input); got.Status != "failed" {
 		t.Fatal("positive ICE restart erased", got)
 	}
 }
@@ -119,7 +119,7 @@ func TestGapFailureSurvivesInvalidDiagnostics(t *testing.T) {
 			}
 		}
 	})
-	if got := pooledPreviewMedia(&input); got.Status != "failed" {
+	if got := fixturePoolVerdict(&input); got.Status != "failed" {
 		t.Fatal("MUTATION: gap-failure-independent", got)
 	}
 	// Removing malformed low gaps must not turn the remaining high observation
@@ -130,7 +130,7 @@ func TestGapFailureSurvivesInvalidDiagnostics(t *testing.T) {
 		c.Moves[0].Distributed.Gaps[0].EventGap = callharness.DurationInterval{Lower: 180 * time.Millisecond, Upper: 180 * time.Millisecond}
 		c.Moves[1].Distributed.Gaps[0].BaselineCertain[0] = -1
 	})
-	if got := pooledPreviewMedia(&input); got.Status == "failed" {
+	if got := fixturePoolVerdict(&input); got.Status == "failed" {
 		t.Fatal("malformed quantile population fabricated failure", got)
 	}
 }
@@ -195,7 +195,7 @@ func TestGeneratorRequestTotalOverflow(t *testing.T) {
 		t.Fatal("MUTATION: generator-total-overflow")
 	}
 	input.Phases[0].Receipts[0].Result.Lost = true
-	if got := pooledPreviewMedia(&input); got.Status != "failed" {
+	if got := fixturePoolVerdict(&input); got.Status != "failed" {
 		t.Fatal("generator total erased receipt failure", got)
 	}
 }
@@ -212,13 +212,13 @@ func TestPoolNumericDecodeKeepsLoss(t *testing.T) {
 	}
 	raw, _ := json.Marshal(pool)
 	input, err := decodePool(raw)
-	if err != nil || pooledPreviewMedia(&input).Status != "failed" {
+	if err != nil || fixturePoolVerdict(&input).Status != "failed" {
 		t.Fatal("numeric decoding erased loss", err)
 	}
 	raw, _ = json.Marshal(sample)
 	raw = []byte(strings.Replace(string(raw), `"affected":1`, `"affected":9223372036854775808`, 1))
 	input, err = decodePool(raw)
-	if err != nil || !input.Missing || pooledPreviewMedia(&input).Status != "failed" {
+	if err != nil || !input.Missing || fixturePoolVerdict(&input).Status != "failed" {
 		t.Fatal("numeric pool decoding erased loss", err)
 	}
 }

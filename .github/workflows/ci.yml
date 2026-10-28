@@ -156,6 +156,8 @@ jobs:
       RELAIS_TEST_REDIS_TLS_REQUIRE: "1"
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Generate UTF-8 locale for Redis tests
         run: |
           sudo locale-gen en_US.UTF-8
@@ -170,7 +172,13 @@ jobs:
         with:
           packages: redis-server
       - name: Run non-harness tests (race detector, Redis required)
+        env:
+          JUDGE_FLAGS: ${{ github.event_name == 'pull_request' && '-short' || '' }}
         run: make test-unit
+      - name: Kill operator gate mutants
+        run: |
+          go test -count=1 ./scripts/ci/gate-mutation
+          go run ./scripts/ci/gate-mutation
 
   # PRs run the short memory matrix plus a Redis uncertainty regression.
   # Main, nightly and manual runs exercise both stores in full.

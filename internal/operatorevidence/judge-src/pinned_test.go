@@ -3,27 +3,23 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"os"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorevidence"
 )
 
 func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("offline release snapshot builds")
-	}
 	root, err := filepath.Abs("../../..")
 	if err != nil {
 		t.Fatal(err)
-	}
-	if _, err = os.Stat(filepath.Join(root, ".git")); err != nil {
-		t.Skip("isolated mutation tree has no release history")
 	}
 	goExecutable, err := exec.LookPath("go")
 	if err != nil {
@@ -38,6 +34,9 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 	cases = append(cases, lost)
 	for _, commit := range []string{"a0d9744ff1223a8d7978447c907041973e915b08", "85e10436eb6adbbf577b6538b0bbb799aab823b2"} {
 		t.Run(commit, func(t *testing.T) {
+			if err := pinnedCommit(ctx, root, commit); err != nil {
+				t.Fatal(err)
+			}
 			judge, err := operatorevidence.BuildPinned(ctx, root, commit, goExecutable, filepath.Join(t.TempDir(), "judge"))
 			if err != nil {
 				t.Fatal(err)
@@ -63,5 +62,26 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func pinnedCommit(ctx context.Context, root, commit string) error {
+	cmd := exec.CommandContext(ctx, "git", "cat-file", "-e", commit+"^{commit}")
+	cmd.Dir = root
+	cmd.Env = operatorcaller.PublicEnvironment(nil)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("required pinned release commit %s is unavailable: %w; checkout must use fetch-depth: 0", commit, err)
+	}
+	return nil
+}
+
+func TestMissingPinnedCommitExplainsHistoryRequirement(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	commit := strings.Repeat("0", 40)
+	err := pinnedCommit(ctx, t.TempDir(), commit)
+	if err == nil || !strings.Contains(err.Error(), commit) || !strings.Contains(err.Error(), "fetch-depth: 0") {
+		t.Fatal("missing pinned commit must identify the commit and checkout requirement", err)
 	}
 }

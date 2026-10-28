@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -73,7 +74,7 @@ func completePoolFixture(t *testing.T) previewPoolInput {
 func TestDurationBoundRequiredMembers(t *testing.T) {
 	t.Parallel()
 	control := rawPoolSample()
-	if got := pooledPreviewMedia(&control); got.Status != "passed" {
+	if got := fixturePoolVerdict(&control); got.Status != "passed" {
 		t.Fatal("passing control", got)
 	}
 	for _, name := range []string{"resume", "kill_to_live"} {
@@ -98,7 +99,7 @@ func TestDurationBoundRequiredMembers(t *testing.T) {
 					if !changed {
 						t.Fatal("bound mutation did not apply")
 					}
-					got := pooledPreviewMedia(&input)
+					got := fixturePoolVerdict(&input)
 					want := "inconclusive"
 					if failure != "" {
 						want = "failed"
@@ -154,10 +155,89 @@ func requiredSites(value any, typ reflect.Type, seen map[string]requiredSite, ty
 			requiredSites(v, typ.Elem(), seen, types)
 		}
 	case reflect.Map:
-		for _, v := range value.(map[string]any) {
-			requiredSites(v, typ.Elem(), seen, types)
+		object := value.(map[string]any)
+		for _, key := range sortedSweepKeys(object) {
+			requiredSites(object[key], typ.Elem(), seen, types)
 		}
 	}
+}
+
+// Short mode uses a stable 1/32 field sample, every required optional-ledger
+// context, and every named mutation target. Full mode exercises every field.
+type fieldSweep struct {
+	short     bool
+	mandatory map[string]bool
+	selected  map[string]bool
+}
+
+func newFieldSweep(t *testing.T) *fieldSweep {
+	t.Helper()
+	s := &fieldSweep{short: testing.Short(), mandatory: map[string]bool{}, selected: map[string]bool{}}
+	if s.short {
+		raw, err := os.ReadFile("../../../scripts/ci/gate-mutation/cases.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cases []struct{ Test string }
+		if err := json.Unmarshal(raw, &cases); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range cases {
+			if suffix, ok := strings.CutPrefix(c.Test, t.Name()+"/"); ok {
+				key, ok := strings.CutSuffix(suffix, "/delete")
+				if ok {
+					s.mandatory[key] = true
+					continue
+				}
+				if key, ok := strings.CutSuffix(suffix, "/null"); ok {
+					s.mandatory[key] = true
+				}
+			}
+		}
+	}
+	t.Cleanup(func() {
+		for key := range s.mandatory {
+			if !s.selected[key] {
+				t.Errorf("named mutation target omitted from PR sample: %s", key)
+			}
+		}
+		t.Logf("field sweep: %d selected fields/contexts (short=%t)", len(s.selected), s.short)
+	})
+	return s
+}
+
+func (s *fieldSweep) include(key string, requiredContext bool) bool {
+	hash := sha256.Sum256([]byte(key))
+	if !s.short || hash[0]%32 == 0 || requiredContext || s.mandatory[key] {
+		s.selected[key] = true
+		return true
+	}
+	return false
+}
+
+func sortedSweepKeys[V any](sites map[string]V) []string {
+	keys := make([]string, 0, len(sites))
+	for key := range sites {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// Named regressions frequently share identical controls. Reuse only an exact
+// serialized pool input; changed raw JSONL, provenance, receipts or counters
+// always get a fresh judgment. Composed and pinned comparisons bypass this memo.
+var fixturePoolVerdicts sync.Map
+
+func fixturePoolVerdict(input *previewPoolInput) previewMediaSummary {
+	raw, err := json.Marshal(input)
+	if err != nil {
+		return pooledPreviewMedia(input)
+	}
+	key := sha256.Sum256(raw)
+	compute := sync.OnceValue(func() previewMediaSummary { return pooledPreviewMedia(input) })
+	value, _ := fixturePoolVerdicts.LoadOrStore(key, compute)
+	return value.(func() previewMediaSummary)()
 }
 
 // Reuse only identical product values at the same document boundary in the same
@@ -175,7 +255,7 @@ func (v *sweepVerdicts) judge(t *testing.T, fixture string, input previewPoolInp
 	key := fmt.Sprintf("%s/%s/%d/%d/%t/%t/%x", fixture, doc.typ, doc.phase, doc.line, contractErr != nil, gapErr != nil, sha256.Sum256(typed))
 	compute := sync.OnceValue(func() previewMediaSummary {
 		changed := optionalInput(t, input, doc, raw)
-		return pooledPreviewMedia(&changed)
+		return fixturePoolVerdict(&changed)
 	})
 	value, _ := v.entries.LoadOrStore(key, compute)
 	return value.(func() previewMediaSummary)()
@@ -183,8 +263,9 @@ func (v *sweepVerdicts) judge(t *testing.T, fixture string, input previewPoolInp
 
 func TestEveryRequiredEvidenceMember(t *testing.T) {
 	t.Parallel()
+	sweep := newFieldSweep(t)
 	input := completePoolFixture(t)
-	if got := pooledPreviewMedia(&input); got.Status != "passed" {
+	if got := fixturePoolVerdict(&input); got.Status != "passed" {
 		t.Fatal("expanded passing control", got)
 	}
 	// Decode each real JSONL variant separately; callerJsonl is a product string,
@@ -219,11 +300,15 @@ func TestEveryRequiredEvidenceMember(t *testing.T) {
 	for _, doc := range documents {
 		sites := map[string]requiredSite{}
 		requiredSites(doc.value, doc.typ, sites, types)
-		for key, site := range sites {
+		for _, key := range sortedSweepKeys(sites) {
+			site := sites[key]
 			if seen[key] {
 				continue
 			}
 			seen[key] = true
+			if !sweep.include(key, false) {
+				continue
+			}
 			for _, mode := range []string{"delete", "null"} {
 				t.Run(key+"/"+mode, func(t *testing.T) {
 					original, exists := site.object[site.name]
@@ -291,7 +376,7 @@ func TestRequiredFieldsRetainIndependentGapFailure(t *testing.T) {
 	})
 	input.Phases[0].CallerJSONL = strings.Replace(input.Phases[0].CallerJSONL, `"resume":{"lower_ns":1000000000,"upper_ns":1000000000}`, `"resume":{}`, 1)
 	input.Phases[1].CallerJSONL = strings.Replace(input.Phases[1].CallerJSONL, `"cpu_percent_per_gomaxprocs":0,`, "", 1)
-	if got := pooledPreviewMedia(&input); got.Status != "failed" {
+	if got := fixturePoolVerdict(&input); got.Status != "failed" {
 		t.Fatal("MUTATION: required-retains-independent-gaps", got)
 	}
 }
@@ -359,7 +444,7 @@ func TestRequiredFieldsRetainIndependentFailures(t *testing.T) {
 		} else {
 			input.Phases[0].CallerJSONL = strings.Replace(input.Phases[0].CallerJSONL, `"VideoExpected":true,`, "", 1)
 		}
-		if got := pooledPreviewMedia(&input); got.Status != "failed" {
+		if got := fixturePoolVerdict(&input); got.Status != "failed" {
 			t.Fatal("MUTATION: required-independent-failure", invalid, got)
 		}
 	}

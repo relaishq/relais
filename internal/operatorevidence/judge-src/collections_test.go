@@ -21,7 +21,7 @@ func editPoolCalls(t *testing.T, input *previewPoolInput, change func(*callharne
 func TestBaselinePopulationCompleteness(t *testing.T) {
 	t.Parallel()
 	control := rawPoolSample()
-	if got := pooledPreviewMedia(&control); got.Status != "passed" {
+	if got := fixturePoolVerdict(&control); got.Status != "passed" {
 		t.Fatal("passing control", got)
 	}
 	changes := map[string]func(*callharness.DistributedGap){
@@ -51,7 +51,7 @@ func TestBaselinePopulationCompleteness(t *testing.T) {
 					input.Phases[i].CallerJSONL = strings.ReplaceAll(input.Phases[i].CallerJSONL, `"baseline_possible_ns":null,`, "")
 				}
 			}
-			if got := pooledPreviewMedia(&input); got.Status != "inconclusive" {
+			if got := fixturePoolVerdict(&input); got.Status != "inconclusive" {
 				t.Fatal("MUTATION: baseline-population-complete", got)
 			}
 			for i := range input.Phases {
@@ -60,12 +60,12 @@ func TestBaselinePopulationCompleteness(t *testing.T) {
 				}
 			}
 			input.Phases[0].Receipts[0].Result.Lost = true
-			if got := pooledPreviewMedia(&input); got.Status != "failed" {
+			if got := fixturePoolVerdict(&input); got.Status != "failed" {
 				t.Fatal("independent receipt failure erased", got)
 			}
 			input.Phases[0].Receipts[0].Result.Lost = false
 			replaceCall(t, &input, func(c *callharness.Report) { c.DecryptionFailures.AuthTag = 1 })
-			if got := pooledPreviewMedia(&input); got.Status != "failed" {
+			if got := fixturePoolVerdict(&input); got.Status != "failed" {
 				t.Fatal("independent counter failure erased", got)
 			}
 		})
@@ -106,11 +106,11 @@ func TestCallerCollectionCompleteness(t *testing.T) {
 			t.Parallel()
 			input := rawPoolSample()
 			replaceCall(t, &input, change)
-			if got := pooledPreviewMedia(&input); got.Status != "inconclusive" {
+			if got := fixturePoolVerdict(&input); got.Status != "inconclusive" {
 				t.Fatal("MUTATION: caller-collections-complete", got)
 			}
 			input.Phases[0].Receipts[0].Result.Lost = true
-			if got := pooledPreviewMedia(&input); got.Status != "failed" {
+			if got := fixturePoolVerdict(&input); got.Status != "failed" {
 				t.Fatal("collection error erased loss", got)
 			}
 		})
@@ -145,11 +145,11 @@ func TestPhaseCollectionJoins(t *testing.T) {
 			if phaseCollections(phase, &report) == nil {
 				t.Fatal("MUTATION: phase-collection-join")
 			}
-			if got := pooledPreviewMedia(&input); got.Status != "inconclusive" {
+			if got := fixturePoolVerdict(&input); got.Status != "inconclusive" {
 				t.Fatal("MUTATION: phase-collection-join", got)
 			}
 			replaceCall(t, &input, func(c *callharness.Report) { c.DecryptionFailures.AuthTag = 1 })
-			if got := pooledPreviewMedia(&input); got.Status != "failed" {
+			if got := fixturePoolVerdict(&input); got.Status != "failed" {
 				t.Fatal("join error erased failure", got)
 			}
 		})
@@ -159,11 +159,11 @@ func TestCollectionPresenceBeforeJudgment(t *testing.T) {
 	t.Parallel()
 	input := rawPoolSample()
 	input.Phases[0].CallerJSONL = strings.Replace(input.Phases[0].CallerJSONL, `"Trusted":true,"Failed":false`, `"Trusted":true`, 1)
-	if got := pooledPreviewMedia(&input); got.Status != "inconclusive" {
+	if got := fixturePoolVerdict(&input); got.Status != "inconclusive" {
 		t.Fatal("MUTATION: verdict-presence", got)
 	}
 	input.Phases[0].Receipts[0].Result.Lost = true
-	if got := pooledPreviewMedia(&input); got.Status != "failed" {
+	if got := fixturePoolVerdict(&input); got.Status != "failed" {
 		t.Fatal(got)
 	}
 }
@@ -233,7 +233,7 @@ func TestIncompletePopulationCannotInventFailure(t *testing.T) {
 			}
 		}
 	})
-	if got := pooledPreviewMedia(&input); got.Status != "inconclusive" {
+	if got := fixturePoolVerdict(&input); got.Status != "inconclusive" {
 		t.Fatal("MUTATION: incomplete-population-not-failure", got)
 	}
 }
@@ -250,13 +250,13 @@ func TestRequiredReceiptMembers(t *testing.T) {
 		if loss {
 			want = "failed"
 		}
-		if !pool.Missing || !input.Phases[0].Missing || pooledPreviewMedia(&input).Status != want {
-			t.Fatal("MUTATION: receipt-member-presence", pool.Missing, pooledPreviewMedia(&input))
+		if !pool.Missing || !input.Phases[0].Missing || fixturePoolVerdict(&input).Status != want {
+			t.Fatal("MUTATION: receipt-member-presence", pool.Missing, fixturePoolVerdict(&input))
 		}
 		raw, _ := json.Marshal(sample)
 		raw = []byte(strings.ReplaceAll(string(raw), `,"uncertain":false`, ""))
 		decoded, err := decodePool(raw)
-		if err != nil || !decoded.Missing || pooledPreviewMedia(&decoded).Status != want {
+		if err != nil || !decoded.Missing || fixturePoolVerdict(&decoded).Status != want {
 			t.Fatal("missing receipt member erased state", err)
 		}
 	}
@@ -271,11 +271,11 @@ func TestTakeoverBoundCollection(t *testing.T) {
 			}
 		}
 	})
-	if got := pooledPreviewMedia(&input); got.Status != "inconclusive" {
+	if got := fixturePoolVerdict(&input); got.Status != "inconclusive" {
 		t.Fatal("MUTATION: takeover-bound-presence", got)
 	}
 	input.Phases[0].Receipts[0].Result.Lost = true
-	if got := pooledPreviewMedia(&input); got.Status != "failed" {
+	if got := fixturePoolVerdict(&input); got.Status != "failed" {
 		t.Fatal("takeover bound erased loss", got)
 	}
 }

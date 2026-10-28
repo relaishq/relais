@@ -17,11 +17,11 @@ import (
 func TestPooledVideoEvidenceCannotDisappear(t *testing.T) {
 	t.Parallel()
 	control := rawPoolSample()
-	if got := pooledPreviewMedia(&control); got.Status != "passed" {
+	if got := fixturePoolVerdict(&control); got.Status != "passed" {
 		t.Fatal("passing control", got)
 	}
 	replaceCall(t, &control, func(c *callharness.Report) { c.Tracks[1].Video.OnlineDecode.Errors = 1 })
-	if got := pooledPreviewMedia(&control); got.Status == "passed" {
+	if got := fixturePoolVerdict(&control); got.Status == "passed" {
 		t.Fatal("decoder errors did not prevent pass", got)
 	}
 	t.Run("typed", func(t *testing.T) {
@@ -70,11 +70,11 @@ func TestPooledVideoEvidenceCannotDisappear(t *testing.T) {
 				t.Fatal("video mutation did not apply")
 			}
 			input.Phases[0].CallerJSONL = stream.String()
-			if got := pooledPreviewMedia(&input); got.Status == "passed" {
+			if got := fixturePoolVerdict(&input); got.Status == "passed" {
 				t.Fatal("MUTATION: video-evidence-required", mode, got)
 			}
 			input.Phases[0].Receipts[0].Result.Lost = true
-			if got := pooledPreviewMedia(&input); got.Status != "failed" {
+			if got := fixturePoolVerdict(&input); got.Status != "failed" {
 				t.Fatal("video absence erased independent failure", got)
 			}
 		})
@@ -174,8 +174,9 @@ func optionalSites(value any, typ reflect.Type, sites map[string]requiredSite, l
 			optionalSites(element, typ.Elem(), sites, ledger, parentKind)
 		}
 	case reflect.Map:
-		for _, element := range value.(map[string]any) {
-			optionalSites(element, typ.Elem(), sites, ledger, parentKind)
+		object := value.(map[string]any)
+		for _, key := range sortedSweepKeys(object) {
+			optionalSites(object[key], typ.Elem(), sites, ledger, parentKind)
 		}
 	}
 }
@@ -200,16 +201,17 @@ func optionalInput(t *testing.T, input previewPoolInput, doc optionalDocument, r
 
 func TestEveryOptionalEvidenceMember(t *testing.T) {
 	t.Parallel()
+	sweep := newFieldSweep(t)
 	passing := completePoolFixture(t)
 	input := passing
 	input.Phases = append([]previewMediaInput{}, passing.Phases...)
-	if got := pooledPreviewMedia(&input); got.Status != "passed" {
+	if got := fixturePoolVerdict(&input); got.Status != "passed" {
 		t.Fatal("passing control", got)
 	}
 	// This is the real failing parent that exposed the ledger defect, rather
 	// than an unrelated failure sentinel that would mask removal of Video.
 	replaceCall(t, &input, func(c *callharness.Report) { c.Tracks[1].Video.OnlineDecode.Errors = 1 })
-	if got := pooledPreviewMedia(&input); got.Status == "passed" {
+	if got := fixturePoolVerdict(&input); got.Status == "passed" {
 		t.Fatal("failing control", got)
 	}
 	ledger := observe.EvidenceOptionalLedger()
@@ -233,13 +235,17 @@ func TestEveryOptionalEvidenceMember(t *testing.T) {
 		if err := observe.DecodeEvidenceLimit(controlBaselineRaw, controlBaseline, 64<<20); err != nil {
 			t.Fatal(err)
 		}
-		for key, site := range sites {
+		for _, key := range sortedSweepKeys(sites) {
+			site := sites[key]
 			if contexts[key] {
 				continue
 			}
 			contexts[key] = true
 			covered[site.owner.String()+"."+site.field.Name] = true
 			optional := observe.EvidenceOptional(site.owner, site.field, site.object) != ""
+			if !sweep.include(key, !optional) {
+				continue
+			}
 			for _, mode := range []string{"delete", "null"} {
 				t.Run(key+"/"+mode, func(t *testing.T) {
 					original, exists := site.object[site.name]
@@ -391,7 +397,7 @@ func TestOptionalMirroredDiagnostics(t *testing.T) {
 	for _, mode := range []string{"delete", "null"} {
 		t.Run(mode, func(t *testing.T) {
 			input := completePoolFixture(t)
-			if got := pooledPreviewMedia(&input); got.Status != "passed" {
+			if got := fixturePoolVerdict(&input); got.Status != "passed" {
 				t.Fatal("passing control", got)
 			}
 			// Omit the diagnostic from both source and copied receipts. Mutation
@@ -435,7 +441,7 @@ func TestOptionalMirroredDiagnostics(t *testing.T) {
 			if changed == 0 {
 				t.Fatal("no diagnostic omissions applied")
 			}
-			if got := pooledPreviewMedia(&input); got.Status != "passed" {
+			if got := fixturePoolVerdict(&input); got.Status != "passed" {
 				t.Fatal("consistent optional omission", mode, got)
 			}
 		})

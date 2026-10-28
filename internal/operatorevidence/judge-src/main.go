@@ -223,7 +223,7 @@ func parsePreviewMediaFor(input *previewMediaInput, qualify bool) (*loadgen.RunR
 			continue
 		}
 		if m.Type == "stats" {
-			sample, err := readSample(raw, first.PID)
+			sample, err := sampleFromMessage(m, first.PID)
 			if err != nil {
 				parseErr = err
 				continue

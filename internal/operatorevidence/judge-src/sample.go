@@ -16,6 +16,12 @@ func readSample(raw []byte, pid int) (loadgen.Stats, error) {
 	if err := observe.Numbers(m); err != nil {
 		return loadgen.Stats{}, err
 	}
+	return sampleFromMessage(m, pid)
+}
+
+// sampleFromMessage accepts a product message whose raw field contract and
+// numeric ranges have already been validated at the decoding boundary.
+func sampleFromMessage(m loadgen.Message, pid int) (loadgen.Stats, error) {
 	s := m.Stats
 	if m.Type != "stats" || s == nil || pid != 0 && m.PID != pid || s.At.IsZero() || s.Interval <= 0 || s.CPUPerGOMAXPROCS < 0 || s.IntervalLateness.P99 < 0 || s.IntervalLateness.Max < 0 {
 		return loadgen.Stats{}, fmt.Errorf("missing or invalid generator stats fields")
