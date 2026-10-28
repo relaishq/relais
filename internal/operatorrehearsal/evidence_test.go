@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
+	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
@@ -107,5 +109,59 @@ func TestRecordingJudgeRetainsInputAndLogsPublicContract(t *testing.T) {
 	}
 	if _, err = os.Stat(filepath.Join(output, "media-evidence.json")); err != nil {
 		t.Fatal("real recorder lost judge input", err)
+	}
+}
+
+func TestEvidenceTimingReasonsRemainPrivateAndClassifiable(t *testing.T) {
+	reason := "private-customer-token classification changes within event-time interval; width=12ms"
+	canonical, ok := observe.CanonicalTimingReason(reason)
+	if !ok {
+		t.Fatal("missing canonical reason")
+	}
+	message := loadgen.Message{Type: "call", PID: 42, Session: reason, Call: &callharness.Report{
+		Offer:       reason,
+		Distributed: &callharness.DistributedRecording{ClockError: reason, Causes: []string{reason}},
+		Moves:       []callharness.MoveReport{{Measurement: callharness.EventMeasurement{FirstContentVerdict: callharness.MetricVerdict{Reasons: []string{reason}}}, Distributed: &callharness.DistributedMeasurement{Causes: []string{reason}}}},
+	}}
+	raw, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := operatorevidence.Pool{Phases: []operatorevidence.MediaInput{{RawMedia: operatorevidence.RawMedia{CallerJSONL: string(raw) + "\n"}}}}
+	clean, err := SanitizeMediaEvidence(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved operatorevidence.Pool
+	if err = json.Unmarshal(clean, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal([]byte(saved.Phases[0].CallerJSONL), &message); err != nil {
+		t.Fatal(err)
+	}
+	for _, got := range []string{message.Call.Moves[0].Measurement.FirstContentVerdict.Reasons[0], message.Call.Moves[0].Distributed.Causes[0], message.Call.Distributed.ClockError, message.Call.Distributed.Causes[0]} {
+		if got != canonical || observe.TimingCause(got) != observe.TimingCause(reason) {
+			t.Fatal("timing reason changed", got)
+		}
+	}
+	if message.Session != evidenceAlias(reason) || message.Call.Offer != evidenceAlias(reason) {
+		t.Fatal("identity or SDP interpreted as a reason")
+	}
+	for _, private := range []string{"private-customer-token", "12ms"} {
+		if strings.Contains(string(clean), private) {
+			t.Fatal("dynamic reason text escaped", private)
+		}
+	}
+	// A field named Reasons in an unknown extension has no product ownership.
+	s := evidenceSanitizer{fields: map[reflect.Type]map[string]reflect.Type{}}
+	unknown, err := s.document([]byte(`{"Reasons":["`+reason+`"]}`), nil)
+	if err != nil || strings.Contains(string(unknown), canonical) {
+		t.Fatal("unknown extension retained a reason", err)
+	}
+	for _, unrecognized := range []string{"unknown-private-reason", "classification-varies-with-clock-interval", "classification changes within event-time interval", ""} {
+		got := s.text(unrecognized, true)
+		if observe.TimingCause(got) != observe.TimingCause(unrecognized) || unrecognized != "" && got != evidenceAlias(unrecognized) {
+			t.Fatal("unknown cause changed", unrecognized, got)
+		}
 	}
 }

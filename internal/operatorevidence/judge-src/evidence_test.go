@@ -3,16 +3,24 @@ package main
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/relaishq/relais/internal/operatorevidence"
+	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/internal/operatorrehearsal"
 	"github.com/relaishq/relais/pkg/callharness"
 )
 
 func TestSanitizedArtifactRejudgesRawPhases(t *testing.T) {
-	for _, mode := range []string{"valid", "lost", "absent-counter", "null-counter", "duplicate-member", "missing-envelope", "foreign", "unknown-bound", "relay"} {
+	modes := []string{"valid", "lost", "absent-counter", "null-counter", "duplicate-member", "missing-envelope", "foreign", "unknown-bound", "relay"}
+	timing := timingSanitizationFixtures()
+	for mode := range timing {
+		modes = append(modes, mode)
+	}
+	slices.Sort(modes)
+	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			input := rawPoolSample()
 			switch mode {
@@ -36,12 +44,51 @@ func TestSanitizedArtifactRejudgesRawPhases(t *testing.T) {
 				in := relayInput()
 				input = previewPoolInput{RunID: in.RunID, Phases: []previewMediaInput{in}}
 			}
+			if fixture, ok := timing[mode]; ok {
+				replaceCall(t, &input, func(c *callharness.Report) {
+					switch fixture.target {
+					case "first_content":
+						c.Moves[0].Measurement.FirstContentVerdict = callharness.MetricVerdict{Reasons: []string{fixture.reason}}
+					case "first_new_content":
+						c.Moves[0].Measurement.FirstNewContentVerdict = callharness.MetricVerdict{Reasons: []string{fixture.reason}}
+					case "distributed_window":
+						c.Moves[0].Distributed.WindowOutcome = "inconclusive"
+						c.Moves[0].Distributed.Causes = []string{fixture.reason}
+					case "clock_error":
+						c.Distributed.ClockError = fixture.reason
+					}
+				})
+			}
 			raw, _ := json.Marshal(input)
 			original, err := decodePool(raw)
 			if err != nil {
 				t.Fatal(err)
 			}
 			want := pooledPreviewMedia(&original)
+			if fixture, ok := timing[mode]; ok {
+				canonical, recognized := observe.CanonicalTimingReason(fixture.reason)
+				if recognized {
+					again, ok := observe.CanonicalTimingReason(canonical)
+					if !ok || again != canonical || timingCause(canonical) != fixture.cause {
+						t.Fatal("canonical cause or precedence changed", fixture, canonical)
+					}
+				} else if fixture.cause != "trusted-coverage-below-80-percent" {
+					t.Fatal("recognized cause has no canonical reason", fixture)
+				}
+				found := false
+				metric := fixture.target
+				if metric == "clock_error" {
+					metric = "distributed_window"
+				}
+				for _, row := range want.UndecidedMetrics {
+					if row.Metric == metric && slices.Contains(row.Causes, fixture.cause) {
+						found = true
+					}
+				}
+				if want.InconclusiveMetrics == 0 || len(want.UndecidedMetrics) != want.InconclusiveMetrics || !found {
+					t.Fatal("fixture did not exercise timing cause", fixture.cause, want)
+				}
+			}
 			var pool operatorevidence.Pool
 			if err = json.Unmarshal(raw, &pool); err != nil {
 				t.Fatal(err)
@@ -58,7 +105,7 @@ func TestSanitizedArtifactRejudgesRawPhases(t *testing.T) {
 			}
 			got := pooledPreviewMedia(&sanitized)
 			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("sanitization changed judge result: got %+v want %+v", got, want)
+				t.Fatalf("MUTATION: timing-reason-sanitization: sanitization changed judge result: got %+v want %+v", got, want)
 			}
 			if strings.Contains(string(clean), "run-fixture") || strings.Contains(string(clean), "session") && strings.Contains(string(clean), `"session":"session"`) {
 				t.Fatal("identity retained")
@@ -143,4 +190,38 @@ func TestInvalidCallRetainsKnownDecryptionFailure(t *testing.T) {
 	if got.Status != "failed" || got.DroppedPhases != 1 || got.IncludedPhases != 1 {
 		t.Fatal(got)
 	}
+}
+
+// Each family enters through product-owned reason fields, not a prebuilt summary.
+func timingSanitizationFixtures() map[string]struct{ target, reason, cause string } {
+	fixtures := map[string]struct{ target, reason, cause string }{}
+	families := []struct{ name, reason, cause string }{
+		{"varies", "private-identity classification changes within event-time interval; width=12ms", "classification-varies-with-clock-interval"},
+		{"unproven", "private-identity not proven throughout event-time interval; width=12ms", "classification-unproven-within-clock-interval"},
+		{"evaluation", "interval evaluation unavailable or exceeds 4096 evaluations; width=12ms", "interval-evaluation-unavailable"},
+		{"bounds", "duration=[1ms,12ms]; event interval width=12ms", "duration-bounds-uncertain"},
+	}
+	for _, f := range families {
+		for _, target := range []string{"first_content", "first_new_content"} {
+			fixtures["timing-"+target+"-"+f.name] = struct{ target, reason, cause string }{target, f.reason, f.cause}
+		}
+	}
+	distributed := []struct{ name, reason, cause string }{
+		{"window", "event window evidence incomplete", "event-window-incomplete"},
+		{"baseline", "private-identity gap baseline has fewer than 10 guaranteed intervals", "baseline-intervals-insufficient"},
+		{"pause", "private-identity pause may reach 2s within clock interval", "pause-bound-uncertain"},
+		{"spread", "private-identity baseline spread not proven within 50ms", "baseline-spread-uncertain"},
+		{"p95", "private-identity move p95 policy not proven across clock interval", "move-p95-unproven"},
+		{"count", "too few distributed trials: moves 19/20, takeovers 9/10", "trial-count-insufficient"},
+		{"content", "private-identity: content loss not proven across clock interval", "content-loss-unproven"},
+	}
+	for _, f := range distributed {
+		fixtures["timing-distributed-"+f.name] = struct{ target, reason, cause string }{"distributed_window", f.reason, f.cause}
+	}
+	for _, target := range []string{"first_content", "first_new_content", "distributed_window"} {
+		fixtures["timing-unknown-"+target] = struct{ target, reason, cause string }{target, "unrecognized private-identity reason", "trusted-coverage-below-80-percent"}
+	}
+	fixtures["timing-clock-error"] = struct{ target, reason, cause string }{"clock_error", families[1].reason, families[1].cause}
+	fixtures["timing-overlapping-families"] = struct{ target, reason, cause string }{"first_content", "interval evaluation unavailable or exceeds 4096 evaluations; classification changes within event-time interval; width=12ms", families[0].cause}
+	return fixtures
 }

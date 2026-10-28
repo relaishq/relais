@@ -13,6 +13,7 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorevidence"
+	"github.com/relaishq/relais/internal/operatorrehearsal"
 	"github.com/relaishq/relais/pkg/callharness"
 )
 
@@ -43,6 +44,23 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 		c.Moves[0].Measurement.FirstContentVerdict = callharness.MetricVerdict{Reasons: []string{"first content classification changes within event-time interval; width=1ms"}}
 	})
 	cases = append(cases, timing)
+	timingRaw, err := json.Marshal(timing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var timingPool operatorevidence.Pool
+	if err = json.Unmarshal(timingRaw, &timingPool); err != nil {
+		t.Fatal(err)
+	}
+	cleanTiming, err := operatorrehearsal.SanitizeMediaEvidence(timingPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sanitizedTiming, err := decodePool(cleanTiming)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases = append(cases, sanitizedTiming)
 	commits := []string{"a0d9744ff1223a8d7978447c907041973e915b08", "85e10436eb6adbbf577b6538b0bbb799aab823b2"}
 	for _, commit := range commits {
 		if err := pinnedCommit(ctx, root, commit); err != nil {

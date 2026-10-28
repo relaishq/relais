@@ -15,6 +15,8 @@ import (
 
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/operatorevidence"
+	"github.com/relaishq/relais/internal/operatorgates/observe"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 // SanitizeMediaEvidence retains JSON structure (including absent/null/duplicate
@@ -82,7 +84,26 @@ func (s *evidenceSanitizer) member(t reflect.Type, key string) (string, reflect.
 	}
 	return evidenceAlias(key), nil
 }
-func (s *evidenceSanitizer) text(v string) string {
+
+// Only reason fields consumed by the diagnostic classifier get canonical text.
+// Identical-looking identities and unknown extension fields stay opaque.
+func evidenceTimingReason(t reflect.Type, key string) bool {
+	switch evidenceType(t) {
+	case reflect.TypeFor[callharness.MetricVerdict]():
+		return strings.EqualFold(key, "Reasons")
+	case reflect.TypeFor[callharness.DistributedMeasurement]():
+		return strings.EqualFold(key, "causes")
+	case reflect.TypeFor[callharness.DistributedRecording]():
+		return strings.EqualFold(key, "causes") || strings.EqualFold(key, "clock_error")
+	}
+	return false
+}
+func (s *evidenceSanitizer) text(v string, timingReason bool) string {
+	if timingReason {
+		if canonical, ok := observe.CanonicalTimingReason(v); ok {
+			return canonical
+		}
+	}
 	if v == "" {
 		return ""
 	}
@@ -99,7 +120,7 @@ func (s *evidenceSanitizer) document(raw []byte, typ reflect.Type) ([]byte, erro
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.UseNumber()
 	var out bytes.Buffer
-	if err := s.value(d, &out, "", typ); err != nil {
+	if err := s.value(d, &out, "", typ, false); err != nil {
 		return nil, err
 	}
 	if _, err := d.Token(); err != io.EOF {
@@ -107,7 +128,7 @@ func (s *evidenceSanitizer) document(raw []byte, typ reflect.Type) ([]byte, erro
 	}
 	return out.Bytes(), nil
 }
-func (s *evidenceSanitizer) value(d *json.Decoder, out *bytes.Buffer, key string, typ reflect.Type) error {
+func (s *evidenceSanitizer) value(d *json.Decoder, out *bytes.Buffer, key string, typ reflect.Type, timingReason bool) error {
 	token, err := d.Token()
 	if err != nil {
 		return err
@@ -121,6 +142,7 @@ func (s *evidenceSanitizer) value(d *json.Decoder, out *bytes.Buffer, key string
 			}
 			first = false
 			childKey := key
+			childTimingReason := timingReason && delim == '['
 			var childType reflect.Type
 			if t := evidenceType(typ); t != nil && delim == '[' && (t.Kind() == reflect.Slice || t.Kind() == reflect.Array) {
 				childType = t.Elem()
@@ -131,6 +153,7 @@ func (s *evidenceSanitizer) value(d *json.Decoder, out *bytes.Buffer, key string
 					return e
 				}
 				childKey = k.(string)
+				childTimingReason = evidenceTimingReason(typ, childKey)
 				name, memberType := s.member(typ, childKey)
 				childType = memberType
 
@@ -138,7 +161,7 @@ func (s *evidenceSanitizer) value(d *json.Decoder, out *bytes.Buffer, key string
 				out.Write(encoded)
 				out.WriteByte(':')
 			}
-			if err := s.value(d, out, childKey, childType); err != nil {
+			if err := s.value(d, out, childKey, childType, childTimingReason); err != nil {
 				return err
 			}
 		}
@@ -193,7 +216,7 @@ func (s *evidenceSanitizer) value(d *json.Decoder, out *bytes.Buffer, key string
 		} else if typ == nil && v != "" {
 			token = evidenceAlias(v)
 		} else {
-			token = s.text(v)
+			token = s.text(v, timingReason)
 		}
 	}
 	if _, ok := token.(json.Number); ok && typ == nil {

@@ -290,7 +290,8 @@
     "rehearsal-failed-metric-pass",
     "rehearsal-dropped-phase-pass",
     "rehearsal-undecided-timing-blocks",
-    "paid-undecided-timing-pass"
+    "paid-undecided-timing-pass",
+    "evidence-timing-reasons-hashed"
   ],
   "killed": [
     {
@@ -2591,6 +2592,14 @@
       "evidence": "killed",
       "test": "TestPaidSummaryRejectsUndecidedTiming",
       "package": "./internal/operatorevidence",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-timing-reasons-hashed",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestSanitizedArtifactRejudgesRawPhases/timing-first_content-varies",
+      "package": "./internal/operatorevidence/judge-src",
       "guardFingerprint": ""
     }
   ],

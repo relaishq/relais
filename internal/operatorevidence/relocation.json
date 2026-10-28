@@ -56,7 +56,8 @@
     "Qualify every phase independently, quarantine incomplete phase envelopes separately, retain known failures and report fixed contract paths/reasons without changing media or generator thresholds.",
     "Accept exactly -1 for the product MoveReport.From/To unknown-index sentinel, with release-source provenance in the numeric exception ledger; other numeric guards and judge thresholds are unchanged.",
     "Restore original per-event generator coverage: complete measurements use their event and baseline horizons plus one sampler period, not dial through hangup; media-span validation and incomplete-measurement fallback remain unchanged.",
-    "Diagnostic-only projection of complete media, distinct lost callers and every undecided yardstick row with phase/event indexes and fixed reason codes; strict product verdicts and thresholds are unchanged. Free rehearsal eligibility alone follows the owner decision of 2026-10-28."
+    "Diagnostic-only projection of complete media, distinct lost callers and every undecided yardstick row with phase/event indexes and fixed reason codes; strict product verdicts and thresholds are unchanged. Free rehearsal eligibility alone follows the owner decision of 2026-10-28.",
+    "Share the unchanged timing-reason classifier with evidence sanitization; recognized product reason fields retain fixed canonical prefixes, while opaque identities and unknown reasons remain hashed. Full-summary raw/sanitized comparisons cover every cause family without changing judge policy or event coverage."
   ],
   "guardFiles": [
     {
@@ -81,7 +82,7 @@
     },
     {
       "file": "timing.go",
-      "sha256": "989a2a3e95573c084e328df9145481c37dbd0450983899935ceb7c402d4a1f25"
+      "sha256": "dffdc12bb39ac503a6bf4216ef6197ea9d5802b14380deb0a110491a2f4f2a84"
     }
   ],
   "fixtureHardening": "Synthetic controls carry complete armed inventories, both audio/video gap populations on every event, and mapped duration/classification records. Product judge policy and expected passing summary counts are unchanged. Video tracks include the product-emitted Video object; the expected passing summary remains unchanged.",
@@ -91,6 +92,7 @@
     "canonical.go": "22cb1835297d4bf5c2afa264a22370f855897a9390dedfc30e305188a6f6e30e",
     "strict.go": "efdd1034a43eefff1b878cb53227ec77215e6bb6ae5b8badf3e67090fb8cd0d6",
     "diagnostic.go": "9ebee72d59b1e10f2c4696180206ed8b2a5aee22c3562d775f3ab1acd2c9af87",
-    "numbers.go": "6b185d11d81af31566b2a5c4cac4664a85d26ebbeba02bfe4b5cc1293baf8c0e"
+    "numbers.go": "6b185d11d81af31566b2a5c4cac4664a85d26ebbeba02bfe4b5cc1293baf8c0e",
+    "timing.go": "ba141ca76ab468ad524649ef394ec62502b49a5ccd48fe5cb360e98e28fb351b"
   }
 }

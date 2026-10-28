@@ -2,9 +2,9 @@ package main
 
 import (
 	"slices"
-	"strings"
 
 	"github.com/relaishq/relais/internal/loadgen"
+	"github.com/relaishq/relais/internal/operatorgates/observe"
 )
 
 // Diagnostics only: consume the yardstick already judged by the pinned product.
@@ -16,34 +16,7 @@ type undecidedMetric struct {
 	Causes []string `json:"causes"`
 }
 
-func timingCause(reason string) string {
-	switch {
-	case strings.Contains(reason, "classification changes within event-time interval;"):
-		return "classification-varies-with-clock-interval"
-	case strings.Contains(reason, "not proven throughout event-time interval;"):
-		return "classification-unproven-within-clock-interval"
-	case strings.HasPrefix(reason, "interval evaluation unavailable or exceeds "):
-		return "interval-evaluation-unavailable"
-	case strings.HasPrefix(reason, "duration=["):
-		return "duration-bounds-uncertain"
-	case reason == "event window evidence incomplete":
-		return "event-window-incomplete"
-	case strings.HasSuffix(reason, " gap baseline has fewer than 10 guaranteed intervals"):
-		return "baseline-intervals-insufficient"
-	case strings.HasSuffix(reason, " pause may reach 2s within clock interval"):
-		return "pause-bound-uncertain"
-	case strings.HasSuffix(reason, " baseline spread not proven within 50ms"):
-		return "baseline-spread-uncertain"
-	case strings.HasSuffix(reason, " move p95 policy not proven across clock interval"):
-		return "move-p95-unproven"
-	case strings.HasPrefix(reason, "too few distributed trials:"):
-		return "trial-count-insufficient"
-	case strings.Contains(reason, "content loss not proven across clock interval"):
-		return "content-loss-unproven"
-	}
-	// The product emits an inconclusive row when trusted coverage is below 80%.
-	return "trusted-coverage-below-80-percent"
-}
+func timingCause(reason string) string { return observe.TimingCause(reason) }
 
 func undecidedRows(r *loadgen.RunReport) []undecidedMetric {
 	out := []undecidedMetric{}

@@ -233,7 +233,11 @@ It replaces opaque identities/text with consistent aliases and shifts all
 nonzero timestamps by one common offset to a synthetic epoch. Missing, null and
 duplicate members and exact known-field number tokens remain intact; unknown
 extension values are scrubbed. Replay tests compare every summary field before
-and after sanitization for passing, failing and invalid evidence.
+and after sanitization for passing, failing and invalid evidence, including
+every timing cause family. Recognized product timing reasons retain only fixed,
+privacy-safe classifier prefixes. Dynamic text is removed; identities and
+unrecognized reasons stay hashed. This preserves `undecidedMetrics.causes`
+without changing judge policy or the event coverage window.
 To rejudge offline, extract the artifact's `pool` object as the judge input.
 Build the pinned judge with `operatorevidence.BuildPinned` from `sourceCommit`
 and this checkout's embedded judge sources, verify `judgeSha256`, then invoke

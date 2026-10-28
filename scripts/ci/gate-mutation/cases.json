@@ -3224,5 +3224,16 @@
     "Test": "TestPaidSummaryRejectsUndecidedTiming",
     "Package": "./internal/operatorevidence",
     "Marker": "MUTATION: paid-timing-strict"
+  },
+  {
+    "ID": "evidence-timing-reasons-hashed",
+    "File": "internal/operatorrehearsal/evidence.go",
+    "Function": "text",
+    "Receiver": "evidenceSanitizer",
+    "Old": "if timingReason {",
+    "New": "if false && timingReason {",
+    "Test": "TestSanitizedArtifactRejudgesRawPhases/timing-first_content-varies",
+    "Marker": "MUTATION: timing-reason-sanitization",
+    "Package": "./internal/operatorevidence/judge-src"
   }
 ]
