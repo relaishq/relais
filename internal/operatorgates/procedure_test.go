@@ -978,3 +978,52 @@ func TestMeasurementPublicationFields(t *testing.T) {
 		t.Fatal("MUTATION: typed-public-measurement", string(raw), err)
 	}
 }
+
+// A real clock advances between deadline creation and admission. Caller setup
+// (including the probe burst) precedes the fresh gate window.
+type advancingGateClock struct{ FakeClock }
+
+func (c *advancingGateClock) Elapsed() time.Duration {
+	c.Advance(time.Microsecond)
+	return c.Tick
+}
+
+func TestSequenceFullLengthCampaignAfterPreparation(t *testing.T) {
+	for _, elapsed := range []time.Duration{5 * time.Minute, 84 * time.Minute} {
+		t.Run(elapsed.String(), func(t *testing.T) {
+			s, initial := fixtureSession(t)
+			clock := &advancingGateClock{FakeClock: *initial}
+			s.clock, s.Budget.clock = clock, clock
+			clock.Advance(elapsed)
+			prepared, commands := 0, 0
+			result := s.RunSequence(context.Background(), SequencePorts{
+				Minimum: func(operator.Gate) time.Duration { return 1020*time.Second + 180*time.Second },
+				Prepare: func(_ context.Context, _ operator.Gate, end, gateEnd time.Duration) error {
+					prepared++
+					if end > gateEnd || end <= clock.Elapsed()+120*time.Second {
+						t.Fatal("preparation lost its separate budget")
+					}
+					clock.Advance(120 * time.Second)
+					return nil
+				},
+				Command: func(_ context.Context, _ operator.Gate, end time.Duration) ProcedureResult {
+					commands++
+					if end-clock.Elapsed() > GateMaximum || end > s.Budget.MutationEnd() {
+						t.Fatal("gate exceeded policy cutoff")
+					}
+					return ProcedureResult{Status: operator.Passed, Media: &MediaSummary{Status: operator.Passed}}
+				},
+				Finalize: func(context.Context, time.Duration) (*MediaSummary, error) {
+					return &MediaSummary{Status: operator.Passed}, nil
+				},
+			})
+			if elapsed == 5*time.Minute {
+				if prepared != 1 || commands != 1 || result.Gates[0].Reason != "" || result.Status != operator.Passed {
+					t.Fatalf("full-length campaign skipped after setup: prepared=%d commands=%d result=%+v", prepared, commands, result)
+				}
+			} else if commands != 0 || result.Gates[0].Reason != "gate-deadline" {
+				t.Fatalf("late campaign escaped minute-103 cutoff: %+v", result)
+			}
+		})
+	}
+}

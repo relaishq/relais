@@ -313,14 +313,17 @@ func (s *Session) SetBlobRoot(root *os.Root) { s.spool = root }
 
 // BeginGate fixes this gate's cutoff once. Asking again cannot renew it.
 func (s *Session) BeginGate() (time.Duration, bool) {
+	return s.beginGate(s.clock.Elapsed())
+}
+func (s *Session) beginGate(now time.Duration) (time.Duration, bool) {
 	if s.activeEnd == nil {
-		end, ok := s.Budget.GateEnd()
+		end, ok := s.Budget.gateEnd(now)
 		if !ok {
 			return end, false
 		}
 		s.activeEnd = &end
 	}
-	return *s.activeEnd, s.clock.Elapsed() < *s.activeEnd && !s.latched
+	return *s.activeEnd, now < *s.activeEnd && !s.latched
 }
 func (s *Session) requestIDs() []string {
 	ids := make([]string, 0, len(s.requests))

@@ -81,11 +81,14 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 						s.Halt(result.Reason)
 					}
 				} else {
-					end, ok := s.BeginGate()
+					// Admit against the same instant that fixes the window. A full
+					// 20-minute minimum must not lose to clock movement between reads.
+					now := s.clock.Elapsed()
+					end, ok := s.beginGate(now)
 					if p.Finalize != nil {
 						end = min(end, s.Budget.MutationEnd())
 					}
-					if !ok || end <= s.clock.Elapsed() || minimum > end-s.clock.Elapsed() {
+					if !ok || end <= now || minimum > end-now {
 						result.Reason = "gate-deadline"
 						s.activeEnd = nil
 

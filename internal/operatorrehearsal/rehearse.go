@@ -230,7 +230,7 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 	var current operator.Gate
 	stops := map[operator.Gate]bool{}
 	sequence := r.session.RunSequence(ctx, operatorgates.SequencePorts{
-		Minimum: func(g operator.Gate) time.Duration { return time.Duration(duration(g))*time.Second + 180*time.Second },
+		Minimum: campaignMinimum,
 		Prepare: func(ctx context.Context, gate operator.Gate, end, gateEnd time.Duration) error {
 			current = gate
 			return r.prepare(ctx, gate, end, gateEnd)
@@ -411,6 +411,16 @@ func duration(g operator.Gate) int {
 	}
 	return 1020
 }
+func campaignMinimum(g operator.Gate) time.Duration {
+	return time.Duration(duration(g))*time.Second + 180*time.Second
+}
+
+// Caller preparation precedes the gate window. Its immutable manifest still
+// needs the campaign's media plus the same two-minute fit reserve at launch.
+func callerWindow(g operator.Gate, now, gateEnd time.Duration) (time.Duration, bool) {
+	end := min(now+operatorgates.GateMaximum, gateEnd)
+	return end, end-now >= time.Duration(duration(g))*time.Second+120*time.Second
+}
 func (r *rehearsal) parameters() operatorgates.ProcessParameters {
 	p := operatorgates.ProcessParameters{Control: "http://" + r.topology.Hosts["shared"].IP + ":24710", Relay: "http://" + r.topology.Hosts["relay"].IP + ":24700", Store: StoreEndpoint, StorePort: 16379, Workers: map[string]operatorgates.WorkerEndpoint{}}
 	for _, w := range []string{"w1", "w2"} {
@@ -527,7 +537,11 @@ func (r *rehearsal) prepare(ctx context.Context, g operator.Gate, end, gateEnd t
 	if e := operatorgates.GatePrecondition(ctx, r.process, r.ports(), end); e != nil {
 		return e
 	}
-	if e := r.startCaller(ctx, g, duration(g), strconv.Itoa(len(r.units)+1), end, gateEnd); e != nil {
+	callerEnd, fits := callerWindow(g, r.clock.Elapsed(), gateEnd)
+	if !fits {
+		return &operatorgates.ProcedureError{Code: "gate-deadline"}
+	}
+	if e := r.startCaller(ctx, g, duration(g), strconv.Itoa(len(r.units)+1), end, callerEnd); e != nil {
 		_ = r.stop(ctx, end)
 		return e
 	}

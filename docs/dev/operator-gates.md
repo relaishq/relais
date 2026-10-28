@@ -221,6 +221,11 @@ one initial clock probe and one every ten seconds, so ten-probe registration
 needs at least ninety seconds after loader startup. The media calibration runs
 for 180 seconds so a 1.25-second phased first interval stays below the judge's
 1% budget, within a six-minute caller runtime limit.
+Caller preparation, including the ten-probe registration, precedes each fresh
+20-minute gate window. Campaign admission uses one elapsed-clock snapshot so a
+1,200-second minimum fits a full window exactly. Before launch, the caller's
+separate 20-minute manifest must fit media plus 120 seconds; both windows stay
+clamped to the original session cutoff, with mutations ending by minute 103.
 Their UDP bind uses the runner's route source for the relay, with port zero;
 the loader rejects wildcard bind addresses. The bridge checks the staged loader
 hash, executable bit, certificate readability and ffmpeg inside the caller unit.
