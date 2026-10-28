@@ -52,13 +52,30 @@ type rehearsal struct {
 	units                   []operatorcaller.Identity
 }
 type recordingJudge struct {
-	pinned operatorevidence.PinnedJudge
-	last   *operatorevidence.Summary
-	cpu    []Calibration
+	requests uint64
+	note     func(operator.Uncertainty)
+	pinned   operatorevidence.PinnedJudge
+	last     *operatorevidence.Summary
+	cpu      []Calibration
 }
 
 func (j *recordingJudge) Judge(ctx context.Context, p operatorevidence.Pool) (operatorevidence.Summary, error) {
+	j.requests++
 	s, e := j.pinned.Judge(ctx, p)
+	if e != nil && j.note != nil {
+		end, _ := ctx.Deadline()
+		u := operator.Uncertainty{Kind: "judge", RequestID: strconv.FormatUint(j.requests, 10), Target: "judge", Action: "judge", Rule: "judge-unavailable"}
+		if errors.Is(e, context.DeadlineExceeded) {
+			u.Rule = "timeout"
+		} else if errors.Is(e, context.Canceled) {
+			u.Rule = "cancelled"
+		}
+		if !end.IsZero() {
+			u.DeadlineUnixMS = strconv.FormatInt(end.UnixMilli(), 10)
+			u.RemainingMS = time.Until(end).Milliseconds()
+		}
+		j.note(u)
+	}
 	if e == nil {
 		j.last = &s
 		j.cpu = nil
@@ -85,7 +102,17 @@ func (e callerExecutor) Execute(ctx context.Context, script []byte, end time.Tim
 	result := e.r.runner.Run(bounded, Command{Label: "caller-service", Args: []string{"sh", "-s"}, Input: script})
 	if result.Err != nil || result.Code == nil || result.Truncated || *result.Code < 0 {
 		e.r.failure("caller-service", result)
-		return operatorcaller.Execution{Certainty: operator.Unknown}
+		rule := "lost-reply"
+		if errors.Is(result.Err, context.DeadlineExceeded) {
+			rule = "timeout"
+		} else if errors.Is(result.Err, context.Canceled) {
+			rule = "cancelled"
+		} else if result.Truncated {
+			rule = "truncated-output"
+		} else if result.Code == nil && result.Err == nil {
+			rule = "missing-exit-status"
+		}
+		return operatorcaller.Execution{Certainty: operator.Unknown, UncertaintyRule: rule}
 	}
 	certainty := operator.Succeeded
 	if *result.Code != 0 {
@@ -144,6 +171,7 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 		}
 		if r.session != nil {
 			report.Latched = r.session.Latched()
+			report.Uncertainties = r.session.Uncertainties()
 		}
 		report.Evaluate()
 		if e := report.Save(filepath.Join(c.Output, "report.json")); e != nil {
@@ -179,6 +207,11 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 		report.Errors = append(report.Errors, "setup-failed")
 		return report, e
 	}
+	r.session.SetUncertaintySink(func(u operator.Uncertainty) {
+		raw, _ := json.Marshal(u)
+		_, _ = fmt.Fprintf(r.diagnostics, "command-result-unknown %s\n", raw)
+	})
+	r.judge.note = r.session.RecordUncertainty
 	r.peer = NewLocalPeer(adapter, r.run, init)
 	defer r.peer.Close()
 	r.process = &operatorgates.ProcessConfig{Parameters: r.parameters(), ArmedAt: armed, Trials: true, Pool: true}
@@ -238,7 +271,15 @@ func (r *rehearsal) recordError(stage string, err error) {
 	if cause != stage {
 		r.report.Errors = append(r.report.Errors, cause)
 	}
-	_, _ = fmt.Fprintf(r.diagnostics, "%s: %s\n", stage, cause)
+	detail := ""
+	if cause == "command-result-unknown" && r.session != nil {
+		rows := r.session.Uncertainties()
+		if len(rows) > 0 {
+			raw, _ := json.Marshal(rows[len(rows)-1])
+			detail = " " + string(raw)
+		}
+	}
+	_, _ = fmt.Fprintf(r.diagnostics, "%s: %s%s\n", stage, cause, detail)
 }
 
 func (r *rehearsal) setup(ctx context.Context) error {
@@ -467,8 +508,11 @@ func (r *rehearsal) affinity(ctx context.Context) error {
 	r.report.CPU.CallerAffinities = append(r.report.CPU.CallerAffinities, CPUList(cpus))
 	return nil
 }
+
+const calibrationPreparation = 2 * time.Minute
+
 func (r *rehearsal) calibrate(ctx context.Context) error {
-	if e := r.startCaller(ctx, operator.Rollout, 60, "1", r.clock.Elapsed()+time.Minute, r.clock.Elapsed()+4*time.Minute); e != nil {
+	if e := r.startCaller(ctx, operator.Rollout, 60, "1", r.clock.Elapsed()+calibrationPreparation, r.clock.Elapsed()+4*time.Minute); e != nil {
 		return e
 	}
 	raw, e := r.active.Collect(ctx, r.wall(r.clock.Elapsed()+3*time.Minute))

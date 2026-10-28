@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatortransport"
@@ -31,6 +33,13 @@ func (s *Session) CheckInbox(p Peer) error {
 	if err == nil && f.Type == "cancel" {
 		code = "interrupted"
 	}
+	if code == "protocol-error" {
+		id := "0"
+		if f.Result != nil {
+			id = f.Result.ID
+		}
+		s.unknownRequest(id, "malformed-reply")
+	}
 	s.Halt(code)
 	return errors.New(code)
 }
@@ -39,6 +48,7 @@ func (s *Session) CheckInbox(p Peer) error {
 // pipe never leads to a second submission. Timeout preserves pending identity.
 func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, target, action string, args json.RawMessage, script []byte, end time.Duration, classify func(operator.Reply) operator.Certainty) (operator.Certainty, error) {
 	if ctx.Err() != nil {
+		s.RecordUncertainty(operator.Uncertainty{Kind: string(op), RequestID: "0", Target: target, Action: action, DeadlineUnixMS: strconv.FormatInt(s.clock.Wall().Add(end-s.clock.Elapsed()).UnixMilli(), 10), RemainingMS: (end - s.clock.Elapsed()).Milliseconds(), Rule: transportRule(ctx.Err(), "cancelled")})
 		s.Halt("interrupted")
 		return operator.Unknown, ctx.Err()
 	}
@@ -52,25 +62,30 @@ func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, t
 	wait, cancel := context.WithTimeout(ctx, s.requests[req.ID].end-s.clock.Elapsed())
 	defer cancel()
 	if err = p.Send(wait, operator.Frame{Type: "request", Session: s.ID, Request: &req}); err != nil {
+		s.unknownRequest(req.ID, transportRule(err, "send-failed"))
 		s.TransportLost()
 		return operator.Unknown, err
 	}
 	for {
 		f, err := p.Receive(wait)
 		if err != nil {
+			s.unknownRequest(req.ID, transportRule(err, "lost-reply"))
 			s.TransportLost()
 			return operator.Unknown, err
 		}
 		if f.Type == "cancel" {
+			s.unknownRequest(req.ID, "cancelled")
 			s.Halt("interrupted")
 			return operator.Unknown, errors.New("interrupted")
 		}
-		if f.Type != "result" {
+		if f.Type != "result" || f.Result == nil {
+			s.unknownRequest(req.ID, "malformed-reply")
 			s.Halt("protocol-error")
 			return operator.Unknown, errors.New("protocol-error")
 		}
 		resolved, err := operatortransport.ResolveReply(s.spool, *f.Result)
 		if err != nil {
+			s.unknownRequest(req.ID, "invalid-blob")
 			s.Halt("invalid-blob")
 			return operator.Unknown, err
 		}
@@ -79,11 +94,24 @@ func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, t
 		if f.Result.ID == req.ID {
 			evidence = classify(*f.Result)
 		}
+		if evidence == operator.Unknown && f.Result.Transport == operator.Succeeded && f.Result.ExitCode != nil && *f.Result.ExitCode == 0 && f.Result.UncertaintyRule == "" && !json.Valid(f.Result.Payload) {
+			f.Result.UncertaintyRule = "malformed-reply"
+		}
 		certainty, err := s.Accept(f.Session, *f.Result, evidence)
 		if err != nil || f.Result.ID == req.ID {
 			return certainty, err
 		}
 	}
+}
+
+func transportRule(err error, fallback string) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "cancelled"
+	}
+	return fallback
 }
 
 // Serve owns one session. Later gate modules register public implementations;
@@ -106,6 +134,10 @@ func Serve(ctx context.Context, p Peer, hello operator.Hello, run GateRunner, sp
 	if err != nil {
 		return err
 	}
+	s.SetUncertaintySink(func(u operator.Uncertainty) {
+		raw, _ := json.Marshal(u)
+		fmt.Fprintln(os.Stderr, "command-result-unknown", string(raw))
+	})
 	if len(spool) > 0 {
 		s.SetBlobRoot(spool[0])
 	}

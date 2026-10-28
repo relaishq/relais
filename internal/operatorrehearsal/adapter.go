@@ -152,6 +152,23 @@ func hostObservationFailed(action string, stdout []byte) bool {
 func (a *Adapter) classify(id string, result CommandResult) operator.Reply {
 	r := operator.Reply{ID: id, Transport: operator.Unknown}
 	if result.Err != nil || result.Code == nil || *result.Code < 0 || *result.Code == 124 || *result.Code == 125 || *result.Code == 137 || result.Truncated || len(result.Stdout) > operator.MaxHostOutputBytes || len(result.Stderr) > operator.MaxHostOutputBytes || !utf8.Valid(result.Stdout) || !utf8.Valid(result.Stderr) {
+		r.UncertaintyRule = "unconfirmed-exit"
+		switch {
+		case errors.Is(result.Err, context.DeadlineExceeded):
+			r.UncertaintyRule = "timeout"
+		case errors.Is(result.Err, context.Canceled):
+			r.UncertaintyRule = "cancelled"
+		case result.Truncated || len(result.Stdout) > operator.MaxHostOutputBytes || len(result.Stderr) > operator.MaxHostOutputBytes:
+			r.UncertaintyRule = "truncated-output"
+		case !utf8.Valid(result.Stdout) || !utf8.Valid(result.Stderr):
+			r.UncertaintyRule = "malformed-reply"
+		case result.Code != nil && (*result.Code == 124 || *result.Code == 137):
+			r.UncertaintyRule = "timeout"
+		case result.Err != nil:
+			r.UncertaintyRule = "lost-reply"
+		case result.Code == nil:
+			r.UncertaintyRule = "missing-exit-status"
+		}
 		return r
 	}
 	r.ExitCode = result.Code
@@ -162,7 +179,7 @@ func (a *Adapter) classify(id string, result CommandResult) operator.Reply {
 	// Credentials are removed before any byte crosses a pipe or diagnostic sink.
 	r.Payload, _ = json.Marshal(operator.HostOutput{Stdout: a.Topology.Redact(string(result.Stdout))})
 	if len(r.Payload) > operator.MaxFrameBytes/2 {
-		return operator.Reply{ID: id, Transport: operator.Unknown}
+		return operator.Reply{ID: id, Transport: operator.Unknown, UncertaintyRule: "truncated-output"}
 	}
 	return r
 }

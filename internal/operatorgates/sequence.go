@@ -46,8 +46,10 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 				result.Reason = "gate-deadline"
 			} else {
 				var prep error
+				var preparationEnd time.Duration
 				if p.Prepare != nil {
 					end := min(s.clock.Elapsed()+15*time.Minute, latest)
+					preparationEnd = end
 					prepCtx, cancel := context.WithTimeout(ctx, max(time.Duration(0), end-s.clock.Elapsed()))
 					gateEnd := s.Budget.end
 					if p.Finalize != nil {
@@ -71,6 +73,9 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 					case reason == "gate-deadline":
 						result.Reason = code(prep)
 					default:
+						if len(s.uncertainties) == 0 {
+							s.unknownScope("gate.prepare", "session", string(gate), preparationEnd, transportRule(prep, "operation-evidence-unknown"))
+						}
 						result.Status = operator.Inconclusive
 						result.Reason = "command-result-unknown"
 						s.Halt(result.Reason)
@@ -111,7 +116,11 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 				}
 			}
 		}
-		if release && p.ReleaseCallers != nil && !p.ReleaseCallers(ctx, releaseReason, min(s.Budget.end, s.clock.Elapsed()+time.Minute)) {
+		releaseEnd := min(s.Budget.end, s.clock.Elapsed()+time.Minute)
+		if release && p.ReleaseCallers != nil && !p.ReleaseCallers(ctx, releaseReason, releaseEnd) {
+			if len(s.uncertainties) == 0 {
+				s.unknownScope("caller.stop", "caller", "stop", releaseEnd, "unconfirmed-stop")
+			}
 			s.Halt("command-result-unknown")
 			result = Stopped(false, result)
 		}

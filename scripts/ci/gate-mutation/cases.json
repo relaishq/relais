@@ -48,7 +48,7 @@
     "GuardFingerprint": "8aef3102e2448b9436bbdae74abad730058fa1a2485eec6388b434663b057a8c",
     "File": "internal/operatorgates/session.go",
     "Function": "Issue",
-    "Old": "s.requests[r.ID] = &pending{end: end, effect: effect}",
+    "Old": "s.requests[r.ID] = &pending{end: end, effect: effect, operation: op, target: target, action: action}",
     "New": "",
     "Test": "TestPendingIdentity",
     "Marker": "MUTATION: pending-identity",

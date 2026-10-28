@@ -57,6 +57,10 @@ func sanitizePool(p *operatorevidence.Summary) *operatorevidence.Summary {
 	return &copy
 }
 func (r *Report) sanitize() {
+	r.Uncertainties = append([]operator.Uncertainty{}, r.Uncertainties...)
+	for i := range r.Uncertainties {
+		r.Uncertainties[i] = r.Uncertainties[i].Public()
+	}
 	for _, p := range []*string{&r.Commit, &r.HeadCommit} {
 		if *p != "" && !fullCommit.MatchString(*p) {
 			*p = "unavailable"

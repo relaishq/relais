@@ -45,11 +45,12 @@ type StopResult struct {
 // Execute delivers one fixed script. A positive exit from an effect is unknown:
 // it does not prove that the command made no change.
 type Execution struct {
-	Certainty    operator.Certainty
-	ExitCode     int
-	Output       string
-	NotSubmitted bool
-	RefusalCode  string
+	UncertaintyRule string
+	Certainty       operator.Certainty
+	ExitCode        int
+	Output          string
+	NotSubmitted    bool
+	RefusalCode     string
 }
 type Executor interface {
 	Execute(context.Context, []byte, time.Time) Execution
@@ -64,7 +65,7 @@ func (LocalExecutor) Execute(ctx context.Context, script []byte, end time.Time) 
 	cmd.Env = PublicEnvironment(nil)
 	out, err := cmd.Output()
 	if ctx.Err() != nil {
-		return Execution{Certainty: operator.Unknown}
+		return Execution{Certainty: operator.Unknown, UncertaintyRule: uncertaintyRule(ctx.Err())}
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
@@ -257,6 +258,11 @@ func (l *FixedLauncher) Ready(ctx context.Context, end time.Time) operator.Certa
 		}
 		r := l.Exec.Execute(ctx, script, end)
 		if r.Certainty == operator.Unknown {
+			rule := r.UncertaintyRule
+			if rule == "" {
+				rule = "lost-reply"
+			}
+			uncertainty(l.Fence, "caller.ready", identity.CallerID, identity.CallerID, "ready", end, time.Now(), rule)
 			return operator.Unknown
 		}
 		if r.Certainty != operator.Succeeded || r.ExitCode != 0 || r.Output != "caller-ready\n" || ctx.Err() != nil || !time.Now().Before(end) {
@@ -311,6 +317,19 @@ func (l *FixedLauncher) Start(ctx context.Context, i Identity, phase Phase, end 
 		result = StartResult{NotStarted, operator.Failed, i.Unit()}
 	} else {
 		result = StartResult{StartUnknown, operator.Unknown, i.Unit()}
+		rule := r.UncertaintyRule
+		if rule == "" {
+			rule = "malformed-reply"
+			if r.Certainty == operator.Unknown {
+				rule = "lost-reply"
+			} else if r.Certainty != operator.Succeeded || r.ExitCode != 0 {
+				rule = "unconfirmed-exit"
+			}
+		}
+		if !time.Now().Before(end) {
+			rule = "timeout"
+		}
+		uncertainty(l.Fence, "caller.start", i.CallerID, i.CallerID, "start", end, time.Now(), rule)
 		l.Fence.Halt("command-result-unknown")
 	}
 	l.starts[key] = result
@@ -342,6 +361,11 @@ func (l *FixedLauncher) Stop(ctx context.Context, i Identity, end time.Time) Sto
 		r := l.Exec.Execute(ctx, script, end)
 		if r.Certainty != operator.Succeeded || r.ExitCode != 0 {
 			uncertain = true
+			rule := r.UncertaintyRule
+			if rule == "" {
+				rule = "unconfirmed-stop"
+			}
+			uncertainty(l.Fence, "caller.stop", i.CallerID, i.CallerID, "stop", end, time.Now(), rule)
 			l.Fence.Halt("command-result-unknown")
 		}
 	} else {
@@ -361,6 +385,7 @@ func (l *FixedLauncher) Stop(ctx context.Context, i Identity, end time.Time) Sto
 	if result.Inactive && !uncertain {
 		result.Certainty = operator.Succeeded
 	} else {
+		uncertainty(l.Fence, "caller.stop", i.CallerID, i.CallerID, "stop", end, time.Now(), "unconfirmed-stop")
 		l.Fence.Halt("command-result-unknown")
 	}
 	l.stops[i.Unit()] = result

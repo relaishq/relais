@@ -26,13 +26,14 @@ type Trace struct {
 }
 
 type Result struct {
-	SchemaVersion  int          `json:"schemaVersion"`
-	ScenarioDigest string       `json:"scenarioDigest"`
-	Status         Verdict      `json:"status"`
-	Complete       bool         `json:"complete"`
-	Latched        bool         `json:"latched"`
-	Pending        []string     `json:"pending"`
-	Gates          []GateResult `json:"gates"`
-	Trace          []Trace      `json:"trace"`
-	FirstError     *Trace       `json:"firstError,omitempty"`
+	Uncertainties  []Uncertainty `json:"uncertainties,omitempty"`
+	SchemaVersion  int           `json:"schemaVersion"`
+	ScenarioDigest string        `json:"scenarioDigest"`
+	Status         Verdict       `json:"status"`
+	Complete       bool          `json:"complete"`
+	Latched        bool          `json:"latched"`
+	Pending        []string      `json:"pending"`
+	Gates          []GateResult  `json:"gates"`
+	Trace          []Trace       `json:"trace"`
+	FirstError     *Trace        `json:"firstError,omitempty"`
 }

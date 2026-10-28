@@ -35,7 +35,9 @@ func TestCalibrationAndGatesUseRouteBoundSharedLauncher(t *testing.T) {
 	}
 	defer store.Close()
 	routes, ready, diagnostics := 0, 0, 0
-	runner := commandRunner(func(_ context.Context, c Command) CommandResult {
+	unknown := false
+	var log bytes.Buffer
+	runner := commandRunner(func(ctx context.Context, c Command) CommandResult {
 		switch c.Label {
 		case "caller-route":
 			routes++
@@ -45,19 +47,36 @@ func TestCalibrationAndGatesUseRouteBoundSharedLauncher(t *testing.T) {
 			return CommandResult{Code: code(0), Stdout: []byte(`[{"prefsrc":"192.0.2.1"}]`)}
 		case "caller-service":
 			ready++
+			if unknown {
+				if strings.Contains(string(c.Input), "caller-ready") {
+					return CommandResult{Code: code(0), Stdout: []byte("caller-ready\n")}
+				}
+				return CommandResult{Err: context.DeadlineExceeded}
+			}
+			if ready == 1 {
+				end, _ := ctx.Deadline()
+				if time.Until(end) < 105*time.Second {
+					t.Fatal("calibration cannot collect ten 10-second loader probes")
+				}
+			}
 			if !strings.Contains(string(c.Input), "caller-ready") {
 				t.Fatal("caller bypassed the shared P4 readiness script")
 			}
 			return CommandResult{Code: code(1), Stderr: []byte("readiness refused by fixture")}
 		case "caller-diagnostics":
 			diagnostics++
-			return CommandResult{Code: code(0)}
+			for _, required := range []string{"-p Result", "-p ExecMainStatus", "-p ExecMainCode", "-p ActiveState", "-p SubState", "journalctl -u ", "-n 60"} {
+				if !strings.Contains(string(c.Input), required) {
+					t.Fatal("unknown omitted caller diagnostics", required)
+				}
+			}
+			return CommandResult{Code: code(0), Stdout: []byte("ActiveState=active\nSubState=running\ncaller journal reason " + strings.Repeat("x", 64) + "\n")}
 		default:
 			t.Fatal("unexpected caller command", c.Label)
 			return CommandResult{}
 		}
 	})
-	r := &rehearsal{work: work, run: "run-launch", bridge: "/bridge", load: "/load", clock: clock, session: session, box: operatorcaller.NewMailbox(store), runner: runner, diagnostics: &bytes.Buffer{}, process: &operatorgates.ProcessConfig{ArmedAt: now}, deployment: &Deployment{Work: work}, topology: &Topology{Hosts: map[string]Host{"relay": {IP: "192.0.2.10"}}, Secrets: map[string]string{"SignalToken": strings.Repeat("x", 64)}}, report: &Report{BinarySHA256: strings.Repeat("a", 64), CallerSHA256: strings.Repeat("b", 64)}}
+	r := &rehearsal{work: work, run: "run-launch", bridge: "/bridge", load: "/load", clock: clock, session: session, box: operatorcaller.NewMailbox(store), runner: runner, diagnostics: &log, process: &operatorgates.ProcessConfig{ArmedAt: now}, deployment: &Deployment{Work: work}, topology: &Topology{Hosts: map[string]Host{"relay": {IP: "192.0.2.10"}}, Secrets: map[string]string{"SignalToken": strings.Repeat("x", 64)}}, report: &Report{BinarySHA256: strings.Repeat("a", 64), CallerSHA256: strings.Repeat("b", 64)}}
 	r.report.Bounds.DriftPPM = 100
 	// Calibration reaches the same P4 readiness seam as the gate start below.
 	if err = r.calibrate(context.Background()); err == nil || err.Error() != "caller-not-ready" {
@@ -78,6 +97,18 @@ func TestCalibrationAndGatesUseRouteBoundSharedLauncher(t *testing.T) {
 	}
 	if routes != 1 || ready != 2 || diagnostics != 2 {
 		t.Fatal("calibration and gate launch diverged", routes, ready, diagnostics)
+	}
+	unknown = true
+	log.Reset()
+	if err = r.calibrate(context.Background()); err == nil || !session.Latched() {
+		t.Fatal("unknown launch did not fail calibration and latch", err)
+	}
+	if diagnostics != 3 || !strings.Contains(log.String(), "ActiveState=active") || !strings.Contains(log.String(), "caller journal reason [secret]") || strings.Contains(log.String(), strings.Repeat("x", 64)) {
+		t.Fatal("calibration unknown lost the active caller journal or disclosed a secret", log.String())
+	}
+	rows := session.Uncertainties()
+	if len(rows) != 1 || rows[0].Kind != "caller.start" || rows[0].Rule != "timeout" || rows[0].CallerID != "1" {
+		t.Fatal("calibration unknown lost the launch certainty rule", rows)
 	}
 }
 

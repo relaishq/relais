@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path"
 	"reflect"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/relaishq/relais/pkg/callharness"
@@ -52,6 +55,7 @@ type Broker struct {
 	Clock                           Clock
 	Fence                           Fence
 	sequence                        int
+	requestID                       uint64
 	prepared, collected             bool
 	setupRTTs                       []int64
 	closed                          bool
@@ -75,14 +79,35 @@ func (b *Broker) write(ctx context.Context, key string, v any) error {
 	if b.Fence.Latched() {
 		return errors.New("caller-fenced")
 	}
-	if createJSON(ctx, b.Mailbox, key, v) != Committed {
+	b.requestID++
+	if state := createJSON(ctx, b.Mailbox, key, v); state != Committed {
+		rule := "create-unknown"
+		if state == Conflict {
+			rule = "create-conflict"
+		}
+		end := time.UnixMilli(b.Manifest.Deadline)
+		if deadline, ok := ctx.Deadline(); ok {
+			end = minTime(end, deadline)
+		}
+		uncertainty(b.Fence, "mailbox.create", strconv.FormatUint(b.requestID, 10), b.Manifest.CallerID, path.Base(key), end, b.Clock.Now(), rule)
 		b.Fence.Halt("command-result-unknown")
 		return errors.New("command-result-unknown")
 	}
 	return nil
 }
-func (b *Broker) wait(ctx context.Context, key string, end time.Time, v any, valid func() bool) error {
+func (b *Broker) wait(ctx context.Context, key string, end time.Time, v any, valid func() bool) (err error) {
 	end = minTime(end, time.UnixMilli(b.Manifest.Deadline))
+	b.requestID++
+	id := strconv.FormatUint(b.requestID, 10)
+	defer func() {
+		if err != nil {
+			action := path.Base(key)
+			if strings.Contains(key, "/acks/") {
+				action = "ack"
+			}
+			uncertainty(b.Fence, "mailbox.read", id, b.Manifest.CallerID, action, end, b.Clock.Now(), uncertaintyRule(err))
+		}
+	}()
 	for b.Clock.Now().Before(end) {
 		if b.closed {
 			return errors.New("caller-stopped")
@@ -167,6 +192,7 @@ func (b *Broker) Feed(ctx context.Context, operation string, p Payload, end time
 		return ack.RunID == record.RunID && ack.Job == "caller-1" && ack.Sequence == n && ack.OperationID == operation && ack.OK
 	})
 	if err != nil {
+		uncertainty(b.Fence, "caller.feed", strconv.Itoa(n), b.Manifest.CallerID, operation, end, b.Clock.Now(), uncertaintyRule(err))
 		b.Fence.Halt("command-result-unknown")
 		return ack, errors.New("command-result-unknown")
 	}
@@ -287,6 +313,8 @@ func Hangup(ctx context.Context, m *Mailbox, root, run, reason string, f Fence) 
 	if state == Committed || state == Conflict {
 		return true
 	}
+	end, _ := ctx.Deadline()
+	uncertainty(f, "mailbox.create", "0", "", "hangup", end, time.Now(), "create-unknown")
 	f.Halt("command-result-unknown")
 	return false
 }
@@ -298,7 +326,18 @@ func EvidenceRetentionContext(ctx context.Context) (context.Context, context.Can
 	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 }
 
-func (b *Broker) Collect(ctx context.Context, end time.Time) (string, error) {
+func (b *Broker) Collect(ctx context.Context, end time.Time) (data string, collectionError error) {
+	b.requestID++
+	id := strconv.FormatUint(b.requestID, 10)
+	defer func() {
+		if collectionError != nil {
+			rule := "incomplete-evidence"
+			if errors.Is(collectionError, context.DeadlineExceeded) || strings.Contains(collectionError.Error(), "caller-deadline") {
+				rule = "timeout"
+			}
+			uncertainty(b.Fence, "caller.collect", id, b.Manifest.CallerID, "collect", minTime(end, time.UnixMilli(b.Manifest.Deadline)), b.Clock.Now(), rule)
+		}
+	}()
 	var finished struct {
 		RunID    string   `json:"runId"`
 		Job      string   `json:"job"`
@@ -394,6 +433,7 @@ func BeginBoundary(ctx context.Context, l Launcher, survivor, boundary *Broker, 
 	}
 	stop := l.Stop(ctx, survivor.Manifest.Identity, end)
 	if !stop.Inactive || stop.Certainty != "succeeded" {
+		uncertainty(survivor.Fence, "caller.stop", survivor.Manifest.CallerID, survivor.Manifest.CallerID, "stop", end, survivor.Clock.Now(), "unconfirmed-stop")
 		survivor.Fence.Halt("command-result-unknown")
 		return errors.New("command-result-unknown")
 	}

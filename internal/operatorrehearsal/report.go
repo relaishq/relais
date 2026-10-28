@@ -29,6 +29,7 @@ type CPUReport struct {
 	Phases           []Calibration `json:"phases"`
 }
 type Report struct {
+	Uncertainties  []operator.Uncertainty    `json:"uncertainties"`
 	SchemaVersion  int                       `json:"schemaVersion"`
 	Commit         string                    `json:"commit"`
 	HeadCommit     string                    `json:"headCommit,omitempty"`

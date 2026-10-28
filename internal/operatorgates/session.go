@@ -17,28 +17,32 @@ import (
 )
 
 type pending struct {
-	end      time.Duration
-	effect   bool
-	expired  bool
-	terminal bool
-	outcome  operator.Certainty
+	operation      operator.Operation
+	target, action string
+	end            time.Duration
+	effect         bool
+	expired        bool
+	terminal       bool
+	outcome        operator.Certainty
 }
 type Session struct {
-	ID           string
-	Budget       Budget
-	clock        Clock
-	capabilities map[operator.Operation]bool
-	next         uint64
-	requests     map[string]*pending
-	latched      bool
-	code         string
-	trace        []operator.Trace
-	firstError   *operator.Trace
-	gates        []operator.Gate
-	activeEnd    *time.Duration
-	digest       string
-	scenario     operator.Scenario
-	spool        *os.Root
+	ID              string
+	Budget          Budget
+	clock           Clock
+	capabilities    map[operator.Operation]bool
+	next            uint64
+	requests        map[string]*pending
+	latched         bool
+	code            string
+	trace           []operator.Trace
+	firstError      *operator.Trace
+	gates           []operator.Gate
+	activeEnd       *time.Duration
+	digest          string
+	scenario        operator.Scenario
+	spool           *os.Root
+	uncertainties   []operator.Uncertainty
+	uncertaintySink func(operator.Uncertainty)
 }
 
 func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {
@@ -86,6 +90,9 @@ func (s *Session) record(event, id string, c operator.Certainty, code string) {
 func (s *Session) Halt(code string) {
 	code = ErrorCategory("Error", code)
 	if !s.latched {
+		if code == "command-result-unknown" && len(s.uncertainties) == 0 {
+			s.unknownRequest("", "unattributed-latch")
+		}
 		s.latched = true
 		s.code = code
 		s.record("latch", "", operator.Unknown, code)
@@ -125,7 +132,7 @@ func (s *Session) Issue(op operator.Operation, target, action string, args json.
 	s.next++
 	deadline, remaining := s.Budget.Wire(end)
 	r := operator.Request{ID: strconv.FormatUint(s.next, 10), Operation: op, Target: target, Action: action, Args: bytes.Clone(args), Script: bytes.Clone(script), DeadlineUnixMS: deadline, RemainingMS: remaining}
-	s.requests[r.ID] = &pending{end: end, effect: effect}
+	s.requests[r.ID] = &pending{end: end, effect: effect, operation: op, target: target, action: action}
 	s.record("request", r.ID, "", "")
 	return r, nil
 }
@@ -135,10 +142,12 @@ func (s *Session) Issue(op operator.Operation, target, action string, args json.
 func (s *Session) Accept(session string, r operator.Reply, evidence operator.Certainty) (operator.Certainty, error) {
 	p := s.requests[r.ID]
 	if session != s.ID || p == nil || !r.Transport.Valid() || !evidence.Valid() {
+		s.unknownRequest(r.ID, "malformed-reply")
 		s.Halt("protocol-error")
 		return operator.Unknown, errors.New("protocol-error")
 	}
 	if p.terminal {
+		s.unknownRequest(r.ID, "malformed-reply")
 		s.Halt("duplicate-result")
 		return operator.Unknown, errors.New("duplicate-result")
 	}
@@ -170,6 +179,20 @@ func (s *Session) Accept(session string, r operator.Reply, evidence operator.Cer
 	p.terminal = true
 	p.outcome = outcome
 	if outcome == operator.Unknown {
+		rule := "operation-evidence-unknown"
+		switch {
+		case p.expired:
+			rule = "timeout"
+		case r.UncertaintyRule != "":
+			rule = r.UncertaintyRule
+		case r.Transport == operator.Unknown:
+			rule = "transport-unknown"
+		case r.ExitCode == nil:
+			rule = "missing-exit-status"
+		case *r.ExitCode != 0:
+			rule = "unconfirmed-exit"
+		}
+		s.unknownRequest(r.ID, rule)
 		s.Halt("command-result-unknown")
 	}
 	s.record("result", r.ID, outcome, "")
@@ -181,15 +204,33 @@ func (s *Session) Expire() {
 		if !p.terminal && !p.expired && s.clock.Elapsed() >= p.end {
 			p.expired = true
 			p.outcome = operator.Unknown
+			s.unknownRequest(id, "timeout")
 			s.Halt("command-result-unknown")
 			s.record("timeout", id, operator.Unknown, "")
 		}
 	}
 }
-func (s *Session) TransportLost() { s.Halt("command-result-unknown") }
+func (s *Session) TransportLost() {
+	for _, id := range s.requestIDs() {
+		if !s.requests[id].terminal {
+			noted := false
+			for _, u := range s.uncertainties {
+				if u.RequestID == id && u.Target == s.requests[id].target {
+					noted = true
+					break
+				}
+			}
+			if !noted {
+				s.unknownRequest(id, "lost-reply")
+			}
+		}
+	}
+	s.Halt("command-result-unknown")
+}
 func (s *Session) Final(gates []operator.GateResult) operator.Result {
 	s.Expire()
 	r := operator.Result{SchemaVersion: 1, ScenarioDigest: s.digest, Status: operator.Passed, Complete: true, Latched: s.latched, Pending: []string{}, Gates: gates, Trace: append([]operator.Trace{}, s.trace...), FirstError: s.firstError}
+	r.Uncertainties = s.Uncertainties()
 	for id, p := range s.requests {
 		if !p.terminal {
 			r.Pending = append(r.Pending, id)
@@ -247,6 +288,9 @@ func (s *Session) CompleteGate(r operator.GateResult, end time.Duration) operato
 		r.Reason = "command-result-unknown"
 	}
 	if r.Reason == "command-result-unknown" || r.Reason == "gate-deadline" || r.Reason == "interrupted" || r.Status == operator.Failure {
+		if r.Reason == "command-result-unknown" && len(s.uncertainties) == 0 {
+			s.RecordUncertainty(operator.Uncertainty{Kind: "gate", RequestID: "0", Target: "session", Action: string(r.Gate), DeadlineUnixMS: strconv.FormatInt(s.clock.Wall().Add(end-s.clock.Elapsed()).UnixMilli(), 10), RemainingMS: (end - s.clock.Elapsed()).Milliseconds(), Rule: "operation-evidence-unknown"})
+		}
 		s.Halt(r.Reason)
 	}
 	return r

@@ -184,9 +184,19 @@ HTTP failure codes, and missing completion evidence retains the underlying error
 The preliminary signaling burst remains optional; the required registration
 burst still supplies the final caller clock and proximity proof.
 Calibration and gate callers share the same start function and P4 launcher.
+Calibration reserves two minutes for preparation: the unchanged loader supplies
+one initial clock probe and one every ten seconds, so ten-probe registration
+needs at least ninety seconds after loader startup. The media calibration still
+runs for sixty seconds, within the same four-minute caller runtime limit.
 Their UDP bind uses the runner's route source for the relay, with port zero;
 the loader rejects wildcard bind addresses. The bridge checks the staged loader
 hash, executable bit, certificate readability and ffmpeg inside the caller unit.
+Unknown outcomes emit structured `command-result-unknown` diagnostics and remain
+in the report's `uncertainties` array. Each includes the operation kind, request
+ID, logical target or caller ID, action, deadline and remaining milliseconds,
+and the fixed certainty rule. Payloads, raw mailbox keys and error strings are
+excluded. Diagnostics never clear the fatal latch or authorize a retry. Caller
+journals are collected on unknown outcomes even when the unit remains active.
 
 PR checks and one complete execution are not initial profile qualification.
 Keep three declared complete executions at the same code/profile/bounds; all

@@ -91,6 +91,31 @@ func TestReportDropsFreeText(t *testing.T) {
 	}
 }
 
+func TestReportPreservesSafeUnknownContext(t *testing.T) {
+	r := passingReport()
+	r.Uncertainties = []operator.Uncertainty{{Kind: "mailbox.read", RequestID: "7", Target: "caller", CallerID: "1", Action: "caller-probes", DeadlineUnixMS: "1800000000000", RemainingMS: 0, Rule: "timeout"}}
+	var out bytes.Buffer
+	if err := r.Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	var saved Report
+	if err := json.Unmarshal(out.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Uncertainties) != 1 || saved.Uncertainties[0] != r.Uncertainties[0] {
+		t.Fatal("unknown context lost from report", out.String())
+	}
+	secret := "BEARER-private-value"
+	r.Uncertainties = []operator.Uncertainty{{Kind: secret, RequestID: secret, Target: secret, CallerID: secret, Action: secret, DeadlineUnixMS: secret, Rule: secret}}
+	out.Reset()
+	if err := r.Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), secret) {
+		t.Fatal("unknown diagnostics disclosed free text")
+	}
+}
+
 func TestReportSanitizesEveryTextSurface(t *testing.T) {
 	r := passingReport()
 	secret := "private-secret"
