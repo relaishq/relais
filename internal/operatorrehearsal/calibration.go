@@ -87,7 +87,7 @@ func Calibrate(raw string) (Calibration, error) {
 			}
 		}
 		if m.Type == "call" {
-			if m.Call == nil || observe.Require(line, observe.Contract{"call.DecryptionFailures.AuthTag", "call.DecryptionFailures.Replay", "call.DecryptionFailures.Other", "call.ICERestarts", "call.Tracks[]", "call.Tracks[].DuplicatePackets"}) != nil {
+			if m.Call == nil || observe.Require(line, observe.Contract{"call.DecryptionFailures.AuthTag", "call.DecryptionFailures.Replay", "call.DecryptionFailures.Other", "call.ICERestarts", "call.Tracks", "call.Tracks[].DuplicatePackets", "call.Tracks[].Video?.OnlineDecode.Dropped", "call.Tracks[].Video?.OnlineDecode.Errors"}) != nil {
 				return c, errors.New("incomplete-calibration-call")
 			}
 			c.CompletedCalls++

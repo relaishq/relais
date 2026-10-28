@@ -172,7 +172,33 @@ func StopScript(i Identity) ([]byte, error) {
 	if err := i.Validate(); err != nil {
 		return nil, err
 	}
-	return []byte("systemctl stop --no-block " + quote(i.Unit()) + "\n"), nil
+	// A collected transient unit makes stop fail even though nothing is live.
+	// Observe exact-unit proof before submission; never turn another stop error
+	// or a lost reply into success because a later read happens to be inactive.
+	return []byte(fmt.Sprintf(`export LC_ALL=C
+unit=%s
+proved=0
+state=$(systemctl show --property=Id --property=ActiveState --property=SubState "$unit" 2>/dev/null)
+show_status=$?
+if [ "$show_status" -eq 0 ] || [ "$show_status" -eq 1 ]; then
+  expected=$(printf 'Id=%%s\nActiveState=inactive\nSubState=dead\n' "$unit" | LC_ALL=C sort)
+  if [ "$(printf '%%s\n' "$state" | LC_ALL=C sort)" = "$expected" ]; then proved=1; fi
+fi
+if [ "$proved" -eq 0 ] && [ -z "$state" ]; then
+  journal=$(journalctl "UNIT=$unit" _PID=1 --no-pager -o cat -n 60 2>/dev/null)
+  journal_status=$?
+  if [ "$journal_status" -eq 0 ] && printf '%%s\n' "$journal" | grep -Fqx "$unit: Deactivated successfully."; then proved=1; fi
+fi
+output=$(systemctl stop --no-block "$unit" 2>&1)
+status=$?
+if [ "$status" -eq 0 ]; then exit 0; fi
+if [ "$status" -eq 5 ] && [ "$proved" -eq 1 ] && [ "$output" = "Failed to stop $unit: Unit $unit not loaded." ]; then
+  printf 'caller-collected:%%s\n' "$unit"
+  exit 0
+fi
+printf '%%s\n' "$output" >&2
+exit "$status"
+`, quote(i.Unit()))), nil
 }
 func InactiveScript(i Identity) ([]byte, error) {
 	if err := i.Validate(); err != nil {
@@ -204,6 +230,24 @@ func inactive(x Execution) bool {
 // ObservedInactive shares the stop proof with independent resource cleanup.
 // A collected transient unit is inactive only with its exact systemd observation.
 func ObservedInactive(x Execution) bool { return inactive(x) }
+
+// AwaitInactive bounds read-only stop confirmation for the launcher and cleanup.
+// It does not repair the certainty of an earlier stop submission.
+func AwaitInactive(ctx context.Context, executor Executor, i Identity, end time.Time) bool {
+	read, err := InactiveScript(i)
+	if err != nil {
+		return false
+	}
+	for time.Now().Before(end) && ctx.Err() == nil {
+		if inactive(executor.Execute(ctx, read, end)) {
+			return true
+		}
+		if sleep(ctx, min(100*time.Millisecond, time.Until(end))) != nil {
+			break
+		}
+	}
+	return false
+}
 
 // Fence binds the launcher and broker to the engine's single fatal latch.
 type Fence interface {
@@ -371,17 +415,7 @@ func (l *FixedLauncher) Stop(ctx context.Context, i Identity, end time.Time) Sto
 	} else {
 		uncertain = true
 	}
-	read, _ := InactiveScript(i)
-	for time.Now().Before(end) && ctx.Err() == nil {
-		observed := l.Exec.Execute(ctx, read, end)
-		if inactive(observed) {
-			result.Inactive = true
-			break
-		}
-		if sleep(ctx, min(100*time.Millisecond, time.Until(end))) != nil {
-			break
-		}
-	}
+	result.Inactive = AwaitInactive(ctx, l.Exec, i, end)
 	if result.Inactive && !uncertain {
 		result.Certainty = operator.Succeeded
 	} else {

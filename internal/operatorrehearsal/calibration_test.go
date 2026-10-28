@@ -3,6 +3,7 @@ package operatorrehearsal
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,8 +22,17 @@ func calibrationRows(mutate func(int, *loadgen.Stats)) string {
 		}
 		_ = e.Encode(loadgen.Message{Type: "stats", PID: 123, Stats: &s})
 	}
-	_ = e.Encode(loadgen.Message{Type: "call", PID: 123, Call: &callharness.Report{Tracks: []callharness.TrackReport{}}})
+	_ = e.Encode(loadgen.Message{Type: "call", PID: 123, Call: &callharness.Report{Tracks: []callharness.TrackReport{{Kind: "audio"}, {Kind: "video", Video: &callharness.VideoReport{}}}}})
 	return b.String()
+}
+
+func TestCalibrationRequiresDecoderCounters(t *testing.T) {
+	for _, field := range []string{"Errors", "Dropped"} {
+		raw := strings.Replace(calibrationRows(nil), `"`+field+`":0,`, "", 1)
+		if _, err := Calibrate(raw); err == nil {
+			t.Fatal("missing decoder counter accepted as zero", field)
+		}
+	}
 }
 func TestCalibrationWeightsIntervalsAndKeepsPeak(t *testing.T) {
 	c, e := Calibrate(calibrationRows(nil))

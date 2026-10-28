@@ -130,22 +130,39 @@ func TestCallerCleanupConfirmsCollectedUnits(t *testing.T) {
 	for _, row := range []struct {
 		name        string
 		observation CommandResult
+		stop        CommandResult
 		want        bool
 	}{
-		{"collected", CommandResult{Code: code(1), Stdout: []byte("LoadState=not-found\nActiveState=inactive\n")}, true},
-		{"inactive", CommandResult{Code: code(0), Stdout: []byte("LoadState=loaded\nActiveState=inactive\n")}, true},
-		{"active", CommandResult{Code: code(0), Stdout: []byte("LoadState=loaded\nActiveState=active\n")}, false},
-		{"missing-proof", CommandResult{Code: code(1), Stdout: []byte("not found\n")}, false},
-		{"unconfirmed", CommandResult{Stdout: []byte("LoadState=not-found\nActiveState=inactive\n")}, false},
+		{"collected", CommandResult{Code: code(1), Stdout: []byte("LoadState=not-found\nActiveState=inactive\n")}, CommandResult{Code: code(0)}, true},
+		{"inactive", CommandResult{Code: code(0), Stdout: []byte("LoadState=loaded\nActiveState=inactive\n")}, CommandResult{Code: code(0)}, true},
+		{"deactivating", CommandResult{Code: code(0), Stdout: []byte("LoadState=loaded\nActiveState=inactive\n")}, CommandResult{Code: code(0)}, true},
+		{"active", CommandResult{Code: code(0), Stdout: []byte("LoadState=loaded\nActiveState=active\n")}, CommandResult{Code: code(0)}, false},
+		{"missing-proof", CommandResult{Code: code(1), Stdout: []byte("not found\n")}, CommandResult{Code: code(0)}, false},
+		{"unconfirmed", CommandResult{Stdout: []byte("LoadState=not-found\nActiveState=inactive\n")}, CommandResult{Code: code(0)}, false},
+		{"stop-error", CommandResult{Code: code(0), Stdout: []byte("LoadState=loaded\nActiveState=inactive\n")}, CommandResult{Code: code(1), Stderr: []byte("Access denied")}, false},
+		{"stop-unknown", CommandResult{Code: code(0), Stdout: []byte("LoadState=loaded\nActiveState=inactive\n")}, CommandResult{}, false},
+		{"unproved-absence", CommandResult{Code: code(1), Stdout: []byte("LoadState=not-found\nActiveState=inactive\n")}, CommandResult{Code: code(5), Stderr: []byte("unit is not loaded")}, false},
 	} {
 		t.Run(row.name, func(t *testing.T) {
-			stops := 0
+			stops, reads := 0, 0
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			runner := commandRunner(func(_ context.Context, c Command) CommandResult {
 				switch c.Label {
 				case "cleanup-caller":
 					stops++
-					return CommandResult{Code: code(5), Stderr: []byte("unit is not loaded")}
+					if !strings.Contains(string(c.Input), "Deactivated successfully.") || !strings.Contains(string(c.Input), "SubState=dead") {
+						t.Fatal("cleanup bypassed the shared collected-unit proof")
+					}
+					return row.stop
 				case "caller-service":
+					reads++
+					if row.name == "deactivating" && reads == 1 {
+						return CommandResult{Code: code(0), Stdout: []byte("LoadState=loaded\nActiveState=deactivating\n")}
+					}
+					if !operatorcaller.ObservedInactive(operatorcaller.Execution{Certainty: operator.Succeeded, ExitCode: 0, Output: string(row.observation.Stdout)}) || row.observation.Code == nil {
+						cancel() // Bound a fixture which never supplies inactive proof.
+					}
 					return row.observation
 				default:
 					return CommandResult{Code: code(0)}
@@ -153,8 +170,11 @@ func TestCallerCleanupConfirmsCollectedUnits(t *testing.T) {
 			})
 			id := operatorcaller.Identity{RunID: "run-cleanup", Gate: operator.Rollout, Phase: operatorcaller.Survivor, CallerID: "1", Attempt: "1", PublicSHA: ReleaseACommit}
 			r := &rehearsal{runner: runner, diagnostics: &bytes.Buffer{}, topology: &Topology{}, units: []operatorcaller.Identity{id}}
-			if got := r.close(context.Background()); got != row.want || stops != 1 {
+			if got := r.close(ctx); got != row.want || stops != 1 {
 				t.Fatal("caller cleanup did not require exact inactive proof", got, stops)
+			}
+			if row.name == "deactivating" && reads != 2 {
+				t.Fatal("cleanup did not wait for stop confirmation", reads)
 			}
 		})
 	}

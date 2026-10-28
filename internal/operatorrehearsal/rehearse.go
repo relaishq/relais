@@ -572,16 +572,20 @@ func (r *rehearsal) close(ctx context.Context) bool {
 	if r.topology != nil {
 		for _, i := range r.units {
 			r.callerDiagnostics(ctx, i)
-			_, _ = r.command(ctx, "cleanup-caller", "systemctl", "stop", i.Unit())
+			stop, _ := operatorcaller.StopScript(i)
+			result := r.runner.Run(ctx, Command{Label: "cleanup-caller", Args: []string{"sh", "-s"}, Input: stop})
+			if result.Err != nil || result.Code == nil || *result.Code != 0 || result.Truncated {
+				r.failure("cleanup-caller", result)
+				ok = false
+			}
 			// systemd can collect a completed transient unit before this stop.
 			// Cleanup is a separate resource owner: confirm inactivity without
 			// changing the gate session's earlier stop certainty or fatal latch.
-			read, _ := operatorcaller.InactiveScript(i)
 			end, _ := ctx.Deadline()
 			if end.IsZero() {
 				end = time.Now().Add(time.Minute)
 			}
-			if !operatorcaller.ObservedInactive((callerExecutor{r}).Execute(ctx, read, end)) {
+			if !operatorcaller.AwaitInactive(ctx, callerExecutor{r}, i, end) {
 				ok = false
 			}
 		}
