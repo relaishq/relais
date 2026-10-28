@@ -284,7 +284,10 @@
     "rehearsal-readiness-bypass",
     "chrony-source-table",
     "scenario-before-boot",
-    "scenario-report-identity"
+    "scenario-report-identity",
+    "evidence-worker-index-sentinel-exact",
+    "evidence-event-horizon-start",
+    "evidence-event-horizon-end"
   ],
   "killed": [
     {
@@ -1971,7 +1974,7 @@
       "id": "evidence-optional-baseline-window",
       "owner": "P4",
       "evidence": "killed",
-      "test": "TestOptionalBaselinesCannotShrinkWindow",
+      "test": "TestContentBaselinesExtendEventWindow",
       "package": "./internal/operatorevidence/judge-src",
       "guardFingerprint": ""
     },
@@ -2537,6 +2540,30 @@
       "evidence": "killed",
       "test": "TestReportRefusesMissingScenarioIdentity",
       "package": "./internal/operatorrehearsal",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-worker-index-sentinel-exact",
+      "owner": "P5",
+      "evidence": "killed",
+      "test": "TestDistributedMoveUnknownWorkerIndex/From/-2",
+      "package": "./internal/operatorgates/observe",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-event-horizon-start",
+      "owner": "P5",
+      "evidence": "killed",
+      "test": "TestGeneratorCoverageUsesEventHorizon",
+      "package": "./internal/operatorevidence/judge-src",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "evidence-event-horizon-end",
+      "owner": "P5",
+      "evidence": "killed",
+      "test": "TestGeneratorCoverageUsesEventHorizon",
+      "package": "./internal/operatorevidence/judge-src",
       "guardFingerprint": ""
     }
   ],

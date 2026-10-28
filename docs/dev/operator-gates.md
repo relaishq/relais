@@ -148,6 +148,14 @@ stats row; its early-abort window does not replace the final judge's policy.
 The A/B pinned-build tests compare calibration with the ordinary generator path
 for phased-first/empty-final evidence and rejected CPU/budget controls.
 
+Generator event coverage follows each measurement's baseline, recovery and
+freshness horizons, with one sampler period of end padding. It does not require
+stats during pre-media registration or an extra period after hangup. Incomplete
+measurements still use their conservative observation horizon. The separate
+media-span check requires stats through hangup, including the final partial row.
+`TestGeneratorCoverageUsesEventHorizon` checks the normal pre-media delay, final
+partial interval, uncovered event edges and incomplete-measurement fallback.
+
 The shared session runs rollout, control restart, A→B→A, then relay deploy.
 Rehearsal eligibility requires every covered procedure and the pooled media to
 pass, at least 20 qualified moves and 10 qualified takeovers, confirmed caller
@@ -262,3 +270,11 @@ arm64 execution or cloud resource lifecycle and billing.
 
 NOT-RUN — The command assembly and report policy have offline tests. Real
 Docker execution and free-runner calibration require the workflow artifact.
+
+The shared numeric contract accepts exactly `-1` for
+`callharness.MoveReport.From` and `.To`: distributed/external callers cannot map
+worker names to local indexes. These are value exceptions in
+`EvidenceNumericSentinels`, with release-source locations, rather than optional
+fields. Other negative values and out-of-range indexes remain invalid.
+`TestDistributedMoveUnknownWorkerIndex` checks both boundaries;
+`TestDistributedCallerWorkerSentinelsQualify` checks the complete judge path.

@@ -128,6 +128,12 @@ func Numbers(value any) error {
 				if field.PkgPath != "" {
 					continue
 				}
+				if unknownWorkerIndex(typ, field, v.Field(i)) {
+					if err := add(1); err != nil {
+						return fmt.Errorf("%s: %w", field.Name, err)
+					}
+					continue
+				}
 				identity := product && typ.Name() == "EventMeasurement" && (field.Name == "FirstContentIdentity" || field.Name == "FirstNewContentIdentity")
 				if err := walk(v.Field(i), coordinates, identity); err != nil {
 					return fmt.Errorf("%s: %w", field.Name, err)

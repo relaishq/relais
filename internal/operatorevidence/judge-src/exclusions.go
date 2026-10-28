@@ -347,15 +347,6 @@ func callerEventWindow(r receipt, c *callharness.Report, m callharness.MoveRepor
 		return time.Time{}, time.Time{}, fmt.Errorf("caller event window overflow")
 	}
 	first, last := r.Start.Add(-time.Second), r.End.Add(7*time.Second)
-	// The wire format has no completeness count for matched content baselines.
-	// A missing/truncated optional list cannot shorten generator coverage.
-	if c.StartedAt.Before(first) {
-		first = c.StartedAt
-	}
-	if c.HungUpAt > 0 && c.StartedAt.Add(c.HungUpAt).After(last) {
-		last = c.StartedAt.Add(c.HungUpAt)
-	}
-
 	earlier := func(at time.Time) {
 		if at.Before(first) {
 			first = at

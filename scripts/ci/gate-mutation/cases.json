@@ -2383,10 +2383,10 @@
     "ID": "evidence-optional-baseline-window",
     "File": "internal/operatorevidence/judge-src/exclusions.go",
     "Function": "callerEventWindow",
-    "Old": "if c.StartedAt.Before(first) {",
-    "New": "if false && c.StartedAt.Before(first) {",
-    "Test": "TestOptionalBaselinesCannotShrinkWindow",
-    "Marker": "MUTATION: missing-baseline-window",
+    "Old": "for _, baseline := range measurement.ContentLoss.Baselines {",
+    "New": "for _, baseline := range []callharness.ContentLossWindow{} {",
+    "Test": "TestContentBaselinesExtendEventWindow",
+    "Marker": "MUTATION: content-baseline-window",
     "Package": "./internal/operatorevidence/judge-src"
   },
   {
@@ -3180,5 +3180,35 @@
     "Test": "TestReportRefusesMissingScenarioIdentity",
     "Marker": "MUTATION: scenario-report-identity",
     "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "evidence-worker-index-sentinel-exact",
+    "File": "internal/operatorgates/observe/evidence_optional.go",
+    "Function": "unknownWorkerIndex",
+    "Old": "value.Int() == -1",
+    "New": "value.Int() < 0",
+    "Test": "TestDistributedMoveUnknownWorkerIndex/From/-2",
+    "Marker": "MUTATION: worker-index-sentinel",
+    "Package": "./internal/operatorgates/observe"
+  },
+  {
+    "ID": "evidence-event-horizon-start",
+    "File": "internal/operatorevidence/judge-src/exclusions.go",
+    "Function": "callerEventWindow",
+    "Old": "first, last := r.Start.Add(-time.Second), r.End.Add(7*time.Second)",
+    "New": "first, last := r.Start.Add(-time.Second), r.End.Add(7*time.Second)\n\tfirst = c.StartedAt",
+    "Test": "TestGeneratorCoverageUsesEventHorizon",
+    "Marker": "MUTATION: event-measurement-horizon",
+    "Package": "./internal/operatorevidence/judge-src"
+  },
+  {
+    "ID": "evidence-event-horizon-end",
+    "File": "internal/operatorevidence/judge-src/exclusions.go",
+    "Function": "callerEventWindow",
+    "Old": "first, last := r.Start.Add(-time.Second), r.End.Add(7*time.Second)",
+    "New": "first, last := r.Start.Add(-time.Second), r.End.Add(7*time.Second)\n\tlast = c.StartedAt.Add(c.HungUpAt)",
+    "Test": "TestGeneratorCoverageUsesEventHorizon",
+    "Marker": "MUTATION: event-measurement-horizon",
+    "Package": "./internal/operatorevidence/judge-src"
   }
 ]

@@ -12,7 +12,7 @@ func TestPoolReportsDroppedSaturatedPhases(t *testing.T) {
 	}
 	// The unchanged sample builder injects a real send-lateness spike in the
 	// event window; this must exclude trials and the whole phase from the pool.
-	phase := rawPreviewInput(previewSample(), 1)
+	phase := rawPreviewInput(previewSample(), 40)
 	input = previewPoolInput{RunID: phase.RunID, Phases: []previewMediaInput{phase}}
 	got := pooledPreviewMedia(&input)
 	if got.Status == "passed" || got.DroppedPhases != 1 || got.IncludedPhases != 0 || got.ExcludedEvents == 0 || got.SaturationOverlaps == 0 || len(got.PhaseDiagnostics) != 1 || got.PhaseDiagnostics[0].Cause != "generator saturation overlaps event window" {

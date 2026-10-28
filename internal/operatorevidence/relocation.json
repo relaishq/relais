@@ -29,7 +29,7 @@
     {
       "file": "exclusions.go",
       "sourceSHA256": "c2e4793b1645efca56ca4bf3c0764d84e1917471bf795d9158d7107e31288826",
-      "relocatedSHA256": "09b50313b34c0c954c2c7e5c4684658448be94683c6a54a21d94ef38bc9fca56",
+      "relocatedSHA256": "c14d4c2226886a892c55e281da66cba925dd3983ad0eaf29325a301356476c88",
       "baselineRelocatedSHA256": "7f12316a594667ce3107dadb9628cf86efcfcbe0839ae43cdfb52de7ade1849f"
     },
     {
@@ -53,7 +53,9 @@
     "relay-deploy alone qualifies one completed zero-event call with full caller and generator checks; relay calls never enter the unchanged trial judge; only explicit null empty Moves/armed collections are normalized for relay, while omitted fields remain invalid",
     "Generator calibration delegates to the same pinned applySaturation path; interval predicates expose numeric diagnostics without threshold or comparison changes.",
     "Existing clock, cadence and span rejection conditions retain their error text and expose fixed numeric diagnostics; verdict behavior is unchanged.",
-    "Qualify every phase independently, quarantine incomplete phase envelopes separately, retain known failures and report fixed contract paths/reasons without changing media or generator thresholds."
+    "Qualify every phase independently, quarantine incomplete phase envelopes separately, retain known failures and report fixed contract paths/reasons without changing media or generator thresholds.",
+    "Accept exactly -1 for the product MoveReport.From/To unknown-index sentinel, with release-source provenance in the numeric exception ledger; other numeric guards and judge thresholds are unchanged.",
+    "Restore original per-event generator coverage: complete measurements use their event and baseline horizons plus one sampler period, not dial through hangup; media-span validation and incomplete-measurement fallback remain unchanged."
   ],
   "guardFiles": [
     {
@@ -80,9 +82,10 @@
   "fixtureHardening": "Synthetic controls carry complete armed inventories, both audio/video gap populations on every event, and mapped duration/classification records. Product judge policy and expected passing summary counts are unchanged. Video tracks include the product-emitted Video object; the expected passing summary remains unchanged.",
   "sharedDecoderContract": {
     "required.go": "7d91f285d5587491f4e707aabe24c40b7067a0c8fe512f0babb84c1d900295d1",
-    "evidence_optional.go": "3851b243be861f34d086626b7ba63a407a7269be36633aa68a2c55c627c5b9d1",
+    "evidence_optional.go": "2762b8d00a0b5c6d6c2471808bc45c210b05a89698357aba9eefc91b0cf88d87",
     "canonical.go": "22cb1835297d4bf5c2afa264a22370f855897a9390dedfc30e305188a6f6e30e",
     "strict.go": "efdd1034a43eefff1b878cb53227ec77215e6bb6ae5b8badf3e67090fb8cd0d6",
-    "diagnostic.go": "9ebee72d59b1e10f2c4696180206ed8b2a5aee22c3562d775f3ab1acd2c9af87"
+    "diagnostic.go": "9ebee72d59b1e10f2c4696180206ed8b2a5aee22c3562d775f3ab1acd2c9af87",
+    "numbers.go": "6b185d11d81af31566b2a5c4cac4664a85d26ebbeba02bfe4b5cc1293baf8c0e"
   }
 }
