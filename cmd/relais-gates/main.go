@@ -24,7 +24,7 @@ func main() { os.Exit(run()) }
 func run() int {
 	hello := operator.Hello{Protocol: operator.ProtocolVersion, Version: buildinfo.Version, Commit: buildinfo.Commit, ScenarioSchema: 1, ResultSchema: 1}
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: relais-gates session [-spool DIR]|version")
+		fmt.Fprintln(os.Stderr, "usage: relais-gates session [-spool DIR]|caller|rehearse|version")
 		return 2
 	}
 	switch os.Args[1] {
@@ -36,6 +36,8 @@ func run() int {
 			return 1
 		}
 		return 0
+	case "rehearse":
+		return rehearse(os.Args[2:])
 	case "caller-host":
 		if len(os.Args) != 2 {
 			return 2

@@ -26,15 +26,16 @@ import (
 var sources embed.FS
 
 type PinnedJudge struct {
-	Commit string
-	SHA256 string
-	Binary string
+	Commit      string
+	SHA256      string
+	Binary      string
+	Diagnostics io.Writer
 }
 
 // BuildPinned archives the exact local commit without writing the checkout or
 // .git. Builds are offline and belong before the media window. output must be a
 // fresh owned directory; the returned binary's bytes are checked on every call.
-func BuildPinned(ctx context.Context, checkout, commit, goExecutable, output string) (PinnedJudge, error) {
+func BuildPinned(ctx context.Context, checkout, commit, goExecutable, output string, diagnostics ...io.Writer) (PinnedJudge, error) {
 	var pinned PinnedJudge
 	if !regexp.MustCompile(`^[a-f0-9]{40}$`).MatchString(commit) {
 		return pinned, errors.New("invalid-judge-pin")
@@ -52,6 +53,8 @@ func BuildPinned(ctx context.Context, checkout, commit, goExecutable, output str
 	archive := exec.CommandContext(ctx, "git", "archive", "--format=tar", commit)
 	archive.Dir = checkout
 	archive.Env = operatorcaller.PublicEnvironment(os.Environ())
+	var archiveErrors bytes.Buffer
+	archive.Stderr = &archiveErrors
 	pipe, err := archive.StdoutPipe()
 	if err != nil {
 		return pinned, err
@@ -65,6 +68,7 @@ func BuildPinned(ctx context.Context, checkout, commit, goExecutable, output str
 	}
 	waitErr := archive.Wait()
 	if err = errors.Join(extractErr, waitErr); err != nil {
+		printDiagnostics(diagnostics, "judge-archive", nil, archiveErrors.Bytes())
 		return pinned, err
 	}
 	dest := filepath.Join(source, "cmd", "operator-media-judge")
@@ -111,15 +115,22 @@ func BuildPinned(ctx context.Context, checkout, commit, goExecutable, output str
 	cmd := exec.CommandContext(ctx, goExecutable, "build", "-trimpath", "-o", binary, "./cmd/operator-media-judge")
 	cmd.Dir = source
 	cmd.Env = buildEnvironment()
-	if out, e := cmd.CombinedOutput(); e != nil {
-		return pinned, fmt.Errorf("pinned-judge-build: %w: %.1000s", e, out)
+	var buildErrors bytes.Buffer
+	cmd.Stderr = &buildErrors
+	if out, e := cmd.Output(); e != nil {
+		printDiagnostics(diagnostics, "judge-build", out, buildErrors.Bytes())
+		return pinned, fmt.Errorf("pinned-judge-build: %w", e)
 	}
 	data, err := os.ReadFile(binary)
 	if err != nil {
 		return pinned, err
 	}
 	sum := sha256.Sum256(data)
-	return PinnedJudge{commit, hex.EncodeToString(sum[:]), binary}, nil
+	pinned = PinnedJudge{Commit: commit, SHA256: hex.EncodeToString(sum[:]), Binary: binary}
+	if len(diagnostics) > 0 {
+		pinned.Diagnostics = diagnostics[0]
+	}
+	return pinned, nil
 }
 func extract(reader *tar.Reader, root string) error {
 	var total int64
@@ -220,7 +231,28 @@ func (p PinnedJudge) Judge(ctx context.Context, pool Pool) (Summary, error) {
 	cmd.Stderr = &stderr
 	result, err := cmd.Output()
 	if err != nil {
+		printDiagnostics([]io.Writer{p.Diagnostics}, "media-judge", result, stderr.Bytes())
 		return out, errors.New("judge-incomplete")
 	}
-	return DecodeSummary(result)
+	summary, err := DecodeSummary(result)
+	if err != nil {
+		printDiagnostics([]io.Writer{p.Diagnostics}, "media-judge-output", result, stderr.Bytes())
+	}
+	return summary, err
+}
+
+// Outputs come only from credential-stripped public source builds and the
+// fixed judge entry. The caller supplies its topology redactor. Incomplete or
+// oversized streams are suppressed rather than printing a fragment of a secret.
+func printDiagnostics(writers []io.Writer, label string, stdout, stderr []byte) {
+	for _, w := range writers {
+		if w == nil {
+			continue
+		}
+		if len(stdout) > operator.MaxHostOutputBytes || len(stderr) > operator.MaxHostOutputBytes {
+			_, _ = fmt.Fprintf(w, "step %s failed\nstdout/stderr: incomplete output suppressed\n", label)
+		} else {
+			_, _ = fmt.Fprintf(w, "step %s failed\nstdout:\n%s\nstderr:\n%s\n", label, stdout, stderr)
+		}
+	}
 }

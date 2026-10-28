@@ -54,7 +54,11 @@ func (s *Session) FreshInventory(ctx context.Context, p Peer, pins []inventory.P
 	}
 	pool := releasecompat.Pool{Schema: 1, Complete: true, TargetWorkerProfile: "legacy"}
 	for _, slot := range inventory.Slots {
-		script, err := host.Inventory(slot, pins, requireRunning)
+		arch := "arm64"
+		if len(pins) > 0 && pins[0].Architecture != "" {
+			arch = pins[0].Architecture
+		}
+		script, err := host.Inventory(slot, pins, requireRunning, arch)
 		if err != nil {
 			return releasecompat.Pool{}, err
 		}

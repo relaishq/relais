@@ -3,6 +3,7 @@
 package operatorevidence
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -14,7 +15,21 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
+type PhaseDiagnostic struct {
+	Phase              int    `json:"phase"`
+	Included           bool   `json:"included"`
+	Cause              string `json:"cause"`
+	ExcludedEvents     int    `json:"excludedEvents"`
+	SaturationOverlaps int    `json:"saturationOverlaps"`
+}
 type Summary struct {
+	IncludedPhases     int               `json:"includedPhases"`
+	DroppedPhases      int               `json:"droppedPhases"`
+	ExcludedEvents     int               `json:"excludedEvents"`
+	SaturationOverlaps int               `json:"saturationOverlaps"`
+	DuplicatePackets   uint64            `json:"duplicatePackets"`
+	PhaseDiagnostics   []PhaseDiagnostic `json:"phaseDiagnostics"`
+
 	Status              operator.Verdict `json:"status"`
 	QualifiedMoves      int              `json:"qualifiedMoves"`
 	QualifiedTakeovers  int              `json:"qualifiedTakeovers"`
@@ -27,6 +42,16 @@ type Summary struct {
 	MaxMediaGapNS       int64            `json:"maxMediaGapNs"`
 	DecryptionFailures  int              `json:"decryptionFailures"`
 	ICERestarts         int              `json:"iceRestarts"`
+}
+
+// MarshalJSON preserves an explicit empty diagnostic inventory. Missing/null
+// inventories still fail the recursive evidence decoder at the read boundary.
+func (s Summary) MarshalJSON() ([]byte, error) {
+	type wire Summary
+	if s.PhaseDiagnostics == nil {
+		s.PhaseDiagnostics = []PhaseDiagnostic{}
+	}
+	return json.Marshal(wire(s))
 }
 
 // DecodeSummary validates presence once; missing counters never become zeros.

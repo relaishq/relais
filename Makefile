@@ -207,3 +207,12 @@ test-operator: ## Replay operator core projections and kill its owned Go mutants
 test-operator-rehearsal-container: ## Runner only: boot actual template units and negative controls; requires pinned RELAIS_REHEARSAL_{ARCHIVE,VERSION,ARCH,SHA256}
 	test -n "$(RELAIS_REHEARSAL_ARCHIVE)" && test -n "$(RELAIS_REHEARSAL_VERSION)" && test -n "$(RELAIS_REHEARSAL_ARCH)" && test -n "$(RELAIS_REHEARSAL_SHA256)"
 	RELAIS_REHEARSAL_CONTAINERS=1 $(GOTEST) -v -count=1 -timeout 30m -run '^TestContainerTemplateBoot$$' ./internal/operatorrehearsal
+
+.PHONY: operator-rehearsal-build operator-rehearsal
+OPERATOR_REHEARSAL_FLAGS ?=
+OPERATOR_REHEARSAL_RUNNER ?=
+operator-rehearsal-build: ensure_bin_dir ## Build the public gate/bridge executable before rehearsal media
+	CGO_ENABLED=0 $(GOBUILD) -trimpath -o $(BIN_DIR)/relais-gates $(LDFLAGS) ./cmd/relais-gates
+
+operator-rehearsal: operator-rehearsal-build ## Run the fixed four-gate Linux Docker profile; needs root systemd and four allowed CPUs
+	$(OPERATOR_REHEARSAL_RUNNER) ./$(BIN_DIR)/relais-gates rehearse -commit "$(shell git rev-parse HEAD)" -go "$(shell $(GOCMD) env GOROOT)/bin/go" $(OPERATOR_REHEARSAL_FLAGS)

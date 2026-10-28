@@ -4,13 +4,14 @@
     "import module path",
     "comments describing collected evidence",
     "exclusion helper prefix before main and unused import removal",
-    "receipt result uses controlplane.MoveResult with the same consumed fields"
+    "receipt result uses controlplane.MoveResult with the same consumed fields",
+    "Handwritten diagnostic projection: phase inclusion/exclusion counts, fixed exclusion codes and duplicate counts; judge policy unchanged."
   ],
   "files": [
     {
       "file": "main.go",
       "sourceSHA256": "c6aef1d42288b9a8df52a4acf0e085e37982501f45e9da35e08e84853ea233bb",
-      "relocatedSHA256": "b8eb604d20c08ac5b41058aa6153c225e50fa64092079956dd0c20eb7b9755c7",
+      "relocatedSHA256": "58d68a0f51c63b46f0647a20de17162ead857e5aadfaac8c08169d82a8aa73c2",
       "baselineRelocatedSHA256": "580e08dd655e517a6a2a0b392320e7e7f2dd17fd0a0a2f2eff3cad3f197abb86"
     },
     {

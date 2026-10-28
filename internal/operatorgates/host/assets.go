@@ -52,8 +52,12 @@ func Process(operation string, parameters any, stage *Stage) (string, error) {
 	op, _ := json.Marshal(operation)
 	preflight := ""
 	if stage != nil {
-		if !versionPattern.MatchString(stage.Version) || stage.Arch != "arm64" && stage.Arch != "amd64" || !digestPattern.MatchString(stage.ArchiveSHA256) || !digestPattern.MatchString(stage.ManifestSHA256) || !poolPattern.MatchString(stage.Pool) || stage.Operation != "upgrade" && stage.Operation != "rollback" {
+		if !versionPattern.MatchString(stage.Version) || stage.Arch != "arm64" && stage.Arch != "amd64" && stage.Arch != "x86_64" || !digestPattern.MatchString(stage.ArchiveSHA256) || !digestPattern.MatchString(stage.ManifestSHA256) || !poolPattern.MatchString(stage.Pool) || stage.Operation != "upgrade" && stage.Operation != "rollback" {
 			return "", fmt.Errorf("invalid stage proof")
+		}
+		downloadArch := stage.Arch
+		if downloadArch == "amd64" {
+			downloadArch = "x86_64"
 		}
 		preflight = fmt.Sprintf(`
     target=pathlib.Path('/opt/relais/preview/%s')
@@ -72,7 +76,7 @@ func Process(operation string, parameters any, stage *Stage) (string, error) {
         if verdict.get('allowed') is False:
             emit({'kind':'refused'});sys.exit(0)
         if checked.returncode!=0 or verdict.get('allowed') is not True: raise ValueError('unknown compatibility result')
-`, stage.Version, stage.Version, stage.Arch, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ManifestSHA256, stage.Pool, stage.Operation)
+`, stage.Version, stage.Version, downloadArch, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ArchiveSHA256, stage.ManifestSHA256, stage.Pool, stage.Operation)
 	}
 	failure := "except Exception:\n    emit({'kind':'unknown'})"
 	if IsPureRead(operation) {
@@ -92,7 +96,14 @@ PY
 `, preflight, data, op, failure), nil
 }
 
-func Inventory(slot string, pins any, requireRunning bool) (string, error) {
+func Inventory(slot string, pins any, requireRunning bool, architecture ...string) (string, error) {
+	arch := "arm64"
+	if len(architecture) > 0 {
+		arch = architecture[0]
+	}
+	if arch != "arm64" && arch != "x86_64" {
+		return "", fmt.Errorf("invalid inventory architecture")
+	}
 	data, err := encoded(pins)
 	if err != nil {
 		return "", err
@@ -105,13 +116,13 @@ func Inventory(slot string, pins any, requireRunning bool) (string, error) {
 	return "python3 - <<'PY'\n" + source("preview_inventory.py") + fmt.Sprintf(`
 import base64,gzip,sys
 try:
- result=collect(%s,json.loads(base64.b64decode('%s')),require_running=%s)
+ result=collect(%s,json.loads(base64.b64decode('%s')),require_running=%s,architecture=%q)
  print(base64.b64encode(gzip.compress(json.dumps(result,separators=(',',':')).encode())).decode())
 except Exception as error:
  print('INVENTORY_UNKNOWN:'+failure_category(error))
  sys.exit(3)
 PY
-`, name, data, running), nil
+`, name, data, running, arch), nil
 }
 
 func Clock() string {

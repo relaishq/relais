@@ -79,6 +79,7 @@ func (LocalExecutor) Execute(ctx context.Context, script []byte, end time.Time) 
 type LaunchConfig struct {
 	BridgePath, BridgeSHA256, LoadPath, LoadSHA256, ConfigPath, ConfigSHA256, MailboxPath, WorkRoot, Architecture string
 	RuntimeDeadline                                                                                               time.Time
+	CPUAffinity                                                                                                   string
 }
 
 func (c LaunchConfig) validate() error {
@@ -91,6 +92,9 @@ func (c LaunchConfig) validate() error {
 		if !digestPattern.MatchString(s) {
 			return errors.New("invalid-launch-hash")
 		}
+	}
+	if c.CPUAffinity != "" && !regexp.MustCompile(`^[0-9]+( [0-9]+)*$`).MatchString(c.CPUAffinity) {
+		return errors.New("invalid-caller-affinity")
 	}
 	if c.RuntimeDeadline.IsZero() {
 		return errors.New("missing-runtime-deadline")
@@ -131,6 +135,10 @@ func StartScript(c LaunchConfig, i Identity, end time.Time) ([]byte, error) {
 	if c.RuntimeDeadline.Before(end) || time.Until(c.RuntimeDeadline) > 20*time.Minute {
 		return nil, errors.New("invalid-runtime-deadline")
 	}
+	affinity := ""
+	if c.CPUAffinity != "" {
+		affinity = " --property=" + quote("CPUAffinity="+c.CPUAffinity)
+	}
 	identity, _ := json.Marshal(i)
 	return []byte(fmt.Sprintf(`set -eu
 umask 077
@@ -146,9 +154,9 @@ cp %s "$work/config.json"
 [ "$(sha256sum "$work/relais-load" | cut -d ' ' -f 1)" = %s ]
 [ "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" = %s ]
 chmod 700 "$work/bridge" "$work/relais-load"
-systemd-run --quiet --unit="$unit" --property="RuntimeMaxSec=$remaining" --property=TimeoutStopSec=180 --property=KillMode=control-group --property=UMask=0077 --property="WorkingDirectory=$work" --setenv=GOMAXPROCS=2 "$work/bridge" caller -config "$work/config.json" -mailbox %s -load "$work/relais-load" -identity %s
+systemd-run --quiet --unit="$unit" --property="RuntimeMaxSec=$remaining" --property=TimeoutStopSec=180 --property=KillMode=control-group --property=UMask=0077 --property="WorkingDirectory=$work" --setenv=GOMAXPROCS=2%s "$work/bridge" caller -config "$work/config.json" -mailbox %s -load "$work/relais-load" -identity %s
 printf 'caller-started:%%s\n' "$unit"
-`, quote(i.Unit()), quote(c.WorkRoot), c.RuntimeDeadline.Unix(), quote(c.BridgePath), quote(c.LoadPath), quote(c.ConfigPath), quote(c.BridgeSHA256), quote(c.LoadSHA256), quote(c.ConfigSHA256), quote(c.MailboxPath), quote(string(identity)))), nil
+`, quote(i.Unit()), quote(c.WorkRoot), c.RuntimeDeadline.Unix(), quote(c.BridgePath), quote(c.LoadPath), quote(c.ConfigPath), quote(c.BridgeSHA256), quote(c.LoadSHA256), quote(c.ConfigSHA256), affinity, quote(c.MailboxPath), quote(string(identity)))), nil
 }
 func StopScript(i Identity) ([]byte, error) {
 	if err := i.Validate(); err != nil {

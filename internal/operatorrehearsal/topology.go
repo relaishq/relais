@@ -59,12 +59,15 @@ func (d *Deployment) command(ctx context.Context, label string, args []string, i
 	if r.Err == nil && r.Code != nil && *r.Code == 0 && !r.Truncated {
 		return r, nil
 	}
+	d.printFailure(label, r)
+	return r, errors.New("container-step-failed:" + label)
+}
+func (d *Deployment) printFailure(label string, r CommandResult) {
 	d.diagnosticMu.Lock()
 	defer d.diagnosticMu.Unlock()
 	if d.Diagnostics != nil {
 		_, _ = fmt.Fprintf(d.Diagnostics, "container step %s failed\n%s", label, d.Topology.diagnosticStreams(r))
 	}
-	return r, errors.New("container-step-failed:" + label)
 }
 func (d *Deployment) runArgs(slot, ip, image string, media bool) []string {
 	weight := "256"
@@ -116,6 +119,7 @@ func (d *Deployment) wait(ctx context.Context, label string, args []string, read
 		}
 		select {
 		case <-ctx.Done():
+			d.printFailure(label, r)
 			return errors.New("container-unready:" + label)
 		case <-time.After(time.Second):
 		}

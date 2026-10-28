@@ -94,3 +94,52 @@ Other ledger cases are never included in the killed count.
 included in `make check`. Full process algorithms, caller lifecycle, judges and
 container rehearsal remain with their owning stages. See
 [operator observations](operator-observations.md) for the typed boundaries and relocation proof.
+
+## Public four-gate rehearsal
+
+On a disposable Linux runner with systemd, Docker, ffmpeg, chrony and at least
+four allowed logical CPUs, build with `make operator-rehearsal-build`, then run
+`make operator-rehearsal OPERATOR_REHEARSAL_RUNNER='sudo -n'`. The command uses
+v0.3.0 and v0.3.1 linux_amd64 archives with fixed SHA-256 pins. It reads the
+current checkout's template, stages both releases before media, builds both
+release-specific judges offline, and uses the unchanged v0.3.0 caller binary
+from its verified archive. Cache the release commits' Go modules before running.
+
+The workflow separates release reads from execution. Only its release-read step
+receives `RELAIS_RELEASE_TOKEN`; it invokes `relais-gates rehearse -prepare-only`.
+The execution target uses `OPERATOR_REHEARSAL_FLAGS=-prepared`. The token stays
+inside the scoped public release reader and never reaches child processes.
+
+The actual allowed CPU mask determines the layout. Two CPUs belong to the
+caller unit, its Go bridge and decoder (`GOMAXPROCS=2`); the remaining CPUs serve
+the driver and containers. Before gate faults, a separate 60-second caller
+measures send lateness, CPU pressure and decoder counters with the topology
+idle. The report keeps the peak p99, maximum lateness and time-weighted flagged
+intervals. This check does not replace the pinned judges' event-window guards.
+
+The shared session runs rollout, control restart, A→B→A, then relay deploy.
+Rehearsal eligibility requires every covered procedure and the pooled media to
+pass, at least 20 qualified moves and 10 qualified takeovers, confirmed caller
+stops, and scoped cleanup. Only `relayLocalTiming` and
+`relayConnectionInvariants` remain explicitly inconclusive. Unknown outcomes,
+precondition errors, driver errors and dropped phases fail eligibility. Phase
+indices, exclusion codes and saturation overlap counts remain visible even
+when the judge cannot produce qualifying media totals.
+
+The workflow uploads only `runtime/operator-report/report.json` and
+`runtime/operator-report/host-diagnostics.log`. It records the tested commit
+(the merge commit for a PR), the separate PR head, template and binary hashes,
+release pins, clock samples, CPU masks and phase evidence. Raw mailboxes,
+credentials, generated keys and unit environments are not artifacts. Cleanup
+runs after partial boot, cancellation and gate failure using deployment-owned
+container IDs and caller units. Images remain reusable build cache.
+
+PR checks and one complete execution are not initial profile qualification.
+Keep three declared complete executions at the same code/profile/bounds; all
+three must meet the strict rule, without discarding failures. This rehearsal
+covers a local TLS proxy, local time reference and shared runner clock. It does
+not cover managed store failover, load admission, independent host clocks,
+arm64 execution or cloud resource lifecycle and billing.
+
+NOT-RUN — The command assembly and report policy have offline tests. Real
+Docker execution and free-runner calibration require the workflow artifact.

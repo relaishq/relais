@@ -40,3 +40,7 @@ bin
 
 # Python bytecode from local script tests
 __pycache__/
+
+# Local operator rehearsal inputs and sanitized output
+/runtime/operator-releases/
+/runtime/operator-report/

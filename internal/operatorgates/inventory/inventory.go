@@ -17,6 +17,7 @@ import (
 
 // Pin is an inventory's identity proof, independent of the session protocol.
 type Pin struct {
+	Architecture   string `json:"architecture,omitempty"`
 	Version        string `json:"version"`
 	Commit         string `json:"commit"`
 	ArchiveSHA256  string `json:"archiveSha256"`

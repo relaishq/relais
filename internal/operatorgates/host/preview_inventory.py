@@ -21,12 +21,12 @@ UNITS = {"w1": [("w1", "worker")], "w2": [("w2", "worker")],
          "shared": [("control", "control"), ("signal", "signal")]}
 
 
-def collect(slot, expected, root=pathlib.Path("/"), run=None, require_running=False):
+def collect(slot, expected, root=pathlib.Path("/"), run=None, require_running=False, architecture="arm64"):
     if run is None:
         def run(args):
             return subprocess.run(args, check=True, capture_output=True, text=True, timeout=10).stdout.strip()
     node = json.loads((root / "etc/relais/node.json").read_text())
-    if node["architecture"] != "arm64" or set(node["components"]) != {r for _, r in UNITS[slot]}:
+    if architecture not in ("arm64", "x86_64") or node["architecture"] != architecture or set(node["components"]) != {r for _, r in UNITS[slot]}:
         raise ValueError("node topology differs")
     rows = []
     for name, role in UNITS[slot]:

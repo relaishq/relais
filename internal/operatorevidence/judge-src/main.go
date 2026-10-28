@@ -15,6 +15,14 @@ import (
 )
 
 type previewMediaSummary struct {
+	IncludedPhases     int               `json:"includedPhases"`
+	DroppedPhases      int               `json:"droppedPhases"`
+	ExcludedEvents     int               `json:"excludedEvents"`
+	SaturationOverlaps int               `json:"saturationOverlaps"`
+	DuplicatePackets   uint64            `json:"duplicatePackets"`
+	PhaseDiagnostics   []phaseDiagnostic `json:"phaseDiagnostics"`
+	exclusionCause     string
+
 	Status              string `json:"status"`
 	QualifiedMoves      int    `json:"qualifiedMoves"`
 	QualifiedTakeovers  int    `json:"qualifiedTakeovers"`
@@ -27,6 +35,14 @@ type previewMediaSummary struct {
 	MaxMediaGapNs       int64  `json:"maxMediaGapNs"`
 	DecryptionFailures  int    `json:"decryptionFailures"`
 	ICERestarts         int    `json:"iceRestarts"`
+}
+
+type phaseDiagnostic struct {
+	Phase              int    `json:"phase"`
+	Included           bool   `json:"included"`
+	Cause              string `json:"cause"`
+	ExcludedEvents     int    `json:"excludedEvents"`
+	SaturationOverlaps int    `json:"saturationOverlaps"`
 }
 
 // Rejudge raw reports, never trust a serialized outcome. This returns MEDIA
@@ -71,6 +87,7 @@ func previewMedia(r *loadgen.RunReport) previewMediaSummary {
 			add(&out.ICERestarts, c.Call.ICERestarts)
 			audio, video := false, false
 			for _, t := range c.Call.Tracks {
+				out.DuplicatePackets += uint64(t.DuplicatePackets)
 				if t.Video != nil && t.Video.OnlineDecode.Errors > 0 {
 					completeMedia = false
 				}
@@ -127,6 +144,10 @@ type previewMediaInput struct {
 type previewReceipt = receipt
 
 func previewGeneratorGuards(r *loadgen.RunReport, receipts []receipt, samples []json.RawMessage) bool {
+	return previewGeneratorDetails(r, receipts, samples, nil)
+}
+
+func previewGeneratorDetails(r *loadgen.RunReport, receipts []receipt, samples []json.RawMessage, details *previewMediaSummary) bool {
 	dir, err := os.MkdirTemp("", "preview-generator-")
 	if err != nil {
 		return false
@@ -153,6 +174,18 @@ func previewGeneratorGuards(r *loadgen.RunReport, receipts []receipt, samples []
 		return false
 	}
 	budgets, excluded := applySaturation(dir, r, receipts, []string{"caller-1"})
+	if details != nil {
+		details.ExcludedEvents = len(excluded)
+		details.exclusionCause = "generator-guard"
+		for _, e := range excluded {
+			if e.Cause == "generator saturation overlaps event window" {
+				details.SaturationOverlaps++
+			}
+		}
+		if details.SaturationOverlaps > 0 {
+			details.exclusionCause = "generator saturation overlaps event window"
+		}
+	}
 	return len(budgets) == 1 && budgets[0].Outcome == "pass" && len(excluded) == 0
 }
 
@@ -260,14 +293,24 @@ func parsePreviewMediaFor(input *previewMediaInput, qualify bool) (*loadgen.RunR
 	if collectionsErr == nil && parseErr == nil {
 		rawVerdict = previewMedia(r)
 		if qualify {
-			guards = previewGeneratorGuards(r, validReceipts, samples)
+			guards = previewGeneratorDetails(r, validReceipts, samples, &out)
 		}
-		out = previewMedia(r)
+		judged := previewMedia(r)
+		judged.ExcludedEvents = out.ExcludedEvents
+		judged.SaturationOverlaps = out.SaturationOverlaps
+		judged.exclusionCause = out.exclusionCause
+		out = judged
 	}
 	if rawVerdict.Status == "failed" || numericFailure || trialsFailed(trials) {
 		out.Status = "failed"
 	}
 	qualified := parseErr == nil && guards
+	if !qualified && out.exclusionCause == "" {
+		out.exclusionCause = "invalid-phase-evidence"
+		if !qualify {
+			out.exclusionCause = "qualification-skipped"
+		}
+	}
 	if !qualified && out.Status != "failed" {
 		out.Status = "inconclusive"
 	}
@@ -306,6 +349,9 @@ type previewPoolInput struct {
 func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	r := &loadgen.RunReport{Limits: loadgen.DefaultLimits()}
 	valid, failed := input.RunID != "" && len(input.Phases) > 0 && !input.Missing, poolFailure(input)
+	diagnostics := []phaseDiagnostic{}
+	included, dropped, excluded, overlaps := 0, 0, 0, 0
+	var duplicates uint64
 	sessions, operations := map[string]bool{}, map[string]bool{}
 	for i := range input.Phases {
 		phase := &input.Phases[i]
@@ -318,6 +364,10 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 			}
 			sessions[session] = true
 		}
+		duplicates += verdict.DuplicatePackets
+		excluded += verdict.ExcludedEvents
+		overlaps += verdict.SaturationOverlaps
+		diag := phaseDiagnostic{Phase: i, ExcludedEvents: verdict.ExcludedEvents, SaturationOverlaps: verdict.SaturationOverlaps, Cause: verdict.exclusionCause}
 		// Replayed identities never increase the acceptance sample. Reject the whole
 		// ambiguous phase as evidence, retaining its known failures independently.
 		duplicate := false
@@ -332,16 +382,31 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 		}
 		if duplicate {
 			valid = false
+			dropped++
+			diag.Cause = "duplicate-operation-identity"
+			diagnostics = append(diagnostics, diag)
 			continue
 		}
 		if !qualified || phase.RunID != input.RunID {
+			dropped++
+			if phase.RunID != input.RunID {
+				diag.Cause = "phase-run-differs"
+			}
+			diagnostics = append(diagnostics, diag)
 			continue
 		}
 		count, ok := observe.AddCount(int64(r.Callers), int64(part.Callers))
 		if !ok {
 			valid = false
+			dropped++
+			diag.Cause = "caller-count-overflow"
+			diagnostics = append(diagnostics, diag)
 			continue
 		}
+		included++
+		diag.Included = true
+		diag.Cause = ""
+		diagnostics = append(diagnostics, diag)
 		r.Callers = int(count)
 		r.Processes = append(r.Processes, part.Processes...)
 		r.Events = append(r.Events, part.Events...)
@@ -356,6 +421,12 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	if failed {
 		out.Status = "failed"
 	}
+	out.IncludedPhases = included
+	out.DroppedPhases = dropped
+	out.ExcludedEvents = excluded
+	out.SaturationOverlaps = overlaps
+	out.DuplicatePackets = duplicates
+	out.PhaseDiagnostics = diagnostics
 	return out
 }
 func decodePool(data []byte) (input previewPoolInput, err error) {
