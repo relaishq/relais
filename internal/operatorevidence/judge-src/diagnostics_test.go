@@ -23,7 +23,22 @@ func TestPoolMissingPhaseStillHasDiagnostics(t *testing.T) {
 	input := rawPoolSample()
 	input.Phases[0].CallerJSONL = ""
 	got := pooledPreviewMedia(&input)
-	if got.Status == "passed" || got.DroppedPhases != len(input.Phases) || len(got.PhaseDiagnostics) != len(input.Phases) {
+	if got.Status == "passed" || got.DroppedPhases != 1 || len(got.PhaseDiagnostics) != len(input.Phases) {
 		t.Fatal(got)
+	}
+}
+
+func TestPoolQualifiesEachPhaseAfterInvalidSibling(t *testing.T) {
+	for _, loss := range []bool{false, true} {
+		input := rawPoolSample()
+		input.Phases[0].CallerJSONL = ""
+		input.Phases[0].Receipts[0].Result.Lost = loss
+		got := pooledPreviewMedia(&input)
+		if got.IncludedPhases != len(input.Phases)-1 || got.DroppedPhases != 1 || !got.PhaseDiagnostics[1].Included {
+			t.Fatalf("invalid sibling suppressed independent qualification: %+v", got)
+		}
+		if loss && got.Status != "failed" {
+			t.Fatal("invalid phase erased known loss", got)
+		}
 	}
 }

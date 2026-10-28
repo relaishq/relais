@@ -185,13 +185,30 @@ and the restored clock must pass the same source check. The ACL control restores
 exact template rules and repeats its positive authenticated probe even after a
 failed negative observation. All hosts are verified again before gates start.
 
-The workflow uploads only `runtime/operator-report/report.json` and
-`runtime/operator-report/host-diagnostics.log`. It records the tested commit
+The workflow uploads `runtime/operator-report/report.json`,
+`runtime/operator-report/host-diagnostics.log` and
+`runtime/operator-report/media-evidence.json`. It records the tested commit
 (the merge commit for a PR), the separate PR head, template and binary hashes,
 release pins, clock samples, CPU masks and phase evidence. Raw mailboxes,
 credentials, generated keys and unit environments are not artifacts. Cleanup
 runs after partial boot, cancellation and gate failure using deployment-owned
 container IDs and caller units. Images remain reusable build cache.
+The media artifact retains the judge pool's per-phase caller JSONL, events,
+receipts and registration probes, plus the release commit and judge binary hash.
+It replaces opaque identities/text with consistent aliases and shifts all
+nonzero timestamps by one common offset to a synthetic epoch. Missing, null and
+duplicate members and exact known-field number tokens remain intact; unknown
+extension values are scrubbed. Replay tests compare every summary field before
+and after sanitization for passing, failing and invalid evidence.
+To rejudge offline, extract the artifact's `pool` object as the judge input.
+Build the pinned judge with `operatorevidence.BuildPinned` from `sourceCommit`
+and this checkout's embedded judge sources, verify `judgeSha256`, then invoke
+that binary with the input file. Neither caller manifests nor credentials are
+needed. Evidence is saved before judgment, including when the judge fails.
+Every invalid phase reports a sanitized `issue.path` and fixed `issue.reason`
+and prints them in a `media-phase` diagnostic. Each phase qualifies independently;
+an invalid sibling keeps the whole pool incomplete but does not suppress other
+phases or erase known failures.
 Caller failures capture unit state and the last 60 journal lines before cleanup,
 with scoped secrets redacted. Unit state includes user, filesystem protection,
 working directory, affinity and runtime limit. Loader stderr and file failure

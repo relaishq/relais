@@ -1,9 +1,11 @@
 package operatorrehearsal
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 
+	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/pkg/operator"
@@ -73,6 +75,7 @@ func sanitizePool(p *operatorevidence.Summary) *operatorevidence.Summary {
 	copy.PhaseDiagnostics = append([]operatorevidence.PhaseDiagnostic{}, p.PhaseDiagnostics...)
 	for i := range copy.PhaseDiagnostics {
 		copy.PhaseDiagnostics[i].Cause = publicExclusion(copy.PhaseDiagnostics[i].Cause)
+		copy.PhaseDiagnostics[i].Issue = copy.PhaseDiagnostics[i].Issue.Public(reflect.TypeFor[operatorevidence.MediaInput](), reflect.TypeFor[loadgen.Message]())
 	}
 	return &copy
 }

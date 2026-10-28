@@ -53,15 +53,22 @@ type rehearsal struct {
 	units                   []operatorcaller.Identity
 }
 type recordingJudge struct {
-	requests uint64
-	note     func(operator.Uncertainty)
-	pinned   operatorevidence.PinnedJudge
-	last     *operatorevidence.Summary
-	cpu      []Calibration
+	requests    uint64
+	note        func(operator.Uncertainty)
+	pinned      operatorevidence.PinnedJudge
+	last        *operatorevidence.Summary
+	cpu         []Calibration
+	retain      func(operatorevidence.Pool) error
+	diagnostics io.Writer
 }
 
 func (j *recordingJudge) Judge(ctx context.Context, p operatorevidence.Pool) (operatorevidence.Summary, error) {
 	j.requests++
+	if j.retain != nil {
+		if err := j.retain(p); err != nil {
+			return operatorevidence.Summary{}, errors.New("media-evidence-save-failed")
+		}
+	}
 	s, e := j.pinned.Judge(ctx, p)
 	if e != nil && j.note != nil {
 		end, _ := ctx.Deadline()
@@ -79,6 +86,13 @@ func (j *recordingJudge) Judge(ctx context.Context, p operatorevidence.Pool) (op
 	}
 	if e == nil {
 		j.last = &s
+		if j.diagnostics != nil {
+			for _, d := range sanitizePool(&s).PhaseDiagnostics {
+				if !d.Included {
+					_, _ = fmt.Fprintf(j.diagnostics, "media-phase phase=%d cause=%s contract_path=%s reason=%s\n", d.Phase, d.Cause, d.Issue.Path, d.Issue.Reason)
+				}
+			}
+		}
 		j.cpu = nil
 		for _, phase := range p.Phases {
 			c, _ := Calibrate(ctx, j.pinned, phase.CallerJSONL)
@@ -376,7 +390,7 @@ func (r *rehearsal) setup(ctx context.Context) error {
 		}
 		r.report.JudgeSHA256 = append(r.report.JudgeSHA256, pinned.SHA256)
 		if i == 0 {
-			r.judge = &recordingJudge{pinned: pinned}
+			r.judge = &recordingJudge{pinned: pinned, diagnostics: r.diagnostics, retain: func(p operatorevidence.Pool) error { return saveMediaEvidence(r.c.Output, p, pinned.SHA256) }}
 		}
 	}
 	r.report.ReleaseCommits = []string{ReleaseACommit, ReleaseBCommit}

@@ -22,6 +22,7 @@ type previewMediaSummary struct {
 	DuplicatePackets   uint64            `json:"duplicatePackets"`
 	PhaseDiagnostics   []phaseDiagnostic `json:"phaseDiagnostics"`
 	exclusionCause     string
+	issue              observe.EvidenceIssue
 
 	Status              string `json:"status"`
 	QualifiedMoves      int    `json:"qualifiedMoves"`
@@ -39,11 +40,12 @@ type previewMediaSummary struct {
 }
 
 type phaseDiagnostic struct {
-	Phase              int    `json:"phase"`
-	Included           bool   `json:"included"`
-	Cause              string `json:"cause"`
-	ExcludedEvents     int    `json:"excludedEvents"`
-	SaturationOverlaps int    `json:"saturationOverlaps"`
+	Phase              int                   `json:"phase"`
+	Included           bool                  `json:"included"`
+	Cause              string                `json:"cause"`
+	ExcludedEvents     int                   `json:"excludedEvents"`
+	SaturationOverlaps int                   `json:"saturationOverlaps"`
+	Issue              observe.EvidenceIssue `json:"issue"`
 }
 
 // Rejudge raw reports, never trust a serialized outcome. This returns MEDIA
@@ -160,6 +162,7 @@ type previewMediaInput struct {
 	Events      []loadgen.EventResult `json:"events"`
 	Receipts    []previewReceipt      `json:"receipts"`
 	Missing     bool                  `json:"missing,omitempty"`
+	issue       observe.EvidenceIssue
 }
 type previewReceipt = receipt
 
@@ -226,32 +229,39 @@ func collectGeneratorSamples(samples []json.RawMessage) (string, error) {
 }
 
 func parsePreviewMedia(input *previewMediaInput) (*loadgen.RunReport, previewMediaSummary, bool) {
-	return parsePreviewMediaFor(input, true)
+	return parsePreviewMediaFor(input)
 }
 
-func parsePreviewMediaFor(input *previewMediaInput, qualify bool) (*loadgen.RunReport, previewMediaSummary, bool) {
+func parsePreviewMediaFor(input *previewMediaInput) (*loadgen.RunReport, previewMediaSummary, bool) {
 	r := &loadgen.RunReport{Callers: len(input.Sessions), Events: input.Events, Limits: loadgen.DefaultLimits()}
 	var numericFailure bool
 	trials := failureInput(input)
 	var sampleDuration, sampleRequests int64
 	var first loadgen.Message
 	var parseErr error
-	if observe.Numbers(input.Probes) != nil {
-		parseErr = fmt.Errorf("invalid probe numbers")
+	issue := input.issue
+	reject := func(err error, path string) {
+		if parseErr == nil && issue.Path == "" {
+			issue = phaseIssue(err, path)
+		}
+		parseErr = err
+	}
+	if err := observe.Numbers(input.Probes); err != nil {
+		reject(err, "$.probes")
 	}
 	validEvents := make([]loadgen.EventResult, 0, len(input.Events))
-	for _, event := range input.Events {
-		if observe.Numbers(event) != nil {
-			parseErr = fmt.Errorf("invalid event numbers")
+	for index, event := range input.Events {
+		if err := observe.Numbers(event); err != nil {
+			reject(err, fmt.Sprintf("$.events[%d]", index))
 		} else {
 			validEvents = append(validEvents, event)
 		}
 	}
 	r.Events = validEvents
 	validReceipts := make([]receipt, 0, len(input.Receipts))
-	for _, receipt := range input.Receipts {
-		if observe.Numbers(receipt) != nil {
-			parseErr = fmt.Errorf("invalid receipt numbers")
+	for index, receipt := range input.Receipts {
+		if err := observe.Numbers(receipt); err != nil {
+			reject(err, fmt.Sprintf("$.receipts[%d]", index))
 		} else {
 			validReceipts = append(validReceipts, receipt)
 		}
@@ -261,14 +271,15 @@ func parsePreviewMediaFor(input *previewMediaInput, qualify bool) (*loadgen.RunR
 	// CPU/pacing field cannot silently become a clean generator sample.
 	decoder := json.NewDecoder(strings.NewReader(input.CallerJSONL))
 	var samples []json.RawMessage
-	for {
+	for row := 0; ; row++ {
+		path := fmt.Sprintf("$.callerJsonl[%d]", row)
 		var raw json.RawMessage
 		err := decoder.Decode(&raw)
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			parseErr = err
+			reject(err, path)
 			break
 		}
 		var m loadgen.Message
@@ -281,26 +292,26 @@ func parsePreviewMediaFor(input *previewMediaInput, qualify bool) (*loadgen.RunR
 			}
 		}
 		if err != nil {
-			parseErr = err
+			reject(err, path)
 			continue
 		}
 		if err = observe.Numbers(m); err == nil {
 			err = callNumbers(m.Call)
 		}
 		if err != nil {
-			parseErr = err
+			reject(err, path)
 			continue
 		}
 		if m.Type == "stats" {
 			sample, err := sampleFromMessage(m, first.PID)
 			if err != nil {
-				parseErr = err
+				reject(err, path)
 				continue
 			}
 			duration, dok := observe.AddCount(sampleDuration, int64(sample.Interval))
 			requests, rok := observe.AddCount(sampleRequests, int64(sample.IntervalStatusRequests))
 			if !dok || !rok {
-				parseErr = fmt.Errorf("generator totals overflow")
+				reject(fmt.Errorf("generator totals overflow"), path+".stats")
 				continue
 			}
 			sampleDuration, sampleRequests = duration, requests
@@ -315,22 +326,20 @@ func parsePreviewMediaFor(input *previewMediaInput, qualify bool) (*loadgen.RunR
 	if first.PID > 0 {
 		p, err := loadgen.ReadSoakProcess(strings.NewReader(checked.String()), first.PID, len(input.Sessions), r.Limits)
 		if err != nil {
-			parseErr = err
+			reject(err, "$.callerJsonl")
 		}
 		r.Processes = []loadgen.ProcessReport{p}
 	}
 	collectionsErr := phaseCollections(input, r)
 	if collectionsErr != nil {
-		parseErr = collectionsErr
+		reject(collectionsErr, collectionPath(collectionsErr))
 	}
 	rawVerdict := previewMediaSummary{Status: "inconclusive"}
 	out := rawVerdict
 	guards := false
 	if collectionsErr == nil && parseErr == nil {
 		rawVerdict = previewMediaFor(r, input.Gate == "relay-deploy")
-		if qualify {
-			guards = previewGeneratorDetails(r, validReceipts, samples, &out)
-		}
+		guards = previewGeneratorDetails(r, validReceipts, samples, &out)
 		judged := previewMediaFor(r, input.Gate == "relay-deploy")
 		judged.ExcludedEvents = out.ExcludedEvents
 		judged.SaturationOverlaps = out.SaturationOverlaps
@@ -347,9 +356,7 @@ func parsePreviewMediaFor(input *previewMediaInput, qualify bool) (*loadgen.RunR
 	}
 	if !qualified && out.exclusionCause == "" {
 		out.exclusionCause = "invalid-phase-evidence"
-		if !qualify {
-			out.exclusionCause = "qualification-skipped"
-		}
+
 	}
 	if !qualified && out.Status != "failed" {
 		out.Status = "inconclusive"
@@ -370,6 +377,10 @@ func parsePreviewMediaFor(input *previewMediaInput, qualify bool) (*loadgen.RunR
 		if r.Result.Lost {
 			out.Status = "failed"
 		}
+	}
+	out.issue = publicPhaseIssue(issue)
+	if !qualified && out.exclusionCause == "invalid-phase-evidence" && out.issue.Path == "" {
+		out.issue = observe.EvidenceIssue{Path: "$", Reason: "qualification-incomplete"}
 	}
 	return r, out, qualified
 }
@@ -397,7 +408,7 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	sessions, operations := map[string]bool{}, map[string]bool{}
 	for i := range input.Phases {
 		phase := &input.Phases[i]
-		part, verdict, qualified := parsePreviewMediaFor(phase, valid)
+		part, verdict, qualified := parsePreviewMedia(phase)
 		valid = valid && qualified && phase.RunID == input.RunID
 		failed = failed || phase.RunID == input.RunID && verdict.Status == "failed"
 		for _, session := range phase.Sessions {
@@ -409,7 +420,7 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 		duplicates += verdict.DuplicatePackets
 		excluded += verdict.ExcludedEvents
 		overlaps += verdict.SaturationOverlaps
-		diag := phaseDiagnostic{Phase: i, ExcludedEvents: verdict.ExcludedEvents, SaturationOverlaps: verdict.SaturationOverlaps, Cause: verdict.exclusionCause}
+		diag := phaseDiagnostic{Phase: i, ExcludedEvents: verdict.ExcludedEvents, SaturationOverlaps: verdict.SaturationOverlaps, Cause: verdict.exclusionCause, Issue: verdict.issue}
 		// Replayed identities never increase the acceptance sample. Reject the whole
 		// ambiguous phase as evidence, retaining its known failures independently.
 		duplicate := false
@@ -459,17 +470,15 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 		r.Events = append(r.Events, part.Events...)
 	}
 	out := previewMediaSummary{Status: "inconclusive"}
-	if valid {
-		if r.Callers > 0 {
-			out = previewMedia(r)
-		} else if relayCalls > 0 {
-			out.Status = "passed"
-		}
-		out.ExpectedCalls += relayCalls
-		out.CompletedCalls += relayCalls
-		out.RelayCalls = relayCalls
-		out.MaxMediaGapNs = max(out.MaxMediaGapNs, relayGap)
+	if r.Callers > 0 {
+		out = previewMedia(r)
+	} else if relayCalls > 0 {
+		out.Status = "passed"
 	}
+	out.ExpectedCalls += relayCalls
+	out.CompletedCalls += relayCalls
+	out.RelayCalls = relayCalls
+	out.MaxMediaGapNs = max(out.MaxMediaGapNs, relayGap)
 	if !valid && out.Status != "failed" {
 		out.Status = "inconclusive"
 	}
@@ -485,17 +494,24 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	return out
 }
 func decodePool(data []byte) (input previewPoolInput, err error) {
-	err = observe.DecodeEvidenceLimit(data, &input, 64<<20)
-	if observe.IsIncompleteEvidence(err) {
-		input.Missing = true
-		for i := range input.Phases {
-			input.Phases[i].Missing = true
-		}
-		err = nil
+	wire, err := decodePoolEnvelope(data)
+	if err != nil {
+		return input, err
 	}
 
+	input.RunID, input.Missing = wire.RunID, wire.Missing
+	input.Phases = make([]previewMediaInput, len(wire.Phases))
+	for i, raw := range wire.Phases {
+		phase := &input.Phases[i]
+		if problem := observe.DecodeEvidenceLimit(raw, phase, 64<<20); problem != nil {
+			input.Missing = true
+			phase.Missing = true
+			phase.issue = observe.DescribeEvidence(problem)
+		}
+	}
 	return
 }
+
 func main() {
 	if len(os.Args) == 3 && os.Args[1] == "--calibration" {
 		data, err := os.ReadFile(os.Args[2])

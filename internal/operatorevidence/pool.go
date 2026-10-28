@@ -16,11 +16,12 @@ import (
 )
 
 type PhaseDiagnostic struct {
-	Phase              int    `json:"phase"`
-	Included           bool   `json:"included"`
-	Cause              string `json:"cause"`
-	ExcludedEvents     int    `json:"excludedEvents"`
-	SaturationOverlaps int    `json:"saturationOverlaps"`
+	Phase              int                   `json:"phase"`
+	Included           bool                  `json:"included"`
+	Cause              string                `json:"cause"`
+	ExcludedEvents     int                   `json:"excludedEvents"`
+	SaturationOverlaps int                   `json:"saturationOverlaps"`
+	Issue              observe.EvidenceIssue `json:"issue"`
 }
 type Summary struct {
 	IncludedPhases     int               `json:"includedPhases"`

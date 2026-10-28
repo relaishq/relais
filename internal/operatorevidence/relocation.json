@@ -11,7 +11,7 @@
     {
       "file": "main.go",
       "sourceSHA256": "c6aef1d42288b9a8df52a4acf0e085e37982501f45e9da35e08e84853ea233bb",
-      "relocatedSHA256": "ce4b7caf38dc764df112c023d17aab9252b7833311fcfd0c9b297cdb9544cb16",
+      "relocatedSHA256": "5db0daace08cd6c70cf13671f49605bc0118b69f153eaa961bd687b0b0a10c11",
       "baselineRelocatedSHA256": "580e08dd655e517a6a2a0b392320e7e7f2dd17fd0a0a2f2eff3cad3f197abb86"
     },
     {
@@ -52,7 +52,8 @@
     "reuse already validated product generator messages rather than decoding the same sample twice; validation and thresholds are unchanged",
     "relay-deploy alone qualifies one completed zero-event call with full caller and generator checks; relay calls never enter the unchanged trial judge; only explicit null empty Moves/armed collections are normalized for relay, while omitted fields remain invalid",
     "Generator calibration delegates to the same pinned applySaturation path; interval predicates expose numeric diagnostics without threshold or comparison changes.",
-    "Existing clock, cadence and span rejection conditions retain their error text and expose fixed numeric diagnostics; verdict behavior is unchanged."
+    "Existing clock, cadence and span rejection conditions retain their error text and expose fixed numeric diagnostics; verdict behavior is unchanged.",
+    "Qualify every phase independently, quarantine incomplete phase envelopes separately, retain known failures and report fixed contract paths/reasons without changing media or generator thresholds."
   ],
   "guardFiles": [
     {
@@ -70,6 +71,10 @@
     {
       "file": "calibration.go",
       "sha256": "bdce87078e4e4b8b0bb06d4102f38695ae92e3d2e0e0bbfa1744bdba71bdb36f"
+    },
+    {
+      "file": "validation.go",
+      "sha256": "1572df8eb7173ba426e3fc74c41cd594e4f9e68ef392d7b2eafcaeeb12e64f9d"
     }
   ],
   "fixtureHardening": "Synthetic controls carry complete armed inventories, both audio/video gap populations on every event, and mapped duration/classification records. Product judge policy and expected passing summary counts are unchanged. Video tracks include the product-emitted Video object; the expected passing summary remains unchanged.",
@@ -77,6 +82,7 @@
     "required.go": "7d91f285d5587491f4e707aabe24c40b7067a0c8fe512f0babb84c1d900295d1",
     "evidence_optional.go": "3851b243be861f34d086626b7ba63a407a7269be36633aa68a2c55c627c5b9d1",
     "canonical.go": "22cb1835297d4bf5c2afa264a22370f855897a9390dedfc30e305188a6f6e30e",
-    "strict.go": "efdd1034a43eefff1b878cb53227ec77215e6bb6ae5b8badf3e67090fb8cd0d6"
+    "strict.go": "efdd1034a43eefff1b878cb53227ec77215e6bb6ae5b8badf3e67090fb8cd0d6",
+    "diagnostic.go": "9ebee72d59b1e10f2c4696180206ed8b2a5aee22c3562d775f3ab1acd2c9af87"
   }
 }
