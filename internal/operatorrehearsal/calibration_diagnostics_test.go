@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -54,6 +55,72 @@ func TestCalibrationThresholdsExplainValuesAndLimits(t *testing.T) {
 				t.Fatal("log lost rejection evidence", log.String())
 			}
 		})
+	}
+}
+
+func TestCalibrationReportKeepsClippedMediaWindow(t *testing.T) {
+	for _, row := range []struct {
+		name string
+		raw  string
+		want CalibrationMediaWindow
+	}{
+		{"phased-first-empty-final", calibrationShape(60, 1202877166, 173312663, false), CalibrationMediaWindow{
+			FirstVideoSendOffsetMS: 1173.312663, HangUpOffsetMS: 61203.492696,
+			FlaggedIntervals: []CalibrationFlaggedInterval{{1173.312663, 2202.877166}},
+			ClippedFlaggedMS: 1029.564503, MediaWindowMS: 60030.180033,
+		}},
+		{"adjacent-merged", calibrationRows(func(i int, s *loadgen.Stats) {
+			if i == 50 || i == 51 {
+				s.CPUPerGOMAXPROCS = 86
+			}
+		}), CalibrationMediaWindow{1000, 101000, []CalibrationFlaggedInterval{{51000, 53000}}, 2000, 100000}},
+		{"unflagged", calibrationRows(nil), CalibrationMediaWindow{1000, 101000, []CalibrationFlaggedInterval{}, 0, 100000}},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			c, err := testCalibrate(t, row.raw)
+			if err != nil {
+				t.Fatal(c, err)
+			}
+			r := passingReport()
+			r.CPU.Calibration, r.CPU.Phases = c, []Calibration{c}
+			var out bytes.Buffer
+			if err := r.Write(&out); err != nil {
+				t.Fatal(err)
+			}
+			var saved Report
+			if err := json.Unmarshal(out.Bytes(), &saved); err != nil {
+				t.Fatal(err)
+			}
+			for _, actual := range []Calibration{saved.CPU.Calibration, saved.CPU.Phases[0]} {
+				w := actual.MediaWindow
+				if !reflect.DeepEqual(w.FlaggedIntervals, row.want.FlaggedIntervals) || w.FirstVideoSendOffsetMS != row.want.FirstVideoSendOffsetMS || w.HangUpOffsetMS != row.want.HangUpOffsetMS || math.Abs(w.ClippedFlaggedMS-row.want.ClippedFlaggedMS) > 1e-9 || math.Abs(w.MediaWindowMS-row.want.MediaWindowMS) > 1e-9 {
+					t.Fatal("report lost judge window", w, row.want)
+				}
+				var total float64
+				for _, f := range w.FlaggedIntervals {
+					total += f.EndOffsetMS - f.StartOffsetMS
+				}
+				if math.Abs(total-w.ClippedFlaggedMS) > 1e-9 || math.Abs((w.HangUpOffsetMS-w.FirstVideoSendOffsetMS)-w.MediaWindowMS) > 1e-9 || math.Abs(100*total/w.MediaWindowMS-actual.FlaggedPercent) > 1e-12 {
+					t.Fatal("cannot reconstruct budget from report", actual)
+				}
+				encoded, _ := json.Marshal(w)
+				if strings.Contains(string(encoded), "2027-") || strings.Contains(string(encoded), "started_at") {
+					t.Fatal("window contains wall-clock identity", string(encoded))
+				}
+			}
+		})
+	}
+	// Both report locations sanitize non-finite offsets before JSON encoding.
+	r := passingReport()
+	bad := Calibration{MediaWindow: CalibrationMediaWindow{HangUpOffsetMS: math.Inf(1)}}
+	r.CPU.Calibration, r.CPU.Phases = bad, []Calibration{bad}
+	var out bytes.Buffer
+	if err := r.Write(&out); err != nil {
+		t.Fatal(err)
+	}
+	var saved Report
+	if json.Unmarshal(out.Bytes(), &saved) != nil || saved.CPU.Calibration.MediaWindow.HangUpOffsetMS != 0 || saved.CPU.Phases[0].MediaWindow.HangUpOffsetMS != 0 {
+		t.Fatal("unsafe window retained", out.String())
 	}
 }
 

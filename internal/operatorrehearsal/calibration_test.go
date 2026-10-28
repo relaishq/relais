@@ -11,7 +11,36 @@ import (
 
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/pkg/callharness"
+	"github.com/relaishq/relais/pkg/operator"
 )
+
+func TestRehearsalMediaDurationsCoverPhasedFirstInterval(t *testing.T) {
+	const first = 1250 * time.Millisecond
+	if calibrationMediaDuration != 180*time.Second {
+		t.Fatal("calibration media duration differs", calibrationMediaDuration)
+	}
+	for _, row := range []struct {
+		name  string
+		media time.Duration
+	}{
+		{"calibration", calibrationMediaDuration},
+		{"rollout", time.Duration(duration(operator.Rollout)) * time.Second},
+		{"control-restart", time.Duration(duration(operator.ControlRestart)) * time.Second},
+		{"upgrade-rollback", time.Duration(duration(operator.UpgradeRollback)) * time.Second},
+		{"relay-deploy", time.Duration(duration(operator.RelayDeploy)) * time.Second},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			// Conservatively count the whole first interval, without startup clipping.
+			if first*100 >= row.media {
+				t.Fatalf("first interval exceeds 1%% budget: %s / %s", first, row.media)
+			}
+			c, err := testCalibrate(t, calibrationShape(int(row.media/time.Second), first, 0, false))
+			if err != nil || !c.Passed || c.FlaggedNS != int64(first) || c.FlaggedPercent >= 1 {
+				t.Fatal("pinned judge rejected the phased first interval", c, err)
+			}
+		})
+	}
+}
 
 func TestCalibrationFinalEmptySampleUsesJudgeWindow(t *testing.T) {
 	raw := calibrationShape(60, 1202877166, 173312663, false)

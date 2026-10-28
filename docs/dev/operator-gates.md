@@ -125,7 +125,7 @@ inside the scoped public release reader and never reaches child processes.
 
 The actual allowed CPU mask determines the layout. Two CPUs belong to the
 caller unit, its Go bridge and decoder (`GOMAXPROCS=2`); the remaining CPUs serve
-the driver and containers. Before gate faults, a separate 60-second caller
+the driver and containers. Before gate faults, a separate 180-second caller
 measures send lateness, CPU pressure and decoder counters with the topology
 idle. The report keeps the peak p99, maximum lateness and time-weighted flagged
 intervals. This check does not replace the pinned judges' event-window guards.
@@ -204,8 +204,9 @@ burst still supplies the final caller clock and proximity proof.
 Calibration and gate callers share the same start function and P4 launcher.
 Calibration reserves two minutes for preparation: the unchanged loader supplies
 one initial clock probe and one every ten seconds, so ten-probe registration
-needs at least ninety seconds after loader startup. The media calibration still
-runs for sixty seconds, within the same four-minute caller runtime limit.
+needs at least ninety seconds after loader startup. The media calibration runs
+for 180 seconds so a 1.25-second phased first interval stays below the judge's
+1% budget, within a six-minute caller runtime limit.
 Their UDP bind uses the runner's route source for the relay, with port zero;
 the loader rejects wildcard bind addresses. The bridge checks the staged loader
 hash, executable bit, certificate readability and ffmpeg inside the caller unit.

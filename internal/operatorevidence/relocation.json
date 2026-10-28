@@ -29,7 +29,7 @@
     {
       "file": "exclusions.go",
       "sourceSHA256": "c2e4793b1645efca56ca4bf3c0764d84e1917471bf795d9158d7107e31288826",
-      "relocatedSHA256": "31e9f1bb8bd874bc7d18ff3a51bec641978e1d34fd5e8ecbf437e09fe7347f83",
+      "relocatedSHA256": "09b50313b34c0c954c2c7e5c4684658448be94683c6a54a21d94ef38bc9fca56",
       "baselineRelocatedSHA256": "7f12316a594667ce3107dadb9628cf86efcfcbe0839ae43cdfb52de7ade1849f"
     },
     {
@@ -69,7 +69,7 @@
     },
     {
       "file": "calibration.go",
-      "sha256": "68990a15558e3d759e637f45d6a4cd249d151623d1d9c2c5ce9d8c618268f526"
+      "sha256": "bdce87078e4e4b8b0bb06d4102f38695ae92e3d2e0e0bbfa1744bdba71bdb36f"
     }
   ],
   "fixtureHardening": "Synthetic controls carry complete armed inventories, both audio/video gap populations on every event, and mapped duration/classification records. Product judge policy and expected passing summary counts are unchanged. Video tracks include the product-emitted Video object; the expected passing summary remains unchanged.",

@@ -514,14 +514,17 @@ func (r *rehearsal) affinity(ctx context.Context) error {
 
 const calibrationPreparation = 2 * time.Minute
 
+// Keep the caller's phased first interval (up to 1.25s) below the judge's 1% media budget.
+const calibrationMediaDuration = 180 * time.Second
+
 func (r *rehearsal) calibrate(ctx context.Context) (err error) {
 	stage := "calibration-caller-preparation-failed"
 	defer func() { r.recordCalibration(stage, err) }()
-	if e := r.startCaller(ctx, operator.Rollout, 60, "1", r.clock.Elapsed()+calibrationPreparation, r.clock.Elapsed()+4*time.Minute); e != nil {
+	if e := r.startCaller(ctx, operator.Rollout, int(calibrationMediaDuration/time.Second), "1", r.clock.Elapsed()+calibrationPreparation, r.clock.Elapsed()+calibrationPreparation+calibrationMediaDuration+time.Minute); e != nil {
 		return e
 	}
 	stage = "calibration-caller-evidence-failed"
-	raw, e := r.active.Collect(ctx, r.wall(r.clock.Elapsed()+3*time.Minute))
+	raw, e := r.active.Collect(ctx, r.wall(r.clock.Elapsed()+calibrationMediaDuration+2*time.Minute))
 	if e != nil {
 		r.callerDiagnostics(ctx, r.active.Manifest.Identity)
 		return e

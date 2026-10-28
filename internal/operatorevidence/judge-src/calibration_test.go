@@ -127,3 +127,17 @@ func TestGeneratorFlagExtractionKeepsBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestGeneratorBudgetRetainsClippedMergedIntervals(t *testing.T) {
+	start := time.Unix(1800000000, 0)
+	samples := []loadgen.Stats{
+		{At: start.Add(time.Second), Interval: 2 * time.Second, CPUPerGOMAXPROCS: 86},
+		{At: start.Add(2 * time.Second), Interval: 2 * time.Second, CPUPerGOMAXPROCS: 86},
+		{At: start.Add(5 * time.Second), Interval: 2 * time.Second, CPUPerGOMAXPROCS: 86},
+		{At: start.Add(7 * time.Second), Interval: time.Second, CPUPerGOMAXPROCS: 86},
+	}
+	b := saturationBudget("caller-1", samples, start, start.Add(4*time.Second))
+	if len(b.clipped) != 2 || !b.clipped[0].Start.Equal(start) || !b.clipped[0].End.Equal(start.Add(2*time.Second)) || !b.clipped[1].Start.Equal(start.Add(3*time.Second)) || !b.clipped[1].End.Equal(start.Add(4*time.Second)) || b.FlaggedSeconds != 3 || b.MediaSeconds != 4 || b.Percent != 75 {
+		t.Fatal("diagnostics differ from clipped budget", b, b.clipped)
+	}
+}

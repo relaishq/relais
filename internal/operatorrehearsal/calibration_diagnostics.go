@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"slices"
+
+	"github.com/relaishq/relais/internal/operatorgates/observe"
 )
 
 // CalibrationCheck records a breached rule, including tolerated flagged
@@ -42,6 +44,10 @@ func (c *Calibration) cause(s string) {
 }
 
 func cleanCalibration(c Calibration) Calibration {
+	c.MediaWindow.FlaggedIntervals = append([]CalibrationFlaggedInterval{}, c.MediaWindow.FlaggedIntervals...)
+	if observe.Numbers(c.MediaWindow) != nil {
+		c.MediaWindow = CalibrationMediaWindow{FlaggedIntervals: []CalibrationFlaggedInterval{}}
+	}
 	c.Causes = append([]string{}, c.Causes...)
 	for i, s := range c.Causes {
 		if !calibrationCause(s) {

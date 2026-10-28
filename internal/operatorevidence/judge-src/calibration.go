@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
@@ -34,6 +35,23 @@ type generatorCalibration struct {
 	CompletedCalls       int              `json:"completedCalls"`
 	DuplicatePackets     uint64           `json:"duplicatePackets"`
 	Causes               []string         `json:"causes"`
+
+	MediaWindow generatorMediaWindow `json:"mediaWindow"`
+}
+
+// Offsets use the product call's StartedAt as zero; no wall-clock identity leaves
+// the pinned judge. These are the budget spans, without event-overlap expansion.
+type generatorMediaWindow struct {
+	FirstVideoSendOffsetMS float64                    `json:"firstVideoSendOffsetMs"`
+	HangUpOffsetMS         float64                    `json:"hangUpOffsetMs"`
+	FlaggedIntervals       []generatorFlaggedInterval `json:"flaggedIntervals"`
+	ClippedFlaggedMS       float64                    `json:"clippedFlaggedMs"`
+	MediaWindowMS          float64                    `json:"mediaWindowMs"`
+}
+
+type generatorFlaggedInterval struct {
+	StartOffsetMS float64 `json:"startOffsetMs"`
+	EndOffsetMS   float64 `json:"endOffsetMs"`
 }
 
 func (c *generatorCalibration) cause(code string) {
@@ -46,6 +64,7 @@ func (c *generatorCalibration) cause(code string) {
 // by previewGeneratorDetails. It neither infers a media window from sample
 // durations nor imposes a minimum packet count, CPU mask or sample population.
 func calibrateGenerator(raw string) (c generatorCalibration) {
+	c.MediaWindow.FlaggedIntervals = []generatorFlaggedInterval{}
 	c.Checks = []generatorCheck{}
 	c.Causes = []string{}
 	defer func() {
@@ -147,6 +166,19 @@ func calibrateGenerator(raw string) (c generatorCalibration) {
 	c.MediaNS = int64(math.Round(b.MediaSeconds * 1e9))
 	c.FlaggedNS = int64(math.Round(b.FlaggedSeconds * 1e9))
 	c.FlaggedPercent = b.Percent
+	start, end := callerWindow(p)
+	if len(p.Calls) == 1 && p.Calls[0].Call != nil && !start.IsZero() && end.After(start) {
+		origin := p.Calls[0].Call.StartedAt
+		offset := func(at time.Time) float64 { return float64(at.Sub(origin)) / float64(time.Millisecond) }
+		c.MediaWindow = generatorMediaWindow{
+			FirstVideoSendOffsetMS: offset(start), HangUpOffsetMS: offset(end),
+			FlaggedIntervals: []generatorFlaggedInterval{},
+			ClippedFlaggedMS: b.FlaggedSeconds * 1000, MediaWindowMS: b.MediaSeconds * 1000,
+		}
+		for _, f := range b.clipped {
+			c.MediaWindow.FlaggedIntervals = append(c.MediaWindow.FlaggedIntervals, generatorFlaggedInterval{offset(f.Start), offset(f.End)})
+		}
+	}
 	if b.Outcome != "pass" {
 		if b.Percent > saturationPercentLimit {
 			c.cause("generator-saturation-budget")

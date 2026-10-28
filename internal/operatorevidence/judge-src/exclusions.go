@@ -45,6 +45,7 @@ type flaggedInterval struct {
 	End   time.Time `json:"end"`
 }
 type callerSaturation struct {
+	clipped        []flaggedInterval
 	Checks         []generatorCheck  `json:"checks,omitempty"`
 	Job            string            `json:"job"`
 	FlaggedSeconds float64           `json:"flagged_seconds"`
@@ -279,6 +280,12 @@ func saturationBudget(job string, samples []loadgen.Stats, start, end time.Time)
 		}
 		if f.End.After(first) {
 			b.FlaggedSeconds += f.End.Sub(first).Seconds()
+			// Retain the same disjoint budget contributions for diagnostics only.
+			if n := len(b.clipped); n > 0 && b.clipped[n-1].End.Equal(first) {
+				b.clipped[n-1].End = f.End
+			} else {
+				b.clipped = append(b.clipped, flaggedInterval{first, f.End})
+			}
 		}
 		if f.End.After(until) {
 			until = f.End
