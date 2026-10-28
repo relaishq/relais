@@ -172,9 +172,15 @@ pid = subprocess.check_output(['systemctl', 'show', '-p', 'MainPID', '--value', 
 args = Path('/proc/' + pid + '/cmdline').read_bytes().split(b'\0')
 sources = subprocess.check_output(['chronyc', '-n', 'sources'], text=True).splitlines()
 tracking = subprocess.check_output(['chronyc', '-n', 'tracking'], text=True)
-rows = [s.split() for s in sources if s.startswith(('^', '=', '#'))]
-if b'-x' not in args or len(rows) != 1 or len(rows[0]) < 2:
-    raise SystemExit('local time source check failed')
+# A source starts with mode + state + whitespace. The table separator also
+# starts with '=', but is not a peer source.
+rows = [s.split() for s in sources if len(s) > 2 and s[0] in '^=#' and s[1] in '*+-?x~' and s[2].isspace()]
+if b'-x' not in args:
+    raise SystemExit('local time daemon is missing -x')
+if len(rows) != 1:
+    raise SystemExit('local time source count is %d; expected 1' % len(rows))
+if len(rows[0]) < 2:
+    raise SystemExit('local time source row is incomplete')
 if rows[0][1] != '` + TimeIP + `':
     print('wrong-time-source')
     raise SystemExit(42)

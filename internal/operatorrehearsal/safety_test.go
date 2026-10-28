@@ -196,6 +196,7 @@ func TestWrongTimeSourceRequiresAddressRejection(t *testing.T) {
 		missingPID, missingSocket, trackingFailure, removeComparison, pass bool
 	}{
 		{name: "wrong-address", sources: "^? 192.0.2.123 1", pass: true},
+		{name: "wrong-address-table", sources: "MS Name/IP address Stratum Poll Reach LastRx Last sample\n===============================================================================\n^? 192.0.2.123 1", pass: true},
 		{name: "missing-process", sources: "^? 192.0.2.123 1", missingPID: true},
 		{name: "missing-socket", sources: "^? 192.0.2.123 1", missingSocket: true},
 		{name: "unselected-reference", sources: "^? " + TimeIP + " 1"},

@@ -3,6 +3,8 @@ package operatorrehearsal
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,7 +14,7 @@ import (
 )
 
 func passingReport() Report {
-	r := Report{Cleanup: true, CPU: CPUReport{Calibration: Calibration{Passed: true}}, Pool: &operatorevidence.Summary{Status: operator.Passed, QualifiedMoves: 20, QualifiedTakeovers: 10, ExpectedCalls: 4, CompletedCalls: 4, RelayCalls: 1, MetricCount: 1, EventCount: 30, IncludedPhases: 4}}
+	r := Report{ScenarioSHA256: strings.Repeat("a", 64), Cleanup: true, CPU: CPUReport{Calibration: Calibration{Passed: true}}, Pool: &operatorevidence.Summary{Status: operator.Passed, QualifiedMoves: 20, QualifiedTakeovers: 10, ExpectedCalls: 4, CompletedCalls: 4, RelayCalls: 1, MetricCount: 1, EventCount: 30, IncludedPhases: 4}}
 	for _, g := range CoveredGates {
 		r.Gates = append(r.Gates, GateReport{Gate: g, ProcedureResult: operatorgates.ProcedureResult{Status: operator.Passed, Media: &operatorgates.MediaSummary{Status: operator.Passed}}, CallerStopped: true})
 	}
@@ -140,5 +142,27 @@ func TestRehearsalExemptionOnlyRelay(t *testing.T) {
 	r.Evaluate()
 	if r.Verdict != operator.Failure || len(r.Exemptions) != 2 {
 		t.Fatal("MUTATION: rehearsal-exemption-widened", r)
+	}
+}
+
+func TestReportRefusesMissingScenarioIdentity(t *testing.T) {
+	for _, identity := range []string{"", "not-a-digest"} {
+		r := passingReport()
+		r.ScenarioSHA256 = identity
+		r.Evaluate()
+		if r.Verdict != operator.Failure {
+			t.Fatal("MUTATION: scenario-report-identity", r)
+		}
+		var out bytes.Buffer
+		if err := r.Write(&out); err == nil || out.Len() != 0 {
+			t.Fatal("MUTATION: scenario-report-identity", err)
+		}
+		name := filepath.Join(t.TempDir(), "report.json")
+		if err := r.Save(name); err == nil {
+			t.Fatal("invalid identity report was saved")
+		}
+		if _, err := os.Stat(name); !os.IsNotExist(err) {
+			t.Fatal("identity refusal left a report artifact", err)
+		}
 	}
 }

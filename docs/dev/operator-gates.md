@@ -142,6 +142,13 @@ commits via `TestPinnedReleaseJudgesMatchFrozenEvidence`.
 fixtures; their media callbacks are canned summaries, so the raw zero-event
 caller case uses synthetic product reports.
 
+The scenario digest is created after binary preparation and before container
+boot. Reports without a valid digest are refused; an earlier preparation failure
+retains diagnostics without emitting an unidentified report. The two fixed
+release pins have identical Go sources, module locks and embedded media; only
+release compatibility JSON differs. Their deterministic judge binaries therefore
+share a hash. Source commit checks still distinguish the pins.
+
 The workflow uploads only `runtime/operator-report/report.json` and
 `runtime/operator-report/host-diagnostics.log`. It records the tested commit
 (the merge commit for a PR), the separate PR head, template and binary hashes,

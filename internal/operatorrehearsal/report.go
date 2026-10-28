@@ -1,7 +1,9 @@
 package operatorrehearsal
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 
@@ -58,6 +60,9 @@ func (r *Report) Evaluate() {
 	r.Failures = append([]string{}, r.Errors...)
 	r.Exemptions = []string{}
 	fail := func(s string) { r.Failures = append(r.Failures, s) }
+	if !fullDigest.MatchString(r.ScenarioSHA256) {
+		fail("invalid-scenario-identity")
+	}
 	if r.Latched {
 		fail("session-latched")
 	}
@@ -110,6 +115,9 @@ func publicCode(s string) string {
 	return "unclassified"
 }
 func (r Report) Write(w io.Writer) error {
+	if !fullDigest.MatchString(r.ScenarioSHA256) {
+		return errors.New("invalid-scenario-identity")
+	}
 	r.sanitize()
 	switch r.Event {
 	case "pull_request", "push", "schedule", "workflow_dispatch", "local":
@@ -123,10 +131,9 @@ func (r Report) Write(w io.Writer) error {
 	return e.Encode(r)
 }
 func (r Report) Save(name string) error {
-	f, e := os.Create(name)
-	if e != nil {
-		return e
+	var data bytes.Buffer
+	if err := r.Write(&data); err != nil {
+		return err
 	}
-	defer f.Close()
-	return r.Write(f)
+	return os.WriteFile(name, data.Bytes(), 0600)
 }

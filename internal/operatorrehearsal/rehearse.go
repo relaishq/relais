@@ -109,9 +109,13 @@ func (r *rehearsal) command(ctx context.Context, label string, args ...string) (
 	return string(out.Stdout), nil
 }
 
-// Rehearse runs resource ownership outside one shared gate session. Every exit,
-// including partial boot and interruption, writes a report after scoped cleanup.
-func Rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer) (report Report, err error) {
+// Rehearse runs resource ownership outside one shared gate session. After scoped
+// cleanup, exits write a report if setup established the scenario identity.
+func Rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer) (Report, error) {
+	return rehearse(ctx, c, diagnostics, (*rehearsal).setup)
+}
+
+func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setup func(*rehearsal, context.Context) error) (report Report, err error) {
 	report = Report{SchemaVersion: 1, Commit: c.Commit, HeadCommit: c.HeadCommit, Event: c.Event, Errors: []string{}, Gates: []GateReport{}, Bounds: clocks.Bounds{FrontendControlBoundNS: 2_000_000, FrontendWorkerBoundNS: 3_000_000, DriftPPM: 100}}
 	if e := os.MkdirAll(c.Output, 0700); e != nil {
 		return report, e
@@ -145,10 +149,14 @@ func Rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer) (rep
 			err = errors.Join(err, e)
 		}
 	}()
-	if e = r.setup(ctx); e != nil {
+	if e = setup(r, ctx); e != nil {
 		r.recordError("setup-failed", e)
 		return report, errors.New("setup-failed")
 	}
+	scenario := operator.Scenario{SchemaVersion: 1, Gates: CoveredGates, Template: operator.Identity{SourceCommit: r.c.Commit, SHA256: report.TemplateSHA256}, ReleaseA: operator.Identity{SourceCommit: ReleaseACommit, SHA256: ReleaseASHA256}, ReleaseB: operator.Identity{SourceCommit: ReleaseBCommit, SHA256: ReleaseBSHA256}, Judge: operator.Identity{SourceCommit: ReleaseACommit, SHA256: r.judge.pinned.SHA256}, Caller: operator.Identity{SourceCommit: ReleaseACommit, SHA256: report.CallerSHA256}}
+	raw, _ := json.Marshal(scenario)
+	scenario.Digest = hash(raw)
+	report.ScenarioSHA256 = scenario.Digest
 	if e = r.deployment.Boot(ctx); e != nil {
 		r.recordError("boot-failed", e)
 		return report, errors.New("boot-failed")
@@ -164,10 +172,6 @@ func Rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer) (rep
 	}
 	r.clock = operatorgates.NewRealClock()
 	armed := r.clock.Wall()
-	scenario := operator.Scenario{SchemaVersion: 1, Gates: CoveredGates, Template: operator.Identity{SourceCommit: r.c.Commit, SHA256: report.TemplateSHA256}, ReleaseA: operator.Identity{SourceCommit: ReleaseACommit, SHA256: ReleaseASHA256}, ReleaseB: operator.Identity{SourceCommit: ReleaseBCommit, SHA256: ReleaseBSHA256}, Judge: operator.Identity{SourceCommit: ReleaseACommit, SHA256: r.judge.pinned.SHA256}, Caller: operator.Identity{SourceCommit: ReleaseACommit, SHA256: report.CallerSHA256}}
-	raw, _ := json.Marshal(scenario)
-	scenario.Digest = hash(raw)
-	report.ScenarioSHA256 = scenario.Digest
 	init := operator.Init{Scenario: scenario, ArmedAtUnixMS: strconv.FormatInt(armed.UnixMilli(), 10), EndUnixMS: strconv.FormatInt(armed.Add(operatorgates.SessionMaximum).UnixMilli(), 10), Capabilities: adapter.Capabilities()}
 	r.session, e = operatorgates.NewSession(r.run, init, r.clock)
 	if e != nil {

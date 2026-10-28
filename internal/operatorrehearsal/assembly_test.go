@@ -85,16 +85,18 @@ func TestAMD64AssemblyUsesDownloadArchitectureAndIsolatedCaller(t *testing.T) {
 	}
 }
 
-func TestRehearseWritesSetupFailureBeforeResourceCreation(t *testing.T) {
+func TestRehearseRefusesUnidentifiedSetupFailure(t *testing.T) {
 	directory := t.TempDir()
 	var diagnostics bytes.Buffer
 	report, e := Rehearse(context.Background(), RehearseConfig{Assets: directory + "/absent", Output: directory + "/report"}, &diagnostics)
 	if e == nil || report.Verdict != operator.Failure || !report.Cleanup {
 		t.Fatal(report, e)
 	}
-	raw, e := os.ReadFile(directory + "/report/report.json")
-	if e != nil || !bytes.Contains(raw, []byte(`"setup-failed"`)) {
-		t.Fatal(string(raw), e)
+	if _, e := os.Stat(directory + "/report/report.json"); !os.IsNotExist(e) {
+		t.Fatal("unidentified setup failure wrote a report", e)
+	}
+	if !strings.Contains(e.Error(), "invalid-scenario-identity") {
+		t.Fatal("identity refusal missing", e)
 	}
 	if !strings.Contains(diagnostics.String(), "local-file-unavailable") {
 		t.Fatal("setup cause missing", diagnostics.String())

@@ -37,15 +37,32 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 	lost.Missing = true
 	lost.Phases[0].Receipts[0].Result.Lost = true
 	cases = append(cases, lost)
-	for _, commit := range []string{"a0d9744ff1223a8d7978447c907041973e915b08", "85e10436eb6adbbf577b6538b0bbb799aab823b2"} {
+	commits := []string{"a0d9744ff1223a8d7978447c907041973e915b08", "85e10436eb6adbbf577b6538b0bbb799aab823b2"}
+	for _, commit := range commits {
+		if err := pinnedCommit(ctx, root, commit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// These fixed releases differ only in release metadata, not Go sources,
+	// module locks or embedded media. The shared glue and decoder are identical.
+	diff := exec.CommandContext(ctx, "git", "--no-optional-locks", "diff", "--name-only", commits[0], commits[1])
+	diff.Dir, diff.Env = root, operatorcaller.PublicEnvironment(nil)
+	changed, err := diff.Output()
+	if err != nil || string(changed) != "scripts/release/compatibility-policy.json\nscripts/release/compatibility.json\n" {
+		t.Fatalf("fixed release judge input trees differ: %s (%v)", changed, err)
+	}
+	var executableSHA string
+	for _, commit := range commits {
 		t.Run(commit, func(t *testing.T) {
-			if err := pinnedCommit(ctx, root, commit); err != nil {
-				t.Fatal(err)
-			}
 			judge, err := operatorevidence.BuildPinned(ctx, root, commit, goExecutable, filepath.Join(t.TempDir(), "judge"))
 			if err != nil {
 				t.Fatal(err)
 			}
+			t.Logf("pin %s executable SHA256 %s", commit, judge.SHA256)
+			if executableSHA != "" && executableSHA != judge.SHA256 {
+				t.Fatal("byte-identical fixed judge sources produced different executables")
+			}
+			executableSHA = judge.SHA256
 			for _, input := range cases {
 				raw, _ := json.Marshal(input)
 				var pool operatorevidence.Pool

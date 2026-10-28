@@ -281,7 +281,10 @@
     "telemetry-known-allowance",
     "telemetry-unbounded-tail",
     "telemetry-age-presence",
-    "rehearsal-readiness-bypass"
+    "rehearsal-readiness-bypass",
+    "chrony-source-table",
+    "scenario-before-boot",
+    "scenario-report-identity"
   ],
   "killed": [
     {
@@ -2511,6 +2514,30 @@
       "evidence": "killed",
       "test": "TestRehearseRefusesIncompleteReadiness",
       "package": "./cmd/relais-gates"
+    },
+    {
+      "id": "chrony-source-table",
+      "owner": "P6a",
+      "evidence": "killed",
+      "test": "TestRunningClockCheckRejectsWrongSourcesAndMissingNoAdjust/chronyc-table",
+      "package": "./internal/operatorrehearsal",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "scenario-before-boot",
+      "owner": "P6a",
+      "evidence": "killed",
+      "test": "TestBootFailureRetainsScenarioIdentity",
+      "package": "./internal/operatorrehearsal",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "scenario-report-identity",
+      "owner": "P6a",
+      "evidence": "killed",
+      "test": "TestReportRefusesMissingScenarioIdentity",
+      "package": "./internal/operatorrehearsal",
+      "guardFingerprint": ""
     }
   ],
   "retired": [

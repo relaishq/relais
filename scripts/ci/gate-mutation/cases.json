@@ -3135,5 +3135,50 @@
     "Test": "TestRehearseRefusesIncompleteReadiness",
     "Marker": "MUTATION: rehearsal-readiness-bypass",
     "Package": "./cmd/relais-gates"
+  },
+  {
+    "ID": "chrony-source-table",
+    "File": "internal/operatorrehearsal/hosts.go",
+    "Function": "clockCheck",
+    "Old": "len(s) > 2 and s[0] in '^=#' and s[1] in '*+-?x~' and s[2].isspace()",
+    "New": "s.startswith(('^', '=', '#'))",
+    "Test": "TestRunningClockCheckRejectsWrongSourcesAndMissingNoAdjust/chronyc-table",
+    "Marker": "MUTATION: chrony-source-table",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "scenario-before-boot",
+    "File": "internal/operatorrehearsal/rehearse.go",
+    "Function": "rehearse",
+    "Old": "report.ScenarioSHA256 = scenario.Digest",
+    "New": "report.ScenarioSHA256 = \"\"",
+    "Test": "TestBootFailureRetainsScenarioIdentity",
+    "Marker": "MUTATION: scenario-before-boot",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "scenario-report-identity",
+    "File": "internal/operatorrehearsal/report.go",
+    "Function": "Evaluate",
+    "Receiver": "Report",
+    "Edits": [
+      {
+        "File": "internal/operatorrehearsal/report.go",
+        "Function": "Evaluate",
+        "Receiver": "Report",
+        "Old": "if !fullDigest.MatchString(r.ScenarioSHA256) {",
+        "New": "if false && !fullDigest.MatchString(r.ScenarioSHA256) {"
+      },
+      {
+        "File": "internal/operatorrehearsal/report.go",
+        "Function": "Write",
+        "Receiver": "Report",
+        "Old": "if !fullDigest.MatchString(r.ScenarioSHA256) {",
+        "New": "if false && !fullDigest.MatchString(r.ScenarioSHA256) {"
+      }
+    ],
+    "Test": "TestReportRefusesMissingScenarioIdentity",
+    "Marker": "MUTATION: scenario-report-identity",
+    "Package": "./internal/operatorrehearsal"
   }
 ]

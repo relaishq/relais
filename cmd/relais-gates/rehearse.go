@@ -62,7 +62,9 @@ func rehearseWithReadiness(args []string, check func() error, diagnostics io.Wri
 				_ = r.Save(filepath.Join(abs(*output), "report.json"))
 			}
 			fmt.Fprintln(diagnostics, "release-read-failed")
-			_ = r.Write(diagnostics)
+			if writeErr := r.Write(diagnostics); writeErr != nil {
+				fmt.Fprintln(diagnostics, "report refused:", writeErr)
+			}
 			return 1
 		}
 	}
@@ -78,7 +80,11 @@ func rehearseWithReadiness(args []string, check func() error, diagnostics io.Wri
 	if e != nil {
 		fmt.Fprintln(diagnostics, "rehearsal-incomplete")
 	}
-	if r.Write(os.Stdout) != nil || e != nil || r.Verdict != "passed" {
+	if writeErr := r.Write(os.Stdout); writeErr != nil {
+		fmt.Fprintln(diagnostics, "report refused:", writeErr)
+		return 1
+	}
+	if e != nil || r.Verdict != "passed" {
 		return 1
 	}
 	return 0
