@@ -168,7 +168,7 @@ func newProcedure(c *ProcessConfig, p ProcedurePorts, end time.Duration) *proced
 
 // ProcedureError is a classified internal outcome. Unclassified errors from
 // callbacks never prove a definite failure and cannot authorize restoration.
-type ProcedureError struct{ Code string }
+type ProcedureError struct{ Code, Category string }
 
 func (e *ProcedureError) Error() string { return e.Code }
 func code(err error) string {
@@ -368,6 +368,10 @@ func (g *procedure) replace(ctx context.Context, w string) error {
 var categoryPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}(?::[a-z0-9-]{1,40})?$`)
 
 func readFailure(err error) (string, string) {
+	var classified *ProcedureError
+	if errors.As(err, &classified) && classified.Category != "" && categoryPattern.MatchString(classified.Category) {
+		return classified.Code, classified.Category
+	}
 	if strings.HasPrefix(code(err), "precondition-failed:") {
 		category := strings.TrimPrefix(code(err), "precondition-failed:")
 		if categoryPattern.MatchString(category) {

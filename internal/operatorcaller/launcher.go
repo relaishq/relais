@@ -379,6 +379,21 @@ func (l *FixedLauncher) Start(ctx context.Context, i Identity, phase Phase, end 
 	l.starts[key] = result
 	return result
 }
+
+// NeverStarted proves no start was submitted for this configured identity, or
+// that its submission was definitely refused. Unknown starts never satisfy it.
+func (l *FixedLauncher) NeverStarted(i Identity) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, known := l.configs[i]; !known || i.Validate() != nil {
+		return false
+	}
+	key := i.RunID + "/" + string(i.Gate) + "/" + string(i.Phase)
+	start, attempted := l.starts[key]
+	_, reserved := l.owners[key]
+	return !attempted && !reserved || attempted && start.Unit == i.Unit() && start.State == NotStarted && start.Certainty == operator.Failed
+}
+
 func (l *FixedLauncher) Stop(ctx context.Context, i Identity, end time.Time) StopResult {
 	l.mu.Lock()
 	defer l.mu.Unlock()

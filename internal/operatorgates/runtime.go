@@ -79,7 +79,14 @@ func (r *ProcessRuntime) Inventory(ctx context.Context, target string, end time.
 	_, err := r.Session.FreshInventory(ctx, r.Peer, r.Pins, end, r.Pins[i].Commit, true)
 	return r.preflightFailure(err, "inventory")
 }
-func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra) (StepResult, error) {
+func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra) (result StepResult, err error) {
+	defer func() {
+		observedSlot := slot
+		if (op == "worker-status" || op == "worker-empty") && extra.Worker != "" {
+			observedSlot = extra.Worker
+		}
+		r.Session.observationFailure(observedSlot, op, err)
+	}()
 	if r.Session.Latched() {
 		return StepResult{}, fault("command-result-unknown")
 	}

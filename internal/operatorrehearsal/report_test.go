@@ -91,6 +91,26 @@ func TestReportDropsFreeText(t *testing.T) {
 	}
 }
 
+func TestReportPreservesPreconditionCategories(t *testing.T) {
+	for _, category := range []string{"inventory", "relay-manifest-identity", "w1-not-running", "ssl-cert-verification-error", "store-incomplete", "observation", "compatibility-refused", "precondition-failed:inventory", "precondition-failed:status", "precondition-failed:live-calls", "precondition-failed:w2-local-inventory"} {
+		r := passingReport()
+		r.Gates[0].Reason, r.Gates[0].Category = "precondition-failed", category
+		var out bytes.Buffer
+		if err := r.Write(&out); err != nil {
+			t.Fatal(err)
+		}
+		var saved Report
+		if err := json.Unmarshal(out.Bytes(), &saved); err != nil || saved.Gates[0].Category != category {
+			t.Fatalf("precondition category lost: want %q got %q: %v", category, saved.Gates[0].Category, err)
+		}
+	}
+	for _, category := range []string{"precondition-failed:customer-production-db", "inventory:secret-value", "w1-private-account", "CustomSecretError"} {
+		if publicCode(category) != "unclassified" {
+			t.Fatal("free-form precondition code escaped", category)
+		}
+	}
+}
+
 func TestReportPreservesSafeUnknownContext(t *testing.T) {
 	r := passingReport()
 	r.Uncertainties = []operator.Uncertainty{{Kind: "mailbox.read", RequestID: "7", Target: "caller", CallerID: "1", Action: "caller-probes", DeadlineUnixMS: "1800000000000", RemainingMS: 0, Rule: "timeout"}}

@@ -540,6 +540,34 @@ func TestStopOnlyTouchesReservedIdentity(t *testing.T) {
 	}
 }
 
+func TestNeverStartedRequiresDefiniteNoSubmission(t *testing.T) {
+	i := fixtureManifest().Identity
+	key := i.RunID + "/" + string(i.Gate) + "/" + string(i.Phase)
+	l := &FixedLauncher{configs: map[Identity]LaunchConfig{i: fixtureLaunchConfig()}}
+	if !l.NeverStarted(i) {
+		t.Fatal("configured caller without a start was uncertain")
+	}
+	unknown := i
+	unknown.CallerID = "2"
+	if l.NeverStarted(unknown) {
+		t.Fatal("unconfigured identity was proved absent")
+	}
+	for _, state := range []StartState{NotStarted, Started, StartUnknown} {
+		certainty := operator.Succeeded
+		if state == NotStarted {
+			certainty = operator.Failed
+		}
+		if state == StartUnknown {
+			certainty = operator.Unknown
+		}
+		l.starts = map[string]StartResult{key: {State: state, Certainty: certainty, Unit: i.Unit()}}
+		l.owners = map[string]Identity{key: i}
+		if l.NeverStarted(i) != (state == NotStarted) {
+			t.Fatal("start certainty ignored", state)
+		}
+	}
+}
+
 func TestSharedHangupReservationAcrossAPIs(t *testing.T) {
 	for _, first := range []string{"broker", "launcher"} {
 		t.Run(first, func(t *testing.T) {

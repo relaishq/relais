@@ -43,6 +43,8 @@ type Session struct {
 	spool           *os.Root
 	uncertainties   []operator.Uncertainty
 	uncertaintySink func(operator.Uncertainty)
+
+	observationFailureSink func(string, string, error)
 }
 
 func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {

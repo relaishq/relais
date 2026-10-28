@@ -85,6 +85,9 @@ func TestCalibrationAndGatesUseRouteBoundSharedLauncher(t *testing.T) {
 	if r.active.Manifest.Plan.DurationSeconds != 180 || time.Duration(r.active.Manifest.Deadline-r.active.Manifest.CreatedAt)*time.Millisecond < calibrationPreparation+calibrationMediaDuration+59*time.Second {
 		t.Fatal("calibration launch lost media duration or runtime headroom", r.active.Manifest)
 	}
+	if !r.stop(context.Background(), time.Minute) || r.active != nil || len(r.units) != 0 {
+		t.Fatal("never-started calibration required a stop or cleanup command")
+	}
 	if err = r.startCaller(context.Background(), operator.ControlRestart, 1020, "2", time.Minute, 20*time.Minute); err == nil || err.Error() != "caller-not-ready" {
 		t.Fatal("gate bypassed real launch readiness", err)
 	}

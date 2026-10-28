@@ -13,6 +13,26 @@ var fullCommit = regexp.MustCompile(`^[a-f0-9]{40}$`)
 var fullDigest = regexp.MustCompile(`^[a-f0-9]{64}$`)
 var cpuRow = regexp.MustCompile(`^[0-9]+,[0-9]+,[0-9]+,(Y|N)$`)
 
+// Accept complete fixed P2/P3 codes, never arbitrary colon suffixes or classes.
+func publicPreconditionCategory(s string) bool {
+	s = strings.TrimPrefix(s, "precondition-failed:")
+	switch s {
+	case "inventory", "status", "clocks", "observation", "caller", "caller-receipt", "caller-evidence", "media-pool", "live-calls", "control-not-settled", "control-not-empty", "control-unavailable", "not-draining", "control-owner", "worker-not-empty", "not-empty", "signal-bracket",
+		"oversized", "store-incomplete", "store-refused", "store-oversized", "store-incomplete-bulk", "store-invalid", "store-too-large", "store-scan-incomplete", "store-topology", "store-unknown-owner", "store-transfer", "store-owner", "local-inventory", "relay-unit-unknown", "invalid-target", "invalid-request", "deadline-before-submission",
+		"value-error", "key-error", "type-error", "file-not-found-error", "permission-error", "timeout-error", "timeout-expired", "called-process-error", "connection-refused-error", "connection-reset-error", "url-error", "ssl-error", "ssl-cert-verification-error", "json-decode-error":
+		return true
+	}
+	for _, slot := range Slots {
+		if code, ok := strings.CutPrefix(s, slot+"-"); ok {
+			switch code {
+			case "shape", "participant", "manifest-identity", "architecture", "release-differs", "unavailable", "topology", "not-running", "service-config", "manifest", "archive", "boot-script", "unit-start", "binary", "budgets", "build-identity", "value-error", "key-error", "type-error", "file-not-found-error", "permission-error", "timeout-expired", "called-process-error", "not-alive", "draining", "not-empty", "local-inventory", "inventory-unknown":
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func publicVerdict(v operator.Verdict) operator.Verdict {
 	switch v {
 	case operator.Passed, operator.Failure, operator.Inconclusive, operator.NotRun:

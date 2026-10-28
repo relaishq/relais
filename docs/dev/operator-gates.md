@@ -202,6 +202,11 @@ HTTP failure codes, and missing completion evidence retains the underlying error
 The preliminary signaling burst remains optional; the required registration
 burst still supplies the final caller clock and proximity proof.
 Calibration and gate callers share the same start function and P4 launcher.
+After calibration stops, fresh inventories and product status must prove zero
+control calls and reservations, plus two live, non-draining, locally empty
+workers, before the first gate. Precondition diagnostics identify the host,
+observation and fixed failure code; reports retain those categories. A caller
+proved never submitted needs no stop, while unknown starts still require proof.
 Calibration reserves two minutes for preparation: the unchanged loader supplies
 one initial clock probe and one every ten seconds, so ten-probe registration
 needs at least ninety seconds after loader startup. The media calibration runs

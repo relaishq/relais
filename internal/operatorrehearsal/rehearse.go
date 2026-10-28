@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -211,6 +212,7 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 		raw, _ := json.Marshal(u)
 		_, _ = fmt.Fprintf(r.diagnostics, "command-result-unknown %s\n", raw)
 	})
+	r.session.SetObservationFailureSink(r.preconditionDiagnostic)
 	r.judge.note = r.session.RecordUncertainty
 	r.peer = NewLocalPeer(adapter, r.run, init)
 	defer r.peer.Close()
@@ -221,11 +223,23 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 		r.recordError("calibration-failed", e)
 		return report, errors.New("calibration-failed")
 	}
+	if e = r.verifyIdle(ctx, r.clock.Elapsed()+2*time.Minute); e != nil {
+		r.recordError("calibration-cleanup-failed", e)
+		return report, errors.New("calibration-cleanup-failed")
+	}
+	var current operator.Gate
+	stops := map[operator.Gate]bool{}
 	sequence := r.session.RunSequence(ctx, operatorgates.SequencePorts{
-		Minimum:        func(g operator.Gate) time.Duration { return time.Duration(duration(g))*time.Second + 180*time.Second },
-		Prepare:        r.prepare,
-		ReleaseCallers: func(ctx context.Context, _ string, end time.Duration) bool { return r.stop(ctx, end) },
-		Command:        r.gate,
+		Minimum: func(g operator.Gate) time.Duration { return time.Duration(duration(g))*time.Second + 180*time.Second },
+		Prepare: func(ctx context.Context, gate operator.Gate, end, gateEnd time.Duration) error {
+			current = gate
+			return r.prepare(ctx, gate, end, gateEnd)
+		},
+		ReleaseCallers: func(ctx context.Context, _ string, end time.Duration) bool {
+			stops[current] = r.stop(ctx, end)
+			return stops[current]
+		},
+		Command: r.gate,
 		Finalize: func(ctx context.Context, _ time.Duration) (*operatorgates.MediaSummary, error) {
 			summary, err := r.pool.Media(ctx)
 			if err != nil {
@@ -234,24 +248,34 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 			return summary, err
 		},
 	})
+	r.recordSequence(sequence, stops)
+	report.Pool = r.judge.last
+	report.CPU.Phases = r.judge.cpu
+	report.Clocks = r.runtime.ClockSamples
+	return report, nil
+}
+func (r *rehearsal) recordSequence(sequence operatorgates.SequenceResult, stops map[operator.Gate]bool) {
 	completed := map[operator.Gate]GateReport{}
-	for _, g := range report.Gates {
+	for _, g := range r.report.Gates {
 		completed[g.Gate] = g
 	}
-	report.Gates = nil
+	r.report.Gates = nil
 	for i, g := range sequence.Gates {
 		row := completed[g.Gate]
 		row.Gate = g.Gate
 		row.ProcedureResult = sequence.Procedures[i]
 		row.Status = g.Status
 		row.Reason = g.Reason
-		report.Gates = append(report.Gates, row)
+		// Preparation can fail before gate() creates a row or a caller. Retain
+		// the release callback's proof rather than a zero-value false report.
+		row.CallerStopped = true
+		if stopped, attempted := stops[g.Gate]; attempted {
+			row.CallerStopped = stopped
+		}
+		r.report.Gates = append(r.report.Gates, row)
 	}
-	report.Pool = r.judge.last
-	report.CPU.Phases = r.judge.cpu
-	report.Clocks = r.runtime.ClockSamples
-	return report, nil
 }
+
 func (r *rehearsal) recordError(stage string, err error) {
 	r.report.Errors = append(r.report.Errors, stage)
 	var cause string
@@ -467,7 +491,25 @@ func (r *rehearsal) startCaller(ctx context.Context, g operator.Gate, seconds in
 	}
 	return err
 }
-func (r *rehearsal) prepare(ctx context.Context, g operator.Gate, end, gateEnd time.Duration) error {
+func (r *rehearsal) prepare(ctx context.Context, g operator.Gate, end, gateEnd time.Duration) (err error) {
+	defer func() {
+		if err != nil {
+			category := publicCode(err.Error())
+			var classified *operatorgates.ProcedureError
+			if errors.As(err, &classified) && classified.Category != "" {
+				category = publicCode(classified.Category)
+				switch category {
+				case "control-not-settled", "control-owner", "not-draining", "w1-not-alive", "w2-not-alive", "w1-draining", "w2-draining":
+					slot := "shared"
+					if strings.HasPrefix(category, "w1-") || strings.HasPrefix(category, "w2-") {
+						slot = category[:2]
+					}
+					r.preconditionDiagnostic(slot, "status", &operatorgates.ProcedureError{Code: "precondition-failed:" + category})
+				}
+			}
+			_, _ = fmt.Fprintf(r.diagnostics, "gate-precondition gate=%s category=%s\n", g, category)
+		}
+	}()
 	// Previous gate must have confirmed stop before a successor can dial.
 	if r.active != nil && !r.stop(ctx, end) {
 		return &operatorgates.ProcedureError{Code: "command-result-unknown"}
@@ -544,6 +586,12 @@ func (r *rehearsal) stop(ctx context.Context, end time.Duration) bool {
 	if r.active == nil {
 		return true
 	}
+	if r.launcher.NeverStarted(r.active.Manifest.Identity) {
+		id := r.active.Manifest.Identity
+		r.units = slices.DeleteFunc(r.units, func(unit operatorcaller.Identity) bool { return unit == id })
+		r.active = nil
+		return true
+	}
 	stop := r.launcher.Stop(ctx, r.active.Manifest.Identity, r.wall(end))
 	if stop.Inactive && stop.Certainty == operator.Succeeded {
 		r.active = nil
@@ -582,6 +630,9 @@ func (r *rehearsal) close(ctx context.Context) bool {
 	ok := true
 	if r.topology != nil {
 		for _, i := range r.units {
+			if r.launcher != nil && r.launcher.NeverStarted(i) {
+				continue
+			}
 			r.callerDiagnostics(ctx, i)
 			stop, _ := operatorcaller.StopScript(i)
 			result := r.runner.Run(ctx, Command{Label: "cleanup-caller", Args: []string{"sh", "-s"}, Input: stop})
