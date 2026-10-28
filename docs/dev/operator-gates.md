@@ -210,6 +210,9 @@ proved never submitted needs no stop, while unknown starts still require proof.
 Each negative-control restore requires that same health proof before the next
 control. The missing-unit restore uses P3's `GatePrecondition` repair to prove
 empty, stop, replace and start the worker, clearing control's draining mark.
+After a confirmed stop, repair waits for control's settled-death proof even if
+its last heartbeat still says alive. Confirmed repair steps are logged before
+the final running-process inventory and full health check.
 Sanitized control-status lines record the flags and counts before repair, after
 every restore and after calibration. The boot-time ACL control's full deployment
 check runs once all hosts exist; no store management credential is retained.

@@ -334,6 +334,65 @@ func TestPreconditionDrainingWorkerMustBeEmpty(t *testing.T) {
 	}
 }
 
+func TestRestoreWorkersWaitsForConfirmedStopDespiteLiveHeartbeat(t *testing.T) {
+	for _, mode := range []string{"confirmed-stop", "refused-stop", "unknown-stop", "unsettled-stop"} {
+		t.Run(mode, func(t *testing.T) {
+			g, _ := testProcedure(t)
+			running, draining, reads := true, true, 0
+			var effects []string
+			g.p.Step = func(_ context.Context, op, _ string, _ time.Duration, _ ProcessExtra) (StepResult, error) {
+				if op != "status" {
+					effects = append(effects, op)
+				}
+				switch op {
+				case "worker-stop":
+					if mode == "refused-stop" {
+						return StepResult{}, fault("precondition-failed:worker-not-empty")
+					}
+					if mode == "unknown-stop" {
+						return StepResult{Certainty: operator.Unknown}, fault("command-result-unknown")
+					}
+					running = false
+				case "status":
+					reads++
+				case "replace":
+					if running || reads < 3 {
+						t.Fatal("replace before settled death")
+					}
+					draining = false
+				case "worker-start":
+					if draining {
+						t.Fatal("start before replace")
+					}
+					running = true
+				}
+				dead := !running && reads >= 3 && mode != "unsettled-stop"
+				return StepResult{Certainty: operator.Succeeded, LossKnown: true, Status: controlplane.Status{Ready: true, Workers: []controlplane.WorkerStatus{{Name: "w1", Address: g.c.Parameters.Workers["w1"].Media, Dead: dead, Draining: draining}}}}, nil
+			}
+			_, _ = g.do(context.Background(), "worker-stop", "w1", ProcessExtra{Worker: "w1"})
+			err := g.restoreWorkers(context.Background())
+			switch mode {
+			case "confirmed-stop":
+				if err != nil || strings.Join(effects, ",") != "worker-stop,replace,worker-start" || !running || draining || len(g.stopped) != 0 {
+					t.Fatal(err, effects, running, draining)
+				}
+			case "refused-stop":
+				if err != nil || len(effects) != 1 || !running {
+					t.Fatal("refused stop changed a live worker", err, effects)
+				}
+			case "unknown-stop":
+				if code(err) != "command-result-unknown" || len(effects) != 1 || reads != 0 {
+					t.Fatal("unknown stop authorized restoration", err, effects)
+				}
+			case "unsettled-stop":
+				if code(err) != "restore-unsettled" || len(effects) != 1 || running {
+					t.Fatal("missing death proof authorized restoration", err, effects)
+				}
+			}
+		})
+	}
+}
+
 func TestTrialStartsBeforeDeadline(t *testing.T) {
 	g, clock := testProcedure(t)
 	clock.Advance(GateMaximum)

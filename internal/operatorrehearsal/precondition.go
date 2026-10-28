@@ -121,7 +121,18 @@ func (r *rehearsal) restoreControl(ctx context.Context, control string) error {
 	if control == "missing-unit" {
 		// SIGTERM marks draining in control. Restoring the file and process is
 		// followed by P3's empty/stop/replace/start repair, not a flag reset.
-		if err := operatorgates.GatePrecondition(ctx, r.process, r.ports(), end); err != nil {
+		ports := r.ports()
+		ports.Step = func(ctx context.Context, op, slot string, end time.Duration, extra operatorgates.ProcessExtra) (operatorgates.StepResult, error) {
+			result, err := r.runtime.Step(ctx, op, slot, end, extra)
+			if err == nil {
+				switch op {
+				case "worker-empty", "worker-stop", "replace", "worker-start":
+					_, _ = fmt.Fprintf(r.diagnostics, "control-repair worker=%s host=%s operation=%s confirmed=true\n", extra.Worker, slot, op)
+				}
+			}
+			return result, err
+		}
+		if err := operatorgates.GatePrecondition(ctx, r.process, ports, end); err != nil {
 			return err
 		}
 	}

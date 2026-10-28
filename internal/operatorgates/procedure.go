@@ -157,6 +157,7 @@ type procedure struct {
 	p        ProcedurePorts
 	end      time.Duration
 	down     []string
+	stopped  []string
 	frozen   bool
 	unknown  bool
 	evidence ProcessEvidence
@@ -204,8 +205,12 @@ func (g *procedure) step(ctx context.Context, op, slot string, end time.Duration
 		return r, err
 	}
 	g.evidence.CompletedSteps++
+	if (op == "worker-stop" || op == "worker-down") && !slices.Contains(g.stopped, extra.Worker) {
+		g.stopped = append(g.stopped, extra.Worker)
+	}
 	if op == "worker-start" {
 		g.down = slices.DeleteFunc(g.down, func(w string) bool { return w == extra.Worker })
+		g.stopped = slices.DeleteFunc(g.stopped, func(w string) bool { return w == extra.Worker })
 	}
 	if op == "unfreeze" || op == "signal-start" {
 		g.frozen = false

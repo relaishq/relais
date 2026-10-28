@@ -7,6 +7,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -71,7 +74,7 @@ func TestCalibrationCleanupChecksNativeDeploymentState(t *testing.T) {
 		pins[i].Architecture = "x86_64"
 		pins[i].BootSHA256 = strings.Repeat("d", 64)
 	}
-	for _, mode := range []string{"idle", "calls", "reservations", "worker-calls", "dead", "draining", "local-sessions", "inventory-unknown", "inventory-architecture", "status-shape", "repair-draining"} {
+	for _, mode := range []string{"idle", "calls", "reservations", "worker-calls", "dead", "draining", "local-sessions", "inventory-unknown", "inventory-architecture", "status-shape", "repair-draining", "missing-unit-sequence"} {
 		t.Run(mode, func(t *testing.T) {
 			clock := operatorgates.NewRealClock()
 			now := clock.Wall()
@@ -102,6 +105,29 @@ func TestCalibrationCleanupChecksNativeDeploymentState(t *testing.T) {
 			case "draining", "repair-draining":
 				s.Workers[0].Draining = true
 			}
+			repair := mode == "repair-draining" || mode == "missing-unit-sequence"
+			var deployment *Deployment
+			var controlRunner *credentialControlRunner
+			if mode == "missing-unit-sequence" {
+				deployment, controlRunner, _ = credentialControlFixture(t, "async", "")
+				controlRunner.control = "missing-unit"
+				deployment.Diagnostics = &log
+			}
+			running, staleReads := true, 0
+			setRunning := func(active bool) {
+				running = active
+				if controlRunner != nil {
+					op := "stop"
+					if active {
+						op = "start"
+					}
+					cmd := exec.Command(filepath.Join(controlRunner.dir, "systemctl"), op, "relais-worker.service")
+					cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "CONTROL_DIR=" + controlRunner.dir, "RESTORE_MODE=", "START_MODE=async"}
+					if out, err := cmd.CombinedOutput(); err != nil {
+						t.Fatal(err, string(out))
+					}
+				}
+			}
 			var requests []string
 			peer := &idlePeer{respond: func(req operator.Request) operator.Reply {
 				requests = append(requests, req.Target+":"+req.Action)
@@ -110,18 +136,35 @@ func TestCalibrationCleanupChecksNativeDeploymentState(t *testing.T) {
 				case "clock":
 					data = oracletest.Marshal(t, clocks.Sample{MeasuredUnixNS: strconv.FormatInt(now.UnixNano(), 10)})
 				case "inventory":
+					if mode == "missing-unit-sequence" && req.Target == "w1" && bytes.Contains(req.Script, []byte("require_running=True")) {
+						state, err := os.ReadFile(filepath.Join(controlRunner.dir, "state"))
+						if err != nil {
+							t.Fatal(err)
+						}
+						if strings.TrimSpace(string(state)) != "active" {
+							return operator.Reply{Transport: operator.Succeeded, ExitCode: code(0), Payload: oracletest.Marshal(t, operator.HostOutput{Stdout: "INVENTORY_UNKNOWN:not-running\n"})}
+						}
+					}
 					data = fixtures[req.Target]
 					if mode == "inventory-architecture" {
 						data = bytes.ReplaceAll(data, []byte(`"arch":"amd64"`), []byte(`"arch":"arm64"`))
 					}
 				default:
+					if mode == "missing-unit-sequence" && req.Action == "status" && !running {
+						// Control still reports the last heartbeat after MainPID became zero.
+						staleReads++
+						if staleReads >= 3 {
+							s.Workers[0].Dead = true
+						}
+					}
 					var product any = s
-					if mode == "repair-draining" {
+					if repair {
 						switch req.Action {
 						case "worker-empty":
 							product = map[string]bool{"completed": true}
 						case "worker-stop":
-							s.Workers[0].Dead = true
+							setRunning(false)
+							s.Workers[0].Dead = mode != "missing-unit-sequence"
 							product = map[string]bool{"completed": true}
 						case "replace":
 							if !s.Workers[0].Dead {
@@ -133,6 +176,7 @@ func TestCalibrationCleanupChecksNativeDeploymentState(t *testing.T) {
 							if s.Workers[0].Draining {
 								t.Fatal("start before replace")
 							}
+							setRunning(true)
 							s.Workers[0].Dead = false
 							product = map[string]bool{"completed": true}
 						}
@@ -160,25 +204,39 @@ func TestCalibrationCleanupChecksNativeDeploymentState(t *testing.T) {
 			}}
 			r.runtime = &operatorgates.ProcessRuntime{Session: session, Peer: peer, Config: r.process, Pins: pins, Architecture: "x86_64", Bounds: &clocks.Bounds{FrontendControlBoundNS: 1000000, FrontendWorkerBoundNS: 1000000}}
 			session.SetObservationFailureSink(r.preconditionDiagnostic)
-			if mode == "repair-draining" {
+			if mode == "missing-unit-sequence" {
+				err = deployment.NegativeControls(context.Background(), func(ctx context.Context, control string) error {
+					if control == "missing-unit" {
+						state, err := os.ReadFile(filepath.Join(controlRunner.dir, "state"))
+						if err != nil || strings.TrimSpace(string(state)) != "active" {
+							t.Fatal("restore did not start the unit", string(state), err)
+						}
+						if _, err := os.Stat(filepath.Join(controlRunner.dir, "worker.service.saved")); !os.IsNotExist(err) {
+							t.Fatal("unit file not restored", err)
+						}
+						s.Workers[0].Draining = true
+					}
+					return r.restoreControl(ctx, control)
+				})
+			} else if repair {
 				err = r.restoreControl(context.Background(), "missing-unit")
 			} else {
 				err = r.verifyIdle(context.Background(), time.Minute)
 			}
-			if (err == nil) != (mode == "idle" || mode == "repair-draining") {
+			if (err == nil) != (mode == "idle" || repair) {
 				t.Fatal(mode, err, log.String())
 			}
 			if mode == "idle" {
 				if len(requests) != 7 || !strings.Contains(log.String(), "deployment-idle-verified stage=calibration") {
 					t.Fatal(requests, log.String())
 				}
-			} else if mode != "repair-draining" && (!strings.Contains(log.String(), "precondition-check host=") || !strings.Contains(log.String(), "observation=") || strings.Contains(log.String(), "unclassified")) {
+			} else if !repair && (!strings.Contains(log.String(), "precondition-check host=") || !strings.Contains(log.String(), "observation=") || strings.Contains(log.String(), "unclassified")) {
 				t.Fatal("missing scoped failure", log.String())
 			}
 			if mode == "inventory-architecture" && !strings.Contains(log.String(), "host=relay observation=inventory category=precondition-failed:relay-manifest-identity") {
 				t.Fatal(log.String())
 			}
-			if mode == "repair-draining" {
+			if repair {
 				var mutations []string
 				for _, request := range requests {
 					for _, action := range []string{"worker-empty", "worker-stop", "replace", "worker-start"} {
