@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "origin": "Independent owner-invariant witnesses; not frozen TypeScript output.",
+  "scenario": "Explicit public representation boundaries",
+  "expectedTestResult": "passed",
+  "events": [
+    {"id":1,"kind":"request","operation":"host.architecture","inputs":["arm64","amd64","x86_64"]},
+    {"id":1,"kind":"result","operation":"host.architecture","value":3},
+    {"id":2,"kind":"request","operation":"observe.historicalMove","inputs":[{"id":"original","from":"w1","to":"w2","kind":"takeover","end":"1970-01-01T00:00:01Z"}]},
+    {"id":2,"kind":"result","operation":"observe.historicalMove","value":"1970-01-01T00:00:01Z"},
+    {"id":3,"kind":"request","operation":"processes.endpoints","inputs":[{"control":"http://control.self.test:12345","relay":"http://relay.self.test:12346","store":"store.self.test","storePort":16379,"workers":{"w1":{"http":"http://worker-one.self.test:12347","media":"192.0.2.3:24711"},"w2":{"http":"http://worker-two.self.test:12347","media":"192.0.2.4:24711"}}}]},
+    {"id":3,"kind":"result","operation":"processes.endpoints","value":true},
+    {"id":4,"kind":"request","operation":"processes.completion","inputs":[{}, {"completed":true}, {"lost_count":1}]},
+    {"id":4,"kind":"result","operation":"processes.completion","value":"known-call-loss"},
+    {"id":5,"kind":"request","operation":"processes.signalNanoseconds","inputs":[{"kind":"ok","started":"1970-01-01T00:16:40Z","ended":"1970-01-01T00:16:40Z","data":{"completed":true,"signalBeforeUnixNs":"9999999999999999998","signalAfterUnixNs":"9999999999999999998"}}]},
+    {"id":5,"kind":"result","operation":"processes.signalNanoseconds","value":"2286-11-20T17:46:39.999999998Z"}
+  ]
+}

@@ -522,11 +522,11 @@ func TestWorkerStartRequiresCompletionProof(t *testing.T) {
 	}
 }
 
-type uncertainStoreRead struct{ reads, failovers int }
+type uncertainStoreRead struct{ reads, failovers, unknownAt int }
 
 func (s *uncertainStoreRead) Observe(context.Context, time.Duration) (StoreObservation, error) {
 	s.reads++
-	if s.reads > 1 {
+	if s.reads >= max(2, s.unknownAt) {
 		return StoreObservation{}, fault("command-result-unknown")
 	}
 	return StoreObservation{Primary: "primary-a", Available: true, Durability: "sync"}, nil
@@ -798,5 +798,124 @@ func TestCollectionUnknownStopsObservationsAndPreservesFailure(t *testing.T) {
 				t.Fatalf("MUTATION: collection uncertainty must stop reads and retain failures: reads=%d result=%+v", observations, r)
 			}
 		})
+	}
+}
+
+func TestSequenceReleasesCallers(t *testing.T) {
+	for _, mode := range []string{"precondition", "skipped", "completed", "failed", "unknown-stop"} {
+		t.Run(mode, func(t *testing.T) {
+			s, clock := fixtureSession(t)
+			s.gates = []operator.Gate{operator.Rollout, operator.ControlRestart}
+			released, commands := 0, 0
+			result := s.RunSequence(context.Background(), SequencePorts{
+				Minimum: func(g operator.Gate) time.Duration {
+					if mode == "skipped" && g == operator.Rollout {
+						return 21 * time.Minute
+					}
+					return 0
+				},
+				Prepare: func(_ context.Context, gate operator.Gate, _, _ time.Duration) error {
+					if gate == operator.Rollout {
+						if mode == "precondition" {
+							return fault("precondition-failed:inventory")
+						}
+					}
+					return nil
+				},
+				Command: func(context.Context, operator.Gate, time.Duration) ProcedureResult {
+					commands++
+					status := operator.Passed
+					if mode == "failed" {
+						status = operator.Failure
+					}
+					return ProcedureResult{Status: status, Media: &MediaSummary{Status: status}}
+				},
+				ReleaseCallers: func(_ context.Context, _ string, end time.Duration) bool {
+					released++
+					if end > s.Budget.end || end > clock.Elapsed()+time.Minute {
+						t.Fatal("MUTATION: caller-release-deadline")
+					}
+					return mode != "unknown-stop"
+				},
+			})
+			if mode == "skipped" {
+				if released != 2 || commands != 1 || result.Gates[0].Status != operator.NotRun {
+					t.Fatal("MUTATION: skipped-caller-release", released, commands)
+				}
+			} else if mode == "failed" || mode == "unknown-stop" {
+				if released != 1 || commands != 1 || result.Gates[1].Reason != "prior-gate-stopped" {
+					t.Fatal("MUTATION: unconfirmed-caller-release", released, commands, result)
+				}
+			} else if released != 2 || commands != map[bool]int{true: 1, false: 2}[mode == "precondition"] {
+				t.Fatal("MUTATION: caller-release-once", released, commands)
+			}
+			if mode == "unknown-stop" && (result.Status == operator.Passed || result.Gates[0].Reason != "command-result-unknown") {
+				t.Fatal("MUTATION: release-unknown-retained", result)
+			}
+		})
+	}
+}
+
+func TestSequenceCannotInventPooledMedia(t *testing.T) {
+	for _, awaiting := range []bool{false, true} {
+		s, _ := fixtureSession(t)
+		s.gates = []operator.Gate{operator.Rollout}
+		result := s.RunSequence(context.Background(), SequencePorts{Command: func(context.Context, operator.Gate, time.Duration) ProcedureResult {
+			r := ProcedureResult{Status: operator.Passed, AwaitingPool: awaiting}
+			if awaiting {
+				r.Status = operator.Inconclusive
+				r.Media = &MediaSummary{Status: operator.Inconclusive}
+			}
+			return r
+		}, Finalize: func(context.Context, time.Duration) (*MediaSummary, error) { return nil, nil }})
+		if result.Status == operator.Passed || result.Gates[0].Status == operator.Passed {
+			t.Fatal("MUTATION: no-invented-media", awaiting, result)
+		}
+	}
+}
+
+func TestAdmissionUnknownSurvivorStops(t *testing.T) {
+	for _, status := range []operator.Verdict{operator.Inconclusive, operator.Failure} {
+		r := RunAdmission(context.Background(), AdmissionPorts{
+			Survivor: func(context.Context, time.Duration) MeasureResult {
+				return MeasureResult{Status: status, Reason: "command-result-unknown"}
+			},
+			StopSurvivor: func(context.Context, time.Duration) bool { t.Fatal("MUTATION: admission-after-unknown"); return true },
+		}, time.Minute)
+		if r.Reason != "command-result-unknown" || r.Status != status {
+			t.Fatal("MUTATION: admission-after-unknown", r)
+		}
+	}
+}
+
+func TestPreconditionCategoryPublication(t *testing.T) {
+	for _, category := range []string{"inventory", "inventory:raw", "inventory:raw:extra", "raw text", "", strings.Repeat("a", 65)} {
+		s, _ := fixtureSession(t)
+		s.gates = []operator.Gate{operator.Rollout}
+		result := s.RunSequence(context.Background(), SequencePorts{Prepare: func(context.Context, operator.Gate, time.Duration, time.Duration) error {
+			return fault("precondition-failed:" + category)
+		}})
+		want := ""
+		if category == "inventory" || category == "inventory:raw" {
+			want = category
+		}
+		if result.Procedures[0].Category != want || result.Gates[0].Reason != "precondition-failed" {
+			t.Fatal("MUTATION: precondition-public-category", category, result)
+		}
+	}
+}
+
+func TestMeasurementPublicationFields(t *testing.T) {
+	var measure Measurement
+	if err := json.Unmarshal([]byte(`{"samples":1,"missingSamples":0,"raw":"untrusted","caller":"untrusted","unexpected":12}`), &measure); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(measure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || len(fields) != 2 || fields["samples"] == nil || fields["missingSamples"] == nil {
+		t.Fatal("MUTATION: typed-public-measurement", string(raw), err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -92,6 +93,7 @@ type StepResult struct {
 	Move           controlplane.MoveResult
 	Inspection     observe.Inspection
 	Local          mediaworker.WorkerStatus
+	Telemetry      HostTelemetry
 	Ownership      observe.Ownership
 	LossKnown      bool
 	OwnershipKnown bool
@@ -362,9 +364,16 @@ func (g *procedure) replace(ctx context.Context, w string) error {
 	_, err := g.wait(ctx, func(s controlplane.Status) bool { return alive(s, w, g.c.Parameters.Workers) })
 	return err
 }
+
+var categoryPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}(?::[a-z0-9-]{1,40})?$`)
+
 func readFailure(err error) (string, string) {
 	if strings.HasPrefix(code(err), "precondition-failed:") {
-		return "precondition-failed", strings.TrimPrefix(code(err), "precondition-failed:")
+		category := strings.TrimPrefix(code(err), "precondition-failed:")
+		if categoryPattern.MatchString(category) {
+			return "precondition-failed", category
+		}
+		return "precondition-failed", ""
 	}
 	return "", ""
 }

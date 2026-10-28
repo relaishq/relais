@@ -472,13 +472,7 @@ func (r *rehearsal) gate(ctx context.Context, g operator.Gate, end time.Duration
 	r.caller.End = end
 	p := r.ports()
 	p.Media = r.caller.Media
-	p.Duplicates = func() *uint64 {
-		if r.judge.last == nil || r.judge.last.DroppedPhases > 0 && r.judge.last.DuplicatePackets == 0 {
-			return nil
-		}
-		n := r.judge.last.DuplicatePackets
-		return &n
-	}
+	p.Duplicates = r.caller.Duplicates
 	var result operatorgates.ProcedureResult
 	if g == operator.UpgradeRollback {
 		result = operatorgates.RunReleaseGate(ctx, r.process, p, end)

@@ -91,7 +91,7 @@ func (r *Report) Evaluate() {
 		}
 	}
 	p := r.Pool
-	if p == nil || p.Status != operator.Passed || p.QualifiedMoves < 20 || p.QualifiedTakeovers < 10 || p.ExpectedCalls != 4 || p.CompletedCalls != p.ExpectedCalls || p.EventCount < 1 || p.MetricCount < 1 || p.ExcludedEvents != 0 || p.FailedMetrics != 0 || p.InconclusiveMetrics != 0 || p.DecryptionFailures != 0 || p.ICERestarts != 0 || p.DroppedPhases != 0 || p.IncludedPhases != 4 || p.DuplicatePackets != 0 {
+	if p == nil || p.Status != operator.Passed || p.QualifiedMoves < 20 || p.QualifiedTakeovers < 10 || p.ExpectedCalls != 4 || p.CompletedCalls != p.ExpectedCalls || p.RelayCalls != 1 || p.EventCount < 1 || p.MetricCount < 1 || p.ExcludedEvents != 0 || p.FailedMetrics != 0 || p.InconclusiveMetrics != 0 || p.DecryptionFailures != 0 || p.ICERestarts != 0 || p.DroppedPhases != 0 || p.IncludedPhases != 4 || p.DuplicatePackets != 0 {
 		fail("pooled-media-not-passed")
 	}
 	r.Verdict = operator.Passed

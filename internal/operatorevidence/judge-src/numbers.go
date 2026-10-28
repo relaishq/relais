@@ -188,7 +188,9 @@ func failureInput(input *previewMediaInput) []callharness.MoveReport {
 func poolFailure(input *previewPoolInput) bool {
 	var trials []callharness.MoveReport
 	for i := range input.Phases {
-		if input.Phases[i].RunID == input.RunID {
+		// Relay calls never enter the trial population, including failure-only
+		// projection. Their known caller failures are retained by phase parsing.
+		if input.Phases[i].RunID == input.RunID && input.Phases[i].Gate != "relay-deploy" {
 			trials = append(trials, failureInput(&input.Phases[i])...)
 		}
 	}

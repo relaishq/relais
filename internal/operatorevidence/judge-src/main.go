@@ -28,6 +28,7 @@ type previewMediaSummary struct {
 	QualifiedTakeovers  int    `json:"qualifiedTakeovers"`
 	ExpectedCalls       int    `json:"expectedCalls"`
 	CompletedCalls      int    `json:"completedCalls"`
+	RelayCalls          int    `json:"relayCalls"`
 	EventCount          int    `json:"eventCount"`
 	MetricCount         int    `json:"metricCount"`
 	FailedMetrics       int    `json:"failedMetrics"`
@@ -48,6 +49,9 @@ type phaseDiagnostic struct {
 // Rejudge raw reports, never trust a serialized outcome. This returns MEDIA
 // evidence only; no host procedure, durability or capacity pass is implied.
 func previewMedia(r *loadgen.RunReport) previewMediaSummary {
+	return previewMediaFor(r, false)
+}
+func previewMediaFor(r *loadgen.RunReport, relay bool) previewMediaSummary {
 	knownFailure := reportFailure(r)
 	validNumbers := observe.Numbers(r) == nil
 	for _, p := range r.Processes {
@@ -55,14 +59,25 @@ func previewMedia(r *loadgen.RunReport) previewMediaSummary {
 			validNumbers = validNumbers && callNumbers(c.Call) == nil
 		}
 	}
-	if !validNumbers || reportCollections(r) != nil {
+	if !validNumbers || reportCollectionsFor(r, relay) != nil {
 		status := "inconclusive"
 		if knownFailure {
 			status = "failed"
 		}
 		return previewMediaSummary{Status: status}
 	}
-	r.Judge()
+	if relay {
+		// Relay calls supply no trial metrics. Their completion and generator
+		// checks still apply; do not invoke the distributed trial judge.
+		r.Outcome, r.Yardstick, r.Distributed = "valid", nil, nil
+		for _, p := range r.Processes {
+			if p.Saturated || len(p.Causes) > 0 {
+				r.Outcome = "inconclusive"
+			}
+		}
+	} else {
+		r.Judge()
+	}
 	completeMedia := true
 	knownLoss := knownFailure
 	out := previewMediaSummary{Status: "inconclusive", ExpectedCalls: r.Callers, EventCount: len(r.Events), MetricCount: len(r.Yardstick)}
@@ -122,7 +137,11 @@ func previewMedia(r *loadgen.RunReport) previewMediaSummary {
 			add(&out.InconclusiveMetrics, 1)
 		}
 	}
-	if completeMedia && r.Outcome == "valid" && r.Distributed != nil && r.Distributed.Outcome == "pass" && out.ExpectedCalls > 0 && out.EventCount > 0 && out.MetricCount > 0 && out.InconclusiveMetrics == 0 {
+	if relay {
+		out.RelayCalls = out.CompletedCalls
+	}
+	trialsPass := r.Distributed != nil && r.Distributed.Outcome == "pass" && out.EventCount > 0 && out.MetricCount > 0
+	if completeMedia && r.Outcome == "valid" && (relay || trialsPass) && out.ExpectedCalls > 0 && out.InconclusiveMetrics == 0 {
 		out.Status = "passed"
 	}
 	// Public judge's trusted failures survive invalid/missing generator evidence.
@@ -133,6 +152,7 @@ func previewMedia(r *loadgen.RunReport) previewMediaSummary {
 }
 
 type previewMediaInput struct {
+	Gate        string                `json:"gate,omitempty"`
 	RunID       string                `json:"runId"`
 	Sessions    []string              `json:"sessions"`
 	Probes      []registrationProbe   `json:"probes"`
@@ -236,7 +256,7 @@ func parsePreviewMediaFor(input *previewMediaInput, qualify bool) (*loadgen.RunR
 			break
 		}
 		var m loadgen.Message
-		err = observe.DecodeEvidenceLimit(raw, &m, 64<<20)
+		raw, err = decodeCallerMessage(raw, &m, input.Gate == "relay-deploy")
 		if m.Call != nil && (m.Call.Distributed == nil || m.Call.Distributed.RunID == input.RunID) {
 			for _, session := range input.Sessions {
 				if m.Session == session && callFailure(m.Call) {
@@ -291,11 +311,11 @@ func parsePreviewMediaFor(input *previewMediaInput, qualify bool) (*loadgen.RunR
 	out := rawVerdict
 	guards := false
 	if collectionsErr == nil && parseErr == nil {
-		rawVerdict = previewMedia(r)
+		rawVerdict = previewMediaFor(r, input.Gate == "relay-deploy")
 		if qualify {
 			guards = previewGeneratorDetails(r, validReceipts, samples, &out)
 		}
-		judged := previewMedia(r)
+		judged := previewMediaFor(r, input.Gate == "relay-deploy")
 		judged.ExcludedEvents = out.ExcludedEvents
 		judged.SaturationOverlaps = out.SaturationOverlaps
 		judged.exclusionCause = out.exclusionCause
@@ -305,6 +325,10 @@ func parsePreviewMediaFor(input *previewMediaInput, qualify bool) (*loadgen.RunR
 		out.Status = "failed"
 	}
 	qualified := parseErr == nil && guards
+	if input.Gate == "relay-deploy" && out.Status != "passed" {
+		qualified = false
+		out.exclusionCause = "incomplete-relay-call"
+	}
 	if !qualified && out.exclusionCause == "" {
 		out.exclusionCause = "invalid-phase-evidence"
 		if !qualify {
@@ -345,13 +369,15 @@ type previewPoolInput struct {
 }
 
 // Assemble RAW processes and receipts first; invoke the unchanged public policy
-// once. Adding per-gate verdicts or sample counters cannot qualify a campaign.
+// once for trial phases. Relay calls have no trials and only add completed calls.
 func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 	r := &loadgen.RunReport{Limits: loadgen.DefaultLimits()}
 	valid, failed := input.RunID != "" && len(input.Phases) > 0 && !input.Missing, poolFailure(input)
 	diagnostics := []phaseDiagnostic{}
 	included, dropped, excluded, overlaps := 0, 0, 0, 0
 	var duplicates uint64
+	var relayCalls int
+	var relayGap int64
 	sessions, operations := map[string]bool{}, map[string]bool{}
 	for i := range input.Phases {
 		phase := &input.Phases[i]
@@ -407,13 +433,26 @@ func pooledPreviewMedia(input *previewPoolInput) previewMediaSummary {
 		diag.Included = true
 		diag.Cause = ""
 		diagnostics = append(diagnostics, diag)
+		if phase.Gate == "relay-deploy" {
+			relayCalls += verdict.RelayCalls
+			relayGap = max(relayGap, verdict.MaxMediaGapNs)
+			continue
+		}
 		r.Callers = int(count)
 		r.Processes = append(r.Processes, part.Processes...)
 		r.Events = append(r.Events, part.Events...)
 	}
 	out := previewMediaSummary{Status: "inconclusive"}
 	if valid {
-		out = previewMedia(r)
+		if r.Callers > 0 {
+			out = previewMedia(r)
+		} else if relayCalls > 0 {
+			out.Status = "passed"
+		}
+		out.ExpectedCalls += relayCalls
+		out.CompletedCalls += relayCalls
+		out.RelayCalls = relayCalls
+		out.MaxMediaGapNs = max(out.MaxMediaGapNs, relayGap)
 	}
 	if !valid && out.Status != "failed" {
 		out.Status = "inconclusive"

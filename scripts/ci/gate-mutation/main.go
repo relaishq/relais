@@ -20,9 +20,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -48,7 +50,12 @@ func main() {
 }
 func run() error {
 	only := flag.String("only", "", "one mutation ID or comma-separated IDs")
+	jobs := flag.Int("jobs", 2, "parallel isolated mutation workers (1-4)")
 	flag.Parse()
+	if *jobs < 1 || *jobs > 4 {
+		return errors.New("jobs must be between 1 and 4")
+	}
+	started := time.Now()
 	var cases []mutation
 	if err := json.Unmarshal(specifications, &cases); err != nil {
 		return err
@@ -66,7 +73,92 @@ func run() error {
 	if err := os.Mkdir(tree, 0700); err != nil {
 		return err
 	}
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	if err := copyTree(root, tree); err != nil {
+		return err
+	}
+	cache := filepath.Join(temp, "cache")
+	packages := []string{}
+	for _, m := range cases {
+		packages = append(packages, m.Package)
+	}
+	sort.Strings(packages)
+	packages = slices.Compact(packages)
+	fmt.Println("BASELINE: every named mutation assertion; full safety and pinned-release suites run in the unit job")
+	baseline, err := test(tree, cache, baselinePattern(cases), packages)
+	if err != nil {
+		failed := map[string]bool{}
+		for _, e := range baseline {
+			if e.Action == "fail" && e.Test != "" {
+				failed[e.Test] = true
+			}
+		}
+		var output strings.Builder
+		for _, e := range baseline {
+			if len(failed) == 0 || failed[e.Test] {
+				output.WriteString(e.Output)
+			}
+		}
+		detail := output.String()
+		if len(detail) > 4000 {
+			detail = detail[len(detail)-4000:]
+		}
+		return fmt.Errorf("INVALID baseline: %w\n%s", err, detail)
+	}
+	seen := map[string]bool{}
+	selected := []mutation{}
+	for _, m := range cases {
+		if seen[m.ID] || !has(baseline, m.Test, "pass") {
+			return fmt.Errorf("INVALID %s: missing baseline test or duplicate ID", m.ID)
+		}
+		seen[m.ID] = true
+		if *only == "" || slices.Contains(strings.Split(*only, ","), m.ID) {
+			selected = append(selected, m)
+		}
+	}
+	if len(selected) == 0 {
+		return errors.New("no mutation selected")
+	}
+	// Exact same edit, assertion and package may satisfy several original guards.
+	// Keep every ID in the report, but execute that identical mutant only once.
+	groups := groupMutations(selected)
+	results := make([]error, len(groups))
+	queue := make(chan int, len(groups))
+	for i := range groups {
+		queue <- i
+	}
+	close(queue)
+	var wg sync.WaitGroup
+	for worker := 0; worker < min(*jobs, len(groups)); worker++ {
+		workerTree := filepath.Join(temp, fmt.Sprintf("worker-%d", worker))
+		if err := copyTree(tree, workerTree); err != nil {
+			return err
+		}
+		wg.Go(func() {
+			for i := range queue {
+				results[i] = kill(workerTree, cache, groups[i][0])
+			}
+		})
+	}
+	wg.Wait()
+	ledger, additional := 0, 0
+	for i, group := range groups {
+		if results[i] != nil {
+			return results[i]
+		}
+		for _, m := range group {
+			fmt.Printf("KILLED %s (%s)\n", m.ID, m.Test)
+			if m.GuardFingerprint != "" {
+				ledger++
+			} else {
+				additional++
+			}
+		}
+	}
+	fmt.Printf("VERIFIED: %d owned ledger mutants and %d additional mutants killed; %d executions, %d workers, %s\n", ledger, additional, len(groups), *jobs, time.Since(started).Round(time.Millisecond))
+	return nil
+}
+func copyTree(root, tree string) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -98,100 +190,81 @@ func run() error {
 		}
 		return os.WriteFile(target, b, info.Mode().Perm())
 	})
-	if err != nil {
-		return err
-	}
-	cache := filepath.Join(temp, "cache")
-	packages := []string{}
+}
+func baselinePattern(cases []mutation) string {
+	names := []string{}
 	for _, m := range cases {
-		packages = append(packages, m.Package)
+		names = append(names, regexp.QuoteMeta(strings.SplitN(m.Test, "/", 2)[0]))
 	}
-	sort.Strings(packages)
-	packages = slices.Compact(packages)
-	fmt.Println("BASELINE: short safety suite; pinned-release comparisons run in the real-checkout unit job")
-	baseline, err := test(tree, cache, "", packages)
-	if err != nil {
-		failed := map[string]bool{}
-		for _, e := range baseline {
-			if e.Action == "fail" && e.Test != "" {
-				failed[e.Test] = true
-			}
-		}
-		var output strings.Builder
-		for _, e := range baseline {
-			if len(failed) == 0 || failed[e.Test] {
-				output.WriteString(e.Output)
-			}
-		}
-		detail := output.String()
-		if len(detail) > 4000 {
-			detail = detail[len(detail)-4000:]
-		}
-		return fmt.Errorf("INVALID baseline: %w\n%s", err, detail)
-	}
-	seen := map[string]bool{}
-	ledger, additional, selected := 0, 0, 0
+	sort.Strings(names)
+	return "^(" + strings.Join(slices.Compact(names), "|") + ")$"
+}
+func groupMutations(cases []mutation) [][]mutation {
+	var groups [][]mutation
+	index := map[string]int{}
 	for _, m := range cases {
-		if seen[m.ID] || !has(baseline, m.Test, "pass") {
-			return fmt.Errorf("INVALID %s: missing baseline test or duplicate ID", m.ID)
+		identity := m
+		identity.ID = ""
+		identity.GuardFingerprint = ""
+		key, _ := json.Marshal(identity)
+		i, exists := index[string(key)]
+		if !exists {
+			i = len(groups)
+			index[string(key)] = i
+			groups = append(groups, nil)
 		}
-		seen[m.ID] = true
-		if *only != "" && !slices.Contains(strings.Split(*only, ","), m.ID) {
-			continue
-		}
-		selected++
-		edits := m.Edits
-		if len(edits) == 0 {
-			edits = []change{{File: m.File, Function: m.Function, Old: m.Old, New: m.New, Receiver: m.Receiver}}
-		}
-		originals := map[string][]byte{}
-		for _, editSpec := range edits {
-			path := filepath.Join(tree, editSpec.File)
-			original, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			if _, ok := originals[path]; !ok {
-				originals[path] = original
-			}
-			changed, err := edit(original, editSpec)
-			if err != nil {
-				return fmt.Errorf("INVALID %s: %w", m.ID, err)
-			}
-			if err = os.WriteFile(path, changed, 0600); err != nil {
-				return err
-			}
-		}
-		events, testErr := test(tree, cache, m.Test, []string{m.Package})
+		groups[i] = append(groups[i], m)
+	}
+	return groups
+}
+func kill(tree, cache string, m mutation) error {
+	edits := m.Edits
+	if len(edits) == 0 {
+		edits = []change{{File: m.File, Function: m.Function, Old: m.Old, New: m.New, Receiver: m.Receiver}}
+	}
+	originals := map[string][]byte{}
+	defer func() {
 		for path, original := range originals {
-			if err = os.WriteFile(path, original, 0600); err != nil {
-				return err
-			}
+			_ = os.WriteFile(path, original, 0600)
 		}
-		output := ""
+	}()
+	for _, spec := range edits {
+		path := filepath.Join(tree, spec.File)
+		original, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if _, exists := originals[path]; !exists {
+			originals[path] = original
+		}
+		changed, err := edit(original, spec)
+		if err != nil {
+			return fmt.Errorf("INVALID %s: %w", m.ID, err)
+		}
+		if err := os.WriteFile(path, changed, 0600); err != nil {
+			return err
+		}
+	}
+	events, testErr := test(tree, cache, "^"+m.Test+"$", []string{m.Package})
+	for path, original := range originals {
+		if err := os.WriteFile(path, original, 0600); err != nil {
+			return err
+		}
+	}
+	if testErr == nil {
+		return fmt.Errorf("SURVIVED %s", m.ID)
+	}
+	var failure *exec.ExitError
+	if !errors.As(testErr, &failure) || failure.ExitCode() != 1 || !assertionFailure(events, m.Test, m.Marker) {
+		var output strings.Builder
 		for _, e := range events {
-			output += e.Output
+			output.WriteString(e.Output)
 		}
-		if testErr == nil {
-			return fmt.Errorf("SURVIVED %s", m.ID)
-		}
-		var exit *exec.ExitError
-		if !errors.As(testErr, &exit) || exit.ExitCode() != 1 || !assertionFailure(events, m.Test, m.Marker) {
-			return fmt.Errorf("INVALID %s: %v\n%s", m.ID, testErr, output)
-		}
-		fmt.Printf("KILLED %s (%s)\n", m.ID, m.Test)
-		if m.GuardFingerprint != "" {
-			ledger++
-		} else {
-			additional++
-		}
+		return fmt.Errorf("INVALID %s: %v\n%s", m.ID, testErr, output.String())
 	}
-	if selected == 0 {
-		return errors.New("no mutation selected")
-	}
-	fmt.Printf("VERIFIED: %d owned ledger mutants and %d additional mutants killed; other ledger cases pending\n", ledger, additional)
 	return nil
 }
+
 func edit(source []byte, m change) ([]byte, error) {
 	if strings.HasSuffix(m.File, ".py") {
 		if strings.Count(string(source), m.Old) != 1 {
@@ -266,14 +339,14 @@ func test(tree, cache, name string, packages []string) ([]event, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	timeout := "60s"
-	if name == "" {
+	if strings.HasPrefix(name, "^(") {
 		timeout = "4m"
 	} // The short baseline includes every named safety regression.
 	// The isolated source has no Git history. Real-checkout unit tests always
 	// run the pinned release comparison, including PR short mode.
-	args := []string{"test", "-short", "-parallel=8", "-json", "-count=1", "-timeout=" + timeout, "-skip=^TestPinnedReleaseJudgesMatchFrozenEvidence$"}
+	args := []string{"test", "-p=2", "-short", "-parallel=8", "-json", "-count=1", "-timeout=" + timeout, "-skip=^TestPinnedReleaseJudgesMatchFrozenEvidence$"}
 	if name != "" {
-		args = append(args, "-run", "^"+name+"$")
+		args = append(args, "-run", name)
 	}
 	args = append(args, packages...)
 	cmd := exec.CommandContext(ctx, "go", args...)
@@ -285,7 +358,7 @@ func test(tree, cache, name string, packages []string) ([]event, error) {
 			cmd.Env = append(cmd.Env, e)
 		}
 	}
-	cmd.Env = append(cmd.Env, "GOCACHE="+cache, "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly -buildvcs=false")
+	cmd.Env = append(cmd.Env, "GOCACHE="+cache, "GOPROXY=off", "GOSUMDB=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=readonly -buildvcs=false -trimpath")
 	out, err := cmd.CombinedOutput()
 	events := []event{}
 	scan := bufio.NewScanner(bytes.NewReader(out))

@@ -46,8 +46,8 @@ func gapCollections(gaps []callharness.DistributedGap) bool {
 
 // Product-owned collections define their own membership. Diagnostic arrays
 // that are not consumed by either judge do not become qualification evidence.
-func trialCollections(c *callharness.Report) error {
-	if c == nil || c.Distributed == nil || len(c.Tracks) == 0 || len(c.Moves) == 0 || len(c.Distributed.Probes) < 10 {
+func callerCollections(c *callharness.Report) error {
+	if c == nil || c.Distributed == nil || len(c.Tracks) == 0 || len(c.Distributed.Probes) < 10 {
 		return fmt.Errorf("missing caller collections")
 	}
 	if observe.Numbers(c.Distributed.Probes) != nil {
@@ -68,6 +68,19 @@ func trialCollections(c *callharness.Report) error {
 	}
 	if !tracks["audio"] || !tracks["video"] {
 		return fmt.Errorf("incomplete track inventory")
+	}
+	return nil
+}
+func trialCollections(c *callharness.Report) error {
+	if err := callerCollections(c); err != nil {
+		return err
+	}
+	if len(c.Moves) == 0 {
+		return fmt.Errorf("missing trials")
+	}
+	tracks := map[string]bool{}
+	for _, t := range c.Tracks {
+		tracks[t.Kind] = true
 	}
 	armed := map[callharness.OperationIdentity]bool{}
 	logical := map[[3]string]bool{}
@@ -176,7 +189,10 @@ func contentCollections(e callharness.ContentLossEvidence) error {
 }
 
 func reportCollections(r *loadgen.RunReport) error {
-	if len(r.Processes) == 0 || len(r.Events) == 0 {
+	return reportCollectionsFor(r, false)
+}
+func reportCollectionsFor(r *loadgen.RunReport, relay bool) error {
+	if len(r.Processes) == 0 || !relay && len(r.Events) == 0 || relay && (r.Callers != 1 || len(r.Events) != 0) {
 		return fmt.Errorf("missing report collections")
 	}
 	calls := map[string]*callharness.Report{}
@@ -195,7 +211,14 @@ func reportCollections(r *loadgen.RunReport) error {
 			if m.Session == "" || calls[m.Session] != nil {
 				return fmt.Errorf("ambiguous caller sessions")
 			}
-			if err := trialCollections(m.Call); err != nil {
+			if relay {
+				if err := callerCollections(m.Call); err != nil {
+					return err
+				}
+				if len(m.Call.Moves) != 0 || len(m.Call.Distributed.Armed) != 0 || len(m.Call.Distributed.Missing) != 0 || m.Call.Distributed.ClockError != "" {
+					return fmt.Errorf("relay phase contains trials or incomplete clocks")
+				}
+			} else if err := trialCollections(m.Call); err != nil {
 				return err
 			}
 			if run != "" && run != m.Call.Distributed.RunID {
@@ -263,7 +286,7 @@ func phaseCollections(input *previewMediaInput, r *loadgen.RunReport) error {
 		return fmt.Errorf("incomplete registration collections")
 	}
 
-	if err := reportCollections(r); err != nil {
+	if err := reportCollectionsFor(r, input.Gate == "relay-deploy"); err != nil {
 		return err
 	}
 	expected := map[string]bool{}

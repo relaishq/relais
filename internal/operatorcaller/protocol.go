@@ -130,6 +130,9 @@ func (m Manifest) Validate(i Identity, now time.Time) error {
 	if err := m.Plan.Validate(); err != nil {
 		return err
 	}
+	if m.Gate == operator.Failover && m.Plan.DurationSeconds < 1020 {
+		return errors.New("insufficient-failover-duration")
+	}
 	if m.Version != 1 || m.Identity != i || m.PublicSHA != m.Plan.PublicSHA || m.Phase != m.Plan.Phase || m.ArmedAt < 0 || m.CreatedAt < m.ArmedAt || m.CreatedAt > now.UnixMilli() || m.Deadline <= now.UnixMilli() || m.Deadline-m.ArmedAt > int64(105*time.Minute/time.Millisecond) || m.Deadline-m.CreatedAt > int64(20*time.Minute/time.Millisecond) || int64(m.Plan.DurationSeconds)*1000+120000 > m.Deadline-now.UnixMilli() || m.Endpoints.RunID != i.RunID {
 		return errors.New("invalid-caller-manifest")
 	}

@@ -74,6 +74,7 @@ type CallerRuntime struct {
 	incomplete bool
 	once       sync.Once
 	done       chan struct{}
+	duplicates *uint64
 	summary    *MediaSummary
 	err        error
 }
@@ -170,7 +171,11 @@ func (r *CallerRuntime) startCollection(ctx context.Context, deadline time.Time)
 		go func() {
 			defer close(r.done)
 			caller, err := r.Broker.Collect(ctx, deadline)
+			if r.Broker.Registration != nil {
+				r.duplicates, _ = operatorevidence.JoinedDuplicatePackets(caller, r.Broker.Registration.Sessions, r.Broker.CallerPID)
+			}
 			phase := r.Phase
+			phase.Gate = r.Broker.Manifest.Gate
 			phase.Plan = r.Broker.Manifest.Plan
 			if r.Broker.Registration != nil {
 				phase.Registration = *r.Broker.Registration
@@ -180,7 +185,7 @@ func (r *CallerRuntime) startCollection(ctx context.Context, deadline time.Time)
 			}
 			events, eventErr := receiptEvents(r.Broker.Events)
 			var marshalErr error
-			phase.Raw, marshalErr = json.Marshal(operatorevidence.RawMedia{CallerJSONL: caller, Events: events, Receipts: r.Broker.Events})
+			phase.Raw, marshalErr = json.Marshal(operatorevidence.RawMedia{CallerJSONL: caller, Events: events, Receipts: append([]operatorcaller.Receipt{}, r.Broker.Events...)})
 			err = errors.Join(err, eventErr, marshalErr)
 			r.Pool.Add(phase, err != nil || r.incomplete)
 			retained, cancel := operatorcaller.EvidenceRetentionContext(ctx)
@@ -255,3 +260,13 @@ func receiptEvents(receipts []operatorcaller.Receipt) ([]loadgen.EventResult, er
 
 var _ GateBroker = (*CallerRuntime)(nil)
 var _ MediaJudge = operatorevidence.PinnedJudge{}
+
+// Duplicates returns only terminal, joined caller evidence.
+func (r *CallerRuntime) Duplicates() *uint64 {
+	select {
+	case <-r.done:
+		return r.duplicates
+	default:
+		return nil
+	}
+}

@@ -200,7 +200,7 @@ dist: ## Build release archives for Linux and macOS on amd64 and arm64
 
 .PHONY: test-operator
 test-operator: ## Replay operator core projections and kill its owned Go mutants
-	$(GOTEST) -count=1 ./pkg/operator ./internal/operatortransport ./internal/operatorgates/... ./internal/operatorcaller ./internal/operatorevidence/... ./cmd/relais-gates ./scripts/ci/gate-mutation
+	$(GOTEST) -count=1 ./pkg/operator ./internal/operatortransport ./internal/operatorgates/... ./internal/operatorcaller ./internal/operatorevidence/... ./internal/operatorrehearsal ./cmd/relais-gates ./scripts/ci/gate-mutation
 	$(GOCMD) run ./scripts/ci/gate-mutation
 
 .PHONY: test-operator-rehearsal-container

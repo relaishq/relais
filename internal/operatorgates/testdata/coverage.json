@@ -1,14 +1,13 @@
 {
   "schemaVersion": 1,
   "corpusDigest": "4f3f783deb4700e7f860db0422c907f4f4d1e2cea87ed84e3a035b15126b6f8d",
-  "fullSuite": "pending",
+  "fullSuite": "accounted",
   "fixtures": [
     {
       "fixture": "00045cd16dc31a8b.json",
       "scenario": "warmup reuses local ready receipt and media start without trusting a remote timestamp",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "replayed",
       "procedureProjections": [
         {
           "operation": "trials.trialWarmup",
@@ -18,21 +17,25 @@
           "test": "operatorgates.TestTrialOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayTests": [
+        "operatorgates.TestTrialOracle",
+        "operatorgates.TestComposedTrialOracle"
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "004099a958ffdf5e.json",
       "scenario": "refused plan or stale/unpriced budget constructs no AWS client",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "0151dac9ba93d068.json",
       "scenario": "gate preparation repairs a dead worker or control with existing steps, else refuses as unhealthy",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P6 composed runtime replay and declared equivalence-delta review",
+      "fullReplay": "non-replayable",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -51,7 +54,8 @@
           "test": "operatorgates.TestPreconditionOracle",
           "scope": "repair procedure; exactly one declared unknown-control-status delta at invocation 2, with consumed result and remaining callbacks pinned"
         }
-      ]
+      ],
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "01c2c004466c85ca.json",
@@ -67,7 +71,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "03678e9f307bc0d5.json",
@@ -75,8 +80,8 @@
       "coreProjections": [
         "run.errorCategory"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "047f7c5bcd393cf9.json",
@@ -108,14 +113,18 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "0643b1d4f8ad59bd.json",
       "scenario": "relay duplicate counters require exact caller process sessions and complete tracks",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "replayTests": [
+        "operatorevidence.TestDuplicatePacketsOracle"
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "085afe8ee43370a0.json",
@@ -123,8 +132,8 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "08b51fe1ded09107.json",
@@ -132,8 +141,8 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "098567902df2479c.json",
@@ -165,7 +174,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "09df80537aa241c1.json",
@@ -174,28 +184,27 @@
         "run.errorCategory",
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "0a95c6d05c17f8d8.json",
       "scenario": "a loser's unknown outcome that arrives late still stops later gates, and no candidate dials before it settles",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "0ad44702da6d6aa6.json",
       "scenario": "malformed caller rows cannot discard known media failure",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "measure.runMeasureGate",
@@ -205,20 +214,21 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "0b86e7522241c704.json",
       "scenario": "far and mismatched callers cannot authorize hosted faults",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "Broker callback/manifest projections replay where inventoried. The fixture does not export the raw finished/inactive mailbox receipt or a child executable needed to replay the entire bridge lifecycle. Callback return values are not fabricated as raw completion proof."
     },
     {
       "fixture": "0c2168e767963841.json",
@@ -234,7 +244,8 @@
           "test": "operatorgates.TestBoundaryOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "0d87eb9e6bbba815.json",
@@ -243,15 +254,14 @@
         "run.errorCategory",
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "0d898d5eb5647856.json",
       "scenario": "serial trials warm up use distinct real receipts and observe sixty seconds after each ACK",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "replayed",
       "procedureProjections": [
         {
           "operation": "trials.trialWarmup",
@@ -287,7 +297,12 @@
           "invocations": 1,
           "scope": "procedure ordering and typed delivery; partial historical receipt results are quarantined as uncertain by the recursive contract"
         }
-      ]
+      ],
+      "replayTests": [
+        "operatorgates.TestTrialOracle",
+        "operatorgates.TestComposedTrialOracle"
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "0dc26434dd8e7e00.json",
@@ -319,14 +334,14 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "0f0eb2dc3f770eb9.json",
       "scenario": "unknown mailbox write is submitted once and never starts a caller",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
@@ -336,14 +351,14 @@
           "test": "TestOracleBrokerCallbacks",
           "scope": "broker prepare begin arm and effect ordering above frozen write wait callbacks; raw collect callback pending"
         }
-      ]
+      ],
+      "reason": "Broker callback/manifest projections replay where inventoried. The fixture does not export the raw finished/inactive mailbox receipt or a child executable needed to replay the entire bridge lifecycle. Callback return values are not fabricated as raw completion proof."
     },
     {
       "fixture": "0fb1e024075ce33e.json",
       "scenario": "load successful transcript remains measure-only with raw measurements",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "measure.runMeasureGate",
@@ -359,7 +374,8 @@
           "test": "TestCorrectedFrozenCallerRows",
           "scope": "Product-owned JSONL ingestion of corrected collection; no fixture-specific tolerance. Full collection/telemetry/judge verdict equivalence remains pending."
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "10e550386ddb932a.json",
@@ -375,7 +391,8 @@
           "test": "operatorgates.TestTrialOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "124967a5e204fb0b.json",
@@ -440,7 +457,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "12a25f3817cc3a62.json",
@@ -449,8 +467,8 @@
         "run.errorCategory",
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "13c69b742a3ec48b.json",
@@ -458,15 +476,14 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "13eeecaa6ae52ac8.json",
       "scenario": "every process mutation reads all four hosts anew and never resends an unknown mutation",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -475,7 +492,8 @@
           "invocations": 12,
           "test": "inventory.TestInventoryOracle"
         }
-      ]
+      ],
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "1561a3d71d17ec42.json",
@@ -491,7 +509,8 @@
           "test": "operatorgates.TestTrialOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "18615569387fc587.json",
@@ -515,14 +534,18 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "1879a3d7b103cb3c.json",
       "scenario": "telemetry keeps missing reset and unbounded tails unknown and reports ENA deltas",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "replayed",
+      "replayTests": [
+        "operatorgates.TestTelemetryOracle"
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "194fd186588addbe.json",
@@ -554,14 +577,14 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "1a46546772a6609b.json",
       "scenario": "clock observations reuse the conductor helper on all four captured hosts",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "replayed",
       "observationProjections": [
         {
           "operation": "clocks.previewClocks",
@@ -570,20 +593,24 @@
           "invocations": 1,
           "test": "operatorgates.TestClockOracle"
         }
-      ]
+      ],
+      "replayTests": [
+        "operatorgates.TestClockOracle"
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "1b5e7064dbfe9fa1.json",
       "scenario": "each round has its own window, so candidates that never become ready leave time for another round",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "1b789eba8077ce7e.json",
@@ -607,27 +634,27 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "1be88515f556f3f6.json",
       "scenario": "loser cancellation finishes before the load survivor dials, even when slow",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "1c42beea532b6b7a.json",
       "scenario": "missing independent worker inventory cannot report admitted calls",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "measure.runMeasureGate",
@@ -637,14 +664,15 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "1d20f71ddc4557f4.json",
       "scenario": "each selected release uses its own tool and correct preflight direction",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "1f967dec2cf81a1b.json",
@@ -653,15 +681,14 @@
         "run.errorCategory",
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "21920a751006f1e7.json",
       "scenario": "failover successful transcript remains measure-only with raw measurements",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "trials.trialWarmup",
@@ -687,7 +714,8 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "21a180fe51dc4708.json",
@@ -719,7 +747,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "23ebd80c52c39191.json",
@@ -727,8 +756,8 @@
       "coreProjections": [
         "run.errorCategory"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "23f866761ee9639b.json",
@@ -752,7 +781,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "2530439e03d90c3d.json",
@@ -776,27 +806,28 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "25d8a761e9a32dec.json",
       "scenario": "late false cancellation after readiness blocks begin and every replacement",
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
-      "coreProjections": []
+      "fullReplay": "non-replayable",
+      "coreProjections": [],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "26b5fb0694a332d7.json",
       "scenario": "hosted transport is bounded by twenty minutes and minute 105",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "Broker callback/manifest projections replay where inventoried. The fixture does not export the raw finished/inactive mailbox receipt or a child executable needed to replay the entire bridge lifecycle. Callback return values are not fabricated as raw completion proof."
     },
     {
       "fixture": "26fb2a5e55af5af3.json",
@@ -804,15 +835,14 @@
       "coreProjections": [
         "run.errorCategory"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "272d0f0debb5d73c.json",
       "scenario": "an unconfirmed caller hangup at gate end is an unknown outcome that stops later gates",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -837,7 +867,8 @@
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "29262219ea35dfe2.json",
@@ -861,27 +892,27 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "2c66cbdf08ee6414.json",
       "scenario": "the load boundary is dispatched once, after a usable survivor, with a valid deadline",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "2cbd2a20bcd4302e.json",
       "scenario": "a read failure is a precondition failure with its host code and a mutating failure stays unknown",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -890,20 +921,21 @@
           "invocations": 4,
           "test": "inventory.TestInventoryOracle"
         }
-      ]
+      ],
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "2e78d37f3a4f59f3.json",
       "scenario": "a confirmed dispatch whose job never becomes ready is tracked at once and told to stop",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "2e97247d9d6ac097.json",
@@ -912,8 +944,8 @@
         "run.errorCategory",
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "2ecf82cd9266c992.json",
@@ -921,8 +953,8 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "2ecfd65c26faacd8.json",
@@ -954,7 +986,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "302791a0ad0a9763.json",
@@ -970,21 +1003,21 @@
           "test": "operatorgates.TestBoundaryOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "322aa74f29f0a814.json",
       "scenario": "a quote expiring during release planning never constructs AWS",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "33f555d1bf7e8653.json",
       "scenario": "hosted broker refuses missing evidence and foreign event acknowledgments",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
@@ -994,20 +1027,21 @@
           "test": "TestOracleBrokerCallbacks",
           "scope": "broker prepare begin arm and effect ordering above frozen write wait callbacks; raw collect callback pending"
         }
-      ]
+      ],
+      "reason": "Broker callback/manifest projections replay where inventoried. The fixture does not export the raw finished/inactive mailbox receipt or a child executable needed to replay the entire bridge lifecycle. Callback return values are not fabricated as raw completion proof."
     },
     {
       "fixture": "395e1e97f51b1b8f.json",
       "scenario": "measurement assembly stops after unknown mutation and refuses a boundary after cutoff",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded campaign wrapper binds captured provider resources or the removed hosted launcher. Public process parameters, phase ordering and fixed-launcher identities are tested independently; the provider assembly is not replayed."
     },
     {
       "fixture": "3be1e754eeb84bcb.json",
@@ -1072,14 +1106,15 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "3eb1d7e8ebfaab22.json",
       "scenario": "through the real queue, a lost boundary dispatch reply stops every survivor before it registers",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "3ee7f94eb9e17e17.json",
@@ -1111,67 +1146,67 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "4136f17b5414b14d.json",
       "scenario": "an unknown registration write or a lost candidate POST is never retried and stays unknown",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "45a0e91b8791d6a9.json",
       "scenario": "measured cost uses observed units and fresh verified rates and discloses unmeasured tariffs",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "This fixture requires provider tariff provenance and resource-allocation prices. That AWS accounting obligation remains private."
     },
     {
       "fixture": "4923c758261e6b96.json",
       "scenario": "no near candidate after every round ends the gate as caller-not-near and every caller is told to stop",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "4d28738c82f50343.json",
       "scenario": "an unknown arm write stops the campaign without retrying its mailbox mutation",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "Broker callback/manifest projections replay where inventoried. The fixture does not export the raw finished/inactive mailbox receipt or a child executable needed to replay the entire bridge lifecycle. Callback return values are not fabricated as raw completion proof."
     },
     {
       "fixture": "4f5960e46254e25f.json",
       "scenario": "failover caller minimum fits warmup recovery and observed worker trials",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The recorded campaign wrapper binds captured provider resources or the removed hosted launcher. Public process parameters, phase ordering and fixed-launcher identities are tested independently; the provider assembly is not replayed."
     },
     {
       "fixture": "5011e4546afe86f1.json",
       "scenario": "known decryption and ICE failures remain failed without pooled sample",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "measure.runMeasureGate",
@@ -1181,7 +1216,8 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "52c749d6046baac5.json",
@@ -1230,7 +1266,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "563e3891ec7cc388.json",
@@ -1238,8 +1275,8 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "5860d4f79c402a4f.json",
@@ -1247,8 +1284,7 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "processes.sanitizeProcessEvidence",
@@ -1258,14 +1294,14 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "5868b4422f351ddc.json",
       "scenario": "load missing evidence stays inconclusive",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "measure.runMeasureGate",
@@ -1275,7 +1311,8 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "58b6cbb9a951d468.json",
@@ -1283,15 +1320,14 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "5920f93dc11c4e2e.json",
       "scenario": "both measurement campaigns submit an unknown caller mailbox mutation once",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -1324,20 +1360,21 @@
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "5b377fd4c64b9357.json",
       "scenario": "a hangup after a lost feed write still reaches the caller, which polls it outside the feed order",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "Broker callback/manifest projections replay where inventoried. The fixture does not export the raw finished/inactive mailbox receipt or a child executable needed to replay the entire bridge lifecycle. Callback return values are not fabricated as raw completion proof."
     },
     {
       "fixture": "5b728930ffa05ed0.json",
@@ -1377,7 +1414,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "5d49cd67f7a88b17.json",
@@ -1386,34 +1424,34 @@
         "run.errorCategory",
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "5f54a242c3c0a98b.json",
       "scenario": "broker records the real first mutation attempt after registration",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "Broker callback/manifest projections replay where inventoried. The fixture does not export the raw finished/inactive mailbox receipt or a child executable needed to replay the entire bridge lifecycle. Callback return values are not fabricated as raw completion proof."
     },
     {
       "fixture": "5fd9474e2a3f03cf.json",
       "scenario": "hosted process assembly carries the run-level caller cost hook",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded campaign wrapper binds captured provider resources or the removed hosted launcher. Public process parameters, phase ordering and fixed-launcher identities are tested independently; the provider assembly is not replayed."
     },
     {
       "fixture": "6080367b30554540.json",
@@ -1453,14 +1491,14 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "617321ad9d53b5f7.json",
       "scenario": "failover missing evidence stays inconclusive",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "measure.runMeasureGate",
@@ -1470,7 +1508,8 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "64f02812971b1ab4.json",
@@ -1478,15 +1517,14 @@
       "coreProjections": [
         "run.errorCategory"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "658ab118244705fb.json",
       "scenario": "runtime release pins and deployed inventory must equal the selected judge",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -1495,34 +1533,34 @@
           "invocations": 4,
           "test": "inventory.TestInventoryOracle"
         }
-      ]
+      ],
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "66cd877a8f1d076e.json",
       "scenario": "deadline retries finish inside both the four-hour lifetime and five-hour ledger",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "68dbb7b793aa2307.json",
       "scenario": "a candidate is prepared without dialing and a hung-up candidate is awaited no longer",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "Broker callback/manifest projections replay where inventoried. The fixture does not export the raw finished/inactive mailbox receipt or a child executable needed to replay the entire bridge lifecycle. Callback return values are not fabricated as raw completion proof."
     },
     {
       "fixture": "6922b8a2b5390382.json",
       "scenario": "boundary measures two original admissions separately with cap two",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "measure.runMeasureGate",
@@ -1532,17 +1570,18 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "692b236b2571a208.json",
       "scenario": "late gate success during unconfirmed caller stop cannot confirm deletion or resume gates",
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "coreProjections": [
         "run.errorCategory",
         "run.previewGateDeadline"
-      ]
+      ],
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "6c5550a3070423b4.json",
@@ -1566,7 +1605,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "763010d54eb552a0.json",
@@ -1614,14 +1654,15 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "77673bc806840d93.json",
       "scenario": "unverified rates are named as the dry-run refusal cause",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "795ccb9547219d4f.json",
@@ -1653,7 +1694,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "7a43d8917f173751.json",
@@ -1661,8 +1703,8 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "7bc424c4b1935432.json",
@@ -1670,15 +1712,14 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "82399182328a195d.json",
       "scenario": "release transcript uses ADR role order fresh target inventory and stable-phase trials",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -1729,27 +1770,28 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "86588a9f211ce6ad.json",
       "scenario": "dry run constructs no AWS SDK client and writes no run evidence",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "86b7ace3cbd9a8d7.json",
       "scenario": "a conductor hangup stops a caller still waiting for transport and each dispatch owns its mailbox",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "Broker callback/manifest projections replay where inventoried. The fixture does not export the raw finished/inactive mailbox receipt or a child executable needed to replay the entire bridge lifecycle. Callback return values are not fabricated as raw completion proof."
     },
     {
       "fixture": "8993b9d3ba5b4019.json",
@@ -1789,28 +1831,28 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "8b3344538fc20ef5.json",
       "scenario": "fixed telemetry uses only read-only SSM host steps and preserves absent fields",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "8bfc8eae756e88e9.json",
       "scenario": "campaign assembly refuses missing and extra live hosts before execution",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The recorded campaign wrapper binds captured provider resources or the removed hosted launcher. Public process parameters, phase ordering and fixed-launcher identities are tested independently; the provider assembly is not replayed."
     },
     {
       "fixture": "8c9c76c0cf1b208a.json",
       "scenario": "decode errors remain raw measure-only evidence without a new acceptance rule",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "measure.runMeasureGate",
@@ -1820,14 +1862,14 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "8d39470b4fb4974c.json",
       "scenario": "gate preparation rolls a live worker a stopped gate left draining, only when it is proven empty",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P6 composed runtime replay and declared equivalence-delta review",
+      "fullReplay": "non-replayable",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -1854,7 +1896,8 @@
           "test": "operatorgates.TestPreconditionOracle",
           "scope": "repair procedure; one declared unknown-control-status delta"
         }
-      ]
+      ],
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "8f3705c63b25260b.json",
@@ -1870,14 +1913,23 @@
           "test": "operatorgates.TestProcedureOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped.",
+      "mediaQualification": {
+        "evidence": "tested",
+        "test": "TestFrozenRelayProcedureHasNoTrialReceipts",
+        "completedCalls": 1,
+        "events": 0,
+        "trials": 0,
+        "metrics": 0,
+        "scope": "Frozen procedure has no arm/feed callbacks. Its media callback is a canned 30-event summary, not raw caller replay. The zero-event media qualification uses synthetic product reports at both pinned release commits."
+      }
     },
     {
       "fixture": "8f6ee020e1204cd2.json",
       "scenario": "a gate that gives up after registration tells its caller to exit instead of waiting out its deadline",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -1918,14 +1970,14 @@
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "8f7a7f3b554bb45a.json",
       "scenario": "a failed read-only precondition is its own reason, keeps its sanitized code and tells the caller to stop",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -1950,14 +2002,14 @@
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "90df0f59b9fcdecc.json",
       "scenario": "a measurement gate waits a bounded time for a hung-up candidate's call to end",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "measure.runMeasureGate",
@@ -1967,20 +2019,21 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "9b3641867128bd38.json",
       "scenario": "candidates preparing together send no caller write after another candidate's write is lost",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "9bb2343437b92066.json",
@@ -1988,15 +2041,14 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "9df1f6468012b315.json",
       "scenario": "measurement gates never start at minute 105 and clamp twenty minute deadlines",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "trials.trialWarmup",
@@ -2022,7 +2074,8 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "9e4ceef43397b71f.json",
@@ -2046,14 +2099,14 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "9fe049224d222854.json",
       "scenario": "production clock verification precedes mutation and missing clocks never submit it",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -2062,7 +2115,8 @@
           "invocations": 4,
           "test": "inventory.TestInventoryOracle"
         }
-      ]
+      ],
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "a20095066c1b93f6.json",
@@ -2102,33 +2156,34 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "a32c5219b69df740.json",
       "scenario": "hosted production assembly binds captured hosts runtime endpoints archive and caller identity",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded campaign wrapper binds captured provider resources or the removed hosted launcher. Public process parameters, phase ordering and fixed-launcher identities are tested independently; the provider assembly is not replayed."
     },
     {
       "fixture": "a497f644af81b6c8.json",
       "scenario": "a lost caller write latches the run before another candidate's next write",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "Broker callback/manifest projections replay where inventoried. The fixture does not export the raw finished/inactive mailbox receipt or a child executable needed to replay the entire bridge lifecycle. Callback return values are not fabricated as raw completion proof."
     },
     {
       "fixture": "a4eb07d89b509b33.json",
@@ -2136,21 +2191,21 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "a65afb24cdac98c9.json",
       "scenario": "through the real queue, an unconfirmed hangup latches the run before any queued dispatch or cancel",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "a6cff16abde78813.json",
@@ -2174,27 +2229,27 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "a84173891e090ebc.json",
       "scenario": "one candidate dials per round: a near pre-dial candidate that registers far ends its round",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "aad2e15df5f8a2a6.json",
       "scenario": "failover unknown command is never retried or followed by another mutation",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "trials.trialWarmup",
@@ -2212,7 +2267,8 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "ae05714cbfb25ed6.json",
@@ -2236,33 +2292,34 @@
           "test": "operatorgates.TestTrialOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "af6f28c64bb709d5.json",
       "scenario": "a stopped unready caller is stopped once: release after a successful replacement neither re-sends nor turns unknown",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "af9e05d743da8cef.json",
       "scenario": "an unconfirmed hangup of a far caller stops all replacements as an unknown outcome",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "b00256084d7d0c6d.json",
@@ -2278,7 +2335,8 @@
           "test": "operatorgates.TestWorkerEmptyOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "b24a4d687c78e557.json",
@@ -2286,36 +2344,35 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "b45053b6cf3845e0.json",
       "scenario": "rates expiring during release planning are repriced before AWS construction",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "b4c3b090489d1074.json",
       "scenario": "dry run prints pricing refusals without converting missing rates into spending permission",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "b5bbf25206fffe30.json",
       "scenario": "an unhealthy deployment dispatches no caller and an unknown repair stays unknown",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "b7d594cd9e6d9dfc.json",
       "scenario": "failover known failure survives absent telemetry",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "measure.runMeasureGate",
@@ -2325,14 +2382,14 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "b8381a019b92fe37.json",
       "scenario": "partial ENA evidence retains known allowance violations",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "measure.runMeasureGate",
@@ -2342,14 +2399,15 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "b86d00b13369ed0a.json",
       "scenario": "captured failover cannot submit at its deadline",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The recorded SDK operations target a captured managed replication group and shard. AWS transport remains private; the public optional store capability and failover definition have separate tests."
     },
     {
       "fixture": "b8765e5ef8bcda04.json",
@@ -2357,15 +2415,14 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "c2c87bc19643d833.json",
       "scenario": "real fault hook runs after fresh inventory and before the mutation submission",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -2374,27 +2431,28 @@
           "invocations": 4,
           "test": "inventory.TestInventoryOracle"
         }
-      ]
+      ],
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "c54aca099a25289f.json",
       "scenario": "separate admission boundary uses exactly two registered calls on one hosted job",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "Broker callback/manifest projections replay where inventoried. The fixture does not export the raw finished/inactive mailbox receipt or a child executable needed to replay the entire bridge lifecycle. Callback return values are not fabricated as raw completion proof."
     },
     {
       "fixture": "c7cc88e93dbdcc2c.json",
       "scenario": "captured failover selects exact shard and submits unknown mutation once",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The recorded SDK operations target a captured managed replication group and shard. AWS transport remains private; the public optional store capability and failover definition have separate tests."
     },
     {
       "fixture": "c84ac2a6e5929c83.json",
@@ -2410,14 +2468,23 @@
           "test": "operatorgates.TestProcedureOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped.",
+      "mediaQualification": {
+        "evidence": "tested",
+        "test": "TestFrozenRelayProcedureHasNoTrialReceipts",
+        "completedCalls": 1,
+        "events": 0,
+        "trials": 0,
+        "metrics": 0,
+        "scope": "Frozen procedure has no arm/feed callbacks. Its media callback is a canned 30-event summary, not raw caller replay. The zero-event media qualification uses synthetic product reports at both pinned release commits."
+      }
     },
     {
       "fixture": "c85d493e11d66f8d.json",
       "scenario": "load known failure survives absent telemetry",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "measure.runMeasureGate",
@@ -2427,7 +2494,8 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "ccee825ab73a16c6.json",
@@ -2436,8 +2504,8 @@
         "run.errorCategory",
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "cd6036a87ac7dd3f.json",
@@ -2469,7 +2537,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "cd93f2f5921b2e18.json",
@@ -2517,14 +2586,14 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "d17df4b9dd26c99a.json",
       "scenario": "unknown or asynchronous durability cannot authorize failover",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "trials.trialWarmup",
@@ -2542,7 +2611,8 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "d283d923d43412bc.json",
@@ -2566,7 +2636,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "d6cbacdc767bb209.json",
@@ -2582,7 +2653,8 @@
           "test": "operatorgates.TestProcedureOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "d8df75035beb0735.json",
@@ -2630,7 +2702,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "dad788f4ed5b0458.json",
@@ -2638,61 +2711,61 @@
       "coreProjections": [
         "run.errorCategory"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "dbf2faf2380d863f.json",
       "scenario": "a lost hangup latches the run before another candidate's next write, and a landed 412 does not",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "dbf3599b51072261.json",
       "scenario": "candidates are dispatched together, the first near one is kept and every other is told to stop",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "ddb6e07cfe62aaa0.json",
       "scenario": "measured call hours require joined loaded completed near caller not configured duration",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "e00e9a3faf33a166.json",
       "scenario": "through the real queue, a lost caller write latches the run: no later dispatch, cancel or caller write",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "e1df50e6d93cadbd.json",
       "scenario": "every other candidate's run is cancelled and confirmed inside its round, so its runner minutes are bounded",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded multi-candidate hosted dispatch/search/cancel policy is removed. Its exact fanout trace is not a requirement of the fixed public single-launcher. Source binding, single launch, deadline, non-overlap and unknown/stop successors are pinned by the terminal mutation ledger."
     },
     {
       "fixture": "e463de78f959513b.json",
@@ -2732,14 +2805,14 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "e7138cd86a2f0fa7.json",
       "scenario": "load unknown command is never retried or followed by another mutation",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "measure.runMeasureGate",
@@ -2749,14 +2822,14 @@
           "test": "operatorgates.TestMeasurementDefinitionOracle",
           "scope": "admission and failover procedure before caller collection; evidence assembly remains with P4"
         }
-      ]
+      ],
+      "reason": "Public measurement procedure and telemetry projections replay. Whole composition lacks a captured mailbox finished/inactive receipt, pinned judge executable and independent clock/inventory evidence for the caller stream. Provider cost projections stay private; missing proof is not synthesized."
     },
     {
       "fixture": "e91020ea28c0bc03.json",
       "scenario": "runtime clock observations refresh after sixty seconds and refuse missing assumptions",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "replayed",
       "observationProjections": [
         {
           "operation": "clocks.previewClocks",
@@ -2765,7 +2838,11 @@
           "invocations": 2,
           "test": "operatorgates.TestClockOracle"
         }
-      ]
+      ],
+      "replayTests": [
+        "operatorgates.TestRuntimeClockCacheOracle"
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "e9cfe602e3b3382b.json",
@@ -2773,15 +2850,15 @@
       "coreProjections": [
         "run.errorCategory"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "ebf77fbea4ec9c7c.json",
       "scenario": "every typed mutating script uses its target archive preflight before execute",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "ecf0f59e34c8e380.json",
@@ -2796,14 +2873,14 @@
           "invocations": 4,
           "test": "clocks.TestSignalBracketOracle"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "ed5049d4d4e0cb78.json",
       "scenario": "missing and excessive independent clock evidence cannot validate runtime bounds",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "replayed",
       "observationProjections": [
         {
           "operation": "clocks.previewClocks",
@@ -2812,7 +2889,11 @@
           "invocations": 4,
           "test": "operatorgates.TestClockOracle"
         }
-      ]
+      ],
+      "replayTests": [
+        "operatorgates.TestClockOracle"
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "edd5c10b65ad547c.json",
@@ -2844,7 +2925,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "ee31ae167952d60b.json",
@@ -2852,8 +2934,7 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P4-P6 integration and remaining recorded seams",
+      "fullReplay": "non-replayable",
       "procedureProjections": [
         {
           "operation": "processes.sanitizeProcessEvidence",
@@ -2863,7 +2944,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "eefe95181c64fe7d.json",
@@ -2871,8 +2953,8 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "f21ae67734c5ee03.json",
@@ -2881,15 +2963,14 @@
         "run.errorCategory",
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "f45d2aaf8872ceb1.json",
       "scenario": "hosted broker joins setup ready probes and near registration before fault arming",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
@@ -2899,7 +2980,8 @@
           "test": "TestOracleBrokerCallbacks",
           "scope": "broker prepare begin arm and effect ordering above frozen write wait callbacks; raw collect callback pending"
         }
-      ]
+      ],
+      "reason": "Broker callback/manifest projections replay where inventoried. The fixture does not export the raw finished/inactive mailbox receipt or a child executable needed to replay the entire bridge lifecycle. Callback return values are not fabricated as raw completion proof."
     },
     {
       "fixture": "f53440add6ea2ca9.json",
@@ -2931,7 +3013,8 @@
           "test": "operatorgates.TestProcedureProjectionOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "f56bbfcfeea2cfcb.json",
@@ -2939,8 +3022,8 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "f58302506a15cf73.json",
@@ -2948,8 +3031,8 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "f669a2c29653fdbe.json",
@@ -2957,21 +3040,21 @@
       "coreProjections": [
         "run.previewGateDeadline"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     },
     {
       "fixture": "f75b1fa3b86c34bc.json",
       "scenario": "load assembly runs survivor then separate boundary and excludes boundary from pool",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "callerProjections": [
         {
           "test": "TestOracleCallerManifests",
           "scope": "manifest validation only"
         }
-      ]
+      ],
+      "reason": "The recorded campaign wrapper binds captured provider resources or the removed hosted launcher. Public process parameters, phase ordering and fixed-launcher identities are tested independently; the provider assembly is not replayed."
     },
     {
       "fixture": "f899cbac511af4a6.json",
@@ -2987,14 +3070,14 @@
           "test": "operatorgates.TestTrialOracle",
           "scope": "complete function at recorded callback seam"
         }
-      ]
+      ],
+      "replayScope": "Complete recorded function at its captured callback boundary; nested host scripts and provider transport are separately scoped."
     },
     {
       "fixture": "fb26c9a9da071a7b.json",
       "scenario": "live inventory refuses missing participants and profiles rather than filling defaults",
       "coreProjections": [],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6",
+      "fullReplay": "non-replayable",
       "observationProjections": [
         {
           "operation": "inventory.parseInventory",
@@ -3003,7 +3086,8 @@
           "invocations": 7,
           "test": "inventory.TestInventoryOracle"
         }
-      ]
+      ],
+      "reason": "The frozen outer adapter includes provider command submission/polling and aliased script/template/archive bytes. Some mutation invocations omit the independently required clock evidence. Typed observations and callback procedures replay, but exact script/transport composition cannot be reconstructed from digest-only or missing inputs."
     },
     {
       "fixture": "ffc96e0a8c7c06fb.json",
@@ -3011,8 +3095,8 @@
       "coreProjections": [
         "run.errorCategory"
       ],
-      "fullReplay": "pending",
-      "pendingOwner": "P2-P6"
+      "fullReplay": "non-replayable",
+      "reason": "The outer fixture owns AWS plan admission, stack/schedule lifecycle, pricing, teardown or report persistence. Those callbacks are private. Public deadline, sequencing, latching and numeric projection successors are covered separately; this inventory does not claim outer replay."
     }
   ],
   "observationReplay": {
@@ -3021,13 +3105,13 @@
     "functionInvocations": 179,
     "typedObservations": 13,
     "scenarios": 20,
-    "scope": "Function and typed-observation projections; outer procedures stay pending unless fullReplay is replayed."
+    "scope": "All 179 function and 13 product observation projections replay. Outer runtime exclusions have per-scenario reasons."
   },
   "procedureReplay": {
     "owner": "P3",
     "evidence": "replayed",
     "scenarios": 70,
-    "fullFixtures": 42,
+    "fullFixtures": 44,
     "functionInvocations": 328,
     "operations": {
       "trials.trialWarmup": 29,
@@ -3043,18 +3127,13 @@
       "trials.workerTrials": 18,
       "processes.stopped": 7
     },
-    "scope": "Procedure callback order, deadlines, receipts, restoration, counters and verdicts. Typed runtime and protocol proof is separately tested. Full suite remains pending.",
-    "deltas": "equivalence-deltas.json",
-    "pendingScopes": [
-      "Composed host/runtime transcript replay; native runtime, typed ingress and session safety are tested separately.",
-      "Caller collection, telemetry reductions and pinned-judge assembly.",
-      "Container and cross-process integration, private lifecycle projections and retired hosted-caller behavior."
-    ]
+    "scope": "All 328 captured procedure invocations replay at their callback boundaries. Full runtime and provider boundaries have per-scenario reasons.",
+    "deltas": "equivalence-deltas.json"
   },
   "callerRuntime": {
-    "systemdLifecycle": "pending-linux",
-    "bridgeRawMailboxReplay": "pending-export-callbacks",
-    "hostedCandidateSearch": "removed; single-launch successor guards tested; full retirement accounting pending",
+    "systemdLifecycle": "non-replayable: Linux systemd is not part of the frozen synthetic corpus; P6a container rehearsal owns runtime proof.",
+    "bridgeRawMailboxReplay": "non-replayable: frozen collection returns raw strings without finished/inactive mailbox receipts; real directory and bridge contracts have native tests.",
+    "hostedCandidateSearch": "retired: fixed single-launch successors are recorded per original mutation ID.",
     "requiredEvidenceContract": {
       "owner": "P4",
       "evidence": "tested",
@@ -3066,7 +3145,7 @@
       ],
       "additionalBoundaries": [
         "stats manifest (3 fields)",
-        "summary (12 fields)"
+        "summary (19 fields)"
       ],
       "tests": [
         "TestEveryRequiredEvidenceMember",
@@ -3083,9 +3162,9 @@
         "TestOptionalMirroredDiagnostics",
         "TestHistoricalTakeoverStartLedger"
       ],
-      "scope": "Local product-type contract regressions; full oracle procedures and pinned rebuilds remain pending.",
-      "optionalLedgerFields": 81,
-      "optionalContexts": 132,
+      "scope": "Local product-type contract regressions. Frozen callback procedures and exact pinned-release comparisons are separately tested.",
+      "optionalLedgerFields": 83,
+      "optionalContexts": 134,
       "optionalWitness": "Delete/null on decoder-error and passing controls; union contexts inspect type, Kind and kind. Historical takeover start uses independent signal timing.",
       "customDecoderTypes": [
         "time.Time"
@@ -3099,7 +3178,7 @@
         "operatorevidence/judge-src.TestComposedProcedureCallerPool"
       ],
       "scope": "Frozen trials cross the real broker, mailbox and bridge delivery at injected host/child API seams. Synthetic measurement collection crosses ReadPool and the unchanged judge; passing qualification and failures with missing clocks/reports are checked.",
-      "remaining": "Whole-session/native child, telemetry cost reductions, pinned rebuilds and provider/container boundaries remain pending."
+      "remaining": "Whole native child/provider/container behavior is outside the frozen corpus. Exact missing inputs are recorded per fixture."
     }
   },
   "corpusRefresh": {
@@ -3112,5 +3191,854 @@
     "collectionRowsWithRestoredDuration": 20,
     "intentionalMalformedCollectionRows": 1,
     "test": "operatorevidence/judge-src.TestCorrectedFrozenCallerRows"
-  }
+  },
+  "fullSuiteMeaning": "Every frozen scenario has a replay scope or an explicit non-replayable reason. This is not an all-scenarios-passed or rehearsal claim.",
+  "groups": [
+    {
+      "id": "core",
+      "required": true,
+      "evidence": "replayed",
+      "tests": [
+        "TestOracleCoreProjections",
+        "TestOracleUnknownEffects",
+        "TestOracleLateUnknown"
+      ]
+    },
+    {
+      "id": "observations",
+      "required": true,
+      "evidence": "replayed",
+      "tests": [
+        "TestClockOracle",
+        "TestRuntimeClockCacheOracle",
+        "TestInventoryOracle"
+      ]
+    },
+    {
+      "id": "procedures",
+      "required": true,
+      "evidence": "replayed",
+      "tests": [
+        "TestProcedureOracle",
+        "TestReleaseOracle",
+        "TestTrialOracle",
+        "TestMeasurementDefinitionOracle"
+      ]
+    },
+    {
+      "id": "caller",
+      "required": true,
+      "evidence": "replayed",
+      "tests": [
+        "TestOracleCallerManifests",
+        "TestOracleBrokerCallbacks",
+        "TestComposedTrialOracle"
+      ]
+    },
+    {
+      "id": "telemetry",
+      "required": true,
+      "evidence": "replayed",
+      "tests": [
+        "TestTelemetryOracle",
+        "TestDuplicatePacketsOracle"
+      ]
+    },
+    {
+      "id": "runtime",
+      "required": true,
+      "evidence": "tested",
+      "tests": [
+        "TestRuntimeFreshProofAndFaultOrder",
+        "TestRuntimeMissingClockStopsMutation",
+        "TestRuntimeUnknownNeverResubmits"
+      ]
+    },
+    {
+      "id": "composition",
+      "required": true,
+      "evidence": "tested",
+      "tests": [
+        "TestComposedProcedureCallerPool",
+        "TestSequenceReleasesCallers",
+        "TestRelayCompletedCallContributesNoTrials",
+        "TestRelayPoolKeepsTrialPopulationUnchanged",
+        "TestFrozenRelayProcedureHasNoTrialReceipts",
+        "TestPinnedReleaseJudgesMatchFrozenEvidence"
+      ],
+      "scope": "Native composition includes raw caller/pool/unchanged judge; frozen trial composition crosses broker/mailbox/bridge. Relay-deploy contributes one completed call and zero trials; raw zero-event caller qualification is synthetic product evidence checked at both release pins, distinct from the frozen callback replay."
+    },
+    {
+      "id": "strict-verdict",
+      "required": true,
+      "evidence": "tested",
+      "tests": [
+        "TestRehearsalPassRule",
+        "TestRehearsalRejectsInconclusive",
+        "TestRehearsalExemptionOnlyRelay"
+      ]
+    }
+  ],
+  "integrationInvocations": [
+    {
+      "fixture": "00045cd16dc31a8b.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 1,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "00045cd16dc31a8b.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 6,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "0643b1d4f8ad59bd.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 1,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "0643b1d4f8ad59bd.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 2,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "0643b1d4f8ad59bd.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 3,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "0643b1d4f8ad59bd.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 4,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "0643b1d4f8ad59bd.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 5,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "0643b1d4f8ad59bd.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 6,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "098567902df2479c.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 5,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "098567902df2479c.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 20,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "098567902df2479c.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 35,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "0ad44702da6d6aa6.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 19,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "0d898d5eb5647856.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 1,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "0d898d5eb5647856.json",
+      "operation": "trials.workerTrials",
+      "invocation": 5,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "0fb1e024075ce33e.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 19,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "0fb1e024075ce33e.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 21,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "10e550386ddb932a.json",
+      "operation": "trials.workerTrials",
+      "invocation": 1,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "10e550386ddb932a.json",
+      "operation": "trials.workerTrials",
+      "invocation": 44,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "124967a5e204fb0b.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 5,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "124967a5e204fb0b.json",
+      "operation": "trials.workerTrials",
+      "invocation": 189,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "124967a5e204fb0b.json",
+      "operation": "trials.workerTrials",
+      "invocation": 471,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "1561a3d71d17ec42.json",
+      "operation": "trials.workerTrials",
+      "invocation": 1,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "1561a3d71d17ec42.json",
+      "operation": "trials.workerTrials",
+      "invocation": 7,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "1879a3d7b103cb3c.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 1,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "1879a3d7b103cb3c.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 2,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "1879a3d7b103cb3c.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 3,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "1879a3d7b103cb3c.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 4,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "1879a3d7b103cb3c.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 5,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "1879a3d7b103cb3c.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 6,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "1c42beea532b6b7a.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 19,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "1c42beea532b6b7a.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 21,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "21920a751006f1e7.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 10,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "21920a751006f1e7.json",
+      "operation": "trials.workerTrials",
+      "invocation": 28,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "21920a751006f1e7.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 80,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "21920a751006f1e7.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 83,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "3be1e754eeb84bcb.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 5,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "3be1e754eeb84bcb.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 20,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "3be1e754eeb84bcb.json",
+      "operation": "trials.workerTrials",
+      "invocation": 204,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "3be1e754eeb84bcb.json",
+      "operation": "trials.workerTrials",
+      "invocation": 486,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "3be1e754eeb84bcb.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 576,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "3be1e754eeb84bcb.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 618,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "3be1e754eeb84bcb.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 723,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "3be1e754eeb84bcb.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 841,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "3be1e754eeb84bcb.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 972,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "3be1e754eeb84bcb.json",
+      "operation": "trials.workerTrials",
+      "invocation": 1156,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "3be1e754eeb84bcb.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 1174,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "3be1e754eeb84bcb.json",
+      "operation": "trials.workerTrials",
+      "invocation": 1358,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "5011e4546afe86f1.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 18,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "5011e4546afe86f1.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 20,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "5011e4546afe86f1.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 43,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "5011e4546afe86f1.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 45,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "5868b4422f351ddc.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 18,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "5868b4422f351ddc.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 20,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "6080367b30554540.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 12,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "617321ad9d53b5f7.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 18,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "617321ad9d53b5f7.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 20,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "6922b8a2b5390382.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 19,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "6922b8a2b5390382.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 21,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "763010d54eb552a0.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 5,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "763010d54eb552a0.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 657,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "82399182328a195d.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 5,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "82399182328a195d.json",
+      "operation": "trials.workerTrials",
+      "invocation": 189,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "82399182328a195d.json",
+      "operation": "trials.workerTrials",
+      "invocation": 471,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "8c9c76c0cf1b208a.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 18,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "8c9c76c0cf1b208a.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 20,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "90df0f59b9fcdecc.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 29,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "90df0f59b9fcdecc.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 31,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "90df0f59b9fcdecc.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 116,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "90df0f59b9fcdecc.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 118,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "9df1f6468012b315.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 10,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "9df1f6468012b315.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 22,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "9df1f6468012b315.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 34,
+      "test": "TestComposedTrialOracle",
+      "evidence": "non-replayable",
+      "reason": "The recorded remaining deadline cannot admit a fresh caller manifest. The negative procedure still replays at the captured callback seam."
+    },
+    {
+      "fixture": "9df1f6468012b315.json",
+      "operation": "trials.workerTrials",
+      "invocation": 50,
+      "test": "TestComposedTrialOracle",
+      "evidence": "non-replayable",
+      "reason": "The recorded remaining deadline cannot admit a fresh caller manifest. The negative procedure still replays at the captured callback seam."
+    },
+    {
+      "fixture": "9df1f6468012b315.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 64,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "aad2e15df5f8a2a6.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 10,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "aad2e15df5f8a2a6.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 31,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "aad2e15df5f8a2a6.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 33,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "ae05714cbfb25ed6.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 1,
+      "test": "TestComposedTrialOracle",
+      "evidence": "non-replayable",
+      "reason": "The recorded remaining deadline cannot admit a fresh caller manifest. The negative procedure still replays at the captured callback seam."
+    },
+    {
+      "fixture": "ae05714cbfb25ed6.json",
+      "operation": "trials.workerTrials",
+      "invocation": 2,
+      "test": "TestComposedTrialOracle",
+      "evidence": "non-replayable",
+      "reason": "The recorded remaining deadline cannot admit a fresh caller manifest. The negative procedure still replays at the captured callback seam."
+    },
+    {
+      "fixture": "b7d594cd9e6d9dfc.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 18,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "b7d594cd9e6d9dfc.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 20,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "b8381a019b92fe37.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 19,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "b8381a019b92fe37.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 21,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "c85d493e11d66f8d.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 18,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "c85d493e11d66f8d.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 20,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "cd93f2f5921b2e18.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 5,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "d17df4b9dd26c99a.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 10,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "d17df4b9dd26c99a.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 24,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "d17df4b9dd26c99a.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 26,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "d17df4b9dd26c99a.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 38,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "d17df4b9dd26c99a.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 52,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "d17df4b9dd26c99a.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 54,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "d8df75035beb0735.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 5,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "d8df75035beb0735.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 110,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "d8df75035beb0735.json",
+      "operation": "trials.trialWarmup",
+      "invocation": 215,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "ddb6e07cfe62aaa0.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 2,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "ddb6e07cfe62aaa0.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 4,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "ddb6e07cfe62aaa0.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 6,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "ddb6e07cfe62aaa0.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 8,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "ddb6e07cfe62aaa0.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 10,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "e7138cd86a2f0fa7.json",
+      "operation": "processes.joinedDuplicatePackets",
+      "invocation": 16,
+      "test": "TestDuplicatePacketsOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "e7138cd86a2f0fa7.json",
+      "operation": "measure.summarizeObservations",
+      "invocation": 18,
+      "test": "TestTelemetryOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "e91020ea28c0bc03.json",
+      "operation": "processes.ProcessRuntime.verifyClocks",
+      "invocation": 1,
+      "test": "TestRuntimeClockCacheOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "e91020ea28c0bc03.json",
+      "operation": "processes.ProcessRuntime.verifyClocks",
+      "invocation": 49,
+      "test": "TestRuntimeClockCacheOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "e91020ea28c0bc03.json",
+      "operation": "processes.ProcessRuntime.verifyClocks",
+      "invocation": 51,
+      "test": "TestRuntimeClockCacheOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "e91020ea28c0bc03.json",
+      "operation": "processes.ProcessRuntime.verifyClocks",
+      "invocation": 99,
+      "test": "TestRuntimeClockCacheOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "f899cbac511af4a6.json",
+      "operation": "trials.workerTrials",
+      "invocation": 1,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    },
+    {
+      "fixture": "f899cbac511af4a6.json",
+      "operation": "trials.workerTrials",
+      "invocation": 4,
+      "test": "TestComposedTrialOracle",
+      "evidence": "replayed"
+    }
+  ]
 }

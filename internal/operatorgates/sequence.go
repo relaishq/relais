@@ -29,6 +29,8 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 	awaiting := map[int]bool{}
 	for _, gate := range s.gates {
 		result := ProcedureResult{Status: operator.NotRun}
+		release := false
+		releaseReason := "gate-not-run"
 		minimum := time.Duration(0)
 		if p.Minimum != nil {
 			minimum = p.Minimum(gate)
@@ -51,6 +53,7 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 					if p.Finalize != nil {
 						gateEnd = s.Budget.MutationEnd()
 					}
+					release = true
 					prep = p.Prepare(prepCtx, gate, end, gateEnd)
 					if prep == nil && s.clock.Elapsed() >= end {
 						prep = fault("command-result-unknown")
@@ -80,11 +83,11 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 					if !ok || end <= s.clock.Elapsed() || minimum > end-s.clock.Elapsed() {
 						result.Reason = "gate-deadline"
 						s.activeEnd = nil
-						if p.ReleaseCallers != nil && !p.ReleaseCallers(ctx, "gate-not-run", min(s.Budget.end, s.clock.Elapsed()+time.Minute)) {
-							s.Halt("command-result-unknown")
-						}
+
 					} else if p.Command != nil {
+						releaseReason = "gate-ended"
 						gateCtx, cancel := context.WithTimeout(ctx, end-s.clock.Elapsed())
+						release = true
 						result = p.Command(gateCtx, gate, end)
 						cancel()
 						if result.Media == nil {
@@ -107,6 +110,10 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 					}
 				}
 			}
+		}
+		if release && p.ReleaseCallers != nil && !p.ReleaseCallers(ctx, releaseReason, min(s.Budget.end, s.clock.Elapsed()+time.Minute)) {
+			s.Halt("command-result-unknown")
+			result = Stopped(false, result)
 		}
 		out.Gates = append(out.Gates, result.GateResult(gate))
 		out.Procedures = append(out.Procedures, result)

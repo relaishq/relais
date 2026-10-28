@@ -46,6 +46,8 @@ func EvidenceOptionalLedger() map[string]string {
 }
 
 var evidenceOptional = map[string]string{
+	"main.previewMediaInput.Gate":                      "Legacy inputs require trial collections; only an explicit relay-deploy gate can contribute a call without trials.",
+	"operatorevidence.MediaInput.Gate":                 "Legacy inputs require trial collections; only an explicit relay-deploy gate can contribute a call without trials.",
 	"loadgen.Message.CallID":                           "The product omits call index zero; inventory joins validate the decoded index.",
 	"loadgen.Message.Error":                            "Only error messages carry error text; they cannot qualify.",
 	"loadgen.Message.MediaOffset":                      "Optional scheduling diagnostic, not a judge bound.",

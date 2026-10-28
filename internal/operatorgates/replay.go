@@ -9,8 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -20,7 +20,11 @@ import (
 type Corpus map[string]json.RawMessage
 
 func LoadCorpus(dir string) (Corpus, error) {
-	packed, err := os.ReadFile(filepath.Join(dir, "corpus.json.gz"))
+	return loadCorpusFS(os.DirFS(dir))
+}
+
+func loadCorpusFS(source fs.FS) (Corpus, error) {
+	packed, err := fs.ReadFile(source, "corpus.json.gz")
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +54,7 @@ func LoadCorpus(dir string) (Corpus, error) {
 		previous = name
 		files[name] = json.RawMessage(entry[1])
 	}
-	sums, err := os.ReadFile(filepath.Join(dir, "SHA256SUMS"))
+	sums, err := fs.ReadFile(source, "SHA256SUMS")
 	if err != nil {
 		return nil, err
 	}

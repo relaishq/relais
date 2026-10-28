@@ -35,6 +35,7 @@ type Summary struct {
 	QualifiedTakeovers  int              `json:"qualifiedTakeovers"`
 	ExpectedCalls       int              `json:"expectedCalls"`
 	CompletedCalls      int              `json:"completedCalls"`
+	RelayCalls          int              `json:"relayCalls"`
 	EventCount          int              `json:"eventCount"`
 	MetricCount         int              `json:"metricCount"`
 	FailedMetrics       int              `json:"failedMetrics"`
@@ -68,9 +69,13 @@ func DecodeSummary(raw []byte) (Summary, error) {
 	if s.Status != operator.Passed && s.Status != operator.Failure && s.Status != operator.Inconclusive {
 		return s, errors.New("invalid-media-status")
 	}
+	trialsComplete := s.EventCount > 0 && s.MetricCount > 0
+	if s.RelayCalls == s.CompletedCalls {
+		trialsComplete = s.EventCount == 0 && s.MetricCount == 0 && s.QualifiedMoves == 0 && s.QualifiedTakeovers == 0
+	}
 	if s.FailedMetrics > 0 || s.DecryptionFailures > 0 || s.ICERestarts > 0 {
 		s.Status = operator.Failure
-	} else if s.Status == operator.Passed && (s.ExpectedCalls < 1 || s.CompletedCalls != s.ExpectedCalls || s.EventCount < 1 || s.MetricCount < 1 || s.InconclusiveMetrics > 0) {
+	} else if s.Status == operator.Passed && (s.ExpectedCalls < 1 || s.CompletedCalls != s.ExpectedCalls || s.RelayCalls > s.CompletedCalls || !trialsComplete || s.InconclusiveMetrics > 0) {
 		s.Status = operator.Inconclusive
 	}
 	return s, nil
@@ -82,6 +87,7 @@ type RawMedia struct {
 	Receipts    []operatorcaller.Receipt `json:"receipts"`
 }
 type Phase struct {
+	Gate         operator.Gate
 	Plan         operatorcaller.Plan
 	Registration operatorcaller.Registration
 	Raw          []byte
@@ -93,6 +99,7 @@ type Phase struct {
 	Inventory releasecompat.Pool
 }
 type MediaInput struct {
+	Gate     operator.Gate          `json:"gate,omitempty"`
 	RunID    string                 `json:"runId"`
 	Sessions []string               `json:"sessions"`
 	Probes   []operatorcaller.Probe `json:"probes"`
@@ -140,7 +147,7 @@ func ReadPool(run string, phases []Phase, missing bool) (Pool, string, error) {
 		}
 		// Missing siblings cannot erase an independently scoped loss receipt or
 		// caller failure. The unchanged judge receives every valid component.
-		pool.Phases = append(pool.Phases, MediaInput{run, append([]string{}, r.Sessions...), append([]operatorcaller.Probe{}, r.Burst.Probes...), raw, phaseMissing})
+		pool.Phases = append(pool.Phases, MediaInput{Gate: p.Gate, RunID: run, Sessions: append([]string{}, r.Sessions...), Probes: append([]operatorcaller.Probe{}, r.Burst.Probes...), RawMedia: raw, Missing: phaseMissing})
 	}
 	return pool, sha, nil
 }

@@ -29,7 +29,19 @@ type Runner interface {
 }
 type LocalRunner struct{}
 
+// Package transaction output is much larger than a host protocol response.
+// Bound image capture separately without changing the host evidence budget.
+const imageBuildOutputBytes = 4 << 20
+
+func commandOutputLimit(label string) int {
+	if label == "image" {
+		return imageBuildOutputBytes
+	}
+	return operator.MaxHostOutputBytes
+}
+
 type boundedOutput struct {
+	limit     int
 	data      []byte
 	truncated bool
 }
@@ -39,7 +51,11 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 	if b.truncated {
 		return n, nil
 	}
-	remaining := operator.MaxHostOutputBytes - len(b.data)
+	limit := b.limit
+	if limit == 0 {
+		limit = operator.MaxHostOutputBytes
+	}
+	remaining := limit - len(b.data)
 	if n > remaining {
 		b.truncated = true
 		b.data = nil
@@ -50,9 +66,13 @@ func (b *boundedOutput) Write(p []byte) (int, error) {
 }
 
 func (t *Topology) diagnosticStreams(r CommandResult) string {
+	return t.diagnosticStreamsLimit(r, operator.MaxHostOutputBytes)
+}
+
+func (t *Topology) diagnosticStreamsLimit(r CommandResult, limit int) string {
 	// A capture boundary, interruption or lost completion can split a secret.
 	// Full-value replacement cannot make those bytes safe to print.
-	if r.Truncated || r.Err != nil || r.Code == nil || *r.Code < 0 || *r.Code == 124 || *r.Code == 125 || *r.Code == 137 || len(r.Stdout) > operator.MaxHostOutputBytes || len(r.Stderr) > operator.MaxHostOutputBytes {
+	if r.Truncated || r.Err != nil || r.Code == nil || *r.Code < 0 || *r.Code == 124 || *r.Code == 125 || *r.Code == 137 || len(r.Stdout) > limit || len(r.Stderr) > limit {
 		return "stdout/stderr: incomplete output suppressed\n"
 	}
 	return "stdout:\n" + t.Redact(string(r.Stdout)) + "\nstderr:\n" + t.Redact(string(r.Stderr)) + "\n"
@@ -68,7 +88,8 @@ func (LocalRunner) Run(ctx context.Context, command Command) CommandResult {
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "LANG=C", "AWS_EC2_METADATA_DISABLED=true"}
 	cmd.Stdin = bytes.NewReader(command.Input)
 	cmd.WaitDelay = time.Second
-	var out, stderr boundedOutput
+	out := boundedOutput{limit: commandOutputLimit(command.Label)}
+	stderr := boundedOutput{limit: commandOutputLimit(command.Label)}
 	cmd.Stdout, cmd.Stderr = &out, &stderr
 	err := cmd.Run()
 	result := CommandResult{Stdout: out.data, Stderr: stderr.data, Truncated: out.truncated || stderr.truncated}

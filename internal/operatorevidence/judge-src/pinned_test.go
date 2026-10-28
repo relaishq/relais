@@ -27,7 +27,12 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	cases := []previewPoolInput{rawPoolSample(), {RunID: "run-fixture", Missing: true}}
+	relay := relayInput()
+	mixed := rawPoolSample()
+	relay.Sessions = []string{"relay-session"}
+	relay.CallerJSONL = strings.ReplaceAll(relay.CallerJSONL, `"session":"session"`, `"session":"relay-session"`)
+	mixed.Phases = append(mixed.Phases, relay)
+	cases := []previewPoolInput{rawPoolSample(), {RunID: "run-fixture", Missing: true}, {RunID: relay.RunID, Phases: []previewMediaInput{relay}}, mixed}
 	lost := rawPoolSample()
 	lost.Missing = true
 	lost.Phases[0].Receipts[0].Result.Lost = true

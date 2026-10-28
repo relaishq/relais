@@ -66,7 +66,7 @@ func (d *Deployment) printFailure(label string, r CommandResult) {
 	d.diagnosticMu.Lock()
 	defer d.diagnosticMu.Unlock()
 	if d.Diagnostics != nil {
-		_, _ = fmt.Fprintf(d.Diagnostics, "container step %s failed\n%s", label, d.Topology.diagnosticStreams(r))
+		_, _ = fmt.Fprintf(d.Diagnostics, "container step %s failed\n%s", label, d.Topology.diagnosticStreamsLimit(r, commandOutputLimit(label)))
 	}
 }
 func (d *Deployment) runArgs(slot, ip, image string, media bool) []string {
@@ -157,7 +157,7 @@ func (d *Deployment) Boot(ctx context.Context) error {
 		return err
 	}
 	image := d.Topology.Config.Name + "-host"
-	if _, err = d.command(ctx, "image", []string{"docker", "build", "--quiet", "-t", image, "-"}, dockerfile); err != nil {
+	if _, err = d.command(ctx, "image", []string{"docker", "build", "--progress=plain", "-t", image, "-"}, dockerfile); err != nil {
 		return err
 	}
 	network, err := d.command(ctx, "network", []string{"docker", "network", "create", "--subnet", d.Topology.Subnet, d.Topology.Config.Name}, nil)

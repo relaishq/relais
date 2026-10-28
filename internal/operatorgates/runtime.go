@@ -280,6 +280,8 @@ func DecodeStepResult(op string, data json.RawMessage) (r StepResult, err error)
 		r.Inspection.Status, err = observe.Relay(data)
 	case "worker-status":
 		r.Local, err = observe.Worker(data)
+	case "telemetry":
+		r.Telemetry, err = DecodeHostTelemetry(data)
 	case "store-status":
 		r.Ownership, err = observe.StoreOwnership(data)
 		r.OwnershipKnown = err == nil

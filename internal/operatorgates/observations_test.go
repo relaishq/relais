@@ -52,6 +52,7 @@ func TestObservationCoverageInventory(t *testing.T) {
 		} `json:"observationReplay"`
 		Fixtures []struct {
 			Fixture, FullReplay  string
+			ReplayTests          []string          `json:"replayTests"`
 			ProcedureProjections []json.RawMessage `json:"procedureProjections"`
 			Projections          []struct {
 				Operation, Evidence, Owner, Test string
@@ -66,7 +67,7 @@ func TestObservationCoverageInventory(t *testing.T) {
 		t.Fatal("observation replay counts differ")
 	}
 	for _, f := range inventory.Fixtures {
-		if f.FullReplay == "replayed" && len(f.ProcedureProjections) == 0 && (len(f.Projections) != 1 || f.Projections[0].Operation != "clocks.verifySignalBracket") {
+		if f.FullReplay == "replayed" && len(f.ProcedureProjections) == 0 && len(f.ReplayTests) == 0 && (len(f.Projections) != 1 || f.Projections[0].Operation != "clocks.verifySignalBracket") {
 			t.Fatal("outer fixture incorrectly marked replayed", f.Fixture)
 		}
 		for _, projection := range f.Projections {
@@ -271,5 +272,97 @@ func TestFreshInventoryReadsAllHostsAndChecksDeployment(t *testing.T) {
 	before := len(calls)
 	if _, err := session.FreshInventory(context.Background(), peer, pins, time.Minute, "", true); err == nil || len(calls) != before {
 		t.Fatal("skip-runtime-release-pins: wrong judge pin read hosts")
+	}
+}
+
+func TestRuntimeClockCacheOracle(t *testing.T) {
+	corpus, err := loadProcedureCorpus(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := loadProcedureFixture(corpus, "e91020ea28c0bc03.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, clock := fixtureSession(t)
+	runtime := &ProcessRuntime{Session: session}
+	roots := procedureRoots(fixture, "processes.ProcessRuntime.verifyClocks")
+	if len(roots) != 4 {
+		t.Fatal("clock cache invocations changed")
+	}
+	for _, root := range roots {
+		outputs := map[string]json.RawMessage{}
+		hosts := map[string]string{}
+		expectedReads := 0
+		for _, e := range root.events {
+			if e.Kind == "request" && e.Operation == "clocks.previewClocks" {
+				var bounds clocks.Bounds
+				if err := json.Unmarshal(e.Inputs[1], &hosts); err != nil {
+					t.Fatal(err)
+				}
+				if err := json.Unmarshal(e.Inputs[2], &bounds); err != nil {
+					t.Fatal(err)
+				}
+				runtime.Bounds = &bounds
+			}
+			if e.Kind == "result" && strings.HasSuffix(e.Operation, ".now") {
+				var now int64
+				if json.Unmarshal(e.Value, &now) == nil {
+					clock.Now = time.UnixMilli(now)
+					clock.Tick = time.Duration(now-1000000) * time.Millisecond
+				}
+			}
+			if e.Kind == "result" && strings.HasSuffix(e.Operation, ".send") {
+				var out struct {
+					Instance string `json:"InstanceId"`
+					Stdout   string `json:"StandardOutputContent"`
+				}
+				if json.Unmarshal(e.Value, &out) == nil && out.Stdout != "" {
+					var envelope struct{ Value json.RawMessage }
+					if err := json.Unmarshal([]byte(out.Stdout), &envelope); err != nil {
+						t.Fatal(err)
+					}
+					outputs[out.Instance] = envelope.Value
+					expectedReads++
+				}
+			}
+		}
+		if root.req.ID == 99 {
+			runtime.Bounds = nil
+		}
+		peer := &observationPeer{respond: func(req operator.Request) operator.Reply {
+			if req.Action != "clock" {
+				t.Fatal("unexpected clock action")
+			}
+			data, ok := outputs[hosts[req.Target]]
+			if !ok {
+				t.Fatal("MUTATION: clock-cache unexpected host read")
+			}
+			return hostReply(t, data)
+		}}
+		runtime.Peer = peer
+		var deadline int64
+		_ = json.Unmarshal(root.req.Inputs[0], &deadline)
+		err := runtime.VerifyClocks(context.Background(), time.Duration(deadline-1000000)*time.Millisecond)
+		if (err == nil) != (root.res.Completion == "returned") || peer.sent != expectedReads {
+			t.Fatal("MUTATION: clock-cache replay", root.req.ID, err, peer.sent, expectedReads)
+		}
+		if err == nil {
+			var want struct {
+				At              int64
+				Control, Worker int64
+				Drift           float64
+			}
+			if err := json.Unmarshal(root.res.Value, &want); err != nil {
+				t.Fatal(err)
+			}
+			got := runtime.ClockSamples[len(runtime.ClockSamples)-1]
+			if got.At.UnixMilli() != want.At || got.Control != want.Control || got.Worker != want.Worker || got.Drift != want.Drift {
+				t.Fatal("MUTATION: clock-cache values", root.req.ID, got, want)
+			}
+		}
+	}
+	if len(runtime.ClockSamples) != 2 {
+		t.Fatal("MUTATION: clock-cache refresh")
 	}
 }

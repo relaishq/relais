@@ -39,7 +39,7 @@ func publicTopology(s string) string {
 }
 func publicExclusion(s string) string {
 	switch s {
-	case "", "generator-guard", "generator saturation overlaps event window", "invalid-phase-evidence", "qualification-skipped", "duplicate-operation-identity", "phase-run-differs", "caller-count-overflow":
+	case "", "generator-guard", "generator saturation overlaps event window", "invalid-phase-evidence", "incomplete-relay-call", "qualification-skipped", "duplicate-operation-identity", "phase-run-differs", "caller-count-overflow":
 		return s
 	}
 	return "unclassified"

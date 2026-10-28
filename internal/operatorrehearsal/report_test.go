@@ -12,7 +12,7 @@ import (
 )
 
 func passingReport() Report {
-	r := Report{Cleanup: true, CPU: CPUReport{Calibration: Calibration{Passed: true}}, Pool: &operatorevidence.Summary{Status: operator.Passed, QualifiedMoves: 20, QualifiedTakeovers: 10, ExpectedCalls: 4, CompletedCalls: 4, MetricCount: 1, EventCount: 30, IncludedPhases: 4}}
+	r := Report{Cleanup: true, CPU: CPUReport{Calibration: Calibration{Passed: true}}, Pool: &operatorevidence.Summary{Status: operator.Passed, QualifiedMoves: 20, QualifiedTakeovers: 10, ExpectedCalls: 4, CompletedCalls: 4, RelayCalls: 1, MetricCount: 1, EventCount: 30, IncludedPhases: 4}}
 	for _, g := range CoveredGates {
 		r.Gates = append(r.Gates, GateReport{Gate: g, ProcedureResult: operatorgates.ProcedureResult{Status: operator.Passed, Media: &operatorgates.MediaSummary{Status: operator.Passed}}, CallerStopped: true})
 	}
@@ -42,6 +42,8 @@ func TestRehearsalPassRule(t *testing.T) {
 		"pool missing":           func(r *Report) { r.Pool = nil },
 		"pool unknown":           func(r *Report) { r.Pool.Status = operator.Inconclusive },
 		"phase dropped":          func(r *Report) { r.Pool.DroppedPhases = 1 },
+		"relay call missing":     func(r *Report) { r.Pool.RelayCalls = 0 },
+		"relay counted twice":    func(r *Report) { r.Pool.RelayCalls = 2 },
 		"phase count":            func(r *Report) { r.Pool.IncludedPhases = 3 },
 		"submitted only":         func(r *Report) { r.Pool.QualifiedTakeovers = 9 },
 		"duplicates":             func(r *Report) { r.Pool.DuplicatePackets = 1 },
@@ -111,5 +113,32 @@ func TestReportSanitizesEveryTextSurface(t *testing.T) {
 	}
 	if strings.Contains(out.String(), secret) {
 		t.Fatal(out.String())
+	}
+}
+
+func TestRehearsalRejectsInconclusive(t *testing.T) {
+	for _, target := range []string{"gate", "pool"} {
+		r := passingReport()
+		if target == "gate" {
+			r.Gates[0].Status = operator.Inconclusive
+		} else {
+			r.Pool.Status = operator.Inconclusive
+		}
+		r.Evaluate()
+		if r.Verdict != operator.Failure {
+			t.Fatal("MUTATION: rehearsal-pass-accepts-inconclusive", target, r)
+		}
+	}
+}
+
+func TestRehearsalExemptionOnlyRelay(t *testing.T) {
+	r := passingReport()
+	// A non-relay gate cannot borrow the relay's two criterion exemptions even
+	// when it supplies every other field of a completed relay procedure.
+	r.Gates[0].Status = operator.Inconclusive
+	r.Gates[0].Process = r.Gates[3].Process
+	r.Evaluate()
+	if r.Verdict != operator.Failure || len(r.Exemptions) != 2 {
+		t.Fatal("MUTATION: rehearsal-exemption-widened", r)
 	}
 }

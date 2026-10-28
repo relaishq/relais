@@ -97,6 +97,11 @@ container rehearsal remain with their owning stages. See
 
 ## Public four-gate rehearsal
 
+The command calls `operatorgates.CheckReadiness()` before release reads or host
+effects. Incomplete replay or mutation accounting refuses with the specific
+`operator-readiness` reason. This accounting check does not establish rehearsal
+or calibration success. `TestRehearseRefusesIncompleteReadiness` pins the refusal.
+
 On a disposable Linux runner with systemd, Docker, ffmpeg, chrony and at least
 four allowed logical CPUs, build with `make operator-rehearsal-build`, then run
 `make operator-rehearsal OPERATOR_REHEARSAL_RUNNER='sudo -n'`. The command uses
@@ -125,6 +130,17 @@ stops, and scoped cleanup. Only `relayLocalTiming` and
 precondition errors, driver errors and dropped phases fail eligibility. Phase
 indices, exclusion codes and saturation overlap counts remain visible even
 when the judge cannot produce qualifying media totals.
+
+Relay deploy contributes one completed caller and zero events or trial metrics.
+Its call must complete with valid caller and generator evidence and no known
+media failures. The pool records `relayCalls: 1` separately and applies the
+unchanged trial judge only to the other phases. Other gates without trial
+collections remain excluded. `TestRelayCompletedCallContributesNoTrials` and
+`TestRelayPoolKeepsTrialPopulationUnchanged` pin these populations at both release
+commits via `TestPinnedReleaseJudgesMatchFrozenEvidence`.
+`TestFrozenRelayProcedureHasNoTrialReceipts` checks the frozen relay procedure
+fixtures; their media callbacks are canned summaries, so the raw zero-event
+caller case uses synthetic product reports.
 
 The workflow uploads only `runtime/operator-report/report.json` and
 `runtime/operator-report/host-diagnostics.log`. It records the tested commit

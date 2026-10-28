@@ -11,7 +11,7 @@
     {
       "file": "main.go",
       "sourceSHA256": "c6aef1d42288b9a8df52a4acf0e085e37982501f45e9da35e08e84853ea233bb",
-      "relocatedSHA256": "58d68a0f51c63b46f0647a20de17162ead857e5aadfaac8c08169d82a8aa73c2",
+      "relocatedSHA256": "7f582907b3e2333b62eefea460e32cc3c14410bccf6a58d9d4237f0d7983ca9b",
       "baselineRelocatedSHA256": "580e08dd655e517a6a2a0b392320e7e7f2dd17fd0a0a2f2eff3cad3f197abb86"
     },
     {
@@ -49,22 +49,27 @@
     "audio-only Video exception, all optional-ledger contexts covered by deletion/null regressions, and explicit time.Time scalar decoder accounting",
     "custom-decoder checks include map keys and named containers; optional contexts have passing controls and required contexts explicitly assert IncompleteEvidence",
     "historical takeover start is optional only via the shared ledger; independent signal receipt bounds remain required",
-    "reuse already validated product generator messages rather than decoding the same sample twice; validation and thresholds are unchanged"
+    "reuse already validated product generator messages rather than decoding the same sample twice; validation and thresholds are unchanged",
+    "relay-deploy alone qualifies one completed zero-event call with full caller and generator checks; relay calls never enter the unchanged trial judge; only explicit null empty Moves/armed collections are normalized for relay, while omitted fields remain invalid"
   ],
   "guardFiles": [
     {
       "file": "numbers.go",
-      "sha256": "1196b549b4b01061468b25ed8a26c5c8ad7523230c182b9a5ae91dd25c2ad658"
+      "sha256": "eb1c2a24b0c0895567e5d68874497112469d8757d7abefc3d4694d69d6eec206"
     },
     {
       "file": "collections.go",
-      "sha256": "d806b21072a8f854233cbdea4b88ce85811bf010481321cd9f2693c82c0bb783"
+      "sha256": "f9be3028d609037398943dbe704205c1c2de4923afb2f6abd5e5991c769bc79f"
+    },
+    {
+      "file": "relay.go",
+      "sha256": "c8032b9b06713a07fdac58bf82f31ac52e82735d86837efdf8ecf67dc1e4ecdc"
     }
   ],
   "fixtureHardening": "Synthetic controls carry complete armed inventories, both audio/video gap populations on every event, and mapped duration/classification records. Product judge policy and expected passing summary counts are unchanged. Video tracks include the product-emitted Video object; the expected passing summary remains unchanged.",
   "sharedDecoderContract": {
     "required.go": "7d91f285d5587491f4e707aabe24c40b7067a0c8fe512f0babb84c1d900295d1",
-    "evidence_optional.go": "2e301fec2a29b4d9777271de22bd05949ec65604026883a34986440823073c43",
+    "evidence_optional.go": "3851b243be861f34d086626b7ba63a407a7269be36633aa68a2c55c627c5b9d1",
     "canonical.go": "22cb1835297d4bf5c2afa264a22370f855897a9390dedfc30e305188a6f6e30e",
     "strict.go": "efdd1034a43eefff1b878cb53227ec77215e6bb6ae5b8badf3e67090fb8cd0d6"
   }

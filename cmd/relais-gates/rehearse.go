@@ -5,19 +5,25 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
 
+	"github.com/relaishq/relais/internal/operatorgates"
 	"github.com/relaishq/relais/internal/operatorgates/artifacts"
 	"github.com/relaishq/relais/internal/operatorrehearsal"
 )
 
 func rehearse(args []string) int {
+	return rehearseWithReadiness(args, operatorgates.CheckReadiness, os.Stderr)
+}
+
+func rehearseWithReadiness(args []string, check func() error, diagnostics io.Writer) int {
 	flags := flag.NewFlagSet("rehearse", flag.ContinueOnError)
-	flags.SetOutput(os.Stderr)
+	flags.SetOutput(diagnostics)
 	checkout := flags.String("checkout", ".", "public source checkout")
 	assets := flags.String("assets", "runtime/operator-releases", "verified release directory")
 	output := flags.String("output", "runtime/operator-report", "sanitized output directory")
@@ -29,6 +35,10 @@ func rehearse(args []string) int {
 	prepared := flags.Bool("prepared", false, "use releases from the separate release-read stage")
 	if flags.Parse(args) != nil || flags.NArg() != 0 {
 		return 2
+	}
+	if err := check(); err != nil {
+		fmt.Fprintln(diagnostics, err)
+		return 1
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -51,8 +61,8 @@ func rehearse(args []string) int {
 			if os.MkdirAll(abs(*output), 0700) == nil {
 				_ = r.Save(filepath.Join(abs(*output), "report.json"))
 			}
-			fmt.Fprintln(os.Stderr, "release-read-failed")
-			_ = r.Write(os.Stderr)
+			fmt.Fprintln(diagnostics, "release-read-failed")
+			_ = r.Write(diagnostics)
 			return 1
 		}
 	}
@@ -61,12 +71,12 @@ func rehearse(args []string) int {
 	}
 	executable, e := exec.LookPath(*compiler)
 	if e != nil {
-		fmt.Fprintln(os.Stderr, "compiler-unavailable")
+		fmt.Fprintln(diagnostics, "compiler-unavailable")
 		return 1
 	}
-	r, e := operatorrehearsal.Rehearse(ctx, operatorrehearsal.RehearseConfig{Checkout: abs(*checkout), Assets: abs(*assets), Output: abs(*output), GoExecutable: abs(executable), Commit: *commit, HeadCommit: *head, Event: *event}, os.Stderr)
+	r, e := operatorrehearsal.Rehearse(ctx, operatorrehearsal.RehearseConfig{Checkout: abs(*checkout), Assets: abs(*assets), Output: abs(*output), GoExecutable: abs(executable), Commit: *commit, HeadCommit: *head, Event: *event}, diagnostics)
 	if e != nil {
-		fmt.Fprintln(os.Stderr, "rehearsal-incomplete")
+		fmt.Fprintln(diagnostics, "rehearsal-incomplete")
 	}
 	if r.Write(os.Stdout) != nil || e != nil || r.Verdict != "passed" {
 		return 1
