@@ -192,10 +192,6 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 		return report, errors.New("boot-failed")
 	}
 	adapter := &Adapter{Topology: r.topology, Containers: r.deployment.ContainerIDs(), Runner: r.runner, Diagnostics: r.diagnostics}
-	if e = r.deployment.NegativeControls(ctx); e != nil {
-		r.recordError("negative-controls-failed", e)
-		return report, errors.New("negative-controls-failed")
-	}
 	if e = r.stage(ctx); e != nil {
 		r.recordError("setup-failed", e)
 		return report, errors.New("setup-failed")
@@ -219,6 +215,10 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 	r.process = &operatorgates.ProcessConfig{Parameters: r.parameters(), ArmedAt: armed, Trials: true, Pool: true}
 	r.runtime = &operatorgates.ProcessRuntime{Session: r.session, Peer: r.peer, Config: r.process, Architecture: "x86_64", Pins: r.pins, Bounds: &report.Bounds}
 	r.pool = &operatorgates.EvidenceRuntime{RunID: r.run, Judge: r.judge}
+	if e = r.deployment.NegativeControls(ctx, r.restoreControl); e != nil {
+		r.recordError("negative-controls-failed", e)
+		return report, errors.New("negative-controls-failed")
+	}
 	if e = r.calibrate(ctx); e != nil || !report.CPU.Calibration.Passed {
 		r.recordError("calibration-failed", e)
 		return report, errors.New("calibration-failed")
@@ -280,6 +280,7 @@ func (r *rehearsal) recordError(stage string, err error) {
 	r.report.Errors = append(r.report.Errors, stage)
 	var cause string
 	var path *os.PathError
+	var classified *operatorgates.ProcedureError
 	switch {
 	case err == nil:
 		cause = stage
@@ -289,6 +290,11 @@ func (r *rehearsal) recordError(stage string, err error) {
 		cause = "interrupted"
 	case errors.Is(err, context.DeadlineExceeded):
 		cause = "gate-deadline"
+	case errors.As(err, &classified):
+		cause = publicCode(classified.Code)
+		if classified.Category != "" {
+			cause = publicCode("precondition-failed:" + classified.Category)
+		}
 	default:
 		cause = publicCode(err.Error())
 	}

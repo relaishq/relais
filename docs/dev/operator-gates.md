@@ -207,6 +207,12 @@ control calls and reservations, plus two live, non-draining, locally empty
 workers, before the first gate. Precondition diagnostics identify the host,
 observation and fixed failure code; reports retain those categories. A caller
 proved never submitted needs no stop, while unknown starts still require proof.
+Each negative-control restore requires that same health proof before the next
+control. The missing-unit restore uses P3's `GatePrecondition` repair to prove
+empty, stop, replace and start the worker, clearing control's draining mark.
+Sanitized control-status lines record the flags and counts before repair, after
+every restore and after calibration. The boot-time ACL control's full deployment
+check runs once all hosts exist; no store management credential is retained.
 Calibration reserves two minutes for preparation: the unchanged loader supplies
 one initial clock probe and one every ten seconds, so ten-probe registration
 needs at least ninety seconds after loader startup. The media calibration runs

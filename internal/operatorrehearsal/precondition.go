@@ -2,6 +2,7 @@ package operatorrehearsal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -32,6 +33,10 @@ func (r *rehearsal) preconditionDiagnostic(slot, observation string, err error) 
 // Verify cleanup with fresh product observations before any gate caller exists.
 // Inactive systemd alone cannot prove that control and workers released a call.
 func (r *rehearsal) verifyIdle(ctx context.Context, end time.Duration) error {
+	return r.verifyIdleAt(ctx, end, "calibration")
+}
+
+func (r *rehearsal) verifyIdleAt(ctx context.Context, end time.Duration, stage string) error {
 	if err := r.runtime.Inventory(ctx, "from", end); err != nil {
 		return err
 	}
@@ -40,11 +45,10 @@ func (r *rehearsal) verifyIdle(ctx context.Context, end time.Duration) error {
 		r.preconditionDiagnostic(slot, observation, err)
 		return err
 	}
-	step, err := r.runtime.Step(ctx, "status", "shared", end, operatorgates.ProcessExtra{})
+	s, err := r.controlStatus(ctx, stage, end)
 	if err != nil {
 		return err
 	}
-	s := step.Status
 	if !s.Ready || s.LostCount != 0 {
 		return fail("shared", "status", "control-not-settled")
 	}
@@ -73,6 +77,53 @@ func (r *rehearsal) verifyIdle(ctx context.Context, end time.Duration) error {
 			return fail(name, "worker-status", name+"-not-empty")
 		}
 	}
-	_, _ = fmt.Fprintln(r.diagnostics, "calibration-idle-verified calls=0 reservations=0 workers=2 localSessions=0")
+	_, _ = fmt.Fprintf(r.diagnostics, "deployment-idle-verified stage=%s calls=0 reservations=0 workers=2 localSessions=0\n", stage)
 	return nil
+}
+
+// Keep only logical worker names, flags and counts, never addresses or call IDs.
+func (r *rehearsal) controlStatus(ctx context.Context, stage string, end time.Duration) (controlplane.Status, error) {
+	step, err := r.runtime.Step(ctx, "status", "shared", end, operatorgates.ProcessExtra{})
+	if err != nil {
+		return step.Status, err
+	}
+	type worker struct {
+		Name       string `json:"name"`
+		Dead       bool   `json:"dead"`
+		Recovering bool   `json:"recovering"`
+		Draining   bool   `json:"draining"`
+		Calls      int    `json:"calls"`
+	}
+	s := step.Status
+	view := struct {
+		Ready        bool     `json:"ready"`
+		Calls        int      `json:"calls"`
+		Reservations int      `json:"reservations"`
+		Workers      []worker `json:"workers"`
+	}{Ready: s.Ready, Calls: len(s.Calls), Reservations: s.Pool.Reservations, Workers: []worker{}}
+	for _, name := range []string{"w1", "w2"} {
+		for _, w := range s.Workers {
+			if w.Name == name {
+				view.Workers = append(view.Workers, worker{name, w.Dead, w.Recovering, w.Draining, w.Calls})
+			}
+		}
+	}
+	raw, _ := json.Marshal(view)
+	_, _ = fmt.Fprintf(r.diagnostics, "control-status stage=%s %s\n", stage, raw)
+	return s, nil
+}
+
+func (r *rehearsal) restoreControl(ctx context.Context, control string) error {
+	end := r.clock.Elapsed() + 5*time.Minute
+	if _, err := r.controlStatus(ctx, control+"-restore", end); err != nil {
+		return err
+	}
+	if control == "missing-unit" {
+		// SIGTERM marks draining in control. Restoring the file and process is
+		// followed by P3's empty/stop/replace/start repair, not a flag reset.
+		if err := operatorgates.GatePrecondition(ctx, r.process, r.ports(), end); err != nil {
+			return err
+		}
+	}
+	return r.verifyIdleAt(ctx, end, control+"-verified")
 }

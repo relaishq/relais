@@ -79,7 +79,7 @@ func TestCleanupOwnerCannotBeInheritedFromImage(t *testing.T) {
 
 func TestEveryGeneratedArgvExcludesSecrets(t *testing.T) {
 	d, runner := bootedFixture(t)
-	if err := d.NegativeControls(context.Background()); err != nil {
+	if err := d.NegativeControls(context.Background(), func(context.Context, string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	adapter := &Adapter{Topology: d.Topology, Containers: d.ContainerIDs(), Runner: &serialBootRunner{runner: runner}}
@@ -246,7 +246,7 @@ fi
 			}
 			runner := &clockControlRunner{dir: dir, removeComparison: row.removeComparison}
 			d := &Deployment{Topology: fixtureTopology(t), Runner: runner, Diagnostics: io.Discard, aclNegative: true, containerIDs: fixtureContainerIDs()}
-			err := d.NegativeControls(context.Background())
+			err := d.NegativeControls(context.Background(), func(context.Context, string) error { return nil })
 			if (err == nil) != row.pass {
 				t.Fatalf("wrong-source control accepted unrelated failure: success=%v expected=%v", err == nil, row.pass)
 			}

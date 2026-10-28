@@ -3,12 +3,60 @@ package operatorrehearsal
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/relaishq/relais/internal/operatorgates"
 )
+
+func TestNegativeControlsRequireEveryRestoreHealthCheck(t *testing.T) {
+	for _, failAt := range []string{"", "wrong-acl", "missing-credential", "missing-unit", "wrong-time-source"} {
+		t.Run(failAt, func(t *testing.T) {
+			var log bytes.Buffer
+			d := &Deployment{Topology: fixtureTopology(t), Runner: &bootRunner{}, Diagnostics: &log, aclNegative: true, containerIDs: fixtureContainerIDs()}
+			var checks []string
+			failure := &operatorgates.ProcedureError{Code: "precondition-failed:w1-draining"}
+			err := d.NegativeControls(context.Background(), func(_ context.Context, control string) error {
+				checks = append(checks, control)
+				if control == failAt {
+					return failure
+				}
+				return nil
+			})
+			want := []string{"wrong-acl", "missing-credential", "missing-unit", "wrong-time-source"}
+			if failAt != "" {
+				for i, control := range want {
+					if control == failAt {
+						want = want[:i+1]
+						break
+					}
+				}
+				if !errors.Is(err, failure) {
+					t.Fatal("health failure was discarded", err)
+				}
+				var diagnostics bytes.Buffer
+				r := &rehearsal{report: new(Report), diagnostics: &diagnostics}
+				r.recordError("negative-controls-failed", err)
+				if !strings.Contains(diagnostics.String(), "precondition-failed:w1-draining") {
+					t.Fatal("restore cause lost", diagnostics.String())
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Join(checks, ",") != strings.Join(want, ",") {
+				t.Fatal("control continued without health proof", checks, want)
+			}
+		})
+	}
+	d := &Deployment{aclNegative: true}
+	if err := d.NegativeControls(context.Background(), nil); err == nil {
+		t.Fatal("missing restore verifier accepted")
+	}
+}
 
 type credentialControlRunner struct {
 	dir            string
@@ -118,7 +166,7 @@ esac
 }
 func TestCredentialControlObservesAsynchronousRefusal(t *testing.T) {
 	d, r, diagnostics := credentialControlFixture(t, "async", "")
-	if err := d.NegativeControls(context.Background()); err != nil {
+	if err := d.NegativeControls(context.Background(), func(context.Context, string) error { return nil }); err != nil {
 		t.Fatal("MUTATION: credential-asynchronous-refusal", err, diagnostics.String())
 	}
 	data, err := os.ReadFile(filepath.Join(r.dir, "signal.token"))
@@ -147,7 +195,7 @@ func TestCredentialControlRejectsOtherOutcomesAndRestores(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			err := d.NegativeControls(context.Background())
+			err := d.NegativeControls(context.Background(), func(context.Context, string) error { return nil })
 			if row.reason == "" && err != nil || row.reason != "" && (err == nil || err.Error() != row.reason) {
 				t.Fatal("MUTATION: credential-refusal-result", err, diagnostics.String())
 			}
@@ -188,7 +236,7 @@ func TestMissingUnitControlRestoresAndVerifies(t *testing.T) {
 		t.Run(row.name, func(t *testing.T) {
 			d, r, diagnostics := credentialControlFixture(t, row.mode, row.restore)
 			r.control = "missing-unit"
-			err := d.NegativeControls(context.Background())
+			err := d.NegativeControls(context.Background(), func(context.Context, string) error { return nil })
 			if row.reason == "" && err != nil || row.reason != "" && (err == nil || err.Error() != row.reason) {
 				t.Fatal("unit control result", err, diagnostics.String())
 			}
@@ -268,7 +316,7 @@ func TestNegativeControlsRequireVerifiedHosts(t *testing.T) {
 	runner := &restoreVerifyRunner{}
 	var diagnostics bytes.Buffer
 	d := &Deployment{Topology: fixtureTopology(t), Runner: runner, Diagnostics: &diagnostics, aclNegative: true, containerIDs: fixtureContainerIDs()}
-	if err := d.NegativeControls(context.Background()); err == nil || err.Error() != "negative-control-verification-failed" {
+	if err := d.NegativeControls(context.Background(), func(context.Context, string) error { return nil }); err == nil || err.Error() != "negative-control-verification-failed" {
 		t.Fatal("host restore was assumed", err)
 	}
 	if !strings.Contains(diagnostics.String(), "verify-after-controls-shared failed exit_status=1") {
@@ -278,8 +326,14 @@ func TestNegativeControlsRequireVerifiedHosts(t *testing.T) {
 func TestNegativeControlEmptyCommandFailureHasContext(t *testing.T) {
 	for _, result := range []CommandResult{{Code: code(1)}, {}} {
 		var diagnostics bytes.Buffer
-		d := &Deployment{Topology: fixtureTopology(t), Runner: &fakeRunner{result: result}, Diagnostics: &diagnostics, aclNegative: true, containerIDs: fixtureContainerIDs()}
-		if err := d.NegativeControls(context.Background()); err == nil {
+		runner := commandRunner(func(_ context.Context, c Command) CommandResult {
+			if strings.HasPrefix(c.Label, "verify-after-controls-") {
+				return CommandResult{Code: code(0)}
+			}
+			return result
+		})
+		d := &Deployment{Topology: fixtureTopology(t), Runner: runner, Diagnostics: &diagnostics, aclNegative: true, containerIDs: fixtureContainerIDs()}
+		if err := d.NegativeControls(context.Background(), func(context.Context, string) error { return nil }); err == nil {
 			t.Fatal("empty failed command accepted")
 		}
 		for _, want := range []string{"host=shared", "unit=relais-signal.service", "credential=/run/relais/signal.token", "expected=", "exit_status="} {

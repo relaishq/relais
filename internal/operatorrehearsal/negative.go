@@ -22,9 +22,33 @@ func negativeScript(c negativeControl) (string, error) {
 // NegativeControls must run on a disposable booted deployment before any gate.
 // Each control demands a specific observed failure and verifies its restoration.
 // Failure stops setup; no fallback can qualify a gate.
-func (d *Deployment) NegativeControls(ctx context.Context) error {
+func (d *Deployment) NegativeControls(ctx context.Context, afterRestore func(context.Context, string) error) error {
 	if !d.aclNegative {
 		return errors.New("wrong-acl-control-not-run")
+	}
+	if afterRestore == nil {
+		return errors.New("negative-control-verification-failed")
+	}
+	verify := func(control string) error {
+		if err := afterRestore(ctx, control); err != nil {
+			return fmt.Errorf("negative-control-verification-failed: %w", err)
+		}
+		for _, slot := range Slots {
+			script, err := d.Topology.VerifyScript(slot)
+			if err != nil {
+				return err
+			}
+			if err = d.shell(ctx, slot, "verify-after-controls-"+slot, script); err != nil {
+				return errors.New("negative-control-verification-failed")
+			}
+		}
+		d.controlNote("control=" + control + " restore_health_verified=true")
+		return nil
+	}
+	// The ACL control runs before any host exists, while setup's store admin
+	// still exists. Finish its deployment health proof once all hosts are booted.
+	if err := verify("wrong-acl"); err != nil {
+		return err
 	}
 	for _, row := range []negativeControl{
 		{"shared", "missing-credential", "relais-signal.service", "/run/relais/signal.token", "/run/relais/signal.token", "failed-with-EXIT_CREDENTIALS-243-and-no-process"},
@@ -54,14 +78,8 @@ func (d *Deployment) NegativeControls(ctx context.Context) error {
 			}
 			return errors.New("negative-control-command-unconfirmed")
 		}
-	}
-	for _, slot := range Slots {
-		script, err := d.Topology.VerifyScript(slot)
-		if err != nil {
+		if err = verify(row.name); err != nil {
 			return err
-		}
-		if err = d.shell(ctx, slot, "verify-after-controls-"+slot, script); err != nil {
-			return errors.New("negative-control-verification-failed")
 		}
 	}
 	return nil
