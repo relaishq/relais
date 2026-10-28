@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/operatorgates/observe"
+	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/operator"
@@ -21,7 +22,8 @@ const ConsentWindow = 60 * time.Second
 const maxSafeEpoch = 1<<53 - 1
 
 // These interfaces are the integration boundary for the caller and evidence
-// owners. Neither may advance a gate, restore a host or retry an unknown effect.
+// owners. CallerRuntime implements the broker seam with operatorcaller.Broker.
+// Neither may advance a gate, restore a host or retry an unknown effect.
 type Registration struct {
 	Near            bool     `json:"near"`
 	Sessions        []string `json:"sessions"`
@@ -29,13 +31,8 @@ type Registration struct {
 	ReadyObservedAt *int64   `json:"readyObservedAt,omitempty"`
 	MediaStartedAt  *int64   `json:"mediaStartedAt,omitempty"`
 }
-type Identity struct {
-	RunID       string `json:"run_id"`
-	OperationID string `json:"operation_id"`
-	SessionID   string `json:"session_id"`
-	Worker      string `json:"worker"`
-	Epoch       uint64 `json:"epoch"`
-}
+type Identity = callharness.OperationIdentity
+
 type Receipt struct {
 	Identity  Identity        `json:"identity"`
 	Kind      string          `json:"kind"`
@@ -272,7 +269,7 @@ func validCall(c controlplane.CallStatus) bool {
 	return c.ID != "" && (c.Owner == "w1" || c.Owner == "w2") && c.Epoch > 0 && c.Epoch <= maxSafeEpoch
 }
 func (g *procedure) identity(c controlplane.CallStatus, op string) Identity {
-	return Identity{g.p.Broker.RunID(), op, c.ID, c.Owner, c.Epoch}
+	return Identity{RunID: g.p.Broker.RunID(), OperationID: op, SessionID: c.ID, Worker: c.Owner, Epoch: c.Epoch}
 }
 func (g *procedure) arm(ctx context.Context, id Identity) error {
 	return g.armIdentities(ctx, id.OperationID, []Identity{id})

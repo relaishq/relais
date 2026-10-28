@@ -7,7 +7,9 @@ import (
 	"strings"
 )
 
-func paths(data []byte, contract Contract) error {
+// Require checks field presence only; Decode and DecodeLimit additionally
+// enforce unique canonical members and product-owned JSON types.
+func Require(data []byte, contract Contract) error {
 	for _, field := range contract {
 		if err := present(data, strings.Split(field, ".")); err != nil {
 			return fmt.Errorf("%s: %w", field, err)

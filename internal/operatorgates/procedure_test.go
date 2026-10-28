@@ -767,7 +767,12 @@ func TestCollectionUnknownStopsObservationsAndPreservesFailure(t *testing.T) {
 				s := controlplane.Status{Ready: true, Calls: []controlplane.CallStatus{{ID: "original", Owner: "w1", Epoch: 1}}, Workers: []controlplane.WorkerStatus{{Name: "w1", Address: g.c.Parameters.Workers["w1"].Media}, {Name: "w2", Address: g.c.Parameters.Workers["w2"].Media}}, Pool: controlplane.PoolSample{Cap: 2}}
 				return MeasurementObservation{Status: &s, Local: map[string]mediaworker.WorkerStatus{"w1": {InventoryKnown: true, Sessions: 1, Inventory: []mediaworker.InstalledSession{{ID: "original", Epoch: 1, Owner: g.c.Parameters.Workers["w1"].Media}}}, "w2": {InventoryKnown: true, Inventory: []mediaworker.InstalledSession{}}}}, nil
 			}
-			p.Collect = func(context.Context, time.Duration) <-chan MeasurementCollection { return collected }
+			p.Collect = func(ctx context.Context, _ time.Duration) <-chan MeasurementCollection {
+				if failure == "none" {
+					go func() { <-ctx.Done(); close(collected) }()
+				}
+				return collected
+			}
 			p.Sleep = func(_ context.Context, d time.Duration) error {
 				clock.Advance(d)
 				// Retain terminal evidence that arrives after the unknown observation.

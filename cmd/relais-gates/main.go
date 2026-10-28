@@ -3,14 +3,18 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorgates"
+	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/internal/operatortransport"
 	"github.com/relaishq/relais/pkg/buildinfo"
 	"github.com/relaishq/relais/pkg/operator"
@@ -29,6 +33,78 @@ func run() int {
 			return 2
 		}
 		if operatortransport.NewCodec(os.Stdin, os.Stdout).Write(operator.Frame{Type: "hello", Hello: &hello}) != nil {
+			return 1
+		}
+		return 0
+	case "caller-host":
+		if len(os.Args) != 2 {
+			return 2
+		}
+		host, err := operatorcaller.CollectHost(context.Background())
+		if err != nil {
+			return 1
+		}
+		if json.NewEncoder(os.Stdout).Encode(host) != nil {
+			return 1
+		}
+		return 0
+	case "caller":
+		flags := flag.NewFlagSet("caller", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		config := flags.String("config", "", "caller configuration")
+		mailbox := flags.String("mailbox", "", "scoped directory mailbox")
+		load := flags.String("load", "", "verified relais-load executable")
+		adapter := flags.String("adapter", "", "absolute mailbox adapter executable")
+		spool := flags.String("spool", "", "agreed mailbox blob spool")
+		expected := flags.String("identity", "", "preallocated identity JSON")
+		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 {
+			return 2
+		}
+		raw, err := os.ReadFile(*config)
+		if err != nil {
+			return 1
+		}
+		var c operatorcaller.BridgeConfig
+		if observe.Decode(raw, &c, observe.Contract{"identity", "bind", "certificateFile", "loadSHA256"}) != nil {
+			return 1
+		}
+		if *expected != "" {
+			var i operatorcaller.Identity
+			if observe.Decode([]byte(*expected), &i, nil) != nil || i != c.Identity {
+				return 1
+			}
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		var box operatorcaller.Store
+		if (*mailbox == "") == (*adapter == "") {
+			return 2
+		}
+		if *adapter != "" {
+			var root *os.Root
+			if *spool != "" {
+				root, err = os.OpenRoot(*spool)
+				if err != nil {
+					return 1
+				}
+				defer root.Close()
+			}
+			peer, e := operatortransport.Start(ctx, *adapter, nil)
+			if e != nil {
+				return 1
+			}
+			defer func() { cancel(); _ = peer.Close(); _ = peer.Wait() }()
+			box = &operatorcaller.ProtocolMailbox{Peer: peer, Session: c.Identity.CallerID, Spool: root, End: time.Now().Add(20 * time.Minute)}
+		} else {
+			directory, e := operatorcaller.OpenDirectory(*mailbox)
+			if e != nil {
+				return 1
+			}
+			defer directory.Close()
+			box = directory
+		}
+		if operatorcaller.RunBridge(ctx, c, box, *load) != nil {
+			fmt.Fprintln(os.Stderr, "caller-incomplete")
 			return 1
 		}
 		return 0
