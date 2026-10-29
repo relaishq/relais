@@ -297,7 +297,10 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 		return Format{Reads: slices.Clone(reads), Writes: writes, Continues: []int{legacy, v2, control, split}}
 	}
 	common := func() map[string]Format {
-		return map[string]Format{"private_http": {Reads: []int{m.HTTPContract}, Writes: []int{m.HTTPContract}, Continues: []int{m.HTTPContract}}}
+		// Version 3 adds optional responses and dial-out-only endpoints. Inbound
+		// requests retain v2 bodies. Older tools validate every profile, including
+		// unselected ones, so mode support uses profiles in the existing v2 schema.
+		return map[string]Format{"private_http": {Reads: []int{2, m.HTTPContract}, Writes: []int{2}, Continues: []int{2, m.HTTPContract}}}
 	}
 	platform := func() map[string]Format {
 		fs := common()
@@ -322,7 +325,7 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 	}
 	worker := func(enabled, bridge bool) Profile {
 		fs := platform()
-		fs["relay_udp"] = Format{Reads: []int{m.UDPContract}, Writes: []int{m.UDPContract}, Continues: []int{m.UDPContract}}
+		fs["relay_udp"] = Format{Reads: []int{1, m.UDPContract}, Writes: []int{1}, Continues: []int{1, m.UDPContract}}
 		writes := []int{legacy, v2, control}
 		if enabled {
 			writes = append(writes, split)
@@ -345,10 +348,15 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 	cp := worker(false, false)
 	cp.Formats["snapshot"] = state(nil)
 	relayProfile := Profile{Formats: platform()}
-	relayProfile.Formats["relay_udp"] = Format{Reads: []int{m.UDPContract}, Writes: []int{m.UDPContract}, Continues: []int{m.UDPContract}}
+	relayProfile.Formats["relay_udp"] = Format{Reads: []int{1, m.UDPContract}, Writes: []int{1}, Continues: []int{1, m.UDPContract}}
 	delete(cp.Formats, "relay_udp")
 	m.Roles = map[string]map[string]Profile{"worker": {"legacy": worker(false, false), "split": worker(true, false)}, "control": {"default": cp}, "relay": {"default": relayProfile}, "signal": {"default": {Formats: common()}}}
 
+	// The dial-out profile selects worker_link v1 plus leg binding support.
+	// Both modes still exchange the existing private API and media payloads.
+	m.Roles["worker"]["dial-out"] = worker(false, false)
+	m.Roles["control"]["dial-out"] = cp
+	m.Roles["relay"]["dial-out"] = relayProfile
 	if bridgeRegistered {
 		m.Roles["worker"]["bridge"] = worker(true, true)
 	}

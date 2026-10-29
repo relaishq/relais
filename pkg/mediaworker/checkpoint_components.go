@@ -27,7 +27,7 @@ func (c *sessionCheckpoint) componentAdmission(data []byte) (componentSizes, err
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return componentSizes{}, err
 	}
-	m := componentMetadata{Format: 10, Owner: s.worker.localAddr.String()}
+	m := componentMetadata{Format: 10, Owner: s.worker.LocalAddr().String()}
 	return c.componentBudgets().admit(sessionComponents(wire.Components), m)
 }
 

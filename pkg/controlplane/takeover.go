@@ -339,7 +339,9 @@ func (p *Plane) Replace(name string, addr netip.AddrPort, worker Worker) error {
 			return errors.New("controlplane: duplicate worker address")
 		}
 	}
-	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: newWorkerObservation(time.Now(), false)}
+	observation := newWorkerObservation(time.Now(), false)
+	observation.linkDown = p.workerUsesLink(name, worker)
+	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: observation}
 	p.mu.Unlock()
 	if w, ok := worker.(interface{ StartHeartbeats(mediaworker.Heartbeats) }); ok {
 		w.StartHeartbeats(p)

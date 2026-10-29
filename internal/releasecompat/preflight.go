@@ -57,8 +57,8 @@ func Preflight(pool Pool, target Manifest, operation string) Verdict {
 	if pool.Schema != 1 || !pool.Complete || len(pool.Participants) == 0 || len(pool.Participants) > 256 {
 		return fail(refuse("unknown_inventory", "complete bounded inventory is required"))
 	}
-	if pool.TargetWorkerProfile != "legacy" && pool.TargetWorkerProfile != "split" && pool.TargetWorkerProfile != "bridge" {
-		return fail(refuse("unknown_profile", "target_worker_profile must be legacy, split or bridge"))
+	if pool.TargetWorkerProfile != "legacy" && pool.TargetWorkerProfile != "split" && pool.TargetWorkerProfile != "bridge" && pool.TargetWorkerProfile != "dial-out" {
+		return fail(refuse("unknown_profile", "target_worker_profile must be legacy, split, bridge or dial-out"))
 	}
 	current := slices.Clone(pool.Participants)
 	names, roles := map[string]bool{}, map[string]int{}
@@ -90,7 +90,7 @@ func Preflight(pool Pool, target Manifest, operation string) Verdict {
 		if !ok {
 			return fail(refuse("unknown_profile", p.Name))
 		}
-		if p.Role == "worker" && (p.Profile != "legacy" && p.Profile != "split" && p.Profile != "bridge" || len(p.Agents) == 0) {
+		if p.Role == "worker" && (p.Profile != "legacy" && p.Profile != "split" && p.Profile != "bridge" && p.Profile != "dial-out" || len(p.Agents) == 0) {
 			return fail(refuse("unknown_agent", "worker requires an explicit profile and agent inventory"))
 		}
 		if p.Role == "worker" && slices.Contains(p.Agents, "bridge") && (p.Profile != "bridge" || pool.TargetWorkerProfile != "bridge") {
@@ -134,6 +134,21 @@ func Preflight(pool Pool, target Manifest, operation string) Verdict {
 			return fail(refuse("unknown_inventory", "missing "+role+" participant"))
 		}
 	}
+	for _, participant := range current {
+		if participant.Role != "worker" {
+			continue
+		}
+		if participant.Profile == "dial-out" {
+			if !supportsDialOut(target, "worker") || !supportsDialOut(target, "control") || !supportsDialOut(target, "relay") {
+				return fail(refuse("dial_out_unsupported", "drain and remove dial-out registrations before rolling below dial-out support"))
+			}
+			if pool.TargetWorkerProfile != "legacy" && pool.TargetWorkerProfile != "dial-out" {
+				return fail(refuse("unknown_profile", "dial-out currently supports the legacy checkpoint profile"))
+			}
+		} else if pool.TargetWorkerProfile == "dial-out" {
+			return fail(refuse("worker_mode_change", "changing connection mode requires replacement under a new worker name"))
+		}
+	}
 	if err := checkState(current, retained); err != nil {
 		return fail(err)
 	}
@@ -149,6 +164,9 @@ func Preflight(pool Pool, target Manifest, operation string) Verdict {
 		profileName := "default"
 		if p.Role == "worker" {
 			profileName = pool.TargetWorkerProfile
+			if p.Profile == "dial-out" {
+				profileName = "dial-out"
+			}
 		}
 		profile, ok := target.Roles[p.Role][profileName]
 		if !ok {
@@ -216,6 +234,10 @@ func findAgent(m Manifest, name string) (Agent, bool) {
 	return Agent{}, false
 }
 func checkState(participants []Participant, retained map[string][]int) error {
+	if err := checkDialOut(participants); err != nil {
+		return err
+	}
+
 	for i, a := range participants {
 		for _, b := range participants[i+1:] {
 			higher, lower := a.Manifest, b.Manifest
@@ -294,3 +316,36 @@ func checkState(participants []Participant, retained map[string][]int) error {
 }
 
 func bridgeDomain(s string) bool { return s == "bridge_output" || s == "bridge_output_move" }
+
+func supportsDialOut(m Manifest, role string) bool {
+	profile, ok := m.Roles[role]["dial-out"]
+	if !ok || m.HTTPContract < 3 || m.UDPContract < 2 {
+		return false
+	}
+	if !slices.Contains(profile.Formats["private_http"].Reads, 3) {
+		return false
+	}
+	return role == "control" || slices.Contains(profile.Formats["relay_udp"].Reads, 2)
+}
+func checkDialOut(participants []Participant) error {
+	required := false
+	for _, p := range participants {
+		if p.Role == "worker" && p.Profile == "dial-out" {
+			required = true
+			if !supportsDialOut(p.Manifest, "worker") {
+				return refuse("dial_out_unsupported", "worker release lacks the command-link profile")
+			}
+		}
+	}
+	if !required {
+		return nil
+	}
+	for _, p := range participants {
+		if p.Role == "relay" || p.Role == "control" {
+			if !supportsDialOut(p.Manifest, p.Role) {
+				return refuse("dial_out_unsupported", "upgrade relay and control before adding dial-out workers")
+			}
+		}
+	}
+	return nil
+}

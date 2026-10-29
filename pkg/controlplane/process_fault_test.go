@@ -83,6 +83,7 @@ func (f *lostReply) requests() []mediaworker.ResumeRequest {
 }
 
 type httpSystem struct {
+	links       *controlplane.WorkerLinks
 	plane       *controlplane.Plane
 	relay       *relay.Relay
 	workers     []*mediaworker.Worker
@@ -96,6 +97,9 @@ func newHTTPSystem(t *testing.T, source, target, routing *lostReply, counts ...i
 }
 
 type httpSystemSettings struct {
+	dialOut             bool
+	dropLinkExport      *atomic.Bool
+	sourceLinkResumes   *atomic.Uint64
 	workerStores        []sessionstore.Store
 	sourceHeartbeatGate *atomic.Bool
 	holdTimeout         time.Duration
@@ -127,7 +131,11 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 		rr.Client = &http.Client{Transport: routing, Timeout: 2 * time.Second}
 	}
 	plane := controlplane.New(rr, store)
-	system := &httpSystem{plane: plane, relay: r, diagnostics: settings.diagnostics}
+	var links *controlplane.WorkerLinks
+	if settings.dialOut {
+		links = plane.ConfigureDialOut([]string{"0"}, rr)
+	}
+	system := &httpSystem{plane: plane, relay: r, links: links, diagnostics: settings.diagnostics}
 	count := 2
 	if len(counts) > 0 {
 		count = counts[0]
@@ -138,7 +146,7 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 		if i < len(settings.workerStores) && settings.workerStores[i] != nil {
 			workerStore = settings.workerStores[i]
 		}
-		w, err := mediaworker.New(mediaworker.Config{ListenAddr: "127.0.0.1:0", Agent: settings.agent, FrameCache: settings.cache, PacketTrace: settings.packetTrace, Relay: &mediaworker.RelayConfig{Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr(), Owners: workerStore}})
+		w, err := mediaworker.New(mediaworker.Config{ListenAddr: "127.0.0.1:0", Agent: settings.agent, FrameCache: settings.cache, PacketTrace: settings.packetTrace, Relay: &mediaworker.RelayConfig{Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr(), Owners: workerStore, DialOut: settings.dialOut && i == 0}})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, w.Close()) })
 		ws := httptest.NewServer(w.PrivateHandler())
@@ -157,14 +165,61 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 		if i == 1 && settings.targetTransport != nil {
 			rw.Client = &http.Client{Transport: settings.targetTransport, Timeout: 2 * time.Second}
 		}
-		require.NoError(t, rr.AddWorker(context.Background(), w.LocalAddr()))
-		require.NoError(t, plane.Register(name, w.LocalAddr(), rw))
+		if !settings.dialOut || i != 0 {
+			require.NoError(t, rr.AddWorker(context.Background(), w.LocalAddr()))
+			require.NoError(t, plane.Register(name, w.LocalAddr(), rw))
+		}
 		system.workers = append(system.workers, w)
 		system.remote = append(system.remote, rw)
 	}
-	ps := httptest.NewServer(plane.ProcessHandler())
+	handler := plane.ProcessHandler()
+	if links != nil {
+		handler = links.Handler(handler)
+	}
+	if settings.dialOut && settings.sourceHeartbeatGate != nil {
+		next := handler
+		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/private/workers/0/heartbeat" && settings.sourceHeartbeatGate.Load() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+	ps := httptest.NewUnstartedServer(handler)
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	ps.Config.Protocols = protocols
+	ps.Start()
 	t.Cleanup(ps.Close)
+	if links != nil {
+		linkCtx, stop := context.WithCancel(context.Background())
+		handler := system.workers[0].PrivateHandler()
+		link := &controlplane.DialOut{URL: ps.URL, Name: "0", Worker: system.workers[0], Ready: make(chan struct{}), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/resume" && settings.sourceLinkResumes != nil {
+				settings.sourceLinkResumes.Add(1)
+			}
+			if strings.HasSuffix(r.URL.Path, "/export") && settings.dropLinkExport != nil && settings.dropLinkExport.CompareAndSwap(true, false) {
+				handler.ServeHTTP(httptest.NewRecorder(), r)
+				links.Drop("0") // Commit export, then lose the actual command stream.
+				return
+			}
+			handler.ServeHTTP(w, r)
+		})}
+		stopped := make(chan struct{})
+		go func() { defer close(stopped); _ = link.Run(linkCtx) }()
+		t.Cleanup(func() { stop(); <-stopped })
+		select {
+		case <-link.Ready:
+		case <-time.After(3 * time.Second):
+			t.Fatal("link admission timed out")
+		}
+	}
 	for i := range count {
+		if settings.dialOut && i == 0 {
+			continue
+		}
 		name := strconv.Itoa(i)
 		var heartbeats mediaworker.Heartbeats = &controlplane.RemoteHeartbeats{URL: ps.URL, Name: name}
 		if i == 0 && settings.sourceHeartbeatGate != nil {
@@ -409,4 +464,70 @@ func TestHTTPThreeWorkerRetryChangesTarget(t *testing.T) {
 			require.True(t, fault.dropped.Load())
 		})
 	}
+}
+
+func TestDialOutLostExportReplyUsesFencedRecovery(t *testing.T) {
+	var drop atomic.Bool
+	var sourceResumes atomic.Uint64
+	target := &lostReply{path: "/never"}
+	s := newHTTPSystemWithSettings(t, nil, target, nil, httpSystemSettings{dialOut: true, dropLinkExport: &drop, sourceLinkResumes: &sourceResumes})
+	report := flowingCall(t, s, func(ctx context.Context, call *callharness.Call) {
+		before, err := s.plane.Status(ctx)
+		require.NoError(t, err)
+		require.Len(t, before.Calls, 1)
+		drop.Store(true)
+		move, err := s.plane.Move(ctx, call.SessionID(), "1")
+		require.NoError(t, err)
+		require.Equal(t, "takeover", move.Kind)
+		after, err := s.plane.Status(ctx)
+		require.NoError(t, err)
+		require.Len(t, after.Calls, 1)
+		require.Greater(t, after.Calls[0].Epoch, before.Calls[0].Epoch)
+		require.Equal(t, "1", after.Calls[0].Owner)
+		require.Zero(t, after.LostCount)
+	})
+	require.False(t, drop.Load(), "fault must run inside the committed export handler")
+	require.Len(t, target.requests(), 1, "recover once, never resume a second time")
+	require.Zero(t, sourceResumes.Load(), "do not resume the exported source")
+	require.Zero(t, report.DecryptionFailures.Total())
+}
+
+func TestDialOutDeadWorkerRejoinsBeforeCallReturns(t *testing.T) {
+	var blocked atomic.Bool
+	s := newHTTPSystemWithSettings(t, nil, nil, nil, httpSystemSettings{dialOut: true, sourceHeartbeatGate: &blocked})
+	report := flowingCall(t, s, func(ctx context.Context, call *callharness.Call) {
+		status0 := func() controlplane.WorkerStatus {
+			status, err := s.plane.Status(ctx)
+			require.NoError(t, err)
+			for _, worker := range status.Workers {
+				if worker.Name == "0" {
+					return worker
+				}
+			}
+			t.Fatal("source missing from status")
+			return controlplane.WorkerStatus{}
+		}
+		blocked.Store(true)
+		require.Eventually(t, func() bool { status, err := s.plane.Status(ctx); return err == nil && len(status.Takeovers) == 1 }, 3*time.Second, 20*time.Millisecond)
+		before := status0()
+		require.True(t, before.Dead)
+		require.NotNil(t, before.Link)
+		s.links.Drop("0")
+		require.Eventually(t, func() bool {
+			worker := status0()
+			return worker.Link != nil && worker.Link.Connected && worker.Link.Reconnects > before.Link.Reconnects
+		}, 3*time.Second, 20*time.Millisecond)
+		require.True(t, status0().Dead, "reconnected hello must not acknowledge rejoin")
+		blocked.Store(false)
+		require.Eventually(t, func() bool { return !status0().Dead }, 2*time.Second, 20*time.Millisecond)
+		require.Zero(t, s.workers[0].SessionCount(), "real heartbeat rejoin must clear stale installed sessions")
+		move, err := s.plane.Move(ctx, call.SessionID(), "0")
+		require.NoError(t, err)
+		require.Equal(t, "move", move.Kind)
+		status, err := s.plane.Status(ctx)
+		require.NoError(t, err)
+		require.Len(t, status.Takeovers, 1)
+		require.Zero(t, status.LostCount)
+	})
+	require.Zero(t, report.DecryptionFailures.Total())
 }

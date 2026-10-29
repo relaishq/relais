@@ -55,6 +55,10 @@ type envelopeError struct {
 func (e *envelopeError) Error() string   { return e.message }
 func (e *envelopeError) Unwrap() []error { return e.causes }
 
+// ErrNotSent proves no handler applied the command, either by a local
+// pre-send rejection or an explicit peer refusal before dispatch.
+var ErrNotSent = errors.New("privateapi: request not sent")
+
 // ErrUncertain means the request may have committed without a usable reply.
 var ErrUncertain = errors.New("privateapi: operation outcome uncertain")
 
@@ -96,20 +100,27 @@ func Write(w http.ResponseWriter, value any) {
 
 func Error(w http.ResponseWriter, err error, codes map[string]error) {
 	f := Failure{Code: "internal", Message: err.Error()}
-	for code, sentinel := range CommonErrors {
-		if errors.Is(err, sentinel) {
-			f.Code = code
-			break
+	// Preserve domain-code precedence, with deterministic selection within
+	// each table when joined errors match more than one sentinel.
+	for _, table := range []map[string]error{CommonErrors, codes} {
+		names := make([]string, 0, len(table))
+		for code := range table {
+			names = append(names, code)
+		}
+		sort.Strings(names)
+		for _, code := range names {
+			if errors.Is(err, table[code]) {
+				f.Code = code
+				break
+			}
 		}
 	}
-	for code, sentinel := range codes {
-		if errors.Is(err, sentinel) {
-			f.Code = code
-			break
-		}
+	// Explicit uncertainty dominates retryable or definitive component causes.
+	if errors.Is(err, ErrUncertain) {
+		f.Code = "uncertain"
 	}
 	var transient *sessionstore.TransientError
-	if errors.As(err, &transient) {
+	if !errors.Is(err, ErrUncertain) && errors.As(err, &transient) {
 		f.Code, f.Candidate = "transient", transient.Candidate
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -168,6 +179,9 @@ func do(ctx context.Context, client *http.Client, base, method, path string, inp
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
+		if errors.Is(err, ErrNotSent) {
+			return err
+		}
 		return Uncertain(err)
 	}
 	defer func() { _ = resp.Body.Close() }()

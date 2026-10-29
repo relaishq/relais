@@ -211,7 +211,7 @@ func (p *Plane) saveRegistration(ctx context.Context, name string, addr netip.Ad
 	if !ok {
 		return errors.New("controlplane: managed worker requires HTTP observation")
 	}
-	return p.controlRecord(ctx, "worker:"+name, FixedWorker{Name: name, URL: remote.URL, Address: addr})
+	return p.controlRecord(ctx, "worker:"+name, FixedWorker{Name: name, URL: p.workerEndpoint(name, remote), Address: addr})
 }
 
 // AuthorityChanges wakes relay registration when a lease becomes usable.
@@ -225,6 +225,9 @@ func (p *Plane) AuthorityChanges() <-chan struct{} {
 // BeginShutdown pauses work while the lease keeper protects handlers that are
 // still draining. The caller cancels RunManaged only after handlers stop.
 func (p *Plane) BeginShutdown() {
+	if p.links != nil {
+		p.links.Close()
+	}
 	if p.restart == nil {
 		return
 	}
@@ -521,7 +524,11 @@ func restartWait(ctx context.Context, delay time.Duration) bool {
 }
 
 func (p *Plane) discoverWorker(ctx context.Context, fixed FixedWorker, saved *FixedWorker) error {
-	worker := &RemoteWorker{URL: fixed.URL}
+	if fixed.URL == "dial-out" {
+		return nil
+	} // Registration arrives on the pushed link.
+
+	worker := p.remoteWorker(fixed)
 	bounded, cancel := context.WithTimeout(ctx, time.Second)
 	status, err := worker.Status(bounded)
 	cancel()
@@ -619,7 +626,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 			if value, ok := saved[worker.Name]; ok {
 				old = &value
 			}
-			remote := &RemoteWorker{URL: worker.URL}
+			remote := p.remoteWorker(worker)
 			bounded, stop := context.WithTimeout(ctx, rebuildStatusTimeout)
 			status, statusErr := remote.Status(bounded)
 			stop()
@@ -1080,4 +1087,21 @@ func (p *Plane) reconcileCreate(ctx context.Context, key string, worker *registr
 	}
 	p.restartOutcome("create", strings.TrimPrefix(key, "create:"), "reconciled", "interrupted")
 	return nil
+}
+
+func (p *Plane) remoteWorker(fixed FixedWorker) *RemoteWorker {
+	if fixed.URL == "dial-out" && p.links != nil {
+		if e := p.links.entries[fixed.Name]; e != nil {
+			return e.remote
+		}
+	}
+	return &RemoteWorker{URL: fixed.URL}
+}
+func (p *Plane) workerEndpoint(name string, remote *RemoteWorker) string {
+	if p.links != nil {
+		if e := p.links.entries[name]; e != nil && e.remote == remote {
+			return "dial-out"
+		}
+	}
+	return remote.URL
 }

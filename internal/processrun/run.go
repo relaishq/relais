@@ -148,7 +148,10 @@ func Ready(fields map[string]any) {
 	_ = json.NewEncoder(os.Stdout).Encode(fields)
 }
 func Serve(ctx context.Context, listener net.Listener, handler http.Handler) error {
-	server := &http.Server{Handler: movediag.Handler(handler), ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second, IdleTimeout: 10 * time.Second}
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	server := &http.Server{Protocols: protocols, HTTP2: &http.HTTP2Config{SendPingTimeout: 500 * time.Millisecond, PingTimeout: time.Second}, Handler: movediag.Handler(handler), ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second, IdleTimeout: 10 * time.Second}
 	done := make(chan error, 1)
 	go func() { done <- server.Serve(listener) }()
 	select {

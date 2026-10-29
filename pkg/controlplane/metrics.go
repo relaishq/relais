@@ -29,6 +29,17 @@ func (p *Plane) metricSamples() []metrics.Sample {
 		sample.Labels = prometheus.Labels{"cause": cause}
 		losses = append(losses, sample)
 	}
+	var reconnects uint64
+	var downtime float64
+	for _, w := range p.workers {
+		if link := p.linkStatusLocked(w); link != nil {
+			reconnects += link.Reconnects
+			downtime += link.DownSeconds
+		}
+	}
+	downMetric := metrics.Gauge("relais_control_worker_link_down_seconds", "Cumulative command link downtime across registered workers.", 0)
+	downMetric.Value = downtime
+	losses = append(losses, metrics.Counter("relais_control_worker_link_reconnects_total", "Accepted worker command link reconnects.", reconnects), downMetric)
 	pool := p.poolLocked(time.Now())
 	p.mu.Unlock()
 	losses = append(losses, poolMetrics(pool)...)

@@ -20,6 +20,7 @@ var RemoteErrors = map[string]error{
 	"control_not_ready": agentv2.ErrControlNotReady,
 	"control_rejected":  agentv2.ErrControlRejected,
 	"control_stale":     agentv2.ErrControlStale, "control_unsupported": agentv2.ErrControlUnsupported,
+	"stale_tenure":    ErrStaleTenure,
 	"unknown_session": ErrUnknownSession, "unsupported_offer": ErrUnsupportedOffer,
 	"worker_draining": ErrDraining,
 	"closed":          ErrClosed, "not_established": ErrNotEstablished,
