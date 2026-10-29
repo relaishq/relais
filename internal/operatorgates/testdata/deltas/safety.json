@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "origin": "Independent owner-invariant witnesses; these are not frozen TypeScript output.",
+  "scenario": "Retained history and unknown observation safety",
+  "expectedTestResult": "passed",
+  "events": [
+    {"id": 1, "kind": "request", "operation": "processes.freshTakeovers", "inputs": [{"id":"original","from":"w1","to":"w2","kind":"takeover","end":"1970-01-01T00:00:01Z"}]},
+    {"id": 1, "kind": "result", "operation": "processes.freshTakeovers", "value": 0},
+    {"id": 2, "kind": "request", "operation": "processes.relay", "inputs": [2]},
+    {"id": 2, "kind": "result", "operation": "processes.relay", "value": {"reason":"command-result-unknown","reads":2,"calls":4,"elapsed":0}},
+    {"id": 3, "kind": "request", "operation": "measure.store", "inputs": [2]},
+    {"id": 3, "kind": "result", "operation": "measure.store", "value": {"reason":"command-result-unknown","reads":2,"failovers":1}}
+  ]
+}

@@ -824,3 +824,36 @@ func TestRetentionCannotExtendCollectionDeadline(t *testing.T) {
 		t.Fatal("MUTATION: retention-collection-deadline", raw, err, b.collected)
 	}
 }
+
+func TestFailoverDurationAdmission(t *testing.T) {
+	for _, seconds := range []int{600, 1019, 1020} {
+		m := fixtureManifest()
+		m.Gate = operator.Failover
+		m.Plan = NewPlan(Survivor, seconds, m.PublicSHA)
+		err := m.Validate(m.Identity, time.UnixMilli(m.CreatedAt))
+		if (err == nil) != (seconds == 1020) {
+			t.Fatal("MUTATION: failover-duration", seconds, err)
+		}
+	}
+}
+
+func TestRemovedHostedLauncherEffects(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		source, err := os.ReadFile(entry.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, effect := range []string{"api.github.com", "workflow_dispatch", "actions/runs", "actions/billing", "ACTIONS_ID_TOKEN_REQUEST_URL"} {
+			if strings.Contains(string(source), effect) {
+				t.Fatal("retired hosted launcher effect returned", entry.Name(), effect)
+			}
+		}
+	}
+}

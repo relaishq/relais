@@ -2738,5 +2738,354 @@
     "Test": "TestRetentionCannotExtendCollectionDeadline",
     "Marker": "MUTATION: retention-collection-deadline",
     "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "dispatch-post-retried",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "Start",
+    "Old": "if cached, exists := l.starts[key]; exists {",
+    "New": "if cached, exists := l.starts[key]; exists && cached.Certainty != operator.Unknown {",
+    "Test": "TestSingleLaunchAndUnknownStop",
+    "Marker": "MUTATION: start-unknown-resend",
+    "Package": "./internal/operatorcaller",
+    "GuardFingerprint": "c4aa18f58a2911cac650cb2c398647391582b7df883116770f2b1787588467c3",
+    "Edits": [
+      {
+        "File": "internal/operatorcaller/launcher.go",
+        "Function": "Start",
+        "Old": "if cached, exists := l.starts[key]; exists {",
+        "New": "if cached, exists := l.starts[key]; exists && cached.Certainty != operator.Unknown {"
+      },
+      {
+        "File": "internal/operatorcaller/launcher.go",
+        "Function": "Start",
+        "Old": "if !l.ready || l.Fence.Latched() || !time.Now().Before(end) {",
+        "New": "if !l.ready || !time.Now().Before(end) {"
+      }
+    ]
+  },
+  {
+    "ID": "dispatch-unknown-forgotten",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "Start",
+    "Old": "if cached, exists := l.starts[key]; exists {",
+    "New": "if cached, exists := l.starts[key]; exists && cached.Certainty != operator.Unknown {",
+    "Test": "TestSingleLaunchAndUnknownStop",
+    "Marker": "MUTATION: start-unknown-resend",
+    "Package": "./internal/operatorcaller",
+    "GuardFingerprint": "5093af1cbd7395e3feda277f0b79da7b612a4335e0641b58beb6d9b4ff5703b0"
+  },
+  {
+    "ID": "dispatch-after-deadline",
+    "GuardFingerprint": "888edf5e066a8ea3f6c18a9d5c999bea0f9000132bdc9a985a59d97b91b89cb7",
+    "File": "internal/operatorgates/session.go",
+    "Function": "Issue",
+    "Old": "if end <= s.clock.Elapsed() {",
+    "New": "if false {",
+    "Test": "TestDeadlineBeforeSubmission",
+    "Marker": "MUTATION: submission-deadline",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "load-continues-after-unknown",
+    "GuardFingerprint": "b7d8c5cd64033d6a00f7b9379ec6ea0e9640d0444b6f8f2cc3828e320b9f13bc",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunAdmission",
+    "Old": "r.Survivor.Reason == \"command-result-unknown\"",
+    "New": "false",
+    "Test": "TestAdmissionUnknownSurvivorStops",
+    "Marker": "MUTATION: admission-after-unknown",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "measure-start-retries-unknown",
+    "GuardFingerprint": "84d338ab7b6c67d81d448104db9922d1a0d6bb8f00dfa535735891b1c81cc2e5",
+    "File": "internal/operatorcaller/broker.go",
+    "Function": "write",
+    "Old": "b.Fence.Halt(\"command-result-unknown\")",
+    "New": "_ = createJSON(ctx,b.Mailbox,key,v)\n b.Fence.Halt(\"command-result-unknown\")",
+    "Test": "TestBrokerUnknownFencesAndStopCached",
+    "Marker": "MUTATION: broker-create-once",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "measure-malformed-drops-failure",
+    "File": "internal/operatorevidence/judge-src/main.go",
+    "Function": "parsePreviewMediaFor",
+    "Old": "if err != nil {\n\t\t\tparseErr = err\n\t\t\tcontinue\n\t\t}\n\t\tif err = observe.Numbers(m); err == nil {",
+    "New": "if err != nil {\n\t\t\tparseErr = err\n\t\t\tbreak\n\t\t}\n\t\tif err = observe.Numbers(m); err == nil {",
+    "Test": "TestRawEvidenceRejectsAmbiguousJSON",
+    "Marker": "MUTATION: jsonl-valid-failure-after-invalid",
+    "Package": "./internal/operatorevidence/judge-src",
+    "GuardFingerprint": "d453206d2b1254a0821982e053404c7656b0ec23694655fcba5d5fb38c63c75b"
+  },
+  {
+    "ID": "boundary-skips-idle-check",
+    "GuardFingerprint": "2c4dd40a56a270d37380f63ee9e55b23f4a025cdb42b2d3e2e7541456d029439",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunAdmission",
+    "Old": "if err := p.Idle(ctx, end); err != nil {",
+    "New": "if err := p.Idle(ctx, end); false {",
+    "Test": "TestAdmissionWaitsForIndependentIdle",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "precondition-failed-as-unknown",
+    "GuardFingerprint": "6f479c4ebc2096a5e80bd22964e301461e1a2dd427084412c22d5904bf6db0ce",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "reason == \"precondition-failed\", strings.HasPrefix(reason, \"precondition-failed:\")",
+    "New": "strings.HasPrefix(reason, \"unrecognized:\"), false",
+    "Test": "TestSequenceDefiniteStopsAndPreconditionsContinue/categorized-precondition",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "prep-reason-stops-later-gates",
+    "GuardFingerprint": "71139cf9da48260892f051261c4a9a36e228106857f8fe2a1ee593b1ba223110",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "reason == \"precondition-failed\", strings.HasPrefix(reason, \"precondition-failed:\")",
+    "New": "strings.HasPrefix(reason, \"unrecognized:\"), false",
+    "Test": "TestSequenceDefiniteStopsAndPreconditionsContinue/categorized-precondition",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "dispatcher-names-run-late",
+    "GuardFingerprint": "190e6afe388b0ebf0a8e47a053a480566a41caadea425833d3356851beabc9c8",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "Start",
+    "Old": "l.starts[key] = StartResult{StartUnknown, operator.Unknown, i.Unit()}",
+    "New": "// identity reservation removed",
+    "Test": "TestPreallocatedLaunchAndSingleBoundary",
+    "Marker": "MUTATION: identity-before-submission",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "Stop",
+    "Old": "if owner, ok := l.owners[key]; !ok || owner != i {",
+    "New": "if owner, ok := l.owners[key]; false && (!ok || owner != i) {",
+    "Test": "TestStopOnlyTouchesReservedIdentity",
+    "Marker": "MUTATION: unowned-caller-stop",
+    "Package": "./internal/operatorcaller",
+    "ID": "cancel-without-identity",
+    "GuardFingerprint": "941c79bd65b9af558bafa80ce7cc0624464ecdf58187815c0cb43487317c3963"
+  },
+  {
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "Stop",
+    "Old": "if owner, ok := l.owners[key]; !ok || owner != i {",
+    "New": "if owner, ok := l.owners[key]; false && (!ok || owner != i) {",
+    "Test": "TestStopOnlyTouchesReservedIdentity",
+    "Marker": "MUTATION: unowned-caller-stop",
+    "Package": "./internal/operatorcaller",
+    "ID": "cancel-unnamed-run",
+    "GuardFingerprint": "7a923559befcb9824b03dfbb9ddbd4d24b0fe80bf6939fc076c83c754d7632b0"
+  },
+  {
+    "ID": "unconfirmed-prep-hangup-ignored",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "Stop",
+    "Old": "if result.Inactive && !uncertain {",
+    "New": "if result.Inactive && (uncertain || !uncertain) {",
+    "Test": "TestSingleLaunchAndUnknownStop",
+    "Marker": "MUTATION: stop-certainty-cache",
+    "Package": "./internal/operatorcaller",
+    "GuardFingerprint": "3689cb168d9f91703bd37fb68c07d71067e48b25f0bc228bf5e1b5ba36b768bf"
+  },
+  {
+    "ID": "precondition-failure-keeps-caller",
+    "GuardFingerprint": "0b38e88576c857b0fd636fa48319301f4e265a55745e848d4b2fbd3ffbc076b9",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "release = true\n\t\t\t\t\tprep = p.Prepare",
+    "New": "release = false\n\t\t\t\t\tprep = p.Prepare",
+    "Test": "TestSequenceReleasesCallers/precondition",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "gate-end-keeps-caller",
+    "GuardFingerprint": "5abe95e5ff99b89be2f2aa2090247c10dd04bfabcee1917d20b692587b82700d",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "release = true\n\t\t\t\t\t\tresult = p.Command",
+    "New": "release = false\n\t\t\t\t\t\tresult = p.Command",
+    "Test": "TestSequenceReleasesCallers/completed",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "skipped-gate-keeps-caller",
+    "GuardFingerprint": "064ea6bed125e5fccc06f9007220bb5eba8069f03b2494aa4a762dfa88c1fb06",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "if release && p.ReleaseCallers != nil",
+    "New": "if false && release && p.ReleaseCallers != nil",
+    "Test": "TestSequenceReleasesCallers/skipped",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "skip-unconfirmed-stop-continues",
+    "GuardFingerprint": "a99a5c2384e2414ca43d39d4e4388c9e6a11c84afce8a3419b6a9b9f4bc79fa4",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "s.Halt(\"command-result-unknown\")\n\t\t\tresult = Stopped(false, result)",
+    "New": "result = Stopped(false, result)",
+    "Test": "TestSequenceReleasesCallers/unknown-stop",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "pending-without-final-pool-passes",
+    "GuardFingerprint": "b1a06c3af92c153ce2fb8a9a73f584677d7699bad371b4d54fd3472162ebfa22",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "if out.Gates[i].Status != operator.Failure && out.Pool != nil {",
+    "New": "if out.Pool == nil { out.Gates[i].Status = operator.Passed }; if out.Gates[i].Status != operator.Failure && out.Pool != nil {",
+    "Test": "TestSequenceCannotInventPooledMedia",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "pass-without-media",
+    "GuardFingerprint": "cd9bc838db3eed9e7d123dcfe72ea853b8b4e1eefb9dd9e517795e734c9fa040",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "if result.Status == operator.Passed {",
+    "New": "if false && result.Status == operator.Passed {",
+    "Test": "TestSequenceCannotInventPooledMedia",
+    "Marker": "MUTATION:",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failover-caller-too-short",
+    "GuardFingerprint": "1170e33eb647aec0815b6acd4575bc2c6702a95078a3cdd5eda7f31b2b09d058",
+    "File": "internal/operatorcaller/protocol.go",
+    "Function": "Validate",
+    "Old": "m.Plan.DurationSeconds < 1020",
+    "New": "m.Plan.DurationSeconds < 600",
+    "Test": "TestFailoverDurationAdmission",
+    "Package": "./internal/operatorcaller",
+    "Marker": "MUTATION: failover-duration",
+    "Receiver": "Manifest"
+  },
+  {
+    "ID": "relay-trusts-foreign-pid",
+    "GuardFingerprint": "71c3613a6cf8c77c17444e57a940ffd60fd85fbfd8c1d66f33a86b58108c2c04",
+    "File": "internal/operatorevidence/duplicates.go",
+    "Function": "JoinedDuplicatePackets",
+    "Old": "m.PID != pid || !expected[m.Session]",
+    "New": "!expected[m.Session]",
+    "Test": "TestDuplicatePacketsOracle",
+    "Package": "./internal/operatorevidence",
+    "Marker": "MUTATION: duplicate-oracle"
+  },
+  {
+    "ID": "rehearsal-ssm-host-scope-ignored",
+    "GuardFingerprint": "afb86eab0c84a1e7b678dac14df1680e23948b7f22cb6d57aad668a631d80a60",
+    "File": "internal/operatorrehearsal/adapter.go",
+    "Function": "Execute",
+    "Old": "if _, ok := a.Topology.Hosts[req.Target]; !ok {",
+    "New": "if _, ok := a.Topology.Hosts[req.Target]; false && !ok {",
+    "Test": "TestAdapterCapturedHostScope",
+    "Package": "./scripts/ci/gate-mutation",
+    "Marker": "MUTATION: captured-host-scope"
+  },
+  {
+    "ID": "rehearsal-aws-shim-scope-ignored",
+    "GuardFingerprint": "f3d21aae3550eefc1da085a4b8555a372d42ddf76dec3152c5d9c6f8b73e076a",
+    "File": "internal/operatorrehearsal/assets/template-read.py",
+    "Function": "",
+    "Old": "name not in scope[\"metadata\"] or options != {",
+    "New": "False and options != {",
+    "Test": "TestTemplateShimScope",
+    "Package": "./scripts/ci/gate-mutation",
+    "Marker": "MUTATION: template-shim-scope"
+  },
+  {
+    "ID": "precondition-category-free-text",
+    "GuardFingerprint": "340772ce1924c4b93a7fc81371a6822a62d38b6b9bed01fb6dd8b0b992abc8a4",
+    "File": "internal/operatorgates/procedure.go",
+    "Function": "readFailure",
+    "Old": "categoryPattern.MatchString(category)",
+    "New": "true",
+    "Test": "TestPreconditionCategoryPublication",
+    "Marker": "MUTATION: precondition-public-category",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "readiness-pending-case",
+    "File": "internal/operatorgates/readiness.go",
+    "Function": "checkReadiness",
+    "Old": "len(mutations.Pending) != 0",
+    "New": "false",
+    "Test": "TestReadinessRejectsIncompleteAccounting/pending-case",
+    "Package": "./internal/operatorgates",
+    "Marker": "MUTATION: readiness accepted"
+  },
+  {
+    "ID": "readiness-delta-binding",
+    "File": "internal/operatorgates/readiness.go",
+    "Function": "checkReadiness",
+    "Old": "len(delta.Bindings) == 0",
+    "New": "false",
+    "Test": "TestReadinessRejectsIncompleteAccounting/unbound-delta",
+    "Package": "./internal/operatorgates",
+    "Marker": "MUTATION: readiness accepted"
+  },
+  {
+    "ID": "readiness-original-identity",
+    "File": "internal/operatorgates/readiness.go",
+    "Function": "checkReadiness",
+    "Old": "hex.EncodeToString(identity[:]) != originalMutationDigest",
+    "New": "hex.EncodeToString(identity[:]) != originalMutationDigest && false",
+    "Test": "TestReadinessRejectsIncompleteAccounting/changed-guard",
+    "Package": "./internal/operatorgates",
+    "Marker": "MUTATION: readiness accepted"
+  },
+  {
+    "ID": "readiness-successor-kill",
+    "File": "internal/operatorgates/readiness.go",
+    "Function": "checkReadiness",
+    "Old": "!killed[row.SuccessorMutation]",
+    "New": "false",
+    "Test": "TestReadinessRejectsIncompleteAccounting/unproved-retirement",
+    "Package": "./internal/operatorgates",
+    "Marker": "MUTATION: readiness accepted"
+  },
+  {
+    "ID": "telemetry-known-allowance",
+    "File": "internal/operatorgates/telemetry.go",
+    "Function": "SummarizeObservations",
+    "Old": "if ena > 0 {",
+    "New": "if false && ena > 0 {",
+    "Test": "TestTelemetryOracle",
+    "Package": "./internal/operatorgates",
+    "Marker": "MUTATION: telemetry-oracle"
+  },
+  {
+    "ID": "telemetry-unbounded-tail",
+    "File": "internal/operatorgates/telemetry.go",
+    "Function": "histogramTail",
+    "Old": "if math.IsInf(bound, 0) {",
+    "New": "if false && math.IsInf(bound, 0) {",
+    "Test": "TestTelemetryOracle",
+    "Package": "./internal/operatorgates",
+    "Marker": "MUTATION: telemetry-oracle"
+  },
+  {
+    "ID": "telemetry-age-presence",
+    "File": "internal/operatorgates/telemetry.go",
+    "Function": "DecodeHostTelemetry",
+    "Old": "\"~ages[].snapshot_age_ms\"",
+    "New": "\"~ages[].checkpoint_age_ms\"",
+    "Test": "TestTelemetryAgePresence",
+    "Package": "./internal/operatorgates",
+    "Marker": "MUTATION: telemetry-age-presence"
   }
 ]

@@ -38,7 +38,7 @@ func TestOracleCoreProjections(t *testing.T) {
 	if scenarios == 0 || assertions == 0 {
 		t.Fatal("no core projections executed")
 	}
-	t.Logf("core projections: %d scenarios, %d assertions; outer gate algorithms remain pending", scenarios, assertions)
+	t.Logf("core projections: %d scenarios, %d assertions; outer-runtime coverage is separately inventoried", scenarios, assertions)
 }
 
 // The callback seam is already classified in these fixtures. This exercises
@@ -112,9 +112,10 @@ func TestOracleInventoryAndPublicContent(t *testing.T) {
 		Fixtures     []struct {
 			Fixture    string `json:"fixture"`
 			FullReplay string `json:"fullReplay"`
+			Reason     string `json:"reason"`
 		} `json:"fixtures"`
 	}
-	if json.Unmarshal(raw, &coverage) != nil || coverage.FullSuite != "pending" {
+	if json.Unmarshal(raw, &coverage) != nil || coverage.FullSuite != "accounted" {
 		t.Fatal("invalid coverage inventory")
 	}
 	sums, err := os.ReadFile("testdata/transcripts/SHA256SUMS")
@@ -127,8 +128,8 @@ func TestOracleInventoryAndPublicContent(t *testing.T) {
 	}
 	pending := map[string]bool{}
 	for _, f := range coverage.Fixtures {
-		if pending[f.Fixture] || f.FullReplay != "pending" && f.FullReplay != "replayed" {
-			t.Fatal("invalid pending fixture")
+		if pending[f.Fixture] || f.FullReplay != "replayed" && (f.FullReplay != "non-replayable" || f.Reason == "") {
+			t.Fatal("invalid fixture disposition")
 		}
 		pending[f.Fixture] = true
 	}
@@ -228,9 +229,11 @@ func TestMutationCoverageInventory(t *testing.T) {
 		t.Fatal(err)
 	}
 	var ledger struct {
-		OriginalCaseCount int                                                              `json:"originalCaseCount"`
-		OwnedCases        []string                                                         `json:"ownedCases"`
-		Pending           []struct{ ID, Owner, Evidence string }                           `json:"pending"`
+		OriginalCaseCount int                                    `json:"originalCaseCount"`
+		OwnedCases        []string                               `json:"ownedCases"`
+		Pending           []struct{ ID, Owner, Evidence string } `json:"pending"`
+		Retired           []struct{ ID, Owner, Evidence, Reason, SuccessorContract, SuccessorMutation, Test string }
+		Private           []struct{ ID, Owner, Evidence, Reason string }
 		Additional        []string                                                         `json:"additionalProtocolCases"`
 		Killed            []struct{ ID, Test, Package, Evidence, GuardFingerprint string } `json:"killed"`
 	}
@@ -249,6 +252,18 @@ func TestMutationCoverageInventory(t *testing.T) {
 	for _, row := range ledger.Pending {
 		if ids[row.ID] || row.Owner == "" || row.Evidence != "pending" {
 			t.Fatal("invalid pending mutation")
+		}
+		ids[row.ID] = true
+	}
+	for _, row := range ledger.Retired {
+		if ids[row.ID] || row.Owner != "removed" || row.Evidence != "retired" || row.Reason == "" || row.SuccessorContract == "" || row.SuccessorMutation == "" || row.Test == "" {
+			t.Fatal("invalid retirement", row.ID)
+		}
+		ids[row.ID] = true
+	}
+	for _, row := range ledger.Private {
+		if ids[row.ID] || row.Owner != "private" || row.Evidence != "assigned-private" || row.Reason == "" {
+			t.Fatal("invalid private assignment", row.ID)
 		}
 		ids[row.ID] = true
 	}

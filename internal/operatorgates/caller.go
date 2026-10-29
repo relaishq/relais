@@ -74,6 +74,7 @@ type CallerRuntime struct {
 	incomplete bool
 	once       sync.Once
 	done       chan struct{}
+	duplicates *uint64
 	summary    *MediaSummary
 	err        error
 }
@@ -170,6 +171,9 @@ func (r *CallerRuntime) startCollection(ctx context.Context, deadline time.Time)
 		go func() {
 			defer close(r.done)
 			caller, err := r.Broker.Collect(ctx, deadline)
+			if r.Broker.Registration != nil {
+				r.duplicates, _ = operatorevidence.JoinedDuplicatePackets(caller, r.Broker.Registration.Sessions, r.Broker.CallerPID)
+			}
 			phase := r.Phase
 			phase.Plan = r.Broker.Manifest.Plan
 			if r.Broker.Registration != nil {
@@ -255,3 +259,13 @@ func receiptEvents(receipts []operatorcaller.Receipt) ([]loadgen.EventResult, er
 
 var _ GateBroker = (*CallerRuntime)(nil)
 var _ MediaJudge = operatorevidence.PinnedJudge{}
+
+// Duplicates returns only terminal, joined caller evidence.
+func (r *CallerRuntime) Duplicates() *uint64 {
+	select {
+	case <-r.done:
+		return r.duplicates
+	default:
+		return nil
+	}
+}

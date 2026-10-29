@@ -13,6 +13,13 @@
         "TestPreconditionOracle",
         "TestPreconditionRepairsOnlyDefiniteFailure",
         "TestPreconditionDeltaRejectsUnrelatedUnknown"
+      ],
+      "bindings": [
+        {
+          "fixture": "0151dac9ba93d068.json",
+          "operation": "processes.ProcessRuntime.step",
+          "invocation": 453
+        }
       ]
     },
     {
@@ -24,8 +31,18 @@
         "TestFreshTakeoverIdentity",
         "TestTrialOracle",
         "TestProcedureOracle",
-        "TestControlTakeoverRequiresOwnershipBeforeDeadline"
-      ]
+        "TestControlTakeoverRequiresOwnershipBeforeDeadline",
+        "TestNativeDeltaFixtures",
+        "TestNativeDeltaFixtures"
+      ],
+      "bindings": [
+        {
+          "fixture": "deltas/safety.json",
+          "operation": "processes.freshTakeovers",
+          "invocation": 1
+        }
+      ],
+      "origin": "Independent owner-invariant fixture; no changed frozen TypeScript observation is claimed."
     },
     {
       "id": "unknown-relay-inspection",
@@ -34,8 +51,18 @@
       "requirement": "No replay or further host effects after unknown completion.",
       "tests": [
         "TestRelayUnknownStopsPolling",
-        "TestRuntimeUnknownNeverResubmits"
-      ]
+        "TestRuntimeUnknownNeverResubmits",
+        "TestNativeDeltaFixtures",
+        "TestNativeDeltaFixtures"
+      ],
+      "bindings": [
+        {
+          "fixture": "deltas/safety.json",
+          "operation": "processes.relay",
+          "invocation": 2
+        }
+      ],
+      "origin": "Independent owner-invariant fixture; no changed frozen TypeScript observation is claimed."
     },
     {
       "id": "unknown-store-observation",
@@ -44,8 +71,18 @@
       "requirement": "The session latch and no-replay rule also cover optional resource capabilities.",
       "tests": [
         "TestFailoverDoesNotReplayUnknownStoreRead",
-        "TestOptionalStoreUnknownIsNeverReplayed"
-      ]
+        "TestOptionalStoreUnknownIsNeverReplayed",
+        "TestNativeDeltaFixtures",
+        "TestNativeDeltaFixtures"
+      ],
+      "bindings": [
+        {
+          "fixture": "deltas/safety.json",
+          "operation": "measure.store",
+          "invocation": 3
+        }
+      ],
+      "origin": "Independent owner-invariant fixture; no changed frozen TypeScript observation is claimed."
     },
     {
       "id": "unknown-measurement-collection",
@@ -54,16 +91,115 @@
       "requirement": "Unknown observation completion cannot authorize another effect or hide known failure.",
       "tests": [
         "TestCollectionUnknownStopsObservationsAndPreservesFailure"
+      ],
+      "bindings": [
+        {
+          "fixture": "e7138cd86a2f0fa7.json",
+          "operation": "measure.runMeasureGate.arg2.observe",
+          "invocation": 7
+        }
       ]
     }
   ],
   "representations": [
-    "Go RFC3339 omits zero fractional seconds; receipt comparisons preserve the exact instant and compare other fields without normalization.",
-    "Object key order is canonicalized for history comparison; omitted fields, explicit false, time spelling and unknown metadata remain distinct.",
-    "The host archive architecture is an explicit arm64 or amd64 input. The default remains arm64; this permits the approved amd64 container rehearsal without changing paid inputs.",
-    "Historical takeover start may be absent. A new takeover uses the independently observed signal start; missing end remains invalid evidence.",
-    "Endpoint validation accepts environment-owned HTTP hostnames or IPs and integer ports. Fixed media identity is still checked against the selected worker endpoints; no provider-specific host or service port is assumed.",
-    "Fixed completion procedures require completed=true in the confirmed host envelope. Known positive loss or self-fence counters survive unrelated malformed evidence without clearing uncertainty.",
-    "Signal nanoseconds remain unsigned decimal values through conversion to Go seconds and nanoseconds, without floating-point or signed overflow."
+    {
+      "id": "receipt-instant",
+      "description": "Go RFC3339 omits zero fractional seconds; receipt comparisons preserve the exact instant and compare other fields without normalization.",
+      "bindings": [
+        {
+          "fixture": "047f7c5bcd393cf9.json",
+          "operation": "processes.drainReceipt",
+          "invocation": 52
+        }
+      ],
+      "tests": [
+        "TestProcedureProjectionOracle"
+      ]
+    },
+    {
+      "id": "history-presence",
+      "description": "Object key order is canonicalized for history comparison; omitted fields, explicit false, time spelling and unknown metadata remain distinct.",
+      "bindings": [
+        {
+          "fixture": "deltas/safety.json",
+          "operation": "processes.freshTakeovers",
+          "invocation": 1
+        }
+      ],
+      "tests": [
+        "TestNativeDeltaFixtures",
+        "TestFreshTakeoverIdentity"
+      ]
+    },
+    {
+      "id": "archive-architecture",
+      "description": "The host archive architecture is an explicit arm64 or amd64 input. The default remains arm64; this permits the approved amd64 container rehearsal without changing paid inputs.",
+      "bindings": [
+        {
+          "fixture": "deltas/representations.json",
+          "operation": "host.architecture",
+          "invocation": 1
+        }
+      ],
+      "tests": [
+        "TestRepresentationFixtures"
+      ]
+    },
+    {
+      "id": "historical-start",
+      "description": "Historical takeover start may be absent. A new takeover uses the independently observed signal start; missing end remains invalid evidence.",
+      "bindings": [
+        {
+          "fixture": "deltas/representations.json",
+          "operation": "observe.historicalMove",
+          "invocation": 2
+        }
+      ],
+      "tests": [
+        "TestRepresentationFixtures"
+      ]
+    },
+    {
+      "id": "resource-endpoints",
+      "description": "Endpoint validation accepts environment-owned HTTP hostnames or IPs and integer ports. Fixed media identity is still checked against the selected worker endpoints; no provider-specific host or service port is assumed.",
+      "bindings": [
+        {
+          "fixture": "deltas/representations.json",
+          "operation": "processes.endpoints",
+          "invocation": 3
+        }
+      ],
+      "tests": [
+        "TestRepresentationFixtures"
+      ]
+    },
+    {
+      "id": "completion-evidence",
+      "description": "Fixed completion procedures require completed=true in the confirmed host envelope. Known positive loss or self-fence counters survive unrelated malformed evidence without clearing uncertainty.",
+      "bindings": [
+        {
+          "fixture": "deltas/representations.json",
+          "operation": "processes.completion",
+          "invocation": 4
+        }
+      ],
+      "tests": [
+        "TestRepresentationFixtures"
+      ]
+    },
+    {
+      "id": "unsigned-signal-time",
+      "description": "Signal nanoseconds remain unsigned decimal values through conversion to Go seconds and nanoseconds, without floating-point or signed overflow.",
+      "bindings": [
+        {
+          "fixture": "deltas/representations.json",
+          "operation": "processes.signalNanoseconds",
+          "invocation": 5
+        }
+      ],
+      "tests": [
+        "TestRepresentationFixtures"
+      ]
+    }
   ]
 }
