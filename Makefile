@@ -158,7 +158,8 @@ test-unit: ## Run all non-harness tests with the race detector; set RELAIS_TEST_
 .PHONY: test-unit-judge
 test-unit-judge: ## Run evidence judge race tests alone; JUDGE_FLAGS=-short samples exhaustive sweeps for PRs
 	# Keep cached-verdict waiters and file reads from occupying every test slot on small runners.
-	$(GOTEST) -race -parallel=8 -v -count=1 -timeout 10m $(JUDGE_FLAGS) ./internal/operatorevidence/judge-src
+	# The full sweep took ~7 min on a 4-CPU runner before the pool envelope fields; allow headroom.
+	$(GOTEST) -race -parallel=8 -v -count=1 -timeout 20m $(JUDGE_FLAGS) ./internal/operatorevidence/judge-src
 
 # test-unit already covers every package outside the call harness under -race.
 HARNESS_PKGS=./pkg/callharness/...
