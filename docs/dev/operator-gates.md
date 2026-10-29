@@ -154,7 +154,7 @@ expectations because the original oracle predates this protocol.
 
 `testdata/mutation-coverage.json` accounts for all 414 original mutation IDs:
 160 public mutants are owned and killed, 41 are retired with explicit successor
-contracts, and 213 remain assigned to private owners. The 141 additional native
+contracts, and 213 remain assigned to private owners. The 148 additional native
 mutants are counted separately. These are accounting categories, not claims that
 private code was tested.
 The late-start projection retains pending/readiness/outcome order while replacing
@@ -349,17 +349,33 @@ path supports protocol blobs. The start script copies the adapter into the
 identity's fresh work directory, checks the staged hash before execution and
 sets mode 0700, as it does for the bridge and loader. A mismatch refuses launch.
 It passes only the staged adapter path, optional spool and absolute runtime
-deadline. The adapter receives no extra arguments and keeps the transport's
-fixed environment; credentials are not forwarded in arguments or environment.
-Mailbox requests use the earlier of that runtime deadline, the active caller
-context deadline and the ten-second request bound. This avoids renewing a
-20-minute mailbox window at process startup or advertising a deadline beyond
-the caller's manifest. Unknown results still latch the mailbox without retry;
-writes remain create-only and judge policy is unchanged.
+deadline. The command refuses adapter mode when the deadline is omitted or
+empty. Directory mode refuses an orphan `-spool`, including an explicit empty
+value. The adapter receives no extra arguments and keeps the transport's fixed
+environment; credentials are not forwarded in arguments or environment.
+After manifest validation, the protocol mailbox permanently keeps the earlier
+of its runtime cutoff and the manifest deadline. Every request also observes
+the active context and the ten-second request bound. Stop and final publication
+cannot renew the cutoff when they remove cancellation or use a separate grace
+context. Unknown results still latch the mailbox without retry; writes remain
+create-only and judge policy is unchanged.
+
+The operator must provide a trusted work root and trusted ancestor directories.
+The launcher does not validate their ownership or permissions. Fresh-directory
+creation and staged hashes protect the copied bytes; protection from replacement
+between verification and execution depends on that trusted ancestry.
 
 `TestDirectoryLaunchScriptsStayUnchanged` compares both directory scripts
 byte-for-byte with pre-adapter fixtures. `TestStartScriptStagesMailboxAdapter`
-executes staging, quoted flags and hash refusal. `TestMailboxAdapterSubprocess`
+executes staging, quoted flags and hash refusal. Its copy-boundary controls
+replace the source during copy, including restoring the original source while
+leaving changed staged bytes. Mutants cover source-only and pre-copy hashing.
+`TestCallerRequiresAdapterDeadlineBeforeStart` covers omitted and empty deadlines
+without starting an adapter. `TestBridgeCapsCleanupToManifest` enters the same
+post-validation lifecycle used by `RunBridge`, runs a real child with an invalid
+stream, and checks the actual stop, report and finished mailbox requests against
+both earlier and later runtime cutoffs. It uses a synthetic host observation;
+it does not qualify the Linux host profile. `TestMailboxAdapterSubprocess`
 checks real subprocess requests, create conflicts and unknown fencing on all
 platforms. `TestCallerBinaryUsesMailboxAdapter` runs the generated script and
 built caller with a fake subprocess adapter on Linux through setup and a

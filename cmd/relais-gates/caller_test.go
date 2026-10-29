@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"os"
 	"os/exec"
@@ -199,5 +200,69 @@ func TestCallerRejectsInvalidRuntimeDeadline(t *testing.T) {
 		if got := run(); got != 2 {
 			t.Fatal("invalid caller runtime deadline was accepted", deadline, got)
 		}
+	}
+}
+
+func TestCallerRequiresAdapterDeadlineBeforeStart(t *testing.T) {
+	root := t.TempDir()
+	config := filepath.Join(root, "config.json")
+	raw, _ := json.Marshal(operatorcaller.BridgeConfig{})
+	if err := os.WriteFile(config, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := os.Args
+	defer func() { os.Args = args }()
+	for _, row := range []struct {
+		name string
+		args []string
+	}{
+		{"omitted", nil},
+		{"empty", []string{"-deadline", ""}},
+		{"empty-equals", []string{"-deadline="}},
+	} {
+		t.Run(row.name, func(t *testing.T) {
+			os.Args = append([]string{"relais-gates", "caller", "-config", config, "-adapter", "/unused"}, row.args...)
+			starts := 0
+			got := runWithAdapter(func(context.Context, string, []string) (*operatortransport.Subprocess, error) {
+				starts++
+				return nil, errors.New("adapter start observed")
+			})
+			if got != 2 || starts != 0 {
+				t.Fatal("MUTATION: caller-adapter-deadline-required", got, starts)
+			}
+		})
+	}
+	// Prove the observer is wired to the production command's start boundary.
+	os.Args = []string{"relais-gates", "caller", "-config", config, "-adapter", "/unused", "-deadline", time.Now().Add(time.Minute).Format(time.RFC3339Nano)}
+	starts := 0
+	got := runWithAdapter(func(context.Context, string, []string) (*operatortransport.Subprocess, error) {
+		starts++
+		return nil, errors.New("adapter start observed")
+	})
+	if got != 1 || starts != 1 {
+		t.Fatal("adapter start observer did not see the positive control", got, starts)
+	}
+}
+
+func TestCallerDirectoryRejectsOrphanSpool(t *testing.T) {
+	root := t.TempDir()
+	config := filepath.Join(root, "config.json")
+	raw, _ := json.Marshal(operatorcaller.BridgeConfig{})
+	if err := os.WriteFile(config, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	args := os.Args
+	defer func() { os.Args = args }()
+	for _, spool := range [][]string{{"-spool", root}, {"-spool="}} {
+		os.Args = append([]string{"relais-gates", "caller", "-config", config, "-mailbox", root}, spool...)
+		if got := run(); got != 2 {
+			t.Fatal("MUTATION: caller-directory-orphan-spool", got)
+		}
+	}
+	// Directory mode still accepts an omitted deadline. This invalid bridge
+	// identity fails later, rather than being refused at flag admission.
+	os.Args = []string{"relais-gates", "caller", "-config", config, "-mailbox", root}
+	if got := run(); got != 1 {
+		t.Fatal("directory mode acquired an adapter deadline requirement", got)
 	}
 }

@@ -305,7 +305,14 @@
     "session-exchange-queue-ignores-deadline",
     "launcher-adapter-hash-unchecked",
     "launcher-mailbox-modes-overlap",
-    "launcher-adapter-directory-flag"
+    "launcher-adapter-directory-flag",
+    "caller-adapter-deadline-omitted",
+    "caller-directory-orphan-spool-accepted",
+    "caller-manifest-cutoff-skipped",
+    "caller-manifest-cutoff-renews-runtime",
+    "mailbox-caller-context-deadline-ignored",
+    "launcher-adapter-source-hash-only",
+    "launcher-adapter-hash-before-copy"
   ],
   "killed": [
     {
@@ -2723,6 +2730,55 @@
       "owner": "public",
       "evidence": "killed",
       "test": "TestStartScriptStagesMailboxAdapter/adapter",
+      "package": "./internal/operatorcaller"
+    },
+    {
+      "id": "caller-adapter-deadline-omitted",
+      "owner": "public",
+      "evidence": "killed",
+      "test": "TestCallerRequiresAdapterDeadlineBeforeStart/omitted",
+      "package": "./cmd/relais-gates"
+    },
+    {
+      "id": "caller-directory-orphan-spool-accepted",
+      "owner": "public",
+      "evidence": "killed",
+      "test": "TestCallerDirectoryRejectsOrphanSpool",
+      "package": "./cmd/relais-gates"
+    },
+    {
+      "id": "caller-manifest-cutoff-skipped",
+      "owner": "public",
+      "evidence": "killed",
+      "test": "TestBridgeCapsCleanupToManifest/later-runtime",
+      "package": "./internal/operatorcaller"
+    },
+    {
+      "id": "caller-manifest-cutoff-renews-runtime",
+      "owner": "public",
+      "evidence": "killed",
+      "test": "TestBridgeCapsCleanupToManifest/earlier-runtime",
+      "package": "./internal/operatorcaller"
+    },
+    {
+      "id": "mailbox-caller-context-deadline-ignored",
+      "owner": "public",
+      "evidence": "killed",
+      "test": "TestProtocolMailboxBoundsRequestByCallerDeadline",
+      "package": "./internal/operatorcaller"
+    },
+    {
+      "id": "launcher-adapter-source-hash-only",
+      "owner": "public",
+      "evidence": "killed",
+      "test": "TestStartScriptStagesMailboxAdapter/copy-change-restored",
+      "package": "./internal/operatorcaller"
+    },
+    {
+      "id": "launcher-adapter-hash-before-copy",
+      "owner": "public",
+      "evidence": "killed",
+      "test": "TestStartScriptStagesMailboxAdapter/copy-change",
       "package": "./internal/operatorcaller"
     }
   ],

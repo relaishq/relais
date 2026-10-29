@@ -25,7 +25,7 @@ func TestProtocolMailboxBoundsRequestByCallerDeadline(t *testing.T) {
 	defer cancel()
 	peer := &mailboxPeer{reply: func(f operator.Frame) (operator.Frame, error) {
 		if f.Request.DeadlineUnixMS != strconv.FormatInt(end.UnixMilli(), 10) || f.Request.RemainingMS > 3000 {
-			t.Fatal("mailbox request outlived caller deadline", f.Request)
+			t.Fatal("MUTATION: mailbox-caller-deadline", f.Request)
 		}
 		zero := 0
 		return operator.Frame{Type: "result", Session: f.Session, Result: &operator.Reply{ID: f.Request.ID, Transport: operator.Succeeded, ExitCode: &zero, Payload: json.RawMessage(`{"found":false}`)}}, nil

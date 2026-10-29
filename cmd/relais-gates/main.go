@@ -20,8 +20,10 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
-func main() { os.Exit(run()) }
-func run() int {
+func main()    { os.Exit(run()) }
+func run() int { return runWithAdapter(operatortransport.Start) }
+
+func runWithAdapter(startAdapter func(context.Context, string, []string) (*operatortransport.Subprocess, error)) int {
 	hello := operator.Hello{Protocol: operator.ProtocolVersion, Version: buildinfo.Version, Commit: buildinfo.Commit, ScenarioSchema: 1, ResultSchema: 1}
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: relais-gates session -config FILE [-spool DIR]|caller|rehearse|version")
@@ -63,6 +65,18 @@ func run() int {
 		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 {
 			return 2
 		}
+		spoolSet := false
+		flags.Visit(func(f *flag.Flag) {
+			if f.Name == "spool" {
+				spoolSet = true
+			}
+		})
+		if (*mailbox == "") == (*adapter == "") || *adapter == "" && spoolSet {
+			return 2
+		}
+		if *adapter != "" && *deadline == "" {
+			return 2
+		}
 		raw, err := os.ReadFile(*config)
 		if err != nil {
 			operatorcaller.WriteFailure(os.Stderr, err)
@@ -93,9 +107,6 @@ func run() int {
 			defer stop()
 		}
 		var box operatorcaller.Store
-		if (*mailbox == "") == (*adapter == "") {
-			return 2
-		}
 		if *adapter != "" {
 			var root *os.Root
 			if *spool != "" {
@@ -105,7 +116,7 @@ func run() int {
 				}
 				defer root.Close()
 			}
-			peer, e := operatortransport.Start(ctx, *adapter, nil)
+			peer, e := startAdapter(ctx, *adapter, nil)
 			if e != nil {
 				return 1
 			}

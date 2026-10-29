@@ -58,7 +58,7 @@ func TestLaunchConfigMailboxModes(t *testing.T) {
 }
 
 func TestStartScriptStagesMailboxAdapter(t *testing.T) {
-	for _, name := range []string{"adapter", "spool", "hash-mismatch"} {
+	for _, name := range []string{"adapter", "spool", "hash-mismatch", "copy-change", "copy-change-restored"} {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
 			c := fixtureLaunchConfig()
@@ -82,6 +82,24 @@ func TestStartScriptStagesMailboxAdapter(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if strings.HasPrefix(name, "copy-change") {
+				cp, err := exec.LookPath("cp")
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Replace the source at the copy boundary. The restored case
+				// leaves the source hash valid while the staged bytes are wrong.
+				stub := "#!/bin/sh\nset -eu\nif [ \"$1\" = " + quote(c.AdapterPath) + " ]; then\n" +
+					quote(cp) + " \"$1\" \"$1.original\"\nprintf 'changed during copy' > \"$1\"\n" +
+					quote(cp) + " \"$@\"\n"
+				if name == "copy-change-restored" {
+					stub += quote(cp) + " \"$1.original\" \"$1\"\n"
+				}
+				stub += "else\n" + quote(cp) + " \"$@\"\nfi\n"
+				if err := os.WriteFile(filepath.Join(root, "cp"), []byte(stub), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
 			stub := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + quote(root+"/argv") + "\n"
 			if err := os.WriteFile(filepath.Join(root, "systemd-run"), []byte(stub), 0700); err != nil {
 				t.Fatal(err)
@@ -96,9 +114,23 @@ func TestStartScriptStagesMailboxAdapter(t *testing.T) {
 			cmd.Stdin = bytes.NewReader(script)
 			out, err := cmd.CombinedOutput()
 			args, readErr := os.ReadFile(root + "/argv")
-			if name == "hash-mismatch" {
+			if name == "hash-mismatch" || strings.HasPrefix(name, "copy-change") {
 				if err == nil || !os.IsNotExist(readErr) || bytes.Contains(out, []byte("caller-started:")) {
 					t.Fatal("MUTATION: launcher-adapter-hash", string(out), err, readErr)
+				}
+				if strings.HasPrefix(name, "copy-change") {
+					staged, err := os.ReadFile(filepath.Join(root, i.Unit(), "mailbox-adapter"))
+					if err != nil || string(staged) != "changed during copy" {
+						t.Fatal("copy control did not stage the changed bytes", string(staged), err)
+					}
+					source, err := os.ReadFile(c.AdapterPath)
+					want := "changed during copy"
+					if name == "copy-change-restored" {
+						want = "staged input 3"
+					}
+					if err != nil || string(source) != want {
+						t.Fatal("copy control left an unexpected source", string(source), err)
+					}
 				}
 				return
 			}
