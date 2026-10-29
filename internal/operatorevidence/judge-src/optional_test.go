@@ -181,22 +181,16 @@ func optionalSites(value any, typ reflect.Type, sites map[string]requiredSite, l
 	}
 }
 
-func optionalInput(t *testing.T, input previewPoolInput, doc optionalDocument, raw []byte) previewPoolInput {
-	t.Helper()
+func optionalInput(input previewPoolInput, doc optionalDocument, raw []byte) (previewPoolInput, error) {
+	if doc.phase < 0 {
+		return decodePool(raw)
+	}
 	changed := input
 	changed.Phases = append([]previewMediaInput{}, input.Phases...)
-	if doc.phase < 0 {
-		var err error
-		changed, err = decodePool(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-	} else {
-		lines := strings.Split(strings.TrimSpace(changed.Phases[doc.phase].CallerJSONL), "\n")
-		lines[doc.line] = string(raw)
-		changed.Phases[doc.phase].CallerJSONL = strings.Join(lines, "\n") + "\n"
-	}
-	return changed
+	lines := strings.Split(strings.TrimSpace(changed.Phases[doc.phase].CallerJSONL), "\n")
+	lines[doc.line] = string(raw)
+	changed.Phases[doc.phase].CallerJSONL = strings.Join(lines, "\n") + "\n"
+	return changed, nil
 }
 
 func TestEveryOptionalEvidenceMember(t *testing.T) {
@@ -292,7 +286,11 @@ func TestEveryOptionalEvidenceMember(t *testing.T) {
 					// only shortcut. Required contexts still reach pooled quarantine.
 					control := previewMediaSummary{Status: "passed"}
 					if !optional || !reflect.DeepEqual(controlDestination, controlBaseline) {
-						control = verdicts.judge(t, "passing", passing, doc, controlRaw, controlDestination, controlErr)
+						var judgeErr error
+						control, judgeErr = verdicts.judge(t, "passing", passing, doc, controlRaw, controlDestination, controlErr)
+						if judgeErr != nil {
+							t.Fatal("optional passing input rejected", key, judgeErr)
+						}
 					}
 					semanticRequired := key == "callharness.DistributedMeasurement.KillToLive/takeover" || key == "mediaworker.HandoverResult.DuplicateWindows"
 					if optional && !semanticRequired && control.Status != "passed" {
@@ -302,7 +300,11 @@ func TestEveryOptionalEvidenceMember(t *testing.T) {
 					}
 					changed := previewMediaSummary{Status: "inconclusive"}
 					if !optional || !reflect.DeepEqual(destination, baseline) {
-						changed = verdicts.judge(t, "failing", input, doc, raw, destination, err)
+						var judgeErr error
+						changed, judgeErr = verdicts.judge(t, "failing", input, doc, raw, destination, err)
+						if judgeErr != nil {
+							t.Fatal("optional failing input rejected", key, judgeErr)
+						}
 					}
 					if changed.Status == "passed" {
 						t.Fatal("MUTATION: optional-evidence-cannot-restore-pass", key, mode, changed)
@@ -432,12 +434,20 @@ func TestOptionalMirroredDiagnostics(t *testing.T) {
 				if err := observe.DecodeEvidenceLimit(raw, reflect.New(doc.typ).Interface(), 64<<20); err != nil {
 					t.Fatal(err)
 				}
-				input = optionalInput(t, input, doc, raw)
+				var err error
+				input, err = optionalInput(input, doc, raw)
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 			doc := optionalDocuments(t, input)[0]
 			omit(doc.value)
 			raw, _ := json.Marshal(doc.value)
-			input = optionalInput(t, input, doc, raw)
+			var err error
+			input, err = optionalInput(input, doc, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if changed == 0 {
 				t.Fatal("no diagnostic omissions applied")
 			}
