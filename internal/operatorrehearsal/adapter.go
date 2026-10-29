@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -206,6 +207,7 @@ func (a *Adapter) Serve(ctx context.Context, p *operatortransport.Pipe, session 
 	if err = p.Send(ctx, operator.Frame{Type: "init", Session: session, Init: &init}); err != nil {
 		return nil, err
 	}
+	var traces []operator.Trace
 	for {
 		f, err = p.Receive(ctx)
 		if err != nil {
@@ -221,7 +223,11 @@ func (a *Adapter) Serve(ctx context.Context, p *operatortransport.Pipe, session 
 				return nil, err
 			}
 		case "trace": // Only the public session builds traces.
+			traces = append(traces, *f.Trace)
 		case "final":
+			if f.Final != nil && (len(f.Final.Trace) < len(traces) || !slices.Equal(f.Final.Trace[:len(traces)], traces)) {
+				f.Final.Trace = append(traces, f.Final.Trace...)
+			}
 			return f.Final, nil
 		default:
 			return nil, errors.New("unexpected-session-frame")

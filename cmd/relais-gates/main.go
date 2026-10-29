@@ -24,7 +24,7 @@ func main() { os.Exit(run()) }
 func run() int {
 	hello := operator.Hello{Protocol: operator.ProtocolVersion, Version: buildinfo.Version, Commit: buildinfo.Commit, ScenarioSchema: 1, ResultSchema: 1}
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: relais-gates session [-spool DIR]|caller|rehearse|version")
+		fmt.Fprintln(os.Stderr, "usage: relais-gates session -config FILE [-spool DIR]|caller|rehearse|version")
 		return 2
 	}
 	switch os.Args[1] {
@@ -118,7 +118,14 @@ func run() int {
 		flags := flag.NewFlagSet("session", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
 		directory := flags.String("spool", "", "agreed local blob spool")
+		configuration := flags.String("config", "", "private resource configuration JSON")
 		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 {
+			return 2
+		}
+		raw, err := os.ReadFile(*configuration)
+		var config operatorgates.ResourceConfig
+		if err != nil || observe.Decode(raw, &config, nil) != nil {
+			fmt.Fprintln(os.Stderr, "operator-config-unavailable")
 			return 2
 		}
 		var root *os.Root
@@ -134,7 +141,7 @@ func run() int {
 
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		if operatorgates.Serve(ctx, operatortransport.NewPipe(os.Stdin, os.Stdout), hello, nil, root) != nil {
+		if operatorgates.ServeSequence(ctx, operatortransport.NewPipe(os.Stdin, os.Stdout), hello, (operatorgates.ResourceRunner{Config: config}).Run, root) != nil {
 			fmt.Fprintln(os.Stderr, "operator-session-incomplete")
 			return 1
 		}
