@@ -17,7 +17,9 @@
     "ast_serialization": "canonical-json-nonempty-fields-v1"
   },
   "preview_inventory.py": {
-    "sha256": "21e32637253696f91c8f049dac75ac988b87c83212018cf9d18092228070858e"
+    "sha256": "35f608160aa1c0cdaadd6596117275f5acbe348ee7bd499000b76cf3e3f98ab0",
+    "baseline_sha256": "21e32637253696f91c8f049dac75ac988b87c83212018cf9d18092228070858e",
+    "change": "Parameterize the required node architecture for the x86_64 rehearsal; default remains arm64."
   },
   "clock.py": {
     "function_sha256": "06e0e0b0c2ae9f4965f5d43238c03ed199ef6d8b264918703045eb8a353cf9ca"

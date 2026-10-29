@@ -29,6 +29,8 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 	awaiting := map[int]bool{}
 	for _, gate := range s.gates {
 		result := ProcedureResult{Status: operator.NotRun}
+		release := false
+		releaseReason := "gate-not-run"
 		minimum := time.Duration(0)
 		if p.Minimum != nil {
 			minimum = p.Minimum(gate)
@@ -44,13 +46,16 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 				result.Reason = "gate-deadline"
 			} else {
 				var prep error
+				var preparationEnd time.Duration
 				if p.Prepare != nil {
 					end := min(s.clock.Elapsed()+15*time.Minute, latest)
+					preparationEnd = end
 					prepCtx, cancel := context.WithTimeout(ctx, max(time.Duration(0), end-s.clock.Elapsed()))
 					gateEnd := s.Budget.end
 					if p.Finalize != nil {
 						gateEnd = s.Budget.MutationEnd()
 					}
+					release = true
 					prep = p.Prepare(prepCtx, gate, end, gateEnd)
 					if prep == nil && s.clock.Elapsed() >= end {
 						prep = fault("command-result-unknown")
@@ -68,23 +73,29 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 					case reason == "gate-deadline":
 						result.Reason = code(prep)
 					default:
+						if len(s.uncertainties) == 0 {
+							s.unknownScope("gate.prepare", "session", string(gate), preparationEnd, transportRule(prep, "operation-evidence-unknown"))
+						}
 						result.Status = operator.Inconclusive
 						result.Reason = "command-result-unknown"
 						s.Halt(result.Reason)
 					}
 				} else {
-					end, ok := s.BeginGate()
+					// Admit against the same instant that fixes the window. A full
+					// 20-minute minimum must not lose to clock movement between reads.
+					now := s.clock.Elapsed()
+					end, ok := s.beginGate(now)
 					if p.Finalize != nil {
 						end = min(end, s.Budget.MutationEnd())
 					}
-					if !ok || end <= s.clock.Elapsed() || minimum > end-s.clock.Elapsed() {
+					if !ok || end <= now || minimum > end-now {
 						result.Reason = "gate-deadline"
 						s.activeEnd = nil
-						if p.ReleaseCallers != nil && !p.ReleaseCallers(ctx, "gate-not-run", min(s.Budget.end, s.clock.Elapsed()+time.Minute)) {
-							s.Halt("command-result-unknown")
-						}
+
 					} else if p.Command != nil {
+						releaseReason = "gate-ended"
 						gateCtx, cancel := context.WithTimeout(ctx, end-s.clock.Elapsed())
+						release = true
 						result = p.Command(gateCtx, gate, end)
 						cancel()
 						if result.Media == nil {
@@ -107,6 +118,14 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 					}
 				}
 			}
+		}
+		releaseEnd := min(s.Budget.end, s.clock.Elapsed()+time.Minute)
+		if release && p.ReleaseCallers != nil && !p.ReleaseCallers(ctx, releaseReason, releaseEnd) {
+			if len(s.uncertainties) == 0 {
+				s.unknownScope("caller.stop", "caller", "stop", releaseEnd, "unconfirmed-stop")
+			}
+			s.Halt("command-result-unknown")
+			result = Stopped(false, result)
 		}
 		out.Gates = append(out.Gates, result.GateResult(gate))
 		out.Procedures = append(out.Procedures, result)

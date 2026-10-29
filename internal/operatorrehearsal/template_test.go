@@ -340,12 +340,15 @@ func TestRunningClockCheckRejectsWrongSourcesAndMissingNoAdjust(t *testing.T) {
 	for _, row := range []struct {
 		name, args, sources string
 		pass                bool
+		reason              string
 	}{
-		{"reference", "chronyd\x00-x\x00-f\x00/etc/chrony.conf\x00", "^* " + TimeIP + " 1 0 377 0 +0ns[+0ns] +/- 1ms", true},
-		{"wrong-source", "chronyd\x00-x\x00", "^* 192.0.2.123 1 0 377 0 +0ns", false},
-		{"extra-source", "chronyd\x00-x\x00", "^* " + TimeIP + " 1\n^? 192.0.2.123 1", false},
-		{"not-selected", "chronyd\x00-x\x00", "^? " + TimeIP + " 1", false},
-		{"clock-adjustment-enabled", "chronyd\x00-f\x00/etc/chrony.conf\x00", "^* " + TimeIP + " 1", false},
+		{"reference", "chronyd\x00-x\x00-f\x00/etc/chrony.conf\x00", "^* " + TimeIP + " 1 0 377 0 +0ns[+0ns] +/- 1ms", true, ""},
+		{"chronyc-table", "chronyd\x00-x\x00-f\x00/etc/chrony.conf\x00", "MS Name/IP address         Stratum Poll Reach LastRx Last sample\n===============================================================================\n^* " + TimeIP + " 1 0 77 0 +31ns[+162ns] +/- 5811ns", true, ""},
+		{"wrong-source", "chronyd\x00-x\x00", "^* 192.0.2.123 1 0 377 0 +0ns", false, "wrong-time-source"},
+		{"extra-source", "chronyd\x00-x\x00", "^* " + TimeIP + " 1\n^? 192.0.2.123 1", false, "source count is 2"},
+		{"peer-is-a-source", "chronyd\x00-x\x00", "^* " + TimeIP + " 1\n=+ 192.0.2.123 1", false, "source count is 2"},
+		{"not-selected", "chronyd\x00-x\x00", "^? " + TimeIP + " 1", false, "reference is not selected"},
+		{"clock-adjustment-enabled", "chronyd\x00-f\x00/etc/chrony.conf\x00", "^* " + TimeIP + " 1", false, "daemon is missing -x"},
 	} {
 		t.Run(row.name, func(t *testing.T) {
 			_ = python(t, "--version")
@@ -365,8 +368,8 @@ func TestRunningClockCheckRejectsWrongSourcesAndMissingNoAdjust(t *testing.T) {
 			cmd.Env = []string{"PATH=" + dir + ":" + os.Getenv("PATH")}
 			cmd.Stdin = strings.NewReader(script)
 			output, err := cmd.CombinedOutput()
-			if (err == nil) != row.pass {
-				t.Fatalf("clock check: pass=%v err=%v output=%s", row.pass, err, output)
+			if (err == nil) != row.pass || row.reason != "" && !strings.Contains(string(output), row.reason) {
+				t.Fatalf("MUTATION: chrony-source-table pass=%v err=%v output=%s", row.pass, err, output)
 			}
 		})
 	}

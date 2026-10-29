@@ -46,3 +46,23 @@ func TestMutationEditsMatchSource(t *testing.T) {
 		}
 	}
 }
+
+func TestMutationGroupsKeepEveryIdentity(t *testing.T) {
+	first := mutation{ID: "original", GuardFingerprint: "frozen", File: "guard.go", Function: "guard", Old: "true", New: "false", Test: "TestGuard", Marker: "MUTATION:", Package: "./guard"}
+	alias := first
+	alias.ID = "successor"
+	alias.GuardFingerprint = ""
+	other := first
+	other.ID = "different-assertion"
+	other.Test = "TestOther"
+	groups := groupMutations([]mutation{first, alias, other})
+	if len(groups) != 2 || len(groups[0]) != 2 || groups[0][0].ID != "original" || groups[0][1].ID != "successor" || groups[1][0].ID != "different-assertion" {
+		t.Fatal("mutation grouping lost an identity or assertion")
+	}
+}
+func TestMutationBaselineIncludesEveryNamedParent(t *testing.T) {
+	pattern := baselinePattern([]mutation{{Test: "TestA/one"}, {Test: "TestA/two"}, {Test: "TestB"}})
+	if pattern != "^(TestA|TestB)$" {
+		t.Fatal("baseline selection changed", pattern)
+	}
+}

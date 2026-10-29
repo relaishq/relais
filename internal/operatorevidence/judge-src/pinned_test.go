@@ -13,6 +13,8 @@ import (
 
 	"github.com/relaishq/relais/internal/operatorcaller"
 	"github.com/relaishq/relais/internal/operatorevidence"
+	"github.com/relaishq/relais/internal/operatorrehearsal"
+	"github.com/relaishq/relais/pkg/callharness"
 )
 
 func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
@@ -27,20 +29,64 @@ func TestPinnedReleaseJudgesMatchFrozenEvidence(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	cases := []previewPoolInput{rawPoolSample(), {RunID: "run-fixture", Missing: true}}
+	relay := relayInput()
+	mixed := rawPoolSample()
+	relay.Sessions = []string{"relay-session"}
+	relay.CallerJSONL = strings.ReplaceAll(relay.CallerJSONL, `"session":"session"`, `"session":"relay-session"`)
+	mixed.Phases = append(mixed.Phases, relay)
+	cases := []previewPoolInput{rawPoolSample(), {RunID: "run-fixture", Missing: true}, {RunID: relay.RunID, Phases: []previewMediaInput{relay}}, mixed}
 	lost := rawPoolSample()
 	lost.Missing = true
 	lost.Phases[0].Receipts[0].Result.Lost = true
 	cases = append(cases, lost)
-	for _, commit := range []string{"a0d9744ff1223a8d7978447c907041973e915b08", "85e10436eb6adbbf577b6538b0bbb799aab823b2"} {
+	timing := rawPoolSample()
+	editPoolCalls(t, &timing, func(c *callharness.Report) {
+		c.Moves[0].Measurement.FirstContentVerdict = callharness.MetricVerdict{Reasons: []string{"first content classification changes within event-time interval; width=1ms"}}
+	})
+	cases = append(cases, timing)
+	timingRaw, err := json.Marshal(timing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var timingPool operatorevidence.Pool
+	if err = json.Unmarshal(timingRaw, &timingPool); err != nil {
+		t.Fatal(err)
+	}
+	cleanTiming, err := operatorrehearsal.SanitizeMediaEvidence(timingPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sanitizedTiming, err := decodePool(cleanTiming)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases = append(cases, sanitizedTiming)
+	commits := []string{"a0d9744ff1223a8d7978447c907041973e915b08", "85e10436eb6adbbf577b6538b0bbb799aab823b2"}
+	for _, commit := range commits {
+		if err := pinnedCommit(ctx, root, commit); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// These fixed releases differ only in release metadata, not Go sources,
+	// module locks or embedded media. The shared glue and decoder are identical.
+	diff := exec.CommandContext(ctx, "git", "--no-optional-locks", "diff", "--name-only", commits[0], commits[1])
+	diff.Dir, diff.Env = root, operatorcaller.PublicEnvironment(nil)
+	changed, err := diff.Output()
+	if err != nil || string(changed) != "scripts/release/compatibility-policy.json\nscripts/release/compatibility.json\n" {
+		t.Fatalf("fixed release judge input trees differ: %s (%v)", changed, err)
+	}
+	var executableSHA string
+	for _, commit := range commits {
 		t.Run(commit, func(t *testing.T) {
-			if err := pinnedCommit(ctx, root, commit); err != nil {
-				t.Fatal(err)
-			}
 			judge, err := operatorevidence.BuildPinned(ctx, root, commit, goExecutable, filepath.Join(t.TempDir(), "judge"))
 			if err != nil {
 				t.Fatal(err)
 			}
+			t.Logf("pin %s executable SHA256 %s", commit, judge.SHA256)
+			if executableSHA != "" && executableSHA != judge.SHA256 {
+				t.Fatal("byte-identical fixed judge sources produced different executables")
+			}
+			executableSHA = judge.SHA256
 			for _, input := range cases {
 				raw, _ := json.Marshal(input)
 				var pool operatorevidence.Pool

@@ -61,12 +61,15 @@ func (g *procedure) restoreWorkers(ctx context.Context) error {
 		return fault("command-result-unknown")
 	}
 	for _, w := range slices.Clone(g.down) {
+		// A confirmed stop has no running predecessor even while control still
+		// reports its last live heartbeat. Wait for death before replace/start.
+		stopped := slices.Contains(g.stopped, w)
 		until := min(g.end-30*time.Second, g.p.Clock.Elapsed()+90*time.Second)
 		s, err := g.status(ctx)
 		if err != nil {
 			return err
 		}
-		for !alive(s, w, g.c.Parameters.Workers) && !settled(s, w) && g.p.Clock.Elapsed() < until {
+		for (stopped || !alive(s, w, g.c.Parameters.Workers)) && !settled(s, w) && g.p.Clock.Elapsed() < until {
 			if err = g.p.Sleep(ctx, 500*time.Millisecond); err != nil {
 				return err
 			}
@@ -75,7 +78,7 @@ func (g *procedure) restoreWorkers(ctx context.Context) error {
 				return err
 			}
 		}
-		if alive(s, w, g.c.Parameters.Workers) {
+		if !stopped && alive(s, w, g.c.Parameters.Workers) {
 			g.down = slices.DeleteFunc(g.down, func(x string) bool { return x == w })
 			continue
 		}

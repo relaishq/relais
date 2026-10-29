@@ -51,9 +51,9 @@ func TestPoolRegistrationAndBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	phase := Phase{Plan: p, Registration: r, Raw: []byte(`{"callerJsonl":"raw","events":[],"receipts":[]}`), FirstFaultAt: at.Add(time.Second), DeployedSHA: p.PublicSHA, Clocks: clocks.Evidence{At: at}, Inventory: releasecompat.Pool{Complete: true}}
+	phase := Phase{Gate: operator.RelayDeploy, Plan: p, Registration: r, Raw: []byte(`{"callerJsonl":"raw","events":[],"receipts":[]}`), FirstFaultAt: at.Add(time.Second), DeployedSHA: p.PublicSHA, Clocks: clocks.Evidence{At: at}, Inventory: releasecompat.Pool{Complete: true}}
 	pool, sha, err := ReadPool("run-fixture", []Phase{phase}, false)
-	if err != nil || sha != p.PublicSHA || pool.Missing || len(pool.Phases) != 1 {
+	if err != nil || sha != p.PublicSHA || pool.Missing || len(pool.Phases) != 1 || pool.Phases[0].Gate != operator.RelayDeploy {
 		t.Fatal(pool, err)
 	}
 	phase.FirstFaultAt = at
@@ -158,5 +158,36 @@ func TestEveryRequiredSummaryMember(t *testing.T) {
 				t.Fatal("MUTATION: recursive-summary-fields", name, mode, got)
 			}
 		}
+	}
+}
+
+func TestRelaySummaryDoesNotClaimTrials(t *testing.T) {
+	for _, tc := range []struct {
+		name                                 string
+		relay, calls, events, metrics, moves int
+		want                                 operator.Verdict
+	}{
+		{"relay", 1, 1, 0, 0, 0, operator.Passed},
+		{"other-eventless", 0, 1, 0, 0, 0, operator.Inconclusive},
+		{"relay-with-events", 1, 1, 1, 1, 0, operator.Inconclusive},
+		{"relay-with-moves", 1, 1, 0, 0, 1, operator.Inconclusive},
+		{"mixed", 1, 2, 30, 5, 20, operator.Passed},
+		{"mixed-without-trials", 1, 2, 0, 0, 0, operator.Inconclusive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, _ := json.Marshal(Summary{Status: operator.Passed, ExpectedCalls: tc.calls, CompletedCalls: tc.calls, RelayCalls: tc.relay, EventCount: tc.events, MetricCount: tc.metrics, QualifiedMoves: tc.moves})
+			got, err := DecodeSummary(raw)
+			if err != nil || got.Status != tc.want {
+				t.Fatal(got, err)
+			}
+		})
+	}
+}
+
+func TestPaidSummaryRejectsUndecidedTiming(t *testing.T) {
+	raw, _ := json.Marshal(Summary{Status: operator.Passed, CompleteMedia: true, ExpectedCalls: 1, CompletedCalls: 1, EventCount: 30, MetricCount: 270, InconclusiveMetrics: 1, UndecidedMetrics: []UndecidedMetric{{Phase: 0, Event: 0, Metric: "first_content", Causes: []string{"metric-undecided"}}}})
+	got, err := DecodeSummary(raw)
+	if err != nil || got.Status != operator.Inconclusive {
+		t.Fatal("MUTATION: paid-timing-strict", got, err)
 	}
 }

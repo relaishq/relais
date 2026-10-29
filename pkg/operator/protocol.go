@@ -46,9 +46,10 @@ type Request struct {
 }
 
 type Reply struct {
-	ID        string    `json:"id"`
-	Transport Certainty `json:"transport"`
-	ExitCode  *int      `json:"exitCode,omitempty"`
+	UncertaintyRule string    `json:"uncertaintyRule,omitempty"`
+	ID              string    `json:"id"`
+	Transport       Certainty `json:"transport"`
+	ExitCode        *int      `json:"exitCode,omitempty"`
 	// NotSubmitted proves a refusal before any submission, not an arbitrary error.
 	NotSubmitted bool            `json:"notSubmitted,omitempty"`
 	RefusalCode  string          `json:"refusalCode,omitempty"`

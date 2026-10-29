@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/netip"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -92,6 +93,7 @@ type StepResult struct {
 	Move           controlplane.MoveResult
 	Inspection     observe.Inspection
 	Local          mediaworker.WorkerStatus
+	Telemetry      HostTelemetry
 	Ownership      observe.Ownership
 	LossKnown      bool
 	OwnershipKnown bool
@@ -137,6 +139,8 @@ type ProcessEvidence struct {
 	RelayConnectionInvariants string  `json:"relayConnectionInvariants,omitempty"`
 }
 type ProcedureResult struct {
+	// Completed records procedure completion independently of strict media qualification.
+	Completed    bool             `json:"-"`
 	Status       operator.Verdict `json:"status"`
 	Reason       string           `json:"reason,omitempty"`
 	Category     string           `json:"category,omitempty"`
@@ -155,6 +159,7 @@ type procedure struct {
 	p        ProcedurePorts
 	end      time.Duration
 	down     []string
+	stopped  []string
 	frozen   bool
 	unknown  bool
 	evidence ProcessEvidence
@@ -166,7 +171,7 @@ func newProcedure(c *ProcessConfig, p ProcedurePorts, end time.Duration) *proced
 
 // ProcedureError is a classified internal outcome. Unclassified errors from
 // callbacks never prove a definite failure and cannot authorize restoration.
-type ProcedureError struct{ Code string }
+type ProcedureError struct{ Code, Category string }
 
 func (e *ProcedureError) Error() string { return e.Code }
 func code(err error) string {
@@ -202,8 +207,12 @@ func (g *procedure) step(ctx context.Context, op, slot string, end time.Duration
 		return r, err
 	}
 	g.evidence.CompletedSteps++
+	if (op == "worker-stop" || op == "worker-down") && !slices.Contains(g.stopped, extra.Worker) {
+		g.stopped = append(g.stopped, extra.Worker)
+	}
 	if op == "worker-start" {
 		g.down = slices.DeleteFunc(g.down, func(w string) bool { return w == extra.Worker })
+		g.stopped = slices.DeleteFunc(g.stopped, func(w string) bool { return w == extra.Worker })
 	}
 	if op == "unfreeze" || op == "signal-start" {
 		g.frozen = false
@@ -362,9 +371,20 @@ func (g *procedure) replace(ctx context.Context, w string) error {
 	_, err := g.wait(ctx, func(s controlplane.Status) bool { return alive(s, w, g.c.Parameters.Workers) })
 	return err
 }
+
+var categoryPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}(?::[a-z0-9-]{1,40})?$`)
+
 func readFailure(err error) (string, string) {
+	var classified *ProcedureError
+	if errors.As(err, &classified) && classified.Category != "" && categoryPattern.MatchString(classified.Category) {
+		return classified.Code, classified.Category
+	}
 	if strings.HasPrefix(code(err), "precondition-failed:") {
-		return "precondition-failed", strings.TrimPrefix(code(err), "precondition-failed:")
+		category := strings.TrimPrefix(code(err), "precondition-failed:")
+		if categoryPattern.MatchString(category) {
+			return "precondition-failed", category
+		}
+		return "precondition-failed", ""
 	}
 	return "", ""
 }

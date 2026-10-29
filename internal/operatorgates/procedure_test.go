@@ -334,6 +334,65 @@ func TestPreconditionDrainingWorkerMustBeEmpty(t *testing.T) {
 	}
 }
 
+func TestRestoreWorkersWaitsForConfirmedStopDespiteLiveHeartbeat(t *testing.T) {
+	for _, mode := range []string{"confirmed-stop", "refused-stop", "unknown-stop", "unsettled-stop"} {
+		t.Run(mode, func(t *testing.T) {
+			g, _ := testProcedure(t)
+			running, draining, reads := true, true, 0
+			var effects []string
+			g.p.Step = func(_ context.Context, op, _ string, _ time.Duration, _ ProcessExtra) (StepResult, error) {
+				if op != "status" {
+					effects = append(effects, op)
+				}
+				switch op {
+				case "worker-stop":
+					if mode == "refused-stop" {
+						return StepResult{}, fault("precondition-failed:worker-not-empty")
+					}
+					if mode == "unknown-stop" {
+						return StepResult{Certainty: operator.Unknown}, fault("command-result-unknown")
+					}
+					running = false
+				case "status":
+					reads++
+				case "replace":
+					if running || reads < 3 {
+						t.Fatal("replace before settled death")
+					}
+					draining = false
+				case "worker-start":
+					if draining {
+						t.Fatal("start before replace")
+					}
+					running = true
+				}
+				dead := !running && reads >= 3 && mode != "unsettled-stop"
+				return StepResult{Certainty: operator.Succeeded, LossKnown: true, Status: controlplane.Status{Ready: true, Workers: []controlplane.WorkerStatus{{Name: "w1", Address: g.c.Parameters.Workers["w1"].Media, Dead: dead, Draining: draining}}}}, nil
+			}
+			_, _ = g.do(context.Background(), "worker-stop", "w1", ProcessExtra{Worker: "w1"})
+			err := g.restoreWorkers(context.Background())
+			switch mode {
+			case "confirmed-stop":
+				if err != nil || strings.Join(effects, ",") != "worker-stop,replace,worker-start" || !running || draining || len(g.stopped) != 0 {
+					t.Fatal(err, effects, running, draining)
+				}
+			case "refused-stop":
+				if err != nil || len(effects) != 1 || !running {
+					t.Fatal("refused stop changed a live worker", err, effects)
+				}
+			case "unknown-stop":
+				if code(err) != "command-result-unknown" || len(effects) != 1 || reads != 0 {
+					t.Fatal("unknown stop authorized restoration", err, effects)
+				}
+			case "unsettled-stop":
+				if code(err) != "restore-unsettled" || len(effects) != 1 || running {
+					t.Fatal("missing death proof authorized restoration", err, effects)
+				}
+			}
+		})
+	}
+}
+
 func TestTrialStartsBeforeDeadline(t *testing.T) {
 	g, clock := testProcedure(t)
 	clock.Advance(GateMaximum)
@@ -522,11 +581,11 @@ func TestWorkerStartRequiresCompletionProof(t *testing.T) {
 	}
 }
 
-type uncertainStoreRead struct{ reads, failovers int }
+type uncertainStoreRead struct{ reads, failovers, unknownAt int }
 
 func (s *uncertainStoreRead) Observe(context.Context, time.Duration) (StoreObservation, error) {
 	s.reads++
-	if s.reads > 1 {
+	if s.reads >= max(2, s.unknownAt) {
 		return StoreObservation{}, fault("command-result-unknown")
 	}
 	return StoreObservation{Primary: "primary-a", Available: true, Durability: "sync"}, nil
@@ -798,5 +857,184 @@ func TestCollectionUnknownStopsObservationsAndPreservesFailure(t *testing.T) {
 				t.Fatalf("MUTATION: collection uncertainty must stop reads and retain failures: reads=%d result=%+v", observations, r)
 			}
 		})
+	}
+}
+
+func TestSequenceReleasesCallers(t *testing.T) {
+	for _, mode := range []string{"precondition", "skipped", "completed", "failed", "unknown-stop"} {
+		t.Run(mode, func(t *testing.T) {
+			s, clock := fixtureSession(t)
+			s.gates = []operator.Gate{operator.Rollout, operator.ControlRestart}
+			released, commands := 0, 0
+			result := s.RunSequence(context.Background(), SequencePorts{
+				Minimum: func(g operator.Gate) time.Duration {
+					if mode == "skipped" && g == operator.Rollout {
+						return 21 * time.Minute
+					}
+					return 0
+				},
+				Prepare: func(_ context.Context, gate operator.Gate, _, _ time.Duration) error {
+					if gate == operator.Rollout {
+						if mode == "precondition" {
+							return fault("precondition-failed:inventory")
+						}
+					}
+					return nil
+				},
+				Command: func(context.Context, operator.Gate, time.Duration) ProcedureResult {
+					commands++
+					status := operator.Passed
+					if mode == "failed" {
+						status = operator.Failure
+					}
+					return ProcedureResult{Status: status, Media: &MediaSummary{Status: status}}
+				},
+				ReleaseCallers: func(_ context.Context, _ string, end time.Duration) bool {
+					released++
+					if end > s.Budget.end || end > clock.Elapsed()+time.Minute {
+						t.Fatal("MUTATION: caller-release-deadline")
+					}
+					return mode != "unknown-stop"
+				},
+			})
+			if mode == "skipped" {
+				if released != 2 || commands != 1 || result.Gates[0].Status != operator.NotRun {
+					t.Fatal("MUTATION: skipped-caller-release", released, commands)
+				}
+			} else if mode == "failed" || mode == "unknown-stop" {
+				if released != 1 || commands != 1 || result.Gates[1].Reason != "prior-gate-stopped" {
+					t.Fatal("MUTATION: unconfirmed-caller-release", released, commands, result)
+				}
+			} else if released != 2 || commands != map[bool]int{true: 1, false: 2}[mode == "precondition"] {
+				t.Fatal("MUTATION: caller-release-once", released, commands)
+			}
+			if mode == "unknown-stop" && (result.Status == operator.Passed || result.Gates[0].Reason != "command-result-unknown") {
+				t.Fatal("MUTATION: release-unknown-retained", result)
+			}
+		})
+	}
+}
+
+func TestSequenceCannotInventPooledMedia(t *testing.T) {
+	for _, awaiting := range []bool{false, true} {
+		s, _ := fixtureSession(t)
+		s.gates = []operator.Gate{operator.Rollout}
+		result := s.RunSequence(context.Background(), SequencePorts{Command: func(context.Context, operator.Gate, time.Duration) ProcedureResult {
+			r := ProcedureResult{Status: operator.Passed, AwaitingPool: awaiting}
+			if awaiting {
+				r.Status = operator.Inconclusive
+				r.Media = &MediaSummary{Status: operator.Inconclusive}
+			}
+			return r
+		}, Finalize: func(context.Context, time.Duration) (*MediaSummary, error) { return nil, nil }})
+		if result.Status == operator.Passed || result.Gates[0].Status == operator.Passed {
+			t.Fatal("MUTATION: no-invented-media", awaiting, result)
+		}
+	}
+}
+
+func TestAdmissionUnknownSurvivorStops(t *testing.T) {
+	for _, status := range []operator.Verdict{operator.Inconclusive, operator.Failure} {
+		r := RunAdmission(context.Background(), AdmissionPorts{
+			Survivor: func(context.Context, time.Duration) MeasureResult {
+				return MeasureResult{Status: status, Reason: "command-result-unknown"}
+			},
+			StopSurvivor: func(context.Context, time.Duration) bool { t.Fatal("MUTATION: admission-after-unknown"); return true },
+		}, time.Minute)
+		if r.Reason != "command-result-unknown" || r.Status != status {
+			t.Fatal("MUTATION: admission-after-unknown", r)
+		}
+	}
+}
+
+func TestPreconditionCategoryPublication(t *testing.T) {
+	for _, category := range []string{"inventory", "inventory:raw", "inventory:raw:extra", "raw text", "", strings.Repeat("a", 65)} {
+		s, _ := fixtureSession(t)
+		s.gates = []operator.Gate{operator.Rollout}
+		result := s.RunSequence(context.Background(), SequencePorts{Prepare: func(context.Context, operator.Gate, time.Duration, time.Duration) error {
+			return fault("precondition-failed:" + category)
+		}})
+		want := ""
+		if category == "inventory" || category == "inventory:raw" {
+			want = category
+		}
+		if result.Procedures[0].Category != want || result.Gates[0].Reason != "precondition-failed" {
+			t.Fatal("MUTATION: precondition-public-category", category, result)
+		}
+	}
+}
+
+func TestMeasurementPublicationFields(t *testing.T) {
+	var measure Measurement
+	if err := json.Unmarshal([]byte(`{"samples":1,"missingSamples":0,"raw":"untrusted","caller":"untrusted","unexpected":12}`), &measure); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(measure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil || len(fields) != 2 || fields["samples"] == nil || fields["missingSamples"] == nil {
+		t.Fatal("MUTATION: typed-public-measurement", string(raw), err)
+	}
+}
+
+// A real clock advances between deadline creation and admission. Caller setup
+// (including the probe burst) precedes the fresh gate window.
+type advancingGateClock struct{ FakeClock }
+
+func (c *advancingGateClock) Elapsed() time.Duration {
+	c.Advance(time.Microsecond)
+	return c.Tick
+}
+
+func TestSequenceFullLengthCampaignAfterPreparation(t *testing.T) {
+	for _, elapsed := range []time.Duration{5 * time.Minute, 84 * time.Minute} {
+		t.Run(elapsed.String(), func(t *testing.T) {
+			s, initial := fixtureSession(t)
+			clock := &advancingGateClock{FakeClock: *initial}
+			s.clock, s.Budget.clock = clock, clock
+			clock.Advance(elapsed)
+			prepared, commands := 0, 0
+			result := s.RunSequence(context.Background(), SequencePorts{
+				Minimum: func(operator.Gate) time.Duration { return 1020*time.Second + 180*time.Second },
+				Prepare: func(_ context.Context, _ operator.Gate, end, gateEnd time.Duration) error {
+					prepared++
+					if end > gateEnd || end <= clock.Elapsed()+120*time.Second {
+						t.Fatal("preparation lost its separate budget")
+					}
+					clock.Advance(120 * time.Second)
+					return nil
+				},
+				Command: func(_ context.Context, _ operator.Gate, end time.Duration) ProcedureResult {
+					commands++
+					if end-clock.Elapsed() > GateMaximum || end > s.Budget.MutationEnd() {
+						t.Fatal("gate exceeded policy cutoff")
+					}
+					return ProcedureResult{Status: operator.Passed, Media: &MediaSummary{Status: operator.Passed}}
+				},
+				Finalize: func(context.Context, time.Duration) (*MediaSummary, error) {
+					return &MediaSummary{Status: operator.Passed}, nil
+				},
+			})
+			if elapsed == 5*time.Minute {
+				if prepared != 1 || commands != 1 || result.Gates[0].Reason != "" || result.Status != operator.Passed {
+					t.Fatalf("full-length campaign skipped after setup: prepared=%d commands=%d result=%+v", prepared, commands, result)
+				}
+			} else if commands != 0 || result.Gates[0].Reason != "gate-deadline" {
+				t.Fatalf("late campaign escaped minute-103 cutoff: %+v", result)
+			}
+		})
+	}
+}
+
+func TestProcedureCompletionIsIndependentOfMediaTiming(t *testing.T) {
+	for _, procedureErr := range []error{nil, fault("precondition-failed:inventory"), fault("gate-deadline"), fault("command-result-unknown")} {
+		g, _ := testProcedure(t)
+		g.p.Media = func(context.Context) (*MediaSummary, error) { return &MediaSummary{Status: operator.Inconclusive}, nil }
+		result := g.finish(context.Background(), procedureErr, false)
+		if result.Completed != (procedureErr == nil) || result.Status != operator.Inconclusive {
+			t.Fatal("procedure completion confused with strict timing", result, procedureErr)
+		}
 	}
 }

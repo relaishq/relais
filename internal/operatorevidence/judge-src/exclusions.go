@@ -3,6 +3,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -44,6 +45,8 @@ type flaggedInterval struct {
 	End   time.Time `json:"end"`
 }
 type callerSaturation struct {
+	clipped        []flaggedInterval
+	Checks         []generatorCheck  `json:"checks,omitempty"`
 	Job            string            `json:"job"`
 	FlaggedSeconds float64           `json:"flagged_seconds"`
 	MediaSeconds   float64           `json:"media_seconds"`
@@ -52,6 +55,15 @@ type callerSaturation struct {
 	Causes         []string          `json:"causes,omitempty"`
 	Flagged        []flaggedInterval `json:"flagged,omitempty"`
 }
+
+// Retain the existing error text while exposing only fixed numeric diagnostics.
+type generatorEvidenceError struct {
+	text  string
+	check generatorCheck
+}
+
+func (e *generatorEvidenceError) Error() string { return e.text }
+
 type eventExclusion struct {
 	Identity        callharness.OperationIdentity `json:"identity"`
 	Job             string                        `json:"job"`
@@ -63,18 +75,35 @@ type eventExclusion struct {
 }
 
 func sampleFlagged(s loadgen.Stats) bool {
+	return len(generatorSampleChecks(s)) > 0
+}
+
+// The predicate and its diagnostic projection share one set of comparisons.
+func generatorSampleChecks(s loadgen.Stats) []generatorCheck {
 	if observe.Numbers(s) != nil {
-		return true
+		return []generatorCheck{{Rule: "generator-numbers-invalid", Observed: 1, Limit: 0}}
 	}
 	if _, ok := observe.AddCount(int64(s.IntervalPacing.SentFrames), int64(s.IntervalPacing.SkippedFrames)); !ok {
-		return true
+		return []generatorCheck{{Rule: "generator-pacing-overflow", Observed: 1, Limit: 0}}
 	}
 	l := loadgen.DefaultLimits()
 	// A sampler tick can split the pacer's first late send from its skipped-frame
 	// record on the next 20–33ms tick. Flag Max independently of p99/skips:
 	// 500ms is safely below ~0.96s (one sample period minus a pacer tick), so a
 	// >=1s stall cannot leave its only useful backward reach in a clean sample.
-	return s.CPUPerGOMAXPROCS > l.CPUPercent || s.IntervalLateness.P99 > l.P99 || s.IntervalLateness.Max > 500*time.Millisecond || s.IntervalPacing.SkippedPercent() > l.SkippedPercent || s.Interval > expectedSamplePeriod+statsClockTolerance
+	var failed []generatorCheck
+	for _, check := range []generatorCheck{
+		{"generator-cpu-percent-max", s.CPUPerGOMAXPROCS, l.CPUPercent},
+		{"generator-p99-ns-max", float64(s.IntervalLateness.P99), float64(l.P99)},
+		{"generator-max-ns-max", float64(s.IntervalLateness.Max), float64(500 * time.Millisecond)},
+		{"generator-skipped-percent-max", s.IntervalPacing.SkippedPercent(), l.SkippedPercent},
+		{"generator-interval-ns-max", float64(s.Interval), float64(expectedSamplePeriod + statsClockTolerance)},
+	} {
+		if check.Observed > check.Limit {
+			failed = append(failed, check)
+		}
+	}
+	return failed
 }
 
 type statsManifestEntry struct {
@@ -133,15 +162,15 @@ func loadSamples(dir string, pid int, verify bool) ([]loadgen.Stats, error) {
 	// Preserve mailbox sequence order: sorting by wall time could hide a backward clock step.
 	for i := 1; i < len(samples); i++ {
 		if !samples[i].At.After(samples[i-1].At) {
-			return nil, fmt.Errorf("duplicate or unordered stats timestamp")
+			return nil, &generatorEvidenceError{"duplicate or unordered stats timestamp", generatorCheck{"generator-timestamps-ordered", 0, 1}}
 		}
 		delta := samples[i].At.Sub(samples[i-1].At) - samples[i].Interval
 		if delta < -statsClockTolerance || delta > statsClockTolerance {
-			return nil, fmt.Errorf("stats wall/monotonic discontinuity at sample %d: %s", i, delta)
+			return nil, &generatorEvidenceError{fmt.Sprintf("stats wall/monotonic discontinuity at sample %d: %s", i, delta), generatorCheck{"generator-clock-delta-ns-max", math.Abs(float64(delta)), float64(statsClockTolerance)}}
 		}
 	}
 	if excursion := statsClockExcursion(samples); excursion > statsClockTolerance {
-		return nil, fmt.Errorf("cumulative stats wall/monotonic drift exceeds 25ms: %s", excursion)
+		return nil, &generatorEvidenceError{fmt.Sprintf("cumulative stats wall/monotonic drift exceeds 25ms: %s", excursion), generatorCheck{"generator-clock-excursion-ns-max", float64(excursion), float64(statsClockTolerance)}}
 	}
 	// No period is serialized by this pinned public schema. Check the 1s
 	// contract, not just interval-to-wall agreement. A short catch-up tick may
@@ -153,11 +182,11 @@ func loadSamples(dir string, pid int, verify bool) ([]loadgen.Stats, error) {
 			regular = true
 		}
 		if i > 0 && i < len(samples)-1 && sample.Interval < expectedSamplePeriod-statsClockTolerance && samples[i-1].Interval <= expectedSamplePeriod+statsClockTolerance && samples[i+1].Interval <= expectedSamplePeriod+statsClockTolerance {
-			return nil, fmt.Errorf("stats sampling cadence inconsistent with 1s at sample %d", i)
+			return nil, &generatorEvidenceError{fmt.Sprintf("stats sampling cadence inconsistent with 1s at sample %d", i), generatorCheck{"generator-cadence-ns-min", float64(sample.Interval), float64(expectedSamplePeriod - statsClockTolerance)}}
 		}
 	}
 	if !regular {
-		return nil, fmt.Errorf("stats sampling period cannot be verified as 1s")
+		return nil, &generatorEvidenceError{"stats sampling period cannot be verified as 1s", generatorCheck{"generator-regular-samples-min", 0, 1}}
 	}
 	return samples, nil
 }
@@ -167,6 +196,7 @@ func loadSamples(dir string, pid int, verify bool) ([]loadgen.Stats, error) {
 // A flagged interval must still be anchored to the caller's event wall-clock window.
 const statsClockTolerance = 25 * time.Millisecond
 const expectedSamplePeriod = time.Second
+const saturationPercentLimit = 1
 
 // Conservatively use the largest absolute cumulative wall/monotonic excursion
 // over the entire collected process timeline for both event edges. This also
@@ -207,7 +237,7 @@ func sampleSpan(samples []loadgen.Stats, start, end time.Time) error {
 	// This allowance never relaxes event-window coverage or changes the budget start.
 	tolerance := min(samples[0].Interval, 1500*time.Millisecond)
 	if samples[0].At.Add(-samples[0].Interval).After(start.Add(tolerance)) || samples[len(samples)-1].At.Before(end) {
-		return fmt.Errorf("stats do not cover caller media start through hangup")
+		return &generatorEvidenceError{"stats do not cover caller media start through hangup", generatorCheck{"generator-media-span-covered", 0, 1}}
 	}
 	return nil
 }
@@ -250,13 +280,19 @@ func saturationBudget(job string, samples []loadgen.Stats, start, end time.Time)
 		}
 		if f.End.After(first) {
 			b.FlaggedSeconds += f.End.Sub(first).Seconds()
+			// Retain the same disjoint budget contributions for diagnostics only.
+			if n := len(b.clipped); n > 0 && b.clipped[n-1].End.Equal(first) {
+				b.clipped[n-1].End = f.End
+			} else {
+				b.clipped = append(b.clipped, flaggedInterval{first, f.End})
+			}
 		}
 		if f.End.After(until) {
 			until = f.End
 		}
 	}
 	b.Percent = 100 * b.FlaggedSeconds / b.MediaSeconds
-	if b.Percent > 1 {
+	if b.Percent > saturationPercentLimit {
 		b.Outcome = "inconclusive"
 		b.Causes = append(b.Causes, "generator saturation exceeds 1% caller media wall-time")
 	}
@@ -311,15 +347,6 @@ func callerEventWindow(r receipt, c *callharness.Report, m callharness.MoveRepor
 		return time.Time{}, time.Time{}, fmt.Errorf("caller event window overflow")
 	}
 	first, last := r.Start.Add(-time.Second), r.End.Add(7*time.Second)
-	// The wire format has no completeness count for matched content baselines.
-	// A missing/truncated optional list cannot shorten generator coverage.
-	if c.StartedAt.Before(first) {
-		first = c.StartedAt
-	}
-	if c.HungUpAt > 0 && c.StartedAt.Add(c.HungUpAt).After(last) {
-		last = c.StartedAt.Add(c.HungUpAt)
-	}
-
 	earlier := func(at time.Time) {
 		if at.Before(first) {
 			first = at
@@ -439,6 +466,10 @@ func applySaturation(dir string, report *loadgen.RunReport, receipts []receipt, 
 		}
 		b := saturationBudget(job, samples, start, end)
 		if err != nil {
+			var diagnostic *generatorEvidenceError
+			if errors.As(err, &diagnostic) {
+				b.Checks = append(b.Checks, diagnostic.check)
+			}
 			b.Outcome = "inconclusive"
 			b.Causes = append(b.Causes, "missing or unparsable collected stats: "+err.Error())
 		}

@@ -17,7 +17,18 @@ import (
 // observeHost uses the session's single exchange path. Only the two fixed pure
 // observations below call it. A malformed reply or unknown transport latches the
 // session; a confirmed bad observation is a definite read precondition failure.
-func (s *Session) observeHost(ctx context.Context, p Peer, slot, action, script string, end time.Duration, decode func(string) error) error {
+func (s *Session) SetObservationFailureSink(sink func(slot, observation string, err error)) {
+	s.observationFailureSink = sink
+}
+
+func (s *Session) observationFailure(slot, action string, err error) {
+	if err != nil && s.observationFailureSink != nil {
+		s.observationFailureSink(slot, action, err)
+	}
+}
+
+func (s *Session) observeHost(ctx context.Context, p Peer, slot, action, script string, end time.Duration, decode func(string) error) (err error) {
+	defer func() { s.observationFailure(slot, action, err) }()
 	var observationErr error
 	outcome, err := s.Exchange(ctx, p, operator.HostExecute, slot, action, nil, []byte(script), end, func(reply operator.Reply) operator.Certainty {
 		if reply.NotSubmitted {
@@ -54,7 +65,11 @@ func (s *Session) FreshInventory(ctx context.Context, p Peer, pins []inventory.P
 	}
 	pool := releasecompat.Pool{Schema: 1, Complete: true, TargetWorkerProfile: "legacy"}
 	for _, slot := range inventory.Slots {
-		script, err := host.Inventory(slot, pins, requireRunning)
+		arch := "arm64"
+		if len(pins) > 0 && pins[0].Architecture != "" {
+			arch = pins[0].Architecture
+		}
+		script, err := host.Inventory(slot, pins, requireRunning, arch)
 		if err != nil {
 			return releasecompat.Pool{}, err
 		}

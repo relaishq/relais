@@ -10,8 +10,18 @@ import (
 // Require checks field presence only; Decode and DecodeLimit additionally
 // enforce unique canonical members and product-owned JSON types.
 func Require(data []byte, contract Contract) error {
+	if !json.Valid(data) {
+		return fmt.Errorf("invalid JSON")
+	}
 	for _, field := range contract {
-		if err := present(data, strings.Split(field, ".")); err != nil {
+		path := strings.Split(field, ".")
+		for _, segment := range path {
+			key := strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(segment, "~"), "?"), "[]")
+			if key == "" || strings.ContainsAny(key, "~?[]") {
+				return fmt.Errorf("invalid presence path %q", field)
+			}
+		}
+		if err := present(data, path); err != nil {
 			return fmt.Errorf("%s: %w", field, err)
 		}
 	}
@@ -19,6 +29,13 @@ func Require(data []byte, contract Contract) error {
 }
 
 func present(data []byte, path []string) error {
+	// A terminal array consumes the last segment before visiting its rows.
+	if len(path) == 0 {
+		if !json.Valid(data) {
+			return fmt.Errorf("invalid JSON")
+		}
+		return nil
+	}
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(data, &object); err != nil || object == nil {
 		return fmt.Errorf("expected object")
@@ -27,8 +44,12 @@ func present(data []byte, path []string) error {
 	optional := strings.HasPrefix(key, "~")
 	key = strings.TrimPrefix(key, "~")
 	nullable := strings.HasSuffix(key, "?")
+	key = strings.TrimSuffix(key, "?")
 	array := strings.HasSuffix(key, "[]")
-	key = strings.TrimSuffix(strings.TrimSuffix(key, "?"), "[]")
+	key = strings.TrimSuffix(key, "[]")
+	if key == "" || strings.ContainsAny(key, "~?[]") {
+		return fmt.Errorf("invalid presence path")
+	}
 	raw, ok := object[key]
 	if !ok {
 		if optional {

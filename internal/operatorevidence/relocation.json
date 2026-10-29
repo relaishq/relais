@@ -4,13 +4,14 @@
     "import module path",
     "comments describing collected evidence",
     "exclusion helper prefix before main and unused import removal",
-    "receipt result uses controlplane.MoveResult with the same consumed fields"
+    "receipt result uses controlplane.MoveResult with the same consumed fields",
+    "Handwritten diagnostic projection: phase inclusion/exclusion counts, fixed exclusion codes and duplicate counts; judge policy unchanged."
   ],
   "files": [
     {
       "file": "main.go",
       "sourceSHA256": "c6aef1d42288b9a8df52a4acf0e085e37982501f45e9da35e08e84853ea233bb",
-      "relocatedSHA256": "b8eb604d20c08ac5b41058aa6153c225e50fa64092079956dd0c20eb7b9755c7",
+      "relocatedSHA256": "b3a2929879b25416b2f2874f5c9ed70f61eb7e1e95fe708ef7bcbc4500dbc800",
       "baselineRelocatedSHA256": "580e08dd655e517a6a2a0b392320e7e7f2dd17fd0a0a2f2eff3cad3f197abb86"
     },
     {
@@ -28,7 +29,7 @@
     {
       "file": "exclusions.go",
       "sourceSHA256": "c2e4793b1645efca56ca4bf3c0764d84e1917471bf795d9158d7107e31288826",
-      "relocatedSHA256": "a6c99216e1cde4769bfd1450a41b6ad60114a3e379a6c4b13be074b9945a7736",
+      "relocatedSHA256": "c14d4c2226886a892c55e281da66cba925dd3983ad0eaf29325a301356476c88",
       "baselineRelocatedSHA256": "7f12316a594667ce3107dadb9628cf86efcfcbe0839ae43cdfb52de7ade1849f"
     },
     {
@@ -48,23 +49,50 @@
     "audio-only Video exception, all optional-ledger contexts covered by deletion/null regressions, and explicit time.Time scalar decoder accounting",
     "custom-decoder checks include map keys and named containers; optional contexts have passing controls and required contexts explicitly assert IncompleteEvidence",
     "historical takeover start is optional only via the shared ledger; independent signal receipt bounds remain required",
-    "reuse already validated product generator messages rather than decoding the same sample twice; validation and thresholds are unchanged"
+    "reuse already validated product generator messages rather than decoding the same sample twice; validation and thresholds are unchanged",
+    "relay-deploy alone qualifies one completed zero-event call with full caller and generator checks; relay calls never enter the unchanged trial judge; only explicit null empty Moves/armed collections are normalized for relay, while omitted fields remain invalid",
+    "Generator calibration delegates to the same pinned applySaturation path; interval predicates expose numeric diagnostics without threshold or comparison changes.",
+    "Existing clock, cadence and span rejection conditions retain their error text and expose fixed numeric diagnostics; verdict behavior is unchanged.",
+    "Qualify every phase independently, quarantine incomplete phase envelopes separately, retain known failures and report fixed contract paths/reasons without changing media or generator thresholds.",
+    "Accept exactly -1 for the product MoveReport.From/To unknown-index sentinel, with release-source provenance in the numeric exception ledger; other numeric guards and judge thresholds are unchanged.",
+    "Restore original per-event generator coverage: complete measurements use their event and baseline horizons plus one sampler period, not dial through hangup; media-span validation and incomplete-measurement fallback remain unchanged.",
+    "Diagnostic-only projection of complete media, distinct lost callers and every undecided yardstick row with phase/event indexes and fixed reason codes; strict product verdicts and thresholds are unchanged. Free rehearsal eligibility alone follows the owner decision of 2026-10-28.",
+    "Share the unchanged timing-reason classifier with evidence sanitization; recognized product reason fields retain fixed canonical prefixes, while opaque identities and unknown reasons remain hashed. Full-summary raw/sanitized comparisons cover every cause family without changing judge policy or event coverage."
   ],
   "guardFiles": [
     {
       "file": "numbers.go",
-      "sha256": "1196b549b4b01061468b25ed8a26c5c8ad7523230c182b9a5ae91dd25c2ad658"
+      "sha256": "eb1c2a24b0c0895567e5d68874497112469d8757d7abefc3d4694d69d6eec206"
     },
     {
       "file": "collections.go",
-      "sha256": "d806b21072a8f854233cbdea4b88ce85811bf010481321cd9f2693c82c0bb783"
+      "sha256": "f9be3028d609037398943dbe704205c1c2de4923afb2f6abd5e5991c769bc79f"
+    },
+    {
+      "file": "relay.go",
+      "sha256": "c8032b9b06713a07fdac58bf82f31ac52e82735d86837efdf8ecf67dc1e4ecdc"
+    },
+    {
+      "file": "calibration.go",
+      "sha256": "bdce87078e4e4b8b0bb06d4102f38695ae92e3d2e0e0bbfa1744bdba71bdb36f"
+    },
+    {
+      "file": "validation.go",
+      "sha256": "1572df8eb7173ba426e3fc74c41cd594e4f9e68ef392d7b2eafcaeeb12e64f9d"
+    },
+    {
+      "file": "timing.go",
+      "sha256": "dffdc12bb39ac503a6bf4216ef6197ea9d5802b14380deb0a110491a2f4f2a84"
     }
   ],
   "fixtureHardening": "Synthetic controls carry complete armed inventories, both audio/video gap populations on every event, and mapped duration/classification records. Product judge policy and expected passing summary counts are unchanged. Video tracks include the product-emitted Video object; the expected passing summary remains unchanged.",
   "sharedDecoderContract": {
     "required.go": "7d91f285d5587491f4e707aabe24c40b7067a0c8fe512f0babb84c1d900295d1",
-    "evidence_optional.go": "2e301fec2a29b4d9777271de22bd05949ec65604026883a34986440823073c43",
+    "evidence_optional.go": "2762b8d00a0b5c6d6c2471808bc45c210b05a89698357aba9eefc91b0cf88d87",
     "canonical.go": "22cb1835297d4bf5c2afa264a22370f855897a9390dedfc30e305188a6f6e30e",
-    "strict.go": "efdd1034a43eefff1b878cb53227ec77215e6bb6ae5b8badf3e67090fb8cd0d6"
+    "strict.go": "efdd1034a43eefff1b878cb53227ec77215e6bb6ae5b8badf3e67090fb8cd0d6",
+    "diagnostic.go": "9ebee72d59b1e10f2c4696180206ed8b2a5aee22c3562d775f3ab1acd2c9af87",
+    "numbers.go": "6b185d11d81af31566b2a5c4cac4664a85d26ebbeba02bfe4b5cc1293baf8c0e",
+    "timing.go": "ba141ca76ab468ad524649ef394ec62502b49a5ccd48fe5cb360e98e28fb351b"
   }
 }

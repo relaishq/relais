@@ -23,6 +23,7 @@ type StoreCapability interface {
 }
 type MeasurementObservation struct {
 	At     time.Time
+	Hosts  map[string]HostTelemetry
 	Status *controlplane.Status
 	Local  map[string]mediaworker.WorkerStatus
 	Store  *StoreObservation
@@ -50,12 +51,21 @@ type MeasurementCollection struct {
 	Err      error
 }
 type Measurement struct {
-	Samples               int    `json:"samples"`
-	MissingSamples        int    `json:"missingSamples"`
-	RecoveredMS           *int64 `json:"recoveredMs,omitempty"`
-	PrimaryChanged        *int   `json:"primaryChanged,omitempty"`
-	SynchronousDurability *int   `json:"synchronousDurability,omitempty"`
-	AdmittedCalls         *int   `json:"admittedCalls,omitempty"`
+	ENAAllowanceDelta         *uint64  `json:"enaAllowanceDelta,omitempty"`
+	ENAKnownAllowanceDelta    *uint64  `json:"enaKnownAllowanceDelta,omitempty"`
+	RedisWriteP99UpperSeconds *float64 `json:"redisWriteP99UpperSeconds,omitempty"`
+	CheckpointP99UpperSeconds *float64 `json:"checkpointP99UpperSeconds,omitempty"`
+	SnapshotAgeMaxMS          *float64 `json:"snapshotAgeMaxMs,omitempty"`
+	CheckpointAgeMaxMS        *float64 `json:"checkpointAgeMaxMs,omitempty"`
+	StoreCommandsPerSecond    *float64 `json:"storeCommandsPerSecond,omitempty"`
+	StoreBytesPerSecond       *float64 `json:"storeBytesPerSecond,omitempty"`
+	PublicUDPBytesPerSecond   *float64 `json:"publicUdpBytesPerSecond,omitempty"`
+	Samples                   int      `json:"samples"`
+	MissingSamples            int      `json:"missingSamples"`
+	RecoveredMS               *int64   `json:"recoveredMs,omitempty"`
+	PrimaryChanged            *int     `json:"primaryChanged,omitempty"`
+	SynchronousDurability     *int     `json:"synchronousDurability,omitempty"`
+	AdmittedCalls             *int     `json:"admittedCalls,omitempty"`
 }
 type MeasureResult struct {
 	Status      operator.Verdict `json:"status"`
@@ -219,7 +229,16 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 			r.Measurement.MissingSamples++
 		}
 	}
-	r.Measurement.Samples = len(rows)
+	summary := SummarizeObservations(rows)
+	summary.MissingSamples += r.Measurement.MissingSamples
+	summary.RecoveredMS = r.Measurement.RecoveredMS
+	summary.PrimaryChanged = r.Measurement.PrimaryChanged
+	summary.SynchronousDurability = r.Measurement.SynchronousDurability
+	summary.AdmittedCalls = r.Measurement.AdmittedCalls
+	r.Measurement = summary
+	if summary.ENAKnownAllowanceDelta != nil && *summary.ENAKnownAllowanceDelta > 0 {
+		failed = true
+	}
 	if r.Media != nil && r.Media.Status == operator.Failure {
 		failed = true
 	}

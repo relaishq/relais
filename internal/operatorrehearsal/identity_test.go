@@ -127,7 +127,7 @@ func execTarget(args []string) string {
 }
 func TestDockerOperationsUseConfirmedCreationIDs(t *testing.T) {
 	d, runner := bootedFixture(t)
-	if err := d.NegativeControls(context.Background()); err != nil {
+	if err := d.NegativeControls(context.Background(), func(context.Context, string) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	a := &Adapter{Topology: d.Topology, Containers: d.ContainerIDs(), Runner: &serialBootRunner{runner: runner}}

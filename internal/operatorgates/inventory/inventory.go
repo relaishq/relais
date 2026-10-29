@@ -17,6 +17,7 @@ import (
 
 // Pin is an inventory's identity proof, independent of the session protocol.
 type Pin struct {
+	Architecture   string `json:"architecture,omitempty"`
 	Version        string `json:"version"`
 	Commit         string `json:"commit"`
 	ArchiveSHA256  string `json:"archiveSha256"`
@@ -29,9 +30,13 @@ var expected = map[string][]string{"relay": {"relay-primary", "relay-standby"}, 
 var category = regexp.MustCompile(`^INVENTORY_UNKNOWN:([a-z][a-z-]{0,29})\s*$`)
 var sha = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
-type Failure struct{ Slot, Code string }
+type Failure struct {
+	Slot, Code string
+	cause      error
+}
 
 func (f *Failure) Error() string { return "inventory-unavailable:" + f.Slot + "-" + f.Code }
+func (f *Failure) Unwrap() error { return f.cause }
 func Unavailable(slot, stdout string) error {
 	code := "unavailable"
 	if match := category.FindStringSubmatch(stdout); match != nil {
@@ -54,7 +59,13 @@ func ValidatePins(pins []Pin, selected operator.Scenario) error {
 	return nil
 }
 
-func Parse(slot string, data []byte, pins []Pin) ([]releasecompat.Participant, error) {
+func Parse(slot string, data []byte, pins []Pin) (participants []releasecompat.Participant, err error) {
+	check := "shape"
+	defer func() {
+		if err != nil {
+			err = &Failure{Slot: slot, Code: check, cause: err}
+		}
+	}()
 	var envelope struct {
 		ObservedAt   int64             `json:"observedAt"`
 		Participants []json.RawMessage `json:"participants"`
@@ -69,6 +80,7 @@ func Parse(slot string, data []byte, pins []Pin) ([]releasecompat.Participant, e
 	seen := map[string]bool{}
 	rows := make([]releasecompat.Participant, 0, len(names))
 	for _, raw := range envelope.Participants {
+		check = "shape"
 		var p releasecompat.Participant
 		if err := observe.Decode(raw, &p, observe.Contract{"name", "role", "profile", "version", "commit", "archive_sha256", "agents", "default_budgets", "manifest"}); err != nil {
 			return nil, err
@@ -96,10 +108,22 @@ func Parse(slot string, data []byte, pins []Pin) ([]releasecompat.Participant, e
 		pin := slices.IndexFunc(pins, func(pin Pin) bool {
 			return pin.Version == p.Version && pin.Commit == p.Commit && pin.ArchiveSHA256 == p.ArchiveSHA256
 		})
+		check = "participant"
 		if pin < 0 || seen[p.Name] || !slices.Contains(names, p.Name) || p.Role != role || p.Profile != profile || p.DefaultBudgets != (role == "worker") || p.Agents == nil || !slices.Equal(p.Agents, agents) {
 			return nil, fmt.Errorf("unproven compatibility participant")
 		}
-		if p.Manifest.Version != pins[pin].Version || p.Manifest.Commit != pins[pin].Commit || p.Manifest.OS != "linux" || p.Manifest.Arch != "arm64" {
+		arch := pins[pin].Architecture
+		switch arch {
+		case "", "arm64":
+			arch = "arm64"
+		case "x86_64":
+			arch = "amd64"
+		default:
+			check = "architecture"
+			return nil, fmt.Errorf("unsupported pinned architecture")
+		}
+		check = "manifest-identity"
+		if p.Manifest.Version != pins[pin].Version || p.Manifest.Commit != pins[pin].Commit || p.Manifest.OS != "linux" || p.Manifest.Arch != arch {
 			return nil, fmt.Errorf("live manifest identity differs")
 		}
 		seen[p.Name] = true

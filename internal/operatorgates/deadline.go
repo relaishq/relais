@@ -52,10 +52,13 @@ func NewBudget(clock Clock, armed, end string) (Budget, error) {
 }
 func (b Budget) Remaining() time.Duration { return max(time.Duration(0), b.end-b.clock.Elapsed()) }
 func (b Budget) GateEnd() (time.Duration, bool) {
-	if b.Remaining() <= 0 {
+	return b.gateEnd(b.clock.Elapsed())
+}
+func (b Budget) gateEnd(now time.Duration) (time.Duration, bool) {
+	if now >= b.end {
 		return b.end, false
 	}
-	return min(b.end, b.clock.Elapsed()+GateMaximum), true
+	return min(b.end, now+GateMaximum), true
 }
 func (b Budget) PoolEnd() time.Duration { return min(b.end, b.clock.Elapsed()+PoolReserve) }
 func (b Budget) MutationEnd() time.Duration {

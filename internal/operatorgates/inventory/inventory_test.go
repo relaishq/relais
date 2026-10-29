@@ -52,6 +52,43 @@ func TestInventoryFailureCode(t *testing.T) {
 	}
 }
 
+func TestInventoryMatchesPinnedArchitecture(t *testing.T) {
+	for _, c := range oracletest.Cases(t, "inventory.parseInventory") {
+		if c.Result.Completion != "returned" {
+			continue
+		}
+		var envelope struct {
+			Value struct {
+				ObservedAt   int64                       `json:"observedAt"`
+				Participants []releasecompat.Participant `json:"participants"`
+			} `json:"value"`
+		}
+		if err := json.Unmarshal([]byte(oracletest.JSON[string](t, c.Request.Inputs[1])), &envelope); err != nil {
+			t.Fatal(err)
+		}
+		pins := oracletest.JSON[[]Pin](t, c.Request.Inputs[2])
+		for i := range pins {
+			pins[i].Architecture = "x86_64"
+		}
+		for i := range envelope.Value.Participants {
+			envelope.Value.Participants[i].Manifest.OS = "linux"
+			envelope.Value.Participants[i].Manifest.Arch = "amd64"
+		}
+		slot := oracletest.JSON[string](t, c.Request.Inputs[0])
+		if _, err := Parse(slot, oracletest.Marshal(t, envelope.Value), pins); err != nil {
+			t.Fatal("pinned amd64 inventory rejected", err)
+		}
+		for i := range pins {
+			pins[i].Architecture = "arm64"
+		}
+		if _, err := Parse(slot, oracletest.Marshal(t, envelope.Value), pins); err == nil {
+			t.Fatal("inventory accepted a different pinned architecture")
+		}
+		return
+	}
+	t.Fatal("missing valid inventory fixture")
+}
+
 func TestBootHashMatchesPublicTemplate(t *testing.T) {
 	template, err := os.ReadFile("../../../deploy/aws/preview.yaml")
 	if err != nil {

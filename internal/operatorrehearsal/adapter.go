@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/relaishq/relais/internal/operatorgates/host"
 	"github.com/relaishq/relais/internal/operatortransport"
 	"github.com/relaishq/relais/pkg/operator"
 )
@@ -123,7 +124,7 @@ func (a *Adapter) Execute(ctx context.Context, req operator.Request) operator.Re
 		command := Command{Label: "host-step", Args: []string{"docker", "exec", "-i", id, "sh", "-c", wrapper}, Input: req.Script}
 		result := a.Runner.Run(bounded, command)
 		reply := a.classify(req.ID, result)
-		if reply.Transport != operator.Succeeded {
+		if reply.Transport != operator.Succeeded || hostObservationFailed(req.Action, result.Stdout) {
 			a.printFailure(result)
 		}
 		return reply
@@ -131,9 +132,43 @@ func (a *Adapter) Execute(ctx context.Context, req operator.Request) operator.Re
 		return refusal(req.ID, "unsupported-operation")
 	}
 }
+
+// A script can exit zero while its typed envelope refuses or lacks evidence.
+// Retain that original output for diagnosis as well as transport failures.
+func hostObservationFailed(action string, stdout []byte) bool {
+	raw, err := host.Unpack(string(stdout), 256000)
+	if err != nil {
+		return true
+	}
+	if action == "inventory" || action == "clock" {
+		return false
+	}
+	var envelope struct {
+		Kind string `json:"kind"`
+	}
+	return json.Unmarshal(raw, &envelope) != nil || envelope.Kind != "ok"
+}
+
 func (a *Adapter) classify(id string, result CommandResult) operator.Reply {
 	r := operator.Reply{ID: id, Transport: operator.Unknown}
 	if result.Err != nil || result.Code == nil || *result.Code < 0 || *result.Code == 124 || *result.Code == 125 || *result.Code == 137 || result.Truncated || len(result.Stdout) > operator.MaxHostOutputBytes || len(result.Stderr) > operator.MaxHostOutputBytes || !utf8.Valid(result.Stdout) || !utf8.Valid(result.Stderr) {
+		r.UncertaintyRule = "unconfirmed-exit"
+		switch {
+		case errors.Is(result.Err, context.DeadlineExceeded):
+			r.UncertaintyRule = "timeout"
+		case errors.Is(result.Err, context.Canceled):
+			r.UncertaintyRule = "cancelled"
+		case result.Truncated || len(result.Stdout) > operator.MaxHostOutputBytes || len(result.Stderr) > operator.MaxHostOutputBytes:
+			r.UncertaintyRule = "truncated-output"
+		case !utf8.Valid(result.Stdout) || !utf8.Valid(result.Stderr):
+			r.UncertaintyRule = "malformed-reply"
+		case result.Code != nil && (*result.Code == 124 || *result.Code == 137):
+			r.UncertaintyRule = "timeout"
+		case result.Err != nil:
+			r.UncertaintyRule = "lost-reply"
+		case result.Code == nil:
+			r.UncertaintyRule = "missing-exit-status"
+		}
 		return r
 	}
 	r.ExitCode = result.Code
@@ -144,7 +179,7 @@ func (a *Adapter) classify(id string, result CommandResult) operator.Reply {
 	// Credentials are removed before any byte crosses a pipe or diagnostic sink.
 	r.Payload, _ = json.Marshal(operator.HostOutput{Stdout: a.Topology.Redact(string(result.Stdout))})
 	if len(r.Payload) > operator.MaxFrameBytes/2 {
-		return operator.Reply{ID: id, Transport: operator.Unknown}
+		return operator.Reply{ID: id, Transport: operator.Unknown, UncertaintyRule: "truncated-output"}
 	}
 	return r
 }

@@ -13,10 +13,13 @@ import (
 // cannot be treated as absence: /status can reconcile ownership.
 func GatePrecondition(ctx context.Context, c *ProcessConfig, p ProcedurePorts, end time.Duration) error {
 	g := newProcedure(c, p, end)
+	var inventoryErr error
+	var category string
 	read := func() (controlplane.Status, bool, error) {
 		inventoryOK := false
 		if p.Inventory != nil {
 			err := p.Inventory(ctx, "from", g.end)
+			inventoryErr = err
 			if code(err) == "command-result-unknown" {
 				return controlplane.Status{}, false, err
 			}
@@ -27,7 +30,22 @@ func GatePrecondition(ctx context.Context, c *ProcessConfig, p ProcedurePorts, e
 			return s, false, err
 		}
 		healthy := inventoryOK && s.Ready && s.LostCount == 0
+		category = ""
+		switch {
+		case !inventoryOK:
+			_, category = readFailure(inventoryErr)
+			if category == "" {
+				category = "inventory"
+			}
+		case !s.Ready || s.LostCount != 0:
+			category = "control-not-settled"
+		}
 		for _, w := range []string{"w1", "w2"} {
+			if category == "" && !alive(s, w, c.Parameters.Workers) {
+				category = w + "-not-alive"
+			} else if category == "" && observe.Draining(s, w) {
+				category = w + "-draining"
+			}
 			healthy = healthy && alive(s, w, c.Parameters.Workers) && !observe.Draining(s, w)
 		}
 		return s, healthy, nil
@@ -56,7 +74,7 @@ func GatePrecondition(ctx context.Context, c *ProcessConfig, p ProcedurePorts, e
 		if observe.Draining(s, w) {
 			if err = WorkerEmpty(ctx, g.ports(), w, g.end); err != nil {
 				if _, category := readFailure(err); category != "" {
-					return fault("precondition-unhealthy")
+					return &ProcedureError{Code: "precondition-unhealthy", Category: category}
 				}
 				return err
 			}
@@ -75,7 +93,7 @@ func GatePrecondition(ctx context.Context, c *ProcessConfig, p ProcedurePorts, e
 		}
 	}
 	if !healthy {
-		return fault("precondition-unhealthy")
+		return &ProcedureError{Code: "precondition-unhealthy", Category: category}
 	}
 	return nil
 }

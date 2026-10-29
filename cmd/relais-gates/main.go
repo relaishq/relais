@@ -24,7 +24,7 @@ func main() { os.Exit(run()) }
 func run() int {
 	hello := operator.Hello{Protocol: operator.ProtocolVersion, Version: buildinfo.Version, Commit: buildinfo.Commit, ScenarioSchema: 1, ResultSchema: 1}
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: relais-gates session [-spool DIR]|version")
+		fmt.Fprintln(os.Stderr, "usage: relais-gates session [-spool DIR]|caller|rehearse|version")
 		return 2
 	}
 	switch os.Args[1] {
@@ -36,6 +36,8 @@ func run() int {
 			return 1
 		}
 		return 0
+	case "rehearse":
+		return rehearse(os.Args[2:])
 	case "caller-host":
 		if len(os.Args) != 2 {
 			return 2
@@ -62,15 +64,18 @@ func run() int {
 		}
 		raw, err := os.ReadFile(*config)
 		if err != nil {
+			operatorcaller.WriteFailure(os.Stderr, err)
 			return 1
 		}
 		var c operatorcaller.BridgeConfig
 		if observe.Decode(raw, &c, observe.Contract{"identity", "bind", "certificateFile", "loadSHA256"}) != nil {
+			fmt.Fprintln(os.Stderr, "caller-incomplete: caller-config-invalid")
 			return 1
 		}
 		if *expected != "" {
 			var i operatorcaller.Identity
 			if observe.Decode([]byte(*expected), &i, nil) != nil || i != c.Identity {
+				fmt.Fprintln(os.Stderr, "caller-incomplete: caller-identity-differs")
 				return 1
 			}
 		}
@@ -98,13 +103,14 @@ func run() int {
 		} else {
 			directory, e := operatorcaller.OpenDirectory(*mailbox)
 			if e != nil {
+				operatorcaller.WriteFailure(os.Stderr, e)
 				return 1
 			}
 			defer directory.Close()
 			box = directory
 		}
-		if operatorcaller.RunBridge(ctx, c, box, *load) != nil {
-			fmt.Fprintln(os.Stderr, "caller-incomplete")
+		if err := operatorcaller.RunBridge(ctx, c, box, *load); err != nil {
+			operatorcaller.WriteFailure(os.Stderr, err)
 			return 1
 		}
 		return 0

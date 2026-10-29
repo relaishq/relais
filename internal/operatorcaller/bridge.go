@@ -40,7 +40,7 @@ func OperatorURL(raw string) (string, error) {
 	}
 	return u.Scheme + "://" + u.Host, nil
 }
-func SignalRTTs(ctx context.Context, signaling, token string, client *http.Client) []int64 {
+func SignalRTTs(ctx context.Context, signaling, token string, client *http.Client) ([]int64, error) {
 	endpoint := strings.TrimSuffix(signaling, "/calls") + "/clock"
 	var rtts []int64
 	clientCopy := *client
@@ -50,24 +50,27 @@ func SignalRTTs(ctx context.Context, signaling, token string, client *http.Clien
 		req, err := http.NewRequestWithContext(probe, http.MethodGet, endpoint, nil)
 		if err != nil {
 			cancel()
-			return nil
+			return nil, errors.New("caller-signaling-request-invalid")
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 		start := time.Now()
 		r, err := clientCopy.Do(req)
 		if err != nil {
 			cancel()
-			return nil
+			return nil, fmt.Errorf("caller-signaling-probe: %w", err)
 		}
 		_, err = io.Copy(io.Discard, io.LimitReader(r.Body, operator.MaxFrameBytes+1))
 		_ = r.Body.Close()
 		cancel()
-		if err != nil || r.StatusCode != http.StatusOK {
-			return nil
+		if err != nil {
+			return nil, errors.New("caller-signaling-body-unavailable")
+		}
+		if r.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("caller-signaling-http-%d", r.StatusCode)
 		}
 		rtts = append(rtts, max(1, time.Since(start).Nanoseconds()))
 	}
-	return rtts
+	return rtts, nil
 }
 
 // Shutdown shares one grace timer across every abort route.
@@ -151,6 +154,18 @@ func RunBridge(ctx context.Context, c BridgeConfig, box Store, load string) erro
 	if hex.EncodeToString(sum[:]) != c.LoadSHA256 {
 		return errors.New("load-hash-differs")
 	}
+	info, err := os.Stat(load)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&0111 == 0 {
+		return errors.New("caller-load-not-executable")
+	}
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return errors.New("caller-ffmpeg-unavailable")
+	}
+	fmt.Fprintf(os.Stderr, "caller-input uid=%d load=%q sha256_verified=true executable=true ffmpeg=%q\n", os.Geteuid(), load, ffmpeg)
 	m, err := waitManifest(ctx, c.Identity, box, time.Now().Add(20*time.Minute))
 	if err != nil {
 		return err
@@ -161,6 +176,7 @@ func RunBridge(ctx context.Context, c BridgeConfig, box Store, load string) erro
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(os.Stderr, "caller-input certificate=%q readable=true\n", c.CertificateFile)
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(ca) {
 		return errors.New("invalid-caller-ca")
@@ -189,7 +205,13 @@ func RunBridge(ctx context.Context, c BridgeConfig, box Store, load string) erro
 	if createJSON(ctx, box, m.Job()+"/host.json", host) != Committed {
 		return errors.New("host-publication-unknown")
 	}
-	setup := Setup{SchemaVersion: 1, RunID: m.RunID, PublicSHA: m.PublicSHA, Job: "caller-1", CallerID: m.CallerID, Attempt: m.Attempt, RuleAddedAt: time.UnixMilli(m.CreatedAt), SignalRTTsNS: SignalRTTs(ctx, m.Endpoints.Signaling, token.Bearer, signalClient)}
+	rtts, err := SignalRTTs(ctx, m.Endpoints.Signaling, token.Bearer, signalClient)
+	if err != nil {
+		// This preliminary burst is optional in the original caller contract.
+		// Keep the mandatory registration burst as the final near/clock proof.
+		fmt.Fprintln(os.Stderr, "caller-diagnostic:", FailureCode(err))
+	}
+	setup := Setup{SchemaVersion: 1, RunID: m.RunID, PublicSHA: m.PublicSHA, Job: "caller-1", CallerID: m.CallerID, Attempt: m.Attempt, RuleAddedAt: time.UnixMilli(m.CreatedAt), SignalRTTsNS: rtts}
 	if err = AwaitBegin(ctx, m, box, SystemClock{}, setup); err != nil {
 		return err
 	}
@@ -206,7 +228,9 @@ func RunBridge(ctx context.Context, c BridgeConfig, box Store, load string) erro
 	child.Env = PublicEnvironment(os.Environ())
 	reader, writer := io.Pipe()
 	child.Stdout = writer
-	child.Stderr = io.Discard
+	// Preserve early argument, file and ffmpeg failures in the caller unit's
+	// journal. The rehearsal redacts that journal before public collection.
+	child.Stderr = os.Stderr
 	if err = child.Start(); err != nil {
 		_ = reader.Close()
 		_ = writer.Close()
@@ -490,7 +514,7 @@ func RunBridge(ctx context.Context, c BridgeConfig, box Store, load string) erro
 		return errors.New("finished-publication-unknown")
 	}
 	if !done {
-		return errors.New("caller-evidence-incomplete")
+		err = errors.Join(err, errors.New("caller-evidence-incomplete"))
 	}
 	return errors.Join(err, exitErr, streamErr, readErr)
 }

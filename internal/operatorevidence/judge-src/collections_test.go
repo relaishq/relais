@@ -194,7 +194,7 @@ func TestGeneratorCollectionsMatchSource(t *testing.T) {
 		t.Fatal("MUTATION: generator-source-collections")
 	}
 }
-func TestOptionalBaselinesCannotShrinkWindow(t *testing.T) {
+func TestContentBaselinesExtendEventWindow(t *testing.T) {
 	t.Parallel()
 	c := previewSample().Processes[0].Calls[0].Call
 	m := c.Moves[0]
@@ -208,8 +208,8 @@ func TestOptionalBaselinesCannotShrinkWindow(t *testing.T) {
 	}
 	m.Measurement.ContentLoss.Baselines = nil
 	missingFirst, missingLast, err := callerEventWindow(receipt, c, m)
-	if err != nil || missingFirst.After(first) || missingLast.Before(last) {
-		t.Fatal("MUTATION: missing-baseline-window", first, missingFirst, last, missingLast, err)
+	if err != nil || !missingFirst.After(first) || !missingLast.Equal(last) {
+		t.Fatal("MUTATION: content-baseline-window", first, missingFirst, last, missingLast, err)
 	}
 }
 

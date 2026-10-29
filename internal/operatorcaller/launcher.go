@@ -45,11 +45,12 @@ type StopResult struct {
 // Execute delivers one fixed script. A positive exit from an effect is unknown:
 // it does not prove that the command made no change.
 type Execution struct {
-	Certainty    operator.Certainty
-	ExitCode     int
-	Output       string
-	NotSubmitted bool
-	RefusalCode  string
+	UncertaintyRule string
+	Certainty       operator.Certainty
+	ExitCode        int
+	Output          string
+	NotSubmitted    bool
+	RefusalCode     string
 }
 type Executor interface {
 	Execute(context.Context, []byte, time.Time) Execution
@@ -64,7 +65,7 @@ func (LocalExecutor) Execute(ctx context.Context, script []byte, end time.Time) 
 	cmd.Env = PublicEnvironment(nil)
 	out, err := cmd.Output()
 	if ctx.Err() != nil {
-		return Execution{Certainty: operator.Unknown}
+		return Execution{Certainty: operator.Unknown, UncertaintyRule: uncertaintyRule(ctx.Err())}
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
@@ -79,6 +80,7 @@ func (LocalExecutor) Execute(ctx context.Context, script []byte, end time.Time) 
 type LaunchConfig struct {
 	BridgePath, BridgeSHA256, LoadPath, LoadSHA256, ConfigPath, ConfigSHA256, MailboxPath, WorkRoot, Architecture string
 	RuntimeDeadline                                                                                               time.Time
+	CPUAffinity                                                                                                   string
 }
 
 func (c LaunchConfig) validate() error {
@@ -91,6 +93,9 @@ func (c LaunchConfig) validate() error {
 		if !digestPattern.MatchString(s) {
 			return errors.New("invalid-launch-hash")
 		}
+	}
+	if c.CPUAffinity != "" && !regexp.MustCompile(`^[0-9]+( [0-9]+)*$`).MatchString(c.CPUAffinity) {
+		return errors.New("invalid-caller-affinity")
 	}
 	if c.RuntimeDeadline.IsZero() {
 		return errors.New("missing-runtime-deadline")
@@ -109,14 +114,23 @@ func ReadyScript(c LaunchConfig) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(fmt.Sprintf(`set -eu
+step=architecture
+trap 'status=$?; if [ "$status" -ne 0 ]; then printf "caller-ready-%%s-failed\n" "$step" >&2; fi' EXIT
 [ "$(uname -m)" = %s ]
+step=ffmpeg
 command -v ffmpeg >/dev/null
+step=systemd
 command -v systemd-run >/dev/null
 systemctl show --property=Version --value >/dev/null
+step=bridge-hash
 [ "$(sha256sum %s | cut -d ' ' -f 1)" = %s ]
+step=load-hash
 [ "$(sha256sum %s | cut -d ' ' -f 1)" = %s ]
+step=config-hash
 [ "$(sha256sum %s | cut -d ' ' -f 1)" = %s ]
+step=host
 %s caller-host >/dev/null
+step=clock
 chronyc tracking | grep -Eq '^Leap status[[:space:]]*:[[:space:]]*Normal$'
 printf 'caller-ready\n'
 `, quote(c.Architecture), quote(c.BridgePath), quote(c.BridgeSHA256), quote(c.LoadPath), quote(c.LoadSHA256), quote(c.ConfigPath), quote(c.ConfigSHA256), quote(c.BridgePath))), nil
@@ -130,6 +144,10 @@ func StartScript(c LaunchConfig, i Identity, end time.Time) ([]byte, error) {
 	}
 	if c.RuntimeDeadline.Before(end) || time.Until(c.RuntimeDeadline) > 20*time.Minute {
 		return nil, errors.New("invalid-runtime-deadline")
+	}
+	affinity := ""
+	if c.CPUAffinity != "" {
+		affinity = " --property=" + quote("CPUAffinity="+c.CPUAffinity)
 	}
 	identity, _ := json.Marshal(i)
 	return []byte(fmt.Sprintf(`set -eu
@@ -146,15 +164,41 @@ cp %s "$work/config.json"
 [ "$(sha256sum "$work/relais-load" | cut -d ' ' -f 1)" = %s ]
 [ "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" = %s ]
 chmod 700 "$work/bridge" "$work/relais-load"
-systemd-run --quiet --unit="$unit" --property="RuntimeMaxSec=$remaining" --property=TimeoutStopSec=180 --property=KillMode=control-group --property=UMask=0077 --property="WorkingDirectory=$work" --setenv=GOMAXPROCS=2 "$work/bridge" caller -config "$work/config.json" -mailbox %s -load "$work/relais-load" -identity %s
+systemd-run --quiet --service-type=exec --unit="$unit" --property="RuntimeMaxSec=$remaining" --property=TimeoutStopSec=180 --property=KillMode=control-group --property=UMask=0077 --property="WorkingDirectory=$work" --setenv=GOMAXPROCS=2%s "$work/bridge" caller -config "$work/config.json" -mailbox %s -load "$work/relais-load" -identity %s
 printf 'caller-started:%%s\n' "$unit"
-`, quote(i.Unit()), quote(c.WorkRoot), c.RuntimeDeadline.Unix(), quote(c.BridgePath), quote(c.LoadPath), quote(c.ConfigPath), quote(c.BridgeSHA256), quote(c.LoadSHA256), quote(c.ConfigSHA256), quote(c.MailboxPath), quote(string(identity)))), nil
+`, quote(i.Unit()), quote(c.WorkRoot), c.RuntimeDeadline.Unix(), quote(c.BridgePath), quote(c.LoadPath), quote(c.ConfigPath), quote(c.BridgeSHA256), quote(c.LoadSHA256), quote(c.ConfigSHA256), affinity, quote(c.MailboxPath), quote(string(identity)))), nil
 }
 func StopScript(i Identity) ([]byte, error) {
 	if err := i.Validate(); err != nil {
 		return nil, err
 	}
-	return []byte("systemctl stop --no-block " + quote(i.Unit()) + "\n"), nil
+	// A collected transient unit makes stop fail even though nothing is live.
+	// Observe exact-unit proof before submission; never turn another stop error
+	// or a lost reply into success because a later read happens to be inactive.
+	return []byte(fmt.Sprintf(`export LC_ALL=C
+unit=%s
+proved=0
+state=$(systemctl show --property=Id --property=ActiveState --property=SubState "$unit" 2>/dev/null)
+show_status=$?
+if [ "$show_status" -eq 0 ] || [ "$show_status" -eq 1 ]; then
+  expected=$(printf 'Id=%%s\nActiveState=inactive\nSubState=dead\n' "$unit" | LC_ALL=C sort)
+  if [ "$(printf '%%s\n' "$state" | LC_ALL=C sort)" = "$expected" ]; then proved=1; fi
+fi
+if [ "$proved" -eq 0 ] && [ -z "$state" ]; then
+  journal=$(journalctl "UNIT=$unit" _PID=1 --no-pager -o cat -n 60 2>/dev/null)
+  journal_status=$?
+  if [ "$journal_status" -eq 0 ] && printf '%%s\n' "$journal" | grep -Fqx "$unit: Deactivated successfully."; then proved=1; fi
+fi
+output=$(systemctl stop --no-block "$unit" 2>&1)
+status=$?
+if [ "$status" -eq 0 ]; then exit 0; fi
+if [ "$status" -eq 5 ] && [ "$proved" -eq 1 ] && [ "$output" = "Failed to stop $unit: Unit $unit not loaded." ]; then
+  printf 'caller-collected:%%s\n' "$unit"
+  exit 0
+fi
+printf '%%s\n' "$output" >&2
+exit "$status"
+`, quote(i.Unit()))), nil
 }
 func InactiveScript(i Identity) ([]byte, error) {
 	if err := i.Validate(); err != nil {
@@ -181,6 +225,28 @@ func inactive(x Execution) bool {
 		return x.Certainty == operator.Succeeded && x.ExitCode == 0 || x.Certainty == operator.Failed && x.ExitCode == 1
 	}
 	return x.Certainty == operator.Succeeded && x.ExitCode == 0 && fields["LoadState"] == "loaded" && (fields["ActiveState"] == "inactive" || fields["ActiveState"] == "failed")
+}
+
+// ObservedInactive shares the stop proof with independent resource cleanup.
+// A collected transient unit is inactive only with its exact systemd observation.
+func ObservedInactive(x Execution) bool { return inactive(x) }
+
+// AwaitInactive bounds read-only stop confirmation for the launcher and cleanup.
+// It does not repair the certainty of an earlier stop submission.
+func AwaitInactive(ctx context.Context, executor Executor, i Identity, end time.Time) bool {
+	read, err := InactiveScript(i)
+	if err != nil {
+		return false
+	}
+	for time.Now().Before(end) && ctx.Err() == nil {
+		if inactive(executor.Execute(ctx, read, end)) {
+			return true
+		}
+		if sleep(ctx, min(100*time.Millisecond, time.Until(end))) != nil {
+			break
+		}
+	}
+	return false
 }
 
 // Fence binds the launcher and broker to the engine's single fatal latch.
@@ -236,6 +302,11 @@ func (l *FixedLauncher) Ready(ctx context.Context, end time.Time) operator.Certa
 		}
 		r := l.Exec.Execute(ctx, script, end)
 		if r.Certainty == operator.Unknown {
+			rule := r.UncertaintyRule
+			if rule == "" {
+				rule = "lost-reply"
+			}
+			uncertainty(l.Fence, "caller.ready", identity.CallerID, identity.CallerID, "ready", end, time.Now(), rule)
 			return operator.Unknown
 		}
 		if r.Certainty != operator.Succeeded || r.ExitCode != 0 || r.Output != "caller-ready\n" || ctx.Err() != nil || !time.Now().Before(end) {
@@ -290,11 +361,39 @@ func (l *FixedLauncher) Start(ctx context.Context, i Identity, phase Phase, end 
 		result = StartResult{NotStarted, operator.Failed, i.Unit()}
 	} else {
 		result = StartResult{StartUnknown, operator.Unknown, i.Unit()}
+		rule := r.UncertaintyRule
+		if rule == "" {
+			rule = "malformed-reply"
+			if r.Certainty == operator.Unknown {
+				rule = "lost-reply"
+			} else if r.Certainty != operator.Succeeded || r.ExitCode != 0 {
+				rule = "unconfirmed-exit"
+			}
+		}
+		if !time.Now().Before(end) {
+			rule = "timeout"
+		}
+		uncertainty(l.Fence, "caller.start", i.CallerID, i.CallerID, "start", end, time.Now(), rule)
 		l.Fence.Halt("command-result-unknown")
 	}
 	l.starts[key] = result
 	return result
 }
+
+// NeverStarted proves no start was submitted for this configured identity, or
+// that its submission was definitely refused. Unknown starts never satisfy it.
+func (l *FixedLauncher) NeverStarted(i Identity) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if _, known := l.configs[i]; !known || i.Validate() != nil {
+		return false
+	}
+	key := i.RunID + "/" + string(i.Gate) + "/" + string(i.Phase)
+	start, attempted := l.starts[key]
+	_, reserved := l.owners[key]
+	return !attempted && !reserved || attempted && start.Unit == i.Unit() && start.State == NotStarted && start.Certainty == operator.Failed
+}
+
 func (l *FixedLauncher) Stop(ctx context.Context, i Identity, end time.Time) StopResult {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -321,25 +420,21 @@ func (l *FixedLauncher) Stop(ctx context.Context, i Identity, end time.Time) Sto
 		r := l.Exec.Execute(ctx, script, end)
 		if r.Certainty != operator.Succeeded || r.ExitCode != 0 {
 			uncertain = true
+			rule := r.UncertaintyRule
+			if rule == "" {
+				rule = "unconfirmed-stop"
+			}
+			uncertainty(l.Fence, "caller.stop", i.CallerID, i.CallerID, "stop", end, time.Now(), rule)
 			l.Fence.Halt("command-result-unknown")
 		}
 	} else {
 		uncertain = true
 	}
-	read, _ := InactiveScript(i)
-	for time.Now().Before(end) && ctx.Err() == nil {
-		observed := l.Exec.Execute(ctx, read, end)
-		if inactive(observed) {
-			result.Inactive = true
-			break
-		}
-		if sleep(ctx, min(100*time.Millisecond, time.Until(end))) != nil {
-			break
-		}
-	}
+	result.Inactive = AwaitInactive(ctx, l.Exec, i, end)
 	if result.Inactive && !uncertain {
 		result.Certainty = operator.Succeeded
 	} else {
+		uncertainty(l.Fence, "caller.stop", i.CallerID, i.CallerID, "stop", end, time.Now(), "unconfirmed-stop")
 		l.Fence.Halt("command-result-unknown")
 	}
 	l.stops[i.Unit()] = result

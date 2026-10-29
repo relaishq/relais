@@ -46,6 +46,8 @@ func EvidenceOptionalLedger() map[string]string {
 }
 
 var evidenceOptional = map[string]string{
+	"main.previewMediaInput.Gate":                      "Legacy inputs require trial collections; only an explicit relay-deploy gate can contribute a call without trials.",
+	"operatorevidence.MediaInput.Gate":                 "Legacy inputs require trial collections; only an explicit relay-deploy gate can contribute a call without trials.",
 	"loadgen.Message.CallID":                           "The product omits call index zero; inventory joins validate the decoded index.",
 	"loadgen.Message.Error":                            "Only error messages carry error text; they cannot qualify.",
 	"loadgen.Message.MediaOffset":                      "Optional scheduling diagnostic, not a judge bound.",
@@ -109,7 +111,7 @@ var evidenceOptional = map[string]string{
 	"callharness.MoveReport.Lost":                      "The product omits false loss flags; a positive flag independently fails.",
 	"callharness.MoveReport.LossCause":                 "Only lost moves carry descriptive loss text.",
 	"callharness.VideoRecovery.CachedPictureIDs":       "Capped picture diagnostics do not set operator populations.",
-	"callharness.ContentLossEvidence.Baselines":        "No exported completeness count; exclusions cover the full caller span.",
+	"callharness.ContentLossEvidence.Baselines":        "Product content_loss.go:78-118 can emit no matched baselines; generator coverage uses the original per-event measurement horizon and any exported baseline spans.",
 	"callharness.EventMeasurement.Reasons":             "Descriptive reasons do not set metric thresholds.",
 	"callharness.MoveReport.Tracks":                    "Legacy per-track diagnostics do not replace required distributed gaps.",
 	"callharness.DialReport.Failure":                   "Only failed dials carry a failure category.",
@@ -121,4 +123,23 @@ var evidenceOptional = map[string]string{
 	"callharness.CandidatePairChecks.FirstCheck":       "The product omits absent check timestamps; diagnostic only.",
 	"callharness.CandidatePairChecks.LastCheck":        "The product omits absent check timestamps; diagnostic only.",
 	"callharness.CandidatePairChecks.LastResponse":     "The product omits absent response timestamps; diagnostic only.",
+}
+
+// EvidenceNumericSentinels records value exceptions, not presence exceptions.
+// These members remain required. Each permits exactly -1; all other negatives
+// and values beyond MaxInteger remain invalid.
+var evidenceNumericSentinels = map[string]string{
+	"callharness.MoveReport.From": "Unknown worker index: pkg/callharness/distributed.go:137-143 and external_move.go:59-61,74-80 at a0d9744ff1223a8d7978447c907041973e915b08.",
+	"callharness.MoveReport.To":   "Unknown worker index: pkg/callharness/distributed.go:141-143 and external_move.go:78-80 at a0d9744ff1223a8d7978447c907041973e915b08.",
+}
+
+func EvidenceNumericSentinels() map[string]string {
+	ledger := make(map[string]string, len(evidenceNumericSentinels))
+	for key, reason := range evidenceNumericSentinels {
+		ledger[key] = reason
+	}
+	return ledger
+}
+func unknownWorkerIndex(typ reflect.Type, field reflect.StructField, value reflect.Value) bool {
+	return typ.PkgPath() == "github.com/relaishq/relais/pkg/callharness" && evidenceNumericSentinels[typ.String()+"."+field.Name] != "" && value.Kind() == reflect.Int && value.Int() == -1
 }

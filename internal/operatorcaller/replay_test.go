@@ -16,7 +16,7 @@ import (
 
 // This replays the broker algorithm above the frozen wait/write callback seam.
 // Callback-level fixtures do not establish raw mailbox parsing or whole-session
-// equivalence; those scopes stay pending in the inventory.
+// equivalence; the inventory records those whole-runtime limits.
 func TestOracleBrokerCallbacks(t *testing.T) {
 	corpus, err := operatorgates.LoadCorpus("../operatorgates/testdata/transcripts")
 	if err != nil {

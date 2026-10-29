@@ -1,0 +1,102 @@
+name: Operator rehearsal
+
+on:
+  pull_request:
+    paths: &operator-paths
+      - 'cmd/relais-gates/**'
+      - 'cmd/relais-load/**'
+      - 'internal/operator*/**'
+      - 'pkg/operator/**'
+      - 'internal/loadgen/**'
+      - 'pkg/callharness/**'
+      - 'internal/releasecompat/**'
+      - 'pkg/buildinfo/**'
+      - 'pkg/controlplane/**'
+      - 'pkg/mediaworker/**'
+      - 'pkg/relay/**'
+      - 'pkg/sessionstore/**'
+      - 'deploy/aws/**'
+      - 'scripts/release/**'
+      - 'scripts/ci/gate-mutation/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Makefile'
+      - '.github/actions/ubuntu-packages/**'
+      - '.github/workflows/operator-rehearsal.yml'
+  push:
+    branches: [main]
+    paths: *operator-paths
+  schedule:
+    - cron: '23 11 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: operator-rehearsal-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 145
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.9'
+      - name: Install caller prerequisites
+        timeout-minutes: 10
+        uses: ./.github/actions/ubuntu-packages
+        with:
+          packages: ffmpeg chrony
+      - name: Prepare compiler, modules and gate binary before media
+        shell: bash
+        run: |
+          set -euo pipefail
+          go mod download
+          for pin in a0d9744ff1223a8d7978447c907041973e915b08 85e10436eb6adbbf577b6538b0bbb799aab823b2; do
+            source_dir=$(mktemp -d "$RUNNER_TEMP/relais-judge.XXXXXX")
+            git archive "$pin" | tar -x -C "$source_dir"
+            (cd "$source_dir" && GOTOOLCHAIN=local go mod download)
+          done
+          make operator-rehearsal-build
+          mkdir -p runtime
+      - name: Read and verify published releases
+        env:
+          # This is the only step receiving the read-only token. The Go reader
+          # scopes it to the public API and removes it before starting children.
+          RELAIS_RELEASE_TOKEN: ${{ github.token }}
+        run: ./bin/relais-gates rehearse -prepare-only
+      - name: Rehearse four gates with idle caller calibration
+        env:
+          TESTED_HEAD: ${{ github.event.pull_request.head.sha }}
+          TESTED_EVENT: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOMODCACHE="$(go env GOMODCACHE)" GOCACHE="$(go env GOCACHE)"
+          make operator-rehearsal OPERATOR_REHEARSAL_RUNNER='sudo -n --preserve-env=GOMODCACHE,GOCACHE' \
+            OPERATOR_REHEARSAL_FLAGS="-prepared -head-commit=$TESTED_HEAD -event=$TESTED_EVENT"
+      - name: Make sanitized artifacts available to uploader
+        if: always()
+        shell: bash
+        run: |
+          if [ -d runtime/operator-report ]; then
+            sudo -n chown -R "$(id -u):$(id -g)" runtime/operator-report
+          fi
+      - name: Upload sanitized report, media evidence and redacted host diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: operator-rehearsal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            runtime/operator-report/report.json
+            runtime/operator-report/host-diagnostics.log
+            runtime/operator-report/media-evidence.json
+          if-no-files-found: warn
+          retention-days: 14
