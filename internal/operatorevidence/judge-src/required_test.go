@@ -240,25 +240,128 @@ func fixturePoolVerdict(input *previewPoolInput) previewMediaSummary {
 	return value.(func() previewMediaSummary)()
 }
 
-// Reuse only identical product values at the same document boundary in the same
-// fixture. Include both raw presence contracts: the main decoder and independent
-// gap-failure recovery. Every wire mutation still traverses both from its root.
+// Every mutation crosses the product decoder before memoization. Reuse only
+// decodable product values at the same document boundary in the same fixture,
+// including the main and independent gap-failure presence contracts.
 type sweepVerdicts struct{ entries sync.Map }
 
-func (v *sweepVerdicts) judge(t *testing.T, fixture string, input previewPoolInput, doc optionalDocument, raw []byte, decoded any, contractErr error) previewMediaSummary {
+func (v *sweepVerdicts) judge(t *testing.T, fixture string, input previewPoolInput, doc optionalDocument, raw []byte, decoded any, contractErr error) (previewMediaSummary, error) {
 	t.Helper()
+	changed, err := optionalInput(input, doc, raw)
+	if err != nil {
+		return previewMediaSummary{}, err
+	}
 	gapErr := observe.EvidenceTypeFields(raw, doc.typ, reflect.TypeFor[callharness.DistributedGap]())
 	typed, err := json.Marshal(decoded)
 	if err != nil {
 		t.Fatal(err)
 	}
 	key := fmt.Sprintf("%s/%s/%d/%d/%t/%t/%x", fixture, doc.typ, doc.phase, doc.line, contractErr != nil, gapErr != nil, sha256.Sum256(typed))
-	compute := sync.OnceValue(func() previewMediaSummary {
-		changed := optionalInput(t, input, doc, raw)
-		return fixturePoolVerdict(&changed)
-	})
+	compute := sync.OnceValue(func() previewMediaSummary { return fixturePoolVerdict(&changed) })
 	value, _ := v.entries.LoadOrStore(key, compute)
-	return value.(func() previewMediaSummary)()
+	return value.(func() previewMediaSummary)(), nil
+}
+
+// Keep envelope rejection covered in short mode even when the field sample
+// omits these members. A decoder refusal is a rejected input, not a test error.
+func TestRequiredPoolEnvelopeMembers(t *testing.T) {
+	t.Parallel()
+	input := rawPoolSample()
+	if got := fixturePoolVerdict(&input); got.Status != "passed" {
+		t.Fatal("passing control", got)
+	}
+	var verdicts sweepVerdicts
+	for _, name := range []string{"runId", "phases", "missing"} {
+		for _, mode := range []string{"delete", "null"} {
+			t.Run(name+"/"+mode, func(t *testing.T) {
+				t.Parallel()
+				raw, _ := json.Marshal(input)
+				var object map[string]any
+				if err := json.Unmarshal(raw, &object); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "delete" {
+					delete(object, name)
+				} else {
+					object[name] = nil
+				}
+				raw, _ = json.Marshal(object)
+				var decoded previewPoolInput
+				contractErr := observe.DecodeEvidenceLimit(raw, &decoded, 64<<20)
+				if !observe.IsIncompleteEvidence(contractErr) {
+					t.Fatal("required envelope member accepted", name, mode, contractErr)
+				}
+				doc := optionalDocument{object, reflect.TypeFor[previewPoolInput](), -1, -1}
+				got, err := verdicts.judge(t, "required", input, doc, raw, &decoded, contractErr)
+				if err == nil && got.Status != "inconclusive" {
+					t.Fatal("required envelope omission passed", name, mode, got)
+				}
+			})
+		}
+	}
+}
+
+func TestSweepVerdictsSeparateEnvelopeRejectionFromPhaseQuarantine(t *testing.T) {
+	t.Parallel()
+	input := rawPoolSample()
+	typ := reflect.TypeFor[previewPoolInput]()
+	mutations := make([]struct {
+		name        string
+		raw         []byte
+		decoded     previewPoolInput
+		contractErr error
+	}, 2)
+	for i, name := range []string{"envelope", "receipt"} {
+		raw, _ := json.Marshal(input)
+		var object map[string]any
+		if err := json.Unmarshal(raw, &object); err != nil {
+			t.Fatal(err)
+		}
+		parent, member := object, "missing"
+		if name == "receipt" {
+			phase := object["phases"].([]any)[0].(map[string]any)
+			parent = phase["receipts"].([]any)[0].(map[string]any)
+			member = "uncertain"
+		}
+		if value, ok := parent[member]; !ok || value != false {
+			t.Fatal("control must supply false", name, member)
+		}
+		delete(parent, member)
+		m := &mutations[i]
+		m.name = name
+		m.raw, _ = json.Marshal(object)
+		m.contractErr = observe.DecodeEvidenceLimit(m.raw, &m.decoded, 64<<20)
+		if !observe.IsIncompleteEvidence(m.contractErr) {
+			t.Fatal("required member accepted", name, m.contractErr)
+		}
+	}
+	// These mutations collided in the old key despite taking different paths
+	// through decodePool: envelope rejection versus decodable phase quarantine.
+	if !reflect.DeepEqual(mutations[0].decoded, mutations[1].decoded) {
+		t.Fatal("controls must have identical decoded values")
+	}
+	if (observe.EvidenceTypeFields(mutations[0].raw, typ, reflect.TypeFor[callharness.DistributedGap]()) != nil) !=
+		(observe.EvidenceTypeFields(mutations[1].raw, typ, reflect.TypeFor[callharness.DistributedGap]()) != nil) {
+		t.Fatal("controls must have identical gap-contract flags")
+	}
+	for _, order := range [][]int{{0, 1}, {1, 0}} {
+		t.Run(mutations[order[0]].name+"-first", func(t *testing.T) {
+			t.Parallel()
+			var verdicts sweepVerdicts
+			for _, index := range order {
+				m := &mutations[index]
+				doc := optionalDocument{typ: typ, phase: -1, line: -1}
+				got, err := verdicts.judge(t, "required", input, doc, m.raw, &m.decoded, m.contractErr)
+				if index == 0 {
+					if err == nil {
+						t.Error("envelope omission must return its decode error", got)
+					}
+				} else if err != nil || got.Status != "inconclusive" || got.DroppedPhases != 1 || got.IncludedPhases != 1 {
+					t.Error("receipt omission must reach pooled quarantine", got, err)
+				}
+			}
+		})
+	}
 }
 
 func TestEveryRequiredEvidenceMember(t *testing.T) {
@@ -331,7 +434,9 @@ func TestEveryRequiredEvidenceMember(t *testing.T) {
 						t.Fatal("MUTATION: recursive-required-field", key, mode, err)
 					}
 					root := optionalDocument{doc.value, doc.typ, doc.phase, doc.line}
-					if got := verdicts.judge(t, "required", input, root, raw, destination, err); got.Status == "passed" {
+					// A rejected envelope proves the input cannot pass. Decodable
+					// inputs must still reach the pooled verdict assertion.
+					if got, err := verdicts.judge(t, "required", input, root, raw, destination, err); err == nil && got.Status == "passed" {
 						t.Fatal("MUTATION: recursive-required-field", key, mode, got)
 					}
 				})
