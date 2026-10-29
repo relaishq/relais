@@ -90,6 +90,7 @@ type ReplayRelay interface {
 }
 
 type registration struct {
+	previousAddr     netip.AddrPort
 	inventoryOnce    sync.Once
 	inventoryReader  func(context.Context) (mediaworker.WorkerStatus, error)
 	preservedIntents []*call      // abandoned intents; cleaned after recovery jobs release call locks

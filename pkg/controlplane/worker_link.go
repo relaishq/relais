@@ -182,6 +182,10 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 			<-entry.admission
 		}
 	}()
+	if err := l.restoreIdentity(req.Context(), name, entry); err != nil {
+		http.Error(rw, "worker identity unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	p := l.plane
 	entry.mu.Lock()
 	p.mu.Lock()
@@ -192,10 +196,16 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 		cycle = old.observation.deathCycle
 	}
 	p.mu.Unlock()
-	if entry.instance != "" && (entry.instance != hello.Instance && old != nil && !canReplace || entry.instance == hello.Instance && hello.Sequence <= entry.sequence) {
+	if entry.instance != "" && (entry.instance != hello.Instance && (old == nil || !canReplace) || entry.instance == hello.Instance && hello.Sequence <= entry.sequence) {
 		entry.mu.Unlock()
 		http.Error(rw, "stale worker instance or link", http.StatusConflict)
 		return
+	}
+	// On a fresh control, the durable instance authenticates the worker's
+	// known cycle. It cannot grant any lease; rebuild still validates epochs.
+	restoring := p.restart != nil && entry.peer == nil && entry.instance == hello.Instance
+	if restoring {
+		cycle = max(cycle, hello.DeathCycle)
 	}
 	if hello.DeathCycle > cycle && old != nil && entry.activeInstance != "" {
 		entry.mu.Unlock()
@@ -226,42 +236,87 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 	duplicate := p.owner(address.Address)
 	canReplace = old != nil && old.observation.canReplace(old.reserved)
 	p.mu.Unlock()
-	if duplicate != nil && duplicate != old || old != nil && (old.addr != address.Address || instanceChanged) && !canReplace || !p.controlAuthority() {
+	if duplicate != nil && duplicate != old || !p.controlAuthority() {
 		return
 	}
-	if err := l.relay.AddBoundWorker(req.Context(), address.Address, token); err != nil {
-		return
-	}
-	if old == nil {
-		if err := p.Register(name, address.Address, entry.remote); err != nil {
+	readyAddress := address.Address
+	rebinding := old != nil && old.addr != address.Address && !instanceChanged && !canReplace
+	if rebinding {
+		// A fresh token is bound to the new endpoint, but it may carry drain
+		// barriers only until all old-address leases have been moved.
+		if err := l.relay.prepareRebind(req.Context(), old.addr, address.Address, token); err != nil {
 			return
 		}
-	} else if old.addr != address.Address || old.worker != entry.remote || instanceChanged {
-		// Changing address/instance is the existing explicit replacement path.
-		if !canReplace || p.Replace(name, address.Address, entry.remote) != nil {
+		p.mu.Lock()
+		// Complete pending activation first, retaining its original cleanup
+		// address even if NAT changes again during this handshake.
+		drained := old.observation.draining && old.reserved == 0 && !old.previousAddr.IsValid()
+		p.mu.Unlock()
+		if drained && hello.Status.Sessions == 0 && len(hello.Status.Inventory) == 0 {
+			if err := p.readdress(req.Context(), name, old, address.Address); err != nil {
+				return
+			}
+			if err := l.relay.AddBoundWorker(req.Context(), address.Address, token); err != nil {
+				return
+			}
+
+		} else {
+			// Admission must also work during rebuild: fence placement now,
+			// then perform planned moves only once control is mutation-ready.
+			if _, err := p.markDraining(name); err != nil {
+				return
+			}
+			readyAddress = old.addr
+		}
+	} else {
+		if old != nil && (old.addr != address.Address || instanceChanged) && !canReplace {
 			return
 		}
+		if err := l.relay.AddBoundWorker(req.Context(), address.Address, token); err != nil {
+			return
+		}
+		if old == nil {
+			if err := p.Register(name, address.Address, entry.remote); err != nil {
+				return
+			}
+		} else if old.addr != address.Address || old.worker != entry.remote || instanceChanged {
+			if !canReplace || p.Replace(name, address.Address, entry.remote) != nil {
+				return
+			}
+		}
 	}
-	if err := workerlink.WriteValue(rw, "ready", struct{}{}); err != nil {
+	p.mu.Lock()
+	activation := p.workers[name].previousAddr.IsValid()
+	p.mu.Unlock()
+	p.mu.Lock()
+	registered := p.workers[name]
+	previous := registered.previousAddr
+	p.mu.Unlock()
+	if err := p.saveLinkRecord(req.Context(), name, registered.addr, previous, &hello, cycle); err != nil {
 		return
 	}
-	peer := workerlink.New(req.Body, rw, func() { _ = rc.SetWriteDeadline(time.Now()); _ = req.Body.Close() }, nil)
+	if err := workerlink.WriteValue(rw, "ready", LinkReady{Address: readyAddress, Activate: activation}); err != nil {
+		return
+	}
+	var peer *workerlink.Peer
+	peer = workerlink.New(req.Body, rw, func() { _ = rc.SetWriteDeadline(time.Now()); _ = req.Body.Close() }, l.legHandler(name, entry, &peer, token))
 	entry.mu.Lock()
 	if l.stopping.Load() {
 		entry.mu.Unlock()
 		peer.Close()
 		return
 	}
-	previous := entry.peer
+	previousPeer := entry.peer
 	entry.instance, entry.sequence = hello.Instance, hello.Sequence
 	entry.peer = peer
 	entry.activeInstance = hello.Instance
 	entry.mu.Unlock()
-	if previous != nil {
-		previous.Close()
+	if previousPeer != nil {
+		previousPeer.Close()
 	}
 	p.mu.Lock()
 	w := p.workers[name]
+	w.observation.deathCycle = max(w.observation.deathCycle, cycle)
 	w.observation.draining = w.observation.draining || hello.Status.Draining
 	w.observation.relayRegistered()
 	p.mu.Unlock()

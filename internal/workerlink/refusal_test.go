@@ -246,3 +246,24 @@ func TestCommandBudgetExcludesWriterQueueWait(t *testing.T) {
 		t.Fatalf("writer queue time was not deducted: %s", budget)
 	}
 }
+
+func TestBidirectionalChunksWithSameRequestID(t *testing.T) {
+	var wire bytes.Buffer
+	budget := int64(privateapi.Timeout)
+	// A reply to our command and the peer's own command can share an ID.
+	for _, m := range []Message{{Kind: "reply", ID: 1, Status: 200, Body: []byte("a"), More: true}, {Kind: "request", ID: 1, Timeout: budget, Method: "POST", Path: "/leg-address"}, {Kind: "reply", ID: 1, Status: 200, Body: []byte("b")}} {
+		if err := Write(&wire, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accepted := make(chan struct{}, 1)
+	peer := New(&wire, io.Discard, func() {}, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { accepted <- struct{}{} }))
+	if err := peer.Run(context.Background()); !errors.Is(err, io.EOF) {
+		t.Fatalf("bidirectional IDs collided: %v", err)
+	}
+	select {
+	case <-accepted:
+	case <-time.After(time.Second):
+		t.Fatal("peer command not served")
+	}
+}

@@ -52,6 +52,7 @@ func endpoints() []endpoint {
 		{"worker", "GET /metrics", nil, "Prometheus text exposition", []int{200}},
 		{"relay", "POST /sessions/{id}/begin-replay", relay.ReplayRequest{}, relay.ReplayPlan{}, []int{200, 400, 409}},
 		{"relay", "POST /sessions/{id}/replay", relay.ReplayRequest{}, relay.ReplayResult{}, []int{200, 400, 409}},
+		{"relay", "POST /workers/rebind", relay.RebindRequest{}, nil, []int{204, 400, 409}},
 		{"relay", "POST /workers/expect", relay.WorkerRequest{}, nil, []int{204, 400, 409}},
 		{"relay", "POST /workers", relay.WorkerRequest{}, nil, []int{204, 400}},
 		{"relay", "DELETE /workers", relay.WorkerRequest{}, nil, []int{204, 400}},

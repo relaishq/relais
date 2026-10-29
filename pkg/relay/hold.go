@@ -97,7 +97,7 @@ func (r *Relay) HoldSession(ctx context.Context, id string, from netip.AddrPort)
 	h := &sessionHold{id: id, barrier: binary.BigEndian.Uint64(nonce[:]), source: from, worker: from, ready: make(chan struct{}), released: make(chan struct{})}
 	r.holds[id] = h
 	h.timer = time.AfterFunc(r.cfg.BarrierTimeout, func() { r.expireBarrier(h) })
-	_, err := r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.barrier, false), from)
+	_, err := r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.barrier, false), r.barrierEndpoint(from))
 	r.forwardMu.Unlock()
 	if err != nil {
 		_, _ = r.ReleaseSession(id, from)
@@ -113,7 +113,7 @@ func (r *Relay) HoldSession(ctx context.Context, id string, from netip.AddrPort)
 			// harmless; the original deadline is never extended.
 			if r.holds[id] == h && !h.acknowledged {
 				r.barrierResends.Add(1)
-				_, _ = r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.barrier, false), from)
+				_, _ = r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.barrier, false), r.barrierEndpoint(from))
 			}
 			r.forwardMu.Unlock()
 		case <-h.ready:
@@ -334,7 +334,7 @@ func (r *Relay) acknowledgeBarrier(id uint64, from netip.AddrPort) {
 
 	// Holds are bounded; acknowledgements never allocate lookup state.
 	for _, h := range r.holds {
-		if h.drained != nil && h.drainNonce == id && h.source == from {
+		if h.drained != nil && h.drainNonce == id && r.barrierEndpoint(h.source) == from {
 			select {
 			case <-h.drained:
 			default:
@@ -342,7 +342,7 @@ func (r *Relay) acknowledgeBarrier(id uint64, from netip.AddrPort) {
 			}
 			return
 		}
-		if h.barrier == id && h.source == from && !h.acknowledged {
+		if h.barrier == id && r.barrierEndpoint(h.source) == from && !h.acknowledged {
 			h.acknowledged = true
 			h.timer.Stop()
 			h.timer = time.AfterFunc(r.cfg.HoldTimeout, func() { r.expireHold(h) })

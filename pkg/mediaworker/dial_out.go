@@ -41,12 +41,9 @@ func (w *Worker) BindRelay(ctx context.Context, token string) (netip.AddrPort, e
 				continue
 			}
 			address := observed.address
-			if prior := w.observed.Load(); prior != nil && *prior != address {
-				// Slice 2 must drain and re-register this observed identity. Until
-				// then, NAT rebinding cannot restore media through reconnect alone.
-				return address, errors.New("mediaworker: relay address changed; drain required")
+			if w.observed.Load() == nil {
+				w.observed.Store(&address)
 			}
-			w.observed.Store(&address)
 			return address, nil
 		case <-ctx.Done():
 			return netip.AddrPort{}, ctx.Err()
@@ -113,4 +110,30 @@ func (w *Worker) StatusSnapshot() WorkerStatus {
 	status := WorkerStatus{Address: w.LocalAddr(), Sessions: w.SessionCount(), Replay: w.ReplayStats(), Agents: w.AgentStats(), InventoryKnown: true}
 	status.Draining, status.Inventory, status.Truncated = w.installedSessions()
 	return status
+}
+
+// AdoptRelayAddress runs only after control has drained the old identity and
+// acknowledged registration. Heartbeats retain the old address until then.
+func (w *Worker) AdoptRelayAddress(address netip.AddrPort) error {
+	if old := w.observed.Load(); old != nil && *old != address && w.SessionCount() != 0 {
+		return errors.New("mediaworker: rebind still has sessions")
+	}
+	w.observed.Store(&address)
+	return nil
+}
+func (w *Worker) WaitRelayObservation(ctx context.Context) (netip.AddrPort, error) {
+	c := w.conn.(*relayConn)
+	for {
+		select {
+		case value := <-c.observed:
+			c.bindingMu.Lock()
+			current := value.token == c.bindingToken
+			c.bindingMu.Unlock()
+			if current {
+				return value.address, nil
+			}
+		case <-ctx.Done():
+			return netip.AddrPort{}, ctx.Err()
+		}
+	}
 }

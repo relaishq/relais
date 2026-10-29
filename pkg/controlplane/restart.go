@@ -40,9 +40,13 @@ const rebuildStatusTimeout = 250 * time.Millisecond
 // FixedWorker names an operator-configured private HTTP endpoint. Saved relay
 // addresses let a restart recover calls even when that worker is unreachable.
 type FixedWorker struct {
-	Name    string         `json:"name"`
-	URL     string         `json:"url"`
-	Address netip.AddrPort `json:"address"`
+	Instance        string          `json:"instance,omitempty"`
+	Sequence        uint64          `json:"sequence,omitempty"`
+	DeathCycle      uint64          `json:"death_cycle,omitempty"`
+	PreviousAddress *netip.AddrPort `json:"previous_address,omitempty"`
+	Name            string          `json:"name"`
+	URL             string          `json:"url"`
+	Address         netip.AddrPort  `json:"address"`
 }
 type createIntent struct {
 	Worker  string    `json:"worker"`
@@ -211,7 +215,15 @@ func (p *Plane) saveRegistration(ctx context.Context, name string, addr netip.Ad
 	if !ok {
 		return errors.New("controlplane: managed worker requires HTTP observation")
 	}
-	return p.controlRecord(ctx, "worker:"+name, FixedWorker{Name: name, URL: p.workerEndpoint(name, remote), Address: addr})
+	if p.workerUsesLink(name, worker) {
+		saved, err := p.linkRecord(ctx, name)
+		if err != nil {
+			return err
+		}
+		saved.Name, saved.URL, saved.Address = name, "dial-out", addr
+		return p.controlRecord(ctx, "worker:"+name, saved)
+	}
+	return p.controlRecord(ctx, "worker:"+name, FixedWorker{Name: name, URL: remote.URL, Address: addr})
 }
 
 // AuthorityChanges wakes relay registration when a lease becomes usable.
@@ -580,6 +592,13 @@ func (p *Plane) registerObservedWorker(ctx context.Context, fixed FixedWorker, s
 	registration := p.workers[fixed.Name]
 	if registration.observation.observeStatus(status, down, true) {
 		p.loadVersion++
+	}
+	if fixed.URL == "dial-out" && saved != nil {
+		registration.observation.deathCycle = saved.DeathCycle
+		if saved.PreviousAddress != nil {
+			registration.previousAddr = *saved.PreviousAddress
+			registration.observation.draining = true
+		}
 	}
 	p.mu.Unlock()
 	return nil
@@ -1096,12 +1115,4 @@ func (p *Plane) remoteWorker(fixed FixedWorker) *RemoteWorker {
 		}
 	}
 	return &RemoteWorker{URL: fixed.URL}
-}
-func (p *Plane) workerEndpoint(name string, remote *RemoteWorker) string {
-	if p.links != nil {
-		if e := p.links.entries[name]; e != nil && e.remote == remote {
-			return "dial-out"
-		}
-	}
-	return remote.URL
 }

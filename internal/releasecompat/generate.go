@@ -297,10 +297,10 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 		return Format{Reads: slices.Clone(reads), Writes: writes, Continues: []int{legacy, v2, control, split}}
 	}
 	common := func() map[string]Format {
-		// Version 3 adds optional responses and dial-out-only endpoints. Inbound
+		// Versions 3/4 add optional responses and dial-out-only endpoints. Inbound
 		// requests retain v2 bodies. Older tools validate every profile, including
 		// unselected ones, so mode support uses profiles in the existing v2 schema.
-		return map[string]Format{"private_http": {Reads: []int{2, m.HTTPContract}, Writes: []int{2}, Continues: []int{2, m.HTTPContract}}}
+		return map[string]Format{"private_http": {Reads: []int{2, 3, m.HTTPContract}, Writes: []int{2}, Continues: []int{2, 3, m.HTTPContract}}}
 	}
 	platform := func() map[string]Format {
 		fs := common()
@@ -352,7 +352,7 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 	delete(cp.Formats, "relay_udp")
 	m.Roles = map[string]map[string]Profile{"worker": {"legacy": worker(false, false), "split": worker(true, false)}, "control": {"default": cp}, "relay": {"default": relayProfile}, "signal": {"default": {Formats: common()}}}
 
-	// The dial-out profile selects worker_link v1 plus leg binding support.
+	// The dial-out profile selects worker_link v2 plus controlled leg rebinding support.
 	// Both modes still exchange the existing private API and media payloads.
 	m.Roles["worker"]["dial-out"] = worker(false, false)
 	m.Roles["control"]["dial-out"] = cp

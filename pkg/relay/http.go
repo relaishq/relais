@@ -23,6 +23,11 @@ type RouteRequest struct {
 	From   netip.AddrPort `json:"from"`
 	To     netip.AddrPort `json:"to"`
 }
+type RebindRequest struct {
+	From  netip.AddrPort `json:"from"`
+	To    netip.AddrPort `json:"to"`
+	Token string         `json:"token"`
+}
 type WorkerRequest struct {
 	Address netip.AddrPort `json:"address"`
 	Token   string         `json:"token,omitempty"`
@@ -100,6 +105,17 @@ func (r *Relay) PrivateHandler() http.Handler {
 			return
 		}
 		privateapi.Write(w, result)
+	})
+	mux.HandleFunc("POST /workers/rebind", func(w http.ResponseWriter, req *http.Request) {
+		var body RebindRequest
+		if !privateapi.Read(w, req, &body) {
+			return
+		}
+		if err := r.PrepareRebind(body.From, body.To, body.Token); err != nil {
+			privateapi.Error(w, err, RemoteErrors)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST /workers/expect", func(w http.ResponseWriter, req *http.Request) {
 		var body WorkerRequest
