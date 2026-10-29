@@ -29,7 +29,7 @@ type pending struct {
 }
 type Session struct {
 	mu              sync.Mutex
-	exchangeMu      sync.Mutex
+	exchange        chan struct{}
 	ID              string
 	Budget          Budget
 	clock           Clock
@@ -66,7 +66,7 @@ func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Session{digest: init.Scenario.Digest, ID: id, Budget: budget, clock: clock, capabilities: map[operator.Operation]bool{}, requests: map[string]*pending{}, gates: append([]operator.Gate{}, init.Scenario.Gates...)}
+	s := &Session{exchange: make(chan struct{}, 1), digest: init.Scenario.Digest, ID: id, Budget: budget, clock: clock, capabilities: map[operator.Operation]bool{}, requests: map[string]*pending{}, gates: append([]operator.Gate{}, init.Scenario.Gates...)}
 	s.scenario = init.Scenario
 	s.scenario.Gates = slices.Clone(init.Scenario.Gates)
 	for _, op := range init.Capabilities {

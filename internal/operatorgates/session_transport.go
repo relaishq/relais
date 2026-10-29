@@ -49,12 +49,25 @@ func (s *Session) CheckInbox(p Peer) error {
 // Exchange is the production serial request path used by gate implementations. A lost
 // pipe never leads to a second submission. Timeout preserves pending identity.
 func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, target, action string, args json.RawMessage, script []byte, end time.Duration, classify func(operator.Reply) operator.Certainty) (operator.Certainty, error) {
-	s.exchangeMu.Lock()
-	defer s.exchangeMu.Unlock()
-	if ctx.Err() != nil {
-		s.RecordUncertainty(operator.Uncertainty{Kind: string(op), RequestID: "0", Target: target, Action: action, DeadlineUnixMS: strconv.FormatInt(s.clock.Wall().Add(end-s.clock.Elapsed()).UnixMilli(), 10), RemainingMS: (end - s.clock.Elapsed()).Milliseconds(), Rule: transportRule(ctx.Err(), "cancelled")})
+	s.mu.Lock()
+	end = min(end, s.Budget.end)
+	if s.activeEnd != nil {
+		end = min(end, *s.activeEnd)
+	}
+	s.mu.Unlock()
+	wait, cancel := context.WithTimeout(ctx, end-s.clock.Elapsed())
+	defer cancel()
+	// Queue time consumes this exchange's original budget. Expired waiters
+	// never reserve an identity or submit behind a longer running request.
+	select {
+	case s.exchange <- struct{}{}:
+		defer func() { <-s.exchange }()
+	case <-wait.Done():
+	}
+	if wait.Err() != nil {
+		s.RecordUncertainty(operator.Uncertainty{Kind: string(op), RequestID: "0", Target: target, Action: action, DeadlineUnixMS: strconv.FormatInt(s.clock.Wall().Add(end-s.clock.Elapsed()).UnixMilli(), 10), RemainingMS: (end - s.clock.Elapsed()).Milliseconds(), Rule: transportRule(wait.Err(), "cancelled")})
 		s.Halt("interrupted")
-		return operator.Unknown, ctx.Err()
+		return operator.Unknown, wait.Err()
 	}
 	if err := s.CheckInbox(p); err != nil {
 		return operator.Unknown, err
@@ -63,8 +76,9 @@ func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, t
 	if err != nil {
 		return operator.Unknown, err
 	}
-	wait, cancel := context.WithTimeout(ctx, s.requests[req.ID].end-s.clock.Elapsed())
-	defer cancel()
+	requestWait, stop := context.WithTimeout(wait, s.requests[req.ID].end-s.clock.Elapsed())
+	defer stop()
+	wait = requestWait
 	if err = p.Send(wait, operator.Frame{Type: "request", Session: s.ID, Request: &req}); err != nil {
 		s.noteUnknownRequest(req.ID, transportRule(err, "send-failed"))
 		s.TransportLost()
@@ -95,7 +109,7 @@ func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, t
 		}
 		f.Result = &resolved
 		evidence := operator.Unknown
-		if f.Result.ID == req.ID {
+		if f.Result.ID == req.ID && (f.Result.Transport == operator.Succeeded || f.Result.NotSubmitted && f.Result.Transport == operator.Failed) {
 			evidence = classify(*f.Result)
 		}
 		if evidence == operator.Unknown && f.Result.Transport == operator.Succeeded && f.Result.ExitCode != nil && *f.Result.ExitCode == 0 && f.Result.UncertaintyRule == "" && !json.Valid(f.Result.Payload) {

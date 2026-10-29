@@ -299,7 +299,10 @@
     "resource-admission-skips-definition",
     "resource-admission-skips-idle",
     "resource-admission-fabricates-capability",
-    "resource-admission-hides-boundary-failure"
+    "resource-admission-hides-boundary-failure",
+    "session-unknown-transport-classified",
+    "session-unknown-refusal-becomes-failure",
+    "session-exchange-queue-ignores-deadline"
   ],
   "killed": [
     {
@@ -2672,6 +2675,30 @@
       "evidence": "killed",
       "test": "TestSessionBinaryOwnsAdmission/known-failure",
       "package": "./cmd/relais-gates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "session-unknown-transport-classified",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestExchangeUnknownTransportSkipsClassifier",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "session-unknown-refusal-becomes-failure",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestSessionBinaryOwnsAdmission/unknown-exit-refusal",
+      "package": "./cmd/relais-gates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "session-exchange-queue-ignores-deadline",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestExchangeQueueHonorsDeadline/context",
+      "package": "./internal/operatorgates",
       "guardFingerprint": ""
     }
   ],

@@ -53,7 +53,9 @@ The public session allocates that immutable manifest. The resource server
 configures its fixed launcher from it. A zero-exit readiness reply carries
 `{"ready":true}`; start carries `{"start":"started"}`; stop carries
 `{"inactive":true}`. Only a proved `notSubmitted` refusal can establish that
-a start was not submitted. Transport `unknown` dominates every payload.
+a start was not submitted. Transport `unknown` dominates every payload and
+cannot supply operation classifications, including a refusal. Positive product
+failures from confirmed transport remain separate from refusal classifications.
 
 Mailbox Args and payloads reuse `operatorcaller.MailboxArgs` and
 `MailboxValue`: read requires explicit `found`; create returns `committed`
@@ -69,7 +71,9 @@ append that terminal tail to the streamed trace.
 The session request bound is 32,768: half-second caller polling can exceed the
 old 4,096 bound within a real campaign. Pending timeouts still have deterministic
 request order. Concurrent caller collection and host requests serialize through
-one exchange owner and share the session's locked fatal state.
+one exchange owner and share the session's locked fatal state. Admission to that
+owner is cancellable: queue time consumes the supplied context and absolute
+request budget, and an expired waiter never submits a request.
 
 `testdata/resource-session.json` is a language-neutral negative boundary
 fixture. Its inventories reuse frozen observation values with the documented
@@ -150,13 +154,13 @@ expectations because the original oracle predates this protocol.
 
 `testdata/mutation-coverage.json` accounts for all 414 original mutation IDs:
 160 public mutants are owned and killed, 41 are retired with explicit successor
-contracts, and 213 remain assigned to private owners. The 135 additional native
+contracts, and 213 remain assigned to private owners. The 138 additional native
 mutants are counted separately. These are accounting categories, not claims that
 private code was tested.
 The late-start projection retains pending/readiness/outcome order while replacing
 the removed multi-launch policy with one pending start. The public mutation edits and additional mutants are in
 `scripts/ci/gate-mutation/cases.json`. Four additional resource-session mutants cover retry on unknown, unknown as
-failure, fabricated capability and rehearsal bypass. Several old dispatch/mailbox guards converge
+failure, fabricated capability and rehearsal bypass. Three more mutants cover uncertain transport classification, refusal promotion with an unknown exit status, and queued exchange deadlines. Several old dispatch/mailbox guards converge
 on one session guard; each original ledger ID is still applied and killed
 separately. `go run ./scripts/ci/gate-mutation` copies source, excluding Git,
 secret environment files and build outputs, into a temporary tree and uses an isolated cache with offline, read-only

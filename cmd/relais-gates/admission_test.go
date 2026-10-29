@@ -61,6 +61,9 @@ func (a *admissionServer) status() controlplane.Status {
 func (a *admissionServer) reply(t *testing.T, q operator.Request) operator.Reply {
 	t.Helper()
 	a.requests++
+	if a.seen["unknown-refusal"] {
+		t.Fatal("MUTATION: optional-session effect after unknown refusal", q.Operation, q.Action)
+	}
 	if q.ID != strconv.Itoa(a.requests) || q.RemainingMS <= 0 || q.RemainingMS > operatorgates.GateMaximum.Milliseconds() {
 		t.Fatal("MUTATION: optional-session request bounds", q.ID)
 	}
@@ -68,6 +71,16 @@ func (a *admissionServer) reply(t *testing.T, q operator.Request) operator.Reply
 	payload := any(nil)
 	switch q.Operation {
 	case operator.HostExecute:
+		if (a.mode == "unknown-refusal" || a.mode == "unknown-exit-refusal") && a.active != "" && q.Action == "status" {
+			a.seen["unknown-refusal"] = true
+			reply.Transport = operator.Unknown
+			if a.mode == "unknown-exit-refusal" {
+				reply.Transport = operator.Succeeded
+				reply.ExitCode = nil
+			}
+			reply.Payload = packedHost(t, []byte(`{"kind":"refused"}`))
+			return reply
+		}
 		if q.Action == "inventory" {
 			reply.Payload = packedHost(t, a.fixture.Inventories[q.Target])
 			return reply
@@ -244,7 +257,7 @@ func TestSessionBinaryOwnsAdmission(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, out)
 	}
-	for _, mode := range []string{"offered", "absent", "invalid-plan", "unknown-start", "unknown-stop", "known-failure", "store-absent"} {
+	for _, mode := range []string{"offered", "absent", "invalid-plan", "unknown-start", "unknown-stop", "unknown-refusal", "unknown-exit-refusal", "known-failure", "store-absent"} {
 		t.Run(mode, func(t *testing.T) {
 			t.Parallel()
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -322,6 +335,9 @@ func TestSessionBinaryOwnsAdmission(t *testing.T) {
 			if strings.HasPrefix(mode, "unknown") {
 				if !final.Latched || final.Status != operator.Inconclusive || len(server.begins) > 1 || len(final.Uncertainties) == 0 {
 					t.Fatal("MUTATION: optional-session unknown not fenced", final, server.begins)
+				}
+				if strings.HasSuffix(mode, "refusal") && (!server.seen["unknown-refusal"] || final.Gates[0].Status != operator.Inconclusive) {
+					t.Fatal("MUTATION: optional-session unknown refusal became definite", final)
 				}
 			} else {
 				if !reflect.DeepEqual(server.begins, server.starts) || !reflect.DeepEqual(server.stops, server.starts) {

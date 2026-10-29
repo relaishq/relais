@@ -3299,9 +3299,11 @@
         "TestMailboxResourceServerPreservesCreateAndBlobEvidence",
         "TestSessionBinaryOwnsAdmission",
         "TestResourceStoreFailoverRequests",
-        "TestRehearsalOffersNoOptionalCapabilities"
+        "TestRehearsalOffersNoOptionalCapabilities",
+        "TestExchangeUnknownTransportSkipsClassifier",
+        "TestExchangeQueueHonorsDeadline"
       ],
-      "scope": "Built session binary with fake resource server; immutable manifest and request ordering through caller start; unknown latch/no retry, definite refusal, missing capability, large evidence and create-only mailbox. Rehearsal uses the same JSON-pipe runner. Full Docker/media execution remains workflow-only; this is native protocol evidence, not an added frozen replay. Optional admission requires explicit capability: cross-process lifecycle, terminal survivor/stop/idle ordering, unknown start/stop fencing and known boundary failure. Store requests preserve observation/failover certainty. Boundary evidence is retained separately; the free adapter offers neither optional capability."
+      "scope": "Built session binary with fake resource server; immutable manifest and request ordering through caller start; unknown latch/no retry, definite refusal, missing capability, large evidence and create-only mailbox. Rehearsal uses the same JSON-pipe runner. Full Docker/media execution remains workflow-only; this is native protocol evidence, not an added frozen replay. Optional admission requires explicit capability: cross-process lifecycle, terminal survivor/stop/idle ordering, unknown start/stop fencing and known boundary failure. Store requests preserve observation/failover certainty. Boundary evidence is retained separately; the free adapter offers neither optional capability. Unknown transport cannot supply refusal classification; unknown transport or missing exit status with a refusal payload stays inconclusive and fences later effects. Queued exchanges honor context and absolute deadlines without submitting."
     }
   ],
   "integrationInvocations": [

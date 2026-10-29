@@ -147,7 +147,7 @@
     "GuardFingerprint": "1844c953bc69f762efd82e5875e7e106c80da41f341cf2311e58260686f74f8d",
     "File": "internal/operatorgates/session_transport.go",
     "Function": "Exchange",
-    "Old": "if ctx.Err() != nil {",
+    "Old": "if wait.Err() != nil {",
     "New": "if false {",
     "Test": "TestInterruptBeforeRequest",
     "Marker": "MUTATION: interrupted-request",
@@ -185,23 +185,43 @@
   },
   {
     "ID": "protocol-active-gate-cutoff",
-    "File": "internal/operatorgates/session.go",
-    "Function": "Issue",
-    "Old": "if s.activeEnd != nil {",
-    "New": "if false {",
     "Test": "TestActiveGateDeadlineBeforeEffect",
     "Marker": "MUTATION: active-gate-cutoff",
-    "Package": "./internal/operatorgates"
+    "Package": "./internal/operatorgates",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/session.go",
+        "Function": "Issue",
+        "Old": "if s.activeEnd != nil {",
+        "New": "if false {"
+      },
+      {
+        "File": "internal/operatorgates/session_transport.go",
+        "Function": "Exchange",
+        "Old": "if s.activeEnd != nil {",
+        "New": "if false {"
+      }
+    ]
   },
   {
     "ID": "protocol-clamped-wait",
-    "File": "internal/operatorgates/session_transport.go",
-    "Function": "Exchange",
-    "Old": "s.requests[req.ID].end-s.clock.Elapsed()",
-    "New": "end-s.clock.Elapsed()",
     "Test": "TestExchangeWaitUsesClampedEnd",
     "Marker": "MUTATION: clamped-wait",
-    "Package": "./internal/operatorgates"
+    "Package": "./internal/operatorgates",
+    "Edits": [
+      {
+        "File": "internal/operatorgates/session_transport.go",
+        "Function": "Exchange",
+        "Old": "end = min(end, *s.activeEnd)",
+        "New": "end = end"
+      },
+      {
+        "File": "internal/operatorgates/session_transport.go",
+        "Function": "Exchange",
+        "Old": "s.requests[req.ID].end-s.clock.Elapsed()",
+        "New": "end-s.clock.Elapsed()"
+      }
+    ]
   },
   {
     "ID": "protocol-blob-classifier-boundary",
@@ -3319,5 +3339,38 @@
     "Test": "TestSessionBinaryOwnsAdmission/known-failure",
     "Marker": "MUTATION: optional-session",
     "Package": "./cmd/relais-gates"
+  },
+  {
+    "ID": "session-unknown-transport-classified",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Receiver": "Session",
+    "Old": "if f.Result.ID == req.ID && (f.Result.Transport == operator.Succeeded || f.Result.NotSubmitted && f.Result.Transport == operator.Failed) {",
+    "New": "if f.Result.ID == req.ID {",
+    "Test": "TestExchangeUnknownTransportSkipsClassifier",
+    "Marker": "MUTATION: unknown-transport-classifier",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "session-unknown-refusal-becomes-failure",
+    "File": "internal/operatorgates/runtime.go",
+    "Function": "Step",
+    "Receiver": "ProcessRuntime",
+    "Old": "if certainty == operator.Unknown {\n\t\tif productFailure != nil {\n\t\t\treturn observed, productFailure",
+    "New": "if certainty == operator.Unknown {\n\t\tif operationErr != nil {\n\t\t\treturn observed, operationErr",
+    "Test": "TestSessionBinaryOwnsAdmission/unknown-exit-refusal",
+    "Marker": "MUTATION: optional-session",
+    "Package": "./cmd/relais-gates"
+  },
+  {
+    "ID": "session-exchange-queue-ignores-deadline",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Receiver": "Session",
+    "Old": "case <-wait.Done():",
+    "New": "",
+    "Test": "TestExchangeQueueHonorsDeadline/context",
+    "Marker": "MUTATION: exchange-queue-deadline",
+    "Package": "./internal/operatorgates"
   }
 ]

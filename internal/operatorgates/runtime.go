@@ -166,6 +166,9 @@ func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Dur
 	}
 	var observed StepResult
 	var operationErr error
+	// Positive product counters can survive incomplete operation evidence.
+	// A refusal cannot become definite while this operation remains unknown.
+	var productFailure error
 	certainty, err := r.Session.Exchange(ctx, r.Peer, operator.HostExecute, slot, op, nil, []byte(script), end, func(reply operator.Reply) operator.Certainty {
 		if reply.NotSubmitted {
 			operationErr = fault("precondition-failed:" + reply.RefusalCode)
@@ -204,9 +207,9 @@ func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Dur
 		observed.Started = envelope.Started
 		observed.Ended = envelope.Ended
 		if e != nil {
-			operationErr = knownProductFailure(op, envelope.Data)
+			productFailure = knownProductFailure(op, envelope.Data)
 			if host.IsPureRead(op) {
-				if operationErr == nil {
+				if productFailure == nil {
 					operationErr = fault("precondition-failed:observation")
 				}
 				return operator.Failed
@@ -235,10 +238,13 @@ func (r *ProcessRuntime) Step(ctx context.Context, op, slot string, end time.Dur
 		return observed, fault("command-result-unknown")
 	}
 	if certainty == operator.Unknown {
-		if operationErr != nil {
-			return observed, operationErr
+		if productFailure != nil {
+			return observed, productFailure
 		}
 		return observed, fault("command-result-unknown")
+	}
+	if productFailure != nil {
+		return observed, productFailure
 	}
 	if operationErr != nil {
 		return observed, operationErr
