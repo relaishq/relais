@@ -30,6 +30,15 @@ type ProtocolMailbox struct {
 	next    uint64
 	broken  bool
 }
+
+// capDeadline survives caller cancellation and the separate publication grace.
+// Once the manifest is validated, no later context can renew this cutoff.
+func (m *ProtocolMailbox) capDeadline(end time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.End = minTime(m.End, end)
+}
+
 type MailboxArgs struct {
 	Key  string         `json:"key"`
 	Data []byte         `json:"data,omitempty"`
@@ -81,6 +90,9 @@ func (m *ProtocolMailbox) exchange(ctx context.Context, op operator.Operation, k
 		return value, err
 	}
 	end := minTime(m.End, time.Now().Add(10*time.Second))
+	if deadline, ok := ctx.Deadline(); ok {
+		end = minTime(end, deadline)
+	}
 	ctx, cancel := context.WithDeadline(ctx, end)
 	defer cancel()
 	r := operator.Request{ID: id, Operation: op, Target: "caller", Args: encoded, DeadlineUnixMS: strconv.FormatInt(end.UnixMilli(), 10), RemainingMS: max(0, time.Until(end).Milliseconds())}

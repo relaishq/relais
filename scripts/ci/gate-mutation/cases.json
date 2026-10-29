@@ -3372,5 +3372,128 @@
     "Test": "TestExchangeQueueHonorsDeadline/context",
     "Marker": "MUTATION: exchange-queue-deadline",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "launcher-adapter-hash-unchecked",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "StartScript",
+    "Old": "[ \"$(sha256sum \"$work/mailbox-adapter\" | cut -d ' ' -f 1)\" = %s ]",
+    "New": "[ \"$(sha256sum \"$work/mailbox-adapter\" | cut -d ' ' -f 1)\" = %s ] || true",
+    "Test": "TestStartScriptStagesMailboxAdapter/hash-mismatch",
+    "Marker": "MUTATION: launcher-adapter-hash",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "launcher-mailbox-modes-overlap",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "validate",
+    "Receiver": "LaunchConfig",
+    "Old": "(c.MailboxPath == \"\") == (c.AdapterPath == \"\")",
+    "New": "c.MailboxPath == \"\" && c.AdapterPath == \"\"",
+    "Test": "TestLaunchConfigMailboxModes/both",
+    "Marker": "MUTATION: launcher-mailbox-mode",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "launcher-adapter-directory-flag",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "StartScript",
+    "Old": "-adapter \\\"$work/mailbox-adapter\\\"",
+    "New": "-mailbox \\\"$work/mailbox-adapter\\\"",
+    "Test": "TestStartScriptStagesMailboxAdapter/adapter",
+    "Marker": "MUTATION: launcher-adapter-flags",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-adapter-deadline-omitted",
+    "File": "cmd/relais-gates/main.go",
+    "Function": "runWithAdapter",
+    "Old": "if *adapter != \"\" && *deadline == \"\" {",
+    "New": "if false && *adapter != \"\" && *deadline == \"\" {",
+    "Test": "TestCallerRequiresAdapterDeadlineBeforeStart/omitted",
+    "Marker": "MUTATION: caller-adapter-deadline-required",
+    "Package": "./cmd/relais-gates"
+  },
+  {
+    "ID": "caller-directory-orphan-spool-accepted",
+    "File": "cmd/relais-gates/main.go",
+    "Function": "runWithAdapter",
+    "Old": "|| *adapter == \"\" && spoolSet",
+    "New": "|| false && *adapter == \"\" && spoolSet",
+    "Test": "TestCallerDirectoryRejectsOrphanSpool",
+    "Marker": "MUTATION: caller-directory-orphan-spool",
+    "Package": "./cmd/relais-gates"
+  },
+  {
+    "ID": "caller-manifest-cutoff-skipped",
+    "File": "internal/operatorcaller/bridge.go",
+    "Function": "runBridge",
+    "Old": "mailbox.capDeadline(time.UnixMilli(m.Deadline))",
+    "New": "_ = mailbox",
+    "Test": "TestBridgeCapsCleanupToManifest/later-runtime",
+    "Marker": "MUTATION: caller-cleanup-deadline",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "caller-manifest-cutoff-renews-runtime",
+    "File": "internal/operatorcaller/transport.go",
+    "Function": "capDeadline",
+    "Receiver": "ProtocolMailbox",
+    "Old": "m.End = minTime(m.End, end)",
+    "New": "m.End = end",
+    "Test": "TestBridgeCapsCleanupToManifest/earlier-runtime",
+    "Marker": "MUTATION: caller-cleanup-deadline",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "mailbox-caller-context-deadline-ignored",
+    "File": "internal/operatorcaller/transport.go",
+    "Function": "exchange",
+    "Receiver": "ProtocolMailbox",
+    "Old": "if deadline, ok := ctx.Deadline(); ok {",
+    "New": "if deadline, ok := ctx.Deadline(); false && ok {",
+    "Test": "TestProtocolMailboxBoundsRequestByCallerDeadline",
+    "Marker": "MUTATION: mailbox-caller-deadline",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "launcher-adapter-source-hash-only",
+    "Test": "TestStartScriptStagesMailboxAdapter/copy-change-restored",
+    "Marker": "MUTATION: launcher-adapter-hash",
+    "Package": "./internal/operatorcaller",
+    "Edits": [
+      {
+        "File": "internal/operatorcaller/launcher.go",
+        "Function": "StartScript",
+        "Old": "[ \"$(sha256sum \"$work/mailbox-adapter\" | cut -d ' ' -f 1)\" = %s ]",
+        "New": "[ \"$(sha256sum %s | cut -d ' ' -f 1)\" = %s ]"
+      },
+      {
+        "File": "internal/operatorcaller/launcher.go",
+        "Function": "StartScript",
+        "Old": "quote(c.AdapterPath), quote(c.AdapterSHA256))",
+        "New": "quote(c.AdapterPath), quote(c.AdapterPath), quote(c.AdapterSHA256))"
+      }
+    ]
+  },
+  {
+    "ID": "launcher-adapter-hash-before-copy",
+    "Test": "TestStartScriptStagesMailboxAdapter/copy-change",
+    "Marker": "MUTATION: launcher-adapter-hash",
+    "Package": "./internal/operatorcaller",
+    "Edits": [
+      {
+        "File": "internal/operatorcaller/launcher.go",
+        "Function": "StartScript",
+        "Old": "cp %s \"$work/mailbox-adapter\"\n[ \"$(sha256sum \"$work/mailbox-adapter\" | cut -d ' ' -f 1)\" = %s ]",
+        "New": "[ \"$(sha256sum %s | cut -d ' ' -f 1)\" = %s ]\ncp %s \"$work/mailbox-adapter\""
+      },
+      {
+        "File": "internal/operatorcaller/launcher.go",
+        "Function": "StartScript",
+        "Old": "quote(c.AdapterPath), quote(c.AdapterSHA256))",
+        "New": "quote(c.AdapterPath), quote(c.AdapterSHA256), quote(c.AdapterPath))"
+      }
+    ]
   }
 ]

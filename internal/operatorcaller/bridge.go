@@ -170,6 +170,14 @@ func RunBridge(ctx context.Context, c BridgeConfig, box Store, load string) erro
 	if err != nil {
 		return err
 	}
+	return runBridge(ctx, c, box, load, host, m)
+}
+
+// runBridge owns the caller lifecycle after host, binary and manifest validation.
+func runBridge(ctx context.Context, c BridgeConfig, box Store, load string, host Host, m Manifest) error {
+	if mailbox, ok := box.(*ProtocolMailbox); ok {
+		mailbox.capDeadline(time.UnixMilli(m.Deadline))
+	}
 	ctx, cancel := context.WithDeadline(ctx, time.UnixMilli(m.Deadline))
 	defer cancel()
 	ca, err := os.ReadFile(c.CertificateFile)

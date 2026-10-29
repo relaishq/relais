@@ -77,19 +77,36 @@ func (LocalExecutor) Execute(ctx context.Context, script []byte, end time.Time) 
 	return Execution{Certainty: operator.Succeeded, Output: string(out)}
 }
 
+// LaunchConfig selects MailboxPath or the hash-pinned AdapterPath. SpoolPath is
+// optional in adapter mode. Adapter arguments and environment are not configurable.
 type LaunchConfig struct {
 	BridgePath, BridgeSHA256, LoadPath, LoadSHA256, ConfigPath, ConfigSHA256, MailboxPath, WorkRoot, Architecture string
+	AdapterPath, AdapterSHA256, SpoolPath                                                                         string
 	RuntimeDeadline                                                                                               time.Time
 	CPUAffinity                                                                                                   string
 }
 
 func (c LaunchConfig) validate() error {
-	for _, s := range []string{c.BridgePath, c.LoadPath, c.ConfigPath, c.MailboxPath, c.WorkRoot} {
+	if (c.MailboxPath == "") == (c.AdapterPath == "") || c.AdapterPath == "" && (c.AdapterSHA256 != "" || c.SpoolPath != "") {
+		return errors.New("invalid-mailbox-mode")
+	}
+	paths := []string{c.BridgePath, c.LoadPath, c.ConfigPath, c.WorkRoot}
+	hashes := []string{c.BridgeSHA256, c.LoadSHA256, c.ConfigSHA256}
+	if c.AdapterPath != "" {
+		paths = append(paths, c.AdapterPath)
+		hashes = append(hashes, c.AdapterSHA256)
+		if c.SpoolPath != "" {
+			paths = append(paths, c.SpoolPath)
+		}
+	} else {
+		paths = append(paths, c.MailboxPath)
+	}
+	for _, s := range paths {
 		if !strings.HasPrefix(s, "/") || strings.ContainsAny(s, "\r\n\x00") {
 			return errors.New("invalid-launch-path")
 		}
 	}
-	for _, s := range []string{c.BridgeSHA256, c.LoadSHA256, c.ConfigSHA256} {
+	for _, s := range hashes {
 		if !digestPattern.MatchString(s) {
 			return errors.New("invalid-launch-hash")
 		}
@@ -113,6 +130,10 @@ func ReadyScript(c LaunchConfig) ([]byte, error) {
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
+	adapterCheck := ""
+	if c.AdapterPath != "" {
+		adapterCheck = fmt.Sprintf("step=adapter-hash\n[ \"$(sha256sum %s | cut -d ' ' -f 1)\" = %s ]\n", quote(c.AdapterPath), quote(c.AdapterSHA256))
+	}
 	return []byte(fmt.Sprintf(`set -eu
 step=architecture
 trap 'status=$?; if [ "$status" -ne 0 ]; then printf "caller-ready-%%s-failed\n" "$step" >&2; fi' EXIT
@@ -128,12 +149,12 @@ step=load-hash
 [ "$(sha256sum %s | cut -d ' ' -f 1)" = %s ]
 step=config-hash
 [ "$(sha256sum %s | cut -d ' ' -f 1)" = %s ]
-step=host
+%sstep=host
 %s caller-host >/dev/null
 step=clock
 chronyc tracking | grep -Eq '^Leap status[[:space:]]*:[[:space:]]*Normal$'
 printf 'caller-ready\n'
-`, quote(c.Architecture), quote(c.BridgePath), quote(c.BridgeSHA256), quote(c.LoadPath), quote(c.LoadSHA256), quote(c.ConfigPath), quote(c.ConfigSHA256), quote(c.BridgePath))), nil
+`, quote(c.Architecture), quote(c.BridgePath), quote(c.BridgeSHA256), quote(c.LoadPath), quote(c.LoadSHA256), quote(c.ConfigPath), quote(c.ConfigSHA256), adapterCheck, quote(c.BridgePath))), nil
 }
 func StartScript(c LaunchConfig, i Identity, end time.Time) ([]byte, error) {
 	if err := c.validate(); err != nil {
@@ -150,6 +171,18 @@ func StartScript(c LaunchConfig, i Identity, end time.Time) ([]byte, error) {
 		affinity = " --property=" + quote("CPUAffinity="+c.CPUAffinity)
 	}
 	identity, _ := json.Marshal(i)
+	mailboxArgs := "-mailbox " + quote(c.MailboxPath)
+	adapterStage := ""
+	if c.AdapterPath != "" {
+		adapterStage = fmt.Sprintf(`cp %s "$work/mailbox-adapter"
+[ "$(sha256sum "$work/mailbox-adapter" | cut -d ' ' -f 1)" = %s ]
+chmod 700 "$work/mailbox-adapter"
+`, quote(c.AdapterPath), quote(c.AdapterSHA256))
+		mailboxArgs = "-adapter \"$work/mailbox-adapter\" -deadline " + quote(c.RuntimeDeadline.UTC().Format(time.RFC3339Nano))
+		if c.SpoolPath != "" {
+			mailboxArgs += " -spool " + quote(c.SpoolPath)
+		}
+	}
 	return []byte(fmt.Sprintf(`set -eu
 umask 077
 unit=%s
@@ -164,9 +197,9 @@ cp %s "$work/config.json"
 [ "$(sha256sum "$work/relais-load" | cut -d ' ' -f 1)" = %s ]
 [ "$(sha256sum "$work/config.json" | cut -d ' ' -f 1)" = %s ]
 chmod 700 "$work/bridge" "$work/relais-load"
-systemd-run --quiet --service-type=exec --unit="$unit" --property="RuntimeMaxSec=$remaining" --property=TimeoutStopSec=180 --property=KillMode=control-group --property=UMask=0077 --property="WorkingDirectory=$work" --setenv=GOMAXPROCS=2%s "$work/bridge" caller -config "$work/config.json" -mailbox %s -load "$work/relais-load" -identity %s
+%ssystemd-run --quiet --service-type=exec --unit="$unit" --property="RuntimeMaxSec=$remaining" --property=TimeoutStopSec=180 --property=KillMode=control-group --property=UMask=0077 --property="WorkingDirectory=$work" --setenv=GOMAXPROCS=2%s "$work/bridge" caller -config "$work/config.json" %s -load "$work/relais-load" -identity %s
 printf 'caller-started:%%s\n' "$unit"
-`, quote(i.Unit()), quote(c.WorkRoot), c.RuntimeDeadline.Unix(), quote(c.BridgePath), quote(c.LoadPath), quote(c.ConfigPath), quote(c.BridgeSHA256), quote(c.LoadSHA256), quote(c.ConfigSHA256), affinity, quote(c.MailboxPath), quote(string(identity)))), nil
+`, quote(i.Unit()), quote(c.WorkRoot), c.RuntimeDeadline.Unix(), quote(c.BridgePath), quote(c.LoadPath), quote(c.ConfigPath), quote(c.BridgeSHA256), quote(c.LoadSHA256), quote(c.ConfigSHA256), adapterStage, affinity, mailboxArgs, quote(string(identity)))), nil
 }
 func StopScript(i Identity) ([]byte, error) {
 	if err := i.Validate(); err != nil {
