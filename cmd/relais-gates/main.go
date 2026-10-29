@@ -58,6 +58,7 @@ func run() int {
 		load := flags.String("load", "", "verified relais-load executable")
 		adapter := flags.String("adapter", "", "absolute mailbox adapter executable")
 		spool := flags.String("spool", "", "agreed mailbox blob spool")
+		deadline := flags.String("deadline", "", "absolute caller runtime deadline (RFC3339)")
 		expected := flags.String("identity", "", "preallocated identity JSON")
 		if flags.Parse(os.Args[2:]) != nil || flags.NArg() != 0 {
 			return 2
@@ -81,6 +82,16 @@ func run() int {
 		}
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
+		callerEnd := time.Now().Add(20 * time.Minute)
+		if *deadline != "" {
+			callerEnd, err = time.Parse(time.RFC3339Nano, *deadline)
+			if err != nil || !callerEnd.After(time.Now()) {
+				return 2
+			}
+			var stop context.CancelFunc
+			ctx, stop = context.WithDeadline(ctx, callerEnd)
+			defer stop()
+		}
 		var box operatorcaller.Store
 		if (*mailbox == "") == (*adapter == "") {
 			return 2
@@ -99,7 +110,7 @@ func run() int {
 				return 1
 			}
 			defer func() { cancel(); _ = peer.Close(); _ = peer.Wait() }()
-			box = &operatorcaller.ProtocolMailbox{Peer: peer, Session: c.Identity.CallerID, Spool: root, End: time.Now().Add(20 * time.Minute)}
+			box = &operatorcaller.ProtocolMailbox{Peer: peer, Session: c.Identity.CallerID, Spool: root, End: callerEnd}
 		} else {
 			directory, e := operatorcaller.OpenDirectory(*mailbox)
 			if e != nil {

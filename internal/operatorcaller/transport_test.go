@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +17,23 @@ import (
 type mailboxPeer struct {
 	requests []operator.Frame
 	reply    func(operator.Frame) (operator.Frame, error)
+}
+
+func TestProtocolMailboxBoundsRequestByCallerDeadline(t *testing.T) {
+	end := time.Now().Add(3 * time.Second).Truncate(time.Millisecond)
+	ctx, cancel := context.WithDeadline(context.Background(), end)
+	defer cancel()
+	peer := &mailboxPeer{reply: func(f operator.Frame) (operator.Frame, error) {
+		if f.Request.DeadlineUnixMS != strconv.FormatInt(end.UnixMilli(), 10) || f.Request.RemainingMS > 3000 {
+			t.Fatal("mailbox request outlived caller deadline", f.Request)
+		}
+		zero := 0
+		return operator.Frame{Type: "result", Session: f.Session, Result: &operator.Reply{ID: f.Request.ID, Transport: operator.Succeeded, ExitCode: &zero, Payload: json.RawMessage(`{"found":false}`)}}, nil
+	}}
+	box := &ProtocolMailbox{Peer: peer, Session: "caller", End: time.Now().Add(20 * time.Minute)}
+	if _, err := box.Read(ctx, "scope/transport.json"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (p *mailboxPeer) Send(_ context.Context, f operator.Frame) error {

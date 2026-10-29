@@ -3372,5 +3372,36 @@
     "Test": "TestExchangeQueueHonorsDeadline/context",
     "Marker": "MUTATION: exchange-queue-deadline",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "launcher-adapter-hash-unchecked",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "StartScript",
+    "Old": "[ \"$(sha256sum \"$work/mailbox-adapter\" | cut -d ' ' -f 1)\" = %s ]",
+    "New": "[ \"$(sha256sum \"$work/mailbox-adapter\" | cut -d ' ' -f 1)\" = %s ] || true",
+    "Test": "TestStartScriptStagesMailboxAdapter/hash-mismatch",
+    "Marker": "MUTATION: launcher-adapter-hash",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "launcher-mailbox-modes-overlap",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "validate",
+    "Receiver": "LaunchConfig",
+    "Old": "(c.MailboxPath == \"\") == (c.AdapterPath == \"\")",
+    "New": "c.MailboxPath == \"\" && c.AdapterPath == \"\"",
+    "Test": "TestLaunchConfigMailboxModes/both",
+    "Marker": "MUTATION: launcher-mailbox-mode",
+    "Package": "./internal/operatorcaller"
+  },
+  {
+    "ID": "launcher-adapter-directory-flag",
+    "File": "internal/operatorcaller/launcher.go",
+    "Function": "StartScript",
+    "Old": "-adapter \\\"$work/mailbox-adapter\\\"",
+    "New": "-mailbox \\\"$work/mailbox-adapter\\\"",
+    "Test": "TestStartScriptStagesMailboxAdapter/adapter",
+    "Marker": "MUTATION: launcher-adapter-flags",
+    "Package": "./internal/operatorcaller"
   }
 ]

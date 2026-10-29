@@ -302,7 +302,10 @@
     "resource-admission-hides-boundary-failure",
     "session-unknown-transport-classified",
     "session-unknown-refusal-becomes-failure",
-    "session-exchange-queue-ignores-deadline"
+    "session-exchange-queue-ignores-deadline",
+    "launcher-adapter-hash-unchecked",
+    "launcher-mailbox-modes-overlap",
+    "launcher-adapter-directory-flag"
   ],
   "killed": [
     {
@@ -2700,6 +2703,27 @@
       "test": "TestExchangeQueueHonorsDeadline/context",
       "package": "./internal/operatorgates",
       "guardFingerprint": ""
+    },
+    {
+      "id": "launcher-adapter-hash-unchecked",
+      "owner": "public",
+      "evidence": "killed",
+      "test": "TestStartScriptStagesMailboxAdapter/hash-mismatch",
+      "package": "./internal/operatorcaller"
+    },
+    {
+      "id": "launcher-mailbox-modes-overlap",
+      "owner": "public",
+      "evidence": "killed",
+      "test": "TestLaunchConfigMailboxModes/both",
+      "package": "./internal/operatorcaller"
+    },
+    {
+      "id": "launcher-adapter-directory-flag",
+      "owner": "public",
+      "evidence": "killed",
+      "test": "TestStartScriptStagesMailboxAdapter/adapter",
+      "package": "./internal/operatorcaller"
     }
   ],
   "retired": [

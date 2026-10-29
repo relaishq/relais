@@ -154,7 +154,7 @@ expectations because the original oracle predates this protocol.
 
 `testdata/mutation-coverage.json` accounts for all 414 original mutation IDs:
 160 public mutants are owned and killed, 41 are retired with explicit successor
-contracts, and 213 remain assigned to private owners. The 138 additional native
+contracts, and 213 remain assigned to private owners. The 141 additional native
 mutants are counted separately. These are accounting categories, not claims that
 private code was tested.
 The late-start projection retains pending/readiness/outcome order while replacing
@@ -342,6 +342,30 @@ Caller failures capture unit state and the last 60 journal lines before cleanup,
 with scoped secrets redacted. Unit state includes user, filesystem protection,
 working directory, affinity and runtime limit. Loader stderr and file failure
 paths remain visible without credential contents.
+The fixed caller launcher accepts exactly one mailbox mode. Directory mode
+retains its existing scripts and rehearsal arguments. Adapter mode supplies an
+absolute executable path and lowercase SHA-256; an optional absolute spool
+path supports protocol blobs. The start script copies the adapter into the
+identity's fresh work directory, checks the staged hash before execution and
+sets mode 0700, as it does for the bridge and loader. A mismatch refuses launch.
+It passes only the staged adapter path, optional spool and absolute runtime
+deadline. The adapter receives no extra arguments and keeps the transport's
+fixed environment; credentials are not forwarded in arguments or environment.
+Mailbox requests use the earlier of that runtime deadline, the active caller
+context deadline and the ten-second request bound. This avoids renewing a
+20-minute mailbox window at process startup or advertising a deadline beyond
+the caller's manifest. Unknown results still latch the mailbox without retry;
+writes remain create-only and judge policy is unchanged.
+
+`TestDirectoryLaunchScriptsStayUnchanged` compares both directory scripts
+byte-for-byte with pre-adapter fixtures. `TestStartScriptStagesMailboxAdapter`
+executes staging, quoted flags and hash refusal. `TestMailboxAdapterSubprocess`
+checks real subprocess requests, create conflicts and unknown fencing on all
+platforms. `TestCallerBinaryUsesMailboxAdapter` runs the generated script and
+built caller with a fake subprocess adapter on Linux through setup and a
+confirmed conductor stop, plus an unknown-create control. It proves mailbox
+wiring and lifecycle only; it does not run media or systemd.
+
 The launcher waits for executable startup with `Type=exec`; the existing mailbox
 handshake still proves caller readiness. Signaling probe failures retain TLS or
 HTTP failure codes, and missing completion evidence retains the underlying error.

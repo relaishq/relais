@@ -81,6 +81,9 @@ func (m *ProtocolMailbox) exchange(ctx context.Context, op operator.Operation, k
 		return value, err
 	}
 	end := minTime(m.End, time.Now().Add(10*time.Second))
+	if deadline, ok := ctx.Deadline(); ok {
+		end = minTime(end, deadline)
+	}
 	ctx, cancel := context.WithDeadline(ctx, end)
 	defer cancel()
 	r := operator.Request{ID: id, Operation: op, Target: "caller", Args: encoded, DeadlineUnixMS: strconv.FormatInt(end.UnixMilli(), 10), RemainingMS: max(0, time.Until(end).Milliseconds())}
