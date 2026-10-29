@@ -1,10 +1,86 @@
 # Operator session core
 
-`relais-gates session -spool DIR` binds an agreed local blob directory without
-putting its path in protocol artifacts. `relais-gates version` emits the protocol-v1 hello. `relais-gates session`
-accepts one init and runs one session over JSON Lines on stdin/stdout. Stdout
-contains protocol frames only. An absent gate implementation is `not-run` with
-`not-implemented`; this stage cannot produce rehearsal eligibility evidence.
+`relais-gates session -config FILE [-spool DIR]` accepts one init and runs the
+public `RunSequence` over JSON Lines on stdin/stdout. Stdout contains protocol
+frames only. The private JSON configuration supplies `parameters` (the existing
+process endpoints), two release `pins`, clock `bounds`, `architecture`,
+caller `endpoints` and `token`, and an absolute `judgeBinary` path.
+Optional `callerIdBase` allocates caller identities after setup callers.
+The binary is checked against Init's judge SHA-256 before resource requests;
+release pins are bound to Init's scenario. No release build or download occurs
+inside a gate. `-spool` binds an agreed local blob directory without putting its
+path in artifacts. Configuration and the spool are local inputs, not public
+reports. `relais-gates version` emits the unchanged protocol-v1 hello.
+
+The resource-backed runner owns preparation, gate admission, process/release
+procedures, caller brokers, the evidence pool and the pinned judge. Host steps
+use `host.execute`; all caller and mailbox access uses the same session's
+requests, deadlines and latch. Failover's optional store boundary uses
+`store.observe` and `store.failover`. Missing required capabilities refuse
+preparation before the first resource request with `precondition-failed`;
+there is no fabricated operation or unknown effect for that refusal.
+
+Load additionally requires the optional `caller.admission` capability marker.
+The free adapter does not offer it or either store capability. This is an
+additive protocol-v1 negotiation value, not a new effect request: the existing
+caller/mailbox operations carry their already-defined `admission-boundary`
+manifest phase. Old peers omit the marker and are refused before effects.
+Private configuration must supply `admission.survivorSeconds` and
+`admission.boundarySeconds`. The combined media duration plus the existing
+seven-minute campaign reserve must fit the 20-minute cap; no deadline is renewed.
+
+`PrepareCallers` proves both setups before survivor begin. The public
+`RunAdmission` then collects the survivor, confirms its one reserved stop,
+proves control, local workers and store ownership idle, and calls `BeginBoundary`.
+The latter requires terminal survivor evidence and the same confirmed stop.
+The two-call boundary runs the existing load measurement definition and owns a
+separate collection and stop reservation. Its raw JSONL remains in the resource
+mailbox and is retained separately in `ResourceResult.BoundaryJSONL`; it never
+enters the survivor pool. Known boundary decryption, ICE or loss failures remain
+failures even when other evidence is incomplete. Native admission/measurement
+verdicts remain conservative and inconclusive; no new passing policy or pinned
+judge threshold was introduced.
+
+`TestSessionBinaryOwnsAdmission` exercises both phases through a built command,
+missing admission/store capabilities, unknown launch/stop and known boundary
+failure against a fake resource server. Its synthetic evidence proves lifecycle
+and fencing only, not a paid media pass. `TestResourceStoreFailoverRequests`
+pins request-backed observe/failover/observe and unknown fencing.
+
+No frame fields or effect request operations changed. Caller operations have an
+explicit payload contract: Args is `{"manifest": <operatorcaller.Manifest>}`.
+The public session allocates that immutable manifest. The resource server
+configures its fixed launcher from it. A zero-exit readiness reply carries
+`{"ready":true}`; start carries `{"start":"started"}`; stop carries
+`{"inactive":true}`. Only a proved `notSubmitted` refusal can establish that
+a start was not submitted. Transport `unknown` dominates every payload and
+cannot supply operation classifications, including a refusal. Positive product
+failures from confirmed transport remain separate from refusal classifications.
+
+Mailbox Args and payloads reuse `operatorcaller.MailboxArgs` and
+`MailboxValue`: read requires explicit `found`; create returns `committed`
+or `conflict`. Unknown reads never become absence. Writes remain create-only.
+Large read values use the existing reply blob envelope and agreed spool.
+The bounded decoded value may contain up to `MaxBlobBytes` of JSON, including
+base64 data; it is not restricted to a small host observation.
+
+Sequence sessions stream traces as trace frames. Final's `trace` contains only
+new terminal entries published after streaming (normally it is empty), avoiding
+a duplicate trace that could exceed the unchanged 256 KiB frame limit. Clients
+append that terminal tail to the streamed trace.
+The session request bound is 32,768: half-second caller polling can exceed the
+old 4,096 bound within a real campaign. Pending timeouts still have deterministic
+request order. Concurrent caller collection and host requests serialize through
+one exchange owner and share the session's locked fatal state. Admission to that
+owner is cancellable: queue time consumes the supplied context and absolute
+request budget, and an expired waiter never submits a request.
+
+`testdata/resource-session.json` is a language-neutral negative boundary
+fixture. Its inventories reuse frozen observation values with the documented
+target-OS translation. `TestSessionBinaryUsesResourceSequence` builds the real
+command and checks requests through caller start, unknown/no-retry behavior,
+definite refusal and missing-capability refusal against a fake resource server.
+It does not claim a completed media campaign.
 
 The engine owns request identities, deadlines and the fatal latch. An adapter
 serves requests; it does not choose a gate verdict or repair an unknown effect.
@@ -77,11 +153,14 @@ remain pending. Live pipe protocol cases have independent
 expectations because the original oracle predates this protocol.
 
 `testdata/mutation-coverage.json` accounts for all 414 original mutation IDs:
-60 are killed by the core and observation packages; 354 remain pending with their ledger owners.
+160 public mutants are owned and killed, 41 are retired with explicit successor
+contracts, and 213 remain assigned to private owners. The 138 additional native
+mutants are counted separately. These are accounting categories, not claims that
+private code was tested.
 The late-start projection retains pending/readiness/outcome order while replacing
-the removed multi-launch policy with one pending start. The 60 ledger edits
-(including 12 Python-source edits) and 14 additional mutants are in
-`scripts/ci/gate-mutation/cases.json`. Several old dispatch/mailbox guards converge
+the removed multi-launch policy with one pending start. The public mutation edits and additional mutants are in
+`scripts/ci/gate-mutation/cases.json`. Four additional resource-session mutants cover retry on unknown, unknown as
+failure, fabricated capability and rehearsal bypass. Three more mutants cover uncertain transport classification, refusal promotion with an unknown exit status, and queued exchange deadlines. Several old dispatch/mailbox guards converge
 on one session guard; each original ledger ID is still applied and killed
 separately. `go run ./scripts/ci/gate-mutation` copies source, excluding Git,
 secret environment files and build outputs, into a temporary tree and uses an isolated cache with offline, read-only
@@ -90,9 +169,9 @@ at the named assertion. Build errors, missing tests, panics and timeouts are
 invalid. New protocol mutants are counted separately from the 414 original IDs.
 Other ledger cases are never included in the killed count.
 
-`make test-operator` runs the core and observation tests and owned mutants. It is
-included in `make check`. Full process algorithms, caller lifecycle, judges and
-container rehearsal remain with their owning stages. See
+`make test-operator` runs operator packages, process/caller/evidence composition
+tests, both pinned-release comparisons and owned mutants. It is included in
+`make check`. Real container rehearsal runs only in its GitHub workflow. See
 [operator observations](operator-observations.md) for the typed boundaries and relocation proof.
 
 ## Public four-gate rehearsal
@@ -157,6 +236,18 @@ media-span check requires stats through hangup, including the final partial row.
 partial interval, uncovered event edges and incomplete-measurement fallback.
 
 The shared session runs rollout, control restart, A→B→A, then relay deploy.
+After setup, controls and calibration, the container adapter becomes a resource
+server on JSON pipes. It serves the same `ServeSequence` and `ResourceRunner`
+used by the session command. The rehearsal no longer supplies its own gate
+sequence or direct caller/mailbox procedure ports. This uses in-process pipes
+to retain the existing typed report and evidence sinks without adding private
+report frames to the protocol. `TestRehearsalUsesSessionResourceRequests`
+requires actual resource requests through this entry; bypassing it is a killed
+mutant. The unchanged GitHub workflow's prepared execution invokes this path,
+including the real container, systemd caller, create-only mailbox, blob spool and
+both pinned-release preparation steps. The container run itself remains
+workflow-only verification.
+
 Owner decision, 2026-10-28: the free rehearsal proves that the operator procedures
 complete and that the media evidence contains no known failure. A shared runner
 cannot provide the scheduling isolation needed to settle every media timing

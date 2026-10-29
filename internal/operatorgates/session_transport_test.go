@@ -106,6 +106,19 @@ func TestInterruptBeforeRequest(t *testing.T) {
 	}
 }
 
+func TestExchangeUnknownTransportSkipsClassifier(t *testing.T) {
+	s, _ := fixtureSession(t)
+	p := &responsePeer{response: operator.Reply{Transport: operator.Unknown, ExitCode: new(int), Payload: json.RawMessage(`{"kind":"refused"}`)}}
+	classified := false
+	c, err := s.Exchange(context.Background(), p, operator.HostExecute, "shared", "status", nil, nil, time.Minute, func(operator.Reply) operator.Certainty {
+		classified = true
+		return operator.Failed
+	})
+	if c != operator.Unknown || err != nil || classified || !s.Latched() {
+		t.Fatal("MUTATION: unknown-transport-classifier", c, err, classified)
+	}
+}
+
 type queuedPeer struct {
 	frame operator.Frame
 	sent  int

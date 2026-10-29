@@ -291,7 +291,18 @@
     "rehearsal-dropped-phase-pass",
     "rehearsal-undecided-timing-blocks",
     "paid-undecided-timing-pass",
-    "evidence-timing-reasons-hashed"
+    "evidence-timing-reasons-hashed",
+    "session-resource-retries-unknown",
+    "session-resource-unknown-as-failure",
+    "session-resource-fabricates-capability",
+    "rehearsal-bypasses-resource-session",
+    "resource-admission-skips-definition",
+    "resource-admission-skips-idle",
+    "resource-admission-fabricates-capability",
+    "resource-admission-hides-boundary-failure",
+    "session-unknown-transport-classified",
+    "session-unknown-refusal-becomes-failure",
+    "session-exchange-queue-ignores-deadline"
   ],
   "killed": [
     {
@@ -2601,6 +2612,94 @@
       "test": "TestSanitizedArtifactRejudgesRawPhases/timing-first_content-varies",
       "package": "./internal/operatorevidence/judge-src",
       "guardFingerprint": ""
+    },
+    {
+      "id": "session-resource-retries-unknown",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestSessionBinaryUsesResourceSequence/unknown-start-evidence",
+      "package": "./cmd/relais-gates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "session-resource-unknown-as-failure",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestResourcePortUnknownIsNeverFailure",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "session-resource-fabricates-capability",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestSessionBinaryUsesResourceSequence/missing-capability",
+      "package": "./cmd/relais-gates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "rehearsal-bypasses-resource-session",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestRehearsalUsesSessionResourceRequests",
+      "package": "./internal/operatorrehearsal",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "resource-admission-skips-definition",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestSessionBinaryOwnsAdmission/offered",
+      "package": "./cmd/relais-gates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "resource-admission-skips-idle",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestSessionBinaryOwnsAdmission/offered",
+      "package": "./cmd/relais-gates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "resource-admission-fabricates-capability",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestSessionBinaryOwnsAdmission/absent",
+      "package": "./cmd/relais-gates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "resource-admission-hides-boundary-failure",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestSessionBinaryOwnsAdmission/known-failure",
+      "package": "./cmd/relais-gates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "session-unknown-transport-classified",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestExchangeUnknownTransportSkipsClassifier",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "session-unknown-refusal-becomes-failure",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestSessionBinaryOwnsAdmission/unknown-exit-refusal",
+      "package": "./cmd/relais-gates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "session-exchange-queue-ignores-deadline",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestExchangeQueueHonorsDeadline/context",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
     }
   ],
   "retired": [
@@ -4629,5 +4728,5 @@
       "reason": "AWS-owned resource, transport, paid admission or accounting obligation: Private paid-launch admission and trusted rehearsal evidence.. Execution remains a private adapter obligation; no public kill is claimed."
     }
   ],
-  "accountingScope": "Terminal public cutover ownership. Assigned-private rows retain immutable original fingerprints and do not claim private deletion or private mutation execution."
+  "accountingScope": "Terminal public cutover ownership. Assigned-private rows retain immutable original fingerprints and do not claim private deletion or private mutation execution. Resource-session wiring mutants are additional native protocol evidence, not original TypeScript mutations."
 }

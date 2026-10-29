@@ -1,0 +1,2814 @@
+{
+  "schemaVersion": 1,
+  "scope": "Negative resource-session boundary; inventories from frozen observations with the documented OS translation. No media pass evidence.",
+  "scenario": {
+    "schemaVersion": 1,
+    "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "gates": [
+      "rollout"
+    ],
+    "template": {
+      "sourceCommit": "a0d9744ff1223a8d7978447c907041973e915b08",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "releaseA": {
+      "sourceCommit": "a0d9744ff1223a8d7978447c907041973e915b08",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "releaseB": {
+      "sourceCommit": "85e10436eb6adbbf577b6538b0bbb799aab823b2",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "caller": {
+      "sourceCommit": "a0d9744ff1223a8d7978447c907041973e915b08",
+      "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "judge": {
+      "sourceCommit": "a0d9744ff1223a8d7978447c907041973e915b08",
+      "sha256": "e1e2899191156936ed556f3196d0442037514cf55f7c8d9abfaad942098052c0"
+    }
+  },
+  "config": {
+    "parameters": {
+      "control": "http://192.0.2.1:24710",
+      "relay": "http://192.0.2.2:24700",
+      "store": "store.example",
+      "storePort": 16379,
+      "workers": {
+        "w1": {
+          "http": "http://192.0.2.3:24701",
+          "media": "192.0.2.3:24711"
+        },
+        "w2": {
+          "http": "http://192.0.2.4:24701",
+          "media": "192.0.2.4:24711"
+        }
+      }
+    },
+    "pins": [
+      {
+        "archiveSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "commit": "a0d9744ff1223a8d7978447c907041973e915b08",
+        "manifestSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "version": "0.3.0",
+        "bootSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      {
+        "archiveSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "commit": "85e10436eb6adbbf577b6538b0bbb799aab823b2",
+        "manifestSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "version": "0.3.1",
+        "bootSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    ],
+    "bounds": {
+      "frontendControlBoundNs": 2000000,
+      "frontendWorkerBoundNs": 3000000,
+      "driftPpm": 100
+    },
+    "architecture": "arm64",
+    "endpoints": {
+      "runId": "run-resources",
+      "signaling": "https://signal.example/calls",
+      "relay": "192.0.2.2:24780",
+      "frontendControlBoundNs": 2000000,
+      "frontendWorkerBoundNs": 3000000,
+      "driftPpm": 100
+    },
+    "token": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "judgeBinary": "REPLACE_LOCALLY"
+  },
+  "inventories": {
+    "relay": {
+      "observedAt": 1000000,
+      "participants": [
+        {
+          "agents": [],
+          "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "commit": "a0d9744ff1223a8d7978447c907041973e915b08",
+          "default_budgets": false,
+          "manifest": {
+            "agents": [
+              {
+                "identity": "builtin-echo",
+                "limits": "builtin-echo",
+                "name": "echo",
+                "reads": [
+                  1162037327
+                ],
+                "writes": [
+                  1162037327
+                ]
+              }
+            ],
+            "arch": "arm64",
+            "archive_layout": 1,
+            "commit": "a0d9744ff1223a8d7978447c907041973e915b08",
+            "manifest_version": 2,
+            "oldest_live_peer": "0.3.0",
+            "oldest_rollback": "0.3.0",
+            "os": "linux",
+            "private_http_contract": 2,
+            "private_http_golden_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "redis_key_contract": 1,
+            "redis_key_golden_sha256": {
+              "framecache": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sessionstore": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "relay_udp_contract": 1,
+            "relay_udp_golden_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "roles": {
+              "control": {
+                "default": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              },
+              "relay": {
+                "default": {
+                  "formats": {
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              },
+              "signal": {
+                "default": {
+                  "formats": {
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    }
+                  }
+                }
+              },
+              "worker": {
+                "legacy": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": [
+                        7,
+                        8,
+                        9
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                },
+                "split": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": [
+                        10
+                      ]
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": [
+                        10
+                      ]
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "scripts": {
+              "pkg/framecache/appendLua": {
+                "sha": "1111111111111111111111111111111111111111",
+                "unchanged_tuples": "reviewed"
+              },
+              "sessionLua": {
+                "sha": "7777777777777777777777777777777777777777"
+              }
+            },
+            "store_contract": 1,
+            "tested_peers": [
+              "0.3.0"
+            ],
+            "version": "0.3.0"
+          },
+          "name": "relay-primary",
+          "profile": "default",
+          "role": "relay",
+          "version": "0.3.0"
+        },
+        {
+          "agents": [],
+          "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "commit": "a0d9744ff1223a8d7978447c907041973e915b08",
+          "default_budgets": false,
+          "manifest": {
+            "agents": [
+              {
+                "identity": "builtin-echo",
+                "limits": "builtin-echo",
+                "name": "echo",
+                "reads": [
+                  1162037327
+                ],
+                "writes": [
+                  1162037327
+                ]
+              }
+            ],
+            "arch": "arm64",
+            "archive_layout": 1,
+            "commit": "a0d9744ff1223a8d7978447c907041973e915b08",
+            "manifest_version": 2,
+            "oldest_live_peer": "0.3.0",
+            "oldest_rollback": "0.3.0",
+            "os": "linux",
+            "private_http_contract": 2,
+            "private_http_golden_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "redis_key_contract": 1,
+            "redis_key_golden_sha256": {
+              "framecache": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sessionstore": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "relay_udp_contract": 1,
+            "relay_udp_golden_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "roles": {
+              "control": {
+                "default": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              },
+              "relay": {
+                "default": {
+                  "formats": {
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              },
+              "signal": {
+                "default": {
+                  "formats": {
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    }
+                  }
+                }
+              },
+              "worker": {
+                "legacy": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": [
+                        7,
+                        8,
+                        9
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                },
+                "split": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": [
+                        10
+                      ]
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": [
+                        10
+                      ]
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "scripts": {
+              "pkg/framecache/appendLua": {
+                "sha": "1111111111111111111111111111111111111111",
+                "unchanged_tuples": "reviewed"
+              },
+              "sessionLua": {
+                "sha": "7777777777777777777777777777777777777777"
+              }
+            },
+            "store_contract": 1,
+            "tested_peers": [
+              "0.3.0"
+            ],
+            "version": "0.3.0"
+          },
+          "name": "relay-standby",
+          "profile": "default",
+          "role": "relay",
+          "version": "0.3.0"
+        }
+      ]
+    },
+    "w1": {
+      "observedAt": 1000000,
+      "participants": [
+        {
+          "agents": [
+            "echo"
+          ],
+          "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "commit": "a0d9744ff1223a8d7978447c907041973e915b08",
+          "default_budgets": true,
+          "manifest": {
+            "agents": [
+              {
+                "identity": "builtin-echo",
+                "limits": "builtin-echo",
+                "name": "echo",
+                "reads": [
+                  1162037327
+                ],
+                "writes": [
+                  1162037327
+                ]
+              }
+            ],
+            "arch": "arm64",
+            "archive_layout": 1,
+            "commit": "a0d9744ff1223a8d7978447c907041973e915b08",
+            "manifest_version": 2,
+            "oldest_live_peer": "0.3.0",
+            "oldest_rollback": "0.3.0",
+            "os": "linux",
+            "private_http_contract": 2,
+            "private_http_golden_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "redis_key_contract": 1,
+            "redis_key_golden_sha256": {
+              "framecache": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sessionstore": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "relay_udp_contract": 1,
+            "relay_udp_golden_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "roles": {
+              "control": {
+                "default": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              },
+              "relay": {
+                "default": {
+                  "formats": {
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              },
+              "signal": {
+                "default": {
+                  "formats": {
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    }
+                  }
+                }
+              },
+              "worker": {
+                "legacy": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": [
+                        7,
+                        8,
+                        9
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                },
+                "split": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": [
+                        10
+                      ]
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": [
+                        10
+                      ]
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "scripts": {
+              "pkg/framecache/appendLua": {
+                "sha": "1111111111111111111111111111111111111111",
+                "unchanged_tuples": "reviewed"
+              },
+              "sessionLua": {
+                "sha": "7777777777777777777777777777777777777777"
+              }
+            },
+            "store_contract": 1,
+            "tested_peers": [
+              "0.3.0"
+            ],
+            "version": "0.3.0"
+          },
+          "name": "w1",
+          "profile": "legacy",
+          "role": "worker",
+          "version": "0.3.0"
+        }
+      ]
+    },
+    "w2": {
+      "observedAt": 1000000,
+      "participants": [
+        {
+          "agents": [
+            "echo"
+          ],
+          "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "commit": "a0d9744ff1223a8d7978447c907041973e915b08",
+          "default_budgets": true,
+          "manifest": {
+            "agents": [
+              {
+                "identity": "builtin-echo",
+                "limits": "builtin-echo",
+                "name": "echo",
+                "reads": [
+                  1162037327
+                ],
+                "writes": [
+                  1162037327
+                ]
+              }
+            ],
+            "arch": "arm64",
+            "archive_layout": 1,
+            "commit": "a0d9744ff1223a8d7978447c907041973e915b08",
+            "manifest_version": 2,
+            "oldest_live_peer": "0.3.0",
+            "oldest_rollback": "0.3.0",
+            "os": "linux",
+            "private_http_contract": 2,
+            "private_http_golden_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "redis_key_contract": 1,
+            "redis_key_golden_sha256": {
+              "framecache": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sessionstore": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "relay_udp_contract": 1,
+            "relay_udp_golden_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "roles": {
+              "control": {
+                "default": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              },
+              "relay": {
+                "default": {
+                  "formats": {
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              },
+              "signal": {
+                "default": {
+                  "formats": {
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    }
+                  }
+                }
+              },
+              "worker": {
+                "legacy": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": [
+                        7,
+                        8,
+                        9
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                },
+                "split": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": [
+                        10
+                      ]
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": [
+                        10
+                      ]
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "scripts": {
+              "pkg/framecache/appendLua": {
+                "sha": "1111111111111111111111111111111111111111",
+                "unchanged_tuples": "reviewed"
+              },
+              "sessionLua": {
+                "sha": "7777777777777777777777777777777777777777"
+              }
+            },
+            "store_contract": 1,
+            "tested_peers": [
+              "0.3.0"
+            ],
+            "version": "0.3.0"
+          },
+          "name": "w2",
+          "profile": "legacy",
+          "role": "worker",
+          "version": "0.3.0"
+        }
+      ]
+    },
+    "shared": {
+      "observedAt": 1000000,
+      "participants": [
+        {
+          "agents": [],
+          "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "commit": "a0d9744ff1223a8d7978447c907041973e915b08",
+          "default_budgets": false,
+          "manifest": {
+            "agents": [
+              {
+                "identity": "builtin-echo",
+                "limits": "builtin-echo",
+                "name": "echo",
+                "reads": [
+                  1162037327
+                ],
+                "writes": [
+                  1162037327
+                ]
+              }
+            ],
+            "arch": "arm64",
+            "archive_layout": 1,
+            "commit": "a0d9744ff1223a8d7978447c907041973e915b08",
+            "manifest_version": 2,
+            "oldest_live_peer": "0.3.0",
+            "oldest_rollback": "0.3.0",
+            "os": "linux",
+            "private_http_contract": 2,
+            "private_http_golden_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "redis_key_contract": 1,
+            "redis_key_golden_sha256": {
+              "framecache": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sessionstore": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "relay_udp_contract": 1,
+            "relay_udp_golden_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "roles": {
+              "control": {
+                "default": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              },
+              "relay": {
+                "default": {
+                  "formats": {
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              },
+              "signal": {
+                "default": {
+                  "formats": {
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    }
+                  }
+                }
+              },
+              "worker": {
+                "legacy": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": [
+                        7,
+                        8,
+                        9
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                },
+                "split": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": [
+                        10
+                      ]
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": [
+                        10
+                      ]
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "scripts": {
+              "pkg/framecache/appendLua": {
+                "sha": "1111111111111111111111111111111111111111",
+                "unchanged_tuples": "reviewed"
+              },
+              "sessionLua": {
+                "sha": "7777777777777777777777777777777777777777"
+              }
+            },
+            "store_contract": 1,
+            "tested_peers": [
+              "0.3.0"
+            ],
+            "version": "0.3.0"
+          },
+          "name": "control",
+          "profile": "default",
+          "role": "control",
+          "version": "0.3.0"
+        },
+        {
+          "agents": [],
+          "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "commit": "a0d9744ff1223a8d7978447c907041973e915b08",
+          "default_budgets": false,
+          "manifest": {
+            "agents": [
+              {
+                "identity": "builtin-echo",
+                "limits": "builtin-echo",
+                "name": "echo",
+                "reads": [
+                  1162037327
+                ],
+                "writes": [
+                  1162037327
+                ]
+              }
+            ],
+            "arch": "arm64",
+            "archive_layout": 1,
+            "commit": "a0d9744ff1223a8d7978447c907041973e915b08",
+            "manifest_version": 2,
+            "oldest_live_peer": "0.3.0",
+            "oldest_rollback": "0.3.0",
+            "os": "linux",
+            "private_http_contract": 2,
+            "private_http_golden_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "redis_key_contract": 1,
+            "redis_key_golden_sha256": {
+              "framecache": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "sessionstore": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "relay_udp_contract": 1,
+            "relay_udp_golden_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "roles": {
+              "control": {
+                "default": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              },
+              "relay": {
+                "default": {
+                  "formats": {
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              },
+              "signal": {
+                "default": {
+                  "formats": {
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    }
+                  }
+                }
+              },
+              "worker": {
+                "legacy": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": null
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": [
+                        7,
+                        8,
+                        9
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                },
+                "split": {
+                  "formats": {
+                    "component": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": [
+                        10
+                      ]
+                    },
+                    "encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "legacy_encryption_header": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "metadata": {
+                      "continues": [
+                        10
+                      ],
+                      "reads": [
+                        10
+                      ],
+                      "writes": [
+                        10
+                      ]
+                    },
+                    "private_http": {
+                      "continues": [
+                        2
+                      ],
+                      "reads": [
+                        2
+                      ],
+                      "writes": [
+                        2
+                      ]
+                    },
+                    "redis_keys": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "relay_udp": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    },
+                    "snapshot": {
+                      "continues": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "reads": [
+                        6,
+                        7,
+                        8,
+                        9,
+                        10
+                      ],
+                      "writes": [
+                        7,
+                        8,
+                        9,
+                        10
+                      ]
+                    },
+                    "store_contract": {
+                      "continues": [
+                        1
+                      ],
+                      "reads": [
+                        1
+                      ],
+                      "writes": [
+                        1
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "scripts": {
+              "pkg/framecache/appendLua": {
+                "sha": "1111111111111111111111111111111111111111",
+                "unchanged_tuples": "reviewed"
+              },
+              "sessionLua": {
+                "sha": "7777777777777777777777777777777777777777"
+              }
+            },
+            "store_contract": 1,
+            "tested_peers": [
+              "0.3.0"
+            ],
+            "version": "0.3.0"
+          },
+          "name": "signal",
+          "profile": "default",
+          "role": "signal",
+          "version": "0.3.0"
+        }
+      ]
+    }
+  },
+  "expectedUnknownStart": [
+    "host.execute/relay/inventory",
+    "host.execute/w1/inventory",
+    "host.execute/w2/inventory",
+    "host.execute/shared/inventory",
+    "host.execute/shared/status",
+    "caller.ready/caller/caller.ready",
+    "caller.start/caller/caller.start"
+  ],
+  "replies": {
+    "caller.ready": {
+      "ready": true
+    },
+    "caller.start": {
+      "start": "started"
+    },
+    "caller.start.unknown": {
+      "start": "unknown"
+    },
+    "caller.stop": {
+      "inactive": true
+    },
+    "mailbox.create": {
+      "state": "committed"
+    },
+    "mailbox.conflict": {
+      "state": "conflict"
+    },
+    "mailbox.absent": {
+      "found": false
+    }
+  },
+  "optionalCapabilities": {
+    "load": [
+      "caller.admission"
+    ],
+    "failover": [
+      "store.observe",
+      "store.failover"
+    ]
+  },
+  "admissionPlan": {
+    "survivorSeconds": 180,
+    "boundarySeconds": 180
+  },
+  "admissionOrder": [
+    "boundary-setup",
+    "survivor-begin",
+    "survivor-terminal",
+    "survivor-stop-confirmed",
+    "idle-proof",
+    "boundary-begin",
+    "boundary-terminal",
+    "boundary-stop-confirmed"
+  ]
+}

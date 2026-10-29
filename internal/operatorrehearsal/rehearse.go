@@ -41,14 +41,12 @@ type rehearsal struct {
 	pins                    []inventory.Pin
 	process                 *operatorgates.ProcessConfig
 	runtime                 *operatorgates.ProcessRuntime
-	pool                    *operatorgates.EvidenceRuntime
 	judge                   *recordingJudge
 	box                     *operatorcaller.Mailbox
 	store                   *operatorcaller.Directory
 	load, bridge, work, run string
 	callerBind              string
 	active                  *operatorcaller.Broker
-	caller                  *operatorgates.CallerRuntime
 	launcher                *operatorcaller.FixedLauncher
 	units                   []operatorcaller.Identity
 }
@@ -228,7 +226,6 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 	defer r.peer.Close()
 	r.process = &operatorgates.ProcessConfig{Parameters: r.parameters(), ArmedAt: armed, Trials: true, Pool: true}
 	r.runtime = &operatorgates.ProcessRuntime{Session: r.session, Peer: r.peer, Config: r.process, Architecture: "x86_64", Pins: r.pins, Bounds: &report.Bounds}
-	r.pool = &operatorgates.EvidenceRuntime{RunID: r.run, Judge: r.judge}
 	if e = r.deployment.NegativeControls(ctx, r.restoreControl); e != nil {
 		r.recordError("negative-controls-failed", e)
 		return report, errors.New("negative-controls-failed")
@@ -241,31 +238,12 @@ func rehearse(ctx context.Context, c RehearseConfig, diagnostics io.Writer, setu
 		r.recordError("calibration-cleanup-failed", e)
 		return report, errors.New("calibration-cleanup-failed")
 	}
-	var current operator.Gate
-	stops := map[operator.Gate]bool{}
-	sequence := r.session.RunSequence(ctx, operatorgates.SequencePorts{
-		Minimum: campaignMinimum,
-		Prepare: func(ctx context.Context, gate operator.Gate, end, gateEnd time.Duration) error {
-			current = gate
-			return r.prepare(ctx, gate, end, gateEnd)
-		},
-		ReleaseCallers: func(ctx context.Context, _ string, end time.Duration) bool {
-			stops[current] = r.stop(ctx, end)
-			return stops[current]
-		},
-		Command: r.gate,
-		Finalize: func(ctx context.Context, _ time.Duration) (*operatorgates.MediaSummary, error) {
-			summary, err := r.pool.Media(ctx)
-			if err != nil {
-				r.report.Errors = append(r.report.Errors, "media-judge-failed")
-			}
-			return summary, err
-		},
-	})
-	r.recordSequence(sequence, stops)
+	if e = r.runResourceSequence(ctx, init); e != nil {
+		r.recordError("operator-session-incomplete", e)
+		return report, e
+	}
 	report.Pool = r.judge.last
 	report.CPU.Phases = r.judge.cpu
-	report.Clocks = r.runtime.ClockSamples
 	return report, nil
 }
 func (r *rehearsal) recordSequence(sequence operatorgates.SequenceResult, stops map[operator.Gate]bool) {
@@ -427,14 +405,13 @@ func duration(g operator.Gate) int {
 	return 1020
 }
 func campaignMinimum(g operator.Gate) time.Duration {
-	return time.Duration(duration(g))*time.Second + 180*time.Second
+	return operatorgates.CampaignMinimum(g)
 }
 
 // Caller preparation precedes the gate window. Its immutable manifest still
 // needs the campaign's media plus the same two-minute fit reserve at launch.
 func callerWindow(g operator.Gate, now, gateEnd time.Duration) (time.Duration, bool) {
-	end := min(now+operatorgates.GateMaximum, gateEnd)
-	return end, end-now >= time.Duration(duration(g))*time.Second+120*time.Second
+	return operatorgates.CallerWindow(g, now, gateEnd)
 }
 func (r *rehearsal) parameters() operatorgates.ProcessParameters {
 	p := operatorgates.ProcessParameters{Control: "http://" + r.topology.Hosts["shared"].IP + ":24710", Relay: "http://" + r.topology.Hosts["relay"].IP + ":24700", Store: StoreEndpoint, StorePort: 16379, Workers: map[string]operatorgates.WorkerEndpoint{}}
@@ -458,27 +435,12 @@ func pause(ctx context.Context, d time.Duration) error {
 	}
 }
 func (r *rehearsal) ports() operatorgates.ProcedurePorts {
-	return operatorgates.ProcedurePorts{Clock: r.clock, Sleep: pause, Step: r.runtime.Step, Inventory: r.runtime.Inventory, Broker: r.caller}
+	return operatorgates.ProcedurePorts{Clock: r.clock, Sleep: pause, Step: r.runtime.Step, Inventory: r.runtime.Inventory}
 }
 
 func (r *rehearsal) newCaller(ctx context.Context, g operator.Gate, seconds int, id string, end time.Duration) error {
-	if r.callerBind == "" {
-		route, err := r.command(ctx, "caller-route", "ip", "-j", "route", "get", r.topology.Hosts["relay"].IP)
-		if err != nil {
-			return err
-		}
-		var routes []struct {
-			Source string `json:"prefsrc"`
-		}
-		if json.Unmarshal([]byte(route), &routes) != nil || len(routes) != 1 {
-			return errors.New("caller-route-invalid")
-		}
-		ip, err := netip.ParseAddr(routes[0].Source)
-		if err != nil || !ip.Is4() || ip.IsUnspecified() {
-			return errors.New("caller-route-invalid")
-		}
-		r.callerBind = netip.AddrPortFrom(ip, 0).String()
-		_, _ = fmt.Fprintln(r.diagnostics, "caller-bind="+r.callerBind)
+	if err := r.ensureCallerBind(ctx); err != nil {
+		return err
 	}
 	now := r.clock.Wall()
 	deadline := r.wall(end)
@@ -486,26 +448,38 @@ func (r *rehearsal) newCaller(ctx context.Context, g operator.Gate, seconds int,
 		deadline = maximum
 	}
 	identity := operatorcaller.Identity{RunID: r.run, Gate: g, Phase: operatorcaller.Survivor, CallerID: id, Attempt: "1", PublicSHA: ReleaseACommit}
-	m := operatorcaller.Manifest{Version: 1, Identity: identity, ArmedAt: r.process.ArmedAt.UnixMilli(), CreatedAt: now.UnixMilli(), Deadline: deadline.UnixMilli(), Plan: operatorcaller.NewPlan(operatorcaller.Survivor, seconds, ReleaseACommit), Endpoints: operatorcaller.Endpoints{RunID: r.run, Signaling: SignalingURL + "/calls", Relay: r.topology.Hosts["relay"].IP + ":24780", FrontendControlBoundNS: r.report.Bounds.FrontendControlBoundNS, FrontendWorkerBoundNS: r.report.Bounds.FrontendWorkerBoundNS, DriftPPM: int(r.report.Bounds.DriftPPM)}}
-	b, e := operatorcaller.NewBroker(m, r.box, operatorcaller.SystemClock{}, r.session)
-	if e != nil {
-		return e
+	manifest := operatorcaller.Manifest{Version: 1, Identity: identity, ArmedAt: r.process.ArmedAt.UnixMilli(), CreatedAt: now.UnixMilli(), Deadline: deadline.UnixMilli(), Plan: operatorcaller.NewPlan(identity.Phase, seconds, ReleaseACommit), Endpoints: operatorcaller.Endpoints{RunID: r.run, Signaling: SignalingURL + "/calls", Relay: r.topology.Hosts["relay"].IP + ":24780", FrontendControlBoundNS: r.report.Bounds.FrontendControlBoundNS, FrontendWorkerBoundNS: r.report.Bounds.FrontendWorkerBoundNS, DriftPPM: int(r.report.Bounds.DriftPPM)}}
+	b, err := operatorcaller.NewBroker(manifest, r.box, operatorcaller.SystemClock{}, r.session)
+	if err != nil {
+		return err
 	}
+	if err = r.configureCaller(ctx, manifest, r.session); err != nil {
+		return err
+	}
+	r.active = b
+	return nil
+}
+func (r *rehearsal) configureCaller(ctx context.Context, manifest operatorcaller.Manifest, fence operatorcaller.Fence) error {
+	if err := r.ensureCallerBind(ctx); err != nil {
+		return err
+	}
+
+	identity := manifest.Identity
+	deadline := time.UnixMilli(manifest.Deadline)
 	config := operatorcaller.BridgeConfig{Identity: identity, Bind: r.callerBind, CertificateFile: filepath.Join(r.deployment.Work, "tls/signal/server.crt"), LoadSHA256: r.report.CallerSHA256}
 	raw, e := json.Marshal(config)
 	if e != nil {
 		return e
 	}
-	path := filepath.Join(r.work, "config-"+id+".json")
+	path := filepath.Join(r.work, "config-"+identity.CallerID+".json")
 	if e = os.WriteFile(path, raw, 0600); e != nil {
 		return e
 	}
 	launch := operatorcaller.LaunchConfig{BridgePath: r.bridge, BridgeSHA256: r.report.BinarySHA256, LoadPath: r.load, LoadSHA256: r.report.CallerSHA256, ConfigPath: path, ConfigSHA256: hash(raw), MailboxPath: filepath.Join(r.work, "mailbox"), WorkRoot: r.work, Architecture: "x86_64", RuntimeDeadline: deadline, CPUAffinity: strings.ReplaceAll(CPUList(r.report.CPU.Layout.Caller), ",", " ")}
-	r.launcher, e = operatorcaller.NewFixedLauncher(map[operatorcaller.Identity]operatorcaller.LaunchConfig{identity: launch}, callerExecutor{r}, r.box, r.session)
+	r.launcher, e = operatorcaller.NewFixedLauncher(map[operatorcaller.Identity]operatorcaller.LaunchConfig{identity: launch}, callerExecutor{r}, r.box, fence)
 	if e != nil {
 		return e
 	}
-	r.active = b
 	r.units = append(r.units, identity)
 	return nil
 }
@@ -521,56 +495,6 @@ func (r *rehearsal) startCaller(ctx context.Context, g operator.Gate, seconds in
 		r.callerDiagnostics(ctx, r.active.Manifest.Identity)
 	}
 	return err
-}
-func (r *rehearsal) prepare(ctx context.Context, g operator.Gate, end, gateEnd time.Duration) (err error) {
-	defer func() {
-		if err != nil {
-			category := publicCode(err.Error())
-			var classified *operatorgates.ProcedureError
-			if errors.As(err, &classified) && classified.Category != "" {
-				category = publicCode(classified.Category)
-				switch category {
-				case "control-not-settled", "control-owner", "not-draining", "w1-not-alive", "w2-not-alive", "w1-draining", "w2-draining":
-					slot := "shared"
-					if strings.HasPrefix(category, "w1-") || strings.HasPrefix(category, "w2-") {
-						slot = category[:2]
-					}
-					r.preconditionDiagnostic(slot, "status", &operatorgates.ProcedureError{Code: "precondition-failed:" + category})
-				}
-			}
-			_, _ = fmt.Fprintf(r.diagnostics, "gate-precondition gate=%s category=%s\n", g, category)
-		}
-	}()
-	// Previous gate must have confirmed stop before a successor can dial.
-	if r.active != nil && !r.stop(ctx, end) {
-		return &operatorgates.ProcedureError{Code: "command-result-unknown"}
-	}
-	r.process.Target = ""
-	r.process.Operation = ""
-	r.process.Mixed = false
-	r.runtime.BeforeMutation = nil
-	if e := operatorgates.GatePrecondition(ctx, r.process, r.ports(), end); e != nil {
-		return e
-	}
-	callerEnd, fits := callerWindow(g, r.clock.Elapsed(), gateEnd)
-	if !fits {
-		return &operatorgates.ProcedureError{Code: "gate-deadline"}
-	}
-	if e := r.startCaller(ctx, g, duration(g), strconv.Itoa(len(r.units)+1), end, callerEnd); e != nil {
-		_ = r.stop(ctx, end)
-		return e
-	}
-	inventory, e := r.session.FreshInventory(ctx, r.peer, r.pins, end, ReleaseACommit, true)
-	if e != nil {
-		return e
-	}
-	if e = r.runtime.VerifyClocks(ctx, end); e != nil {
-		return e
-	}
-	phase := operatorevidence.Phase{DeployedSHA: ReleaseACommit, Clocks: r.runtime.ClockSamples[len(r.runtime.ClockSamples)-1], Inventory: inventory}
-	r.caller = operatorgates.NewCallerRuntime(r.active, r.clock, gateEnd, r.pool, phase)
-	r.runtime.BeforeMutation = r.caller.MarkFault
-	return nil
 }
 func (r *rehearsal) affinity(ctx context.Context) error {
 	mask, e := r.command(ctx, "caller-affinity", "taskset", "-pc", strconv.Itoa(r.active.CallerPID))
@@ -635,25 +559,6 @@ func (r *rehearsal) stop(ctx context.Context, end time.Duration) bool {
 	r.callerDiagnostics(ctx, r.active.Manifest.Identity)
 	return false
 }
-func (r *rehearsal) gate(ctx context.Context, g operator.Gate, end time.Duration) operatorgates.ProcedureResult {
-	r.caller.End = end
-	p := r.ports()
-	p.Media = r.caller.Media
-	p.Duplicates = r.caller.Duplicates
-	var result operatorgates.ProcedureResult
-	if g == operator.UpgradeRollback {
-		result = operatorgates.RunReleaseGate(ctx, r.process, p, end)
-	} else {
-		result = operatorgates.RunProcessGate(ctx, g, r.process, p, end)
-	}
-	if result.Status == operator.Failure {
-		r.callerDiagnostics(ctx, r.active.Manifest.Identity)
-	}
-	stopped := r.stop(ctx, min(r.clock.Elapsed()+time.Minute, end))
-	result = operatorgates.Stopped(stopped, result)
-	r.report.Gates = append(r.report.Gates, GateReport{Gate: g, ProcedureResult: result, CallerStopped: stopped})
-	return result
-}
 func (r *rehearsal) callerDiagnostics(ctx context.Context, id operatorcaller.Identity) {
 	bounded, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
@@ -705,4 +610,27 @@ func (r *rehearsal) close(ctx context.Context) bool {
 		_ = r.store.Close()
 	}
 	return ok
+}
+
+func (r *rehearsal) ensureCallerBind(ctx context.Context) error {
+	if r.callerBind == "" {
+		route, err := r.command(ctx, "caller-route", "ip", "-j", "route", "get", r.topology.Hosts["relay"].IP)
+		if err != nil {
+			return err
+		}
+		var routes []struct {
+			Source string `json:"prefsrc"`
+		}
+		if json.Unmarshal([]byte(route), &routes) != nil || len(routes) != 1 {
+			return errors.New("caller-route-invalid")
+		}
+		ip, err := netip.ParseAddr(routes[0].Source)
+		if err != nil || !ip.Is4() || ip.IsUnspecified() {
+			return errors.New("caller-route-invalid")
+		}
+		r.callerBind = netip.AddrPortFrom(ip, 0).String()
+		_, _ = fmt.Fprintln(r.diagnostics, "caller-bind="+r.callerBind)
+	}
+
+	return nil
 }

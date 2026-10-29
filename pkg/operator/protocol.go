@@ -31,6 +31,9 @@ const (
 	MailboxCreate Operation = "mailbox.create"
 	StoreObserve  Operation = "store.observe"
 	StoreFailover Operation = "store.failover"
+	// CallerAdmission is an optional negotiation marker. Its effects use the
+	// existing caller and mailbox operations with the admission-boundary phase.
+	CallerAdmission Operation = "caller.admission"
 )
 
 // IDs and Unix milliseconds are decimal strings, avoiding floating-point loss.
