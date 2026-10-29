@@ -84,6 +84,8 @@ type Options struct {
 	// (Memory by default): answers advertise the relay's public address, and the workers
 	// bind only private sockets behind it.
 	Relay bool
+	// DialOutWorkers selects indices using real outbound HTTP/2 links. Requires Relay.
+	DialOutWorkers []int
 	// SessionStore selects the relay topology's store. Nil uses Memory.
 	// The caller owns its lifetime; it must outlive Harness.Close.
 	SessionStore sessionstore.Store
@@ -130,6 +132,10 @@ type Harness struct {
 
 // Start starts a local topology, or attaches callers to Options.External.
 func Start(opts Options) (*Harness, error) {
+	if len(opts.DialOutWorkers) > 0 && !opts.Relay {
+		return nil, errors.New("callharness: dial-out workers require Relay")
+	}
+
 	if opts.External != nil {
 		if opts.Relay || opts.Workers != 0 || opts.SessionStore != nil || opts.FrameCache != nil {
 			return nil, errors.New("callharness: external topology cannot start local workers")

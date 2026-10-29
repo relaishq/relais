@@ -138,6 +138,7 @@ type call struct {
 // Plane owns the registry and call metadata. The store remains authoritative
 // for ownership. New and Register must be called before accepting calls.
 type Plane struct {
+	links           *WorkerLinks
 	recovery        *moveRecovery
 	restart         *restartState
 	inventory       keyInventoryCache
@@ -229,7 +230,9 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 			return errors.New("controlplane: duplicate worker address")
 		}
 	}
-	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: newWorkerObservation(time.Now(), p.bootstrap)}
+	observation := newWorkerObservation(time.Now(), p.bootstrap)
+	observation.linkDown = p.workerUsesLink(name, worker)
+	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: observation}
 	delete(p.pendingWorkers, name)
 	p.loadVersion++
 	p.observationChangedLocked()
@@ -639,6 +642,10 @@ func (p *Plane) moveRequest(ctx context.Context, id, to string) (MoveResult, err
 		return MoveResult{}, err
 	}
 
+	if err := p.waitWorkerLink(ctx, lease.Worker); err != nil {
+		return MoveResult{}, err
+	}
+
 	target, err := p.pick(ctx, to, lease.Worker)
 	if err != nil {
 		return MoveResult{}, err
@@ -714,6 +721,10 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 	if err != nil {
 		return nil, err
 	}
+	if err := p.waitWorkerLink(ctx, w.addr); err != nil {
+		return nil, err
+	}
+
 	p.mu.Lock()
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
@@ -823,14 +834,15 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 
 // WorkerStatus describes one registered worker and its live lease count.
 type WorkerStatus struct {
-	Name            string         `json:"name"`
-	Address         netip.AddrPort `json:"address"`
-	Draining        bool           `json:"draining"`
-	Recovering      bool           `json:"recovering"`
-	Dead            bool           `json:"dead"`
-	LivenessUnknown bool           `json:"liveness_unknown,omitempty"`
-	LastHeartbeat   time.Time      `json:"last_heartbeat"`
-	Calls           int            `json:"call_count"`
+	Link            *WorkerLinkStatus `json:"worker_link,omitempty"`
+	Name            string            `json:"name"`
+	Address         netip.AddrPort    `json:"address"`
+	Draining        bool              `json:"draining"`
+	Recovering      bool              `json:"recovering"`
+	Dead            bool              `json:"dead"`
+	LivenessUnknown bool              `json:"liveness_unknown,omitempty"`
+	LastHeartbeat   time.Time         `json:"last_heartbeat"`
+	Calls           int               `json:"call_count"`
 }
 
 // CallStatus describes current lease ownership and successful moves.
@@ -870,7 +882,7 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 	status := Status{Rebuild: p.RebuildStatus(), SessionStoreKeys: inventory, Workers: []WorkerStatus{}, Calls: []CallStatus{}, Takeovers: p.recentTakeovers(), LostCount: p.lostCount}
 	for _, w := range workers {
 		knowledge := w.observation.knowledge()
-		status.Workers = append(status.Workers, WorkerStatus{Name: w.name, Address: w.addr, Draining: knowledge.draining, Dead: knowledge.dead, LivenessUnknown: knowledge.livenessUnknown, Recovering: knowledge.recovering, LastHeartbeat: knowledge.lastHeartbeat})
+		status.Workers = append(status.Workers, WorkerStatus{Link: p.linkStatusLocked(w), Name: w.name, Address: w.addr, Draining: knowledge.draining, Dead: knowledge.dead, LivenessUnknown: knowledge.livenessUnknown, Recovering: knowledge.recovering, LastHeartbeat: knowledge.lastHeartbeat})
 	}
 
 	calls := make(map[string]*call, len(p.calls))

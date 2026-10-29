@@ -52,6 +52,7 @@ func endpoints() []endpoint {
 		{"worker", "GET /metrics", nil, "Prometheus text exposition", []int{200}},
 		{"relay", "POST /sessions/{id}/begin-replay", relay.ReplayRequest{}, relay.ReplayPlan{}, []int{200, 400, 409}},
 		{"relay", "POST /sessions/{id}/replay", relay.ReplayRequest{}, relay.ReplayResult{}, []int{200, 400, 409}},
+		{"relay", "POST /workers/expect", relay.WorkerRequest{}, nil, []int{204, 400, 409}},
 		{"relay", "POST /workers", relay.WorkerRequest{}, nil, []int{204, 400}},
 		{"relay", "DELETE /workers", relay.WorkerRequest{}, nil, []int{204, 400}},
 		{"relay", "POST /sessions/{id}/hold", relay.RouteRequest{}, nil, []int{204, 400, 409}},
@@ -72,6 +73,9 @@ func endpoints() []endpoint {
 		{"control", "GET /metrics", nil, "Prometheus text exposition", []int{200}},
 		{"control", "POST /private/workers/{name}/mark-draining", nil, nil, []int{204, 404, 503}},
 		{"control", "POST /private/workers/{name}/replace", nil, struct{}{}, []int{200, 404, 409}},
+		{"control", "POST /private/workers/{name}/link", "worker_link frames", "worker_link frames", []int{200, 403, 409, 503, 505}},
+		{"control", "GET /private/workers/{name}/status", nil, mediaworker.WorkerStatus{}, []int{200, 404, 409}},
+		{"control", "GET /private/workers/{name}/metrics", nil, "Prometheus text exposition", []int{200, 404, 409}},
 		{"control", "POST /private/workers/{name}/heartbeat", controlplane.HeartbeatRequest{}, controlplane.HeartbeatReply{}, []int{200, 400, 409}},
 		// Shared error envelopes and alternate status/error bodies are wire contracts too.
 		{"errors", "conflict", nil, privateapi.Failure{}, []int{409}},

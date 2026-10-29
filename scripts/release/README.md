@@ -47,3 +47,20 @@ own `relais-compat preflight` before every step, and keeps `release-pair-verdict
 `make release-pair PAIR_A=<dir> PAIR_B=<dir>` runs existing archives;
 `PAIR_FLAGS=-pair-expect-refusal=unsupported_pair` is the unnominated control. See the [operator procedure](../../deploy/aws/README.md#compatibility-gate-before-upgrade-or-rollback)
 for the `0.3.0`/`0.3.1` nomination example and offline inventory sources.
+
+Dial-out is additive within manifest schema 2. Inbound profiles keep HTTP v2
+request bodies and UDP v1 media writes; new readers also understand HTTP v3 and
+UDP v2. Optional response fields do not change the inbound request contract.
+The `dial-out` worker profile selects command-link v1 and leg binding. Control
+and relay advertise matching `dial-out` capability profiles. Preflight requires
+those capabilities on every control and relay before admitting a dial-out pool,
+refuses rollback below them while a dial-out worker is registered, and preserves
+each worker's connection mode during an upgrade. Changing mode requires a new
+worker name. Bridge attach and split-checkpoint dial-out profiles are separate
+work.
+
+The capability profiles use the existing format domains because published
+schema-2 readers validate every profile, including unselected profiles. Adding a
+new domain or top-level field would prevent an older target's own preflight from
+reading an inbound-only pool during rollback. The command-link layout has its
+own versioned fixture in `internal/workerlink/testdata/`.

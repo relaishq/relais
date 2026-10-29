@@ -12,12 +12,12 @@ import (
 )
 
 type workerFlags struct {
-	storeConfig                                             processrun.StoreConfig
-	limits                                                  mediaworker.SnapshotLimits
-	bridgeOutput                                            mediaworker.BridgeOutputLimits
-	name, listen, leg, public, control, httpAddr, agentName *string
-	cacheOff, cryptoTrace, split, version                   *bool
-	drainTimeout, taskBudget, moveReserve                   *time.Duration
+	storeConfig                                                      processrun.StoreConfig
+	limits                                                           mediaworker.SnapshotLimits
+	bridgeOutput                                                     mediaworker.BridgeOutputLimits
+	name, listen, leg, public, control, httpAddr, agentName, connect *string
+	cacheOff, cryptoTrace, split, version                            *bool
+	drainTimeout, taskBudget, moveReserve                            *time.Duration
 }
 
 // The registration preflight and Run use the same flag declarations. New boolean
@@ -26,6 +26,7 @@ func newWorkerFlags(options Options) (*flag.FlagSet, *workerFlags) {
 	f := &workerFlags{}
 	flags := flag.NewFlagSet(os.Args[0], flag.ContinueOnError)
 	f.storeConfig.Flags(flags)
+	f.connect = flags.String("connect", "inbound", "worker connection mode: inbound or dial-out")
 	f.name = flags.String("name", processrun.Env("RELAIS_WORKER_NAME", ""), "unique worker name")
 	f.listen = flags.String("media", processrun.Env("RELAIS_WORKER_MEDIA", "127.0.0.1:0"), "private UDP address")
 	f.leg = flags.String("relay-leg", processrun.Env("RELAIS_RELAY_LEG", ""), "relay private UDP address")

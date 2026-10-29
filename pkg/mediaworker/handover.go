@@ -305,7 +305,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 			return "", err
 		}
 		if w.cfg.Relay != nil {
-			if opts.Lease.SessionID != snap.State.ID || opts.Lease.Worker != w.localAddr {
+			if opts.Lease.SessionID != snap.State.ID || opts.Lease.Worker != w.LocalAddr() {
 				return "", sessionstore.ErrLeaseLost
 			}
 			ctx, cancel := context.WithTimeout(parent, ownershipTimeout)
@@ -328,7 +328,7 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 		}
 	}
 	if w.cfg.Relay != nil {
-		if opts.Lease.SessionID != snap.State.ID || opts.Lease.Worker != w.localAddr {
+		if opts.Lease.SessionID != snap.State.ID || opts.Lease.Worker != w.LocalAddr() {
 			if sess != nil {
 				sess.fenced.Store(true)
 				sess.close()

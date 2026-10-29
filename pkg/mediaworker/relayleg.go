@@ -26,14 +26,18 @@ type relayConn struct {
 
 	// readMu guards readBuf, which holds an incoming datagram: header plus
 	// a packet as long as the caller's read buffer.
-	readMu  sync.Mutex
-	readBuf []byte
+	readMu       sync.Mutex
+	readBuf      []byte
+	bindingMu    sync.Mutex
+	bindingToken string
+	observed     chan legObservation
 }
 
 func newRelayConn(conn *net.UDPConn, relayAddr netip.AddrPort) *relayConn {
 	return &relayConn{
-		conn:  conn,
-		relay: netip.AddrPortFrom(relayAddr.Addr().Unmap(), relayAddr.Port()),
+		conn:     conn,
+		observed: make(chan legObservation, 1),
+		relay:    netip.AddrPortFrom(relayAddr.Addr().Unmap(), relayAddr.Port()),
 		buffers: sync.Pool{New: func() any {
 			buf := make([]byte, 0, relay.MaxHeaderLen+receiveMTU)
 
@@ -61,6 +65,18 @@ func (c *relayConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
 			return 0, netip.AddrPort{}, err
 		}
 		if netip.AddrPortFrom(from.Addr().Unmap(), from.Port()) != c.relay {
+			continue
+		}
+		if kind, token, addr, ok := relayleg.ParseBinding(buf[:n]); ok {
+			c.bindingMu.Lock()
+			matches := token == c.bindingToken
+			c.bindingMu.Unlock()
+			if kind == relayleg.Observed && matches {
+				select {
+				case c.observed <- legObservation{address: addr, token: token}:
+				default:
+				}
+			}
 			continue
 		}
 		if id, ack, ok := relayleg.ParseBarrier(buf[:n]); ok {

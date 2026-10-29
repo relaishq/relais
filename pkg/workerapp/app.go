@@ -7,8 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"net/netip"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/relaishq/relais/internal/processrun"
@@ -61,6 +64,9 @@ func Run(ctx context.Context, args []string, options Options) error {
 		return &flagError{err}
 	}
 	storeConfig, limits := f.storeConfig, f.limits
+	if *f.connect != "inbound" && *f.connect != "dial-out" {
+		return fmt.Errorf("-connect must be inbound or dial-out")
+	}
 	if *version {
 		return buildinfo.PrintVersion(os.Stdout, "relais-worker")
 	}
@@ -97,11 +103,32 @@ func Run(ctx context.Context, args []string, options Options) error {
 	if *name == "" || *control == "" {
 		return &configError{}
 	}
-	listener, err := processrun.ListenPrivate(*httpAddr)
+	var listener net.Listener
+	if *f.connect == "inbound" {
+		listener, err = processrun.ListenPrivate(*httpAddr)
+	} else {
+		// Dial-out opens no listener unless an operator explicitly asks for loopback metrics.
+		explicit := false
+		flags.Visit(func(f *flag.Flag) {
+			if f.Name == "http" {
+				explicit = true
+			}
+		})
+		if explicit {
+			host, _, splitErr := net.SplitHostPort(*httpAddr)
+			ip := net.ParseIP(host)
+			if splitErr != nil || ip == nil || !ip.IsLoopback() {
+				return fmt.Errorf("dial-out -http must be loopback")
+			}
+			listener, err = processrun.ListenPrivate(*httpAddr)
+		}
+	}
 	if err != nil {
 		return err
 	}
-	defer func() { _ = listener.Close() }()
+	if listener != nil {
+		defer func() { _ = listener.Close() }()
+	}
 	store, err := storeConfig.Open(ctx)
 	if err != nil {
 		return err
@@ -116,21 +143,48 @@ func Run(ctx context.Context, args []string, options Options) error {
 		defer func() { _ = client.Close() }()
 		frames = client
 	}
-	cfg := f.mediaConfig(agentConfig, frames, &mediaworker.RelayConfig{Addr: legAddr, PublicAddr: mediaAddr, Owners: store, StoreOutageBudget: storeConfig.OutageBudget})
+	cfg := f.mediaConfig(agentConfig, frames, &mediaworker.RelayConfig{DialOut: *f.connect == "dial-out", Addr: legAddr, PublicAddr: mediaAddr, Owners: store, StoreOutageBudget: storeConfig.OutageBudget})
 	worker, err := mediaworker.New(cfg)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = worker.Close() }()
 	udpbuffer.Log(log.Printf, "worker "+*name+" media", worker.SocketBuffers())
-	processrun.Ready(map[string]any{"http": "http://" + listener.Addr().String(), "media": worker.LocalAddr(), "name": *name})
-	worker.StartHeartbeats(&controlplane.RemoteHeartbeats{URL: *control, Name: *name})
-	// Keep this HTTP API and heartbeats alive while the control plane exports
-	// sessions. Shutdown of the listener comes after drain, then Close.
 	serving, stopHTTP := context.WithCancel(context.Background())
 	defer stopHTTP()
-	done := make(chan error, 1)
-	go func() { done <- processrun.Serve(serving, listener, agentHandler(worker, *agentName)) }()
+	var running sync.WaitGroup
+	defer running.Wait()
+	defer stopHTTP()
+	done := make(chan error, 2)
+	if listener != nil {
+		handler := agentHandler(worker, *agentName)
+		if *f.connect == "dial-out" {
+			mux := http.NewServeMux()
+			mux.Handle("GET /metrics", handler)
+			handler = mux
+		}
+		running.Go(func() { done <- processrun.Serve(serving, listener, handler) })
+	}
+	ready := map[string]any{"media": worker.LocalAddr(), "name": *name, "connect": *f.connect}
+	if listener != nil {
+		ready["http"] = "http://" + listener.Addr().String()
+	}
+	if *f.connect == "dial-out" {
+		d := &controlplane.DialOut{URL: *control, Name: *name, Worker: worker, Handler: agentHandler(worker, *agentName), Ready: make(chan struct{})}
+		running.Go(func() { done <- d.Run(serving) })
+		running.Go(func() { worker.KeepRelayBinding(serving) })
+		select {
+		case <-d.Ready:
+			ready["media"] = worker.LocalAddr()
+		case <-ctx.Done():
+			return nil
+		case err := <-done:
+			return err
+		}
+	} else {
+		worker.StartHeartbeats(&controlplane.RemoteHeartbeats{URL: *control, Name: *name})
+	}
+	processrun.Ready(ready)
 	select {
 	case err := <-done:
 		return err
@@ -143,7 +197,8 @@ func Run(ctx context.Context, args []string, options Options) error {
 	}
 	stopDrain()
 	stopHTTP()
-	return <-done
+	running.Wait()
+	return nil
 }
 
 type configError struct{}

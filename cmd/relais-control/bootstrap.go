@@ -18,11 +18,11 @@ func parseWorkers(entries []string) ([]fixedWorker, error) {
 	for _, entry := range entries {
 		name, endpoint, ok := strings.Cut(entry, "=")
 		u, err := url.Parse(endpoint)
-		if !ok || name == "" || strings.ContainsAny(name, "/?# \t\r\n") || err != nil || u.Scheme != "http" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
-			return nil, errors.New("worker must be name=http://address")
+		if !ok || name == "" || strings.ContainsAny(name, "/?# \t\r\n") || (endpoint != "dial-out" && (err != nil || u.Scheme != "http" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/"))) {
+			return nil, errors.New("worker must be name=http://address or name=dial-out")
 		}
 		endpoint = strings.TrimSuffix(endpoint, "/")
-		if names[name] || endpoints[endpoint] {
+		if names[name] || endpoint != "dial-out" && endpoints[endpoint] {
 			return nil, errors.New("duplicate worker name or endpoint")
 		}
 		names[name], endpoints[endpoint] = true, true

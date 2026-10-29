@@ -376,6 +376,7 @@ type Relay struct {
 	replayPacing map[netip.AddrPort]*replayPacer
 	registryMu   sync.RWMutex
 	registry     map[netip.AddrPort]struct{}
+	bindings     map[string]legBinding
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -719,6 +720,11 @@ func (r *Relay) RemoveWorker(worker netip.AddrPort) {
 	r.registryMu.Lock()
 	defer r.registryMu.Unlock()
 	delete(r.registry, unmap(worker))
+	for token, b := range r.bindings {
+		if b.address == unmap(worker) {
+			delete(r.bindings, token)
+		}
+	}
 }
 
 func (r *Relay) registered(worker netip.AddrPort) bool {
@@ -1019,6 +1025,9 @@ func (r *Relay) workerLoop() {
 			continue
 		}
 		from = unmap(from)
+		if r.legBinding(buf[:n], from) {
+			continue
+		}
 		if !r.registered(from) {
 			r.unknownWorker.Add(1)
 

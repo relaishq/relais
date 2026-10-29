@@ -30,6 +30,7 @@ var RemoteErrors = func() map[string]error {
 	maps.Copy(codes, map[string]error{
 		"unknown_call": ErrUnknownCall, "move_in_progress": ErrMoveInProgress, "no_target": ErrNoTarget,
 		"ended": sessionstore.ErrEnded, "at_capacity": ErrAtCapacity,
+		"worker_link_unavailable": ErrWorkerLinkUnavailable, "worker_command_not_sent": ErrWorkerCommandNotSent,
 	})
 	return codes
 }()

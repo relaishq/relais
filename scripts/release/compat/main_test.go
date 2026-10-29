@@ -5,11 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/internal/privateapi"
+	"github.com/relaishq/relais/internal/relayleg"
 
 	"github.com/relaishq/relais/internal/releasecompat"
 )
@@ -17,7 +21,7 @@ import (
 func copyContractRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	paths := []string{"scripts/release/compatibility-policy.json", "scripts/release/compatibility.json", "pkg/sessionstore/testdata/script-contract.json", "internal/privateapi/testdata/contract-v2.json", "pkg/mediaworker/state.go", "pkg/mediaworker/agent_v2.go", "pkg/mediaworker/bridge_output.go", "pkg/mediaworker/component_snapshot.go", "pkg/mediaworker/handover.go", "internal/componentcodec/binary.go", "internal/componentcodec/auth.go", "pkg/sessionstore/components.go", "pkg/agent/agent.go", "pkg/framecache/redis.go", "cmd/relais-load/soak.go", "pkg/sessionstore/testdata/key-contract-v1.json", "pkg/framecache/testdata/key-contract-v1.json", "internal/relayleg/testdata/contract-v1.json"}
+	paths := []string{"scripts/release/compatibility-policy.json", "scripts/release/compatibility.json", "pkg/sessionstore/testdata/script-contract.json", fmt.Sprintf("internal/privateapi/testdata/contract-v%d.json", privateapi.ContractVersion), "pkg/mediaworker/state.go", "pkg/mediaworker/agent_v2.go", "pkg/mediaworker/bridge_output.go", "pkg/mediaworker/component_snapshot.go", "pkg/mediaworker/handover.go", "internal/componentcodec/binary.go", "internal/componentcodec/auth.go", "pkg/sessionstore/components.go", "pkg/agent/agent.go", "pkg/framecache/redis.go", "cmd/relais-load/soak.go", "pkg/sessionstore/testdata/key-contract-v1.json", "pkg/framecache/testdata/key-contract-v1.json", fmt.Sprintf("internal/relayleg/testdata/contract-v%d.json", relayleg.ContractVersion)}
 	scripts, err := filepath.Glob("../../../pkg/sessionstore/redis*.go")
 	if err != nil {
 		t.Fatal(err)

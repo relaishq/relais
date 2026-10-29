@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"sync/atomic"
 	"time"
 
 	"github.com/relaishq/relais/internal/movediag"
@@ -181,6 +182,7 @@ func (r *RemoteRelay) Status(ctx context.Context) (relay.RelayStatus, error) {
 type RemoteHeartbeats struct {
 	URL, Name string
 	Client    *http.Client
+	cycle     *atomic.Uint64
 	token     string
 }
 
@@ -191,6 +193,9 @@ func (h *RemoteHeartbeats) Heartbeat(addr netip.AddrPort) error {
 	err := privateapi.Do(ctx, remoteClient(h.Client), h.URL, http.MethodPost, "/private/workers/"+url.PathEscape(h.Name)+"/heartbeat", HeartbeatRequest{Address: addr, Token: h.token}, &reply, nil)
 	if err != nil {
 		return err
+	}
+	if h.cycle != nil {
+		h.cycle.Store(reply.DeathCycle)
 	}
 	if reply.Token != "" {
 		h.token = reply.Token

@@ -4,6 +4,7 @@
   "oldest_rollback": "0.3.0",
   "tested_peers": [
     "self",
-    "0.3.0"
+    "0.3.0",
+    "0.3.1"
   ]
 }

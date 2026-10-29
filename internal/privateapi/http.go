@@ -55,6 +55,9 @@ type envelopeError struct {
 func (e *envelopeError) Error() string   { return e.message }
 func (e *envelopeError) Unwrap() []error { return e.causes }
 
+// ErrNotSent proves a transport rejected a command before writing it.
+var ErrNotSent = errors.New("privateapi: request not sent")
+
 // ErrUncertain means the request may have committed without a usable reply.
 var ErrUncertain = errors.New("privateapi: operation outcome uncertain")
 
@@ -168,6 +171,9 @@ func do(ctx context.Context, client *http.Client, base, method, path string, inp
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
+		if errors.Is(err, ErrNotSent) {
+			return err
+		}
 		return Uncertain(err)
 	}
 	defer func() { _ = resp.Body.Close() }()

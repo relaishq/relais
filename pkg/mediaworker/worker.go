@@ -234,6 +234,8 @@ type Config struct {
 // RelayConfig puts a media worker behind a relay. A worker behind a relay
 // owns its UDP socket; it cannot also share a Socket.
 type RelayConfig struct {
+	DialOut bool
+
 	// Addr is the relay's private relay-leg address. The worker sends every
 	// packet there and accepts packets only from there.
 	Addr netip.AddrPort
@@ -272,6 +274,7 @@ type Worker struct {
 	// localAddr is the UDP socket the worker reads: its own or the shared
 	// Socket's. mediaAddr is where callers send: localAddr, or behind a
 	// relay the relay's public address.
+	observed         atomic.Pointer[netip.AddrPort]
 	localAddr        netip.AddrPort
 	mediaAddr        netip.AddrPort
 	readDone         chan struct{}
@@ -365,7 +368,7 @@ func New(cfg Config) (*Worker, error) {
 	if err != nil {
 		return nil, fmt.Errorf("mediaworker: resolve listen address: %w", err)
 	}
-	if addr.IP == nil || addr.IP.IsUnspecified() {
+	if (addr.IP == nil || addr.IP.IsUnspecified()) && (cfg.Relay == nil || !cfg.Relay.DialOut) {
 		return nil, fmt.Errorf("mediaworker: listen address %q must name a specific IP", cfg.ListenAddr)
 	}
 
@@ -468,6 +471,9 @@ func (w *Worker) MediaAddr() netip.AddrPort {
 // is private, and it is the address the worker claims its sessions with in
 // the session-owner store.
 func (w *Worker) LocalAddr() netip.AddrPort {
+	if addr := w.observed.Load(); addr != nil {
+		return *addr
+	}
 	return w.localAddr
 }
 
@@ -495,6 +501,10 @@ func (w *Worker) CreateSessionWithLease(ctx context.Context, offerSDP string) (i
 }
 
 func (w *Worker) createSession(ctx context.Context, offerSDP string, placed func(sessionstore.Lease)) (sessionID, answerSDP string, err error) {
+	if w.cfg.Relay != nil && w.cfg.Relay.DialOut && w.observed.Load() == nil {
+		return "", "", ErrNotEstablished
+	}
+
 	w.mu.Lock()
 	draining := w.draining
 	w.mu.Unlock()
@@ -754,7 +764,7 @@ func (w *Worker) claim(ctx context.Context, sess *session) error {
 	ctx, cancel := context.WithTimeout(ctx, ownershipTimeout)
 	defer cancel()
 
-	lease, err := w.cfg.Relay.Owners.Claim(ctx, sess.id, w.localAddr, w.cfg.Relay.LeaseTTL)
+	lease, err := w.cfg.Relay.Owners.Claim(ctx, sess.id, w.LocalAddr(), w.cfg.Relay.LeaseTTL)
 	if err != nil {
 		var transient *sessionstore.TransientError
 		if errors.As(err, &transient) && transient.Candidate != nil {
@@ -835,7 +845,7 @@ func (w *Worker) renewLeases() {
 				renewals.Go(func() {
 					ctx, cancel := context.WithTimeout(context.Background(), ownershipTimeout)
 					defer cancel()
-					if err := refresher.RefreshWorkerIndex(ctx, w.localAddr, w.cfg.Relay.LeaseTTL); err != nil {
+					if err := refresher.RefreshWorkerIndex(ctx, w.LocalAddr(), w.cfg.Relay.LeaseTTL); err != nil {
 						w.log.Warnf("refresh worker index: %v", err)
 					}
 				})
@@ -975,7 +985,7 @@ func (w *Worker) heartbeat(receiver Heartbeats) {
 	if closed {
 		return
 	}
-	if !errors.Is(receiver.Heartbeat(w.localAddr), ErrRejoinRequired) {
+	if !errors.Is(receiver.Heartbeat(w.LocalAddr()), ErrRejoinRequired) {
 		return
 	}
 	w.mu.Lock()
@@ -993,7 +1003,7 @@ func (w *Worker) heartbeat(receiver Heartbeats) {
 	closed = w.closed
 	w.mu.Unlock()
 	if !closed {
-		_ = receiver.Heartbeat(w.localAddr)
+		_ = receiver.Heartbeat(w.LocalAddr())
 	}
 }
 
