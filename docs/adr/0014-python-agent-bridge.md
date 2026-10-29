@@ -1,6 +1,6 @@
 # ADR 0014: Python bots behind a fenced agent bridge
 
-Status: **Proposed**. **Amends ADR 0010**. Part of [#254](https://github.com/relaishq/relais/issues/254), aligned with [#255](https://github.com/relaishq/relais/issues/255). Code baseline: `7cc1e2f`; preceding proposal: `db148f3`.
+Status: **Proposed**. **Amends ADR 0010**. Part of [#254](https://github.com/relaishq/relais/issues/254), aligned with [#255](https://github.com/relaishq/relais/issues/255). Code baseline: `7cc1e2f`; preceding proposal: `db148f3`. Amended 2026-10-29 for dial-out workers by [ADR 0015](0015-worker-dial-out.md) (Proposed); see the dated amendment below.
 
 ## Approve now vs decide later
 
@@ -114,6 +114,16 @@ Change parameters and redeploy; no hard-coded operational values. The control pl
 Inventory lists account-local resource IDs, endpoints and logs. Default names: `relais-<deployment>-<role>-<instance>`; tags: deployment, role, instance, release. Resolved parameters and private status/log commands let the customer's agent inspect its account. Never include credentials or conversation data.
 
 **NOT-RUN — implementation, safety/timing targets, Pipecat compatibility and bridge capacity/comparisons.**
+
+## Amendment 2026-10-29: dial-out workers (ADR 0015)
+
+Status: **Proposed**, with [ADR 0015](0015-worker-dial-out.md). The owner decided that a dial-out worker dials out to the bot. There is no rendezvous through relay or control for now. A dial-out worker accepts no inbound connections, so only the side that opens each bridge socket changes. Everything else in this ADR stays as written.
+
+- **Runner registry.** A dial-out worker opens the registry WebSocket to each configured runner endpoint. The Appendix B messages are unchanged. Runners keep the inbound path for inbound workers, so one runner serves a mixed pool.
+- **Bot session.** The runner's reply to `assign` adds the bot's private attach URL. The owner opens the session WebSocket to that URL and presents the attach token. The bot accepts only a connection whose token matches its pending assignment. The bot then sends `attach` and the owner checks scope, as today.
+- **Destination (#254 Q4).** For a dial-out owner, the owner connects to the bot, not the bot to the owner. The bootstrap lookup is not used; the operator directory lists runner endpoints for dial-out workers.
+- **Unchanged.** Token authority and issuer, revocation, generations, permits, export rules, recovery targets and the timing gates.
+- **Mixed pools.** A bot can move between an inbound owner and a dial-out owner by the existing revoke/assign sequence. The bridge protocol version records dial-out support. The compatibility check refuses a dial-out worker with the bridge agent when the runner release lacks it.
 
 ## Appendix A: Host, task and export details
 
