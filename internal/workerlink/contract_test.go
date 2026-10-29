@@ -17,10 +17,12 @@ import (
 func TestLinkContractGolden(t *testing.T) {
 	entries := map[string]string{}
 	for _, m := range []workerlink.Message{
-		{Kind: "request", ID: 7, Deadline: 123456789, Method: "POST", Path: "/sessions/call/export", Epoch: 9},
+		{Kind: "request", ID: 7, Timeout: 123456789, Method: "POST", Path: "/sessions/call/export", Epoch: 9},
 		{Kind: "reply", ID: 7, Status: 200, Body: []byte(`{"state":"AQID"}`)},
-		{Kind: "request", ID: 8, Deadline: 123456789, Method: "POST", Path: "/resume", Body: []byte("chunk"), More: true},
+		{Kind: "request", ID: 8, Timeout: 123456789, Method: "POST", Path: "/resume", Body: []byte("chunk"), More: true},
 		{Kind: "ping"},
+		{Kind: "reply", ID: 9, Error: "not_applied"},
+		{Kind: "reply", ID: 10, Error: "uncertain"},
 	} {
 		var b bytes.Buffer
 		if err := workerlink.Write(&b, m); err != nil {

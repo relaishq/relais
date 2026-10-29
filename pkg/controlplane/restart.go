@@ -225,6 +225,9 @@ func (p *Plane) AuthorityChanges() <-chan struct{} {
 // BeginShutdown pauses work while the lease keeper protects handlers that are
 // still draining. The caller cancels RunManaged only after handlers stop.
 func (p *Plane) BeginShutdown() {
+	if p.links != nil {
+		p.links.Close()
+	}
 	if p.restart == nil {
 		return
 	}

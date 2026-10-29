@@ -29,18 +29,22 @@ const LostAfter = 1500 * time.Millisecond
 var ErrNotSent = privateapi.ErrNotSent
 var ErrUnavailable = errors.New("workerlink: link unavailable; retryable")
 
-// Message is also the wire header. Body chunks can interleave by ID. Deadline
-// is absolute UTC nanoseconds, as on the existing trusted HTTP boundary.
+var ErrAfterSend = errors.New("workerlink: command reply unavailable")
+
+// Message is also the wire header. Body chunks can interleave by ID. Timeout
+// carries the remaining duration in nanoseconds, independent of host clocks.
+// The inbound HTTP API does not propagate a deadline to the worker.
 type Message struct {
-	Kind     string `json:"kind"`
-	ID       uint64 `json:"id,omitempty"`
-	Deadline int64  `json:"deadline,omitempty"`
-	Method   string `json:"method,omitempty"`
-	Path     string `json:"path,omitempty"`
-	Epoch    uint64 `json:"epoch,omitempty"`
-	Status   int    `json:"status,omitempty"`
-	Body     []byte `json:"body,omitempty"`
-	More     bool   `json:"more,omitempty"`
+	Kind    string `json:"kind"`
+	ID      uint64 `json:"id,omitempty"`
+	Timeout int64  `json:"timeout_ns,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Method  string `json:"method,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Epoch   uint64 `json:"epoch,omitempty"`
+	Status  int    `json:"status,omitempty"`
+	Body    []byte `json:"body,omitempty"`
+	More    bool   `json:"more,omitempty"`
 }
 
 func Read(r io.Reader) (Message, error) {
@@ -107,7 +111,7 @@ func New(r io.Reader, w io.Writer, interrupt func(), handler http.Handler) *Peer
 func (p *Peer) Done() <-chan struct{} { return p.done }
 func (p *Peer) Close()                { p.once.Do(func() { close(p.done); p.interrupt() }) }
 
-func (p *Peer) send(m Message) error {
+func (p *Peer) send(m Message, deadline time.Time) error {
 	body := m.Body
 	for {
 		n := min(len(body), ChunkSize)
@@ -118,6 +122,10 @@ func (p *Peer) send(m Message) error {
 			p.writeMu.Unlock()
 			return ErrUnavailable
 		default:
+		}
+		if !deadline.IsZero() {
+			m.Timeout = int64(time.Until(deadline))
+			deadline = time.Time{} // Keep identical metadata on later chunks.
 		}
 		err := Write(p.writer, m)
 		p.writeMu.Unlock()
@@ -150,7 +158,7 @@ func (p *Peer) Run(ctx context.Context) error {
 			case <-p.done:
 				return
 			case <-ping:
-				if err := p.send(Message{Kind: "ping"}); err != nil {
+				if err := p.send(Message{Kind: "ping"}, time.Time{}); err != nil {
 					return
 				}
 			}
@@ -193,7 +201,7 @@ func (p *Peer) Run(ctx context.Context) error {
 			return errors.New("workerlink: unexpected message")
 		}
 		if old, ok := partial[m.ID]; ok {
-			if old.Kind != m.Kind || old.Method != m.Method || old.Path != m.Path || old.Deadline != m.Deadline || old.Epoch != m.Epoch || old.Status != m.Status {
+			if old.Kind != m.Kind || old.Method != m.Method || old.Path != m.Path || old.Timeout != m.Timeout || old.Error != m.Error || old.Epoch != m.Epoch || old.Status != m.Status {
 				return errors.New("workerlink: changed chunk header")
 			}
 			m.Body = append(old.Body, m.Body...)
@@ -228,26 +236,29 @@ func (p *Peer) Run(ctx context.Context) error {
 		select {
 		case slots <- struct{}{}:
 		default:
-			return errors.New("workerlink: too many commands")
+			_ = p.send(Message{Kind: "reply", ID: m.ID, Error: "not_applied"}, time.Time{})
+			continue
 		}
-		go func(m Message) { defer func() { <-slots }(); p.serve(ctx, m) }(m)
+		go func(m Message) {
+			reply := p.serve(ctx, m)
+			<-slots // Handler capacity is independent of reply backpressure.
+			_ = p.send(reply, time.Time{})
+		}(m)
 	}
 }
 
-func (p *Peer) serve(ctx context.Context, m Message) {
-	if m.Deadline == 0 {
-		p.Close()
-		return
+func (p *Peer) serve(ctx context.Context, m Message) Message {
+	reply := Message{Kind: "reply", ID: m.ID}
+	if m.Timeout <= 0 || m.Timeout > int64(privateapi.Timeout) {
+		reply.Error = "not_applied"
+		return reply
 	}
-	ctx, cancel := context.WithDeadline(ctx, time.Unix(0, m.Deadline))
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(m.Timeout))
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, m.Method, "http://worker"+m.Path, bytes.NewReader(m.Body))
-	if err != nil {
-		p.Close()
-		return
-	}
-	if ctx.Err() != nil {
-		return
+	if err != nil || ctx.Err() != nil {
+		reply.Error = "not_applied"
+		return reply
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if m.Epoch != 0 {
@@ -256,10 +267,11 @@ func (p *Peer) serve(ctx context.Context, m Message) {
 	recorder := &responseBuffer{header: make(http.Header), code: http.StatusOK}
 	p.handler.ServeHTTP(recorder, req)
 	if recorder.overflow {
-		p.Close()
-		return
+		reply.Error = "uncertain"
+		return reply
 	}
-	_ = p.send(Message{Kind: "reply", ID: m.ID, Status: recorder.code, Body: recorder.body.Bytes()})
+	reply.Status, reply.Body = recorder.code, recorder.body.Bytes()
+	return reply
 }
 
 func (p *Peer) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -287,7 +299,7 @@ func (p *Peer) RoundTrip(req *http.Request) (*http.Response, error) {
 	p.mu.Unlock()
 	defer func() { p.mu.Lock(); delete(p.pending, id); p.mu.Unlock() }()
 	deadline, _ := ctx.Deadline()
-	m := Message{Kind: "request", ID: id, Deadline: deadline.UnixNano(), Method: req.Method, Path: req.URL.RequestURI(), Body: body, Epoch: parseEpoch(req.Header.Get("X-Relais-Epoch"))}
+	m := Message{Kind: "request", ID: id, Timeout: int64(time.Until(deadline)), Method: req.Method, Path: req.URL.RequestURI(), Body: body, Epoch: parseEpoch(req.Header.Get("X-Relais-Epoch"))}
 	select {
 	case <-p.done:
 		return nil, errors.Join(ErrNotSent, ErrUnavailable)
@@ -298,33 +310,44 @@ func (p *Peer) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Once sending starts, any failure is uncertain. A partial write can still
 	// reach the peer; reconnect never replays it.
 	sent := make(chan error, 1)
-	go func() { sent <- p.send(m) }()
+	go func() { sent <- p.send(m, deadline) }()
 	select {
 	case err = <-sent:
 		if err != nil {
-			return nil, err
+			if errors.Is(err, ErrUnavailable) {
+				err = ErrAfterSend
+			}
+			return nil, privateapi.Uncertain(err)
 		}
 	case <-ctx.Done():
 		p.Close()
-		return nil, ctx.Err()
+		return nil, privateapi.Uncertain(ctx.Err())
 	case <-p.done:
-		return nil, ErrUnavailable
+		return nil, privateapi.Uncertain(ErrAfterSend)
 	}
 	select {
 	case m = <-reply:
-		// The remote deadline timer can fire before the local one. A reply
-		// arriving after the absolute deadline must not win that select race.
+		// A reply arriving after the caller deadline cannot win the select race.
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, privateapi.Uncertain(err)
 		}
 		if !time.Now().Before(deadline) {
-			return nil, context.DeadlineExceeded
+			return nil, privateapi.Uncertain(context.DeadlineExceeded)
+		}
+		switch m.Error {
+		case "not_applied":
+			return nil, ErrNotSent
+		case "uncertain":
+			return nil, privateapi.Uncertain(errors.New("workerlink: unusable command reply"))
+		case "":
+		default:
+			return nil, privateapi.Uncertain(errors.New("workerlink: unknown command outcome"))
 		}
 		return &http.Response{StatusCode: m.Status, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(m.Body)), Request: req}, nil
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, privateapi.Uncertain(ctx.Err())
 	case <-p.done:
-		return nil, ErrUnavailable
+		return nil, privateapi.Uncertain(ErrAfterSend)
 	}
 }
 

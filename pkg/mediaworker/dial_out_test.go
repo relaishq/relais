@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/relaishq/relais/internal/privateapi"
 
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
@@ -50,5 +53,21 @@ func TestDialOutRefusesSessionBeforeLegBinding(t *testing.T) {
 	}
 	if _, _, _, err := w.CreateSessionWithLease(context.Background(), "offer"); !errors.Is(err, ErrNotEstablished) {
 		t.Fatalf("unbound create with lease accepted: %v", err)
+	}
+}
+
+func TestLinkMissingSessionUsesHandlerOutcome(t *testing.T) {
+	w := &Worker{sessions: map[string]*session{}}
+	called := false
+	handler := w.LinkHandler(http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {
+		called = true
+		privateapi.Error(rw, ErrUnknownSession, RemoteErrors)
+	}))
+	req := httptest.NewRequest(http.MethodDelete, "/sessions/missing", nil)
+	req.Header.Set("X-Relais-Epoch", "4")
+	reply := httptest.NewRecorder()
+	handler.ServeHTTP(reply, req)
+	if !called || !strings.Contains(reply.Body.String(), `"code":"unknown_session"`) {
+		t.Fatalf("missing session became stale tenure: %s", reply.Body)
 	}
 }

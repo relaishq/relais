@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/relaishq/relais/internal/privateapi"
@@ -20,7 +21,7 @@ import (
 // ErrWorkerLinkUnavailable is a retryable command-path failure, never evidence of death.
 var ErrWorkerLinkUnavailable = workerlink.ErrUnavailable
 
-// ErrWorkerCommandNotSent proves a worker command was rejected before transmission.
+// ErrWorkerCommandNotSent proves a worker command was rejected before handler dispatch.
 var ErrWorkerCommandNotSent = privateapi.ErrNotSent
 
 // LinkHello replaces the initial status dial. Sequence increases per attempt
@@ -43,6 +44,7 @@ type LinkAddress struct {
 
 type linkEntry struct {
 	mu             sync.Mutex
+	admission      chan struct{}
 	peer           *workerlink.Peer
 	instance       string
 	activeInstance string
@@ -53,15 +55,16 @@ type linkEntry struct {
 // WorkerLinks owns only command availability. It never calls detect, Transfer
 // or heartbeat. Names are fixed before the private listener starts.
 type WorkerLinks struct {
-	plane   *Plane
-	relay   *RemoteRelay
-	entries map[string]*linkEntry
+	plane    *Plane
+	relay    *RemoteRelay
+	entries  map[string]*linkEntry
+	stopping atomic.Bool
 }
 
 func (p *Plane) ConfigureDialOut(names []string, r *RemoteRelay) *WorkerLinks {
 	links := &WorkerLinks{plane: p, relay: r, entries: make(map[string]*linkEntry)}
 	for _, name := range names {
-		entry := &linkEntry{}
+		entry := &linkEntry{admission: make(chan struct{}, 1)}
 		entry.remote = &RemoteWorker{URL: "http://dial-out", Client: &http.Client{Timeout: privateapi.Timeout, Transport: &linkTransport{links: links, name: name, entry: entry}}}
 		links.entries[name] = entry
 	}
@@ -151,7 +154,7 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 		http.Error(rw, "HTTP/2 required", http.StatusHTTPVersionNotSupported)
 		return
 	}
-	if !l.plane.controlAuthority() {
+	if l.stopping.Load() || !l.plane.controlAuthority() {
 		http.Error(rw, "control not ready", http.StatusServiceUnavailable)
 		return
 	}
@@ -166,6 +169,19 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 		http.Error(rw, "invalid link hello", http.StatusConflict)
 		return
 	}
+	// Serialize admission separately from command access. Waiting admissions
+	// honor cancellation; network/store work never holds the command mutex.
+	select {
+	case entry.admission <- struct{}{}:
+	case <-req.Context().Done():
+		return
+	}
+	admitting := true
+	defer func() {
+		if admitting {
+			<-entry.admission
+		}
+	}()
 	p := l.plane
 	entry.mu.Lock()
 	p.mu.Lock()
@@ -187,7 +203,6 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 	instanceChanged := entry.activeInstance != "" && entry.activeInstance != hello.Instance
-	entry.instance, entry.sequence = hello.Instance, hello.Sequence
 	entry.mu.Unlock()
 	token := randomToken()
 	if err := l.relay.ExpectWorker(req.Context(), token); err != nil {
@@ -206,42 +221,39 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 	if !address.Address.IsValid() {
 		return
 	}
-	entry.mu.Lock()
-	if entry.instance != hello.Instance || entry.sequence != hello.Sequence {
-		entry.mu.Unlock()
-		return
-	}
 	p.mu.Lock()
 	old = p.workers[name]
 	duplicate := p.owner(address.Address)
 	canReplace = old != nil && old.observation.canReplace(old.reserved)
 	p.mu.Unlock()
 	if duplicate != nil && duplicate != old || old != nil && (old.addr != address.Address || instanceChanged) && !canReplace || !p.controlAuthority() {
-		entry.mu.Unlock()
 		return
 	}
 	if err := l.relay.AddBoundWorker(req.Context(), address.Address, token); err != nil {
-		entry.mu.Unlock()
 		return
 	}
 	if old == nil {
 		if err := p.Register(name, address.Address, entry.remote); err != nil {
-			entry.mu.Unlock()
 			return
 		}
 	} else if old.addr != address.Address || old.worker != entry.remote || instanceChanged {
 		// Changing address/instance is the existing explicit replacement path.
 		if !canReplace || p.Replace(name, address.Address, entry.remote) != nil {
-			entry.mu.Unlock()
 			return
 		}
 	}
 	if err := workerlink.WriteValue(rw, "ready", struct{}{}); err != nil {
-		entry.mu.Unlock()
 		return
 	}
 	peer := workerlink.New(req.Body, rw, func() { _ = rc.SetWriteDeadline(time.Now()); _ = req.Body.Close() }, nil)
+	entry.mu.Lock()
+	if l.stopping.Load() {
+		entry.mu.Unlock()
+		peer.Close()
+		return
+	}
 	previous := entry.peer
+	entry.instance, entry.sequence = hello.Instance, hello.Sequence
 	entry.peer = peer
 	entry.activeInstance = hello.Instance
 	entry.mu.Unlock()
@@ -253,10 +265,20 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 	w.observation.draining = w.observation.draining || hello.Status.Draining
 	w.observation.relayRegistered()
 	p.mu.Unlock()
+	<-entry.admission
+	admitting = false
 	l.setAvailable(name, entry, peer, true)
 	defer l.setAvailable(name, entry, peer, false)
 	_ = rc.SetReadDeadline(time.Time{})
 	_ = peer.Run(req.Context())
+}
+
+// Close rejects new admissions and releases HTTP/2 streams before HTTP shutdown.
+func (l *WorkerLinks) Close() {
+	l.stopping.Store(true)
+	for name := range l.entries {
+		l.Drop(name)
+	}
 }
 
 // Drop closes only the command stream. Separate heartbeats and calls continue.

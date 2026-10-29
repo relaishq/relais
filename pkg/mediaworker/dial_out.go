@@ -42,6 +42,8 @@ func (w *Worker) BindRelay(ctx context.Context, token string) (netip.AddrPort, e
 			}
 			address := observed.address
 			if prior := w.observed.Load(); prior != nil && *prior != address {
+				// Slice 2 must drain and re-register this observed identity. Until
+				// then, NAT rebinding cannot restore media through reconnect alone.
 				return address, errors.New("mediaworker: relay address changed; drain required")
 			}
 			w.observed.Store(&address)
@@ -89,12 +91,14 @@ func (w *Worker) LinkHandler(handler http.Handler) http.Handler {
 			id := strings.Split(strings.TrimPrefix(r.URL.Path, "/sessions/"), "/")[0]
 			epoch, err := strconv.ParseUint(r.Header.Get("X-Relais-Epoch"), 10, 64)
 			s := w.session(id)
-			valid := false
-			if s != nil {
-				s.mu.Lock()
-				valid = err == nil && epoch == s.lease.Epoch && !s.fenced.Load()
-				s.mu.Unlock()
+			if s == nil {
+				// Preserve the existing unknown-session/idempotent-end handler outcome.
+				handler.ServeHTTP(rw, r)
+				return
 			}
+			s.mu.Lock()
+			valid := err == nil && epoch == s.lease.Epoch && !s.fenced.Load()
+			s.mu.Unlock()
 			if !valid {
 				privateapi.Error(rw, ErrStaleTenure, RemoteErrors)
 				return

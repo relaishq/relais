@@ -98,7 +98,7 @@ func TestCommandDeadlineReachesHandler(t *testing.T) {
 		t.Fatalf("deadline lost: %v", err)
 	}
 	deadline := <-observed
-	if want, _ := ctx.Deadline(); !deadline.Equal(want) {
+	if want, _ := ctx.Deadline(); deadline.Before(want.Add(-time.Millisecond)) || deadline.After(want.Add(100*time.Millisecond)) {
 		t.Fatalf("deadline changed: %s vs %s", deadline, want)
 	}
 }
@@ -250,10 +250,10 @@ func TestChunkedValuePreservesMaximumWireBody(t *testing.T) {
 
 func TestChunkAssemblySupportsConcurrencyLimit(t *testing.T) {
 	var stream bytes.Buffer
-	deadline := time.Now().Add(time.Minute).UnixNano()
+	budget := int64(privateapi.Timeout)
 	for chunk := range 3 {
 		for id := uint64(1); id <= MaxConcurrent; id++ {
-			if err := Write(&stream, Message{Kind: "request", ID: id, Deadline: deadline, Method: http.MethodPost, Path: "/sessions", Body: []byte{byte(chunk)}, More: chunk < 2}); err != nil {
+			if err := Write(&stream, Message{Kind: "request", ID: id, Timeout: budget, Method: http.MethodPost, Path: "/sessions", Body: []byte{byte(chunk)}, More: chunk < 2}); err != nil {
 				t.Fatal(err)
 			}
 		}
