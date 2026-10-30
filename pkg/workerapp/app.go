@@ -92,7 +92,7 @@ func Run(ctx context.Context, args []string, options Options) error {
 	}
 	var bridge *agentbridge.Bridge
 	if *f.bridgeURL == "" && *f.bridgeToken != "" {
-		return fmt.Errorf("-bridge-dev-token requires -bridge-bot-url")
+		return fmt.Errorf("-bridge-dev-token requires -bridge-url")
 	}
 	if *f.bridgeURL != "" {
 		if *agentName != "bridge" || !*split {
@@ -176,7 +176,15 @@ func Run(ctx context.Context, args []string, options Options) error {
 	var running sync.WaitGroup
 	defer running.Wait()
 	defer stopHTTP()
-	done := make(chan error, 2)
+	done := make(chan error, 3)
+	if bridge != nil {
+		bridgeListener, err := bridge.Listen()
+		if err != nil {
+			return err
+		}
+		defer func() { _ = bridgeListener.Close() }()
+		running.Go(func() { done <- processrun.Serve(serving, bridgeListener, bridge) })
+	}
 	if listener != nil {
 		handler := agentHandler(worker, *agentName)
 		if *f.connect == "dial-out" {

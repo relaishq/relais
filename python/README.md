@@ -1,89 +1,83 @@
-# Isolated Python loopback
+# Authenticated loopback moves
 
-This is ADR 0014 Appendix C slice 3. The worker connects to a Python bot that
-listens on a literal loopback address. A static development token protects the
-connection. Use this only on an isolated development machine. No packages or
-releases are published by this slice.
+This is the development subset of ADR 0014 Appendix C item 4. A runner
+registers with both workers. The bot opens its session WebSocket to the
+owner, using a short-lived, single-use attach token issued by that worker.
+A planned move keeps the Python process, bot generation, lineage and output
+sequence. The old worker-dials-bot shortcut and `-bridge-bot-url` are retired.
+
+Use this only on one isolated development machine. Each worker has one runner
+slot. The reference runner serves one call per process, including its moves;
+restart the runner before placing another call. The fixture generates a tone
+and makes no provider or tool requests.
+Provider permits, replacement, revocation and crash recovery are not supported.
+The worker explicitly reports `provider_starts=false`; this subset cannot
+authorize external work. A different bot, runner, generation or lineage is
+refused during reattachment. A crash checkpoint with an uncertain output tail
+is also refused.
 
 Create the pinned environment inside the checkout:
 
 ```sh
 python3.12 -m venv python/.venv
 python/.venv/bin/python -m pip install -e python/relais-agent
-python/.venv/bin/python -m unittest discover -s python/relais-agent/tests -v
+PYTHONPATH=python/relais-agent python/.venv/bin/python -m unittest discover \
+  -s python/relais-agent/tests -v
 ```
 
-Run the real-media proof, with one media worker and the in-process call harness:
-
-```sh
-RELAIS_TEST_PYTHON=../../python/.venv/bin/python go test -race -v -count=1 \
-  -timeout=2m -run '^TestPythonBridgeHearLoopback$' ./pkg/callharness
-```
-
-The full test keeps caller input and consent alive for 65 seconds. It requires
-at least 60 seconds of consent, the existing 4.5 second maximum consent silence,
-zero caller and worker decryption failures, and all 150 tone packets. Python
-decodes caller Opus and emits three seconds of 660 Hz Opus. The caller receives
-it through Pion and the test decodes those exact received packets with PyAV.
-It checks sample count, frequency, packet identities, sequence continuity,
-500 ms maximum packet gap, and raw Python-ready-to-caller p95 ≤150 ms. Ready is
-captured before queue or credit waits. Both processes use the same machine's
-wall clock; this is local evidence. `-short` runs five seconds and does not
-prove the consent window. Without `RELAIS_TEST_PYTHON`, the test skips.
-
-To run the bot alone:
-
-```sh
-export RELAIS_BRIDGE_DEV_TOKEN=isolated-development-token
-python/.venv/bin/python -m relais_agent --port 9102
-```
-
-Configure a development worker with its usual relay/control/store flags and:
+Configure two workers with their usual relay/control/store flags and separate
+literal loopback listeners:
 
 ```sh
 -agent=bridge -agent-split-checkpoints \
--bridge-bot-url=ws://127.0.0.1:9102/bridge
+-bridge-url=ws://127.0.0.1:9102/bridge
 ```
 
-Set `RELAIS_BRIDGE_DEV_TOKEN` to the same value in both shells. Prefer this
-environment variable; the existing `--token` / `-bridge-dev-token` flags remain
-available and override it. Tokens are never logged.
+Use port 9103 on the second worker. Set `RELAIS_BRIDGE_DEV_TOKEN` to the same
+16–128 visible ASCII byte development token in all three processes. The
+`-bridge-dev-token` and Python `--token` flags override it. Tokens do not enter
+URLs or logs. Start the runner before placing the call:
 
-The bot validates Authorization with `hmac.compare_digest` and refuses browser Origins. Both endpoints
-refuse non-loopback addresses; the worker also refuses DNS names, redirects,
-URL credentials and query strings. Tokens never enter the URL. WebSocket
-compression and library pings are disabled in the bot. There are no provider
-calls, downloads, telemetry, subprocess supervision or machine-wide installs.
+```sh
+python/.venv/bin/python -m relais_agent \
+  --worker ws://127.0.0.1:9102/bridge \
+  --worker ws://127.0.0.1:9103/bridge
+```
 
-The development subset uses protocol 1 and binary framing from ADR 0014
-Appendix B. Worker-to-bot `attached` follows the bot's `hello`; it contains the
-socket's immutable scope and fresh-session limits. Output JSON uses `type`
-with the receipt/credit fields at top level. The worker binds all incoming
-packets to the socket scope. The bot sends `output_begin`, packets, `audio_end`
-and a local checkpoint. It exercises idle `playback_finished`, `checkpointed`
-and the captured host output acknowledgement. `replay_horizon(seq)` advances
-the producer's no-retry boundary. `notice_gap(count)` reports overflow of
-non-audio post-accept notifications; audio overflow uses `input_gap`.
+The runner opens `/bridge/registry` on each configured worker. Protocol 1
+`hello`, `reserve`, `reserved` and `assign` use the fields in ADR 0014 Appendix B.
+This fixed development slot requires capacity 1 and config revision `1`.
+An assignment expires after five seconds. The bot opens `/bridge` and sends
+`attach` with the assigned session, epoch, bot, generation and token, plus its
+last-issued output sequence. An invalid scope cannot consume another scope's
+token. A valid token is consumed even if later attachment fails.
 
-The accepted input/notice outbox holds at most 32 records and 11 KiB of encoded
-move-only state; the byte cap can reduce the packet count. Overflow reports
-gaps. Each revision is immutable. Socket delivery is retired only by a later
-accepted actor transaction. Save reads its cached export length; SaveMoveOnly
-returns the exact repeatable image without waiting for the socket. Local
-rollback and Restore preserve the accepted image. The tone
-producer holds at most 32 packets and blocks on queue/absolute host credit.
-The host socket writer has a one-second deadline. State callbacks do no socket
-I/O. Rejected callbacks publish no transport events; checkpoint notices contain
-the exact acknowledged pair. Frozen outbox images include pending input,
-Control, playback notices and gap metadata, with validated lengths and session
-identity. Socket buffers remain transient transport state.
+A fresh binding checkpoints the runner identity and host lineage before
+`attached`. An exact move preserves the host's accepted input outbox and output
+ledger. Reattachment transfers their routing scope to the new lease epoch.
+The returned exact cut retires admitted identities; the fixture resends only
+retained, proven-unadmitted bytes above it. Packed sent receipts retain their
+conflict evidence. Frozen exports keep their original bytes.
 
-Only fresh calls on one worker are supported. Worker moves, reattachment,
-bot replacement, conversation recovery, process recovery, permit guards,
-runner capacity, Pipecat integration and publication are later slices. This
-loopback subset must not be used to claim those guarantees. No CI job is added.
+Both worker routes require Authorization, a loopback peer, no browser Origin
+and no URL query. The runner refuses DNS names, remote addresses, URL
+credentials and redirects. Proxy discovery, compression and library pings are
+disabled. Input/output framing, bounded outbox, local Save/Restore, absolute
+credits, exact acknowledgements, `replay_horizon` and gap notices retain the
+slice-3 rules. State callbacks perform no socket I/O.
 
-The default Go race unit suite also runs a fake-bot WebSocket transport test:
-`TestBridgeTransportSequentialCallsUseLeaseEpoch`. It covers two calls in a row,
-a pre-claimed store lease, audio, checkpoint acknowledgement and protocol-error
-socket closure. The optional Python test adds codec/decoding and timing evidence.
+The default Go test `TestBridgeRunnerMovesLiveCall` runs in `make check`.
+It moves a real WebRTC call three times and checks every bot packet ID on the
+wire. Token tests cover authentication, Origin, scope, expiry and replay.
+The optional codec test adds two moves, all 150 tone packets, raw ready-to-caller
+p95 ≤150 ms, zero decryption failures and the existing full consent thresholds:
+
+```sh
+RELAIS_TEST_PYTHON=../../python/.venv/bin/python go test -race -v -count=1 \
+  -timeout=2m -run '^TestPythonBridgeMoveLoopback$' ./pkg/callharness
+```
+
+`-short` keeps five seconds of caller input and does not prove the 60-second
+consent window. The new test reports local move gaps; the unchanged harness
+suites own the pooled planned-move policy, baseline margin and uncertainty
+checks. No hosted CI run or Pipecat compatibility result is claimed here.

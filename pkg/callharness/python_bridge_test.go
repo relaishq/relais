@@ -13,6 +13,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,8 +29,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Opt-in pinned Python/PyAV integration; does not add time to the short harness.
-func TestPythonBridgeHearLoopback(t *testing.T) {
+// Opt-in pinned Python/PyAV integration; the default Go test proves the move
+// without codec dependencies. Full mode retains the 60 s consent threshold.
+func TestPythonBridgeMoveLoopback(t *testing.T) {
 	python := os.Getenv("RELAIS_TEST_PYTHON")
 	if python == "" {
 		t.Skip("set RELAIS_TEST_PYTHON to the pinned development venv")
@@ -43,7 +46,30 @@ func TestPythonBridgeHearLoopback(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, python, "-m", "relais_agent", "--packets", "150")
+	store := sessionstore.NewMemory()
+	r, err := relay.New(relay.Config{Owners: store})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, r.Close()) }()
+	plane := controlplane.New(r, store)
+	workers := make([]*mediaworker.Worker, 2)
+	endpoints := make([]string, 2)
+	for i := range workers {
+		bridge, e := agentbridge.New(agentbridge.Config{URL: "ws://127.0.0.1:9102/bridge", Token: "isolated-loopback-token"})
+		require.NoError(t, e)
+		factory := agenthost.Factory(bridge.Registration())
+		w, e := mediaworker.New(mediaworker.Config{SplitCheckpoints: true, Agent: mediaworker.AgentConfig{Factory: factory, Registrations: map[string]legacy.Factory{"bridge": factory}}, Relay: &mediaworker.RelayConfig{Owners: store, Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr()}})
+		require.NoError(t, e)
+		defer func() { require.NoError(t, w.Close()) }()
+		bridge.SetWorker(w)
+		r.AddWorker(w.LocalAddr())
+		require.NoError(t, plane.Register(strconv.Itoa(i), w.LocalAddr(), w))
+		workerServer := httptest.NewServer(bridge)
+		defer workerServer.Close()
+		endpoints[i] = "ws" + strings.TrimPrefix(workerServer.URL, "http") + "/bridge"
+		workers[i] = w
+	}
+	w := workers[0]
+	cmd := exec.CommandContext(ctx, python, "-m", "relais_agent", "--packets", "150", "--worker", endpoints[0], "--worker", endpoints[1])
 	cmd.Env = append(os.Environ(), "PYTHONPATH=../../python/relais-agent", "RELAIS_BRIDGE_DEV_TOKEN=isolated-loopback-token")
 	stdout, err := cmd.StdoutPipe()
 	require.NoError(t, err)
@@ -54,9 +80,10 @@ func TestPythonBridgeHearLoopback(t *testing.T) {
 	scanner := bufio.NewScanner(stdout)
 	require.True(t, scanner.Scan())
 	var ready struct {
-		URL string `json:"url"`
+		Ready bool `json:"ready"`
 	}
 	require.NoError(t, json.Unmarshal(scanner.Bytes(), &ready))
+	require.True(t, ready.Ready)
 	type sample struct {
 		Sequence     uint64          `json:"seq"`
 		Ready        int64           `json:"ready_ns"`
@@ -65,7 +92,7 @@ func TestPythonBridgeHearLoopback(t *testing.T) {
 		InputSamples int             `json:"input_samples"`
 		Checkpointed json.RawMessage `json:"checkpointed"`
 	}
-	samples := make(chan sample, 160)
+	samples := make(chan sample, 256)
 	go func() {
 		defer close(samples)
 		for scanner.Scan() {
@@ -75,21 +102,6 @@ func TestPythonBridgeHearLoopback(t *testing.T) {
 			}
 		}
 	}()
-	bridge, err := agentbridge.New(agentbridge.Config{URL: ready.URL, Token: "isolated-loopback-token"})
-	require.NoError(t, err)
-	store := sessionstore.NewMemory()
-	r, err := relay.New(relay.Config{Owners: store})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, r.Close()) }()
-	reg := bridge.Registration()
-	factory := agenthost.Factory(reg)
-	w, err := mediaworker.New(mediaworker.Config{SplitCheckpoints: true, Agent: mediaworker.AgentConfig{Factory: factory, Registrations: map[string]legacy.Factory{"bridge": factory}}, Relay: &mediaworker.RelayConfig{Owners: store, Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr()}})
-	require.NoError(t, err)
-	defer func() { require.NoError(t, w.Close()) }()
-	bridge.SetWorker(w)
-	r.AddWorker(w.LocalAddr())
-	plane := controlplane.New(r, store)
-	require.NoError(t, plane.Register("0", w.LocalAddr(), w))
 	planeCtx, stopPlane := context.WithCancel(ctx)
 	planeDone := make(chan struct{})
 	go func() { defer close(planeDone); _ = plane.Run(planeCtx) }()
@@ -109,20 +121,39 @@ func TestPythonBridgeHearLoopback(t *testing.T) {
 	}
 	go func() { sending <- call.SendMedia(ctx, duration) }()
 	packets := make([]pacedPacket, 0, 150)
-	for range 150 {
+	var moveGaps []time.Duration
+	for n := 0; n < 150; n++ {
 		select {
 		case p := <-received:
 			packets = append(packets, p)
+			if n == 59 || n == 109 {
+				target := "1"
+				if n == 109 {
+					target = "0"
+				}
+				_, e := plane.Move(ctx, call.SessionID(), target)
+				require.NoError(t, e)
+			}
+			if n == 60 || n == 110 {
+				moveGaps = append(moveGaps, p.at.Sub(packets[n-1].at))
+			}
 		case <-ctx.Done():
 			t.Fatalf("received %d/150: %s", len(packets), stderr.String())
 		}
 	}
 	require.NoError(t, <-sending)
 	observed := make(map[string][]int64)
-	for range 150 {
+	var savedSamples []sample
+	for n := 0; n < 150; {
 		select {
-		case s := <-samples:
-			observed[s.Digest] = append(observed[s.Digest], s.Ready)
+		case s, ok := <-samples:
+			require.True(t, ok, "Python output closed")
+			if s.Ready > 0 {
+				observed[s.Digest] = append(observed[s.Digest], s.Ready)
+				n++
+			} else {
+				savedSamples = append(savedSamples, s)
+			}
 		case <-ctx.Done():
 			t.Fatal("missing Python production evidence")
 		}
@@ -168,28 +199,35 @@ print('decoded_samples=%d frequency_hz=%.1f'%(len(samples),freq))`)
 		return err == nil && bytes.Contains(s.Bytes, []byte("dG9uZSBjb21wbGV0ZQ=="))
 	}, 2*time.Second, 10*time.Millisecond)
 	var playback, acknowledged bool
+	inspect := func(s sample) {
+		if len(s.Playback) > 0 {
+			require.Contains(t, string(s.Playback), `"complete"`)
+			require.Positive(t, s.InputSamples)
+			playback = true
+		}
+		if len(s.Checkpointed) > 0 {
+			var ack struct {
+				Sequence uint64 `json:"seq"`
+			}
+			require.NoError(t, json.Unmarshal(s.Checkpointed, &ack))
+			require.EqualValues(t, 1, ack.Sequence)
+			acknowledged = true
+		}
+	}
+	for _, s := range savedSamples {
+		inspect(s)
+	}
 	for !playback || !acknowledged {
 		select {
-		case s := <-samples:
-			if len(s.Playback) > 0 {
-				require.Contains(t, string(s.Playback), `"complete"`)
-				require.Positive(t, s.InputSamples)
-				playback = true
-			}
-			if len(s.Checkpointed) > 0 {
-				var ack struct {
-					Sequence uint64 `json:"seq"`
-				}
-				require.NoError(t, json.Unmarshal(s.Checkpointed, &ack))
-				require.EqualValues(t, 1, ack.Sequence)
-				acknowledged = true
-			}
+		case s, ok := <-samples:
+			require.True(t, ok, "Python output closed")
+			inspect(s)
 		case <-ctx.Done():
 			t.Fatal("missing idle playback or exact checkpoint acknowledgement")
 		}
 	}
-	// Exercise a local exact cut with the real adapter. A bad length must
-	// refuse before adoption; the original frozen image remains usable.
+	// Preserve the slice-3 real-adapter exact-export regression after the
+	// two-worker move: a corrupt length must not consume the valid frozen cut.
 	lease, err := store.Get(ctx, call.SessionID())
 	require.NoError(t, err)
 	exported, err := w.ExportSession(call.SessionID())
@@ -212,7 +250,7 @@ print('decoded_samples=%d frequency_hz=%.1f'%(len(samples),freq))`)
 	resumed, err := w.ResumeSession(exported, mediaworker.ResumeOptions{Lease: lease, Kind: legacy.PlannedMove})
 	require.NoError(t, err)
 	require.Equal(t, call.SessionID(), resumed)
-	t.Logf("local_export_bytes=%d adapter_outbox_bytes=%d corrupt_length_refused=true", len(exported), len(outbox))
+	t.Logf("local_export_bytes=%d adapter_outbox_bytes=%d corrupt_length_refused=true original_image_resumed=true", len(exported), len(outbox))
 	report, err := call.Hangup(ctx)
 	require.NoError(t, err)
 	require.Zero(t, report.DecryptionFailures.Total())
@@ -221,9 +259,13 @@ print('decoded_samples=%d frequency_hz=%.1f'%(len(samples),freq))`)
 		require.GreaterOrEqual(t, report.Consent.ResponsesAfter, uint64((60*time.Second)/(4*time.Second)))
 		require.Less(t, report.Consent.LongestWithoutResponse, 4500*time.Millisecond)
 	}
-	metrics := httptest.NewRecorder()
-	w.PrivateHandler().ServeHTTP(metrics, httptest.NewRequest("GET", "/metrics", nil))
-	require.Contains(t, metrics.Body.String(), "relais_worker_decryption_failures_total 0")
+	for _, worker := range workers {
+		metrics := httptest.NewRecorder()
+		worker.PrivateHandler().ServeHTTP(metrics, httptest.NewRequest("GET", "/metrics", nil))
+		require.Contains(t, metrics.Body.String(), "relais_worker_decryption_failures_total 0")
+	}
+	sort.Slice(moveGaps, func(i, j int) bool { return moveGaps[i] < moveGaps[j] })
+	t.Logf("moves=2 move_gap_p95=%s (local, two samples)", moveGaps[1])
 	t.Logf("packets=150 raw_p95=%s raw_max=%s %s", delays[142], delays[149], output)
 	t.Logf("consent_observed=%s responses=%d max_silence=%s", report.Consent.ObservedFor, report.Consent.ResponsesAfter, report.Consent.LongestWithoutResponse)
 }

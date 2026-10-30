@@ -33,6 +33,7 @@ type adapterState struct {
 	Outbox uint64 `json:"outbox"`
 }
 type adapterUpdate struct {
+	RunnerID   string      `json:"runner_id,omitempty"`
 	Checkpoint *checkpoint `json:"checkpoint,omitempty"`
 	Delivered  uint64      `json:"delivered,omitempty"`
 }

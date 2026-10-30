@@ -14,11 +14,11 @@ func TestDevelopmentBridgeFlagGuards(t *testing.T) {
 		args    []string
 		message string
 	}{
-		{[]string{"-bridge-dev-token=isolated-test-token"}, "-bridge-dev-token requires -bridge-bot-url"},
-		{[]string{"-agent=bridge", "-bridge-bot-url=ws://127.0.0.1:9102/bridge", "-bridge-dev-token=isolated-test-token"}, "requires -agent=bridge and -agent-split-checkpoints"},
-		{[]string{"-bridge-bot-url=ws://127.0.0.1:9102/bridge", "-bridge-dev-token=isolated-test-token"}, "requires -agent=bridge and -agent-split-checkpoints"},
-		{[]string{"-agent=bridge", "-agent-split-checkpoints", "-bridge-bot-url=ws://192.168.1.1:9102/bridge", "-bridge-dev-token=isolated-test-token"}, "literal-loopback"},
-		{[]string{"-agent=bridge", "-agent-split-checkpoints", "-bridge-bot-url=ws://127.0.0.1:9102/bridge"}, "development token"},
+		{[]string{"-bridge-dev-token=isolated-test-token"}, "-bridge-dev-token requires -bridge-url"},
+		{[]string{"-agent=bridge", "-bridge-url=ws://127.0.0.1:9102/bridge", "-bridge-dev-token=isolated-test-token"}, "requires -agent=bridge and -agent-split-checkpoints"},
+		{[]string{"-bridge-url=ws://127.0.0.1:9102/bridge", "-bridge-dev-token=isolated-test-token"}, "requires -agent=bridge and -agent-split-checkpoints"},
+		{[]string{"-agent=bridge", "-agent-split-checkpoints", "-bridge-url=ws://192.168.1.1:9102/bridge", "-bridge-dev-token=isolated-test-token"}, "literal-loopback"},
+		{[]string{"-agent=bridge", "-agent-split-checkpoints", "-bridge-url=ws://127.0.0.1:9102/bridge"}, "development token"},
 	} {
 		require.ErrorContains(t, Run(context.Background(), tc.args, Options{}), tc.message)
 	}
@@ -27,14 +27,14 @@ func TestDevelopmentBridgeFlagGuards(t *testing.T) {
 func TestDevelopmentBridgeTokenEnvironment(t *testing.T) {
 	t.Setenv("RELAIS_BRIDGE_DEV_TOKEN", "isolated-env-test-token")
 	flags, f := newWorkerFlags(Options{})
-	require.NoError(t, flags.Parse([]string{"-bridge-bot-url=ws://127.0.0.1:9102/bridge"}))
+	require.NoError(t, flags.Parse([]string{"-bridge-url=ws://127.0.0.1:9102/bridge"}))
 	require.Equal(t, "isolated-env-test-token", f.bridgeDevelopmentToken())
 	var help bytes.Buffer
 	flags.SetOutput(&help)
 	flags.PrintDefaults()
 	require.NotContains(t, help.String(), "isolated-env-test-token")
 	flags, f = newWorkerFlags(Options{})
-	require.NoError(t, flags.Parse([]string{"-bridge-bot-url=ws://127.0.0.1:9102/bridge", "-bridge-dev-token=isolated-flag-test-token"}))
+	require.NoError(t, flags.Parse([]string{"-bridge-url=ws://127.0.0.1:9102/bridge", "-bridge-dev-token=isolated-flag-test-token"}))
 	require.Equal(t, "isolated-flag-test-token", f.bridgeDevelopmentToken())
 }
 

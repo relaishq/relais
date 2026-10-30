@@ -2,9 +2,7 @@ package agentbridge
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -45,52 +43,35 @@ func (b *Bridge) run(parent context.Context, run *agent.TaskRun) error {
 	a := value.(*adapter)
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	cfg, err := websocket.NewConfig(b.config.URL, "http://localhost")
+	attachment, scope, resume, err := b.connection(ctx, run, a)
 	if err != nil {
 		return err
 	}
-	// Empty Origin is deliberately distinct from any browser Origin.
-	cfg.Origin = &url.URL{}
-	cfg.Header.Set("Authorization", "Bearer "+b.config.Token)
-	dialCtx, dialCancel := context.WithTimeout(ctx, time.Second)
-	conn, err := cfg.DialContext(dialCtx)
-	dialCancel()
-	if err != nil {
-		return fmt.Errorf("bridge: bot connection failed")
-	}
-	conn.MaxPayloadBytes = 32 << 10
+	conn := attachment.conn
+	defer close(attachment.done)
+	defer attachment.release()
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
-	_ = conn.SetDeadline(time.Now().Add(time.Second))
-	var hello struct {
-		Type        string `json:"type"`
-		Protocol    int    `json:"protocol"`
-		BotInstance string `json:"bot_instance"`
-	}
-	if err = websocket.JSON.Receive(conn, &hello); err != nil {
-		return errProtocol
-	}
-	if hello.Type != "hello" || hello.Protocol != 1 {
-		return errProtocol
-	}
-	var nonce [16]byte
-	if _, err = rand.Read(nonce[:]); err != nil {
-		return err
-	}
-	// No reattachment or replacement in this slice. The host's binding check
-	// also refuses a second identity on an already bound session.
-	epoch, err := b.worker.BridgeOutputEpoch(a.id)
+	state, err := b.worker.BridgeOutputResume(scope)
 	if err != nil {
 		return err
 	}
-	scope := mediaworker.BridgeOutputScope{SessionID: a.id, BotInstance: hello.BotInstance, Epoch: epoch, Generation: 1, LineageID: hex.EncodeToString(nonce[:])}
-	if err = b.worker.BindBridgeOutput(scope); err != nil {
+	local := a.attachmentState.Load()
+	if local == nil {
+		return errProtocol
+	}
+
+	if err = sendJSON(conn, map[string]any{
+		"type": "attached", "protocol": 1, "scope": scope, "epoch": scope.Epoch, "generation": scope.Generation, "lineage_id": scope.LineageID,
+		"resume": resume, "next_output_seq": state.NextSequence, "checkpoint_seq": local.Sequence, "working": local.Working, "history": local.History,
+		"checkpoint_age_ms": nil, "snapshot_age_ms": nil, "outcome_unknown": false, "duplicate_windows": []any{},
+		"output_receipts": state, "provider_starts": false,
+		"limits": map[string]int{"input_packets": 32, "json_bytes": 32768, "binary_bytes": 1200, "working_bytes": a.maxWorking - 128, "history_bytes": a.maxHistory},
+	}); err != nil {
 		return err
 	}
-	if err = websocket.JSON.Send(conn, map[string]any{"type": "attached", "protocol": 1, "scope": scope, "resume": "fresh", "next_output_seq": 1, "limits": map[string]int{"input_packets": 32, "json_bytes": 32768, "binary_bytes": 1200, "working_bytes": a.maxWorking, "history_bytes": a.maxHistory}}); err != nil {
-		return err
-	}
+
 	_ = conn.SetDeadline(time.Time{})
 	replies := make(chan any, 1)
 	creditTicker := time.NewTicker(20 * time.Millisecond)
@@ -298,7 +279,7 @@ func (b *Bridge) write(ctx context.Context, conn *websocket.Conn, a *adapter, sc
 // socket writer never changes the accepted image. Emit's 100 ms floor remains
 // outside both the socket writer and the host output admission path.
 func emitUpdates(ctx context.Context, run *agent.TaskRun, a *adapter, candidates <-chan []byte) error {
-	sequence := run.After()
+	sequence := run.After() + 1 // The initial identity update reserves the first emission.
 	for {
 		var update adapterUpdate
 		select {

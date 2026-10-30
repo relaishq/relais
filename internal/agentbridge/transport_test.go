@@ -6,7 +6,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"strings"
@@ -43,14 +42,22 @@ func TestBridgeTransportSequentialCallsUseLeaseEpoch(t *testing.T) {
 				require.NoError(t, err)
 			}
 			results := make(chan botResult, 2)
-			server := httptest.NewServer(websocket.Server{Handshake: func(*websocket.Config, *http.Request) error { return nil }, Handler: func(conn *websocket.Conn) {
-				defer func() { _ = conn.Close() }()
-				scope, err := exerciseBot(conn)
-				results <- botResult{scope, err}
-			}})
-			defer server.Close()
-			b, err := New(Config{URL: "ws" + strings.TrimPrefix(server.URL, "http") + "/bridge", Token: "isolated-test-token"})
+			b, err := New(Config{URL: "ws://127.0.0.1:9102/bridge", Token: "isolated-test-token"})
 			require.NoError(t, err)
+			server := httptest.NewServer(b)
+			defer server.Close()
+			runnerCtx, stopRunner := context.WithCancel(context.Background())
+			defer stopRunner()
+			go func() {
+				_ = fakeRunner(runnerCtx, "ws"+strings.TrimPrefix(server.URL, "http")+"/bridge", func(c *websocket.Conn, m map[string]json.RawMessage) {
+					if e := attachFake(c, m, 0); e != nil {
+						results <- botResult{err: e}
+						return
+					}
+					scope, err := exerciseBot(c)
+					results <- botResult{scope, err}
+				})
+			}()
 			r, err := relay.New(relay.Config{Owners: store})
 			require.NoError(t, err)
 			defer func() { require.NoError(t, r.Close()) }()
@@ -137,13 +144,7 @@ func exerciseBot(conn *websocket.Conn) (mediaworker.BridgeOutputScope, error) {
 	var scope mediaworker.BridgeOutputScope
 	fail := func(err error) (mediaworker.BridgeOutputScope, error) { return scope, err }
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
-	if conn.Request().Header.Get("Authorization") != "Bearer isolated-test-token" {
-		return fail(fmt.Errorf("missing development authorization"))
-	}
 	send := func(v any) error { return websocket.JSON.Send(conn, v) }
-	if err := send(map[string]any{"type": "hello", "protocol": 1, "bot_instance": "go-bot"}); err != nil {
-		return fail(err)
-	}
 	var attached struct {
 		Type  string                        `json:"type"`
 		Scope mediaworker.BridgeOutputScope `json:"scope"`

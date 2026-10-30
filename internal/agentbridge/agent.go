@@ -1,5 +1,4 @@
-// Package agentbridge implements the isolated, single-worker development bridge.
-// It does not implement runner assignment, replacement or conversation recovery.
+// Package agentbridge implements the isolated loopback runner and bot bridge.
 package agentbridge
 
 import (
@@ -17,23 +16,27 @@ import (
 
 const stateKind = "bridge.state/v1"
 
-// Bridge owns a fixed bot endpoint. SetWorker is called before serving calls.
-// Every connection is outbound from the worker and has one call's scope.
+// Bridge serves a worker-owned loopback registry and session endpoint.
+// SetWorker is called before serving HTTP or calls.
 type Bridge struct {
-	config Config
-	worker *mediaworker.Worker
-	agents sync.Map
+	config  Config
+	worker  *mediaworker.Worker
+	agents  sync.Map
+	mu      sync.Mutex
+	runner  *runner
+	changed chan struct{}
+	pending map[string]*assignment
 }
 
 func New(config Config) (*Bridge, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	return &Bridge{config: config}, nil
+	return &Bridge{config: config, changed: make(chan struct{}), pending: make(map[string]*assignment)}, nil
 }
 func (b *Bridge) SetWorker(w *mediaworker.Worker) { b.worker = w }
 func (b *Bridge) Registration() agenthost.Registration {
-	return agenthost.Registration{Name: "bridge", Bounds: agenthost.Bounds{MaxStateBytes: 1024, MaxHistoryBytes: 8192, MaxPendingBytes: 4096},
+	return agenthost.Registration{Name: "bridge", Bounds: agenthost.Bounds{MaxStateBytes: 3072, MaxHistoryBytes: 8192, MaxPendingBytes: 4096},
 		Factory: func(args agent.FactoryArgs) agent.Agent {
 			a := &adapter{bridge: b, id: args.SessionID, maxWorking: args.MaxStateBytes, maxHistory: args.MaxHistoryBytes, wake: make(chan struct{}, 1), deliveredWake: make(chan struct{}, 1), acks: make(chan agenthost.BridgeCheckpoint, 1)}
 			a.current = &outboxImage{SessionID: a.id}
@@ -51,6 +54,7 @@ type checkpoint struct {
 	Version       uint32 `json:"version"`
 	InputSSRC     uint32 `json:"input_ssrc"`
 	InputSequence uint64 `json:"input_seq"`
+	RunnerID      string `json:"runner_id,omitempty"`
 	Working       []byte `json:"working,omitempty"`
 	History       []byte `json:"history,omitempty"`
 }
@@ -68,6 +72,8 @@ type adapter struct {
 	acks                   chan agenthost.BridgeCheckpoint
 	ackMu                  sync.Mutex
 	ackHigh                uint64
+	runnerID               atomic.Value
+	attachmentState        atomic.Pointer[checkpoint]
 }
 
 func (a *adapter) Handle(_ context.Context, e agent.Event) (agent.Effects, error) {
@@ -76,19 +82,28 @@ func (a *adapter) Handle(_ context.Context, e agent.Event) (agent.Effects, error
 		return agent.Effects{StartTasks: []agent.TaskSpec{{Step: "connection", Kind: stateKind, Class: agent.ReadOnly, Resume: agent.Abandon, Request: []byte(a.id)}}}, nil
 	case agent.AudioInput, agent.Control, agent.PlaybackFinished:
 		return agent.Effects{}, a.stageOutbox(e, 0)
+	case agent.TimerFired:
+		if e.Timer.ID == "bridge-connect" {
+			return agent.Effects{StartTasks: []agent.TaskSpec{{Step: "connection", Kind: stateKind, Class: agent.ReadOnly, Resume: agent.Abandon, Request: []byte(a.id)}}}, nil
+		}
 	case agent.Resumed:
 		if e.Resume.MoveOnly == agent.OutcomeUnknown {
 			a.current = &outboxImage{SessionID: a.id, Revision: a.current.Revision + 1}
 			data, _ := json.Marshal(a.current)
 			a.current.encoded = data
 		}
+		return agent.Effects{SetTimers: []agent.TimerSpec{{ID: "bridge-connect"}}}, nil
 	case agent.TaskMessage:
 		if len(e.Result.Chunk.Data) > 0 {
 			var update adapterUpdate
 			if err := json.Unmarshal(e.Result.Chunk.Data, &update); err != nil {
 				return agent.Effects{}, err
 			}
+			if update.RunnerID != "" {
+				a.state.RunnerID = update.RunnerID
+			}
 			if update.Checkpoint != nil && update.Checkpoint.Sequence > a.state.Sequence {
+				update.Checkpoint.RunnerID = a.state.RunnerID
 				a.state = *update.Checkpoint
 			}
 			if update.Delivered > 0 {
@@ -125,6 +140,11 @@ func (a *adapter) Restore(_ context.Context, s agent.State) error {
 	return nil
 }
 func (a *adapter) Accepted() {
+	a.runnerID.Store(a.state.RunnerID)
+	saved := a.state
+	saved.Working = slices.Clone(saved.Working)
+	saved.History = slices.Clone(saved.History)
+	a.attachmentState.Store(&saved)
 	a.outboxMu.Lock()
 	a.accepted = a.current
 	a.outboxMu.Unlock()
@@ -166,7 +186,7 @@ func (a *adapter) candidate(raw []byte) error {
 	if err != nil {
 		return err
 	}
-	if len(b)+32 > a.maxWorking || len(history) > a.maxHistory {
+	if len(b)+128 > a.maxWorking || len(history) > a.maxHistory {
 		return agent.ErrCapacity
 	}
 	return nil
