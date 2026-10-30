@@ -645,7 +645,7 @@ func (s *session) sendAgentAudioLocked(header rtp.Header, payload []byte, state 
 	if track.Packets == 1 || oldOutbound>>16 != track.HighestSentIndex>>16 {
 		s.checkpoint.request()
 	}
-	if _, err := s.worker.send(encrypted, s.state.ICE.RemoteAddr); err != nil {
+	if _, err := s.send(encrypted, s.state.ICE.RemoteAddr); err != nil {
 		s.log.Debugf("session %s: send agent audio: %v", s.id, err)
 	} else {
 		s.tracePacket(encrypted, "agent")

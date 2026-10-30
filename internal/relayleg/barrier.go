@@ -7,7 +7,7 @@ import "encoding/binary"
 
 // ContractVersion covers caller-address headers, drain barriers and leg binding frames.
 // Bump it when the versioned UDP layout fixtures change.
-const ContractVersion = 2
+const ContractVersion = 3
 
 const barrierSize = 13
 

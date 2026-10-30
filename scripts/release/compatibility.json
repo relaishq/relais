@@ -5,7 +5,7 @@
   "os": "any",
   "arch": "any",
   "archive_layout": 1,
-  "store_contract": 1,
+  "store_contract": 2,
   "scripts": {
     "componentCommitLua": {
       "sha": "d7f190cb2413e6478ecdae5a2347bee198a9ea87"
@@ -39,6 +39,12 @@
     "putRouteLua": {
       "sha": "c4086ffbaf70d582a550704e7e65143e1d755d3b"
     },
+    "putSlotRouteLua": {
+      "sha": "c1b1ca5a1ac1d42c65879c6f5de5bb0390368b5e"
+    },
+    "relayAssignmentLua": {
+      "sha": "e097940955cb8d3d70a608c3fa56b45293337bc8"
+    },
     "relayLeaseLua": {
       "sha": "729fabf7a7b59137a645cda3ec06b0a07b5fc7e2"
     },
@@ -49,15 +55,15 @@
       "sha": "104ae65debf45156ded1e8e613705534c8e62c17"
     }
   },
-  "private_http_contract": 5,
+  "private_http_contract": 7,
   "redis_key_contract": 1,
   "redis_key_golden_sha256": {
     "framecache": "7df2f4606485a52e42840e7aa63f6f731db1f8dfeab858f41829b4119ad0dc35",
     "sessionstore": "03a1309d63699a67f9f442ca0e585f60f25126da66000dcb0f040787131da426"
   },
-  "relay_udp_contract": 2,
+  "relay_udp_contract": 3,
   "relay_udp_golden_sha256": "3ff7baf9748f6b962e224bbc3e76b5489b4e12afbccd1428168da034409fe154",
-  "private_http_golden_sha256": "0612a91e13b26d545019e8559d7d14e539edfda1d3b9db8b1db0580cd0c230be",
+  "private_http_golden_sha256": "28122d4b8e0418f732176c95474e0902ff6bdc8c5709565e48dcf42b60d45bef",
   "roles": {
     "control": {
       "default": {
@@ -107,7 +113,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ],
             "writes": [
               2
@@ -116,7 +124,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ]
           },
           "redis_keys": {
@@ -136,7 +146,8 @@
               7,
               8,
               9,
-              10
+              10,
+              11
             ],
             "writes": null,
             "continues": [
@@ -148,7 +159,8 @@
           },
           "store_contract": {
             "reads": [
-              1
+              1,
+              2
             ],
             "writes": [
               1
@@ -206,7 +218,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ],
             "writes": [
               2
@@ -215,7 +229,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ]
           },
           "redis_keys": {
@@ -235,7 +251,8 @@
               7,
               8,
               9,
-              10
+              10,
+              11
             ],
             "writes": null,
             "continues": [
@@ -247,6 +264,31 @@
           },
           "store_contract": {
             "reads": [
+              1,
+              2
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          }
+        }
+      },
+      "relay-change": {
+        "formats": {
+          "component": {
+            "reads": [
+              10
+            ],
+            "writes": null,
+            "continues": [
+              10
+            ]
+          },
+          "encryption_header": {
+            "reads": [
               1
             ],
             "writes": [
@@ -254,6 +296,75 @@
             ],
             "continues": [
               1
+            ]
+          },
+          "legacy_encryption_header": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "metadata": {
+            "reads": [
+              10
+            ],
+            "writes": null,
+            "continues": [
+              10
+            ]
+          },
+          "private_http": {
+            "reads": [
+              7
+            ],
+            "writes": [
+              7
+            ],
+            "continues": [
+              7
+            ]
+          },
+          "redis_keys": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "snapshot": {
+            "reads": [
+              6,
+              7,
+              8,
+              9,
+              10,
+              11
+            ],
+            "writes": null,
+            "continues": [
+              11
+            ]
+          },
+          "store_contract": {
+            "reads": [
+              1,
+              2
+            ],
+            "writes": [
+              2
+            ],
+            "continues": [
+              1,
+              2
             ]
           }
         }
@@ -267,7 +378,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ],
             "writes": [
               2
@@ -276,7 +389,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ]
           },
           "redis_keys": {
@@ -293,7 +408,8 @@
           "relay_udp": {
             "reads": [
               1,
-              2
+              2,
+              3
             ],
             "writes": [
               1
@@ -305,7 +421,8 @@
           },
           "store_contract": {
             "reads": [
-              1
+              1,
+              2
             ],
             "writes": [
               1
@@ -323,7 +440,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ],
             "writes": [
               2
@@ -332,7 +451,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ]
           },
           "redis_keys": {
@@ -349,7 +470,8 @@
           "relay_udp": {
             "reads": [
               1,
-              2
+              2,
+              3
             ],
             "writes": [
               1
@@ -361,6 +483,33 @@
           },
           "store_contract": {
             "reads": [
+              1,
+              2
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          }
+        }
+      },
+      "relay-change": {
+        "formats": {
+          "private_http": {
+            "reads": [
+              7
+            ],
+            "writes": [
+              7
+            ],
+            "continues": [
+              7
+            ]
+          },
+          "redis_keys": {
+            "reads": [
               1
             ],
             "writes": [
@@ -368,6 +517,30 @@
             ],
             "continues": [
               1
+            ]
+          },
+          "relay_udp": {
+            "reads": [
+              3
+            ],
+            "writes": [
+              3
+            ],
+            "continues": [
+              3
+            ]
+          },
+          "store_contract": {
+            "reads": [
+              1,
+              2
+            ],
+            "writes": [
+              2
+            ],
+            "continues": [
+              1,
+              2
             ]
           }
         }
@@ -381,7 +554,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ],
             "writes": [
               2
@@ -390,7 +565,24 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
+            ]
+          }
+        }
+      },
+      "relay-change": {
+        "formats": {
+          "private_http": {
+            "reads": [
+              7
+            ],
+            "writes": [
+              7
+            ],
+            "continues": [
+              7
             ]
           }
         }
@@ -444,7 +636,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ],
             "writes": [
               2
@@ -453,7 +647,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ]
           },
           "redis_keys": {
@@ -470,7 +666,8 @@
           "relay_udp": {
             "reads": [
               1,
-              2
+              2,
+              3
             ],
             "writes": [
               1
@@ -486,7 +683,8 @@
               7,
               8,
               9,
-              10
+              10,
+              11
             ],
             "writes": [
               7,
@@ -502,7 +700,8 @@
           },
           "store_contract": {
             "reads": [
-              1
+              1,
+              2
             ],
             "writes": [
               1
@@ -560,7 +759,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ],
             "writes": [
               2
@@ -569,7 +770,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ]
           },
           "redis_keys": {
@@ -586,7 +789,8 @@
           "relay_udp": {
             "reads": [
               1,
-              2
+              2,
+              3
             ],
             "writes": [
               1
@@ -602,7 +806,8 @@
               7,
               8,
               9,
-              10
+              10,
+              11
             ],
             "writes": [
               7,
@@ -618,6 +823,31 @@
           },
           "store_contract": {
             "reads": [
+              1,
+              2
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          }
+        }
+      },
+      "relay-change": {
+        "formats": {
+          "component": {
+            "reads": [
+              10
+            ],
+            "writes": null,
+            "continues": [
+              10
+            ]
+          },
+          "encryption_header": {
+            "reads": [
               1
             ],
             "writes": [
@@ -625,6 +855,88 @@
             ],
             "continues": [
               1
+            ]
+          },
+          "legacy_encryption_header": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "metadata": {
+            "reads": [
+              10
+            ],
+            "writes": null,
+            "continues": [
+              10
+            ]
+          },
+          "private_http": {
+            "reads": [
+              7
+            ],
+            "writes": [
+              7
+            ],
+            "continues": [
+              7
+            ]
+          },
+          "redis_keys": {
+            "reads": [
+              1
+            ],
+            "writes": [
+              1
+            ],
+            "continues": [
+              1
+            ]
+          },
+          "relay_udp": {
+            "reads": [
+              3
+            ],
+            "writes": [
+              3
+            ],
+            "continues": [
+              3
+            ]
+          },
+          "snapshot": {
+            "reads": [
+              6,
+              7,
+              8,
+              9,
+              10,
+              11
+            ],
+            "writes": [
+              11
+            ],
+            "continues": [
+              11
+            ]
+          },
+          "store_contract": {
+            "reads": [
+              1,
+              2
+            ],
+            "writes": [
+              2
+            ],
+            "continues": [
+              1,
+              2
             ]
           }
         }
@@ -680,7 +992,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ],
             "writes": [
               2
@@ -689,7 +1003,9 @@
               2,
               3,
               4,
-              5
+              5,
+              6,
+              7
             ]
           },
           "redis_keys": {
@@ -706,7 +1022,8 @@
           "relay_udp": {
             "reads": [
               1,
-              2
+              2,
+              3
             ],
             "writes": [
               1
@@ -722,7 +1039,8 @@
               7,
               8,
               9,
-              10
+              10,
+              11
             ],
             "writes": [
               7,
@@ -739,7 +1057,8 @@
           },
           "store_contract": {
             "reads": [
-              1
+              1,
+              2
             ],
             "writes": [
               1

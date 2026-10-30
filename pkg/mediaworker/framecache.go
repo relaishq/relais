@@ -353,7 +353,7 @@ func (s *session) sendReplay(packets [][]byte) {
 			s.truncateReplay(reason)
 			return
 		}
-		_, err := s.worker.send(packet, remote)
+		_, err := s.send(packet, remote)
 		if err == nil {
 			s.tracePacket(packet, "frame-cache")
 		}

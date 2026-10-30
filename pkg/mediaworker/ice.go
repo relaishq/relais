@@ -7,7 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/relaishq/relais/internal/relaytrace"
+
 	"github.com/pion/stun/v4"
+	"github.com/relaishq/relais/internal/iceufrag"
 )
 
 // The media worker is an ICE-lite agent (RFC 8445 section 2.5): it never
@@ -43,7 +46,7 @@ func hostCandidate(addr netip.AddrPort) string {
 // handleSTUN answers a STUN binding request that arrived on the worker's
 // socket. The USERNAME (worker ufrag ":" caller ufrag) names the session,
 // because the worker's ufrag is the session ID.
-func (w *Worker) handleSTUN(raw []byte, from netip.AddrPort) {
+func (w *Worker) handleSTUNVia(raw []byte, from, leg netip.AddrPort) {
 	msg := &stun.Message{Raw: append([]byte(nil), raw...)}
 	if err := msg.Decode(); err != nil || msg.Type != stun.BindingRequest {
 		return
@@ -58,11 +61,15 @@ func (w *Worker) handleSTUN(raw []byte, from netip.AddrPort) {
 		return
 	}
 
-	sess := w.session(localUfrag)
+	id, _, valid := iceufrag.Parse(localUfrag)
+	if !valid {
+		return
+	}
+	sess := w.session(id)
 	if sess == nil {
 		return
 	}
-	if err := sess.answerBindingRequest(msg, remoteUfrag, from); err != nil {
+	if err := sess.answerBindingRequest(msg, localUfrag, remoteUfrag, from, leg); err != nil {
 		w.log.Debugf("session %s: drop binding request from %s: %v", localUfrag, from, err)
 	}
 }
@@ -85,7 +92,7 @@ func (w *Worker) handleSTUN(raw []byte, from netip.AddrPort) {
 //
 // The caller is the controlling agent (the answer says a=ice-lite), so role
 // attributes are not checked.
-func (s *session) answerBindingRequest(msg *stun.Message, remoteUfrag string, from netip.AddrPort) error {
+func (s *session) answerBindingRequest(msg *stun.Message, localUfrag, remoteUfrag string, from, leg netip.AddrPort) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -93,7 +100,19 @@ func (s *session) answerBindingRequest(msg *stun.Message, remoteUfrag string, fr
 		return errHandedOver
 	}
 	creds := &s.state.ICE
-	if remoteUfrag != creds.RemoteUfrag {
+	p := s.pendingRestart
+	pending := p != nil && localUfrag == p.ice.LocalUfrag && localUfrag != creds.LocalUfrag
+	if pending {
+		creds = &p.ice
+	}
+	expectedLeg := s.currentLeg()
+	if pending {
+		expectedLeg = creds.Relay.Leg
+	}
+	if leg != expectedLeg {
+		return errWrongUfrag
+	}
+	if localUfrag != creds.LocalUfrag || remoteUfrag != creds.RemoteUfrag {
 		return errWrongUfrag
 	}
 	integrity := stun.NewShortTermIntegrity(creds.LocalPwd)
@@ -107,11 +126,25 @@ func (s *session) answerBindingRequest(msg *stun.Message, remoteUfrag string, fr
 	// The caller proved it knows the session's ICE password from this
 	// address, so its DTLS and SRTP from here belong to the session, unless
 	// the address is still another session's.
-	if !s.worker.mapAddr(from, s) {
+	if !s.worker.mapRelayAddr(from, s, leg) {
 		return errActiveFlow
 	}
+	if pending {
+		p.receive = from
+	}
 
-	if msg.Contains(stun.AttrUseCandidate) && creds.RemoteAddr != from {
+	if relaytrace.Enabled() {
+		relaytrace.Emit("worker-check", leg.String(), msg.Raw)
+	}
+	if msg.Contains(stun.AttrUseCandidate) && relaytrace.Enabled() {
+		relaytrace.Emit("use-candidate", leg.String(), nil)
+	}
+	switched := pending && msg.Contains(stun.AttrUseCandidate) && s.switchRelayLocked(relayPath{leg, from})
+	if switched {
+		creds = &s.state.ICE
+	}
+
+	if !pending && msg.Contains(stun.AttrUseCandidate) && creds.RemoteAddr != from {
 		if creds.RemoteAddr.IsValid() {
 			s.log.Debugf("session %s: caller re-nominated %s (was %s)", s.id, from, creds.RemoteAddr)
 		} else {
@@ -120,7 +153,7 @@ func (s *session) answerBindingRequest(msg *stun.Message, remoteUfrag string, fr
 		creds.RemoteAddr = from
 		s.nominatedOnce.Do(func() { close(s.nominated) })
 	}
-	if from == creds.RemoteAddr {
+	if !pending && from == creds.RemoteAddr || pending && s.state.ICE.LocalUfrag == localUfrag {
 		s.consent.Reset(s.worker.cfg.consentTimeout)
 	}
 
@@ -135,8 +168,11 @@ func (s *session) answerBindingRequest(msg *stun.Message, remoteUfrag string, fr
 		return err
 	}
 
-	if _, err := s.worker.send(response.Raw, from); err != nil {
+	if _, err := s.worker.sendVia(response.Raw, from, leg); err != nil {
 		s.log.Debugf("session %s: send binding response: %v", s.id, err)
+	}
+	if switched {
+		s.requestKeyframe("relay-change")
 	}
 
 	return nil

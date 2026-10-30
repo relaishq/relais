@@ -47,6 +47,7 @@ func (w *Worker) captureZombie(id string) (workerprobe.Sender, error) {
 	}
 
 	addr := s.state.ICE.RemoteAddr
+	leg := s.currentLeg()
 	seq := uint16(track.HighestSentIndex) //nolint:gosec // RTP sequence is the low 16 bits
 	timestamp := track.LastTimestamp
 	var mu sync.Mutex
@@ -67,7 +68,7 @@ func (w *Worker) captureZombie(id string) (workerprobe.Sender, error) {
 			return nil, err
 		}
 
-		_, err = w.send(encrypted, addr)
+		_, err = w.sendVia(encrypted, addr, leg)
 		return encrypted, err
 	}, nil
 }

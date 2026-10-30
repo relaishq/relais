@@ -109,6 +109,9 @@ type registration struct {
 }
 
 type call struct {
+	relayCapable   bool
+	eventOpen      bool
+	relayEvent     *RelayEvent                 // guarded by stateMu
 	intent         *sessionstore.ControlIntent // guarded by mu
 	terminal       bool                        // reads hold mu or the plane registry lock; writes hold both
 	lease          sessionstore.Lease          // guarded by stateMu; last observed placed tenure
@@ -142,6 +145,8 @@ type call struct {
 // Plane owns the registry and call metadata. The store remains authoritative
 // for ownership. New and Register must be called before accepting calls.
 type Plane struct {
+	relayPlacement  sync.RWMutex // orders create admission against relay drain
+	relaySet        map[string]RelayBinding
 	links           *WorkerLinks
 	recovery        *moveRecovery
 	restart         *restartState
@@ -412,6 +417,12 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 	if !ready {
 		return "", "", ErrNoTarget
 	}
+	p.relayPlacement.RLock()
+	defer p.relayPlacement.RUnlock()
+	slot, slotErr := p.pickRelay(ctx, "")
+	if slotErr != nil {
+		return "", "", slotErr
+	}
 	excluded := make(map[netip.AddrPort]bool, attempts)
 	var w *registration
 	var id, answer string
@@ -428,7 +439,9 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 			return "", "", recordErr
 		}
 		placed = sessionstore.Lease{}
-		if worker, ok := w.worker.(interface {
+		if worker, ok := w.worker.(relayChangeWorker); ok && slot != "" {
+			id, answer, placed, err = worker.CreateSessionAtRelay(ctx, offer, slot)
+		} else if worker, ok := w.worker.(interface {
 			CreateSessionWithLease(context.Context, string) (string, string, sessionstore.Lease, error)
 		}); ok {
 			id, answer, placed, err = worker.CreateSessionWithLease(ctx, offer)

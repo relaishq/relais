@@ -222,6 +222,10 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 	if err != nil {
 		return m, err
 	}
+	relayState, err := constant(root, "pkg/mediaworker/relay_restart.go", "relaySessionStateVersion")
+	if err != nil {
+		return m, err
+	}
 	v2, err := constant(root, "pkg/mediaworker/agent_v2.go", "v2SessionStateVersion")
 	if err != nil {
 		return m, err
@@ -290,7 +294,7 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 		}
 		return true
 	})
-	reads = append(reads, split)
+	reads = append(reads, split, relayState)
 	slices.Sort(reads)
 	reads = slices.Compact(reads)
 	state := func(writes []int) Format {
@@ -300,12 +304,15 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 		// Versions 3/4/5 add optional responses and dial-out-only endpoints. Inbound
 		// requests retain v2 bodies. Older tools validate every profile, including
 		// unselected ones, so mode support uses profiles in the existing v2 schema.
-		return map[string]Format{"private_http": {Reads: []int{2, 3, 4, m.HTTPContract}, Writes: []int{2}, Continues: []int{2, 3, 4, m.HTTPContract}}}
+		return map[string]Format{"private_http": {Reads: []int{2, 3, 4, 5, 6, m.HTTPContract}, Writes: []int{2}, Continues: []int{2, 3, 4, 5, 6, m.HTTPContract}}}
 	}
 	platform := func() map[string]Format {
 		fs := common()
 		fs["redis_keys"] = Format{Reads: []int{m.KeyContract}, Writes: []int{m.KeyContract}, Continues: []int{m.KeyContract}}
-		fs["store_contract"] = Format{Reads: []int{m.StoreContract}, Writes: []int{m.StoreContract}, Continues: []int{m.StoreContract}}
+		// Contract 2 adds relay assignments and scoped routes. Existing profiles
+		// still run one bootstrap relay and write the unchanged contract-1 tuples.
+		// Relay-change profiles must declare contract-2 writers when introduced.
+		fs["store_contract"] = Format{Reads: []int{1, m.StoreContract}, Writes: []int{1}, Continues: []int{1}}
 		return fs
 	}
 	// Echo's app marker is separate from the host snapshot version.
@@ -325,7 +332,7 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 	}
 	worker := func(enabled, bridge bool) Profile {
 		fs := platform()
-		fs["relay_udp"] = Format{Reads: []int{1, m.UDPContract}, Writes: []int{1}, Continues: []int{1, m.UDPContract}}
+		fs["relay_udp"] = Format{Reads: []int{1, 2, m.UDPContract}, Writes: []int{1}, Continues: []int{1, 2}}
 		writes := []int{legacy, v2, control}
 		if enabled {
 			writes = append(writes, split)
@@ -348,7 +355,7 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 	cp := worker(false, false)
 	cp.Formats["snapshot"] = state(nil)
 	relayProfile := Profile{Formats: platform()}
-	relayProfile.Formats["relay_udp"] = Format{Reads: []int{1, m.UDPContract}, Writes: []int{1}, Continues: []int{1, m.UDPContract}}
+	relayProfile.Formats["relay_udp"] = Format{Reads: []int{1, 2, m.UDPContract}, Writes: []int{1}, Continues: []int{1, 2}}
 	delete(cp.Formats, "relay_udp")
 	m.Roles = map[string]map[string]Profile{"worker": {"legacy": worker(false, false), "split": worker(true, false)}, "control": {"default": cp}, "relay": {"default": relayProfile}, "signal": {"default": {Formats: common()}}}
 
@@ -359,6 +366,33 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 	m.Roles["relay"]["dial-out"] = relayProfile
 	if bridgeRegistered {
 		m.Roles["worker"]["bridge"] = worker(true, true)
+	}
+	// Relay-change mode is separate from the default single-slot writer.
+	for _, role := range []string{"worker", "control", "relay", "signal"} {
+		profile := m.Roles[role]["default"]
+		if role == "worker" {
+			profile = worker(false, false)
+		}
+		formats := map[string]Format{}
+		for k, v := range profile.Formats {
+			formats[k] = v
+		}
+		formats["private_http"] = Format{Reads: []int{m.HTTPContract}, Writes: []int{m.HTTPContract}, Continues: []int{m.HTTPContract}}
+		if role != "signal" {
+			formats["store_contract"] = Format{Reads: []int{1, m.StoreContract}, Writes: []int{m.StoreContract}, Continues: []int{1, m.StoreContract}}
+		}
+		if role == "worker" || role == "control" {
+			formats["snapshot"] = Format{Reads: reads, Writes: []int{relayState}, Continues: []int{relayState}}
+			if role == "control" {
+				f := formats["snapshot"]
+				f.Writes = nil
+				formats["snapshot"] = f
+			}
+		}
+		if role == "worker" || role == "relay" {
+			formats["relay_udp"] = Format{Reads: []int{m.UDPContract}, Writes: []int{m.UDPContract}, Continues: []int{m.UDPContract}}
+		}
+		m.Roles[role]["relay-change"] = Profile{Formats: formats}
 	}
 	return m, m.Validate()
 }

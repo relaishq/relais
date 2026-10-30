@@ -126,6 +126,7 @@ func (r *Relay) persist(caller netip.AddrPort, force bool) {
 		return
 	}
 	if snapshot, ok := r.flows.snapshot(caller, force, time.Now()); ok {
+		snapshot.record.Slot = r.cfg.SlotID
 		r.persistence.enqueue(snapshot.record.SessionID, &snapshot)
 	}
 }
@@ -174,10 +175,25 @@ func (r *Relay) restoreRoutes() {
 	})
 	decided := make(map[netip.AddrPort]bool)
 	for _, route := range routes {
-		// The newest record decides this address even when its owner is unknown.
-		// Falling back would route it to a different, older session.
+		if route.Slot != r.cfg.SlotID {
+			continue
+		}
+		// Even an unavailable assignment read reserves the newest address.
 		duplicate := decided[route.Caller]
 		decided[route.Caller] = true
+		if r.cfg.SlotID != "" {
+			lease, assignment, err := r.cfg.Owners.(sessionstore.RelayOwners).RelayOwner(ctx, route.SessionID)
+			if err != nil || !assignment.Allows(r.cfg.SlotID) || lease.Epoch != route.Generation {
+				if err != nil && !errors.Is(err, sessionstore.ErrNotFound) {
+					loadErr = errors.Join(loadErr, err)
+				}
+				r.routesRestoreSkipped.Add(1)
+				continue
+			}
+			leases[route.SessionID] = lease
+		}
+		// The newest record decides this address even when its owner is unknown.
+		// Falling back would route it to a different, older session.
 		lease, ok := leases[route.SessionID]
 		if ok && lease.Epoch == route.Generation && !duplicate && r.flows.restore(route, unmap(lease.Worker), time.Now()) {
 			r.routesRestored.Add(1)

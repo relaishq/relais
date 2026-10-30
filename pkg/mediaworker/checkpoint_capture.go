@@ -23,6 +23,9 @@ func (c *sessionCheckpoint) capture(kind checkpointCaptureKind, payload *movePay
 	s := c.session
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.pendingRestart != nil {
+		return nil, ErrExportIncompatible
+	}
 	defer func() {
 		if !s.fenced.Load() && s.ctx.Err() == nil && s.agent != nil {
 			s.agent.paused = false

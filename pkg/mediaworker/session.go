@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/relaishq/relais/internal/relaytrace"
+
 	"github.com/pion/dtls/v3"
 	"github.com/pion/dtls/v3/pkg/crypto/fingerprint"
 	"github.com/pion/dtls/v3/pkg/crypto/selfsign"
@@ -61,7 +63,11 @@ var supportedSRTPProfiles = []dtls.SRTPProtectionProfile{
 // sends or receives is processed under it, so a snapshot taken under mu is
 // atomic with the counters (see export).
 type session struct {
-	checkpoint sessionCheckpoint
+	pendingRestart *pendingRestart
+	relayAborted   uint64 // fences an in-flight offer racing with rollback
+	previousRelay  relayPath
+	previousUntil  time.Time
+	checkpoint     sessionCheckpoint
 
 	moveMu             sync.Mutex
 	moveReserved       int64
@@ -238,11 +244,15 @@ func (s *session) answerParams() answerParams {
 		}
 	}
 
+	candidate := s.worker.MediaAddr()
+	if s.state.ICE.Relay != nil {
+		candidate = s.state.ICE.Relay.Public
+	}
 	return answerParams{
 		iceUfrag:    s.state.ICE.LocalUfrag,
 		icePwd:      s.state.ICE.LocalPwd,
 		fingerprint: certificateFingerprint(s.state.DTLS.Certificate),
-		candidate:   s.worker.MediaAddr(),
+		candidate:   candidate,
 		tracks:      tracks,
 	}
 }
@@ -465,7 +475,7 @@ func (s *session) handleRTP(pkt []byte) {
 }
 
 // handleRTPLocked is the ordinary authenticated media path; callers hold mu.
-func (s *session) handleRTPLocked(pkt []byte) (complete *framecache.Frame, failure uint64, decryptErr error) {
+func (s *session) handleRTPLocked(pkt []byte, path relayPath) (complete *framecache.Frame, failure uint64, decryptErr error) {
 
 	// A successful decryption advances the inbound SRTP context's rollover
 	// counter and replay window, so the session state records the packet's
@@ -490,6 +500,10 @@ func (s *session) handleRTPLocked(pkt []byte) (complete *framecache.Frame, failu
 	}
 	if oldInbound>>16 != s.state.SRTP.Inbound[authenticated.SSRC]>>16 {
 		s.checkpoint.request()
+	}
+
+	if s.switchRelayLocked(path) {
+		s.requestKeyframe("relay-change")
 	}
 
 	var in rtp.Packet
@@ -570,7 +584,7 @@ func (s *session) handleRTPLocked(pkt []byte) (complete *framecache.Frame, failu
 		s.checkpoint.request()
 	}
 
-	if _, err := s.worker.send(encrypted, s.state.ICE.RemoteAddr); err != nil {
+	if _, err := s.send(encrypted, s.state.ICE.RemoteAddr); err != nil {
 		s.log.Debugf("session %s: send echo packet: %v", s.id, err)
 	} else {
 		s.tracePacket(encrypted, "echo")
@@ -681,12 +695,15 @@ func (s *session) requestKeyframe(trigger string) {
 		video.SRTCPIndex = index
 	}
 
-	if _, err := s.worker.send(encrypted, s.state.ICE.RemoteAddr); err != nil {
+	if _, err := s.send(encrypted, s.state.ICE.RemoteAddr); err != nil {
 		s.log.Debugf("session %s: send PLI: %v", s.id, err)
 
 		return
 	}
 	s.needsKeyframe = false
+	if relaytrace.Enabled() {
+		relaytrace.Emit("keyframe-request", s.currentLeg().String(), nil)
+	}
 	s.tracePacket(encrypted, "keyframe-request")
 	s.log.Debugf("session %s: caller sent %s for video ssrc %d; sent PLI for caller ssrc %d",
 		s.id, trigger, video.SSRC, video.InboundSSRC)
