@@ -41,7 +41,7 @@ func newWorkerFlags(options Options) (*flag.FlagSet, *workerFlags) {
 		defaultAgent = "echo"
 	}
 	f.agentName = flags.String("agent", defaultAgent, "audio agent: echo, demo or a registered name")
-	f.bridgeURL = flags.String("bridge-bot-url", "", "isolated development bot ws://<loopback>:<port>/bridge; worker dials bot")
+	f.bridgeURL = flags.String("bridge-url", "", "isolated worker ws://<loopback>:<port>/bridge; runner and bot dial worker")
 	f.bridgeToken = flags.String("bridge-dev-token", "", "static development token (prefer RELAIS_BRIDGE_DEV_TOKEN); isolated loopback only")
 	f.split = flags.Bool("agent-split-checkpoints", false, "use v10 component checkpoints for new calls (upgrade every participant first)")
 	flags.IntVar(&f.limits.MaxBytes, "agent-max-snapshot-bytes", 0, "encoded snapshot byte cap (0: legacy 7168, split hot 6144)")
