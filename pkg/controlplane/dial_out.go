@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sync/atomic"
 	"time"
@@ -116,8 +117,11 @@ func (d *DialOut) connect(ctx context.Context, client *http.Client) error {
 	if err := workerlink.WriteValue(writer, "address", LinkAddress{Address: address}); err != nil {
 		return err
 	}
-	var ready struct{}
+	var ready LinkReady
 	if err := workerlink.ReadValue(resp.Body, "ready", &ready); err != nil {
+		return err
+	}
+	if err := d.Worker.AdoptRelayAddress(ready.Address); err != nil {
 		return err
 	}
 	timer.Stop()
@@ -134,5 +138,34 @@ func (d *DialOut) connect(ctx context.Context, client *http.Client) error {
 		handler = d.Worker.PrivateHandler()
 	}
 	peer := workerlink.New(resp.Body, writer, cancel, d.Worker.LinkHandler(handler))
-	return peer.Run(ctx)
+	monitorDone := make(chan struct{})
+	go func() { defer close(monitorDone); d.watchLeg(ctx, peer, address, ready) }()
+	err = peer.Run(ctx)
+	cancel()
+	<-monitorDone
+	return err
+}
+
+func (d *DialOut) watchLeg(ctx context.Context, peer *workerlink.Peer, bound netip.AddrPort, ready LinkReady) {
+	client := &http.Client{Transport: peer, Timeout: privateapi.Timeout}
+	if ready.Activate {
+		if err := privateapi.Do(ctx, client, "http://control", http.MethodPost, "/leg-ready", LinkAddress{Address: ready.Address}, nil, nil); err != nil {
+			d.connected = false
+			peer.Close()
+			return
+		}
+	}
+	for {
+		if bound != d.Worker.LocalAddr() {
+			if err := privateapi.Do(ctx, client, "http://control", http.MethodPost, "/leg-address", LinkAddress{Address: bound}, nil, nil); err == nil {
+				peer.Close()
+				return
+			}
+		}
+		var err error
+		bound, err = d.Worker.WaitRelayObservation(ctx)
+		if err != nil {
+			return
+		}
+	}
 }

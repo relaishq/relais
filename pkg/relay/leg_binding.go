@@ -9,8 +9,10 @@ import (
 )
 
 type legBinding struct {
-	address netip.AddrPort
-	expires time.Time
+	address  netip.AddrPort
+	expires  time.Time
+	observed netip.AddrPort
+	drainFor netip.AddrPort
 }
 
 // ExpectWorker admits only a hello, never media or a route. Control must still
@@ -52,6 +54,7 @@ func (r *Relay) AddBoundWorker(address netip.AddrPort, token string) error {
 		}
 	}
 	b.expires = time.Time{}
+	b.drainFor = netip.AddrPort{}
 	r.bindings[token] = b
 	r.registry[address] = struct{}{}
 	return nil
@@ -79,9 +82,45 @@ func (r *Relay) observeLeg(token string, from netip.AddrPort) bool {
 	defer r.registryMu.Unlock()
 	b, known := r.bindings[token]
 	valid := known && (b.expires.IsZero() || time.Now().Before(b.expires))
-	if valid && !b.address.IsValid() {
-		b.address = from
+	if valid {
+		if !b.address.IsValid() {
+			b.address = from
+		}
+		b.observed = from
 		r.bindings[token] = b
 	}
 	return valid
+}
+
+// PrepareRebind authorizes only drain barriers, never media or lease routes.
+// The relay must have observed To under this control-issued token.
+func (r *Relay) PrepareRebind(from, to netip.AddrPort, token string) error {
+	r.registryMu.Lock()
+	defer r.registryMu.Unlock()
+	b, ok := r.bindings[token]
+	if !ok || b.observed != to || !b.expires.IsZero() && time.Now().After(b.expires) {
+		return errors.New("relay: unobserved rebind address")
+	}
+	if _, ok := r.registry[from]; !ok {
+		return errors.New("relay: rebind source not registered")
+	}
+	if _, ok := r.registry[to]; ok && to != from {
+		return errors.New("relay: rebind address already registered")
+	}
+	if r.drainTargets == nil {
+		r.drainTargets = make(map[netip.AddrPort]netip.AddrPort)
+	}
+	r.drainTargets[from] = to
+	b.expires = time.Time{}
+	b.drainFor = from
+	r.bindings[token] = b
+	return nil
+}
+func (r *Relay) barrierEndpoint(from netip.AddrPort) netip.AddrPort {
+	r.registryMu.RLock()
+	defer r.registryMu.RUnlock()
+	if to := r.drainTargets[from]; to.IsValid() {
+		return to
+	}
+	return from
 }

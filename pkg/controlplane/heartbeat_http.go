@@ -26,7 +26,7 @@ func (p *Plane) remoteHeartbeat(name string, req HeartbeatRequest) (HeartbeatRep
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	w := p.workers[name]
-	if w == nil || w.addr != req.Address {
+	if w == nil || w.addr != req.Address && w.previousAddr != req.Address {
 		return HeartbeatReply{}, errors.New("controlplane: unknown worker heartbeat")
 	}
 	before := w.observation.knowledge()

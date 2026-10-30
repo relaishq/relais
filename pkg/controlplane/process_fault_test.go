@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,6 +98,7 @@ func newHTTPSystem(t *testing.T, source, target, routing *lostReply, counts ...i
 }
 
 type httpSystemSettings struct {
+	sourceLeg           func(netip.AddrPort) netip.AddrPort
 	dialOut             bool
 	dropLinkExport      *atomic.Bool
 	sourceLinkResumes   *atomic.Uint64
@@ -146,7 +148,11 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 		if i < len(settings.workerStores) && settings.workerStores[i] != nil {
 			workerStore = settings.workerStores[i]
 		}
-		w, err := mediaworker.New(mediaworker.Config{ListenAddr: "127.0.0.1:0", Agent: settings.agent, FrameCache: settings.cache, PacketTrace: settings.packetTrace, Relay: &mediaworker.RelayConfig{Addr: r.WorkerAddr(), PublicAddr: r.PublicAddr(), Owners: workerStore, DialOut: settings.dialOut && i == 0}})
+		leg := r.WorkerAddr()
+		if i == 0 && settings.sourceLeg != nil {
+			leg = settings.sourceLeg(leg)
+		}
+		w, err := mediaworker.New(mediaworker.Config{ListenAddr: "127.0.0.1:0", Agent: settings.agent, FrameCache: settings.cache, PacketTrace: settings.packetTrace, Relay: &mediaworker.RelayConfig{Addr: leg, PublicAddr: r.PublicAddr(), Owners: workerStore, DialOut: settings.dialOut && i == 0}})
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, w.Close()) })
 		ws := httptest.NewServer(w.PrivateHandler())
@@ -209,6 +215,7 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 		})}
 		stopped := make(chan struct{})
 		go func() { defer close(stopped); _ = link.Run(linkCtx) }()
+		go system.workers[0].KeepRelayBinding(linkCtx)
 		t.Cleanup(func() { stop(); <-stopped })
 		select {
 		case <-link.Ready:

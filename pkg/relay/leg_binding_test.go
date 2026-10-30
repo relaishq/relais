@@ -4,6 +4,10 @@ import (
 	"net/netip"
 	"testing"
 	"time"
+
+	"github.com/relaishq/relais/pkg/sessionstore"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestLegBindingNeedsControlConfirmation(t *testing.T) {
@@ -64,4 +68,24 @@ func TestReconnectReplacesLegTokenWithoutLeakingCapacity(t *testing.T) {
 	if len(r.bindings) != 1 {
 		t.Fatal("reconnect retained obsolete binding tokens")
 	}
+}
+
+func TestRebindAuthorizesBarriersWithoutMovingMedia(t *testing.T) {
+	r, err := New(Config{PublicAddr: "127.0.0.1:0", WorkerAddr: "127.0.0.1:0", Owners: sessionstore.NewMemory()})
+	require.NoError(t, err)
+	defer func() { _ = r.Close() }()
+	old := netip.MustParseAddrPort("127.0.0.1:17001")
+	next := netip.MustParseAddrPort("127.0.0.1:17002")
+	token := "00112233445566778899aabbccddeeff"
+	r.AddWorker(old)
+	require.NoError(t, r.ExpectWorker(token))
+	require.Error(t, r.PrepareRebind(old, next, token), "an unobserved endpoint must not get drain authority")
+	require.True(t, r.observeLeg(token, next))
+	require.Equal(t, old, r.barrierEndpoint(old), "UDP observations alone cannot change drain routing")
+	require.NoError(t, r.PrepareRebind(old, next, token))
+	require.Equal(t, next, r.barrierEndpoint(old))
+	require.True(t, r.registered(old))
+	require.False(t, r.registered(next), "drain authorization must not permit media")
+	r.RemoveWorker(old)
+	require.Equal(t, old, r.barrierEndpoint(old))
 }

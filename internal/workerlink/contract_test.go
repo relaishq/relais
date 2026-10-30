@@ -20,6 +20,8 @@ func TestLinkContractGolden(t *testing.T) {
 		{Kind: "request", ID: 7, Timeout: 123456789, Method: "POST", Path: "/sessions/call/export", Epoch: 9},
 		{Kind: "reply", ID: 7, Status: 200, Body: []byte(`{"state":"AQID"}`)},
 		{Kind: "request", ID: 8, Timeout: 123456789, Method: "POST", Path: "/resume", Body: []byte("chunk"), More: true},
+		{Kind: "request", ID: 11, Timeout: 123456789, Method: "POST", Path: "/leg-address", Body: []byte(`{"address":"192.0.2.2:17001"}`)},
+		{Kind: "request", ID: 12, Timeout: 123456789, Method: "POST", Path: "/leg-ready", Body: []byte(`{"address":"192.0.2.2:17001"}`)},
 		{Kind: "ping"},
 		{Kind: "reply", ID: 9, Error: "not_applied"},
 		{Kind: "reply", ID: 10, Error: "uncertain"},
@@ -39,7 +41,7 @@ func TestLinkContractGolden(t *testing.T) {
 		"hello":   controlplane.LinkHello{Instance: "instance", Sequence: 2, Release: "0.0.0-test", Contract: workerlink.ContractVersion, DeathCycle: 3, Status: mediaworker.WorkerStatus{InventoryKnown: true, Inventory: []mediaworker.InstalledSession{{ID: "call", Epoch: 9, Owner: netip.MustParseAddrPort("192.0.2.1:17001")}}}},
 		"welcome": controlplane.LinkWelcome{Token: "00112233445566778899aabbccddeeff", DeathCycle: 3},
 		"address": controlplane.LinkAddress{Address: netip.MustParseAddrPort("192.0.2.1:17001")},
-		"ready":   struct{}{},
+		"ready":   controlplane.LinkReady{Address: netip.MustParseAddrPort("192.0.2.1:17001"), Activate: true},
 	} {
 		var b bytes.Buffer
 		if err := workerlink.WriteValue(&b, kind, value); err != nil {

@@ -377,6 +377,7 @@ type Relay struct {
 	registryMu   sync.RWMutex
 	registry     map[netip.AddrPort]struct{}
 	bindings     map[string]legBinding
+	drainTargets map[netip.AddrPort]netip.AddrPort
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -645,7 +646,7 @@ func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort) {
 	h.drainNonce = binary.BigEndian.Uint64(nonce[:])
 	drained := make(chan struct{})
 	h.drained = drained
-	_, err := r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.drainNonce, false), from)
+	_, err := r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.drainNonce, false), r.barrierEndpoint(from))
 	r.forwardMu.Unlock()
 	if err != nil {
 		return
@@ -663,7 +664,7 @@ func (r *Relay) drainExportedOutput(id string, from, to netip.AddrPort) {
 			// A lost marker or acknowledgement is resent with the same nonce.
 			r.forwardMu.Lock()
 			if r.holds[id] == h && h.drained == drained {
-				_, _ = r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.drainNonce, false), from)
+				_, _ = r.workers.WriteToUDPAddrPort(relayleg.Barrier(h.drainNonce, false), r.barrierEndpoint(from))
 			}
 			r.forwardMu.Unlock()
 		case <-timer.C:
@@ -720,8 +721,9 @@ func (r *Relay) RemoveWorker(worker netip.AddrPort) {
 	r.registryMu.Lock()
 	defer r.registryMu.Unlock()
 	delete(r.registry, unmap(worker))
+	delete(r.drainTargets, unmap(worker))
 	for token, b := range r.bindings {
-		if b.address == unmap(worker) {
+		if b.address == unmap(worker) || b.drainFor == unmap(worker) {
 			delete(r.bindings, token)
 		}
 	}
@@ -1028,18 +1030,18 @@ func (r *Relay) workerLoop() {
 		if r.legBinding(buf[:n], from) {
 			continue
 		}
-		if !r.registered(from) {
-			r.unknownWorker.Add(1)
-
-			continue
-		}
-
 		if id, ack, ok := relayleg.ParseBarrier(buf[:n]); ok {
 			if ack {
 				r.acknowledgeBarrier(id, from)
 			}
 			continue
 		}
+		if !r.registered(from) {
+			r.unknownWorker.Add(1)
+
+			continue
+		}
+
 		caller, pkt, err := ParseHeader(buf[:n])
 		if err != nil {
 			r.malformed.Add(1)

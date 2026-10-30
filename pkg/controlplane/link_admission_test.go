@@ -28,19 +28,24 @@ type admissionRig struct {
 	addr   netip.AddrPort
 }
 type admissionStream struct {
+	ready  LinkReady
 	body   io.ReadCloser
 	writer *io.PipeWriter
 	cancel context.CancelFunc
 }
 
-func newAdmissionRig(t *testing.T, relayHandler http.Handler) *admissionRig {
+func newAdmissionRig(t *testing.T, relayHandler http.Handler, stores ...sessionstore.Store) *admissionRig {
 	t.Helper()
 	if relayHandler == nil {
 		relayHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	}
 	relayServer := httptest.NewServer(relayHandler)
 	t.Cleanup(relayServer.Close)
-	p := New(nil, sessionstore.NewMemory())
+	var store sessionstore.Store = sessionstore.NewMemory()
+	if len(stores) > 0 {
+		store = stores[0]
+	}
+	p := New(nil, store)
 	links := p.ConfigureDialOut([]string{"a"}, &RemoteRelay{URL: relayServer.URL})
 	server := httptest.NewUnstartedServer(links.Handler(p.ProcessHandler()))
 	protocols := new(http.Protocols)
@@ -87,12 +92,12 @@ func (r *admissionRig) open(t *testing.T, instance string, sequence, cycle uint6
 	if err := workerlink.WriteValue(writer, "address", LinkAddress{Address: addr}); err != nil {
 		return nil, err
 	}
-	var ready struct{}
+	var ready LinkReady
 	if err := workerlink.ReadValue(res.resp.Body, "ready", &ready); err != nil {
 		cancel()
 		return nil, err
 	}
-	return &admissionStream{body: res.resp.Body, writer: writer, cancel: cancel}, nil
+	return &admissionStream{ready: ready, body: res.resp.Body, writer: writer, cancel: cancel}, nil
 }
 func (s *admissionStream) run(handler http.Handler) *workerlink.Peer {
 	peer := workerlink.New(s.body, s.writer, s.cancel, handler)

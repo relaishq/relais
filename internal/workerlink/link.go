@@ -19,7 +19,7 @@ import (
 	"github.com/relaishq/relais/internal/privateapi"
 )
 
-const ContractVersion = 1
+const ContractVersion = 2
 const ChunkSize = 32 << 10 // JSON base64 plus metadata stays below 64 KiB.
 const MaxFrame = 64 << 10
 const MaxConcurrent = 64
@@ -90,47 +90,43 @@ func Write(w io.Writer, m Message) error {
 // Peer serves the existing handler and/or acts as an http.RoundTripper. Close
 // must interrupt its reader and writer (the HTTP request/response stream).
 type Peer struct {
-	reader    io.Reader
-	writer    io.Writer
-	interrupt func()
-	handler   http.Handler
-	writeMu   sync.Mutex
-	mu        sync.Mutex
-	pending   map[uint64]chan Message
-	next      atomic.Uint64
-	last      atomic.Int64
-	done      chan struct{}
-	once      sync.Once
+	reader      io.Reader
+	writer      io.Writer
+	interrupt   func()
+	handler     http.Handler
+	writeMu     sync.Mutex
+	mu          sync.Mutex
+	pending     map[uint64]chan Message
+	replyMu     sync.Mutex
+	replyBytes  int
+	replyClosed bool
+	replies     chan Message
+	replySlots  chan struct{}
+	next        atomic.Uint64
+	last        atomic.Int64
+	done        chan struct{}
+	once        sync.Once
 }
 
 func New(r io.Reader, w io.Writer, interrupt func(), handler http.Handler) *Peer {
-	p := &Peer{reader: r, writer: w, interrupt: interrupt, handler: handler, pending: make(map[uint64]chan Message), done: make(chan struct{})}
+	p := &Peer{reader: r, writer: w, interrupt: interrupt, handler: handler, pending: make(map[uint64]chan Message), replies: make(chan Message, MaxQueuedReplies), replySlots: make(chan struct{}, MaxQueuedReplies), done: make(chan struct{})}
 	p.last.Store(time.Now().UnixNano())
 	return p
 }
 func (p *Peer) Done() <-chan struct{} { return p.done }
-func (p *Peer) Close()                { p.once.Do(func() { close(p.done); p.interrupt() }) }
+func (p *Peer) Close() {
+	p.once.Do(func() { p.replyMu.Lock(); p.replyClosed = true; p.replyMu.Unlock(); close(p.done); p.interrupt() })
+}
 
 func (p *Peer) send(m Message, deadline time.Time) error {
 	body := m.Body
 	for {
 		n := min(len(body), ChunkSize)
 		m.Body, m.More = body[:n], len(body) > n
-		p.writeMu.Lock()
-		select {
-		case <-p.done:
-			p.writeMu.Unlock()
-			return ErrUnavailable
-		default:
-		}
-		if !deadline.IsZero() {
-			m.Timeout = int64(time.Until(deadline))
-			deadline = time.Time{} // Keep identical metadata on later chunks.
-		}
-		err := Write(p.writer, m)
-		p.writeMu.Unlock()
+		var err error
+		m, err = p.writeFrame(m, deadline)
+		deadline = time.Time{}
 		if err != nil {
-			p.Close()
 			return err
 		}
 		if !m.More {
@@ -145,6 +141,9 @@ func (p *Peer) send(m Message, deadline time.Time) error {
 // pings as well as transport HTTP/2 health checks, so a live connection cannot
 // hide a stalled command stream.
 func (p *Peer) Run(ctx context.Context) error {
+	replyDone := make(chan struct{})
+	go func() { defer close(replyDone); p.writeReplies() }()
+	defer func() { p.Close(); <-replyDone }()
 
 	//nolint:staticcheck // Joining the writer prevents ResponseWriter use after the link handler returns.
 	defer func() { p.Close(); p.writeMu.Lock(); p.writeMu.Unlock() }()
@@ -186,7 +185,15 @@ func (p *Peer) Run(ctx context.Context) error {
 			}
 		}
 	}()
-	partial := make(map[uint64]Message)
+	type incoming struct {
+		message  Message
+		deadline time.Time
+	}
+	type messageKey struct {
+		kind string
+		id   uint64
+	}
+	partial := make(map[messageKey]incoming)
 	slots := make(chan struct{}, MaxConcurrent)
 	for {
 		m, err := Read(p.reader)
@@ -200,7 +207,14 @@ func (p *Peer) Run(ctx context.Context) error {
 		if m.Kind != "request" && m.Kind != "reply" {
 			return errors.New("workerlink: unexpected message")
 		}
-		if old, ok := partial[m.ID]; ok {
+		key := messageKey{m.Kind, m.ID}
+		deadline := time.Time{}
+		if m.Kind == "request" && m.Timeout > 0 && m.Timeout <= int64(privateapi.Timeout) {
+			deadline = time.Now().Add(time.Duration(m.Timeout))
+		}
+		if value, ok := partial[key]; ok {
+			old := value.message
+			deadline = value.deadline
 			if old.Kind != m.Kind || old.Method != m.Method || old.Path != m.Path || old.Timeout != m.Timeout || old.Error != m.Error || old.Epoch != m.Epoch || old.Status != m.Status {
 				return errors.New("workerlink: changed chunk header")
 			}
@@ -210,14 +224,14 @@ func (p *Peer) Run(ctx context.Context) error {
 			return errors.New("workerlink: body too large")
 		}
 		if m.More {
-			_, continuing := partial[m.ID]
+			_, continuing := partial[key]
 			if !continuing && len(partial) >= MaxConcurrent {
 				return errors.New("workerlink: too many partial messages")
 			}
-			partial[m.ID] = m
+			partial[key] = incoming{m, deadline}
 			continue
 		}
-		delete(partial, m.ID)
+		delete(partial, key)
 		if m.Kind == "reply" {
 			p.mu.Lock()
 			reply := p.pending[m.ID]
@@ -236,24 +250,24 @@ func (p *Peer) Run(ctx context.Context) error {
 		select {
 		case slots <- struct{}{}:
 		default:
-			_ = p.send(Message{Kind: "reply", ID: m.ID, Error: "not_applied"}, time.Time{})
+			p.queueReply(Message{Kind: "reply", ID: m.ID, Error: "not_applied"})
 			continue
 		}
 		go func(m Message) {
-			reply := p.serve(ctx, m)
+			reply := p.serve(ctx, m, deadline)
 			<-slots // Handler capacity is independent of reply backpressure.
-			_ = p.send(reply, time.Time{})
+			p.queueReply(reply)
 		}(m)
 	}
 }
 
-func (p *Peer) serve(ctx context.Context, m Message) Message {
+func (p *Peer) serve(ctx context.Context, m Message, deadline time.Time) Message {
 	reply := Message{Kind: "reply", ID: m.ID}
-	if m.Timeout <= 0 || m.Timeout > int64(privateapi.Timeout) {
+	if deadline.IsZero() || !time.Now().Before(deadline) {
 		reply.Error = "not_applied"
 		return reply
 	}
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(m.Timeout))
+	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, m.Method, "http://worker"+m.Path, bytes.NewReader(m.Body))
 	if err != nil || ctx.Err() != nil {
@@ -264,9 +278,10 @@ func (p *Peer) serve(ctx context.Context, m Message) Message {
 	if m.Epoch != 0 {
 		req.Header.Set("X-Relais-Epoch", fmtEpoch(m.Epoch))
 	}
-	recorder := &responseBuffer{header: make(http.Header), code: http.StatusOK}
+	recorder := &responseBuffer{header: make(http.Header), code: http.StatusOK, reserve: p.reserveReply}
 	p.handler.ServeHTTP(recorder, req)
 	if recorder.overflow {
+		p.releaseReply(recorder.body.Len())
 		reply.Error = "uncertain"
 		return reply
 	}
@@ -357,12 +372,13 @@ type responseBuffer struct {
 	code     int
 	body     bytes.Buffer
 	overflow bool
+	reserve  func(int) bool
 }
 
 func (b *responseBuffer) Header() http.Header  { return b.header }
 func (b *responseBuffer) WriteHeader(code int) { b.code = code }
 func (b *responseBuffer) Write(data []byte) (int, error) {
-	if len(data) > privateapi.MaxBody-b.body.Len() {
+	if len(data) > privateapi.MaxBody-b.body.Len() || b.reserve != nil && !b.reserve(len(data)) {
 		b.overflow = true
 		return 0, errors.New("workerlink: response too large")
 	}

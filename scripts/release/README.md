@@ -49,9 +49,9 @@ own `relais-compat preflight` before every step, and keeps `release-pair-verdict
 for the `0.3.0`/`0.3.1` nomination example and offline inventory sources.
 
 Dial-out is additive within manifest schema 2. Inbound profiles keep HTTP v2
-request bodies and UDP v1 media writes; new readers also understand HTTP v3 and
+request bodies and UDP v1 media writes; new readers also understand HTTP v3/v4 and
 UDP v2. Optional response fields do not change the inbound request contract.
-The `dial-out` worker profile selects command-link v1 and leg binding. Control
+The `dial-out` worker profile selects command-link v2 and controlled leg rebinding. Control
 and relay advertise matching `dial-out` capability profiles. Preflight requires
 those capabilities on every control and relay before admitting a dial-out pool,
 refuses rollback below them while a dial-out worker is registered, and preserves
@@ -64,3 +64,18 @@ schema-2 readers validate every profile, including unselected profiles. Adding a
 new domain or top-level field would prevent an older target's own preflight from
 reading an inbound-only pool during rollback. The command-link layout has its
 own versioned fixture in `internal/workerlink/testdata/`.
+
+The local dial-out process smoke uses the built worker, control and relay binaries
+with a dedicated Redis. It checks 20 planned moves, control restart with the same
+worker processes, and SIGKILL takeover. It does not replace the full consent and
+repeated crash gates:
+
+```sh
+make build
+RELAIS_TEST_DIAL_OUT_PROCESS=1 RELAIS_TEST_REDIS_ADDR=127.0.0.1:16379 \
+  RELAIS_TEST_REDIS_REQUIRE=1 go test -race -v -count=1 -timeout 2m \
+  -run '^TestDialOutProcessMoveRestartAndSIGKILL$' ./cmd/crash-run
+```
+
+Start your own disposable Redis on that address first. Set
+`RELAIS_TEST_KEEP_PROCESS_LOGS=1` to retain successful process logs under `bin/`.

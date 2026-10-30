@@ -78,3 +78,22 @@ func TestDialOutRequiresRelayAndControlCapability(t *testing.T) {
 	pool.TargetWorkerProfile = "dial-out"
 	requireRefused(t, Preflight(pool, next, "upgrade"), "worker_mode_change")
 }
+
+func TestDialOutRequiresRebindingContract(t *testing.T) {
+	for _, role := range []string{"worker", "relay", "control"} {
+		t.Run(role, func(t *testing.T) {
+			m := testManifest(t, "0.3.2")
+			pool := testPool(m)
+			pool.Participants[1].Profile = "dial-out"
+			for i := range pool.Participants {
+				if pool.Participants[i].Role == role {
+					pool.Participants[i].Manifest.HTTPContract = 3
+					break
+				}
+			}
+			if err := checkState(pool.Participants, nil); err == nil || !strings.Contains(err.Error(), "dial_out_unsupported") {
+				t.Fatalf("old %s command-link contract permitted: %v", role, err)
+			}
+		})
+	}
+}
