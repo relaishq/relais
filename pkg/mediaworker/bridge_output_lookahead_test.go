@@ -256,31 +256,37 @@ func TestBridgeOutputHeadroomProfileValidation(t *testing.T) {
 func TestBridgeOutputCreditBatchFits(t *testing.T) {
 	for _, size := range []int{160, 1200} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
-			rig, scope := newBridgeRig(t, false)
-			s := rig.s
-			credit, err := s.worker.BridgeOutputCredit(scope)
-			require.NoError(t, err)
-			count := min(credit.PacketSlots, credit.PayloadBytes/size)
-			replies := make(chan BridgeOutputReceipt, count)
-			for n := 1; n <= count; n++ {
-				seq := uint64(n)
-				go func() {
-					r, e := s.worker.SubmitBridgeOutput(context.Background(), scope, 1, seq, bridgePacket(size))
-					if e != nil {
-						t.Error(e)
-					}
-					replies <- r
-				}()
-				require.Eventually(t, func() bool { return len(s.agent.v2.bridge.ingress) == n }, time.Second, time.Millisecond)
-			}
-			startBridgeLoop(t, s)
-			for range count {
-				require.Equal(t, "admitted", (<-replies).Outcome)
-			}
-			s.mu.Lock()
-			cost, budget := s.bridgeExportCostLocked(), s.bridgeLookaheadBudget()
-			s.mu.Unlock()
-			require.LessOrEqual(t, cost, budget)
+			synctest.Test(t, func(t *testing.T) {
+				rig, scope := newBridgeRig(t, false)
+				s := rig.s
+				credit, err := s.worker.BridgeOutputCredit(scope)
+				require.NoError(t, err)
+				count := min(credit.PacketSlots, credit.PayloadBytes/size)
+				require.Positive(t, count)
+				replies := make(chan BridgeOutputReceipt, count)
+				for n := 1; n <= count; n++ {
+					seq := uint64(n)
+					go func() {
+						r, e := s.worker.SubmitBridgeOutput(context.Background(), scope, 1, seq, bridgePacket(size))
+						if e != nil {
+							t.Error(e)
+						}
+						replies <- r
+					}()
+					// Queue in sequence without advancing the admission clock.
+					synctest.Wait()
+					require.Len(t, s.agent.v2.bridge.ingress, n)
+				}
+				startBridgeLoop(t, s)
+				for range count {
+					receipt := <-replies
+					require.Equal(t, "admitted", receipt.Outcome, "%+v", receipt)
+				}
+				s.mu.Lock()
+				cost, budget := s.bridgeExportCostLocked(), s.bridgeLookaheadBudget()
+				s.mu.Unlock()
+				require.LessOrEqual(t, cost, budget)
+			})
 		})
 	}
 }

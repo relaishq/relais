@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/relaishq/relais/internal/processidentity"
@@ -196,29 +197,32 @@ func TestPlainRestartAfterUnknownClaimBeforeActivation(t *testing.T) {
 	}
 }
 func TestFenceFailurePreventsActivationAndBinding(t *testing.T) {
-	for _, failure := range []error{processidentity.ErrExecutable, errors.New("permission denied")} {
-		s := sessionstore.NewMemory()
-		a, err := s.ClaimRelay(context.Background(), "one", process("a"), time.Millisecond)
-		require.NoError(t, err)
-		_, err = s.ActivateRelay(context.Background(), a)
-		require.NoError(t, err)
-		time.Sleep(3 * time.Millisecond)
-		cfg := config(s)
-		signals := 0
-		cfg.Fence = func(context.Context, processidentity.Identity) error { signals++; return failure }
-		bound := false
-		g, err := Acquire(context.Background(), cfg)
-		if err == nil {
-			bound = true
-			g.Close()
+	synctest.Test(t, func(t *testing.T) {
+		for _, failure := range []error{processidentity.ErrExecutable, errors.New("permission denied")} {
+			// Keep activation before expiry, then expire the lease explicitly.
+			s := sessionstore.NewMemory()
+			a, err := s.ClaimRelay(context.Background(), "one", process("a"), time.Millisecond)
+			require.NoError(t, err)
+			_, err = s.ActivateRelay(context.Background(), a)
+			require.NoError(t, err)
+			time.Sleep(3 * time.Millisecond)
+			cfg := config(s)
+			signals := 0
+			cfg.Fence = func(context.Context, processidentity.Identity) error { signals++; return failure }
+			bound := false
+			g, err := Acquire(context.Background(), cfg)
+			if err == nil {
+				bound = true
+				g.Close()
+			}
+			require.ErrorIs(t, err, failure)
+			require.False(t, bound)
+			require.Equal(t, 1, signals)
+			record, err := s.GetRelay(context.Background(), "one")
+			require.NoError(t, err)
+			require.Equal(t, a.Holder, record.Forwarder)
 		}
-		require.ErrorIs(t, err, failure)
-		require.False(t, bound)
-		require.Equal(t, 1, signals)
-		record, err := s.GetRelay(context.Background(), "one")
-		require.NoError(t, err)
-		require.Equal(t, a.Holder, record.Forwarder)
-	}
+	})
 }
 
 type unavailable struct {
