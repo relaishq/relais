@@ -37,7 +37,7 @@ func TestRepeatedLegObservationNeedsNoJournalWrite(t *testing.T) {
 	client := &http.Client{Transport: peer}
 	next := netip.MustParseAddrPort("127.0.0.1:17002")
 	require.NoError(t, reportLeg(context.Background(), client, next))
-	<-store.entered
+	receiveLinkTest(t, store.entered, "blocked rebind drain")
 	store.refuseWrites.Store(true)
 	require.NoError(t, reportLeg(context.Background(), client, next), "unchanged keepalive must not rewrite the durable drain target")
 	store.refuseWrites.Store(false)

@@ -90,7 +90,7 @@ func TestRebindDrainOutlivesCommandBudget(t *testing.T) {
 	}
 	ack := make(chan error, 1)
 	go func() { ack <- report() }()
-	<-store.entered
+	receiveLinkTest(t, store.entered, "detached drain store entry")
 	select {
 	case err := <-ack:
 		require.NoError(t, err)
@@ -119,12 +119,12 @@ func TestShutdownCancelsDetachedRebind(t *testing.T) {
 	store.enabled.Store(true)
 	client := &http.Client{Transport: peer}
 	require.NoError(t, privateapi.Do(context.Background(), client, "http://control", "POST", "/leg-address", LinkAddress{Address: netip.MustParseAddrPort("127.0.0.1:17002")}, nil, RemoteErrors))
-	<-store.entered
+	receiveLinkTest(t, store.entered, "detached drain store entry")
 	stopped := make(chan struct{})
 	go func() { r.p.BeginShutdown(); close(stopped) }()
 	select {
 	case <-stopped:
-	case <-time.After(2 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("shutdown did not cancel and join the detached drain")
 	}
 }

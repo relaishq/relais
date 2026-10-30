@@ -24,7 +24,11 @@ func TestDialOutProcessFullConsent(t *testing.T) {
 			killed := time.Now()
 			r.harness.RecordProcessKill("0", killed)
 			require.NoError(t, r.topology.workers[0].Child.SignalGroup(syscall.SIGKILL))
-			<-r.topology.workers[0].Child.Done()
+			select {
+			case <-r.topology.workers[0].Child.Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("killed worker did not exit")
+			}
 			s, err := r.topology.waitControl(r.ctx, 2*time.Second, "worker takeover", func(s controlplane.Status) bool { return len(s.Takeovers) == 1 })
 			require.NoError(t, err)
 			takeover := time.Since(killed)
@@ -63,7 +67,11 @@ func TestDialOutProcessCrashWithLinkDown(t *testing.T) {
 	killed := time.Now()
 	r.harness.RecordProcessKill("0", killed)
 	require.NoError(t, r.topology.workers[0].Child.SignalGroup(syscall.SIGKILL))
-	<-r.topology.workers[0].Child.Done()
+	select {
+	case <-r.topology.workers[0].Child.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("killed worker did not exit")
+	}
 	s, err := r.topology.waitControl(r.ctx, 2*time.Second, "worker takeover with link down", func(s controlplane.Status) bool { return len(s.Takeovers) == 1 })
 	require.NoError(t, err)
 	takeover := time.Since(killed)

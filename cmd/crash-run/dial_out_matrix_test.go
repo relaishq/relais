@@ -336,7 +336,14 @@ func (r *dialProcessRig) caller(t *testing.T, duration time.Duration) *callharne
 	ctx, stop := context.WithCancel(r.ctx)
 	sent := make(chan error, 1)
 	go func() { sent <- c.SendMedia(ctx, duration) }()
-	t.Cleanup(func() { stop(); <-sent })
+	t.Cleanup(func() {
+		stop()
+		select {
+		case <-sent:
+		case <-time.After(5 * time.Second):
+			t.Error("caller media sender did not stop")
+		}
+	})
 	time.Sleep(600 * time.Millisecond)
 	return c
 }
@@ -433,8 +440,8 @@ func TestDialOutProcessShutdownDuringDrain(t *testing.T) {
 			intents, err = r.store.ControlIntents(r.ctx)
 			require.NoError(t, err)
 			require.Empty(t, intents, "successor must reconcile the interrupted intent")
-			// Match crash-run's post-takeover observation before another move:
-			// observe recovered media before starting the next phase.
+			// Space the later moves to avoid the open immediate-move decoder
+			// gap tracked in https://github.com/relaishq/relais/issues/306.
 			time.Sleep(2 * time.Second)
 			require.NoError(t, c.MoveExternal(r.ctx, 0))
 			time.Sleep(200 * time.Millisecond)

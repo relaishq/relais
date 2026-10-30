@@ -8,10 +8,23 @@ import (
 	"net/netip"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/relaishq/relais/internal/privateapi"
 	"github.com/relaishq/relais/pkg/sessionstore"
 )
+
+func receiveLinkTest[T any](t *testing.T, ch <-chan T, what string) T {
+	t.Helper()
+	select {
+	case value := <-ch:
+		return value
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+		var zero T
+		return zero
+	}
+}
 
 // Exercise the same HTTP handlers and framed streams without opening listeners.
 // Socket/process tests remain separate acceptance evidence.

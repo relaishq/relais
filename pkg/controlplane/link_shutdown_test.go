@@ -102,15 +102,15 @@ func TestShutdownFinishesMoveBeforeClosingLink(t *testing.T) {
 			require.NoError(t, err)
 			// A failed journal clear leaves actual durable work for the successor.
 			store.retain.Store(true)
+			var release sync.Once
+			t.Cleanup(func() { release.Do(func() { close(source.exportGate) }) })
 			moved := make(chan error, 1)
 			if automatic {
 				require.NoError(t, reportLeg(context.Background(), &http.Client{Transport: peer}, netip.MustParseAddrPort("127.0.0.1:17002")))
 			} else {
 				go func() { _, err := r.p.Move(context.Background(), id, "b"); moved <- err }()
 			}
-			<-source.exported
-			var release sync.Once
-			t.Cleanup(func() { release.Do(func() { close(source.exportGate) }) })
+			receiveLinkTest(t, source.exported, "applied export")
 			stopped := make(chan struct{})
 			go func() { r.p.BeginShutdown(); close(stopped) }()
 			select {
@@ -125,11 +125,13 @@ func TestShutdownFinishesMoveBeforeClosingLink(t *testing.T) {
 				t.Fatal("shutdown did not join the move")
 			}
 			if !automatic {
-				require.NoError(t, <-moved)
+				require.NoError(t, receiveLinkTest(t, moved, "operator move completion"))
 			}
 			lease, err := store.Get(context.Background(), id)
 			require.NoError(t, err)
-			require.True(t, source.runs(id) || target.runs(id))
+			require.True(t, target.runs(id), "shutdown must finish the applied move on its target")
+			require.False(t, source.runs(id), "shutdown must not roll the applied move back")
+			require.Equal(t, target.addr, lease.Worker)
 			intents, err := store.ControlIntents(context.Background())
 			require.NoError(t, err)
 			require.Len(t, intents, 1)
@@ -146,6 +148,14 @@ func TestShutdownFinishesMoveBeforeClosingLink(t *testing.T) {
 			stream, err = next.openWorker(t, "b", "B", 2, 0, target.addr)
 			require.NoError(t, err)
 			stream.run(unitWorkerHandler(target))
+			// Ready-frame delivery can precede server-side link availability.
+			// Establish both surviving command paths before testing rebuild.
+			for _, name := range []string{"a", "b"} {
+				require.Eventually(t, func() bool {
+					_, err := next.links.entries[name].remote.Status(context.Background())
+					return err == nil
+				}, 5*time.Second, 10*time.Millisecond, "successor link %s", name)
+			}
 			require.NoError(t, next.p.rebuild(context.Background(), []FixedWorker{{Name: "a", URL: "dial-out"}, {Name: "b", URL: "dial-out"}}))
 			intents, err = store.ControlIntents(context.Background())
 			require.NoError(t, err)

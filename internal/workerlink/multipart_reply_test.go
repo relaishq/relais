@@ -16,14 +16,19 @@ func TestMultipartRepliesDoNotWaitOnEachOther(t *testing.T) {
 	finish := make(chan struct{})
 	errors := make(chan error, 8)
 	part := make([]byte, privateapi.MaxBody/2)
-	peer := New(reader, io.Discard, func() { _ = reader.Close() }, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	peer := New(reader, io.Discard, func() { _ = reader.Close() }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, err := w.Write(part)
 		if err != nil {
 			errors <- err
 			return
 		}
 		first <- struct{}{}
-		<-finish
+		select {
+		case <-finish:
+		case <-r.Context().Done():
+			errors <- r.Context().Err()
+			return
+		}
 		_, err = w.Write(part)
 		errors <- err
 	}))

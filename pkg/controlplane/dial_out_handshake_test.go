@@ -34,9 +34,17 @@ func TestDialOutHandshakeDeadlineInterruptsBodyRead(t *testing.T) {
 		cancel()
 		_ = writer.Close()
 		if !finished {
-			<-done
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Error("handshake did not stop after closing its body")
+			}
 		}
-		<-uploaded
+		select {
+		case <-uploaded:
+		case <-time.After(3 * time.Second):
+			t.Error("handshake upload did not stop")
+		}
 	}()
 	d := &DialOut{Worker: w, URL: "http://control", Name: "worker", instance: "process"}
 	go func() {

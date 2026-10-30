@@ -365,7 +365,6 @@ func (l *WorkerLinks) Close() {
 	l.closeOnce.Do(func() {
 		l.jobsMu.Lock()
 		l.stopping.Store(true)
-		l.cancel()
 		l.jobsMu.Unlock()
 		settled := make(chan struct{})
 		go func() { l.jobs.Wait(); close(settled) }()
@@ -375,6 +374,9 @@ func (l *WorkerLinks) Close() {
 		case <-settled:
 		case <-timer.C:
 		}
+		// Started drain moves keep their context until they finish or the join
+		// expires. Cancelling earlier would roll an applied export back.
+		l.cancel()
 		for name := range l.entries {
 			l.Drop(name)
 		}
