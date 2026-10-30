@@ -7,9 +7,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -63,18 +65,23 @@ func (b *tappedFrames) Read(dst []byte) (int, error) {
 }
 
 type processLinkGate struct {
-	exportID  atomic.Uint64
-	armed     atomic.Bool
-	entered   chan struct{}
-	release   chan struct{}
-	canceled  chan struct{}
-	once      sync.Once
-	mu        sync.Mutex
-	active    map[*http.Request]context.CancelFunc
-	blocked   bool
-	blackhole bool
-	restored  chan struct{}
-	discarded atomic.Uint64
+	heartbeatsBlocked atomic.Bool
+	heartbeatRequest  func(controlplane.HeartbeatRequest)
+	heartbeatReply    func(controlplane.HeartbeatReply)
+	workerVisit       func(context.Context, workerlink.Message) error
+	controlVisit      func(workerlink.Message) error
+	exportID          atomic.Uint64
+	armed             atomic.Bool
+	entered           chan struct{}
+	release           chan struct{}
+	canceled          chan struct{}
+	once              sync.Once
+	mu                sync.Mutex
+	active            map[*http.Request]context.CancelFunc
+	blocked           bool
+	blackhole         bool
+	restored          chan struct{}
+	discarded         atomic.Uint64
 }
 
 func newProcessLinkGate() *processLinkGate {
@@ -140,6 +147,11 @@ func (g *processLinkGate) admit(w http.ResponseWriter, r *http.Request, next htt
 }
 func (g *processLinkGate) unblock() { g.once.Do(func() { close(g.release) }) }
 func (g *processLinkGate) workerFrame(ctx context.Context, m workerlink.Message) error {
+	if g.workerVisit != nil {
+		if err := g.workerVisit(ctx, m); err != nil {
+			return err
+		}
+	}
 	if err := g.discard(); err != nil {
 		return err
 	}
@@ -156,20 +168,28 @@ func (g *processLinkGate) workerFrame(ctx context.Context, m workerlink.Message)
 }
 
 type dialProcessRig struct {
-	ctx      context.Context
-	topology *pairTopology
-	release  *pairRelease
-	store    *sessionstore.Redis
-	mapping  *nettopology.NATMapping
-	gate     *processLinkGate
-	harness  *callharness.Harness
-	inbound  bool
+	workerRedis     string
+	packetTrace     bool
+	inboundEndpoint string
+	legOverride     string
+	callerSocket    func() (net.PacketConn, error)
+	ctx             context.Context
+	topology        *pairTopology
+	release         *pairRelease
+	store           *sessionstore.Redis
+	mapping         *nettopology.NATMapping
+	gate            *processLinkGate
+	harness         *callharness.Harness
+	inbound         bool
 }
 
 func newDialProcessRig(t *testing.T, nat bool) *dialProcessRig {
 	return newModeProcessRig(t, nat, false)
 }
 func newModeProcessRig(t *testing.T, nat, inbound bool, cacheOff ...bool) *dialProcessRig {
+	return newConfiguredProcessRig(t, nat, inbound, nil, cacheOff...)
+}
+func newConfiguredProcessRig(t *testing.T, nat, inbound bool, configure func(*dialProcessRig), cacheOff ...bool) *dialProcessRig {
 	t.Helper()
 	if os.Getenv("RELAIS_TEST_DIAL_OUT_PROCESS") != "1" {
 		t.Skip("set RELAIS_TEST_DIAL_OUT_PROCESS=1 after make build")
@@ -202,6 +222,9 @@ func newModeProcessRig(t *testing.T, nat, inbound bool, cacheOff ...bool) *dialP
 	topology, err := newPairTopology(manager, dir, env, "", 0, 0)
 	require.NoError(t, err)
 	rig := &dialProcessRig{ctx: ctx, topology: topology, release: &pairRelease{Dir: bin, Version: "local"}, store: store, gate: newProcessLinkGate(), inbound: inbound}
+	if configure != nil {
+		configure(rig)
+	}
 	transport := workerlink.Transport()
 	var proxy *httptest.Server
 	t.Cleanup(func() {
@@ -234,14 +257,57 @@ func newModeProcessRig(t *testing.T, nat, inbound bool, cacheOff ...bool) *dialP
 		require.Equal(t, topology.relayLeg, p.Ready.Leg)
 		topology.relay = p
 	}
+	if inbound {
+		endpoint, err := url.Parse("http://" + topology.workerHTTP[0])
+		require.NoError(t, err)
+		exportProxy := httputil.NewSingleHostReverseProxy(endpoint)
+		exportProxy.ModifyResponse = func(resp *http.Response) error {
+			if strings.HasSuffix(resp.Request.URL.Path, "/export") && resp.StatusCode == http.StatusOK && rig.gate.armed.CompareAndSwap(true, false) {
+				body, err := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if err != nil {
+					return err
+				}
+				resp.Body = io.NopCloser(bytes.NewReader(body))
+				close(rig.gate.entered)
+				select {
+				case <-rig.gate.release:
+				case <-resp.Request.Context().Done():
+					return resp.Request.Context().Err()
+				}
+			}
+			return nil
+		}
+		server := httptest.NewServer(exportProxy)
+		t.Cleanup(server.Close)
+		rig.inboundEndpoint = server.URL
+	}
 	rig.startControl(t)
 	target, err := url.Parse("http://" + topology.controlAddr)
 	require.NoError(t, err)
 	reverse := httputil.NewSingleHostReverseProxy(target)
 	reverse.Transport, reverse.FlushInterval = transport, -1
 	reverse.ModifyResponse = func(resp *http.Response) error {
+		if rig.gate.heartbeatReply != nil && resp.Request.URL.Path == "/private/workers/0/heartbeat" && resp.StatusCode == http.StatusOK {
+			body, err := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if err != nil {
+				return err
+			}
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			var reply controlplane.HeartbeatReply
+			if err := json.Unmarshal(body, &reply); err != nil {
+				return err
+			}
+			rig.gate.heartbeatReply(reply)
+		}
 		if resp.StatusCode == http.StatusOK && resp.Request.URL.Path == "/private/workers/0/link" {
 			resp.Body = &tappedFrames{ReadCloser: resp.Body, visit: func(m workerlink.Message) error {
+				if rig.gate.controlVisit != nil {
+					if err := rig.gate.controlVisit(m); err != nil {
+						return err
+					}
+				}
 				if err := rig.gate.discard(); err != nil {
 					return err
 				}
@@ -254,6 +320,25 @@ func newModeProcessRig(t *testing.T, nat, inbound bool, cacheOff ...bool) *dialP
 		return nil
 	}
 	proxy = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rig.gate.heartbeatsBlocked.Load() && r.URL.Path == "/private/workers/0/heartbeat" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		if rig.gate.heartbeatRequest != nil && r.URL.Path == "/private/workers/0/heartbeat" {
+			body, err := io.ReadAll(r.Body)
+			_ = r.Body.Close()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			var heartbeat controlplane.HeartbeatRequest
+			if err := json.Unmarshal(body, &heartbeat); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			rig.gate.heartbeatRequest(heartbeat)
+		}
 		if r.URL.Path == "/private/workers/0/link" {
 			rig.gate.admit(w, r, reverse)
 			return
@@ -273,11 +358,17 @@ func newModeProcessRig(t *testing.T, nat, inbound bool, cacheOff ...bool) *dialP
 		controlURL, leg := "http://"+topology.controlAddr, topology.relayLeg
 		if i == 0 {
 			controlURL = proxy.URL
+			if rig.legOverride != "" {
+				leg = rig.legOverride
+			}
 			if nat {
 				leg = rig.mapping.WorkerAddr().String()
 			}
 		}
 		args := []string{rig.release.binary("relais-worker"), "-name", strconv.Itoa(i), "-media", topology.workerMedia[i], "-relay-leg", leg, "-relay-media", topology.relayMedia, "-control", controlURL}
+		if rig.packetTrace {
+			args = append(args, "-srtp-diagnostics")
+		}
 		if len(cacheOff) != 0 && cacheOff[0] {
 			args = append(args, "-frame-cache-off")
 		}
@@ -286,7 +377,16 @@ func newModeProcessRig(t *testing.T, nat, inbound bool, cacheOff ...bool) *dialP
 		} else {
 			args = append(args, "-connect=dial-out")
 		}
-		p, err := topology.launch(pairWorkerName(i), "worker", rig.release, env, args...)
+		workerEnv := env
+		if i == 0 && rig.workerRedis != "" {
+			workerEnv = append([]string(nil), env...)
+			for n, value := range workerEnv {
+				if strings.HasPrefix(value, "RELAIS_REDIS_ADDR=") {
+					workerEnv[n] = "RELAIS_REDIS_ADDR=" + rig.workerRedis
+				}
+			}
+		}
+		p, err := topology.launch(pairWorkerName(i), "worker", rig.release, workerEnv, args...)
 		require.NoError(t, err)
 		topology.workers[i] = p
 		require.NoError(t, topology.ready(ctx, p, 8*time.Second))
@@ -302,6 +402,9 @@ func (r *dialProcessRig) startControl(t *testing.T) {
 		endpoint := "dial-out"
 		if r.inbound {
 			endpoint = "http://" + p.workerHTTP[i]
+			if i == 0 && r.inboundEndpoint != "" {
+				endpoint = r.inboundEndpoint
+			}
 		}
 		args = append(args, "-worker", strconv.Itoa(i)+"="+endpoint)
 	}
@@ -327,7 +430,7 @@ func (r *dialProcessRig) ready(t *testing.T) controlplane.Status {
 }
 func (r *dialProcessRig) caller(t *testing.T, duration time.Duration) *callharness.Call {
 	t.Helper()
-	h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: "http://" + r.topology.controlAddr + "/calls", RelayAddr: netip.MustParseAddrPort(r.topology.relayMedia)}})
+	h, err := callharness.Start(callharness.Options{External: &callharness.ExternalTopology{SignalingURL: "http://" + r.topology.controlAddr + "/calls", RelayAddr: netip.MustParseAddrPort(r.topology.relayMedia), CallerSocket: r.callerSocket}})
 	require.NoError(t, err)
 	r.harness = h
 	t.Cleanup(func() { _ = h.Close() })
@@ -440,11 +543,9 @@ func TestDialOutProcessShutdownDuringDrain(t *testing.T) {
 			intents, err = r.store.ControlIntents(r.ctx)
 			require.NoError(t, err)
 			require.Empty(t, intents, "successor must reconcile the interrupted intent")
-			// Space the later moves to avoid the open immediate-move decoder
-			// gap tracked in https://github.com/relaishq/relais/issues/306.
-			time.Sleep(2 * time.Second)
+			// Recovery must permit immediate exact moves, including after a
+			// lost applied export, without replaying older input behind live video.
 			require.NoError(t, c.MoveExternal(r.ctx, 0))
-			time.Sleep(200 * time.Millisecond)
 			require.NoError(t, c.MoveExternal(r.ctx, 1))
 			time.Sleep(700 * time.Millisecond)
 			r.cleanCall(t, c)
