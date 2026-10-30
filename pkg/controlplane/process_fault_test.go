@@ -200,6 +200,9 @@ func newHTTPSystemWithSettings(t *testing.T, source, target, routing *lostReply,
 	ps.Start()
 	t.Cleanup(ps.Close)
 	if links != nil {
+		t.Cleanup(links.Close)
+	}
+	if links != nil {
 		linkCtx, stop := context.WithCancel(context.Background())
 		handler := system.workers[0].PrivateHandler()
 		link := &controlplane.DialOut{URL: ps.URL, Name: "0", Worker: system.workers[0], Ready: make(chan struct{}), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

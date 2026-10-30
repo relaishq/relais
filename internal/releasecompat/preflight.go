@@ -319,10 +319,10 @@ func bridgeDomain(s string) bool { return s == "bridge_output" || s == "bridge_o
 
 func supportsDialOut(m Manifest, role string) bool {
 	profile, ok := m.Roles[role]["dial-out"]
-	if !ok || m.HTTPContract < 4 || m.UDPContract < 2 {
+	if !ok || m.HTTPContract < 5 || m.UDPContract < 2 {
 		return false
 	}
-	if !slices.Contains(profile.Formats["private_http"].Reads, 4) {
+	if !slices.Contains(profile.Formats["private_http"].Reads, 5) {
 		return false
 	}
 	return role == "control" || slices.Contains(profile.Formats["relay_udp"].Reads, 2)

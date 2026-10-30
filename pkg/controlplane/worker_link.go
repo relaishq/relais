@@ -43,11 +43,13 @@ type LinkAddress struct {
 }
 
 type linkEntry struct {
+	drain          *legDrain // guarded by WorkerLinks.jobsMu
 	mu             sync.Mutex
 	admission      chan struct{}
 	peer           *workerlink.Peer
 	instance       string
 	activeInstance string
+	restoring      bool
 	sequence       uint64
 	remote         *RemoteWorker
 }
@@ -55,6 +57,10 @@ type linkEntry struct {
 // WorkerLinks owns only command availability. It never calls detect, Transfer
 // or heartbeat. Names are fixed before the private listener starts.
 type WorkerLinks struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	jobsMu   sync.Mutex
+	jobs     sync.WaitGroup
 	plane    *Plane
 	relay    *RemoteRelay
 	entries  map[string]*linkEntry
@@ -62,7 +68,8 @@ type WorkerLinks struct {
 }
 
 func (p *Plane) ConfigureDialOut(names []string, r *RemoteRelay) *WorkerLinks {
-	links := &WorkerLinks{plane: p, relay: r, entries: make(map[string]*linkEntry)}
+	ctx, cancel := context.WithCancel(context.Background())
+	links := &WorkerLinks{plane: p, relay: r, ctx: ctx, cancel: cancel, entries: make(map[string]*linkEntry)}
 	for _, name := range names {
 		entry := &linkEntry{admission: make(chan struct{}, 1)}
 		entry.remote = &RemoteWorker{URL: "http://dial-out", Client: &http.Client{Timeout: privateapi.Timeout, Transport: &linkTransport{links: links, name: name, entry: entry}}}
@@ -203,7 +210,7 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 	}
 	// On a fresh control, the durable instance authenticates the worker's
 	// known cycle. It cannot grant any lease; rebuild still validates epochs.
-	restoring := p.restart != nil && entry.peer == nil && entry.instance == hello.Instance
+	restoring := entry.restoring && entry.instance == hello.Instance
 	if restoring {
 		cycle = max(cycle, hello.DeathCycle)
 	}
@@ -235,6 +242,7 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 	old = p.workers[name]
 	duplicate := p.owner(address.Address)
 	canReplace = old != nil && old.observation.canReplace(old.reserved)
+	flapBack := old != nil && old.addr == address.Address && old.rebindTarget.IsValid() && !old.previousAddr.IsValid() && !instanceChanged
 	p.mu.Unlock()
 	if duplicate != nil && duplicate != old || !p.controlAuthority() {
 		return
@@ -263,7 +271,7 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 		} else {
 			// Admission must also work during rebuild: fence placement now,
 			// then perform planned moves only once control is mutation-ready.
-			if _, err := p.markDraining(name); err != nil {
+			if err := p.beginRebind(req.Context(), old, address.Address); err != nil {
 				return
 			}
 			readyAddress = old.addr
@@ -275,16 +283,40 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 		if err := l.relay.AddBoundWorker(req.Context(), address.Address, token); err != nil {
 			return
 		}
+		if flapBack {
+			l.cancelRebind(entry)
+			if err := p.clearRebind(req.Context(), old, false); err != nil {
+				return
+			}
+		}
 		if old == nil {
 			if err := p.Register(name, address.Address, entry.remote); err != nil {
 				return
 			}
 		} else if old.addr != address.Address || old.worker != entry.remote || instanceChanged {
+			if canReplace {
+				if err := l.cleanupReplacedRebind(req.Context(), old, address.Address); err != nil {
+					return
+				}
+			}
 			if !canReplace || p.Replace(name, address.Address, entry.remote) != nil {
 				return
 			}
 		}
 	}
+	// Registration has changed. Publish its accepted identity before any further
+	// store or response write can fail; admission is still serialized.
+	entry.mu.Lock()
+	entry.instance, entry.activeInstance, entry.sequence = hello.Instance, hello.Instance, hello.Sequence
+	entry.restoring = false
+	p.mu.Lock()
+	w := p.workers[name]
+	w.observation.deathCycle = max(w.observation.deathCycle, cycle)
+	w.observation.draining = w.observation.draining || hello.Status.Draining
+	w.operatorDraining = w.operatorDraining || hello.Status.Draining
+	w.observation.relayRegistered()
+	p.mu.Unlock()
+	entry.mu.Unlock()
 	p.mu.Lock()
 	activation := p.workers[name].previousAddr.IsValid()
 	p.mu.Unlock()
@@ -292,6 +324,12 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 	registered := p.workers[name]
 	previous := registered.previousAddr
 	p.mu.Unlock()
+	if instanceChanged {
+		l.cancelRebind(entry)
+		if err := p.saveRebindTarget(req.Context(), name, netip.AddrPort{}); err != nil {
+			return
+		}
+	}
 	if err := p.saveLinkRecord(req.Context(), name, registered.addr, previous, &hello, cycle); err != nil {
 		return
 	}
@@ -307,19 +345,11 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 	previousPeer := entry.peer
-	entry.instance, entry.sequence = hello.Instance, hello.Sequence
 	entry.peer = peer
-	entry.activeInstance = hello.Instance
 	entry.mu.Unlock()
 	if previousPeer != nil {
 		previousPeer.Close()
 	}
-	p.mu.Lock()
-	w := p.workers[name]
-	w.observation.deathCycle = max(w.observation.deathCycle, cycle)
-	w.observation.draining = w.observation.draining || hello.Status.Draining
-	w.observation.relayRegistered()
-	p.mu.Unlock()
 	<-entry.admission
 	admitting = false
 	l.setAvailable(name, entry, peer, true)
@@ -330,10 +360,14 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 
 // Close rejects new admissions and releases HTTP/2 streams before HTTP shutdown.
 func (l *WorkerLinks) Close() {
+	l.jobsMu.Lock()
 	l.stopping.Store(true)
+	l.cancel()
+	l.jobsMu.Unlock()
 	for name := range l.entries {
 		l.Drop(name)
 	}
+	l.jobs.Wait()
 }
 
 // Drop closes only the command stream. Separate heartbeats and calls continue.

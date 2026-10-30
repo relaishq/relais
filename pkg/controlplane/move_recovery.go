@@ -132,6 +132,10 @@ func (m *moveRecovery) moveLocked(ctx context.Context, c *call, lease sessionsto
 	}()
 	p.mu.Lock()
 	source, r := p.owner(lease.Worker), p.relay
+	if source != nil {
+		source.outgoingMoves++
+		defer func() { p.mu.Lock(); source.outgoingMoves--; p.mu.Unlock() }()
+	}
 	// Keep a slot for synchronous rollback after Transfer releases the source
 	// lease. Otherwise a concurrent create could fill it before rollback.
 	rollbackReserved := source != nil && p.config.WorkerCallCap > 0

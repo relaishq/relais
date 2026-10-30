@@ -405,5 +405,7 @@ func (p *Plane) resetRecoveredDrain(name string) error {
 		return errors.New("controlplane: drain reset raced with rejoin or recovery")
 	}
 	old.observation.resetDrain()
+	old.operatorDraining = false
+	old.observation.draining = old.rebindTarget.IsValid()
 	return nil
 }

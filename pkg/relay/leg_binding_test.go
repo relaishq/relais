@@ -89,3 +89,19 @@ func TestRebindAuthorizesBarriersWithoutMovingMedia(t *testing.T) {
 	r.RemoveWorker(old)
 	require.Equal(t, old, r.barrierEndpoint(old))
 }
+
+func TestRebindFlapBackRestoresBarrierEndpoint(t *testing.T) {
+	r := &Relay{registry: make(map[netip.AddrPort]struct{})}
+	old := netip.MustParseAddrPort("192.0.2.1:17001")
+	next := netip.MustParseAddrPort("192.0.2.1:17002")
+	first, second := "00112233445566778899aabbccddeeff", "112233445566778899aabbccddeeff00"
+	require.NoError(t, r.ExpectWorker(first))
+	require.True(t, r.observeLeg(first, old))
+	require.NoError(t, r.AddBoundWorker(old, first))
+	require.True(t, r.observeLeg(first, next))
+	require.NoError(t, r.PrepareRebind(old, next, first))
+	require.NoError(t, r.ExpectWorker(second))
+	require.True(t, r.observeLeg(second, old))
+	require.NoError(t, r.AddBoundWorker(old, second))
+	require.Equal(t, old, r.barrierEndpoint(old), "fresh binding at original address must cancel stale drain routing")
+}

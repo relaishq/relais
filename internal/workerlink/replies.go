@@ -1,6 +1,7 @@
 package workerlink
 
 import (
+	"context"
 	"time"
 
 	"github.com/relaishq/relais/internal/privateapi"
@@ -14,16 +15,36 @@ const MaxReplyBytes = 4 * privateapi.MaxBody
 // for the next 64 callers without making handler saturation a link failure.
 const MaxQueuedReplies = 2 * MaxConcurrent
 
-func (p *Peer) reserveReply(n int) bool {
-	p.replyMu.Lock()
-	defer p.replyMu.Unlock()
-	if p.replyClosed || n > MaxReplyBytes-p.replyBytes {
-		return false
+func (p *Peer) reserveReply(ctx context.Context, n int) bool {
+	for {
+		p.replyMu.Lock()
+		if p.replyClosed || ctx.Err() != nil {
+			p.replyMu.Unlock()
+			return false
+		}
+		if n <= MaxReplyBytes-p.replyBytes {
+			p.replyBytes += n
+			p.replyMu.Unlock()
+			return true
+		}
+		changed := p.replyChanged
+		p.replyMu.Unlock()
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return false
+		case <-p.done:
+			return false
+		}
 	}
-	p.replyBytes += n
-	return true
 }
-func (p *Peer) releaseReply(n int) { p.replyMu.Lock(); p.replyBytes -= n; p.replyMu.Unlock() }
+func (p *Peer) releaseReply(n int) {
+	p.replyMu.Lock()
+	p.replyBytes -= n
+	close(p.replyChanged)
+	p.replyChanged = make(chan struct{})
+	p.replyMu.Unlock()
+}
 func (p *Peer) queueReply(m Message) {
 	p.replyMu.Lock()
 	if p.replyClosed {

@@ -40,7 +40,7 @@ func (l *WorkerLinks) legHandler(name string, e *linkEntry, peer **workerlink.Pe
 		e.mu.Lock()
 		current := e.peer == *peer
 		e.mu.Unlock()
-		if !current || !l.plane.controlAuthority() {
+		if !current || l.stopping.Load() || !l.plane.controlAuthority() {
 			privateapi.Error(rw, ErrWorkerLinkUnavailable, RemoteErrors)
 			return
 		}
@@ -48,8 +48,10 @@ func (l *WorkerLinks) legHandler(name string, e *linkEntry, peer **workerlink.Pe
 		p.mu.Lock()
 		w := p.workers[name]
 		previous := netip.AddrPort{}
+		rebindTarget := netip.AddrPort{}
 		if w != nil {
 			previous = w.previousAddr
+			rebindTarget = w.rebindTarget
 		}
 		pending := previous.IsValid()
 		p.mu.Unlock()
@@ -63,7 +65,21 @@ func (l *WorkerLinks) legHandler(name string, e *linkEntry, peer **workerlink.Pe
 					privateapi.Error(rw, err, RemoteErrors)
 					return
 				}
-				if _, err := p.Drain(r.Context(), name); err != nil {
+				if err := p.beginRebind(r.Context(), w, body.Address); err != nil {
+					privateapi.Error(rw, err, RemoteErrors)
+					return
+				}
+				if err := l.startRebindDrain(e, w, body.Address); err != nil {
+					privateapi.Error(rw, err, RemoteErrors)
+					return
+				}
+			} else if !pending && rebindTarget.IsValid() {
+				l.cancelRebind(e)
+				if err := l.relay.AddBoundWorker(r.Context(), w.addr, token); err != nil {
+					privateapi.Error(rw, err, RemoteErrors)
+					return
+				}
+				if err := p.clearRebind(r.Context(), w, false); err != nil {
 					privateapi.Error(rw, err, RemoteErrors)
 					return
 				}
@@ -81,22 +97,14 @@ func (l *WorkerLinks) legHandler(name string, e *linkEntry, peer **workerlink.Pe
 				privateapi.Error(rw, err, RemoteErrors)
 				return
 			}
-			if err := p.controlRecord(r.Context(), "drain:"+name, nil); err != nil {
-				privateapi.Error(rw, err, RemoteErrors)
-				return
-			}
 			if err := p.saveLinkRecord(r.Context(), name, w.addr, netip.AddrPort{}, nil, 0); err != nil {
 				privateapi.Error(rw, err, RemoteErrors)
 				return
 			}
-			p.mu.Lock()
-			if p.workers[name] == w {
-				w.previousAddr = netip.AddrPort{}
-				w.observation.draining = false
-				p.loadVersion++
-				p.observationChangedLocked()
+			if err := p.clearRebind(r.Context(), w, true); err != nil {
+				privateapi.Error(rw, err, RemoteErrors)
+				return
 			}
-			p.mu.Unlock()
 		}
 		rw.WriteHeader(http.StatusNoContent)
 	})
@@ -106,10 +114,10 @@ func (l *WorkerLinks) legHandler(name string, e *linkEntry, peer **workerlink.Pe
 // reservations or installed sessions may adopt the freshly bound endpoint.
 func (p *Plane) readdress(ctx context.Context, name string, old *registration, to netip.AddrPort) error {
 	p.mu.Lock()
-	safe := p.workers[name] == old && old.observation.draining && !old.observation.dead && !old.observation.recovering && old.reserved == 0
+	safe := p.canReaddressLocked(name, old)
 	p.mu.Unlock()
 	if !safe {
-		return errors.New("controlplane: rebind requires a drained worker")
+		return ErrWorkerLinkUnavailable
 	}
 	leases, err := p.store.ListByWorker(ctx, old.addr)
 	if err != nil {
@@ -123,16 +131,24 @@ func (p *Plane) readdress(ctx context.Context, name string, old *registration, t
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.workers[name] != old || old.reserved != 0 || old.observation.dead || old.observation.recovering {
+	if !p.canReaddressLocked(name, old) {
 		return ErrWorkerLinkUnavailable
 	}
 	if other := p.owner(to); other != nil && other != old {
 		return errors.New("controlplane: duplicate rebind address")
 	}
-	next := &registration{name: old.name, addr: to, previousAddr: old.addr, worker: old.worker, observation: old.observation}
+	next := &registration{name: old.name, addr: to, previousAddr: old.addr, worker: old.worker, observation: old.observation, rebindTarget: old.rebindTarget, operatorDraining: old.operatorDraining}
 	next.observation.linkDown = true
 	p.workers[name] = next
 	p.loadVersion++
 	p.observationChangedLocked()
 	return nil
+}
+
+// Addresses remain immutable to concurrent move/recovery readers. Replacing a
+// registration is safe only after all work keyed by the old pointer has settled.
+func (p *Plane) canReaddressLocked(name string, w *registration) bool {
+	return p.workers[name] == w && w.observation.draining && !w.observation.dead && !w.observation.recovering &&
+		w.reserved == 0 && w.transfers == 0 && w.outgoingMoves == 0 && w.rollbackSlots == 0 && !w.retryingMoves &&
+		len(w.preservedIntents) == 0 && !p.recovery.hasWorkLocked(w, recoveryAll)
 }

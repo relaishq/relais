@@ -2,80 +2,35 @@ package controlplane_test
 
 import (
 	"context"
-	"net"
 	"net/http/httptest"
 	"net/netip"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/relaishq/relais/internal/nettopology"
 	"github.com/relaishq/relais/pkg/sessionstore"
 
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/stretchr/testify/require"
 )
 
-// udpNAT preserves the worker-facing endpoint while replacing the relay-facing
-// mapping. Closing the old mapping also removes its return path mid-call.
 type udpNAT struct {
-	front  *net.UDPConn
-	relay  netip.AddrPort
-	mu     sync.Mutex
-	back   *net.UDPConn
-	worker netip.AddrPort
-	done   sync.WaitGroup
+	*nettopology.NATMapping
+	original netip.AddrPort
 }
 
 func newUDPNAT(t *testing.T, relay netip.AddrPort) *udpNAT {
 	t.Helper()
-	front, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.MustParseAddrPort("127.0.0.1:0")))
+	mapping, err := nettopology.NewNATMapping(relay)
 	require.NoError(t, err)
-	n := &udpNAT{front: front, relay: relay}
-	n.rebind(t)
-	n.done.Go(func() {
-		b := make([]byte, 65536)
-		for {
-			size, from, err := front.ReadFromUDPAddrPort(b)
-			if err != nil {
-				return
-			}
-			n.mu.Lock()
-			n.worker = from
-			back := n.back
-			n.mu.Unlock()
-			_, _ = back.WriteToUDPAddrPort(b[:size], relay)
-		}
-	})
-	t.Cleanup(func() { _ = front.Close(); n.mu.Lock(); _ = n.back.Close(); n.mu.Unlock(); n.done.Wait() })
+	n := &udpNAT{NATMapping: mapping, original: mapping.ObservedAddr()}
+	t.Cleanup(func() { require.NoError(t, n.Close()) })
 	return n
 }
 func (n *udpNAT) rebind(t *testing.T) netip.AddrPort {
 	t.Helper()
-	back, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.MustParseAddrPort("127.0.0.1:0")))
-	require.NoError(t, err)
-	n.mu.Lock()
-	old := n.back
-	n.back = back
-	n.mu.Unlock()
-	if old != nil {
-		_ = old.Close()
-	}
-	n.done.Go(func() {
-		b := make([]byte, 65536)
-		for {
-			size, _, err := back.ReadFromUDPAddrPort(b)
-			if err != nil {
-				return
-			}
-			n.mu.Lock()
-			worker := n.worker
-			n.mu.Unlock()
-			if worker.IsValid() {
-				_, _ = n.front.WriteToUDPAddrPort(b[:size], worker)
-			}
-		}
-	})
-	return back.LocalAddr().(*net.UDPAddr).AddrPort()
+	require.NoError(t, n.Rebind(netip.AddrPort{}))
+	return n.ObservedAddr()
 }
 func TestDialOutNATRebindingDrainsAndRegisters(t *testing.T) {
 	forHTTPRecoveryStores(t, testDialOutNATRebinding)
@@ -84,7 +39,7 @@ func testDialOutNATRebinding(t *testing.T, store sessionstore.Store) {
 	var nat *udpNAT
 	s := newHTTPSystemWithSettings(t, nil, nil, nil, httpSystemSettings{store: store, dialOut: true, sourceLeg: func(addr netip.AddrPort) netip.AddrPort {
 		nat = newUDPNAT(t, addr)
-		return nat.front.LocalAddr().(*net.UDPAddr).AddrPort()
+		return nat.WorkerAddr()
 	}})
 	report := flowingCall(t, s, func(ctx context.Context, call *callharness.Call) {
 		before, err := s.plane.Status(ctx)
