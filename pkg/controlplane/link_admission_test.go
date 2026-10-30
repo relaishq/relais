@@ -54,6 +54,7 @@ func newAdmissionRig(t *testing.T, relayHandler http.Handler, stores ...sessions
 	server.Config.Protocols = protocols
 	server.Start()
 	t.Cleanup(server.Close)
+	t.Cleanup(links.Close)
 	tr := workerlink.Transport()
 	t.Cleanup(tr.CloseIdleConnections)
 	return &admissionRig{p: p, links: links, server: server, client: &http.Client{Transport: tr}, addr: netip.MustParseAddrPort("127.0.0.1:17001")}

@@ -11,14 +11,7 @@ import (
 // linkRecord preserves optional process identity across bootstrap observation
 // writes. Older inbound records keep their existing fields and encoding.
 func (p *Plane) linkRecord(ctx context.Context, name string) (FixedWorker, error) {
-	if p.restart == nil {
-		return FixedWorker{}, nil
-	}
-	lease, err := p.controlLease()
-	if err != nil {
-		return FixedWorker{}, err
-	}
-	records, err := p.restart.store.ControlRecords(ctx, lease)
+	records, err := p.linkRecords(ctx)
 	if err != nil {
 		return FixedWorker{}, err
 	}
@@ -30,6 +23,16 @@ func (p *Plane) linkRecord(ctx context.Context, name string) (FixedWorker, error
 	}
 	return saved, nil
 }
+func (p *Plane) linkRecords(ctx context.Context) (map[string]json.RawMessage, error) {
+	if p.restart == nil {
+		return nil, nil
+	}
+	lease, err := p.controlLease()
+	if err != nil {
+		return nil, err
+	}
+	return p.restart.store.ControlRecords(ctx, lease)
+}
 func (l *WorkerLinks) restoreIdentity(ctx context.Context, name string, e *linkEntry) error {
 	saved, err := l.plane.linkRecord(ctx, name)
 	if err != nil {
@@ -38,6 +41,7 @@ func (l *WorkerLinks) restoreIdentity(ctx context.Context, name string, e *linkE
 	e.mu.Lock()
 	if e.instance == "" && saved.Instance != "" {
 		e.instance, e.activeInstance, e.sequence = saved.Instance, saved.Instance, saved.Sequence
+		e.restoring = true
 	}
 	e.mu.Unlock()
 	// Admission can beat the background rebuild. Restore the same conservative

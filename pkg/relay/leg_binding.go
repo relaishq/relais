@@ -57,6 +57,7 @@ func (r *Relay) AddBoundWorker(address netip.AddrPort, token string) error {
 	b.drainFor = netip.AddrPort{}
 	r.bindings[token] = b
 	r.registry[address] = struct{}{}
+	delete(r.drainTargets, address)
 	return nil
 }
 func (r *Relay) legBinding(packet []byte, from netip.AddrPort) bool {

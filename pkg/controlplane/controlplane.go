@@ -90,11 +90,14 @@ type ReplayRelay interface {
 }
 
 type registration struct {
+	rebindTarget     netip.AddrPort
+	operatorDraining bool
 	previousAddr     netip.AddrPort
 	inventoryOnce    sync.Once
 	inventoryReader  func(context.Context) (mediaworker.WorkerStatus, error)
 	preservedIntents []*call      // abandoned intents; cleaned after recovery jobs release call locks
 	transfers        int          // store Transfer requests in flight; guarded by Plane.mu
+	outgoingMoves    int          // synchronous planned moves retaining this registration
 	createMu         sync.RWMutex // isolate create observation cuts to this worker
 	name             string
 	addr             netip.AddrPort
@@ -693,6 +696,7 @@ func (p *Plane) markDraining(name string) (*registration, error) {
 	if w == nil {
 		return nil, &unknownWorkerError{fmt.Errorf("controlplane: unknown worker %q: %w", name, sessionstore.ErrNotFound)}
 	}
+	w.operatorDraining = true
 	if !w.observation.knowledge().draining {
 		w.observation.markDraining()
 		p.observationChangedLocked()
@@ -707,7 +711,12 @@ func (p *Plane) markDraining(name string) (*registration, error) {
 // balanced. With no destination it
 // moves nothing. It marks draining before waiting up to one second for
 // incoming reservations, then includes those calls in the drain.
-func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, drainErr error) {
+func (p *Plane) Drain(ctx context.Context, name string) ([]MoveResult, error) {
+	return p.drain(ctx, name, nil)
+}
+
+// A non-nil source is an already fenced automatic rebind, not an operator drain.
+func (p *Plane) drain(ctx context.Context, name string, source *registration) (moves []MoveResult, drainErr error) {
 	if err := p.requireMutationReady(); err != nil {
 		return nil, err
 	}
@@ -718,9 +727,13 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 			p.metrics.drains.Add(1)
 		}
 	}()
-	w, err := p.markDraining(name)
-	if err != nil {
-		return nil, err
+	w := source
+	if w == nil {
+		var err error
+		w, err = p.markDraining(name)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := p.waitWorkerLink(ctx, w.addr); err != nil {
 		return nil, err

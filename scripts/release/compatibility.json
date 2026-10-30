@@ -49,7 +49,7 @@
       "sha": "104ae65debf45156ded1e8e613705534c8e62c17"
     }
   },
-  "private_http_contract": 4,
+  "private_http_contract": 5,
   "redis_key_contract": 1,
   "redis_key_golden_sha256": {
     "framecache": "7df2f4606485a52e42840e7aa63f6f731db1f8dfeab858f41829b4119ad0dc35",
@@ -106,7 +106,8 @@
             "reads": [
               2,
               3,
-              4
+              4,
+              5
             ],
             "writes": [
               2
@@ -114,7 +115,8 @@
             "continues": [
               2,
               3,
-              4
+              4,
+              5
             ]
           },
           "redis_keys": {
@@ -203,7 +205,8 @@
             "reads": [
               2,
               3,
-              4
+              4,
+              5
             ],
             "writes": [
               2
@@ -211,7 +214,8 @@
             "continues": [
               2,
               3,
-              4
+              4,
+              5
             ]
           },
           "redis_keys": {
@@ -262,7 +266,8 @@
             "reads": [
               2,
               3,
-              4
+              4,
+              5
             ],
             "writes": [
               2
@@ -270,7 +275,8 @@
             "continues": [
               2,
               3,
-              4
+              4,
+              5
             ]
           },
           "redis_keys": {
@@ -316,7 +322,8 @@
             "reads": [
               2,
               3,
-              4
+              4,
+              5
             ],
             "writes": [
               2
@@ -324,7 +331,8 @@
             "continues": [
               2,
               3,
-              4
+              4,
+              5
             ]
           },
           "redis_keys": {
@@ -372,7 +380,8 @@
             "reads": [
               2,
               3,
-              4
+              4,
+              5
             ],
             "writes": [
               2
@@ -380,7 +389,8 @@
             "continues": [
               2,
               3,
-              4
+              4,
+              5
             ]
           }
         }
@@ -433,7 +443,8 @@
             "reads": [
               2,
               3,
-              4
+              4,
+              5
             ],
             "writes": [
               2
@@ -441,7 +452,8 @@
             "continues": [
               2,
               3,
-              4
+              4,
+              5
             ]
           },
           "redis_keys": {
@@ -547,7 +559,8 @@
             "reads": [
               2,
               3,
-              4
+              4,
+              5
             ],
             "writes": [
               2
@@ -555,7 +568,8 @@
             "continues": [
               2,
               3,
-              4
+              4,
+              5
             ]
           },
           "redis_keys": {
@@ -665,7 +679,8 @@
             "reads": [
               2,
               3,
-              4
+              4,
+              5
             ],
             "writes": [
               2
@@ -673,7 +688,8 @@
             "continues": [
               2,
               3,
-              4
+              4,
+              5
             ]
           },
           "redis_keys": {

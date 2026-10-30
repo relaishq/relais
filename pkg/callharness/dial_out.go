@@ -48,7 +48,14 @@ func (t *relayTopology) startLinks(ctx context.Context, indices []int, count int
 	server.Start()
 	t.linkURL = server.URL
 	t.linkDone = make(chan struct{})
-	go func() { <-ctx.Done(); t.linkWorkers.Wait(); server.Close(); relayAPI.Close(); close(t.linkDone) }()
+	go func() {
+		<-ctx.Done()
+		t.links.Close()
+		t.linkWorkers.Wait()
+		server.Close()
+		relayAPI.Close()
+		close(t.linkDone)
+	}()
 	return nil
 }
 func (t *relayTopology) startDialOut(ctx context.Context, index int, worker *mediaworker.Worker) error {

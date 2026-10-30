@@ -19,7 +19,7 @@ import (
 	"github.com/relaishq/relais/internal/privateapi"
 )
 
-const ContractVersion = 2
+const ContractVersion = 3
 const ChunkSize = 32 << 10 // JSON base64 plus metadata stays below 64 KiB.
 const MaxFrame = 64 << 10
 const MaxConcurrent = 64
@@ -90,26 +90,27 @@ func Write(w io.Writer, m Message) error {
 // Peer serves the existing handler and/or acts as an http.RoundTripper. Close
 // must interrupt its reader and writer (the HTTP request/response stream).
 type Peer struct {
-	reader      io.Reader
-	writer      io.Writer
-	interrupt   func()
-	handler     http.Handler
-	writeMu     sync.Mutex
-	mu          sync.Mutex
-	pending     map[uint64]chan Message
-	replyMu     sync.Mutex
-	replyBytes  int
-	replyClosed bool
-	replies     chan Message
-	replySlots  chan struct{}
-	next        atomic.Uint64
-	last        atomic.Int64
-	done        chan struct{}
-	once        sync.Once
+	reader       io.Reader
+	writer       io.Writer
+	interrupt    func()
+	handler      http.Handler
+	writeMu      sync.Mutex
+	mu           sync.Mutex
+	pending      map[uint64]chan Message
+	replyMu      sync.Mutex
+	replyBytes   int
+	replyClosed  bool
+	replyChanged chan struct{}
+	replies      chan Message
+	replySlots   chan struct{}
+	next         atomic.Uint64
+	last         atomic.Int64
+	done         chan struct{}
+	once         sync.Once
 }
 
 func New(r io.Reader, w io.Writer, interrupt func(), handler http.Handler) *Peer {
-	p := &Peer{reader: r, writer: w, interrupt: interrupt, handler: handler, pending: make(map[uint64]chan Message), replies: make(chan Message, MaxQueuedReplies), replySlots: make(chan struct{}, MaxQueuedReplies), done: make(chan struct{})}
+	p := &Peer{reader: r, writer: w, interrupt: interrupt, handler: handler, pending: make(map[uint64]chan Message), replies: make(chan Message, MaxQueuedReplies), replySlots: make(chan struct{}, MaxQueuedReplies), replyChanged: make(chan struct{}), done: make(chan struct{})}
 	p.last.Store(time.Now().UnixNano())
 	return p
 }
@@ -278,7 +279,7 @@ func (p *Peer) serve(ctx context.Context, m Message, deadline time.Time) Message
 	if m.Epoch != 0 {
 		req.Header.Set("X-Relais-Epoch", fmtEpoch(m.Epoch))
 	}
-	recorder := &responseBuffer{header: make(http.Header), code: http.StatusOK, reserve: p.reserveReply}
+	recorder := &responseBuffer{header: make(http.Header), code: http.StatusOK, reserve: func(n int) bool { return p.reserveReply(ctx, n) }}
 	p.handler.ServeHTTP(recorder, req)
 	if recorder.overflow {
 		p.releaseReply(recorder.body.Len())

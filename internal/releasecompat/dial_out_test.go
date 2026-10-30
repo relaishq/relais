@@ -79,7 +79,7 @@ func TestDialOutRequiresRelayAndControlCapability(t *testing.T) {
 	requireRefused(t, Preflight(pool, next, "upgrade"), "worker_mode_change")
 }
 
-func TestDialOutRequiresRebindingContract(t *testing.T) {
+func TestDialOutRequiresDrainAcknowledgementContract(t *testing.T) {
 	for _, role := range []string{"worker", "relay", "control"} {
 		t.Run(role, func(t *testing.T) {
 			m := testManifest(t, "0.3.2")
@@ -87,7 +87,7 @@ func TestDialOutRequiresRebindingContract(t *testing.T) {
 			pool.Participants[1].Profile = "dial-out"
 			for i := range pool.Participants {
 				if pool.Participants[i].Role == role {
-					pool.Participants[i].Manifest.HTTPContract = 3
+					pool.Participants[i].Manifest.HTTPContract = 4
 					break
 				}
 			}

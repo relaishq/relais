@@ -49,9 +49,9 @@ own `relais-compat preflight` before every step, and keeps `release-pair-verdict
 for the `0.3.0`/`0.3.1` nomination example and offline inventory sources.
 
 Dial-out is additive within manifest schema 2. Inbound profiles keep HTTP v2
-request bodies and UDP v1 media writes; new readers also understand HTTP v3/v4 and
+request bodies and UDP v1 media writes; new readers also understand HTTP v3/v4/v5 and
 UDP v2. Optional response fields do not change the inbound request contract.
-The `dial-out` worker profile selects command-link v2 and controlled leg rebinding. Control
+The `dial-out` worker profile selects command-link v3 and asynchronous leg-rebind drain acknowledgement. Control
 and relay advertise matching `dial-out` capability profiles. Preflight requires
 those capabilities on every control and relay before admitting a dial-out pool,
 refuses rollback below them while a dial-out worker is registered, and preserves

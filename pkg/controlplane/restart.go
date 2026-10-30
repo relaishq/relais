@@ -40,6 +40,7 @@ const rebuildStatusTimeout = 250 * time.Millisecond
 // FixedWorker names an operator-configured private HTTP endpoint. Saved relay
 // addresses let a restart recover calls even when that worker is unreachable.
 type FixedWorker struct {
+	RebindTarget    *netip.AddrPort `json:"rebind_target,omitempty"`
 	Instance        string          `json:"instance,omitempty"`
 	Sequence        uint64          `json:"sequence,omitempty"`
 	DeathCycle      uint64          `json:"death_cycle,omitempty"`
@@ -593,7 +594,12 @@ func (p *Plane) registerObservedWorker(ctx context.Context, fixed FixedWorker, s
 	if registration.observation.observeStatus(status, down, true) {
 		p.loadVersion++
 	}
+	registration.operatorDraining = status.Draining
 	if fixed.URL == "dial-out" && saved != nil {
+		if saved.RebindTarget != nil {
+			registration.rebindTarget = *saved.RebindTarget
+			registration.observation.draining = true
+		}
 		registration.observation.deathCycle = saved.DeathCycle
 		if saved.PreviousAddress != nil {
 			registration.previousAddr = *saved.PreviousAddress
@@ -675,6 +681,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 	for _, worker := range p.workers {
 		registrations = append(registrations, worker)
 		if _, ok := records["drain:"+worker.name]; ok {
+			worker.operatorDraining = true
 			worker.observation.markDraining()
 		}
 	}
@@ -697,6 +704,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 			}
 			p.mu.Lock()
 			worker.observation.observeStatus(status, false, false)
+			worker.operatorDraining = worker.operatorDraining || status.Draining
 			p.mu.Unlock()
 			if status.Draining {
 				if err := p.controlRecord(ctx, "drain:"+worker.name, true); err != nil {

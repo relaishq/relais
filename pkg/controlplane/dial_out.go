@@ -137,7 +137,14 @@ func (d *DialOut) connect(ctx context.Context, client *http.Client) error {
 	if handler == nil {
 		handler = d.Worker.PrivateHandler()
 	}
-	peer := workerlink.New(resp.Body, writer, cancel, d.Worker.LinkHandler(handler))
+	peer := workerlink.New(resp.Body, writer, func() {
+		cancel()
+		// Full-duplex HTTP/2 cancellation can leave a body read waiting for the
+		// upload to finish. Interrupt both pipe ends and the response explicitly.
+		_ = reader.Close()
+		_ = writer.Close()
+		_ = resp.Body.Close()
+	}, d.Worker.LinkHandler(handler))
 	monitorDone := make(chan struct{})
 	go func() { defer close(monitorDone); d.watchLeg(ctx, peer, address, ready) }()
 	err = peer.Run(ctx)
@@ -148,6 +155,7 @@ func (d *DialOut) connect(ctx context.Context, client *http.Client) error {
 
 func (d *DialOut) watchLeg(ctx context.Context, peer *workerlink.Peer, bound netip.AddrPort, ready LinkReady) {
 	client := &http.Client{Transport: peer, Timeout: privateapi.Timeout}
+	reported := ready.Address
 	if ready.Activate {
 		if err := privateapi.Do(ctx, client, "http://control", http.MethodPost, "/leg-ready", LinkAddress{Address: ready.Address}, nil, nil); err != nil {
 			d.connected = false
@@ -156,10 +164,9 @@ func (d *DialOut) watchLeg(ctx context.Context, peer *workerlink.Peer, bound net
 		}
 	}
 	for {
-		if bound != d.Worker.LocalAddr() {
+		if bound != d.Worker.LocalAddr() || bound != reported {
 			if err := privateapi.Do(ctx, client, "http://control", http.MethodPost, "/leg-address", LinkAddress{Address: bound}, nil, nil); err == nil {
-				peer.Close()
-				return
+				reported = bound
 			}
 		}
 		var err error
