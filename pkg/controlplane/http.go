@@ -28,7 +28,9 @@ var RemoteErrors = func() map[string]error {
 	codes := maps.Clone(mediaworker.RemoteErrors)
 	maps.Copy(codes, relay.RemoteErrors)
 	maps.Copy(codes, map[string]error{
-		"unknown_call": ErrUnknownCall, "move_in_progress": ErrMoveInProgress, "no_target": ErrNoTarget,
+		"relay_change_rolled_back": ErrRelayRolledBack,
+		"relay_conflict":           sessionstore.ErrRelayConflict,
+		"unknown_call":             ErrUnknownCall, "move_in_progress": ErrMoveInProgress, "no_target": ErrNoTarget,
 		"ended": sessionstore.ErrEnded, "at_capacity": ErrAtCapacity,
 		"worker_link_unavailable": ErrWorkerLinkUnavailable, "worker_command_not_sent": ErrWorkerCommandNotSent,
 	})
@@ -47,6 +49,7 @@ type MoveFailure struct {
 // and the to query parameter on moves. An omitted name uses load balancing.
 func (p *Plane) Handler() http.Handler {
 	mux := http.NewServeMux()
+	p.relayHandlers(mux)
 	mux.HandleFunc("POST /calls", func(w http.ResponseWriter, r *http.Request) {
 		ct, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if err != nil || ct != "application/sdp" {
@@ -67,6 +70,11 @@ func (p *Plane) Handler() http.Handler {
 		}
 
 		w.Header().Set("Content-Type", "application/sdp")
+		if c, e := p.lookup(id); e == nil {
+			c.stateMu.Lock()
+			c.relayCapable = r.Header.Get("Relais-Relay-Change") == "true"
+			c.stateMu.Unlock()
+		}
 		w.Header().Set("Location", "/calls/"+id)
 		w.WriteHeader(http.StatusCreated)
 		_, _ = io.WriteString(w, answer)

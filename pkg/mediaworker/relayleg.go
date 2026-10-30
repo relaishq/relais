@@ -17,8 +17,11 @@ import (
 // caller, as the worker's own socket does without a relay, so the rest of
 // the worker cannot tell the two apart.
 type relayConn struct {
-	conn  *net.UDPConn
-	relay netip.AddrPort
+	conn      *net.UDPConn
+	relay     netip.AddrPort
+	peersMu   sync.RWMutex
+	peers     map[netip.AddrPort]bool
+	lastRelay netip.AddrPort // written/read only by the worker's single packet loop
 
 	// buffers hold outgoing datagrams: header plus packet. Sessions, their
 	// DTLS connections and the read loop all send concurrently.
@@ -64,7 +67,11 @@ func (c *relayConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
 		if err != nil {
 			return 0, netip.AddrPort{}, err
 		}
-		if netip.AddrPortFrom(from.Addr().Unmap(), from.Port()) != c.relay {
+		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
+		c.peersMu.RLock()
+		allowed := from == c.relay || c.peers[from]
+		c.peersMu.RUnlock()
+		if !allowed {
 			continue
 		}
 		if kind, token, addr, ok := relayleg.ParseBinding(buf[:n]); ok {
@@ -83,7 +90,7 @@ func (c *relayConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
 			if !ack && !workerprobe.BarrierIgnored(c.conn.LocalAddr().(*net.UDPAddr).AddrPort()) {
 				// The worker's single read loop finished the previous packet before
 				// requesting this read, so the acknowledgement is a drain barrier.
-				_, _ = c.conn.WriteToUDPAddrPort(relayleg.Barrier(id, true), c.relay)
+				_, _ = c.conn.WriteToUDPAddrPort(relayleg.Barrier(id, true), from)
 			}
 			continue
 		}
@@ -92,15 +99,19 @@ func (c *relayConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
 			continue
 		}
 
+		c.lastRelay = from
 		return copy(b, pkt), caller, nil
 	}
 }
 
 // WriteToUDPAddrPort sends a packet to a caller through the relay.
 func (c *relayConn) WriteToUDPAddrPort(p []byte, caller netip.AddrPort) (int, error) {
+	return c.writeVia(p, caller, c.relay)
+}
+func (c *relayConn) writeVia(p []byte, caller, leg netip.AddrPort) (int, error) {
 	bufp, _ := c.buffers.Get().(*[]byte)
 	datagram := append(relay.AppendHeader((*bufp)[:0], caller), p...)
-	_, err := c.conn.WriteToUDPAddrPort(datagram, c.relay)
+	_, err := c.conn.WriteToUDPAddrPort(datagram, leg)
 	*bufp = datagram
 	c.buffers.Put(bufp)
 	if err != nil {

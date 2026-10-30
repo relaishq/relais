@@ -78,7 +78,7 @@ func (e *dtlsEndpoint) WriteTo(p []byte, _ net.Addr) (int, error) {
 		return len(p), nil // deliberate network drop, counted and checkpoint requested
 	}
 
-	return e.sess.worker.send(p, to)
+	return e.sess.send(p, to)
 }
 
 // RemoteAddr is the caller's nominated address.

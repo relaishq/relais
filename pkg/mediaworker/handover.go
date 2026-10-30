@@ -10,6 +10,7 @@ import (
 	"github.com/pion/dtls/v3"
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
+	"github.com/relaishq/relais/internal/iceufrag"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/agent"
 	"github.com/relaishq/relais/pkg/framecache"
@@ -277,6 +278,15 @@ func (w *Worker) ResumeSession(state []byte, opts ResumeOptions) (id string, res
 	if err != nil {
 		return "", err
 	}
+	if path := snap.State.ICE.Relay; path != nil {
+		w.mu.Lock()
+		known, ok := w.relaySlots[path.ID]
+		w.mu.Unlock()
+		if snap.Version != relaySessionStateVersion || !ok || known != *path {
+			return "", ErrRelayUnsupported
+		}
+	}
+
 	// A retry after a lost reply must acknowledge the already adopted tenure,
 	// without restoring counters or reapplying margins. Expiry time may have
 	// advanced through renewal; identity is session, worker and epoch only.
@@ -522,6 +532,12 @@ func (w *Worker) adopt(sess *session, dtlsConn *dtls.Conn, replayPackets [][]byt
 	// session on this worker until one does; the relay or shared socket
 	// keeps the session's own check time across the move.
 	w.byAddr[sess.state.ICE.RemoteAddr] = sess
+	if path := sess.state.ICE.Relay; path != nil {
+		if w.byRelayPath == nil {
+			w.byRelayPath = make(map[relayPath]*session)
+		}
+		w.byRelayPath[relayPath{path.Leg, sess.state.ICE.RemoteAddr}] = sess
+	}
 	delete(w.byAddrConsent, sess.state.ICE.RemoteAddr)
 	w.running.Add(3)
 	if len(replayPackets) > 0 {
@@ -607,10 +623,15 @@ func validateSnapshot(snap *snapshot) error {
 		return err
 	}
 	state := &snap.State
+	validUfrag := state.ID != "" && state.ID == state.ICE.LocalUfrag
+	if snap.Version == relaySessionStateVersion {
+		id, _, ok := iceufrag.Parse(state.ICE.LocalUfrag)
+		validUfrag = ok && state.ID == id
+	}
 	switch {
 	case state.Version != snap.Version:
 		return fmt.Errorf("%w %d (want %d)", errStateVersion, state.Version, sessionStateVersion)
-	case state.ID == "" || state.ID != state.ICE.LocalUfrag:
+	case !validUfrag:
 		return fmt.Errorf("%w: session ID %q, ICE ufrag %q", errBadState, state.ID, state.ICE.LocalUfrag)
 	case !state.ICE.RemoteAddr.IsValid():
 		return fmt.Errorf("%w: no nominated caller address", errBadState)
@@ -631,7 +652,7 @@ func validateSnapshot(snap *snapshot) error {
 }
 
 func validateSnapshotVersion(version int) error {
-	if version != controlSessionStateVersion && version != v2SessionStateVersion && version != sessionStateVersion && version != 6 {
+	if version != relaySessionStateVersion && version != controlSessionStateVersion && version != v2SessionStateVersion && version != sessionStateVersion && version != 6 {
 		return fmt.Errorf("%w %d (want %d)", errStateVersion, version, sessionStateVersion)
 	}
 	return nil
@@ -665,7 +686,7 @@ func decodeSnapshot(data []byte) (*snapshot, error) {
 		}
 		state.Agent.legacy = len(legacy.State.Agent) == 0
 	}
-	if version.Version != v2SessionStateVersion && version.Version != controlSessionStateVersion {
+	if version.Version != v2SessionStateVersion && version.Version != controlSessionStateVersion && version.Version != relaySessionStateVersion {
 		state.Version = sessionStateVersion
 		snap.Version = sessionStateVersion
 	}

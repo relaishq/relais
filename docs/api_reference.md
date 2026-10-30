@@ -32,6 +32,34 @@ The current owner, the move log and the owner's count of the caller's packets it
 
 The control plane API (`/api/v1/sessions`, `/api/v1/plugins`) and the WebSocket signaling endpoint (`/ws/signaling`) were served by the retired `relais-core` server and no longer exist.
 
+## Planned relay change signaling
+
+Control and the authenticated `relais-signal` frontend support relay changes
+for callers that opt in on `POST /calls` with the header
+`Relais-Relay-Change: true`. The create body remains the full SDP offer with
+`Content-Type: application/sdp`. This implementation uses a header rather than
+ADR 0016's proposed create field `relay_change`, so existing SDP clients keep
+their request format. Updating that ADR wording is a follow-up; the ADR is not
+changed here. A single-relay deployment needs no opt-in or ICE restart.
+
+After creation, an opted-in caller opens `GET /calls/{id}/events` using the same
+bearer authorization as call deletion. It returns `text/event-stream` with
+`relay-change` events whose JSON data contains `generation` and an absolute UTC
+`deadline`. A reconnect receives the current pending event again; callers
+should deduplicate by generation. Comment keepalives arrive every five seconds.
+An `ended` event with a `reason` closes the stream on any terminal call outcome.
+
+On `relay-change`, the caller creates an ICE restart offer on the same peer
+connection and sends the full SDP to
+`POST /calls/{id}/ice-restart?generation={generation}`, with the same bearer
+authorization and `Content-Type: application/sdp`. A successful response is
+`200` with the SDP answer. It changes ICE credentials and advertises the target
+relay as the only candidate; DTLS and media keys continue. A stale generation
+returns `409` (`relay_conflict`), and a changed media identity returns `409`
+(`restart_mismatch`). The caller must process higher-generation recovery events
+even after a failed offer. A planned change that cannot switch rolls back to the
+old slot; if necessary control requests a new same-slot restart to restore media.
+
 ## Fixed-pool admission and telemetry
 
 Control `POST /calls` counts live store leases plus incoming reservations against
@@ -190,7 +218,7 @@ Control error classes (codes preserve the existing HTTP status):
 | Class | Codes | Client action |
 | --- | --- | --- |
 | retryable | `worker_link_unavailable`, `worker_command_not_sent`, `stale_tenure`, `agent_backpressure`, `agent_capacity`, `barrier_timeout`, `canceled`, `checkpoint_clock`, `closed`, `control_not_ready`, `control_rejected`, `deadline`, `export_not_flushed`, `held`, `hold_expired`, `hold_limit`, `lease_lost`, `move_in_progress`, `no_target`, `at_capacity`, `not_established`, `replay_in_progress`, `replay_not_ready`, `replay_target_changed`, `session_exists`, `transient`, `unknown_session` | Retry the identical message with bounded backoff and a deadline. |
-| definite | `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `dtls_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
+| definite | `relay_switched`, `relay_change_rolled_back`, `restart_mismatch`, `relay_unsupported`, `relay_conflict`, `move_budget`, `agent_incompatible`, `agent_oversize`, `agent_restore`, `agent_save`, `agent_version`, `buffer_disabled`, `control_conflict`, `control_invalid`, `control_order`, `control_stale`, `control_unsupported`, `ended`, `export_incompatible`, `not_found`, `sequence_budget`, `srtcp_exhausted`, `dtls_exhausted`, `unknown_call`, `unsupported_offer` | Stop automatic retries; resolve ordering, registration, limits or call state. For control_stale, acceptance is durable. |
 | uncertain | `internal`, `uncertain` | Acceptance is unknown; retry the identical message. Internal is exposed as uncertain. |
 
 `control_order` is retryable while an earlier sequence from this controller is

@@ -90,6 +90,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/relaishq/relais/internal/relaytrace"
+
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
 	"github.com/relaishq/relais/internal/privateapi"
@@ -263,6 +265,8 @@ type RelayConfig struct {
 // Worker is a media worker. It owns one UDP socket, or shares one with other
 // workers (see Socket), and the sessions that run over it.
 type Worker struct {
+	relaySlots  map[string]RelaySlot
+	byRelayPath map[relayPath]*session
 	splitLimits SnapshotLimits
 	taskDrain   taskDrain
 	moveBytes   atomic.Int64
@@ -490,17 +494,17 @@ func (w *Worker) SocketBuffers() udpbuffer.Result {
 // session-owner store before the answer is returned, so the relay can route
 // the caller's first ICE check.
 func (w *Worker) CreateSession(ctx context.Context, offerSDP string) (string, string, error) {
-	return w.createSession(ctx, offerSDP, nil)
+	return w.createSession(ctx, offerSDP, "", nil)
 }
 
 // CreateSessionWithLease returns the placed tenure in the same acknowledgement,
 // so a control-plane store outage cannot erase its cleanup token.
 func (w *Worker) CreateSessionWithLease(ctx context.Context, offerSDP string) (id, answer string, lease sessionstore.Lease, err error) {
-	id, answer, err = w.createSession(ctx, offerSDP, func(placed sessionstore.Lease) { lease = placed })
+	id, answer, err = w.createSession(ctx, offerSDP, "", func(placed sessionstore.Lease) { lease = placed })
 	return
 }
 
-func (w *Worker) createSession(ctx context.Context, offerSDP string, placed func(sessionstore.Lease)) (sessionID, answerSDP string, err error) {
+func (w *Worker) createSession(ctx context.Context, offerSDP, slotID string, placed func(sessionstore.Lease)) (sessionID, answerSDP string, err error) {
 	if w.cfg.Relay != nil && w.cfg.Relay.DialOut && w.observed.Load() == nil {
 		return "", "", ErrNotEstablished
 	}
@@ -521,6 +525,27 @@ func (w *Worker) createSession(ctx context.Context, offerSDP string, placed func
 		return "", "", err
 	}
 
+	path := w.initialRelay(slotID)
+	if slotID != "" && path == nil {
+		sess.close()
+		return "", "", ErrRelayUnsupported
+	}
+	if path != nil {
+		sess.mu.Lock()
+		if sess.componentMode || sess.state.Agent.V2 != nil {
+			sess.mu.Unlock()
+			sess.close()
+			return "", "", ErrRelayUnsupported
+		}
+		sess.state.Version = relaySessionStateVersion
+		sess.state.ICE.Relay = path
+		sess.state.RestartIdentity, err = restartIdentity(offerSDP)
+		sess.mu.Unlock()
+		if err != nil {
+			sess.close()
+			return "", "", err
+		}
+	}
 	answer, err := buildAnswer(offer, sess.answerParams())
 	if err != nil {
 		sess.close()
@@ -531,6 +556,20 @@ func (w *Worker) createSession(ctx context.Context, offerSDP string, placed func
 		sess.close()
 
 		return "", "", err
+	}
+
+	if sess.state.ICE.Relay != nil {
+		a, ok := w.cfg.Relay.Owners.(sessionstore.RelayAssignments)
+		if !ok {
+			sess.close()
+			w.release(sess)
+			return "", "", ErrRelayUnsupported
+		}
+		if err := a.CASRelay(ctx, sess.lease, sessionstore.RelayAssignment{}, sessionstore.RelayAssignment{Slot: sess.state.ICE.Relay.ID}); err != nil {
+			sess.close()
+			w.release(sess)
+			return "", "", err
+		}
 	}
 
 	w.mu.Lock()
@@ -639,12 +678,35 @@ func (w *Worker) readLoop() {
 		pkt := buf[:n]
 
 		if stun.IsMessage(pkt) {
-			w.handleSTUN(pkt, from)
+			w.handleSTUNVia(pkt, from, w.receivedLeg())
 
 			continue
 		}
-		if sess := w.sessionAt(from); sess != nil {
-			sess.handlePacket(pkt)
+		if sess := w.sessionAtRelay(from, w.receivedLeg()); sess != nil {
+			leg := w.receivedLeg()
+			if relaytrace.Enabled() {
+				relaytrace.Emit("worker-arrival", leg.String(), pkt)
+			}
+			path := relayPath{leg, from}
+			if isRTPOrRTCP(pkt) {
+				// Authorization and SRTP processing share the packet lock, so
+				// rollback cannot revoke the path between admission and decrypt.
+				sess.handleSRTPPacket(earlyPacket{data: pkt, rtcp: isRTCP(pkt), path: path})
+				continue
+			}
+			sess.mu.Lock()
+			allowed := sess.acceptsRelayPath(path, false)
+			sess.mu.Unlock()
+			if allowed {
+				if relaytrace.Enabled() {
+					relaytrace.Emit("worker-input", leg.String(), pkt)
+				}
+				sess.handlePacket(pkt)
+			} else {
+				if relaytrace.Enabled() {
+					relaytrace.Emit("worker-reject", leg.String(), pkt)
+				}
+			}
 		}
 	}
 }
@@ -731,6 +793,11 @@ func (w *Worker) forget(sess *session) {
 	registered := w.sessions[sess.id] == sess
 	if registered {
 		delete(w.sessions, sess.id)
+	}
+	for path, owner := range w.byRelayPath {
+		if owner == sess {
+			delete(w.byRelayPath, path)
+		}
 	}
 	for addr, owner := range w.byAddr {
 		if owner == sess {

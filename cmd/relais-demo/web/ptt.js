@@ -1,6 +1,6 @@
 'use strict';
 (function(root) {
- const definite=new Set('move_budget agent_incompatible agent_oversize agent_restore agent_save agent_version buffer_disabled control_conflict control_invalid control_order control_stale control_unsupported dtls_exhausted ended export_incompatible not_found sequence_budget srtcp_exhausted unknown_call unsupported_offer'.split(' '));
+ const definite=new Set('relay_switched relay_change_rolled_back restart_mismatch relay_unsupported relay_conflict move_budget agent_incompatible agent_oversize agent_restore agent_save agent_version buffer_disabled control_conflict control_invalid control_order control_stale control_unsupported dtls_exhausted ended export_incompatible not_found sequence_budget srtcp_exhausted unknown_call unsupported_offer'.split(' '));
  const retryable=new Set('agent_backpressure agent_capacity barrier_timeout canceled checkpoint_clock closed control_not_ready control_rejected deadline export_not_flushed held hold_expired hold_limit lease_lost move_in_progress no_target at_capacity not_established replay_in_progress replay_not_ready replay_target_changed session_exists stale_tenure transient unknown_session worker_command_not_sent worker_link_unavailable'.split(' '));
  const notAccepted=new Set(['agent_capacity','control_not_ready','control_rejected','agent_backpressure']);
  const classify=(code)=>definite.has(code)?'definite':retryable.has(code)?'retryable':'uncertain';

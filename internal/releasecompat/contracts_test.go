@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/relaishq/relais/pkg/sessionstore"
 )
 
 func scriptTree(t *testing.T, files map[string]string) string {
@@ -208,7 +210,7 @@ func TestLuaDiagnosticBinariesAreExcludedUnlessImported(t *testing.T) {
 }
 func TestLuaInventoryNamesEveryAddedAndRemovedScript(t *testing.T) {
 	root := scriptTree(t, map[string]string{"pkg/arbitrary/run.go": `package arbitrary;func run(){c.EvalRO(ctx,"return 2",nil);c.EvalRO(ctx,"return 3",nil)}`})
-	golden := ScriptGolden{Contract: 1, Scripts: map[string]Script{"old-a": {SHA: strings.Repeat("a", 40)}, "old-b": {SHA: strings.Repeat("b", 40)}}}
+	golden := ScriptGolden{Contract: sessionstore.ScriptContractVersion, Scripts: map[string]Script{"old-a": {SHA: strings.Repeat("a", 40)}, "old-b": {SHA: strings.Repeat("b", 40)}}}
 	data, err := JSON(golden)
 	if err != nil {
 		t.Fatal(err)

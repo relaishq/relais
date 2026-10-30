@@ -2,9 +2,9 @@ package sessionstore
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -83,6 +83,87 @@ return 1
 
 var putRouteScript = redis.NewScript(putRouteLua)
 
+// Named slots use a separate script so the legacy single-slot command and
+// script-cache byte contract remain unchanged.
+const putSlotRouteLua = `
+local epoch=redis.call('HGET',KEYS[1],'epoch')
+if epoch~=ARGV[1] then return -1 end
+local t=redis.call('TIME'); local now=tonumber(t[1])*1000+math.floor(tonumber(t[2])/1000)
+local incoming=cjson.decode(ARGV[3])
+local slot=incoming.data.relay_slot or ''
+local function sameSlot(r) return (r.data.relay_slot or '')==slot end
+local function marker(k) return string.sub(k,1,11)=='@nomination' end
+if slot~='' then
+ local a=redis.call('HMGET',KEYS[1],'relay','relay_pending')
+ if a[1]~=slot and a[2]~=slot then return -1 end
+end
+if incoming.expires<=now then return 0 end
+local function after(a,b) for k=1,#a do local x,y=string.byte(a,k),string.byte(b,k) if x~=y then return x>y end end return false end
+local function greater(a,b) return #a>#b or (#a==#b and after(a,b)) end
+-- Prune old fields even when another address keeps the hash alive.
+local values=redis.call('HGETALL',KEYS[2])
+for i=1,#values,2 do
+ if not marker(values[i]) then
+  local ok,previous=pcall(cjson.decode,values[i+1])
+  if not ok or previous.expires<=now then redis.call('HDEL',KEYS[2],values[i]) end
+ end
+end
+local nomination=redis.call('HGET',KEYS[2],ARGV[7])
+if nomination and greater(nomination,incoming.confirmed) then return 1 end
+local old=redis.call('HGET',KEYS[2],ARGV[2])
+if old then
+ old=cjson.decode(old)
+ if old.generation==incoming.generation and (greater(old.confirmed,incoming.confirmed) or (old.confirmed==incoming.confirmed and greater(old.authenticated,incoming.authenticated))) then return 1 end
+end
+if ARGV[4]=='1' and (not old or old.generation~=incoming.generation) then
+ -- A delayed nomination must not delete a more recently confirmed address.
+ local values=redis.call('HGETALL',KEYS[2])
+ for i=1,#values,2 do
+  if not marker(values[i]) then
+  local previous=cjson.decode(values[i+1])
+  if sameSlot(previous) and previous.generation==incoming.generation and greater(previous.confirmed,incoming.confirmed) then return 1 end
+  end
+ end
+ for i=1,#values,2 do
+  if not marker(values[i]) and sameSlot(cjson.decode(values[i+1])) then redis.call('HDEL',KEYS[2],values[i]) end
+ end
+ redis.call('HSET',KEYS[2],ARGV[7],incoming.confirmed)
+end
+redis.call('HSET',KEYS[2],ARGV[2],ARGV[3])
+-- Keep at most eight addresses, evicting the oldest authenticated evidence.
+local values=redis.call('HGETALL',KEYS[2]); local entries={}
+for i=1,#values,2 do
+ if not marker(values[i]) then
+  local previous=cjson.decode(values[i+1])
+  if sameSlot(previous) then table.insert(entries,{values[i],previous}) end
+ end
+end
+table.sort(entries,function(a,b)
+ if a[2].authenticated~=b[2].authenticated then return greater(b[2].authenticated,a[2].authenticated) end
+ return greater(b[2].confirmed,a[2].confirmed)
+end)
+for i=1,#entries-tonumber(ARGV[6]) do redis.call('HDEL',KEYS[2],entries[i][1]) end
+local deadline=incoming.expires+tonumber(ARGV[5])
+local remaining=redis.call('PTTL',KEYS[2])
+if remaining<deadline-now then redis.call('PEXPIREAT',KEYS[2],deadline) end
+return 1
+`
+
+var putSlotRouteScript = redis.NewScript(putSlotRouteLua)
+
+func routeField(route Route) string {
+	if route.Slot == "" {
+		return route.Caller.String()
+	}
+	return base64.RawURLEncoding.EncodeToString([]byte(route.Slot)) + "|" + route.Caller.String()
+}
+func routeMarker(slot string) string {
+	if slot == "" {
+		return "@nomination"
+	}
+	return "@nomination|" + base64.RawURLEncoding.EncodeToString([]byte(slot))
+}
+
 func (r *Redis) PutRoute(ctx context.Context, route Route, nominated bool) error {
 	if !validRoute(route) {
 		return errors.New("sessionstore: invalid route")
@@ -96,7 +177,12 @@ func (r *Redis) PutRoute(ctx context.Context, route Route, nominated bool) error
 	if nominated {
 		replace = "1"
 	}
-	n, err := putRouteScript.Run(ctx, r.client, []string{keys[0], keys[4]}, strconv.FormatUint(route.Generation, 10), route.Caller.String(), raw, replace, RouteRetention.Milliseconds(), MaxRoutesPerSession).Int()
+	var n int
+	if route.Slot == "" {
+		n, err = putRouteScript.Run(ctx, r.client, []string{keys[0], keys[4]}, strconv.FormatUint(route.Generation, 10), route.Caller.String(), raw, replace, RouteRetention.Milliseconds(), MaxRoutesPerSession).Int()
+	} else {
+		n, err = putSlotRouteScript.Run(ctx, r.client, []string{keys[0], keys[4]}, strconv.FormatUint(route.Generation, 10), routeField(route), raw, replace, RouteRetention.Milliseconds(), MaxRoutesPerSession, routeMarker(route.Slot)).Int()
+	}
 	if err != nil {
 		return &TransientError{Op: "put_route", Err: err}
 	}
@@ -116,7 +202,7 @@ func (r *Redis) DeleteRoute(ctx context.Context, route Route) error {
 	if err != nil {
 		return err
 	}
-	return r.client.Eval(ctx, deleteRouteLua, []string{r.keys(route.SessionID)[4]}, route.Caller.String(), raw).Err()
+	return r.client.Eval(ctx, deleteRouteLua, []string{r.keys(route.SessionID)[4]}, routeField(route), raw).Err()
 }
 func (r *Redis) ForgetRoutes(ctx context.Context, id string) error {
 	return r.client.Del(ctx, r.keys(id)[4]).Err()
@@ -137,7 +223,7 @@ func (r *Redis) LoadRouteOwners(ctx context.Context, limit int) ([]Route, map[st
 	var mu sync.Mutex
 	routes := []Route{}
 	owners := make(map[string]Lease)
-	newest := make(map[netip.AddrPort]int)
+	newest := make(map[routeKey]int)
 	seen := make(map[string]bool)
 	scan := func(ctx context.Context, client *redis.Client) error {
 		var cursor uint64
@@ -168,7 +254,7 @@ func (r *Redis) LoadRouteOwners(ctx context.Context, limit int) ([]Route, map[st
 					continue
 				}
 				for caller, raw := range values {
-					if caller == "@nomination" {
+					if strings.HasPrefix(caller, "@nomination") {
 						continue
 					}
 					var record storedRoute
@@ -181,7 +267,7 @@ func (r *Redis) LoadRouteOwners(ctx context.Context, limit int) ([]Route, map[st
 						cleanup.Eval(ctx, deleteRouteLua, []string{key}, caller, raw)
 						continue
 					}
-					if !validRoute(route) || route.Caller.String() != caller || r.keys(route.SessionID)[4] != key {
+					if !validRoute(route) || routeField(route) != caller || r.keys(route.SessionID)[4] != key {
 						failures = errors.Join(failures, errors.New("sessionstore: corrupt route metadata"))
 						continue
 					}
@@ -211,11 +297,11 @@ func (r *Redis) LoadRouteOwners(ctx context.Context, limit int) ([]Route, map[st
 				for _, route := range candidates[id] {
 					if !time.Now().Before(route.ExpiresAt) || err == nil && lease.Epoch != route.Generation {
 						raw, _ := routeJSON(route)
-						cleanup.Eval(ctx, deleteRouteLua, []string{r.keys(id)[4]}, route.Caller.String(), raw)
+						cleanup.Eval(ctx, deleteRouteLua, []string{r.keys(id)[4]}, routeField(route), raw)
 						continue
 					}
 					mu.Lock()
-					index, seenAddress := newest[route.Caller]
+					index, seenAddress := newest[route.key()]
 					newer := !seenAddress || routeEvidenceNewer(route, routes[index]) ||
 						route.LastAuthenticated.Equal(routes[index].LastAuthenticated) &&
 							route.ConfirmedAt.Equal(routes[index].ConfirmedAt) && route.SessionID < routes[index].SessionID
@@ -231,7 +317,7 @@ func (r *Redis) LoadRouteOwners(ctx context.Context, limit int) ([]Route, map[st
 						}
 					} else {
 						if newer {
-							newest[route.Caller] = len(routes)
+							newest[route.key()] = len(routes)
 						}
 						routes = append(routes, route)
 						if err == nil {

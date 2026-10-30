@@ -125,6 +125,7 @@ type Memory struct {
 	controlRecords    map[string]json.RawMessage
 	controlIntents    map[string]ControlIntent
 	relayLeases       map[string]RelayLease
+	relayAssignments  map[string]RelayAssignment
 	mu                sync.RWMutex
 	leases            map[string]Lease
 	ended             map[string]Lease // ExpiresAt is the tombstone retention deadline
@@ -134,9 +135,9 @@ type Memory struct {
 	componentSequence uint64
 	states            map[string][]byte
 	checkpoints       map[string]Checkpoint
-	routes            map[netip.AddrPort]Route
-	routeNominations  map[string]Route
-	routeSessions     map[string]map[netip.AddrPort]struct{}
+	routes            map[routeKey]Route
+	routeNominations  map[routeSessionKey]Route
+	routeSessions     map[string]map[routeKey]struct{}
 	epoch             uint64 // global; no per-session history survives release
 }
 
@@ -148,7 +149,7 @@ func NewMemory() *Memory {
 	if _, err := rand.Read(key); err != nil {
 		panic(err)
 	}
-	return &Memory{componentRecords: make(map[string]componentRecord), componentCrypto: &Redis{keysByID: map[byte][]byte{0: key}}, leases: make(map[string]Lease), ended: make(map[string]Lease), states: make(map[string][]byte), checkpoints: make(map[string]Checkpoint), routes: make(map[netip.AddrPort]Route), routeNominations: make(map[string]Route), routeSessions: make(map[string]map[netip.AddrPort]struct{})}
+	return &Memory{componentRecords: make(map[string]componentRecord), componentCrypto: &Redis{keysByID: map[byte][]byte{0: key}}, leases: make(map[string]Lease), ended: make(map[string]Lease), states: make(map[string][]byte), checkpoints: make(map[string]Checkpoint), routes: make(map[routeKey]Route), routeNominations: make(map[routeSessionKey]Route), routeSessions: make(map[string]map[routeKey]struct{})}
 }
 
 func valid(id string, worker netip.AddrPort, ttl time.Duration) bool {
@@ -184,6 +185,7 @@ func (m *Memory) Claim(ctx context.Context, id string, worker netip.AddrPort, tt
 	}
 
 	delete(m.componentRecords, id)
+	delete(m.relayAssignments, id)
 	return m.next(id, worker, ttl), nil
 }
 
@@ -250,6 +252,7 @@ func (m *Memory) Get(ctx context.Context, id string) (Lease, error) {
 	lease, ok := m.leases[id]
 	if !ok || !time.Now().Before(lease.ExpiresAt) {
 		delete(m.leases, id)
+		delete(m.relayAssignments, id)
 		delete(m.states, id)
 		delete(m.checkpoints, id)
 		delete(m.componentRecords, id)
@@ -296,6 +299,7 @@ func (m *Memory) Release(ctx context.Context, lease Lease) error {
 			m.ended[lease.SessionID] = current
 		}
 		delete(m.leases, lease.SessionID)
+		delete(m.relayAssignments, lease.SessionID)
 		delete(m.states, lease.SessionID)
 		delete(m.checkpoints, lease.SessionID)
 		delete(m.componentRecords, lease.SessionID)
@@ -322,6 +326,7 @@ func (m *Memory) ListByWorker(ctx context.Context, worker netip.AddrPort) ([]Lea
 		}
 		if !now.Before(lease.ExpiresAt) {
 			delete(m.leases, lease.SessionID)
+			delete(m.relayAssignments, lease.SessionID)
 			delete(m.states, lease.SessionID)
 			delete(m.checkpoints, lease.SessionID)
 			delete(m.componentRecords, lease.SessionID)
@@ -366,6 +371,7 @@ func (m *Memory) GetState(ctx context.Context, id string) ([]byte, error) {
 	lease, ok := m.leases[id]
 	if !ok || !time.Now().Before(lease.ExpiresAt) {
 		delete(m.leases, id)
+		delete(m.relayAssignments, id)
 		delete(m.states, id)
 		delete(m.checkpoints, id)
 		delete(m.componentRecords, id)

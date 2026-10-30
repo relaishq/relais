@@ -447,6 +447,10 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			pending.lease = transferred
 			p.mu.Unlock()
 		}
+		if err = p.settleDeadRelayChange(ctx, transferred); err != nil {
+			p.unreserve(target)
+			return
+		}
 		// A planned hold may already have flushed to this target after its
 		// resume reply was lost. Confirmation must never replay its live input
 		// against the old export checkpoint. A different target can still replay.

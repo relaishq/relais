@@ -228,7 +228,7 @@ func (h *Harness) Close() error {
 // postOffer makes the one signaling exchange that starts a call on a media
 // worker: it POSTs the offer and returns the answer and the call's resource
 // URL (from Location).
-func (h *Harness) postOffer(ctx context.Context, worker int, offer string) (answer, resourceURL string, err error) {
+func (h *Harness) postOffer(ctx context.Context, worker int, offer string, relayChange ...bool) (answer, resourceURL string, err error) {
 	target, err := h.offerURL(worker)
 	if err != nil {
 		return "", "", err
@@ -238,6 +238,9 @@ func (h *Harness) postOffer(ctx context.Context, worker int, offer string) (answ
 		return "", "", err
 	}
 	req.Header.Set("Content-Type", "application/sdp")
+	if len(relayChange) > 0 && relayChange[0] {
+		req.Header.Set("Relais-Relay-Change", "true")
+	}
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {

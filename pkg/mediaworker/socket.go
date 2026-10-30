@@ -13,6 +13,7 @@ import (
 
 	"github.com/pion/logging"
 	"github.com/pion/stun/v4"
+	"github.com/relaishq/relais/internal/iceufrag"
 	"github.com/relaishq/relais/internal/udpbuffer"
 	"github.com/relaishq/relais/pkg/agent"
 )
@@ -433,7 +434,11 @@ func stunSessionID(raw []byte) string {
 		return ""
 	}
 
-	return local
+	id, _, valid := iceufrag.Parse(local)
+	if !valid {
+		return ""
+	}
+	return id
 }
 
 // write sends a worker's packet to a caller if the worker owns the session

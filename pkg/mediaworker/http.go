@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"time"
 
 	"github.com/relaishq/relais/internal/privateapi"
@@ -15,6 +16,9 @@ import (
 
 // RemoteErrors identifies coordination errors across the private HTTP boundary.
 var RemoteErrors = map[string]error{
+	"relay_switched":   ErrRelaySwitched,
+	"relay_conflict":   sessionstore.ErrRelayConflict,
+	"restart_mismatch": ErrRestartMismatch, "relay_unsupported": ErrRelayUnsupported,
 	"control_invalid": agentv2.ErrControlInvalid, "control_conflict": agentv2.ErrControlConflict,
 	"control_order":     agentv2.ErrControlOrder,
 	"control_not_ready": agentv2.ErrControlNotReady,
@@ -38,7 +42,8 @@ var RemoteErrors = map[string]error{
 }
 
 type CreateRequest struct {
-	Offer string `json:"offer"`
+	Offer     string `json:"offer"`
+	RelaySlot string `json:"relay_slot,omitempty"`
 }
 type CreateReply struct {
 	Lease  sessionstore.Lease `json:"lease"`
@@ -97,13 +102,49 @@ type WorkerStatus struct {
 // Session snapshots contain key material: this API must stay private.
 func (w *Worker) PrivateHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /relays", func(rw http.ResponseWriter, r *http.Request) {
+		var req RelaySetRequest
+		if !privateapi.Read(rw, r, &req) {
+			return
+		}
+		if err := w.ConfigureRelays(r.Context(), req.Slots); err != nil {
+			workerAPIError(rw, err)
+			return
+		}
+		rw.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /sessions/{id}/restart", func(rw http.ResponseWriter, r *http.Request) {
+		var req RestartRequest
+		if !privateapi.Read(rw, r, &req) {
+			return
+		}
+		answer, err := w.RestartSession(r.Context(), r.PathValue("id"), req)
+		if err != nil {
+			workerAPIError(rw, err)
+			return
+		}
+		privateapi.Write(rw, RestartReply{Answer: answer})
+	})
+	mux.HandleFunc("DELETE /sessions/{id}/restart", func(rw http.ResponseWriter, r *http.Request) {
+		generation, err := strconv.ParseUint(r.URL.Query().Get("generation"), 10, 64)
+		if err != nil || generation == 0 {
+			http.Error(rw, "invalid generation", http.StatusBadRequest)
+			return
+		}
+		if err = w.AbortRelayRestart(r.Context(), r.PathValue("id"), generation); err != nil {
+			workerAPIError(rw, err)
+			return
+		}
+		rw.WriteHeader(http.StatusNoContent)
+	})
+
 	mux.Handle("GET /metrics", metrics.ProcessHandler(w.metricSamples, metrics.CheckpointCollectors()...))
 	mux.HandleFunc("POST /sessions", func(rw http.ResponseWriter, r *http.Request) {
 		var req CreateRequest
 		if !privateapi.Read(rw, r, &req) {
 			return
 		}
-		id, answer, lease, err := w.CreateSessionWithLease(r.Context(), req.Offer)
+		id, answer, lease, err := w.CreateSessionAtRelay(r.Context(), req.Offer, req.RelaySlot)
 		if err != nil {
 			workerAPIError(rw, err)
 			return

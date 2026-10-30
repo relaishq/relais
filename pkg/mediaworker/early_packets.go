@@ -3,6 +3,7 @@ package mediaworker
 import (
 	"slices"
 
+	"github.com/relaishq/relais/internal/relaytrace"
 	"github.com/relaishq/relais/pkg/framecache"
 )
 
@@ -11,6 +12,7 @@ const maxEarlyPackets = 64
 type earlyPacket struct {
 	data []byte
 	rtcp bool
+	path relayPath // zero for already-admitted internal callers
 }
 
 type mediaPacketResult struct {
@@ -29,6 +31,10 @@ func (s *session) handleSRTPPacket(pkt earlyPacket) {
 		return
 	}
 	if s.srtpIn == nil {
+		if pkt.path.caller.IsValid() && !s.acceptsRelayPath(pkt.path, !pkt.rtcp) {
+			s.mu.Unlock()
+			return
+		}
 		pkt.data = slices.Clone(pkt.data)
 		if s.earlyPackets == nil {
 			s.earlyPackets = make([]earlyPacket, 0, maxEarlyPackets)
@@ -56,11 +62,24 @@ func (s *session) handleSRTPPacket(pkt earlyPacket) {
 }
 
 func (s *session) processSRTPPacketLocked(pkt earlyPacket) mediaPacketResult {
+	if pkt.path.caller.IsValid() {
+		allowed := s.acceptsRelayPath(pkt.path, !pkt.rtcp)
+		if relaytrace.Enabled() {
+			name := "worker-input"
+			if !allowed {
+				name = "worker-reject"
+			}
+			relaytrace.Emit(name, pkt.path.leg.String(), pkt.data)
+		}
+		if !allowed {
+			return mediaPacketResult{}
+		}
+	}
 	if pkt.rtcp {
 		failure, err := s.handleRTCPLocked(pkt.data)
 		return mediaPacketResult{protocol: "SRTCP", failure: failure, decryptErr: err}
 	}
-	complete, failure, err := s.handleRTPLocked(pkt.data)
+	complete, failure, err := s.handleRTPLocked(pkt.data, pkt.path)
 	return mediaPacketResult{protocol: "SRTP", complete: complete, failure: failure, decryptErr: err}
 }
 

@@ -30,6 +30,7 @@ const (
 
 // CallOptions shape the call the caller makes.
 type CallOptions struct {
+	RelayChange bool // advertise relay-change support and open the event stream
 	// Freshness configures the caller's bounded recovery evaluation.
 	// Defaults stay strict (2s recovery + 3s stability), including under race.
 	// Acceptance callers such as #27 can set RecoveryLimit: 2*time.Second
@@ -95,11 +96,13 @@ const (
 // Call is one call made by the caller: a Pion PeerConnection that sends
 // pre-encoded Opus audio (and VP8 video) and records everything it observes.
 type Call struct {
-	harness *Harness
-	pc      *webrtc.PeerConnection
-	audio   *webrtc.TrackLocalStaticSample
-	video   *webrtc.TrackLocalStaticSample // nil for an audio-only call
-	rec     *recorder
+	eventsCancel context.CancelFunc
+	restartErr   error
+	harness      *Harness
+	pc           *webrtc.PeerConnection
+	audio        *webrtc.TrackLocalStaticSample
+	video        *webrtc.TrackLocalStaticSample // nil for an audio-only call
+	rec          *recorder
 
 	audioSSRC   uint32
 	videoSSRC   uint32
@@ -251,7 +254,7 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 
 	call.offer = pc.LocalDescription().SDP
 	rec.offerAnswerExchange()
-	answer, resourceURL, err := h.postOffer(ctx, opts.Worker, call.offer)
+	answer, resourceURL, err := h.postOffer(ctx, opts.Worker, call.offer, opts.RelayChange)
 	if err != nil {
 		return call, err
 	}
@@ -265,6 +268,9 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 	rec.markNegotiated()
 	call.localUfrag = iceUfrag(pc.LocalDescription())
 	call.remoteUfrag = iceUfrag(pc.RemoteDescription())
+	if opts.RelayChange {
+		call.startRelayEvents()
+	}
 
 	select {
 	case <-connected:
@@ -641,9 +647,12 @@ func (c *Call) close() error {
 		if c.recordingCancel != nil {
 			c.recordingCancel()
 		}
+		if c.eventsCancel != nil {
+			c.eventsCancel()
+		}
 		err := c.pc.Close()
 		c.readers.Wait()
-		c.closeErr = errors.Join(err, c.socket.close())
+		c.closeErr = errors.Join(err, c.socket.close(), c.restartErr)
 		c.harness.removeCall(c)
 	})
 

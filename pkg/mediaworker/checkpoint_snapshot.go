@@ -38,6 +38,10 @@ func (c *sessionCheckpoint) captureSnapshotCandidate(captured time.Time, candida
 func (c *sessionCheckpoint) captureSnapshotCandidateMode(captured time.Time, candidate *agentState, writing bool) ([]byte, agentState, dtlsSequenceCheckpoint, error) {
 	s := c.session
 	s.mu.Lock()
+	if s.pendingRestart != nil && s.state.ICE.LocalUfrag == s.pendingRestart.ice.LocalUfrag {
+		s.mu.Unlock()
+		return nil, agentState{}, dtlsSequenceCheckpoint{}, ErrNotEstablished
+	}
 	if s.fenced.Load() || s.ctx.Err() != nil {
 		s.mu.Unlock()
 		return nil, agentState{}, dtlsSequenceCheckpoint{}, errHandedOver

@@ -208,6 +208,18 @@ func actualHTTPWire(t *testing.T) httpWire {
 			}
 			muxNames := map[string]bool{}
 			ast.Inspect(f, func(n ast.Node) bool {
+				if fn, ok := n.(*ast.FuncDecl); ok && fn.Type.Params != nil {
+					for _, param := range fn.Type.Params.List {
+						if syntax(param.Type) == "*http.ServeMux" {
+							for _, name := range param.Names {
+								muxNames[name.Name] = true
+							}
+						}
+					}
+				}
+				return true
+			})
+			ast.Inspect(f, func(n ast.Node) bool {
 				assign, ok := n.(*ast.AssignStmt)
 				if !ok {
 					return true
