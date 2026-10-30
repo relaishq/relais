@@ -212,7 +212,8 @@ type bridgeAttempt struct {
 	cancel context.CancelFunc
 }
 type bridgeOutputHost struct {
-	draining         int // guarded by session.mu; pending moves stop credit before pause
+	permit           bridgePermitCache // live only; exact moves never export permission
+	draining         int               // guarded by session.mu; pending moves stop credit before pause
 	changed          chan struct{}
 	provenUnadmitted bool
 	state            *bridgeOutputState // immutable accepted revision; guarded by session.mu

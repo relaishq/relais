@@ -868,18 +868,24 @@ func (w *Worker) renewLeases() {
 func (w *Worker) renewLease(sess *session) {
 	sess.mu.Lock()
 	lease, fenced := sess.lease, sess.fenced.Load()
+	var permitScope BridgeOutputScope
+	if sess.agent != nil && sess.agent.v2 != nil && sess.agent.v2.bridge != nil && sess.agent.v2.bridge.state != nil {
+		permitScope = BridgeOutputScope(sess.agent.v2.bridge.state.Scope)
+	}
 	sess.mu.Unlock()
 	if fenced {
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(sess.ctx, ownershipTimeout)
+	renewalStart := time.Now()
 	renewed, err := w.cfg.Relay.Owners.Renew(ctx, lease, w.cfg.Relay.LeaseTTL)
 	cancel()
 	sess.mu.Lock()
 	if err == nil {
 		sess.lease = renewed
 	}
+	sess.cacheBridgeRenewal(permitScope, renewalStart, err == nil)
 
 	lost := errors.Is(err, sessionstore.ErrLeaseLost) && !sess.fenced.Load()
 	if lost {

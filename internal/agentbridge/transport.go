@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/relaishq/relais/internal/taskrun"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"golang.org/x/net/websocket"
@@ -43,9 +44,14 @@ func (b *Bridge) run(parent context.Context, run *agent.TaskRun) error {
 	a := value.(*adapter)
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	attachment, scope, resume, err := b.connection(ctx, run, a)
+	attachCtx, stopAttach := context.WithTimeout(ctx, attachBudget)
+	attachment, scope, resume, err := b.connection(attachCtx, run, a)
+	stopAttach()
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &taskrun.Failure{Outcome: agent.Capacity, Detail: "no_capacity_silence"}
 	}
 	conn := attachment.conn
 	defer close(attachment.done)
@@ -67,7 +73,7 @@ func (b *Bridge) run(parent context.Context, run *agent.TaskRun) error {
 		"resume": resume, "next_output_seq": state.NextSequence, "checkpoint_seq": local.Sequence, "working": local.Working, "history": local.History,
 		"checkpoint_age_ms": nil, "snapshot_age_ms": nil, "outcome_unknown": false, "duplicate_windows": []any{},
 		"output_receipts": state, "provider_starts": false,
-		"limits": map[string]int{"input_packets": 32, "json_bytes": 32768, "binary_bytes": 1200, "working_bytes": a.maxWorking - 128, "history_bytes": a.maxHistory},
+		"limits": map[string]int{"input_packets": 32, "json_bytes": 32768, "binary_bytes": 1200, "working_bytes": a.maxWorking - adapterMetadataBytes, "history_bytes": a.maxHistory},
 	}); err != nil {
 		return err
 	}
@@ -289,19 +295,25 @@ func (b *Bridge) write(ctx context.Context, conn *websocket.Conn, a *adapter, sc
 // socket writer never changes the accepted image. Emit's 100 ms floor remains
 // outside both the socket writer and the host output admission path.
 func emitUpdates(ctx context.Context, run *agent.TaskRun, a *adapter, candidates <-chan []byte) error {
-	sequence := run.After() + 1 // The initial identity update reserves the first emission.
+	sequence := run.After() + 1 // Identity reserves the first emission.
+	attached := false
 	for {
 		var update adapterUpdate
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case raw := <-candidates:
-			var c checkpoint
-			if err := json.Unmarshal(raw, &c); err != nil {
-				return err
+		if !attached {
+			update.Attached = true
+			attached = true
+		} else {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case raw := <-candidates:
+				var c checkpoint
+				if err := json.Unmarshal(raw, &c); err != nil {
+					return err
+				}
+				update.Checkpoint = &c
+			case <-a.deliveredWake:
 			}
-			update.Checkpoint = &c
-		case <-a.deliveredWake:
 		}
 		update.Delivered = a.delivered.Load()
 		raw, err := json.Marshal(update)
