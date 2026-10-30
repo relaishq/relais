@@ -238,15 +238,14 @@ func (p *Plane) AuthorityChanges() <-chan struct{} {
 // BeginShutdown pauses work while the lease keeper protects handlers that are
 // still draining. The caller cancels RunManaged only after handlers stop.
 func (p *Plane) BeginShutdown() {
+	if p.restart != nil {
+		p.restart.stopping.Store(true)
+		p.restart.ready.Store(false)
+		p.rebuildPhase("stopping", nil)
+	}
 	if p.links != nil {
 		p.links.Close()
 	}
-	if p.restart == nil {
-		return
-	}
-	p.restart.stopping.Store(true)
-	p.restart.ready.Store(false)
-	p.rebuildPhase("stopping", nil)
 }
 
 // A tenure owns its pending requests so a definitive loss can cancel them

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -101,7 +102,15 @@ func (d *DialOut) connect(ctx context.Context, client *http.Client) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	defer func() { _ = resp.Body.Close() }()
+	// HTTP/2 cancellation alone can leave a response read waiting for the
+	// upload. This must cover the welcome/ready handshake too, before Peer exists.
+	interrupt := sync.OnceFunc(func() {
+		_ = reader.Close()
+		_ = writer.Close()
+		_ = resp.Body.Close()
+	})
+	stopInterrupt := context.AfterFunc(ctx, interrupt)
+	defer func() { stopInterrupt(); interrupt() }()
 	if resp.StatusCode != http.StatusOK || resp.ProtoMajor != 2 {
 		return errors.New("workerlink: admission refused")
 	}
@@ -139,11 +148,7 @@ func (d *DialOut) connect(ctx context.Context, client *http.Client) error {
 	}
 	peer := workerlink.New(resp.Body, writer, func() {
 		cancel()
-		// Full-duplex HTTP/2 cancellation can leave a body read waiting for the
-		// upload to finish. Interrupt both pipe ends and the response explicitly.
-		_ = reader.Close()
-		_ = writer.Close()
-		_ = resp.Body.Close()
+		interrupt()
 	}, d.Worker.LinkHandler(handler))
 	monitorDone := make(chan struct{})
 	go func() { defer close(monitorDone); d.watchLeg(ctx, peer, address, ready) }()
