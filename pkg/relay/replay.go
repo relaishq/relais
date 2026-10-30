@@ -104,9 +104,10 @@ func (r *Relay) BeginReplay(ctx context.Context, id string, from netip.AddrPort,
 		}
 		if !h.replay {
 			if r.barrierEndpoint(from) == from {
-				// Ordinary live exports retain their existing uncertainty and
-				// same-target confirmation path. Only an authorized NAT drain
-				// has lost its old leg and needs the retained pre-barrier input.
+				// Keep ordinary uncertain exports on their same-target confirmation
+				// path. That path has not been proven free of this pre-barrier hole:
+				// inbound operator recovery did not reproduce it in three trials.
+				// Promotion is currently limited to an authorized NAT drain.
 				return ReplayPlan{}, ErrHeld
 			}
 			// Control has fenced the uncertain export before requesting replay.
@@ -114,6 +115,9 @@ func (r *Relay) BeginReplay(ctx context.Context, id string, from netip.AddrPort,
 			// would omit pre-barrier input missing from the recovery checkpoint.
 			// A later exact move could then recover those old holes behind live
 			// video, reversing the decoder's source clock.
+			h.timer.Stop()
+			h.promotedDeadline = time.Now().Add(r.cfg.HoldTimeout)
+			h.timer = time.AfterFunc(r.cfg.HoldTimeout, func() { r.expireHold(h) })
 			h.replay = true
 			h.queuedHigh = make(map[uint32]uint64)
 			for i := range h.queue {

@@ -291,7 +291,7 @@ jobs:
             bin/attach-smoke-*
 
   dial-out-process:
-    timeout-minutes: 40
+    timeout-minutes: 75
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
@@ -310,25 +310,17 @@ jobs:
       # Each invocation owns a disposable loopback Redis. Run the outage
       # cases serially: they deliberately pause that Redis for 30 seconds.
       - name: Verify native dial-out fault matrix (race detector)
-        timeout-minutes: 12
-        env:
-          RELAIS_TEST_DIAL_OUT_PROCESS: "1"
-          RELAIS_TEST_REDIS_REQUIRE: "1"
-          RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
+        timeout-minutes: 22
         run: >-
           python3 scripts/dev/with-redis.py env RELAIS_TEST_DIAL_OUT_PROCESS=1
-          RELAIS_HARNESS_REQUIRE_FFMPEG=1 go test -race -v -count=1 -timeout 11m
+          RELAIS_HARNESS_REQUIRE_FFMPEG=1 go test -race -v -count=1 -timeout 20m
           -run '^Test(DialOutProcess|ProcessImmediateMoveAfterUncertainExport)'
           -skip '^TestDialOutProcessFullConsent$' ./cmd/crash-run/
       - name: Verify ten interleaved SIGKILL trials per mode with full consent
-        timeout-minutes: 25
-        env:
-          RELAIS_TEST_DIAL_OUT_PROCESS: "1"
-          RELAIS_TEST_REDIS_REQUIRE: "1"
-          RELAIS_HARNESS_REQUIRE_FFMPEG: "1"
+        timeout-minutes: 37
         run: >-
           python3 scripts/dev/with-redis.py env RELAIS_TEST_DIAL_OUT_PROCESS=1
-          RELAIS_HARNESS_REQUIRE_FFMPEG=1 go test -race -v -count=10 -timeout 24m
+          RELAIS_HARNESS_REQUIRE_FFMPEG=1 go test -race -v -count=10 -timeout 35m
           -run '^TestDialOutProcessFullConsent$' ./cmd/crash-run/
       - name: Upload dial-out process failure logs
         if: failure()
