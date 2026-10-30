@@ -43,6 +43,11 @@ func (w *Worker) StopBridgePermits(scope BridgeOutputScope) (time.Time, error) {
 	if b.state == nil || BridgeOutputScope(b.state.Scope) != scope {
 		return time.Time{}, ErrBridgeOutputScope
 	}
+	// Once export has paused the actor, its cut wins. The caller must follow
+	// the move rather than create a source-only revocation after that cut.
+	if s.agent.paused || s.fenced.Load() {
+		return time.Time{}, ErrBridgeOutputMoving
+	}
 	if b.permit.stopped.IsZero() {
 		b.permit.stopped = time.Now()
 	}

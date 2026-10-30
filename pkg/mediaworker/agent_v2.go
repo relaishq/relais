@@ -468,6 +468,11 @@ type moveScratch struct {
 // The actor reserves actual accepted payloads before pausing. If queued work
 // grows them, reserveMoveBytes grows this hold before accepting that work.
 func (s *session) reserveV2ExportScratch() error {
+	// session.mu serializes this pre-pause admission with StopBridgePermits.
+	// Until C5 carries revocation state, moving a stopped scope is unsafe.
+	if b := s.agent.v2.bridge; b != nil && !b.permit.stopped.IsZero() {
+		return ErrExportNotFlushed
+	}
 	s.moveMu.Lock()
 	defer s.moveMu.Unlock()
 	if s.moveClosed {

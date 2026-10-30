@@ -278,18 +278,18 @@ func (b *Bridge) removeAssignment(p *assignment) {
 		}
 	}
 }
-func (b *Bridge) connection(ctx context.Context, run *agent.TaskRun, a *adapter) (attachment, mediaworker.BridgeOutputScope, string, error) {
+func (b *Bridge) connection(ctx context.Context, run *agent.TaskRun, a *adapter) (attachment, mediaworker.BridgeOutputScope, string, *runner, error) {
 	existing, err := b.worker.BridgeOutputBinding(a.id)
 	if err != nil && !errors.Is(err, mediaworker.ErrBridgeOutputUnbound) {
-		return attachment{}, existing, "", err
+		return attachment{}, existing, "", nil, err
 	}
 	epoch, err := b.worker.BridgeOutputEpoch(a.id)
 	if err != nil {
-		return attachment{}, existing, "", err
+		return attachment{}, existing, "", nil, err
 	}
 	r, p, err := b.reserve(ctx, a.id, epoch, existing)
 	if err != nil {
-		return attachment{}, existing, "", err
+		return attachment{}, existing, "", nil, err
 	}
 	defer b.removeAssignment(p)
 	success := false
@@ -305,15 +305,15 @@ func (b *Bridge) connection(ctx context.Context, run *agent.TaskRun, a *adapter)
 	case conn = <-p.attached:
 		close(p.claimed)
 	case <-r.done:
-		return conn, existing, "", errProtocol
+		return conn, existing, "", nil, errProtocol
 	case <-ctx.Done():
-		return conn, existing, "", ctx.Err()
+		return conn, existing, "", nil, ctx.Err()
 	case <-timer.C:
-		return conn, existing, "", context.DeadlineExceeded
+		return conn, existing, "", nil, context.DeadlineExceeded
 	}
-	fail := func(e error) (attachment, mediaworker.BridgeOutputScope, string, error) {
+	fail := func(e error) (attachment, mediaworker.BridgeOutputScope, string, *runner, error) {
 		close(conn.done)
-		return attachment{}, existing, "", e
+		return attachment{}, existing, "", nil, e
 	}
 	if existing.BotInstance != "" && a.runnerID.Load() != r.id {
 		return fail(errProtocol)
@@ -364,7 +364,7 @@ func (b *Bridge) connection(ctx context.Context, run *agent.TaskRun, a *adapter)
 		<-r.slot
 	}
 	success = true
-	return conn, p.scope, resume, nil
+	return conn, p.scope, resume, r, nil
 }
 
 // Listen binds only the literal loopback address validated by Config.

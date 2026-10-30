@@ -90,3 +90,32 @@ func TestBridgePermitLeaseTTLAndScopeAndDurability(t *testing.T) {
 		require.Zero(t, s.worker.BridgePermitRemaining(scope))
 	})
 }
+
+func TestBridgeStoppedPermitsRefuseExportBeforePause(t *testing.T) {
+	rig, scope := newBridgeRig(t, false)
+	s := rig.s
+	_, err := s.worker.StopBridgePermits(scope)
+	require.NoError(t, err)
+	s.mu.Lock()
+	err = s.reserveV2ExportScratch()
+	paused, fenced, held := s.agent.paused, s.fenced.Load(), s.exportScratch != nil
+	s.mu.Unlock()
+	require.ErrorIs(t, err, ErrExportNotFlushed)
+	require.False(t, paused)
+	require.False(t, fenced)
+	require.False(t, held)
+	require.NoError(t, s.ctx.Err())
+}
+
+func TestBridgePausedExportRefusesConcurrentPermitStop(t *testing.T) {
+	rig, scope := newBridgeRig(t, false)
+	s := rig.s
+	s.mu.Lock()
+	s.agent.paused = true
+	s.mu.Unlock()
+	_, err := s.worker.StopBridgePermits(scope)
+	require.ErrorIs(t, err, ErrBridgeOutputMoving)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	require.True(t, s.agent.v2.bridge.permit.stopped.IsZero())
+}

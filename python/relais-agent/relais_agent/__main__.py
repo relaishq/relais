@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 import av
 from websockets.asyncio.client import connect
+from websockets.exceptions import WebSocketException
 
 from .codec import Tone, decoder
 from .permissions import Permit
@@ -195,6 +196,8 @@ class Runner:
         session = assignment["session_id"]
         pair = assignment["epoch"], assignment["generation"]
         identity = assignment["bot_instance"], assignment["lineage_id"]
+        if assignment["bot_instance"] != self.bot_instance:
+            raise ValueError("assignment names another bot")
         previous = self.floors.get(session)
         if previous:
             floor, bound = previous
@@ -217,7 +220,7 @@ class Runner:
                 or floor[0] != old or floor[1] is None
                 or floor[1][0] != message["bot_instance"]
                 or (previous and previous["request_id"] == message["request_id"])):
-            raise ValueError("stale or conflicting revocation")
+            return None
         # No await between the floor commit and disabling obsolete work.
         self.floors[session] = new, None
         self.revocations[session] = dict(message)
@@ -244,9 +247,12 @@ class Runner:
         try:
             await self.registry_connected(url, ready)
         finally:
-            for session in self.sessions.values():
+            for session_id, session in list(self.sessions.items()):
                 if session.permit.owner == url:
-                    session.permit.disable()
+                    session.stop()
+                    await session.close()
+                    if self.sessions.get(session_id) is session and session.permit.owner == url:
+                        del self.sessions[session_id]
 
     async def registry_connected(self, url, ready):
         async with socket(url + "/registry", self.token) as ws:
@@ -261,42 +267,54 @@ class Runner:
                 await asyncio.gather(permit_task, return_exceptions=True)
 
     async def registry_messages(self, ws, url, ready):
-            reserved = None
-            async for raw in ws:
-                message = json.loads(raw)
-                kind = message["type"]
-                if kind == "registered":
-                    ready.set()
-                elif kind == "reserve":
-                    session = message["session_id"]
-                    previous = self.floors.get(session)
-                    now = time.time_ns() // 1000000
-                    self.reservations = {worker: r for worker, r in self.reservations.items() if r["expires_ms"] > now}
-                    accepted = ((not self.sessions or session in self.sessions)
-                                and all(r["session_id"] == session for r in self.reservations.values())
-                                and message["expires_ms"] > now
-                                and (previous is None or message["epoch"] >= previous[0][0]))
-                    reserved = message if accepted else None
-                    if accepted:
-                        self.reservations[url] = message
-                    await ws.send(json.dumps({"type": "reserved", "reservation_id": message["reservation_id"], "accepted": accepted}))
-                elif kind == "permit":
-                    session = self.sessions.get(message["session_id"])
-                    if session is not None:
-                        session.permit.receive(url, message)
-                elif kind == "revoke":
-                    await ws.send(json.dumps(self.revoke(message)))
-                elif kind == "assign":
-                    if (reserved is None or self.reservations.get(url) != reserved or any(message[k] != reserved[k] for k in ("session_id", "epoch", "expires_ms"))
-                            or time.time_ns() // 1000000 >= message["expires_ms"]):
-                        raise ValueError("unreserved or expired assignment")
-                    reserved = None
-                    del self.reservations[url]
+        reserved = None
+        async for raw in ws:
+            message = json.loads(raw)
+            kind = message["type"]
+            if kind == "registered":
+                ready.set()
+            elif kind == "reserve":
+                session = message["session_id"]
+                previous = self.floors.get(session)
+                now = time.time_ns() // 1000000
+                self.reservations = {worker: r for worker, r in self.reservations.items() if r["expires_ms"] > now}
+                accepted = ((not self.sessions or session in self.sessions)
+                            and all(r["session_id"] == session for r in self.reservations.values())
+                            and message["expires_ms"] > now
+                            and (previous is None or message["epoch"] >= previous[0][0]))
+                reserved = message if accepted else None
+                if accepted:
+                    self.reservations[url] = message
+                await ws.send(json.dumps({"type": "reserved", "reservation_id": message["reservation_id"], "accepted": accepted}))
+            elif kind == "permit":
+                session = self.sessions.get(message["session_id"])
+                if session is not None:
+                    session.permit.receive(url, message)
+            elif kind == "revoke":
+                acknowledgement = self.revoke(message)
+                if acknowledgement is not None:
+                    await ws.send(json.dumps(acknowledgement))
+            elif kind == "assign":
+                if (reserved is None or self.reservations.get(url) != reserved or any(message[k] != reserved[k] for k in ("session_id", "epoch", "expires_ms"))
+                        or time.time_ns() // 1000000 >= message["expires_ms"]):
+                    continue
+                reserved = None
+                del self.reservations[url]
+                try:
                     self.accept(message)
-                    session = self.sessions.setdefault(message["session_id"], Session(self.packets))
+                except ValueError:
+                    continue
+                session_id = message["session_id"]
+                session = self.sessions.setdefault(session_id, Session(self.packets))
+                try:
                     await session.attach(url, self.token, message)
-                else:
-                    raise ValueError("unsupported registry message")
+                except (OSError, ValueError, WebSocketException):
+                    session.stop()
+                    await session.close()
+                    if self.sessions.get(session_id) is session:
+                        del self.sessions[session_id]
+            else:
+                raise ValueError("unsupported registry message")
 
 
 async def main(args):

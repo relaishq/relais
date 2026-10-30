@@ -53,7 +53,7 @@ func authorityCall(t *testing.T, ctx context.Context) (*Bridge, string, string) 
 	return b, "ws" + strings.TrimPrefix(server.URL, "http") + "/bridge", id
 }
 
-func TestBridgePermitLedgerAndPartitionExpiryFallback(t *testing.T) {
+func TestBridgePermitRepliesAndPartitionExpiryFallback(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	b, endpoint, id := authorityCall(t, ctx)
@@ -89,20 +89,9 @@ func TestBridgePermitLedgerAndPartitionExpiryFallback(t *testing.T) {
 	}()
 	defer func() { _ = bot.Close(); <-botDone }()
 	scope := attached.Scope
-	var deadline time.Time
-	var ledger []mediaworker.BridgeOutputScope
-	start := func() bool {
-		if !time.Now().Before(deadline) {
-			return false
-		}
-		ledger = append(ledger, scope)
-		return true
-	}
-	require.False(t, start(), "attached is not provider authority")
 	request := permitRequest{Type: "permit_request", SessionID: id, Epoch: scope.Epoch, Generation: scope.Generation}
 	for {
 		request.Nonce = nonce()
-		requestStart := time.Now()
 		require.NoError(t, websocket.JSON.Send(registry, request))
 		var reply struct {
 			permitRequest
@@ -111,7 +100,6 @@ func TestBridgePermitLedgerAndPartitionExpiryFallback(t *testing.T) {
 		require.NoError(t, websocket.JSON.Receive(registry, &reply))
 		require.Equal(t, request.Nonce, reply.Nonce)
 		if reply.Remaining > 0 {
-			deadline = requestStart.Add(time.Duration(reply.Remaining) * time.Millisecond)
 			break
 		}
 		select {
@@ -120,8 +108,6 @@ func TestBridgePermitLedgerAndPartitionExpiryFallback(t *testing.T) {
 			t.Fatal(ctx.Err())
 		}
 	}
-	require.True(t, start())
-	require.Len(t, ledger, 1)
 	revoked := make(chan bool, 1)
 	go func() {
 		confirmed, e := b.Revoke(ctx, scope, scope.Epoch, scope.Generation+1)
@@ -129,12 +115,9 @@ func TestBridgePermitLedgerAndPartitionExpiryFallback(t *testing.T) {
 	}()
 	var transition revocation
 	require.NoError(t, websocket.JSON.Receive(registry, &transition))
-	deadline = time.Time{} // Fake runner commits its floor before acknowledging.
-	require.False(t, start())
 	transition.Type = "revoked"
 	require.NoError(t, websocket.JSON.Send(registry, transition))
 	require.True(t, <-revoked)
-	require.Len(t, ledger, 1, "obsolete generation cannot add provider/tool starts")
 	request.Nonce = nonce()
 	require.NoError(t, websocket.JSON.Send(registry, request))
 	var reply struct {
@@ -146,6 +129,8 @@ func TestBridgePermitLedgerAndPartitionExpiryFallback(t *testing.T) {
 	require.ErrorIs(t, err, errProtocol, "retry cannot change transition arguments")
 	until, err := b.worker.StopBridgePermits(scope)
 	require.NoError(t, err)
+	_, err = b.worker.ExportSession(id)
+	require.ErrorIs(t, err, mediaworker.ErrExportNotFlushed, "a stopped generation cannot move without its revocation boundary")
 	// Blackhole registry replies without closing either socket. Revoke retries
 	// must use the same transition and cannot extend the grant-stop deadline.
 	confirmed, err := b.Revoke(ctx, scope, scope.Epoch, scope.Generation+1)
@@ -154,7 +139,6 @@ func TestBridgePermitLedgerAndPartitionExpiryFallback(t *testing.T) {
 	require.False(t, time.Now().Before(until), "unconfirmed revocation must wait the entire permit cap")
 	require.WithinDuration(t, until, time.Now(), time.Second)
 	require.Equal(t, 1, b.worker.SessionCount())
-	require.False(t, start())
 	require.NoError(t, registry.SetReadDeadline(time.Now().Add(time.Second)))
 	request.Nonce = nonce()
 	require.NoError(t, websocket.JSON.Send(registry, request))
@@ -175,7 +159,7 @@ func TestBridgePermitLedgerAndPartitionExpiryFallback(t *testing.T) {
 		retries++
 	}
 	require.Greater(t, retries, 1, "blackholed acknowledgements must cause bounded exact retries")
-	t.Logf("permit_cap=%s fallback_lateness=%s ledger_starts=%d call_retained=true", mediaworker.BridgePermitCap, time.Since(until), len(ledger))
+	t.Logf("permit_cap=%s fallback_lateness=%s call_retained=true", mediaworker.BridgePermitCap, time.Since(until))
 }
 
 func TestBridgeRevokeUnavailableNeverAuthorizesWork(t *testing.T) {

@@ -45,7 +45,7 @@ func (b *Bridge) run(parent context.Context, run *agent.TaskRun) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	attachCtx, stopAttach := context.WithTimeout(ctx, attachBudget)
-	attachment, scope, resume, err := b.connection(attachCtx, run, a)
+	attachment, scope, resume, runner, err := b.connection(attachCtx, run, a)
 	stopAttach()
 	if err != nil {
 		if ctx.Err() != nil {
@@ -59,6 +59,16 @@ func (b *Bridge) run(parent context.Context, run *agent.TaskRun) error {
 	defer func() { _ = conn.Close() }()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
+	registryDone := make(chan struct{})
+	go func() {
+		defer close(registryDone)
+		select {
+		case <-runner.done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	defer func() { cancel(); <-registryDone }()
 	state, err := b.worker.BridgeOutputResume(scope)
 	if err != nil {
 		return err

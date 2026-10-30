@@ -17,6 +17,7 @@ def revoke(epoch=1, generation=10, new_epoch=1, new_generation=11, request_id="r
 class RevocationTests(unittest.TestCase):
     def test_revoke_advances_floor_before_ack_and_exact_retries_only(self):
         runner = Runner("isolated-test-token", 150)
+        runner.bot_instance = "bot"
         old = assignment()
         runner.accept(old)
         bot = runner.sessions["call"] = Session(1)
@@ -38,8 +39,7 @@ class RevocationTests(unittest.TestCase):
                         dict(old, generation=10, lineage_id="other")):
             with self.assertRaises(ValueError):
                 runner.accept(changed)
-        with self.assertRaises(ValueError):
-            runner.revoke(dict(message, new_generation=12))
+        self.assertIsNone(runner.revoke(dict(message, new_generation=12)))
         successor = dict(old, generation=11, lineage_id="new")
         runner.accept(successor)
         new_ticket = bot.permit.bind("owner", successor)
@@ -51,11 +51,11 @@ class RevocationTests(unittest.TestCase):
         self.assertEqual(bot.permit.ledger[-1][1:3], (1, 11))
         with self.assertRaises(ValueError):
             runner.accept(dict(old, generation=11, lineage_id="other"))
-        with self.assertRaises(ValueError):
-            runner.revoke(message)  # Cannot acknowledge an obsolete request after assignment.
+        self.assertIsNone(runner.revoke(message))  # Obsolete request cannot be acknowledged.
 
     def test_epoch_precedes_generation_and_unconfirmed_lineage_is_not_reconnect(self):
         runner = Runner("isolated-test-token", 150)
+        runner.bot_instance = "bot"
         runner.accept(assignment())
         runner.revoke(revoke(new_epoch=2, new_generation=1))
         with self.assertRaises(ValueError):
@@ -64,8 +64,7 @@ class RevocationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.accept(dict(assignment(3, 1), lineage_id="different"))
         runner.accept(dict(assignment(3, 1), lineage_id="new"))
-        with self.assertRaises(ValueError):
-            runner.revoke(revoke(new_epoch=2, new_generation=2, request_id="stale"))
+        self.assertIsNone(runner.revoke(revoke(new_epoch=2, new_generation=2, request_id="stale")))
 
 
 class PermitTests(unittest.TestCase):
