@@ -121,19 +121,20 @@ once and stored in `.relais-local`, which has mode 0700. They are never printed.
 Keep this directory private. The public certificate is regenerated on each
 full topology start.
 
-The default ports are Redis 16380; relay HTTP 34700 and UDP 34780/34781;
-workers HTTP 34701/34702 and UDP 34711/34712; control HTTP 34710; signal HTTPS
-34743. Set `PORT_BASE` to shift the 34700-based ports together. Use `-state DIR`
+The default ports are Redis 16380; relay HTTP 25700 and UDP 25780/25781;
+workers HTTP 25701/25702 and UDP 25711/25712; control HTTP 25710; signal HTTPS
+25743. These defaults stay below Linux's default ephemeral range (32768–60999).
+Set `PORT_BASE` to shift the 25700-based ports together. Use `-state DIR`
 on both scripts to choose another state directory.
 
 In another terminal, start one 60-second call through the signal frontend:
 
 ```bash
 ./relais-load -external-caller \
-  -signaling https://127.0.0.1:34743/calls \
+  -signaling https://127.0.0.1:25743/calls \
   -signaling-cert .relais-local/secrets/signal.pem \
   -bearer-token-file .relais-local/secrets/signal.token \
-  -relay 127.0.0.1:34780 -callers 1 -duration 60s \
+  -relay 127.0.0.1:25780 -callers 1 -duration 60s \
   -output caller.jsonl > caller.log 2> caller.stderr &
 CALLER_PID=$!
 ```
@@ -148,18 +149,18 @@ AT=$(python3 -c 'import datetime; print((datetime.datetime.now(datetime.timezone
 curl -fsS -X POST "$CALLER_HTTP/start" -H 'Content-Type: application/json' \
   -d "{\"at\":\"$AT\"}"
 sleep 6
-curl -fsS http://127.0.0.1:34710/status > status.json
+curl -fsS http://127.0.0.1:25710/status > status.json
 CALL_ID=$(python3 -c 'import json; print(json.load(open("status.json"))["calls"][0]["id"])')
 
 # Move to the other worker, then record the result in the caller report.
-curl -fsS -X POST "http://127.0.0.1:34710/calls/$CALL_ID/move" > move.json
+curl -fsS -X POST "http://127.0.0.1:25710/calls/$CALL_ID/move" > move.json
 python3 -c 'import json; print(json.dumps([json.load(open("move.json"))]))' > moves.json
 curl -fsS -X POST "$CALLER_HTTP/record-moves" \
   -H 'Content-Type: application/json' --data-binary @moves.json
 sleep 6
 
 # Resolve the current owner, then kill only its PID recorded by start.sh.
-curl -fsS http://127.0.0.1:34710/status > status.json
+curl -fsS http://127.0.0.1:25710/status > status.json
 OWNER=$(python3 -c 'import json; print(json.load(open("status.json"))["calls"][0]["owner"])')
 OWNER_PID=$(awk -F '|' -v name="worker-${OWNER#w}" '$1==name {pid=$2} END {print pid}' .relais-local/pids)
 AT=$(python3 -c 'import datetime; print(datetime.datetime.now(datetime.timezone.utc).isoformat())')
@@ -167,12 +168,12 @@ kill -9 "$OWNER_PID"
 curl -fsS -X POST "$CALLER_HTTP/kill" -H 'Content-Type: application/json' \
   -d "{\"worker\":\"$OWNER\",\"at\":\"$AT\"}"
 sleep 3
-curl -fsS http://127.0.0.1:34710/status
+curl -fsS http://127.0.0.1:25710/status
 
 # Restart the same worker with the saved binary path, ports and shared key.
 ./start.sh -restart-worker "$OWNER"
 sleep 3
-curl -fsS http://127.0.0.1:34710/status
+curl -fsS http://127.0.0.1:25710/status
 wait "$CALLER_PID"
 ./stop.sh
 ```
