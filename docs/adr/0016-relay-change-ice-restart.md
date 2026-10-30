@@ -133,7 +133,7 @@ caller            signal/control              worker (owner)         relay R2   
   |== media continues on R1 =========================================================|
   |-- checks (g+1) ------------------------------------------------->|  |        |
   |                     |                         |<- forwarded check --|        |
-  |                     |                         |   USE-CANDIDATE: switch path |
+  |                     |                         |   USE-CANDIDATE or caller media: switch|
   |<-------------------------------------- binding success ----------|          |
   |== media on R2 ====================================================|         |
   |                     |<- switched (g+1) -------|                    |        |
@@ -159,10 +159,15 @@ caller            signal/control              worker (owner)         relay R2   
 5. The caller sends checks to R2. R2 routes the binding request by session ID,
    as today. It forwards it only if the assignment names R2 as current or
    pending (an extra field on the existing owner lookup).
-6. The worker authenticates the check with the `g + 1` credentials. On
-   `USE-CANDIDATE` it switches the session's path to (R2, caller address)
-   **at once**, answers the check and asks the caller for a keyframe, as after a
-   planned move. RTP sequence numbers, timestamps and the SRTP state continue.
+6. The worker authenticates the check with the `g + 1` credentials. It
+   switches the session's path to (R2, caller address) **at once** on the
+   first of two signals: `USE-CANDIDATE` on an authenticated check, or the
+   first authenticated SRTP packet from the caller through R2 after such a
+   check. The second signal follows a caller that starts sending on the new
+   pair before it nominates it; such a caller may already ignore packets from
+   the old relay. The worker answers the check and asks the caller for a
+   keyframe, as after a planned move. RTP sequence numbers, timestamps and the
+   SRTP state continue.
 7. The worker commits `relay = R2, relay_gen = g + 1` with a store write fenced
    by its lease epoch, then reports the switch to control. Control tells R1 to
    forget the call's routes with the existing tenure-checked cleanup.
