@@ -1,0 +1,11 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "relais-agent"
+version = "0.0.0"
+description = "Isolated loopback development bot for Relais"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = ["websockets==15.0.1", "av==16.0.1"]

@@ -22,6 +22,7 @@ import (
 	"github.com/pion/rtcp"
 	"github.com/pion/rtp"
 	"github.com/pion/srtp/v3"
+	"github.com/relaishq/relais/internal/agenthost"
 	"github.com/relaishq/relais/internal/workerprobe"
 	"github.com/relaishq/relais/pkg/agent"
 	"github.com/relaishq/relais/pkg/framecache"
@@ -704,6 +705,11 @@ func (s *session) consentExpired() {
 func (s *session) close() {
 	s.closeOnce.Do(func() {
 		s.cancel()
+		if s.agent != nil && s.agent.v2 != nil && s.agent.v2.bridge != nil {
+			if hooks, ok := s.agent.v2.instance.(agenthost.BridgeHooks); ok {
+				hooks.Closed()
+			}
+		}
 		s.releaseMoveBytes()
 		s.consent.Stop()
 

@@ -240,6 +240,21 @@ type bridgeOutputHost struct {
 	// No transport callback is involved in capture.
 }
 
+// BridgeOutputEpoch reads the session's actual local lease. BindBridgeOutput
+// still checks that epoch when committing the attachment.
+func (w *Worker) BridgeOutputEpoch(id string) (uint64, error) {
+	s, err := w.bridgeSession(id)
+	if err != nil {
+		return 0, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lease.Epoch == 0 {
+		return 0, ErrBridgeOutputScope
+	}
+	return s.lease.Epoch, nil
+}
+
 // BindBridgeOutput is an internal-owner seam for the future authenticated bridge
 // transport. It cannot turn an ordinary agent into a bridge or replace lineage.
 // The caller must establish authorization before binding the first scope.
