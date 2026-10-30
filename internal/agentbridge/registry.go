@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	agent "github.com/relaishq/relais/pkg/agent/v2"
@@ -20,11 +21,13 @@ import (
 // with multiple eligible workers; an exact move reserves the same bot there.
 // Provider starts remain disabled until the permit/revocation slice.
 type runner struct {
-	id, bot string
-	conn    *websocket.Conn
-	slot    chan struct{}
-	replies chan reservationReply
-	done    chan struct{}
+	id, bot     string
+	conn        *websocket.Conn
+	slot        chan struct{}
+	replies     chan reservationReply
+	replyMu     sync.Mutex
+	reservation string
+	done        chan struct{}
 }
 type reservationReply struct {
 	Type     string `json:"type"`
@@ -132,12 +135,7 @@ func (b *Bridge) register(c *websocket.Conn) {
 	}
 	for {
 		var reply reservationReply
-		if websocket.JSON.Receive(c, &reply) != nil || reply.Type != "reserved" {
-			return
-		}
-		select {
-		case r.replies <- reply:
-		default:
+		if websocket.JSON.Receive(c, &reply) != nil || r.receiveReply(reply) != nil {
 			return
 		}
 	}
@@ -200,6 +198,8 @@ func (b *Bridge) reserve(ctx context.Context, id string, epoch uint64, existing 
 		}
 		scope.Epoch = epoch
 		reservation := nonce()
+		r.setReservation(reservation)
+		defer r.setReservation("")
 		expires := time.Now().Add(5 * time.Second)
 		if err := sendJSON(r.conn, map[string]any{"type": "reserve", "session_id": id, "epoch": epoch, "reservation_id": reservation, "expires_ms": expires.UnixMilli()}); err != nil {
 			return nil, nil, err
@@ -330,4 +330,34 @@ func (b *Bridge) connection(ctx context.Context, run *agent.TaskRun, a *adapter)
 func (b *Bridge) Listen() (net.Listener, error) {
 	u, _ := url.Parse(b.config.URL)
 	return net.Listen("tcp", u.Host)
+}
+
+// setReservation switches the single outstanding RPC and retires replies from
+// its predecessor. Slot ownership serializes this with the next request.
+func (r *runner) setReservation(id string) {
+	r.replyMu.Lock()
+	defer r.replyMu.Unlock()
+	r.reservation = id
+	select {
+	case <-r.replies:
+	default:
+	}
+}
+
+// A delayed or duplicate response is valid registry traffic, not a reason to
+// disconnect the runner. Only the first response for the active RPC is queued.
+func (r *runner) receiveReply(reply reservationReply) error {
+	if reply.Type != "reserved" {
+		return errProtocol
+	}
+	r.replyMu.Lock()
+	defer r.replyMu.Unlock()
+	if r.reservation == "" || reply.ID != r.reservation {
+		return nil
+	}
+	select {
+	case r.replies <- reply:
+	default:
+	}
+	return nil
 }

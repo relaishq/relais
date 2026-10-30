@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -65,7 +66,7 @@ func TestBridgeRunnerMovesLiveCall(t *testing.T) {
 		}
 		if lineage != attached.Scope.LineageID {
 			mu.Unlock()
-			errors <- errProtocol
+			errors <- fmt.Errorf("%w: bot lineage changed during attachment", errProtocol)
 			return
 		}
 		for seq := range pending {
@@ -111,6 +112,7 @@ func TestBridgeRunnerMovesLiveCall(t *testing.T) {
 					Type    string `json:"type"`
 					Seq     uint64 `json:"seq"`
 					Outcome string `json:"outcome"`
+					Reason  string `json:"reason"`
 				}
 				if json.Unmarshal(raw, &reply) != nil {
 					return
@@ -130,7 +132,7 @@ func TestBridgeRunnerMovesLiveCall(t *testing.T) {
 				}
 				if reply.Type == "output_receipt" {
 					if reply.Outcome != "admitted" {
-						errors <- errProtocol
+						errors <- fmt.Errorf("%w: output receipt seq=%d outcome=%q reason=%q", errProtocol, reply.Seq, reply.Outcome, reply.Reason)
 						return
 					}
 					mu.Lock()

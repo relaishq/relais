@@ -189,6 +189,16 @@ func (b *Bridge) write(ctx context.Context, conn *websocket.Conn, a *adapter, sc
 		case <-ctx.Done():
 			return ctx.Err()
 		case r := <-replies:
+			if message, ok := r.(wireMessage); ok && message.kind == "output_receipt" {
+				if receipt, ok := message.value.(mediaworker.BridgeOutputReceipt); ok && !receipt.Consumed && receipt.Reason == "moving" {
+					// The source did not admit this identity. End the old socket without
+					// declaring a failed packet; the exact destination cut reconciles it.
+					return mediaworker.ErrBridgeOutputMoving
+				}
+			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if err := send(r); err != nil {
 				return err
 			}
