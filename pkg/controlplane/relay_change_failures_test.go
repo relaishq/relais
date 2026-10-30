@@ -166,11 +166,63 @@ func TestRelayCancellationKeepsSwitchedAssignment(t *testing.T) {
 		done := make(chan error, 1)
 		go func() { done <- p.ChangeRelay(ctx, id, "r2") }()
 		lease, pending := waitRelayPending(t, store, id)
-		cancel()
+		c, err := p.lookup(id)
+		require.NoError(t, err)
+		// Takeover cancels the operation; request cancellation now repairs ICE.
+		require.NoError(t, c.lockOperator(ctx, true))
+		defer c.mu.Unlock()
 		require.Error(t, <-done)
 		_, got, err := store.(sessionstore.RelayAssignments).RelayOwner(context.Background(), id)
 		require.NoError(t, err)
 		require.Equal(t, pending, got, "an uncommitted switched path stays authorized; cancellation cannot roll it back")
 		require.NoError(t, store.(sessionstore.RelayAssignments).CASRelay(context.Background(), lease, pending, sessionstore.RelayAssignment{Slot: "r2", Generation: 1}))
+	})
+}
+
+func TestTakeoverPreemptsRelayRecovery(t *testing.T) {
+	forBudgetRetryStores(t, func(t *testing.T, store sessionstore.Store) {
+		p, _, b, id := relayFailurePlane(t, store)
+		p.workers["b"].worker = &takeoverWorker{fakeWorker: b}
+		ctx := context.Background()
+		lease, err := store.Get(ctx, id)
+		require.NoError(t, err)
+		require.NoError(t, store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
+		request, disconnect := context.WithCancel(ctx)
+		defer disconnect()
+		done := make(chan error, 1)
+		go func() { done <- p.ChangeRelay(request, id, "r2") }()
+		c, err := p.lookup(id)
+		require.NoError(t, err)
+		defer func() {
+			c.controlMu.Lock()
+			if c.relayCancel != nil {
+				c.relayCancel()
+			}
+			c.controlMu.Unlock()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Error("relay recovery did not stop")
+			}
+		}()
+		waitRelayPending(t, store, id)
+		disconnect()
+		require.Eventually(t, func() bool {
+			_, a, e := store.(sessionstore.RelayAssignments).RelayOwner(ctx, id)
+			return e == nil && a.Generation == 1 && a.Pending == "r1"
+		}, time.Second, time.Millisecond)
+		source := p.workers["a"]
+		p.mu.Lock()
+		expireObservedWorker(t, source)
+		p.mu.Unlock()
+		start := time.Now()
+		p.recovery.recover(ctx, source, lease, start)
+		require.Less(t, time.Since(start), takeoverBudget)
+		current, assignment, err := store.(sessionstore.RelayAssignments).RelayOwner(ctx, id)
+		require.NoError(t, err)
+		require.Equal(t, b.addr, current.Worker)
+		require.Empty(t, assignment.Pending)
+		require.Equal(t, uint64(2), assignment.Generation)
+		require.True(t, b.runs(id))
 	})
 }

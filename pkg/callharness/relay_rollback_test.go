@@ -101,7 +101,11 @@ func TestPlannedRelayRollbackKeepsCall(t *testing.T) {
 				sent := make(chan error, 1)
 				go func() { sent <- call.SendMedia(ctx, 14*time.Second) }()
 				time.Sleep(time.Second)
+				started := time.Now()
 				require.Error(t, p.ChangeRelay(ctx, call.SessionID(), "r2"), "failed change must report rollback")
+				if fault == "offer-refused" {
+					require.Less(t, time.Since(started), 2*time.Second, "a definite refusal must recover without waiting for the planned deadline")
+				}
 				require.Eventually(t, func() bool {
 					_, a, e := store.(sessionstore.RelayAssignments).RelayOwner(ctx, call.SessionID())
 					return e == nil && a.Slot == "r1" && a.Pending == "" && a.Generation >= 2

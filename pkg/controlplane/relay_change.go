@@ -87,7 +87,12 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithCancel(ctx)
+	// Request cancellation starts recovery; takeover cancellation stops it.
+	// Publish the detached recovery cancellation with ownership of the call.
+	recoveryBase, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	ctx, cancelRequest := context.WithCancel(ctx)
+	stop := context.AfterFunc(recoveryBase, cancelRequest)
+	defer func() { stop(); cancelRequest() }()
 	if err = c.lockOperatorCancel(ctx, false, cancel); err != nil {
 		cancel()
 		return err
@@ -135,10 +140,10 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 	err = p.waitRelayChange(ctx, c, pending, 10*time.Second)
 	cleanup := from.Slot
 	if err != nil {
-		if ctx.Err() != nil {
+		if recoveryBase.Err() != nil {
 			return errors.Join(err, p.cleanupRelayPending(ctx, lease, pending))
 		}
-		recovery, cancel := context.WithTimeout(ctx, sessionstore.StoreOutageBudget(0))
+		recovery, cancel := context.WithTimeout(recoveryBase, sessionstore.StoreOutageBudget(0))
 		defer cancel()
 		rolled, abortErr := p.abortRelayPending(recovery, lease, pending)
 
@@ -265,10 +270,17 @@ func (p *Plane) waitRelayChange(ctx context.Context, c *call, pending sessionsto
 	deadline, _ := ctx.Deadline()
 	c.stateMu.Lock()
 	c.relayEvent = &RelayEvent{Generation: pending.Generation + 1, Deadline: deadline}
+	c.relayRejected = false
 	c.stateMu.Unlock()
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
 	for {
+		c.stateMu.Lock()
+		rejected := c.relayRejected
+		c.stateMu.Unlock()
+		if rejected {
+			return mediaworker.ErrRestartMismatch
+		}
 		_, got, e := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, c.id)
 		if e == nil && got == (sessionstore.RelayAssignment{Slot: pending.Pending, Generation: pending.Generation + 1}) {
 			c.stateMu.Lock()
@@ -341,6 +353,13 @@ func (p *Plane) relayHandlers(mux *http.ServeMux) {
 		}
 		answer, err := worker.RestartSession(r.Context(), c.id, mediaworker.RestartRequest{Offer: string(body), Generation: g, Slot: a.Pending})
 		if err != nil {
+			if errors.Is(err, mediaworker.ErrRestartMismatch) {
+				c.stateMu.Lock()
+				if c.relayEvent == event { // a late refusal cannot reject a newer generation
+					c.relayRejected = true
+				}
+				c.stateMu.Unlock()
+			}
 			privateapi.Error(w, err, RemoteErrors)
 			return
 		}

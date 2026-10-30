@@ -113,6 +113,7 @@ type call struct {
 	relayCapable   bool
 	eventOpen      bool
 	relayEvent     *RelayEvent                 // guarded by stateMu
+	relayRejected  bool                        // guarded by stateMu; applies only to relayEvent
 	intent         *sessionstore.ControlIntent // guarded by mu
 	terminal       bool                        // reads hold mu or the plane registry lock; writes hold both
 	lease          sessionstore.Lease          // guarded by stateMu; last observed placed tenure
