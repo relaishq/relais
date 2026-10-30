@@ -14,8 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/relaishq/relais/internal/agentbridge"
 	"github.com/relaishq/relais/internal/processrun"
 	"github.com/relaishq/relais/internal/udpbuffer"
+	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/buildinfo"
 	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/framecache"
@@ -88,6 +90,22 @@ func Run(ctx context.Context, args []string, options Options) error {
 	if reserveSet && (*moveReserve <= 0 || *moveReserve >= *drainTimeout) {
 		return fmt.Errorf("-agent-drain-move-reserve must be greater than 0 and less than -drain-timeout (%s)", *drainTimeout)
 	}
+	var bridge *agentbridge.Bridge
+	if *f.bridgeURL == "" && *f.bridgeToken != "" {
+		return fmt.Errorf("-bridge-dev-token requires -bridge-bot-url")
+	}
+	if *f.bridgeURL != "" {
+		if *agentName != "bridge" || !*split {
+			return fmt.Errorf("development bridge requires -agent=bridge and -agent-split-checkpoints")
+		}
+		var err error
+		bridge, err = agentbridge.New(agentbridge.Config{URL: *f.bridgeURL, Token: f.bridgeDevelopmentToken()})
+		if err != nil {
+			return err
+		}
+		r := bridge.Registration()
+		options.Agents = append(options.Agents, Registration{Name: r.Name, Factory: r.Factory, Tasks: r.Tasks, Limits: agent.Limits(r.Bounds), SkipDrainWait: r.SkipDrainWait})
+	}
 	agentConfig, err := registeredAgents(options, *agentName, limits, *split)
 	if err != nil {
 		return err
@@ -149,6 +167,9 @@ func Run(ctx context.Context, args []string, options Options) error {
 		return err
 	}
 	defer func() { _ = worker.Close() }()
+	if bridge != nil {
+		bridge.SetWorker(worker)
+	}
 	udpbuffer.Log(log.Printf, "worker "+*name+" media", worker.SocketBuffers())
 	serving, stopHTTP := context.WithCancel(context.Background())
 	defer stopHTTP()

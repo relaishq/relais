@@ -40,6 +40,8 @@ bin
 
 # Python bytecode from local script tests
 __pycache__/
+/python/.venv/
+*.egg-info/
 
 # Local operator rehearsal inputs and sanitized output
 /runtime/operator-releases/
