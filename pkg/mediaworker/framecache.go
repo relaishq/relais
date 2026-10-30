@@ -293,7 +293,6 @@ func (s *session) encodeReplay() ([][]byte, error) {
 // rather than turning a decodable prefix into an incomplete keyframe.
 func (s *session) sendReplay(packets [][]byte) {
 	s.mu.Lock()
-	remote := s.state.ICE.RemoteAddr
 	maxDuration := s.replayBurstDuration
 	s.mu.Unlock()
 	if maxDuration <= 0 {
@@ -353,7 +352,7 @@ func (s *session) sendReplay(packets [][]byte) {
 			s.truncateReplay(reason)
 			return
 		}
-		_, err := s.send(packet, remote)
+		_, err := s.send(packet, s.state.ICE.RemoteAddr)
 		if err == nil {
 			s.tracePacket(packet, "frame-cache")
 		}

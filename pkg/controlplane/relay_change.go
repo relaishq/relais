@@ -87,10 +87,21 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 	if err != nil {
 		return err
 	}
-	if err = c.lockOperator(ctx, false); err != nil {
+	ctx, cancel := context.WithCancel(ctx)
+	if err = c.lockOperatorCancel(ctx, false, cancel); err != nil {
+		cancel()
 		return err
 	}
-	defer c.mu.Unlock()
+	defer func() {
+		c.stateMu.Lock()
+		c.relayEvent = nil
+		c.stateMu.Unlock()
+		c.controlMu.Lock()
+		c.relayCancel = nil
+		c.mu.Unlock()
+		c.controlMu.Unlock()
+		cancel()
+	}()
 	c.stateMu.Lock()
 	capable := c.relayCapable
 	c.stateMu.Unlock()
@@ -105,29 +116,32 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 	if err != nil {
 		return err
 	}
-	if from.Pending != "" || from.Slot == b.Slot.ID {
+	if from.Pending != "" {
+		// A previous ambiguous abort may now be acknowledged. Never clear a path
+		// that the worker has already switched; its commit must settle first.
+		from, err = p.abortRelayPending(ctx, lease, from)
+		if err != nil {
+			return err
+		}
+	}
+	if from.Slot == b.Slot.ID {
 		return sessionstore.ErrRelayConflict
 	}
 	pending := from
 	pending.Pending = target
 	if err = p.setRelay(ctx, lease, from, pending); err != nil {
-		return err
+		return errors.Join(err, p.cleanupRelayPending(ctx, lease, pending))
 	}
 	err = p.waitRelayChange(ctx, c, pending, 10*time.Second)
 	cleanup := from.Slot
 	if err != nil {
-		// Rollback has its own bound: expiry of the change cannot cancel the
-		// operation that keeps the call. The per-call operator lock stays held.
-		recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), sessionstore.StoreOutageBudget(0))
-		defer cancel()
-		p.mu.Lock()
-		owner := p.owner(lease.Worker)
-		p.mu.Unlock()
-		if owner == nil {
-			return ErrNoTarget
+		if ctx.Err() != nil {
+			return errors.Join(err, p.cleanupRelayPending(ctx, lease, pending))
 		}
-		worker := owner.worker.(relayChangeWorker)
-		abortErr := worker.AbortRelayRestart(recovery, id, from.Generation+1)
+		recovery, cancel := context.WithTimeout(ctx, sessionstore.StoreOutageBudget(0))
+		defer cancel()
+		rolled, abortErr := p.abortRelayPending(recovery, lease, pending)
+
 		if errors.Is(abortErr, mediaworker.ErrRelaySwitched) {
 			// A switched worker retries its fenced commit. Never send it back.
 			err = p.waitRelayChange(recovery, c, pending, sessionstore.StoreOutageBudget(0))
@@ -137,19 +151,15 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 			ctx = recovery
 		} else {
 			if abortErr != nil {
-				return errors.Join(err, abortErr)
-			}
-			rolled := sessionstore.RelayAssignment{Slot: from.Slot, Generation: from.Generation + 1}
-			if e := p.setRelay(recovery, lease, pending, rolled); e != nil {
-				return errors.Join(err, e)
+				return errors.Join(err, abortErr, p.cleanupRelayPending(ctx, lease, pending))
 			}
 			pending = rolled
 			pending.Pending = from.Slot // a new restart on the still-live old slot
 			if e := p.setRelay(recovery, lease, rolled, pending); e != nil {
-				return errors.Join(err, e)
+				return errors.Join(err, e, p.cleanupRelayPending(ctx, lease, pending))
 			}
 			if e := p.waitRelayChange(recovery, c, pending, 10*time.Second); e != nil {
-				return errors.Join(err, e)
+				return errors.Join(err, e, p.cleanupRelayPending(ctx, lease, pending))
 			}
 			cleanup = target
 			ctx = recovery
@@ -167,6 +177,66 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 	return err
 }
 
+// Cancellation cleanup leaves time for takeover inside its original budget.
+// Only an acknowledged abort (or a definite absent/fenced session) permits
+// clearing an assignment under the old epoch. Uncertain RPC failures do not.
+func (p *Plane) cleanupRelayPending(ctx context.Context, lease sessionstore.Lease, pending sessionstore.RelayAssignment) error {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), takeoverBudget/3)
+	defer cancel()
+	_, err := p.abortRelayPending(cleanup, lease, pending)
+	return err
+}
+func (p *Plane) abortRelayPending(ctx context.Context, lease sessionstore.Lease, pending sessionstore.RelayAssignment) (sessionstore.RelayAssignment, error) {
+	a := p.store.(sessionstore.RelayAssignments)
+	_, current, err := a.RelayOwner(ctx, lease.SessionID)
+	if err != nil {
+		return current, err
+	}
+	if current != pending {
+		if current.Pending == "" && current.Slot == pending.Pending && current.Generation >= pending.Generation+1 {
+			return current, mediaworker.ErrRelaySwitched
+		}
+		if current.Pending == "" {
+			return current, nil
+		}
+		return current, sessionstore.ErrRelayConflict
+	}
+	p.mu.Lock()
+	owner := p.owner(lease.Worker)
+	p.mu.Unlock()
+	if owner == nil {
+		return pending, ErrNoTarget
+	}
+	err = owner.worker.(relayChangeWorker).AbortRelayRestart(ctx, lease.SessionID, pending.Generation+1)
+	if err != nil && !errors.Is(err, mediaworker.ErrUnknownSession) && !errors.Is(err, mediaworker.ErrClosed) && !errors.Is(err, sessionstore.ErrLeaseLost) {
+		return pending, err
+	}
+	rolled := sessionstore.RelayAssignment{Slot: pending.Slot, Generation: pending.Generation + 1}
+	if e := p.setRelay(ctx, lease, pending, rolled); e != nil {
+		return pending, errors.Join(err, e)
+	}
+	return rolled, err
+}
+
+// Transfer has fenced the old owner before an unacknowledged/dead-owner
+// generation is retired. A resumed checkpoint never contains pending creds.
+func (p *Plane) settleDeadRelayChange(ctx context.Context, lease sessionstore.Lease) error {
+	p.mu.Lock()
+	enabled := len(p.relaySet) > 0
+	p.mu.Unlock()
+	if !enabled {
+		return nil
+	}
+	_, a, err := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, lease.SessionID)
+	if err != nil {
+		return err
+	}
+	if a.Pending == "" {
+		return nil
+	}
+	return p.setRelay(ctx, lease, a, sessionstore.RelayAssignment{Slot: a.Slot, Generation: a.Generation + 1})
+}
+
 func (p *Plane) setRelay(ctx context.Context, lease sessionstore.Lease, from, to sessionstore.RelayAssignment) error {
 	a := p.store.(sessionstore.RelayAssignments)
 	for {
@@ -178,7 +248,7 @@ func (p *Plane) setRelay(ctx context.Context, lease sessionstore.Lease, from, to
 		if e == nil && got == to {
 			return nil
 		}
-		if errors.Is(err, sessionstore.ErrLeaseLost) || e == nil && got != from {
+		if errors.Is(err, sessionstore.ErrLeaseLost) || errors.Is(err, sessionstore.ErrRelayTransition) || e == nil && got != from {
 			return err
 		}
 		select {
@@ -312,7 +382,10 @@ func (p *Plane) relayHandlers(mux *http.ServeMux) {
 				}
 				sent = e.Generation
 			}
-			if c.hungUp.Load() {
+			p.mu.Lock()
+			terminal := c.terminal
+			p.mu.Unlock()
+			if c.hungUp.Load() || terminal {
 				_, _ = io.WriteString(w, "event: ended\ndata: {\"reason\":\"ended\"}\n\n")
 				_ = flush.Flush()
 				return
@@ -401,15 +474,15 @@ func (p *Plane) pickRelay(ctx context.Context, exclude string) (string, error) {
 }
 
 func (p *Plane) DrainRelay(ctx context.Context, slot string) error {
-	p.relayPlacement.Lock()
-	defer p.relayPlacement.Unlock()
 	if err := p.requireMutationReady(); err != nil {
 		return err
 	}
+	p.relayPlacement.Lock()
 	p.mu.Lock()
 	b, ok := p.relaySet[slot]
 	if !ok {
 		p.mu.Unlock()
+		p.relayPlacement.Unlock()
 		return mediaworker.ErrRelayUnsupported
 	}
 	b.draining = true
@@ -419,6 +492,7 @@ func (p *Plane) DrainRelay(ctx context.Context, slot string) error {
 		ids = append(ids, id)
 	}
 	p.mu.Unlock()
+	p.relayPlacement.Unlock()
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	sem := make(chan struct{}, 8)

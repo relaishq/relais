@@ -47,7 +47,7 @@ type pendingRestart struct {
 	aborted  chan struct{}
 }
 
-// AbortRelayRestart revokes an un-nominated generation, including its receive
+// AbortRelayRestart revokes an unswitched generation, including its receive
 // permission and credentials. Control calls it before the higher-generation
 // assignment rollback. The current ICE credentials and output path stay live.
 func (w *Worker) AbortRelayRestart(ctx context.Context, id string, generation uint64) error {
@@ -307,7 +307,9 @@ func (w *Worker) RestartSession(ctx context.Context, id string, req RestartReque
 			}
 		}
 	}()
-	relaytrace.Emit("worker-answer", slot.ID, nil)
+	if relaytrace.Enabled() {
+		relaytrace.Emit("worker-answer", slot.ID, nil)
+	}
 	return answer, nil
 }
 

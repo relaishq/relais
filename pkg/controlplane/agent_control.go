@@ -109,10 +109,19 @@ func (c *call) unlockControl() {
 // cannot starve a move/drain. Takeover also cancels a current Control RPC and
 // bounds lock acquisition by its existing end-to-end recovery budget.
 func (c *call) lockOperator(ctx context.Context, takeover bool) error {
+	return c.lockOperatorCancel(ctx, takeover, nil)
+}
+
+func (c *call) lockOperatorCancel(ctx context.Context, takeover bool, relayCancel context.CancelFunc) error {
 	ctx, cancel := context.WithTimeout(ctx, takeoverBudget)
 	defer cancel()
 	c.controlMu.Lock()
+	if relayCancel != nil && c.controlWaiters > 0 {
+		c.controlMu.Unlock()
+		return ErrMoveInProgress
+	}
 	if c.mu.TryLock() {
+		c.relayCancel = relayCancel
 		c.controlMu.Unlock()
 		return nil
 	}
@@ -121,6 +130,9 @@ func (c *call) lockOperator(ctx context.Context, takeover bool) error {
 		return ErrMoveInProgress
 	}
 	c.controlWaiters++
+	if takeover && c.relayCancel != nil {
+		c.relayCancel()
+	}
 	if takeover && c.controlCancel != nil {
 		c.controlCancel()
 	}
@@ -135,7 +147,16 @@ func (c *call) lockOperator(ctx context.Context, takeover bool) error {
 		case <-ticker.C:
 		}
 		c.controlMu.Lock()
+		// A queued relay change must yield to operators that arrived while it
+		// waited. Otherwise it can become a long holder after takeover's cancel.
+		if relayCancel != nil && c.controlWaiters > 1 {
+			c.controlMu.Unlock()
+			return ErrMoveInProgress
+		}
 		locked := c.mu.TryLock()
+		if locked {
+			c.relayCancel = relayCancel
+		}
 		otherOperator := !c.controlActive
 		c.controlMu.Unlock()
 		if locked {

@@ -128,6 +128,7 @@ func TestPlannedRelayRollbackKeepsCall(t *testing.T) {
 				require.NoError(t, err)
 				require.Zero(t, report.DecryptionFailures.Total())
 				for _, track := range report.Tracks {
+					t.Logf("ROLLBACK_GAP fault=%s track=%s caller_gap=%s", fault, track.Kind, track.MediaGap)
 					require.Zero(t, track.DuplicatePackets)
 				}
 				t.Logf("ROLLBACK fault=%s generation>=2 old_slot=live auth=0 duplicates=0", fault)

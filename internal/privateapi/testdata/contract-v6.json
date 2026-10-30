@@ -2,6 +2,40 @@
   "payloads": [
     {
       "service": "worker",
+      "route": "DELETE /sessions/{id}/restart",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        204,
+        400,
+        409
+      ]
+    },
+    {
+      "service": "control",
+      "route": "POST /relays/{id}/drain",
+      "request": {
+        "json": null,
+        "shape": null
+      },
+      "response": {
+        "json": null,
+        "shape": null
+      },
+      "statuses": [
+        200,
+        404,
+        409
+      ]
+    },
+    {
+      "service": "worker",
       "route": "POST /relays",
       "request": {
         "json": {
@@ -143,11 +177,16 @@
       "route": "POST /sessions",
       "request": {
         "json": {
-          "offer": "fixture"
+          "offer": "fixture",
+          "relay_slot": "fixture"
         },
         "shape": {
           "offer": {
             "json_options": "",
+            "type": "string"
+          },
+          "relay_slot": {
+            "json_options": ",omitempty",
             "type": "string"
           }
         }
@@ -4397,6 +4436,15 @@
       },
       {
         "service": "control",
+        "route": "POST /relays/{id}/drain",
+        "query_parameters": null,
+        "explicit_statuses": [
+          "http.StatusOK"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "control",
         "route": "POST /workers/{name}/drain",
         "query_parameters": null,
         "explicit_statuses": [
@@ -4557,6 +4605,18 @@
       },
       {
         "service": "worker",
+        "route": "DELETE /sessions/{id}/restart",
+        "query_parameters": [
+          "generation"
+        ],
+        "explicit_statuses": [
+          "http.StatusBadRequest",
+          "http.StatusNoContent"
+        ],
+        "anonymous_response_types": null
+      },
+      {
+        "service": "worker",
         "route": "GET /metrics",
         "query_parameters": null,
         "explicit_statuses": null,
@@ -4659,6 +4719,7 @@
       ],
       "worker": [
         "StatusAccepted",
+        "StatusBadRequest",
         "StatusNoContent"
       ]
     },
@@ -4698,7 +4759,9 @@
       "no_target",
       "not_established",
       "not_found",
+      "relay_change_rolled_back",
       "relay_conflict",
+      "relay_switched",
       "relay_unsupported",
       "replay_in_progress",
       "replay_not_ready",

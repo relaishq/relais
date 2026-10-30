@@ -109,6 +109,7 @@ type registration struct {
 }
 
 type call struct {
+	relayCancel    context.CancelFunc // guarded by controlMu; published with c.mu ownership
 	relayCapable   bool
 	eventOpen      bool
 	relayEvent     *RelayEvent                 // guarded by stateMu

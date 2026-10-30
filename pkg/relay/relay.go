@@ -843,7 +843,9 @@ func (r *Relay) callerLoop() {
 			continue
 		}
 		from = unmap(from)
-		relaytrace.Emit("relay-input", r.cfg.SlotID, buf[MaxHeaderLen:MaxHeaderLen+n])
+		if relaytrace.Enabled() {
+			relaytrace.Emit("relay-input", r.cfg.SlotID, buf[MaxHeaderLen:MaxHeaderLen+n])
+		}
 
 		if worker, ok := r.route(buf[MaxHeaderLen:MaxHeaderLen+n], from); ok {
 			r.forward(buf[:MaxHeaderLen+n], from, worker)

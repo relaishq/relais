@@ -255,7 +255,7 @@ func timelineChange(t *testing.T, events []relayTimelineEvent, call *Call, start
 		log("last-caller-application-"+track.kind, relayTimelineEvent{at: last})
 		log("first-caller-application-"+track.kind, relayTimelineEvent{at: first})
 		t.Logf("TIMELINE_GAP gen=%d boundary=caller-application track=%s ms=%.3f", generation, track.kind, float64(first.Sub(last))/float64(time.Millisecond))
-		require.LessOrEqual(t, first.Sub(last), 150*time.Millisecond)
+		require.LessOrEqual(t, first.Sub(last), relayTimingLimit(150*time.Millisecond))
 		delivered := make(map[uint16]bool, len(track.headers))
 		for _, h := range track.headers {
 			delivered[h.seq] = true

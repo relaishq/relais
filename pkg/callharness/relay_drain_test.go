@@ -95,8 +95,7 @@ func TestRelayDrainLive(t *testing.T) {
 			p95 := percentile(gaps, 95)
 			t.Logf("RELAY_SAMPLES track=%s gaps=%v", kind, gaps)
 			t.Logf("RELAY_DRAIN track=%s n=8 p95=%s baseline_limit=%s reconnects=0 auth=0 duplicates=0", kind, p95, limits[kind])
-			require.LessOrEqual(t, p95, 150*time.Millisecond)
-			require.LessOrEqual(t, p95, limits[kind])
+			require.LessOrEqual(t, p95, relayTimingLimit(min(150*time.Millisecond, limits[kind])))
 		}
 		c, e := h.Dial(ctx, CallOptions{RelayChange: true})
 		require.NoError(t, e)

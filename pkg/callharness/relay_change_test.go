@@ -88,8 +88,7 @@ func TestPlannedRelayChangeLive(t *testing.T) {
 			p95 := percentile(pauses[track.Kind], 95)
 			t.Logf("RELAY_SAMPLES track=%s gaps=%v", track.Kind, pauses[track.Kind])
 			t.Logf("RELAY_CHANGE_PAUSES track=%s n=%d p50=%s p95=%s max=%s baseline_max=%s target_met=%t", track.Kind, len(pauses[track.Kind]), percentile(pauses[track.Kind], 50), p95, percentile(pauses[track.Kind], 100), base, p95 <= 150*time.Millisecond && p95 <= base+50*time.Millisecond)
-			require.LessOrEqual(t, p95, 150*time.Millisecond)
-			require.LessOrEqual(t, p95, base+50*time.Millisecond)
+			require.LessOrEqual(t, p95, relayTimingLimit(min(150*time.Millisecond, base+50*time.Millisecond)))
 		}
 		call.dialMu.Lock()
 		connected := 0
