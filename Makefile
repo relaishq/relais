@@ -1,5 +1,6 @@
 ## Go parameters
 GOCMD=go
+PYTHON_AGENT ?= python3.12
 GOBUILD=$(GOCMD) build
 GOCLEAN=$(GOCMD) clean
 GOTEST=$(GOCMD) test
@@ -21,7 +22,7 @@ BUILD_TIME ?= $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 # Linker flags (populate pkg/buildinfo)
 LDFLAGS=-ldflags "-X github.com/relaishq/relais/pkg/buildinfo.Version=$(VERSION) -X github.com/relaishq/relais/pkg/buildinfo.Commit=$(COMMIT) -X github.com/relaishq/relais/pkg/buildinfo.Date=$(BUILD_TIME)"
 
-.PHONY: check check-quality check-rules test-external-module test-ci-scripts test-demo-page test-unit-local all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo demo-cluster demo-agent crash-run release-pair release-pair-source help
+.PHONY: check check-quality check-rules test-external-module test-ci-scripts test-python-agent test-demo-page test-unit-local all build clean test coverage deps lint lint-install vet fmt bench profile test-streams test-stream-groups test-cluster test-unit test-harness test-harness-short test-harness-timing test-harness-smoke test-full demo demo-cluster demo-agent crash-run release-pair release-pair-source help
 
 all: test build
 
@@ -100,6 +101,7 @@ check-quality: ## Run every PR quality gate in CI order
 	$(MAKE) test-external-module
 	$(MAKE) build
 	$(MAKE) test-ci-scripts
+	$(MAKE) test-python-agent
 	$(MAKE) test-demo-page
 	$(MAKE) test-operator
 	$(MAKE) check-rules
@@ -112,6 +114,9 @@ test-external-module: ## Build the supported external-module API without CGO
 
 test-ci-scripts: ## Test CI evidence and rule scripts
 	python3 -m unittest discover -s scripts/ci
+
+test-python-agent: ## Test the pinned Python agent in a throwaway Python 3.12 venv
+	$(PYTHON_AGENT) scripts/dev/test-python-agent.py
 
 test-demo-page: ## Test demo page verdict logic
 	node --test cmd/relais-demo/*.test.cjs

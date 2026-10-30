@@ -71,6 +71,16 @@ jobs:
       - name: Test CI evidence scripts
         run: make test-ci-scripts
 
+      - name: Set up Python for agent authority tests
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: python/relais-agent/pyproject.toml
+
+      - name: Test Python agent authority and faults
+        run: make test-python-agent
+
       # The demo page's verdict logic decides the browser go/no-go.
       - name: Run demo page tests
         run: make test-demo-page

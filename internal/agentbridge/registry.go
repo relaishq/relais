@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -19,7 +20,7 @@ import (
 
 // The development pool has one runner slot per worker. A runner can register
 // with multiple eligible workers; an exact move reserves the same bot there.
-// Provider starts remain disabled until the permit/revocation slice.
+// Provider/tool starts require a live, renewal-backed permit.
 type runner struct {
 	id, bot     string
 	conn        *websocket.Conn
@@ -27,6 +28,9 @@ type runner struct {
 	replies     chan reservationReply
 	replyMu     sync.Mutex
 	reservation string
+	revokeSlot  chan struct{}
+	revoking    *revocation
+	revoked     chan struct{}
 	done        chan struct{}
 }
 type reservationReply struct {
@@ -111,7 +115,7 @@ func (b *Bridge) register(c *websocket.Conn) {
 	if websocket.JSON.Receive(c, &hello) != nil || hello.Type != "hello" || hello.Protocol != 1 || !identity(hello.RunnerID) || !identity(hello.Bot) || hello.Agent != "bridge" || hello.Revision != "1" || hello.Capacity != 1 {
 		return
 	}
-	r := &runner{id: hello.RunnerID, bot: hello.Bot, conn: c, replies: make(chan reservationReply, 1), done: make(chan struct{}), slot: make(chan struct{}, 1)}
+	r := &runner{revokeSlot: make(chan struct{}, 1), revoked: make(chan struct{}, 1), id: hello.RunnerID, bot: hello.Bot, conn: c, replies: make(chan reservationReply, 1), done: make(chan struct{}), slot: make(chan struct{}, 1)}
 	b.mu.Lock()
 	if b.runner != nil {
 		b.mu.Unlock()
@@ -134,8 +138,34 @@ func (b *Bridge) register(c *websocket.Conn) {
 		return
 	}
 	for {
-		var reply reservationReply
-		if websocket.JSON.Receive(c, &reply) != nil || r.receiveReply(reply) != nil {
+		var raw json.RawMessage
+		if websocket.JSON.Receive(c, &raw) != nil {
+			return
+		}
+		var header struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &header) != nil {
+			return
+		}
+		switch header.Type {
+		case "reserved":
+			var reply reservationReply
+			if json.Unmarshal(raw, &reply) != nil || r.receiveReply(reply) != nil {
+				return
+			}
+		case "permit_request":
+			var request permitRequest
+			if json.Unmarshal(raw, &request) != nil || b.permit(r, request) != nil {
+				return
+			}
+		case "revoked":
+			var ack revocation
+			if json.Unmarshal(raw, &ack) != nil {
+				return
+			}
+			r.receiveRevoked(ack)
+		default:
 			return
 		}
 	}
@@ -147,7 +177,8 @@ func (b *Bridge) attach(c *websocket.Conn) {
 	}
 	b.mu.Lock()
 	p := b.pending[m.Token]
-	if p == nil || time.Now().After(p.expires) || m.SessionID != p.scope.SessionID || m.Bot != p.scope.BotInstance || m.Epoch != p.scope.Epoch || m.Generation != p.scope.Generation {
+	stopped := b.revocations[m.SessionID] != nil
+	if stopped || p == nil || time.Now().After(p.expires) || m.SessionID != p.scope.SessionID || m.Bot != p.scope.BotInstance || m.Epoch != p.scope.Epoch || m.Generation != p.scope.Generation {
 		b.mu.Unlock()
 		return
 	}
@@ -247,18 +278,18 @@ func (b *Bridge) removeAssignment(p *assignment) {
 		}
 	}
 }
-func (b *Bridge) connection(ctx context.Context, run *agent.TaskRun, a *adapter) (attachment, mediaworker.BridgeOutputScope, string, error) {
+func (b *Bridge) connection(ctx context.Context, run *agent.TaskRun, a *adapter) (attachment, mediaworker.BridgeOutputScope, string, *runner, error) {
 	existing, err := b.worker.BridgeOutputBinding(a.id)
 	if err != nil && !errors.Is(err, mediaworker.ErrBridgeOutputUnbound) {
-		return attachment{}, existing, "", err
+		return attachment{}, existing, "", nil, err
 	}
 	epoch, err := b.worker.BridgeOutputEpoch(a.id)
 	if err != nil {
-		return attachment{}, existing, "", err
+		return attachment{}, existing, "", nil, err
 	}
 	r, p, err := b.reserve(ctx, a.id, epoch, existing)
 	if err != nil {
-		return attachment{}, existing, "", err
+		return attachment{}, existing, "", nil, err
 	}
 	defer b.removeAssignment(p)
 	success := false
@@ -274,15 +305,15 @@ func (b *Bridge) connection(ctx context.Context, run *agent.TaskRun, a *adapter)
 	case conn = <-p.attached:
 		close(p.claimed)
 	case <-r.done:
-		return conn, existing, "", errProtocol
+		return conn, existing, "", nil, errProtocol
 	case <-ctx.Done():
-		return conn, existing, "", ctx.Err()
+		return conn, existing, "", nil, ctx.Err()
 	case <-timer.C:
-		return conn, existing, "", context.DeadlineExceeded
+		return conn, existing, "", nil, context.DeadlineExceeded
 	}
-	fail := func(e error) (attachment, mediaworker.BridgeOutputScope, string, error) {
+	fail := func(e error) (attachment, mediaworker.BridgeOutputScope, string, *runner, error) {
 		close(conn.done)
-		return attachment{}, existing, "", e
+		return attachment{}, existing, "", nil, e
 	}
 	if existing.BotInstance != "" && a.runnerID.Load() != r.id {
 		return fail(errProtocol)
@@ -300,7 +331,7 @@ func (b *Bridge) connection(ctx context.Context, run *agent.TaskRun, a *adapter)
 		return fail(err)
 	}
 	// New identity must reach a fenced checkpoint before attached. Exact same-
-	// lineage moves need no provider authority here; this slice grants no permits.
+	// lineage moves wait for their own renewal/checkpoint before permit grants.
 	if existing.BotInstance == "" {
 		poll := time.NewTicker(10 * time.Millisecond)
 		defer poll.Stop()
@@ -321,9 +352,19 @@ func (b *Bridge) connection(ctx context.Context, run *agent.TaskRun, a *adapter)
 	if existing.BotInstance != "" {
 		resume = "planned_move"
 	}
-	conn.release = func() { <-r.slot }
+	b.mu.Lock()
+	b.active[a.id] = activeBot{runner: r, scope: p.scope, done: conn.done}
+	b.mu.Unlock()
+	conn.release = func() {
+		b.mu.Lock()
+		if active := b.active[a.id]; active.done == conn.done {
+			delete(b.active, a.id)
+		}
+		b.mu.Unlock()
+		<-r.slot
+	}
 	success = true
-	return conn, p.scope, resume, nil
+	return conn, p.scope, resume, r, nil
 }
 
 // Listen binds only the literal loopback address validated by Config.

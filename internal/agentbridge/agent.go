@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/relaishq/relais/internal/agenthost"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
@@ -16,23 +17,31 @@ import (
 
 const stateKind = "bridge.state/v1"
 
+// The ADR handoff deadline ends in an explicit no-capacity/silence outcome.
+const attachBudget = 2 * time.Second
+
+// Runner identity, bot outcome and outbox revision fit even at their maxima.
+const adapterMetadataBytes = 192
+
 // Bridge serves a worker-owned loopback registry and session endpoint.
 // SetWorker is called before serving HTTP or calls.
 type Bridge struct {
-	config  Config
-	worker  *mediaworker.Worker
-	agents  sync.Map
-	mu      sync.Mutex
-	runner  *runner
-	changed chan struct{}
-	pending map[string]*assignment
+	config      Config
+	worker      *mediaworker.Worker
+	agents      sync.Map
+	mu          sync.Mutex
+	runner      *runner
+	changed     chan struct{}
+	pending     map[string]*assignment
+	revocations map[string]*revocation
+	active      map[string]activeBot
 }
 
 func New(config Config) (*Bridge, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	return &Bridge{config: config, changed: make(chan struct{}), pending: make(map[string]*assignment)}, nil
+	return &Bridge{config: config, changed: make(chan struct{}), pending: make(map[string]*assignment), revocations: make(map[string]*revocation), active: make(map[string]activeBot)}, nil
 }
 func (b *Bridge) SetWorker(w *mediaworker.Worker) { b.worker = w }
 func (b *Bridge) Registration() agenthost.Registration {
@@ -50,6 +59,7 @@ func (b *Bridge) Registration() agenthost.Registration {
 
 type checkpoint struct {
 	Type          string `json:"type,omitempty"`
+	BotOutcome    string `json:"bot_outcome,omitempty"`
 	Sequence      uint64 `json:"seq"`
 	Version       uint32 `json:"version"`
 	InputSSRC     uint32 `json:"input_ssrc"`
@@ -94,6 +104,11 @@ func (a *adapter) Handle(_ context.Context, e agent.Event) (agent.Effects, error
 		}
 		return agent.Effects{SetTimers: []agent.TimerSpec{{ID: "bridge-connect"}}}, nil
 	case agent.TaskMessage:
+		if e.Result.Final {
+			// Failed attachment/owner socket loss never claims bot recovery.
+			// State is exposed through the existing private agent-session status.
+			a.state.BotOutcome = "no_capacity_silence"
+		}
 		if len(e.Result.Chunk.Data) > 0 {
 			var update adapterUpdate
 			if err := json.Unmarshal(e.Result.Chunk.Data, &update); err != nil {
@@ -101,8 +116,13 @@ func (a *adapter) Handle(_ context.Context, e agent.Event) (agent.Effects, error
 			}
 			if update.RunnerID != "" {
 				a.state.RunnerID = update.RunnerID
+				a.state.BotOutcome = "attaching"
+			}
+			if update.Attached {
+				a.state.BotOutcome = "attached"
 			}
 			if update.Checkpoint != nil && update.Checkpoint.Sequence > a.state.Sequence {
+				update.Checkpoint.BotOutcome = a.state.BotOutcome
 				update.Checkpoint.RunnerID = a.state.RunnerID
 				a.state = *update.Checkpoint
 			}
@@ -171,7 +191,20 @@ func (a *adapter) Checkpointed(c agenthost.BridgeCheckpoint) {
 	default:
 	}
 }
-func (a *adapter) Closed() { a.bridge.agents.CompareAndDelete(a.id, a) }
+func (a *adapter) Closed() {
+	b := a.bridge
+	if b.agents.CompareAndDelete(a.id, a) {
+		b.mu.Lock()
+		delete(b.revocations, a.id)
+		delete(b.active, a.id)
+		for token, p := range b.pending {
+			if p.scope.SessionID == a.id {
+				delete(b.pending, token)
+			}
+		}
+		b.mu.Unlock()
+	}
+}
 func (a *adapter) candidate(raw []byte) error {
 	var c checkpoint
 	if err := json.Unmarshal(raw, &c); err != nil {
@@ -186,7 +219,7 @@ func (a *adapter) candidate(raw []byte) error {
 	if err != nil {
 		return err
 	}
-	if len(b)+128 > a.maxWorking || len(history) > a.maxHistory {
+	if len(b)+adapterMetadataBytes > a.maxWorking || len(history) > a.maxHistory {
 		return agent.ErrCapacity
 	}
 	return nil

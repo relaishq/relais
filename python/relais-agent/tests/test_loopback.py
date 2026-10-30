@@ -28,6 +28,7 @@ class LoopbackTests(unittest.TestCase):
 class AssignmentTests(unittest.TestCase):
     def test_floor_compares_epoch_before_generation_and_keeps_identity(self):
         runner = Runner("isolated-test-token", 150)
+        runner.bot_instance = "bot"
         assignment = dict(session_id="call", epoch=1, generation=10, bot_instance="bot", lineage_id="lineage")
         runner.accept(assignment)
         runner.accept(dict(assignment, epoch=2))
