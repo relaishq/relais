@@ -290,6 +290,48 @@ jobs:
             bin/crash-run-*
             bin/attach-smoke-*
 
+  dial-out-process:
+    timeout-minutes: 75
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+      - name: Install Redis and ffmpeg
+        uses: ./.github/actions/ubuntu-packages
+        timeout-minutes: 10
+        with:
+          packages: redis-server ffmpeg
+      - name: Build process binaries
+        run: make build
+      # Each invocation owns a disposable loopback Redis. Run the outage
+      # cases serially: they deliberately pause that Redis for 30 seconds.
+      - name: Verify native dial-out fault matrix (race detector)
+        timeout-minutes: 22
+        run: >-
+          python3 scripts/dev/with-redis.py env RELAIS_TEST_DIAL_OUT_PROCESS=1
+          RELAIS_HARNESS_REQUIRE_FFMPEG=1 go test -race -v -count=1 -timeout 20m
+          -run '^Test(DialOutProcess|ProcessImmediateMoveAfterUncertainExport)'
+          -skip '^TestDialOutProcessFullConsent$' ./cmd/crash-run/
+      - name: Verify ten interleaved SIGKILL trials per mode with full consent
+        timeout-minutes: 37
+        run: >-
+          python3 scripts/dev/with-redis.py env RELAIS_TEST_DIAL_OUT_PROCESS=1
+          RELAIS_HARNESS_REQUIRE_FFMPEG=1 go test -race -v -count=10 -timeout 35m
+          -run '^TestDialOutProcessFullConsent$' ./cmd/crash-run/
+      - name: Upload dial-out process failure logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: dial-out-process-logs
+          path: |
+            bin/dial-out-matrix-*
+            bin/dial-out-process-*
+            bin/dial-out-activation-*
+
   # Each lane runs twenty 60 s trials on an awake Linux runner. The driver
   # and relay children run as the same ordinary user; fencing reads /proc.
   relay-continuity:

@@ -456,7 +456,9 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			// as checkpoint preparation, including after a planned hold expires.
 			plan, gateErr := replay.BeginReplay(ctx, c.id, source.addr, nil)
 			if gateErr == nil {
+				p.mu.Lock()
 				pending.replayPlan, pending.held = &plan, true
+				p.mu.Unlock()
 			} else if !errors.Is(gateErr, relay.ErrBufferDisabled) && (!pending.held || !errors.Is(gateErr, relay.ErrHeld)) {
 				p.unreserve(target)
 				return
@@ -552,7 +554,9 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 			pending.replayAnchors = anchors
 			plan, gateErr := replay.BeginReplay(ctx, c.id, source.addr, inbound)
 			if gateErr == nil {
+				p.mu.Lock()
 				pending.replayPlan, pending.held = &plan, true
+				p.mu.Unlock()
 				pending.replayDuplicationWindow = max(pending.replayDuplicationWindow, pending.snapshotAge)
 			} else {
 				p.unreserve(target)
@@ -650,7 +654,9 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 					}
 					res.Result.RelayReplayRecoveryPLI = true
 				}
+				p.mu.Lock()
 				pending.held = false
+				p.mu.Unlock()
 			}
 			if pending.replayPlan == nil && (pending.planned || pending.held) {
 				// A margin-zero resume of the retained export is exact (ADR 0009).
