@@ -214,13 +214,19 @@ and the fingerprint check stops a new certificate. This is the same power that
 The worker holds the keys, so the worker is the fence. The store assignment is
 the second line, as kernel socket exclusivity is for ADR 0004.
 
-1. **One forwarding relay.** At any moment the worker sends a call's media,
-   checks responses and keyframe requests on exactly one path. It never sends
-   the same packet through two relays.
+1. **One forwarding relay.** At any moment the worker sends a call's media and
+   keyframe requests on exactly one path. It never sends the same packet
+   through two relays. The only exception: a binding response to an
+   authenticated check of the pending generation goes back on the path that
+   check arrived on, as ICE requires. A caller nominates the pending relay only
+   after it has answered a check there.
 2. **Bounded receive.** The worker accepts the caller's media from the current
-   path, and for **500 ms** after a switch from the previous path, receive only.
-   This keeps packets that were already in flight on the old path. SRTP replay
-   protection drops any duplicate index.
+   path. It also accepts it, receive only, from two other paths: from the
+   pending path once a check of the pending generation has been authenticated
+   through it, until the change commits or rolls back; and from the previous
+   path for **500 ms** after a switch. Some callers start sending on the
+   pending path before they nominate it, and others still have packets in
+   flight on the old path. SRTP replay protection drops any duplicate index.
 3. **Assignment bound.** A relay that is not current or pending in the
    assignment gets nothing from the worker for that call, and the worker drops
    what it sends for the call. A relay drops a binding request for a call whose
