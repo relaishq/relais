@@ -119,6 +119,12 @@ func releaseHold(r Relay, id string, to netip.AddrPort, input map[uint32]relay.C
 // Store and transport work use the existing bounds without holding registry locks.
 func (m *moveRecovery) moveLocked(ctx context.Context, c *call, lease sessionstore.Lease, target *registration) (res MoveResult, err error) {
 	p := m.plane
+	if p.links != nil {
+		if !p.links.startMove() {
+			return res, ErrNotReady
+		}
+		defer p.links.jobs.Done()
+	}
 	moved, recoveryMetrics := false, false
 	defer func() {
 		if recoveryMetrics {

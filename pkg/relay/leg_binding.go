@@ -49,7 +49,7 @@ func (r *Relay) AddBoundWorker(address netip.AddrPort, token string) error {
 		return errors.New("relay: leg token not bound to address")
 	}
 	for key, prior := range r.bindings {
-		if key != token && prior.address == address {
+		if key != token && (prior.address == address || prior.drainFor == address) {
 			delete(r.bindings, key)
 		}
 	}

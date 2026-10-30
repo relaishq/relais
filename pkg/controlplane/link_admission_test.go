@@ -60,12 +60,18 @@ func newAdmissionRig(t *testing.T, relayHandler http.Handler, stores ...sessions
 	return &admissionRig{p: p, links: links, server: server, client: &http.Client{Transport: tr}, addr: netip.MustParseAddrPort("127.0.0.1:17001")}
 }
 func (r *admissionRig) open(t *testing.T, instance string, sequence, cycle uint64, addr netip.AddrPort) (*admissionStream, error) {
+	return r.openWorker(t, "a", instance, sequence, cycle, addr)
+}
+func (r *admissionRig) openWorker(t *testing.T, name, instance string, sequence, cycle uint64, addr netip.AddrPort) (*admissionStream, error) {
+	return r.openWorkerWithStatus(t, name, instance, sequence, cycle, addr, mediaworker.WorkerStatus{InventoryKnown: true})
+}
+func (r *admissionRig) openWorkerWithStatus(t *testing.T, name, instance string, sequence, cycle uint64, addr netip.AddrPort, status mediaworker.WorkerStatus) (*admissionStream, error) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	reader, writer := io.Pipe()
 	t.Cleanup(func() { _ = reader.Close(); _ = writer.Close() })
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, r.server.URL+"/private/workers/a/link", reader)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, r.server.URL+"/private/workers/"+name+"/link", reader)
 	type response struct {
 		resp *http.Response
 		err  error
@@ -74,7 +80,7 @@ func (r *admissionRig) open(t *testing.T, instance string, sequence, cycle uint6
 	go func() { resp, err := r.client.Do(req); done <- response{resp, err} }()
 	timer := time.AfterFunc(3*time.Second, cancel)
 	defer timer.Stop()
-	if err := workerlink.WriteValue(writer, "hello", LinkHello{Instance: instance, Sequence: sequence, Contract: workerlink.ContractVersion, DeathCycle: cycle, Status: mediaworker.WorkerStatus{InventoryKnown: true}}); err != nil {
+	if err := workerlink.WriteValue(writer, "hello", LinkHello{Instance: instance, Sequence: sequence, Contract: workerlink.ContractVersion, DeathCycle: cycle, Status: status}); err != nil {
 		return nil, err
 	}
 	res := <-done

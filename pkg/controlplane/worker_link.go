@@ -57,14 +57,15 @@ type linkEntry struct {
 // WorkerLinks owns only command availability. It never calls detect, Transfer
 // or heartbeat. Names are fixed before the private listener starts.
 type WorkerLinks struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	jobsMu   sync.Mutex
-	jobs     sync.WaitGroup
-	plane    *Plane
-	relay    *RemoteRelay
-	entries  map[string]*linkEntry
-	stopping atomic.Bool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	jobsMu    sync.Mutex
+	jobs      sync.WaitGroup
+	closeOnce sync.Once
+	plane     *Plane
+	relay     *RemoteRelay
+	entries   map[string]*linkEntry
+	stopping  atomic.Bool
 }
 
 func (p *Plane) ConfigureDialOut(names []string, r *RemoteRelay) *WorkerLinks {
@@ -358,16 +359,36 @@ func (l *WorkerLinks) serve(rw http.ResponseWriter, req *http.Request) {
 	_ = peer.Run(req.Context())
 }
 
-// Close rejects new admissions and releases HTTP/2 streams before HTTP shutdown.
+// Close stops new work, lets already applied moves settle, then releases the
+// streams before HTTP shutdown. The wait is bounded even if a dependency stalls.
 func (l *WorkerLinks) Close() {
+	l.closeOnce.Do(func() {
+		l.jobsMu.Lock()
+		l.stopping.Store(true)
+		l.cancel()
+		l.jobsMu.Unlock()
+		settled := make(chan struct{})
+		go func() { l.jobs.Wait(); close(settled) }()
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-settled:
+		case <-timer.C:
+		}
+		for name := range l.entries {
+			l.Drop(name)
+		}
+	})
+}
+
+func (l *WorkerLinks) startMove() bool {
 	l.jobsMu.Lock()
-	l.stopping.Store(true)
-	l.cancel()
-	l.jobsMu.Unlock()
-	for name := range l.entries {
-		l.Drop(name)
+	defer l.jobsMu.Unlock()
+	if l.stopping.Load() {
+		return false
 	}
-	l.jobs.Wait()
+	l.jobs.Add(1)
+	return true
 }
 
 // Drop closes only the command stream. Separate heartbeats and calls continue.

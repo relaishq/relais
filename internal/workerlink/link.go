@@ -282,9 +282,12 @@ func (p *Peer) serve(ctx context.Context, m Message, deadline time.Time) Message
 	recorder := &responseBuffer{header: make(http.Header), code: http.StatusOK, reserve: func(n int) bool { return p.reserveReply(ctx, n) }}
 	p.handler.ServeHTTP(recorder, req)
 	if recorder.overflow {
-		p.releaseReply(recorder.body.Len())
+		p.releaseReply(recorder.reserved)
 		reply.Error = "uncertain"
 		return reply
+	}
+	if unused := recorder.reserved - recorder.body.Len(); unused > 0 {
+		p.releaseReply(unused)
 	}
 	reply.Status, reply.Body = recorder.code, recorder.body.Bytes()
 	return reply
@@ -374,14 +377,24 @@ type responseBuffer struct {
 	body     bytes.Buffer
 	overflow bool
 	reserve  func(int) bool
+	reserved int
 }
 
 func (b *responseBuffer) Header() http.Header  { return b.header }
 func (b *responseBuffer) WriteHeader(code int) { b.code = code }
 func (b *responseBuffer) Write(data []byte) (int, error) {
-	if len(data) > privateapi.MaxBody-b.body.Len() || b.reserve != nil && !b.reserve(len(data)) {
+	if len(data) > privateapi.MaxBody-b.body.Len() {
 		b.overflow = true
 		return 0, errors.New("workerlink: response too large")
+	}
+	// Reserve the entire possible reply before retaining its first bytes. Two
+	// multi-part writers must not hold partial budgets and wait on each other.
+	if len(data) != 0 && b.reserve != nil && b.reserved == 0 {
+		if !b.reserve(privateapi.MaxBody) {
+			b.overflow = true
+			return 0, errors.New("workerlink: response budget unavailable")
+		}
+		b.reserved = privateapi.MaxBody
 	}
 	return b.body.Write(data)
 }
