@@ -4,35 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/relaishq/relais/internal/operatortransport"
 	"github.com/relaishq/relais/pkg/operator"
 )
 
-type batchRunner struct {
-	mu      sync.Mutex
-	started int
-	release chan struct{}
+// Each child represents work on the same service CPU mask. The test controls
+// completion so concurrent submissions cannot be hidden by fast fake commands.
+type pacedBatchRunner struct {
+	entered chan Command
+	release chan CommandResult
 }
 
-func (r *batchRunner) Run(ctx context.Context, _ Command) CommandResult {
-	wait, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	r.mu.Lock()
-	r.started++
-	if r.started == 4 {
-		close(r.release)
-	}
-	r.mu.Unlock()
-	select {
-	case <-r.release:
-		return CommandResult{Code: code(0), Stdout: []byte("observation")}
-	case <-wait.Done():
-		return CommandResult{Err: wait.Err()}
-	}
+func (r *pacedBatchRunner) Run(_ context.Context, command Command) CommandResult {
+	r.entered <- command
+	return <-r.release
 }
 func batchRequest() operator.Request {
 	req := request()
@@ -47,23 +36,58 @@ func batchRequest() operator.Request {
 	req.Args, _ = json.Marshal(args)
 	return req
 }
-func TestReadBatchRunsFourHostsTogetherAndJoins(t *testing.T) {
-	runner := &batchRunner{release: make(chan struct{})}
-	a := &Adapter{Topology: fixtureTopology(t), Runner: runner, Containers: fixtureContainerIDs()}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	reply := a.Execute(ctx, batchRequest())
-	var out operator.HostReadBatchOutput
-	if reply.Transport != operator.Succeeded || json.Unmarshal(reply.Payload, &out) != nil || len(out.Replies) != 4 {
-		t.Fatalf("MUTATION: batch-parallel-join reply=%+v", reply)
-	}
-	for i, child := range out.Replies {
-		if child.ID != []string{"relay", "w1", "w2", "shared"}[i] || child.Transport != operator.Succeeded || child.ExitCode == nil || *child.ExitCode != 0 {
-			t.Fatalf("MUTATION: batch-parallel-join child=%+v", child)
-		}
-	}
-	if again := a.Execute(ctx, batchRequest()); again.Transport != operator.Unknown {
-		t.Fatal("duplicate batch replayed")
+func TestReadBatchSerializesSharedHostWorkAndJoins(t *testing.T) {
+	for _, action := range []string{"inventory", "clock"} {
+		t.Run(action, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				runner := &pacedBatchRunner{entered: make(chan Command, len(Slots)), release: make(chan CommandResult)}
+				defer close(runner.release)
+				ids := fixtureContainerIDs()
+				a := &Adapter{Topology: fixtureTopology(t), Runner: runner, Containers: ids}
+				req := batchRequest()
+				req.Action = action
+				done := make(chan operator.Reply, 1)
+				go func() { done <- a.Execute(context.Background(), req) }()
+				for i, slot := range Slots {
+					synctest.Wait()
+					if len(runner.entered) != 1 {
+						t.Fatal("MUTATION: batch-shared-host-serialized", "overlapping service probes", len(runner.entered))
+					}
+					command := <-runner.entered
+					if command.Args[3] != ids[slot] {
+						t.Fatal("MUTATION: batch-shared-host-serialized", "child order differs")
+					}
+					select {
+					case <-done:
+						t.Fatal("MUTATION: batch-shared-host-serialized", "reply before all children completed")
+					default:
+					}
+					result := CommandResult{Code: code(0), Stdout: []byte("observation")}
+					if i == 1 {
+						result.Code = code(3)
+					}
+					if i == 2 {
+						result.Err = context.DeadlineExceeded
+					}
+					runner.release <- result
+				}
+				synctest.Wait()
+				reply := <-done
+				var out operator.HostReadBatchOutput
+				if reply.Transport != operator.Succeeded || reply.ExitCode == nil || *reply.ExitCode != 0 || json.Unmarshal(reply.Payload, &out) != nil || len(out.Replies) != len(Slots) {
+					t.Fatalf("MUTATION: batch-shared-host-serialized reply=%+v", reply)
+				}
+				for i, child := range out.Replies {
+					expected := []operator.Certainty{operator.Succeeded, operator.Failed, operator.Unknown, operator.Succeeded}[i]
+					if child.ID != Slots[i] || child.Transport != expected {
+						t.Fatalf("MUTATION: batch-shared-host-serialized child=%+v", child)
+					}
+				}
+				if again := a.Execute(context.Background(), req); again.Transport != operator.Unknown {
+					t.Fatal("duplicate batch replayed")
+				}
+			})
+		})
 	}
 }
 func TestReadBatchValidatesAllChildrenBeforeSubmission(t *testing.T) {
@@ -110,7 +134,7 @@ func TestReadBatchSurvivesProtocolPipe(t *testing.T) {
 	peer := operatortransport.NewPipe(toAdapter, fromAdapter)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	runner := &batchRunner{release: make(chan struct{})}
+	runner := &fakeRunner{result: CommandResult{Code: code(0), Stdout: []byte("observation")}}
 	adapter := &Adapter{Topology: fixtureTopology(t), Containers: fixtureContainerIDs(), Runner: runner}
 	done := make(chan error, 1)
 	go func() { _, err := adapter.Serve(ctx, peer, "batch-pipe", operator.Init{}); done <- err }()

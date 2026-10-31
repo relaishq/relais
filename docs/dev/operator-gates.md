@@ -142,8 +142,12 @@ Without it, the session keeps the serial `host.execute` path. A batch carries
 `HostReadBatchArgs` in `Request.Args`, action `inventory` or `clock`, target
 `hosts`, and no outer script. Its four `reads` use the fixed order `relay`,
 `w1`, `w2`, `shared`. Each carries the original host script. The adapter validates
-all children before submission, runs them together under the original deadline,
-rechecks the host floor for each submission, and joins all results without retry.
+all children before submission, keeps the original deadline, rechecks the host
+floor for each submission, and collects all results without retry. The local
+rehearsal adapter executes children one at a time because its containers share
+the service CPUs; simultaneous probes can disturb the pre-fault media baseline.
+This still uses one batch exchange for inventory and one for clocks. An adapter
+for independent hosts may execute children concurrently.
 Whenever any child ran, the adapter must return outer `Transport: Succeeded`
 with exit code 0, even if a child failed or timed out. Children carry their own
 results in `HostReadBatchOutput.replies`, including host certainty, exit status

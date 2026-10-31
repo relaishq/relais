@@ -3647,5 +3647,15 @@
     "Test": "TestBatchObservationRetainsHostReasonAndDiagnostic/timeout",
     "Marker": "MUTATION: batch-child-detail",
     "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "batch-shared-host-parallel-probes",
+    "File": "internal/operatorrehearsal/adapter_batch.go",
+    "Function": "executeReadBatch",
+    "Old": "for i, read := range args.Reads {\n\t\tchild := operator.Request{ID: read.Target, Operation: operator.HostReadBatch, Target: read.Target, Action: req.Action, Script: read.Script}\n\t\tout.Replies[i] = a.executeHost(ctx, child)\n\t}",
+    "New": "done := make(chan struct{}, len(args.Reads))\n\tfor i, read := range args.Reads {\n\t\tgo func() {\n\t\t\tchild := operator.Request{ID: read.Target, Operation: operator.HostReadBatch, Target: read.Target, Action: req.Action, Script: read.Script}\n\t\t\tout.Replies[i] = a.executeHost(ctx, child)\n\t\t\tdone <- struct{}{}\n\t\t}()\n\t}\n\tfor range args.Reads { <-done }",
+    "Test": "TestReadBatchSerializesSharedHostWorkAndJoins/inventory",
+    "Marker": "MUTATION: batch-shared-host-serialized",
+    "Package": "./internal/operatorrehearsal"
   }
 ]

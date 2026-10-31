@@ -327,7 +327,8 @@
     "batch-validation-skipped",
     "batch-outer-failure-hides-unknown",
     "batch-failed-outer-skips-children",
-    "batch-child-uncertainty-dropped"
+    "batch-child-uncertainty-dropped",
+    "batch-shared-host-parallel-probes"
   ],
   "killed": [
     {
@@ -2905,6 +2906,13 @@
     {
       "id": "batch-child-uncertainty-dropped",
       "test": "TestBatchObservationRetainsHostReasonAndDiagnostic/timeout",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-shared-host-parallel-probes",
+      "test": "TestReadBatchSerializesSharedHostWorkAndJoins/inventory",
       "package": "./internal/operatorrehearsal",
       "evidence": "killed",
       "guardFingerprint": ""
