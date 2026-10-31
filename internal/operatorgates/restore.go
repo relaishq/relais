@@ -111,16 +111,23 @@ func (g *procedure) restoreGate(ctx context.Context) error {
 	if g.unknown {
 		return fault("command-result-unknown")
 	}
+	// Return only the reserved part of the original window. Restore signaling
+	// before worker waits, which can consume the rest of this bounded window.
+	g.end = g.restoreEnd
 	var failure error
-	if len(g.down) > 0 {
-		failure = g.restoreWorkers(ctx)
+	if g.frozen {
+		_, failure = g.do(ctx, "unfreeze", "shared", ProcessExtra{})
 		if code(failure) == "command-result-unknown" {
 			return failure
 		}
 	}
-	if g.frozen {
-		if _, err := g.do(ctx, "unfreeze", "shared", ProcessExtra{}); err != nil {
-			return err
+	if len(g.down) > 0 {
+		err := g.restoreWorkers(ctx)
+		if code(err) == "known-call-loss" {
+			g.restoreLoss = true
+		}
+		if failure == nil {
+			failure = err
 		}
 	}
 	return failure

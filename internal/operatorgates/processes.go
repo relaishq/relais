@@ -12,6 +12,12 @@ import (
 
 func RunProcessGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p ProcedurePorts, end time.Duration) ProcedureResult {
 	g := newProcedure(c, p, end)
+	g.end -= RestoreReserve
+	return runProcessGate(ctx, gate, g)
+}
+
+func runProcessGate(ctx context.Context, gate operator.Gate, g *procedure) ProcedureResult {
+	p := g.p
 	err := g.process(ctx, gate)
 	result := g.finish(ctx, err, false)
 	if gate == operator.RelayDeploy {
@@ -74,6 +80,7 @@ func (g *procedure) finish(ctx context.Context, err error, release bool) Procedu
 	}
 	// Definite errors and the normal completed procedure can restore owned state.
 	// An unknown effect cannot authorize even the first restoration request.
+	procedureLate := g.p.Clock.Elapsed() >= g.end
 	restored := true
 	if !g.unknown && r.Reason != "command-result-unknown" {
 		if restore := g.restoreGate(ctx); restore != nil {
@@ -87,8 +94,11 @@ func (g *procedure) finish(ctx context.Context, err error, release bool) Procedu
 			}
 		}
 	}
-	procedureLate := g.p.Clock.Elapsed() >= g.end
-	procedurePassed := r.Status == operator.Passed
+	if g.restoreLoss {
+		r.Status = operator.Failure
+	}
+	procedureLate = procedureLate || g.p.Clock.Elapsed() >= g.end
+	procedurePassed := r.Status == operator.Passed && restored
 	if g.p.Media != nil {
 		media, err := g.p.Media(ctx)
 		if code(err) == "command-result-unknown" {
@@ -111,13 +121,21 @@ func (g *procedure) finish(ctx context.Context, err error, release bool) Procedu
 		r.Status = operator.Inconclusive
 		r.AwaitingPool = true
 	}
-	if release && err == nil && r.Media != nil && r.Status != operator.Failure {
+	if release && procedurePassed && r.Media != nil && r.Status != operator.Failure {
 		r.Status = operator.Inconclusive
 		r.AwaitingPool = true
 	}
 	if (procedureLate || g.p.Clock.Elapsed() >= max(g.end, g.p.CollectionEnd)) && r.Status != operator.Failure {
 		r.Status = operator.Inconclusive
 		r.Reason = "gate-deadline"
+		r.AwaitingPool = false
+	}
+	if !restored {
+		if r.Status != operator.Failure {
+			r.Status = operator.Inconclusive
+		}
+		r.Reason = "restore-failed"
+		r.Category = ""
 		r.AwaitingPool = false
 	}
 	if g.unknown {

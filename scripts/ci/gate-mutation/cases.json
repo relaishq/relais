@@ -899,7 +899,7 @@
     "ID": "relay-promotes-unsupported-criteria",
     "GuardFingerprint": "be34210a1f06a1ea31c80e5ec4e1072321b603d1c33840eb68707d5b3d40613b",
     "File": "internal/operatorgates/processes.go",
-    "Function": "RunProcessGate",
+    "Function": "runProcessGate",
     "Old": "if result.Status != operator.Failure {",
     "New": "if false {",
     "Test": "TestProcedureOracle/c84ac2a6e5929c83.json/0",
@@ -1203,8 +1203,8 @@
     "Function": "restoreWorkers",
     "Old": "if err != nil {\n\t\t\treturn err\n\t\t}",
     "New": "if err != nil {\n if code(err)==\"command-result-unknown\"{g.unknown=false;return fault(\"restore-unobserved\")};return err\n }",
-    "Test": "TestProcedureOracle/a20095066c1b93f6.json/0",
-    "Marker": "MUTATION:",
+    "Test": "TestWorkerRestorationUnknownStaysUnknown",
+    "Marker": "MUTATION: worker-restoration-unknown",
     "Package": "./internal/operatorgates"
   },
   {
@@ -1266,7 +1266,7 @@
     "ID": "release-hides-relay-window",
     "GuardFingerprint": "12b55ac12239ecd1491564351bdf59778eadc823f43140b33cb9642a5a6dbad5",
     "File": "internal/operatorgates/release.go",
-    "Function": "RunReleaseGate",
+    "Function": "runReleaseGate",
     "Old": "g.evidence.RelayWindows = \"inconclusive\"",
     "New": "g.evidence.RelayWindows = \"\"",
     "Test": "TestReleaseOracle/82399182328a195d.json/0",
@@ -1588,7 +1588,7 @@
     "ID": "p3-final-status-hides-loss",
     "GuardFingerprint": "",
     "File": "internal/operatorgates/processes.go",
-    "Function": "RunProcessGate",
+    "Function": "runProcessGate",
     "Old": "if code(err) == \"known-call-loss\" || s.LostCount > 0 {",
     "New": "if false {",
     "Test": "TestFinalControlStatusPreservesKnownLoss/complete",
@@ -2965,8 +2965,8 @@
     "GuardFingerprint": "b1a06c3af92c153ce2fb8a9a73f584677d7699bad371b4d54fd3472162ebfa22",
     "File": "internal/operatorgates/sequence.go",
     "Function": "RunSequence",
-    "Old": "if out.Gates[i].Status != operator.Failure && out.Pool != nil {",
-    "New": "if out.Pool == nil { out.Gates[i].Status = operator.Passed }; if out.Gates[i].Status != operator.Failure && out.Pool != nil {",
+    "Old": "if out.Procedures[i].Completed && out.Gates[i].Status != operator.Failure && out.Pool != nil {",
+    "New": "if out.Pool == nil { out.Gates[i].Status = operator.Passed }; if out.Procedures[i].Completed && out.Gates[i].Status != operator.Failure && out.Pool != nil {",
     "Test": "TestSequenceCannotInventPooledMedia",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -3556,6 +3556,26 @@
     "New": "r.Refusals = nil",
     "Test": "TestAdapterRefusalRetainsOriginalRequestMetadata",
     "Marker": "MUTATION: refusal-retention",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failed-restoration-qualifies",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "finish",
+    "Old": "if !restored {",
+    "New": "if false {",
+    "Test": "TestFailedRestorationCannotQualifyForPool/refused-unfreeze/process",
+    "Marker": "MUTATION: restoration-required",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "pool-promotes-incomplete-procedure",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "out.Procedures[i].Completed && ",
+    "New": "",
+    "Test": "TestPoolPromotionRequiresCompletedProcedure",
+    "Marker": "MUTATION: pool-requires-completion",
     "Package": "./internal/operatorgates"
   }
 ]

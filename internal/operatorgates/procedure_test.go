@@ -707,8 +707,8 @@ func TestControlTakeoverRequiresOwnershipBeforeDeadline(t *testing.T) {
 			starts++
 		}
 	}
-	if r.Status != operator.Inconclusive || r.Reason != "gate-deadline" || clock.Elapsed() != g.end || len(events) != 1 || events[0].Kind != "move" || starts != 1 || (*operations)[len(*operations)-1] != "status:" {
-		t.Fatalf("MUTATION: takeover without ownership must expire without feed or restoration: result=%+v events=%+v operations=%v", r, events, *operations)
+	if r.Status != operator.Inconclusive || r.Reason != "gate-deadline" || clock.Elapsed() != g.end-RestoreReserve+500*time.Millisecond || len(events) != 1 || events[0].Kind != "move" || starts != 2 || (*operations)[len(*operations)-1] != "status:" {
+		t.Fatalf("MUTATION: takeover without ownership must expire without feed and restore the worker: result=%+v elapsed=%s starts=%d", r, clock.Elapsed(), starts)
 	}
 }
 

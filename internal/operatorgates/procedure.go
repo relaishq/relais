@@ -21,6 +21,11 @@ import (
 const CalibrationWarmup = 30 * time.Second
 const FaultCallAge = 190 * time.Second
 const ConsentWindow = 60 * time.Second
+
+// RestoreReserve covers four inventory and four stale-clock reads before
+// unfreeze. At 3.05 s per read, 60 s leaves 35.6 s for command admission,
+// above the 30 s host floor plus 1 s for rounding and transit.
+const RestoreReserve = 60 * time.Second
 const maxSafeEpoch = 1<<53 - 1
 
 // These interfaces are the integration boundary for the caller and evidence
@@ -123,6 +128,8 @@ type ProcedurePorts struct {
 	Duplicates func() *uint64
 	// Inventory must read all hosts and prove the selected release is running.
 	Inventory func(context.Context, string, time.Duration) error
+	// Wait retains a fixed trial polling purpose in the public trace.
+	Wait func(string)
 }
 type ProcessConfig struct {
 	Parameters ProcessParameters
@@ -169,18 +176,22 @@ func (r ProcedureResult) GateResult(g operator.Gate) operator.GateResult {
 }
 
 type procedure struct {
-	c        *ProcessConfig
-	p        ProcedurePorts
-	end      time.Duration
-	down     []string
-	stopped  []string
-	frozen   bool
-	unknown  bool
-	evidence ProcessEvidence
+	c          *ProcessConfig
+	p          ProcedurePorts
+	end        time.Duration
+	restoreEnd time.Duration
+	down       []string
+	stopped    []string
+	frozen     bool
+	unknown    bool
+	// Keep positive loss even when an earlier restoration error is returned.
+	restoreLoss bool
+	evidence    ProcessEvidence
 }
 
 func newProcedure(c *ProcessConfig, p ProcedurePorts, end time.Duration) *procedure {
-	return &procedure{c: c, p: p, end: min(end, p.Clock.Elapsed()+GateMaximum, p.Clock.Elapsed()+c.ArmedAt.Add(SessionMaximum).Sub(p.Clock.Wall()))}
+	end = min(end, p.Clock.Elapsed()+GateMaximum, p.Clock.Elapsed()+c.ArmedAt.Add(SessionMaximum).Sub(p.Clock.Wall()))
+	return &procedure{c: c, p: p, end: end, restoreEnd: end}
 }
 
 // ProcedureError is a classified internal outcome. Unclassified errors from

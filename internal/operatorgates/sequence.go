@@ -146,7 +146,7 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 		}
 	}
 	for i := range awaiting {
-		if out.Gates[i].Status != operator.Failure && out.Pool != nil {
+		if out.Procedures[i].Completed && out.Gates[i].Status != operator.Failure && out.Pool != nil {
 			out.Gates[i].Status = out.Pool.Status
 		}
 	}

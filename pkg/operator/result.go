@@ -18,11 +18,15 @@ type GateResult struct {
 }
 
 type Trace struct {
-	Event     string    `json:"event"`
-	RequestID string    `json:"requestId,omitempty"`
-	Certainty Certainty `json:"certainty,omitempty"`
-	Code      string    `json:"code,omitempty"`
-	AtUnixMS  string    `json:"atUnixMs"`
+	Operation   Operation `json:"operation,omitempty"`
+	Target      string    `json:"target,omitempty"`
+	Action      string    `json:"action,omitempty"`
+	WaitPurpose string    `json:"waitPurpose,omitempty"`
+	Event       string    `json:"event"`
+	RequestID   string    `json:"requestId,omitempty"`
+	Certainty   Certainty `json:"certainty,omitempty"`
+	Code        string    `json:"code,omitempty"`
+	AtUnixMS    string    `json:"atUnixMs"`
 }
 
 type Result struct {

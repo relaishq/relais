@@ -172,7 +172,7 @@ func ErrorCategory(name, message string) string {
 		case "Preview deadline expired", "Preview admission expired", "Caller preparation failed", "Caller preparation deadline", "Caller job unconfirmed", "Invalid dispatch scope", "DNS preparation missing", "Caller role missing", "Caller campaign missing",
 			"Caller preparation deadline:identity-path", "Caller preparation deadline:runner-preparing",
 			"command-result-unknown", "gate-deadline", "interrupted", "caller-not-near", "precondition-unhealthy", "precondition-failed", "not-implemented", "prior-gate-stopped",
-			"unsupported-capability", "protocol-error", "duplicate-result", "invalid-refusal", "invalid-blob", "gate-failed", "unclassified":
+			"unsupported-capability", "protocol-error", "duplicate-result", "invalid-refusal", "invalid-blob", "gate-failed", "restore-failed", "unclassified":
 			return message
 		}
 	}

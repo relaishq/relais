@@ -95,10 +95,26 @@ func effectful(op operator.Operation, action string) bool {
 }
 func (s *Session) record(event, id string, c operator.Certainty, code string) {
 	entry := operator.Trace{Event: event, RequestID: id, Certainty: c, Code: code, AtUnixMS: strconv.FormatInt(s.clock.Wall().UnixMilli(), 10)}
+	if p := s.requests[id]; p != nil {
+		labels := (operator.Uncertainty{Kind: string(p.operation), Target: p.target, Action: p.action}).Public()
+		entry.Operation, entry.Target, entry.Action = operator.Operation(labels.Kind), labels.Target, labels.Action
+	}
 	s.trace = append(s.trace, entry)
 	if s.firstError == nil && (c == operator.Failed || c == operator.Unknown) {
 		s.firstError = &entry
 	}
+}
+
+// recordWait retains only fixed purpose labels, never predicates or status payloads.
+func (s *Session) recordWait(purpose string) {
+	switch purpose {
+	case "trial-takeover", "trial-settled", "trial-ready":
+	default:
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.trace = append(s.trace, operator.Trace{Event: "wait", WaitPurpose: purpose, AtUnixMS: strconv.FormatInt(s.clock.Wall().UnixMilli(), 10)})
 }
 func (s *Session) Halt(code string) {
 	s.mu.Lock()
@@ -336,7 +352,7 @@ func (s *Session) CompleteGate(r operator.GateResult, end time.Duration) operato
 		r.Status = operator.Inconclusive
 		r.Reason = "command-result-unknown"
 	}
-	if r.Reason == "command-result-unknown" || r.Reason == "gate-deadline" || r.Reason == "interrupted" || r.Status == operator.Failure {
+	if r.Reason == "restore-failed" || r.Reason == "command-result-unknown" || r.Reason == "gate-deadline" || r.Reason == "interrupted" || r.Status == operator.Failure {
 		if r.Reason == "command-result-unknown" && len(s.uncertainties) == 0 {
 			s.recordUncertainty(operator.Uncertainty{Kind: "gate", RequestID: "0", Target: "session", Action: string(r.Gate), DeadlineUnixMS: strconv.FormatInt(s.clock.Wall().Add(end-s.clock.Elapsed()).UnixMilli(), 10), RemainingMS: (end - s.clock.Elapsed()).Milliseconds(), Rule: "operation-evidence-unknown"})
 		}
