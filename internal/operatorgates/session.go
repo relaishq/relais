@@ -83,7 +83,7 @@ func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {
 }
 func effectful(op operator.Operation, action string) bool {
 	switch op {
-	case operator.MailboxRead, operator.CallerReady, operator.StoreObserve:
+	case operator.MailboxRead, operator.CallerReady, operator.StoreObserve, operator.HostReadBatch:
 		return false
 	case operator.HostExecute:
 		switch action {
@@ -194,7 +194,9 @@ func (s *Session) Accept(session string, r operator.Reply, evidence operator.Cer
 		outcome = operator.Unknown
 	}
 	if !r.NotSubmitted && (r.ExitCode == nil || *r.ExitCode != 0 || r.Transport != operator.Succeeded) {
-		if p.effect || r.Transport == operator.Unknown {
+		// A batch wrapper failure must not demote unknown child evidence.
+		// Complete, definite child failures retain the pure-read outcome.
+		if p.effect || p.operation == operator.HostReadBatch && evidence == operator.Unknown || r.Transport == operator.Unknown {
 			outcome = operator.Unknown
 		} else {
 			outcome = operator.Failed

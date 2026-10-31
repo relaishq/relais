@@ -49,3 +49,12 @@ func (s *Session) noteUnknownRequest(id, rule string) {
 	defer s.mu.Unlock()
 	s.unknownRequest(id, rule)
 }
+
+// A child keeps the batch's recorded request identity and deadline, while its
+// fixed host slot and allow-listed reason identify the failed observation.
+func (s *Session) noteUnknownHost(id, slot, action, rule string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.requests[id]
+	s.recordUncertainty(operator.Uncertainty{Kind: string(operator.HostExecute), RequestID: id, Target: slot, Action: action, DeadlineUnixMS: p.deadlineUnixMS, RemainingMS: (p.end - s.clock.Elapsed()).Milliseconds(), Rule: rule})
+}

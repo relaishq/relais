@@ -1533,9 +1533,9 @@
     "ID": "process-skips-fresh-inventory",
     "GuardFingerprint": "6fd2bbb623836b58f13d6b0ad71b48ca0b544249d32e451c1d984131e483f90f",
     "File": "internal/operatorgates/observations.go",
-    "Function": "FreshInventory",
-    "Old": "range inventory.Slots",
-    "New": "range inventory.Slots[:0]",
+    "Function": "observeHosts",
+    "Old": "if !s.capabilities[operator.HostReadBatch] {",
+    "New": "if action == \"inventory\" { return nil }; if !s.capabilities[operator.HostReadBatch] {",
     "Test": "TestRuntimeFreshProofAndFaultOrder",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -3009,7 +3009,7 @@
     "ID": "rehearsal-ssm-host-scope-ignored",
     "GuardFingerprint": "afb86eab0c84a1e7b678dac14df1680e23948b7f22cb6d57aad668a631d80a60",
     "File": "internal/operatorrehearsal/adapter.go",
-    "Function": "Execute",
+    "Function": "executeHost",
     "Old": "if _, ok := a.Topology.Hosts[req.Target]; !ok {",
     "New": "if _, ok := a.Topology.Hosts[req.Target]; false && !ok {",
     "Test": "TestAdapterCapturedHostScope",
@@ -3345,7 +3345,7 @@
     "File": "internal/operatorgates/session_transport.go",
     "Function": "Exchange",
     "Receiver": "Session",
-    "Old": "if f.Result.ID == req.ID && (f.Result.Transport == operator.Succeeded || f.Result.NotSubmitted && f.Result.Transport == operator.Failed) {",
+    "Old": "if f.Result.ID == req.ID && (f.Result.Transport == operator.Succeeded || f.Result.Transport == operator.Failed && (f.Result.NotSubmitted || op == operator.HostReadBatch)) {",
     "New": "if f.Result.ID == req.ID {",
     "Test": "TestExchangeUnknownTransportSkipsClassifier",
     "Marker": "MUTATION: unknown-transport-classifier",
@@ -3542,7 +3542,7 @@
     "ID": "host-submission-floor",
     "File": "internal/operatorgates/session_transport.go",
     "Function": "Exchange",
-    "Old": "if op == operator.HostExecute && req.RemainingMS < operator.HostSubmissionMinimum.Milliseconds() {",
+    "Old": "if (op == operator.HostExecute || op == operator.HostReadBatch) && req.RemainingMS < operator.HostSubmissionMinimum.Milliseconds() {",
     "New": "if false {",
     "Test": "TestReleaseGateWithRemoteHostLatencyAndThirtySecondFloor",
     "Marker": "MUTATION: host-submission-floor",
@@ -3577,5 +3577,75 @@
     "Test": "TestPoolPromotionRequiresCompletedProcedure",
     "Marker": "MUTATION: pool-requires-completion",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "batch-read-disabled",
+    "File": "internal/operatorgates/observations.go",
+    "Function": "observeHosts",
+    "Old": "if !s.capabilities[operator.HostReadBatch] {",
+    "New": "if true {",
+    "Test": "TestProcedureRoundTripCounts/upgrade-rollback/batch=true",
+    "Marker": "MUTATION: procedure-round-trip-counts",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "batch-unknown-hidden",
+    "File": "internal/operatorgates/observations.go",
+    "Function": "observeHosts",
+    "Old": "child.Transport == operator.Unknown",
+    "New": "false",
+    "Test": "TestBatchedProofFailureAndUncertainty/failed-and-unknown",
+    "Marker": "MUTATION: batch-certainty",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "batch-submission-floor",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "(op == operator.HostExecute || op == operator.HostReadBatch)",
+    "New": "(op == operator.HostExecute)",
+    "Test": "TestBatchedProofFailureAndUncertainty/floor",
+    "Marker": "MUTATION: batch-floor",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "batch-validation-skipped",
+    "File": "internal/operatorrehearsal/adapter_batch.go",
+    "Function": "executeReadBatch",
+    "Old": "req.Action != \"inventory\" && req.Action != \"clock\"",
+    "New": "false",
+    "Test": "TestReadBatchValidatesAllChildrenBeforeSubmission/action",
+    "Marker": "MUTATION: batch-validation-before-submit",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "batch-outer-failure-hides-unknown",
+    "File": "internal/operatorgates/session.go",
+    "Function": "Accept",
+    "Old": "p.operation == operator.HostReadBatch && evidence == operator.Unknown",
+    "New": "false",
+    "Test": "TestBatchedProofFailureAndUncertainty/outer-failed-unknown",
+    "Marker": "MUTATION: batch-certainty",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "batch-failed-outer-skips-children",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "f.Result.NotSubmitted || op == operator.HostReadBatch",
+    "New": "f.Result.NotSubmitted",
+    "Test": "TestBatchedProofFailureAndUncertainty/outer-failed-definite",
+    "Marker": "MUTATION: batch-certainty",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "batch-child-uncertainty-dropped",
+    "File": "internal/operatorgates/uncertainty.go",
+    "Function": "noteUnknownHost",
+    "Old": "s.recordUncertainty(operator.Uncertainty{Kind: string(operator.HostExecute), RequestID: id, Target: slot, Action: action, DeadlineUnixMS: p.deadlineUnixMS, RemainingMS: (p.end - s.clock.Elapsed()).Milliseconds(), Rule: rule})",
+    "New": "_ = p",
+    "Test": "TestBatchObservationRetainsHostReasonAndDiagnostic/timeout",
+    "Marker": "MUTATION: batch-child-detail",
+    "Package": "./internal/operatorrehearsal"
   }
 ]

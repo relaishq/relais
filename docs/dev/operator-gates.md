@@ -119,7 +119,7 @@ every request and wait is clamped to that cutoff. Adapter execution must call
 context through execution and polling. Expired queued requests receive a proved
 `deadline-before-submission` refusal from the pipe adapter boundary.
 
-`host.execute` requires at least `operator.HostSubmissionMinimum` (30 seconds)
+`host.execute` and optional `host.read-batch` require at least `operator.HostSubmissionMinimum` (30 seconds)
 remaining at submission, including read-only host observations. The public
 exchange checks this after queueing and deadline clamping, before sending;
 adapters must recheck before remote submission because transit consumes time.
@@ -136,10 +136,54 @@ trace retains the fixed code. Refusals never become unknown effects
 or successful steps. These additive diagnostics keep protocol and result schema
 version 1; the gate, caller and session maxima and collection/stop reserves are unchanged.
 
+Adapters can advertise optional `host.read-batch` to collect the four
+independent inventory reads or the four independent clock reads in one exchange.
+Without it, the session keeps the serial `host.execute` path. A batch carries
+`HostReadBatchArgs` in `Request.Args`, action `inventory` or `clock`, target
+`hosts`, and no outer script. Its four `reads` use the fixed order `relay`,
+`w1`, `w2`, `shared`. Each carries the original host script. The adapter validates
+all children before submission, runs them together under the original deadline,
+rechecks the host floor for each submission, and joins all results without retry.
+Whenever any child ran, the adapter must return outer `Transport: Succeeded`
+with exit code 0, even if a child failed or timed out. Children carry their own
+results in `HostReadBatchOutput.replies`, including host certainty, exit status
+and bounded `HostOutput`; child IDs are the corresponding host slots. An outer
+`notSubmitted` refusal is valid only when no child was submitted. Outside
+adapters with a failed/nonzero outer reply still have their complete child
+results classified: definite failures remain failed reads, and unknown or
+unreadable child results latch. An outer failure can never authorize a pass.
+The batch path is stricter than serial reads for outside adapters: a submitted
+`Failed` child without an exit code or a decodable `HostOutput` latches. Serial
+pure-read transport failures can remain definite failures without that evidence.
+Unknown-child diagnostics retain the fixed host slot and allow-listed reason
+alongside the batch uncertainty. Batch unknowns and outer refusals emit the
+existing precondition-check diagnostic; an outer-only failure has no proven
+child slot. Missing, duplicate, malformed or unknown child results latch the
+session. A definite
+failure cannot hide another host's unknown result. Batches never include
+mutations or control status. Every mutation still waits for fresh four-host
+inventory and the existing clock freshness check.
+
+`TestProcedureRoundTripCounts` and `TestMeasurementRoundTripCounts` pin these
+host exchange counts in a deterministic immediate-readiness model. They exclude
+caller setup, mailbox traffic, evidence collection and variable polling. The
+load row is one observation; each additional measurement observation costs
+seven exchanges. These counts are transport evidence, not a completed media gate.
+
+| Procedure | Serial adapter | Batch adapter |
+| --- | ---: | ---: |
+| rollout | 197 | 92 |
+| control-restart | 232 | 109 |
+| upgrade-rollback | 320 | 149 |
+| failover | 63 | 39 |
+| relay-deploy | 22 | 10 |
+| load observation | 7 | 7 |
+
 Process and release procedures reserve `RestoreReserve` (60 seconds) inside
 their original procedure window. Restoration uses that window's full cutoff
 and attempts unfreeze before worker recovery waits. Four inventory reads and
-up to four clock reads precede unfreeze. At 3.05 seconds per read, the reserve
+up to four clock reads precede unfreeze; a batch adapter uses one exchange per
+read set. The reserve and proof checks are unchanged. At 3.05 seconds per read, the reserve
 leaves 35.6 seconds for submission, above the 30-second floor plus a one-second
 rounding/transit margin. `TestProcedureReservesUnfreezeAdmission` checks this
 latency model. Slower reads can still refuse restoration. Failed restoration

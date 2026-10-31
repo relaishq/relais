@@ -320,7 +320,14 @@
     "host-submission-floor",
     "refusal-retention",
     "failed-restoration-qualifies",
-    "pool-promotes-incomplete-procedure"
+    "pool-promotes-incomplete-procedure",
+    "batch-read-disabled",
+    "batch-unknown-hidden",
+    "batch-submission-floor",
+    "batch-validation-skipped",
+    "batch-outer-failure-hides-unknown",
+    "batch-failed-outer-skips-children",
+    "batch-child-uncertainty-dropped"
   ],
   "killed": [
     {
@@ -2851,6 +2858,55 @@
       "evidence": "killed",
       "test": "TestPoolPromotionRequiresCompletedProcedure",
       "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-read-disabled",
+      "test": "TestProcedureRoundTripCounts/upgrade-rollback/batch=true",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-unknown-hidden",
+      "test": "TestBatchedProofFailureAndUncertainty/failed-and-unknown",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-submission-floor",
+      "test": "TestBatchedProofFailureAndUncertainty/floor",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-validation-skipped",
+      "test": "TestReadBatchValidatesAllChildrenBeforeSubmission/action",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-outer-failure-hides-unknown",
+      "test": "TestBatchedProofFailureAndUncertainty/outer-failed-unknown",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-failed-outer-skips-children",
+      "test": "TestBatchedProofFailureAndUncertainty/outer-failed-definite",
+      "package": "./internal/operatorgates",
+      "evidence": "killed",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "batch-child-uncertainty-dropped",
+      "test": "TestBatchObservationRetainsHostReasonAndDiagnostic/timeout",
+      "package": "./internal/operatorrehearsal",
+      "evidence": "killed",
       "guardFingerprint": ""
     }
   ],
