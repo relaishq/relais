@@ -46,7 +46,7 @@ type Adapter struct {
 func (a *Adapter) Capabilities() []operator.Operation {
 	var ops []operator.Operation
 	if a.Topology != nil && a.Runner != nil {
-		ops = append(ops, operator.HostExecute)
+		ops = append(ops, operator.HostExecute, operator.HostReadBatch)
 	}
 	if a.Caller != nil {
 		ops = append(ops, operator.CallerReady, operator.CallerStart, operator.CallerStop)
@@ -100,35 +100,11 @@ func (a *Adapter) Execute(ctx context.Context, req operator.Request) operator.Re
 		default:
 			return a.Caller.Stop(bounded, req)
 		}
+	case operator.HostReadBatch:
+		return a.executeReadBatch(bounded, req)
 	case operator.HostExecute:
-		if a.Topology == nil {
-			return refusal(req.ID, "invalid-target")
-		}
-		if _, ok := a.Topology.Hosts[req.Target]; !ok {
-			return refusal(req.ID, "invalid-target")
-		}
-		id := a.Containers[req.Target]
-		if !dockerID.MatchString(id) {
-			return refusal(req.ID, "invalid-target")
-		}
-		if req.Action == "" || len(req.Script) == 0 || len(req.Script) > operator.MaxScriptBytes || a.Runner == nil {
-			return refusal(req.ID, "invalid-request")
-		}
-		if bounded.Err() != nil {
-			return refusal(req.ID, "deadline-before-submission")
-		}
-		deadline, _ := bounded.Deadline()
-		seconds := max(1, int(time.Until(deadline).Seconds()))
-		// timeout also lives inside the container: killing the docker client alone
-		// would not stop the submitted command. Its outcome still remains unknown.
-		wrapper := `f=$(mktemp) || exit 125; trap 'rm -f "$f"' EXIT; cat > "$f" || exit 125; timeout -s KILL ` + strconv.Itoa(seconds) + `s nice -n 10 sh "$f"`
-		command := Command{Label: "host-step", Args: []string{"docker", "exec", "-i", id, "sh", "-c", wrapper}, Input: req.Script}
-		result := a.Runner.Run(bounded, command)
-		reply := a.classify(req.ID, result)
-		if reply.Transport != operator.Succeeded || hostObservationFailed(req.Action, result.Stdout) {
-			a.printFailure(result)
-		}
-		return reply
+		return a.executeHost(bounded, req)
+
 	default:
 		return refusal(req.ID, "unsupported-operation")
 	}
@@ -248,4 +224,40 @@ func (t *Topology) Redact(text string) string {
 		text = replaceSecret(text, value)
 	}
 	return text
+}
+
+func (a *Adapter) executeHost(bounded context.Context, req operator.Request) operator.Reply {
+	if a.Topology == nil {
+		return refusal(req.ID, "invalid-target")
+	}
+	if _, ok := a.Topology.Hosts[req.Target]; !ok {
+		return refusal(req.ID, "invalid-target")
+	}
+	id := a.Containers[req.Target]
+	if !dockerID.MatchString(id) {
+		return refusal(req.ID, "invalid-target")
+	}
+	if req.Action == "" || len(req.Script) == 0 || len(req.Script) > operator.MaxScriptBytes || a.Runner == nil {
+		return refusal(req.ID, "invalid-request")
+	}
+	if bounded.Err() != nil {
+		return refusal(req.ID, "deadline-before-submission")
+	}
+	deadline, _ := bounded.Deadline()
+	seconds := max(1, int(time.Until(deadline).Seconds()))
+	// Batch children retain the batch operation as an internal marker. Recheck
+	// the rounded budget at the actual submission point, after target validation.
+	if req.Operation == operator.HostReadBatch && seconds < int(operator.HostSubmissionMinimum/time.Second) {
+		return refusal(req.ID, "deadline-before-submission")
+	}
+	// timeout also lives inside the container: killing the docker client alone
+	// would not stop the submitted command. Its outcome still remains unknown.
+	wrapper := `f=$(mktemp) || exit 125; trap 'rm -f "$f"' EXIT; cat > "$f" || exit 125; timeout -s KILL ` + strconv.Itoa(seconds) + `s nice -n 10 sh "$f"`
+	command := Command{Label: "host-step", Args: []string{"docker", "exec", "-i", id, "sh", "-c", wrapper}, Input: req.Script}
+	result := a.Runner.Run(bounded, command)
+	reply := a.classify(req.ID, result)
+	if reply.Transport != operator.Succeeded || hostObservationFailed(req.Action, result.Stdout) {
+		a.printFailure(result)
+	}
+	return reply
 }
