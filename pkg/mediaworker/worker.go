@@ -669,43 +669,53 @@ func (w *Worker) readLoop() {
 
 			continue
 		}
-		if w.paused.Load() {
-			continue
-		}
-		w.metrics.packetsIn.Add(1)
-		w.metrics.bytesIn.Add(uint64(n))
-		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
-		pkt := buf[:n]
+		w.receivePacket(buf[:n], from)
+	}
+}
 
-		if stun.IsMessage(pkt) {
-			w.handleSTUNVia(pkt, from, w.receivedLeg())
-
-			continue
+func (w *Worker) receivePacket(pkt []byte, from netip.AddrPort) {
+	if c, ok := w.conn.(*relayConn); ok {
+		c.packetMu.RLock()
+		defer c.packetMu.RUnlock()
+		if !c.allowed(c.lastRelay) {
+			return
 		}
-		if sess := w.sessionAtRelay(from, w.receivedLeg()); sess != nil {
-			leg := w.receivedLeg()
+	}
+	if w.paused.Load() {
+		return
+	}
+	w.metrics.packetsIn.Add(1)
+	w.metrics.bytesIn.Add(uint64(len(pkt)))
+	from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
+
+	if stun.IsMessage(pkt) {
+		w.handleSTUNVia(pkt, from, w.receivedLeg())
+
+		return
+	}
+	if sess := w.sessionAtRelay(from, w.receivedLeg()); sess != nil {
+		leg := w.receivedLeg()
+		if relaytrace.Enabled() {
+			relaytrace.Emit("worker-arrival", leg.String(), pkt)
+		}
+		path := relayPath{leg, from}
+		if isRTPOrRTCP(pkt) {
+			// Authorization and SRTP processing share the packet lock, so
+			// rollback cannot revoke the path between admission and decrypt.
+			sess.handleSRTPPacket(earlyPacket{data: pkt, rtcp: isRTCP(pkt), path: path})
+			return
+		}
+		sess.mu.Lock()
+		allowed := sess.acceptsRelayPath(path, false)
+		sess.mu.Unlock()
+		if allowed {
 			if relaytrace.Enabled() {
-				relaytrace.Emit("worker-arrival", leg.String(), pkt)
+				relaytrace.Emit("worker-input", leg.String(), pkt)
 			}
-			path := relayPath{leg, from}
-			if isRTPOrRTCP(pkt) {
-				// Authorization and SRTP processing share the packet lock, so
-				// rollback cannot revoke the path between admission and decrypt.
-				sess.handleSRTPPacket(earlyPacket{data: pkt, rtcp: isRTCP(pkt), path: path})
-				continue
-			}
-			sess.mu.Lock()
-			allowed := sess.acceptsRelayPath(path, false)
-			sess.mu.Unlock()
-			if allowed {
-				if relaytrace.Enabled() {
-					relaytrace.Emit("worker-input", leg.String(), pkt)
-				}
-				sess.handlePacket(pkt)
-			} else {
-				if relaytrace.Enabled() {
-					relaytrace.Emit("worker-reject", leg.String(), pkt)
-				}
+			sess.handlePacket(pkt)
+		} else {
+			if relaytrace.Enabled() {
+				relaytrace.Emit("worker-reject", leg.String(), pkt)
 			}
 		}
 	}

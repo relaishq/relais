@@ -25,6 +25,8 @@ type RelayBinding struct {
 	Slot     mediaworker.RelaySlot
 	Relay    Relay
 	draining bool
+	lost     bool
+	lostAt   time.Time
 }
 type relayChangeWorker interface {
 	ConfigureRelays(context.Context, []mediaworker.RelaySlot) error
@@ -41,6 +43,8 @@ type RelayEvent struct {
 // ConfigureRelaySet is a bootstrap operation. Existing one-relay construction
 // and placement remain unchanged; relay changes require a set of at least two.
 func (p *Plane) ConfigureRelaySet(ctx context.Context, bindings []RelayBinding) error {
+	p.relayPlacement.Lock()
+	defer p.relayPlacement.Unlock()
 	if _, ok := p.store.(sessionstore.RelayAssignments); !ok || len(bindings) < 2 {
 		return mediaworker.ErrRelayUnsupported
 	}
@@ -79,6 +83,28 @@ func (p *Plane) ConfigureRelaySet(ctx context.Context, bindings []RelayBinding) 
 	return nil
 }
 
+// Registration and loss marking serialize through relayPlacement. Publish a
+// fresh worker only after it accepts the current view, including prior losses.
+func (p *Plane) configureWorkerRelays(ctx context.Context, worker Worker) error {
+	p.mu.Lock()
+	enabled := len(p.relaySet) > 0
+	var slots []mediaworker.RelaySlot
+	for _, binding := range p.relaySet {
+		if !binding.lost {
+			slots = append(slots, binding.Slot)
+		}
+	}
+	p.mu.Unlock()
+	if !enabled {
+		return nil
+	}
+	w, ok := worker.(relayChangeWorker)
+	if !ok {
+		return mediaworker.ErrRelayUnsupported
+	}
+	return w.ConfigureRelays(ctx, slots)
+}
+
 func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 	if err := p.requireMutationReady(); err != nil {
 		return err
@@ -113,7 +139,7 @@ func (p *Plane) ChangeRelay(ctx context.Context, id, target string) error {
 	p.mu.Lock()
 	b, known := p.relaySet[target]
 	p.mu.Unlock()
-	if !capable || !known || b.draining {
+	if !capable || !known || b.draining || b.lost {
 		return mediaworker.ErrRelayUnsupported
 	}
 	a := p.store.(sessionstore.RelayAssignments)
@@ -271,6 +297,10 @@ func (p *Plane) waitRelayChange(ctx context.Context, c *call, pending sessionsto
 	c.stateMu.Lock()
 	c.relayEvent = &RelayEvent{Generation: pending.Generation + 1, Deadline: deadline}
 	c.relayRejected = false
+	select {
+	case c.relayWake <- struct{}{}:
+	default:
+	}
 	c.stateMu.Unlock()
 	tick := time.NewTicker(10 * time.Millisecond)
 	defer tick.Stop()
@@ -285,6 +315,7 @@ func (p *Plane) waitRelayChange(ctx context.Context, c *call, pending sessionsto
 		if e == nil && got == (sessionstore.RelayAssignment{Slot: pending.Pending, Generation: pending.Generation + 1}) {
 			c.stateMu.Lock()
 			c.relayEvent = nil
+			c.relaySlot = got.Slot
 			c.stateMu.Unlock()
 			return nil
 		}
@@ -317,7 +348,21 @@ func (p *Plane) relayHandlers(mux *http.ServeMux) {
 			writeError(w, err)
 			return
 		}
-		g, err := strconv.ParseUint(r.URL.Query().Get("generation"), 10, 64)
+		var g uint64
+		if r.URL.Query().Get("generation") == "" {
+			event, e := p.callerRelayRestart(r.Context(), c)
+			if e != nil {
+				if errors.Is(e, mediaworker.ErrRelayUnsupported) {
+					http.Error(w, "invalid generation", 400)
+					return
+				}
+				writeError(w, e)
+				return
+			}
+			g = event.Generation
+		} else {
+			g, err = strconv.ParseUint(r.URL.Query().Get("generation"), 10, 64)
+		}
 		if err != nil {
 			http.Error(w, "invalid generation", 400)
 			return
@@ -379,6 +424,8 @@ func (p *Plane) relayHandlers(mux *http.ServeMux) {
 			return
 		}
 		c.eventOpen = true
+		wake := make(chan struct{}, 1)
+		c.relayWake = wake
 		c.stateMu.Unlock()
 		defer func() { c.stateMu.Lock(); c.eventOpen = false; c.stateMu.Unlock() }()
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -404,8 +451,18 @@ func (p *Plane) relayHandlers(mux *http.ServeMux) {
 			p.mu.Lock()
 			terminal := c.terminal
 			p.mu.Unlock()
-			if c.hungUp.Load() || terminal {
-				_, _ = io.WriteString(w, "event: ended\ndata: {\"reason\":\"ended\"}\n\n")
+			c.stateMu.Lock()
+			endedReason := c.relayEndReason
+			c.stateMu.Unlock()
+			if c.hungUp.Load() || terminal || endedReason != "" {
+				c.stateMu.Lock()
+				reason := c.relayEndReason
+				c.stateMu.Unlock()
+				if reason == "" {
+					reason = "ended"
+				}
+				data, _ := json.Marshal(RelayEvent{Reason: reason})
+				_, _ = fmt.Fprintf(w, "event: ended\ndata: %s\n\n", data)
 				_ = flush.Flush()
 				return
 			}
@@ -426,6 +483,7 @@ func (p *Plane) relayHandlers(mux *http.ServeMux) {
 			case <-r.Context().Done():
 				return
 			case <-tick.C:
+			case <-wake:
 			}
 		}
 	})
@@ -451,21 +509,23 @@ func (w *RemoteWorker) CreateSessionAtRelay(ctx context.Context, offer, slot str
 }
 
 // pickRelay keeps one-slot placement unchanged. Reads happen outside registry
-// and packet locks; a store fault refuses new placement, never live media.
+// and packet locks. Known assignments are local placement hints; authorization
+// and all relay transitions still use the authoritative store.
 func (p *Plane) pickRelay(ctx context.Context, exclude string) (string, error) {
 	p.mu.Lock()
 	if len(p.relaySet) == 0 {
 		p.mu.Unlock()
 		return "", nil
 	}
-	var slots, ids []string
+	var slots []string
+	var calls []*call
 	for id, b := range p.relaySet {
-		if !b.draining && id != exclude {
+		if !b.draining && !b.lost && id != exclude {
 			slots = append(slots, id)
 		}
 	}
-	for id := range p.calls {
-		ids = append(ids, id)
+	for _, c := range p.calls {
+		calls = append(calls, c)
 	}
 	p.mu.Unlock()
 	if len(slots) == 0 {
@@ -473,14 +533,24 @@ func (p *Plane) pickRelay(ctx context.Context, exclude string) (string, error) {
 	}
 	sort.Strings(slots)
 	loads := map[string]int{}
-	for _, id := range ids {
-		_, a, e := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, id)
+	for _, c := range calls {
+		c.stateMu.Lock()
+		slot := c.relaySlot
+		c.stateMu.Unlock()
+		if slot != "" {
+			loads[slot]++
+			continue
+		}
+		_, a, e := p.store.(sessionstore.RelayAssignments).RelayOwner(ctx, c.id)
 		if errors.Is(e, sessionstore.ErrNotFound) {
 			continue
 		}
 		if e != nil {
 			return "", e
 		}
+		c.stateMu.Lock()
+		c.relaySlot = a.Slot
+		c.stateMu.Unlock()
 		loads[a.Slot]++
 	}
 	best := slots[0]

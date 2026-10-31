@@ -99,6 +99,9 @@ func (s *session) answerBindingRequest(msg *stun.Message, localUfrag, remoteUfra
 	if s.fenced.Load() {
 		return errHandedOver
 	}
+	if c, ok := s.worker.conn.(*relayConn); ok && !c.allowed(leg) {
+		return ErrRelayUnsupported
+	}
 	creds := &s.state.ICE
 	p := s.pendingRestart
 	pending := p != nil && localUfrag == p.ice.LocalUfrag && localUfrag != creds.LocalUfrag

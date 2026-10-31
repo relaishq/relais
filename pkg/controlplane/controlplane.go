@@ -109,9 +109,17 @@ type registration struct {
 }
 
 type call struct {
+	relayEpisodeMu sync.Mutex    // serializes journal access without holding the operation lock
+	relayEpisode   *relayEpisode // guarded by relayEpisodeMu
+
+	relayTarget    string             // guarded by controlMu
+	relayUnplanned bool               // guarded by controlMu
 	relayCancel    context.CancelFunc // guarded by controlMu; published with c.mu ownership
 	relayCapable   bool
+	relaySlot      string // guarded by stateMu; placement hint, never authorization
+	relayEndReason string // guarded by stateMu
 	eventOpen      bool
+	relayWake      chan struct{}               // guarded by stateMu; wakes the single event stream
 	relayEvent     *RelayEvent                 // guarded by stateMu
 	relayRejected  bool                        // guarded by stateMu; applies only to relayEvent
 	intent         *sessionstore.ControlIntent // guarded by mu
@@ -208,6 +216,8 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 	if name == "" || !addr.IsValid() || worker == nil {
 		return errors.New("controlplane: worker needs name, address and interface")
 	}
+	p.relayPlacement.RLock()
+	defer p.relayPlacement.RUnlock()
 
 	p.mu.Lock()
 
@@ -225,11 +235,15 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 
 	p.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := p.configureWorkerRelays(ctx, worker); err != nil {
+		return err
+	}
 	err := p.saveRegistration(ctx, name, addr, worker)
-	cancel()
 	if err != nil {
 		return err
 	}
+
 	p.mu.Lock()
 	if _, exists := p.workers[name]; exists {
 		p.mu.Unlock()
@@ -476,7 +490,7 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 	if placed.Epoch == 0 {
 		placed = sessionstore.Lease{SessionID: id, Worker: w.addr}
 	}
-	c := &call{id: id, lease: placed}
+	c := &call{id: id, lease: placed, relaySlot: slot}
 	p.calls[id] = c
 	p.mu.Unlock()
 	if placed.Epoch == 0 {

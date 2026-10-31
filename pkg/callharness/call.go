@@ -96,6 +96,13 @@ const (
 // Call is one call made by the caller: a Pion PeerConnection that sends
 // pre-encoded Opus audio (and VP8 video) and records everything it observes.
 type Call struct {
+	relayRestartMu    sync.Mutex
+	relayGeneration   uint64
+	relayAttemptUntil time.Time
+	inboundMedia      atomic.Pointer[time.Time]
+	liveMedia         atomic.Bool
+	iceStalled        atomic.Bool
+
 	eventsCancel context.CancelFunc
 	restartErr   error
 	harness      *Harness
@@ -233,7 +240,11 @@ func (h *Harness) Dial(ctx context.Context, opts CallOptions) (call *Call, err e
 		default:
 		}
 	})
-	pc.OnICEConnectionStateChange(rec.iceConnectionState)
+	iceStalled := &call.iceStalled
+	pc.OnICEConnectionStateChange(func(state webrtc.ICEConnectionState) {
+		rec.iceConnectionState(state)
+		iceStalled.Store(state == webrtc.ICEConnectionStateDisconnected || state == webrtc.ICEConnectionStateFailed)
+	})
 	pc.OnSignalingStateChange(rec.signalingState)
 	pc.OnNegotiationNeeded(rec.negotiationNeeded)
 	pc.OnTrack(call.onTrack)
@@ -330,6 +341,7 @@ func (c *Call) addTrack(capability webrtc.RTPCodecCapability, kind string) (*web
 			if err != nil {
 				return
 			}
+			c.inboundMedia.Store(timePointer(time.Now()))
 			for range keyframeRequests(packets, ssrc) {
 				requestedAt := c.rec.keyframeRequestReceived(kind)
 				if kind == kindVideo && requestedAt != nil {
@@ -417,6 +429,7 @@ func (c *Call) onTrack(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 				}
 				return
 			}
+			c.inboundMedia.Store(timePointer(arrived))
 			c.rec.packet(record, pkt, arrived)
 			if assembler != nil {
 				frames, n := assembler.pushAll(pkt, arrived)
@@ -443,6 +456,9 @@ func (c *Call) startReader(fn func()) {
 // SendMedia plays the pre-encoded media in real time, looping it, for the
 // given duration: Opus audio, and VP8 video when the call has video.
 func (c *Call) SendMedia(ctx context.Context, duration time.Duration) error {
+	c.inboundMedia.Store(timePointer(time.Now()))
+	c.liveMedia.Store(true)
+	defer c.liveMedia.Store(false)
 	end := time.Now().Add(duration)
 
 	var wg sync.WaitGroup
