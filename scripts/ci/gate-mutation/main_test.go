@@ -66,25 +66,3 @@ func TestMutationBaselineIncludesEveryNamedParent(t *testing.T) {
 		t.Fatal("baseline selection changed", pattern)
 	}
 }
-
-func TestResourceRunnerBudgetWiring(t *testing.T) {
-	data, err := os.ReadFile("../../../internal/operatorgates/resource_sequence.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	receiver := "ResourceRunner"
-	for name, guard := range map[string]string{
-		"command":     "return runResourceCommand(ctx, s.clock, caller, end, p,",
-		"preparation": "if callerEnd-s.clock.Elapsed() < windowRequired {",
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := edit(data, change{File: "resource_sequence.go", Function: "Run", Receiver: &receiver, Old: guard, New: guard})
-			if err != nil {
-				if err.Error() == "edit must match exactly once" {
-					t.Fatal("MUTATION: resource-budget-wiring", name)
-				}
-				t.Fatal("INVALID resource source", err)
-			}
-		})
-	}
-}

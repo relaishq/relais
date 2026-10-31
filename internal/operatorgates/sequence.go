@@ -120,7 +120,9 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 			}
 		}
 		releaseEnd := min(s.Budget.end, s.clock.Elapsed()+time.Minute)
+		stopExpired := s.clock.Elapsed() >= releaseEnd
 		if release && p.ReleaseCallers != nil && !p.ReleaseCallers(ctx, releaseReason, releaseEnd) {
+			result.StopDeadlineExpired = result.StopDeadlineExpired || stopExpired
 			if len(s.uncertainties) == 0 {
 				s.unknownScope("caller.stop", "caller", "stop", releaseEnd, "unconfirmed-stop")
 			}

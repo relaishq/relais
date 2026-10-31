@@ -3503,19 +3503,19 @@
     "Receiver": "ResourceRunner",
     "Old": "return runResourceCommand(ctx, s.clock, caller, end, p,",
     "New": "return func(ctx context.Context, clock Clock, caller *CallerRuntime, end time.Duration, p ProcedurePorts, run func(context.Context, ProcedurePorts, time.Duration) ProcedureResult, stop func(context.Context, time.Duration) bool) ProcedureResult { caller.End = end; out := run(ctx, p, end); return Stopped(stop(ctx, min(clock.Elapsed()+time.Minute, end)), out) }(ctx, s.clock, caller, end, p,",
-    "Test": "TestResourceRunnerBudgetWiring/command",
-    "Marker": "MUTATION: resource-budget-wiring",
-    "Package": "./scripts/ci/gate-mutation"
+    "Test": "TestResourceRunnerCallerStartBudget/two-minute-preparation",
+    "Marker": "MUTATION: resource-budget-procedure-cutoff",
+    "Package": "./internal/operatorgates"
   },
   {
     "ID": "resource-preparation-skips-caller-fit",
     "File": "internal/operatorgates/resource_sequence.go",
     "Function": "Run",
     "Receiver": "ResourceRunner",
-    "Old": "if callerEnd-s.clock.Elapsed() < windowRequired {",
-    "New": "if false && callerEnd-s.clock.Elapsed() < windowRequired {",
-    "Test": "TestResourceRunnerBudgetWiring/preparation",
-    "Marker": "MUTATION: resource-budget-wiring",
-    "Package": "./scripts/ci/gate-mutation"
+    "Old": "return max(s.clock.Elapsed(), mediaEnd)+callerCollectionReserve+callerStopReserve <= callerEnd",
+    "New": "return mediaEnd > 0",
+    "Test": "TestResourceRunnerCallerStartBudget/late-caller-start",
+    "Marker": "MUTATION: resource-budget-refusal",
+    "Package": "./internal/operatorgates"
   }
 ]

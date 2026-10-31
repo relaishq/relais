@@ -186,27 +186,68 @@ func TestExpiredCallerWindowKeepsGateDeadline(t *testing.T) {
 	}
 }
 
-func TestCallerPreparationMustLeaveCollectionAndStopReserve(t *testing.T) {
-	for _, gate := range []operator.Gate{operator.Rollout, operator.RelayDeploy} {
-		end, ok := CallerWindow(gate, 0, 20*time.Minute)
-		if !ok {
-			t.Fatal("initial campaign does not fit")
-		}
-		preparation := end - CampaignDuration(gate) - 2*time.Minute + time.Nanosecond
-		// Preparation consumed the fit margin. Admission must refuse before the
-		// real procedure can use the remaining collection and stop reserve.
-		if end-preparation >= CampaignDuration(gate)+callerCollectionReserve+callerStopReserve {
-			t.Fatal("preparation consumed the collection/stop reserve")
-		}
+func TestSequenceStopDeadlineClassification(t *testing.T) {
+	for _, mode := range []string{"unknown-stop", "expired-before-stop", "unknown-after-submission"} {
+		t.Run(mode, func(t *testing.T) {
+			s, clock := fixtureSession(t)
+			result := s.RunSequence(context.Background(), SequencePorts{Command: func(context.Context, operator.Gate, time.Duration) ProcedureResult {
+				if mode == "expired-before-stop" {
+					clock.Advance(s.Budget.end)
+				}
+				return ProcedureResult{Status: operator.Inconclusive, Reason: "gate-deadline"}
+			}, ReleaseCallers: func(_ context.Context, _ string, end time.Duration) bool {
+				if mode == "unknown-after-submission" {
+					clock.Advance(end - clock.Elapsed())
+				}
+				return false
+			}})
+			want := "command-result-unknown"
+			if mode == "expired-before-stop" {
+				want = "gate-deadline"
+			}
+			if result.Gates[0].Reason != want || result.Gates[0].Status != operator.Inconclusive || !s.Latched() {
+				t.Fatal("stop certainty classification", result.Gates)
+			}
+		})
 	}
 }
 
-func TestSequenceExpiredStopPreservesDeadlineReason(t *testing.T) {
-	s, _ := fixtureSession(t)
-	result := s.RunSequence(context.Background(), SequencePorts{Command: func(context.Context, operator.Gate, time.Duration) ProcedureResult {
-		return ProcedureResult{Status: operator.Inconclusive, Reason: "gate-deadline"}
+func TestUnconfirmedStopDoesNotInheritProcedureDeadline(t *testing.T) {
+	got := Stopped(false, ProcedureResult{Status: operator.Inconclusive, Reason: "gate-deadline"})
+	if got.Reason != "command-result-unknown" {
+		t.Fatal("procedure deadline is not proof of an expired stop", got.Reason)
+	}
+}
+
+func TestResourceUnconfirmedStopRetainsUnknownOutcome(t *testing.T) {
+	for _, timesOut := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unknown-stop", true: "timeout-after-submission"}[timesOut], func(t *testing.T) {
+			_, clock := fixtureSession(t)
+			out := runResourceCommand(context.Background(), clock, &CallerRuntime{End: 20 * time.Minute}, 20*time.Minute, ProcedurePorts{}, func(context.Context, ProcedurePorts, time.Duration) ProcedureResult {
+				return ProcedureResult{Status: operator.Inconclusive, Reason: "gate-deadline"}
+			}, func(_ context.Context, end time.Duration) bool {
+				if timesOut {
+					clock.Advance(end - clock.Elapsed())
+				}
+				return false
+			})
+			if out.Reason != "command-result-unknown" || out.StopDeadlineExpired {
+				t.Fatal("submitted stop lost its unknown outcome", out.Reason)
+			}
+		})
+	}
+}
+
+func TestSequenceRetainsExpiredResourceStop(t *testing.T) {
+	s, clock := fixtureSession(t)
+	result := s.RunSequence(context.Background(), SequencePorts{Command: func(ctx context.Context, _ operator.Gate, end time.Duration) ProcedureResult {
+		clock.Advance(21 * time.Minute)
+		return runResourceCommand(ctx, clock, &CallerRuntime{End: 20 * time.Minute}, end, ProcedurePorts{}, func(context.Context, ProcedurePorts, time.Duration) ProcedureResult {
+			t.Fatal("expired procedure ran")
+			return ProcedureResult{}
+		}, func(context.Context, time.Duration) bool { t.Fatal("expired stop submitted"); return false })
 	}, ReleaseCallers: func(context.Context, string, time.Duration) bool { return false }})
-	if result.Gates[0].Reason != "gate-deadline" || result.Gates[0].Status != operator.Inconclusive || !s.Latched() {
-		t.Fatal("expired stop erased the known budget deadline")
+	if result.Gates[0].Reason != "gate-deadline" || !s.Latched() {
+		t.Fatal("expired resource stop classification", result.Gates)
 	}
 }

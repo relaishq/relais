@@ -43,11 +43,23 @@ type ResourceResult struct {
 }
 type ResourceRunner struct {
 	Config ResourceConfig
+	// Sleep supplies procedure and mailbox waits; nil uses real elapsed time.
+	Sleep func(context.Context, time.Duration) error
 	// These hooks retain local diagnostics and evidence for the rehearsal. They
 	// never supply resource ports or choose gate outcomes.
 	Judge    MediaJudge
 	Started  func(*Session)
 	Finished func(*Session, ResourceResult)
+}
+
+type resourceCallerClock struct {
+	Clock
+	sleep func(context.Context, time.Duration) error
+}
+
+func (c resourceCallerClock) Now() time.Time { return c.Wall() }
+func (c resourceCallerClock) Sleep(ctx context.Context, d time.Duration) error {
+	return c.sleep(ctx, d)
 }
 
 func (r ResourceRunner) validate(s *Session) error {
@@ -112,6 +124,10 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 		return result.Gates
 	}
 	c := r.Config
+	pause := r.Sleep
+	if pause == nil {
+		pause = resourcePause
+	}
 	judge := r.Judge
 	if judge == nil {
 		judge = operatorevidence.PinnedJudge{Commit: s.scenario.Judge.SourceCommit, SHA256: s.scenario.Judge.SHA256, Binary: c.JudgeBinary}
@@ -126,14 +142,14 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 	next := max(uint64(1), c.CallerIDBase)
 	wall := func(end time.Duration) time.Time { return s.clock.Wall().Add(max(0, end-s.clock.Elapsed())) }
 	procedures := func() ProcedurePorts {
-		return ProcedurePorts{Clock: s.clock, Sleep: resourcePause, Step: runtime.Step, Inventory: runtime.Inventory, Broker: caller}
+		return ProcedurePorts{Clock: s.clock, Sleep: pause, Step: runtime.Step, Inventory: runtime.Inventory, Broker: caller}
 	}
 	makeCaller := func(gate operator.Gate, phase operatorcaller.Phase, seconds int, callerEnd time.Duration) (*ResourcePorts, *operatorcaller.Broker, error) {
 		identity := operatorcaller.Identity{RunID: c.Endpoints.RunID, Gate: gate, Phase: phase, CallerID: strconv.FormatUint(next, 10), Attempt: "1", PublicSHA: s.scenario.Caller.SourceCommit}
 		next++
 		manifest := operatorcaller.Manifest{Version: 1, Identity: identity, ArmedAt: s.Budget.armed, CreatedAt: s.clock.Wall().UnixMilli(), Deadline: wall(callerEnd).UnixMilli(), Plan: operatorcaller.NewPlan(phase, seconds, identity.PublicSHA), Endpoints: c.Endpoints}
 		port := &ResourcePorts{Session: s, Peer: peer, End: callerEnd, Manifest: manifest}
-		broker, err := operatorcaller.NewBroker(manifest, operatorcaller.NewMailbox(port), operatorcaller.SystemClock{}, s)
+		broker, err := operatorcaller.NewBroker(manifest, operatorcaller.NewMailbox(port), resourceCallerClock{s.clock, pause}, s)
 		return port, broker, err
 	}
 	stop := func(ctx context.Context, end time.Duration) bool { return launchers.stopAll(ctx, wall(end)) }
@@ -209,6 +225,20 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 				}
 				return err
 			}
+			// Media already runs while inventory and clocks are observed. Preserve
+			// its scheduled start on the elapsed clock instead of restarting the
+			// campaign duration after those observations.
+			duration := CampaignDuration(gate)
+			if gate == operator.Load {
+				duration = time.Duration(c.Admission.SurvivorSeconds+c.Admission.BoundarySeconds) * time.Second
+			}
+			mediaEnd := s.clock.Elapsed() + broker.MediaStartedAt.Sub(s.clock.Wall()) + duration
+			mediaFits := func() bool {
+				return max(s.clock.Elapsed(), mediaEnd)+callerCollectionReserve+callerStopReserve <= callerEnd
+			}
+			if !mediaFits() {
+				return fault("gate-deadline")
+			}
 			observed, err := s.FreshInventory(ctx, peer, c.Pins, end, c.Pins[0].Commit, true)
 			if err != nil {
 				return runtime.preflightFailure(err, "inventory")
@@ -216,11 +246,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			if err = runtime.VerifyClocks(ctx, end); err != nil {
 				return err
 			}
-			windowRequired := CampaignDuration(gate) + callerCollectionReserve + callerStopReserve
-			if gate == operator.Load {
-				windowRequired = time.Duration(c.Admission.SurvivorSeconds+c.Admission.BoundarySeconds)*time.Second + callerCollectionReserve + callerStopReserve
-			}
-			if callerEnd-s.clock.Elapsed() < windowRequired {
+			if !mediaFits() {
 				return fault("gate-deadline")
 			}
 			phase := operatorevidence.Phase{DeployedSHA: c.Pins[0].Commit, Clocks: runtime.ClockSamples[len(runtime.ClockSamples)-1], Inventory: observed}
@@ -332,6 +358,7 @@ func runResourceCommand(ctx context.Context, clock Clock, caller *CallerRuntime,
 		cancelProcedure()
 	}
 	if clock.Elapsed() >= stopEnd {
+		out.StopDeadlineExpired = true
 		if out.Status != operator.Failure {
 			out.Status = operator.Inconclusive
 			out.Reason = "gate-deadline"
@@ -339,5 +366,6 @@ func runResourceCommand(ctx context.Context, clock Clock, caller *CallerRuntime,
 		}
 		return out
 	}
-	return Stopped(stop(ctx, min(clock.Elapsed()+callerStopReserve, stopEnd)), out)
+	stopDeadline := min(clock.Elapsed()+callerStopReserve, stopEnd)
+	return Stopped(stop(ctx, stopDeadline), out)
 }

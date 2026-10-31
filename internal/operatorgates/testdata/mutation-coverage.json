@@ -2787,16 +2787,16 @@
       "id": "resource-command-renews-caller-budget",
       "owner": "P6",
       "evidence": "killed",
-      "test": "TestResourceRunnerBudgetWiring/command",
-      "package": "./scripts/ci/gate-mutation",
+      "test": "TestResourceRunnerCallerStartBudget/two-minute-preparation",
+      "package": "./internal/operatorgates",
       "guardFingerprint": ""
     },
     {
       "id": "resource-preparation-skips-caller-fit",
       "owner": "P6",
       "evidence": "killed",
-      "test": "TestResourceRunnerBudgetWiring/preparation",
-      "package": "./scripts/ci/gate-mutation",
+      "test": "TestResourceRunnerCallerStartBudget/late-caller-start",
+      "package": "./internal/operatorgates",
       "guardFingerprint": ""
     }
   ],

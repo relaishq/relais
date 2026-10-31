@@ -144,6 +144,8 @@ type ProcessEvidence struct {
 }
 type ProcedureResult struct {
 	ProcedureReason string `json:"-"`
+	// A procedure deadline alone does not establish the caller stop's outcome.
+	StopDeadlineExpired bool `json:"-"`
 	// Completed records procedure completion independently of strict media qualification.
 	Completed    bool             `json:"-"`
 	Status       operator.Verdict `json:"status"`
