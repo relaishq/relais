@@ -190,9 +190,12 @@ func previewGeneratorDetails(r *loadgen.RunReport, receipts []receipt, samples [
 		return false
 	}
 	budgets, excluded := applySaturation(dir, r, receipts, []string{"caller-1"})
+	passed := len(budgets) == 1 && budgets[0].Outcome == "pass" && len(excluded) == 0
 	if details != nil {
 		details.ExcludedEvents = len(excluded)
-		details.exclusionCause = "generator-guard"
+		if !passed {
+			details.exclusionCause = "generator-guard"
+		}
 		for _, e := range excluded {
 			if e.Cause == "generator saturation overlaps event window" {
 				details.SaturationOverlaps++
@@ -202,7 +205,7 @@ func previewGeneratorDetails(r *loadgen.RunReport, receipts []receipt, samples [
 			details.exclusionCause = "generator saturation overlaps event window"
 		}
 	}
-	return len(budgets) == 1 && budgets[0].Outcome == "pass" && len(excluded) == 0
+	return passed
 }
 
 // Both entry points use the same collected sample boundary, including hashes.
@@ -382,6 +385,9 @@ func parsePreviewMediaFor(input *previewMediaInput) (*loadgen.RunReport, preview
 			continue
 		}
 		if uncertainReceipt(r) && out.Status != "failed" {
+			if out.exclusionCause == "" {
+				out.exclusionCause = "uncertain-receipt"
+			}
 			out.Status = "inconclusive"
 			qualified = false
 		}

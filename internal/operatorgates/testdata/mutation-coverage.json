@@ -316,7 +316,9 @@
     "resource-command-renews-caller-budget",
     "resource-preparation-skips-caller-fit",
     "resource-caller-window-uses-procedure-limit",
-    "resource-boundary-forgets-phase-clock"
+    "resource-boundary-forgets-phase-clock",
+    "host-submission-floor",
+    "refusal-retention"
   ],
   "killed": [
     {
@@ -2814,6 +2816,22 @@
       "owner": "P6",
       "evidence": "killed",
       "test": "TestResourceAdmissionCountsActualPhaseGap",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "host-submission-floor",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestReleaseGateWithRemoteHostLatencyAndThirtySecondFloor",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "refusal-retention",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestAdapterRefusalRetainsOriginalRequestMetadata",
       "package": "./internal/operatorgates",
       "guardFingerprint": ""
     }

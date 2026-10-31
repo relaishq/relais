@@ -1,11 +1,9 @@
 package operatorrehearsal
 
 import (
-	"reflect"
 	"regexp"
 	"strings"
 
-	"github.com/relaishq/relais/internal/loadgen"
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/pkg/operator"
@@ -59,36 +57,12 @@ func publicTopology(s string) string {
 	}
 	return strings.Join(rows, "\n")
 }
-func publicExclusion(s string) string {
-	switch s {
-	case "", "generator-guard", "generator saturation overlaps event window", "invalid-phase-evidence", "incomplete-relay-call", "qualification-skipped", "duplicate-operation-identity", "phase-run-differs", "caller-count-overflow":
-		return s
-	}
-	return "unclassified"
-}
 func sanitizePool(p *operatorevidence.Summary) *operatorevidence.Summary {
 	if p == nil {
 		return nil
 	}
-	copy := *p
+	copy := p.PublicDiagnostics()
 	copy.Status = publicVerdict(p.Status)
-	copy.UndecidedMetrics = append([]operatorevidence.UndecidedMetric{}, p.UndecidedMetrics...)
-	for i := range copy.UndecidedMetrics {
-		row := &copy.UndecidedMetrics[i]
-		row.Metric = operatorevidence.PublicMetric(row.Metric)
-		row.Causes = append([]string{}, row.Causes...)
-		for j, cause := range row.Causes {
-			row.Causes[j] = operatorevidence.PublicTimingCause(cause)
-		}
-	}
-	copy.PhaseDiagnostics = append([]operatorevidence.PhaseDiagnostic{}, p.PhaseDiagnostics...)
-	for i := range copy.PhaseDiagnostics {
-		if !operator.Gate(copy.PhaseDiagnostics[i].Gate).Valid() {
-			copy.PhaseDiagnostics[i].Gate = "unavailable"
-		}
-		copy.PhaseDiagnostics[i].Cause = publicExclusion(copy.PhaseDiagnostics[i].Cause)
-		copy.PhaseDiagnostics[i].Issue = copy.PhaseDiagnostics[i].Issue.Public(reflect.TypeFor[operatorevidence.MediaInput](), reflect.TypeFor[loadgen.Message]())
-	}
 	return &copy
 }
 func (r *Report) sanitize() {
@@ -164,6 +138,8 @@ func (r *Report) sanitize() {
 		if g.Media != nil {
 			m := *g.Media
 			m.Status = publicVerdict(m.Status)
+			diagnostics := (operatorevidence.Summary{UndecidedMetrics: m.UndecidedMetrics, PhaseDiagnostics: m.PhaseDiagnostics}).PublicDiagnostics()
+			m.UndecidedMetrics, m.PhaseDiagnostics = diagnostics.UndecidedMetrics, diagnostics.PhaseDiagnostics
 			g.Media = &m
 		}
 	}

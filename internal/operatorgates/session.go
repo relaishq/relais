@@ -18,16 +18,22 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
+const maxRefusalDiagnostics = 64
+
 type pending struct {
 	operation      operator.Operation
 	target, action string
 	end            time.Duration
+	deadlineUnixMS string
+	remainingMS    int64
 	effect         bool
 	expired        bool
 	terminal       bool
 	outcome        operator.Certainty
 }
 type Session struct {
+	omittedRefusals int
+	refusals        []operator.Refusal
 	diagnostics     []operator.GateDiagnostic
 	mu              sync.Mutex
 	exchange        chan struct{}
@@ -146,7 +152,7 @@ func (s *Session) Issue(op operator.Operation, target, action string, args json.
 	s.next++
 	deadline, remaining := s.Budget.Wire(end)
 	r := operator.Request{ID: strconv.FormatUint(s.next, 10), Operation: op, Target: target, Action: action, Args: bytes.Clone(args), Script: bytes.Clone(script), DeadlineUnixMS: deadline, RemainingMS: remaining}
-	s.requests[r.ID] = &pending{end: end, effect: effect, operation: op, target: target, action: action}
+	s.requests[r.ID] = &pending{end: end, effect: effect, operation: op, target: target, action: action, deadlineUnixMS: deadline, remainingMS: remaining}
 	s.record("request", r.ID, "", "")
 	return r, nil
 }
@@ -184,6 +190,12 @@ func (s *Session) Accept(session string, r operator.Reply, evidence operator.Cer
 			return operator.Unknown, errors.New("invalid-refusal")
 		}
 		outcome = operator.Failed
+		if len(s.refusals) < maxRefusalDiagnostics {
+			metadata := (operator.Uncertainty{Kind: string(p.operation), RequestID: r.ID, Target: p.target, Action: p.action, DeadlineUnixMS: p.deadlineUnixMS, RemainingMS: p.remainingMS}).Public()
+			s.refusals = append(s.refusals, operator.Refusal{RequestID: metadata.RequestID, Operation: operator.Operation(metadata.Kind), Target: metadata.Target, Action: metadata.Action, DeadlineUnixMS: metadata.DeadlineUnixMS, RemainingMS: metadata.RemainingMS, Code: r.RefusalCode})
+		} else {
+			s.omittedRefusals++
+		}
 	}
 	// Timeout/late success is never evidence that the deadline was met.
 	if p.expired || s.clock.Elapsed() >= p.end {
@@ -211,7 +223,11 @@ func (s *Session) Accept(session string, r operator.Reply, evidence operator.Cer
 		s.unknownRequest(r.ID, rule)
 		s.halt("command-result-unknown")
 	}
-	s.record("result", r.ID, outcome, "")
+	resultCode := ""
+	if r.NotSubmitted {
+		resultCode = r.RefusalCode
+	}
+	s.record("result", r.ID, outcome, resultCode)
 	return outcome, nil
 }
 func (s *Session) Expire() {
@@ -258,6 +274,8 @@ func (s *Session) Final(gates []operator.GateResult) operator.Result {
 	defer s.mu.Unlock()
 	s.expire()
 	r := operator.Result{SchemaVersion: 1, ScenarioDigest: s.digest, Status: operator.Passed, Complete: true, Latched: s.latched, Pending: []string{}, Gates: gates, Trace: append([]operator.Trace{}, s.trace...), FirstError: s.firstError}
+	r.Refusals = slices.Clone(s.refusals)
+	r.OmittedRefusals = s.omittedRefusals
 	r.Diagnostics = slices.Clone(s.diagnostics)
 	r.Uncertainties = slices.Clone(s.uncertainties)
 	for id, p := range s.requests {

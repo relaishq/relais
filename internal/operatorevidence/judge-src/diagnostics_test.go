@@ -42,3 +42,20 @@ func TestPoolQualifiesEachPhaseAfterInvalidSibling(t *testing.T) {
 		}
 	}
 }
+
+func TestUncertainReceiptHasItsOwnExclusionCause(t *testing.T) {
+	phase := rawPreviewInput(previewSample(), 0)
+	_, verdict, qualified := parsePreviewMedia(&phase)
+	if !qualified || verdict.exclusionCause != "" {
+		t.Fatal("passing generator guard retained a failure cause")
+	}
+	phase.Receipts[0].Uncertain = true
+	_, verdict, qualified = parsePreviewMedia(&phase)
+	if qualified || verdict.exclusionCause != "uncertain-receipt" {
+		t.Fatal("receipt uncertainty mislabeled as generator failure")
+	}
+	pool := pooledPreviewMedia(&previewPoolInput{RunID: phase.RunID, Phases: []previewMediaInput{phase}})
+	if pool.Status != "inconclusive" || pool.DroppedPhases != 1 || len(pool.PhaseDiagnostics) != 1 || pool.PhaseDiagnostics[0].Cause != "uncertain-receipt" {
+		t.Fatal("pool discarded receipt exclusion cause")
+	}
+}
