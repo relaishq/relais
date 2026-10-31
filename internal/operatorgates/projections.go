@@ -47,6 +47,8 @@ func Stopped(confirmed bool, r ProcedureResult) ProcedureResult {
 		r.Status = operator.Inconclusive
 	}
 	r.AwaitingPool = false
-	r.Reason = "command-result-unknown"
+	if r.Reason != "gate-deadline" {
+		r.Reason = "command-result-unknown"
+	}
 	return r
 }

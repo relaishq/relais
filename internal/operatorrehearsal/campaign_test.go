@@ -72,10 +72,10 @@ func TestCampaignsFitAfterCalibrationAndCallerPreparation(t *testing.T) {
 func TestCallerWindowPreservesCampaignFitReserve(t *testing.T) {
 	for _, gate := range CoveredGates {
 		media := time.Duration(duration(gate)) * time.Second
-		for _, remaining := range []time.Duration{20 * time.Minute, media + 120*time.Second, media + 120*time.Second - time.Nanosecond} {
+		for _, remaining := range []time.Duration{20 * time.Minute, media + 180*time.Second, media + 180*time.Second - time.Nanosecond, media + 120*time.Second} {
 			now := 5 * time.Minute
 			end, fits := callerWindow(gate, now, now+remaining)
-			if end != now+min(operatorgates.GateMaximum, remaining) || fits != (remaining >= media+120*time.Second) {
+			if end != now+min(operatorgates.GateMaximum, remaining) || fits != (remaining >= media+180*time.Second) {
 				t.Fatalf("caller window changed: gate=%s remaining=%s end=%s fits=%v", gate, remaining, end, fits)
 			}
 		}

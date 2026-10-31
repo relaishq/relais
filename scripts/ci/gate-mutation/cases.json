@@ -867,8 +867,8 @@
     "GuardFingerprint": "78ccf27d78f1e3bafdf8403b89c08ebee739be99fe35c7ca50ed72daf1e9340e",
     "File": "internal/operatorgates/processes.go",
     "Function": "finish",
-    "Old": "if g.p.Clock.Elapsed() >= g.end && r.Status != operator.Failure {",
-    "New": "if false {",
+    "Old": "if (procedureLate || g.p.Clock.Elapsed() >= max(g.end, g.p.CollectionEnd)) && r.Status != operator.Failure {",
+    "New": "if false && (procedureLate || g.p.Clock.Elapsed() >= max(g.end, g.p.CollectionEnd)) && r.Status != operator.Failure {",
     "Test": "TestProcedureOracle/edd5c10b65ad547c.json/0",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -3495,5 +3495,27 @@
         "New": "quote(c.AdapterPath), quote(c.AdapterSHA256), quote(c.AdapterPath))"
       }
     ]
+  },
+  {
+    "ID": "resource-command-renews-caller-budget",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Run",
+    "Receiver": "ResourceRunner",
+    "Old": "return runResourceCommand(ctx, s.clock, caller, end, p,",
+    "New": "return func(ctx context.Context, clock Clock, caller *CallerRuntime, end time.Duration, p ProcedurePorts, run func(context.Context, ProcedurePorts, time.Duration) ProcedureResult, stop func(context.Context, time.Duration) bool) ProcedureResult { caller.End = end; out := run(ctx, p, end); return Stopped(stop(ctx, min(clock.Elapsed()+time.Minute, end)), out) }(ctx, s.clock, caller, end, p,",
+    "Test": "TestResourceRunnerBudgetWiring/command",
+    "Marker": "MUTATION: resource-budget-wiring",
+    "Package": "./scripts/ci/gate-mutation"
+  },
+  {
+    "ID": "resource-preparation-skips-caller-fit",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Run",
+    "Receiver": "ResourceRunner",
+    "Old": "if callerEnd-s.clock.Elapsed() < windowRequired {",
+    "New": "if false && callerEnd-s.clock.Elapsed() < windowRequired {",
+    "Test": "TestResourceRunnerBudgetWiring/preparation",
+    "Marker": "MUTATION: resource-budget-wiring",
+    "Package": "./scripts/ci/gate-mutation"
   }
 ]

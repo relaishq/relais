@@ -67,12 +67,17 @@ func (p resourceCallers) stopAll(ctx context.Context, end time.Time) bool {
 	return stopped
 }
 func (r *ProcessRuntime) measurePorts(caller *CallerRuntime, calls int) MeasurePorts {
-	return MeasurePorts{ProcedurePorts: ProcedurePorts{Clock: r.Session.clock, Sleep: resourcePause, Step: r.Step, Inventory: r.Inventory, Broker: caller}, Calls: calls, Store: r.Session.OptionalStore(r.Peer), Observe: r.Observe, BeforeFault: func(ctx context.Context, end time.Duration) error {
+	ports := MeasurePorts{ProcedurePorts: ProcedurePorts{Clock: r.Session.clock, Sleep: resourcePause, Step: r.Step, Inventory: r.Inventory, Broker: caller}, Calls: calls, Store: r.Session.OptionalStore(r.Peer), Observe: r.Observe, BeforeFault: func(ctx context.Context, end time.Duration) error {
 		if err := r.Inventory(ctx, "from", end); err != nil {
 			return err
 		}
 		return r.VerifyClocks(ctx, end)
 	}, MarkFault: caller.MarkFault, Collect: caller.Collect}
+	if r.commandPorts != nil {
+		ports.ProcedurePorts = *r.commandPorts
+		ports.Broker = caller
+	}
+	return ports
 }
 func runResourceAdmission(ctx context.Context, s *Session, runtime *ProcessRuntime, caller *CallerRuntime, boundary *operatorcaller.Broker, launchers resourceCallers, end time.Duration, token string, result *ResourceResult) ProcedureResult {
 	wall := func(end time.Duration) time.Time { return s.clock.Wall().Add(max(0, end-s.clock.Elapsed())) }

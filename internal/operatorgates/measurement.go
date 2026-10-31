@@ -175,9 +175,14 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 			}
 		}
 	}
-	if p.Collect != nil {
-		collectionCtx, cancelCollection := context.WithCancel(ctx)
-		collecting := p.Collect(collectionCtx, g.end)
+	procedureLate := p.Clock.Elapsed() >= g.end
+	collectionEnd, collectionParent := g.end, ctx
+	if p.CollectionContext != nil {
+		collectionEnd, collectionParent = max(g.end, p.CollectionEnd), p.CollectionContext
+	}
+	if p.Collect != nil && (p.CollectionContext == nil || p.Clock.Elapsed() < collectionEnd && collectionParent.Err() == nil) {
+		collectionCtx, cancelCollection := context.WithCancel(collectionParent)
+		collecting := p.Collect(collectionCtx, collectionEnd)
 		var collection MeasurementCollection
 		received := false
 	collect:
@@ -204,6 +209,18 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 			// is bounded by the original gate deadline, never a renewed wait budget.
 			if err = p.Sleep(ctx, min(15*time.Second, max(time.Duration(0), g.end-p.Clock.Elapsed()))); err != nil {
 				break
+			}
+		}
+		// Procedure telemetry stops at its own cutoff. The already-started
+		// collector may finish within the reserved evidence window.
+		if !received && p.CollectionContext != nil {
+			select {
+			case result, ok := <-collecting:
+				collection, received = result, true
+				if !ok {
+					collection.Err = context.Canceled
+				}
+			case <-collectionCtx.Done():
 			}
 		}
 		// Return collection ownership only after its worker has stopped and added
@@ -244,7 +261,7 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 	}
 	if failed {
 		r.Status = operator.Failure
-	} else if r.Reason == "" && p.Clock.Elapsed() >= g.end {
+	} else if r.Reason == "" && (procedureLate || p.Clock.Elapsed() >= collectionEnd) {
 		r.Reason = "gate-deadline"
 	}
 	return r

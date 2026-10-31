@@ -12,6 +12,14 @@ inside a gate. `-spool` binds an agreed local blob directory without putting its
 path in artifacts. Configuration and the spool are local inputs, not public
 reports. `relais-gates version` emits the unchanged protocol-v1 hello.
 
+The optional result `diagnostics` array retains each gate's procedure completion
+and fixed reason code, media counters, pooled counters, pending qualification
+and caller-stop confirmation. It contains no resource output. Inconclusive
+diagnostics have a reason even when procedure execution completed. Legacy gate
+reasons remain unchanged. These additive
+fields keep result schema version 1. Preparation consumes the caller's original
+window; procedure and restoration leave one minute each for collection and stop.
+
 The resource-backed runner owns preparation, gate admission, process/release
 procedures, caller brokers, the evidence pool and the pinned judge. Host steps
 use `host.execute`; all caller and mailbox access uses the same session's

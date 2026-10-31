@@ -164,6 +164,7 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 	if s.Latched() && out.Status != operator.Failure {
 		out.Status = operator.Inconclusive
 	}
+	s.retainGateDiagnostics(&out, nil)
 	return out
 }
 

@@ -26,14 +26,38 @@ type Trace struct {
 }
 
 type Result struct {
-	Uncertainties  []Uncertainty `json:"uncertainties,omitempty"`
-	SchemaVersion  int           `json:"schemaVersion"`
-	ScenarioDigest string        `json:"scenarioDigest"`
-	Status         Verdict       `json:"status"`
-	Complete       bool          `json:"complete"`
-	Latched        bool          `json:"latched"`
-	Pending        []string      `json:"pending"`
-	Gates          []GateResult  `json:"gates"`
-	Trace          []Trace       `json:"trace"`
-	FirstError     *Trace        `json:"firstError,omitempty"`
+	Diagnostics    []GateDiagnostic `json:"diagnostics,omitempty"`
+	Uncertainties  []Uncertainty    `json:"uncertainties,omitempty"`
+	SchemaVersion  int              `json:"schemaVersion"`
+	ScenarioDigest string           `json:"scenarioDigest"`
+	Status         Verdict          `json:"status"`
+	Complete       bool             `json:"complete"`
+	Latched        bool             `json:"latched"`
+	Pending        []string         `json:"pending"`
+	Gates          []GateResult     `json:"gates"`
+	Trace          []Trace          `json:"trace"`
+	FirstError     *Trace           `json:"firstError,omitempty"`
+}
+
+// GateDiagnostic retains bounded evidence projections, never adapter output.
+type GateDiagnostic struct {
+	Reason        string              `json:"reason,omitempty"`
+	Gate          Gate                `json:"gate"`
+	Procedure     ProcedureDiagnostic `json:"procedure"`
+	Media         *MediaDiagnostic    `json:"media,omitempty"`
+	Pool          *MediaDiagnostic    `json:"pool,omitempty"`
+	PoolPending   bool                `json:"poolPending"`
+	CallerStopped bool                `json:"callerStopped"`
+}
+type ProcedureDiagnostic struct {
+	Completed      bool   `json:"completed"`
+	Reason         string `json:"reason,omitempty"`
+	CompletedSteps int    `json:"completedSteps"`
+}
+type MediaDiagnostic struct {
+	Status              Verdict `json:"status"`
+	ExpectedCalls       int     `json:"expectedCalls"`
+	CompletedCalls      int     `json:"completedCalls"`
+	FailedMetrics       int     `json:"failedMetrics"`
+	InconclusiveMetrics int     `json:"inconclusiveMetrics"`
 }

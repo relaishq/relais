@@ -312,7 +312,9 @@
     "caller-manifest-cutoff-renews-runtime",
     "mailbox-caller-context-deadline-ignored",
     "launcher-adapter-source-hash-only",
-    "launcher-adapter-hash-before-copy"
+    "launcher-adapter-hash-before-copy",
+    "resource-command-renews-caller-budget",
+    "resource-preparation-skips-caller-fit"
   ],
   "killed": [
     {
@@ -2780,6 +2782,22 @@
       "evidence": "killed",
       "test": "TestStartScriptStagesMailboxAdapter/copy-change",
       "package": "./internal/operatorcaller"
+    },
+    {
+      "id": "resource-command-renews-caller-budget",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestResourceRunnerBudgetWiring/command",
+      "package": "./scripts/ci/gate-mutation",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "resource-preparation-skips-caller-fit",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestResourceRunnerBudgetWiring/preparation",
+      "package": "./scripts/ci/gate-mutation",
+      "guardFingerprint": ""
     }
   ],
   "retired": [

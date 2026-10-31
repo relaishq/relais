@@ -14,6 +14,7 @@ import (
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
+	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/operator"
 )
@@ -73,10 +74,16 @@ func CampaignDuration(g operator.Gate) time.Duration {
 	}
 	return 1020 * time.Second
 }
-func CampaignMinimum(g operator.Gate) time.Duration { return CampaignDuration(g) + 180*time.Second }
+
+const callerCollectionReserve = time.Minute
+const callerStopReserve = time.Minute
+
+func CampaignMinimum(g operator.Gate) time.Duration {
+	return CampaignDuration(g) + time.Minute + callerCollectionReserve + callerStopReserve
+}
 func CallerWindow(g operator.Gate, now, gateEnd time.Duration) (time.Duration, bool) {
 	end := min(now+GateMaximum, gateEnd)
-	return end, end-now >= CampaignDuration(g)+120*time.Second
+	return end, end-now >= CampaignMinimum(g)
 }
 func resourcePause(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(max(0, d))
@@ -98,6 +105,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			result.Gates = append(result.Gates, operator.GateResult{Gate: gate, Status: operator.NotRun, Reason: "precondition-failed"})
 			result.Procedures = append(result.Procedures, ProcedureResult{Status: operator.NotRun, Reason: "precondition-failed"})
 		}
+		s.retainGateDiagnostics(&result.SequenceResult, result.CallerStopped)
 		if r.Finished != nil {
 			r.Finished(s, result)
 		}
@@ -208,6 +216,13 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			if err = runtime.VerifyClocks(ctx, end); err != nil {
 				return err
 			}
+			windowRequired := CampaignDuration(gate) + callerCollectionReserve + callerStopReserve
+			if gate == operator.Load {
+				windowRequired = time.Duration(c.Admission.SurvivorSeconds+c.Admission.BoundarySeconds)*time.Second + callerCollectionReserve + callerStopReserve
+			}
+			if callerEnd-s.clock.Elapsed() < windowRequired {
+				return fault("gate-deadline")
+			}
 			phase := operatorevidence.Phase{DeployedSHA: c.Pins[0].Commit, Clocks: runtime.ClockSamples[len(runtime.ClockSamples)-1], Inventory: observed}
 			caller = NewCallerRuntime(broker, s.clock, callerEnd, pool, phase)
 			runtime.BeforeMutation = caller.MarkFault
@@ -218,23 +233,26 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			return result.CallerStopped[current]
 		},
 		Command: func(ctx context.Context, gate operator.Gate, end time.Duration) ProcedureResult {
-			caller.End = end
 			p := procedures()
 			p.Media = caller.Media
 			p.Duplicates = caller.Duplicates
-			var out ProcedureResult
-			switch gate {
-			case operator.UpgradeRollback:
-				out = RunReleaseGate(ctx, process, p, end)
-			case operator.Load:
-				out = runResourceAdmission(ctx, s, runtime, caller, boundary, launchers, end, c.Token, &result)
-			case operator.Failover:
-				m := RunMeasureGate(ctx, gate, process, runtime.measurePorts(caller, 1), end)
-				out = ProcedureResult{Status: m.Status, Reason: m.Reason, Media: m.Media}
-			default:
-				out = RunProcessGate(ctx, gate, process, p, end)
-			}
-			return Stopped(stop(ctx, min(s.clock.Elapsed()+time.Minute, end)), out)
+			return runResourceCommand(ctx, s.clock, caller, end, p, func(ctx context.Context, p ProcedurePorts, end time.Duration) ProcedureResult {
+				runtime.commandPorts = &p
+				defer func() { runtime.commandPorts = nil }()
+				var out ProcedureResult
+				switch gate {
+				case operator.UpgradeRollback:
+					out = RunReleaseGate(ctx, process, p, end)
+				case operator.Load:
+					out = runResourceAdmission(ctx, s, runtime, caller, boundary, launchers, end, c.Token, &result)
+				case operator.Failover:
+					m := RunMeasureGate(ctx, gate, process, runtime.measurePorts(caller, 1), end)
+					out = ProcedureResult{Status: m.Status, Reason: m.Reason, Media: m.Media}
+				default:
+					out = RunProcessGate(ctx, gate, process, p, end)
+				}
+				return out
+			}, stop)
 		},
 		Finalize: func(ctx context.Context, _ time.Duration) (*MediaSummary, error) {
 			summary, err := pool.Media(ctx)
@@ -242,6 +260,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			return summary, err
 		},
 	})
+	s.retainGateDiagnostics(&result.SequenceResult, result.CallerStopped)
 	result.Clocks = runtime.ClockSamples
 	if r.Finished != nil {
 		r.Finished(s, result)
@@ -272,4 +291,53 @@ func (r *ProcessRuntime) Observe(ctx context.Context, end time.Duration) (Measur
 		out.Local[worker] = row.Local
 	}
 	return out, nil
+}
+
+// runResourceCommand owns the procedure, collection and stop windows together.
+func runResourceCommand(ctx context.Context, clock Clock, caller *CallerRuntime, end time.Duration, p ProcedurePorts, run func(context.Context, ProcedurePorts, time.Duration) ProcedureResult, stop func(context.Context, time.Duration) bool) ProcedureResult {
+	// Preparation consumed part of this immutable window. Neither gate
+	// admission nor restoration may renew the caller manifest's cutoff.
+	stopEnd := min(end, caller.End)
+	collectionEnd := stopEnd - callerStopReserve
+	procedureEnd := collectionEnd - callerCollectionReserve
+	caller.End = collectionEnd
+	out := ProcedureResult{Status: operator.Inconclusive, Reason: "gate-deadline"}
+	if clock.Elapsed() < procedureEnd {
+		collectionCtx, cancelCollection := context.WithTimeout(ctx, max(0, collectionEnd-clock.Elapsed()))
+		defer cancelCollection()
+		p.CollectionEnd = collectionEnd
+		p.CollectionContext = collectionCtx
+		if step := p.Step; step != nil {
+			p.PostMediaStatus = func(context.Context) (controlplane.Status, error) {
+				if clock.Elapsed() >= collectionEnd || collectionCtx.Err() != nil {
+					return controlplane.Status{}, fault("gate-deadline")
+				}
+				row, err := step(collectionCtx, "status", "shared", collectionEnd, ProcessExtra{})
+				if err == nil && row.Status.LostCount > 0 {
+					err = fault("known-call-loss")
+				}
+				return row.Status, err
+			}
+		}
+		if media := p.Media; media != nil {
+			p.Media = func(context.Context) (*MediaSummary, error) {
+				if clock.Elapsed() >= collectionEnd || collectionCtx.Err() != nil {
+					return nil, fault("gate-deadline")
+				}
+				return media(collectionCtx)
+			}
+		}
+		procedureCtx, cancelProcedure := context.WithTimeout(ctx, procedureEnd-clock.Elapsed())
+		out = run(procedureCtx, p, procedureEnd)
+		cancelProcedure()
+	}
+	if clock.Elapsed() >= stopEnd {
+		if out.Status != operator.Failure {
+			out.Status = operator.Inconclusive
+			out.Reason = "gate-deadline"
+			out.AwaitingPool = false
+		}
+		return out
+	}
+	return Stopped(stop(ctx, min(clock.Elapsed()+callerStopReserve, stopEnd)), out)
 }
