@@ -223,9 +223,17 @@ func TestRelayEpisodeRetriesPreviouslyTriedLiveSlot(t *testing.T) {
 				c.relayEpisodeMu.Unlock()
 				bound := 5 * time.Second // includes the production four-second check timeout
 				if refuse {
-					c.stateMu.Lock()
-					c.relayRejected = true
-					c.stateMu.Unlock()
+					// The stored assignment precedes event publication. Reject only
+					// the matching event, after waitRelayChange resets the flag.
+					require.Eventually(t, func() bool {
+						c.stateMu.Lock()
+						defer c.stateMu.Unlock()
+						if c.relayEvent == nil || c.relayEvent.Generation != first.Generation+1 {
+							return false
+						}
+						c.relayRejected = true
+						return true
+					}, time.Second, time.Millisecond)
 					bound = time.Second
 				}
 				require.Eventually(t, func() bool {

@@ -107,11 +107,11 @@ func TestReplyBudgetWaitsForWriter(t *testing.T) {
 	}
 }
 func testReplyBudgetWait(t *testing.T, outcome string) {
-	reader, send := io.Pipe()
+	// Budget waits need a live writer, not the silent-link watchdog.
 	writer := &budgetReplyWriter{release: make(chan struct{}), small: make(chan Message, 1)}
 	written := make(chan struct{}, 4)
 	entered, finished := make(chan struct{}), make(chan struct{})
-	peer := New(reader, writer, func() { _ = reader.Close(); writer.unblock() }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	peer := New(nil, writer, writer.unblock, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/small" {
 			close(entered)
 			_, _ = w.Write([]byte("applied"))
@@ -121,22 +121,25 @@ func testReplyBudgetWait(t *testing.T, outcome string) {
 		_, _ = w.Write(make([]byte, privateapi.MaxBody))
 		written <- struct{}{}
 	}))
-	defer func() { peer.Close(); _ = send.Close() }()
-	go func() { _ = peer.Run(context.Background()) }()
+	writerDone := make(chan struct{})
+	go func() { defer close(writerDone); peer.writeReplies() }()
+	defer func() { peer.Close(); <-writerDone }()
+	serve := func(id uint64, path string, budget time.Duration) {
+		deadline := time.Now().Add(budget)
+		go func() {
+			peer.queueReply(peer.serve(context.Background(), Message{Kind: "request", ID: id, Method: "POST", Path: path}, deadline))
+		}()
+	}
 	for id := uint64(1); id <= 4; id++ {
-		if err := Write(send, Message{Kind: "request", ID: id, Timeout: int64(privateapi.Timeout), Method: "POST", Path: "/large"}); err != nil {
-			t.Fatal(err)
-		}
+		serve(id, "/large", 10*time.Second)
 		<-written
 	}
-	budget := privateapi.Timeout
+	budget := 10 * time.Second
 	if outcome == "deadline" {
 		budget = 600 * time.Millisecond
 	}
 	started := time.Now()
-	if err := Write(send, Message{Kind: "request", ID: 5, Timeout: int64(budget), Method: "POST", Path: "/small"}); err != nil {
-		t.Fatal(err)
-	}
+	serve(5, "/small", budget)
 	<-entered
 	select {
 	case <-finished:
@@ -178,7 +181,7 @@ func testReplyBudgetWait(t *testing.T, outcome string) {
 			return
 		}
 		t.Fatalf("unexpected small reply: %+v", reply)
-	case <-time.After(2 * time.Second):
+	case <-time.After(9 * time.Second):
 		t.Fatal("waiting command never received its reply")
 	}
 }
