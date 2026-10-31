@@ -1,6 +1,7 @@
 package relaylease
 
 import (
+	"errors"
 	"time"
 
 	"github.com/relaishq/relais/pkg/sessionstore"
@@ -51,4 +52,12 @@ func (s *staleness) observe(l sessionstore.RelayLease, missing bool, pollErr err
 	}
 	s.lastSuccess, s.previousSuccess = now, true
 	return s.elapsed >= ttl
+}
+
+// Observation shares ADR 0004's reachable-observation rule with control's
+// cross-slot loss detector. It grants no lease or forwarding authority.
+type Observation struct{ staleness }
+
+func (s *Observation) Observe(l sessionstore.RelayLease, err error, now time.Time, threshold time.Duration) bool {
+	return s.observe(l, errors.Is(err, sessionstore.ErrNotFound), err, now, threshold, DefaultRenew)
 }

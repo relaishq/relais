@@ -49,6 +49,15 @@ bearer authorization as call deletion. It returns `text/event-stream` with
 should deduplicate by generation. Comment keepalives arrive every five seconds.
 An `ended` event with a `reason` closes the stream on any terminal call outcome.
 
+A capable caller also posts a full restart offer to `POST /calls/{id}/ice-restart`
+without a `generation` query when ICE disconnects/fails, or inbound RTP/RTCP
+stops for two seconds during live media. Control restarts the live current slot
+first, then tries another live slot. Retries share one journaled 15-second loss
+episode deadline. Completion currently means assignment commit; caller media
+progress confirmation remains a known limit.
+This requires a configured relay set. Without one, the request returns 400
+and does not start a recovery episode.
+
 On `relay-change`, the caller creates an ICE restart offer on the same peer
 connection and sends the full SDP to
 `POST /calls/{id}/ice-restart?generation={generation}`, with the same bearer

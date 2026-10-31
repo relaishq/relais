@@ -19,6 +19,7 @@ import (
 type relayConn struct {
 	conn      *net.UDPConn
 	relay     netip.AddrPort
+	packetMu  sync.RWMutex // orders packet admission against a relay-set cut-off
 	peersMu   sync.RWMutex
 	peers     map[netip.AddrPort]bool
 	lastRelay netip.AddrPort // written/read only by the worker's single packet loop
@@ -69,7 +70,7 @@ func (c *relayConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
 		}
 		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
 		c.peersMu.RLock()
-		allowed := from == c.relay || c.peers[from]
+		allowed := c.allowedLocked(from)
 		c.peersMu.RUnlock()
 		if !allowed {
 			continue
@@ -90,7 +91,11 @@ func (c *relayConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
 			if !ack && !workerprobe.BarrierIgnored(c.conn.LocalAddr().(*net.UDPAddr).AddrPort()) {
 				// The worker's single read loop finished the previous packet before
 				// requesting this read, so the acknowledgement is a drain barrier.
-				_, _ = c.conn.WriteToUDPAddrPort(relayleg.Barrier(id, true), from)
+				c.peersMu.RLock()
+				if c.allowedLocked(from) {
+					_, _ = c.conn.WriteToUDPAddrPort(relayleg.Barrier(id, true), from)
+				}
+				c.peersMu.RUnlock()
 			}
 			continue
 		}
@@ -108,7 +113,23 @@ func (c *relayConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
 func (c *relayConn) WriteToUDPAddrPort(p []byte, caller netip.AddrPort) (int, error) {
 	return c.writeVia(p, caller, c.relay)
 }
+func (c *relayConn) allowedLocked(leg netip.AddrPort) bool {
+	if c.peers == nil {
+		return leg == c.relay
+	}
+	return c.peers[leg]
+}
+func (c *relayConn) allowed(leg netip.AddrPort) bool {
+	c.peersMu.RLock()
+	defer c.peersMu.RUnlock()
+	return c.allowedLocked(leg)
+}
 func (c *relayConn) writeVia(p []byte, caller, leg netip.AddrPort) (int, error) {
+	c.peersMu.RLock()
+	defer c.peersMu.RUnlock()
+	if !c.allowedLocked(leg) {
+		return 0, ErrRelayUnsupported
+	}
 	bufp, _ := c.buffers.Get().(*[]byte)
 	datagram := append(relay.AppendHeader((*bufp)[:0], caller), p...)
 	_, err := c.conn.WriteToUDPAddrPort(datagram, leg)

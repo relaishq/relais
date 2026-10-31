@@ -41,6 +41,7 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 	bufferSSRCs := flag.Int("buffer-ssrcs", relay.DefaultMaxBufferedSSRCs, "maximum buffered caller SSRCs per session")
 	standby := flag.Bool("standby", false, "wait without binding any sockets, then fence and take over")
 	hostID := flag.String("host-id", processrun.Env("RELAIS_HOST_ID", ""), "unique host identity; overrides machine ID discovery (required for standby when unavailable)")
+	slotID := flag.String("relay-slot", "", "relay-set slot ID; must equal the relay lease key")
 	leaseKey := flag.String("relay-lease", "default", "same-host relay lease key; shared by active and standby")
 	leaseTTL := flag.Duration("relay-lease-ttl", relaylease.DefaultTTL, "relay lease lifetime and reachable staleness interval")
 	leaseRenew := flag.Duration("relay-lease-renew", relaylease.DefaultRenew, "relay lease renewal interval")
@@ -50,6 +51,9 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 	flag.Parse()
 	if *version {
 		return buildinfo.PrintVersion(os.Stdout, "relais-relay")
+	}
+	if *slotID != "" && *slotID != *leaseKey {
+		return fmt.Errorf("relay-slot must equal relay-lease")
 	}
 	if err := validateBufferBounds(*bufferWindow, *bufferSession, *bufferTotal, *bufferSSRCs); err != nil {
 		return err
@@ -116,7 +120,7 @@ func runWithLease(acquire func(context.Context, bool, string, relaylease.Config)
 		return bindFailed(err)
 	}
 	defer func() { _ = listener.Close() }()
-	r, err := relay.New(relay.Config{InstanceID: process.Owner, ForwardingAllowed: guard.Allowed, Continuity: continuity, BindContext: bindCtx, PublicAddr: *public, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, RouteRestoreTimeout: *restoreTimeout, MaxFlows: *maxFlows, HoldTimeout: *hold, Buffer: buffer})
+	r, err := relay.New(relay.Config{SlotID: *slotID, InstanceID: process.Owner, ForwardingAllowed: guard.Allowed, Continuity: continuity, BindContext: bindCtx, PublicAddr: *public, WorkerAddr: *leg, Owners: store, Routes: store, DisableRouteRestore: *restoreOff, RouteRestoreTimeout: *restoreTimeout, MaxFlows: *maxFlows, HoldTimeout: *hold, Buffer: buffer})
 	if err != nil {
 		return bindFailed(err)
 	}

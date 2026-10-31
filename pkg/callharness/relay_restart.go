@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/relaishq/relais/internal/iceufrag"
 	"github.com/relaishq/relais/internal/relaytrace"
 
 	"github.com/pion/webrtc/v4"
@@ -28,6 +29,30 @@ func (c *Call) startRelayEvents() {
 	c.eventsCancel = cancel
 	c.readers.Add(1)
 	c.mu.Unlock()
+	c.startReader(func() {
+		tick := time.NewTicker(100 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				if !c.relayStalled() {
+					continue
+				}
+				c.relayRestartMu.Lock()
+				waiting := time.Now().Before(c.relayAttemptUntil)
+				c.relayRestartMu.Unlock()
+				if waiting {
+					continue
+				}
+				err := c.restartRelay(ctx, controlplane.RelayEvent{Deadline: time.Now().Add(15 * time.Second)})
+				c.mu.Lock()
+				c.restartErr = err
+				c.mu.Unlock()
+			}
+		}
+	})
 	go func() {
 		defer c.readers.Done()
 		client := *c.harness.httpClient
@@ -53,6 +78,8 @@ func (c *Call) startRelayEvents() {
 							break
 						}
 						if event.Reason != "" {
+							_ = c.pc.Close()
+							cancel()
 							_ = resp.Body.Close()
 							return
 						}
@@ -86,6 +113,18 @@ func (c *Call) startRelayEvents() {
 }
 
 func (c *Call) restartRelay(ctx context.Context, event controlplane.RelayEvent) error {
+	c.relayRestartMu.Lock()
+	defer c.relayRestartMu.Unlock()
+	if event.Generation != 0 && event.Generation <= c.relayGeneration {
+		return nil
+	}
+	if event.Generation == 0 && (time.Now().Before(c.relayAttemptUntil) || !c.relayStalled()) {
+		return nil
+	}
+	c.relayAttemptUntil = event.Deadline
+	if event.Generation == 0 {
+		c.relayAttemptUntil = time.Now().Add(2 * time.Second)
+	}
 	ctx, cancel := context.WithDeadline(ctx, event.Deadline)
 	defer cancel()
 	if relaytrace.Enabled() {
@@ -113,7 +152,11 @@ func (c *Call) restartRelay(ctx context.Context, event controlplane.RelayEvent) 
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.resourceURL+"/ice-restart?generation="+strconv.FormatUint(event.Generation, 10), strings.NewReader(c.pc.LocalDescription().SDP))
+	endpoint := c.resourceURL + "/ice-restart"
+	if event.Generation != 0 {
+		endpoint += "?generation=" + strconv.FormatUint(event.Generation, 10)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(c.pc.LocalDescription().SDP))
 	if err != nil {
 		return err
 	}
@@ -133,8 +176,22 @@ func (c *Call) restartRelay(ctx context.Context, event controlplane.RelayEvent) 
 	}
 	c.rec.offerAnswerExchange()
 	err = c.pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: string(data)})
+	if err == nil {
+		_, generation, _ := iceufrag.Parse(iceUfrag(c.pc.RemoteDescription()))
+		c.relayGeneration = generation
+		// The event stream carries the actual server attempt bound. Spontaneous
+		// requests have no event; permit another stall observation after two seconds.
+		if event.Generation == 0 {
+			c.relayAttemptUntil = time.Now().Add(2 * time.Second)
+		}
+	}
 	if relaytrace.Enabled() {
 		relaytrace.Emit("answer-applied", c.selectedRemoteAddr(), nil)
 	}
 	return err
+}
+
+func (c *Call) relayStalled() bool {
+	last := c.inboundMedia.Load()
+	return c.iceStalled.Load() || c.liveMedia.Load() && last != nil && time.Since(*last) >= 2*time.Second
 }

@@ -112,7 +112,7 @@ func (c *call) lockOperator(ctx context.Context, takeover bool) error {
 	return c.lockOperatorCancel(ctx, takeover, nil)
 }
 
-func (c *call) lockOperatorCancel(ctx context.Context, takeover bool, relayCancel context.CancelFunc) error {
+func (c *call) lockOperatorCancel(ctx context.Context, takeover bool, relayCancel context.CancelFunc, unplanned ...bool) error {
 	ctx, cancel := context.WithTimeout(ctx, takeoverBudget)
 	defer cancel()
 	c.controlMu.Lock()
@@ -122,6 +122,8 @@ func (c *call) lockOperatorCancel(ctx context.Context, takeover bool, relayCance
 	}
 	if c.mu.TryLock() {
 		c.relayCancel = relayCancel
+		c.relayUnplanned = len(unplanned) > 0 && unplanned[0]
+		c.relayTarget = ""
 		c.controlMu.Unlock()
 		return nil
 	}
@@ -156,6 +158,8 @@ func (c *call) lockOperatorCancel(ctx context.Context, takeover bool, relayCance
 		locked := c.mu.TryLock()
 		if locked {
 			c.relayCancel = relayCancel
+			c.relayUnplanned = len(unplanned) > 0 && unplanned[0]
+			c.relayTarget = ""
 		}
 		otherOperator := !c.controlActive
 		c.controlMu.Unlock()

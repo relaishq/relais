@@ -353,7 +353,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [relay-restart, relay-standby]
+        mode: [relay-restart, relay-standby, relay-loss]
     steps:
       - uses: actions/checkout@v6
         with:

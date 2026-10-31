@@ -1032,6 +1032,20 @@ func (r *Relay) resolved(sessionID string, owner netip.AddrPort, err error, wait
 		for _, w := range waiters {
 			if w.datagram != nil {
 				r.lookupsFailed.Add(1)
+				// During an outage, only the previously confirmed session/worker route
+				// may carry checks. The worker still authenticates them and fences slots.
+				if r.cfg.SlotID != "" {
+					flow, confirmed := r.flows.forwardRoute(w.caller)
+					if confirmed && flow.session == sessionID {
+						if _, ok := r.flows.routeSTUN(w.caller, sessionID, w.txID, now); ok {
+							if isNomination(w.datagram[MaxHeaderLen:]) {
+								r.flows.markNomination(w.caller, w.txID)
+							}
+							r.stunRouted.Add(1)
+							forwards = append(forwards, w)
+						}
+					}
+				}
 			}
 		}
 	}

@@ -88,6 +88,9 @@ func (w *Worker) AbortRelayRestart(ctx context.Context, id string, generation ui
 // acceptsRelayPath runs under the packet lock. Pending permission is RTP-only;
 // it neither nominates the address nor refreshes the current pair's consent.
 func (s *session) acceptsRelayPath(path relayPath, pendingRTP bool) bool {
+	if c, ok := s.worker.conn.(*relayConn); ok && !c.allowed(path.leg) {
+		return false
+	}
 	if path.leg == s.currentLeg() && (s.state.ICE.Relay == nil || path.caller == s.state.ICE.RemoteAddr) {
 		return true
 	}
@@ -118,38 +121,81 @@ func (s *session) switchRelayLocked(path relayPath) bool {
 	return true
 }
 
-// ConfigureRelays is a private control operation, before admitting calls.
+// ConfigureRelays bootstraps the set, then permits removal of lost slots only.
 // Dial-out's per-slot observed-address registration is a separate contract.
 func (w *Worker) ConfigureRelays(ctx context.Context, slots []RelaySlot) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	c, ok := w.conn.(*relayConn)
-	if !ok || w.cfg.Relay.DialOut || w.cfg.SplitCheckpoints || len(slots) < 2 {
+	if !ok || w.cfg.Relay.DialOut || w.cfg.SplitCheckpoints {
 		return ErrRelayUnsupported
 	}
+	c.packetMu.Lock()
+	defer c.packetMu.Unlock()
 	known := make(map[string]RelaySlot, len(slots))
 	peers := make(map[netip.AddrPort]bool, len(slots))
-	bootstrap := false
 	for _, slot := range slots {
 		if slot.ID == "" || !slot.Leg.IsValid() || !slot.Public.IsValid() || known[slot.ID].ID != "" || peers[slot.Leg] {
 			return ErrRelayUnsupported
 		}
 		known[slot.ID], peers[slot.Leg] = slot, true
-		bootstrap = bootstrap || slot.Leg == c.relay
-	}
-	if !bootstrap {
-		return ErrRelayUnsupported
 	}
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if w.closed || len(w.sessions) > 0 {
-		return ErrRelayUnsupported
+	if w.closed {
+		w.mu.Unlock()
+		return ErrClosed
+	}
+	if w.relaySlots == nil {
+		// A worker enrolled after a loss may start with one or zero live slots,
+		// and its constructor's bootstrap leg may already have been removed.
+		if len(w.sessions) > 0 {
+			w.mu.Unlock()
+			return ErrRelayUnsupported
+		}
+	} else {
+		for id, slot := range known {
+			if w.relaySlots[id] != slot {
+				w.mu.Unlock()
+				return ErrRelayUnsupported
+			}
+		}
+	}
+	var removed []netip.AddrPort
+	for _, old := range w.relaySlots {
+		if !peers[old.Leg] {
+			removed = append(removed, old.Leg)
+		}
 	}
 	w.relaySlots = known
+	sessions := make([]*session, 0, len(w.sessions))
+	for _, s := range w.sessions {
+		sessions = append(sessions, s)
+	}
 	c.peersMu.Lock()
 	c.peers = peers
 	c.peersMu.Unlock()
+	w.mu.Unlock()
+	// Drain any admission already in progress. Packet authorization rechecks
+	// the set under the session lock; writes hold peersMu through the syscall.
+	// Returning is the cut-off, including queued pre-key media and old grace.
+	for _, s := range sessions {
+		s.mu.Lock()
+		kept := s.earlyPackets[:0]
+		for _, packet := range s.earlyPackets {
+			if !packet.path.leg.IsValid() || c.allowed(packet.path.leg) {
+				kept = append(kept, packet)
+			}
+		}
+		clear(s.earlyPackets[len(kept):])
+		s.earlyPackets = kept
+		s.mu.Unlock()
+	}
+	if relaytrace.Enabled() {
+		for _, leg := range removed {
+			relaytrace.Emit("worker-relay-cutoff", leg.String(), nil)
+		}
+	}
 	return nil
 }
 
@@ -333,6 +379,9 @@ func (w *Worker) sendVia(pkt []byte, to, leg netip.AddrPort) (int, error) {
 	if c, ok := w.conn.(*relayConn); ok && leg.IsValid() {
 		n, err := c.writeVia(pkt, to, leg)
 		if err == nil {
+			if relaytrace.Enabled() {
+				relaytrace.Emit("worker-leg-output", leg.String(), pkt)
+			}
 			w.metrics.packetsOut.Add(1)
 			w.metrics.bytesOut.Add(uint64(n))
 		}
