@@ -9,12 +9,15 @@ const element=()=>({addEventListener(){},value:'camera',replaceChildren(){},appe
 const elements=new Map();
 const context={window:{relaisMetrics:require('../web/metrics.js'),relaisContinuity:require('../web/continuity.js'),addEventListener(){}},
  document:{getElementById(id){if(!elements.has(id))elements.set(id,element());return elements.get(id);},createElement:element,addEventListener(){},removeEventListener(){},hidden:false},
+ EventSource:class {addEventListener(){}close(){}},
  location:{search:'?source=camera',hash:''},URLSearchParams,Headers,Blob,
  URL:{createObjectURL(blob){savedBlob=blob;return 'blob:test';},revokeObjectURL(){}},
  performance:{now:()=>10000,timeOrigin:0},setInterval(){},clearInterval(){},clearTimeout(){},setTimeout(fn){fn();},
  fetch:(path,options)=>fetch(base+path,options),
  RTCPeerConnection:class {
   constructor(){this.connectionState='new';this.iceGatheringState='complete';}
+  addEventListener(){}
+  removeEventListener(){}
   addTransceiver(){}
   async createOffer(){return {type:'offer',sdp:'offer'};}
   async setLocalDescription(description){this.localDescription=description;if(scenario==='ice')await fetch(base+'/test/restart',{method:'POST'});}
@@ -31,6 +34,7 @@ const instrument=`
  };
  window.trackStopped=()=>{};
 `;
+vm.runInNewContext(fs.readFileSync(require.resolve('../web/relay-change.js'),'utf8'),context);
 const source=fs.readFileSync(require.resolve('../web/demo.js'),'utf8');
 vm.runInNewContext(source.replace(/\}\)\(\);\s*$/,instrument+'})();'),context);
 context.window.trackStopped=()=>{tracksStopped++;};
