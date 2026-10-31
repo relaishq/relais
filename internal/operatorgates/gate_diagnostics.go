@@ -1,6 +1,11 @@
 package operatorgates
 
-import "github.com/relaishq/relais/pkg/operator"
+import (
+	"encoding/json"
+
+	"github.com/relaishq/relais/internal/operatorevidence"
+	"github.com/relaishq/relais/pkg/operator"
+)
 
 func diagnosticCode(reason string) string {
 	switch reason {
@@ -21,7 +26,39 @@ func mediaDiagnostic(m *MediaSummary) *operator.MediaDiagnostic {
 	if status != operator.Passed && status != operator.Failure && status != operator.Inconclusive {
 		status = operator.Inconclusive
 	}
-	return &operator.MediaDiagnostic{Status: status, ExpectedCalls: m.ExpectedCalls, CompletedCalls: m.CompletedCalls, FailedMetrics: m.FailedMetrics, InconclusiveMetrics: m.InconclusiveMetrics}
+	diagnostics := (operatorevidence.Summary{UndecidedMetrics: m.UndecidedMetrics, PhaseDiagnostics: m.PhaseDiagnostics}).PublicDiagnostics()
+	metrics := make([]operator.MetricDiagnostic, 0, len(diagnostics.UndecidedMetrics))
+	for _, row := range diagnostics.UndecidedMetrics {
+		metrics = append(metrics, operator.MetricDiagnostic{Phase: row.Phase, Event: row.Event, Metric: row.Metric, Causes: row.Causes})
+	}
+	phases := make([]operator.PhaseDiagnostic, 0, len(diagnostics.PhaseDiagnostics))
+	for _, row := range diagnostics.PhaseDiagnostics {
+		phases = append(phases, operator.PhaseDiagnostic{Gate: row.Gate, EventCount: row.EventCount, Phase: row.Phase, Included: row.Included, Cause: row.Cause, ExcludedEvents: row.ExcludedEvents, SaturationOverlaps: row.SaturationOverlaps, Issue: operator.EvidenceIssue{Path: row.Issue.Path, Reason: row.Issue.Reason}})
+	}
+	out := &operator.MediaDiagnostic{IncludedPhases: m.IncludedPhases, DroppedPhases: m.DroppedPhases, ExcludedEvents: m.ExcludedEvents, SaturationOverlaps: m.SaturationOverlaps, UndecidedMetrics: []operator.MetricDiagnostic{}, PhaseDiagnostics: []operator.PhaseDiagnostic{}, OmittedUndecidedMetrics: len(metrics), OmittedPhaseDiagnostics: len(phases), Status: status, ExpectedCalls: m.ExpectedCalls, CompletedCalls: m.CompletedCalls, FailedMetrics: m.FailedMetrics, InconclusiveMetrics: m.InconclusiveMetrics}
+	// A final can contain six gates, each with both media and pool projections.
+	// Reserve at most 12 KiB per projection inside the unchanged 256 KiB frame.
+	// Keep phase causes first and make every omitted diagnostic row explicit.
+	fits := func() bool { raw, _ := json.Marshal(out); return len(raw) <= 12<<10 }
+	for _, row := range phases {
+		out.PhaseDiagnostics = append(out.PhaseDiagnostics, row)
+		out.OmittedPhaseDiagnostics--
+		if !fits() {
+			out.PhaseDiagnostics = out.PhaseDiagnostics[:len(out.PhaseDiagnostics)-1]
+			out.OmittedPhaseDiagnostics++
+			break
+		}
+	}
+	for _, row := range metrics {
+		out.UndecidedMetrics = append(out.UndecidedMetrics, row)
+		out.OmittedUndecidedMetrics--
+		if !fits() {
+			out.UndecidedMetrics = out.UndecidedMetrics[:len(out.UndecidedMetrics)-1]
+			out.OmittedUndecidedMetrics++
+			break
+		}
+	}
+	return out
 }
 func (s *Session) retainGateDiagnostics(result *SequenceResult, stopped map[operator.Gate]bool) {
 	rows := make([]operator.GateDiagnostic, 0, len(result.Gates))

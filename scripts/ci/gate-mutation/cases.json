@@ -48,7 +48,7 @@
     "GuardFingerprint": "8aef3102e2448b9436bbdae74abad730058fa1a2485eec6388b434663b057a8c",
     "File": "internal/operatorgates/session.go",
     "Function": "Issue",
-    "Old": "s.requests[r.ID] = &pending{end: end, effect: effect, operation: op, target: target, action: action}",
+    "Old": "s.requests[r.ID] = &pending{end: end, effect: effect, operation: op, target: target, action: action, deadlineUnixMS: deadline, remainingMS: remaining}",
     "New": "",
     "Test": "TestPendingIdentity",
     "Marker": "MUTATION: pending-identity",
@@ -3536,6 +3536,26 @@
     "New": "Clock: nil,",
     "Test": "TestResourceAdmissionCountsActualPhaseGap",
     "Marker": "MUTATION: resource-admission-gap",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "host-submission-floor",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "if op == operator.HostExecute && req.RemainingMS < operator.HostSubmissionMinimum.Milliseconds() {",
+    "New": "if false {",
+    "Test": "TestReleaseGateWithRemoteHostLatencyAndThirtySecondFloor",
+    "Marker": "MUTATION: host-submission-floor",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "refusal-retention",
+    "File": "internal/operatorgates/session.go",
+    "Function": "Final",
+    "Old": "r.Refusals = slices.Clone(s.refusals)",
+    "New": "r.Refusals = nil",
+    "Test": "TestAdapterRefusalRetainsOriginalRequestMetadata",
+    "Marker": "MUTATION: refusal-retention",
     "Package": "./internal/operatorgates"
   }
 ]

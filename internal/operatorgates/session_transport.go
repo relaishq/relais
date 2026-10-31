@@ -76,6 +76,12 @@ func (s *Session) Exchange(ctx context.Context, p Peer, op operator.Operation, t
 	if err != nil {
 		return operator.Unknown, err
 	}
+	// Queueing and preflight reads consume the original budget. Refuse locally
+	// before writing a host request that cannot meet the submission floor.
+	if op == operator.HostExecute && req.RemainingMS < operator.HostSubmissionMinimum.Milliseconds() {
+		refusal := operator.Reply{ID: req.ID, Transport: operator.Failed, NotSubmitted: true, RefusalCode: "deadline-before-submission"}
+		return s.Accept(s.ID, refusal, classify(refusal))
+	}
 	requestWait, stop := context.WithTimeout(wait, s.requests[req.ID].end-s.clock.Elapsed())
 	defer stop()
 	wait = requestWait

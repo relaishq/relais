@@ -2,7 +2,14 @@
 // Payloads are private adapter data; only Result and Trace are public artifacts.
 package operator
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
+
+// HostSubmissionMinimum is the admission floor for host.execute, including
+// observations. Adapters recheck it before submitting a remote host command.
+const HostSubmissionMinimum = 30 * time.Second
 
 const ProtocolVersion = 1
 const MaxFrameBytes = 256 << 10

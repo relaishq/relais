@@ -52,7 +52,9 @@ func (r *EvidenceRuntime) Media(ctx context.Context) (*MediaSummary, error) {
 	return procedureMedia(summary), err
 }
 func procedureMedia(s operatorevidence.Summary) *MediaSummary {
-	return &MediaSummary{Status: s.Status, QualifiedMoves: &s.QualifiedMoves, QualifiedTakeovers: &s.QualifiedTakeovers,
+	return &MediaSummary{IncludedPhases: s.IncludedPhases, DroppedPhases: s.DroppedPhases,
+		ExcludedEvents: s.ExcludedEvents, SaturationOverlaps: s.SaturationOverlaps,
+		UndecidedMetrics: s.UndecidedMetrics, PhaseDiagnostics: s.PhaseDiagnostics, Status: s.Status, QualifiedMoves: &s.QualifiedMoves, QualifiedTakeovers: &s.QualifiedTakeovers,
 		ExpectedCalls: s.ExpectedCalls, CompletedCalls: s.CompletedCalls, EventCount: s.EventCount, MetricCount: s.MetricCount,
 		FailedMetrics: s.FailedMetrics, InconclusiveMetrics: s.InconclusiveMetrics, MaxMediaGapNS: s.MaxMediaGapNS,
 		DecryptionFailures: s.DecryptionFailures, ICERestarts: s.ICERestarts}

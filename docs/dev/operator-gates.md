@@ -14,7 +14,14 @@ reports. `relais-gates version` emits the unchanged protocol-v1 hello.
 
 The optional result `diagnostics` array retains each gate's procedure completion
 and fixed reason code, media counters, pooled counters, pending qualification
-and caller-stop confirmation. It contains no resource output. Inconclusive
+and caller-stop confirmation. Media and pool diagnostics also retain indexed
+undecided metric names and causes, phase inclusion/exclusion causes, safe evidence
+field paths, and included/dropped phase, excluded event and saturation counts.
+These use the same fixed label allow-lists as rehearsal reports. Each media/pool
+projection is capped at 12 KiB to fit the unchanged final frame. Phase causes take
+priority; `omittedUndecidedMetrics` and `omittedPhaseDiagnostics` count any rows
+that do not fit, while total counters stay unchanged. Each list stops at its
+first row that does not fit. It contains no resource output. Inconclusive
 diagnostics have a reason even when procedure execution completed. Legacy gate
 reasons remain unchanged. These additive
 fields keep result schema version 1. Preparation consumes the caller's original
@@ -109,6 +116,23 @@ every request and wait is clamped to that cutoff. Adapter execution must call
 context through execution and polling. Expired queued requests receive a proved
 `deadline-before-submission` refusal from the pipe adapter boundary.
 
+`host.execute` requires at least `operator.HostSubmissionMinimum` (30 seconds)
+remaining at submission, including read-only host observations. The public
+exchange checks this after queueing and deadline clamping, before sending;
+adapters must recheck before remote submission because transit consumes time.
+Adapters may require more than 30 seconds. The adapter rounds the remaining
+budget down to whole seconds after transit; the public floor does not guarantee
+admission at the adapter.
+The floor does not apply to caller or mailbox requests. A local refusal follows
+the same proved `notSubmitted` result path as an adapter refusal. The additive
+result `refusals` array retains the request ID, operation, public target/action,
+original absolute deadline and remaining milliseconds, and fixed refusal code.
+The first 64 refusal rows are retained, and `omittedRefusals` counts later
+refusals. Every refusal still reaches terminal request accounting and its result
+trace retains the fixed code. Refusals never become unknown effects
+or successful steps. These additive diagnostics keep protocol and result schema
+version 1; the gate, caller and session maxima and reserves are unchanged.
+
 Each effect is submitted once. Its ID is recorded before writing. A timeout
 retains its pending identity. Unknown completion latches before returning to
 gate code; late success cannot erase it. Duplicate/mismatched replies are
@@ -170,7 +194,8 @@ private code was tested.
 The late-start projection retains pending/readiness/outcome order while replacing
 the removed multi-launch policy with one pending start. The public mutation edits and additional mutants are in
 `scripts/ci/gate-mutation/cases.json`. Four additional resource-session mutants cover retry on unknown, unknown as
-failure, fabricated capability and rehearsal bypass. Three more mutants cover uncertain transport classification, refusal promotion with an unknown exit status, and queued exchange deadlines. Several old dispatch/mailbox guards converge
+failure, fabricated capability and rehearsal bypass. Two further mutants cover
+the host submission floor and refusal metadata retention. Three more mutants cover uncertain transport classification, refusal promotion with an unknown exit status, and queued exchange deadlines. Several old dispatch/mailbox guards converge
 on one session guard; each original ledger ID is still applied and killed
 separately. `go run ./scripts/ci/gate-mutation` copies source, excluding Git,
 secret environment files and build outputs, into a temporary tree and uses an isolated cache with offline, read-only

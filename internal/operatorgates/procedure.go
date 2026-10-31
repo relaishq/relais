@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/observe"
 	"github.com/relaishq/relais/pkg/callharness"
 	"github.com/relaishq/relais/pkg/controlplane"
@@ -50,18 +51,24 @@ type GateBroker interface {
 	Events() []Receipt
 }
 type MediaSummary struct {
-	Status              operator.Verdict `json:"status"`
-	QualifiedMoves      *int             `json:"qualifiedMoves,omitempty"`
-	QualifiedTakeovers  *int             `json:"qualifiedTakeovers,omitempty"`
-	ExpectedCalls       int              `json:"expectedCalls"`
-	CompletedCalls      int              `json:"completedCalls"`
-	EventCount          int              `json:"eventCount"`
-	MetricCount         int              `json:"metricCount"`
-	FailedMetrics       int              `json:"failedMetrics"`
-	InconclusiveMetrics int              `json:"inconclusiveMetrics"`
-	MaxMediaGapNS       int64            `json:"maxMediaGapNs"`
-	DecryptionFailures  int              `json:"decryptionFailures"`
-	ICERestarts         int              `json:"iceRestarts"`
+	IncludedPhases      int                                `json:"includedPhases"`
+	DroppedPhases       int                                `json:"droppedPhases"`
+	ExcludedEvents      int                                `json:"excludedEvents"`
+	SaturationOverlaps  int                                `json:"saturationOverlaps"`
+	UndecidedMetrics    []operatorevidence.UndecidedMetric `json:"undecidedMetrics"`
+	PhaseDiagnostics    []operatorevidence.PhaseDiagnostic `json:"phaseDiagnostics"`
+	Status              operator.Verdict                   `json:"status"`
+	QualifiedMoves      *int                               `json:"qualifiedMoves,omitempty"`
+	QualifiedTakeovers  *int                               `json:"qualifiedTakeovers,omitempty"`
+	ExpectedCalls       int                                `json:"expectedCalls"`
+	CompletedCalls      int                                `json:"completedCalls"`
+	EventCount          int                                `json:"eventCount"`
+	MetricCount         int                                `json:"metricCount"`
+	FailedMetrics       int                                `json:"failedMetrics"`
+	InconclusiveMetrics int                                `json:"inconclusiveMetrics"`
+	MaxMediaGapNS       int64                              `json:"maxMediaGapNs"`
+	DecryptionFailures  int                                `json:"decryptionFailures"`
+	ICERestarts         int                                `json:"iceRestarts"`
 }
 type ProcessExtra struct {
 	Worker     string   `json:"worker,omitempty"`
