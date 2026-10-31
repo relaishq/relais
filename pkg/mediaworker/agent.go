@@ -432,6 +432,13 @@ func (s *session) agentLoop() {
 func (s *session) finishAgentFlush(request agentFlush) bool {
 	if request.moveOnly != nil {
 		if s.agent.v2.bridge != nil {
+			s.mu.Lock()
+			refusal := s.bridgeExportRefusalLocked()
+			s.mu.Unlock()
+			if refusal != nil {
+				request.done <- refusal
+				return true
+			}
 			release := s.holdBridgeCredit()
 			defer release()
 			if err := s.drainBridgeToFit(request.deadline.Add(-2 * s.worker.cfg.Agent.CallbackTimeout)); err != nil {

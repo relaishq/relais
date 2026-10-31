@@ -29,9 +29,11 @@ import (
 // Default-run proof: real WebRTC/relay/leases, inbound runner sockets and
 // token attachment. Each packet carries its bot sequence for wire uniqueness.
 func TestBridgeRunnerMovesLiveCall(t *testing.T) {
+	conversationStores(t, testConversationMovesLiveCall)
+}
+func testConversationMovesLiveCall(t *testing.T, store sessionstore.Store) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	store := sessionstore.NewMemory()
 	r, err := relay.New(relay.Config{Owners: store})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, r.Close()) }()
@@ -52,14 +54,22 @@ func TestBridgeRunnerMovesLiveCall(t *testing.T) {
 			return
 		}
 		var attached struct {
-			Scope mediaworker.BridgeOutputScope `json:"scope"`
-			Next  uint64                        `json:"next_output_seq"`
+			Scope      mediaworker.BridgeOutputScope `json:"scope"`
+			Next       uint64                        `json:"next_output_seq"`
+			Checkpoint uint64                        `json:"checkpoint_seq"`
+			Working    []byte                        `json:"working"`
+			History    []byte                        `json:"history"`
 		}
 		if e := websocket.JSON.Receive(conn, &attached); e != nil {
 			errors <- e
 			return
 		}
 		mu.Lock()
+		if len(scopes) > 0 && (attached.Checkpoint != 1 || string(attached.Working) != "conversation" || string(attached.History) != "four exchanges") {
+			mu.Unlock()
+			errors <- fmt.Errorf("%w: conversation differs after exact move", errProtocol)
+			return
+		}
 		scopes = append(scopes, attached.Scope)
 		if lineage == "" {
 			lineage = attached.Scope.LineageID
@@ -118,6 +128,11 @@ func TestBridgeRunnerMovesLiveCall(t *testing.T) {
 					return
 				}
 				if reply.Type == "output_begun" {
+					if websocket.JSON.Send(conn, checkpoint{Type: "checkpoint", Sequence: 1, Version: 1, Working: []byte("conversation"), History: []byte("four exchanges")}) != nil {
+						return
+					}
+				}
+				if reply.Type == "checkpointed" && reply.Seq == 1 && !begun {
 					begun = true
 					mu.Lock()
 					for seq := attached.Next; seq <= issued; seq++ {

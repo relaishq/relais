@@ -1,7 +1,6 @@
 """Loopback runner: register with each --worker, then attach to the owner."""
 import argparse
 import asyncio
-import base64
 import hashlib
 import ipaddress
 import json
@@ -17,6 +16,7 @@ from websockets.exceptions import WebSocketException
 
 from .codec import Tone, decoder
 from .permissions import Permit
+from .conversation import Conversation
 
 
 def loopback(host):
@@ -59,6 +59,7 @@ class Session:
         self.input_samples = 0
         self.decode = decoder()
         self.permit = Permit()
+        self.conversation = None
 
     async def produce(self):
         await self.started.wait()
@@ -88,8 +89,10 @@ class Session:
             if (attached["type"] != "attached" or attached["protocol"] != 1
                     or any(scope[k] != assignment[k] for k in ("session_id", "epoch", "bot_instance", "generation", "lineage_id"))):
                 raise ValueError("mismatched attachment")
-            if attached["resume"] not in ("fresh", "planned_move"):
+            if attached["resume"] not in ("fresh", "planned_move", "bot_restart"):
                 raise ValueError("unsupported recovery")
+            self.conversation = (self.conversation.resumed(attached) if self.conversation
+                                 else Conversation(attached))
             print(json.dumps({"attached_epoch": scope["epoch"], "pid": os.getpid()}), flush=True)
             next_seq = attached["next_output_seq"]
             self.pending = {s: p for s, p in self.pending.items() if s >= next_seq}
@@ -130,6 +133,7 @@ class Session:
                     print(json.dumps({"playback": message, "input_samples": self.input_samples}), flush=True)
                     self.finished.set()
                 elif kind == "checkpointed":
+                    self.conversation.acknowledge(message)
                     print(json.dumps({"checkpointed": message}), flush=True)
                 elif kind in ("input_gap", "notice_gap", "refused"):
                     raise ValueError(f"unexpected {kind}")
@@ -157,11 +161,13 @@ class Session:
                 await send_packet(*item)
             await ws.send(json.dumps({"type": "audio_end", "turn": 1, "last_seq": self.packets}))
             await self.finished.wait()
-            await ws.send(json.dumps({"type": "checkpoint", "seq": 1, "version": 1,
-                                      "working": base64.b64encode(b"tone complete").decode()}))
+            self.conversation.working = b"tone complete"
+            await ws.send(json.dumps(self.conversation.checkpoint()))
             await ws.send(json.dumps({"type": "replay_horizon", "seq": self.packets}))
 
         try:
+            if self.conversation.pending is not None:
+                await ws.send(json.dumps(self.conversation.pending))
             async with asyncio.TaskGroup() as tasks:
                 tasks.create_task(receive())
                 tasks.create_task(output())
@@ -201,7 +207,9 @@ class Runner:
         previous = self.floors.get(session)
         if previous:
             floor, bound = previous
-            if pair < floor or (bound is None and pair != floor):
+            pending_move = (bound is None and session in self.revocations
+                            and pair[0] > floor[0] and pair[1] == floor[1])
+            if pair < floor or (bound is None and pair != floor and not pending_move):
                 raise ValueError("stale or unrevoked assignment")
             if bound is not None and (identity != bound or pair[1] != floor[1]):
                 raise ValueError("replacement requires revocation")
@@ -216,9 +224,23 @@ class Runner:
         if previous == message:
             return dict(message, type="revoked")
         floor = self.floors.get(session)
+        bound_bot = floor[1][0] if floor and floor[1] is not None else None
+        matches_old = floor is not None and floor[0] == old
+        if (floor and floor[1] is None and previous
+                and (previous["new_epoch"], previous["new_generation"]) == old):
+            # Crash after revocation but before successor assignment. There is
+            # no pipeline at this reserved pair; retain the exact transition chain.
+            bound_bot = self.bot_instance
+        if (floor and floor[1] is None and previous
+                and (previous["old_epoch"], previous["old_generation"]) == old
+                and new[0] > floor[0][0]):
+            # The worker saved the old stop, then crashed after the runner
+            # advanced its unused successor floor. A higher owner reconciles
+            # that same stopped root; it cannot replace an active lineage.
+            matches_old, bound_bot = True, self.bot_instance
         if (not message["request_id"] or new <= old or floor is None
-                or floor[0] != old or floor[1] is None
-                or floor[1][0] != message["bot_instance"]
+                or not matches_old
+                or bound_bot != message["bot_instance"]
                 or (previous and previous["request_id"] == message["request_id"])):
             return None
         # No await between the floor commit and disabling obsolete work.
@@ -233,7 +255,10 @@ class Runner:
 
     def start_provider(self, session_id, kind, ticket):
         # Capture this ticket when the pipeline attaches, never at callback time.
-        return self.sessions[session_id].permit.start(kind, ticket)
+        session = self.sessions[session_id]
+        if session.conversation is None or not session.conversation.generation_ready():
+            raise PermissionError("durable conversation checkpoint required")
+        return session.permit.start(kind, ticket)
 
     async def request_permits(self, ws, url):
         while True:
@@ -305,6 +330,11 @@ class Runner:
                 except ValueError:
                     continue
                 session_id = message["session_id"]
+                session = self.sessions.get(session_id)
+                if session is not None and session.permit.scope is not None and session.permit.scope["generation"] != message["generation"]:
+                    session.stop()
+                    await session.close()
+                    del self.sessions[session_id]
                 session = self.sessions.setdefault(session_id, Session(self.packets))
                 try:
                     await session.attach(url, self.token, message)

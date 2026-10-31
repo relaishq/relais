@@ -74,6 +74,9 @@ func (s *session) restoreBridgeOutput(move *movePayload) error {
 		}
 	}
 	b.state = cloneBridgeState(saved)
+	if saved.Stopped {
+		b.permit.stopped = time.Now()
+	}
 	if move == nil {
 		b.provenUnadmitted = false
 		b.durable = cloneBridgeState(saved)

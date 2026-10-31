@@ -163,6 +163,12 @@ func (c *sessionCheckpoint) captureSnapshotCandidateMode(captured time.Time, can
 var errCheckpointSkipped = errors.New("mediaworker: checkpoint rate limited")
 
 func (c *sessionCheckpoint) persistSnapshotBudget(parent context.Context, force, intent bool) error {
+	return c.persistSnapshotBudgetMode(parent, force, intent, nil)
+}
+
+// Restart holds snapshotMu across conversation selection and its lineage write.
+// Notifications are returned to that owner and run only after unlock.
+func (c *sessionCheckpoint) persistSnapshotBudgetMode(parent context.Context, force, intent bool, notifications *[]func()) error {
 	s := c.session
 	forcedStarted := time.Now()
 	measuredForced := false
@@ -184,15 +190,23 @@ func (c *sessionCheckpoint) persistSnapshotBudget(parent context.Context, force,
 	}
 	// Serialize copy+put so an older copy cannot overwrite a newer one. The
 	// packet lock is never held during encoding or the fenced store operation.
-	c.snapshotMu.Lock()
+	if notifications == nil {
+		c.snapshotMu.Lock()
+	}
 	var settled, acknowledged func()
 	defer func() {
-		c.snapshotMu.Unlock()
-		if settled != nil {
-			settled()
+		if notifications == nil {
+			c.snapshotMu.Unlock()
 		}
-		if acknowledged != nil {
-			acknowledged()
+		for _, notify := range []func(){settled, acknowledged} {
+			if notify == nil {
+				continue
+			}
+			if notifications != nil {
+				*notifications = append(*notifications, notify)
+			} else {
+				notify()
+			}
 		}
 	}()
 	if c.componentPending != nil {
@@ -211,6 +225,17 @@ func (c *sessionCheckpoint) persistSnapshotBudget(parent context.Context, force,
 		}
 	}
 	s.mu.Lock()
+	if notifications == nil && s.agent != nil && s.agent.v2 != nil && s.agent.v2.bridge != nil && s.agent.v2.bridge.restart != nil {
+		request := *s.agent.v2.bridge.restart
+		request.ctx = s.ctx
+		request.done = make(chan error, 1)
+		s.mu.Unlock()
+		select {
+		case s.agent.v2.bridge.restarts <- request:
+		default:
+		}
+		return errCheckpointSkipped
+	}
 	v2 := s.state.Agent.V2 != nil
 	if v2 && (s.fenced.Load() || s.ctx.Err() != nil) {
 		s.mu.Unlock()

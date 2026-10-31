@@ -19,17 +19,19 @@ import (
 )
 
 func authorityCall(t *testing.T, ctx context.Context) (*Bridge, string, string) {
+	return authorityStoreCall(t, ctx, sessionstore.NewMemory())
+}
+func authorityStoreCall(t *testing.T, ctx context.Context, store sessionstore.Store) (*Bridge, string, string) {
 	t.Helper()
 	b, err := New(Config{URL: "ws://127.0.0.1:9102/bridge", Token: "isolated-test-token"})
 	require.NoError(t, err)
 	server := httptest.NewServer(b)
 	t.Cleanup(server.Close)
-	store := sessionstore.NewMemory()
 	rel, err := relay.New(relay.Config{Owners: store})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, rel.Close()) })
 	factory := agenthost.Factory(b.Registration())
-	w, err := mediaworker.New(mediaworker.Config{SplitCheckpoints: true, Agent: mediaworker.AgentConfig{Factory: factory, Registrations: map[string]legacy.Factory{"bridge": factory}, CallbackTimeout: time.Second}, Relay: &mediaworker.RelayConfig{Owners: store, Addr: rel.WorkerAddr(), PublicAddr: rel.PublicAddr(), LeaseRenewInterval: 100 * time.Millisecond}})
+	w, err := mediaworker.New(mediaworker.Config{SplitCheckpoints: true, Agent: mediaworker.AgentConfig{Factory: factory, Registrations: map[string]legacy.Factory{"bridge": factory}, CallbackTimeout: 500 * time.Millisecond}, Relay: &mediaworker.RelayConfig{Owners: store, Addr: rel.WorkerAddr(), PublicAddr: rel.PublicAddr(), LeaseRenewInterval: 100 * time.Millisecond}})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, w.Close()) })
 	b.SetWorker(w)
@@ -48,7 +50,11 @@ func authorityCall(t *testing.T, ctx context.Context) (*Bridge, string, string) 
 	<-gather
 	id, answer, err := w.CreateSession(ctx, pc.LocalDescription().SDP)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, w.EndSession(id)) })
+	t.Cleanup(func() {
+		if err := w.EndSession(id); err != nil {
+			require.ErrorIs(t, err, mediaworker.ErrUnknownSession)
+		}
+	})
 	require.NoError(t, pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: answer}))
 	return b, "ws" + strings.TrimPrefix(server.URL, "http") + "/bridge", id
 }
@@ -130,7 +136,7 @@ func TestBridgePermitRepliesAndPartitionExpiryFallback(t *testing.T) {
 	until, err := b.worker.StopBridgePermits(scope)
 	require.NoError(t, err)
 	_, err = b.worker.ExportSession(id)
-	require.ErrorIs(t, err, mediaworker.ErrExportNotFlushed, "a stopped generation cannot move without its revocation boundary")
+	require.ErrorIs(t, err, mediaworker.ErrBridgeRevoked, "a stopped generation cannot move without its revocation boundary")
 	// Blackhole registry replies without closing either socket. Revoke retries
 	// must use the same transition and cannot extend the grant-stop deadline.
 	confirmed, err := b.Revoke(ctx, scope, scope.Epoch, scope.Generation+1)

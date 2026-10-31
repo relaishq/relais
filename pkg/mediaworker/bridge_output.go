@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/relaishq/relais/internal/agenthost"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 )
 
@@ -30,13 +31,7 @@ var (
 
 // BridgeOutputScope is copied from an authenticated attachment, never from
 // untrusted packet fields. Binding/reauthorization belongs to the bridge owner.
-type BridgeOutputScope struct {
-	SessionID   string `json:"session_id"`
-	BotInstance string `json:"bot_instance"`
-	Epoch       uint64 `json:"epoch"`
-	Generation  uint64 `json:"generation"`
-	LineageID   string `json:"lineage_id"`
-}
+type BridgeOutputScope agenthost.BridgeScope
 
 func bridgeToken(v string) bool {
 	if len(v) == 0 || len(v) > 64 {
@@ -135,6 +130,7 @@ type bridgeOutputState struct {
 	LastStream  uint64               `json:"m,omitempty"`
 	// RebaseTicks records unused timestamp advancement from late wakes. Gaps
 	// consume this first, without changing nextAt or charging RTP time twice.
+	Stopped       bool   `json:"z,omitempty"` // durable grant-stop boundary; never a permit
 	RebaseTicks   uint64 `json:"b,omitempty"`
 	RebaseThrough uint64 `json:"h,omitempty"`
 }
@@ -212,6 +208,8 @@ type bridgeAttempt struct {
 	cancel context.CancelFunc
 }
 type bridgeOutputHost struct {
+	restart          *bridgeRestartRequest // guarded by session.mu; blocks stale background writes
+	restarts         chan bridgeRestartRequest
 	permit           bridgePermitCache // live only; exact moves never export permission
 	draining         int               // guarded by session.mu; pending moves stop credit before pause
 	changed          chan struct{}
@@ -1018,6 +1016,10 @@ func (s *session) bridgeCheckpointedLocked(pair agentState, seq uint64) {
 		return
 	}
 	if b.durable == nil || pair.V2.Bridge.Revision > b.durable.Revision {
+		if b.restart != nil && BridgeOutputScope(pair.V2.Bridge.Scope) == b.restart.next {
+			b.restart = nil
+			b.permit = bridgePermitCache{}
+		}
 		b.durable = cloneBridgeState(pair.V2.Bridge)
 		b.checkpointSeq = seq
 	}
@@ -1053,13 +1055,13 @@ func (w *Worker) BridgeOutputCheckpointed(scope BridgeOutputScope) ([]byte, erro
 
 func newBridgeOutputHost(l BridgeOutputLimits) *bridgeOutputHost {
 	l = l.Defaults()
-	return &bridgeOutputHost{changed: make(chan struct{}, 1), provenUnadmitted: true, attempts: make(map[agent.TaskID]bridgeAttempt), records: make(map[uint64]bridgePacketRecord), ingress: make(chan bridgeOutputRequest, l.PendingPackets), priority: make(chan bridgePriorityRequest, 1), limits: l}
+	return &bridgeOutputHost{restarts: make(chan bridgeRestartRequest, 1), changed: make(chan struct{}, 1), provenUnadmitted: true, attempts: make(map[agent.TaskID]bridgeAttempt), records: make(map[uint64]bridgePacketRecord), ingress: make(chan bridgeOutputRequest, l.PendingPackets), priority: make(chan bridgePriorityRequest, 1), limits: l}
 }
 func bridgeStateEqual(a, b *bridgeOutputState) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.LastTurn == b.LastTurn && a.LastStream == b.LastStream && a.Version == b.Version && a.Scope == b.Scope && a.Revision == b.Revision && a.Through == b.Through && a.Sent == b.Sent && a.Pruned == b.Pruned && a.CancelFloor == b.CancelFloor && a.ClearFloor == b.ClearFloor && a.RebaseTicks == b.RebaseTicks && a.RebaseThrough == b.RebaseThrough && slices.Equal(a.Exceptions, b.Exceptions) && slices.Equal(a.Turns, b.Turns)
+	return a.Stopped == b.Stopped && a.LastTurn == b.LastTurn && a.LastStream == b.LastStream && a.Version == b.Version && a.Scope == b.Scope && a.Revision == b.Revision && a.Through == b.Through && a.Sent == b.Sent && a.Pruned == b.Pruned && a.CancelFloor == b.CancelFloor && a.ClearFloor == b.ClearFloor && a.RebaseTicks == b.RebaseTicks && a.RebaseThrough == b.RebaseThrough && slices.Equal(a.Exceptions, b.Exceptions) && slices.Equal(a.Turns, b.Turns)
 }
 
 func bridgeMetadataCharge(state *bridgeOutputState, playback playbackState) (int, error) {

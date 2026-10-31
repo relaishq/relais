@@ -539,7 +539,7 @@ func uncertainExport(err error) bool {
 	if errors.Is(err, privateapi.ErrUncertain) {
 		return true
 	}
-	for _, known := range []error{privateapi.ErrNotSent, mediaworker.ErrStaleTenure, mediaworker.ErrUnknownSession, mediaworker.ErrClosed, mediaworker.ErrNotEstablished, mediaworker.ErrExportNotFlushed, mediaworker.ErrExportIncompatible,
+	for _, known := range []error{privateapi.ErrNotSent, mediaworker.ErrStaleTenure, mediaworker.ErrUnknownSession, mediaworker.ErrClosed, mediaworker.ErrNotEstablished, mediaworker.ErrExportNotFlushed, mediaworker.ErrExportIncompatible, mediaworker.ErrBridgeRevoked,
 		sessionstore.ErrNotFound, sessionstore.ErrLeaseLost, sessionstore.ErrTransient, agentv2.ErrCapacity} {
 		if errors.Is(err, known) {
 			return false

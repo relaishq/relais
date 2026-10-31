@@ -37,6 +37,7 @@ var RemoteErrors = map[string]error{
 	"agent_backpressure":  agentv2.ErrBackpressure,
 	"uncertain":           privateapi.ErrUncertain,
 	"export_incompatible": ErrExportIncompatible,
+	"bridge_revoked":      ErrBridgeRevoked,
 	"move_budget":         ErrMoveBudget, "export_not_flushed": ErrExportNotFlushed,
 	"agent_version": agent.ErrVersion, "agent_oversize": agent.ErrStateTooLarge, "agent_save": agent.ErrSave, "agent_restore": agent.ErrRestore,
 }
@@ -251,6 +252,10 @@ func workerAPIError(rw http.ResponseWriter, err error) {
 	}
 	if errors.Is(err, ErrExportIncompatible) {
 		privateapi.Error(rw, err, map[string]error{"export_incompatible": ErrExportIncompatible})
+		return
+	}
+	if errors.Is(err, ErrBridgeRevoked) {
+		privateapi.Error(rw, err, map[string]error{"bridge_revoked": ErrBridgeRevoked})
 		return
 	}
 	if errors.Is(err, ErrExportNotFlushed) {

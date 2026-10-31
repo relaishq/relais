@@ -1,6 +1,8 @@
 package agenthost
 
 import (
+	"context"
+
 	legacy "github.com/relaishq/relais/pkg/agent"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 )
@@ -22,3 +24,21 @@ type BridgeCheckpoint struct {
 	Sequence uint64
 	Output   []byte
 }
+
+// BridgeScope identifies one authorized assignment. Epoch alone is not lineage.
+type BridgeScope struct {
+	SessionID   string `json:"session_id"`
+	BotInstance string `json:"bot_instance"`
+	Epoch       uint64 `json:"epoch"`
+	Generation  uint64 `json:"generation"`
+	LineageID   string `json:"lineage_id"`
+}
+
+// BridgeRestarter runs only on the actor, using a settled durable conversation.
+// Like Restore/Save, it must use owned local state and never wait on transport.
+type BridgeRestarter interface {
+	Restart(context.Context, agent.State, BridgeScope, string) (agent.State, error)
+}
+
+// BridgeDeferral reports bounded candidate pressure without closing its channel.
+type BridgeDeferral interface{ Deferred(agent.TaskResult) }

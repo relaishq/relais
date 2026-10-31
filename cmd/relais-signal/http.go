@@ -403,6 +403,7 @@ var controlErrors = map[string]controlErrorPolicy{
 	"session_exists":           {"retryable", "call route changing; retry the identical message"},
 	"checkpoint_clock":         {"retryable", "store clock unavailable; retry the identical message"},
 	"export_not_flushed":       {"retryable", "call export not ready; retry the identical message"},
+	"bridge_revoked":           {"definite", "bridge generation revoked; use the replacement generation"},
 	"agent_incompatible":       {"definite", "agent registration or effects incompatible; stop automatic retries"},
 	"agent_save":               {"definite", "agent Save failed; call ended"},
 	"agent_restore":            {"definite", "agent Restore failed; call ended"},
