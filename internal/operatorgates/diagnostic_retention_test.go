@@ -66,7 +66,7 @@ func TestReleaseGateWithRemoteHostLatencyAndThirtySecondFloor(t *testing.T) {
 	s, _ := fixtureSession(t)
 	s.clock = clock
 	s.Budget.clock = clock
-	clock.Advance(GateMaximum - 30500*time.Millisecond)
+	clock.Advance(GateMaximum - RestoreReserve - 30500*time.Millisecond)
 	submittedTooLate := false
 	peer := &observationPeer{respond: func(req operator.Request) operator.Reply {
 		if req.RemainingMS < 30000 {
@@ -94,7 +94,7 @@ func TestReleaseGateWithRemoteHostLatencyAndThirtySecondFloor(t *testing.T) {
 		return StepResult{Certainty: certainty, Status: controlplane.Status{Ready: true, Calls: []controlplane.CallStatus{{ID: "original", Owner: "w2", Epoch: 1}}, Workers: []controlplane.WorkerStatus{{Name: "w1", Address: g.c.Parameters.Workers["w1"].Media}, {Name: "w2", Address: g.c.Parameters.Workers["w2"].Media}}}}, nil
 	}
 	got := RunReleaseGate(context.Background(), g.c, g.p, GateMaximum)
-	if submittedTooLate || peer.sent != 1 {
+	if submittedTooLate || peer.sent != 2 {
 		t.Fatal("MUTATION: host-submission-floor: public driver submitted a host command below its admission floor")
 	}
 	if got.Status != operator.Inconclusive || got.Reason != "precondition-failed" || got.Category != "deadline-before-submission" || s.Latched() {

@@ -318,7 +318,9 @@
     "resource-caller-window-uses-procedure-limit",
     "resource-boundary-forgets-phase-clock",
     "host-submission-floor",
-    "refusal-retention"
+    "refusal-retention",
+    "failed-restoration-qualifies",
+    "pool-promotes-incomplete-procedure"
   ],
   "killed": [
     {
@@ -1108,7 +1110,7 @@
     {
       "id": "recovery-unknown-renamed",
       "owner": "P3",
-      "test": "TestProcedureOracle/a20095066c1b93f6.json/0",
+      "test": "TestWorkerRestorationUnknownStaysUnknown",
       "package": "./internal/operatorgates",
       "evidence": "killed",
       "guardFingerprint": "484bb59b91724abf07a6dc349b322195b50095a5f6fece7d75363d6cab7e393a"
@@ -2832,6 +2834,22 @@
       "owner": "P6",
       "evidence": "killed",
       "test": "TestAdapterRefusalRetainsOriginalRequestMetadata",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "failed-restoration-qualifies",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestFailedRestorationCannotQualifyForPool/refused-unfreeze/process",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "pool-promotes-incomplete-procedure",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestPoolPromotionRequiresCompletedProcedure",
       "package": "./internal/operatorgates",
       "guardFingerprint": ""
     }

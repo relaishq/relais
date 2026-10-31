@@ -142,7 +142,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 	next := max(uint64(1), c.CallerIDBase)
 	wall := func(end time.Duration) time.Time { return s.clock.Wall().Add(max(0, end-s.clock.Elapsed())) }
 	procedures := func() ProcedurePorts {
-		return ProcedurePorts{Clock: s.clock, Sleep: pause, Step: runtime.Step, Inventory: runtime.Inventory, Broker: caller}
+		return ProcedurePorts{Clock: s.clock, Sleep: pause, Step: runtime.Step, Inventory: runtime.Inventory, Broker: caller, Wait: s.recordWait}
 	}
 	makeCaller := func(gate operator.Gate, phase operatorcaller.Phase, seconds int, callerEnd time.Duration) (*ResourcePorts, *operatorcaller.Broker, error) {
 		identity := operatorcaller.Identity{RunID: c.Endpoints.RunID, Gate: gate, Phase: phase, CallerID: strconv.FormatUint(next, 10), Attempt: "1", PublicSHA: s.scenario.Caller.SourceCommit}

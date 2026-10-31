@@ -64,7 +64,7 @@ failure against a fake resource server. Its synthetic evidence proves lifecycle
 and fencing only, not a paid media pass. `TestResourceStoreFailoverRequests`
 pins request-backed observe/failover/observe and unknown fencing.
 
-No frame fields or effect request operations changed. Caller operations have an
+Effect request operations are unchanged. Caller operations have an
 explicit payload contract: Args is `{"manifest": <operatorcaller.Manifest>}`.
 The public session allocates that immutable manifest. The resource server
 configures its fixed launcher from it. A zero-exit readiness reply carries
@@ -85,6 +85,9 @@ Sequence sessions stream traces as trace frames. Final's `trace` contains only
 new terminal entries published after streaming (normally it is empty), avoiding
 a duplicate trace that could exceed the unchanged 256 KiB frame limit. Clients
 append that terminal tail to the streamed trace.
+Request and result traces include allow-listed operation, target and action
+labels. Trial polling emits fixed `trial-takeover`, `trial-settled` and
+`trial-ready` wait-purpose labels, without retaining status payloads.
 The session request bound is 32,768: half-second caller polling can exceed the
 old 4,096 bound within a real campaign. Pending timeouts still have deterministic
 request order. Concurrent caller collection and host requests serialize through
@@ -131,7 +134,20 @@ The first 64 refusal rows are retained, and `omittedRefusals` counts later
 refusals. Every refusal still reaches terminal request accounting and its result
 trace retains the fixed code. Refusals never become unknown effects
 or successful steps. These additive diagnostics keep protocol and result schema
-version 1; the gate, caller and session maxima and reserves are unchanged.
+version 1; the gate, caller and session maxima and collection/stop reserves are unchanged.
+
+Process and release procedures reserve `RestoreReserve` (60 seconds) inside
+their original procedure window. Restoration uses that window's full cutoff
+and attempts unfreeze before worker recovery waits. Four inventory reads and
+up to four clock reads precede unfreeze. At 3.05 seconds per read, the reserve
+leaves 35.6 seconds for submission, above the 30-second floor plus a one-second
+rounding/transit margin. `TestProcedureReservesUnfreezeAdmission` checks this
+latency model. Slower reads can still refuse restoration. Failed restoration
+sets `restore-failed`, blocks pool qualification and stops successor gates;
+the final read-only pool still runs. Known failures remain failures.
+`TestFailedRestorationCannotQualifyForPool`,
+`TestPoolPromotionRequiresCompletedProcedure` and
+`TestRestorationFailureStopsSuccessors` check these verdict and fence rules.
 
 Each effect is submitted once. Its ID is recorded before writing. A timeout
 retains its pending identity. Unknown completion latches before returning to
@@ -188,14 +204,16 @@ expectations because the original oracle predates this protocol.
 
 `testdata/mutation-coverage.json` accounts for all 414 original mutation IDs:
 160 public mutants are owned and killed, 41 are retired with explicit successor
-contracts, and 213 remain assigned to private owners. The 148 additional native
+contracts, and 213 remain assigned to private owners. The 156 additional native
 mutants are counted separately. These are accounting categories, not claims that
 private code was tested.
 The late-start projection retains pending/readiness/outcome order while replacing
 the removed multi-launch policy with one pending start. The public mutation edits and additional mutants are in
 `scripts/ci/gate-mutation/cases.json`. Four additional resource-session mutants cover retry on unknown, unknown as
 failure, fabricated capability and rehearsal bypass. Two further mutants cover
-the host submission floor and refusal metadata retention. Three more mutants cover uncertain transport classification, refusal promotion with an unknown exit status, and queued exchange deadlines. Several old dispatch/mailbox guards converge
+the host submission floor and refusal metadata retention. Two restoration mutants
+cover failed restoration qualification and incomplete-procedure pool promotion.
+Three more mutants cover uncertain transport classification, refusal promotion with an unknown exit status, and queued exchange deadlines. Several old dispatch/mailbox guards converge
 on one session guard; each original ledger ID is still applied and killed
 separately. `go run ./scripts/ci/gate-mutation` copies source, excluding Git,
 secret environment files and build outputs, into a temporary tree and uses an isolated cache with offline, read-only
