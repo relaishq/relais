@@ -29,7 +29,14 @@ func RunProcessGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 		}
 	}
 	if (result.Status == operator.Passed || result.AwaitingPool) && gate == operator.ControlRestart {
-		s, err := g.status(ctx)
+		status := g.status
+		if p.PostMediaStatus != nil {
+			status = p.PostMediaStatus
+		}
+		s, err := status(ctx)
+		if err != nil {
+			result.ProcedureReason = diagnosticCode(code(err))
+		}
 		reg := p.Broker.Registration()
 		if err != nil || slices.ContainsFunc(s.Calls, func(c controlplane.CallStatus) bool { return slices.Contains(reg.Sessions, c.ID) }) || g.evidence.ControlReadyMS == nil {
 			result.Status = operator.Inconclusive
@@ -39,7 +46,7 @@ func RunProcessGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 			result.AwaitingPool = false
 			result.Completed = false
 		}
-		if g.unknown {
+		if g.unknown || code(err) == "command-result-unknown" {
 			result.Reason = "command-result-unknown"
 		}
 	}
@@ -47,7 +54,7 @@ func RunProcessGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 	return result
 }
 func (g *procedure) finish(ctx context.Context, err error, release bool) ProcedureResult {
-	r := ProcedureResult{Status: operator.Inconclusive}
+	r := ProcedureResult{Status: operator.Inconclusive, ProcedureReason: diagnosticCode(code(err))}
 	if err == nil {
 		r.Status = operator.Passed
 	}
@@ -71,6 +78,7 @@ func (g *procedure) finish(ctx context.Context, err error, release bool) Procedu
 	if !g.unknown && r.Reason != "command-result-unknown" {
 		if restore := g.restoreGate(ctx); restore != nil {
 			restored = false
+			r.ProcedureReason = diagnosticCode(code(restore))
 			switch code(restore) {
 			case "command-result-unknown":
 				r.Reason = code(restore)
@@ -79,6 +87,7 @@ func (g *procedure) finish(ctx context.Context, err error, release bool) Procedu
 			}
 		}
 	}
+	procedureLate := g.p.Clock.Elapsed() >= g.end
 	procedurePassed := r.Status == operator.Passed
 	if g.p.Media != nil {
 		media, err := g.p.Media(ctx)
@@ -106,7 +115,7 @@ func (g *procedure) finish(ctx context.Context, err error, release bool) Procedu
 		r.Status = operator.Inconclusive
 		r.AwaitingPool = true
 	}
-	if g.p.Clock.Elapsed() >= g.end && r.Status != operator.Failure {
+	if (procedureLate || g.p.Clock.Elapsed() >= max(g.end, g.p.CollectionEnd)) && r.Status != operator.Failure {
 		r.Status = operator.Inconclusive
 		r.Reason = "gate-deadline"
 		r.AwaitingPool = false

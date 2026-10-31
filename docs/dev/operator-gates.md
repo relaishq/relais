@@ -12,6 +12,14 @@ inside a gate. `-spool` binds an agreed local blob directory without putting its
 path in artifacts. Configuration and the spool are local inputs, not public
 reports. `relais-gates version` emits the unchanged protocol-v1 hello.
 
+The optional result `diagnostics` array retains each gate's procedure completion
+and fixed reason code, media counters, pooled counters, pending qualification
+and caller-stop confirmation. It contains no resource output. Inconclusive
+diagnostics have a reason even when procedure execution completed. Legacy gate
+reasons remain unchanged. These additive
+fields keep result schema version 1. Preparation consumes the caller's original
+window; procedure and restoration leave one minute each for collection and stop.
+
 The resource-backed runner owns preparation, gate admission, process/release
 procedures, caller brokers, the evidence pool and the pinned judge. Host steps
 use `host.execute`; all caller and mailbox access uses the same session's
@@ -27,7 +35,9 @@ caller/mailbox operations carry their already-defined `admission-boundary`
 manifest phase. Old peers omit the marker and are refused before effects.
 Private configuration must supply `admission.survivorSeconds` and
 `admission.boundarySeconds`. The combined media duration plus the existing
-seven-minute campaign reserve must fit the 20-minute cap; no deadline is renewed.
+seven-minute campaign reserve must fit the 20-minute procedure cap. The separate
+caller maximum is 22 minutes; no deadline is renewed. Boundary fit is checked
+after the actual survivor stop and idle wait, then again after boundary startup.
 
 `PrepareCallers` proves both setups before survivor begin. The public
 `RunAdmission` then collects the survivor, confirms its one reserved stop,
@@ -410,8 +420,14 @@ for 180 seconds so a 1.25-second phased first interval stays below the judge's
 Caller preparation, including the ten-probe registration, precedes each fresh
 20-minute gate window. Campaign admission uses one elapsed-clock snapshot so a
 1,200-second minimum fits a full window exactly. Before launch, the caller's
-separate 20-minute manifest must fit media plus 120 seconds; both windows stay
+separate 22-minute manifest includes startup and must fit media plus 120 seconds; both windows stay
 clamped to the original session cutoff, with mutations ending by minute 103.
+Procedure/restoration ends at least two minutes before the caller cutoff,
+collection ends one minute before it, and stop stays within that cutoff.
+The archived 21-minute manifest rejection in `26b5fb0694a332d7.json`, event 7,
+retains its original bytes. `TestOracleCallerManifests` explicitly checks that
+case under the new 22-minute policy; native manifest tests also reject a window
+one millisecond above the new maximum.
 Their UDP bind uses the runner's route source for the relay, with port zero;
 the loader rejects wildcard bind addresses. The bridge checks the staged loader
 hash, executable bit, certificate readability and ffmpeg inside the caller unit.

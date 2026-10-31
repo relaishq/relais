@@ -221,7 +221,7 @@ func TestOracleCallerManifests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	count := 0
+	count, callerWindowTransitions := 0, 0
 	for name := range corpus {
 		if strings.Contains(name, "/") {
 			continue
@@ -250,13 +250,23 @@ func TestOracleCallerManifests(t *testing.T) {
 				t.Fatal("manifest fixture input")
 			}
 			err := m.Validate(i, time.UnixMilli(now))
-			if (err != nil) != (e.Completion == "threw") {
-				t.Fatalf("%s event %d: %v vs %s", name, e.ID, err, e.Completion)
+			wantError := e.Completion == "threw"
+			if name == "26b5fb0694a332d7.json" && e.ID == 7 {
+				// Keep the archived 20m policy's 21m rejection intact. The
+				// separate 22m caller maximum intentionally admits this case.
+				if !wantError || m.Deadline-m.CreatedAt != int64(21*time.Minute/time.Millisecond) {
+					t.Fatal("caller window transition fixture changed")
+				}
+				wantError = false
+				callerWindowTransitions++
+			}
+			if (err != nil) != wantError {
+				t.Fatalf("%s event %d: %v; want rejection %t (archived %s)", name, e.ID, err, wantError, e.Completion)
 			}
 			count++
 		}
 	}
-	if count == 0 {
+	if count == 0 || callerWindowTransitions != 1 {
 		t.Fatal("no manifests")
 	}
 	t.Log(fmt.Sprint("manifest assertions: ", count))

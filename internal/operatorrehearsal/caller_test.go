@@ -88,8 +88,11 @@ func TestCalibrationAndGatesUseRouteBoundSharedLauncher(t *testing.T) {
 	if !r.stop(context.Background(), time.Minute) || r.active != nil || len(r.units) != 0 {
 		t.Fatal("never-started calibration required a stop or cleanup command")
 	}
-	if err = r.startCaller(context.Background(), operator.ControlRestart, 1020, "2", time.Minute, 20*time.Minute); err == nil || err.Error() != "caller-not-ready" {
+	if err = r.startCaller(context.Background(), operator.ControlRestart, 1020, "2", time.Minute, 22*time.Minute); err == nil || err.Error() != "caller-not-ready" {
 		t.Fatal("gate bypassed real launch readiness", err)
+	}
+	if time.Duration(r.active.Manifest.Deadline-r.active.Manifest.CreatedAt)*time.Millisecond < 22*time.Minute-time.Second {
+		t.Fatal("rehearsal caller cutoff was shortened")
 	}
 	for _, id := range []string{"1", "2"} {
 		raw, err := os.ReadFile(filepath.Join(work, "config-"+id+".json"))

@@ -28,6 +28,7 @@ type pending struct {
 	outcome        operator.Certainty
 }
 type Session struct {
+	diagnostics     []operator.GateDiagnostic
 	mu              sync.Mutex
 	exchange        chan struct{}
 	ID              string
@@ -257,6 +258,7 @@ func (s *Session) Final(gates []operator.GateResult) operator.Result {
 	defer s.mu.Unlock()
 	s.expire()
 	r := operator.Result{SchemaVersion: 1, ScenarioDigest: s.digest, Status: operator.Passed, Complete: true, Latched: s.latched, Pending: []string{}, Gates: gates, Trace: append([]operator.Trace{}, s.trace...), FirstError: s.firstError}
+	r.Diagnostics = slices.Clone(s.diagnostics)
 	r.Uncertainties = slices.Clone(s.uncertainties)
 	for id, p := range s.requests {
 		if !p.terminal {

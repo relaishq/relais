@@ -14,6 +14,7 @@ import (
 	"github.com/relaishq/relais/internal/operatorevidence"
 	"github.com/relaishq/relais/internal/operatorgates/clocks"
 	"github.com/relaishq/relais/internal/operatorgates/inventory"
+	"github.com/relaishq/relais/pkg/controlplane"
 	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/operator"
 )
@@ -42,11 +43,23 @@ type ResourceResult struct {
 }
 type ResourceRunner struct {
 	Config ResourceConfig
+	// Sleep supplies procedure and mailbox waits; nil uses real elapsed time.
+	Sleep func(context.Context, time.Duration) error
 	// These hooks retain local diagnostics and evidence for the rehearsal. They
 	// never supply resource ports or choose gate outcomes.
 	Judge    MediaJudge
 	Started  func(*Session)
 	Finished func(*Session, ResourceResult)
+}
+
+type resourceCallerClock struct {
+	Clock
+	sleep func(context.Context, time.Duration) error
+}
+
+func (c resourceCallerClock) Now() time.Time { return c.Wall() }
+func (c resourceCallerClock) Sleep(ctx context.Context, d time.Duration) error {
+	return c.sleep(ctx, d)
 }
 
 func (r ResourceRunner) validate(s *Session) error {
@@ -73,10 +86,16 @@ func CampaignDuration(g operator.Gate) time.Duration {
 	}
 	return 1020 * time.Second
 }
-func CampaignMinimum(g operator.Gate) time.Duration { return CampaignDuration(g) + 180*time.Second }
+
+const callerCollectionReserve = time.Minute
+const callerStopReserve = time.Minute
+
+func CampaignMinimum(g operator.Gate) time.Duration {
+	return CampaignDuration(g) + time.Minute + callerCollectionReserve + callerStopReserve
+}
 func CallerWindow(g operator.Gate, now, gateEnd time.Duration) (time.Duration, bool) {
-	end := min(now+GateMaximum, gateEnd)
-	return end, end-now >= CampaignDuration(g)+120*time.Second
+	end := min(now+operatorcaller.CallerMaximum, gateEnd)
+	return end, end-now >= CampaignMinimum(g)
 }
 func resourcePause(ctx context.Context, d time.Duration) error {
 	timer := time.NewTimer(max(0, d))
@@ -98,12 +117,17 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			result.Gates = append(result.Gates, operator.GateResult{Gate: gate, Status: operator.NotRun, Reason: "precondition-failed"})
 			result.Procedures = append(result.Procedures, ProcedureResult{Status: operator.NotRun, Reason: "precondition-failed"})
 		}
+		s.retainGateDiagnostics(&result.SequenceResult, result.CallerStopped)
 		if r.Finished != nil {
 			r.Finished(s, result)
 		}
 		return result.Gates
 	}
 	c := r.Config
+	pause := r.Sleep
+	if pause == nil {
+		pause = resourcePause
+	}
 	judge := r.Judge
 	if judge == nil {
 		judge = operatorevidence.PinnedJudge{Commit: s.scenario.Judge.SourceCommit, SHA256: s.scenario.Judge.SHA256, Binary: c.JudgeBinary}
@@ -118,14 +142,14 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 	next := max(uint64(1), c.CallerIDBase)
 	wall := func(end time.Duration) time.Time { return s.clock.Wall().Add(max(0, end-s.clock.Elapsed())) }
 	procedures := func() ProcedurePorts {
-		return ProcedurePorts{Clock: s.clock, Sleep: resourcePause, Step: runtime.Step, Inventory: runtime.Inventory, Broker: caller}
+		return ProcedurePorts{Clock: s.clock, Sleep: pause, Step: runtime.Step, Inventory: runtime.Inventory, Broker: caller}
 	}
 	makeCaller := func(gate operator.Gate, phase operatorcaller.Phase, seconds int, callerEnd time.Duration) (*ResourcePorts, *operatorcaller.Broker, error) {
 		identity := operatorcaller.Identity{RunID: c.Endpoints.RunID, Gate: gate, Phase: phase, CallerID: strconv.FormatUint(next, 10), Attempt: "1", PublicSHA: s.scenario.Caller.SourceCommit}
 		next++
 		manifest := operatorcaller.Manifest{Version: 1, Identity: identity, ArmedAt: s.Budget.armed, CreatedAt: s.clock.Wall().UnixMilli(), Deadline: wall(callerEnd).UnixMilli(), Plan: operatorcaller.NewPlan(phase, seconds, identity.PublicSHA), Endpoints: c.Endpoints}
 		port := &ResourcePorts{Session: s, Peer: peer, End: callerEnd, Manifest: manifest}
-		broker, err := operatorcaller.NewBroker(manifest, operatorcaller.NewMailbox(port), operatorcaller.SystemClock{}, s)
+		broker, err := operatorcaller.NewBroker(manifest, operatorcaller.NewMailbox(port), resourceCallerClock{s.clock, pause}, s)
 		return port, broker, err
 	}
 	stop := func(ctx context.Context, end time.Duration) bool { return launchers.stopAll(ctx, wall(end)) }
@@ -170,7 +194,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			now := s.clock.Elapsed()
 			callerEnd, fits := CallerWindow(gate, now, gateEnd)
 			if gate == operator.Load {
-				callerEnd = min(now+GateMaximum, gateEnd)
+				callerEnd = min(now+operatorcaller.CallerMaximum, gateEnd)
 				fits = callerEnd-now >= c.Admission.minimum()
 			}
 			if !fits {
@@ -201,12 +225,30 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 				}
 				return err
 			}
+			// Media already runs while inventory and clocks are observed. Preserve
+			// its scheduled start on the elapsed clock instead of restarting the
+			// campaign duration after those observations.
+			duration := CampaignDuration(gate)
+			if gate == operator.Load {
+				// Boundary fit is checked after the actual survivor stop/idle gap.
+				duration = time.Duration(c.Admission.SurvivorSeconds) * time.Second
+			}
+			mediaEnd := s.clock.Elapsed() + broker.MediaStartedAt.Sub(s.clock.Wall()) + duration
+			mediaFits := func() bool {
+				return max(s.clock.Elapsed(), mediaEnd)+callerCollectionReserve+callerStopReserve <= callerEnd
+			}
+			if !mediaFits() {
+				return fault("gate-deadline")
+			}
 			observed, err := s.FreshInventory(ctx, peer, c.Pins, end, c.Pins[0].Commit, true)
 			if err != nil {
 				return runtime.preflightFailure(err, "inventory")
 			}
 			if err = runtime.VerifyClocks(ctx, end); err != nil {
 				return err
+			}
+			if !mediaFits() {
+				return fault("gate-deadline")
 			}
 			phase := operatorevidence.Phase{DeployedSHA: c.Pins[0].Commit, Clocks: runtime.ClockSamples[len(runtime.ClockSamples)-1], Inventory: observed}
 			caller = NewCallerRuntime(broker, s.clock, callerEnd, pool, phase)
@@ -218,23 +260,26 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			return result.CallerStopped[current]
 		},
 		Command: func(ctx context.Context, gate operator.Gate, end time.Duration) ProcedureResult {
-			caller.End = end
 			p := procedures()
 			p.Media = caller.Media
 			p.Duplicates = caller.Duplicates
-			var out ProcedureResult
-			switch gate {
-			case operator.UpgradeRollback:
-				out = RunReleaseGate(ctx, process, p, end)
-			case operator.Load:
-				out = runResourceAdmission(ctx, s, runtime, caller, boundary, launchers, end, c.Token, &result)
-			case operator.Failover:
-				m := RunMeasureGate(ctx, gate, process, runtime.measurePorts(caller, 1), end)
-				out = ProcedureResult{Status: m.Status, Reason: m.Reason, Media: m.Media}
-			default:
-				out = RunProcessGate(ctx, gate, process, p, end)
-			}
-			return Stopped(stop(ctx, min(s.clock.Elapsed()+time.Minute, end)), out)
+			return runResourceCommand(ctx, s.clock, caller, end, p, func(ctx context.Context, p ProcedurePorts, end time.Duration) ProcedureResult {
+				runtime.commandPorts = &p
+				defer func() { runtime.commandPorts = nil }()
+				var out ProcedureResult
+				switch gate {
+				case operator.UpgradeRollback:
+					out = RunReleaseGate(ctx, process, p, end)
+				case operator.Load:
+					out = runResourceAdmission(ctx, s, runtime, caller, boundary, launchers, end, c.Token, &result)
+				case operator.Failover:
+					m := RunMeasureGate(ctx, gate, process, runtime.measurePorts(caller, 1), end)
+					out = ProcedureResult{Status: m.Status, Reason: m.Reason, Media: m.Media}
+				default:
+					out = RunProcessGate(ctx, gate, process, p, end)
+				}
+				return out
+			}, stop)
 		},
 		Finalize: func(ctx context.Context, _ time.Duration) (*MediaSummary, error) {
 			summary, err := pool.Media(ctx)
@@ -242,6 +287,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			return summary, err
 		},
 	})
+	s.retainGateDiagnostics(&result.SequenceResult, result.CallerStopped)
 	result.Clocks = runtime.ClockSamples
 	if r.Finished != nil {
 		r.Finished(s, result)
@@ -272,4 +318,55 @@ func (r *ProcessRuntime) Observe(ctx context.Context, end time.Duration) (Measur
 		out.Local[worker] = row.Local
 	}
 	return out, nil
+}
+
+// runResourceCommand owns the procedure, collection and stop windows together.
+func runResourceCommand(ctx context.Context, clock Clock, caller *CallerRuntime, end time.Duration, p ProcedurePorts, run func(context.Context, ProcedurePorts, time.Duration) ProcedureResult, stop func(context.Context, time.Duration) bool) ProcedureResult {
+	// Preparation consumed part of this immutable window. Neither gate
+	// admission nor restoration may renew the caller manifest's cutoff.
+	stopEnd := min(end, caller.End)
+	collectionEnd := stopEnd - callerStopReserve
+	procedureEnd := collectionEnd - callerCollectionReserve
+	caller.End = collectionEnd
+	out := ProcedureResult{Status: operator.Inconclusive, Reason: "gate-deadline"}
+	if clock.Elapsed() < procedureEnd {
+		collectionCtx, cancelCollection := context.WithTimeout(ctx, max(0, collectionEnd-clock.Elapsed()))
+		defer cancelCollection()
+		p.CollectionEnd = collectionEnd
+		p.CollectionContext = collectionCtx
+		if step := p.Step; step != nil {
+			p.PostMediaStatus = func(context.Context) (controlplane.Status, error) {
+				if clock.Elapsed() >= collectionEnd || collectionCtx.Err() != nil {
+					return controlplane.Status{}, fault("gate-deadline")
+				}
+				row, err := step(collectionCtx, "status", "shared", collectionEnd, ProcessExtra{})
+				if err == nil && row.Status.LostCount > 0 {
+					err = fault("known-call-loss")
+				}
+				return row.Status, err
+			}
+		}
+		if media := p.Media; media != nil {
+			p.Media = func(context.Context) (*MediaSummary, error) {
+				if clock.Elapsed() >= collectionEnd || collectionCtx.Err() != nil {
+					return nil, fault("gate-deadline")
+				}
+				return media(collectionCtx)
+			}
+		}
+		procedureCtx, cancelProcedure := context.WithTimeout(ctx, procedureEnd-clock.Elapsed())
+		out = run(procedureCtx, p, procedureEnd)
+		cancelProcedure()
+	}
+	if clock.Elapsed() >= stopEnd {
+		out.StopDeadlineExpired = true
+		if out.Status != operator.Failure {
+			out.Status = operator.Inconclusive
+			out.Reason = "gate-deadline"
+			out.AwaitingPool = false
+		}
+		return out
+	}
+	stopDeadline := min(clock.Elapsed()+callerStopReserve, stopEnd)
+	return Stopped(stop(ctx, stopDeadline), out)
 }

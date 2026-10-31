@@ -867,8 +867,8 @@
     "GuardFingerprint": "78ccf27d78f1e3bafdf8403b89c08ebee739be99fe35c7ca50ed72daf1e9340e",
     "File": "internal/operatorgates/processes.go",
     "Function": "finish",
-    "Old": "if g.p.Clock.Elapsed() >= g.end && r.Status != operator.Failure {",
-    "New": "if false {",
+    "Old": "if (procedureLate || g.p.Clock.Elapsed() >= max(g.end, g.p.CollectionEnd)) && r.Status != operator.Failure {",
+    "New": "if false && (procedureLate || g.p.Clock.Elapsed() >= max(g.end, g.p.CollectionEnd)) && r.Status != operator.Failure {",
     "Test": "TestProcedureOracle/edd5c10b65ad547c.json/0",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -3495,5 +3495,47 @@
         "New": "quote(c.AdapterPath), quote(c.AdapterSHA256), quote(c.AdapterPath))"
       }
     ]
+  },
+  {
+    "ID": "resource-command-renews-caller-budget",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Run",
+    "Receiver": "ResourceRunner",
+    "Old": "return runResourceCommand(ctx, s.clock, caller, end, p,",
+    "New": "return func(ctx context.Context, clock Clock, caller *CallerRuntime, end time.Duration, p ProcedurePorts, run func(context.Context, ProcedurePorts, time.Duration) ProcedureResult, stop func(context.Context, time.Duration) bool) ProcedureResult { caller.End = end; out := run(ctx, p, end); return Stopped(stop(ctx, min(clock.Elapsed()+time.Minute, end)), out) }(ctx, s.clock, caller, end, p,",
+    "Test": "TestResourceRunnerCallerStartBudget/two-minute-preparation",
+    "Marker": "MUTATION: resource-budget-procedure-cutoff",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-preparation-skips-caller-fit",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Run",
+    "Receiver": "ResourceRunner",
+    "Old": "return max(s.clock.Elapsed(), mediaEnd)+callerCollectionReserve+callerStopReserve <= callerEnd",
+    "New": "return mediaEnd > 0",
+    "Test": "TestResourceRunnerCallerStartBudget/late-caller-start",
+    "Marker": "MUTATION: resource-budget-refusal",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-caller-window-uses-procedure-limit",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "CallerWindow",
+    "Old": "now+operatorcaller.CallerMaximum",
+    "New": "now+GateMaximum",
+    "Test": "TestResourceRunnerCallerStartBudget/two-minute-caller-start",
+    "Marker": "MUTATION: resource-budget-admission",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-boundary-forgets-phase-clock",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "runResourceAdmission",
+    "Old": "Clock: s.clock,",
+    "New": "Clock: nil,",
+    "Test": "TestResourceAdmissionCountsActualPhaseGap",
+    "Marker": "MUTATION: resource-admission-gap",
+    "Package": "./internal/operatorgates"
   }
 ]

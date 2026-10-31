@@ -103,10 +103,14 @@ type StepResult struct {
 }
 type StepFunc func(context.Context, string, string, time.Duration, ProcessExtra) (StepResult, error)
 type ProcedurePorts struct {
-	Clock  Clock
-	Sleep  func(context.Context, time.Duration) error
-	Step   StepFunc
-	Broker GateBroker
+	// Collection owns its reserved evidence window after procedure/restoration.
+	CollectionEnd     time.Duration
+	PostMediaStatus   func(context.Context) (controlplane.Status, error)
+	CollectionContext context.Context
+	Clock             Clock
+	Sleep             func(context.Context, time.Duration) error
+	Step              StepFunc
+	Broker            GateBroker
 	// Media returns the evidence owner's validated, sanitized summary.
 	Media      func(context.Context) (*MediaSummary, error)
 	Duplicates func() *uint64
@@ -139,6 +143,9 @@ type ProcessEvidence struct {
 	RelayConnectionInvariants string  `json:"relayConnectionInvariants,omitempty"`
 }
 type ProcedureResult struct {
+	ProcedureReason string `json:"-"`
+	// A procedure deadline alone does not establish the caller stop's outcome.
+	StopDeadlineExpired bool `json:"-"`
 	// Completed records procedure completion independently of strict media qualification.
 	Completed    bool             `json:"-"`
 	Status       operator.Verdict `json:"status"`

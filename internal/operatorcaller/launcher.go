@@ -163,7 +163,7 @@ func StartScript(c LaunchConfig, i Identity, end time.Time) ([]byte, error) {
 	if err := i.Validate(); err != nil {
 		return nil, err
 	}
-	if c.RuntimeDeadline.Before(end) || time.Until(c.RuntimeDeadline) > 20*time.Minute {
+	if c.RuntimeDeadline.Before(end) || time.Until(c.RuntimeDeadline) > CallerMaximum {
 		return nil, errors.New("invalid-runtime-deadline")
 	}
 	affinity := ""
