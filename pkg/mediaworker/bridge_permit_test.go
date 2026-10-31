@@ -100,7 +100,7 @@ func TestBridgeStoppedPermitsRefuseExportBeforePause(t *testing.T) {
 	err = s.reserveV2ExportScratch()
 	paused, fenced, held := s.agent.paused, s.fenced.Load(), s.exportScratch != nil
 	s.mu.Unlock()
-	require.ErrorIs(t, err, ErrExportNotFlushed)
+	require.ErrorIs(t, err, ErrBridgeRevoked)
 	require.False(t, paused)
 	require.False(t, fenced)
 	require.False(t, held)

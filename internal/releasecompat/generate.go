@@ -304,7 +304,7 @@ func Generate(root, version, commit, osName, arch string) (Manifest, error) {
 		// Versions 3/4/5 add optional responses and dial-out-only endpoints. Inbound
 		// requests retain v2 bodies. Older tools validate every profile, including
 		// unselected ones, so mode support uses profiles in the existing v2 schema.
-		return map[string]Format{"private_http": {Reads: []int{2, 3, 4, 5, m.HTTPContract}, Writes: []int{2}, Continues: []int{2, 3, 4, 5, m.HTTPContract}}}
+		return map[string]Format{"private_http": {Reads: []int{2, 3, 4, 5, 6, m.HTTPContract}, Writes: []int{2}, Continues: []int{2, 3, 4, 5, 6, m.HTTPContract}}}
 	}
 	platform := func() map[string]Format {
 		fs := common()

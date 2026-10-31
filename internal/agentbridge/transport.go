@@ -81,9 +81,9 @@ func (b *Bridge) run(parent context.Context, run *agent.TaskRun) error {
 	if err = sendJSON(conn, map[string]any{
 		"type": "attached", "protocol": 1, "scope": scope, "epoch": scope.Epoch, "generation": scope.Generation, "lineage_id": scope.LineageID,
 		"resume": resume, "next_output_seq": state.NextSequence, "checkpoint_seq": local.Sequence, "working": local.Working, "history": local.History,
-		"checkpoint_age_ms": nil, "snapshot_age_ms": nil, "outcome_unknown": false, "duplicate_windows": []any{},
+		"checkpoint_age_ms": nil, "snapshot_age_ms": nil, "outcome_unknown": resume == "bot_restart", "duplicate_windows": []any{},
 		"output_receipts": state, "provider_starts": false,
-		"limits": map[string]int{"input_packets": 32, "json_bytes": 32768, "binary_bytes": 1200, "working_bytes": a.maxWorking - adapterMetadataBytes, "history_bytes": a.maxHistory},
+		"limits": map[string]int{"input_packets": 32, "json_bytes": 32768, "binary_bytes": 1200, "working_bytes": (a.maxWorking - adapterMetadataBytes - 160) * 3 / 4, "history_bytes": a.maxHistory},
 	}); err != nil {
 		return err
 	}
@@ -97,7 +97,7 @@ func (b *Bridge) run(parent context.Context, run *agent.TaskRun) error {
 	defer func() { cancel(); _ = conn.Close(); <-writerDone }()
 	candidates := make(chan []byte, 1)
 	emitterDone := make(chan error, 1)
-	go func() { err := emitUpdates(ctx, run, a, candidates); emitterDone <- err; cancel() }()
+	go func() { err := emitUpdates(ctx, run, a, scope, candidates); emitterDone <- err; cancel() }()
 	defer func() { cancel(); <-emitterDone }()
 	for {
 		var raw []byte
@@ -122,6 +122,7 @@ func (b *Bridge) run(parent context.Context, run *agent.TaskRun) error {
 				Turn      agent.Turn `json:"turn"`
 				Sequence  uint64     `json:"seq"`
 				Last      uint64     `json:"last_seq"`
+				Before    agent.Turn `json:"before_turn"`
 			}
 			if err = json.Unmarshal(raw, &m); err != nil {
 				return errProtocol
@@ -149,10 +150,29 @@ func (b *Bridge) run(parent context.Context, run *agent.TaskRun) error {
 					break
 				}
 				select {
+				case previous := <-candidates:
+					var old checkpoint
+					_ = json.Unmarshal(previous, &old)
+					reply = map[string]any{"type": "superseded", "seq": old.Sequence}
+				default:
+				}
+				select {
 				case candidates <- raw:
 				case <-ctx.Done():
 					return ctx.Err()
 				}
+			case "cancel_before", "clear_audio":
+				var receipt mediaworker.BridgeInterruption
+				var e error
+				if m.Type == "clear_audio" {
+					receipt, e = b.worker.ClearBridgeAudio(ctx, scope, m.RequestID, m.Before)
+				} else {
+					receipt, e = b.worker.InterruptBridgeOutput(ctx, scope, m.RequestID, m.Turn, false)
+				}
+				if e != nil {
+					return e
+				}
+				reply = typed("interrupted", receipt)
 			case "replay_horizon":
 				if err = b.worker.AdvanceBridgeReplayHorizon(scope, m.Sequence); err != nil {
 					return err
@@ -218,8 +238,15 @@ func (b *Bridge) write(ctx context.Context, conn *websocket.Conn, a *adapter, sc
 			if err := send(r); err != nil {
 				return err
 			}
+		case deferred := <-a.deferred:
+			if deferred["scope"] != scope {
+				continue
+			}
+			if err := send(deferred); err != nil {
+				return err
+			}
 		case <-a.wake:
-			record, ok := a.nextOutbox(a.delivered.Load())
+			record, ok := a.nextOutbox(a.delivered.Load(), scope)
 			if !ok {
 				continue
 			}
@@ -262,7 +289,7 @@ func (b *Bridge) write(ctx context.Context, conn *websocket.Conn, a *adapter, sc
 			case a.deliveredWake <- struct{}{}:
 			default:
 			}
-			if _, ok := a.nextOutbox(record.ID); ok {
+			if _, ok := a.nextOutbox(record.ID, scope); ok {
 				select {
 				case a.wake <- struct{}{}:
 				default:
@@ -272,6 +299,9 @@ func (b *Bridge) write(ctx context.Context, conn *websocket.Conn, a *adapter, sc
 			var c checkpoint
 			if err := json.Unmarshal(ack.State.Bytes, &c); err != nil {
 				return err
+			}
+			if c.Scope != scope {
+				continue
 			}
 			if c.Sequence > 0 {
 				if err := send(map[string]any{"type": "checkpointed", "seq": c.Sequence, "checkpoint_seq": ack.Sequence, "scope": scope, "working": c.Working, "history": ack.State.History}); err != nil {
@@ -304,11 +334,11 @@ func (b *Bridge) write(ctx context.Context, conn *websocket.Conn, a *adapter, sc
 // Outbox delivery is retired only by a later accepted actor transaction. The
 // socket writer never changes the accepted image. Emit's 100 ms floor remains
 // outside both the socket writer and the host output admission path.
-func emitUpdates(ctx context.Context, run *agent.TaskRun, a *adapter, candidates <-chan []byte) error {
+func emitUpdates(ctx context.Context, run *agent.TaskRun, a *adapter, scope mediaworker.BridgeOutputScope, candidates <-chan []byte) error {
 	sequence := run.After() + 1 // Identity reserves the first emission.
 	attached := false
 	for {
-		var update adapterUpdate
+		update := adapterUpdate{Scope: scope}
 		if !attached {
 			update.Attached = true
 			attached = true
@@ -321,6 +351,8 @@ func emitUpdates(ctx context.Context, run *agent.TaskRun, a *adapter, candidates
 				if err := json.Unmarshal(raw, &c); err != nil {
 					return err
 				}
+				update.Arrived = time.Now()
+				c.Scope = scope
 				update.Checkpoint = &c
 			case <-a.deliveredWake:
 			}

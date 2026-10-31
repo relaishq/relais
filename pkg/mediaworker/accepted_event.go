@@ -240,6 +240,12 @@ func (m acceptedEvents) accept(event agent.Event, mode eventMode, control *v2Env
 		if event.Kind == agent.Control && errors.Is(err, errSnapshotAdmissionCapacity) {
 			return agent.ErrCapacity
 		}
+		if errors.Is(err, errSnapshotAdmissionCapacity) && !adoption && h.v2.bridge != nil && event.Kind == agent.TaskMessage {
+			if hook, ok := h.v2.instance.(agenthost.BridgeDeferral); ok {
+				hook.Deferred(*event.Result)
+			}
+			return errTaskAdmissionBackpressure
+		}
 		if errors.Is(err, errSnapshotAdmissionCapacity) && !adoption {
 			return s.refuseSnapshotEvent(event, before)
 		}

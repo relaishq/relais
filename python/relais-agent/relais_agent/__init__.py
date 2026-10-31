@@ -1,1 +1,1 @@
-"""Single-worker development bridge. No provider calls or recovery support."""
+"""Loopback development bridge with bounded conversation checkpoints. No provider calls."""

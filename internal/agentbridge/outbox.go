@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"time"
 
 	agent "github.com/relaishq/relais/pkg/agent/v2"
+	"github.com/relaishq/relais/pkg/mediaworker"
 )
 
 const outboxBytes = 11 << 10
@@ -18,14 +20,15 @@ type outboxRecord struct {
 	Notices uint64      `json:"notices,omitempty"`
 }
 type outboxImage struct {
-	SessionID string         `json:"session_id"`
-	Revision  uint64         `json:"revision"`
-	Records   []outboxRecord `json:"records,omitempty"`
-	GapID     uint64         `json:"gap_id,omitempty"`
-	First     uint64         `json:"first,omitempty"`
-	Last      uint64         `json:"last,omitempty"`
-	NoticeID  uint64         `json:"notice_id,omitempty"`
-	Notices   uint64         `json:"notices,omitempty"`
+	Scope     mediaworker.BridgeOutputScope `json:"scope"`
+	SessionID string                        `json:"session_id"`
+	Revision  uint64                        `json:"revision"`
+	Records   []outboxRecord                `json:"records,omitempty"`
+	GapID     uint64                        `json:"gap_id,omitempty"`
+	First     uint64                        `json:"first,omitempty"`
+	Last      uint64                        `json:"last,omitempty"`
+	NoticeID  uint64                        `json:"notice_id,omitempty"`
+	Notices   uint64                        `json:"notices,omitempty"`
 	encoded   []byte
 }
 type adapterState struct {
@@ -33,10 +36,12 @@ type adapterState struct {
 	Outbox uint64 `json:"outbox"`
 }
 type adapterUpdate struct {
-	Attached   bool        `json:"attached,omitempty"`
-	RunnerID   string      `json:"runner_id,omitempty"`
-	Checkpoint *checkpoint `json:"checkpoint,omitempty"`
-	Delivered  uint64      `json:"delivered,omitempty"`
+	Arrived    time.Time                     `json:"arrived,omitempty"`
+	Scope      mediaworker.BridgeOutputScope `json:"scope"`
+	Attached   bool                          `json:"attached,omitempty"`
+	RunnerID   string                        `json:"runner_id,omitempty"`
+	Checkpoint *checkpoint                   `json:"checkpoint,omitempty"`
+	Delivered  uint64                        `json:"delivered,omitempty"`
 }
 
 // Build once in Handle, publish only after its Save commits. Save only reads
@@ -99,10 +104,13 @@ func (a *adapter) stageOutbox(e agent.Event, delivered uint64) error {
 	a.current = &next
 	return nil
 }
-func (a *adapter) nextOutbox(after uint64) (outboxRecord, bool) {
+func (a *adapter) nextOutbox(after uint64, scopes ...mediaworker.BridgeOutputScope) (outboxRecord, bool) {
 	a.outboxMu.Lock()
 	image := a.accepted
 	a.outboxMu.Unlock()
+	if len(scopes) > 0 && image.Scope != scopes[0] {
+		return outboxRecord{}, false
+	}
 	var next outboxRecord
 	for _, r := range image.Records {
 		if r.ID > after {
@@ -129,7 +137,7 @@ func (a *adapter) RestoreMoveOnly(_ context.Context, data []byte) error {
 	if err := json.Unmarshal(data, &image); err != nil {
 		return err
 	}
-	if image.SessionID != a.id || image.Revision != a.current.Revision || len(image.Records) > 32 || image.GapID > image.Revision || image.NoticeID > image.Revision || (image.GapID > 0 && image.Last < image.First) {
+	if image.Scope != a.state.Scope || image.SessionID != a.id || image.Revision != a.current.Revision || len(image.Records) > 32 || image.GapID > image.Revision || image.NoticeID > image.Revision || (image.GapID > 0 && image.Last < image.First) {
 		return errProtocol
 	}
 	var last uint64
@@ -160,5 +168,23 @@ func (a *adapter) RestoreMoveOnly(_ context.Context, data []byte) error {
 	a.outboxMu.Lock()
 	a.accepted = &image
 	a.outboxMu.Unlock()
+	return nil
+}
+
+// Scope remapping is local actor work. Only a continuing authorized lineage
+// reaches this path; replacement creates an empty image instead.
+func (a *adapter) bindOutboxScope(scope mediaworker.BridgeOutputScope) error {
+	next := *a.current
+	next.Scope = scope
+	next.Revision++
+	data, err := json.Marshal(next)
+	if err != nil {
+		return err
+	}
+	if len(data) > outboxBytes {
+		return agent.ErrCapacity
+	}
+	next.encoded = data
+	a.current = &next
 	return nil
 }

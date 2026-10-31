@@ -24,7 +24,7 @@ func (w *Worker) BridgePermitRemaining(scope BridgeOutputScope) time.Duration {
 	b := s.agent.v2.bridge
 	if s.ctx.Err() != nil || s.fenced.Load() || s.agent.paused || b.state == nil || b.durable == nil || b.checkpointSeq == 0 ||
 		BridgeOutputScope(b.state.Scope) != scope || BridgeOutputScope(b.durable.Scope) != scope || scope.Epoch != s.lease.Epoch ||
-		b.permit.scope != scope || !b.permit.stopped.IsZero() {
+		b.permit.scope != scope || (b.state.Stopped || !b.permit.stopped.IsZero()) {
 		return 0
 	}
 	return max(0, time.Until(b.permit.deadline))
@@ -49,6 +49,11 @@ func (w *Worker) StopBridgePermits(scope BridgeOutputScope) (time.Time, error) {
 		return time.Time{}, ErrBridgeOutputMoving
 	}
 	if b.permit.stopped.IsZero() {
+		v := cloneBridgeState(b.state)
+		v.Stopped = true
+		v.Revision++
+		b.state = v
+		s.projectBridgeLocked(s.state.Agent.V2)
 		b.permit.stopped = time.Now()
 	}
 	b.permit.deadline = time.Time{}
@@ -61,7 +66,7 @@ func (s *session) cacheBridgeRenewal(scope BridgeOutputScope, start time.Time, s
 		return
 	}
 	b := s.agent.v2.bridge
-	if b.state == nil || scope != (BridgeOutputScope(b.state.Scope)) || scope.Epoch != s.lease.Epoch || !b.permit.stopped.IsZero() {
+	if b.state == nil || scope != (BridgeOutputScope(b.state.Scope)) || scope.Epoch != s.lease.Epoch || (b.state.Stopped || !b.permit.stopped.IsZero()) {
 		return
 	}
 	b.permit.scope = scope

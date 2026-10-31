@@ -177,7 +177,8 @@ func (b *Bridge) attach(c *websocket.Conn) {
 	}
 	b.mu.Lock()
 	p := b.pending[m.Token]
-	stopped := b.revocations[m.SessionID] != nil
+	request := b.revocations[m.SessionID]
+	stopped := request != nil && (m.Epoch < request.NewEpoch || (m.Epoch == request.NewEpoch && m.Generation < request.NewGeneration))
 	if stopped || p == nil || time.Now().After(p.expires) || m.SessionID != p.scope.SessionID || m.Bot != p.scope.BotInstance || m.Epoch != p.scope.Epoch || m.Generation != p.scope.Generation {
 		b.mu.Unlock()
 		return
@@ -318,10 +319,6 @@ func (b *Bridge) connection(ctx context.Context, run *agent.TaskRun, a *adapter)
 	if existing.BotInstance != "" && a.runnerID.Load() != r.id {
 		return fail(errProtocol)
 	}
-	data := []byte(`{"runner_id":"` + r.id + `"}`)
-	if err = run.Emit(ctx, run.After()+1, agent.Chunk{Data: data}); err != nil {
-		return fail(err)
-	}
 	if existing.BotInstance == "" {
 		err = b.worker.BindBridgeOutput(p.scope)
 	} else {
@@ -330,9 +327,26 @@ func (b *Bridge) connection(ctx context.Context, run *agent.TaskRun, a *adapter)
 	if err != nil {
 		return fail(err)
 	}
+	data, _ := json.Marshal(adapterUpdate{Scope: p.scope, RunnerID: r.id})
+	if err = run.Emit(ctx, run.After()+1, agent.Chunk{Data: data}); err != nil {
+		return fail(err)
+	}
+	pollIdentity := time.NewTicker(10 * time.Millisecond)
+	defer pollIdentity.Stop()
+	for {
+		local := a.attachmentState.Load()
+		if local != nil && local.Scope == p.scope && local.RunnerID == r.id {
+			break
+		}
+		select {
+		case <-pollIdentity.C:
+		case <-ctx.Done():
+			return fail(ctx.Err())
+		}
+	}
 	// New identity must reach a fenced checkpoint before attached. Exact same-
 	// lineage moves wait for their own renewal/checkpoint before permit grants.
-	if existing.BotInstance == "" {
+	if existing.BotInstance == "" || (a.attachmentState.Load() != nil && a.attachmentState.Load().Resume == "bot_restart") {
 		poll := time.NewTicker(10 * time.Millisecond)
 		defer poll.Stop()
 		for {
@@ -351,6 +365,9 @@ func (b *Bridge) connection(ctx context.Context, run *agent.TaskRun, a *adapter)
 	resume := "fresh"
 	if existing.BotInstance != "" {
 		resume = "planned_move"
+		if local := a.attachmentState.Load(); local != nil && local.Resume == "bot_restart" {
+			resume = "bot_restart"
+		}
 	}
 	b.mu.Lock()
 	b.active[a.id] = activeBot{runner: r, scope: p.scope, done: conn.done}

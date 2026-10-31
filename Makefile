@@ -116,7 +116,7 @@ test-ci-scripts: ## Test CI evidence and rule scripts
 	python3 -m unittest discover -s scripts/ci
 
 test-python-agent: ## Test the pinned Python agent in a throwaway Python 3.12 venv
-	$(PYTHON_AGENT) scripts/dev/test-python-agent.py
+	PYTHON_AGENT="$(PYTHON_AGENT)" python3 scripts/dev/test-python-agent.py
 
 test-demo-page: ## Test demo page verdict logic
 	node --test cmd/relais-demo/*.test.cjs

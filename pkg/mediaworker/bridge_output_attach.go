@@ -43,6 +43,9 @@ func (w *Worker) ReattachBridgeOutput(scope BridgeOutputScope, last uint64) erro
 	if s.fenced.Load() || s.agent.paused {
 		return ErrBridgeOutputMoving
 	}
+	if b.state.Stopped {
+		return ErrBridgeRevoked
+	}
 	if !b.provenUnadmitted || last < b.state.Through {
 		return ErrBridgeOutputUncertain
 	}

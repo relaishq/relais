@@ -998,6 +998,10 @@ func (s *session) v2AgentLoop() {
 // The actor event loop is independent of ingress and playback workers.
 func (s *session) v2AgentEvents() {
 	h := s.agent.v2
+	var restarts <-chan bridgeRestartRequest
+	if h.bridge != nil {
+		restarts = h.bridge.restarts
+	}
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	ready := make(chan struct{})
@@ -1062,6 +1066,8 @@ func (s *session) v2AgentEvents() {
 			if !s.finishAgentFlush(request) {
 				return
 			}
+		case request := <-restarts:
+			request.done <- s.restartBridge(request)
 		case request := <-h.controls:
 			receipt, err := (acceptedEvents{s}).submit(agent.Event{Kind: agent.Control, Control: &request.message}, eventLive)
 			request.done <- controlReply{receipt, err}

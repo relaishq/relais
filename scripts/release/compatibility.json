@@ -55,7 +55,7 @@
       "sha": "104ae65debf45156ded1e8e613705534c8e62c17"
     }
   },
-  "private_http_contract": 6,
+  "private_http_contract": 7,
   "redis_key_contract": 1,
   "redis_key_golden_sha256": {
     "framecache": "7df2f4606485a52e42840e7aa63f6f731db1f8dfeab858f41829b4119ad0dc35",
@@ -63,7 +63,7 @@
   },
   "relay_udp_contract": 3,
   "relay_udp_golden_sha256": "3ff7baf9748f6b962e224bbc3e76b5489b4e12afbccd1428168da034409fe154",
-  "private_http_golden_sha256": "28122d4b8e0418f732176c95474e0902ff6bdc8c5709565e48dcf42b60d45bef",
+  "private_http_golden_sha256": "d2e536f310cd9ffd3ac8546d8c37cb977a37bf9f6acf514a7ada7ddb77185d7f",
   "roles": {
     "control": {
       "default": {
@@ -114,7 +114,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ],
             "writes": [
               2
@@ -124,7 +125,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ]
           },
           "redis_keys": {
@@ -217,7 +219,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ],
             "writes": [
               2
@@ -227,7 +230,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ]
           },
           "redis_keys": {
@@ -316,13 +320,13 @@
           },
           "private_http": {
             "reads": [
-              6
+              7
             ],
             "writes": [
-              6
+              7
             ],
             "continues": [
-              6
+              7
             ]
           },
           "redis_keys": {
@@ -375,7 +379,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ],
             "writes": [
               2
@@ -385,7 +390,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ]
           },
           "redis_keys": {
@@ -435,7 +441,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ],
             "writes": [
               2
@@ -445,7 +452,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ]
           },
           "redis_keys": {
@@ -491,13 +499,13 @@
         "formats": {
           "private_http": {
             "reads": [
-              6
+              7
             ],
             "writes": [
-              6
+              7
             ],
             "continues": [
-              6
+              7
             ]
           },
           "redis_keys": {
@@ -547,7 +555,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ],
             "writes": [
               2
@@ -557,7 +566,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ]
           }
         }
@@ -566,13 +576,13 @@
         "formats": {
           "private_http": {
             "reads": [
-              6
+              7
             ],
             "writes": [
-              6
+              7
             ],
             "continues": [
-              6
+              7
             ]
           }
         }
@@ -627,7 +637,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ],
             "writes": [
               2
@@ -637,7 +648,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ]
           },
           "redis_keys": {
@@ -748,7 +760,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ],
             "writes": [
               2
@@ -758,7 +771,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ]
           },
           "redis_keys": {
@@ -865,13 +879,13 @@
           },
           "private_http": {
             "reads": [
-              6
+              7
             ],
             "writes": [
-              6
+              7
             ],
             "continues": [
-              6
+              7
             ]
           },
           "redis_keys": {
@@ -979,7 +993,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ],
             "writes": [
               2
@@ -989,7 +1004,8 @@
               3,
               4,
               5,
-              6
+              6,
+              7
             ]
           },
           "redis_keys": {
