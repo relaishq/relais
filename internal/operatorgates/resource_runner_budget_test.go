@@ -22,7 +22,7 @@ import (
 // Run the real resource preparation, command and collection wiring. Only the
 // peer's fixed protocol replies and elapsed sleeps are simulated.
 func TestResourceRunnerCallerStartBudget(t *testing.T) {
-	for _, mode := range []string{"two-minute-preparation", "late-caller-start"} {
+	for _, mode := range []string{"two-minute-preparation", "two-minute-caller-start", "late-caller-start"} {
 		t.Run(mode, func(t *testing.T) {
 			runtime, peer, _ := runtimeFixture(t)
 			s := runtime.Session
@@ -46,6 +46,7 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 			s.scenario.Judge = operator.Identity{SourceCommit: runtime.Pins[0].Commit, SHA256: hex.EncodeToString(sum[:])}
 			s.scenario.Caller = s.scenario.Judge
 			var manifest operatorcaller.Manifest
+			var mediaStart time.Time
 			replies := map[string][]byte{}
 			prepared, procedure, collection, observedAfterStart := false, false, false, false
 			original := peer.respond
@@ -60,8 +61,11 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 						t.Fatal(err)
 					}
 					manifest = args.Manifest
-					if mode == "late-caller-start" {
+					if mode == "two-minute-caller-start" {
 						clock.Advance(2 * time.Minute)
+					}
+					if mode == "late-caller-start" {
+						clock.Advance(4 * time.Minute)
 					}
 					return payload(CallerProof{Ready: true})
 				case operator.CallerStart:
@@ -73,6 +77,9 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 					replies[id.Job()+"/caller.jsonl"] = []byte("incomplete evidence")
 					return payload(CallerProof{Start: operatorcaller.Started})
 				case operator.CallerStop:
+					if !clock.Wall().Before(time.UnixMilli(manifest.Deadline)) {
+						t.Fatal("stop exceeded immutable caller cutoff")
+					}
 					return payload(CallerProof{Inactive: true})
 				case operator.MailboxCreate:
 					var args operatorcaller.MailboxArgs
@@ -94,6 +101,7 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 						}
 						if feed.Payload.Kind == "start" {
 							prepared = true
+							mediaStart = feed.Payload.At
 						}
 					}
 					return payload(operatorcaller.MailboxValue{State: operatorcaller.Committed})
@@ -104,6 +112,8 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 					}
 					if strings.HasSuffix(args.Key, "/finished.json") {
 						collection = true
+						// Completion is unavailable until all 17 minutes of media have run.
+						clock.Advance(max(0, mediaStart.Add(17*time.Minute).Sub(clock.Wall())) + 30*time.Second)
 						cutoff := time.UnixMilli(manifest.Deadline)
 						if !clock.Wall().Before(cutoff) {
 							t.Fatal("MUTATION: resource-budget-collection-cutoff")
@@ -136,7 +146,7 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 			runner := ResourceRunner{Config: ResourceConfig{Parameters: runtime.Config.Parameters, Pins: runtime.Pins, Bounds: *runtime.Bounds, Architecture: "arm64", Token: strings.Repeat("x", 64), JudgeBinary: binary, Endpoints: operatorcaller.Endpoints{RunID: "run-budget", Signaling: "https://signal.test/calls", Relay: runtime.Config.Parameters.Workers["w1"].Media.String(), DriftPPM: 1}}, Sleep: func(ctx context.Context, d time.Duration) error {
 				procedure = true
 				deadline, ok := ctx.Deadline()
-				if !ok || time.Until(deadline) > 18*time.Minute-clock.Elapsed()+time.Second {
+				if !ok || time.Until(deadline) > time.Duration(manifest.Deadline-start.UnixMilli())*time.Millisecond-2*time.Minute-clock.Elapsed()+time.Second {
 					t.Fatal("MUTATION: resource-budget-procedure-cutoff")
 				}
 				clock.Advance(d)
@@ -146,9 +156,12 @@ func TestResourceRunnerCallerStartBudget(t *testing.T) {
 			if !prepared {
 				t.Fatal("caller preparation was not exercised")
 			}
-			if mode == "two-minute-preparation" {
+			if mode != "late-caller-start" {
 				if !procedure || !collection || !observedAfterStart {
 					t.Fatal("MUTATION: resource-budget-admission", result.Gates)
+				}
+				if manifest.Deadline-start.UnixMilli() != int64(22*time.Minute/time.Millisecond) || !result.CallerStopped[operator.Rollout] {
+					t.Fatal("caller cutoff or stop confirmation changed")
 				}
 			} else if procedure || collection || observedAfterStart || result.Gates[0].Reason != "gate-deadline" {
 				t.Fatal("MUTATION: resource-budget-refusal", result.Gates)

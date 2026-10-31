@@ -238,7 +238,7 @@ func TestResourceUnconfirmedStopRetainsUnknownOutcome(t *testing.T) {
 	}
 }
 
-func TestSequenceRetainsExpiredResourceStop(t *testing.T) {
+func TestSequenceFailedReleaseDoesNotInheritExpiredResourceStop(t *testing.T) {
 	s, clock := fixtureSession(t)
 	result := s.RunSequence(context.Background(), SequencePorts{Command: func(ctx context.Context, _ operator.Gate, end time.Duration) ProcedureResult {
 		clock.Advance(21 * time.Minute)
@@ -247,7 +247,7 @@ func TestSequenceRetainsExpiredResourceStop(t *testing.T) {
 			return ProcedureResult{}
 		}, func(context.Context, time.Duration) bool { t.Fatal("expired stop submitted"); return false })
 	}, ReleaseCallers: func(context.Context, string, time.Duration) bool { return false }})
-	if result.Gates[0].Reason != "gate-deadline" || !s.Latched() {
-		t.Fatal("expired resource stop classification", result.Gates)
+	if result.Gates[0].Reason != "command-result-unknown" || !s.Latched() || result.Procedures[0].StopDeadlineExpired {
+		t.Fatal("failed release inherited an earlier expired stop", result.Gates)
 	}
 }

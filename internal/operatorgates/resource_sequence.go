@@ -94,7 +94,7 @@ func CampaignMinimum(g operator.Gate) time.Duration {
 	return CampaignDuration(g) + time.Minute + callerCollectionReserve + callerStopReserve
 }
 func CallerWindow(g operator.Gate, now, gateEnd time.Duration) (time.Duration, bool) {
-	end := min(now+GateMaximum, gateEnd)
+	end := min(now+operatorcaller.CallerMaximum, gateEnd)
 	return end, end-now >= CampaignMinimum(g)
 }
 func resourcePause(ctx context.Context, d time.Duration) error {
@@ -194,7 +194,7 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			now := s.clock.Elapsed()
 			callerEnd, fits := CallerWindow(gate, now, gateEnd)
 			if gate == operator.Load {
-				callerEnd = min(now+GateMaximum, gateEnd)
+				callerEnd = min(now+operatorcaller.CallerMaximum, gateEnd)
 				fits = callerEnd-now >= c.Admission.minimum()
 			}
 			if !fits {
@@ -230,7 +230,8 @@ func (r ResourceRunner) Run(ctx context.Context, s *Session, peer Peer) []operat
 			// campaign duration after those observations.
 			duration := CampaignDuration(gate)
 			if gate == operator.Load {
-				duration = time.Duration(c.Admission.SurvivorSeconds+c.Admission.BoundarySeconds) * time.Second
+				// Boundary fit is checked after the actual survivor stop/idle gap.
+				duration = time.Duration(c.Admission.SurvivorSeconds) * time.Second
 			}
 			mediaEnd := s.clock.Elapsed() + broker.MediaStartedAt.Sub(s.clock.Wall()) + duration
 			mediaFits := func() bool {

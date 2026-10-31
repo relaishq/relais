@@ -14,7 +14,7 @@ import (
 )
 
 // AdmissionPlan retains the campaign's explicit durations and seven-minute
-// combined preparation/stop reserve. Each manifest still has its own 20m cap.
+// combined preparation/stop reserve within the 20m procedure window.
 type AdmissionPlan struct {
 	SurvivorSeconds int `json:"survivorSeconds"`
 	BoundarySeconds int `json:"boundarySeconds"`
@@ -83,6 +83,10 @@ func runResourceAdmission(ctx context.Context, s *Session, runtime *ProcessRunti
 	wall := func(end time.Duration) time.Time { return s.clock.Wall().Add(max(0, end-s.clock.Elapsed())) }
 	ports := runtime.measurePorts(caller, 1)
 	admitted := RunAdmission(ctx, AdmissionPorts{
+		Clock: s.clock,
+		// Broker.Begin schedules media one second ahead. The actual stop/idle
+		// time is consumed before this remaining-window admission is checked.
+		BoundaryMinimum: time.Duration(boundary.Manifest.Plan.DurationSeconds)*time.Second + time.Second,
 		Survivor: func(ctx context.Context, end time.Duration) MeasureResult {
 			return RunMeasureGate(ctx, operator.Load, runtime.Config, ports, end)
 		},
@@ -96,6 +100,11 @@ func runResourceAdmission(ctx context.Context, s *Session, runtime *ProcessRunti
 		Boundary: func(ctx context.Context, end time.Duration) MeasureResult {
 			if err := operatorcaller.BeginBoundary(ctx, launchers, caller.Broker, boundary, token, wall(end)); err != nil {
 				return MeasureResult{Status: operator.Inconclusive, Reason: caller.callerError(err).Error()}
+			}
+			// Begin itself may consume time; recheck the real scheduled media end.
+			mediaEnd := s.clock.Elapsed() + boundary.MediaStartedAt.Sub(s.clock.Wall()) + time.Duration(boundary.Manifest.Plan.DurationSeconds)*time.Second
+			if mediaEnd > end {
+				return MeasureResult{Status: operator.Inconclusive, Reason: "gate-deadline"}
 			}
 			boundaryCaller := NewCallerRuntime(boundary, s.clock, end, nil, caller.Phase)
 			boundaryPorts := runtime.measurePorts(boundaryCaller, 2)

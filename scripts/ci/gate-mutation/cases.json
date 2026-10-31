@@ -3517,5 +3517,25 @@
     "Test": "TestResourceRunnerCallerStartBudget/late-caller-start",
     "Marker": "MUTATION: resource-budget-refusal",
     "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-caller-window-uses-procedure-limit",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "CallerWindow",
+    "Old": "now+operatorcaller.CallerMaximum",
+    "New": "now+GateMaximum",
+    "Test": "TestResourceRunnerCallerStartBudget/two-minute-caller-start",
+    "Marker": "MUTATION: resource-budget-admission",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-boundary-forgets-phase-clock",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "runResourceAdmission",
+    "Old": "Clock: s.clock,",
+    "New": "Clock: nil,",
+    "Test": "TestResourceAdmissionCountsActualPhaseGap",
+    "Marker": "MUTATION: resource-admission-gap",
+    "Package": "./internal/operatorgates"
   }
 ]

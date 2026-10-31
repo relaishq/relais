@@ -314,7 +314,9 @@
     "launcher-adapter-source-hash-only",
     "launcher-adapter-hash-before-copy",
     "resource-command-renews-caller-budget",
-    "resource-preparation-skips-caller-fit"
+    "resource-preparation-skips-caller-fit",
+    "resource-caller-window-uses-procedure-limit",
+    "resource-boundary-forgets-phase-clock"
   ],
   "killed": [
     {
@@ -2796,6 +2798,22 @@
       "owner": "P6",
       "evidence": "killed",
       "test": "TestResourceRunnerCallerStartBudget/late-caller-start",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "resource-caller-window-uses-procedure-limit",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestResourceRunnerCallerStartBudget/two-minute-caller-start",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "resource-boundary-forgets-phase-clock",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestResourceAdmissionCountsActualPhaseGap",
       "package": "./internal/operatorgates",
       "guardFingerprint": ""
     }

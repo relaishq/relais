@@ -122,7 +122,9 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 		releaseEnd := min(s.Budget.end, s.clock.Elapsed()+time.Minute)
 		stopExpired := s.clock.Elapsed() >= releaseEnd
 		if release && p.ReleaseCallers != nil && !p.ReleaseCallers(ctx, releaseReason, releaseEnd) {
-			result.StopDeadlineExpired = result.StopDeadlineExpired || stopExpired
+			// This release is a separate stop attempt. Its uncertainty cannot
+			// inherit the command's earlier, known inability to submit a stop.
+			result.StopDeadlineExpired = stopExpired
 			if len(s.uncertainties) == 0 {
 				s.unknownScope("caller.stop", "caller", "stop", releaseEnd, "unconfirmed-stop")
 			}
@@ -173,10 +175,14 @@ func (s *Session) RunSequence(ctx context.Context, p SequencePorts) SequenceResu
 // RunAdmission preserves the two distinct call populations. The boundary is
 // measured after the survivor has stopped and is never pooled with its media.
 type AdmissionPorts struct {
-	Survivor     func(context.Context, time.Duration) MeasureResult
-	StopSurvivor func(context.Context, time.Duration) bool
-	Idle         func(context.Context, time.Duration) error
-	Boundary     func(context.Context, time.Duration) MeasureResult
+	// BoundaryMinimum is admitted after the actual stop/idle gap. The owning
+	// procedure's end already excludes its collection and final stop reserves.
+	Clock           Clock
+	BoundaryMinimum time.Duration
+	Survivor        func(context.Context, time.Duration) MeasureResult
+	StopSurvivor    func(context.Context, time.Duration) bool
+	Idle            func(context.Context, time.Duration) error
+	Boundary        func(context.Context, time.Duration) MeasureResult
 }
 type AdmissionResult struct {
 	Survivor, Boundary MeasureResult
@@ -202,6 +208,10 @@ func RunAdmission(ctx context.Context, p AdmissionPorts, end time.Duration) Admi
 		if code(err) == "known-call-loss" {
 			r.Status = operator.Failure
 		}
+		return r
+	}
+	if p.Clock != nil && end-p.Clock.Elapsed() < p.BoundaryMinimum {
+		r.Reason = "gate-deadline"
 		return r
 	}
 	r.Boundary = p.Boundary(ctx, end)
