@@ -11,12 +11,17 @@ import (
 )
 
 func TestMultipartRepliesDoNotWaitOnEachOther(t *testing.T) {
-	reader, send := io.Pipe()
+	// Exercise reply allocation and release independently of link liveness and
+	// the two-second wire deadline. Serializing eight maximum replies under
+	// -race is not the latency property this regression test checks.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
 	first := make(chan struct{}, 8)
 	finish := make(chan struct{})
 	errors := make(chan error, 8)
 	part := make([]byte, privateapi.MaxBody/2)
-	peer := New(reader, io.Discard, func() { _ = reader.Close() }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	peer := New(nil, io.Discard, func() {}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, err := w.Write(part)
 		if err != nil {
 			errors <- err
@@ -32,12 +37,13 @@ func TestMultipartRepliesDoNotWaitOnEachOther(t *testing.T) {
 		_, err = w.Write(part)
 		errors <- err
 	}))
-	defer func() { peer.Close(); _ = send.Close() }()
-	go func() { _ = peer.Run(context.Background()) }()
+	writerDone := make(chan struct{})
+	go func() { defer close(writerDone); peer.writeReplies() }()
+	defer func() { peer.Close(); <-writerDone }()
 	for id := uint64(1); id <= 8; id++ {
-		if err := Write(send, Message{Kind: "request", ID: id, Timeout: int64(privateapi.Timeout), Method: "POST", Path: "/export"}); err != nil {
-			t.Fatal(err)
-		}
+		go func() {
+			peer.queueReply(peer.serve(ctx, Message{Kind: "request", ID: id, Method: "POST", Path: "/export"}, deadline))
+		}()
 	}
 	// Four whole replies fit. The old incremental allocator lets all eight
 	// partial replies fill the budget while none can finish and release it.
@@ -56,7 +62,7 @@ func TestMultipartRepliesDoNotWaitOnEachOther(t *testing.T) {
 			if err != nil {
 				t.Errorf("multipart reply exhausted its deadline waiting on partial reservations: %v", err)
 			}
-		case <-time.After(3 * time.Second):
+		case <-time.After(9 * time.Second):
 			t.Fatal("multipart replies did not finish")
 		}
 	}
