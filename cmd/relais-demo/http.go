@@ -318,6 +318,8 @@ func (d *demo) handler(files http.Handler) http.Handler {
 	// The Pion external harness reads /status next to its signaling URL.
 	mux.Handle("GET /status", proxy)
 	mux.Handle("DELETE /calls/{id}", proxy)
+	mux.Handle("GET /calls/{id}/events", proxy)
+	mux.Handle("POST /calls/{id}/ice-restart", proxy)
 	mux.Handle("POST /calls/{id}/agent/control", proxy)
 	mux.HandleFunc("GET /demo/voice/{id}", d.voiceStatus)
 	mux.HandleFunc("POST /calls/{id}/move", func(w http.ResponseWriter, r *http.Request) {

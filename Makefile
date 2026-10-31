@@ -222,3 +222,9 @@ operator-rehearsal-build: ensure_bin_dir ## Build the public gate/bridge executa
 
 operator-rehearsal: operator-rehearsal-build ## Run the fixed four-gate Linux Docker profile; needs root systemd and four allowed CPUs
 	$(OPERATOR_REHEARSAL_RUNNER) ./$(BIN_DIR)/relais-gates rehearse -commit "$(shell git rev-parse HEAD)" -go "$(shell $(GOCMD) env GOROOT)/bin/go" $(OPERATOR_REHEARSAL_FLAGS)
+
+.PHONY: test-chrome-relay-change
+test-chrome-relay-change: ## Opt-in Chrome relay gate; skips unless RELAIS_CHROME names a binary
+	@if [ -z "$$RELAIS_CHROME" ]; then echo "NOT-RUN: set RELAIS_CHROME to an explicit Chrome binary"; else \
+		$(GOBUILD) -o $(BIN_DIR)/relais-relay ./cmd/relais-relay && \
+		$(GOTEST) -v -count=1 -timeout 5m -run '^TestChromeRelayChange$$' ./cmd/crash-run; fi
