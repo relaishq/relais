@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/relaishq/relais/internal/iceufrag"
@@ -134,6 +135,18 @@ func (c *Call) restartRelay(ctx context.Context, event controlplane.RelayEvent) 
 	// A refused offer remains outstanding in Pion. Reuse it for the recovery
 	// answer; a caller with an applied answer starts a normal fresh restart.
 	if c.pc.SignalingState() != webrtc.SignalingStateHaveLocalOffer {
+		// CreateOffer starts gathering on an ICE restart. Subscribe first:
+		// Pion can capture the previous GatheringCompletePromise handler before
+		// a new promise is installed, then complete without waking that promise.
+		// The handler stays installed until the next restart replaces it, so
+		// close the channel at most once.
+		gathered := make(chan struct{})
+		gatherComplete := sync.OnceFunc(func() { close(gathered) })
+		c.pc.OnICEGatheringStateChange(func(state webrtc.ICEGatheringState) {
+			if state == webrtc.ICEGatheringStateComplete {
+				gatherComplete()
+			}
+		})
 		offer, err := c.pc.CreateOffer(&webrtc.OfferOptions{ICERestart: true})
 		if err != nil {
 			return err
@@ -141,7 +154,6 @@ func (c *Call) restartRelay(ctx context.Context, event controlplane.RelayEvent) 
 		if relaytrace.Enabled() {
 			relaytrace.Emit("offer-created-pair", c.selectedRemoteAddr(), nil)
 		}
-		gathered := webrtc.GatheringCompletePromise(c.pc)
 		if err = c.pc.SetLocalDescription(offer); err != nil {
 			return err
 		}
