@@ -80,6 +80,10 @@ type Options struct {
 	// control plane to transfer ownership and re-point the relay.
 	Workers int
 
+	// AgentCallbackTimeout sets the local workers' callback deadline.
+	// Zero uses the production default.
+	AgentCallbackTimeout time.Duration
+
 	// Relay runs every call through a relay with a session-owner store
 	// (Memory by default): answers advertise the relay's public address, and the workers
 	// bind only private sockets behind it.
