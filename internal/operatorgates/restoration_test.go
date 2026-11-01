@@ -374,3 +374,105 @@ func TestStalledTrialReadinessHasWaitPurpose(t *testing.T) {
 		t.Fatal("stalled readiness lacks a wait purpose", err, trace)
 	}
 }
+
+func TestMeasureRestorationFailureStopsSuccessors(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		mediaStatus operator.Verdict
+		restoreLoss bool
+	}{
+		{"passed", operator.Passed, false},
+		{"failed", operator.Failure, false},
+		{"restoration-call-loss", operator.Passed, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, p := newRoundTripWorld(t, false)
+			step := p.Step
+			starts := 0
+			p.Step = func(ctx context.Context, op, slot string, end time.Duration, extra ProcessExtra) (StepResult, error) {
+				if op == "worker-start" {
+					starts++
+					return StepResult{}, fault("precondition-failed:deadline-before-submission")
+				}
+				if op == "status" && starts > 0 && tc.restoreLoss {
+					return StepResult{Status: controlplane.Status{LostCount: 1}}, nil
+				}
+				return step(ctx, op, slot, end, extra)
+			}
+			ports := MeasurePorts{ProcedurePorts: p, Calls: 1, Store: &roundTripStore{},
+				Observe:     w.runtime.Observe,
+				BeforeFault: func(context.Context, time.Duration) error { return nil },
+				MarkFault:   func(context.Context) error { return nil },
+				Collect: func(context.Context, time.Duration) <-chan MeasurementCollection {
+					ch := make(chan MeasurementCollection, 1)
+					ch <- MeasurementCollection{Evidence: MeasurementEvidence{Media: &MediaSummary{Status: tc.mediaStatus}}}
+					close(ch)
+					return ch
+				},
+			}
+			s := w.runtime.Session
+			s.gates = []operator.Gate{operator.Failover, operator.Load}
+			commands, pools := 0, 0
+			var measured MeasureResult
+			out := s.RunSequence(context.Background(), SequencePorts{
+				Command: func(ctx context.Context, gate operator.Gate, end time.Duration) ProcedureResult {
+					commands++
+					measured = RunMeasureGate(ctx, gate, w.runtime.Config, ports, end)
+					return ProcedureResult{Status: measured.Status, Reason: measured.Reason, Media: measured.Media}
+				},
+				Finalize: func(context.Context, time.Duration) (*MediaSummary, error) {
+					pools++
+					if !s.Latched() {
+						t.Error("final pool ran before restoration latched the session")
+					}
+					return &MediaSummary{Status: operator.Passed}, nil
+				},
+			})
+			final := s.Final(out.Gates)
+			want := operator.Inconclusive
+			if tc.mediaStatus == operator.Failure || tc.restoreLoss {
+				want = operator.Failure
+			}
+			// One refused trial start plus one restoration attempt; loss stops before the second start.
+			wantStarts := 2
+			if tc.restoreLoss {
+				wantStarts = 1
+			}
+			if starts != wantStarts || commands != 1 || pools != 1 || !s.Latched() || out.Pool == nil ||
+				measured.Status != want || measured.Reason != "restore-failed" ||
+				out.Status != want || out.Gates[0].Reason != "restore-failed" ||
+				final.Gates[0].Reason != "restore-failed" || final.Gates[1].Reason != "prior-gate-stopped" ||
+				out.Gates[1].Status != operator.NotRun || out.Gates[1].Reason != "prior-gate-stopped" {
+				t.Fatalf("MUTATION: measure-restoration-latch: result=%+v measured=%+v starts=%d commands=%d pools=%d", out, measured, starts, commands, pools)
+			}
+		})
+	}
+}
+
+func TestMeasureMissingSampleDoesNotStopSuccessors(t *testing.T) {
+	g, _ := testProcedure(t)
+	s, _ := fixtureSession(t)
+	s.clock, s.Budget.clock = g.p.Clock, g.p.Clock
+	s.gates = []operator.Gate{operator.Load, operator.Rollout}
+	commands := 0
+	out := s.RunSequence(context.Background(), SequencePorts{
+		Command: func(ctx context.Context, gate operator.Gate, end time.Duration) ProcedureResult {
+			commands++
+			if gate != operator.Load {
+				return ProcedureResult{Status: operator.Passed, Media: &MediaSummary{Status: operator.Passed}}
+			}
+			m := RunMeasureGate(ctx, gate, g.c, MeasurePorts{ProcedurePorts: g.p,
+				Observe: func(context.Context, time.Duration) (MeasurementObservation, error) {
+					return MeasurementObservation{}, fault("missing-live-inventory")
+				},
+			}, end)
+			if m.Measurement.MissingSamples != 1 || m.Reason != "" || m.Status != operator.Inconclusive {
+				t.Fatal("missing sample classification changed", m)
+			}
+			return ProcedureResult{Status: m.Status, Reason: m.Reason, Media: m.Media}
+		},
+	})
+	if commands != 2 || s.Latched() || out.Gates[1].Status != operator.Passed {
+		t.Fatal("missing sample stopped successor", out)
+	}
+}

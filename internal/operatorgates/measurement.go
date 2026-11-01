@@ -168,10 +168,13 @@ func RunMeasureGate(ctx context.Context, gate operator.Gate, c *ProcessConfig, p
 	}
 	if len(g.down) > 0 && !g.unknown {
 		if err = g.restoreWorkers(ctx); err != nil {
+			if code(err) == "known-call-loss" {
+				failed = true
+			}
 			if code(err) == "command-result-unknown" {
 				r.Reason = code(err)
 			} else {
-				r.Measurement.MissingSamples++
+				r.Reason = "restore-failed"
 			}
 		}
 	}

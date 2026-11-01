@@ -3657,5 +3657,25 @@
     "Test": "TestReadBatchSerializesSharedHostWorkAndJoins/inventory",
     "Marker": "MUTATION: batch-shared-host-serialized",
     "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "measure-restoration-not-latched",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "r.Reason = \"restore-failed\"",
+    "New": "r.Measurement.MissingSamples++",
+    "Test": "TestMeasureRestorationFailureStopsSuccessors/passed",
+    "Marker": "MUTATION: measure-restoration-latch",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "measure-restoration-hides-call-loss",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "if code(err) == \"known-call-loss\" {",
+    "New": "if false {",
+    "Test": "TestMeasureRestorationFailureStopsSuccessors/restoration-call-loss",
+    "Marker": "MUTATION: measure-restoration-latch",
+    "Package": "./internal/operatorgates"
   }
 ]

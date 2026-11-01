@@ -328,7 +328,9 @@
     "batch-outer-failure-hides-unknown",
     "batch-failed-outer-skips-children",
     "batch-child-uncertainty-dropped",
-    "batch-shared-host-parallel-probes"
+    "batch-shared-host-parallel-probes",
+    "measure-restoration-not-latched",
+    "measure-restoration-hides-call-loss"
   ],
   "killed": [
     {
@@ -2842,6 +2844,22 @@
       "owner": "P6",
       "evidence": "killed",
       "test": "TestAdapterRefusalRetainsOriginalRequestMetadata",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "measure-restoration-hides-call-loss",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestMeasureRestorationFailureStopsSuccessors/restoration-call-loss",
+      "package": "./internal/operatorgates",
+      "guardFingerprint": ""
+    },
+    {
+      "id": "measure-restoration-not-latched",
+      "owner": "P6",
+      "evidence": "killed",
+      "test": "TestMeasureRestorationFailureStopsSuccessors/passed",
       "package": "./internal/operatorgates",
       "guardFingerprint": ""
     },
