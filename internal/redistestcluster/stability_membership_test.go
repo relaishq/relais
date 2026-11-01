@@ -39,7 +39,10 @@ func TestClusterWaitsForReplicaMissingFromSlotDiscovery(t *testing.T) {
 			var corrected, observed atomic.Bool
 			// Valkey omits zero-offset replicas from SLOTS, while SHARDS still lists
 			// them. A loading member must agree; a failed member cannot block readiness.
-			opts := &redis.ClusterOptions{Addrs: addrs, MaxRedirects: -1, MaxRetries: -1}
+			//
+			// Seed discovery from the hidden replica so its SLOTS response must
+			// remain usable before readiness samples its SHARDS view.
+			opts := &redis.ClusterOptions{Addrs: []string{missing}, MaxRedirects: -1, MaxRetries: -1}
 			opts.NewClient = func(opts *redis.Options) *redis.Client {
 				node := redis.NewClient(opts)
 				node.AddHook(incompleteMembershipHook{address: opts.Addr, missing: missing, health: health, corrected: &corrected, observed: &observed})
@@ -89,7 +92,11 @@ func (h incompleteMembershipHook) ProcessHook(next redis.ProcessHook) redis.Proc
 				}
 				slots[i].Nodes = nodes
 			}
-			if h.health != "fail" && h.address == h.missing && !h.corrected.Load() {
+			// go-redis also uses SLOTS to build its initial node list. Wait
+			// until SHARDS is sampled here before injecting disagreement, or
+			// readiness may block on the fake owner before reaching this node.
+			// This relies on WaitForStable sampling SHARDS before SLOTS per node.
+			if h.health != "fail" && h.address == h.missing && h.observed.Load() && !h.corrected.Load() {
 				for i := range slots {
 					// Keep coverage intact, but disagree on this owner.
 					slots[i].Nodes[0].Addr = "127.0.0.1:1"
