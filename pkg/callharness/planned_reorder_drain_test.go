@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/relaishq/relais/internal/relayleg"
+	"github.com/relaishq/relais/pkg/mediaworker"
 	"github.com/relaishq/relais/pkg/relay"
 	"github.com/stretchr/testify/require"
 )
@@ -153,7 +154,14 @@ func TestPlannedDrainReorderedPrivateInput(t *testing.T) {
 		require.NoError(t, err)
 		media = time.Duration(rounds)*time.Second + 4*time.Second
 	}
-	sys := startReorderTopology(t, reorderOptions{workers: 3, buffer: true})
+	// This test measures reordered media through concurrent moves. Agent
+	// callbacks (lifecycle and per-packet) need scheduling headroom on
+	// loaded race runners (#335).
+	agents := make([]mediaworker.AgentConfig, 3)
+	for i := range agents {
+		agents[i].CallbackTimeout = time.Second
+	}
+	sys := startReorderTopology(t, reorderOptions{workers: 3, buffer: true, agents: agents})
 	var reorderers []*legReorderer
 	for i, leg := range sys.legs {
 		reorderers = append(reorderers, newLegReorderer(leg, uint64(time.Now().UnixNano())+uint64(i)))
