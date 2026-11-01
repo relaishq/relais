@@ -98,3 +98,69 @@ func TestConfirmedRebuildReleasesOldSourceRegistration(t *testing.T) {
 	require.NoError(t, p.MarkDraining("b"))
 	require.NoError(t, p.readdress(ctx, "b", source, netip.MustParseAddrPort("127.0.0.1:17003")), "confirmed recovery must not leave old pointer-keyed work blocking readdress")
 }
+
+func TestRebuildWaitsForTargetHeartbeatAfterCommandLink(t *testing.T) {
+	state, waits, b, id := rebuildAwaitingHeartbeat(t, 12)
+	require.Zero(t, state.LostCount, "a connected target awaiting its first heartbeat can still recover the exported call")
+	require.Equal(t, 12, waits)
+	require.True(t, b.runs(id))
+	require.Len(t, state.Calls, 1)
+}
+
+func TestRebuildTargetHeartbeatWaitEndsAtDeadline(t *testing.T) {
+	state, waits, b, id := rebuildAwaitingHeartbeat(t, 0)
+	require.EqualValues(t, 1, state.LostCount, "a target that never heartbeats must not hold rebuild past its deadline")
+	require.Equal(t, int(takeoverBudget/rebuildTick), waits)
+	require.False(t, b.runs(id))
+	require.Empty(t, state.Calls)
+}
+
+const rebuildTick = 50 * time.Millisecond
+
+// rebuildAwaitingHeartbeat rebuilds an interrupted export onto a dial-out
+// target whose link connects at once; it heartbeats on wait heartbeatAt
+// (never when 0). Each wait advances the fake clock by rebuildTick.
+func rebuildAwaitingHeartbeat(t *testing.T, heartbeatAt int) (Status, int, *fakeWorker, string) {
+	t.Helper()
+	p, a, b, _ := setup(t)
+	ctx := context.Background()
+	id, _, err := p.Create(ctx, "offer", "a")
+	require.NoError(t, err)
+	lease, err := p.store.Get(ctx, id)
+	require.NoError(t, err)
+	require.NoError(t, p.store.PutState(ctx, lease, takeoverSnapshot(t, id, 0)))
+	_, err = a.ExportSession(id)
+	require.NoError(t, err)
+	authorizeLongControl(t, p)
+	links := p.ConfigureDialOut([]string{"b"}, nil)
+	t.Cleanup(links.Close)
+	target := p.workers["b"]
+	target.worker = &takeoverWorker{fakeWorker: b}
+	target.observation.linkDown = true
+	target.observation.observeStatus(mediaworker.WorkerStatus{}, true, true)
+	now := time.Now()
+	target.observation.recordHeartbeat(now)
+	p.recovery.targetNow = func() time.Time { return now }
+	waits := 0
+	p.recovery.targetWait = func(context.Context, <-chan struct{}, time.Duration) error {
+		waits++
+		require.LessOrEqual(t, waits, 100)
+		now = now.Add(rebuildTick)
+		// Admission and the separate heartbeat can complete in different ticks.
+		p.mu.Lock()
+		target.observation.linkDown = false
+		p.observationChangedLocked()
+		p.mu.Unlock()
+		if waits == heartbeatAt {
+			_, err := p.remoteHeartbeat("b", HeartbeatRequest{Address: b.addr})
+			require.NoError(t, err)
+		}
+		return nil
+	}
+	intent := sessionstore.ControlIntent{ID: id, Token: "interrupted-export", Kind: "move", Started: now, Lease: lease}
+	require.NoError(t, p.restart.store.PutControlIntent(ctx, intent))
+	require.NoError(t, p.recovery.rebuild(ctx, intent, nil))
+	state, err := p.Status(ctx)
+	require.NoError(t, err)
+	return state, waits, b, id
+}

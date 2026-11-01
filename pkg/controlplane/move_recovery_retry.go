@@ -347,15 +347,19 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 				return
 			}
 			if !pending.unrequested {
-				// Bootstrap may see separate heartbeats before a dial-out target
-				// finishes admission. Spend only the existing adoption budget on
-				// that link, without changing ordinary planned/no-target recovery.
+				// Bootstrap observes the command link and heartbeat separately.
+				// Wait for either missing observation within the existing adoption
+				// budget, without changing ordinary planned/no-target recovery.
 				if pending.rebuilding && m.observationTime().Before(pending.targetDeadline) {
 					p.mu.Lock()
 					returning := false
 					for _, w := range p.workers {
 						o := &w.observation
-						if p.links != nil && p.links.entries[w.name] != nil && !excluded[w.addr] && o.linkDown && !o.dead && !o.draining && !o.recovering && m.observationTime().Sub(o.lastHeartbeat) < p.config.DeadAfter {
+						// Before the first heartbeat, lastHeartbeat dates registration,
+						// not liveness. Only the rebuild deadline bounds that wait.
+						if p.links != nil && p.links.entries[w.name] != nil && !excluded[w.addr] &&
+							(o.linkDown || o.livenessUnknown) && !o.dead && !o.draining && !o.recovering &&
+							(o.livenessUnknown || m.observationTime().Sub(o.lastHeartbeat) < p.config.DeadAfter) {
 							returning = true
 						}
 					}
