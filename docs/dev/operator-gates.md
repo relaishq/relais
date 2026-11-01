@@ -196,6 +196,10 @@ the final read-only pool still runs. Known failures remain failures.
 `TestFailedRestorationCannotQualifyForPool`,
 `TestPoolPromotionRequiresCompletedProcedure` and
 `TestRestorationFailureStopsSuccessors` check these verdict and fence rules.
+Measure gates use the same `restore-failed` reason and session latch when worker
+restoration fails. Known call loss remains a failure. Rehearsal reports retain
+`restore-failed` after sanitization. `TestMeasureRestorationFailureStopsSuccessors`
+checks the successor fence and final read-only pool. Missing samples alone do not latch.
 
 Each effect is submitted once. Its ID is recorded before writing. A timeout
 retains its pending identity. Unknown completion latches before returning to
@@ -252,7 +256,7 @@ expectations because the original oracle predates this protocol.
 
 `testdata/mutation-coverage.json` accounts for all 414 original mutation IDs:
 160 public mutants are owned and killed, 41 are retired with explicit successor
-contracts, and 213 remain assigned to private owners. The 156 additional native
+contracts, and 213 remain assigned to private owners. The 166 additional native
 mutants are counted separately. These are accounting categories, not claims that
 private code was tested.
 The late-start projection retains pending/readiness/outcome order while replacing
@@ -261,6 +265,7 @@ the removed multi-launch policy with one pending start. The public mutation edit
 failure, fabricated capability and rehearsal bypass. Two further mutants cover
 the host submission floor and refusal metadata retention. Two restoration mutants
 cover failed restoration qualification and incomplete-procedure pool promotion.
+Two additional measure-gate mutants cover the worker restoration latch and known call loss.
 Three more mutants cover uncertain transport classification, refusal promotion with an unknown exit status, and queued exchange deadlines. Several old dispatch/mailbox guards converge
 on one session guard; each original ledger ID is still applied and killed
 separately. `go run ./scripts/ci/gate-mutation` copies source, excluding Git,
