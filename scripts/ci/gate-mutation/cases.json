@@ -48,7 +48,7 @@
     "GuardFingerprint": "8aef3102e2448b9436bbdae74abad730058fa1a2485eec6388b434663b057a8c",
     "File": "internal/operatorgates/session.go",
     "Function": "Issue",
-    "Old": "s.requests[r.ID] = &pending{end: end, effect: effect, operation: op, target: target, action: action}",
+    "Old": "s.requests[r.ID] = &pending{end: end, effect: effect, operation: op, target: target, action: action, deadlineUnixMS: deadline, remainingMS: remaining}",
     "New": "",
     "Test": "TestPendingIdentity",
     "Marker": "MUTATION: pending-identity",
@@ -867,8 +867,8 @@
     "GuardFingerprint": "78ccf27d78f1e3bafdf8403b89c08ebee739be99fe35c7ca50ed72daf1e9340e",
     "File": "internal/operatorgates/processes.go",
     "Function": "finish",
-    "Old": "if g.p.Clock.Elapsed() >= g.end && r.Status != operator.Failure {",
-    "New": "if false {",
+    "Old": "if (procedureLate || g.p.Clock.Elapsed() >= max(g.end, g.p.CollectionEnd)) && r.Status != operator.Failure {",
+    "New": "if false && (procedureLate || g.p.Clock.Elapsed() >= max(g.end, g.p.CollectionEnd)) && r.Status != operator.Failure {",
     "Test": "TestProcedureOracle/edd5c10b65ad547c.json/0",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -899,7 +899,7 @@
     "ID": "relay-promotes-unsupported-criteria",
     "GuardFingerprint": "be34210a1f06a1ea31c80e5ec4e1072321b603d1c33840eb68707d5b3d40613b",
     "File": "internal/operatorgates/processes.go",
-    "Function": "RunProcessGate",
+    "Function": "runProcessGate",
     "Old": "if result.Status != operator.Failure {",
     "New": "if false {",
     "Test": "TestProcedureOracle/c84ac2a6e5929c83.json/0",
@@ -1203,8 +1203,8 @@
     "Function": "restoreWorkers",
     "Old": "if err != nil {\n\t\t\treturn err\n\t\t}",
     "New": "if err != nil {\n if code(err)==\"command-result-unknown\"{g.unknown=false;return fault(\"restore-unobserved\")};return err\n }",
-    "Test": "TestProcedureOracle/a20095066c1b93f6.json/0",
-    "Marker": "MUTATION:",
+    "Test": "TestWorkerRestorationUnknownStaysUnknown",
+    "Marker": "MUTATION: worker-restoration-unknown",
     "Package": "./internal/operatorgates"
   },
   {
@@ -1266,7 +1266,7 @@
     "ID": "release-hides-relay-window",
     "GuardFingerprint": "12b55ac12239ecd1491564351bdf59778eadc823f43140b33cb9642a5a6dbad5",
     "File": "internal/operatorgates/release.go",
-    "Function": "RunReleaseGate",
+    "Function": "runReleaseGate",
     "Old": "g.evidence.RelayWindows = \"inconclusive\"",
     "New": "g.evidence.RelayWindows = \"\"",
     "Test": "TestReleaseOracle/82399182328a195d.json/0",
@@ -1533,9 +1533,9 @@
     "ID": "process-skips-fresh-inventory",
     "GuardFingerprint": "6fd2bbb623836b58f13d6b0ad71b48ca0b544249d32e451c1d984131e483f90f",
     "File": "internal/operatorgates/observations.go",
-    "Function": "FreshInventory",
-    "Old": "range inventory.Slots",
-    "New": "range inventory.Slots[:0]",
+    "Function": "observeHosts",
+    "Old": "if !s.capabilities[operator.HostReadBatch] {",
+    "New": "if action == \"inventory\" { return nil }; if !s.capabilities[operator.HostReadBatch] {",
     "Test": "TestRuntimeFreshProofAndFaultOrder",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -1588,7 +1588,7 @@
     "ID": "p3-final-status-hides-loss",
     "GuardFingerprint": "",
     "File": "internal/operatorgates/processes.go",
-    "Function": "RunProcessGate",
+    "Function": "runProcessGate",
     "Old": "if code(err) == \"known-call-loss\" || s.LostCount > 0 {",
     "New": "if false {",
     "Test": "TestFinalControlStatusPreservesKnownLoss/complete",
@@ -2965,8 +2965,8 @@
     "GuardFingerprint": "b1a06c3af92c153ce2fb8a9a73f584677d7699bad371b4d54fd3472162ebfa22",
     "File": "internal/operatorgates/sequence.go",
     "Function": "RunSequence",
-    "Old": "if out.Gates[i].Status != operator.Failure && out.Pool != nil {",
-    "New": "if out.Pool == nil { out.Gates[i].Status = operator.Passed }; if out.Gates[i].Status != operator.Failure && out.Pool != nil {",
+    "Old": "if out.Procedures[i].Completed && out.Gates[i].Status != operator.Failure && out.Pool != nil {",
+    "New": "if out.Pool == nil { out.Gates[i].Status = operator.Passed }; if out.Procedures[i].Completed && out.Gates[i].Status != operator.Failure && out.Pool != nil {",
     "Test": "TestSequenceCannotInventPooledMedia",
     "Marker": "MUTATION:",
     "Package": "./internal/operatorgates"
@@ -3009,7 +3009,7 @@
     "ID": "rehearsal-ssm-host-scope-ignored",
     "GuardFingerprint": "afb86eab0c84a1e7b678dac14df1680e23948b7f22cb6d57aad668a631d80a60",
     "File": "internal/operatorrehearsal/adapter.go",
-    "Function": "Execute",
+    "Function": "executeHost",
     "Old": "if _, ok := a.Topology.Hosts[req.Target]; !ok {",
     "New": "if _, ok := a.Topology.Hosts[req.Target]; false && !ok {",
     "Test": "TestAdapterCapturedHostScope",
@@ -3345,7 +3345,7 @@
     "File": "internal/operatorgates/session_transport.go",
     "Function": "Exchange",
     "Receiver": "Session",
-    "Old": "if f.Result.ID == req.ID && (f.Result.Transport == operator.Succeeded || f.Result.NotSubmitted && f.Result.Transport == operator.Failed) {",
+    "Old": "if f.Result.ID == req.ID && (f.Result.Transport == operator.Succeeded || f.Result.Transport == operator.Failed && (f.Result.NotSubmitted || op == operator.HostReadBatch)) {",
     "New": "if f.Result.ID == req.ID {",
     "Test": "TestExchangeUnknownTransportSkipsClassifier",
     "Marker": "MUTATION: unknown-transport-classifier",
@@ -3495,5 +3495,187 @@
         "New": "quote(c.AdapterPath), quote(c.AdapterSHA256), quote(c.AdapterPath))"
       }
     ]
+  },
+  {
+    "ID": "resource-command-renews-caller-budget",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Run",
+    "Receiver": "ResourceRunner",
+    "Old": "return runResourceCommand(ctx, s.clock, caller, end, p,",
+    "New": "return func(ctx context.Context, clock Clock, caller *CallerRuntime, end time.Duration, p ProcedurePorts, run func(context.Context, ProcedurePorts, time.Duration) ProcedureResult, stop func(context.Context, time.Duration) bool) ProcedureResult { caller.End = end; out := run(ctx, p, end); return Stopped(stop(ctx, min(clock.Elapsed()+time.Minute, end)), out) }(ctx, s.clock, caller, end, p,",
+    "Test": "TestResourceRunnerCallerStartBudget/two-minute-preparation",
+    "Marker": "MUTATION: resource-budget-procedure-cutoff",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-preparation-skips-caller-fit",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "Run",
+    "Receiver": "ResourceRunner",
+    "Old": "return max(s.clock.Elapsed(), mediaEnd)+callerCollectionReserve+callerStopReserve <= callerEnd",
+    "New": "return mediaEnd > 0",
+    "Test": "TestResourceRunnerCallerStartBudget/late-caller-start",
+    "Marker": "MUTATION: resource-budget-refusal",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-caller-window-uses-procedure-limit",
+    "File": "internal/operatorgates/resource_sequence.go",
+    "Function": "CallerWindow",
+    "Old": "now+operatorcaller.CallerMaximum",
+    "New": "now+GateMaximum",
+    "Test": "TestResourceRunnerCallerStartBudget/two-minute-caller-start",
+    "Marker": "MUTATION: resource-budget-admission",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "resource-boundary-forgets-phase-clock",
+    "File": "internal/operatorgates/resource_admission.go",
+    "Function": "runResourceAdmission",
+    "Old": "Clock: s.clock,",
+    "New": "Clock: nil,",
+    "Test": "TestResourceAdmissionCountsActualPhaseGap",
+    "Marker": "MUTATION: resource-admission-gap",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "host-submission-floor",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "if (op == operator.HostExecute || op == operator.HostReadBatch) && req.RemainingMS < operator.HostSubmissionMinimum.Milliseconds() {",
+    "New": "if false {",
+    "Test": "TestReleaseGateWithRemoteHostLatencyAndThirtySecondFloor",
+    "Marker": "MUTATION: host-submission-floor",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "refusal-retention",
+    "File": "internal/operatorgates/session.go",
+    "Function": "Final",
+    "Old": "r.Refusals = slices.Clone(s.refusals)",
+    "New": "r.Refusals = nil",
+    "Test": "TestAdapterRefusalRetainsOriginalRequestMetadata",
+    "Marker": "MUTATION: refusal-retention",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "failed-restoration-qualifies",
+    "File": "internal/operatorgates/processes.go",
+    "Function": "finish",
+    "Old": "if !restored {",
+    "New": "if false {",
+    "Test": "TestFailedRestorationCannotQualifyForPool/refused-unfreeze/process",
+    "Marker": "MUTATION: restoration-required",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "pool-promotes-incomplete-procedure",
+    "File": "internal/operatorgates/sequence.go",
+    "Function": "RunSequence",
+    "Old": "out.Procedures[i].Completed && ",
+    "New": "",
+    "Test": "TestPoolPromotionRequiresCompletedProcedure",
+    "Marker": "MUTATION: pool-requires-completion",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "batch-read-disabled",
+    "File": "internal/operatorgates/observations.go",
+    "Function": "observeHosts",
+    "Old": "if !s.capabilities[operator.HostReadBatch] {",
+    "New": "if true {",
+    "Test": "TestProcedureRoundTripCounts/upgrade-rollback/batch=true",
+    "Marker": "MUTATION: procedure-round-trip-counts",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "batch-unknown-hidden",
+    "File": "internal/operatorgates/observations.go",
+    "Function": "observeHosts",
+    "Old": "child.Transport == operator.Unknown",
+    "New": "false",
+    "Test": "TestBatchedProofFailureAndUncertainty/failed-and-unknown",
+    "Marker": "MUTATION: batch-certainty",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "batch-submission-floor",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "(op == operator.HostExecute || op == operator.HostReadBatch)",
+    "New": "(op == operator.HostExecute)",
+    "Test": "TestBatchedProofFailureAndUncertainty/floor",
+    "Marker": "MUTATION: batch-floor",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "batch-validation-skipped",
+    "File": "internal/operatorrehearsal/adapter_batch.go",
+    "Function": "executeReadBatch",
+    "Old": "req.Action != \"inventory\" && req.Action != \"clock\"",
+    "New": "false",
+    "Test": "TestReadBatchValidatesAllChildrenBeforeSubmission/action",
+    "Marker": "MUTATION: batch-validation-before-submit",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "batch-outer-failure-hides-unknown",
+    "File": "internal/operatorgates/session.go",
+    "Function": "Accept",
+    "Old": "p.operation == operator.HostReadBatch && evidence == operator.Unknown",
+    "New": "false",
+    "Test": "TestBatchedProofFailureAndUncertainty/outer-failed-unknown",
+    "Marker": "MUTATION: batch-certainty",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "batch-failed-outer-skips-children",
+    "File": "internal/operatorgates/session_transport.go",
+    "Function": "Exchange",
+    "Old": "f.Result.NotSubmitted || op == operator.HostReadBatch",
+    "New": "f.Result.NotSubmitted",
+    "Test": "TestBatchedProofFailureAndUncertainty/outer-failed-definite",
+    "Marker": "MUTATION: batch-certainty",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "batch-child-uncertainty-dropped",
+    "File": "internal/operatorgates/uncertainty.go",
+    "Function": "noteUnknownHost",
+    "Old": "s.recordUncertainty(operator.Uncertainty{Kind: string(operator.HostExecute), RequestID: id, Target: slot, Action: action, DeadlineUnixMS: p.deadlineUnixMS, RemainingMS: (p.end - s.clock.Elapsed()).Milliseconds(), Rule: rule})",
+    "New": "_ = p",
+    "Test": "TestBatchObservationRetainsHostReasonAndDiagnostic/timeout",
+    "Marker": "MUTATION: batch-child-detail",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "batch-shared-host-parallel-probes",
+    "File": "internal/operatorrehearsal/adapter_batch.go",
+    "Function": "executeReadBatch",
+    "Old": "for i, read := range args.Reads {\n\t\tchild := operator.Request{ID: read.Target, Operation: operator.HostReadBatch, Target: read.Target, Action: req.Action, Script: read.Script}\n\t\tout.Replies[i] = a.executeHost(ctx, child)\n\t}",
+    "New": "done := make(chan struct{}, len(args.Reads))\n\tfor i, read := range args.Reads {\n\t\tgo func() {\n\t\t\tchild := operator.Request{ID: read.Target, Operation: operator.HostReadBatch, Target: read.Target, Action: req.Action, Script: read.Script}\n\t\t\tout.Replies[i] = a.executeHost(ctx, child)\n\t\t\tdone <- struct{}{}\n\t\t}()\n\t}\n\tfor range args.Reads { <-done }",
+    "Test": "TestReadBatchSerializesSharedHostWorkAndJoins/inventory",
+    "Marker": "MUTATION: batch-shared-host-serialized",
+    "Package": "./internal/operatorrehearsal"
+  },
+  {
+    "ID": "measure-restoration-not-latched",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "r.Reason = \"restore-failed\"",
+    "New": "r.Measurement.MissingSamples++",
+    "Test": "TestMeasureRestorationFailureStopsSuccessors/passed",
+    "Marker": "MUTATION: measure-restoration-latch",
+    "Package": "./internal/operatorgates"
+  },
+  {
+    "ID": "measure-restoration-hides-call-loss",
+    "File": "internal/operatorgates/measurement.go",
+    "Function": "RunMeasureGate",
+    "Old": "if code(err) == \"known-call-loss\" {",
+    "New": "if false {",
+    "Test": "TestMeasureRestorationFailureStopsSuccessors/restoration-call-loss",
+    "Marker": "MUTATION: measure-restoration-latch",
+    "Package": "./internal/operatorgates"
   }
 ]

@@ -111,6 +111,7 @@ func (p *Plane) Run(ctx context.Context) error {
 	ticker := time.NewTicker(p.config.CheckInterval)
 	defer ticker.Stop()
 	var wg sync.WaitGroup
+	wg.Go(func() { p.runRelayLoss(ctx) })
 	var reconciling bool
 	var nextReconcile time.Time
 	var reconcileMu sync.Mutex
@@ -303,6 +304,8 @@ func (p *Plane) Replace(name string, addr netip.AddrPort, worker Worker) error {
 	if !addr.IsValid() || worker == nil {
 		return errors.New("controlplane: invalid replacement")
 	}
+	p.relayPlacement.RLock()
+	defer p.relayPlacement.RUnlock()
 	p.mu.Lock()
 	old := p.workers[name]
 	if old == nil || !old.observation.canReplace(old.reserved) {
@@ -322,9 +325,13 @@ func (p *Plane) Replace(name string, addr netip.AddrPort, worker Worker) error {
 	if err != nil || len(leases) != 0 {
 		return errors.New("controlplane: replacement still has leases")
 	}
+	if err := p.configureWorkerRelays(ctx, worker); err != nil {
+		return err
+	}
 	if err := p.saveRegistration(ctx, name, addr, worker); err != nil {
 		return err
 	}
+
 	if err := p.controlRecord(ctx, "drain:"+name, nil); err != nil {
 		return err
 	}
@@ -339,7 +346,9 @@ func (p *Plane) Replace(name string, addr netip.AddrPort, worker Worker) error {
 			return errors.New("controlplane: duplicate worker address")
 		}
 	}
-	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: newWorkerObservation(time.Now(), false)}
+	observation := newWorkerObservation(time.Now(), false)
+	observation.linkDown = p.workerUsesLink(name, worker)
+	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: observation}
 	p.mu.Unlock()
 	if w, ok := worker.(interface{ StartHeartbeats(mediaworker.Heartbeats) }); ok {
 		w.StartHeartbeats(p)
@@ -403,5 +412,7 @@ func (p *Plane) resetRecoveredDrain(name string) error {
 		return errors.New("controlplane: drain reset raced with rejoin or recovery")
 	}
 	old.observation.resetDrain()
+	old.operatorDraining = false
+	old.observation.draining = old.rebindTarget.IsValid()
 	return nil
 }

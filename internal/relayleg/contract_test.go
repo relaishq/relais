@@ -23,6 +23,16 @@ func TestUDPContractGolden(t *testing.T) {
 		}
 		entries[fmt.Sprintf("drain-ack=%t", ack)] = hex.EncodeToString(packet)
 	}
+	token := "00112233445566778899aabbccddeeff"
+	for _, kind := range []byte{relayleg.Hello, relayleg.Observed, relayleg.Keepalive} {
+		addr := netip.MustParseAddrPort("192.0.2.1:17001")
+		packet := relayleg.Binding(kind, token, addr)
+		gotKind, gotToken, gotAddr, ok := relayleg.ParseBinding(packet)
+		if !ok || gotKind != kind || gotToken != token || kind == relayleg.Observed && gotAddr != addr {
+			t.Fatal("binding reader/writer disagreement")
+		}
+		entries[fmt.Sprintf("leg-binding/%d", kind)] = hex.EncodeToString(packet)
+	}
 	for _, address := range []string{"192.0.2.1:1234", "[2001:db8::1]:5678", "[::ffff:192.0.2.1]:1234"} {
 		caller := netip.MustParseAddrPort(address)
 		packet := append(relay.AppendHeader(nil, caller), 0x80, 0x6f, 0x12, 0x34)

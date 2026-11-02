@@ -25,6 +25,7 @@ import (
 // ProcessRuntime renders and classifies the fixed host procedures. Every
 // mutation receives fresh four-host inventory, then clocks, then the fault hook.
 type ProcessRuntime struct {
+	commandPorts   *ProcedurePorts
 	Session        *Session
 	Peer           Peer
 	Config         *ProcessConfig

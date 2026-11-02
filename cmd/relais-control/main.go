@@ -29,7 +29,7 @@ func run() error {
 	var testWorkers testWorkerAllowlist
 	flag.Var(&testWorkers, "test-register-worker", "enable private test registration for IP=HTTP-first-last,UDP-first-last (repeat per host)")
 	var registered workers
-	flag.Var(&registered, "worker", "name=http://worker-address (repeat for each worker)")
+	flag.Var(&registered, "worker", "name=http://worker-address or name=dial-out (repeat for each worker)")
 	workerCallCap := flag.Int("worker-call-cap", 0, "hard calls plus incoming reservations per worker (0 = unlimited)")
 	version := buildinfo.VersionFlag(flag.CommandLine)
 	flag.Parse()
@@ -75,7 +75,14 @@ func run() error {
 	}
 	// Serve heartbeats during registration. A slow later worker must not make
 	// an earlier healthy registration age past DeadAfter before Run starts.
-	handler := controlHandler(plane, r, *demoRegister, testWorkers, testWorkerClient())
+	var dialOut []string
+	for _, entry := range fixed {
+		if entry.endpoint == "dial-out" {
+			dialOut = append(dialOut, entry.name)
+		}
+	}
+	links := plane.ConfigureDialOut(dialOut, r)
+	handler := links.Handler(controlHandler(plane, r, *demoRegister, testWorkers, testWorkerClient()))
 	var handlers sync.WaitGroup
 	tracked := http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		handlers.Add(1)
@@ -84,8 +91,11 @@ func run() error {
 	})
 	served := make(chan struct{})
 	serveErr := make(chan error, 1)
-	go func() { defer close(served); serveErr <- processrun.Serve(ctx, listener, tracked) }()
-	defer func() { cancel(); <-served }()
+	// Keep command links and heartbeats available while BeginShutdown joins
+	// applied moves. The signal requests shutdown; it must not close their IO.
+	serveCtx, stopServe := context.WithCancel(context.WithoutCancel(ctx))
+	go func() { defer close(served); serveErr <- processrun.Serve(serveCtx, listener, tracked) }()
+	defer func() { stopServe(); cancel(); <-served }()
 	managed := make([]controlplane.FixedWorker, 0, len(fixed))
 	for _, worker := range fixed {
 		managed = append(managed, controlplane.FixedWorker{Name: worker.name, URL: worker.endpoint})
@@ -96,6 +106,7 @@ func run() error {
 	go func() { defer close(done); managedErr <- plane.RunManaged(managedCtx, managed) }()
 	defer func() {
 		plane.BeginShutdown()
+		stopServe()
 		cancel()
 		<-served
 		handlers.Wait()
@@ -137,6 +148,7 @@ awaitReady:
 	case err = <-managedErr:
 	}
 	plane.BeginShutdown()
+	stopServe()
 	cancel()
 	<-served
 	handlers.Wait()

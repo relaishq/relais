@@ -90,10 +90,14 @@ type ReplayRelay interface {
 }
 
 type registration struct {
+	rebindTarget     netip.AddrPort
+	operatorDraining bool
+	previousAddr     netip.AddrPort
 	inventoryOnce    sync.Once
 	inventoryReader  func(context.Context) (mediaworker.WorkerStatus, error)
 	preservedIntents []*call      // abandoned intents; cleaned after recovery jobs release call locks
 	transfers        int          // store Transfer requests in flight; guarded by Plane.mu
+	outgoingMoves    int          // synchronous planned moves retaining this registration
 	createMu         sync.RWMutex // isolate create observation cuts to this worker
 	name             string
 	addr             netip.AddrPort
@@ -105,6 +109,19 @@ type registration struct {
 }
 
 type call struct {
+	relayEpisodeMu sync.Mutex    // serializes journal access without holding the operation lock
+	relayEpisode   *relayEpisode // guarded by relayEpisodeMu
+
+	relayTarget    string             // guarded by controlMu
+	relayUnplanned bool               // guarded by controlMu
+	relayCancel    context.CancelFunc // guarded by controlMu; published with c.mu ownership
+	relayCapable   bool
+	relaySlot      string // guarded by stateMu; placement hint, never authorization
+	relayEndReason string // guarded by stateMu
+	eventOpen      bool
+	relayWake      chan struct{}               // guarded by stateMu; wakes the single event stream
+	relayEvent     *RelayEvent                 // guarded by stateMu
+	relayRejected  bool                        // guarded by stateMu; applies only to relayEvent
 	intent         *sessionstore.ControlIntent // guarded by mu
 	terminal       bool                        // reads hold mu or the plane registry lock; writes hold both
 	lease          sessionstore.Lease          // guarded by stateMu; last observed placed tenure
@@ -138,6 +155,9 @@ type call struct {
 // Plane owns the registry and call metadata. The store remains authoritative
 // for ownership. New and Register must be called before accepting calls.
 type Plane struct {
+	relayPlacement  sync.RWMutex // orders create admission against relay drain
+	relaySet        map[string]RelayBinding
+	links           *WorkerLinks
 	recovery        *moveRecovery
 	restart         *restartState
 	inventory       keyInventoryCache
@@ -196,6 +216,8 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 	if name == "" || !addr.IsValid() || worker == nil {
 		return errors.New("controlplane: worker needs name, address and interface")
 	}
+	p.relayPlacement.RLock()
+	defer p.relayPlacement.RUnlock()
 
 	p.mu.Lock()
 
@@ -213,11 +235,15 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 
 	p.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := p.configureWorkerRelays(ctx, worker); err != nil {
+		return err
+	}
 	err := p.saveRegistration(ctx, name, addr, worker)
-	cancel()
 	if err != nil {
 		return err
 	}
+
 	p.mu.Lock()
 	if _, exists := p.workers[name]; exists {
 		p.mu.Unlock()
@@ -229,7 +255,9 @@ func (p *Plane) Register(name string, addr netip.AddrPort, worker Worker) error 
 			return errors.New("controlplane: duplicate worker address")
 		}
 	}
-	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: newWorkerObservation(time.Now(), p.bootstrap)}
+	observation := newWorkerObservation(time.Now(), p.bootstrap)
+	observation.linkDown = p.workerUsesLink(name, worker)
+	p.workers[name] = &registration{name: name, addr: addr, worker: worker, observation: observation}
 	delete(p.pendingWorkers, name)
 	p.loadVersion++
 	p.observationChangedLocked()
@@ -405,6 +433,12 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 	if !ready {
 		return "", "", ErrNoTarget
 	}
+	p.relayPlacement.RLock()
+	defer p.relayPlacement.RUnlock()
+	slot, slotErr := p.pickRelay(ctx, "")
+	if slotErr != nil {
+		return "", "", slotErr
+	}
 	excluded := make(map[netip.AddrPort]bool, attempts)
 	var w *registration
 	var id, answer string
@@ -421,7 +455,9 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 			return "", "", recordErr
 		}
 		placed = sessionstore.Lease{}
-		if worker, ok := w.worker.(interface {
+		if worker, ok := w.worker.(relayChangeWorker); ok && slot != "" {
+			id, answer, placed, err = worker.CreateSessionAtRelay(ctx, offer, slot)
+		} else if worker, ok := w.worker.(interface {
 			CreateSessionWithLease(context.Context, string) (string, string, sessionstore.Lease, error)
 		}); ok {
 			id, answer, placed, err = worker.CreateSessionWithLease(ctx, offer)
@@ -454,7 +490,7 @@ func (p *Plane) Create(ctx context.Context, offer, name string) (idResult, answe
 	if placed.Epoch == 0 {
 		placed = sessionstore.Lease{SessionID: id, Worker: w.addr}
 	}
-	c := &call{id: id, lease: placed}
+	c := &call{id: id, lease: placed, relaySlot: slot}
 	p.calls[id] = c
 	p.mu.Unlock()
 	if placed.Epoch == 0 {
@@ -639,6 +675,10 @@ func (p *Plane) moveRequest(ctx context.Context, id, to string) (MoveResult, err
 		return MoveResult{}, err
 	}
 
+	if err := p.waitWorkerLink(ctx, lease.Worker); err != nil {
+		return MoveResult{}, err
+	}
+
 	target, err := p.pick(ctx, to, lease.Worker)
 	if err != nil {
 		return MoveResult{}, err
@@ -685,6 +725,7 @@ func (p *Plane) markDraining(name string) (*registration, error) {
 	if w == nil {
 		return nil, &unknownWorkerError{fmt.Errorf("controlplane: unknown worker %q: %w", name, sessionstore.ErrNotFound)}
 	}
+	w.operatorDraining = true
 	if !w.observation.knowledge().draining {
 		w.observation.markDraining()
 		p.observationChangedLocked()
@@ -699,7 +740,12 @@ func (p *Plane) markDraining(name string) (*registration, error) {
 // balanced. With no destination it
 // moves nothing. It marks draining before waiting up to one second for
 // incoming reservations, then includes those calls in the drain.
-func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, drainErr error) {
+func (p *Plane) Drain(ctx context.Context, name string) ([]MoveResult, error) {
+	return p.drain(ctx, name, nil)
+}
+
+// A non-nil source is an already fenced automatic rebind, not an operator drain.
+func (p *Plane) drain(ctx context.Context, name string, source *registration) (moves []MoveResult, drainErr error) {
 	if err := p.requireMutationReady(); err != nil {
 		return nil, err
 	}
@@ -710,10 +756,18 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 			p.metrics.drains.Add(1)
 		}
 	}()
-	w, err := p.markDraining(name)
-	if err != nil {
+	w := source
+	if w == nil {
+		var err error
+		w, err = p.markDraining(name)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := p.waitWorkerLink(ctx, w.addr); err != nil {
 		return nil, err
 	}
+
 	p.mu.Lock()
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
@@ -823,14 +877,15 @@ func (p *Plane) Drain(ctx context.Context, name string) (moves []MoveResult, dra
 
 // WorkerStatus describes one registered worker and its live lease count.
 type WorkerStatus struct {
-	Name            string         `json:"name"`
-	Address         netip.AddrPort `json:"address"`
-	Draining        bool           `json:"draining"`
-	Recovering      bool           `json:"recovering"`
-	Dead            bool           `json:"dead"`
-	LivenessUnknown bool           `json:"liveness_unknown,omitempty"`
-	LastHeartbeat   time.Time      `json:"last_heartbeat"`
-	Calls           int            `json:"call_count"`
+	Link            *WorkerLinkStatus `json:"worker_link,omitempty"`
+	Name            string            `json:"name"`
+	Address         netip.AddrPort    `json:"address"`
+	Draining        bool              `json:"draining"`
+	Recovering      bool              `json:"recovering"`
+	Dead            bool              `json:"dead"`
+	LivenessUnknown bool              `json:"liveness_unknown,omitempty"`
+	LastHeartbeat   time.Time         `json:"last_heartbeat"`
+	Calls           int               `json:"call_count"`
 }
 
 // CallStatus describes current lease ownership and successful moves.
@@ -870,7 +925,7 @@ func (p *Plane) Status(ctx context.Context) (Status, error) {
 	status := Status{Rebuild: p.RebuildStatus(), SessionStoreKeys: inventory, Workers: []WorkerStatus{}, Calls: []CallStatus{}, Takeovers: p.recentTakeovers(), LostCount: p.lostCount}
 	for _, w := range workers {
 		knowledge := w.observation.knowledge()
-		status.Workers = append(status.Workers, WorkerStatus{Name: w.name, Address: w.addr, Draining: knowledge.draining, Dead: knowledge.dead, LivenessUnknown: knowledge.livenessUnknown, Recovering: knowledge.recovering, LastHeartbeat: knowledge.lastHeartbeat})
+		status.Workers = append(status.Workers, WorkerStatus{Link: p.linkStatusLocked(w), Name: w.name, Address: w.addr, Draining: knowledge.draining, Dead: knowledge.dead, LivenessUnknown: knowledge.livenessUnknown, Recovering: knowledge.recovering, LastHeartbeat: knowledge.lastHeartbeat})
 	}
 
 	calls := make(map[string]*call, len(p.calls))

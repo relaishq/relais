@@ -39,7 +39,7 @@ archive = Path(os.environ['INSTALL_ARCHIVE'])
 logs = Path(os.environ['INSTALL_LOGS'])
 state = logs / 'topology'
 redis_port = int(os.environ.get('REDIS_PORT', '16380'))
-base = int(os.environ.get('PORT_BASE', '34700'))
+base = int(os.environ.get('PORT_BASE', '25700'))
 assert 0 < redis_port <= 65535 and redis_port != 6379, '6379 is reserved'
 ctrl = f'http://127.0.0.1:{base+10}'
 # Prevent proxy environment variables from redirecting local checks.

@@ -40,9 +40,14 @@ const rebuildStatusTimeout = 250 * time.Millisecond
 // FixedWorker names an operator-configured private HTTP endpoint. Saved relay
 // addresses let a restart recover calls even when that worker is unreachable.
 type FixedWorker struct {
-	Name    string         `json:"name"`
-	URL     string         `json:"url"`
-	Address netip.AddrPort `json:"address"`
+	RebindTarget    *netip.AddrPort `json:"rebind_target,omitempty"`
+	Instance        string          `json:"instance,omitempty"`
+	Sequence        uint64          `json:"sequence,omitempty"`
+	DeathCycle      uint64          `json:"death_cycle,omitempty"`
+	PreviousAddress *netip.AddrPort `json:"previous_address,omitempty"`
+	Name            string          `json:"name"`
+	URL             string          `json:"url"`
+	Address         netip.AddrPort  `json:"address"`
 }
 type createIntent struct {
 	Worker  string    `json:"worker"`
@@ -211,6 +216,14 @@ func (p *Plane) saveRegistration(ctx context.Context, name string, addr netip.Ad
 	if !ok {
 		return errors.New("controlplane: managed worker requires HTTP observation")
 	}
+	if p.workerUsesLink(name, worker) {
+		saved, err := p.linkRecord(ctx, name)
+		if err != nil {
+			return err
+		}
+		saved.Name, saved.URL, saved.Address = name, "dial-out", addr
+		return p.controlRecord(ctx, "worker:"+name, saved)
+	}
 	return p.controlRecord(ctx, "worker:"+name, FixedWorker{Name: name, URL: remote.URL, Address: addr})
 }
 
@@ -225,12 +238,14 @@ func (p *Plane) AuthorityChanges() <-chan struct{} {
 // BeginShutdown pauses work while the lease keeper protects handlers that are
 // still draining. The caller cancels RunManaged only after handlers stop.
 func (p *Plane) BeginShutdown() {
-	if p.restart == nil {
-		return
+	if p.restart != nil {
+		p.restart.stopping.Store(true)
+		p.restart.ready.Store(false)
+		p.rebuildPhase("stopping", nil)
 	}
-	p.restart.stopping.Store(true)
-	p.restart.ready.Store(false)
-	p.rebuildPhase("stopping", nil)
+	if p.links != nil {
+		p.links.Close()
+	}
 }
 
 // A tenure owns its pending requests so a definitive loss can cancel them
@@ -521,7 +536,11 @@ func restartWait(ctx context.Context, delay time.Duration) bool {
 }
 
 func (p *Plane) discoverWorker(ctx context.Context, fixed FixedWorker, saved *FixedWorker) error {
-	worker := &RemoteWorker{URL: fixed.URL}
+	if fixed.URL == "dial-out" {
+		return nil
+	} // Registration arrives on the pushed link.
+
+	worker := p.remoteWorker(fixed)
 	bounded, cancel := context.WithTimeout(ctx, time.Second)
 	status, err := worker.Status(bounded)
 	cancel()
@@ -574,6 +593,18 @@ func (p *Plane) registerObservedWorker(ctx context.Context, fixed FixedWorker, s
 	if registration.observation.observeStatus(status, down, true) {
 		p.loadVersion++
 	}
+	registration.operatorDraining = status.Draining
+	if fixed.URL == "dial-out" && saved != nil {
+		if saved.RebindTarget != nil {
+			registration.rebindTarget = *saved.RebindTarget
+			registration.observation.draining = true
+		}
+		registration.observation.deathCycle = saved.DeathCycle
+		if saved.PreviousAddress != nil {
+			registration.previousAddr = *saved.PreviousAddress
+			registration.observation.draining = true
+		}
+	}
 	p.mu.Unlock()
 	return nil
 }
@@ -619,7 +650,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 			if value, ok := saved[worker.Name]; ok {
 				old = &value
 			}
-			remote := &RemoteWorker{URL: worker.URL}
+			remote := p.remoteWorker(worker)
 			bounded, stop := context.WithTimeout(ctx, rebuildStatusTimeout)
 			status, statusErr := remote.Status(bounded)
 			stop()
@@ -649,6 +680,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 	for _, worker := range p.workers {
 		registrations = append(registrations, worker)
 		if _, ok := records["drain:"+worker.name]; ok {
+			worker.operatorDraining = true
 			worker.observation.markDraining()
 		}
 	}
@@ -671,6 +703,7 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 			}
 			p.mu.Lock()
 			worker.observation.observeStatus(status, false, false)
+			worker.operatorDraining = worker.operatorDraining || status.Draining
 			p.mu.Unlock()
 			if status.Draining {
 				if err := p.controlRecord(ctx, "drain:"+worker.name, true); err != nil {
@@ -715,6 +748,25 @@ func (p *Plane) rebuild(ctx context.Context, fixed []FixedWorker) error {
 		return err
 	}
 	for _, intent := range intents {
+		if strings.HasPrefix(intent.Kind, "relay-recovery") {
+			current, e := p.store.Get(ctx, intent.Lease.SessionID)
+			if errors.Is(e, sessionstore.ErrEnded) || errors.Is(e, sessionstore.ErrNotFound) || intent.Kind == "relay-recovery-complete" {
+				if e = p.restart.store.DeleteControlIntent(ctx, intent.ID, intent.Token); e != nil {
+					return e
+				}
+			} else if e != nil {
+				return e
+			} else {
+				c := p.rebuildCall(current)
+				c.stateMu.Lock()
+				c.relayCapable = intent.Kind == "relay-recovery"
+				c.stateMu.Unlock()
+				if _, e = p.relayRecoveryEpisode(ctx, c, intent.Started); e != nil {
+					return e
+				}
+			}
+			continue
+		}
 		if intent.Kind != "end" {
 			if err := p.recovery.rebuild(ctx, intent, observations); err != nil {
 				return err
@@ -1080,4 +1132,13 @@ func (p *Plane) reconcileCreate(ctx context.Context, key string, worker *registr
 	}
 	p.restartOutcome("create", strings.TrimPrefix(key, "create:"), "reconciled", "interrupted")
 	return nil
+}
+
+func (p *Plane) remoteWorker(fixed FixedWorker) *RemoteWorker {
+	if fixed.URL == "dial-out" && p.links != nil {
+		if e := p.links.entries[fixed.Name]; e != nil {
+			return e.remote
+		}
+	}
+	return &RemoteWorker{URL: fixed.URL}
 }

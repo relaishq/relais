@@ -15,7 +15,8 @@ type HeartbeatRequest struct {
 	Token   string         `json:"token,omitempty"`
 }
 type HeartbeatReply struct {
-	Token string `json:"rejoin_token,omitempty"`
+	DeathCycle uint64 `json:"death_cycle,omitempty"`
+	Token      string `json:"rejoin_token,omitempty"`
 }
 
 // remoteHeartbeat never accepts an ordinary heartbeat as a rejoin ACK.
@@ -25,12 +26,13 @@ func (p *Plane) remoteHeartbeat(name string, req HeartbeatRequest) (HeartbeatRep
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	w := p.workers[name]
-	if w == nil || w.addr != req.Address {
+	if w == nil || w.addr != req.Address && w.previousAddr != req.Address {
 		return HeartbeatReply{}, errors.New("controlplane: unknown worker heartbeat")
 	}
 	before := w.observation.knowledge()
 	returned := w.observation.deathReturned
 	reply, changed, err := w.observation.heartbeat(workerHeartbeat{remote: true, restart: p.restart != nil, token: req.Token}, time.Time{})
+	reply.DeathCycle = w.observation.deathCycle
 	if changed {
 		p.loadVersion++
 	}

@@ -18,16 +18,23 @@ import (
 	"github.com/relaishq/relais/pkg/operator"
 )
 
+const maxRefusalDiagnostics = 64
+
 type pending struct {
 	operation      operator.Operation
 	target, action string
 	end            time.Duration
+	deadlineUnixMS string
+	remainingMS    int64
 	effect         bool
 	expired        bool
 	terminal       bool
 	outcome        operator.Certainty
 }
 type Session struct {
+	omittedRefusals int
+	refusals        []operator.Refusal
+	diagnostics     []operator.GateDiagnostic
 	mu              sync.Mutex
 	exchange        chan struct{}
 	ID              string
@@ -76,7 +83,7 @@ func NewSession(id string, init operator.Init, clock Clock) (*Session, error) {
 }
 func effectful(op operator.Operation, action string) bool {
 	switch op {
-	case operator.MailboxRead, operator.CallerReady, operator.StoreObserve:
+	case operator.MailboxRead, operator.CallerReady, operator.StoreObserve, operator.HostReadBatch:
 		return false
 	case operator.HostExecute:
 		switch action {
@@ -88,10 +95,26 @@ func effectful(op operator.Operation, action string) bool {
 }
 func (s *Session) record(event, id string, c operator.Certainty, code string) {
 	entry := operator.Trace{Event: event, RequestID: id, Certainty: c, Code: code, AtUnixMS: strconv.FormatInt(s.clock.Wall().UnixMilli(), 10)}
+	if p := s.requests[id]; p != nil {
+		labels := (operator.Uncertainty{Kind: string(p.operation), Target: p.target, Action: p.action}).Public()
+		entry.Operation, entry.Target, entry.Action = operator.Operation(labels.Kind), labels.Target, labels.Action
+	}
 	s.trace = append(s.trace, entry)
 	if s.firstError == nil && (c == operator.Failed || c == operator.Unknown) {
 		s.firstError = &entry
 	}
+}
+
+// recordWait retains only fixed purpose labels, never predicates or status payloads.
+func (s *Session) recordWait(purpose string) {
+	switch purpose {
+	case "trial-takeover", "trial-settled", "trial-ready":
+	default:
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.trace = append(s.trace, operator.Trace{Event: "wait", WaitPurpose: purpose, AtUnixMS: strconv.FormatInt(s.clock.Wall().UnixMilli(), 10)})
 }
 func (s *Session) Halt(code string) {
 	s.mu.Lock()
@@ -145,7 +168,7 @@ func (s *Session) Issue(op operator.Operation, target, action string, args json.
 	s.next++
 	deadline, remaining := s.Budget.Wire(end)
 	r := operator.Request{ID: strconv.FormatUint(s.next, 10), Operation: op, Target: target, Action: action, Args: bytes.Clone(args), Script: bytes.Clone(script), DeadlineUnixMS: deadline, RemainingMS: remaining}
-	s.requests[r.ID] = &pending{end: end, effect: effect, operation: op, target: target, action: action}
+	s.requests[r.ID] = &pending{end: end, effect: effect, operation: op, target: target, action: action, deadlineUnixMS: deadline, remainingMS: remaining}
 	s.record("request", r.ID, "", "")
 	return r, nil
 }
@@ -171,7 +194,9 @@ func (s *Session) Accept(session string, r operator.Reply, evidence operator.Cer
 		outcome = operator.Unknown
 	}
 	if !r.NotSubmitted && (r.ExitCode == nil || *r.ExitCode != 0 || r.Transport != operator.Succeeded) {
-		if p.effect || r.Transport == operator.Unknown {
+		// A batch wrapper failure must not demote unknown child evidence.
+		// Complete, definite child failures retain the pure-read outcome.
+		if p.effect || p.operation == operator.HostReadBatch && evidence == operator.Unknown || r.Transport == operator.Unknown {
 			outcome = operator.Unknown
 		} else {
 			outcome = operator.Failed
@@ -183,6 +208,12 @@ func (s *Session) Accept(session string, r operator.Reply, evidence operator.Cer
 			return operator.Unknown, errors.New("invalid-refusal")
 		}
 		outcome = operator.Failed
+		if len(s.refusals) < maxRefusalDiagnostics {
+			metadata := (operator.Uncertainty{Kind: string(p.operation), RequestID: r.ID, Target: p.target, Action: p.action, DeadlineUnixMS: p.deadlineUnixMS, RemainingMS: p.remainingMS}).Public()
+			s.refusals = append(s.refusals, operator.Refusal{RequestID: metadata.RequestID, Operation: operator.Operation(metadata.Kind), Target: metadata.Target, Action: metadata.Action, DeadlineUnixMS: metadata.DeadlineUnixMS, RemainingMS: metadata.RemainingMS, Code: r.RefusalCode})
+		} else {
+			s.omittedRefusals++
+		}
 	}
 	// Timeout/late success is never evidence that the deadline was met.
 	if p.expired || s.clock.Elapsed() >= p.end {
@@ -210,7 +241,11 @@ func (s *Session) Accept(session string, r operator.Reply, evidence operator.Cer
 		s.unknownRequest(r.ID, rule)
 		s.halt("command-result-unknown")
 	}
-	s.record("result", r.ID, outcome, "")
+	resultCode := ""
+	if r.NotSubmitted {
+		resultCode = r.RefusalCode
+	}
+	s.record("result", r.ID, outcome, resultCode)
 	return outcome, nil
 }
 func (s *Session) Expire() {
@@ -257,6 +292,9 @@ func (s *Session) Final(gates []operator.GateResult) operator.Result {
 	defer s.mu.Unlock()
 	s.expire()
 	r := operator.Result{SchemaVersion: 1, ScenarioDigest: s.digest, Status: operator.Passed, Complete: true, Latched: s.latched, Pending: []string{}, Gates: gates, Trace: append([]operator.Trace{}, s.trace...), FirstError: s.firstError}
+	r.Refusals = slices.Clone(s.refusals)
+	r.OmittedRefusals = s.omittedRefusals
+	r.Diagnostics = slices.Clone(s.diagnostics)
 	r.Uncertainties = slices.Clone(s.uncertainties)
 	for id, p := range s.requests {
 		if !p.terminal {
@@ -316,7 +354,7 @@ func (s *Session) CompleteGate(r operator.GateResult, end time.Duration) operato
 		r.Status = operator.Inconclusive
 		r.Reason = "command-result-unknown"
 	}
-	if r.Reason == "command-result-unknown" || r.Reason == "gate-deadline" || r.Reason == "interrupted" || r.Status == operator.Failure {
+	if r.Reason == "restore-failed" || r.Reason == "command-result-unknown" || r.Reason == "gate-deadline" || r.Reason == "interrupted" || r.Status == operator.Failure {
 		if r.Reason == "command-result-unknown" && len(s.uncertainties) == 0 {
 			s.recordUncertainty(operator.Uncertainty{Kind: "gate", RequestID: "0", Target: "session", Action: string(r.Gate), DeadlineUnixMS: strconv.FormatInt(s.clock.Wall().Add(end-s.clock.Elapsed()).UnixMilli(), 10), RemainingMS: (end - s.clock.Elapsed()).Milliseconds(), Rule: "operation-evidence-unknown"})
 		}

@@ -39,6 +39,7 @@ func (h *Harness) RestartWorker(worker int) error {
 	defer t.mu.Unlock()
 	old := h.workers.list[worker]
 	fresh, err := mediaworker.New(mediaworker.Config{CheckpointEnvelope: t.checkpointEnvelope, LoggerFactory: t.loggerFactory, SnapshotInterval: t.snapshotInterval, SnapshotLimits: harnessSnapshotLimits(t.snapshotInterval),
+		Agent:      mediaworker.AgentConfig{CallbackTimeout: t.agentCallbackTimeout},
 		FrameCache: t.frames, DisableFrameCache: t.disableFrameCache, DisableResumePLI: t.disableResumePLI,
 		Relay: &mediaworker.RelayConfig{Addr: t.relay.WorkerAddr(), PublicAddr: t.relay.PublicAddr(), Owners: t.owners}})
 	if err != nil {

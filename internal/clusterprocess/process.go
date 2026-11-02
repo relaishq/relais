@@ -17,10 +17,11 @@ import (
 )
 
 type Ready struct {
-	HTTP  string `json:"http"`
-	Media string `json:"media"`
-	Leg   string `json:"leg"`
-	PID   int    `json:"pid"`
+	Connect string `json:"connect"`
+	HTTP    string `json:"http"`
+	Media   string `json:"media"`
+	Leg     string `json:"leg"`
+	PID     int    `json:"pid"`
 }
 type Child struct {
 	cmd    *exec.Cmd
@@ -113,7 +114,7 @@ func (c *Child) Ready(ctx context.Context) (Ready, error) {
 		}
 		for _, line := range bytes.Split(data, []byte("\n")) {
 			var r Ready
-			if json.Unmarshal(line, &r) == nil && r.HTTP != "" && r.PID == c.pid {
+			if json.Unmarshal(line, &r) == nil && (r.HTTP != "" || r.Connect == "dial-out" && r.Media != "") && r.PID == c.pid {
 				return r, nil
 			}
 		}

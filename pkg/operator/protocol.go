@@ -2,7 +2,14 @@
 // Payloads are private adapter data; only Result and Trace are public artifacts.
 package operator
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
+
+// HostSubmissionMinimum is the admission floor for host.execute, including
+// observations. Adapters recheck it before submitting a remote host command.
+const HostSubmissionMinimum = 30 * time.Second
 
 const ProtocolVersion = 1
 const MaxFrameBytes = 256 << 10
@@ -23,7 +30,10 @@ func (c Certainty) Valid() bool { return c == Succeeded || c == Failed || c == U
 type Operation string
 
 const (
-	HostExecute   Operation = "host.execute"
+	HostExecute Operation = "host.execute"
+	// HostReadBatch is optional. It groups four independent inventory or clock
+	// reads; adapters must join every result and must never retry a child.
+	HostReadBatch Operation = "host.read-batch"
 	CallerReady   Operation = "caller.ready"
 	CallerStart   Operation = "caller.start"
 	CallerStop    Operation = "caller.stop"
@@ -98,4 +108,20 @@ type Frame struct {
 	Trace   *Trace   `json:"trace,omitempty"`
 	Final   *Result  `json:"final,omitempty"`
 	Code    string   `json:"code,omitempty"`
+}
+
+// HostReadBatchArgs contains one fixed pure observation for each host. The
+// outer request supplies the action and immutable deadline for every child.
+type HostReadBatchArgs struct {
+	Reads []HostRead `json:"reads"`
+}
+type HostRead struct {
+	Target string `json:"target"`
+	Script []byte `json:"script"`
+}
+
+// Child reply IDs are host slots, in request order. Each child retains its own
+// transport certainty, exit status and bounded HostOutput. Blobs are forbidden.
+type HostReadBatchOutput struct {
+	Replies []Reply `json:"replies"`
 }

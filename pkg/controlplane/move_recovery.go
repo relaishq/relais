@@ -119,6 +119,12 @@ func releaseHold(r Relay, id string, to netip.AddrPort, input map[uint32]relay.C
 // Store and transport work use the existing bounds without holding registry locks.
 func (m *moveRecovery) moveLocked(ctx context.Context, c *call, lease sessionstore.Lease, target *registration) (res MoveResult, err error) {
 	p := m.plane
+	if p.links != nil {
+		if !p.links.startMove() {
+			return res, ErrNotReady
+		}
+		defer p.links.jobs.Done()
+	}
 	moved, recoveryMetrics := false, false
 	defer func() {
 		if recoveryMetrics {
@@ -132,6 +138,10 @@ func (m *moveRecovery) moveLocked(ctx context.Context, c *call, lease sessionsto
 	}()
 	p.mu.Lock()
 	source, r := p.owner(lease.Worker), p.relay
+	if source != nil {
+		source.outgoingMoves++
+		defer func() { p.mu.Lock(); source.outgoingMoves--; p.mu.Unlock() }()
+	}
 	// Keep a slot for synchronous rollback after Transfer releases the source
 	// lease. Otherwise a concurrent create could fill it before rollback.
 	rollbackReserved := source != nil && p.config.WorkerCallCap > 0
@@ -529,7 +539,7 @@ func uncertainExport(err error) bool {
 	if errors.Is(err, privateapi.ErrUncertain) {
 		return true
 	}
-	for _, known := range []error{mediaworker.ErrUnknownSession, mediaworker.ErrClosed, mediaworker.ErrNotEstablished, mediaworker.ErrExportNotFlushed, mediaworker.ErrExportIncompatible,
+	for _, known := range []error{privateapi.ErrNotSent, mediaworker.ErrStaleTenure, mediaworker.ErrUnknownSession, mediaworker.ErrClosed, mediaworker.ErrNotEstablished, mediaworker.ErrExportNotFlushed, mediaworker.ErrExportIncompatible, mediaworker.ErrBridgeRevoked,
 		sessionstore.ErrNotFound, sessionstore.ErrLeaseLost, sessionstore.ErrTransient, agentv2.ErrCapacity} {
 		if errors.Is(err, known) {
 			return false

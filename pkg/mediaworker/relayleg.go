@@ -17,8 +17,12 @@ import (
 // caller, as the worker's own socket does without a relay, so the rest of
 // the worker cannot tell the two apart.
 type relayConn struct {
-	conn  *net.UDPConn
-	relay netip.AddrPort
+	conn      *net.UDPConn
+	relay     netip.AddrPort
+	packetMu  sync.RWMutex // orders packet admission against a relay-set cut-off
+	peersMu   sync.RWMutex
+	peers     map[netip.AddrPort]bool
+	lastRelay netip.AddrPort // written/read only by the worker's single packet loop
 
 	// buffers hold outgoing datagrams: header plus packet. Sessions, their
 	// DTLS connections and the read loop all send concurrently.
@@ -26,14 +30,18 @@ type relayConn struct {
 
 	// readMu guards readBuf, which holds an incoming datagram: header plus
 	// a packet as long as the caller's read buffer.
-	readMu  sync.Mutex
-	readBuf []byte
+	readMu       sync.Mutex
+	readBuf      []byte
+	bindingMu    sync.Mutex
+	bindingToken string
+	observed     chan legObservation
 }
 
 func newRelayConn(conn *net.UDPConn, relayAddr netip.AddrPort) *relayConn {
 	return &relayConn{
-		conn:  conn,
-		relay: netip.AddrPortFrom(relayAddr.Addr().Unmap(), relayAddr.Port()),
+		conn:     conn,
+		observed: make(chan legObservation, 1),
+		relay:    netip.AddrPortFrom(relayAddr.Addr().Unmap(), relayAddr.Port()),
 		buffers: sync.Pool{New: func() any {
 			buf := make([]byte, 0, relay.MaxHeaderLen+receiveMTU)
 
@@ -60,14 +68,34 @@ func (c *relayConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
 		if err != nil {
 			return 0, netip.AddrPort{}, err
 		}
-		if netip.AddrPortFrom(from.Addr().Unmap(), from.Port()) != c.relay {
+		from = netip.AddrPortFrom(from.Addr().Unmap(), from.Port())
+		c.peersMu.RLock()
+		allowed := c.allowedLocked(from)
+		c.peersMu.RUnlock()
+		if !allowed {
+			continue
+		}
+		if kind, token, addr, ok := relayleg.ParseBinding(buf[:n]); ok {
+			c.bindingMu.Lock()
+			matches := token == c.bindingToken
+			c.bindingMu.Unlock()
+			if kind == relayleg.Observed && matches {
+				select {
+				case c.observed <- legObservation{address: addr, token: token}:
+				default:
+				}
+			}
 			continue
 		}
 		if id, ack, ok := relayleg.ParseBarrier(buf[:n]); ok {
 			if !ack && !workerprobe.BarrierIgnored(c.conn.LocalAddr().(*net.UDPAddr).AddrPort()) {
 				// The worker's single read loop finished the previous packet before
 				// requesting this read, so the acknowledgement is a drain barrier.
-				_, _ = c.conn.WriteToUDPAddrPort(relayleg.Barrier(id, true), c.relay)
+				c.peersMu.RLock()
+				if c.allowedLocked(from) {
+					_, _ = c.conn.WriteToUDPAddrPort(relayleg.Barrier(id, true), from)
+				}
+				c.peersMu.RUnlock()
 			}
 			continue
 		}
@@ -76,15 +104,35 @@ func (c *relayConn) ReadFromUDPAddrPort(b []byte) (int, netip.AddrPort, error) {
 			continue
 		}
 
+		c.lastRelay = from
 		return copy(b, pkt), caller, nil
 	}
 }
 
 // WriteToUDPAddrPort sends a packet to a caller through the relay.
 func (c *relayConn) WriteToUDPAddrPort(p []byte, caller netip.AddrPort) (int, error) {
+	return c.writeVia(p, caller, c.relay)
+}
+func (c *relayConn) allowedLocked(leg netip.AddrPort) bool {
+	if c.peers == nil {
+		return leg == c.relay
+	}
+	return c.peers[leg]
+}
+func (c *relayConn) allowed(leg netip.AddrPort) bool {
+	c.peersMu.RLock()
+	defer c.peersMu.RUnlock()
+	return c.allowedLocked(leg)
+}
+func (c *relayConn) writeVia(p []byte, caller, leg netip.AddrPort) (int, error) {
+	c.peersMu.RLock()
+	defer c.peersMu.RUnlock()
+	if !c.allowedLocked(leg) {
+		return 0, ErrRelayUnsupported
+	}
 	bufp, _ := c.buffers.Get().(*[]byte)
 	datagram := append(relay.AppendHeader((*bufp)[:0], caller), p...)
-	_, err := c.conn.WriteToUDPAddrPort(datagram, c.relay)
+	_, err := c.conn.WriteToUDPAddrPort(datagram, leg)
 	*bufp = datagram
 	c.buffers.Put(bufp)
 	if err != nil {

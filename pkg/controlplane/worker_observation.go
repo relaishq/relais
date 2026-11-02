@@ -14,6 +14,11 @@ import (
 // store work. Only detect establishes death, and only heartbeat completes rejoin.
 // Replacement constructs fresh knowledge instead of reusing a death cycle.
 type workerObservation struct {
+	linkDown            bool
+	linkSeen            bool
+	linkReconnects      uint64
+	linkDownSince       time.Time
+	linkDownTotal       time.Duration
 	relayPending        bool
 	livenessUnknown     bool
 	draining            bool
@@ -218,7 +223,7 @@ func (o *workerObservation) resetDrain() { o.draining = false }
 func (o *workerObservation) knowledge() workerKnowledge {
 	k := workerKnowledge{
 		resumeRetry:      !o.dead && !o.draining,
-		eligible:         !o.dead && !o.draining && !o.recovering && !o.relayPending && !o.livenessUnknown,
+		eligible:         !o.dead && !o.draining && !o.recovering && !o.relayPending && !o.livenessUnknown && !o.linkDown,
 		relayEligible:    !o.dead && !o.recovering,
 		relayRequired:    !o.dead && o.relayPending,
 		replacementReady: o.dead && o.recovered && !o.recovering,
@@ -236,7 +241,7 @@ func (o *workerObservation) knowledge() workerKnowledge {
 		k.poolClass = workerPoolPending
 	case o.dead || o.recovering:
 		k.poolClass = workerPoolUnreachable
-	case o.livenessUnknown:
+	case o.livenessUnknown || o.linkDown:
 		k.poolClass = workerPoolPending
 	case o.draining:
 		k.poolClass = workerPoolDraining

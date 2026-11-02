@@ -23,8 +23,14 @@ type RouteRequest struct {
 	From   netip.AddrPort `json:"from"`
 	To     netip.AddrPort `json:"to"`
 }
+type RebindRequest struct {
+	From  netip.AddrPort `json:"from"`
+	To    netip.AddrPort `json:"to"`
+	Token string         `json:"token"`
+}
 type WorkerRequest struct {
 	Address netip.AddrPort `json:"address"`
+	Token   string         `json:"token,omitempty"`
 }
 
 // ReleaseReply reports a hold release. Packets counts held arrivals. A
@@ -100,6 +106,28 @@ func (r *Relay) PrivateHandler() http.Handler {
 		}
 		privateapi.Write(w, result)
 	})
+	mux.HandleFunc("POST /workers/rebind", func(w http.ResponseWriter, req *http.Request) {
+		var body RebindRequest
+		if !privateapi.Read(w, req, &body) {
+			return
+		}
+		if err := r.PrepareRebind(body.From, body.To, body.Token); err != nil {
+			privateapi.Error(w, err, RemoteErrors)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /workers/expect", func(w http.ResponseWriter, req *http.Request) {
+		var body WorkerRequest
+		if !privateapi.Read(w, req, &body) {
+			return
+		}
+		if err := r.ExpectWorker(body.Token); err != nil {
+			privateapi.Error(w, err, RemoteErrors)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("POST /workers", func(w http.ResponseWriter, req *http.Request) {
 		var body WorkerRequest
 		if !privateapi.Read(w, req, &body) {
@@ -109,7 +137,14 @@ func (r *Relay) PrivateHandler() http.Handler {
 			http.Error(w, "invalid worker address", http.StatusBadRequest)
 			return
 		}
-		r.AddWorker(body.Address)
+		if body.Token != "" {
+			if err := r.AddBoundWorker(body.Address, body.Token); err != nil {
+				privateapi.Error(w, err, RemoteErrors)
+				return
+			}
+		} else {
+			r.AddWorker(body.Address)
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("DELETE /workers", func(w http.ResponseWriter, req *http.Request) {

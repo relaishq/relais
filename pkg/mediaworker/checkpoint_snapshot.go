@@ -9,6 +9,7 @@ import (
 	"maps"
 	"time"
 
+	"github.com/relaishq/relais/internal/agenthost"
 	"github.com/relaishq/relais/internal/workerprobe"
 	agent "github.com/relaishq/relais/pkg/agent/v2"
 	"github.com/relaishq/relais/pkg/metrics"
@@ -37,6 +38,10 @@ func (c *sessionCheckpoint) captureSnapshotCandidate(captured time.Time, candida
 func (c *sessionCheckpoint) captureSnapshotCandidateMode(captured time.Time, candidate *agentState, writing bool) ([]byte, agentState, dtlsSequenceCheckpoint, error) {
 	s := c.session
 	s.mu.Lock()
+	if s.pendingRestart != nil && s.state.ICE.LocalUfrag == s.pendingRestart.ice.LocalUfrag {
+		s.mu.Unlock()
+		return nil, agentState{}, dtlsSequenceCheckpoint{}, ErrNotEstablished
+	}
 	if s.fenced.Load() || s.ctx.Err() != nil {
 		s.mu.Unlock()
 		return nil, agentState{}, dtlsSequenceCheckpoint{}, errHandedOver
@@ -158,6 +163,12 @@ func (c *sessionCheckpoint) captureSnapshotCandidateMode(captured time.Time, can
 var errCheckpointSkipped = errors.New("mediaworker: checkpoint rate limited")
 
 func (c *sessionCheckpoint) persistSnapshotBudget(parent context.Context, force, intent bool) error {
+	return c.persistSnapshotBudgetMode(parent, force, intent, nil)
+}
+
+// Restart holds snapshotMu across conversation selection and its lineage write.
+// Notifications are returned to that owner and run only after unlock.
+func (c *sessionCheckpoint) persistSnapshotBudgetMode(parent context.Context, force, intent bool, notifications *[]func()) error {
 	s := c.session
 	forcedStarted := time.Now()
 	measuredForced := false
@@ -179,11 +190,29 @@ func (c *sessionCheckpoint) persistSnapshotBudget(parent context.Context, force,
 	}
 	// Serialize copy+put so an older copy cannot overwrite a newer one. The
 	// packet lock is never held during encoding or the fenced store operation.
-	c.snapshotMu.Lock()
-	defer c.snapshotMu.Unlock()
+	if notifications == nil {
+		c.snapshotMu.Lock()
+	}
+	var settled, acknowledged func()
+	defer func() {
+		if notifications == nil {
+			c.snapshotMu.Unlock()
+		}
+		for _, notify := range []func(){settled, acknowledged} {
+			if notify == nil {
+				continue
+			}
+			if notifications != nil {
+				*notifications = append(*notifications, notify)
+			} else {
+				notify()
+			}
+		}
+	}()
 	if c.componentPending != nil {
 		ctx, cancel := context.WithTimeout(parent, ownershipTimeout)
-		err := c.settleComponentWrite(ctx)
+		var err error
+		settled, err = c.settleComponentWrite(ctx)
 		cancel()
 		if err != nil {
 			if errors.Is(err, sessionstore.ErrLeaseLost) {
@@ -196,6 +225,17 @@ func (c *sessionCheckpoint) persistSnapshotBudget(parent context.Context, force,
 		}
 	}
 	s.mu.Lock()
+	if notifications == nil && s.agent != nil && s.agent.v2 != nil && s.agent.v2.bridge != nil && s.agent.v2.bridge.restart != nil {
+		request := *s.agent.v2.bridge.restart
+		request.ctx = s.ctx
+		request.done = make(chan error, 1)
+		s.mu.Unlock()
+		select {
+		case s.agent.v2.bridge.restarts <- request:
+		default:
+		}
+		return errCheckpointSkipped
+	}
 	v2 := s.state.Agent.V2 != nil
 	if v2 && (s.fenced.Load() || s.ctx.Err() != nil) {
 		s.mu.Unlock()
@@ -292,7 +332,7 @@ func (c *sessionCheckpoint) persistSnapshotBudget(parent context.Context, force,
 		err = s.worker.cfg.Relay.Owners.PutState(ctx, lease, state)
 	}
 	if err == nil {
-		c.ackSnapshot(pair, dtlsNext, captured, wireBytes, intent)
+		acknowledged = c.ackSnapshot(pair, dtlsNext, captured, wireBytes, intent)
 	} else if errors.Is(err, errCheckpointSkipped) {
 		err = c.noteSnapshotSkip(checkpointSkipBudget)
 	} else if c.componentPending == nil {
@@ -386,7 +426,8 @@ func (c *sessionCheckpoint) warnSnapshot(err error) {
 	warn()
 }
 
-func (c *sessionCheckpoint) ackSnapshot(pair agentState, dtlsNext dtlsSequenceCheckpoint, captured time.Time, wireBytes int, intent bool) {
+// The returned notification owns this capture and runs after snapshotMu unlocks.
+func (c *sessionCheckpoint) ackSnapshot(pair agentState, dtlsNext dtlsSequenceCheckpoint, captured time.Time, wireBytes int, intent bool) func() {
 	s := c.session
 	if pair.V2 != nil {
 		c.snapshotBudgetMu.Lock()
@@ -425,6 +466,16 @@ func (c *sessionCheckpoint) ackSnapshot(pair agentState, dtlsNext dtlsSequenceCh
 		c.controlAck = max(c.controlAck, pair.V2.ControlHigh)
 	}
 	c.lastCheckpoint = time.Now()
+	sequence := s.state.Checkpoint.Successes
 	s.mu.Unlock()
 	metrics.CheckpointWrites.WithLabelValues("success").Inc()
+	if s.agent != nil && s.agent.v2 != nil && s.agent.v2.bridge != nil && pair.V2 != nil {
+		if hooks, ok := s.agent.v2.instance.(agenthost.BridgeHooks); ok {
+			return func() {
+				output, _ := json.Marshal(pair.V2.Bridge)
+				hooks.Checkpointed(agenthost.BridgeCheckpoint{State: cloneV2State(v2State(pair)), Progress: pair.Progress, Sequence: sequence, Output: output})
+			}
+		}
+	}
+	return nil
 }

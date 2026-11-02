@@ -73,3 +73,15 @@ func TestReapedChildSignalCannotTargetReusedPID(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 }
+
+func TestReadyAcceptsDialOutWithoutHTTPListener(t *testing.T) {
+	child, err := Start(t.TempDir(), "dial-out-ready", os.Environ(), "/bin/sh", "-c", `printf '{"pid":%s,"connect":"dial-out","media":"127.0.0.1:17001"}\n' "$$"; exec sleep 60`)
+	require.NoError(t, err)
+	defer child.Stop()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ready, err := child.Ready(ctx)
+	require.NoError(t, err)
+	require.Empty(t, ready.HTTP)
+	require.Equal(t, "127.0.0.1:17001", ready.Media)
+}
