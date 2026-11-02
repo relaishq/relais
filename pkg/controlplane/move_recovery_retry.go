@@ -731,6 +731,13 @@ func (m *moveRecovery) continueLocked(ctx context.Context, source *registration,
 		if agentFailure {
 			pending.agentFailure = err
 		}
+		if pending.unrequested && !pending.transientResume && errors.Is(err, agentv2.ErrIncompatibleAgent) {
+			// A definite incompatible refusal precedes any adjusted-state write and
+			// adoption, so uses no sequence/SRTCP/DTLS range. This includes
+			// v2 Restore refusals: Restore cannot send output. Each target is excluded
+			// below; targetDeadline bounds the search.
+			pending.attempts--
+		}
 		if errors.Is(err, mediaworker.ErrSequenceBudgetExhausted) || errors.Is(err, mediaworker.ErrSRTCPIndexExhausted) || errors.Is(err, mediaworker.ErrDTLSSequenceExhausted) {
 			complete(true, err)
 			return
