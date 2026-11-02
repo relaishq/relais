@@ -1,6 +1,6 @@
 # ADR 0016: Move live calls to a new relay address through ICE restart
 
-Status: **Proposed** 2026-10-29. It stays Proposed until the owner reviews it.
+Status: **Accepted** 2026-11-02 by the project lead (proposed 2026-10-29), including the 2026-11-01 amendment and its detail defaults.
 
 **Amended 2026-11-01 (owner decision A+C).** Receiver reports give a fast
 delivery signal; a capable caller reports decoded media through signaling.
@@ -10,8 +10,7 @@ Part of [#278](https://github.com/relaishq/relais/issues/278), step 3 of the
 scale-to-zero map [#275](https://github.com/relaishq/relais/issues/275).
 It chooses the "several relays / ICE restart" path that
 [ADR 0011](0011-deploy-and-autoscale.md) section 3 left open, and it builds on
-the proposed worker dial-out mode ([ADR 0015](0015-worker-dial-out.md), open on
-`docs/276-dial-out-adr`). Code baseline: `cb64d96`.
+the worker dial-out mode ([ADR 0015](0015-worker-dial-out.md)). Code baseline: `cb64d96`.
 
 Today every call is tied to one relay address for its whole life. A relay
 process can restart in place (ADR 0003, ADR 0004), but a lost relay host drops
